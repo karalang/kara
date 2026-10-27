@@ -5275,7 +5275,94 @@ impl<'a> super::TypeChecker<'a> {
                 );
             }
         }
+        // A trait method's `-> impl Trait` is, in each impl, the hidden
+        // associated type the impl's method returns: the witness of its own
+        // `impl Trait`, or the type it names (B-2026-10-20-32).
+        let rpits = self.trait_rpit_methods();
+        for imp in &self.env.impls {
+            let Some(tr) = &imp.trait_name else {
+                continue;
+            };
+            for (m, sig) in &imp.methods {
+                if !rpits.contains_key(&(tr.clone(), m.clone())) {
+                    continue;
+                }
+                let ret = match &sig.return_type {
+                    Type::Existential { origin, .. } => {
+                        match self.impl_trait_return_witnesses.get(origin) {
+                            Some(w) => w.clone(),
+                            None => continue,
+                        }
+                    }
+                    other => other.clone(),
+                };
+                let bounds =
+                    Self::bounds_by_param(imp.generic_params.as_ref(), imp.where_clause.as_ref());
+                let projs = self.proj_traits(bounds.iter().map(|(p, t)| (p, t.clone())));
+                out.insert(
+                    (
+                        imp.target_type.clone(),
+                        tr.clone(),
+                        crate::ty::rpit_assoc(m),
+                    ),
+                    (ret, projs),
+                );
+            }
+        }
         out
+    }
+
+    /// Each trait method declared `-> impl Trait`, by `(trait, method)`,
+    /// with that `impl Trait`'s origin: of the traits some impl implements.
+    pub(super) fn trait_rpit_methods(&self) -> FxHashMap<(String, String), SpanKey> {
+        let mut out = FxHashMap::default();
+        let mut add = |t: &TraitDef| {
+            for ti in &t.items {
+                if let TraitItem::Method(m) = ti {
+                    if let Some(rt) = &m.return_type {
+                        if matches!(rt.kind, TypeKind::ImplTrait { .. }) {
+                            out.entry((t.name.clone(), m.name.clone()))
+                                .or_insert_with(|| SpanKey::from_span(&rt.span));
+                        }
+                    }
+                }
+            }
+        };
+        let implemented: FxHashSet<&str> = self
+            .env
+            .impls
+            .iter()
+            .filter_map(|i| i.trait_name.as_deref())
+            .collect();
+        let mut found: FxHashSet<String> = FxHashSet::default();
+        let programs = std::iter::once(self.program)
+            .chain(crate::prelude::STDLIB_PROGRAMS.iter().map(|(_, p)| p));
+        for program in programs {
+            for item in &program.items {
+                if let Item::TraitDef(t) = item {
+                    if implemented.contains(t.name.as_str()) && found.insert(t.name.clone()) {
+                        add(t);
+                    }
+                }
+            }
+        }
+        for tr in implemented {
+            if !found.contains(tr) {
+                if let Some(t) = self.find_imported_trait_def(tr) {
+                    add(t);
+                }
+            }
+        }
+        out
+    }
+
+    /// Each trait method declared `-> impl Trait`, by that `impl Trait`'s
+    /// origin: `(trait, method)`, for the impls that implement it.
+    pub(super) fn trait_rpit_origins(&self) -> FxHashMap<SpanKey, (String, String)> {
+        self.trait_rpit_methods()
+            .into_iter()
+            .map(|(k, o)| (o, k))
+            .collect()
     }
 
     /// Each type parameter's bound trait names, from its inline bounds and
@@ -9669,10 +9756,55 @@ impl<'a> super::TypeChecker<'a> {
                 // covering Vec, Map, SortedSet, Set, Slice, Array, Range* and
                 // any user type that has registered an "Item" assoc binding.
                 let mut elem_ty = self.element_type_of(&iter_ty);
+                // `for` never calls `into_iter` (design.md § `Iterator` and
+                // `Iterable`): a type that is only `IntoIterator` is consumed
+                // explicitly, which the fix writes (B-2026-10-20-32).
+                if self.cli_lint_overrides.strict_core && self.into_iterator_only(&iter_ty) {
+                    elem_ty = Type::Error;
+                    let message = format!(
+                        "type '{}' cannot be iterated by a `for` loop: it implements `IntoIterator` but not `Iterator`, and `for` never calls `into_iter`; consume it with `.into_iter()`",
+                        type_display(&iter_ty)
+                    );
+                    let end = iterable.span.offset + iterable.span.length;
+                    let simple = matches!(
+                        iterable.kind,
+                        ExprKind::Identifier(_)
+                            | ExprKind::FieldAccess { .. }
+                            | ExprKind::Call { .. }
+                            | ExprKind::MethodCall { .. }
+                            | ExprKind::TupleIndex { .. }
+                            | ExprKind::Index { .. }
+                    );
+                    if simple {
+                        let fix = super::FixIt {
+                            span: Span {
+                                line: iterable.span.line,
+                                column: iterable.span.column + iterable.span.length,
+                                offset: end,
+                                length: 0,
+                            },
+                            replacement: ".into_iter()".to_string(),
+                        };
+                        self.type_error_with_fix_it(
+                            message,
+                            iterable.span,
+                            TypeErrorKind::TraitBoundNotSatisfied,
+                            fix,
+                        );
+                    } else {
+                        self.type_error(
+                            message,
+                            iterable.span,
+                            TypeErrorKind::TraitBoundNotSatisfied,
+                        );
+                    }
+                }
                 // A `for` iterates a collection, an iterator or an
                 // `IntoIterator`; anything else is refused rather than bound
                 // whole to the pattern (B-2026-10-21-76).
-                if self.cli_lint_overrides.strict_core && !self.for_iterable_may_iterate(&iter_ty) {
+                else if self.cli_lint_overrides.strict_core
+                    && !self.for_iterable_may_iterate(&iter_ty)
+                {
                     elem_ty = Type::Error;
                     self.type_error(
                         format!(

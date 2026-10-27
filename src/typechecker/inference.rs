@@ -38,6 +38,35 @@ pub(crate) fn mut_ref_of(t: Type) -> Type {
     }
 }
 
+/// An `impl Trait` type with `f` applied to its trait's arguments and
+/// inline bindings. Its origin is its identity and stays; what the bindings
+/// name is the signature's, so a substitution reaches them like any other
+/// part of it (`impl Iterator[Item = T]` at `T := i64`, `Item = Self.Item`
+/// at `Self := C`, B-2026-10-20-32).
+pub(super) fn map_existential(ty: &Type, f: impl Fn(&Type) -> Type) -> Type {
+    match ty {
+        Type::Existential {
+            trait_name,
+            trait_args,
+            assoc_bindings,
+            origin,
+            tait_alias,
+            scope,
+        } => Type::Existential {
+            trait_name: trait_name.clone(),
+            trait_args: trait_args.iter().map(&f).collect(),
+            assoc_bindings: assoc_bindings
+                .iter()
+                .map(|(n, t)| (n.clone(), f(t)))
+                .collect(),
+            origin: *origin,
+            tait_alias: tait_alias.clone(),
+            scope: scope.iter().map(|(n, t)| (n.clone(), f(t))).collect(),
+        },
+        _ => ty.clone(),
+    }
+}
+
 /// Structural substitution of `Type::TypeParam(name)` → concrete type
 /// from `subs`. Callers build `subs` externally from concrete types and
 /// use this purely as a tree-walk utility — they do *not* perform type
@@ -211,6 +240,7 @@ pub(crate) fn substitute_type_params(ty: &Type, subs: &HashMap<String, SubstValu
             name: name.clone(),
             base: Box::new(substitute_type_params(base, subs)),
         },
+        Type::Existential { .. } => map_existential(ty, |t| substitute_type_params(t, subs)),
         _ => ty.clone(),
     }
 }
@@ -319,6 +349,18 @@ pub(super) fn instantiate_signature_with_fresh_vars(
                     collect(a, names, seen, const_names, const_seen);
                 }
                 for a in receiver_args {
+                    collect(a, names, seen, const_names, const_seen);
+                }
+            }
+            Type::Existential {
+                trait_args,
+                assoc_bindings,
+                ..
+            } => {
+                for a in trait_args
+                    .iter()
+                    .chain(assoc_bindings.iter().map(|(_, t)| t))
+                {
                     collect(a, names, seen, const_names, const_seen);
                 }
             }
@@ -463,6 +505,9 @@ pub(super) fn instantiate_signature_with_fresh_vars(
                     .map(|a| substitute(a, name_to_id, name_to_const_id))
                     .collect(),
             },
+            Type::Existential { .. } => {
+                map_existential(ty, |t| substitute(t, name_to_id, name_to_const_id))
+            }
             _ => ty.clone(),
         }
     }
@@ -735,6 +780,7 @@ pub(super) fn resolve_type_vars(
             params: params.iter().map(&recur).collect(),
             return_type: Box::new(recur(return_type)),
         },
+        Type::Existential { .. } => map_existential(ty, recur),
         _ => ty.clone(),
     }
 }

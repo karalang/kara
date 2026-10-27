@@ -109,7 +109,6 @@ pub use env::{EnumInfo, FunctionSig, ImplInfo, StructInfo, TraitInfo, TypeEnv, U
 pub(crate) use expr_method_call::SLICE_MUTATING_METHODS;
 #[cfg(test)]
 use inference::substitute_type_params;
-use types::type_is_fully_concrete;
 pub use types::{
     const_arg_display, type_display, type_to_concrete_or_param_name, ConstArg, ConstVarId, DimArg,
     FloatSize, IntSize, SubstValue, Type, TypeVarId, UIntSize, VariantTypeInfo,
@@ -2450,6 +2449,9 @@ pub struct TypeCheckResult {
     pub impl_trait_return_witnesses: FxHashMap<SpanKey, TypeExpr>,
     /// `impl_trait_return_witnesses` as checker types, for the typed HIR.
     pub impl_trait_witness_types: FxHashMap<SpanKey, Type>,
+    /// Each trait method's `-> impl Trait` by its origin in the trait:
+    /// `(trait, method)` (B-2026-10-20-32).
+    pub trait_rpit_origins: FxHashMap<SpanKey, (String, String)>,
     /// Sibling table to `pattern_binding_types` carrying the inner element
     /// `TypeExpr` for `Vec[T]` / `Slice[T]` pattern bindings only. Keyed by
     /// the same `SpanKey` (the pattern's span). Populated alongside the
@@ -4135,6 +4137,7 @@ impl<'a> TypeChecker<'a> {
         let distinct_type_traits = self.env.distinct_types.clone();
         let distinct_bases = self.env.distinct_bases.clone();
         let impl_trait_assoc_types = self.impl_trait_assoc_types();
+        let trait_rpit_origins = self.trait_rpit_origins();
         let compiler_builtins = self.env.compiler_builtins.clone();
         let must_use_functions = self.env.must_use_functions.clone();
         let (node_types, node_call_subs) = self.resolved_node_tables();
@@ -4278,6 +4281,7 @@ impl<'a> TypeChecker<'a> {
             call_type_subs_te: self.call_type_subs_te,
             pattern_binding_types: self.pattern_binding_types,
             impl_trait_witness_types: self.impl_trait_return_witnesses.clone(),
+            trait_rpit_origins,
             impl_trait_return_witnesses: self
                 .impl_trait_return_witnesses
                 .iter()
@@ -6056,7 +6060,11 @@ impl<'a> TypeChecker<'a> {
         if matches!(f, Type::Existential { .. } | Type::Error | Type::Never) {
             return;
         }
-        if !type_is_fully_concrete(&f) {
+        // A generic witness (`VecIntoIter[T]` in `fn f[T]`) is written over
+        // the function's own names, which each use of the existential
+        // instantiates (B-2026-10-20-32); only an unsolved variable is not
+        // yet a witness.
+        if crate::typechecker::exprs::contains_type_var(&f) {
             return;
         }
         self.return_impl_trait_witnesses

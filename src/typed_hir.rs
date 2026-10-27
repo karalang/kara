@@ -261,6 +261,7 @@ pub struct TypedHir {
 pub fn build(tc: &TypeCheckResult, defs: &dyn HirDefs) -> TypedHir {
     let tcx = TyCtxt::new();
     tcx.set_existential_witnesses(tc.impl_trait_witness_types.clone());
+    tcx.set_trait_rpits(tc.trait_rpit_origins.clone());
     let mut node_types = FxHashMap::default();
     let mut calls = FxHashMap::default();
     let mut errors = Vec::new();

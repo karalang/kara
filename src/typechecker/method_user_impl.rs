@@ -83,8 +83,11 @@ impl<'a> super::TypeChecker<'a> {
             .impls
             .iter()
             .any(|imp| {
+                // A collection's `into_iter` is its `IntoIterator` impl's
+                // (B-2026-10-20-32).
                 imp.target_type == name
-                    && imp.trait_name.is_none()
+                    && (imp.trait_name.is_none()
+                        || imp.trait_name.as_deref() == Some("IntoIterator"))
                     && imp.methods.contains_key(method)
             })
             .then(|| name.to_string())

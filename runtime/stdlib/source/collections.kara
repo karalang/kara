@@ -183,11 +183,6 @@ impl[T] Vec[T] {
         VecIterMut { v: self, front: 0, back: n }
     }
 
-    /// The elements, front to back, each moved out of the vector.
-    fn into_iter(own self) -> VecIntoIter[T] {
-        VecIntoIter { front: Vec.new(), back: self }
-    }
-
     fn is_empty(ref self) -> bool {
         self.len() == 0
     }
@@ -1147,6 +1142,15 @@ fn vec_extend_iter[T, I: Iterator](v: mut ref Vec[T], items: own I) {
     }
 }
 
+// A type that is `IntoIterator` and not itself an iterator gives its items
+// through `into_iter` (B-2026-10-20-32).
+fn vec_extend_into[T, C: IntoIterator[Item = T]](v: mut ref Vec[T], items: own C) {
+    let mut it = items.into_iter();
+    while let Some(x) = it.next() {
+        v.push(x);
+    }
+}
+
 fn vec_extend_set[T](v: mut ref Vec[T], items: own Set[T]) {
     for x in items.into_iter() {
         v.push(x);
@@ -1194,6 +1198,13 @@ fn deque_extend_iter[T, I: Iterator](d: mut ref VecDeque[T], items: own I) {
     while let Some(x) = it.next() {
         let y: T = iter_read_value(x);
         d.push_back(y);
+    }
+}
+
+fn deque_extend_into[T, C: IntoIterator[Item = T]](d: mut ref VecDeque[T], items: own C) {
+    let mut it = items.into_iter();
+    while let Some(x) = it.next() {
+        d.push_back(x);
     }
 }
 
@@ -1254,15 +1265,6 @@ impl[T] VecDeque[T] {
         VecDeque.new()
     }
 
-    /// The elements moved out, front to back.
-    fn into_iter(own self) -> VecIntoIter[T] {
-        let mut d = self;
-        let mut v: Vec[T] = Vec.new();
-        while let Some(x) = d.pop_front() {
-            v.push(x);
-        }
-        v.into_iter()
-    }
 
     // The rest of collections.md's surface (B-2026-10-26-18), on the
     // native ends: an element moves by rotating the ring through
@@ -1337,23 +1339,11 @@ impl[T] Set[T] {
     fn default() -> Set[T] {
         Set.new()
     }
-
-    /// The elements moved out, in the set's iteration order.
-    fn into_iter(own self) -> VecIntoIter[T] {
-        let mut c = self;
-        c.drain_entries().into_iter()
-    }
 }
 
 impl[T] SortedSet[T] {
     fn default() -> SortedSet[T] {
         SortedSet.new()
-    }
-
-    /// The elements moved out, in the set's iteration order.
-    fn into_iter(own self) -> VecIntoIter[T] {
-        let mut c = self;
-        c.drain_entries().into_iter()
     }
 }
 
@@ -1361,6 +1351,62 @@ impl[K, V] Map[K, V] {
     fn default() -> Map[K, V] {
         Map.new()
     }
+}
+
+impl[K, V] SortedMap[K, V] {
+    fn default() -> SortedMap[K, V] {
+        SortedMap.new()
+    }
+}
+
+// Each collection is consumed through `IntoIterator` (design.md §
+// `Iterator` and `Iterable`, B-2026-10-20-32), so a generic
+// `C: IntoIterator` takes one; `for` borrows it instead.
+impl[T] IntoIterator for Vec[T] {
+    type Item = T;
+
+    /// The elements, front to back, each moved out of the vector.
+    fn into_iter(own self) -> VecIntoIter[T] {
+        VecIntoIter { front: Vec.new(), back: self }
+    }
+}
+
+impl[T] IntoIterator for VecDeque[T] {
+    type Item = T;
+
+    /// The elements moved out, front to back.
+    fn into_iter(own self) -> VecIntoIter[T] {
+        let mut d = self;
+        let mut v: Vec[T] = Vec.new();
+        while let Some(x) = d.pop_front() {
+            v.push(x);
+        }
+        v.into_iter()
+    }
+}
+
+impl[T] IntoIterator for Set[T] {
+    type Item = T;
+
+    /// The elements moved out, in the set's iteration order.
+    fn into_iter(own self) -> VecIntoIter[T] {
+        let mut c = self;
+        c.drain_entries().into_iter()
+    }
+}
+
+impl[T] IntoIterator for SortedSet[T] {
+    type Item = T;
+
+    /// The elements moved out, in the set's iteration order.
+    fn into_iter(own self) -> VecIntoIter[T] {
+        let mut c = self;
+        c.drain_entries().into_iter()
+    }
+}
+
+impl[K, V] IntoIterator for Map[K, V] {
+    type Item = (K, V);
 
     /// The entries, each a `(key, value)` pair, moved out, in the map's iteration order.
     fn into_iter(own self) -> VecIntoIter[(K, V)] {
@@ -1369,10 +1415,8 @@ impl[K, V] Map[K, V] {
     }
 }
 
-impl[K, V] SortedMap[K, V] {
-    fn default() -> SortedMap[K, V] {
-        SortedMap.new()
-    }
+impl[K, V] IntoIterator for SortedMap[K, V] {
+    type Item = (K, V);
 
     /// The entries, each a `(key, value)` pair, moved out, in the map's iteration order.
     fn into_iter(own self) -> VecIntoIter[(K, V)] {

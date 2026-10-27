@@ -312,6 +312,12 @@ struct Tables {
     list_ids: FxHashMap<Box<[Ty]>, TyList>,
 }
 
+/// The hidden associated type a trait method's `-> impl Trait` is, in each
+/// impl: `$<method>`, a name no source can spell.
+pub fn rpit_assoc(method: &str) -> String {
+    format!("${method}")
+}
+
 /// The type context: owns every interned type and list of one compilation.
 pub struct TyCtxt {
     tables: RefCell<Tables>,
@@ -320,6 +326,10 @@ pub struct TyCtxt {
     /// Each return-position `impl Trait`'s one concrete type, by the
     /// existential's origin: the type a value of it lowers to.
     witnesses: RefCell<FxHashMap<crate::resolver::SpanKey, Type>>,
+    /// Each trait method's return-position `impl Trait`, by its origin in
+    /// the trait: `(trait, method)`. A value of it is the impl's hidden
+    /// associated type [`rpit_assoc`].
+    trait_rpits: RefCell<FxHashMap<crate::resolver::SpanKey, (String, String)>>,
     /// Each concrete projection the MIR builder has normalized
     /// (`VecIter[i64].Item` → `i64`), so a generic ADT's field typed
     /// `I.Item` instantiates to the binding (B-2026-10-18-23).
@@ -339,6 +349,7 @@ impl TyCtxt {
             names: Interner::new(),
             adts: RefCell::new(FxHashMap::default()),
             witnesses: RefCell::new(FxHashMap::default()),
+            trait_rpits: RefCell::new(FxHashMap::default()),
             projs: RefCell::new(FxHashMap::default()),
         }
     }
@@ -352,6 +363,11 @@ impl TyCtxt {
     /// Record the concrete types return-position `impl Trait`s stand for.
     pub fn set_existential_witnesses(&self, w: FxHashMap<crate::resolver::SpanKey, Type>) {
         *self.witnesses.borrow_mut() = w;
+    }
+
+    /// Record the trait methods whose return is an `impl Trait`.
+    pub fn set_trait_rpits(&self, r: FxHashMap<crate::resolver::SpanKey, (String, String)>) {
+        *self.trait_rpits.borrow_mut() = r;
     }
 
     /// Intern a type. Structurally equal kinds return the same handle.
@@ -1170,12 +1186,49 @@ impl TyCtxt {
                     "generic associated type projection",
                 ))
             }
-            Type::Existential { origin, .. } => {
-                let w = self.witnesses.borrow().get(origin).cloned();
-                return match w {
-                    Some(w) => lower(&w),
-                    None => Err(LowerError::Unsupported("impl Trait")),
-                };
+            Type::Existential { origin, scope, .. } => {
+                // A trait method's `-> impl Trait` is each impl's own type:
+                // the hidden associated type the builder normalizes at the
+                // instance, as `C.Item` (B-2026-10-20-32).
+                let rpit = self.trait_rpits.borrow().get(origin).cloned();
+                if let Some((trait_name, method)) = rpit {
+                    let base = scope
+                        .iter()
+                        .find(|(n, _)| n == "Self")
+                        .map(|(_, t)| t)
+                        .ok_or(LowerError::Unsupported("impl Trait"))?;
+                    TyKind::Proj {
+                        base: lower(base)?,
+                        assoc: self.param_name(&rpit_assoc(&method)),
+                        trait_: Some(self.param_name(&trait_name)),
+                    }
+                } else {
+                    let w = self.witnesses.borrow().get(origin).cloned();
+                    return match w {
+                        // The witness is written over the declaration's
+                        // generic names; this use says what each stands for.
+                        Some(w) => {
+                            let subs = scope
+                                .iter()
+                                .filter(|(n, t)| !matches!(t, Type::TypeParam(p) if p == n))
+                                .map(|(n, t)| {
+                                    (
+                                        n.clone(),
+                                        crate::typechecker::types::SubstValue::Type(t.clone()),
+                                    )
+                                })
+                                .collect::<std::collections::HashMap<_, _>>();
+                            if subs.is_empty() {
+                                lower(&w)
+                            } else {
+                                lower(&crate::typechecker::inference::substitute_type_params(
+                                    &w, &subs,
+                                ))
+                            }
+                        }
+                        None => Err(LowerError::Unsupported("impl Trait")),
+                    };
+                }
             }
             // A refined value is its base's: the predicate is checked where
             // one is made, and the name only gates what checks.

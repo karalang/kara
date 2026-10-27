@@ -17463,8 +17463,20 @@ impl<'l, 'a> Bx<'l, 'a> {
                 return Ok(());
             }
             // In a generic body a trait method is found once the receiver's
-            // type is known: the one impl method of that name for it.
+            // type is known: the impl of the trait the bound names, which an
+            // inherent method of the same name does not hide
+            // (B-2026-10-20-32), else the one impl method of that name.
             let rt = self.expr_ty(object)?;
+            let bound = self
+                .lcx
+                .tc
+                .method_typeparam_trait_key
+                .get(&SpanKey::from_span(&e.span))
+                .and_then(|k| k.split_once('.'))
+                .and_then(|(tr, m)| self.user_impl_method(rt, tr, m));
+            if let Some((d, inst_args)) = bound {
+                return self.user_method_call(e, object, d, inst_args, args, dest);
+            }
             if let Some((d, inst_args)) = self.method_by_receiver(rt, method) {
                 return self.user_method_call(e, object, d, inst_args, args, dest);
             }
@@ -20500,6 +20512,15 @@ impl<'l, 'a> Bx<'l, 'a> {
                 };
                 (helper, sargs.to_vec())
             }
+            // A type that is `IntoIterator` and no iterator (B-2026-10-20-32).
+            HK::Adt { def, .. } if self.into_iterator_only(def) => {
+                let helper = if deque {
+                    "deque_extend_into"
+                } else {
+                    "vec_extend_into"
+                };
+                (helper, vec![elem, st])
+            }
             _ if deque => ("deque_extend_iter", vec![elem, st]),
             _ => ("vec_extend_iter", vec![elem, st]),
         };
@@ -20527,6 +20548,19 @@ impl<'l, 'a> Bx<'l, 'a> {
             next,
         );
         Ok(true)
+    }
+
+    /// Whether the ADT `def` implements `IntoIterator` and not `Iterator`.
+    fn into_iterator_only(&self, def: DefId) -> bool {
+        let name = self.lcx.def_name(def);
+        let has = |tr: &str| {
+            self.lcx.tc.impl_trait_assoc_types.contains_key(&(
+                name.clone(),
+                tr.to_string(),
+                "Item".to_string(),
+            ))
+        };
+        has("IntoIterator") && !has("Iterator")
     }
 
     /// `T.parse(s)` as `docs/library/core-types.md` gives it, into `dest`
@@ -22246,12 +22280,14 @@ const LIBRARY_NAMES_THE_COMPILER_USES: &[&str] = &[
     "iter_read_value",
     "iter_clone_value",
     "vec_extend_iter",
+    "vec_extend_into",
     "vec_extend_set",
     "vec_extend_sorted_set",
     "vec_extend_deque",
     "vec_extend_map",
     "vec_extend_sorted_map",
     "deque_extend_iter",
+    "deque_extend_into",
     "deque_extend_vec",
     "deque_extend_set",
     "deque_extend_sorted_set",

@@ -300,7 +300,7 @@ Every collection works with `for`. A collection is `Iterable`, so `for x in c` b
 | `SortedMap[K, V]` | `(ref K, ref V)` | `(ref K, mut ref V)` | `(K, V)` | Ascending key |
 | `SortedSet[T]` | `ref T` | none | `T` | Ascending |
 
-`Set` and `SortedSet` have no `iter_mut`, because changing an element in place would break the hash or the ordering. `iter()` borrows the collection, `iter_mut()` borrows it mutably for the whole iteration, and `into_iter()` consumes it. Each returns `impl Iterator` with the item shown.
+`Set` and `SortedSet` have no `iter_mut`, because changing an element in place would break the hash or the ordering. `iter()` borrows the collection, `iter_mut()` borrows it mutably for the whole iteration, and `into_iter()` consumes it. Each returns `impl Iterator` with the item shown. `into_iter` is each collection's `IntoIterator` impl ([design.md § `Iterator` and `Iterable`](../design.md#iterator-and-iterable)), so a generic `C: IntoIterator[Item = T]` takes any of them.
 
 ## Common traits
 

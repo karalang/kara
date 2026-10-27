@@ -29,12 +29,18 @@ impl[T] Iterator for ReceiverIter[T] {
     }
 }
 
-impl[T] Receiver[T] {
+// A receiver has nothing to lend, so it is `IntoIterator` and not
+// iterated by `for` (design.md § `Iterator` and `Iterable`).
+impl[T] IntoIterator for Receiver[T] {
+    type Item = T;
+
     /// The values received, until the channel is closed and drained.
     fn into_iter(own self) -> ReceiverIter[T] {
         ReceiverIter { rx: self }
     }
+}
 
+impl[T] Receiver[T] {
     // Whether every sender is gone. A native of each MIR backend.
     #[compiler_builtin]
     fn __closed(ref self) -> bool {

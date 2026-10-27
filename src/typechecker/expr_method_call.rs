@@ -733,7 +733,16 @@ impl<'a> super::TypeChecker<'a> {
                 if bindings.is_empty() {
                     return ret;
                 }
-                substitute_existential_assoc_bindings(&ret, type_param_name, &bindings)
+                // The parameter's bindings reach an `impl Trait` the method
+                // returns too: `into_iter` under `C: IntoIterator[Item = i64]`
+                // returns an `impl Iterator[Item = i64]`, not one over
+                // `C.Item` (B-2026-10-20-32).
+                let bind =
+                    |t: &Type| substitute_existential_assoc_bindings(t, type_param_name, &bindings);
+                match &ret {
+                    Type::Existential { .. } => super::inference::map_existential(&ret, bind),
+                    _ => bind(&ret),
+                }
             }
             _ => {
                 let trait_list = candidates

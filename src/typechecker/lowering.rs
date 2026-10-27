@@ -225,6 +225,10 @@ impl<'a> super::TypeChecker<'a> {
                     // distinguishing signal for slice 6's TAIT-aware
                     // diagnostics.
                     tait_alias: None,
+                    scope: generic_scope
+                        .iter()
+                        .map(|n| (n.clone(), Type::TypeParam(n.clone())))
+                        .collect(),
                 }
             }
             // `dyn Trait` slice 5 — the dual of `impl Trait`. Slice 5
@@ -1590,6 +1594,27 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// A named type that implements `IntoIterator` and not `Iterator`: a
+    /// value `for` cannot take (B-2026-10-20-32).
+    pub(super) fn into_iterator_only(&self, ty: &Type) -> bool {
+        match ty {
+            // A collection is `IntoIterator` and borrowed by `for`.
+            Type::Named { name, .. }
+                if matches!(
+                    name.as_str(),
+                    "Vec" | "VecDeque" | "Set" | "SortedSet" | "Map" | "SortedMap"
+                ) =>
+            {
+                false
+            }
+            Type::Named { name, args } => {
+                self.env.has_impl("IntoIterator", name, args)
+                    && !self.env.has_impl("Iterator", name, args)
+            }
+            _ => false,
+        }
+    }
+
     pub(super) fn element_type_of(&self, ty: &Type) -> Type {
         // Strings iterate as `char` BY VALUE — a `char` is a Copy scalar decoded
         // from the UTF-8 storage, not a borrow into it — so `for c in s` and
@@ -1726,6 +1751,24 @@ impl<'a> super::TypeChecker<'a> {
                 // (`type Item = (A.Item, B.Item)` on `Zip[A, B]`), which the
                 // substitution leaves as `Counter.Item`: resolve it.
                 self.resolve_assoc_projections(&substitute_type_params(&entry.ty, &subs))
+            }
+            // An `impl Iterator[Item = T]` yields its inline `Item`
+            // (B-2026-10-20-32).
+            Type::Existential {
+                trait_name,
+                assoc_bindings,
+                ..
+            } if self
+                .env
+                .supertrait_closure_traits(trait_name)
+                .iter()
+                .any(|t| t == "Iterator") =>
+            {
+                assoc_bindings
+                    .iter()
+                    .find(|(n, _)| n == "Item")
+                    .map(|(_, t)| t.clone())
+                    .unwrap_or_else(|| ty.clone())
             }
             _ => ty.clone(),
         }

@@ -197,6 +197,11 @@ pub enum Type {
         assoc_bindings: Vec<(String, Type)>,
         origin: crate::resolver::SpanKey,
         tait_alias: Option<String>,
+        /// The generic names in scope where it was declared (`T` of `fn
+        /// f[T]`, `Self` in a trait), each with what it stands for at this
+        /// use: the witness is written over those names, so a caller's
+        /// `f[i64]()` lowers to the witness at `T := i64` (B-2026-10-20-32).
+        scope: Vec<(String, Type)>,
     },
 
     /// A refinement type `type Name = Base where <pred>` — a base type
