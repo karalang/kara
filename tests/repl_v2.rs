@@ -513,3 +513,16 @@ fn repl_v2_auto_clone_clones_where_the_binding_moved() {
     assert_eq!(appended(&path), 2, "a cell before the moving one ran again");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// An item's non-ASCII text reaches the cells intact (the items' `main`
+/// was stripped a byte at a time, which split `é` into `Ã©`).
+#[test]
+fn repl_v2_items_keep_non_ascii_text() {
+    assert_eq!(
+        run(&[
+            "fn greet() -> Str { \"héllo, wörld\" }",
+            "println(greet());"
+        ]),
+        "héllo, wörld\n"
+    );
+}

@@ -791,12 +791,16 @@ pub(super) fn strip_main(src: &str) -> String {
     let bytes = src.as_bytes();
     let mut out = String::with_capacity(bytes.len());
     let mut i = 0;
+    // The source is copied a run at a time from `kept`: a byte at a time
+    // would split a non-ASCII character into Latin-1 ones.
+    let mut kept = 0;
     while i < bytes.len() {
         // Look for the literal "fn main" preceded by start-of-input or a
         // non-identifier byte (avoid matching inside identifiers).
         let after_fn_main_starts = bytes[i..].starts_with(b"fn main")
             && (i == 0 || !bytes[i - 1].is_ascii_alphanumeric() && bytes[i - 1] != b'_');
         if after_fn_main_starts {
+            out.push_str(&src[kept..i]);
             // Skip past `fn main`, then to the opening `{`.
             let mut j = i + b"fn main".len();
             while j < bytes.len() && bytes[j] != b'{' {
@@ -824,11 +828,12 @@ pub(super) fn strip_main(src: &str) -> String {
                 j += 1;
             }
             i = j;
+            kept = j;
             continue;
         }
-        out.push(bytes[i] as char);
         i += 1;
     }
+    out.push_str(&src[kept..]);
     out
 }
 
