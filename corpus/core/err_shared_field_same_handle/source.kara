@@ -1,0 +1,9 @@
+shared struct Bag { mut items: Vec[i64] }
+fn main() {
+    let b = Bag { items: Vec.new() };
+    b.items.push(1);
+    for x in b.items {
+        if x == 1 { b.items.push(2); }
+    }
+    println(f"{b.items.len()}");
+}

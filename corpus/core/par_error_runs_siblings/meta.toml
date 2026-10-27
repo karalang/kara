@@ -1,0 +1,15 @@
+source = "review/core-pins/par_error_runs_siblings"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["par", "post-m1:par"]
+class = "e"
+expected_from = "pin"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = ["11.7"]
+backends = []
+env = {}
+note = "D4 (2026-10-07): no branch is cancelled; the source-earliest error is returned. Written in the tuple form of par (batch, 2026-10-07), which legacy does not parse; the same program in legacy's statement form prints the expected output on legacy interp. The drop model does not support par. e-spec: legacy differs from the drop model; v2 matches it"
+bucket = "e-spec"
+classified_with = "0a4cfd7fc"

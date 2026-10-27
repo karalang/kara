@@ -1,0 +1,1 @@
+error: b.items is written through the same handle while the for loop borrows it (§6.2)

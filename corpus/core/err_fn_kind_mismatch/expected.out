@@ -1,0 +1,1 @@
+error: the closure mutates n, so it is a MutFn, but apply expects Fn (§9.6)

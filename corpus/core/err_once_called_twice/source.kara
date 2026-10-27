@@ -1,0 +1,8 @@
+fn call_twice(f: OnceFn()) {
+    f();
+    f();
+}
+fn main() {
+    let s = "x".to_string();
+    call_twice(|| { let t = s; });
+}

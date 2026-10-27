@@ -1,0 +1,14 @@
+fn twice(f: own MutFn()) { f(); f(); }
+fn once(f: own OnceFn() -> String) -> String { f() }
+fn apply(f: Fn(i64) -> i64, x: i64) -> i64 { f(x) }
+fn main() {
+    let mut count = 0;
+    twice(|| { count += 1; });
+    println(f"{count}");
+    let s = "owned".to_string();
+    let r = once(|| s);
+    println(r);
+    let k = 10;
+    println(f"{apply(|x| x + k, 5)}");
+    println(f"{apply(|x| x * 2, 4)}");
+}

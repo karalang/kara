@@ -1,0 +1,15 @@
+source = "review/core-pins/ok_closure_kinds"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure"]
+class = "e"
+expected_from = "pin"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = ["9.6"]
+backends = []
+env = {}
+note = "D2 (2026-10-07). MutFn is new syntax; legacy fails to parse MutFn(). legacy.out not recorded here. e-spec: legacy differs from the drop model; v2 matches it"
+bucket = "e-spec"
+classified_with = "0a4cfd7fc"

@@ -1,0 +1,15 @@
+shared struct Node { val: i64, mut next: Option[Node] }
+fn main() {
+    let c = Node { val: 3, next: None };
+    let b = Node { val: 2, next: Some(c) };
+    let a = Node { val: 1, next: Some(b) };
+    match a.next {
+        Some(nxt) => { a.next = nxt.next; },
+        None => {},
+    }
+    let mut cur = Some(a);
+    while let Some(n) = cur {
+        println(f"{n.val}");
+        cur = n.next;
+    }
+}

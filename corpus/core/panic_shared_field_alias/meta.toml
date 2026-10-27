@@ -1,0 +1,15 @@
+source = "review/core-pins/panic_shared_field_alias"
+dedup_of = []
+expect = "panic:101"
+exit = 101
+tags = ["shared", "panic"]
+class = "e"
+expected_from = "pin"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = ["6.2"]
+backends = []
+env = {}
+note = "D1: through a second handle the borrow flag panics after printing start. Legacy prints start then unreachable; the drop model, which has no flags, loops until its step limit because the loop grows the Vec it walks. e-spec: legacy differs from the drop model; v2 matches it"
+bucket = "e-spec"
+classified_with = "0a4cfd7fc"
