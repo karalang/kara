@@ -69,7 +69,8 @@ impl<'a> super::TypeChecker<'a> {
                 } else {
                     let key = type_args.first().cloned().unwrap_or(Type::Error);
                     let val = type_args.get(1).cloned().unwrap_or(Type::Error);
-                    return Some(self.infer_map_method(&key, &val, method, args, span));
+                    let hasher = type_args.get(2).cloned();
+                    return Some(self.infer_map_method(&key, &val, hasher, method, args, span));
                 }
             }
         }
@@ -127,7 +128,8 @@ impl<'a> super::TypeChecker<'a> {
                     // fall through to the impl-table dispatch below
                 } else {
                     let element = type_args.first().cloned().unwrap_or(Type::Error);
-                    return Some(self.infer_set_method(&element, method, args, span));
+                    let hasher = type_args.get(1).cloned();
+                    return Some(self.infer_set_method(&element, hasher, method, args, span));
                 }
             }
         }

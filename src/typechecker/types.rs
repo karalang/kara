@@ -703,6 +703,70 @@ pub(super) fn type_is_fully_concrete(ty: &Type) -> bool {
     }
 }
 
+/// The hasher a `Map` / `Set` type names when it names none:
+/// `SipHash13BuildHasher` (collections.md § Hashing, `H =
+/// SipHash13BuildHasher`).
+pub fn default_hasher() -> Type {
+    Type::Named {
+        name: "SipHash13BuildHasher".to_string(),
+        args: Vec::new(),
+    }
+}
+
+/// How many type arguments `name` takes before its hasher: 2 for `Map`, 1
+/// for `Set`, `None` for any other type.
+pub fn hasher_slot(name: &str) -> Option<usize> {
+    match name {
+        "Map" => Some(2),
+        "Set" => Some(1),
+        _ => None,
+    }
+}
+
+/// `Map` / `Set` argument lists with the hasher written out on both sides,
+/// when exactly one of them leaves it off. A type that names no hasher
+/// has the default one, so `Map[K, V]` and `Map[K, V, SipHash13BuildHasher]`
+/// are one type, and `Map[K, V]` against `Map[K, V, H]` binds `H` to the
+/// default (B-2026-10-25-31). `None` when the lists need no padding.
+pub fn hasher_padded(name: &str, a: &[Type], b: &[Type]) -> Option<(Vec<Type>, Vec<Type>)> {
+    let base = hasher_slot(name)?;
+    let pad = |x: &[Type]| {
+        let mut x = x.to_vec();
+        x.push(default_hasher());
+        x
+    };
+    match (a.len(), b.len()) {
+        (n, m) if n == base && m == base + 1 => Some((pad(a), b.to_vec())),
+        (n, m) if n == base + 1 && m == base => Some((a.to_vec(), pad(b))),
+        _ => None,
+    }
+}
+
+/// `args` of the type `name` without the hasher a `Map` / `Set` may name
+/// last: its element types.
+pub fn element_args<'a>(name: &str, args: &'a [Type]) -> &'a [Type] {
+    match hasher_slot(name) {
+        Some(base) if args.len() == base + 1 => &args[..base],
+        _ => args,
+    }
+}
+
+/// `args` of the type `name` without a last hasher argument that is the
+/// default or was never inferred: the arguments of the same type written
+/// without one.
+pub fn without_default_hasher<'a>(name: &str, args: &'a [Type]) -> &'a [Type] {
+    match hasher_slot(name) {
+        Some(base) if args.len() == base + 1 && hidden_hasher(&args[base]) => &args[..base],
+        _ => args,
+    }
+}
+
+/// Whether `t` is the default hasher, or a hasher not yet inferred, which
+/// a type's display leaves off.
+fn hidden_hasher(t: &Type) -> bool {
+    matches!(t, Type::TypeVar(_)) || *t == default_hasher()
+}
+
 pub fn type_display(ty: &Type) -> String {
     match ty {
         Type::Shape(dims) => {
@@ -779,7 +843,12 @@ pub fn type_display(ty: &Type) -> String {
             // parse error the compiler taught them — so this arm must render
             // what the LANGUAGE accepts, like its Slice/Rc/Arc siblings
             // already did (B-2026-08-17-15).
-            let inner: Vec<String> = args.iter().map(type_display).collect();
+            // A `Map` / `Set` that names the default hasher displays as
+            // the one that names none, which is the same type.
+            let inner: Vec<String> = without_default_hasher(name, args)
+                .iter()
+                .map(type_display)
+                .collect();
             format!("{}[{}]", name, inner.join(", "))
         }
         Type::Shared(name) => name.clone(),
@@ -1162,14 +1231,12 @@ pub(super) fn iterator_item_type_for(ty: &Type) -> Option<Type> {
     match ty {
         Type::Array { element, .. } => Some((**element).clone()),
         Type::Slice { element, .. } => Some((**element).clone()),
-        Type::Named { name, args } => match name.as_str() {
-            "Vec" | "Set" | "SortedSet" | "VecDeque" if args.len() == 1 => Some(args[0].clone()),
-            "Map" | "SortedMap" if args.len() == 2 => {
-                Some(Type::Tuple(vec![args[0].clone(), args[1].clone()]))
-            }
+        Type::Named { name, args } => match (name.as_str(), element_args(name, args)) {
+            ("Vec" | "Set" | "SortedSet" | "VecDeque", [e]) => Some(e.clone()),
+            ("Map" | "SortedMap", [k, v]) => Some(Type::Tuple(vec![k.clone(), v.clone()])),
             // `Range` / `RangeInclusive` are Iterators — `(0..n).iter()` is
             // a redundant pass-through that yields the bound element type.
-            "Range" | "RangeInclusive" if args.len() == 1 => Some(args[0].clone()),
+            ("Range" | "RangeInclusive", [e]) => Some(e.clone()),
             _ => None,
         },
         Type::Ref(inner) | Type::MutRef(inner) => iterator_item_type_for(inner),
@@ -1700,6 +1767,13 @@ pub(super) fn types_compatible(a: &Type, b: &Type) -> bool {
             },
         ) => {
             let variances = crate::prelude::stdlib_variance(a_name);
+            let padded = (a_name == b_name)
+                .then(|| hasher_padded(a_name, a_args, b_args))
+                .flatten();
+            let (a_args, b_args) = match &padded {
+                Some((a, b)) => (a, b),
+                None => (a_args, b_args),
+            };
             a_name == b_name
                 && a_args.len() == b_args.len()
                 && a_args

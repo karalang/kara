@@ -477,8 +477,45 @@ impl<'a> super::TypeChecker<'a> {
     /// Keyed off `path.span`, which is the same span the parser recorded under
     /// — `PathExpr::span` covers the whole `Map[…]` write and is built once, in
     /// `parse_path_type`, before the argument is removed.
-    fn check_recorded_container_hasher(&mut self, name: &str, path: &PathExpr) {
+    fn check_recorded_container_hasher(
+        &mut self,
+        name: &str,
+        path: &PathExpr,
+        generic_scope: &[String],
+    ) {
+        let key = crate::resolver::SpanKey::from_span(&path.span);
+        if let Some(crate::hasher_kind::HasherKind::User(h)) =
+            self.program.container_hashers.get(&key)
+        {
+            // A generic parameter in the hasher's place: what it may be is
+            // the parameter's own business.
+            if generic_scope.contains(h) {
+                return;
+            }
+        }
         self.check_container_hasher_at(name, path.span);
+    }
+
+    /// The hasher the parser took off the `Map` / `Set` written at `span`,
+    /// as the type's last argument, or `None` when it named none or the
+    /// default (B-2026-10-25-31).
+    pub(super) fn recorded_hasher(
+        &self,
+        span: crate::token::Span,
+        generic_scope: &[String],
+    ) -> Option<Type> {
+        use crate::hasher_kind::HasherKind;
+        let key = crate::resolver::SpanKey::from_span(&span);
+        let named = |name: &str| Type::Named {
+            name: name.to_string(),
+            args: Vec::new(),
+        };
+        match self.program.container_hashers.get(&key)? {
+            HasherKind::SipHash13 => None,
+            HasherKind::Fx => Some(named("FxBuildHasher")),
+            HasherKind::User(h) if generic_scope.contains(h) => Some(Type::TypeParam(h.clone())),
+            HasherKind::User(h) => Some(named(h)),
+        }
     }
 
     /// [`Self::check_recorded_container_hasher`] of the container written at
@@ -577,8 +614,14 @@ impl<'a> super::TypeChecker<'a> {
     /// (including `Map[K, V, i64]` and every misspelling) are reported by
     /// [`Self::check_recorded_container_hasher`], called first from here so the
     /// two halves cannot both fire on one write.
-    fn take_hasher_type_arg(&mut self, name: &str, args: Vec<Type>, path: &PathExpr) -> Vec<Type> {
-        self.check_recorded_container_hasher(name, path);
+    fn take_hasher_type_arg(
+        &mut self,
+        name: &str,
+        args: Vec<Type>,
+        path: &PathExpr,
+        generic_scope: &[String],
+    ) -> Vec<Type> {
+        self.check_recorded_container_hasher(name, path, generic_scope);
         let base = match name {
             "Map" => 2,
             "Set" => 1,
@@ -607,9 +650,16 @@ impl<'a> super::TypeChecker<'a> {
         };
 
         // Zero args is the inference-driven form (`Map.new()` before the slots
-        // are solved) and `base` args is the ordinary spelling; neither has a
-        // hasher to take.
+        // are solved) and `base` args is the ordinary spelling. A hasher the
+        // parser took off the write goes back on as the last argument: the
+        // hasher is part of the type (collections.md § Hashing,
+        // B-2026-10-25-31), and a type that names none, or names the
+        // default, keeps `base` arguments.
         if args.len() <= base {
+            let mut args = args;
+            if args.len() == base {
+                args.extend(self.recorded_hasher(path.span, generic_scope));
+            }
             return args;
         }
 
@@ -703,7 +753,7 @@ impl<'a> super::TypeChecker<'a> {
             // `Map[K, V, H]` / `Set[T, H]` — validate the trailing hasher
             // selector and STRIP it, so every downstream consumer keeps seeing
             // the two-ary `Map` / one-ary `Set` it always has (B-2026-08-21-6).
-            args = self.take_hasher_type_arg(name, args, path);
+            args = self.take_hasher_type_arg(name, args, path, generic_scope);
             // Intercept stdlib Rc[T] / Arc[T] wrappers — sub-item 2 of the
             // Type::Shared/Rc/Arc representation work. Single-arg form
             // only; zero/multi-arg keeps flowing through Type::Named so

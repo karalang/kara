@@ -888,6 +888,16 @@ pub(super) fn unify_types(
                 .zip(bb.iter())
                 .all(|(x, y)| unify_types(x, y, substitutions, const_substitutions))
         }
+        // `Map[K, V]` against `Map[K, V, H]`: the one that names no hasher
+        // has the default (B-2026-10-25-31).
+        (Type::Named { name: an, args: aa }, Type::Named { name: bn, args: bb })
+            if an == bn && super::types::hasher_padded(an, aa, bb).is_some() =>
+        {
+            let (aa, bb) = super::types::hasher_padded(an, aa, bb).unwrap();
+            aa.iter()
+                .zip(bb.iter())
+                .all(|(x, y)| unify_types(x, y, substitutions, const_substitutions))
+        }
         (Type::Ref(x), Type::Ref(y))
         | (Type::MutRef(x), Type::MutRef(y))
         | (Type::Weak(x), Type::Weak(y)) => unify_types(x, y, substitutions, const_substitutions),

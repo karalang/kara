@@ -167,10 +167,13 @@ impl<'a> super::TypeChecker<'a> {
 
     /// Infer the return type of a method call on `Map[K, V]`.
     /// `key` is K, `val` is V from the receiver's type arguments.
+    /// `hasher` is the receiver's, when its type names one: `merge` takes
+    /// and gives a table of the same type (B-2026-10-25-31).
     pub(super) fn infer_map_method(
         &mut self,
         key: &Type,
         val: &Type,
+        hasher: Option<Type>,
         method: &str,
         args: &[CallArg],
         span: &Span,
@@ -251,7 +254,7 @@ impl<'a> super::TypeChecker<'a> {
         };
         let map_kv = Type::Named {
             name: "Map".to_string(),
-            args: vec![k.clone(), v.clone()],
+            args: [k.clone(), v.clone()].into_iter().chain(hasher).collect(),
         };
 
         match method {
@@ -1060,9 +1063,12 @@ impl<'a> super::TypeChecker<'a> {
     /// Infer the return type of a method call on `Set[T: Hash + Eq]`.
     /// Hash set with O(1) average insert/remove/contains. Enforces the
     /// `T: Hash + Eq` bound the same way `Map[K, V]` checks `K: Hash + Eq`.
+    /// `hasher` is the receiver's, when its type names one: `union` and
+    /// its siblings take and give sets of the same type (B-2026-10-25-31).
     pub(super) fn infer_set_method(
         &mut self,
         element: &Type,
+        hasher: Option<Type>,
         method: &str,
         args: &[CallArg],
         span: &Span,
@@ -1083,7 +1089,7 @@ impl<'a> super::TypeChecker<'a> {
         let elem = element.clone();
         let set_elem = Type::Named {
             name: "Set".to_string(),
-            args: vec![elem.clone()],
+            args: std::iter::once(elem.clone()).chain(hasher).collect(),
         };
 
         match method {

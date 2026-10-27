@@ -584,7 +584,8 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
         .iter()
         .filter_map(|(k, ty)| match ty {
             Type::Named { name, args }
-                if (name == "Map" || name == "SortedMap") && args.len() == 2 =>
+                if (name == "Map" || name == "SortedMap")
+                    && crate::typechecker::types::element_args(name, args).len() == 2 =>
             {
                 Some((
                     (k.0, k.1),
@@ -602,7 +603,8 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
         .iter()
         .filter_map(|(k, ty)| match ty {
             Type::Named { name, args }
-                if (name == "Set" || name == "SortedSet") && args.len() == 1 =>
+                if (name == "Set" || name == "SortedSet")
+                    && crate::typechecker::types::element_args(name, args).len() == 1 =>
             {
                 Some(((k.0, k.1), TypeChecker::type_to_type_expr(&args[0])))
             }

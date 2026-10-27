@@ -357,7 +357,7 @@ impl<'a> super::TypeChecker<'a> {
             let record = match obj_ty {
                 Type::Named { name, args }
                     if name == "Map"
-                        && args.len() == 2
+                        && crate::typechecker::types::element_args(name, args).len() == 2
                         && matches!(
                             method,
                             "get"
@@ -396,7 +396,7 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 Type::Named { name, args }
                     if name == "Set"
-                        && args.len() == 1
+                        && crate::typechecker::types::element_args(name, args).len() == 1
                         // B-2026-08-18-26 — the `Set` half of the same gap.
                         && matches!(method, "contains" | "iter" | "len" | "is_empty")
                         && is_scalar_or_string(&args[0]) =>

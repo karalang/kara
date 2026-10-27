@@ -5863,6 +5863,16 @@ impl<'a> TypeChecker<'a> {
         match (a, b) {
             // An unsolved slot takes whatever the sibling branch pins it to.
             (Type::TypeVar(_), _) | (_, Type::TypeVar(_)) => true,
+            (Type::Named { name: na, args: aa }, Type::Named { name: nb, args: ab })
+                if na == nb && aa.len() != ab.len() =>
+            {
+                // One side leaves its hasher to the default (B-2026-10-25-31).
+                types::hasher_padded(na, aa, ab).is_some_and(|(aa, ab)| {
+                    aa.iter()
+                        .zip(ab.iter())
+                        .all(|(x, y)| Self::same_shape_modulo_typevars(x, y))
+                })
+            }
             (Type::Named { name: na, args: aa }, Type::Named { name: nb, args: ab }) => {
                 na == nb
                     && aa.len() == ab.len()
@@ -5909,6 +5919,23 @@ impl<'a> TypeChecker<'a> {
                         .zip(ab.iter())
                         .map(|(x, y)| Self::merge_branch_types(x, y))
                         .collect(),
+                }
+            }
+            (Type::Named { name: na, args: aa }, Type::Named { name: nb, args: ab })
+                if na == nb && types::hasher_padded(na, aa, ab).is_some() =>
+            {
+                // One side leaves its hasher to the default: the join names
+                // the other's, or none when that is the default too
+                // (B-2026-10-25-31).
+                let (aa, ab) = types::hasher_padded(na, aa, ab).unwrap_or_default();
+                let args: Vec<Type> = aa
+                    .iter()
+                    .zip(ab.iter())
+                    .map(|(x, y)| Self::merge_branch_types(x, y))
+                    .collect();
+                Type::Named {
+                    name: na.clone(),
+                    args: types::without_default_hasher(na, &args).to_vec(),
                 }
             }
             (Type::Tuple(ea), Type::Tuple(eb)) if ea.len() == eb.len() => Type::Tuple(

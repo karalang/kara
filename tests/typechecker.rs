@@ -44816,18 +44816,40 @@ fn both_spec_named_hashers_are_accepted_on_map_and_set() {
 }
 
 #[test]
-fn naming_the_default_hasher_does_not_change_what_a_map_is_assignable_to() {
-    // The hasher is a CONSTRUCTION-time property, not part of the value's
-    // shape: it decides which hash function the container is built with, and
-    // the container carries that with it. So an opted-out map still satisfies
-    // a plain `Map[K, V]` parameter — anything else would fork the type system
-    // over a choice that has no bearing on layout or on what operations apply.
-    typecheck_ok(
+fn a_named_hasher_makes_a_map_a_different_type_from_a_plain_one() {
+    // The hasher is part of the type (B-2026-10-25-31, the review thread's
+    // ruling): `Map[K, V, FxBuildHasher]` is not `Map[K, V]`, as Rust's
+    // `HashMap<K, V, S>` is not `HashMap<K, V>`. Code that takes a map of any
+    // hasher writes `Map[K, V, H]`. This test used to pin the opposite.
+    let errs = typecheck_errors(
         "fn take(m: Map[String, i64]) -> i64 { m.len() }\n\
          fn main() {\n\
              let mut a: Map[String, i64, FxBuildHasher] = Map.new();\n\
              a.insert(\"x\", 1);\n\
              println(take(a));\n\
+         }",
+    );
+    assert!(
+        errs.iter().any(|e| e
+            .message
+            .contains("expected 'Map[String, i64]', found 'Map[String, i64, FxBuildHasher]'")),
+        "expected the mismatch naming both map types, got {errs:?}"
+    );
+}
+
+#[test]
+fn naming_the_default_hasher_does_not_change_what_a_map_is_assignable_to() {
+    // The default, written out, is the type written without one; and a
+    // function generic over the hasher takes a map of either.
+    typecheck_ok(
+        "fn take(m: Map[String, i64]) -> i64 { m.len() }\n\
+         fn any[H](m: ref Map[String, i64, H]) -> i64 { m.len() }\n\
+         fn main() {\n\
+             let mut a: Map[String, i64, SipHash13BuildHasher] = Map.new();\n\
+             a.insert(\"x\", 1);\n\
+             let mut b: Map[String, i64, FxBuildHasher] = Map.new();\n\
+             b.insert(\"y\", 2);\n\
+             println(any(b) + any(a) + take(a));\n\
          }",
     );
 }
@@ -44929,11 +44951,11 @@ fn a_user_written_build_hasher_is_accepted_on_map_and_set() {
 }
 
 #[test]
-fn a_user_hashed_map_is_still_the_same_type_as_a_plain_one() {
-    // Same rule as the two selectors: the hasher is a CONSTRUCTION-time
-    // property carried by the value, not part of its shape. If it forked the
-    // type, every library taking a `Map[K, V]` would stop accepting one.
-    typecheck_ok(&format!(
+fn a_user_hashed_map_is_a_different_type_from_a_plain_one() {
+    // Same rule as the two selectors (B-2026-10-25-31): the hasher is part of
+    // the type, so a `Map[String, i64, FnvBuild]` is refused where a plain
+    // `Map[String, i64]` is wanted. This test used to pin the opposite.
+    let errs = typecheck_errors(&format!(
         "{USER_HASHER_PRELUDE}\
          fn take(m: Map[String, i64]) -> i64 {{ m.len() }}\n\
          fn main() {{\n\
@@ -44942,6 +44964,12 @@ fn a_user_hashed_map_is_still_the_same_type_as_a_plain_one() {
              println(take(a));\n\
          }}"
     ));
+    assert!(
+        errs.iter().any(|e| e
+            .message
+            .contains("expected 'Map[String, i64]', found 'Map[String, i64, FnvBuild]'")),
+        "expected the mismatch naming both map types, got {errs:?}"
+    );
 }
 
 #[test]

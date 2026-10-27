@@ -1095,9 +1095,13 @@ impl TyCtxt {
                 TyKind::Param(param_ty(name)?)
             }
             Type::Named { name, args } => match lookup(name) {
+                // A `Map` / `Set` that names the default hasher, or one never
+                // inferred, is the type that names none (B-2026-10-25-31).
                 Some(TypeName::Adt(def)) => TyKind::Adt {
                     def,
-                    args: lower_all(args)?,
+                    args: lower_all(crate::typechecker::types::without_default_hasher(
+                        name, args,
+                    ))?,
                 },
                 Some(TypeName::Trait(bound)) => TyKind::Opaque {
                     bound,

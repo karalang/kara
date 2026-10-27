@@ -846,9 +846,12 @@ impl<'a> super::TypeChecker<'a> {
             )
             .then_some(t);
         }
+        // A `Map` / `Set`'s last slot is its hasher, inferred like the rest
+        // (B-2026-10-25-31).
         let arity = match type_name {
-            "Vec" | "VecDeque" | "Set" | "SortedSet" | "Option" => 1,
-            "Map" | "SortedMap" => 2,
+            "Vec" | "VecDeque" | "SortedSet" | "Option" => 1,
+            "Set" | "SortedMap" => 2,
+            "Map" => 3,
             _ => return None,
         };
         let args = (0..arity).map(|_| self.env.fresh_type_var()).collect();
@@ -911,7 +914,7 @@ impl<'a> super::TypeChecker<'a> {
                 // substitution through. Const-args at this position are
                 // ignored for dispatch but still parsed so the shape
                 // round-trips cleanly.
-                let target_args: Vec<Type> = generic_args
+                let mut target_args: Vec<Type> = generic_args
                     .iter()
                     .filter_map(|a| match a {
                         GenericArg::Type(t) => Some(self.lower_type_expr(t, &[])),
@@ -921,6 +924,11 @@ impl<'a> super::TypeChecker<'a> {
                         GenericArg::Shape(_) => None,
                     })
                     .collect();
+                // `Map[K, V, H].new()`: the hasher the parser took off the
+                // receiver is the type's last argument (B-2026-10-25-31).
+                if crate::typechecker::types::hasher_slot(&type_name) == Some(target_args.len()) {
+                    target_args.extend(self.recorded_hasher(object.span, &[]));
+                }
                 self.record_method_callee(
                     SpanKey::from_span(span),
                     format!("{}.{}", type_name, method),
@@ -1150,6 +1158,19 @@ impl<'a> super::TypeChecker<'a> {
                         let pinned = Type::Named {
                             name: type_name.clone(),
                             args: target_args.clone(),
+                        };
+                        // The constructor of `Map[K, V, H]` builds a table
+                        // with that hasher: its result takes `H`.
+                        let ret = match (ret, crate::typechecker::types::hasher_slot(&type_name)) {
+                            (Type::Named { name, mut args }, Some(base))
+                                if name == type_name
+                                    && args.len() == base
+                                    && target_args.len() == base + 1 =>
+                            {
+                                args.push(target_args[base].clone());
+                                Type::Named { name, args }
+                            }
+                            (ret, _) => ret,
                         };
                         // `Channel[i64].new()` is why this is two-step. Most
                         // builtin constructors return a value NAMED after the

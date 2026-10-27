@@ -108,7 +108,10 @@ impl<'a> super::TypeChecker<'a> {
     ) -> Option<Type> {
         let (owner, params, ret) = match (receiver, method) {
             (Type::Named { name, args: targs }, "entry_at") => {
-                let entry = match (name.as_str(), targs.as_slice()) {
+                let entry = match (
+                    name.as_str(),
+                    crate::typechecker::types::element_args(name, targs),
+                ) {
                     ("Set" | "SortedSet" | "VecDeque", [t]) => t.clone(),
                     ("Map" | "SortedMap", [k, v]) => Type::Tuple(vec![k.clone(), v.clone()]),
                     _ => return None,
@@ -119,7 +122,10 @@ impl<'a> super::TypeChecker<'a> {
             // iteration order, and leaves it empty: what the library's
             // `into_iter` takes the elements with (B-2026-10-13-14).
             (Type::Named { name, args: targs }, "drain_entries") => {
-                let entry = match (name.as_str(), targs.as_slice()) {
+                let entry = match (
+                    name.as_str(),
+                    crate::typechecker::types::element_args(name, targs),
+                ) {
                     ("Set" | "SortedSet", [t]) => t.clone(),
                     ("Map" | "SortedMap", [k, v]) => Type::Tuple(vec![k.clone(), v.clone()]),
                     _ => return None,

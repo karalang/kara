@@ -320,6 +320,19 @@ impl FnKind {
     }
 }
 
+/// A library collection's type arguments without the hasher a `Map` /
+/// `Set` may name last (B-2026-10-25-31): the element types, which is what
+/// every reader of those arguments but [`TyInterner::hasher`] wants.
+pub fn table_args(kind: IntrinsicKind, mut args: Vec<Ty>) -> Vec<Ty> {
+    let base = match kind {
+        IntrinsicKind::Map => 2,
+        IntrinsicKind::Set => 1,
+        _ => args.len(),
+    };
+    args.truncate(base);
+    args
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum IntrinsicTy {
     String,
@@ -460,6 +473,18 @@ impl TyInterner {
         }
     }
 
+    /// The hasher the `Map` / `Set` type `t` names, `None` when it names
+    /// none and so has the default (B-2026-10-25-31).
+    pub fn hasher(&self, t: Ty) -> Option<Ty> {
+        let SharedKind::Intrinsic { kind, args } = self.tcx.kind(t) else {
+            return None;
+        };
+        match (kind, self.tcx.list(args).as_slice()) {
+            (IntrinsicKind::Map, [_, _, h]) | (IntrinsicKind::Set, [_, h]) => Some(*h),
+            _ => None,
+        }
+    }
+
     /// MIR's view of `t`.
     pub fn kind(&self, t: Ty) -> TyKind {
         let tcx = &self.tcx;
@@ -502,8 +527,12 @@ impl TyInterner {
                 let a = tcx.list(args);
                 match (kind, a.as_slice()) {
                     (IntrinsicKind::Vec, [e]) => TyKind::Intrinsic(IntrinsicTy::Vec(*e)),
-                    (IntrinsicKind::Map, [k, v]) => TyKind::Intrinsic(IntrinsicTy::Map(*k, *v)),
-                    (IntrinsicKind::Set, [e]) => TyKind::Intrinsic(IntrinsicTy::Set(*e)),
+                    // A third (second) argument is the table's hasher
+                    // ([`Self::hasher`]), which MIR's view leaves out.
+                    (IntrinsicKind::Map, [k, v] | [k, v, _]) => {
+                        TyKind::Intrinsic(IntrinsicTy::Map(*k, *v))
+                    }
+                    (IntrinsicKind::Set, [e] | [e, _]) => TyKind::Intrinsic(IntrinsicTy::Set(*e)),
                     (IntrinsicKind::VecDeque, [e]) => TyKind::Intrinsic(IntrinsicTy::VecDeque(*e)),
                     (IntrinsicKind::SortedMap, [k, v]) => {
                         TyKind::Intrinsic(IntrinsicTy::SortedMap(*k, *v))

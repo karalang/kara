@@ -3067,8 +3067,9 @@ impl<'a> super::TypeChecker<'a> {
             // `SortedMap` binding needs the same full-TypeExpr recording or its
             // codegen dispatch tables are never registered and `m.len()` fails
             // "no handler for method" — the SortedMap leg of B-2026-07-23-3.
-            if ((name == "Map" || name == "SortedMap") && args.len() == 2)
-                || ((name == "Set" || name == "SortedSet") && args.len() == 1)
+            let elems = crate::typechecker::types::element_args(name, args).len();
+            if ((name == "Map" || name == "SortedMap") && elems == 2)
+                || ((name == "Set" || name == "SortedSet") && elems == 1)
             {
                 let key = SpanKey::from_span(&pattern.span);
                 self.pattern_binding_inner_types

@@ -2833,7 +2833,7 @@ impl<'a> super::TypeChecker<'a> {
         {
             if (self.cli_lint_overrides.strict_core || self.library_methods_from_source)
                 && (name == "SortedMap" || (name == "Map" && entries.is_empty()))
-                && args.len() == 2
+                && crate::typechecker::types::element_args(name, args).len() == 2
             {
                 for (k, v) in entries {
                     self.check_expr(k, &args[0]);
@@ -6602,7 +6602,9 @@ impl<'a> super::TypeChecker<'a> {
             return;
         };
         let elem = match name.as_str() {
-            "Vec" | "Set" | "SortedSet" | "VecDeque" if declared_args.len() == 1 => {
+            "Vec" | "Set" | "SortedSet" | "VecDeque"
+                if crate::typechecker::types::element_args(name, declared_args).len() == 1 =>
+            {
                 &declared_args[0]
             }
             _ => return,
@@ -9065,14 +9067,18 @@ impl<'a> super::TypeChecker<'a> {
                 {
                     let map_kv = match &obj_ty {
                         Type::Named { name, args }
-                            if matches!(name.as_str(), "Map" | "SortedMap") && args.len() == 2 =>
+                            if matches!(name.as_str(), "Map" | "SortedMap")
+                                && crate::typechecker::types::element_args(name, args).len()
+                                    == 2 =>
                         {
                             Some((args[0].clone(), args[1].clone()))
                         }
                         Type::Ref(inner) | Type::MutRef(inner) => match inner.as_ref() {
                             Type::Named { name, args }
                                 if matches!(name.as_str(), "Map" | "SortedMap")
-                                    && args.len() == 2 =>
+                                    && crate::typechecker::types::element_args(name, args)
+                                        .len()
+                                        == 2 =>
                             {
                                 Some((args[0].clone(), args[1].clone()))
                             }
@@ -10946,9 +10952,11 @@ impl<'a> super::TypeChecker<'a> {
                     "Set" => {
                         let first_ty = self.infer_collection_elements(items);
                         self.record_collection_literal(expr, "Set", items);
+                        // Its hasher comes from where the set goes, as
+                        // `Set.new()`'s does (B-2026-10-25-31).
                         Type::Named {
                             name: "Set".to_string(),
-                            args: vec![first_ty],
+                            args: vec![first_ty, self.env.fresh_type_var()],
                         }
                     }
                     other => {
@@ -11057,7 +11065,11 @@ impl<'a> super::TypeChecker<'a> {
             // (B-2026-10-19-60).
             ExprKind::MapLiteral { entries, .. } if entries.is_empty() => Type::Named {
                 name: "Map".to_string(),
-                args: vec![self.env.fresh_type_var(), self.env.fresh_type_var()],
+                args: vec![
+                    self.env.fresh_type_var(),
+                    self.env.fresh_type_var(),
+                    self.env.fresh_type_var(),
+                ],
             },
             ExprKind::MapLiteral { type_name, entries } => {
                 let (first_key, first_val) = &entries[0];
@@ -11089,9 +11101,15 @@ impl<'a> super::TypeChecker<'a> {
                     Some("SortedMap") => "SortedMap",
                     _ => "Map",
                 };
+                // A `Map`'s hasher comes from where the table goes, as
+                // `Map.new()`'s does (B-2026-10-25-31).
+                let mut args = vec![key_ty, val_ty];
+                if head == "Map" {
+                    args.push(self.env.fresh_type_var());
+                }
                 Type::Named {
                     name: head.to_string(),
-                    args: vec![key_ty, val_ty],
+                    args,
                 }
             }
 

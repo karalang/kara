@@ -382,10 +382,12 @@ impl<'a> super::TypeChecker<'a> {
             Type::Slice { element, .. } => self.type_supports_display(element),
             Type::Ref(inner) | Type::MutRef(inner) => self.type_supports_display(inner),
             Type::Named { name, args } => match name.as_str() {
-                "Vec" | "VecDeque" | "Option" | "SortedSet" | "Set" if args.len() == 1 => {
+                "Vec" | "VecDeque" | "Option" | "SortedSet" | "Set"
+                    if crate::typechecker::types::element_args(name, args).len() == 1 =>
+                {
                     self.type_supports_display(&args[0])
                 }
-                "Map" | "SortedMap" | "Result" if args.len() == 2 => {
+                "Map" | "SortedMap" | "Result" if crate::typechecker::types::element_args(name, args).len() == 2 => {
                     self.type_supports_display(&args[0]) && self.type_supports_display(&args[1])
                 }
                 // Total-order float wrappers Display as their inner float
@@ -2389,7 +2391,10 @@ impl super::env::TypeEnv {
                         | "Set"
                         | "SortedSet"
                 ) {
-                    return args.iter().all(|a| self.type_supports_clone(a));
+                    // A table's hasher is a type, not a value it holds.
+                    return crate::typechecker::types::element_args(name, args)
+                        .iter()
+                        .all(|a| self.type_supports_clone(a));
                 }
                 if self.has_impl("Clone", name, args) {
                     return true;
@@ -2473,7 +2478,9 @@ impl super::env::TypeEnv {
                         | "Set"
                         | "SortedSet"
                 ) {
-                    return args.iter().all(|a| self.type_supports_debug(a));
+                    return crate::typechecker::types::element_args(name, args)
+                        .iter()
+                        .all(|a| self.type_supports_debug(a));
                 }
                 if self.has_impl("Debug", name, args) {
                     return true;

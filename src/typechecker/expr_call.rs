@@ -1809,14 +1809,29 @@ impl<'a> super::TypeChecker<'a> {
         if let ExprKind::Path { segments, .. } = &callee.kind {
             if segments.len() == 2 && segments[1] == "new" && args.is_empty() {
                 let collection = segments[0].as_str();
+                // A `Map` / `Set`'s hasher is inferred too, from where the
+                // table goes; one never pinned is the default
+                // (B-2026-10-25-31).
                 let result_ty = match collection {
-                    "Vec" | "VecDeque" | "Set" | "SortedSet" => Some(Type::Named {
+                    "Vec" | "VecDeque" | "SortedSet" => Some(Type::Named {
                         name: collection.to_string(),
                         args: vec![self.env.fresh_type_var()],
                     }),
-                    "Map" | "SortedMap" => Some(Type::Named {
+                    "Set" => Some(Type::Named {
                         name: collection.to_string(),
                         args: vec![self.env.fresh_type_var(), self.env.fresh_type_var()],
+                    }),
+                    "SortedMap" => Some(Type::Named {
+                        name: collection.to_string(),
+                        args: vec![self.env.fresh_type_var(), self.env.fresh_type_var()],
+                    }),
+                    "Map" => Some(Type::Named {
+                        name: collection.to_string(),
+                        args: vec![
+                            self.env.fresh_type_var(),
+                            self.env.fresh_type_var(),
+                            self.env.fresh_type_var(),
+                        ],
                     }),
                     // `String.new()` has no syntactic stdlib declaration
                     // (no `impl String { fn new() -> String }` in

@@ -328,27 +328,6 @@ fn lower_program_inner<'a>(
         tc,
         source,
         user_len,
-        hashers: &program.container_hashers,
-        hashed_fields: program
-            .items
-            .iter()
-            .filter_map(|i| match i {
-                Item::StructDef(s) => Some(s),
-                _ => None,
-            })
-            .flat_map(|s| {
-                s.fields
-                    .iter()
-                    .filter(|f| match &f.ty.kind {
-                        ast::TypeKind::Path(p) => program
-                            .container_hashers
-                            .get(&SpanKey::from_span(&p.span))
-                            .is_some_and(|h| *h != crate::hasher_kind::HasherKind::default()),
-                        _ => false,
-                    })
-                    .map(|f| (s.name.clone(), f.name.clone()))
-            })
-            .collect(),
         fn_field_effects: program
             .items
             .iter()
@@ -881,13 +860,6 @@ struct Lcx<'a> {
     /// How many leading bytes of `source` are the program's own, the rest
     /// being the appended library's; `None` when it is all the program's.
     user_len: Option<usize>,
-    /// The hasher each `Map[K, V, H]` / `Set[T, H]` type names, by the
-    /// span of its path (the parser takes `H` out of the type).
-    hashers: &'a FxHashMap<SpanKey, crate::hasher_kind::HasherKind>,
-    /// The struct fields whose `Map` / `Set` type names a hasher, as
-    /// (struct, field): a table stored there walks as an annotated `let`'s
-    /// does (B-2026-10-25-31).
-    hashed_fields: FxHashSet<(String, String)>,
     /// The struct fields whose function type declares an effect clause, as
     /// (struct, field): a call through one has those effects (core
     /// semantics §12, B-2026-10-27-2).
@@ -2817,9 +2789,6 @@ struct Bx<'l, 'a> {
     old_vals: FxHashMap<NodeId, Local>,
     /// This function's `ensures` clauses, checked at every return.
     ensures: &'a [EnsuresClause],
-    /// Its declared return type is a table that names a hasher: the table
-    /// it returns walks in a fixed order (B-2026-10-25-31).
-    ret_hashed: bool,
     /// The impl this function belongs to and its generic parameter count.
     impl_target: Option<(DefId, usize)>,
     /// Subscripts of an assignment's target, evaluated before its value.
@@ -2884,7 +2853,6 @@ impl<'l, 'a> Bx<'l, 'a> {
             par_try: Vec::new(),
             old_vals: FxHashMap::default(),
             ensures: &[],
-            ret_hashed: false,
             impl_target: None,
             pre_indices: FxHashMap::default(),
             eq_stack: Vec::new(),
@@ -4267,7 +4235,6 @@ impl<'l, 'a> Bx<'l, 'a> {
         // A destructuring parameter is an argument of its own; its names
         // bind once every argument is declared, as a `let` would.
         let mut destructured = Vec::new();
-        let mut hashed = Vec::new();
         for (i, p) in f.params.iter().enumerate() {
             let t = match fn_params.get(i).copied().flatten() {
                 Some(t) => t,
@@ -4291,14 +4258,6 @@ impl<'l, 'a> Bx<'l, 'a> {
             if self.needs_drop(t) {
                 self.schedule(ScopeEntry::Drop(Place::local(l)));
             }
-            // An owned table whose parameter type names a hasher walks in
-            // a fixed order from here on (B-2026-10-25-31); a borrowed one
-            // is the caller's.
-            if !matches!(self.tys().tcx().kind(t), HK::Ref(_) | HK::MutRef(_))
-                && self.names_a_hasher(&p.ty)
-            {
-                hashed.push(l);
-            }
         }
         self.bind_destructured(destructured)?;
         if self
@@ -4312,9 +4271,6 @@ impl<'l, 'a> Bx<'l, 'a> {
             // Parameters only: the body ends unreachable (`finish`).
             self.scopes.clear();
             return Ok(());
-        }
-        for l in hashed {
-            self.unkey_table(Place::local(l));
         }
         self.contracts_on_entry(f)?;
         // The body's own scope sits inside the parameters' (D6). Falling
@@ -4399,10 +4355,6 @@ impl<'l, 'a> Bx<'l, 'a> {
             self.old_vals.insert(o.id, l);
         }
         self.ensures = &f.ensures;
-        self.ret_hashed = f
-            .return_type
-            .as_ref()
-            .is_some_and(|te| self.names_a_hasher(te));
         Ok(())
     }
 
@@ -4948,13 +4900,6 @@ impl<'l, 'a> Bx<'l, 'a> {
                     } else {
                         self.expr_into(value, Place::local(l))?;
                     }
-                    if ty.as_ref().is_some_and(|te| self.names_a_hasher(te)) {
-                        self.call_native(
-                            "table_unkeyed",
-                            vec![Operand::Move(Place::local(l))],
-                            Place::local(l),
-                        );
-                    }
                     self.pop_scope()?;
                     self.let_scope = outer;
                     self.declare(l, t);
@@ -5326,13 +5271,6 @@ impl<'l, 'a> Bx<'l, 'a> {
             );
         }
         self.assign(place.clone(), Rvalue::Use(op));
-        if let ExprKind::FieldAccess { object, field, .. } = &target.kind {
-            let ot = self.expr_ty(object)?;
-            let (_, ot) = self.strip_ty_full(ot);
-            if self.hashed_field(ot, field).is_some() {
-                self.unkey_table(place);
-            }
-        }
         Ok(())
     }
 
@@ -6800,31 +6738,9 @@ impl<'l, 'a> Bx<'l, 'a> {
             span: e.span,
             ..outer
         });
-        let r = self.expr_into_here(e, dest.clone());
-        if r.is_ok() && self.builds_hashed_table(e) {
-            self.unkey_table(dest);
-        }
+        let r = self.expr_into_here(e, dest);
         self.b.set_source_info(outer);
         r
-    }
-
-    /// Whether `e` is `Map[K, V, H].new()`, `Set[T, H].with_capacity(n)` or
-    /// another constructor qualified with a container type that names a
-    /// hasher: the table it builds walks as an annotated `let`'s does
-    /// (B-2026-10-25-31).
-    fn builds_hashed_table(&self, e: &Expr) -> bool {
-        let ExprKind::MethodCall { object, .. } = &e.kind else {
-            return false;
-        };
-        let ExprKind::Path { segments, .. } = &object.kind else {
-            return false;
-        };
-        matches!(segments.as_slice(), [h] if h == "Map" || h == "Set")
-            && self
-                .lcx
-                .hashers
-                .get(&SpanKey::from_span(&object.span))
-                .is_some_and(|h| *h != crate::hasher_kind::HasherKind::default())
     }
 
     fn expr_into_here(&mut self, e: &'a Expr, dest: Place) -> R<()> {
@@ -7158,16 +7074,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                     let Some((idx, ft)) = self.field_of(t, variant, &fi.name) else {
                         return self.unsupported(fi.span, "this field");
                     };
-                    let mut op = self.operand_at(&fi.value, ft)?;
-                    // A field whose type names a hasher gets its table
-                    // marked before the literal stores it, so a `shared`
-                    // struct's handle needs no write through it.
-                    if variant.is_none() && self.hashed_field(t, &fi.name).is_some() {
-                        let l = self.temp(ft);
-                        self.assign(l, Rvalue::Use(op));
-                        self.unkey_table(Place::local(l));
-                        op = Operand::Move(Place::local(l));
-                    }
+                    let op = self.operand_at(&fi.value, ft)?;
                     vals.push((idx, op));
                 }
                 vals.sort_by_key(|(i, _)| *i);
@@ -11560,10 +11467,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                     HK::Intrinsic { kind, args }
                         if kind != IntrinsicKind::Vec
                             && t == ot
-                            && !self
-                                .tys()
-                                .tcx()
-                                .list(args)
+                            && !crate::mir::ty::table_args(kind, self.tys().tcx().list(args))
                                 .into_iter()
                                 .all(|a| self.is_copy(a)) =>
                     {
@@ -11672,10 +11576,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 || (mode == Mode::Mut
                     && !matches!(kind, IntrinsicKind::Set | IntrinsicKind::SortedSet))
                 || (mode == Mode::Owned
-                    && self
-                        .tys()
-                        .tcx()
-                        .list(args)
+                    && crate::mir::ty::table_args(kind, self.tys().tcx().list(args))
                         .into_iter()
                         .all(|t| self.is_copy(t))) =>
             {
@@ -11685,7 +11586,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                     mode = Mode::Ref;
                 }
                 let tcx = self.tys().tcx();
-                let args = tcx.list(args);
+                let args = crate::mir::ty::table_args(kind, tcx.list(args));
                 match kind {
                     IntrinsicKind::Map | IntrinsicKind::SortedMap => {
                         tcx.intern(HK::Tuple(tcx.intern_list(&args)))
@@ -12340,9 +12241,6 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// the function's error; a branch that ends with its own value runs
     /// none (core semantics §11.7).
     fn return_exit(&mut self) -> R<()> {
-        if self.ret_hashed && self.par_exit.is_none() {
-            self.unkey_table(Place::local(Local::RETURN_PLACE));
-        }
         for clause in self.ensures {
             self.contract_check(&clause.body, "ensures")?;
         }
@@ -14085,38 +13983,10 @@ impl<'l, 'a> Bx<'l, 'a> {
         }
     }
 
-    /// Whether the `Map` / `Set` type `te` names a hasher other than the
-    /// default: then the table walks in one order in every process
-    /// (`table_unkeyed`, collections.md § Hashing, B-2026-10-24-29).
-    /// Field `name` of struct type `t`, as its index and type, when its
-    /// declared type names a hasher (B-2026-10-25-31).
-    fn hashed_field(&self, t: Ty, name: &str) -> Option<(u32, Ty)> {
-        let (adt, _) = self.tys().tcx().adt_of(t)?;
-        if adt.is_enum
-            || !self
-                .lcx
-                .hashed_fields
-                .contains(&(adt.name.clone(), name.to_string()))
-        {
-            return None;
-        }
-        self.field_of(t, None, name)
-    }
-
     /// Mark the table at `place` as walking under a fixed key, as a table
     /// whose type names a hasher does (`karac_mir_map_unkeyed`).
     fn unkey_table(&mut self, place: Place) {
         self.call_native("table_unkeyed", vec![Operand::Move(place.clone())], place);
-    }
-
-    fn names_a_hasher(&self, te: &ast::TypeExpr) -> bool {
-        let ast::TypeKind::Path(p) = &te.kind else {
-            return false;
-        };
-        self.lcx
-            .hashers
-            .get(&SpanKey::from_span(&p.span))
-            .is_some_and(|h| *h != crate::hasher_kind::HasherKind::default())
     }
 
     /// Whether the `?` at `at` keeps the error return trace (design.md §
@@ -14209,16 +14079,23 @@ impl<'l, 'a> Bx<'l, 'a> {
         self.queue_for_native(name, &args);
         let func = self.fn_operand(name, DefId(u32::MAX), Vec::new());
         let next = self.b.new_block();
+        // A table a `Map` / `Set` native builds into a slot whose type
+        // names a hasher walks under a fixed key (B-2026-10-25-31).
+        let hashed = (name.starts_with("Map[") || name.starts_with("Set["))
+            && self.tys().hasher(self.place_type(&dest)).is_some();
         self.goto_with(
             TerminatorKind::Call {
                 func,
                 args,
-                destination: dest,
+                destination: dest.clone(),
                 target: Some(next),
                 unwind: UnwindAction::Abort,
             },
             next,
         );
+        if hashed {
+            self.unkey_table(dest);
+        }
     }
 
     fn fn_operand(&self, name: &str, def: DefId, args: Vec<Ty>) -> Operand {
@@ -14852,8 +14729,8 @@ impl<'l, 'a> Bx<'l, 'a> {
     fn collect_elem(&self, c: Ty) -> Option<Ty> {
         let tcx = self.tys().tcx();
         match tcx.kind(c) {
-            HK::Intrinsic { args, .. } => {
-                let a = tcx.list(args);
+            HK::Intrinsic { kind, args } => {
+                let a = crate::mir::ty::table_args(kind, tcx.list(args));
                 match a.len() {
                     1 => Some(a[0]),
                     2 => Some(tcx.intern(HK::Tuple(tcx.intern_list(&a)))),
@@ -17774,7 +17651,10 @@ impl<'l, 'a> Bx<'l, 'a> {
                     IntrinsicKind::SortedMap => "SortedMap",
                     IntrinsicKind::SortedSet => "SortedSet",
                 };
-                (self.lcx.defs.lookup(0, name)?, self.tys().tcx().list(args))
+                (
+                    self.lcx.defs.lookup(0, name)?,
+                    crate::mir::ty::table_args(kind, self.tys().tcx().list(args)),
+                )
             }
             _ => return None,
         };
@@ -17842,7 +17722,10 @@ impl<'l, 'a> Bx<'l, 'a> {
                 let Some(d) = self.lcx.defs.lookup(0, name) else {
                     return Ok(None);
                 };
-                (d, self.tys().tcx().list(args))
+                (
+                    d,
+                    crate::mir::ty::table_args(kind, self.tys().tcx().list(args)),
+                )
             }
             _ => return Ok(None),
         };
@@ -17903,7 +17786,10 @@ impl<'l, 'a> Bx<'l, 'a> {
                 let Some(d) = self.lcx.defs.lookup(0, name) else {
                     return Ok(None);
                 };
-                (d, self.tys().tcx().list(args))
+                (
+                    d,
+                    crate::mir::ty::table_args(kind, self.tys().tcx().list(args)),
+                )
             }
             _ => return Ok(None),
         };
@@ -20534,7 +20420,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         let (helper, inst_args) = match tcx.kind(st) {
             HK::Ref(_) | HK::MutRef(_) | HK::Slice { .. } | HK::Array { .. } => return Ok(false),
             HK::Intrinsic { kind, args } => {
-                let sargs = tcx.list(args);
+                let sargs = crate::mir::ty::table_args(kind, tcx.list(args));
                 let helper = match (deque, kind) {
                     (false, IntrinsicKind::Vec) => return Ok(false),
                     (false, IntrinsicKind::Set) => "vec_extend_set",
