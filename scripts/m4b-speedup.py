@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""M4b speedup harness: each program's `karac build` against a
+"""M4b speedup harness: each program's `KARAC_AUTO_PAR=0` `karac build` against a
 `KARAC_AUTO_PAR=1` build of the same source, by the same karac.
 
 The programs are the kata loop list (`docs/investigations/m4-kata-auto-par-loops.json`,
@@ -22,7 +22,10 @@ app one 21-run median swings by 0.15..0.45 (Gowtham's call, 2026-10-26).
         --katas ../kara-katas --out /mnt/attach/project-files/review/m4b-speedup --threads 4
 
 `--threads` sets `KARAC_THREADS` for both arms; without it the runtime runs
-its tasks on one worker, and the ratio is then the parallel form's overhead.
+one worker per core (since 72ce9e026c; one worker before it). `--threads 1`
+measures the parallel form's overhead. Both arms name `KARAC_AUTO_PAR`
+explicitly, `0` for seq and `1` for par, since auto-par is on by default from
+72ce9e026c.
 
 Builds run up to `--jobs` at a time before any timing starts; timing runs one
 binary at a time, so nothing else of the harness shares the cores with it.
@@ -92,8 +95,8 @@ def build(karac: str, src: Path, out: Path, par: bool, timeout: float) -> dict:
     env = dict(os.environ)
     for k in ("KARAC_AUTO_PAR", "KARAC_AUTO_PAR_DEBUG"):
         env.pop(k, None)
+    env["KARAC_AUTO_PAR"] = "1" if par else "0"
     if par:
-        env["KARAC_AUTO_PAR"] = "1"
         env["KARAC_AUTO_PAR_DEBUG"] = "1"
     start = time.monotonic()
     try:
@@ -182,9 +185,9 @@ def measure(prog: dict, seq: Path, par: Path, args) -> dict:
 
 def markdown(report: dict) -> str:
     rows = report["programs"]
-    lines = [f"# M4b speedup: seq `karac build` vs `KARAC_AUTO_PAR=1`", "",
+    lines = ["# M4b speedup: `KARAC_AUTO_PAR=0` vs `KARAC_AUTO_PAR=1` `karac build`", "",
              f"- karac `{report['karac_sha']}`, kara-katas `{report['katas_sha']}`, "
-             f"{report['nproc']} cores, `KARAC_THREADS={report['threads'] or 'unset (1)'}`, {report['runs']} interleaved runs (medians), "
+             f"{report['nproc']} cores, `KARAC_THREADS={report['threads'] or 'unset, one per core'}`, {report['runs']} interleaved runs (medians), "
              f"`KARAC_HASH_SEED={report['seed']}`, started {report['started']}.",
              f"- Ratio is seq/par: above 1 the parallel build is faster. Floor {FLOOR}.", ""]
     ran = [r for r in rows if r.get("ratio") is not None]
@@ -230,7 +233,7 @@ def main() -> int:
     ap.add_argument("--timeout", type=float, default=120.0, help="seconds per run")
     ap.add_argument("--build-timeout", type=float, default=600.0)
     ap.add_argument("--seed", type=int, default=1)
-    ap.add_argument("--threads", type=int, help="KARAC_THREADS for both arms (the runtime's default is 1)")
+    ap.add_argument("--threads", type=int, help="KARAC_THREADS for both arms (the runtime's default is one per core)")
     ap.add_argument("--filter", action="append", help="substring of a program's name (repeatable)")
     args = ap.parse_args()
 
