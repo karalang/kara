@@ -351,6 +351,10 @@ impl<'a> super::OwnershipChecker<'a> {
         ref_params: &HashSet<String>,
         ref_locals: &HashSet<String>,
     ) {
+        // The element (or payload) type: which parts of a pushed tuple or
+        // struct are borrows. `None` when the return type does not say, and
+        // then a source is classified whole, as before.
+        let elem = f.return_type.as_ref().and_then(first_type_arg);
         let mut returns: Vec<&Expr> = Vec::new();
         collect_return_exprs_in_block(&f.body, &mut returns);
         if let Some(tail) = &f.body.final_expr {
@@ -375,12 +379,9 @@ impl<'a> super::OwnershipChecker<'a> {
                 ExprKind::Identifier(name) => {
                     let mut sources: Vec<&Expr> = Vec::new();
                     collect_container_push_sources(&f.body, name, &mut sources);
-                    sources.iter().any(|src| {
-                        matches!(
-                            classify_borrow_return(src, ref_params, ref_locals),
-                            Some(BorrowReturnShape::DanglingSource)
-                        )
-                    })
+                    sources
+                        .iter()
+                        .any(|src| self.element_source_dangles(src, elem, ref_params, ref_locals))
                 }
                 // Directly returned wrapper: `Some(src)` (`Option[ref T]`) /
                 // `Ok(src)` (`Result[ref T, E]`) — `src` is the borrow payload.
@@ -392,10 +393,7 @@ impl<'a> super::OwnershipChecker<'a> {
                     );
                     is_borrow_wrapper
                         && args.len() == 1
-                        && matches!(
-                            classify_borrow_return(&args[0].value, ref_params, ref_locals),
-                            Some(BorrowReturnShape::DanglingSource)
-                        )
+                        && self.element_source_dangles(&args[0].value, elem, ref_params, ref_locals)
                 }
                 // Any other return form is conservatively accepted.
                 _ => false,
@@ -421,6 +419,48 @@ impl<'a> super::OwnershipChecker<'a> {
                     consume_span: None,
                 });
             }
+        }
+    }
+
+    /// Does an element `src` of a returned borrowed collection, of element
+    /// type `ty`, borrow storage that dies at return? Only its `ref` parts
+    /// can (B-2026-10-27-1): a tuple literal's are the members at `ref`
+    /// positions of `ty`, a borrowed struct literal's are its `ref` fields,
+    /// and a part whose type holds no `ref` is an owned value that moves
+    /// into the collection. `(c, 1)` in a `Vec[(ref Node, i64)]` is pinned
+    /// exactly when `c` is, as a bare `c` in a `Vec[ref Node]` is.
+    fn element_source_dangles(
+        &self,
+        src: &Expr,
+        ty: Option<&TypeExpr>,
+        ref_params: &HashSet<String>,
+        ref_locals: &HashSet<String>,
+    ) -> bool {
+        let dangles = |e: &Expr| {
+            matches!(
+                classify_borrow_return(e, ref_params, ref_locals),
+                Some(BorrowReturnShape::DanglingSource)
+            )
+        };
+        let Some(ty) = ty else {
+            return dangles(src);
+        };
+        if matches!(ty.kind, TypeKind::Ref(_) | TypeKind::MutRef(_)) {
+            return dangles(src);
+        }
+        if !type_expr_contains_ref(ty) {
+            return false;
+        }
+        match (&src.kind, &ty.kind) {
+            (ExprKind::Tuple(parts), TypeKind::Tuple(tys)) if parts.len() == tys.len() => parts
+                .iter()
+                .zip(tys)
+                .any(|(p, t)| self.element_source_dangles(p, Some(t), ref_params, ref_locals)),
+            (ExprKind::StructLiteral { .. }, _) => matches!(
+                self.classify_borrow_return_struct(src, ref_params, ref_locals),
+                Some(BorrowReturnShape::DanglingSource)
+            ),
+            _ => dangles(src),
         }
     }
 
@@ -1335,6 +1375,18 @@ fn type_expr_has_ref_element(te: &TypeExpr) -> bool {
         TypeKind::Tuple(elems) => elems.iter().any(type_expr_contains_ref),
         _ => false,
     }
+}
+
+/// The first type argument of a generic return type: `T` of `Vec[T]`,
+/// `Option[T]` or `Result[T, E]`.
+fn first_type_arg(te: &TypeExpr) -> Option<&TypeExpr> {
+    let TypeKind::Path(p) = &te.kind else {
+        return None;
+    };
+    p.generic_args.as_ref()?.iter().find_map(|a| match a {
+        GenericArg::Type(t) => Some(t),
+        _ => None,
+    })
 }
 
 /// `te` is (or transitively contains, through a generic arg / tuple member) a
