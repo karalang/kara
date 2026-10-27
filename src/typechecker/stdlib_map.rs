@@ -179,7 +179,9 @@ impl<'a> super::TypeChecker<'a> {
         span: &Span,
     ) -> Type {
         // K: Hash + Eq bound — Map requires the key type to be hashable and equality-comparable.
-        if !self.type_supports_hash(key) || !self.type_supports_eq(key) {
+        if (!self.type_supports_hash(key) || !self.type_supports_eq(key))
+            && !self.reported_table_keys.contains(&type_display(key))
+        {
             let missing = if !self.type_supports_hash(key) && !self.type_supports_eq(key) {
                 "Hash + Eq"
             } else if !self.type_supports_hash(key) {
@@ -1074,7 +1076,9 @@ impl<'a> super::TypeChecker<'a> {
         span: &Span,
     ) -> Type {
         // T: Hash + Eq bound
-        if !self.type_supports_hash(element) || !self.type_supports_eq(element) {
+        if (!self.type_supports_hash(element) || !self.type_supports_eq(element))
+            && !self.reported_table_keys.contains(&type_display(element))
+        {
             self.type_error(
                 format!(
                     "Set[{}]: element type does not implement `Hash + Eq`; \

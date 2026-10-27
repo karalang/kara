@@ -249,7 +249,7 @@ impl[T] DoubleEndedIterator for VecIter[T] {
 }
 
 /// The elements of a set, in the set's iteration order, each borrowed.
-struct SetIter[T] {
+struct SetIter[T: Hash + Eq] {
     s: ref Set[T],
     front: i64,
     back: i64,
@@ -268,7 +268,7 @@ impl[T] Iterator for SetIter[T] {
     }
 }
 
-impl[T] Set[T] {
+impl[T: Hash + Eq] Set[T] {
     /// The elements, in the set's iteration order, each borrowed.
     fn iter(ref self) -> SetIter[T] {
         SetIter { s: self, front: 0, back: self.len() }
@@ -390,7 +390,7 @@ impl[T: Ord] SortedSet[T] {
 
 /// The entries of a map, in the map's iteration order: each key and value
 /// borrowed.
-struct MapIter[K, V] {
+struct MapIter[K: Hash + Eq, V] {
     m: ref Map[K, V],
     front: i64,
     back: i64,
@@ -410,7 +410,7 @@ impl[K, V] Iterator for MapIter[K, V] {
     }
 }
 
-impl[K, V] Map[K, V] {
+impl[K: Hash + Eq, V] Map[K, V] {
     /// A map of the list's `(key, value)` pairs; a repeated key keeps its
     /// last value (docs/library/collections.md, Collection literals).
     fn from(v: own Vec[(K, V)]) -> Map[K, V] {
@@ -448,7 +448,7 @@ impl[K, V] Map[K, V] {
 }
 
 /// The keys of a map, in the map's iteration order, each borrowed.
-struct MapKeys[K, V] {
+struct MapKeys[K: Hash + Eq, V] {
     m: ref Map[K, V],
     front: i64,
     back: i64,
@@ -469,7 +469,7 @@ impl[K, V] Iterator for MapKeys[K, V] {
 }
 
 /// The values of a map, in the map's iteration order, each borrowed.
-struct MapValues[K, V] {
+struct MapValues[K: Hash + Eq, V] {
     m: ref Map[K, V],
     front: i64,
     back: i64,
@@ -1071,7 +1071,7 @@ impl FromIterator[char] for String {
     }
 }
 
-impl[K, V] FromIterator[(K, V)] for Map[K, V] {
+impl[K: Hash + Eq, V] FromIterator[(K, V)] for Map[K, V] {
     fn from_iter[I: Iterator[Item = (K, V)]](iter: own I) -> Map[K, V] {
         let mut it = iter;
         let mut out: Map[K, V] = Map.new();
@@ -1082,7 +1082,7 @@ impl[K, V] FromIterator[(K, V)] for Map[K, V] {
     }
 }
 
-impl[T] FromIterator[T] for Set[T] {
+impl[T: Hash + Eq] FromIterator[T] for Set[T] {
     fn from_iter[I: Iterator[Item = T]](iter: own I) -> Set[T] {
         let mut it = iter;
         let mut out: Set[T] = Set.new();
@@ -1147,7 +1147,7 @@ impl[T] Extend[T] for VecDeque[T] {
     }
 }
 
-impl[T] Extend[T] for Set[T] {
+impl[T: Hash + Eq] Extend[T] for Set[T] {
     fn extend[I: IntoIterator[Item = T]](mut ref self, items: own I) {
         for x in items.into_iter() {
             self.insert(x);
@@ -1164,7 +1164,7 @@ impl[T] Extend[T] for SortedSet[T] {
 }
 
 // A later pair replaces an earlier value, as `insert` does.
-impl[K, V] Extend[(K, V)] for Map[K, V] {
+impl[K: Hash + Eq, V] Extend[(K, V)] for Map[K, V] {
     fn extend[I: IntoIterator[Item = (K, V)]](mut ref self, items: own I) {
         for (k, v) in items.into_iter() {
             self.insert(k, v);
@@ -1219,7 +1219,7 @@ fn vec_extend_into[T, C: IntoIterator[Item = T]](v: mut ref Vec[T], items: own C
     }
 }
 
-fn vec_extend_set[T](v: mut ref Vec[T], items: own Set[T]) {
+fn vec_extend_set[T: Hash + Eq](v: mut ref Vec[T], items: own Set[T]) {
     for x in items.into_iter() {
         v.push(x);
     }
@@ -1237,7 +1237,7 @@ fn vec_extend_deque[T](v: mut ref Vec[T], items: own VecDeque[T]) {
     }
 }
 
-fn vec_extend_map[K, V](v: mut ref Vec[(K, V)], items: own Map[K, V]) {
+fn vec_extend_map[K: Hash + Eq, V](v: mut ref Vec[(K, V)], items: own Map[K, V]) {
     for (k, x) in items.into_iter() {
         v.push((k, x));
     }
@@ -1282,7 +1282,7 @@ fn deque_extend_vec[T](d: mut ref VecDeque[T], items: own Vec[T]) {
     }
 }
 
-fn deque_extend_set[T](d: mut ref VecDeque[T], items: own Set[T]) {
+fn deque_extend_set[T: Hash + Eq](d: mut ref VecDeque[T], items: own Set[T]) {
     for x in items.into_iter() {
         d.push_back(x);
     }
@@ -1301,7 +1301,7 @@ fn deque_extend_deque[T](d: mut ref VecDeque[T], items: own VecDeque[T]) {
     }
 }
 
-fn deque_extend_map[K, V](d: mut ref VecDeque[(K, V)], items: own Map[K, V]) {
+fn deque_extend_map[K: Hash + Eq, V](d: mut ref VecDeque[(K, V)], items: own Map[K, V]) {
     for (k, x) in items.into_iter() {
         d.push_back((k, x));
     }
@@ -1403,7 +1403,7 @@ impl[T: PartialEq] VecDeque[T] {
     }
 }
 
-impl[T] Set[T] {
+impl[T: Hash + Eq] Set[T] {
     fn default() -> Set[T] {
         Set.new()
     }
@@ -1415,7 +1415,7 @@ impl[T] SortedSet[T] {
     }
 }
 
-impl[K, V] Map[K, V] {
+impl[K: Hash + Eq, V] Map[K, V] {
     fn default() -> Map[K, V] {
         Map.new()
     }
@@ -1453,7 +1453,7 @@ impl[T] IntoIterator for VecDeque[T] {
     }
 }
 
-impl[T] IntoIterator for Set[T] {
+impl[T: Hash + Eq] IntoIterator for Set[T] {
     type Item = T;
 
     /// The elements moved out, in the set's iteration order.
@@ -1473,7 +1473,7 @@ impl[T] IntoIterator for SortedSet[T] {
     }
 }
 
-impl[K, V] IntoIterator for Map[K, V] {
+impl[K: Hash + Eq, V] IntoIterator for Map[K, V] {
     type Item = (K, V);
 
     /// The entries, each a `(key, value)` pair, moved out, in the map's iteration order.

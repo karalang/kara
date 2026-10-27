@@ -90,6 +90,7 @@ mod stdlib_iter;
 mod stdlib_map;
 mod stdlib_methods;
 mod stdlib_seq;
+mod table_keys;
 #[cfg(test)]
 mod tests;
 pub mod types;
@@ -3127,6 +3128,15 @@ pub struct TypeChecker<'a> {
     /// slot — and the "does not implement `BuildHasher`" error is attached to
     /// the path span, so without this the same misspelling reports twice.
     pub(super) checked_container_hashers: FxHashSet<SpanKey>,
+    /// B-2026-10-27-25: `Map` / `Set` writes whose key has been judged
+    /// against `Hash + Eq`, the type-parameter declarations already told
+    /// they need it, and the concrete keys already refused (so a method
+    /// call on the same table does not report the key twice). The check
+    /// goes live once declarations have been judged.
+    pub(super) checked_table_keys: FxHashSet<SpanKey>,
+    pub(super) reported_table_key_params: FxHashSet<SpanKey>,
+    pub(super) reported_table_keys: FxHashSet<String>,
+    pub(super) table_keys_live: bool,
     /// See [`TypeCheckResult::direct_iter_terminals`].
     pub(super) direct_iter_terminals: FxHashSet<SpanKey>,
     /// MethodCall span → receiver type-parameter name. See the matching field
@@ -3757,6 +3767,10 @@ impl<'a> TypeChecker<'a> {
             method_impl_type_subs: FxHashMap::default(),
             impl_dispatch_names: crate::impl_dispatch::ImplDispatchNames::default(),
             checked_container_hashers: FxHashSet::default(),
+            checked_table_keys: FxHashSet::default(),
+            reported_table_key_params: FxHashSet::default(),
+            reported_table_keys: FxHashSet::default(),
+            table_keys_live: false,
             direct_iter_terminals: FxHashSet::default(),
             method_typeparam_receiver: FxHashMap::default(),
             method_typeparam_trait_key: FxHashMap::default(),
@@ -4007,6 +4021,7 @@ impl<'a> TypeChecker<'a> {
         // available, and it is what keeps `Array` — newly dispatchable in this
         // row — from joining that class.
         self.reject_unqualifiable_impl_collisions();
+        self.check_declared_table_keys();
         self.check_items();
         self.check_wide_int_literals();
         self.finalize_typevar_pattern_bindings();

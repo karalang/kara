@@ -845,18 +845,14 @@ impl<'a> super::TypeChecker<'a> {
         })
     }
 
-    /// The edit adding `trait_name` to the declaration of type parameter
-    /// `param` on the function or impl around `offset`, or `None` when that
-    /// declaration already names `Clone` / `Copy` (for `Clone`) or the trait.
-    pub(super) fn param_bound_edit(
-        &self,
-        offset: usize,
-        param: &str,
-        trait_name: &str,
-    ) -> Option<crate::resolver::TextEdit> {
+    /// The generic parameter lists in scope at `offset`, innermost first: a
+    /// method's before its impl's or trait's, and a struct's, enum's or
+    /// alias's own (B-2026-10-27-25).
+    pub(super) fn param_scopes_at(&self, offset: usize) -> Vec<&'a Option<GenericParams>> {
         let inside = |sp: &Span| sp.offset <= offset && offset < sp.offset + sp.length;
-        let mut scopes: Vec<&Option<GenericParams>> = Vec::new();
-        for item in &self.program.items {
+        let mut scopes: Vec<&'a Option<GenericParams>> = Vec::new();
+        let program: &'a Program = self.program;
+        for item in &program.items {
             match item {
                 Item::Function(f) if inside(&f.span) => scopes.push(&f.generic_params),
                 Item::ImplBlock(imp) if inside(&imp.span) => {
@@ -869,10 +865,36 @@ impl<'a> super::TypeChecker<'a> {
                     }
                     scopes.push(&imp.generic_params);
                 }
+                Item::TraitDef(t) if inside(&t.span) => {
+                    for it in &t.items {
+                        if let TraitItem::Method(m) = it {
+                            if inside(&m.span) {
+                                scopes.push(&m.generic_params);
+                            }
+                        }
+                    }
+                    scopes.push(&t.generic_params);
+                }
+                Item::StructDef(s) if inside(&s.span) => scopes.push(&s.generic_params),
+                Item::EnumDef(e) if inside(&e.span) => scopes.push(&e.generic_params),
+                Item::TypeAlias(t) if inside(&t.span) => scopes.push(&t.generic_params),
                 _ => {}
             }
         }
-        let gp = scopes
+        scopes
+    }
+
+    /// The edit adding `trait_name` to the declaration of type parameter
+    /// `param` on the function or impl around `offset`, or `None` when that
+    /// declaration already names `Clone` / `Copy` (for `Clone`) or the trait.
+    pub(super) fn param_bound_edit(
+        &self,
+        offset: usize,
+        param: &str,
+        trait_name: &str,
+    ) -> Option<crate::resolver::TextEdit> {
+        let gp = self
+            .param_scopes_at(offset)
             .into_iter()
             .flatten()
             .flat_map(|g| g.params.iter())
@@ -1978,11 +2000,17 @@ impl super::env::TypeEnv {
             Type::Named { name, args } if (name == "Vec" || name == "VecDeque") && args.len() == 1 => {
                 self.type_supports_eq(&args[0])
             }
-            Type::Named { name, .. } => {
+            // A derive on a generic type holds for the arguments that have the
+            // trait: `#[derive(Eq)] struct Pair[T]` is not `Eq` at `Pair[f64]`
+            // (B-2026-10-27-25).
+            Type::Named { name, args } => {
+                let derived = |d: &std::collections::HashSet<String>| {
+                    d.contains("Eq") && args.iter().all(|a| self.type_supports_eq(a))
+                };
                 if let Some(info) = self.structs.get(name) {
-                    info.derived_traits.contains("Eq") || self.has_user_impl_eq(name)
+                    derived(&info.derived_traits) || self.has_user_impl_eq(name)
                 } else if let Some(info) = self.enums.get(name) {
-                    info.derived_traits.contains("Eq") || self.has_user_impl_eq(name)
+                    derived(&info.derived_traits) || self.has_user_impl_eq(name)
                 } else {
                     // Unknown type — permissive to avoid cascading errors
                     // when the resolver has already flagged it.
@@ -2041,11 +2069,17 @@ impl super::env::TypeEnv {
             Type::Named { name, args } if name == "Vec" && args.len() == 1 => {
                 self.type_supports_hash(&args[0])
             }
-            Type::Named { name, .. } => {
+            // A derive on a generic type holds for the arguments that have the
+            // trait: `#[derive(Hash)] struct Pair[T]` is not `Hash` at `Pair[f64]`
+            // (B-2026-10-27-25).
+            Type::Named { name, args } => {
+                let derived = |d: &std::collections::HashSet<String>| {
+                    d.contains("Hash") && args.iter().all(|a| self.type_supports_hash(a))
+                };
                 if let Some(info) = self.structs.get(name) {
-                    info.derived_traits.contains("Hash") || self.has_user_impl_hash(name)
+                    derived(&info.derived_traits) || self.has_user_impl_hash(name)
                 } else if let Some(info) = self.enums.get(name) {
-                    info.derived_traits.contains("Hash") || self.has_user_impl_hash(name)
+                    derived(&info.derived_traits) || self.has_user_impl_hash(name)
                 } else {
                     true
                 }

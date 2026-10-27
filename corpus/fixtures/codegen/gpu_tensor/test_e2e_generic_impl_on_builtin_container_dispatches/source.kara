@@ -1,7 +1,7 @@
 trait Zero { fn describe(ref self) -> String; }
 impl[T] Zero for Vec[T] { fn describe(ref self) -> String { return f"VEC"; } }
-impl[K, V] Zero for Map[K, V] { fn describe(ref self) -> String { return f"MAP"; } }
-impl[T] Zero for Set[T] { fn describe(ref self) -> String { return f"SET"; } }
+impl[K: Hash + Eq, V] Zero for Map[K, V] { fn describe(ref self) -> String { return f"MAP"; } }
+impl[T: Hash + Eq] Zero for Set[T] { fn describe(ref self) -> String { return f"SET"; } }
 fn main() {
 let mut v: Vec[i64] = Vec.new();
 v.push(1);

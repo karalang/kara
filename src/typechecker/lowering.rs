@@ -791,6 +791,7 @@ impl<'a> super::TypeChecker<'a> {
             // selector and STRIP it, so every downstream consumer keeps seeing
             // the two-ary `Map` / one-ary `Set` it always has (B-2026-08-21-6).
             args = self.take_hasher_type_arg(name, args, path, generic_scope);
+            self.check_table_key_at(name, &args, path.span);
             // Intercept stdlib Rc[T] / Arc[T] wrappers — sub-item 2 of the
             // Type::Shared/Rc/Arc representation work. Single-arg form
             // only; zero/multi-arg keeps flowing through Type::Named so

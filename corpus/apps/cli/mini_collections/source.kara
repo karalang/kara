@@ -79,7 +79,7 @@ fn pair_repr[K: PyRepr, V: PyRepr](k: ref K, v: ref V) -> String {
 // A dict keeps its keys in insertion order; Map does not, so the entries
 // live in a Vec (a removed entry leaves None until the next compaction)
 // and the Map indexes it.
-struct Dict[K, V] {
+struct Dict[K: Hash + Eq, V] {
     slots: Vec[Option[(K, V)]],
     index: Map[K, i64],
 }

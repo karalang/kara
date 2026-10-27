@@ -851,7 +851,7 @@ struct Opcode {
     j2: i64,
 }
 
-struct Matcher[T] {
+struct Matcher[T: Hash + Eq] {
     a: Vec[T],
     b: Vec[T],
     b2j: Map[T, Vec[i64]],

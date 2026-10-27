@@ -47303,6 +47303,7 @@ fn a_map_key_with_only_half_the_pair_is_refused_and_told_which_half() {
     // hand is the easy way to end up with only one — so the rejection survives
     // for a PARTIAL set, and has to name the missing half rather than repeat the
     // old "your impl will go unused", which is no longer true of either.
+    // Since B-2026-10-27-25 it is reported where the `Map` type is written.
     for (src, missing) in [
         (
             r#"
@@ -47333,7 +47334,10 @@ fn main() {
         let errs = typecheck_errors(src);
         let msg = errs
             .iter()
-            .find(|e| e.message.contains("can be Map keys"))
+            .find(|e| {
+                e.message
+                    .contains("of this `Map` must implement `Hash + Eq`")
+            })
             .map(|e| e.message.clone())
             .unwrap_or_else(|| panic!("expected a Map key rejection, got: {errs:?}"));
         assert!(
@@ -47363,11 +47367,14 @@ fn main() {
     );
     let msg = errs
         .iter()
-        .find(|e| e.message.contains("can be Map keys"))
+        .find(|e| {
+            e.message
+                .contains("of this `Map` must implement `Hash + Eq`")
+        })
         .map(|e| e.message.clone())
         .expect("expected the Map key bound to be rejected");
     assert!(
-        !msg.contains("you have written"),
+        !msg.to_lowercase().contains("you have written"),
         "a key type with no impl has no impl to reconcile against: {msg}"
     );
 }

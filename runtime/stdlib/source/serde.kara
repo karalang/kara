@@ -236,7 +236,7 @@ impl[T: Serialize] Serialize for VecDeque[T] {
     }
 }
 
-impl[T: Serialize] Serialize for Set[T] {
+impl[T: Serialize + Hash + Eq] Serialize for Set[T] {
     fn serialize[S: Serializer](ref self, s: mut ref S) {
         s.serialize_seq_begin(self.len());
         for x in self.iter() {
@@ -267,7 +267,7 @@ impl[T: Serialize] Serialize for Option[T] {
     }
 }
 
-impl[K: Serialize, V: Serialize] Serialize for Map[K, V] {
+impl[K: Serialize + Hash + Eq, V: Serialize] Serialize for Map[K, V] {
     fn serialize[S: Serializer](ref self, s: mut ref S) {
         s.serialize_map_begin(self.len());
         for (k, v) in self.iter() {

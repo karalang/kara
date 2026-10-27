@@ -34,7 +34,7 @@ enum GraphError[N] {
 
 // The nodes live in `infos` in the order they were first seen, as
 // graphlib's dict keeps them; `index` finds a node's place.
-struct TopologicalSorter[N] {
+struct TopologicalSorter[N: Hash + Eq] {
     infos: Vec[NodeInfo[N]],
     index: Map[N, i64],
     ready: Option[Vec[i64]],
