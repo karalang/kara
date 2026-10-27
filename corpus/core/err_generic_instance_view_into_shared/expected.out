@@ -1,0 +1,1 @@
+error: instance put[ref String] stores a view in a shared field (§5.8), noted at the generic body's line 2

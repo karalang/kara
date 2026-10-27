@@ -1,0 +1,9 @@
+shared struct Slot[T] { mut items: Vec[T] }
+fn put[T](s: Slot[T], x: own T) { s.items.push(x); }
+fn main() {
+    let name = "a".to_string();
+    let s: Slot[ref String] = Slot { items: Vec.new() };
+    let r = ref name;
+    put(s, r);
+    println(f"{s.items.len()}");
+}

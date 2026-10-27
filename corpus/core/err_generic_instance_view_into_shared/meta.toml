@@ -1,0 +1,10 @@
+source = "review/conformance-sweep-2026-10-19/pins/5.8-generic-view-instance"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["shared"]
+expected_from = "spec"
+rules = ["5.7", "5.8"]
+backends = []
+env = {}
+note = "B-2026-10-19-43: core semantics §5.8, an instance whose body stores a view-typed value where a view may not go (a field of a `shared` value, §5.7) is an error; `put[ref String]` pushes a `ref String` into `s.items`. The expected.out wording of an error pin is guidance, not a byte oracle."

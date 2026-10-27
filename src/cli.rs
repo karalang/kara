@@ -3223,7 +3223,7 @@ fn mir_check_message(e: &crate::mir::BorrowError) -> String {
                 other => other,
             }
         ),
-        ("E0509", Some(place)) => format!(
+        ("E0509", Some(place)) if e.text.contains("which this function owns") => format!(
             "the result borrows {place}, which this function owns, so it would outlive \
              it (core-semantics.md §5.4) [E0509]"
         ),

@@ -297,6 +297,7 @@ pub fn borrow_errors(
     has_receiver: &dyn Fn(&InstanceId) -> ResultBorrows,
 ) -> Vec<BorrowError> {
     let mut errs = read_only_errors(body, tys);
+    errs.extend(view_into_shared_errors(body, tys));
     let loans = collect_loans(body, tys);
     if loans.is_empty() {
         return errs;
@@ -607,6 +608,158 @@ fn through_shared_ref(body: &Body, tys: &TyInterner, place: &Place) -> bool {
     read_only
 }
 
+/// Does `place` name a field of a `shared` value (`s.items`, `(*s).items`
+/// through a `ref` handle)? A view may not go there (core semantics §5.7).
+fn in_shared_field(body: &Body, tys: &TyInterner, place: &Place) -> bool {
+    (0..place.projection.len()).any(|i| {
+        let prefix = Place {
+            local: place.local,
+            projection: place.projection[..i].to_vec(),
+        };
+        matches!(place.projection[i], ProjElem::Field(..))
+            && place_ty(body, tys, &prefix)
+                .is_ok_and(|pt| matches!(tys.kind(pt.ty), TyKind::Shared(_)))
+    })
+}
+
+/// Whether a value of type `ty` is or holds a view: a `ref`, a `Str`, a
+/// slice, or a collection, tuple or struct with one in it. A `shared`
+/// handle is not a view, and a function value's captures are the by-loan
+/// check's (§9.3).
+fn holds_view(tys: &TyInterner, ty: Ty) -> bool {
+    fn go(tys: &TyInterner, ty: Ty, seen: &mut Vec<Ty>) -> bool {
+        if seen.contains(&ty) {
+            return false;
+        }
+        seen.push(ty);
+        match tys.kind(ty) {
+            TyKind::Ref(_) | TyKind::MutRef(_) | TyKind::Str | TyKind::Slice(_) => true,
+            TyKind::Tuple(ts) => ts.iter().any(|t| go(tys, *t, seen)),
+            TyKind::Array(t, _) => go(tys, t, seen),
+            TyKind::Intrinsic(
+                IntrinsicTy::Vec(e)
+                | IntrinsicTy::Set(e)
+                | IntrinsicTy::VecDeque(e)
+                | IntrinsicTy::SortedSet(e),
+            ) => go(tys, e, seen),
+            TyKind::Intrinsic(IntrinsicTy::Map(k, v) | IntrinsicTy::SortedMap(k, v)) => {
+                go(tys, k, seen) || go(tys, v, seen)
+            }
+            TyKind::Adt(a) => {
+                let adt = tys.adt(a);
+                let is_enum = adt.is_enum;
+                adt.variants.iter().enumerate().any(|(v, var)| {
+                    (0..var.fields.len() as u32).any(|f| {
+                        tys.field_ty(ty, is_enum.then_some(v as u32), f)
+                            .is_some_and(|t| go(tys, t, seen))
+                    })
+                })
+            }
+            _ => false,
+        }
+    }
+    go(tys, ty, &mut Vec::new())
+}
+
+/// The field of a `shared` value statement `s` stores a view-typed value
+/// in, with that value's type.
+fn stored_view(body: &Body, tys: &TyInterner, s: &StatementKind) -> Option<(Place, Ty)> {
+    let StatementKind::Assign(dest, rv) = s else {
+        return None;
+    };
+    if !in_shared_field(body, tys, dest) {
+        return None;
+    }
+    let op_ty = |op: &Operand| match op {
+        Operand::Copy(p) | Operand::Move(p) => place_ty(body, tys, p).ok().map(|pt| pt.ty),
+        Operand::Const(c) => Some(c.ty),
+    };
+    let t = match rv {
+        Rvalue::Ref(..) => place_ty(body, tys, dest).ok().map(|pt| pt.ty),
+        Rvalue::Use(op) | Rvalue::Cast(_, op, _) => op_ty(op),
+        Rvalue::Aggregate(_, ops) => ops.iter().filter_map(op_ty).find(|t| holds_view(tys, *t)),
+        _ => None,
+    }?;
+    holds_view(tys, t).then(|| (dest.clone(), t))
+}
+
+/// A view-typed value stored in a field of a `shared` value (core
+/// semantics §5.7): assigned there, or passed to a call beside a `mut ref`
+/// lending that field, whose type can hold it (`s.items.push(r)`). Decided
+/// by type, so it holds where the view arrives as a parameter and the body
+/// takes no loan of it, as in a generic instance (`put[ref String]`, §5.8;
+/// B-2026-10-19-43).
+fn view_into_shared_errors(body: &Body, tys: &TyInterner) -> Vec<BorrowError> {
+    let mut errs = Vec::new();
+    // What a `mut ref` temporary lends: the place of its one `&mut`.
+    let lent = |l: Local| {
+        body.blocks
+            .iter()
+            .flat_map(|b| &b.statements)
+            .find_map(|s| match &s.kind {
+                StatementKind::Assign(d, Rvalue::Ref(BorrowKind::Mut, p))
+                    if d.local == l && d.projection.is_empty() =>
+                {
+                    Some(p.clone())
+                }
+                _ => None,
+            })
+    };
+    // A generic instance is named, as §5.8 does: its body is the generic
+    // one, which stores no view until a view type fills its parameter.
+    let subject = |t: Ty| {
+        if body.instance.args.is_empty() {
+            format!("a view (`{}`) is stored", tys.display(t))
+        } else {
+            format!(
+                "the instance {} stores a view (`{}`)",
+                body.instance.name,
+                tys.display(t)
+            )
+        }
+    };
+    for (bi, block) in body.blocks.iter().enumerate() {
+        let n = block.statements.len();
+        for si in 0..=n {
+            let stored = if si < n {
+                stored_view(body, tys, &block.statements[si].kind)
+            } else if let TerminatorKind::Call { args, .. } = &block.terminator.kind {
+                args.iter().enumerate().find_map(|(i, a)| {
+                    let p = a.place().filter(|p| p.projection.is_empty())?;
+                    let pt = place_ty(body, tys, p).ok()?;
+                    let TyKind::MutRef(holder) = tys.kind(pt.ty) else {
+                        return None;
+                    };
+                    let field = lent(p.local).filter(|f| in_shared_field(body, tys, f))?;
+                    args.iter().enumerate().find_map(|(j, b)| {
+                        let q = b.place().filter(|_| j != i)?;
+                        let t = place_ty(body, tys, q).ok()?.ty;
+                        (holds_view(tys, t) && contains_ty(tys, holder, t))
+                            .then(|| (field.clone(), t))
+                    })
+                })
+            } else {
+                None
+            };
+            let Some((field, t)) = stored else {
+                continue;
+            };
+            let text = format!(
+                "{}: {} in {}, a field of a `shared` value, where a view may not go; store an owned copy instead (core semantics §5.7, §5.8) [E0509]",
+                site(body, (bi, si), None),
+                subject(t),
+                source_place(body, tys, &field)
+                    .map_or_else(|| show_place(body, tys, &field), |p| format!("`{p}`")),
+            );
+            errs.push(BorrowError {
+                place: source_place(body, tys, &field),
+                ..BorrowError::new(text, "E0509", site_at(body, (bi, si), None))
+            });
+        }
+    }
+    errs
+}
+
 /// The source `line:column` of statement `si` of block `bi` (its
 /// terminator past the last statement), when the builder recorded one.
 fn source_at(body: &Body, (bi, si): (usize, usize)) -> Option<(usize, usize)> {
@@ -871,7 +1024,9 @@ impl Cx<'_> {
         let StatementKind::Assign(dest, rv) = s else {
             return val;
         };
-        if dest.projection.contains(&ProjElem::Deref) {
+        if dest.projection.contains(&ProjElem::Deref)
+            || stored_view(self.body, self.tys, s).is_some()
+        {
             return val;
         }
         match rv {
