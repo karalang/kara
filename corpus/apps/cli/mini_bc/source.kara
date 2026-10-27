@@ -333,6 +333,7 @@ impl Add for Num {
 }
 
 impl Neg for Num {
+    type Output = Num;
     fn neg(own self) -> Num {
         num(not self.neg, self.mag, self.scale)
     }

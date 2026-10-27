@@ -2,6 +2,7 @@
 //
 // CR-202 slice 5l. Per design.md § Operator Traits.
 
-trait Rem {
-    fn rem(own self, rhs: own Self) -> Self;
+trait Rem[Rhs = Self] {
+    type Output;
+    fn rem(own self, rhs: own Rhs) -> Self.Output;
 }

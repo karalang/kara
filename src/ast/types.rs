@@ -287,6 +287,11 @@ pub struct GenericParam {
     /// param is carried in `bounds` and classified at the typechecker
     /// (like the structural `Effect` marker).
     pub is_variadic_shape: bool,
+    /// `Rhs = Self`: the argument an omitted one takes (design.md § Default
+    /// generic arguments). Parsed on a trait's type parameters only
+    /// (`Parser::generic_defaults_ok`); `Self` in it is the type the trait
+    /// is for.
+    pub default: Option<TypeExpr>,
     pub span: Span,
 }
 

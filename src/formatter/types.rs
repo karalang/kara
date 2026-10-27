@@ -69,6 +69,10 @@ impl super::Formatter {
                     self.format_trait_bound(b);
                 }
             }
+            if let Some(d) = &p.default {
+                self.write_str(" = ");
+                self.format_type_expr(d);
+            }
         }
         for ep in &gp.effect_params {
             if !first {

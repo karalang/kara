@@ -2,6 +2,7 @@
 //
 // CR-202 slice 5h. Per design.md § Operator Traits.
 
-trait Add {
-    fn add(own self, rhs: own Self) -> Self;
+trait Add[Rhs = Self] {
+    type Output;
+    fn add(own self, rhs: own Rhs) -> Self.Output;
 }

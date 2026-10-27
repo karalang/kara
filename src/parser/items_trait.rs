@@ -125,7 +125,9 @@ impl super::Parser {
         let name_span = self.span_from(&start);
         self.check_ident_class(&name, IdentClass::Type, "trait", name_span);
         let doc_comment = self.take_pending_doc();
+        self.generic_defaults_ok = true;
         let generic_params = self.parse_optional_generic_params();
+        self.generic_defaults_ok = false;
 
         if self.check(&Token::Equal) {
             return self

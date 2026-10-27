@@ -3875,16 +3875,6 @@ impl<'a> super::TypeChecker<'a> {
         full_target: &Type,
         gp: &[String],
     ) {
-        // The operator traits are declared without the spec's `Rhs` and
-        // `Output` (B-2026-10-27-13); `check_operator_output` holds an
-        // operator method to its impl's `Output` meanwhile.
-        const OPERATORS: [&str; 12] = [
-            "Add", "Sub", "Mul", "Div", "Rem", "BitAnd", "BitOr", "BitXor", "Shl", "Shr", "Neg",
-            "Not",
-        ];
-        if OPERATORS.contains(&trait_name) {
-            return;
-        }
         let Some(tdef) = self.find_trait_def(trait_name).cloned() else {
             return;
         };
@@ -3917,7 +3907,11 @@ impl<'a> super::TypeChecker<'a> {
                     b.span,
                 ));
             } else if b.generic_params.is_none() {
-                bindings.push((b.name.clone(), self.lower_type_expr(&b.ty, gp)));
+                // `type Output = Self` is the impl's type.
+                let mut scope = gp.to_vec();
+                scope.push("Self".to_string());
+                let ty = self.lower_type_expr(&b.ty, &scope);
+                bindings.push((b.name.clone(), ty));
             }
         }
         let trait_gp = Self::generic_param_names(&tdef.generic_params);
@@ -3934,7 +3928,8 @@ impl<'a> super::TypeChecker<'a> {
                     .collect()
             })
             .unwrap_or_default();
-        let mut checks: Vec<(String, Span, Type, Type)> = Vec::new();
+        // Each comparison, with what to add when it fails.
+        let mut checks: Vec<(String, Span, Type, Type, String)> = Vec::new();
         for item in &imp.items {
             let ImplItem::Method(method) = item else {
                 continue;
@@ -3971,6 +3966,18 @@ impl<'a> super::TypeChecker<'a> {
             for (p, a) in trait_gp.iter().zip(&trait_args) {
                 subs.insert(p.clone(), SubstValue::Type(a.clone()));
             }
+            // An omitted trait argument is its parameter's default, read at
+            // this impl (`impl Add for M` is `impl Add[M] for M`).
+            let omitted = tdef.generic_params.iter().flat_map(|g| &g.params);
+            let mut defaulted: Vec<&str> = Vec::new();
+            for param in omitted.skip(trait_args.len()) {
+                if let Some(d) = &param.default {
+                    defaulted.push(&param.name);
+                    let lowered = self.lower_type_expr(d, &trait_scope);
+                    let arg = at_impl(&lowered, &bindings, &subs);
+                    subs.insert(param.name.clone(), SubstValue::Type(arg));
+                }
+            }
             for (p, q) in tm_gp.iter().zip(&im_gp) {
                 subs.insert(p.clone(), SubstValue::Type(Type::TypeParam(q.clone())));
             }
@@ -3986,11 +3993,26 @@ impl<'a> super::TypeChecker<'a> {
                 let want = read_trait(self, &tp.ty);
                 let got = read_impl(self, &ip.ty);
                 let pname = ip.name().unwrap_or("_").to_string();
+                // A parameter typed by an omitted trait argument
+                // (`rhs: own Rhs` under `impl Add for I`) takes another
+                // type when the impl names it (`impl Add[D] for I`).
+                let hint = match &tp.ty.kind {
+                    TypeKind::Path(p)
+                        if p.segments.len() == 1
+                            && p.generic_args.is_none()
+                            && defaulted.contains(&p.segments[0].as_str()) =>
+                    {
+                        let got = type_display(peel_mode(&got));
+                        format!(". To take a `{got}`, implement `{trait_name}[{got}]`")
+                    }
+                    _ => String::new(),
+                };
                 checks.push((
                     format!("parameter '{pname}' of impl method '{type_name}.{name}'"),
                     ip.ty.span,
                     want,
                     got,
+                    hint,
                 ));
             }
             let want = tm
@@ -4007,19 +4029,20 @@ impl<'a> super::TypeChecker<'a> {
                 span,
                 want,
                 got,
+                String::new(),
             ));
         }
         // Re-lowering for the comparison must not repeat what the trait's and
         // the impl's own lowering already reported.
         self.errors.truncate(mark.0);
         self.warnings.truncate(mark.1);
-        for (what, span, want, got) in checks {
+        for (what, span, want, got, hint) in checks {
             let (want, got) = (peel_mode(&want), peel_mode(&got));
             if sig_types_differ(want, got) {
                 found.push((
                     format!(
                         "{what} is `{}`, but trait '{trait_name}' declares `{}` there: an impl \
-                         method's signature is the trait's",
+                         method's signature is the trait's{hint}",
                         type_display(got),
                         type_display(want),
                     ),
@@ -4030,6 +4053,58 @@ impl<'a> super::TypeChecker<'a> {
         for (message, span) in found {
             self.type_error(message, span, TypeErrorKind::TypeMismatch);
         }
+    }
+
+    /// The binding a missing `type A` takes when a trait method returns
+    /// `Self.A` and the impl's method of that name writes its return type
+    /// (an operator impl written before the operator traits declared their
+    /// `Output`, B-2026-10-27-13): `type A = <that type>;`, inserted before
+    /// the impl's first item.
+    fn missing_assoc_type_fix(
+        &mut self,
+        imp: &ImplBlock,
+        trait_name: &str,
+        assoc: &str,
+        gp: &[String],
+    ) -> Option<FixIt> {
+        let tdef = self.find_trait_def(trait_name)?;
+        let returns_assoc = |m: &&TraitMethod| {
+            matches!(
+                m.return_type.as_ref().map(|t| &t.kind),
+                Some(TypeKind::Path(p))
+                    if p.segments.len() == 2 && p.segments[0] == "Self" && p.segments[1] == assoc
+            )
+        };
+        let names: Vec<String> = tdef
+            .items
+            .iter()
+            .filter_map(|it| match it {
+                TraitItem::Method(m) => Some(&**m),
+                _ => None,
+            })
+            .filter(returns_assoc)
+            .map(|m| m.name.clone())
+            .collect();
+        let ret = imp.items.iter().find_map(|i| match i {
+            ImplItem::Method(f) if names.contains(&f.name) => f.return_type.as_ref(),
+            _ => None,
+        })?;
+        let first = imp.items.first().map(|i| match i {
+            ImplItem::Method(f) => f.span,
+            ImplItem::AssocType(b) => b.span,
+        })?;
+        let (errors, warnings) = (self.errors.len(), self.warnings.len());
+        let ty = self.lower_type_expr(ret, gp);
+        self.errors.truncate(errors);
+        self.warnings.truncate(warnings);
+        if matches!(ty, Type::Error | Type::AssocProjection { .. }) {
+            return None;
+        }
+        let indent = " ".repeat(first.column.saturating_sub(1));
+        Some(FixIt {
+            span: Span { length: 0, ..first },
+            replacement: format!("type {assoc} = {};\n{indent}", type_display(&ty)),
+        })
     }
 
     fn check_impl_block(&mut self, imp: &ImplBlock) {
@@ -4420,14 +4495,19 @@ impl<'a> super::TypeChecker<'a> {
                     .collect();
                 for required in &trait_info.assoc_types {
                     if !provided.contains(required) {
-                        self.type_error(
-                            format!(
-                                "impl of trait '{}' is missing associated type '{}'",
-                                trait_name, required
-                            ),
-                            imp.span,
-                            TypeErrorKind::MissingField,
+                        let message = format!(
+                            "impl of trait '{}' is missing associated type '{}'",
+                            trait_name, required
                         );
+                        match self.missing_assoc_type_fix(imp, &trait_name, required, &gp) {
+                            Some(fix) => self.type_error_with_fix_it(
+                                message,
+                                imp.span,
+                                TypeErrorKind::MissingField,
+                                fix,
+                            ),
+                            None => self.type_error(message, imp.span, TypeErrorKind::MissingField),
+                        }
                     }
                 }
                 // Supertrait constraint: every supertrait of `trait_name` must
@@ -4694,92 +4774,12 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
-        self.check_operator_output(imp, &gp);
-
         self.enclosing_bounds = saved_bounds;
         self.enclosing_assoc_eqs = saved_assoc_eqs;
         self.enclosing_proj_bounds = saved_proj_bounds;
         self.current_impl_target = saved_impl_target;
         self.current_concrete_impl_target = saved_concrete_impl_target;
         self.lint_override_stack.pop();
-    }
-
-    /// B-2026-10-15-76 — in an impl of an operator trait, `type Output` is
-    /// the operator's result type (design.md § Operator traits), so the
-    /// operator method must return it: `impl Sub for Instant { type Output
-    /// = Duration; fn sub(..) -> Instant }` is refused rather than letting
-    /// `a - b` be an `Instant` and `T.Output` a `Duration`.
-    fn check_operator_output(&mut self, imp: &ImplBlock, gp: &[String]) {
-        let Some(tr) = imp.trait_name.as_ref().and_then(|p| p.segments.last()) else {
-            return;
-        };
-        let method = match tr.as_str() {
-            "Neg" => "neg",
-            "Not" => "not",
-            _ => match [
-                "Add", "Sub", "Mul", "Div", "Rem", "BitAnd", "BitOr", "BitXor", "Shl", "Shr",
-            ]
-            .iter()
-            .position(|t| t == tr)
-            {
-                Some(i) => [
-                    "add", "sub", "mul", "div", "rem", "bitand", "bitor", "bitxor", "shl", "shr",
-                ][i],
-                None => return,
-            },
-        };
-        let output = imp.items.iter().find_map(|i| match i {
-            ImplItem::AssocType(b) if b.name == "Output" && b.generic_params.is_none() => Some(b),
-            _ => None,
-        });
-        let func = imp.items.iter().find_map(|i| match i {
-            ImplItem::Method(f) if f.name == method => Some(f),
-            _ => None,
-        });
-        let (Some(output), Some(func)) = (output, func) else {
-            return;
-        };
-        let Some(ret) = &func.return_type else {
-            return;
-        };
-        let (errors, warnings) = (self.errors.len(), self.warnings.len());
-        // `Self` as written, with the impl's own parameters (`W[T]`).
-        let target = self.lower_type_expr(&imp.target_type, gp);
-        fn own_self(t: Type, target: &Type) -> Type {
-            match t {
-                Type::Named { name, args } if name == "Self" && args.is_empty() => target.clone(),
-                Type::TypeParam(p) if p == "Self" => target.clone(),
-                Type::Named { name, args } => Type::Named {
-                    name,
-                    args: args.into_iter().map(|a| own_self(a, target)).collect(),
-                },
-                Type::Tuple(ts) => {
-                    Type::Tuple(ts.into_iter().map(|a| own_self(a, target)).collect())
-                }
-                t => t,
-            }
-        }
-        let declared = own_self(self.lower_type_expr(&output.ty, gp), &target);
-        let returned = own_self(self.lower_type_expr(ret, gp), &target);
-        // Lowering the two again reports nothing new: the binding and the
-        // method were checked above.
-        self.errors.truncate(errors);
-        self.warnings.truncate(warnings);
-        if matches!(returned, Type::AssocProjection { .. })
-            || super::types::types_compatible(&returned, &declared)
-        {
-            return;
-        }
-        self.type_error(
-            format!(
-                "`{method}` returns `{}`, but this impl's `type Output` is `{}`: the result of \
-                 the operator is its `Output`, so the two must agree",
-                type_display(&returned),
-                type_display(&declared),
-            ),
-            ret.span,
-            TypeErrorKind::TypeMismatch,
-        );
     }
 
     fn check_const_decl(&mut self, c: &ConstDecl) {

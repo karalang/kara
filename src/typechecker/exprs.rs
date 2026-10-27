@@ -5264,16 +5264,7 @@ impl<'a> super::TypeChecker<'a> {
                 let Some(info) = self.env.traits.get(&t) else {
                     continue;
                 };
-                // An operator trait declares no `Output`, yet each impl of
-                // it binds one (design.md § Operator traits).
-                const OPERATORS: [&str; 12] = [
-                    "Add", "Sub", "Mul", "Div", "Rem", "BitAnd", "BitOr", "BitXor", "Shl", "Shr",
-                    "Neg", "Not",
-                ];
-                let output = OPERATORS
-                    .contains(&t.as_str())
-                    .then(|| "Output".to_string());
-                for assoc in info.assoc_types.iter().cloned().chain(output) {
+                for assoc in info.assoc_types.iter().cloned() {
                     let slot = found.entry((param.clone(), assoc));
                     slot.and_modify(|e| {
                         if e.as_ref() != Some(&t) {

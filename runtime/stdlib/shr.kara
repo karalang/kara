@@ -1,8 +1,8 @@
 // runtime/stdlib/shr.kara
 //
 // CR-202 slice 5l. Per design.md § Operator Traits — bit shift right.
-// rhs = Self per v1 homogeneity rule.
 
-trait Shr {
-    fn shr(own self, rhs: own Self) -> Self;
+trait Shr[Rhs = Self] {
+    type Output;
+    fn shr(own self, rhs: own Rhs) -> Self.Output;
 }

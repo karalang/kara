@@ -1906,12 +1906,14 @@ fn mir_user_operator_impls() {
 }
 
 impl Add for V2 {
+    type Output = V2;
     fn add(own self, rhs: own V2) -> V2 {
         V2 { x: self.x + rhs.x, tag: self.tag + rhs.tag }
     }
 }
 
 impl Sub for V2 {
+    type Output = Self;
     fn sub(ref self, rhs: ref V2) -> Self {
         V2 { x: self.x - rhs.x, tag: self.tag.clone() }
     }
@@ -1930,12 +1932,14 @@ struct Bits {
 }
 
 impl BitOr for Bits {
+    type Output = Bits;
     fn bitor(own self, rhs: own Bits) -> Bits {
         Bits { b: self.b | rhs.b }
     }
 }
 
 impl Shl for Bits {
+    type Output = Bits;
     fn shl(own self, rhs: own Bits) -> Bits {
         Bits { b: self.b << rhs.b }
     }

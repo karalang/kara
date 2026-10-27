@@ -4089,6 +4089,7 @@ struct Mask {
 }
 
 impl Not for Mask {
+    type Output = Mask;
     fn not(self) -> Mask {
         Mask { bits: ~self.bits, name: self.name.clone() }
     }
@@ -4099,6 +4100,7 @@ struct Tag {
 }
 
 impl Neg for Tag {
+    type Output = Tag;
     fn neg(own self) -> Tag {
         Tag { s: self.s + "!" }
     }
@@ -4593,7 +4595,9 @@ fn legacy_channel_spellings_are_fixed() {
 
 /// B-2026-10-15-76 — an operator impl's `type Output` is the operator's
 /// result type, so a method returning something else is refused rather than
-/// letting `a - b` and `T.Output` disagree.
+/// letting `a - b` and `T.Output` disagree. Since the operator traits declare
+/// `-> Self.Output` (B-2026-10-27-13) it is the impl-signature check's
+/// refusal (B-2026-10-27-9).
 #[test]
 fn an_operator_method_must_return_its_impls_output() {
     let (dir, path) = fixture(
@@ -4613,7 +4617,10 @@ fn an_operator_method_must_return_its_impls_output() {
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(!out.status.success(), "the mismatch must be refused: {err}");
     assert!(
-        err.contains("`sub` returns `Instant`, but this impl's `type Output` is `Duration`"),
+        err.contains(
+            "the return type of impl method 'Instant.sub' is `Instant`, but trait 'Sub' \
+             declares `Duration` there"
+        ),
         "{err}"
     );
     let _ = std::fs::remove_dir_all(&dir);

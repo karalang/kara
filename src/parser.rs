@@ -200,6 +200,9 @@ pub struct Parser {
     /// is sticky (stage 2), and accepting them now would let programs depend
     /// on a spelling whose semantics are still undecided. Fail-closed.
     pub(crate) frozen_ok: bool,
+    /// `true` only while parsing a trait declaration's own generic list, the
+    /// one place a parameter may name a default (`trait Add[Rhs = Self]`).
+    pub(crate) generic_defaults_ok: bool,
     /// `true` only for the outermost type of a function parameter, the one
     /// position `escaping Fn(...)` is accepted (`docs/core-semantics.md`
     /// §9.3). Taken by `parse_type` like [`Self::frozen_ok`].
@@ -448,6 +451,7 @@ impl Parser {
             recursion_depth: 0,
             pending_extra_items: Vec::new(),
             frozen_ok: false,
+            generic_defaults_ok: false,
             escaping_ok: false,
             escaping_fn_types: rustc_hash::FxHashSet::default(),
             mut_fn_types: rustc_hash::FxHashSet::default(),

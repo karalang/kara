@@ -354,18 +354,12 @@ fn kara_blocks(text: &str) -> Vec<(usize, &str)> {
 /// terminator, and no terminator gate could see it while the parser was failing
 /// earlier on the same line. Both are fixed; the exemption goes.
 ///
-/// ONE ENTRY IS BACK, and it is of a different kind from every entry before
-/// it: the spec is AHEAD of the parser rather than wrong. The 2026-10-07 design
-/// rewrite gives the operator traits a right-hand-side type parameter with a
-/// default (`trait Add[Rhs = Self]`, and `Map`'s `H = SipHash13BuildHasher`),
-/// and the frozen legacy parser does not accept default generic arguments, so
-/// it stops at the `=` and every later trait line reads as a missing `;`. The
-/// guard test below retires the entry the moment the parser accepts the form.
-const NON_TERMINATOR: &[(&str, &str)] = &[(
-    "Rhs = Self",
-    "default generic arguments (design.md § Default generic arguments) are \
-     specified ahead of the frozen legacy parser",
-)];
+/// The last entry was `Rhs = Self`: the spec was AHEAD of the parser rather
+/// than wrong. design.md gives the operator traits a right-hand-side type
+/// parameter with a default (`trait Add[Rhs = Self]`), and the parser stopped
+/// at the `=`, so every later trait line read as a missing `;`. A trait's
+/// parameters take defaults since B-2026-10-27-13, and the exemption goes.
+const NON_TERMINATOR: &[(&str, &str)] = &[];
 
 // REMOVED, and the removal is exactly what the sibling test below exists to
 // force. `matches!` was listed here because it surfaced as `Expected Semicolon,

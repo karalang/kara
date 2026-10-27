@@ -9,5 +9,6 @@
 // declaration parses.
 
 trait Not {
-    fn not(own self) -> Self;
+    type Output;
+    fn not(own self) -> Self.Output;
 }

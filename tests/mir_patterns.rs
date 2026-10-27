@@ -200,6 +200,7 @@ struct Mask {
 }
 
 impl Not for Mask {
+    type Output = Mask;
     fn not(self) -> Mask {
         Mask { bits: ~self.bits, name: self.name.clone() }
     }
@@ -210,6 +211,7 @@ struct Tag {
 }
 
 impl Neg for Tag {
+    type Output = Tag;
     fn neg(own self) -> Tag {
         Tag { s: self.s + "!" }
     }

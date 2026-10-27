@@ -2,6 +2,7 @@
 //
 // CR-202 slice 5l. Per design.md § Operator Traits — binary bitwise.
 
-trait BitAnd {
-    fn bitand(own self, rhs: own Self) -> Self;
+trait BitAnd[Rhs = Self] {
+    type Output;
+    fn bitand(own self, rhs: own Rhs) -> Self.Output;
 }

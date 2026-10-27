@@ -2,6 +2,7 @@
 //
 // CR-202 slice 5k. Per design.md § Operator Traits.
 
-trait Div {
-    fn div(own self, rhs: own Self) -> Self;
+trait Div[Rhs = Self] {
+    type Output;
+    fn div(own self, rhs: own Rhs) -> Self.Output;
 }

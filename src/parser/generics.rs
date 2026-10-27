@@ -128,6 +128,7 @@ impl super::Parser {
                     variance: Variance::Invariant,
                     variance_span: None,
                     is_variadic_shape: true,
+                    default: None,
                     span: self.span_from(&pstart),
                 });
                 if !self.eat(&Token::Comma) {
@@ -160,6 +161,7 @@ impl super::Parser {
                     variance: Variance::Invariant,
                     variance_span: None,
                     is_variadic_shape: false,
+                    default: None,
                     span: self.span_from(&pstart),
                 });
             } else {
@@ -181,6 +183,33 @@ impl super::Parser {
                         }
                     }
                 }
+                // `Rhs = Self` (design.md § Default generic arguments).
+                let default = if self.check(&Token::Equal) {
+                    let dstart = self.current_span();
+                    self.advance();
+                    let ty = self.parse_type()?;
+                    if !self.generic_defaults_ok {
+                        self.error_at(
+                            "a default generic argument (`T = Type`) is allowed on a trait's \
+                             type parameters only: a function's generic parameters take no \
+                             defaults (design.md § Default generic arguments), and a type's \
+                             are not supported yet",
+                            self.span_from(&dstart),
+                        );
+                    }
+                    Some(ty)
+                } else {
+                    if self.generic_defaults_ok
+                        && params.iter().any(|p: &GenericParam| p.default.is_some())
+                    {
+                        self.error_at(
+                            "a generic parameter without a default cannot follow one with a \
+                             default (design.md § Default generic arguments)",
+                            pname_span,
+                        );
+                    }
+                    None
+                };
                 // Slice 8ac (phase 6 line 26): a bound list whose first
                 // entry is the bare `Effect` trait reclassifies the
                 // generic-param into an effect-parameter. The check is
@@ -221,6 +250,7 @@ impl super::Parser {
                         variance,
                         variance_span,
                         is_variadic_shape: false,
+                        default,
                         span: self.span_from(&pstart),
                     });
                 }

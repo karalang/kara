@@ -2877,6 +2877,7 @@ fn stub_generics(name: &str, span: &Span) -> Option<GenericParams> {
                 variance: Variance::Invariant,
                 variance_span: None,
                 is_variadic_shape: false,
+                default: None,
             })
             .collect(),
     })

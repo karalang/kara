@@ -2821,6 +2821,7 @@ fn desugar_impl_trait_args_in_function(f: &mut Function) {
             variance: Variance::Invariant,
             variance_span: None,
             is_variadic_shape: false,
+            default: None,
             span: *impl_trait_span,
         });
 
