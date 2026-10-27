@@ -1274,6 +1274,12 @@ impl<'ctx> Cx<'ctx, '_> {
                 let g = self.group_handle(g)?;
                 self.rt("group_cancel", &[g.into()])?;
             }
+            // Auto-par's group (B-2026-10-27-22): its tasks log as their
+            // spawner, released in spawn order at its drop.
+            ("TaskGroup", "__hidden", [g]) => {
+                let g = self.group_handle(g)?;
+                self.rt("group_hide", &[g.into()])?;
+            }
             ("TaskGroup", "__deadline_at", [g, at]) => {
                 let at = self.int_arg(at)?;
                 let gp = self.group_handle(g)?;

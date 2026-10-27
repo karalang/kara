@@ -170,10 +170,15 @@ pub struct EffectSet {
     /// each caller substitutes the effects of the argument it passes
     /// (core §12, D6). Never escapes a body as anything but a parameter.
     pub calls: BTreeSet<u32>,
-    /// Logs through `std.log`: no effect and no conflict with anything
-    /// (design.md § Observability), but two statements that log keep
-    /// their order, so statement auto-par never reorders the lines.
+    /// Logs through `std.log`: no effect, and no conflict with anything
+    /// but the console (design.md § Observability). Auto-par holds an
+    /// auto-par task's records until its join (B-2026-10-27-22), so a
+    /// statement that logs keeps its order against one that writes
+    /// standard output or standard error, or sets logging up.
     pub logs: bool,
+    /// Sets logging up (`log.init`): the backend and level a record held
+    /// across it would otherwise miss.
+    pub log_setup: bool,
 }
 
 impl EffectSet {
@@ -195,10 +200,15 @@ impl EffectSet {
         self.effects.extend(other.effects);
         self.calls.extend(other.calls);
         self.logs |= other.logs;
+        self.log_setup |= other.log_setup;
     }
 
     fn is_empty(&self) -> bool {
-        !self.unknown && self.effects.is_empty() && self.calls.is_empty() && !self.logs
+        !self.unknown
+            && self.effects.is_empty()
+            && self.calls.is_empty()
+            && !self.logs
+            && !self.log_setup
     }
 
     pub fn display(&self) -> Vec<String> {
@@ -1375,7 +1385,10 @@ fn native_effects(base: &str, method: &str) -> Option<Vec<(Verb, &'static str, O
         ("Mutex", "lock" | "try_lock" | "acquire") => vec![(Blocks, "", None)],
         // A group's own natives; `spawn` is charged with its task's effects
         // in `call_effects`.
-        ("TaskGroup", "new" | "isolating" | "end" | "drop" | "cancel" | "__deadline_at") => {
+        (
+            "TaskGroup",
+            "new" | "isolating" | "end" | "drop" | "cancel" | "__deadline_at" | "__hidden",
+        ) => {
             vec![HEAP]
         }
         ("TaskHandle", "join" | "try_join") => vec![(Blocks, "", None)],
@@ -1968,7 +1981,11 @@ impl<'p> Analysis<'p> {
         // Observability adds no effect and conflicts with nothing
         // (design.md § Observability): `std.log`'s functions.
         if self.program.is_transparent(&inst.name) {
-            eff.logs = true;
+            if inst.name.split('[').next() == Some("init") {
+                eff.log_setup = true;
+            } else {
+                eff.logs = true;
+            }
             return;
         }
         if self.program.bodies.contains_key(&inst.name) {
@@ -2278,6 +2295,7 @@ fn substitute(
         unknown: callee.unknown,
         why: callee.why.clone(),
         logs: callee.logs,
+        log_setup: callee.log_setup,
         ..EffectSet::default()
     };
     for p in &callee.calls {

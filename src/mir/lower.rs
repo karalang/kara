@@ -4788,7 +4788,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         let tt = self.tys().tcx().tuple(&tys);
         let tup = self.temp(tt);
         self.push_scope();
-        self.par_tasks(region, &es, Place::local(tup))?;
+        self.par_tasks(region, &es, Place::local(tup), true)?;
         let mut binds = Vec::new();
         for (k, (slot, t)) in slots.into_iter().enumerate() {
             let field = Operand::Move(Place::local(tup).field(k as u32, t));
@@ -9751,7 +9751,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             if let Some(ExprKind::Tuple(es)) = b.final_expr.as_deref().map(|x| &x.kind) {
                 if es.len() > 1 {
                     let es: Vec<&'a Expr> = es.iter().collect();
-                    return self.par_tasks(region, &es, dest);
+                    return self.par_tasks(region, &es, dest, false);
                 }
             }
         }
@@ -9810,7 +9810,9 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// When a branch `return`s, each task instead returns a `Result` whose
     /// error variant carries the function's whole value, which a `return`
     /// or `?` in the task builds; the source-earliest one is returned.
-    fn par_tasks(&mut self, region: usize, es: &[&'a Expr], dest: Place) -> R<()> {
+    /// `hidden`: auto-par made the tasks, which are not tasks to the
+    /// program's logging (docs/library/log.md; B-2026-10-27-22).
+    fn par_tasks(&mut self, region: usize, es: &[&'a Expr], dest: Place, hidden: bool) -> R<()> {
         let span = es[0].span;
         let ret_ty = self.fn_ret_ty();
         // A branch that `return`s leaves its task with the function's
@@ -9827,6 +9829,9 @@ impl<'l, 'a> Bx<'l, 'a> {
         };
         let g = self.temp(group_ty);
         self.call_native("TaskGroup.new", Vec::new(), Place::local(g));
+        if hidden {
+            self.hide_group(g, group_ty);
+        }
         let mut handles = Vec::new();
         for &x in es {
             let vt = self.expr_ty(x)?;
@@ -10201,7 +10206,17 @@ impl<'l, 'a> Bx<'l, 'a> {
             } => self.tys().tcx().list(args)[0],
             _ => return Ok(None),
         };
-        self.loop_tasks(e, body, et, limit)
+        self.loop_tasks(e, body, et, limit, false)
+    }
+
+    /// Marks auto-par's group `g` (B-2026-10-27-22): its tasks log as their
+    /// spawner, and their records reach the backend in spawn order at its
+    /// drop, as the sequential program emits them.
+    fn hide_group(&mut self, g: Local, group_ty: Ty) {
+        let gr = self.ref_to(Place::local(g), group_ty);
+        let unit = self.unit();
+        let u = self.temp(unit);
+        self.call_native("TaskGroup.__hidden", vec![gr], Place::local(u));
     }
 
     /// [`Self::par_for_tasks_begin`] for a loop whose iterations return
@@ -10213,6 +10228,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         body: &'a Block,
         et: Ty,
         limit: Option<Operand>,
+        hidden: bool,
     ) -> R<Option<ParForTasks>> {
         let Some(task) = self.par_for_task_expr(e, body) else {
             return Ok(None);
@@ -10250,6 +10266,9 @@ impl<'l, 'a> Bx<'l, 'a> {
             limit.into_iter().collect(),
             Place::local(group),
         );
+        if hidden {
+            self.hide_group(group, group_ty);
+        }
         let handles = self.temp(handles_ty);
         let name = format!("{}.new", self.tys().display(handles_ty));
         self.call_native(&name, Vec::new(), Place::local(handles));
@@ -11219,7 +11238,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             Some(r) => r.ty,
             None => self.unit(),
         };
-        let Some(tasks) = self.loop_tasks(e, body, et, None)? else {
+        let Some(tasks) = self.loop_tasks(e, body, et, None, true)? else {
             return self.for_range(e, label, pattern, iterable, body, dest);
         };
         let ParForTasks {

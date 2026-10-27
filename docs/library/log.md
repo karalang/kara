@@ -4,7 +4,7 @@
 
 Logging is observability, so it is transparent to the effect system ([design.md §12](../design.md#observability)). The functions of `std.log` are declared with no effects: a call never changes a function's effect set and never conflicts with anything, so adding a log line cannot change a signature or forbid parallelism. The standard library marks them with an internal attribute that user code cannot write, as it does with `#[compiler_builtin]`. Because log output does not conflict, lines from concurrent branches may interleave; within one branch they follow source order.
 
-The compiler's own parallelization (statement and loop auto-par) is invisible to logging. A task it creates is not a task to the program: its records carry the enclosing task's `task_id` and span, not a new id, and they reach the backend in the order the sequential program would emit them, held per auto-par task and released in statement order where the tasks join. A task the program starts itself, with `par` or a `TaskGroup`, is a real task, with its own id and no order relative to its siblings.
+The compiler's own parallelization (statement and loop auto-par) is invisible to logging. A task it creates is not a task to the program: its records carry the enclosing task's `task_id` and span, not a new id, and they reach the backend in the order the sequential program would emit them, held per auto-par task until every task before it in statement order has finished (the first unfinished one's records go on as it logs them). Records leave on standard output or standard error interleaved with the program's own console writes, and a reader has to be able to trust that order, so auto-par keeps a statement that logs in order against one that writes standard output or standard error or calls `init`, and against nothing else; a statement that does both stays where it was written. A task the program starts itself, with `par` or a `TaskGroup`, is a real task, with its own id and no order relative to its siblings.
 
 ## Severity levels
 
@@ -119,5 +119,5 @@ ERROR request failed err="token expired" status=500 task_id=3
 ## Not yet implemented
 
 - `init` does not yet refuse a backend that cannot cross tasks (B-2026-10-27-21).
-- Auto-par is not yet invisible to logging. Until it is, auto-par moves no statement or loop that logs, so a program's lines and their `task_id` are those of the program as written (B-2026-10-27-22).
+- When a statement auto-par runs as a task panics, a record an earlier statement would have logged first can be missing; the target drains every held record, in statement order, before the panic is reported (B-2026-10-27-30).
 - Renaming a type of `std.log` on import (`import std.log.{Level as L}`) makes a second type, which the library's functions do not accept; import the types under their own names (B-2026-10-27-23).

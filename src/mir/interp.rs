@@ -6415,6 +6415,9 @@ impl<'a> Interp<'a> {
                     owner: self.cur_task,
                     deadline: None,
                     isolating: method == "isolating",
+                    hidden: false,
+                    members: Vec::new(),
+                    next: 0,
                 });
                 let g = Value::Agg(vec![Value::Int(self.groups.len() as i128)]);
                 Ok(match method {
@@ -6441,6 +6444,15 @@ impl<'a> Interp<'a> {
                 }
                 _ => err(format!("{name} takes a group and a deadline")),
             },
+            ("TaskGroup", "__hidden") => {
+                if let Some(g) = args.first() {
+                    let g = self.group_id(g)?;
+                    if let Some(slot) = g.checked_sub(1).and_then(|i| self.groups.get_mut(i)) {
+                        slot.hidden = true;
+                    }
+                }
+                Ok(Value::Unit)
+            }
             ("TaskGroup", "drop" | "end") => Ok(Value::Unit),
             ("TaskGroup", "spawn_frame") => self.spawn_frame(name, args),
             ("TaskGroup", "spawn") => {
@@ -6553,9 +6565,22 @@ impl<'a> Interp<'a> {
             cancelled: false,
         });
         let handle = self.handles.len();
-        if let Some(g) = self.groups.get_mut(group - 1) {
-            g.live += 1;
-        }
+        let me = self.tasks.len();
+        let log_up = self.tasks.get(self.cur_task).and_then(|t| t.log_hold);
+        let log_seq = match self.groups.get_mut(group - 1) {
+            Some(g) => {
+                g.live += 1;
+                g.hidden.then(|| {
+                    g.members.push(me);
+                    g.members.len() - 1
+                })
+            }
+            None => None,
+        };
+        let (log_id, log_hold) = match log_seq {
+            Some(_) => (self.log_task_id(), Some(me)),
+            None => (me as i128, log_up),
+        };
         self.tasks.push(TaskSlot {
             frame: slot,
             frame_ty,
@@ -6572,6 +6597,12 @@ impl<'a> Interp<'a> {
             torn: false,
             unwind: false,
             panicked: None,
+            log_id,
+            log_held: Vec::new(),
+            log_hold,
+            log_up,
+            log_seq: log_seq.unwrap_or(0),
+            log_done: false,
         });
         self.spawned.push(self.tasks.len() - 1);
         Ok(Value::Agg(vec![Value::Int(handle as i128), Value::Unit]))
@@ -6863,6 +6894,9 @@ impl<'a> Interp<'a> {
             let (group, handle) = (self.tasks[t].group, self.tasks[t].handle);
             if let Some(g) = group.checked_sub(1).and_then(|g| self.groups.get_mut(g)) {
                 g.live -= 1;
+                if g.hidden {
+                    self.log_hold_done(t)?;
+                }
             }
             // A task of an isolating group gives its handle the `Err` of
             // its panic, or `Cancelled` (§11.12), unless the handle is gone.
@@ -6908,6 +6942,9 @@ impl<'a> Interp<'a> {
         let (group, handle) = (self.tasks[t].group, self.tasks[t].handle);
         if let Some(g) = group.checked_sub(1).and_then(|g| self.groups.get_mut(g)) {
             g.live -= 1;
+            if g.hidden {
+                self.log_hold_done(t)?;
+            }
         }
         let Some(h) = handle.checked_sub(1).and_then(|h| self.handles.get_mut(h)) else {
             return Ok(());
@@ -13621,6 +13658,12 @@ impl<'a> Interp<'a> {
             torn: false,
             unwind: false,
             panicked: None,
+            log_id: 0,
+            log_held: Vec::new(),
+            log_hold: None,
+            log_up: None,
+            log_seq: 0,
+            log_done: false,
         });
         self.run_tasks(entry)
     }
@@ -15111,58 +15154,9 @@ impl<'a> Interp<'a> {
                 let (Some(call), Some(default)) = (it.next(), it.next()) else {
                     return err("log_dispatch takes a call and a default".to_string());
                 };
-                let Some((sink, sink_ty, record)) = self.log_sink.clone() else {
-                    self.call_erased(default, vec![call])?;
-                    return Ok(Value::Unit);
-                };
-                let Value::Erased {
-                    body: ref record_fn,
-                    ..
-                } = record
-                else {
-                    return err(format!("a log record function is {record:?}"));
-                };
-                let program: &'a Program = self.program;
-                let record_ty = program
-                    .bodies
-                    .get(record_fn)
-                    .map(|b| b.locals[0].ty)
-                    .ok_or_else(|| Stop::Error(format!("no body for {record_fn}")))?;
-                let rec = self.call_erased(record, vec![call])?;
-                let name = format!("{}.emit", self.tys.adt_name(sink_ty));
-                let body = program
-                    .bodies
-                    .get(&name)
-                    .ok_or_else(|| Stop::Error(format!("no body for {name}")))?;
-                let takes_ref = matches!(
-                    self.tys.kind(body.locals[2].ty),
-                    TyKind::Ref(_) | TyKind::MutRef(_)
-                );
-                let (recv, recv_id) = self.scratch_ref(sink);
-                let mut scratch = vec![recv_id];
-                let arg = if takes_ref {
-                    let (r, id) = self.scratch_ref(rec.clone());
-                    scratch.push(id);
-                    r
-                } else {
-                    rec.clone()
-                };
-                let out = self.call(&name, vec![recv, arg]);
-                // The backend may have changed itself: keep what it holds now.
-                let at = Addr {
-                    root: Root::Heap(recv_id),
-                    path: Path::new(),
-                };
-                let now = self.slot(&at)?;
-                if let Some(slot) = self.log_sink.as_mut() {
-                    slot.0 = now;
-                }
-                for id in scratch {
-                    self.free_slot(id);
-                }
-                out?;
-                if takes_ref {
-                    self.drop_value(rec, record_ty)?;
+                match self.tasks.get(self.cur_task).and_then(|t| t.log_hold) {
+                    Some(key) => self.log_route(Some(key), call, default)?,
+                    None => self.log_emit(call, default)?,
                 }
                 Ok(Value::Unit)
             }
@@ -15170,11 +15164,112 @@ impl<'a> Interp<'a> {
         }
     }
 
+    /// Hands a kept call to the installed backend, or to `default` when
+    /// there is none.
+    fn log_emit(&mut self, call: Value, default: Value) -> R<()> {
+        let Some((sink, sink_ty, record)) = self.log_sink.clone() else {
+            self.call_erased(default, vec![call])?;
+            return Ok(());
+        };
+        let Value::Erased {
+            body: ref record_fn,
+            ..
+        } = record
+        else {
+            return err(format!("a log record function is {record:?}"));
+        };
+        let program: &'a Program = self.program;
+        let record_ty = program
+            .bodies
+            .get(record_fn)
+            .map(|b| b.locals[0].ty)
+            .ok_or_else(|| Stop::Error(format!("no body for {record_fn}")))?;
+        let rec = self.call_erased(record, vec![call])?;
+        let name = format!("{}.emit", self.tys.adt_name(sink_ty));
+        let body = program
+            .bodies
+            .get(&name)
+            .ok_or_else(|| Stop::Error(format!("no body for {name}")))?;
+        let takes_ref = matches!(
+            self.tys.kind(body.locals[2].ty),
+            TyKind::Ref(_) | TyKind::MutRef(_)
+        );
+        let (recv, recv_id) = self.scratch_ref(sink);
+        let mut scratch = vec![recv_id];
+        let arg = if takes_ref {
+            let (r, id) = self.scratch_ref(rec.clone());
+            scratch.push(id);
+            r
+        } else {
+            rec.clone()
+        };
+        let out = self.call(&name, vec![recv, arg]);
+        // The backend may have changed itself: keep what it holds now.
+        let at = Addr {
+            root: Root::Heap(recv_id),
+            path: Path::new(),
+        };
+        let now = self.slot(&at)?;
+        if let Some(slot) = self.log_sink.as_mut() {
+            slot.0 = now;
+        }
+        for id in scratch {
+            self.free_slot(id);
+        }
+        out?;
+        if takes_ref {
+            self.drop_value(rec, record_ty)?;
+        }
+        Ok(())
+    }
+
+    /// A kept call logged through hold `key` (B-2026-10-27-22): it waits
+    /// with the first task of a hidden group on the way up that is not its
+    /// group's first unfinished one, or, when there is none, goes on.
+    fn log_route(&mut self, mut key: Option<usize>, call: Value, default: Value) -> R<()> {
+        while let Some(k) = key {
+            let Some(t) = self.tasks.get(k) else { break };
+            let first = t
+                .group
+                .checked_sub(1)
+                .and_then(|g| self.groups.get(g))
+                .is_some_and(|g| g.next == t.log_seq);
+            if !first {
+                self.tasks[k].log_held.push((call, default));
+                return Ok(());
+            }
+            key = t.log_up;
+        }
+        self.log_emit(call, default)
+    }
+
+    /// Task `t` of a hidden group finished: while its group's first
+    /// unfinished task has finished, the next one is the first, and the
+    /// calls the new first one held go on.
+    fn log_hold_done(&mut self, t: usize) -> R<()> {
+        self.tasks[t].log_done = true;
+        let g = self.tasks[t].group - 1;
+        while let Some(&id) = self.groups[g].members.get(self.groups[g].next) {
+            let held = std::mem::take(&mut self.tasks[id].log_held);
+            let up = self.tasks[id].log_up;
+            for (call, default) in held {
+                self.log_route(up, call, default)?;
+            }
+            if !self.tasks[id].log_done {
+                break;
+            }
+            self.groups[g].next += 1;
+        }
+        Ok(())
+    }
+
     /// The running task's `std.log` id: positive inside a task, 0 outside
     /// every task.
     fn log_task_id(&self) -> i128 {
-        if !self.tasks.is_empty() && self.cur_task != 0 && self.cur_task != usize::MAX {
-            return self.cur_task as i128;
+        if self.cur_task != 0 && self.cur_task != usize::MAX {
+            if let Some(t) = self.tasks.get(self.cur_task) {
+                return t.log_id;
+            }
         }
         0
     }
@@ -15757,6 +15852,21 @@ struct TaskSlot {
     /// It panicked in an isolating group (§11.12): the message and the
     /// location, which its handle holds once it is torn down.
     panicked: Option<(String, String)>,
+    /// The `task_id` its `std.log` records carry (0: none): its own, or,
+    /// in a hidden group, its spawner's.
+    log_id: i128,
+    /// In a hidden group, the `std.log` calls it and the tasks it started
+    /// made while it was not its group's first unfinished task, with their
+    /// default backends.
+    log_held: Vec<(Value, Value)>,
+    /// The task whose hold its records go through: itself in a hidden
+    /// group, else its spawner's.
+    log_hold: Option<usize>,
+    /// In a hidden group: its spawner's hold, its place in the group's
+    /// `members`, and whether it finished.
+    log_up: Option<usize>,
+    log_seq: usize,
+    log_done: bool,
 }
 
 /// A spawned task's handle under the executor: its result once the task
@@ -15781,6 +15891,13 @@ struct GroupSlot {
     deadline: Option<std::time::Instant>,
     /// It contains its tasks' panics (`TaskGroup.isolating`, §11.12).
     isolating: bool,
+    /// Auto-par made it (`TaskGroup.__hidden`, B-2026-10-27-22): its tasks
+    /// log as their spawner, in the order they were spawned.
+    hidden: bool,
+    /// A hidden group's tasks in the order they were spawned, and the
+    /// first that has not finished, whose records go on as it logs them.
+    members: Vec<usize>,
+    next: usize,
 }
 
 /// What indexing a `Map` with a missing key reports, as the compiled

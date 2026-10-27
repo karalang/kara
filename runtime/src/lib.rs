@@ -333,6 +333,7 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         mir_task::karac_mir_group_isolating,
         mir_task::karac_mir_group_drop,
         mir_task::karac_mir_group_cancel,
+        mir_task::karac_mir_group_hide,
         mir_task::karac_mir_group_deadline,
         mir_task::karac_mir_cancelled,
         mir_task::karac_mir_unwinding,

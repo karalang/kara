@@ -118,6 +118,28 @@ struct Group {
     deadline: Option<Instant>,
     /// It contains its tasks' panics (`TaskGroup.isolating`, §11.12).
     isolating: bool,
+    /// Auto-par's (B-2026-10-27-22): its tasks are not tasks to `std.log`
+    /// (docs/library/log.md), and their records reach the backend in the
+    /// order they were spawned ([`Hold`]).
+    hidden: bool,
+    /// A hidden group's tasks, by id, in the order they were spawned.
+    members: Vec<u64>,
+    /// The first of `members` that has not finished: its records go on as
+    /// it logs them, and a later task's wait until it is the first.
+    next: usize,
+}
+
+/// A task of a hidden group, for `std.log` (B-2026-10-27-22): while it is
+/// not its group's first unfinished task, the records it and the tasks it
+/// starts log wait here; once it is, they go on as its spawner's would.
+struct Hold {
+    group: *mut Group,
+    /// Its place in the group's `members`.
+    seq: usize,
+    /// Its spawner's hold (0: none).
+    up: u64,
+    done: bool,
+    held: Vec<crate::mir_log::Held>,
 }
 
 struct Task {
@@ -156,6 +178,13 @@ struct Task {
     /// ran it (measured: fare_cap's root ran 29 of its 37 ms on other
     /// workers, the first napping, 0.75x of its seq build).
     root: bool,
+    /// The `task_id` its `std.log` records carry (0: none): its own, or,
+    /// for a task of a hidden group, its spawner's.
+    log_id: u64,
+    /// The [`Hold`] its `std.log` records go through (0: none): its own in
+    /// a hidden group, else its spawner's, so a task started inside an
+    /// auto-par task logs in that task's place in statement order.
+    hold: u64,
 }
 
 /// Whether a queued task can get anywhere if polled now, with the progress
@@ -183,15 +212,18 @@ struct Cur {
     cancel: bool,
     torn: bool,
     unwind: bool,
-    /// The root task, which `std.log` counts as outside every task.
-    root: bool,
+    /// See [`Task::log_id`].
+    log_id: u64,
+    /// See [`Task::hold`].
+    hold: u64,
 }
 
 impl Task {
     /// Its state while it runs.
     fn cur(&self) -> Cur {
         Cur {
-            root: self.root,
+            log_id: self.log_id,
+            hold: self.hold,
             id: self.id,
             group: self.group,
             deadline: self.deadline,
@@ -258,6 +290,8 @@ struct Exec {
     /// The deadlines set on groups, with the group's id: one that is not
     /// the group's own any more (it fired, or the group is gone) is stale.
     deadlines: Vec<(Instant, u64)>,
+    /// The tasks of hidden groups whose records are not all on, by id.
+    holds: HashMap<u64, Hold>,
     /// Called with a task's id when it ends, returned or torn down
     /// ([`on_task_end`]).
     hooks: Vec<fn(u64)>,
@@ -757,6 +791,9 @@ fn group_new(limit: i64, isolating: bool) -> *mut u8 {
             owner: e.cur().map_or(0, |c| c.id),
             deadline: None,
             isolating,
+            hidden: false,
+            members: Vec::new(),
+            next: 0,
         }));
         let id = e.group_ids;
         e.groups.insert(id, g);
@@ -770,6 +807,20 @@ fn group_new(limit: i64, isolating: bool) -> *mut u8 {
 #[no_mangle]
 pub extern "C" fn karac_mir_group_isolating(limit: i64) -> *mut u8 {
     group_new(limit, true)
+}
+
+/// Marks auto-par's group `g` hidden (B-2026-10-27-22): its tasks log as
+/// their spawner, in the order they were spawned.
+///
+/// # Safety
+/// `g` is a live group handle with no task yet.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_group_hide(g: *mut u8) {
+    EXEC.with(|e| {
+        let _held = e.borrow_mut();
+        // SAFETY: the caller's contract, under the executor's lock.
+        unsafe { (*(g as *mut Group)).hidden = true };
+    });
 }
 
 /// A panic (core-semantics §11.12): when the running task is a task of an
@@ -932,6 +983,10 @@ pub unsafe extern "C" fn karac_mir_ready_group(g: *mut u8, end: u8) -> u8 {
 fn task_done(t: &Task) {
     let group = t.group;
     if !group.is_null() {
+        // SAFETY: as below.
+        if unsafe { (*group).hidden } {
+            log_hold_done(t.id);
+        }
         let free = EXEC.with(|e| {
             let _held = e.borrow_mut();
             // SAFETY: a group outlives its tasks (`karac_mir_group_drop`);
@@ -959,10 +1014,92 @@ pub(crate) fn current_task() -> Option<u64> {
     EXEC.with(|e| e.borrow().cur().map(|c| c.id))
 }
 
-/// The running task's id, unless it is the root task: `std.log`'s
-/// `task_id`, which code outside every task (`main`) does not have.
-pub(crate) fn current_task_unless_root() -> Option<u64> {
-    EXEC.with(|e| e.borrow().cur().filter(|c| !c.root).map(|c| c.id))
+/// `std.log`'s `task_id` for the running task: 0 for the root task and
+/// outside every task (`main`), and an auto-par task's spawner's.
+pub(crate) fn log_task_id() -> u64 {
+    EXEC.with(|e| e.borrow().cur().map_or(0, |c| c.log_id))
+}
+
+/// Whether the running task's `std.log` records go through a [`Hold`]: it
+/// is an auto-par task, or runs inside one.
+pub(crate) fn holding_logs() -> bool {
+    EXEC.with(|e| e.borrow().cur().is_some_and(|c| c.hold != 0))
+}
+
+/// Keeps the records [`Hold`]s let go reaching the backend in the order
+/// they were let go: taken before the executor's lock, and held until the
+/// backend has them.
+static LOG_ORDER: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+impl Exec {
+    /// Record `h`, logged through hold `key`: waits in the first hold on
+    /// the way up that is not its group's first unfinished task, or, when
+    /// there is none, joins `out` for the backend.
+    fn route_log(
+        &mut self,
+        mut key: u64,
+        h: crate::mir_log::Held,
+        out: &mut Vec<crate::mir_log::Held>,
+    ) {
+        while let Some(hold) = self.holds.get_mut(&key) {
+            // SAFETY: a group outlives its tasks' holds.
+            if unsafe { (*hold.group).next } != hold.seq {
+                hold.held.push(h);
+                return;
+            }
+            key = hold.up;
+        }
+        out.push(h);
+    }
+}
+
+/// A record the running task logged, through its [`Hold`].
+pub(crate) fn hold_log(h: crate::mir_log::Held) {
+    let _order = LOG_ORDER.lock().unwrap_or_else(|p| p.into_inner());
+    let mut out = Vec::new();
+    EXEC.with(|e| {
+        let mut e = e.borrow_mut();
+        let key = e.cur().map_or(0, |c| c.hold);
+        e.route_log(key, h, &mut out);
+    });
+    for h in out {
+        h.release();
+    }
+}
+
+/// The task with hold `key` finished: while its group's first unfinished
+/// task has finished, the next one is the first, and the records the new
+/// first one held go on.
+fn log_hold_done(key: u64) {
+    let _order = LOG_ORDER.lock().unwrap_or_else(|p| p.into_inner());
+    let mut out = Vec::new();
+    EXEC.with(|e| {
+        let mut e = e.borrow_mut();
+        let Some(hold) = e.holds.get_mut(&key) else {
+            return;
+        };
+        hold.done = true;
+        // SAFETY: a group outlives its tasks; under the executor's lock.
+        let g = unsafe { &mut *hold.group };
+        while let Some(&id) = g.members.get(g.next) {
+            let Some(hold) = e.holds.get_mut(&id) else {
+                break;
+            };
+            let (up, done) = (hold.up, hold.done);
+            let held = std::mem::take(&mut hold.held);
+            for h in held {
+                e.route_log(up, h, &mut out);
+            }
+            if !done {
+                break;
+            }
+            e.holds.remove(&id);
+            g.next += 1;
+        }
+    });
+    for h in out {
+        h.release();
+    }
 }
 
 /// Calls `f` with a task's id whenever a task ends, returned or torn down.
@@ -1206,6 +1343,28 @@ pub unsafe extern "C" fn karac_mir_task_spawn(
         }
         e.ids += 1;
         let id = e.ids;
+        // An auto-par task logs as its spawner, in spawn order.
+        let up = e.cur().map_or(0, |c| c.hold);
+        // SAFETY: as above.
+        let (log_id, hold) = if !group.is_null() && unsafe { (*group).hidden } {
+            let seq = unsafe {
+                (*group).members.push(id);
+                (*group).members.len() - 1
+            };
+            e.holds.insert(
+                id,
+                Hold {
+                    group,
+                    seq,
+                    up,
+                    done: false,
+                    held: Vec::new(),
+                },
+            );
+            (e.cur().map_or(0, |c| c.log_id), id)
+        } else {
+            (id, up)
+        };
         e.push(Task {
             id,
             group,
@@ -1222,6 +1381,8 @@ pub unsafe extern "C" fn karac_mir_task_spawn(
             unwind: false,
             seen: 0,
             root: false,
+            log_id,
+            hold,
         });
         e.progress += 1;
     });
@@ -1239,6 +1400,8 @@ pub unsafe extern "C" fn karac_mir_task_run(poll: TaskPoll, a: *mut u8, b: *mut 
     EXEC.with(|e| {
         if let Some(t) = e.borrow_mut().queue.back_mut() {
             t.root = true;
+            t.log_id = 0;
+            t.hold = 0;
         }
     });
     start_workers();

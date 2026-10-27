@@ -76,10 +76,17 @@ impl<'ctx> Cx<'ctx, '_> {
                 let _ = default;
                 let default = self.log_body("__log_default")?;
                 let p = self.operand_ptr(call)?;
+                // The runtime copies a call an auto-par task holds.
+                let t = self.operand_type(call)?;
+                let size = self.layout(t)?.size;
                 let f = self.log_default_fn(&default)?;
                 self.rt(
                     "log_dispatch",
-                    &[p.into(), f.as_global_value().as_pointer_value().into()],
+                    &[
+                        p.into(),
+                        self.i64(size).into(),
+                        f.as_global_value().as_pointer_value().into(),
+                    ],
                 )?;
             }
             _ => return Ok(None),

@@ -482,33 +482,52 @@ pub(super) fn verdict(
                 .map(Effect::display)
         })
         .collect();
-    // The first block of a branch that logs. Auto-par moves none: lines
-    // keep their order, and a line logged from a task carries its id
-    // (docs/library/log.md § Span context), so a statement or loop that
-    // logs stays where it was written. A written `par` is not affected.
-    // Interim: the spec makes auto-par invisible to logging instead
-    // (B-2026-10-27-22).
-    let logs: Vec<Option<BasicBlock>> = sets
-        .iter()
-        .map(|set| {
-            set.iter()
-                .copied()
-                .find(|b| at.get(b).is_some_and(|e| e.logs))
+    // Logging alone is no reason to stay in order: an auto-par task's
+    // records wait until every task before it has finished, and so reach
+    // the backend in statement order (docs/library/log.md;
+    // B-2026-10-27-22). Waiting, they would pass what the console shows
+    // meanwhile, and a backend or level `init` sets meanwhile, so a branch
+    // that logs keeps its order against one that writes standard output or
+    // standard error or sets logging up, and a branch that does both stays
+    // where it was written. A record is not a line others see to the
+    // rule for stops below: that would keep nearly every statement that
+    // logs in order, since most can panic, and a log line must not change
+    // what runs in parallel (design.md §12).
+    let first_block = |k: usize, pick: &dyn Fn(&EffectSet) -> bool| -> Option<BasicBlock> {
+        sets[k]
+            .iter()
+            .copied()
+            .find(|b| at.get(b).is_some_and(|e| pick(e)))
+    };
+    let logs: Vec<Option<BasicBlock>> = (0..sets.len())
+        .map(|k| first_block(k, &|e| e.logs))
+        .collect();
+    let console: Vec<Option<BasicBlock>> = (0..sets.len())
+        .map(|k| {
+            first_block(k, &|e| {
+                e.log_setup
+                    || e.effects.iter().any(|x| {
+                        x.verb == Verb::Writes && matches!(x.class.as_str(), "Stdout" | "Stderr")
+                    })
+            })
         })
         .collect();
-    let visible: Vec<Option<String>> = visible
-        .into_iter()
-        .zip(&logs)
-        .map(|(v, l)| v.or_else(|| l.map(|_| "logs".to_string())))
-        .collect();
     let in_order = |i: usize, j: usize| -> Option<ParConflict> {
-        let (a, b) = (logs[i]?, logs[j]?);
+        let (a, b) = match (logs[i], console[j]) {
+            (Some(a), Some(b)) => (a, b),
+            _ => (console[i]?, logs[j]?),
+        };
+        let (fa, fb) = if logs[i] == Some(a) {
+            ("logs", "writes the console")
+        } else {
+            ("writes the console", "logs")
+        };
         Some(ParConflict {
             region: 0,
             line: r.span.line,
             branches: (i, j),
-            first: (a, "logs".to_string()),
-            second: (b, "logs".to_string()),
+            first: (a, fa.to_string()),
+            second: (b, fb.to_string()),
         })
     };
     let panic: Vec<Option<String>> = sets
@@ -727,7 +746,7 @@ pub(super) fn verdict(
                 } else if let Some(c) = &crossing[k] {
                     first_refusal.get_or_insert(Refusal::Crossing(c.clone()));
                 } else if let Some(c) = in_order(k, k) {
-                    // Moved into a task, its lines would carry that task's id.
+                    // Its records would pass its own console lines.
                     first_refusal.get_or_insert(Refusal::Conflict(c));
                 } else {
                     cur.push(k);

@@ -20,6 +20,34 @@ type DropSink = unsafe extern "C" fn(*mut u8);
 /// `void(call)`: the default backend, consuming the call.
 type Default = unsafe extern "C" fn(*mut u8);
 
+/// A kept call an auto-par task logged (B-2026-10-27-22), on its way to
+/// the backend in statement order (`mir_task`'s `Hold`): a copy of the
+/// call in its own allocation, and the default backend it was given.
+pub(crate) struct Held {
+    call: *mut u8,
+    size: usize,
+    default: Default,
+}
+
+impl Held {
+    fn layout(size: usize) -> std::alloc::Layout {
+        std::alloc::Layout::from_size_align(size.max(1), 16).expect("a log call's layout")
+    }
+
+    /// Hands the call to the backend, and frees its copy.
+    pub(crate) fn release(self) {
+        // SAFETY: `call` is the copy `karac_mir_log_dispatch` made,
+        // consumed once here.
+        unsafe {
+            emit(self.call, self.default);
+            std::alloc::dealloc(self.call, Self::layout(self.size));
+        }
+    }
+}
+
+// SAFETY: a held call is owned data, moved between workers with its task.
+unsafe impl Send for Held {}
+
 struct Installed {
     sink: *mut u8,
     emit: Emit,
@@ -104,13 +132,49 @@ pub unsafe extern "C" fn karac_mir_log_install(
     unlock();
 }
 
-/// Hands the kept call at `call` to the installed backend under the lock,
-/// or to `default` when there is none.
+/// Hands the kept call at `call`, of `size` bytes, to the installed
+/// backend under the lock, or to `default` when there is none. A call an
+/// auto-par task made is copied, to reach the backend in statement order
+/// (docs/library/log.md: auto-par is invisible to logging).
 ///
 /// # Safety
 /// `call` is a call `emit` and `default` take.
 #[no_mangle]
-pub unsafe extern "C" fn karac_mir_log_dispatch(call: *mut u8, default: Default) {
+pub unsafe extern "C" fn karac_mir_log_dispatch(call: *mut u8, size: usize, default: Default) {
+    if HELD.with(Cell::get) {
+        // From inside a backend's `emit`.
+        // SAFETY: the caller's contract.
+        unsafe { default(call) };
+        return;
+    }
+    if crate::mir_task::holding_logs() {
+        // SAFETY: a fresh allocation of `size` bytes, and the call moved
+        // into it; the caller gave the call up.
+        let copy = unsafe {
+            let copy = std::alloc::alloc(Held::layout(size));
+            if copy.is_null() {
+                std::alloc::handle_alloc_error(Held::layout(size));
+            }
+            std::ptr::copy_nonoverlapping(call, copy, size);
+            copy
+        };
+        crate::mir_task::hold_log(Held {
+            call: copy,
+            size,
+            default,
+        });
+        return;
+    }
+    // SAFETY: the caller's contract.
+    unsafe { emit(call, default) };
+}
+
+/// Hands `call` to the installed backend under the lock, or to `default`
+/// when there is none or this thread is inside a backend's `emit`.
+///
+/// # Safety
+/// As [`karac_mir_log_dispatch`].
+unsafe fn emit(call: *mut u8, default: Default) {
     if !lock() {
         // SAFETY: the caller's contract.
         unsafe { default(call) };
@@ -126,8 +190,9 @@ pub unsafe extern "C" fn karac_mir_log_dispatch(call: *mut u8, default: Default)
     unlock();
 }
 
-/// The running task's id, or 0 outside every task (`main` included).
+/// The running task's id, or 0 outside every task (`main` included). An
+/// auto-par task answers its spawner's.
 #[no_mangle]
 pub extern "C" fn karac_mir_log_task_id() -> i64 {
-    crate::mir_task::current_task_unless_root().map_or(0, |id| id as i64)
+    crate::mir_task::log_task_id() as i64
 }
