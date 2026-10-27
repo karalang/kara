@@ -64,9 +64,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | soundness | 16 |
 | perf | 13 |
 | miscompile | 10 |
-| run-vs-build | 9 |
+| run-vs-build | 10 |
 | other | 4 |
-| codegen-gap | 3 |
+| codegen-gap | 4 |
 | crash | 1 |
 
 ### By surface
@@ -79,7 +79,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | interp | 20 |
 | ownership | 18 |
 | cli | 18 |
-| mir-llvm | 14 |
+| mir-llvm | 16 |
 | runtime | 10 |
 | parser | 7 |
 | other | 2 |
@@ -98,12 +98,13 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-15-10 | 2026-10-15 | runtime | medium | NARROWED AGAIN 2026-10-19 (Thread A, d3124030ef): `std.sync.MutexGuard` has landed (`m.lock()` returns one, and a `lock` block lowers onto it; B-2026-10-19-23). Still specified-only: `std.iter.Extend` and all of `std.log`. PREVIOUSLY: NARROWED AGAIN 2026-10-19 (Thread A, 7794d0fad9): `std.process.exit` (a gated Kāra module over the native; `-> Never` now lowers) and `std.iter.DoubleEndedIterator` (already the library's trait, only its import was missing) have landed. Still specified-only: `std.sync.MutexGuard`, `std.iter.Extend` and all of `std.log`. MEASURED at 7794d0fad9: `Mutex` has no `lock()` method at all (`no method 'lock' on type 'Mutex'`), only the `lock m x { }` block (which does exclude: 8 tasks of 200000 increments each reach 1600000 on `__mir-llvm-run`, three runs of three); `Extend` has no trait signature anywhere in docs/library (README names it; collections.md gives only `Vec.extend[I: IntoIterator[Item = T]]`), and the v2 library has no `IntoIterator` trait; `std.log` needs `key: value` call fields. PREVIOUSLY: NARROWED 2026-10-19 (Thread A, read off prelude::LIBRARY_GLOBAL_MODULES at bdea5d5967): std.time (Instant partly, B-2026-10-15-112; SystemTime, Duration, sleep), std.random.next_u64 and std.uuid.v4 have landed (aff0e47fee, 3c1fb1d390, d0d9258c19); still specified-only are `std.sync.MutexGuard`, `std.iter.{DoubleEndedIterator, Extend}`, `std.process.exit` and all of `std.log`. WAS: Library items that docs/library/README.md's module table specifies are not implemented: `std.time.{Instant, SystemTime, Duration, sleep}`, `std.random.next_u64`, `std.uuid.v4`, `std.iter.{DoubleEndedIterator, Extend}`, `std.process.exit`, `std.sync.MutexGuard` and all of `std.log`; importing one now says "is in the library spec (docs/library) but not implemented yet" | — |
 | B-2026-10-24-2 | 2026-10-24 | codegen | low | A long `sort_by` of shuffled pairs on the MIR compiled backend runs 1.5x legacy and about 1.9x Rust after B-2026-10-13-18's partition: kata 252's bench is 0.28-0.30 s against legacy's 0.19 s, and 1,000,000 indices sorted by key 10 times take 0.93-1.05 s against rustc -O's 0.51-0.56 s | — |
 | B-2026-10-24-6 | 2026-10-24 | mir-llvm+runtime | low | After the in-line Map probe (9abd7da4c8), kata 340's sliding window still pays about 200 instructions per `remove` in karac_mir_map_remove_entry (Fenwick upkeep on a holed table, a rebuild on the first hole, and compactions) and 79 per word hash (93 before db4018cfb6), against Rust's ~74, so v2 sits at legacy's 3.6-3.9G instructions where Rust -O ran 1.98G | — |
-| B-2026-10-25-31 | 2026-10-25 | mir+mir-llvm | low | A table's hasher is not part of its type on v2, where collections.md makes `H` the last type parameter of `Map[K, V, H]` / `Set[T, H]`: the parser strips it, so a table built without the annotation in sight walks in the seeded order, and no BuildHasher's own code runs (a user hasher's build/write/finish never run, and an Fx table hashes with SipHash). RULED 10-27 by the review thread: `H` becomes a real type parameter. Stage 1 is the type, with the default filled in where `H` is omitted; stage 2 runs the builder's code. Already fixed: annotated lets, plain struct fields, returns, owned params, shared fields, and qualified constructors (5ed688429b) | — |
+| B-2026-10-25-31 | 2026-10-25 | mir+mir-llvm | low | A table's hasher is not part of its type on v2, where collections.md makes `H` the last type parameter of `Map[K, V, H]` / `Set[T, H]`: the parser strips it, so a table built without the annotation in sight walks in the seeded order, and no BuildHasher's own code runs (a user hasher's build/write/finish never run, and an Fx table hashes with SipHash). RULED 10-27 by the review thread: `H` becomes a real type parameter. Stage 1 is the type, with the default filled in where `H` is omitted; stage 2 runs the builder's code. STAGE 1 LANDED at 6b724b5025 (H is in the type, and a table walks in the order its type names wherever it is built); the remainder is stage 2, running the builder's own Kāra code | — |
 | B-2026-10-26-17 | 2026-10-26 | mir+mir-llvm | medium | After B-2026-10-26-14's fixes, at 9030678cd0 `KARAC_AUTO_PAR=1` builds still run under the M4b floor of 0.9x their own seq build: on one worker, the default, kata 28 brute_force 0.26x, 191 popcount 0.36x, 4 binary_search_partition 0.56x, 9 palindrome 0.70x and 8 atoi 0.75x (11 programs under 0.9x in all) (CORRECTED: hotel_audit, under on 4 workers in the first three timings, ran 0.97 / 0.98 / 0.92 in three more 21-run timings, inside the swing of a no-site control; no 4-worker app is reliably under at this box's resolution) (Thread B: hotel_audit's two small tasked loops are not the cause either, re-timed in three 31-run passes; the one-worker katas pay for the task form itself, see detail) | — |
 | B-2026-10-27-11 | 2026-10-27 | typecheck+mir | medium | `Iterable` (design.md § `Iterator` and `Iterable`, a lang-item trait: `type Item; fn iter(self) -> impl Iterator[Item = Self.Item]`) does not exist, so `for x in c` over a user collection cannot borrow it: `impl Iterable for Bag` is 'undefined type Iterable' | — |
 | B-2026-10-27-12 | 2026-10-27 | ownership+mir | low | Passing a function value held in a collection element to a non-escaping function-typed parameter (`apply(v[0], 4)` over `fn apply(f: Fn(i64) -> i64, x: i64)`) is refused as a move out of the element, where core-semantics §4.1 / §9.3 make a bare `Fn` parameter a borrow | — |
 | B-2026-10-27-14 | 2026-10-27 | typecheck | medium | Arithmetic on a `T: Add` (`Sub`, `Mul`, ...) type parameter is typed `T`, not the bound's `T.Output`, so `fn g[T: Sub](a: own T, b: own T) -> T { a - b }` passes check and, at a type whose `Output` is another type, reads the result as a `T`; and a mixed-operand bound (`T: Add[D, Output = T]`, `a + d`) is refused as 'both operands must have the same type' | — |
 | B-2026-10-27-15 | 2026-10-27 | parser | low | A type's generic parameters take no default (`struct Map[K, V, H = SipHash13BuildHasher]`, design.md § Default generic arguments): the parser refuses it by name; only a trait's parameters take defaults | — |
+| B-2026-10-27-17 | 2026-10-27 | mir-llvm | low | tests/mir_isolating_built.rs mir_isolating_built_contains_every_kind_of_panic failed once in a full llvm gate: `drop r` and `q err` printed in a different order in the built binary than in the interpreter; schedule-sensitive (5/5 alone) | — |
 
 ### Relocated
 
@@ -286,6 +287,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-27-9 | typecheck | high | An impl method's signature is not checked against its trait's: `impl Mk2 for S { type A = bool; fn mk2(self) -> Option[i64] { Some(7) } }` under `tra… | 75990e74c3 |
 | B-2026-10-27-10 | mir | medium | A trait impl's method named like an inherent method of the same type shares its MIR instance name (`Bag.into_iter`), so a call through the bound (`c.… | c264a31df1 |
 | B-2026-10-27-13 | typecheck | medium | The library's operator traits are declared without the spec's `Rhs` parameter and `Output` type (runtime/stdlib/add.kara: `trait Add { fn add(own sel… | f91c8a7d29 |
+| B-2026-10-27-16 | mir-llvm | medium | On v2 a wasm build emits no v128 instruction for `Vector[T, N]` arithmetic, and ignores `KARAC_OPT_LEVEL` and `--target-features`, so CI's WASM E2E j… | 62992ffd35 |
 
 </details>
 
