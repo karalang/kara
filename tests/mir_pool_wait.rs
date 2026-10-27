@@ -56,6 +56,11 @@ fn karac(file: &Path, args: &[&str]) -> Command {
 /// The program's stdout on the interpreter and, when the runtime archive
 /// links, on the built binary, which must print the same.
 fn stdout_on_both(name: &str, src: &str) -> String {
+    stdout_on_both_env(name, src, &[])
+}
+
+/// [`stdout_on_both`] with `env` set on the built binary's run.
+fn stdout_on_both_env(name: &str, src: &str, env: &[(&str, &str)]) -> String {
     let (dir, file) = scratch(name, "i", src);
     let out = run(name, karac(&file, &["__mir-run"]));
     let _ = std::fs::remove_dir_all(&dir);
@@ -85,7 +90,9 @@ fn stdout_on_both(name: &str, src: &str) -> String {
         Err(err)
     });
     if linked.is_some() {
-        let out = run(name, Command::new(&exe));
+        let mut cmd = Command::new(&exe);
+        cmd.envs(env.iter().copied());
+        let out = run(name, cmd);
         assert!(
             out.status.success(),
             "{name} built: {}",
@@ -209,8 +216,12 @@ fn main() {
 }
 "#
     );
+    // Which of the two tasks waits first, and so which is turned away, is
+    // the schedule's (core-semantics §11.1): on the pool either can be, so
+    // the build runs on one worker, where `a` starts first as on the
+    // interpreter.
     assert_eq!(
-        stdout_on_both("busy", &src),
+        stdout_on_both_env("busy", &src, &[("KARAC_THREADS", "1")]),
         "b busy\ngiving back 9\na got 9\n"
     );
 }
