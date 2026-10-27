@@ -20710,7 +20710,6 @@ fn main() {
 /// keeps f32 precision. That is tracked on its own row; pinning it here
 /// would bake the divergence into a passing test.
 #[test]
-#[ignore = "v2 gap after M3: the v2 wasm build renders a whole float with `.0` where the pinned native output has none"]
 fn wasm_f16_conversion_build_and_run_e2e() {
     let tmp = wasm_test_dir("f16conv");
     let path = tmp.join("f16conv.kara");
@@ -20796,9 +20795,9 @@ fn main() {
     );
     assert_eq!(
         node_stdout,
-        "3.5 1.0009765625 0.00000005960464477539063 0.00006097555160522461 \
-         inf 65504 -0\n\
-         3.5 0.00000005960464477539063 65504\n",
+        "3.5 1.0009765625 5.960464477539063e-08 6.097555160522461e-05 \
+         inf 65504.0 -0.0\n\
+         3.5 5.960464477539063e-08 65504.0\n",
         "wasm f16 conversions must match the native semantics; \
          stderr={node_stderr}",
     );
@@ -20845,7 +20844,6 @@ fn main() {
 /// `args: ['prog']` so `env.args().len()` is 1 under node exactly as it is
 /// under the native binary.
 #[test]
-#[ignore = "v2 gap after M3: the v2 wasm build renders a whole float with `.0` where the pinned native output has none"]
 fn wasm_f16_arithmetic_build_and_run_e2e() {
     let tmp = wasm_test_dir("f16arith");
     let path = tmp.join("f16arith.kara");
@@ -20946,13 +20944,13 @@ fn main() {
     // Every one of these six lines differed before the fix.
     assert_eq!(
         node_stdout,
-        "ovf inf 65504\n\
+        "ovf inf 65504.0\n\
          div 2.80078125 0.333251953125\n\
          inx 0.39990234375 0.029998779296875 -0.2000732421875\n\
-         unf 0\n\
+         unf 0.0\n\
          acc 0.900390625\n\
-         mth 255.875 33.125 1.2529296875 3\n\
-         vec inf 0.029998779296875 0 0.39990234375\n",
+         mth 255.875 33.125 1.2529296875 3.0\n\
+         vec inf 0.029998779296875 0.0 0.39990234375\n",
         "wasm f16 arithmetic must match the native semantics; \
          stderr={node_stderr}",
     );
@@ -21661,7 +21659,6 @@ fn main() {
 /// `ref_only` rides along as the control: a pointer is not decomposed, so it
 /// built before this fix and must keep building.
 #[test]
-#[ignore = "v2 gap after M3: the v2 wasm build renders a whole float with `.0` where the pinned native output has none"]
 fn wasm_bf16_aggregate_params_build_and_match_native() {
     let tmp = wasm_test_dir("bf16aggabi");
     let path = tmp.join("bf16_agg_abi.kara");
@@ -21761,7 +21758,7 @@ fn main() {
     // it is that a "bitcast" that had become a conversion would not produce it.
     assert_eq!(
         node_stdout,
-        "one 1.5\nwiden 1.5\nmake 2.5\nfields 14.25\nmixed 182\nmany 4321.5\n\
+        "one 1.5\nwiden 1.5\nmake 2.5\nfields 14.25\nmixed 182.0\nmany 4321.5\n\
          nested 542.5\npair 3.5\nselfval 6.5\nselfref 7.5\nround 1.1015625\n",
         "a bf16-bearing aggregate across a wasm boundary must compute the native \
          values; stderr={node_stderr}",
@@ -21800,7 +21797,6 @@ fn run_wasm_under_node(
 /// (`i64x2.add`, `f32x4.mul`, `f32x4.add`), and the module runs
 /// correctly under a WASI host.
 #[test]
-#[ignore = "v2 gap after M3: the v2 wasm build renders a whole float with `.0` where the pinned native output has none"]
 fn wasm_simd128_default_lowers_vector_ops_to_v128() {
     let tmp = wasm_test_dir("simd_default");
     let path = tmp.join("vecsimd.kara");
@@ -21866,7 +21862,7 @@ fn wasm_simd128_default_lowers_vector_ops_to_v128() {
         "v128 module failed under node:wasi: stdout={node_stdout} stderr={node_stderr}",
     );
     assert_eq!(
-        node_stdout, "22\n12\n",
+        node_stdout, "22\n12.0\n",
         "vector arithmetic must match native semantics; stderr={node_stderr}",
     );
     let _ = std::fs::remove_dir_all(&tmp);
@@ -21880,7 +21876,6 @@ fn wasm_simd128_default_lowers_vector_ops_to_v128() {
 /// per-instruction). Same program, same output, no vector instructions;
 /// and `-simd128,+simd128` re-enables (last-wins resolution).
 #[test]
-#[ignore = "v2 gap after M3: the v2 wasm build renders a whole float with `.0` where the pinned native output has none"]
 fn wasm_simd128_opt_out_scalarizes_module() {
     let tmp = wasm_test_dir("simd_optout");
     let path = tmp.join("vecscalar.kara");
@@ -21933,7 +21928,7 @@ fn wasm_simd128_opt_out_scalarizes_module() {
             node_out.status.success(),
             "scalar module failed under node:wasi: stdout={node_stdout} stderr={node_stderr}",
         );
-        assert_eq!(node_stdout, "22\n12\n", "stderr={node_stderr}");
+        assert_eq!(node_stdout, "22\n12.0\n", "stderr={node_stderr}");
     } else {
         eprintln!(
             "note: wasm_simd128_opt_out_scalarizes_module — node not on PATH, run leg skipped"
@@ -22084,7 +22079,6 @@ fn main() {
 ///   - guest `println` still routes through genuine WASI fd_write
 ///     alongside the host-fn traffic.
 #[test]
-#[ignore = "v2 gap after M3: the v2 wasm build does not lower the `report` native yet"]
 fn wasm_wasi_host_fn_e2e() {
     let tmp = wasm_test_dir("we2e-host");
     let path = tmp.join("hosted_wasi.kara");
@@ -22320,7 +22314,7 @@ fn write_wasm_project_fixture(tmp: &std::path::Path, pkg: &str) {
 /// world — its import must carry the canonical-ABI
 /// `kara:<pkg>/host` naming, not the C-ABI `kara_host` shape.
 #[test]
-#[ignore = "v2 gap after M3: the v2 wasm build does not lower the `report` native yet"]
+#[ignore = "v2 gap after M3: the v2 wasm build emits a core module, not the embedded component (B-2026-10-27-6)"]
 fn wasm_project_wasi_emits_embedded_component() {
     let tmp = wasm_test_dir("bprojwasi");
     write_wasm_project_fixture(&tmp, "wasipkg");
@@ -22393,7 +22387,7 @@ fn wasm_project_wasi_emits_embedded_component() {
 /// emitted — the pin exists for reproducible builds, so drift must not
 /// silently componentize with whatever is on PATH.
 #[test]
-#[ignore = "v2 gap after M3: the v2 wasm build does not lower the `report` native yet"]
+#[ignore = "v2 gap after M3: the v2 wasm build emits a core module, not the embedded component (B-2026-10-27-6)"]
 fn wasm_project_toolchain_pin_mismatch_fails() {
     let tmp = wasm_test_dir("bprojpin");
     write_wasm_project_fixture(&tmp, "pinpkg");

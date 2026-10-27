@@ -1,5 +1,6 @@
 //! Calls to the `extern "C"` functions a program declares (design.md § FFI;
-//! B-2026-10-22-10): a direct call to the external symbol by the C calling
+//! B-2026-10-22-10), and to its `host fn`s, which on wasm are imports of
+//! the `kara_host` module (B-2026-10-23-17): a direct call to the external symbol by the C calling
 //! convention, which the linker resolves against the libraries `kara.toml`'s
 //! `[link]` table names (and the C library). The lowering already refuses a
 //! signature with anything but integers, `bool` and raw pointers
@@ -79,6 +80,22 @@ impl<'ctx> Cx<'ctx, '_> {
         }
         if let Some(x) = rext {
             f.add_attribute(AttributeLoc::Return, attr(x));
+        }
+        // A `host fn` on a wasm target is an import of the `kara_host`
+        // module, which the embedder's import object provides at
+        // instantiation; the attributes are also what lets wasm-ld leave
+        // the symbol undefined. A plain `extern "C"` gets none, so an
+        // unresolved one is still a link error.
+        if sig.host && crate::target::active_target_is_wasm() {
+            for (k, v) in [
+                ("wasm-import-module", "kara_host"),
+                ("wasm-import-name", name),
+            ] {
+                f.add_attribute(
+                    AttributeLoc::Function,
+                    self.llcx.create_string_attribute(k, v),
+                );
+            }
         }
         Ok(f)
     }

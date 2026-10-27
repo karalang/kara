@@ -60,6 +60,11 @@ fn karac(file: &Path, args: &[&str]) -> Command {
 /// The program's stdout on the interpreter and, when the runtime archive
 /// links, on the built binary, which must print the same lines.
 fn stdout_on_both(name: &str, src: &str) -> String {
+    stdout_on_both_env(name, src, &[])
+}
+
+/// [`stdout_on_both`], with `env` set for the built binary's run.
+fn stdout_on_both_env(name: &str, src: &str, env: &[(&str, &str)]) -> String {
     let (dir, file) = scratch(name, "i", src);
     let out = run(name, karac(&file, &["__mir-run"]));
     let _ = std::fs::remove_dir_all(&dir);
@@ -89,7 +94,9 @@ fn stdout_on_both(name: &str, src: &str) -> String {
         Err(err)
     });
     if linked.is_some() {
-        let out = run(name, Command::new(&exe));
+        let mut cmd = Command::new(&exe);
+        cmd.envs(env.iter().copied());
+        let out = run(name, cmd);
         assert!(
             out.status.success(),
             "{name} built: {}",
@@ -197,7 +204,10 @@ fn main() {
 }
 
 /// Sleepers wake in the order of their deadlines, and in the order they
-/// slept at the same deadline, while a task parked on a socket waits.
+/// slept at the same deadline, while a task parked on a socket waits. On
+/// one worker: on the pool, two sleepers due at once wake on two workers,
+/// in an order core-semantics §11.1 leaves open; the pool's own deadline
+/// order is the next test's.
 #[test]
 fn mir_reactor_sleepers_wake_in_deadline_order_beside_a_parked_task() {
     let src = r#"
@@ -234,7 +244,54 @@ fn main() {
 }
 "#;
     assert_eq!(
-        stdout_on_both("sleepers", src),
+        stdout_on_both_env("sleepers", src, &[("KARAC_THREADS", "1")]),
         "1\n11\n2\n3\nwoke 1 sum 17\n"
+    );
+}
+
+/// On the pool, sleepers wake in the order of their deadlines while a task
+/// parked on a socket waits. The first park opened the reactor's `epoll`
+/// set under the executor's lock, and moving it to a high descriptor
+/// number waited out an RCU grace period with every worker stalled: the
+/// sleeper spawned first started 48 ms before the others and woke before
+/// sleepers due 40 ms ahead of it (B-2026-10-27-5).
+#[test]
+fn mir_reactor_pool_sleepers_wake_in_deadline_order() {
+    let src = r#"
+fn nap(ms: i64, tag: i64) -> i64 {
+    sleep_ms(ms);
+    println(f"{tag}");
+    tag
+}
+fn wait_byte(conn: TcpStream) -> i64 {
+    let mut buf: Array[u8, 8] = [0u8; 8];
+    match conn.read(mut buf) {
+        Ok(n) => n,
+        Err(_) => -1,
+    }
+}
+fn main() {
+    let listener = TcpListener.bind("127.0.0.1:0".to_string()).unwrap();
+    let at = listener.local_addr().unwrap();
+    let out = TcpStream.connect(at).unwrap();
+    let conn = listener.accept().unwrap();
+    let group = TaskGroup.new();
+    let w = group.spawn(|| wait_byte(conn));
+    let a = group.spawn(|| nap(140, 4));
+    let b = group.spawn(|| nap(20, 1));
+    let c = group.spawn(|| nap(100, 3));
+    let d = group.spawn(|| nap(60, 2));
+    sleep_ms(160);
+    let one: Vec[u8] = Vec.filled(1, 9u8);
+    match out.write(one[0..1]) {
+        Ok(_) => {}
+        Err(_) => println("write failed"),
+    }
+    println(f"woke {w.join()} sum {a.join() + b.join() + c.join() + d.join()}");
+}
+"#;
+    assert_eq!(
+        stdout_on_both_env("pool_sleepers", src, &[("KARAC_THREADS", "4")]),
+        "1\n2\n3\n4\nwoke 1 sum 10\n"
     );
 }

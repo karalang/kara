@@ -72,6 +72,9 @@ pub struct Program {
 pub struct ExternSig {
     pub params: Vec<Ty>,
     pub ret: Ty,
+    /// A `host fn`: the wasm module's host provides it, as an import of
+    /// the `kara_host` module (design.md § Host Functions).
+    pub host: bool,
 }
 
 /// How a derived `Display` departs from the default.
@@ -1410,6 +1413,12 @@ impl<'a> Interp<'a> {
         }
         let program: &'a Program = self.program;
         if let Some(sig) = program.externs.get(name) {
+            if sig.host {
+                return err(format!(
+                    "`{name}` is a `host fn`: it runs only in a wasm module whose host \
+                     provides it (`karac build --target=wasm_wasi`)"
+                ));
+            }
             return self.foreign_call(name, sig, args);
         }
         let (ty_name, method) = split_method(name);

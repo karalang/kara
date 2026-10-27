@@ -69,6 +69,11 @@ fn stdout_on_interp(name: &str, src: &str) -> String {
 /// The program's stdout on the interpreter and, when the runtime archive
 /// links, on the built binary, which must print the same.
 fn stdout_on_both(name: &str, src: &str) -> String {
+    stdout_on_both_env(name, src, &[])
+}
+
+/// [`stdout_on_both`], with `env` set for the built binary's run.
+fn stdout_on_both_env(name: &str, src: &str, env: &[(&str, &str)]) -> String {
     let interp = stdout_on_interp(name, src);
 
     let (dir, file) = scratch(name, "b", src);
@@ -90,7 +95,9 @@ fn stdout_on_both(name: &str, src: &str) -> String {
         Err(err)
     });
     if linked.is_some() {
-        let out = run(name, Command::new(&exe));
+        let mut cmd = Command::new(&exe);
+        cmd.envs(env.iter().copied());
+        let out = run(name, cmd);
         assert!(
             out.status.success(),
             "{name} built: {}",
@@ -238,8 +245,11 @@ fn main() {
     }
 }
 "#;
+    // One worker: on the pool `eager` runs beside `main`, and how far a
+    // cancelled task got, and so which lines it printed when, depends on
+    // timing (core-semantics §11.9).
     assert_eq!(
-        stdout_on_both("own", src),
+        stdout_on_both_env("own", src, &[("KARAC_THREADS", "1")]),
         "still running
 drop worker
 worker cancelled

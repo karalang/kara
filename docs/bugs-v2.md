@@ -60,12 +60,12 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | false-positive | 45 |
 | diagnostics | 38 |
-| missing-feature | 31 |
+| missing-feature | 32 |
 | perf | 13 |
 | soundness | 13 |
 | miscompile | 9 |
 | run-vs-build | 9 |
-| other | 3 |
+| other | 4 |
 | codegen-gap | 3 |
 | crash | 1 |
 
@@ -79,8 +79,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | interp | 20 |
 | cli | 18 |
 | ownership | 17 |
-| mir-llvm | 12 |
-| runtime | 9 |
+| mir-llvm | 14 |
+| runtime | 10 |
 | parser | 6 |
 | other | 2 |
 | resolver | 2 |
@@ -114,6 +114,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-27-1 | 2026-10-27 | ownership | low | `karac check` refuses returning a `Vec[(ref Node, i64)]` whose pushed tuples hold a borrow of a parameter ("returned borrowed collection holds an element that borrows function-local storage"), because the pinning check reads the tuple literal `(c, 1)` as a local source; the same push of a bare `c` into a `Vec[ref Node]` passes, and the MIR borrow checker accepts both | — |
 | B-2026-10-27-2 | 2026-10-27 | mir | low | A `par` over calls through a stored callback ignores the callback type's effect clause: `struct Job { run: Fn(i64) -> i64 with reads(Clock) }` and `par { (j.run)(3), (j.run)(4) }` is refused as `unknown` and `unknown`, where core-semantics §12 says a call through an escaping function value has the effects its type declares | — |
 | B-2026-10-27-4 | 2026-10-27 | cli | low | The v2 build refuses `--enable-hot-swap` on a default-profile project and a cross `--target` / `[build].target` by name, where legacy honoured both; 4 cli tests stay ignored | — |
+| B-2026-10-27-5 | 2026-10-27 | mir-llvm+runtime | medium | On the pool (threads on by default since 72ce9e026c), sleepers wake out of deadline order: the first park opens the reactor's epoll set under the executor's lock, and its F_DUPFD to descriptor 100 grows the fd table, which in a threaded process waits out an RCU grace period (48 ms under strace), stalling every worker; a 60 ms sleeper woke before 20 and 40 ms ones | — |
+| B-2026-10-27-6 | 2026-10-27 | mir-llvm | low | The v2 wasm build always emits a core module: `--bindings=component` (the wasm_wasi project default) does not embed the WIT world or componentize, `[toolchain] wasm-tools` is never consulted, and a `host fn` imports from `kara_host` instead of the canonical-ABI `kara:<pkg>/host`; 2 cli tests ignored | — |
 
 ### Fixed
 

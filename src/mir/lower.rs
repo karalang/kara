@@ -1244,7 +1244,9 @@ impl<'a> Lcx<'a> {
         self.bound_resources = bound_resources(program);
         for item in &program.items {
             let externs: Vec<&ast::ExternFunction> = match item {
-                Item::ExternFunction(e) if e.abi == "C" => vec![e],
+                // A `host fn` is called the same way: its host provides the
+                // body (design.md § Host Functions).
+                Item::ExternFunction(e) if e.abi == "C" || e.abi == "host" => vec![e],
                 Item::ExternBlock(b) if b.abi == "C" => b
                     .items
                     .iter()
@@ -13957,10 +13959,14 @@ impl<'l, 'a> Bx<'l, 'a> {
         for (a, &t) in args.iter().zip(&params) {
             ops.push(self.operand_at(&a.value, t)?);
         }
-        self.lcx
-            .program
-            .externs
-            .insert(decl.name.clone(), interp::ExternSig { params, ret });
+        self.lcx.program.externs.insert(
+            decl.name.clone(),
+            interp::ExternSig {
+                params,
+                ret,
+                host: decl.abi == "host",
+            },
+        );
         self.call_native(&decl.name, ops, dest);
         Ok(())
     }

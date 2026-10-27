@@ -1079,6 +1079,9 @@ fn settle(t: Task) -> bool {
                 let mut e = e.borrow_mut();
                 let key = e.put_off(t);
                 e.timers.push(Reverse((at, key)));
+                // Only the first worker wakes sleepers: one napping
+                // without a deadline to wake for has one now.
+                e.rouse_first();
             });
             false
         }
@@ -1090,7 +1093,11 @@ fn settle(t: Task) -> bool {
         // the task.
         Wait::FdBy(fd, events, at) => {
             if let Some(key) = park(t, fd, events) {
-                EXEC.with(|e| e.borrow_mut().timers.push(Reverse((at, key))));
+                EXEC.with(|e| {
+                    let mut e = e.borrow_mut();
+                    e.timers.push(Reverse((at, key)));
+                    e.rouse_first();
+                });
             }
             false
         }
@@ -1398,6 +1405,8 @@ fn start_workers() {
     if !pooled() || STARTED.swap(true, Ordering::AcqRel) {
         return;
     }
+    // While this is the only thread: see [`Reactor::open`].
+    EXEC.with(|e| e.borrow_mut().reactor.open());
     for w in 1..threads() {
         let spawned = std::thread::Builder::new()
             .name(format!("karac-worker-{w}"))
@@ -1434,11 +1443,6 @@ fn finished_polling() {
             e.rouse_first();
         }
     });
-}
-
-/// Whether a worker other than this one polls a task now.
-fn others_running() -> bool {
-    pooled() && EXEC.with(|e| e.borrow().running > 0)
 }
 
 /// Naps until a task is queued, progress is made or [`POOL_PARK`] passes:
@@ -1587,12 +1591,18 @@ fn block(quiet: u64) {
 /// descriptor, whichever comes first, and queues what woke; false when
 /// there is none of them to wait for.
 fn idle_wait(by: Option<Instant>) -> bool {
-    let (next, group, parked) = EXEC.with(|e| {
+    // Read under one lock with the running count: a worker puts its task
+    // to sleep before it stops counting as running, so with none running
+    // every timer is in the heap already, and with some running the wait
+    // is short. Read apart, a sleeper another worker settled in between
+    // was missed until the wait's old deadline (B-2026-10-27-5).
+    let (next, group, parked, others) = EXEC.with(|e| {
         let mut e = e.borrow_mut();
         (
             e.next_deadline(),
             e.next_group_deadline(),
             !e.parked.is_empty(),
+            pooled() && e.running > 0,
         )
     });
     // A group's deadline cancels its tasks (§11.10).
@@ -1601,7 +1611,7 @@ fn idle_wait(by: Option<Instant>) -> bool {
         return false;
     }
     let mut timeout = until.map(|t| t.saturating_duration_since(Instant::now()));
-    if others_running() {
+    if others {
         // Other workers put tasks to sleep or park them meanwhile, and only
         // this one wakes sleepers: wait a little at a time. With none
         // running and the queue empty, nothing else can change.
@@ -1743,28 +1753,37 @@ struct Reactor {
 
 #[cfg(all(feature = "net", target_os = "linux"))]
 impl Reactor {
+    /// The `epoll` descriptor, made on the first call.
+    ///
+    /// Moved above the numbers a program's own descriptors take, so they
+    /// are numbered as on the interpreter, which has no reactor descriptor.
+    /// That grows the descriptor table, which in a process with more than
+    /// one thread waits out an RCU grace period: 48 ms measured, under the
+    /// executor's lock, with every worker stalled behind it (B-2026-10-27-5).
+    /// So the pool opens it in [`start_workers`], before any other thread.
+    fn open(&mut self) -> Option<i32> {
+        if let Some(ep) = self.ep {
+            return Some(ep);
+        }
+        // SAFETY: plain syscall.
+        let mut ep = unsafe { libc::epoll_create1(libc::EPOLL_CLOEXEC) };
+        if ep < 0 {
+            return None;
+        }
+        // SAFETY: plain syscalls on the descriptor just made.
+        let high = unsafe { libc::fcntl(ep, libc::F_DUPFD_CLOEXEC, 100) };
+        if high >= 0 {
+            // SAFETY: as above.
+            unsafe { libc::close(ep) };
+            ep = high;
+        }
+        self.ep = Some(ep);
+        Some(ep)
+    }
+
     fn watch(&mut self, fd: i32, events: i16) -> bool {
-        let ep = match self.ep {
-            Some(ep) => ep,
-            None => {
-                // SAFETY: plain syscall.
-                let mut ep = unsafe { libc::epoll_create1(libc::EPOLL_CLOEXEC) };
-                if ep < 0 {
-                    return false;
-                }
-                // Moved above the numbers a program's own descriptors take,
-                // so they are numbered as on the interpreter, which has no
-                // reactor descriptor.
-                // SAFETY: plain syscalls on the descriptor just made.
-                let high = unsafe { libc::fcntl(ep, libc::F_DUPFD_CLOEXEC, 100) };
-                if high >= 0 {
-                    // SAFETY: as above.
-                    unsafe { libc::close(ep) };
-                    ep = high;
-                }
-                self.ep = Some(ep);
-                ep
-            }
+        let Some(ep) = self.open() else {
+            return false;
         };
         let mut want = libc::EPOLLONESHOT as u32;
         if events & 1 != 0 {
@@ -1860,6 +1879,10 @@ struct Reactor {
 
 #[cfg(not(all(feature = "net", target_os = "linux")))]
 impl Reactor {
+    fn open(&mut self) -> Option<i32> {
+        None
+    }
+
     fn watch(&mut self, fd: i32, events: i16) -> bool {
         self.fds.insert(fd, events);
         true

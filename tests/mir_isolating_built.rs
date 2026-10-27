@@ -69,6 +69,11 @@ fn stdout_on_interp(name: &str, src: &str) -> String {
 /// The program's stdout on the interpreter and, when the runtime archive
 /// links, on the built binary, which must print the same.
 fn stdout_on_both(name: &str, src: &str) -> String {
+    stdout_on_both_env(name, src, &[])
+}
+
+/// [`stdout_on_both`], with `env` set for the built binary's run.
+fn stdout_on_both_env(name: &str, src: &str, env: &[(&str, &str)]) -> String {
     let interp = stdout_on_interp(name, src);
 
     // The same path as the interpreter's run, so a panic's location reads
@@ -92,7 +97,9 @@ fn stdout_on_both(name: &str, src: &str) -> String {
         Err(err)
     });
     if linked.is_some() {
-        let out = run(name, Command::new(&exe));
+        let mut cmd = Command::new(&exe);
+        cmd.envs(env.iter().copied());
+        let out = run(name, cmd);
         assert!(
             out.status.success(),
             "{name} built: {}",
@@ -278,7 +285,9 @@ fn main() {
     show("d".to_string(), d.join());
 }
 "#;
-    let out = stdout_on_both("natives", src);
+    // One worker: tasks `a` and `b` each print as they end, and on the
+    // pool which of them ends first is unspecified (core-semantics §11.1).
+    let out = stdout_on_both_env("natives", src, &[("KARAC_THREADS", "1")]);
     let lines: Vec<&str> = out.lines().collect();
     assert_eq!(lines[..2], ["drop sort", "drop retain"], "{out}");
     assert!(
@@ -410,8 +419,10 @@ fn main() {
     println("done");
 }
 "#;
+    // One worker: `p` and `s` print their defers as they run, and on the
+    // pool their lines interleave in an order §11.1 leaves open.
     assert_eq!(
-        stdout_on_both("teardown", src),
+        stdout_on_both_env("teardown", src, &[("KARAC_THREADS", "1")]),
         "defer 1\nerrdefer 1\ndefer 2\np panicked: step one\ns 2\nw 42\nk cancelled\ndone\n"
     );
 }
