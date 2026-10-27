@@ -321,7 +321,9 @@ fn main() {\n    let a = N { v: 2, next: None };\n    let b = N { v: 3, next: So
     /// A handle read again after a `match` on a tuple of handles, then
     /// moved into the returned value, gives its count to the caller: the
     /// retains that build the result go (kata 558's `intersect`), the
-    /// tuple's stay, and the `Drop` bodies still run once each, in order.
+    /// tuple is matched where its parts lie so it counts nothing
+    /// (B-2026-10-24-11), and the `Drop` bodies still run once each, in
+    /// order.
     #[test]
     fn mir_rc_pairs_moves_a_handle_into_the_returned_value() {
         let src = "shared enum T { L(i64), N(T, T) }\n\
@@ -332,7 +334,7 @@ match (x, y) {\n        (T.L(p), T.L(q)) => {\n            if p == q {\n        
 fn keep(a: H) -> Option[H] {\n    let h = H { id: a.id + 1 };\n    match (h, a) {\n        _ => {}\n    }\n    Some(h)\n}\n\
 fn main() {\n    match two(3) {\n        T.N(T.L(a), T.L(b)) => println(f\"{a} {b}\"),\n        _ => println(\"?\"),\n    }\n    \
 let a = H { id: 1 };\n    match keep(a) {\n        Some(h) => println(f\"k{h.id}\"),\n        None => {}\n    }\n    println(\"end\");\n}\n";
-        assert_eq!(retains(src, "two"), 2);
+        assert_eq!(retains(src, "two"), 0);
         assert_eq!(
             run_source(src).unwrap(),
             ("3 4\nk2\nd2\nend\nd1\n".into(), Some(0))

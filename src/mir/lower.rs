@@ -12503,10 +12503,15 @@ impl<'l, 'a> Bx<'l, 'a> {
     ) -> R<()> {
         // The scrutinee temporary lives as long as the whole match.
         self.push_scope();
-        let (place, st, by_ref) = self.scrutinee(
-            scrutinee,
-            self.binds_mut_ref(arms.iter().map(|a| &a.pattern)),
-        )?;
+        let parts = self.scrutinee_parts(scrutinee, arms)?;
+        let (place, st, by_ref) = match &parts {
+            // Not read: every arm tests and binds the parts.
+            Some(_) => (Place::local(Local(0)), self.unit(), false),
+            None => self.scrutinee(
+                scrutinee,
+                self.binds_mut_ref(arms.iter().map(|a| &a.pattern)),
+            )?,
+        };
         let join = self.b.new_block();
         for arm in arms {
             if let PatternKind::Or(alts) = &arm.pattern.kind {
@@ -12516,13 +12521,21 @@ impl<'l, 'a> Bx<'l, 'a> {
                 }
             }
             let next = self.b.new_block();
-            self.test_pattern(&arm.pattern, &place, st, next)?;
+            match &parts {
+                Some(parts) => self.test_parts(&arm.pattern, parts, next)?,
+                None => self.test_pattern(&arm.pattern, &place, st, next)?,
+            }
             self.push_scope();
             let mut binds = Vec::new();
             // A guard reads the bindings by reference; the arm moves them
             // only once it is chosen (`docs/spikes/mir-types.md` §9.5).
             let guard_by_ref = arm.guard.is_some() && !by_ref;
-            self.bind_pattern(&arm.pattern, &place, st, by_ref || guard_by_ref, &mut binds)?;
+            match &parts {
+                Some(parts) => self.bind_parts(&arm.pattern, parts, guard_by_ref, &mut binds)?,
+                None => {
+                    self.bind_pattern(&arm.pattern, &place, st, by_ref || guard_by_ref, &mut binds)?
+                }
+            }
             for &(l, t) in &binds {
                 self.declare(l, t);
             }
@@ -12545,7 +12558,10 @@ impl<'l, 'a> Bx<'l, 'a> {
                 self.cur = body_bb;
                 if guard_by_ref {
                     let mut moved = Vec::new();
-                    self.bind_pattern(&arm.pattern, &place, st, false, &mut moved)?;
+                    match &parts {
+                        Some(parts) => self.bind_parts(&arm.pattern, parts, false, &mut moved)?,
+                        None => self.bind_pattern(&arm.pattern, &place, st, false, &mut moved)?,
+                    }
                     for &(l, t) in &moved {
                         self.declare(l, t);
                     }
@@ -12562,6 +12578,33 @@ impl<'l, 'a> Bx<'l, 'a> {
         });
         self.cur = join;
         self.pop_scope()
+    }
+
+    /// `test_pattern` for an arm of a match on parts (`scrutinee_parts`):
+    /// a tuple pattern tests each part where it lies; `_` tests nothing.
+    fn test_parts(&mut self, pat: &'a Pattern, parts: &[(Place, Ty)], fail: BasicBlock) -> R<()> {
+        if let PatternKind::Tuple(ps) = &pat.kind {
+            for (p, (place, t)) in ps.iter().zip(parts) {
+                self.test_pattern(p, place, *t, fail)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// `bind_pattern` for an arm of a match on parts.
+    fn bind_parts(
+        &mut self,
+        pat: &'a Pattern,
+        parts: &[(Place, Ty)],
+        by_ref: bool,
+        out: &mut Vec<(Local, Ty)>,
+    ) -> R<()> {
+        if let PatternKind::Tuple(ps) = &pat.kind {
+            for (p, (place, t)) in ps.iter().zip(parts) {
+                self.bind_pattern(p, place, *t, by_ref, out)?;
+            }
+        }
+        Ok(())
     }
 
     /// A `match` arm `A(x) | B(x) => body`: each alternative is tested in
@@ -12698,6 +12741,147 @@ impl<'l, 'a> Bx<'l, 'a> {
             }
             _ => (place, st, false),
         })
+    }
+
+    /// The parts of `match (a, b, ..)` over locals' places (a `ref` one seen
+    /// through), when the arms only test them and copy `Copy` values out:
+    /// each part is then matched where it lies, and no tuple is built, which
+    /// would count every handle into it and release it after the match
+    /// (B-2026-10-24-11). A part is `Copy` or a handle (which the tuple only
+    /// counted, never moved), and a guard is plain operators over names, so
+    /// nothing changes a part between the tests that read it.
+    fn scrutinee_parts(
+        &mut self,
+        scrutinee: &'a Expr,
+        arms: &'a [ast::MatchArm],
+    ) -> R<Option<Vec<(Place, Ty)>>> {
+        let ExprKind::Tuple(elems) = &scrutinee.kind else {
+            return Ok(None);
+        };
+        let st = self.expr_ty(scrutinee)?;
+        let mut tys = Vec::with_capacity(elems.len());
+        for (i, el) in elems.iter().enumerate() {
+            let Some(ft) = self.tys().field_ty(st, None, i as u32) else {
+                return Ok(None);
+            };
+            let handle = matches!(self.tys().tcx().kind(ft), HK::Shared { .. });
+            if !(self.is_place(el) && self.is_local_rooted(el) && (handle || self.is_copy(ft))) {
+                return Ok(None);
+            }
+            tys.push(ft);
+        }
+        for arm in arms {
+            let parts_ok = match &arm.pattern.kind {
+                PatternKind::Wildcard => true,
+                PatternKind::Tuple(ps) => {
+                    ps.len() == tys.len()
+                        && ps.iter().zip(&tys).all(|(p, &t)| self.copies_only(p, t))
+                }
+                _ => false,
+            };
+            if !parts_ok || !arm.guard.as_ref().is_none_or(plain_guard) {
+                return Ok(None);
+            }
+        }
+        let mut parts = Vec::with_capacity(elems.len());
+        for (el, ft) in elems.iter().zip(tys) {
+            let et = self.expr_ty(el)?;
+            let place = self.expr_place(el, false)?;
+            parts.push(match self.tys().tcx().kind(et) {
+                _ if et == ft => (place, ft),
+                HK::Ref(inner) | HK::MutRef(inner) if inner == ft => {
+                    (place.project(ProjElem::Deref), ft)
+                }
+                _ => return Ok(None),
+            });
+        }
+        return Ok(Some(parts));
+
+        /// Names, literals, fields and operators: nothing that writes.
+        fn plain_guard(e: &Expr) -> bool {
+            match &e.kind {
+                ExprKind::Identifier(_)
+                | ExprKind::Integer(..)
+                | ExprKind::Float(..)
+                | ExprKind::CharLit(_)
+                | ExprKind::ByteLit(_)
+                | ExprKind::Bool(_) => true,
+                ExprKind::Binary { left, right, .. } => plain_guard(left) && plain_guard(right),
+                ExprKind::Unary { operand, .. } => plain_guard(operand),
+                ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+                    plain_guard(object)
+                }
+                _ => false,
+            }
+        }
+    }
+
+    /// Whether `pat`, matched against a `t`, binds only `Copy` values by
+    /// copy: no binding of a part that is not `Copy`, and no `ref` or
+    /// `mut ref` binding, so no binding holds on to the scrutinee.
+    fn copies_only(&mut self, pat: &Pattern, t: Ty) -> bool {
+        if let HK::Ref(inner) | HK::MutRef(inner) = self.tys().tcx().kind(t) {
+            if self.destructures(pat) {
+                return self.copies_only(pat, inner);
+            }
+        }
+        let by_name = |s: &Self, span| {
+            let k = SpanKey::from_span(span);
+            !s.lcx.ref_bindings.contains(&k) && !s.lcx.mut_ref_bindings.contains(&k)
+        };
+        match &pat.kind {
+            PatternKind::Wildcard | PatternKind::Literal(_) | PatternKind::RangePattern { .. } => {
+                true
+            }
+            PatternKind::Binding(_) => {
+                matches!(self.lcx.res.get(&pat.id), Some(Res::Def(_)))
+                    || (self.is_copy(t) && by_name(self, &pat.span))
+            }
+            PatternKind::AtBinding {
+                pattern, by_ref, ..
+            } => {
+                !*by_ref
+                    && self.is_copy(t)
+                    && by_name(self, &pat.span)
+                    && self.copies_only(pattern, t)
+            }
+            PatternKind::Tuple(ps) => ps.iter().enumerate().all(|(i, p)| {
+                self.tys()
+                    .field_ty(t, None, i as u32)
+                    .is_some_and(|ft| self.copies_only(p, ft))
+            }),
+            PatternKind::TupleVariant { patterns, .. } => {
+                let Some(&Res::Def(d)) = self.lcx.res.get(&pat.id) else {
+                    return false;
+                };
+                let Some(idx) = self.variant_at(d, t) else {
+                    return false;
+                };
+                patterns.iter().enumerate().all(|(i, p)| {
+                    self.tys()
+                        .tcx()
+                        .field_ty(t, Some(idx), i as u32)
+                        .is_some_and(|ft| self.copies_only(p, ft))
+                })
+            }
+            PatternKind::Struct { fields, .. } => {
+                let variant = match self.lcx.res.get(&pat.id) {
+                    Some(&Res::Def(d)) => self.variant_at(d, t),
+                    _ => None,
+                };
+                fields.iter().all(|fp| {
+                    let Some((_, ft)) = self.field_of(t, variant, &fp.name) else {
+                        return false;
+                    };
+                    match &fp.pattern {
+                        Some(p) => self.copies_only(p, ft),
+                        None => self.is_copy(ft),
+                    }
+                })
+            }
+            PatternKind::Or(_) => !self.pattern_binds(pat),
+            _ => false,
+        }
     }
 
     /// Whether `e` is a field (or tuple part) reached through a value that
