@@ -105,7 +105,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-27-27 | 2026-10-27 | typecheck | medium | A variant pattern spelled through the WRONG enum is accepted and matches the scrutinee's own variant of that name: with `enum Mode { Slow, P(i64) }` and `enum Other { Slow, P(i64) }`, `match Mode.Slow { Other.Slow => .. }` takes the arm, and `Other.P(x)` against `Mode.P(4)` binds x = 4. Only the last segment of a dotted variant path is read. | — |
 | B-2026-10-27-28 | 2026-10-27 | typecheck+mir | low | The standard collections are not `Iterable`: `fn total[C: Iterable[Item = ref i64]](c: C)` refuses `total(vec![1, 2, 3])` with "trait bound `C: Iterable` is not satisfied; `Vec[i64]` does not implement `Iterable`", though design.md § `Iterator` and `Iterable` and library/collections.md say every collection is | — |
 | B-2026-10-27-29 | 2026-10-27 | typecheck+mir | medium | A program function named like a builtin the library calls (`fn panic(s: Str) -> i64 { 7 }`) replaces it inside library bodies: `let o: Option[i64] = None; println(o.expect("boom"))` prints 7 instead of panicking, on `karac run --interp`. | — |
-| B-2026-10-27-30 | 2026-10-27 | mir+mir-llvm | low | Auto-par and std.log, remainder of B-2026-10-27-22: a record an earlier auto-par statement would log can be missing when a later one panics first. Target (review-thread ruling 2026-10-27): before a panic ends the program, the runtime drains every held record in statement order to the backend, then reports the panic | — |
 
 ### Relocated
 
@@ -301,6 +300,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-27-20 | typecheck+mir+runtime | medium | All of `std.log` (docs/library/log.md, fcb3ddf9c) is specified but not implemented: the four level functions with open `key: value` fields, `Level`,… | 0b968aee09 |
 | B-2026-10-27-22 | mir+mir-llvm | medium | Auto-par is not yet invisible to logging (docs/library/log.md, ruled 2026-10-27): the interim keeps every statement and loop that logs out of auto-pa… | 4fc726165c |
 | B-2026-10-27-24 | parser | low | A match pattern cannot name a variant through a module binding: `import std.log;` then `match record.level { log.Level.Debug => . | ef19081ebc |
+| B-2026-10-27-30 | mir+mir-llvm | low | Auto-par and std.log, remainder of B-2026-10-27-22: a record an earlier auto-par statement would log can be missing when a later one panics first | 192217f2f9 |
 
 </details>
 
