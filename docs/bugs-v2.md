@@ -64,8 +64,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | soundness | 16 |
 | perf | 13 |
 | miscompile | 10 |
-| run-vs-build | 10 |
-| other | 4 |
+| run-vs-build | 9 |
+| other | 5 |
 | codegen-gap | 4 |
 | crash | 1 |
 
@@ -104,7 +104,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-27-12 | 2026-10-27 | ownership+mir | low | Passing a function value held in a collection element to a non-escaping function-typed parameter (`apply(v[0], 4)` over `fn apply(f: Fn(i64) -> i64, x: i64)`) is refused as a move out of the element, where core-semantics §4.1 / §9.3 make a bare `Fn` parameter a borrow | — |
 | B-2026-10-27-14 | 2026-10-27 | typecheck | medium | Arithmetic on a `T: Add` (`Sub`, `Mul`, ...) type parameter is typed `T`, not the bound's `T.Output`, so `fn g[T: Sub](a: own T, b: own T) -> T { a - b }` passes check and, at a type whose `Output` is another type, reads the result as a `T`; and a mixed-operand bound (`T: Add[D, Output = T]`, `a + d`) is refused as 'both operands must have the same type' | — |
 | B-2026-10-27-15 | 2026-10-27 | parser | low | A type's generic parameters take no default (`struct Map[K, V, H = SipHash13BuildHasher]`, design.md § Default generic arguments): the parser refuses it by name; only a trait's parameters take defaults | — |
-| B-2026-10-27-17 | 2026-10-27 | mir-llvm | low | tests/mir_isolating_built.rs mir_isolating_built_contains_every_kind_of_panic failed once in a full llvm gate: `drop r` and `q err` printed in a different order in the built binary than in the interpreter; schedule-sensitive (5/5 alone) | — |
 
 ### Relocated
 
@@ -288,6 +287,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-27-10 | mir | medium | A trait impl's method named like an inherent method of the same type shares its MIR instance name (`Bag.into_iter`), so a call through the bound (`c.… | c264a31df1 |
 | B-2026-10-27-13 | typecheck | medium | The library's operator traits are declared without the spec's `Rhs` parameter and `Output` type (runtime/stdlib/add.kara: `trait Add { fn add(own sel… | f91c8a7d29 |
 | B-2026-10-27-16 | mir-llvm | medium | On v2 a wasm build emits no v128 instruction for `Vector[T, N]` arithmetic, and ignores `KARAC_OPT_LEVEL` and `--target-features`, so CI's WASM E2E j… | 62992ffd35 |
+| B-2026-10-27-17 | mir-llvm | low | tests/mir_isolating_built.rs mir_isolating_built_contains_every_kind_of_panic failed once in a full llvm gate: `drop r` and `q err` printed in a diff… | 5eaa25d31a |
 
 </details>
 
