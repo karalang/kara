@@ -6741,6 +6741,28 @@ impl<'a> TypeChecker<'a> {
     }
 
     pub(super) fn check_assignable(&mut self, expected: &Type, found: &Type, span: Span) -> bool {
+        // B-2026-10-27-14: an operator's result on a `T: Add` is the bound's
+        // `T.Output`, which the `TypeParam` wildcard of `types_compatible`
+        // would take for a `T`.
+        if let Some(want) = self.type_param_name(expected).cloned() {
+            if let Some((param, fix)) = self.unfixed_operator_output(found, None) {
+                if param == want {
+                    let say = Self::output_fix_hint(&param, fix.as_ref());
+                    self.type_error_maybe_fix_it(
+                        format!(
+                            "expected '{want}', found '{}': the result of an operator on a \
+                             '{want}' is its bound's `Output` (design.md § Operator traits), \
+                             which is '{want}' only where the bound says so: {say}",
+                            type_display(found),
+                        ),
+                        span,
+                        TypeErrorKind::TypeMismatch,
+                        fix,
+                    );
+                    return false;
+                }
+            }
+        }
         // design.md § String literals: a literal is a `Str` wherever a `Str`
         // is expected, including the slots whose check infers the argument
         // first (`v.push("a")` on a `Vec[Str]`, `d.contains("a")`;

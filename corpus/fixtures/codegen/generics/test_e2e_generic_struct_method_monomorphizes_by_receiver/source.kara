@@ -5,7 +5,7 @@ impl[T] Box[T] {
     fn get_val(own self) -> T { self.v }
 }
 struct Pair[T] { a: T, b: T }
-impl[T: Sub] Pair[T] {
+impl[T: Sub[Output = T]] Pair[T] {
     fn lo(ref self) -> T { self.a }
     fn hi(ref self) -> T { self.b }
     fn gap(ref self) -> T { self.hi() - self.lo() }

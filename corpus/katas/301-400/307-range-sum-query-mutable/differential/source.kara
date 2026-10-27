@@ -270,7 +270,7 @@ struct FenE[T] {
     n: i64,
 }
 
-impl[T: Copy + Add + Sub] FenE[T] {
+impl[T: Copy + Add[Output = T] + Sub[Output = T]] FenE[T] {
     fn new(nums: ref Vec[T], zero: T) -> FenE[T] {
         let n = nums.len();
         let mut tree: Vec[T] = Vec.new();

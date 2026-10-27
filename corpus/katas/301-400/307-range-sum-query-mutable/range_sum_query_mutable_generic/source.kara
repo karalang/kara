@@ -45,7 +45,7 @@ struct Fenwick[T] {
     n: i64,
 }
 
-impl[T: Copy + Add + Sub] Fenwick[T] {
+impl[T: Copy + Add[Output = T] + Sub[Output = T]] Fenwick[T] {
     fn new(nums: ref Vec[T], zero: T) -> Fenwick[T] {
         let n = nums.len();
         let mut tree: Vec[T] = Vec.new();

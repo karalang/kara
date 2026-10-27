@@ -1,5 +1,5 @@
 struct Pair[T] { x: T, y: T }
-impl[T: Add + Mul] Pair[T] {
+impl[T: Add[Output = T] + Mul] Pair[T] {
 fn combine(ref self) -> T { self.x * self.y + self.x }
 fn twice(ref self) -> T { self.combine() + self.combine() }
 }

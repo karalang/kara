@@ -6452,23 +6452,23 @@ fn f16_bf16_satisfy_the_arithmetic_operator_traits() {
         ("Rem", "a % b"),
     ] {
         for width in ["f16", "bf16", "f32", "f64"] {
-            typecheck_ok(&format!(
-                "fn g[T: {bound}](a: T, b: T) -> T {{ {body} }}\n\
+            typecheck_desugared_ok(&format!(
+                "fn g[T: {bound}[Output = T]](a: T, b: T) -> T {{ {body} }}\n\
                  fn main() {{ let x: {width} = 1.5; let _ = g(x, x); }}"
             ));
         }
     }
     for width in ["f16", "bf16", "f32", "f64"] {
-        typecheck_ok(&format!(
-            "fn g[T: Neg](a: T) -> T {{ -a }}\n\
+        typecheck_desugared_ok(&format!(
+            "fn g[T: Neg[Output = T]](a: T) -> T {{ -a }}\n\
              fn main() {{ let x: {width} = 1.5; let _ = g(x); }}"
         ));
     }
     // Several bounds at once, and a generic calling a generic — both reach the
     // same impl table, and both were rejected for the same reason.
-    typecheck_ok(
-        "fn m[T: Mul](a: T, b: T) -> T { a * b }\n\
-         fn p[T: Add + Mul](a: T, b: T) -> T { m(a, b) + b }\n\
+    typecheck_desugared_ok(
+        "fn m[T: Mul[Output = T]](a: T, b: T) -> T { a * b }\n\
+         fn p[T: Add[Output = T] + Mul[Output = T]](a: T, b: T) -> T { m(a, b) + b }\n\
          fn main() { let x: f16 = 1.5; let y: bf16 = 1.5; let _ = p(x, x); let _ = p(y, y); }",
     );
 }
@@ -9748,12 +9748,12 @@ fn test_generic_container_impl_no_ord_bound_ok() {
     // resolve `span` — confirming the rejection above was solely the spurious
     // `Ord` bound, not a container/monomorphization defect.
     typecheck_ok_desugared(
-        "trait Range2[T: Sub] {
+        "trait Range2[T: Sub[Output = T]] {
              fn lo(ref self) -> T;
              fn hi(ref self) -> T;
              fn span(ref self) -> T { self.hi() - self.lo() }
          }
-         impl[T: Sub] Range2[T] for Column[T] {
+         impl[T: Sub[Output = T]] Range2[T] for Column[T] {
              fn lo(ref self) -> T { self.min() }
              fn hi(ref self) -> T { self.max() }
          }
@@ -21422,11 +21422,11 @@ fn baked_arithmetic_traits_resolvable_as_bounds() {
     // (operator-trait carve-out), so the test pin is in trait-bound
     // position. If any of the four were accidentally dropped from
     // env.traits, the bound would fail to resolve.
-    typecheck_ok(
-        "fn use_add[T: Add](a: T, b: T) -> T { a.add(b) }\n\
-         fn use_sub[T: Sub](a: T, b: T) -> T { a.sub(b) }\n\
-         fn use_mul[T: Mul](a: T, b: T) -> T { a.mul(b) }\n\
-         fn use_div[T: Div](a: T, b: T) -> T { a.div(b) }",
+    typecheck_desugared_ok(
+        "fn use_add[T: Add[Output = T]](a: T, b: T) -> T { a.add(b) }\n\
+         fn use_sub[T: Sub[Output = T]](a: T, b: T) -> T { a.sub(b) }\n\
+         fn use_mul[T: Mul[Output = T]](a: T, b: T) -> T { a.mul(b) }\n\
+         fn use_div[T: Div[Output = T]](a: T, b: T) -> T { a.div(b) }",
     );
 }
 
@@ -21436,14 +21436,14 @@ fn baked_extra_operator_traits_resolvable_as_bounds() {
     // joined the baked surface (Not held back — `not` is a Kāra
     // keyword, so the method name in the trait declaration would not
     // parse). Pin that bound resolution still finds them.
-    typecheck_ok(
-        "fn use_rem[T: Rem](a: T, b: T) -> T { a.rem(b) }\n\
-         fn use_neg[T: Neg](a: T) -> T { a.neg() }\n\
-         fn use_bitand[T: BitAnd](a: T, b: T) -> T { a.bitand(b) }\n\
-         fn use_bitor[T: BitOr](a: T, b: T) -> T { a.bitor(b) }\n\
-         fn use_bitxor[T: BitXor](a: T, b: T) -> T { a.bitxor(b) }\n\
-         fn use_shl[T: Shl](a: T, b: T) -> T { a.shl(b) }\n\
-         fn use_shr[T: Shr](a: T, b: T) -> T { a.shr(b) }",
+    typecheck_desugared_ok(
+        "fn use_rem[T: Rem[Output = T]](a: T, b: T) -> T { a.rem(b) }\n\
+         fn use_neg[T: Neg[Output = T]](a: T) -> T { a.neg() }\n\
+         fn use_bitand[T: BitAnd[Output = T]](a: T, b: T) -> T { a.bitand(b) }\n\
+         fn use_bitor[T: BitOr[Output = T]](a: T, b: T) -> T { a.bitor(b) }\n\
+         fn use_bitxor[T: BitXor[Output = T]](a: T, b: T) -> T { a.bitxor(b) }\n\
+         fn use_shl[T: Shl[Output = T]](a: T, b: T) -> T { a.shl(b) }\n\
+         fn use_shr[T: Shr[Output = T]](a: T, b: T) -> T { a.shr(b) }",
     );
 }
 
@@ -24916,9 +24916,9 @@ fn operator_on_operator_trait_bounded_type_param_admitted() {
     //     trap the fix handles by consulting `enclosing_bounds`),
     //   - two operator traits at once (`Add + Mul`) and unary `Neg`.
     typecheck_desugared_ok(
-        "fn add_gen[T: Add](a: T, b: T) -> T { a + b }\n\
-         fn neg_gen[T: Neg](a: T) -> T { -a }\n\
-         trait Foldy[T: Add + Mul] {\n\
+        "fn add_gen[T: Add[Output = T]](a: T, b: T) -> T { a + b }\n\
+         fn neg_gen[T: Neg[Output = T]](a: T) -> T { -a }\n\
+         trait Foldy[T: Add[Output = T] + Mul[Output = T]] {\n\
          \x20   fn a(ref self) -> T;\n\
          \x20   fn b(ref self) -> T;\n\
          \x20   fn sum2(ref self) -> T { self.a() + self.b() }\n\
@@ -24992,12 +24992,12 @@ fn bounded_generic_impl_methods_resolve() {
     // `gap`) and the external bounded-generic-param call (in `use_pair`).
     typecheck_desugared_ok(
         "struct Pair[T] { a: T, b: T }\n\
-         impl[T: Sub] Pair[T] {\n\
+         impl[T: Sub[Output = T]] Pair[T] {\n\
          \x20   fn lo(ref self) -> T { self.a }\n\
          \x20   fn hi(ref self) -> T { self.b }\n\
          \x20   fn gap(ref self) -> T { self.hi() - self.lo() }\n\
          }\n\
-         fn use_pair[T: Sub](p: ref Pair[T]) -> T { p.gap() }\n\
+         fn use_pair[T: Sub[Output = T]](p: ref Pair[T]) -> T { p.gap() }\n\
          fn main() {}",
     );
 }
@@ -25175,7 +25175,7 @@ fn user_trait_default_method_over_container_resolves() {
     // `Type::Error` — the very hole B-2026-07-31-1 closed. Running desugar makes
     // the test exercise the pipeline it names.
     typecheck_desugared_ok(
-        "trait Stat[T: Add] {\n\
+        "trait Stat[T: Add[Output = T]] {\n\
          \x20   fn total(ref self) -> T;\n\
          \x20   fn total_or(ref self, fallback: T) -> T { self.total() }\n\
          \x20   fn twice_total(ref self) -> T { self.total() + self.total() }\n\
@@ -25196,9 +25196,9 @@ fn user_generic_trait_impl_over_column_resolves() {
     // Column[T]` with a required method resolves across two element monos
     // (i64 + f64) — the base generic-container-impl feature. (The default-method
     // twin over ≥2 monos is the residual edge B-2026-07-04-15.)
-    typecheck_ok(
-        "trait Doubler[T: Add] { fn doubled_sum(ref self) -> T; }\n\
-         impl[T: Add] Doubler[T] for Column[T] {\n\
+    typecheck_desugared_ok(
+        "trait Doubler[T: Add[Output = T]] { fn doubled_sum(ref self) -> T; }\n\
+         impl[T: Add[Output = T]] Doubler[T] for Column[T] {\n\
          \x20   fn doubled_sum(ref self) -> T { self.sum() + self.sum() }\n\
          }\n\
          fn main() {\n\
@@ -51418,9 +51418,9 @@ fn instance_method_default_fill_declines_what_it_cannot_name() {
 /// identically because they are identical.
 #[test]
 fn add_bounded_param_accepts_both_spellings_of_the_same_parameter() {
-    typecheck_ok(
+    typecheck_desugared_ok(
         r#"
-fn f[T: Copy + Add](zero: T) -> T {
+fn f[T: Copy + Add[Output = T]](zero: T) -> T {
     let mut a: Vec[T] = Vec.new();
     a.push(zero);
     return a[0] + zero;
@@ -51434,9 +51434,9 @@ fn main() { println(f"{f(5)}"); }
 /// sum, reading back out of the buffer it is building.
 #[test]
 fn generic_prefix_sum_over_an_add_bounded_parameter_typechecks() {
-    typecheck_ok(
+    typecheck_desugared_ok(
         r#"
-fn prefix[T: Copy + Add](xs: ref Vec[T], zero: T) -> Vec[T] {
+fn prefix[T: Copy + Add[Output = T]](xs: ref Vec[T], zero: T) -> Vec[T] {
     let mut p: Vec[T] = Vec.new();
     p.push(zero);
     let mut i: i64 = 0;

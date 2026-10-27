@@ -1,5 +1,5 @@
 
-trait Stat[T: Add] {
+trait Stat[T: Add[Output = T]] {
     fn total(ref self) -> T;
     fn total_or(ref self, fallback: T) -> T { self.total() }
     fn twice_total(ref self) -> T { self.total() + self.total() }

@@ -480,6 +480,10 @@ impl<'a> super::TypeChecker<'a> {
         for (name, bounds) in Self::collect_param_bounds(&t.generic_params, &t.where_clause) {
             self.enclosing_bounds.insert(name, bounds);
         }
+        // And their `Output = T`s (B-2026-10-27-14).
+        let saved_assoc_eqs = self.enclosing_assoc_eqs.clone();
+        self.enclosing_assoc_eqs
+            .extend(Self::collect_assoc_eqs(&t.where_clause));
         if !t.supertraits.is_empty() {
             self.enclosing_bounds
                 .entry("Self".to_string())
@@ -541,6 +545,7 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
+        self.enclosing_assoc_eqs = saved_assoc_eqs;
         self.enclosing_bounds = saved_bounds;
         self.enclosing_trait = saved_enclosing_trait;
         self.lint_override_stack.pop();
@@ -9566,10 +9571,12 @@ impl<'a> super::TypeChecker<'a> {
                 let result = self.infer_binary(&binop, target, value, &stmt.span);
                 // B-2026-10-14-30 — `a += b` on a user type is `a = a + b`, so
                 // the impl's result must be the type of `a` (design.md
-                // § Operator traits, compound assignment).
+                // § Operator traits, compound assignment). So must a bounded
+                // parameter's `T.Output` (B-2026-10-27-14).
                 if self
                     .user_operator_calls
                     .contains_key(&SpanKey::from_span(&stmt.span))
+                    || self.unfixed_operator_output(&result, None).is_some()
                 {
                     if let Some(tt) = self
                         .expr_types

@@ -1,5 +1,5 @@
 
-fn prefix[T: Copy + Add](xs: ref Vec[T], zero: T) -> Vec[T] {
+fn prefix[T: Copy + Add[Output = T]](xs: ref Vec[T], zero: T) -> Vec[T] {
     let mut p: Vec[T] = Vec.new();
     p.push(zero);
     let mut i: i64 = 0;

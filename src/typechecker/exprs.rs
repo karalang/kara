@@ -5769,6 +5769,68 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// The one trait among `param`'s bounds in `where_clause` that declares
+    /// `assoc`; `None` when none or several do.
+    fn declaring_bound_trait(
+        &self,
+        where_clause: &WhereClause,
+        param: &str,
+        assoc: &str,
+    ) -> Option<String> {
+        let traits: Vec<&String> = where_clause
+            .constraints
+            .iter()
+            .filter_map(|c| match c {
+                WhereConstraint::TypeBound {
+                    type_name, bounds, ..
+                } if type_name == param => Some(bounds),
+                _ => None,
+            })
+            .flatten()
+            .filter_map(|b| b.path.last())
+            .filter(|t| {
+                self.env
+                    .traits
+                    .get(t.as_str())
+                    .is_some_and(|i| i.assoc_types.iter().any(|a| a == assoc))
+            })
+            .collect();
+        let [tr] = traits.as_slice() else {
+            return None;
+        };
+        Some((*tr).clone())
+    }
+
+    /// `param.assoc` at the call, read from the impl, for `concrete`, of
+    /// `declaring_bound_trait`. `None` when no single bound declares it or
+    /// the impl binds it generically, which leaves the type-keyed lookup to
+    /// answer.
+    fn bound_trait_assoc(
+        &self,
+        where_clause: &WhereClause,
+        param: &str,
+        assoc: &str,
+        concrete: &Type,
+    ) -> Option<Type> {
+        let Type::Named { name, .. } = concrete else {
+            return None;
+        };
+        let tr = &self.declaring_bound_trait(where_clause, param, assoc)?;
+        let mut found = self.env.impls.iter().enumerate().filter_map(|(i, imp)| {
+            if imp.target_type != *name || imp.trait_name.as_deref() != Some(tr.as_str()) {
+                return None;
+            }
+            self.env
+                .impl_own_assoc_types
+                .get(&i)?
+                .iter()
+                .find(|(a, _)| a == assoc)
+                .map(|(_, t)| t.clone())
+        });
+        let t = found.next()?;
+        (found.next().is_none() && super::types::type_is_fully_concrete(&t)).then_some(t)
+    }
+
     /// B-2026-08-22-3 — discharge `WhereConstraint::AssocTypeEq`
     /// (`where I.Item = i64`) at call sites.
     ///
@@ -5826,6 +5888,41 @@ impl<'a> super::TypeChecker<'a> {
                 receiver_args: Vec::new(),
             };
             let found = self.resolve_assoc_projections(&substitute_type_params(&projection, &subs));
+            // The impl of the bound that declares the associated type answers
+            // for it: `V` may bind `Output` once per operator trait
+            // (`Add` to `V`, `Mul` to `i64`; B-2026-10-27-14).
+            let found = self
+                .bound_trait_assoc(where_clause, type_name, assoc_name, &solutions[type_name])
+                .unwrap_or(found);
+            // A caller's own parameter answers through its bound: an
+            // operator's `Output` there is whatever the caller's bound
+            // fixes, and nothing when it fixes none (B-2026-10-27-14).
+            let found = self.normalize_enclosing_assoc_eqs(&found);
+            let tr = self.declaring_bound_trait(where_clause, type_name, assoc_name);
+            if let Some((param, fix)) = self.unfixed_operator_output(&found, tr.as_deref()) {
+                let required = self.lower_type_expr(ty, all_param_names);
+                let required = substitute_type_params(&required, &subs);
+                let message = format!(
+                    "error[E_WHERE_CLAUSE_ASSOC_TYPE_EQ_NOT_SATISFIED]: associated-type \
+                     bound `{type_name}.{assoc_name} = {}` is not satisfied; '{param}' is \
+                     bounded without fixing its `{assoc_name}`",
+                    type_display(&required),
+                );
+                // The edit says `Output = P`, so it is the fix only when
+                // that is what the callee requires.
+                let fix = fix.filter(|_| self.type_param_name(&required) == Some(&param));
+                let message = match &fix {
+                    Some(fix) => format!("{message}: write `{}`", fix.replacement),
+                    None => message,
+                };
+                self.type_error_maybe_fix_it(
+                    message,
+                    *discharge_span,
+                    TypeErrorKind::TypeMismatch,
+                    fix,
+                );
+                continue;
+            }
             if !assoc_eq_bound_is_comparable(&found) {
                 continue;
             }

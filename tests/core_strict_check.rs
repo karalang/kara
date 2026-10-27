@@ -12281,8 +12281,8 @@ fn a_generic_operator_on_borrowed_operands_names_the_fix() {
     );
     accepted_and_runs(
         "generic-add-own-or-copy",
-        "fn h[T: Add + Copy](a: T, b: T) -> T {\n    a + b\n}\n\
-         fn k[T: Add](a: own T, b: own T) -> T {\n    a + b\n}\n\
+        "fn h[T: Add[Output = T] + Copy](a: T, b: T) -> T {\n    a + b\n}\n\
+         fn k[T: Add[Output = T]](a: own T, b: own T) -> T {\n    a + b\n}\n\
          fn main() {\n    println(f\"{h(1, 2)} {k(3, 4)}\");\n}\n",
         "3 7\n",
     );

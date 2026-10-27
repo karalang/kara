@@ -1,6 +1,6 @@
 
-fn double_val[T: Add](x: own T) -> T { x + x }
-fn quad[T: Add](x: own T) -> T { double_val(double_val(x)) }
+fn double_val[T: Add[Output = T]](x: own T) -> T { x + x }
+fn quad[T: Add[Output = T]](x: own T) -> T { double_val(double_val(x)) }
 fn main() {
     println(quad(3));
 }

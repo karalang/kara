@@ -43,7 +43,7 @@ impl Shl for Bits {
     }
 }
 
-fn sum2[T: Add](a: own T, b: own T) -> T {
+fn sum2[T: Add[Output = T]](a: own T, b: own T) -> T {
     a + b
 }
 

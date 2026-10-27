@@ -1,11 +1,11 @@
 
-fn g_add[T: Add](a: own T, b: own T) -> T { a + b }
-fn g_sub[T: Sub](a: own T, b: own T) -> T { a - b }
-fn g_mul[T: Mul](a: own T, b: own T) -> T { a * b }
-fn g_div[T: Div](a: own T, b: own T) -> T { a / b }
-fn g_neg[T: Neg](a: own T) -> T { -a }
-fn g_poly[T: Add + Mul + Clone](a: own T, b: own T) -> T { g_add(g_mul(a, b.clone()), b) }
-fn g_sum[T: Add](xs: own Vec[T], zero: own T) -> T {
+fn g_add[T: Add[Output = T]](a: own T, b: own T) -> T { a + b }
+fn g_sub[T: Sub[Output = T]](a: own T, b: own T) -> T { a - b }
+fn g_mul[T: Mul[Output = T]](a: own T, b: own T) -> T { a * b }
+fn g_div[T: Div[Output = T]](a: own T, b: own T) -> T { a / b }
+fn g_neg[T: Neg[Output = T]](a: own T) -> T { -a }
+fn g_poly[T: Add[Output = T] + Mul[Output = T] + Clone](a: own T, b: own T) -> T { g_add(g_mul(a, b.clone()), b) }
+fn g_sum[T: Add[Output = T]](xs: own Vec[T], zero: own T) -> T {
     let mut acc = zero;
     for x in xs { acc = acc + x; }
     acc

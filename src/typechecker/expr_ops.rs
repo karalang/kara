@@ -2528,6 +2528,135 @@ impl<'a> super::TypeChecker<'a> {
         })
     }
 
+    /// For an operand of a type parameter bounded by the operator trait `tr`:
+    /// the right operand's type when the bound names one (`Add[D]`), and the
+    /// result type, the bound's `Output` (design.md § Operator traits): the
+    /// type an `Output = X` in scope fixes, else the projection `T.Output`.
+    /// A parameter also bounded by `Numeric` is a primitive, whose `Output`
+    /// is itself.
+    pub(super) fn bounded_operator_types(&mut self, ty: &Type, tr: &str) -> (Option<Type>, Type) {
+        let Some(name) = self.type_param_name(ty).cloned() else {
+            return (None, ty.clone());
+        };
+        let bound = self.enclosing_bounds.get(&name).and_then(|bs| {
+            bs.iter()
+                .find(|b| b.path.last().is_some_and(|t| t == tr))
+                .cloned()
+        });
+        let scope: Vec<String> = self.enclosing_bounds.keys().cloned().collect();
+        let rhs = bound
+            .as_ref()
+            .and_then(|b| b.generic_args.as_ref())
+            .and_then(|args| {
+                args.iter().find_map(|a| match a {
+                    GenericArg::Type(t) => Some(t.clone()),
+                    _ => None,
+                })
+            })
+            .map(|t| self.lower_type_expr(&t, &scope));
+        if self.type_param_has_trait_bound(ty, "Numeric") {
+            return (rhs, ty.clone());
+        }
+        let projection = Type::AssocProjection {
+            param: name,
+            assoc: "Output".to_string(),
+            args: Vec::new(),
+            receiver_args: Vec::new(),
+        };
+        (rhs, self.normalize_enclosing_assoc_eqs(&projection))
+    }
+
+    /// When `ty` is the `Output` of an operator on an in-scope parameter
+    /// (`T.Output` from `a + b` under `T: Add`) that no `Output =` fixes: the
+    /// parameter, and the edit that has its operator bound say `Output = T`
+    /// (`Add` becomes `Add[Output = T]`), which is what a body that wants a
+    /// `T` back states (design.md § Operator traits; B-2026-10-27-14). The
+    /// bound is `tr`'s when the caller knows the operator; otherwise there is
+    /// an edit only when the parameter has one operator bound, since
+    /// `T.Output` does not say whose it is.
+    pub(super) fn unfixed_operator_output(
+        &mut self,
+        ty: &Type,
+        tr: Option<&str>,
+    ) -> Option<(String, Option<FixIt>)> {
+        const OPERATORS: [&str; 12] = [
+            "Add", "Sub", "Mul", "Div", "Rem", "BitAnd", "BitOr", "BitXor", "Shl", "Shr", "Neg",
+            "Not",
+        ];
+        let Type::AssocProjection {
+            param, assoc, args, ..
+        } = ty
+        else {
+            return None;
+        };
+        if assoc != "Output" || !args.is_empty() {
+            return None;
+        }
+        if self
+            .enclosing_assoc_eqs
+            .contains_key(&(param.clone(), "Output".to_string()))
+        {
+            return None;
+        }
+        let bounds: Vec<TraitBound> = self
+            .enclosing_bounds
+            .get(param)?
+            .iter()
+            .filter(|b| {
+                b.fn_sig.is_none()
+                    && b.path.last().is_some_and(|t| {
+                        OPERATORS.contains(&t.as_str()) && tr.is_none_or(|tr| tr == t)
+                    })
+            })
+            .cloned()
+            .collect();
+        let [bound] = bounds.as_slice() else {
+            return (!bounds.is_empty()).then(|| (param.clone(), None));
+        };
+        let scope: Vec<String> = self.enclosing_bounds.keys().cloned().collect();
+        let mut inside: Vec<String> = Vec::new();
+        for a in bound.generic_args.iter().flatten() {
+            let GenericArg::Type(t) = a else {
+                return Some((param.clone(), None));
+            };
+            let (errors, warnings) = (self.errors.len(), self.warnings.len());
+            let lowered = self.lower_type_expr(t, &scope);
+            self.errors.truncate(errors);
+            self.warnings.truncate(warnings);
+            inside.push(type_display(&lowered));
+        }
+        inside.push(format!("Output = {param}"));
+        Some((
+            param.clone(),
+            Some(FixIt {
+                span: bound.span,
+                replacement: format!("{}[{}]", bound.path.join("."), inside.join(", ")),
+            }),
+        ))
+    }
+
+    /// The edit an unfixed operator `Output` asks for, in words.
+    pub(super) fn output_fix_hint(param: &str, fix: Option<&FixIt>) -> String {
+        match fix {
+            Some(fix) => format!("write `{}`", fix.replacement),
+            None => format!("give the operator's bound `Output = {param}`"),
+        }
+    }
+
+    /// Reports `message` with `fix` when there is one.
+    pub(super) fn type_error_maybe_fix_it(
+        &mut self,
+        message: String,
+        span: Span,
+        kind: TypeErrorKind,
+        fix: Option<FixIt>,
+    ) {
+        match fix {
+            Some(fix) => self.type_error_with_fix_it(message, span, kind, fix),
+            None => self.type_error(message, span, kind),
+        }
+    }
+
     /// The name of the in-scope generic type parameter `ty` denotes, under
     /// EITHER of the two spellings the lowering paths produce — see
     /// `type_param_has_trait_bound` for the Named-vs-TypeParam trap.
@@ -3848,28 +3977,83 @@ impl<'a> super::TypeChecker<'a> {
                     .is_some_and(|tr| self.type_param_has_trait_bound(&left_ty, tr))
                 {
                     // Arithmetic on a `T: Add`/`Sub`/`Mul`/`Div`/`Rem` generic
-                    // parameter — the bound names the stdlib operator trait for
-                    // THIS operator. User operator-trait impls are forbidden, so
-                    // every instantiation is a primitive numeric / `String` /
-                    // distinct-numeric that codegen lowers post-monomorphization
-                    // (verified: `T: Numeric` arithmetic already builds+runs).
-                    // Result is `T`; both operands must be the same parameter
-                    // — under EITHER spelling, per `same_type_param`
-                    // (B-2026-09-02-18).
-                    if left_ty != right_ty && !self.same_type_param(&left_ty, &right_ty) {
-                        self.type_error(
-                            format!(
-                                "arithmetic on a '{}'-bounded type parameter requires both \
-                                 operands to have the same type, found '{}' and '{}'",
-                                Self::arithmetic_operator_trait(op).unwrap_or(""),
-                                type_display(&left_ty),
-                                type_display(&right_ty)
-                            ),
-                            right.span,
-                            TypeErrorKind::TypeMismatch,
-                        );
+                    // parameter calls the bound's impl: the right operand is
+                    // its `Rhs` (`T` unless the bound names one) and the
+                    // result its `Output` (design.md § Operator traits), which
+                    // is `T` only where the bound says so (`Add[Output = T]`).
+                    // B-2026-10-27-14: the result was `T` whatever the impl's
+                    // `Output`, so a `T: Sub` body read an `Instant - Instant`
+                    // `Duration` as an `Instant`. The two spellings of one
+                    // parameter count as the same (`same_type_param`,
+                    // B-2026-09-02-18).
+                    let tr = Self::arithmetic_operator_trait(op).unwrap_or("");
+                    // A refused right operand leaves the result unknown,
+                    // so nothing downstream reports it again.
+                    let (rhs, output) = self.bounded_operator_types(&left_ty, tr);
+                    match rhs {
+                        Some(rhs) => {
+                            // `check_assignable` takes a rigid parameter on
+                            // either side for anything, so a parameter must
+                            // be the same one.
+                            let rigid = (self.type_param_name(&rhs).is_some()
+                                || self.type_param_name(&right_ty).is_some())
+                                && rhs != right_ty
+                                && !self.same_type_param(&rhs, &right_ty);
+                            if rigid {
+                                self.type_error(
+                                    format!(
+                                        "expected '{}', found '{}': the bound `{tr}[{}]` \
+                                         names the right-hand type",
+                                        type_display(&rhs),
+                                        type_display(&right_ty),
+                                        type_display(&rhs)
+                                    ),
+                                    right.span,
+                                    TypeErrorKind::TypeMismatch,
+                                );
+                                return Type::Error;
+                            }
+                            if !self.check_assignable(&rhs, &right_ty, right.span) {
+                                return Type::Error;
+                            }
+                        }
+                        None if left_ty != right_ty
+                            && !self.same_type_param(&left_ty, &right_ty) =>
+                        {
+                            self.type_error(
+                                format!(
+                                    "arithmetic on a '{tr}'-bounded type parameter requires \
+                                     both operands to have the same type, found '{}' and \
+                                     '{}'; a bound names another right-hand type as \
+                                     `{tr}[R]`",
+                                    type_display(&left_ty),
+                                    type_display(&right_ty)
+                                ),
+                                right.span,
+                                TypeErrorKind::TypeMismatch,
+                            );
+                            return Type::Error;
+                        }
+                        None => {}
                     }
-                    left_ty
+                    output
+                } else if let Some((param, fix)) = self.unfixed_operator_output(&left_ty, None) {
+                    // `a + b + c` under `T: Add`: the first sum is a
+                    // `T.Output`, which nothing says is a `T` again.
+                    let say = Self::output_fix_hint(&param, fix.as_ref());
+                    self.type_error_maybe_fix_it(
+                        format!(
+                            "'{}' has no operator here: it is the `Output` of an operator \
+                             on '{param}', which the bound does not fix (design.md § \
+                             Operator traits). A body that operates on the result again \
+                             says it is '{param}': {say}",
+                            type_display(&left_ty),
+                        ),
+                        left.span,
+                        TypeErrorKind::TypeMismatch,
+                        fix,
+                    );
+                    Type::Error
                 } else {
                     let message = self.arithmetic_rejection_message(op, &left_ty, &right_ty);
                     match self.str_concat_operand_fix(op, &left_ty, right, &right_ty) {
@@ -4373,6 +4557,10 @@ impl<'a> super::TypeChecker<'a> {
                         TypeErrorKind::InvalidUnaryOp,
                     );
                     Type::Error
+                } else if self.type_param_has_trait_bound(&ty, "Neg") {
+                    // `-x` on a `T: Neg` is the bound's `Output`, as for a
+                    // binary operator (B-2026-10-27-14).
+                    self.bounded_operator_types(&ty, "Neg").1
                 } else {
                     ty
                 }
