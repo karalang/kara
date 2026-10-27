@@ -17,9 +17,13 @@ use std::collections::{HashMap, HashSet};
 use super::const_eval::{
     apply_binary, apply_unary, const_value_type, infer_operand_target_ty, integer_to_const_value,
 };
-use super::inference::{find_unbound_const_param, find_unbound_type_param, resolve_type_var_top};
+use super::inference::{
+    find_unbound_const_param, find_unbound_type_param, map_existential, resolve_type_var_top,
+    substitute_type_params,
+};
 use super::types::{
-    type_display, type_is_fully_concrete, IntSize, ScrutineeMode, Type, UIntSize, VariantTypeInfo,
+    substitute_existential_assoc_bindings, type_display, type_is_fully_concrete, IntSize,
+    ScrutineeMode, SubstValue, Type, UIntSize, VariantTypeInfo,
 };
 use super::{ConstEvalError, CoreLent, FixIt, LocalTypeScope, TypeErrorKind};
 
@@ -3854,6 +3858,180 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// B-2026-10-27-9: an impl method's signature is the trait method's, read
+    /// at this impl: `Self` is the impl's type, `Self.A` the impl's own
+    /// `type A = …`, the trait's generics the impl's trait arguments, and the
+    /// method's generics the impl method's, by position. A caller going
+    /// through a bound types the call from the trait, so an impl that returns
+    /// or takes something else is unsound (an `Option[i64]` read as an
+    /// `Option[bool]`). Modes are §4.7's check; this one compares the types
+    /// under them, and only where both sides are known, so a projection or an
+    /// `impl Trait` against a concrete type is left alone. An impl's
+    /// associated type the trait does not declare is refused here too.
+    fn check_impl_signatures_match_trait(
+        &mut self,
+        imp: &ImplBlock,
+        trait_name: &str,
+        full_target: &Type,
+        gp: &[String],
+    ) {
+        // The operator traits are declared without the spec's `Rhs` and
+        // `Output` (B-2026-10-27-13); `check_operator_output` holds an
+        // operator method to its impl's `Output` meanwhile.
+        const OPERATORS: [&str; 12] = [
+            "Add", "Sub", "Mul", "Div", "Rem", "BitAnd", "BitOr", "BitXor", "Shl", "Shr", "Neg",
+            "Not",
+        ];
+        if OPERATORS.contains(&trait_name) {
+            return;
+        }
+        let Some(tdef) = self.find_trait_def(trait_name).cloned() else {
+            return;
+        };
+        let type_name = match &imp.target_type.kind {
+            TypeKind::Path(p) => p.segments.last().cloned().unwrap_or_default(),
+            _ => String::new(),
+        };
+        let declared: Vec<String> = tdef
+            .items
+            .iter()
+            .filter_map(|it| match it {
+                TraitItem::AssocType(a) => Some(a.name.clone()),
+                _ => None,
+            })
+            .collect();
+        let mark = (self.errors.len(), self.warnings.len());
+        let mut bindings: Vec<(String, Type)> = Vec::new();
+        let mut found: Vec<(String, Span)> = Vec::new();
+        for item in &imp.items {
+            let ImplItem::AssocType(b) = item else {
+                continue;
+            };
+            if !declared.contains(&b.name) {
+                found.push((
+                    format!(
+                        "impl of trait '{trait_name}' for '{type_name}' defines associated \
+                         type '{}', which '{trait_name}' does not declare",
+                        b.name
+                    ),
+                    b.span,
+                ));
+            } else if b.generic_params.is_none() {
+                bindings.push((b.name.clone(), self.lower_type_expr(&b.ty, gp)));
+            }
+        }
+        let trait_gp = Self::generic_param_names(&tdef.generic_params);
+        let trait_args: Vec<Type> = imp
+            .trait_name
+            .as_ref()
+            .and_then(|p| p.generic_args.as_ref())
+            .map(|args| {
+                args.iter()
+                    .filter_map(|a| match a {
+                        GenericArg::Type(t) => Some(self.lower_type_expr(t, gp)),
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let mut checks: Vec<(String, Span, Type, Type)> = Vec::new();
+        for item in &imp.items {
+            let ImplItem::Method(method) = item else {
+                continue;
+            };
+            let Some(tm) = tdef.items.iter().find_map(|it| match it {
+                TraitItem::Method(m) if m.name == method.name => Some(m),
+                _ => None,
+            }) else {
+                continue;
+            };
+            let name = &method.name;
+            if tm.params.len() != method.params.len() {
+                found.push((
+                    format!(
+                        "impl method '{type_name}.{name}' takes {} parameter(s), but \
+                         '{trait_name}.{name}' declares {}",
+                        method.params.len(),
+                        tm.params.len(),
+                    ),
+                    method.span,
+                ));
+                continue;
+            }
+            let tm_gp = Self::generic_param_names(&tm.generic_params);
+            let im_gp = Self::generic_param_names(&method.generic_params);
+            let mut trait_scope: Vec<String> = vec!["Self".to_string()];
+            trait_scope.extend(trait_gp.iter().cloned());
+            trait_scope.extend(tm_gp.iter().cloned());
+            let mut impl_scope: Vec<String> = gp.to_vec();
+            impl_scope.extend(im_gp.iter().cloned());
+            impl_scope.push("Self".to_string());
+            let mut subs: HashMap<String, SubstValue> = HashMap::new();
+            subs.insert("Self".to_string(), SubstValue::Type(full_target.clone()));
+            for (p, a) in trait_gp.iter().zip(&trait_args) {
+                subs.insert(p.clone(), SubstValue::Type(a.clone()));
+            }
+            for (p, q) in tm_gp.iter().zip(&im_gp) {
+                subs.insert(p.clone(), SubstValue::Type(Type::TypeParam(q.clone())));
+            }
+            let read_trait = |this: &mut Self, t: &TypeExpr| {
+                let lowered = this.lower_type_expr(t, &trait_scope);
+                at_impl(&lowered, &bindings, &subs)
+            };
+            let read_impl = |this: &mut Self, t: &TypeExpr| {
+                let lowered = this.lower_type_expr(t, &impl_scope);
+                at_impl(&lowered, &bindings, &subs)
+            };
+            for (tp, ip) in tm.params.iter().zip(&method.params) {
+                let want = read_trait(self, &tp.ty);
+                let got = read_impl(self, &ip.ty);
+                let pname = ip.name().unwrap_or("_").to_string();
+                checks.push((
+                    format!("parameter '{pname}' of impl method '{type_name}.{name}'"),
+                    ip.ty.span,
+                    want,
+                    got,
+                ));
+            }
+            let want = tm
+                .return_type
+                .as_ref()
+                .map_or(Type::Unit, |t| read_trait(self, t));
+            let got = method
+                .return_type
+                .as_ref()
+                .map_or(Type::Unit, |t| read_impl(self, t));
+            let span = method.return_type.as_ref().map_or(method.span, |t| t.span);
+            checks.push((
+                format!("the return type of impl method '{type_name}.{name}'"),
+                span,
+                want,
+                got,
+            ));
+        }
+        // Re-lowering for the comparison must not repeat what the trait's and
+        // the impl's own lowering already reported.
+        self.errors.truncate(mark.0);
+        self.warnings.truncate(mark.1);
+        for (what, span, want, got) in checks {
+            let (want, got) = (peel_mode(&want), peel_mode(&got));
+            if sig_types_differ(want, got) {
+                found.push((
+                    format!(
+                        "{what} is `{}`, but trait '{trait_name}' declares `{}` there: an impl \
+                         method's signature is the trait's",
+                        type_display(got),
+                        type_display(want),
+                    ),
+                    span,
+                ));
+            }
+        }
+        for (message, span) in found {
+            self.type_error(message, span, TypeErrorKind::TypeMismatch);
+        }
+    }
+
     fn check_impl_block(&mut self, imp: &ImplBlock) {
         let saved_impl_span = self
             .current_impl_span
@@ -4229,6 +4407,7 @@ impl<'a> super::TypeChecker<'a> {
             if self.cli_lint_overrides.strict_core {
                 self.check_impl_modes_not_stronger(imp, &trait_name);
                 self.check_impl_defines_required_methods(imp, &trait_name);
+                self.check_impl_signatures_match_trait(imp, &trait_name, &full_target, &gp);
             }
             if let Some(trait_info) = self.env.traits.get(&trait_name).cloned() {
                 let provided: HashSet<String> = imp
@@ -10097,5 +10276,117 @@ fn string_new_default(value: &Expr) -> Option<Span> {
             Some(d.span)
         }
         _ => None,
+    }
+}
+
+/// B-2026-10-27-9: a trait method's type read at an impl: `Self.A` becomes
+/// the impl's binding, then every generic in `subs` its stand-in.
+fn at_impl(ty: &Type, bindings: &[(String, Type)], subs: &HashMap<String, SubstValue>) -> Type {
+    let t = match ty {
+        Type::Existential { .. } => map_existential(ty, |x| at_impl(x, bindings, subs)),
+        _ => substitute_existential_assoc_bindings(ty, "Self", bindings),
+    };
+    substitute_type_params(&t, subs)
+}
+
+/// The type under a parameter's or a return's mode; §4.7 checks the mode.
+fn peel_mode(ty: &Type) -> &Type {
+    match ty {
+        Type::Ref(inner) | Type::MutRef(inner) => inner,
+        _ => ty,
+    }
+}
+
+/// True only when `a` and `b` are known to be different types. Anything not
+/// yet known on either side (an inference variable, a projection, an error,
+/// an `impl Trait` against a concrete type) is taken to agree.
+fn sig_types_differ(a: &Type, b: &Type) -> bool {
+    let all = |x: &[Type], y: &[Type]| {
+        x.len() != y.len() || x.iter().zip(y).any(|(p, q)| sig_types_differ(p, q))
+    };
+    match (a, b) {
+        (Type::Error | Type::TypeVar(_) | Type::AssocProjection { .. } | Type::Never, _)
+        | (_, Type::Error | Type::TypeVar(_) | Type::AssocProjection { .. } | Type::Never) => false,
+        (
+            Type::Existential {
+                trait_name: t1,
+                assoc_bindings: b1,
+                ..
+            },
+            Type::Existential {
+                trait_name: t2,
+                assoc_bindings: b2,
+                ..
+            },
+        ) => {
+            t1 != t2
+                || b1.iter().any(|(n, x)| {
+                    b2.iter()
+                        .find(|(m, _)| m == n)
+                        .is_some_and(|(_, y)| sig_types_differ(x, y))
+                })
+        }
+        (Type::Existential { .. }, _) | (_, Type::Existential { .. }) => false,
+        (Type::Ref(x), Type::Ref(y))
+        | (Type::MutRef(x), Type::MutRef(y))
+        | (Type::Rc(x), Type::Rc(y))
+        | (Type::Arc(x), Type::Arc(y))
+        | (Type::Weak(x), Type::Weak(y)) => sig_types_differ(x, y),
+        (Type::Tuple(x), Type::Tuple(y)) => all(x, y),
+        (Type::Named { name: n1, args: a1 }, Type::Named { name: n2, args: a2 }) => {
+            n1 != n2 || (a1.len() == a2.len() && all(a1, a2))
+        }
+        (
+            Type::Function {
+                params: p1,
+                return_type: r1,
+            },
+            Type::Function {
+                params: p2,
+                return_type: r2,
+            },
+        )
+        | (
+            Type::OnceFunction {
+                params: p1,
+                return_type: r1,
+            },
+            Type::OnceFunction {
+                params: p2,
+                return_type: r2,
+            },
+        ) => {
+            // A function type's parameter modes are D5's rewrite, which the
+            // library's own items do not get: `Fn(A, T)` there is owned and
+            // borrowed in a user impl. The types under them must agree.
+            p1.len() != p2.len()
+                || p1
+                    .iter()
+                    .zip(p2)
+                    .any(|(p, q)| sig_types_differ(peel_mode(p), peel_mode(q)))
+                || sig_types_differ(r1, r2)
+        }
+        (Type::Array { element: x, .. }, Type::Array { element: y, .. }) => sig_types_differ(x, y),
+        (
+            Type::Slice {
+                element: x,
+                mutable: m1,
+            },
+            Type::Slice {
+                element: y,
+                mutable: m2,
+            },
+        ) => m1 != m2 || sig_types_differ(x, y),
+        (
+            Type::Pointer {
+                is_mut: m1,
+                inner: x,
+            },
+            Type::Pointer {
+                is_mut: m2,
+                inner: y,
+            },
+        ) => m1 != m2 || sig_types_differ(x, y),
+        _ => a != b,
     }
 }
