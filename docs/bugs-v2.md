@@ -58,9 +58,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| false-positive | 48 |
-| diagnostics | 38 |
-| missing-feature | 34 |
+| false-positive | 49 |
+| diagnostics | 39 |
+| missing-feature | 37 |
 | soundness | 18 |
 | perf | 13 |
 | miscompile | 10 |
@@ -73,17 +73,17 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 75 |
-| mir | 37 |
+| typecheck | 77 |
+| mir | 39 |
 | codegen | 22 |
 | interp | 20 |
 | ownership | 18 |
 | cli | 18 |
-| mir-llvm | 16 |
-| runtime | 10 |
-| parser | 7 |
+| mir-llvm | 17 |
+| runtime | 11 |
+| parser | 8 |
+| resolver | 3 |
 | other | 2 |
-| resolver | 2 |
 | effect | 2 |
 | lexer | 1 |
 ## Current state
@@ -104,6 +104,11 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-27-12 | 2026-10-27 | ownership+mir | low | Passing a function value held in a collection element to a non-escaping function-typed parameter (`apply(v[0], 4)` over `fn apply(f: Fn(i64) -> i64, x: i64)`) is refused as a move out of the element, where core-semantics §4.1 / §9.3 make a bare `Fn` parameter a borrow | — |
 | B-2026-10-27-18 | 2026-10-27 | typecheck | medium | An associated-type projection on a type parameter (`T.Output`) is keyed by the parameter, not by the trait that declares it, so under `T: Add[Output = T] + Mul` the `Add` eq also types `a * b` as a `T`, and an `Output = X` discharge with two bounds declaring `Output` falls back to a type-keyed impl lookup that can pick either impl | — |
 | B-2026-10-27-19 | 2026-10-27 | typecheck | medium | A rigid type parameter is a wildcard in `types_compatible`, so `fn f[T](x: own T) -> T { 5 }` passes check and only the MIR validator refuses it ("invalid MIR: f[String]: assigning i64 to _0 of type String") | — |
+| B-2026-10-27-20 | 2026-10-27 | typecheck+mir+runtime | medium | All of `std.log` (docs/library/log.md, fcb3ddf9c) is specified but not implemented: the four level functions with open `key: value` fields, `Level`, `Record`, `Backend`, `init`, `Stream`, `json_backend`, `text_backend`, and `import std.log;`. Split from B-2026-10-15-10, which keeps only `std.iter.Extend`. | — |
+| B-2026-10-27-21 | 2026-10-27 | typecheck | low | `std.log.init` accepts a backend that cannot cross tasks: docs/library/log.md requires `B` to be `CrossTask` (core-semantics §6.3), since `emit` runs on whichever task logs, but `init[B: Backend]` checks nothing, so a backend holding a `shared` value is installed and its `emit` runs from every task. | — |
+| B-2026-10-27-22 | 2026-10-27 | mir+mir-llvm | medium | Auto-par is not yet invisible to logging (docs/library/log.md, ruled 2026-10-27): the interim keeps every statement and loop that logs out of auto-par, so adding a log line can change what runs in parallel. Target: an auto-par task's records carry the enclosing task's `task_id` and span and reach the backend in sequential order, held per auto-par task and released in statement order at the join. | — |
+| B-2026-10-27-23 | 2026-10-27 | resolver | low | Renaming a type imported from a gated library module (`import std.encoding.{DecodeError as DE}`, `import std.log.{Level as L}`) makes a second, distinct type: `let r: Result[Vec[u8], DE] = hex_decode("zz")` fails with "expected 'Result[Vec[u8], DE]', found 'Result[Vec[u8], DecodeError]'". | — |
+| B-2026-10-27-24 | 2026-10-27 | parser | low | A match pattern cannot name a variant through a module binding: `import std.log;` then `match record.level { log.Level.Debug => .. }` fails to parse with "Expected FatArrow, found Dot", though `log.Level.Debug` works as an expression. | — |
 
 ### Relocated
 
