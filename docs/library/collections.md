@@ -405,11 +405,20 @@ The split lets the hash algorithm be a property of the table, not of the key: `M
 - `SipHash13BuildHasher` is the default for `Map[K, V]` and `Set[T]`. It is resistant to hash flooding and keyed from a random value chosen once per process. The default may change in a future Kāra version if a better algorithm of the same kind becomes standard.
 - `FxBuildHasher` is fast and unkeyed. A table that names it gives up the protection against hash flooding.
 
-Both are ordinary `BuildHasher` types written in Kāra, like a user hasher, and every backend runs the same implementation.
+Both are ordinary `BuildHasher` types written in Kāra, like a user hasher, and every backend runs the same implementation. (Today both are native fast paths inside the table rather than Kāra `impl BuildHasher` types, kept until moving them to Kāra is measured; the digests are the same either way, and a user hasher runs as Kāra. B-2026-10-25-31.)
 
 **A user hasher** is any type that implements `BuildHasher`, named in the table's last type parameter: `Map[K, V, MyBuildHasher]`, `Set[T, MyBuildHasher]`. The builder must be a struct with no fields, because the table names its builder as a type and constructs it itself; a seed belongs inside `build()`. A field-carrying builder is a compile error.
 
 **Keys use their own impls.** A table hashes each key through the key type's `Hash` impl and compares keys through its `PartialEq` impl (which `Eq` requires), whether derived or written by hand. So an impl that deliberately ignores a field puts two keys that differ only in that field in the same slot. `Hash` decides which bytes a key contributes and the table's `BuildHasher` decides how those bytes become a digest, so a hand-written `Hash` composes with any hasher.
+
+**What the built-in types feed.** The library's `Hash` impls feed these bytes, so a user hasher sees the same input on every backend:
+- an integer: its own width through `write_<width>` (`write_i64` for `i64`, `write_u8` for `u8`), native-endian;
+- `bool`: `write_u8` of 0 or 1; `char`: `write_u32` of its scalar value;
+- a float: `write_u64` of `to_bits()` (`f32` widened through `write_u32`), because tables compare floats by their bits, so `-0.0` and `0.0` are different keys and a NaN equals itself;
+- `String` and `Str`: `write` of the UTF-8 bytes, then `write_u8(0xff)`, so `("ab", "c")` and `("a", "bc")` feed different bytes;
+- `Vec`, `Array` and `Slice`: `write_usize` of the length, then each element;
+- a tuple, and a `derive(Hash)` struct: each field in order; a `derive(Hash)` enum: `write_u32` of the variant's index, then its payload's fields in order;
+- `Option[T]` and `Result[T, E]` as the enums they are.
 
 **Stability policy.** The default hasher's values are not stable across runs, across Kāra versions or across targets. This matches Python and modern Java: the common use is in-memory keying, and the common attack is hash flooding from adversarial input. Iteration order changes with them (see [`Map`](#mapk-v-h)). For testing, the environment variable `KARAC_HASH_SEED` pins the per-process key so that a run can be reproduced. It is a testing aid only: a deployment must not set it, since a known key gives up the protection the default exists for.
 
