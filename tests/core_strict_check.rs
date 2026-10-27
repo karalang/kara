@@ -15338,3 +15338,40 @@ fn a_vecdeque_has_the_page_surface_not_vecs() {
     );
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn the_prelude_has_error_and_anyerror() {
+    // B-2026-10-21-22: design.md §10's `Error` trait and `AnyError` are in the
+    // prelude. `?` converts any `Error` into an `AnyError` through the blanket
+    // `impl[E: Error] From[E] for AnyError`, and `.context()` is one of two
+    // impls picked by the receiver's error. The run is pinned by
+    // corpus/core/ok_error_anyerror.
+    accepted_and_runs(
+        "error-and-anyerror",
+        include_str!("../corpus/core/ok_error_anyerror/source.kara"),
+        include_str!("../corpus/core/ok_error_anyerror/expected.out"),
+    );
+    let plain = "struct Plain {\n    x: i64,\n}\n";
+    rejected(
+        "question-mark-of-a-non-error-into-anyerror",
+        &format!(
+            "{plain}fn f() -> Result[i64, Plain] {{\n    Err(Plain {{ x: 1 }})\n}}\n\
+             fn g() -> Result[i64, AnyError] {{\n    let v = f()?;\n    Ok(v)\n}}\n\
+             fn main() {{\n    println(g().is_ok());\n}}\n"
+        ),
+        "'Plain' does not implement `Error`",
+    );
+    rejected(
+        "context-on-a-non-error",
+        &format!(
+            "{plain}fn main() {{\n    let r: Result[i64, Plain] = Ok(1);\n    \
+             println(r.context(\"c\").is_ok());\n}}\n"
+        ),
+        "`Plain` does not implement `Error`",
+    );
+    rejected(
+        "an-error-needs-display",
+        &format!("{plain}impl Error for Plain {{ }}\nfn main() {{ }}\n"),
+        "impl Error for Plain requires impl Display for Plain",
+    );
+}

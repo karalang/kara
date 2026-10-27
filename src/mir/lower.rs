@@ -9329,25 +9329,33 @@ impl<'l, 'a> Bx<'l, 'a> {
 
     /// The `from` of the user's non-generic `impl From[source] for
     /// target`, as `?` converts an error.
-    fn user_from(&mut self, target: Ty, source: Ty) -> Option<DefId> {
+    fn user_from(&mut self, target: Ty, source: Ty) -> Option<(DefId, Vec<Ty>)> {
         let (adt, _) = self.tys().tcx().adt_of(target)?;
         let base = self.lcx.defs.table.get(adt.def).path.segments.clone();
+        // A concrete impl first; then a blanket one over its own parameter
+        // (`impl[E: Error] From[E] for AnyError`, design.md §10), instanced
+        // at the source. The checker has already held its bounds.
+        let mut blanket = None;
         for k in 0.. {
             let mut path = base.clone();
             path.push(format!("impl From#{k}"));
             path.push("from".to_string());
-            let d = self.lcx.defs.table.lookup(&DefPath::new(path))?;
+            let Some(d) = self.lcx.defs.table.lookup(&DefPath::new(path)) else {
+                break;
+            };
             let item = self.lcx.fns.get(&d)?;
-            if item.impl_params != 0 {
-                continue;
-            }
+            let args = match item.impl_params {
+                0 => Vec::new(),
+                1 if blanket.is_none() => vec![source],
+                _ => continue,
+            };
             let p = item.f.params.first()?;
             let t = *self.lcx.node_types.get(&p.pattern.id)?;
             // A `from` that borrows its source (`i: ref Inches`, or a bare
             // `i: Inches`, which D5 reads as that borrow) converts an
             // `Inches` too: an impl may be weaker than its trait (core
             // semantics §4.7, B-2026-10-14-34). The callers lend it.
-            let Ok(pt) = self.lcx.mir_ty(t, &[]) else {
+            let Ok(pt) = self.lcx.mir_ty(t, &args) else {
                 continue;
             };
             let pt = match self.tys().tcx().kind(pt) {
@@ -9355,10 +9363,13 @@ impl<'l, 'a> Bx<'l, 'a> {
                 _ => pt,
             };
             if pt == source {
-                return Some(d);
+                if args.is_empty() {
+                    return Some((d, args));
+                }
+                blanket = Some((d, args));
             }
         }
-        None
+        blanket
     }
 
     // ── loops ───────────────────────────────────────────────────────
@@ -12422,15 +12433,15 @@ impl<'l, 'a> Bx<'l, 'a> {
             if want != have && self.variant_from(want, have, &mut ops) {
                 // Converted in place by the library's variant mapping.
             } else if want != have {
-                let Some(d) = self.user_from(want, have) else {
+                let Some((d, iargs)) = self.user_from(want, have) else {
                     return self.unsupported(e.span, "`?` converting this error");
                 };
-                let name = self.lcx.instance(d, Vec::new());
-                let func = self.fn_operand(&name, d, Vec::new());
+                let name = self.lcx.instance(d, iargs.clone());
+                let func = self.fn_operand(&name, d, iargs.clone());
                 // Under D5 `from` borrows its source: pass a reference to
                 // the payload and drop the payload after the call.
                 let item = &self.lcx.fns[&d];
-                let pt = self.callee_param_ty(&item.f.params[0], &[])?;
+                let pt = self.callee_param_ty(&item.f.params[0], &iargs)?;
                 let mut held = None;
                 if matches!(self.tys().tcx().kind(pt), HK::Ref(i) if i == have) {
                     let h = self.temp(have);
@@ -14428,6 +14439,16 @@ impl<'l, 'a> Bx<'l, 'a> {
                         self.assign(dest, Rvalue::NullaryOp(op, *t));
                         return Ok(());
                     }
+                    // The library's `any_error_kind[E]()`: the name of this
+                    // instance's `E`, which an `AnyError` keeps (design.md §10).
+                    if let ("any_error_kind", None, [t]) =
+                        (name.as_str(), self.lcx.def_owner(d), inst_args.as_slice())
+                    {
+                        let kind = self.tys().display(*t);
+                        let op = self.static_str(&kind);
+                        self.call_native("String.from", vec![op], dest);
+                        return Ok(());
+                    }
                     // A library function with no Kāra body (`sleep_ms(2)`,
                     // `Command.new("ls")`, `Arena[i64].new()`): the
                     // interpreter's, by its name qualified with the owning
@@ -14950,18 +14971,18 @@ impl<'l, 'a> Bx<'l, 'a> {
         let l = self.temp(t);
         let kind = self.adt_aggregate(t, idx as u32);
         self.assign(l, Rvalue::Aggregate(kind, Vec::new()));
-        let Some(Some(d)) = to else {
+        let Some(Some((d, iargs))) = to else {
             self.assign(dest, Rvalue::Use(Operand::Move(Place::local(l))));
             return Ok(true);
         };
         let f = self.lcx.fns[&d].f;
-        let pt = self.callee_param_ty(&f.params[0], &[])?;
+        let pt = self.callee_param_ty(&f.params[0], &iargs)?;
         let arg = match self.tys().tcx().kind(pt) {
             HK::Ref(_) => self.ref_to(Place::local(l), t),
             _ => Operand::Move(Place::local(l)),
         };
-        let name = self.lcx.instance(d, Vec::new());
-        let func = self.fn_operand(&name, d, Vec::new());
+        let name = self.lcx.instance(d, iargs.clone());
+        let func = self.fn_operand(&name, d, iargs);
         let next = self.b.new_block();
         self.goto_with(
             TerminatorKind::Call {
@@ -17387,15 +17408,15 @@ impl<'l, 'a> Bx<'l, 'a> {
                 }
             }
         }
-        let Some(d) = self.user_from(dt, st) else {
+        let Some((d, iargs)) = self.user_from(dt, st) else {
             return Ok(false);
         };
         let f = self.lcx.fns[&d].f;
-        let pt = self.callee_param_ty(&f.params[0], &[])?;
+        let pt = self.callee_param_ty(&f.params[0], &iargs)?;
         let pending = vec![self.arg_pending(object, pt)?];
         let ops = self.finish_args(pending)?;
-        let name = self.lcx.instance(d, Vec::new());
-        let func = self.fn_operand(&name, d, Vec::new());
+        let name = self.lcx.instance(d, iargs.clone());
+        let func = self.fn_operand(&name, d, iargs);
         let next = self.b.new_block();
         self.goto_with(
             TerminatorKind::Call {

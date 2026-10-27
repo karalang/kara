@@ -1,0 +1,51 @@
+// design.md §10 "`Error` and `AnyError`" (B-2026-10-21-22): `Error` and
+// `AnyError` are in the prelude; `?` converts any `Error` into an
+// `AnyError`; `.context(msg)` works on a `Result` of an `Error` and of an
+// `AnyError`; `Display` prints the chain outermost first, joined by ": ".
+
+enum ConfigError { Missing(String) }
+
+impl Display for ConfigError {
+    fn to_string(ref self) -> String {
+        match self {
+            ConfigError.Missing(k) => f"missing key {k}",
+        }
+    }
+}
+
+impl Error for ConfigError { }
+
+fn lookup(key: Str) -> Result[i64, ConfigError] {
+    if key == "port" { Ok(8080) } else { Err(ConfigError.Missing(key.to_string())) }
+}
+
+fn is_error[E: Error](_e: ref E) -> bool {
+    true
+}
+
+fn load(key: Str, text: Str) -> Result[i64, AnyError] {
+    let base = lookup(key)?;
+    let extra = i64.parse(text).context(f"while reading the offset {text}")?;
+    let r: Result[i64, AnyError] = Ok(base + extra);
+    let total = r.context("while loading the config").context("at startup")?;
+    Ok(total)
+}
+
+fn show(r: Result[i64, AnyError]) {
+    match r {
+        Ok(v) => println(f"ok {v}"),
+        Err(e) => println(f"err {e}"),
+    }
+}
+
+fn main() {
+    show(load("port", "1"));
+    show(load("host", "1"));
+    show(load("port", "x"));
+    let e: Result[i64, AnyError] = Err(AnyError.from(ConfigError.Missing("db")));
+    show(e.context("inner").context("outer"));
+    println(is_error(ConfigError.Missing("k")));
+    println(is_error(ParseError.Empty));
+    println(is_error(AllocError.CapacityOverflow));
+    println(is_error(IoError.NotFound));
+}

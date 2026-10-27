@@ -2348,6 +2348,10 @@ pub struct TypeCheckResult {
     /// by the call's `NodeId`. The node twin of `method_callee_types`, which
     /// is keyed by a span the call SHARES with its receiver.
     pub node_method_callees: FxHashMap<crate::ids::NodeId, String>,
+    /// v2 typed HIR: where the target of the impl a method call resolved to
+    /// is written, keyed by the call's `NodeId`, for a type with two impls
+    /// of the method (design.md §10's two `Result.context`s).
+    pub node_method_impls: FxHashMap<crate::ids::NodeId, SpanKey>,
     /// v2 typed HIR: each free call's callee EXPRESSION, keyed by the call's
     /// `NodeId`, so the callee's name resolution (keyed by that expression's
     /// own node) can be read per call.
@@ -3290,6 +3294,7 @@ pub struct TypeChecker<'a> {
     /// `resolved_node_tables` (B-2026-10-18-18).
     pub(super) node_type_slots: Vec<(crate::ids::NodeId, Type)>,
     pub(super) node_method_callees: FxHashMap<crate::ids::NodeId, String>,
+    pub(super) node_method_impls: FxHashMap<crate::ids::NodeId, SpanKey>,
     pub(super) node_call_callees: FxHashMap<crate::ids::NodeId, crate::ids::NodeId>,
     /// See [`TypeCheckResult::variant_patterns`].
     pub(super) variant_patterns: FxHashMap<crate::ids::NodeId, (String, String)>,
@@ -3777,6 +3782,7 @@ impl<'a> TypeChecker<'a> {
             fn_self_types: FxHashMap::default(),
             current_impl_span: None,
             node_method_callees: FxHashMap::default(),
+            node_method_impls: FxHashMap::default(),
             node_call_callees: FxHashMap::default(),
             variant_patterns: FxHashMap::default(),
             current_call_node: None,
@@ -4259,6 +4265,7 @@ impl<'a> TypeChecker<'a> {
             ),
             node_call_subs,
             node_method_callees: std::mem::take(&mut self.node_method_callees),
+            node_method_impls: std::mem::take(&mut self.node_method_impls),
             node_call_callees: std::mem::take(&mut self.node_call_callees),
             variant_patterns: std::mem::take(&mut self.variant_patterns),
             fn_return_types: std::mem::take(&mut self.fn_return_types),
@@ -7746,6 +7753,19 @@ impl<'a> TypeChecker<'a> {
     /// Record a method call's impl-parameter bindings (read off the
     /// receiver's type) as part of the call's node-keyed type arguments, so a
     /// method's frame holds the impl's parameters as well as its own.
+    /// Record that the method call at `span` resolved to the impl whose
+    /// target is written at `target`, for typed HIR.
+    pub(super) fn record_node_method_impl(&mut self, span: &Span, target: &Span) {
+        let Some((node, key)) = self.current_call_node else {
+            return;
+        };
+        if key != SpanKey::from_span(span) || node.is_dummy() {
+            return;
+        }
+        self.node_method_impls
+            .insert(node, SpanKey::from_span(target));
+    }
+
     pub(super) fn record_node_impl_subs(
         &mut self,
         span: &Span,

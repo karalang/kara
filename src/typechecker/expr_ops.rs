@@ -5053,6 +5053,24 @@ impl<'a> super::TypeChecker<'a> {
                         .insert(SpanKey::from_span(span), seg);
                     return inner_args[0].clone();
                 }
+                // A blanket conversion the source lacks a bound of: name the
+                // bound (`?` into an `AnyError` takes any `Error`).
+                if let Some(bounds) = self.env.blanket_from_bounds(&target_name) {
+                    self.type_error(
+                        format!(
+                            "'?' cannot convert error '{}' to '{}': '{}' does not implement `{}`, \
+                             which `{}`'s `From` asks of the error it converts",
+                            type_display(inner_err),
+                            type_display(ret_err),
+                            type_display(inner_err),
+                            bounds.join(" + "),
+                            target_name
+                        ),
+                        *span,
+                        TypeErrorKind::TypeMismatch,
+                    );
+                    return Type::Error;
+                }
                 self.type_error(
                     format!(
                         "'?' cannot convert error '{}' to '{}': no `impl From[{}] for {}` in scope",

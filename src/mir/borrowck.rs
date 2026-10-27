@@ -2234,6 +2234,7 @@ fn main() -> () {
             // `into_iter`, `iter` and `vec!` are the library's.
             "for_into_iter_consumes",
             "ok_ref_copied_from_a_tuple_element",
+            "ok_error_anyerror",
         ];
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus/core");
         let mut pins: Vec<_> = std::fs::read_dir(&root)

@@ -67,6 +67,17 @@ pub trait HirDefs {
     fn type_def(&self, name: &str) -> Option<TypeName>;
     /// The method `owner.method` (the type checker's `Type.method` key).
     fn method_callee(&self, owner: &str, method: &str) -> Option<Callee>;
+    /// [`Self::method_callee`] when `owner` has several impls of `method`:
+    /// the one whose target is written at `impl_target`, which the checker
+    /// resolved the call to.
+    fn method_callee_in_impl(
+        &self,
+        _owner: &str,
+        _method: &str,
+        _impl_target: crate::resolver::SpanKey,
+    ) -> Option<Callee> {
+        None
+    }
     /// What a call's callee expression resolves to, by that expression's
     /// node.
     fn path_callee(&self, callee_expr: NodeId) -> Option<Callee>;
@@ -181,6 +192,31 @@ impl HirDefs for ProgramHirDefs<'_> {
             .collect();
         match (inherent.as_slice(), cands.as_slice()) {
             ([m], _) | ([], [m]) => Some(Callee::Def(*m)),
+            _ => None,
+        }
+    }
+
+    fn method_callee_in_impl(
+        &self,
+        owner: &str,
+        method: &str,
+        impl_target: crate::resolver::SpanKey,
+    ) -> Option<Callee> {
+        let owner_def = crate::node_res::renamed_library_type(self.defs, self.module, owner)
+            .or_else(|| self.defs.lookup(self.module, owner))?;
+        let cands = self.defs.methods.get(&owner_def)?.get(method)?;
+        if cands.len() < 2 {
+            return None;
+        }
+        let mut hits = cands.iter().filter(|m| {
+            self.defs
+                .parent
+                .get(m)
+                .and_then(|i| self.defs.impls.get(i))
+                .is_some_and(|i| i.target_span == impl_target)
+        });
+        match (hits.next(), hits.next()) {
+            (Some(&m), None) => Some(Callee::Def(m)),
             _ => None,
         }
     }
@@ -327,7 +363,10 @@ pub fn build(tc: &TypeCheckResult, defs: &dyn HirDefs) -> TypedHir {
                 // its type arguments, which the call's type carries.
                 key.rsplit_once('.').and_then(|(owner, method)| {
                     let owner = owner.split_once('[').map_or(owner, |(o, _)| o);
-                    defs.method_callee(owner, method)
+                    tc.node_method_impls
+                        .get(&id)
+                        .and_then(|&at| defs.method_callee_in_impl(owner, method, at))
+                        .or_else(|| defs.method_callee(owner, method))
                 })
             })
         });

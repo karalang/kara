@@ -139,6 +139,8 @@ pub const PRELUDE_TYPES: &[&str] = &[
     "ClockProvider",
     "RandomProvider",
     "AllocError",
+    // `AnyError` (design.md §10), beside `Error` in PRELUDE_TRAITS.
+    "AnyError",
     // `DiscriminantError` — the `Err` payload of the auto-generated
     // `TryFrom[intN]` on a C-like `#[repr(intN)]` enum (design.md § Enum
     // Discriminant Runtime Surface, B-2026-08-21-26). Scope-0 so
@@ -478,6 +480,10 @@ pub const PRELUDE_TRAITS: &[&str] = &[
     "IndexMut",
     "IndexSet",
     "Display",
+    // `Error` (design.md §10, B-2026-10-21-22), in
+    // `runtime/stdlib/source/error.kara`: scope-0 so a baked module's error
+    // type implements it (`impl Error for DecodeError`).
+    "Error",
     // CR-202 slice 5g.
     "Debug",
     "Iterator",
@@ -863,6 +869,11 @@ pub const LIBRARY_SOURCES: &[(&str, &str)] = &[
     (
         "source/parse.kara",
         include_str!("../runtime/stdlib/source/parse.kara"),
+    ),
+    // `Error` and `AnyError` (design.md §10; B-2026-10-21-22).
+    (
+        "source/error.kara",
+        include_str!("../runtime/stdlib/source/error.kara"),
     ),
     // Already all Kāra (a `Vec`-backed heap), so a copy of the baked file is
     // appended: the checker then skips the baked copy of the struct and its

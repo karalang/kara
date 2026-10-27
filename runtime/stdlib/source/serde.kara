@@ -27,6 +27,8 @@ impl Display for DeserializeError {
     }
 }
 
+impl Error for DeserializeError { }
+
 /// A format's writing half. Containers are bracketed by `_begin` / `_end`,
 /// and every element, field, key and value is announced before it is
 /// written, so a format can place its separators.

@@ -1,0 +1,73 @@
+// The `Error` trait and the erased `AnyError`, as Kāra (design.md §10
+// "`Error` and `AnyError`"; B-2026-10-21-22). Both are in the prelude.
+
+/// Marks a type as an error. The standard library's error types implement it.
+pub trait Error: Display { }
+
+/// An erased error that needs no `dyn`: the original error's message, the
+/// name of its type, and the context messages added to it, oldest first.
+/// It does not implement `Error`, so an `AnyError` never wraps another.
+pub struct AnyError {
+    msg: String,
+    kind: String,
+    context: Vec[String],
+}
+
+impl[E: Error] From[E] for AnyError {
+    fn from(e: own E) -> AnyError {
+        AnyError { msg: e.to_string(), kind: any_error_kind(e), context: Vec.new() }
+    }
+}
+
+/// The name of `E`, which the MIR builder answers for each instance.
+#[compiler_builtin]
+fn any_error_kind[E](_e: ref E) -> String {
+    ""
+}
+
+/// The chain outermost first, joined by `": "`: the last context message
+/// added, then the earlier ones, then the original message.
+impl Display for AnyError {
+    fn to_string(ref self) -> String {
+        let mut out = String.new();
+        for c in self.context.iter().rev() {
+            out.push_str(c);
+            out.push_str(": ");
+        }
+        out.push_str(self.msg);
+        out
+    }
+}
+
+impl[T, E: Error] Result[T, E] {
+    /// On `Err`, the error as an `AnyError` with `msg` added to its context.
+    fn context(own self, msg: own String) -> Result[T, AnyError] {
+        match self {
+            Ok(x) => Ok(x),
+            Err(e) => {
+                let mut a = AnyError.from(e);
+                a.context.push(msg);
+                Err(a)
+            }
+        }
+    }
+}
+
+impl[T] Result[T, AnyError] {
+    /// On `Err`, `msg` added to the error's context.
+    fn context(own self, msg: own String) -> Result[T, AnyError] {
+        match self {
+            Ok(x) => Ok(x),
+            Err(e) => {
+                let mut a = e;
+                a.context.push(msg);
+                Err(a)
+            }
+        }
+    }
+}
+
+impl Error for ParseError { }
+impl Error for AllocError { }
+impl Error for IoError { }
+impl Error for VarError { }

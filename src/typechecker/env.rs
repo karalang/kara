@@ -216,6 +216,58 @@ pub(super) fn conversion_param_takes(param: &Type, source: &Type) -> bool {
     param == source || matches!(param, Type::Ref(inner) if **inner == *source)
 }
 
+/// Whether a receiver with `actual` type arguments fits the target `imp` is
+/// written for. A generic impl stores no `target_args`, so `impl[T]
+/// Result[T, AnyError]` would otherwise apply to every `Result`; its written
+/// shape keeps it to the receivers whose error is `AnyError` (design.md §10's
+/// two `.context()` impls). The impl's own params fit anything, as does an
+/// argument still being inferred; a caller's type parameter is a type of its
+/// own and fits only itself.
+pub(super) fn impl_shape_fits(imp: &ImplInfo, actual: &[Type]) -> bool {
+    if !imp.target_args.is_empty() || imp.target_generic_args.len() != actual.len() {
+        return true;
+    }
+    let params: Vec<&str> = imp
+        .generic_params
+        .iter()
+        .flat_map(|gp| gp.params.iter().map(|p| p.name.as_str()))
+        .collect();
+    fn fits(d: &Type, a: &Type, params: &[&str]) -> bool {
+        match (d, a) {
+            (Type::TypeParam(p), _) if params.contains(&p.as_str()) => true,
+            (_, Type::TypeVar(_) | Type::Error) => true,
+            (Type::Named { name: dn, args: da }, Type::Named { name: an, args: aa }) => {
+                dn == an
+                    && da.len() == aa.len()
+                    && da.iter().zip(aa).all(|(x, y)| fits(x, y, params))
+            }
+            (Type::Ref(x), Type::Ref(y)) | (Type::MutRef(x), Type::MutRef(y)) => fits(x, y, params),
+            (Type::Tuple(xs), Type::Tuple(ys)) => {
+                xs.len() == ys.len() && xs.iter().zip(ys).all(|(x, y)| fits(x, y, params))
+            }
+            // A projection (`I.Item`) or another form written with the
+            // impl's params is decided by the bounds, not here.
+            _ if mentions_param(d) => true,
+            _ => d == a,
+        }
+    }
+    fn mentions_param(t: &Type) -> bool {
+        match t {
+            Type::TypeParam(_) | Type::AssocProjection { .. } => true,
+            Type::Named { args, .. } => args.iter().any(mentions_param),
+            Type::Ref(i) | Type::MutRef(i) | Type::Weak(i) => mentions_param(i),
+            Type::Tuple(ts) => ts.iter().any(mentions_param),
+            Type::Array { element, .. } | Type::Slice { element, .. } => mentions_param(element),
+            Type::Function { .. } | Type::OnceFunction { .. } => true,
+            _ => false,
+        }
+    }
+    imp.target_generic_args
+        .iter()
+        .zip(actual)
+        .all(|(d, a)| fits(d, a, &params))
+}
+
 pub(super) fn bind_impl_params(decl: &[Type], actual: &[Type], out: &mut HashMap<String, Type>) {
     for (d, a) in decl.iter().zip(actual.iter()) {
         bind_impl_param_one(d, a, out);
@@ -771,7 +823,7 @@ impl TypeEnv {
             let Some(sig) = imp.methods.get(method) else {
                 continue;
             };
-            if !self.impl_bounds_discharge(imp, target_args) {
+            if !impl_shape_fits(imp, target_args) || !self.impl_bounds_discharge(imp, target_args) {
                 continue;
             }
             if imp.trait_name.is_none() {
@@ -812,7 +864,7 @@ impl TypeEnv {
             let Some(sig) = imp.methods.get(method) else {
                 continue;
             };
-            if !self.impl_bounds_discharge(imp, target_args) {
+            if !impl_shape_fits(imp, target_args) || !self.impl_bounds_discharge(imp, target_args) {
                 continue;
             }
             if imp.trait_name.is_none() {
@@ -1398,19 +1450,83 @@ impl TypeEnv {
         target: &str,
         target_args: &[Type],
     ) -> Option<&ImplInfo> {
-        self.impls_by_trait
-            .get("From")?
-            .iter()
-            .map(|&i| &self.impls[i])
-            .find(|imp| {
-                imp.target_type == target
-                    && impl_args_match(&imp.target_args, target_args)
-                    && imp
-                        .methods
-                        .get("from")
-                        .and_then(|sig| sig.params.first())
-                        .is_some_and(|p| conversion_param_takes(p, source))
+        let candidates = || {
+            self.impls_by_trait
+                .get("From")
+                .into_iter()
+                .flatten()
+                .map(|&i| &self.impls[i])
+                .filter(|imp| {
+                    imp.target_type == target && impl_args_match(&imp.target_args, target_args)
+                })
+        };
+        let from_param = |imp: &ImplInfo| -> Option<Type> {
+            imp.methods
+                .get("from")
+                .and_then(|sig| sig.params.first())
+                .cloned()
+        };
+        candidates()
+            .find(|imp| from_param(imp).is_some_and(|p| conversion_param_takes(&p, source)))
+            .or_else(|| {
+                // A blanket impl over the impl's own parameter (`impl[E:
+                // Error] From[E] for AnyError`, design.md §10) converts any
+                // source its bounds hold for. A concrete impl wins above.
+                candidates().find(|imp| self.blanket_from_takes(imp, from_param(imp), source))
             })
+    }
+
+    /// The traits a blanket `From` impl for `target` asks of its source
+    /// (`Error`, for `impl[E: Error] From[E] for AnyError`), to say why a
+    /// source that lacks them does not convert.
+    pub fn blanket_from_bounds(&self, target: &str) -> Option<Vec<String>> {
+        self.impls_by_trait.get("From")?.iter().find_map(|&i| {
+            let imp = &self.impls[i];
+            if imp.target_type != target {
+                return None;
+            }
+            let gp = imp.generic_params.as_ref()?;
+            let name = match imp.methods.get("from")?.params.first()? {
+                Type::TypeParam(n) => n,
+                Type::Ref(inner) => match &**inner {
+                    Type::TypeParam(n) => n,
+                    _ => return None,
+                },
+                _ => return None,
+            };
+            let p = gp.params.iter().find(|p| &p.name == name)?;
+            let bounds: Vec<String> = p
+                .bounds
+                .iter()
+                .filter_map(|b| b.path.last().cloned())
+                .collect();
+            (!bounds.is_empty()).then_some(bounds)
+        })
+    }
+
+    /// Whether `imp`, whose `from` takes `param`, is a blanket conversion
+    /// (`param` is one of the impl's own type parameters, or a borrow of one)
+    /// whose bounds hold for `source`. A source still being inferred is not
+    /// taken: the blanket impl would otherwise claim every conversion.
+    fn blanket_from_takes(&self, imp: &ImplInfo, param: Option<Type>, source: &Type) -> bool {
+        let Some(gp) = &imp.generic_params else {
+            return false;
+        };
+        let name = match param {
+            Some(Type::TypeParam(n)) => n,
+            Some(Type::Ref(inner)) => match *inner {
+                Type::TypeParam(n) => n,
+                _ => return false,
+            },
+            _ => return false,
+        };
+        if !gp.params.iter().any(|p| p.name == name)
+            || matches!(source, Type::TypeVar(_) | Type::Error)
+        {
+            return false;
+        }
+        let subs = HashMap::from([(name, source.clone())]);
+        self.impl_bounds_discharge_with(imp, &subs, &|ty, bound| self.bound_satisfied(ty, bound))
     }
 
     /// Find a `TryFrom` impl mapping `source` → `target`. Disambiguates

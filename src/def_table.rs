@@ -80,6 +80,11 @@ pub struct ImplData {
     pub trait_name: Option<String>,
     /// That trait's definition, when it resolves.
     pub trait_def: Option<DefId>,
+    /// Where its target type is written: the checker names the impl a
+    /// method call resolved to by it, when one type has two impls of a
+    /// method (`impl[T, E: Error] Result[T, E]` and `impl[T] Result[T,
+    /// AnyError]` both give `context`).
+    pub target_span: crate::resolver::SpanKey,
 }
 
 fn generic_names(g: &Option<GenericParams>) -> Vec<String> {
@@ -436,6 +441,7 @@ impl ProgramDefs {
                     target,
                     trait_name: trait_name.clone(),
                     trait_def,
+                    target_span: crate::resolver::SpanKey::from_span(&b.target_type.span),
                 },
             );
             let g = generic_names(&b.generic_params);

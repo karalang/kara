@@ -19,6 +19,8 @@ impl Display for DecodeError {
     }
 }
 
+impl Error for DecodeError { }
+
 /// `data` in Base64 over `alphabet`, padded with `=` when `pad`.
 fn base64_encode_with(data: Slice[u8], alphabet: Str, pad: bool) -> String {
     let n = data.len();

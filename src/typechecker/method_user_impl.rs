@@ -954,6 +954,9 @@ impl<'a> super::TypeChecker<'a> {
                     .filter(|(p, _)| !sig.generic_params.iter().any(|g| g == p))
                     .collect();
                 self.record_node_impl_subs(span, &recv_subs);
+                if let Some(target) = imp.target_span.as_ref() {
+                    self.record_node_method_impl(span, target);
+                }
                 // B-2026-08-30-43 — hand the same binding to the interpreter.
                 // It is computed here anyway; the tree-walk had no way to see
                 // it, because an impl binds `T` from the RECEIVER's type args

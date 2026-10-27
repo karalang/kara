@@ -1,0 +1,9 @@
+source = "B-2026-10-21-22"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["error", "library"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md §10 `Error` and `AnyError`: prelude names, `?` through the blanket From, both `.context()` impls, the Display chain outermost first. Pins readme_01, enc_16 and ct_78 of the ADR-3 library sweep cover the same surface."
