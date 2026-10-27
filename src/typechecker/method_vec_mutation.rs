@@ -660,6 +660,17 @@ impl<'a> super::TypeChecker<'a> {
     /// `Array[i64, 2]` element builds the array. Anything else is inferred,
     /// and the caller checks it against the slot; a tuple literal's elements
     /// are range-checked against theirs first.
+    /// A needle a table only reads (`s.contains(x)`, `m.get(k)`): `None` and
+    /// its kin are checked against the element, as [`is_open_value`] says;
+    /// anything else is inferred, so a borrowed needle stays borrowed.
+    pub(super) fn infer_probe_arg(&mut self, arg: &Expr, elem: &Type) -> Type {
+        let slot = resolve_type_var_top(elem, &self.env.substitutions);
+        if is_open_value(arg) && super::exprs::expectation_is_concrete(&slot) {
+            return self.check_expr(arg, &slot);
+        }
+        self.infer_expr(arg)
+    }
+
     pub(super) fn infer_element_arg(&mut self, arg: &Expr, elem: &Type) -> Type {
         let literal = matches!(
             &arg.kind,
@@ -673,7 +684,7 @@ impl<'a> super::TypeChecker<'a> {
             ExprKind::Tuple(es) if es.iter().any(super::exprs::is_collection_literal)
         );
         let slot = resolve_type_var_top(elem, &self.env.substitutions);
-        if literal && super::exprs::expectation_is_concrete(&slot) {
+        if (literal || is_open_value(arg)) && super::exprs::expectation_is_concrete(&slot) {
             return self.check_expr(arg, &slot);
         }
         // A bare parameter, or a binding out of one, pushed into an owned
@@ -1049,3 +1060,20 @@ const DEQUE_METHODS: &[&str] = &[
     "try_insert",
     "try_reserve",
 ];
+
+/// Whether `e` is `None`, or `Some(x)` / `Ok(x)` / `Err(e)`: a value whose
+/// type parameter nothing solves when it is inferred alone, so a slot it
+/// goes into checks it, as `push` does. Inferred, `insert(None)` into a
+/// `Set[Option[String]]` stored a one-byte `Option[()]` (B-2026-10-27-35).
+pub(super) fn is_open_value(e: &Expr) -> bool {
+    let ctor = |name: &str| matches!(name, "Ok" | "Err" | "Some" | "None");
+    match &e.kind {
+        ExprKind::Identifier(n) => n == "None",
+        ExprKind::Call { callee, .. } => match &callee.kind {
+            ExprKind::Identifier(n) => ctor(n),
+            ExprKind::Path { segments, .. } => segments.last().is_some_and(|n| ctor(n)),
+            _ => false,
+        },
+        _ => false,
+    }
+}

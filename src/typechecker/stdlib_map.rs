@@ -140,7 +140,7 @@ impl<'a> super::TypeChecker<'a> {
         // against `String` — so infer it plainly and peel below.
         let arg_ty = if allow_borrowed || matches!(pre_slot, Type::TypeVar(_) | Type::TypeParam(_))
         {
-            self.infer_expr(&arg.value)
+            self.infer_probe_arg(&arg.value, &pre_slot)
         } else {
             self.check_expr(&arg.value, &pre_slot)
         };
@@ -694,7 +694,7 @@ impl<'a> super::TypeChecker<'a> {
             // it, never storing it, so design.md gives it `val: ref T` too.
             "contains" | "remove" => {
                 for arg in args {
-                    let at = self.infer_expr(&arg.value);
+                    let at = self.infer_probe_arg(&arg.value, &elem);
                     // The numeric-coercion checks keep the RAW type, so a
                     // borrowed numeric needle behaves exactly as before and no
                     // coercion is recorded against a reference.
@@ -1146,7 +1146,7 @@ impl<'a> super::TypeChecker<'a> {
             // it, never storing it, so design.md gives it `val: ref T` too.
             "contains" | "remove" => {
                 for arg in args {
-                    let at = self.infer_expr(&arg.value);
+                    let at = self.infer_probe_arg(&arg.value, &elem);
                     // The numeric-coercion checks keep the RAW type, so a
                     // borrowed numeric needle behaves exactly as before and no
                     // coercion is recorded against a reference.
