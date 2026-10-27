@@ -7,7 +7,7 @@
 
 use inkwell::module::Linkage;
 use inkwell::types::BasicTypeEnum;
-use inkwell::values::{BasicValue, BasicValueEnum, IntValue, PointerValue};
+use inkwell::values::{BasicValue, BasicValueEnum, IntValue, PointerValue, VectorValue};
 use inkwell::{AtomicOrdering, AtomicRMWBinOp, FloatPredicate, IntPredicate};
 
 use super::{Cx, R};
@@ -557,6 +557,9 @@ impl<'ctx> Cx<'ctx, '_> {
                     let (pa, pb) = (self.operand_ptr(a)?, self.operand_ptr(b)?);
                     let bt = self.operand_type(b)?;
                     let (bet, _) = self.vector_of(bt).unwrap_or((bt, 0));
+                    if bet == et && dt == et && self.vector_binop(*op, et, n, dst, pa, pb)? {
+                        return Ok(());
+                    }
                     let (es, bs, ds) = (
                         self.layout(et)?.size,
                         self.layout(bet)?.size,
@@ -876,6 +879,68 @@ impl<'ctx> Cx<'ctx, '_> {
             TyKind::Array(et, n) if self.tys.is_vector(t) => Some((et, n)),
             _ => None,
         }
+    }
+
+    /// `x op y` on two lane vectors at `pa` and `pb` as one LLVM vector
+    /// operation (`<n x T>`), when it means what the same operator does on
+    /// each lane: wrapping integer add, sub, mul and bit operations, and
+    /// f32 / f64 arithmetic. The target lowers it to its vector unit, or
+    /// to scalars when it has none (`-simd128`). False when `op` on `et`
+    /// stays lane by lane (division traps per lane, shifts mask per lane).
+    fn vector_binop(
+        &self,
+        op: BinOp,
+        et: Ty,
+        n: u64,
+        dst: PointerValue<'ctx>,
+        pa: PointerValue<'ctx>,
+        pb: PointerValue<'ctx>,
+    ) -> R<bool> {
+        let float =
+            matches!(self.tys.kind(et), TyKind::Float(_)) && self.narrow_float(et).is_none();
+        let int = self.int_of(et).is_some();
+        let ok = match op {
+            BinOp::Add | BinOp::Sub | BinOp::Mul => float || int,
+            BinOp::Div => float,
+            BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor => int,
+            _ => false,
+        };
+        let Ok(lanes) = u32::try_from(n) else {
+            return Ok(false);
+        };
+        if !ok || lanes == 0 {
+            return Ok(false);
+        }
+        let b = &self.builder;
+        let vt: BasicTypeEnum<'ctx> = match self.llvm_ty(et)? {
+            BasicTypeEnum::IntType(t) => t.vec_type(lanes).into(),
+            BasicTypeEnum::FloatType(t) => t.vec_type(lanes).into(),
+            _ => return Ok(false),
+        };
+        let load = |p: PointerValue<'ctx>| -> R<VectorValue<'ctx>> {
+            let v = b.build_load(vt, p, "").map_err(e)?;
+            if let Some(i) = v.as_instruction_value() {
+                i.set_alignment(1).map_err(e)?;
+            }
+            Ok(v.into_vector_value())
+        };
+        let (x, y) = (load(pa)?, load(pb)?);
+        let r: VectorValue<'ctx> = match (op, float) {
+            (BinOp::Add, true) => b.build_float_add(x, y, ""),
+            (BinOp::Sub, true) => b.build_float_sub(x, y, ""),
+            (BinOp::Mul, true) => b.build_float_mul(x, y, ""),
+            (BinOp::Div, _) => b.build_float_div(x, y, ""),
+            (BinOp::Add, false) => b.build_int_add(x, y, ""),
+            (BinOp::Sub, false) => b.build_int_sub(x, y, ""),
+            (BinOp::Mul, false) => b.build_int_mul(x, y, ""),
+            (BinOp::BitAnd, _) => b.build_and(x, y, ""),
+            (BinOp::BitOr, _) => b.build_or(x, y, ""),
+            _ => b.build_xor(x, y, ""),
+        }
+        .map_err(e)?;
+        let st = b.build_store(dst, r).map_err(e)?;
+        st.set_alignment(1).map_err(e)?;
+        Ok(true)
     }
 
     pub(super) fn binop(

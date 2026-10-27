@@ -39,7 +39,7 @@ pub(super) fn cmd_build_v2_file(filename: &str, a: BuildArgs) {
     refuse_hot_swap(&a, manifest.as_ref().map(|m| m.profile));
     #[cfg(feature = "llvm")]
     if set_wasm_target(&a) {
-        list_cpus_if_asked(&a);
+        apply_wasm_cpu(&a);
     } else {
         apply_cpu(&a, |pick| {
             manifest_release_field_for(filename, output, pick)
@@ -102,7 +102,9 @@ pub(super) fn cmd_build_v2_project(a: BuildArgs) {
         }
     }
     #[cfg(feature = "llvm")]
-    if !set_wasm_target(&a) {
+    if set_wasm_target(&a) {
+        apply_wasm_cpu(&a);
+    } else {
         apply_cpu(&a, |pick| pick(&mf));
     }
     if !mf.link_libs.is_empty() || !mf.link_search_paths.is_empty() {
@@ -381,6 +383,23 @@ fn list_cpus_if_asked(a: &BuildArgs) {
     }
 }
 
+/// A wasm build's CPU and features: the flag, then the env var, over the
+/// wasm defaults (`+simd128`, which a `-simd128` after it turns off).
+#[cfg(feature = "llvm")]
+fn apply_wasm_cpu(a: &BuildArgs) {
+    list_cpus_if_asked(a);
+    apply_target_cpu_override(
+        a.target_cpu
+            .map(str::to_string)
+            .or_else(read_target_cpu_env),
+    );
+    apply_target_features_override(
+        a.target_features
+            .map(str::to_string)
+            .or_else(read_target_features_env),
+    );
+}
+
 /// The CPU baseline, as `karac build` sets it: the flag, then
 /// `KARAC_TARGET_CPU`, then the manifest's `[release] target-cpu`, then its
 /// `cpu-baseline` (`v3` when absent); the feature string likewise.
@@ -591,7 +610,11 @@ fn build(
                 .ok()
                 .filter(|n| *n <= 3)
                 .unwrap_or_else(|| fail(format!("error: KARAC_MIR_OPT={v}: expected 0 to 3"))),
-            Err(_) => 2,
+            // `KARAC_OPT_LEVEL`, the documented knob (`karac build --help`):
+            // `0` skips the mid-end passes as well as the backend's.
+            Err(_) => crate::backend::driver::read_opt_level_env()
+                .parse::<u8>()
+                .unwrap_or(2),
         };
         let stem = std::path::Path::new(exe)
             .file_name()
