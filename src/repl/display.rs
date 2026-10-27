@@ -297,6 +297,16 @@ fn plain(n: &Node, depth: usize, out: &mut String) {
             out.push_str(": ");
             plain(v, depth, out);
         }
+        // A wrapper of one value (`Some(…)`, `Set.from([…])`) wraps it as
+        // it is shown.
+        Node::Group { head, open, items }
+            if !head.is_empty() && *open == '(' && items.len() == 1 =>
+        {
+            out.push_str(head);
+            out.push('(');
+            plain(&items[0], depth, out);
+            out.push(')');
+        }
         Node::Group { head, open, items } if items.iter().any(has_structure) => {
             let (o, c) = group_brackets(head, *open);
             out.push_str(&o);
@@ -452,6 +462,10 @@ mod tests {
         );
         assert_eq!(plain_of("[[1i64], [2i64, 3i64]]"), "[\n  [1],\n  [2, 3]\n]");
         assert_eq!(plain_of("([1i64],)"), "(\n  [1],\n)");
+        assert_eq!(
+            plain_of("Some(Line { a: P { x: 1i64 }, n: 3i64 })"),
+            "Some(Line {\n  a: P { x: 1 },\n  n: 3\n})"
+        );
     }
 
     #[test]
@@ -466,7 +480,7 @@ mod tests {
         );
         assert_eq!(
             plain_of("[\"k\": [2i64, 1i64]]"),
-            "[\"k\": [2, 1]]",
+            "[\n  \"k\": [2, 1]\n]",
             "a list's order is its own"
         );
     }

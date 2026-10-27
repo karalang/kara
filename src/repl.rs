@@ -1548,7 +1548,7 @@ impl Session {
             })?;
             let mut new = old.clone();
             let mut at_cell = at_cell.clone();
-            at_cell.sort_by(|a, b| b.0.cmp(&a.0));
+            at_cell.sort_by_key(|a| std::cmp::Reverse(a.0));
             for (end, _) in &at_cell {
                 new.insert_str(*end, ".clone()");
             }
