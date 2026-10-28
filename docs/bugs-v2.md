@@ -61,22 +61,22 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | false-positive | 51 |
 | diagnostics | 39 |
 | missing-feature | 39 |
-| soundness | 23 |
+| soundness | 24 |
 | perf | 15 |
 | miscompile | 14 |
 | run-vs-build | 9 |
 | other | 5 |
 | codegen-gap | 4 |
-| crash | 1 |
+| crash | 2 |
 
 ### By surface
 
 | surface | total |
 |---|---|
-| typecheck | 86 |
-| mir | 43 |
+| typecheck | 87 |
+| mir | 45 |
+| mir-llvm | 24 |
 | codegen | 22 |
-| mir-llvm | 22 |
 | interp | 21 |
 | ownership | 19 |
 | cli | 19 |
@@ -99,6 +99,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-28-1 | 2026-10-28 | mir-llvm | low | After 45524985d1 a one-worker auto-par build runs the in-order build's instructions, yet 16 of 129 M4b programs still time under 0.9x of it in one 9-run pass (kata 7 0.764, 8 0.727, 125 0.696, 153 0.798, 895 0.79, word_freq_multi 0.787): the code is the same and lands elsewhere, so the floor at one worker is at the resolution of code placement | — |
 | B-2026-10-28-2 | 2026-10-28 | typecheck | low | A generic struct's or enum's declared parameter bounds are not checked where the type is written with arguments: `struct M[T: Hash + Eq] { m: Map[T, i64] }` lets `fn mk() -> M[f64]` and `let x: M[f64] = mk()` pass, and the `f64` key surfaces only at a later `x.m.len()` (reported twice there); the target is a refusal at the written `M[f64]` naming the unmet bound, for every declared bound, not only `Hash + Eq` | — |
 | B-2026-10-28-3 | 2026-10-28 | mir-llvm | low | A compiled program's run time moves 10-20% with where its hot function lands, and the runtime archive is one of the things that moves it: kata 125 runs about 10% slower whenever karac.main sits at 16 mod 64 (the full archive's larger headers shift user code by 0x3130 bytes), kata 28 KMP 0.41 vs 0.52 s between layouts; no alignment setting tried removes the swing without slowing another program 7-20% | — |
+| B-2026-10-28-4 | 2026-10-28 | mir+mir-llvm | high | A function with a `mut ref` parameter that calls an auto-par site is refused by the default build: "invalid MIR: tally: bb3[term]: copy of _2 whose type mut ref i64 is not Copy" (one_worker_twin passes the parameter to `<name>#seq` as a copy); katas 68 twophase, 79 word_search and word_search_visited and apps/cli/mini_cookiejar fail on mir-llvm at default settings. | — |
+| B-2026-10-28-5 | 2026-10-28 | typecheck+mir+mir-llvm | high | `Vec.extend_from_slice` and the `try_` writers (`try_push`, `try_insert`, `try_reserve`, `try_resize`, `try_extend_from_slice`) borrow their receiver shared in MIR: auto-par runs appends to one buffer as concurrent tasks (the proto3 encoder of fixtures/protobuf_proto/proto_map_field_roundtrip crashes or decodes out of bounds in 56 of 9,000 runs on three workers), and `karac check` lets a `ref` parameter be appended to. | — |
 
 ### Relocated
 
