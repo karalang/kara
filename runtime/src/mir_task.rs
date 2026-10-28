@@ -72,9 +72,45 @@ use std::cell::UnsafeCell;
 use std::cell::{Cell, RefCell};
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap, VecDeque};
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU8, AtomicUsize, Ordering};
 use std::sync::LazyLock;
 use std::time::{Duration, Instant};
+
+/// The executor's maps are keyed by its own counters (task keys, task and
+/// group ids) and by descriptors, never by a program's data, so they hash
+/// with one multiply rather than SipHash under a random key: SipHash's
+/// rounds were inlined into every table operation of every map, in every
+/// binary that runs a task (B-2026-10-28-8).
+#[derive(Default)]
+struct IdHasher(u64);
+
+impl std::hash::Hasher for IdHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.write_u64(u64::from(b));
+        }
+    }
+
+    fn write_u32(&mut self, n: u32) {
+        self.write_u64(u64::from(n));
+    }
+
+    fn write_u64(&mut self, n: u64) {
+        // Fibonacci hashing: the table indexes by the low bits and tags by
+        // the top seven, and a multiply by an odd constant spreads both.
+        self.0 = (self.0 ^ n).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    }
+
+    fn write_usize(&mut self, n: usize) {
+        self.write_u64(n as u64);
+    }
+}
+
+type IdMap<K, V> = HashMap<K, V, std::hash::BuildHasherDefault<IdHasher>>;
 
 /// A task's poll function: resumes the task once, and answers 1 when it
 /// returned.
@@ -255,14 +291,14 @@ struct Exec {
     /// The tasks off the queue, sleeping or parked, by the key they were
     /// put off with; a key is never reused, so a timer or a descriptor
     /// that names a task already woken names no task.
-    off: HashMap<u64, Task>,
+    off: IdMap<u64, Task>,
     keys: u64,
     /// Deadlines, each with the key of its task: the earliest first, and
     /// in the order the tasks were put off at a tie.
     timers: BinaryHeap<Reverse<(Instant, u64)>>,
     /// The keys of the tasks parked on each descriptor, in the order they
     /// parked.
-    parked: HashMap<i32, Vec<u64>>,
+    parked: IdMap<i32, Vec<u64>>,
     reactor: Reactor,
     /// The running task of the thread that called `karac_mir_task_run`,
     /// worker 0, the only one on one worker.
@@ -285,20 +321,20 @@ struct Exec {
     /// The last task id given out.
     ids: u64,
     /// The live groups, by id.
-    groups: HashMap<u64, *mut Group>,
+    groups: IdMap<u64, *mut Group>,
     group_ids: u64,
     /// The deadlines set on groups, with the group's id: one that is not
     /// the group's own any more (it fired, or the group is gone) is stale.
     deadlines: Vec<(Instant, u64)>,
     /// The tasks of hidden groups whose records are not all on, by id.
-    holds: HashMap<u64, Hold>,
+    holds: IdMap<u64, Hold>,
     /// Called with a task's id when it ends, returned or torn down
     /// ([`on_task_end`]).
     hooks: Vec<fn(u64)>,
     /// The panics of the tasks of isolating groups that panicked (§11.12),
     /// by task id: the message and the location, which the task's handle
     /// takes once its frame has left by its exits ([`task_failure`]).
-    panics: HashMap<u64, (String, String)>,
+    panics: IdMap<u64, (String, String)>,
 }
 
 impl Exec {
@@ -855,19 +891,7 @@ pub(crate) fn contain_panic(message: impl FnOnce() -> String, location: &str) ->
                 .panics
                 .insert(id, (message, location.to_string()))
         });
-        let mut owned: Vec<(u64, *mut Group)> = EXEC.with(|e| {
-            e.borrow()
-                .groups
-                .iter()
-                // SAFETY: a registered group is live.
-                .filter(|(_, &g)| unsafe { (*g).owner } == id)
-                .map(|(&gid, &g)| (gid, g))
-                .collect()
-        });
-        owned.sort_by_key(|&(gid, _)| gid);
-        for (_, g) in owned {
-            cancel_where(|c| c.group == g);
-        }
+        cancel_owned(id);
     }
     EXEC.with(|e| {
         if let Some(c) = e.borrow_mut().cur_mut().as_mut() {
@@ -919,7 +943,7 @@ fn free_group(g: *mut Group) {
 #[no_mangle]
 pub unsafe extern "C" fn karac_mir_group_cancel(g: *mut u8) {
     let g = g as *mut Group;
-    cancel_where(|t| t.group == g);
+    cancel_where(&|t| t.group == g);
 }
 
 /// `TaskGroup.__deadline_at(g, at)` (§11.10): `g` is cancelled once the
@@ -1093,7 +1117,7 @@ pub(crate) fn drain_logs() {
             return;
         };
         // The holds under each spawner's hold, by group and place.
-        let mut under: HashMap<u64, Vec<(u64, usize, u64)>> = HashMap::new();
+        let mut under: IdMap<u64, Vec<(u64, usize, u64)>> = IdMap::default();
         for (&key, hold) in &e.holds {
             // SAFETY: a group outlives its tasks' holds.
             let group = unsafe { (*hold.group).id };
@@ -1107,7 +1131,7 @@ pub(crate) fn drain_logs() {
         }
         fn drain(
             e: &mut Exec,
-            under: &HashMap<u64, Vec<(u64, usize, u64)>>,
+            under: &IdMap<u64, Vec<(u64, usize, u64)>>,
             up: u64,
             out: &mut Vec<crate::mir_log::Held>,
         ) {
@@ -1170,14 +1194,62 @@ pub(crate) fn on_task_end(f: fn(u64)) {
 /// each task of its group.
 #[allow(dead_code)] // for the natives that keep per-task state (M4 item 5)
 pub(crate) fn cancel(id: u64) {
-    cancel_where(|t| t.id == id);
+    cancel_where(&|t| t.id == id);
+}
+
+/// Cancels the tasks of each group task `owner` made, the oldest group
+/// first.
+fn cancel_owned(owner: u64) {
+    let mut owned: Vec<(u64, usize)> = EXEC.with(|e| {
+        e.borrow()
+            .groups
+            .iter()
+            // SAFETY: a registered group is live.
+            .filter(|(_, &g)| unsafe { (*g).owner } == owner)
+            .map(|(&id, &g)| (id, g as usize))
+            .collect()
+    });
+    sort_by_id(&mut owned);
+    for (_, g) in owned {
+        cancel_where(&|c| c.group == g as *mut Group);
+    }
+}
+
+/// Sorts `v` by its ids, which are unique: a heapsort, a few hundred bytes
+/// where the library's sorts take kilobytes per element type, in every
+/// binary that runs a task (B-2026-10-28-8).
+fn sort_by_id(v: &mut [(u64, usize)]) {
+    fn sift(v: &mut [(u64, usize)], mut i: usize, n: usize) {
+        loop {
+            let mut c = 2 * i + 1;
+            if c >= n {
+                return;
+            }
+            if c + 1 < n && v[c + 1].0 > v[c].0 {
+                c += 1;
+            }
+            if v[i].0 >= v[c].0 {
+                return;
+            }
+            v.swap(i, c);
+            i = c;
+        }
+    }
+    let n = v.len();
+    for i in (0..n / 2).rev() {
+        sift(v, i, n);
+    }
+    for end in (1..n).rev() {
+        v.swap(0, end);
+        sift(v, 0, end);
+    }
 }
 
 /// Cancels each unfinished task `doomed` picks: a suspended one is torn
 /// down now, in the order they were spawned, and a running one (or one a
 /// teardown interrupted) at the next wait it reaches.
-fn cancel_where(doomed: impl Fn(&Cur) -> bool) {
-    let mut tasks: Vec<Task> = EXEC.with(|e| {
+fn cancel_where(doomed: &dyn Fn(&Cur) -> bool) {
+    let tasks: Vec<Task> = EXEC.with(|e| {
         let mut e = e.borrow_mut();
         let e = &mut *e;
         for c in e
@@ -1209,9 +1281,13 @@ fn cancel_where(doomed: impl Fn(&Cur) -> bool) {
         out.extend(keys.into_iter().filter_map(|k| e.take_key(k)));
         out
     });
-    tasks.sort_by_key(|t| t.id);
-    for t in tasks {
-        tear_down(t);
+    let mut order: Vec<(u64, usize)> = tasks.iter().map(|t| t.id).zip(0..).collect();
+    sort_by_id(&mut order);
+    let mut tasks: Vec<Option<Task>> = tasks.into_iter().map(Some).collect();
+    for (_, i) in order {
+        if let Some(t) = tasks[i].take() {
+            tear_down(t);
+        }
     }
 }
 
@@ -1222,19 +1298,7 @@ fn cancel_where(doomed: impl Fn(&Cur) -> bool) {
 /// One whose exit suspends, or that waits where no cancel exit is, goes
 /// back to wait as before, still cancelled.
 fn tear_down(mut t: Task) {
-    let mut owned: Vec<(u64, *mut Group)> = EXEC.with(|e| {
-        e.borrow()
-            .groups
-            .iter()
-            // SAFETY: a registered group is live.
-            .filter(|(_, &g)| unsafe { (*g).owner } == t.id)
-            .map(|(&id, &g)| (id, g))
-            .collect()
-    });
-    owned.sort_by_key(|&(id, _)| id);
-    for (_, g) in owned {
-        cancel_where(|c| c.group == g);
-    }
+    cancel_owned(t.id);
     t.cancel = true;
     for _ in 0..2 {
         if poll_nested(&mut t) {
@@ -1290,13 +1354,13 @@ fn settle(t: Task) -> bool {
             false
         }
         Wait::Fd(fd, events) => {
-            park(t, fd, events);
+            park_fd(t, fd, events);
             false
         }
         // Whichever comes first, the descriptor or the deadline, wakes
         // the task.
         Wait::FdBy(fd, events, at) => {
-            if let Some(key) = park(t, fd, events) {
+            if let Some(key) = park_fd(t, fd, events) {
                 EXEC.with(|e| {
                     let mut e = e.borrow_mut();
                     e.timers.push(Reverse((at, key)));
@@ -1332,7 +1396,7 @@ fn fire_deadlines() {
             })
         });
         match due {
-            Some(g) => cancel_where(|c| c.group == g),
+            Some(g) => cancel_where(&|c| c.group == g),
             None => {
                 let more = EXEC.with(|e| {
                     let e = e.borrow();
@@ -1481,7 +1545,7 @@ pub unsafe extern "C" fn karac_mir_task_run(poll: TaskPoll, a: *mut u8, b: *mut 
         fire_deadlines();
         let mut woken = 0;
         if ask {
-            woken += wait_reactor(Some(Duration::ZERO));
+            woken += wait_parked(Some(Duration::ZERO));
             since = 0;
         }
         woken += EXEC.with(|e| e.borrow_mut().wake_timers());
@@ -1848,13 +1912,75 @@ fn idle_wait(by: Option<Instant>) -> bool {
         timeout = Some(timeout.map_or(POOL_NAP, |d| d.min(POOL_NAP)));
     }
     if parked {
-        wait_reactor(timeout);
+        wait_parked(timeout);
     } else if let Some(d) = timeout {
         std::thread::sleep(d);
     }
     EXEC.with(|e| e.borrow_mut().wake_timers());
     fire_deadlines();
     true
+}
+
+/// The reactor's entries, reached through [`REACTOR`] so that a binary
+/// that never waits on a descriptor (an auto-par kata) links neither, nor
+/// the tables they grow: [`fd_wait`], which makes every descriptor wait,
+/// is the only reference to them (B-2026-10-28-8).
+struct ReactorOps {
+    park: fn(Task, i32, i16) -> Option<u64>,
+    wait: fn(Option<Duration>) -> usize,
+}
+
+static REACTOR_OPS: ReactorOps = ReactorOps {
+    park,
+    wait: wait_reactor,
+};
+
+/// Null until the first descriptor wait, then [`REACTOR_OPS`].
+static REACTOR: AtomicPtr<ReactorOps> = AtomicPtr::new(std::ptr::null_mut());
+
+/// The wait for `fd` to be ready for `events`, or until `by` at most.
+fn fd_wait(fd: i32, events: i16, by: Option<Instant>) -> Wait {
+    if REACTOR.load(Ordering::Relaxed).is_null() {
+        // Opaque to the optimizer: seeing the one address ever stored,
+        // it would call the entries directly, and link them everywhere.
+        let ops = std::hint::black_box(&REACTOR_OPS as *const ReactorOps);
+        REACTOR.store(ops as *mut ReactorOps, Ordering::Release);
+    }
+    match by {
+        Some(at) => Wait::FdBy(fd, events, at),
+        None => Wait::Fd(fd, events),
+    }
+}
+
+fn reactor() -> Option<&'static ReactorOps> {
+    // SAFETY: null, or the address of a static.
+    unsafe { REACTOR.load(Ordering::Acquire).as_ref() }
+}
+
+/// [`park`], once a descriptor wait was made; before, there is no task to
+/// park, and one would only be queued.
+fn park_fd(t: Task, fd: i32, events: i16) -> Option<u64> {
+    match reactor() {
+        Some(r) => (r.park)(t, fd, events),
+        None => {
+            EXEC.with(|e| e.borrow_mut().wake(t));
+            None
+        }
+    }
+}
+
+/// [`wait_reactor`], once a descriptor wait was made; before, no task is
+/// parked, and the wait only sleeps out `timeout`.
+fn wait_parked(timeout: Option<Duration>) -> usize {
+    match reactor() {
+        Some(r) => (r.wait)(timeout),
+        None => {
+            if let Some(d) = timeout {
+                std::thread::sleep(d);
+            }
+            0
+        }
+    }
 }
 
 /// Parks `t` on `fd` until it is ready for `events`: with the reactor
@@ -1978,7 +2104,7 @@ struct Reactor {
     /// The `epoll` descriptor, made when the first task parks.
     ep: Option<i32>,
     /// The descriptors registered with it.
-    known: std::collections::HashSet<i32>,
+    known: std::collections::HashSet<i32, std::hash::BuildHasherDefault<IdHasher>>,
 }
 
 #[cfg(all(feature = "net", target_os = "linux"))]
@@ -2104,7 +2230,7 @@ impl Waiter {
 #[cfg(not(all(feature = "net", target_os = "linux")))]
 #[derive(Default)]
 struct Reactor {
-    fds: HashMap<i32, i16>,
+    fds: IdMap<i32, i16>,
 }
 
 #[cfg(not(all(feature = "net", target_os = "linux")))]
@@ -2367,7 +2493,7 @@ pub extern "C" fn karac_mir_ready_fd(fd: i64, write: u8) -> u8 {
     if ready {
         arm();
     }
-    note(ready, Wait::Fd(fd as i32, events))
+    note(ready, fd_wait(fd as i32, events, None))
 }
 
 /// `__ready("TcpStream.connect", ..)`: a fresh connect is ready at once,
@@ -2487,7 +2613,7 @@ pub(crate) fn ready_io(fd: i32, ready: bool, out: bool, by: Option<Duration>) ->
     let events: i16 = if out { 4 } else { 1 }; // POLLOUT, POLLIN
     match by {
         Some(t) => read_by(fd, ready, events, t),
-        None => note(ready, Wait::Fd(fd, events)),
+        None => note(ready, fd_wait(fd, events, None)),
     }
 }
 
@@ -2510,7 +2636,7 @@ fn read_by(fd: i32, readable: bool, events: i16, t: Duration) -> u8 {
         TIMED_OUT.with(|c| c.set(fd));
         note(true, Wait::None)
     } else {
-        note(false, Wait::FdBy(fd, events, at))
+        note(false, fd_wait(fd, events, Some(at)))
     }
 }
 
