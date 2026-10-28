@@ -565,7 +565,7 @@ A `///` before `self` in a method signature is ignored: `self` is not a document
 
 **The package name in paths.**
 - **Inside a package**, paths omit the package name. In package `myproject`, `src/db/connection.kara` is `db.connection`, and its items are imported as `db.connection.Connection`, never `myproject.db.connection.Connection`.
-- **Across packages**, a path starts with the dependency's name. If `webserver` depends on `http`, it writes `import http.client.Connection` (from `http`'s `client` module) or `import http.Connection` (an item of `http`'s root). The resolver recognizes a dependency by matching the first segment against the dependency names in `kara.toml`.
+- **Across packages**, a path starts with the dependency's name. If `webserver` depends on `http`, it writes `import http.client.Connection` (from `http`'s `client` module) or `import http.Connection` (an item of `http`'s root). The resolver recognizes a dependency by matching the first segment against the dependencies' import names: each one's `alias`, else the `[package].import` it declares, else its name with `-` mapped to `_` ([Packages and manifests](#packages-and-manifests)), as listed in `kara.toml`.
 - **A local module hides a dependency of the same name.** If a package has `src/db.kara` and a dependency named `db`, `db` means the local module. To reach the dependency, give it an alias in `kara.toml`:
 
   ```toml
@@ -699,7 +699,9 @@ proptest = "0.4"                   # only in tests and examples
 target = "x86_64-linux"            # default manifest-overlay triple; --target overrides
 ```
 
-- `[package].name` is required. It is the package's identity and the name dependents use as a path's first segment.
+- `[package].name` is required. It is the package's identity, and it gives the name dependents use as a path's first segment.
+- **Hyphens in a package name.** A package name may contain `-`, and a path segment may not, so a dependent's path starts with the name with each `-` replaced by `_`: a dependency on `kara-data` is imported from `kara_data`. Two dependencies whose names differ only by `-` against `_` would claim one segment, which is an error at the manifest; an `alias` resolves it.
+- `[package].import` is optional. It declares the import name dependents use instead of the name, and must be an identifier: `kara-data` declares `import = "data"`, so its dependents write `import data.{Column, DataFrame}`. A dependent's `alias` overrides both.
 - `[package].edition` is optional and validated.
 - `version` and `authors` are recognized. An unknown key in `[package]` is a warning; invalid TOML is an error.
 - `[build].target` selects the default manifest overlay ([Conditional compilation](#conditional-compilation)); `[build].targets` lists the targets `karac check` verifies ([§16](#16-targets-and-compilation)).

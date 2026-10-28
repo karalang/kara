@@ -1549,11 +1549,11 @@ There are no operations where the two conventions are unified automatically — 
 
 | Call | Divisor | `n = 1` | `n = 0` |
 |---|---|---|---|
-| `Stats.variance(s)` / `Stats.stddev(s)` | `n` (**population**) | `0.0` | traps |
-| `col.var()` / `col.std()` | `n − 1` (**sample**, Bessel) | traps | traps |
+| `Stats.variance(s)` / `Stats.stddev(s)` | `n` (**population**) | `Some(0.0)` | `None` |
+| `col.var()` / `col.std()` | `n − 1` (**sample**, Bessel) | `None` | `None` |
 | `gpu.variance(v)` / `gpu.stddev(v)` | `n` (**population**) | `Some(0.0)` | `None` |
 
-Each surface matches the default of the ecosystem it is modeled on: `Stats.*` is a plain numeric-slice API in the shape of NumPy, whose `np.var` defaults to `ddof=0`; `Column`/`DataFrame` is the dataframe surface, in the shape of pandas, whose `Series.var` defaults to `ddof=1`. Unifying on either divisor would surprise one of the two audiences at the point where they are least likely to check — a variance that is silently off by `n/(n−1)` produces plausible numbers, not errors. `Column`'s sample form also explains why it **traps at `n = 1`** where `Stats` answers `0.0`: sample variance of one observation is `0/0`, undefined rather than zero.
+Each surface matches the default of the ecosystem it is modeled on: `Stats.*` is a plain numeric-slice API in the shape of NumPy, whose `np.var` defaults to `ddof=0`; `Column`/`DataFrame` is the dataframe surface, in the shape of pandas, whose `Series.var` defaults to `ddof=1`. Unifying on either divisor would surprise one of the two audiences at the point where they are least likely to check — a variance that is silently off by `n/(n−1)` produces plausible numbers, not errors. `Column`'s sample form also explains why it answers **`None` at `n = 1`** where `Stats` answers `Some(0.0)`: sample variance of one observation is `0/0`, undefined rather than zero. Neither traps: an empty or one-row group is a normal event in a report ([library/data.md](library/data.md#reductions-and-statistics)).
 
 The real hazard is not the divisor but the near-homograph: `variance` and `var` read as the same word abbreviated. They are not the same function. Code that needs a specific convention should say which — `Stats.variance(col.valid_values())` for the population form of a column, or scale `Stats.variance` by `n/(n−1)` for the sample form of a slice. `gpu.variance` follows `Stats`, since it consumes a dense `Vec`, not a nullable column; there is deliberately no `gpu.var`, which would import the ambiguous short spelling into a third namespace.
 
@@ -1881,12 +1881,14 @@ Optimizer passes in the first release: predicate pushdown (move filters before s
 **Design shape:**
 
 ```kara
-let col: Column[f64] = df.column("score");
-let mean: f64 = col.mean();
-let std: f64 = col.std();
-let med: f64 = col.median();
-let p99: f64 = col.quantile(0.99);
-let corr_xy: f64 = df.column("x").corr(df.column("y"));
+let col: Column[f64] = df.column("score")?;  // Err when absent or not f64
+let mean: Option[f64] = col.mean();          // None when no slot is valid
+let std: Option[f64] = col.std();
+let med: Option[f64] = col.median();
+let p99: Option[f64] = col.quantile(0.99);
+let x: Column[f64] = df.column("x")?;
+let y: Column[f64] = df.column("y")?;
+let corr_xy: Option[f64] = x.corr(y);
 
 let summary: DataFrame = df.describe();   // count / mean / std / min / 25% / 50% / 75% / max per numeric column
 ```

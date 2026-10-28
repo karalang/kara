@@ -19,6 +19,7 @@ This directory specifies the standard library's public API: its types, functions
 | [time-random-env.md](time-random-env.md) | `Clock`, `RandomSource` and `Env` APIs |
 | [log.md](log.md) | Structured logging (`std.log`) |
 | [secret.md](secret.md) | `Secret[T]` (post-v1 library) |
+| [data.md](data.md) | The `kara-data` package: `Column`, `DataFrame`, expressions, `LazyFrame`, `Stats`, CSV and Arrow IPC (post-v1 package) |
 
 ## How the library is built
 
