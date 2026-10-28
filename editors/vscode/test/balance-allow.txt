@@ -1,0 +1,4 @@
+# corpus/examples programs that deliberately do not lex to the end
+# (one repo-relative path per line).
+# A fixture whose source is cut off mid-string by the fixture recorder.
+corpus/fixtures/tcp_stream/test_tcp_stream_write_all_round_trip/source.kara

@@ -1,0 +1,90 @@
+//! Scope assertions for the Kāra TextMate grammar (see test/grammar.test.js).
+// <--- comment.line.documentation
+
+/// A documented function.
+// <--- comment.line.documentation
+import std.collections.Map;
+// <------ storage.type
+
+#[derive(Eq, Clone)]
+// <- meta.attribute punctuation.definition.attribute
+//^^^^^^ entity.name.function.attribute
+shared enum Direction { Up, Down }
+// <------ storage.modifier
+//     ^^^^ storage.type.enum
+//          ^^^^^^^^^ entity.name.type
+
+struct Point { x: i64, y: f64 }
+//     ^^^^^ entity.name.type
+//                ^^^ support.type.primitive
+
+const MAX_FLOOR: i64 = 10;
+//    ^^^^^^^^^ variable.other.constant
+//                     ^^ constant.numeric.decimal
+
+fn area(ref self, own p: Point) -> i64 with reads(Db), writes(Log) {
+// <-- storage.type.function
+// ^^^^ entity.name.function
+//      ^^^ storage.modifier
+//          ^^^^ variable.language.self
+//                ^^^ storage.modifier.ownership
+//                              ^^ keyword.operator.arrow
+//                                     ^^^^ keyword.other.with
+//                                          ^^^^^ keyword.other.effect
+//                                                ^^ entity.name.type
+//                                                     ^^^^^^ keyword.other.effect
+    let own = 3;
+//      ^^^ - storage.modifier
+    let s = f"{p.x:>8} and {{literal}} {count(xs)}";
+//          ^ storage.type.string
+//           ^ string.interpolated
+//             ^ meta.interpolation
+//                ^^^ constant.other.format-spec
+//                         ^^ constant.character.escape
+//                                      ^^^^^ entity.name.function.call
+    let r = r#"raw "quoted" \n"#;
+//          ^^^^^^^^^^^^^^^^^^^^ string.quoted.raw
+//                          ^ - constant.character.escape
+    let c = 'x';
+//          ^^^ string.quoted.single.char
+    'outer: for i in 0..10 {
+//  ^^^^^^ entity.name.label
+//          ^^^ keyword.control
+//                   ^ constant.numeric
+//                    ^^ keyword.operator.range
+        if i > 0x1F_u8 and not done { break 'outer; }
+//         ^ - entity.name.type
+//             ^^^^^^^ constant.numeric.hex
+//                     ^^^ keyword.operator.logical
+//                                          ^^^^^^ entity.name.label
+    }
+    let v = Vec.new();
+//          ^^^ entity.name.type
+//              ^^^ entity.name.function.call
+    v.box + 1.5e3 /* nested /* block */ comment */;
+//    ^^^ variable.other.member
+//    ^^^ - invalid.illegal
+//          ^^^^^ constant.numeric.float
+//                                      ^^^^^^^ comment.block
+    let gen = 1;
+//      ^^^ invalid.illegal.reserved
+    par {
+//  ^^^ keyword.control.par
+        a()
+    }
+    x |> f()
+//    ^^ keyword.operator.pipe
+}
+
+test "points add" {
+// <---- keyword.declaration.test
+//   ^^^^^^^^^^^^ string.quoted.double
+}
+
+distinct type Meters = f64;
+// <-------- storage.modifier
+//            ^^^^^^ entity.name.type
+
+effect resource Clock: Tick;
+// <------ storage.type.effect
+//              ^^^^^ entity.name.type

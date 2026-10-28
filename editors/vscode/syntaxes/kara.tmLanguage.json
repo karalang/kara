@@ -1,0 +1,758 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Kāra",
+  "scopeName": "source.kara",
+  "fileTypes": [
+    "kara"
+  ],
+  "patterns": [
+    {
+      "include": "#items"
+    }
+  ],
+  "repository": {
+    "items": {
+      "patterns": [
+        {
+          "include": "#comments"
+        },
+        {
+          "include": "#attributes"
+        },
+        {
+          "include": "#strings"
+        },
+        {
+          "include": "#chars-and-labels"
+        },
+        {
+          "include": "#numbers"
+        },
+        {
+          "include": "#member"
+        },
+        {
+          "include": "#raw-identifier"
+        },
+        {
+          "include": "#effect-clause"
+        },
+        {
+          "include": "#declarations"
+        },
+        {
+          "include": "#keywords"
+        },
+        {
+          "include": "#contextual-keywords"
+        },
+        {
+          "include": "#reserved"
+        },
+        {
+          "include": "#constants"
+        },
+        {
+          "include": "#types"
+        },
+        {
+          "include": "#calls"
+        },
+        {
+          "include": "#operators"
+        },
+        {
+          "include": "#punctuation"
+        }
+      ]
+    },
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.documentation.kara",
+          "match": "//[/!](?!/).*$"
+        },
+        {
+          "name": "comment.line.double-slash.kara",
+          "match": "//.*$"
+        },
+        {
+          "include": "#block-comment"
+        }
+      ]
+    },
+    "block-comment": {
+      "name": "comment.block.kara",
+      "begin": "/\\*",
+      "end": "\\*/",
+      "patterns": [
+        {
+          "include": "#block-comment"
+        }
+      ]
+    },
+    "attributes": {
+      "name": "meta.attribute.kara",
+      "begin": "(#)(!?)(\\[)",
+      "beginCaptures": {
+        "1": {
+          "name": "punctuation.definition.attribute.kara"
+        },
+        "2": {
+          "name": "punctuation.definition.attribute.inner.kara"
+        },
+        "3": {
+          "name": "punctuation.brackets.attribute.kara"
+        }
+      },
+      "end": "\\]",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.brackets.attribute.kara"
+        }
+      },
+      "patterns": [
+        {
+          "match": "(?<=\\[)\\s*([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "entity.name.function.attribute.kara"
+            }
+          }
+        },
+        {
+          "include": "#comments"
+        },
+        {
+          "include": "#strings"
+        },
+        {
+          "include": "#numbers"
+        },
+        {
+          "include": "#attribute-brackets"
+        },
+        {
+          "include": "#effect-verbs"
+        },
+        {
+          "include": "#constants"
+        },
+        {
+          "include": "#types"
+        },
+        {
+          "include": "#operators"
+        },
+        {
+          "include": "#punctuation"
+        }
+      ]
+    },
+    "attribute-brackets": {
+      "begin": "[\\[(]",
+      "end": "[\\])]",
+      "patterns": [
+        {
+          "include": "#strings"
+        },
+        {
+          "include": "#numbers"
+        },
+        {
+          "include": "#attribute-brackets"
+        },
+        {
+          "include": "#effect-verbs"
+        },
+        {
+          "include": "#types"
+        },
+        {
+          "include": "#punctuation"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "include": "#triple-string"
+        },
+        {
+          "include": "#f-string"
+        },
+        {
+          "include": "#raw-string"
+        },
+        {
+          "name": "string.quoted.double.kara",
+          "begin": "([bc]?)(\")",
+          "beginCaptures": {
+            "1": {
+              "name": "storage.type.string.kara"
+            },
+            "2": {
+              "name": "punctuation.definition.string.begin.kara"
+            }
+          },
+          "end": "\"",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.end.kara"
+            }
+          },
+          "patterns": [
+            {
+              "include": "#escapes"
+            }
+          ]
+        }
+      ]
+    },
+    "raw-string": {
+      "name": "string.quoted.raw.kara",
+      "begin": "(r)(#*)(\")",
+      "beginCaptures": {
+        "1": {
+          "name": "storage.type.string.kara"
+        },
+        "3": {
+          "name": "punctuation.definition.string.begin.kara"
+        }
+      },
+      "end": "(\")(\\2)",
+      "endCaptures": {
+        "1": {
+          "name": "punctuation.definition.string.end.kara"
+        }
+      }
+    },
+    "f-string": {
+      "name": "string.interpolated.kara",
+      "begin": "(f)(\")",
+      "beginCaptures": {
+        "1": {
+          "name": "storage.type.string.kara"
+        },
+        "2": {
+          "name": "punctuation.definition.string.begin.kara"
+        }
+      },
+      "end": "\"",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.end.kara"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#f-string-content"
+        }
+      ]
+    },
+    "interpolation-braces": {
+      "begin": "\\{",
+      "end": "\\}",
+      "patterns": [
+        {
+          "include": "#interpolation-braces"
+        },
+        {
+          "include": "#items"
+        }
+      ]
+    },
+    "escapes": {
+      "patterns": [
+        {
+          "name": "constant.character.escape.kara",
+          "match": "\\\\(?:[nrt0\\\\'\"{}]|x[0-9A-Fa-f]{2}|u\\{[0-9A-Fa-f_]{1,8}\\}|\\r?\\n)"
+        },
+        {
+          "name": "invalid.illegal.escape.kara",
+          "match": "\\\\."
+        }
+      ]
+    },
+    "chars-and-labels": {
+      "patterns": [
+        {
+          "name": "string.quoted.single.char.kara",
+          "match": "(b?)'(?:\\\\(?:[nrt0\\\\'\"]|x[0-9A-Fa-f]{2}|u\\{[0-9A-Fa-f_]{1,8}\\})|[^\\\\'\\n])'",
+          "captures": {
+            "1": {
+              "name": "storage.type.string.kara"
+            }
+          }
+        },
+        {
+          "name": "entity.name.label.kara",
+          "match": "'[A-Za-z_][A-Za-z0-9_]*\\b(?!')"
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.hex.kara",
+          "match": "\\b0x[0-9A-Fa-f_]+(?:[iu](?:8|16|32|64|128|size))?\\b"
+        },
+        {
+          "name": "constant.numeric.binary.kara",
+          "match": "\\b0b[01_]+(?:[iu](?:8|16|32|64|128|size))?\\b"
+        },
+        {
+          "name": "constant.numeric.octal.kara",
+          "match": "\\b0o[0-7_]+(?:[iu](?:8|16|32|64|128|size))?\\b"
+        },
+        {
+          "name": "constant.numeric.float.kara",
+          "match": "\\b[0-9][0-9_]*(?:\\.[0-9][0-9_]*(?:[eE][+-]?[0-9_]+)?|[eE][+-]?[0-9_]+)(?:b?f(?:16|32|64))?\\b"
+        },
+        {
+          "name": "constant.numeric.decimal.kara",
+          "match": "\\b[0-9][0-9_]*(?:[iu](?:8|16|32|64|128|size)|b?f(?:16|32|64))?\\b"
+        }
+      ]
+    },
+    "member": {
+      "comment": "After `.`, any word is a member name, keywords included (design.md § Keywords).",
+      "patterns": [
+        {
+          "match": "(?<=[^.]\\.|^\\.)\\s*([A-Z][A-Z0-9_]*[A-Z0-9])\\b(?![a-z])",
+          "captures": {
+            "1": {
+              "name": "constant.other.kara"
+            }
+          }
+        },
+        {
+          "match": "(?<=[^.]\\.|^\\.)\\s*([A-Z][A-Za-z0-9_]*)\\b",
+          "captures": {
+            "1": {
+              "name": "entity.name.type.kara"
+            }
+          }
+        },
+        {
+          "match": "(?<=[^.]\\.|^\\.)\\s*([a-z_][A-Za-z0-9_]*)\\b(?=\\s*\\()",
+          "captures": {
+            "1": {
+              "name": "entity.name.function.call.method.kara"
+            }
+          }
+        },
+        {
+          "match": "(?<=[^.]\\.|^\\.)\\s*([a-z_][A-Za-z0-9_]*|[0-9]+)\\b",
+          "captures": {
+            "1": {
+              "name": "variable.other.member.kara"
+            }
+          }
+        }
+      ]
+    },
+    "raw-identifier": {
+      "name": "variable.other.kara",
+      "match": "\\br#[A-Za-z_][A-Za-z0-9_]*\\b"
+    },
+    "effect-verbs": {
+      "name": "keyword.other.effect.kara",
+      "match": "\\b(?:reads|writes|sends|receives|allocates|panics|blocks)\\b"
+    },
+    "effect-clause": {
+      "comment": "`with` is a keyword only where it starts an effect clause (design.md § Keywords, §12).",
+      "name": "meta.effect-clause.kara",
+      "begin": "\\b(with)\\b(?=\\s+(?:reads|writes|sends|receives|allocates|panics|blocks|_)\\b)",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.other.with.kara"
+        }
+      },
+      "end": "(?=[{;=]|\\bwhere\\b|^\\s*$)",
+      "patterns": [
+        {
+          "include": "#comments"
+        },
+        {
+          "include": "#effect-verbs"
+        },
+        {
+          "include": "#types"
+        },
+        {
+          "include": "#punctuation"
+        },
+        {
+          "name": "variable.other.effect-var.kara",
+          "match": "\\b_\\b|\\b[a-z][A-Za-z0-9_]*\\b"
+        }
+      ]
+    },
+    "declarations": {
+      "patterns": [
+        {
+          "match": "\\b(fn)\\s+((?:r#)?[A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "keyword.declaration.function.kara storage.type.function.kara"
+            },
+            "2": {
+              "name": "entity.name.function.kara"
+            }
+          }
+        },
+        {
+          "match": "\\b(struct|enum|trait|type)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "keyword.declaration.$1.kara storage.type.$1.kara"
+            },
+            "2": {
+              "name": "entity.name.type.kara"
+            }
+          }
+        },
+        {
+          "match": "^\\s*(?:(pub|private)\\s+)?(union)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "storage.modifier.visibility.kara"
+            },
+            "2": {
+              "name": "keyword.declaration.union.kara storage.type.union.kara"
+            },
+            "3": {
+              "name": "entity.name.type.kara"
+            }
+          }
+        },
+        {
+          "match": "\\b(effect)\\s+(resource)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "keyword.declaration.effect.kara storage.type.effect.kara"
+            },
+            "2": {
+              "name": "keyword.declaration.resource.kara storage.type.resource.kara"
+            },
+            "3": {
+              "name": "entity.name.type.kara"
+            }
+          }
+        },
+        {
+          "match": "\\b(const)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "storage.type.const.kara"
+            },
+            "2": {
+              "name": "variable.other.constant.kara"
+            }
+          }
+        },
+        {
+          "match": "^\\s*(test)\\s+(?=\")",
+          "captures": {
+            "1": {
+              "name": "keyword.declaration.test.kara"
+            }
+          }
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.kara",
+          "match": "\\b(?:if|else|match|while|for|in|loop|return|break|continue|defer|errdefer|try|yield)\\b"
+        },
+        {
+          "name": "storage.type.kara",
+          "match": "\\b(?:fn|struct|enum|trait|impl|type|const|let|import|extern|asm|global_asm|comptime)\\b"
+        },
+        {
+          "name": "storage.modifier.kara",
+          "match": "\\b(?:pub|private|mut|ref|unsafe|dyn)\\b"
+        },
+        {
+          "name": "keyword.other.contract.kara",
+          "match": "\\b(?:requires|ensures|invariant)\\b"
+        },
+        {
+          "name": "keyword.operator.logical.kara",
+          "match": "\\b(?:and|or|not)\\b"
+        },
+        {
+          "name": "keyword.operator.cast.kara",
+          "match": "\\bas\\b"
+        },
+        {
+          "name": "invalid.illegal.move.kara",
+          "comment": "`move` is reserved and rejected in favour of `own` (lexer.rs).",
+          "match": "\\bmove\\b"
+        },
+        {
+          "name": "constant.language.boolean.kara",
+          "match": "\\b(?:true|false)\\b"
+        },
+        {
+          "name": "variable.language.self.kara",
+          "match": "\\bself\\b"
+        },
+        {
+          "name": "entity.name.type.self.kara variable.language.self.kara",
+          "match": "\\bSelf\\b"
+        }
+      ]
+    },
+    "contextual-keywords": {
+      "comment": "Keywords only in one position (design.md § Keywords); elsewhere ordinary identifiers.",
+      "patterns": [
+        {
+          "name": "storage.modifier.kara",
+          "match": "\\b(?:shared|sync)\\b(?=\\s+(?:struct|enum)\\b)"
+        },
+        {
+          "name": "storage.modifier.kara",
+          "match": "\\bdistinct\\b(?=\\s+type\\b)"
+        },
+        {
+          "name": "storage.modifier.kara",
+          "match": "\\bmarker\\b(?=\\s+trait\\b)"
+        },
+        {
+          "name": "storage.modifier.kara",
+          "match": "\\bhost\\b(?=\\s+fn\\b)"
+        },
+        {
+          "name": "keyword.control.par.kara",
+          "match": "\\bpar\\b(?=\\s*[{(]|\\s+for\\b)"
+        },
+        {
+          "name": "storage.modifier.ownership.kara",
+          "match": "\\bown\\b(?=\\s*[A-Za-z_(\\[|])"
+        },
+        {
+          "name": "storage.modifier.ownership.kara",
+          "match": "\\b(?:weak|frozen)\\b(?=\\s+[A-Za-z_(\\[])"
+        },
+        {
+          "name": "keyword.other.freeze.kara",
+          "match": "\\bfreeze\\b(?=\\s+[A-Za-z_(\\[])"
+        },
+        {
+          "name": "storage.modifier.kara",
+          "match": "\\bescaping\\b(?=\\s+Fn)"
+        },
+        {
+          "name": "keyword.other.where.kara",
+          "match": "\\bwhere\\b(?=\\s+[A-Za-z_]|\\s*$)"
+        }
+      ]
+    },
+    "reserved": {
+      "comment": "Reserved for future use (token::RESERVED_FUTURE_KEYWORDS); the compiler rejects them.",
+      "name": "invalid.illegal.reserved.kara",
+      "match": "\\b(?:async|await|become|box|do|final|gen|override|priv|pure|typeof|virtual)\\b"
+    },
+    "constants": {
+      "name": "constant.other.kara",
+      "match": "\\b[A-Z][A-Z0-9_]*[A-Z0-9]\\b(?![a-z])"
+    },
+    "types": {
+      "patterns": [
+        {
+          "name": "support.type.primitive.kara storage.type.primitive.kara",
+          "match": "\\b(?:i8|i16|i32|i64|i128|isize|u8|u16|u32|u64|u128|usize|f16|bf16|f32|f64|bool|char|str|never)\\b"
+        },
+        {
+          "name": "entity.name.type.kara",
+          "match": "\\b[A-Z][A-Za-z0-9_]*\\b"
+        }
+      ]
+    },
+    "calls": {
+      "match": "\\b([a-z_][A-Za-z0-9_]*)\\s*(?=\\()",
+      "captures": {
+        "1": {
+          "name": "entity.name.function.call.kara"
+        }
+      }
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.arrow.kara",
+          "match": "->|=>"
+        },
+        {
+          "name": "keyword.operator.pipe.kara",
+          "match": "\\|>"
+        },
+        {
+          "name": "keyword.operator.optional.kara",
+          "match": "\\?\\.|\\?\\?|\\?"
+        },
+        {
+          "name": "keyword.operator.range.kara",
+          "match": "\\.\\.=|\\.\\.\\.|\\.\\."
+        },
+        {
+          "name": "keyword.operator.comparison.kara",
+          "match": "==|!=|<=|>=|<|>"
+        },
+        {
+          "name": "keyword.operator.assignment.compound.kara",
+          "match": "(?:<<|>>|[-+*/%&|^])="
+        },
+        {
+          "name": "keyword.operator.assignment.kara",
+          "match": "="
+        },
+        {
+          "name": "keyword.operator.bitwise.kara",
+          "match": "<<|>>|[&|^~]"
+        },
+        {
+          "name": "keyword.operator.arithmetic.kara",
+          "match": "[-+*/%]"
+        },
+        {
+          "name": "keyword.operator.at.kara",
+          "match": "@"
+        }
+      ]
+    },
+    "punctuation": {
+      "patterns": [
+        {
+          "name": "punctuation.separator.path.kara",
+          "match": "::"
+        },
+        {
+          "name": "punctuation.accessor.dot.kara",
+          "match": "\\."
+        },
+        {
+          "name": "punctuation.separator.comma.kara",
+          "match": ","
+        },
+        {
+          "name": "punctuation.terminator.statement.kara",
+          "match": ";"
+        },
+        {
+          "name": "punctuation.separator.colon.kara",
+          "match": ":"
+        },
+        {
+          "name": "punctuation.brackets.curly.kara",
+          "match": "[{}]"
+        },
+        {
+          "name": "punctuation.brackets.square.kara",
+          "match": "[\\[\\]]"
+        },
+        {
+          "name": "punctuation.brackets.round.kara",
+          "match": "[()]"
+        }
+      ]
+    },
+    "f-string-content": {
+      "patterns": [
+        {
+          "include": "#escapes"
+        },
+        {
+          "name": "constant.character.escape.brace.kara",
+          "match": "\\{\\{|\\}\\}"
+        },
+        {
+          "name": "meta.interpolation.kara",
+          "begin": "\\{",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.section.interpolation.begin.kara"
+            }
+          },
+          "end": "\\}",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.section.interpolation.end.kara"
+            }
+          },
+          "contentName": "source.kara.embedded",
+          "patterns": [
+            {
+              "name": "constant.other.format-spec.kara",
+              "match": "(?<!:):(?!:)[^{}\"]*(?=\\})"
+            },
+            {
+              "comment": "An escaped quote inside a hole is an error with a fix-it (lexer.rs ESCAPED_QUOTE_IN_HOLE); keep it from swallowing the string's end.",
+              "name": "string.quoted.double.kara",
+              "begin": "\\\\([\"'])",
+              "end": "\\\\\\1"
+            },
+            {
+              "include": "#interpolation-braces"
+            },
+            {
+              "include": "#items"
+            }
+          ]
+        }
+      ]
+    },
+    "triple-string": {
+      "comment": "`\"\"\"` blocks (lexer.rs triple_string); `f\"\"\"` interpolates.",
+      "patterns": [
+        {
+          "name": "string.interpolated.block.kara",
+          "begin": "(f)(\"\"\")",
+          "beginCaptures": {
+            "1": {
+              "name": "storage.type.string.kara"
+            },
+            "2": {
+              "name": "punctuation.definition.string.begin.kara"
+            }
+          },
+          "end": "\"\"\"",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.end.kara"
+            }
+          },
+          "patterns": [
+            {
+              "include": "#f-string-content"
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.triple.kara",
+          "begin": "\"\"\"",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.begin.kara"
+            }
+          },
+          "end": "\"\"\"",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.end.kara"
+            }
+          },
+          "patterns": [
+            {
+              "include": "#escapes"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

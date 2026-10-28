@@ -1,0 +1,116 @@
+{
+  "name": "kara",
+  "displayName": "Kāra",
+  "description": "Kāra language support: syntax highlighting, diagnostics, hover, go-to-definition and formatting through kara-lsp.",
+  "version": "0.1.0",
+  "publisher": "karalang",
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/karalang/kara",
+    "directory": "editors/vscode"
+  },
+  "engines": {
+    "vscode": "^1.82.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Linters",
+    "Formatters"
+  ],
+  "keywords": [
+    "kara",
+    "karac",
+    "lsp"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "workspaceContains:**/*.kara"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "kara",
+        "aliases": [
+          "Kāra",
+          "Kara",
+          "kara"
+        ],
+        "extensions": [
+          ".kara"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "kara",
+        "scopeName": "source.kara",
+        "path": "./syntaxes/kara.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "title": "Kāra",
+      "properties": {
+        "kara.server.path": {
+          "type": "string",
+          "default": "",
+          "scope": "machine-overridable",
+          "markdownDescription": "Path to the `kara-lsp` binary. Leave empty to use the binary bundled with the extension, or `kara-lsp` on your `PATH`."
+        },
+        "kara.server.extraEnv": {
+          "type": "object",
+          "default": {},
+          "additionalProperties": {
+            "type": "string"
+          },
+          "markdownDescription": "Extra environment variables for the `kara-lsp` process."
+        },
+        "kara.trace.server": {
+          "type": "string",
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
+          "default": "off",
+          "description": "Trace the messages between VS Code and kara-lsp in the \"Kāra Language Server\" output channel."
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "kara.restartServer",
+        "title": "Restart Language Server",
+        "category": "Kāra"
+      },
+      {
+        "command": "kara.showOutput",
+        "title": "Show Language Server Output",
+        "category": "Kāra"
+      }
+    ]
+  },
+  "scripts": {
+    "compile": "tsc -p .",
+    "bundle": "esbuild src/extension.ts --bundle --platform=node --format=cjs --target=node18 --external:vscode --outfile=out/extension.js --minify",
+    "vscode:prepublish": "npm run bundle && cp ../../LICENSE-MIT ../../LICENSE-APACHE .",
+    "test": "node test/grammar.test.js",
+    "test:corpus": "node test/grammar.test.js --corpus",
+    "test:lsp": "node test/lsp.test.js",
+    "package": "vsce package"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^18.19.0",
+    "@types/vscode": "^1.82.0",
+    "@vscode/vsce": "^3.2.1",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.4.5",
+    "vscode-oniguruma": "^2.0.1",
+    "vscode-textmate": "^9.1.0",
+    "vscode-jsonrpc": "^8.2.0"
+  }
+}
