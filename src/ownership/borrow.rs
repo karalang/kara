@@ -39,8 +39,11 @@ impl<'a> super::OwnershipChecker<'a> {
     pub(crate) fn callee_modes_for_call(&self, callee: &Expr) -> Option<&Vec<OwnershipMode>> {
         // Includes the `with_provider[R]` generic special-form callee
         // (B-2026-07-02-26) via `callee_param_modes_key`.
-        let key = super::callee_param_modes_key(callee)?;
-        self.callee_param_modes.get(&key)
+        super::lookup_callee_param_modes(
+            &self.callee_param_modes,
+            &self.trait_static_methods,
+            callee,
+        )
     }
 
     /// Whether the argument at `arg_index` of `callee` is a borrow position

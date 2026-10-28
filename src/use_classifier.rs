@@ -43,8 +43,9 @@ use crate::ast::{
 };
 use crate::cfg::{Classification, ConsumeOrigin, PlacePath, PlaceSeg, UseKind};
 use crate::ownership::{
-    callee_param_modes_key, collect_callee_param_modes, collect_copy_bounded_type_params,
-    collect_method_param_modes, collect_method_self_modes, is_copy_type_in_scope, OwnershipMode,
+    collect_callee_param_modes, collect_copy_bounded_type_params, collect_method_param_modes,
+    collect_method_self_modes, collect_trait_static_methods, is_copy_type_in_scope,
+    lookup_callee_param_modes, OwnershipMode,
 };
 use crate::resolver::SpanKey;
 use crate::typechecker::{Type, TypeCheckResult};
@@ -64,6 +65,7 @@ use std::collections::{HashMap, HashSet};
 pub struct ClassifierPrelude {
     method_self_modes: FxHashMap<String, SelfParam>,
     callee_param_modes: FxHashMap<String, Vec<OwnershipMode>>,
+    trait_static_methods: FxHashMap<String, Vec<String>>,
     method_param_modes: FxHashMap<String, Vec<OwnershipMode>>,
     unit_variant_names: HashSet<String>,
     /// `ref name` / `mut ref name` pattern bindings, which move nothing
@@ -94,6 +96,7 @@ impl ClassifierPrelude {
         ClassifierPrelude {
             method_self_modes: collect_method_self_modes(program),
             callee_param_modes: collect_callee_param_modes(program),
+            trait_static_methods: collect_trait_static_methods(program),
             method_param_modes: collect_method_param_modes(program),
             unit_variant_names: collect_unit_variant_names(tc),
             ref_bindings: program.ref_binding_spans.iter().copied().collect(),
@@ -246,6 +249,7 @@ pub fn classify_function_body_with(
         tc,
         method_self_modes: &prelude.method_self_modes,
         callee_param_modes: &prelude.callee_param_modes,
+        trait_static_methods: &prelude.trait_static_methods,
         method_param_modes: &prelude.method_param_modes,
         unit_variant_names: &prelude.unit_variant_names,
         ref_bindings: &prelude.ref_bindings,
@@ -285,6 +289,7 @@ struct UseClassifier<'a> {
     tc: &'a TypeCheckResult,
     method_self_modes: &'a FxHashMap<String, SelfParam>,
     callee_param_modes: &'a FxHashMap<String, Vec<OwnershipMode>>,
+    trait_static_methods: &'a FxHashMap<String, Vec<String>>,
     method_param_modes: &'a FxHashMap<String, Vec<OwnershipMode>>,
     unit_variant_names: &'a HashSet<String>,
     ref_bindings: &'a FxHashSet<SpanKey>,
@@ -1914,8 +1919,7 @@ impl<'a> UseClassifier<'a> {
     fn callee_modes_for_call(&self, callee: &Expr) -> Option<&Vec<OwnershipMode>> {
         // Includes the `with_provider[R]` generic special-form callee
         // (B-2026-07-02-26) via `callee_param_modes_key`.
-        let key = callee_param_modes_key(callee)?;
-        self.callee_param_modes.get(&key)
+        lookup_callee_param_modes(self.callee_param_modes, self.trait_static_methods, callee)
     }
 
     /// B-2026-08-15-27 — parameter modes read off a FUNCTION-TYPED callee's own

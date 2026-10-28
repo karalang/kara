@@ -1770,6 +1770,9 @@ pub struct OwnershipChecker<'a> {
     /// `Own`. Drives `Call`-arg consume-vs-read classification per
     /// design.md § Consume Predicate step 2.
     pub(crate) callee_param_modes: FxHashMap<String, Vec<OwnershipMode>>,
+    /// The traits declaring each static method name
+    /// ([`collect_trait_static_methods`]).
+    pub(crate) trait_static_methods: FxHashMap<String, Vec<String>>,
     /// Bare names bound by this unit's `import` declarations, aliases
     /// included. Lets `arg_is_borrow_position` tell an IMPORTED free function
     /// — whose signature lives in another module, so it has no
@@ -2127,6 +2130,7 @@ impl<'a> OwnershipChecker<'a> {
             immutable_lets: FxHashMap::default(),
             method_self_modes: collect_method_self_modes(program),
             callee_param_modes: collect_callee_param_modes(program),
+            trait_static_methods: collect_trait_static_methods(program),
             imported_names: crate::use_classifier::collect_imported_names_pub(program)
                 .into_iter()
                 .collect(),
@@ -3877,9 +3881,74 @@ fn collect_callee_param_modes_into(
                     }
                 }
             }
+            // A trait's static method, for a call through a type parameter
+            // (`T.make(s)`, B-2026-10-27-32): see `lookup_callee_param_modes`.
+            Item::TraitDef(t) => {
+                for it in &t.items {
+                    if let TraitItem::Method(m) = it {
+                        if m.self_param.is_none() {
+                            map.insert(
+                                format!("{}.{}", t.name, m.name),
+                                param_modes_from_signature(&m.params),
+                            );
+                        }
+                    }
+                }
+            }
             _ => {}
         }
     }
+}
+
+/// The traits that declare each static method name, for
+/// [`lookup_callee_param_modes`].
+pub(crate) fn collect_trait_static_methods(program: &Program) -> FxHashMap<String, Vec<String>> {
+    let mut map: FxHashMap<String, Vec<String>> = FxHashMap::default();
+    let programs = crate::prelude::STDLIB_PROGRAMS
+        .iter()
+        .map(|(_, sp)| sp)
+        .chain(std::iter::once(program));
+    for p in programs {
+        for item in &p.items {
+            let Item::TraitDef(t) = item else { continue };
+            for it in &t.items {
+                if let TraitItem::Method(m) = it {
+                    if m.self_param.is_none() {
+                        map.entry(m.name.clone()).or_default().push(t.name.clone());
+                    }
+                }
+            }
+        }
+    }
+    map
+}
+
+/// A call's parameter modes ([`callee_param_modes_key`]). A static method
+/// called through a type parameter (`T.make(s)`, B-2026-10-27-32) names no
+/// impl, so it takes the modes of the trait that declares the method, when
+/// every such trait agrees. Before, it had none, and a `mut ref S` passed
+/// on was read as a move.
+pub(crate) fn lookup_callee_param_modes<'m>(
+    modes: &'m FxHashMap<String, Vec<OwnershipMode>>,
+    trait_statics: &FxHashMap<String, Vec<String>>,
+    callee: &Expr,
+) -> Option<&'m Vec<OwnershipMode>> {
+    let key = callee_param_modes_key(callee)?;
+    if let Some(m) = modes.get(&key) {
+        return Some(m);
+    }
+    let ExprKind::Path { segments, .. } = &callee.kind else {
+        return None;
+    };
+    let [_, method] = segments.as_slice() else {
+        return None;
+    };
+    let mut declared = trait_statics
+        .get(method)?
+        .iter()
+        .filter_map(|t| modes.get(&format!("{t}.{method}")));
+    let first = declared.next()?;
+    declared.all(|m| m == first).then_some(first)
 }
 
 /// Collect per-position parameter ownership modes for every *instance*
