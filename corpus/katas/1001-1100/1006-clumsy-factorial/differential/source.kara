@@ -1,0 +1,261 @@
+// LeetCode #1006: Clumsy Factorial -- differential
+//
+// The five arms, copied, against the statement read literally and five
+// more properties. See README.md § Differential.
+
+fn clumsy_star(n: i64) -> i64 {
+    let mut stack: Vec[i64] = vec![n];
+    let mut op = 0;
+    let mut x = n - 1;
+    while x > 0 {
+        let last = stack.len() - 1;
+        if op == 0 {
+            stack[last] = stack[last] * x;
+        } else if op == 1 {
+            stack[last] = stack[last] / x;
+        } else if op == 2 {
+            stack.push(x);
+        } else {
+            stack.push(-x);
+        }
+        op = (op + 1) % 4;
+        x -= 1;
+    }
+    let mut sum = 0;
+    for t in stack.iter() {
+        sum += t;
+    }
+    sum
+}
+
+fn clumsy_groups(n: i64) -> i64 {
+    let mut sum = 0;
+    let mut x = n;
+    let mut sign = 1;
+    while x > 0 {
+        let mut term = x;
+        x -= 1;
+        if x > 0 {
+            term *= x;
+            x -= 1;
+        }
+        if x > 0 {
+            term /= x;
+            x -= 1;
+        }
+        sum += sign * term;
+        if x > 0 {
+            sum += x;
+            x -= 1;
+        }
+        sign = -1;
+    }
+    sum
+}
+
+fn clumsy_formula(n: i64) -> i64 {
+    if n <= 2 {
+        n
+    } else if n == 3 {
+        6
+    } else if n == 4 {
+        7
+    } else if n % 4 == 0 {
+        n + 1
+    } else if n % 4 == 3 {
+        n - 1
+    } else {
+        n + 2
+    }
+}
+
+fn clumsy_recursive(n: i64) -> i64 {
+    rec_from(n, 1)
+}
+
+fn rec_from(x: i64, sign: i64) -> i64 {
+    if x <= 0 {
+        return 0;
+    }
+    let mut term = x;
+    if x > 1 {
+        term *= x - 1;
+    }
+    if x > 2 {
+        term /= x - 2;
+    }
+    let plus = if x > 3 { x - 3 } else { 0 };
+    sign * term + plus + rec_from(x - 4, -1)
+}
+
+fn clumsy_parse(n: i64) -> i64 {
+    let ops = ["*", "/", "+", "-"];
+    let mut text = n.to_string();
+    for x in 1..n {
+        text = text + ops[(x - 1) % 4] + (n - x).to_string();
+    }
+    evaluate(text)
+}
+
+fn precedence(op: char) -> i64 {
+    if op == '*' or op == '/' { 2 } else { 1 }
+}
+
+fn apply(nums: mut ref Vec[i64], op: char) {
+    let b = nums.pop().unwrap();
+    let a = nums.pop().unwrap();
+    nums.push(match op {
+        '*' => a * b,
+        '/' => a / b,
+        '+' => a + b,
+        _ => a - b,
+    });
+}
+
+fn evaluate(text: ref String) -> i64 {
+    let mut nums: Vec[i64] = Vec.new();
+    let mut ops: Vec[char] = Vec.new();
+    let mut number = 0;
+    for c in text.chars() {
+        if c.is_ascii_digit() {
+            number = number * 10 + (c as i64 - '0' as i64);
+        } else {
+            nums.push(number);
+            number = 0;
+            while ops.len() > 0 and precedence(ops[ops.len() - 1]) >= precedence(c) {
+                apply(mut nums, ops.pop().unwrap());
+            }
+            ops.push(c);
+        }
+    }
+    nums.push(number);
+    while ops.len() > 0 {
+        apply(mut nums, ops.pop().unwrap());
+    }
+    nums[0]
+}
+
+// The statement read literally: write out the numbers and operators,
+// then apply the leftmost `*` or `/` while there is one, and then the
+// leftmost `+` or `-` while there is one, each time replacing the two
+// numbers and their operator by the result. O(n^2).
+fn clumsy_literal(n: i64) -> i64 {
+    let mut nums: Vec[i64] = Vec.new();
+    let mut ops: Vec[i64] = Vec.new();
+    for x in 0..n {
+        nums.push(n - x);
+        if x < n - 1 {
+            ops.push(x % 4);
+        }
+    }
+    for level in 0..2 {
+        let mut i = 0;
+        while i < ops.len() {
+            let op = ops[i];
+            if (level == 0 and op < 2) or (level == 1 and op >= 2) {
+                let a = nums[i];
+                let b = nums[i + 1];
+                nums[i] = if op == 0 { a * b } else if op == 1 { a / b } else if op == 2 { a + b } else { a - b };
+                nums.remove(i + 1);
+                ops.remove(i);
+            } else {
+                i += 1;
+            }
+        }
+    }
+    nums[0]
+}
+
+// The first group alone: n * (n-1) / (n-2) + (n-3), cut short when n < 4.
+fn first_group(n: i64) -> i64 {
+    let mut term = n;
+    if n > 1 {
+        term = term * (n - 1);
+    }
+    if n > 2 {
+        term = term / (n - 2);
+    }
+    if n > 3 { term + (n - 3) } else { term }
+}
+
+fn arms(n: i64) -> Vec[i64] {
+    vec![clumsy_star(n), clumsy_groups(n), clumsy_formula(n), clumsy_recursive(n), clumsy_parse(n)]
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let names = ["star", "groups", "formula", "recursive", "parse"];
+    let mut failures: Vec[i64] = vec![0; 6];
+    let mut checks = 0;
+    let mut count = 0;
+    let mut sum = 0;
+    let mut check = 0;
+    let mut seed = 10061;
+    for t in 0..360 {
+        let n = if t < 300 { t + 1 } else { 1 + next_random(mut seed) % 10000 };
+        let got = arms(n);
+        count += 1;
+        sum += got[0];
+        check = (check * 31 + got[0]) % 1000000007;
+        let literal = if t < 300 { clumsy_literal(n) } else { 0 };
+        let back = if n > 4 { arms(n - 4) } else { arms(n) };
+        for a in 0..5 {
+            // P1: the statement, for every n up to 300
+            if t < 300 {
+                checks += 1;
+                if got[a] != literal {
+                    failures[0] += 1;
+                }
+            }
+            // P2: from n = 9 on, four more numbers add 4
+            if n >= 9 {
+                checks += 1;
+                if got[a] != back[a] + 4 {
+                    failures[1] += 1;
+                }
+            }
+            // P3: from n = 5 on, the answer is n - 1, n + 1 or n + 2
+            if n >= 5 {
+                checks += 1;
+                let d = got[a] - n;
+                if d != -1 and d != 1 and d != 2 {
+                    failures[2] += 1;
+                }
+            }
+            // P4: never more than the first group alone, and exactly it
+            // when there is no other
+            checks += 1;
+            if got[a] > first_group(n) or (n <= 4 and got[a] != first_group(n)) {
+                failures[3] += 1;
+            }
+            // P5: always positive
+            checks += 1;
+            if got[a] < 1 {
+                failures[4] += 1;
+            }
+            // P6: each arm agrees with at least two of the other four
+            checks += 1;
+            let mut agree = 0;
+            for b in 0..5 {
+                if b != a and got[b] == got[a] {
+                    agree += 1;
+                }
+            }
+            if agree < 2 {
+                failures[5] += 1;
+            }
+        }
+    }
+    let mut total = 0;
+    for p in 0..6 {
+        total += failures[p];
+        if failures[p] > 0 {
+            println(f"P{p + 1}: {failures[p]} failures");
+        }
+    }
+    println(f"{count} values of n: answers sum to {sum}, checksum {check}, {checks} checks over {names.len()} arms: {total} failures");
+}

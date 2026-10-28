@@ -1,0 +1,64 @@
+// LeetCode #1006: Clumsy Factorial -- recursion over groups
+//
+// The expression from `x` down is one group, `x * (x-1) / (x-2)` with the
+// group's sign and then `+ (x-3)`, followed by the same expression from
+// `x - 4` with its first group subtracted. Each call takes one group and
+// leaves the rest to the next. O(n) time, n / 4 calls deep.
+fn clumsy(n: i64) -> i64 {
+    from(n, 1)
+}
+
+fn from(x: i64, sign: i64) -> i64 {
+    if x <= 0 {
+        return 0;
+    }
+    let mut term = x;
+    if x > 1 {
+        term *= x - 1;
+    }
+    if x > 2 {
+        term /= x - 2;
+    }
+    let plus = if x > 3 { x - 3 } else { 0 };
+    sign * term + plus + from(x - 4, -1)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // LeetCode's two examples
+    println(f"n = 4 -> {clumsy(4)}");
+    println(f"n = 10 -> {clumsy(10)}");
+    // every n up to 16, one line
+    let small: Vec[String] = (1..17).map(|n| clumsy(n).to_string()).collect();
+    println(f"n = 1..16 -> {small.join(" ")}");
+    // LeetCode's largest, and the three below it
+    for n in [10000, 9999, 9998, 9997] {
+        println(f"n = {n} -> {clumsy(n)}");
+    }
+    // every n up to 1000
+    let mut sum = 0;
+    let mut check = 0;
+    for n in 1..1001 {
+        let got = clumsy(n);
+        sum += got;
+        check = (check * 31 + got) % 1000000007;
+    }
+    println(f"n = 1..1000: answers sum to {sum}, checksum {check}");
+    // 200 random n up to 10000
+    let mut seed = 1006;
+    sum = 0;
+    check = 0;
+    for _ in 0..200 {
+        let n = 1 + next_random(mut seed) % 10000;
+        let got = clumsy(n);
+        sum += got;
+        check = (check * 31 + got) % 1000000007;
+    }
+    println(f"200 random n up to 10000: answers sum to {sum}, checksum {check}");
+}

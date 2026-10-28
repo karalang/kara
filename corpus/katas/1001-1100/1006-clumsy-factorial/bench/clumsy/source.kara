@@ -1,0 +1,44 @@
+// Benchmark: LeetCode #1006 Clumsy Factorial -- the ★ arm, a stack, on
+// every n up to 10000, LeetCode's largest.
+// Mirrors clumsy.c, .rs, .py and go-seq/.
+
+fn clumsy(n: i64) -> i64 {
+    let mut stack: Vec[i64] = vec![n];
+    let mut op = 0;
+    let mut x = n - 1;
+    while x > 0 {
+        let last = stack.len() - 1;
+        if op == 0 {
+            stack[last] = stack[last] * x;
+        } else if op == 1 {
+            stack[last] = stack[last] / x;
+        } else if op == 2 {
+            stack.push(x);
+        } else {
+            stack.push(-x);
+        }
+        op = (op + 1) % 4;
+        x -= 1;
+    }
+    let mut sum = 0;
+    for t in stack.iter() {
+        sum += t;
+    }
+    sum
+}
+
+fn main() {
+    let rounds = 4;
+    let mut total = 0;
+    let mut check = 0;
+    for r in 0..rounds {
+        // each round walks the n in a different order: up, then down
+        for i in 0..10000 {
+            let n = if r % 2 == 0 { i + 1 } else { 10000 - i };
+            let got = clumsy(n);
+            total += got;
+            check = (check * 31 + got) % 1000000007;
+        }
+    }
+    println(f"{rounds} rounds over every n up to 10000: answers sum to {total}, checksum {check}");
+}

@@ -1,0 +1,72 @@
+// LeetCode #1006: Clumsy Factorial -- a stack
+//
+// Evaluate n * (n-1) / (n-2) + (n-3) - (n-4) * (n-5) / ... as written,
+// with `*` and `/` before `+` and `-`. A stack holds the terms: `*` and
+// `/` fold the next number into the top term, `+` pushes it, `-` pushes
+// its negation, and the answer is the sum of the stack. Division
+// truncates toward zero, and a negated term keeps it so: the top of the
+// stack is divided as it stands. O(n).
+fn clumsy(n: i64) -> i64 {
+    let mut stack: Vec[i64] = vec![n];
+    let mut op = 0;
+    let mut x = n - 1;
+    while x > 0 {
+        let last = stack.len() - 1;
+        if op == 0 {
+            stack[last] = stack[last] * x;
+        } else if op == 1 {
+            stack[last] = stack[last] / x;
+        } else if op == 2 {
+            stack.push(x);
+        } else {
+            stack.push(-x);
+        }
+        op = (op + 1) % 4;
+        x -= 1;
+    }
+    let mut sum = 0;
+    for t in stack.iter() {
+        sum += t;
+    }
+    sum
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // LeetCode's two examples
+    println(f"n = 4 -> {clumsy(4)}");
+    println(f"n = 10 -> {clumsy(10)}");
+    // every n up to 16, one line
+    let small: Vec[String] = (1..17).map(|n| clumsy(n).to_string()).collect();
+    println(f"n = 1..16 -> {small.join(" ")}");
+    // LeetCode's largest, and the three below it
+    for n in [10000, 9999, 9998, 9997] {
+        println(f"n = {n} -> {clumsy(n)}");
+    }
+    // every n up to 1000
+    let mut sum = 0;
+    let mut check = 0;
+    for n in 1..1001 {
+        let got = clumsy(n);
+        sum += got;
+        check = (check * 31 + got) % 1000000007;
+    }
+    println(f"n = 1..1000: answers sum to {sum}, checksum {check}");
+    // 200 random n up to 10000
+    let mut seed = 1006;
+    sum = 0;
+    check = 0;
+    for _ in 0..200 {
+        let n = 1 + next_random(mut seed) % 10000;
+        let got = clumsy(n);
+        sum += got;
+        check = (check * 31 + got) % 1000000007;
+    }
+    println(f"200 random n up to 10000: answers sum to {sum}, checksum {check}");
+}
