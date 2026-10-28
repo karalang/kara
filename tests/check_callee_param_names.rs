@@ -92,3 +92,39 @@ fn main() {
     assert!(!out.status.success(), "{err}");
     assert!(err.contains("expected 'T', found 'i64'"), "{err}");
 }
+
+/// The enclosing item's own parameters a receiver brings into the call
+/// (`VecIntoIter[(K, V)]` inside `impl[K, V]`) are its own, named back as
+/// they were: 16a2058c4a left them unnamed too, and `keys` below was refused
+/// with "cannot infer type parameter 'OutV'" (corpus/apps/cli/mini_collections).
+#[test]
+fn the_callers_parameters_a_receiver_brings_stay_the_callers() {
+    let path = write(
+        "receiver",
+        "struct Dict[K, V] { ks: Vec[K], vs: Vec[V] }
+impl[K: Clone, V: Clone] Dict[K, V] {
+    fn items(ref self) -> Vec[(K, V)] {
+        let mut out: Vec[(K, V)] = Vec.new();
+        let mut i = 0;
+        while i < self.ks.len() {
+            out.push((self.ks[i].clone(), self.vs[i].clone()));
+            i = i + 1;
+        }
+        out
+    }
+    fn keys(ref self) -> Vec[K] {
+        self.items().into_iter().map(|(k, _)| k).collect()
+    }
+}
+fn main() {
+    let d = Dict { ks: [1, 2].to_vec(), vs: [3, 4].to_vec() };
+    println(d.keys().len());
+}
+",
+    );
+    let out = karac(&["check"], &path);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    let out = karac(&["run", "--interp"], &path);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    assert_eq!(text(&out.stdout), "2\n");
+}
