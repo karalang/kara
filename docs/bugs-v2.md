@@ -61,7 +61,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | false-positive | 51 |
 | diagnostics | 39 |
 | missing-feature | 39 |
-| soundness | 22 |
+| soundness | 23 |
 | miscompile | 14 |
 | perf | 14 |
 | run-vs-build | 9 |
@@ -73,7 +73,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 85 |
+| typecheck | 86 |
 | mir | 43 |
 | codegen | 22 |
 | interp | 21 |
@@ -97,7 +97,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-02-39 | 2026-10-02 | runtime+codegen | low | A growth-heavy `Map[i64, i64]` workload runs 1.63x Rust's `HashMap` at equal hashing (SipHash-1-3 both), and ties a plain C linear-probing table: kata:325's bench, 857.5 ms against 520.6 for rust_ovf | — |
 | B-2026-10-24-2 | 2026-10-24 | codegen | low | A long `sort_by` of shuffled pairs on the MIR compiled backend runs 1.5x legacy and about 1.9x Rust after B-2026-10-13-18's partition: kata 252's bench is 0.28-0.30 s against legacy's 0.19 s, and 1,000,000 indices sorted by key 10 times take 0.93-1.05 s against rustc -O's 0.51-0.56 s | — |
 | B-2026-10-24-6 | 2026-10-24 | mir-llvm+runtime | low | After the in-line Map probe (9abd7da4c8), kata 340's sliding window still pays about 200 instructions per `remove` in karac_mir_map_remove_entry (Fenwick upkeep on a holed table, a rebuild on the first hole, and compactions) and 79 per word hash (93 before db4018cfb6), against Rust's ~74, so v2 sits at legacy's 3.6-3.9G instructions where Rust -O ran 1.98G | — |
-| B-2026-10-27-25 | 2026-10-27 | typecheck | low | The `K: Hash + Eq` bound on a table's key is checked only at a Map / Set method call and passes a type parameter, a type-only use and a generic ADT's arguments, where collections.md makes it a bound of every table (default hasher included); the target is a refusal naming the missing impl, with a `karac fix` that adds `#[derive(Hash)]` (owner Thread A) | — |
 | B-2026-10-27-27 | 2026-10-27 | typecheck | medium | A variant pattern spelled through the WRONG enum is accepted and matches the scrutinee's own variant of that name: with `enum Mode { Slow, P(i64) }` and `enum Other { Slow, P(i64) }`, `match Mode.Slow { Other.Slow => .. }` takes the arm, and `Other.P(x)` against `Mode.P(4)` binds x = 4. Only the last segment of a dotted variant path is read. | — |
 | B-2026-10-27-28 | 2026-10-27 | typecheck+mir | low | The standard collections are not `Iterable`: `fn total[C: Iterable[Item = ref i64]](c: C)` refuses `total(vec![1, 2, 3])` with "trait bound `C: Iterable` is not satisfied; `Vec[i64]` does not implement `Iterable`", though design.md § `Iterator` and `Iterable` and library/collections.md say every collection is | — |
 | B-2026-10-27-29 | 2026-10-27 | typecheck+mir | medium | A program function named like a builtin the library calls (`fn panic(s: Str) -> i64 { 7 }`) replaces it inside library bodies: `let o: Option[i64] = None; println(o.expect("boom"))` prints 7 instead of panicking, on `karac run --interp`. | — |
@@ -105,6 +104,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-27-34 | 2026-10-27 | typecheck | medium | A caller's type parameter named like a library generic's own leaks into the library call: inside `fn run_all[T](x: own T)`, `g.spawn(|| { let y = x; 1 })` is refused with "expected 'T', found 'i64': inside this item `T` stands for whatever type the caller picks" (TaskGroup.spawn's own `T` is read as the caller's), while the same program with the parameter renamed `U` checks and runs | — |
 | B-2026-10-27-32 | 2026-10-27 | ownership | medium | A `mut ref S` parameter passed to a static method of a type parameter (`T.make(s)`, the serde `T.deserialize(d)`) is read as a move by `karac check`: inside a loop it is 'moved inside a loop and not assigned again', twice it is 'moved here, used again'. `karac run` accepts the program and prints the right answer. | — |
 | B-2026-10-28-1 | 2026-10-28 | mir-llvm | low | After 45524985d1 a one-worker auto-par build runs the in-order build's instructions, yet 16 of 129 M4b programs still time under 0.9x of it in one 9-run pass (kata 7 0.764, 8 0.727, 125 0.696, 153 0.798, 895 0.79, word_freq_multi 0.787): the code is the same and lands elsewhere, so the floor at one worker is at the resolution of code placement | — |
+| B-2026-10-28-2 | 2026-10-28 | typecheck | low | A generic struct's or enum's declared parameter bounds are not checked where the type is written with arguments: `struct M[T: Hash + Eq] { m: Map[T, i64] }` lets `fn mk() -> M[f64]` and `let x: M[f64] = mk()` pass, and the `f64` key surfaces only at a later `x.m.len()` (reported twice there); the target is a refusal at the written `M[f64]` naming the unmet bound, for every declared bound, not only `Hash + Eq` | — |
 
 ### Relocated
 
@@ -303,6 +303,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-27-22 | mir+mir-llvm | medium | Auto-par is not yet invisible to logging (docs/library/log.md, ruled 2026-10-27): the interim keeps every statement and loop that logs out of auto-pa… | 4fc726165c |
 | B-2026-10-27-23 | resolver | low | Renaming a type imported from a gated library module (`import std.encoding.{DecodeError as DE}`, `import std.log.{Level as L}`) makes a second, disti… | 043ee4083f |
 | B-2026-10-27-24 | parser | low | A match pattern cannot name a variant through a module binding: `import std.log;` then `match record.level { log.Level.Debug => . | ef19081ebc |
+| B-2026-10-27-25 | typecheck | low | The `K: Hash + Eq` bound on a table's key is checked only at a Map / Set method call and passes a type parameter, a type-only use and a generic ADT's… | 918d380872 |
 | B-2026-10-27-26 | interp+mir-llvm | medium | A table key whose PART has a hand-written PartialEq is compared structurally, so `Set[(Name, i64)]` with a case-insensitive `impl PartialEq for Name`… | 20238d4ed5 |
 | B-2026-10-27-30 | mir+mir-llvm | low | Auto-par and std.log, remainder of B-2026-10-27-22: a record an earlier auto-par statement would log can be missing when a later one panics first | 192217f2f9 |
 | B-2026-10-27-31 | cli | high | `karac check` reports no `par` conflict and no MIR borrow error in a program that imports std.log: `import std.log.{info}; fn main() { par { println(… | 7a16756c13 |
