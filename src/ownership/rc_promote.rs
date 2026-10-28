@@ -285,9 +285,17 @@ impl<'a> super::OwnershipChecker<'a> {
         }
         // C3: an element moved out of a collection that still owns it.
         let mut seen = HashSet::new();
-        for span in &self.core_index_moves {
+        // A move in its own copy of a default body was judged against that
+        // copy's non-moves already (B-2026-10-28-12).
+        let copies = self.core_copy_index_moves.iter().map(|s| (s, true));
+        for (span, judged) in self
+            .core_index_moves
+            .iter()
+            .map(|s| (s, false))
+            .chain(copies)
+        {
             let key = SpanKey::from_span(span);
-            if self.core_non_move_sources.contains(&key) || !seen.insert(key) {
+            if (!judged && self.core_non_move_sources.contains(&key)) || !seen.insert(key) {
                 continue;
             }
             let supports_clone = self.moved_type_supports_clone(span);

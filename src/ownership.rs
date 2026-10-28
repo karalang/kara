@@ -1671,6 +1671,10 @@ pub struct OwnershipChecker<'a> {
     /// borrows there, so a use after a move in one copy is matched against
     /// its own copy's entries only (B-2026-10-28-11).
     pub(crate) core_copy_non_moves: HashMap<String, HashSet<SpanKey>>,
+    /// The element moves at default-copy spans that are moves in their own
+    /// copy; `core_move_errors` reports them without the program-wide
+    /// [`Self::core_non_move_sources`] filter (B-2026-10-28-12).
+    pub(crate) core_copy_index_moves: Vec<Span>,
     /// See [`OwnershipCheckResult::core_read_only_index_lets`].
     pub(crate) core_read_only_index_lets: HashSet<SpanKey>,
     /// Index projections the use classifier saw in a moving position
@@ -2120,6 +2124,7 @@ impl<'a> OwnershipChecker<'a> {
             core_non_move_sources: HashSet::new(),
             fn_non_move_sources: HashSet::new(),
             core_copy_non_moves: HashMap::new(),
+            core_copy_index_moves: Vec::new(),
             core_read_only_index_lets: HashSet::new(),
             core_index_moves: Vec::new(),
             core_borrow_moves: Vec::new(),
@@ -3161,13 +3166,18 @@ impl<'a> OwnershipChecker<'a> {
                 }
             }
         }
-        self.core_index_moves.extend(
-            classification
-                .core_index_moves
-                .iter()
-                .filter(|s| !lent.contains(&SpanKey::from_span(s)))
-                .copied(),
-        );
+        // An element move at a span copies of one default body share is kept
+        // back until this copy's own non-moves are known (B-2026-10-28-12).
+        let (copy_index_moves, index_moves): (Vec<Span>, Vec<Span>) = classification
+            .core_index_moves
+            .iter()
+            .filter(|s| !lent.contains(&SpanKey::from_span(s)))
+            .partition(|s| {
+                self.typecheck_result
+                    .default_copy_spans
+                    .contains(&SpanKey::from_span(s))
+            });
+        self.core_index_moves.extend(index_moves);
         self.core_borrow_moves
             .extend(classification.core_borrow_moves.iter().copied());
         self.core_escaping_borrow_captures
@@ -3254,7 +3264,7 @@ impl<'a> OwnershipChecker<'a> {
                 modes.push((name, mode));
             }
         }
-        self.drop_copy_non_move_errors(f, &fn_key, errors_before);
+        self.drop_copy_non_move_errors(f, &fn_key, errors_before, copy_index_moves);
         self.param_modes.insert(fn_key, modes);
     }
 
@@ -3263,9 +3273,19 @@ impl<'a> OwnershipChecker<'a> {
     /// copy's own entries. The strict pipeline's program-wide filter skips
     /// those spans, since another copy may borrow where this one moves
     /// (B-2026-10-28-11).
-    fn drop_copy_non_move_errors(&mut self, f: &Function, fn_key: &str, errors_before: usize) {
+    ///
+    /// Its element moves at such spans (`copy_index_moves`) are kept the same
+    /// way: one copy's `String` `+` borrows `v[1]` where another's `Add`
+    /// moves it (B-2026-10-28-12).
+    fn drop_copy_non_move_errors(
+        &mut self,
+        f: &Function,
+        fn_key: &str,
+        errors_before: usize,
+        copy_index_moves: Vec<Span>,
+    ) {
         let copies = &self.typecheck_result.default_copy_spans;
-        if !core_rules() || copies.is_empty() {
+        if copies.is_empty() {
             return;
         }
         let mut own: HashSet<SpanKey> = self
@@ -3281,6 +3301,14 @@ impl<'a> OwnershipChecker<'a> {
                 own.insert(key);
             }
         });
+        self.core_copy_index_moves.extend(
+            copy_index_moves
+                .into_iter()
+                .filter(|s| !own.contains(&SpanKey::from_span(s))),
+        );
+        if !core_rules() {
+            return;
+        }
         let mut i = errors_before;
         while i < self.errors.len() {
             let e = &self.errors[i];

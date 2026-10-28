@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| false-positive | 52 |
+| false-positive | 53 |
 | diagnostics | 41 |
 | missing-feature | 39 |
 | soundness | 24 |
@@ -73,10 +73,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 90 |
+| typecheck | 91 |
 | mir | 45 |
 | mir-llvm | 27 |
-| ownership | 22 |
+| ownership | 23 |
 | codegen | 22 |
 | interp | 21 |
 | cli | 19 |
@@ -97,6 +97,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-28-1 | 2026-10-28 | mir-llvm | low | After 45524985d1 a one-worker auto-par build runs the in-order build's instructions, yet 16 of 129 M4b programs still time under 0.9x of it in one 9-run pass (kata 7 0.764, 8 0.727, 125 0.696, 153 0.798, 895 0.79, word_freq_multi 0.787): the code is the same and lands elsewhere, so the floor at one worker is at the resolution of code placement | — |
 | B-2026-10-28-3 | 2026-10-28 | mir-llvm | low | A compiled program's run time moves 10-20% with where its hot function lands, and the runtime archive is one of the things that moves it: kata 125 runs about 10% slower whenever karac.main sits at 16 mod 64 (the full archive's larger headers shift user code by 0x3130 bytes), kata 28 KMP 0.41 vs 0.52 s between layouts; no alignment setting tried removes the swing without slowing another program 7-20% | — |
 | B-2026-10-28-10 | 2026-10-28 | mir-llvm | low | With compile_mir linear (B-2026-10-28-6), an auto-par build of apps/cli/mini_inflect still takes about 13 s against 5.3 s with KARAC_AUTO_PAR=0: the in-order #seq twins double the bodies (838 against 404) and LLVM's opt + emission takes 7.4 s against 2.7 s | — |
+| B-2026-10-28-12 | 2026-10-28 | typecheck+ownership | medium | A trait default body copied into two impls rewrites `v[0] + v[1]` by the LAST impl's operand types for every copy, and drops an element move program-wide where any copy borrows it: with `Pair[String]` impl'd after `Pair[Big]` (`impl Add for Big { fn add(own self, rhs: own Big) }`, non-`Copy`), `karac check` passes a body that moves both `Big`s out of their `Vec` while `karac run` refuses it; with the impls the other way and `Big` `Copy`, check and run refuse the `String` copy as a move out of the `Vec` (B-2026-10-28-9 family) | — |
 
 ### Relocated
 

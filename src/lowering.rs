@@ -2502,8 +2502,8 @@ impl<'a> Lowerer<'a> {
             BinOp::And | BinOp::Or | BinOp::Range | BinOp::RangeInclusive => return None,
         };
 
-        let lhs_ty = self.type_at(&left.span)?;
-        let rhs_ty = self.type_at(&right.span)?;
+        let lhs_ty = self.type_at(left)?;
+        let rhs_ty = self.type_at(right)?;
         // Homogeneity: only lower when both operands are the same type.
         // Mixed-numeric arithmetic (`i32 + i64`) currently fails typecheck
         // — once widening is wired, this constraint can relax.
@@ -2627,7 +2627,7 @@ impl<'a> Lowerer<'a> {
             UnaryOp::Not | UnaryOp::BitNot => "not",
             UnaryOp::Deref | UnaryOp::Ref | UnaryOp::MutRef => unreachable!(),
         };
-        let ty = self.type_at(&operand.span)?;
+        let ty = self.type_at(operand)?;
         // Gate each op to its valid operand types (mirrors typechecker rules).
         let ok = match op {
             UnaryOp::Neg => matches!(ty, Type::Int(_) | Type::Float(_)),
@@ -2645,8 +2645,11 @@ impl<'a> Lowerer<'a> {
         ))
     }
 
-    fn type_at(&self, span: &Span) -> Option<&Type> {
-        self.tc.expr_types.get(&SpanKey::from_span(span))
+    /// The operand's own type: copies of one trait default body share its
+    /// spans, and `a + b` is `String` concatenation in one copy and a user
+    /// `Add` in another (B-2026-10-28-12).
+    fn type_at(&self, e: &Expr) -> Option<&Type> {
+        self.tc.expr_type(e)
     }
 }
 
