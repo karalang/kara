@@ -451,7 +451,10 @@ impl Walk<'_, '_> {
         match key.and_then(|k| self.self_modes.get(k)) {
             Some(SelfParam::MutRef) => true,
             Some(_) => false,
-            None => MUTATING_BUILTINS.contains(&method),
+            None => {
+                MUTATING_BUILTINS.contains(&method)
+                    || crate::ast::is_mutating_collection_method(method)
+            }
         }
     }
 

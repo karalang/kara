@@ -1599,9 +1599,16 @@ pub fn collect_assigned_roots_expr(expr: &Expr, out: &mut std::collections::Hash
 /// so it never over-marks a capture (which would wrongly force a by-reference
 /// capture and, in codegen, trip the escaping-closure rejection). B-2026-07-15-13.
 pub fn is_mutating_collection_method(method: &str) -> bool {
+    // The fallible twins (`try_push`, `try_extend_from_slice`) write what
+    // the plain ones do. Without `extend_from_slice` and these, MIR borrowed
+    // the receiver shared, so auto-par ran two appends to one buffer as
+    // tasks at once and check let a `ref` parameter be appended to
+    // (B-2026-10-28-5).
+    let method = method.strip_prefix("try_").unwrap_or(method);
     matches!(
         method,
         "push"
+            | "extend_from_slice"
             | "pop"
             | "push_back"
             | "push_front"

@@ -1784,7 +1784,10 @@ impl Walk<'_, '_> {
         };
         match key.and_then(|k| self.self_modes.get(k)) {
             Some(m) => matches!(m, SelfParam::MutRef),
-            None => by_type().unwrap_or_else(|| MUTATING_BUILTINS.contains(&method)),
+            None => by_type().unwrap_or_else(|| {
+                MUTATING_BUILTINS.contains(&method)
+                    || crate::ast::is_mutating_collection_method(method)
+            }),
         }
     }
 

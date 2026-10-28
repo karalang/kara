@@ -4553,12 +4553,13 @@ impl<'l, 'a> Bx<'l, 'a> {
             },
             alone,
         );
-        // Every argument goes to the twin: a borrow is copied, a value
-        // moved, so this exit has nothing left to drop.
+        // Every argument goes to the twin: a shared borrow is copied, a
+        // value or a `mut ref` (which is not Copy, B-2026-10-28-4) moved, so
+        // this exit has nothing left to drop.
         let ops = arg_locals
             .iter()
             .map(|&l| match self.tys().tcx().kind(self.b.local_ty(l)) {
-                HK::Ref(_) | HK::MutRef(_) => Operand::Copy(Place::local(l)),
+                HK::Ref(_) => Operand::Copy(Place::local(l)),
                 _ => Operand::Move(Place::local(l)),
             })
             .collect();
