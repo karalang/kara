@@ -621,9 +621,7 @@ impl<'a> super::OwnershipChecker<'a> {
         let tc = self.typecheck_result;
         let Some(Type::Named {
             name: enum_name, ..
-        }) = tc
-            .expr_types
-            .get(&crate::resolver::SpanKey::from_span(&scrutinee.span))
+        }) = tc.expr_type(scrutinee)
         else {
             return;
         };

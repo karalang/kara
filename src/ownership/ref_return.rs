@@ -501,9 +501,7 @@ impl<'a> super::OwnershipChecker<'a> {
             // while `n` is live is rejected.
             ExprKind::MethodCall { object, .. } => {
                 let is_ref = matches!(
-                    self.typecheck_result
-                        .expr_types
-                        .get(&SpanKey::from_span(&value.span)),
+                    self.typecheck_result.expr_type(value),
                     Some(Type::Ref(_) | Type::MutRef(_))
                 );
                 if is_ref {
@@ -599,8 +597,7 @@ impl<'a> super::OwnershipChecker<'a> {
         }
         let borrowed = self
             .typecheck_result
-            .expr_types
-            .get(&SpanKey::from_span(&e.span))
+            .expr_type(e)
             .is_some_and(type_holds_ref);
         if borrowed {
             return self.core_return_shape(e, ref_params, ref_locals);
@@ -614,8 +611,7 @@ impl<'a> super::OwnershipChecker<'a> {
         matches!(e.kind, ExprKind::Call { .. } | ExprKind::MethodCall { .. })
             && self
                 .typecheck_result
-                .expr_types
-                .get(&SpanKey::from_span(&e.span))
+                .expr_type(e)
                 .is_some_and(|t| !matches!(t, Type::Error) && !type_holds_ref(t))
     }
 

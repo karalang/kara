@@ -235,8 +235,7 @@ impl<'a> super::OwnershipChecker<'a> {
     ) -> bool {
         let ty = self
             .typecheck_result
-            .expr_types
-            .get(&SpanKey::from_span(&scrutinee.span))
+            .expr_type(scrutinee)
             .cloned()
             .or_else(|| match &scrutinee.kind {
                 ExprKind::Identifier(name) => param_types.get(name).cloned(),
@@ -348,8 +347,7 @@ impl<'a> super::OwnershipChecker<'a> {
             }
         }
         self.typecheck_result
-            .expr_types
-            .get(&SpanKey::from_span(&expr.span))
+            .expr_type(expr)
             .map(|t| self.is_copy_type(t))
             .unwrap_or(false)
     }
@@ -375,8 +373,7 @@ impl<'a> super::OwnershipChecker<'a> {
                 } else {
                     // Local binding not in param_types — consult typecheck result
                     self.typecheck_result
-                        .expr_types
-                        .get(&SpanKey::from_span(&expr.span))
+                        .expr_type(expr)
                         .map(|t| self.is_copy_type(t))
                         .unwrap_or(false)
                 };
@@ -473,8 +470,7 @@ impl<'a> super::OwnershipChecker<'a> {
             ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
                 let field_is_copy = self
                     .typecheck_result
-                    .expr_types
-                    .get(&SpanKey::from_span(&expr.span))
+                    .expr_type(expr)
                     .map(|t| self.is_copy_type(t))
                     .unwrap_or(false);
                 if field_is_copy {
@@ -503,8 +499,7 @@ impl<'a> super::OwnershipChecker<'a> {
             ExprKind::SelfValue if param_usage.contains_key("self") => {
                 let is_copy = self
                     .typecheck_result
-                    .expr_types
-                    .get(&SpanKey::from_span(&expr.span))
+                    .expr_type(expr)
                     .is_some_and(|t| self.is_copy_type(t));
                 if !is_copy {
                     param_usage.insert("self".to_string(), ParamUsage::Consumed);
@@ -890,8 +885,7 @@ impl<'a> super::OwnershipChecker<'a> {
                     && RANGE_VIEW_COPY_OUT_METHODS.contains(&method.as_str())
                     && self
                         .typecheck_result
-                        .expr_types
-                        .get(&SpanKey::from_span(&expr.span))
+                        .expr_type(expr)
                         .is_some_and(crate::ownership::type_is_deeply_owned)
                 {
                     self.end_copied_out_slice_borrow(&SpanKey::from_span(&object.span));
@@ -1257,11 +1251,7 @@ impl<'a> super::OwnershipChecker<'a> {
                     param_usage.insert(name.clone(), ParamUsage::Unused);
                 }
                 let mut closure_param_types: HashMap<String, Type> = param_types.clone();
-                let closure_fn_type = self
-                    .typecheck_result
-                    .expr_types
-                    .get(&SpanKey::from_span(&expr.span))
-                    .cloned();
+                let closure_fn_type = self.typecheck_result.expr_type(expr).cloned();
                 let inferred_param_types: Vec<Option<Type>> = match &closure_fn_type {
                     Some(Type::Function { params, .. })
                     | Some(Type::OnceFunction { params, .. }) => {

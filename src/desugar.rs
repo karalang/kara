@@ -541,6 +541,8 @@ fn synthesize_trait_default_methods(program: &mut Program) {
         return;
     }
 
+    // How many impls each default body is copied into, by trait and method.
+    let mut copies: HashMap<(String, String), usize> = HashMap::new();
     for item in &mut program.items {
         let Item::ImplBlock(imp) = item else { continue };
         // Snapshot the trait's name + type-args, releasing the borrow on
@@ -590,6 +592,32 @@ fn synthesize_trait_default_methods(program: &mut Program) {
             }
             rename_generics_shadowing_the_impls(&mut copy, imp.generic_params.as_ref());
             imp.items.push(ImplItem::Method(Box::new(copy)));
+            *copies
+                .entry((trait_name.clone(), def_fn.name.clone()))
+                .or_default() += 1;
+        }
+    }
+    // The copies keep the default body's spans, so where two impls take one
+    // a span-keyed table can hold only one copy's entry (B-2026-10-28-9).
+    struct Spans<'s>(&'s mut rustc_hash::FxHashSet<crate::resolver::SpanKey>);
+    impl crate::span_visitor::MutVisitor for Spans<'_> {
+        fn span(&mut self, span: &mut crate::token::Span) {
+            self.0.insert(crate::resolver::SpanKey::from_span(span));
+        }
+    }
+    for ((trait_name, method), n) in copies {
+        if n < 2 {
+            continue;
+        }
+        let Some((_, defaults)) = trait_defaults.get(&trait_name) else {
+            continue;
+        };
+        if let Some(def_fn) = defaults.iter().find(|f| f.name == method) {
+            let mut body = def_fn.clone();
+            crate::span_visitor::walk_function_mut_with(
+                &mut body,
+                &mut Spans(&mut program.default_copy_spans),
+            );
         }
     }
 }

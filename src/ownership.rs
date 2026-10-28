@@ -1329,7 +1329,7 @@ pub(crate) fn core_copied_parts(
     };
     // A field of a type parameter's type is not known to copy, so a generic
     // struct's parts are judged conservatively below.
-    let Some(Type::Named { name, .. }) = tc.expr_types.get(&SpanKey::from_span(&value.span)) else {
+    let Some(Type::Named { name, .. }) = tc.expr_type(value) else {
         return None;
     };
     let info = tc.struct_info.get(name)?;
@@ -2717,8 +2717,7 @@ impl<'a> OwnershipChecker<'a> {
             ExprKind::FieldAccess { .. } | ExprKind::TupleIndex { .. }
         ) && self
             .typecheck_result
-            .expr_types
-            .get(&SpanKey::from_span(&expr.span))
+            .expr_type(expr)
             .is_some_and(|t| matches!(t, Type::MutRef(_)))
     }
 
@@ -2749,8 +2748,7 @@ impl<'a> OwnershipChecker<'a> {
             }
         }
         self.typecheck_result
-            .expr_types
-            .get(&SpanKey::from_span(&expr.span))
+            .expr_type(expr)
             .is_some_and(|t| self.type_is_shared_handle(t))
     }
 

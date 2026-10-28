@@ -763,17 +763,14 @@ impl<'a> super::OwnershipChecker<'a> {
         let ExprKind::MethodCall { object, .. } = &method_call.kind else {
             return false;
         };
-        self.typecheck_result
-            .expr_types
-            .get(&SpanKey::from_span(&object.span))
-            .is_some_and(|t| {
-                crate::use_classifier::type_counts_or_copies(
-                    t,
-                    self.typecheck_result,
-                    &|t| self.is_copy_type(t),
-                    true,
-                )
-            })
+        self.typecheck_result.expr_type(object).is_some_and(|t| {
+            crate::use_classifier::type_counts_or_copies(
+                t,
+                self.typecheck_result,
+                &|t| self.is_copy_type(t),
+                true,
+            )
+        })
     }
 
     /// Slice 2 — the receiver-side `BorrowKind` for a `MethodCall`. Drives

@@ -135,11 +135,7 @@ impl<'a> super::OwnershipChecker<'a> {
                 // span is unaliased (unlike LHS chains), so this is the
                 // reliable source of binding types for later consume sites
                 // that walk through chained accesses (`c.inner.unwrap()`).
-                if let Some(rhs_ty) = self
-                    .typecheck_result
-                    .expr_types
-                    .get(&SpanKey::from_span(&value.span))
-                {
+                if let Some(rhs_ty) = self.typecheck_result.expr_type(value) {
                     let rhs_ty = rhs_ty.clone();
                     let rhs_ty = match (annotated_borrow, annotated_mut, rhs_ty) {
                         (true, _, t @ (Type::Ref(_) | Type::MutRef(_))) => t,
@@ -206,8 +202,7 @@ impl<'a> super::OwnershipChecker<'a> {
                     // conservative propagation.
                     let copied_out = self
                         .typecheck_result
-                        .expr_types
-                        .get(&SpanKey::from_span(&value.span))
+                        .expr_type(value)
                         .is_some_and(crate::ownership::type_is_deeply_owned);
                     if copied_out {
                         self.end_copied_out_slice_borrow(&borrow_key);
@@ -376,8 +371,7 @@ impl<'a> super::OwnershipChecker<'a> {
                         // ends at this statement.
                         let copied_out = self
                             .typecheck_result
-                            .expr_types
-                            .get(&SpanKey::from_span(&value.span))
+                            .expr_type(value)
                             .is_some_and(crate::ownership::type_is_deeply_owned);
                         if copied_out {
                             self.end_copied_out_slice_borrow(&borrow_key);
@@ -503,10 +497,7 @@ impl super::OwnershipChecker<'_> {
         let ExprKind::Index { object, index } = &target.kind else {
             return None;
         };
-        let ty = self
-            .typecheck_result
-            .expr_types
-            .get(&SpanKey::from_span(&object.span))?;
+        let ty = self.typecheck_result.expr_type(object)?;
         let ty = match ty {
             Type::Ref(t) | Type::MutRef(t) => t.as_ref(),
             t => t,

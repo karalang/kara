@@ -1585,11 +1585,7 @@ fn try_admit_frozen_freeze<'a>(
     // distinguishes a freeze site from an alias. Positive evidence only: an
     // expression with no recorded type, or one that is not a non-generic
     // `shared struct`, is not admitted and falls through to the ordinary walk.
-    let raw = cx
-        .tc
-        .expr_types
-        .get(&SpanKey::from_span(&value.span))
-        .cloned();
+    let raw = cx.tc.expr_type(value).cloned();
     // Stage 3b step 1 — the uniqueness precondition, computed HERE because
     // this is the last point before the operand is walked (which would add the
     // source's own name to `used_names` and make every freeze look aliased).

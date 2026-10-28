@@ -877,6 +877,12 @@ pub struct Program {
     /// that never names a hasher, which is almost all of them.
     pub container_hashers:
         rustc_hash::FxHashMap<crate::resolver::SpanKey, crate::hasher_kind::HasherKind>,
+    /// The spans of a trait default body that desugaring copied into more
+    /// than one impl (`desugar::synthesize_trait_default_methods`). Every copy
+    /// keeps the trait's spans, so a span-keyed table holds only the last
+    /// impl's entry there; a reader that needs the copy it is looking at
+    /// reads the node's own (B-2026-10-28-9).
+    pub default_copy_spans: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
     /// Lint-level overrides written on a STATEMENT — `#[allow(lint)] stmt;` or
     /// `#[expect(lint)] let x = …;`. Set by the PARSER, and kept beside the
     /// tree for the same reason as [`Self::freeze_spans`] above: the

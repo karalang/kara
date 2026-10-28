@@ -2337,6 +2337,9 @@ pub struct TypeCheckResult {
     /// parameters (impl's, then the function's) in scope where the node was
     /// typed, so a `TypeParam` in its type can be placed by position.
     pub node_types: FxHashMap<crate::ids::NodeId, (Type, u32)>,
+    /// [`crate::ast::Program::default_copy_spans`]: where [`Self::expr_types`]
+    /// holds only one of several copies' types. See [`Self::expr_type`].
+    pub default_copy_spans: FxHashSet<SpanKey>,
     /// See `node_types`. Frame 0 is the empty frame (code outside any
     /// generic function).
     pub node_generic_frames: Vec<Vec<String>>,
@@ -2505,6 +2508,23 @@ pub struct TypeCheckResult {
     /// specialization on monomorphization tuple) pushes
     /// `CompilerQuery` values here.
     pub queries: Vec<crate::queries::CompilerQuery>,
+}
+
+impl TypeCheckResult {
+    /// The type of `e`. At a span several copies of one trait default body
+    /// share ([`Self::default_copy_spans`]), [`Self::expr_types`] holds the
+    /// last impl's type, so the node's own is read: the copy in a
+    /// `Pick[String]` impl moves a `String` where the `Pick[i64]` copy reads
+    /// an `i64` (B-2026-10-28-9).
+    pub fn expr_type(&self, e: &crate::ast::Expr) -> Option<&Type> {
+        let key = SpanKey::from_span(&e.span);
+        if self.default_copy_spans.contains(&key) {
+            if let Some((t, _)) = self.node_types.get(&e.id) {
+                return Some(t);
+            }
+        }
+        self.expr_types.get(&key)
+    }
 }
 
 // ── Cross-module visibility helpers (CR-24 slice 6) ─────────────
@@ -4325,6 +4345,7 @@ impl<'a> TypeChecker<'a> {
             path_call_method_dispatch: self.path_call_method_dispatch,
             call_type_subs: self.call_type_subs,
             node_types,
+            default_copy_spans: self.program.default_copy_spans.clone(),
             node_generic_frames: std::mem::take(&mut self.node_generic_frames),
             node_generic_frame_proj_traits: std::mem::take(
                 &mut self.node_generic_frame_proj_traits,

@@ -389,8 +389,7 @@ impl<'a> UseClassifier<'a> {
     fn is_borrow_typed_expr(&self, expr: &Expr) -> bool {
         let ty = self
             .tc
-            .expr_types
-            .get(&SpanKey::from_span(&expr.span))
+            .expr_type(expr)
             .cloned()
             .or_else(|| match &expr.kind {
                 ExprKind::Identifier(name) => self
@@ -491,7 +490,7 @@ impl<'a> UseClassifier<'a> {
                 .node_types
                 .get(&place.id)
                 .map(|(t, _)| t)
-                .or_else(|| self.tc.expr_types.get(&SpanKey::from_span(&place.span)))
+                .or_else(|| self.tc.expr_type(place))
         };
         while let Some(Type::Ref(t) | Type::MutRef(t)) = ty {
             ty = Some(t);
@@ -610,7 +609,7 @@ impl<'a> UseClassifier<'a> {
                 // at the let-RHS site so subsequent identifier-leaves
                 // have a name-keyed type to fall back on when their
                 // span lookup would alias.
-                if let Some(rhs_ty) = self.tc.expr_types.get(&SpanKey::from_span(&value.span)) {
+                if let Some(rhs_ty) = self.tc.expr_type(value) {
                     // Decompose a tuple destructure field-by-field so each
                     // binding gets its OWN type, not the whole tuple's. Without
                     // this, `let (n, s) = f()` where `f -> (i64, String)` maps
@@ -1139,7 +1138,7 @@ impl<'a> UseClassifier<'a> {
                         .node_types
                         .get(&object.id)
                         .map(|(t, _)| t)
-                        .or_else(|| self.tc.expr_types.get(&SpanKey::from_span(&object.span)))
+                        .or_else(|| self.tc.expr_type(object))
                         .is_some_and(|mut t| {
                             // A borrow is copied, but the method takes what it
                             // points at (B-2026-10-25-25).
@@ -2230,7 +2229,7 @@ impl<'a> UseClassifier<'a> {
         let ExprKind::Index { object, index } = &target.kind else {
             return None;
         };
-        let ty = self.tc.expr_types.get(&SpanKey::from_span(&object.span))?;
+        let ty = self.tc.expr_type(object)?;
         let ty = match ty {
             Type::Ref(t) | Type::MutRef(t) => t.as_ref(),
             t => t,
@@ -2252,7 +2251,7 @@ impl<'a> UseClassifier<'a> {
     /// shared node stored into a `weak` field becomes) is a counted handle
     /// like a `shared` one, so neither moves anything.
     fn core_moves_out_of_place(&self, expr: &Expr) -> bool {
-        match self.tc.expr_types.get(&SpanKey::from_span(&expr.span)) {
+        match self.tc.expr_type(expr) {
             Some(Type::Weak(_)) => false,
             // A value of a written function type is move-only (core §1.1:
             // only a `Fn` closure whose captures are all `Copy` is `Copy`,
@@ -2269,8 +2268,7 @@ impl<'a> UseClassifier<'a> {
 
     fn expr_is_copy(&self, expr: &Expr) -> bool {
         self.tc
-            .expr_types
-            .get(&SpanKey::from_span(&expr.span))
+            .expr_type(expr)
             .map(|t| self.is_copy_type(t))
             .unwrap_or(false)
     }
