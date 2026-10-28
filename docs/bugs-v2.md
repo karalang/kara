@@ -63,7 +63,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | missing-feature | 39 |
 | soundness | 22 |
 | miscompile | 14 |
-| perf | 13 |
+| perf | 14 |
 | run-vs-build | 9 |
 | other | 5 |
 | codegen-gap | 4 |
@@ -77,7 +77,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | mir | 43 |
 | codegen | 22 |
 | interp | 21 |
-| mir-llvm | 20 |
+| mir-llvm | 21 |
 | ownership | 19 |
 | cli | 19 |
 | runtime | 11 |
@@ -88,7 +88,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | lexer | 1 |
 ## Current state
 
-_Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-10-27). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-10-28). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open
 
@@ -97,7 +97,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-02-39 | 2026-10-02 | runtime+codegen | low | A growth-heavy `Map[i64, i64]` workload runs 1.63x Rust's `HashMap` at equal hashing (SipHash-1-3 both), and ties a plain C linear-probing table: kata:325's bench, 857.5 ms against 520.6 for rust_ovf | — |
 | B-2026-10-24-2 | 2026-10-24 | codegen | low | A long `sort_by` of shuffled pairs on the MIR compiled backend runs 1.5x legacy and about 1.9x Rust after B-2026-10-13-18's partition: kata 252's bench is 0.28-0.30 s against legacy's 0.19 s, and 1,000,000 indices sorted by key 10 times take 0.93-1.05 s against rustc -O's 0.51-0.56 s | — |
 | B-2026-10-24-6 | 2026-10-24 | mir-llvm+runtime | low | After the in-line Map probe (9abd7da4c8), kata 340's sliding window still pays about 200 instructions per `remove` in karac_mir_map_remove_entry (Fenwick upkeep on a holed table, a rebuild on the first hole, and compactions) and 79 per word hash (93 before db4018cfb6), against Rust's ~74, so v2 sits at legacy's 3.6-3.9G instructions where Rust -O ran 1.98G | — |
-| B-2026-10-26-17 | 2026-10-26 | mir+mir-llvm | medium | After B-2026-10-26-14's fixes, at 9030678cd0 `KARAC_AUTO_PAR=1` builds still run under the M4b floor of 0.9x their own seq build: on one worker, the default, kata 28 brute_force 0.26x, 191 popcount 0.36x, 4 binary_search_partition 0.56x, 9 palindrome 0.70x and 8 atoi 0.75x (11 programs under 0.9x in all) (CORRECTED: hotel_audit, under on 4 workers in the first three timings, ran 0.97 / 0.98 / 0.92 in three more 21-run timings, inside the swing of a no-site control; no 4-worker app is reliably under at this box's resolution) (Thread B: hotel_audit's two small tasked loops are not the cause either, re-timed in three 31-run passes; the one-worker katas pay for the task form itself, see detail) | — |
 | B-2026-10-27-25 | 2026-10-27 | typecheck | low | The `K: Hash + Eq` bound on a table's key is checked only at a Map / Set method call and passes a type parameter, a type-only use and a generic ADT's arguments, where collections.md makes it a bound of every table (default hasher included); the target is a refusal naming the missing impl, with a `karac fix` that adds `#[derive(Hash)]` (owner Thread A) | — |
 | B-2026-10-27-27 | 2026-10-27 | typecheck | medium | A variant pattern spelled through the WRONG enum is accepted and matches the scrutinee's own variant of that name: with `enum Mode { Slow, P(i64) }` and `enum Other { Slow, P(i64) }`, `match Mode.Slow { Other.Slow => .. }` takes the arm, and `Other.P(x)` against `Mode.P(4)` binds x = 4. Only the last segment of a dotted variant path is read. | — |
 | B-2026-10-27-28 | 2026-10-27 | typecheck+mir | low | The standard collections are not `Iterable`: `fn total[C: Iterable[Item = ref i64]](c: C)` refuses `total(vec![1, 2, 3])` with "trait bound `C: Iterable` is not satisfied; `Vec[i64]` does not implement `Iterable`", though design.md § `Iterator` and `Iterable` and library/collections.md say every collection is | — |
@@ -105,6 +104,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-27-33 | 2026-10-27 | typecheck | medium | A generic function that spawns or sends a value of a type parameter need not require `T: CrossTask`, so a `shared` value enters a task through it: `fn run_all[U](x: own U) -> i64 { let g = TaskGroup.new(); g.spawn(|| { let y = x; 1 }).join() }` passes check and runs with `run_all(Cell { n: 1 })` over a `shared struct Cell`, where design.md § `CrossTask` says such a function "must itself require `T: CrossTask`" and the error is at that generic signature | — |
 | B-2026-10-27-34 | 2026-10-27 | typecheck | medium | A caller's type parameter named like a library generic's own leaks into the library call: inside `fn run_all[T](x: own T)`, `g.spawn(|| { let y = x; 1 })` is refused with "expected 'T', found 'i64': inside this item `T` stands for whatever type the caller picks" (TaskGroup.spawn's own `T` is read as the caller's), while the same program with the parameter renamed `U` checks and runs | — |
 | B-2026-10-27-32 | 2026-10-27 | ownership | medium | A `mut ref S` parameter passed to a static method of a type parameter (`T.make(s)`, the serde `T.deserialize(d)`) is read as a move by `karac check`: inside a loop it is 'moved inside a loop and not assigned again', twice it is 'moved here, used again'. `karac run` accepts the program and prints the right answer. | — |
+| B-2026-10-28-1 | 2026-10-28 | mir-llvm | low | After 45524985d1 a one-worker auto-par build runs the in-order build's instructions, yet 16 of 129 M4b programs still time under 0.9x of it in one 9-run pass (kata 7 0.764, 8 0.727, 125 0.696, 153 0.798, 895 0.79, word_freq_multi 0.787): the code is the same and lands elsewhere, so the floor at one worker is at the resolution of code placement | — |
 
 ### Relocated
 
@@ -278,6 +278,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-26-14 | mir | medium | `KARAC_AUTO_PAR=1` builds ran M4b programs under 0.9x their own seq build: at 905c25d3e2, 22 of 129 on 4 workers (worst apps/pipeline/thumb_render 0.… | 66ebdb23b7 |
 | B-2026-10-26-15 | mir-llvm | high | Two `par` branches that walk one `frozen` graph of a `shared struct` race on its reference counts on the pool (KARAC_THREADS=4): ThreadSanitizer repo… | dfce639b14 |
 | B-2026-10-26-16 | typecheck | low | E_CHAR_AS_NARROW_INT on an ASCII char LITERAL (`'#' as u8`) carries no edit and its help does not name the byte literal `b'#'`, so `karac fix` leaves… | a418ad6c44 |
+| B-2026-10-26-17 | mir+mir-llvm | medium | After B-2026-10-26-14's fixes, at 9030678cd0 `KARAC_AUTO_PAR=1` builds still run under the M4b floor of 0.9x their own seq build: on one worker, the… | 45524985d1 |
 | B-2026-10-26-18 | typecheck | low | `karac check` types a `VecDeque` with `Vec`'s whole method surface, so `d.sort()`, `d.dedup()`, `d.binary_search(x)`, `d.as_slice()` check though col… | 687ad99102 |
 | B-2026-10-27-1 | ownership | low | `karac check` refuses returning a `Vec[(ref Node, i64)]` whose pushed tuples hold a borrow of a parameter ("returned borrowed collection holds an ele… | 098fea6a67 |
 | B-2026-10-27-2 | mir | low | A `par` over calls through a stored callback ignores the callback type's effect clause: `struct Job { run: Fn(i64) -> i64 with reads(Clock) }` and `p… | ee104fa4a0 |
