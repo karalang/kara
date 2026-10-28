@@ -11489,11 +11489,13 @@ fn test_console_writes_are_inferred() {
 }
 
 #[test]
-fn test_stdin_reads_are_inferred() {
+fn test_stdin_reads_are_inferred_as_writes() {
+    // A read advances the stream, and a `StdinProvider`'s methods are
+    // `mut ref self`, so a read writes `Stdin` (core-semantics §14.10).
     assert_infers(
         "fn p() { stdin.read_line(); }",
         "p",
-        EffectVerbKind::Reads,
+        EffectVerbKind::Writes,
         "Stdin",
     );
     // `blocks` alongside, for the same reason `Stdin.lines` carries it: the
@@ -11507,7 +11509,7 @@ fn test_stdin_reads_are_inferred() {
     assert_infers(
         "fn p() { Stdin.read_to_string(); }",
         "p",
-        EffectVerbKind::Reads,
+        EffectVerbKind::Writes,
         "Stdin",
     );
 }
