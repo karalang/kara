@@ -1787,6 +1787,13 @@ impl<'a> super::TypeChecker<'a> {
         if self.env.has_impl("Iterator", name, args) {
             return None;
         }
+        // A library collection's `for` is typed by its own path, which
+        // copies a `Copy` element out (`for x in v` over `Vec[i64]` binds an
+        // `i64`); its `Iterable` impl is there for a generic bound
+        // (B-2026-10-27-28).
+        if Self::for_iterable_is_core_collection(base) || name == "VecDeque" {
+            return None;
+        }
         let (i, _) = self.env.impls.iter().enumerate().find(|(_, imp)| {
             imp.trait_name.as_deref() == Some("Iterable") && &imp.target_type == name
         })?;

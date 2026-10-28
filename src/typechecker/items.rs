@@ -117,8 +117,25 @@ impl<'a> super::TypeChecker<'a> {
     fn preregister_impl_assoc_types(&mut self) {
         let (errors, warnings) = (self.errors.len(), self.warnings.len());
         let items: &[Item] = &self.program.items;
-        for item in items {
-            let Item::ImplBlock(imp) = item else { continue };
+        // `Iterable` impls last: each fills only a slot no other trait's
+        // impl binds (see `check_impl_block_inner`; B-2026-10-27-28).
+        let impls = items
+            .iter()
+            .filter_map(|i| match i {
+                Item::ImplBlock(imp) => Some(imp),
+                _ => None,
+            })
+            .filter(|imp| !Self::impl_trait_is_iterable(imp))
+            .chain(
+                items
+                    .iter()
+                    .filter_map(|i| match i {
+                        Item::ImplBlock(imp) => Some(imp),
+                        _ => None,
+                    })
+                    .filter(|imp| Self::impl_trait_is_iterable(imp)),
+            );
+        for imp in impls {
             let TypeKind::Path(p) = &imp.target_type.kind else {
                 continue;
             };
@@ -154,6 +171,13 @@ impl<'a> super::TypeChecker<'a> {
         }
         self.errors.truncate(errors);
         self.warnings.truncate(warnings);
+    }
+
+    fn impl_trait_is_iterable(imp: &ImplBlock) -> bool {
+        imp.trait_name
+            .as_ref()
+            .and_then(|t| t.segments.last())
+            .is_some_and(|t| t == "Iterable")
     }
 
     pub(super) fn check_items(&mut self) {
@@ -4780,15 +4804,23 @@ impl<'a> super::TypeChecker<'a> {
                     if gp.contains(&type_name) {
                         continue;
                     }
-                    self.env.impl_assoc_types.insert(
-                        (type_name.clone(), binding.name.clone()),
-                        crate::typechecker::env::ImplAssocTypeEntry {
-                            ty: bound_ty,
-                            gat_params,
-                            param_bound_traits,
-                            where_clause: where_clause_clone,
-                        },
-                    );
+                    let entry = crate::typechecker::env::ImplAssocTypeEntry {
+                        ty: bound_ty,
+                        gat_params,
+                        param_bound_traits,
+                        where_clause: where_clause_clone,
+                    };
+                    let key = (type_name.clone(), binding.name.clone());
+                    // The type-keyed table holds one `Item` per type, and a
+                    // collection's is its `IntoIterator` one (`T`); its
+                    // `Iterable` one (`ref T`) is read through the trait
+                    // (`trait_impl_assoc`), so it never displaces another
+                    // trait's (B-2026-10-27-28).
+                    if Self::impl_trait_is_iterable(imp) {
+                        self.env.impl_assoc_types.entry(key).or_insert(entry);
+                    } else {
+                        self.env.impl_assoc_types.insert(key, entry);
+                    }
                 }
             }
         }

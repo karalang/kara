@@ -1493,6 +1493,57 @@ impl[K, V] IntoIterator for SortedMap[K, V] {
     }
 }
 
+// Each collection is borrowed through `Iterable` (design.md § `Iterator`
+// and `Iterable`), so a generic `C: Iterable[Item = ref T]` takes one
+// (B-2026-10-27-28). `iter` is the collection's own.
+impl[T] Iterable for Vec[T] {
+    type Item = ref T;
+
+    fn iter(self) -> impl Iterator[Item = ref T] {
+        self.iter()
+    }
+}
+
+impl[T] Iterable for VecDeque[T] {
+    type Item = ref T;
+
+    fn iter(self) -> impl Iterator[Item = ref T] {
+        self.iter()
+    }
+}
+
+impl[T: Hash + Eq] Iterable for Set[T] {
+    type Item = ref T;
+
+    fn iter(self) -> impl Iterator[Item = ref T] {
+        self.iter()
+    }
+}
+
+impl[T] Iterable for SortedSet[T] {
+    type Item = ref T;
+
+    fn iter(self) -> impl Iterator[Item = ref T] {
+        self.iter()
+    }
+}
+
+impl[K: Hash + Eq, V] Iterable for Map[K, V] {
+    type Item = (ref K, ref V);
+
+    fn iter(self) -> impl Iterator[Item = (ref K, ref V)] {
+        self.iter()
+    }
+}
+
+impl[K, V] Iterable for SortedMap[K, V] {
+    type Item = (ref K, ref V);
+
+    fn iter(self) -> impl Iterator[Item = (ref K, ref V)] {
+        self.iter()
+    }
+}
+
 // `f64.total_cmp` and `f32.total_cmp` named as a value: the comparator
 // `w.sort_by(f64.total_cmp)` passes (docs/library/collections.md). The MIR
 // builder names these for the path (B-2026-10-21-30).
