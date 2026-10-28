@@ -1,0 +1,1712 @@
+$ mlr --icsv --opprint cat data/orders.csv
+id   date       region customer product   qty price status
+1001 2026-01-03 east   acme     widget    4   2.50  shipped
+1002 2026-01-03 west   globex   gadget    1   19.99 shipped
+1003 2026-01-04 east   initech  widget    10  2.50  pending
+1004 2026-01-05 north  acme     gizmo     2   7.25  shipped
+1005 2026-01-05 west   umbrella widget    -   2.50  cancelled
+1006 2026-01-06 east   globex   gizmo     3   7.25  shipped
+1007 2026-01-07 south  acme     gadget    2   19.99 returned
+1008 2026-01-07 north  initech  doohickey 6   0.75  shipped
+1009 2026-01-08 east   umbrella gadget    1   18.5  shipped
+1010 2026-01-09 west   acme     widget    12  2.4   pending
+1011 2026-01-10 south  globex   doohickey 25  0.75  shipped
+1012 2026-01-10 east   Zoë & co gizmo     1   7     shipped
+1013 2026-01-11 north  umbrella widget    8   2.50  returned
+1014 2026-01-12 south  initech  gadget    3   19.99 shipped
+$ mlr --icsv --ojson head -n 2 data/orders.csv
+[
+{
+  "id": 1001,
+  "date": "2026-01-03",
+  "region": "east",
+  "customer": "acme",
+  "product": "widget",
+  "qty": 4,
+  "price": 2.50,
+  "status": "shipped"
+},
+{
+  "id": 1002,
+  "date": "2026-01-03",
+  "region": "west",
+  "customer": "globex",
+  "product": "gadget",
+  "qty": 1,
+  "price": 19.99,
+  "status": "shipped"
+}
+]
+$ mlr --icsv --ojsonl head -n 3 then cut -f id,customer,price data/orders.csv
+{"id": 1001, "customer": "acme", "price": 2.50}
+{"id": 1002, "customer": "globex", "price": 19.99}
+{"id": 1003, "customer": "initech", "price": 2.50}
+$ mlr --icsv --ojson --jvstack --no-jlistwrap head -n 2 then cut -f id,qty data/orders.csv
+{
+  "id": 1001,
+  "qty": 4
+}
+{
+  "id": 1002,
+  "qty": 1
+}
+$ mlr --icsv --ojson --no-jvstack tail -n 2 data/orders.csv
+[
+{"id": 1013, "date": "2026-01-11", "region": "north", "customer": "umbrella", "product": "widget", "qty": 8, "price": 2.50, "status": "returned"},
+{"id": 1014, "date": "2026-01-12", "region": "south", "customer": "initech", "product": "gadget", "qty": 3, "price": 19.99, "status": "shipped"}
+]
+$ mlr --icsv --oxtab head -n 2 data/orders.csv
+id       1001
+date     2026-01-03
+region   east
+customer acme
+product  widget
+qty      4
+price    2.50
+status   shipped
+
+id       1002
+date     2026-01-03
+region   west
+customer globex
+product  gadget
+qty      1
+price    19.99
+status   shipped
+$ mlr --icsv --oxtab --xvright head -n 3 then cut -f id,customer,qty,price data/orders.csv
+id       1001
+customer acme
+qty         4
+price    2.50
+
+id         1002
+customer globex
+qty           1
+price     19.99
+
+id          1003
+customer initech
+qty           10
+price       2.50
+$ mlr --icsv --oxtab --ops colon head -n 1 data/orders.csv
+id:::::::1001
+date:::::2026-01-03
+region:::east
+customer:acme
+product::widget
+qty::::::4
+price::::2.50
+status:::shipped
+$ mlr --c2p --barred head -n 4 then cut -f id,region,qty data/orders.csv
++------+--------+-----+
+| id   | region | qty |
++------+--------+-----+
+| 1001 | east   | 4   |
+| 1002 | west   | 1   |
+| 1003 | east   | 10  |
+| 1004 | north  | 2   |
++------+--------+-----+
+$ mlr --c2p --right head -n 4 then cut -f id,customer,price data/orders.csv
+  id customer price
+1001     acme  2.50
+1002   globex 19.99
+1003  initech  2.50
+1004     acme  7.25
+$ mlr --c2p --barred --right head -n 3 then cut -f id,customer,qty data/orders.csv
++------+----------+-----+
+|   id | customer | qty |
++------+----------+-----+
+| 1001 |     acme |   4 |
+| 1002 |   globex |   1 |
+| 1003 |  initech |  10 |
++------+----------+-----+
+$ mlr --icsv --omd cat data/quoted.csv
+| name | quote | n |
+| --- | --- | --- |
+| plain | hello | 1 |
+| comma, inside | say "hi" | 2 |
+| multi | line one
+line two | 3 |
+| pipe | a\|b | 4 |
+| tab | x	y | 5 |
+| empty |  | 6 |
+$ mlr --icsv --otsv cat data/quoted.csv
+name	quote	n
+plain	hello	1
+comma, inside	say "hi"	2
+multi	line one\nline two	3
+pipe	a|b	4
+tab	x\ty	5
+empty		6
+$ mlr --icsv --ocsv cat data/quoted.csv
+name,quote,n
+plain,hello,1
+"comma, inside","say ""hi""",2
+multi,"line one
+line two",3
+pipe,a|b,4
+tab,x	y,5
+empty,,6
+$ mlr --icsv --ojson cat data/quoted.csv
+[
+{
+  "name": "plain",
+  "quote": "hello",
+  "n": 1
+},
+{
+  "name": "comma, inside",
+  "quote": "say \"hi\"",
+  "n": 2
+},
+{
+  "name": "multi",
+  "quote": "line one\nline two",
+  "n": 3
+},
+{
+  "name": "pipe",
+  "quote": "a|b",
+  "n": 4
+},
+{
+  "name": "tab",
+  "quote": "x\ty",
+  "n": 5
+},
+{
+  "name": "empty",
+  "quote": "",
+  "n": 6
+}
+]
+$ mlr --icsv --ocsv --quote-all head -n 2 then cut -f id,customer data/orders.csv
+"id","customer"
+"1001","acme"
+"1002","globex"
+$ mlr --icsv --odkvp head -n 2 data/orders.csv
+id=1001,date=2026-01-03,region=east,customer=acme,product=widget,qty=4,price=2.50,status=shipped
+id=1002,date=2026-01-03,region=west,customer=globex,product=gadget,qty=1,price=19.99,status=shipped
+$ mlr --icsv --onidx --ofs space head -n 3 then cut -f id,customer,qty data/orders.csv
+1001 acme 4
+1002 globex 1
+1003 initech 10
+$ mlr --c2t head -n 2 data/orders.csv
+id	date	region	customer	product	qty	price	status
+1001	2026-01-03	east	acme	widget	4	2.50	shipped
+1002	2026-01-03	west	globex	gadget	1	19.99	shipped
+$ mlr --c2d head -n 2 data/orders.csv
+id=1001,date=2026-01-03,region=east,customer=acme,product=widget,qty=4,price=2.50,status=shipped
+id=1002,date=2026-01-03,region=west,customer=globex,product=gadget,qty=1,price=19.99,status=shipped
+$ mlr --c2j head -n 1 data/orders.csv
+[
+{
+  "id": 1001,
+  "date": "2026-01-03",
+  "region": "east",
+  "customer": "acme",
+  "product": "widget",
+  "qty": 4,
+  "price": 2.50,
+  "status": "shipped"
+}
+]
+$ mlr --c2n head -n 2 data/orders.csv
+1001 2026-01-03 east acme widget 4 2.50 shipped
+1002 2026-01-03 west globex gadget 1 19.99 shipped
+$ mlr --c2m head -n 2 then cut -f id,status data/orders.csv
+| id | status |
+| --- | --- |
+| 1001 | shipped |
+| 1002 | shipped |
+$ mlr --icsv --opprint cat data/dupes.csv
+a b a_2 a_3
+1 2 3   4
+5 6 7   8
+$ mlr --icsv --implicit-csv-header --ocsv head -n 2 data/orders.csv
+1,2,3,4,5,6,7,8
+id,date,region,customer,product,qty,price,status
+1001,2026-01-03,east,acme,widget,4,2.50,shipped
+$ mlr --icsv --headerless-csv-output --ocsv head -n 2 data/orders.csv
+1001,2026-01-03,east,acme,widget,4,2.50,shipped
+1002,2026-01-03,west,globex,gadget,1,19.99,shipped
+$ mlr --icsv --hi --ho --ocsv tail -n 1 data/visits.csv
+home,ann
+$ mlr --icsv --allow-ragged-csv-input --ojson cat data/ragged.csv
+[
+{
+  "k": "a",
+  "x": 1,
+  "y": 2
+},
+{
+  "k": "b",
+  "x": 3,
+  "y": 4
+},
+{
+  "k": "c",
+  "x": 5
+},
+{
+  "k": "d",
+  "x": 6,
+  "y": 7,
+  "4": 8
+},
+{
+  "k": "e",
+  "x": 9,
+  "y": 10
+}
+]
+$ mlr --icsv --opprint cat data/ragged.csv
+k x y
+a 1 2
+b 3 4
+! mlr: mlr: CSV header/data length mismatch 3 != 2 at filename data/ragged.csv row 4.
+! .
+[exit 1]
+$ mlr --icsv --opprint cat data/ragged.csv data/visits.csv
+k x y
+a 1 2
+b 3 4
+
+page user
+home ann
+cart bob
+home ann
+home cy
+cart bob
+home ann
+! mlr: mlr: CSV header/data length mismatch 3 != 2 at filename data/ragged.csv row 4.
+! .
+[exit 1]
+$ mlr --itsv --ojson cat data/regions.tsv
+[
+{
+  "region": "east",
+  "manager": "Kim\tLee",
+  "target": 1200
+},
+{
+  "region": "west",
+  "manager": "Sam\nO'Neil",
+  "target": 900
+},
+{
+  "region": "north",
+  "manager": "Al\\Bo",
+  "target": 700
+},
+{
+  "region": "south",
+  "manager": "Jo",
+  "target": ""
+}
+]
+$ mlr --itsv --otsv cat data/regions.tsv
+region	manager	target
+east	Kim\tLee	1200
+west	Sam\nO'Neil	900
+north	Al\\Bo	700
+south	Jo	
+$ mlr --itsv --opprint cat data/bad.tsv
+a b c
+1 2 3
+! mlr: mlr: TSV header/data length mismatch 3 != 2 at filename data/bad.tsv line  3.
+! .
+[exit 1]
+$ mlr --itsv --allow-ragged-csv-input --ocsv cat data/bad.tsv
+a,b,c
+1,2,3
+4,5,
+6,7,8
+$ mlr --idkvp --ojson cat data/events.dkvp
+[
+{
+  "t": 1700000000,
+  "user": "ann",
+  "action": "login",
+  "ms": 12
+},
+{
+  "t": 1700000060,
+  "user": "bob",
+  "action": "view",
+  "ms": 48,
+  "page": "home"
+},
+{
+  "t": 1700000090,
+  "user": "ann",
+  "action": "view",
+  "ms": 33,
+  "page": "cart"
+},
+{
+  "t": 1700000120,
+  "user": "cy",
+  "action": "login"
+},
+{
+  "t": 1700000150,
+  "user": "bob",
+  "action": "buy",
+  "ms": 91,
+  "page": "cart",
+  "amount": 19.99
+},
+{
+  "t": 1700000200,
+  "ms": 7,
+  "user": "ann",
+  "action": "logout"
+},
+{
+  "1": "lonely",
+  "user": "dee",
+  "3": "x"
+}
+]
+$ mlr --opprint cat data/events.dkvp
+t          user action ms
+1700000000 ann  login  12
+
+t          user action ms page
+1700000060 bob  view   48 home
+1700000090 ann  view   33 cart
+
+t          user action
+1700000120 cy   login
+
+t          user action ms page amount
+1700000150 bob  buy    91 cart 19.99
+
+t          ms user action
+1700000200 7  ann  logout
+
+1      user 3
+lonely dee  x
+$ mlr --ocsv cat data/events.dkvp
+t,user,action,ms
+1700000000,ann,login,12
+1700000060,bob,view,48,home
+1700000090,ann,view,33,cart
+1700000120,cy,login,
+1700000150,bob,buy,91,cart,19.99
+! mlr: CSV schema change: first keys "t,user,action,ms"; current keys "t,ms,user,action"
+! mlr: exiting due to data error.
+[exit 1]
+$ mlr --ocsv unsparsify data/events.dkvp
+t,user,action,ms,page,amount,1,3
+1700000000,ann,login,12,,,,
+1700000060,bob,view,48,home,,,
+1700000090,ann,view,33,cart,,,
+1700000120,cy,login,,,,,
+1700000150,bob,buy,91,cart,19.99,,
+1700000200,ann,logout,7,,,,
+,dee,,,,,lonely,x
+$ mlr --oxtab unsparsify --fill-with - then head -n 2 data/events.dkvp
+t      1700000000
+user   ann
+action login
+ms     12
+page   -
+amount -
+1      -
+3      -
+
+t      1700000060
+user   bob
+action view
+ms     48
+page   home
+amount -
+1      -
+3      -
+$ mlr --inidx --ocsv cat data/words.txt
+1,2,3
+alpha,beta,gamma
+,delta,epsilon
+zeta,eta,theta,iota
+,,
+kappa,,
+$ mlr --inidx --ifs space --ojson head -n 2 data/words.txt
+[
+{
+  "1": "alpha",
+  "2": "beta",
+  "3": "",
+  "4": "gamma"
+},
+{
+  "1": "",
+  "2": "",
+  "3": "delta\tepsilon"
+}
+]
+$ mlr --inidx --ifs space --repifs --onidx --ofs comma cat data/words.txt
+alpha,beta,gamma
+delta	epsilon
+zeta,eta,theta,iota
+
+kappa
+$ mlr --icsv --ifs semicolon --opprint cat data/semi.csv
+city temp  rain
+Oslo -3.5  0.2
+Lima 22    0
+Pune 31.25 -
+$ mlr --csv --fs semicolon cat data/semi.csv
+city;temp;rain
+Oslo;-3.5;0.2
+Lima;22;0
+Pune;31.25;
+$ mlr --icsv --ojson cat data/nested.csv
+[
+{
+  "id": 1,
+  "user": {
+    "name": "ann",
+    "age": 31
+  },
+  "tags": ["red", "blue"],
+  "geo": {
+    "lat": 59.9,
+    "lon": 10.7
+  },
+  "meta": {},
+  "list": []
+},
+{
+  "id": 2,
+  "user": {
+    "name": "bob",
+    "age": ""
+  },
+  "tags": ["green", ""],
+  "geo": {
+    "lat": 48.8,
+    "lon": 2.35
+  },
+  "meta": {},
+  "list": "x"
+}
+]
+$ mlr --icsv --ojson --no-auto-unflatten head -n 1 data/nested.csv
+[
+{
+  "id": 1,
+  "user.name": "ann",
+  "user.age": 31,
+  "tags.1": "red",
+  "tags.2": "blue",
+  "geo.lat": 59.9,
+  "geo.lon": 10.7,
+  "meta": "{}",
+  "list": "[]"
+}
+]
+$ mlr --icsv --ojsonl cat data/nested.csv
+{"id": 1, "user": {"name": "ann", "age": 31}, "tags": ["red", "blue"], "geo": {"lat": 59.9, "lon": 10.7}, "meta": {}, "list": []}
+{"id": 2, "user": {"name": "bob", "age": ""}, "tags": ["green", ""], "geo": {"lat": 48.8, "lon": 2.35}, "meta": {}, "list": "x"}
+$ mlr --icsv --opprint cat data/header_only.csv
+$ mlr --icsv --ojson cat data/empty.csv
+$ mlr --icsv --ocsv cat data/orders.csv data/customers.csv
+id,date,region,customer,product,qty,price,status
+1001,2026-01-03,east,acme,widget,4,2.50,shipped
+1002,2026-01-03,west,globex,gadget,1,19.99,shipped
+1003,2026-01-04,east,initech,widget,10,2.50,pending
+1004,2026-01-05,north,acme,gizmo,2,7.25,shipped
+1005,2026-01-05,west,umbrella,widget,,2.50,cancelled
+1006,2026-01-06,east,globex,gizmo,3,7.25,shipped
+1007,2026-01-07,south,acme,gadget,2,19.99,returned
+1008,2026-01-07,north,initech,doohickey,6,0.75,shipped
+1009,2026-01-08,east,umbrella,gadget,1,18.5,shipped
+1010,2026-01-09,west,acme,widget,12,2.4,pending
+1011,2026-01-10,south,globex,doohickey,25,0.75,shipped
+1012,2026-01-10,east,Zoë & co,gizmo,1,7,shipped
+1013,2026-01-11,north,umbrella,widget,8,2.50,returned
+1014,2026-01-12,south,initech,gadget,3,19.99,shipped
+! mlr: CSV schema change: first keys "id,date,region,customer,product,qty,price,status"; current keys "customer,tier,since"
+! mlr: exiting due to data error.
+[exit 1]
+$ mlr --icsv --opprint cat data/orders.csv data/customers.csv
+id   date       region customer product   qty price status
+1001 2026-01-03 east   acme     widget    4   2.50  shipped
+1002 2026-01-03 west   globex   gadget    1   19.99 shipped
+1003 2026-01-04 east   initech  widget    10  2.50  pending
+1004 2026-01-05 north  acme     gizmo     2   7.25  shipped
+1005 2026-01-05 west   umbrella widget    -   2.50  cancelled
+1006 2026-01-06 east   globex   gizmo     3   7.25  shipped
+1007 2026-01-07 south  acme     gadget    2   19.99 returned
+1008 2026-01-07 north  initech  doohickey 6   0.75  shipped
+1009 2026-01-08 east   umbrella gadget    1   18.5  shipped
+1010 2026-01-09 west   acme     widget    12  2.4   pending
+1011 2026-01-10 south  globex   doohickey 25  0.75  shipped
+1012 2026-01-10 east   Zoë & co gizmo     1   7     shipped
+1013 2026-01-11 north  umbrella widget    8   2.50  returned
+1014 2026-01-12 south  initech  gadget    3   19.99 shipped
+
+customer tier   since
+acme     gold   2019
+globex   silver 2021
+initech  gold   2018
+hooli    bronze 2024
+umbrella silver 2020
+$ mlr --from data/orders.csv --icsv --opprint head -n 2 then cut -f id,qty
+id   qty
+1001 4
+1002 1
+$ mlr --c2p cat -n -g region then head -n 6 data/orders.csv
+n id   date       region customer product qty price status
+1 1001 2026-01-03 east   acme     widget  4   2.50  shipped
+1 1002 2026-01-03 west   globex   gadget  1   19.99 shipped
+2 1003 2026-01-04 east   initech  widget  10  2.50  pending
+1 1004 2026-01-05 north  acme     gizmo   2   7.25  shipped
+2 1005 2026-01-05 west   umbrella widget  -   2.50  cancelled
+3 1006 2026-01-06 east   globex   gizmo   3   7.25  shipped
+$ mlr --c2p cat -N idx --filename --filenum data/visits.csv data/customers.csv
+filenum filename        idx page user
+1       data/visits.csv 1   home ann
+1       data/visits.csv 2   cart bob
+1       data/visits.csv 3   home ann
+1       data/visits.csv 4   home cy
+1       data/visits.csv 5   cart bob
+1       data/visits.csv 6   home ann
+
+filenum filename           idx customer tier   since
+2       data/customers.csv 7   acme     gold   2019
+2       data/customers.csv 8   globex   silver 2021
+2       data/customers.csv 9   initech  gold   2018
+2       data/customers.csv 10  hooli    bronze 2024
+2       data/customers.csv 11  umbrella silver 2020
+$ mlr --icsv --opprint sort -nr reading data/sensors.csv
+sensor reading              unit note
+s5     n/a                  C    text
+s7     99999999999999999999 raw  past int64
+s6     1_000                raw  underscore
+s4     007                  raw  leading zero
+s5     -                    C    missing
+s6     9223372036854775807  raw  int64 max
+s2     1e3                  C    spike
+s4     0x1F                 raw  hex
+s6     10                   raw  overflows the sum
+s3     5.                   C    ok
+s2     +3                   C    signed
+s1     1.5                  C    ok
+s3     .5                   C    ok
+s7     2.5E-2               C    ok
+s1     -0.25                C    ok
+s7     -12                  C    ok
+$ mlr --icsv --opprint sort -nf reading data/sensors.csv
+sensor reading              unit note
+s7     -12                  C    ok
+s1     -0.25                C    ok
+s7     2.5E-2               C    ok
+s3     .5                   C    ok
+s1     1.5                  C    ok
+s2     +3                   C    signed
+s3     5.                   C    ok
+s6     10                   raw  overflows the sum
+s4     0x1F                 raw  hex
+s2     1e3                  C    spike
+s6     9223372036854775807  raw  int64 max
+s5     -                    C    missing
+s4     007                  raw  leading zero
+s6     1_000                raw  underscore
+s7     99999999999999999999 raw  past int64
+s5     n/a                  C    text
+$ mlr --icsv --opprint sort -f reading data/sensors.csv
+sensor reading              unit note
+s5     -                    C    missing
+s2     +3                   C    signed
+s1     -0.25                C    ok
+s7     -12                  C    ok
+s3     .5                   C    ok
+s4     007                  raw  leading zero
+s4     0x1F                 raw  hex
+s1     1.5                  C    ok
+s6     10                   raw  overflows the sum
+s6     1_000                raw  underscore
+s2     1e3                  C    spike
+s7     2.5E-2               C    ok
+s3     5.                   C    ok
+s6     9223372036854775807  raw  int64 max
+s7     99999999999999999999 raw  past int64
+s5     n/a                  C    text
+$ mlr --icsv --opprint sort -f sensor -nr reading data/sensors.csv
+sensor reading              unit note
+s1     1.5                  C    ok
+s1     -0.25                C    ok
+s2     1e3                  C    spike
+s2     +3                   C    signed
+s3     5.                   C    ok
+s3     .5                   C    ok
+s4     007                  raw  leading zero
+s4     0x1F                 raw  hex
+s5     n/a                  C    text
+s5     -                    C    missing
+s6     1_000                raw  underscore
+s6     9223372036854775807  raw  int64 max
+s6     10                   raw  overflows the sum
+s7     99999999999999999999 raw  past int64
+s7     2.5E-2               C    ok
+s7     -12                  C    ok
+$ mlr --icsv --ojson head -n 8 then cut -f reading data/sensors.csv
+[
+{
+  "reading": 1.5
+},
+{
+  "reading": -0.25
+},
+{
+  "reading": +3
+},
+{
+  "reading": 1e3
+},
+{
+  "reading": .5
+},
+{
+  "reading": 5.
+},
+{
+  "reading": 0x1F
+},
+{
+  "reading": "007"
+}
+]
+$ mlr --icsv --opprint stats1 -a count,sum,mean,min,max -f reading -g sensor data/sensors.csv
+sensor reading_count reading_sum         reading_mean        reading_min reading_max
+s1     2             1.25                0.625               -0.25       1.5
+s2     2             1003                501.5               3           1000
+s3     2             5.5                 2.75                0.5         5
+s4     2             31                  31                  0x1F        007
+s5     1             0                   -                   n/a         n/a
+s6     3             9223372036854776000 4611686018427388000 10          1_000
+s7     3             -11.975             -5.9875             -12         99999999999999999999
+$ mlr --icsv --opprint stats1 -a count,null_count,distinct_count,mode,antimode,minlen,maxlen -f reading,note data/sensors.csv
+reading_count reading_null_count reading_distinct_count reading_mode reading_antimode reading_minlen reading_maxlen note_count note_null_count note_distinct_count note_mode note_antimode note_minlen note_maxlen
+15            1                  15                     1.5          1.5              2              20             16         0               11                  ok        signed        2           17
+$ mlr --icsv --opprint stats1 -a min,max,p50 -f reading data/sensors.csv
+reading_min reading_max reading_p50
+-12         n/a         10
+$ mlr --icsv --opprint sort -f region -nr qty data/orders.csv
+id   date       region customer product   qty price status
+1003 2026-01-04 east   initech  widget    10  2.50  pending
+1001 2026-01-03 east   acme     widget    4   2.50  shipped
+1006 2026-01-06 east   globex   gizmo     3   7.25  shipped
+1009 2026-01-08 east   umbrella gadget    1   18.5  shipped
+1012 2026-01-10 east   Zoë & co gizmo     1   7     shipped
+1013 2026-01-11 north  umbrella widget    8   2.50  returned
+1008 2026-01-07 north  initech  doohickey 6   0.75  shipped
+1004 2026-01-05 north  acme     gizmo     2   7.25  shipped
+1011 2026-01-10 south  globex   doohickey 25  0.75  shipped
+1014 2026-01-12 south  initech  gadget    3   19.99 shipped
+1007 2026-01-07 south  acme     gadget    2   19.99 returned
+1005 2026-01-05 west   umbrella widget    -   2.50  cancelled
+1010 2026-01-09 west   acme     widget    12  2.4   pending
+1002 2026-01-03 west   globex   gadget    1   19.99 shipped
+$ mlr --icsv --opprint sort -nf price -f id then cut -f id,product,price data/orders.csv
+id   product   price
+1008 doohickey 0.75
+1011 doohickey 0.75
+1010 widget    2.4
+1001 widget    2.50
+1003 widget    2.50
+1005 widget    2.50
+1013 widget    2.50
+1012 gizmo     7
+1004 gizmo     7.25
+1006 gizmo     7.25
+1009 gadget    18.5
+1002 gadget    19.99
+1007 gadget    19.99
+1014 gadget    19.99
+$ mlr --icsv --opprint sort -c customer then cut -f id,customer data/orders.csv
+id   customer
+1001 acme
+1004 acme
+1007 acme
+1010 acme
+1002 globex
+1006 globex
+1011 globex
+1003 initech
+1008 initech
+1014 initech
+1005 umbrella
+1009 umbrella
+1013 umbrella
+1012 Zoë & co
+$ mlr --icsv --opprint sort -cr customer then cut -f id,customer data/orders.csv
+id   customer
+1012 Zoë & co
+1005 umbrella
+1009 umbrella
+1013 umbrella
+1003 initech
+1008 initech
+1014 initech
+1002 globex
+1006 globex
+1011 globex
+1001 acme
+1004 acme
+1007 acme
+1010 acme
+$ mlr --icsv --opprint sort -r status -n id then cut -f id,status data/orders.csv
+id   status
+1001 shipped
+1002 shipped
+1004 shipped
+1006 shipped
+1008 shipped
+1009 shipped
+1011 shipped
+1012 shipped
+1014 shipped
+1007 returned
+1013 returned
+1003 pending
+1010 pending
+1005 cancelled
+$ mlr --opprint sort -f page data/events.dkvp
+t          user action ms page
+1700000090 ann  view   33 cart
+
+t          user action ms page amount
+1700000150 bob  buy    91 cart 19.99
+
+t          user action ms page
+1700000060 bob  view   48 home
+
+t          user action ms
+1700000000 ann  login  12
+
+t          user action
+1700000120 cy   login
+
+t          ms user action
+1700000200 7  ann  logout
+
+1      user 3
+lonely dee  x
+$ mlr --icsv --opprint head -n 1 -g region then cut -f id,region,customer data/orders.csv
+id   region customer
+1001 east   acme
+1002 west   globex
+1004 north  acme
+1007 south  acme
+$ mlr --icsv --opprint tail -n 2 -g product then cut -f id,product data/orders.csv
+id   product
+1010 widget
+1013 widget
+1009 gadget
+1014 gadget
+1006 gizmo
+1012 gizmo
+1008 doohickey
+1011 doohickey
+$ mlr --icsv --opprint tac then head -n 3 data/orders.csv
+id   date       region customer product qty price status
+1014 2026-01-12 south  initech  gadget  3   19.99 shipped
+1013 2026-01-11 north  umbrella widget  8   2.50  returned
+1012 2026-01-10 east   Zoë & co gizmo   1   7     shipped
+$ mlr --icsv --ocsv cut -o -f price,id,nosuch data/orders.csv
+price,id
+2.50,1001
+19.99,1002
+2.50,1003
+7.25,1004
+2.50,1005
+7.25,1006
+19.99,1007
+0.75,1008
+18.5,1009
+2.4,1010
+0.75,1011
+7,1012
+2.50,1013
+19.99,1014
+$ mlr --icsv --ocsv cut -x -f date,status,price data/orders.csv
+id,region,customer,product,qty
+1001,east,acme,widget,4
+1002,west,globex,gadget,1
+1003,east,initech,widget,10
+1004,north,acme,gizmo,2
+1005,west,umbrella,widget,
+1006,east,globex,gizmo,3
+1007,south,acme,gadget,2
+1008,north,initech,doohickey,6
+1009,east,umbrella,gadget,1
+1010,west,acme,widget,12
+1011,south,globex,doohickey,25
+1012,east,Zoë & co,gizmo,1
+1013,north,umbrella,widget,8
+1014,south,initech,gadget,3
+$ mlr --icsv --ocsv cut -r -f '^(i|pr)' data/orders.csv
+id,product,price
+1001,widget,2.50
+1002,gadget,19.99
+1003,widget,2.50
+1004,gizmo,7.25
+1005,widget,2.50
+1006,gizmo,7.25
+1007,gadget,19.99
+1008,doohickey,0.75
+1009,gadget,18.5
+1010,widget,2.4
+1011,doohickey,0.75
+1012,gizmo,7
+1013,widget,2.50
+1014,gadget,19.99
+$ mlr --icsv --ocsv cut -r -f '"^ID$"i,qty' then head -n 3 data/orders.csv
+id,qty
+1001,4
+1002,1
+1003,10
+$ mlr --icsv --ocsv cut -x -r -f e then head -n 2 data/orders.csv
+id,product,qty,status
+1001,widget,4,shipped
+1002,gadget,1,shipped
+$ mlr --opprint having-fields --at-least ms,page data/events.dkvp
+t          user action ms page
+1700000060 bob  view   48 home
+1700000090 ann  view   33 cart
+
+t          user action ms page amount
+1700000150 bob  buy    91 cart 19.99
+$ mlr --opprint having-fields --which-are t,user,action data/events.dkvp
+t          user action
+1700000120 cy   login
+$ mlr --opprint having-fields --at-most t,user,action,ms data/events.dkvp
+t          user action ms
+1700000000 ann  login  12
+
+t          user action
+1700000120 cy   login
+
+t          ms user action
+1700000200 7  ann  logout
+$ mlr --opprint having-fields --any-matching '^am' data/events.dkvp
+t          user action ms page amount
+1700000150 bob  buy    91 cart 19.99
+$ mlr --opprint having-fields --all-matching '^[a-z]+$' data/events.dkvp
+t          user action ms
+1700000000 ann  login  12
+
+t          user action ms page
+1700000060 bob  view   48 home
+1700000090 ann  view   33 cart
+
+t          user action
+1700000120 cy   login
+
+t          user action ms page amount
+1700000150 bob  buy    91 cart 19.99
+
+t          ms user action
+1700000200 7  ann  logout
+$ mlr --opprint having-fields --none-matching '^p' data/events.dkvp
+t          user action ms
+1700000000 ann  login  12
+
+t          user action
+1700000120 cy   login
+
+t          ms user action
+1700000200 7  ann  logout
+
+1      user 3
+lonely dee  x
+$ mlr --icsv --opprint decimate -n 4 data/orders.csv
+id   date       region customer product   qty price status
+1004 2026-01-05 north  acme     gizmo     2   7.25  shipped
+1008 2026-01-07 north  initech  doohickey 6   0.75  shipped
+1012 2026-01-10 east   Zoë & co gizmo     1   7     shipped
+$ mlr --icsv --opprint decimate -n 2 -b -g region then cut -f id,region data/orders.csv
+id   region
+1001 east
+1002 west
+1004 north
+1006 east
+1007 south
+1010 west
+1012 east
+1013 north
+1014 south
+$ mlr --icsv --opprint grep -i ACME data/orders.csv
+id   date       region customer product qty price status
+1001 2026-01-03 east   acme     widget  4   2.50  shipped
+1004 2026-01-05 north  acme     gizmo   2   7.25  shipped
+1007 2026-01-07 south  acme     gadget  2   19.99 returned
+1010 2026-01-09 west   acme     widget  12  2.4   pending
+$ mlr --icsv --opprint grep -v shipped data/orders.csv
+id   date       region customer product qty price status
+1003 2026-01-04 east   initech  widget  10  2.50  pending
+1005 2026-01-05 west   umbrella widget  -   2.50  cancelled
+1007 2026-01-07 south  acme     gadget  2   19.99 returned
+1010 2026-01-09 west   acme     widget  12  2.4   pending
+1013 2026-01-11 north  umbrella widget  8   2.50  returned
+$ mlr --icsv --opprint grep -a '^100[3-5],' data/orders.csv
+id   date       region customer product qty price status
+1003 2026-01-04 east   initech  widget  10  2.50  pending
+1004 2026-01-05 north  acme     gizmo   2   7.25  shipped
+1005 2026-01-05 west   umbrella widget  -   2.50  cancelled
+$ mlr --icsv --opprint grep region=north data/orders.csv
+id   date       region customer product   qty price status
+1004 2026-01-05 north  acme     gizmo     2   7.25  shipped
+1008 2026-01-07 north  initech  doohickey 6   0.75  shipped
+1013 2026-01-11 north  umbrella widget    8   2.50  returned
+$ mlr --icsv --opprint count data/orders.csv
+count
+14
+$ mlr --icsv --opprint count -g region data/orders.csv
+region count
+east   5
+west   3
+north  3
+south  3
+$ mlr --icsv --opprint count -n -g customer data/orders.csv
+count
+5
+$ mlr --icsv --opprint count -o orders -g region,product data/orders.csv
+region product   orders
+east   widget    2
+west   gadget    1
+north  gizmo     1
+west   widget    2
+east   gizmo     2
+south  gadget    2
+north  doohickey 1
+east   gadget    1
+south  doohickey 1
+north  widget    1
+$ mlr --icsv --opprint count-distinct -f region,status data/orders.csv
+region status    count
+east   shipped   4
+west   shipped   1
+east   pending   1
+north  shipped   2
+west   cancelled 1
+south  returned  1
+west   pending   1
+south  shipped   2
+north  returned  1
+$ mlr --icsv --opprint count-distinct -n -f customer data/orders.csv
+count
+5
+$ mlr --icsv --opprint count-distinct -u -f region,product data/orders.csv
+field   value     count
+region  east      5
+region  west      3
+region  north     3
+region  south     3
+product widget    5
+product gadget    4
+product gizmo     3
+product doohickey 2
+$ mlr --icsv --opprint count-similar -g customer then cut -f id,customer,count data/orders.csv
+id   customer count
+1001 acme     4
+1004 acme     4
+1007 acme     4
+1010 acme     4
+1002 globex   3
+1006 globex   3
+1011 globex   3
+1003 initech  3
+1008 initech  3
+1014 initech  3
+1005 umbrella 3
+1009 umbrella 3
+1013 umbrella 3
+1012 Zoë & co 1
+$ mlr --icsv --opprint uniq -g region,status data/orders.csv
+region status
+east   shipped
+west   shipped
+east   pending
+north  shipped
+west   cancelled
+south  returned
+west   pending
+south  shipped
+north  returned
+$ mlr --icsv --opprint uniq -g region -c data/orders.csv
+region count
+east   5
+west   3
+north  3
+south  3
+$ mlr --icsv --opprint uniq -g region -n data/orders.csv
+count
+4
+$ mlr --icsv --opprint uniq -x page -c data/visits.csv
+user count
+ann  3
+bob  2
+cy   1
+$ mlr --icsv --opprint uniq -a data/visits.csv
+page user
+home ann
+cart bob
+home cy
+$ mlr --icsv --opprint uniq -a -c data/visits.csv
+count page user
+3     home ann
+2     cart bob
+1     home cy
+$ mlr --icsv --opprint uniq -a -n data/visits.csv
+count
+3
+$ mlr --icsv --opprint group-by region data/orders.csv
+id   date       region customer product   qty price status
+1001 2026-01-03 east   acme     widget    4   2.50  shipped
+1003 2026-01-04 east   initech  widget    10  2.50  pending
+1006 2026-01-06 east   globex   gizmo     3   7.25  shipped
+1009 2026-01-08 east   umbrella gadget    1   18.5  shipped
+1012 2026-01-10 east   Zoë & co gizmo     1   7     shipped
+1002 2026-01-03 west   globex   gadget    1   19.99 shipped
+1005 2026-01-05 west   umbrella widget    -   2.50  cancelled
+1010 2026-01-09 west   acme     widget    12  2.4   pending
+1004 2026-01-05 north  acme     gizmo     2   7.25  shipped
+1008 2026-01-07 north  initech  doohickey 6   0.75  shipped
+1013 2026-01-11 north  umbrella widget    8   2.50  returned
+1007 2026-01-07 south  acme     gadget    2   19.99 returned
+1011 2026-01-10 south  globex   doohickey 25  0.75  shipped
+1014 2026-01-12 south  initech  gadget    3   19.99 shipped
+$ mlr --opprint group-like data/events.dkvp
+t          user action ms
+1700000000 ann  login  12
+
+t          user action ms page
+1700000060 bob  view   48 home
+1700000090 ann  view   33 cart
+
+t          user action
+1700000120 cy   login
+
+t          user action ms page amount
+1700000150 bob  buy    91 cart 19.99
+
+t          ms user action
+1700000200 7  ann  logout
+
+1      user 3
+lonely dee  x
+$ mlr --icsv --opprint top -n 2 -f price -g region data/orders.csv
+region top_idx price_top
+east   1       18.5
+east   2       7.25
+west   1       19.99
+west   2       2.50
+north  1       7.25
+north  2       2.50
+south  1       19.99
+south  2       19.99
+$ mlr --icsv --opprint top -n 3 -f qty --min -o rank data/orders.csv
+rank qty_top
+1    1
+2    1
+3    1
+$ mlr --icsv --opprint top -f qty,price data/orders.csv
+top_idx qty_top price_top
+1       -       19.99
+$ mlr --icsv --opprint top -n 1 -f price -g product -a data/orders.csv
+id   date       region customer product   qty price status
+1013 2026-01-11 north  umbrella widget    8   2.50  returned
+1014 2026-01-12 south  initech  gadget    3   19.99 shipped
+1006 2026-01-06 east   globex   gizmo     3   7.25  shipped
+1011 2026-01-10 south  globex   doohickey 25  0.75  shipped
+$ mlr --icsv --opprint stats1 -a count,sum,mean,min,max -f qty,price -g region data/orders.csv
+region qty_count qty_sum qty_mean          qty_min qty_max price_count price_sum          price_mean         price_min price_max
+east   5         19      3.8               1       10      5           37.75              7.55               2.5       18.5
+west   2         13      6.5               1       12      3           24.889999999999997 8.296666666666665  2.4       19.99
+north  3         16      5.333333333333333 2       8       3           10.5               3.5                0.75      7.25
+south  3         30      10                2       25      3           40.73              13.576666666666666 0.75      19.99
+$ mlr --icsv --opprint stats1 -a p10,p25.2,median,p75,p90 -f qty,price data/orders.csv
+qty_p10 qty_p25.2 qty_median qty_p75 qty_p90 price_p10 price_p25.2 price_median price_p75 price_p90
+1       2         3          8       12      0.75      2.50        7            18.5      19.99
+$ mlr --icsv --opprint stats1 -i -a p25,median,p75 -f qty,price data/orders.csv
+qty_p25 qty_median qty_p75 price_p25 price_median price_p75
+2       3          8       2.5       4.75         15.6875
+$ mlr --icsv --oxtab stats1 -a var,stddev,meaneb,kurtosis,mad -f qty,price data/orders.csv
+qty_var        45.5
+qty_stddev     6.745368781616021
+qty_meaneb     1.8708286933869707
+qty_kurtosis   2.863160648874935
+qty_mad        4.769230769230769
+price_var      61.60696318681317
+price_stddev   7.8490103316796045
+price_meaneb   2.097736249028141
+price_kurtosis -1.2126607392297266
+price_mad      6.562244897959183
+$ mlr --icsv --opprint stats1 -a mean,var -f qty -g product,region data/orders.csv
+product   region qty_mean qty_var
+widget    east   7        18
+gadget    west   1        -
+gizmo     north  2        -
+widget    west   12       -
+gizmo     east   2        2
+gadget    south  2.5      0.5
+doohickey north  6        -
+gadget    east   1        -
+doohickey south  25       -
+widget    north  8        -
+$ mlr --icsv --opprint stats1 -a sum,count --fr '^(qty|price)$' -g status data/orders.csv
+status    qty_sum qty_count price_sum         price_count
+shipped   46      9         83.97999999999999 9
+pending   22      2         4.9               2
+cancelled 0       0         2.5               1
+returned  10      2         22.49             2
+$ mlr --icsv --opprint stats1 -a max --fx '^(id|qty|price)$' data/orders.csv
+date_max   region_max customer_max product_max status_max
+2026-01-12 west       umbrella     widget      shipped
+$ mlr --icsv --opprint stats1 -a first -f qty data/orders.csv
+! mlr stats1: accumulator "first" not found.
+[exit 1]
+$ mlr --icsv --opprint stats1 -f qty data/orders.csv
+! mlr stats1: -a option is required.
+! Please see mlr stats1 --help for more information.
+[exit 1]
+$ mlr --icsv --opprint merge-fields -a min,max,sum -f q1,q2,q3,q4 -o all data/scores.csv
+name all_min all_max all_sum
+ann  7       9       24
+bob  5       n/a     18
+cy   8.5     10      37
+dee  2       0x10    25
+$ mlr --icsv --opprint merge-fields -k -a sum,count,mean -r '^q[12]$' -o h1 data/scores.csv
+name q1 q2   q3 q4  h1_sum h1_count h1_mean
+ann  7  9    -  8   16     2        8
+bob  5  6    7  n/a 11     2        5.5
+cy   9  9.5  10 8.5 18.5   2        9.25
+dee  4  0x10 3  2   20     2        10
+$ mlr --icsv --opprint merge-fields -a sum,max -c _in,_out data/flows.csv
+host bytes_sum bytes_max pkts_sum pkts_max
+a    350       250       10       6
+b    300       300       21       12
+c    40        40        2        2
+$ mlr --icsv --opprint merge-fields -k -a sum -c bytes_,pkts_ data/flows.csv
+host bytes_in bytes_out pkts_in pkts_out in_sum out_sum
+a    100      250       4       6        104    256
+b    300      -         9       12       309    12
+c    0        40        0       2        0      42
+$ mlr --icsv --opprint merge-fields -a nope -f q1 -o x data/scores.csv
+! mlr merge-fields: accumulator "nope" not found.
+!
+[exit 1]
+$ mlr --icsv --opprint fraction -f price data/orders.csv
+id   date       region customer product   qty price status    price_fraction
+1001 2026-01-03 east   acme     widget    4   2.50  shipped   0.021954860806182492
+1002 2026-01-03 west   globex   gadget    1   19.99 shipped   0.17555106700623518
+1003 2026-01-04 east   initech  widget    10  2.50  pending   0.021954860806182492
+1004 2026-01-05 north  acme     gizmo     2   7.25  shipped   0.06366909633792922
+1005 2026-01-05 west   umbrella widget    -   2.50  cancelled 0.021954860806182492
+1006 2026-01-06 east   globex   gizmo     3   7.25  shipped   0.06366909633792922
+1007 2026-01-07 south  acme     gadget    2   19.99 returned  0.17555106700623518
+1008 2026-01-07 north  initech  doohickey 6   0.75  shipped   0.006586458241854747
+1009 2026-01-08 east   umbrella gadget    1   18.5  shipped   0.16246596996575044
+1010 2026-01-09 west   acme     widget    12  2.4   pending   0.02107666637393519
+1011 2026-01-10 south  globex   doohickey 25  0.75  shipped   0.006586458241854747
+1012 2026-01-10 east   Zoë & co gizmo     1   7     shipped   0.061473610257310976
+1013 2026-01-11 north  umbrella widget    8   2.50  returned  0.021954860806182492
+1014 2026-01-12 south  initech  gadget    3   19.99 shipped   0.17555106700623518
+$ mlr --icsv --opprint fraction -f price -g region -p -c then cut -f id,region,price,price_cumulative_percent data/orders.csv
+id   region price price_cumulative_percent
+1001 east   2.50  6.622516556291391
+1002 west   19.99 80.31337886701488
+1003 east   2.50  13.245033112582782
+1004 north  7.25  69.04761904761905
+1005 west   2.50  90.35757332261953
+1006 east   7.25  32.450331125827816
+1007 south  19.99 49.079302725263936
+1008 north  0.75  76.19047619047619
+1009 east   18.5  81.45695364238411
+1010 west   2.4   100
+1011 south  0.75  50.92069727473607
+1012 east   7     100
+1013 north  2.50  100
+1014 south  19.99 100
+$ mlr --icsv --opprint fraction -f bytes_in,pkts_out data/flows.csv
+host bytes_in bytes_out pkts_in pkts_out bytes_in_fraction pkts_out_fraction
+a    100      250       4       6        0.25              0.3
+b    300      -         9       12       0.75              0.6
+c    0        40        0       2        0                 0.1
+$ mlr --icsv --opprint step -a delta,shift,from-first,ratio,rsum,rprod,counter -f q1 data/scores.csv
+name q1 q2   q3 q4  q1_delta q1_shift q1_from_first q1_ratio           q1_rsum q1_rprod q1_counter
+ann  7  9    -  8   0        -        0             1                  7       7        1
+bob  5  6    7  n/a -2       7        -2            0.7142857142857143 12      35       2
+cy   9  9.5  10 8.5 4        5        2             1.8                21      315      3
+dee  4  0x10 3  2   -5       9        -3            0.4444444444444444 25      1260     4
+$ mlr --icsv --opprint step -a delta,rsum,counter -f qty -g region then cut -f id,region,qty,qty_delta,qty_rsum,qty_counter data/orders.csv
+id   region qty qty_delta qty_rsum qty_counter
+1001 east   4   0         4        1
+1002 west   1   0         1        1
+1003 east   10  6         14       2
+1004 north  2   0         2        1
+1005 west   -   -         -        -
+1006 east   3   -7        17       3
+1007 south  2   0         2        1
+1008 north  6   4         8        2
+1009 east   1   -2        18       4
+1010 west   12  12        13       2
+1011 south  25  23        27       2
+1012 east   1   0         19       5
+1013 north  8   2         16       3
+1014 south  3   -22       30       3
+$ mlr --icsv --opprint step -a shift_lag,shift_lead -f price then cut -f id,price,price_shift_lag,price_shift_lead data/orders.csv
+id   price price_shift_lag price_shift_lead
+1001 2.50  -               19.99
+1002 19.99 2.50            2.50
+1003 2.50  19.99           7.25
+1004 7.25  2.50            2.50
+1005 2.50  7.25            7.25
+1006 7.25  2.50            19.99
+1007 19.99 7.25            0.75
+1008 0.75  19.99           18.5
+1009 18.5  0.75            2.4
+1010 2.4   18.5            0.75
+1011 0.75  2.4             7
+1012 7     0.75            2.50
+1013 2.50  7               19.99
+1014 19.99 2.50            -
+$ mlr --icsv --opprint step -a ewma -d 0.1,0.9 -f q1 data/scores.csv
+name q1 q2   q3 q4  q1_ewma_0.1        q1_ewma_0.9
+ann  7  9    -  8   7                  7
+bob  5  6    7  n/a 6.8                5.2
+cy   9  9.5  10 8.5 7.0200000000000005 8.62
+dee  4  0x10 3  2   6.718000000000001  4.462
+$ mlr --icsv --opprint step -a ewma -d 0.5 -o half -f q1,q3 data/scores.csv
+name q1 q2   q3 q4  q1_ewma_half q3_ewma_half
+ann  7  9    -  8   7            -
+bob  5  6    7  n/a 6            4
+cy   9  9.5  10 8.5 7.5          7
+dee  4  0x10 3  2   5.75         5
+$ mlr --icsv --opprint step -a slwin_1_1,shift_lead -f price -g region then cut -r -f '^(id|region|price)' data/orders.csv
+id   region price price_1_1          price_shift_lead
+1001 east   2.50  2.5                2.50
+1002 west   19.99 11.245             2.50
+1003 east   2.50  4.083333333333333  7.25
+1004 north  7.25  4                  0.75
+1006 east   7.25  9.416666666666666  18.5
+1005 west   2.50  8.296666666666665  2.4
+1007 south  19.99 10.37              0.75
+1009 east   18.5  10.916666666666666 7
+1008 north  0.75  3.5                2.50
+1011 south  0.75  13.576666666666666 19.99
+1010 west   2.4   2.45               -
+1012 east   7     12.75              -
+1013 north  2.50  1.625              -
+1014 south  19.99 10.37              -
+$ mlr --icsv --opprint step -a slwin_0_2 -f q2 data/scores.csv
+name q1 q2   q3 q4  q2_0_2
+ann  7  9    -  8   8.166666666666666
+bob  5  6    7  n/a 10.5
+cy   9  9.5  10 8.5 12.75
+dee  4  0x10 3  2   16
+$ mlr --icsv --opprint step -a median -f q1 data/scores.csv
+! mlr step: stepper "median" not found.
+[exit 1]
+$ mlr --icsv --opprint nest --ivar ';' -f id then cut -f region,id data/orders.csv
+id   region
+1001 east
+1002 west
+1003 east
+1004 north
+1005 west
+1006 east
+1007 south
+1008 north
+1009 east
+1010 west
+1011 south
+1012 east
+1013 north
+1014 south
+$ mlr --icsv --opprint nest --explode --values --across-records -f tags --nested-fs ';' data/tags.csv
+id tags  attrs
+1  red   size:L;fit:slim
+1  green size:L;fit:slim
+1  blue  size:L;fit:slim
+2  solo  color:red
+3  -     -
+$ mlr --icsv --opprint nest --explode --values --across-fields -f tags --nested-fs semicolon data/tags.csv
+id tags_1 tags_2 tags_3 attrs
+1  red    green  blue   size:L;fit:slim
+
+id tags_1 attrs
+2  solo   color:red
+3  -      -
+$ mlr --icsv --ojson nest --explode --pairs --across-records -f attrs --nested-fs ';' --nested-ps : data/tags.csv
+[
+{
+  "id": 1,
+  "tags": "red;green;blue",
+  "size": "L"
+},
+{
+  "id": 1,
+  "tags": "red;green;blue",
+  "fit": "slim"
+},
+{
+  "id": 2,
+  "tags": "solo",
+  "color": "red"
+}
+]
+$ mlr --icsv --ojson nest --explode --pairs --across-fields -f attrs --nested-fs ';' --nested-ps : data/tags.csv
+[
+{
+  "id": 1,
+  "tags": "red;green;blue",
+  "size": "L",
+  "fit": "slim"
+},
+{
+  "id": 2,
+  "tags": "solo",
+  "color": "red"
+},
+{
+  "id": 3,
+  "tags": ""
+}
+]
+$ mlr --icsv --opprint nest --evar ';' -f tags then nest --ivar '|' -f tags data/tags.csv
+id tags           attrs
+1  red|green|blue size:L;fit:slim
+2  solo           color:red
+3  -              -
+$ mlr --icsv --opprint nest --explode --values --across-fields -f tags then nest --implode --values --across-fields -f tags --nested-fs + data/tags.csv
+id tags           attrs
+1  red+green+blue size:L;fit:slim
+2  solo           color:red
+3  -              -
+$ mlr --icsv --ocsv reorder -f status,id then head -n 2 data/orders.csv
+status,id,date,region,customer,product,qty,price
+shipped,1001,2026-01-03,east,acme,widget,4,2.50
+shipped,1002,2026-01-03,west,globex,gadget,1,19.99
+$ mlr --icsv --ocsv reorder -e -f id,date then head -n 2 data/orders.csv
+region,customer,product,qty,price,status,id,date
+east,acme,widget,4,2.50,shipped,1001,2026-01-03
+west,globex,gadget,1,19.99,shipped,1002,2026-01-03
+$ mlr --icsv --ocsv reorder -f qty -a region then head -n 2 data/orders.csv
+id,date,region,qty,customer,product,price,status
+1001,2026-01-03,east,4,acme,widget,2.50,shipped
+1002,2026-01-03,west,1,globex,gadget,19.99,shipped
+$ mlr --icsv --ocsv reorder -r '^[pq]' -b id then head -n 2 data/orders.csv
+product,qty,price,id,date,region,customer,status
+widget,4,2.50,1001,2026-01-03,east,acme,shipped
+gadget,1,19.99,1002,2026-01-03,west,globex,shipped
+$ mlr --icsv --ocsv reorder -r '^[dp]' then head -n 2 data/orders.csv
+date,product,price,id,region,customer,qty,status
+2026-01-03,widget,2.50,1001,east,acme,4,shipped
+2026-01-03,gadget,19.99,1002,west,globex,1,shipped
+$ mlr --icsv --ocsv rename id,order,qty,quantity then head -n 2 data/orders.csv
+order,date,region,customer,product,quantity,price,status
+1001,2026-01-03,east,acme,widget,4,2.50,shipped
+1002,2026-01-03,west,globex,gadget,1,19.99,shipped
+$ mlr --icsv --ocsv rename qty,price then head -n 2 data/orders.csv
+id,date,region,customer,product,price,status
+1001,2026-01-03,east,acme,widget,4,shipped
+1002,2026-01-03,west,globex,gadget,1,shipped
+$ mlr --icsv --ocsv rename -r '^(.)r(.*)$,\2_\1' then head -n 2 data/orders.csv
+id,date,region,customer,oduct_p,qty,ice_p,status
+1001,2026-01-03,east,acme,widget,4,2.50,shipped
+1002,2026-01-03,west,globex,gadget,1,19.99,shipped
+$ mlr --icsv --ocsv rename -g -r e,E then head -n 2 data/orders.csv
+id,datE,rEgion,customEr,product,qty,pricE,status
+1001,2026-01-03,east,acme,widget,4,2.50,shipped
+1002,2026-01-03,west,globex,gadget,1,19.99,shipped
+$ mlr --icsv --ocsv rename -r '"^C(.*)"i,client\1' then head -n 2 data/orders.csv
+id,date,region,clientustomer,product,qty,price,status
+1001,2026-01-03,east,acme,widget,4,2.50,shipped
+1002,2026-01-03,west,globex,gadget,1,19.99,shipped
+$ mlr --icsv --ocsv label a,b,c then head -n 2 data/orders.csv
+a,b,c,customer,product,qty,price,status
+1001,2026-01-03,east,acme,widget,4,2.50,shipped
+1002,2026-01-03,west,globex,gadget,1,19.99,shipped
+$ mlr --icsv --ocsv label x,y,qty then head -n 2 data/orders.csv
+x,y,qty,customer,product,price,status
+1001,2026-01-03,east,acme,widget,2.50,shipped
+1002,2026-01-03,west,globex,gadget,19.99,shipped
+$ mlr --icsv --ocsv label a,b,a data/orders.csv
+! mlr label: labels must be unique; got duplicate "a"
+[exit 1]
+$ mlr --opprint regularize data/events.dkvp
+t          user action ms
+1700000000 ann  login  12
+
+t          user action ms page
+1700000060 bob  view   48 home
+1700000090 ann  view   33 cart
+
+t          user action
+1700000120 cy   login
+
+t          user action ms page amount
+1700000150 bob  buy    91 cart 19.99
+
+t          user action ms
+1700000200 ann  logout 7
+
+1      user 3
+lonely dee  x
+$ mlr --ojson sort-within-records then head -n 2 data/events.dkvp
+[
+{
+  "action": "login",
+  "ms": 12,
+  "t": 1700000000,
+  "user": "ann"
+},
+{
+  "action": "view",
+  "ms": 48,
+  "page": "home",
+  "t": 1700000060,
+  "user": "bob"
+}
+]
+$ mlr --ojson sort-within-records -r then tail -n 1 data/events.dkvp
+[
+{
+  "1": "lonely",
+  "3": "x",
+  "user": "dee"
+}
+]
+$ mlr --icsv --opprint template -f customer,id,missing data/orders.csv
+customer id   missing
+acme     1001 -
+globex   1002 -
+initech  1003 -
+acme     1004 -
+umbrella 1005 -
+globex   1006 -
+acme     1007 -
+initech  1008 -
+umbrella 1009 -
+acme     1010 -
+globex   1011 -
+Zoë & co 1012 -
+umbrella 1013 -
+initech  1014 -
+$ mlr --icsv --opprint template -f id,missing --fill-with X then head -n 3 data/orders.csv
+id   missing
+1001 X
+1002 X
+1003 X
+$ mlr --icsv --ojson template -f page,user,n --fill-with '' then head -n 1 data/visits.csv
+[
+{
+  "page": "home",
+  "user": "ann",
+  "n": ""
+}
+]
+$ mlr --icsv --opprint fill-down -f qty then head -n 6 then cut -f id,qty data/orders.csv
+id   qty
+1001 4
+1002 1
+1003 10
+1004 2
+1005 2
+1006 3
+$ mlr --icsv --opprint fill-down -a -f qty then head -n 6 then cut -f id,qty data/orders.csv
+id   qty
+1001 4
+1002 1
+1003 10
+1004 2
+1005 -
+1006 3
+$ mlr --icsv --opprint fill-down -f q3,q4 data/scores.csv
+name q1 q2   q3 q4
+ann  7  9    -  8
+bob  5  6    7  n/a
+cy   9  9.5  10 8.5
+dee  4  0x10 3  2
+$ mlr --icsv --opprint fill-down --all data/tags.csv
+id tags           attrs
+1  red;green;blue size:L;fit:slim
+2  solo           color:red
+3  solo           color:red
+$ mlr --icsv --opprint fill-empty data/orders.csv
+id   date       region customer product   qty price status
+1001 2026-01-03 east   acme     widget    4   2.50  shipped
+1002 2026-01-03 west   globex   gadget    1   19.99 shipped
+1003 2026-01-04 east   initech  widget    10  2.50  pending
+1004 2026-01-05 north  acme     gizmo     2   7.25  shipped
+1005 2026-01-05 west   umbrella widget    N/A 2.50  cancelled
+1006 2026-01-06 east   globex   gizmo     3   7.25  shipped
+1007 2026-01-07 south  acme     gadget    2   19.99 returned
+1008 2026-01-07 north  initech  doohickey 6   0.75  shipped
+1009 2026-01-08 east   umbrella gadget    1   18.5  shipped
+1010 2026-01-09 west   acme     widget    12  2.4   pending
+1011 2026-01-10 south  globex   doohickey 25  0.75  shipped
+1012 2026-01-10 east   Zoë & co gizmo     1   7     shipped
+1013 2026-01-11 north  umbrella widget    8   2.50  returned
+1014 2026-01-12 south  initech  gadget    3   19.99 shipped
+$ mlr --icsv --ojson fill-empty -v 0 then head -n 1 then cut -f q3 data/scores.csv
+[
+{
+  "q3": 0
+}
+]
+$ mlr --icsv --ojson fill-empty -S -v 0 then head -n 1 then cut -f q3 data/scores.csv
+[
+{
+  "q3": "0"
+}
+]
+$ mlr --icsv --opprint sec2gmt t data/times.csv
+id t                    ms
+1  1970-01-01T00:00:00Z 0
+2  2017-07-14T02:40:00Z 1500000000123
+3  2023-11-14T22:13:20Z 1700000000999
+4  1969-12-31T00:00:00Z -1000
+5  soon                 -
+$ mlr --icsv --opprint sec2gmt -3 t data/times.csv
+id t                        ms
+1  1970-01-01T00:00:00.000Z 0
+2  2017-07-14T02:40:00.000Z 1500000000123
+3  2023-11-14T22:13:20.750Z 1700000000999
+4  1969-12-31T00:00:00.000Z -1000
+5  soon                     -
+$ mlr --icsv --opprint sec2gmt --millis -6 ms data/times.csv
+id t             ms
+1  0             1970-01-01T00:00:00.000000Z
+2  1500000000    2017-07-14T02:40:00.122999Z
+3  1700000000.75 2023-11-14T22:13:20.999000Z
+4  -86400        1969-12-31T23:59:59.000000Z
+5  soon          -
+$ mlr --icsv --opprint sec2gmt -1 t,ms data/times.csv
+id t                      ms
+1  1970-01-01T00:00:00.0Z 1970-01-01T00:00:00.0Z
+2  2017-07-14T02:40:00.0Z 49503-02-10T02:42:03.0Z
+3  2023-11-14T22:13:20.7Z 55840-11-08T22:29:59.0Z
+4  1969-12-31T00:00:00.0Z 1969-12-31T23:43:20.0Z
+5  soon                   -
+$ mlr --icsv --opprint join -j customer -f data/customers.csv then cut -f id,customer,tier,qty data/orders.csv
+customer tier   id   qty
+acme     gold   1001 4
+globex   silver 1002 1
+initech  gold   1003 10
+acme     gold   1004 2
+umbrella silver 1005 -
+globex   silver 1006 3
+acme     gold   1007 2
+initech  gold   1008 6
+umbrella silver 1009 1
+acme     gold   1010 12
+globex   silver 1011 25
+umbrella silver 1013 8
+initech  gold   1014 3
+$ mlr --icsv --opprint join --np --ul -j customer -f data/customers.csv data/orders.csv
+customer tier   since
+hooli    bronze 2024
+$ mlr --icsv --opprint join --np --ur -j customer -f data/customers.csv data/orders.csv
+id   date       region customer product qty price status
+1012 2026-01-10 east   Zoë & co gizmo   1   7     shipped
+$ mlr --icsv --opprint join --ul --ur -j customer --lp c_ --rp o_ -f data/customers.csv then head -n 4 data/orders.csv
+customer c_tier c_since o_id o_date     o_region o_product o_qty o_price o_status
+acme     gold   2019    1001 2026-01-03 east     widget    4     2.50    shipped
+globex   silver 2021    1002 2026-01-03 west     gadget    1     19.99   shipped
+initech  gold   2018    1003 2026-01-04 east     widget    10    2.50    pending
+acme     gold   2019    1004 2026-01-05 north    gizmo     2     7.25    shipped
+$ mlr --icsv --opprint join -l customer -r customer -j client -f data/customers.csv then cut -f client,id,tier data/orders.csv
+client   tier   id
+acme     gold   1001
+globex   silver 1002
+initech  gold   1003
+acme     gold   1004
+umbrella silver 1005
+globex   silver 1006
+acme     gold   1007
+initech  gold   1008
+umbrella silver 1009
+acme     gold   1010
+globex   silver 1011
+umbrella silver 1013
+initech  gold   1014
+$ mlr --icsv --opprint join --lk tier -j customer -f data/customers.csv then head -n 3 data/orders.csv
+customer tier   id   date       region product qty price status
+acme     gold   1001 2026-01-03 east   widget  4   2.50  shipped
+globex   silver 1002 2026-01-03 west   gadget  1   19.99 shipped
+initech  gold   1003 2026-01-04 east   widget  10  2.50  pending
+$ mlr seqgen --start 1 --stop 10 --step 3
+i=1
+i=4
+i=7
+i=10
+$ mlr --opprint seqgen -f x --start 5 --stop 1 --step -1.5
+x
+5
+3.5
+2
+$ mlr seqgen --start 1 --stop 1 --step 0
+$ mlr seqgen --start 1 --stop 5 --step 0
+! mlr seqgen: step must not be zero unless start == stop.
+[exit 1]
+$ mlr --ojson seqgen --start 0x10 --stop 0x13 then step -a rsum -f i
+[
+{
+  "i": 0x10,
+  "i_rsum": 16
+},
+{
+  "i": 17,
+  "i_rsum": 33
+},
+{
+  "i": 18,
+  "i_rsum": 51
+},
+{
+  "i": 19,
+  "i_rsum": 70
+}
+]
+$ mlr -n --icsv --opprint cat data/orders.csv
+$ mlr --icsv --opprint sort -nr qty then head -n 3 then cut -o -f customer,qty data/orders.csv
+customer qty
+umbrella -
+globex   25
+acme     12
+$ mlr --icsv --opprint stats1 -a sum -f qty -g customer then sort -nr qty_sum data/orders.csv
+customer qty_sum
+globex   29
+acme     20
+initech  19
+umbrella 9
+Zoë & co 1
+$ mlr --icsv --bogus cat data/orders.csv
+! mlr: option "--bogus" not recognized.
+! Please run "mlr --help" for usage information.
+[exit 1]
+$ mlr --icsv frobnicate data/orders.csv
+! mlr: verb "frobnicate" not found. Please use "mlr --help" for a list.
+[exit 1]
+$ mlr --icsv cat then
+! mlr: 'then' must have a verb after it.
+[exit 1]
+$ mlr --icsv head -n abc data/orders.csv
+! mlr head: could not scan flag "abc" argument "abc" as int.
+[exit 1]
+$ mlr --icsv --opprint step -a delta data/orders.csv
+! mlr step: -a and -f are both required arguments.
+[exit 1]
+$ mlr --icsv --opprint seqgen --start x
+! mlr seqgen: start value should be number; got "x"
+[exit 1]
+$ mlr --icsv --opprint grep '(' data/orders.csv
+! mlr grep: couldn't compile regex "("
+[exit 1]

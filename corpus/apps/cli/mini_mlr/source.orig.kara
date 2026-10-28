@@ -1,0 +1,5291 @@
+// mini_mlr: a port of Miller 6.13 (John Kerl, BSD-2-Clause), the command
+// line tool for name-indexed data, to Kāra. Thirty-three of its verbs are
+// here, chained with `then`: cat, head, tail, tac, group-by, group-like,
+// regularize, sort-within-records, cut, having-fields, template,
+// unsparsify, fill-down, fill-empty, grep, decimate, sec2gmt, seqgen, sort,
+// top, count, count-similar, uniq, count-distinct, stats1, merge-fields,
+// fraction, step, nest, reorder, rename, label and join. It reads CSV,
+// TSV, DKVP and NIDX and writes those and PPRINT, XTAB, Markdown and JSON,
+// with Miller's type inference (a value keeps the text it was read with),
+// its arithmetic on ints, floats and empty values, and its sorting order.
+//
+// The program writes its inputs into data/ and then runs data/jobs.txt,
+// one mlr command line per line with its arguments separated by tabs,
+// printing each command and what it wrote. An error prints after the
+// output mlr had already written, with "!" before each line of the
+// message.
+//
+// Every job runs in its own task, and within a job every input file is
+// read in a task of its own; the transcript is put together in job order
+// and the records in file order, so the output is the same on every run.
+
+import std.regex.{Regex};
+import std.sync.{TaskGroup};
+
+// ============================================================ values
+
+// A field's value. A number keeps the text it was read with, so `0x1F`
+// and `2.50` print as they came in; arithmetic makes new text.
+#[derive(Clone)]
+enum Val {
+    Int(String, i64),
+    Float(String, f64),
+    Str(String),
+    Void,
+    Absent,
+    Error,
+}
+
+impl Val {
+    fn text(self) -> String {
+        match self {
+            Val.Int(s, _) => s.clone(),
+            Val.Float(s, _) => s.clone(),
+            Val.Str(s) => s.clone(),
+            Val.Void => String.new(),
+            Val.Absent => String.new(),
+            Val.Error => "(error)".to_string(),
+        }
+    }
+
+    fn is_num(self) -> bool {
+        match self {
+            Val.Int(_, _) => true,
+            Val.Float(_, _) => true,
+            _ => false,
+        }
+    }
+
+    fn is_void(self) -> bool {
+        match self {
+            Val.Void => true,
+            _ => false,
+        }
+    }
+
+    fn is_absent(self) -> bool {
+        match self {
+            Val.Absent => true,
+            _ => false,
+        }
+    }
+
+    fn is_str(self) -> bool {
+        match self {
+            Val.Str(_) => true,
+            _ => false,
+        }
+    }
+
+    fn as_f64(self) -> f64 {
+        match self {
+            Val.Int(_, i) => *i as f64,
+            Val.Float(_, f) => *f,
+            _ => 0.0,
+        }
+    }
+}
+
+// Go's strconv.FormatFloat(x, 'f', -1, 64): the shortest digits that read
+// back, never an exponent.
+fn fmt_f64(x: f64) -> String {
+    if x != x {
+        return "NaN".to_string();
+    }
+    if x == 1.0 / 0.0 {
+        return "+Inf".to_string();
+    }
+    if x == -1.0 / 0.0 {
+        return "-Inf".to_string();
+    }
+    let r = x.to_string();
+    let neg = r.starts_with("-");
+    let mut body = if neg { r.substring(1) } else { r.clone() };
+    let mut exp: i64 = 0;
+    if let Some(i) = body.find("e") {
+        exp = i64.parse(body[i + 1..body.len()]) ?? 0;
+        body = body.substring(0, i);
+    }
+    let (ip, fp) = match body.split_once(".") {
+        Some((a, b)) => (a.to_string(), b.to_string()),
+        None => (body.clone(), String.new()),
+    };
+    let digits = ip.clone() + fp;
+    let point = ip.len() + exp;
+    let mut s = String.new();
+    if point <= 0 {
+        s.push_str("0.");
+        for _ in 0..(0 - point) {
+            s.push('0');
+        }
+        s.push_str(digits);
+    } else if point >= digits.len() {
+        s.push_str(digits);
+        for _ in 0..(point - digits.len()) {
+            s.push('0');
+        }
+    } else {
+        s.push_str(digits[0..point]);
+        s.push('.');
+        s.push_str(digits[point..digits.len()]);
+    }
+    if s.contains(".") {
+        while s.ends_with("0") {
+            s.pop();
+        }
+        if s.ends_with(".") {
+            s.pop();
+        }
+    }
+    let mut start = 0;
+    while start < s.len() - 1 and s.bytes()[start] == b'0' and s.bytes()[start + 1] != b'.' {
+        start += 1;
+    }
+    let out = s.substring(start);
+    if neg {
+        "-".to_string() + out
+    } else {
+        out
+    }
+}
+
+fn from_int(i: i64) -> Val {
+    Val.Int(i.to_string(), i)
+}
+
+fn from_float(f: f64) -> Val {
+    Val.Float(fmt_f64(f), f)
+}
+
+fn from_string(s: Str) -> Val {
+    if s.len() == 0 {
+        Val.Void
+    } else {
+        Val.Str(s.to_string())
+    }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Scan {
+    Text,
+    Dec,
+    Hex,
+    Oct,
+    Bin,
+    Float,
+}
+
+fn is_dec(c: u8) -> bool {
+    c >= b'0' and c <= b'9'
+}
+
+fn is_float_char(c: u8) -> bool {
+    is_dec(c) or c == b'.' or c == b'e' or c == b'E' or c == b'+' or c == b'-'
+}
+
+fn is_hex(c: u8) -> bool {
+    is_dec(c) or (c >= b'a' and c <= b'f') or (c >= b'A' and c <= b'F')
+}
+
+fn digits_in(b: Slice[u8], from: i64, ok: Fn(u8) -> bool) -> bool {
+    for i in from..b.len() {
+        if not ok(b[i]) {
+            return false;
+        }
+    }
+    true
+}
+
+// pkg/scan: the shape of a field, before it is parsed.
+fn scan_type(s: Str) -> Scan {
+    let b = s.bytes();
+    if b.len() == 0 {
+        return Scan.Text;
+    }
+    let c = b[0];
+    if c == b'+' or c == b'-' {
+        return scan_positive(b[1..b.len()]);
+    }
+    if is_dec(c) {
+        return scan_positive(b);
+    }
+    if c == b'.' {
+        if b.len() == 1 {
+            return Scan.Text;
+        }
+        return scan_dec_or_float(b);
+    }
+    Scan.Text
+}
+
+fn scan_dec_or_float(b: Slice[u8]) -> Scan {
+    let mut maybe_int = true;
+    for c in b {
+        if not is_float_char(*c) {
+            return Scan.Text;
+        }
+        if not is_dec(*c) {
+            maybe_int = false;
+        }
+    }
+    if maybe_int { Scan.Dec } else { Scan.Float }
+}
+
+fn scan_positive(b: Slice[u8]) -> Scan {
+    if b.len() == 0 {
+        return Scan.Text;
+    }
+    let c = b[0];
+    if c == b'.' {
+        if digits_in(b, 0, is_float_char) {
+            return Scan.Float;
+        }
+        return Scan.Text;
+    }
+    if not is_dec(c) {
+        return Scan.Text;
+    }
+    if b.len() == 1 {
+        return Scan.Dec;
+    }
+    if c == b'0' {
+        let c1 = b[1];
+        if c1 == b'x' or c1 == b'X' {
+            if b.len() == 2 or not digits_in(b, 2, is_hex) {
+                return Scan.Text;
+            }
+            return Scan.Hex;
+        }
+        if c1 == b'o' or c1 == b'O' {
+            if b.len() == 2 or not digits_in(b, 2, |d| d >= b'0' and d <= b'7') {
+                return Scan.Text;
+            }
+            return Scan.Oct;
+        }
+        if c1 == b'b' or c1 == b'B' {
+            if b.len() == 2 or not digits_in(b, 2, |d| d == b'0' or d == b'1') {
+                return Scan.Text;
+            }
+            return Scan.Bin;
+        }
+        // A leading zero (007, 08) reads as text, decimal or octal-looking.
+        if digits_in(b, 1, is_dec) {
+            return Scan.Text;
+        }
+    }
+    scan_dec_or_float(b)
+}
+
+fn digit_value(c: u8) -> u64 {
+    if is_dec(c) {
+        (c - b'0') as u64
+    } else if c >= b'a' and c <= b'f' {
+        (c - b'a') as u64 + 10
+    } else {
+        (c - b'A') as u64 + 10
+    }
+}
+
+// The grammar Go's ParseFloat accepts for decimal text: a sign, digits
+// with an optional point (one side may be empty), then an exponent.
+fn float_text(s: Str) -> bool {
+    let b = s.bytes();
+    let mut i = 0;
+    if i < b.len() and (b[i] == b'+' or b[i] == b'-') {
+        i += 1;
+    }
+    let mut ip = 0;
+    while i < b.len() and is_dec(b[i]) {
+        i += 1;
+        ip += 1;
+    }
+    let mut fp = 0;
+    if i < b.len() and b[i] == b'.' {
+        i += 1;
+        while i < b.len() and is_dec(b[i]) {
+            i += 1;
+            fp += 1;
+        }
+    }
+    if ip == 0 and fp == 0 {
+        return false;
+    }
+    if i < b.len() and (b[i] == b'e' or b[i] == b'E') {
+        i += 1;
+        if i < b.len() and (b[i] == b'+' or b[i] == b'-') {
+            i += 1;
+        }
+        let mut ep = 0;
+        while i < b.len() and is_dec(b[i]) {
+            i += 1;
+            ep += 1;
+        }
+        if ep == 0 {
+            return false;
+        }
+    }
+    i == b.len()
+}
+
+// mlrval's inference for a field read from a file.
+fn infer(s: Str) -> Val {
+    if s.len() == 0 {
+        return Val.Void;
+    }
+    match scan_type(s) {
+        Scan.Text => Val.Str(s.to_string()),
+        Scan.Dec => match i64.parse(s) {
+            Ok(i) => Val.Int(s.to_string(), i),
+            Err(_) => Val.Str(s.to_string()),
+        },
+        Scan.Float => {
+            if not float_text(s) {
+                return Val.Str(s.to_string());
+            }
+            match f64.parse(s) {
+                Ok(f) => {
+                    if f == 1.0 / 0.0 or f == -1.0 / 0.0 {
+                        Val.Str(s.to_string())
+                    } else {
+                        Val.Float(s.to_string(), f)
+                    }
+                }
+                Err(_) => Val.Str(s.to_string()),
+            }
+        }
+        kind => {
+            let b = s.bytes();
+            let neg = b[0] == b'-';
+            let skip = if b[0] == b'+' or b[0] == b'-' { 3 } else { 2 };
+            let base: u64 = if kind == Scan.Hex { 16 } else if kind == Scan.Oct { 8 } else { 2 };
+            // Leading zeros do not count against the width.
+            let mut first = skip;
+            while first < b.len() - 1 and b[first] == b'0' {
+                first += 1;
+            }
+            let mut u: u64 = 0;
+            for i in first..b.len() {
+                match u.checked_mul(base) {
+                    Some(m) => match m.checked_add(digit_value(b[i])) {
+                        Some(n) => u = n,
+                        None => return Val.Str(s.to_string()),
+                    },
+                    None => return Val.Str(s.to_string()),
+                }
+            }
+            // Sixteen hex digits from 8 up wrap to a negative int, as
+            // Go's two's complement conversion does.
+            let width = b.len() - skip;
+            let wraps = kind == Scan.Hex and width == 16 and b[skip] >= b'8';
+            let mut v: i64 = 0;
+            if u > 9223372036854775807 {
+                if not wraps {
+                    return Val.Str(s.to_string());
+                }
+                v = (u - 9223372036854775807 - 1) as i64 + (0 - 9223372036854775807 - 1);
+            } else {
+                v = u as i64;
+            }
+            Val.Int(s.to_string(), if neg { 0 - v } else { v })
+        }
+    }
+}
+
+// ------------------------------------------------------------ arithmetic
+// The dispositions of pkg/bifs/arithmetic.go for the kinds the jobs reach.
+
+fn plus(a: Val, b: Val) -> Val {
+    match (a, b) {
+        (Val.Absent, Val.Void) => Val.Absent,
+        (Val.Absent, y) => y.clone(),
+        (Val.Void, Val.Absent) => Val.Absent,
+        (x, Val.Absent) => x.clone(),
+        (Val.Void, Val.Void) => Val.Void,
+        (Val.Void, y) => if y.is_num() { y.clone() } else { Val.Error },
+        (x, Val.Void) => if x.is_num() { x.clone() } else { Val.Error },
+        (Val.Int(_, x), Val.Int(_, y)) => match x.checked_add(*y) {
+            Some(c) => from_int(c),
+            None => from_float(*x as f64 + *y as f64),
+        },
+        (x, y) => {
+            if x.is_num() and y.is_num() {
+                from_float(x.as_f64() + y.as_f64())
+            } else {
+                Val.Error
+            }
+        }
+    }
+}
+
+fn negate(v: Val) -> Val {
+    match v {
+        Val.Int(_, i) => from_int(0 - *i),
+        _ => from_float(0.0 - v.as_f64()),
+    }
+}
+
+fn minus(a: Val, b: Val) -> Val {
+    match (a, b) {
+        (Val.Absent, Val.Void) => Val.Absent,
+        (Val.Absent, y) => y.clone(),
+        (Val.Void, Val.Absent) => Val.Absent,
+        (x, Val.Absent) => x.clone(),
+        (Val.Void, Val.Void) => Val.Void,
+        (Val.Void, y) => if y.is_num() { negate(y) } else { Val.Error },
+        (x, Val.Void) => if x.is_num() { x.clone() } else { Val.Error },
+        (Val.Int(_, x), Val.Int(_, y)) => match x.checked_sub(*y) {
+            Some(c) => from_int(c),
+            None => from_float(*x as f64 - *y as f64),
+        },
+        (x, y) => {
+            if x.is_num() and y.is_num() {
+                from_float(x.as_f64() - y.as_f64())
+            } else {
+                Val.Error
+            }
+        }
+    }
+}
+
+fn times(a: Val, b: Val) -> Val {
+    match (a, b) {
+        (Val.Absent, Val.Void) => Val.Absent,
+        (Val.Absent, y) => y.clone(),
+        (Val.Void, Val.Absent) => Val.Absent,
+        (x, Val.Absent) => x.clone(),
+        (Val.Void, Val.Void) => Val.Void,
+        (Val.Void, y) => if y.is_num() { y.clone() } else { Val.Error },
+        (x, Val.Void) => if x.is_num() { x.clone() } else { Val.Error },
+        (Val.Int(_, x), Val.Int(_, y)) => {
+            // Miller multiplies in floats first and keeps the int product
+            // only while it fits.
+            let c = *x as f64 * *y as f64;
+            if c.abs() > 9223372036854774784.0 {
+                from_float(c)
+            } else {
+                from_int(*x * *y)
+            }
+        }
+        (x, y) => {
+            if x.is_num() and y.is_num() {
+                from_float(x.as_f64() * y.as_f64())
+            } else {
+                Val.Error
+            }
+        }
+    }
+}
+
+fn divide(a: Val, b: Val) -> Val {
+    if a.is_void() or b.is_void() {
+        let ok_a = a.is_num() or a.is_void();
+        let ok_b = b.is_num() or b.is_void();
+        return if ok_a and ok_b { Val.Void } else { Val.Error };
+    }
+    if b.is_absent() {
+        return a.clone();
+    }
+    if not (a.is_num() and b.is_num()) {
+        return Val.Error;
+    }
+    match (a, b) {
+        (Val.Int(_, x), Val.Int(_, y)) => {
+            if *y == 0 {
+                return from_float(*x as f64 / *y as f64);
+            }
+            if *x % *y == 0 {
+                return from_int(*x / *y);
+            }
+            from_float(*x as f64 / *y as f64)
+        }
+        (x, y) => from_float(x.as_f64() / y.as_f64()),
+    }
+}
+
+fn bif_abs(v: Val) -> Val {
+    match v {
+        Val.Int(_, i) => from_int(i.abs()),
+        Val.Float(_, f) => from_float(f.abs()),
+        _ => v.clone(),
+    }
+}
+
+fn bif_min(a: Val, b: Val) -> Val {
+    if a.is_absent() {
+        return b.clone();
+    }
+    if b.is_absent() {
+        return a.clone();
+    }
+    if a.is_num() and b.is_num() {
+        return match (a, b) {
+            (Val.Int(_, x), Val.Int(_, y)) => if *x < *y { a.clone() } else { b.clone() },
+            _ => from_float(a.as_f64().min(b.as_f64())),
+        };
+    }
+    if a.is_num() {
+        return a.clone();
+    }
+    if b.is_num() {
+        return b.clone();
+    }
+    if a.is_void() or b.is_void() {
+        return Val.Void;
+    }
+    if a.text() < b.text() { a.clone() } else { b.clone() }
+}
+
+fn bif_max(a: Val, b: Val) -> Val {
+    if a.is_absent() {
+        return b.clone();
+    }
+    if b.is_absent() {
+        return a.clone();
+    }
+    if a.is_num() and b.is_num() {
+        return match (a, b) {
+            (Val.Int(_, x), Val.Int(_, y)) => if *x > *y { a.clone() } else { b.clone() },
+            _ => from_float(a.as_f64().max(b.as_f64())),
+        };
+    }
+    if a.is_num() {
+        return b.clone();
+    }
+    if b.is_num() {
+        return a.clone();
+    }
+    if a.is_void() {
+        return b.clone();
+    }
+    if b.is_void() {
+        return a.clone();
+    }
+    if a.text() > b.text() { a.clone() } else { b.clone() }
+}
+
+fn collate_rank(v: Val) -> i64 {
+    match v {
+        Val.Int(_, _) => 0,
+        Val.Float(_, _) => 0,
+        Val.Void => 2,
+        Val.Str(_) => 2,
+        _ => 3,
+    }
+}
+
+fn ord_f64(x: f64, y: f64) -> Ordering {
+    if x < y {
+        Ordering.Less
+    } else if x > y {
+        Ordering.Greater
+    } else {
+        Ordering.Equal
+    }
+}
+
+// Miller's collation: numbers by value, then empty and text together by
+// bytes, then everything else.
+fn collate(a: Val, b: Val) -> Ordering {
+    let ra = collate_rank(a);
+    let rb = collate_rank(b);
+    if ra != rb {
+        return ra.cmp(rb);
+    }
+    if ra == 0 {
+        return match (a, b) {
+            (Val.Int(_, x), Val.Int(_, y)) => x.cmp(*y),
+            _ => ord_f64(a.as_f64(), b.as_f64()),
+        };
+    }
+    if ra == 2 {
+        return a.text().cmp(b.text());
+    }
+    Ordering.Equal
+}
+
+fn reverse_order(o: Ordering) -> Ordering {
+    match o {
+        Ordering.Less => Ordering.Greater,
+        Ordering.Greater => Ordering.Less,
+        Ordering.Equal => Ordering.Equal,
+    }
+}
+
+// ============================================================ records
+
+#[derive(Clone)]
+struct Field {
+    key: String,
+    val: Val,
+}
+
+// An ordered record, and the file it came from.
+#[derive(Clone)]
+struct Rec {
+    f: Vec[Field],
+    fname: String,
+    fnum: i64,
+}
+
+fn new_rec() -> Rec {
+    Rec { f: Vec.new(), fname: "(stdin)".to_string(), fnum: 0 }
+}
+
+impl Rec {
+    fn like(self, f: own Vec[Field]) -> Rec {
+        Rec { f: f, fname: self.fname.clone(), fnum: self.fnum }
+    }
+
+    fn index(self, k: Str) -> Option[i64] {
+        for i in 0..self.f.len() {
+            if self.f[i].key == k {
+                return Some(i);
+            }
+        }
+        None
+    }
+
+    fn get(self, k: Str) -> Option[Val] {
+        match self.index(k) {
+            Some(i) => Some(self.f[i].val.clone()),
+            None => None,
+        }
+    }
+
+    fn has(self, k: Str) -> bool {
+        self.index(k).is_some()
+    }
+
+    fn put(mut ref self, k: Str, v: Val) {
+        match self.index(k) {
+            Some(i) => self.f[i].val = v.clone(),
+            None => self.f.push(Field { key: k.to_string(), val: v.clone() }),
+        }
+    }
+
+    fn prepend(mut ref self, k: Str, v: Val) {
+        match self.index(k) {
+            Some(i) => self.f[i].val = v.clone(),
+            None => self.f.insert(0, Field { key: k.to_string(), val: v.clone() }),
+        }
+    }
+
+    fn remove(mut ref self, k: Str) {
+        if let Some(i) = self.index(k) {
+            self.f.remove(i);
+        }
+    }
+
+    fn keys(self) -> Vec[String] {
+        let mut out: Vec[String] = Vec.new();
+        for p in self.f {
+            out.push(p.key.clone());
+        }
+        out
+    }
+
+    // A key already present gets _2, _3, ... appended, as Miller dedupes
+    // field names on input.
+    fn put_dedupe(mut ref self, k: Str, v: Val) {
+        let mut key = k.to_string();
+        if self.has(key) {
+            let mut j = 2;
+            while self.has(f"{k}_{j}") {
+                j += 1;
+            }
+            key = f"{k}_{j}";
+        }
+        self.f.push(Field { key: key, val: v.clone() });
+    }
+}
+
+fn field(k: Str, v: Val) -> Field {
+    Field { key: k.to_string(), val: v.clone() }
+}
+
+// The values of the named fields, or None if one is missing.
+fn selected(rec: Rec, names: Vec[String]) -> Option[Vec[Val]] {
+    let mut vals: Vec[Val] = Vec.new();
+    for n in names {
+        match rec.get(n) {
+            Some(v) => vals.push(v),
+            None => return None,
+        }
+    }
+    Some(vals)
+}
+
+fn joined(vals: Vec[Val]) -> String {
+    let mut out = String.new();
+    for i in 0..vals.len() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push_str(vals[i].text());
+    }
+    out
+}
+
+fn join_strs(parts: Vec[String], sep: Str) -> String {
+    let mut out = String.new();
+    for i in 0..parts.len() {
+        if i > 0 {
+            out.push_str(sep);
+        }
+        out.push_str(parts[i]);
+    }
+    out
+}
+
+fn split_list(s: Str) -> Vec[String] {
+    if s.len() == 0 {
+        return Vec.new();
+    }
+    s.split(",").map(|p| p.to_string()).collect()
+}
+
+fn runes(s: Str) -> i64 {
+    s.chars().count()
+}
+
+fn repeat(s: Str, n: i64) -> String {
+    let mut out = String.new();
+    for _ in 0..n {
+        out.push_str(s);
+    }
+    out
+}
+
+// ============================================================ regexes
+
+// lib.CompileMillerRegex: "..." loses its quotes, and a trailing i after
+// the closing quote makes it case-insensitive.
+fn miller_regex(s: Str) -> Result[Regex, String] {
+    let b = s.bytes();
+    let n = b.len();
+    let mut pattern = s.to_string();
+    if n >= 3 and b[n - 1] == b'i' and (b[0] == b'"' or b[0] == b'/') and b[n - 2] == b[0] {
+        pattern = "(?i)".to_string() + s[1..n - 2];
+    } else if n >= 2 and (b[0] == b'"' or b[0] == b'/') and b[n - 1] == b[0] {
+        pattern = s[1..n - 1].to_string();
+    }
+    match Regex.compile(pattern) {
+        Ok(rx) => Ok(rx),
+        Err(e) => Err(f"mlr: could not compile regex \"{s}\": {e.message}\n"),
+    }
+}
+
+fn regexes(names: Vec[String]) -> Result[Vec[Regex], String] {
+    let mut out: Vec[Regex] = Vec.new();
+    for n in names {
+        out.push(miller_regex(n)?);
+    }
+    Ok(out)
+}
+
+fn any_match(rxs: Vec[Regex], s: Str) -> bool {
+    for rx in rxs {
+        if rx.is_match(s) {
+            return true;
+        }
+    }
+    false
+}
+
+// lib.RegexCompiledSub: the first match replaced, with \1 to \9 standing
+// for the groups; with gsub, every match replaced by the literal text.
+fn sub_captures(name: Str, rx: Regex, repl: Str, gsub: bool) -> String {
+    if gsub {
+        return rx.replace_all(name, repl.replace("$", "$$"));
+    }
+    let caps = match rx.captures(name) {
+        Some(c) => c,
+        None => return name.to_string(),
+    };
+    let whole = match caps.get(0) {
+        Some(m) => m,
+        None => return name.to_string(),
+    };
+    let rb = repl.bytes();
+    let mut out = String.new();
+    let mut i = 0;
+    while i < rb.len() {
+        if rb[i] == b'\\' and i + 1 < rb.len() and is_dec(rb[i + 1]) {
+            let g = (rb[i + 1] - b'0') as i64;
+            if let Some(m) = caps.get(g) {
+                out.push_str(m.text);
+            }
+            i += 2;
+        } else {
+            let start = i;
+            i += 1;
+            while i < rb.len() and rb[i] != b'\\' {
+                i += 1;
+            }
+            out.push_str(repl[start..i]);
+        }
+    }
+    name[0..whole.start].to_string() + out + name[whole.end..name.len()]
+}
+
+// ============================================================ options
+
+#[derive(Clone)]
+struct Opts {
+    ifmt: String,
+    ofmt: String,
+    ifs: Option[String],
+    ofs: Option[String],
+    ips: Option[String],
+    ops: Option[String],
+    repifs: Option[bool],
+    nidx_regex: bool,
+    implicit: bool,
+    headerless: bool,
+    ragged: bool,
+    quote_all: bool,
+    jlistwrap: bool,
+    jvstack: bool,
+    auto_unflatten: bool,
+    xvright: bool,
+    barred: bool,
+    right: bool,
+    files: Vec[String],
+    no_input: bool,
+}
+
+fn new_opts() -> Opts {
+    Opts {
+        ifmt: "dkvp".to_string(),
+        ofmt: "dkvp".to_string(),
+        ifs: None,
+        ofs: None,
+        ips: None,
+        ops: None,
+        repifs: None,
+        nidx_regex: false,
+        implicit: false,
+        headerless: false,
+        ragged: false,
+        quote_all: false,
+        jlistwrap: true,
+        jvstack: true,
+        auto_unflatten: true,
+        xvright: false,
+        barred: false,
+        right: false,
+        files: Vec.new(),
+        no_input: false,
+    }
+}
+
+fn sep_name(name: Str) -> String {
+    match name {
+        "colon" => ":".to_string(),
+        "comma" => ",".to_string(),
+        "equals" => "=".to_string(),
+        "newline" => "\n".to_string(),
+        "pipe" => "|".to_string(),
+        "semicolon" => ";".to_string(),
+        "slash" => "/".to_string(),
+        "space" => " ".to_string(),
+        "tab" => "\t".to_string(),
+        "lf" => "\n".to_string(),
+        _ => name.to_string(),
+    }
+}
+
+fn default_fs(fmt: Str) -> String {
+    match fmt {
+        "tsv" => "\t".to_string(),
+        "xtab" => "\n".to_string(),
+        "nidx" => " ".to_string(),
+        "markdown" => " ".to_string(),
+        "pprint" => " ".to_string(),
+        _ => ",".to_string(),
+    }
+}
+
+fn default_ps(fmt: Str) -> String {
+    if fmt == "xtab" { " ".to_string() } else { "=".to_string() }
+}
+
+// A main flag with no argument; false when there is no such flag.
+fn main_flag0(o: mut ref Opts, a: Str) -> bool {
+    match a {
+        "--icsv" => o.ifmt = "csv".to_string(),
+        "--itsv" => o.ifmt = "tsv".to_string(),
+        "--idkvp" => o.ifmt = "dkvp".to_string(),
+        "--inidx" => o.ifmt = "nidx".to_string(),
+        "--ocsv" => o.ofmt = "csv".to_string(),
+        "--otsv" => o.ofmt = "tsv".to_string(),
+        "--odkvp" => o.ofmt = "dkvp".to_string(),
+        "--oxtab" => o.ofmt = "xtab".to_string(),
+        "--opprint" => o.ofmt = "pprint".to_string(),
+        "--omd" => o.ofmt = "markdown".to_string(),
+        "--csv" => {
+            o.ifmt = "csv".to_string();
+            o.ofmt = "csv".to_string();
+        }
+        "--tsv" => {
+            o.ifmt = "tsv".to_string();
+            o.ofmt = "tsv".to_string();
+        }
+        "--c2t" => {
+            o.ifmt = "csv".to_string();
+            o.ofmt = "tsv".to_string();
+        }
+        "--c2d" => {
+            o.ifmt = "csv".to_string();
+            o.ofmt = "dkvp".to_string();
+        }
+        "--c2p" => {
+            o.ifmt = "csv".to_string();
+            o.ofmt = "pprint".to_string();
+        }
+        "--c2m" => {
+            o.ifmt = "csv".to_string();
+            o.ofmt = "markdown".to_string();
+        }
+        "--c2n" => {
+            o.ifmt = "csv".to_string();
+            o.ofmt = "nidx".to_string();
+            o.ofs = Some(" ".to_string());
+        }
+        "--c2j" => {
+            o.ifmt = "csv".to_string();
+            o.ofmt = "json".to_string();
+            o.jlistwrap = true;
+            o.jvstack = true;
+        }
+        "--ojson" => {
+            o.ofmt = "json".to_string();
+            o.jlistwrap = true;
+            o.jvstack = true;
+        }
+        "--ojsonl" => {
+            o.ofmt = "json".to_string();
+            o.jlistwrap = false;
+            o.jvstack = false;
+        }
+        "--onidx" => {
+            o.ofmt = "nidx".to_string();
+            o.ofs = Some(" ".to_string());
+        }
+        "--repifs" => o.repifs = Some(true),
+        "--implicit-csv-header" => o.implicit = true,
+        "--hi" => o.implicit = true,
+        "--headerless-csv-output" => o.headerless = true,
+        "--ho" => o.headerless = true,
+        "--allow-ragged-csv-input" => o.ragged = true,
+        "--quote-all" => o.quote_all = true,
+        "--jvstack" => o.jvstack = true,
+        "--no-jvstack" => o.jvstack = false,
+        "--jlistwrap" => o.jlistwrap = true,
+        "--no-jlistwrap" => o.jlistwrap = false,
+        "--no-auto-unflatten" => o.auto_unflatten = false,
+        "--xvright" => o.xvright = true,
+        "--barred" => o.barred = true,
+        "--right" => o.right = true,
+        "-n" => o.no_input = true,
+        _ => return false,
+    }
+    true
+}
+
+// A main flag that takes an argument; false when there is no such flag.
+fn main_flag1(o: mut ref Opts, a: Str, arg: Str) -> bool {
+    match a {
+        "--ifs" => o.ifs = Some(sep_name(arg)),
+        "--ofs" => o.ofs = Some(sep_name(arg)),
+        "--fs" => {
+            o.ifs = Some(sep_name(arg));
+            o.ofs = Some(sep_name(arg));
+        }
+        "--ops" => o.ops = Some(sep_name(arg)),
+        "--from" => o.files.push(arg.to_string()),
+        _ => return false,
+    }
+    true
+}
+
+fn is_main_flag1(a: Str) -> bool {
+    a == "--ifs" or a == "--ofs" or a == "--fs" or a == "--ops" or a == "--from"
+}
+
+// The separators, once every flag is in.
+#[derive(Clone)]
+struct Seps {
+    ifs: String,
+    ofs: String,
+    ips: String,
+    ops: String,
+    repifs: bool,
+    nidx_regex: bool,
+}
+
+fn finalize(o: Opts) -> Seps {
+    let mut repifs = false;
+    let mut nidx_regex = false;
+    match o.repifs {
+        Some(r) => repifs = r,
+        None => {
+            if o.ifmt == "nidx" and o.ifs.is_none() {
+                nidx_regex = true;
+            }
+            repifs = o.ifmt == "pprint";
+        }
+    }
+    Seps {
+        ifs: o.ifs.clone() ?? default_fs(o.ifmt),
+        ofs: o.ofs.clone() ?? default_fs(o.ofmt),
+        ips: o.ips.clone() ?? default_ps(o.ifmt),
+        ops: o.ops.clone() ?? default_ps(o.ofmt),
+        repifs: repifs,
+        nidx_regex: nidx_regex,
+    }
+}
+
+fn all_alnum(b: Slice[u8], from: i64) -> bool {
+    if from >= b.len() {
+        return false;
+    }
+    for i in from..b.len() {
+        let c = b[i];
+        let ok = is_dec(c) or (c >= b'a' and c <= b'z') or (c >= b'A' and c <= b'Z');
+        if not ok {
+            return false;
+        }
+    }
+    true
+}
+
+// Miller's Getoptify: -abc becomes -a -b -c (but -12 stays a number), and
+// --flag=value becomes --flag value.
+fn getoptify(args: Vec[String]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for a in args {
+        let b = a.bytes();
+        if b.len() >= 2 and b[0] == b'-' and b[1] != b'-' and all_alnum(b, 1) and not digits_in(b, 1, is_dec) {
+            for c in a.substring(1).chars() {
+                out.push(f"-{c}");
+            }
+        } else if a.starts_with("--") and a.find("=").is_some() {
+            let i = a.find("=") ?? 0;
+            if i > 2 and i < a.len() - 1 {
+                out.push(a.substring(0, i));
+                out.push(a.substring(i + 1));
+            } else {
+                out.push(a.clone());
+            }
+        } else {
+            out.push(a.clone());
+        }
+    }
+    out
+}
+
+// ============================================================ readers
+
+// The line reader: lines end at LF, a CR before the LF goes, and a last
+// line without an LF still counts.
+fn lines_of(text: Str) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    if text.len() == 0 {
+        return out;
+    }
+    let mut parts: Vec[String] = text.split("\n").map(|p| p.to_string()).collect();
+    if parts.len() > 0 and parts[parts.len() - 1].len() == 0 {
+        parts.pop();
+    }
+    for p in parts {
+        match p.strip_suffix("\r") {
+            Some(q) => out.push(q.to_string()),
+            None => out.push(p.clone()),
+        }
+    }
+    out
+}
+
+// encoding/csv as Miller's fork reads it: CRLF becomes LF everywhere, a
+// quoted field may hold the separator, quotes and line ends, and blank
+// lines are skipped.
+fn csv_rows(raw: Str, comma: u8) -> Vec[Vec[String]] {
+    let text = raw.replace("\r\n", "\n");
+    let b = text.bytes();
+    let n = b.len();
+    let mut rows: Vec[Vec[String]] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        if b[i] == b'\n' {
+            i += 1;
+            continue;
+        }
+        let mut row: Vec[String] = Vec.new();
+        loop {
+            if i < n and b[i] == b'"' {
+                i += 1;
+                let mut buf = String.new();
+                while i < n {
+                    let mut j = i;
+                    while j < n and b[j] != b'"' {
+                        j += 1;
+                    }
+                    buf.push_str(text[i..j]);
+                    if j >= n {
+                        i = j;
+                        break;
+                    }
+                    if j + 1 < n and b[j + 1] == b'"' {
+                        buf.push('"');
+                        i = j + 2;
+                        continue;
+                    }
+                    i = j + 1;
+                    break;
+                }
+                row.push(buf);
+            } else {
+                let mut j = i;
+                while j < n and b[j] != comma and b[j] != b'\n' {
+                    j += 1;
+                }
+                row.push(text[i..j].to_string());
+                i = j;
+            }
+            if i < n and b[i] == comma {
+                i += 1;
+                continue;
+            }
+            if i < n and b[i] == b'\n' {
+                i += 1;
+            }
+            break;
+        }
+        rows.push(row);
+    }
+    rows
+}
+
+// What reading one file gave: its records, and the error it stopped at.
+struct Got {
+    recs: Vec[Rec],
+    err: Option[String],
+}
+
+fn file_rec(path: Str, fnum: i64) -> Rec {
+    Rec { f: Vec.new(), fname: path.to_string(), fnum: fnum }
+}
+
+fn read_csv(path: Str, raw: Str, o: Opts, s: Seps, fnum: i64) -> Got {
+    let text = match raw.strip_prefix("\u{feff}") {
+        Some(t) => t,
+        None => raw,
+    };
+    let mut out: Vec[Rec] = Vec.new();
+    let mut header: Vec[String] = Vec.new();
+    let mut have_header = false;
+    let mut need_header = not o.implicit;
+    let mut rownum = 0;
+    for row in csv_rows(text, s.ifs.bytes()[0]) {
+        if need_header {
+            header = row.clone();
+            have_header = true;
+            rownum += 1;
+            need_header = false;
+            continue;
+        }
+        rownum += 1;
+        if not have_header {
+            header = Vec.new();
+            for i in 0..row.len() {
+                header.push((i + 1).to_string());
+            }
+            have_header = true;
+        }
+        let mut rec = file_rec(path, fnum);
+        let nh = header.len();
+        let nd = row.len();
+        if nh != nd and not o.ragged {
+            let err = f"mlr: CSV header/data length mismatch {nh} != {nd} at filename {path} row {rownum}.\n";
+            return Got { recs: out, err: Some(err) };
+        }
+        for i in 0..nh.min(nd) {
+            rec.put_dedupe(header[i], infer(row[i]));
+        }
+        for i in nh..nd {
+            rec.put_dedupe((i + 1).to_string(), infer(row[i]));
+        }
+        out.push(rec);
+    }
+    Got { recs: out, err: None }
+}
+
+fn tsv_decode(s: Str) -> String {
+    let b = s.bytes();
+    let mut out = String.new();
+    let mut i = 0;
+    let mut start = 0;
+    while i < b.len() {
+        if b[i] == b'\\' and i < b.len() - 1 {
+            let d = b[i + 1];
+            let m = if d == b'\\' {
+                "\\"
+            } else if d == b'n' {
+                "\n"
+            } else if d == b'r' {
+                "\r"
+            } else if d == b't' {
+                "\t"
+            } else {
+                ""
+            };
+            if m.len() > 0 {
+                out.push_str(s[start..i]);
+                out.push_str(m);
+                i += 2;
+                start = i;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    out.push_str(s[start..b.len()]);
+    out
+}
+
+fn split_fs(line: Str, fs: Str, repifs: bool) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    if line.len() == 0 {
+        return out;
+    }
+    for p in line.split(fs) {
+        if repifs and p.len() == 0 {
+            continue;
+        }
+        out.push(p.to_string());
+    }
+    out
+}
+
+fn read_tsv(path: Str, text: Str, o: Opts, s: Seps, fnum: i64) -> Got {
+    let mut out: Vec[Rec] = Vec.new();
+    let mut header: Vec[String] = Vec.new();
+    let mut have_header = false;
+    let mut lineno = 0;
+    for line in lines_of(text) {
+        lineno += 1;
+        let fields = split_fs(line, s.ifs, s.repifs);
+        if not have_header {
+            header = fields;
+            have_header = true;
+            continue;
+        }
+        let nh = header.len();
+        let nd = fields.len();
+        if not o.ragged and nh != nd {
+            let err = f"mlr: TSV header/data length mismatch {nh} != {nd} at filename {path} line  {lineno}.\n";
+            return Got { recs: out, err: Some(err) };
+        }
+        let mut rec = file_rec(path, fnum);
+        for i in 0..nh.min(nd) {
+            rec.put_dedupe(header[i], infer(tsv_decode(fields[i])));
+        }
+        for i in nh..nd {
+            rec.put_dedupe((i + 1).to_string(), infer(tsv_decode(fields[i])));
+        }
+        for i in nd..nh {
+            rec.put(header[i], Val.Void);
+        }
+        out.push(rec);
+    }
+    Got { recs: out, err: None }
+}
+
+fn read_dkvp(path: Str, text: Str, s: Seps, fnum: i64) -> Got {
+    let mut out: Vec[Rec] = Vec.new();
+    for line in lines_of(text) {
+        let mut rec = file_rec(path, fnum);
+        let pairs = split_fs(line, s.ifs, s.repifs);
+        for i in 0..pairs.len() {
+            let pair = pairs[i].clone();
+            match pair.split_once(s.ips) {
+                Some((k, v)) => rec.put_dedupe(k, infer(v)),
+                None => {
+                    if pair.len() > 0 {
+                        rec.put_dedupe((i + 1).to_string(), infer(pair));
+                    }
+                }
+            }
+        }
+        out.push(rec);
+    }
+    Got { recs: out, err: None }
+}
+
+fn read_nidx(path: Str, text: Str, s: Seps, fnum: i64) -> Result[Got, String] {
+    let mut out: Vec[Rec] = Vec.new();
+    let ws = match Regex.compile("[ \t]+") {
+        Ok(rx) => rx,
+        Err(e) => return Err(e.message),
+    };
+    for line in lines_of(text) {
+        let vals = if s.nidx_regex {
+            if line.len() == 0 { Vec.new() } else { ws.split(line) }
+        } else {
+            split_fs(line, s.ifs, s.repifs)
+        };
+        let mut rec = file_rec(path, fnum);
+        for i in 0..vals.len() {
+            rec.f.push(Field { key: (i + 1).to_string(), val: infer(vals[i]) });
+        }
+        out.push(rec);
+    }
+    Ok(Got { recs: out, err: None })
+}
+
+fn read_file(path: Str, o: Opts, s: Seps, fnum: i64) -> Result[Got, String] {
+    let text = match fs.read_to_string(path.to_string()) {
+        Ok(t) => t,
+        Err(e) => return Err(f"mlr: open {path}: {e}.\n"),
+    };
+    match o.ifmt.as_str() {
+        "csv" => Ok(read_csv(path, text, o, s, fnum)),
+        "tsv" => Ok(read_tsv(path, text, o, s, fnum)),
+        "nidx" => read_nidx(path, text, s, fnum),
+        _ => Ok(read_dkvp(path, text, s, fnum)),
+    }
+}
+
+// Every file's records, in file order, each file read in a task of its
+// own. A file stops at its first error; the later files are still read,
+// and the last error is the one reported.
+fn read_inputs(files: Vec[String], o: Opts, s: Seps) -> Result[Got, String] {
+    let group = TaskGroup.new();
+    let mut handles = Vec.new();
+    for i in 0..files.len() {
+        let path = files[i].clone();
+        handles.push(group.spawn(|| read_file(path, o, s, i + 1)));
+    }
+    let mut recs: Vec[Rec] = Vec.new();
+    let mut err: Option[String] = None;
+    for h in handles.into_iter() {
+        let got = h.join()?;
+        recs.extend(got.recs);
+        if got.err.is_some() {
+            err = got.err;
+        }
+    }
+    Ok(Got { recs: recs, err: err })
+}
+
+// ============================================================ writers
+
+// What a writer wrote, and the error it stopped at.
+struct Written {
+    text: String,
+    err: Option[String],
+}
+
+fn csv_quote(field: Str, comma: Str, quote_all: bool) -> String {
+    if not quote_all {
+        if field.len() == 0 {
+            return String.new();
+        }
+        let special = field == "\\." or field.contains("\n") or field.contains("\r")
+            or field.contains("\"") or field.contains(comma);
+        if not special {
+            return field.to_string();
+        }
+    }
+    "\"".to_string() + field.replace("\"", "\"\"") + "\""
+}
+
+fn tsv_encode(s: Str) -> String {
+    s.replace("\\", "\\\\").replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
+}
+
+fn csv_line(fields: Vec[String], s: Seps, o: Opts, tsv: bool) -> String {
+    let mut out = String.new();
+    for i in 0..fields.len() {
+        if i > 0 {
+            out.push_str(s.ofs);
+        }
+        if tsv {
+            out.push_str(tsv_encode(fields[i]));
+        } else {
+            out.push_str(csv_quote(fields[i], s.ofs, o.quote_all));
+        }
+    }
+    out.push('\n');
+    out
+}
+
+// CSV and TSV: the header is the first record's keys. A longer record is
+// written as it is, a shorter one is filled out with empty fields, and a
+// record whose keys differ from the header's is a schema change.
+fn write_csv(recs: Vec[Rec], o: Opts, s: Seps, tsv: bool) -> Written {
+    let mut out = String.new();
+    let mut first_keys: Vec[String] = Vec.new();
+    let mut have_first = false;
+    let mut need_header = not o.headerless;
+    for rec in recs {
+        let keys = rec.keys();
+        if not have_first {
+            first_keys = keys.clone();
+            have_first = true;
+        }
+        if need_header {
+            out.push_str(csv_line(keys, s, o, tsv));
+            need_header = false;
+        }
+        let mut fields: Vec[String] = Vec.new();
+        for i in 0..rec.f.len() {
+            if i < first_keys.len() and rec.f[i].key != first_keys[i] {
+                let kind = if tsv { "TSV" } else { "CSV" };
+                let a = join_strs(first_keys, s.ofs);
+                let b = join_strs(keys, s.ofs);
+                let err = f"mlr: {kind} schema change: first keys \"{a}\"; current keys \"{b}\"\n";
+                return Written { text: out, err: Some(err) };
+            }
+            fields.push(rec.f[i].val.text());
+        }
+        while fields.len() < first_keys.len() {
+            fields.push(String.new());
+        }
+        out.push_str(csv_line(fields, s, o, tsv));
+    }
+    Written { text: out, err: None }
+}
+
+fn write_dkvp(recs: Vec[Rec], s: Seps) -> Written {
+    let mut out = String.new();
+    for rec in recs {
+        for i in 0..rec.f.len() {
+            if i > 0 {
+                out.push_str(s.ofs);
+            }
+            out.push_str(rec.f[i].key);
+            out.push_str(s.ops);
+            out.push_str(rec.f[i].val.text());
+        }
+        out.push('\n');
+    }
+    Written { text: out, err: None }
+}
+
+fn write_nidx(recs: Vec[Rec], s: Seps) -> Written {
+    let mut out = String.new();
+    for rec in recs {
+        for i in 0..rec.f.len() {
+            if i > 0 {
+                out.push_str(s.ofs);
+            }
+            out.push_str(rec.f[i].val.text());
+        }
+        out.push('\n');
+    }
+    Written { text: out, err: None }
+}
+
+// Markdown: a new header whenever the keys change, after a blank line.
+fn write_markdown(recs: Vec[Rec]) -> Written {
+    let mut out = String.new();
+    let mut last = String.new();
+    let mut nheaders = 0;
+    for rec in recs {
+        let cur = join_strs(rec.keys(), ",");
+        if last.len() > 0 and cur != last {
+            last = String.new();
+            if nheaders > 0 {
+                out.push('\n');
+            }
+        }
+        if last.len() == 0 {
+            out.push('|');
+            for p in rec.f {
+                out.push_str(f" {p.key} |");
+            }
+            out.push('\n');
+            out.push('|');
+            for _ in 0..rec.f.len() {
+                out.push_str(" --- |");
+            }
+            out.push('\n');
+            last = cur;
+            nheaders += 1;
+        }
+        out.push('|');
+        for p in rec.f {
+            let v = p.val.text().replace("|", "\\|");
+            out.push_str(f" {v} |");
+        }
+        out.push('\n');
+    }
+    Written { text: out, err: None }
+}
+
+// XTAB: one line per field, keys padded to the longest; with --xvright
+// the values are right-aligned too.
+fn write_xtab(recs: Vec[Rec], o: Opts, s: Seps) -> Written {
+    let mut out = String.new();
+    let mut first = true;
+    for rec in recs {
+        let mut maxk = 1;
+        let mut maxv = 0;
+        for p in rec.f {
+            maxk = maxk.max(runes(p.key));
+            maxv = maxv.max(runes(p.val.text()));
+        }
+        if not first {
+            out.push_str(s.ofs);
+        }
+        first = false;
+        for p in rec.f {
+            let pad = maxk - runes(p.key);
+            let gap = if runes(s.ops) == 1 { repeat(s.ops, 1 + pad) } else { s.ops.clone() };
+            let mut val = p.val.text();
+            if o.xvright {
+                val = repeat(" ", maxv - runes(val)) + val;
+            }
+            out.push_str(p.key);
+            out.push_str(gap);
+            out.push_str(val);
+            out.push_str(s.ofs);
+        }
+    }
+    Written { text: out, err: None }
+}
+
+fn width_of(widths: Map[String, i64], k: Str) -> i64 {
+    widths.get(k.to_string()) ?? 0
+}
+
+fn padded(text: Str, k: Str, widths: Map[String, i64], ofs: Str, right: bool) -> String {
+    let pad = repeat(ofs, width_of(widths, k) - runes(text));
+    if right {
+        pad + text.to_string()
+    } else {
+        text.to_string() + pad
+    }
+}
+
+fn bar_line(rec: Rec, widths: Map[String, i64]) -> String {
+    let mut out = "+-".to_string();
+    for i in 0..rec.f.len() {
+        if i > 0 {
+            out.push_str("-+-");
+        }
+        out.push_str(repeat("-", width_of(widths, rec.f[i].key)));
+    }
+    out.push_str("-+\n");
+    out
+}
+
+fn barred_row(cells: Vec[String], ofs: Str) -> String {
+    let mut out = "|".to_string();
+    out.push_str(ofs);
+    for i in 0..cells.len() {
+        if i > 0 {
+            out.push_str(ofs);
+            out.push('|');
+            out.push_str(ofs);
+        }
+        out.push_str(cells[i]);
+    }
+    out.push_str(ofs);
+    out.push_str("|\n");
+    out
+}
+
+// One PPRINT block: the records of one key set, in columns as wide as
+// their widest cell. A block of empty records prints nothing.
+fn pprint_batch(batch: Vec[Rec], o: Opts, s: Seps, out: mut ref String) -> bool {
+    let mut widths: Map[String, i64] = Map.new();
+    let mut maxnf = 0;
+    for rec in batch {
+        maxnf = maxnf.max(rec.f.len());
+        for p in rec.f {
+            let w = runes(p.val.text()).max(1);
+            if w > width_of(widths, p.key) {
+                widths[p.key.clone()] = w;
+            }
+        }
+    }
+    if maxnf == 0 {
+        return false;
+    }
+    let keys: Vec[String] = widths.keys().map(|k| k.clone()).collect();
+    for k in keys {
+        let w = width_of(widths, k).max(runes(k));
+        widths[k.clone()] = w;
+    }
+    let ofs = s.ofs.clone();
+    if o.barred {
+        for idx in 0..batch.len() {
+            let rec = batch[idx].clone();
+            if idx == 0 and not o.headerless {
+                out.push_str(bar_line(rec, widths));
+                let mut cells: Vec[String] = Vec.new();
+                for p in rec.f {
+                    cells.push(padded(p.key, p.key, widths, ofs, o.right));
+                }
+                out.push_str(barred_row(cells, ofs));
+                out.push_str(bar_line(rec, widths));
+            }
+            let mut cells: Vec[String] = Vec.new();
+            for p in rec.f {
+                cells.push(padded(p.val.text(), p.key, widths, ofs, o.right));
+            }
+            out.push_str(barred_row(cells, ofs));
+            if idx == batch.len() - 1 {
+                out.push_str(bar_line(rec, widths));
+            }
+        }
+        return true;
+    }
+    for idx in 0..batch.len() {
+        let rec = batch[idx].clone();
+        let mut rows: Vec[Vec[(String, String)]] = Vec.new();
+        if idx == 0 and not o.headerless {
+            let mut row: Vec[(String, String)] = Vec.new();
+            for p in rec.f {
+                row.push((p.key.clone(), p.key.clone()));
+            }
+            rows.push(row);
+        }
+        let mut row: Vec[(String, String)] = Vec.new();
+        for p in rec.f {
+            let t = p.val.text();
+            row.push((p.key.clone(), if t.len() == 0 { "-".to_string() } else { t }));
+        }
+        rows.push(row);
+        for row in rows {
+            for j in 0..row.len() {
+                let (k, cell) = row[j].clone();
+                let last = j == row.len() - 1;
+                if o.right {
+                    out.push_str(repeat(ofs, width_of(widths, k) - runes(cell)));
+                    out.push_str(cell);
+                    out.push_str(if last { "\n" } else { ofs.as_str() });
+                } else {
+                    out.push_str(cell);
+                    if last {
+                        out.push('\n');
+                    } else {
+                        out.push_str(repeat(ofs, width_of(widths, k) - runes(cell)));
+                        out.push_str(ofs);
+                    }
+                }
+            }
+        }
+    }
+    true
+}
+
+// PPRINT: records batch by key set, the batches a blank line apart.
+fn write_pprint(recs: Vec[Rec], o: Opts, s: Seps) -> Written {
+    let mut out = String.new();
+    let mut batch: Vec[Rec] = Vec.new();
+    let mut last: Option[String] = None;
+    for rec in recs {
+        let cur = join_strs(rec.keys(), ",");
+        match last {
+            None => {
+                batch.push(rec.clone());
+                last = Some(cur);
+            }
+            Some(l) => {
+                if cur != l {
+                    if pprint_batch(batch, o, s, mut out) {
+                        out.push('\n');
+                    }
+                    batch = Vec.new();
+                    batch.push(rec.clone());
+                    last = Some(cur);
+                } else {
+                    batch.push(rec.clone());
+                }
+            }
+        }
+    }
+    if batch.len() > 0 {
+        pprint_batch(batch, o, s, mut out);
+    }
+    Written { text: out, err: None }
+}
+
+// ------------------------------------------------------------ JSON
+
+// A JSON value: a record's field, or a map or an array that
+// auto-unflatten made from `a.b` keys.
+#[derive(Clone)]
+enum Json {
+    Leaf(Val),
+    Obj(Vec[JField]),
+    List(Vec[Json]),
+}
+
+#[derive(Clone)]
+struct JField {
+    key: String,
+    val: Json,
+}
+
+fn json_string(s: Str) -> String {
+    let mut out = "\"".to_string();
+    for ch in s.chars() {
+        if ch == '\\' {
+            out.push_str("\\\\");
+        } else if ch == '\u{8}' {
+            out.push_str("\\b");
+        } else if ch == '\u{c}' {
+            out.push_str("\\f");
+        } else if ch == '\n' {
+            out.push_str("\\n");
+        } else if ch == '\r' {
+            out.push_str("\\r");
+        } else if ch == '\t' {
+            out.push_str("\\t");
+        } else if ch == '"' {
+            out.push_str("\\\"");
+        } else if (ch as u32) < 32 {
+            let code = ch as u32;
+            let hex = "0123456789abcdef";
+            out.push_str("\\u00");
+            out.push(hex.char_at((code / 16) as i64) ?? '0');
+            out.push(hex.char_at((code % 16) as i64) ?? '0');
+        } else {
+            out.push(ch);
+        }
+    }
+    out.push('"');
+    out
+}
+
+fn is_collection(j: Json) -> bool {
+    match j {
+        Json.Leaf(_) => false,
+        _ => true,
+    }
+}
+
+fn json_value(j: Json, multiline: bool, depth: i64) -> String {
+    match j {
+        Json.Obj(fields) => json_map(fields, multiline, depth),
+        Json.List(items) => {
+            let mut terminal = true;
+            for x in items {
+                if is_collection(x) {
+                    terminal = false;
+                }
+            }
+            if terminal or not multiline {
+                let mut out = "[".to_string();
+                for i in 0..items.len() {
+                    if i > 0 {
+                        out.push_str(", ");
+                    }
+                    out.push_str(json_value(items[i], false, depth + 1));
+                }
+                out.push(']');
+                return out;
+            }
+            let mut out = "[\n".to_string();
+            for i in 0..items.len() {
+                out.push_str(repeat("  ", depth));
+                out.push_str(json_value(items[i], multiline, depth + 1));
+                out.push_str(if i < items.len() - 1 { ",\n" } else { "\n" });
+            }
+            out.push_str(repeat("  ", depth - 1));
+            out.push(']');
+            out
+        }
+        Json.Leaf(v) => {
+            if v.is_num() {
+                v.text()
+            } else if v.is_void() {
+                "\"\"".to_string()
+            } else {
+                json_string(v.text())
+            }
+        }
+    }
+}
+
+fn json_map(fields: Vec[JField], multiline: bool, depth: i64) -> String {
+    if not multiline {
+        let mut out = "{".to_string();
+        for i in 0..fields.len() {
+            if i > 0 {
+                out.push_str(", ");
+            }
+            out.push_str(json_string(fields[i].key));
+            out.push_str(": ");
+            out.push_str(json_value(fields[i].val, false, depth + 1));
+        }
+        out.push('}');
+        return out;
+    }
+    if fields.len() == 0 {
+        return "{}".to_string();
+    }
+    let mut out = "{\n".to_string();
+    for i in 0..fields.len() {
+        out.push_str(repeat("  ", depth));
+        out.push_str(json_string(fields[i].key));
+        out.push_str(": ");
+        out.push_str(json_value(fields[i].val, true, depth + 1));
+        out.push_str(if i < fields.len() - 1 { ",\n" } else { "\n" });
+    }
+    out.push_str(repeat("  ", depth - 1));
+    out.push('}');
+    out
+}
+
+fn flat_json(rec: Rec) -> Vec[JField] {
+    let mut out: Vec[JField] = Vec.new();
+    for p in rec.f {
+        out.push(JField { key: p.key.clone(), val: Json.Leaf(p.val.clone()) });
+    }
+    out
+}
+
+fn write_json(recs: Vec[Vec[JField]], o: Opts) -> Written {
+    let mut out = String.new();
+    if o.jlistwrap {
+        for i in 0..recs.len() {
+            out.push_str(if i == 0 { "[\n" } else { ",\n" });
+            out.push_str(json_map(recs[i], o.jvstack, 1));
+        }
+        if recs.len() > 0 {
+            out.push_str("\n]\n");
+        }
+    } else {
+        for rec in recs {
+            out.push_str(json_map(rec, o.jvstack, 1));
+            out.push('\n');
+        }
+    }
+    Written { text: out, err: None }
+}
+
+// Auto-unflatten: `a.b` keys nest, "{}" and "[]" become empty collections,
+// and maps keyed 1..n become arrays.
+fn unflatten_terminal(v: Val) -> Json {
+    if v.is_str() and v.text() == "{}" {
+        return Json.Obj(Vec.new());
+    }
+    if v.is_str() and v.text() == "[]" {
+        return Json.List(Vec.new());
+    }
+    Json.Leaf(v.clone())
+}
+
+fn jfind(fields: Vec[JField], k: Str) -> Option[i64] {
+    for i in 0..fields.len() {
+        if fields[i].key == k {
+            return Some(i);
+        }
+    }
+    None
+}
+
+fn insert_path(fields: own Vec[JField], path: Slice[String], v: Json) -> Vec[JField] {
+    let mut out = fields;
+    let piece = path[0].clone();
+    let found = jfind(out, piece);
+    if path.len() == 1 {
+        match found {
+            Some(i) => out[i].val = v.clone(),
+            None => out.push(JField { key: piece, val: v.clone() }),
+        }
+        return out;
+    }
+    let inner = match found {
+        Some(i) => match out[i].val.clone() {
+            Json.Obj(fs) => fs,
+            _ => Vec.new(),
+        },
+        None => Vec.new(),
+    };
+    let child = Json.Obj(insert_path(inner, path[1..path.len()], v));
+    match found {
+        Some(i) => out[i].val = child,
+        None => out.push(JField { key: piece, val: child }),
+    }
+    out
+}
+
+fn arrayify(j: Json) -> Json {
+    match j {
+        Json.Obj(fields) => {
+            if fields.len() == 0 {
+                return j.clone();
+            }
+            let mut ok = true;
+            let mut kids: Vec[JField] = Vec.new();
+            for i in 0..fields.len() {
+                if fields[i].key != (i + 1).to_string() {
+                    ok = false;
+                }
+                kids.push(JField { key: fields[i].key.clone(), val: arrayify(fields[i].val) });
+            }
+            if ok {
+                let mut items: Vec[Json] = Vec.new();
+                for k in kids.into_iter() {
+                    items.push(k.val);
+                }
+                return Json.List(items);
+            }
+            Json.Obj(kids)
+        }
+        Json.List(items) => {
+            let mut out: Vec[Json] = Vec.new();
+            for x in items {
+                out.push(arrayify(x));
+            }
+            Json.List(out)
+        }
+        Json.Leaf(_) => j.clone(),
+    }
+}
+
+fn unflatten(rec: Rec) -> Vec[JField] {
+    let mut out: Vec[JField] = Vec.new();
+    let mut affected: Vec[String] = Vec.new();
+    for p in rec.f {
+        if p.key.contains(".") {
+            let path: Vec[String] = p.key.split(".").map(|x| x.to_string()).collect();
+            if not affected.contains(path[0]) {
+                affected.push(path[0].clone());
+            }
+            out = insert_path(out, path.as_slice(), unflatten_terminal(p.val));
+        } else {
+            let leaf = unflatten_terminal(p.val);
+            match jfind(out, p.key) {
+                Some(i) => out[i].val = leaf,
+                None => out.push(JField { key: p.key.clone(), val: leaf }),
+            }
+        }
+    }
+    for base in affected {
+        if let Some(i) = jfind(out, base) {
+            out[i].val = arrayify(out[i].val);
+        }
+    }
+    out
+}
+
+// ============================================================ verbs
+
+// A verb as the command line gave it: its flags in order, each with its
+// argument ("" for a flag that takes none), and its positional arguments.
+#[derive(Clone)]
+struct Verb {
+    name: String,
+    opts: Vec[(String, String)],
+    pos: Vec[String],
+}
+
+impl Verb {
+    fn flag(self, f: Str) -> bool {
+        for (k, _) in self.opts {
+            if k == f {
+                return true;
+            }
+        }
+        false
+    }
+
+    // The argument of the last use of a flag.
+    fn last(self, f: Str) -> Option[String] {
+        let mut out: Option[String] = None;
+        for (k, a) in self.opts {
+            if k == f {
+                out = Some(a.clone());
+            }
+        }
+        out
+    }
+
+    fn list_of(self, f: Str) -> Option[Vec[String]] {
+        match self.last(f) {
+            Some(a) => Some(split_list(a)),
+            None => None,
+        }
+    }
+
+    fn list_or_empty(self, f: Str) -> Vec[String] {
+        self.list_of(f) ?? Vec.new()
+    }
+
+    fn int_of(self, f: Str, default: i64) -> i64 {
+        match self.last(f) {
+            Some(a) => i64.parse(a) ?? default,
+            None => default,
+        }
+    }
+}
+
+// Each verb's flags: a flag ending in ':' takes an argument, one ending
+// in '#' takes an int.
+fn verb_flags(verb: Str) -> Option[String] {
+    let spec = match verb {
+        "cat" => "-n -N: -g: --filename --filenum",
+        "head" => "-n# -g:",
+        "tail" => "-n# -g:",
+        "tac" => "",
+        "group-by" => "",
+        "group-like" => "",
+        "regularize" => "",
+        "sort-within-records" => "-r",
+        "cut" => "-f: -o -x --complement -r",
+        "having-fields" => "--at-least: --which-are: --at-most: --all-defined: --any-defined: --all-matching: --any-matching: --none-matching:",
+        "template" => "-f: --fill-with:",
+        "unsparsify" => "--fill-with: -f:",
+        "fill-down" => "-f: --all -a --only-if-absent",
+        "fill-empty" => "-v: -S",
+        "grep" => "-v -i -a",
+        "decimate" => "-n# -b -e -g:",
+        "sec2gmt" => "-1 -2 -3 -4 -5 -6 -7 -8 -9 --millis --micros --nanos",
+        "seqgen" => "-f: --start: --stop: --step:",
+        "sort" => "-f: -r: -c: -cr: -nf: -nr:",
+        "top" => "-n# -f: -g: --max --min -a -o:",
+        "count" => "-g: -n -o:",
+        "count-similar" => "-g: -o:",
+        "uniq" => "-g: -f: -x: -c -n -o: -a -u",
+        "count-distinct" => "-g: -f: -x: -c -n -o: -a -u",
+        "stats1" => "-a: -f: -g: --fr: --fx: -i",
+        "merge-fields" => "-a: -f: -r: -c: -o: -k -i",
+        "fraction" => "-f: -g: -p -c",
+        "step" => "-a: -f: -g: -d: -o:",
+        "nest" => "-f: --explode -e --implode -i --values -v --pairs -p --across-records -R --across-fields -F --nested-fs: -S: --nested-ps: -P: --evar: --ivar:",
+        "reorder" => "-f: -r: -b: -a: -e",
+        "rename" => "-r -g",
+        "label" => "",
+        "join" => "-f: -j: -l: -r: --lk: --lp: --rp: --np --ul --ur -u",
+        _ => return None,
+    };
+    Some(spec.to_string())
+}
+
+fn verb_positionals(verb: Str) -> i64 {
+    match verb {
+        "group-by" => 1,
+        "grep" => 1,
+        "sec2gmt" => 1,
+        "rename" => 1,
+        "label" => 1,
+        _ => 0,
+    }
+}
+
+// The arity of a verb's flag: 0 none, 1 a string, 2 an int; None when the
+// verb has no such flag.
+fn flag_arity(spec: Str, flag: Str) -> Option[i64] {
+    for tok in spec.split(" ") {
+        if tok == flag {
+            return Some(0);
+        }
+        if let Some(t) = tok.strip_suffix(":") {
+            if t == flag {
+                return Some(1);
+            }
+        }
+        if let Some(t) = tok.strip_suffix("#") {
+            if t == flag {
+                return Some(2);
+            }
+        }
+    }
+    None
+}
+
+fn int_text(a: Str) -> bool {
+    let b = a.bytes();
+    let from = if b.len() > 0 and (b[0] == b'+' or b[0] == b'-') { 1 } else { 0 };
+    digits_in(b, from, is_dec) and b.len() > from
+}
+
+fn stepper_shape(name: Str) -> Option[(i64, i64)] {
+    match name {
+        "delta" => return Some((1, 0)),
+        "shift" => return Some((1, 0)),
+        "shift_lag" => return Some((1, 0)),
+        "ratio" => return Some((1, 0)),
+        "shift_lead" => return Some((0, 1)),
+        "from-first" => return Some((0, 0)),
+        "rsum" => return Some((0, 0)),
+        "rprod" => return Some((0, 0)),
+        "counter" => return Some((0, 0)),
+        "ewma" => return Some((0, 0)),
+        _ => {}
+    }
+    let rest = name.strip_prefix("slwin_")?;
+    let (a, b) = rest.split_once("_")?;
+    if not (digits_in(a.bytes(), 0, is_dec) and a.len() > 0 and digits_in(b.bytes(), 0, is_dec) and b.len() > 0) {
+        return None;
+    }
+    Some((i64.parse(a).ok()?, i64.parse(b).ok()?))
+}
+
+// Parses the verb at argv[i]; returns it and the position after it. The
+// checks here are the ones Miller makes while it parses the command line.
+fn parse_verb(argv: Vec[String], start: i64) -> Result[(Verb, i64), String] {
+    let name = argv[start].clone();
+    let spec = match verb_flags(name) {
+        Some(s) => s,
+        None => return Err(f"mlr: verb \"{name}\" not found. Please use \"mlr --help\" for a list.\n"),
+    };
+    let mut v = Verb { name: name.clone(), opts: Vec.new(), pos: Vec.new() };
+    let mut i = start + 1;
+    while i < argv.len() and argv[i].starts_with("-") and argv[i] != "--" {
+        let mut opt = argv[i].clone();
+        i += 1;
+        // Getoptify split -nr into -n -r; sort reads the pair back.
+        if name == "sort" and i < argv.len() {
+            let nxt = argv[i].clone();
+            if opt == "-c" and nxt == "-r" {
+                opt = "-cr".to_string();
+                i += 1;
+            } else if opt == "-n" and (nxt == "-f" or nxt == "-r") {
+                opt = "-n".to_string() + nxt.substring(1);
+                i += 1;
+            } else if opt == "-n" {
+                opt = "-nf".to_string();
+            }
+        } else if name == "sort" and opt == "-n" {
+            opt = "-nf".to_string();
+        }
+        let arity = match flag_arity(spec, opt) {
+            Some(a) => a,
+            None => return Err(f"mlr {name}: option \"{opt}\" not recognized.\n"),
+        };
+        let mut arg = String.new();
+        if arity > 0 {
+            if i >= argv.len() {
+                return Err(f"mlr {name}: option \"{opt}\" missing argument(s).\n");
+            }
+            arg = argv[i].clone();
+            i += 1;
+            if arity == 2 and not int_text(arg) {
+                return Err(f"mlr {name}: could not scan flag \"{arg}\" argument \"{arg}\" as int.\n");
+            }
+        }
+        if name == "step" and opt == "-a" {
+            for st in split_list(arg) {
+                if stepper_shape(st).is_none() {
+                    return Err(f"mlr step: stepper \"{st}\" not found.\n");
+                }
+            }
+        }
+        v.opts.push((opt, arg));
+    }
+    for _ in 0..verb_positionals(name) {
+        if i >= argv.len() {
+            return Err(f"mlr {name}: positional argument missing.\n");
+        }
+        v.pos.push(argv[i].clone());
+        i += 1;
+    }
+    match name.as_str() {
+        "stats1" => {
+            if not v.flag("-a") {
+                return Err("mlr stats1: -a option is required.\nPlease see mlr stats1 --help for more information.\n".to_string());
+            }
+            if not (v.flag("-f") or v.flag("--fr") or v.flag("--fx")) {
+                return Err("mlr stats1: -f option is required.\nPlease see mlr stats1 --help for more information.\n".to_string());
+            }
+        }
+        "merge-fields" => {
+            if not v.flag("-a") {
+                return Err("mlr merge-fields: -a option is required.\nPlease see mlr merge-fields --help for more information.\n".to_string());
+            }
+            if not (v.flag("-f") or v.flag("-r") or v.flag("-c")) {
+                return Err("mlr merge-fields: -f option is required.\nPlease see mlr merge-fields --help for more information.\n".to_string());
+            }
+        }
+        "nest" => {
+            let n = nest_config(v);
+            if n.field.is_none() or n.action.len() == 0 or n.what.len() == 0 or n.across.len() == 0 {
+                return Err("mlr nest: missing required argument.\n".to_string());
+            }
+        }
+        "rename" => {
+            if v.pos[0].split(",").count() % 2 != 0 {
+                return Err("mlr rename: field-name list must have even length.\n".to_string());
+            }
+        }
+        "grep" => {
+            let pattern = v.pos[0].clone();
+            let full = if v.flag("-i") { "(?i)".to_string() + pattern } else { pattern.clone() };
+            if Regex.compile(full).is_err() {
+                return Err(f"mlr grep: couldn't compile regex \"{pattern}\"\n");
+            }
+        }
+        "join" => {
+            if not v.flag("-f") {
+                return Err("mlr join: need left file name\n".to_string());
+            }
+            if v.flag("--np") and not v.flag("--ul") and not v.flag("--ur") {
+                return Err("mlr join: all emit flags are unset; no output is possible.\n".to_string());
+            }
+            if not v.flag("-j") {
+                return Err("mlr join: need output field names\n".to_string());
+            }
+        }
+        _ => {}
+    }
+    Ok((v, i))
+}
+
+fn percentile_of(name: Str) -> Option[f64] {
+    if name == "median" {
+        return Some(50.0);
+    }
+    let rest = name.strip_prefix("p")?;
+    if not float_text(rest) {
+        return None;
+    }
+    f64.parse(rest).ok()
+}
+
+fn valid_acc(name: Str) -> bool {
+    let known = [
+        "count", "null_count", "distinct_count", "mode", "antimode", "sum", "mean", "mad", "var",
+        "stddev", "meaneb", "skewness", "kurtosis", "min", "max", "minlen", "maxlen",
+    ];
+    for k in known {
+        if k == name {
+            return true;
+        }
+    }
+    percentile_of(name).is_some()
+}
+
+// The checks Miller makes when it builds each verb, once the whole
+// command line has parsed.
+fn construct_verb(v: Verb) -> Result[(), String] {
+    match v.name.as_str() {
+        "stats1" => {
+            for a in v.list_or_empty("-a") {
+                if not valid_acc(a) {
+                    return Err(f"mlr stats1: accumulator \"{a}\" not found.\n");
+                }
+            }
+        }
+        "merge-fields" => {
+            for a in v.list_or_empty("-a") {
+                if not valid_acc(a) {
+                    return Err(f"mlr merge-fields: accumulator \"{a}\" not found.\n\n");
+                }
+            }
+        }
+        "step" => {
+            if not v.flag("-a") or not v.flag("-f") {
+                return Err("mlr step: -a and -f are both required arguments.\n".to_string());
+            }
+        }
+        "seqgen" => {
+            seqgen_params(v)?;
+        }
+        "label" => {
+            let names = split_list(v.pos[0]);
+            for i in 0..names.len() {
+                for j in 0..i {
+                    if names[j] == names[i] {
+                        let n = names[i].clone();
+                        return Err(f"mlr label: labels must be unique; got duplicate \"{n}\"\n");
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------ cat, head, tail, tac
+
+fn v_cat(v: Verb, recs: own Vec[Rec]) -> Vec[Rec] {
+    let numbers = v.flag("-n") or v.flag("-N");
+    let name = v.last("-N") ?? "n".to_string();
+    let groups = v.list_of("-g");
+    let mut counter = 0;
+    let mut counts: Map[String, i64] = Map.new();
+    let mut out: Vec[Rec] = Vec.new();
+    for rec in recs.into_iter() {
+        let mut r = rec;
+        if numbers {
+            let mut grouped: Option[String] = None;
+            if let Some(g) = groups {
+                if g.len() > 0 {
+                    if let Some(vals) = selected(r, g) {
+                        grouped = Some(joined(vals));
+                    }
+                }
+            }
+            let c = match grouped {
+                Some(key) => {
+                    let c = (counts.get(key) ?? 0) + 1;
+                    counts[key] = c;
+                    c
+                }
+                None => {
+                    counter += 1;
+                    counter
+                }
+            };
+            r.prepend(name, from_int(c));
+        }
+        if v.flag("--filename") {
+            let fname = r.fname.clone();
+            r.prepend("filename", from_string(fname));
+        }
+        if v.flag("--filenum") {
+            let fnum = r.fnum;
+            r.prepend("filenum", from_int(fnum));
+        }
+        out.push(r);
+    }
+    out
+}
+
+fn v_head(v: Verb, recs: own Vec[Rec]) -> Vec[Rec] {
+    let n = v.int_of("-n", 10).abs();
+    let groups = v.list_or_empty("-g");
+    let mut counts: Map[String, i64] = Map.new();
+    let mut out: Vec[Rec] = Vec.new();
+    for rec in recs.into_iter() {
+        let key = match selected(rec, groups) {
+            Some(vals) => joined(vals),
+            None => continue,
+        };
+        let c = counts.get(key) ?? 0;
+        if c < n {
+            out.push(rec);
+        }
+        counts[key] = c + 1;
+    }
+    out
+}
+
+fn v_tail(v: Verb, recs: own Vec[Rec]) -> Vec[Rec] {
+    let n = v.int_of("-n", 10).abs();
+    let groups = v.list_or_empty("-g");
+    let mut index: Map[String, i64] = Map.new();
+    let mut keep: Vec[Vec[Rec]] = Vec.new();
+    for rec in recs.into_iter() {
+        let key = match selected(rec, groups) {
+            Some(vals) => joined(vals),
+            None => continue,
+        };
+        let at = match index.get(key) {
+            Some(i) => *i,
+            None => {
+                keep.push(Vec.new());
+                index[key] = keep.len() - 1;
+                keep.len() - 1
+            }
+        };
+        keep[at].push(rec);
+        if keep[at].len() > n {
+            keep[at].remove(0);
+        }
+    }
+    let mut out: Vec[Rec] = Vec.new();
+    for bucket in keep.into_iter() {
+        out.extend(bucket);
+    }
+    out
+}
+
+fn v_tac(recs: own Vec[Rec]) -> Vec[Rec] {
+    let mut out = recs;
+    out.reverse();
+    out
+}
+
+// Records in buckets by a key, the buckets in first-seen order; a record
+// with no key is dropped.
+struct Buckets {
+    index: Map[String, i64],
+    lists: Vec[Vec[Rec]],
+}
+
+fn new_buckets() -> Buckets {
+    Buckets { index: Map.new(), lists: Vec.new() }
+}
+
+impl Buckets {
+    fn add(mut ref self, key: Str, rec: own Rec) {
+        match self.index.get(key.to_string()) {
+            Some(i) => {
+                let at = *i;
+                self.lists[at].push(rec);
+            }
+            None => {
+                self.index[key.to_string()] = self.lists.len();
+                let mut l: Vec[Rec] = Vec.new();
+                l.push(rec);
+                self.lists.push(l);
+            }
+        }
+    }
+
+    fn flat(own self) -> Vec[Rec] {
+        let mut out: Vec[Rec] = Vec.new();
+        for l in self.lists.into_iter() {
+            out.extend(l);
+        }
+        out
+    }
+}
+
+fn v_group_by(v: Verb, recs: own Vec[Rec]) -> Vec[Rec] {
+    let names: Vec[String] = v.pos[0].split(",").map(|p| p.to_string()).collect();
+    let mut b = new_buckets();
+    for rec in recs.into_iter() {
+        if let Some(vals) = selected(rec, names) {
+            b.add(joined(vals), rec);
+        }
+    }
+    b.flat()
+}
+
+fn v_group_like(recs: own Vec[Rec]) -> Vec[Rec] {
+    let mut b = new_buckets();
+    for rec in recs.into_iter() {
+        let key = join_strs(rec.keys(), ",");
+        b.add(key, rec);
+    }
+    b.flat()
+}
+
+fn v_regularize(recs: own Vec[Rec]) -> Vec[Rec] {
+    let mut seen: Map[String, Vec[String]] = Map.new();
+    let mut out: Vec[Rec] = Vec.new();
+    for rec in recs.into_iter() {
+        let keys = rec.keys();
+        let mut sorted = keys.clone();
+        sorted.sort();
+        let sk = join_strs(sorted, ",");
+        match seen.get(sk) {
+            Some(order) => {
+                let mut f: Vec[Field] = Vec.new();
+                for k in order {
+                    f.push(field(k, rec.get(k) ?? Val.Absent));
+                }
+                out.push(rec.like(f));
+            }
+            None => {
+                seen[sk] = keys;
+                out.push(rec);
+            }
+        }
+    }
+    out
+}
+
+fn v_sort_within_records(recs: own Vec[Rec]) -> Vec[Rec] {
+    let mut out: Vec[Rec] = Vec.new();
+    for rec in recs.into_iter() {
+        let mut r = rec;
+        r.f.sort_by(|a, b| a.key.cmp(b.key));
+        out.push(r);
+    }
+    out
+}
+
+// ------------------------------------------------------------ cut, having-fields, template
+
+fn v_cut(v: Verb, recs: own Vec[Rec]) -> Result[Vec[Rec], String] {
+    let names = v.list_or_empty("-f");
+    let ordered = v.flag("-o");
+    let complement = v.flag("-x") or v.flag("--complement");
+    let use_regex = v.flag("-r");
+    let rxs = if use_regex { regexes(names)? } else { Vec.new() };
+    let mut out: Vec[Rec] = Vec.new();
+    for rec in recs.into_iter() {
+        let mut r = rec;
+        if use_regex {
+            r.f.retain(|p| any_match(rxs, p.key) != complement);
+        } else if complement {
+            r.f.retain(|p| not names.contains(p.key));
+        } else if ordered {
+            let mut f: Vec[Field] = Vec.new();
+            for n in names {
+                if let Some(val) = r.get(n) {
+                    f.push(field(n, val));
+                }
+            }
+            r.f = f;
+        } else {
+            r.f.retain(|p| names.contains(p.key));
+        }
+        out.push(r);
+    }
+    Ok(out)
+}
+
+fn v_having_fields(v: Verb, recs: own Vec[Rec]) -> Result[Vec[Rec], String] {
+    let (mode, arg) = v.opts[v.opts.len() - 1].clone();
+    let names = split_list(arg);
+    let rx = if mode.ends_with("-matching") { Some(miller_regex(arg)?) } else { None };
+    let mut out: Vec[Rec] = Vec.new();
+    for rec in recs.into_iter() {
+        let keys = rec.keys();
+        let keep = match mode.as_str() {
+            "--at-least" => names.iter().all(|n| rec.has(n)),
+            "--which-are" => keys.len() == names.len() and names.iter().all(|n| rec.has(n)),
+            "--at-most" => keys.iter().all(|k| names.contains(k)),
+            _ => {
+                let r = match rx {
+                    Some(r) => r,
+                    None => return Err(f"mlr having-fields: option \"{mode}\" not recognized.\n"),
+                };
+                let hits = keys.iter().filter(|k| r.is_match(k)).count();
+                match mode.as_str() {
+                    "--all-matching" => keys.len() > 0 and hits == keys.len(),
+                    "--any-matching" => hits > 0,
+                    _ => hits == 0,
+                }
+            }
+        };
+        if keep {
+            out.push(rec);
+        }
+    }
+    Ok(out)
+}
+
+fn v_template(v: Verb, recs: own Vec[Rec]) -> Vec[Rec] {
+    let names = v.list_or_empty("-f");
+    let fill = from_string(v.last("--fill-with") ?? String.new());
+    let mut out: Vec[Rec] = Vec.new();
+    for rec in recs.into_iter() {
+        let mut f: Vec[Field] = Vec.new();
+        for n in names {
+            f.push(field(n, rec.get(n) ?? fill.clone()));
+        }
+        out.push(rec.like(f));
+    }
+    out
+}
+
+fn v_unsparsify(v: Verb, recs: own Vec[Rec]) -> Vec[Rec] {
+    let fill = from_string(v.last("--fill-with") ?? String.new());
+    let mut names: Vec[String] = Vec.new();
+    let mut have_names = false;
+    for (k, a) in v.opts {
+        if k == "-f" {
+            names.extend(split_list(a));
+            have_names = true;
+        }
+    }
+    let mut out: Vec[Rec] = Vec.new();
+    if have_names {
+        for rec in recs.into_iter() {
+            let mut r = rec;
+            for n in names {
+                if not r.has(n) {
+                    r.put(n, fill);
+                }
+            }
+            out.push(r);
+        }
+        return out;
+    }
+    let mut union: Vec[String] = Vec.new();
+    let mut seen: Set[String] = Set.new();
+    for rec in recs {
+        for p in rec.f {
+            if seen.insert(p.key.clone()) {
+                union.push(p.key.clone());
+            }
+        }
+    }
+    for rec in recs.into_iter() {
+        let mut f: Vec[Field] = Vec.new();
+        for k in union {
+            f.push(field(k, rec.get(k) ?? fill.clone()));
+        }
+        out.push(rec.like(f));
+    }
+    out
+}
+
+fn v_fill_down(v: Verb, recs: own Vec[Rec]) -> Vec[Rec] {
+    let names = v.list_or_empty("-f");
+    let all = v.flag("--all");
+    let only_absent = v.flag("-a") or v.flag("--only-if-absent");
+    let mut last: Map[String, Val] = Map.new();
+    let mut out: Vec[Rec] = Vec.new();
+    for rec in recs.into_iter() {
+        let mut r = rec;
+        let fields = if all { r.keys() } else { names.clone() };
+        for n in fields {
+            let present = match r.get(n) {
+                Some(val) => only_absent or not val.is_void(),
+                None => false,
+            };
+            if present {
+                last[n.clone()] = r.get(n) ?? Val.Absent;
+            } else if let Some(prev) = last.get(n) {
+                let p = prev.clone();
+                r.put(n, p);
+            }
+        }
+        out.push(r);
+    }
+    out
+}
+
+fn v_fill_empty(v: Verb, recs: own Vec[Rec]) -> Vec[Rec] {
+    let text = v.last("-v") ?? "N/A".to_string();
+    let fill = if v.flag("-S") { from_string(text) } else { infer(text) };
+    let mut out: Vec[Rec] = Vec.new();
+    for rec in recs.into_iter() {
+        let mut r = rec;
+        for i in 0..r.f.len() {
+            if r.f[i].val.is_void() {
+                r.f[i].val = fill.clone();
+            }
+        }
+        out.push(r);
+    }
+    out
+}
+
+// ------------------------------------------------------------ grep, decimate, sec2gmt, seqgen
+
+fn v_grep(v: Verb, recs: own Vec[Rec]) -> Result[Vec[Rec], String] {
+    let invert = v.flag("-v");
+    let values_only = v.flag("-a");
+    let pattern = if v.flag("-i") { "(?i)".to_string() + v.pos[0] } else { v.pos[0].clone() };
+    let rx = match Regex.compile(pattern) {
+        Ok(r) => r,
+        Err(e) => return Err(e.message),
+    };
+    let mut out: Vec[Rec] = Vec.new();
+    for rec in recs.into_iter() {
+        let mut text = String.new();
+        for i in 0..rec.f.len() {
+            if i > 0 {
+                text.push(',');
+            }
+            if not values_only {
+                text.push_str(rec.f[i].key);
+                text.push('=');
+            }
+            text.push_str(rec.f[i].val.text());
+        }
+        if rx.is_match(text) != invert {
+            out.push(rec);
+        }
+    }
+    Ok(out)
+}
+
+fn v_decimate(v: Verb, recs: own Vec[Rec]) -> Vec[Rec] {
+    let n = v.int_of("-n", 10);
+    let groups = v.list_or_empty("-g");
+    let keep_rem = if v.flag("-b") and not v.flag("-e") { 0 } else { n - 1 };
+    let mut counts: Map[String, i64] = Map.new();
+    let mut out: Vec[Rec] = Vec.new();
+    for rec in recs.into_iter() {
+        let key = match selected(rec, groups) {
+            Some(vals) => joined(vals),
+            None => continue,
+        };
+        let c = counts.get(key) ?? 0;
+        if c % n == keep_rem {
+            out.push(rec);
+        }
+        counts[key] = c + 1;
+    }
+    out
+}
+
+// Howard Hinnant's civil_from_days, proleptic Gregorian: Miller's dates
+// run past the year 9999.
+fn days_to_civil(days: i64) -> (i64, i64, i64) {
+    let z = days + 719468;
+    let era = (if z >= 0 { z } else { z - 146096 }) / 146097;
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
+fn floor_div(a: i64, b: i64) -> i64 {
+    let q = a / b;
+    if (a % b != 0) and ((a < 0) != (b < 0)) { q - 1 } else { q }
+}
+
+fn zero_pad(n: i64, width: i64) -> String {
+    let s = n.to_string();
+    repeat("0", width - s.len()) + s
+}
+
+fn sec2gmt(x: f64, places: i64) -> String {
+    let mut ip = x.trunc() as i64;
+    let mut frac = x - ip as f64;
+    if frac < 0.0 {
+        ip -= 1;
+        frac += 1.0;
+    }
+    let mut ns = (frac * 1.0e9).trunc() as i64;
+    ip += ns / 1000000000;
+    ns = ns % 1000000000;
+    let days = floor_div(ip, 86400);
+    let secs = ip - days * 86400;
+    let (y, m, d) = days_to_civil(days);
+    let mut s = f"{zero_pad(y, 4)}-{zero_pad(m, 2)}-{zero_pad(d, 2)}T";
+    s.push_str(f"{zero_pad(secs / 3600, 2)}:{zero_pad(secs / 60 % 60, 2)}:{zero_pad(secs % 60, 2)}");
+    if places > 0 {
+        let mut div = 1;
+        for _ in 0..(9 - places) {
+            div *= 10;
+        }
+        s.push('.');
+        s.push_str(zero_pad(ns / div, places));
+    }
+    s.push('Z');
+    s
+}
+
+fn v_sec2gmt(v: Verb, recs: own Vec[Rec]) -> Vec[Rec] {
+    let mut pre = 1.0;
+    let mut places = 0;
+    for (k, _) in v.opts {
+        match k.as_str() {
+            "--millis" => pre = 1.0e3,
+            "--micros" => pre = 1.0e6,
+            "--nanos" => pre = 1.0e9,
+            _ => places = i64.parse(k.substring(1)) ?? 0,
+        }
+    }
+    let names: Vec[String] = v.pos[0].split(",").map(|p| p.to_string()).collect();
+    let mut out: Vec[Rec] = Vec.new();
+    for rec in recs.into_iter() {
+        let mut r = rec;
+        for n in names {
+            if let Some(val) = r.get(n) {
+                if val.is_num() {
+                    r.put(n, from_string(sec2gmt(val.as_f64() / pre, places)));
+                }
+            }
+        }
+        out.push(r);
+    }
+    out
+}
+
+// seqgen's start, stop and step, and which way it counts: 1 up, -1 down,
+// 0 for a zero step from start to an equal stop.
+fn seqgen_params(v: Verb) -> Result[(Val, Val, Val, i64), String] {
+    let start = v.last("--start") ?? "1".to_string();
+    let stop = v.last("--stop") ?? "100".to_string();
+    let step = v.last("--step") ?? "1".to_string();
+    let a = infer(start);
+    let b = infer(stop);
+    let c = infer(step);
+    if not a.is_num() {
+        return Err(f"mlr seqgen: start value should be number; got \"{start}\"\n");
+    }
+    if not b.is_num() {
+        return Err(f"mlr seqgen: stop value should be number; got \"{stop}\"\n");
+    }
+    if not c.is_num() {
+        return Err(f"mlr seqgen: step value should be number; got \"{step}\"\n");
+    }
+    let dir = if c.as_f64() > 0.0 {
+        1
+    } else if c.as_f64() < 0.0 {
+        -1
+    } else if collate(a, b) == Ordering.Equal {
+        0
+    } else {
+        return Err("mlr seqgen: step must not be zero unless start == stop.\n".to_string());
+    };
+    Ok((a, b, c, dir))
+}
+
+fn v_seqgen(v: Verb) -> Result[Vec[Rec], String] {
+    let name = v.last("-f") ?? "i".to_string();
+    let (a, b, c, dir) = seqgen_params(v)?;
+    let mut out: Vec[Rec] = Vec.new();
+    let mut x = a;
+    loop {
+        let o = collate(x, b);
+        let done = if dir > 0 {
+            o == Ordering.Greater
+        } else if dir < 0 {
+            o == Ordering.Less
+        } else {
+            o == Ordering.Equal
+        };
+        if done {
+            break;
+        }
+        let mut r = Rec { f: Vec.new(), fname: "seqgen".to_string(), fnum: 1 };
+        r.f.push(field(name, x));
+        out.push(r);
+        x = plus(x, c);
+    }
+    Ok(out)
+}
+
+// ------------------------------------------------------------ sort, top
+
+#[derive(Clone, Copy, PartialEq)]
+enum SortKind {
+    Lex,
+    LexRev,
+    Fold,
+    FoldRev,
+    Num,
+    NumRev,
+}
+
+fn fold_text(v: Val) -> String {
+    if v.is_str() { v.text().to_lowercase() } else { v.text() }
+}
+
+fn sort_compare(kinds: Vec[SortKind], a: Vec[Val], b: Vec[Val]) -> Ordering {
+    for i in 0..kinds.len() {
+        let c = match kinds[i] {
+            SortKind.Lex => a[i].text().cmp(b[i].text()),
+            SortKind.LexRev => b[i].text().cmp(a[i].text()),
+            SortKind.Fold => fold_text(a[i]).cmp(fold_text(b[i])),
+            SortKind.FoldRev => fold_text(b[i]).cmp(fold_text(a[i])),
+            SortKind.Num => collate(a[i], b[i]),
+            SortKind.NumRev => reverse_order(collate(a[i], b[i])),
+        };
+        if c != Ordering.Equal {
+            return c;
+        }
+    }
+    Ordering.Equal
+}
+
+// sort: records group by their sort-key values; the groups sort, stably,
+// and records missing a key come last, in arrival order.
+fn v_sort(v: Verb, recs: own Vec[Rec]) -> Vec[Rec] {
+    let mut names: Vec[String] = Vec.new();
+    let mut kinds: Vec[SortKind] = Vec.new();
+    for (k, a) in v.opts {
+        let kind = match k.as_str() {
+            "-f" => SortKind.Lex,
+            "-r" => SortKind.LexRev,
+            "-c" => SortKind.Fold,
+            "-cr" => SortKind.FoldRev,
+            "-nf" => SortKind.Num,
+            _ => SortKind.NumRev,
+        };
+        for n in split_list(a) {
+            names.push(n);
+            kinds.push(kind);
+        }
+    }
+    let mut index: Map[String, i64] = Map.new();
+    let mut groups: Vec[(Vec[Val], Vec[Rec])] = Vec.new();
+    let mut spill: Vec[Rec] = Vec.new();
+    for rec in recs.into_iter() {
+        let vals = match selected(rec, names) {
+            Some(vals) => vals,
+            None => {
+                spill.push(rec);
+                continue;
+            }
+        };
+        let key = joined(vals);
+        match index.get(key) {
+            Some(i) => {
+                let at = *i;
+                groups[at].1.push(rec);
+            }
+            None => {
+                index[key] = groups.len();
+                let mut l: Vec[Rec] = Vec.new();
+                l.push(rec);
+                groups.push((vals, l));
+            }
+        }
+    }
+    groups.sort_by(|x, y| sort_compare(kinds, x.0, y.0));
+    let mut out: Vec[Rec] = Vec.new();
+    for (_, l) in groups.into_iter() {
+        out.extend(l);
+    }
+    out.extend(spill);
+    out
+}
+
+// BsearchMlrvalArrayFor{Descending,Ascending}Insert, as Miller's top
+// keeper uses it.
+fn bsearch_insert(arr: Vec[Val], value: Val, descending: bool) -> i64 {
+    let size = arr.len();
+    if size == 0 {
+        return 0;
+    }
+    let gt = |a: Val, b: Val| {
+        let c = collate(a, b);
+        if descending { c == Ordering.Greater } else { c == Ordering.Less }
+    };
+    let lt = |a: Val, b: Val| {
+        let c = collate(a, b);
+        if descending { c == Ordering.Less } else { c == Ordering.Greater }
+    };
+    let mut lo = 0;
+    let mut hi = size - 1;
+    let mut mid = (hi + lo) / 2;
+    if gt(value, arr[0]) {
+        return 0;
+    }
+    if lt(value, arr[hi]) {
+        return size;
+    }
+    while lo < hi {
+        if collate(value, arr[mid]) == Ordering.Equal {
+            return mid;
+        } else if gt(value, arr[mid]) {
+            hi = mid;
+        } else {
+            lo = mid;
+        }
+        let newmid = (hi + lo) / 2;
+        if mid == newmid {
+            if not lt(value, arr[lo]) {
+                return lo;
+            } else if not lt(value, arr[hi]) {
+                return hi;
+            }
+            return hi + 1;
+        }
+        mid = newmid;
+    }
+    lo
+}
+
+struct TopKeeper {
+    cap: i64,
+    do_max: bool,
+    vals: Vec[Val],
+    recs: Vec[Rec],
+}
+
+impl TopKeeper {
+    fn add(mut ref self, v: Val, rec: Rec) {
+        let d = bsearch_insert(self.vals, v, self.do_max);
+        if self.vals.len() < self.cap {
+            self.vals.insert(d, v.clone());
+            self.recs.insert(d, rec.clone());
+        } else if d < self.cap {
+            self.vals.insert(d, v.clone());
+            self.recs.insert(d, rec.clone());
+            self.vals.pop();
+            self.recs.pop();
+        }
+    }
+}
+
+fn v_top(v: Verb, recs: own Vec[Rec]) -> Vec[Rec] {
+    let n = v.int_of("-n", 1);
+    let fields = v.list_or_empty("-f");
+    let groups = v.list_or_empty("-g");
+    let mut do_max = true;
+    for (k, _) in v.opts {
+        if k == "--max" {
+            do_max = true;
+        } else if k == "--min" {
+            do_max = false;
+        }
+    }
+    let show_full = v.flag("-a");
+    let out_name = v.last("-o") ?? "top_idx".to_string();
+    let mut index: Map[String, i64] = Map.new();
+    let mut table: Vec[(Vec[Val], Vec[TopKeeper])] = Vec.new();
+    for rec in recs {
+        let fv = match selected(rec, fields) {
+            Some(x) => x,
+            None => continue,
+        };
+        let gv = match selected(rec, groups) {
+            Some(x) => x,
+            None => continue,
+        };
+        let key = joined(gv);
+        let at = match index.get(key) {
+            Some(i) => *i,
+            None => {
+                let mut keepers: Vec[TopKeeper] = Vec.new();
+                for _ in fields {
+                    keepers.push(TopKeeper { cap: n, do_max: do_max, vals: Vec.new(), recs: Vec.new() });
+                }
+                table.push((gv, keepers));
+                index[key] = table.len() - 1;
+                table.len() - 1
+            }
+        };
+        for j in 0..fields.len() {
+            table[at].1[j].add(fv[j], rec);
+        }
+    }
+    let mut out: Vec[Rec] = Vec.new();
+    for (gv, keepers) in table {
+        if show_full {
+            for k in keepers {
+                for r in k.recs {
+                    out.push(r.clone());
+                }
+            }
+            continue;
+        }
+        for j in 0..n {
+            let mut rec = new_rec();
+            for g in 0..groups.len() {
+                rec.put(groups[g], gv[g]);
+            }
+            for f in 0..fields.len() {
+                rec.put(out_name, from_int(j + 1));
+                let kept = keepers[f].vals.len();
+                let val = if j < kept { keepers[f].vals[j].clone() } else { Val.Void };
+                rec.put(fields[f] + "_top", val);
+            }
+            out.push(rec);
+        }
+    }
+    out
+}
+
+// ------------------------------------------------------------ counting
+
+fn named_rec(name: Str, v: Val) -> Rec {
+    let mut r = new_rec();
+    r.f.push(field(name, v));
+    r
+}
+
+fn v_count(v: Verb, recs: own Vec[Rec]) -> Vec[Rec] {
+    let name = v.last("-o") ?? "count".to_string();
+    let mut out: Vec[Rec] = Vec.new();
+    let groups = match v.list_of("-g") {
+        Some(g) => g,
+        None => {
+            out.push(named_rec(name, from_int(recs.len())));
+            return out;
+        }
+    };
+    let mut index: Map[String, i64] = Map.new();
+    let mut counts: Vec[(Vec[Val], i64)] = Vec.new();
+    for rec in recs {
+        let vals = match selected(rec, groups) {
+            Some(x) => x,
+            None => continue,
+        };
+        let key = joined(vals);
+        match index.get(key) {
+            Some(i) => {
+                let at = *i;
+                counts[at].1 += 1;
+            }
+            None => {
+                index[key] = counts.len();
+                counts.push((vals, 1));
+            }
+        }
+    }
+    if v.flag("-n") {
+        out.push(named_rec(name, from_int(counts.len())));
+        return out;
+    }
+    for (vals, c) in counts {
+        let mut r = new_rec();
+        for g in 0..groups.len() {
+            r.f.push(field(groups[g], vals[g]));
+        }
+        r.f.push(field(name, from_int(c)));
+        out.push(r);
+    }
+    out
+}
+
+fn v_count_similar(v: Verb, recs: own Vec[Rec]) -> Vec[Rec] {
+    let groups = v.list_or_empty("-g");
+    let name = v.last("-o") ?? "count".to_string();
+    let mut b = new_buckets();
+    for rec in recs.into_iter() {
+        if let Some(vals) = selected(rec, groups) {
+            b.add(joined(vals), rec);
+        }
+    }
+    let mut out: Vec[Rec] = Vec.new();
+    for l in b.lists.into_iter() {
+        let n = l.len();
+        for rec in l.into_iter() {
+            let mut r = rec;
+            r.put(name, from_int(n));
+            out.push(r);
+        }
+    }
+    out
+}
+
+fn kind_name(v: Val) -> String {
+    let k = match v {
+        Val.Int(_, _) => "int",
+        Val.Float(_, _) => "float",
+        Val.Str(_) => "str",
+        Val.Void => "void",
+        Val.Absent => "absent",
+        Val.Error => "err",
+    };
+    k.to_string()
+}
+
+fn record_string(rec: Rec) -> String {
+    let mut out = String.new();
+    for i in 0..rec.f.len() {
+        if i > 0 {
+            out.push('\u{0}');
+        }
+        out.push_str(rec.f[i].key);
+        out.push('\u{1}');
+        out.push_str(kind_name(rec.f[i].val));
+        out.push('\u{1}');
+        out.push_str(rec.f[i].val.text());
+    }
+    out
+}
+
+// uniq and count-distinct, which Miller builds from one transformer.
+fn v_uniq(v: Verb, recs: own Vec[Rec]) -> Vec[Rec] {
+    let mut groups: Vec[String] = Vec.new();
+    let mut invert = false;
+    for (k, a) in v.opts {
+        if k == "-g" or k == "-f" {
+            groups = split_list(a);
+        } else if k == "-x" {
+            groups = split_list(a);
+            invert = true;
+        }
+    }
+    let show_n = v.flag("-n");
+    let show_counts = if v.name == "count-distinct" { not show_n } else { v.flag("-c") };
+    let name = v.last("-o") ?? "count".to_string();
+    let mut out: Vec[Rec] = Vec.new();
+    if v.flag("-a") {
+        let mut index: Map[String, i64] = Map.new();
+        let mut firsts: Vec[(Rec, i64)] = Vec.new();
+        for rec in recs.into_iter() {
+            let s = record_string(rec);
+            match index.get(s) {
+                Some(i) => {
+                    let at = *i;
+                    firsts[at].1 += 1;
+                }
+                None => {
+                    index[s] = firsts.len();
+                    firsts.push((rec.clone(), 1));
+                    if not show_counts and not show_n {
+                        out.push(rec);
+                    }
+                }
+            }
+        }
+        if show_n {
+            out.push(named_rec(name, from_int(firsts.len())));
+            return out;
+        }
+        if show_counts {
+            for (r, c) in firsts.into_iter() {
+                let mut rr = r;
+                rr.prepend(name, from_int(c));
+                out.push(rr);
+            }
+        }
+        return out;
+    }
+    if v.flag("-u") {
+        let mut findex: Map[String, i64] = Map.new();
+        let mut per: Vec[(String, Map[String, i64], Vec[(Val, i64)])] = Vec.new();
+        for rec in recs {
+            let fs = uniq_fields(rec, groups, invert);
+            for f in fs {
+                let at = match findex.get(f) {
+                    Some(i) => *i,
+                    None => {
+                        per.push((f.clone(), Map.new(), Vec.new()));
+                        findex[f.clone()] = per.len() - 1;
+                        per.len() - 1
+                    }
+                };
+                if let Some(val) = rec.get(f) {
+                    let s = val.text();
+                    match per[at].1.get(s) {
+                        Some(i) => {
+                            let vi = *i;
+                            per[at].2[vi].1 += 1;
+                        }
+                        None => {
+                            let vi = per[at].2.len();
+                            per[at].1[s] = vi;
+                            per[at].2.push((val, 1));
+                        }
+                    }
+                }
+            }
+        }
+        for (f, _, vals) in per {
+            for (val, c) in vals {
+                let mut r = new_rec();
+                r.f.push(field("field", from_string(f)));
+                r.f.push(field("value", val));
+                r.f.push(field("count", from_int(c)));
+                out.push(r);
+            }
+        }
+        return out;
+    }
+    let mut index: Map[String, i64] = Map.new();
+    let mut table: Vec[(Vec[String], Vec[Val], i64)] = Vec.new();
+    for rec in recs {
+        let fs = uniq_fields(rec, groups, invert);
+        let vals = match selected(rec, fs) {
+            Some(x) => x,
+            None => continue,
+        };
+        let key = joined(vals);
+        match index.get(key) {
+            Some(i) => {
+                let at = *i;
+                table[at].2 += 1;
+            }
+            None => {
+                index[key] = table.len();
+                if not show_counts and not show_n {
+                    let mut r = new_rec();
+                    for j in 0..fs.len() {
+                        r.f.push(field(fs[j], vals[j]));
+                    }
+                    out.push(r);
+                }
+                table.push((fs, vals, 1));
+            }
+        }
+    }
+    if show_n {
+        out.push(named_rec("count", from_int(table.len())));
+        return out;
+    }
+    if show_counts {
+        for (fs, vals, c) in table {
+            let mut r = new_rec();
+            for j in 0..fs.len() {
+                r.f.push(field(fs[j], vals[j]));
+            }
+            r.f.push(field(name, from_int(c)));
+            out.push(r);
+        }
+    }
+    out
+}
+
+fn uniq_fields(rec: Rec, groups: Vec[String], invert: bool) -> Vec[String] {
+    if not invert {
+        return groups.clone();
+    }
+    let mut out: Vec[String] = Vec.new();
+    for p in rec.f {
+        if not groups.contains(p.key) {
+            out.push(p.key.clone());
+        }
+    }
+    out
+}
+
+// ------------------------------------------------------------ stats1, merge-fields
+
+// One accumulator, as utils/stats1_accumulators.go keeps it.
+#[derive(Clone)]
+struct Acc {
+    name: String,
+    pct: Option[f64],
+    primary: bool,
+    count: i64,
+    sums: Vec[Val],
+    vals: Vec[Val],
+    counts: Map[String, i64],
+    order: Vec[String],
+    m: Val,
+}
+
+fn new_acc(name: Str) -> Acc {
+    let mut sums: Vec[Val] = Vec.new();
+    for _ in 0..5 {
+        sums.push(from_int(0));
+    }
+    Acc {
+        name: name.to_string(),
+        pct: percentile_of(name),
+        primary: false,
+        count: 0,
+        sums: sums,
+        vals: Vec.new(),
+        counts: Map.new(),
+        order: Vec.new(),
+        m: Val.Absent,
+    }
+}
+
+// The accumulators of one field. Its percentiles share one keeper of
+// values, and only the first of them feeds it.
+#[derive(Clone)]
+struct AccSet {
+    accs: Vec[Acc],
+    keeper: Vec[Val],
+    interp: bool,
+}
+
+fn new_acc_set(names: Vec[String], interp: bool) -> AccSet {
+    let mut accs: Vec[Acc] = Vec.new();
+    let mut primary = true;
+    for n in names {
+        let mut a = new_acc(n);
+        if a.pct.is_some() {
+            a.primary = primary;
+            primary = false;
+        }
+        accs.push(a);
+    }
+    AccSet { accs: accs, keeper: Vec.new(), interp: interp }
+}
+
+impl Acc {
+    fn ingest(mut ref self, v: Val) {
+        match self.name.as_str() {
+            "count" => self.count += 1,
+            "null_count" => {
+                if v.is_void() {
+                    self.count += 1;
+                }
+            }
+            "distinct_count" | "mode" | "antimode" => {
+                let s = v.text();
+                match self.counts.get(s) {
+                    Some(c) => {
+                        let n = *c + 1;
+                        self.counts[s] = n;
+                    }
+                    None => {
+                        self.counts[s.clone()] = 1;
+                        self.order.push(s);
+                    }
+                }
+            }
+            "sum" | "mean" | "var" | "stddev" | "meaneb" | "skewness" | "kurtosis" => {
+                if v.is_num() {
+                    self.count += 1;
+                    let mut p = v.clone();
+                    let mut powers: Vec[Val] = Vec.new();
+                    powers.push(v.clone());
+                    for _ in 0..3 {
+                        p = times(v, p);
+                        powers.push(p.clone());
+                    }
+                    self.sums[1] = plus(self.sums[1], v);
+                    for j in 2..5 {
+                        self.sums[j] = plus(self.sums[j], powers[j - 1]);
+                    }
+                }
+            }
+            "mad" => {
+                if v.is_num() {
+                    self.vals.push(v.clone());
+                }
+            }
+            "min" => self.m = bif_min(self.m, v),
+            "max" => self.m = bif_max(self.m, v),
+            "minlen" => self.m = bif_min(self.m, from_int(runes(v.text()))),
+            "maxlen" => self.m = bif_max(self.m, from_int(runes(v.text()))),
+            _ => {}
+        }
+    }
+
+    fn emit(self, keeper: Vec[Val], interp: bool) -> Val {
+        if let Some(p) = self.pct {
+            return percentile(keeper, p, interp);
+        }
+        match self.name.as_str() {
+            "count" | "null_count" => from_int(self.count),
+            "distinct_count" => from_int(self.order.len()),
+            "mode" | "antimode" => {
+                if self.order.len() == 0 {
+                    return Val.Void;
+                }
+                let mut best = self.order[0].clone();
+                let mut bc = self.counts.get(best) ?? 0;
+                for s in self.order {
+                    let c = self.counts.get(s) ?? 0;
+                    let better = if self.name == "mode" { c > bc } else { c < bc };
+                    if better {
+                        best = s.clone();
+                        bc = c;
+                    }
+                }
+                from_string(best)
+            }
+            "sum" => self.sums[1].clone(),
+            "mean" => {
+                if self.count == 0 {
+                    Val.Void
+                } else {
+                    divide(self.sums[1], from_int(self.count))
+                }
+            }
+            "var" | "stddev" | "meaneb" => {
+                let var = finalize_var(self.count, self.sums[1], self.sums[2]);
+                if var.is_void() or self.name == "var" {
+                    return var;
+                }
+                if self.name == "stddev" {
+                    return from_float(var.as_f64().sqrt());
+                }
+                from_float(divide(var, from_int(self.count)).as_f64().sqrt())
+            }
+            "kurtosis" => {
+                if self.count < 2 {
+                    return Val.Void;
+                }
+                let n = self.count as f64;
+                let s1 = self.sums[1].as_f64();
+                let s2 = self.sums[2].as_f64();
+                let s3 = self.sums[3].as_f64();
+                let s4 = self.sums[4].as_f64();
+                let mean = s1 / n;
+                let mut num = s4 - mean * (4.0 * s3 - mean * (6.0 * s2 - 3.0 * n * mean * mean));
+                num = num / n;
+                let mut den = (s2 - n * mean * mean) / n;
+                den = den * den;
+                from_float(num / den - 3.0)
+            }
+            "mad" => {
+                if self.vals.len() == 0 {
+                    return Val.Void;
+                }
+                let mn = from_int(self.vals.len());
+                let mut mean = from_int(0);
+                for v in self.vals {
+                    mean = plus(mean, v);
+                }
+                mean = divide(mean, mn);
+                let mut dev = from_int(0);
+                for v in self.vals {
+                    dev = plus(dev, bif_abs(minus(mean, v)));
+                }
+                divide(dev, mn)
+            }
+            _ => {
+                if self.m.is_absent() { Val.Void } else { self.m.clone() }
+            }
+        }
+    }
+}
+
+impl AccSet {
+    fn ingest(mut ref self, j: i64, v: Val) {
+        if self.accs[j].pct.is_some() {
+            if self.accs[j].primary {
+                self.keeper.push(v.clone());
+            }
+        } else {
+            self.accs[j].ingest(v);
+        }
+    }
+
+    fn ingest_all(mut ref self, v: Val) {
+        for j in 0..self.accs.len() {
+            self.ingest(j, v);
+        }
+    }
+
+    fn emit(self, j: i64) -> Val {
+        self.accs[j].emit(self.keeper, self.interp)
+    }
+}
+
+fn finalize_var(count: i64, msum: Val, msum2: Val) -> Val {
+    if count < 2 {
+        return Val.Void;
+    }
+    let n = count as f64;
+    let s = msum.as_f64();
+    let s2 = msum2.as_f64();
+    let mean = s / n;
+    let mut num = s2 - mean * (2.0 * s - n * mean);
+    if num < 0.0 {
+        num = 0.0;
+    }
+    from_float(num / (n - 1.0))
+}
+
+fn percentile(vals: Vec[Val], p: f64, interp: bool) -> Val {
+    if vals.len() == 0 {
+        return Val.Void;
+    }
+    let mut arr = vals.clone();
+    arr.sort_by(|a, b| collate(a, b));
+    let n = arr.len();
+    if not interp {
+        let mut idx = (p * n as f64 / 100.0) as i64;
+        if idx >= n {
+            idx = n - 1;
+        }
+        if idx < 0 {
+            idx = 0;
+        }
+        return arr[idx].clone();
+    }
+    let mut findex = (p / 100.0) * (n as f64 - 1.0);
+    if findex < 0.0 {
+        findex = 0.0;
+    }
+    let ii = findex.floor() as i64;
+    if ii >= n - 1 {
+        return arr[ii].clone();
+    }
+    let frac = from_float(findex - ii as f64);
+    plus(arr[ii], times(frac, minus(arr[ii + 1], arr[ii])))
+}
+
+fn v_stats1(v: Verb, recs: own Vec[Rec]) -> Result[Vec[Rec], String] {
+    let accs = v.list_or_empty("-a");
+    let groups = v.list_or_empty("-g");
+    let interp = v.flag("-i");
+    let mut fields: Vec[String] = Vec.new();
+    let mut fregex = false;
+    let mut finvert = false;
+    for (k, a) in v.opts {
+        if k == "-f" {
+            fields = split_list(a);
+        } else if k == "--fr" {
+            fields = split_list(a);
+            fregex = true;
+        } else if k == "--fx" {
+            fields = split_list(a);
+            fregex = true;
+            finvert = true;
+        }
+    }
+    let rxs = if fregex { regexes(fields)? } else { Vec.new() };
+    // Per group: its values, its fields in first-seen order, and their
+    // accumulators.
+    let mut index: Map[String, i64] = Map.new();
+    let mut table: Vec[(Vec[Val], Vec[String], Vec[AccSet])] = Vec.new();
+    for rec in recs {
+        let gv = match selected(rec, groups) {
+            Some(x) => x,
+            None => continue,
+        };
+        let key = joined(gv);
+        let at = match index.get(key) {
+            Some(i) => *i,
+            None => {
+                table.push((gv, Vec.new(), Vec.new()));
+                index[key] = table.len() - 1;
+                table.len() - 1
+            }
+        };
+        let names = if fregex {
+            let mut ns: Vec[String] = Vec.new();
+            for p in rec.f {
+                if any_match(rxs, p.key) != finvert {
+                    ns.push(p.key.clone());
+                }
+            }
+            ns
+        } else {
+            fields.clone()
+        };
+        for f in names {
+            let val = match rec.get(f) {
+                Some(x) => x,
+                None => continue,
+            };
+            let fi = match table[at].1.iter().position(|x| x == f) {
+                Some(i) => i,
+                None => {
+                    table[at].1.push(f.clone());
+                    table[at].2.push(new_acc_set(accs, interp));
+                    table[at].1.len() - 1
+                }
+            };
+            for j in 0..accs.len() {
+                if val.is_void() and (fregex or accs[j] != "null_count") {
+                    continue;
+                }
+                table[at].2[fi].ingest(j, val);
+            }
+        }
+    }
+    let mut out: Vec[Rec] = Vec.new();
+    for (gv, forder, sets) in table {
+        let mut rec = new_rec();
+        for g in 0..groups.len() {
+            rec.put(groups[g], gv[g]);
+        }
+        for i in 0..forder.len() {
+            for j in 0..accs.len() {
+                rec.put(f"{forder[i]}_{accs[j]}", sets[i].emit(j));
+            }
+        }
+        out.push(rec);
+    }
+    Ok(out)
+}
+
+fn v_merge_fields(v: Verb, recs: own Vec[Rec]) -> Result[Vec[Rec], String] {
+    let accs = v.list_or_empty("-a");
+    let out_name = v.last("-o") ?? String.new();
+    let keep = v.flag("-k");
+    let interp = v.flag("-i");
+    let mut names: Vec[String] = Vec.new();
+    let mut mode = String.new();
+    for (k, a) in v.opts {
+        if k == "-f" or k == "-r" or k == "-c" {
+            names = split_list(a);
+            mode = k.clone();
+        }
+    }
+    let rxs = if mode != "-f" { regexes(names)? } else { Vec.new() };
+    let mut out: Vec[Rec] = Vec.new();
+    for rec in recs.into_iter() {
+        let mut r = rec;
+        if mode == "-c" {
+            // Each matching field merges into the field named by what is
+            // left when the match is cut out of its name.
+            let mut shorts: Vec[String] = Vec.new();
+            let mut sets: Vec[AccSet] = Vec.new();
+            let mut kept: Vec[Field] = Vec.new();
+            for p in r.f {
+                let mut short: Option[String] = None;
+                for rx in rxs {
+                    if rx.is_match(p.key) {
+                        short = Some(rx.replace(p.key, ""));
+                        break;
+                    }
+                }
+                let sh = match short {
+                    Some(s) => s,
+                    None => {
+                        kept.push(p.clone());
+                        continue;
+                    }
+                };
+                let si = match shorts.iter().position(|x| x == sh) {
+                    Some(i) => i,
+                    None => {
+                        shorts.push(sh.clone());
+                        sets.push(new_acc_set(accs, interp));
+                        shorts.len() - 1
+                    }
+                };
+                if not p.val.is_void() {
+                    sets[si].ingest_all(p.val);
+                }
+                if keep {
+                    kept.push(p.clone());
+                }
+            }
+            r.f = kept;
+            for i in 0..shorts.len() {
+                for j in 0..accs.len() {
+                    r.put(f"{shorts[i]}_{accs[j]}", sets[i].emit(j));
+                }
+            }
+            out.push(r);
+            continue;
+        }
+        let mut set = new_acc_set(accs, interp);
+        let mut targets: Vec[String] = Vec.new();
+        if mode == "-f" {
+            for n in names {
+                if r.has(n) {
+                    targets.push(n.clone());
+                }
+            }
+        } else {
+            for p in r.f {
+                if any_match(rxs, p.key) {
+                    targets.push(p.key.clone());
+                }
+            }
+        }
+        for n in targets {
+            let val = r.get(n) ?? Val.Absent;
+            if not val.is_void() {
+                set.ingest_all(val);
+            }
+            if not keep {
+                r.remove(n);
+            }
+        }
+        for j in 0..accs.len() {
+            r.put(f"{out_name}_{accs[j]}", set.emit(j));
+        }
+        out.push(r);
+    }
+    Ok(out)
+}
+
+// ------------------------------------------------------------ fraction
+
+fn v_fraction(v: Verb, recs: own Vec[Rec]) -> Vec[Rec] {
+    let fields = v.list_or_empty("-f");
+    let groups = v.list_or_empty("-g");
+    let percent = v.flag("-p");
+    let cumu = v.flag("-c");
+    let mult = from_int(if percent { 100 } else { 1 });
+    let mut suffix = if cumu { "_cumulative".to_string() } else { String.new() };
+    suffix.push_str(if percent { "_percent" } else { "_fraction" });
+    let zero = from_int(0);
+    // Sums and running sums by group, then field.
+    let mut sums: Map[String, Map[String, Val]] = Map.new();
+    let mut cumus: Map[String, Map[String, Val]] = Map.new();
+    for rec in recs {
+        let key = match selected(rec, groups) {
+            Some(gv) => joined(gv),
+            None => continue,
+        };
+        let mut s = sums.get(key).map(|m| m.clone()) ?? Map.new();
+        let mut c = cumus.get(key).map(|m| m.clone()) ?? Map.new();
+        for f in fields {
+            let val = match rec.get(f) {
+                Some(x) => x,
+                None => continue,
+            };
+            match s.get(f) {
+                Some(prev) => {
+                    let total = plus(prev, val);
+                    s[f.clone()] = total;
+                }
+                None => {
+                    s[f.clone()] = val;
+                    c[f.clone()] = zero.clone();
+                }
+            }
+        }
+        sums[key.clone()] = s;
+        cumus[key] = c;
+    }
+    let mut out: Vec[Rec] = Vec.new();
+    for rec in recs.into_iter() {
+        let mut r = rec;
+        let key = match selected(r, groups) {
+            Some(gv) => joined(gv),
+            None => {
+                out.push(r);
+                continue;
+            }
+        };
+        for f in fields {
+            let val = match r.get(f) {
+                Some(x) => x,
+                None => continue,
+            };
+            let cum = cumus[key][f].clone();
+            let numer = if cumu { plus(val, cum) } else { val.clone() };
+            let den = sums[key][f].clone();
+            let outv = if collate(numer, zero) == Ordering.Equal {
+                zero.clone()
+            } else {
+                times(divide(numer, den), mult)
+            };
+            r.put(f + suffix, outv);
+            if cumu {
+                let next = plus(cum, val);
+                if let Some(m) = cumus.get_mut(key) {
+                    m[f.clone()] = next;
+                }
+            }
+        }
+        out.push(r);
+    }
+    out
+}
+
+// ------------------------------------------------------------ step
+
+// A sliding window over one group's records, as indexes into the run's
+// records: `back` behind the current one and `fwd` ahead of it.
+#[derive(Clone)]
+struct Window {
+    back: Vec[Option[i64]],
+    cur: Option[i64],
+    fwd: Vec[Option[i64]],
+}
+
+fn new_window(back: i64, fwd: i64) -> Window {
+    Window { back: Vec.filled(back, None), cur: None, fwd: Vec.filled(fwd, None) }
+}
+
+impl Window {
+    fn ingest(mut ref self, rec: Option[i64]) {
+        if self.back.len() > 0 {
+            self.back.pop();
+            self.back.insert(0, self.cur);
+        }
+        if self.fwd.len() > 0 {
+            self.cur = self.fwd.remove(0);
+            self.fwd.push(rec);
+        } else {
+            self.cur = rec;
+        }
+    }
+
+    fn get(self, i: i64) -> Option[i64] {
+        if i == 0 {
+            self.cur
+        } else if i > 0 {
+            self.fwd[i - 1]
+        } else {
+            self.back[0 - i - 1]
+        }
+    }
+}
+
+#[derive(Clone)]
+struct Stepper {
+    name: String,
+    field: String,
+    acc: Val,
+    first: Option[Val],
+    alphas: Vec[Val],
+    oneminus: Vec[Val],
+    ewma_names: Vec[String],
+    prevs: Vec[Val],
+    started: bool,
+    b: i64,
+    f: i64,
+}
+
+fn new_stepper(name: Str, field: Str, alphas: Vec[String], suffixes: Vec[String]) -> Stepper {
+    let (b, f) = stepper_shape(name) ?? (0, 0);
+    let mut av: Vec[Val] = Vec.new();
+    let mut om: Vec[Val] = Vec.new();
+    for a in alphas {
+        let x = f64.parse(a) ?? 0.0;
+        av.push(from_float(x));
+        om.push(from_float(1.0 - x));
+    }
+    let sfx = if suffixes.len() > 0 { suffixes.clone() } else { alphas.clone() };
+    let mut names: Vec[String] = Vec.new();
+    for s in sfx {
+        names.push(f"{field}_ewma_{s}");
+    }
+    Stepper {
+        name: name.to_string(),
+        field: field.to_string(),
+        acc: from_int(if name == "rprod" { 1 } else { 0 }),
+        first: None,
+        alphas: av,
+        oneminus: om,
+        ewma_names: names,
+        prevs: Vec.new(),
+        started: false,
+        b: b,
+        f: f,
+    }
+}
+
+fn val_at(arena: Vec[Rec], at: Option[i64], f: Str) -> Option[Val] {
+    match at {
+        Some(i) => arena[i].get(f),
+        None => None,
+    }
+}
+
+impl Stepper {
+    fn process(mut ref self, win: Window, arena: mut ref Vec[Rec]) {
+        let f = self.field.clone();
+        let cur = win.get(0);
+        if self.name.starts_with("slwin_") {
+            let mut count = 0;
+            let mut sum = from_float(0.0);
+            for j in (0 - self.b)..(self.f + 1) {
+                if let Some(val) = val_at(arena, win.get(j), f) {
+                    if not val.is_void() {
+                        sum = plus(sum, val);
+                        count += 1;
+                    }
+                }
+            }
+            if let Some(ci) = cur {
+                let out = if count == 0 { Val.Void } else { divide(sum, from_int(count)) };
+                arena[ci].put(f"{f}_{self.b}_{self.f}", out);
+            }
+            return;
+        }
+        let ci = match cur {
+            Some(i) => i,
+            None => return,
+        };
+        let v = arena[ci].get(f) ?? Val.Absent;
+        let prev = val_at(arena, win.get(0 - 1), f);
+        match self.name.as_str() {
+            "delta" => {
+                if v.is_void() {
+                    arena[ci].put(f + "_delta", Val.Void);
+                    return;
+                }
+                let d = match prev {
+                    Some(p) => minus(v, p),
+                    None => from_int(0),
+                };
+                arena[ci].put(f + "_delta", d);
+            }
+            "shift" | "shift_lag" => {
+                let out = prev ?? Val.Void;
+                arena[ci].put(f"{f}_{self.name}", out);
+            }
+            "shift_lead" => {
+                match win.get(1) {
+                    None => arena[ci].put(f + "_shift_lead", Val.Void),
+                    Some(ni) => {
+                        if let Some(nv) = arena[ni].get(f) {
+                            arena[ci].put(f + "_shift_lead", nv);
+                        }
+                    }
+                }
+            }
+            "from-first" => {
+                let out = match self.first {
+                    None => {
+                        self.first = Some(v.clone());
+                        from_int(0)
+                    }
+                    Some(first) => minus(v, first),
+                };
+                arena[ci].put(f + "_from_first", out);
+            }
+            "ratio" => {
+                if v.is_void() {
+                    arena[ci].put(f + "_ratio", Val.Void);
+                    return;
+                }
+                let r = match prev {
+                    Some(p) => divide(v, p),
+                    None => from_int(1),
+                };
+                arena[ci].put(f + "_ratio", r);
+            }
+            "rsum" | "rprod" | "counter" => {
+                let name = f"{f}_{self.name}";
+                if v.is_void() {
+                    arena[ci].put(name, Val.Void);
+                    return;
+                }
+                self.acc = match self.name.as_str() {
+                    "rsum" => plus(v, self.acc),
+                    "rprod" => times(v, self.acc),
+                    _ => plus(self.acc, from_int(1)),
+                };
+                arena[ci].put(name, self.acc);
+            }
+            _ => {
+                // ewma: the first value is copied, without a check for
+                // empty, as Miller does.
+                if not self.started {
+                    for name in self.ewma_names {
+                        arena[ci].put(name, v);
+                        self.prevs.push(v.clone());
+                    }
+                    self.started = true;
+                } else {
+                    for j in 0..self.ewma_names.len() {
+                        let next = plus(times(v, self.alphas[j]), times(self.prevs[j], self.oneminus[j]));
+                        arena[ci].put(self.ewma_names[j], next);
+                        self.prevs[j] = next;
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn v_step(v: Verb, recs: own Vec[Rec]) -> Vec[Rec] {
+    let mut steppers: Vec[String] = Vec.new();
+    let mut fields: Vec[String] = Vec.new();
+    for (k, a) in v.opts {
+        if k == "-a" {
+            steppers.extend(split_list(a));
+        } else if k == "-f" {
+            fields.extend(split_list(a));
+        }
+    }
+    let groups = v.list_or_empty("-g");
+    let alphas = v.list_or_empty("-d");
+    let suffixes = v.list_or_empty("-o");
+    let mut back = 0;
+    let mut fwd = 0;
+    for s in steppers {
+        let (b, f) = stepper_shape(s) ?? (0, 0);
+        back = back.max(b);
+        fwd = fwd.max(f);
+    }
+    let mut arena = recs;
+    let mut order: Vec[i64] = Vec.new();
+    let mut windex: Map[String, i64] = Map.new();
+    let mut windows: Vec[Window] = Vec.new();
+    // Steppers by group and field, made as each first appears.
+    let mut sindex: Map[String, i64] = Map.new();
+    let mut states: Vec[Vec[Stepper]] = Vec.new();
+    // The records not yet emitted, in arrival order, with their group.
+    let mut log: Vec[(i64, i64, String)] = Vec.new();
+    for ri in 0..arena.len() {
+        let key = match selected(arena[ri], groups) {
+            Some(gv) => joined(gv),
+            None => {
+                order.push(ri);
+                continue;
+            }
+        };
+        let wi = match windex.get(key) {
+            Some(i) => *i,
+            None => {
+                windows.push(new_window(back, fwd));
+                windex[key.clone()] = windows.len() - 1;
+                windows.len() - 1
+            }
+        };
+        windows[wi].ingest(Some(ri));
+        log.push((ri, wi, key.clone()));
+        for f in fields {
+            if not arena[ri].has(f) {
+                continue;
+            }
+            let sk = f"{key}\u{0}{f}";
+            let si = match sindex.get(sk) {
+                Some(i) => *i,
+                None => {
+                    let mut list: Vec[Stepper] = Vec.new();
+                    for s in steppers {
+                        list.push(new_stepper(s, f, alphas, suffixes));
+                    }
+                    states.push(list);
+                    sindex[sk] = states.len() - 1;
+                    states.len() - 1
+                }
+            };
+            let win = windows[wi].clone();
+            for st in 0..states[si].len() {
+                states[si][st].process(win, mut arena);
+            }
+        }
+        if let Some(ci) = windows[wi].get(0) {
+            order.push(ci);
+            log.retain(|e| e.0 != ci);
+        }
+    }
+    // At the end of the stream each waiting record moves its group's
+    // window on by one.
+    for (ri, wi, key) in log {
+        windows[*wi].ingest(None);
+        let win = windows[*wi].clone();
+        for f in fields {
+            if not arena[*ri].has(f) {
+                continue;
+            }
+            if let Some(si) = sindex.get(f"{key}\u{0}{f}") {
+                let at = *si;
+                for st in 0..states[at].len() {
+                    states[at][st].process(win, mut arena);
+                }
+            }
+        }
+        if let Some(ci) = win.get(0) {
+            order.push(ci);
+        }
+    }
+    let mut out: Vec[Rec] = Vec.new();
+    for i in order {
+        out.push(arena[i].clone());
+    }
+    out
+}
+
+// ------------------------------------------------------------ nest
+
+#[derive(Clone)]
+struct NestConfig {
+    field: Option[String],
+    action: String,
+    what: String,
+    across: String,
+    fs: String,
+    ps: String,
+}
+
+fn nest_config(v: Verb) -> NestConfig {
+    let mut n = NestConfig {
+        field: None,
+        action: String.new(),
+        what: String.new(),
+        across: String.new(),
+        fs: ";".to_string(),
+        ps: ":".to_string(),
+    };
+    for (k, a) in v.opts {
+        match k.as_str() {
+            "-f" => n.field = Some(a.clone()),
+            "--explode" | "-e" => n.action = "explode".to_string(),
+            "--implode" | "-i" => n.action = "implode".to_string(),
+            "--values" | "-v" => n.what = "values".to_string(),
+            "--pairs" | "-p" => n.what = "pairs".to_string(),
+            "--across-records" | "-R" => n.across = "records".to_string(),
+            "--across-fields" | "-F" => n.across = "fields".to_string(),
+            "--nested-fs" | "-S" => n.fs = sep_name(a),
+            "--nested-ps" | "-P" => n.ps = sep_name(a),
+            "--evar" | "--ivar" => {
+                n.fs = sep_name(a);
+                n.action = if k == "--evar" { "explode".to_string() } else { "implode".to_string() };
+                n.what = "values".to_string();
+                n.across = "records".to_string();
+            }
+            _ => {}
+        }
+    }
+    n
+}
+
+fn pieces(s: Str, fs: Str, keep_empty: bool) -> Vec[String] {
+    if s.len() == 0 and not keep_empty {
+        return Vec.new();
+    }
+    s.split(fs).map(|p| p.to_string()).collect()
+}
+
+fn v_nest(v: Verb, recs: own Vec[Rec]) -> Result[Vec[Rec], String] {
+    let n = nest_config(v);
+    let name = n.field.clone() ?? String.new();
+    let mut out: Vec[Rec] = Vec.new();
+    let mode = f"{n.action} {n.what} {n.across}";
+    match mode.as_str() {
+        "explode values records" => {
+            for rec in recs.into_iter() {
+                let val = match rec.get(name) {
+                    Some(x) => x,
+                    None => {
+                        out.push(rec);
+                        continue;
+                    }
+                };
+                // Not lib.SplitString, so an empty value still gives one
+                // record.
+                for piece in pieces(val.text(), n.fs, true) {
+                    let mut r = rec.clone();
+                    r.put(name, from_string(piece));
+                    out.push(r);
+                }
+            }
+        }
+        "explode values fields" => {
+            for rec in recs.into_iter() {
+                let mut r = rec;
+                if let Some(at) = r.index(name) {
+                    let text = r.f[at].val.text();
+                    let mut pos = at;
+                    let ps = pieces(text, n.fs, true);
+                    for j in 0..ps.len() {
+                        pos += 1;
+                        r.f.insert(pos, field(f"{name}_{j + 1}", from_string(ps[j])));
+                    }
+                    r.f.remove(at);
+                }
+                out.push(r);
+            }
+        }
+        "explode pairs fields" => {
+            for rec in recs.into_iter() {
+                let mut r = rec;
+                if let Some(at) = r.index(name) {
+                    let text = r.f[at].val.text();
+                    let mut pos = at;
+                    for piece in pieces(text, n.fs, false) {
+                        pos += 1;
+                        match piece.split_once(n.ps) {
+                            Some((k, x)) => r.f.insert(pos, field(k, from_string(x))),
+                            None => r.f.insert(pos, field(name, from_string(piece))),
+                        }
+                    }
+                    r.f.remove(at);
+                }
+                out.push(r);
+            }
+        }
+        "explode pairs records" => {
+            for rec in recs.into_iter() {
+                let val = match rec.get(name) {
+                    Some(x) => x,
+                    None => {
+                        out.push(rec);
+                        continue;
+                    }
+                };
+                for piece in pieces(val.text(), n.fs, false) {
+                    let mut r = rec.clone();
+                    let at = r.index(name) ?? 0;
+                    match piece.split_once(n.ps) {
+                        Some((k, x)) => r.f.insert(at + 1, field(k, from_string(x))),
+                        None => r.f.insert(at + 1, field(name, from_string(piece))),
+                    }
+                    r.f.remove(at);
+                    out.push(r);
+                }
+            }
+        }
+        "implode values fields" => {
+            let rx = match Regex.compile(f"^{name}_[0-9]+$") {
+                Ok(r) => r,
+                Err(e) => return Err(e.message),
+            };
+            for rec in recs.into_iter() {
+                let mut r = rec;
+                let mut parts: Vec[String] = Vec.new();
+                let mut first: Option[i64] = None;
+                let mut kept: Vec[Field] = Vec.new();
+                for p in r.f {
+                    if rx.is_match(p.key) {
+                        if first.is_none() {
+                            first = Some(kept.len());
+                        }
+                        parts.push(p.val.text());
+                    } else {
+                        kept.push(p.clone());
+                    }
+                }
+                if let Some(i) = first {
+                    kept.insert(i, field(name, from_string(join_strs(parts, n.fs))));
+                }
+                r.f = kept;
+                out.push(r);
+            }
+        }
+        _ => {
+            // Implode across records: records that agree on every other
+            // field merge into the first of them, at the end of the stream.
+            let mut index: Map[String, i64] = Map.new();
+            let mut buckets: Vec[(String, Rec, Vec[String])] = Vec.new();
+            for rec in recs.into_iter() {
+                let at = match rec.index(name) {
+                    Some(i) => i,
+                    None => {
+                        out.push(rec);
+                        continue;
+                    }
+                };
+                let mut okeys: Vec[String] = Vec.new();
+                let mut ovals: Vec[String] = Vec.new();
+                for j in 0..rec.f.len() {
+                    if j != at {
+                        okeys.push(rec.f[j].key.clone());
+                        ovals.push(rec.f[j].val.text());
+                    }
+                }
+                let kj = join_strs(okeys, ",");
+                let key = kj.clone() + "\u{0}" + join_strs(ovals, ",");
+                let piece = rec.f[at].val.text();
+                match index.get(key) {
+                    Some(i) => {
+                        let b = *i;
+                        buckets[b].2.push(piece);
+                    }
+                    None => {
+                        index[key] = buckets.len();
+                        let mut l: Vec[String] = Vec.new();
+                        l.push(piece);
+                        buckets.push((kj, rec, l));
+                    }
+                }
+            }
+            // Grouped by the other fields' names first, as Miller's two
+            // levels of maps keep them.
+            let mut okey_order: Vec[String] = Vec.new();
+            for (kj, _, _) in buckets {
+                if not okey_order.contains(kj) {
+                    okey_order.push(kj.clone());
+                }
+            }
+            for ok in okey_order {
+                for (kj, rep, vals) in buckets {
+                    if kj == ok {
+                        let mut r = rep.clone();
+                        r.put(name, from_string(join_strs(vals, n.fs)));
+                        out.push(r);
+                    }
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
+// ------------------------------------------------------------ reorder, rename, label
+
+fn v_reorder(v: Verb, recs: own Vec[Rec]) -> Result[Vec[Rec], String] {
+    let mut names: Vec[String] = Vec.new();
+    let mut use_regex = false;
+    let mut after = false;
+    let mut center = String.new();
+    for (k, a) in v.opts {
+        match k.as_str() {
+            "-f" => {
+                names = split_list(a);
+                use_regex = false;
+            }
+            "-r" => {
+                names = split_list(a);
+                use_regex = true;
+            }
+            "-b" => {
+                center = a.clone();
+                after = false;
+            }
+            "-a" => {
+                center = a.clone();
+                after = true;
+            }
+            _ => {
+                after = true;
+                center = String.new();
+            }
+        }
+    }
+    let rxs = if use_regex { regexes(names)? } else { Vec.new() };
+    let mut out: Vec[Rec] = Vec.new();
+    for rec in recs.into_iter() {
+        let mut r = rec;
+        if center.len() == 0 {
+            if use_regex {
+                let mut hit: Vec[Field] = Vec.new();
+                let mut miss: Vec[Field] = Vec.new();
+                for p in r.f {
+                    if any_match(rxs, p.key) {
+                        hit.push(p.clone());
+                    } else {
+                        miss.push(p.clone());
+                    }
+                }
+                if after {
+                    miss.extend(hit);
+                    r.f = miss;
+                } else {
+                    hit.extend(miss);
+                    r.f = hit;
+                }
+            } else if after {
+                for n in names {
+                    if let Some(at) = r.index(n) {
+                        let p = r.f.remove(at);
+                        r.f.push(p);
+                    }
+                }
+            } else {
+                for k in 0..names.len() {
+                    let n = names[names.len() - 1 - k].clone();
+                    if let Some(at) = r.index(n) {
+                        let p = r.f.remove(at);
+                        r.f.insert(0, p);
+                    }
+                }
+            }
+            out.push(r);
+            continue;
+        }
+        let ci = match r.index(center) {
+            Some(i) => i,
+            None => {
+                out.push(r);
+                continue;
+            }
+        };
+        let mut f: Vec[Field] = Vec.new();
+        if use_regex {
+            let mut hit: Vec[Field] = Vec.new();
+            for p in r.f {
+                if p.key != center and any_match(rxs, p.key) {
+                    hit.push(p.clone());
+                }
+            }
+            for p in r.f {
+                if p.key == center {
+                    if after {
+                        f.push(p.clone());
+                    }
+                    f.extend(hit.clone());
+                    if not after {
+                        f.push(p.clone());
+                    }
+                } else if not hit.iter().any(|h| h.key == p.key) {
+                    f.push(p.clone());
+                }
+            }
+        } else {
+            for j in 0..ci {
+                if not names.contains(r.f[j].key) {
+                    f.push(r.f[j].clone());
+                }
+            }
+            let mut listed: Vec[Field] = Vec.new();
+            for n in names {
+                if let Some(val) = r.get(n) {
+                    listed.push(field(n, val));
+                }
+            }
+            if not after {
+                f.extend(listed.clone());
+            }
+            f.push(r.f[ci].clone());
+            if after {
+                f.extend(listed);
+            }
+            for j in ci..r.f.len() {
+                if r.f[j].key != center and not names.contains(r.f[j].key) {
+                    f.push(r.f[j].clone());
+                }
+            }
+        }
+        r.f = f;
+        out.push(r);
+    }
+    Ok(out)
+}
+
+// Visits each field once, in order, as Miller's walk of its linked list
+// does: a rename onto a key already present moves the value into that
+// key's place and unlinks the field being visited.
+fn rename_walk(r: mut ref Rec, renames: Vec[(String, String)]) {
+    let mut j = 0;
+    while j < r.f.len() {
+        let old = r.f[j].key.clone();
+        let mut new: Option[String] = None;
+        for (a, b) in renames {
+            if a == old {
+                new = Some(b.clone());
+            }
+        }
+        match new {
+            Some(n) => {
+                if n == old {
+                    j += 1;
+                    continue;
+                }
+                match r.index(n) {
+                    Some(ex) => {
+                        r.f[ex].val = r.f[j].val.clone();
+                        r.f.remove(j);
+                    }
+                    None => {
+                        r.f[j].key = n;
+                        j += 1;
+                    }
+                }
+            }
+            None => j += 1,
+        }
+    }
+}
+
+fn rename_regex_walk(r: mut ref Rec, rx: Regex, repl: Str, gsub: bool) {
+    let mut j = 0;
+    while j < r.f.len() {
+        let old = r.f[j].key.clone();
+        let n = sub_captures(old, rx, repl, gsub);
+        if n == old {
+            j += 1;
+            continue;
+        }
+        match r.index(n) {
+            Some(ex) => {
+                r.f[ex].val = r.f[j].val.clone();
+                r.f.remove(j);
+            }
+            None => {
+                r.f[j].key = n;
+                j += 1;
+            }
+        }
+    }
+}
+
+fn v_rename(v: Verb, recs: own Vec[Rec]) -> Result[Vec[Rec], String] {
+    let use_regex = v.flag("-r") or v.flag("-g");
+    let gsub = v.flag("-g");
+    let names: Vec[String] = v.pos[0].split(",").map(|p| p.to_string()).collect();
+    let mut pairs: Vec[(String, String)] = Vec.new();
+    let mut j = 0;
+    while j + 1 < names.len() {
+        pairs.push((names[j].clone(), names[j + 1].clone()));
+        j += 2;
+    }
+    let mut rxs: Vec[Regex] = Vec.new();
+    if use_regex {
+        for (a, _) in pairs {
+            rxs.push(miller_regex(a)?);
+        }
+    }
+    let mut out: Vec[Rec] = Vec.new();
+    for rec in recs.into_iter() {
+        let mut r = rec;
+        if use_regex {
+            for k in 0..pairs.len() {
+                rename_regex_walk(mut r, rxs[k], pairs[k].1, gsub);
+            }
+        } else {
+            rename_walk(mut r, pairs);
+        }
+        out.push(r);
+    }
+    Ok(out)
+}
+
+fn v_label(v: Verb, recs: own Vec[Rec]) -> Vec[Rec] {
+    let names: Vec[String] = v.pos[0].split(",").map(|p| p.to_string()).collect();
+    let mut out: Vec[Rec] = Vec.new();
+    for rec in recs.into_iter() {
+        let mut r = rec;
+        let nhead = names.len().min(r.f.len());
+        let mut f: Vec[Field] = Vec.new();
+        let mut have: Vec[String] = Vec.new();
+        for j in 0..nhead {
+            f.push(field(names[j], r.f[j].val));
+            have.push(names[j].clone());
+        }
+        for j in nhead..r.f.len() {
+            if have.contains(r.f[j].key) {
+                continue;
+            }
+            have.push(r.f[j].key.clone());
+            f.push(r.f[j].clone());
+        }
+        r.f = f;
+        out.push(r);
+    }
+    out
+}
+
+// ------------------------------------------------------------ join
+
+// join, unsorted: the left file is read whole and bucketed by its join
+// fields; each right record pairs with its bucket as it streams past.
+fn v_join(v: Verb, recs: own Vec[Rec], o: Opts, s: Seps) -> Result[Vec[Rec], String] {
+    let left_file = v.last("-f") ?? String.new();
+    let out_names = v.list_or_empty("-j");
+    let left_names = v.list_of("-l") ?? out_names.clone();
+    let right_names = v.list_of("-r") ?? out_names.clone();
+    let lp = v.last("--lp") ?? String.new();
+    let rp = v.last("--rp") ?? String.new();
+    let pairs = not v.flag("--np");
+    let ul = v.flag("--ul");
+    let ur = v.flag("--ur");
+    let keep: Option[Vec[String]] = match v.list_of("--lk") {
+        Some(k) => {
+            let mut all = k.clone();
+            all.extend(left_names.clone());
+            Some(all)
+        }
+        None => None,
+    };
+    let got = read_file(left_file, o, s, 1)?;
+    if let Some(e) = got.err {
+        return Err("mlr :  ".to_string() + e);
+    }
+    let mut index: Map[String, i64] = Map.new();
+    let mut buckets: Vec[(Vec[Rec], bool)] = Vec.new();
+    let mut unpairable: Vec[Rec] = Vec.new();
+    for lrec in got.recs.into_iter() {
+        let mut l = lrec;
+        if let Some(k) = keep {
+            l.f.retain(|p| k.contains(p.key));
+        }
+        let key = match selected(l, left_names) {
+            Some(vals) => joined(vals),
+            None => {
+                unpairable.push(l);
+                continue;
+            }
+        };
+        match index.get(key) {
+            Some(i) => {
+                let b = *i;
+                buckets[b].0.push(l);
+            }
+            None => {
+                index[key] = buckets.len();
+                let mut list: Vec[Rec] = Vec.new();
+                list.push(l);
+                buckets.push((list, false));
+            }
+        }
+    }
+    let mut out: Vec[Rec] = Vec.new();
+    for rrec in recs.into_iter() {
+        let key = match selected(rrec, right_names) {
+            Some(vals) => joined(vals),
+            None => {
+                if ur {
+                    out.push(rrec);
+                }
+                continue;
+            }
+        };
+        let b = match index.get(key) {
+            Some(i) => *i,
+            None => {
+                if ur {
+                    out.push(rrec);
+                }
+                continue;
+            }
+        };
+        buckets[b].1 = true;
+        if pairs {
+            for lrec in buckets[b].0 {
+                let mut rec = rrec.like(Vec.new());
+                for j in 0..left_names.len().min(out_names.len()) {
+                    if let Some(val) = lrec.get(left_names[j]) {
+                        rec.put(out_names[j], val);
+                    }
+                }
+                for p in lrec.f {
+                    if not left_names.contains(p.key) {
+                        rec.put(lp.clone() + p.key, p.val);
+                    }
+                }
+                for p in rrec.f {
+                    if not right_names.contains(p.key) {
+                        rec.put(rp.clone() + p.key, p.val);
+                    }
+                }
+                out.push(rec);
+            }
+        }
+    }
+    if ul {
+        for (list, paired) in buckets.into_iter() {
+            if not paired {
+                out.extend(list);
+            }
+        }
+        out.extend(unpairable);
+    }
+    Ok(out)
+}
+
+// ------------------------------------------------------------ the chain
+
+fn run_verb(v: Verb, recs: own Vec[Rec], o: Opts, s: Seps) -> Result[Vec[Rec], String] {
+    match v.name.as_str() {
+        "cat" => Ok(v_cat(v, recs)),
+        "head" => Ok(v_head(v, recs)),
+        "tail" => Ok(v_tail(v, recs)),
+        "tac" => Ok(v_tac(recs)),
+        "group-by" => Ok(v_group_by(v, recs)),
+        "group-like" => Ok(v_group_like(recs)),
+        "regularize" => Ok(v_regularize(recs)),
+        "sort-within-records" => Ok(v_sort_within_records(recs)),
+        "cut" => v_cut(v, recs),
+        "having-fields" => v_having_fields(v, recs),
+        "template" => Ok(v_template(v, recs)),
+        "unsparsify" => Ok(v_unsparsify(v, recs)),
+        "fill-down" => Ok(v_fill_down(v, recs)),
+        "fill-empty" => Ok(v_fill_empty(v, recs)),
+        "grep" => v_grep(v, recs),
+        "decimate" => Ok(v_decimate(v, recs)),
+        "sec2gmt" => Ok(v_sec2gmt(v, recs)),
+        "seqgen" => v_seqgen(v),
+        "sort" => Ok(v_sort(v, recs)),
+        "top" => Ok(v_top(v, recs)),
+        "count" => Ok(v_count(v, recs)),
+        "count-similar" => Ok(v_count_similar(v, recs)),
+        "uniq" | "count-distinct" => Ok(v_uniq(v, recs)),
+        "stats1" => v_stats1(v, recs),
+        "merge-fields" => v_merge_fields(v, recs),
+        "fraction" => Ok(v_fraction(v, recs)),
+        "step" => Ok(v_step(v, recs)),
+        "nest" => v_nest(v, recs),
+        "reorder" => v_reorder(v, recs),
+        "rename" => v_rename(v, recs),
+        "label" => Ok(v_label(v, recs)),
+        "join" => v_join(v, recs, o, s),
+        _ => Err(f"mlr: verb \"{v.name}\" not found.\n"),
+    }
+}
+
+// ============================================================ main
+
+struct Job {
+    o: Opts,
+    s: Seps,
+    chain: Vec[Verb],
+    files: Vec[String],
+}
+
+// Miller's first pass over the command line (main flags, then the verb
+// chain joined by `then`), then the second, which builds each verb.
+fn parse(raw: Vec[String]) -> Result[Job, String] {
+    let argv = getoptify(raw);
+    let mut o = new_opts();
+    let mut chain: Vec[Verb] = Vec.new();
+    let mut i = 0;
+    let mut first = true;
+    while i < argv.len() {
+        let a = argv[i].clone();
+        if a.starts_with("-") {
+            if main_flag0(mut o, a) {
+                i += 1;
+            } else if is_main_flag1(a) and i + 1 < argv.len() {
+                main_flag1(mut o, a, argv[i + 1]);
+                i += 2;
+            } else {
+                return Err(f"mlr: option \"{a}\" not recognized.\nPlease run \"mlr --help\" for usage information.\n");
+            }
+        } else if first or a == "then" {
+            if a == "then" {
+                i += 1;
+            }
+            if i >= argv.len() {
+                return Err("mlr: 'then' must have a verb after it.\n".to_string());
+            }
+            let (v, next) = parse_verb(argv, i)?;
+            chain.push(v);
+            i = next;
+            first = false;
+        } else {
+            break;
+        }
+    }
+    let s = finalize(o);
+    for v in chain {
+        construct_verb(v)?;
+    }
+    let mut files = o.files.clone();
+    for j in i..argv.len() {
+        files.push(argv[j].clone());
+    }
+    if o.no_input or (chain.len() > 0 and chain[0].name == "seqgen") {
+        files = Vec.new();
+    }
+    Ok(Job { o: o, s: s, chain: chain, files: files })
+}
+
+// What one mlr command line writes: its standard output, and its error
+// output when it fails.
+fn run_job(argv: Vec[String]) -> (String, Option[String]) {
+    let job = match parse(argv) {
+        Ok(j) => j,
+        Err(e) => return (String.new(), Some(e)),
+    };
+    let got = match read_inputs(job.files, job.o, job.s) {
+        Ok(g) => g,
+        Err(e) => return (String.new(), Some(e)),
+    };
+    let mut recs = got.recs;
+    for v in job.chain {
+        recs = match run_verb(v, recs, job.o, job.s) {
+            Ok(r) => r,
+            Err(e) => return (String.new(), Some(e)),
+        };
+    }
+    let o = job.o.clone();
+    let s = job.s.clone();
+    let written = match o.ofmt.as_str() {
+        "json" => {
+            let last = job.chain[job.chain.len() - 1].name.clone();
+            let mut jrecs: Vec[Vec[JField]] = Vec.new();
+            for rec in recs {
+                if o.ifmt != "json" and o.auto_unflatten and last != "flatten" {
+                    jrecs.push(unflatten(rec));
+                } else {
+                    jrecs.push(flat_json(rec));
+                }
+            }
+            write_json(jrecs, o)
+        }
+        "csv" => write_csv(recs, o, s, false),
+        "tsv" => write_csv(recs, o, s, true),
+        "nidx" => write_nidx(recs, s),
+        "markdown" => write_markdown(recs),
+        "xtab" => write_xtab(recs, o, s),
+        "pprint" => write_pprint(recs, o, s),
+        _ => write_dkvp(recs, s),
+    };
+    if let Some(e) = written.err {
+        return (written.text, Some(e + "mlr: exiting due to data error.\n"));
+    }
+    if let Some(e) = got.err {
+        return (written.text, Some(f"mlr: {e}.\n"));
+    }
+    (written.text, None)
+}
+
+// An argument as a shell would need it written.
+fn shown(a: Str) -> String {
+    let mut plain = a.len() > 0;
+    for c in a.chars() {
+        let safe = (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9')
+            or "@%+=:,./-_".contains(c.to_string());
+        if not safe {
+            plain = false;
+        }
+    }
+    if plain {
+        a.to_string()
+    } else {
+        "'".to_string() + a.replace("'", "'\"'\"'") + "'"
+    }
+}
+
+// One job's part of the transcript: the command, what it wrote, and its
+// error output after "!".
+fn transcript(line: Str) -> String {
+    let argv: Vec[String] = line.split("\t").map(|p| p.to_string()).collect();
+    let mut t = "$ mlr".to_string();
+    for a in argv {
+        t.push(' ');
+        t.push_str(shown(a));
+    }
+    t.push('\n');
+    let (out, err) = run_job(argv);
+    // A carriage return is shown as ^M, as `cat -v` shows it.
+    let printed = out.replace("\r", "^M");
+    t.push_str(printed);
+    if printed.len() > 0 and not printed.ends_with("\n") {
+        t.push_str("\n\\ no newline at end of output\n");
+    }
+    if let Some(e) = err {
+        let body = match e.strip_suffix("\n") {
+            Some(b) => b.to_string(),
+            None => e.clone(),
+        };
+        for l in body.split("\n") {
+            if l.len() == 0 {
+                t.push_str("!\n");
+            } else {
+                t.push_str(f"! {l}\n");
+            }
+        }
+        t.push_str("[exit 1]\n");
+    }
+    t
+}
+
+struct DataFile {
+    path: String,
+    body: String,
+}
+
+fn write_data() -> Result[(), String] {
+    if let Err(e) = fs.create_dir_all("data".to_string()) {
+        return Err(f"cannot create data: {e}");
+    }
+    for file in data_files() {
+        if let Err(e) = fs.write(f"data/{file.path}", file.body.clone()) {
+            return Err(f"cannot write {file.path}: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = write_data() {
+        eprintln(e);
+        return;
+    }
+    let jobs = match fs.read_to_string("data/jobs.txt".to_string()) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln(f"cannot read jobs.txt: {e}");
+            return;
+        }
+    };
+    let lines: Vec[String] = jobs.lines().filter(|l| l.len() > 0).map(|l| l.to_string()).collect();
+    // Every job in a task of its own; the transcript prints in job order.
+    let group = TaskGroup.new();
+    let mut handles = Vec.new();
+    for line in lines {
+        handles.push(group.spawn(|| transcript(line)));
+    }
+    for h in handles.into_iter() {
+        print(h.join());
+    }
+}
+
+// ============================================================ data
+
+// The files under data/, in path order.
+fn data_files() -> Vec[DataFile] {
+    let mut v: Vec[DataFile] = Vec.new();
+    data_part_0(mut v);
+    data_part_1(mut v);
+    data_part_2(mut v);
+    v
+}
+
+fn data_part_0(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("a\tb\tc\n");
+    t.push_str("1\t2\t3\n");
+    t.push_str("4\t5\n");
+    t.push_str("6\t7\t8\n");
+    v.push(DataFile { path: "bad.tsv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("customer,tier,since\n");
+    t.push_str("acme,gold,2019\n");
+    t.push_str("globex,silver,2021\n");
+    t.push_str("initech,gold,2018\n");
+    t.push_str("hooli,bronze,2024\n");
+    t.push_str("umbrella,silver,2020\n");
+    v.push(DataFile { path: "customers.csv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("a,b,a,a\n");
+    t.push_str("1,2,3,4\n");
+    t.push_str("5,6,7,8\n");
+    v.push(DataFile { path: "dupes.csv".to_string(), body: t });
+    let mut t = String.new();
+    v.push(DataFile { path: "empty.csv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("t=1700000000,user=ann,action=login,ms=12\n");
+    t.push_str("t=1700000060,user=bob,action=view,ms=48,page=home\n");
+    t.push_str("t=1700000090,user=ann,action=view,ms=33,page=cart\n");
+    t.push_str("t=1700000120,user=cy,action=login\n");
+    t.push_str("t=1700000150,user=bob,action=buy,ms=91,page=cart,amount=19.99\n");
+    t.push_str("t=1700000200,ms=7,user=ann,action=logout\n");
+    t.push_str("lonely,user=dee,x\n");
+    v.push(DataFile { path: "events.dkvp".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("host,bytes_in,bytes_out,pkts_in,pkts_out\n");
+    t.push_str("a,100,250,4,6\n");
+    t.push_str("b,300,,9,12\n");
+    t.push_str("c,0,40,0,2\n");
+    v.push(DataFile { path: "flows.csv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("a,b,c\n");
+    v.push(DataFile { path: "header_only.csv".to_string(), body: t });
+}
+
+fn data_part_1(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("--icsv\t--opprint\tcat\tdata/orders.csv\n");
+    t.push_str("--icsv\t--ojson\thead\t-n\t2\tdata/orders.csv\n");
+    t.push_str("--icsv\t--ojsonl\thead\t-n\t3\tthen\tcut\t-f\tid,customer,price\tdata/orders.csv\n");
+    t.push_str("--icsv\t--ojson\t--jvstack\t--no-jlistwrap\thead\t-n\t2\tthen\tcut\t-f\tid,qty\tdata/orders.csv\n");
+    t.push_str("--icsv\t--ojson\t--no-jvstack\ttail\t-n\t2\tdata/orders.csv\n");
+    t.push_str("--icsv\t--oxtab\thead\t-n\t2\tdata/orders.csv\n");
+    t.push_str("--icsv\t--oxtab\t--xvright\thead\t-n\t3\tthen\tcut\t-f\tid,customer,qty,price\tdata/orders.csv\n");
+    t.push_str("--icsv\t--oxtab\t--ops\tcolon\thead\t-n\t1\tdata/orders.csv\n");
+    t.push_str("--c2p\t--barred\thead\t-n\t4\tthen\tcut\t-f\tid,region,qty\tdata/orders.csv\n");
+    t.push_str("--c2p\t--right\thead\t-n\t4\tthen\tcut\t-f\tid,customer,price\tdata/orders.csv\n");
+    t.push_str("--c2p\t--barred\t--right\thead\t-n\t3\tthen\tcut\t-f\tid,customer,qty\tdata/orders.csv\n");
+    t.push_str("--icsv\t--omd\tcat\tdata/quoted.csv\n");
+    t.push_str("--icsv\t--otsv\tcat\tdata/quoted.csv\n");
+    t.push_str("--icsv\t--ocsv\tcat\tdata/quoted.csv\n");
+    t.push_str("--icsv\t--ojson\tcat\tdata/quoted.csv\n");
+    t.push_str("--icsv\t--ocsv\t--quote-all\thead\t-n\t2\tthen\tcut\t-f\tid,customer\tdata/orders.csv\n");
+    t.push_str("--icsv\t--odkvp\thead\t-n\t2\tdata/orders.csv\n");
+    t.push_str("--icsv\t--onidx\t--ofs\tspace\thead\t-n\t3\tthen\tcut\t-f\tid,customer,qty\tdata/orders.csv\n");
+    t.push_str("--c2t\thead\t-n\t2\tdata/orders.csv\n");
+    t.push_str("--c2d\thead\t-n\t2\tdata/orders.csv\n");
+    t.push_str("--c2j\thead\t-n\t1\tdata/orders.csv\n");
+    t.push_str("--c2n\thead\t-n\t2\tdata/orders.csv\n");
+    t.push_str("--c2m\thead\t-n\t2\tthen\tcut\t-f\tid,status\tdata/orders.csv\n");
+    t.push_str("--icsv\t--opprint\tcat\tdata/dupes.csv\n");
+    t.push_str("--icsv\t--implicit-csv-header\t--ocsv\thead\t-n\t2\tdata/orders.csv\n");
+    t.push_str("--icsv\t--headerless-csv-output\t--ocsv\thead\t-n\t2\tdata/orders.csv\n");
+    t.push_str("--icsv\t--hi\t--ho\t--ocsv\ttail\t-n\t1\tdata/visits.csv\n");
+    t.push_str("--icsv\t--allow-ragged-csv-input\t--ojson\tcat\tdata/ragged.csv\n");
+    t.push_str("--icsv\t--opprint\tcat\tdata/ragged.csv\n");
+    t.push_str("--icsv\t--opprint\tcat\tdata/ragged.csv\tdata/visits.csv\n");
+    t.push_str("--itsv\t--ojson\tcat\tdata/regions.tsv\n");
+    t.push_str("--itsv\t--otsv\tcat\tdata/regions.tsv\n");
+    t.push_str("--itsv\t--opprint\tcat\tdata/bad.tsv\n");
+    t.push_str("--itsv\t--allow-ragged-csv-input\t--ocsv\tcat\tdata/bad.tsv\n");
+    t.push_str("--idkvp\t--ojson\tcat\tdata/events.dkvp\n");
+    t.push_str("--opprint\tcat\tdata/events.dkvp\n");
+    t.push_str("--ocsv\tcat\tdata/events.dkvp\n");
+    t.push_str("--ocsv\tunsparsify\tdata/events.dkvp\n");
+    t.push_str("--oxtab\tunsparsify\t--fill-with\t-\tthen\thead\t-n\t2\tdata/events.dkvp\n");
+    t.push_str("--inidx\t--ocsv\tcat\tdata/words.txt\n");
+    t.push_str("--inidx\t--ifs\tspace\t--ojson\thead\t-n\t2\tdata/words.txt\n");
+    t.push_str("--inidx\t--ifs\tspace\t--repifs\t--onidx\t--ofs\tcomma\tcat\tdata/words.txt\n");
+    t.push_str("--icsv\t--ifs\tsemicolon\t--opprint\tcat\tdata/semi.csv\n");
+    t.push_str("--csv\t--fs\tsemicolon\tcat\tdata/semi.csv\n");
+    t.push_str("--icsv\t--ojson\tcat\tdata/nested.csv\n");
+    t.push_str("--icsv\t--ojson\t--no-auto-unflatten\thead\t-n\t1\tdata/nested.csv\n");
+    t.push_str("--icsv\t--ojsonl\tcat\tdata/nested.csv\n");
+    t.push_str("--icsv\t--opprint\tcat\tdata/header_only.csv\n");
+    t.push_str("--icsv\t--ojson\tcat\tdata/empty.csv\n");
+    t.push_str("--icsv\t--ocsv\tcat\tdata/orders.csv\tdata/customers.csv\n");
+    t.push_str("--icsv\t--opprint\tcat\tdata/orders.csv\tdata/customers.csv\n");
+    t.push_str("--from\tdata/orders.csv\t--icsv\t--opprint\thead\t-n\t2\tthen\tcut\t-f\tid,qty\n");
+    t.push_str("--c2p\tcat\t-n\t-g\tregion\tthen\thead\t-n\t6\tdata/orders.csv\n");
+    t.push_str("--c2p\tcat\t-N\tidx\t--filename\t--filenum\tdata/visits.csv\tdata/customers.csv\n");
+    t.push_str("--icsv\t--opprint\tsort\t-nr\treading\tdata/sensors.csv\n");
+    t.push_str("--icsv\t--opprint\tsort\t-nf\treading\tdata/sensors.csv\n");
+    t.push_str("--icsv\t--opprint\tsort\t-f\treading\tdata/sensors.csv\n");
+    t.push_str("--icsv\t--opprint\tsort\t-f\tsensor\t-nr\treading\tdata/sensors.csv\n");
+    t.push_str("--icsv\t--ojson\thead\t-n\t8\tthen\tcut\t-f\treading\tdata/sensors.csv\n");
+    t.push_str("--icsv\t--opprint\tstats1\t-a\tcount,sum,mean,min,max\t-f\treading\t-g\tsensor\tdata/sensors.csv\n");
+    t.push_str("--icsv\t--opprint\tstats1\t-a\tcount,null_count,distinct_count,mode,antimode,minlen,maxlen\t-f\treading,note\tdata/sensors.csv\n");
+    t.push_str("--icsv\t--opprint\tstats1\t-a\tmin,max,p50\t-f\treading\tdata/sensors.csv\n");
+    t.push_str("--icsv\t--opprint\tsort\t-f\tregion\t-nr\tqty\tdata/orders.csv\n");
+    t.push_str("--icsv\t--opprint\tsort\t-nf\tprice\t-f\tid\tthen\tcut\t-f\tid,product,price\tdata/orders.csv\n");
+    t.push_str("--icsv\t--opprint\tsort\t-c\tcustomer\tthen\tcut\t-f\tid,customer\tdata/orders.csv\n");
+    t.push_str("--icsv\t--opprint\tsort\t-cr\tcustomer\tthen\tcut\t-f\tid,customer\tdata/orders.csv\n");
+    t.push_str("--icsv\t--opprint\tsort\t-r\tstatus\t-n\tid\tthen\tcut\t-f\tid,status\tdata/orders.csv\n");
+    t.push_str("--opprint\tsort\t-f\tpage\tdata/events.dkvp\n");
+    t.push_str("--icsv\t--opprint\thead\t-n\t1\t-g\tregion\tthen\tcut\t-f\tid,region,customer\tdata/orders.csv\n");
+    t.push_str("--icsv\t--opprint\ttail\t-n\t2\t-g\tproduct\tthen\tcut\t-f\tid,product\tdata/orders.csv\n");
+    t.push_str("--icsv\t--opprint\ttac\tthen\thead\t-n\t3\tdata/orders.csv\n");
+    t.push_str("--icsv\t--ocsv\tcut\t-o\t-f\tprice,id,nosuch\tdata/orders.csv\n");
+    t.push_str("--icsv\t--ocsv\tcut\t-x\t-f\tdate,status,price\tdata/orders.csv\n");
+    t.push_str("--icsv\t--ocsv\tcut\t-r\t-f\t^(i|pr)\tdata/orders.csv\n");
+    t.push_str("--icsv\t--ocsv\tcut\t-r\t-f\t\"^ID$\"i,qty\tthen\thead\t-n\t3\tdata/orders.csv\n");
+    t.push_str("--icsv\t--ocsv\tcut\t-x\t-r\t-f\te\tthen\thead\t-n\t2\tdata/orders.csv\n");
+    t.push_str("--opprint\thaving-fields\t--at-least\tms,page\tdata/events.dkvp\n");
+    t.push_str("--opprint\thaving-fields\t--which-are\tt,user,action\tdata/events.dkvp\n");
+    t.push_str("--opprint\thaving-fields\t--at-most\tt,user,action,ms\tdata/events.dkvp\n");
+    t.push_str("--opprint\thaving-fields\t--any-matching\t^am\tdata/events.dkvp\n");
+    t.push_str("--opprint\thaving-fields\t--all-matching\t^[a-z]+$\tdata/events.dkvp\n");
+    t.push_str("--opprint\thaving-fields\t--none-matching\t^p\tdata/events.dkvp\n");
+    t.push_str("--icsv\t--opprint\tdecimate\t-n\t4\tdata/orders.csv\n");
+    t.push_str("--icsv\t--opprint\tdecimate\t-n\t2\t-b\t-g\tregion\tthen\tcut\t-f\tid,region\tdata/orders.csv\n");
+    t.push_str("--icsv\t--opprint\tgrep\t-i\tACME\tdata/orders.csv\n");
+    t.push_str("--icsv\t--opprint\tgrep\t-v\tshipped\tdata/orders.csv\n");
+    t.push_str("--icsv\t--opprint\tgrep\t-a\t^100[3-5],\tdata/orders.csv\n");
+    t.push_str("--icsv\t--opprint\tgrep\tregion=north\tdata/orders.csv\n");
+    t.push_str("--icsv\t--opprint\tcount\tdata/orders.csv\n");
+    t.push_str("--icsv\t--opprint\tcount\t-g\tregion\tdata/orders.csv\n");
+    t.push_str("--icsv\t--opprint\tcount\t-n\t-g\tcustomer\tdata/orders.csv\n");
+    t.push_str("--icsv\t--opprint\tcount\t-o\torders\t-g\tregion,product\tdata/orders.csv\n");
+    t.push_str("--icsv\t--opprint\tcount-distinct\t-f\tregion,status\tdata/orders.csv\n");
+    t.push_str("--icsv\t--opprint\tcount-distinct\t-n\t-f\tcustomer\tdata/orders.csv\n");
+    t.push_str("--icsv\t--opprint\tcount-distinct\t-u\t-f\tregion,product\tdata/orders.csv\n");
+    t.push_str("--icsv\t--opprint\tcount-similar\t-g\tcustomer\tthen\tcut\t-f\tid,customer,count\tdata/orders.csv\n");
+    t.push_str("--icsv\t--opprint\tuniq\t-g\tregion,status\tdata/orders.csv\n");
+    t.push_str("--icsv\t--opprint\tuniq\t-g\tregion\t-c\tdata/orders.csv\n");
+    t.push_str("--icsv\t--opprint\tuniq\t-g\tregion\t-n\tdata/orders.csv\n");
+    t.push_str("--icsv\t--opprint\tuniq\t-x\tpage\t-c\tdata/visits.csv\n");
+    t.push_str("--icsv\t--opprint\tuniq\t-a\tdata/visits.csv\n");
+    t.push_str("--icsv\t--opprint\tuniq\t-a\t-c\tdata/visits.csv\n");
+    t.push_str("--icsv\t--opprint\tuniq\t-a\t-n\tdata/visits.csv\n");
+    t.push_str("--icsv\t--opprint\tgroup-by\tregion\tdata/orders.csv\n");
+    t.push_str("--opprint\tgroup-like\tdata/events.dkvp\n");
+    t.push_str("--icsv\t--opprint\ttop\t-n\t2\t-f\tprice\t-g\tregion\tdata/orders.csv\n");
+    t.push_str("--icsv\t--opprint\ttop\t-n\t3\t-f\tqty\t--min\t-o\trank\tdata/orders.csv\n");
+    t.push_str("--icsv\t--opprint\ttop\t-f\tqty,price\tdata/orders.csv\n");
+    t.push_str("--icsv\t--opprint\ttop\t-n\t1\t-f\tprice\t-g\tproduct\t-a\tdata/orders.csv\n");
+    t.push_str("--icsv\t--opprint\tstats1\t-a\tcount,sum,mean,min,max\t-f\tqty,price\t-g\tregion\tdata/orders.csv\n");
+    t.push_str("--icsv\t--opprint\tstats1\t-a\tp10,p25.2,median,p75,p90\t-f\tqty,price\tdata/orders.csv\n");
+    t.push_str("--icsv\t--opprint\tstats1\t-i\t-a\tp25,median,p75\t-f\tqty,price\tdata/orders.csv\n");
+    t.push_str("--icsv\t--oxtab\tstats1\t-a\tvar,stddev,meaneb,kurtosis,mad\t-f\tqty,price\tdata/orders.csv\n");
+    t.push_str("--icsv\t--opprint\tstats1\t-a\tmean,var\t-f\tqty\t-g\tproduct,region\tdata/orders.csv\n");
+    t.push_str("--icsv\t--opprint\tstats1\t-a\tsum,count\t--fr\t^(qty|price)$\t-g\tstatus\tdata/orders.csv\n");
+    t.push_str("--icsv\t--opprint\tstats1\t-a\tmax\t--fx\t^(id|qty|price)$\tdata/orders.csv\n");
+    t.push_str("--icsv\t--opprint\tstats1\t-a\tfirst\t-f\tqty\tdata/orders.csv\n");
+    t.push_str("--icsv\t--opprint\tstats1\t-f\tqty\tdata/orders.csv\n");
+    t.push_str("--icsv\t--opprint\tmerge-fields\t-a\tmin,max,sum\t-f\tq1,q2,q3,q4\t-o\tall\tdata/scores.csv\n");
+    t.push_str("--icsv\t--opprint\tmerge-fields\t-k\t-a\tsum,count,mean\t-r\t^q[12]$\t-o\th1\tdata/scores.csv\n");
+    t.push_str("--icsv\t--opprint\tmerge-fields\t-a\tsum,max\t-c\t_in,_out\tdata/flows.csv\n");
+    t.push_str("--icsv\t--opprint\tmerge-fields\t-k\t-a\tsum\t-c\tbytes_,pkts_\tdata/flows.csv\n");
+    t.push_str("--icsv\t--opprint\tmerge-fields\t-a\tnope\t-f\tq1\t-o\tx\tdata/scores.csv\n");
+    t.push_str("--icsv\t--opprint\tfraction\t-f\tprice\tdata/orders.csv\n");
+    t.push_str("--icsv\t--opprint\tfraction\t-f\tprice\t-g\tregion\t-p\t-c\tthen\tcut\t-f\tid,region,price,price_cumulative_percent\tdata/orders.csv\n");
+    t.push_str("--icsv\t--opprint\tfraction\t-f\tbytes_in,pkts_out\tdata/flows.csv\n");
+    t.push_str("--icsv\t--opprint\tstep\t-a\tdelta,shift,from-first,ratio,rsum,rprod,counter\t-f\tq1\tdata/scores.csv\n");
+    t.push_str("--icsv\t--opprint\tstep\t-a\tdelta,rsum,counter\t-f\tqty\t-g\tregion\tthen\tcut\t-f\tid,region,qty,qty_delta,qty_rsum,qty_counter\tdata/orders.csv\n");
+    t.push_str("--icsv\t--opprint\tstep\t-a\tshift_lag,shift_lead\t-f\tprice\tthen\tcut\t-f\tid,price,price_shift_lag,price_shift_lead\tdata/orders.csv\n");
+    t.push_str("--icsv\t--opprint\tstep\t-a\tewma\t-d\t0.1,0.9\t-f\tq1\tdata/scores.csv\n");
+    t.push_str("--icsv\t--opprint\tstep\t-a\tewma\t-d\t0.5\t-o\thalf\t-f\tq1,q3\tdata/scores.csv\n");
+    t.push_str("--icsv\t--opprint\tstep\t-a\tslwin_1_1,shift_lead\t-f\tprice\t-g\tregion\tthen\tcut\t-r\t-f\t^(id|region|price)\tdata/orders.csv\n");
+    t.push_str("--icsv\t--opprint\tstep\t-a\tslwin_0_2\t-f\tq2\tdata/scores.csv\n");
+    t.push_str("--icsv\t--opprint\tstep\t-a\tmedian\t-f\tq1\tdata/scores.csv\n");
+    t.push_str("--icsv\t--opprint\tnest\t--ivar\t;\t-f\tid\tthen\tcut\t-f\tregion,id\tdata/orders.csv\n");
+    t.push_str("--icsv\t--opprint\tnest\t--explode\t--values\t--across-records\t-f\ttags\t--nested-fs\t;\tdata/tags.csv\n");
+    t.push_str("--icsv\t--opprint\tnest\t--explode\t--values\t--across-fields\t-f\ttags\t--nested-fs\tsemicolon\tdata/tags.csv\n");
+    t.push_str("--icsv\t--ojson\tnest\t--explode\t--pairs\t--across-records\t-f\tattrs\t--nested-fs\t;\t--nested-ps\t:\tdata/tags.csv\n");
+    t.push_str("--icsv\t--ojson\tnest\t--explode\t--pairs\t--across-fields\t-f\tattrs\t--nested-fs\t;\t--nested-ps\t:\tdata/tags.csv\n");
+    t.push_str("--icsv\t--opprint\tnest\t--evar\t;\t-f\ttags\tthen\tnest\t--ivar\t|\t-f\ttags\tdata/tags.csv\n");
+    t.push_str("--icsv\t--opprint\tnest\t--explode\t--values\t--across-fields\t-f\ttags\tthen\tnest\t--implode\t--values\t--across-fields\t-f\ttags\t--nested-fs\t+\tdata/tags.csv\n");
+    t.push_str("--icsv\t--ocsv\treorder\t-f\tstatus,id\tthen\thead\t-n\t2\tdata/orders.csv\n");
+    t.push_str("--icsv\t--ocsv\treorder\t-e\t-f\tid,date\tthen\thead\t-n\t2\tdata/orders.csv\n");
+    t.push_str("--icsv\t--ocsv\treorder\t-f\tqty\t-a\tregion\tthen\thead\t-n\t2\tdata/orders.csv\n");
+    t.push_str("--icsv\t--ocsv\treorder\t-r\t^[pq]\t-b\tid\tthen\thead\t-n\t2\tdata/orders.csv\n");
+    t.push_str("--icsv\t--ocsv\treorder\t-r\t^[dp]\tthen\thead\t-n\t2\tdata/orders.csv\n");
+    t.push_str("--icsv\t--ocsv\trename\tid,order,qty,quantity\tthen\thead\t-n\t2\tdata/orders.csv\n");
+    t.push_str("--icsv\t--ocsv\trename\tqty,price\tthen\thead\t-n\t2\tdata/orders.csv\n");
+    t.push_str("--icsv\t--ocsv\trename\t-r\t^(.)r(.*)$,\\2_\\1\tthen\thead\t-n\t2\tdata/orders.csv\n");
+    t.push_str("--icsv\t--ocsv\trename\t-g\t-r\te,E\tthen\thead\t-n\t2\tdata/orders.csv\n");
+    t.push_str("--icsv\t--ocsv\trename\t-r\t\"^C(.*)\"i,client\\1\tthen\thead\t-n\t2\tdata/orders.csv\n");
+    t.push_str("--icsv\t--ocsv\tlabel\ta,b,c\tthen\thead\t-n\t2\tdata/orders.csv\n");
+    t.push_str("--icsv\t--ocsv\tlabel\tx,y,qty\tthen\thead\t-n\t2\tdata/orders.csv\n");
+    t.push_str("--icsv\t--ocsv\tlabel\ta,b,a\tdata/orders.csv\n");
+    t.push_str("--opprint\tregularize\tdata/events.dkvp\n");
+    t.push_str("--ojson\tsort-within-records\tthen\thead\t-n\t2\tdata/events.dkvp\n");
+    t.push_str("--ojson\tsort-within-records\t-r\tthen\ttail\t-n\t1\tdata/events.dkvp\n");
+    t.push_str("--icsv\t--opprint\ttemplate\t-f\tcustomer,id,missing\tdata/orders.csv\n");
+    t.push_str("--icsv\t--opprint\ttemplate\t-f\tid,missing\t--fill-with\tX\tthen\thead\t-n\t3\tdata/orders.csv\n");
+    t.push_str("--icsv\t--ojson\ttemplate\t-f\tpage,user,n\t--fill-with\t\tthen\thead\t-n\t1\tdata/visits.csv\n");
+    t.push_str("--icsv\t--opprint\tfill-down\t-f\tqty\tthen\thead\t-n\t6\tthen\tcut\t-f\tid,qty\tdata/orders.csv\n");
+    t.push_str("--icsv\t--opprint\tfill-down\t-a\t-f\tqty\tthen\thead\t-n\t6\tthen\tcut\t-f\tid,qty\tdata/orders.csv\n");
+    t.push_str("--icsv\t--opprint\tfill-down\t-f\tq3,q4\tdata/scores.csv\n");
+    t.push_str("--icsv\t--opprint\tfill-down\t--all\tdata/tags.csv\n");
+    t.push_str("--icsv\t--opprint\tfill-empty\tdata/orders.csv\n");
+    t.push_str("--icsv\t--ojson\tfill-empty\t-v\t0\tthen\thead\t-n\t1\tthen\tcut\t-f\tq3\tdata/scores.csv\n");
+    t.push_str("--icsv\t--ojson\tfill-empty\t-S\t-v\t0\tthen\thead\t-n\t1\tthen\tcut\t-f\tq3\tdata/scores.csv\n");
+    t.push_str("--icsv\t--opprint\tsec2gmt\tt\tdata/times.csv\n");
+    t.push_str("--icsv\t--opprint\tsec2gmt\t-3\tt\tdata/times.csv\n");
+    t.push_str("--icsv\t--opprint\tsec2gmt\t--millis\t-6\tms\tdata/times.csv\n");
+    t.push_str("--icsv\t--opprint\tsec2gmt\t-1\tt,ms\tdata/times.csv\n");
+    t.push_str("--icsv\t--opprint\tjoin\t-j\tcustomer\t-f\tdata/customers.csv\tthen\tcut\t-f\tid,customer,tier,qty\tdata/orders.csv\n");
+    t.push_str("--icsv\t--opprint\tjoin\t--np\t--ul\t-j\tcustomer\t-f\tdata/customers.csv\tdata/orders.csv\n");
+    t.push_str("--icsv\t--opprint\tjoin\t--np\t--ur\t-j\tcustomer\t-f\tdata/customers.csv\tdata/orders.csv\n");
+    t.push_str("--icsv\t--opprint\tjoin\t--ul\t--ur\t-j\tcustomer\t--lp\tc_\t--rp\to_\t-f\tdata/customers.csv\tthen\thead\t-n\t4\tdata/orders.csv\n");
+    t.push_str("--icsv\t--opprint\tjoin\t-l\tcustomer\t-r\tcustomer\t-j\tclient\t-f\tdata/customers.csv\tthen\tcut\t-f\tclient,id,tier\tdata/orders.csv\n");
+    t.push_str("--icsv\t--opprint\tjoin\t--lk\ttier\t-j\tcustomer\t-f\tdata/customers.csv\tthen\thead\t-n\t3\tdata/orders.csv\n");
+    t.push_str("seqgen\t--start\t1\t--stop\t10\t--step\t3\n");
+    t.push_str("--opprint\tseqgen\t-f\tx\t--start\t5\t--stop\t1\t--step\t-1.5\n");
+    t.push_str("seqgen\t--start\t1\t--stop\t1\t--step\t0\n");
+    t.push_str("seqgen\t--start\t1\t--stop\t5\t--step\t0\n");
+    t.push_str("--ojson\tseqgen\t--start\t0x10\t--stop\t0x13\tthen\tstep\t-a\trsum\t-f\ti\n");
+    t.push_str("-n\t--icsv\t--opprint\tcat\tdata/orders.csv\n");
+    t.push_str("--icsv\t--opprint\tsort\t-nr\tqty\tthen\thead\t-n\t3\tthen\tcut\t-o\t-f\tcustomer,qty\tdata/orders.csv\n");
+    t.push_str("--icsv\t--opprint\tstats1\t-a\tsum\t-f\tqty\t-g\tcustomer\tthen\tsort\t-nr\tqty_sum\tdata/orders.csv\n");
+    t.push_str("--icsv\t--bogus\tcat\tdata/orders.csv\n");
+    t.push_str("--icsv\tfrobnicate\tdata/orders.csv\n");
+    t.push_str("--icsv\tcat\tthen\n");
+    t.push_str("--icsv\thead\t-n\tabc\tdata/orders.csv\n");
+    t.push_str("--icsv\t--opprint\tstep\t-a\tdelta\tdata/orders.csv\n");
+    t.push_str("--icsv\t--opprint\tseqgen\t--start\tx\n");
+    t.push_str("--icsv\t--opprint\tgrep\t(\tdata/orders.csv\n");
+    v.push(DataFile { path: "jobs.txt".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("id,user.name,user.age,tags.1,tags.2,geo.lat,geo.lon,meta,list\n");
+    t.push_str("1,ann,31,red,blue,59.9,10.7,{},[]\n");
+    t.push_str("2,bob,,green,,48.8,2.35,{},x\n");
+    v.push(DataFile { path: "nested.csv".to_string(), body: t });
+}
+
+fn data_part_2(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("id,date,region,customer,product,qty,price,status\n");
+    t.push_str("1001,2026-01-03,east,acme,widget,4,2.50,shipped\n");
+    t.push_str("1002,2026-01-03,west,globex,gadget,1,19.99,shipped\n");
+    t.push_str("1003,2026-01-04,east,initech,widget,10,2.50,pending\n");
+    t.push_str("1004,2026-01-05,north,acme,gizmo,2,7.25,shipped\n");
+    t.push_str("1005,2026-01-05,west,umbrella,widget,,2.50,cancelled\n");
+    t.push_str("1006,2026-01-06,east,globex,gizmo,3,7.25,shipped\n");
+    t.push_str("1007,2026-01-07,south,acme,gadget,2,19.99,returned\n");
+    t.push_str("1008,2026-01-07,north,initech,doohickey,6,0.75,shipped\n");
+    t.push_str("1009,2026-01-08,east,umbrella,gadget,1,18.5,shipped\n");
+    t.push_str("1010,2026-01-09,west,acme,widget,12,2.4,pending\n");
+    t.push_str("1011,2026-01-10,south,globex,doohickey,25,0.75,shipped\n");
+    t.push_str("1012,2026-01-10,east,Zo\u{eb} & co,gizmo,1,7,shipped\n");
+    t.push_str("1013,2026-01-11,north,umbrella,widget,8,2.50,returned\n");
+    t.push_str("1014,2026-01-12,south,initech,gadget,3,19.99,shipped\n");
+    v.push(DataFile { path: "orders.csv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("\u{feff}name,quote,n\r\n");
+    t.push_str("plain,hello,1\r\n");
+    t.push_str("\"comma, inside\",\"say \"\"hi\"\"\",2\r\n");
+    t.push_str("multi,\"line one\r\n");
+    t.push_str("line two\",3\r\n");
+    t.push_str("pipe,a|b,4\r\n");
+    t.push_str("tab,\"x\ty\",5\r\n");
+    t.push_str("empty,,6\r\n");
+    v.push(DataFile { path: "quoted.csv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("k,x,y\n");
+    t.push_str("a,1,2\n");
+    t.push_str("b,3,4\n");
+    t.push_str("c,5\n");
+    t.push_str("d,6,7,8\n");
+    t.push_str("e,9,10\n");
+    v.push(DataFile { path: "ragged.csv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("region\tmanager\ttarget\n");
+    t.push_str("east\tKim\\tLee\t1200\n");
+    t.push_str("west\tSam\\nO'Neil\t900\n");
+    t.push_str("north\tAl\\\\Bo\t700\n");
+    t.push_str("south\tJo\t\n");
+    v.push(DataFile { path: "regions.tsv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("name,q1,q2,q3,q4\n");
+    t.push_str("ann,7,9,,8\n");
+    t.push_str("bob,5,6,7,n/a\n");
+    t.push_str("cy,9,9.5,10,8.5\n");
+    t.push_str("dee,4,0x10,3,2\n");
+    v.push(DataFile { path: "scores.csv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("city;temp;rain\n");
+    t.push_str("Oslo;-3.5;0.2\n");
+    t.push_str("Lima;22;0\n");
+    t.push_str("Pune;31.25;\n");
+    v.push(DataFile { path: "semi.csv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("sensor,reading,unit,note\n");
+    t.push_str("s1,1.5,C,ok\n");
+    t.push_str("s1,-0.25,C,ok\n");
+    t.push_str("s2,+3,C,signed\n");
+    t.push_str("s2,1e3,C,spike\n");
+    t.push_str("s3,.5,C,ok\n");
+    t.push_str("s3,5.,C,ok\n");
+    t.push_str("s4,0x1F,raw,hex\n");
+    t.push_str("s4,007,raw,leading zero\n");
+    t.push_str("s5,,C,missing\n");
+    t.push_str("s5,n/a,C,text\n");
+    t.push_str("s6,9223372036854775807,raw,int64 max\n");
+    t.push_str("s6,10,raw,overflows the sum\n");
+    t.push_str("s6,1_000,raw,underscore\n");
+    t.push_str("s7,-12,C,ok\n");
+    t.push_str("s7,2.5E-2,C,ok\n");
+    t.push_str("s7,99999999999999999999,raw,past int64\n");
+    v.push(DataFile { path: "sensors.csv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("id,tags,attrs\n");
+    t.push_str("1,red;green;blue,size:L;fit:slim\n");
+    t.push_str("2,solo,color:red\n");
+    t.push_str("3,,\n");
+    v.push(DataFile { path: "tags.csv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("id,t,ms\n");
+    t.push_str("1,0,0\n");
+    t.push_str("2,1500000000,1500000000123\n");
+    t.push_str("3,1700000000.75,1700000000999\n");
+    t.push_str("4,-86400,-1000\n");
+    t.push_str("5,soon,\n");
+    v.push(DataFile { path: "times.csv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("page,user\n");
+    t.push_str("home,ann\n");
+    t.push_str("cart,bob\n");
+    t.push_str("home,ann\n");
+    t.push_str("home,cy\n");
+    t.push_str("cart,bob\n");
+    t.push_str("home,ann\n");
+    v.push(DataFile { path: "visits.csv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("alpha beta  gamma\n");
+    t.push_str("  delta\tepsilon\n");
+    t.push_str("zeta eta theta iota\n");
+    t.push_str("\n");
+    t.push_str("kappa\n");
+    v.push(DataFile { path: "words.txt".to_string(), body: t });
+}
