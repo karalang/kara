@@ -62,9 +62,11 @@ impl<'ctx> Cx<'ctx, '_> {
         match (base, method) {
             // The default providers (§14.7) are the ambient resources'
             // natives with a receiver, which carries nothing.
-            ("OsEnv" | "OsClock" | "OsRandom" | "OsStdout" | "OsStderr" | "OsStdin", _)
-                if !args.is_empty() =>
-            {
+            (
+                "OsEnv" | "OsClock" | "OsRandom" | "OsStdout" | "OsStderr" | "OsStdin"
+                | "OsFileSystem",
+                _,
+            ) if !args.is_empty() => {
                 let (resource, method) = crate::mir::providers::os_default(base, method)
                     .expect("a library default provider");
                 self.native(&format!("{resource}.{method}"), &args[1..], dest)

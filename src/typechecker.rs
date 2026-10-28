@@ -8539,6 +8539,7 @@ pub(crate) fn library_provider_trait(resource: &str) -> Option<&'static str> {
         "Stdout" => Some("StdoutProvider"),
         "Stderr" => Some("StderrProvider"),
         "Stdin" => Some("StdinProvider"),
+        "FileSystem" => Some("FileSystemProvider"),
         _ => None,
     }
 }

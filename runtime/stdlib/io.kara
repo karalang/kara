@@ -415,6 +415,91 @@ trait StdinProvider {
     }
 }
 
+trait FileSystemProvider {
+    // The path operations of `fs` (docs/library/io.md § Files). Those that
+    // only look take `ref self`, so they stay `reads(FileSystem)`.
+
+    fn read_to_string(ref self, path: Str) -> Result[String, IoError] {
+        panic("FileSystem.read_to_string called on a provider that does not implement it")
+    }
+
+    fn read_lines(ref self, path: Str) -> Result[Vec[String], IoError] {
+        panic("FileSystem.read_lines called on a provider that does not implement it")
+    }
+
+    fn exists(ref self, path: Str) -> bool {
+        panic("FileSystem.exists called on a provider that does not implement it")
+    }
+
+    fn metadata(ref self, path: Str) -> Result[Metadata, IoError] {
+        panic("FileSystem.metadata called on a provider that does not implement it")
+    }
+
+    fn read_dir(ref self, path: Str) -> Result[Vec[String], IoError] {
+        panic("FileSystem.read_dir called on a provider that does not implement it")
+    }
+
+    fn read_bytes(ref self, path: Str) -> Result[Vec[u8], IoError] {
+        panic("FileSystem.read_bytes called on a provider that does not implement it")
+    }
+
+    fn read_link(ref self, path: Str) -> Result[String, IoError] {
+        panic("FileSystem.read_link called on a provider that does not implement it")
+    }
+
+    fn symlink_metadata(ref self, path: Str) -> Result[Metadata, IoError] {
+        panic("FileSystem.symlink_metadata called on a provider that does not implement it")
+    }
+
+    fn write(mut ref self, path: Str, contents: Str) -> Result[(), IoError] {
+        panic("FileSystem.write called on a provider that does not implement it")
+    }
+
+    fn create_dir(mut ref self, path: Str) -> Result[(), IoError] {
+        panic("FileSystem.create_dir called on a provider that does not implement it")
+    }
+
+    fn create_dir_all(mut ref self, path: Str) -> Result[(), IoError] {
+        panic("FileSystem.create_dir_all called on a provider that does not implement it")
+    }
+
+    fn remove_file(mut ref self, path: Str) -> Result[(), IoError] {
+        panic("FileSystem.remove_file called on a provider that does not implement it")
+    }
+
+    fn remove_dir(mut ref self, path: Str) -> Result[(), IoError] {
+        panic("FileSystem.remove_dir called on a provider that does not implement it")
+    }
+
+    fn remove_dir_all(mut ref self, path: Str) -> Result[(), IoError] {
+        panic("FileSystem.remove_dir_all called on a provider that does not implement it")
+    }
+
+    fn rename(mut ref self, from: Str, to: Str) -> Result[(), IoError] {
+        panic("FileSystem.rename called on a provider that does not implement it")
+    }
+
+    fn copy(mut ref self, from: Str, to: Str) -> Result[i64, IoError] {
+        panic("FileSystem.copy called on a provider that does not implement it")
+    }
+
+    fn write_bytes(mut ref self, path: Str, content: Slice[u8]) -> Result[(), IoError] {
+        panic("FileSystem.write_bytes called on a provider that does not implement it")
+    }
+
+    fn symlink(mut ref self, target: Str, link: Str) -> Result[(), IoError] {
+        panic("FileSystem.symlink called on a provider that does not implement it")
+    }
+
+    fn set_permissions(mut ref self, path: Str, mode: i64) -> Result[(), IoError] {
+        panic("FileSystem.set_permissions called on a provider that does not implement it")
+    }
+
+    fn set_modified(mut ref self, path: Str, ms: i64) -> Result[(), IoError] {
+        panic("FileSystem.set_modified called on a provider that does not implement it")
+    }
+}
+
 struct Env { }
 
 impl Env {

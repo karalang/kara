@@ -142,6 +142,8 @@ pub const PRELUDE_TYPES: &[&str] = &[
     "StdoutProvider",
     "StderrProvider",
     "StdinProvider",
+    // `FileSystem`'s (§14.11).
+    "FileSystemProvider",
     "AllocError",
     // `AnyError` (design.md §10), beside `Error` in PRELUDE_TRAITS.
     "AnyError",

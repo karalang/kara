@@ -2,7 +2,8 @@
 //
 // The program-rooted resources on the v2 pipeline (core-semantics §14.7,
 // §14.10; B-2026-10-20-11): `Env`, `Clock`, `RandomSource` and the
-// standard streams `Stdout`, `Stderr` and `Stdin`, each with a library
+// standard streams `Stdout`, `Stderr` and `Stdin`, and `FileSystem`'s path
+// operations (§14.11), each with a library
 // provider trait (runtime/stdlib/io.kara) and a default provider, a static
 // value of a type below. A call on a resource outside any `with_provider`
 // uses the default; inside `with_provider[Env](fake, || ..)` it uses `fake`.
@@ -74,9 +75,74 @@ impl StdinProvider for OsStdin {
     fn read_to_string(mut ref self) -> Result[String, IoError] { Err(IoError.Other("placeholder")) }
 }
 
+struct OsFileSystem {}
+
+impl FileSystemProvider for OsFileSystem {
+    #[compiler_builtin]
+    fn read_to_string(ref self, path: Str) -> Result[String, IoError] { Err(IoError.Other("placeholder")) }
+
+    #[compiler_builtin]
+    fn read_lines(ref self, path: Str) -> Result[Vec[String], IoError] { Err(IoError.Other("placeholder")) }
+
+    #[compiler_builtin]
+    fn exists(ref self, path: Str) -> bool { false }
+
+    #[compiler_builtin]
+    fn metadata(ref self, path: Str) -> Result[Metadata, IoError] { Err(IoError.Other("placeholder")) }
+
+    #[compiler_builtin]
+    fn read_dir(ref self, path: Str) -> Result[Vec[String], IoError] { Err(IoError.Other("placeholder")) }
+
+    #[compiler_builtin]
+    fn read_bytes(ref self, path: Str) -> Result[Vec[u8], IoError] { Err(IoError.Other("placeholder")) }
+
+    #[compiler_builtin]
+    fn read_link(ref self, path: Str) -> Result[String, IoError] { Err(IoError.Other("placeholder")) }
+
+    #[compiler_builtin]
+    fn symlink_metadata(ref self, path: Str) -> Result[Metadata, IoError] { Err(IoError.Other("placeholder")) }
+
+    #[compiler_builtin]
+    fn write(mut ref self, path: Str, contents: Str) -> Result[(), IoError] { Err(IoError.Other("placeholder")) }
+
+    #[compiler_builtin]
+    fn create_dir(mut ref self, path: Str) -> Result[(), IoError] { Err(IoError.Other("placeholder")) }
+
+    #[compiler_builtin]
+    fn create_dir_all(mut ref self, path: Str) -> Result[(), IoError] { Err(IoError.Other("placeholder")) }
+
+    #[compiler_builtin]
+    fn remove_file(mut ref self, path: Str) -> Result[(), IoError] { Err(IoError.Other("placeholder")) }
+
+    #[compiler_builtin]
+    fn remove_dir(mut ref self, path: Str) -> Result[(), IoError] { Err(IoError.Other("placeholder")) }
+
+    #[compiler_builtin]
+    fn remove_dir_all(mut ref self, path: Str) -> Result[(), IoError] { Err(IoError.Other("placeholder")) }
+
+    #[compiler_builtin]
+    fn rename(mut ref self, from: Str, to: Str) -> Result[(), IoError] { Err(IoError.Other("placeholder")) }
+
+    #[compiler_builtin]
+    fn copy(mut ref self, from: Str, to: Str) -> Result[i64, IoError] { Err(IoError.Other("placeholder")) }
+
+    #[compiler_builtin]
+    fn write_bytes(mut ref self, path: Str, content: Slice[u8]) -> Result[(), IoError] { Err(IoError.Other("placeholder")) }
+
+    #[compiler_builtin]
+    fn symlink(mut ref self, target: Str, link: Str) -> Result[(), IoError] { Err(IoError.Other("placeholder")) }
+
+    #[compiler_builtin]
+    fn set_permissions(mut ref self, path: Str, mode: i64) -> Result[(), IoError] { Err(IoError.Other("placeholder")) }
+
+    #[compiler_builtin]
+    fn set_modified(mut ref self, path: Str, ms: i64) -> Result[(), IoError] { Err(IoError.Other("placeholder")) }
+}
+
 effect resource Env: EnvProvider = OsEnv {};
 effect resource Clock: ClockProvider = OsClock {};
 effect resource RandomSource: RandomProvider = OsRandom {};
 effect resource Stdout: StdoutProvider = OsStdout {};
 effect resource Stderr: StderrProvider = OsStderr {};
 effect resource Stdin: StdinProvider = OsStdin {};
+effect resource FileSystem: FileSystemProvider = OsFileSystem {};

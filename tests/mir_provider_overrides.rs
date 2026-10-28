@@ -279,3 +279,98 @@ fn provider_stderr_and_stdin_overrides() {
         assert_eq!(built, interp);
     }
 }
+
+/// `with_provider[FileSystem]` serves `fs`'s path operations from the
+/// provider, in a callee too (§14.11); once the call returns, `fs` is the
+/// real file system again.
+const FILE_SYSTEM_PATHS: &str = r#"
+struct MemFs { files: Map[String, String] }
+
+impl FileSystemProvider for MemFs {
+    fn read_to_string(ref self, path: Str) -> Result[String, IoError] {
+        match self.files.get(path) {
+            Some(s) => Ok(s.clone()),
+            None => Err(IoError.NotFound),
+        }
+    }
+
+    fn exists(ref self, path: Str) -> bool {
+        self.files.contains_key(path)
+    }
+
+    fn write(mut ref self, path: Str, contents: Str) -> Result[(), IoError] {
+        self.files.insert(path.to_string(), contents.to_string());
+        Ok(())
+    }
+}
+
+fn save(name: Str) -> Result[(), IoError] with writes(FileSystem) {
+    fs.write(name, f"hello {name}")
+}
+
+fn main() {
+    let r = with_provider[FileSystem](MemFs { files: Map.new() }, || {
+        let a = save("kprov-a.txt");
+        println(f"saved {a.is_ok()} {fs.exists("kprov-a.txt")} {fs.exists("kprov-b.txt")}");
+        match FileSystem.read_to_string("kprov-a.txt") {
+            Ok(s) => println(f"read {s}"),
+            Err(e) => println(f"err {e}"),
+        }
+        match fs.read_to_string("kprov-b.txt") {
+            Ok(s) => println(f"read {s}"),
+            Err(e) => println(f"err {e}"),
+        }
+        3
+    });
+    println(f"after {r} {fs.exists("kprov-a.txt")}");
+    let w = fs.write("kprov-c.txt", "on disk");
+    match fs.read_to_string("kprov-c.txt") {
+        Ok(s) => println(f"{w.is_ok()} {s}"),
+        Err(e) => println(f"err {e}"),
+    }
+}
+"#;
+
+#[test]
+fn provider_file_system_override_takes_path_operations() {
+    let dir = Scratch::new("fs_paths");
+    let (interp, built) = interp_and_build(dir.path(), FILE_SYSTEM_PATHS, "");
+    assert_eq!(
+        interp.0,
+        "saved true true false\nread hello kprov-a.txt\nerr NotFound\nafter 3 false\ntrue on disk\n"
+    );
+    if let Some(built) = built {
+        assert_eq!(built, interp);
+    }
+}
+
+/// A program's own `Stdout` or `FileSystem` type shadows the library's
+/// resource of that name, in a program that overrides another resource.
+const OWN_RESOURCE_NAMES: &str = r#"
+struct Stdout { n: i64 }
+
+struct FileSystem { m: i64 }
+
+struct FakeEnv { }
+
+impl EnvProvider for FakeEnv {
+    fn var(ref self, name: Str) -> Result[String, VarError] { Ok("faked") }
+}
+
+fn main() {
+    let s = Stdout { n: 4 };
+    let f = FileSystem { m: 5 };
+    let v = with_provider[Env](FakeEnv { }, || Env.var("A"));
+    println(f"{s.n} {f.m} {v.is_ok()}");
+}
+"#;
+
+#[test]
+fn provider_own_type_named_like_a_resource_shadows_it() {
+    let dir = Scratch::new("own_names");
+    let (interp, built) = interp_and_build(dir.path(), OWN_RESOURCE_NAMES, "");
+    assert_eq!(interp, ("4 5 true\n".to_string(), String::new()));
+    if let Some(built) = built {
+        assert_eq!(built, interp);
+    }
+}

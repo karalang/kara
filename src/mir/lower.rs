@@ -22242,6 +22242,8 @@ const BAKED_SOURCES: &[(&str, &[&str], &[&str])] = &[
             "StdoutProvider",
             "StderrProvider",
             "StdinProvider",
+            "OsFileSystem",
+            "FileSystemProvider",
         ],
         // A program's own `Env` (a Lua interpreter's environment) shadows
         // the resource, whose calls then keep the resource's own natives.
@@ -22252,6 +22254,7 @@ const BAKED_SOURCES: &[(&str, &[&str], &[&str])] = &[
             "OsStdout",
             "OsStderr",
             "OsStdin",
+            "OsFileSystem",
             "Env",
             "Clock",
             "RandomSource",
@@ -22934,7 +22937,16 @@ fn library_top_level_names(lib: &str) -> Vec<String> {
         let line = line
             .trim_start_matches("pub ")
             .trim_start_matches("shared ");
-        for kw in ["struct ", "enum ", "trait ", "type ", "fn "] {
+        // A program's own `Stdout` shadows the library's resource of the
+        // name, whose calls then keep the resource's own natives.
+        for kw in [
+            "struct ",
+            "enum ",
+            "trait ",
+            "type ",
+            "fn ",
+            "effect resource ",
+        ] {
             if let Some(rest) = line.strip_prefix(kw) {
                 let name: String = rest
                     .chars()

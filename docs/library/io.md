@@ -202,6 +202,38 @@ A file updated in place opens with `File.options().read(true).write(true).open(p
 
 **Dropping a `BufWriter` flushes it and ignores any error.** Call `flush()` before the drop to see a write error. The drop has the effects of `flush`, charged to the scope where it runs ([core-semantics.md §12](../core-semantics.md#12-effects-soundness-defaults-c10), item 3).
 
+**Overriding the file system.** `FileSystem` is a program-rooted resource too ([core-semantics §14.11](../core-semantics.md)): inside `with_provider[FileSystem](fake, || ..)` every path operation above calls the fake, in any function the closure calls, and the real file system is back once the call returns. The fake implements `FileSystemProvider`, which has one method per path operation, with the parameters and result of the `fs` function of its name after a `self`: `ref self` for the ones that only look (`read_to_string`, `read_lines`, `exists`, `metadata`, `read_dir`, `read_bytes`, `read_link`, `symlink_metadata`), `mut ref self` for the rest. A method the fake does not implement panics when called, naming it. A fake that keeps files in memory:
+
+```kara
+struct MemFs { files: Map[String, String] }
+
+impl FileSystemProvider for MemFs {
+    fn read_to_string(ref self, path: Str) -> Result[String, IoError] {
+        match self.files.get(path) {
+            Some(s) => Ok(s.clone()),
+            None => Err(IoError.NotFound),
+        }
+    }
+
+    fn write(mut ref self, path: Str, contents: Str) -> Result[(), IoError] {
+        self.files.insert(path.to_string(), contents.to_string());
+        Ok(())
+    }
+}
+
+fn main() {
+    with_provider[FileSystem](MemFs { files: Map.new() }, || {
+        let _ = fs.write("notes.txt", "draft");
+        match fs.read_to_string("notes.txt") {
+            Ok(s) => println(s),
+            Err(e) => println(f"error: {e}"),
+        }
+    });
+}
+```
+
+`File`, `OpenOptions` and the buffered types over a file go to the operating system in this version, also under an override; their routing to the fake (§14.11's `open`, `read_handle`, `write_handle` and `close`) is the next step.
+
 ## Errors
 
 ```kara

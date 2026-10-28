@@ -80,6 +80,7 @@ pub fn os_default(base: &str, method: &str) -> Option<(&'static str, String)> {
         "OsStdout" => "Stdout",
         "OsStderr" => "Stderr",
         "OsStdin" => "Stdin",
+        "OsFileSystem" => "FileSystem",
         _ => return None,
     };
     let method = match (resource, method) {
