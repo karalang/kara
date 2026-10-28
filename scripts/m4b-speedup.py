@@ -27,6 +27,11 @@ measures the parallel form's overhead. Both arms name `KARAC_AUTO_PAR`
 explicitly, `0` for seq and `1` for par, since auto-par is on by default from
 72ce9e026c.
 
+`--instructions` also runs each arm once under cachegrind and reports both
+instruction counts: on one worker the auto-par build runs the in-order build's
+own code (45524985d1), and a ratio under the floor with equal counts is where
+the code landed, not what it ran (B-2026-10-28-1).
+
 Builds run up to `--jobs` at a time before any timing starts; timing runs one
 binary at a time, so nothing else of the harness shares the cores with it.
 """
@@ -140,7 +145,7 @@ def run_once(binary: Path, cwd: Path, env: dict, timeout: float) -> dict:
                 "exit": os.waitstatus_to_exitcode(status), "stdout": so.read(), "stderr": se.read()}
 
 
-def measure(prog: dict, seq: Path, par: Path, args) -> dict:
+def run_env(prog: dict, args) -> dict:
     env = dict(os.environ)
     for k in ("KARAC_AUTO_PAR", "KARAC_AUTO_PAR_DEBUG"):
         env.pop(k, None)
@@ -148,6 +153,39 @@ def measure(prog: dict, seq: Path, par: Path, args) -> dict:
     if args.threads is not None:
         env["KARAC_THREADS"] = str(args.threads)
     env.update(prog.get("env", {}))
+    return env
+
+
+# `==123== I refs:      1,744,126,705` as cachegrind prints it.
+IREFS = re.compile(r"I\s+refs:\s+([\d,]+)")
+
+
+def instructions(prog: dict, seq: Path, par: Path, args) -> dict:
+    """Each arm's instruction count, one run under cachegrind with the cache
+    simulation off (B-2026-10-28-1): on one worker the two arms can execute
+    the same instructions yet time apart by where the hot loop lands."""
+    env = run_env(prog, args)
+    counts = {}
+    with tempfile.TemporaryDirectory(prefix="m4b-ir-") as tmp:
+        cwd = prog["cwd"] or Path(tmp)
+        for arm, binary in (("seq", seq), ("par", par)):
+            cmd = ["valgrind", "--tool=cachegrind", "--cache-sim=no",
+                   "--cachegrind-out-file=/dev/null", str(binary)]
+            try:
+                r = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True,
+                                   timeout=args.instructions_timeout)
+            except subprocess.TimeoutExpired:
+                return {"ir_why": f"{arm} over {args.instructions_timeout:.0f}s under cachegrind"}
+            m = IREFS.search(r.stderr.decode(errors="replace"))
+            if not m:
+                return {"ir_why": f"{arm}: no instruction count in cachegrind's report"}
+            counts[arm] = int(m.group(1).replace(",", ""))
+    return {"seq_ir": counts["seq"], "par_ir": counts["par"],
+            "ir_ratio": round(counts["seq"] / counts["par"], 4) if counts["par"] else None}
+
+
+def measure(prog: dict, seq: Path, par: Path, args) -> dict:
+    env = run_env(prog, args)
     with tempfile.TemporaryDirectory(prefix="m4b-run-") as tmp:
         cwd = prog["cwd"] or Path(tmp)
         load = os.getloadavg()[0]
@@ -194,32 +232,49 @@ def markdown(report: dict) -> str:
     with_sites = [r for r in ran if r["par_build"].get("sites")]
     under = [r for r in ran if r["ratio"] < FLOOR]
     aa = [r["ratio"] for r in ran if r.get("identical_binary")]
+    counted = [r for r in ran if r.get("ir_ratio") is not None]
     bad = [r for r in rows if r.get("output_same") is False or r.get("matches_expected") is False]
     if ran:
         gm = statistics.geometric_mean([r["ratio"] for r in ran])
         lines.append(f"- {len(ran)} of {len(rows)} programs timed; geomean ratio {gm:.3f}; "
                      f"{len(with_sites)} got at least one task site; {len(under)} under {FLOOR}; "
                      f"{len(bad)} with differing output.")
+    if counted:
+        ir_under = [r for r in counted if r["ir_ratio"] < FLOOR]
+        slow_same = [r for r in counted if r["ratio"] < FLOOR and r["ir_ratio"] >= 0.99]
+        lines.append(f"- Instructions (one cachegrind run per arm): {len(counted)} programs counted; geomean "
+                     f"instruction ratio {statistics.geometric_mean([r['ir_ratio'] for r in counted]):.4f}; "
+                     f"{len(ir_under)} under {FLOOR} by instructions; {len(slow_same)} under {FLOOR} by time "
+                     f"while running within 1% of seq's instructions.")
     if aa:
         lines.append(f"- Noise: {len(aa)} programs built to identical binaries (no task site); their "
                      f"ratios run {min(aa):.3f}..{max(aa):.3f}, geomean "
                      f"{statistics.geometric_mean(aa):.3f}. A ratio inside that band is not a result.")
-    lines += ["", "| program | sites | seq s | par s | ratio | par cpu/wall | output |",
-              "|---|---|---:|---:|---:|---:|---|"]
+    ir = bool(counted)
+    lines += ["", "| program | sites | seq s | par s | ratio | par cpu/wall |"
+              + (" seq instr | par instr | instr ratio |" if ir else "") + " output |",
+              "|---|---|---:|---:|---:|---:|" + ("---:|---:|---:|" if ir else "") + "---|"]
     for r in rows:
         pb = r.get("par_build", {})
         sites = "; ".join(f"{k.split()[0]} {len(v)}" for k, v in pb.get("sites", {}).items()) or "none"
         if r.get("identical_binary"):
             sites += " (same binary)"
         if r.get("ratio") is None:
-            lines.append(f"| {r['name']} | {sites} | | | {r.get('verdict')} | | {r.get('why', '')} |")
+            lines.append(f"| {r['name']} | {sites} | | | {r.get('verdict')} | |"
+                         + (" | | |" if ir else "") + f" {r.get('why', '')} |")
             continue
         out = "same" if r["output_same"] else "DIFFERS"
         if r.get("matches_expected") is False:
             out += ", not expected.out"
         flag = " **under floor**" if r["ratio"] < FLOOR else ""
+        cells = ""
+        if ir:
+            if r.get("ir_ratio") is None:
+                cells = f" | | {r.get('ir_why', '')} |"
+            else:
+                cells = f" {r['seq_ir']} | {r['par_ir']} | {r['ir_ratio']} |"
         lines.append(f"| {r['name']} | {sites} | {r['seq_s']} | {r['par_s']} | {r['ratio']}{flag} | "
-                     f"{r['par_cpu_per_wall']} | {out} |")
+                     f"{r['par_cpu_per_wall']} |{cells} {out} |")
     return "\n".join(lines) + "\n"
 
 
@@ -235,6 +290,9 @@ def main() -> int:
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--threads", type=int, help="KARAC_THREADS for both arms (the runtime's default is one per core)")
     ap.add_argument("--filter", action="append", help="substring of a program's name (repeatable)")
+    ap.add_argument("--instructions", action="store_true",
+                    help="also count each arm's instructions, one run under cachegrind")
+    ap.add_argument("--instructions-timeout", type=float, default=3600.0)
     args = ap.parse_args()
 
     progs = programs(args)
@@ -269,10 +327,13 @@ def main() -> int:
                 row.update({"verdict": "NOBUILD", "why": sb.get("why") or pb.get("why")})
             else:
                 row.update(measure(p, work / f"{i}.seq", work / f"{i}.par", args))
+                if args.instructions and row.get("verdict") == "RAN":
+                    row.update(instructions(p, work / f"{i}.seq", work / f"{i}.par", args))
             report["programs"].append(row)
             r = row.get("ratio")
+            irs = "" if row.get("ir_ratio") is None else f" (instructions {row['ir_ratio']})"
             print(f"[{i + 1}/{len(progs)}] {p['name']}: "
-                  f"{r if r is not None else row['verdict']}"
+                  f"{r if r is not None else row['verdict']}{irs}"
                   f"{'' if row.get('output_same', True) else ' OUTPUT DIFFERS'}", flush=True)
             stem.with_suffix(".json").write_text(json.dumps(report, indent=1) + "\n")
     finally:
