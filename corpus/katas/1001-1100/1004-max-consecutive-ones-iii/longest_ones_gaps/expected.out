@@ -1,0 +1,18 @@
+nums = [1,1,1,0,0,0,1,1,1,1,0], k = 2 -> 6
+nums = [0,0,1,1,0,0,1,1,1,0,1,1,0,0,0,1,1,1,1], k = 3 -> 10
+nums = [1,1,1,1], k = 0 -> 4
+nums = [0,0,0], k = 0 -> 0
+nums = [0,0,0], k = 3 -> 3
+nums = [0], k = 0 -> 0
+nums = [0], k = 1 -> 1
+nums = [1,0,1], k = 0 -> 1
+nums = [1,0,1], k = 1 -> 3
+nums = [1,1,0,1,1,0,0,1], k = 1 -> 5
+100000 ones, k = 0 -> 100000
+100000 zeros, k = 0 -> 0
+100000 zeros, k = 100000 -> 100000
+1, 0 in turn, k = 25000 -> 50001
+3000 random arrays of 19447 numbers: answers sum to 10266, checksum 223091891
+1000 random arrays of 50944 numbers: answers sum to 24647, checksum 628283410
+100 random arrays of 99332 numbers: answers sum to 50730, checksum 448595773
+3 random arrays of 24406 numbers: answers sum to 24305, checksum 415388

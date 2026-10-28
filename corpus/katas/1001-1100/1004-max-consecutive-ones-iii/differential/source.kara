@@ -1,0 +1,236 @@
+// LeetCode #1004: Max Consecutive Ones III -- differential
+//
+// The five arms, copied, against the statement read literally and five
+// more properties. See README.md § Differential.
+
+fn ones_star(nums: ref Vec[i64], k: i64) -> i64 {
+    let mut left = 0;
+    let mut zeros = 0;
+    let mut best = 0;
+    for right in 0..nums.len() {
+        if nums[right] == 0 {
+            zeros += 1;
+        }
+        while zeros > k {
+            if nums[left] == 0 {
+                zeros -= 1;
+            }
+            left += 1;
+        }
+        best = best.max(right - left + 1);
+    }
+    best
+}
+
+fn ones_grow(nums: ref Vec[i64], k: i64) -> i64 {
+    let mut left = 0;
+    let mut flips = k;
+    for right in 0..nums.len() {
+        if nums[right] == 0 {
+            flips -= 1;
+        }
+        if flips < 0 {
+            if nums[left] == 0 {
+                flips += 1;
+            }
+            left += 1;
+        }
+    }
+    nums.len() - left
+}
+
+fn ones_gaps(nums: ref Vec[i64], k: i64) -> i64 {
+    let n = nums.len();
+    let mut at: Vec[i64] = vec![-1];
+    for i in 0..n {
+        if nums[i] == 0 {
+            at.push(i);
+        }
+    }
+    at.push(n);
+    let zeros = at.len() - 2;
+    if k >= zeros {
+        return n;
+    }
+    let mut best = 0;
+    // flip the 0s at at[first..first + k], between at[first - 1] and at[first + k]
+    for first in 1..zeros - k + 2 {
+        best = best.max(at[first + k] - at[first - 1] - 1);
+    }
+    best
+}
+
+fn ones_search(nums: ref Vec[i64], k: i64) -> i64 {
+    let n = nums.len();
+    let mut zeros: Vec[i64] = vec![0];
+    for x in nums.iter() {
+        let last = zeros[zeros.len() - 1];
+        zeros.push(last + if x == 0 { 1 } else { 0 });
+    }
+    let mut best = 0;
+    for right in 0..n {
+        let mut lo = 0;
+        let mut hi = right + 1;
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            if zeros[right + 1] - zeros[mid] <= k {
+                hi = mid;
+            } else {
+                lo = mid + 1;
+            }
+        }
+        best = best.max(right + 1 - lo);
+    }
+    best
+}
+
+fn ones_queue(nums: ref Vec[i64], k: i64) -> i64 {
+    let mut flipped: VecDeque[i64] = VecDeque.new();
+    let mut start = 0;
+    let mut best = 0;
+    for i in 0..nums.len() {
+        if nums[i] == 0 {
+            flipped.push_back(i);
+            if flipped.len() > k {
+                match flipped.pop_front() {
+                    Some(oldest) => start = oldest + 1,
+                    None => {}
+                }
+            }
+        }
+        best = best.max(i - start + 1);
+    }
+    best
+}
+
+// The statement read literally: every subarray, kept when it holds at
+// most k 0s, which flipped make it all 1s. O(n^2).
+fn ones_brute(nums: ref Vec[i64], k: i64) -> i64 {
+    let n = nums.len();
+    let mut best = 0;
+    for i in 0..n {
+        let mut zeros = 0;
+        for j in i..n {
+            if nums[j] == 0 {
+                zeros += 1;
+            }
+            if zeros <= k {
+                best = best.max(j - i + 1);
+            }
+        }
+    }
+    best
+}
+
+fn arms(nums: ref Vec[i64], k: i64) -> Vec[i64] {
+    vec![
+        ones_star(nums, k),
+        ones_grow(nums, k),
+        ones_gaps(nums, k),
+        ones_search(nums, k),
+        ones_queue(nums, k),
+    ]
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_bits(n: i64, ones: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut nums: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        nums.push(if next_random(mut seed) % 8 < ones { 1 } else { 0 });
+    }
+    nums
+}
+
+// the longest run of 1s with no flip
+fn longest_run(nums: ref Vec[i64]) -> i64 {
+    let mut run = 0;
+    let mut best = 0;
+    for x in nums.iter() {
+        run = if x == 1 { run + 1 } else { 0 };
+        best = best.max(run);
+    }
+    best
+}
+
+fn main() {
+    let names = ["star", "grow", "gaps", "search", "queue"];
+    let mut failures: Vec[i64] = vec![0; 6];
+    let mut checks = 0;
+    let mut arrays = 0;
+    let mut numbers = 0;
+    let mut sum = 0;
+    let mut check = 0;
+    let mut seed = 10041;
+    for t in 0..3200 {
+        let size = if t < 3000 { 1 + next_random(mut seed) % 12 } else { 1 + next_random(mut seed) % 300 };
+        let density = next_random(mut seed) % 9;
+        let nums = random_bits(size, density, mut seed);
+        let k = next_random(mut seed) % (size + 2);
+        let got = arms(nums, k);
+        arrays += 1;
+        numbers += size;
+        sum += got[0];
+        check = (check * 31 + got[0] + 1) % 1000000007;
+        let zeros = nums.iter().filter(|x| x == 0).count();
+        let ones = size - zeros;
+        let more = arms(nums, k + 1);
+        let mut reversed = nums.clone();
+        reversed.reverse();
+        let back = arms(reversed, k);
+        for a in 0..5 {
+            // P1: the statement, on the small arrays
+            if t < 3000 {
+                checks += 1;
+                if got[a] != ones_brute(nums, k) {
+                    failures[0] += 1;
+                }
+            }
+            // P2: one more flip never shortens the answer, and lengthens
+            // it by at least one unless it already reaches every 0 or the end
+            checks += 1;
+            if more[a] < got[a] or (k < zeros and more[a] == got[a]) {
+                failures[1] += 1;
+            }
+            // P3: the array reversed gives the same answer
+            checks += 1;
+            if back[a] != got[a] {
+                failures[2] += 1;
+            }
+            // P4: the longest run of 1s, with k more numbers flipped or not
+            // round it, is a lower bound
+            checks += 1;
+            if got[a] < (longest_run(nums) + k).min(size) {
+                failures[3] += 1;
+            }
+            // P5: never more than the 1s and the flips, and all of it when
+            // every 0 can be flipped
+            checks += 1;
+            if got[a] > ones + k.min(zeros) or (k >= zeros and got[a] != size) {
+                failures[4] += 1;
+            }
+            // P6: each arm agrees with at least two of the other four
+            checks += 1;
+            let mut agree = 0;
+            for b in 0..5 {
+                if b != a and got[b] == got[a] {
+                    agree += 1;
+                }
+            }
+            if agree < 2 {
+                failures[5] += 1;
+            }
+        }
+    }
+    let mut total = 0;
+    for p in 0..6 {
+        total += failures[p];
+        if failures[p] > 0 {
+            println(f"P{p + 1}: {failures[p]} failures");
+        }
+    }
+    println(f"{arrays} arrays of {numbers} numbers: answers sum to {sum}, checksum {check}, {checks} checks over {names.len()} arms: {total} failures");
+}

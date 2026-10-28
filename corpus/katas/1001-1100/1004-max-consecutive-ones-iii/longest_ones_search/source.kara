@@ -1,0 +1,104 @@
+// LeetCode #1004: Max Consecutive Ones III -- prefix counts and a search
+//
+// zeros[i] counts the 0s among the first i numbers, and never falls. For
+// each right end, the furthest left start whose window holds at most k
+// 0s is the first i with zeros[right + 1] - zeros[i] <= k, found by
+// binary search. O(n log n).
+fn longest_ones(nums: ref Vec[i64], k: i64) -> i64 {
+    let n = nums.len();
+    let mut zeros: Vec[i64] = vec![0];
+    for x in nums.iter() {
+        let last = zeros[zeros.len() - 1];
+        zeros.push(last + if x == 0 { 1 } else { 0 });
+    }
+    let mut best = 0;
+    for right in 0..n {
+        let mut lo = 0;
+        let mut hi = right + 1;
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            if zeros[right + 1] - zeros[mid] <= k {
+                hi = mid;
+            } else {
+                lo = mid + 1;
+            }
+        }
+        best = best.max(right + 1 - lo);
+    }
+    best
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `n` bits, each a 1 with chance `ones` in 8
+fn random_bits(n: i64, ones: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut nums: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        nums.push(if next_random(mut seed) % 8 < ones { 1 } else { 0 });
+    }
+    nums
+}
+
+fn show(nums: ref Vec[i64]) -> String {
+    let parts: Vec[String] = nums.iter().map(|x| x.to_string()).collect();
+    "[" + parts.join(",") + "]"
+}
+
+fn main() {
+    // LeetCode's two examples, then a few more
+    let examples: Vec[(Vec[i64], i64)] = vec![
+        (vec![1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 0], 2),
+        (vec![0, 0, 1, 1, 0, 0, 1, 1, 1, 0, 1, 1, 0, 0, 0, 1, 1, 1, 1], 3),
+        (vec![1, 1, 1, 1], 0),
+        (vec![0, 0, 0], 0),
+        (vec![0, 0, 0], 3),
+        (vec![0], 0),
+        (vec![0], 1),
+        (vec![1, 0, 1], 0),
+        (vec![1, 0, 1], 1),
+        (vec![1, 1, 0, 1, 1, 0, 0, 1], 1),
+    ];
+    for (nums, k) in examples.iter() {
+        println(f"nums = {show(nums)}, k = {k} -> {longest_ones(nums, k)}");
+    }
+    // LeetCode's longest: 100000 numbers
+    let n = 100000;
+    let ones: Vec[i64] = Vec.filled(n, 1);
+    let zeros: Vec[i64] = Vec.filled(n, 0);
+    let mut alternating: Vec[i64] = Vec.new();
+    for i in 0..n {
+        alternating.push(1 - i % 2);
+    }
+    let large: Vec[(String, Vec[i64], i64)] = vec![
+        ("100000 ones, k = 0".to_string(), ones, 0),
+        ("100000 zeros, k = 0".to_string(), zeros.clone(), 0),
+        ("100000 zeros, k = 100000".to_string(), zeros, 100000),
+        ("1, 0 in turn, k = 25000".to_string(), alternating, 25000),
+    ];
+    for (name, nums, k) in large.iter() {
+        println(f"{name} -> {longest_ones(nums, k)}");
+    }
+    let mut seed = 1004;
+    let groups: Vec[(i64, i64)] = vec![(3000, 12), (1000, 100), (100, 2000), (3, 100000)];
+    for (count, most) in groups.iter() {
+        let mut total = 0;
+        let mut sum = 0;
+        let mut check = 0;
+        for _ in 0..count {
+            let size = 1 + next_random(mut seed) % most;
+            let density = next_random(mut seed) % 9;
+            let nums = random_bits(size, density, mut seed);
+            let k = next_random(mut seed) % (size + 1) / (1 + next_random(mut seed) % 8);
+            let got = longest_ones(nums, k);
+            total += size;
+            sum += got;
+            check = (check * 31 + got + 1) % 1000000007;
+        }
+        println(f"{count} random arrays of {total} numbers: answers sum to {sum}, checksum {check}");
+    }
+}

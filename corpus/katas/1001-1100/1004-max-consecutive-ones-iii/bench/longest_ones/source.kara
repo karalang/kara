@@ -1,0 +1,54 @@
+// Benchmark: LeetCode #1004 Max Consecutive Ones III -- the ★ arm, a
+// sliding window, on arrays of 100000 numbers, LeetCode's longest.
+// Mirrors longest_ones.c, .rs, .py and go-seq/.
+
+fn longest_ones(nums: ref Vec[i64], k: i64) -> i64 {
+    let mut left = 0;
+    let mut zeros = 0;
+    let mut best = 0;
+    for right in 0..nums.len() {
+        if nums[right] == 0 {
+            zeros += 1;
+        }
+        while zeros > k {
+            if nums[left] == 0 {
+                zeros -= 1;
+            }
+            left += 1;
+        }
+        best = best.max(right - left + 1);
+    }
+    best
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let rounds = 30;
+    let n = 100000;
+    let mut seed = 1004;
+    // 20 arrays of 100000 numbers; array t has a 1 with chance (t % 7 + 1) in 8
+    let mut arrays: Vec[Vec[i64]] = Vec.new();
+    for t in 0..20 {
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            nums.push(if next_random(mut seed) % 8 < t % 7 + 1 { 1 } else { 0 });
+        }
+        arrays.push(nums);
+    }
+    let mut total = 0;
+    let mut check = 0;
+    for r in 0..rounds {
+        for i in 0..20 {
+            let t = (r + i) % 20;
+            let k = (r * 37 + t * 101) % 3000;
+            let got = longest_ones(arrays[t], k);
+            total += got;
+            check = (check * 31 + got) % 1000000007;
+        }
+    }
+    println(f"{rounds} rounds over 20 arrays of {n} numbers: answers sum to {total}, checksum {check}");
+}
