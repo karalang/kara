@@ -45,6 +45,7 @@ pub(super) struct DeferredCallBounds {
 }
 use std::collections::HashSet;
 
+mod adt_bounds;
 mod alloc_rejection;
 mod bounds;
 mod closures;
@@ -3134,6 +3135,10 @@ pub struct TypeChecker<'a> {
     /// call on the same table does not report the key twice). The check
     /// goes live once declarations have been judged.
     pub(super) checked_table_keys: FxHashSet<SpanKey>,
+    /// B-2026-10-28-2: the bounded generic structs and enums, and the writes
+    /// of one already judged.
+    pub(super) adt_bounds: Option<std::rc::Rc<adt_bounds::AdtBounds>>,
+    pub(super) checked_adt_writes: FxHashSet<SpanKey>,
     pub(super) reported_table_key_params: FxHashSet<SpanKey>,
     pub(super) reported_table_keys: FxHashSet<String>,
     pub(super) table_keys_live: bool,
@@ -3768,6 +3773,8 @@ impl<'a> TypeChecker<'a> {
             impl_dispatch_names: crate::impl_dispatch::ImplDispatchNames::default(),
             checked_container_hashers: FxHashSet::default(),
             checked_table_keys: FxHashSet::default(),
+            adt_bounds: None,
+            checked_adt_writes: FxHashSet::default(),
             reported_table_key_params: FxHashSet::default(),
             reported_table_keys: FxHashSet::default(),
             table_keys_live: false,

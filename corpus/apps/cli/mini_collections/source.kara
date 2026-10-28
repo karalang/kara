@@ -204,7 +204,7 @@ fn dict_body[K: Hash + Eq + Clone + PyRepr, V: Clone + PyRepr](d: ref Dict[K, V]
 
 // ------------------------------------------------------------ Counter
 
-struct Counter[K] {
+struct Counter[K: Hash + Eq] {
     d: Dict[K, i64],
 }
 
@@ -696,7 +696,7 @@ fn odict_job(ops: ref String, out: mut ref String) {
 
 // functools.lru_cache's bounded policy: a hit moves the key to the
 // newest end; a miss on a full cache evicts the oldest first.
-struct Lru[K, V] {
+struct Lru[K: Hash + Eq, V] {
     cache: Dict[K, V],
     maxsize: i64,
     hits: i64,
@@ -751,7 +751,7 @@ fn lru_job(maxsize: i64, file: ref String, out: mut ref String) -> Result[(), St
 
 // ------------------------------------------------------------ ChainMap
 
-struct ChainMap[K, V] {
+struct ChainMap[K: Hash + Eq, V] {
     maps: Vec[Dict[K, V]],
 }
 

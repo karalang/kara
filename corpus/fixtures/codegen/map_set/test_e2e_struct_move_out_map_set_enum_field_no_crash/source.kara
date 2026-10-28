@@ -4,7 +4,7 @@ struct SHolder { s: Set[i64] }
 struct MInner { m: Map[i64, i64] }
 struct MOuter { inner: MInner }
 struct GMInner[K: Hash + Eq, V] { m: Map[K, V] }
-struct GMOuter[K, V] { inner: GMInner[K, V] }
+struct GMOuter[K: Hash + Eq, V] { inner: GMInner[K, V] }
 struct VecMap { v: Vec[i64], m: Map[i64, i64] }
 struct VecMapOuter { inner: VecMap }
 struct EInner { t: Tok }

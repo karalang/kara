@@ -103,10 +103,13 @@ impl<'a> super::TypeChecker<'a> {
         tys: &[&TypeExpr],
     ) {
         let mut tables: Vec<(&str, &TypeExpr, Span)> = Vec::new();
+        let bounded = self.adt_bounds();
+        let mut adts: Vec<(&str, Vec<&TypeExpr>, Span)> = Vec::new();
         for t in tys {
             Self::written_tables(t, &mut tables);
+            Self::written_bounded_adts(&bounded, t, &mut adts);
         }
-        if tables.is_empty() {
+        if tables.is_empty() && adts.is_empty() {
             return;
         }
         let mut bounds: FxHashMap<String, Vec<TraitBound>> = FxHashMap::default();
@@ -128,6 +131,17 @@ impl<'a> super::TypeChecker<'a> {
             self.warnings.truncate(warnings);
             self.checked_container_hashers = hashers;
             self.judge_table_key(name, &key_ty, span);
+        }
+        // The bounds of a generic struct or enum written with arguments
+        // (B-2026-10-28-2), judged the same way.
+        for (name, args, span) in adts {
+            let (errors, warnings) = (self.errors.len(), self.warnings.len());
+            let hashers = self.checked_container_hashers.clone();
+            let arg_tys: Vec<Type> = args.iter().map(|a| self.lower_type_expr(a, &gp)).collect();
+            self.errors.truncate(errors);
+            self.warnings.truncate(warnings);
+            self.checked_container_hashers = hashers;
+            self.judge_adt_bounds(name, &arg_tys, span);
         }
         self.enclosing_bounds = saved;
     }
@@ -202,7 +216,7 @@ impl<'a> super::TypeChecker<'a> {
 
     /// The type parameters `key` names: a `TypeParam`, or the bare name a
     /// body annotation lowers an enclosing parameter to.
-    fn key_params(&self, key: &Type, out: &mut Vec<String>) {
+    pub(super) fn key_params(&self, key: &Type, out: &mut Vec<String>) {
         match key {
             Type::TypeParam(p) => out.push(p.clone()),
             Type::Named { name, args } => {
