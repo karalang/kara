@@ -1,0 +1,1005 @@
+$ xsv count data/orders.csv
+60
+$ xsv count -n data/orders.csv
+61
+$ xsv count data/empty.csv
+0
+$ xsv count data/blank.csv
+0
+$ xsv count data/quoted.csv
+5
+$ xsv count data/ragged.csv
+! CSV error: record 1 (line: 2, byte: 6): found record with 2 fields, but the previous record has 3 fields
+[exit 1]
+$ xsv headers data/orders.csv
+1   order_id
+2   date
+3   region
+4   customer
+5   product
+6   qty
+7   unit_price
+8   discount
+9   status
+10  rating
+11  weight_kg
+$ xsv headers data/regions.tsv
+1   region
+2   manager
+3   quarterly_target
+$ xsv headers -j data/customers.csv
+customer
+segment
+country
+$ xsv headers data/orders.csv data/customers.csv
+order_id
+date
+region
+customer
+product
+qty
+unit_price
+discount
+status
+rating
+weight_kg
+customer
+segment
+country
+$ xsv headers --intersect data/regions.tsv data/orders.csv
+region
+manager
+quarterly_target
+order_id
+date
+customer
+product
+qty
+unit_price
+discount
+status
+rating
+weight_kg
+$ xsv select 1,3-5 data/sensors.csv
+id,counter,flag,label
+s1,9007199254740993,true,12
+s2,-42,false, 12
+s3,+15,,alpha
+s4,99999999999999999999,true,beta
+s5,0,false,gamma
+s6,17,,12
+s7,-3,true,
+s8,8,false,delta
+s9,8,true,beta
+s10,,false,beta
+s11,5,,alpha
+s12,5,true,epsilon
+$ xsv select label-id data/sensors.csv
+label,flag,counter,reading,id
+12,true,9007199254740993,-0.5,s1
+ 12,false,-42,.5,s2
+alpha,,+15,1.,s3
+beta,true,99999999999999999999,+7,s4
+gamma,false,0,1e3,s5
+12,,17,2.5E-2,s6
+,true,-3,-12.75,s7
+delta,false,8,,s8
+beta,true,8,0.1,s9
+beta,false,,0.2,s10
+alpha,,5,1e21,s11
+epsilon,true,5,0.00001,s12
+$ xsv select '!counter-flag' data/sensors.csv
+id,reading,label
+s1,-0.5,12
+s2,.5, 12
+s3,1.,alpha
+s4,+7,beta
+s5,1e3,gamma
+s6,2.5E-2,12
+s7,-12.75,
+s8,,delta
+s9,0.1,beta
+s10,0.2,beta
+s11,1e21,alpha
+s12,0.00001,epsilon
+$ xsv select 3- data/regions.tsv
+quarterly_target
+12000
+9500.5
+""
+7000
+$ xsv select '!-2' data/regions.tsv
+quarterly_target
+12000
+9500.5
+""
+7000
+$ xsv select - data/dupes.csv
+name,age,name
+ada,36,lovelace
+alan,41,turing
+grace,85,hopper
+$ xsv select 'name[1],age,name' data/dupes.csv
+name,age,name
+lovelace,36,ada
+turing,41,alan
+hopper,85,grace
+$ xsv select -n 2,1 data/regions.tsv
+manager,region
+M. Okafor,north
+R. Silva,south
+K. Tanaka,east
+A. Novak,central
+$ xsv select '"text",id' data/quoted.csv
+text,id
+"Hello, world",1
+"multi
+line",2
+abcd,3
+,4
+semi;colon,5
+$ xsv select nope data/orders.csv
+! Selector name 'nope' does not exist as a named header in the given CSV data.
+[exit 1]
+$ xsv select 9 data/regions.tsv
+! Selector index 9 is out of bounds. Index must be >= 1 and <= 3.
+[exit 1]
+$ xsv select 'name[2]' data/dupes.csv
+! Selector index '2' for name 'name' is out of bounds. Must be >= 0 and <= 1.
+[exit 1]
+$ xsv select -n name data/dupes.csv
+! Cannot use names ('name') in selection with --no-headers set.
+[exit 1]
+$ xsv select a-b-c data/dupes.csv
+! Expected end of field but got '-' instead.
+[exit 1]
+$ xsv slice -s 2 -e 5 data/orders.csv
+order_id,date,region,customer,product,qty,unit_price,discount,status,rating,weight_kg
+1003,2026-09-13,south,Bob Ng,hub,35,24,0.1,pending,,0.5
+1004,2026-09-27,east,Priya Nair,"Widget, large",2,7,0.05,shipped,5,2.75
+1005,2026-09-08,east,Priya Nair,hub,15,24,0.05,shipped,3,3e-1
+$ xsv slice -i 0 data/sensors.csv
+id,reading,counter,flag,label
+s1,-0.5,9007199254740993,true,12
+$ xsv slice -s 57 data/orders.csv
+order_id,date,region,customer,product,qty,unit_price,discount,status,rating,weight_kg
+1058,2026-09-28,east,Chen Wei,cable 2m,34,3.75,,shipped,2,2.75
+1059,2026-09-02,south,Lee,"Widget, large",25,7,0.05,cancelled,4,4
+1060,2026-09-26,north,Omar Haddad,"Widget, large",38,7,,cancelled,2,0.125
+$ xsv slice -s 10 -l 3 data/orders.csv
+order_id,date,region,customer,product,qty,unit_price,discount,status,rating,weight_kg
+1011,2026-09-07,west,"Smith, Jane",widget,32,2.5,,shipped,5,1.250
+1012,2026-09-29,north,Bob Ng,hub,23,24,0.05,shipped,5,1.250
+1013,2026-09-24,north,Chen Wei,hub,2,24,0.1,shipped,4,1.250
+$ xsv slice -n -l 2 data/regions.tsv
+region,manager,quarterly_target
+north,M. Okafor,12000
+$ xsv slice -s 5 -e 2 data/orders.csv
+order_id,date,region,customer,product,qty,unit_price,discount,status,rating,weight_kg
+! The end of the range (2) must be greater than or
+! equal to the start of the range (5).
+[exit 1]
+$ xsv slice -e 3 -l 2 data/orders.csv
+order_id,date,region,customer,product,qty,unit_price,discount,status,rating,weight_kg
+! --end and --len cannot be used at the same time.
+[exit 1]
+$ xsv search -s region '^(north|east)$' data/orders.csv
+order_id,date,region,customer,product,qty,unit_price,discount,status,rating,weight_kg
+1001,2026-09-21,east,Bob Ng,hub,20,24,,shipped,1,0.125
+1002,2026-09-18,north,"Smith, Jane",gadget,1,19.99,,cancelled,1,4
+1004,2026-09-27,east,Priya Nair,"Widget, large",2,7,0.05,shipped,5,2.75
+1005,2026-09-08,east,Priya Nair,hub,15,24,0.05,shipped,3,3e-1
+1006,2026-09-29,east,Priya Nair,gadget,31,19.99,,cancelled,1,0.5
+1007,2026-09-30,north,Chen Wei,widget,20,2.5,,shipped,1,1.250
+1012,2026-09-29,north,Bob Ng,hub,23,24,0.05,shipped,5,1.250
+1013,2026-09-24,north,Chen Wei,hub,2,24,0.1,shipped,4,1.250
+1015,2026-09-29,north,Priya Nair,"Widget, large",13,7,,shipped,1,0.5
+1016,2026-09-21,north,Ünal Çelik,hub,39,24,0.1,shipped,4,0.125
+1017,2026-09-07,north,Priya Nair,gadget,28,19.99,,shipped,3,3e-1
+1019,2026-09-03,north,Priya Nair,gadget,8,19.99,,pending,,4
+1023,2026-09-27,east,Omar Haddad,widget,29,2.5,,returned,,12
+1027,2026-09-01,east,Lee,hub,33,24,,shipped,3,3e-1
+1029,2026-09-16,north,"Ana ""Ace"" Ruiz",widget,18,2.5,0.15,cancelled,5,0.125
+1030,2026-09-15,north,"Ana ""Ace"" Ruiz",hub,22,24,,shipped,4,0.125
+1031,2026-09-29,north,"Ana ""Ace"" Ruiz",gadget,33,19.99,0.05,returned,1,1.250
+1035,2026-09-18,north,Omar Haddad,hub,8,24,0.1,shipped,4,4
+1036,2026-09-08,north,"Smith, Jane","Widget, large",30,7,0.1,shipped,2,12
+1037,2026-09-12,north,Priya Nair,"Widget, large",25,7,,cancelled,,0.5
+1041,2026-09-25,east,"Ana ""Ace"" Ruiz",cable 2m,7,3.75,,shipped,4,12
+1043,2026-09-11,east,"Smith, Jane",widget,38,2.5,,returned,,0.5
+1044,2026-09-11,east,"Ana ""Ace"" Ruiz",hub,4,24,0.1,shipped,5,0.125
+1045,2026-09-18,north,"Smith, Jane","Widget, large",36,7,,shipped,2,2.75
+1046,2026-09-29,east,Bob Ng,gadget,32,19.99,0.1,shipped,4,0.5
+1049,2026-09-27,east,"Smith, Jane",widget,25,2.5,0.05,returned,2,1.250
+1052,2026-09-10,north,Ünal Çelik,"Widget, large",5,7,,shipped,4,0.5
+1053,2026-09-13,north,"Ana ""Ace"" Ruiz",widget,,2.5,0.05,pending,3,0.5
+1054,2026-09-24,north,"Smith, Jane",gadget,6,19.99,,pending,5,4
+1057,2026-09-23,east,Priya Nair,gadget,38,19.99,0.05,cancelled,,2.75
+1058,2026-09-28,east,Chen Wei,cable 2m,34,3.75,,shipped,2,2.75
+1060,2026-09-26,north,Omar Haddad,"Widget, large",38,7,,cancelled,2,0.125
+$ xsv search -i SMITH data/orders.csv
+order_id,date,region,customer,product,qty,unit_price,discount,status,rating,weight_kg
+1002,2026-09-18,north,"Smith, Jane",gadget,1,19.99,,cancelled,1,4
+1011,2026-09-07,west,"Smith, Jane",widget,32,2.5,,shipped,5,1.250
+1034,2026-09-29, east,"Smith, Jane",hub,21,24,0.05,shipped,3,3e-1
+1036,2026-09-08,north,"Smith, Jane","Widget, large",30,7,0.1,shipped,2,12
+1043,2026-09-11,east,"Smith, Jane",widget,38,2.5,,returned,,0.5
+1045,2026-09-18,north,"Smith, Jane","Widget, large",36,7,,shipped,2,2.75
+1049,2026-09-27,east,"Smith, Jane",widget,25,2.5,0.05,returned,2,1.250
+1054,2026-09-24,north,"Smith, Jane",gadget,6,19.99,,pending,5,4
+$ xsv search -v -s status,rating '^(shipped|[1-4])$' data/orders.csv
+order_id,date,region,customer,product,qty,unit_price,discount,status,rating,weight_kg
+1003,2026-09-13,south,Bob Ng,hub,35,24,0.1,pending,,0.5
+1019,2026-09-03,north,Priya Nair,gadget,8,19.99,,pending,,4
+1023,2026-09-27,east,Omar Haddad,widget,29,2.5,,returned,,12
+1028,2026-09-06,west,Omar Haddad,"Widget, large",22,7,,cancelled,,0.5
+1029,2026-09-16,north,"Ana ""Ace"" Ruiz",widget,18,2.5,0.15,cancelled,5,0.125
+1037,2026-09-12,north,Priya Nair,"Widget, large",25,7,,cancelled,,0.5
+1043,2026-09-11,east,"Smith, Jane",widget,38,2.5,,returned,,0.5
+1054,2026-09-24,north,"Smith, Jane",gadget,6,19.99,,pending,5,4
+1057,2026-09-23,east,Priya Nair,gadget,38,19.99,0.05,cancelled,,2.75
+$ xsv search -s 2 '^-?[0-9]+\.[0-9]+$' data/sensors.csv
+id,reading,counter,flag,label
+s1,-0.5,9007199254740993,true,12
+s7,-12.75,-3,true,
+s9,0.1,8,true,beta
+s10,0.2,,false,beta
+s12,0.00001,5,true,epsilon
+$ xsv search -n a data/dupes.csv
+name,age,name
+ada,36,lovelace
+alan,41,turing
+grace,85,hopper
+$ xsv sort -s customer data/customers.csv
+customer,segment,country
+,unknown,
+ Bob Ng ,wholesale,SG
+"Ana ""Ace"" Ruiz",retail,MX
+Chen Wei,wholesale,CN
+Chen Wei,partner,CN
+Dana Scully,retail,US
+"smith, jane",retail,UK
+Ünal Çelik,retail,TR
+$ xsv sort -N -s qty data/orders.csv
+order_id,date,region,customer,product,qty,unit_price,discount,status,rating,weight_kg
+1048,2026-09-08,south,Lee,hub,,24,0.05,shipped,n/a,12
+1053,2026-09-13,north,"Ana ""Ace"" Ruiz",widget,,2.5,0.05,pending,3,0.5
+1002,2026-09-18,north,"Smith, Jane",gadget,1,19.99,,cancelled,1,4
+1004,2026-09-27,east,Priya Nair,"Widget, large",2,7,0.05,shipped,5,2.75
+1013,2026-09-24,north,Chen Wei,hub,2,24,0.1,shipped,4,1.250
+1033,2026-09-15,west,Bob Ng,"Widget, large",4,7,0.1,cancelled,3,3e-1
+1044,2026-09-11,east,"Ana ""Ace"" Ruiz",hub,4,24,0.1,shipped,5,0.125
+1052,2026-09-10,north,Ünal Çelik,"Widget, large",5,7,,shipped,4,0.5
+1054,2026-09-24,north,"Smith, Jane",gadget,6,19.99,,pending,5,4
+1041,2026-09-25,east,"Ana ""Ace"" Ruiz",cable 2m,7,3.75,,shipped,4,12
+1019,2026-09-03,north,Priya Nair,gadget,8,19.99,,pending,,4
+1035,2026-09-18,north,Omar Haddad,hub,8,24,0.1,shipped,4,4
+1032,2026-09-03,south,Priya Nair,hub,9,24,0.1,shipped,,12
+1040,2026-09-25,south,Omar Haddad,gadget,9,19.99,0.15,cancelled,1,0.125
+1021,2026-09-26,west,Priya Nair,gadget,10,19.99,0.1,pending,4,0.5
+1047,2026-09-29,west,"Ana ""Ace"" Ruiz",widget,10,2.5,,pending,1,3e-1
+1026,2026-09-26,west,Chen Wei,cable 2m,12,3.75,,shipped,1,2.75
+1015,2026-09-29,north,Priya Nair,"Widget, large",13,7,,shipped,1,0.5
+1051,2026-09-29,west,Ünal Çelik,widget,13,2.5,,shipped,1,2.75
+1038,2026-09-15,west,Ünal Çelik,cable 2m,14,3.75,,shipped,3,4
+1005,2026-09-08,east,Priya Nair,hub,15,24,0.05,shipped,3,3e-1
+1010,2026-09-04,west,Bob Ng,"Widget, large",17,7,0.15,cancelled,1,2.75
+1029,2026-09-16,north,"Ana ""Ace"" Ruiz",widget,18,2.5,0.15,cancelled,5,0.125
+1001,2026-09-21,east,Bob Ng,hub,20,24,,shipped,1,0.125
+1007,2026-09-30,north,Chen Wei,widget,20,2.5,,shipped,1,1.250
+1024,2026-09-05,west,"Ana ""Ace"" Ruiz",widget,20,2.5,,shipped,5,0.5
+1014,2026-09-01,west,Lee,cable 2m,21,3.75,0.05,pending,1,1.250
+1034,2026-09-29, east,"Smith, Jane",hub,21,24,0.05,shipped,3,3e-1
+1028,2026-09-06,west,Omar Haddad,"Widget, large",22,7,,cancelled,,0.5
+1030,2026-09-15,north,"Ana ""Ace"" Ruiz",hub,22,24,,shipped,4,0.125
+1039,2026-09-10,west,Omar Haddad,"Widget, large",22,7,,cancelled,2,4
+1012,2026-09-29,north,Bob Ng,hub,23,24,0.05,shipped,5,1.250
+1020,2026-09-07,south,"Ana ""Ace"" Ruiz",widget,24,2.5,0.05,pending,3,2.75
+1037,2026-09-12,north,Priya Nair,"Widget, large",25,7,,cancelled,,0.5
+1049,2026-09-27,east,"Smith, Jane",widget,25,2.5,0.05,returned,2,1.250
+1059,2026-09-02,south,Lee,"Widget, large",25,7,0.05,cancelled,4,4
+1009,2026-09-17,south,Bob Ng,"Widget, large",28,7,0.15,shipped,2,2.75
+1017,2026-09-07,north,Priya Nair,gadget,28,19.99,,shipped,3,3e-1
+1023,2026-09-27,east,Omar Haddad,widget,29,2.5,,returned,,12
+1036,2026-09-08,north,"Smith, Jane","Widget, large",30,7,0.1,shipped,2,12
+1006,2026-09-29,east,Priya Nair,gadget,31,19.99,,cancelled,1,0.5
+1056,2026-09-10,west,"Ana ""Ace"" Ruiz",cable 2m,31,3.75,,returned,1,3e-1
+1011,2026-09-07,west,"Smith, Jane",widget,32,2.5,,shipped,5,1.250
+1046,2026-09-29,east,Bob Ng,gadget,32,19.99,0.1,shipped,4,0.5
+1018,2026-09-27,west,Ünal Çelik,hub,33,24,0.15,cancelled,2,1.250
+1025,2026-09-29,west,Chen Wei,gadget,33,19.99,0.1,pending,3,1.250
+1027,2026-09-01,east,Lee,hub,33,24,,shipped,3,3e-1
+1031,2026-09-29,north,"Ana ""Ace"" Ruiz",gadget,33,19.99,0.05,returned,1,1.250
+1058,2026-09-28,east,Chen Wei,cable 2m,34,3.75,,shipped,2,2.75
+1003,2026-09-13,south,Bob Ng,hub,35,24,0.1,pending,,0.5
+1042,2026-09-07,,Ünal Çelik,widget,35,2.5,,shipped,1,0.5
+1008,2026-09-02, west,Bob Ng,hub,36,24,,cancelled,4,12
+1022,2026-09-30,south,Lee,"Widget, large",36,7,,cancelled,3,1.250
+1045,2026-09-18,north,"Smith, Jane","Widget, large",36,7,,shipped,2,2.75
+1043,2026-09-11,east,"Smith, Jane",widget,38,2.5,,returned,,0.5
+1057,2026-09-23,east,Priya Nair,gadget,38,19.99,0.05,cancelled,,2.75
+1060,2026-09-26,north,Omar Haddad,"Widget, large",38,7,,cancelled,2,0.125
+1016,2026-09-21,north,Ünal Çelik,hub,39,24,0.1,shipped,4,0.125
+1050,2026-09-27,south,"Ana ""Ace"" Ruiz",cable 2m,39,3.75,,cancelled,2,2.75
+1055,2026-09-30,south,Lee,hub,39,24,,shipped,4,0.5
+$ xsv sort -R -N -s unit_price,order_id data/orders.csv
+order_id,date,region,customer,product,qty,unit_price,discount,status,rating,weight_kg
+1055,2026-09-30,south,Lee,hub,39,24,,shipped,4,0.5
+1048,2026-09-08,south,Lee,hub,,24,0.05,shipped,n/a,12
+1044,2026-09-11,east,"Ana ""Ace"" Ruiz",hub,4,24,0.1,shipped,5,0.125
+1035,2026-09-18,north,Omar Haddad,hub,8,24,0.1,shipped,4,4
+1034,2026-09-29, east,"Smith, Jane",hub,21,24,0.05,shipped,3,3e-1
+1032,2026-09-03,south,Priya Nair,hub,9,24,0.1,shipped,,12
+1030,2026-09-15,north,"Ana ""Ace"" Ruiz",hub,22,24,,shipped,4,0.125
+1027,2026-09-01,east,Lee,hub,33,24,,shipped,3,3e-1
+1018,2026-09-27,west,Ünal Çelik,hub,33,24,0.15,cancelled,2,1.250
+1016,2026-09-21,north,Ünal Çelik,hub,39,24,0.1,shipped,4,0.125
+1013,2026-09-24,north,Chen Wei,hub,2,24,0.1,shipped,4,1.250
+1012,2026-09-29,north,Bob Ng,hub,23,24,0.05,shipped,5,1.250
+1008,2026-09-02, west,Bob Ng,hub,36,24,,cancelled,4,12
+1005,2026-09-08,east,Priya Nair,hub,15,24,0.05,shipped,3,3e-1
+1003,2026-09-13,south,Bob Ng,hub,35,24,0.1,pending,,0.5
+1001,2026-09-21,east,Bob Ng,hub,20,24,,shipped,1,0.125
+1057,2026-09-23,east,Priya Nair,gadget,38,19.99,0.05,cancelled,,2.75
+1054,2026-09-24,north,"Smith, Jane",gadget,6,19.99,,pending,5,4
+1046,2026-09-29,east,Bob Ng,gadget,32,19.99,0.1,shipped,4,0.5
+1040,2026-09-25,south,Omar Haddad,gadget,9,19.99,0.15,cancelled,1,0.125
+1031,2026-09-29,north,"Ana ""Ace"" Ruiz",gadget,33,19.99,0.05,returned,1,1.250
+1025,2026-09-29,west,Chen Wei,gadget,33,19.99,0.1,pending,3,1.250
+1021,2026-09-26,west,Priya Nair,gadget,10,19.99,0.1,pending,4,0.5
+1019,2026-09-03,north,Priya Nair,gadget,8,19.99,,pending,,4
+1017,2026-09-07,north,Priya Nair,gadget,28,19.99,,shipped,3,3e-1
+1006,2026-09-29,east,Priya Nair,gadget,31,19.99,,cancelled,1,0.5
+1002,2026-09-18,north,"Smith, Jane",gadget,1,19.99,,cancelled,1,4
+1060,2026-09-26,north,Omar Haddad,"Widget, large",38,7,,cancelled,2,0.125
+1059,2026-09-02,south,Lee,"Widget, large",25,7,0.05,cancelled,4,4
+1052,2026-09-10,north,Ünal Çelik,"Widget, large",5,7,,shipped,4,0.5
+1045,2026-09-18,north,"Smith, Jane","Widget, large",36,7,,shipped,2,2.75
+1039,2026-09-10,west,Omar Haddad,"Widget, large",22,7,,cancelled,2,4
+1037,2026-09-12,north,Priya Nair,"Widget, large",25,7,,cancelled,,0.5
+1036,2026-09-08,north,"Smith, Jane","Widget, large",30,7,0.1,shipped,2,12
+1033,2026-09-15,west,Bob Ng,"Widget, large",4,7,0.1,cancelled,3,3e-1
+1028,2026-09-06,west,Omar Haddad,"Widget, large",22,7,,cancelled,,0.5
+1022,2026-09-30,south,Lee,"Widget, large",36,7,,cancelled,3,1.250
+1015,2026-09-29,north,Priya Nair,"Widget, large",13,7,,shipped,1,0.5
+1010,2026-09-04,west,Bob Ng,"Widget, large",17,7,0.15,cancelled,1,2.75
+1009,2026-09-17,south,Bob Ng,"Widget, large",28,7,0.15,shipped,2,2.75
+1004,2026-09-27,east,Priya Nair,"Widget, large",2,7,0.05,shipped,5,2.75
+1058,2026-09-28,east,Chen Wei,cable 2m,34,3.75,,shipped,2,2.75
+1056,2026-09-10,west,"Ana ""Ace"" Ruiz",cable 2m,31,3.75,,returned,1,3e-1
+1050,2026-09-27,south,"Ana ""Ace"" Ruiz",cable 2m,39,3.75,,cancelled,2,2.75
+1041,2026-09-25,east,"Ana ""Ace"" Ruiz",cable 2m,7,3.75,,shipped,4,12
+1038,2026-09-15,west,Ünal Çelik,cable 2m,14,3.75,,shipped,3,4
+1026,2026-09-26,west,Chen Wei,cable 2m,12,3.75,,shipped,1,2.75
+1014,2026-09-01,west,Lee,cable 2m,21,3.75,0.05,pending,1,1.250
+1053,2026-09-13,north,"Ana ""Ace"" Ruiz",widget,,2.5,0.05,pending,3,0.5
+1051,2026-09-29,west,Ünal Çelik,widget,13,2.5,,shipped,1,2.75
+1049,2026-09-27,east,"Smith, Jane",widget,25,2.5,0.05,returned,2,1.250
+1047,2026-09-29,west,"Ana ""Ace"" Ruiz",widget,10,2.5,,pending,1,3e-1
+1043,2026-09-11,east,"Smith, Jane",widget,38,2.5,,returned,,0.5
+1042,2026-09-07,,Ünal Çelik,widget,35,2.5,,shipped,1,0.5
+1029,2026-09-16,north,"Ana ""Ace"" Ruiz",widget,18,2.5,0.15,cancelled,5,0.125
+1024,2026-09-05,west,"Ana ""Ace"" Ruiz",widget,20,2.5,,shipped,5,0.5
+1023,2026-09-27,east,Omar Haddad,widget,29,2.5,,returned,,12
+1020,2026-09-07,south,"Ana ""Ace"" Ruiz",widget,24,2.5,0.05,pending,3,2.75
+1011,2026-09-07,west,"Smith, Jane",widget,32,2.5,,shipped,5,1.250
+1007,2026-09-30,north,Chen Wei,widget,20,2.5,,shipped,1,1.250
+$ xsv sort -N -s reading data/sensors.csv
+id,reading,counter,flag,label
+s8,,8,false,delta
+s7,-12.75,-3,true,
+s1,-0.5,9007199254740993,true,12
+s12,0.00001,5,true,epsilon
+s6,2.5E-2,17,,12
+s9,0.1,8,true,beta
+s10,0.2,,false,beta
+s2,.5,-42,false, 12
+s3,1.,+15,,alpha
+s4,+7,99999999999999999999,true,beta
+s5,1e3,0,false,gamma
+s11,1e21,5,,alpha
+$ xsv sort -n data/regions.tsv
+central,A. Novak,7000
+east,K. Tanaka,
+north,M. Okafor,12000
+region,manager,quarterly_target
+south,R. Silva,9500.5
+$ xsv sort -R data/dupes.csv
+name,age,name
+grace,85,hopper
+alan,41,turing
+ada,36,lovelace
+$ xsv frequency data/orders.csv
+field,value,count
+order_id,1001,1
+order_id,1002,1
+order_id,1003,1
+order_id,1004,1
+order_id,1005,1
+order_id,1006,1
+order_id,1007,1
+order_id,1008,1
+order_id,1009,1
+order_id,1010,1
+date,2026-09-29,9
+date,2026-09-27,5
+date,2026-09-07,4
+date,2026-09-08,3
+date,2026-09-10,3
+date,2026-09-15,3
+date,2026-09-18,3
+date,2026-09-26,3
+date,2026-09-30,3
+date,2026-09-01,2
+region,north,19
+region,west,16
+region,east,14
+region,south,10
+region,(NULL),1
+customer,"Ana ""Ace"" Ruiz",11
+customer,Priya Nair,10
+customer,Bob Ng,8
+customer,"Smith, Jane",8
+customer,Lee,6
+customer,Omar Haddad,6
+customer,Ünal Çelik,6
+customer,Chen Wei,5
+product,hub,16
+product,"Widget, large",14
+product,widget,12
+product,gadget,11
+product,cable 2m,7
+qty,33,4
+qty,20,3
+qty,22,3
+qty,25,3
+qty,36,3
+qty,38,3
+qty,39,3
+qty,(NULL),2
+qty,10,2
+qty,13,2
+unit_price,24,16
+unit_price,7,14
+unit_price,2.5,12
+unit_price,19.99,11
+unit_price,3.75,7
+discount,(NULL),32
+discount,0.05,12
+discount,0.1,11
+discount,0.15,5
+status,shipped,30
+status,cancelled,16
+status,pending,9
+status,returned,5
+rating,1,14
+rating,4,11
+rating,3,10
+rating,2,9
+rating,(NULL),8
+rating,5,7
+rating,n/a,1
+weight_kg,0.5,13
+weight_kg,1.250,10
+weight_kg,2.75,10
+weight_kg,0.125,7
+weight_kg,3e-1,7
+weight_kg,4,7
+weight_kg,12,6
+$ xsv frequency -s region,status --asc data/orders.csv
+field,value,count
+region,(NULL),1
+region,south,10
+region,east,14
+region,west,16
+region,north,19
+status,returned,5
+status,pending,9
+status,cancelled,16
+status,shipped,30
+$ xsv frequency -s rating -l 0 --no-nulls data/orders.csv
+field,value,count
+rating,1,14
+rating,4,11
+rating,3,10
+rating,2,9
+rating,5,7
+rating,n/a,1
+$ xsv frequency -j 4 -s product,customer -l 3 data/orders.csv
+field,value,count
+product,"Ana ""Ace"" Ruiz",11
+product,Priya Nair,10
+product,Bob Ng,8
+customer,hub,16
+customer,"Widget, large",14
+customer,widget,12
+$ xsv frequency -n -s 1 data/regions.tsv
+field,value,count
+1,central,1
+1,east,1
+1,north,1
+1,region,1
+1,south,1
+$ xsv stats data/orders.csv
+field,type,sum,min,max,min_length,max_length,mean,stddev
+order_id,Integer,61830,1001,1060,4,4,1030.5,17.318102282486574
+date,Unicode,,2026-09-01,2026-09-30,10,10,,
+region,Unicode,, east,west,0,5,,
+customer,Unicode,,"Ana ""Ace"" Ruiz",Ünal Çelik,3,14,,
+product,Unicode,,"Widget, large",widget,3,13,,
+qty,Integer,1293,1,39,0,2,22.293103448275858,11.64860302515174
+unit_price,Float,758.1400000000001,2.5,24,1,5,12.635666666666665,9.029058896449593
+discount,Float,2.4499999999999997,0.05,0.15,0,4,0.0875,0.03689996128530682
+status,Unicode,,cancelled,shipped,7,9,,
+rating,Unicode,,1,n/a,0,3,,
+weight_kg,Float,149.475,0.125,12,1,5,2.4912499999999995,3.4128672726658054
+$ xsv stats --everything data/orders.csv
+field,type,sum,min,max,min_length,max_length,mean,stddev,median,mode,cardinality
+order_id,Integer,61830,1001,1060,4,4,1030.5,17.318102282486574,1030.5,N/A,60
+date,Unicode,,2026-09-01,2026-09-30,10,10,,,,2026-09-29,25
+region,Unicode,, east,west,0,5,,,,north,7
+customer,Unicode,,"Ana ""Ace"" Ruiz",Ünal Çelik,3,14,,,,"Ana ""Ace"" Ruiz",8
+product,Unicode,,"Widget, large",widget,3,13,,,,hub,5
+qty,Integer,1293,1,39,0,2,22.293103448275858,11.64860302515174,22.5,33,33
+unit_price,Float,758.1400000000001,2.5,24,1,5,12.635666666666665,9.029058896449593,7,24,5
+discount,Float,2.4499999999999997,0.05,0.15,0,4,0.0875,0.03689996128530682,0.1,,4
+status,Unicode,,cancelled,shipped,7,9,,,,shipped,4
+rating,Unicode,,1,n/a,0,3,,,3,1,7
+weight_kg,Float,149.475,0.125,12,1,5,2.4912499999999995,3.4128672726658054,1.25,0.5,7
+$ xsv stats --everything --nulls -s qty,discount,rating data/orders.csv
+field,type,sum,min,max,min_length,max_length,mean,stddev,median,mode,cardinality
+qty,Integer,1293,1,39,0,2,21.549999999999994,12.131810801909719,22.5,33,33
+discount,Float,2.4499999999999997,0.05,0.15,0,4,0.040833333333333346,0.050408057116122035,0.1,,4
+rating,Unicode,,1,n/a,0,3,,,3,1,7
+$ xsv stats --everything data/sensors.csv
+field,type,sum,min,max,min_length,max_length,mean,stddev,median,mode,cardinality
+id,Unicode,,s1,s9,2,3,,,,N/A,12
+reading,Float,1000000000000000000000,-12.75,1000000000000000000000,0,7,90909090909090900000,287479787288034480000,0.2,N/A,12
+counter,Float,100009007199254740000,-42,100000000000000000000,0,20,9091727927204974000,28747719905481410000,8,N/A,10
+flag,Unicode,,false,true,0,5,,,,true,3
+label,Unicode,, 12,gamma,0,7,,,12,beta,8
+$ xsv stats -j 4 --everything data/orders.csv
+field,type,sum,min,max,min_length,max_length,mean,stddev,median,mode,cardinality
+order_id,Integer,61830,1001,1060,4,4,1030.5,17.31810228248657,1030.5,N/A,60
+date,Unicode,,2026-09-01,2026-09-30,10,10,,,,2026-09-29,25
+region,Unicode,, east,west,0,5,,,,north,7
+customer,Unicode,,"Ana ""Ace"" Ruiz",Ünal Çelik,3,14,,,,"Ana ""Ace"" Ruiz",8
+product,Unicode,,"Widget, large",widget,3,13,,,,hub,5
+qty,Integer,1293,1,39,0,2,22.29310344827586,11.648603025151742,22.5,33,33
+unit_price,Float,758.14,2.5,24,1,5,12.635666666666662,9.029058896449593,7,24,5
+discount,Float,2.45,0.05,0.15,0,4,0.08750000000000001,0.03689996128530682,0.1,,4
+status,Unicode,,cancelled,shipped,7,9,,,,shipped,4
+rating,Unicode,,1,n/a,0,3,,,3,1,7
+weight_kg,Float,149.475,0.125,12,1,5,2.49125,3.412867272665806,1.25,0.5,7
+$ xsv stats --median --mode -s reading,counter -j 3 data/sensors.csv
+field,type,sum,min,max,min_length,max_length,mean,stddev,median,mode
+reading,Float,1000000000000000000000,-12.75,1000000000000000000000,0,7,90909090909090900000,287479787288034500000,0.2,N/A
+counter,Float,100009007199254740000,-42,100000000000000000000,0,20,9091727927204977000,28747719905481404000,8,N/A
+$ xsv stats --cardinality data/empty.csv
+field,type,sum,min,max,min_length,max_length,mean,stddev,cardinality
+x,NULL,,,,,,,,0
+y,NULL,,,,,,,,0
+z,NULL,,,,,,,,0
+$ xsv stats -n data/regions.tsv
+field,type,sum,min,max,min_length,max_length,mean,stddev
+0,Unicode,,central,south,4,7,,
+1,Unicode,,A. Novak,manager,7,9,,
+2,Unicode,,12000,quarterly_target,0,16,,
+$ xsv stats data/ragged.csv
+! CSV error: record 1 (line: 2, byte: 6): found record with 2 fields, but the previous record has 3 fields
+[exit 1]
+$ xsv join customer data/orders.csv customer data/customers.csv
+order_id,date,region,customer,product,qty,unit_price,discount,status,rating,weight_kg,customer,segment,country
+1001,2026-09-21,east,Bob Ng,hub,20,24,,shipped,1,0.125, Bob Ng ,wholesale,SG
+1003,2026-09-13,south,Bob Ng,hub,35,24,0.1,pending,,0.5, Bob Ng ,wholesale,SG
+1007,2026-09-30,north,Chen Wei,widget,20,2.5,,shipped,1,1.250,Chen Wei,wholesale,CN
+1007,2026-09-30,north,Chen Wei,widget,20,2.5,,shipped,1,1.250,Chen Wei,partner,CN
+1008,2026-09-02, west,Bob Ng,hub,36,24,,cancelled,4,12, Bob Ng ,wholesale,SG
+1009,2026-09-17,south,Bob Ng,"Widget, large",28,7,0.15,shipped,2,2.75, Bob Ng ,wholesale,SG
+1010,2026-09-04,west,Bob Ng,"Widget, large",17,7,0.15,cancelled,1,2.75, Bob Ng ,wholesale,SG
+1012,2026-09-29,north,Bob Ng,hub,23,24,0.05,shipped,5,1.250, Bob Ng ,wholesale,SG
+1013,2026-09-24,north,Chen Wei,hub,2,24,0.1,shipped,4,1.250,Chen Wei,wholesale,CN
+1013,2026-09-24,north,Chen Wei,hub,2,24,0.1,shipped,4,1.250,Chen Wei,partner,CN
+1016,2026-09-21,north,Ünal Çelik,hub,39,24,0.1,shipped,4,0.125,Ünal Çelik,retail,TR
+1018,2026-09-27,west,Ünal Çelik,hub,33,24,0.15,cancelled,2,1.250,Ünal Çelik,retail,TR
+1020,2026-09-07,south,"Ana ""Ace"" Ruiz",widget,24,2.5,0.05,pending,3,2.75,"Ana ""Ace"" Ruiz",retail,MX
+1024,2026-09-05,west,"Ana ""Ace"" Ruiz",widget,20,2.5,,shipped,5,0.5,"Ana ""Ace"" Ruiz",retail,MX
+1025,2026-09-29,west,Chen Wei,gadget,33,19.99,0.1,pending,3,1.250,Chen Wei,wholesale,CN
+1025,2026-09-29,west,Chen Wei,gadget,33,19.99,0.1,pending,3,1.250,Chen Wei,partner,CN
+1026,2026-09-26,west,Chen Wei,cable 2m,12,3.75,,shipped,1,2.75,Chen Wei,wholesale,CN
+1026,2026-09-26,west,Chen Wei,cable 2m,12,3.75,,shipped,1,2.75,Chen Wei,partner,CN
+1029,2026-09-16,north,"Ana ""Ace"" Ruiz",widget,18,2.5,0.15,cancelled,5,0.125,"Ana ""Ace"" Ruiz",retail,MX
+1030,2026-09-15,north,"Ana ""Ace"" Ruiz",hub,22,24,,shipped,4,0.125,"Ana ""Ace"" Ruiz",retail,MX
+1031,2026-09-29,north,"Ana ""Ace"" Ruiz",gadget,33,19.99,0.05,returned,1,1.250,"Ana ""Ace"" Ruiz",retail,MX
+1033,2026-09-15,west,Bob Ng,"Widget, large",4,7,0.1,cancelled,3,3e-1, Bob Ng ,wholesale,SG
+1038,2026-09-15,west,Ünal Çelik,cable 2m,14,3.75,,shipped,3,4,Ünal Çelik,retail,TR
+1041,2026-09-25,east,"Ana ""Ace"" Ruiz",cable 2m,7,3.75,,shipped,4,12,"Ana ""Ace"" Ruiz",retail,MX
+1042,2026-09-07,,Ünal Çelik,widget,35,2.5,,shipped,1,0.5,Ünal Çelik,retail,TR
+1044,2026-09-11,east,"Ana ""Ace"" Ruiz",hub,4,24,0.1,shipped,5,0.125,"Ana ""Ace"" Ruiz",retail,MX
+1046,2026-09-29,east,Bob Ng,gadget,32,19.99,0.1,shipped,4,0.5, Bob Ng ,wholesale,SG
+1047,2026-09-29,west,"Ana ""Ace"" Ruiz",widget,10,2.5,,pending,1,3e-1,"Ana ""Ace"" Ruiz",retail,MX
+1050,2026-09-27,south,"Ana ""Ace"" Ruiz",cable 2m,39,3.75,,cancelled,2,2.75,"Ana ""Ace"" Ruiz",retail,MX
+1051,2026-09-29,west,Ünal Çelik,widget,13,2.5,,shipped,1,2.75,Ünal Çelik,retail,TR
+1052,2026-09-10,north,Ünal Çelik,"Widget, large",5,7,,shipped,4,0.5,Ünal Çelik,retail,TR
+1053,2026-09-13,north,"Ana ""Ace"" Ruiz",widget,,2.5,0.05,pending,3,0.5,"Ana ""Ace"" Ruiz",retail,MX
+1056,2026-09-10,west,"Ana ""Ace"" Ruiz",cable 2m,31,3.75,,returned,1,3e-1,"Ana ""Ace"" Ruiz",retail,MX
+1058,2026-09-28,east,Chen Wei,cable 2m,34,3.75,,shipped,2,2.75,Chen Wei,wholesale,CN
+1058,2026-09-28,east,Chen Wei,cable 2m,34,3.75,,shipped,2,2.75,Chen Wei,partner,CN
+$ xsv join --left customer data/customers.csv customer data/orders.csv
+customer,segment,country,order_id,date,region,customer,product,qty,unit_price,discount,status,rating,weight_kg
+"smith, jane",retail,UK,,,,,,,,,,,
+ Bob Ng ,wholesale,SG,1001,2026-09-21,east,Bob Ng,hub,20,24,,shipped,1,0.125
+ Bob Ng ,wholesale,SG,1003,2026-09-13,south,Bob Ng,hub,35,24,0.1,pending,,0.5
+ Bob Ng ,wholesale,SG,1008,2026-09-02, west,Bob Ng,hub,36,24,,cancelled,4,12
+ Bob Ng ,wholesale,SG,1009,2026-09-17,south,Bob Ng,"Widget, large",28,7,0.15,shipped,2,2.75
+ Bob Ng ,wholesale,SG,1010,2026-09-04,west,Bob Ng,"Widget, large",17,7,0.15,cancelled,1,2.75
+ Bob Ng ,wholesale,SG,1012,2026-09-29,north,Bob Ng,hub,23,24,0.05,shipped,5,1.250
+ Bob Ng ,wholesale,SG,1033,2026-09-15,west,Bob Ng,"Widget, large",4,7,0.1,cancelled,3,3e-1
+ Bob Ng ,wholesale,SG,1046,2026-09-29,east,Bob Ng,gadget,32,19.99,0.1,shipped,4,0.5
+"Ana ""Ace"" Ruiz",retail,MX,1020,2026-09-07,south,"Ana ""Ace"" Ruiz",widget,24,2.5,0.05,pending,3,2.75
+"Ana ""Ace"" Ruiz",retail,MX,1024,2026-09-05,west,"Ana ""Ace"" Ruiz",widget,20,2.5,,shipped,5,0.5
+"Ana ""Ace"" Ruiz",retail,MX,1029,2026-09-16,north,"Ana ""Ace"" Ruiz",widget,18,2.5,0.15,cancelled,5,0.125
+"Ana ""Ace"" Ruiz",retail,MX,1030,2026-09-15,north,"Ana ""Ace"" Ruiz",hub,22,24,,shipped,4,0.125
+"Ana ""Ace"" Ruiz",retail,MX,1031,2026-09-29,north,"Ana ""Ace"" Ruiz",gadget,33,19.99,0.05,returned,1,1.250
+"Ana ""Ace"" Ruiz",retail,MX,1041,2026-09-25,east,"Ana ""Ace"" Ruiz",cable 2m,7,3.75,,shipped,4,12
+"Ana ""Ace"" Ruiz",retail,MX,1044,2026-09-11,east,"Ana ""Ace"" Ruiz",hub,4,24,0.1,shipped,5,0.125
+"Ana ""Ace"" Ruiz",retail,MX,1047,2026-09-29,west,"Ana ""Ace"" Ruiz",widget,10,2.5,,pending,1,3e-1
+"Ana ""Ace"" Ruiz",retail,MX,1050,2026-09-27,south,"Ana ""Ace"" Ruiz",cable 2m,39,3.75,,cancelled,2,2.75
+"Ana ""Ace"" Ruiz",retail,MX,1053,2026-09-13,north,"Ana ""Ace"" Ruiz",widget,,2.5,0.05,pending,3,0.5
+"Ana ""Ace"" Ruiz",retail,MX,1056,2026-09-10,west,"Ana ""Ace"" Ruiz",cable 2m,31,3.75,,returned,1,3e-1
+Ünal Çelik,retail,TR,1016,2026-09-21,north,Ünal Çelik,hub,39,24,0.1,shipped,4,0.125
+Ünal Çelik,retail,TR,1018,2026-09-27,west,Ünal Çelik,hub,33,24,0.15,cancelled,2,1.250
+Ünal Çelik,retail,TR,1038,2026-09-15,west,Ünal Çelik,cable 2m,14,3.75,,shipped,3,4
+Ünal Çelik,retail,TR,1042,2026-09-07,,Ünal Çelik,widget,35,2.5,,shipped,1,0.5
+Ünal Çelik,retail,TR,1051,2026-09-29,west,Ünal Çelik,widget,13,2.5,,shipped,1,2.75
+Ünal Çelik,retail,TR,1052,2026-09-10,north,Ünal Çelik,"Widget, large",5,7,,shipped,4,0.5
+Chen Wei,wholesale,CN,1007,2026-09-30,north,Chen Wei,widget,20,2.5,,shipped,1,1.250
+Chen Wei,wholesale,CN,1013,2026-09-24,north,Chen Wei,hub,2,24,0.1,shipped,4,1.250
+Chen Wei,wholesale,CN,1025,2026-09-29,west,Chen Wei,gadget,33,19.99,0.1,pending,3,1.250
+Chen Wei,wholesale,CN,1026,2026-09-26,west,Chen Wei,cable 2m,12,3.75,,shipped,1,2.75
+Chen Wei,wholesale,CN,1058,2026-09-28,east,Chen Wei,cable 2m,34,3.75,,shipped,2,2.75
+Chen Wei,partner,CN,1007,2026-09-30,north,Chen Wei,widget,20,2.5,,shipped,1,1.250
+Chen Wei,partner,CN,1013,2026-09-24,north,Chen Wei,hub,2,24,0.1,shipped,4,1.250
+Chen Wei,partner,CN,1025,2026-09-29,west,Chen Wei,gadget,33,19.99,0.1,pending,3,1.250
+Chen Wei,partner,CN,1026,2026-09-26,west,Chen Wei,cable 2m,12,3.75,,shipped,1,2.75
+Chen Wei,partner,CN,1058,2026-09-28,east,Chen Wei,cable 2m,34,3.75,,shipped,2,2.75
+Dana Scully,retail,US,,,,,,,,,,,
+,unknown,,,,,,,,,,,,
+$ xsv join --right region data/regions.tsv region data/orders.csv
+region,manager,quarterly_target,order_id,date,region,customer,product,qty,unit_price,discount,status,rating,weight_kg
+east,K. Tanaka,,1001,2026-09-21,east,Bob Ng,hub,20,24,,shipped,1,0.125
+north,M. Okafor,12000,1002,2026-09-18,north,"Smith, Jane",gadget,1,19.99,,cancelled,1,4
+south,R. Silva,9500.5,1003,2026-09-13,south,Bob Ng,hub,35,24,0.1,pending,,0.5
+east,K. Tanaka,,1004,2026-09-27,east,Priya Nair,"Widget, large",2,7,0.05,shipped,5,2.75
+east,K. Tanaka,,1005,2026-09-08,east,Priya Nair,hub,15,24,0.05,shipped,3,3e-1
+east,K. Tanaka,,1006,2026-09-29,east,Priya Nair,gadget,31,19.99,,cancelled,1,0.5
+north,M. Okafor,12000,1007,2026-09-30,north,Chen Wei,widget,20,2.5,,shipped,1,1.250
+,,,1008,2026-09-02, west,Bob Ng,hub,36,24,,cancelled,4,12
+south,R. Silva,9500.5,1009,2026-09-17,south,Bob Ng,"Widget, large",28,7,0.15,shipped,2,2.75
+,,,1010,2026-09-04,west,Bob Ng,"Widget, large",17,7,0.15,cancelled,1,2.75
+,,,1011,2026-09-07,west,"Smith, Jane",widget,32,2.5,,shipped,5,1.250
+north,M. Okafor,12000,1012,2026-09-29,north,Bob Ng,hub,23,24,0.05,shipped,5,1.250
+north,M. Okafor,12000,1013,2026-09-24,north,Chen Wei,hub,2,24,0.1,shipped,4,1.250
+,,,1014,2026-09-01,west,Lee,cable 2m,21,3.75,0.05,pending,1,1.250
+north,M. Okafor,12000,1015,2026-09-29,north,Priya Nair,"Widget, large",13,7,,shipped,1,0.5
+north,M. Okafor,12000,1016,2026-09-21,north,Ünal Çelik,hub,39,24,0.1,shipped,4,0.125
+north,M. Okafor,12000,1017,2026-09-07,north,Priya Nair,gadget,28,19.99,,shipped,3,3e-1
+,,,1018,2026-09-27,west,Ünal Çelik,hub,33,24,0.15,cancelled,2,1.250
+north,M. Okafor,12000,1019,2026-09-03,north,Priya Nair,gadget,8,19.99,,pending,,4
+south,R. Silva,9500.5,1020,2026-09-07,south,"Ana ""Ace"" Ruiz",widget,24,2.5,0.05,pending,3,2.75
+,,,1021,2026-09-26,west,Priya Nair,gadget,10,19.99,0.1,pending,4,0.5
+south,R. Silva,9500.5,1022,2026-09-30,south,Lee,"Widget, large",36,7,,cancelled,3,1.250
+east,K. Tanaka,,1023,2026-09-27,east,Omar Haddad,widget,29,2.5,,returned,,12
+,,,1024,2026-09-05,west,"Ana ""Ace"" Ruiz",widget,20,2.5,,shipped,5,0.5
+,,,1025,2026-09-29,west,Chen Wei,gadget,33,19.99,0.1,pending,3,1.250
+,,,1026,2026-09-26,west,Chen Wei,cable 2m,12,3.75,,shipped,1,2.75
+east,K. Tanaka,,1027,2026-09-01,east,Lee,hub,33,24,,shipped,3,3e-1
+,,,1028,2026-09-06,west,Omar Haddad,"Widget, large",22,7,,cancelled,,0.5
+north,M. Okafor,12000,1029,2026-09-16,north,"Ana ""Ace"" Ruiz",widget,18,2.5,0.15,cancelled,5,0.125
+north,M. Okafor,12000,1030,2026-09-15,north,"Ana ""Ace"" Ruiz",hub,22,24,,shipped,4,0.125
+north,M. Okafor,12000,1031,2026-09-29,north,"Ana ""Ace"" Ruiz",gadget,33,19.99,0.05,returned,1,1.250
+south,R. Silva,9500.5,1032,2026-09-03,south,Priya Nair,hub,9,24,0.1,shipped,,12
+,,,1033,2026-09-15,west,Bob Ng,"Widget, large",4,7,0.1,cancelled,3,3e-1
+east,K. Tanaka,,1034,2026-09-29, east,"Smith, Jane",hub,21,24,0.05,shipped,3,3e-1
+north,M. Okafor,12000,1035,2026-09-18,north,Omar Haddad,hub,8,24,0.1,shipped,4,4
+north,M. Okafor,12000,1036,2026-09-08,north,"Smith, Jane","Widget, large",30,7,0.1,shipped,2,12
+north,M. Okafor,12000,1037,2026-09-12,north,Priya Nair,"Widget, large",25,7,,cancelled,,0.5
+,,,1038,2026-09-15,west,Ünal Çelik,cable 2m,14,3.75,,shipped,3,4
+,,,1039,2026-09-10,west,Omar Haddad,"Widget, large",22,7,,cancelled,2,4
+south,R. Silva,9500.5,1040,2026-09-25,south,Omar Haddad,gadget,9,19.99,0.15,cancelled,1,0.125
+east,K. Tanaka,,1041,2026-09-25,east,"Ana ""Ace"" Ruiz",cable 2m,7,3.75,,shipped,4,12
+,,,1042,2026-09-07,,Ünal Çelik,widget,35,2.5,,shipped,1,0.5
+east,K. Tanaka,,1043,2026-09-11,east,"Smith, Jane",widget,38,2.5,,returned,,0.5
+east,K. Tanaka,,1044,2026-09-11,east,"Ana ""Ace"" Ruiz",hub,4,24,0.1,shipped,5,0.125
+north,M. Okafor,12000,1045,2026-09-18,north,"Smith, Jane","Widget, large",36,7,,shipped,2,2.75
+east,K. Tanaka,,1046,2026-09-29,east,Bob Ng,gadget,32,19.99,0.1,shipped,4,0.5
+,,,1047,2026-09-29,west,"Ana ""Ace"" Ruiz",widget,10,2.5,,pending,1,3e-1
+south,R. Silva,9500.5,1048,2026-09-08,south,Lee,hub,,24,0.05,shipped,n/a,12
+east,K. Tanaka,,1049,2026-09-27,east,"Smith, Jane",widget,25,2.5,0.05,returned,2,1.250
+south,R. Silva,9500.5,1050,2026-09-27,south,"Ana ""Ace"" Ruiz",cable 2m,39,3.75,,cancelled,2,2.75
+,,,1051,2026-09-29,west,Ünal Çelik,widget,13,2.5,,shipped,1,2.75
+north,M. Okafor,12000,1052,2026-09-10,north,Ünal Çelik,"Widget, large",5,7,,shipped,4,0.5
+north,M. Okafor,12000,1053,2026-09-13,north,"Ana ""Ace"" Ruiz",widget,,2.5,0.05,pending,3,0.5
+north,M. Okafor,12000,1054,2026-09-24,north,"Smith, Jane",gadget,6,19.99,,pending,5,4
+south,R. Silva,9500.5,1055,2026-09-30,south,Lee,hub,39,24,,shipped,4,0.5
+,,,1056,2026-09-10,west,"Ana ""Ace"" Ruiz",cable 2m,31,3.75,,returned,1,3e-1
+east,K. Tanaka,,1057,2026-09-23,east,Priya Nair,gadget,38,19.99,0.05,cancelled,,2.75
+east,K. Tanaka,,1058,2026-09-28,east,Chen Wei,cable 2m,34,3.75,,shipped,2,2.75
+south,R. Silva,9500.5,1059,2026-09-02,south,Lee,"Widget, large",25,7,0.05,cancelled,4,4
+north,M. Okafor,12000,1060,2026-09-26,north,Omar Haddad,"Widget, large",38,7,,cancelled,2,0.125
+$ xsv join --full customer data/customers.csv customer data/customers2.csv
+customer,segment,country,customer,segment,country
+"smith, jane",retail,UK,,,
+ Bob Ng ,wholesale,SG,,,
+"Ana ""Ace"" Ruiz",retail,MX,,,
+Ünal Çelik,retail,TR,,,
+Chen Wei,wholesale,CN,,,
+Chen Wei,partner,CN,,,
+Dana Scully,retail,US,,,
+,unknown,,,,
+,,,Priya Nair,partner,IN
+,,,Omar Haddad,retail,JO
+$ xsv join --no-case customer data/orders.csv customer data/customers.csv
+order_id,date,region,customer,product,qty,unit_price,discount,status,rating,weight_kg,customer,segment,country
+1001,2026-09-21,east,Bob Ng,hub,20,24,,shipped,1,0.125, Bob Ng ,wholesale,SG
+1002,2026-09-18,north,"Smith, Jane",gadget,1,19.99,,cancelled,1,4,"smith, jane",retail,UK
+1003,2026-09-13,south,Bob Ng,hub,35,24,0.1,pending,,0.5, Bob Ng ,wholesale,SG
+1007,2026-09-30,north,Chen Wei,widget,20,2.5,,shipped,1,1.250,Chen Wei,wholesale,CN
+1007,2026-09-30,north,Chen Wei,widget,20,2.5,,shipped,1,1.250,Chen Wei,partner,CN
+1008,2026-09-02, west,Bob Ng,hub,36,24,,cancelled,4,12, Bob Ng ,wholesale,SG
+1009,2026-09-17,south,Bob Ng,"Widget, large",28,7,0.15,shipped,2,2.75, Bob Ng ,wholesale,SG
+1010,2026-09-04,west,Bob Ng,"Widget, large",17,7,0.15,cancelled,1,2.75, Bob Ng ,wholesale,SG
+1011,2026-09-07,west,"Smith, Jane",widget,32,2.5,,shipped,5,1.250,"smith, jane",retail,UK
+1012,2026-09-29,north,Bob Ng,hub,23,24,0.05,shipped,5,1.250, Bob Ng ,wholesale,SG
+1013,2026-09-24,north,Chen Wei,hub,2,24,0.1,shipped,4,1.250,Chen Wei,wholesale,CN
+1013,2026-09-24,north,Chen Wei,hub,2,24,0.1,shipped,4,1.250,Chen Wei,partner,CN
+1016,2026-09-21,north,Ünal Çelik,hub,39,24,0.1,shipped,4,0.125,Ünal Çelik,retail,TR
+1018,2026-09-27,west,Ünal Çelik,hub,33,24,0.15,cancelled,2,1.250,Ünal Çelik,retail,TR
+1020,2026-09-07,south,"Ana ""Ace"" Ruiz",widget,24,2.5,0.05,pending,3,2.75,"Ana ""Ace"" Ruiz",retail,MX
+1024,2026-09-05,west,"Ana ""Ace"" Ruiz",widget,20,2.5,,shipped,5,0.5,"Ana ""Ace"" Ruiz",retail,MX
+1025,2026-09-29,west,Chen Wei,gadget,33,19.99,0.1,pending,3,1.250,Chen Wei,wholesale,CN
+1025,2026-09-29,west,Chen Wei,gadget,33,19.99,0.1,pending,3,1.250,Chen Wei,partner,CN
+1026,2026-09-26,west,Chen Wei,cable 2m,12,3.75,,shipped,1,2.75,Chen Wei,wholesale,CN
+1026,2026-09-26,west,Chen Wei,cable 2m,12,3.75,,shipped,1,2.75,Chen Wei,partner,CN
+1029,2026-09-16,north,"Ana ""Ace"" Ruiz",widget,18,2.5,0.15,cancelled,5,0.125,"Ana ""Ace"" Ruiz",retail,MX
+1030,2026-09-15,north,"Ana ""Ace"" Ruiz",hub,22,24,,shipped,4,0.125,"Ana ""Ace"" Ruiz",retail,MX
+1031,2026-09-29,north,"Ana ""Ace"" Ruiz",gadget,33,19.99,0.05,returned,1,1.250,"Ana ""Ace"" Ruiz",retail,MX
+1033,2026-09-15,west,Bob Ng,"Widget, large",4,7,0.1,cancelled,3,3e-1, Bob Ng ,wholesale,SG
+1034,2026-09-29, east,"Smith, Jane",hub,21,24,0.05,shipped,3,3e-1,"smith, jane",retail,UK
+1036,2026-09-08,north,"Smith, Jane","Widget, large",30,7,0.1,shipped,2,12,"smith, jane",retail,UK
+1038,2026-09-15,west,Ünal Çelik,cable 2m,14,3.75,,shipped,3,4,Ünal Çelik,retail,TR
+1041,2026-09-25,east,"Ana ""Ace"" Ruiz",cable 2m,7,3.75,,shipped,4,12,"Ana ""Ace"" Ruiz",retail,MX
+1042,2026-09-07,,Ünal Çelik,widget,35,2.5,,shipped,1,0.5,Ünal Çelik,retail,TR
+1043,2026-09-11,east,"Smith, Jane",widget,38,2.5,,returned,,0.5,"smith, jane",retail,UK
+1044,2026-09-11,east,"Ana ""Ace"" Ruiz",hub,4,24,0.1,shipped,5,0.125,"Ana ""Ace"" Ruiz",retail,MX
+1045,2026-09-18,north,"Smith, Jane","Widget, large",36,7,,shipped,2,2.75,"smith, jane",retail,UK
+1046,2026-09-29,east,Bob Ng,gadget,32,19.99,0.1,shipped,4,0.5, Bob Ng ,wholesale,SG
+1047,2026-09-29,west,"Ana ""Ace"" Ruiz",widget,10,2.5,,pending,1,3e-1,"Ana ""Ace"" Ruiz",retail,MX
+1049,2026-09-27,east,"Smith, Jane",widget,25,2.5,0.05,returned,2,1.250,"smith, jane",retail,UK
+1050,2026-09-27,south,"Ana ""Ace"" Ruiz",cable 2m,39,3.75,,cancelled,2,2.75,"Ana ""Ace"" Ruiz",retail,MX
+1051,2026-09-29,west,Ünal Çelik,widget,13,2.5,,shipped,1,2.75,Ünal Çelik,retail,TR
+1052,2026-09-10,north,Ünal Çelik,"Widget, large",5,7,,shipped,4,0.5,Ünal Çelik,retail,TR
+1053,2026-09-13,north,"Ana ""Ace"" Ruiz",widget,,2.5,0.05,pending,3,0.5,"Ana ""Ace"" Ruiz",retail,MX
+1054,2026-09-24,north,"Smith, Jane",gadget,6,19.99,,pending,5,4,"smith, jane",retail,UK
+1056,2026-09-10,west,"Ana ""Ace"" Ruiz",cable 2m,31,3.75,,returned,1,3e-1,"Ana ""Ace"" Ruiz",retail,MX
+1058,2026-09-28,east,Chen Wei,cable 2m,34,3.75,,shipped,2,2.75,Chen Wei,wholesale,CN
+1058,2026-09-28,east,Chen Wei,cable 2m,34,3.75,,shipped,2,2.75,Chen Wei,partner,CN
+$ xsv join 1 data/customers.csv 1 data/customers.csv
+customer,segment,country,customer,segment,country
+"smith, jane",retail,UK,"smith, jane",retail,UK
+ Bob Ng ,wholesale,SG, Bob Ng ,wholesale,SG
+"Ana ""Ace"" Ruiz",retail,MX,"Ana ""Ace"" Ruiz",retail,MX
+Ünal Çelik,retail,TR,Ünal Çelik,retail,TR
+Chen Wei,wholesale,CN,Chen Wei,wholesale,CN
+Chen Wei,wholesale,CN,Chen Wei,partner,CN
+Chen Wei,partner,CN,Chen Wei,wholesale,CN
+Chen Wei,partner,CN,Chen Wei,partner,CN
+Dana Scully,retail,US,Dana Scully,retail,US
+$ xsv join --nulls 1 data/customers.csv 1 data/customers.csv
+customer,segment,country,customer,segment,country
+"smith, jane",retail,UK,"smith, jane",retail,UK
+ Bob Ng ,wholesale,SG, Bob Ng ,wholesale,SG
+"Ana ""Ace"" Ruiz",retail,MX,"Ana ""Ace"" Ruiz",retail,MX
+Ünal Çelik,retail,TR,Ünal Çelik,retail,TR
+Chen Wei,wholesale,CN,Chen Wei,wholesale,CN
+Chen Wei,wholesale,CN,Chen Wei,partner,CN
+Chen Wei,partner,CN,Chen Wei,wholesale,CN
+Chen Wei,partner,CN,Chen Wei,partner,CN
+Dana Scully,retail,US,Dana Scully,retail,US
+,unknown,,,unknown,
+$ xsv join --cross region data/regions.tsv name data/dupes.csv
+region,manager,quarterly_target,name,age,name
+north,M. Okafor,12000,ada,36,lovelace
+north,M. Okafor,12000,alan,41,turing
+north,M. Okafor,12000,grace,85,hopper
+south,R. Silva,9500.5,ada,36,lovelace
+south,R. Silva,9500.5,alan,41,turing
+south,R. Silva,9500.5,grace,85,hopper
+east,K. Tanaka,,ada,36,lovelace
+east,K. Tanaka,,alan,41,turing
+east,K. Tanaka,,grace,85,hopper
+central,A. Novak,7000,ada,36,lovelace
+central,A. Novak,7000,alan,41,turing
+central,A. Novak,7000,grace,85,hopper
+$ xsv join 1,2 data/customers.csv 1 data/regions.tsv
+! Column selections must have the same number of columns, but found column selections with 2 and 1 columns.
+[exit 1]
+$ xsv join --left --full 1 data/customers.csv 1 data/regions.tsv
+! Please pick exactly one join operation.
+[exit 1]
+$ xsv fixlengths data/ragged.csv
+a,b,c,
+1,2,,
+3,4,5,6
+7,,,
+8,,,
+$ xsv fixlengths -l 2 data/ragged.csv
+a,b
+1,2
+3,4
+7,
+8,
+$ xsv fixlengths -l 0 data/ragged.csv
+! Length must be greater than 0.
+[exit 1]
+$ xsv flatten data/regions.tsv
+region            north
+manager           M. Okafor
+quarterly_target  12000
+#
+region            south
+manager           R. Silva
+quarterly_target  9500.5
+#
+region            east
+manager           K. Tanaka
+quarterly_target  
+#
+region            central
+manager           A. Novak
+quarterly_target  7000
+$ xsv flatten -c 6 data/dupes.csv
+name  ada
+age   36
+name  lovela...
+#
+name  alan
+age   41
+name  turing
+#
+name  grace
+age   85
+name  hopper
+$ xsv flatten -s '' -n data/dupes.csv
+0   name
+1   age
+2   name
+0   ada
+1   36
+2   lovelace
+0   alan
+1   41
+2   turing
+0   grace
+1   85
+2   hopper
+$ xsv table data/regions.tsv
+region   manager    quarterly_target
+north    M. Okafor  12000
+south    R. Silva   9500.5
+east     K. Tanaka  
+central  A. Novak   7000
+$ xsv table -w 6 -p 1 data/customers.csv
+customer           segment   country
+smith, jane        retail    UK
+ Bob Ng            wholesale SG
+"Ana ""Ace"" Ruiz" retail    MX
+Ünal Çelik         retail    TR
+Chen Wei           wholesale CN
+Chen Wei           partner   CN
+Dana Scully        retail    US
+                   unknown   
+$ xsv table -c 5 data/sensors.csv
+id   readi...  count...  flag   label
+s1   -0.5      90071...  true   12
+s2   .5        -42       false   12
+s3   1.        +15              alpha
+s4   +7        99999...  true   beta
+s5   1e3       0         false  gamma
+s6   2.5E-...  17               12
+s7   -12.7...  -3        true   
+s8             8         false  delta
+s9   0.1       8         true   beta
+s10  0.2                 false  beta
+s11  1e21      5                alpha
+s12  0.000...  5         true   epsil...
+$ xsv fmt -t ';' data/quoted.csv
+id;text;note
+1;Hello, world;"said ""hi"""
+2;"multi
+line";plain
+3;abcd;x
+4;;
+5;"semi;colon";tab	here
+$ xsv fmt --quote-always data/regions.tsv
+"region","manager","quarterly_target"
+"north","M. Okafor","12000"
+"south","R. Silva","9500.5"
+"east","K. Tanaka",""
+"central","A. Novak","7000"
+$ xsv fmt --crlf data/dupes.csv
+name,age,name
+ada,36,lovelace
+alan,41,turing
+grace,85,hopper
+$ xsv fmt --ascii data/dupes.csv
+nameagenameada36lovelacealan41turinggrace85hopper
+\ no newline at end of output
+$ xsv fmt -t '\t' data/quoted.csv
+id	text	note
+1	Hello, world	"said ""hi"""
+2	"multi
+line"	plain
+3	abcd	x
+4		
+5	semi;colon	"tab	here"
+$ xsv fmt --escape '\' --quote ''"'"'' data/quoted.csv
+id,text,note
+1,'Hello, world',said "hi"
+2,'multi
+line',plain
+3,abcd,x
+4,,
+5,semi;colon,tab	here
+$ xsv cat rows data/customers.csv data/customers2.csv
+customer,segment,country
+"smith, jane",retail,UK
+ Bob Ng ,wholesale,SG
+"Ana ""Ace"" Ruiz",retail,MX
+Ünal Çelik,retail,TR
+Chen Wei,wholesale,CN
+Chen Wei,partner,CN
+Dana Scully,retail,US
+,unknown,
+Priya Nair,partner,IN
+Omar Haddad,retail,JO
+$ xsv cat rows -n data/regions.tsv data/customers.csv
+region,manager,quarterly_target
+north,M. Okafor,12000
+south,R. Silva,9500.5
+east,K. Tanaka,
+central,A. Novak,7000
+customer,segment,country
+"smith, jane",retail,UK
+ Bob Ng ,wholesale,SG
+"Ana ""Ace"" Ruiz",retail,MX
+Ünal Çelik,retail,TR
+Chen Wei,wholesale,CN
+Chen Wei,partner,CN
+Dana Scully,retail,US
+,unknown,
+$ xsv cat rows data/customers.csv data/sensors.csv
+customer,segment,country
+"smith, jane",retail,UK
+ Bob Ng ,wholesale,SG
+"Ana ""Ace"" Ruiz",retail,MX
+Ünal Çelik,retail,TR
+Chen Wei,wholesale,CN
+Chen Wei,partner,CN
+Dana Scully,retail,US
+,unknown,
+s1,-0.5,9007199254740993,true,12
+\ no newline at end of output
+! CSV error: found record with 5 fields, but the previous record has 3 fields
+[exit 1]
+$ xsv cat columns data/regions.tsv data/dupes.csv
+region,manager,quarterly_target,name,age,name
+north,M. Okafor,12000,ada,36,lovelace
+south,R. Silva,9500.5,alan,41,turing
+east,K. Tanaka,,grace,85,hopper
+$ xsv cat columns --pad data/regions.tsv data/customers2.csv
+region,manager,quarterly_target,customer,segment,country
+north,M. Okafor,12000,Priya Nair,partner,IN
+south,R. Silva,9500.5,Omar Haddad,retail,JO
+east,K. Tanaka,,,,
+central,A. Novak,7000,,,

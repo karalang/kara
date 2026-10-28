@@ -1,0 +1,2226 @@
+// mini_xsv: a port of xsv 0.13.0 (Andrew Gallant, MIT/Unlicense), the Rust
+// command line CSV toolkit, to Kāra. Fourteen of its commands are here:
+// count, headers, select, slice, search, sort, frequency, stats, join,
+// fixlengths, flatten, table, fmt and cat, with xsv's column selection
+// syntax, its type inference for stats, and the behaviour of the crates it
+// is built on: csv (reading and quoting), streaming-stats (running mean and
+// variance, median, mode, frequencies) and tabwriter (elastic tabstops).
+//
+// The program writes its inputs into data/ and then runs data/jobs.txt,
+// one xsv command line per line with its arguments separated by tabs,
+// printing each command and what it wrote. An error prints after the
+// output the command had already written, as xsv's buffered writer
+// flushes it, with "!" before each line of the message.
+//
+// `stats -j N` and `frequency -j N` split the records into xsv's chunks
+// and compute each chunk in its own task, then merge the chunks in file
+// order; xsv does this only for an indexed file and merges in the order the
+// chunks finish. Frequency ties, which xsv leaves in hash map order, come
+// out by value.
+
+import std.regex.{Regex};
+import std.sync.{TaskGroup};
+
+// ============================================================ numbers
+
+fn all_digits(s: Str) -> bool {
+    if s.len() == 0 {
+        return false;
+    }
+    for c in s.chars() {
+        if c < '0' or c > '9' {
+            return false;
+        }
+    }
+    true
+}
+
+fn unsigned(s: Str) -> Str {
+    match s.strip_prefix("+") {
+        Some(rest) => rest,
+        None => match s.strip_prefix("-") {
+            Some(rest) => rest,
+            None => s,
+        },
+    }
+}
+
+// Rust's `i64::from_str`: an optional sign and digits, nothing else.
+fn rust_int(s: Str) -> Option[i64] {
+    if not all_digits(unsigned(s)) {
+        return None;
+    }
+    i64.parse(s).ok()
+}
+
+// Rust's `f64::from_str` for decimal text: digits with an optional point
+// and fraction (either side may be empty, not both), then an exponent.
+fn rust_float(s: Str) -> Option[f64] {
+    let body = unsigned(s);
+    let (mant, exp) = match body.find("e") {
+        Some(i) => (body[0..i], Some(body[i + 1..body.len()])),
+        None => match body.find("E") {
+            Some(i) => (body[0..i], Some(body[i + 1..body.len()])),
+            None => (body, None),
+        },
+    };
+    let ok_mant = match mant.split_once(".") {
+        Some((a, b)) => (all_digits(a) or a.len() == 0) and (all_digits(b) or b.len() == 0)
+            and a.len() + b.len() > 0,
+        None => all_digits(mant),
+    };
+    if not ok_mant {
+        return None;
+    }
+    if let Some(e) = exp {
+        if not all_digits(unsigned(e)) {
+            return None;
+        }
+    }
+    f64.parse(s).ok()
+}
+
+// Rust's `Display` for f64: the shortest digits that read back, written
+// out in full with no exponent, and no ".0" on a whole number.
+fn show_f64(x: f64) -> String {
+    let r = x.to_string();
+    if r == "NaN" or r == "inf" or r == "-inf" {
+        return r;
+    }
+    let neg = r.starts_with("-");
+    let mut body = if neg { r.substring(1) } else { r.clone() };
+    let mut exp: i64 = 0;
+    if let Some(i) = body.find("e") {
+        exp = rust_int(body[i + 1..body.len()]) ?? 0;
+        body = body.substring(0, i);
+    }
+    let (ip, fp) = match body.split_once(".") {
+        Some((a, b)) => (a.to_string(), b.to_string()),
+        None => (body.clone(), String.new()),
+    };
+    let digits = ip.clone() + fp;
+    let point = ip.len() + exp;
+    let mut s = String.new();
+    if point <= 0 {
+        s.push_str("0.");
+        for _ in 0..(0 - point) {
+            s.push('0');
+        }
+        s.push_str(digits);
+    } else if point >= digits.len() {
+        s.push_str(digits);
+        for _ in 0..(point - digits.len()) {
+            s.push('0');
+        }
+    } else {
+        s.push_str(digits[0..point]);
+        s.push('.');
+        s.push_str(digits[point..digits.len()]);
+    }
+    if s.contains(".") {
+        while s.ends_with("0") {
+            s.pop();
+        }
+        if s.ends_with(".") {
+            s.pop();
+        }
+    }
+    let mut start = 0;
+    while start < s.len() - 1 and s.bytes()[start] == b'0' and s.bytes()[start + 1] != b'.' {
+        start += 1;
+    }
+    let out = s.substring(start);
+    if neg {
+        "-".to_string() + out
+    } else {
+        out
+    }
+}
+
+// ============================================================ CSV reading
+
+// One record as csv-core reads it, with where its read began.
+struct Raw {
+    fields: Vec[String],
+    byte: i64,
+    line: i64,
+}
+
+enum Item {
+    Rec(Vec[String]),
+    Bad(String),
+}
+
+// A file as a csv::Reader sees it: the first record, and the records after
+// it (all of them with no headers). Past a record of the wrong length a
+// strict reader yields an error and goes on reading.
+struct Csv {
+    headers: Vec[String],
+    items: Vec[Item],
+}
+
+enum St {
+    Start,
+    Field,
+    Quoted,
+    EndQuote,
+}
+
+fn parse_csv(text: Str, delim: u8) -> Vec[Raw] {
+    let bs = text.bytes();
+    let n = text.len();
+    let mut out: Vec[Raw] = Vec.new();
+    let mut i: i64 = 0;
+    let mut newlines: i64 = 0;
+    let mut counted: i64 = 0;
+    while i < n {
+        let start = i;
+        while i < n and (bs[i] == b'\n' or bs[i] == b'\r') {
+            i += 1;
+        }
+        if i >= n {
+            break;
+        }
+        let mut fields: Vec[String] = Vec.new();
+        let mut cur = String.new();
+        let mut seg = i;
+        let mut st = St.Start;
+        loop {
+            if i >= n {
+                match st {
+                    St.Field | St.Quoted => cur.push_str(text[seg..n]),
+                    _ => {}
+                }
+                fields.push(cur);
+                break;
+            }
+            let c = bs[i];
+            i += 1;
+            match st {
+                St.Start => {
+                    if c == b'"' {
+                        st = St.Quoted;
+                        seg = i;
+                    } else if c == delim {
+                        fields.push(cur);
+                        cur = String.new();
+                    } else if c == b'\n' or c == b'\r' {
+                        fields.push(cur);
+                        break;
+                    } else {
+                        st = St.Field;
+                        seg = i - 1;
+                    }
+                }
+                St.Field => {
+                    if c == delim {
+                        cur.push_str(text[seg..i - 1]);
+                        fields.push(cur);
+                        cur = String.new();
+                        st = St.Start;
+                    } else if c == b'\n' or c == b'\r' {
+                        cur.push_str(text[seg..i - 1]);
+                        fields.push(cur);
+                        break;
+                    }
+                }
+                St.Quoted => {
+                    if c == b'"' {
+                        cur.push_str(text[seg..i - 1]);
+                        st = St.EndQuote;
+                    }
+                }
+                St.EndQuote => {
+                    if c == b'"' {
+                        cur.push('"');
+                        st = St.Quoted;
+                        seg = i;
+                    } else if c == delim {
+                        fields.push(cur);
+                        cur = String.new();
+                        st = St.Start;
+                    } else if c == b'\n' or c == b'\r' {
+                        fields.push(cur);
+                        break;
+                    } else {
+                        st = St.Field;
+                        seg = i - 1;
+                    }
+                }
+            }
+        }
+        while counted < start {
+            if bs[counted] == b'\n' {
+                newlines += 1;
+            }
+            counted += 1;
+        }
+        out.push(Raw { fields, byte: start, line: newlines + 1 });
+    }
+    out
+}
+
+fn default_delim(path: Str) -> u8 {
+    if path.ends_with(".tsv") { b'\t' } else { b',' }
+}
+
+fn open_csv(path: Str, delim: Option[u8], no_headers: bool, flexible: bool) -> Result[Csv, String] {
+    let text = match fs.read_to_string(path.to_string()) {
+        Ok(t) => t,
+        Err(e) => return Err(f"{path}: {e}"),
+    };
+    let d = delim ?? default_delim(path);
+    let raw = parse_csv(text, d);
+    let mut items: Vec[Item] = Vec.new();
+    let mut expected: i64 = -1;
+    let mut headers: Vec[String] = Vec.new();
+    let mut k: i64 = 0;
+    for r in raw {
+        if k == 0 {
+            headers = r.fields.clone();
+        }
+        let len = r.fields.len();
+        if not flexible and expected >= 0 and len != expected {
+            let (line, byte) = (r.line, r.byte);
+            items.push(Item.Bad(f"CSV error: record {k} (line: {line}, byte: {byte}): found record with {len} fields, but the previous record has {expected} fields"));
+        } else {
+            if expected < 0 {
+                expected = len;
+            }
+            if k > 0 or no_headers {
+                items.push(Item.Rec(r.fields.clone()));
+            }
+        }
+        k += 1;
+    }
+    Ok(Csv { headers, items })
+}
+
+fn rec(item: Item) -> Result[Vec[String], String] {
+    match item {
+        Item.Rec(fields) => Ok(fields.clone()),
+        Item.Bad(msg) => Err(msg.clone()),
+    }
+}
+
+// ============================================================ CSV writing
+
+// A csv::Writer: quotes a field only when it must, and refuses a record
+// whose length differs from the first one's after the record's fields are
+// already in its buffer.
+struct CsvOut {
+    delim: char,
+    term: String,
+    quote: char,
+    always: bool,
+    escape: Option[char],
+    expected: i64,
+    buf: String,
+}
+
+fn csv_out(delim: char, term: Str, quote: char, always: bool, escape: Option[char]) -> CsvOut {
+    CsvOut { delim, term: term.to_string(), quote, always, escape, expected: -1, buf: String.new() }
+}
+
+impl CsvOut {
+    fn needs_quotes(self, f: Str) -> bool {
+        if self.always {
+            return true;
+        }
+        for c in f.chars() {
+            if c == self.delim or c == self.quote {
+                return true;
+            }
+            if let Some(e) = self.escape {
+                if c == e {
+                    return true;
+                }
+            }
+            if self.term == "\n" or self.term == "\r\n" {
+                if c == '\n' or c == '\r' {
+                    return true;
+                }
+            } else if self.term.starts_with(c.to_string()) {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn write(mut ref self, fields: Vec[String]) -> Result[(), String] {
+        let start = self.buf.len();
+        for k in 0..fields.len() {
+            if k > 0 {
+                self.buf.push(self.delim);
+            }
+            let f = fields[k].as_str();
+            if self.needs_quotes(f) {
+                self.buf.push(self.quote);
+                for c in f.chars() {
+                    if c == self.quote {
+                        match self.escape {
+                            Some(e) => self.buf.push(e),
+                            None => self.buf.push(self.quote),
+                        }
+                    }
+                    self.buf.push(c);
+                }
+                self.buf.push(self.quote);
+            } else {
+                self.buf.push_str(f);
+            }
+        }
+        let len = fields.len();
+        if self.expected < 0 {
+            self.expected = len;
+        } else if self.expected != len {
+            let expected = self.expected;
+            return Err(f"CSV error: found record with {len} fields, but the previous record has {expected} fields");
+        }
+        if self.buf.len() == start {
+            self.buf.push(self.quote);
+            self.buf.push(self.quote);
+        }
+        self.buf.push_str(self.term);
+        Ok(())
+    }
+}
+
+// ============================================================ tabwriter
+
+// Elastic tabstops as the tabwriter crate lays them out: a cell ends at a
+// tab, a column is as wide as its widest cell in the run of lines that
+// have it (at least `minwidth`), and a line with a single cell ends every
+// column, so the text before it is written out on its own.
+struct TabWriter {
+    minwidth: i64,
+    padding: i64,
+    lines: Vec[Vec[String]],
+    cur: String,
+    out: String,
+}
+
+fn tab_writer(minwidth: i64, padding: i64) -> TabWriter {
+    TabWriter { minwidth, padding, lines: [Vec.new()].to_vec(), cur: String.new(), out: String.new() }
+}
+
+fn width(s: Str) -> i64 {
+    s.chars().count()
+}
+
+impl TabWriter {
+    fn end_cell(mut ref self) {
+        let last = self.lines.len() - 1;
+        let cell = self.cur.clone();
+        self.lines[last].push(cell);
+        self.cur = String.new();
+    }
+
+    fn write(mut ref self, text: Str) {
+        for c in text.chars() {
+            if c == '\t' or c == '\n' {
+                self.end_cell();
+                if c == '\n' {
+                    let ncells = self.lines[self.lines.len() - 1].len();
+                    self.lines.push(Vec.new());
+                    if ncells == 1 {
+                        self.flush();
+                    }
+                }
+            } else {
+                self.cur.push(c);
+            }
+        }
+    }
+
+    fn flush(mut ref self) {
+        if self.cur.len() > 0 {
+            self.end_cell();
+        }
+        let n = self.lines.len();
+        let mut ws: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..n {
+            ws.push(Vec.new());
+        }
+        for i in 0..n {
+            let cells = self.lines[i].len();
+            if cells == 0 {
+                continue;
+            }
+            for col in ws[i].len()..(cells - 1) {
+                let mut w = self.minwidth;
+                let mut count = 0;
+                for j in i..n {
+                    if col + 1 >= self.lines[j].len() {
+                        break;
+                    }
+                    count += 1;
+                    w = w.max(width(self.lines[j][col]));
+                }
+                for j in i..(i + count) {
+                    ws[j].push(w);
+                }
+            }
+        }
+        for i in 0..n {
+            if i > 0 {
+                self.out.push('\n');
+            }
+            let cells = self.lines[i].len();
+            for k in 0..cells {
+                let cell = self.lines[i][k].clone();
+                self.out.push_str(cell);
+                if k < ws[i].len() {
+                    let pad = ws[i][k] - width(cell) + self.padding;
+                    for _ in 0..pad {
+                        self.out.push(' ');
+                    }
+                }
+            }
+        }
+        self.lines = [Vec.new()].to_vec();
+    }
+}
+
+fn tabwrite(text: Str, minwidth: i64, padding: i64) -> String {
+    let mut tw = tab_writer(minwidth, padding);
+    tw.write(text);
+    tw.flush();
+    tw.out
+}
+
+fn condense(s: Str, n: Option[i64]) -> String {
+    match n {
+        Some(n) if n < s.chars().count() => {
+            let mut t: String = s.chars().take(n).collect();
+            t.push_str("...");
+            t
+        }
+        _ => s.to_string(),
+    }
+}
+
+// ============================================================ selections
+
+enum One {
+    Start,
+    End,
+    Index(i64),
+    Name(String, i64),
+}
+
+struct Selector {
+    first: One,
+    last: Option[One],
+}
+
+struct SelectColumns {
+    selectors: Vec[Selector],
+    invert: bool,
+}
+
+struct SelParser {
+    chars: Vec[char],
+    pos: i64,
+}
+
+impl SelParser {
+    fn cur(self) -> Option[char] {
+        if self.pos < self.chars.len() { Some(self.chars[self.pos]) } else { None }
+    }
+
+    fn bump(mut ref self) {
+        if self.pos < self.chars.len() {
+            self.pos += 1;
+        }
+    }
+
+    fn end_of_field(self) -> bool {
+        match self.cur() {
+            None => true,
+            Some(c) => c == ',' or c == '-',
+        }
+    }
+
+    fn end_of_selector(self) -> bool {
+        match self.cur() {
+            None => true,
+            Some(c) => c == ',',
+        }
+    }
+
+    fn parse(mut ref self) -> Result[Vec[Selector], String] {
+        let mut sels: Vec[Selector] = Vec.new();
+        while self.cur().is_some() {
+            let first = if self.cur() == Some('-') { One.Start } else { self.parse_one()? };
+            let mut last: Option[One] = None;
+            if self.cur() == Some('-') {
+                self.bump();
+                last = Some(if self.end_of_selector() { One.End } else { self.parse_one()? });
+            }
+            if not self.end_of_selector() {
+                let c = self.cur() ?? ' ';
+                return Err(f"Expected end of field but got '{c}' instead.");
+            }
+            sels.push(Selector { first, last });
+            self.bump();
+        }
+        Ok(sels)
+    }
+
+    fn parse_one(mut ref self) -> Result[One, String] {
+        let mut name = String.new();
+        if self.cur() == Some('"') {
+            self.bump();
+            loop {
+                match self.cur() {
+                    None => return Err("Unclosed quote, missing closing \".".to_string()),
+                    Some('"') => {
+                        self.bump();
+                        if self.cur() == Some('"') {
+                            self.bump();
+                            name.push_str("\"\"");
+                            continue;
+                        }
+                        break;
+                    }
+                    Some(c) => {
+                        name.push(c);
+                        self.bump();
+                    }
+                }
+            }
+        } else {
+            while not (self.end_of_field() or self.cur() == Some('[')) {
+                name.push(self.cur() ?? ' ');
+                self.bump();
+            }
+        }
+        if self.cur() == Some('[') {
+            self.bump();
+            let mut idx = String.new();
+            loop {
+                match self.cur() {
+                    None => return Err("Unclosed index bracket, missing closing ].".to_string()),
+                    Some(']') => {
+                        self.bump();
+                        break;
+                    }
+                    Some(c) => {
+                        idx.push(c);
+                        self.bump();
+                    }
+                }
+            }
+            if not all_digits(idx) {
+                return Err(f"Could not convert '{idx}' to an integer: invalid digit found in string");
+            }
+            return Ok(One.Name(name, i64.parse(idx).ok() ?? 0));
+        }
+        let digits = name.strip_prefix("+") ?? name.as_str();
+        if all_digits(digits) {
+            return Ok(One.Index(i64.parse(digits).ok() ?? 0));
+        }
+        Ok(One.Name(name, 0))
+    }
+}
+
+fn parse_selection(spec: Str) -> Result[SelectColumns, String] {
+    let mut s = spec;
+    let mut invert = false;
+    if let Some(rest) = spec.strip_prefix("!") {
+        s = rest;
+        invert = true;
+    }
+    let mut p = SelParser { chars: s.chars().collect(), pos: 0 };
+    let selectors = p.parse()?;
+    Ok(SelectColumns { selectors, invert })
+}
+
+fn one_index(one: One, first: Vec[String], use_names: bool) -> Result[i64, String] {
+    match one {
+        One.Start => Ok(0),
+        One.End => Ok(if first.len() == 0 { 0 } else { first.len() - 1 }),
+        One.Index(i) => {
+            let n = first.len();
+            if i < 1 or i > n {
+                Err(f"Selector index {i} is out of bounds. Index must be >= 1 and <= {n}.")
+            } else {
+                Ok(i - 1)
+            }
+        }
+        One.Name(name, sidx) => {
+            if not use_names {
+                return Err(f"Cannot use names ('{name}') in selection with --no-headers set.");
+            }
+            let mut found = 0;
+            for i in 0..first.len() {
+                if first[i] == name {
+                    if found == sidx {
+                        return Ok(i);
+                    }
+                    found += 1;
+                }
+            }
+            if found == 0 {
+                Err(f"Selector name '{name}' does not exist as a named header in the given CSV data.")
+            } else {
+                let most = found - 1;
+                Err(f"Selector index '{sidx}' for name '{name}' is out of bounds. Must be >= 0 and <= {most}.")
+            }
+        }
+    }
+}
+
+fn selection(cols: SelectColumns, first: Vec[String], use_names: bool) -> Result[Vec[i64], String] {
+    let mut idxs: Vec[i64] = Vec.new();
+    if cols.selectors.len() == 0 {
+        if not cols.invert {
+            for i in 0..first.len() {
+                idxs.push(i);
+            }
+        }
+        return Ok(idxs);
+    }
+    for sel in cols.selectors {
+        let a = one_index(sel.first, first, use_names)?;
+        match sel.last {
+            None => idxs.push(a),
+            Some(last) => {
+                let b = one_index(last, first, use_names)?;
+                if a <= b {
+                    for i in a..(b + 1) {
+                        idxs.push(i);
+                    }
+                } else {
+                    let mut i = a;
+                    while i >= b {
+                        idxs.push(i);
+                        i -= 1;
+                    }
+                }
+            }
+        }
+    }
+    if cols.invert {
+        let chosen: Set[i64] = idxs.iter().map(|i| *i).collect();
+        let mut rest: Vec[i64] = Vec.new();
+        for i in 0..first.len() {
+            if not chosen.contains(i) {
+                rest.push(i);
+            }
+        }
+        return Ok(rest);
+    }
+    Ok(idxs)
+}
+
+fn pick(fields: Vec[String], sel: Vec[i64]) -> Vec[String] {
+    sel.iter().map(|i| fields[*i].clone()).collect()
+}
+
+// ============================================================ arguments
+
+struct Args {
+    opts: Map[String, String],
+    pos: Vec[String],
+}
+
+impl Args {
+    fn get(self, name: Str) -> Option[String] {
+        match self.opts.get(name.to_string()) {
+            Some(v) => Some(v.clone()),
+            None => None,
+        }
+    }
+
+    fn flag(self, name: Str) -> bool {
+        self.opts.contains_key(name.to_string())
+    }
+
+    fn num(self, name: Str, default: i64) -> Result[i64, String] {
+        match self.get(name) {
+            None => Ok(default),
+            Some(v) => match rust_int(v) {
+                Some(n) if n >= 0 => Ok(n),
+                _ => Err(f"Could not parse '{v}' as a number for --{name}."),
+            },
+        }
+    }
+
+    fn maybe_num(self, name: Str) -> Result[Option[i64], String] {
+        if self.flag(name) { Ok(Some(self.num(name, 0)?)) } else { Ok(None) }
+    }
+
+    fn delimiter(self) -> Option[u8] {
+        match self.get("d") {
+            None => None,
+            Some(d) => Some(delim_byte(d)),
+        }
+    }
+}
+
+fn delim_byte(d: Str) -> u8 {
+    if d == "\\t" { b'\t' } else { d.bytes()[0] }
+}
+
+// The value flags and the switches of each command, by short name.
+fn spec(cmd: Str) -> (Str, Str) {
+    match cmd {
+        "count" => ("", "n"),
+        "headers" => ("", "j intersect"),
+        "select" => ("d", "n"),
+        "slice" => ("s e l i d", "n"),
+        "search" => ("s d", "i v n"),
+        "sort" => ("s d", "N R n"),
+        "frequency" => ("s l j d", "a no-nulls n"),
+        "stats" => ("s j d", "everything mode cardinality median nulls n"),
+        "join" => ("d", "left right full cross no-case nulls n"),
+        "fixlengths" => ("l d", ""),
+        "flatten" => ("c s d", "n"),
+        "table" => ("w p c d", ""),
+        "fmt" => ("t quote escape d", "crlf ascii quote-always"),
+        "cat" => ("d", "pad n"),
+        _ => ("", ""),
+    }
+}
+
+fn long_name(name: Str) -> Str {
+    match name {
+        "select" | "separator" | "start" => "s",
+        "end" => "e",
+        "len" | "limit" | "length" => "l",
+        "index" | "ignore-case" => "i",
+        "jobs" | "just-names" => "j",
+        "condense" => "c",
+        "width" => "w",
+        "out-delimiter" => "t",
+        "delimiter" => "d",
+        "no-headers" => "n",
+        "invert-match" => "v",
+        "numeric" => "N",
+        "reverse" => "R",
+        "asc" => "a",
+        _ => name,
+    }
+}
+
+fn parse_args(cmd: Str, argv: Vec[String]) -> Result[Args, String] {
+    let (vals, bools) = spec(cmd);
+    let vals: Vec[Str] = vals.split_whitespace().collect();
+    let bools: Vec[Str] = bools.split_whitespace().collect();
+    let mut opts: Map[String, String] = Map.new();
+    let mut pos: Vec[String] = Vec.new();
+    let mut k = 0;
+    while k < argv.len() {
+        let a = argv[k].as_str();
+        k += 1;
+        if a.starts_with("-") and a != "-" {
+            let mut name = a.strip_prefix("--") ?? a[1..a.len()];
+            if not vals.contains(name) and not bools.contains(name) {
+                name = long_name(name);
+            }
+            if cmd == "cat" and a == "-p" {
+                name = "pad";
+            }
+            if vals.contains(name) {
+                if k >= argv.len() {
+                    return Err(f"Missing value for '{a}'");
+                }
+                opts.insert(name.to_string(), argv[k].clone());
+                k += 1;
+            } else if bools.contains(name) {
+                opts.insert(name.to_string(), "true".to_string());
+            } else {
+                return Err(f"Unknown flag: '{a}'");
+            }
+        } else {
+            pos.push(a.to_string());
+        }
+    }
+    Ok(Args { opts, pos })
+}
+
+// ============================================================ commands
+
+// What one command printed: through its csv::Writer, or directly.
+struct Job {
+    w: CsvOut,
+    out: String,
+}
+
+fn cmd_count(a: Args, job: mut ref Job) -> Result[(), String] {
+    let r = open_csv(a.pos[0], a.delimiter(), a.flag("n"), false)?;
+    let mut n = 0;
+    for item in r.items {
+        rec(item)?;
+        n += 1;
+    }
+    job.out.push_str(f"{n}\n");
+    Ok(())
+}
+
+fn cmd_headers(a: Args, job: mut ref Job) -> Result[(), String] {
+    let mut heads: Vec[String] = Vec.new();
+    for path in a.pos {
+        let r = open_csv(path, a.delimiter(), false, false)?;
+        for h in r.headers {
+            // xsv's --intersect keeps the first of each name, a union.
+            if not a.flag("intersect") or not heads.contains(h) {
+                heads.push(h.clone());
+            }
+        }
+    }
+    let mut text = String.new();
+    for i in 0..heads.len() {
+        if a.pos.len() == 1 and not a.flag("j") {
+            let n = i + 1;
+            text.push_str(f"{n}\t");
+        }
+        text.push_str(heads[i]);
+        text.push('\n');
+    }
+    if a.flag("j") {
+        job.out.push_str(text);
+    } else {
+        job.out.push_str(tabwrite(text, 2, 2));
+    }
+    Ok(())
+}
+
+fn cmd_select(a: Args, job: mut ref Job) -> Result[(), String] {
+    let nh = a.flag("n");
+    let cols = parse_selection(a.pos[0])?;
+    let r = open_csv(a.pos[1], a.delimiter(), nh, false)?;
+    let sel = selection(cols, r.headers, not nh)?;
+    if not nh {
+        job.w.write(pick(r.headers, sel))?;
+    }
+    for item in r.items {
+        job.w.write(pick(rec(item)?, sel))?;
+    }
+    Ok(())
+}
+
+fn cmd_slice(a: Args, job: mut ref Job) -> Result[(), String] {
+    let nh = a.flag("n");
+    let r = open_csv(a.pos[0], a.delimiter(), nh, false)?;
+    if not nh and r.headers.len() > 0 {
+        job.w.write(r.headers.clone())?;
+    }
+    // WORKAROUND B-2026-10-28-23: the closure form, `let num = |k: Str| { if a.flag(k)
+    // { Ok(Some(a.num(k, 0)?)) } else { Ok(None) } };`, passes check but
+    // does not build on MIR; it is in mini_xsv.orig.kara.
+    let (s, e, l, i) = (a.maybe_num("s")?, a.maybe_num("e")?, a.maybe_num("l")?, a.maybe_num("i")?);
+    let (start, end) = match (s, e, l, i) {
+        (None, None, None, Some(i)) => (i, i + 1),
+        (_, _, _, Some(_)) => return Err("--index cannot be used with --start, --end or --len".to_string()),
+        (_, Some(_), Some(_), None) => return Err("--end and --len cannot be used at the same time.".to_string()),
+        (_, None, None, None) => (s ?? 0, i64.MAX),
+        (_, Some(e), None, None) => {
+            let s = s ?? 0;
+            if s > e {
+                return Err(f"The end of the range ({e}) must be greater than or\nequal to the start of the range ({s}).");
+            }
+            (s, e)
+        }
+        (_, None, Some(l), None) => {
+            let s = s ?? 0;
+            (s, s + l)
+        }
+    };
+    let mut k = 0;
+    for item in r.items {
+        if k >= end {
+            break;
+        }
+        if k >= start {
+            job.w.write(rec(item)?)?;
+        }
+        k += 1;
+    }
+    Ok(())
+}
+
+fn cmd_search(a: Args, job: mut ref Job) -> Result[(), String] {
+    let nh = a.flag("n");
+    let pattern = if a.flag("i") { "(?i)".to_string() + a.pos[0] } else { a.pos[0].clone() };
+    let re = match Regex.compile(pattern) {
+        Ok(re) => re,
+        Err(e) => return Err(e.message.clone()),
+    };
+    let r = open_csv(a.pos[1], a.delimiter(), nh, false)?;
+    let cols = parse_selection(a.get("s") ?? String.new())?;
+    let sel = selection(cols, r.headers, not nh)?;
+    if not nh {
+        job.w.write(r.headers.clone())?;
+    }
+    for item in r.items {
+        let fields = rec(item)?;
+        let mut m = sel.iter().any(|i| re.is_match(fields[*i]));
+        if a.flag("v") {
+            m = not m;
+        }
+        if m {
+            job.w.write(fields)?;
+        }
+    }
+    Ok(())
+}
+
+enum Number {
+    Int(i64),
+    Float(f64),
+}
+
+fn next_num(s: Str) -> Option[Number] {
+    if let Some(i) = rust_int(s) {
+        return Some(Number.Int(i));
+    }
+    match rust_float(s) {
+        Some(f) => Some(Number.Float(f)),
+        None => None,
+    }
+}
+
+fn compare_float(x: f64, y: f64) -> Ordering {
+    if x < y {
+        Ordering.Less
+    } else if x > y {
+        Ordering.Greater
+    } else {
+        Ordering.Equal
+    }
+}
+
+fn compare_num(a: Number, b: Number) -> Ordering {
+    match (a, b) {
+        (Number.Int(x), Number.Int(y)) => x.cmp(y),
+        (Number.Int(x), Number.Float(y)) => compare_float(x as f64, y),
+        (Number.Float(x), Number.Int(y)) => compare_float(x, y as f64),
+        (Number.Float(x), Number.Float(y)) => compare_float(x, y),
+    }
+}
+
+fn iter_cmp(a: Vec[String], b: Vec[String]) -> Ordering {
+    let mut k = 0;
+    loop {
+        if k >= a.len() and k >= b.len() {
+            return Ordering.Equal;
+        }
+        if k >= a.len() {
+            return Ordering.Less;
+        }
+        if k >= b.len() {
+            return Ordering.Greater;
+        }
+        let c = a[k].cmp(b[k]);
+        if c != Ordering.Equal {
+            return c;
+        }
+        k += 1;
+    }
+}
+
+// xsv's numeric order: a field that is not a number ends the comparison,
+// before any number.
+fn iter_cmp_num(a: Vec[String], b: Vec[String]) -> Ordering {
+    let mut k = 0;
+    loop {
+        let x = if k < a.len() { next_num(a[k]) } else { None };
+        let y = if k < b.len() { next_num(b[k]) } else { None };
+        k += 1;
+        match (x, y) {
+            (None, None) => return Ordering.Equal,
+            (None, _) => return Ordering.Less,
+            (_, None) => return Ordering.Greater,
+            (Some(x), Some(y)) => {
+                let c = compare_num(x, y);
+                if c != Ordering.Equal {
+                    return c;
+                }
+            }
+        }
+    }
+}
+
+fn cmd_sort(a: Args, job: mut ref Job) -> Result[(), String] {
+    let nh = a.flag("n");
+    let r = open_csv(a.pos[0], a.delimiter(), nh, false)?;
+    let sel = selection(parse_selection(a.get("s") ?? String.new())?, r.headers, not nh)?;
+    let mut all: Vec[Vec[String]] = Vec.new();
+    for item in r.items {
+        all.push(rec(item)?);
+    }
+    let numeric = a.flag("N");
+    let reverse = a.flag("R");
+    all.sort_by(|r1, r2| {
+        let x = pick(r1, sel);
+        let y = pick(r2, sel);
+        match (numeric, reverse) {
+            (false, false) => iter_cmp(x, y),
+            (true, false) => iter_cmp_num(x, y),
+            (false, true) => iter_cmp(y, x),
+            (true, true) => iter_cmp_num(y, x),
+        }
+    });
+    if not nh and r.headers.len() > 0 {
+        job.w.write(r.headers.clone())?;
+    }
+    for row in all {
+        job.w.write(row)?;
+    }
+    Ok(())
+}
+
+// xsv's split of n indexed records over `jobs` jobs, as (start, length).
+fn chunks(n: i64, jobs: i64) -> Vec[(i64, i64)] {
+    let size = if n < jobs { n } else { n / jobs };
+    let mut out: Vec[(i64, i64)] = Vec.new();
+    if size == 0 {
+        for i in 0..n {
+            out.push((i, 0));
+        }
+        return out;
+    }
+    let mut count = n / size;
+    if n % size != 0 {
+        count += 1;
+    }
+    for i in 0..count {
+        let start = i * size;
+        out.push((start, size.min(n - start)));
+    }
+    out
+}
+
+fn all_records(r: Csv) -> Result[Vec[Vec[String]], String] {
+    let mut all: Vec[Vec[String]] = Vec.new();
+    for item in r.items {
+        all.push(rec(item)?);
+    }
+    Ok(all)
+}
+
+// The frequency tables of a run of records, one per column of a sorted
+// selection.
+fn ftables(rows: Slice[Vec[String]], cols: Vec[i64], no_nulls: bool) -> Vec[Map[String, i64]] {
+    let mut tabs: Vec[Map[String, i64]] = Vec.new();
+    for _ in 0..cols.len() {
+        tabs.push(Map.new());
+    }
+    for row in rows {
+        for k in 0..cols.len() {
+            let v = row[cols[k]].trim().to_string();
+            if v.len() > 0 or not no_nulls {
+                let n = tabs[k].get(v) ?? 0;
+                tabs[k][v] = n + 1;
+            }
+        }
+    }
+    tabs
+}
+
+fn cmd_frequency(a: Args, job: mut ref Job) -> Result[(), String] {
+    let nh = a.flag("n");
+    let r = open_csv(a.pos[0], a.delimiter(), nh, false)?;
+    let sel = selection(parse_selection(a.get("s") ?? String.new())?, r.headers, not nh)?;
+    let heads = pick(r.headers, sel);
+    // xsv counts the columns in index order but labels them in selection
+    // order, so an unsorted selection swaps the labels.
+    let mut normal = sel.clone();
+    normal.sort();
+    normal.dedup();
+    let rows = all_records(r)?;
+    let jobs = a.num("j", 1)?;
+    let no_nulls = a.flag("no-nulls");
+    let mut tabs: Vec[Map[String, i64]] = Vec.new();
+    if jobs > 1 {
+        if rows.len() > 0 {
+            let group = TaskGroup.new();
+            let mut handles = Vec.new();
+            for (start, len) in chunks(rows.len(), jobs) {
+                handles.push(group.spawn(|| ftables(rows[start..start + len], normal, no_nulls)));
+            }
+            let mut first = true;
+            for h in handles.into_iter() {
+                let part = h.join();
+                if first {
+                    tabs = part;
+                    first = false;
+                } else {
+                    for k in 0..part.len() {
+                        for (v, c) in part[k] {
+                            let n = tabs[k].get(v) ?? 0;
+                            tabs[k][v.clone()] = n + c;
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        tabs = ftables(rows[0..rows.len()], normal, no_nulls);
+    }
+    let limit = a.num("l", 10)?;
+    let asc = a.flag("a");
+    job.w.write(["field", "value", "count"].iter().map(|s| s.to_string()).collect())?;
+    let n = heads.len().min(tabs.len());
+    for k in 0..n {
+        let head = if nh { (k + 1).to_string() } else { heads[k].clone() };
+        let mut counts: Vec[(String, i64)] = Vec.new();
+        for (v, c) in tabs[k] {
+            counts.push((v.clone(), c));
+        }
+        counts.sort_by(|x, y| {
+            let by_count = if asc { x.1.cmp(y.1) } else { y.1.cmp(x.1) };
+            if by_count != Ordering.Equal { by_count } else { x.0.cmp(y.0) }
+        });
+        if limit > 0 {
+            counts.truncate(limit);
+        }
+        for (v, c) in counts {
+            let value = if v.len() == 0 { "(NULL)".to_string() } else { v.clone() };
+            job.w.write([head.clone(), value, c.to_string()].to_vec())?;
+        }
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------ stats
+
+#[derive(Clone, Copy, PartialEq)]
+enum FieldType {
+    Null,
+    Unicode,
+    Float,
+    Integer,
+}
+
+fn type_name(t: FieldType) -> String {
+    match t {
+        FieldType.Null => "NULL".to_string(),
+        FieldType.Unicode => "Unicode".to_string(),
+        FieldType.Float => "Float".to_string(),
+        FieldType.Integer => "Integer".to_string(),
+    }
+}
+
+fn is_number(t: FieldType) -> bool {
+    t == FieldType.Float or t == FieldType.Integer
+}
+
+fn sample_type(s: Str) -> FieldType {
+    if s.len() == 0 {
+        FieldType.Null
+    } else if rust_int(s).is_some() {
+        FieldType.Integer
+    } else if rust_float(s).is_some() {
+        FieldType.Float
+    } else {
+        FieldType.Unicode
+    }
+}
+
+fn merge_type(a: FieldType, b: FieldType) -> FieldType {
+    match (a, b) {
+        (FieldType.Null, any) => any,
+        (any, FieldType.Null) => any,
+        (FieldType.Float, FieldType.Integer) => FieldType.Float,
+        (FieldType.Integer, FieldType.Float) => FieldType.Float,
+        (x, y) => if x == y { x } else { FieldType.Unicode },
+    }
+}
+
+#[derive(Clone)]
+struct MinMax[T] {
+    min: Option[T],
+    max: Option[T],
+}
+
+impl[T: PartialOrd + Clone] MinMax[T] {
+    fn new() -> MinMax[T] {
+        MinMax { min: None, max: None }
+    }
+
+    fn add(mut ref self, v: T) {
+        let lower = match self.min {
+            None => true,
+            Some(m) => v < m,
+        };
+        if lower {
+            self.min = Some(v.clone());
+        }
+        let higher = match self.max {
+            None => true,
+            Some(m) => v > m,
+        };
+        if higher {
+            self.max = Some(v.clone());
+        }
+    }
+
+    fn merge(mut ref self, other: MinMax[T]) {
+        match other.min {
+            Some(m) => {
+                let take = match self.min {
+                    None => true,
+                    Some(s) => m < s,
+                };
+                if take {
+                    self.min = Some(m.clone());
+                }
+            }
+            None => {}
+        }
+        match other.max {
+            Some(m) => {
+                let take = match self.max {
+                    None => true,
+                    Some(s) => m > s,
+                };
+                if take {
+                    self.max = Some(m.clone());
+                }
+            }
+            None => {}
+        }
+    }
+}
+
+// streaming-stats' OnlineStats: a running mean and population variance.
+#[derive(Clone, Copy)]
+struct Online {
+    size: i64,
+    mean: f64,
+    variance: f64,
+}
+
+impl Online {
+    fn add(mut ref self, sample: f64) {
+        let oldmean = self.mean;
+        let prevq = self.variance * (self.size as f64);
+        self.size += 1;
+        self.mean += (sample - oldmean) / (self.size as f64);
+        self.variance = (prevq + (sample - oldmean) * (sample - self.mean)) / (self.size as f64);
+    }
+
+    fn merge(mut ref self, v: Online) {
+        let (s1, s2) = (self.size as f64, v.size as f64);
+        let meandiffsq = (self.mean - v.mean) * (self.mean - v.mean);
+        let mean = ((s1 * self.mean) + (s2 * v.mean)) / (s1 + s2);
+        let var = (((s1 * self.variance) + (s2 * v.variance)) / (s1 + s2))
+            + ((s1 * s2 * meandiffsq) / ((s1 + s2) * (s1 + s2)));
+        self.size += v.size;
+        self.mean = mean;
+        self.variance = var;
+    }
+}
+
+#[derive(Clone, Copy)]
+struct Which {
+    nulls: bool,
+    median: bool,
+    mode: bool,
+    cardinality: bool,
+}
+
+#[derive(Clone)]
+struct Stats {
+    which: Which,
+    typ: FieldType,
+    sum_int: i64,
+    sum_float: Option[f64],
+    strings: MinMax[String],
+    str_len: MinMax[i64],
+    integers: MinMax[i64],
+    floats: MinMax[f64],
+    online: Online,
+    samples: Vec[String],
+    numbers: Vec[f64],
+}
+
+fn new_stats(which: Which) -> Stats {
+    Stats {
+        which,
+        typ: FieldType.Null,
+        sum_int: 0,
+        sum_float: None,
+        strings: MinMax.new(),
+        str_len: MinMax.new(),
+        integers: MinMax.new(),
+        floats: MinMax.new(),
+        online: Online { size: 0, mean: 0.0, variance: 0.0 },
+        samples: Vec.new(),
+        numbers: Vec.new(),
+    }
+}
+
+impl Stats {
+    fn add(mut ref self, sample: Str) {
+        let sample_type = sample_type(sample);
+        self.typ = merge_type(self.typ, sample_type);
+        let t = self.typ;
+        if sample.len() > 0 {
+            if t == FieldType.Float {
+                let f = rust_float(sample) ?? 0.0;
+                self.sum_float = match self.sum_float {
+                    None => Some((self.sum_int as f64) + f),
+                    Some(s) => Some(s + f),
+                };
+            } else if t == FieldType.Integer {
+                match self.sum_float {
+                    Some(s) => self.sum_float = Some(s + (rust_float(sample) ?? 0.0)),
+                    None => self.sum_int += rust_int(sample) ?? 0,
+                }
+            }
+        }
+        self.str_len.add(sample.len());
+        if sample.len() > 0 {
+            self.strings.add(sample.to_string());
+            if t == FieldType.Float {
+                let n = rust_float(sample) ?? 0.0;
+                self.floats.add(n);
+                self.integers.add(n as i64);
+            } else if t == FieldType.Integer {
+                let n = rust_int(sample) ?? 0;
+                self.integers.add(n);
+                self.floats.add(n as f64);
+            }
+        }
+        if self.which.mode or self.which.cardinality {
+            self.samples.push(sample.to_string());
+        }
+        if t == FieldType.Null {
+            if self.which.nulls {
+                self.online.add(0.0);
+            }
+        } else if is_number(t) {
+            if sample_type == FieldType.Null {
+                if self.which.nulls {
+                    self.online.add(0.0);
+                }
+            } else {
+                let n = rust_float(sample) ?? 0.0;
+                if self.which.median {
+                    self.numbers.push(n);
+                }
+                self.online.add(n);
+            }
+        }
+    }
+
+    fn merge(mut ref self, other: Stats) {
+        self.typ = merge_type(self.typ, other.typ);
+        self.sum_float = match (self.sum_float, other.sum_float) {
+            (Some(a), Some(b)) => Some(a + b),
+            (Some(a), None) => Some(a + (other.sum_int as f64)),
+            (None, Some(b)) => Some((self.sum_int as f64) + b),
+            (None, None) => {
+                self.sum_int += other.sum_int;
+                None
+            }
+        };
+        self.strings.merge(other.strings);
+        self.str_len.merge(other.str_len);
+        self.integers.merge(other.integers);
+        self.floats.merge(other.floats);
+        self.online.merge(other.online);
+        self.samples.extend_from_slice(other.samples);
+        self.numbers.extend_from_slice(other.numbers);
+    }
+
+    fn record(self) -> Vec[String] {
+        let t = self.typ;
+        let mut out: Vec[String] = Vec.new();
+        out.push(type_name(t));
+        out.push(match t {
+            FieldType.Integer => self.sum_int.to_string(),
+            FieldType.Float => show_f64(self.sum_float ?? 0.0),
+            _ => String.new(),
+        });
+        let (lo, hi) = match t {
+            FieldType.Unicode => match (self.strings.min.clone(), self.strings.max.clone()) {
+                (Some(a), Some(b)) => (a.clone(), b.clone()),
+                _ => (String.new(), String.new()),
+            },
+            FieldType.Integer => match (self.integers.min, self.integers.max) {
+                (Some(a), Some(b)) => (a.to_string(), b.to_string()),
+                _ => (String.new(), String.new()),
+            },
+            FieldType.Float => match (self.floats.min, self.floats.max) {
+                (Some(a), Some(b)) => (show_f64(a), show_f64(b)),
+                _ => (String.new(), String.new()),
+            },
+            FieldType.Null => (String.new(), String.new()),
+        };
+        out.push(lo);
+        out.push(hi);
+        match (self.str_len.min, self.str_len.max) {
+            (Some(a), Some(b)) => {
+                out.push(a.to_string());
+                out.push(b.to_string());
+            }
+            _ => {
+                out.push(String.new());
+                out.push(String.new());
+            }
+        }
+        if is_number(t) {
+            out.push(show_f64(self.online.mean));
+            out.push(show_f64(self.online.variance.sqrt()));
+        } else {
+            out.push(String.new());
+            out.push(String.new());
+        }
+        if self.which.median {
+            let mut data = self.numbers.clone();
+            data.sort_by(f64.total_cmp);
+            let n = data.len();
+            out.push(if n == 0 {
+                String.new()
+            } else if n % 2 == 0 {
+                show_f64((data[n / 2 - 1] + data[n / 2]) / 2.0)
+            } else {
+                show_f64(data[n / 2])
+            });
+        }
+        if self.which.mode or self.which.cardinality {
+            let mut data = self.samples.clone();
+            data.sort();
+            if self.which.mode {
+                out.push(mode_on_sorted(data) ?? "N/A".to_string());
+            }
+            if self.which.cardinality {
+                let mut set = data.clone();
+                set.dedup();
+                out.push(set.len().to_string());
+            }
+        }
+        out
+    }
+}
+
+// streaming-stats' mode over sorted data: a value counts as the mode only
+// while no other run has reached its length, and a single value seen once
+// is no mode at all.
+fn mode_on_sorted(data: Vec[String]) -> Option[String] {
+    let mut mode: Option[String] = None;
+    let mut next: Option[String] = None;
+    let mut mode_count = 0;
+    let mut next_count = 0;
+    for x in data {
+        if mode.as_ref().map(|y| y == x) ?? false {
+            mode_count += 1;
+        } else if next.as_ref().map(|y| y == x) ?? false {
+            next_count += 1;
+        } else {
+            next = Some(x.clone());
+            next_count = 0;
+        }
+        if next_count > mode_count {
+            mode = next.take();
+            mode_count = next_count;
+            next_count = 0;
+        } else if next_count == mode_count {
+            mode = None;
+            mode_count = 0;
+        }
+    }
+    mode
+}
+
+fn compute(rows: Slice[Vec[String]], sel: Vec[i64], which: Which) -> Vec[Stats] {
+    let mut stats: Vec[Stats] = Vec.new();
+    for _ in 0..sel.len() {
+        stats.push(new_stats(which));
+    }
+    for row in rows {
+        for k in 0..sel.len() {
+            stats[k].add(row[sel[k]]);
+        }
+    }
+    stats
+}
+
+fn cmd_stats(a: Args, job: mut ref Job) -> Result[(), String] {
+    let nh = a.flag("n");
+    let r = open_csv(a.pos[0], a.delimiter(), nh, false)?;
+    let sel = selection(parse_selection(a.get("s") ?? String.new())?, r.headers, not nh)?;
+    let heads = pick(r.headers, sel);
+    let every = a.flag("everything");
+    let which = Which {
+        nulls: a.flag("nulls"),
+        median: a.flag("median") or every,
+        mode: a.flag("mode") or every,
+        cardinality: a.flag("cardinality") or every,
+    };
+    let rows = all_records(r)?;
+    let jobs = a.num("j", 1)?;
+    let mut stats: Vec[Stats] = Vec.new();
+    if jobs > 1 and rows.len() > 0 {
+        let group = TaskGroup.new();
+        let mut handles = Vec.new();
+        for (start, len) in chunks(rows.len(), jobs) {
+            handles.push(group.spawn(|| compute(rows[start..start + len], sel, which)));
+        }
+        let mut first = true;
+        for h in handles.into_iter() {
+            let part = h.join();
+            if first {
+                stats = part;
+                first = false;
+            } else {
+                for k in 0..part.len() {
+                    stats[k].merge(part[k].clone());
+                }
+            }
+        }
+    } else {
+        stats = compute(rows[0..rows.len()], sel, which);
+    }
+    // As xsv does, each column's line is rendered in its own task.
+    let lines: Vec[Vec[String]] = {
+        let group = TaskGroup.new();
+        let mut handles = Vec.new();
+        for st in stats {
+            handles.push(group.spawn(|| st.record()));
+        }
+        handles.into_iter().map(|h| h.join()).collect()
+    };
+    let mut fields: Vec[String] = ["field", "type", "sum", "min", "max", "min_length", "max_length", "mean", "stddev"]
+        .iter().map(|s| s.to_string()).collect();
+    if which.median {
+        fields.push("median".to_string());
+    }
+    if which.mode {
+        fields.push("mode".to_string());
+    }
+    if which.cardinality {
+        fields.push("cardinality".to_string());
+    }
+    job.w.write(fields)?;
+    for k in 0..heads.len() {
+        let mut row: Vec[String] = Vec.new();
+        row.push(if nh { k.to_string() } else { heads[k].clone() });
+        row.extend_from_slice(lines[k]);
+        job.w.write(row)?;
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------ join
+
+fn join_key(row: Vec[String], sel: Vec[i64], casei: bool) -> Vec[String] {
+    let mut key: Vec[String] = Vec.new();
+    for i in sel {
+        let v = row[*i].trim();
+        key.push(if casei { v.to_lowercase() } else { v.to_string() });
+    }
+    key
+}
+
+fn concat(a: Vec[String], b: Vec[String]) -> Vec[String] {
+    let mut out = a.clone();
+    out.extend_from_slice(b);
+    out
+}
+
+fn blanks(n: i64) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for _ in 0..n {
+        out.push(String.new());
+    }
+    out
+}
+
+fn cmd_join(a: Args, job: mut ref Job) -> Result[(), String] {
+    let mut picked = 0;
+    for k in ["left", "right", "full", "cross"] {
+        if a.flag(k) {
+            picked += 1;
+        }
+    }
+    if picked > 1 {
+        return Err("Please pick exactly one join operation.".to_string());
+    }
+    let nh = a.flag("n");
+    let mut r1 = open_csv(a.pos[1], a.delimiter(), nh, false)?;
+    let mut r2 = open_csv(a.pos[3], a.delimiter(), nh, false)?;
+    let mut sel1 = selection(parse_selection(a.pos[0])?, r1.headers, not nh)?;
+    let mut sel2 = selection(parse_selection(a.pos[2])?, r2.headers, not nh)?;
+    if sel1.len() != sel2.len() {
+        let (n1, n2) = (sel1.len(), sel2.len());
+        return Err(f"Column selections must have the same number of columns, but found column selections with {n1} and {n2} columns.");
+    }
+    let casei = a.flag("no-case");
+    let nulls = a.flag("nulls");
+    if not nh {
+        job.w.write(concat(r1.headers, r2.headers))?;
+    }
+    let right = a.flag("right");
+    if right {
+        swap(mut r1, mut r2);
+        swap(mut sel1, mut sel2);
+    }
+    let pad1 = blanks(r1.headers.len());
+    let pad2 = blanks(r2.headers.len());
+    if a.flag("cross") {
+        let rows2 = all_records(r2)?;
+        for item in r1.items {
+            let row1 = rec(item)?;
+            for row2 in rows2 {
+                job.w.write(concat(row1, row2))?;
+            }
+        }
+        return Ok(());
+    }
+    let mut rows2: Vec[Vec[String]] = Vec.new();
+    let mut index: Map[Vec[String], Vec[i64]] = Map.new();
+    for item in r2.items {
+        let row = rec(item)?;
+        let key = join_key(row, sel2, casei);
+        if nulls or not key.iter().any(|k| k.len() == 0) {
+            let n = rows2.len();
+            match index.get_mut(key.clone()) {
+                Some(rows) => rows.push(n),
+                None => {
+                    index.insert(key, [n].to_vec());
+                }
+            }
+        }
+        rows2.push(row);
+    }
+    let mut written: Vec[bool] = Vec.new();
+    for _ in 0..rows2.len() {
+        written.push(false);
+    }
+    let full = a.flag("full");
+    let outer = a.flag("left") or right or full;
+    for item in r1.items {
+        let row1 = rec(item)?;
+        let key = join_key(row1, sel1, casei);
+        match index.get(key) {
+            None => {
+                if right {
+                    job.w.write(concat(pad2, row1))?;
+                } else if outer {
+                    job.w.write(concat(row1, pad2))?;
+                }
+            }
+            Some(hits) => {
+                for k in hits {
+                    written[*k] = true;
+                    if right {
+                        job.w.write(concat(rows2[*k], row1))?;
+                    } else {
+                        job.w.write(concat(row1, rows2[*k]))?;
+                    }
+                }
+            }
+        }
+    }
+    if full {
+        for k in 0..rows2.len() {
+            if not written[k] {
+                job.w.write(concat(pad1, rows2[k]))?;
+            }
+        }
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------ the rest
+
+fn cmd_fixlengths(a: Args, job: mut ref Job) -> Result[(), String] {
+    let length = if a.flag("l") {
+        let n = a.num("l", 0)?;
+        if n == 0 {
+            return Err("Length must be greater than 0.".to_string());
+        }
+        n
+    } else {
+        let mut maxlen = 0;
+        for item in open_csv(a.pos[0], a.delimiter(), true, true)?.items {
+            let row = rec(item)?;
+            let mut nonempty = 0;
+            for k in 0..row.len() {
+                if k == 0 or row[k].len() > 0 {
+                    nonempty = k + 1;
+                }
+            }
+            maxlen = maxlen.max(nonempty);
+        }
+        maxlen
+    };
+    for item in open_csv(a.pos[0], a.delimiter(), true, true)?.items {
+        let mut row = rec(item)?;
+        if length >= row.len() {
+            while row.len() < length {
+                row.push(String.new());
+            }
+        } else {
+            row.truncate(length);
+        }
+        job.w.write(row)?;
+    }
+    Ok(())
+}
+
+fn cmd_flatten(a: Args, job: mut ref Job) -> Result[(), String] {
+    let nh = a.flag("n");
+    let r = open_csv(a.pos[0], a.delimiter(), nh, false)?;
+    let sep = a.get("s") ?? "#".to_string();
+    let n = if a.flag("c") { Some(a.num("c", 0)?) } else { None };
+    let mut tw = tab_writer(2, 2);
+    let mut first = true;
+    for item in r.items {
+        if not first and sep.len() > 0 {
+            tw.write(sep + "\n");
+        }
+        first = false;
+        let row = rec(item)?;
+        let count = r.headers.len().min(row.len());
+        for k in 0..count {
+            let name = if nh { k.to_string() } else { r.headers[k].clone() };
+            let value = condense(row[k], n);
+            tw.write(f"{name}\t{value}\n");
+        }
+    }
+    tw.flush();
+    job.out.push_str(tw.out);
+    Ok(())
+}
+
+fn cmd_table(a: Args, job: mut ref Job) -> Result[(), String] {
+    let r = open_csv(a.pos[0], a.delimiter(), true, false)?;
+    let n = if a.flag("c") { Some(a.num("c", 0)?) } else { None };
+    let mut w = csv_out('\t', "\n", '"', false, None);
+    for item in r.items {
+        let row = rec(item)?;
+        w.write(row.iter().map(|f| condense(f, n)).collect())?;
+    }
+    job.out.push_str(tabwrite(w.buf, a.num("w", 2)?, a.num("p", 2)?));
+    Ok(())
+}
+
+fn cmd_fmt(a: Args, job: mut ref Job) -> Result[(), String] {
+    let r = open_csv(a.pos[0], a.delimiter(), true, false)?;
+    let mut delim = match a.get("t") {
+        Some(t) => delim_byte(t) as char,
+        None => ',',
+    };
+    let mut term = if a.flag("crlf") { "\r\n" } else { "\n" };
+    if a.flag("ascii") {
+        delim = '\u{1f}';
+        term = "\u{1e}";
+    }
+    let quote = match a.get("quote") {
+        Some(q) => q.chars().next() ?? '"',
+        None => '"',
+    };
+    let escape = match a.get("escape") {
+        Some(e) => e.chars().next(),
+        None => None,
+    };
+    let mut w = csv_out(delim, term, quote, a.flag("quote-always"), escape);
+    let mut result: Result[(), String] = Ok(());
+    for item in r.items {
+        match rec(item) {
+            Ok(row) => {
+                if let Err(e) = w.write(row) {
+                    result = Err(e);
+                    break;
+                }
+            }
+            Err(e) => {
+                result = Err(e);
+                break;
+            }
+        }
+    }
+    job.out.push_str(w.buf);
+    result
+}
+
+fn cmd_cat(a: Args, job: mut ref Job) -> Result[(), String] {
+    let mode = a.pos[0].clone();
+    let paths = a.pos[1..a.pos.len()];
+    if mode == "rows" {
+        let nh = a.flag("n");
+        for k in 0..paths.len() {
+            let r = open_csv(paths[k], a.delimiter(), nh, false)?;
+            if k == 0 and not nh and r.headers.len() > 0 {
+                job.w.write(r.headers.clone())?;
+            }
+            for item in r.items {
+                job.w.write(rec(item)?)?;
+            }
+        }
+        return Ok(());
+    }
+    let mut rdrs: Vec[Csv] = Vec.new();
+    for path in paths {
+        rdrs.push(open_csv(path, a.delimiter(), true, false)?);
+    }
+    let mut at: Vec[i64] = Vec.new();
+    for _ in 0..rdrs.len() {
+        at.push(0);
+    }
+    let pad = a.flag("pad");
+    loop {
+        let mut row: Vec[String] = Vec.new();
+        let mut done = 0;
+        for k in 0..rdrs.len() {
+            if at[k] >= rdrs[k].items.len() {
+                done += 1;
+                if pad {
+                    row.extend_from_slice(blanks(rdrs[k].headers.len()));
+                } else {
+                    return Ok(());
+                }
+            } else {
+                let fields = rec(rdrs[k].items[at[k]])?;
+                row.extend_from_slice(fields);
+                at[k] += 1;
+            }
+        }
+        if done >= rdrs.len() {
+            return Ok(());
+        }
+        job.w.write(row)?;
+    }
+}
+
+// ============================================================ driver
+
+fn run(cmd: Str, a: Args, job: mut ref Job) -> Result[(), String] {
+    match cmd {
+        "count" => cmd_count(a, mut job),
+        "headers" => cmd_headers(a, mut job),
+        "select" => cmd_select(a, mut job),
+        "slice" => cmd_slice(a, mut job),
+        "search" => cmd_search(a, mut job),
+        "sort" => cmd_sort(a, mut job),
+        "frequency" => cmd_frequency(a, mut job),
+        "stats" => cmd_stats(a, mut job),
+        "join" => cmd_join(a, mut job),
+        "fixlengths" => cmd_fixlengths(a, mut job),
+        "flatten" => cmd_flatten(a, mut job),
+        "table" => cmd_table(a, mut job),
+        "fmt" => cmd_fmt(a, mut job),
+        "cat" => cmd_cat(a, mut job),
+        _ => Err(f"Unknown command: '{cmd}'"),
+    }
+}
+
+// An argument as a shell would need it written.
+fn shown(a: Str) -> String {
+    let mut plain = a.len() > 0;
+    for c in a.chars() {
+        let safe = (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9')
+            or "@%+=:,./-_".contains(c.to_string());
+        if not safe {
+            plain = false;
+        }
+    }
+    if plain {
+        a.to_string()
+    } else {
+        "'".to_string() + a.replace("'", "'\"'\"'") + "'"
+    }
+}
+
+struct DataFile {
+    path: String,
+    body: String,
+}
+
+fn write_data() -> Result[(), String] {
+    if let Err(e) = fs.create_dir_all("data".to_string()) {
+        return Err(f"cannot create data: {e}");
+    }
+    for file in data_files() {
+        if let Err(e) = fs.write(f"data/{file.path}", file.body.clone()) {
+            return Err(f"cannot write {file.path}: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = write_data() {
+        eprintln(e);
+        return;
+    }
+    let jobs = match fs.read_to_string("data/jobs.txt".to_string()) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln(f"cannot read jobs.txt: {e}");
+            return;
+        }
+    };
+    for line in jobs.lines() {
+        if line.len() == 0 {
+            continue;
+        }
+        let argv: Vec[String] = line.split("\t").map(|p| p.to_string()).collect();
+        let mut cmdline = "$ xsv".to_string();
+        for arg in argv {
+            cmdline.push(' ');
+            cmdline.push_str(shown(arg));
+        }
+        println(cmdline);
+        let cmd = argv[0].clone();
+        let mut job = Job { w: csv_out(',', "\n", '"', false, None), out: String.new() };
+        let result = match parse_args(cmd, argv[1..argv.len()].to_vec()) {
+            Ok(a) => run(cmd, a, mut job),
+            Err(e) => Err(e),
+        };
+        let printed = job.w.buf.clone() + job.out;
+        print(printed);
+        if printed.len() > 0 and not printed.ends_with("\n") {
+            println("");
+            println("\\ no newline at end of output");
+        }
+        if let Err(e) = result {
+            for l in e.split("\n") {
+                println(f"! {l}");
+            }
+            println("[exit 1]");
+        }
+    }
+}
+
+// ============================================================ data
+
+// The files under data/, in path order.
+fn data_files() -> Vec[DataFile] {
+    let mut v: Vec[DataFile] = Vec.new();
+    data_part_0(mut v);
+    data_part_1(mut v);
+    v
+}
+
+fn data_part_0(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    v.push(DataFile { path: "blank.csv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("customer,segment,country\n");
+    t.push_str("\"smith, jane\",retail,UK\n");
+    t.push_str(" Bob Ng ,wholesale,SG\n");
+    t.push_str("\"Ana \"\"Ace\"\" Ruiz\",retail,MX\n");
+    t.push_str("\u{dc}nal \u{c7}elik,retail,TR\n");
+    t.push_str("Chen Wei,wholesale,CN\n");
+    t.push_str("Chen Wei,partner,CN\n");
+    t.push_str("Dana Scully,retail,US\n");
+    t.push_str(",unknown,\n");
+    v.push(DataFile { path: "customers.csv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("customer,segment,country\n");
+    t.push_str("Priya Nair,partner,IN\n");
+    t.push_str("Omar Haddad,retail,JO\n");
+    v.push(DataFile { path: "customers2.csv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("name,age,name\n");
+    t.push_str("ada,36,lovelace\n");
+    t.push_str("alan,41,turing\n");
+    t.push_str("grace,85,hopper\n");
+    v.push(DataFile { path: "dupes.csv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("x,y,z\n");
+    v.push(DataFile { path: "empty.csv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("count\tdata/orders.csv\n");
+    t.push_str("count\t-n\tdata/orders.csv\n");
+    t.push_str("count\tdata/empty.csv\n");
+    t.push_str("count\tdata/blank.csv\n");
+    t.push_str("count\tdata/quoted.csv\n");
+    t.push_str("count\tdata/ragged.csv\n");
+    t.push_str("headers\tdata/orders.csv\n");
+    t.push_str("headers\tdata/regions.tsv\n");
+    t.push_str("headers\t-j\tdata/customers.csv\n");
+    t.push_str("headers\tdata/orders.csv\tdata/customers.csv\n");
+    t.push_str("headers\t--intersect\tdata/regions.tsv\tdata/orders.csv\n");
+    t.push_str("select\t1,3-5\tdata/sensors.csv\n");
+    t.push_str("select\tlabel-id\tdata/sensors.csv\n");
+    t.push_str("select\t!counter-flag\tdata/sensors.csv\n");
+    t.push_str("select\t3-\tdata/regions.tsv\n");
+    t.push_str("select\t!-2\tdata/regions.tsv\n");
+    t.push_str("select\t-\tdata/dupes.csv\n");
+    t.push_str("select\tname[1],age,name\tdata/dupes.csv\n");
+    t.push_str("select\t-n\t2,1\tdata/regions.tsv\n");
+    t.push_str("select\t\"text\",id\tdata/quoted.csv\n");
+    t.push_str("select\tnope\tdata/orders.csv\n");
+    t.push_str("select\t9\tdata/regions.tsv\n");
+    t.push_str("select\tname[2]\tdata/dupes.csv\n");
+    t.push_str("select\t-n\tname\tdata/dupes.csv\n");
+    t.push_str("select\ta-b-c\tdata/dupes.csv\n");
+    t.push_str("slice\t-s\t2\t-e\t5\tdata/orders.csv\n");
+    t.push_str("slice\t-i\t0\tdata/sensors.csv\n");
+    t.push_str("slice\t-s\t57\tdata/orders.csv\n");
+    t.push_str("slice\t-s\t10\t-l\t3\tdata/orders.csv\n");
+    t.push_str("slice\t-n\t-l\t2\tdata/regions.tsv\n");
+    t.push_str("slice\t-s\t5\t-e\t2\tdata/orders.csv\n");
+    t.push_str("slice\t-e\t3\t-l\t2\tdata/orders.csv\n");
+    t.push_str("search\t-s\tregion\t^(north|east)$\tdata/orders.csv\n");
+    t.push_str("search\t-i\tSMITH\tdata/orders.csv\n");
+    t.push_str("search\t-v\t-s\tstatus,rating\t^(shipped|[1-4])$\tdata/orders.csv\n");
+    t.push_str("search\t-s\t2\t^-?[0-9]+\\.[0-9]+$\tdata/sensors.csv\n");
+    t.push_str("search\t-n\ta\tdata/dupes.csv\n");
+    t.push_str("sort\t-s\tcustomer\tdata/customers.csv\n");
+    t.push_str("sort\t-N\t-s\tqty\tdata/orders.csv\n");
+    t.push_str("sort\t-R\t-N\t-s\tunit_price,order_id\tdata/orders.csv\n");
+    t.push_str("sort\t-N\t-s\treading\tdata/sensors.csv\n");
+    t.push_str("sort\t-n\tdata/regions.tsv\n");
+    t.push_str("sort\t-R\tdata/dupes.csv\n");
+    t.push_str("frequency\tdata/orders.csv\n");
+    t.push_str("frequency\t-s\tregion,status\t--asc\tdata/orders.csv\n");
+    t.push_str("frequency\t-s\trating\t-l\t0\t--no-nulls\tdata/orders.csv\n");
+    t.push_str("frequency\t-j\t4\t-s\tproduct,customer\t-l\t3\tdata/orders.csv\n");
+    t.push_str("frequency\t-n\t-s\t1\tdata/regions.tsv\n");
+    t.push_str("stats\tdata/orders.csv\n");
+    t.push_str("stats\t--everything\tdata/orders.csv\n");
+    t.push_str("stats\t--everything\t--nulls\t-s\tqty,discount,rating\tdata/orders.csv\n");
+    t.push_str("stats\t--everything\tdata/sensors.csv\n");
+    t.push_str("stats\t-j\t4\t--everything\tdata/orders.csv\n");
+    t.push_str("stats\t--median\t--mode\t-s\treading,counter\t-j\t3\tdata/sensors.csv\n");
+    t.push_str("stats\t--cardinality\tdata/empty.csv\n");
+    t.push_str("stats\t-n\tdata/regions.tsv\n");
+    t.push_str("stats\tdata/ragged.csv\n");
+    t.push_str("join\tcustomer\tdata/orders.csv\tcustomer\tdata/customers.csv\n");
+    t.push_str("join\t--left\tcustomer\tdata/customers.csv\tcustomer\tdata/orders.csv\n");
+    t.push_str("join\t--right\tregion\tdata/regions.tsv\tregion\tdata/orders.csv\n");
+    t.push_str("join\t--full\tcustomer\tdata/customers.csv\tcustomer\tdata/customers2.csv\n");
+    t.push_str("join\t--no-case\tcustomer\tdata/orders.csv\tcustomer\tdata/customers.csv\n");
+    t.push_str("join\t1\tdata/customers.csv\t1\tdata/customers.csv\n");
+    t.push_str("join\t--nulls\t1\tdata/customers.csv\t1\tdata/customers.csv\n");
+    t.push_str("join\t--cross\tregion\tdata/regions.tsv\tname\tdata/dupes.csv\n");
+    t.push_str("join\t1,2\tdata/customers.csv\t1\tdata/regions.tsv\n");
+    t.push_str("join\t--left\t--full\t1\tdata/customers.csv\t1\tdata/regions.tsv\n");
+    t.push_str("fixlengths\tdata/ragged.csv\n");
+    t.push_str("fixlengths\t-l\t2\tdata/ragged.csv\n");
+    t.push_str("fixlengths\t-l\t0\tdata/ragged.csv\n");
+    t.push_str("flatten\tdata/regions.tsv\n");
+    t.push_str("flatten\t-c\t6\tdata/dupes.csv\n");
+    t.push_str("flatten\t-s\t\t-n\tdata/dupes.csv\n");
+    t.push_str("table\tdata/regions.tsv\n");
+    t.push_str("table\t-w\t6\t-p\t1\tdata/customers.csv\n");
+    t.push_str("table\t-c\t5\tdata/sensors.csv\n");
+    t.push_str("fmt\t-t\t;\tdata/quoted.csv\n");
+    t.push_str("fmt\t--quote-always\tdata/regions.tsv\n");
+    t.push_str("fmt\t--crlf\tdata/dupes.csv\n");
+    t.push_str("fmt\t--ascii\tdata/dupes.csv\n");
+    t.push_str("fmt\t-t\t\\t\tdata/quoted.csv\n");
+    t.push_str("fmt\t--escape\t\\\t--quote\t'\tdata/quoted.csv\n");
+    t.push_str("cat\trows\tdata/customers.csv\tdata/customers2.csv\n");
+    t.push_str("cat\trows\t-n\tdata/regions.tsv\tdata/customers.csv\n");
+    t.push_str("cat\trows\tdata/customers.csv\tdata/sensors.csv\n");
+    t.push_str("cat\tcolumns\tdata/regions.tsv\tdata/dupes.csv\n");
+    t.push_str("cat\tcolumns\t--pad\tdata/regions.tsv\tdata/customers2.csv\n");
+    v.push(DataFile { path: "jobs.txt".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("order_id,date,region,customer,product,qty,unit_price,discount,status,rating,weight_kg\n");
+    t.push_str("1001,2026-09-21,east,Bob Ng,hub,20,24,,shipped,1,0.125\n");
+    t.push_str("1002,2026-09-18,north,\"Smith, Jane\",gadget,1,19.99,,cancelled,1,4\n");
+    t.push_str("1003,2026-09-13,south,Bob Ng,hub,35,24,0.1,pending,,0.5\n");
+    t.push_str("1004,2026-09-27,east,Priya Nair,\"Widget, large\",2,7,0.05,shipped,5,2.75\n");
+    t.push_str("1005,2026-09-08,east,Priya Nair,hub,15,24,0.05,shipped,3,3e-1\n");
+    t.push_str("1006,2026-09-29,east,Priya Nair,gadget,31,19.99,,cancelled,1,0.5\n");
+    t.push_str("1007,2026-09-30,north,Chen Wei,widget,20,2.5,,shipped,1,1.250\n");
+    t.push_str("1008,2026-09-02, west,Bob Ng,hub,36,24,,cancelled,4,12\n");
+    t.push_str("1009,2026-09-17,south,Bob Ng,\"Widget, large\",28,7,0.15,shipped,2,2.75\n");
+    t.push_str("1010,2026-09-04,west,Bob Ng,\"Widget, large\",17,7,0.15,cancelled,1,2.75\n");
+    t.push_str("1011,2026-09-07,west,\"Smith, Jane\",widget,32,2.5,,shipped,5,1.250\n");
+    t.push_str("1012,2026-09-29,north,Bob Ng,hub,23,24,0.05,shipped,5,1.250\n");
+    t.push_str("1013,2026-09-24,north,Chen Wei,hub,2,24,0.1,shipped,4,1.250\n");
+    t.push_str("1014,2026-09-01,west,Lee,cable 2m,21,3.75,0.05,pending,1,1.250\n");
+    t.push_str("1015,2026-09-29,north,Priya Nair,\"Widget, large\",13,7,,shipped,1,0.5\n");
+    t.push_str("1016,2026-09-21,north,\u{dc}nal \u{c7}elik,hub,39,24,0.1,shipped,4,0.125\n");
+    t.push_str("1017,2026-09-07,north,Priya Nair,gadget,28,19.99,,shipped,3,3e-1\n");
+    t.push_str("1018,2026-09-27,west,\u{dc}nal \u{c7}elik,hub,33,24,0.15,cancelled,2,1.250\n");
+    t.push_str("1019,2026-09-03,north,Priya Nair,gadget,8,19.99,,pending,,4\n");
+    t.push_str("1020,2026-09-07,south,\"Ana \"\"Ace\"\" Ruiz\",widget,24,2.5,0.05,pending,3,2.75\n");
+    t.push_str("1021,2026-09-26,west,Priya Nair,gadget,10,19.99,0.1,pending,4,0.5\n");
+    t.push_str("1022,2026-09-30,south,Lee,\"Widget, large\",36,7,,cancelled,3,1.250\n");
+    t.push_str("1023,2026-09-27,east,Omar Haddad,widget,29,2.5,,returned,,12\n");
+    t.push_str("1024,2026-09-05,west,\"Ana \"\"Ace\"\" Ruiz\",widget,20,2.5,,shipped,5,0.5\n");
+    t.push_str("1025,2026-09-29,west,Chen Wei,gadget,33,19.99,0.1,pending,3,1.250\n");
+    t.push_str("1026,2026-09-26,west,Chen Wei,cable 2m,12,3.75,,shipped,1,2.75\n");
+    t.push_str("1027,2026-09-01,east,Lee,hub,33,24,,shipped,3,3e-1\n");
+    t.push_str("1028,2026-09-06,west,Omar Haddad,\"Widget, large\",22,7,,cancelled,,0.5\n");
+    t.push_str("1029,2026-09-16,north,\"Ana \"\"Ace\"\" Ruiz\",widget,18,2.5,0.15,cancelled,5,0.125\n");
+    t.push_str("1030,2026-09-15,north,\"Ana \"\"Ace\"\" Ruiz\",hub,22,24,,shipped,4,0.125\n");
+    t.push_str("1031,2026-09-29,north,\"Ana \"\"Ace\"\" Ruiz\",gadget,33,19.99,0.05,returned,1,1.250\n");
+    t.push_str("1032,2026-09-03,south,Priya Nair,hub,9,24,0.1,shipped,,12\n");
+    t.push_str("1033,2026-09-15,west,Bob Ng,\"Widget, large\",4,7,0.1,cancelled,3,3e-1\n");
+    t.push_str("1034,2026-09-29, east,\"Smith, Jane\",hub,21,24,0.05,shipped,3,3e-1\n");
+    t.push_str("1035,2026-09-18,north,Omar Haddad,hub,8,24,0.1,shipped,4,4\n");
+    t.push_str("1036,2026-09-08,north,\"Smith, Jane\",\"Widget, large\",30,7,0.1,shipped,2,12\n");
+    t.push_str("1037,2026-09-12,north,Priya Nair,\"Widget, large\",25,7,,cancelled,,0.5\n");
+    t.push_str("1038,2026-09-15,west,\u{dc}nal \u{c7}elik,cable 2m,14,3.75,,shipped,3,4\n");
+    t.push_str("1039,2026-09-10,west,Omar Haddad,\"Widget, large\",22,7,,cancelled,2,4\n");
+    t.push_str("1040,2026-09-25,south,Omar Haddad,gadget,9,19.99,0.15,cancelled,1,0.125\n");
+    t.push_str("1041,2026-09-25,east,\"Ana \"\"Ace\"\" Ruiz\",cable 2m,7,3.75,,shipped,4,12\n");
+    t.push_str("1042,2026-09-07,,\u{dc}nal \u{c7}elik,widget,35,2.5,,shipped,1,0.5\n");
+    t.push_str("1043,2026-09-11,east,\"Smith, Jane\",widget,38,2.5,,returned,,0.5\n");
+    t.push_str("1044,2026-09-11,east,\"Ana \"\"Ace\"\" Ruiz\",hub,4,24,0.1,shipped,5,0.125\n");
+    t.push_str("1045,2026-09-18,north,\"Smith, Jane\",\"Widget, large\",36,7,,shipped,2,2.75\n");
+    t.push_str("1046,2026-09-29,east,Bob Ng,gadget,32,19.99,0.1,shipped,4,0.5\n");
+    t.push_str("1047,2026-09-29,west,\"Ana \"\"Ace\"\" Ruiz\",widget,10,2.5,,pending,1,3e-1\n");
+    t.push_str("1048,2026-09-08,south,Lee,hub,,24,0.05,shipped,n/a,12\n");
+    t.push_str("1049,2026-09-27,east,\"Smith, Jane\",widget,25,2.5,0.05,returned,2,1.250\n");
+    t.push_str("1050,2026-09-27,south,\"Ana \"\"Ace\"\" Ruiz\",cable 2m,39,3.75,,cancelled,2,2.75\n");
+    t.push_str("1051,2026-09-29,west,\u{dc}nal \u{c7}elik,widget,13,2.5,,shipped,1,2.75\n");
+    t.push_str("1052,2026-09-10,north,\u{dc}nal \u{c7}elik,\"Widget, large\",5,7,,shipped,4,0.5\n");
+    t.push_str("1053,2026-09-13,north,\"Ana \"\"Ace\"\" Ruiz\",widget,,2.5,0.05,pending,3,0.5\n");
+    t.push_str("1054,2026-09-24,north,\"Smith, Jane\",gadget,6,19.99,,pending,5,4\n");
+    t.push_str("1055,2026-09-30,south,Lee,hub,39,24,,shipped,4,0.5\n");
+    t.push_str("1056,2026-09-10,west,\"Ana \"\"Ace\"\" Ruiz\",cable 2m,31,3.75,,returned,1,3e-1\n");
+    t.push_str("1057,2026-09-23,east,Priya Nair,gadget,38,19.99,0.05,cancelled,,2.75\n");
+    t.push_str("1058,2026-09-28,east,Chen Wei,cable 2m,34,3.75,,shipped,2,2.75\n");
+    t.push_str("1059,2026-09-02,south,Lee,\"Widget, large\",25,7,0.05,cancelled,4,4\n");
+    t.push_str("1060,2026-09-26,north,Omar Haddad,\"Widget, large\",38,7,,cancelled,2,0.125\n");
+    v.push(DataFile { path: "orders.csv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("id,text,note\r\n");
+    t.push_str("1,\"Hello, world\",\"said \"\"hi\"\"\"\r\n");
+    t.push_str("\r\n");
+    t.push_str("2,\"multi\n");
+    t.push_str("line\",plain\r\n");
+    t.push_str("3,\"ab\"cd,x\r\n");
+    t.push_str("4,,\r\n");
+    t.push_str("5,semi;colon,\"tab\there\"\r\n");
+    v.push(DataFile { path: "quoted.csv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("a,b,c\n");
+    t.push_str("1,2\n");
+    t.push_str("3,4,5,6\n");
+    t.push_str("7,,,\n");
+    t.push_str("8\n");
+    v.push(DataFile { path: "ragged.csv".to_string(), body: t });
+}
+
+fn data_part_1(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("region\tmanager\tquarterly_target\n");
+    t.push_str("north\tM. Okafor\t12000\n");
+    t.push_str("south\tR. Silva\t9500.5\n");
+    t.push_str("east\tK. Tanaka\t\n");
+    t.push_str("central\tA. Novak\t7000\n");
+    v.push(DataFile { path: "regions.tsv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("id,reading,counter,flag,label\n");
+    t.push_str("s1,-0.5,9007199254740993,true,12\n");
+    t.push_str("s2,.5,-42,false, 12\n");
+    t.push_str("s3,1.,+15,,alpha\n");
+    t.push_str("s4,+7,99999999999999999999,true,beta\n");
+    t.push_str("s5,1e3,0,false,gamma\n");
+    t.push_str("s6,2.5E-2,17,,12\n");
+    t.push_str("s7,-12.75,-3,true,\n");
+    t.push_str("s8,,8,false,delta\n");
+    t.push_str("s9,0.1,8,true,beta\n");
+    t.push_str("s10,0.2,,false,beta\n");
+    t.push_str("s11,1e21,5,,alpha\n");
+    t.push_str("s12,0.00001,5,true,epsilon\n");
+    v.push(DataFile { path: "sensors.csv".to_string(), body: t });
+}
