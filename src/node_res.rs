@@ -91,9 +91,13 @@ fn res_of(
 ) -> Res {
     let sym = result.symbol_table.get_symbol(r.symbol);
     // A library body's builtin call is the compiler's, whatever function of
-    // its name the program declares (B-2026-10-27-29).
+    // its name the program declares (B-2026-10-27-29): the baked stdlib's
+    // item when it has one (`sleep_ms`), as an unshadowed call finds.
     if r.builtin {
-        return builtin(&sym.name, &r.rest);
+        return match defs.stdlib_items.get(&sym.name) {
+            Some(&d) if r.rest.is_empty() => Res::Def(d),
+            _ => builtin(&sym.name, &r.rest),
+        };
     }
     let start = match &sym.kind {
         SymbolKind::Variable { .. } | SymbolKind::SelfValue => {

@@ -69,3 +69,22 @@ fn library_log_writes_past_a_program_eprintln() {
         assert!(err.contains("INFO  hi k=1"), "{lane:?}: {err}");
     }
 }
+
+/// A builtin the baked library defines (`sleep_ms`, which `std.time.sleep`
+/// calls) is the library's item past a program function of its name, whose
+/// body is named apart from the native's.
+#[test]
+fn library_sleep_parks_past_a_program_sleep_ms() {
+    let path = write(
+        "sleep",
+        "import std.time.{sleep, Duration};\n\
+         fn sleep_ms(n: i64) -> i64 {\n    println(\"mine\");\n    n\n}\n\
+         fn main() {\n    sleep(Duration.ms(1));\n    println(sleep_ms(4));\n}\n",
+    );
+    for lane in LANES {
+        let out = karac(lane, &path);
+        let err = text(&out.stderr);
+        assert!(out.status.success(), "{lane:?}: {err}");
+        assert_eq!(text(&out.stdout), "mine\n4\n", "{lane:?}");
+    }
+}
