@@ -68,6 +68,40 @@ struct Carried {
     fields: Vec<(String, u32, bool)>,
 }
 
+/// The ambient native a default provider's method is (core semantics
+/// §14.7, §14.10): `OsEnv.var` is `Env.var` and `OsStdout.write` is
+/// `Stdout.print`, called without the receiver, which carries nothing.
+/// `None` for a type that is no library default.
+pub fn os_default(base: &str, method: &str) -> Option<(&'static str, String)> {
+    let resource = match base {
+        "OsEnv" => "Env",
+        "OsClock" => "Clock",
+        "OsRandom" => "RandomSource",
+        "OsStdout" => "Stdout",
+        "OsStderr" => "Stderr",
+        "OsStdin" => "Stdin",
+        _ => return None,
+    };
+    let method = match (resource, method) {
+        ("Stdout" | "Stderr", "write") => "print",
+        _ => method,
+    };
+    Some((resource, method.to_string()))
+}
+
+/// The fused native that prints for `r.m` outside an override:
+/// `Stdout.println` is `println`, which takes the format parts and builds
+/// no `String` (core semantics §14.10). `None` for any other call.
+pub fn fused_print(r: &str, m: &str) -> Option<&'static str> {
+    Some(match (r, m) {
+        ("Stdout", "print") => "print",
+        ("Stdout", "println") => "println",
+        ("Stderr", "print") => "eprint",
+        ("Stderr", "println") => "eprintln",
+        _ => return None,
+    })
+}
+
 /// Closure types made here take their ids from this one down, far from the
 /// ids the resolver hands out.
 const CARRIED_DEFS: u32 = u32::MAX - 1;
@@ -374,6 +408,20 @@ impl Spec<'_> {
                 fx.body.instance.name
             )
         })?;
+        if let Some(native) = fused_print(r, m) {
+            return match binding {
+                Binding::Default(_) => {
+                    let TerminatorKind::Call { func, .. } =
+                        &mut fx.body.blocks[bb.index()].terminator.kind
+                    else {
+                        unreachable!()
+                    };
+                    *func = fn_def(self.tys, DefId(u32::MAX), Vec::new(), native.to_string());
+                    Ok(())
+                }
+                Binding::Bound(_) => self.print_to(fx, bb, r, m == "println"),
+            };
+        }
         let (Binding::Bound(t) | Binding::Default(t)) = binding;
         let method = decl
             .impls
@@ -440,6 +488,78 @@ impl Spec<'_> {
         ops.insert(0, recv);
         ops.extend(extra);
         Ok(())
+    }
+
+    /// `print` / `println` on a stream bound to a provider (core semantics
+    /// §14.10): the parts formatted into a `String` (with the newline for
+    /// `println`), the provider's `write` called with a view of it, and
+    /// the `String` dropped.
+    fn print_to(&mut self, fx: &mut Fx, bb: BasicBlock, r: &str, line: bool) -> Result<(), String> {
+        let TerminatorKind::Call {
+            args: mut parts,
+            destination,
+            target,
+            ..
+        } = fx.body.blocks[bb.index()].terminator.kind.clone()
+        else {
+            unreachable!()
+        };
+        let here = fx.body.instance.name.clone();
+        let after = target
+            .ok_or_else(|| format!("providers: in `{here}`, a `{r}` print that does not return"))?;
+        let info = fx.body.blocks[bb.index()].terminator.source_info;
+        let tcx = self.tys.tcx();
+        let (string, view) = (tcx.intern(SK::Str), tcx.intern(SK::StaticStr));
+        if line {
+            parts.push(Operand::Const(Const {
+                ty: view,
+                kind: ConstKind::Str("\n".to_string()),
+            }));
+        }
+        let text = fx.temp(string);
+        let viewed = fx.temp(view);
+        // The write, its view of the text, then the text's drop.
+        let drop_text = fx.block(
+            TerminatorKind::Drop {
+                place: Place::local(text),
+                target: after,
+                unwind: UnwindAction::Abort,
+            },
+            info,
+        );
+        let write = fx.block(
+            TerminatorKind::Call {
+                func: fn_def(self.tys, DefId(u32::MAX), Vec::new(), format!("{r}.write")),
+                args: vec![Operand::Move(Place::local(viewed))],
+                destination,
+                target: Some(drop_text),
+                unwind: UnwindAction::Abort,
+            },
+            info,
+        );
+        let as_view = fx.block(TerminatorKind::Goto { target: write }, info);
+        let text_ref = fx.borrow(as_view, Place::local(text), false, self.tys);
+        fx.body.blocks[as_view.index()].terminator.kind = TerminatorKind::Call {
+            func: fn_def(
+                self.tys,
+                DefId(u32::MAX),
+                Vec::new(),
+                "String.as_str".to_string(),
+            ),
+            args: vec![text_ref],
+            destination: Place::local(viewed),
+            target: Some(write),
+            unwind: UnwindAction::Abort,
+        };
+        fx.body.blocks[bb.index()].terminator.kind = TerminatorKind::Call {
+            func: fn_def(self.tys, DefId(u32::MAX), Vec::new(), "format".to_string()),
+            args: parts,
+            destination: Place::local(text),
+            target: Some(as_view),
+            unwind: UnwindAction::Abort,
+        };
+        // The write is a call on the resource like any other.
+        self.resource_call(fx, write, r, "write")
     }
 
     /// `with_provider[R](p, f)`: `p` kept in a local while `f`'s copy for

@@ -1326,13 +1326,9 @@ fn native_effects(base: &str, method: &str) -> Option<Vec<(Verb, &'static str, O
         // The default providers' methods (core-semantics §14.7) are the
         // ambient resources' natives with a receiver first, a fresh value
         // that keys nothing.
-        ("OsEnv" | "OsClock" | "OsRandom", _) => {
-            let resource = match base {
-                "OsEnv" => "Env",
-                "OsClock" => "Clock",
-                _ => "RandomSource",
-            };
-            let effects = native_effects(resource, method)?;
+        _ if super::providers::os_default(base, method).is_some() => {
+            let (resource, method) = super::providers::os_default(base, method)?;
+            let effects = native_effects(resource, &method)?;
             return Some(effects.into_iter().map(|(v, r, _)| (v, r, None)).collect());
         }
         ("Env", "args" | "var") => vec![(Reads, "Env", None), HEAP],
@@ -1512,8 +1508,9 @@ fn native_effects(base: &str, method: &str) -> Option<Vec<(Verb, &'static str, O
         ("File", "set_len") => vec![(Writes, "File", Some(0)), (Blocks, "", None)],
         // Building the options touches nothing.
         ("File", "options") | ("OpenOptions", _) => vec![],
+        // A read advances the stream, so it writes (core semantics §14.10).
         ("Stdin", "read_line" | "read_to_string" | "lines") => {
-            vec![(Reads, "Stdin", None), (Blocks, "", None), HEAP]
+            vec![(Writes, "Stdin", None), (Blocks, "", None), HEAP]
         }
         // Pure libraries over values: they allocate, and a bad index or
         // argument panics. Parsing command-line arguments reads them.
@@ -1638,10 +1635,15 @@ impl<'p> Analysis<'p> {
         } else {
             Access::Reads
         };
+        // A stream's `print` calls its provider's `write` (§14.10).
+        let via = match super::providers::fused_print(r, m) {
+            Some(_) => "write",
+            None => m,
+        };
         let impls = decl
             .impls
             .values()
-            .filter_map(|ms| ms.get(m).cloned())
+            .filter_map(|ms| ms.get(m).or_else(|| ms.get(via)).cloned())
             .collect();
         Some((resource, access, impls))
     }

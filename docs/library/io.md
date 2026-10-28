@@ -13,8 +13,8 @@ The streams are reached through the prelude aliases `stdin`, `stdout` and `stder
 
 ```kara
 // stdin
-fn stdin.read_line() -> Result[String, IoError] with reads(Stdin) blocks
-fn stdin.read_to_string() -> Result[String, IoError] with reads(Stdin) blocks
+fn stdin.read_line() -> Result[String, IoError] with writes(Stdin) blocks
+fn stdin.read_to_string() -> Result[String, IoError] with writes(Stdin) blocks
 fn stdin.lines() -> StdinLines
 
 // stdout and stderr
@@ -26,7 +26,46 @@ fn stderr.println(s: Str) with writes(Stderr)
 fn stderr.flush() with writes(Stderr)
 ```
 
-`stdin.read_line()` returns the next line with its `\n`, or the last line without one when the input does not end in a newline; at the end of input it returns `Ok` of an empty string. `stdin.lines()` returns an iterator over the remaining lines of standard input, each a `Result[String, IoError]` without its `\n` or `\r\n`, and it ends at the end of input. Iterate it with `for line in stdin.lines()`: making it reads nothing, and each turn of the loop reads one line with `reads(Stdin)` and `blocks`. It has no adaptor or terminal methods. The reads share one buffer, so `read_line` followed by `lines()` continues where the first read stopped. The prelude functions `print`, `println` and `eprintln` take any `Display` value and have `writes(Stdout)` or `writes(Stderr)` ([README](README.md#the-prelude)).
+`stdin.read_line()` returns the next line with its `\n`, or the last line without one when the input does not end in a newline; at the end of input it returns `Ok` of an empty string. `stdin.lines()` returns an iterator over the remaining lines of standard input, each a `Result[String, IoError]` without its `\n` or `\r\n`, and it ends at the end of input. Iterate it with `for line in stdin.lines()`: making it reads nothing, and each turn of the loop reads one line with `writes(Stdin)` and `blocks`: a read advances the stream, so it writes, as a draw writes `RandomSource` ([core-semantics §14.10](../core-semantics.md)). It has no adaptor or terminal methods. The reads share one buffer, so `read_line` followed by `lines()` continues where the first read stopped. The prelude functions `print`, `println` and `eprintln` take any `Display` value and have `writes(Stdout)` or `writes(Stderr)` ([README](README.md#the-prelude)).
+
+**Overriding a stream.** `Stdout`, `Stderr` and `Stdin` are program-rooted resources ([core-semantics §14.10](../core-semantics.md)), and a program replaces one for the extent of a call with `with_provider`, as it does `Env` ([time-random-env.md](time-random-env.md#testing-with-fixed-values)). The replacement implements the stream's provider trait:
+
+```kara
+trait StdoutProvider {
+    fn write(mut ref self, s: Str)
+    fn flush(mut ref self)
+}
+
+trait StderrProvider {
+    fn write(mut ref self, s: Str)
+    fn flush(mut ref self)
+}
+
+trait StdinProvider {
+    fn read_line(mut ref self) -> Result[String, IoError]       // with its newline; Ok("") at the end
+    fn read_to_string(mut ref self) -> Result[String, IoError]
+}
+```
+
+Every method takes `mut ref self`, because each call advances the stream, and every method has a default body that panics naming the stream and the method, so a fake states only the methods it uses. Inside `with_provider[Stdout](fake, || ..)`, `print`, `println`, `stdout.print` and `stdout.println` in the closure and in every function it calls format their text, the newline included, and pass it to `fake.write`; `stdout.flush()` calls `fake.flush`. Outside an override the printers write to the process's stream directly, with no intermediate `String`. `stdin.lines()` reads the process's stdin only and is refused under a `Stdin` override. The panic path never uses a provider: a panic message, a failed `assert`, `dbg` and the runtime's own warnings go to the process's standard error even under `with_provider[Stderr]`.
+
+```kara
+struct Lines { n: i64 }
+
+impl StdoutProvider for Lines {
+    fn write(mut ref self, s: Str) {
+        self.n = self.n + 1;
+        eprintln(f"line {self.n}: {s.trim()}");
+    }
+}
+
+fn main() {
+    with_provider[Stdout](Lines { n: 0 }, || {
+        println("hello");   // stderr: line 1: hello
+    });
+    println("back");        // stdout: back
+}
+```
 
 **UTF-8 and stdin.** `stdin.read_line` and `stdin.read_to_string` return `Result[String, IoError]`: invalid UTF-8 on stdin is `IoError.InvalidUtf8`, which keeps `String`'s UTF-8 invariant. A bytes-level stdin read is deferred ([deferred.md](../deferred.md)).
 
@@ -537,7 +576,7 @@ fn main() -> Result[(), IoError] {
 }
 ```
 
-Its inferred effects are `reads(Stdin), writes(Stdout), blocks`. Like any private function, `main` has its effects inferred ([design.md §12](../design.md#12-effects)). It has no `panics`: `parse` returns a `Result` that the `match` handles, and `?` propagates rather than panicking. `blocks` comes from the stdin read, which parks the thread until input or end of file arrives.
+Its inferred effects are `writes(Stdin), writes(Stdout), blocks`. Like any private function, `main` has its effects inferred ([design.md §12](../design.md#12-effects)). It has no `panics`: `parse` returns a `Result` that the `match` handles, and `?` propagates rather than panicking. `blocks` comes from the stdin read, which parks the thread until input or end of file arrives.
 
 A command-line tool skeleton:
 

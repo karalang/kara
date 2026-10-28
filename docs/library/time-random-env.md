@@ -123,4 +123,4 @@ fn main() {
 }
 ```
 
-Inside the closure every call on `Env`, including those in the functions it calls, uses the fake, which cannot leave the call. The library declares the defaults as `effect resource Env: EnvProvider = OsEnv {};`, `effect resource Clock: ClockProvider = OsClock {};` and `effect resource RandomSource: RandomProvider = OsRandom {};`. Overriding `FileSystem`, `Network` and the standard streams stays in M4a ([deferred.md](../deferred.md#m4a-services)).
+Inside the closure every call on `Env`, including those in the functions it calls, uses the fake, which cannot leave the call. The library declares the defaults as `effect resource Env: EnvProvider = OsEnv {};`, `effect resource Clock: ClockProvider = OsClock {};` and `effect resource RandomSource: RandomProvider = OsRandom {};`. The standard streams are overridden the same way ([io.md](io.md#standard-streams)).

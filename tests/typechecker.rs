@@ -14829,7 +14829,7 @@ fn test_io_error_variants_are_known() {
 fn test_stdin_read_line_returns_result_str_io_error() {
     // Stdin.read_line() -> Result[str, IoError] — should typecheck
     typecheck_ok(
-        "fn main() with reads(Stdin) {
+        "fn main() with writes(Stdin) {
              let r = Stdin.read_line();
          }",
     );
@@ -15097,10 +15097,10 @@ fn test_bufreader_lines_returns_lines_iter() {
 fn test_stdin_lines_for_loop_binds_result_string() {
     // phase-8 `Stdin.lines()` slice: `for line in stdin.lines()` binds
     // `line: Result[String, IoError]` via the `("StdinLines","Item")` mapping,
-    // exactly like `BufReader.lines()`. The `reads(Stdin), blocks` effect is
+    // exactly like `BufReader.lines()`. The `writes(Stdin), blocks` effect is
     // inferred from the static `Stdin.lines` seed, so the `with` clause verifies.
     typecheck_ok(
-        "fn driver() with reads(Stdin) blocks {
+        "fn driver() with writes(Stdin) blocks {
              for line in stdin.lines() {
                  match line {
                      Ok(s) => { println(s); }

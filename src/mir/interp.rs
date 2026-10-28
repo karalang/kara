@@ -1479,12 +1479,10 @@ impl<'a> Interp<'a> {
         let base = ty_name.split('[').next().unwrap_or(ty_name);
         // The default providers (§14.7) are the ambient resources' natives
         // with a receiver, which carries nothing.
-        if let ("OsEnv" | "OsClock" | "OsRandom", Some(_)) = (base, args.first()) {
-            let resource = match base {
-                "OsEnv" => "Env",
-                "OsClock" => "Clock",
-                _ => "RandomSource",
-            };
+        if let (Some((resource, method)), Some(_)) = (
+            crate::mir::providers::os_default(base, method),
+            args.first(),
+        ) {
             let rest = arg_tys.get(1..).unwrap_or_default();
             let args = args.into_iter().skip(1).collect();
             return self.native(&format!("{resource}.{method}"), args, rest, ret);

@@ -8536,6 +8536,9 @@ pub(crate) fn library_provider_trait(resource: &str) -> Option<&'static str> {
         "Env" => Some("EnvProvider"),
         "Clock" => Some("ClockProvider"),
         "RandomSource" => Some("RandomProvider"),
+        "Stdout" => Some("StdoutProvider"),
+        "Stderr" => Some("StderrProvider"),
+        "Stdin" => Some("StdinProvider"),
         _ => None,
     }
 }

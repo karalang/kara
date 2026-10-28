@@ -9329,9 +9329,9 @@ fn test_pub_fn_with_reads_filesystem_declared_accepts_bufreader_lines() {
 }
 
 #[test]
-fn test_pub_fn_calling_stdin_lines_must_declare_reads_stdin() {
+fn test_pub_fn_calling_stdin_lines_must_declare_writes_stdin() {
     // phase-8 `Stdin.lines()` slice: like `BufReader.lines`, the per-line reads
-    // happen during iteration, so `reads(Stdin), blocks` is attributed at the
+    // happen during iteration, so `writes(Stdin), blocks` is attributed at the
     // `lines()` call by the static seed. A pub fn iterating `stdin.lines()`
     // without declaring the effect must fail.
     let result = effectcheck_full_pipeline(
@@ -9349,16 +9349,16 @@ fn test_pub_fn_calling_stdin_lines_must_declare_reads_stdin() {
             .errors
             .iter()
             .any(|e| e.kind == EffectErrorKind::MissingEffectDeclaration
-                && (e.message.contains("reads(Stdin)") || e.message.contains("blocks"))),
-        "expected MissingEffectDeclaration for reads(Stdin)/blocks; got: {:?}",
+                && (e.message.contains("writes(Stdin)") || e.message.contains("blocks"))),
+        "expected MissingEffectDeclaration for writes(Stdin)/blocks; got: {:?}",
         result.errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
     );
 }
 
 #[test]
-fn test_pub_fn_with_reads_stdin_blocks_declared_accepts_stdin_lines() {
+fn test_pub_fn_with_writes_stdin_blocks_declared_accepts_stdin_lines() {
     let result = effectcheck_full_pipeline(
-        "pub fn dump() with reads(Stdin) blocks {
+        "pub fn dump() with writes(Stdin) blocks {
              for line in stdin.lines() {
                  match line {
                      Ok(_) => {}
@@ -9374,7 +9374,7 @@ fn test_pub_fn_with_reads_stdin_blocks_declared_accepts_stdin_lines() {
         .collect();
     assert!(
         real_errors.is_empty(),
-        "expected clean effectcheck with reads(Stdin) blocks declared; got: {:?}",
+        "expected clean effectcheck with writes(Stdin) blocks declared; got: {:?}",
         real_errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
     );
 }
@@ -11644,7 +11644,7 @@ fn test_design_md_io_skeletons_infer_documented_effects() {
         );
     }
 
-    // Guessing-game skeleton: reads(Stdin), writes(Stdout), blocks — and
+    // Guessing-game skeleton: writes(Stdin), writes(Stdout), blocks — and
     // NOT panics. design.md used to claim `panics` here; measurement showed
     // it comes from indexing (which the CLI skeleton has, via `args[1]`, and
     // this one does not — `i64.parse` returns an Option handled exhaustively,
@@ -11667,7 +11667,7 @@ fn test_design_md_io_skeletons_infer_documented_effects() {
         .iter()
         .map(|e| format!("{:?}({})", e.effect.verb, e.effect.resource))
         .collect();
-    for want in ["Reads(Stdin)", "Writes(Stdout)", "Blocks()"] {
+    for want in ["Writes(Stdin)", "Writes(Stdout)", "Blocks()"] {
         assert!(
             have.contains(want),
             "design.md's guessing-game skeleton documents {want}; got: {have:?}"

@@ -1,5 +1,5 @@
 
-fn main() reads(Stdin) {
+fn main() writes(Stdin) {
     match Stdin.read_line() {
         Ok(s) => { if s.len() == 0 { println("eof-ok"); } else { println("got-line"); } }
         Err(_) => { println("io-err"); }

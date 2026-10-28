@@ -1824,18 +1824,19 @@ impl<'a> EffectChecker<'a> {
                     .insert(self.interner.intern("DataFrame.read_csv"), rset);
             }
             // Phase 8 `Stdin.lines()` slice: the stdin line iterator carries
-            // `reads(Stdin), blocks` (design.md § "Source effects flow through
+            // `writes(Stdin), blocks` (core-semantics §14.10: a read advances
+            // the stream; design.md § "Source effects flow through
             // adaptors"). Like `BufReader.lines`, the per-line reads happen
             // during for-loop iteration (no call site of their own), so the
             // effect must be attributed statically at the `lines()` call rather
             // than left to runtime tracking — otherwise a function iterating
-            // `stdin.lines()` would not infer `reads(Stdin)`. `blocks` because a
+            // `stdin.lines()` would not infer `writes(Stdin)`. `blocks` because a
             // stdin read parks the OS thread until input (or EOF) arrives.
             {
                 let mut set = EffectSet::new();
                 set.add(
                     Effect {
-                        verb: EffectVerbKind::Reads,
+                        verb: EffectVerbKind::Writes,
                         resource: "Stdin".to_string(),
                     },
                     EffectOrigin::Direct(builtin_span),
@@ -1911,11 +1912,12 @@ impl<'a> EffectChecker<'a> {
                 seed(name, &[w("Stderr")]);
             }
 
-            // Stdin. `blocks` alongside `reads(Stdin)` for the same reason
-            // `Stdin.lines` carries it: the read parks the OS thread until
-            // input or EOF arrives.
+            // Stdin. A read advances the stream, so it writes, as a draw
+            // writes `RandomSource` (core-semantics §14.10). `blocks` for
+            // the same reason `Stdin.lines` carries it: the read parks the
+            // OS thread until input or EOF arrives.
             for name in ["Stdin.read_line", "Stdin.read_to_string"] {
-                seed(name, &[r("Stdin"), blocks.clone()]);
+                seed(name, &[w("Stdin"), blocks.clone()]);
             }
 
             // Env reads. `Env.set` is seeded `writes(Env)` above; these are the

@@ -27,7 +27,7 @@
 struct Stdin { }
 
 // Lazy line iterator over standard input (design.md § "Source effects flow
-// through adaptors" — `io.lines()` binds `reads(Stdin), blocks`). Empty marker;
+// through adaptors" — `io.lines()` binds `writes(Stdin), blocks`). Empty marker;
 // stdin is ambient, so — unlike the File-backed `LinesIter` — it carries no
 // reader handle. Iteration is driven by the compiler (interpreter for-loop
 // drain / codegen per-iteration `karac_runtime_stdin_read_line` loop), yielding
@@ -43,7 +43,7 @@ impl StdinLines {
     // native `StdinLines.next`); the legacy interpreter drains the loop
     // itself.
     #[compiler_builtin]
-    fn next(mut ref self) -> Option[Result[String, IoError]] with reads(Stdin) blocks { None }
+    fn next(mut ref self) -> Option[Result[String, IoError]] with writes(Stdin) blocks { None }
 }
 
 impl Stdin {
@@ -54,7 +54,7 @@ impl Stdin {
     fn read_to_string() -> Result[String, IoError] { Err(IoError.Other("placeholder")) }
 
     #[compiler_builtin]
-    fn lines() -> StdinLines with reads(Stdin) blocks { StdinLines { } }
+    fn lines() -> StdinLines with writes(Stdin) blocks { StdinLines { } }
 }
 
 struct Stdout { }
@@ -374,6 +374,44 @@ trait RandomProvider {
     // counting fake can keep its state.
     fn next_u64(mut ref self) -> u64 {
         panic("RandomSource.next_u64 called on a provider that does not implement it")
+    }
+}
+
+// The standard streams' provider traits (core-semantics §14.10). A write
+// or a read advances the stream, so every method takes `mut ref self`:
+// reading standard input is `writes(Stdin)`, as a draw is
+// `writes(RandomSource)`. Under `with_provider[Stdout](fake, || ..)`,
+// `print` and `println` call `fake.write` with the formatted text, the
+// newline included; a panic, a failed `assert` and `dbg` still go to the
+// process's own standard error.
+trait StdoutProvider {
+    fn write(mut ref self, s: Str) {
+        panic("Stdout.write called on a provider that does not implement it")
+    }
+
+    fn flush(mut ref self) {
+        panic("Stdout.flush called on a provider that does not implement it")
+    }
+}
+
+trait StderrProvider {
+    fn write(mut ref self, s: Str) {
+        panic("Stderr.write called on a provider that does not implement it")
+    }
+
+    fn flush(mut ref self) {
+        panic("Stderr.flush called on a provider that does not implement it")
+    }
+}
+
+trait StdinProvider {
+    // The next line with its newline, or `Ok("")` at the end of input.
+    fn read_line(mut ref self) -> Result[String, IoError] {
+        panic("Stdin.read_line called on a provider that does not implement it")
+    }
+
+    fn read_to_string(mut ref self) -> Result[String, IoError] {
+        panic("Stdin.read_to_string called on a provider that does not implement it")
     }
 }
 

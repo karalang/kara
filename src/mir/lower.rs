@@ -17222,6 +17222,19 @@ impl<'l, 'a> Bx<'l, 'a> {
                 for a in args {
                     self.print_operands(&a.value, &mut ops)?;
                 }
+                // A program that overrides the stream calls it through its
+                // provider (§14.10), a placeholder until specialisation.
+                let (r, m) = match name {
+                    "println" => ("Stdout", "println"),
+                    "print" => ("Stdout", "print"),
+                    "eprintln" => ("Stderr", "println"),
+                    _ => ("Stderr", "print"),
+                };
+                if self.resource_via_provider(r) {
+                    self.ensure_resource(r)?;
+                    self.call_native(&format!("{r}.{m}"), ops, dest);
+                    return Ok(());
+                }
                 self.call_native(name, ops, dest);
                 Ok(())
             }
@@ -18904,6 +18917,20 @@ impl<'l, 'a> Bx<'l, 'a> {
             decl.impls.insert(t, methods);
             decl.default = Some(t);
         }
+        // `print` and `println` on a standard stream (§14.10) take the
+        // parts the fused natives take; `providers::specialise` keeps the
+        // native outside an override and formats for the provider's
+        // `write` inside one.
+        for m in ["print", "println"] {
+            if let Some(native) = crate::mir::providers::fused_print(r, m) {
+                decl.methods.insert(m.to_string(), true);
+                if let Some(t) = decl.default {
+                    if let Some(ms) = decl.impls.get_mut(&t) {
+                        ms.insert(m.to_string(), native.to_string());
+                    }
+                }
+            }
+        }
         self.lcx.program.resources.insert(r.to_string(), decl);
         Ok(())
     }
@@ -19021,6 +19048,24 @@ impl<'l, 'a> Bx<'l, 'a> {
         dest: Place,
     ) -> R<()> {
         self.ensure_resource(r)?;
+        if (r, m) == ("Stdin", "lines") {
+            self.errors.push(format!(
+                "{} in `{}`: `stdin.lines()` reads the process's own stdin, so it cannot run \
+                 under a `Stdin` override (core-semantics §14.10); read with \
+                 `stdin.read_line()` in a loop instead",
+                at(e.span),
+                self.name
+            ));
+            return Err(());
+        }
+        if crate::mir::providers::fused_print(r, m).is_some() {
+            let mut ops = Vec::new();
+            for a in args {
+                self.print_operands(&a.value, &mut ops)?;
+            }
+            self.call_native(&format!("{r}.{m}"), ops, dest);
+            return Ok(());
+        }
         let Some(tm) = self.resource_method(r, m) else {
             return self.unsupported(
                 e.span,
@@ -22191,6 +22236,12 @@ const BAKED_SOURCES: &[(&str, &[&str], &[&str])] = &[
             "EnvProvider",
             "ClockProvider",
             "RandomProvider",
+            "OsStdout",
+            "OsStderr",
+            "OsStdin",
+            "StdoutProvider",
+            "StderrProvider",
+            "StdinProvider",
         ],
         // A program's own `Env` (a Lua interpreter's environment) shadows
         // the resource, whose calls then keep the resource's own natives.
@@ -22198,6 +22249,9 @@ const BAKED_SOURCES: &[(&str, &[&str], &[&str])] = &[
             "OsEnv",
             "OsClock",
             "OsRandom",
+            "OsStdout",
+            "OsStderr",
+            "OsStdin",
             "Env",
             "Clock",
             "RandomSource",

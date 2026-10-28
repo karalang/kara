@@ -138,6 +138,10 @@ pub const PRELUDE_TYPES: &[&str] = &[
     "EnvProvider",
     "ClockProvider",
     "RandomProvider",
+    // The standard streams' provider traits (core-semantics §14.10).
+    "StdoutProvider",
+    "StderrProvider",
+    "StdinProvider",
     "AllocError",
     // `AnyError` (design.md §10), beside `Error` in PRELUDE_TRAITS.
     "AnyError",

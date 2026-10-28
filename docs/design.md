@@ -5242,7 +5242,7 @@ A second execution effect, `suspends` (the task may yield cooperatively), return
 | Verb | Resource | Covers |
 |---|---|---|
 | `reads`/`writes` | `FileSystem` | the capability to use files by path |
-| `reads` | `Stdin` | standard input |
+| `writes` | `Stdin` | standard input (a read advances the stream, so it writes, [core-semantics §14.10](core-semantics.md)) |
 | `writes` | `Stdout` | standard output (`print`, `println`) |
 | `writes` | `Stderr` | standard error (`eprint`, `eprintln`) |
 | `reads` | `Clock` | wall-clock and monotonic time |
@@ -7074,7 +7074,7 @@ All diagnostics are available as JSON with machine-applicable fix diffs. AI agen
 ```bash
 $ karac build --output=json
 {
-  "program_effects": ["reads(FileSystem, Env, Stdin)", "writes(Stdout, Stderr, UserDB)", "sends(Network)"],  // null if build did not reach effect analysis
+  "program_effects": ["reads(FileSystem, Env)", "writes(Stdin, Stdout, Stderr, UserDB)", "sends(Network)"],  // null if build did not reach effect analysis
   "diagnostics": [{
     "id": "d1",
     "severity": "error", "primary": true,

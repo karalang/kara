@@ -1,6 +1,6 @@
 struct CannedStdin {}
-impl CannedStdin {
-fn read_line(self) -> Result[String, String] {
+impl StdinProvider for CannedStdin {
+fn read_line(mut ref self) -> Result[String, IoError] {
 Ok("piped line")
 }
 }
