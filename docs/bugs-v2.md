@@ -97,7 +97,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-28-1 | 2026-10-28 | mir-llvm | low | After 45524985d1 a one-worker auto-par build runs the in-order build's instructions, yet 16 of 129 M4b programs still time under 0.9x of it in one 9-run pass (kata 7 0.764, 8 0.727, 125 0.696, 153 0.798, 895 0.79, word_freq_multi 0.787): the code is the same and lands elsewhere, so the floor at one worker is at the resolution of code placement | — |
 | B-2026-10-28-3 | 2026-10-28 | mir-llvm | low | A compiled program's run time moves 10-20% with where its hot function lands, and the runtime archive is one of the things that moves it: kata 125 runs about 10% slower whenever karac.main sits at 16 mod 64 (the full archive's larger headers shift user code by 0x3130 bytes), kata 28 KMP 0.41 vs 0.52 s between layouts; no alignment setting tried removes the swing without slowing another program 7-20% | — |
 | B-2026-10-28-10 | 2026-10-28 | mir-llvm | low | With compile_mir linear (B-2026-10-28-6), an auto-par build of apps/cli/mini_inflect still takes about 13 s against 5.3 s with KARAC_AUTO_PAR=0: the in-order #seq twins double the bodies (838 against 404) and LLVM's opt + emission takes 7.4 s against 2.7 s | — |
-| B-2026-10-28-13 | 2026-10-28 | typecheck+ownership | low | `karac check` reports one identical diagnostic per impl for a mistake in a trait default body copied into several impls: a use after a move in `Use.run`, impl'd by two types whose `take` both consume, is two `value 's' moved here` errors at one span; an element move (E_INDEX_MOVE_NON_COPY) is two as well | — |
 
 ### Relocated
 
@@ -320,6 +319,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-28-9 | typecheck+ownership | medium | `karac check` verdict on a trait default body depends on impl order: desugar copies the body into every impl with the same spans, the typechecker kee… | 09e7ad69b5 |
 | B-2026-10-28-11 | typecheck+ownership | medium | `karac check` accepts a use-after-move in a trait default body copied into two impls whose call in it borrows in one impl and consumes in the other (… | 5f981f27a0 |
 | B-2026-10-28-12 | typecheck+ownership | medium | A trait default body copied into two impls rewrites `v[0] + v[1]` by the LAST impl's operand types for every copy, and drops an element move program-… | 936eab079a |
+| B-2026-10-28-13 | typecheck+ownership | low | `karac check` reports one identical diagnostic per impl for a mistake in a trait default body copied into several impls: a use after a move in `Use.r… | ac5a67f639 |
 
 </details>
 
