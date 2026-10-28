@@ -514,14 +514,13 @@ pub(crate) fn link_executable_impl(
     // full archive) so `gpu.dispatch` links without a manual `KARAC_RUNTIME`;
     // a non-GPU program never sees it. Computed once — also gates the macOS
     // Metal-framework flags below.
-    let references_gpu = object_references_gpu(obj_path);
-    let references_arrow = !references_gpu && object_references_arrow(obj_path);
-    let references_regex =
-        !references_gpu && !references_arrow && object_references_regex(obj_path);
-    let references_unicode = !references_gpu
-        && !references_arrow
-        && !references_regex
-        && object_references_unicode(obj_path);
+    let nm = nm_listing(obj_path);
+    let nm = nm.as_deref();
+    let references_gpu = object_references_gpu(nm);
+    let references_arrow = !references_gpu && object_references_arrow(nm);
+    let references_regex = !references_gpu && !references_arrow && object_references_regex(nm);
+    let references_unicode =
+        !references_gpu && !references_arrow && !references_regex && object_references_unicode(nm);
     // A ThreadSanitizer link takes a TSan-built archive: TSan sees the
     // order the pool's lock imposes only in instrumented code
     // (`mir_asan.rs`). A program that normalizes takes the TSan build of
@@ -543,7 +542,7 @@ pub(crate) fn link_executable_impl(
     } else {
         SpecialArchive::None
     };
-    let prefer_min = special == SpecialArchive::None && !object_references_tls(obj_path);
+    let prefer_min = special == SpecialArchive::None && !object_references_tls(nm);
     let runtime_path = resolve_runtime_path(prefer_min, special)?;
 
     // Windows uses a separate link path (MSVC toolchain): a `clang` driver
@@ -879,14 +878,13 @@ pub fn link_native_library(
     lib_name: &str,
     export_symbols: &[String],
 ) -> Result<(), String> {
-    let references_gpu = object_references_gpu(obj_path);
-    let references_arrow = !references_gpu && object_references_arrow(obj_path);
-    let references_regex =
-        !references_gpu && !references_arrow && object_references_regex(obj_path);
-    let references_unicode = !references_gpu
-        && !references_arrow
-        && !references_regex
-        && object_references_unicode(obj_path);
+    let nm = nm_listing(obj_path);
+    let nm = nm.as_deref();
+    let references_gpu = object_references_gpu(nm);
+    let references_arrow = !references_gpu && object_references_arrow(nm);
+    let references_regex = !references_gpu && !references_arrow && object_references_regex(nm);
+    let references_unicode =
+        !references_gpu && !references_arrow && !references_regex && object_references_unicode(nm);
     let special = if references_gpu {
         SpecialArchive::Gpu
     } else if references_arrow {
@@ -898,7 +896,7 @@ pub fn link_native_library(
     } else {
         SpecialArchive::None
     };
-    let prefer_min = special == SpecialArchive::None && !object_references_tls(obj_path);
+    let prefer_min = special == SpecialArchive::None && !object_references_tls(nm);
     let runtime_path = resolve_runtime_path(prefer_min, special)?;
     match kind {
         NativeLibKind::StaticLib => link_static_library(obj_path, out_path, &runtime_path),
@@ -1331,41 +1329,50 @@ const TLS_RUNTIME_SYMBOL_MARKERS: &[&str] = &[
     "karac_mir_ready_http",
 ];
 
-/// Scan `obj_path`'s symbol table (via `nm`) for any reference to a
+/// Scan the object's symbol listing ([`nm_listing`]) for any reference to a
 /// TLS-only runtime symbol. A Kāra-emitted object never *defines*
 /// `karac_runtime_*` (those live in the archive), so any appearance is a
-/// reference. Conservative on failure: if `nm` is missing or errors, or
+/// reference. Conservative on failure: if the object cannot be read, or
 /// `KARAC_FORCE_FULL_RUNTIME` is set, returns `true` so the caller links
 /// the full archive (always correct, just larger).
-fn object_references_tls(obj_path: &str) -> bool {
+fn object_references_tls(nm: Option<&str>) -> bool {
     if std::env::var_os("KARAC_FORCE_FULL_RUNTIME").is_some() {
         return true;
     }
-    let output = std::process::Command::new("nm").arg(obj_path).output();
-    match output {
-        Ok(o) if o.status.success() => {
-            symbol_listing_references_tls(&String::from_utf8_lossy(&o.stdout))
-        }
-        // nm absent / failed: can't prove the program is TLS-free, so be safe.
-        _ => true,
-    }
+    // Unreadable: can't prove the program is TLS-free, so be safe.
+    nm.is_none_or(symbol_listing_references_tls)
 }
 
-/// Scan `obj_path` for a reference to a `karac_runtime_gpu_*` symbol — i.e.
+/// The emitted object's symbols, one name a line as `nm` lists them, or
+/// `None` when the object cannot be read. Read once per link, in process:
+/// the archive choice asks it up to five questions, and an `nm` run for
+/// each cost about 25 ms of every build.
+fn nm_listing(obj_path: &str) -> Option<String> {
+    let buf =
+        inkwell::memory_buffer::MemoryBuffer::create_from_file(std::path::Path::new(obj_path))
+            .ok()?;
+    let object = buf.create_binary_file(None).ok()?;
+    let mut symbols = object.get_symbols()?;
+    let mut out = String::new();
+    while let Some(symbol) = symbols.next_symbol() {
+        if let Some(name) = symbol.get_name() {
+            out.push_str(&name.to_string_lossy());
+            out.push('\n');
+        }
+    }
+    Some(out)
+}
+
+/// Scan the object's symbol listing for a reference to a `karac_runtime_gpu_*` symbol — i.e.
 /// the program calls `gpu.dispatch` (spike slice-0c). Such a binary links the
 /// wgpu-backed GPU runtime archive, whose Metal backend pulls in macOS system
 /// frameworks the default compute link line omits; the caller adds them only
 /// when this is true so non-GPU binaries are byte-for-byte unaffected.
-/// Conservative on `nm` failure: `false` (no GPU frameworks) — a genuinely
+/// Conservative on an unreadable object: `false` (no GPU frameworks) — a genuinely
 /// GPU-using program then fails at link with a clear missing-symbol error
 /// rather than silently mislinking.
-fn object_references_gpu(obj_path: &str) -> bool {
-    match std::process::Command::new("nm").arg(obj_path).output() {
-        Ok(o) if o.status.success() => {
-            symbol_listing_references_gpu(&String::from_utf8_lossy(&o.stdout))
-        }
-        _ => false,
-    }
+fn object_references_gpu(nm: Option<&str>) -> bool {
+    nm.is_some_and(symbol_listing_references_gpu)
 }
 
 /// Pure predicate over `nm`-style symbol-listing text: true iff any line names
@@ -1382,13 +1389,8 @@ fn symbol_listing_references_gpu(nm_output: &str) -> bool {
 /// program uses `Regex.compile` / `is_match`. Those symbols live only in the
 /// opt-in `libkarac_runtime_regex.a`, so a hit selects that archive
 /// (B-2026-07-14-19). Mirrors `object_references_gpu`.
-fn object_references_regex(obj_path: &str) -> bool {
-    match std::process::Command::new("nm").arg(obj_path).output() {
-        Ok(o) if o.status.success() => {
-            symbol_listing_references_regex(&String::from_utf8_lossy(&o.stdout))
-        }
-        _ => false,
-    }
+fn object_references_regex(nm: Option<&str>) -> bool {
+    nm.is_some_and(symbol_listing_references_regex)
 }
 
 fn symbol_listing_references_regex(nm_output: &str) -> bool {
@@ -1399,13 +1401,8 @@ fn symbol_listing_references_regex(nm_output: &str) -> bool {
 /// program serializes Arrow IPC (`to_arrow_ipc`). Those symbols live only in
 /// the opt-in `libkarac_runtime_arrow.a`, so a hit selects that archive.
 /// Mirrors `object_references_regex`.
-fn object_references_arrow(obj_path: &str) -> bool {
-    match std::process::Command::new("nm").arg(obj_path).output() {
-        Ok(o) if o.status.success() => {
-            symbol_listing_references_arrow(&String::from_utf8_lossy(&o.stdout))
-        }
-        _ => false,
-    }
+fn object_references_arrow(nm: Option<&str>) -> bool {
+    nm.is_some_and(symbol_listing_references_arrow)
 }
 
 fn symbol_listing_references_arrow(nm_output: &str) -> bool {
@@ -1416,13 +1413,8 @@ fn symbol_listing_references_arrow(nm_output: &str) -> bool {
 /// program calls `String.normalize(form)`. Those symbols live only in the
 /// opt-in `libkarac_runtime_unicode.a`, so a hit selects that archive
 /// (B-2026-08-20-41). Mirrors `object_references_regex`.
-fn object_references_unicode(obj_path: &str) -> bool {
-    match std::process::Command::new("nm").arg(obj_path).output() {
-        Ok(o) if o.status.success() => {
-            symbol_listing_references_unicode(&String::from_utf8_lossy(&o.stdout))
-        }
-        _ => false,
-    }
+fn object_references_unicode(nm: Option<&str>) -> bool {
+    nm.is_some_and(symbol_listing_references_unicode)
 }
 
 fn symbol_listing_references_unicode(nm_output: &str) -> bool {
