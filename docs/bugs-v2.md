@@ -59,7 +59,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | false-positive | 53 |
-| missing-feature | 45 |
+| missing-feature | 46 |
 | diagnostics | 42 |
 | soundness | 24 |
 | perf | 20 |
@@ -73,8 +73,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 98 |
-| mir | 46 |
+| typecheck | 99 |
+| mir | 47 |
 | mir-llvm | 30 |
 | ownership | 24 |
 | interp | 22 |
@@ -98,12 +98,10 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-28-10 | 2026-10-28 | mir-llvm | low | With compile_mir linear (B-2026-10-28-6) and the twins gone (630f13fdf6, dual module), an auto-par build of apps/cli/mini_inflect still takes about 20 s against 7.6 s with KARAC_AUTO_PAR=0: the parallel module alone (189,758 instructions) takes about 7.5 s of opt + emission against 2.7 s for the in-order one (177,688), so the cost is the parallel program's code, not the copy | — |
 | B-2026-10-28-15 | 2026-10-28 | mir-llvm | low | A native program that reaches an auto-par site pays a fixed cost for going multi-threaded: about 0.2-0.3 ms per worker to start the pool on a 4-core cloud host (the cost of bare thread creation there), plus multi-threaded malloc, mutex and wake overhead, about 1.5 ms in all on apps/pipeline/grain_intake already at two workers; it grows with the core count | — |
 | B-2026-10-28-16 | 2026-10-28 | typecheck | medium | A binary operator whose left operand is a primitive and whose impl is the program's (`impl Mul[Col] for f64`, then `2.0 * col`) is refused by `karac check` with "expected 'f64', found 'Col'"; the same for `10.0 - col` (`impl Sub[Col] for f64`) and `5 * icol` (`impl Mul[ICol] for i64`) | — |
-| B-2026-10-28-17 | 2026-10-28 | typecheck+mir | medium | A trait-qualified call of an operator method (`Add.add(p, q)`, `Mul.mul(2.0, col)`, `Add.add(2, 3)`) passes `karac check` but leaves its result untyped, so every backend refuses the program with "a type that failed to check is not lowered yet", even when the receiver's type has one impl of the trait | — |
-| B-2026-10-28-18 | 2026-10-28 | typecheck | low | A method call of a generic operator trait's method whose receiver type has several impls of it that differ only in the right operand (`col.mul(2.0)` with `Mul[f64]`, `Mul[i64]`, `Mul[Col]` and `Mul[Mask]` for `Col`) is refused as "ambiguous method 'mul' ... use UFCS", although the argument's type selects exactly one impl; the operator form `col * 2.0` resolves the same impls | — |
-| B-2026-10-28-19 | 2026-10-28 | interp+mir-llvm | low | An operator trait's method called by name on a primitive (`2.add(3)`) passes `karac check` but does not run: the interpreter stops with "call of unknown function i64.add" and the compiled backends with "native `i64.add` is not lowered yet" | — |
-| B-2026-10-28-20 | 2026-10-28 | typecheck | low | A type-qualified call of a trait method (`P.add(a, b)` for `impl Add for P`) is refused by `karac check` with "expected 1 argument(s), found 2", though design.md § Method resolution says `User.validate(user)` and `user.validate()` are the same call | — |
+| B-2026-10-28-18 | 2026-10-28 | typecheck | low | A method call of a generic operator trait's method whose receiver type has several impls of it that differ only in the right operand (`col.mul(2.0)` with `Mul[f64]`, `Mul[i64]`, `Mul[Col]` and `Mul[Mask]` for `Col`) is refused as "ambiguous method 'mul' ... use UFCS", although the argument's type selects exactly one impl; the operator form `col * 2.0` resolves the same impls; since B-2026-10-28-17's fix the UFCS form it suggests (`Mul.mul(col, 2.0)`, and `Mul.mul(2.0, col)` with `impl Mul[Col] for f64`) is refused as ambiguous the same way, because UFCS selects by trait but not yet by the trait's argument | — |
 | B-2026-10-28-21 | 2026-10-28 | typecheck | medium | A type with two `Index` impls that differ in the index type (`Index[String]` and `Index[i64]` for a `Frame`, so `f["a"]` and `f[0]`) only consults the first: `f[1]` is refused with "expected 'String', found 'i64'" | — |
 | B-2026-10-28-22 | 2026-10-28 | typecheck | medium | A user operator impl is not found for an operand of explicit `ref T` type: `fn add_refs(x: ref Col, y: ref Col) -> Col { x + y }` is refused with "type 'ref Col' does not implement trait Add", even when the impl borrows (`fn add(self, rhs: Col)`); `x * 2.0` likewise, and `-x` reads "unary '-' requires numeric type, found 'ref Col'" | — |
+| B-2026-10-28-23 | 2026-10-28 | typecheck+mir | medium | A closure whose error type comes only from a `?` inside it passes `karac check` but does not build on MIR: `let get = |s: Str| { if s.len() > 0 { Ok(Some(num(s)?)) } else { Ok(None) } };` fails with `an expression whose type does not lower (Type(UnknownParam("E")))`, and the `|..| -> Result[..]` annotation that would pin E is refused by the parser and deleted by `karac fix` | — |
 
 ### Relocated
 
@@ -329,6 +327,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-28-12 | typecheck+ownership | medium | A trait default body copied into two impls rewrites `v[0] + v[1]` by the LAST impl's operand types for every copy, and drops an element move program-… | 936eab079a |
 | B-2026-10-28-13 | typecheck+ownership | low | `karac check` reports one identical diagnostic per impl for a mistake in a trait default body copied into several impls: a use after a move in `Use.r… | ac5a67f639 |
 | B-2026-10-28-14 | mir-llvm | low | apps/pipeline/grain_intake's auto-par build runs under 0.9x of its in-order build at four workers (21-run medians 0.886, 0.881, 0.989, 0.88, 0.91 ove… | 01665b3473 |
+| B-2026-10-28-17 | typecheck+mir | medium | A trait-qualified call of an operator method (`Add.add(p, q)`, `Mul.mul(2.0, col)`, `Add.add(2, 3)`) passes `karac check` but leaves its result untyp… | 5ae4458dbf |
+| B-2026-10-28-19 | interp+mir-llvm | low | An operator trait's method called by name on a primitive (`2.add(3)`) passes `karac check` but does not run: the interpreter stops with "call of unkn… | 5ae4458dbf |
+| B-2026-10-28-20 | typecheck | low | A type-qualified call of a trait method (`P.add(a, b)` for `impl Add for P`) is refused by `karac check` with "expected 1 argument(s), found 2", thou… | 5ae4458dbf |
 
 </details>
 
