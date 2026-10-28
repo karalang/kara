@@ -1,0 +1,866 @@
+$ json orders.json | dtypes
+column,dtype
+id,int64
+placed,str
+status,str
+total,float64
+items,object
+coupon,str
+gift,object
+customer.id,str
+customer.name,str
+customer.tier,str
+customer.address.city,str
+customer.address.country,str
+returns,object
+$ json orders.json | select id,status,total,customer.name,customer.address.city,coupon,gift
+id,status,total,customer.name,customer.address.city,coupon,gift
+5001,shipped,37.5,Ada Okafor,Lagos,,True
+5002,pending,64.0,Bruno Lima,Porto,SPRING10,
+5003,shipped,12.75,Seán O'Brien,Cork,,False
+5004,cancelled,0.0,Ada Okafor,Lagos,,
+5005,shipped,88.4,Mei Tanaka,,WELCOME,True
+5006,shipped,32.0,Bruno Lima,Porto,,
+5007,pending,21.0,"Zoë ""Z"" Adler",Graz,,
+5008,shipped,51.25,Seán O'Brien,Cork,SPRING10,False
+5009,shipped,10.0,Mei Tanaka,,,
+5010,returned,43.4,Ada Okafor,Abuja,,True
+$ json orders.json | select id,items | head 3
+id,items
+5001,"[{'sku': 'TEA-01', 'qty': 2, 'price': 10.0, 'tags': ['tea', 'organic']}, {'sku': 'MUG-02', 'qty': 1, 'price': 17.5, 'tags': [], 'options': {'color': 'blue'}}]"
+5002,"[{'sku': 'BEAN-05', 'qty': 4, 'price': 16.0, 'tags': ['coffee'], 'options': {'grind': 'fine', 'size': '1kg'}}]"
+5003,"[{'sku': 'TEA-07', 'qty': 3, 'price': 4.25, 'tags': ['tea', 'sample']}]"
+$ json orders.json sep=_ | select id,customer_id,customer_address_country | head 4
+id,customer_id,customer_address_country
+5001,c-17,NG
+5002,c-03,PT
+5003,c-22,IE
+5004,c-17,NG
+$ json orders.json max_level=1 | select id,customer.name,customer.address | head 4
+id,customer.name,customer.address
+5001,Ada Okafor,"{'city': 'Lagos', 'country': 'NG'}"
+5002,Bruno Lima,"{'city': 'Porto', 'country': 'PT'}"
+5003,Seán O'Brien,"{'city': 'Cork', 'country': 'IE'}"
+5004,Ada Okafor,"{'city': 'Lagos', 'country': 'NG'}"
+$ json orders.json max_level=0 | select id,customer | head 2
+id,customer
+5001,"{'id': 'c-17', 'name': 'Ada Okafor', 'tier': 'gold', 'address': {'city': 'Lagos', 'country': 'NG'}}"
+5002,"{'id': 'c-03', 'name': 'Bruno Lima', 'tier': 'silver', 'address': {'city': 'Porto', 'country': 'PT'}}"
+$ json orders.json | select id,returns
+id,returns
+5001,
+5002,
+5003,
+5004,
+5005,"[{'sku': 'KETTLE-1', 'reason': 'damaged', 'refund': 43.4}]"
+5006,
+5007,
+5008,"[{'sku': 'TEA-07', 'reason': 'wrong item', 'refund': 8.5}, {'sku': 'BEAN-09', 'reason': 'stale', 'refund': 30.0}]"
+5009,
+5010,
+$ json order.json | dtypes
+column,dtype
+id,int64
+placed,str
+status,str
+total,float64
+items,object
+coupon,str
+gift,bool
+returns,object
+customer.id,str
+customer.name,str
+customer.tier,str
+$ json order.json record_path=items meta=id
+sku,qty,price,tags,options.color,id
+MUG-02,2,17.5,['gift'],red,5005
+TEA-01,1,10.0,"['tea', 'organic']",,5005
+KETTLE-1,1,43.4,"['hardware', 'sale']",,5005
+$ jsonl events.jsonl | dtypes
+column,dtype
+event,str
+user.id,float64
+user.plan,str
+props.path,str
+props.ms,float64
+user.referrer,str
+props.method,str
+session.id,str
+session.device.os,str
+session.device.app,str
+props.amount,float64
+props.items,object
+user,float64
+props.reason,str
+$ jsonl events.jsonl | select event,user.id,user.plan,props.path,props.ms
+event,user.id,user.plan,props.path,props.ms
+page_view,7.0,free,/pricing,1840.0
+signup,9.0,pro,,
+page_view,9.0,pro,/docs,420.0
+purchase,7.0,pro,,
+page_view,,,/,95.0
+page_view,12.0,free,/pricing,2210.0
+purchase,12.0,team,,
+page_view,7.0,pro,/docs,
+refund,7.0,free,,
+signup,15.0,free,,
+page_view,15.0,free,/blog/launch,3105.0
+purchase,9.0,pro,,
+$ jsonl events.jsonl | select event,user,user.id | head 6
+event,user,user.id
+page_view,,7.0
+signup,,9.0
+page_view,,9.0
+purchase,,7.0
+page_view,,
+page_view,,12.0
+$ jsonl events.jsonl | where event == 'purchase' | select user.id,props.amount,props.items
+user.id,props.amount,props.items
+7.0,49.0,['pro-annual']
+12.0,120.0,"['team-monthly', 'seats-5']"
+9.0,9.99,[]
+$ jsonl events.jsonl | select event,session.device.os,session.device.app
+event,session.device.os,session.device.app
+page_view,,
+signup,,
+page_view,ios,4.2
+purchase,,
+page_view,,
+page_view,android,4.1
+purchase,,
+page_view,,
+refund,,
+signup,web,
+page_view,,
+purchase,,
+$ jsonl events.jsonl max_level=1 | select event,session.id,session.device | head 4
+event,session.id,session.device
+page_view,,
+signup,,
+page_view,s-1,"{'os': 'ios', 'app': '4.2'}"
+purchase,,
+$ json orders.json record_path=items | dtypes
+column,dtype
+sku,str
+qty,int64
+price,float64
+tags,object
+options.color,str
+options.grind,str
+options.size,str
+$ json orders.json record_path=items
+sku,qty,price,tags,options.color,options.grind,options.size
+TEA-01,2,10.0,"['tea', 'organic']",,,
+MUG-02,1,17.5,[],blue,,
+BEAN-05,4,16.0,['coffee'],,fine,1kg
+TEA-07,3,4.25,"['tea', 'sample']",,,
+MUG-02,2,17.5,['gift'],red,,
+TEA-01,1,10.0,"['tea', 'organic']",,,
+KETTLE-1,1,43.4,"['hardware', 'sale']",,,
+BEAN-05,2,16.0,['coffee'],,whole,1kg
+TEA-07,5,4.25,['tea'],,,
+BEAN-09,1,30.0,"['coffee', 'sale']",,fine,500g
+TEA-01,1,10.0,"['tea', 'organic']",,,
+KETTLE-1,1,43.4,['hardware'],,,
+$ json orders.json record_path=items meta=id,status
+sku,qty,price,tags,options.color,options.grind,options.size,id,status
+TEA-01,2,10.0,"['tea', 'organic']",,,,5001,shipped
+MUG-02,1,17.5,[],blue,,,5001,shipped
+BEAN-05,4,16.0,['coffee'],,fine,1kg,5002,pending
+TEA-07,3,4.25,"['tea', 'sample']",,,,5003,shipped
+MUG-02,2,17.5,['gift'],red,,,5005,shipped
+TEA-01,1,10.0,"['tea', 'organic']",,,,5005,shipped
+KETTLE-1,1,43.4,"['hardware', 'sale']",,,,5005,shipped
+BEAN-05,2,16.0,['coffee'],,whole,1kg,5006,shipped
+TEA-07,5,4.25,['tea'],,,,5008,shipped
+BEAN-09,1,30.0,"['coffee', 'sale']",,fine,500g,5008,shipped
+TEA-01,1,10.0,"['tea', 'organic']",,,,5009,shipped
+KETTLE-1,1,43.4,['hardware'],,,,5010,returned
+$ json orders.json record_path=items meta=id,customer.name,customer.tier | select id,customer.name,customer.tier,sku,qty
+id,customer.name,customer.tier,sku,qty
+5001,Ada Okafor,gold,TEA-01,2
+5001,Ada Okafor,gold,MUG-02,1
+5002,Bruno Lima,silver,BEAN-05,4
+5003,Seán O'Brien,bronze,TEA-07,3
+5005,Mei Tanaka,gold,MUG-02,2
+5005,Mei Tanaka,gold,TEA-01,1
+5005,Mei Tanaka,gold,KETTLE-1,1
+5006,Bruno Lima,silver,BEAN-05,2
+5008,Seán O'Brien,bronze,TEA-07,5
+5008,Seán O'Brien,bronze,BEAN-09,1
+5009,Mei Tanaka,gold,TEA-01,1
+5010,Ada Okafor,gold,KETTLE-1,1
+$ json orders.json record_path=items meta=id record_prefix=item. | head 4
+item.sku,item.qty,item.price,item.tags,item.options.color,item.options.grind,item.options.size,id
+TEA-01,2,10.0,"['tea', 'organic']",,,,5001
+MUG-02,1,17.5,[],blue,,,5001
+BEAN-05,4,16.0,['coffee'],,fine,1kg,5002
+TEA-07,3,4.25,"['tea', 'sample']",,,,5003
+$ json orders.json record_path=items meta=id,customer.id meta_prefix=order. | select order.id,order.customer.id,sku | head 4
+order.id,order.customer.id,sku
+5001,c-17,TEA-01
+5001,c-17,MUG-02
+5002,c-03,BEAN-05
+5003,c-22,TEA-07
+$ json orders.json record_path=items meta=id sep=_ | select id,sku,options_color,options_grind
+id,sku,options_color,options_grind
+5001,TEA-01,,
+5001,MUG-02,blue,
+5002,BEAN-05,,fine
+5003,TEA-07,,
+5005,MUG-02,red,
+5005,TEA-01,,
+5005,KETTLE-1,,
+5006,BEAN-05,,whole
+5008,TEA-07,,
+5008,BEAN-09,,fine
+5009,TEA-01,,
+5010,KETTLE-1,,
+$ json orders.json record_path=items,tags meta=id
+! TypeError: 'NoneType' object is not iterable
+$ json order.json record_path=items,tags meta=id record_prefix=tag_
+tag_0,id
+gift,5005
+tea,5005
+organic,5005
+hardware,5005
+sale,5005
+$ json orders.json record_path=items meta=id,customer.address.city
+! KeyError: "Key 'address' not found. To replace missing values of 'address' with np.nan, pass in errors='ignore'"
+$ json orders.json record_path=items meta=id,customer.address.city errors=ignore | select id,sku,customer.address.city
+id,sku,customer.address.city
+5001,TEA-01,Lagos
+5001,MUG-02,Lagos
+5002,BEAN-05,Porto
+5003,TEA-07,Cork
+5005,MUG-02,
+5005,TEA-01,
+5005,KETTLE-1,
+5006,BEAN-05,Porto
+5008,TEA-07,Cork
+5008,BEAN-09,Cork
+5009,TEA-01,
+5010,KETTLE-1,Abuja
+$ json orders.json record_path=returns meta=id
+! KeyError: "Key 'returns' not found. If specifying a record_path, all elements of data should have the path."
+$ json orders.json record_path=items meta=id,sku errors=ignore
+! ValueError: Conflicting metadata name sku, need distinguishing prefix 
+$ jsonl events.jsonl record_path=props.items meta=event
+! KeyError: "Key 'items' not found. If specifying a record_path, all elements of data should have the path."
+$ json orders.json | len items n_items | select id,n_items
+id,n_items
+5001,2.0
+5002,1.0
+5003,1.0
+5004,0.0
+5005,3.0
+5006,1.0
+5007,
+5008,2.0
+5009,1.0
+5010,1.0
+$ json orders.json | explode items | select id,items | head 5
+id,items
+5001,"{'sku': 'TEA-01', 'qty': 2, 'price': 10.0, 'tags': ['tea', 'organic']}"
+5001,"{'sku': 'MUG-02', 'qty': 1, 'price': 17.5, 'tags': [], 'options': {'color': 'blue'}}"
+5002,"{'sku': 'BEAN-05', 'qty': 4, 'price': 16.0, 'tags': ['coffee'], 'options': {'grind': 'fine', 'size': '1kg'}}"
+5003,"{'sku': 'TEA-07', 'qty': 3, 'price': 4.25, 'tags': ['tea', 'sample']}"
+5004,
+$ json orders.json record_path=items meta=id | explode tags | select id,sku,tags
+id,sku,tags
+5001,TEA-01,tea
+5001,TEA-01,organic
+5001,MUG-02,
+5002,BEAN-05,coffee
+5003,TEA-07,tea
+5003,TEA-07,sample
+5005,MUG-02,gift
+5005,TEA-01,tea
+5005,TEA-01,organic
+5005,KETTLE-1,hardware
+5005,KETTLE-1,sale
+5006,BEAN-05,coffee
+5008,TEA-07,tea
+5008,BEAN-09,coffee
+5008,BEAN-09,sale
+5009,TEA-01,tea
+5009,TEA-01,organic
+5010,KETTLE-1,hardware
+$ json orders.json record_path=items meta=id | explode tags | counts tags
+tags,count
+tea,5
+organic,3
+coffee,3
+hardware,2
+sale,2
+sample,1
+gift,1
+$ json orders.json record_path=items meta=id | explode tags | agg tags qty:sum,id:nunique
+tags,qty_sum,id_nunique
+coffee,7,3
+gift,2,1
+hardware,2,2
+organic,4,3
+sale,2,2
+sample,3,1
+tea,12,5
+$ read survey.csv | split langs ; | select respondent,langs | head 4
+respondent,langs
+1,"['python', 'rust']"
+2,['javascript']
+3,"['python', 'javascript', 'go']"
+4,['java']
+$ read survey.csv | split langs ; | explode langs | counts langs
+langs,count
+python,7
+go,4
+rust,3
+javascript,3
+java,2
+$ read survey.csv | split langs ; | len langs n | select respondent,n
+respondent,n
+1,2.0
+2,1.0
+3,3.0
+4,1.0
+5,1.0
+6,2.0
+7,
+8,2.0
+9,1.0
+10,2.0
+11,3.0
+12,1.0
+$ read survey.csv | split langs ; | explode langs | agg langs income:mean,age:max
+langs,income_mean,age_max
+go,62750.0,38
+java,81000.0,61
+javascript,30000.0,23
+python,50285.71428571428,71
+rust,58333.333333333336,34
+$ read survey.csv | splitx langs ; first,second,third | select respondent,first,second,third
+respondent,first,second,third
+1,python,rust,
+2,javascript,,
+3,python,javascript,go
+4,java,,
+5,python,,
+6,rust,go,
+7,,,
+8,javascript,python,
+9,go,,
+10,java,python,
+11,python,rust,go
+12,python,,
+$ read survey.csv | splitx langs ; first,rest | select respondent,first,rest
+respondent,first,rest
+1,python,rust
+2,javascript,
+3,python,javascript;go
+4,java,
+5,python,
+6,rust,go
+7,,
+8,javascript,python
+9,go,
+10,java,python
+11,python,rust;go
+12,python,
+$ read survey.csv | dummies langs ; | drop age,country,satisfaction,income,hours
+respondent,langs,go,java,javascript,python,rust
+1,python;rust,0,0,0,1,1
+2,javascript,0,0,1,0,0
+3,python;javascript;go,1,0,1,1,0
+4,java,0,1,0,0,0
+5,python,0,0,0,1,0
+6,rust;go,1,0,0,0,1
+7,,0,0,0,0,0
+8,javascript;python,0,0,1,1,0
+9,go,1,0,0,0,0
+10,java;python,0,1,0,1,0
+11,python;rust;go,1,0,0,1,1
+12,python,0,0,0,1,0
+$ read survey.csv | getdummies country | select respondent,country_BR,country_DE,country_IN,country_UK,country_US
+respondent,country_BR,country_DE,country_IN,country_UK,country_US
+1,False,True,False,False,False
+2,False,False,False,False,True
+3,False,False,False,False,True
+4,False,False,True,False,False
+5,False,False,False,True,False
+6,False,False,True,False,False
+7,False,True,False,False,False
+8,True,False,False,False,False
+9,False,False,False,False,True
+10,False,False,False,True,False
+11,True,False,False,False,False
+12,False,False,False,False,True
+$ read survey.csv | getdummies satisfaction prefix=sat | drop age,country,langs,income,hours
+respondent,sat_high,sat_low,sat_medium,sat_very high
+1,True,False,False,False
+2,False,False,True,False
+3,False,True,False,False
+4,True,False,False,False
+5,False,False,True,False
+6,False,False,False,True
+7,False,True,False,False
+8,False,False,True,False
+9,True,False,False,False
+10,False,True,False,False
+11,False,False,True,False
+12,True,False,False,False
+$ json orders.json | getdummies status | dtypes
+column,dtype
+id,int64
+placed,str
+total,float64
+items,object
+coupon,str
+gift,object
+customer.id,str
+customer.name,str
+customer.tier,str
+customer.address.city,str
+customer.address.country,str
+returns,object
+status_cancelled,bool
+status_pending,bool
+status_returned,bool
+status_shipped,bool
+$ read survey.csv | cut age 0,18,35,50,120 band | select respondent,age,band
+respondent,age,band
+1,34,"(18, 35]"
+2,19,"(18, 35]"
+3,18,"(0, 18]"
+4,45,"(35, 50]"
+5,65,"(50, 120]"
+6,27,"(18, 35]"
+7,52,"(50, 120]"
+8,23,"(18, 35]"
+9,38,"(35, 50]"
+10,61,"(50, 120]"
+11,30,"(18, 35]"
+12,71,"(50, 120]"
+$ read survey.csv | cut age 0,18,35,50,120 band lowest=1 | select respondent,age,band
+respondent,age,band
+1,34,"(18.0, 35.0]"
+2,19,"(18.0, 35.0]"
+3,18,"(-0.001, 18.0]"
+4,45,"(35.0, 50.0]"
+5,65,"(50.0, 120.0]"
+6,27,"(18.0, 35.0]"
+7,52,"(50.0, 120.0]"
+8,23,"(18.0, 35.0]"
+9,38,"(35.0, 50.0]"
+10,61,"(50.0, 120.0]"
+11,30,"(18.0, 35.0]"
+12,71,"(50.0, 120.0]"
+$ read survey.csv | cut age 18,30,50,65 band right=0 | select respondent,age,band
+respondent,age,band
+1,34,"[30, 50)"
+2,19,"[18, 30)"
+3,18,"[18, 30)"
+4,45,"[30, 50)"
+5,65,
+6,27,"[18, 30)"
+7,52,"[50, 65)"
+8,23,"[18, 30)"
+9,38,"[30, 50)"
+10,61,"[50, 65)"
+11,30,"[30, 50)"
+12,71,
+$ read survey.csv | cut age 0,18,35,65,120 band labels=minor,young,adult,senior | select respondent,age,band
+respondent,age,band
+1,34,young
+2,19,young
+3,18,minor
+4,45,adult
+5,65,adult
+6,27,young
+7,52,adult
+8,23,young
+9,38,adult
+10,61,adult
+11,30,young
+12,71,senior
+$ read survey.csv | cut age 3 band | select respondent,age,band
+respondent,age,band
+1,34,"(17.947, 35.667]"
+2,19,"(17.947, 35.667]"
+3,18,"(17.947, 35.667]"
+4,45,"(35.667, 53.333]"
+5,65,"(53.333, 71.0]"
+6,27,"(17.947, 35.667]"
+7,52,"(35.667, 53.333]"
+8,23,"(17.947, 35.667]"
+9,38,"(35.667, 53.333]"
+10,61,"(53.333, 71.0]"
+11,30,"(17.947, 35.667]"
+12,71,"(53.333, 71.0]"
+$ read survey.csv | cut age 4 band right=0 | select respondent,age,band
+respondent,age,band
+1,34,"[31.25, 44.5)"
+2,19,"[18.0, 31.25)"
+3,18,"[18.0, 31.25)"
+4,45,"[44.5, 57.75)"
+5,65,"[57.75, 71.053)"
+6,27,"[18.0, 31.25)"
+7,52,"[44.5, 57.75)"
+8,23,"[18.0, 31.25)"
+9,38,"[31.25, 44.5)"
+10,61,"[57.75, 71.053)"
+11,30,"[18.0, 31.25)"
+12,71,"[57.75, 71.053)"
+$ read survey.csv | cut hours 4 band | select respondent,hours,band
+respondent,hours,band
+1,6.5,"(6.25, 8.125]"
+2,,
+3,9.0,"(8.125, 10.0]"
+4,7.5,"(6.25, 8.125]"
+5,4.0,"(2.492, 4.375]"
+6,8.0,"(6.25, 8.125]"
+7,,
+8,5.5,"(4.375, 6.25]"
+9,10.0,"(8.125, 10.0]"
+10,3.0,"(2.492, 4.375]"
+11,6.0,"(4.375, 6.25]"
+12,2.5,"(2.492, 4.375]"
+$ read survey.csv | cut income 3 band | counts band
+band,count
+"(27908.0, 58666.667]",6
+"(58666.667, 89333.333]",4
+"(89333.333, 120000.0]",2
+$ read survey.csv | cut age 0,18,35,50,120 band | agg band income:mean,respondent:count
+band,income_mean,respondent_count
+"(0, 18]",28000.0,1
+"(18, 35]",47400.0,5
+"(35, 50]",107500.0,2
+"(50, 120]",65000.0,4
+$ read survey.csv | cut age 0,18,35,50,120 band | counts band
+band,count
+"(18, 35]",5
+"(50, 120]",4
+"(35, 50]",2
+"(0, 18]",1
+$ read survey.csv | cut age 0,18,35,50,120 band | dtypes
+column,dtype
+respondent,int64
+age,int64
+country,str
+langs,str
+satisfaction,str
+income,int64
+hours,float64
+band,category
+$ read survey.csv | cut age 50,18,35 band
+! ValueError: bins must increase monotonically.
+$ read survey.csv | qcut income 4 q | select respondent,income,q
+respondent,income,q
+1,72000,"(57000.0, 76000.0]"
+2,31000,"(27999.999, 41500.0]"
+3,28000,"(27999.999, 41500.0]"
+4,95000,"(76000.0, 120000.0]"
+5,60000,"(57000.0, 76000.0]"
+6,54000,"(41500.0, 57000.0]"
+7,88000,"(76000.0, 120000.0]"
+8,31000,"(27999.999, 41500.0]"
+9,120000,"(76000.0, 120000.0]"
+10,67000,"(57000.0, 76000.0]"
+11,49000,"(41500.0, 57000.0]"
+12,45000,"(41500.0, 57000.0]"
+$ read survey.csv | qcut income 3 q | select respondent,income,q
+respondent,income,q
+1,72000,"(68666.667, 120000.0]"
+2,31000,"(27999.999, 47666.667]"
+3,28000,"(27999.999, 47666.667]"
+4,95000,"(68666.667, 120000.0]"
+5,60000,"(47666.667, 68666.667]"
+6,54000,"(47666.667, 68666.667]"
+7,88000,"(68666.667, 120000.0]"
+8,31000,"(27999.999, 47666.667]"
+9,120000,"(68666.667, 120000.0]"
+10,67000,"(47666.667, 68666.667]"
+11,49000,"(47666.667, 68666.667]"
+12,45000,"(27999.999, 47666.667]"
+$ read survey.csv | qcut income 10 q | counts q
+q,count
+"(27999.999, 31000.0]",3
+"(94300.0, 120000.0]",2
+"(33800.0, 46200.0]",1
+"(46200.0, 51000.0]",1
+"(51000.0, 57000.0]",1
+"(57000.0, 64200.0]",1
+"(64200.0, 70500.0]",1
+"(70500.0, 84800.0]",1
+"(84800.0, 94300.0]",1
+"(31000.0, 33800.0]",0
+$ read survey.csv | qcut income 0,0.1,0.5,0.9,1 q | select respondent,income,q
+respondent,income,q
+1,72000,"(57000.0, 94300.0]"
+2,31000,"(27999.999, 31000.0]"
+3,28000,"(27999.999, 31000.0]"
+4,95000,"(94300.0, 120000.0]"
+5,60000,"(57000.0, 94300.0]"
+6,54000,"(31000.0, 57000.0]"
+7,88000,"(57000.0, 94300.0]"
+8,31000,"(27999.999, 31000.0]"
+9,120000,"(94300.0, 120000.0]"
+10,67000,"(57000.0, 94300.0]"
+11,49000,"(31000.0, 57000.0]"
+12,45000,"(31000.0, 57000.0]"
+$ read survey.csv | qcut hours 4 q labels=light,typical,busy,heavy | select respondent,hours,q
+respondent,hours,q
+1,6.5,busy
+2,,
+3,9.0,heavy
+4,7.5,busy
+5,4.0,light
+6,8.0,heavy
+7,,
+8,5.5,typical
+9,10.0,heavy
+10,3.0,light
+11,6.0,typical
+12,2.5,light
+$ read survey.csv | qcut age 2 half | agg half age:min,age:max,income:median
+half,age_min,age_max,income_median
+"(17.999, 36.0]",18,34,40000.0
+"(36.0, 71.0]",38,71,77500.0
+$ read survey.csv | cut income 0,40000,80000,200000 band labels=low,mid,high | sort band,income | select respondent,income,band
+respondent,income,band
+3,28000,low
+2,31000,low
+8,31000,low
+12,45000,mid
+11,49000,mid
+6,54000,mid
+5,60000,mid
+10,67000,mid
+1,72000,mid
+7,88000,high
+4,95000,high
+9,120000,high
+$ read survey.csv | cat satisfaction low,medium,high | dtypes
+column,dtype
+respondent,int64
+age,int64
+country,str
+langs,str
+satisfaction,category
+income,int64
+hours,float64
+$ read survey.csv | cat satisfaction low,medium,high | select respondent,satisfaction
+respondent,satisfaction
+1,high
+2,medium
+3,low
+4,high
+5,medium
+6,
+7,low
+8,medium
+9,high
+10,low
+11,medium
+12,high
+$ read survey.csv | cat satisfaction low,medium,high ordered=1 | sort satisfaction | select respondent,satisfaction
+respondent,satisfaction
+3,low
+7,low
+10,low
+2,medium
+5,medium
+8,medium
+11,medium
+1,high
+4,high
+9,high
+12,high
+6,
+$ read survey.csv | cat satisfaction low,medium,high ordered=1 | sort satisfaction asc=0 | select respondent,satisfaction
+respondent,satisfaction
+1,high
+4,high
+9,high
+12,high
+2,medium
+5,medium
+8,medium
+11,medium
+3,low
+7,low
+10,low
+6,
+$ read survey.csv | cat satisfaction low,medium,high ordered=1 | where satisfaction >= 'medium' | select respondent,satisfaction
+respondent,satisfaction
+1,high
+2,medium
+4,high
+5,medium
+8,medium
+9,high
+11,medium
+12,high
+$ read survey.csv | cat satisfaction low,medium,high | where satisfaction == 'high' | select respondent,satisfaction
+respondent,satisfaction
+1,high
+4,high
+9,high
+12,high
+$ read survey.csv | cat satisfaction low,medium,high | where satisfaction > 'low'
+! TypeError: Unordered Categoricals can only compare equality or not
+$ read survey.csv | cat satisfaction low,medium,high,very_high | counts satisfaction
+satisfaction,count
+medium,4
+high,4
+low,3
+very high,1
+$ read survey.csv | cat satisfaction high,medium,low ordered=1 | agg satisfaction income:mean,age:count
+satisfaction,income_mean,age_count
+high,83000.0,4
+medium,42750.0,4
+low,61000.0,3
+$ read survey.csv | cat country US,UK,DE | counts country
+country,count
+US,4
+UK,2
+DE,2
+$ read survey.csv | cat satisfaction low,medium,high ordered=1 | dedup satisfaction | sort satisfaction
+respondent,age,country,langs,satisfaction,income,hours
+3,18,US,python;javascript;go,low,28000,9.0
+2,19,US,javascript,medium,31000,
+1,34,DE,python;rust,high,72000,6.5
+6,27,IN,rust;go,,54000,8.0
+$ read survey.csv | nlargest 3 income | select respondent,income
+respondent,income
+9,120000
+4,95000
+7,88000
+$ read survey.csv | nsmallest 4 income | select respondent,income
+respondent,income
+3,28000
+2,31000
+8,31000
+12,45000
+$ read survey.csv | nlargest 3 hours | select respondent,hours
+respondent,hours
+9,10.0
+3,9.0
+6,8.0
+$ json orders.json record_path=items meta=id | nlargest 4 price | select id,sku,price
+id,sku,price
+5005,KETTLE-1,43.4
+5010,KETTLE-1,43.4
+5008,BEAN-09,30.0
+5001,MUG-02,17.5
+$ read sensor.csv | interpolate temp
+minute,temp
+0,
+1,
+2,20.5
+3,21.0
+4,21.583333333333332
+5,22.166666666666668
+6,22.75
+7,23.0
+8,22.2
+9,21.4
+10,21.4
+$ read sensor.csv | interpolate temp | round temp 3
+minute,temp
+0,
+1,
+2,20.5
+3,21.0
+4,21.583
+5,22.167
+6,22.75
+7,23.0
+8,22.2
+9,21.4
+10,21.4
+$ read survey.csv | interpolate hours | select respondent,hours
+respondent,hours
+1,6.5
+2,7.75
+3,9.0
+4,7.5
+5,4.0
+6,8.0
+7,6.75
+8,5.5
+9,10.0
+10,3.0
+11,6.0
+12,2.5
+$ read survey.csv | cumcount n by=country | select respondent,country,n
+respondent,country,n
+1,DE,0
+2,US,0
+3,US,1
+4,IN,0
+5,UK,0
+6,IN,1
+7,DE,1
+8,BR,0
+9,US,2
+10,UK,1
+11,BR,1
+12,US,3
+$ read survey.csv | ngroup g by=country | select respondent,country,g
+respondent,country,g
+1,DE,1
+2,US,4
+3,US,4
+4,IN,2
+5,UK,3
+6,IN,2
+7,DE,1
+8,BR,0
+9,US,4
+10,UK,3
+11,BR,0
+12,US,4
+$ json orders.json record_path=items meta=id | cumcount line by=id | select id,line,sku
+id,line,sku
+5001,0,TEA-01
+5001,1,MUG-02
+5002,0,BEAN-05
+5003,0,TEA-07
+5005,0,MUG-02
+5005,1,TEA-01
+5005,2,KETTLE-1
+5006,0,BEAN-05
+5008,0,TEA-07
+5008,1,BEAN-09
+5009,0,TEA-01
+5010,0,KETTLE-1
+$ read survey.csv | replace country UK GB | counts country
+country,count
+US,4
+DE,2
+IN,2
+GB,2
+BR,2
+$ json orders.json | replace status returned refunded | select id,status
+id,status
+5001,shipped
+5002,pending
+5003,shipped
+5004,cancelled
+5005,shipped
+5006,shipped
+5007,pending
+5008,shipped
+5009,shipped
+5010,refunded
+$ json nope.json
+! FileNotFoundError: [Errno 2] No such file or directory: 'data/nope.json'
+$ json orders.json record_path=items meta=id,sku
+! KeyError: "Key 'sku' not found. To replace missing values of 'sku' with np.nan, pass in errors='ignore'"
+$ read survey.csv | cut age 0,18,18,65 band
+! ValueError: Bin edges must be unique: Index([0, 18, 18, 65], dtype='int64').
+You can drop duplicate edges by setting the 'duplicates' kwarg
+$ read survey.csv | qcut country 4 q
+! TypeError: unsupported operand type(s) for -: 'str' and 'str'
+$ read survey.csv | explode nope
+! KeyError: 'nope'
