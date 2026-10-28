@@ -1,0 +1,3824 @@
+// mini_timeseries: a Kāra port of the time-series half of pandas 3.0.5
+// (BSD-3-Clause, the pandas development team): to_datetime, the .dt
+// accessor, floor/ceil/round, strftime, durations, resample with every
+// common offset alias (closed, label, origin and offset included),
+// groupby-resample, ohlc, asfreq with ffill and bfill, rolling over time
+// windows, date_range, and tz_localize/tz_convert across a daylight
+// saving change, on a small frame engine with read_csv and to_csv.
+//
+// It reads data/jobs.txt, one pipeline per line (`read trades.csv
+// dates=ts | resample ts 5min price:last,qty:sum`), runs each in a task
+// of its own, and prints, in job order, `$ <job>` and the frame as
+// pandas' to_csv writes it, or the error pandas raises after `! `.
+//
+// Bins, offsets and formats follow pandas' own code: _get_time_bins and
+// _adjust_dates_anchored for the bin edges, the DateOffset rules for
+// anchored offsets, format_array_from_datetime for how a column of
+// timestamps is written, and the groupby and rolling kernels for every
+// aggregate, so that each float prints the same last digit.
+
+import std.sync.{TaskGroup};
+
+// ============================================================ values
+
+// A column of one dtype. A missing float is NaN; a missing string is
+// None. `Obj` is the `object` dtype pandas gives a column it never saw a
+// value in. `Time` is datetime64 and `Delta` timedelta64.
+#[derive(Clone)]
+enum Col {
+    Int(Vec[i64]),
+    Float(Vec[f64]),
+    Bool(Vec[bool]),
+    Str(Vec[Option[String]]),
+    Obj(Vec[Option[String]]),
+    Time(TimeCol),
+    Delta(DeltaCol),
+}
+
+// Instants as microseconds since the epoch in UTC, whatever the zone;
+// None is NaT. `unit` is the resolution pandas reports ("s" or "us") and
+// `tz` the zone the instants are shown in, None for naive times.
+#[derive(Clone)]
+struct TimeCol {
+    v: Vec[Option[i64]],
+    unit: String,
+    tz: Option[String],
+}
+
+// Durations in microseconds; None is NaT.
+#[derive(Clone)]
+struct DeltaCol {
+    v: Vec[Option[i64]],
+    unit: String,
+}
+
+// One cell, for keys, comparisons and literals.
+#[derive(Clone)]
+enum Val {
+    I(i64),
+    F(f64),
+    B(bool),
+    S(String),
+    T(i64),
+    D(i64),
+    Na,
+}
+
+#[derive(Clone)]
+struct Frame {
+    names: Vec[String],
+    cols: Vec[Col],
+}
+
+fn nan() -> f64 {
+    0.0 / 0.0
+}
+
+fn is_nan(x: f64) -> bool {
+    x != x
+}
+
+fn signbit(x: f64) -> bool {
+    1.0.copysign(x) < 0.0
+}
+
+impl Col {
+    fn len(self) -> i64 {
+        match self {
+            Col.Int(v) => v.len(),
+            Col.Float(v) => v.len(),
+            Col.Bool(v) => v.len(),
+            Col.Str(v) => v.len(),
+            Col.Obj(v) => v.len(),
+            Col.Time(t) => t.v.len(),
+            Col.Delta(d) => d.v.len(),
+        }
+    }
+
+    fn dtype(self) -> String {
+        match self {
+            Col.Int(_) => "int64".to_string(),
+            Col.Float(_) => "float64".to_string(),
+            Col.Bool(_) => "bool".to_string(),
+            Col.Str(_) => "str".to_string(),
+            Col.Obj(_) => "object".to_string(),
+            Col.Time(t) => match t.tz {
+                Some(z) => f"datetime64[{t.unit}, {z}]",
+                None => f"datetime64[{t.unit}]",
+            },
+            Col.Delta(d) => f"timedelta64[{d.unit}]",
+        }
+    }
+
+    fn is_time(self) -> bool {
+        match self {
+            Col.Time(_) => true,
+            _ => false,
+        }
+    }
+
+    fn is_numeric(self) -> bool {
+        match self {
+            Col.Int(_) => true,
+            Col.Float(_) => true,
+            _ => false,
+        }
+    }
+
+    fn get(self, i: i64) -> Val {
+        match self {
+            Col.Int(v) => Val.I(v[i]),
+            Col.Float(v) => if is_nan(v[i]) { Val.Na } else { Val.F(v[i]) },
+            Col.Bool(v) => Val.B(v[i]),
+            Col.Str(v) => match v[i] {
+                Some(s) => Val.S(s.clone()),
+                None => Val.Na,
+            },
+            Col.Obj(v) => match v[i] {
+                Some(s) => Val.S(s.clone()),
+                None => Val.Na,
+            },
+            Col.Time(t) => match t.v[i] {
+                Some(x) => Val.T(x),
+                None => Val.Na,
+            },
+            Col.Delta(d) => match d.v[i] {
+                Some(x) => Val.D(x),
+                None => Val.Na,
+            },
+        }
+    }
+
+    fn is_na(self, i: i64) -> bool {
+        match self {
+            Col.Float(v) => is_nan(v[i]),
+            Col.Str(v) => v[i].is_none(),
+            Col.Obj(v) => v[i].is_none(),
+            Col.Time(t) => t.v[i].is_none(),
+            Col.Delta(d) => d.v[i].is_none(),
+            _ => false,
+        }
+    }
+
+    // The rows at `idx`, in that order; -1 is a missing row.
+    fn take(self, idx: Vec[i64]) -> Col {
+        let missing = idx.iter().any(|i| *i < 0);
+        match self {
+            Col.Int(v) => {
+                if missing {
+                    Col.Float(idx.iter().map(|i| if *i < 0 { nan() } else { v[*i] as f64 }).collect())
+                } else {
+                    Col.Int(idx.iter().map(|i| v[*i]).collect())
+                }
+            }
+            Col.Float(v) => Col.Float(idx.iter().map(|i| if *i < 0 { nan() } else { v[*i] }).collect()),
+            Col.Bool(v) => {
+                if missing {
+                    // pandas would make this an object column; no job reaches it.
+                    Col.Obj(idx.iter().map(|i| if *i < 0 { None } else { Some(bool_text(v[*i])) }).collect())
+                } else {
+                    Col.Bool(idx.iter().map(|i| v[*i]).collect())
+                }
+            }
+            Col.Str(v) => Col.Str(idx.iter().map(|i| if *i < 0 { None } else { v[*i].clone() }).collect()),
+            Col.Obj(v) => Col.Obj(idx.iter().map(|i| if *i < 0 { None } else { v[*i].clone() }).collect()),
+            Col.Time(t) => Col.Time(TimeCol {
+                v: idx.iter().map(|i| if *i < 0 { None } else { t.v[*i] }).collect(),
+                unit: t.unit.clone(),
+                tz: t.tz.clone(),
+            }),
+            Col.Delta(d) => Col.Delta(DeltaCol {
+                v: idx.iter().map(|i| if *i < 0 { None } else { d.v[*i] }).collect(),
+                unit: d.unit.clone(),
+            }),
+        }
+    }
+
+    // The column as floats, as pandas casts it for a numeric kernel.
+    fn floats(self) -> Vec[f64] {
+        match self {
+            Col.Int(v) => v.iter().map(|x| *x as f64).collect(),
+            Col.Float(v) => v.clone(),
+            Col.Bool(v) => v.iter().map(|b| if *b { 1.0 } else { 0.0 }).collect(),
+            _ => Vec.new(),
+        }
+    }
+
+    fn empty_like(self) -> Col {
+        match self {
+            Col.Int(_) => Col.Int(Vec.new()),
+            Col.Float(_) => Col.Float(Vec.new()),
+            Col.Bool(_) => Col.Bool(Vec.new()),
+            Col.Str(_) => Col.Str(Vec.new()),
+            Col.Obj(_) => Col.Obj(Vec.new()),
+            Col.Time(t) => Col.Time(TimeCol { v: Vec.new(), unit: t.unit.clone(), tz: t.tz.clone() }),
+            Col.Delta(d) => Col.Delta(DeltaCol { v: Vec.new(), unit: d.unit.clone() }),
+        }
+    }
+}
+
+fn bool_text(b: bool) -> String {
+    if b { "True".to_string() } else { "False".to_string() }
+}
+
+// How to_csv writes a column's cells. A datetime or timedelta column
+// picks one format for all its cells, from what the cells need.
+fn col_texts(c: Col) -> Vec[String] {
+    match c {
+        Col.Int(v) => v.iter().map(|x| x.to_string()).collect(),
+        Col.Float(v) => v.iter().map(|x| if is_nan(*x) { String.new() } else { x.to_string() }).collect(),
+        Col.Bool(v) => v.iter().map(|b| bool_text(*b)).collect(),
+        Col.Str(v) => v.iter().map(|x| x.clone() ?? String.new()).collect(),
+        Col.Obj(v) => v.iter().map(|x| x.clone() ?? String.new()).collect(),
+        Col.Time(t) => time_texts(t),
+        Col.Delta(d) => delta_texts(d),
+    }
+}
+
+fn val_text(v: Val) -> String {
+    match v {
+        Val.I(n) => n.to_string(),
+        Val.F(x) => x.to_string(),
+        Val.B(b) => bool_text(b),
+        Val.S(s) => s.clone(),
+        Val.T(x) => x.to_string(),
+        Val.D(x) => x.to_string(),
+        Val.Na => String.new(),
+    }
+}
+
+// The order pandas sorts keys in: numbers by value, strings by code
+// point, NaN after everything.
+fn val_cmp(a: Val, b: Val) -> Ordering {
+    match (a, b) {
+        (Val.Na, Val.Na) => Ordering.Equal,
+        (Val.Na, _) => Ordering.Greater,
+        (_, Val.Na) => Ordering.Less,
+        (Val.S(x), Val.S(y)) => x.cmp(y),
+        (Val.B(x), Val.B(y)) => (x as i64).cmp(y as i64),
+        (Val.I(x), Val.I(y)) => x.cmp(y),
+        (Val.T(x), Val.T(y)) => x.cmp(y),
+        (Val.D(x), Val.D(y)) => x.cmp(y),
+        (x, y) => {
+            let p = num_of(x);
+            let q = num_of(y);
+            if p < q {
+                Ordering.Less
+            } else if p > q {
+                Ordering.Greater
+            } else {
+                Ordering.Equal
+            }
+        }
+    }
+}
+
+// The opposite order, for a descending sort.
+fn flip(o: Ordering) -> Ordering {
+    match o {
+        Ordering.Less => Ordering.Greater,
+        Ordering.Greater => Ordering.Less,
+        Ordering.Equal => Ordering.Equal,
+    }
+}
+
+fn num_of(v: Val) -> f64 {
+    match v {
+        Val.I(n) => n as f64,
+        Val.F(x) => x,
+        Val.B(b) => if b { 1.0 } else { 0.0 },
+        _ => nan(),
+    }
+}
+
+// Equality as factorize sees it: NaN equals NaN.
+fn val_eq(a: Val, b: Val) -> bool {
+    val_cmp(a, b) == Ordering.Equal
+}
+
+// A key made of several cells, as one string for a Map.
+fn key_text(vals: Vec[Val]) -> String {
+    let mut t = String.new();
+    for v in vals {
+        match v {
+            Val.I(n) => t.push_str(f"i{n}"),
+            Val.F(x) => {
+                // 1 and 1.0 are one key, as in a pandas hash table.
+                if x == x.trunc() and x.abs() < 9.0e15 {
+                    t.push_str(f"i{x as i64}");
+                } else {
+                    t.push_str(f"f{x.to_bits()}");
+                }
+            }
+            Val.B(b) => t.push_str(if b { "b1" } else { "b0" }),
+            Val.S(s) => {
+                t.push_str("s");
+                t.push_str(s.replace("\\", "\\\\").replace("\u{1f}", "\\u"));
+            }
+            Val.T(x) => t.push_str(f"t{x}"),
+            Val.D(x) => t.push_str(f"d{x}"),
+            Val.Na => t.push_str("n"),
+        }
+        t.push('\u{1f}');
+    }
+    t
+}
+
+// ============================================================ frames
+
+impl Frame {
+    fn new() -> Frame {
+        Frame { names: Vec.new(), cols: Vec.new() }
+    }
+
+    fn height(self) -> i64 {
+        if self.cols.len() == 0 { 0 } else { self.cols[0].len() }
+    }
+
+    fn find(self, name: Str) -> Option[i64] {
+        for i in 0..self.names.len() {
+            if self.names[i] == name {
+                return Some(i);
+            }
+        }
+        None
+    }
+
+    fn col(self, name: Str) -> Result[Col, String] {
+        match self.find(name) {
+            Some(i) => Ok(self.cols[i].clone()),
+            None => Err(key_error(name)),
+        }
+    }
+
+    // Sets a column, replacing one of that name or appending it.
+    fn put(mut ref self, name: Str, c: own Col) {
+        match self.find(name) {
+            Some(i) => self.cols[i] = c,
+            None => {
+                self.names.push(name.to_string());
+                self.cols.push(c);
+            }
+        }
+    }
+
+    fn take(self, idx: Vec[i64]) -> Frame {
+        Frame { names: self.names.clone(), cols: self.cols.iter().map(|c| c.take(idx)).collect() }
+    }
+
+    fn rows_where(self, keep: Vec[bool]) -> Frame {
+        let mut idx: Vec[i64] = Vec.new();
+        for i in 0..keep.len() {
+            if keep[i] {
+                idx.push(i);
+            }
+        }
+        self.take(idx)
+    }
+
+    fn row(self, i: i64, which: Vec[i64]) -> Vec[Val] {
+        which.iter().map(|j| self.cols[*j].get(i)).collect()
+    }
+}
+
+fn key_error(name: Str) -> String {
+    f"KeyError: '{name}'"
+}
+
+fn index_of_all(f: Frame, names: Vec[String]) -> Result[Vec[i64], String] {
+    let mut out: Vec[i64] = Vec.new();
+    for n in names {
+        match f.find(n) {
+            Some(i) => out.push(i),
+            None => return Err(key_error(n)),
+        }
+    }
+    Ok(out)
+}
+
+fn range_idx(n: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for i in 0..n {
+        v.push(i);
+    }
+    v
+}
+
+// ============================================================ float kernels
+
+// numpy's add.reduce over float64: a pairwise sum, eight accumulators
+// at a time, from 0.0. pandas reaches it from Series.mean and describe.
+fn pairwise_sum(a: Vec[f64], lo: i64, n: i64) -> f64 {
+    if n < 8 {
+        let mut res = 0.0;
+        for i in lo..lo + n {
+            res = res + a[i];
+        }
+        return res;
+    }
+    if n <= 128 {
+        let mut r: Vec[f64] = Vec.new();
+        for j in 0..8 {
+            r.push(a[lo + j]);
+        }
+        let mut i = 8;
+        while i < n - n % 8 {
+            for j in 0..8 {
+                r[j] = r[j] + a[lo + i + j];
+            }
+            i += 8;
+        }
+        let mut res = ((r[0] + r[1]) + (r[2] + r[3])) + ((r[4] + r[5]) + (r[6] + r[7]));
+        while i < n {
+            res = res + a[lo + i];
+            i += 1;
+        }
+        return res;
+    }
+    let mut n2 = n / 2;
+    n2 -= n2 % 8;
+    pairwise_sum(a, lo, n2) + pairwise_sum(a, lo + n2, n - n2)
+}
+
+fn np_sum(a: Vec[f64]) -> f64 {
+    pairwise_sum(a, 0, a.len())
+}
+
+// Kahan summation as pandas' groupby kernels run it.
+struct Kahan {
+    sum: f64,
+    comp: f64,
+    n: i64,
+}
+
+fn kahan() -> Kahan {
+    Kahan { sum: 0.0, comp: 0.0, n: 0 }
+}
+
+impl Kahan {
+    fn add(mut ref self, val: f64) {
+        self.n += 1;
+        let y = val - self.comp;
+        let t = self.sum + y;
+        self.comp = t - self.sum - y;
+        if is_nan(self.comp) or self.comp.abs() == 1.0 / 0.0 {
+            self.comp = 0.0;
+        }
+        self.sum = t;
+    }
+}
+
+// Series.mean: numpy's sum with NaN as 0, over the non-NaN count.
+fn series_mean(a: Vec[f64]) -> f64 {
+    let mut filled: Vec[f64] = Vec.new();
+    let mut count = 0;
+    for x in a {
+        if is_nan(x) {
+            filled.push(0.0);
+        } else {
+            filled.push(x);
+            count += 1;
+        }
+    }
+    if count == 0 {
+        return nan();
+    }
+    np_sum(filled) / (count as f64)
+}
+
+// nanops.nanvar with ddof 1: two passes of numpy's sum.
+fn series_var(a: Vec[f64]) -> f64 {
+    let mut filled: Vec[f64] = Vec.new();
+    let mut count = 0;
+    for x in a {
+        if is_nan(x) {
+            filled.push(0.0);
+        } else {
+            filled.push(x);
+            count += 1;
+        }
+    }
+    let d = count as f64 - 1.0;
+    let avg = np_sum(filled) / (count as f64);
+    let mut sqr: Vec[f64] = Vec.new();
+    for x in a {
+        if is_nan(x) {
+            sqr.push(0.0);
+        } else {
+            let e = avg - x;
+            sqr.push(e * e);
+        }
+    }
+    if d <= 0.0 {
+        return nan();
+    }
+    np_sum(sqr) / d
+}
+
+// numpy's quantile, method "linear", over values with NaN removed.
+fn np_quantile(sorted: Vec[f64], q: f64) -> f64 {
+    let n = sorted.len();
+    if n == 0 {
+        return nan();
+    }
+    let virt = ((n - 1) as f64) * q;
+    if virt >= ((n - 1) as f64) {
+        return sorted[n - 1];
+    }
+    if virt < 0.0 {
+        return sorted[0];
+    }
+    let prev = virt.floor();
+    let i = prev as i64;
+    let a = sorted[i];
+    let b = sorted[i + 1];
+    let gamma = virt - prev;
+    let diff = b - a;
+    if gamma >= 0.5 {
+        b - diff * (1.0 - gamma)
+    } else {
+        a + diff * gamma
+    }
+}
+
+fn sorted_valid(a: Vec[f64]) -> Vec[f64] {
+    let mut v: Vec[f64] = a.iter().filter(|x| not is_nan(*x)).map(|x| *x).collect();
+    v.sort_by(f64.total_cmp);
+    v
+}
+
+// numpy's rint: round half to even, keeping the sign of zero.
+fn rint(x: f64) -> f64 {
+    if is_nan(x) or x.abs() >= 4503599627370496.0 {
+        return x;
+    }
+    let f = x.floor();
+    let d = x - f;
+    let mut r = if d < 0.5 {
+        f
+    } else if d > 0.5 {
+        f + 1.0
+    } else if (f / 2.0).floor() * 2.0 == f {
+        f
+    } else {
+        f + 1.0
+    };
+    if r == 0.0 {
+        r = 0.0.copysign(x);
+    }
+    r
+}
+
+// numpy's round(x, decimals) for decimals >= 0.
+fn np_round(x: f64, decimals: i64) -> f64 {
+    if decimals == 0 {
+        return rint(x);
+    }
+    let mut f = 1.0;
+    for _ in 0..decimals {
+        f = f * 10.0;
+    }
+    rint(x * f) / f
+}
+
+// ============================================================ read_csv
+
+// The strings read_csv reads as missing unless keep_default_na=False.
+fn default_na(s: Str) -> bool {
+    match s {
+        "" | "#N/A" | "#N/A N/A" | "#NA" | "-1.#IND" | "-1.#QNAN" | "-NaN" | "-nan" | "1.#IND"
+        | "1.#QNAN" | "<NA>" | "N/A" | "NA" | "NULL" | "NaN" | "None" | "n/a" | "nan" | "null" => true,
+        _ => false,
+    }
+}
+
+struct ReadOpts {
+    sep: String,
+    na: Vec[String],
+    keep_default_na: bool,
+    header: bool,
+    usecols: Option[Vec[String]],
+    dtype: Vec[(String, String)],
+}
+
+fn read_opts() -> ReadOpts {
+    ReadOpts { sep: ",".to_string(), na: Vec.new(), keep_default_na: true, header: true, usecols: None, dtype: Vec.new() }
+}
+
+// The C tokenizer: rows of fields, quotes doubled inside quotes, blank
+// lines skipped.
+fn tokenize(text: Str, sep: char) -> Vec[Vec[String]] {
+    let mut rows: Vec[Vec[String]] = Vec.new();
+    let mut row: Vec[String] = Vec.new();
+    let mut field = String.new();
+    let mut in_quotes = false;
+    let mut row_started = false;
+    let chars: Vec[char] = text.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if in_quotes {
+            if c == '"' {
+                if i + 1 < chars.len() and chars[i + 1] == '"' {
+                    field.push('"');
+                    i += 1;
+                } else {
+                    in_quotes = false;
+                }
+            } else {
+                field.push(c);
+            }
+        } else if c == '"' {
+            in_quotes = true;
+            row_started = true;
+        } else if c == sep {
+            row.push(field.clone());
+            field = String.new();
+            row_started = true;
+        } else if c == '\n' or c == '\r' {
+            if c == '\r' and i + 1 < chars.len() and chars[i + 1] == '\n' {
+                i += 1;
+            }
+            if row_started or field.len() > 0 {
+                row.push(field.clone());
+                rows.push(row.clone());
+            }
+            row = Vec.new();
+            field = String.new();
+            row_started = false;
+        } else {
+            field.push(c);
+            row_started = true;
+        }
+        i += 1;
+    }
+    if row_started or field.len() > 0 {
+        row.push(field.clone());
+        rows.push(row);
+    }
+    rows
+}
+
+fn is_na_text(s: Str, o: ReadOpts) -> bool {
+    if o.keep_default_na and default_na(s) {
+        return true;
+    }
+    o.na.iter().any(|n| n == s)
+}
+
+fn parse_bool(s: Str) -> Option[bool] {
+    match s {
+        "True" | "TRUE" | "true" => Some(true),
+        "False" | "FALSE" | "false" => Some(false),
+        _ => None,
+    }
+}
+
+fn parse_float(s: Str) -> Option[f64] {
+    let t = s.trim();
+    // Rust-style spellings pandas' xstrtod refuses.
+    if t.len() == 0 or t.contains("_") {
+        return None;
+    }
+    match t.to_lowercase().as_str() {
+        "nan" | "+nan" | "-nan" => return None,
+        _ => {}
+    }
+    f64.parse(t).ok()
+}
+
+// One column's cells, typed the way the C parser infers them.
+fn infer(cells: Vec[Option[String]]) -> Col {
+    if cells.len() == 0 {
+        return Col.Obj(Vec.new());
+    }
+    let na_count = cells.iter().filter(|c| c.is_none()).count();
+    let mut ints: Vec[i64] = Vec.new();
+    let mut all_int = true;
+    for c in cells {
+        if let Some(s) = c {
+            match i64.parse(s) {
+                Ok(n) => ints.push(n),
+                Err(_) => {
+                    all_int = false;
+                    break;
+                }
+            }
+        }
+    }
+    if all_int and na_count == 0 {
+        return Col.Int(ints);
+    }
+    let mut floats: Vec[f64] = Vec.new();
+    let mut all_float = true;
+    for c in cells {
+        match c {
+            None => floats.push(nan()),
+            Some(s) => match parse_float(s) {
+                Some(x) => floats.push(x),
+                None => {
+                    all_float = false;
+                    break;
+                }
+            },
+        }
+    }
+    if all_float {
+        return Col.Float(floats);
+    }
+    if na_count == 0 {
+        let mut bools: Vec[bool] = Vec.new();
+        let mut all_bool = true;
+        for c in cells {
+            match parse_bool(c.clone() ?? String.new()) {
+                Some(b) => bools.push(b),
+                None => {
+                    all_bool = false;
+                    break;
+                }
+            }
+        }
+        if all_bool {
+            return Col.Bool(bools);
+        }
+    }
+    Col.Str(cells.clone())
+}
+
+fn convert(cells: Vec[Option[String]], dtype: Str) -> Result[Col, String] {
+    match dtype {
+        "str" => Ok(Col.Str(cells.clone())),
+        "float" => {
+            let mut v: Vec[f64] = Vec.new();
+            for c in cells {
+                match c {
+                    None => v.push(nan()),
+                    Some(s) => match parse_float(s) {
+                        Some(x) => v.push(x),
+                        None => return Err(f"ValueError: could not convert string to float: '{s}'"),
+                    },
+                }
+            }
+            Ok(Col.Float(v))
+        }
+        _ => Ok(infer(cells)),
+    }
+}
+
+fn read_csv(path: Str, o: ReadOpts) -> Result[Frame, String] {
+    let full = f"data/{path}";
+    let text = match fs.read_to_string(full.clone()) {
+        Ok(t) => t,
+        Err(_) => return Err(f"FileNotFoundError: [Errno 2] No such file or directory: '{full}'"),
+    };
+    let sep = o.sep.chars().next() ?? ',';
+    let rows = tokenize(text, sep);
+    let mut names: Vec[String] = Vec.new();
+    let mut start = 0;
+    let width = if rows.len() > 0 { rows[0].len() } else { 0 };
+    if o.header {
+        if rows.len() > 0 {
+            names = rows[0].clone();
+        }
+        start = 1;
+    } else {
+        for j in 0..width {
+            names.push(j.to_string());
+        }
+    }
+    let mut f = Frame.new();
+    for j in 0..names.len() {
+        let name = names[j].clone();
+        if let Some(keep) = o.usecols {
+            if not keep.iter().any(|k| *k == name) {
+                continue;
+            }
+        }
+        let mut cells: Vec[Option[String]] = Vec.new();
+        for r in start..rows.len() {
+            let raw = if j < rows[r].len() { rows[r][j].clone() } else { String.new() };
+            if is_na_text(raw, o) {
+                cells.push(None);
+            } else {
+                cells.push(Some(raw));
+            }
+        }
+        let mut dtype = String.new();
+        for (n, t) in o.dtype {
+            if *n == name {
+                dtype = t.clone();
+            }
+        }
+        f.put(name, convert(cells, dtype)?);
+    }
+    Ok(f)
+}
+
+// ============================================================ to_csv
+
+fn csv_field(s: Str) -> String {
+    if s.contains(",") or s.contains("\"") or s.contains("\n") or s.contains("\r") {
+        "\"".to_string() + s.replace("\"", "\"\"") + "\""
+    } else {
+        s.to_string()
+    }
+}
+
+fn csv_line(fields: Vec[String]) -> String {
+    let mut t = String.new();
+    for i in 0..fields.len() {
+        if i > 0 {
+            t.push(',');
+        }
+        t.push_str(csv_field(fields[i]));
+    }
+    // Python's csv module quotes a row that would otherwise be empty.
+    if t.len() == 0 {
+        t.push_str("\"\"");
+    }
+    t.push('\n');
+    t
+}
+
+fn to_csv(f: Frame, index: Option[Vec[String]]) -> String {
+    let mut out = String.new();
+    let mut head: Vec[String] = Vec.new();
+    if index.is_some() {
+        head.push(String.new());
+    }
+    for n in f.names {
+        head.push(n.clone());
+    }
+    out.push_str(csv_line(head));
+    let texts: Vec[Vec[String]] = f.cols.iter().map(|c| col_texts(c)).collect();
+    for i in 0..f.height() {
+        let mut fields: Vec[String] = Vec.new();
+        if let Some(labels) = index {
+            fields.push(labels[i].clone());
+        }
+        for t in texts {
+            fields.push(t[i].clone());
+        }
+        out.push_str(csv_line(fields));
+    }
+    out
+}
+
+// ============================================================ job arguments
+
+// A value written in a job: 'text', an int, a float, or a bare word.
+fn literal(tok: Str) -> Val {
+    if tok.len() >= 2 and tok.starts_with("'") and tok.ends_with("'") {
+        // `_` stands for a space, since a job splits its steps on spaces.
+        return Val.S(tok[1..tok.len() - 1].replace("_", " "));
+    }
+    if tok == "True" or tok == "False" {
+        return Val.B(tok == "True");
+    }
+    if let Ok(n) = i64.parse(tok) {
+        return Val.I(n);
+    }
+    if let Some(x) = parse_float(tok) {
+        return Val.F(x);
+    }
+    Val.S(tok.to_string())
+}
+
+fn number(tok: Str) -> Result[Val, String] {
+    match literal(tok) {
+        Val.S(_) => Err(f"ValueError: could not convert string to float: '{tok}'"),
+        v => Ok(v),
+    }
+}
+
+fn names_of(s: Str) -> Vec[String] {
+    if s.len() == 0 {
+        return Vec.new();
+    }
+    s.split(",").map(|p| p.to_string()).collect()
+}
+
+struct Args {
+    pos: Vec[String],
+    kw: Vec[(String, String)],
+}
+
+fn split_args(toks: Vec[String]) -> Args {
+    let mut a = Args { pos: Vec.new(), kw: Vec.new() };
+    for t in toks {
+        match t.split_once("=") {
+            Some((k, v)) => {
+                if k.len() > 0 and t != "==" {
+                    a.kw.push((k.to_string(), v.to_string()));
+                } else {
+                    a.pos.push(t.clone());
+                }
+            }
+            None => a.pos.push(t.clone()),
+        }
+    }
+    a
+}
+
+impl Args {
+    fn get(self, k: Str) -> Option[String] {
+        for (key, v) in self.kw {
+            if *key == k {
+                return Some(v.clone());
+            }
+        }
+        None
+    }
+
+    fn arg(self, i: i64) -> Result[String, String] {
+        if i < self.pos.len() {
+            Ok(self.pos[i].clone())
+        } else {
+            Err("TypeError: missing a required argument".to_string())
+        }
+    }
+
+    fn has(self, word: Str) -> bool {
+        self.pos.iter().any(|p| p == word)
+    }
+}
+
+fn int_arg(s: Str) -> Result[i64, String] {
+    match i64.parse(s) {
+        Ok(n) => Ok(n),
+        Err(_) => Err(f"ValueError: invalid literal for int() with base 10: '{s}'"),
+    }
+}
+
+// ============================================================ selecting
+
+fn select(f: Frame, want: Vec[String]) -> Result[Frame, String] {
+    let mut missing: Vec[String] = Vec.new();
+    for w in want {
+        if f.find(w).is_none() {
+            missing.push(w.clone());
+        }
+    }
+    if missing.len() == want.len() and want.len() > 0 {
+        return Err(f"KeyError: \"None of [Index([{quoted_list(want)}], dtype='str')] are in the [columns]\"");
+    }
+    if missing.len() > 0 {
+        return Err(f"KeyError: \"[{quoted_list(missing)}] not in index\"");
+    }
+    let mut out = Frame.new();
+    for w in want {
+        out.names.push(w.clone());
+        out.cols.push(f.col(w)?);
+    }
+    Ok(out)
+}
+
+fn quoted_list(xs: Vec[String]) -> String {
+    let parts: Vec[String] = xs.iter().map(|x| f"'{x}'").collect();
+    parts.join(", ")
+}
+
+fn drop_cols(f: Frame, gone: Vec[String]) -> Result[Frame, String] {
+    let missing: Vec[String] = gone.iter().filter(|g| f.find(g).is_none()).map(|g| g.clone()).collect();
+    if missing.len() > 0 {
+        return Err(f"KeyError: \"[{quoted_list(missing)}] not found in axis\"");
+    }
+    let mut out = Frame.new();
+    for i in 0..f.names.len() {
+        if not gone.iter().any(|g| *g == f.names[i]) {
+            out.names.push(f.names[i].clone());
+            out.cols.push(f.cols[i].clone());
+        }
+    }
+    Ok(out)
+}
+
+fn rename(f: Frame, pairs: Vec[String]) -> Frame {
+    let mut out = f.clone();
+    for p in pairs {
+        if let Some((a, b)) = p.split_once(":") {
+            for i in 0..out.names.len() {
+                if out.names[i] == a {
+                    out.names[i] = b.to_string();
+                }
+            }
+        }
+    }
+    out
+}
+
+fn head(f: Frame, n: i64) -> Frame {
+    let h = f.height();
+    let k = if n < h { n } else { h };
+    f.take(range_idx(k))
+}
+
+fn tail(f: Frame, n: i64) -> Frame {
+    let h = f.height();
+    let k = if n < h { n } else { h };
+    let mut idx: Vec[i64] = Vec.new();
+    for i in h - k..h {
+        idx.push(i);
+    }
+    f.take(idx)
+}
+
+fn dtypes(f: Frame) -> Frame {
+    let mut out = Frame.new();
+    out.put("column", Col.Str(f.names.iter().map(|n| Some(n.clone())).collect()));
+    out.put("dtype", Col.Str(f.cols.iter().map(|c| Some(c.dtype())).collect()));
+    out
+}
+
+// ============================================================ filters
+
+fn compare(a: Val, rel: Str, b: Val) -> bool {
+    let missing = match (a, b) {
+        (Val.Na, _) => true,
+        (_, Val.Na) => true,
+        _ => false,
+    };
+    if missing {
+        return rel == "!=";
+    }
+    let o = val_cmp(a, b);
+    match rel {
+        "==" => o == Ordering.Equal,
+        "!=" => o != Ordering.Equal,
+        "<" => o == Ordering.Less,
+        "<=" => o != Ordering.Greater,
+        ">" => o == Ordering.Greater,
+        _ => o != Ordering.Less,
+    }
+}
+
+fn where_rows(f: Frame, name: Str, rel: Str, rhs: Str) -> Result[Frame, String] {
+    let c = f.col(name)?;
+    let other: Option[Col] = if rhs.starts_with("@") { Some(f.col(rhs[1..])?) } else { None };
+    // A quoted value compared with a datetime or timedelta column is read
+    // as a Timestamp or a Timedelta, as pandas reads it.
+    let lit = match c {
+        Col.Time(ref t) => time_literal(rhs, t.tz)?,
+        Col.Delta(_) => delta_literal(rhs)?,
+        _ => literal(rhs),
+    };
+    let mut keep: Vec[bool] = Vec.new();
+    for i in 0..f.height() {
+        let b = match other {
+            Some(ref o) => o.get(i),
+            None => lit.clone(),
+        };
+        keep.push(compare(c.get(i), rel, b));
+    }
+    Ok(f.rows_where(keep))
+}
+
+fn na_rows(f: Frame, name: Str, want_na: bool) -> Result[Frame, String] {
+    let c = f.col(name)?;
+    let keep: Vec[bool] = range_idx(f.height()).iter().map(|i| c.is_na(*i) == want_na).collect();
+    Ok(f.rows_where(keep))
+}
+
+
+// ============================================================ new columns
+
+// One side of an arithmetic expression: a column or a number.
+enum Operand {
+    Column(Col),
+    Lit(Val),
+}
+
+fn operand(f: Frame, tok: Str) -> Result[Operand, String] {
+    match literal(tok) {
+        Val.I(n) => Ok(Operand.Lit(Val.I(n))),
+        Val.F(x) => Ok(Operand.Lit(Val.F(x))),
+        _ => Ok(Operand.Column(f.col(tok)?)),
+    }
+}
+
+fn operand_is_int(o: Operand) -> bool {
+    match o {
+        Operand.Column(Col.Int(_)) => true,
+        Operand.Lit(Val.I(_)) => true,
+        _ => false,
+    }
+}
+
+fn operand_int(o: Operand, i: i64) -> i64 {
+    match o {
+        Operand.Column(Col.Int(v)) => v[i],
+        Operand.Lit(Val.I(n)) => n,
+        _ => 0,
+    }
+}
+
+fn operand_float(o: Operand, i: i64) -> f64 {
+    match o {
+        Operand.Column(c) => match c.get(i) {
+            Val.Na => nan(),
+            v => num_of(v),
+        },
+        Operand.Lit(v) => num_of(v),
+    }
+}
+
+fn arith(f: Frame, a: Str, sym: Str, b: Str) -> Result[Col, String] {
+    let x = operand(f, a)?;
+    let y = operand(f, b)?;
+    let n = f.height();
+    if operand_is_int(x) and operand_is_int(y) and sym != "/" {
+        let mut v: Vec[i64] = Vec.new();
+        for i in 0..n {
+            let p = operand_int(x, i);
+            let q = operand_int(y, i);
+            v.push(match sym {
+                "+" => p.wrapping_add(q),
+                "-" => p.wrapping_sub(q),
+                _ => p.wrapping_mul(q),
+            });
+        }
+        return Ok(Col.Int(v));
+    }
+    let mut v: Vec[f64] = Vec.new();
+    for i in 0..n {
+        let p = operand_float(x, i);
+        let q = operand_float(y, i);
+        v.push(match sym {
+            "+" => p + q,
+            "-" => p - q,
+            "*" => p * q,
+            _ => p / q,
+        });
+    }
+    Ok(Col.Float(v))
+}
+
+fn round_col(c: Col, decimals: i64) -> Col {
+    match c {
+        Col.Float(v) => Col.Float(v.iter().map(|x| np_round(*x, decimals)).collect()),
+        other => other.clone(),
+    }
+}
+
+
+// ============================================================ sorting and duplicates
+
+fn sort_rows(f: Frame, by: Vec[String], asc: Vec[bool], na_first: bool) -> Result[Frame, String] {
+    let which = index_of_all(f, by)?;
+    let mut idx = range_idx(f.height());
+    idx.sort_by(|a, b| {
+        for k in 0..which.len() {
+            let c = ref f.cols[which[k]];
+            let x = c.get(a);
+            let y = c.get(b);
+            let o = match (x, y) {
+                (Val.Na, Val.Na) => Ordering.Equal,
+                (Val.Na, _) => if na_first { Ordering.Less } else { Ordering.Greater },
+                (_, Val.Na) => if na_first { Ordering.Greater } else { Ordering.Less },
+                (p, q) => {
+                    let o = val_cmp(p, q);
+                    if asc[k] { o } else { flip(o) }
+                }
+            };
+            if o != Ordering.Equal {
+                return o;
+            }
+        }
+        Ordering.Equal
+    });
+    Ok(f.take(idx))
+}
+
+
+// ============================================================ groupby
+
+// The groups of a frame by key columns: the observed keys in sorted
+// order, the rows of each in frame order, and each row's group (-1 when
+// a key is missing, as dropna=True drops it).
+#[derive(Clone)]
+struct Groups {
+    keys: Vec[Vec[Val]],
+    rows: Vec[Vec[i64]],
+    label: Vec[i64],
+}
+
+fn group_rows(f: Frame, by: Vec[String]) -> Result[Groups, String] {
+    let which = index_of_all(f, by)?;
+    let mut ids: Map[String, i64] = Map.new();
+    let mut keys: Vec[Vec[Val]] = Vec.new();
+    let mut members: Vec[Vec[i64]] = Vec.new();
+    let mut first_label: Vec[i64] = Vec.new();
+    for i in 0..f.height() {
+        let k = f.row(i, which);
+        if k.iter().any(|v| match v {
+            Val.Na => true,
+            _ => false,
+        }) {
+            first_label.push(-1);
+            continue;
+        }
+        let t = key_text(k);
+        let id = match ids.get(t) {
+            Some(g) => *g,
+            None => {
+                ids[t.clone()] = keys.len();
+                keys.push(k.clone());
+                members.push(Vec.new());
+                keys.len() - 1
+            }
+        };
+        members[id].push(i);
+        first_label.push(id);
+    }
+    let mut order = range_idx(keys.len());
+    order.sort_by(|a, b| {
+        for j in 0..which.len() {
+            let o = val_cmp(keys[a][j], keys[b][j]);
+            if o != Ordering.Equal {
+                return o;
+            }
+        }
+        Ordering.Equal
+    });
+    let mut rank: Vec[i64] = Vec.filled(keys.len(), 0);
+    for p in 0..order.len() {
+        rank[order[p]] = p;
+    }
+    let label: Vec[i64] = first_label.iter().map(|l| if *l < 0 { -1 } else { rank[*l] }).collect();
+    Ok(Groups {
+        keys: order.iter().map(|g| keys[*g].clone()).collect(),
+        rows: order.iter().map(|g| members[*g].clone()).collect(),
+        label: label,
+    })
+}
+
+// The key columns of a grouped result, typed as their source columns.
+fn key_columns(f: Frame, by: Vec[String], g: Groups) -> Result[Frame, String] {
+    let mut out = Frame.new();
+    for j in 0..by.len() {
+        let src = f.col(by[j])?;
+        let firsts: Vec[i64] = g.rows.iter().map(|r| r[0]).collect();
+        out.put(by[j], src.take(firsts));
+    }
+    Ok(out)
+}
+
+fn welford(vals: Vec[f64], ddof: i64, sqrt: bool) -> f64 {
+    let mut nobs = 0;
+    let mut mean = 0.0;
+    let mut ssq = 0.0;
+    for v in vals {
+        if is_nan(v) {
+            continue;
+        }
+        nobs += 1;
+        let old = mean;
+        mean = mean + (v - old) / (nobs as f64);
+        ssq = ssq + (v - mean) * (v - old);
+    }
+    if nobs <= ddof {
+        return nan();
+    }
+    let var = ssq / ((nobs - ddof) as f64);
+    if sqrt { var.sqrt() } else { var }
+}
+
+fn median_of(vals: Vec[f64]) -> f64 {
+    let s = sorted_valid(vals);
+    let n = s.len();
+    if n == 0 {
+        return nan();
+    }
+    if n % 2 == 1 {
+        s[n / 2]
+    } else {
+        (s[n / 2] + s[n / 2 - 1]) / 2.0
+    }
+}
+
+fn agg_known(func: Str) -> bool {
+    match func {
+        "sum" | "mean" | "count" | "size" | "min" | "max" | "median" | "std" | "var" | "nunique" | "first"
+        | "last" => true,
+        _ => false,
+    }
+}
+
+// One aggregate of one column over each group, as pandas' cython kernel
+// for it computes it.
+fn agg_one(c: Col, g: Groups, func: Str) -> Result[Col, String] {
+    if not agg_known(func) {
+        return Err(f"AttributeError: 'SeriesGroupBy' object has no attribute '{func}'");
+    }
+    match func {
+        "size" => return Ok(Col.Int(g.rows.iter().map(|r| r.len()).collect())),
+        "count" => return Ok(Col.Int(g.rows.iter().map(|r| r.iter().filter(|i| not c.is_na(*i)).count()).collect())),
+        "nunique" => {
+            let mut out: Vec[i64] = Vec.new();
+            for r in g.rows {
+                let mut seen: Set[String] = Set.new();
+                for i in r {
+                    let v = c.get(i);
+                    match v {
+                        Val.Na => {}
+                        _ => {
+                            seen.insert(key_text([v].to_vec()));
+                        }
+                    }
+                }
+                out.push(seen.len());
+            }
+            return Ok(Col.Int(out));
+        }
+        "first" | "last" => {
+            let mut idx: Vec[i64] = Vec.new();
+            for r in g.rows {
+                let mut pick = -1;
+                for i in r {
+                    if not c.is_na(i) {
+                        pick = i;
+                        if func == "first" {
+                            break;
+                        }
+                    }
+                }
+                idx.push(pick);
+            }
+            return Ok(c.take(idx));
+        }
+        _ => {}
+    }
+    match c {
+        Col.Int(v) => match func {
+            "sum" => Ok(Col.Int(g.rows.iter().map(|r| {
+                let mut s: i64 = 0;
+                for i in r {
+                    s = s.wrapping_add(v[*i]);
+                }
+                s
+            }).collect())),
+            "min" | "max" => {
+                // An empty resample bin has no minimum: pandas casts to float
+                // and writes NaN there.
+                if g.rows.iter().any(|r| r.len() == 0) {
+                    agg_float(Col.Float(c.floats()), g, func)
+                } else if func == "min" {
+                    Ok(Col.Int(g.rows.iter().map(|r| r.iter().map(|i| v[*i]).min() ?? 0).collect()))
+                } else {
+                    Ok(Col.Int(g.rows.iter().map(|r| r.iter().map(|i| v[*i]).max() ?? 0).collect()))
+                }
+            }
+            _ => agg_float(Col.Float(c.floats()), g, func),
+        },
+        Col.Float(_) => agg_float(c, g, func),
+        Col.Bool(_) => agg_float(Col.Float(c.floats()), g, func),
+        _ => match func {
+            "min" | "max" => {
+                let mut out: Vec[Option[String]] = Vec.new();
+                for r in g.rows {
+                    let mut best: Option[String] = None;
+                    for i in r {
+                        if let Val.S(s) = c.get(i) {
+                            let better = match best {
+                                None => true,
+                                Some(ref b) => if func == "min" { s < b } else { s > b },
+                            };
+                            if better {
+                                best = Some(s.clone());
+                            }
+                        }
+                    }
+                    out.push(best);
+                }
+                Ok(Col.Str(out))
+            }
+            _ => Err(f"TypeError: agg function failed [how->{func},dtype->str]"),
+        },
+    }
+}
+
+fn agg_float(c: Col, g: Groups, func: Str) -> Result[Col, String] {
+    let v = c.floats();
+    let mut out: Vec[f64] = Vec.new();
+    for r in g.rows {
+        let vals: Vec[f64] = r.iter().map(|i| v[*i]).collect();
+        out.push(match func {
+            "sum" => {
+                let mut k = kahan();
+                for x in vals {
+                    if not is_nan(x) {
+                        k.add(x);
+                    }
+                }
+                k.sum
+            }
+            "mean" => {
+                let mut k = kahan();
+                for x in vals {
+                    if not is_nan(x) {
+                        k.add(x);
+                    }
+                }
+                if k.n == 0 { nan() } else { k.sum / (k.n as f64) }
+            }
+            "min" | "max" => {
+                let mut best = nan();
+                for x in vals {
+                    if is_nan(x) {
+                        continue;
+                    }
+                    if is_nan(best) or (func == "min" and x < best) or (func == "max" and x > best) {
+                        best = x;
+                    }
+                }
+                best
+            }
+            "median" => median_of(vals),
+            "std" => welford(vals, 1, true),
+            _ => welford(vals, 1, false),
+        });
+    }
+    Ok(Col.Float(out))
+}
+
+#[derive(Clone)]
+struct AggSpec {
+    col: String,
+    func: String,
+}
+
+fn parse_specs(s: Str) -> Vec[AggSpec] {
+    let mut out: Vec[AggSpec] = Vec.new();
+    for p in names_of(s) {
+        match p.split_once(":") {
+            Some((c, f)) => out.push(AggSpec { col: c.to_string(), func: f.to_string() }),
+            None => out.push(AggSpec { col: p.clone(), func: String.new() }),
+        }
+    }
+    out
+}
+
+// groupby(keys).agg(**{f"{col}_{func}": (col, func)}).reset_index().
+// Each aggregate runs in a task of its own; the columns join in order.
+fn agg(f: Frame, by: Vec[String], specs: Vec[AggSpec]) -> Result[Frame, String] {
+    let missing: Vec[String] = specs.iter().filter(|s| f.find(s.col).is_none()).map(|s| s.col.clone()).collect();
+    let g = group_rows(f, by)?;
+    if missing.len() > 0 {
+        return Err(f"KeyError: \"Label(s) [{quoted_list(missing)}] do not exist\"");
+    }
+    let mut out = key_columns(f, by, g)?;
+    let group = TaskGroup.new();
+    let mut handles = Vec.new();
+    for s in specs {
+        let c = f.col(s.col)?;
+        let gg = g.clone();
+        let func = s.func.clone();
+        handles.push(group.spawn(|| agg_one(c, gg, func)));
+    }
+    let mut k = 0;
+    for h in handles.into_iter() {
+        let col = h.join()?;
+        out.put(f"{specs[k].col}_{specs[k].func}", col);
+        k += 1;
+    }
+    Ok(out)
+}
+
+fn size(f: Frame, by: Vec[String]) -> Result[Frame, String] {
+    let g = group_rows(f, by)?;
+    let mut out = key_columns(f, by, g)?;
+    out.put("size", Col.Int(g.rows.iter().map(|r| r.len()).collect()));
+    Ok(out)
+}
+
+// A group's aggregate written back onto each of its rows.
+
+fn roll_add(val: f64, nobs: mut ref i64, sum_x: mut ref f64, comp: mut ref f64, same: mut ref i64, prev: mut ref f64) {
+    if is_nan(val) {
+        return;
+    }
+    nobs += 1;
+    let y = val - comp;
+    let t = sum_x + y;
+    *comp = t - sum_x - y;
+    *sum_x = t;
+    if val == prev {
+        same += 1;
+    } else {
+        *same = 1;
+    }
+    *prev = val;
+}
+
+fn roll_remove(val: f64, nobs: mut ref i64, sum_x: mut ref f64, comp: mut ref f64) {
+    if is_nan(val) {
+        return;
+    }
+    nobs -= 1;
+    let y = 0.0 - val - comp;
+    let t = sum_x + y;
+    *comp = t - sum_x - y;
+    *sum_x = t;
+}
+
+// pandas' roll_mean: roll_sum's bookkeeping, a count of negative values,
+// and a result that is 0 when the sum's sign disagrees with every value.
+
+// ============================================================ calendar
+
+const US_PER_SEC: i64 = 1000000;
+const US_PER_MIN: i64 = 60000000;
+const US_PER_HOUR: i64 = 3600000000;
+const US_PER_DAY: i64 = 86400000000;
+
+fn floor_div(a: i64, b: i64) -> i64 {
+    let q = a / b;
+    if a % b != 0 and ((a < 0) != (b < 0)) { q - 1 } else { q }
+}
+
+fn floor_mod(a: i64, b: i64) -> i64 {
+    a - floor_div(a, b) * b
+}
+
+// Days since 1970-01-01 of a proleptic Gregorian date (Howard Hinnant's
+// days_from_civil).
+fn days_from_civil(y0: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y0 - 1 } else { y0 };
+    let era = floor_div(y, 400);
+    let yoe = y - era * 400;
+    let mp = if m > 2 { m - 3 } else { m + 9 };
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146097 + doe - 719468
+}
+
+fn civil_from_days(z0: i64) -> (i64, i64, i64) {
+    let z = z0 + 719468;
+    let era = floor_div(z, 146097);
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + if m <= 2 { 1 } else { 0 };
+    (y, m, d)
+}
+
+fn is_leap(y: i64) -> bool {
+    (y % 4 == 0 and y % 100 != 0) or y % 400 == 0
+}
+
+fn days_in_month(y: i64, m: i64) -> i64 {
+    match m {
+        2 => if is_leap(y) { 29 } else { 28 },
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    }
+}
+
+// A wall-clock time broken into fields. `dow` is Monday = 0.
+#[derive(Clone, Copy)]
+struct Parts {
+    year: i64,
+    month: i64,
+    day: i64,
+    hour: i64,
+    minute: i64,
+    second: i64,
+    micro: i64,
+    dow: i64,
+    doy: i64,
+}
+
+fn parts_of(t: i64) -> Parts {
+    let days = floor_div(t, US_PER_DAY);
+    let rest = t - days * US_PER_DAY;
+    let (y, m, d) = civil_from_days(days);
+    Parts {
+        year: y,
+        month: m,
+        day: d,
+        hour: rest / US_PER_HOUR,
+        minute: rest % US_PER_HOUR / US_PER_MIN,
+        second: rest % US_PER_MIN / US_PER_SEC,
+        micro: rest % US_PER_SEC,
+        dow: floor_mod(days + 3, 7),
+        doy: days - days_from_civil(y, 1, 1) + 1,
+    }
+}
+
+fn wall(y: i64, m: i64, d: i64, h: i64, mi: i64, s: i64, us: i64) -> i64 {
+    days_from_civil(y, m, d) * US_PER_DAY + h * US_PER_HOUR + mi * US_PER_MIN + s * US_PER_SEC + us
+}
+
+// The ISO 8601 week number, as isocalendar() gives it.
+fn iso_week(p: Parts) -> i64 {
+    let wd = p.dow + 1;
+    let w = (p.doy - wd + 10) / 7;
+    if w < 1 {
+        return weeks_in_year(p.year - 1);
+    }
+    if w > weeks_in_year(p.year) {
+        return 1;
+    }
+    w
+}
+
+fn weeks_in_year(y: i64) -> i64 {
+    // A year has 53 ISO weeks when it starts on a Thursday, or on a
+    // Wednesday in a leap year.
+    let jan1 = floor_mod(days_from_civil(y, 1, 1) + 3, 7);
+    if jan1 == 3 or (jan1 == 2 and is_leap(y)) { 53 } else { 52 }
+}
+
+fn day_name(dow: i64) -> String {
+    ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"][dow].to_string()
+}
+
+fn month_name(m: i64) -> String {
+    ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"][m - 1].to_string()
+}
+
+// ============================================================ time zones
+
+// The zones the jobs use: UTC, and America/New_York under the US rules
+// in force since 2007 (daylight time from 02:00 on the second Sunday of
+// March to 02:00 on the first Sunday of November).
+fn known_zone(zone: Str) -> bool {
+    zone == "UTC" or zone == "America/New_York"
+}
+
+fn nth_sunday(y: i64, m: i64, n: i64) -> i64 {
+    let first_dow = floor_mod(days_from_civil(y, m, 1) + 3, 7);
+    1 + floor_mod(6 - first_dow, 7) + 7 * (n - 1)
+}
+
+// The zone's offset from UTC at an instant, in microseconds.
+fn zone_offset(zone: Str, utc: i64) -> i64 {
+    if zone != "America/New_York" {
+        return 0;
+    }
+    let y = parts_of(utc - 5 * US_PER_HOUR).year;
+    let start = wall(y, 3, nth_sunday(y, 3, 2), 7, 0, 0, 0);
+    let end = wall(y, 11, nth_sunday(y, 11, 1), 6, 0, 0, 0);
+    if utc >= start and utc < end { -4 * US_PER_HOUR } else { -5 * US_PER_HOUR }
+}
+
+fn zone_abbrev(zone: Str, utc: i64) -> String {
+    if zone != "America/New_York" {
+        return "UTC".to_string();
+    }
+    if zone_offset(zone, utc) == -4 * US_PER_HOUR { "EDT".to_string() } else { "EST".to_string() }
+}
+
+// Wall-clock time in the column's zone.
+fn to_local(tz: Option[String], utc: i64) -> i64 {
+    match tz {
+        Some(z) => utc + zone_offset(z, utc),
+        None => utc,
+    }
+}
+
+// The instant a wall-clock time names in a zone (tz_localize). The jobs
+// never name a time the clocks skip or repeat.
+fn from_local(tz: Option[String], local: i64) -> i64 {
+    match tz {
+        Some(z) => {
+            if z != "America/New_York" {
+                return local;
+            }
+            let standard = local + 5 * US_PER_HOUR;
+            if zone_offset(z, standard) == -5 * US_PER_HOUR { standard } else { local + 4 * US_PER_HOUR }
+        }
+        None => local,
+    }
+}
+
+// ============================================================ formatting
+
+fn pad(n: i64, width: i64) -> String {
+    let mut t = n.to_string();
+    while t.len() < width {
+        t = "0".to_string() + t;
+    }
+    t
+}
+
+fn date_text(p: Parts) -> String {
+    f"{p.year}-{pad(p.month, 2)}-{pad(p.day, 2)}"
+}
+
+fn clock_text(p: Parts) -> String {
+    f"{pad(p.hour, 2)}:{pad(p.minute, 2)}:{pad(p.second, 2)}"
+}
+
+fn offset_text(off: i64) -> String {
+    let sign = if off < 0 { "-" } else { "+" };
+    let a = off.abs() / US_PER_MIN;
+    f"{sign}{pad(a / 60, 2)}:{pad(a % 60, 2)}"
+}
+
+// format_array_from_datetime: a naive column is written as dates when
+// every value is a midnight, and otherwise with as many fractional
+// digits (none, 3 or 6) as its finest value needs; an aware column
+// writes each value as str(Timestamp) does, with its offset.
+fn time_texts(t: TimeCol) -> Vec[String] {
+    let valid: Vec[i64] = t.v.iter().filter(|x| x.is_some()).map(|x| x.unwrap()).collect();
+    match t.tz {
+        None => {
+            let dates_only = valid.iter().all(|x| floor_mod(*x, US_PER_DAY) == 0);
+            let digits = if valid.iter().any(|x| floor_mod(*x, 1000) != 0) {
+                6
+            } else if valid.iter().any(|x| floor_mod(*x, US_PER_SEC) != 0) {
+                3
+            } else {
+                0
+            };
+            t.v.iter().map(|x| match x {
+                None => String.new(),
+                Some(u) => {
+                    let p = parts_of(u);
+                    if dates_only {
+                        date_text(p)
+                    } else if digits == 6 {
+                        f"{date_text(p)} {clock_text(p)}.{pad(p.micro, 6)}"
+                    } else if digits == 3 {
+                        f"{date_text(p)} {clock_text(p)}.{pad(p.micro / 1000, 3)}"
+                    } else {
+                        f"{date_text(p)} {clock_text(p)}"
+                    }
+                }
+            }).collect()
+        }
+        Some(z) => t.v.iter().map(|x| match x {
+            None => String.new(),
+            Some(u) => {
+                let off = zone_offset(z, u);
+                let p = parts_of(u + off);
+                let frac = if p.micro != 0 { f".{pad(p.micro, 6)}" } else { String.new() };
+                f"{date_text(p)} {clock_text(p)}{frac}{offset_text(off)}"
+            }
+        }).collect(),
+    }
+}
+
+// Timedelta._repr_base: "N days HH:MM:SS", or "N days" when every value
+// is a whole number of days.
+fn delta_texts(d: DeltaCol) -> Vec[String] {
+    let even = d.v.iter().all(|x| match x {
+        Some(u) => floor_mod(u, US_PER_DAY) == 0,
+        None => true,
+    });
+    d.v.iter().map(|x| match x {
+        None => String.new(),
+        Some(u) => {
+            let days = floor_div(u, US_PER_DAY);
+            if even {
+                return f"{days} days";
+            }
+            let p = parts_of(u - days * US_PER_DAY);
+            let sign = if days < 0 { " +" } else { " " };
+            let frac = if p.micro != 0 { f".{pad(p.micro, 6)}" } else { String.new() };
+            f"{days} days{sign}{clock_text(p)}{frac}"
+        }
+    }).collect()
+}
+
+// Timestamp.strftime over the directives the jobs use.
+fn strftime(fmt: Str, utc: i64, tz: Option[String]) -> String {
+    let p = parts_of(to_local(tz, utc));
+    let chars: Vec[char] = fmt.chars().collect();
+    let mut out = String.new();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '%' and i + 1 < chars.len() {
+            let d = chars[i + 1];
+            i += 2;
+            match d {
+                'Y' => out.push_str(p.year.to_string()),
+                'm' => out.push_str(pad(p.month, 2)),
+                'd' => out.push_str(pad(p.day, 2)),
+                'H' => out.push_str(pad(p.hour, 2)),
+                'M' => out.push_str(pad(p.minute, 2)),
+                'S' => out.push_str(pad(p.second, 2)),
+                'j' => out.push_str(pad(p.doy, 3)),
+                'a' => out.push_str(day_name(p.dow)[0..3]),
+                'A' => out.push_str(day_name(p.dow)),
+                'b' => out.push_str(month_name(p.month)[0..3]),
+                'B' => out.push_str(month_name(p.month)),
+                'Z' => match tz {
+                    Some(z) => out.push_str(zone_abbrev(z, utc)),
+                    None => {}
+                },
+                '%' => out.push('%'),
+                other => {
+                    out.push('%');
+                    out.push(other);
+                }
+            }
+        } else {
+            out.push(chars[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
+// ============================================================ parsing
+
+fn digits_at(cs: Vec[char], at: i64, n: i64) -> Option[i64] {
+    if at + n > cs.len() {
+        return None;
+    }
+    let mut v = 0;
+    for k in at..at + n {
+        let c = cs[k];
+        if c < '0' or c > '9' {
+            return None;
+        }
+        v = v * 10 + (c as i64 - '0' as i64);
+    }
+    Some(v)
+}
+
+// An ISO 8601 date or date-time: the wall time it writes, and the UTC
+// offset when it gives one (`Z` or `+hh:mm`).
+fn parse_iso(s: Str) -> Option[(i64, Option[i64])] {
+    let cs: Vec[char] = s.chars().collect();
+    let y = digits_at(cs, 0, 4)?;
+    if cs.len() < 10 or cs[4] != '-' or cs[7] != '-' {
+        return None;
+    }
+    let m = digits_at(cs, 5, 2)?;
+    let d = digits_at(cs, 8, 2)?;
+    if m < 1 or m > 12 or d < 1 or d > days_in_month(y, m) {
+        return None;
+    }
+    let mut at = 10;
+    let mut h = 0;
+    let mut mi = 0;
+    let mut sec = 0;
+    let mut us = 0;
+    if at < cs.len() and (cs[at] == 'T' or cs[at] == ' ') {
+        h = digits_at(cs, at + 1, 2)?;
+        if at + 3 >= cs.len() or cs[at + 3] != ':' {
+            return None;
+        }
+        mi = digits_at(cs, at + 4, 2)?;
+        at += 6;
+        if at < cs.len() and cs[at] == ':' {
+            sec = digits_at(cs, at + 1, 2)?;
+            at += 3;
+            if at < cs.len() and cs[at] == '.' {
+                at += 1;
+                let mut scale = 100000;
+                while at < cs.len() and cs[at] >= '0' and cs[at] <= '9' {
+                    us += (cs[at] as i64 - '0' as i64) * scale;
+                    scale /= 10;
+                    at += 1;
+                }
+            }
+        }
+        if h > 23 or mi > 59 or sec > 59 {
+            return None;
+        }
+    }
+    let local = wall(y, m, d, h, mi, sec, us);
+    if at == cs.len() {
+        return Some((local, None));
+    }
+    if cs[at] == 'Z' and at + 1 == cs.len() {
+        return Some((local, Some(0)));
+    }
+    if cs[at] == '+' or cs[at] == '-' {
+        let oh = digits_at(cs, at + 1, 2)?;
+        let om = if at + 3 < cs.len() and cs[at + 3] == ':' { digits_at(cs, at + 4, 2)? } else { digits_at(cs, at + 3, 2)? };
+        let off = (oh * 60 + om) * US_PER_MIN;
+        return Some((local, Some(if cs[at] == '-' { 0 - off } else { off })));
+    }
+    None
+}
+
+// strptime over %Y %m %d %H %M %S and literal characters.
+fn parse_with(s: Str, fmt: Str) -> Option[i64] {
+    let cs: Vec[char] = s.chars().collect();
+    let fs: Vec[char] = fmt.chars().collect();
+    let mut y = 1900;
+    let mut m = 1;
+    let mut d = 1;
+    let mut h = 0;
+    let mut mi = 0;
+    let mut sec = 0;
+    let mut at = 0;
+    let mut k = 0;
+    while k < fs.len() {
+        if fs[k] == '%' and k + 1 < fs.len() {
+            let width = if fs[k + 1] == 'Y' { 4 } else { 2 };
+            let v = digits_at(cs, at, width)?;
+            match fs[k + 1] {
+                'Y' => y = v,
+                'm' => m = v,
+                'd' => d = v,
+                'H' => h = v,
+                'M' => mi = v,
+                _ => sec = v,
+            }
+            at += width;
+            k += 2;
+        } else {
+            if at >= cs.len() or cs[at] != fs[k] {
+                return None;
+            }
+            at += 1;
+            k += 1;
+        }
+    }
+    if at != cs.len() or m < 1 or m > 12 or d < 1 or d > days_in_month(y, m) or h > 23 or mi > 59 or sec > 59 {
+        return None;
+    }
+    Some(wall(y, m, d, h, mi, sec, 0))
+}
+
+fn format_mismatch(s: Str, fmt: Str) -> String {
+    let mut t = f"ValueError: time data \"{s}\" doesn't match format \"{fmt}\". You might want to try:\n";
+    t.push_str("    - passing `format` if your strings have a consistent format;\n");
+    t.push_str("    - passing `format='ISO8601'` if your strings are all ISO8601 but not necessarily in exactly the same format;\n");
+    t.push_str("    - passing `format='mixed'`, and the format will be inferred for each element individually. You might want to use `dayfirst` alongside this.");
+    t
+}
+
+struct DateOpts {
+    format: Option[String],
+    unit: Option[String],
+    coerce: bool,
+}
+
+// pd.to_datetime over one column.
+fn to_datetime(c: Col, o: DateOpts) -> Result[Col, String] {
+    if let Some(u) = o.unit {
+        // Epoch numbers: seconds here, the only unit the jobs give.
+        let scale = if u == "ms" { 1000 } else { US_PER_SEC };
+        let v: Vec[Option[i64]] = match c {
+            Col.Int(xs) => xs.iter().map(|x| Some(*x * scale)).collect(),
+            Col.Float(xs) => xs.iter().map(|x| if is_nan(*x) { None } else { Some((*x as i64) * scale) }).collect(),
+            _ => return Err("TypeError: unit must be used with numeric values".to_string()),
+        };
+        return Ok(Col.Time(TimeCol { v: v, unit: u.clone(), tz: None }));
+    }
+    let cells: Vec[Option[String]] = match c {
+        Col.Str(v) => v.clone(),
+        Col.Obj(v) => v.clone(),
+        Col.Time(_) => return Ok(c.clone()),
+        other => {
+            let n = other.len();
+            let mut v: Vec[Option[String]] = Vec.new();
+            for i in 0..n {
+                v.push(match other.get(i) {
+                    Val.Na => None,
+                    x => Some(val_text(x)),
+                });
+            }
+            v
+        }
+    };
+    let mut out: Vec[Option[i64]] = Vec.new();
+    let mut tz: Option[String] = None;
+    let mut first = true;
+    for cell in cells {
+        match cell {
+            None => out.push(None),
+            Some(s) => {
+                let parsed: Option[(i64, Option[i64])] = match o.format {
+                    Some(ref fmt) => parse_with(s, fmt).map(|w| (w, None)),
+                    None => parse_iso(s),
+                };
+                match parsed {
+                    Some((w, off)) => {
+                        if first and off.is_some() {
+                            tz = Some("UTC".to_string());
+                        }
+                        first = false;
+                        out.push(Some(w - (off ?? 0)));
+                    }
+                    None => {
+                        if o.coerce {
+                            out.push(None);
+                        } else {
+                            return Err(match o.format {
+                                Some(ref fmt) => format_mismatch(s, fmt),
+                                None => f"ValueError: time data \"{s}\" doesn't match format \"%Y-%m-%d\"",
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(Col.Time(TimeCol { v: out, unit: "us".to_string(), tz: tz }))
+}
+
+// A quoted value compared with a datetime column: a wall time in the
+// column's zone, unless it gives its own offset.
+fn time_literal(tok: Str, tz: Option[String]) -> Result[Val, String] {
+    let text = match literal(tok) {
+        Val.S(s) => s,
+        other => return Ok(other),
+    };
+    match parse_iso(text) {
+        Some((w, Some(off))) => Ok(Val.T(w - off)),
+        Some((w, None)) => Ok(Val.T(from_local(tz, w))),
+        None => Err(f"ValueError: could not convert string to Timestamp"),
+    }
+}
+
+// A quoted value compared with a timedelta column: `N days` and an
+// optional `HH:MM:SS`.
+fn delta_literal(tok: Str) -> Result[Val, String] {
+    let text = match literal(tok) {
+        Val.S(s) => s,
+        other => return Ok(other),
+    };
+    let words: Vec[String] = text.split(" ").map(|w| w.to_string()).collect();
+    let mut total = 0;
+    let mut k = 0;
+    while k < words.len() {
+        let w = words[k].clone();
+        if k + 1 < words.len() and (words[k + 1] == "days" or words[k + 1] == "day") {
+            match i64.parse(w) {
+                Ok(n) => total += n * US_PER_DAY,
+                Err(_) => return Err(f"ValueError: unit abbreviation w/o a number"),
+            }
+            k += 2;
+        } else {
+            let hms: Vec[String] = w.split(":").map(|x| x.to_string()).collect();
+            if hms.len() != 3 {
+                return Err(f"ValueError: unit abbreviation w/o a number");
+            }
+            let h = int_arg(hms[0])?;
+            let m = int_arg(hms[1])?;
+            let s = int_arg(hms[2])?;
+            total += h * US_PER_HOUR + m * US_PER_MIN + s * US_PER_SEC;
+            k += 1;
+        }
+    }
+    Ok(Val.D(total))
+}
+
+// ============================================================ frequencies
+
+// A pandas offset alias. A Tick is a fixed length of time; the others
+// are calendar offsets applied to wall-clock time. Week, MonthEnd and
+// the rest are anchored: they land on dates that satisfy `on_offset`.
+#[derive(Clone, Copy)]
+enum Freq {
+    Tick(i64),
+    Day(i64),
+    Week(i64, i64),
+    MonthEnd(i64),
+    MonthBegin(i64),
+    QuarterEnd(i64),
+    QuarterBegin(i64),
+    YearEnd(i64),
+    SemiMonthEnd(i64),
+}
+
+fn weekday_of(code: Str) -> Option[i64] {
+    match code {
+        "MON" => Some(0),
+        "TUE" => Some(1),
+        "WED" => Some(2),
+        "THU" => Some(3),
+        "FRI" => Some(4),
+        "SAT" => Some(5),
+        "SUN" => Some(6),
+        _ => None,
+    }
+}
+
+fn parse_freq(s: Str) -> Result[Freq, String] {
+    let cs: Vec[char] = s.chars().collect();
+    let mut k = 0;
+    while k < cs.len() and cs[k] >= '0' and cs[k] <= '9' {
+        k += 1;
+    }
+    let n = if k == 0 { 1 } else { int_arg(s[0..k])? };
+    let unit = s[k..].to_string();
+    let f = match unit.as_str() {
+        "s" => Some(Freq.Tick(n * US_PER_SEC)),
+        "min" => Some(Freq.Tick(n * US_PER_MIN)),
+        "h" => Some(Freq.Tick(n * US_PER_HOUR)),
+        "D" => Some(Freq.Day(n)),
+        "W" => Some(Freq.Week(n, 6)),
+        "ME" => Some(Freq.MonthEnd(n)),
+        "MS" => Some(Freq.MonthBegin(n)),
+        "QE" => Some(Freq.QuarterEnd(n)),
+        "QS" => Some(Freq.QuarterBegin(n)),
+        "YE" => Some(Freq.YearEnd(n)),
+        "SME" => Some(Freq.SemiMonthEnd(n)),
+        _ => if unit.starts_with("W-") { weekday_of(unit[2..]).map(|w| Freq.Week(n, w)) } else { None },
+    };
+    match f {
+        Some(x) => Ok(x),
+        None => Err(f"ValueError: Invalid frequency: {s}. Failed to parse with error message: ValueError(\"Invalid frequency: {unit}. Failed to parse with error message: KeyError('{unit}').\")"),
+    }
+}
+
+fn is_tick(f: Freq) -> bool {
+    match f {
+        Freq.Tick(_) => true,
+        _ => false,
+    }
+}
+
+// The offsets whose resample bins close on the right by default, and
+// whose right edges _adjust_bin_edges moves to the end of the day.
+fn is_end_type(f: Freq) -> bool {
+    match f {
+        Freq.Week(_, _) => true,
+        Freq.MonthEnd(_) => true,
+        Freq.QuarterEnd(_) => true,
+        Freq.YearEnd(_) => true,
+        _ => false,
+    }
+}
+
+// The length of a fixed window ("2min", "7D"), for rolling.
+fn window_len(f: Freq) -> Result[i64, String] {
+    match f {
+        Freq.Tick(u) => Ok(u),
+        Freq.Day(n) => Ok(n * US_PER_DAY),
+        _ => Err("ValueError: window must be an integer 0 or greater".to_string()),
+    }
+}
+
+fn on_offset(f: Freq, local: i64) -> bool {
+    let p = parts_of(local);
+    let dim = days_in_month(p.year, p.month);
+    match f {
+        Freq.Week(_, wd) => p.dow == wd,
+        Freq.MonthEnd(_) => p.day == dim,
+        Freq.MonthBegin(_) => p.day == 1,
+        Freq.QuarterEnd(_) => p.month % 3 == 0 and p.day == dim,
+        Freq.QuarterBegin(_) => p.month % 3 == 1 and p.day == 1,
+        Freq.YearEnd(_) => p.month == 12 and p.day == 31,
+        Freq.SemiMonthEnd(_) => p.day == 15 or p.day == dim,
+        _ => true,
+    }
+}
+
+// The next date on the offset strictly after (or before) `local`, at the
+// same time of day. One application of an anchored offset with n = 1
+// (or -1) is exactly this, whether or not `local` is on the offset.
+fn step_anchor(f: Freq, local: i64, forward: bool) -> i64 {
+    let d = if forward { US_PER_DAY } else { 0 - US_PER_DAY };
+    let mut t = local + d;
+    while not on_offset(f, t) {
+        t += d;
+    }
+    t
+}
+
+fn mult(f: Freq) -> i64 {
+    match f {
+        Freq.Tick(_) => 1,
+        Freq.Day(n) => n,
+        Freq.Week(n, _) => n,
+        Freq.MonthEnd(n) => n,
+        Freq.MonthBegin(n) => n,
+        Freq.QuarterEnd(n) => n,
+        Freq.QuarterBegin(n) => n,
+        Freq.YearEnd(n) => n,
+        Freq.SemiMonthEnd(n) => n,
+    }
+}
+
+// local + k * freq, on wall-clock time.
+fn shift(f: Freq, local: i64, k: i64) -> i64 {
+    match f {
+        Freq.Tick(u) => local + k * u,
+        Freq.Day(n) => local + k * n * US_PER_DAY,
+        _ => {
+            let mut t = local;
+            for _ in 0..(k * mult(f)).abs() {
+                t = step_anchor(f, t, k > 0);
+            }
+            t
+        }
+    }
+}
+
+fn rollback(f: Freq, local: i64) -> i64 {
+    if on_offset(f, local) { local } else { step_anchor(f, local, false) }
+}
+
+fn rollforward(f: Freq, local: i64) -> i64 {
+    if on_offset(f, local) { local } else { step_anchor(f, local, true) }
+}
+
+fn normalize_local(local: i64) -> i64 {
+    floor_div(local, US_PER_DAY) * US_PER_DAY
+}
+
+// pd.date_range(start, end, freq, tz) between two instants: a Tick steps
+// through absolute time; a calendar offset steps through wall-clock time
+// in the zone, from the first date on the offset to the last.
+fn date_range(start: i64, end: i64, f: Freq, tz: Option[String]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    match f {
+        Freq.Tick(u) => {
+            let mut t = start;
+            while t <= end {
+                out.push(t);
+                t += u;
+            }
+        }
+        _ => {
+            let first = rollforward(f, to_local(tz, start));
+            let last = rollback(f, to_local(tz, end));
+            let mut t = first;
+            while t <= last {
+                out.push(from_local(tz, t));
+                t = shift(f, t, 1);
+            }
+        }
+    }
+    out
+}
+
+// ============================================================ the .dt accessor
+
+fn time_col(c: Col) -> Result[TimeCol, String] {
+    match c {
+        Col.Time(t) => Ok(t.clone()),
+        _ => Err("AttributeError: Can only use .dt accessor with datetimelike values".to_string()),
+    }
+}
+
+fn delta_col(c: Col) -> Result[DeltaCol, String] {
+    match c {
+        Col.Delta(d) => Ok(d.clone()),
+        _ => Err("AttributeError: Can only use .dt accessor with datetimelike values".to_string()),
+    }
+}
+
+// A numeric field of each value; float with NaN when there is a NaT.
+fn int_part(t: TimeCol, get: Fn(Parts) -> i64) -> Col {
+    let ps: Vec[Option[Parts]] = t.v.iter().map(|x| x.map(|u| parts_of(to_local(t.tz, u)))).collect();
+    if ps.iter().any(|p| p.is_none()) {
+        Col.Float(ps.iter().map(|p| match p {
+            Some(q) => get(q) as f64,
+            None => nan(),
+        }).collect())
+    } else {
+        Col.Int(ps.iter().map(|p| get(p.unwrap())).collect())
+    }
+}
+
+fn dt_part(c: Col, name: Str) -> Result[Col, String] {
+    let t = time_col(c)?;
+    let local: Vec[Option[Parts]] = t.v.iter().map(|x| x.map(|u| parts_of(to_local(t.tz, u)))).collect();
+    match name {
+        "year" => Ok(int_part(t, |p| p.year)),
+        "month" => Ok(int_part(t, |p| p.month)),
+        "day" => Ok(int_part(t, |p| p.day)),
+        "hour" => Ok(int_part(t, |p| p.hour)),
+        "minute" => Ok(int_part(t, |p| p.minute)),
+        "second" => Ok(int_part(t, |p| p.second)),
+        "microsecond" => Ok(int_part(t, |p| p.micro)),
+        "dayofweek" => Ok(int_part(t, |p| p.dow)),
+        "dayofyear" => Ok(int_part(t, |p| p.doy)),
+        "quarter" => Ok(int_part(t, |p| (p.month - 1) / 3 + 1)),
+        "week" => Ok(int_part(t, |p| iso_week(p))),
+        "day_name" => Ok(Col.Str(local.iter().map(|p| p.map(|q| day_name(q.dow))).collect())),
+        "month_name" => Ok(Col.Str(local.iter().map(|p| p.map(|q| month_name(q.month))).collect())),
+        "is_month_end" => Ok(Col.Bool(local.iter().map(|p| match p {
+            Some(q) => q.day == days_in_month(q.year, q.month),
+            None => false,
+        }).collect())),
+        "is_month_start" => Ok(Col.Bool(local.iter().map(|p| match p {
+            Some(q) => q.day == 1,
+            None => false,
+        }).collect())),
+        _ => Err(f"AttributeError: 'DatetimeProperties' object has no attribute '{name}'"),
+    }
+}
+
+// floor, ceil and round to a fixed frequency, on wall-clock time; round
+// breaks a tie towards the even multiple.
+fn round_time(c: Col, freq: Str, how: Str) -> Result[Col, String] {
+    let t = time_col(c)?;
+    let unit = match parse_freq(freq)? {
+        Freq.Tick(u) => u,
+        Freq.Day(n) => n * US_PER_DAY,
+        _ => return Err(f"ValueError: {freq} is a non-fixed frequency"),
+    };
+    let v: Vec[Option[i64]] = t.v.iter().map(|x| x.map(|u| {
+        let local = to_local(t.tz, u);
+        let q = floor_div(local, unit);
+        let r = local - q * unit;
+        let k = match how {
+            "floor" => q,
+            "ceil" => if r == 0 { q } else { q + 1 },
+            _ => if 2 * r > unit or (2 * r == unit and q % 2 != 0) { q + 1 } else { q },
+        };
+        from_local(t.tz, k * unit)
+    })).collect();
+    Ok(Col.Time(TimeCol { v: v, unit: t.unit.clone(), tz: t.tz.clone() }))
+}
+
+fn normalize(c: Col) -> Result[Col, String] {
+    let t = time_col(c)?;
+    let v: Vec[Option[i64]] = t.v.iter().map(|x| x.map(|u| from_local(t.tz, normalize_local(to_local(t.tz, u))))).collect();
+    Ok(Col.Time(TimeCol { v: v, unit: t.unit.clone(), tz: t.tz.clone() }))
+}
+
+fn strftime_col(c: Col, fmt: Str) -> Result[Col, String] {
+    let t = time_col(c)?;
+    Ok(Col.Str(t.v.iter().map(|x| x.map(|u| strftime(fmt, u, t.tz))).collect()))
+}
+
+fn clock_of(s: Str) -> Result[i64, String] {
+    let parts: Vec[String] = s.split(":").map(|x| x.to_string()).collect();
+    let mut us = 0;
+    let scales = [US_PER_HOUR, US_PER_MIN, US_PER_SEC];
+    for k in 0..parts.len() {
+        us += int_arg(parts[k])? * scales[k];
+    }
+    Ok(us)
+}
+
+// DatetimeIndex.indexer_between_time, both ends included; a window that
+// wraps past midnight takes the times after the start or before the end.
+fn between_time(f: Frame, name: Str, a: Str, b: Str) -> Result[Frame, String] {
+    let t = time_col(f.col(name)?)?;
+    let lo = clock_of(a)?;
+    let hi = clock_of(b)?;
+    let keep: Vec[bool] = t.v.iter().map(|x| match x {
+        Some(u) => {
+            let tod = floor_mod(to_local(t.tz, u), US_PER_DAY);
+            if lo <= hi { tod >= lo and tod <= hi } else { tod >= lo or tod <= hi }
+        }
+        None => false,
+    }).collect();
+    Ok(f.rows_where(keep))
+}
+
+fn sub_times(a: Col, b: Col) -> Result[Col, String] {
+    let x = time_col(a)?;
+    let y = time_col(b)?;
+    let v: Vec[Option[i64]] = range_idx(x.v.len()).iter().map(|i| match (x.v[*i], y.v[*i]) {
+        (Some(p), Some(q)) => Some(p - q),
+        _ => None,
+    }).collect();
+    let unit = if x.unit == "us" or y.unit == "us" { "us" } else { "s" };
+    Ok(Col.Delta(DeltaCol { v: v, unit: unit.to_string() }))
+}
+
+fn time_diff(c: Col) -> Result[Col, String] {
+    let x = time_col(c)?;
+    let v: Vec[Option[i64]] = range_idx(x.v.len()).iter().map(|i| if *i == 0 {
+        None
+    } else {
+        match (x.v[*i], x.v[*i - 1]) {
+            (Some(p), Some(q)) => Some(p - q),
+            _ => None,
+        }
+    }).collect();
+    Ok(Col.Delta(DeltaCol { v: v, unit: x.unit.clone() }))
+}
+
+fn total_seconds(c: Col) -> Result[Col, String] {
+    let d = delta_col(c)?;
+    Ok(Col.Float(d.v.iter().map(|x| match x {
+        Some(u) => (u as f64) / 1000000.0,
+        None => nan(),
+    }).collect()))
+}
+
+fn set_zone(c: Col, how: Str, zone: Str) -> Result[Col, String] {
+    let t = time_col(c)?;
+    if not known_zone(zone) {
+        return Err(f"ZoneInfoNotFoundError: 'No time zone found with key {zone}'");
+    }
+    if how == "localize" {
+        if t.tz.is_some() {
+            return Err("TypeError: Already tz-aware, use tz_convert to convert.".to_string());
+        }
+        let z = Some(zone.to_string());
+        let v: Vec[Option[i64]] = t.v.iter().map(|x| x.map(|u| from_local(z, u))).collect();
+        return Ok(Col.Time(TimeCol { v: v, unit: t.unit.clone(), tz: z.clone() }));
+    }
+    if t.tz.is_none() {
+        return Err("TypeError: Cannot convert tz-naive timestamps, use tz_localize to localize".to_string());
+    }
+    Ok(Col.Time(TimeCol { v: t.v.clone(), unit: t.unit.clone(), tz: Some(zone.to_string()) }))
+}
+
+// ============================================================ resample
+
+struct BinOpts {
+    freq: Freq,
+    closed_right: bool,
+    label_right: bool,
+    epoch: bool,
+    offset: i64,
+}
+
+// The bins of one sorted run of instants: the label of each bin and, for
+// each bin, how many of the instants fall at or before its end
+// (TimeGrouper._get_time_bins and lib.generate_bins_dt64).
+fn time_bins(vals: Vec[i64], o: BinOpts, tz: Option[String], unit_us: i64) -> (Vec[i64], Vec[i64]) {
+    let first = vals[0];
+    let last = vals[vals.len() - 1];
+    let mut binner: Vec[i64] = Vec.new();
+    let mut edges: Vec[i64] = Vec.new();
+    match o.freq {
+        Freq.Tick(fv) => {
+            // _adjust_dates_anchored: bins step from the origin (midnight
+            // of the first day in the zone, or the epoch) in absolute time.
+            let origin = (if o.epoch { 0 } else { from_local(tz, normalize_local(to_local(tz, first))) }) + o.offset;
+            let foff = floor_mod(first - origin, fv);
+            let loff = floor_mod(last - origin, fv);
+            let lo = if foff > 0 { first - foff } else if o.closed_right { first - fv } else { first };
+            let hi = if loff > 0 { last + fv - loff } else if o.closed_right { last } else { last + fv };
+            binner = date_range(lo, hi, o.freq, tz);
+            edges = binner.clone();
+        }
+        _ => {
+            let f0 = normalize_local(to_local(tz, first));
+            let l0 = normalize_local(to_local(tz, last));
+            let lo = if o.closed_right { shift(o.freq, f0, -1) } else { rollback(o.freq, f0) };
+            let hi = shift(o.freq, l0, 1);
+            let mut walls: Vec[i64] = Vec.new();
+            let mut t = lo;
+            while t <= hi {
+                walls.push(t);
+                t = shift(o.freq, t, 1);
+            }
+            binner = walls.iter().map(|w| from_local(tz, *w)).collect();
+            if is_end_type(o.freq) {
+                // A bin that ends on a date runs to the last moment of it.
+                edges = if o.closed_right {
+                    walls.iter().map(|w| from_local(tz, *w + US_PER_DAY - unit_us)).collect()
+                } else {
+                    binner.clone()
+                };
+                if edges.len() >= 2 and edges[edges.len() - 2] > last {
+                    edges.pop();
+                    binner.pop();
+                }
+            } else {
+                edges = binner.clone();
+            }
+        }
+    }
+    let mut ends: Vec[i64] = Vec.new();
+    let mut j = 0;
+    for i in 0..edges.len() - 1 {
+        let r = edges[i + 1];
+        while j < vals.len() and (vals[j] < r or (o.closed_right and vals[j] == r)) {
+            j += 1;
+        }
+        ends.push(j);
+    }
+    let mut labels: Vec[i64] = if o.label_right { binner[1..].to_vec() } else { binner.clone() };
+    while labels.len() > ends.len() {
+        labels.pop();
+    }
+    (labels, ends)
+}
+
+// The rows of each bin, in time order, for one group of rows.
+struct Binned {
+    labels: Vec[i64],
+    rows: Vec[Vec[i64]],
+}
+
+fn bin_rows(t: TimeCol, rows: Vec[i64], o: BinOpts) -> Binned {
+    let mut order: Vec[i64] = rows.iter().filter(|i| t.v[*i].is_some()).map(|i| *i).collect();
+    order.sort_by(|a, b| t.v[a].unwrap().cmp(t.v[b].unwrap()));
+    if order.len() == 0 {
+        return Binned { labels: Vec.new(), rows: Vec.new() };
+    }
+    let vals: Vec[i64] = order.iter().map(|i| t.v[*i].unwrap()).collect();
+    let unit_us = if t.unit == "s" { US_PER_SEC } else { 1 };
+    let (labels, ends) = time_bins(vals, o, t.tz, unit_us);
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let mut s = 0;
+    for e in ends {
+        out.push(order[s..e].to_vec());
+        s = e;
+    }
+    Binned { labels: labels, rows: out }
+}
+
+fn bin_opts(a: Args, freq: Freq) -> Result[BinOpts, String] {
+    let end_type = is_end_type(freq);
+    let closed_right = match a.get("closed") {
+        Some(s) => s == "right",
+        None => end_type,
+    };
+    let label_right = match a.get("label") {
+        Some(s) => s == "right",
+        None => end_type,
+    };
+    let offset = match a.get("offset") {
+        Some(s) => match parse_freq(s)? {
+            Freq.Tick(u) => u,
+            _ => 0,
+        },
+        None => 0,
+    };
+    Ok(BinOpts { freq: freq, closed_right: closed_right, label_right: label_right, epoch: a.get("origin") == Some("epoch".to_string()), offset: offset })
+}
+
+fn resample_time(f: Frame, name: Str) -> Result[TimeCol, String] {
+    match f.col(name)? {
+        Col.Time(t) => Ok(t.clone()),
+        _ => Err("TypeError: Only valid with DatetimeIndex, TimedeltaIndex or PeriodIndex, but got an instance of 'Index'".to_string()),
+    }
+}
+
+// The aggregates of one group's bins, as the groupby kernels compute
+// them over a BinGrouper.
+fn bin_aggs(f: Frame, b: Binned, specs: Vec[AggSpec]) -> Result[Vec[Col], String] {
+    let g = Groups { keys: Vec.new(), rows: b.rows.clone(), label: Vec.new() };
+    let mut out: Vec[Col] = Vec.new();
+    for s in specs {
+        out.push(agg_one(f.col(s.col)?, g, s.func)?);
+    }
+    Ok(out)
+}
+
+// df.resample(freq, on=name).agg(...), or with `by` keys
+// df.groupby(keys).resample(freq, on=name).agg(...): each group is
+// binned on its own range, in a task of its own, and the groups join in
+// key order.
+fn resample(f: Frame, name: Str, freq: Str, specs: Vec[AggSpec], by: Vec[String], a: Args) -> Result[Frame, String] {
+    let fr = parse_freq(freq)?;
+    let t = resample_time(f, name)?;
+    let o = bin_opts(a, fr)?;
+    let missing: Vec[String] = specs.iter().filter(|s| f.find(s.col).is_none()).map(|s| s.col.clone()).collect();
+    if missing.len() > 0 {
+        return Err(f"KeyError: \"Column(s) [{quoted_list(missing)}] do not exist\"");
+    }
+    let groups: Groups = if by.len() == 0 {
+        Groups { keys: [Vec.new()].to_vec(), rows: [range_idx(f.height())].to_vec(), label: Vec.new() }
+    } else {
+        group_rows(f, by)?
+    };
+    let pool = TaskGroup.new();
+    let mut handles = Vec.new();
+    for rows in groups.rows {
+        let tt = t.clone();
+        let ff = f.clone();
+        let ss = specs.clone();
+        let rr = rows.clone();
+        let oo = BinOpts { freq: o.freq, closed_right: o.closed_right, label_right: o.label_right, epoch: o.epoch, offset: o.offset };
+        handles.push(pool.spawn(|| {
+            let b = bin_rows(tt, rr, oo);
+            let labels = b.labels.clone();
+            match bin_aggs(ff, b, ss) {
+                Ok(cols) => Ok((labels, cols)),
+                Err(e) => Err(e),
+            }
+        }));
+    }
+    let mut parts: Vec[(Vec[i64], Vec[Col])] = Vec.new();
+    for h in handles.into_iter() {
+        parts.push(h.join()?);
+    }
+    // Stitch the groups together: key columns, the bin labels, then each
+    // aggregate.
+    let which = index_of_all(f, by)?;
+    let mut key_rows: Vec[i64] = Vec.new();
+    let mut labels: Vec[Option[i64]] = Vec.new();
+    for g in 0..parts.len() {
+        for l in parts[g].0 {
+            labels.push(Some(*l));
+            if by.len() > 0 {
+                key_rows.push(groups.rows[g][0]);
+            }
+        }
+    }
+    let mut out = Frame.new();
+    for k in 0..by.len() {
+        out.put(by[k], f.cols[which[k]].take(key_rows));
+    }
+    out.put(name, Col.Time(TimeCol { v: labels, unit: t.unit.clone(), tz: t.tz.clone() }));
+    for s in 0..specs.len() {
+        let mut col: Option[Col] = None;
+        for g in 0..parts.len() {
+            let piece = parts[g].1[s].clone();
+            col = Some(match col {
+                None => piece,
+                Some(c) => join_cols(c, piece),
+            });
+        }
+        let empty = f.col(specs[s].col)?.empty_like();
+        out.put(f"{specs[s].col}_{specs[s].func}", col ?? empty);
+    }
+    Ok(out)
+}
+
+// Two pieces of one aggregate column, from two groups; an int piece
+// meets a float one as float.
+fn join_cols(a: Col, b: Col) -> Col {
+    match (a, b) {
+        (Col.Int(x), Col.Int(y)) => {
+            let mut v = x.clone();
+            v.extend(y.clone());
+            Col.Int(v)
+        }
+        (Col.Str(x), Col.Str(y)) => {
+            let mut v = x.clone();
+            v.extend(y.clone());
+            Col.Str(v)
+        }
+        (x, y) => {
+            let mut v = x.floats();
+            v.extend(y.floats());
+            Col.Float(v)
+        }
+    }
+}
+
+// Resampler.ohlc over one column: the first, highest, lowest and last
+// value in each bin, NaN for a bin with none.
+fn ohlc(f: Frame, name: Str, freq: Str, val: Str) -> Result[Frame, String] {
+    let fr = parse_freq(freq)?;
+    let t = resample_time(f, name)?;
+    let o = bin_opts(split_args(Vec.new()), fr)?;
+    let v = f.col(val)?.floats();
+    let b = bin_rows(t, range_idx(f.height()), o);
+    let mut cols: Vec[Vec[f64]] = [Vec.new(), Vec.new(), Vec.new(), Vec.new()].to_vec();
+    for rows in b.rows {
+        let mut q = [nan(), nan(), nan(), nan()];
+        for i in rows {
+            let x = v[i];
+            if is_nan(x) {
+                continue;
+            }
+            if is_nan(q[0]) {
+                q = [x, x, x, x];
+            } else {
+                if x > q[1] {
+                    q[1] = x;
+                }
+                if x < q[2] {
+                    q[2] = x;
+                }
+                q[3] = x;
+            }
+        }
+        for k in 0..4 {
+            cols[k].push(q[k]);
+        }
+    }
+    let mut out = Frame.new();
+    out.put(name, Col.Time(TimeCol { v: b.labels.iter().map(|l| Some(*l)).collect(), unit: t.unit.clone(), tz: t.tz.clone() }));
+    let heads = ["open", "high", "low", "close"];
+    for k in 0..4 {
+        out.put(heads[k], Col.Float(cols[k].clone()));
+    }
+    Ok(out)
+}
+
+// df.set_index(name).asfreq(freq, method).reset_index(): a regular grid
+// from the first instant to the last, each row the one at that instant,
+// or with ffill the last one before it, or with bfill the next.
+fn asfreq(f: Frame, name: Str, freq: Str, method: Str) -> Result[Frame, String] {
+    let fr = parse_freq(freq)?;
+    let t = resample_time(f, name)?;
+    let vals: Vec[i64] = t.v.iter().filter(|x| x.is_some()).map(|x| x.unwrap()).collect();
+    let lo = vals.iter().min() ?? 0;
+    let hi = vals.iter().max() ?? 0;
+    let grid = date_range(lo, hi, fr, t.tz);
+    let mut idx: Vec[i64] = Vec.new();
+    for g in grid {
+        let mut pick = -1;
+        for i in 0..t.v.len() {
+            if let Some(u) = t.v[i] {
+                let hit = match method {
+                    "ffill" => u <= g,
+                    "bfill" => u >= g and pick < 0,
+                    _ => u == g,
+                };
+                if hit {
+                    pick = i;
+                }
+            }
+        }
+        idx.push(pick);
+    }
+    let mut out = Frame.new();
+    out.put(name, Col.Time(TimeCol { v: grid.iter().map(|g| Some(*g)).collect(), unit: t.unit.clone(), tz: t.tz.clone() }));
+    for i in 0..f.names.len() {
+        if f.names[i] != name {
+            out.put(f.names[i], f.cols[i].take(idx));
+        }
+    }
+    Ok(out)
+}
+
+// ============================================================ time windows
+
+// VariableWindowIndexer with closed="right": row i's window holds the
+// rows whose instant lies in (t_i - w, t_i].
+fn window_bounds(t: Vec[i64], w: i64) -> (Vec[i64], Vec[i64]) {
+    let n = t.len();
+    let mut start: Vec[i64] = Vec.filled(n, 0);
+    let mut end: Vec[i64] = Vec.filled(n, 0);
+    if n == 0 {
+        return (start, end);
+    }
+    end[0] = 1;
+    for i in 1..n {
+        let start_bound = t[i] - w;
+        start[i] = i;
+        for j in start[i - 1]..i {
+            if t[j] > start_bound {
+                start[i] = j;
+                break;
+            }
+        }
+        end[i] = if t[end[i - 1]] <= t[i] { i + 1 } else { end[i - 1] };
+    }
+    (start, end)
+}
+
+// roll_sum over variable bounds, with roll_add/roll_remove.
+fn roll_sum_var(v: Vec[f64], start: Vec[i64], end: Vec[i64], minp: i64) -> Vec[f64] {
+    let mut out: Vec[f64] = Vec.new();
+    let mut sum_x = 0.0;
+    let mut comp_add = 0.0;
+    let mut comp_remove = 0.0;
+    let mut nobs = 0;
+    let mut same = 0;
+    let mut prev = 0.0;
+    for i in 0..v.len() {
+        let s = start[i];
+        let e = end[i];
+        if i == 0 or s >= end[i - 1] {
+            prev = v[s];
+            same = 0;
+            sum_x = 0.0;
+            comp_add = 0.0;
+            comp_remove = 0.0;
+            nobs = 0;
+            for j in s..e {
+                roll_add(v[j], mut nobs, mut sum_x, mut comp_add, mut same, mut prev);
+            }
+        } else {
+            for j in start[i - 1]..s {
+                roll_remove(v[j], mut nobs, mut sum_x, mut comp_remove);
+            }
+            for j in end[i - 1]..e {
+                roll_add(v[j], mut nobs, mut sum_x, mut comp_add, mut same, mut prev);
+            }
+        }
+        out.push(if nobs == 0 and minp == 0 {
+            0.0
+        } else if nobs >= minp {
+            if same >= nobs { prev * (nobs as f64) } else { sum_x }
+        } else {
+            nan()
+        });
+    }
+    out
+}
+
+fn roll_mean_var(v: Vec[f64], start: Vec[i64], end: Vec[i64], minp: i64) -> Vec[f64] {
+    let mut out: Vec[f64] = Vec.new();
+    let mut sum_x = 0.0;
+    let mut comp_add = 0.0;
+    let mut comp_remove = 0.0;
+    let mut nobs = 0;
+    let mut neg = 0;
+    let mut same = 0;
+    let mut prev = 0.0;
+    for i in 0..v.len() {
+        let s = start[i];
+        let e = end[i];
+        if i == 0 or s >= end[i - 1] {
+            comp_add = 0.0;
+            comp_remove = 0.0;
+            sum_x = 0.0;
+            nobs = 0;
+            neg = 0;
+            prev = v[s];
+            same = 0;
+            for j in s..e {
+                if not is_nan(v[j]) and signbit(v[j]) {
+                    neg += 1;
+                }
+                roll_add(v[j], mut nobs, mut sum_x, mut comp_add, mut same, mut prev);
+            }
+        } else {
+            for j in start[i - 1]..s {
+                if not is_nan(v[j]) and signbit(v[j]) {
+                    neg -= 1;
+                }
+                roll_remove(v[j], mut nobs, mut sum_x, mut comp_remove);
+            }
+            for j in end[i - 1]..e {
+                if not is_nan(v[j]) and signbit(v[j]) {
+                    neg += 1;
+                }
+                roll_add(v[j], mut nobs, mut sum_x, mut comp_add, mut same, mut prev);
+            }
+        }
+        out.push(if nobs >= minp and nobs > 0 {
+            let r = sum_x / (nobs as f64);
+            if same >= nobs {
+                prev
+            } else if neg == 0 and r < 0.0 {
+                0.0
+            } else if neg == nobs and r > 0.0 {
+                0.0
+            } else {
+                r
+            }
+        } else {
+            nan()
+        });
+    }
+    out
+}
+
+fn roll_extreme_var(v: Vec[f64], start: Vec[i64], end: Vec[i64], minp: i64, want_max: bool) -> Vec[f64] {
+    let mut out: Vec[f64] = Vec.new();
+    for i in 0..v.len() {
+        let mut nobs = 0;
+        let mut best = nan();
+        for j in start[i]..end[i] {
+            let x = v[j];
+            if is_nan(x) {
+                continue;
+            }
+            nobs += 1;
+            if is_nan(best) or (want_max and x > best) or (not want_max and x < best) {
+                best = x;
+            }
+        }
+        out.push(if nobs >= minp and nobs > 0 { best } else { nan() });
+    }
+    out
+}
+
+// df.rolling(win, on=name)[val].<func>(), min_periods 1.
+fn time_rolling(f: Frame, name: Str, win: Str, val: Str, func: Str) -> Result[Col, String] {
+    let w = window_len(parse_freq(win)?)?;
+    let t = resample_time(f, name)?;
+    let times: Vec[i64] = t.v.iter().map(|x| x ?? 0).collect();
+    let (start, end) = window_bounds(times, w);
+    let v = f.col(val)?.floats();
+    let out = match func {
+        "mean" => roll_mean_var(v, start, end, 1),
+        "sum" => roll_sum_var(v, start, end, 1),
+        "max" => roll_extreme_var(v, start, end, 1, true),
+        "min" => roll_extreme_var(v, start, end, 1, false),
+        "count" => {
+            let present: Vec[f64] = v.iter().map(|x| if is_nan(*x) { 0.0 } else { 1.0 }).collect();
+            roll_sum_var(present, start, end, 0)
+        }
+        _ => return Err(f"AttributeError: 'Rolling' object has no attribute '{func}'"),
+    };
+    Ok(Col.Float(out))
+}
+
+// ============================================================ jobs
+
+fn with_col(f: Frame, name: Str, c: own Col) -> Result[Frame, String] {
+    let mut g = f.clone();
+    g.put(name, c);
+    Ok(g)
+}
+
+// `read FILE [dates=a,b] [format=..] [unit=s] [coerce]`: read_csv, then
+// pd.to_datetime over each named column.
+fn read_job(toks: Vec[String]) -> Result[Frame, String] {
+    let a = split_args(toks);
+    let mut f = read_csv(a.arg(0)?, read_opts())?;
+    if let Some(cols) = a.get("dates") {
+        for c in names_of(cols) {
+            let o = DateOpts { format: a.get("format").map(|s| s.replace("_", " ")), unit: a.get("unit"), coerce: a.has("coerce") };
+            let parsed = to_datetime(f.col(c)?, o)?;
+            f.put(c, parsed);
+        }
+    }
+    Ok(f)
+}
+
+// `range START END FREQ [tz=ZONE]`: a one-column frame of pd.date_range.
+fn range_job(toks: Vec[String]) -> Result[Frame, String] {
+    let a = split_args(toks);
+    let tz = a.get("tz");
+    let ends = [a.arg(0)?, a.arg(1)?];
+    let mut at: Vec[i64] = Vec.new();
+    for e in ends {
+        match parse_iso(e) {
+            Some((w, _)) => at.push(from_local(tz, w)),
+            None => return Err(f"ValueError: could not convert string to Timestamp"),
+        }
+    }
+    let v = date_range(at[0], at[1], parse_freq(a.arg(2)?)?, tz);
+    let mut f = Frame.new();
+    f.put("t", Col.Time(TimeCol { v: v.iter().map(|x| Some(*x)).collect(), unit: "us".to_string(), tz: tz }));
+    Ok(f)
+}
+
+// One step of a job applied to the frame.
+fn step(f: Frame, op: Str, toks: Vec[String]) -> Result[Frame, String] {
+    let a = split_args(toks);
+    match op {
+        "dtypes" => Ok(dtypes(f)),
+        "head" => Ok(head(f, int_arg(a.arg(0)?)?)),
+        "tail" => Ok(tail(f, int_arg(a.arg(0)?)?)),
+        "select" => select(f, names_of(a.arg(0)?)),
+        "where" => where_rows(f, toks[0], toks[1], toks[2]),
+        "isna" => na_rows(f, a.arg(0)?, true),
+        "assign" => {
+            let c = arith(f, toks[2], toks[3], toks[4])?;
+            with_col(f, toks[0], c)
+        }
+        "round" => {
+            let name = a.arg(0)?;
+            let c = round_col(f.col(name)?, int_arg(a.arg(1)?)?);
+            with_col(f, name, c)
+        }
+        "sort" => {
+            let by = names_of(a.arg(0)?);
+            let asc: Vec[bool] = match a.get("asc") {
+                Some(s) => {
+                    let flags: Vec[bool] = names_of(s).iter().map(|x| x == "1").collect();
+                    if flags.len() == 1 { Vec.filled(by.len(), flags[0]) } else { flags }
+                }
+                None => Vec.filled(by.len(), true),
+            };
+            sort_rows(f, by, asc, false)
+        }
+        "agg" => agg(f, names_of(a.arg(0)?), parse_specs(a.arg(1)?)),
+        "dt" => {
+            let c = dt_part(f.col(a.arg(0)?)?, a.arg(1)?)?;
+            with_col(f, a.arg(2)?, c)
+        }
+        "floor" | "ceil" | "dtround" => {
+            let c = round_time(f.col(a.arg(0)?)?, a.arg(1)?, op)?;
+            with_col(f, a.arg(2)?, c)
+        }
+        "strftime" => {
+            let c = strftime_col(f.col(a.arg(0)?)?, a.arg(1)?.replace("_", " "))?;
+            with_col(f, a.arg(2)?, c)
+        }
+        "normalize" => {
+            let c = normalize(f.col(a.arg(0)?)?)?;
+            with_col(f, a.arg(1)?, c)
+        }
+        "between_time" => between_time(f, a.arg(0)?, a.arg(1)?, a.arg(2)?),
+        "sub" => {
+            let c = sub_times(f.col(a.arg(0)?)?, f.col(a.arg(1)?)?)?;
+            with_col(f, a.arg(2)?, c)
+        }
+        "tdiff" => {
+            let c = time_diff(f.col(a.arg(0)?)?)?;
+            with_col(f, a.arg(1)?, c)
+        }
+        "secs" => {
+            let c = total_seconds(f.col(a.arg(0)?)?)?;
+            with_col(f, a.arg(1)?, c)
+        }
+        "tz" => {
+            let name = a.arg(0)?;
+            let c = set_zone(f.col(name)?, a.arg(1)?, a.arg(2)?)?;
+            with_col(f, name, c)
+        }
+        "resample" => {
+            let by = names_of(a.get("by") ?? String.new());
+            resample(f, a.arg(0)?, a.arg(1)?, parse_specs(a.arg(2)?), by, a)
+        }
+        "ohlc" => ohlc(f, a.arg(0)?, a.arg(1)?, a.arg(2)?),
+        "asfreq" => {
+            let method = if a.pos.len() > 2 { a.arg(2)? } else { String.new() };
+            asfreq(f, a.arg(0)?, a.arg(1)?, method)
+        }
+        "trolling" => {
+            let c = time_rolling(f, a.arg(0)?, a.arg(1)?, a.arg(2)?, a.arg(3)?)?;
+            with_col(f, a.arg(4)?, c)
+        }
+        _ => Err(f"ValueError: unknown step {op}"),
+    }
+}
+
+fn run(line: Str) -> Result[String, String] {
+    let steps: Vec[String] = line.split(" | ").map(|s| s.to_string()).collect();
+    let first: Vec[String] = steps[0].split(" ").map(|s| s.to_string()).collect();
+    let mut cur = if first[0] == "range" { range_job(first[1..].to_vec())? } else { read_job(first[1..].to_vec())? };
+    for k in 1..steps.len() {
+        let toks: Vec[String] = steps[k].split(" ").map(|s| s.to_string()).collect();
+        cur = step(cur, toks[0], toks[1..].to_vec())?;
+    }
+    Ok(to_csv(cur, None))
+}
+
+fn transcript(line: Str) -> String {
+    let mut t = f"$ {line}\n";
+    match run(line) {
+        Ok(text) => t.push_str(text),
+        Err(e) => t.push_str(f"! {e}\n"),
+    }
+    t
+}
+
+struct DataFile {
+    path: String,
+    body: String,
+}
+
+fn write_data() -> Result[(), String] {
+    if let Err(e) = fs.create_dir_all("data".to_string()) {
+        return Err(f"cannot create data: {e}");
+    }
+    for file in data_files() {
+        if let Err(e) = fs.write(f"data/{file.path}", file.body.clone()) {
+            return Err(f"cannot write {file.path}: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = write_data() {
+        eprintln(e);
+        return;
+    }
+    let jobs = match fs.read_to_string("data/jobs.txt".to_string()) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln(f"cannot read jobs.txt: {e}");
+            return;
+        }
+    };
+    let lines: Vec[String] = jobs.lines().filter(|l| l.len() > 0).map(|l| l.to_string()).collect();
+    // Every job in a task of its own; the transcript prints in job order.
+    let group = TaskGroup.new();
+    let mut handles = Vec.new();
+    for line in lines {
+        handles.push(group.spawn(|| transcript(line)));
+    }
+    for h in handles.into_iter() {
+        print(h.join());
+    }
+}
+
+// ============================================================ data
+
+// The files under data/, in path order.
+fn data_files() -> Vec[DataFile] {
+    let mut v: Vec[DataFile] = Vec.new();
+    data_part_0(mut v);
+    data_part_1(mut v);
+    data_part_2(mut v);
+    data_part_3(mut v);
+    v
+}
+
+fn data_part_0(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("read metrics.csv dates=ts | dtypes\n");
+    t.push_str("read metrics.csv dates=ts | head 4\n");
+    t.push_str("read trades.csv dates=ts | dtypes\n");
+    t.push_str("read trades.csv dates=ts | head 3\n");
+    t.push_str("read sales.csv dates=date | head 3\n");
+    t.push_str("read sales.csv dates=date | dtypes\n");
+    t.push_str("read tickets.csv dates=created,closed unit=s | head 4\n");
+    t.push_str("read tickets.csv dates=created,closed unit=s | dtypes\n");
+    t.push_str("read visits.csv dates=when format=%m/%d/%Y_%H:%M coerce\n");
+    t.push_str("read visits.csv dates=when format=%m/%d/%Y_%H:%M coerce | dtypes\n");
+    t.push_str("read visits.csv dates=when format=%m/%d/%Y_%H:%M\n");
+    t.push_str("read meter.csv | dtypes\n");
+    t.push_str("read meter.csv dates=at\n");
+    t.push_str("read sales.csv dates=date | dt date year y | dt date month m | dt date day d | head 4\n");
+    t.push_str("read sales.csv dates=date | dt date dayofweek dow | dt date day_name name | head 7\n");
+    t.push_str("read sales.csv dates=date | dt date quarter q | dt date dayofyear doy | dt date is_month_end me | where me == True\n");
+    t.push_str("read sales.csv dates=date | dt date week w | dt date is_month_start ms | head 9\n");
+    t.push_str("read sales.csv dates=date | dt date month_name mn | agg mn amount:sum | sort amount_sum asc=0\n");
+    t.push_str("read metrics.csv dates=ts | dt ts hour h | dt ts minute mi | dt ts second s | head 5\n");
+    t.push_str("read trades.csv dates=ts | dt ts microsecond us | head 4\n");
+    t.push_str("read visits.csv dates=when format=%m/%d/%Y_%H:%M coerce | dt when hour h | dt when dayofweek dow | select visit,when,h,dow\n");
+    t.push_str("read metrics.csv dates=ts | floor ts h t | select ts,t | head 5\n");
+    t.push_str("read metrics.csv dates=ts | ceil ts 15min t | select ts,t | head 5\n");
+    t.push_str("read metrics.csv dates=ts | dtround ts h t | select ts,t | head 6\n");
+    t.push_str("read trades.csv dates=ts | floor ts s t | dtround ts min r | select ts,t,r | head 5\n");
+    t.push_str("read sales.csv dates=date | strftime date %Y-%m m | agg m amount:sum,amount:count\n");
+    t.push_str("read sales.csv dates=date | strftime date %d/%m/%Y f | strftime date %a_%b_%d f2 | strftime date %j doy | head 3\n");
+    t.push_str("read metrics.csv dates=ts | strftime ts %Y-%m-%dT%H:%M h | head 3\n");
+    t.push_str("read sales.csv dates=date | normalize date d | head 2\n");
+    t.push_str("read metrics.csv dates=ts | normalize ts d | agg host,d cpu:mean,req:sum\n");
+    t.push_str("read metrics.csv dates=ts | where ts >= '2026-03-08_06:00' | where ts < '2026-03-08_08:00' | where host == 'web1' | select ts,cpu\n");
+    t.push_str("read sales.csv dates=date | where date > '2024-02-27' | where date <= '2024-03-02' | select date,store,amount\n");
+    t.push_str("read tickets.csv dates=created,closed unit=s | isna closed | select id,created\n");
+    t.push_str("read visits.csv dates=when format=%m/%d/%Y_%H:%M coerce | isna when | select visit,clinic\n");
+    t.push_str("read trades.csv dates=ts | between_time ts 09:40 09:45 | select ts,sym,price\n");
+    t.push_str("read metrics.csv dates=ts | between_time ts 23:50 00:10 | where host == 'db1' | select ts,mem\n");
+    t.push_str("read tickets.csv dates=created,closed unit=s | sub closed created took | select id,took | head 6\n");
+    t.push_str("read tickets.csv dates=created,closed unit=s | sub closed created took | secs took s | agg prio s:mean,s:max,s:count\n");
+    t.push_str("read tickets.csv dates=created,closed unit=s | tdiff created gap | select id,created,gap | head 5\n");
+    t.push_str("read tickets.csv dates=created,closed unit=s | sub closed created took | where took > '2_days' | select id,took\n");
+    t.push_str("read meter.csv dates=at | tdiff at gap | secs gap s\n");
+    t.push_str("read trades.csv dates=ts | resample ts 5min price:last,qty:sum\n");
+    t.push_str("read trades.csv dates=ts | resample ts 5min price:mean,price:count,qty:max\n");
+    t.push_str("read trades.csv dates=ts | where sym == 'KRA' | resample ts 10min price:first,price:min,price:max,price:last\n");
+    t.push_str("read trades.csv dates=ts | where sym == 'MND' | ohlc ts 15min price\n");
+    t.push_str("read trades.csv dates=ts | assign value = price * qty | resample ts 15min value:sum,qty:sum | assign vwap = value_sum / qty_sum | round vwap 4\n");
+    t.push_str("read trades.csv dates=ts | resample ts 15min price:median,price:std,qty:mean by=sym\n");
+    t.push_str("read trades.csv dates=ts | resample ts 10min qty:sum by=sym\n");
+    t.push_str("read metrics.csv dates=ts | where host == 'web2' | resample ts 3h cpu:mean,req:sum,mem:max\n");
+    t.push_str("read metrics.csv dates=ts | resample ts 6h req:sum,cpu:count by=host\n");
+    t.push_str("read metrics.csv dates=ts | resample ts 6h cpu:mean closed=right label=right by=host | round cpu_mean 3\n");
+    t.push_str("read metrics.csv dates=ts | resample ts 4h req:sum origin=epoch | head 5\n");
+    t.push_str("read metrics.csv dates=ts | resample ts 4h req:sum offset=1h | head 5\n");
+    t.push_str("read sales.csv dates=date | where store == 'north' | resample date W amount:sum,amount:count\n");
+    t.push_str("read sales.csv dates=date | resample date W-MON amount:sum by=store | head 8\n");
+    t.push_str("read sales.csv dates=date | resample date ME amount:sum,amount:mean by=store | round amount_mean 2\n");
+    t.push_str("read sales.csv dates=date | resample date MS amount:sum,amount:max\n");
+    t.push_str("read sales.csv dates=date | resample date QE amount:sum,amount:count by=store\n");
+    t.push_str("read sales.csv dates=date | resample date YE amount:sum\n");
+    t.push_str("read sales.csv dates=date | resample date 10D amount:sum | head 6\n");
+    t.push_str("read sales.csv dates=date | where store == 'south' | resample date 2W amount:sum\n");
+    t.push_str("read sales.csv dates=date | where store == 'south' | resample date SME amount:sum\n");
+    t.push_str("read tickets.csv dates=created,closed unit=s | resample created D id:count,prio:first | head 8\n");
+    t.push_str("read tickets.csv dates=created,closed unit=s | resample closed 12h id:count\n");
+    t.push_str("read visits.csv dates=when format=%m/%d/%Y_%H:%M coerce | resample when D visit:count\n");
+    t.push_str("read meter.csv dates=at | resample at D kwh:last | head 6\n");
+    t.push_str("read meter.csv dates=at | resample at ME kwh:min,kwh:max\n");
+    t.push_str("read meter.csv dates=at | asfreq at D | head 6\n");
+    t.push_str("read meter.csv dates=at | asfreq at D ffill | head 8\n");
+    t.push_str("read meter.csv dates=at | asfreq at D bfill | tail 3\n");
+    t.push_str("read meter.csv dates=at | floor at D day | asfreq day D | head 4\n");
+    t.push_str("read meter.csv dates=at | asfreq at 12h | head 4\n");
+    t.push_str("read sales.csv dates=date | where store == 'north' | asfreq date D | isna amount | select date,store\n");
+    t.push_str("range 2026-03-01 2026-03-03 8h | dt t day_name name\n");
+    t.push_str("range 2024-01-31 2024-06-30 ME\n");
+    t.push_str("range 2024-02-26 2024-03-04 D | dt t week w | dt t dayofweek dow\n");
+    t.push_str("range 2026-01-01 2026-12-31 QS\n");
+    t.push_str("range 2026-03-07 2026-03-21 W-SAT\n");
+    t.push_str("read trades.csv dates=ts | where sym == 'KRA' | trolling ts 2min price mean avg | round avg 4 | head 10\n");
+    t.push_str("read trades.csv dates=ts | trolling ts 5min qty sum vol | select ts,qty,vol | head 10\n");
+    t.push_str("read trades.csv dates=ts | trolling ts 90s qty count n | select ts,n | head 8\n");
+    t.push_str("read metrics.csv dates=ts | where host == 'db1' | trolling ts 1h cpu max peak | select ts,cpu,peak | head 8\n");
+    t.push_str("read sales.csv dates=date | where store == 'north' | trolling date 7D amount sum wk | round wk 2 | head 10\n");
+    t.push_str("read sales.csv dates=date | where store == 'south' | trolling date 3D amount mean avg | round avg 2 | head 12\n");
+    t.push_str("read metrics.csv dates=ts | tz ts convert America/New_York | head 3\n");
+    t.push_str("read metrics.csv dates=ts | tz ts convert America/New_York | where host == 'web1' | where ts >= '2026-03-08_00:40-05:00' | head 6\n");
+    t.push_str("read metrics.csv dates=ts | tz ts convert America/New_York | dt ts hour h | where host == 'web2' | agg h req:sum | head 8\n");
+    t.push_str("read metrics.csv dates=ts | tz ts convert America/New_York | resample ts D req:sum,cpu:count\n");
+    t.push_str("read metrics.csv dates=ts | tz ts convert America/New_York | resample ts 6h req:sum | head 6\n");
+    t.push_str("read metrics.csv dates=ts | tz ts convert America/New_York | normalize ts d | agg d req:sum\n");
+    t.push_str("read metrics.csv dates=ts | tz ts convert UTC | head 2\n");
+    t.push_str("read trades.csv dates=ts | tz ts localize America/New_York | tz ts convert UTC | head 3\n");
+    t.push_str("read visits.csv dates=when format=%m/%d/%Y_%H:%M coerce | tz when localize America/New_York | select visit,when | head 8\n");
+    t.push_str("read metrics.csv dates=ts | tz ts convert America/New_York | strftime ts %Y-%m-%d_%H:%M_%Z f | select f | head 2\n");
+    t.push_str("range 2026-03-07 2026-03-10 D tz=America/New_York\n");
+    t.push_str("range 2026-11-01 2026-11-02 6h tz=America/New_York\n");
+    t.push_str("read metrics.csv dates=ts | resample ts 1fortnight req:sum\n");
+    t.push_str("read metrics.csv dates=ts | resample host h req:sum\n");
+    t.push_str("read sales.csv dates=date | dt amount year y\n");
+    t.push_str("read sales.csv dates=nope\n");
+    t.push_str("read metrics.csv dates=ts | tz ts localize America/New_York\n");
+    v.push(DataFile { path: "jobs.txt".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("at,kwh\n");
+    t.push_str("2026-01-30 22:10:00,15000.5\n");
+    t.push_str("2026-01-31 23:50:00,15012.25\n");
+    t.push_str("2026-02-02 06:30:00,15030.0\n");
+    t.push_str("2026-02-05 12:00:00,15071.75\n");
+    t.push_str("2026-02-06 00:00:00,15078.0\n");
+    t.push_str("2026-02-10 09:45:00,15130.5\n");
+    t.push_str("2026-02-28 18:00:00,15333.25\n");
+    t.push_str("2026-03-01 00:00:00,15336.0\n");
+    v.push(DataFile { path: "meter.csv".to_string(), body: t });
+}
+
+fn data_part_1(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("ts,host,cpu,mem,req\n");
+    t.push_str("2026-03-07T20:00:11Z,web1,48.5,2519,264\n");
+    t.push_str("2026-03-07T20:19:46Z,web1,50.2,2580,349\n");
+    t.push_str("2026-03-07T20:39:39Z,web1,46.6,2593,54\n");
+    t.push_str("2026-03-07T20:58:24Z,web1,40.3,2432,152\n");
+    t.push_str("2026-03-07T21:38:59Z,web1,,2607,372\n");
+    t.push_str("2026-03-07T21:57:35Z,web1,25.0,2344,304\n");
+    t.push_str("2026-03-07T22:18:30Z,web1,29.7,2468,74\n");
+    t.push_str("2026-03-07T22:57:43Z,web1,28.3,2460,155\n");
+    t.push_str("2026-03-07T23:18:23Z,web1,33.1,2498,310\n");
+    t.push_str("2026-03-07T23:38:45Z,web1,36.0,2534,232\n");
+    t.push_str("2026-03-07T23:59:12Z,web1,54.8,2667,239\n");
+    t.push_str("2026-03-08T00:19:21Z,web1,49.8,2558,115\n");
+    t.push_str("2026-03-08T00:38:23Z,web1,21.5,2672,131\n");
+    t.push_str("2026-03-08T00:58:24Z,web1,46.1,2403,228\n");
+    t.push_str("2026-03-08T01:19:54Z,web1,36.0,2407,327\n");
+    t.push_str("2026-03-08T01:40:30Z,web1,43.2,2314,385\n");
+    t.push_str("2026-03-08T01:59:29Z,web1,16.5,2555,233\n");
+    t.push_str("2026-03-08T02:18:14Z,web1,35.4,2455,282\n");
+    t.push_str("2026-03-08T02:37:54Z,web1,38.1,2498,395\n");
+    t.push_str("2026-03-08T02:57:49Z,web1,51.7,2470,127\n");
+    t.push_str("2026-03-08T03:18:27Z,web1,37.1,2494,231\n");
+    t.push_str("2026-03-08T03:38:34Z,web1,45.8,2353,206\n");
+    t.push_str("2026-03-08T03:58:57Z,web1,20.1,2373,38\n");
+    t.push_str("2026-03-08T04:18:24Z,web1,23.7,2568,396\n");
+    t.push_str("2026-03-08T04:37:27Z,web1,46.6,2570,348\n");
+    t.push_str("2026-03-08T04:56:40Z,web1,17.1,2720,30\n");
+    t.push_str("2026-03-08T05:16:18Z,web1,20.7,2412,53\n");
+    t.push_str("2026-03-08T05:36:21Z,web1,39.5,2641,12\n");
+    t.push_str("2026-03-08T05:56:20Z,web1,16.3,2344,160\n");
+    t.push_str("2026-03-08T06:16:34Z,web1,36.0,2360,131\n");
+    t.push_str("2026-03-08T06:37:17Z,web1,,2767,340\n");
+    t.push_str("2026-03-08T06:57:59Z,web1,31.6,2786,284\n");
+    t.push_str("2026-03-08T07:16:42Z,web1,29.7,2654,395\n");
+    t.push_str("2026-03-08T07:36:05Z,web1,50.0,2718,103\n");
+    t.push_str("2026-03-08T07:57:43Z,web1,17.9,2335,305\n");
+    t.push_str("2026-03-08T08:17:30Z,web1,48.6,2583,1\n");
+    t.push_str("2026-03-08T08:38:26Z,web1,45.8,2741,291\n");
+    t.push_str("2026-03-08T08:58:27Z,web1,23.4,2657,355\n");
+    t.push_str("2026-03-08T09:38:40Z,web1,43.9,2392,311\n");
+    t.push_str("2026-03-08T09:59:49Z,web1,32.3,2593,104\n");
+    t.push_str("2026-03-08T10:18:13Z,web1,48.7,2454,218\n");
+    t.push_str("2026-03-08T10:37:15Z,web1,,2628,321\n");
+    t.push_str("2026-03-08T10:56:34Z,web1,54.2,2595,297\n");
+    t.push_str("2026-03-08T11:17:53Z,web1,37.6,2722,284\n");
+    t.push_str("2026-03-08T11:57:39Z,web1,42.2,2723,357\n");
+    t.push_str("2026-03-08T12:16:52Z,web1,43.1,2379,390\n");
+    t.push_str("2026-03-08T12:36:16Z,web1,21.4,2400,210\n");
+    t.push_str("2026-03-08T12:57:48Z,web1,30.0,2515,113\n");
+    t.push_str("2026-03-08T13:16:05Z,web1,43.1,2465,23\n");
+    t.push_str("2026-03-08T13:37:50Z,web1,37.0,2447,148\n");
+    t.push_str("2026-03-08T13:57:21Z,web1,46.4,2433,356\n");
+    t.push_str("2026-03-08T14:16:19Z,web1,51.2,2745,80\n");
+    t.push_str("2026-03-08T14:35:44Z,web1,23.6,2533,355\n");
+    t.push_str("2026-03-08T14:56:10Z,web1,27.4,2444,354\n");
+    t.push_str("2026-03-08T15:15:50Z,web1,54.5,2608,170\n");
+    t.push_str("2026-03-08T15:36:00Z,web1,26.3,2413,79\n");
+    t.push_str("2026-03-08T15:57:15Z,web1,25.4,2709,204\n");
+    t.push_str("2026-03-08T16:17:18Z,web1,29.3,2529,115\n");
+    t.push_str("2026-03-08T16:38:42Z,web1,24.6,2427,349\n");
+    t.push_str("2026-03-08T16:58:20Z,web1,46.9,2673,228\n");
+    t.push_str("2026-03-08T17:19:31Z,web1,36.8,2555,266\n");
+    t.push_str("2026-03-08T17:39:38Z,web1,36.8,2780,374\n");
+    t.push_str("2026-03-08T17:58:24Z,web1,49.9,2561,14\n");
+    t.push_str("2026-03-08T18:17:35Z,web1,53.7,2502,62\n");
+    t.push_str("2026-03-08T18:56:09Z,web1,27.4,2434,279\n");
+    t.push_str("2026-03-08T19:16:31Z,web1,43.5,2464,325\n");
+    t.push_str("2026-03-08T19:56:43Z,web1,23.1,2417,133\n");
+    t.push_str("2026-03-08T20:16:03Z,web1,19.0,2679,337\n");
+    t.push_str("2026-03-08T20:36:37Z,web1,29.5,2578,261\n");
+    t.push_str("2026-03-08T20:55:54Z,web1,38.6,2769,352\n");
+    t.push_str("2026-03-08T21:14:00Z,web1,26.6,2697,50\n");
+    t.push_str("2026-03-08T21:35:36Z,web1,33.9,2351,241\n");
+    t.push_str("2026-03-08T21:54:02Z,web1,21.5,2652,321\n");
+    t.push_str("2026-03-08T22:14:49Z,web1,16.3,2551,49\n");
+    t.push_str("2026-03-08T22:34:48Z,web1,44.5,2548,90\n");
+    t.push_str("2026-03-08T22:55:27Z,web1,,2340,17\n");
+    t.push_str("2026-03-08T23:15:40Z,web1,39.7,2391,365\n");
+    t.push_str("2026-03-08T23:36:01Z,web1,22.0,2630,383\n");
+    t.push_str("2026-03-08T23:55:57Z,web1,34.0,2726,273\n");
+    t.push_str("2026-03-09T00:16:06Z,web1,48.9,2372,327\n");
+    t.push_str("2026-03-09T00:36:50Z,web1,21.5,2522,169\n");
+    t.push_str("2026-03-09T00:55:42Z,web1,19.7,2760,121\n");
+    t.push_str("2026-03-09T01:15:38Z,web1,31.5,2446,320\n");
+    t.push_str("2026-03-09T01:35:36Z,web1,52.2,2577,68\n");
+    t.push_str("2026-03-09T01:56:35Z,web1,35.3,2717,51\n");
+    t.push_str("2026-03-09T02:17:34Z,web1,44.0,2777,370\n");
+    t.push_str("2026-03-09T02:36:55Z,web1,36.8,2506,18\n");
+    t.push_str("2026-03-09T02:57:53Z,web1,49.5,2795,92\n");
+    t.push_str("2026-03-09T03:18:23Z,web1,51.7,2759,349\n");
+    t.push_str("2026-03-09T03:38:55Z,web1,45.7,2357,150\n");
+    t.push_str("2026-03-09T03:57:25Z,web1,28.0,2383,187\n");
+    t.push_str("2026-03-09T04:18:46Z,web1,16.4,2410,78\n");
+    t.push_str("2026-03-09T04:39:34Z,web1,15.2,2429,267\n");
+    t.push_str("2026-03-09T04:58:18Z,web1,32.3,2701,139\n");
+    t.push_str("2026-03-09T05:39:05Z,web1,34.1,2458,188\n");
+    t.push_str("2026-03-09T05:58:21Z,web1,32.8,2759,183\n");
+    t.push_str("2026-03-07T20:00:05Z,web2,46.6,2815,193\n");
+    t.push_str("2026-03-07T20:21:22Z,web2,60.8,2494,341\n");
+    t.push_str("2026-03-07T20:41:29Z,web2,36.2,2469,366\n");
+    t.push_str("2026-03-07T21:00:21Z,web2,39.7,2701,111\n");
+    t.push_str("2026-03-07T21:21:00Z,web2,52.0,2461,135\n");
+    t.push_str("2026-03-07T21:42:14Z,web2,66.9,2584,293\n");
+    t.push_str("2026-03-07T22:01:51Z,web2,61.1,2458,302\n");
+    t.push_str("2026-03-07T22:22:34Z,web2,41.4,2622,257\n");
+    t.push_str("2026-03-07T22:43:12Z,web2,54.4,2898,267\n");
+    t.push_str("2026-03-07T23:24:29Z,web2,37.1,2767,58\n");
+    t.push_str("2026-03-07T23:44:22Z,web2,68.4,2776,31\n");
+    t.push_str("2026-03-08T00:22:40Z,web2,38.8,2782,330\n");
+    t.push_str("2026-03-08T00:42:46Z,web2,58.5,2452,389\n");
+    t.push_str("2026-03-08T01:03:48Z,web2,59.0,2821,390\n");
+    t.push_str("2026-03-08T01:22:20Z,web2,38.8,2737,238\n");
+    t.push_str("2026-03-08T01:42:23Z,web2,37.4,2846,328\n");
+    t.push_str("2026-03-08T02:02:17Z,web2,,2751,266\n");
+    t.push_str("2026-03-08T02:23:26Z,web2,32.5,2941,193\n");
+    t.push_str("2026-03-08T02:42:37Z,web2,67.7,2670,243\n");
+    t.push_str("2026-03-08T03:02:32Z,web2,40.4,2753,397\n");
+    t.push_str("2026-03-08T03:22:50Z,web2,,2468,344\n");
+    t.push_str("2026-03-08T03:41:40Z,web2,38.8,2487,188\n");
+    t.push_str("2026-03-08T04:00:37Z,web2,49.9,2683,261\n");
+    t.push_str("2026-03-08T04:21:12Z,web2,54.5,2516,9\n");
+    t.push_str("2026-03-08T05:00:15Z,web2,55.0,2560,243\n");
+    t.push_str("2026-03-08T05:19:17Z,web2,34.4,2579,127\n");
+    t.push_str("2026-03-08T05:38:14Z,web2,48.8,2728,366\n");
+    t.push_str("2026-03-08T05:59:26Z,web2,67.2,2681,227\n");
+    t.push_str("2026-03-08T06:20:15Z,web2,49.3,2520,132\n");
+    t.push_str("2026-03-08T06:39:33Z,web2,67.6,2599,83\n");
+    t.push_str("2026-03-08T06:58:00Z,web2,,2761,320\n");
+    t.push_str("2026-03-08T07:18:18Z,web2,35.8,2905,108\n");
+    t.push_str("2026-03-08T07:37:27Z,web2,39.1,2674,324\n");
+    t.push_str("2026-03-08T07:57:08Z,web2,53.0,2783,43\n");
+    t.push_str("2026-03-08T08:18:53Z,web2,54.2,2909,69\n");
+    t.push_str("2026-03-08T08:38:27Z,web2,33.9,2632,94\n");
+    t.push_str("2026-03-08T08:58:31Z,web2,47.3,2819,168\n");
+    t.push_str("2026-03-08T09:17:42Z,web2,54.6,2928,334\n");
+    t.push_str("2026-03-08T09:37:07Z,web2,53.7,2757,201\n");
+    t.push_str("2026-03-08T09:56:09Z,web2,52.1,2660,239\n");
+    t.push_str("2026-03-08T10:16:32Z,web2,40.4,2684,205\n");
+    t.push_str("2026-03-08T10:37:01Z,web2,65.5,2461,305\n");
+    t.push_str("2026-03-08T10:58:31Z,web2,35.1,2865,120\n");
+    t.push_str("2026-03-08T11:19:55Z,web2,57.0,2471,65\n");
+    t.push_str("2026-03-08T11:38:30Z,web2,63.9,2932,92\n");
+    t.push_str("2026-03-08T11:57:49Z,web2,49.1,2633,328\n");
+    t.push_str("2026-03-08T12:17:46Z,web2,35.5,2879,231\n");
+    t.push_str("2026-03-08T12:37:53Z,web2,52.9,2520,146\n");
+    t.push_str("2026-03-08T12:56:25Z,web2,54.8,2532,66\n");
+    t.push_str("2026-03-08T13:16:15Z,web2,49.4,2573,177\n");
+    t.push_str("2026-03-08T13:37:33Z,web2,68.4,2937,90\n");
+    t.push_str("2026-03-08T13:58:19Z,web2,36.3,2909,311\n");
+    t.push_str("2026-03-08T14:37:05Z,web2,46.5,2553,197\n");
+    t.push_str("2026-03-08T14:58:19Z,web2,53.6,2561,240\n");
+    t.push_str("2026-03-08T15:17:37Z,web2,47.1,2595,290\n");
+    t.push_str("2026-03-08T15:37:06Z,web2,56.7,2552,166\n");
+    t.push_str("2026-03-08T15:57:44Z,web2,67.8,2839,203\n");
+    t.push_str("2026-03-08T16:16:43Z,web2,44.2,2814,322\n");
+    t.push_str("2026-03-08T16:36:12Z,web2,44.6,2496,298\n");
+    t.push_str("2026-03-08T16:57:03Z,web2,49.0,2857,29\n");
+    t.push_str("2026-03-08T17:16:32Z,web2,37.7,2593,182\n");
+    t.push_str("2026-03-08T17:35:04Z,web2,38.8,2701,363\n");
+    t.push_str("2026-03-08T17:54:01Z,web2,42.5,2944,25\n");
+    t.push_str("2026-03-08T18:15:47Z,web2,38.0,2489,316\n");
+    t.push_str("2026-03-08T18:35:50Z,web2,63.3,2517,47\n");
+    t.push_str("2026-03-08T18:56:55Z,web2,33.5,2657,324\n");
+    t.push_str("2026-03-08T19:15:16Z,web2,46.5,2584,17\n");
+    t.push_str("2026-03-08T19:36:26Z,web2,,2747,114\n");
+    t.push_str("2026-03-08T19:56:41Z,web2,34.4,2903,319\n");
+    t.push_str("2026-03-08T20:56:18Z,web2,43.4,2682,194\n");
+    t.push_str("2026-03-08T21:16:08Z,web2,42.4,2755,120\n");
+    t.push_str("2026-03-08T21:35:33Z,web2,58.6,2489,124\n");
+    t.push_str("2026-03-08T22:15:47Z,web2,65.0,2690,196\n");
+    t.push_str("2026-03-08T22:34:36Z,web2,66.1,2712,270\n");
+    t.push_str("2026-03-08T22:55:21Z,web2,31.8,2746,267\n");
+    t.push_str("2026-03-08T23:15:48Z,web2,60.0,2784,204\n");
+    t.push_str("2026-03-08T23:53:42Z,web2,54.3,2574,24\n");
+    t.push_str("2026-03-09T00:14:19Z,web2,65.9,2784,186\n");
+    t.push_str("2026-03-09T00:34:18Z,web2,50.0,2867,18\n");
+    t.push_str("2026-03-09T00:53:53Z,web2,67.3,2871,89\n");
+    t.push_str("2026-03-09T01:31:33Z,web2,34.6,2945,252\n");
+    t.push_str("2026-03-09T01:52:19Z,web2,,2583,52\n");
+    t.push_str("2026-03-09T02:11:59Z,web2,34.7,2862,388\n");
+    t.push_str("2026-03-09T02:30:52Z,web2,33.4,2670,101\n");
+    t.push_str("2026-03-09T02:51:24Z,web2,66.9,2844,86\n");
+    t.push_str("2026-03-09T03:11:35Z,web2,64.0,2699,303\n");
+    t.push_str("2026-03-09T03:32:13Z,web2,45.5,2801,385\n");
+    t.push_str("2026-03-09T03:52:45Z,web2,,2914,160\n");
+    t.push_str("2026-03-09T04:11:54Z,web2,37.6,2708,271\n");
+    t.push_str("2026-03-09T04:30:32Z,web2,35.1,2492,139\n");
+    t.push_str("2026-03-09T04:51:56Z,web2,57.5,2696,167\n");
+    t.push_str("2026-03-09T05:10:41Z,web2,45.4,2566,86\n");
+    t.push_str("2026-03-09T05:30:04Z,web2,37.1,2841,373\n");
+    t.push_str("2026-03-09T05:50:18Z,web2,42.1,2782,317\n");
+    t.push_str("2026-03-07T20:00:22Z,db1,75.4,2871,2\n");
+    t.push_str("2026-03-07T20:20:25Z,db1,76.0,3052,30\n");
+    t.push_str("2026-03-07T20:39:51Z,db1,72.3,2683,25\n");
+    t.push_str("2026-03-07T20:58:43Z,db1,67.8,3064,25\n");
+    t.push_str("2026-03-07T21:37:21Z,db1,61.6,2662,13\n");
+    t.push_str("2026-03-07T21:58:49Z,db1,75.4,2725,22\n");
+    t.push_str("2026-03-07T22:17:49Z,db1,49.7,2982,4\n");
+    t.push_str("2026-03-07T22:36:01Z,db1,57.9,2799,39\n");
+    t.push_str("2026-03-07T22:55:26Z,db1,54.8,2882,20\n");
+    t.push_str("2026-03-07T23:15:37Z,db1,48.9,2766,23\n");
+    t.push_str("2026-03-07T23:34:31Z,db1,81.3,2969,27\n");
+    t.push_str("2026-03-07T23:53:53Z,db1,80.1,2970,4\n");
+    t.push_str("2026-03-08T00:12:12Z,db1,65.9,2710,8\n");
+    t.push_str("2026-03-08T00:33:44Z,db1,49.9,2979,34\n");
+    t.push_str("2026-03-08T00:53:18Z,db1,50.2,2842,3\n");
+    t.push_str("2026-03-08T01:14:49Z,db1,,2715,26\n");
+    t.push_str("2026-03-08T01:35:04Z,db1,80.6,2945,19\n");
+    t.push_str("2026-03-08T01:55:20Z,db1,67.2,2745,25\n");
+    t.push_str("2026-03-08T02:34:15Z,db1,69.6,2965,5\n");
+    t.push_str("2026-03-08T02:54:56Z,db1,79.0,3060,36\n");
+    t.push_str("2026-03-08T03:13:42Z,db1,,2814,16\n");
+    t.push_str("2026-03-08T03:33:17Z,db1,48.9,2910,39\n");
+    t.push_str("2026-03-08T03:54:53Z,db1,,2768,24\n");
+    t.push_str("2026-03-08T04:13:04Z,db1,45.6,3095,39\n");
+    t.push_str("2026-03-08T04:51:02Z,db1,51.6,2639,19\n");
+    t.push_str("2026-03-08T05:11:12Z,db1,63.8,2900,0\n");
+    t.push_str("2026-03-08T06:30:22Z,db1,66.7,2781,3\n");
+    t.push_str("2026-03-08T06:51:53Z,db1,84.5,2971,9\n");
+    t.push_str("2026-03-08T07:10:21Z,db1,63.0,2915,26\n");
+    t.push_str("2026-03-08T07:30:41Z,db1,72.7,3047,16\n");
+    t.push_str("2026-03-08T08:11:34Z,db1,68.2,2630,2\n");
+    t.push_str("2026-03-08T08:30:16Z,db1,84.8,2949,12\n");
+    t.push_str("2026-03-08T08:51:38Z,db1,55.0,2838,34\n");
+    t.push_str("2026-03-08T09:12:35Z,db1,48.3,2754,34\n");
+    t.push_str("2026-03-08T09:32:28Z,db1,72.6,3091,33\n");
+    t.push_str("2026-03-08T09:52:05Z,db1,74.5,2844,23\n");
+    t.push_str("2026-03-08T10:13:14Z,db1,50.9,2888,17\n");
+    t.push_str("2026-03-08T10:33:05Z,db1,57.8,2716,21\n");
+    t.push_str("2026-03-08T10:54:33Z,db1,50.9,2883,0\n");
+    t.push_str("2026-03-08T11:14:31Z,db1,52.6,2856,30\n");
+    t.push_str("2026-03-08T11:34:02Z,db1,60.6,2755,26\n");
+    t.push_str("2026-03-08T11:55:25Z,db1,66.7,3017,32\n");
+    t.push_str("2026-03-08T12:15:52Z,db1,75.4,2678,2\n");
+    t.push_str("2026-03-08T12:34:50Z,db1,55.1,3014,32\n");
+    t.push_str("2026-03-08T12:54:03Z,db1,81.8,2988,1\n");
+    t.push_str("2026-03-08T13:32:03Z,db1,,3081,18\n");
+    t.push_str("2026-03-08T13:52:07Z,db1,83.1,2919,10\n");
+    t.push_str("2026-03-08T14:13:00Z,db1,79.8,2788,35\n");
+    t.push_str("2026-03-08T14:32:44Z,db1,84.6,2954,22\n");
+    t.push_str("2026-03-08T14:53:07Z,db1,81.6,2952,17\n");
+    t.push_str("2026-03-08T15:13:56Z,db1,71.4,3098,3\n");
+    t.push_str("2026-03-08T15:54:45Z,db1,70.3,2635,33\n");
+    t.push_str("2026-03-08T16:15:56Z,db1,49.6,2816,8\n");
+    t.push_str("2026-03-08T16:34:20Z,db1,,2915,35\n");
+    t.push_str("2026-03-08T16:55:11Z,db1,76.9,2756,28\n");
+    t.push_str("2026-03-08T17:34:31Z,db1,80.3,2927,5\n");
+    t.push_str("2026-03-08T17:53:47Z,db1,63.9,2786,31\n");
+    t.push_str("2026-03-08T18:14:58Z,db1,68.7,2986,37\n");
+    t.push_str("2026-03-08T18:33:46Z,db1,63.8,2911,15\n");
+    t.push_str("2026-03-08T19:11:52Z,db1,,2785,32\n");
+    t.push_str("2026-03-08T19:32:10Z,db1,53.1,2769,18\n");
+    t.push_str("2026-03-08T19:53:31Z,db1,52.2,2693,0\n");
+    t.push_str("2026-03-08T20:34:14Z,db1,46.8,2657,31\n");
+    t.push_str("2026-03-08T20:54:54Z,db1,58.3,3093,30\n");
+    t.push_str("2026-03-08T21:15:14Z,db1,56.3,2673,39\n");
+    t.push_str("2026-03-08T21:35:04Z,db1,48.2,2612,12\n");
+    t.push_str("2026-03-08T21:56:40Z,db1,80.7,2904,12\n");
+    t.push_str("2026-03-08T22:15:23Z,db1,47.6,2833,19\n");
+    t.push_str("2026-03-08T22:35:00Z,db1,53.5,2869,6\n");
+    t.push_str("2026-03-08T22:54:36Z,db1,71.8,2993,12\n");
+    t.push_str("2026-03-08T23:14:11Z,db1,68.9,2951,24\n");
+    t.push_str("2026-03-08T23:35:24Z,db1,46.0,2632,2\n");
+    t.push_str("2026-03-08T23:55:54Z,db1,69.0,2989,31\n");
+    t.push_str("2026-03-09T00:34:38Z,db1,56.4,2913,8\n");
+    t.push_str("2026-03-09T00:55:59Z,db1,81.5,2716,18\n");
+    t.push_str("2026-03-09T01:16:40Z,db1,74.8,3081,10\n");
+    t.push_str("2026-03-09T01:35:52Z,db1,78.6,2913,38\n");
+    t.push_str("2026-03-09T01:56:04Z,db1,73.8,2904,15\n");
+    t.push_str("2026-03-09T02:17:50Z,db1,50.2,3036,37\n");
+    t.push_str("2026-03-09T02:36:39Z,db1,72.7,2785,29\n");
+    t.push_str("2026-03-09T03:15:55Z,db1,77.1,3032,17\n");
+    t.push_str("2026-03-09T03:35:15Z,db1,48.6,2906,16\n");
+    t.push_str("2026-03-09T03:54:00Z,db1,71.7,3098,34\n");
+    t.push_str("2026-03-09T04:15:03Z,db1,54.3,2668,26\n");
+    t.push_str("2026-03-09T04:34:06Z,db1,73.3,2659,9\n");
+    t.push_str("2026-03-09T04:53:28Z,db1,73.7,2744,29\n");
+    t.push_str("2026-03-09T05:12:55Z,db1,79.9,2939,30\n");
+    t.push_str("2026-03-09T05:33:42Z,db1,59.8,2912,7\n");
+    t.push_str("2026-03-09T05:54:14Z,db1,72.6,2846,38\n");
+    v.push(DataFile { path: "metrics.csv".to_string(), body: t });
+}
+
+fn data_part_2(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("date,store,amount\n");
+    t.push_str("2024-01-01,north,973.34\n");
+    t.push_str("2024-01-02,north,375.11\n");
+    t.push_str("2024-01-03,north,909.90\n");
+    t.push_str("2024-01-04,north,455.34\n");
+    t.push_str("2024-01-05,north,571.93\n");
+    t.push_str("2024-01-06,north,868.63\n");
+    t.push_str("2024-01-07,north,1040.50\n");
+    t.push_str("2024-01-08,north,428.02\n");
+    t.push_str("2024-01-10,north,561.54\n");
+    t.push_str("2024-01-11,north,879.70\n");
+    t.push_str("2024-01-12,north,235.93\n");
+    t.push_str("2024-01-13,north,553.85\n");
+    t.push_str("2024-01-14,north,820.81\n");
+    t.push_str("2024-01-15,north,398.30\n");
+    t.push_str("2024-01-16,north,540.40\n");
+    t.push_str("2024-01-17,north,636.68\n");
+    t.push_str("2024-01-18,north,1072.00\n");
+    t.push_str("2024-01-19,north,1076.70\n");
+    t.push_str("2024-01-20,north,411.57\n");
+    t.push_str("2024-01-24,north,1074.36\n");
+    t.push_str("2024-01-25,north,558.12\n");
+    t.push_str("2024-01-27,north,919.11\n");
+    t.push_str("2024-01-28,north,468.69\n");
+    t.push_str("2024-01-29,north,972.92\n");
+    t.push_str("2024-01-30,north,378.80\n");
+    t.push_str("2024-01-31,north,555.67\n");
+    t.push_str("2024-02-01,north,867.01\n");
+    t.push_str("2024-02-02,north,522.42\n");
+    t.push_str("2024-02-04,north,1066.54\n");
+    t.push_str("2024-02-05,north,808.51\n");
+    t.push_str("2024-02-06,north,814.66\n");
+    t.push_str("2024-02-07,north,601.43\n");
+    t.push_str("2024-02-08,north,610.87\n");
+    t.push_str("2024-02-10,north,734.15\n");
+    t.push_str("2024-02-11,north,1073.67\n");
+    t.push_str("2024-02-13,north,771.25\n");
+    t.push_str("2024-02-14,north,875.23\n");
+    t.push_str("2024-02-15,north,763.62\n");
+    t.push_str("2024-02-16,north,333.55\n");
+    t.push_str("2024-02-17,north,813.03\n");
+    t.push_str("2024-02-18,north,849.24\n");
+    t.push_str("2024-02-19,north,768.52\n");
+    t.push_str("2024-02-20,north,487.12\n");
+    t.push_str("2024-02-21,north,884.07\n");
+    t.push_str("2024-02-22,north,935.90\n");
+    t.push_str("2024-02-23,north,235.05\n");
+    t.push_str("2024-02-24,north,302.66\n");
+    t.push_str("2024-02-25,north,919.23\n");
+    t.push_str("2024-02-26,north,434.72\n");
+    t.push_str("2024-02-27,north,721.08\n");
+    t.push_str("2024-02-28,north,439.48\n");
+    t.push_str("2024-02-29,north,382.37\n");
+    t.push_str("2024-03-02,north,696.89\n");
+    t.push_str("2024-03-03,north,382.37\n");
+    t.push_str("2024-03-04,north,903.12\n");
+    t.push_str("2024-03-05,north,745.79\n");
+    t.push_str("2024-03-06,north,815.65\n");
+    t.push_str("2024-03-07,north,413.84\n");
+    t.push_str("2024-03-08,north,799.52\n");
+    t.push_str("2024-03-09,north,1019.32\n");
+    t.push_str("2024-03-10,north,607.63\n");
+    t.push_str("2024-03-11,north,675.25\n");
+    t.push_str("2024-03-12,north,913.02\n");
+    t.push_str("2024-03-13,north,588.27\n");
+    t.push_str("2024-03-14,north,727.66\n");
+    t.push_str("2024-03-15,north,737.61\n");
+    t.push_str("2024-03-17,north,955.25\n");
+    t.push_str("2024-03-18,north,1047.90\n");
+    t.push_str("2024-03-19,north,644.16\n");
+    t.push_str("2024-03-20,north,812.52\n");
+    t.push_str("2024-03-21,north,848.41\n");
+    t.push_str("2024-03-22,north,631.36\n");
+    t.push_str("2024-03-23,north,682.90\n");
+    t.push_str("2024-03-24,north,1060.25\n");
+    t.push_str("2024-03-25,north,1024.19\n");
+    t.push_str("2024-03-26,north,954.51\n");
+    t.push_str("2024-03-27,north,423.68\n");
+    t.push_str("2024-03-28,north,411.30\n");
+    t.push_str("2024-03-29,north,412.66\n");
+    t.push_str("2024-03-30,north,200.45\n");
+    t.push_str("2024-03-31,north,657.19\n");
+    t.push_str("2024-04-01,north,1084.69\n");
+    t.push_str("2024-04-02,north,481.45\n");
+    t.push_str("2024-04-03,north,710.77\n");
+    t.push_str("2024-04-05,north,895.86\n");
+    t.push_str("2024-04-06,north,719.48\n");
+    t.push_str("2024-04-07,north,960.86\n");
+    t.push_str("2024-04-08,north,326.68\n");
+    t.push_str("2024-04-09,north,607.25\n");
+    t.push_str("2024-04-10,north,815.49\n");
+    t.push_str("2024-04-11,north,603.25\n");
+    t.push_str("2024-04-12,north,608.05\n");
+    t.push_str("2024-04-13,north,496.14\n");
+    t.push_str("2024-04-14,north,326.79\n");
+    t.push_str("2024-04-16,north,1084.98\n");
+    t.push_str("2024-04-17,north,613.17\n");
+    t.push_str("2024-04-18,north,421.35\n");
+    t.push_str("2024-04-20,north,682.85\n");
+    t.push_str("2024-04-21,north,472.42\n");
+    t.push_str("2024-04-22,north,900.67\n");
+    t.push_str("2024-04-23,north,1079.10\n");
+    t.push_str("2024-04-24,north,203.46\n");
+    t.push_str("2024-04-25,north,786.21\n");
+    t.push_str("2024-04-27,north,797.96\n");
+    t.push_str("2024-04-28,north,398.14\n");
+    t.push_str("2024-04-29,north,597.94\n");
+    t.push_str("2024-01-01,south,352.97\n");
+    t.push_str("2024-01-02,south,589.35\n");
+    t.push_str("2024-01-03,south,558.50\n");
+    t.push_str("2024-01-04,south,869.80\n");
+    t.push_str("2024-01-05,south,750.11\n");
+    t.push_str("2024-01-06,south,712.12\n");
+    t.push_str("2024-01-07,south,565.43\n");
+    t.push_str("2024-01-08,south,1071.55\n");
+    t.push_str("2024-01-09,south,579.16\n");
+    t.push_str("2024-01-10,south,284.92\n");
+    t.push_str("2024-01-12,south,648.93\n");
+    t.push_str("2024-01-13,south,632.06\n");
+    t.push_str("2024-01-14,south,415.05\n");
+    t.push_str("2024-01-15,south,823.93\n");
+    t.push_str("2024-01-16,south,537.67\n");
+    t.push_str("2024-01-17,south,361.52\n");
+    t.push_str("2024-01-18,south,782.48\n");
+    t.push_str("2024-01-19,south,449.97\n");
+    t.push_str("2024-01-20,south,347.20\n");
+    t.push_str("2024-01-21,south,205.57\n");
+    t.push_str("2024-01-22,south,466.45\n");
+    t.push_str("2024-01-23,south,591.85\n");
+    t.push_str("2024-01-24,south,781.98\n");
+    t.push_str("2024-01-25,south,452.05\n");
+    t.push_str("2024-01-26,south,439.96\n");
+    t.push_str("2024-01-27,south,244.44\n");
+    t.push_str("2024-01-29,south,727.02\n");
+    t.push_str("2024-01-30,south,956.31\n");
+    t.push_str("2024-02-01,south,237.71\n");
+    t.push_str("2024-02-02,south,577.48\n");
+    t.push_str("2024-02-03,south,746.47\n");
+    t.push_str("2024-02-04,south,422.46\n");
+    t.push_str("2024-02-05,south,741.41\n");
+    t.push_str("2024-02-06,south,776.97\n");
+    t.push_str("2024-02-07,south,859.96\n");
+    t.push_str("2024-02-08,south,679.28\n");
+    t.push_str("2024-02-09,south,207.41\n");
+    t.push_str("2024-02-12,south,605.47\n");
+    t.push_str("2024-02-13,south,267.62\n");
+    t.push_str("2024-02-14,south,\n");
+    t.push_str("2024-02-16,south,920.05\n");
+    t.push_str("2024-02-17,south,771.63\n");
+    t.push_str("2024-02-18,south,443.85\n");
+    t.push_str("2024-02-19,south,230.83\n");
+    t.push_str("2024-02-20,south,511.89\n");
+    t.push_str("2024-02-21,south,349.56\n");
+    t.push_str("2024-02-23,south,949.09\n");
+    t.push_str("2024-02-24,south,518.77\n");
+    t.push_str("2024-02-25,south,881.17\n");
+    t.push_str("2024-02-26,south,536.74\n");
+    t.push_str("2024-02-27,south,831.81\n");
+    t.push_str("2024-02-28,south,582.30\n");
+    t.push_str("2024-02-29,south,1094.59\n");
+    t.push_str("2024-03-01,south,705.00\n");
+    t.push_str("2024-03-02,south,588.41\n");
+    t.push_str("2024-03-03,south,424.61\n");
+    t.push_str("2024-03-04,south,955.26\n");
+    t.push_str("2024-03-07,south,303.91\n");
+    t.push_str("2024-03-09,south,453.15\n");
+    t.push_str("2024-03-10,south,519.06\n");
+    t.push_str("2024-03-11,south,591.69\n");
+    t.push_str("2024-03-12,south,940.41\n");
+    t.push_str("2024-03-13,south,568.17\n");
+    t.push_str("2024-03-15,south,211.29\n");
+    t.push_str("2024-03-16,south,471.84\n");
+    t.push_str("2024-03-17,south,1063.13\n");
+    t.push_str("2024-03-18,south,927.55\n");
+    t.push_str("2024-03-19,south,1009.24\n");
+    t.push_str("2024-03-20,south,1093.19\n");
+    t.push_str("2024-03-21,south,690.50\n");
+    t.push_str("2024-03-22,south,951.05\n");
+    t.push_str("2024-03-23,south,375.60\n");
+    t.push_str("2024-03-24,south,399.39\n");
+    t.push_str("2024-03-25,south,973.08\n");
+    t.push_str("2024-03-26,south,850.18\n");
+    t.push_str("2024-03-28,south,264.70\n");
+    t.push_str("2024-03-29,south,223.77\n");
+    t.push_str("2024-03-30,south,454.18\n");
+    t.push_str("2024-03-31,south,1094.60\n");
+    t.push_str("2024-04-01,south,586.62\n");
+    t.push_str("2024-04-02,south,885.14\n");
+    t.push_str("2024-04-03,south,447.58\n");
+    t.push_str("2024-04-05,south,227.57\n");
+    t.push_str("2024-04-06,south,865.22\n");
+    t.push_str("2024-04-07,south,902.66\n");
+    t.push_str("2024-04-08,south,1022.37\n");
+    t.push_str("2024-04-09,south,401.02\n");
+    t.push_str("2024-04-10,south,559.67\n");
+    t.push_str("2024-04-13,south,738.80\n");
+    t.push_str("2024-04-14,south,994.41\n");
+    t.push_str("2024-04-15,south,855.95\n");
+    t.push_str("2024-04-16,south,638.84\n");
+    t.push_str("2024-04-17,south,664.62\n");
+    t.push_str("2024-04-19,south,717.39\n");
+    t.push_str("2024-04-20,south,394.27\n");
+    t.push_str("2024-04-21,south,870.48\n");
+    t.push_str("2024-04-22,south,391.23\n");
+    t.push_str("2024-04-23,south,961.61\n");
+    t.push_str("2024-04-25,south,454.01\n");
+    t.push_str("2024-04-26,south,589.74\n");
+    t.push_str("2024-04-28,south,881.65\n");
+    t.push_str("2024-04-29,south,412.65\n");
+    t.push_str("2024-04-30,south,316.88\n");
+    v.push(DataFile { path: "sales.csv".to_string(), body: t });
+}
+
+fn data_part_3(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("id,created,closed,prio\n");
+    t.push_str("5000,1772340859,1772520634,P2\n");
+    t.push_str("5001,1772350663,1772392098,P3\n");
+    t.push_str("5002,1772359352,1772504775,P1\n");
+    t.push_str("5003,1772368248,1772530746,P3\n");
+    t.push_str("5004,1772382027,1772386574,P3\n");
+    t.push_str("5005,1772395592,1772448703,P1\n");
+    t.push_str("5006,1772402973,1772407716,P2\n");
+    t.push_str("5007,1772419618,,P2\n");
+    t.push_str("5008,1772431632,1772572051,P3\n");
+    t.push_str("5009,1772437600,1772603883,P1\n");
+    t.push_str("5010,1772449059,1772542228,P1\n");
+    t.push_str("5011,1772459265,,P3\n");
+    t.push_str("5012,1772472870,1772502919,P3\n");
+    t.push_str("5013,1772487691,1772671176,P3\n");
+    t.push_str("5014,1772499957,1772650432,P2\n");
+    t.push_str("5015,1772518381,1772592612,P3\n");
+    t.push_str("5016,1772526718,1772645213,P1\n");
+    t.push_str("5017,1772543689,1772678148,P1\n");
+    t.push_str("5018,1772558341,,P3\n");
+    t.push_str("5019,1772577755,1772614195,P3\n");
+    t.push_str("5020,1772581129,1772733168,P1\n");
+    t.push_str("5021,1772588504,1772698693,P1\n");
+    t.push_str("5022,1772603259,,P1\n");
+    t.push_str("5023,1772608904,1772784103,P2\n");
+    t.push_str("5024,1772625694,1772684323,P1\n");
+    t.push_str("5025,1772629093,1772814311,P3\n");
+    t.push_str("5026,1772642478,1772808543,P3\n");
+    t.push_str("5027,1772648720,1772650965,P2\n");
+    t.push_str("5028,1772658457,1772764230,P2\n");
+    t.push_str("5029,1772675973,1772786971,P3\n");
+    t.push_str("5030,1772691781,1772804777,P3\n");
+    t.push_str("5031,1772695427,1772712284,P2\n");
+    t.push_str("5032,1772713918,1772900891,P3\n");
+    t.push_str("5033,1772724053,1772921399,P2\n");
+    t.push_str("5034,1772729799,1772906535,P1\n");
+    t.push_str("5035,1772740390,1772773210,P3\n");
+    t.push_str("5036,1772741728,1772765184,P1\n");
+    t.push_str("5037,1772760916,1772838491,P3\n");
+    t.push_str("5038,1772779638,1772779976,P2\n");
+    t.push_str("5039,1772781141,1772846992,P2\n");
+    v.push(DataFile { path: "tickets.csv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("ts,sym,price,qty\n");
+    t.push_str("2026-03-02 09:30:00.000,KRA,101.25,40\n");
+    t.push_str("2026-03-02 09:30:29.458,KRA,101.42,140\n");
+    t.push_str("2026-03-02 09:31:06.830,MND,47.53,160\n");
+    t.push_str("2026-03-02 09:31:13.787,KRA,101.29,100\n");
+    t.push_str("2026-03-02 09:32:14.864,KRA,101.41,140\n");
+    t.push_str("2026-03-02 09:32:20.591,KRA,101.40,170\n");
+    t.push_str("2026-03-02 09:33:22.379,KRA,101.24,70\n");
+    t.push_str("2026-03-02 09:33:32.308,MND,47.62,150\n");
+    t.push_str("2026-03-02 09:34:35.827,KRA,101.29,150\n");
+    t.push_str("2026-03-02 09:34:58.587,KRA,101.43,170\n");
+    t.push_str("2026-03-02 09:36:01.481,KRA,101.60,160\n");
+    t.push_str("2026-03-02 09:36:14.145,KRA,101.70,40\n");
+    t.push_str("2026-03-02 09:37:15.987,KRA,101.76,30\n");
+    t.push_str("2026-03-02 09:37:46.847,KRA,101.63,40\n");
+    t.push_str("2026-03-02 09:38:49.047,KRA,101.75,100\n");
+    t.push_str("2026-03-02 09:38:57.434,KRA,101.87,20\n");
+    t.push_str("2026-03-02 09:39:46.439,KRA,101.99,180\n");
+    t.push_str("2026-03-02 09:40:30.806,KRA,102.05,110\n");
+    t.push_str("2026-03-02 09:41:45.825,KRA,101.95,130\n");
+    t.push_str("2026-03-02 09:42:41.672,KRA,101.86,20\n");
+    t.push_str("2026-03-02 09:43:45.411,MND,47.55,170\n");
+    t.push_str("2026-03-02 09:43:48.748,KRA,102.00,60\n");
+    t.push_str("2026-03-02 09:45:08.708,MND,47.56,120\n");
+    t.push_str("2026-03-02 09:45:09.989,KRA,101.98,200\n");
+    t.push_str("2026-03-02 09:45:19.362,KRA,102.12,120\n");
+    t.push_str("2026-03-02 09:46:12.890,KRA,102.27,50\n");
+    t.push_str("2026-03-02 09:46:23.884,KRA,102.36,140\n");
+    t.push_str("2026-03-02 09:47:51.825,KRA,102.37,10\n");
+    t.push_str("2026-03-02 09:48:22.997,MND,47.41,120\n");
+    t.push_str("2026-03-02 09:48:42.357,MND,47.25,40\n");
+    t.push_str("2026-03-02 09:49:31.152,KRA,102.40,120\n");
+    t.push_str("2026-03-02 09:50:52.588,KRA,102.53,110\n");
+    t.push_str("2026-03-02 09:52:09.976,KRA,102.72,160\n");
+    t.push_str("2026-03-02 09:53:31.436,MND,47.14,70\n");
+    t.push_str("2026-03-02 09:53:38.125,KRA,102.63,120\n");
+    t.push_str("2026-03-02 09:55:06.317,MND,47.10,60\n");
+    t.push_str("2026-03-02 09:55:53.575,MND,47.09,120\n");
+    t.push_str("2026-03-02 09:57:07.327,KRA,102.58,40\n");
+    t.push_str("2026-03-02 09:57:14.273,KRA,102.60,200\n");
+    t.push_str("2026-03-02 09:58:08.160,MND,47.05,150\n");
+    t.push_str("2026-03-02 09:58:41.792,KRA,102.44,50\n");
+    t.push_str("2026-03-02 10:00:05.935,MND,46.94,30\n");
+    t.push_str("2026-03-02 10:00:27.141,MND,47.12,150\n");
+    t.push_str("2026-03-02 10:01:24.399,MND,47.09,110\n");
+    t.push_str("2026-03-02 10:02:17.965,MND,47.13,50\n");
+    t.push_str("2026-03-02 10:03:13.474,KRA,102.46,70\n");
+    t.push_str("2026-03-02 10:04:35.181,MND,46.94,70\n");
+    t.push_str("2026-03-02 10:04:41.142,KRA,102.31,30\n");
+    t.push_str("2026-03-02 10:06:06.922,KRA,102.24,160\n");
+    t.push_str("2026-03-02 10:07:02.562,MND,47.12,160\n");
+    t.push_str("2026-03-02 10:07:20.898,KRA,102.18,110\n");
+    t.push_str("2026-03-02 10:07:47.464,MND,47.22,160\n");
+    t.push_str("2026-03-02 10:09:15.701,KRA,102.33,160\n");
+    t.push_str("2026-03-02 10:09:29.490,MND,47.14,170\n");
+    t.push_str("2026-03-02 10:10:40.235,KRA,102.29,90\n");
+    t.push_str("2026-03-02 10:12:08.679,KRA,102.20,160\n");
+    t.push_str("2026-03-02 10:13:33.530,KRA,102.29,20\n");
+    t.push_str("2026-03-02 10:14:11.526,MND,47.28,70\n");
+    v.push(DataFile { path: "trades.csv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("visit,when,clinic\n");
+    t.push_str("1,03/01/2026 08:15,east\n");
+    t.push_str("2,03/01/2026 09:40,west\n");
+    t.push_str("3,03/02/2026 13:05,east\n");
+    t.push_str("4,03/04/2026 16:30,east\n");
+    t.push_str("5,13/45/2026 10:00,west\n");
+    t.push_str("6,03/09/2026 07:55,west\n");
+    t.push_str("7,03/09/2026 18:20,east\n");
+    t.push_str("8,03/10/2026 12:00,west\n");
+    t.push_str("9,,east\n");
+    t.push_str("10,03/15/2026 23:59,west\n");
+    t.push_str("11,03/16/2026 00:01,east\n");
+    t.push_str("12,03/31/2026 11:11,west\n");
+    v.push(DataFile { path: "visits.csv".to_string(), body: t });
+}

@@ -1,0 +1,816 @@
+$ read metrics.csv dates=ts | dtypes
+column,dtype
+ts,"datetime64[us, UTC]"
+host,str
+cpu,float64
+mem,int64
+req,int64
+$ read metrics.csv dates=ts | head 4
+ts,host,cpu,mem,req
+2026-03-07 20:00:11+00:00,web1,48.5,2519,264
+2026-03-07 20:19:46+00:00,web1,50.2,2580,349
+2026-03-07 20:39:39+00:00,web1,46.6,2593,54
+2026-03-07 20:58:24+00:00,web1,40.3,2432,152
+$ read trades.csv dates=ts | dtypes
+column,dtype
+ts,datetime64[us]
+sym,str
+price,float64
+qty,int64
+$ read trades.csv dates=ts | head 3
+ts,sym,price,qty
+2026-03-02 09:30:00.000,KRA,101.25,40
+2026-03-02 09:30:29.458,KRA,101.42,140
+2026-03-02 09:31:06.830,MND,47.53,160
+$ read sales.csv dates=date | head 3
+date,store,amount
+2024-01-01,north,973.34
+2024-01-02,north,375.11
+2024-01-03,north,909.9
+$ read sales.csv dates=date | dtypes
+column,dtype
+date,datetime64[us]
+store,str
+amount,float64
+$ read tickets.csv dates=created,closed unit=s | head 4
+id,created,closed,prio
+5000,2026-03-01 04:54:19,2026-03-03 06:50:34,P2
+5001,2026-03-01 07:37:43,2026-03-01 19:08:18,P3
+5002,2026-03-01 10:02:32,2026-03-03 02:26:15,P1
+5003,2026-03-01 12:30:48,2026-03-03 09:39:06,P3
+$ read tickets.csv dates=created,closed unit=s | dtypes
+column,dtype
+id,int64
+created,datetime64[s]
+closed,datetime64[s]
+prio,str
+$ read visits.csv dates=when format=%m/%d/%Y_%H:%M coerce
+visit,when,clinic
+1,2026-03-01 08:15:00,east
+2,2026-03-01 09:40:00,west
+3,2026-03-02 13:05:00,east
+4,2026-03-04 16:30:00,east
+5,,west
+6,2026-03-09 07:55:00,west
+7,2026-03-09 18:20:00,east
+8,2026-03-10 12:00:00,west
+9,,east
+10,2026-03-15 23:59:00,west
+11,2026-03-16 00:01:00,east
+12,2026-03-31 11:11:00,west
+$ read visits.csv dates=when format=%m/%d/%Y_%H:%M coerce | dtypes
+column,dtype
+visit,int64
+when,datetime64[us]
+clinic,str
+$ read visits.csv dates=when format=%m/%d/%Y_%H:%M
+! ValueError: time data "13/45/2026 10:00" doesn't match format "%m/%d/%Y %H:%M". You might want to try:
+    - passing `format` if your strings have a consistent format;
+    - passing `format='ISO8601'` if your strings are all ISO8601 but not necessarily in exactly the same format;
+    - passing `format='mixed'`, and the format will be inferred for each element individually. You might want to use `dayfirst` alongside this.
+$ read meter.csv | dtypes
+column,dtype
+at,str
+kwh,float64
+$ read meter.csv dates=at
+at,kwh
+2026-01-30 22:10:00,15000.5
+2026-01-31 23:50:00,15012.25
+2026-02-02 06:30:00,15030.0
+2026-02-05 12:00:00,15071.75
+2026-02-06 00:00:00,15078.0
+2026-02-10 09:45:00,15130.5
+2026-02-28 18:00:00,15333.25
+2026-03-01 00:00:00,15336.0
+$ read sales.csv dates=date | dt date year y | dt date month m | dt date day d | head 4
+date,store,amount,y,m,d
+2024-01-01,north,973.34,2024,1,1
+2024-01-02,north,375.11,2024,1,2
+2024-01-03,north,909.9,2024,1,3
+2024-01-04,north,455.34,2024,1,4
+$ read sales.csv dates=date | dt date dayofweek dow | dt date day_name name | head 7
+date,store,amount,dow,name
+2024-01-01,north,973.34,0,Monday
+2024-01-02,north,375.11,1,Tuesday
+2024-01-03,north,909.9,2,Wednesday
+2024-01-04,north,455.34,3,Thursday
+2024-01-05,north,571.93,4,Friday
+2024-01-06,north,868.63,5,Saturday
+2024-01-07,north,1040.5,6,Sunday
+$ read sales.csv dates=date | dt date quarter q | dt date dayofyear doy | dt date is_month_end me | where me == True
+date,store,amount,q,doy,me
+2024-01-31,north,555.67,1,31,True
+2024-02-29,north,382.37,1,60,True
+2024-03-31,north,657.19,1,91,True
+2024-02-29,south,1094.59,1,60,True
+2024-03-31,south,1094.6,1,91,True
+2024-04-30,south,316.88,2,121,True
+$ read sales.csv dates=date | dt date week w | dt date is_month_start ms | head 9
+date,store,amount,w,ms
+2024-01-01,north,973.34,1,True
+2024-01-02,north,375.11,1,False
+2024-01-03,north,909.9,1,False
+2024-01-04,north,455.34,1,False
+2024-01-05,north,571.93,1,False
+2024-01-06,north,868.63,1,False
+2024-01-07,north,1040.5,1,False
+2024-01-08,north,428.02,2,False
+2024-01-10,north,561.54,2,False
+$ read sales.csv dates=date | dt date month_name mn | agg mn amount:sum | sort amount_sum asc=0
+mn,amount_sum
+March,37895.63
+January,33936.27
+February,32759.9
+April,32455.39
+$ read metrics.csv dates=ts | dt ts hour h | dt ts minute mi | dt ts second s | head 5
+ts,host,cpu,mem,req,h,mi,s
+2026-03-07 20:00:11+00:00,web1,48.5,2519,264,20,0,11
+2026-03-07 20:19:46+00:00,web1,50.2,2580,349,20,19,46
+2026-03-07 20:39:39+00:00,web1,46.6,2593,54,20,39,39
+2026-03-07 20:58:24+00:00,web1,40.3,2432,152,20,58,24
+2026-03-07 21:38:59+00:00,web1,,2607,372,21,38,59
+$ read trades.csv dates=ts | dt ts microsecond us | head 4
+ts,sym,price,qty,us
+2026-03-02 09:30:00.000,KRA,101.25,40,0
+2026-03-02 09:30:29.458,KRA,101.42,140,458000
+2026-03-02 09:31:06.830,MND,47.53,160,830000
+2026-03-02 09:31:13.787,KRA,101.29,100,787000
+$ read visits.csv dates=when format=%m/%d/%Y_%H:%M coerce | dt when hour h | dt when dayofweek dow | select visit,when,h,dow
+visit,when,h,dow
+1,2026-03-01 08:15:00,8.0,6.0
+2,2026-03-01 09:40:00,9.0,6.0
+3,2026-03-02 13:05:00,13.0,0.0
+4,2026-03-04 16:30:00,16.0,2.0
+5,,,
+6,2026-03-09 07:55:00,7.0,0.0
+7,2026-03-09 18:20:00,18.0,0.0
+8,2026-03-10 12:00:00,12.0,1.0
+9,,,
+10,2026-03-15 23:59:00,23.0,6.0
+11,2026-03-16 00:01:00,0.0,0.0
+12,2026-03-31 11:11:00,11.0,1.0
+$ read metrics.csv dates=ts | floor ts h t | select ts,t | head 5
+ts,t
+2026-03-07 20:00:11+00:00,2026-03-07 20:00:00+00:00
+2026-03-07 20:19:46+00:00,2026-03-07 20:00:00+00:00
+2026-03-07 20:39:39+00:00,2026-03-07 20:00:00+00:00
+2026-03-07 20:58:24+00:00,2026-03-07 20:00:00+00:00
+2026-03-07 21:38:59+00:00,2026-03-07 21:00:00+00:00
+$ read metrics.csv dates=ts | ceil ts 15min t | select ts,t | head 5
+ts,t
+2026-03-07 20:00:11+00:00,2026-03-07 20:15:00+00:00
+2026-03-07 20:19:46+00:00,2026-03-07 20:30:00+00:00
+2026-03-07 20:39:39+00:00,2026-03-07 20:45:00+00:00
+2026-03-07 20:58:24+00:00,2026-03-07 21:00:00+00:00
+2026-03-07 21:38:59+00:00,2026-03-07 21:45:00+00:00
+$ read metrics.csv dates=ts | dtround ts h t | select ts,t | head 6
+ts,t
+2026-03-07 20:00:11+00:00,2026-03-07 20:00:00+00:00
+2026-03-07 20:19:46+00:00,2026-03-07 20:00:00+00:00
+2026-03-07 20:39:39+00:00,2026-03-07 21:00:00+00:00
+2026-03-07 20:58:24+00:00,2026-03-07 21:00:00+00:00
+2026-03-07 21:38:59+00:00,2026-03-07 22:00:00+00:00
+2026-03-07 21:57:35+00:00,2026-03-07 22:00:00+00:00
+$ read trades.csv dates=ts | floor ts s t | dtround ts min r | select ts,t,r | head 5
+ts,t,r
+2026-03-02 09:30:00.000,2026-03-02 09:30:00,2026-03-02 09:30:00
+2026-03-02 09:30:29.458,2026-03-02 09:30:29,2026-03-02 09:30:00
+2026-03-02 09:31:06.830,2026-03-02 09:31:06,2026-03-02 09:31:00
+2026-03-02 09:31:13.787,2026-03-02 09:31:13,2026-03-02 09:31:00
+2026-03-02 09:32:14.864,2026-03-02 09:32:14,2026-03-02 09:32:00
+$ read sales.csv dates=date | strftime date %Y-%m m | agg m amount:sum,amount:count
+m,amount_sum,amount_count
+2024-01,33936.27,54
+2024-02,32759.9,50
+2024-03,37895.63,55
+2024-04,32455.39,49
+$ read sales.csv dates=date | strftime date %d/%m/%Y f | strftime date %a_%b_%d f2 | strftime date %j doy | head 3
+date,store,amount,f,f2,doy
+2024-01-01,north,973.34,01/01/2024,Mon Jan 01,001
+2024-01-02,north,375.11,02/01/2024,Tue Jan 02,002
+2024-01-03,north,909.9,03/01/2024,Wed Jan 03,003
+$ read metrics.csv dates=ts | strftime ts %Y-%m-%dT%H:%M h | head 3
+ts,host,cpu,mem,req,h
+2026-03-07 20:00:11+00:00,web1,48.5,2519,264,2026-03-07T20:00
+2026-03-07 20:19:46+00:00,web1,50.2,2580,349,2026-03-07T20:19
+2026-03-07 20:39:39+00:00,web1,46.6,2593,54,2026-03-07T20:39
+$ read sales.csv dates=date | normalize date d | head 2
+date,store,amount,d
+2024-01-01,north,973.34,2024-01-01
+2024-01-02,north,375.11,2024-01-02
+$ read metrics.csv dates=ts | normalize ts d | agg host,d cpu:mean,req:sum
+host,d,cpu_mean,req_sum
+db1,2026-03-07 00:00:00+00:00,66.76666666666667,234
+db1,2026-03-08 00:00:00+00:00,64.37818181818182,1211
+db1,2026-03-09 00:00:00+00:00,68.6875,361
+web1,2026-03-07 00:00:00+00:00,39.25,2505
+web1,2026-03-08 00:00:00+00:00,34.98615384615385,15160
+web1,2026-03-09 00:00:00+00:00,35.03529411764706,3077
+web2,2026-03-07 00:00:00+00:00,51.32727272727273,2354
+web2,2026-03-08 00:00:00+00:00,48.9741935483871,13641
+web2,2026-03-09 00:00:00+00:00,47.806666666666665,3373
+$ read metrics.csv dates=ts | where ts >= '2026-03-08_06:00' | where ts < '2026-03-08_08:00' | where host == 'web1' | select ts,cpu
+ts,cpu
+2026-03-08 06:16:34+00:00,36.0
+2026-03-08 06:37:17+00:00,
+2026-03-08 06:57:59+00:00,31.6
+2026-03-08 07:16:42+00:00,29.7
+2026-03-08 07:36:05+00:00,50.0
+2026-03-08 07:57:43+00:00,17.9
+$ read sales.csv dates=date | where date > '2024-02-27' | where date <= '2024-03-02' | select date,store,amount
+date,store,amount
+2024-02-28,north,439.48
+2024-02-29,north,382.37
+2024-03-02,north,696.89
+2024-02-28,south,582.3
+2024-02-29,south,1094.59
+2024-03-01,south,705.0
+2024-03-02,south,588.41
+$ read tickets.csv dates=created,closed unit=s | isna closed | select id,created
+id,created
+5007,2026-03-02 02:46:58
+5011,2026-03-02 13:47:45
+5018,2026-03-03 17:19:01
+5022,2026-03-04 05:47:39
+$ read visits.csv dates=when format=%m/%d/%Y_%H:%M coerce | isna when | select visit,clinic
+visit,clinic
+5,west
+9,east
+$ read trades.csv dates=ts | between_time ts 09:40 09:45 | select ts,sym,price
+ts,sym,price
+2026-03-02 09:40:30.806,KRA,102.05
+2026-03-02 09:41:45.825,KRA,101.95
+2026-03-02 09:42:41.672,KRA,101.86
+2026-03-02 09:43:45.411,MND,47.55
+2026-03-02 09:43:48.748,KRA,102.0
+$ read metrics.csv dates=ts | between_time ts 23:50 00:10 | where host == 'db1' | select ts,mem
+ts,mem
+2026-03-07 23:53:53+00:00,2970
+2026-03-08 23:55:54+00:00,2989
+$ read tickets.csv dates=created,closed unit=s | sub closed created took | select id,took | head 6
+id,took
+5000,2 days 01:56:15
+5001,0 days 11:30:35
+5002,1 days 16:23:43
+5003,1 days 21:08:18
+5004,0 days 01:15:47
+5005,0 days 14:45:11
+$ read tickets.csv dates=created,closed unit=s | sub closed created took | secs took s | agg prio s:mean,s:max,s:count
+prio,s_mean,s_max,s_count
+P1,111999.0,176736.0,11
+P2,89860.2,197346.0,10
+P3,103049.93333333333,186973.0,15
+$ read tickets.csv dates=created,closed unit=s | tdiff created gap | select id,created,gap | head 5
+id,created,gap
+5000,2026-03-01 04:54:19,
+5001,2026-03-01 07:37:43,0 days 02:43:24
+5002,2026-03-01 10:02:32,0 days 02:24:49
+5003,2026-03-01 12:30:48,0 days 02:28:16
+5004,2026-03-01 16:20:27,0 days 03:49:39
+$ read tickets.csv dates=created,closed unit=s | sub closed created took | where took > '2_days' | select id,took
+id,took
+5000,2 days 01:56:15
+5013,2 days 02:58:05
+5023,2 days 00:39:59
+5025,2 days 03:26:58
+5032,2 days 03:56:13
+5033,2 days 06:49:06
+5034,2 days 01:05:36
+$ read meter.csv dates=at | tdiff at gap | secs gap s
+at,kwh,gap,s
+2026-01-30 22:10:00,15000.5,,
+2026-01-31 23:50:00,15012.25,1 days 01:40:00,92400.0
+2026-02-02 06:30:00,15030.0,1 days 06:40:00,110400.0
+2026-02-05 12:00:00,15071.75,3 days 05:30:00,279000.0
+2026-02-06 00:00:00,15078.0,0 days 12:00:00,43200.0
+2026-02-10 09:45:00,15130.5,4 days 09:45:00,380700.0
+2026-02-28 18:00:00,15333.25,18 days 08:15:00,1584900.0
+2026-03-01 00:00:00,15336.0,0 days 06:00:00,21600.0
+$ read trades.csv dates=ts | resample ts 5min price:last,qty:sum
+ts,price_last,qty_sum
+2026-03-02 09:30:00,101.43,1290
+2026-03-02 09:35:00,101.99,570
+2026-03-02 09:40:00,102.0,490
+2026-03-02 09:45:00,102.4,920
+2026-03-02 09:50:00,102.63,460
+2026-03-02 09:55:00,102.44,620
+2026-03-02 10:00:00,102.31,510
+2026-03-02 10:05:00,47.14,920
+2026-03-02 10:10:00,47.28,340
+$ read trades.csv dates=ts | resample ts 5min price:mean,price:count,qty:max
+ts,price_mean,price_count,qty_max
+2026-03-02 09:30:00,90.588,10,170
+2026-03-02 09:35:00,101.75714285714285,7,180
+2026-03-02 09:40:00,91.082,5,170
+2026-03-02 09:45:00,83.9688888888889,9,200
+2026-03-02 09:50:00,88.755,4,160
+2026-03-02 09:55:00,74.81,6,200
+2026-03-02 10:00:00,62.855714285714285,7,150
+2026-03-02 10:05:00,74.705,6,170
+2026-03-02 10:10:00,88.515,4,160
+$ read trades.csv dates=ts | where sym == 'KRA' | resample ts 10min price:first,price:min,price:max,price:last
+ts,price_first,price_min,price_max,price_last
+2026-03-02 09:30:00,101.25,101.24,101.99,101.99
+2026-03-02 09:40:00,102.05,101.86,102.4,102.4
+2026-03-02 09:50:00,102.53,102.44,102.72,102.44
+2026-03-02 10:00:00,102.46,102.18,102.46,102.33
+2026-03-02 10:10:00,102.29,102.2,102.29,102.29
+$ read trades.csv dates=ts | where sym == 'MND' | ohlc ts 15min price
+ts,open,high,low,close
+2026-03-02 09:30:00,47.53,47.62,47.53,47.55
+2026-03-02 09:45:00,47.56,47.56,47.05,47.05
+2026-03-02 10:00:00,46.94,47.28,46.94,47.28
+$ read trades.csv dates=ts | assign value = price * qty | resample ts 15min value:sum,qty:sum | assign vwap = value_sum / qty_sum | round vwap 4
+ts,value_sum,qty_sum,vwap
+2026-03-02 09:30:00,212816.7,2350,90.5603
+2026-03-02 09:45:00,167300.8,2000,83.6504
+2026-03-02 10:00:00,127532.6,1770,72.0523
+$ read trades.csv dates=ts | resample ts 15min price:median,price:std,qty:mean by=sym
+sym,ts,price_median,price_std,qty_mean
+KRA,2026-03-02 09:30:00,101.63,0.2794501702644255,98.42105263157895
+KRA,2026-03-02 09:45:00,102.42,0.21680881118178638,110.0
+KRA,2026-03-02 10:00:00,102.29,0.08746427842267564,100.0
+MND,2026-03-02 09:30:00,47.55,0.04725815626252395,160.0
+MND,2026-03-02 09:45:00,47.14,0.19091259530900334,97.14285714285714
+MND,2026-03-02 10:00:00,47.12,0.11218783851697392,107.77777777777777
+$ read trades.csv dates=ts | resample ts 10min qty:sum by=sym
+sym,ts,qty_sum
+KRA,2026-03-02 09:30:00,1550
+KRA,2026-03-02 09:40:00,960
+KRA,2026-03-02 09:50:00,680
+KRA,2026-03-02 10:00:00,530
+KRA,2026-03-02 10:10:00,270
+MND,2026-03-02 09:30:00,310
+MND,2026-03-02 09:40:00,450
+MND,2026-03-02 09:50:00,400
+MND,2026-03-02 10:00:00,900
+MND,2026-03-02 10:10:00,70
+$ read metrics.csv dates=ts | where host == 'web2' | resample ts 3h cpu:mean,req:sum,mem:max
+ts,cpu_mean,req_sum,mem_max
+2026-03-07 18:00:00+00:00,47.86666666666667,900,2815
+2026-03-07 21:00:00+00:00,52.625,1454,2898
+2026-03-08 00:00:00+00:00,47.528571428571425,2377,2941
+2026-03-08 03:00:00+00:00,48.625,2162,2753
+2026-03-08 06:00:00+00:00,47.525,1341,2909
+2026-03-08 09:00:00+00:00,52.37777777777778,1889,2932
+2026-03-08 12:00:00+00:00,49.675,1458,2937
+2026-03-08 15:00:00+00:00,47.599999999999994,1878,2944
+2026-03-08 18:00:00+00:00,43.18333333333334,1331,2903
+2026-03-08 21:00:00+00:00,54.028571428571425,1205,2784
+2026-03-09 00:00:00+00:00,50.4,1172,2945
+2026-03-09 03:00:00+00:00,45.5375,2201,2914
+$ read metrics.csv dates=ts | resample ts 6h req:sum,cpu:count by=host
+host,ts,req_sum,cpu_count
+db1,2026-03-07 18:00:00+00:00,234,12
+db1,2026-03-08 00:00:00+00:00,293,11
+db1,2026-03-08 06:00:00+00:00,318,16
+db1,2026-03-08 12:00:00+00:00,280,13
+db1,2026-03-08 18:00:00+00:00,320,15
+db1,2026-03-09 00:00:00+00:00,361,16
+web1,2026-03-07 18:00:00+00:00,2505,10
+web1,2026-03-08 00:00:00+00:00,3697,18
+web1,2026-03-08 06:00:00+00:00,4097,14
+web1,2026-03-08 12:00:00+00:00,3828,18
+web1,2026-03-08 18:00:00+00:00,3538,15
+web1,2026-03-09 00:00:00+00:00,3077,17
+web2,2026-03-07 18:00:00+00:00,2354,11
+web2,2026-03-08 00:00:00+00:00,4539,15
+web2,2026-03-08 06:00:00+00:00,3230,17
+web2,2026-03-08 12:00:00+00:00,3336,17
+web2,2026-03-08 18:00:00+00:00,2536,13
+web2,2026-03-09 00:00:00+00:00,3373,15
+$ read metrics.csv dates=ts | resample ts 6h cpu:mean closed=right label=right by=host | round cpu_mean 3
+host,ts,cpu_mean
+db1,2026-03-08 00:00:00+00:00,66.767
+db1,2026-03-08 06:00:00+00:00,61.118
+db1,2026-03-08 12:00:00+00:00,64.362
+db1,2026-03-08 18:00:00+00:00,73.369
+db1,2026-03-09 00:00:00+00:00,58.993
+db1,2026-03-09 06:00:00+00:00,68.688
+web1,2026-03-08 00:00:00+00:00,39.25
+web1,2026-03-08 06:00:00+00:00,33.622
+web1,2026-03-08 12:00:00+00:00,38.707
+web1,2026-03-08 18:00:00+00:00,36.317
+web1,2026-03-09 00:00:00+00:00,31.553
+web1,2026-03-09 06:00:00+00:00,35.035
+web2,2026-03-08 00:00:00+00:00,51.327
+web2,2026-03-08 06:00:00+00:00,48.113
+web2,2026-03-08 12:00:00+00:00,50.094
+web2,2026-03-08 18:00:00+00:00,48.576
+web2,2026-03-09 00:00:00+00:00,49.023
+web2,2026-03-09 06:00:00+00:00,47.807
+$ read metrics.csv dates=ts | resample ts 4h req:sum origin=epoch | head 5
+ts,req_sum
+2026-03-07 20:00:00+00:00,5093
+2026-03-08 00:00:00+00:00,6239
+2026-03-08 04:00:00+00:00,4912
+2026-03-08 08:00:00+00:00,5023
+2026-03-08 12:00:00+00:00,4772
+$ read metrics.csv dates=ts | resample ts 4h req:sum offset=1h | head 5
+ts,req_sum
+2026-03-07 17:00:00+00:00,1801
+2026-03-07 21:00:00+00:00,4530
+2026-03-08 01:00:00+00:00,6103
+2026-03-08 05:00:00+00:00,4836
+2026-03-08 09:00:00+00:00,5188
+$ read sales.csv dates=date | where store == 'north' | resample date W amount:sum,amount:count
+date,amount_sum,amount_count
+2024-01-07,5194.75,7
+2024-01-14,3479.85,6
+2024-01-21,4135.65,6
+2024-01-28,3020.2799999999997,4
+2024-02-04,4363.36,6
+2024-02-11,4643.29,6
+2024-02-18,4405.92,6
+2024-02-25,4532.55,7
+2024-03-03,3056.91,6
+2024-03-10,5304.87,7
+2024-03-17,4597.0599999999995,6
+2024-03-24,5727.5,7
+2024-03-31,4083.98,7
+2024-04-07,4853.110000000001,6
+2024-04-14,3783.65,7
+2024-04-21,3274.77,5
+2024-04-28,4165.54,6
+2024-05-05,597.94,1
+$ read sales.csv dates=date | resample date W-MON amount:sum by=store | head 8
+store,date,amount_sum
+north,2024-01-01,973.34
+north,2024-01-08,4649.43
+north,2024-01-15,3450.13
+north,2024-01-22,3737.35
+north,2024-01-29,3993.2
+north,2024-02-05,4198.95
+north,2024-02-12,3834.7799999999997
+north,2024-02-19,5174.4400000000005
+$ read sales.csv dates=date | resample date ME amount:sum,amount:mean by=store | round amount_mean 2
+store,date,amount_sum,amount_mean
+north,2024-01-31,17737.92,682.23
+north,2024-02-29,18015.38,692.9
+north,2024-03-31,20792.67,716.99
+north,2024-04-30,16675.010000000002,667.0
+south,2024-01-31,16198.35,578.51
+south,2024-02-29,14744.52,614.36
+south,2024-03-31,17102.96,657.81
+south,2024-04-30,15780.38,657.52
+$ read sales.csv dates=date | resample date MS amount:sum,amount:max
+date,amount_sum,amount_max
+2024-01-01,33936.27,1076.7
+2024-02-01,32759.9,1094.59
+2024-03-01,37895.63,1094.6
+2024-04-01,32455.39,1084.98
+$ read sales.csv dates=date | resample date QE amount:sum,amount:count by=store
+store,date,amount_sum,amount_count
+north,2024-03-31,56545.97,81
+north,2024-06-30,16675.010000000002,25
+south,2024-03-31,48045.83,78
+south,2024-06-30,15780.38,24
+$ read sales.csv dates=date | resample date YE amount:sum
+date,amount_sum
+2024-12-31,137047.19
+$ read sales.csv dates=date | resample date 10D amount:sum | head 6
+date,amount_sum
+2024-01-01,12518.22
+2024-01-11,11624.75
+2024-01-21,9237.63
+2024-01-31,11096.26
+2024-02-10,10221.710000000001
+2024-02-20,11997.6
+$ read sales.csv dates=date | where store == 'south' | resample date 2W amount:sum
+date,amount_sum
+2024-01-07,4398.28
+2024-01-21,7140.01
+2024-02-04,6644.18
+2024-02-18,6273.65
+2024-03-03,8204.77
+2024-03-17,6077.91
+2024-03-31,9307.029999999999
+2024-04-14,7631.0599999999995
+2024-04-28,7419.79
+2024-05-12,729.53
+$ read sales.csv dates=date | where store == 'south' | resample date SME amount:sum
+date,amount_sum
+2023-12-31,8029.95
+2024-01-15,8168.4
+2024-01-31,6122.24
+2024-02-15,7527.69
+2024-02-29,7144.26
+2024-03-15,9958.69
+2024-03-31,8725.66
+2024-04-15,7832.4400000000005
+2024-04-30,316.88
+$ read tickets.csv dates=created,closed unit=s | resample created D id:count,prio:first | head 8
+created,id_count,prio_first
+2026-03-01,7,P2
+2026-03-02,7,P2
+2026-03-03,7,P2
+2026-03-04,8,P1
+2026-03-05,8,P3
+2026-03-06,3,P3
+$ read tickets.csv dates=created,closed unit=s | resample closed 12h id:count
+closed,id_count
+2026-03-01 12:00:00,3
+2026-03-02 00:00:00,1
+2026-03-02 12:00:00,0
+2026-03-03 00:00:00,4
+2026-03-03 12:00:00,2
+2026-03-04 00:00:00,3
+2026-03-04 12:00:00,3
+2026-03-05 00:00:00,4
+2026-03-05 12:00:00,2
+2026-03-06 00:00:00,6
+2026-03-06 12:00:00,4
+2026-03-07 00:00:00,1
+2026-03-07 12:00:00,3
+$ read visits.csv dates=when format=%m/%d/%Y_%H:%M coerce | resample when D visit:count
+when,visit_count
+2026-03-01,2
+2026-03-02,1
+2026-03-03,0
+2026-03-04,1
+2026-03-05,0
+2026-03-06,0
+2026-03-07,0
+2026-03-08,0
+2026-03-09,2
+2026-03-10,1
+2026-03-11,0
+2026-03-12,0
+2026-03-13,0
+2026-03-14,0
+2026-03-15,1
+2026-03-16,1
+2026-03-17,0
+2026-03-18,0
+2026-03-19,0
+2026-03-20,0
+2026-03-21,0
+2026-03-22,0
+2026-03-23,0
+2026-03-24,0
+2026-03-25,0
+2026-03-26,0
+2026-03-27,0
+2026-03-28,0
+2026-03-29,0
+2026-03-30,0
+2026-03-31,1
+$ read meter.csv dates=at | resample at D kwh:last | head 6
+at,kwh_last
+2026-01-30,15000.5
+2026-01-31,15012.25
+2026-02-01,
+2026-02-02,15030.0
+2026-02-03,
+2026-02-04,
+$ read meter.csv dates=at | resample at ME kwh:min,kwh:max
+at,kwh_min,kwh_max
+2026-01-31,15000.5,15012.25
+2026-02-28,15030.0,15333.25
+2026-03-31,15336.0,15336.0
+$ read meter.csv dates=at | asfreq at D | head 6
+at,kwh
+2026-01-30 22:10:00,15000.5
+2026-01-31 22:10:00,
+2026-02-01 22:10:00,
+2026-02-02 22:10:00,
+2026-02-03 22:10:00,
+2026-02-04 22:10:00,
+$ read meter.csv dates=at | asfreq at D ffill | head 8
+at,kwh
+2026-01-30 22:10:00,15000.5
+2026-01-31 22:10:00,15000.5
+2026-02-01 22:10:00,15012.25
+2026-02-02 22:10:00,15030.0
+2026-02-03 22:10:00,15030.0
+2026-02-04 22:10:00,15030.0
+2026-02-05 22:10:00,15071.75
+2026-02-06 22:10:00,15078.0
+$ read meter.csv dates=at | asfreq at D bfill | tail 3
+at,kwh
+2026-02-26 22:10:00,15333.25
+2026-02-27 22:10:00,15333.25
+2026-02-28 22:10:00,15336.0
+$ read meter.csv dates=at | floor at D day | asfreq day D | head 4
+day,at,kwh
+2026-01-30,2026-01-30 22:10:00,15000.5
+2026-01-31,2026-01-31 23:50:00,15012.25
+2026-02-01,,
+2026-02-02,2026-02-02 06:30:00,15030.0
+$ read meter.csv dates=at | asfreq at 12h | head 4
+at,kwh
+2026-01-30 22:10:00,15000.5
+2026-01-31 10:10:00,
+2026-01-31 22:10:00,
+2026-02-01 10:10:00,
+$ read sales.csv dates=date | where store == 'north' | asfreq date D | isna amount | select date,store
+date,store
+2024-01-09,
+2024-01-21,
+2024-01-22,
+2024-01-23,
+2024-01-26,
+2024-02-03,
+2024-02-09,
+2024-02-12,
+2024-03-01,
+2024-03-16,
+2024-04-04,
+2024-04-15,
+2024-04-19,
+2024-04-26,
+$ range 2026-03-01 2026-03-03 8h | dt t day_name name
+t,name
+2026-03-01 00:00:00,Sunday
+2026-03-01 08:00:00,Sunday
+2026-03-01 16:00:00,Sunday
+2026-03-02 00:00:00,Monday
+2026-03-02 08:00:00,Monday
+2026-03-02 16:00:00,Monday
+2026-03-03 00:00:00,Tuesday
+$ range 2024-01-31 2024-06-30 ME
+t
+2024-01-31
+2024-02-29
+2024-03-31
+2024-04-30
+2024-05-31
+2024-06-30
+$ range 2024-02-26 2024-03-04 D | dt t week w | dt t dayofweek dow
+t,w,dow
+2024-02-26,9,0
+2024-02-27,9,1
+2024-02-28,9,2
+2024-02-29,9,3
+2024-03-01,9,4
+2024-03-02,9,5
+2024-03-03,9,6
+2024-03-04,10,0
+$ range 2026-01-01 2026-12-31 QS
+t
+2026-01-01
+2026-04-01
+2026-07-01
+2026-10-01
+$ range 2026-03-07 2026-03-21 W-SAT
+t
+2026-03-07
+2026-03-14
+2026-03-21
+$ read trades.csv dates=ts | where sym == 'KRA' | trolling ts 2min price mean avg | round avg 4 | head 10
+ts,sym,price,qty,avg
+2026-03-02 09:30:00.000,KRA,101.25,40,101.25
+2026-03-02 09:30:29.458,KRA,101.42,140,101.335
+2026-03-02 09:31:13.787,KRA,101.29,100,101.32
+2026-03-02 09:32:14.864,KRA,101.41,140,101.3733
+2026-03-02 09:32:20.591,KRA,101.4,170,101.38
+2026-03-02 09:33:22.379,KRA,101.24,70,101.35
+2026-03-02 09:34:35.827,KRA,101.29,150,101.265
+2026-03-02 09:34:58.587,KRA,101.43,170,101.32
+2026-03-02 09:36:01.481,KRA,101.6,160,101.44
+2026-03-02 09:36:14.145,KRA,101.7,40,101.505
+$ read trades.csv dates=ts | trolling ts 5min qty sum vol | select ts,qty,vol | head 10
+ts,qty,vol
+2026-03-02 09:30:00.000,40,40.0
+2026-03-02 09:30:29.458,140,180.0
+2026-03-02 09:31:06.830,160,340.0
+2026-03-02 09:31:13.787,100,440.0
+2026-03-02 09:32:14.864,140,580.0
+2026-03-02 09:32:20.591,170,750.0
+2026-03-02 09:33:22.379,70,820.0
+2026-03-02 09:33:32.308,150,970.0
+2026-03-02 09:34:35.827,150,1120.0
+2026-03-02 09:34:58.587,170,1290.0
+$ read trades.csv dates=ts | trolling ts 90s qty count n | select ts,n | head 8
+ts,n
+2026-03-02 09:30:00.000,1.0
+2026-03-02 09:30:29.458,2.0
+2026-03-02 09:31:06.830,3.0
+2026-03-02 09:31:13.787,4.0
+2026-03-02 09:32:14.864,3.0
+2026-03-02 09:32:20.591,4.0
+2026-03-02 09:33:22.379,3.0
+2026-03-02 09:33:32.308,4.0
+$ read metrics.csv dates=ts | where host == 'db1' | trolling ts 1h cpu max peak | select ts,cpu,peak | head 8
+ts,cpu,peak
+2026-03-07 20:00:22+00:00,75.4,75.4
+2026-03-07 20:20:25+00:00,76.0,76.0
+2026-03-07 20:39:51+00:00,72.3,76.0
+2026-03-07 20:58:43+00:00,67.8,76.0
+2026-03-07 21:37:21+00:00,61.6,72.3
+2026-03-07 21:58:49+00:00,75.4,75.4
+2026-03-07 22:17:49+00:00,49.7,75.4
+2026-03-07 22:36:01+00:00,57.9,75.4
+$ read sales.csv dates=date | where store == 'north' | trolling date 7D amount sum wk | round wk 2 | head 10
+date,store,amount,wk
+2024-01-01,north,973.34,973.34
+2024-01-02,north,375.11,1348.45
+2024-01-03,north,909.9,2258.35
+2024-01-04,north,455.34,2713.69
+2024-01-05,north,571.93,3285.62
+2024-01-06,north,868.63,4154.25
+2024-01-07,north,1040.5,5194.75
+2024-01-08,north,428.02,4649.43
+2024-01-10,north,561.54,3925.96
+2024-01-11,north,879.7,4350.32
+$ read sales.csv dates=date | where store == 'south' | trolling date 3D amount mean avg | round avg 2 | head 12
+date,store,amount,avg
+2024-01-01,south,352.97,352.97
+2024-01-02,south,589.35,471.16
+2024-01-03,south,558.5,500.27
+2024-01-04,south,869.8,672.55
+2024-01-05,south,750.11,726.14
+2024-01-06,south,712.12,777.34
+2024-01-07,south,565.43,675.89
+2024-01-08,south,1071.55,783.03
+2024-01-09,south,579.16,738.71
+2024-01-10,south,284.92,645.21
+2024-01-12,south,648.93,466.92
+2024-01-13,south,632.06,640.5
+$ read metrics.csv dates=ts | tz ts convert America/New_York | head 3
+ts,host,cpu,mem,req
+2026-03-07 15:00:11-05:00,web1,48.5,2519,264
+2026-03-07 15:19:46-05:00,web1,50.2,2580,349
+2026-03-07 15:39:39-05:00,web1,46.6,2593,54
+$ read metrics.csv dates=ts | tz ts convert America/New_York | where host == 'web1' | where ts >= '2026-03-08_00:40-05:00' | head 6
+ts,host,cpu,mem,req
+2026-03-08 00:56:20-05:00,web1,16.3,2344,160
+2026-03-08 01:16:34-05:00,web1,36.0,2360,131
+2026-03-08 01:37:17-05:00,web1,,2767,340
+2026-03-08 01:57:59-05:00,web1,31.6,2786,284
+2026-03-08 03:16:42-04:00,web1,29.7,2654,395
+2026-03-08 03:36:05-04:00,web1,50.0,2718,103
+$ read metrics.csv dates=ts | tz ts convert America/New_York | dt ts hour h | where host == 'web2' | agg h req:sum | head 8
+h,req_sum
+0,1540
+1,1311
+3,475
+4,331
+5,774
+6,630
+7,485
+8,443
+$ read metrics.csv dates=ts | tz ts convert America/New_York | resample ts D req:sum,cpu:count
+ts,req_sum,cpu_count
+2026-03-07 00:00:00-05:00,12434,69
+2026-03-08 00:00:00-05:00,27135,177
+2026-03-09 00:00:00-04:00,2347,17
+$ read metrics.csv dates=ts | tz ts convert America/New_York | resample ts 6h req:sum | head 6
+ts,req_sum
+2026-03-07 12:00:00-05:00,4169
+2026-03-07 18:00:00-05:00,8265
+2026-03-08 00:00:00-05:00,7619
+2026-03-08 07:00:00-04:00,7398
+2026-03-08 13:00:00-04:00,6348
+2026-03-08 19:00:00-04:00,6895
+$ read metrics.csv dates=ts | tz ts convert America/New_York | normalize ts d | agg d req:sum
+d,req_sum
+2026-03-07 00:00:00-05:00,12434
+2026-03-08 00:00:00-05:00,27135
+2026-03-09 00:00:00-04:00,2347
+$ read metrics.csv dates=ts | tz ts convert UTC | head 2
+ts,host,cpu,mem,req
+2026-03-07 20:00:11+00:00,web1,48.5,2519,264
+2026-03-07 20:19:46+00:00,web1,50.2,2580,349
+$ read trades.csv dates=ts | tz ts localize America/New_York | tz ts convert UTC | head 3
+ts,sym,price,qty
+2026-03-02 14:30:00+00:00,KRA,101.25,40
+2026-03-02 14:30:29.458000+00:00,KRA,101.42,140
+2026-03-02 14:31:06.830000+00:00,MND,47.53,160
+$ read visits.csv dates=when format=%m/%d/%Y_%H:%M coerce | tz when localize America/New_York | select visit,when | head 8
+visit,when
+1,2026-03-01 08:15:00-05:00
+2,2026-03-01 09:40:00-05:00
+3,2026-03-02 13:05:00-05:00
+4,2026-03-04 16:30:00-05:00
+5,
+6,2026-03-09 07:55:00-04:00
+7,2026-03-09 18:20:00-04:00
+8,2026-03-10 12:00:00-04:00
+$ read metrics.csv dates=ts | tz ts convert America/New_York | strftime ts %Y-%m-%d_%H:%M_%Z f | select f | head 2
+f
+2026-03-07 15:00 EST
+2026-03-07 15:19 EST
+$ range 2026-03-07 2026-03-10 D tz=America/New_York
+t
+2026-03-07 00:00:00-05:00
+2026-03-08 00:00:00-05:00
+2026-03-09 00:00:00-04:00
+2026-03-10 00:00:00-04:00
+$ range 2026-11-01 2026-11-02 6h tz=America/New_York
+t
+2026-11-01 00:00:00-04:00
+2026-11-01 05:00:00-05:00
+2026-11-01 11:00:00-05:00
+2026-11-01 17:00:00-05:00
+2026-11-01 23:00:00-05:00
+$ read metrics.csv dates=ts | resample ts 1fortnight req:sum
+! ValueError: Invalid frequency: 1fortnight. Failed to parse with error message: ValueError("Invalid frequency: fortnight. Failed to parse with error message: KeyError('fortnight').")
+$ read metrics.csv dates=ts | resample host h req:sum
+! TypeError: Only valid with DatetimeIndex, TimedeltaIndex or PeriodIndex, but got an instance of 'Index'
+$ read sales.csv dates=date | dt amount year y
+! AttributeError: Can only use .dt accessor with datetimelike values
+$ read sales.csv dates=nope
+! KeyError: 'nope'
+$ read metrics.csv dates=ts | tz ts localize America/New_York
+! TypeError: Already tz-aware, use tz_convert to convert.
