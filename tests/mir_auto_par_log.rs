@@ -166,53 +166,43 @@ fn mir_written_par_logs_as_its_tasks() {
 
 /// A later statement's panic ends the program while an earlier
 /// statement's task still holds its record: the record reaches the
-/// backend before the panic is reported, as it would run in order
-/// (B-2026-10-27-30).
+/// backend before the panic is reported (B-2026-10-27-30). `quick`'s
+/// record waits behind `slow`, which is still asleep when `boom` panics,
+/// so it is out only if the panic lets it go; `slow` has logged nothing
+/// yet and gives nothing. The sleeps fix the order on every schedule: an
+/// earlier version raced a CPU loop against the panic and lost under load.
 const PANICS: &str = r#"import std.log.{info};
+import std.time.{sleep, Duration};
 
-fn inner(k: i64) -> i64 {
-    let mut s = 0;
-    let mut j = 0;
-    while j < 3 {
-        s = s + (k + j) % 7;
-        j = j + 1;
-    }
-    s
-}
-
-fn work(n: i64) -> i64 {
-    let mut s = 0;
-    let mut i = 0;
-    while i < n {
-        s = s + inner(i);
-        i = i + 1;
-    }
-    s
-}
-
-fn step(tag: i64, n: i64) -> i64 {
-    let r = work(n);
+fn slow(tag: i64, ms: i64) -> i64 {
+    sleep(Duration.ms(ms));
     info("step", tag: tag);
-    r
+    tag
 }
 
-fn boom(n: i64) -> i64 {
-    let r = work(n);
+fn quick(tag: i64) -> i64 {
+    info("step", tag: tag);
+    tag
+}
+
+fn boom(ms: i64) -> i64 {
+    sleep(Duration.ms(ms));
     let v: Vec[i64] = Vec.new();
-    r + v[r]
+    v[ms]
 }
 
 fn main() {
-    let a = step(1, 10);
-    let b = boom(3000000);
-    println(a + b);
+    let a = slow(1, 3000);
+    let b = quick(2);
+    let c = boom(300);
+    println(a + b + c);
 }
 "#;
 
 #[test]
 fn mir_auto_par_logs_before_a_later_panic() {
     let path = write("panics", PANICS);
-    let record = "{\"level\":\"info\",\"msg\":\"step\",\"tag\":1,\"task_id\":null}\n";
+    let record = "{\"level\":\"info\",\"msg\":\"step\",\"tag\":2,\"task_id\":null}\n";
     let check = |lane: &str, out: &Output| {
         let err = text(&out.stderr);
         assert_eq!(out.status.code(), Some(101), "{lane}: {err}");
@@ -231,12 +221,6 @@ fn mir_auto_par_logs_before_a_later_panic() {
         );
         check(&format!("{lane:?}"), &out);
     }
-    // Built, the first statement's own group holds the record while its
-    // long loop runs, and the second statement panics at once.
-    let src = PANICS
-        .replace("step(1, 10)", "step(1, 30000000)")
-        .replace("boom(3000000)", "boom(10)");
-    let path = write("panics-built", &src);
     let bin = path.with_file_name("main.out");
     let out = karac(&["build", "-o", bin.to_str().unwrap()], &path);
     let err = text(&out.stderr);
