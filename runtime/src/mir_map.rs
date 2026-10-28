@@ -59,8 +59,16 @@ pub struct MirMap {
     index_used: usize,
     dead: Vec<bool>,
     /// A Fenwick tree over `cap` slots counting the live ones, kept only
-    /// while there are holes: index to slot and back in `O(log n)`.
-    live: Vec<i64>,
+    /// while there are holes: index to slot and back in `O(log n)`. Built
+    /// when an index is first asked of a holed table, not by the removal
+    /// that makes the hole (B-2026-10-24-6): lookups hand back entries, so
+    /// a table that is only searched and changed never needs it. Readers
+    /// may share a table, so the one that finds it stale builds it while
+    /// the others wait ([`MirMap::ensure_live`]).
+    live: std::cell::UnsafeCell<Vec<i64>>,
+    /// Whether `live` counts the current slots: [`LIVE_OK`], [`LIVE_STALE`]
+    /// or [`LIVE_BUILDING`].
+    live_state: std::sync::atomic::AtomicU8,
     /// The last index and slot paired while there were holes, as
     /// `index << 32 | slot` ([`NO_PAIR`] for none): a lookup's index is
     /// most often handed straight back to `at`, `remove` or the next
@@ -76,6 +84,13 @@ pub struct MirMap {
 }
 
 const NO_PAIR: u64 = u64::MAX;
+
+const LIVE_OK: u8 = 0;
+const LIVE_STALE: u8 = 1;
+const LIVE_BUILDING: u8 = 2;
+
+/// The holes a hashed table keeps before a removal compacts it, at least.
+const COMPACT_MIN_HOLES: usize = 32;
 
 // The words compiled code reads, in order.
 const _: () = {
@@ -244,14 +259,15 @@ impl MirMap {
             return (p & 0xFFFF_FFFF) as usize;
         }
         // The least slot with `i + 1` live slots up to it.
-        let n = self.live.len();
+        let live = self.ensure_live();
+        let n = live.len();
         let (mut pos, mut rem) = (0usize, i as i64 + 1);
         let mut step = n.next_power_of_two();
         while step > 0 {
             let next = pos + step;
-            if next <= n && self.live[next - 1] < rem {
+            if next <= n && live[next - 1] < rem {
                 pos = next;
-                rem -= self.live[next - 1];
+                rem -= live[next - 1];
             }
             step /= 2;
         }
@@ -281,36 +297,78 @@ impl MirMap {
             return (p >> 32) as usize;
         }
         // The live slots before `s`.
+        let live = self.ensure_live();
         let (mut k, mut n) = (s, 0i64);
         while k > 0 {
-            n += self.live[k - 1];
+            n += live[k - 1];
             k &= k - 1;
         }
         self.remember(n as usize, s);
         n as usize
     }
 
+    /// Counts slot `s` `d` more live, if the tree is current; a stale one
+    /// is rebuilt whole when next asked.
     fn add_live(&mut self, s: usize, d: i64) {
+        if *self.live_state.get_mut() != LIVE_OK {
+            return;
+        }
+        let live = self.live.get_mut();
         let mut k = s + 1;
-        while k <= self.live.len() {
-            self.live[k - 1] += d;
+        while k <= live.len() {
+            live[k - 1] += d;
             k += k & k.wrapping_neg();
         }
     }
 
-    /// The Fenwick tree over the current slots, built in `O(cap)`.
-    fn rebuild_live(&mut self) {
-        self.live.clear();
-        self.live.resize(self.cap, 0);
-        for s in 0..self.slots {
-            if !self.dead[s] {
-                self.live[s] += 1;
+    /// Marks the tree as not counting the current slots.
+    fn stale_live(&mut self) {
+        *self.live_state.get_mut() = LIVE_STALE;
+    }
+
+    /// The tree, current: built here, in `O(cap)`, if it is stale. A
+    /// table is changed only through `&mut`, so while readers share it
+    /// nothing else writes `live`, and the one reader that claims the
+    /// build writes it while the rest wait for [`LIVE_OK`].
+    fn ensure_live(&self) -> &[i64] {
+        use std::sync::atomic::Ordering::{Acquire, Release};
+        loop {
+            match self.live_state.load(Acquire) {
+                LIVE_OK => break,
+                LIVE_STALE => {
+                    if self
+                        .live_state
+                        .compare_exchange(LIVE_STALE, LIVE_BUILDING, Acquire, Acquire)
+                        .is_ok()
+                    {
+                        // SAFETY: this reader holds LIVE_BUILDING, so no
+                        // other reads or writes `live` until it stores
+                        // LIVE_OK, and no writer holds the table.
+                        self.build_live(unsafe { &mut *self.live.get() });
+                        self.live_state.store(LIVE_OK, Release);
+                        break;
+                    }
+                }
+                _ => std::hint::spin_loop(),
+            }
+        }
+        // SAFETY: LIVE_OK: nothing writes `live` while a reader holds it.
+        unsafe { &*self.live.get() }
+    }
+
+    /// The Fenwick tree over the current slots, into `live`.
+    fn build_live(&self, live: &mut Vec<i64>) {
+        live.clear();
+        live.resize(self.cap, 0);
+        for (n, &dead) in live.iter_mut().zip(&self.dead[..self.slots]) {
+            if !dead {
+                *n += 1;
             }
         }
         for k in 1..=self.cap {
             let up = k + (k & k.wrapping_neg());
             if up <= self.cap {
-                self.live[up - 1] += self.live[k - 1];
+                live[up - 1] += live[k - 1];
             }
         }
     }
@@ -336,7 +394,8 @@ impl MirMap {
         self.hashes.truncate(w);
         self.dead.clear();
         self.dead.resize(w, false);
-        self.live.clear();
+        self.live.get_mut().clear();
+        self.stale_live();
         let cells = self.index.len().max(8);
         self.reindex(cells);
     }
@@ -354,7 +413,7 @@ impl MirMap {
         self.buf = karac_realloc_or_panic(old, cap * self.entry_size.max(1));
         self.cap = cap;
         if self.holes > 0 {
-            self.rebuild_live();
+            self.stale_live();
         }
     }
 }
@@ -556,7 +615,8 @@ fn empty(entry_size: usize) -> *mut MirMap {
         index: Vec::new(),
         index_used: 0,
         dead: Vec::new(),
-        live: Vec::new(),
+        live: std::cell::UnsafeCell::new(Vec::new()),
+        live_state: std::sync::atomic::AtomicU8::new(LIVE_STALE),
         pair: std::sync::atomic::AtomicU64::new(NO_PAIR),
         unkeyed: false,
     }))
@@ -839,13 +899,16 @@ unsafe fn remove_slot(m: &mut MirMap, s: usize, out: *mut u8) {
     if m.holes == 0 {
         m.dead[s] = true;
         m.holes = 1;
-        m.rebuild_live();
+        m.stale_live();
     } else {
         m.dead[s] = true;
         m.holes += 1;
         m.add_live(s, -1);
     }
-    if m.holes > m.len() {
+    // A small table keeps up to `COMPACT_MIN_HOLES` holes: compacting it
+    // after every few removes (a sliding window over k keys) cost more
+    // than the holes do (B-2026-10-24-6).
+    if m.holes > m.len().max(COMPACT_MIN_HOLES) {
         m.compact();
     }
 }
@@ -869,7 +932,8 @@ pub unsafe extern "C" fn karac_mir_map_clear(h: *mut MirMap) {
     m.index_used = 0;
     m.dead.clear();
     m.holes = 0;
-    m.live.clear();
+    m.live.get_mut().clear();
+    m.stale_live();
     m.forget();
 }
 
