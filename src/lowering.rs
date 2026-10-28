@@ -21,6 +21,7 @@ use crate::typechecker::{
     ConstArg, DimArg, FloatSize, IntSize, Type, TypeCheckResult, TypeChecker, UIntSize,
     VariantTypeInfo,
 };
+use rustc_hash::FxHashMap;
 
 /// The set of method names this pass desugars comparison operators into.
 /// Each is a relational-trait method (`PartialEq::eq`/`ne`, `Ord`/`PartialOrd`
@@ -1535,6 +1536,10 @@ impl<'a> Lowerer<'a> {
         // method-call span (== the receiver's span in this AST) — capture it
         // before the kind borrow.
         let self_span = expr.span;
+        // B-2026-10-28-17 — a UFCS call, `Trait.method(x, ..)`, is the
+        // receiver form `x.method(..)` the typechecker typed it as. Before
+        // the default fill, which is planned for the receiver form.
+        rewrite_ufcs_call(expr, &self.tc.ufcs_calls);
         // B-2026-09-01-20 — splice in the instance-method DEFAULT ARGUMENTS the
         // typechecker planned.
         //
@@ -3425,4 +3430,69 @@ fn rename_shadows_in_expr(e: &mut Expr, n: &str, counter: &std::cell::Cell<usize
         &mut |c| rename_shadows_in_expr(c, n, counter),
         &mut |b| rename_shadows_in_block(b, n, counter),
     );
+}
+
+/// B-2026-10-28-17 — rewrite a UFCS call, `Trait.method(x, ..)` or
+/// `Type.method(x, ..)` of a method that takes `self`, into the receiver
+/// form `x.method(..)` the typechecker typed it as (`ufcs`, keyed by the
+/// call's span). The call keeps its span and id, so every table the checker
+/// keyed by them describes the rewritten call.
+pub fn rewrite_ufcs_call(expr: &mut Expr, ufcs: &FxHashMap<SpanKey, String>) {
+    let self_span = expr.span;
+    if let Some(name) = ufcs.get(&SpanKey::from_span(&self_span)) {
+        match &mut expr.kind {
+            ExprKind::MethodCall { object, args, .. }
+                if matches!(&object.kind, ExprKind::Identifier(n) if n == name)
+                    && !args.is_empty() =>
+            {
+                let recv = args.remove(0);
+                **object = recv.value;
+            }
+            ExprKind::Call { callee, args } if !args.is_empty() => {
+                if let ExprKind::Path {
+                    segments,
+                    generic_args: None,
+                } = &callee.kind
+                {
+                    if let [n, method] = segments.as_slice() {
+                        if n == name {
+                            let method = method.clone();
+                            let mut args = std::mem::take(args);
+                            let recv = args.remove(0);
+                            let close = Span {
+                                offset: (self_span.offset + self_span.length).saturating_sub(1),
+                                length: 1,
+                                ..self_span
+                            };
+                            expr.kind = ExprKind::MethodCall {
+                                object: Box::new(recv.value),
+                                method,
+                                turbofish: None,
+                                args,
+                                args_close_span: close,
+                            };
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// [`rewrite_ufcs_call`] over a whole program.
+pub fn rewrite_ufcs(program: &mut Program, ufcs: &FxHashMap<SpanKey, String>) {
+    struct Ufcs<'u>(&'u FxHashMap<SpanKey, String>);
+    impl crate::span_visitor::MutVisitor for Ufcs<'_> {
+        fn span(&mut self, _span: &mut Span) {}
+        fn expr(&mut self, e: &mut Expr) {
+            rewrite_ufcs_call(e, self.0);
+        }
+    }
+    if ufcs.is_empty() {
+        return;
+    }
+    for item in program.items.iter_mut() {
+        crate::span_visitor::walk_item_mut_with(item, &mut Ufcs(ufcs));
+    }
 }

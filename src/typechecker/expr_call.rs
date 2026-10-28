@@ -1009,6 +1009,26 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
+        // `Trait.method(x, ..)` / `Type.method(x, ..)` of a method that takes
+        // `self`: the receiver form `x.method(..)` (B-2026-10-28-17, -20).
+        if let ExprKind::Path {
+            segments,
+            generic_args: None,
+        } = &callee.kind
+        {
+            if let [name, method] = segments.as_slice() {
+                let close = Span {
+                    offset: (span.offset + span.length).saturating_sub(1),
+                    length: 1,
+                    ..*span
+                };
+                if let Some(ty) = self.try_ufcs_method(name, method, args, span, &close) {
+                    self.record_expr_type(span, &ty);
+                    return ty;
+                }
+            }
+        }
+
         // Comptime stdlib surface (substrate 3): the `compiler` and `ast`
         // modules. `ast.expr(s)` is the quasi-quote AST builder (a string →
         // `Expr` node, spliced at the comptime site); `compiler.error(msg)` is

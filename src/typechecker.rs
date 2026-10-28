@@ -83,6 +83,7 @@ mod method_pointer;
 mod method_sequence_mutation;
 mod method_simd;
 mod method_temp_receiver;
+mod method_ufcs;
 mod method_user_impl;
 mod method_vec_mutation;
 mod patterns;
@@ -1980,6 +1981,12 @@ pub struct TypeCheckResult {
     /// them (`impl_args_match` compares the args vector) — the only thing
     /// missing was a way to NAME the winner for the runtimes.
     pub method_impl_dispatch: FxHashMap<(SpanKey, String), String>,
+    /// B-2026-10-28-17 — the UFCS calls, `Trait.method(x, ..)` and
+    /// `Type.method(x, ..)` of a method that takes `self`, by call span, to
+    /// the trait or type name.
+    /// Typed as the receiver form `x.method(..)`, which `lowering` rewrites
+    /// them into, so every later stage sees one spelling.
+    pub ufcs_calls: FxHashMap<SpanKey, String>,
     /// B-2026-09-01-20 — the COMPLETED argument list for an instance-method
     /// call whose omitted arguments have declared defaults.
     ///
@@ -3140,6 +3147,8 @@ pub struct TypeChecker<'a> {
     pub(super) user_operator_calls: FxHashMap<SpanKey, String>,
     /// Working half of `TypeCheckResult::method_impl_dispatch`.
     pub(super) method_impl_dispatch: FxHashMap<(SpanKey, String), String>,
+    /// Working half of `TypeCheckResult::ufcs_calls`.
+    pub(super) ufcs_calls: FxHashMap<SpanKey, String>,
     /// Working half of `TypeCheckResult::method_default_fills`.
     pub(super) method_default_fills: FxHashMap<(SpanKey, String), Vec<crate::ast::CallArg>>,
     /// Declared defaults for every instance METHOD, keyed `"Type.method"`.
@@ -3809,6 +3818,7 @@ impl<'a> TypeChecker<'a> {
             method_callee_types: FxHashMap::default(),
             user_operator_calls: FxHashMap::default(),
             method_impl_dispatch: FxHashMap::default(),
+            ufcs_calls: FxHashMap::default(),
             method_default_fills: FxHashMap::default(),
             method_defaults: crate::default_args::method_default_table(program),
             named_fns: crate::default_args::named_param_table(program),
@@ -4336,6 +4346,7 @@ impl<'a> TypeChecker<'a> {
             method_callee_types: self.method_callee_types,
             user_operator_calls: self.user_operator_calls,
             method_impl_dispatch: self.method_impl_dispatch,
+            ufcs_calls: self.ufcs_calls,
             method_default_fills: self.method_default_fills,
             method_impl_type_subs: self.method_impl_type_subs,
             direct_iter_terminals: self.direct_iter_terminals,

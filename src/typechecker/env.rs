@@ -417,6 +417,10 @@ pub struct TypeEnv {
     /// Where each user-written (non-stdlib) struct or enum is declared, for
     /// a fix-it that adds a `#[derive(..)]` above it (B-2026-10-18-32).
     pub user_type_decl_spans: FxHashMap<String, crate::token::Span>,
+    /// While a UFCS call `Trait.method(x, ..)` is typed, `(Trait, method)`:
+    /// method lookup sees only that trait's impls, so neither an inherent
+    /// method nor another trait's hides it (B-2026-10-28-17).
+    pub ufcs_trait: Option<(String, String)>,
     /// Which generic-param positions of a named type are Shape-kinded
     /// (declared `...S` on the struct/enum). Sparse — only types with at
     /// least one shape-variadic param have an entry; the Vec is
@@ -605,6 +609,7 @@ impl TypeEnv {
             structs: FxHashMap::default(),
             enums: FxHashMap::default(),
             user_type_decl_spans: FxHashMap::default(),
+            ufcs_trait: None,
             shape_param_positions: FxHashMap::default(),
             generic_defaults: FxHashMap::default(),
             unions: FxHashMap::default(),
@@ -767,6 +772,9 @@ impl TypeEnv {
             let Some(sig) = imp.methods.get(method) else {
                 continue;
             };
+            if !self.ufcs_admits(imp, method) {
+                continue;
+            }
             if imp.trait_name.is_none() {
                 if inherent.is_none() {
                     inherent = Some(sig);
@@ -831,6 +839,9 @@ impl TypeEnv {
             if !impl_shape_fits(imp, target_args) || !self.impl_bounds_discharge(imp, target_args) {
                 continue;
             }
+            if !self.ufcs_admits(imp, method) {
+                continue;
+            }
             if imp.trait_name.is_none() {
                 if inherent.is_none() {
                     inherent = Some(sig);
@@ -840,6 +851,15 @@ impl TypeEnv {
             }
         }
         inherent.or(trait_method)
+    }
+
+    /// Whether `imp` may answer a lookup of `method` while a UFCS call
+    /// names a trait ([`Self::ufcs_trait`]).
+    fn ufcs_admits(&self, imp: &ImplInfo, method: &str) -> bool {
+        match &self.ufcs_trait {
+            Some((t, m)) if m == method => imp.trait_name.as_deref() == Some(t.as_str()),
+            _ => true,
+        }
     }
 
     /// Slice 3 of the method-resolution CR — all-candidates variant of
@@ -870,6 +890,9 @@ impl TypeEnv {
                 continue;
             };
             if !impl_shape_fits(imp, target_args) || !self.impl_bounds_discharge(imp, target_args) {
+                continue;
+            }
+            if !self.ufcs_admits(imp, method) {
                 continue;
             }
             if imp.trait_name.is_none() {

@@ -1644,6 +1644,13 @@ impl<'a> super::TypeChecker<'a> {
                 }
             }
         }
+        // `Trait.method(x, ..)` / `Type.method(x, ..)`: the receiver form
+        // `x.method(..)` (B-2026-10-28-17).
+        if let ExprKind::Identifier(name) = &object.kind {
+            if let Some(t) = self.try_ufcs_method(name, method, args, span, args_close_span) {
+                return t;
+            }
+        }
         // Comptime stdlib modules (substrate 3): `ast.expr(s)` /
         // `compiler.error(msg)` parse as method calls on the lowercase module
         // identifier. Route them to the comptime-module typing (which gates on

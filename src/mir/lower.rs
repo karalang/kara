@@ -140,6 +140,30 @@ fn reduction_op(op: &AstBinOp) -> Option<BinOp> {
     })
 }
 
+/// The binary operator an operator trait's method stands for: `add` of
+/// `Add` is `+` (design.md § Operator traits).
+fn operator_method(method: &str) -> Option<AstBinOp> {
+    Some(match method {
+        "add" => AstBinOp::Add,
+        "sub" => AstBinOp::Sub,
+        "mul" => AstBinOp::Mul,
+        "div" => AstBinOp::Div,
+        "rem" => AstBinOp::Mod,
+        "eq" => AstBinOp::Eq,
+        "ne" => AstBinOp::NotEq,
+        "lt" => AstBinOp::Lt,
+        "le" => AstBinOp::LtEq,
+        "gt" => AstBinOp::Gt,
+        "ge" => AstBinOp::GtEq,
+        "bitand" => AstBinOp::BitAnd,
+        "bitor" => AstBinOp::BitOr,
+        "bitxor" => AstBinOp::BitXor,
+        "shl" => AstBinOp::Shl,
+        "shr" => AstBinOp::Shr,
+        _ => return None,
+    })
+}
+
 /// The values an integer type holds; the whole `i128` range for anything
 /// else, and for `u128`, whose values past `i128::MAX` the fold carries as
 /// their `i128` bit pattern, so it cannot check them.
@@ -17083,6 +17107,11 @@ impl<'l, 'a> Bx<'l, 'a> {
         dest: Place,
     ) -> R<bool> {
         let [l, r] = args else {
+            if let [a] = args {
+                if owner != "String" {
+                    return self.unary_operator_call(method, &a.value, dest);
+                }
+            }
             return Ok(false);
         };
         let primitive = matches!(
@@ -17106,24 +17135,34 @@ impl<'l, 'a> Bx<'l, 'a> {
                 | "char"
                 | "String"
         );
-        let op = match method {
-            "add" => AstBinOp::Add,
-            "sub" => AstBinOp::Sub,
-            "mul" => AstBinOp::Mul,
-            "div" => AstBinOp::Div,
-            "rem" => AstBinOp::Mod,
-            "eq" => AstBinOp::Eq,
-            "ne" => AstBinOp::NotEq,
-            "lt" => AstBinOp::Lt,
-            "le" => AstBinOp::LtEq,
-            "gt" => AstBinOp::Gt,
-            "ge" => AstBinOp::GtEq,
-            _ => return Ok(false),
+        let Some(op) = operator_method(method) else {
+            return Ok(false);
         };
         if !primitive {
             return Ok(false);
         }
         self.binary(op, &l.value, &r.value, dest)?;
+        Ok(true)
+    }
+
+    /// `a.neg()`, `a.not()` of a primitive, or `i64.neg(a)`: the unary
+    /// operator, `-a` and `~a` (or `not a` of a `bool`).
+    fn unary_operator_call(&mut self, method: &str, a: &'a Expr, dest: Place) -> R<bool> {
+        let mop = match method {
+            "neg" => UnOp::Neg,
+            "not" => UnOp::Not,
+            _ => return Ok(false),
+        };
+        let t = self.expr_ty(a)?;
+        let (_, base) = self.strip_ty_full(t);
+        if !matches!(
+            self.tys().tcx().kind(base),
+            HK::Int(_) | HK::UInt(_) | HK::Float(_) | HK::Bool
+        ) {
+            return Ok(false);
+        }
+        let (o, _) = self.scalar_operand(a)?;
+        self.assign(dest, Rvalue::UnaryOp(mop, o));
         Ok(true)
     }
 
@@ -17892,6 +17931,23 @@ impl<'l, 'a> Bx<'l, 'a> {
         }
         let Some(rc) = self.lcx.calls.get(&e.id) else {
             if self.option_method(object, method, args, dest.clone())? {
+                return Ok(());
+            }
+            // `a.add(b)` in a generic body (`Add.add(a, b)` with `T: Add`),
+            // instantiated at a number: the operator (B-2026-10-28-17).
+            let rt = self.expr_ty(object)?;
+            let (_, base) = self.strip_ty_full(rt);
+            let number = matches!(
+                self.tys().tcx().kind(base),
+                HK::Int(_) | HK::UInt(_) | HK::Float(_)
+            );
+            if let (true, Some(op), [other]) = (number, operator_method(method), args) {
+                return self.binary(op, object, &other.value, dest);
+            }
+            if number
+                && args.is_empty()
+                && self.unary_operator_call(method, object, dest.clone())?
+            {
                 return Ok(());
             }
             // In a generic body a trait method is found once the receiver's
@@ -21228,6 +21284,18 @@ impl<'l, 'a> Bx<'l, 'a> {
             if let (Some(op), true) = (op, scalar) {
                 return self.binary(op, object, &other.value, dest);
             }
+            // `a.add(b)`, `a.shl(2)` on a number: the operator, `a + b`
+            // (B-2026-10-28-19).
+            let number = matches!(
+                self.tys().tcx().kind(base),
+                HK::Int(_) | HK::UInt(_) | HK::Float(_)
+            );
+            if let (Some(op), true) = (operator_method(method), number) {
+                return self.binary(op, object, &other.value, dest);
+            }
+        }
+        if args.is_empty() && self.unary_operator_call(method, object, dest.clone())? {
+            return Ok(());
         }
         match (key, method) {
             (_, "as_slice" | "as_mut_slice")
@@ -23492,6 +23560,9 @@ fn frontend(src: &str, check_only: bool) -> Result<Frontend, String> {
         }
     }
     phase_time("comptime", &mut t);
+    // `Trait.method(x, ..)` is the method call `x.method(..)` from here on
+    // (B-2026-10-28-17).
+    crate::lowering::rewrite_ufcs(&mut program, &tc.ufcs_calls);
     let own = crate::ownershipcheck(&program, &tc);
     phase_time("ownershipcheck", &mut t);
     let frozen = FrozenHints {
