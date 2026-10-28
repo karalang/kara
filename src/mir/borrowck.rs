@@ -373,10 +373,14 @@ pub fn borrow_errors(
                             },
                             borrow_site(body, loan.at),
                         );
+                        // Of several named holders, the one declared
+                        // last, whatever order the live set is in.
                         let holder = live
                             .iter()
                             .filter(|l| o.get(**l).iter().any(|h| h == li))
-                            .find_map(|l| local_name(body, *l));
+                            .filter_map(|l| local_name(body, *l).map(|n| (*l, n)))
+                            .max_by_key(|(l, _)| *l)
+                            .map(|(_, n)| n);
                         errs.push(BorrowError {
                             access: access_name(access),
                             place: source_place(body, tys, &place),
@@ -1511,40 +1515,132 @@ pub(super) fn liveness(body: &Body) -> Vec<Vec<Local>> {
     liveness_with(body, &|_| true)
 }
 
+/// The blocks of `body` in postorder from the entry, then the ones it
+/// does not reach, in block order.
+fn postorder(body: &Body) -> Vec<usize> {
+    let n = body.blocks.len();
+    let mut order = Vec::with_capacity(n);
+    let mut seen = vec![false; n];
+    let mut stack: Vec<(usize, Vec<usize>)> = Vec::new();
+    if n > 0 {
+        seen[0] = true;
+        let succ = |b: usize| -> Vec<usize> {
+            body.blocks[b]
+                .terminator
+                .kind
+                .successors()
+                .into_iter()
+                .map(|s| s.index())
+                .collect()
+        };
+        stack.push((0, succ(0)));
+        while let Some((b, rest)) = stack.last_mut() {
+            match rest.pop() {
+                Some(s) if !seen[s] => {
+                    seen[s] = true;
+                    let next = succ(s);
+                    stack.push((s, next));
+                }
+                Some(_) => {}
+                None => {
+                    order.push(*b);
+                    stack.pop();
+                }
+            }
+        }
+    }
+    order.extend((0..n).filter(|&b| !seen[b]));
+    order
+}
+
 /// [`liveness`], where a `Drop` of `place` keeps it live only when
-/// `drop_uses(place)`.
+/// `drop_uses(place)`. The sets are bits over the locals, and each block's
+/// effect is folded once into `in = gen | (out & !kill)`, so a round of the
+/// fixpoint costs a few words a block: searching lists made a large body
+/// (mini_inflect's `new_tab` as an auto-par coroutine, 26,420 blocks over
+/// 1,700 locals) take most of a minute (B-2026-10-28-6).
 fn liveness_with(body: &Body, drop_uses: &dyn Fn(&Place) -> bool) -> Vec<Vec<Local>> {
     let n = body.blocks.len();
-    let mut live_in: Vec<Vec<Local>> = vec![Vec::new(); n];
-    let mut live_out: Vec<Vec<Local>> = vec![Vec::new(); n];
+    // Each block's uses and defs, from its end back to its start.
+    let mut nl = body.locals.len();
+    let steps: Vec<Vec<(Vec<Local>, Vec<Local>)>> = body
+        .blocks
+        .iter()
+        .map(|block| {
+            let mut s = Vec::with_capacity(block.statements.len() + 1);
+            s.push(terminator_use_def_with(&block.terminator.kind, drop_uses));
+            for st in block.statements.iter().rev() {
+                s.push(statement_use_def(&st.kind));
+            }
+            for (u, d) in &s {
+                for l in u.iter().chain(d) {
+                    nl = nl.max(l.index() + 1);
+                }
+            }
+            s
+        })
+        .collect();
+    let w = nl.div_ceil(64).max(1);
+    let bit = |l: &Local| (l.index() / 64, 1u64 << (l.index() % 64));
+    let mut gen = vec![0u64; n * w];
+    let mut kill = vec![0u64; n * w];
+    for (bi, s) in steps.iter().enumerate() {
+        let (g, k) = (&mut gen[bi * w..][..w], &mut kill[bi * w..][..w]);
+        // Walking back: `live = (live - defs) | uses`.
+        for (u, d) in s {
+            for l in d {
+                let (i, m) = bit(l);
+                g[i] &= !m;
+                k[i] |= m;
+            }
+            for l in u {
+                let (i, m) = bit(l);
+                g[i] |= m;
+            }
+        }
+    }
+    let mut live_in = vec![0u64; n * w];
+    let mut live_out = vec![0u64; n * w];
+    let mut out = vec![0u64; w];
+    // Successors before predecessors: a postorder from the entry, then
+    // any block it does not reach. In reverse block order that body took
+    // 491 rounds to settle; in postorder, 3.
+    let order = postorder(body);
     let mut changed = true;
     while changed {
         changed = false;
-        for bi in (0..n).rev() {
-            let block = &body.blocks[bi];
-            let mut out = Vec::new();
-            for s in block.terminator.kind.successors() {
-                for l in &live_in[s.index()] {
-                    if !out.contains(l) {
-                        out.push(*l);
-                    }
+        for &bi in &order {
+            out.fill(0);
+            for s in body.blocks[bi].terminator.kind.successors() {
+                let from = &live_in[s.index() * w..][..w];
+                for (o, x) in out.iter_mut().zip(from) {
+                    *o |= x;
                 }
             }
-            let mut live = out.clone();
-            let (u, d) = terminator_use_def_with(&block.terminator.kind, drop_uses);
-            transfer_live(&mut live, &u, &d);
-            for s in block.statements.iter().rev() {
-                let (u, d) = statement_use_def(&s.kind);
-                transfer_live(&mut live, &u, &d);
+            for i in 0..w {
+                let v = gen[bi * w + i] | (out[i] & !kill[bi * w + i]);
+                if v != live_in[bi * w + i] {
+                    live_in[bi * w + i] = v;
+                    changed = true;
+                }
+                live_out[bi * w + i] = out[i];
             }
-            if live.len() != live_in[bi].len() || out.len() != live_out[bi].len() {
-                changed = true;
-            }
-            live_in[bi] = live;
-            live_out[bi] = out;
         }
     }
     live_out
+        .chunks(w)
+        .map(|words| {
+            let mut ls = Vec::new();
+            for (i, &x) in words.iter().enumerate() {
+                let mut x = x;
+                while x != 0 {
+                    ls.push(Local((i * 64 + x.trailing_zeros() as usize) as u32));
+                    x &= x - 1;
+                }
+            }
+            ls
+        })
+        .collect()
 }
 
 // ---- accesses ----
