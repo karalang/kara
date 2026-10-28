@@ -9314,6 +9314,7 @@ impl<'a> super::TypeChecker<'a> {
                     }
                     self.core_ref_copy_spans
                         .insert(SpanKey::from_span(&value.span));
+                    self.core_ref_copy_nodes.insert(value.id);
                 }
                 // B-2026-09-24-1 — a plain re-bind of a borrowed String
                 // (`let t = r;` with `r: ref String`, a `Some(w)` payload, or

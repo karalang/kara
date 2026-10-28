@@ -143,8 +143,18 @@ impl<'a> super::OwnershipChecker<'a> {
     /// already took it out of `rc_values`.
     pub(crate) fn core_move_errors(&self) -> Vec<OwnershipError> {
         use crate::ownership::RcTrigger;
-        let mut sites: Vec<&crate::ownership::RcEntry> =
-            self.rc_values.values().flat_map(|m| m.values()).collect();
+        // A consume site that is not a move in its own copy of a default
+        // body (B-2026-10-28-11).
+        let mut sites: Vec<&crate::ownership::RcEntry> = self
+            .rc_values
+            .iter()
+            .flat_map(|(f, m)| {
+                let own = self.core_copy_non_moves.get(f);
+                m.values().filter(move |e| {
+                    !own.is_some_and(|o| o.contains(&SpanKey::from_span(&e.consume_span)))
+                })
+            })
+            .collect();
         sites.sort_by(|a, b| {
             a.other_use_span
                 .offset

@@ -1944,11 +1944,15 @@ impl Pipeline {
             });
             let non_moves = &ownership.core_non_move_sources;
             let ref_copies = &self.typed.as_ref().unwrap().core_ref_copy_spans;
+            // A span copies of one default body share was matched against its
+            // own copy's entries in the ownership pass (B-2026-10-28-11).
+            let copies = &self.typed.as_ref().unwrap().default_copy_spans;
             ownership.errors.retain(|e| {
                 e.kind != crate::ownership::OwnershipErrorKind::UseAfterMove
                     || !e.consume_span.is_some_and(|c| {
                         let key = crate::resolver::SpanKey::from_span(&c);
-                        non_moves.contains(&key) || ref_copies.contains(&key)
+                        !copies.contains(&key)
+                            && (non_moves.contains(&key) || ref_copies.contains(&key))
                     })
             });
             // The typechecker's `E_INDEX_MOVE_NON_COPY` already reports some

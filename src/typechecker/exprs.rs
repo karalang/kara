@@ -1188,6 +1188,7 @@ impl<'a> super::TypeChecker<'a> {
             if owned || self.local_scope.is_view(n) {
                 self.core_ref_copy_spans
                     .insert(SpanKey::from_span(&expr.span));
+                self.core_ref_copy_nodes.insert(expr.id);
             }
         }
     }

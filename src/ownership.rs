@@ -1662,6 +1662,15 @@ pub struct OwnershipChecker<'a> {
     /// Consume sites that are not moves under the v2 core. See
     /// [`OwnershipCheckResult::core_non_move_sources`].
     pub(crate) core_non_move_sources: HashSet<SpanKey>,
+    /// The function being checked's own entries of
+    /// [`Self::core_non_move_sources`].
+    pub(crate) fn_non_move_sources: HashSet<SpanKey>,
+    /// Per function, the consume sites at spans copies of one trait default
+    /// body share (`TypeCheckResult::default_copy_spans`) that are not moves in
+    /// that function's copy. A program-wide span set cannot say which copy
+    /// borrows there, so a use after a move in one copy is matched against
+    /// its own copy's entries only (B-2026-10-28-11).
+    pub(crate) core_copy_non_moves: HashMap<String, HashSet<SpanKey>>,
     /// See [`OwnershipCheckResult::core_read_only_index_lets`].
     pub(crate) core_read_only_index_lets: HashSet<SpanKey>,
     /// Index projections the use classifier saw in a moving position
@@ -2109,6 +2118,8 @@ impl<'a> OwnershipChecker<'a> {
             suppress_rc_notes: false,
             suppressed_rc_fn_keys: HashSet::new(),
             core_non_move_sources: HashSet::new(),
+            fn_non_move_sources: HashSet::new(),
+            core_copy_non_moves: HashMap::new(),
             core_read_only_index_lets: HashSet::new(),
             core_index_moves: Vec::new(),
             core_borrow_moves: Vec::new(),
@@ -3093,6 +3104,8 @@ impl<'a> OwnershipChecker<'a> {
         // pipeline (`UseClassifier`'s `once_callable_closures` set,
         // populated at let-RHS-is-closure sites with a captured-owned
         // signal — see round 12.20).
+        let errors_before = self.errors.len();
+        self.fn_non_move_sources.clear();
         self.populate_predicate_outputs(f, &fn_key, prelude);
 
         // Phase-7-codegen.md line 45 — compute the use-classifier's
@@ -3112,6 +3125,8 @@ impl<'a> OwnershipChecker<'a> {
             param_types_for_classifier,
         );
         self.core_non_move_sources
+            .extend(classification.core_borrowed_spans.iter().copied());
+        self.fn_non_move_sources
             .extend(classification.core_borrowed_spans.iter().copied());
         if core_rules() {
             index_let::read_only_index_lets(
@@ -3239,7 +3254,48 @@ impl<'a> OwnershipChecker<'a> {
                 modes.push((name, mode));
             }
         }
+        self.drop_copy_non_move_errors(f, &fn_key, errors_before);
         self.param_modes.insert(fn_key, modes);
+    }
+
+    /// v2 core: in a copy of a trait default body, a use after a move whose
+    /// consume site is not a move in THIS copy is dropped here, against the
+    /// copy's own entries. The strict pipeline's program-wide filter skips
+    /// those spans, since another copy may borrow where this one moves
+    /// (B-2026-10-28-11).
+    fn drop_copy_non_move_errors(&mut self, f: &Function, fn_key: &str, errors_before: usize) {
+        let copies = &self.typecheck_result.default_copy_spans;
+        if !core_rules() || copies.is_empty() {
+            return;
+        }
+        let mut own: HashSet<SpanKey> = self
+            .fn_non_move_sources
+            .iter()
+            .filter(|k| copies.contains(k))
+            .copied()
+            .collect();
+        let ref_copies = &self.typecheck_result.core_ref_copy_nodes;
+        crate::span_visitor::for_each_expr_in_block(&f.body, &mut |e| {
+            let key = SpanKey::from_span(&e.span);
+            if copies.contains(&key) && ref_copies.contains(&e.id) {
+                own.insert(key);
+            }
+        });
+        let mut i = errors_before;
+        while i < self.errors.len() {
+            let e = &self.errors[i];
+            let drop = e.kind == OwnershipErrorKind::UseAfterMove
+                && e.consume_span
+                    .is_some_and(|c| own.contains(&SpanKey::from_span(&c)));
+            if drop {
+                self.errors.remove(i);
+            } else {
+                i += 1;
+            }
+        }
+        if !own.is_empty() {
+            self.core_copy_non_moves.insert(fn_key.to_string(), own);
+        }
     }
 
     /// Run both predicate passes over the function body in a single

@@ -2001,8 +2001,7 @@ impl<'a> UseClassifier<'a> {
     fn resolved_method_mode_key(&self, method_call: &Expr) -> Option<&String> {
         let span = SpanKey::from_span(&method_call.span);
         self.tc
-            .method_callee_types
-            .get(&span)
+            .method_callee(method_call)
             .or_else(|| self.tc.method_typeparam_trait_key.get(&span))
     }
 

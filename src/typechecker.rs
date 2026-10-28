@@ -1790,6 +1790,11 @@ pub struct TypeCheckResult {
     /// §1.1), so the read copies the reference and moves nothing; the
     /// pipeline drops a use-after-move whose consume site is one of these.
     pub core_ref_copy_spans: FxHashSet<SpanKey>,
+    /// The nodes of [`Self::core_ref_copy_spans`]. Copies of one trait default
+    /// body share their spans ([`Self::default_copy_spans`]), and only some
+    /// copies may borrow there; the ownership pass asks each copy's own node
+    /// (B-2026-10-28-11).
+    pub core_ref_copy_nodes: FxHashSet<crate::ids::NodeId>,
     /// v2 core: each `for` iterable that is an iterator value held in a
     /// local, which the loop consumes (B-2026-10-18-36): `for g in given` over
     /// `let given = a.split(",")`.
@@ -2525,6 +2530,19 @@ impl TypeCheckResult {
         }
         self.expr_types.get(&key)
     }
+
+    /// The `Type.method` callee of the method call `call`, read from its own
+    /// node at a span copies of one default body share (see
+    /// [`Self::expr_type`]).
+    pub fn method_callee(&self, call: &crate::ast::Expr) -> Option<&String> {
+        let key = SpanKey::from_span(&call.span);
+        if self.default_copy_spans.contains(&key) {
+            if let Some(c) = self.node_method_callees.get(&call.id) {
+                return Some(c);
+            }
+        }
+        self.method_callee_types.get(&key)
+    }
 }
 
 // ── Cross-module visibility helpers (CR-24 slice 6) ─────────────
@@ -2713,6 +2731,8 @@ pub struct TypeChecker<'a> {
     pub(super) core_shared_depth: usize,
     /// See [`TypeCheckResult::core_ref_copy_spans`].
     pub(super) core_ref_copy_spans: FxHashSet<SpanKey>,
+    /// See [`TypeCheckResult::core_ref_copy_nodes`].
+    pub(super) core_ref_copy_nodes: FxHashSet<crate::ids::NodeId>,
     /// See [`TypeCheckResult::core_consuming_for_iterables`].
     pub(super) core_consuming_for_iterables: FxHashSet<SpanKey>,
     /// The edit that copies each `Str` piece before a `collect` into a
@@ -3712,6 +3732,7 @@ impl<'a> TypeChecker<'a> {
             core_shorthand_field: false,
             core_shared_depth: 0,
             core_ref_copy_spans: FxHashSet::default(),
+            core_ref_copy_nodes: FxHashSet::default(),
             core_consuming_for_iterables: FxHashSet::default(),
             collect_strings_fixes: FxHashMap::default(),
             into_iter_sites: FxHashMap::default(),
@@ -4277,6 +4298,7 @@ impl<'a> TypeChecker<'a> {
             str_retyped_uses: std::mem::take(&mut self.str_retyped_uses),
             core_once_calls: std::mem::take(&mut self.core_once_calls),
             core_ref_copy_spans: self.core_ref_copy_spans,
+            core_ref_copy_nodes: self.core_ref_copy_nodes,
             core_consuming_for_iterables: self.core_consuming_for_iterables,
             core_moving_scrutinees: self.core_moving_scrutinees,
             core_borrowed_receivers: self.core_borrowed_receivers,

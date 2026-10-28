@@ -106,8 +106,7 @@ impl<'a> super::OwnershipChecker<'a> {
     pub(crate) fn resolved_method_mode_key(&self, method_call: &Expr) -> Option<&String> {
         let span = SpanKey::from_span(&method_call.span);
         self.typecheck_result
-            .method_callee_types
-            .get(&span)
+            .method_callee(method_call)
             .or_else(|| self.typecheck_result.method_typeparam_trait_key.get(&span))
     }
 
@@ -800,11 +799,7 @@ impl<'a> super::OwnershipChecker<'a> {
     /// owned arg consumed into it stays alive on a path parallel to any
     /// subsequent outer use of the source binding.
     pub(crate) fn method_call_receiver_is_mut_ref(&self, method_call: &Expr) -> bool {
-        let key = match self
-            .typecheck_result
-            .method_callee_types
-            .get(&SpanKey::from_span(&method_call.span))
-        {
+        let key = match self.typecheck_result.method_callee(method_call) {
             Some(k) => k,
             None => return false,
         };

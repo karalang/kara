@@ -117,6 +117,8 @@ impl<'a> super::OwnershipChecker<'a> {
                     if matches!(pattern.kind, PatternKind::Wildcard) {
                         self.core_non_move_sources
                             .insert(SpanKey::from_span(&value.span));
+                        self.fn_non_move_sources
+                            .insert(SpanKey::from_span(&value.span));
                     }
                     self.check_expr_consuming(value, states, param_types, param_usage);
                 }
