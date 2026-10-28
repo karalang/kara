@@ -2,14 +2,15 @@
 
 All notable changes to the Kāra language and compiler will be documented in this file.
 
-> **Maintenance note (2026-08-15).** This file is a coarse milestone record, not
-> the project's living history. Day-to-day progress is tracked in
-> [`docs/roadmap.md`](docs/roadmap.md) (phase status),
-> [`docs/implementation_checklist/`](docs/implementation_checklist/) (per-phase
-> slice trackers), and [`docs/bug-ledger.md`](docs/bug-ledger.md) (every bug
-> found and fixed, 1,200+ rows) — those, plus `git log`, are authoritative. The
-> entry below summarizes the state as of 2026-08-15; the section after it is
-> the original 2026-06 entry, kept as the record of the design milestone.
+> **Maintenance note (2026-10-28).** This file is a coarse milestone record.
+> The v1 entry is written at the release candidate. Until then, progress is in
+> [`docs/roadmap.md`](docs/roadmap.md), the bug ledger
+> [`docs/bugs-v2.jsonl`](docs/bugs-v2.jsonl) (rollup in
+> [`docs/bugs-v2.md`](docs/bugs-v2.md); the pre-M3 ledger is archived in
+> [`docs/legacy/`](docs/legacy/)) and `git log`. The 2026-08-15 entry below
+> describes the legacy compiler, deleted at M3 on 2026-10-24: its tree-walk
+> interpreter, layout blocks, contracts, GPU and self-hosting claims do not
+> describe v1.
 
 ---
 

@@ -1,9 +1,8 @@
 # Kāra
 
-Kāra is a systems programming language for the age of AI-written code. Declare intent; the compiler handles what LLMs get wrong — memory layout, ownership, concurrency — and emits every decision as structured output agents can consume.
+Kāra is a systems programming language for the age of AI-written code. You declare intent; the compiler handles what language models get wrong (ownership, effects, concurrency) and reports every decision as structured output that an agent can read.
 
-Questions, ideas, or design feedback? [Start a GitHub Discussion](https://github.com/karalang/kara/discussions/new/choose) — all input welcome.
-Want to send a patch? [CONTRIBUTING.md](CONTRIBUTING.md) covers the build, the gates, and the invariants worth knowing first.
+Questions, ideas or design feedback? [Start a GitHub Discussion](https://github.com/karalang/kara/discussions/new/choose). Want to send a patch? [CONTRIBUTING.md](CONTRIBUTING.md) covers the build, the gates and the invariants worth knowing first.
 
 ---
 
@@ -19,427 +18,214 @@ fn main() {
 karac run hello.kara        # Hello, world!
 ```
 
-Three things Kāra does that other languages make you do by hand:
+Three things Kāra does that other languages leave to you:
 
-- **Effects → automatic concurrency.** Functions declare what they touch; the compiler runs independent work in parallel for you — no `async`/`await`, no colored functions, no thread plumbing.
-- **Ownership without lifetime annotations.** Memory safety with no `'a` syntax — parameter modes are declared at the signature; the rest is inferred.
-- **Every compiler decision as JSON.** Effects, ownership, concurrency, and fixes are all queryable, so agents (and you) read exactly what the compiler decided.
+- **Effects drive concurrency.** Functions say what they touch. The compiler checks `par` blocks against those effects, and runs independent work in parallel by itself where it can prove it safe. There is no `async`/`await` and no function colouring.
+- **Ownership without lifetime annotations.** Parameters borrow by default, `own T` takes ownership, and `mut ref T` writes. A returned view's source is inferred from the signature, so there is no `'a` syntax.
+- **Every compiler decision as JSON.** Effects, ownership, concurrency and fixes are queryable, so agents (and you) read exactly what the compiler decided.
 
 ### The whole idea in one program
 
-Reads from two data sources and combines them — written as plain sequential code. The compiler proves the two reads are independent and runs them concurrently, and it borrows its inputs with no lifetime annotations:
+Two reads from two data sources, written as plain sequential code. The compiler proves the reads independent and runs them concurrently, and the providers that back them are chosen at run time, so a test can swap in fakes:
 
 ```kara
-// Two distinct data sources, both backed by one trait.
+// Two data sources behind one trait. A provider supplies each at run time.
 trait Source {
-    fn load(ref self) -> Vec[i64];
+    fn load(self) -> Vec[i64];
 }
 effect resource UserDB: Source;
 effect resource OrderDB: Source;
 
-// Private functions — the compiler infers each one's effects from its body:
+struct Fixed { rows: Vec[i64] }
+impl Source for Fixed {
+    fn load(self) -> Vec[i64] { self.rows.clone() }
+}
+
+// Private functions: the compiler infers each one's effects from its body.
 //   fetch_users  -> reads(UserDB)
 //   fetch_orders -> reads(OrderDB)
-fn fetch_users() -> Vec[i64]  { UserDB.load() }
+fn fetch_users() -> Vec[i64] { UserDB.load() }
 fn fetch_orders() -> Vec[i64] { OrderDB.load() }
 
-// `ref` borrows its inputs — no copy, and no lifetime annotation.
-fn total(users: ref Vec[i64], orders: ref Vec[i64]) -> i64 {
+// Parameters borrow by default: no copy, and no lifetime annotation.
+fn total(users: Vec[i64], orders: Vec[i64]) -> i64 {
     users.len() as i64 + orders.len() as i64
 }
 
-fn main() {
-    // Two reads on two different resources: no shared data, no conflict.
-    // The compiler proves them independent and runs them concurrently —
-    // no async, no threads, no annotation.
-    let users  = fetch_users();      // statement 0
-    let orders = fetch_orders();     // statement 1
+fn report() {
+    // Two reads of two different resources: nothing shared, no conflict.
+    // The compiler proves them independent and runs them concurrently.
+    let users = fetch_users();            // statement 0
+    let orders = fetch_orders();          // statement 1
+    println(f"{total(users, orders)}");   // statement 2: waits on 0 and 1
+}
 
-    // Both results are first used here, so the compiler inserts the join.
-    println(total(users, orders));   // statement 2 — waits on 0 and 1
+fn main() {
+    providers {
+        UserDB => Fixed { rows: [1, 2, 3] },
+        OrderDB => Fixed { rows: [10, 20] },
+    } in {
+        report();
+    }
 }
 ```
 
-Don't take the concurrency on faith — ask the compiler what it did:
+Don't take the concurrency on faith. Ask the compiler what it did:
 
 ```bash
-$ karac query concurrency app.kara.main
-{"function":"main","total_statements":3,
- "parallel_groups":[{"statements":[0,1],"reason":"independent reads on different resources"}]}
+$ karac query concurrency app.kara.report
+{"function":"report","total_statements":3,
+ "parallel_groups":[{"statements":[0,1],"reason":"independent effects on different resources"}], ...}
 ```
 
-The two fetches run in parallel, and the compiler tells you *why* — there is no `par`, no `async`, and no thread code anywhere in the source. Everything below is the detail behind these three ideas.
+There is no `par`, no `async` and no thread code in the source.
 
 ---
 
-## What Makes Kāra Different
+## What makes Kāra different
 
-### AI-First Compiler Interface
+### An AI-first compiler interface
 
-The compiler's analyses aren't trapped in human-oriented text — every decision it makes is queryable as JSON.
+**Structured diagnostics with machine-applicable fixes.** `karac check --output=json` reports each diagnostic with its phase, code, span and, where the compiler knows the answer, the fix as an exact edit. `karac fix` applies it. Here is the loop on a common mistake, using a value after giving it away:
+
+```kara
+fn archive(log: own Vec[String]) -> i64 {
+    log.len() as i64
+}
+
+fn main() {
+    let log = ["boot".to_string(), "ready".to_string()];
+    let n = archive(log);
+    println(f"{n} archived, last was {log[1]}");
+}
+```
+
+```bash
+$ karac check archive.kara --output=json
+{"diagnostics":[{"severity":"error","phase":"ownership","code":"E0500",
+  "class":"OWNERSHIP_MOVE_AFTER_USE","line":8,"column":39,
+  "message":"value 'log' moved here, used again here (moved at line 7:21)",
+  "replacement":{"offset":158,"length":0,"text":".clone()"}}]}
+
+$ karac fix archive.kara
+applied 1 fix(es) to archive.kara
+
+$ karac run archive.kara
+2 archived, last was ready
+```
+
+No prose was parsed anywhere in that loop.
 
 **Query API.** `karac query <kind> <file>[.<function>]` exposes what the compiler inferred:
 
 | Query | Returns |
 |---|---|
-| `effects` | inferred vs. declared effects, per function |
-| `ownership` | parameter modes, RC fallbacks (with the trigger line), closure captures |
-| `concurrency` | which statements auto-parallelize, and why |
-| `cost-summary` | RC ops, Arc wraps, and perf notes per function or file |
-| `monomorphization` | generic instantiation table — which types, at which sites |
-| `affected-by` | transitive callers/callees/tests of a function or line range |
-| `attributes` | index of namespaced `#[tool::*]` attributes |
+| `effects` | inferred and declared effects per function, or the whole program's effect graph |
+| `ownership` | parameter modes and closure captures |
+| `concurrency` | which statements and loops run in parallel, and why the others do not |
+| `cost-summary` | every silent runtime cost the compiler inserted |
+| `monomorphization` | which generic instances exist, and where they come from |
+| `affected-by` | the callers, callees and tests a change reaches |
 
-Querying the `load_dashboard` example from the next section:
+**Explanations on demand.** `karac explain --class=<CLASS>` returns the explanation behind any diagnostic class, grounded in the specification. `karac fmt` gives one canonical formatting, so agent-written diffs stay semantic.
 
-```bash
-$ karac query concurrency dashboard.kara.load_dashboard
-{"function":"load_dashboard","total_statements":3,
- "parallel_groups":[{"statements":[0,1,2],"reason":"no data or effect dependencies"}]}
-```
+### Effects, not async
 
-**Structured diagnostics with machine-applicable fixes — the loop, end to end.** `karac check|build|run --output=json` emits diagnostics with phase, error code, span, and — where the compiler knows the answer — the fix as concrete edits. `karac fix` applies them. Here is the whole agent loop on a real mistake: an LLM writes a config resource whose trait method consumes its receiver (`self`) while promising a reads-only contract —
+Every function's effects are known: inferred for private functions, declared for public ones. The compiler uses them to check concurrency, not to colour functions:
 
-```
-pub effect resource Cfg: Config;
-pub trait Config { fn get(self, key: i64) -> i64 with reads(Cfg); }
+- `par { }` and `par for` run branches in parallel, and a conflict between branches is a compile error, not a race.
+- `TaskGroup` runs a dynamic number of tasks, such as one per accepted connection. A panic in an isolating group ends only its own task.
+- Loops and independent statements are parallelised automatically, only where the effects prove it safe. The result is deterministic: what runs concurrently is decided at compile time.
+- Resources are provided, not global: `with_provider` and `providers { } in { }` swap a database, clock or random source for a fake in tests, with no mocking framework.
 
-fn limits() -> i64 with reads(Cfg) {
-    let lo = Cfg.get(1);
-    let hi = Cfg.get(2);
-    lo + hi
-}
-```
+### Ownership without lifetimes
 
-An owned `self` receiver means every `Cfg.get(...)` call infers `writes(Cfg)` — the declared `reads(Cfg)` can never hold, and the two lookups in `limits` serialize as write-write conflicts. The compiler flags the root cause at the trait definition, with the fix as a byte-precise edit:
-
-```bash
-$ karac check config.kara --output=json
-{"diagnostics":[{"code":"E0412","phase":"effect","line":2,"column":27,
-  "message":"trait method 'Config.get' declares reads(Cfg) but its `self` receiver
-    makes every 'Cfg.get' call infer writes(Cfg); change the receiver to `ref self`
-    or declare writes(Cfg)",
-  "replacement":{"offset":59,"length":4,"text":"ref self"}}]}
-
-$ karac fix config.kara
-applied 1 fix(es) to config.kara
-
-$ karac check config.kara --output=json
-{"diagnostics":[]}
-
-$ karac query concurrency config.kara.limits
-{"function":"limits","total_statements":2,
- "parallel_groups":[{"statements":[0,1],"reason":"concurrent reads on same resource"}]}
-```
-
-No prose was parsed anywhere in that loop. And the fix didn't just silence an error — with the receiver corrected to `ref self`, the two config reads now run concurrently.
-
-`--output=jsonl` streams build events (`phase_start`, `diagnostic`, `build_complete`, …) so agents can react before the build finishes.
-
-**Explanations on demand.** `karac explain --class=TYPE_MISMATCH` (or `--concept=<name>`) returns the spec-grounded explanation behind any diagnostic class, as text or JSON.
-
-**Canonical source form.** `karac fmt` emits one canonical formatting, so agent-written diffs stay semantic. `karac catalog` emits one JSONL signature record per function/type for cheap codebase indexing.
-
-### Effect System — No Async/Await, No Colored Functions
-
-Every function declares what it does to the world. The compiler uses this for automatic parallelization:
-
-```
-pub effect resource UserDB: UserDatabase;
-pub effect resource OrderDB: OrderDatabase;
-pub effect resource NotifDB: NotificationDatabase;
-
-fn load_dashboard(user_id: i64) -> Dashboard
-    with reads(UserDB) reads(OrderDB) reads(NotifDB)
-{
-    let profile = fetch_profile(user_id);       // reads(UserDB)
-    let orders = fetch_orders(user_id);         // reads(OrderDB)
-    let notifications = fetch_notifs(user_id);  // reads(NotifDB)
-
-    // Compiler sees non-conflicting effects → runs all three concurrently
-    // Data dependency on all three → inserts sync point here
-    build_dashboard(profile, orders, notifications)
-}
-```
-
-No `async fn`. No colored functions. No `Promise.all`. The compiler handles concurrency because it understands effects and data dependencies.
-
-And it's **deterministic by contract**: the same source + compiler + target always yields the same parallelization, and any two operations the analysis can't prove independent keep their source-order, user-visible effects. So auto-parallelism never makes output order a coin flip — what runs concurrently is decided at compile time, not by the scheduler. ([Determinism contract](docs/design.md).)
-
-### Tiered Ownership — No Lifetime Annotations
-
-Modes are declared at the signature — bare `T` is owned, `ref T` / `mut ref T`
-are explicit borrows. There are no lifetime parameters (`'a`); the compiler
-infers where a returned borrow comes from by **source pinning**.
-
-```
+```kara
 struct User { name: String, age: i64 }
 
-// Returning a borrow: the compiler infers it borrows from `u` — no `'a`.
-fn name_of(u: ref User) -> ref String { u.name }
+// A returned view: the compiler infers that it borrows from `u`.
+fn name_of(u: User) -> ref String { ref u.name }
 
-// The canonical accessor (`ref self`).
-impl User {
-    fn name(ref self) -> ref String { self.name }
-}
-
-// Two ref params: the return is inferred to borrow from *both* (and may
-// outlive neither). Still no annotation — Rust needs `<'a>` here.
-fn longer(a: ref String, b: ref String) -> ref String {
-    if a.len() > b.len() { a } else { b }
+// Two candidates: the result borrows from both, still with no annotation.
+fn longer(a: String, b: String) -> ref String {
+    if a.len() > b.len() { ref a } else { ref b }
 }
 ```
 
-**What replaces lifetime parameters** is the source-pinning rule: every
-returned `ref` must trace to a `ref` parameter — one ref parameter → inferred,
-several → the conservative union of all. Borrowing past the source's lifetime
-is a compile error, caught statically, not at runtime:
+Moving a value while a view of it is alive is caught at compile time:
 
 ```
-// fn bad(u: User) -> ref String { u.name }   — u is owned, dropped at return
-error[ownership]: returned borrow does not originate from a `ref` parameter;
-  its source is dropped when the function returns, leaving a dangling
-  reference   [E0509]
-
-// let n = name_of(u); consume(u);   — moving u while n still borrows it
-error[ownership]: cannot move `u` while a borrow into it (a returned
-  reference still points at it) is still live
+error[ownership]: cannot move `u` while a borrow into it (a returned reference
+  still points at it) is still live
 ```
 
-That second diagnostic is the no-`'a` equivalent of Rust's "cannot move out
-of `u` because it is borrowed" — reached through ownership + borrow analysis,
-with no lifetime syntax in the source. The compiler also shows what it
-inferred (every analysis is queryable as JSON, like the effects above):
+The rule is conservative: when a result may borrow from several parameters, it borrows from all of them. Kāra may reject a program a finer analysis would accept, but never accepts one that dangles. Types that need shared ownership say so with `shared struct` and `shared enum`, which are reference-counted. The full model is [docs/core-semantics.md](docs/core-semantics.md).
 
-```
-$ karac query ownership user.kara.name_of
-{"function":"name_of","parameters":[{"name":"u","mode":"ref","representation":"ref (borrow)"}],"rc_values":[],"closures":[]}
-```
+### Services in the standard library
 
-**Why this is safe.** Source pinning is deliberately *conservative*. A returned
-`ref` must trace to a `ref` parameter; when several qualify, the compiler unions
-them, so the result is bounded by its shortest-lived source. That means Kāra can
-*reject* a program a finer analysis would accept — but it can never *accept* one
-that dangles. When it can't prove a borrow outlives its use, it doesn't guess: it
-escalates to RC and tells you. The safety comes from refusing to guess, not from
-out-thinking the aliasing problem.
+HTTP/1.1, TLS and WebSocket servers ship in the standard library, with blocking-style code and no function colouring:
 
-Escalation path: owned → `ref` → RC. Reference counting is inserted only when
-a value's use-sites can't be ordered by control flow — and every insertion
-emits a note, never a silent surprise. Full model:
-**[design.md § Feature 4](docs/design.md)**.
+```kara
+#[allow(prelude_shadow)]
+struct Response { status: i64, body: String }
 
-### Data Layout Separation
-
-Logical structure stays clean. Physical layout is a separate, opt-in concern:
-
-```
-struct Entity {
-    id: u64, name: String,
-    position: Vec3, velocity: Vec3,
-    health: f32, armor: f32, is_alive: bool,
+fn handle(req: Request) -> Response {
+    Response { status: 200, body: req.path() }
 }
 
-layout entities: Collection<Entity> {
-    group physics { position, velocity }   // hot path: physics tick
-    group combat { health, armor, is_alive } // hot path: combat
-    group metadata { id, name }              // cold
+fn main() {
+    let _ = Server.serve("127.0.0.1:8080", handle);
 }
 ```
 
-## Production Readiness
+More in [`examples/std_net`](examples/std_net).
 
-What v1 ships with, what the numbers look like, and what the toolchain gives you.
+## Performance
 
-### Concurrency Runtime
+The v1 compiler is held to measured bars before release: run time and build time against the earlier compiler, binary size, an automatic-parallelism speedup floor, and a load test of 100,000 idle connections with tail-latency limits. Cross-language benchmarks against Rust, C and Go live in **[kara-katas](https://github.com/karalang/kara-katas)**, with the data and chart generator versioned beside the code. Figures for this README are being re-measured on the v1 compiler.
 
-**2M idle WebSocket-over-TLS connections in one process. ~12.1 KB/connection — 2.3× denser than Rust. Reproducible.**
+## Targets
 
-Measured on an r8g.4xlarge (16 vCPU), 0 failures, with the per-connection handler executing — not a target. The densest of seven runtimes benchmarked here (vs Rust, Java/Netty, Node, Go, .NET, Phoenix). Methodology, cost model, and caveats: **[REPORT.md](examples/ws_idle_holder/bench/REPORT.md)** · [reproduction harness](examples/ws_idle_holder/bench).
-
-The numbers behind each claim:
-
-- Blocking-style I/O syntax; effect-driven scheduling moves blocking work off the par-runtime threads.
-- **Demo 1 verified on r8g.4xlarge (Linux, 16 vCPU) at 1M and 2M, head-to-head with a Rust (tokio + rustls) reference on the same box** — with the per-connection handler **executing** (recv/send over the coroutine network-async transform; the recv buffer + coroutine frame are held, not freed): both impls hold **2 000 000 idle WebSocket-over-TLS connections, 0 failures**. **Kāra at ~12.1 KB/conn** server-side RSS vs **Rust at ~27.9 KB/conn** — **2.30× runtime-density advantage**, scale-invariant 1M↔2M (Kāra −0.03 % drift). In production-cost terms, counting the kernel socket buffer both stacks pay equally, total server-side memory is **15.0 KB vs 30.4 KB/conn (2.03×)** — so at a realistic 250K conns/box Kāra fits an 8 GiB `m7g.large` where Rust needs a 16 GiB `m7g.xlarge`, ≈**50 % lower infra cost** (~$473 vs ~$946/yr per 250K unit on a 1-yr reserved instance). Connect-phase latency at `--concurrency 64` (1M): Kāra **mean 82 ms, p50 46 ms, p99 255 ms**; Rust keeps a ~3 ms p50 (tighter handshake hop) but a wider tail. Source: [`examples/ws_idle_holder`](examples/ws_idle_holder); full methodology + cost model + caveats in [`examples/ws_idle_holder/bench/REPORT.md`](examples/ws_idle_holder/bench/REPORT.md); reproduction harness in [`examples/ws_idle_holder/bench`](examples/ws_idle_holder/bench). _Note: an earlier 7.8 KB/conn / 3.55× figure was measured before the handler executed and is superseded._
-- **Benchmarked against five commercial WebSocket stacks** at 250K idle conns/box (same harness as the Rust reference, in-process TLS, apples-to-apples). Per-connection server RSS, densest first: **Kāra 12.1 KB** · Java/Netty 14.4 KB\* · Rust 27.9 KB · Node.js 40.4 KB · Go 43.4 KB · .NET/Kestrel (Linux) 52.9 KB · Phoenix Channels 102.8 KB — **the densest runtime in this set**: **3.4× lighter than Node, 3.7× than Go, 4.5× than .NET, 8.7× than Phoenix**. _\*Netty's RSS is a JVM `-Xmx` dial: 14.4 KB is its balanced-heap deployment point (marginal slope ~12.8 KB, live set ~8–10 KB); every other stack here, Kāra included, reports a fixed live footprint._ Per-comparator tables, GC-dial analysis, and the per-runtime cost reframes are in [`examples/ws_idle_holder/bench/REPORT.md`](examples/ws_idle_holder/bench/REPORT.md).
-
-### Standard Library at v1
-
-In-tree — no third-party Kāra packages to add, and no package manager to
-reach for. (The Rust runtime crate that backs these surfaces does link
-tokio, hyper, rustls, and ring; the point is that a Kāra program's
-dependency list stays empty.) Blocking-style I/O, no function coloring — the
-effect-driven scheduler moves blocking work off the par-runtime threads.
-Minimal, compiling examples live in
-[`examples/std_net`](examples/std_net).
-
-- **HTTP/1.1 server** — [`runtime/stdlib/http.kara`](runtime/stdlib/http.kara) · `Server.serve(addr, handler)` over `Fn(Request) -> Response` · [minimal example](examples/std_net/http_hello.kara)
-- **TLS** — [`runtime/stdlib/tls.kara`](runtime/stdlib/tls.kara) · `Server.serve_tls(addr, cert, key, handler)`; `TlsListener` / `TlsStream` for raw sockets · [minimal example](examples/std_net/https_hello.kara)
-- **WebSocket** — [`runtime/stdlib/ws.kara`](runtime/stdlib/ws.kara) · `WebSocket.accept` / `accept_tls`, `recv_text` / `send_text` · [minimal example](examples/std_net/ws_echo.kara)
-
-The same surface, at scale: [`examples/ws_idle_holder`](examples/ws_idle_holder)
-holds 2M idle WebSocket-over-TLS connections (see Concurrency Runtime above).
-
-### Performance
-
-Cross-language benchmarks vs. Rust (`rustc -O`), C (`clang -O3`), and Go
-(`go build`) live in the **[kara-katas](https://github.com/karalang/kara-katas)**
-repo — one corpus of algorithm kernels, each in multiple languages, with
-the data feed and chart generator versioned alongside the code. Full
-chart set and methodology: **[BENCHMARKS.md](https://github.com/karalang/kara-katas/blob/main/BENCHMARKS.md)**;
-raw numbers: **[bench-results.json](https://github.com/karalang/kara-katas/blob/main/bench-results.json)**.
-
-These benchmarks are validation, not a value proposition: the bar is
-**parity** — that Kāra's safety, ownership, and effect abstractions land
-production-class workloads within a few percent of Rust/C, with no
-performance cliff. The corpus is also a correctness exercise — 246
-algorithm kernels spanning control flow, generics, collections, pattern
-matching, ownership, and codegen, where small programs surface a
-disproportionate share of compiler bugs.
-
-**Sequential lane** (`KARAC_AUTO_PAR=0`) — the headline, apples-to-apples
-against single-threaded Rust/C/Go. Each dot is one program; lower is
-faster; everything relative to **Rust = 1.0**.
-
-![Runtime, sequential lane — relative to Rust](docs/assets/runtime-seq.png)
-
-Kāra tracks C closely and sits at or below the **Rust (checked)** rings —
-the safety-matched comparison. Kāra checks integer overflow by default;
-`rustc -O` silently wraps — defined behavior, but a wrong value where Kāra
-would trap — so the gray `Rust (default)` baseline does strictly less work.
-Overlaid in goldenrod is `rustc -O -C overflow-checks=on` on the katas
-where it diverges; against *that*, Kāra is at parity or ahead (the apparent
-1.4–1.66× gaps on overflow-heavy katas collapse to ~1.0×), and it emits
-**fewer** instructions than safety-matched Rust on 16 collection/pointer
-kernels. The residue is a few string-building loops (~1.2×, tracked). Go
-trails on most single-threaded work.
-
-> **The map-bearing kernels are excepted, as of 2026-09-08.** `karac`
-> `59c8d30cd` (2026-08-22) replaced codegen's integer hash — one multiply
-> against a compile-time-constant seed in the compiler's own source — with
-> per-process-seeded SipHash-1-3, closing an offline hash-collision hole. The
-> earlier map figures were scoring Kāra hashing far more cheaply than the
-> comparators it was measured against. All twelve affected katas have been
-> re-benched and nine now sit **behind** safety-matched Rust. The list, tree and
-> backtracking kernels do not hash and are unaffected. The remaining gap is
-> smaller than the kata ratios suggest — an isolated `Map[i64,i64]` lookup is
-> 1.73× Rust's instruction count but **1.14× its wall clock**. Detail in
-> [kara-katas BENCHMARKS.md](https://github.com/karalang/kara-katas/blob/main/BENCHMARKS.md);
-> tracked as `B-2026-09-07-42` / `B-2026-09-07-53`. The chart above predates the
-> re-bench for those katas.
-
-![Binary size, sequential lane — relative to Rust, log scale](docs/assets/binary-seq.png)
-
-C-sized binaries (~33 KiB) for most programs, rising to a ~285 KiB floor
-when the larger runtime surface links. Rust ~14× above C; Go ~74×
-(runtime + GC in every binary).
-
-- **Runtime memory** ([chart](https://github.com/karalang/kara-katas/blob/main/graphs/rss-seq.png)) — Kāra/C/Rust at parity; Kāra runs leak-free at native footprint. Go's GC heap is 2–8×.
-- **Compile cost** ([time](https://github.com/karalang/kara-katas/blob/main/graphs/compile-elapsed.png) · [memory](https://github.com/karalang/kara-katas/blob/main/graphs/compile-rss.png)) — faster than `rustc -O` on every program (~0.55–0.8×) and ~0.3× its peak memory.
-
-<sub>The two sequential-lane charts above and the parallel-lane chart below are mirrored from kara-katas into [`docs/assets/`](docs/assets) (GitHub doesn't reliably render hotlinked external SVGs). After adding a kata, regenerate them in kara-katas (`python3 scripts/bench-graph.py`) and refresh with [`scripts/sync-bench-charts.sh`](scripts/sync-bench-charts.sh).</sub>
-
-**Parallel lane — auto-par vs hand-tuned** (default runtime) — the comparison
-that matters. Kāra's compiler auto-parallelizes dependency-free reductions/maps
-from **zero parallel source** — no `rayon`, no goroutines, no thread plumbing,
-no data-race risk — and the chart pits that against hand-written Rust `rayon`,
-Go goroutines, and a raw C-pthreads floor on the same workload. Each dot is one
-program; lower is faster; everything relative to **Rust = 1.0**.
-
-![Runtime, parallel lane — Kāra auto-par vs Rust rayon / Go / C-pthreads, relative to Rust](docs/assets/runtime-par.png)
-
-Across the **37 programs** that currently ship the full parallel comparator set,
-Kāra's auto-par runs at a median **1.14× of hand-tuned `rayon`** (typically within
-~10–15%), is **faster than `rayon` outright on ten** (best #22 0.58×, #20, #11,
-#86), beats Go's goroutines on **28 of 37** — often by multiples, as dispatch
-overhead swamps fine-grained reductions — and **edges or matches the raw-pthreads
-C floor on nine** of the allocation-heavy ones, for **none** of the engineering
-cost. It is not uniformly fastest — a few string-/allocation-churn kernels trail
-both C and Go (worst #3629 bfs_sieve). More points land automatically as parallel
-katas are added.
-
-The intra-Kāra view of the same effect (same source, auto-par vs its own
-sequential lane) runs **3.7×** on a ~100 ns kernel up to **13.4×** on a heavier
-one, against an 18-core ceiling ([speedup chart](https://github.com/karalang/kara-katas/blob/main/graphs/autopar-speedup.png)).
-It applies to data-parallel work over large datasets — not I/O-bound, tiny, or
-sequentially-dependent loops, where the compiler's cost gate declines to
-parallelize.
-
-### Toolchain
-
-- LLVM-backed codegen.
-- Address-sanitizer–clean across the codegen E2E suite.
-- Structured diagnostics and the AI-first compiler interface described above.
-
-### Targets
-
-- **Native** — the v1 compile target.
-- **WASM** (`wasm32-wasip1`) — single-file compute builds work today: `karac build x.kara --target=wasm_wasi` emits a `.wasm` that runs under any WASI host (arith, `Vec`, `Option`, `String`, `Map`, JSON, structs/enums/`match`, recursion, file I/O via WASI preopens — byte-identical to native). Verified end-to-end under `node:wasi`; see [`examples/wasm_hello`](examples/wasm_hello). **Compute-only for now** — no networking or auto-parallelism on WASM yet (the wasm runtime archive is built without the tokio/scheduler surface), and project-mode/browser builds are in progress. Scope: [docs/implementation_checklist/phase-10-targets.md](docs/implementation_checklist/phase-10-targets.md).
-- **GPU and embedded** — on the roadmap (Phase 10); one language across targets under per-target profile constraints. GPU ships as a compile target first; call-site ergonomics come later. See [docs/design.md](docs/design.md).
+- **Native**: Linux x86_64, Linux aarch64 and Apple-silicon macOS in v1. Windows follows in v1.1.
+- **WebAssembly**: plain `wasm32` (`karac build --target=wasm_wasi`) for compute programs.
 
 ## Docs
 
-- **[docs/design.md](docs/design.md)** — The language specification. Authoritative source for all committed design decisions.
-- **[docs/syntax.md](docs/syntax.md)** — Syntax reference and quick lookup.
-- **[docs/glossary.md](docs/glossary.md)** — Terminology used across the design and compiler.
-- **[docs/roadmap.md](docs/roadmap.md)** — Compiler implementation plan, phase by phase.
-- **[docs/implementation_checklist/](docs/implementation_checklist/)** — Items to validate, benchmark, or revisit during specific phases.
-- **[docs/deferred.md](docs/deferred.md)** — Committed designs for deferred features (P1: decided/non-breaking, P2: speculative).
-- **[docs/dogfooding.md](docs/dogfooding.md)** — The V1 dogfooding roster: real programs built in Kāra that surface bugs, harden the language, and prove its differentiating features.
+- **[docs/design.md](docs/design.md)**: the language specification.
+- **[docs/core-semantics.md](docs/core-semantics.md)**: the normative core (moves, borrows, drops, patterns, providers), each rule pinned by a program in `corpus/core/`.
+- **[docs/library/](docs/library/)**: the standard library.
+- **[docs/syntax.md](docs/syntax.md)** and **[docs/glossary.md](docs/glossary.md)**: quick reference and terminology.
+- **[docs/deferred.md](docs/deferred.md)**: designs for features scheduled after v1.
+- **[docs/roadmap.md](docs/roadmap.md)**: what is done and what comes next.
 
-## Project Status
+## Project status
 
-Actively developed, pre-1.0. The compiler frontend, interpreter, query API, auto-concurrency runtime, and LLVM codegen are complete (roadmap Phases 0–7); the standard-library floor and verification enforcement are effectively done (Phases 8–9), and the additional targets — WASM, the GPU gate — are mostly in place (Phase 10). The project is now in its **v1 pivot: self-hosting the compiler in Kāra** (Phase 12) — the lexer is fully ported, and the parser, resolver, typechecker, and codegen each have slices landed and passing a differential oracle against the Rust seed — alongside test coverage and bug-fixing. Remaining before v1: completing self-hosting, then the long-tail standard library (Phase 11). See [docs/roadmap.md](docs/roadmap.md) for the phase-by-phase breakdown.
+Pre-1.0, with v1 in its final stretch. The compiler lowers every program to a mid-level IR (MIR), which both the interpreter and the LLVM backend run, and its corpus of thousands of programs with expected outputs is the release gate. Remaining for v1: `dyn Trait`, effect variables for stored callbacks, provider overrides for the file system, network and standard streams, and the release itself.
 
-We took a **tree-walk interpreter first** approach: language semantics were validated with an interpreter before LLVM code generation.
+## Prior art
 
-## Prior Art
-
-| Language/System | What Kāra takes |
+| Language | What Kāra takes |
 |---|---|
-| **Rust** | Ownership, enums, pattern matching, traits, `Result<T,E>` |
-| **Koka** | Algebraic effect system (simplified: no handlers, trait injection instead) |
-| **Zig** | Memory layout control, comptime (deferred) |
-| **Go** | Simple concurrency model (blocking I/O on threads) |
-| **Swift** | Inferred reference counting (as fallback, not primary) |
-| **Unity DOTS / Bevy** | Data-oriented design, SoA layouts |
+| **Rust** | Ownership, enums, pattern matching, traits, `Result` |
+| **Swift** | Parameters that borrow by default, with consumption written (`own`) |
+| **Koka** | An effect system, simplified: no handlers, providers instead |
+| **Go** | Blocking-style I/O on lightweight tasks |
 
-## Getting Started
+## Getting started
 
-### Install a prebuilt dev preview
+### Install
 
-Self-contained preview builds (no LLVM or Rust needed) are on the
-[releases page](https://github.com/karalang/kara/releases) for x86_64/aarch64
-Linux and Apple-silicon macOS. Download the newest tarball for your platform,
-then:
-
-```bash
-tar xzf karac-*.tar.gz
-export PATH="$PWD/karac-<version>-<platform>/bin:$PATH"
-karac --version
-```
-
-The layout is relocatable — the unpacked directory can live anywhere. macOS:
-clear Gatekeeper quarantine once with `xattr -dr com.apple.quarantine
-<unpacked-dir>`. `karac run` (JIT) needs nothing else; `karac build` (native
-binaries) needs a C linker (`build-essential` / Xcode CLT). WASM targets are
-not bundled — build from source for those. These are pre-v1 previews: expect
-breakage, and report issues with the exact `karac --version` string (its
-`+g<sha>` suffix pins the build's commit).
+Prebuilt binaries for Linux x86_64, Linux aarch64 and Apple-silicon macOS arrive with the v1 release. Until then, build from source.
 
 ### Build from source
 
-You'll need a [Rust toolchain](https://rustup.rs) and LLVM 18 (`llvm-18-dev
-libpolly-18-dev` on apt, `brew install llvm@18` on macOS — point `llvm-sys` at
-it with `LLVM_SYS_181_PREFIX=$(llvm-config-18 --prefix)` / `$(brew --prefix
-llvm@18)` if it isn't found automatically):
+You need a [Rust toolchain](https://rustup.rs) and LLVM 18 (`llvm-18-dev libpolly-18-dev` on apt, `brew install llvm@18` on macOS; point `llvm-sys` at it with `LLVM_SYS_181_PREFIX=$(llvm-config-18 --prefix)` or `$(brew --prefix llvm@18)` if it is not found):
 
 ```bash
 git clone https://github.com/karalang/kara
 cd kara
-cargo build --release --features llvm    # the compiler + JIT runner → target/release/
-# Runtime archives `karac build` links into native binaries — lean first,
-# then full (both emit the same canonical filename, so order matters):
+cargo build --release --features llvm    # the compiler and the JIT runner, in target/release/
+# The runtime archives `karac build` links: the lean one first, then the full one.
 cargo rustc -p karac-runtime --release --no-default-features --features net --crate-type staticlib
 cp target/release/libkarac_runtime.a target/release/libkarac_runtime_min.a
 cargo rustc -p karac-runtime --release --crate-type staticlib
@@ -447,38 +233,7 @@ export PATH="$PWD/target/release:$PATH"
 karac --version
 ```
 
-Two further archives (`wasm`, `wasm-threads`) are needed only for
-`karac build --target=wasm_*`; see [CLAUDE.md](CLAUDE.md) for the full
-four-archive recipe.
-
-### Developing the compiler
-
-```bash
-cargo build                          # build the compiler (no LLVM backend)
-cargo test                           # run the front-end tests (lexer, parser, resolver, typechecker, effect, ownership, interpreter)
-cargo test --features llvm           # also run codegen E2E and memory-sanitizer tests
-cargo clippy --all --all-targets -- -D warnings   # lint
-cargo fmt                            # format
-```
-
-Codegen E2E tests (`tests/codegen.rs`, `tests/par_codegen.rs`,
-`tests/memory_sanitizer.rs`) are gated on `--features llvm` and need the
-runtime staticlib archives from the build-from-source recipe above.
-
-Build the archives with `cargo rustc … --crate-type staticlib`, **not**
-`cargo build -p karac-runtime --release`. The runtime's `crate-type` is `["staticlib", "rlib"]`,
-and emitting both artifacts in one `cargo build` under `lto = "fat"` defeats the
-staticlib's cross-module dead-code elimination — std's DWARF backtrace
-symbolizer then survives `-dead_strip` into *every* compiled binary (measured:
-auto-par floor 295.7 KiB → 417.7 KiB, +41%). The rationale is spelled out at
-`runtime/Cargo.toml`'s `crate-type` line.
-
-Without the archives the E2E tests skip with a stderr notice rather than
-exercise real binaries — they pass vacuously. The memory-sanitizer suite
-additionally needs a `cc` toolchain that supports `-fsanitize=address`; it skips
-gracefully on hosts that don't.
-
-See [docs/roadmap.md](docs/roadmap.md) for current progress and [docs/design.md](docs/design.md) for the language specification.
+`karac build` needs a C linker (`build-essential` or the Xcode command-line tools). The WebAssembly and optional archives, and the full test gate, are in [CLAUDE.md](CLAUDE.md) and [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
