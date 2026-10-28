@@ -17,6 +17,11 @@ program fails only if the median of three 21-run timings (`--runs 21`, run
 three times) is under 0.9x and outside the band of a program with no task
 site (such as apps/pipeline/sensor_merge) timed in the same runs: on a 5..25 ms
 app one 21-run median swings by 0.15..0.45 (Gowtham's call, 2026-10-26).
+A program whose seq median is under 20 ms (`SHORT_S`) is outside the floor and
+listed by name with its ratio on a line of its own: there the fixed cost of
+going multi-threaded, about 0.2..0.3 ms a worker to start the pool on a
+4-core cloud host plus multi-threaded malloc and wakes, outweighs anything its
+sites can win (B-2026-10-28-14, B-2026-10-28-15; Gowtham's call, 2026-10-28).
 
     python3 scripts/m4b-speedup.py --karac target/release/karac \\
         --katas ../kara-katas --out /mnt/attach/project-files/review/m4b-speedup --threads 4
@@ -53,6 +58,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 LOOPS = REPO / "docs" / "investigations" / "m4-kata-auto-par-loops.json"
 FLOOR = 0.9
+# Seq medians under this many seconds are outside the floor (see the docstring).
+SHORT_S = 0.020
 # `auto-par: <what>: a, b` as `build_renamed_source` prints it.
 DONE = re.compile(r"^auto-par: (loops as tasks|statements as tasks|reductions): (.*)$")
 
@@ -212,7 +219,7 @@ def measure(prog: dict, seq: Path, par: Path, args) -> dict:
     if prog["expected"] is not None:
         oracle = first["seq"]["stdout"] == prog["expected"] and first["par"]["stdout"] == prog["expected"]
     return {"verdict": "RAN", "seq_s": round(s, 4), "par_s": round(p, 4),
-            "ratio": round(s / p, 3) if p else None,
+            "ratio": round(s / p, 3) if p else None, "short": s < SHORT_S,
             "seq_spread": [round(min(walls["seq"]), 4), round(max(walls["seq"]), 4)],
             "par_spread": [round(min(walls["par"]), 4), round(max(walls["par"]), 4)],
             "seq_cpu_per_wall": round(statistics.median(cpus["seq"]), 2),
@@ -230,7 +237,8 @@ def markdown(report: dict) -> str:
              f"- Ratio is seq/par: above 1 the parallel build is faster. Floor {FLOOR}.", ""]
     ran = [r for r in rows if r.get("ratio") is not None]
     with_sites = [r for r in ran if r["par_build"].get("sites")]
-    under = [r for r in ran if r["ratio"] < FLOOR]
+    short = [r for r in ran if r["seq_s"] < SHORT_S]
+    under = [r for r in ran if r["ratio"] < FLOOR and r["seq_s"] >= SHORT_S]
     aa = [r["ratio"] for r in ran if r.get("identical_binary")]
     counted = [r for r in ran if r.get("ir_ratio") is not None]
     bad = [r for r in rows if r.get("output_same") is False or r.get("matches_expected") is False]
@@ -239,6 +247,9 @@ def markdown(report: dict) -> str:
         lines.append(f"- {len(ran)} of {len(rows)} programs timed; geomean ratio {gm:.3f}; "
                      f"{len(with_sites)} got at least one task site; {len(under)} under {FLOOR}; "
                      f"{len(bad)} with differing output.")
+    if short:
+        listed = ", ".join(f"{r['name']} {r['ratio']}" for r in short)
+        lines.append(f"- Outside the floor, seq under {SHORT_S * 1000:.0f} ms ({len(short)}): {listed}.")
     if counted:
         ir_under = [r for r in counted if r["ir_ratio"] < FLOOR]
         slow_same = [r for r in counted if r["ratio"] < FLOOR and r["ir_ratio"] >= 0.99]
@@ -266,7 +277,9 @@ def markdown(report: dict) -> str:
         out = "same" if r["output_same"] else "DIFFERS"
         if r.get("matches_expected") is False:
             out += ", not expected.out"
-        flag = " **under floor**" if r["ratio"] < FLOOR else ""
+        flag = ""
+        if r["ratio"] < FLOOR:
+            flag = " (short)" if r["seq_s"] < SHORT_S else " **under floor**"
         cells = ""
         if ir:
             if r.get("ir_ratio") is None:
@@ -300,7 +313,7 @@ def main() -> int:
         print("no program matched", file=sys.stderr)
         return 2
     report = {"karac": args.karac, "karac_sha": karac_sha(args.karac), "checkout_sha": git_sha(REPO), "katas_sha": git_sha(Path(args.katas)),
-              "nproc": os.cpu_count(), "threads": args.threads, "runs": args.runs, "seed": args.seed, "floor": FLOOR,
+              "nproc": os.cpu_count(), "threads": args.threads, "runs": args.runs, "seed": args.seed, "floor": FLOOR, "short_s": SHORT_S,
               "started": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "programs": []}
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -342,7 +355,8 @@ def main() -> int:
     stem.with_suffix(".json").write_text(json.dumps(report, indent=1) + "\n")
     stem.with_suffix(".md").write_text(markdown(report))
     print(stem.with_suffix(".md"))
-    under = [r for r in report["programs"] if r.get("ratio") is not None and r["ratio"] < FLOOR]
+    under = [r for r in report["programs"]
+             if r.get("ratio") is not None and r["ratio"] < FLOOR and r["seq_s"] >= SHORT_S]
     return 1 if under else 0
 
 
