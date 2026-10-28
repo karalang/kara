@@ -59,7 +59,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | false-positive | 52 |
-| diagnostics | 40 |
+| diagnostics | 41 |
 | missing-feature | 39 |
 | soundness | 24 |
 | perf | 18 |
@@ -73,11 +73,11 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 89 |
+| typecheck | 90 |
 | mir | 45 |
 | mir-llvm | 27 |
+| ownership | 22 |
 | codegen | 22 |
-| ownership | 21 |
 | interp | 21 |
 | cli | 19 |
 | runtime | 11 |
@@ -98,6 +98,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-28-3 | 2026-10-28 | mir-llvm | low | A compiled program's run time moves 10-20% with where its hot function lands, and the runtime archive is one of the things that moves it: kata 125 runs about 10% slower whenever karac.main sits at 16 mod 64 (the full archive's larger headers shift user code by 0x3130 bytes), kata 28 KMP 0.41 vs 0.52 s between layouts; no alignment setting tried removes the swing without slowing another program 7-20% | — |
 | B-2026-10-28-8 | 2026-10-28 | mir-llvm | medium | Auto-par default-on links the task pool into every binary with a parallel site: two_sum brute_force is 511,928 B against 412,672 B with KARAC_AUTO_PAR=0 (+24%), putting the ADR-2 size geomean at 1.241x against the 1.25x bar; the next runtime growth breaks ADR-2 | — |
 | B-2026-10-28-10 | 2026-10-28 | mir-llvm | low | With compile_mir linear (B-2026-10-28-6), an auto-par build of apps/cli/mini_inflect still takes about 13 s against 5.3 s with KARAC_AUTO_PAR=0: the in-order #seq twins double the bodies (838 against 404) and LLVM's opt + emission takes 7.4 s against 2.7 s | — |
+| B-2026-10-28-11 | 2026-10-28 | typecheck+ownership | medium | `karac check` accepts a use-after-move in a trait default body copied into two impls whose call in it borrows in one impl and consumes in the other (`t.take(s)`, `Look.take(s: ref String)` vs `Keep.take(s: own String)`): the error is raised for the consuming copy, then dropped by a program-wide "not a move here" span set the borrowing copy filled; MIR build refuses it (B-2026-10-28-9 family, not fixed by it) | — |
 
 ### Relocated
 
