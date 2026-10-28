@@ -1,0 +1,21 @@
+nums = [4,2,3], k = 1 -> 5
+nums = [3,-1,0,2], k = 3 -> 6
+nums = [2,-3,-1,5,-4], k = 2 -> 13
+nums = [-5], k = 1 -> 5
+nums = [-5], k = 2 -> -5
+nums = [5], k = 1 -> -5
+nums = [0], k = 3 -> 0
+nums = [-2,-3], k = 1 -> 1
+nums = [-8,3,-5,-3,-4], k = 6 -> 23
+nums = [-1,-1,1], k = 3 -> 1
+nums = [100,-100,7], k = 4 -> 193
+10000 of -100, k = 10000 -> 1000000
+10000 of -100, k = 9999 -> 999800
+10000 of 100, k = 9999 -> 999800
+10000 of 100, k = 10000 -> 1000000
+-100, 99 in turn, k = 5001 -> 994802
+-100, 99 in turn, k = 2500 -> 495000
+3000 random arrays of 13691 numbers: answers sum to 34871, checksum 20381149
+1000 random arrays of 51700 numbers: answers sum to 2277887, checksum 262173459
+100 random arrays of 103965 numbers: answers sum to 4801684, checksum 367382971
+3 random arrays of 18237 numbers: answers sum to 913728, checksum 322464858

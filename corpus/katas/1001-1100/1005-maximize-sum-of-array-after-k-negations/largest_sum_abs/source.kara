@@ -1,0 +1,105 @@
+// LeetCode #1005: Maximize Sum Of Array After K Negations -- by size
+//
+// Sorted by absolute value, largest first, a negative is worth flipping
+// more the earlier it comes: walk the array flipping each negative while
+// flips remain. An odd flip left over goes to the last number, the one
+// nearest zero, which is never negative by then. O(n log n).
+fn largest_sum_after_k_negations(nums: ref Vec[i64], k: i64) -> i64 {
+    let mut by_size = nums.clone();
+    by_size.sort_by_key(|x| -x.abs());
+    let mut left = k;
+    for i in 0..by_size.len() {
+        if by_size[i] < 0 and left > 0 {
+            by_size[i] = -by_size[i];
+            left -= 1;
+        }
+    }
+    if left % 2 == 1 {
+        let last = by_size.len() - 1;
+        by_size[last] = -by_size[last];
+    }
+    let mut sum = 0;
+    for x in by_size.iter() {
+        sum += x;
+    }
+    sum
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `n` numbers from -`reach` to `reach`, each negative with chance `neg` in 8
+fn random_nums(n: i64, reach: i64, neg: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut nums: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        let size = next_random(mut seed) % (reach + 1);
+        nums.push(if next_random(mut seed) % 8 < neg { -size } else { size });
+    }
+    nums
+}
+
+fn show(nums: ref Vec[i64]) -> String {
+    let parts: Vec[String] = nums.iter().map(|x| x.to_string()).collect();
+    "[" + parts.join(",") + "]"
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let examples: Vec[(Vec[i64], i64)] = vec![
+        (vec![4, 2, 3], 1),
+        (vec![3, -1, 0, 2], 3),
+        (vec![2, -3, -1, 5, -4], 2),
+        (vec![-5], 1),
+        (vec![-5], 2),
+        (vec![5], 1),
+        (vec![0], 3),
+        (vec![-2, -3], 1),
+        (vec![-8, 3, -5, -3, -4], 6),
+        (vec![-1, -1, 1], 3),
+        (vec![100, -100, 7], 4),
+    ];
+    for (nums, k) in examples.iter() {
+        println(f"nums = {show(nums)}, k = {k} -> {largest_sum_after_k_negations(nums, k)}");
+    }
+    // LeetCode's longest: 10000 numbers, and 10000 flips
+    let n = 10000;
+    let low: Vec[i64] = Vec.filled(n, -100);
+    let high: Vec[i64] = Vec.filled(n, 100);
+    let mut turns: Vec[i64] = Vec.new();
+    for i in 0..n {
+        turns.push(if i % 2 == 0 { -100 } else { 99 });
+    }
+    let large: Vec[(String, Vec[i64], i64)] = vec![
+        ("10000 of -100, k = 10000".to_string(), low.clone(), 10000),
+        ("10000 of -100, k = 9999".to_string(), low, 9999),
+        ("10000 of 100, k = 9999".to_string(), high.clone(), 9999),
+        ("10000 of 100, k = 10000".to_string(), high, 10000),
+        ("-100, 99 in turn, k = 5001".to_string(), turns.clone(), 5001),
+        ("-100, 99 in turn, k = 2500".to_string(), turns, 2500),
+    ];
+    for (name, nums, k) in large.iter() {
+        println(f"{name} -> {largest_sum_after_k_negations(nums, k)}");
+    }
+    let mut seed = 1005;
+    let groups: Vec[(i64, i64, i64)] = vec![(3000, 8, 6), (1000, 100, 100), (100, 2000, 100), (3, 10000, 100)];
+    for (count, most, reach) in groups.iter() {
+        let mut total = 0;
+        let mut sum = 0;
+        let mut check = 0;
+        for _ in 0..count {
+            let size = 1 + next_random(mut seed) % most;
+            let neg = next_random(mut seed) % 9;
+            let nums = random_nums(size, reach, neg, mut seed);
+            let k = 1 + next_random(mut seed) % (2 * size + 1).min(10000);
+            let got = largest_sum_after_k_negations(nums, k);
+            total += size;
+            sum += got;
+            check = (check * 31 + got % 1000000007 + 1000000007) % 1000000007;
+        }
+        println(f"{count} random arrays of {total} numbers: answers sum to {sum}, checksum {check}");
+    }
+}

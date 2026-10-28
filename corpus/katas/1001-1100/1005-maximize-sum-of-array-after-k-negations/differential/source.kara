@@ -1,0 +1,314 @@
+// LeetCode #1005: Maximize Sum Of Array After K Negations -- differential
+//
+// The five arms, copied, against the statement read literally and five
+// more properties. See README.md § Differential.
+
+fn sum_star(nums: ref Vec[i64], k: i64) -> i64 {
+    let mut count: Vec[i64] = Vec.filled(201, 0);
+    for x in nums.iter() {
+        count[x + 100] += 1;
+    }
+    let mut left = k;
+    let mut v = -100;
+    while v < 0 and left > 0 {
+        let flip = count[v + 100].min(left);
+        count[v + 100] -= flip;
+        count[100 - v] += flip;
+        left -= flip;
+        v += 1;
+    }
+    let mut sum = 0;
+    for v in -100..101 {
+        sum += v * count[v + 100];
+    }
+    if left % 2 == 1 {
+        // no negative is left, so the smallest number is the one nearest zero
+        let mut smallest = 0;
+        while count[smallest + 100] == 0 {
+            smallest += 1;
+        }
+        sum -= 2 * smallest;
+    }
+    sum
+}
+
+fn sum_sort(nums: ref Vec[i64], k: i64) -> i64 {
+    let mut sorted = nums.clone();
+    sorted.sort();
+    let mut left = k;
+    let mut i = 0;
+    while i < sorted.len() and sorted[i] < 0 and left > 0 {
+        sorted[i] = -sorted[i];
+        left -= 1;
+        i += 1;
+    }
+    let mut sum = 0;
+    let mut smallest = sorted[0];
+    for x in sorted.iter() {
+        sum += x;
+        smallest = smallest.min(x);
+    }
+    if left % 2 == 1 {
+        sum -= 2 * smallest;
+    }
+    sum
+}
+
+fn sum_heap(nums: ref Vec[i64], k: i64) -> i64 {
+    let mut heap: PriorityQueue[i64] = PriorityQueue.from(nums.clone());
+    for _ in 0..k {
+        match heap.pop() {
+            Some(x) => heap.push(-x),
+            None => {}
+        }
+    }
+    let mut sum = 0;
+    for x in heap.into_sorted_vec().iter() {
+        sum += x;
+    }
+    sum
+}
+
+fn sum_abs(nums: ref Vec[i64], k: i64) -> i64 {
+    let mut by_size = nums.clone();
+    by_size.sort_by_key(|x| -x.abs());
+    let mut left = k;
+    for i in 0..by_size.len() {
+        if by_size[i] < 0 and left > 0 {
+            by_size[i] = -by_size[i];
+            left -= 1;
+        }
+    }
+    if left % 2 == 1 {
+        let last = by_size.len() - 1;
+        by_size[last] = -by_size[last];
+    }
+    let mut sum = 0;
+    for x in by_size.iter() {
+        sum += x;
+    }
+    sum
+}
+
+fn sum_select(nums: ref Vec[i64], k: i64) -> i64 {
+    let mut sum = 0;
+    let mut sum_abs = 0;
+    let mut negatives = 0;
+    let mut nearest = nums[0].abs();
+    for x in nums.iter() {
+        sum += x;
+        sum_abs += x.abs();
+        nearest = nearest.min(x.abs());
+        if x < 0 {
+            negatives += 1;
+        }
+    }
+    if k <= negatives {
+        let mut work = nums.clone();
+        sum - 2 * smallest_sum(mut work, k)
+    } else if (k - negatives) % 2 == 1 {
+        sum_abs - 2 * nearest
+    } else {
+        sum_abs
+    }
+}
+
+// The sum of the `k` smallest numbers of `a`, by quickselect: partition
+// around a middle pivot into smaller, equal and larger, then keep the
+// smaller part whole and look into the part that holds the k-th.
+fn smallest_sum(a: mut ref Vec[i64], k: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = a.len();
+    let mut need = k;
+    let mut total = 0;
+    while need > 0 {
+        let pivot = a[lo + (hi - lo) / 2];
+        // three-way partition of a[lo..hi]: [lo, lt) < pivot, [lt, gt) ==, [gt, hi) >
+        let mut lt = lo;
+        let mut i = lo;
+        let mut gt = hi;
+        while i < gt {
+            if a[i] < pivot {
+                a.swap(lt, i);
+                lt += 1;
+                i += 1;
+            } else if a[i] > pivot {
+                gt -= 1;
+                a.swap(i, gt);
+            } else {
+                i += 1;
+            }
+        }
+        let below = lt - lo;
+        let equal = gt - lt;
+        if need <= below {
+            hi = lt;
+        } else {
+            for j in lo..lt {
+                total += a[j];
+            }
+            need -= below;
+            let take = need.min(equal);
+            total += take * pivot;
+            need -= take;
+            lo = gt;
+        }
+    }
+    total
+}
+
+// The statement read literally: each of the k steps negates one number,
+// any one. Which numbers end up negated is a set of signs, so walk the
+// sets reachable after each step, then take the best sum among them.
+// O(k n 2^n), for small arrays.
+fn sum_brute(nums: ref Vec[i64], k: i64) -> i64 {
+    let n = nums.len();
+    let masks = 1 << n;
+    let mut reach: Vec[bool] = Vec.filled(masks, false);
+    reach[0] = true;
+    for _ in 0..k {
+        let mut next: Vec[bool] = Vec.filled(masks, false);
+        for m in 0..masks {
+            if reach[m] {
+                for i in 0..n {
+                    next[m ^ (1 << i)] = true;
+                }
+            }
+        }
+        reach = next;
+    }
+    let mut best = i64.MIN;
+    for m in 0..masks {
+        if reach[m] {
+            let mut sum = 0;
+            for i in 0..n {
+                sum += if (m >> i) & 1 == 1 { -nums[i] } else { nums[i] };
+            }
+            best = best.max(sum);
+        }
+    }
+    best
+}
+
+fn arms(nums: ref Vec[i64], k: i64) -> Vec[i64] {
+    vec![
+        sum_star(nums, k),
+        sum_sort(nums, k),
+        sum_heap(nums, k),
+        sum_abs(nums, k),
+        sum_select(nums, k),
+    ]
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_nums(n: i64, reach: i64, neg: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut nums: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        let size = next_random(mut seed) % (reach + 1);
+        nums.push(if next_random(mut seed) % 8 < neg { -size } else { size });
+    }
+    nums
+}
+
+fn main() {
+    let names = ["star", "sort", "heap", "abs", "select"];
+    let mut failures: Vec[i64] = vec![0; 6];
+    let mut checks = 0;
+    let mut arrays = 0;
+    let mut numbers = 0;
+    let mut sum = 0;
+    let mut check = 0;
+    let mut seed = 10051;
+    for t in 0..3200 {
+        let small = t < 3000;
+        let size = if small { 1 + next_random(mut seed) % 6 } else { 1 + next_random(mut seed) % 300 };
+        let reach = if small { 1 + next_random(mut seed) % 6 } else { 100 };
+        let neg = next_random(mut seed) % 9;
+        let nums = random_nums(size, reach, neg, mut seed);
+        let k = 1 + next_random(mut seed) % (2 * size + 2);
+        let got = arms(nums, k);
+        arrays += 1;
+        numbers += size;
+        sum += got[0];
+        check = (check * 31 + got[0] % 1000000007 + 1000000007) % 1000000007;
+        let mut total = 0;
+        let mut total_abs = 0;
+        let mut negatives = 0;
+        let mut has_zero = false;
+        let mut smallest = nums[0];
+        for x in nums.iter() {
+            total += x;
+            total_abs += x.abs();
+            smallest = smallest.min(x);
+            if x < 0 {
+                negatives += 1;
+            }
+            if x == 0 {
+                has_zero = true;
+            }
+        }
+        let brute = if small { sum_brute(nums, k) } else { 0 };
+        let more = arms(nums, k + 2);
+        let mut reversed = nums.clone();
+        reversed.reverse();
+        let back = arms(reversed, k);
+        for a in 0..5 {
+            // P1: the statement, on the small arrays
+            if small {
+                checks += 1;
+                if got[a] != brute {
+                    failures[0] += 1;
+                }
+            }
+            // P2: two more flips never give less, and give the same once
+            // every negative can be flipped
+            checks += 1;
+            if more[a] < got[a] or (k >= negatives and more[a] != got[a]) {
+                failures[1] += 1;
+            }
+            // P3: the array reversed gives the same answer
+            checks += 1;
+            if back[a] != got[a] {
+                failures[2] += 1;
+            }
+            // P4: never more than the sum of the sizes, and all of it when
+            // every negative is flipped and the flips left cancel or land
+            // on a 0
+            checks += 1;
+            let whole = k >= negatives and ((k - negatives) % 2 == 0 or has_zero);
+            if got[a] > total_abs or (whole and got[a] != total_abs) {
+                failures[3] += 1;
+            }
+            // P5: every flip moves the sum by an even amount, and spending
+            // all k on the smallest number is a lower bound
+            checks += 1;
+            let floor = if k % 2 == 0 { total } else { total - 2 * smallest };
+            if (got[a] - total) % 2 != 0 or got[a] < floor {
+                failures[4] += 1;
+            }
+            // P6: each arm agrees with at least two of the other four
+            checks += 1;
+            let mut agree = 0;
+            for b in 0..5 {
+                if b != a and got[b] == got[a] {
+                    agree += 1;
+                }
+            }
+            if agree < 2 {
+                failures[5] += 1;
+            }
+        }
+    }
+    let mut total = 0;
+    for p in 0..6 {
+        total += failures[p];
+        if failures[p] > 0 {
+            println(f"P{p + 1}: {failures[p]} failures");
+        }
+    }
+    println(f"{arrays} arrays of {numbers} numbers: answers sum to {sum}, checksum {check}, {checks} checks over {names.len()} arms: {total} failures");
+}

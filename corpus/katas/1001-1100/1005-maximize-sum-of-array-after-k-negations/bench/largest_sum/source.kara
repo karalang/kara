@@ -1,0 +1,65 @@
+// Benchmark: LeetCode #1005 Maximize Sum Of Array After K Negations -- the
+// ★ arm, counting, on arrays of 10000 numbers, LeetCode's longest.
+// Mirrors largest_sum.c, .rs, .py and go-seq/.
+
+fn largest_sum_after_k_negations(nums: ref Vec[i64], k: i64) -> i64 {
+    let mut count: Vec[i64] = Vec.filled(201, 0);
+    for x in nums.iter() {
+        count[x + 100] += 1;
+    }
+    let mut left = k;
+    let mut v = -100;
+    while v < 0 and left > 0 {
+        let flip = count[v + 100].min(left);
+        count[v + 100] -= flip;
+        count[100 - v] += flip;
+        left -= flip;
+        v += 1;
+    }
+    let mut sum = 0;
+    for v in -100..101 {
+        sum += v * count[v + 100];
+    }
+    if left % 2 == 1 {
+        let mut smallest = 0;
+        while count[smallest + 100] == 0 {
+            smallest += 1;
+        }
+        sum -= 2 * smallest;
+    }
+    sum
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let rounds = 2500;
+    let n = 10000;
+    let mut seed = 1005;
+    // 20 arrays of 10000 numbers from -100 to 100; in array t each is
+    // negative with chance (t % 7 + 1) in 8
+    let mut arrays: Vec[Vec[i64]] = Vec.new();
+    for t in 0..20 {
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            let size = next_random(mut seed) % 101;
+            nums.push(if next_random(mut seed) % 8 < t % 7 + 1 { -size } else { size });
+        }
+        arrays.push(nums);
+    }
+    let mut total = 0;
+    let mut check = 0;
+    for r in 0..rounds {
+        for i in 0..20 {
+            let t = (r + i) % 20;
+            let k = 1 + (r * 37 + t * 101) % 10000;
+            let got = largest_sum_after_k_negations(arrays[t], k);
+            total += got;
+            check = (check * 31 + got % 1000000007 + 1000000007) % 1000000007;
+        }
+    }
+    println(f"{rounds} rounds over 20 arrays of {n} numbers: answers sum to {total}, checksum {check}");
+}
