@@ -1,0 +1,3031 @@
+// mini_pandas: a Kāra port of the part of pandas 3.0.5 (BSD-3-Clause,
+// the pandas development team) that a data-cleaning script reaches for:
+// read_csv with its type inference, filters, new columns, missing
+// values, sorting, de-duplication, groupby aggregation and transforms,
+// merge, concat, pivot_table, melt, crosstab, rolling windows, ranks,
+// value_counts, describe and quantile, and to_csv.
+//
+// It reads data/jobs.txt, one pipeline per line (`read orders.csv |
+// where qty > 5 | select order_id,qty`), runs each in a task of its own,
+// and prints, in job order, `$ <job>` and the frame as pandas' to_csv
+// writes it, or the error pandas raises after `! `.
+//
+// The arithmetic is pandas' own, kernel by kernel, so that every float
+// prints with the same last digit: groupby sums and means use Kahan
+// summation, groupby variance is Welford's, Series means and describe
+// use numpy's pairwise sum, rolling windows add and remove with two
+// compensations, and quantiles interpolate as numpy does.
+
+import std.sync.{TaskGroup};
+
+// ============================================================ values
+
+// A column of one dtype. A missing float is NaN; a missing string is
+// None. `Obj` is the `object` dtype pandas gives a column it never saw a
+// value in.
+#[derive(Clone)]
+enum Col {
+    Int(Vec[i64]),
+    Float(Vec[f64]),
+    Bool(Vec[bool]),
+    Str(Vec[Option[String]]),
+    Obj(Vec[Option[String]]),
+}
+
+// One cell, for keys, comparisons and literals.
+#[derive(Clone)]
+enum Val {
+    I(i64),
+    F(f64),
+    B(bool),
+    S(String),
+    Na,
+}
+
+#[derive(Clone)]
+struct Frame {
+    names: Vec[String],
+    cols: Vec[Col],
+}
+
+fn nan() -> f64 {
+    0.0 / 0.0
+}
+
+fn is_nan(x: f64) -> bool {
+    x != x
+}
+
+fn signbit(x: f64) -> bool {
+    1.0.copysign(x) < 0.0
+}
+
+impl Col {
+    fn len(self) -> i64 {
+        match self {
+            Col.Int(v) => v.len(),
+            Col.Float(v) => v.len(),
+            Col.Bool(v) => v.len(),
+            Col.Str(v) => v.len(),
+            Col.Obj(v) => v.len(),
+        }
+    }
+
+    fn dtype(self) -> String {
+        match self {
+            Col.Int(_) => "int64".to_string(),
+            Col.Float(_) => "float64".to_string(),
+            Col.Bool(_) => "bool".to_string(),
+            Col.Str(_) => "str".to_string(),
+            Col.Obj(_) => "object".to_string(),
+        }
+    }
+
+    fn is_numeric(self) -> bool {
+        match self {
+            Col.Int(_) => true,
+            Col.Float(_) => true,
+            _ => false,
+        }
+    }
+
+    fn get(self, i: i64) -> Val {
+        match self {
+            Col.Int(v) => Val.I(v[i]),
+            Col.Float(v) => if is_nan(v[i]) { Val.Na } else { Val.F(v[i]) },
+            Col.Bool(v) => Val.B(v[i]),
+            Col.Str(v) => match v[i] {
+                Some(s) => Val.S(s.clone()),
+                None => Val.Na,
+            },
+            Col.Obj(v) => match v[i] {
+                Some(s) => Val.S(s.clone()),
+                None => Val.Na,
+            },
+        }
+    }
+
+    fn is_na(self, i: i64) -> bool {
+        match self {
+            Col.Float(v) => is_nan(v[i]),
+            Col.Str(v) => v[i].is_none(),
+            Col.Obj(v) => v[i].is_none(),
+            _ => false,
+        }
+    }
+
+    // The rows at `idx`, in that order; -1 is a missing row.
+    fn take(self, idx: Vec[i64]) -> Col {
+        let missing = idx.iter().any(|i| *i < 0);
+        match self {
+            Col.Int(v) => {
+                if missing {
+                    Col.Float(idx.iter().map(|i| if *i < 0 { nan() } else { v[*i] as f64 }).collect())
+                } else {
+                    Col.Int(idx.iter().map(|i| v[*i]).collect())
+                }
+            }
+            Col.Float(v) => Col.Float(idx.iter().map(|i| if *i < 0 { nan() } else { v[*i] }).collect()),
+            Col.Bool(v) => {
+                if missing {
+                    // pandas would make this an object column; no job reaches it.
+                    Col.Obj(idx.iter().map(|i| if *i < 0 { None } else { Some(bool_text(v[*i])) }).collect())
+                } else {
+                    Col.Bool(idx.iter().map(|i| v[*i]).collect())
+                }
+            }
+            Col.Str(v) => Col.Str(idx.iter().map(|i| if *i < 0 { None } else { v[*i].clone() }).collect()),
+            Col.Obj(v) => Col.Obj(idx.iter().map(|i| if *i < 0 { None } else { v[*i].clone() }).collect()),
+        }
+    }
+
+    // The column as floats, as pandas casts it for a numeric kernel.
+    fn floats(self) -> Vec[f64] {
+        match self {
+            Col.Int(v) => v.iter().map(|x| *x as f64).collect(),
+            Col.Float(v) => v.clone(),
+            Col.Bool(v) => v.iter().map(|b| if *b { 1.0 } else { 0.0 }).collect(),
+            _ => Vec.new(),
+        }
+    }
+
+    fn empty_like(self) -> Col {
+        match self {
+            Col.Int(_) => Col.Int(Vec.new()),
+            Col.Float(_) => Col.Float(Vec.new()),
+            Col.Bool(_) => Col.Bool(Vec.new()),
+            Col.Str(_) => Col.Str(Vec.new()),
+            Col.Obj(_) => Col.Obj(Vec.new()),
+        }
+    }
+}
+
+fn bool_text(b: bool) -> String {
+    if b { "True".to_string() } else { "False".to_string() }
+}
+
+// How to_csv writes one cell.
+fn cell_text(c: Col, i: i64) -> String {
+    match c {
+        Col.Int(v) => v[i].to_string(),
+        Col.Float(v) => if is_nan(v[i]) { String.new() } else { v[i].to_string() },
+        Col.Bool(v) => bool_text(v[i]),
+        Col.Str(v) => v[i].clone() ?? String.new(),
+        Col.Obj(v) => v[i].clone() ?? String.new(),
+    }
+}
+
+fn val_text(v: Val) -> String {
+    match v {
+        Val.I(n) => n.to_string(),
+        Val.F(x) => x.to_string(),
+        Val.B(b) => bool_text(b),
+        Val.S(s) => s.clone(),
+        Val.Na => String.new(),
+    }
+}
+
+// The order pandas sorts keys in: numbers by value, strings by code
+// point, NaN after everything.
+fn val_cmp(a: Val, b: Val) -> Ordering {
+    match (a, b) {
+        (Val.Na, Val.Na) => Ordering.Equal,
+        (Val.Na, _) => Ordering.Greater,
+        (_, Val.Na) => Ordering.Less,
+        (Val.S(x), Val.S(y)) => x.cmp(y),
+        (Val.B(x), Val.B(y)) => (x as i64).cmp(y as i64),
+        (Val.I(x), Val.I(y)) => x.cmp(y),
+        (x, y) => {
+            let p = num_of(x);
+            let q = num_of(y);
+            if p < q {
+                Ordering.Less
+            } else if p > q {
+                Ordering.Greater
+            } else {
+                Ordering.Equal
+            }
+        }
+    }
+}
+
+fn num_of(v: Val) -> f64 {
+    match v {
+        Val.I(n) => n as f64,
+        Val.F(x) => x,
+        Val.B(b) => if b { 1.0 } else { 0.0 },
+        _ => nan(),
+    }
+}
+
+// Equality as factorize sees it: NaN equals NaN.
+fn val_eq(a: Val, b: Val) -> bool {
+    val_cmp(a, b) == Ordering.Equal
+}
+
+// A key made of several cells, as one string for a Map.
+fn key_text(vals: Vec[Val]) -> String {
+    let mut t = String.new();
+    for v in vals {
+        match v {
+            Val.I(n) => t.push_str(f"i{n}"),
+            Val.F(x) => {
+                // 1 and 1.0 are one key, as in a pandas hash table.
+                if x == x.trunc() and x.abs() < 9.0e15 {
+                    t.push_str(f"i{x as i64}");
+                } else {
+                    t.push_str(f"f{x.to_bits()}");
+                }
+            }
+            Val.B(b) => t.push_str(if b { "b1" } else { "b0" }),
+            Val.S(s) => {
+                t.push_str("s");
+                t.push_str(s.replace("\\", "\\\\").replace("\u{1f}", "\\u"));
+            }
+            Val.Na => t.push_str("n"),
+        }
+        t.push('\u{1f}');
+    }
+    t
+}
+
+// ============================================================ frames
+
+impl Frame {
+    fn new() -> Frame {
+        Frame { names: Vec.new(), cols: Vec.new() }
+    }
+
+    fn height(self) -> i64 {
+        if self.cols.len() == 0 { 0 } else { self.cols[0].len() }
+    }
+
+    fn find(self, name: Str) -> Option[i64] {
+        for i in 0..self.names.len() {
+            if self.names[i] == name {
+                return Some(i);
+            }
+        }
+        None
+    }
+
+    fn col(self, name: Str) -> Result[Col, String] {
+        match self.find(name) {
+            Some(i) => Ok(self.cols[i].clone()),
+            None => Err(key_error(name)),
+        }
+    }
+
+    // Sets a column, replacing one of that name or appending it.
+    fn put(mut ref self, name: Str, c: own Col) {
+        match self.find(name) {
+            Some(i) => self.cols[i] = c,
+            None => {
+                self.names.push(name.to_string());
+                self.cols.push(c);
+            }
+        }
+    }
+
+    fn take(self, idx: Vec[i64]) -> Frame {
+        Frame { names: self.names.clone(), cols: self.cols.iter().map(|c| c.take(idx)).collect() }
+    }
+
+    fn rows_where(self, keep: Vec[bool]) -> Frame {
+        let mut idx: Vec[i64] = Vec.new();
+        for i in 0..keep.len() {
+            if keep[i] {
+                idx.push(i);
+            }
+        }
+        self.take(idx)
+    }
+
+    fn row(self, i: i64, which: Vec[i64]) -> Vec[Val] {
+        which.iter().map(|j| self.cols[*j].get(i)).collect()
+    }
+}
+
+fn key_error(name: Str) -> String {
+    f"KeyError: '{name}'"
+}
+
+fn index_of_all(f: Frame, names: Vec[String]) -> Result[Vec[i64], String] {
+    let mut out: Vec[i64] = Vec.new();
+    for n in names {
+        match f.find(n) {
+            Some(i) => out.push(i),
+            None => return Err(key_error(n)),
+        }
+    }
+    Ok(out)
+}
+
+fn range_idx(n: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for i in 0..n {
+        v.push(i);
+    }
+    v
+}
+
+// ============================================================ float kernels
+
+// numpy's add.reduce over float64: a pairwise sum, eight accumulators
+// at a time, from 0.0. pandas reaches it from Series.mean and describe.
+fn pairwise_sum(a: Vec[f64], lo: i64, n: i64) -> f64 {
+    if n < 8 {
+        let mut res = 0.0;
+        for i in lo..lo + n {
+            res = res + a[i];
+        }
+        return res;
+    }
+    if n <= 128 {
+        let mut r: Vec[f64] = Vec.new();
+        for j in 0..8 {
+            r.push(a[lo + j]);
+        }
+        let mut i = 8;
+        while i < n - n % 8 {
+            for j in 0..8 {
+                r[j] = r[j] + a[lo + i + j];
+            }
+            i += 8;
+        }
+        let mut res = ((r[0] + r[1]) + (r[2] + r[3])) + ((r[4] + r[5]) + (r[6] + r[7]));
+        while i < n {
+            res = res + a[lo + i];
+            i += 1;
+        }
+        return res;
+    }
+    let mut n2 = n / 2;
+    n2 -= n2 % 8;
+    pairwise_sum(a, lo, n2) + pairwise_sum(a, lo + n2, n - n2)
+}
+
+fn np_sum(a: Vec[f64]) -> f64 {
+    pairwise_sum(a, 0, a.len())
+}
+
+// Kahan summation as pandas' groupby kernels run it.
+struct Kahan {
+    sum: f64,
+    comp: f64,
+    n: i64,
+}
+
+fn kahan() -> Kahan {
+    Kahan { sum: 0.0, comp: 0.0, n: 0 }
+}
+
+impl Kahan {
+    fn add(mut ref self, val: f64) {
+        self.n += 1;
+        let y = val - self.comp;
+        let t = self.sum + y;
+        self.comp = t - self.sum - y;
+        if is_nan(self.comp) or self.comp.abs() == 1.0 / 0.0 {
+            self.comp = 0.0;
+        }
+        self.sum = t;
+    }
+}
+
+// Series.mean: numpy's sum with NaN as 0, over the non-NaN count.
+fn series_mean(a: Vec[f64]) -> f64 {
+    let mut filled: Vec[f64] = Vec.new();
+    let mut count = 0;
+    for x in a {
+        if is_nan(x) {
+            filled.push(0.0);
+        } else {
+            filled.push(x);
+            count += 1;
+        }
+    }
+    if count == 0 {
+        return nan();
+    }
+    np_sum(filled) / (count as f64)
+}
+
+// nanops.nanvar with ddof 1: two passes of numpy's sum.
+fn series_var(a: Vec[f64]) -> f64 {
+    let mut filled: Vec[f64] = Vec.new();
+    let mut count = 0;
+    for x in a {
+        if is_nan(x) {
+            filled.push(0.0);
+        } else {
+            filled.push(x);
+            count += 1;
+        }
+    }
+    let d = count as f64 - 1.0;
+    let avg = np_sum(filled) / (count as f64);
+    let mut sqr: Vec[f64] = Vec.new();
+    for x in a {
+        if is_nan(x) {
+            sqr.push(0.0);
+        } else {
+            let e = avg - x;
+            sqr.push(e * e);
+        }
+    }
+    if d <= 0.0 {
+        return nan();
+    }
+    np_sum(sqr) / d
+}
+
+// numpy's quantile, method "linear", over values with NaN removed.
+fn np_quantile(sorted: Vec[f64], q: f64) -> f64 {
+    let n = sorted.len();
+    if n == 0 {
+        return nan();
+    }
+    let virt = ((n - 1) as f64) * q;
+    if virt >= ((n - 1) as f64) {
+        return sorted[n - 1];
+    }
+    if virt < 0.0 {
+        return sorted[0];
+    }
+    let prev = virt.floor();
+    let i = prev as i64;
+    let a = sorted[i];
+    let b = sorted[i + 1];
+    let gamma = virt - prev;
+    let diff = b - a;
+    if gamma >= 0.5 {
+        b - diff * (1.0 - gamma)
+    } else {
+        a + diff * gamma
+    }
+}
+
+fn sorted_valid(a: Vec[f64]) -> Vec[f64] {
+    let mut v: Vec[f64] = a.iter().filter(|x| not is_nan(**x)).map(|x| *x).collect();
+    v.sort_by(f64.total_cmp);
+    v
+}
+
+// numpy's rint: round half to even, keeping the sign of zero.
+fn rint(x: f64) -> f64 {
+    if is_nan(x) or x.abs() >= 4503599627370496.0 {
+        return x;
+    }
+    let f = x.floor();
+    let d = x - f;
+    let mut r = if d < 0.5 {
+        f
+    } else if d > 0.5 {
+        f + 1.0
+    } else if (f / 2.0).floor() * 2.0 == f {
+        f
+    } else {
+        f + 1.0
+    };
+    if r == 0.0 {
+        r = 0.0.copysign(x);
+    }
+    r
+}
+
+// numpy's round(x, decimals) for decimals >= 0.
+fn np_round(x: f64, decimals: i64) -> f64 {
+    if decimals == 0 {
+        return rint(x);
+    }
+    let mut f = 1.0;
+    for _ in 0..decimals {
+        f = f * 10.0;
+    }
+    rint(x * f) / f
+}
+
+// ============================================================ read_csv
+
+// The strings read_csv reads as missing unless keep_default_na=False.
+fn default_na(s: Str) -> bool {
+    match s {
+        "" | "#N/A" | "#N/A N/A" | "#NA" | "-1.#IND" | "-1.#QNAN" | "-NaN" | "-nan" | "1.#IND"
+        | "1.#QNAN" | "<NA>" | "N/A" | "NA" | "NULL" | "NaN" | "None" | "n/a" | "nan" | "null" => true,
+        _ => false,
+    }
+}
+
+struct ReadOpts {
+    sep: String,
+    na: Vec[String],
+    keep_default_na: bool,
+    header: bool,
+    usecols: Option[Vec[String]],
+    dtype: Vec[(String, String)],
+}
+
+fn read_opts() -> ReadOpts {
+    ReadOpts { sep: ",".to_string(), na: Vec.new(), keep_default_na: true, header: true, usecols: None, dtype: Vec.new() }
+}
+
+// The C tokenizer: rows of fields, quotes doubled inside quotes, blank
+// lines skipped.
+fn tokenize(text: Str, sep: char) -> Vec[Vec[String]] {
+    let mut rows: Vec[Vec[String]] = Vec.new();
+    let mut row: Vec[String] = Vec.new();
+    let mut field = String.new();
+    let mut in_quotes = false;
+    let mut row_started = false;
+    let chars: Vec[char] = text.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if in_quotes {
+            if c == '"' {
+                if i + 1 < chars.len() and chars[i + 1] == '"' {
+                    field.push('"');
+                    i += 1;
+                } else {
+                    in_quotes = false;
+                }
+            } else {
+                field.push(c);
+            }
+        } else if c == '"' {
+            in_quotes = true;
+            row_started = true;
+        } else if c == sep {
+            row.push(field.clone());
+            field = String.new();
+            row_started = true;
+        } else if c == '\n' or c == '\r' {
+            if c == '\r' and i + 1 < chars.len() and chars[i + 1] == '\n' {
+                i += 1;
+            }
+            if row_started or field.len() > 0 {
+                row.push(field.clone());
+                rows.push(row.clone());
+            }
+            row = Vec.new();
+            field = String.new();
+            row_started = false;
+        } else {
+            field.push(c);
+            row_started = true;
+        }
+        i += 1;
+    }
+    if row_started or field.len() > 0 {
+        row.push(field.clone());
+        rows.push(row);
+    }
+    rows
+}
+
+fn is_na_text(s: Str, o: ReadOpts) -> bool {
+    if o.keep_default_na and default_na(s) {
+        return true;
+    }
+    o.na.iter().any(|n| n == s)
+}
+
+fn parse_bool(s: Str) -> Option[bool] {
+    match s {
+        "True" | "TRUE" | "true" => Some(true),
+        "False" | "FALSE" | "false" => Some(false),
+        _ => None,
+    }
+}
+
+fn parse_float(s: Str) -> Option[f64] {
+    let t = s.trim();
+    // Rust-style spellings pandas' xstrtod refuses.
+    if t.len() == 0 or t.contains("_") {
+        return None;
+    }
+    match t.to_lowercase().as_str() {
+        "nan" | "+nan" | "-nan" => return None,
+        _ => {}
+    }
+    f64.parse(t).ok()
+}
+
+// One column's cells, typed the way the C parser infers them.
+fn infer(cells: Vec[Option[String]]) -> Col {
+    if cells.len() == 0 {
+        return Col.Obj(Vec.new());
+    }
+    let na_count = cells.iter().filter(|c| c.is_none()).count();
+    let mut ints: Vec[i64] = Vec.new();
+    let mut all_int = true;
+    for c in cells {
+        if let Some(s) = c {
+            match i64.parse(s) {
+                Ok(n) => ints.push(n),
+                Err(_) => {
+                    all_int = false;
+                    break;
+                }
+            }
+        }
+    }
+    if all_int and na_count == 0 {
+        return Col.Int(ints);
+    }
+    let mut floats: Vec[f64] = Vec.new();
+    let mut all_float = true;
+    for c in cells {
+        match c {
+            None => floats.push(nan()),
+            Some(s) => match parse_float(s) {
+                Some(x) => floats.push(x),
+                None => {
+                    all_float = false;
+                    break;
+                }
+            },
+        }
+    }
+    if all_float {
+        return Col.Float(floats);
+    }
+    if na_count == 0 {
+        let mut bools: Vec[bool] = Vec.new();
+        let mut all_bool = true;
+        for c in cells {
+            match parse_bool(c.clone() ?? String.new()) {
+                Some(b) => bools.push(b),
+                None => {
+                    all_bool = false;
+                    break;
+                }
+            }
+        }
+        if all_bool {
+            return Col.Bool(bools);
+        }
+    }
+    Col.Str(cells.clone())
+}
+
+fn convert(cells: Vec[Option[String]], dtype: Str) -> Result[Col, String] {
+    match dtype {
+        "str" => Ok(Col.Str(cells.clone())),
+        "float" => {
+            let mut v: Vec[f64] = Vec.new();
+            for c in cells {
+                match c {
+                    None => v.push(nan()),
+                    Some(s) => match parse_float(s) {
+                        Some(x) => v.push(x),
+                        None => return Err(f"ValueError: could not convert string to float: '{s}'"),
+                    },
+                }
+            }
+            Ok(Col.Float(v))
+        }
+        _ => Ok(infer(cells)),
+    }
+}
+
+fn read_csv(path: Str, o: ReadOpts) -> Result[Frame, String] {
+    let full = f"data/{path}";
+    let text = match fs.read_to_string(full.clone()) {
+        Ok(t) => t,
+        Err(_) => return Err(f"FileNotFoundError: [Errno 2] No such file or directory: '{full}'"),
+    };
+    let sep = o.sep.chars().next() ?? ',';
+    let rows = tokenize(text, sep);
+    let mut names: Vec[String] = Vec.new();
+    let mut start = 0;
+    let width = if rows.len() > 0 { rows[0].len() } else { 0 };
+    if o.header {
+        if rows.len() > 0 {
+            names = rows[0].clone();
+        }
+        start = 1;
+    } else {
+        for j in 0..width {
+            names.push(j.to_string());
+        }
+    }
+    let mut f = Frame.new();
+    for j in 0..names.len() {
+        let name = names[j].clone();
+        if let Some(keep) = o.usecols {
+            if not keep.iter().any(|k| *k == name) {
+                continue;
+            }
+        }
+        let mut cells: Vec[Option[String]] = Vec.new();
+        for r in start..rows.len() {
+            let raw = if j < rows[r].len() { rows[r][j].clone() } else { String.new() };
+            if is_na_text(raw, o) {
+                cells.push(None);
+            } else {
+                cells.push(Some(raw));
+            }
+        }
+        let mut dtype = String.new();
+        for (n, t) in o.dtype {
+            if *n == name {
+                dtype = t.clone();
+            }
+        }
+        f.put(name, convert(cells, dtype)?);
+    }
+    Ok(f)
+}
+
+// ============================================================ to_csv
+
+fn csv_field(s: Str) -> String {
+    if s.contains(",") or s.contains("\"") or s.contains("\n") or s.contains("\r") {
+        "\"".to_string() + s.replace("\"", "\"\"") + "\""
+    } else {
+        s.to_string()
+    }
+}
+
+fn csv_line(fields: Vec[String]) -> String {
+    let mut t = String.new();
+    for i in 0..fields.len() {
+        if i > 0 {
+            t.push(',');
+        }
+        t.push_str(csv_field(fields[i]));
+    }
+    // Python's csv module quotes a row that would otherwise be empty.
+    if t.len() == 0 {
+        t.push_str("\"\"");
+    }
+    t.push('\n');
+    t
+}
+
+fn to_csv(f: Frame, index: Option[Vec[String]]) -> String {
+    let mut out = String.new();
+    let mut head: Vec[String] = Vec.new();
+    if index.is_some() {
+        head.push(String.new());
+    }
+    for n in f.names {
+        head.push(n.clone());
+    }
+    out.push_str(csv_line(head));
+    for i in 0..f.height() {
+        let mut fields: Vec[String] = Vec.new();
+        if let Some(labels) = index {
+            fields.push(labels[i].clone());
+        }
+        for c in f.cols {
+            fields.push(cell_text(c, i));
+        }
+        out.push_str(csv_line(fields));
+    }
+    out
+}
+
+// ============================================================ job arguments
+
+// A value written in a job: 'text', an int, a float, or a bare word.
+fn literal(tok: Str) -> Val {
+    if tok.len() >= 2 and tok.starts_with("'") and tok.ends_with("'") {
+        return Val.S(tok[1..tok.len() - 1].to_string());
+    }
+    if let Ok(n) = i64.parse(tok) {
+        return Val.I(n);
+    }
+    if let Some(x) = parse_float(tok) {
+        return Val.F(x);
+    }
+    Val.S(tok.to_string())
+}
+
+fn number(tok: Str) -> Result[Val, String] {
+    match literal(tok) {
+        Val.S(_) => Err(f"ValueError: could not convert string to float: '{tok}'"),
+        v => Ok(v),
+    }
+}
+
+fn names_of(s: Str) -> Vec[String] {
+    if s.len() == 0 {
+        return Vec.new();
+    }
+    s.split(",").map(|p| p.to_string()).collect()
+}
+
+struct Args {
+    pos: Vec[String],
+    kw: Vec[(String, String)],
+}
+
+fn split_args(toks: Vec[String]) -> Args {
+    let mut a = Args { pos: Vec.new(), kw: Vec.new() };
+    for t in toks {
+        match t.split_once("=") {
+            Some((k, v)) => {
+                if k.len() > 0 and t != "==" {
+                    a.kw.push((k.to_string(), v.to_string()));
+                } else {
+                    a.pos.push(t.clone());
+                }
+            }
+            None => a.pos.push(t.clone()),
+        }
+    }
+    a
+}
+
+impl Args {
+    fn get(self, k: Str) -> Option[String] {
+        for (key, v) in self.kw {
+            if *key == k {
+                return Some(v.clone());
+            }
+        }
+        None
+    }
+
+    fn arg(self, i: i64) -> Result[String, String] {
+        if i < self.pos.len() {
+            Ok(self.pos[i].clone())
+        } else {
+            Err("TypeError: missing a required argument".to_string())
+        }
+    }
+
+    fn has(self, word: Str) -> bool {
+        self.pos.iter().any(|p| p == word)
+    }
+}
+
+fn int_arg(s: Str) -> Result[i64, String] {
+    match i64.parse(s) {
+        Ok(n) => Ok(n),
+        Err(_) => Err(f"ValueError: invalid literal for int() with base 10: '{s}'"),
+    }
+}
+
+// ============================================================ selecting
+
+fn select(f: Frame, want: Vec[String]) -> Result[Frame, String] {
+    let mut missing: Vec[String] = Vec.new();
+    for w in want {
+        if f.find(w).is_none() {
+            missing.push(w.clone());
+        }
+    }
+    if missing.len() == want.len() and want.len() > 0 {
+        return Err(f"KeyError: \"None of [Index([{quoted_list(want)}], dtype='str')] are in the [columns]\"");
+    }
+    if missing.len() > 0 {
+        return Err(f"KeyError: \"[{quoted_list(missing)}] not in index\"");
+    }
+    let mut out = Frame.new();
+    for w in want {
+        out.names.push(w.clone());
+        out.cols.push(f.col(w)?);
+    }
+    Ok(out)
+}
+
+fn quoted_list(xs: Vec[String]) -> String {
+    let parts: Vec[String] = xs.iter().map(|x| f"'{x}'").collect();
+    parts.join(", ")
+}
+
+fn drop_cols(f: Frame, gone: Vec[String]) -> Result[Frame, String] {
+    let missing: Vec[String] = gone.iter().filter(|g| f.find(g).is_none()).map(|g| g.clone()).collect();
+    if missing.len() > 0 {
+        return Err(f"KeyError: \"[{quoted_list(missing)}] not found in axis\"");
+    }
+    let mut out = Frame.new();
+    for i in 0..f.names.len() {
+        if not gone.iter().any(|g| *g == f.names[i]) {
+            out.names.push(f.names[i].clone());
+            out.cols.push(f.cols[i].clone());
+        }
+    }
+    Ok(out)
+}
+
+fn rename(f: Frame, pairs: Vec[String]) -> Frame {
+    let mut out = f.clone();
+    for p in pairs {
+        if let Some((a, b)) = p.split_once(":") {
+            for i in 0..out.names.len() {
+                if out.names[i] == a {
+                    out.names[i] = b.to_string();
+                }
+            }
+        }
+    }
+    out
+}
+
+fn head(f: Frame, n: i64) -> Frame {
+    let h = f.height();
+    let k = if n < h { n } else { h };
+    f.take(range_idx(k))
+}
+
+fn tail(f: Frame, n: i64) -> Frame {
+    let h = f.height();
+    let k = if n < h { n } else { h };
+    let mut idx: Vec[i64] = Vec.new();
+    for i in h - k..h {
+        idx.push(i);
+    }
+    f.take(idx)
+}
+
+fn dtypes(f: Frame) -> Frame {
+    let mut out = Frame.new();
+    out.put("column", Col.Str(f.names.iter().map(|n| Some(n.clone())).collect()));
+    out.put("dtype", Col.Str(f.cols.iter().map(|c| Some(c.dtype())).collect()));
+    out
+}
+
+// ============================================================ filters
+
+fn compare(a: Val, rel: Str, b: Val) -> bool {
+    let missing = match (a, b) {
+        (Val.Na, _) => true,
+        (_, Val.Na) => true,
+        _ => false,
+    };
+    if missing {
+        return rel == "!=";
+    }
+    let o = val_cmp(a, b);
+    match rel {
+        "==" => o == Ordering.Equal,
+        "!=" => o != Ordering.Equal,
+        "<" => o == Ordering.Less,
+        "<=" => o != Ordering.Greater,
+        ">" => o == Ordering.Greater,
+        _ => o != Ordering.Less,
+    }
+}
+
+fn where_rows(f: Frame, name: Str, rel: Str, rhs: Str) -> Result[Frame, String] {
+    let c = f.col(name)?;
+    let other: Option[Col] = if rhs.starts_with("@") { Some(f.col(rhs[1..])?) } else { None };
+    let lit = literal(rhs);
+    let mut keep: Vec[bool] = Vec.new();
+    for i in 0..f.height() {
+        let b = match other {
+            Some(o) => o.get(i),
+            None => lit.clone(),
+        };
+        keep.push(compare(c.get(i), rel, b));
+    }
+    Ok(f.rows_where(keep))
+}
+
+fn na_rows(f: Frame, name: Str, want_na: bool) -> Result[Frame, String] {
+    let c = f.col(name)?;
+    let keep: Vec[bool] = range_idx(f.height()).iter().map(|i| c.is_na(*i) == want_na).collect();
+    Ok(f.rows_where(keep))
+}
+
+fn isin_rows(f: Frame, name: Str, vals: Vec[String]) -> Result[Frame, String] {
+    let c = f.col(name)?;
+    let wanted: Vec[Val] = if c.is_numeric() {
+        let mut v: Vec[Val] = Vec.new();
+        for s in vals {
+            v.push(number(s)?);
+        }
+        v
+    } else {
+        vals.iter().map(|s| Val.S(s.clone())).collect()
+    };
+    let mut keep: Vec[bool] = Vec.new();
+    for i in 0..f.height() {
+        let x = c.get(i);
+        let hit = match x {
+            Val.Na => false,
+            _ => wanted.iter().any(|w| val_eq(x, w)),
+        };
+        keep.push(hit);
+    }
+    Ok(f.rows_where(keep))
+}
+
+fn str_cells(c: Col, name: Str) -> Result[Vec[Option[String]], String] {
+    match c {
+        Col.Str(v) => Ok(v.clone()),
+        Col.Obj(v) => Ok(v.clone()),
+        _ => Err(f"AttributeError: Can only use .str accessor with string values, not {name}"),
+    }
+}
+
+fn contains_rows(f: Frame, name: Str, pat: Str, case: bool, prefix: bool) -> Result[Frame, String] {
+    let cells = str_cells(f.col(name)?, name)?;
+    let upper_pat = pat.to_uppercase();
+    let keep: Vec[bool] = cells.iter().map(|c| match c {
+        None => false,
+        Some(s) => {
+            if prefix {
+                s.starts_with(pat)
+            } else if case {
+                s.contains(pat)
+            } else {
+                s.to_uppercase().contains(upper_pat)
+            }
+        }
+    }).collect();
+    Ok(f.rows_where(keep))
+}
+
+fn between_rows(f: Frame, name: Str, lo: Val, hi: Val) -> Result[Frame, String] {
+    let c = f.col(name)?;
+    let keep: Vec[bool] = range_idx(f.height()).iter().map(|i| {
+        let x = c.get(*i);
+        compare(x, ">=", lo) and compare(x, "<=", hi)
+    }).collect();
+    Ok(f.rows_where(keep))
+}
+
+// ============================================================ new columns
+
+// One side of an arithmetic expression: a column or a number.
+enum Operand {
+    Column(Col),
+    Lit(Val),
+}
+
+fn operand(f: Frame, tok: Str) -> Result[Operand, String] {
+    match literal(tok) {
+        Val.I(n) => Ok(Operand.Lit(Val.I(n))),
+        Val.F(x) => Ok(Operand.Lit(Val.F(x))),
+        _ => Ok(Operand.Column(f.col(tok)?)),
+    }
+}
+
+fn operand_is_int(o: Operand) -> bool {
+    match o {
+        Operand.Column(Col.Int(_)) => true,
+        Operand.Lit(Val.I(_)) => true,
+        _ => false,
+    }
+}
+
+fn operand_int(o: Operand, i: i64) -> i64 {
+    match o {
+        Operand.Column(Col.Int(v)) => v[i],
+        Operand.Lit(Val.I(n)) => n,
+        _ => 0,
+    }
+}
+
+fn operand_float(o: Operand, i: i64) -> f64 {
+    match o {
+        Operand.Column(c) => match c.get(i) {
+            Val.Na => nan(),
+            v => num_of(v),
+        },
+        Operand.Lit(v) => num_of(v),
+    }
+}
+
+fn arith(f: Frame, a: Str, sym: Str, b: Str) -> Result[Col, String] {
+    let x = operand(f, a)?;
+    let y = operand(f, b)?;
+    let n = f.height();
+    if operand_is_int(x) and operand_is_int(y) and sym != "/" {
+        let mut v: Vec[i64] = Vec.new();
+        for i in 0..n {
+            let p = operand_int(x, i);
+            let q = operand_int(y, i);
+            v.push(match sym {
+                "+" => p.wrapping_add(q),
+                "-" => p.wrapping_sub(q),
+                _ => p.wrapping_mul(q),
+            });
+        }
+        return Ok(Col.Int(v));
+    }
+    let mut v: Vec[f64] = Vec.new();
+    for i in 0..n {
+        let p = operand_float(x, i);
+        let q = operand_float(y, i);
+        v.push(match sym {
+            "+" => p + q,
+            "-" => p - q,
+            "*" => p * q,
+            _ => p / q,
+        });
+    }
+    Ok(Col.Float(v))
+}
+
+fn round_col(c: Col, decimals: i64) -> Col {
+    match c {
+        Col.Float(v) => Col.Float(v.iter().map(|x| np_round(*x, decimals)).collect()),
+        other => other.clone(),
+    }
+}
+
+fn map_str(c: Col, name: Str, op: Str) -> Result[Col, String] {
+    let cells = str_cells(c, name)?;
+    Ok(Col.Str(cells.iter().map(|s| match s {
+        None => None,
+        Some(t) => Some(match op {
+            "upper" => t.to_uppercase(),
+            "lower" => t.to_lowercase(),
+            _ => t.trim().to_string(),
+        }),
+    }).collect()))
+}
+
+fn str_len(c: Col, name: Str) -> Result[Col, String] {
+    let cells = str_cells(c, name)?;
+    if cells.iter().any(|s| s.is_none()) {
+        Ok(Col.Float(cells.iter().map(|s| match s {
+            None => nan(),
+            Some(t) => t.chars().count() as f64,
+        }).collect()))
+    } else {
+        Ok(Col.Int(cells.iter().map(|s| (s.clone() ?? String.new()).chars().count()).collect()))
+    }
+}
+
+fn astype(c: Col, to: Str) -> Result[Col, String] {
+    match to {
+        "int" => match c {
+            Col.Int(v) => Ok(Col.Int(v.clone())),
+            Col.Float(v) => {
+                if v.iter().any(|x| is_nan(*x) or x.abs() == 1.0 / 0.0) {
+                    return Err("IntCastingNaNError: Cannot convert non-finite values (NA or inf) to integer".to_string());
+                }
+                Ok(Col.Int(v.iter().map(|x| *x as i64).collect()))
+            }
+            Col.Bool(v) => Ok(Col.Int(v.iter().map(|b| if *b { 1 } else { 0 }).collect())),
+            _ => Err("ValueError: invalid literal for int() with base 10".to_string()),
+        },
+        "float" => match c {
+            Col.Int(_) => Ok(Col.Float(c.floats())),
+            Col.Float(_) => Ok(Col.Float(c.floats())),
+            Col.Bool(_) => Ok(Col.Float(c.floats())),
+            _ => Err("ValueError: could not convert string to float".to_string()),
+        },
+        _ => Ok(Col.Str(range_idx(c.len()).iter().map(|i| match c.get(*i) {
+            Val.Na => None,
+            v => Some(val_text(v)),
+        }).collect())),
+    }
+}
+
+fn clip(c: Col, lo: Val, hi: Val) -> Col {
+    match c {
+        Col.Int(v) => match (lo, hi) {
+            (Val.I(a), Val.I(b)) => Col.Int(v.iter().map(|x| (*x).max(a).min(b)).collect()),
+            _ => clip(Col.Float(c.floats()), lo, hi),
+        },
+        Col.Float(v) => {
+            let a = num_of(lo);
+            let b = num_of(hi);
+            Col.Float(v.iter().map(|x| {
+                if is_nan(*x) {
+                    *x
+                } else if *x < a {
+                    a
+                } else if *x > b {
+                    b
+                } else {
+                    *x
+                }
+            }).collect())
+        }
+        other => other.clone(),
+    }
+}
+
+fn abs_col(c: Col) -> Col {
+    match c {
+        Col.Int(v) => Col.Int(v.iter().map(|x| x.abs()).collect()),
+        Col.Float(v) => Col.Float(v.iter().map(|x| x.abs()).collect()),
+        other => other.clone(),
+    }
+}
+
+// ============================================================ missing values
+
+fn fillna(c: Col, value: Val) -> Col {
+    match c {
+        Col.Float(v) => match value {
+            Val.S(_) => c.clone(),
+            _ => {
+                let x = num_of(value);
+                Col.Float(v.iter().map(|y| if is_nan(*y) { x } else { *y }).collect())
+            }
+        },
+        Col.Str(v) => Col.Str(v.iter().map(|s| match s {
+            None => Some(val_text(value)),
+            Some(t) => Some(t.clone()),
+        }).collect()),
+        other => other.clone(),
+    }
+}
+
+// ffill, or bfill when `back`.
+fn fill_along(c: Col, back: bool) -> Col {
+    let n = c.len();
+    let mut idx: Vec[i64] = Vec.new();
+    let mut last = -1;
+    let order: Vec[i64] = if back { range_idx(n).iter().rev().map(|i| *i).collect() } else { range_idx(n) };
+    let mut picked: Vec[i64] = Vec.filled(n, -1);
+    for i in order {
+        if not c.is_na(i) {
+            last = i;
+        }
+        picked[i] = if c.is_na(i) { last } else { i };
+    }
+    for p in picked {
+        idx.push(p);
+    }
+    match c {
+        Col.Int(_) => c.clone(),
+        Col.Bool(_) => c.clone(),
+        _ => c.take(idx),
+    }
+}
+
+fn dropna(f: Frame, subset: Option[Vec[String]], how_all: bool) -> Result[Frame, String] {
+    let which = match subset {
+        Some(s) => index_of_all(f, s)?,
+        None => range_idx(f.names.len()),
+    };
+    let mut keep: Vec[bool] = Vec.new();
+    for i in 0..f.height() {
+        let nas = which.iter().filter(|j| f.cols[**j].is_na(i)).count();
+        keep.push(if how_all { nas < which.len() } else { nas == 0 });
+    }
+    Ok(f.rows_where(keep))
+}
+
+// ============================================================ sorting and duplicates
+
+fn sort_rows(f: Frame, by: Vec[String], asc: Vec[bool], na_first: bool) -> Result[Frame, String] {
+    let which = index_of_all(f, by)?;
+    let mut idx = range_idx(f.height());
+    idx.sort_by(|a, b| {
+        for k in 0..which.len() {
+            let c = f.cols[which[k]];
+            let x = c.get(a);
+            let y = c.get(b);
+            let o = match (x, y) {
+                (Val.Na, Val.Na) => Ordering.Equal,
+                (Val.Na, _) => if na_first { Ordering.Less } else { Ordering.Greater },
+                (_, Val.Na) => if na_first { Ordering.Greater } else { Ordering.Less },
+                (p, q) => {
+                    let o = val_cmp(p, q);
+                    if asc[k] { o } else { o.reverse() }
+                }
+            };
+            if o != Ordering.Equal {
+                return o;
+            }
+        }
+        Ordering.Equal
+    });
+    Ok(f.take(idx))
+}
+
+fn dedup(f: Frame, subset: Option[Vec[String]], keep: Str) -> Result[Frame, String] {
+    let which = match subset {
+        Some(s) => index_of_all(f, s)?,
+        None => range_idx(f.names.len()),
+    };
+    let keys: Vec[String] = range_idx(f.height()).iter().map(|i| key_text(f.row(*i, which))).collect();
+    let mut seen: Map[String, i64] = Map.new();
+    for k in keys {
+        let n = seen.get(k).map(|c| *c) ?? 0;
+        seen[k.clone()] = n + 1;
+    }
+    let mut first: Map[String, bool] = Map.new();
+    let mut flags: Vec[bool] = Vec.filled(keys.len(), false);
+    match keep {
+        "last" => {
+            for i in (0..keys.len()).rev() {
+                if not first.contains_key(keys[i]) {
+                    first[keys[i].clone()] = true;
+                    flags[i] = true;
+                }
+            }
+        }
+        "false" => {
+            for i in 0..keys.len() {
+                flags[i] = seen.get(keys[i]).map(|c| *c) == Some(1);
+            }
+        }
+        _ => {
+            for i in 0..keys.len() {
+                if not first.contains_key(keys[i]) {
+                    first[keys[i].clone()] = true;
+                    flags[i] = true;
+                }
+            }
+        }
+    }
+    Ok(f.rows_where(flags))
+}
+
+// ============================================================ groupby
+
+// The groups of a frame by key columns: the observed keys in sorted
+// order, the rows of each in frame order, and each row's group (-1 when
+// a key is missing, as dropna=True drops it).
+#[derive(Clone)]
+struct Groups {
+    keys: Vec[Vec[Val]],
+    rows: Vec[Vec[i64]],
+    label: Vec[i64],
+}
+
+fn group_rows(f: Frame, by: Vec[String]) -> Result[Groups, String] {
+    let which = index_of_all(f, by)?;
+    let mut ids: Map[String, i64] = Map.new();
+    let mut keys: Vec[Vec[Val]] = Vec.new();
+    let mut members: Vec[Vec[i64]] = Vec.new();
+    let mut first_label: Vec[i64] = Vec.new();
+    for i in 0..f.height() {
+        let k = f.row(i, which);
+        if k.iter().any(|v| match v {
+            Val.Na => true,
+            _ => false,
+        }) {
+            first_label.push(-1);
+            continue;
+        }
+        let t = key_text(k);
+        let id = match ids.get(t) {
+            Some(g) => *g,
+            None => {
+                ids[t.clone()] = keys.len();
+                keys.push(k.clone());
+                members.push(Vec.new());
+                keys.len() - 1
+            }
+        };
+        members[id].push(i);
+        first_label.push(id);
+    }
+    let mut order = range_idx(keys.len());
+    order.sort_by(|a, b| {
+        for j in 0..which.len() {
+            let o = val_cmp(keys[a][j], keys[b][j]);
+            if o != Ordering.Equal {
+                return o;
+            }
+        }
+        Ordering.Equal
+    });
+    let mut rank: Vec[i64] = Vec.filled(keys.len(), 0);
+    for p in 0..order.len() {
+        rank[order[p]] = p;
+    }
+    let label: Vec[i64] = first_label.iter().map(|l| if *l < 0 { -1 } else { rank[*l] }).collect();
+    Ok(Groups {
+        keys: order.iter().map(|g| keys[*g].clone()).collect(),
+        rows: order.iter().map(|g| members[*g].clone()).collect(),
+        label: label,
+    })
+}
+
+// The key columns of a grouped result, typed as their source columns.
+fn key_columns(f: Frame, by: Vec[String], g: Groups) -> Result[Frame, String] {
+    let mut out = Frame.new();
+    for j in 0..by.len() {
+        let src = f.col(by[j])?;
+        let firsts: Vec[i64] = g.rows.iter().map(|r| r[0]).collect();
+        out.put(by[j], src.take(firsts));
+    }
+    Ok(out)
+}
+
+fn welford(vals: Vec[f64], ddof: i64, sqrt: bool) -> f64 {
+    let mut nobs = 0;
+    let mut mean = 0.0;
+    let mut ssq = 0.0;
+    for v in vals {
+        if is_nan(v) {
+            continue;
+        }
+        nobs += 1;
+        let old = mean;
+        mean = mean + (v - old) / (nobs as f64);
+        ssq = ssq + (v - mean) * (v - old);
+    }
+    if nobs <= ddof {
+        return nan();
+    }
+    let var = ssq / ((nobs - ddof) as f64);
+    if sqrt { var.sqrt() } else { var }
+}
+
+fn median_of(vals: Vec[f64]) -> f64 {
+    let s = sorted_valid(vals);
+    let n = s.len();
+    if n == 0 {
+        return nan();
+    }
+    if n % 2 == 1 {
+        s[n / 2]
+    } else {
+        (s[n / 2] + s[n / 2 - 1]) / 2.0
+    }
+}
+
+fn agg_known(func: Str) -> bool {
+    match func {
+        "sum" | "mean" | "count" | "size" | "min" | "max" | "median" | "std" | "var" | "nunique" | "first"
+        | "last" => true,
+        _ => false,
+    }
+}
+
+// One aggregate of one column over each group, as pandas' cython kernel
+// for it computes it.
+fn agg_one(c: Col, g: Groups, func: Str) -> Result[Col, String] {
+    if not agg_known(func) {
+        return Err(f"AttributeError: 'SeriesGroupBy' object has no attribute '{func}'");
+    }
+    match func {
+        "size" => return Ok(Col.Int(g.rows.iter().map(|r| r.len()).collect())),
+        "count" => return Ok(Col.Int(g.rows.iter().map(|r| r.iter().filter(|i| not c.is_na(**i)).count()).collect())),
+        "nunique" => {
+            let mut out: Vec[i64] = Vec.new();
+            for r in g.rows {
+                let mut seen: Set[String] = Set.new();
+                for i in r {
+                    let v = c.get(i);
+                    match v {
+                        Val.Na => {}
+                        _ => {
+                            seen.insert(key_text([v].to_vec()));
+                        }
+                    }
+                }
+                out.push(seen.len());
+            }
+            return Ok(Col.Int(out));
+        }
+        "first" | "last" => {
+            let mut idx: Vec[i64] = Vec.new();
+            for r in g.rows {
+                let mut pick = -1;
+                for i in r {
+                    if not c.is_na(i) {
+                        pick = i;
+                        if func == "first" {
+                            break;
+                        }
+                    }
+                }
+                idx.push(pick);
+            }
+            return Ok(c.take(idx));
+        }
+        _ => {}
+    }
+    match c {
+        Col.Int(v) => match func {
+            "sum" => Ok(Col.Int(g.rows.iter().map(|r| {
+                let mut s: i64 = 0;
+                for i in r {
+                    s = s.wrapping_add(v[*i]);
+                }
+                s
+            }).collect())),
+            "min" => Ok(Col.Int(g.rows.iter().map(|r| r.iter().map(|i| v[*i]).min() ?? 0).collect())),
+            "max" => Ok(Col.Int(g.rows.iter().map(|r| r.iter().map(|i| v[*i]).max() ?? 0).collect())),
+            _ => agg_float(Col.Float(c.floats()), g, func),
+        },
+        Col.Float(_) => agg_float(c, g, func),
+        Col.Bool(_) => agg_float(Col.Float(c.floats()), g, func),
+        _ => match func {
+            "min" | "max" => {
+                let mut out: Vec[Option[String]] = Vec.new();
+                for r in g.rows {
+                    let mut best: Option[String] = None;
+                    for i in r {
+                        if let Val.S(s) = c.get(i) {
+                            let better = match best {
+                                None => true,
+                                Some(b) => if func == "min" { s < b } else { s > b },
+                            };
+                            if better {
+                                best = Some(s.clone());
+                            }
+                        }
+                    }
+                    out.push(best);
+                }
+                Ok(Col.Str(out))
+            }
+            _ => Err(f"TypeError: agg function failed [how->{func},dtype->str]"),
+        },
+    }
+}
+
+fn agg_float(c: Col, g: Groups, func: Str) -> Result[Col, String] {
+    let v = c.floats();
+    let mut out: Vec[f64] = Vec.new();
+    for r in g.rows {
+        let vals: Vec[f64] = r.iter().map(|i| v[*i]).collect();
+        out.push(match func {
+            "sum" => {
+                let mut k = kahan();
+                for x in vals {
+                    if not is_nan(x) {
+                        k.add(x);
+                    }
+                }
+                k.sum
+            }
+            "mean" => {
+                let mut k = kahan();
+                for x in vals {
+                    if not is_nan(x) {
+                        k.add(x);
+                    }
+                }
+                if k.n == 0 { nan() } else { k.sum / (k.n as f64) }
+            }
+            "min" | "max" => {
+                let mut best = nan();
+                for x in vals {
+                    if is_nan(x) {
+                        continue;
+                    }
+                    if is_nan(best) or (func == "min" and x < best) or (func == "max" and x > best) {
+                        best = x;
+                    }
+                }
+                best
+            }
+            "median" => median_of(vals),
+            "std" => welford(vals, 1, true),
+            _ => welford(vals, 1, false),
+        });
+    }
+    Ok(Col.Float(out))
+}
+
+struct AggSpec {
+    col: String,
+    func: String,
+}
+
+fn parse_specs(s: Str) -> Vec[AggSpec] {
+    let mut out: Vec[AggSpec] = Vec.new();
+    for p in names_of(s) {
+        match p.split_once(":") {
+            Some((c, f)) => out.push(AggSpec { col: c.to_string(), func: f.to_string() }),
+            None => out.push(AggSpec { col: p.clone(), func: String.new() }),
+        }
+    }
+    out
+}
+
+// groupby(keys).agg(**{f"{col}_{func}": (col, func)}).reset_index().
+// Each aggregate runs in a task of its own; the columns join in order.
+fn agg(f: Frame, by: Vec[String], specs: Vec[AggSpec]) -> Result[Frame, String] {
+    let missing: Vec[String] = specs.iter().filter(|s| f.find(s.col).is_none()).map(|s| s.col.clone()).collect();
+    let g = group_rows(f, by)?;
+    if missing.len() > 0 {
+        return Err(f"KeyError: \"Label(s) [{quoted_list(missing)}] do not exist\"");
+    }
+    let mut out = key_columns(f, by, g)?;
+    let group = TaskGroup.new();
+    let mut handles = Vec.new();
+    for s in specs {
+        let c = f.col(s.col)?;
+        let gg = g.clone();
+        let func = s.func.clone();
+        handles.push(group.spawn(|| agg_one(c, gg, func)));
+    }
+    let mut k = 0;
+    for h in handles.into_iter() {
+        let col = h.join()?;
+        out.put(f"{specs[k].col}_{specs[k].func}", col);
+        k += 1;
+    }
+    Ok(out)
+}
+
+fn size(f: Frame, by: Vec[String]) -> Result[Frame, String] {
+    let g = group_rows(f, by)?;
+    let mut out = key_columns(f, by, g)?;
+    out.put("size", Col.Int(g.rows.iter().map(|r| r.len()).collect()));
+    Ok(out)
+}
+
+// A group's aggregate written back onto each of its rows.
+fn broadcast(agg: Col, label: Vec[i64]) -> Col {
+    agg.take(label)
+}
+
+fn transform(f: Frame, by: Vec[String], name: Str, func: Str) -> Result[Col, String] {
+    let g = group_rows(f, by)?;
+    let c = f.col(name)?;
+    let a = agg_one(c, g, func)?;
+    Ok(broadcast(a, g.label))
+}
+
+fn group_cumsum(f: Frame, by: Vec[String], name: Str) -> Result[Col, String] {
+    let g = group_rows(f, by)?;
+    let c = f.col(name)?;
+    match c {
+        Col.Int(v) => {
+            let mut acc: Vec[i64] = Vec.filled(g.keys.len(), 0);
+            let mut out: Vec[i64] = Vec.new();
+            for i in 0..v.len() {
+                let lab = g.label[i];
+                if lab < 0 {
+                    out.push(0);
+                    continue;
+                }
+                acc[lab] = acc[lab].wrapping_add(v[i]);
+                out.push(acc[lab]);
+            }
+            Ok(Col.Int(out))
+        }
+        _ => {
+            let v = c.floats();
+            let mut acc: Vec[f64] = Vec.filled(g.keys.len(), 0.0);
+            let mut comp: Vec[f64] = Vec.filled(g.keys.len(), 0.0);
+            let mut out: Vec[f64] = Vec.new();
+            for i in 0..v.len() {
+                let lab = g.label[i];
+                if lab < 0 or is_nan(v[i]) {
+                    out.push(nan());
+                    continue;
+                }
+                let y = v[i] - comp[lab];
+                let t = acc[lab] + y;
+                comp[lab] = t - acc[lab] - y;
+                acc[lab] = t;
+                out.push(t);
+            }
+            Ok(Col.Float(out))
+        }
+    }
+}
+
+// The row `n` places back within the group (forward when n < 0), or -1.
+fn group_offsets(g: Groups, n: i64) -> Vec[i64] {
+    let mut src: Vec[i64] = Vec.filled(g.label.len(), -1);
+    for r in g.rows {
+        for p in 0..r.len() {
+            let q = p - n;
+            if q >= 0 and q < r.len() {
+                src[r[p]] = r[q];
+            }
+        }
+    }
+    src
+}
+
+fn group_shift(f: Frame, by: Vec[String], name: Str, n: i64) -> Result[Col, String] {
+    let g = group_rows(f, by)?;
+    let c = f.col(name)?;
+    Ok(c.take(group_offsets(g, n)))
+}
+
+fn group_diff(f: Frame, by: Vec[String], name: Str) -> Result[Col, String] {
+    let g = group_rows(f, by)?;
+    let v = f.col(name)?.floats();
+    let src = group_offsets(g, 1);
+    Ok(Col.Float(range_idx(v.len()).iter().map(|i| if src[*i] < 0 { nan() } else { v[*i] - v[src[*i]] }).collect()))
+}
+
+// ============================================================ merge
+
+// A key column that may come from either side: the left row's value
+// when there is one, else the right row's.
+fn coalesce(l: Col, li: Vec[i64], r: Col, ri: Vec[i64]) -> Col {
+    match (l, r) {
+        (Col.Int(a), Col.Int(b)) => Col.Int(range_idx(li.len()).iter().map(|k| if li[*k] >= 0 { a[li[*k]] } else { b[ri[*k]] }).collect()),
+        (Col.Str(a), Col.Str(b)) => Col.Str(range_idx(li.len()).iter().map(|k| if li[*k] >= 0 { a[li[*k]].clone() } else { b[ri[*k]].clone() }).collect()),
+        _ => {
+            let x = l.take(li).floats();
+            let y = r.take(ri).floats();
+            Col.Float(range_idx(li.len()).iter().map(|k| if li[*k] >= 0 { x[*k] } else { y[*k] }).collect())
+        }
+    }
+}
+
+struct MergeOpts {
+    how: String,
+    left_on: Vec[String],
+    right_on: Vec[String],
+    suffixes: (String, String),
+}
+
+fn merge(left: Frame, right: Frame, o: MergeOpts) -> Result[Frame, String] {
+    let lw = index_of_all(left, o.left_on)?;
+    let rw = index_of_all(right, o.right_on)?;
+    let lkeys: Vec[String] = range_idx(left.height()).iter().map(|i| key_text(left.row(*i, lw))).collect();
+    let rkeys: Vec[String] = range_idx(right.height()).iter().map(|i| key_text(right.row(*i, rw))).collect();
+    let mut rindex: Map[String, Vec[i64]] = Map.new();
+    for j in 0..rkeys.len() {
+        if not rindex.contains_key(rkeys[j]) {
+            rindex[rkeys[j].clone()] = Vec.new();
+        }
+        rindex[rkeys[j].clone()].push(j);
+    }
+    let mut lindex: Map[String, Vec[i64]] = Map.new();
+    for i in 0..lkeys.len() {
+        if not lindex.contains_key(lkeys[i]) {
+            lindex[lkeys[i].clone()] = Vec.new();
+        }
+        lindex[lkeys[i].clone()].push(i);
+    }
+    let mut li: Vec[i64] = Vec.new();
+    let mut ri: Vec[i64] = Vec.new();
+    match o.how.as_str() {
+        "inner" | "left" => {
+            for i in 0..lkeys.len() {
+                match rindex.get(lkeys[i]) {
+                    Some(js) => {
+                        for j in js {
+                            li.push(i);
+                            ri.push(*j);
+                        }
+                    }
+                    None => {
+                        if o.how == "left" {
+                            li.push(i);
+                            ri.push(-1);
+                        }
+                    }
+                }
+            }
+        }
+        "right" => {
+            for j in 0..rkeys.len() {
+                match lindex.get(rkeys[j]) {
+                    Some(is) => {
+                        for i in is {
+                            li.push(*i);
+                            ri.push(j);
+                        }
+                    }
+                    None => {
+                        li.push(-1);
+                        ri.push(j);
+                    }
+                }
+            }
+        }
+        _ => {
+            // outer: every key, sorted, each with its left rows times its
+            // right rows.
+            let mut keys: Vec[(Vec[Val], String)] = Vec.new();
+            let mut seen: Set[String] = Set.new();
+            for i in 0..lkeys.len() {
+                if seen.insert(lkeys[i].clone()) {
+                    keys.push((left.row(i, lw), lkeys[i].clone()));
+                }
+            }
+            for j in 0..rkeys.len() {
+                if seen.insert(rkeys[j].clone()) {
+                    keys.push((right.row(j, rw), rkeys[j].clone()));
+                }
+            }
+            keys.sort_by(|a, b| {
+                for k in 0..a.0.len() {
+                    let c = val_cmp(a.0[k], b.0[k]);
+                    if c != Ordering.Equal {
+                        return c;
+                    }
+                }
+                Ordering.Equal
+            });
+            for (_, k) in keys {
+                let ls: Vec[i64] = lindex.get(k).map(|v| v.clone()) ?? Vec.new();
+                let rs: Vec[i64] = rindex.get(k).map(|v| v.clone()) ?? Vec.new();
+                if ls.len() == 0 {
+                    for j in rs {
+                        li.push(-1);
+                        ri.push(j);
+                    }
+                } else if rs.len() == 0 {
+                    for i in ls {
+                        li.push(i);
+                        ri.push(-1);
+                    }
+                } else {
+                    for i in ls {
+                        for j in rs {
+                            li.push(i);
+                            ri.push(j);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // A key named alike on both sides is one column; every other name the
+    // two sides share takes a suffix.
+    let mut partner: Vec[i64] = Vec.filled(left.names.len(), -1);
+    let mut merged: Vec[bool] = Vec.filled(right.names.len(), false);
+    for k in 0..lw.len() {
+        if left.names[lw[k]] == right.names[rw[k]] {
+            partner[lw[k]] = rw[k];
+            merged[rw[k]] = true;
+        }
+    }
+    let mut left_names: Vec[String] = Vec.new();
+    for c in 0..left.names.len() {
+        if partner[c] < 0 {
+            left_names.push(left.names[c].clone());
+        }
+    }
+    let mut right_names: Vec[String] = Vec.new();
+    for j in 0..right.names.len() {
+        if not merged[j] {
+            right_names.push(right.names[j].clone());
+        }
+    }
+    let mut out = Frame.new();
+    for c in 0..left.names.len() {
+        let name = left.names[c].clone();
+        if partner[c] >= 0 {
+            out.names.push(name);
+            out.cols.push(coalesce(left.cols[c], li, right.cols[partner[c]], ri));
+        } else {
+            out.names.push(if right_names.contains(name) { name + o.suffixes.0 } else { name });
+            out.cols.push(left.cols[c].take(li));
+        }
+    }
+    for j in 0..right.names.len() {
+        if merged[j] {
+            continue;
+        }
+        let name = right.names[j].clone();
+        out.names.push(if left_names.contains(name) { name + o.suffixes.1 } else { name });
+        out.cols.push(right.cols[j].take(ri));
+    }
+    Ok(out)
+}
+
+// ============================================================ concat
+
+// A column for rows a frame did not have: all missing, in the dtype
+// pandas fills such a gap with.
+fn missing_like(other: Option[Col], n: i64) -> Col {
+    match other {
+        Some(Col.Str(_)) => Col.Str(Vec.filled(n, None)),
+        Some(Col.Obj(_)) => Col.Obj(Vec.filled(n, None)),
+        _ => Col.Float(Vec.filled(n, nan())),
+    }
+}
+
+// Two columns end to end, at their common dtype. An empty side, or one
+// that is only a gap, takes the other's dtype.
+fn join_cols(x: Col, y: Col) -> Col {
+    if x.len() == 0 {
+        return y.clone();
+    }
+    if y.len() == 0 {
+        return x.clone();
+    }
+    match (x, y) {
+        (Col.Int(p), Col.Int(q)) => {
+            let mut v = p.clone();
+            v.extend(q.clone());
+            Col.Int(v)
+        }
+        (Col.Str(p), Col.Str(q)) => {
+            let mut v = p.clone();
+            v.extend(q.clone());
+            Col.Str(v)
+        }
+        (Col.Bool(p), Col.Bool(q)) => {
+            let mut v = p.clone();
+            v.extend(q.clone());
+            Col.Bool(v)
+        }
+        (p, q) => {
+            if p.is_numeric() and q.is_numeric() {
+                let mut v = p.floats();
+                v.extend(q.floats());
+                Col.Float(v)
+            } else {
+                let mut v: Vec[Option[String]] = Vec.new();
+                for c in [p.clone(), q.clone()].to_vec() {
+                    for i in 0..c.len() {
+                        v.push(match c.get(i) {
+                            Val.Na => None,
+                            t => Some(val_text(t)),
+                        });
+                    }
+                }
+                Col.Obj(v)
+            }
+        }
+    }
+}
+
+fn concat_col(a: Option[Col], na: i64, b: Option[Col], nb: i64) -> Col {
+    let x = match a {
+        Some(p) => p.clone(),
+        None => missing_like(b, na),
+    };
+    let y = match b {
+        Some(q) => q.clone(),
+        None => missing_like(a, nb),
+    };
+    join_cols(x, y)
+}
+
+fn concat(a: Frame, b: Frame) -> Frame {
+    let mut names = a.names.clone();
+    for n in b.names {
+        if not names.contains(n) {
+            names.push(n.clone());
+        }
+    }
+    let mut out = Frame.new();
+    for n in names {
+        let x = a.find(n).map(|i| a.cols[i].clone());
+        let y = b.find(n).map(|i| b.cols[i].clone());
+        out.names.push(n.clone());
+        out.cols.push(concat_col(x, a.height(), y, b.height()));
+    }
+    out
+}
+
+// ============================================================ pivot_table, crosstab, melt
+
+// The cells of a table keyed by two group keys.
+fn spread(f: Frame, index: Str, columns: Str, agg: Col, g: Groups, fill: Option[Val], counting: bool) -> Result[Frame, String] {
+    // pivot_table drops a combination whose aggregate is missing.
+    let mut live: Vec[i64] = Vec.new();
+    for k in 0..g.keys.len() {
+        if not agg.is_na(k) {
+            live.push(k);
+        }
+    }
+    let mut row_keys: Vec[Val] = Vec.new();
+    let mut col_keys: Vec[Val] = Vec.new();
+    for k in live {
+        let r = g.keys[k][0].clone();
+        let c = g.keys[k][1].clone();
+        if not row_keys.iter().any(|x| val_eq(x, r)) {
+            row_keys.push(r);
+        }
+        if not col_keys.iter().any(|x| val_eq(x, c)) {
+            col_keys.push(c);
+        }
+    }
+    row_keys.sort_by(|a, b| val_cmp(a, b));
+    col_keys.sort_by(|a, b| val_cmp(a, b));
+    let mut cell: Map[String, i64] = Map.new();
+    for k in live {
+        cell[key_text(g.keys[k].clone())] = k;
+    }
+    let mut out = Frame.new();
+    let src = f.col(index)?;
+    let mut firsts: Vec[i64] = Vec.new();
+    for r in row_keys {
+        for k in 0..g.keys.len() {
+            if val_eq(g.keys[k][0], r) {
+                firsts.push(g.rows[k][0]);
+                break;
+            }
+        }
+    }
+    out.put(index, src.take(firsts));
+    let any_missing = row_keys.len() * col_keys.len() > live.len();
+    let int_cells = match agg {
+        Col.Int(_) => counting or not any_missing or match fill {
+            Some(Val.I(_)) => true,
+            _ => false,
+        },
+        _ => false,
+    };
+    for c in col_keys {
+        let mut picks: Vec[i64] = Vec.new();
+        for r in row_keys {
+            picks.push(cell.get(key_text([r.clone(), c.clone()].to_vec())).map(|k| *k) ?? -1);
+        }
+        let col = if int_cells {
+            let ints = match agg {
+                Col.Int(v) => v.clone(),
+                _ => Vec.new(),
+            };
+            let dflt = match fill {
+                Some(Val.I(n)) => n,
+                _ => 0,
+            };
+            Col.Int(picks.iter().map(|p| if *p < 0 { dflt } else { ints[*p] }).collect())
+        } else {
+            let fl = agg.floats();
+            let dflt = match fill {
+                Some(v) => num_of(v),
+                None => nan(),
+            };
+            Col.Float(picks.iter().map(|p| if *p < 0 { dflt } else { fl[*p] }).collect())
+        };
+        out.put(val_text(c), col);
+    }
+    Ok(out)
+}
+
+fn pivot(f: Frame, index: Str, columns: Str, values: Str, func: Str, fill: Option[Val]) -> Result[Frame, String] {
+    let g = group_rows(f, [index.to_string(), columns.to_string()].to_vec())?;
+    let vals = f.col(values)?;
+    let agg = agg_one(vals, g, func)?;
+    spread(f, index, columns, agg, g, fill, false)
+}
+
+fn crosstab(f: Frame, a: Str, b: Str) -> Result[Frame, String] {
+    let g = group_rows(f, [a.to_string(), b.to_string()].to_vec())?;
+    let counts = Col.Int(g.rows.iter().map(|r| r.len()).collect());
+    spread(f, a, b, counts, g, Some(Val.I(0)), true)
+}
+
+fn melt(f: Frame, ids: Vec[String], vars: Option[Vec[String]], var_name: Str, value_name: Str) -> Result[Frame, String] {
+    let id_idx = index_of_all(f, ids)?;
+    let value_vars: Vec[String] = match vars {
+        Some(v) => v.clone(),
+        None => f.names.iter().filter(|n| not ids.contains(*n)).map(|n| n.clone()).collect(),
+    };
+    let var_idx = index_of_all(f, value_vars)?;
+    let n = f.height();
+    let mut tile: Vec[i64] = Vec.new();
+    for _ in var_idx {
+        for i in 0..n {
+            tile.push(i);
+        }
+    }
+    let mut out = Frame.new();
+    for j in id_idx {
+        out.put(f.names[j], f.cols[j].take(tile));
+    }
+    let mut variable: Vec[Option[String]] = Vec.new();
+    for j in var_idx {
+        for _ in 0..n {
+            variable.push(Some(f.names[j].clone()));
+        }
+    }
+    out.put(var_name, Col.Str(variable));
+    let mut value: Option[Col] = None;
+    let mut so_far = 0;
+    for j in var_idx {
+        let c = f.cols[j].clone();
+        value = Some(concat_col(value, so_far, Some(c), n));
+        so_far += n;
+    }
+    out.put(value_name, value ?? Col.Float(Vec.new()));
+    Ok(out)
+}
+
+// ============================================================ rolling windows
+
+// pandas' roll_sum: Kahan sums that add the entering values with one
+// compensation and remove the leaving ones with another, and a run of
+// equal values that gives the exact product instead.
+fn roll_sum(v: Vec[f64], w: i64, minp: i64) -> Vec[f64] {
+    let n = v.len();
+    let mut out: Vec[f64] = Vec.new();
+    let mut sum_x = 0.0;
+    let mut comp_add = 0.0;
+    let mut comp_remove = 0.0;
+    let mut nobs = 0;
+    let mut same = 0;
+    let mut prev = 0.0;
+    for i in 0..n {
+        let s = if i + 1 > w { i + 1 - w } else { 0 };
+        let e = i + 1;
+        let prev_s = if i > w { i - w } else { 0 };
+        if i == 0 or s >= i {
+            prev = v[s];
+            same = 0;
+            sum_x = 0.0;
+            comp_add = 0.0;
+            comp_remove = 0.0;
+            nobs = 0;
+            for j in s..e {
+                roll_add(v[j], mut nobs, mut sum_x, mut comp_add, mut same, mut prev);
+            }
+        } else {
+            for j in prev_s..s {
+                roll_remove(v[j], mut nobs, mut sum_x, mut comp_remove);
+            }
+            roll_add(v[e - 1], mut nobs, mut sum_x, mut comp_add, mut same, mut prev);
+        }
+        out.push(if nobs == 0 and minp == 0 {
+            0.0
+        } else if nobs >= minp {
+            if same >= nobs { prev * (nobs as f64) } else { sum_x }
+        } else {
+            nan()
+        });
+    }
+    out
+}
+
+fn roll_add(val: f64, nobs: mut ref i64, sum_x: mut ref f64, comp: mut ref f64, same: mut ref i64, prev: mut ref f64) {
+    if is_nan(val) {
+        return;
+    }
+    nobs += 1;
+    let y = val - comp;
+    let t = sum_x + y;
+    comp = t - sum_x - y;
+    sum_x = t;
+    if val == prev {
+        same += 1;
+    } else {
+        same = 1;
+    }
+    prev = val;
+}
+
+fn roll_remove(val: f64, nobs: mut ref i64, sum_x: mut ref f64, comp: mut ref f64) {
+    if is_nan(val) {
+        return;
+    }
+    nobs -= 1;
+    let y = 0.0 - val - comp;
+    let t = sum_x + y;
+    comp = t - sum_x - y;
+    sum_x = t;
+}
+
+// pandas' roll_mean: roll_sum's bookkeeping, a count of negative values,
+// and a result that is 0 when the sum's sign disagrees with every value.
+fn roll_mean(v: Vec[f64], w: i64, minp: i64) -> Vec[f64] {
+    let n = v.len();
+    let mut out: Vec[f64] = Vec.new();
+    let mut sum_x = 0.0;
+    let mut comp_add = 0.0;
+    let mut comp_remove = 0.0;
+    let mut nobs = 0;
+    let mut neg = 0;
+    let mut same = 0;
+    let mut prev = 0.0;
+    for i in 0..n {
+        let s = if i + 1 > w { i + 1 - w } else { 0 };
+        let e = i + 1;
+        let prev_s = if i > w { i - w } else { 0 };
+        if i == 0 or s >= i {
+            comp_add = 0.0;
+            comp_remove = 0.0;
+            sum_x = 0.0;
+            nobs = 0;
+            neg = 0;
+            prev = v[s];
+            same = 0;
+            for j in s..e {
+                if not is_nan(v[j]) and signbit(v[j]) {
+                    neg += 1;
+                }
+                roll_add(v[j], mut nobs, mut sum_x, mut comp_add, mut same, mut prev);
+            }
+        } else {
+            for j in prev_s..s {
+                if not is_nan(v[j]) and signbit(v[j]) {
+                    neg -= 1;
+                }
+                roll_remove(v[j], mut nobs, mut sum_x, mut comp_remove);
+            }
+            let val = v[e - 1];
+            if not is_nan(val) and signbit(val) {
+                neg += 1;
+            }
+            roll_add(val, mut nobs, mut sum_x, mut comp_add, mut same, mut prev);
+        }
+        out.push(if nobs >= minp and nobs > 0 {
+            let r = sum_x / (nobs as f64);
+            if same >= nobs {
+                prev
+            } else if neg == 0 and r < 0.0 {
+                0.0
+            } else if neg == nobs and r > 0.0 {
+                0.0
+            } else {
+                r
+            }
+        } else {
+            nan()
+        });
+    }
+    out
+}
+
+fn roll_extreme(v: Vec[f64], w: i64, minp: i64, want_max: bool) -> Vec[f64] {
+    let mut out: Vec[f64] = Vec.new();
+    for i in 0..v.len() {
+        let s = if i + 1 > w { i + 1 - w } else { 0 };
+        let mut nobs = 0;
+        let mut best = nan();
+        for j in s..i + 1 {
+            let x = v[j];
+            if is_nan(x) {
+                continue;
+            }
+            nobs += 1;
+            if is_nan(best) or (want_max and x > best) or (not want_max and x < best) {
+                best = x;
+            }
+        }
+        out.push(if nobs >= minp and nobs > 0 { best } else { nan() });
+    }
+    out
+}
+
+fn rolling(c: Col, w: i64, func: Str, minp: Option[i64]) -> Result[Col, String] {
+    let m = minp ?? w;
+    let v = c.floats();
+    let out = match func {
+        "mean" => roll_mean(v, w, m),
+        "sum" => roll_sum(v, w, m),
+        "max" => roll_extreme(v, w, m, true),
+        "min" => roll_extreme(v, w, m, false),
+        "count" => {
+            let present: Vec[f64] = v.iter().map(|x| if is_nan(*x) { 0.0 } else { 1.0 }).collect();
+            roll_sum(present, w, m)
+        }
+        _ => return Err(f"AttributeError: 'Rolling' object has no attribute '{func}'"),
+    };
+    Ok(Col.Float(out))
+}
+
+// ============================================================ running values
+
+fn cumulative(c: Col, op: Str) -> Col {
+    match c {
+        Col.Int(v) => {
+            let mut acc: i64 = 0;
+            let mut out: Vec[i64] = Vec.new();
+            for i in 0..v.len() {
+                acc = if i == 0 {
+                    v[0]
+                } else if op == "cumsum" {
+                    acc.wrapping_add(v[i])
+                } else {
+                    acc.max(v[i])
+                };
+                out.push(acc);
+            }
+            Col.Int(out)
+        }
+        _ => {
+            let v = c.floats();
+            let mut acc = if op == "cumsum" { 0.0 } else { 0.0 - 1.0 / 0.0 };
+            let mut out: Vec[f64] = Vec.new();
+            for x in v {
+                if is_nan(x) {
+                    out.push(nan());
+                    continue;
+                }
+                if op == "cumsum" {
+                    acc = acc + x;
+                } else if x > acc {
+                    acc = x;
+                }
+                out.push(acc);
+            }
+            Col.Float(out)
+        }
+    }
+}
+
+fn shift(c: Col, n: i64) -> Col {
+    let len = c.len();
+    let idx: Vec[i64] = range_idx(len).iter().map(|i| {
+        let j = *i - n;
+        if j >= 0 and j < len { j } else { -1 }
+    }).collect();
+    let moved = c.take(idx);
+    match moved {
+        Col.Int(v) => Col.Float(v.iter().map(|x| *x as f64).collect()),
+        other => other,
+    }
+}
+
+fn diff(c: Col) -> Col {
+    let v = c.floats();
+    Col.Float(range_idx(v.len()).iter().map(|i| if *i == 0 { nan() } else { v[*i] - v[*i - 1] }).collect())
+}
+
+fn pct_change(c: Col) -> Col {
+    let v = c.floats();
+    Col.Float(range_idx(v.len()).iter().map(|i| if *i == 0 { nan() } else { v[*i] / v[*i - 1] - 1.0 }).collect())
+}
+
+// ============================================================ rank and value_counts
+
+fn rank(c: Col, method: Str, descending: bool) -> Col {
+    let n = c.len();
+    let mut idx: Vec[i64] = range_idx(n).iter().filter(|i| not c.is_na(**i)).map(|i| *i).collect();
+    idx.sort_by(|a, b| {
+        let o = val_cmp(c.get(a), c.get(b));
+        if descending { o.reverse() } else { o }
+    });
+    let mut out: Vec[f64] = Vec.filled(n, nan());
+    let mut p = 0;
+    let mut dense = 0;
+    while p < idx.len() {
+        let mut q = p;
+        while q + 1 < idx.len() and val_eq(c.get(idx[q + 1]), c.get(idx[p])) {
+            q += 1;
+        }
+        dense += 1;
+        let mut sum_ranks = 0.0;
+        for k in p..q + 1 {
+            sum_ranks = sum_ranks + ((k + 1) as f64);
+        }
+        let dups = (q - p + 1) as f64;
+        for k in p..q + 1 {
+            out[idx[k]] = match method {
+                "min" => (p + 1) as f64,
+                "max" => (q + 1) as f64,
+                "first" => (k + 1) as f64,
+                "dense" => dense as f64,
+                _ => sum_ranks / dups,
+            };
+        }
+        p = q + 1;
+    }
+    Col.Float(out)
+}
+
+fn value_counts(f: Frame, name: Str, normalize: bool) -> Result[Frame, String] {
+    let c = f.col(name)?;
+    let mut ids: Map[String, i64] = Map.new();
+    let mut firsts: Vec[i64] = Vec.new();
+    let mut counts: Vec[i64] = Vec.new();
+    for i in 0..c.len() {
+        let v = c.get(i);
+        if let Val.Na = v {
+            continue;
+        }
+        let k = key_text([v].to_vec());
+        match ids.get(k) {
+            Some(g) => counts[*g] += 1,
+            None => {
+                ids[k.clone()] = firsts.len();
+                firsts.push(i);
+                counts.push(1);
+            }
+        }
+    }
+    let mut order = range_idx(firsts.len());
+    order.sort_by(|a, b| counts[b].cmp(counts[a]));
+    let mut out = Frame.new();
+    out.put(name, c.take(order.iter().map(|g| firsts[*g]).collect()));
+    if normalize {
+        let total: i64 = counts.iter().sum();
+        out.put("proportion", Col.Float(order.iter().map(|g| (counts[*g] as f64) / (total as f64)).collect()));
+    } else {
+        out.put("count", Col.Int(order.iter().map(|g| counts[*g]).collect()));
+    }
+    Ok(out)
+}
+
+// ============================================================ describe and quantile
+
+// One numeric column's describe(): count, mean, std, min, the
+// quartiles and max.
+fn describe_col(c: Col) -> Vec[f64] {
+    let v = c.floats();
+    let s = sorted_valid(v);
+    let count = s.len();
+    let mean = series_mean(v);
+    let std = if count > 1 { series_var(v).sqrt() } else { nan() };
+    let lo = if count > 0 { s[0] } else { nan() };
+    let hi = if count > 0 { s[count - 1] } else { nan() };
+    [count as f64, mean, std, lo, np_quantile(s, 0.25), np_quantile(s, 0.5), np_quantile(s, 0.75), hi].to_vec()
+}
+
+// Each column's statistics are computed in a task of their own.
+fn describe(f: Frame) -> (Frame, Vec[String]) {
+    let mut out = Frame.new();
+    let group = TaskGroup.new();
+    let mut handles = Vec.new();
+    let mut names: Vec[String] = Vec.new();
+    for i in 0..f.names.len() {
+        if f.cols[i].is_numeric() {
+            let c = f.cols[i].clone();
+            names.push(f.names[i].clone());
+            handles.push(group.spawn(|| describe_col(c)));
+        }
+    }
+    let mut k = 0;
+    for h in handles.into_iter() {
+        out.put(names[k], Col.Float(h.join()));
+        k += 1;
+    }
+    let labels: Vec[String] = ["count", "mean", "std", "min", "25%", "50%", "75%", "max"].iter().map(|s| s.to_string()).collect();
+    (out, labels)
+}
+
+fn quantile(f: Frame, cols: Vec[String], qs: Vec[f64]) -> Result[(Frame, Vec[String]), String] {
+    let mut out = Frame.new();
+    for n in cols {
+        let s = sorted_valid(f.col(n)?.floats());
+        out.put(n, Col.Float(qs.iter().map(|q| np_quantile(s, *q)).collect()));
+    }
+    Ok((out, qs.iter().map(|q| q.to_string()).collect()))
+}
+
+// ============================================================ jobs
+
+fn parse_read(toks: Vec[String]) -> Result[(String, ReadOpts), String] {
+    let a = split_args(toks);
+    let path = a.arg(0)?;
+    let mut o = read_opts();
+    if let Some(s) = a.get("sep") {
+        o.sep = if s == "tab" { "\t".to_string() } else { s };
+    }
+    if let Some(s) = a.get("na") {
+        o.na = names_of(s);
+    }
+    if a.get("keep_default_na") == Some("0".to_string()) {
+        o.keep_default_na = false;
+    }
+    if a.get("header") == Some("none".to_string()) {
+        o.header = false;
+    }
+    if let Some(s) = a.get("usecols") {
+        o.usecols = Some(names_of(s));
+    }
+    if let Some(s) = a.get("dtype") {
+        for p in names_of(s) {
+            if let Some((c, t)) = p.split_once(":") {
+                o.dtype.push((c.to_string(), t.to_string()));
+            }
+        }
+    }
+    Ok((path, o))
+}
+
+// A frame, and the labels to_csv writes as its index when it has one.
+struct Out {
+    f: Frame,
+    index: Option[Vec[String]],
+}
+
+fn plain(f: own Frame) -> Result[Out, String] {
+    Ok(Out { f: f, index: None })
+}
+
+fn with_col(f: Frame, name: Str, c: own Col) -> Result[Out, String] {
+    let mut g = f.clone();
+    g.put(name, c);
+    plain(g)
+}
+
+// One step of a job applied to the frame.
+fn step(f: Frame, op: Str, toks: Vec[String]) -> Result[Out, String] {
+    let a = split_args(toks);
+    match op {
+        "dtypes" => plain(dtypes(f)),
+        "head" => plain(head(f, int_arg(a.arg(0)?)?)),
+        "tail" => plain(tail(f, int_arg(a.arg(0)?)?)),
+        "select" => plain(select(f, names_of(a.arg(0)?))?),
+        "drop" => plain(drop_cols(f, names_of(a.arg(0)?))?),
+        "rename" => plain(rename(f, names_of(a.arg(0)?))),
+        "where" => plain(where_rows(f, toks[0], toks[1], toks[2])?),
+        "isna" => plain(na_rows(f, a.arg(0)?, true)?),
+        "notna" => plain(na_rows(f, a.arg(0)?, false)?),
+        "isin" => plain(isin_rows(f, a.arg(0)?, names_of(a.arg(1)?))?),
+        "contains" => {
+            let case = a.get("case") != Some("0".to_string());
+            plain(contains_rows(f, a.arg(0)?, a.arg(1)?, case, false)?)
+        }
+        "startswith" => plain(contains_rows(f, a.arg(0)?, a.arg(1)?, true, true)?),
+        "between" => plain(between_rows(f, a.arg(0)?, number(a.arg(1)?)?, number(a.arg(2)?)?)?),
+        "assign" => {
+            let c = arith(f, toks[2], toks[3], toks[4])?;
+            with_col(f, toks[0], c)
+        }
+        "round" => {
+            let name = a.arg(0)?;
+            let c = round_col(f.col(name)?, int_arg(a.arg(1)?)?);
+            with_col(f, name, c)
+        }
+        "upper" | "lower" | "strip" => {
+            let name = a.arg(0)?;
+            let c = map_str(f.col(name)?, name, op)?;
+            with_col(f, name, c)
+        }
+        "len" => {
+            let name = a.arg(0)?;
+            let c = str_len(f.col(name)?, name)?;
+            with_col(f, a.arg(1)?, c)
+        }
+        "astype" => {
+            let name = a.arg(0)?;
+            let c = astype(f.col(name)?, a.arg(1)?)?;
+            with_col(f, name, c)
+        }
+        "clip" => {
+            let name = a.arg(0)?;
+            let c = clip(f.col(name)?, number(a.arg(1)?)?, number(a.arg(2)?)?);
+            with_col(f, name, c)
+        }
+        "abs" => {
+            let name = a.arg(0)?;
+            let c = abs_col(f.col(name)?);
+            with_col(f, name, c)
+        }
+        "fillna" => {
+            let name = a.arg(0)?;
+            let c = fillna(f.col(name)?, literal(a.arg(1)?));
+            with_col(f, name, c)
+        }
+        "ffill" | "bfill" => {
+            let name = a.arg(0)?;
+            let c = fill_along(f.col(name)?, op == "bfill");
+            with_col(f, name, c)
+        }
+        "dropna" => plain(dropna(f, a.get("subset").map(|s| names_of(s)), a.get("how") == Some("all".to_string()))?),
+        "sort" => {
+            let by = names_of(a.arg(0)?);
+            let asc: Vec[bool] = match a.get("asc") {
+                Some(s) => {
+                    let flags: Vec[bool] = names_of(s).iter().map(|x| x == "1").collect();
+                    if flags.len() == 1 { Vec.filled(by.len(), flags[0]) } else { flags }
+                }
+                None => Vec.filled(by.len(), true),
+            };
+            plain(sort_rows(f, by, asc, a.get("na") == Some("first".to_string()))?)
+        }
+        "dedup" => plain(dedup(f, a.get("subset").map(|s| names_of(s)), a.get("keep") ?? "first".to_string())?),
+        "agg" => plain(agg(f, names_of(a.arg(0)?), parse_specs(a.arg(1)?))?),
+        "size" => plain(size(f, names_of(a.arg(0)?))?),
+        "transform" => {
+            let c = transform(f, names_of(a.arg(0)?), a.arg(1)?, a.arg(2)?)?;
+            with_col(f, a.arg(3)?, c)
+        }
+        "gcumsum" => {
+            let c = group_cumsum(f, names_of(a.arg(0)?), a.arg(1)?)?;
+            with_col(f, a.arg(2)?, c)
+        }
+        "gdiff" => {
+            let c = group_diff(f, names_of(a.arg(0)?), a.arg(1)?)?;
+            with_col(f, a.arg(2)?, c)
+        }
+        "gshift" => {
+            let c = group_shift(f, names_of(a.arg(0)?), a.arg(1)?, int_arg(a.arg(2)?)?)?;
+            with_col(f, a.arg(3)?, c)
+        }
+        "merge" => {
+            let right = read_csv(a.arg(0)?, read_opts())?;
+            let (lo, ro) = match a.get("on") {
+                Some(s) => (names_of(s), names_of(s)),
+                None => (names_of(a.get("left_on") ?? String.new()), names_of(a.get("right_on") ?? String.new())),
+            };
+            let sfx = match a.get("suffixes") {
+                Some(s) => match s.split_once(",") {
+                    Some((x, y)) => (x.to_string(), y.to_string()),
+                    None => (s.clone(), String.new()),
+                },
+                None => ("_x".to_string(), "_y".to_string()),
+            };
+            let o = MergeOpts { how: a.get("how") ?? "inner".to_string(), left_on: lo, right_on: ro, suffixes: sfx };
+            plain(merge(f, right, o)?)
+        }
+        "concat" => {
+            let other = read_csv(a.arg(0)?, read_opts())?;
+            plain(concat(f, other))
+        }
+        "pivot" => {
+            let fill = match a.get("fill") {
+                Some(s) => Some(number(s)?),
+                None => None,
+            };
+            plain(pivot(f, a.get("index") ?? String.new(), a.get("columns") ?? String.new(), a.get("values") ?? String.new(), a.get("agg") ?? "mean".to_string(), fill)?)
+        }
+        "melt" => {
+            let ids = names_of(a.get("id") ?? String.new());
+            let vars = a.get("vars").map(|s| names_of(s));
+            plain(melt(f, ids, vars, a.get("var") ?? "variable".to_string(), a.get("value") ?? "value".to_string())?)
+        }
+        "crosstab" => plain(crosstab(f, a.arg(0)?, a.arg(1)?)?),
+        "rolling" => {
+            let name = a.arg(0)?;
+            let minp = match a.get("min") {
+                Some(s) => Some(int_arg(s)?),
+                None => None,
+            };
+            let c = rolling(f.col(name)?, int_arg(a.arg(1)?)?, a.arg(2)?, minp)?;
+            with_col(f, a.arg(3)?, c)
+        }
+        "cumsum" | "cummax" => {
+            let c = cumulative(f.col(a.arg(0)?)?, op);
+            with_col(f, a.arg(1)?, c)
+        }
+        "shift" => {
+            let c = shift(f.col(a.arg(0)?)?, int_arg(a.arg(1)?)?);
+            with_col(f, a.arg(2)?, c)
+        }
+        "diff" => {
+            let c = diff(f.col(a.arg(0)?)?);
+            with_col(f, a.arg(1)?, c)
+        }
+        "pct" => {
+            let c = pct_change(f.col(a.arg(0)?)?);
+            with_col(f, a.arg(1)?, c)
+        }
+        "rank" => {
+            let c = rank(f.col(a.arg(0)?)?, a.get("method") ?? "average".to_string(), a.has("desc"));
+            with_col(f, a.arg(1)?, c)
+        }
+        "counts" => plain(value_counts(f, a.arg(0)?, a.has("norm"))?),
+        "describe" => {
+            let (d, labels) = describe(f);
+            Ok(Out { f: d, index: Some(labels) })
+        }
+        "quantile" => {
+            let mut qs: Vec[f64] = Vec.new();
+            for q in names_of(a.arg(1)?) {
+                qs.push(num_of(number(q)?));
+            }
+            let (d, labels) = quantile(f, names_of(a.arg(0)?), qs)?;
+            Ok(Out { f: d, index: Some(labels) })
+        }
+        _ => Err(f"ValueError: unknown step {op}"),
+    }
+}
+
+fn run(line: Str) -> Result[String, String] {
+    let steps: Vec[String] = line.split(" | ").map(|s| s.to_string()).collect();
+    let first: Vec[String] = steps[0].split(" ").map(|s| s.to_string()).collect();
+    let (path, o) = parse_read(first[1..].to_vec())?;
+    let mut cur = Out { f: read_csv(path, o)?, index: None };
+    for k in 1..steps.len() {
+        let toks: Vec[String] = steps[k].split(" ").map(|s| s.to_string()).collect();
+        cur = step(cur.f, toks[0], toks[1..].to_vec())?;
+    }
+    Ok(to_csv(cur.f, cur.index))
+}
+
+fn transcript(line: Str) -> String {
+    let mut t = f"$ {line}\n";
+    match run(line) {
+        Ok(text) => t.push_str(text),
+        Err(e) => t.push_str(f"! {e}\n"),
+    }
+    t
+}
+
+struct DataFile {
+    path: String,
+    body: String,
+}
+
+fn write_data() -> Result[(), String] {
+    if let Err(e) = fs.create_dir_all("data".to_string()) {
+        return Err(f"cannot create data: {e}");
+    }
+    for file in data_files() {
+        if let Err(e) = fs.write(f"data/{file.path}", file.body.clone()) {
+            return Err(f"cannot write {file.path}: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = write_data() {
+        eprintln(e);
+        return;
+    }
+    let jobs = match fs.read_to_string("data/jobs.txt".to_string()) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln(f"cannot read jobs.txt: {e}");
+            return;
+        }
+    };
+    let lines: Vec[String] = jobs.lines().filter(|l| l.len() > 0).map(|l| l.to_string()).collect();
+    // Every job in a task of its own; the transcript prints in job order.
+    let group = TaskGroup.new();
+    let mut handles = Vec.new();
+    for line in lines {
+        handles.push(group.spawn(|| transcript(line)));
+    }
+    for h in handles.into_iter() {
+        print(h.join());
+    }
+}
+
+// ============================================================ data
+
+// The files under data/, in path order.
+fn data_files() -> Vec[DataFile] {
+    let mut v: Vec[DataFile] = Vec.new();
+    data_part_0(mut v);
+    data_part_1(mut v);
+    v
+}
+
+fn data_part_0(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("customer,segment,country,since\n");
+    t.push_str("acme,enterprise,US,2019\n");
+    t.push_str("globex,smb,DE,2021\n");
+    t.push_str("initech,enterprise,US,2018\n");
+    t.push_str("umbrella,smb,UK,2020\n");
+    t.push_str("hooli,startup,US,2024\n");
+    t.push_str("hooli,startup,US,2025\n");
+    t.push_str("wayne,enterprise,US,2017\n");
+    v.push(DataFile { path: "customers.csv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("a,b,c\n");
+    v.push(DataFile { path: "header_only.csv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("read types.csv | dtypes\n");
+    t.push_str("read types.csv\n");
+    t.push_str("read orders.csv | dtypes\n");
+    t.push_str("read semi.csv sep=; na=-\n");
+    t.push_str("read semi.csv sep=; na=- | dtypes\n");
+    t.push_str("read semi.csv sep=;\n");
+    t.push_str("read customers.csv usecols=customer,since\n");
+    t.push_str("read survey.csv header=none | head 3\n");
+    t.push_str("read header_only.csv | dtypes\n");
+    t.push_str("read header_only.csv\n");
+    t.push_str("read types.csv dtype=lead:str,ints:float | select ints,lead\n");
+    t.push_str("read types.csv keep_default_na=0 na=yes | select yesno,gaps\n");
+    t.push_str("read missing.csv\n");
+    t.push_str("read web.tsv sep=tab | dtypes\n");
+    t.push_str("read orders.csv | head 3\n");
+    t.push_str("read orders.csv | tail 2\n");
+    t.push_str("read orders.csv | select order_id,customer,qty | head 4\n");
+    t.push_str("read orders.csv | drop date,discount,status | head 3\n");
+    t.push_str("read orders.csv | rename unit_price:price,qty:units | head 2\n");
+    t.push_str("read orders.csv | where qty > 5 | select order_id,qty\n");
+    t.push_str("read orders.csv | where qty <= 2 | select order_id,qty\n");
+    t.push_str("read orders.csv | where region == 'east' | select order_id,customer\n");
+    t.push_str("read orders.csv | where status != 'shipped' | select order_id,status\n");
+    t.push_str("read orders.csv | where unit_price >= 7.25 | where qty < 4 | select order_id,product,qty\n");
+    t.push_str("read orders.csv | isna qty | select order_id,status\n");
+    t.push_str("read orders.csv | notna discount | select order_id,discount\n");
+    t.push_str("read orders.csv | isin product gizmo,gadget | select order_id,product\n");
+    t.push_str("read orders.csv | isin qty 1,2,40 | select order_id,qty\n");
+    t.push_str("read orders.csv | contains customer co case=0 | select order_id,customer\n");
+    t.push_str("read orders.csv | contains customer Co | select customer\n");
+    t.push_str("read web.tsv sep=tab | contains path /api | select path,status\n");
+    t.push_str("read web.tsv sep=tab | contains path orders case=0 | select path\n");
+    t.push_str("read web.tsv sep=tab | startswith path /static | select path,bytes\n");
+    t.push_str("read web.tsv sep=tab | where status >= 500 | select ts,path,ms\n");
+    t.push_str("read web.tsv sep=tab | between ms 2.5 49.0 | select path,ms\n");
+    t.push_str("read orders.csv | where qty > @discount | select order_id\n");
+    t.push_str("read orders.csv | select nope\n");
+    t.push_str("read orders.csv | where nope > 1\n");
+    t.push_str("read orders.csv | assign total = qty * unit_price | select order_id,qty,unit_price,total\n");
+    t.push_str("read orders.csv | assign net = unit_price - discount | select order_id,unit_price,discount,net\n");
+    t.push_str("read orders.csv | assign half = qty / 2 | select order_id,qty,half | head 6\n");
+    t.push_str("read orders.csv | assign big = qty + 1000 | assign ratio = big / qty | select order_id,big,ratio | head 5\n");
+    t.push_str("read orders.csv | assign t = qty * unit_price | round t 1 | select order_id,t\n");
+    t.push_str("read orders.csv | assign t = qty * unit_price | round t 0 | select order_id,t | head 6\n");
+    t.push_str("read readings.csv | round temp 0 | select sensor,day,temp | head 8\n");
+    t.push_str("read orders.csv | upper region | lower customer | select region,customer | head 4\n");
+    t.push_str("read orders.csv | len customer clen | select customer,clen | head 5\n");
+    t.push_str("read web.tsv sep=tab | strip path | lower path | counts path\n");
+    t.push_str("read orders.csv | astype qty str | select qty | head 6\n");
+    t.push_str("read orders.csv | fillna qty 0 | astype qty int | select order_id,qty\n");
+    t.push_str("read orders.csv | astype order_id float | select order_id | head 3\n");
+    t.push_str("read readings.csv | clip temp 0 22 | select sensor,day,temp\n");
+    t.push_str("read readings.csv | abs temp | where sensor == 's3' | select day,temp\n");
+    t.push_str("read orders.csv | fillna discount 0 | select order_id,discount | head 6\n");
+    t.push_str("read orders.csv | fillna qty 1 | select order_id,qty | head 6\n");
+    t.push_str("read orders.csv | dropna | select order_id\n");
+    t.push_str("read orders.csv | dropna subset=qty | select order_id,qty\n");
+    t.push_str("read survey.csv | dropna\n");
+    t.push_str("read survey.csv | dropna how=all\n");
+    t.push_str("read survey.csv | dropna subset=q2,q3\n");
+    t.push_str("read readings.csv | ffill temp | select sensor,day,temp\n");
+    t.push_str("read readings.csv | bfill humidity | select sensor,day,humidity\n");
+    t.push_str("read semi.csv sep=; na=- | fillna temp 0 | fillna rain 0\n");
+    t.push_str("read orders.csv | sort qty | select order_id,qty\n");
+    t.push_str("read orders.csv | sort qty asc=0 | select order_id,qty\n");
+    t.push_str("read orders.csv | sort qty na=first | select order_id,qty | head 4\n");
+    t.push_str("read orders.csv | sort region,qty asc=1,0 | select region,order_id,qty\n");
+    t.push_str("read orders.csv | sort customer,unit_price | select customer,unit_price,order_id\n");
+    t.push_str("read orders.csv | sort status asc=0 | select order_id,status\n");
+    t.push_str("read staff.csv | sort salary,name asc=0,1\n");
+    t.push_str("read staff.csv | dedup\n");
+    t.push_str("read staff.csv | dedup subset=dept | select name,dept\n");
+    t.push_str("read staff.csv | dedup subset=dept keep=last | select name,dept\n");
+    t.push_str("read staff.csv | dedup subset=salary keep=false | select name,salary\n");
+    t.push_str("read staff.csv | sort start | dedup subset=dept | select dept,name,start\n");
+    t.push_str("read orders.csv | agg region qty:sum,unit_price:mean\n");
+    t.push_str("read orders.csv | agg region qty:count,qty:size,order_id:count\n");
+    t.push_str("read orders.csv | agg product qty:min,qty:max,unit_price:median\n");
+    t.push_str("read orders.csv | agg customer qty:mean,qty:std,qty:var\n");
+    t.push_str("read orders.csv | agg region,product qty:sum\n");
+    t.push_str("read orders.csv | agg status customer:nunique,customer:first,customer:last\n");
+    t.push_str("read orders.csv | agg region customer:min,customer:max\n");
+    t.push_str("read orders.csv | agg region discount:sum,discount:mean,discount:count\n");
+    t.push_str("read orders.csv | assign total = qty * unit_price | agg customer total:sum | sort total_sum asc=0\n");
+    t.push_str("read orders.csv | assign total = qty * unit_price | agg region,status total:sum,total:mean\n");
+    t.push_str("read orders.csv | size region\n");
+    t.push_str("read orders.csv | size region,status\n");
+    t.push_str("read staff.csv | agg dept salary:mean,salary:median,salary:std,name:count\n");
+    t.push_str("read staff.csv | agg dept manager:first,manager:count,manager:nunique\n");
+    t.push_str("read readings.csv | agg sensor temp:mean,temp:min,temp:max,temp:std,humidity:median\n");
+    t.push_str("read readings.csv | agg sensor temp:sum,temp:var\n");
+    t.push_str("read survey.csv | agg team q1:mean,q2:mean,q3:mean,q4:mean\n");
+    t.push_str("read web.tsv sep=tab | agg path ms:mean,bytes:sum,status:max\n");
+    t.push_str("read orders.csv | agg region nope:sum\n");
+    t.push_str("read orders.csv | agg region qty:bogus\n");
+    t.push_str("read orders.csv | transform region qty sum region_qty | select order_id,region,qty,region_qty\n");
+    t.push_str("read orders.csv | transform product unit_price mean avg_price | select order_id,product,unit_price,avg_price\n");
+    t.push_str("read orders.csv | transform customer order_id count n | select customer,n | head 8\n");
+    t.push_str("read staff.csv | transform dept salary max top | assign gap = top - salary | select name,dept,salary,gap\n");
+    t.push_str("read staff.csv | transform dept salary min floor | select name,floor\n");
+    t.push_str("read readings.csv | gcumsum sensor temp cum | select sensor,day,temp,cum\n");
+    t.push_str("read readings.csv | gshift sensor temp 1 prev | select sensor,day,temp,prev\n");
+    t.push_str("read readings.csv | gshift sensor temp -1 next | select sensor,day,next | head 9\n");
+    t.push_str("read readings.csv | gdiff sensor temp delta | select sensor,day,delta\n");
+    t.push_str("read orders.csv | merge customers.csv on=customer | select order_id,customer,segment,country\n");
+    t.push_str("read orders.csv | merge customers.csv on=customer how=left | select order_id,customer,segment\n");
+    t.push_str("read orders.csv | merge customers.csv on=customer how=right | select order_id,customer,since\n");
+    t.push_str("read orders.csv | merge customers.csv on=customer how=outer | select order_id,customer,segment\n");
+    t.push_str("read orders.csv | merge returns.csv on=order_id | select order_id,customer,reason,refund\n");
+    t.push_str("read orders.csv | merge returns.csv on=order_id how=outer | select order_id,status,reason,refund\n");
+    t.push_str("read orders.csv | merge returns.csv on=order_id how=left | where status == 'returned' | select order_id,reason\n");
+    t.push_str("read orders.csv | select order_id,customer | merge customers.csv left_on=customer right_on=customer how=inner | head 4\n");
+    t.push_str("read staff.csv | dedup | merge staff.csv left_on=manager right_on=name suffixes=,_mgr | select name,manager,salary,salary_mgr\n");
+    t.push_str("read customers.csv | merge customers.csv on=country | select customer_x,customer_y | head 6\n");
+    t.push_str("read orders.csv | concat orders_q2.csv | select order_id,qty,channel | tail 5\n");
+    t.push_str("read orders.csv | concat orders_q2.csv | dtypes\n");
+    t.push_str("read orders_q2.csv | concat returns.csv | select order_id,qty,reason\n");
+    t.push_str("read orders.csv | merge nope.csv on=customer\n");
+    t.push_str("read orders.csv | merge customers.csv on=nope\n");
+    t.push_str("read orders.csv | pivot index=region columns=product values=qty agg=sum\n");
+    t.push_str("read orders.csv | pivot index=region columns=product values=qty agg=sum fill=0\n");
+    t.push_str("read orders.csv | pivot index=customer columns=status values=order_id agg=count fill=0\n");
+    t.push_str("read orders.csv | pivot index=product columns=region values=unit_price agg=mean\n");
+    t.push_str("read readings.csv | pivot index=day columns=sensor values=temp agg=mean\n");
+    t.push_str("read survey.csv | melt id=respondent vars=q1,q2\n");
+    t.push_str("read survey.csv | melt id=respondent,team | head 10\n");
+    t.push_str("read survey.csv | melt id=respondent vars=q1,q2,q3,q4 var=question value=score | dropna | agg question score:mean,score:count\n");
+    t.push_str("read survey.csv | melt id=team vars=q1,q3 | pivot index=team columns=variable values=value agg=max\n");
+    t.push_str("read orders.csv | crosstab region status\n");
+    t.push_str("read staff.csv | crosstab dept start\n");
+    t.push_str("read readings.csv | where sensor == 's1' | rolling temp 3 mean avg | select day,temp,avg\n");
+    t.push_str("read readings.csv | where sensor == 's1' | rolling temp 3 mean avg min=1 | select day,temp,avg\n");
+    t.push_str("read readings.csv | where sensor == 's2' | rolling temp 3 sum tot min=2 | select day,temp,tot\n");
+    t.push_str("read readings.csv | where sensor == 's3' | rolling temp 2 mean avg | select day,temp,avg\n");
+    t.push_str("read readings.csv | where sensor == 's2' | rolling humidity 4 max hi | rolling humidity 4 min lo | select day,humidity,hi,lo\n");
+    t.push_str("read readings.csv | where sensor == 's1' | rolling humidity 3 count n | select day,humidity,n\n");
+    t.push_str("read readings.csv | where sensor == 's1' | cumsum temp cum | cummax temp peak | select day,temp,cum,peak\n");
+    t.push_str("read readings.csv | where sensor == 's1' | shift temp 2 lag | select day,temp,lag\n");
+    t.push_str("read readings.csv | where sensor == 's2' | diff temp d | pct temp p | select day,temp,d,p\n");
+    t.push_str("read orders.csv | cumsum qty running | select order_id,qty,running\n");
+    t.push_str("read staff.csv | rank salary r | select name,salary,r\n");
+    t.push_str("read staff.csv | rank salary r method=min desc | select name,salary,r\n");
+    t.push_str("read staff.csv | rank salary r method=dense desc | select name,salary,r\n");
+    t.push_str("read staff.csv | rank salary r method=first | select name,salary,r\n");
+    t.push_str("read staff.csv | rank salary r method=max | select name,salary,r\n");
+    t.push_str("read orders.csv | rank qty r | select order_id,qty,r\n");
+    t.push_str("read orders.csv | rank customer r method=dense | select customer,r | head 6\n");
+    t.push_str("read orders.csv | counts region\n");
+    t.push_str("read orders.csv | counts product norm\n");
+    t.push_str("read orders.csv | counts qty\n");
+    t.push_str("read staff.csv | counts dept\n");
+    t.push_str("read web.tsv sep=tab | counts status\n");
+    t.push_str("read orders.csv | counts nope\n");
+    t.push_str("read orders.csv | describe\n");
+    t.push_str("read readings.csv | describe\n");
+    t.push_str("read staff.csv | describe\n");
+    t.push_str("read web.tsv sep=tab | select status,ms | describe\n");
+    t.push_str("read orders.csv | quantile qty,unit_price 0.1,0.5,0.9\n");
+    t.push_str("read readings.csv | quantile temp 0.25,0.75\n");
+    v.push(DataFile { path: "jobs.txt".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("order_id,date,region,customer,product,qty,unit_price,discount,status\n");
+    t.push_str("1001,2026-03-02,east,acme,widget,4,2.99,0.1,shipped\n");
+    t.push_str("1002,2026-03-02,west,globex,gadget,1,19.5,,shipped\n");
+    t.push_str("1003,2026-03-03,east,initech,widget,10,2.99,0.15,pending\n");
+    t.push_str("1004,2026-03-04,north,acme,gizmo,2,7.25,,shipped\n");
+    t.push_str("1005,2026-03-04,west,umbrella,widget,,2.99,,cancelled\n");
+    t.push_str("1006,2026-03-05,east,globex,gizmo,3,7.25,0.05,shipped\n");
+    t.push_str("1007,2026-03-06,south,acme,gadget,2,19.5,,returned\n");
+    t.push_str("1008,2026-03-06,north,initech,doohickey,6,0.75,0.2,shipped\n");
+    t.push_str("1009,2026-03-07,east,umbrella,gadget,1,18.25,,shipped\n");
+    t.push_str("1010,2026-03-08,west,acme,widget,12,2.79,0.1,pending\n");
+    t.push_str("1011,2026-03-09,south,globex,doohickey,25,0.75,0.25,shipped\n");
+    t.push_str("1012,2026-03-09,east,Zo\u{eb} & Co,gizmo,1,7.0,,shipped\n");
+    t.push_str("1013,2026-03-10,north,umbrella,widget,8,2.99,0.1,returned\n");
+    t.push_str("1014,2026-03-11,south,initech,gadget,3,19.5,0.05,shipped\n");
+    t.push_str("1015,2026-03-11,west,hooli,gizmo,5,7.25,,shipped\n");
+    t.push_str("1016,2026-03-12,east,acme,doohickey,40,0.7,0.3,shipped\n");
+    t.push_str("1017,2026-03-13,north,globex,widget,7,2.99,,pending\n");
+    t.push_str("1018,2026-03-13,south,umbrella,gizmo,2,7.25,0.1,shipped\n");
+    t.push_str("1019,2026-03-14,east,initech,gadget,,19.5,,cancelled\n");
+    t.push_str("1020,2026-03-15,west,acme,gadget,4,18.25,0.05,shipped\n");
+    v.push(DataFile { path: "orders.csv".to_string(), body: t });
+}
+
+fn data_part_1(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("order_id,date,region,customer,product,qty,unit_price,discount,status,channel\n");
+    t.push_str("2001,2026-04-01,east,acme,widget,3,2.99,,shipped,web\n");
+    t.push_str("2002,2026-04-01,west,wayne,gizmo,9,7.25,0.1,shipped,phone\n");
+    t.push_str("2003,2026-04-02,south,globex,gadget,1,19.5,,pending,web\n");
+    v.push(DataFile { path: "orders_q2.csv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("sensor,day,temp,humidity\n");
+    t.push_str("s1,1,20.5,40\n");
+    t.push_str("s1,2,21.0,42\n");
+    t.push_str("s1,3,,41\n");
+    t.push_str("s1,4,22.25,45\n");
+    t.push_str("s1,5,21.75,44\n");
+    t.push_str("s1,6,23.5,47\n");
+    t.push_str("s1,7,24.0,\n");
+    t.push_str("s1,8,22.5,43\n");
+    t.push_str("s2,1,18.0,55\n");
+    t.push_str("s2,2,18.5,57\n");
+    t.push_str("s2,3,19.25,56\n");
+    t.push_str("s2,4,19.25,58\n");
+    t.push_str("s2,5,19.25,60\n");
+    t.push_str("s2,6,20.0,59\n");
+    t.push_str("s2,7,,61\n");
+    t.push_str("s2,8,21.5,62\n");
+    t.push_str("s3,1,-2.5,80\n");
+    t.push_str("s3,2,-1.0,82\n");
+    t.push_str("s3,3,0.5,81\n");
+    t.push_str("s3,4,-0.5,79\n");
+    t.push_str("s3,5,1.5,78\n");
+    t.push_str("s3,6,3.0,77\n");
+    t.push_str("s3,7,2.5,76\n");
+    t.push_str("s3,8,4.0,75\n");
+    v.push(DataFile { path: "readings.csv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("order_id,reason,refund\n");
+    t.push_str("1007,damaged,39.0\n");
+    t.push_str("1013,wrong item,23.92\n");
+    t.push_str("1020,late,\n");
+    t.push_str("1099,unknown,5.5\n");
+    v.push(DataFile { path: "returns.csv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("city;temp;rain\n");
+    t.push_str("Berlin;12.5;-\n");
+    t.push_str("Paris;14;2.5\n");
+    t.push_str("Madrid;-;0\n");
+    t.push_str("Rome;18.25;1\n");
+    v.push(DataFile { path: "semi.csv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("name,dept,salary,start,manager\n");
+    t.push_str("ana,eng,120000,2019,\n");
+    t.push_str("ben,eng,95000,2021,ana\n");
+    t.push_str("chen,eng,95000,2022,ana\n");
+    t.push_str("dara,ops,70000,2020,eli\n");
+    t.push_str("eli,ops,88000,2016,\n");
+    t.push_str("fay,sales,64000,2023,gus\n");
+    t.push_str("gus,sales,91000,2015,\n");
+    t.push_str("hal,eng,135000,2014,\n");
+    t.push_str("ida,ops,70000,2022,eli\n");
+    t.push_str("ben,eng,95000,2021,ana\n");
+    t.push_str("jo,sales,58000,2024,gus\n");
+    v.push(DataFile { path: "staff.csv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("respondent,team,q1,q2,q3,q4\n");
+    t.push_str("r1,red,5,4,4,3\n");
+    t.push_str("r2,red,3,,4,2\n");
+    t.push_str("r3,blue,4,4,5,5\n");
+    t.push_str("r4,blue,2,3,,1\n");
+    t.push_str("r5,green,5,5,5,4\n");
+    t.push_str("r6,red,1,2,3,\n");
+    t.push_str("r7,green,4,3,4,4\n");
+    v.push(DataFile { path: "survey.csv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("ints,lead,signs,floats,exps,bools,yesno,mixed,gaps,quoted\n");
+    t.push_str("1,007,+3,1.5,1e3,True,yes,10,1,\"a, b\"\n");
+    t.push_str("2,010,-4,.5,2.5E-2,False,no,x,,\"say \"\"hi\"\"\"\n");
+    t.push_str("3,000,+0,5.,inf,TRUE,yes,30,3,plain\n");
+    t.push_str("4,100,-0,-0.0,-inf,false,no,40,4,\n");
+    v.push(DataFile { path: "types.csv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("ts\tpath\tstatus\tbytes\tms\n");
+    t.push_str("09:00:01\t/\t200\t5120\t12.5\n");
+    t.push_str("09:00:02\t/api/orders\t200\t830\t48.25\n");
+    t.push_str("09:00:02\t/api/orders\t500\t120\t1203.0\n");
+    t.push_str("09:00:03\t/static/app.js\t200\t88123\t3.0\n");
+    t.push_str("09:00:05\t/api/users\t404\t64\t7.75\n");
+    t.push_str("09:00:06\t/api/orders\t200\t910\t52.5\n");
+    t.push_str("09:00:08\t/\t304\t0\t1.25\n");
+    t.push_str("09:00:09\t/API/Orders\t200\t850\t49.0\n");
+    t.push_str("09:00:11\t/static/app.css\t200\t20480\t2.5\n");
+    t.push_str("09:00:12\t/api/orders\t503\t0\t3001.5\n");
+    t.push_str("09:00:12\t/api/users\t200\t1500\t22.0\n");
+    t.push_str("09:00:14\t/health\t200\t2\t0.5\n");
+    v.push(DataFile { path: "web.tsv".to_string(), body: t });
+}

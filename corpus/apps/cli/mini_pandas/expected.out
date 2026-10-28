@@ -1,0 +1,1600 @@
+$ read types.csv | dtypes
+column,dtype
+ints,int64
+lead,int64
+signs,int64
+floats,float64
+exps,float64
+bools,bool
+yesno,str
+mixed,str
+gaps,float64
+quoted,str
+$ read types.csv
+ints,lead,signs,floats,exps,bools,yesno,mixed,gaps,quoted
+1,7,3,1.5,1000.0,True,yes,10,1.0,"a, b"
+2,10,-4,0.5,0.025,False,no,x,,"say ""hi"""
+3,0,0,5.0,inf,True,yes,30,3.0,plain
+4,100,0,-0.0,-inf,False,no,40,4.0,
+$ read orders.csv | dtypes
+column,dtype
+order_id,int64
+date,str
+region,str
+customer,str
+product,str
+qty,float64
+unit_price,float64
+discount,float64
+status,str
+$ read semi.csv sep=; na=-
+city,temp,rain
+Berlin,12.5,
+Paris,14.0,2.5
+Madrid,,0.0
+Rome,18.25,1.0
+$ read semi.csv sep=; na=- | dtypes
+column,dtype
+city,str
+temp,float64
+rain,float64
+$ read semi.csv sep=;
+city,temp,rain
+Berlin,12.5,-
+Paris,14,2.5
+Madrid,-,0
+Rome,18.25,1
+$ read customers.csv usecols=customer,since
+customer,since
+acme,2019
+globex,2021
+initech,2018
+umbrella,2020
+hooli,2024
+hooli,2025
+wayne,2017
+$ read survey.csv header=none | head 3
+0,1,2,3,4,5
+respondent,team,q1,q2,q3,q4
+r1,red,5,4,4,3
+r2,red,3,,4,2
+$ read header_only.csv | dtypes
+column,dtype
+a,object
+b,object
+c,object
+$ read header_only.csv
+a,b,c
+$ read types.csv dtype=lead:str,ints:float | select ints,lead
+ints,lead
+1.0,007
+2.0,010
+3.0,000
+4.0,100
+$ read types.csv keep_default_na=0 na=yes | select yesno,gaps
+yesno,gaps
+,1
+no,
+,3
+no,4
+$ read missing.csv
+! FileNotFoundError: [Errno 2] No such file or directory: 'data/missing.csv'
+$ read web.tsv sep=tab | dtypes
+column,dtype
+ts,str
+path,str
+status,int64
+bytes,int64
+ms,float64
+$ read orders.csv | head 3
+order_id,date,region,customer,product,qty,unit_price,discount,status
+1001,2026-03-02,east,acme,widget,4.0,2.99,0.1,shipped
+1002,2026-03-02,west,globex,gadget,1.0,19.5,,shipped
+1003,2026-03-03,east,initech,widget,10.0,2.99,0.15,pending
+$ read orders.csv | tail 2
+order_id,date,region,customer,product,qty,unit_price,discount,status
+1019,2026-03-14,east,initech,gadget,,19.5,,cancelled
+1020,2026-03-15,west,acme,gadget,4.0,18.25,0.05,shipped
+$ read orders.csv | select order_id,customer,qty | head 4
+order_id,customer,qty
+1001,acme,4.0
+1002,globex,1.0
+1003,initech,10.0
+1004,acme,2.0
+$ read orders.csv | drop date,discount,status | head 3
+order_id,region,customer,product,qty,unit_price
+1001,east,acme,widget,4.0,2.99
+1002,west,globex,gadget,1.0,19.5
+1003,east,initech,widget,10.0,2.99
+$ read orders.csv | rename unit_price:price,qty:units | head 2
+order_id,date,region,customer,product,units,price,discount,status
+1001,2026-03-02,east,acme,widget,4.0,2.99,0.1,shipped
+1002,2026-03-02,west,globex,gadget,1.0,19.5,,shipped
+$ read orders.csv | where qty > 5 | select order_id,qty
+order_id,qty
+1003,10.0
+1008,6.0
+1010,12.0
+1011,25.0
+1013,8.0
+1016,40.0
+1017,7.0
+$ read orders.csv | where qty <= 2 | select order_id,qty
+order_id,qty
+1002,1.0
+1004,2.0
+1007,2.0
+1009,1.0
+1012,1.0
+1018,2.0
+$ read orders.csv | where region == 'east' | select order_id,customer
+order_id,customer
+1001,acme
+1003,initech
+1006,globex
+1009,umbrella
+1012,Zoë & Co
+1016,acme
+1019,initech
+$ read orders.csv | where status != 'shipped' | select order_id,status
+order_id,status
+1003,pending
+1005,cancelled
+1007,returned
+1010,pending
+1013,returned
+1017,pending
+1019,cancelled
+$ read orders.csv | where unit_price >= 7.25 | where qty < 4 | select order_id,product,qty
+order_id,product,qty
+1002,gadget,1.0
+1004,gizmo,2.0
+1006,gizmo,3.0
+1007,gadget,2.0
+1009,gadget,1.0
+1014,gadget,3.0
+1018,gizmo,2.0
+$ read orders.csv | isna qty | select order_id,status
+order_id,status
+1005,cancelled
+1019,cancelled
+$ read orders.csv | notna discount | select order_id,discount
+order_id,discount
+1001,0.1
+1003,0.15
+1006,0.05
+1008,0.2
+1010,0.1
+1011,0.25
+1013,0.1
+1014,0.05
+1016,0.3
+1018,0.1
+1020,0.05
+$ read orders.csv | isin product gizmo,gadget | select order_id,product
+order_id,product
+1002,gadget
+1004,gizmo
+1006,gizmo
+1007,gadget
+1009,gadget
+1012,gizmo
+1014,gadget
+1015,gizmo
+1018,gizmo
+1019,gadget
+1020,gadget
+$ read orders.csv | isin qty 1,2,40 | select order_id,qty
+order_id,qty
+1002,1.0
+1004,2.0
+1007,2.0
+1009,1.0
+1012,1.0
+1016,40.0
+1018,2.0
+$ read orders.csv | contains customer co case=0 | select order_id,customer
+order_id,customer
+1012,Zoë & Co
+$ read orders.csv | contains customer Co | select customer
+customer
+Zoë & Co
+$ read web.tsv sep=tab | contains path /api | select path,status
+path,status
+/api/orders,200
+/api/orders,500
+/api/users,404
+/api/orders,200
+/api/orders,503
+/api/users,200
+$ read web.tsv sep=tab | contains path orders case=0 | select path
+path
+/api/orders
+/api/orders
+/api/orders
+/API/Orders
+/api/orders
+$ read web.tsv sep=tab | startswith path /static | select path,bytes
+path,bytes
+/static/app.js,88123
+/static/app.css,20480
+$ read web.tsv sep=tab | where status >= 500 | select ts,path,ms
+ts,path,ms
+09:00:02,/api/orders,1203.0
+09:00:12,/api/orders,3001.5
+$ read web.tsv sep=tab | between ms 2.5 49.0 | select path,ms
+path,ms
+/,12.5
+/api/orders,48.25
+/static/app.js,3.0
+/api/users,7.75
+/API/Orders,49.0
+/static/app.css,2.5
+/api/users,22.0
+$ read orders.csv | where qty > @discount | select order_id
+order_id
+1001
+1003
+1006
+1008
+1010
+1011
+1013
+1014
+1016
+1018
+1020
+$ read orders.csv | select nope
+! KeyError: "None of [Index(['nope'], dtype='str')] are in the [columns]"
+$ read orders.csv | where nope > 1
+! KeyError: 'nope'
+$ read orders.csv | assign total = qty * unit_price | select order_id,qty,unit_price,total
+order_id,qty,unit_price,total
+1001,4.0,2.99,11.96
+1002,1.0,19.5,19.5
+1003,10.0,2.99,29.900000000000002
+1004,2.0,7.25,14.5
+1005,,2.99,
+1006,3.0,7.25,21.75
+1007,2.0,19.5,39.0
+1008,6.0,0.75,4.5
+1009,1.0,18.25,18.25
+1010,12.0,2.79,33.480000000000004
+1011,25.0,0.75,18.75
+1012,1.0,7.0,7.0
+1013,8.0,2.99,23.92
+1014,3.0,19.5,58.5
+1015,5.0,7.25,36.25
+1016,40.0,0.7,28.0
+1017,7.0,2.99,20.93
+1018,2.0,7.25,14.5
+1019,,19.5,
+1020,4.0,18.25,73.0
+$ read orders.csv | assign net = unit_price - discount | select order_id,unit_price,discount,net
+order_id,unit_price,discount,net
+1001,2.99,0.1,2.89
+1002,19.5,,
+1003,2.99,0.15,2.8400000000000003
+1004,7.25,,
+1005,2.99,,
+1006,7.25,0.05,7.2
+1007,19.5,,
+1008,0.75,0.2,0.55
+1009,18.25,,
+1010,2.79,0.1,2.69
+1011,0.75,0.25,0.5
+1012,7.0,,
+1013,2.99,0.1,2.89
+1014,19.5,0.05,19.45
+1015,7.25,,
+1016,0.7,0.3,0.39999999999999997
+1017,2.99,,
+1018,7.25,0.1,7.15
+1019,19.5,,
+1020,18.25,0.05,18.2
+$ read orders.csv | assign half = qty / 2 | select order_id,qty,half | head 6
+order_id,qty,half
+1001,4.0,2.0
+1002,1.0,0.5
+1003,10.0,5.0
+1004,2.0,1.0
+1005,,
+1006,3.0,1.5
+$ read orders.csv | assign big = qty + 1000 | assign ratio = big / qty | select order_id,big,ratio | head 5
+order_id,big,ratio
+1001,1004.0,251.0
+1002,1001.0,1001.0
+1003,1010.0,101.0
+1004,1002.0,501.0
+1005,,
+$ read orders.csv | assign t = qty * unit_price | round t 1 | select order_id,t
+order_id,t
+1001,12.0
+1002,19.5
+1003,29.9
+1004,14.5
+1005,
+1006,21.8
+1007,39.0
+1008,4.5
+1009,18.2
+1010,33.5
+1011,18.8
+1012,7.0
+1013,23.9
+1014,58.5
+1015,36.2
+1016,28.0
+1017,20.9
+1018,14.5
+1019,
+1020,73.0
+$ read orders.csv | assign t = qty * unit_price | round t 0 | select order_id,t | head 6
+order_id,t
+1001,12.0
+1002,20.0
+1003,30.0
+1004,14.0
+1005,
+1006,22.0
+$ read readings.csv | round temp 0 | select sensor,day,temp | head 8
+sensor,day,temp
+s1,1,20.0
+s1,2,21.0
+s1,3,
+s1,4,22.0
+s1,5,22.0
+s1,6,24.0
+s1,7,24.0
+s1,8,22.0
+$ read orders.csv | upper region | lower customer | select region,customer | head 4
+region,customer
+EAST,acme
+WEST,globex
+EAST,initech
+NORTH,acme
+$ read orders.csv | len customer clen | select customer,clen | head 5
+customer,clen
+acme,4
+globex,6
+initech,7
+acme,4
+umbrella,8
+$ read web.tsv sep=tab | strip path | lower path | counts path
+path,count
+/api/orders,5
+/,2
+/api/users,2
+/static/app.js,1
+/static/app.css,1
+/health,1
+$ read orders.csv | astype qty str | select qty | head 6
+qty
+4.0
+1.0
+10.0
+2.0
+""
+3.0
+$ read orders.csv | fillna qty 0 | astype qty int | select order_id,qty
+order_id,qty
+1001,4
+1002,1
+1003,10
+1004,2
+1005,0
+1006,3
+1007,2
+1008,6
+1009,1
+1010,12
+1011,25
+1012,1
+1013,8
+1014,3
+1015,5
+1016,40
+1017,7
+1018,2
+1019,0
+1020,4
+$ read orders.csv | astype order_id float | select order_id | head 3
+order_id
+1001.0
+1002.0
+1003.0
+$ read readings.csv | clip temp 0 22 | select sensor,day,temp
+sensor,day,temp
+s1,1,20.5
+s1,2,21.0
+s1,3,
+s1,4,22.0
+s1,5,21.75
+s1,6,22.0
+s1,7,22.0
+s1,8,22.0
+s2,1,18.0
+s2,2,18.5
+s2,3,19.25
+s2,4,19.25
+s2,5,19.25
+s2,6,20.0
+s2,7,
+s2,8,21.5
+s3,1,0.0
+s3,2,0.0
+s3,3,0.5
+s3,4,0.0
+s3,5,1.5
+s3,6,3.0
+s3,7,2.5
+s3,8,4.0
+$ read readings.csv | abs temp | where sensor == 's3' | select day,temp
+day,temp
+1,2.5
+2,1.0
+3,0.5
+4,0.5
+5,1.5
+6,3.0
+7,2.5
+8,4.0
+$ read orders.csv | fillna discount 0 | select order_id,discount | head 6
+order_id,discount
+1001,0.1
+1002,0.0
+1003,0.15
+1004,0.0
+1005,0.0
+1006,0.05
+$ read orders.csv | fillna qty 1 | select order_id,qty | head 6
+order_id,qty
+1001,4.0
+1002,1.0
+1003,10.0
+1004,2.0
+1005,1.0
+1006,3.0
+$ read orders.csv | dropna | select order_id
+order_id
+1001
+1003
+1006
+1008
+1010
+1011
+1013
+1014
+1016
+1018
+1020
+$ read orders.csv | dropna subset=qty | select order_id,qty
+order_id,qty
+1001,4.0
+1002,1.0
+1003,10.0
+1004,2.0
+1006,3.0
+1007,2.0
+1008,6.0
+1009,1.0
+1010,12.0
+1011,25.0
+1012,1.0
+1013,8.0
+1014,3.0
+1015,5.0
+1016,40.0
+1017,7.0
+1018,2.0
+1020,4.0
+$ read survey.csv | dropna
+respondent,team,q1,q2,q3,q4
+r1,red,5,4.0,4.0,3.0
+r3,blue,4,4.0,5.0,5.0
+r5,green,5,5.0,5.0,4.0
+r7,green,4,3.0,4.0,4.0
+$ read survey.csv | dropna how=all
+respondent,team,q1,q2,q3,q4
+r1,red,5,4.0,4.0,3.0
+r2,red,3,,4.0,2.0
+r3,blue,4,4.0,5.0,5.0
+r4,blue,2,3.0,,1.0
+r5,green,5,5.0,5.0,4.0
+r6,red,1,2.0,3.0,
+r7,green,4,3.0,4.0,4.0
+$ read survey.csv | dropna subset=q2,q3
+respondent,team,q1,q2,q3,q4
+r1,red,5,4.0,4.0,3.0
+r3,blue,4,4.0,5.0,5.0
+r5,green,5,5.0,5.0,4.0
+r6,red,1,2.0,3.0,
+r7,green,4,3.0,4.0,4.0
+$ read readings.csv | ffill temp | select sensor,day,temp
+sensor,day,temp
+s1,1,20.5
+s1,2,21.0
+s1,3,21.0
+s1,4,22.25
+s1,5,21.75
+s1,6,23.5
+s1,7,24.0
+s1,8,22.5
+s2,1,18.0
+s2,2,18.5
+s2,3,19.25
+s2,4,19.25
+s2,5,19.25
+s2,6,20.0
+s2,7,20.0
+s2,8,21.5
+s3,1,-2.5
+s3,2,-1.0
+s3,3,0.5
+s3,4,-0.5
+s3,5,1.5
+s3,6,3.0
+s3,7,2.5
+s3,8,4.0
+$ read readings.csv | bfill humidity | select sensor,day,humidity
+sensor,day,humidity
+s1,1,40.0
+s1,2,42.0
+s1,3,41.0
+s1,4,45.0
+s1,5,44.0
+s1,6,47.0
+s1,7,43.0
+s1,8,43.0
+s2,1,55.0
+s2,2,57.0
+s2,3,56.0
+s2,4,58.0
+s2,5,60.0
+s2,6,59.0
+s2,7,61.0
+s2,8,62.0
+s3,1,80.0
+s3,2,82.0
+s3,3,81.0
+s3,4,79.0
+s3,5,78.0
+s3,6,77.0
+s3,7,76.0
+s3,8,75.0
+$ read semi.csv sep=; na=- | fillna temp 0 | fillna rain 0
+city,temp,rain
+Berlin,12.5,0.0
+Paris,14.0,2.5
+Madrid,0.0,0.0
+Rome,18.25,1.0
+$ read orders.csv | sort qty | select order_id,qty
+order_id,qty
+1002,1.0
+1009,1.0
+1012,1.0
+1004,2.0
+1007,2.0
+1018,2.0
+1006,3.0
+1014,3.0
+1001,4.0
+1020,4.0
+1015,5.0
+1008,6.0
+1017,7.0
+1013,8.0
+1003,10.0
+1010,12.0
+1011,25.0
+1016,40.0
+1005,
+1019,
+$ read orders.csv | sort qty asc=0 | select order_id,qty
+order_id,qty
+1016,40.0
+1011,25.0
+1010,12.0
+1003,10.0
+1013,8.0
+1017,7.0
+1008,6.0
+1015,5.0
+1001,4.0
+1020,4.0
+1006,3.0
+1014,3.0
+1004,2.0
+1007,2.0
+1018,2.0
+1002,1.0
+1009,1.0
+1012,1.0
+1005,
+1019,
+$ read orders.csv | sort qty na=first | select order_id,qty | head 4
+order_id,qty
+1005,
+1019,
+1002,1.0
+1009,1.0
+$ read orders.csv | sort region,qty asc=1,0 | select region,order_id,qty
+region,order_id,qty
+east,1016,40.0
+east,1003,10.0
+east,1001,4.0
+east,1006,3.0
+east,1009,1.0
+east,1012,1.0
+east,1019,
+north,1013,8.0
+north,1017,7.0
+north,1008,6.0
+north,1004,2.0
+south,1011,25.0
+south,1014,3.0
+south,1007,2.0
+south,1018,2.0
+west,1010,12.0
+west,1015,5.0
+west,1020,4.0
+west,1002,1.0
+west,1005,
+$ read orders.csv | sort customer,unit_price | select customer,unit_price,order_id
+customer,unit_price,order_id
+Zoë & Co,7.0,1012
+acme,0.7,1016
+acme,2.79,1010
+acme,2.99,1001
+acme,7.25,1004
+acme,18.25,1020
+acme,19.5,1007
+globex,0.75,1011
+globex,2.99,1017
+globex,7.25,1006
+globex,19.5,1002
+hooli,7.25,1015
+initech,0.75,1008
+initech,2.99,1003
+initech,19.5,1014
+initech,19.5,1019
+umbrella,2.99,1005
+umbrella,2.99,1013
+umbrella,7.25,1018
+umbrella,18.25,1009
+$ read orders.csv | sort status asc=0 | select order_id,status
+order_id,status
+1001,shipped
+1002,shipped
+1004,shipped
+1006,shipped
+1008,shipped
+1009,shipped
+1011,shipped
+1012,shipped
+1014,shipped
+1015,shipped
+1016,shipped
+1018,shipped
+1020,shipped
+1007,returned
+1013,returned
+1003,pending
+1010,pending
+1017,pending
+1005,cancelled
+1019,cancelled
+$ read staff.csv | sort salary,name asc=0,1
+name,dept,salary,start,manager
+hal,eng,135000,2014,
+ana,eng,120000,2019,
+ben,eng,95000,2021,ana
+ben,eng,95000,2021,ana
+chen,eng,95000,2022,ana
+gus,sales,91000,2015,
+eli,ops,88000,2016,
+dara,ops,70000,2020,eli
+ida,ops,70000,2022,eli
+fay,sales,64000,2023,gus
+jo,sales,58000,2024,gus
+$ read staff.csv | dedup
+name,dept,salary,start,manager
+ana,eng,120000,2019,
+ben,eng,95000,2021,ana
+chen,eng,95000,2022,ana
+dara,ops,70000,2020,eli
+eli,ops,88000,2016,
+fay,sales,64000,2023,gus
+gus,sales,91000,2015,
+hal,eng,135000,2014,
+ida,ops,70000,2022,eli
+jo,sales,58000,2024,gus
+$ read staff.csv | dedup subset=dept | select name,dept
+name,dept
+ana,eng
+dara,ops
+fay,sales
+$ read staff.csv | dedup subset=dept keep=last | select name,dept
+name,dept
+ida,ops
+ben,eng
+jo,sales
+$ read staff.csv | dedup subset=salary keep=false | select name,salary
+name,salary
+ana,120000
+eli,88000
+fay,64000
+gus,91000
+hal,135000
+jo,58000
+$ read staff.csv | sort start | dedup subset=dept | select dept,name,start
+dept,name,start
+eng,hal,2014
+sales,gus,2015
+ops,eli,2016
+$ read orders.csv | agg region qty:sum,unit_price:mean
+region,qty_sum,unit_price_mean
+east,59.0,8.382857142857143
+north,23.0,3.495
+south,32.0,11.75
+west,22.0,10.156
+$ read orders.csv | agg region qty:count,qty:size,order_id:count
+region,qty_count,qty_size,order_id_count
+east,6,7,7
+north,4,4,4
+south,4,4,4
+west,4,5,5
+$ read orders.csv | agg product qty:min,qty:max,unit_price:median
+product,qty_min,qty_max,unit_price_median
+doohickey,6.0,40.0,0.75
+gadget,1.0,4.0,19.5
+gizmo,1.0,5.0,7.25
+widget,4.0,12.0,2.99
+$ read orders.csv | agg customer qty:mean,qty:std,qty:var
+customer,qty_mean,qty_std,qty_var
+Zoë & Co,1.0,,
+acme,10.666666666666666,14.84138358330067,220.26666666666665
+globex,9.0,10.954451150103322,119.99999999999999
+hooli,5.0,,
+initech,6.333333333333333,3.511884584284246,12.333333333333332
+umbrella,3.6666666666666665,3.7859388972001824,14.333333333333332
+$ read orders.csv | agg region,product qty:sum
+region,product,qty_sum
+east,doohickey,40.0
+east,gadget,1.0
+east,gizmo,4.0
+east,widget,14.0
+north,doohickey,6.0
+north,gizmo,2.0
+north,widget,15.0
+south,doohickey,25.0
+south,gadget,5.0
+south,gizmo,2.0
+west,gadget,5.0
+west,gizmo,5.0
+west,widget,12.0
+$ read orders.csv | agg status customer:nunique,customer:first,customer:last
+status,customer_nunique,customer_first,customer_last
+cancelled,2,umbrella,initech
+pending,3,initech,globex
+returned,2,acme,umbrella
+shipped,6,acme,acme
+$ read orders.csv | agg region customer:min,customer:max
+region,customer_min,customer_max
+east,Zoë & Co,umbrella
+north,acme,umbrella
+south,acme,umbrella
+west,acme,umbrella
+$ read orders.csv | agg region discount:sum,discount:mean,discount:count
+region,discount_sum,discount_mean,discount_count
+east,0.6,0.15,4
+north,0.30000000000000004,0.15000000000000002,2
+south,0.4,0.13333333333333333,3
+west,0.15000000000000002,0.07500000000000001,2
+$ read orders.csv | assign total = qty * unit_price | agg customer total:sum | sort total_sum asc=0
+customer,total_sum
+acme,199.94
+initech,92.9
+globex,80.93
+umbrella,56.67
+hooli,36.25
+Zoë & Co,7.0
+$ read orders.csv | assign total = qty * unit_price | agg region,status total:sum,total:mean
+region,status,total_sum,total_mean
+east,cancelled,0.0,
+east,pending,29.900000000000002,29.900000000000002
+east,shipped,86.96000000000001,17.392000000000003
+north,pending,20.93,20.93
+north,returned,23.92,23.92
+north,shipped,19.0,9.5
+south,returned,39.0,39.0
+south,shipped,91.75,30.583333333333332
+west,cancelled,0.0,
+west,pending,33.480000000000004,33.480000000000004
+west,shipped,128.75,42.916666666666664
+$ read orders.csv | size region
+region,size
+east,7
+north,4
+south,4
+west,5
+$ read orders.csv | size region,status
+region,status,size
+east,cancelled,1
+east,pending,1
+east,shipped,5
+north,pending,1
+north,returned,1
+north,shipped,2
+south,returned,1
+south,shipped,3
+west,cancelled,1
+west,pending,1
+west,shipped,3
+$ read staff.csv | agg dept salary:mean,salary:median,salary:std,name:count
+dept,salary_mean,salary_median,salary_std,name_count
+eng,108000.0,95000.0,18574.17562100671,5
+ops,76000.0,70000.0,10392.304845413264,3
+sales,71000.0,64000.0,17578.395831246944,3
+$ read staff.csv | agg dept manager:first,manager:count,manager:nunique
+dept,manager_first,manager_count,manager_nunique
+eng,ana,3,1
+ops,eli,2,1
+sales,gus,2,1
+$ read readings.csv | agg sensor temp:mean,temp:min,temp:max,temp:std,humidity:median
+sensor,temp_mean,temp_min,temp_max,temp_std,humidity_median
+s1,22.214285714285715,20.5,24.0,1.2618486061179859,43.0
+s2,19.392857142857142,18.0,21.5,1.125991626459603,58.5
+s3,0.9375,-2.5,4.0,2.2109710213258915,78.5
+$ read readings.csv | agg sensor temp:sum,temp:var
+sensor,temp_sum,temp_var
+s1,155.5,1.592261904761904
+s2,135.75,1.2678571428571423
+s3,7.5,4.888392857142857
+$ read survey.csv | agg team q1:mean,q2:mean,q3:mean,q4:mean
+team,q1_mean,q2_mean,q3_mean,q4_mean
+blue,3.0,3.5,5.0,3.0
+green,4.5,4.0,4.5,4.0
+red,3.0,3.0,3.6666666666666665,2.5
+$ read web.tsv sep=tab | agg path ms:mean,bytes:sum,status:max
+path,ms_mean,bytes_sum,status_max
+/,6.875,5120,304
+/API/Orders,49.0,850,200
+/api/orders,1076.3125,1860,503
+/api/users,14.875,1564,404
+/health,0.5,2,200
+/static/app.css,2.5,20480,200
+/static/app.js,3.0,88123,200
+$ read orders.csv | agg region nope:sum
+! KeyError: "Label(s) ['nope'] do not exist"
+$ read orders.csv | agg region qty:bogus
+! AttributeError: 'SeriesGroupBy' object has no attribute 'bogus'
+$ read orders.csv | transform region qty sum region_qty | select order_id,region,qty,region_qty
+order_id,region,qty,region_qty
+1001,east,4.0,59.0
+1002,west,1.0,22.0
+1003,east,10.0,59.0
+1004,north,2.0,23.0
+1005,west,,22.0
+1006,east,3.0,59.0
+1007,south,2.0,32.0
+1008,north,6.0,23.0
+1009,east,1.0,59.0
+1010,west,12.0,22.0
+1011,south,25.0,32.0
+1012,east,1.0,59.0
+1013,north,8.0,23.0
+1014,south,3.0,32.0
+1015,west,5.0,22.0
+1016,east,40.0,59.0
+1017,north,7.0,23.0
+1018,south,2.0,32.0
+1019,east,,59.0
+1020,west,4.0,22.0
+$ read orders.csv | transform product unit_price mean avg_price | select order_id,product,unit_price,avg_price
+order_id,product,unit_price,avg_price
+1001,widget,2.99,2.956666666666667
+1002,gadget,19.5,19.083333333333332
+1003,widget,2.99,2.956666666666667
+1004,gizmo,7.25,7.2
+1005,widget,2.99,2.956666666666667
+1006,gizmo,7.25,7.2
+1007,gadget,19.5,19.083333333333332
+1008,doohickey,0.75,0.7333333333333334
+1009,gadget,18.25,19.083333333333332
+1010,widget,2.79,2.956666666666667
+1011,doohickey,0.75,0.7333333333333334
+1012,gizmo,7.0,7.2
+1013,widget,2.99,2.956666666666667
+1014,gadget,19.5,19.083333333333332
+1015,gizmo,7.25,7.2
+1016,doohickey,0.7,0.7333333333333334
+1017,widget,2.99,2.956666666666667
+1018,gizmo,7.25,7.2
+1019,gadget,19.5,19.083333333333332
+1020,gadget,18.25,19.083333333333332
+$ read orders.csv | transform customer order_id count n | select customer,n | head 8
+customer,n
+acme,6
+globex,4
+initech,4
+acme,6
+umbrella,4
+globex,4
+acme,6
+initech,4
+$ read staff.csv | transform dept salary max top | assign gap = top - salary | select name,dept,salary,gap
+name,dept,salary,gap
+ana,eng,120000,15000
+ben,eng,95000,40000
+chen,eng,95000,40000
+dara,ops,70000,18000
+eli,ops,88000,0
+fay,sales,64000,27000
+gus,sales,91000,0
+hal,eng,135000,0
+ida,ops,70000,18000
+ben,eng,95000,40000
+jo,sales,58000,33000
+$ read staff.csv | transform dept salary min floor | select name,floor
+name,floor
+ana,95000
+ben,95000
+chen,95000
+dara,70000
+eli,70000
+fay,58000
+gus,58000
+hal,95000
+ida,70000
+ben,95000
+jo,58000
+$ read readings.csv | gcumsum sensor temp cum | select sensor,day,temp,cum
+sensor,day,temp,cum
+s1,1,20.5,20.5
+s1,2,21.0,41.5
+s1,3,,
+s1,4,22.25,63.75
+s1,5,21.75,85.5
+s1,6,23.5,109.0
+s1,7,24.0,133.0
+s1,8,22.5,155.5
+s2,1,18.0,18.0
+s2,2,18.5,36.5
+s2,3,19.25,55.75
+s2,4,19.25,75.0
+s2,5,19.25,94.25
+s2,6,20.0,114.25
+s2,7,,
+s2,8,21.5,135.75
+s3,1,-2.5,-2.5
+s3,2,-1.0,-3.5
+s3,3,0.5,-3.0
+s3,4,-0.5,-3.5
+s3,5,1.5,-2.0
+s3,6,3.0,1.0
+s3,7,2.5,3.5
+s3,8,4.0,7.5
+$ read readings.csv | gshift sensor temp 1 prev | select sensor,day,temp,prev
+sensor,day,temp,prev
+s1,1,20.5,
+s1,2,21.0,20.5
+s1,3,,21.0
+s1,4,22.25,
+s1,5,21.75,22.25
+s1,6,23.5,21.75
+s1,7,24.0,23.5
+s1,8,22.5,24.0
+s2,1,18.0,
+s2,2,18.5,18.0
+s2,3,19.25,18.5
+s2,4,19.25,19.25
+s2,5,19.25,19.25
+s2,6,20.0,19.25
+s2,7,,20.0
+s2,8,21.5,
+s3,1,-2.5,
+s3,2,-1.0,-2.5
+s3,3,0.5,-1.0
+s3,4,-0.5,0.5
+s3,5,1.5,-0.5
+s3,6,3.0,1.5
+s3,7,2.5,3.0
+s3,8,4.0,2.5
+$ read readings.csv | gshift sensor temp -1 next | select sensor,day,next | head 9
+sensor,day,next
+s1,1,21.0
+s1,2,
+s1,3,22.25
+s1,4,21.75
+s1,5,23.5
+s1,6,24.0
+s1,7,22.5
+s1,8,
+s2,1,18.5
+$ read readings.csv | gdiff sensor temp delta | select sensor,day,delta
+sensor,day,delta
+s1,1,
+s1,2,0.5
+s1,3,
+s1,4,
+s1,5,-0.5
+s1,6,1.75
+s1,7,0.5
+s1,8,-1.5
+s2,1,
+s2,2,0.5
+s2,3,0.75
+s2,4,0.0
+s2,5,0.0
+s2,6,0.75
+s2,7,
+s2,8,
+s3,1,
+s3,2,1.5
+s3,3,1.5
+s3,4,-1.0
+s3,5,2.0
+s3,6,1.5
+s3,7,-0.5
+s3,8,1.5
+$ read orders.csv | merge customers.csv on=customer | select order_id,customer,segment,country
+order_id,customer,segment,country
+1001,acme,enterprise,US
+1002,globex,smb,DE
+1003,initech,enterprise,US
+1004,acme,enterprise,US
+1005,umbrella,smb,UK
+1006,globex,smb,DE
+1007,acme,enterprise,US
+1008,initech,enterprise,US
+1009,umbrella,smb,UK
+1010,acme,enterprise,US
+1011,globex,smb,DE
+1015,hooli,startup,US
+1013,umbrella,smb,UK
+1014,initech,enterprise,US
+1015,hooli,startup,US
+1016,acme,enterprise,US
+1017,globex,smb,DE
+1018,umbrella,smb,UK
+1019,initech,enterprise,US
+1020,acme,enterprise,US
+$ read orders.csv | merge customers.csv on=customer how=left | select order_id,customer,segment
+order_id,customer,segment
+1001,acme,enterprise
+1002,globex,smb
+1003,initech,enterprise
+1004,acme,enterprise
+1005,umbrella,smb
+1006,globex,smb
+1007,acme,enterprise
+1008,initech,enterprise
+1009,umbrella,smb
+1010,acme,enterprise
+1011,globex,smb
+1012,Zoë & Co,
+1013,umbrella,smb
+1014,initech,enterprise
+1015,hooli,startup
+1015,hooli,startup
+1016,acme,enterprise
+1017,globex,smb
+1018,umbrella,smb
+1019,initech,enterprise
+1020,acme,enterprise
+$ read orders.csv | merge customers.csv on=customer how=right | select order_id,customer,since
+order_id,customer,since
+1001.0,acme,2019
+1004.0,acme,2019
+1007.0,acme,2019
+1010.0,acme,2019
+1016.0,acme,2019
+1020.0,acme,2019
+1002.0,globex,2021
+1006.0,globex,2021
+1011.0,globex,2021
+1017.0,globex,2021
+1003.0,initech,2018
+1008.0,initech,2018
+1014.0,initech,2018
+1019.0,initech,2018
+1005.0,umbrella,2020
+1009.0,umbrella,2020
+1013.0,umbrella,2020
+1018.0,umbrella,2020
+1015.0,hooli,2024
+1015.0,hooli,2025
+,wayne,2017
+$ read orders.csv | merge customers.csv on=customer how=outer | select order_id,customer,segment
+order_id,customer,segment
+1012.0,Zoë & Co,
+1001.0,acme,enterprise
+1004.0,acme,enterprise
+1007.0,acme,enterprise
+1010.0,acme,enterprise
+1016.0,acme,enterprise
+1020.0,acme,enterprise
+1002.0,globex,smb
+1006.0,globex,smb
+1011.0,globex,smb
+1017.0,globex,smb
+1015.0,hooli,startup
+1015.0,hooli,startup
+1003.0,initech,enterprise
+1008.0,initech,enterprise
+1014.0,initech,enterprise
+1019.0,initech,enterprise
+1005.0,umbrella,smb
+1009.0,umbrella,smb
+1013.0,umbrella,smb
+1018.0,umbrella,smb
+,wayne,enterprise
+$ read orders.csv | merge returns.csv on=order_id | select order_id,customer,reason,refund
+order_id,customer,reason,refund
+1007,acme,damaged,39.0
+1013,umbrella,wrong item,23.92
+1020,acme,late,
+$ read orders.csv | merge returns.csv on=order_id how=outer | select order_id,status,reason,refund
+order_id,status,reason,refund
+1001,shipped,,
+1002,shipped,,
+1003,pending,,
+1004,shipped,,
+1005,cancelled,,
+1006,shipped,,
+1007,returned,damaged,39.0
+1008,shipped,,
+1009,shipped,,
+1010,pending,,
+1011,shipped,,
+1012,shipped,,
+1013,returned,wrong item,23.92
+1014,shipped,,
+1015,shipped,,
+1016,shipped,,
+1017,pending,,
+1018,shipped,,
+1019,cancelled,,
+1020,shipped,late,
+1099,,unknown,5.5
+$ read orders.csv | merge returns.csv on=order_id how=left | where status == 'returned' | select order_id,reason
+order_id,reason
+1007,damaged
+1013,wrong item
+$ read orders.csv | select order_id,customer | merge customers.csv left_on=customer right_on=customer how=inner | head 4
+order_id,customer,segment,country,since
+1001,acme,enterprise,US,2019
+1002,globex,smb,DE,2021
+1003,initech,enterprise,US,2018
+1004,acme,enterprise,US,2019
+$ read staff.csv | dedup | merge staff.csv left_on=manager right_on=name suffixes=,_mgr | select name,manager,salary,salary_mgr
+name,manager,salary,salary_mgr
+ben,ana,95000,120000
+chen,ana,95000,120000
+dara,eli,70000,88000
+fay,gus,64000,91000
+ida,eli,70000,88000
+jo,gus,58000,91000
+$ read customers.csv | merge customers.csv on=country | select customer_x,customer_y | head 6
+customer_x,customer_y
+acme,acme
+acme,initech
+acme,hooli
+acme,hooli
+acme,wayne
+globex,globex
+$ read orders.csv | concat orders_q2.csv | select order_id,qty,channel | tail 5
+order_id,qty,channel
+1019,,
+1020,4.0,
+2001,3.0,web
+2002,9.0,phone
+2003,1.0,web
+$ read orders.csv | concat orders_q2.csv | dtypes
+column,dtype
+order_id,int64
+date,str
+region,str
+customer,str
+product,str
+qty,float64
+unit_price,float64
+discount,float64
+status,str
+channel,str
+$ read orders_q2.csv | concat returns.csv | select order_id,qty,reason
+order_id,qty,reason
+2001,3.0,
+2002,9.0,
+2003,1.0,
+1007,,damaged
+1013,,wrong item
+1020,,late
+1099,,unknown
+$ read orders.csv | merge nope.csv on=customer
+! FileNotFoundError: [Errno 2] No such file or directory: 'data/nope.csv'
+$ read orders.csv | merge customers.csv on=nope
+! KeyError: 'nope'
+$ read orders.csv | pivot index=region columns=product values=qty agg=sum
+region,doohickey,gadget,gizmo,widget
+east,40.0,1.0,4.0,14.0
+north,6.0,,2.0,15.0
+south,25.0,5.0,2.0,
+west,,5.0,5.0,12.0
+$ read orders.csv | pivot index=region columns=product values=qty agg=sum fill=0
+region,doohickey,gadget,gizmo,widget
+east,40.0,1.0,4.0,14.0
+north,6.0,0.0,2.0,15.0
+south,25.0,5.0,2.0,0.0
+west,0.0,5.0,5.0,12.0
+$ read orders.csv | pivot index=customer columns=status values=order_id agg=count fill=0
+customer,cancelled,pending,returned,shipped
+Zoë & Co,0,0,0,1
+acme,0,1,1,4
+globex,0,1,0,3
+hooli,0,0,0,1
+initech,1,1,0,2
+umbrella,1,0,1,2
+$ read orders.csv | pivot index=product columns=region values=unit_price agg=mean
+product,east,north,south,west
+doohickey,0.7,0.75,0.75,
+gadget,18.875,,19.5,18.875
+gizmo,7.125,7.25,7.25,7.25
+widget,2.99,2.99,,2.89
+$ read readings.csv | pivot index=day columns=sensor values=temp agg=mean
+day,s1,s2,s3
+1,20.5,18.0,-2.5
+2,21.0,18.5,-1.0
+3,,19.25,0.5
+4,22.25,19.25,-0.5
+5,21.75,19.25,1.5
+6,23.5,20.0,3.0
+7,24.0,,2.5
+8,22.5,21.5,4.0
+$ read survey.csv | melt id=respondent vars=q1,q2
+respondent,variable,value
+r1,q1,5.0
+r2,q1,3.0
+r3,q1,4.0
+r4,q1,2.0
+r5,q1,5.0
+r6,q1,1.0
+r7,q1,4.0
+r1,q2,4.0
+r2,q2,
+r3,q2,4.0
+r4,q2,3.0
+r5,q2,5.0
+r6,q2,2.0
+r7,q2,3.0
+$ read survey.csv | melt id=respondent,team | head 10
+respondent,team,variable,value
+r1,red,q1,5.0
+r2,red,q1,3.0
+r3,blue,q1,4.0
+r4,blue,q1,2.0
+r5,green,q1,5.0
+r6,red,q1,1.0
+r7,green,q1,4.0
+r1,red,q2,4.0
+r2,red,q2,
+r3,blue,q2,4.0
+$ read survey.csv | melt id=respondent vars=q1,q2,q3,q4 var=question value=score | dropna | agg question score:mean,score:count
+question,score_mean,score_count
+q1,3.4285714285714284,7
+q2,3.5,6
+q3,4.166666666666667,6
+q4,3.1666666666666665,6
+$ read survey.csv | melt id=team vars=q1,q3 | pivot index=team columns=variable values=value agg=max
+team,q1,q3
+blue,4.0,5.0
+green,5.0,5.0
+red,5.0,4.0
+$ read orders.csv | crosstab region status
+region,cancelled,pending,returned,shipped
+east,1,1,0,5
+north,0,1,1,2
+south,0,0,1,3
+west,1,1,0,3
+$ read staff.csv | crosstab dept start
+dept,2014,2015,2016,2019,2020,2021,2022,2023,2024
+eng,1,0,0,1,0,2,1,0,0
+ops,0,0,1,0,1,0,1,0,0
+sales,0,1,0,0,0,0,0,1,1
+$ read readings.csv | where sensor == 's1' | rolling temp 3 mean avg | select day,temp,avg
+day,temp,avg
+1,20.5,
+2,21.0,
+3,,
+4,22.25,
+5,21.75,
+6,23.5,22.5
+7,24.0,23.083333333333332
+8,22.5,23.333333333333332
+$ read readings.csv | where sensor == 's1' | rolling temp 3 mean avg min=1 | select day,temp,avg
+day,temp,avg
+1,20.5,20.5
+2,21.0,20.75
+3,,20.75
+4,22.25,21.625
+5,21.75,22.0
+6,23.5,22.5
+7,24.0,23.083333333333332
+8,22.5,23.333333333333332
+$ read readings.csv | where sensor == 's2' | rolling temp 3 sum tot min=2 | select day,temp,tot
+day,temp,tot
+1,18.0,
+2,18.5,36.5
+3,19.25,55.75
+4,19.25,57.0
+5,19.25,57.75
+6,20.0,58.5
+7,,39.25
+8,21.5,41.5
+$ read readings.csv | where sensor == 's3' | rolling temp 2 mean avg | select day,temp,avg
+day,temp,avg
+1,-2.5,
+2,-1.0,-1.75
+3,0.5,-0.25
+4,-0.5,0.0
+5,1.5,0.5
+6,3.0,2.25
+7,2.5,2.75
+8,4.0,3.25
+$ read readings.csv | where sensor == 's2' | rolling humidity 4 max hi | rolling humidity 4 min lo | select day,humidity,hi,lo
+day,humidity,hi,lo
+1,55.0,,
+2,57.0,,
+3,56.0,,
+4,58.0,58.0,55.0
+5,60.0,60.0,56.0
+6,59.0,60.0,56.0
+7,61.0,61.0,58.0
+8,62.0,62.0,59.0
+$ read readings.csv | where sensor == 's1' | rolling humidity 3 count n | select day,humidity,n
+day,humidity,n
+1,40.0,
+2,42.0,
+3,41.0,3.0
+4,45.0,3.0
+5,44.0,3.0
+6,47.0,3.0
+7,,2.0
+8,43.0,2.0
+$ read readings.csv | where sensor == 's1' | cumsum temp cum | cummax temp peak | select day,temp,cum,peak
+day,temp,cum,peak
+1,20.5,20.5,20.5
+2,21.0,41.5,21.0
+3,,,
+4,22.25,63.75,22.25
+5,21.75,85.5,22.25
+6,23.5,109.0,23.5
+7,24.0,133.0,24.0
+8,22.5,155.5,24.0
+$ read readings.csv | where sensor == 's1' | shift temp 2 lag | select day,temp,lag
+day,temp,lag
+1,20.5,
+2,21.0,
+3,,20.5
+4,22.25,21.0
+5,21.75,
+6,23.5,22.25
+7,24.0,21.75
+8,22.5,23.5
+$ read readings.csv | where sensor == 's2' | diff temp d | pct temp p | select day,temp,d,p
+day,temp,d,p
+1,18.0,,
+2,18.5,0.5,0.02777777777777768
+3,19.25,0.75,0.04054054054054057
+4,19.25,0.0,0.0
+5,19.25,0.0,0.0
+6,20.0,0.75,0.03896103896103886
+7,,,
+8,21.5,,
+$ read orders.csv | cumsum qty running | select order_id,qty,running
+order_id,qty,running
+1001,4.0,4.0
+1002,1.0,5.0
+1003,10.0,15.0
+1004,2.0,17.0
+1005,,
+1006,3.0,20.0
+1007,2.0,22.0
+1008,6.0,28.0
+1009,1.0,29.0
+1010,12.0,41.0
+1011,25.0,66.0
+1012,1.0,67.0
+1013,8.0,75.0
+1014,3.0,78.0
+1015,5.0,83.0
+1016,40.0,123.0
+1017,7.0,130.0
+1018,2.0,132.0
+1019,,
+1020,4.0,136.0
+$ read staff.csv | rank salary r | select name,salary,r
+name,salary,r
+ana,120000,10.0
+ben,95000,8.0
+chen,95000,8.0
+dara,70000,3.5
+eli,88000,5.0
+fay,64000,2.0
+gus,91000,6.0
+hal,135000,11.0
+ida,70000,3.5
+ben,95000,8.0
+jo,58000,1.0
+$ read staff.csv | rank salary r method=min desc | select name,salary,r
+name,salary,r
+ana,120000,2.0
+ben,95000,3.0
+chen,95000,3.0
+dara,70000,8.0
+eli,88000,7.0
+fay,64000,10.0
+gus,91000,6.0
+hal,135000,1.0
+ida,70000,8.0
+ben,95000,3.0
+jo,58000,11.0
+$ read staff.csv | rank salary r method=dense desc | select name,salary,r
+name,salary,r
+ana,120000,2.0
+ben,95000,3.0
+chen,95000,3.0
+dara,70000,6.0
+eli,88000,5.0
+fay,64000,7.0
+gus,91000,4.0
+hal,135000,1.0
+ida,70000,6.0
+ben,95000,3.0
+jo,58000,8.0
+$ read staff.csv | rank salary r method=first | select name,salary,r
+name,salary,r
+ana,120000,10.0
+ben,95000,7.0
+chen,95000,8.0
+dara,70000,3.0
+eli,88000,5.0
+fay,64000,2.0
+gus,91000,6.0
+hal,135000,11.0
+ida,70000,4.0
+ben,95000,9.0
+jo,58000,1.0
+$ read staff.csv | rank salary r method=max | select name,salary,r
+name,salary,r
+ana,120000,10.0
+ben,95000,9.0
+chen,95000,9.0
+dara,70000,4.0
+eli,88000,5.0
+fay,64000,2.0
+gus,91000,6.0
+hal,135000,11.0
+ida,70000,4.0
+ben,95000,9.0
+jo,58000,1.0
+$ read orders.csv | rank qty r | select order_id,qty,r
+order_id,qty,r
+1001,4.0,9.5
+1002,1.0,2.0
+1003,10.0,15.0
+1004,2.0,5.0
+1005,,
+1006,3.0,7.5
+1007,2.0,5.0
+1008,6.0,12.0
+1009,1.0,2.0
+1010,12.0,16.0
+1011,25.0,17.0
+1012,1.0,2.0
+1013,8.0,14.0
+1014,3.0,7.5
+1015,5.0,11.0
+1016,40.0,18.0
+1017,7.0,13.0
+1018,2.0,5.0
+1019,,
+1020,4.0,9.5
+$ read orders.csv | rank customer r method=dense | select customer,r | head 6
+customer,r
+acme,2.0
+globex,3.0
+initech,5.0
+acme,2.0
+umbrella,6.0
+globex,3.0
+$ read orders.csv | counts region
+region,count
+east,7
+west,5
+north,4
+south,4
+$ read orders.csv | counts product norm
+product,proportion
+widget,0.3
+gadget,0.3
+gizmo,0.25
+doohickey,0.15
+$ read orders.csv | counts qty
+qty,count
+1.0,3
+2.0,3
+4.0,2
+3.0,2
+10.0,1
+6.0,1
+12.0,1
+25.0,1
+8.0,1
+5.0,1
+40.0,1
+7.0,1
+$ read staff.csv | counts dept
+dept,count
+eng,5
+ops,3
+sales,3
+$ read web.tsv sep=tab | counts status
+status,count
+200,8
+500,1
+404,1
+304,1
+503,1
+$ read orders.csv | counts nope
+! KeyError: 'nope'
+$ read orders.csv | describe
+,order_id,qty,unit_price,discount
+count,20.0,18.0,20.0,11.0
+mean,1010.5,7.555555555555555,8.522,0.13181818181818183
+std,5.916079783099616,9.942317295410279,7.426782685162639,0.08447700063546075
+min,1001.0,1.0,0.7,0.05
+25%,1005.75,2.0,2.99,0.07500000000000001
+50%,1010.5,4.0,7.125,0.1
+75%,1015.25,7.75,18.25,0.175
+max,1020.0,40.0,19.5,0.3
+$ read readings.csv | describe
+,day,temp,humidity
+count,24.0,22.0,23.0
+mean,4.5,13.579545454545455,60.78260869565217
+std,2.340568492816482,9.972398325126125,14.847578687630369
+min,1.0,-2.5,40.0
+25%,2.75,2.625,46.0
+50%,4.5,19.25,59.0
+75%,6.25,21.375,76.5
+max,8.0,24.0,82.0
+$ read staff.csv | describe
+,salary,start
+count,11.0,11.0
+mean,89181.81818181818,2019.7272727272727
+std,23447.038967930177,3.349355433241121
+min,58000.0,2014.0
+25%,70000.0,2017.5
+50%,91000.0,2021.0
+75%,95000.0,2022.0
+max,135000.0,2024.0
+$ read web.tsv sep=tab | select status,ms | describe
+,status,ms
+count,12.0,12.0
+mean,275.9166666666667,366.9791666666667
+std,122.50451444990124,896.8799165740015
+min,200.0,0.5
+25%,200.0,2.875
+50%,200.0,17.25
+75%,329.0,49.875
+max,503.0,3001.5
+$ read orders.csv | quantile qty,unit_price 0.1,0.5,0.9
+,qty,unit_price
+0.1,1.0,0.75
+0.5,4.0,7.125
+0.9,15.90000000000001,19.5
+$ read readings.csv | quantile temp 0.25,0.75
+,temp
+0.25,2.625
+0.75,21.375
