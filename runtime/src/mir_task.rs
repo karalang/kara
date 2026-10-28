@@ -1540,7 +1540,7 @@ pub unsafe extern "C" fn karac_mir_task_spawn(
     b: *mut u8,
 ) {
     let group = group as *mut Group;
-    EXEC.with(|e| {
+    let id = EXEC.with(|e| {
         let mut e = e.borrow_mut();
         if !group.is_null() {
             // SAFETY: the caller's contract, under the executor's lock.
@@ -1590,7 +1590,14 @@ pub unsafe extern "C" fn karac_mir_task_spawn(
             hold,
         });
         e.progress += 1;
+        id
     });
+    // The pool starts with the first task beside the root, which the main
+    // thread runs inline until a worker takes one: a program that reaches
+    // no site never leaves one thread (B-2026-10-28-15).
+    if id > 1 {
+        start_workers();
+    }
 }
 
 /// Runs the root task `poll(a, b)` and every task spawned meanwhile until
@@ -1609,7 +1616,6 @@ pub unsafe extern "C" fn karac_mir_task_run(poll: TaskPoll, a: *mut u8, b: *mut 
             t.hold = 0;
         }
     });
-    start_workers();
     // Tasks that waited on another task in a row with nothing happening in
     // between.
     let mut idle = 0usize;
@@ -1779,22 +1785,31 @@ thread_local! {
 /// Starts the pool's other workers once, when it runs more than one.
 fn start_workers() {
     static STARTED: AtomicBool = AtomicBool::new(false);
-    if !pooled() || STARTED.swap(true, Ordering::AcqRel) {
+    if STARTED.load(Ordering::Relaxed) || !pooled() || STARTED.swap(true, Ordering::AcqRel) {
         return;
     }
     // While this is the only thread: see [`Reactor::open`].
     EXEC.with(|e| e.borrow_mut().reactor.open());
-    for w in 1..threads() {
-        let spawned = std::thread::Builder::new()
-            .name(format!("karac-worker-{w}"))
-            // As deep as the main thread's: a poll runs the task's whole
-            // call chain.
-            .stack_size(8 << 20)
-            .spawn(move || worker_loop(w));
-        if spawned.is_err() {
-            break;
-        }
+    spawn_worker(1);
+}
+
+/// Starts worker `w`, which starts the next one before it looks for work:
+/// the main thread pays for one thread's creation, not one per core
+/// (B-2026-10-28-15).
+fn spawn_worker(w: usize) {
+    if w >= threads() {
+        return;
     }
+    // A failed start leaves the pool with the workers it has.
+    let _ = std::thread::Builder::new()
+        .name(format!("karac-worker-{w}"))
+        // As deep as the main thread's: a poll runs the task's whole
+        // call chain.
+        .stack_size(8 << 20)
+        .spawn(move || {
+            spawn_worker(w + 1);
+            worker_loop(w)
+        });
 }
 
 /// A task this worker polled is settled: it no longer counts as running.
