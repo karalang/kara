@@ -1,0 +1,17 @@
+tops = [2,1,2,4,2,2], bottoms = [5,2,6,2,3,2] -> 2
+tops = [3,5,1,2,3], bottoms = [3,6,3,3,4] -> -1
+tops = [1,1], bottoms = [1,1] -> 0
+tops = [1,2], bottoms = [2,1] -> 1
+tops = [1,2], bottoms = [3,4] -> -1
+tops = [1,2,1,1], bottoms = [2,1,2,2] -> 1
+tops = [6,6,6,5], bottoms = [5,5,5,6] -> 1
+tops = [1,2,3,4,6], bottoms = [6,6,6,6,5] -> 1
+tops = [2,3,2,3], bottoms = [3,2,3,2] -> 2
+tops = [4,4,1,4], bottoms = [1,1,4,1] -> 1
+20000 of 6 over 6 -> 0
+3 on alternate halves -> 8000
+5 everywhere but the last domino -> -1
+3000 random rows of 14926 dominoes: 2301 possible, rotations sum to 1765, checksum 439966604
+1000 random rows of 51472 dominoes: 636 possible, rotations sum to 7379, checksum 27387271
+100 random rows of 106397 dominoes: 61 possible, rotations sum to 13716, checksum 869846468
+3 random rows of 6058 dominoes: 3 possible, rotations sum to 2323, checksum 792049

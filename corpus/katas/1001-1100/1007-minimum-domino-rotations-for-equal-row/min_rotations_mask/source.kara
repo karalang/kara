@@ -1,0 +1,129 @@
+// LeetCode #1007: Minimum Domino Rotations For Equal Row -- a set of faces
+//
+// Keep the faces every domino so far shows, as six bits: each domino
+// keeps only the bits of its two faces. The faces left at the end are the
+// ones a row can be filled with; for each, count the dominoes without it
+// on top and those without it below, and take the fewest. O(n).
+fn min_domino_rotations(tops: ref Vec[i64], bottoms: ref Vec[i64]) -> i64 {
+    let mut common = 0b1111110;
+    for i in 0..tops.len() {
+        common = common & ((1 << tops[i]) | (1 << bottoms[i]));
+    }
+    let mut best = -1;
+    for v in 1..7 {
+        if (common >> v) & 1 == 1 {
+            let mut not_top = 0;
+            let mut not_bottom = 0;
+            for i in 0..tops.len() {
+                if tops[i] != v {
+                    not_top += 1;
+                }
+                if bottoms[i] != v {
+                    not_bottom += 1;
+                }
+            }
+            let need = not_top.min(not_bottom);
+            if best == -1 or need < best {
+                best = need;
+            }
+        }
+    }
+    best
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `n` dominoes with values 1 to `faces`; with chance `forced` in 8 a
+// domino shows `target` on a random half
+fn random_row(n: i64, faces: i64, target: i64, forced: i64, seed: mut ref i64) -> (Vec[i64], Vec[i64]) {
+    let mut tops: Vec[i64] = Vec.new();
+    let mut bottoms: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        let mut t = 1 + next_random(mut seed) % faces;
+        let mut b = 1 + next_random(mut seed) % faces;
+        if next_random(mut seed) % 8 < forced {
+            if next_random(mut seed) % 2 == 0 {
+                t = target;
+            } else {
+                b = target;
+            }
+        }
+        tops.push(t);
+        bottoms.push(b);
+    }
+    (tops, bottoms)
+}
+
+fn show(nums: ref Vec[i64]) -> String {
+    let parts: Vec[String] = nums.iter().map(|x| x.to_string()).collect();
+    "[" + parts.join(",") + "]"
+}
+
+fn main() {
+    // LeetCode's two examples, then a few more
+    let examples: Vec[(Vec[i64], Vec[i64])] = vec![
+        (vec![2, 1, 2, 4, 2, 2], vec![5, 2, 6, 2, 3, 2]),
+        (vec![3, 5, 1, 2, 3], vec![3, 6, 3, 3, 4]),
+        (vec![1, 1], vec![1, 1]),
+        (vec![1, 2], vec![2, 1]),
+        (vec![1, 2], vec![3, 4]),
+        (vec![1, 2, 1, 1], vec![2, 1, 2, 2]),
+        (vec![6, 6, 6, 5], vec![5, 5, 5, 6]),
+        (vec![1, 2, 3, 4, 6], vec![6, 6, 6, 6, 5]),
+        (vec![2, 3, 2, 3], vec![3, 2, 3, 2]),
+        (vec![4, 4, 1, 4], vec![1, 1, 4, 1]),
+    ];
+    for (tops, bottoms) in examples.iter() {
+        println(f"tops = {show(tops)}, bottoms = {show(bottoms)} -> {min_domino_rotations(tops, bottoms)}");
+    }
+    // LeetCode's longest: 20000 dominoes
+    let n = 20000;
+    let mut half_tops: Vec[i64] = Vec.new();
+    let mut half_bottoms: Vec[i64] = Vec.new();
+    let mut late_tops: Vec[i64] = Vec.new();
+    let mut late_bottoms: Vec[i64] = Vec.new();
+    for i in 0..n {
+        half_tops.push(if i % 2 == 0 { 3 } else { 1 + i % 6 });
+        half_bottoms.push(if i % 2 == 0 { 1 + i % 5 } else { 3 });
+        late_tops.push(5);
+        late_bottoms.push(if i == n - 1 { 2 } else { 5 });
+    }
+    late_tops[n - 1] = 4;
+    let large: Vec[(String, Vec[i64], Vec[i64])] = vec![
+        ("20000 of 6 over 6".to_string(), Vec.filled(n, 6), Vec.filled(n, 6)),
+        ("3 on alternate halves".to_string(), half_tops, half_bottoms),
+        ("5 everywhere but the last domino".to_string(), late_tops, late_bottoms),
+    ];
+    for (name, tops, bottoms) in large.iter() {
+        println(f"{name} -> {min_domino_rotations(tops, bottoms)}");
+    }
+    let mut seed = 1007;
+    let groups: Vec[(i64, i64)] = vec![(3000, 8), (1000, 100), (100, 2000), (3, 20000)];
+    for (count, most) in groups.iter() {
+        let mut total = 0;
+        let mut possible = 0;
+        let mut sum = 0;
+        let mut check = 0;
+        for _ in 0..count {
+            let size = 2 + next_random(mut seed) % (most - 1);
+            let faces = 1 + next_random(mut seed) % 6;
+            let target = 1 + next_random(mut seed) % faces;
+            // half the rows force every domino, so they can always be made equal
+            let forced = if next_random(mut seed) % 2 == 0 { 8 } else { next_random(mut seed) % 9 };
+            let (tops, bottoms) = random_row(size, faces, target, forced, mut seed);
+            let got = min_domino_rotations(tops, bottoms);
+            total += size;
+            if got >= 0 {
+                possible += 1;
+                sum += got;
+            }
+            check = (check * 31 + got + 2) % 1000000007;
+        }
+        println(f"{count} random rows of {total} dominoes: {possible} possible, rotations sum to {sum}, checksum {check}");
+    }
+}

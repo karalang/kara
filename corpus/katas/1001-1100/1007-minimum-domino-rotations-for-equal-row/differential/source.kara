@@ -1,0 +1,301 @@
+// LeetCode #1007: Minimum Domino Rotations For Equal Row -- differential
+//
+// The five arms, copied, against the statement read literally and five
+// more properties. See README.md § Differential.
+
+fn rot_star(tops: ref Vec[i64], bottoms: ref Vec[i64]) -> i64 {
+    let a = rotations(tops, bottoms, tops[0]);
+    let b = rotations(tops, bottoms, bottoms[0]);
+    if a == -1 {
+        b
+    } else if b == -1 {
+        a
+    } else {
+        a.min(b)
+    }
+}
+
+// the fewest rotations that make one row all `v`, or -1
+fn rotations(tops: ref Vec[i64], bottoms: ref Vec[i64], v: i64) -> i64 {
+    let mut to_top = 0;
+    let mut to_bottom = 0;
+    for i in 0..tops.len() {
+        if tops[i] != v and bottoms[i] != v {
+            return -1;
+        }
+        if tops[i] != v {
+            to_top += 1;
+        } else if bottoms[i] != v {
+            to_bottom += 1;
+        }
+    }
+    to_top.min(to_bottom)
+}
+
+fn rot_count(tops: ref Vec[i64], bottoms: ref Vec[i64]) -> i64 {
+    let n = tops.len();
+    let mut on_top: Vec[i64] = Vec.filled(7, 0);
+    let mut on_bottom: Vec[i64] = Vec.filled(7, 0);
+    let mut on_both: Vec[i64] = Vec.filled(7, 0);
+    for i in 0..n {
+        on_top[tops[i]] += 1;
+        on_bottom[bottoms[i]] += 1;
+        if tops[i] == bottoms[i] {
+            on_both[tops[i]] += 1;
+        }
+    }
+    let mut best = -1;
+    for v in 1..7 {
+        if on_top[v] + on_bottom[v] - on_both[v] == n {
+            let need = (n - on_top[v]).min(n - on_bottom[v]);
+            if best == -1 or need < best {
+                best = need;
+            }
+        }
+    }
+    best
+}
+
+fn rot_faces(tops: ref Vec[i64], bottoms: ref Vec[i64]) -> i64 {
+    let mut best = -1;
+    for v in 1..7 {
+        for row in 0..2 {
+            let mut turns = 0;
+            let mut ok = true;
+            let mut i = 0;
+            while ok and i < tops.len() {
+                let (mine, other) = if row == 0 { (tops[i], bottoms[i]) } else { (bottoms[i], tops[i]) };
+                if mine != v {
+                    if other == v {
+                        turns += 1;
+                    } else {
+                        ok = false;
+                    }
+                }
+                i += 1;
+            }
+            if ok and (best == -1 or turns < best) {
+                best = turns;
+            }
+        }
+    }
+    best
+}
+
+fn rot_mask(tops: ref Vec[i64], bottoms: ref Vec[i64]) -> i64 {
+    let mut common = 0b1111110;
+    for i in 0..tops.len() {
+        common = common & ((1 << tops[i]) | (1 << bottoms[i]));
+    }
+    let mut best = -1;
+    for v in 1..7 {
+        if (common >> v) & 1 == 1 {
+            let mut not_top = 0;
+            let mut not_bottom = 0;
+            for i in 0..tops.len() {
+                if tops[i] != v {
+                    not_top += 1;
+                }
+                if bottoms[i] != v {
+                    not_bottom += 1;
+                }
+            }
+            let need = not_top.min(not_bottom);
+            if best == -1 or need < best {
+                best = need;
+            }
+        }
+    }
+    best
+}
+
+fn rot_halves(tops: ref Vec[i64], bottoms: ref Vec[i64]) -> i64 {
+    let costs = table(tops, bottoms, 0, tops.len());
+    let mut best = -1;
+    for c in costs.iter() {
+        if c >= 0 and (best == -1 or c < best) {
+            best = c;
+        }
+    }
+    best
+}
+
+// costs[2 * (v - 1) + row] for dominoes lo..hi: -1 when face v cannot
+// fill that row (0 the top, 1 the bottom)
+fn table(tops: ref Vec[i64], bottoms: ref Vec[i64], lo: i64, hi: i64) -> Vec[i64] {
+    if hi - lo == 1 {
+        let mut costs: Vec[i64] = Vec.filled(12, -1);
+        for v in 1..7 {
+            for row in 0..2 {
+                let (mine, other) = if row == 0 { (tops[lo], bottoms[lo]) } else { (bottoms[lo], tops[lo]) };
+                costs[2 * (v - 1) + row] = if mine == v { 0 } else if other == v { 1 } else { -1 };
+            }
+        }
+        return costs;
+    }
+    let mid = lo + (hi - lo) / 2;
+    let left = table(tops, bottoms, lo, mid);
+    let right = table(tops, bottoms, mid, hi);
+    let mut costs: Vec[i64] = Vec.filled(12, -1);
+    for k in 0..12 {
+        if left[k] >= 0 and right[k] >= 0 {
+            costs[k] = left[k] + right[k];
+        }
+    }
+    costs
+}
+
+// The statement read literally: every set of dominoes to rotate, kept
+// when it leaves the top row or the bottom row all one value, and the
+// smallest such set's size. O(2^n n), for short rows.
+fn rot_brute(tops: ref Vec[i64], bottoms: ref Vec[i64]) -> i64 {
+    let n = tops.len();
+    let mut best = -1;
+    for m in 0..(1 << n) {
+        let mut top_same = true;
+        let mut bottom_same = true;
+        let mut first_top = 0;
+        let mut first_bottom = 0;
+        let mut turned = 0;
+        for i in 0..n {
+            let flip = (m >> i) & 1 == 1;
+            let (t, b) = if flip { (bottoms[i], tops[i]) } else { (tops[i], bottoms[i]) };
+            if flip {
+                turned += 1;
+            }
+            if i == 0 {
+                first_top = t;
+                first_bottom = b;
+            }
+            if t != first_top {
+                top_same = false;
+            }
+            if b != first_bottom {
+                bottom_same = false;
+            }
+        }
+        if (top_same or bottom_same) and (best == -1 or turned < best) {
+            best = turned;
+        }
+    }
+    best
+}
+
+fn arms(tops: ref Vec[i64], bottoms: ref Vec[i64]) -> Vec[i64] {
+    vec![
+        rot_star(tops, bottoms),
+        rot_count(tops, bottoms),
+        rot_faces(tops, bottoms),
+        rot_mask(tops, bottoms),
+        rot_halves(tops, bottoms),
+    ]
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_row(n: i64, faces: i64, target: i64, forced: i64, seed: mut ref i64) -> (Vec[i64], Vec[i64]) {
+    let mut tops: Vec[i64] = Vec.new();
+    let mut bottoms: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        let mut t = 1 + next_random(mut seed) % faces;
+        let mut b = 1 + next_random(mut seed) % faces;
+        if next_random(mut seed) % 8 < forced {
+            if next_random(mut seed) % 2 == 0 {
+                t = target;
+            } else {
+                b = target;
+            }
+        }
+        tops.push(t);
+        bottoms.push(b);
+    }
+    (tops, bottoms)
+}
+
+fn main() {
+    let names = ["star", "count", "faces", "mask", "halves"];
+    let mut failures: Vec[i64] = vec![0; 6];
+    let mut checks = 0;
+    let mut rows = 0;
+    let mut dominoes = 0;
+    let mut possible = 0;
+    let mut check = 0;
+    let mut seed = 10071;
+    for t in 0..3200 {
+        let small = t < 3000;
+        let size = if small { 2 + next_random(mut seed) % 7 } else { 2 + next_random(mut seed) % 299 };
+        let faces = 1 + next_random(mut seed) % 6;
+        let target = 1 + next_random(mut seed) % faces;
+        let forced = if next_random(mut seed) % 2 == 0 { 8 } else { next_random(mut seed) % 9 };
+        let (tops, bottoms) = random_row(size, faces, target, forced, mut seed);
+        let got = arms(tops, bottoms);
+        rows += 1;
+        dominoes += size;
+        if got[0] >= 0 {
+            possible += 1;
+        }
+        check = (check * 31 + got[0] + 2) % 1000000007;
+        let brute = if small { rot_brute(tops, bottoms) } else { 0 };
+        let swapped = arms(bottoms, tops);
+        let mut rev_tops = tops.clone();
+        rev_tops.reverse();
+        let mut rev_bottoms = bottoms.clone();
+        rev_bottoms.reverse();
+        let back = arms(rev_tops, rev_bottoms);
+        let flip_tops: Vec[i64] = tops.iter().map(|x| 7 - x).collect();
+        let flip_bottoms: Vec[i64] = bottoms.iter().map(|x| 7 - x).collect();
+        let relabelled = arms(flip_tops, flip_bottoms);
+        for a in 0..5 {
+            // P1: the statement, on the short rows
+            if small {
+                checks += 1;
+                if got[a] != brute {
+                    failures[0] += 1;
+                }
+            }
+            // P2: swapping the rows gives the same answer
+            checks += 1;
+            if swapped[a] != got[a] {
+                failures[1] += 1;
+            }
+            // P3: the dominoes in reverse order give the same answer
+            checks += 1;
+            if back[a] != got[a] {
+                failures[2] += 1;
+            }
+            // P4: -1, or at most half the dominoes, since the turns that
+            // fill the top and those that fill the bottom add up to at most n
+            checks += 1;
+            if got[a] < -1 or 2 * got[a] > size {
+                failures[3] += 1;
+            }
+            // P5: renaming every face v to 7 - v gives the same answer
+            checks += 1;
+            if relabelled[a] != got[a] {
+                failures[4] += 1;
+            }
+            // P6: each arm agrees with at least two of the other four
+            checks += 1;
+            let mut agree = 0;
+            for b in 0..5 {
+                if b != a and got[b] == got[a] {
+                    agree += 1;
+                }
+            }
+            if agree < 2 {
+                failures[5] += 1;
+            }
+        }
+    }
+    let mut total = 0;
+    for p in 0..6 {
+        total += failures[p];
+        if failures[p] > 0 {
+            println(f"P{p + 1}: {failures[p]} failures");
+        }
+    }
+    println(f"{rows} rows of {dominoes} dominoes: {possible} possible, checksum {check}, {checks} checks over {names.len()} arms: {total} failures");
+}
