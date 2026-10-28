@@ -269,18 +269,27 @@ fn compile_module<'ctx>(
         empty_global(module, "KARAC_SPAWN_SITES", entry.into());
     }
 
+    // A program that runs tasks frees through the runtime's per-thread
+    // lists (`route_heap`), decided once for all its units.
+    let heap = module.get_function("karac_mir_task_spawn").is_some()
+        && tm
+            .get_triple()
+            .as_str()
+            .to_string_lossy()
+            .contains("-linux-gnu");
+
     // The hot-swap table and its constructor stay in one unit.
     let hot_swap = module.get_global("karac_hotswap_table").is_some();
     if let Some(plan) = split::plan(module.as_mut_ptr()).filter(|_| !hot_swap) {
         crate::mir::lower::phase_time("plan codegen units", &mut t);
         let units = plan.units();
         let r = split::compile_units(module.as_mut_ptr(), &plan, obj, &|m, part| {
-            optimize_and_emit(m, part, opt, &super::driver::create_target_machine()?)
+            optimize_and_emit(m, part, opt, &super::driver::create_target_machine()?, heap)
         });
         crate::mir::lower::phase_time(&format!("opt + emission, {units} units"), &mut t);
         return r;
     }
-    optimize_and_emit_timed(module, obj, opt, &tm)
+    optimize_and_emit_timed(module, obj, opt, &tm, heap)
 }
 
 fn optimize_and_emit_timed(
@@ -288,9 +297,13 @@ fn optimize_and_emit_timed(
     obj: &Path,
     opt: u8,
     tm: &TargetMachine,
+    heap: bool,
 ) -> Result<(), String> {
     let mut t = std::time::Instant::now();
     run_passes(module, opt, tm)?;
+    if heap {
+        route_heap(module);
+    }
     crate::mir::lower::phase_time("opt passes", &mut t);
     let r = emit(module, obj, tm);
     crate::mir::lower::phase_time("object emission", &mut t);
@@ -302,9 +315,27 @@ fn optimize_and_emit(
     obj: &Path,
     opt: u8,
     tm: &TargetMachine,
+    heap: bool,
 ) -> Result<(), String> {
     run_passes(module, opt, tm)?;
+    if heap {
+        route_heap(module);
+    }
     emit(module, obj, tm)
+}
+
+/// Points the module's calls of `malloc` and `free` at the runtime's
+/// `karac_malloc` and `karac_free`, which keep small chunks on per-thread
+/// lists once the pool runs more than one thread: past glibc's own short
+/// per-thread cache, its `free` then takes a lock, and grain_intake's
+/// 140,000 frees cost it about a millisecond at four workers
+/// (B-2026-10-28-15). After the passes, which know the C names.
+fn route_heap(module: &Module<'_>) {
+    for (libc, ours) in [("malloc", "karac_malloc"), ("free", "karac_free")] {
+        if let Some(f) = module.get_function(libc) {
+            f.as_global_value().set_name(ours);
+        }
+    }
 }
 
 fn run_passes(module: &Module<'_>, opt: u8, tm: &TargetMachine) -> Result<(), String> {

@@ -82,7 +82,154 @@ pub extern "C" fn karac_alloc_fallible(size: usize) -> *mut u8 {
             return p;
         }
     }
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    {
+        let p = small::take(n);
+        if !p.is_null() {
+            return p;
+        }
+    }
     unsafe { malloc(n) }
+}
+
+/// Per-thread free lists of small chunks, in front of `malloc` and `free`
+/// once the program runs more than one thread (B-2026-10-28-15).
+///
+/// Once a second thread exists, glibc's `free` takes its arena's lock (an
+/// atomic, for a fast bin) for every chunk its seven-deep per-thread cache
+/// cannot take, and a Kāra program frees in bursts: a collection of
+/// strings at the end of a scope. The lists hold glibc's own chunks, so a
+/// chunk taken from one may be freed by libc `free`, and one freed here may
+/// come from any allocation path. A thread keeps at most [`KEEP`] chunks a
+/// size, under 600 KiB in all. `KARAC_ALLOC_CACHE=0` leaves them off.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+pub(crate) mod small {
+    use std::cell::Cell;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    /// One list per 16-byte chunk size, up to [`MAX`]-byte requests.
+    const CLASSES: usize = 33;
+    /// The largest request a list serves: a 512-byte chunk.
+    pub(crate) const MAX: usize = CLASSES * 16 - 24;
+    /// Chunks each list keeps before `free` takes the rest.
+    const KEEP: u32 = 64;
+
+    static ON: AtomicBool = AtomicBool::new(false);
+
+    struct Lists {
+        head: [Cell<*mut u8>; CLASSES],
+        len: [Cell<u32>; CLASSES],
+    }
+
+    thread_local! {
+        static LISTS: Lists = const {
+            Lists {
+                head: [const { Cell::new(std::ptr::null_mut()) }; CLASSES],
+                len: [const { Cell::new(0) }; CLASSES],
+            }
+        };
+    }
+
+    extern "C" {
+        fn dlsym(handle: *mut u8, name: *const std::ffi::c_char) -> *mut u8;
+    }
+
+    /// Turns the lists on, when no sanitizer watches the heap: a chunk kept
+    /// here is one it would see freed.
+    pub(crate) fn start() {
+        if std::env::var_os("KARAC_ALLOC_CACHE").is_some_and(|v| v == "0") {
+            return;
+        }
+        for name in [
+            c"__asan_init",
+            c"__tsan_init",
+            c"__msan_init",
+            c"__hwasan_init",
+        ] {
+            // SAFETY: RTLD_DEFAULT (null) and a NUL-terminated name.
+            if !unsafe { dlsym(std::ptr::null_mut(), name.as_ptr()) }.is_null() {
+                return;
+            }
+        }
+        ON.store(true, Ordering::Relaxed);
+    }
+
+    /// A kept chunk for an `n`-byte request, or null.
+    #[inline]
+    pub(crate) fn take(n: usize) -> *mut u8 {
+        if n > MAX || !ON.load(Ordering::Relaxed) {
+            return std::ptr::null_mut();
+        }
+        // glibc's chunk for `n` bytes: a header word, 16-byte steps, 32 at
+        // least.
+        let c = ((n + 23) >> 4).max(2);
+        LISTS
+            .try_with(|l| {
+                let p = l.head[c].get();
+                if !p.is_null() {
+                    // SAFETY: a kept chunk holds the next one's address.
+                    l.head[c].set(unsafe { *(p as *mut *mut u8) });
+                    l.len[c].set(l.len[c].get() - 1);
+                }
+                p
+            })
+            .unwrap_or(std::ptr::null_mut())
+    }
+
+    /// Keeps the live chunk `p` for a later [`take`]; false when `free`
+    /// should have it.
+    #[inline]
+    pub(crate) fn put(p: *mut u8) -> bool {
+        if !ON.load(Ordering::Relaxed) {
+            return false;
+        }
+        // SAFETY: `p` is a live chunk of the allocator.
+        let c = (unsafe { super::buf_cache::usable_size(p) } + 8) >> 4;
+        if c >= CLASSES {
+            return false;
+        }
+        LISTS
+            .try_with(|l| {
+                if l.len[c].get() >= KEEP {
+                    return false;
+                }
+                // SAFETY: the chunk is at least 24 bytes, and dead.
+                unsafe { *(p as *mut *mut u8) = l.head[c].get() };
+                l.head[c].set(p);
+                l.len[c].set(l.len[c].get() + 1);
+                true
+            })
+            .unwrap_or(false)
+    }
+}
+
+/// `malloc` as compiled code calls it.
+#[no_mangle]
+pub extern "C" fn karac_malloc(size: usize) -> *mut u8 {
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    {
+        let p = small::take(size);
+        if !p.is_null() {
+            return p;
+        }
+    }
+    unsafe { malloc(size) }
+}
+
+/// `free` as compiled code calls it.
+#[no_mangle]
+pub extern "C" fn karac_free(ptr: *mut u8) {
+    if ptr.is_null() {
+        return;
+    }
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    if small::put(ptr) {
+        return;
+    }
+    extern "C" {
+        fn free(ptr: *mut core::ffi::c_void);
+    }
+    unsafe { free(ptr as *mut core::ffi::c_void) }
 }
 
 /// Panicking allocation — the infallible counterpart of
@@ -886,6 +1033,10 @@ pub extern "C" fn karac_free_buf(ptr: *mut u8, bytes_hint: usize) {
         // allocator query), plus the one relaxed load that records small-chunk
         // churn for the park-side `malloc_trim` decision (B-2026-07-30-4).
         buf_cache::note_small_free();
+        #[cfg(target_env = "gnu")]
+        if small::put(ptr) {
+            return;
+        }
     } else if buf_cache::enabled() && buf_cache::put(ptr) {
         return;
     }
@@ -958,6 +1109,29 @@ mod tests {
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     fn check(p: *const u8, n: usize) -> bool {
         (0..n).all(|i| unsafe { *p.add(i) } == (i % 251) as u8)
+    }
+
+    // ── per-thread small-chunk lists (B-2026-10-28-15) ──
+
+    /// A chunk `karac_free` keeps comes back for a request its size fits,
+    /// and not for one it does not; past the lists' size it goes to `free`.
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    #[test]
+    fn small_lists_hand_a_freed_chunk_back_for_its_size() {
+        small::start();
+        let p = karac_malloc(40);
+        karac_free(p);
+        // glibc's chunk for 40 bytes serves 33..=40.
+        assert_eq!(karac_malloc(33), p);
+        karac_free(p);
+        let q = karac_malloc(41);
+        assert_ne!(q, p);
+        assert_eq!(karac_malloc(40), p);
+        let big = karac_malloc(small::MAX + 1);
+        karac_free(big);
+        assert!(small::take(small::MAX + 1).is_null());
+        karac_free(p);
+        karac_free(q);
     }
 
     #[cfg(any(target_os = "macos", target_os = "linux"))]
