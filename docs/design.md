@@ -3191,7 +3191,8 @@ For any trait and type, at most one impl applies. The compiler checks this where
 
 - **Overlap is an error.** Two impls of one trait overlap when their headers unify, ignoring their bounds. `impl[T: Eq] Foo for Bar[T]` and `impl[T: Ord] Foo for Bar[T]` overlap, and so do `impl Foo for Bar[i64]` and `impl[T] Foo for Bar[T]`. The error is reported at the second impl. There is no specialization to choose between them ([No specialization](#no-specialization)).
 - **A type implements a trait once.** A duplicate impl is the simplest overlap.
-- **The orphan rule.** A package may write `impl Trait for Type` only if it defines `Trait` or `Type`, or both. The standard library counts as a package.
+- **The orphan rule.** A package may write `impl Trait for Type` only if it defines `Trait` or `Type`, or both, or a type that appears in `Trait`'s type arguments. The standard library counts as a package.
+- **A local type in the trait's arguments counts.** `impl Mul[Column] for f64` is allowed in the package that defines `Column`, though `Mul` and `f64` are both foreign. Numeric libraries need this for a primitive on the left (`2.0 * col`). The local type may appear anywhere in the arguments: `Mul[Column]`, `Mul[Column[T]]`, `From[Vec[Column]]`. A bare type parameter does not count, and `Self` may not be a bare type parameter: `impl[T] Mul[Column] for T` is an error outside the package defining `Mul`. Two packages can then never write the same impl, because each must name a type the other cannot. An upstream package that later adds a blanket impl covering such a header makes it overlap, which is reported at the downstream impl, so a new blanket impl over a foreign trait's arguments is a breaking change for the upstream package.
 - **The final application package is exempt from the orphan rule** for trait impls. Nothing depends on an application, so its impls cannot conflict with another package's. An application may implement a foreign trait for a foreign type. The overlap rule still applies.
 - **Blanket impls.** `impl[T: B1 + B2] Trait for T` is allowed only if the package defines `Trait` (or is the application). Owning one of the bounds is not enough: `T` ranges over every type, so no package owns it.
 - **Inherent impls only on your own types.** A package may write `impl Type { ... }` only for a type it declares; the application exemption does not change this. Outside the standard library, `impl Vec[i64] { ... }` is an error. Write a trait, or wrap the type in a `distinct type`.
@@ -3208,6 +3209,9 @@ impl Printable for Vec[i64] { ... }      // own trait, foreign type
 // The package defines the type: OK
 struct MyPoint { x: f64, y: f64 }
 impl Display for MyPoint { ... }         // foreign trait, own type
+
+// The package defines a type in the trait's arguments: OK
+impl Mul[MyPoint] for f64 { ... }        // `2.0 * p`
 
 // Neither (Render comes from a dependency): an error in a library.
 // In the application package it is allowed, unless it overlaps another impl.
