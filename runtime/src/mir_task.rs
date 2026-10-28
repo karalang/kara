@@ -668,7 +668,90 @@ fn default_threads() -> usize {
     if cfg!(target_family = "wasm") || cfg!(test) {
         return 1;
     }
-    std::thread::available_parallelism().map_or(1, |n| n.get())
+    #[cfg(target_os = "linux")]
+    {
+        linux_cores()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        std::thread::available_parallelism().map_or(1, |n| n.get())
+    }
+}
+
+/// The cores this process may use on Linux: those in its affinity mask,
+/// and no more than its cgroup's CPU quota allows (cgroup v2's `cpu.max`,
+/// else v1's `cpu.cfs_quota_us` over `cpu.cfs_period_us`), as
+/// `available_parallelism` counts them. The quota is read at the root of
+/// the cgroup namespace, which is a container's own; std also walks the
+/// nested groups through `/proc`, with parsers of its own that weighed
+/// 16 KB in every binary, since every program asks (B-2026-10-28-8).
+#[cfg(target_os = "linux")]
+fn linux_cores() -> usize {
+    extern "C" {
+        fn sched_getaffinity(pid: i32, size: usize, mask: *mut u64) -> i32;
+        fn sysconf(name: i32) -> i64;
+    }
+    // 1,024 cores; a larger machine answers EINVAL, and counts online ones.
+    let mut mask = [0u64; 16];
+    // SAFETY: `mask` holds the bytes it is said to.
+    let cores =
+        if unsafe { sched_getaffinity(0, std::mem::size_of_val(&mask), mask.as_mut_ptr()) } == 0 {
+            mask.iter().map(|w| w.count_ones() as usize).sum()
+        } else {
+            // SAFETY: plain call; _SC_NPROCESSORS_ONLN.
+            unsafe { sysconf(84) }.max(1) as usize
+        };
+    let mut buf = [0u8; 64];
+    // "<quota> <period>", or "max <period>" without a quota.
+    let v2 = cgroup_file(c"/sys/fs/cgroup/cpu.max", &mut buf);
+    let mut words = v2.split(|&b| b == b' ' || b == b'\n');
+    let quota = match (whole(words.next()), whole(words.next())) {
+        (Some(q), Some(p)) => Some((q, p)),
+        // A v1 quota without a limit is -1, which is no whole number.
+        _ => whole(Some(cgroup_file(
+            c"/sys/fs/cgroup/cpu/cpu.cfs_quota_us",
+            &mut buf,
+        )))
+        .zip(whole(Some(cgroup_file(
+            c"/sys/fs/cgroup/cpu/cpu.cfs_period_us",
+            &mut [0u8; 64],
+        )))),
+    };
+    match quota {
+        Some((q, p)) if p > 0 => cores.min((q / p).max(1)),
+        _ => cores.max(1),
+    }
+}
+
+/// The start of the file at `path` in `buf`, without its trailing newline;
+/// empty when it cannot be read.
+#[cfg(target_os = "linux")]
+fn cgroup_file<'a>(path: &std::ffi::CStr, buf: &'a mut [u8; 64]) -> &'a [u8] {
+    extern "C" {
+        fn open(path: *const std::ffi::c_char, flags: i32, ...) -> i32;
+        fn read(fd: i32, buf: *mut u8, n: usize) -> isize;
+        fn close(fd: i32) -> i32;
+    }
+    // SAFETY: a NUL-terminated path, opened read-only.
+    let fd = unsafe { open(path.as_ptr(), 0) };
+    if fd < 0 {
+        return &[];
+    }
+    // SAFETY: `buf` holds `buf.len()` bytes; `fd` was just opened.
+    let got = unsafe { read(fd, buf.as_mut_ptr(), buf.len()) };
+    // SAFETY: as above.
+    unsafe { close(fd) };
+    let got = &buf[..got.max(0) as usize];
+    got.strip_suffix(b"\n").unwrap_or(got)
+}
+
+/// `w` as a whole number of decimal digits.
+#[cfg(target_os = "linux")]
+fn whole(w: Option<&[u8]>) -> Option<usize> {
+    let w = w.filter(|w| !w.is_empty() && w.iter().all(u8::is_ascii_digit))?;
+    Some(w.iter().fold(0usize, |n, &d| {
+        n.saturating_mul(10).saturating_add(usize::from(d - b'0'))
+    }))
 }
 
 /// How many workers the pool runs (`KARAC_THREADS`, else the core count).
@@ -2663,6 +2746,24 @@ pub(crate) fn take_timed_out(fd: i32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The pool's own core count agrees with std's on the host it runs on
+    /// (B-2026-10-28-8), and reads a cgroup file's number back.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_cores_counts_as_available_parallelism() {
+        assert_eq!(
+            linux_cores(),
+            std::thread::available_parallelism().map_or(1, |n| n.get())
+        );
+        assert_eq!(whole(Some(&b"150000"[..])), Some(150000));
+        assert_eq!(whole(Some(&b"-1"[..])), None);
+        assert_eq!(whole(Some(&b"max"[..])), None);
+        assert_eq!(
+            cgroup_file(c"/nonexistent/cpu.max", &mut [0u8; 64]),
+            &b""[..]
+        );
+    }
 
     static mut LOG: Vec<(usize, u32)> = Vec::new();
 
