@@ -62,7 +62,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | diagnostics | 40 |
 | missing-feature | 39 |
 | soundness | 24 |
-| perf | 17 |
+| perf | 18 |
 | miscompile | 14 |
 | run-vs-build | 9 |
 | other | 5 |
@@ -75,7 +75,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | typecheck | 89 |
 | mir | 45 |
-| mir-llvm | 26 |
+| mir-llvm | 27 |
 | codegen | 22 |
 | ownership | 21 |
 | interp | 21 |
@@ -97,9 +97,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-24-2 | 2026-10-24 | codegen | low | A long `sort_by` of shuffled pairs on the MIR compiled backend runs 1.5x legacy and about 1.9x Rust after B-2026-10-13-18's partition: kata 252's bench is 0.28-0.30 s against legacy's 0.19 s, and 1,000,000 indices sorted by key 10 times take 0.93-1.05 s against rustc -O's 0.51-0.56 s | — |
 | B-2026-10-28-1 | 2026-10-28 | mir-llvm | low | After 45524985d1 a one-worker auto-par build runs the in-order build's instructions, yet 16 of 129 M4b programs still time under 0.9x of it in one 9-run pass (kata 7 0.764, 8 0.727, 125 0.696, 153 0.798, 895 0.79, word_freq_multi 0.787): the code is the same and lands elsewhere, so the floor at one worker is at the resolution of code placement | — |
 | B-2026-10-28-3 | 2026-10-28 | mir-llvm | low | A compiled program's run time moves 10-20% with where its hot function lands, and the runtime archive is one of the things that moves it: kata 125 runs about 10% slower whenever karac.main sits at 16 mod 64 (the full archive's larger headers shift user code by 0x3130 bytes), kata 28 KMP 0.41 vs 0.52 s between layouts; no alignment setting tried removes the swing without slowing another program 7-20% | — |
-| B-2026-10-28-6 | 2026-10-28 | mir-llvm | medium | An auto-par build (the default) of apps/cli/mini_inflect (6,994 lines) takes 84 s against 9.5 s with KARAC_AUTO_PAR=0: compile_mir (MIR to LLVM IR) 61.8 s against 0.38 s, for 365,133 LLVM instructions against 177,690; the binaries run alike (0.08 s, same output). | — |
 | B-2026-10-28-8 | 2026-10-28 | mir-llvm | medium | Auto-par default-on links the task pool into every binary with a parallel site: two_sum brute_force is 511,928 B against 412,672 B with KARAC_AUTO_PAR=0 (+24%), putting the ADR-2 size geomean at 1.241x against the 1.25x bar; the next runtime growth breaks ADR-2 | — |
 | B-2026-10-28-9 | 2026-10-28 | typecheck+ownership | medium | `karac check` verdict on a trait default body depends on impl order: desugar copies the body into every impl with the same spans, the typechecker keeps the LAST impl's expression types, and the move-out-of-element check reads them, so a `v[0]` that moves a String passes check when a `Pick[i64]` impl comes after the `Pick[String]` one (MIR build still refuses it) | — |
+| B-2026-10-28-10 | 2026-10-28 | mir-llvm | low | With compile_mir linear (B-2026-10-28-6), an auto-par build of apps/cli/mini_inflect still takes about 13 s against 5.3 s with KARAC_AUTO_PAR=0: the in-order #seq twins double the bodies (838 against 404) and LLVM's opt + emission takes 7.4 s against 2.7 s | — |
 
 ### Relocated
 
@@ -315,6 +315,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-28-2 | typecheck | low | A generic struct's or enum's declared parameter bounds are not checked where the type is written with arguments: `struct M[T: Hash + Eq] { m: Map[T,… | b9294ac5ff |
 | B-2026-10-28-4 | mir+mir-llvm | high | A function with a `mut ref` parameter that calls an auto-par site is refused by the default build: "invalid MIR: tally: bb3[term]: copy of _2 whose t… | a9f56911ac |
 | B-2026-10-28-5 | typecheck+mir+mir-llvm | high | `Vec.extend_from_slice` and the `try_` writers (`try_push`, `try_insert`, `try_reserve`, `try_resize`, `try_extend_from_slice`) borrow their receiver… | a9f56911ac |
+| B-2026-10-28-6 | mir-llvm | medium | An auto-par build (the default) of apps/cli/mini_inflect (6,994 lines) takes 84 s against 9.5 s with KARAC_AUTO_PAR=0: compile_mir (MIR to LLVM IR) 6… | bdf62fdac0 |
 | B-2026-10-28-7 | typecheck+ownership | high | `karac check` refuses correct programs at offset-specific places: the baked stdlib (STDLIB_PROGRAMS, e.g | 71d0bd3bdf |
 
 </details>
