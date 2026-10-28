@@ -351,17 +351,18 @@ impl<'ctx> Cx<'ctx, '_> {
         entry: PointerValue<'ctx>,
         t: Table,
     ) -> R<()> {
-        self.insert_hashed(hp, entry, t, None)
+        self.insert_hashed(hp, entry, t, None).map(|_| ())
     }
 
     /// [`Cx::insert_entry`], with the key's hash `hv` when the caller has it.
+    /// A hashed table hands back where the entry now is; a sorted one, none.
     fn insert_hashed(
         &mut self,
         hp: PointerValue<'ctx>,
         entry: PointerValue<'ctx>,
         t: Table,
         hv: Option<IntValue<'ctx>>,
-    ) -> R<()> {
+    ) -> R<Option<PointerValue<'ctx>>> {
         let size = self.i64(self.layout(t.entry)?.size.max(1));
         if t.sorted {
             let [hf, _, cf] = self.glue_ptrs(t);
@@ -369,17 +370,17 @@ impl<'ctx> Cx<'ctx, '_> {
                 "map_insert",
                 &[hp.into(), size.into(), entry.into(), hf.into(), cf.into()],
             )?;
-            return Ok(());
+            return Ok(None);
         }
         let hv = match hv {
             Some(hv) => hv,
             None => self.table_hash(entry, t)?,
         };
-        self.mrt_ptr(
+        let at = self.mrt_ptr(
             "map_insert_hv",
             &[hp.into(), size.into(), entry.into(), hv.into()],
         )?;
-        Ok(())
+        Ok(Some(at))
     }
 
     /// The entry at index `i` of the table `h`, which has more than `i`:
@@ -733,7 +734,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 let v = t.val.unwrap_or(t.key);
                 let h = self.load_ptr(hp)?;
                 let kp = self.key_arg(k, t.key)?;
-                let (at, _) = self.lookup(h, kp, t)?;
+                let (at, hv) = self.lookup(h, kp, t)?;
                 let found = self.builder.build_is_not_null(at, "").map_err(e)?;
                 let slot = self.entry_slot(8, "stored")?;
                 let f = self.cur_fn()?;
@@ -762,9 +763,15 @@ impl<'ctx> Cx<'ctx, '_> {
                 } else {
                     self.store_operand(vslot, val)?;
                 }
-                self.insert_entry(hp, tmp, t)?;
-                let h2 = self.load_ptr(hp)?;
-                let (at, _) = self.lookup(h2, tmp, t)?;
+                // The probe's hash serves the insert, which says where the
+                // entry went; only a sorted table is searched again.
+                let at = match self.insert_hashed(hp, tmp, t, hv)? {
+                    Some(at) => at,
+                    None => {
+                        let h2 = self.load_ptr(hp)?;
+                        self.lookup(h2, tmp, t)?.0
+                    }
+                };
                 self.store(slot, at.into())?;
                 self.builder.build_unconditional_branch(done).map_err(e)?;
                 self.builder.position_at_end(done);

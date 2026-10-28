@@ -52,9 +52,7 @@ fn main() {
 }
 "#;
 
-const WANT: &str = "159 16716025159 626199663925 true
-3267 66492 309 309
-";
+const WANT: &str = "159 16716025159 626199663925 true\n3267 66492 309 309\n";
 
 fn compiled(src: &str) -> Option<String> {
     let lowered = karac::mir::lower::build_source(src).expect("MIR");
