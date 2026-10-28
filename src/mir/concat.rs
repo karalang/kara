@@ -124,7 +124,14 @@ fn candidate(body: &Body, tys: &TyInterner, preds: &[Vec<usize>], bi: usize) -> 
             break;
         }
         let term = &body.blocks[b].terminator.kind;
-        let succ = term.successors();
+        // A check on the way (`a + (n - x).to_string()`'s overflow test)
+        // branches to an abort, which drops nothing: the way on is the
+        // other branch.
+        let succ: Vec<_> = term
+            .successors()
+            .into_iter()
+            .filter(|s| !aborts(body, s.index(), t))
+            .collect();
         if succ.len() != 1 || terminator_mentions(term, t) || preds[succ[0].index()].len() != 1 {
             return None;
         }
@@ -182,6 +189,17 @@ fn candidate(body: &Body, tys: &TyInterner, preds: &[Vec<usize>], bi: usize) -> 
         return None;
     }
     (!drops.is_empty()).then_some((r, t, (db, ds), drops))
+}
+
+/// Whether block `b` only aborts, without touching `t`: a failed check's
+/// exit, which runs no drop (`a panic aborts`, above).
+fn aborts(body: &Body, b: usize, t: Local) -> bool {
+    let data = &body.blocks[b];
+    matches!(data.terminator.kind, TerminatorKind::Abort { .. })
+        && !data
+            .statements
+            .iter()
+            .any(|s| statement_mentions(&s.kind, t))
 }
 
 fn operand_mentions(o: &Operand, l: Local) -> bool {
@@ -248,5 +266,15 @@ mod tests {
         let src = "fn main() {\n    let a = String.from(\"x\");\n    let b = a + \"y\";\n    println(f\"{a} {b}\");\n}\n";
         assert_eq!(moved_lefts(src, "main"), (1, 0));
         assert_eq!(run_source(src).expect("runs").0, "x xy\n");
+    }
+
+    /// The right side's overflow check sits between the borrow of `s` and
+    /// the add; its failure aborts, so `s` is still taken (kata 1006,
+    /// B-2026-10-28-30).
+    #[test]
+    fn a_checked_right_side_still_appends_in_place() {
+        let src = "fn f(n: i64) -> String {\n    let mut s = n.to_string();\n    for x in 1..n {\n        s = s + (n - x).to_string();\n    }\n    s\n}\nfn main() {\n    println(f(4));\n}\n";
+        assert_eq!(moved_lefts(src, "f"), (1, 1));
+        assert_eq!(run_source(src).expect("runs").0, "4321\n");
     }
 }
