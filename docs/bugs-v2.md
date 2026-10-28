@@ -96,7 +96,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 |---|---|---|---|---|---|
 | B-2026-10-28-3 | 2026-10-28 | mir-llvm | low | A compiled program's run time moves 10-20% with where its hot function lands, and the runtime archive is one of the things that moves it: kata 125 runs about 10% slower whenever karac.main sits at 16 mod 64 (the full archive's larger headers shift user code by 0x3130 bytes), kata 28 KMP 0.41 vs 0.52 s between layouts; no alignment setting tried removes the swing without slowing another program 7-20% | — |
 | B-2026-10-28-10 | 2026-10-28 | mir-llvm | low | With compile_mir linear (B-2026-10-28-6) and the twins gone (630f13fdf6, dual module), an auto-par build of apps/cli/mini_inflect still takes about 20 s against 7.6 s with KARAC_AUTO_PAR=0: the parallel module alone (189,758 instructions) takes about 7.5 s of opt + emission against 2.7 s for the in-order one (177,688), so the cost is the parallel program's code, not the copy | — |
-| B-2026-10-28-14 | 2026-10-28 | mir-llvm | low | apps/pipeline/grain_intake's auto-par build runs under 0.9x of its in-order build at four workers (21-run medians 0.886, 0.881, 0.989, 0.88, 0.91 over five passes on the dual-module build; 0.897, 0.896, 0.892 with the twins): its sites hold about 4% of the work, and the loss is the fixed cost of going multi-threaded (B-2026-10-28-15) | — |
 | B-2026-10-28-15 | 2026-10-28 | mir-llvm | low | A native program that reaches an auto-par site pays a fixed cost for going multi-threaded: about 0.2-0.3 ms per worker to start the pool on a 4-core cloud host (the cost of bare thread creation there), plus multi-threaded malloc, mutex and wake overhead, about 1.5 ms in all on apps/pipeline/grain_intake already at two workers; it grows with the core count | — |
 
 ### Relocated
@@ -322,6 +321,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-28-11 | typecheck+ownership | medium | `karac check` accepts a use-after-move in a trait default body copied into two impls whose call in it borrows in one impl and consumes in the other (… | 5f981f27a0 |
 | B-2026-10-28-12 | typecheck+ownership | medium | A trait default body copied into two impls rewrites `v[0] + v[1]` by the LAST impl's operand types for every copy, and drops an element move program-… | 936eab079a |
 | B-2026-10-28-13 | typecheck+ownership | low | `karac check` reports one identical diagnostic per impl for a mistake in a trait default body copied into several impls: a use after a move in `Use.r… | ac5a67f639 |
+| B-2026-10-28-14 | mir-llvm | low | apps/pipeline/grain_intake's auto-par build runs under 0.9x of its in-order build at four workers (21-run medians 0.886, 0.881, 0.989, 0.88, 0.91 ove… | 01665b3473 |
 
 </details>
 
