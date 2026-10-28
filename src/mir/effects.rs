@@ -1350,7 +1350,7 @@ fn native_effects(base: &str, method: &str) -> Option<Vec<(Verb, &'static str, O
         ("__select_epoch", "") => vec![],
         // A task's teardown (core-semantics §11.9): flags of the running
         // task.
-        ("__cancelled" | "__unwinding" | "__unwind" | "__pooled", "") => vec![],
+        ("__cancelled" | "__unwinding" | "__unwind", "") => vec![],
         // An `Abort` in a program with an isolating group (§11.12).
         ("__panic", "") => vec![PANICS],
         ("__select_park", "") => vec![(Blocks, "", None)],

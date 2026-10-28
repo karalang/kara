@@ -62,7 +62,8 @@ pub(crate) fn run_checked(source: &str) -> Result<Ran, Failed> {
     let run = std::thread::Builder::new()
         .stack_size(1 << 30)
         .spawn(move || {
-            let l = crate::mir::lower::build_source(&source)?;
+            let l = crate::mir::lower::build_source(&source)
+                .map(crate::mir::lower::Lowered::for_this_pool)?;
             crate::mir::lower::par_check(&l)?;
             Ok::<_, String>(crate::mir::interp::collect_repl_bindings(|| {
                 crate::mir::interp::run_untraced(&l.program, &l.tys, "main", vec![])

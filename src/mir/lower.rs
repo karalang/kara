@@ -214,6 +214,26 @@ pub struct Lowered {
     /// Each body's locals the ownership check proved frozen (design.md §
     /// Frozen handles), which `frozen::uncount` makes count nothing.
     pub frozen_locals: FxHashMap<String, crate::mir::frozen::FrozenLocals>,
+    /// For a build that runs loops or statements as tasks, the program as
+    /// `KARAC_AUTO_PAR=0` builds it. A run on one worker runs this one
+    /// instead ([`Lowered::for_this_pool`]), and a native build carries
+    /// both and picks at startup: on one worker the tasks only cost
+    /// (B-2026-10-26-17), and an in-order copy of the program's functions
+    /// beside the tasks does not run the in-order build's instructions,
+    /// since LLVM optimises them in the other program's company
+    /// (B-2026-10-28-1).
+    pub in_order: Option<Box<Lowered>>,
+}
+
+impl Lowered {
+    /// The program this process runs: the in-order one when the pool has
+    /// one worker ([`Self::in_order`]).
+    pub fn for_this_pool(self) -> Lowered {
+        match self.in_order {
+            Some(seq) if !interp::pool_has_workers() => *seq,
+            _ => self,
+        }
+    }
 }
 
 /// The `let`s the ownership check's frozen walk admitted, by their
@@ -569,6 +589,7 @@ fn lower_program_inner<'a>(
         auto_par_reductions: lcx.auto_par_reduced,
         auto_par_record: matches!(lcx.auto_par, AutoPar::Record),
         frozen_locals: lcx.frozen_locals,
+        in_order: None,
     }
 }
 
@@ -1961,19 +1982,6 @@ impl<'a> Lcx<'a> {
             _ if args.is_empty() => name,
             _ => format!("{name}[{}]", show(args)),
         }
-    }
-
-    /// The name of `name`'s in-order twin, queued on first ask
-    /// ([`Bx::one_worker_twin`]).
-    fn seq_twin(&mut self, def: DefId, args: &[Ty], name: &str) -> String {
-        let seq = format!("{name}{SEQ_TWIN}");
-        if self.queued.insert(seq.clone()) {
-            if let Some(p) = self.fn_param_tys.get(name).cloned() {
-                self.fn_param_tys.insert(seq.clone(), p);
-            }
-            self.queue.push((def, args.to_vec(), seq.clone()));
-        }
-        seq
     }
 
     fn lower_instance(&mut self, def: DefId, args: &[Ty], name: &str) {
@@ -3819,7 +3827,6 @@ impl<'l, 'a> Bx<'l, 'a> {
 
     /// End the current block with `kind`; continue in `next`.
     fn goto_with(&mut self, mut kind: TerminatorKind, next: BasicBlock) {
-        self.seq_world_call(&mut kind);
         let cancel = self.cancel_point(&mut kind);
         let bb = self.cur;
         self.b.terminate(bb, kind);
@@ -4489,95 +4496,6 @@ impl<'l, 'a> Bx<'l, 'a> {
         Ok(())
     }
 
-    /// In an in-order twin, a call of a function calls that function's
-    /// twin ([`Self::one_worker_twin`]).
-    fn seq_world_call(&mut self, kind: &mut TerminatorKind) {
-        if !self.name.ends_with(SEQ_TWIN) {
-            return;
-        }
-        let TerminatorKind::Call {
-            func:
-                Operand::Const(Const {
-                    kind: ConstKind::FnDef(callee),
-                    ..
-                }),
-            ..
-        } = kind
-        else {
-            return;
-        };
-        if !self.lcx.fns.contains_key(&callee.def) {
-            return;
-        }
-        callee.name = self.lcx.seq_twin(callee.def, &callee.args, &callee.name);
-    }
-
-    /// A function with auto-par sites is built twice (B-2026-10-26-17): as
-    /// written here, and as `<name>#seq`, which has no hints and so is the
-    /// body `KARAC_AUTO_PAR=0` builds. This one starts by asking the pool
-    /// whether it runs more than one worker (`KARAC_THREADS`, else the core
-    /// count) and, when it does not, returns what the twin returns. On one
-    /// worker the tasks only cost, and not at the sites alone: a value a
-    /// task captures escapes, so even the function's other loops lose what
-    /// the in-order build keeps (kata 28's needle stays in registers), and
-    /// a reduction tracks its wide sum per term; every caller of a
-    /// function with tasks is a coroutine; and a function a task calls has
-    /// one caller more, which changes what is inlined where (kata 8's
-    /// `my_atoi` stayed a call). So a function that has a site, or calls
-    /// one that does, starts with the question, and a twin calls only
-    /// twins ([`Bx::seq_world_call`]): a one-worker run enters an in-order
-    /// copy of the program at the first such function, `main` when it is
-    /// one, and runs the instructions the in-order build runs (kata 28's
-    /// KMP: 4,602,427,749 in order, 4,602,440,804 through the twins). A
-    /// closure's sites keep the task form.
-    fn one_worker_twin(&mut self, arg_locals: &[Local]) {
-        let AutoPar::Apply(hints) = &self.lcx.auto_par else {
-            return;
-        };
-        if self.name.ends_with(SEQ_TWIN)
-            || self.par_exit.is_some()
-            || !hints.affected.contains(&self.name)
-        {
-            return;
-        }
-        let InstanceId { def, args, .. } = self.b.instance().clone();
-        let seq = self.lcx.seq_twin(def, &args, &self.name);
-        let bool_t = self.tys().bool();
-        let pooled = self.temp(bool_t);
-        self.call_native(POOLED, Vec::new(), Place::local(pooled));
-        let (par, alone, done) = (self.b.new_block(), self.b.new_block(), self.b.new_block());
-        self.goto_with(
-            TerminatorKind::SwitchInt {
-                discr: Operand::Copy(Place::local(pooled)),
-                targets: SwitchTargets::if_else(par, alone),
-            },
-            alone,
-        );
-        // Every argument goes to the twin: a shared borrow is copied, a
-        // value or a `mut ref` (which is not Copy, B-2026-10-28-4) moved, so
-        // this exit has nothing left to drop.
-        let ops = arg_locals
-            .iter()
-            .map(|&l| match self.tys().tcx().kind(self.b.local_ty(l)) {
-                HK::Ref(_) => Operand::Copy(Place::local(l)),
-                _ => Operand::Move(Place::local(l)),
-            })
-            .collect();
-        let func = self.fn_operand(&seq, def, args);
-        self.goto_with(
-            TerminatorKind::Call {
-                func,
-                args: ops,
-                destination: Place::local(Local::RETURN_PLACE),
-                target: Some(done),
-                unwind: UnwindAction::Abort,
-            },
-            done,
-        );
-        self.b.terminate(self.cur, TerminatorKind::Return);
-        self.cur = par;
-    }
-
     fn lower_fn(
         &mut self,
         f: &'a Function,
@@ -4595,7 +4513,6 @@ impl<'l, 'a> Bx<'l, 'a> {
     ) -> R<()> {
         self.impl_target = impl_target;
         self.push_scope();
-        let mut arg_locals = Vec::new();
         if let Some(mode) = &f.self_param {
             let seen = impl_target
                 .is_none_or(|(_, n)| n == 0)
@@ -4641,7 +4558,6 @@ impl<'l, 'a> Bx<'l, 'a> {
             };
             let l = self.b.arg("self", t);
             self.self_local = Some(l);
-            arg_locals.push(l);
             if self.needs_drop(t) {
                 self.schedule(ScopeEntry::Drop(Place::local(l)));
             }
@@ -4659,7 +4575,6 @@ impl<'l, 'a> Bx<'l, 'a> {
             };
             let PatternKind::Binding(name) = &p.pattern.kind else {
                 let l = self.b.arg("arg", t);
-                arg_locals.push(l);
                 if self.needs_drop(t) {
                     self.schedule(ScopeEntry::Drop(Place::local(l)));
                 }
@@ -4667,7 +4582,6 @@ impl<'l, 'a> Bx<'l, 'a> {
                 continue;
             };
             let l = self.b.arg(name, t);
-            arg_locals.push(l);
             if let Some(&sym) = self.lcx.binding_syms.get(&(p.pattern.id, name.clone())) {
                 self.locals.insert(sym, l);
             }
@@ -4675,7 +4589,6 @@ impl<'l, 'a> Bx<'l, 'a> {
                 self.schedule(ScopeEntry::Drop(Place::local(l)));
             }
         }
-        self.one_worker_twin(&arg_locals);
         self.bind_destructured(destructured)?;
         if self
             .lcx
@@ -21926,7 +21839,7 @@ fn unit_const(unit: Ty) -> Operand {
 /// Check one source file, build its MIR, elaborate drops and run `main`
 /// on the MIR interpreter; or the first stage that refused it.
 pub fn run_source(src: &str) -> Result<interp::RunResult, String> {
-    let lowered = build_source(src)?;
+    let lowered = build_source(src)?.for_this_pool();
     par_check(&lowered)?;
     Ok(interp::run_untraced(
         &lowered.program,
@@ -22117,7 +22030,7 @@ fn mentions_par(src: &str) -> bool {
 /// [`run_source`], writing the program's output to the process's stdout
 /// and stderr as it runs (`karac __mir-run`).
 pub fn run_source_streaming(src: &str) -> Result<interp::RunResult, String> {
-    let lowered = build_source(src)?;
+    let lowered = build_source(src)?.for_this_pool();
     par_check(&lowered)?;
     Ok(interp::run_streaming(
         &lowered.program,
@@ -23066,8 +22979,10 @@ fn build_renamed_source(src: &str, auto_par: bool) -> Result<Lowered, String> {
     // own checks see the parallel form; when they refuse it, the first
     // build stands. A body that would suspend while called through a
     // function value loses its loops' hints, and the build runs again.
+    // Each build lowers the one checked program.
     let debug = std::env::var("KARAC_AUTO_PAR_DEBUG").is_ok();
-    let first = finish_build(lower_source_for_checks(src, false, AutoPar::Record)?)?;
+    let front = frontend(src, false)?;
+    let first = finish_build(front.lower(AutoPar::Record)?)?;
     let verdicts = crate::mir::effects::analyze(&first.program, &first.tys).auto_par;
     if debug {
         for v in &verdicts {
@@ -23082,8 +22997,8 @@ fn build_renamed_source(src: &str, auto_par: bool) -> Result<Lowered, String> {
     let mut hints = AutoParHints::of(&verdicts);
     hints.observes_capacity = src.contains("capacity(");
     while !hints.is_empty() {
-        hints.note_affected(&first.program);
-        let second = match lower_source_for_checks(src, false, AutoPar::Apply(hints.clone()))
+        let second = match front
+            .lower(AutoPar::Apply(hints.clone()))
             .and_then(finish_build)
         {
             Ok(second) => second,
@@ -23128,6 +23043,12 @@ fn build_renamed_source(src: &str, auto_par: bool) -> Result<Lowered, String> {
                     eprintln!("auto-par: {what}: {}", at.join(", "));
                 }
             }
+            // The recording build is not the in-order one (its loops are
+            // lowered for the verdicts), so that is lowered a third time.
+            let mut second = second;
+            if !second.auto_par_tasks.is_empty() || !second.auto_par_groups.is_empty() {
+                second.in_order = Some(Box::new(finish_build(front.lower(AutoPar::Off)?)?));
+            }
             return Ok(second);
         };
         if debug {
@@ -23167,13 +23088,6 @@ pub fn build_source_recording(src: &str) -> Result<Lowered, String> {
     finish_build(lower_source_for_checks(src, false, AutoPar::Record)?)
 }
 
-/// The suffix of a function's in-order twin ([`Bx::one_worker_twin`]).
-pub(crate) const SEQ_TWIN: &str = "#seq";
-
-/// `__pooled()`: whether the task pool runs more than one worker
-/// ([`Bx::one_worker_twin`]).
-pub(crate) const POOLED: &str = "__pooled";
-
 /// What a build does about automatic parallelism (M4 item 14).
 #[derive(Clone)]
 pub(crate) enum AutoPar {
@@ -23197,10 +23111,6 @@ pub(crate) struct AutoParHints {
     /// tasks would change: they grow their own `Vec`s, which the join then
     /// appends, where the loop grew one by its pushes.
     observes_capacity: bool,
-    /// The instances that have a site or call one that does, directly or
-    /// through other functions: each gets an in-order twin
-    /// ([`Bx::one_worker_twin`]).
-    affected: FxHashSet<String>,
 }
 
 impl AutoParHints {
@@ -23224,48 +23134,7 @@ impl AutoParHints {
             loops,
             stmts,
             observes_capacity: false,
-            affected: FxHashSet::default(),
         }
-    }
-
-    /// Fill [`Self::affected`] from the calls of `program`, the in-order
-    /// build: the instances with a site, and every function that calls one
-    /// of those, by name, transitively.
-    fn note_affected(&mut self, program: &interp::Program) {
-        let mut callers: FxHashMap<&str, Vec<&str>> = FxHashMap::default();
-        for (name, body) in &program.bodies {
-            for bb in &body.blocks {
-                if let TerminatorKind::Call {
-                    func:
-                        Operand::Const(Const {
-                            kind: ConstKind::FnDef(callee),
-                            ..
-                        }),
-                    ..
-                } = &bb.terminator.kind
-                {
-                    callers.entry(callee.name.as_str()).or_default().push(name);
-                }
-            }
-        }
-        let mut affected: FxHashSet<String> = FxHashSet::default();
-        let mut work: Vec<String> = self
-            .loops
-            .keys()
-            .chain(self.stmts.keys())
-            .map(|(n, ..)| n.clone())
-            .collect();
-        while let Some(n) = work.pop() {
-            if !affected.insert(n.clone()) {
-                continue;
-            }
-            for c in callers.get(n.as_str()).into_iter().flatten() {
-                if !affected.contains(*c) {
-                    work.push(c.to_string());
-                }
-            }
-        }
-        self.affected = affected;
     }
 
     fn is_empty(&self) -> bool {
@@ -23501,6 +23370,41 @@ fn lower_source_for_checks(
     check_only: bool,
     auto_par: AutoPar,
 ) -> Result<Lowered, String> {
+    frontend(src, check_only)?.lower(auto_par)
+}
+
+/// One source file checked as far as the MIR builder starts: what
+/// [`Frontend::lower`] builds from, as many times as auto-par asks.
+struct Frontend {
+    program: ast::Program,
+    src: String,
+    user_len: usize,
+    tc: TypeCheckResult,
+    r: ResolveResult,
+    captures: FxHashMap<SpanKey, Vec<(String, OwnershipMode)>>,
+    frozen: FrozenHints,
+    check_only: bool,
+}
+
+impl Frontend {
+    /// The program's MIR, its loops and statements lowered as `auto_par`
+    /// says.
+    fn lower(&self, auto_par: AutoPar) -> Result<Lowered, String> {
+        lower_typed(
+            &self.program,
+            &self.src,
+            self.user_len,
+            &self.tc,
+            &self.r,
+            &self.captures,
+            &self.frozen,
+            self.check_only,
+            auto_par,
+        )
+    }
+}
+
+fn frontend(src: &str, check_only: bool) -> Result<Frontend, String> {
     let mut t = std::time::Instant::now();
     let (src, user_len) = library_source(src);
     phase_time("library_source", &mut t);
@@ -23594,17 +23498,16 @@ fn lower_source_for_checks(
         aliases: own.frozen_alias_bindings.clone(),
         containers: own.frozen_element_containers.clone(),
     };
-    lower_typed(
-        &program,
-        &src,
+    Ok(Frontend {
+        program,
+        src,
         user_len,
-        &tc,
-        &r,
-        &own.closure_captures,
-        &frozen,
+        tc,
+        r,
+        captures: own.closure_captures,
+        frozen,
         check_only,
-        auto_par,
-    )
+    })
 }
 
 /// A program lowered from `roots` rather than from `main`: the functions a

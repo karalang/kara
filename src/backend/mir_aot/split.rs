@@ -423,15 +423,10 @@ unsafe fn cut(m: LLVMModuleRef, plan: &Plan, unit: usize) -> Result<(), String> 
     Ok(())
 }
 
-/// Optimise and emit each unit of the planned `module` on its own thread,
-/// then merge the objects into `obj`. `compile` is what one unit runs.
-pub(super) fn compile_units(
-    module: LLVMModuleRef,
-    plan: &Plan,
-    obj: &Path,
-    compile: &(dyn Fn(&inkwell::module::Module<'_>, &Path) -> Result<(), String> + Sync),
-) -> Result<(), String> {
-    let bitcode = unsafe {
+/// `module` as bitcode, to read back in a context of another thread.
+pub(super) fn bitcode(module: LLVMModuleRef) -> Vec<u8> {
+    // SAFETY: `module` is a live module; the buffer is copied out and freed.
+    unsafe {
         let buf = llvm_sys::bit_writer::LLVMWriteBitcodeToMemoryBuffer(module);
         let mut bytes = std::slice::from_raw_parts(
             LLVMGetBufferStart(buf) as *const u8,
@@ -442,7 +437,18 @@ pub(super) fn compile_units(
         // inkwell reads a buffer as ending in a NUL past the data.
         bytes.push(0);
         bytes
-    };
+    }
+}
+
+/// Optimise and emit each unit of the planned `module` on its own thread,
+/// then merge the objects into `obj`. `compile` is what one unit runs.
+pub(super) fn compile_units(
+    module: LLVMModuleRef,
+    plan: &Plan,
+    obj: &Path,
+    compile: &(dyn Fn(&inkwell::module::Module<'_>, &Path) -> Result<(), String> + Sync),
+) -> Result<(), String> {
+    let bitcode = bitcode(module);
     let parts: Vec<PathBuf> = (0..plan.units())
         .map(|u| {
             let mut p = obj.as_os_str().to_owned();
@@ -479,24 +485,27 @@ pub(super) fn compile_units(
     let merged = results
         .into_iter()
         .collect::<Result<(), String>>()
-        .and_then(|()| {
-            let out = std::process::Command::new("cc")
-                .args(["-r", "-nostdlib", "-o"])
-                .arg(obj)
-                .args(&parts)
-                .output()
-                .map_err(|e| format!("cc -r: {e}"))?;
-            if out.status.success() {
-                Ok(())
-            } else {
-                Err(format!(
-                    "cc -r: {}",
-                    String::from_utf8_lossy(&out.stderr).trim()
-                ))
-            }
-        });
+        .and_then(|()| partial_link(obj, &parts));
     for p in &parts {
         let _ = std::fs::remove_file(p);
     }
     merged
+}
+
+/// Merge the objects `parts` into the one object `obj` (`cc -r`).
+pub(super) fn partial_link(obj: &Path, parts: &[PathBuf]) -> Result<(), String> {
+    let out = std::process::Command::new("cc")
+        .args(["-r", "-nostdlib", "-o"])
+        .arg(obj)
+        .args(parts)
+        .output()
+        .map_err(|e| format!("cc -r: {e}"))?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "cc -r: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ))
+    }
 }

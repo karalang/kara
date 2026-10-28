@@ -131,9 +131,6 @@ pub enum DisplayStyle {
 impl Program {
     /// Whether the instance `name` is of a function transparent to effects.
     pub fn is_transparent(&self, name: &str) -> bool {
-        let name = name
-            .strip_suffix(crate::mir::lower::SEQ_TWIN)
-            .unwrap_or(name);
         let base = name.split('[').next().unwrap_or(name);
         self.transparent.contains(base)
     }
@@ -1929,10 +1926,6 @@ impl<'a> Interp<'a> {
             ("__ready", "") => self.ready(&args),
             // The interpreter's descriptor calls complete when made.
             ("__io_again", "") => Ok(Value::Bool(false)),
-            // A function with auto-par sites asks before its tasks
-            // (`lower::POOLED`); answered as the native pool answers, so
-            // `KARAC_THREADS=1` runs the in-order twin here too.
-            ("__pooled", "") => Ok(Value::Bool(pool_has_workers())),
             // A task's teardown (core-semantics §11.9, `coroutine::CANCELLED`).
             ("__cancelled", "") => Ok(Value::Bool(match self.tasks.get_mut(self.cur_task) {
                 Some(t) if t.cancelled && !t.torn => {
@@ -16943,7 +16936,7 @@ fn log_native(name: &str) -> Option<&str> {
 
 /// Whether the native pool would run more than one worker: `KARAC_THREADS`,
 /// else the core count, decided once (runtime/src/mir_task.rs `pooled`).
-fn pool_has_workers() -> bool {
+pub fn pool_has_workers() -> bool {
     static POOLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *POOLED.get_or_init(|| {
         std::env::var("KARAC_THREADS")

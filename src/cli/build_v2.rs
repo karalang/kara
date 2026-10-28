@@ -627,6 +627,9 @@ fn build(
                 // Conflicting `par` branches and invalid MIR are refused,
                 // as on every MIR backend.
                 crate::mir::lower::compiled_check(&l)?;
+                if let Some(seq) = &l.in_order {
+                    crate::mir::lower::compiled_check(seq)?;
+                }
                 Ok(l)
             })
             .unwrap_or_else(|e| super::run_v2::refused(&e, output));
@@ -635,14 +638,28 @@ fn build(
         } else {
             Vec::new()
         };
-        let built = crate::backend::mir_aot::compile_program_object_with(
-            &lowered.program,
-            &lowered.tys,
-            &obj,
-            opt,
-            keep_ll.as_deref(),
-            &hot_swap,
-        )
+        // A build with tasks carries its in-order program, which runs on
+        // one worker; a hot-swap build swaps the bodies of one program, so
+        // it keeps the tasks.
+        let built = match &lowered.in_order {
+            Some(seq) if hot_swap.is_empty() => {
+                crate::backend::mir_aot::compile_dual_program_object(
+                    (&lowered.program, &lowered.tys),
+                    (&seq.program, &seq.tys),
+                    &obj,
+                    opt,
+                    keep_ll.as_deref(),
+                )
+            }
+            _ => crate::backend::mir_aot::compile_program_object_with(
+                &lowered.program,
+                &lowered.tys,
+                &obj,
+                opt,
+                keep_ll.as_deref(),
+                &hot_swap,
+            ),
+        }
         .map_err(|e| format!("llvm: {e}"))
         .and_then(|()| {
             let mut t = std::time::Instant::now();

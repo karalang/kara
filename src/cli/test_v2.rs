@@ -442,11 +442,13 @@ impl Runner {
     fn build(&mut self) -> Result<(), String> {
         #[cfg(feature = "llvm")]
         if self.jit {
-            self.ir = crate::mir::lower::build_source(&self.source).and_then(|l| {
-                crate::mir::lower::compiled_check(&l)?;
-                crate::backend::mir::compile_mir_ir_for_jit(&l.program, &l.tys)
-                    .map_err(|e| format!("llvm: {e}"))
-            })?;
+            self.ir = crate::mir::lower::build_source(&self.source)
+                .map(crate::mir::lower::Lowered::for_this_pool)
+                .and_then(|l| {
+                    crate::mir::lower::compiled_check(&l)?;
+                    crate::backend::mir::compile_mir_ir_for_jit(&l.program, &l.tys)
+                        .map_err(|e| format!("llvm: {e}"))
+                })?;
             return Ok(());
         }
         let worker = self.spawn()?;
@@ -461,10 +463,12 @@ impl Runner {
         std::thread::Builder::new()
             .stack_size(1 << 30)
             .spawn(move || {
-                let lowered = crate::mir::lower::build_source(&source).and_then(|l| {
-                    crate::mir::lower::par_check(&l)?;
-                    Ok(l)
-                });
+                let lowered = crate::mir::lower::build_source(&source)
+                    .map(crate::mir::lower::Lowered::for_this_pool)
+                    .and_then(|l| {
+                        crate::mir::lower::par_check(&l)?;
+                        Ok(l)
+                    });
                 let lowered = match lowered {
                     Ok(l) => {
                         let _ = tx.send(Ok((0, String::new())));
