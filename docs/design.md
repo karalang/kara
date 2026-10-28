@@ -50,7 +50,7 @@ Effects say what behavior is permitted; ownership governs how that behavior is r
 - **AI-first tooling.** Structured JSON diagnostics with machine-applicable fixes, `karac fix`, `karac explain`, the compiler query API, and per-phase diagnostic codes ([§17](#17-tooling-contract)).
 - **Effect-verified concurrency.** Explicit in v1: `par {}` and `par for` are checked against effects, and a conflict is an error. `TaskGroup` runs dynamic tasks, such as a server's request handlers, which cannot race on memory but run in no fixed order ([§13](#13-concurrency)). Automatic where proven safe from M4: the compiler parallelizes loops and independent statements only when effects are fully known and sound, with no unknown callees and no unattributed drops. Automatic parallelism is the long-term differentiator.
 
-**Panics abort the process** ([core-semantics.md §10](core-semantics.md)). There is no unwinding and no `catch_panic`. A service should run under a supervisor that restarts it; task-level failure isolation arrives with the services track, and the compiler's middle end already reserves the cleanup edges it needs.
+**Panics end the process** ([core-semantics.md §10](core-semantics.md)), except inside an isolating `TaskGroup`, where a panic ends only its own task and its handle holds `Err(Panicked { .. })` ([core-semantics.md §11.12](core-semantics.md)). There is no unwinding into the panicking code and no `catch_panic`. A server writes one isolating group per accept loop, so a bad request ends its own connection, not the server.
 
 **The v1 release follows the services and automatic-parallelism tracks** (M4a and M4b below). Parity with the old compiler (M3) is an internal milestone, not the release.
 
@@ -246,6 +246,7 @@ Kāra keeps its hard keywords few, so that common words stay usable as names.
 - Items: `fn`, `struct`, `enum`, `trait`, `impl`, `type`, `const`, `import`, `extern`, `unsafe`, `pub`, `private`.
 - Statements: `let`, `mut`, `if`, `else`, `match`, `while`, `for`, `in`, `loop`, `return`, `break`, `continue`, `defer`, `errdefer`.
 - Expressions: `ref`, `as`, `and`, `or`, `not`, `true`, `false`, `self`, `Self`.
+- Types: `dyn` ([§9](#dyn-trait)).
 
 **Contextual keywords** are keywords only in one position and ordinary identifiers everywhere else:
 
@@ -258,7 +259,7 @@ Kāra keeps its hard keywords few, so that common words stay usable as names.
 | `shared`, `sync` | come directly before `struct` or `enum` ([§11](#11-ownership-and-sharing)) |
 | `weak`, `frozen` | prefix a type or a receiver ([§11](#11-ownership-and-sharing)) |
 | `freeze` | prefixes an expression ([§11](#11-ownership-and-sharing)) |
-| `escaping` | prefixes a function type ([§7](#7-functions-and-closures)) |
+| `escaping` | prefixes a function type or a `dyn` type ([§7](#7-functions-and-closures), [§9](#dyn-trait)) |
 | `own` | comes directly before a parameter's type, before `self`, or before an argument type in a function type (`Fn(own T) -> R`); it marks an owned parameter ([§7](#parameter-modes)) |
 | `host` | comes directly before `fn` at item position ([§15](#15-unsafe-ffi-and-layout-control)) |
 | `test` | comes directly before a string literal at module scope ([§14](#14-testing)) |
@@ -292,7 +293,6 @@ These words are reserved, so that a later feature can use them without breaking 
 | `box` | An owned heap-pointer primitive. Kāra uses owned values and `shared` types. |
 | `comptime` | Compile-time evaluation (comptime track, [deferred.md](deferred.md#comptime)). |
 | `do` | Block-expression sugar. |
-| `dyn` | Trait objects (services track, [deferred.md](deferred.md#dyn)). |
 | `final`, `override`, `virtual` | Subclass-style markers. Kāra has no inheritance, but the words are common in code ported from OOP languages. |
 | `gen`, `yield` | Generators. |
 | `asm`, `global_asm` | Inline and module-level assembly (systems track). |
@@ -3108,7 +3108,7 @@ Kāra emits **one specialized implementation per tuple of type and const argumen
 - **Trait method calls in generic code.** In `fn process[T: Display](xs: Slice[T])`, each instance calls its `T`'s `to_string` directly. No vtable.
 
 **What does not.**
-- **`dyn Trait`**, which returns with the services track ([deferred.md](deferred.md#dyn)), dispatches through a vtable by design. It is a separate feature from generics.
+- **[`dyn Trait`](#dyn-trait)** dispatches through a table of methods by design. It is a separate feature from generics, chosen at the type.
 - **Effects are not part of the instance key.** An instance is chosen by its type and const arguments alone. Its effects are computed on the instance, and the effects of a function passed to a non-escaping parameter are charged to each caller ([core-semantics.md §12](core-semantics.md#12-effects-soundness-defaults-c10)).
 
 **The standard library ships as source.** Collection code is compiled into each program at the instances it uses, like Rust's `std::collections`, not called through a prebuilt archive. The runtime library holds only non-generic primitives: panic support, the allocator interface, FFI bridges and OS bindings.
@@ -3570,6 +3570,99 @@ fn count_logged[T](xs: own Vec[T], log: Logger) -> impl Iterator[Item = T] {
 ```
 
 A function whose result must borrow none of its parameters returns a named type with no reference in it.
+
+### `dyn Trait`
+
+`dyn Trait` is a value of some type that implements `Trait`, chosen at run time. A call through it dispatches through a table of the concrete type's methods. Use it where one variable, field or collection must hold values of different types: a list of request handlers, a set of plugins, a heterogeneous scene. Where one type per use is enough, a generic parameter or `impl Trait` is faster and is preferred.
+
+```kara
+trait Shape {
+    fn area(self) -> f64;
+}
+
+struct Circle { r: f64 }
+struct Square { side: f64 }
+
+impl Shape for Circle {
+    fn area(self) -> f64 { 3.14159 * self.r * self.r }
+}
+
+impl Shape for Square {
+    fn area(self) -> f64 { self.side * self.side }
+}
+
+fn total_area(shapes: Vec[dyn Shape]) -> f64 {
+    shapes.iter().map(|s| s.area()).sum()
+}
+
+fn main() {
+    let shapes: Vec[dyn Shape] = [Circle { r: 1.0 }, Square { side: 2.0 }];
+    println(f"{total_area(shapes)}");
+}
+```
+
+**The forms.**
+
+| Type | What it is |
+|---|---|
+| `dyn Trait` | An owned value. It owns its concrete value, which lives in its own heap block, and drops it. It moves, and is `Copy` never. There is no `Box`: the owned form is the handle. |
+| `ref dyn Trait`, `mut ref dyn Trait` | A view of a concrete value, or of an owned `dyn Trait`. It owns nothing and follows the view rules ([core-semantics.md §5](core-semantics.md#5-references-and-views-c5)). |
+| `dyn Trait[Item = T]` | Every associated type of the trait is bound in the type. One left unbound is an error naming it. |
+| `dyn Trait with X` | The clause bounds the effects of every call through the value (below). |
+| `dyn Trait + CrossTask` | The concrete type is `CrossTask`, so the value may cross a task boundary (below). |
+
+The `dyn` keyword is required: a bare trait name in a type position is an error, as for `impl Trait`. A `dyn` type names one trait. A second trait after `+` is an error, except `CrossTask`.
+
+**Coercion.** A value becomes `dyn Trait` where the expected type is a `dyn` type: a `let` with a type, an argument, a field, a return, an element of a collection whose type is written. Nothing else coerces, and nothing is written at the site.
+- An owned `S` where `dyn Trait` is expected moves into a new heap block (`allocates(Heap)`, which is default-permitted). A zero-sized `S` allocates nothing.
+- A `ref S` or `mut ref S` where `ref dyn Trait` or `mut ref dyn Trait` is expected allocates nothing. So does a view of an owned `dyn Trait`.
+- `S` must implement `Trait` with the bound associated types, and must not itself be a `dyn` type. A `dyn Trait` value is never wrapped again.
+- A coercion never reaches inside a type: a `Vec[Circle]` does not become a `Vec[dyn Shape]`. Build the collection with the `dyn` element type, or map over it.
+
+**Representation.** Every `dyn` type, owned or view, is two machine words: a pointer to the concrete value and a pointer to its method table. Neither is ever null, so `Option[dyn Trait]` is also two words. The table's layout is not specified. Two `dyn` values of one concrete type need not share a table, and nothing compares tables: `dyn` values have no identity and no `==` of their own.
+
+**Which traits can be used as `dyn`.** A method can be dispatched when it:
+- has a receiver (`self`, `mut ref self` or `own self`);
+- has no type or const parameters of its own;
+- mentions `Self` only as the receiver, or in an associated type that the `dyn` type binds;
+- does not return `impl Trait`.
+
+Every required method and associated function of the trait, and of its supertraits, must be dispatchable. Otherwise `dyn Trait` is an error that names the first one that is not (`E_DYN_NOT_DISPATCHABLE`). A default method that is not dispatchable is still callable: `dyn Trait` implements `Trait`, and the compiler supplies that impl, so a generic default method such as `Iterator.map` runs with `Self = dyn Iterator[Item = T]` and its calls to `next` dispatch. The same impl lets a `ref dyn Trait` fill a `[T: Trait]` parameter. User code cannot write an impl whose `Self` is a `dyn` type.
+
+`Clone` is the one supertrait with a `Self` return that is allowed. When `Trait: Clone`, `dyn Trait` is `Clone`, and cloning it clones the concrete value into a new block.
+
+**Calls and moves.**
+- A `self` method runs on a view of the concrete value; a `mut ref self` method may change it in place.
+- An `own self` method needs an owned `dyn Trait` and consumes it: the concrete value moves into the method and the block is freed.
+- A `mut ref dyn Trait` cannot replace the value it views: `*r = other` is an error, because the new value may have another type and size. Assign the owned `dyn Trait` itself, which drops the old value first ([core-semantics.md §7](core-semantics.md#7-destruction-c6-supersedes-the-drop-judgment-0)).
+- There is no downcast. Code that needs the concrete type back uses an `enum`.
+- There is no upcast in v1: a `dyn Sub` is not a `dyn Super` value, even when `Sub: Super` ([deferred.md](deferred.md#dyn)). A `dyn Sub` value can still call every `Super` method.
+
+**Drop.** An owned `dyn Trait` drops where any value of its type would. It runs the concrete value's drop, then frees the block.
+
+**Effects.** A `dyn` value is treated like a function value ([Function values and effects](#function-values-and-effects)), with its type's `with` clause in the place of the function type's:
+- A call through a `dyn` parameter that is not `escaping` has, at each call site, the effects of the value passed there, charged to that caller. For a value coerced at that call, those are the concrete type's methods' effects.
+- Anywhere else (a field, a collection element, an `escaping` parameter, a return) a call has the effects the type declares: its `with` clause, narrowed to the method's own ceiling when the trait declares one ([Trait methods and generic calls](#trait-methods-and-generic-calls)). Coercing a value whose methods exceed the clause is an error at the coercion, naming the method and the extra effect. A type with neither a clause nor a ceiling has every effect, as an unannotated escaping function type does.
+- An effect variable may stand in the clause. It is solved from the values coerced into it, as for function values:
+
+```kara
+trait Handler {
+    fn handle(self, req: Request) -> Response;
+}
+
+struct Router[with E] {
+    routes: Vec[(String, dyn Handler with E)],
+}
+
+impl[with E] Router[with E] {
+    fn add(mut ref self, path: Str, h: escaping dyn Handler with E) { self.routes.push((path.to_string(), h)); }
+    fn dispatch(self, req: Request) -> Response with E { ... }
+}
+```
+
+**Providers.** A `dyn` value uses the providers that were in scope where it was coerced, as a function value does ([core-semantics.md §14.3](core-semantics.md#14-providers-brought-forward-from-m4a-2026-10-20)). Outside any `with_provider`, that is each program-rooted resource's static default, and the value may go anywhere; a call through it needs no provider. A coercion of a type whose methods reach a provider-rooted resource, or reach a program-rooted resource that a `with_provider` overrides at the coercion, is an error in v1 (`E_DYN_PROVIDER`): the value has no room to carry the provider. The diagnostic names the resource and the `with_provider`, and suggests a generic parameter.
+
+**Crossing tasks.** Whether a `dyn Trait` may enter a task depends on the concrete type, which the type does not show. So `dyn Trait` is not `CrossTask`, and `dyn Trait + CrossTask` is, with each coercion into it checking that the concrete type is `CrossTask` ([`CrossTask`](#crosstask)). A trait with `CrossTask` among its supertraits makes every `dyn` of it `CrossTask`. A view follows the view rules, as for any type.
 
 ### `CrossTask`
 
@@ -5536,7 +5629,7 @@ fn audit(db: OrderDb) {
 ```
 
 - **Where it may be declared:** on functions, methods, `impl` blocks, structs and enums. A trait's methods may use the variables of their `impl` block or their own generic list; a trait itself takes none in v1.
-- **Where it may be used:** in the clause of a function type (`Fn(T) -> U with E`), and in the clause of the function that declares or inherits it (`fn emit(self, e: Event) with E`). A clause may combine a variable with named effects: `with E writes(Log)`.
+- **Where it may be used:** in the clause of a function type (`Fn(T) -> U with E`) or a `dyn` type (`dyn Handler with E`, [§9](#dyn-trait)), and in the clause of the function that declares or inherits it (`fn emit(self, e: Event) with E`). A clause may combine a variable with named effects: `with E writes(Log)`.
 - **How it is solved.** Each use of a generic item gets a fresh instance of each of its effect variables, solved at that use from what fills it: the effects of each function value bound to a position that names the variable. Several values give the union of their sets, as a collection literal of function values does. A value bound later must fit the solution by effect-set subtyping, and one that does not is an error naming the extra effect and the binding that fixed the set. For a type, the instance is fixed by the value's construction and later bindings within the same function, as type arguments are inferred for `Vec.new()`. A variable that nothing fills is the empty set.
 - **What a call is charged.** A call through a value typed `with E`, or to a function whose clause names `E`, has the solved set, charged to the caller where the variable was solved. So the `audit` above is charged `writes(OrderDb)`, and `EventBus` itself names no resource.
 - **Spelled out where needed.** The solved set may be written as a type argument, `EventBus[with writes(OrderDb)]`, and must be in a public signature, like any other effect a public function has ([§12](#12-effects)).
@@ -5581,7 +5674,7 @@ The diagnostic points at the impl method, names the extra effect and quotes the 
 
 **Instances are keyed by types only.** An effect set never distinguishes two instances of a generic: effects change no code.
 
-**`impl Trait`** in argument and return position is specified in [§9](#9-traits). Trait-level effect ceilings and the effects of `dyn Trait` calls arrive with the [`dyn` track](deferred.md#dyn).
+**`impl Trait`** in argument and return position is specified in [§9](#9-traits), and so are the effects of calls through [`dyn Trait`](#dyn-trait), which follow the rules for function values. A `with` clause on the `trait` header is not in v1 ([deferred.md](deferred.md#dyn)).
 
 ### Design principles
 
@@ -5603,7 +5696,7 @@ Providers (`effect resource R: Trait`, `with_provider`, `providers {} in {}`, `#
 These return with later tracks:
 - effect groups, `stable` groups and effect semver rules; parameterized resources (`UserDb[id]`) with `alias` and `independent` ([effects expressiveness](deferred.md#effects-expressiveness));
 - the web and host effect vocabulary ([web](deferred.md#web));
-- trait-level ceilings and `dyn Trait` effects ([`dyn`](deferred.md#dyn));
+- a `with` clause on the `trait` header, `dyn` upcasts and `dyn` values that carry a provider ([`dyn`](deferred.md#dyn));
 - project profiles that forbid effects across a project ([systems](deferred.md#systems)).
 
 ---

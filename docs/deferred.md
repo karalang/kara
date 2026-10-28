@@ -6036,96 +6036,14 @@ fn lookup(idx: i64) -> i64 {
 
 ## dyn
 
-Trait objects (`dyn Trait`), the effects of calls through them, and trait-level effect ceilings. The roadmap brings `dyn` with the services track (M4a); its design is kept as a track of its own because it touches traits, effects and codegen together.
+`dyn Trait` is in v1: [design.md § `dyn Trait`](design.md#dyn-trait) holds the forms, coercion, which traits can be used as `dyn`, drop, effects (the rules for function values, with the `dyn` type's `with` clause in the place of the function type's), providers and `CrossTask`. What stays here:
 
-### Effects of `dyn Trait` Calls
-
-> In v1, a trait method's `with` clause is a ceiling that every impl stays within, and a trait method with no clause has no ceiling: a call through a bound has the effects of the instance's method, charged to whoever instantiates the generic function ([design.md §12](design.md#trait-methods-and-generic-calls)). A `with` clause on the `trait` header and every rule for `dyn Trait` below are this track's additions.
-
-**Interaction with `dyn Trait`.** Trait method ceilings form an upper bound; impls may narrow individual methods (effect subtyping), and `dyn Trait` call sites must declare at least the trait-level bound for any method they may invoke. Static dispatch through `T: Trait` uses the per-method declaration — also narrower than the ceiling — by the same rule. See the `dyn Trait` subsection below for the worked example.
-
-**`dyn Trait` (dynamic dispatch).** Dynamic dispatch hides the concrete impl at the call site, so effect analysis cannot resolve an effect variable at monomorphization — there is no monomorphization. The trait definition must commit to an effect contract that every impl, present and future, is bound by. Kāra uses **trait-level effect bounds**: the contract is stated once at the trait definition, not inferred from the set of known impls across the program. This is the standard treatment for trait-object effect contracts under separate compilation, and it is compatible with incremental builds and downstream libraries adding impls.
-
-**Why the keyword is explicit.** Kāra requires the literal `dyn` in every trait-object type; a bare trait name in a type position is a compile error. Explicit keying makes the choice of dynamic dispatch — and, for owned positions, the heap allocation it implies — visible at the type itself rather than inferred from cross-file knowledge of whether the name denotes a trait or a struct. This is consistent with the language's broader "costs are legible" posture (effects, ownership modes, `shared`, `allocates(Heap)`), gives renames and trait-for-struct swaps a noisy diagnostic instead of a silent semantic change, and pairs symmetrically with the `impl Trait` keyword for existentials — both polymorphism choices surface at the type itself (see [design.md §9](design.md#9-traits)).
-
-**Two levels of declaration.** A trait may declare effects at two levels, which serve different call-site modes:
-
-1. **Trait-level bound** — the *ceiling*. The union of everything any method of any impl may do. This is what `dyn Trait` call sites use, because the concrete method being invoked may not even be statically known (different code paths may call different methods).
-2. **Per-method declaration** — the *actual* effect set of an individual method, tighter than or equal to the trait-level bound. This is what static-dispatch call sites use when the method is called through a `T: Trait` generic bound.
-
-```
-trait Storage with reads(Data) writes(Data) {
-    fn load(ref self, key: Key) -> Option[Value] with reads(Data);
-    fn save(ref self, key: Key, value: Value) with writes(Data);
-    fn exists(ref self, key: Key) -> bool with reads(Data);
-}
-```
-
-The trait-level `with reads(Data) writes(Data)` is the union. `load` and `exists` narrow to `reads(Data)` only; `save` narrows to `writes(Data)` only. The trait-level bound must be the superset (or equal) of the per-method union — it is not allowed to be tighter, because `dyn Trait` must safely cover any method the caller might invoke.
-
-**Impls must fit each method's declaration.** An impl is checked against the per-method declaration, not only against the trait-level bound. An impl method with effects that exceed *any* of the trait method's declared effects is a compile error at the impl site:
-
-```
-impl Storage for NetworkBackedStore {
-    fn load(ref self, key: Key) -> Option[Value]
-        with reads(Data) sends(Network)   // ✗ error: sends(Network) is outside
-                                           //   Storage.load's declared reads(Data)
-    { ... }
-}
-```
-
-The diagnostic points at the impl method, names the extra effect, and quotes the trait method's declared effects. Downstream libraries cannot widen the effect surface by adding a new impl, which is what makes the open-world model safe under separate compilation.
-
-**Static dispatch narrows to per-method declarations.** A generic function `fn f[T: Storage](s: ref T)` that calls `s.load(key)` sees `reads(Data)` — the method-level declaration — not the full trait-level bound. The effect system treats the method declaration as the bound for `T: Storage`; auto-concurrency at the monomorphization site may further narrow using the impl's inferred effects.
-
-```
-fn read_key[T: Storage](store: ref T, key: Key) -> Option[Value] with reads(Data) {
-    store.load(key)   // method-level reads(Data), not the trait-level union
-}
-```
-
-**`dyn Trait` call sites use the trait-level bound.** When the concrete type is erased, the caller's declared effects must cover the trait-level bound of every method it invokes:
-
-```
-fn sync(store: ref dyn Storage, input: ref Input) -> Result[(), AnyError]
-    with reads(Data) writes(Data)     // trait-level bound, not impl-level
-{
-    if let Some(existing) = store.load(input.key) {
-        if existing != input.value {
-            store.save(input.key, input.value);
-        }
-    }
-    Ok(())
-}
-```
-
-Calling only `store.load` on a `dyn Storage` still requires `reads(Data)` (the method's declared effect), not the full trait-level bound — per-method declarations are load-bearing for `dyn` callers that invoke only a subset of the methods.
-
-**Unbound traits.** A trait declared without any `with` clause has no effect ceiling. A static call through such a trait follows the v1 rule: it has the effects of the instance's method. A `dyn Trait` call to such a trait has no instance to read effects from.
-
-> **Open.** What a `dyn` call to an unbound trait may do. The choices are to require a trait-level bound before a trait can be used as `dyn`, to give such a call every effect so that the caller must declare them, or to carry its effects in a named effect variable ([Named Effect Variables](#named-effect-variables)).
-
-**Viral annotation extends to `dyn Trait`.** Calling a method on `dyn Trait` from a public function requires the caller's signature to cover the relevant effects explicitly — either the per-method effects (if only some methods are called) or the trait-level bound (if the set is open), or an effect variable. Nothing is implicitly inherited from the trait definition. `dyn Trait` is not a back door that launders effects through the vtable.
-
-**Trait-level `with` clauses are defaults for methods that declare no `with` of their own.** A `with` clause written on the `trait` header applies to every method that omits its own `with`. Method-level `with` clauses fully *replace* the trait-level default for that method — they do not union with it:
-
-```kara
-trait Reader with reads(DB) {
-    fn access(ref self, key: Key) -> Value;             // ceiling: reads(DB) (from trait)
-    fn stream(ref self) -> Iterator[Value] with sends(Wire);
-    // stream's ceiling is sends(Wire) — NOT reads(DB) + sends(Wire).
-}
-```
-
-Rationale: method-level `with` is the authoritative declaration. The trait-level shorthand exists to reduce stutter when a trait's methods share a common effect envelope. Unioning would hide the authoritative declaration behind implicit trait-level context; replacement keeps each method's ceiling readable from its own signature alone.
-
-**Private traits infer effects from local impls.** A private (module-internal or package-internal) trait need not declare a ceiling. The compiler infers each method's effect set from the union of per-method effects across all impls visible in the same compilation unit, then propagates the inferred ceiling to call sites. There is no cross-package dimension because private traits are not exported — `pub` is the gate that turns an effect ceiling from an inferred internal detail into a published commitment. Inference uses the same subset-subtyping rule at call sites: a generic call through a private trait sees the inferred ceiling, and auto-concurrency may further narrow at monomorphization using the specific impl's effects.
-
-**Private-trait inference is SCC-aware.** A private trait's per-method ceilings participate in the same strongly-connected-component pass as private `fn` inference ([design.md §12](design.md#inference-and-declarations), mutual recursion rules). Impl bodies that call through the trait, and default method bodies that recurse into impls, are resolved simultaneously. An SCC containing trait-method nodes and impl-body nodes produces a single fixed-point ceiling per method.
-
-**A private trait with no visible impls has an unbound ceiling.** The compiler does not invent an empty effect set for such a trait. An unimpled private trait is treated as effect-opaque, the same rule that applies to a `pub trait` with no declared ceiling. This is the forgiving choice: work-in-progress traits do not trigger surprise errors at every call site until the first impl lands.
-
-**Public traits with no declared effect ceiling are effect-opaque.** A public trait that declines to declare any `with` clause has no ceiling at all. This is the unbound-trait case above. This closes the "forgot to declare" loophole: the language never silently admits widening through an omitted ceiling. A library author who wants precise effect tracking declares the ceiling; one who wants to stay open declares nothing and accepts what the unbound-trait rule gives callers. Both are sound; the choice is ergonomic.
+- **A `with` clause on the `trait` header**, as the default ceiling for methods that declare none: `trait Storage with reads(Data) writes(Data) { ... }`. A method's own clause would replace it, not union with it. In v1 each method states its own ceiling, and a `dyn` type states its own clause.
+- **Ceilings inferred for private traits** from the impls visible in the package, solved in the same strongly-connected-component pass as private functions.
+- **Upcasting** `dyn Sub` to `dyn Super`. Along the first-supertrait chain it is free if the method table puts supertrait methods first; with several supertraits it needs a table pointer per supertrait.
+- **A `dyn` value that carries a provider.** In v1 a coercion under a `with_provider` override of a resource the methods reach is an error. Lifting it means a third word for the provider, or a method table with one entry per provider type a call site may supply (the provider types are known at link time, so the call site would pick its entry by a constant index, not a branch).
+- **Small values stored inline** in the data word with no allocation, starting with `shared` handles. No type or spelling changes.
+- **Downcasting**, and `dyn` types naming more than one trait besides `CrossTask`.
 
 ## Layout
 
