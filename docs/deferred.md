@@ -27,7 +27,7 @@ Each track opens with what it brings. Within a track, each feature has its own s
 
 ## M4a services
 
-Coroutines and the `suspends` effect, non-blocking networking, one scheduler and reactor, cooperative cancellation and deadlines, channel `select` with timeouts, task-level failure isolation, the provider work core-semantics §14 leaves out (overriding `FileSystem`, `Network` and the standard streams; `#[test(requires: ..)]`), and effect variables for stored callbacks. Effect groups moved to [effects expressiveness](#effects-expressiveness) on 2026-10-28: no services program needed them. The track comes before the v1 release. Its gate is the services programs in the corpus plus a load test of connections and tail latency; blocking-I/O services already run in v1.
+Coroutines and the `suspends` effect, non-blocking networking, one scheduler and reactor, cooperative cancellation and deadlines, channel `select` with timeouts, task-level failure isolation, provider overrides for `FileSystem`, `Network` and the standard streams (now core-semantics §14.10 to 14.14), and effect variables for stored callbacks. Effect groups moved to [effects expressiveness](#effects-expressiveness) on 2026-10-28: no services program needed them. The track comes before the v1 release. Its gate is the services programs in the corpus plus a load test of connections and tail latency; blocking-I/O services already run in v1.
 
 ### Execution Effects (`blocks` / `suspends`)
 
