@@ -10337,7 +10337,9 @@ fn string_new_default(value: &Expr) -> Option<Span> {
 /// the impl's binding, then every generic in `subs` its stand-in.
 fn at_impl(ty: &Type, bindings: &[(String, Type)], subs: &HashMap<String, SubstValue>) -> Type {
     let t = match ty {
-        Type::Existential { .. } => map_existential(ty, |x| at_impl(x, bindings, subs)),
+        Type::Existential { .. } | Type::Dyn { .. } => {
+            map_existential(ty, |x| at_impl(x, bindings, subs))
+        }
         _ => substitute_existential_assoc_bindings(ty, "Self", bindings),
     };
     substitute_type_params(&t, subs)

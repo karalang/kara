@@ -51,6 +51,28 @@ impl<'a> Validator<'a> {
         }
     }
 
+    /// `ToDyn`: an owned value into `dyn Trait`, or a borrow of one into
+    /// the view of the same or a weaker kind. The table names the value's
+    /// type; a `dyn` value is never wrapped again.
+    fn dyn_cast(&self, kind: CastKind, from: Ty, to: Ty) -> bool {
+        let CastKind::ToDyn(_) = kind else {
+            return false;
+        };
+        let concrete = |t: Ty| {
+            !matches!(
+                self.tys.kind(t),
+                TyKind::Dyn { .. } | TyKind::Ref(_) | TyKind::MutRef(_)
+            )
+        };
+        let is_dyn = |t: Ty| matches!(self.tys.kind(t), TyKind::Dyn { .. });
+        match (self.tys.kind(from), self.tys.kind(to)) {
+            (_, TyKind::Dyn { .. }) => concrete(from),
+            (TyKind::Ref(c) | TyKind::MutRef(c), TyKind::Ref(d))
+            | (TyKind::MutRef(c), TyKind::MutRef(d)) => concrete(c) && is_dyn(d),
+            _ => false,
+        }
+    }
+
     fn err(&mut self, msg: impl AsRef<str>) {
         self.errors.push(format!("{}: {}", self.loc, msg.as_ref()));
     }
@@ -188,7 +210,11 @@ impl<'a> Validator<'a> {
         match o {
             Operand::Copy(p) => {
                 let ty = self.place(p)?;
-                if !self.tys.is_copy(ty) {
+                // A copy of a `mut ref dyn T` view is its reborrow: the view
+                // has no place behind it to reborrow through.
+                let dyn_view = matches!(self.tys.kind(ty), TyKind::MutRef(d)
+                    if matches!(self.tys.kind(d), TyKind::Dyn { .. }));
+                if !self.tys.is_copy(ty) && !dyn_view {
                     self.err(format!(
                         "copy of {} whose type {} is not Copy",
                         pretty::place(self.body, self.tys, p),
@@ -371,7 +397,8 @@ impl<'a> Validator<'a> {
                             TyKind::Fn { params: p, ret: r, kind: k },
                             TyKind::Fn { params: q, ret: s, kind: l },
                         ) if p == q && r == s && k <= l
-                    ) || self.weak_cast(*kind, from, *t);
+                    ) || self.weak_cast(*kind, from, *t)
+                        || self.dyn_cast(*kind, from, *t);
                     if !ok {
                         self.err(format!(
                             "{kind:?} cast from {} to {}",

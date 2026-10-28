@@ -442,7 +442,8 @@ impl<'a> super::TypeChecker<'a> {
             // not the witness's derive metadata; the derive-matches-bound
             // path is handled directly in `type_satisfies_bound` by the
             // existential-trait-name comparison, not via these helpers.
-            | Type::Existential { .. } => false,
+            | Type::Existential { .. }
+            | Type::Dyn { .. } => false,
             // Shape-kinded args are not value types — no derive surface.
             Type::Shape(_) => false,
         }
@@ -1967,7 +1968,8 @@ impl super::env::TypeEnv {
             // not the witness's derive metadata; the derive-matches-bound
             // path is handled directly in `type_satisfies_bound` by the
             // existential-trait-name comparison, not via these helpers.
-            | Type::Existential { .. } => false,
+            | Type::Existential { .. }
+            | Type::Dyn { .. } => false,
             // Shape-kinded args are not value types — no derive surface.
             Type::Shape(_) => false,
         }
@@ -2039,7 +2041,8 @@ impl super::env::TypeEnv {
             // not the witness's derive metadata; the derive-matches-bound
             // path is handled directly in `type_satisfies_bound` by the
             // existential-trait-name comparison, not via these helpers.
-            | Type::Existential { .. } => false,
+            | Type::Existential { .. }
+            | Type::Dyn { .. } => false,
             // Shape-kinded args are not value types — no derive surface.
             Type::Shape(_) => false,
         }
@@ -2106,7 +2109,8 @@ impl super::env::TypeEnv {
             // not the witness's derive metadata; the derive-matches-bound
             // path is handled directly in `type_satisfies_bound` by the
             // existential-trait-name comparison, not via these helpers.
-            | Type::Existential { .. } => false,
+            | Type::Existential { .. }
+            | Type::Dyn { .. } => false,
             // Shape-kinded args are not value types — no derive surface.
             Type::Shape(_) => false,
         }
@@ -2293,7 +2297,8 @@ impl super::env::TypeEnv {
             // not the witness's derive metadata; the derive-matches-bound
             // path is handled directly in `type_satisfies_bound` by the
             // existential-trait-name comparison, not via these helpers.
-            | Type::Existential { .. } => false,
+            | Type::Existential { .. }
+            | Type::Dyn { .. } => false,
             // Shape-kinded args are not value types — no derive surface.
             Type::Shape(_) => false,
         }
@@ -2375,7 +2380,8 @@ impl super::env::TypeEnv {
             // not the witness's derive metadata; the derive-matches-bound
             // path is handled directly in `type_satisfies_bound` by the
             // existential-trait-name comparison, not via these helpers.
-            | Type::Existential { .. } => false,
+            | Type::Existential { .. }
+            | Type::Dyn { .. } => false,
             // Shape-kinded args are not value types — no derive surface.
             Type::Shape(_) => false,
         }
@@ -2476,7 +2482,8 @@ impl super::env::TypeEnv {
             // not the witness's derive metadata; the derive-matches-bound
             // path is handled directly in `type_satisfies_bound` by the
             // existential-trait-name comparison, not via these helpers.
-            | Type::Existential { .. } => false,
+            | Type::Existential { .. }
+            | Type::Dyn { .. } => false,
             // Shape-kinded args are not value types — no derive surface.
             Type::Shape(_) => false,
         }
@@ -2552,7 +2559,8 @@ impl super::env::TypeEnv {
             // not the witness's derive metadata; the derive-matches-bound
             // path is handled directly in `type_satisfies_bound` by the
             // existential-trait-name comparison, not via these helpers.
-            | Type::Existential { .. } => false,
+            | Type::Existential { .. }
+            | Type::Dyn { .. } => false,
             // Shape-kinded args are not value types — no derive surface.
             Type::Shape(_) => false,
         }

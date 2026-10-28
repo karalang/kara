@@ -354,6 +354,9 @@ fn walk<S1: BuildHasher, S2: BuildHasher>(
         // layer; concrete witnesses are walked when they're
         // substituted in.
         Type::Existential { .. } => {}
+        // Whether a `dyn` value may cross is its `+ CrossTask`, which the
+        // coercion into it checks (design.md § `dyn Trait`).
+        Type::Dyn { .. } => {}
         // Already returned via early-hit match above.
         Type::Shared(_) | Type::Rc(_) | Type::Pointer { .. } => unreachable!(),
         // Type::Error — accepted (downstream diagnostics already cover

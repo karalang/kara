@@ -38,9 +38,8 @@
 //! effect gate instead).
 //!
 //! Still a tracked follow-up: **FE-3c** host-capturing closures (needs the
-//! closure-capture analysis, not the call graph). `dyn Trait` is already
-//! globally rejected at type lowering (`E_DYN_TRAIT_NOT_IMPLEMENTED_YET`), so
-//! no `#[gpu]`-specific dyn check is needed.
+//! closure-capture analysis, not the call graph). A `dyn Trait` value is not
+//! GPU-safe (`gpu_unsafe_walk`), so no `#[gpu]`-specific dyn check is needed.
 
 use rustc_hash::FxHashMap;
 use std::collections::{HashMap, HashSet};

@@ -209,6 +209,18 @@ pub enum Type {
         scope: Vec<(String, Type)>,
     },
 
+    /// `dyn Trait` (design.md § `dyn Trait`): a value of some type that
+    /// implements `trait_name`, chosen at run time. `ref dyn T` and `mut ref
+    /// dyn T` are `Ref(Dyn)` / `MutRef(Dyn)`. `args` are the trait's own
+    /// generic arguments; `assoc` binds every associated type of the trait
+    /// and its supertraits, in `dyn_assoc_names` order.
+    Dyn {
+        trait_name: String,
+        args: Vec<Type>,
+        assoc: Vec<(String, Type)>,
+        cross_task: bool,
+    },
+
     /// A refinement type `type Name = Base where <pred>` — a base type
     /// carrying a distinct *nominal* identity plus a value predicate
     /// (design.md § Refinement Types; phase-9-verification step 1).
@@ -670,6 +682,10 @@ pub(super) fn type_is_fully_concrete(ty: &Type) -> bool {
         // — an impl block can never name an existential as its target, so
         // treat as non-concrete to keep them out of the specialized lane.
         Type::Existential { .. } => false,
+        Type::Dyn { args, assoc, .. } => {
+            args.iter().all(type_is_fully_concrete)
+                && assoc.iter().all(|(_, t)| type_is_fully_concrete(t))
+        }
         Type::Named { args, .. } => args.iter().all(type_is_fully_concrete),
         // A shape is concrete iff no dim references an unresolved
         // param/var. `?` is concrete — it is a committed runtime dim,
@@ -937,6 +953,27 @@ pub fn type_display(ty: &Type) -> String {
             } else {
                 format!("impl {}[{}]", trait_name, inner.join(", "))
             }
+        }
+        Type::Dyn {
+            trait_name,
+            args,
+            assoc,
+            cross_task,
+        } => {
+            let mut inner: Vec<String> = args.iter().map(type_display).collect();
+            inner.extend(
+                assoc
+                    .iter()
+                    .map(|(name, ty)| format!("{} = {}", name, type_display(ty))),
+            );
+            let mut out = format!("dyn {trait_name}");
+            if !inner.is_empty() {
+                out.push_str(&format!("[{}]", inner.join(", ")));
+            }
+            if *cross_task {
+                out.push_str(" + CrossTask");
+            }
+            out
         }
         // Bespoke: print the refinement's nominal name (`Positive`), not
         // the base (`i64`), so diagnostics name the type the user wrote.
@@ -1336,6 +1373,10 @@ pub(super) fn contains_type_param(ty: &Type) -> bool {
             params,
             return_type,
         } => params.iter().any(contains_type_param) || contains_type_param(return_type),
+        Type::Dyn { args, assoc, .. } => {
+            args.iter().any(contains_type_param)
+                || assoc.iter().any(|(_, t)| contains_type_param(t))
+        }
         _ => false,
     }
 }
@@ -1652,6 +1693,35 @@ pub(super) fn types_compatible(a: &Type, b: &Type) -> bool {
         (Type::TypeParam(_), Type::Existential { .. })
         | (Type::Existential { .. }, Type::TypeParam(_)) => true,
         (Type::Existential { .. }, _) | (_, Type::Existential { .. }) => false,
+        // Two `dyn` types of one trait agree part by part. A coercion into a
+        // `dyn` type is `check_assignable`'s (`dyn_coercion`), never this
+        // structural rule's.
+        (
+            Type::Dyn {
+                trait_name: at,
+                args: aa,
+                assoc: ab,
+                cross_task: ac,
+            },
+            Type::Dyn {
+                trait_name: bt,
+                args: ba,
+                assoc: bb,
+                cross_task: bc,
+            },
+        ) => {
+            at == bt
+                && ac == bc
+                && aa.len() == ba.len()
+                && ab.len() == bb.len()
+                && aa.iter().zip(ba).all(|(x, y)| types_compatible(x, y))
+                && ab
+                    .iter()
+                    .zip(bb)
+                    .all(|((n, x), (m, y))| n == m && types_compatible(x, y))
+        }
+        (Type::TypeParam(_), Type::Dyn { .. }) | (Type::Dyn { .. }, Type::TypeParam(_)) => true,
+        (Type::Dyn { .. }, _) | (_, Type::Dyn { .. }) => false,
         // A borrow of a type param (`ref T` / `mut ref T`) is NOT the owned
         // type param it stands for — the permissive TypeParam wildcard below
         // must not equate them. Without this, a generic `.first()` / `.last()`

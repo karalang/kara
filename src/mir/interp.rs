@@ -44,6 +44,8 @@ pub struct Program {
     pub display_styles: BTreeMap<AdtId, DisplayStyle>,
     /// The program's statics, indexed by `ConstKind::Static`.
     pub statics: Vec<StaticDef>,
+    /// The `dyn` method tables, indexed by `CastKind::ToDyn`.
+    pub vtables: Vec<super::syntax::Vtable>,
     /// The length of the program's own source, before the library text
     /// appended after it: a span at or past it is in the library.
     pub user_source_len: Option<usize>,
@@ -323,6 +325,19 @@ pub enum Value {
     Erased {
         body: String,
         env: Option<(AllocId, Ty)>,
+    },
+    /// An owned `dyn Trait` value: the heap slot holding the concrete
+    /// value, and the program's vtable for its type. It owns the slot.
+    Dyn {
+        data: AllocId,
+        vtable: u32,
+    },
+    /// A `ref dyn Trait` / `mut ref dyn Trait` made from a reference to a
+    /// concrete value: where the value is, and its vtable. A view of an
+    /// owned `dyn` value is a plain `Ref` to the place holding it.
+    DynView {
+        at: Box<Addr>,
+        vtable: u32,
     },
 }
 
@@ -4047,6 +4062,67 @@ impl<'a> Interp<'a> {
                 self.tys.display(from)
             )),
         }
+    }
+
+    /// A call of the method at `slot` of a `dyn` receiver, `vals[0]`: an
+    /// owned `dyn` value (an `own self` method, which consumes it and frees
+    /// its slot), a view made from a reference, or a reference to the place
+    /// holding an owned `dyn` value. The method gets the concrete value the
+    /// way its first parameter takes it. Returns the instance's name too.
+    fn call_dyn(&mut self, slot: u32, mut vals: Vec<Value>) -> R<(String, Value)> {
+        if vals.is_empty() {
+            return err("a `dyn` call has no receiver");
+        }
+        let recv = std::mem::replace(&mut vals[0], Value::Unit);
+        let (at, vtable, owned) = match recv {
+            Value::Dyn { data, vtable } => (
+                Addr {
+                    root: Root::Heap(data),
+                    path: Path::new(),
+                },
+                vtable,
+                Some(data),
+            ),
+            Value::DynView { at, vtable } => (*at, vtable, None),
+            Value::Ref(a) => match self.slot(&a)? {
+                Value::Dyn { data, vtable } => (
+                    Addr {
+                        root: Root::Heap(data),
+                        path: Path::new(),
+                    },
+                    vtable,
+                    None,
+                ),
+                Value::DynView { at, vtable } => (*at, vtable, None),
+                other => return err(format!("a `dyn` call through a reference to {other:?}")),
+            },
+            other => return err(format!("a `dyn` call on {other:?}")),
+        };
+        let program: &'a Program = self.program;
+        let name = program
+            .vtables
+            .get(vtable as usize)
+            .and_then(|v| v.slots.get(slot as usize))
+            .ok_or_else(|| Stop::Error(format!("no slot {slot} in vtable {vtable}")))?;
+        let callee = program
+            .bodies
+            .get(name)
+            .ok_or_else(|| Stop::Error(format!("no body for the `dyn` slot {name}")))?;
+        let by_ref = callee
+            .locals
+            .get(1)
+            .is_some_and(|l| matches!(self.tys.kind(l.ty), TyKind::Ref(_) | TyKind::MutRef(_)));
+        vals[0] = match (owned, by_ref) {
+            (Some(data), _) => {
+                let v = std::mem::replace(&mut self.live(data)?.value, Value::Uninit);
+                self.free_slot(data);
+                v
+            }
+            (None, true) => Value::Ref(at),
+            (None, false) => self.slot(&at)?,
+        };
+        let ret = self.call_body(name, callee, vals)?;
+        Ok((name.clone(), ret))
     }
 
     /// A call through an erased value: by `ref` or `mut ref` (the value
@@ -12401,6 +12477,9 @@ impl<'a> Interp<'a> {
                 root: Root::Static(*i),
                 path: Path::new(),
             }),
+            ConstKind::DynSlot { .. } => {
+                return err("a call through a `dyn` value is not run by the interpreter yet")
+            }
         })
     }
 
@@ -12449,6 +12528,27 @@ impl<'a> Interp<'a> {
             Rvalue::Cast(CastKind::Erase, o, _) => {
                 let (x, from) = self.operand(body, o)?;
                 self.erase(x, from)
+            }
+            Rvalue::Cast(CastKind::ToDyn(vtable), o, to) => {
+                let (x, _) = self.operand(body, o)?;
+                match (self.tys.kind(*to), x) {
+                    (TyKind::Dyn { .. }, v) => {
+                        let data = self.alloc(HeapObj {
+                            count: 1,
+                            weak: 0,
+                            value: v,
+                        });
+                        Ok(Value::Dyn {
+                            data,
+                            vtable: *vtable,
+                        })
+                    }
+                    (TyKind::Ref(_) | TyKind::MutRef(_), Value::Ref(at)) => Ok(Value::DynView {
+                        at: Box::new(at),
+                        vtable: *vtable,
+                    }),
+                    (_, v) => err(format!("a coercion to `dyn` of {v:?}")),
+                }
             }
             // A raw pointer is the address the reference held.
             Rvalue::Cast(CastKind::RefToPtr | CastKind::PtrToPtr | CastKind::IntToPtr, o, _) => {
@@ -12875,6 +12975,18 @@ impl<'a> Interp<'a> {
                 target,
                 unwind: UnwindAction::Abort,
             } => {
+                if let Operand::Const(Const {
+                    kind: ConstKind::DynSlot { slot, .. },
+                    ..
+                }) = func
+                {
+                    let mut vals = Vec::with_capacity(args.len());
+                    for a in args {
+                        vals.push(self.operand(body, a)?.0);
+                    }
+                    let (name, ret) = self.call_dyn(*slot, vals)?;
+                    return self.finish_call(body, destination, target, ret, &name);
+                }
                 // A function item named in place is called by its name
                 // without making a value of it.
                 let named = match func {
@@ -13062,6 +13174,25 @@ impl<'a> Interp<'a> {
                     Ok(())
                 }
                 other => err(format!("a function-value place holds {other:?}")),
+            },
+            // An owned `dyn` value: the concrete value's drop, then the slot.
+            TyKind::Dyn { .. } => match v {
+                Value::Dyn { data, vtable } => {
+                    let program: &'a Program = self.program;
+                    let concrete = program
+                        .vtables
+                        .get(vtable as usize)
+                        .ok_or_else(|| Stop::Error(format!("no vtable {vtable}")))?
+                        .concrete;
+                    let at = Addr {
+                        root: Root::Heap(data),
+                        path: Path::new(),
+                    };
+                    self.drop_at(&at, concrete)?;
+                    self.free_slot(data);
+                    Ok(())
+                }
+                other => err(format!("a `dyn` place holds {other:?}")),
             },
             TyKind::Intrinsic(kind) => {
                 let Value::Box(id) = v else {
@@ -13641,6 +13772,7 @@ impl<'a> Interp<'a> {
             Value::Uninit => false,
             Value::Box(_) | Value::Shared(_) | Value::Weak(_) => true,
             Value::Erased { env, .. } => env.is_some(),
+            Value::Dyn { .. } => true,
             Value::Agg(fs) | Value::Variant(_, fs) => {
                 if self.tys.has_drop_impl(ty) && v.any_init() {
                     return true;
@@ -15562,6 +15694,7 @@ impl<'a> Interp<'a> {
                 Value::Box(a)
                 | Value::Shared(a)
                 | Value::Weak(a)
+                | Value::Dyn { data: a, .. }
                 | Value::Erased {
                     env: Some((a, _)), ..
                 } => {
@@ -15607,6 +15740,7 @@ impl<'a> Interp<'a> {
                     Value::Erased {
                         env: Some((h, _)), ..
                     } => out.push((*h, true)),
+                    Value::Dyn { data: h, .. } => out.push((*h, true)),
                     _ => {}
                 }
             }

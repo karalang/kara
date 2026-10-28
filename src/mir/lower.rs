@@ -34,6 +34,8 @@ use super::interp;
 use super::syntax::*;
 use super::ty::{AdtId, FloatTy, Ty, TyInterner};
 
+mod dyn_trait;
+
 /// The value of an operator tree made only of unsuffixed integer literals,
 /// when every step is in range. A lone literal is not a tree. A shift amount
 /// must be below `bits`, the width of the type the tree takes: 64, or 128
@@ -3380,6 +3382,14 @@ impl<'l, 'a> Bx<'l, 'a> {
     fn assign(&mut self, place: impl Into<Place>, rv: Rvalue) {
         let place = place.into();
         let pt = self.place_type(&place);
+        // A view of a `dyn` value is the pair itself, never reborrowed
+        // through: there is no place behind it to borrow.
+        let rv = match rv {
+            Rvalue::Ref(_, p) if self.is_dyn_view(self.place_type(&p)) => {
+                Rvalue::Use(Operand::Copy(p))
+            }
+            rv => rv,
+        };
         // A borrow of a place that holds a reference is that reference
         // (a borrow of a borrow is the borrow): a reborrow through it.
         let rv = match rv {
@@ -3389,6 +3399,33 @@ impl<'l, 'a> Bx<'l, 'a> {
                     _ => kind,
                 };
                 Rvalue::Ref(kind, p.project(ProjElem::Deref))
+            }
+            rv => rv,
+        };
+        // A borrow of a concrete value into a `dyn` view is the borrow, then
+        // the view of it (design.md § `dyn Trait`).
+        let rv = match rv {
+            Rvalue::Ref(kind, p)
+                if self.dyn_under(pt).is_some_and(|d| d != pt)
+                    && self.dyn_under(self.place_type(&p)).is_none() =>
+            {
+                let mutable = matches!(kind, BorrowKind::Mut);
+                let ct = self.place_type(&p);
+                let rt = self.tys().tcx().reference(ct, mutable);
+                let r = self.temp(rt);
+                let bb = self.cur;
+                self.b.assign(bb, Place::local(r), Rvalue::Ref(kind, p));
+                Rvalue::Use(Operand::Move(Place::local(r)))
+            }
+            rv => rv,
+        };
+        let rv = match rv {
+            Rvalue::Use(op) if self.dyn_cast(&op, pt).is_some() => {
+                let (concrete, dyn_ty) = self.dyn_cast(&op, pt).expect("checked");
+                match self.vtable_for(concrete, dyn_ty) {
+                    Ok(vt) => Rvalue::Cast(CastKind::ToDyn(vt), op, pt),
+                    Err(()) => Rvalue::Use(op),
+                }
             }
             rv => rv,
         };
@@ -3602,6 +3639,9 @@ impl<'l, 'a> Bx<'l, 'a> {
 
     /// `op` widened into the numeric slot `t`, if it needs it.
     fn widen(&mut self, op: Operand, t: Ty) -> Operand {
+        if self.dyn_cast(&op, t).is_some() {
+            return self.coerce_to_dyn(op, t);
+        }
         if let Operand::Const(_) = op {
             return self.fit_const(op, t);
         }
@@ -7106,6 +7146,18 @@ impl<'l, 'a> Bx<'l, 'a> {
             self.call_native("process.exit", vec![op], Place::local(u));
             self.diverge(TerminatorKind::Unreachable);
             return Ok(());
+        }
+        // A concrete value into a `dyn` slot (design.md § `dyn Trait`):
+        // made at its own type, then coerced by `assign`.
+        let dt = self.place_type(&dest);
+        if self.dyn_under(dt).is_some() {
+            let et = self.expr_ty(e)?;
+            if self.dyn_under(et).is_none() && !matches!(self.tys().tcx().kind(et), HK::Never) {
+                let l = self.temp(et);
+                self.expr_into(e, Place::local(l))?;
+                self.assign(dest, Rvalue::Use(Operand::Move(Place::local(l))));
+                return Ok(());
+            }
         }
         // B-2026-10-18-4 — a call that returns a `ref T` of a `Copy` (or
         // handle) `T`, stored into a `T` slot (`-> i64` returning
@@ -16019,6 +16071,11 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// `insert(nodes, nodes[root].left, v)` reads `nodes` before lending it.
     /// Any other argument is evaluated now.
     fn arg_pending(&mut self, a: &'a Expr, pt: Ty) -> R<PendingRecv<'a>> {
+        if self.is_dyn_view(pt) && self.is_place(a) {
+            if let Some(op) = self.place_into_dyn_view(a, pt)? {
+                return Ok(PendingRecv::Ready(op));
+            }
+        }
         if let HK::MutRef(inner) = self.tys().tcx().kind(pt) {
             let slice = matches!(self.tys().tcx().kind(inner), HK::Slice { .. });
             if !slice && self.is_place(a) {
@@ -17596,6 +17653,9 @@ impl<'l, 'a> Bx<'l, 'a> {
         dest: Place,
     ) -> R<()> {
         if self.comptime_native(e, &dest)? {
+            return Ok(());
+        }
+        if self.dyn_method_call(object, method, args, dest.clone())? {
             return Ok(());
         }
         // `slot.upgrade()` on a `weak` slot: the checker typed it as the
@@ -23960,6 +24020,20 @@ fn finish_build(mut lowered: Lowered) -> Result<Lowered, String> {
             .as_ref()
             .unwrap_or(&Default::default()),
     );
+    // A `dyn` call is a plain call: one whose method suspends is not
+    // lowered yet, since its caller would not wait for it.
+    if let Some(slot) = lowered
+        .program
+        .vtables
+        .iter()
+        .flat_map(|v| &v.slots)
+        .find(|s| coroutines.contains(*s))
+    {
+        return Err(format!(
+            "`{slot}` suspends and is called through a `dyn` value: a suspending \
+             method through `dyn` is not lowered yet"
+        ));
+    }
     for body in lowered.program.bodies.values_mut() {
         if dump.as_deref() == Some("built") {
             eprintln!("{}", crate::mir::pretty::pretty_body(body, &lowered.tys));

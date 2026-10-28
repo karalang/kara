@@ -715,6 +715,13 @@ impl<'a> super::TypeChecker<'a> {
                 reason: GpuUnsafeReason::SharedRc,
                 path: Vec::new(),
             }),
+            // A `dyn` value lives in a heap block and calls through a table
+            // of host functions.
+            Type::Dyn { .. } => Some(GpuUnsafe {
+                leaf: super::types::type_display(ty),
+                reason: GpuUnsafeReason::Heap,
+                path: Vec::new(),
+            }),
 
             // Aggregates that recurse element-wise. A borrow / fixed array /
             // SIMD vector / tuple is GPU-safe iff its element(s) are — `ref

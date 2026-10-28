@@ -501,6 +501,9 @@ impl<'ctx> Cx<'ctx, '_> {
                 "MIR to LLVM: a float constant of type `{}`",
                 self.tys.display(c.ty)
             )),
+            ConstKind::DynSlot { .. } => {
+                Err("MIR to LLVM: a call through a `dyn` value is not lowered yet".into())
+            }
         }
     }
 
@@ -1275,6 +1278,9 @@ impl<'ctx> Cx<'ctx, '_> {
             }
             CastKind::Upgrade => return self.upgrade(dst, a, to),
             CastKind::Erase => return self.erase(dst, a, from, to),
+            CastKind::ToDyn(_) => {
+                return Err("MIR to LLVM: a coercion to `dyn` is not lowered yet".into())
+            }
             _ => {}
         }
         let x = self.operand_scalar(a)?;

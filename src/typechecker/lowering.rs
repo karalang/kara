@@ -231,29 +231,23 @@ impl<'a> super::TypeChecker<'a> {
                         .collect(),
                 }
             }
-            // `dyn Trait` slice 5 — the dual of `impl Trait`. Slice 5
-            // ships the RPITIT-incompatibility check: when the named
-            // trait has any method declared with `-> impl Trait`
-            // (return-position impl trait in trait), `dyn Trait`
-            // cannot synthesize a fixed vtable slot for that method.
-            // Lower to `Type::Error` with `E_RPITIT_INCOMPATIBLE_WITH_DYN`
-            // naming the first offending method. When the trait has no
-            // RPITIT methods, emit the generic `E_DYN_TRAIT_NOT_IMPLEMENTED_YET`
-            // P1-deferred stub (general `dyn Trait` value/type
-            // semantics, vtable layout, and effect checking are P1 per
-            // design.md § Polymorphism). Walking generic args before
-            // emitting surfaces any nested type errors.
+            // `dyn Trait` (design.md § `dyn Trait`): `lower_dyn_type`. A
+            // trait with a method returning `impl Trait` (RPITIT) has no
+            // fixed table slot for it, so it is no `dyn` type.
             TypeKind::Dyn {
-                trait_path, args, ..
+                trait_path,
+                args,
+                assoc_bindings,
+                ..
             } => {
-                for a in args {
-                    if let GenericArg::Type(t) = a {
-                        let _ = self.lower_type_expr_inner(t, generic_scope, false);
-                    }
-                }
                 let trait_name = trait_path.segments.join(".");
                 if let Some(offending) = Self::trait_first_rpitit_method(self.program, &trait_name)
                 {
+                    for a in args {
+                        if let GenericArg::Type(t) = a {
+                            let _ = self.lower_type_expr_inner(t, generic_scope, false);
+                        }
+                    }
                     self.type_error(
                         format!(
                             "error[E_RPITIT_INCOMPATIBLE_WITH_DYN]: cannot use \
@@ -266,20 +260,9 @@ impl<'a> super::TypeChecker<'a> {
                         ty.span,
                         TypeErrorKind::TypeMismatch,
                     );
-                } else {
-                    self.type_error(
-                        format!(
-                            "error[E_DYN_TRAIT_NOT_IMPLEMENTED_YET]: `dyn {trait_name}` is \
-                             parsed but the trait-object machinery (vtable construction, \
-                             dynamic dispatch, effect-opacity story) is P1-deferred per \
-                             design.md § Polymorphism; route through a generic parameter \
-                             `[T: {trait_name}]` for now"
-                        ),
-                        ty.span,
-                        TypeErrorKind::TypeMismatch,
-                    );
+                    return Type::Error;
                 }
-                Type::Error
+                self.lower_dyn_type(trait_path, args, assoc_bindings, ty.span, generic_scope)
             }
             TypeKind::Unit => Type::Unit,
             TypeKind::Error => Type::Error,

@@ -295,6 +295,16 @@ pub enum TyKind {
         ret: Ty,
         kind: FnKind,
     },
+    /// `dyn Trait`: an owned pair of a heap block holding a value of some
+    /// type implementing `trait_` and that type's method table (design.md
+    /// § `dyn Trait`). `args` is the trait's generic arguments, then its
+    /// associated types in declaration order. `Ref(Dyn)` and `MutRef(Dyn)`
+    /// are views, the same two words; no place projects through them.
+    Dyn {
+        trait_: DefId,
+        args: Vec<Ty>,
+        cross_task: bool,
+    },
     /// A shared kind MIR has no view of (a generic parameter, a function
     /// pointer, a raw pointer, ...): never valid in a MIR body.
     Other,
@@ -447,6 +457,15 @@ impl TyInterner {
                 once: kind == FnKind::OnceFn,
                 mutable: kind == FnKind::MutFn,
             },
+            TyKind::Dyn {
+                trait_,
+                args,
+                cross_task,
+            } => SharedKind::Dyn {
+                trait_,
+                args: tcx.intern_list(&args),
+                cross_task,
+            },
             TyKind::Other => SharedKind::Error,
         };
         tcx.intern(shared)
@@ -564,6 +583,15 @@ impl TyInterner {
                     FnKind::Fn
                 },
             },
+            SharedKind::Dyn {
+                trait_,
+                args,
+                cross_task,
+            } => TyKind::Dyn {
+                trait_,
+                args: tcx.list(args),
+                cross_task,
+            },
             _ => TyKind::Other,
         }
     }
@@ -674,7 +702,7 @@ impl TyInterner {
                     self.display(ret)
                 )
             }
-            TyKind::Other => self.tcx.display(t, &|d| format!("def#{}", d.0)),
+            TyKind::Dyn { .. } | TyKind::Other => self.tcx.display(t, &|d| format!("def#{}", d.0)),
         }
     }
 

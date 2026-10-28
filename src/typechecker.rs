@@ -62,6 +62,7 @@ mod fn_env_cross_task;
 mod provider_share;
 pub(crate) use expr_method_call::STRING_BUILTIN_METHODS;
 mod cross_task_params;
+mod dyn_trait;
 mod expr_method_tensor;
 mod expr_ops;
 mod exprs;
@@ -1987,6 +1988,11 @@ pub struct TypeCheckResult {
     /// Typed as the receiver form `x.method(..)`, which `lowering` rewrites
     /// them into, so every later stage sees one spelling.
     pub ufcs_calls: FxHashMap<SpanKey, String>,
+    /// design.md § `dyn Trait`: each expression that coerces into a `dyn`
+    /// slot, to its own (concrete) type and the slot's (`dyn Trait`, `ref
+    /// dyn Trait` or `mut ref dyn Trait`). The expression's node type stays
+    /// concrete. Viewing an owned `dyn` is a plain borrow, not an entry.
+    pub node_dyn_coercions: FxHashMap<crate::ids::NodeId, (Type, Type)>,
     /// B-2026-09-01-20 — the COMPLETED argument list for an instance-method
     /// call whose omitted arguments have declared defaults.
     ///
@@ -3149,6 +3155,9 @@ pub struct TypeChecker<'a> {
     pub(super) method_impl_dispatch: FxHashMap<(SpanKey, String), String>,
     /// Working half of `TypeCheckResult::ufcs_calls`.
     pub(super) ufcs_calls: FxHashMap<SpanKey, String>,
+    /// `TypeCheckResult::node_dyn_coercions` by impl block and span, until
+    /// `check` maps them to nodes (`dyn_coercion_nodes`).
+    pub(super) dyn_coercion_spans: FxHashMap<dyn_trait::CoercionKey, (Type, Type)>,
     /// Working half of `TypeCheckResult::method_default_fills`.
     pub(super) method_default_fills: FxHashMap<(SpanKey, String), Vec<crate::ast::CallArg>>,
     /// Declared defaults for every instance METHOD, keyed `"Type.method"`.
@@ -3819,6 +3828,7 @@ impl<'a> TypeChecker<'a> {
             user_operator_calls: FxHashMap::default(),
             method_impl_dispatch: FxHashMap::default(),
             ufcs_calls: FxHashMap::default(),
+            dyn_coercion_spans: FxHashMap::default(),
             method_default_fills: FxHashMap::default(),
             method_defaults: crate::default_args::method_default_table(program),
             named_fns: crate::default_args::named_param_table(program),
@@ -4238,6 +4248,7 @@ impl<'a> TypeChecker<'a> {
         let distinct_type_traits = self.env.distinct_types.clone();
         let distinct_bases = self.env.distinct_bases.clone();
         let impl_trait_assoc_types = self.impl_trait_assoc_types();
+        let node_dyn_coercions = self.dyn_coercion_nodes();
         let trait_rpit_origins = self.trait_rpit_origins();
         let blanket_impls = self
             .env
@@ -4347,6 +4358,7 @@ impl<'a> TypeChecker<'a> {
             user_operator_calls: self.user_operator_calls,
             method_impl_dispatch: self.method_impl_dispatch,
             ufcs_calls: self.ufcs_calls,
+            node_dyn_coercions,
             method_default_fills: self.method_default_fills,
             method_impl_type_subs: self.method_impl_type_subs,
             direct_iter_terminals: self.direct_iter_terminals,
@@ -7212,6 +7224,11 @@ impl<'a> TypeChecker<'a> {
         // a counted copy), also as an element of a tuple literal.
         if self.library_methods_from_source && self.reads_into(expected, found) {
             return true;
+        }
+        // design.md § `dyn Trait`: a value of a type that implements the
+        // trait becomes a `dyn` value where one is expected.
+        if let Some(ok) = self.dyn_coercion(expected, found, span) {
+            return ok;
         }
         if self.is_subtype_with_projections(expected, found) {
             // Record a concrete witness flowing into the current function's

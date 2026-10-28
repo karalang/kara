@@ -232,6 +232,7 @@ pub fn constant(tys: &TyInterner, c: &Const) -> String {
         ConstKind::FnDef(inst) => inst.name.clone(),
         ConstKind::ZeroSized => format!("<ZST {}>", tys.display(c.ty)),
         ConstKind::Static(i) => format!("&static#{i}"),
+        ConstKind::DynSlot { dyn_ty, slot } => format!("<{} slot {slot}>", tys.display(*dyn_ty)),
     }
 }
 

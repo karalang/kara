@@ -1973,6 +1973,10 @@ impl<'a> super::TypeChecker<'a> {
             }
             return Type::Error;
         }
+        // A call through a `dyn` value is its trait's method.
+        if let Some(ty) = self.try_dyn_receiver_method(&obj_ty, method, args, span) {
+            return ty;
+        }
 
         // A library type's method with a Kāra body (redesign A2) is typed
         // through that body's signature, so the call records the callee and

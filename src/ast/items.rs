@@ -9,7 +9,7 @@ use crate::token::Span;
 
 use super::{
     Attribute, Block, Expr, ExprKind, GenericArg, GenericParams, PathExpr, Pattern, PatternKind,
-    StmtKind, TraitBound, TypeExpr, Visibility, WhereClause,
+    StmtKind, TraitBound, TypeExpr, TypeKind, Visibility, WhereClause,
 };
 
 // ── Item deprecation payload ─────────────────────────────────────
@@ -826,6 +826,37 @@ pub struct TraitMethod {
     /// placement). Propagation to impl methods rides with the FE-3
     /// call-graph slice, paralleling `is_track_caller`.
     pub is_gpu: bool,
+}
+
+impl TraitMethod {
+    /// Whether a `dyn` value can call this method through its method table
+    /// (design.md § Which traits can be used as `dyn`): it has a receiver,
+    /// no type or const parameters of its own, names `Self` only as the
+    /// receiver or in an associated type (`Self.Item`), and returns no
+    /// `impl Trait`.
+    pub fn is_dyn_dispatchable(&self) -> bool {
+        if self.self_param.is_none()
+            || self
+                .generic_params
+                .as_ref()
+                .is_some_and(|g| !g.params.is_empty())
+        {
+            return false;
+        }
+        let mut ok = true;
+        let mut check = |t: &TypeExpr| match &t.kind {
+            TypeKind::Path(p) if p.segments.len() == 1 && p.segments[0] == "Self" => ok = false,
+            TypeKind::ImplTrait { .. } => ok = false,
+            _ => {}
+        };
+        for p in &self.params {
+            crate::span_visitor::for_each_type_expr(&p.ty, &mut check);
+        }
+        if let Some(r) = &self.return_type {
+            crate::span_visitor::for_each_type_expr(r, &mut check);
+        }
+        ok
+    }
 }
 
 /// The inlining axis of the codegen-hint attributes (design.md §

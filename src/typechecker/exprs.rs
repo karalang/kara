@@ -223,6 +223,9 @@ pub(super) fn contains_type_var(t: &Type) -> bool {
             params,
             return_type,
         } => params.iter().any(contains_type_var) || contains_type_var(return_type),
+        Type::Dyn { args, assoc, .. } => {
+            args.iter().any(contains_type_var) || assoc.iter().any(|(_, t)| contains_type_var(t))
+        }
         _ => false,
     }
 }
@@ -1094,6 +1097,11 @@ impl<'a> super::TypeChecker<'a> {
         }
         self.collect_views_into_strings_fix(expr, expected);
         let mut ty = self.check_expr_inner(expr, expected);
+        // A branch or block whose results each became the `dyn` value is
+        // that `dyn` value.
+        if self.coerced_within(expr, expected, &ty) {
+            ty = expected.clone();
+        }
         // A value stored into a `weak` slot keeps its own type in typed HIR.
         let weak_store = self.weak_store_actual.take();
         // A result whose type only the context decides (`collect`'s `C`)
@@ -11406,6 +11414,10 @@ fn type_contains_assoc_projection(ty: &Type) -> bool {
         }
         Type::Existential { trait_args, .. } => {
             trait_args.iter().any(type_contains_assoc_projection)
+        }
+        Type::Dyn { args, assoc, .. } => {
+            args.iter().any(type_contains_assoc_projection)
+                || assoc.iter().any(|(_, t)| type_contains_assoc_projection(t))
         }
         Type::Refinement { base, .. } => type_contains_assoc_projection(base),
         // Terminal / projection-free shapes.

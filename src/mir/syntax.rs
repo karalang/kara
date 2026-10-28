@@ -319,6 +319,28 @@ pub enum ConstKind {
     /// A borrow of the static at this index in the program's statics:
     /// `ref T`, or `mut ref T` for a `let mut` binding.
     Static(u32),
+    /// The method at `slot` of the `dyn` type `dyn_ty`'s tables: the
+    /// callee of a call through a `dyn Trait` value, whose first argument
+    /// is the receiver (a view of it, or the owned value for an `own self`
+    /// method, which consumes it). See [`Vtable`].
+    DynSlot {
+        dyn_ty: Ty,
+        slot: u32,
+    },
+}
+
+/// The method table of one concrete type behind one `dyn` type (design.md
+/// § `dyn Trait`): what a `CastKind::ToDyn` naming it pairs with the value.
+/// `slots` are the instances of the concrete type's methods in slot order:
+/// the supertraits' dispatchable methods depth-first in declaration order,
+/// then the trait's own. `clone` is the concrete type's `clone` when the
+/// trait has `Clone` as a supertrait.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Vtable {
+    pub dyn_ty: Ty,
+    pub concrete: Ty,
+    pub slots: Vec<String>,
+    pub clone: Option<String>,
 }
 
 /// A module binding that lives in one global place: its value is computed
@@ -444,6 +466,11 @@ pub enum CastKind {
     PtrToInt,
     /// An address as a raw pointer (`ptr.null()`, `ptr.from_exposed(a)`).
     IntToPtr,
+    /// A value as a `dyn Trait` paired with the program's vtable at this
+    /// index: an owned value moved into a new heap block (the target type
+    /// is `Dyn`), or a `ref`/`mut ref` to one as a view (the target is
+    /// `Ref(Dyn)` / `MutRef(Dyn)`), which allocates nothing.
+    ToDyn(u32),
 }
 
 #[derive(Debug, Clone, PartialEq)]

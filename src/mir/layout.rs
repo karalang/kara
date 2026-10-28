@@ -89,6 +89,8 @@ fn layout_at(tys: &TyInterner, t: Ty, depth: u32) -> Option<Layout> {
         TyKind::Float(FloatTy::F64) => scalar(8),
         TyKind::Unit | TyKind::Never | TyKind::FnDef(_) => ZST,
         TyKind::Str | TyKind::Slice(_) => TWO_WORDS,
+        // `dyn Trait` and its views: the data pointer and the table.
+        TyKind::Dyn { .. } => TWO_WORDS,
         TyKind::Fn { .. } => Layout { size: 24, align: 8 },
         TyKind::Tuple(ts) | TyKind::Closure(_, ts) => {
             let mut parts = Vec::with_capacity(ts.len());
@@ -110,7 +112,7 @@ fn layout_at(tys: &TyInterner, t: Ty, depth: u32) -> Option<Layout> {
             None => adt_body(tys, t, depth)?,
         },
         TyKind::Ref(p) | TyKind::MutRef(p) => match tys.kind(p) {
-            TyKind::Str | TyKind::Slice(_) => TWO_WORDS,
+            TyKind::Str | TyKind::Slice(_) | TyKind::Dyn { .. } => TWO_WORDS,
             _ => WORD,
         },
         TyKind::Intrinsic(IntrinsicTy::String | IntrinsicTy::Vec(_)) => {

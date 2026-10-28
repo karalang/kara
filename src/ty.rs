@@ -145,6 +145,16 @@ pub enum TyKind {
         bound: DefId,
         args: TyList,
     },
+    /// `dyn Trait` (design.md § `dyn Trait`): an owned value of some type
+    /// implementing the trait `trait_`, chosen at run time, in its own heap
+    /// block. `args` is the trait's generic arguments, then its associated
+    /// types in declaration order. `ref dyn Trait` is `Ref(Dyn)`, a view of
+    /// the same two words.
+    Dyn {
+        trait_: DefId,
+        args: TyList,
+        cross_task: bool,
+    },
     /// The associated type `assoc` of `base` (`I.Item` in a generic body).
     /// The MIR builder normalizes it once `base` is concrete at an instance,
     /// through that type's impl binding; it never reaches MIR itself.
@@ -493,6 +503,7 @@ impl TyCtxt {
             TyKind::Tuple(list)
             | TyKind::Adt { args: list, .. }
             | TyKind::Opaque { args: list, .. }
+            | TyKind::Dyn { args: list, .. }
             | TyKind::Shared { args: list, .. }
             | TyKind::Intrinsic { args: list, .. }
             | TyKind::FnDef { args: list, .. }
@@ -548,6 +559,15 @@ impl TyCtxt {
             TyKind::Opaque { bound, args: a } => TyKind::Opaque {
                 bound,
                 args: self.subst_list(a, args, const_args),
+            },
+            TyKind::Dyn {
+                trait_,
+                args: a,
+                cross_task,
+            } => TyKind::Dyn {
+                trait_,
+                args: self.subst_list(a, args, const_args),
+                cross_task,
             },
             TyKind::Intrinsic { kind, args: a } => TyKind::Intrinsic {
                 kind,
@@ -775,6 +795,22 @@ impl TyCtxt {
                     format!("impl {}[{}]", def_name(bound), list(args))
                 }
             }
+            TyKind::Dyn {
+                trait_,
+                args,
+                cross_task,
+            } => {
+                let base = if self.list(args).is_empty() {
+                    format!("dyn {}", def_name(trait_))
+                } else {
+                    format!("dyn {}[{}]", def_name(trait_), list(args))
+                };
+                if cross_task {
+                    format!("{base} + CrossTask")
+                } else {
+                    base
+                }
+            }
             TyKind::Error => "{error}".into(),
             TyKind::StaticStr => "str".into(),
             TyKind::Shared { def, args } => {
@@ -935,6 +971,7 @@ impl TyCtxt {
             | TyKind::Param(_)
             | TyKind::Proj { .. }
             | TyKind::Opaque { .. }
+            | TyKind::Dyn { .. }
             | TyKind::Error => false,
         }
     }
@@ -961,7 +998,8 @@ impl TyCtxt {
             | TyKind::Intrinsic { .. }
             | TyKind::Weak(_)
             | TyKind::Fn { .. }
-            | TyKind::Opaque { .. } => true,
+            | TyKind::Opaque { .. }
+            | TyKind::Dyn { .. } => true,
             TyKind::Tuple(l) | TyKind::Closure { captures: l, .. } => self
                 .list(l)
                 .into_iter()
@@ -1122,6 +1160,25 @@ impl TyCtxt {
                     args: self.empty_list(),
                 },
                 _ => return Err(LowerError::UnknownName(name.clone())),
+            },
+            // The trait's own arguments, then its associated types in the
+            // order the checker bound them.
+            Type::Dyn {
+                trait_name,
+                args,
+                assoc,
+                cross_task,
+            } => match lookup(trait_name) {
+                Some(TypeName::Trait(trait_)) => {
+                    let mut all = args.clone();
+                    all.extend(assoc.iter().map(|(_, t)| t.clone()));
+                    TyKind::Dyn {
+                        trait_,
+                        args: lower_all(&all)?,
+                        cross_task: *cross_task,
+                    }
+                }
+                _ => return Err(LowerError::UnknownName(trait_name.clone())),
             },
             Type::Function {
                 params,

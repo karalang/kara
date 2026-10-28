@@ -956,6 +956,19 @@ pub fn for_each_expr(e: &Expr, f: &mut impl FnMut(&Expr)) {
     walk_expr_mut(&mut copy, &mut Each(f));
 }
 
+/// Call `f` on every type expression in `t`, outermost first.
+pub fn for_each_type_expr(t: &TypeExpr, f: &mut impl FnMut(&TypeExpr)) {
+    struct Each<'f, F>(&'f mut F);
+    impl<F: FnMut(&TypeExpr)> MutVisitor for Each<'_, F> {
+        fn span(&mut self, _: &mut Span) {}
+        fn type_expr(&mut self, t: &mut TypeExpr) {
+            (self.0)(t)
+        }
+    }
+    let mut copy = t.clone();
+    visit_type_spans_mut(&mut copy, &mut Each(f));
+}
+
 /// The ids of the `self` expressions in `e`.
 pub fn self_value_ids(e: &Expr) -> Vec<NodeId> {
     struct Ids(Vec<NodeId>);

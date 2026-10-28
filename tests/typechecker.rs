@@ -26581,32 +26581,18 @@ fn impl_trait_slice5_dyn_trait_with_rpitit_method_rejected() {
 }
 
 #[test]
-fn impl_trait_slice5_dyn_trait_without_rpitit_hits_p1_stub() {
-    // Negative complement: a `dyn Trait` use site against a trait
-    // with NO RPITIT methods hits the generic
-    // `E_DYN_TRAIT_NOT_IMPLEMENTED_YET` stub instead of the
-    // RPITIT-specific diagnostic. This pins that slice 5's check
-    // fires ONLY on the RPITIT case — the rest of `dyn Trait` stays
-    // P1-deferred without ambiguity.
+fn impl_trait_slice5_dyn_trait_without_rpitit_lowers() {
+    // Negative complement: a `dyn Trait` of a trait with NO RPITIT methods
+    // is a `dyn` type (design.md § `dyn Trait`), so slice 5's check fires
+    // ONLY on the RPITIT case. It was refused as P1-deferred
+    // (`E_DYN_TRAIT_NOT_IMPLEMENTED_YET`) before `dyn` was built.
     let result = typecheck_desugared_result(
         "trait Display { fn show(ref self) -> String; }\n\
          fn use_display(d: dyn Display) -> i64 { 0 }",
     );
-    let stub_hits = result.errors.iter().any(|e| {
-        e.message.contains("E_DYN_TRAIT_NOT_IMPLEMENTED_YET") && e.message.contains("Display")
-    });
-    let rpitit_misfire = result
-        .errors
-        .iter()
-        .any(|e| e.message.contains("E_RPITIT_INCOMPATIBLE_WITH_DYN"));
     assert!(
-        stub_hits,
-        "expected E_DYN_TRAIT_NOT_IMPLEMENTED_YET stub naming `Display`; got: {:?}",
-        result.errors.iter().map(|e| &e.message).collect::<Vec<_>>()
-    );
-    assert!(
-        !rpitit_misfire,
-        "RPITIT-incompat diagnostic must NOT fire for a non-RPITIT trait; got: {:?}",
+        result.errors.is_empty(),
+        "expected `dyn Display` to lower; got: {:?}",
         result.errors.iter().map(|e| &e.message).collect::<Vec<_>>()
     );
 }

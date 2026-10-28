@@ -63,6 +63,19 @@ pub(super) fn map_existential(ty: &Type, f: impl Fn(&Type) -> Type) -> Type {
             tait_alias: tait_alias.clone(),
             scope: scope.iter().map(|(n, t)| (n.clone(), f(t))).collect(),
         },
+        // A `dyn` type maps the same parts: its trait's arguments and bound
+        // associated types.
+        Type::Dyn {
+            trait_name,
+            args,
+            assoc,
+            cross_task,
+        } => Type::Dyn {
+            trait_name: trait_name.clone(),
+            args: args.iter().map(&f).collect(),
+            assoc: assoc.iter().map(|(n, t)| (n.clone(), f(t))).collect(),
+            cross_task: *cross_task,
+        },
         _ => ty.clone(),
     }
 }
@@ -243,7 +256,9 @@ pub(crate) fn substitute_type_params(ty: &Type, subs: &HashMap<String, SubstValu
             name: name.clone(),
             base: Box::new(substitute_type_params(base, subs)),
         },
-        Type::Existential { .. } => map_existential(ty, |t| substitute_type_params(t, subs)),
+        Type::Existential { .. } | Type::Dyn { .. } => {
+            map_existential(ty, |t| substitute_type_params(t, subs))
+        }
         _ => ty.clone(),
     }
 }
@@ -356,14 +371,12 @@ pub(super) fn instantiate_signature_with_fresh_vars(
                 }
             }
             Type::Existential {
-                trait_args,
-                assoc_bindings,
+                trait_args: args,
+                assoc_bindings: assoc,
                 ..
-            } => {
-                for a in trait_args
-                    .iter()
-                    .chain(assoc_bindings.iter().map(|(_, t)| t))
-                {
+            }
+            | Type::Dyn { args, assoc, .. } => {
+                for a in args.iter().chain(assoc.iter().map(|(_, t)| t)) {
                     collect(a, names, seen, const_names, const_seen);
                 }
             }
@@ -510,7 +523,7 @@ pub(super) fn instantiate_signature_with_fresh_vars(
                     .collect(),
                 trait_name: trait_name.clone(),
             },
-            Type::Existential { .. } => {
+            Type::Existential { .. } | Type::Dyn { .. } => {
                 map_existential(ty, |t| substitute(t, name_to_id, name_to_const_id))
             }
             _ => ty.clone(),
@@ -785,7 +798,7 @@ pub(super) fn resolve_type_vars(
             params: params.iter().map(&recur).collect(),
             return_type: Box::new(recur(return_type)),
         },
-        Type::Existential { .. } => map_existential(ty, recur),
+        Type::Existential { .. } | Type::Dyn { .. } => map_existential(ty, recur),
         _ => ty.clone(),
     }
 }
@@ -903,6 +916,24 @@ pub(super) fn unify_types(
                 .zip(bb.iter())
                 .all(|(x, y)| unify_types(x, y, substitutions, const_substitutions))
         }
+        (
+            Type::Dyn {
+                trait_name: at,
+                args: aa,
+                assoc: ab,
+                cross_task: ac,
+            },
+            Type::Dyn {
+                trait_name: bt,
+                args: ba,
+                assoc: bb,
+                cross_task: bc,
+            },
+        ) if at == bt && ac == bc && aa.len() == ba.len() && ab.len() == bb.len() => aa
+            .iter()
+            .zip(ba.iter())
+            .chain(ab.iter().map(|(_, t)| t).zip(bb.iter().map(|(_, t)| t)))
+            .all(|(x, y)| unify_types(x, y, substitutions, const_substitutions)),
         (Type::Ref(x), Type::Ref(y))
         | (Type::MutRef(x), Type::MutRef(y))
         | (Type::Weak(x), Type::Weak(y)) => unify_types(x, y, substitutions, const_substitutions),
