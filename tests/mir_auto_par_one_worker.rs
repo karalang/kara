@@ -110,6 +110,32 @@ fn mir_auto_par_builds_an_in_order_twin_for_one_worker() {
         ir.contains("@\"kara.Acc.total#seq\"") && ir.contains("karac_mir_pooled"),
         "no in-order twin, or no pool check: {err}"
     );
+    // The entry into the twin is never inlined, and no resume reads the
+    // place of the latest library call, which would keep every call's
+    // store of it alive in the twin too (B-2026-10-28-1).
+    let (mut func, mut entries, mut groups) = ("", Vec::new(), Vec::new());
+    for l in ir.lines() {
+        if l.starts_with("define ") {
+            func = l;
+        }
+        if l.contains("call ") && l.contains("@\"kara.Acc.total#seq\"") && !func.contains("#seq") {
+            entries.push(l);
+        }
+        if l.starts_with("attributes ") && l.contains("{ noinline }") {
+            groups.push(l.split(' ').nth(1).unwrap_or_default());
+        }
+        assert!(
+            !(func.contains("#resume") && l.contains("load") && l.contains("@karac.site")),
+            "a resume reads the call place: {func}"
+        );
+    }
+    assert!(
+        !entries.is_empty()
+            && entries
+                .iter()
+                .all(|l| groups.iter().any(|g| l.ends_with(&format!(" {g}")))),
+        "the twin entry is inlinable: {entries:?}"
+    );
     let seq_dir = scratch("seq");
     let (_, _, seq_ir) = build(&seq_dir, Some("0"));
     let _ = std::fs::remove_dir_all(&seq_dir);

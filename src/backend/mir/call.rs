@@ -6,7 +6,10 @@
 //! result comes back through a temporary that is then copied to the
 //! destination, so neither can alias a place the callee reads.
 
-use inkwell::values::{BasicMetadataValueEnum, BasicValue, FunctionValue, IntValue, PointerValue};
+use inkwell::attributes::{Attribute, AttributeLoc};
+use inkwell::values::{
+    BasicMetadataValueEnum, BasicValue, CallSiteValue, FunctionValue, IntValue, PointerValue,
+};
 use inkwell::IntPredicate;
 
 use super::callable::Shim;
@@ -129,9 +132,29 @@ impl<'ctx> Cx<'ctx, '_> {
             };
             vals.push(slot.into());
         }
-        self.call_function(name, f, &vals)?;
+        let call = self.call_function(name, f, &vals)?;
+        self.twin_entry(name, call)?;
         let d = self.place_ptr(dest)?;
         self.copy(d, ret, dty)
+    }
+
+    /// A function with auto-par sites enters its in-order twin on one
+    /// worker (`lower.rs`'s `one_worker_twin`), and that call is never
+    /// inlined: the twin would land in the caller, a coroutine when it
+    /// has tasks, and optimise there as it does not in the in-order build
+    /// (kata 3's twin ran 1.2% more instructions inlined into `main`'s
+    /// resume). A twin's own calls of twins inline as the in-order build's
+    /// calls do (B-2026-10-28-1).
+    fn twin_entry(&self, name: &str, call: CallSiteValue<'ctx>) -> R<()> {
+        let twin = crate::mir::lower::SEQ_TWIN;
+        if name.ends_with(twin) && !self.cur()?.instance.name.contains(twin) {
+            let kind = Attribute::get_named_enum_kind_id("noinline");
+            call.add_attribute(
+                AttributeLoc::Function,
+                self.llcx.create_enum_attribute(kind, 0),
+            );
+        }
+        Ok(())
     }
 
     /// [`Self::call_body`] for a body with a by-value function: each
@@ -173,6 +196,7 @@ impl<'ctx> Cx<'ctx, '_> {
             vals.push(x.into());
         }
         let r = self.call_function(name, v, &vals)?;
+        self.twin_entry(name, r)?;
         if ret.is_some() {
             let x = r.try_as_basic_value().unwrap_basic();
             let dty = self.place_type(dest)?;

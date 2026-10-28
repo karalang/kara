@@ -1107,14 +1107,33 @@ fn spawns(bodies: &[Body], tys: &TyInterner) -> Vec<(usize, BasicBlock, String, 
     out
 }
 
+/// Where `body` starts: its first located statement or terminator, as the
+/// backend's `body_start` has it (a body's own `span` is where its building
+/// ended, which may be no place).
+fn body_start(body: &Body) -> crate::token::Span {
+    body.blocks
+        .iter()
+        .flat_map(|b| {
+            b.statements
+                .iter()
+                .map(|s| s.source_info.span)
+                .chain(std::iter::once(b.terminator.source_info.span))
+        })
+        .filter(|s| s.line > 0)
+        .min_by_key(|s| s.offset)
+        .unwrap_or(body.span)
+}
+
 /// `C#task`, for the closure body `c` (see `task_name`). A closure that
 /// takes its environment by value (it moves a capture out) is called with
 /// it, and drops it itself: `C#task(env) { _0 = C(move env); return }`.
 /// A closure `handed` by reference runs as `C#ref#task(env: ref C)`, which
 /// passes the reference on (`ref_task_name`).
 fn task_body(c: &Body, tys: &TyInterner, handed: bool) -> Result<Body, String> {
+    // At the closure's start, so the task's resume reports a place of its
+    // own (`Resume::build`'s resume after the return).
     let si = SourceInfo {
-        span: c.span,
+        span: body_start(c),
         scope: SourceScope(0),
     };
     let env_ref = c.local(Local(1)).ty;
@@ -2503,6 +2522,12 @@ impl<'a> Resume<'a> {
             });
         }
         self.blocks.extend(extra);
+        // A resume after the return reports where the function starts. At
+        // the body's own span (where its building ended) the backend reports
+        // the program's latest library call instead, and that read keeps
+        // every call's store of it alive in the whole program, in-order
+        // twins included (B-2026-10-28-1).
+        let start = body_start(self.body);
         let resumed_after_return = BasicBlock(self.blocks.len() as u32);
         self.blocks.push(BasicBlockData {
             statements: vec![],
@@ -2510,7 +2535,10 @@ impl<'a> Resume<'a> {
                 kind: TerminatorKind::Abort {
                     reason: AbortReason::Panic,
                 },
-                source_info: self.info(),
+                source_info: SourceInfo {
+                    span: start,
+                    ..self.info()
+                },
             },
         });
         let mut values = vec![(0, BasicBlock(1))];
