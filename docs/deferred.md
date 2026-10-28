@@ -27,7 +27,7 @@ Each track opens with what it brings. Within a track, each feature has its own s
 
 ## M4a services
 
-Coroutines and the `suspends` effect, non-blocking networking, one scheduler and reactor, cooperative cancellation and deadlines, channel `select` with timeouts, task-level failure isolation, the provider work core-semantics §14 leaves out (overriding `FileSystem`, `Network` and the standard streams; `#[test(requires: ..)]`), effect variables for stored callbacks, and effect groups if the services programs show they are needed. The track comes before the v1 release. Its gate is the services programs in the corpus plus a load test of connections and tail latency; blocking-I/O services already run in v1.
+Coroutines and the `suspends` effect, non-blocking networking, one scheduler and reactor, cooperative cancellation and deadlines, channel `select` with timeouts, task-level failure isolation, the provider work core-semantics §14 leaves out (overriding `FileSystem`, `Network` and the standard streams; `#[test(requires: ..)]`), and effect variables for stored callbacks. Effect groups moved to [effects expressiveness](#effects-expressiveness) on 2026-10-28: no services program needed them. The track comes before the v1 release. Its gate is the services programs in the corpus plus a load test of connections and tail latency; blocking-I/O services already run in v1.
 
 ### Execution Effects (`blocks` / `suspends`)
 
@@ -804,17 +804,11 @@ These additions to the v1 tooling contract ([design.md §17](design.md#17-toolin
 
 ### Effect Variables for Stored Callbacks
 
-v1 needs no annotation for a non-escaping function parameter: its effects come from the argument at each call. A function value that escapes has the effects its type declares, or every effect when it declares none ([design.md §12](design.md#function-values-and-effects)). Effect variables let a stored callback's effects follow the caller instead. They return with this track.
-
-Effect variables are declared in the same generic list using the `with` keyword: `fn map[T, U, with E](list: Vec[T], f: Fn(T) -> U with E) -> Vec[U] with E`.
-
-**Effect variables — a separate namespace.**
-
-Effect variables (`with E`) are **not** type metavariables. They live in a separate solution map with their own rules. When checking a closure against an effect-polymorphic parameter, `E` remains symbolic until the closure body is inferred; the effects collected from the body (via the effect lattice) are then **unified** with `E`. "Unify" here is a single-assignment rule: `E` may be solved at most once per call. A second use of the same `E` that resolves to a different effect set is an effect-variable-conflict error. The conflict scope is **per call** — each call to a function with an effect variable `E` gets a fresh instance of `E`, so conflicts are local to that call site. Type metavariables and effect variables never meet on the same lattice.
+Specified for v1 in [design.md § Effect variables](design.md#effect-variables) (2026-10-28). One difference from the earlier draft here: several function values bound to one variable give the union of their sets, as a collection literal does, instead of a conflict error.
 
 ### Effect Groups and Composition
 
-Effect groups come with this track only if the services programs show a need for them. [Effect Semver Rules](#effect-semver-rules) and `stable` groups depend on them.
+Effect groups were left out of the services track on 2026-10-28, since no services program needed them; they return with [effects expressiveness](#effects-expressiveness). [Effect Semver Rules](#effect-semver-rules) and `stable` groups depend on them.
 
 Named groups reduce annotation burden. Groups compose with `+`:
 

@@ -60,7 +60,7 @@ Features outside the v1 core return as named tracks. A track enters this specifi
 
 | Track | Brings | When |
 |---|---|---|
-| **Services (M4a)** | Coroutines and the `suspends` effect, non-blocking networking, one scheduler and reactor, cooperative cancellation and deadlines, channel `select` with timeouts, task-level failure isolation, effect variables for stored callbacks, `dyn`, and effect groups if the services programs show they are needed. Gate: the services programs in the corpus, plus a load test of connections and tail latency. Blocking-I/O services already run in v1. | Before the v1 release |
+| **Services (M4a)** | Coroutines and the `suspends` effect, non-blocking networking, one scheduler and reactor, cooperative cancellation and deadlines, channel `select` with timeouts, task-level failure isolation, effect variables for stored callbacks, and `dyn`. Gate: the services programs in the corpus, plus a load test of connections and tail latency. Blocking-I/O services already run in v1. | Before the v1 release |
 | **Automatic parallelism (M4b)** | Loop and statement auto-parallelism as compiler passes under the proof bar, and `seq {}` to keep code in order. Gate: measured speedup with zero output changes across the whole corpus. | Before the v1 release |
 | **Data (M4c)** | The `kara-data` package: Tensor, Column, DataFrame, statistics, autograd, Arrow. | After v1 |
 | **Later tracks** | Systems (profiles, interrupts, volatile access, inline assembly, linker control, exported C ABI, SIMD), layout blocks, verification (predicates on distinct types, contracts), effect expressiveness (other named effect variables, parameterized resources), interactive (REPL, notebooks, playground), web (browser glue, component model), `comptime`, GPU, self-hosting. | Ordered in the roadmap |
@@ -5509,7 +5509,39 @@ impl EventBus {
 let fs = [f1, f2];   // Vec[Fn() with reads(X) writes(Y)]
 ```
 
-Effect variables for stored callbacks (`with E`) return with the [services track](deferred.md#m4a-services).
+#### Effect variables
+
+**An effect variable names an effect set that the caller supplies.** It lets a stored callback carry its own effects, where a clause would fix them for every user. It is declared in a generic list with `with`, beside type parameters, and used wherever an effect clause may appear:
+
+```kara
+struct EventBus[with E] {
+    handlers: Vec[Fn(Event) with E],
+}
+
+impl[with E] EventBus[with E] {
+    fn register(mut ref self, h: escaping Fn(Event) with E) {
+        self.handlers.push(h);
+    }
+
+    fn emit(self, e: Event) with E {
+        for h in self.handlers { h(e); }
+    }
+}
+
+fn audit(db: OrderDb) {
+    let mut bus = EventBus { handlers: Vec.new() };
+    bus.register(|e| db.record(e));      // E = {writes(OrderDb)}
+    bus.emit(Event.Placed);              // charged writes(OrderDb) here
+}
+```
+
+- **Where it may be declared:** on functions, methods, `impl` blocks, structs and enums. A trait's methods may use the variables of their `impl` block or their own generic list; a trait itself takes none in v1.
+- **Where it may be used:** in the clause of a function type (`Fn(T) -> U with E`), and in the clause of the function that declares or inherits it (`fn emit(self, e: Event) with E`). A clause may combine a variable with named effects: `with E writes(Log)`.
+- **How it is solved.** Each use of a generic item gets a fresh instance of each of its effect variables, solved at that use from what fills it: the effects of each function value bound to a position that names the variable. Several values give the union of their sets, as a collection literal of function values does. A value bound later must fit the solution by effect-set subtyping, and one that does not is an error naming the extra effect and the binding that fixed the set. For a type, the instance is fixed by the value's construction and later bindings within the same function, as type arguments are inferred for `Vec.new()`. A variable that nothing fills is the empty set.
+- **What a call is charged.** A call through a value typed `with E`, or to a function whose clause names `E`, has the solved set, charged to the caller where the variable was solved. So the `audit` above is charged `writes(OrderDb)`, and `EventBus` itself names no resource.
+- **Spelled out where needed.** The solved set may be written as a type argument, `EventBus[with writes(OrderDb)]`, and must be in a public signature, like any other effect a public function has ([§12](#12-effects)).
+- **Instances are still keyed by types only.** An effect variable changes no code: an `EventBus` whose handlers have no effects and an `EventBus[with writes(OrderDb)]` share one instance.
+- **Separate from type parameters.** An effect variable is never a type, and a type parameter is never an effect set, so `[T, with E]` cannot confuse the two. Inference keeps them apart.
 
 ### Trait methods and generic calls
 
@@ -5570,9 +5602,7 @@ Providers (`effect resource R: Trait`, `with_provider`, `providers {} in {}`, `#
 
 These return with later tracks:
 - effect groups, `stable` groups and effect semver rules; parameterized resources (`UserDb[id]`) with `alias` and `independent` ([effects expressiveness](deferred.md#effects-expressiveness));
-- `suspends`; effect variables for stored callbacks (`with E`) ([M4a services](deferred.md#m4a-services));
 - the web and host effect vocabulary ([web](deferred.md#web));
-- `seq {}` ([M4b auto-par](deferred.md#m4b-auto-par));
 - trait-level ceilings and `dyn Trait` effects ([`dyn`](deferred.md#dyn));
 - project profiles that forbid effects across a project ([systems](deferred.md#systems)).
 
