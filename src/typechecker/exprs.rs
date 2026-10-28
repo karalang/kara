@@ -11084,6 +11084,10 @@ impl<'a> super::TypeChecker<'a> {
                             );
                         }
                     }
+                    if self.provider_may_be_shared(None, Some(body)) {
+                        let descr = format!("provider for resource `{}`", b.resource);
+                        self.check_cross_task_params(&provider_ty, &descr, &b.resource_span);
+                    }
                     self.check_provider_satisfies_declared_bound(
                         &b.resource,
                         &provider_ty,

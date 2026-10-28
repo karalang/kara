@@ -61,6 +61,7 @@ mod expr_method_call;
 mod fn_env_cross_task;
 mod provider_share;
 pub(crate) use expr_method_call::STRING_BUILTIN_METHODS;
+mod cross_task_params;
 mod expr_method_tensor;
 mod expr_ops;
 mod exprs;
@@ -3142,6 +3143,9 @@ pub struct TypeChecker<'a> {
     pub(super) reported_table_key_params: FxHashSet<SpanKey>,
     pub(super) reported_table_keys: FxHashSet<String>,
     pub(super) table_keys_live: bool,
+    /// B-2026-10-27-33: type-parameter declarations already told they
+    /// need `CrossTask`.
+    pub(super) reported_cross_task_params: FxHashSet<SpanKey>,
     /// See [`TypeCheckResult::direct_iter_terminals`].
     pub(super) direct_iter_terminals: FxHashSet<SpanKey>,
     /// MethodCall span → receiver type-parameter name. See the matching field
@@ -3778,6 +3782,7 @@ impl<'a> TypeChecker<'a> {
             reported_table_key_params: FxHashSet::default(),
             reported_table_keys: FxHashSet::default(),
             table_keys_live: false,
+            reported_cross_task_params: FxHashSet::default(),
             direct_iter_terminals: FxHashSet::default(),
             method_typeparam_receiver: FxHashMap::default(),
             method_typeparam_trait_key: FxHashMap::default(),

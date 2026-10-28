@@ -90,8 +90,9 @@ fn __select_send_none[T](tx: ref Sender[T]) -> Option[Result[(), SendError[T]]] 
 
 // The send of the value in `slot`, tried without waiting: `None`, with the
 // value back in `slot`, while the channel is full, else what `send` gives,
-// the value then gone from `slot`.
-fn __select_send[T](tx: ref Sender[T], slot: mut ref Option[T]) -> Option[Result[(), SendError[T]]] {
+// the value then gone from `slot`. It sends a `T`, so `T: CrossTask`
+// (design.md § `CrossTask`).
+fn __select_send[T: CrossTask](tx: ref Sender[T], slot: mut ref Option[T]) -> Option[Result[(), SendError[T]]] {
     match slot.take() {
         Some(v) => match tx.try_send(v) {
             Err(SendError.Full(v)) => {

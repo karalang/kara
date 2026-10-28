@@ -640,6 +640,7 @@ impl<'a> super::TypeChecker<'a> {
         if let Err(path) = is_cross_task_safe_with(&pinned, &self.env.structs, &self.env.enums) {
             self.emit_cross_task_unsafe_value("value sent across a channel", &pinned, &path, span);
         }
+        self.check_cross_task_params(&pinned, "value sent across a channel", span);
     }
 
     /// The per-method body of [`infer_channel_method`], split out so the
@@ -729,6 +730,7 @@ impl<'a> super::TypeChecker<'a> {
                             span,
                         );
                     }
+                    self.check_cross_task_params(&elem, "value sent across a channel", span);
                     for arg in args {
                         let at = self.infer_expr(&arg.value);
                         if !pin_channel_elem_from_arg(&mut self.env, &elem, &at) {
@@ -1088,6 +1090,7 @@ impl<'a> super::TypeChecker<'a> {
                             span,
                         );
                     }
+                    self.check_cross_task_params(&elem, "value sent across a channel", span);
                     if args.len() != 1 {
                         self.type_error(
                             "Sender.try_send expects exactly one argument".to_string(),

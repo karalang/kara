@@ -33,13 +33,13 @@ fn text(b: &[u8]) -> String {
 /// Each caller names its parameter as the library method it calls names its
 /// own: `TaskGroup.spawn[T]`, `IsolatingGroup.spawn[T]`, `Iterator.map[OutV]`.
 const SRC: &str = "import std.sync.{TaskGroup};
-shared struct Cell { n: i64 }
-fn run_all[T](x: own T) -> i64 {
+struct Cell { n: i64 }
+fn run_all[T: CrossTask](x: own T) -> i64 {
     let g = TaskGroup.new();
     let h = g.spawn(|| { let y = x; 1 });
     h.join()
 }
-fn isolated[T](x: own T) -> i64 {
+fn isolated[T: CrossTask](x: own T) -> i64 {
     let g = TaskGroup.isolating();
     let h = g.spawn(|| { let y = x; 4 });
     match h.join() {

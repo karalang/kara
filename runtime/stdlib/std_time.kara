@@ -105,8 +105,9 @@ pub struct TimedOut {}
 
 /// Runs `f` as a task scope bounded by `d` (core-semantics §11.10): its
 /// value, or `Err(TimedOut)` once `d` has passed, when the scope is
-/// cancelled and `f` stops at the wait it is in.
-pub fn timeout[T](d: Duration, f: own OnceFn() -> T) -> Result[T, TimedOut] with reads(Clock) blocks suspends {
+/// cancelled and `f` stops at the wait it is in. `f`'s value crosses back
+/// from the task, so `T: CrossTask` (design.md § `CrossTask`).
+pub fn timeout[T: CrossTask](d: Duration, f: own OnceFn() -> T) -> Result[T, TimedOut] with reads(Clock) blocks suspends {
     let group = TaskGroup.new().__deadline_at(d.__select_at());
     match group.spawn(f).try_join() {
         Ok(v) => Ok(v),

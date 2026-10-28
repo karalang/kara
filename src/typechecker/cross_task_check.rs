@@ -114,6 +114,17 @@ impl<'a> super::TypeChecker<'a> {
                     site_label,
                 );
             }
+            let ty = ty.clone();
+            let span = if anchor_span.line == 0 && anchor_span.column == 0 {
+                *call_span
+            } else {
+                anchor_span
+            };
+            self.check_cross_task_params(
+                &ty,
+                &format!("capture of `{name}` by the task passed to `{site_label}`"),
+                &span,
+            );
         }
     }
 
@@ -274,6 +285,11 @@ impl<'a> super::TypeChecker<'a> {
             &HashMap::new(),
             &self.env.const_substitutions,
             &HashMap::new(),
+        );
+        self.check_cross_task_params(
+            &result_ty,
+            &format!("the result of the task passed to `{site_label}`"),
+            span,
         );
         if matches!(
             result_ty,
