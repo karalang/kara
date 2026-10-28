@@ -4388,10 +4388,29 @@ impl<'a> super::TypeChecker<'a> {
                 ),
                 _ => None,
             };
+            // A callee's parameter no argument has solved yet stays the
+            // callee's variable where the enclosing item has a parameter of
+            // the same name: named back, the closure checked against it would
+            // read the enclosing item's rigid `T` (B-2026-10-27-34).
+            let unshadowed: std::collections::HashMap<_, _>;
+            let names = if arg_ty_opt.is_none()
+                && id_to_name
+                    .values()
+                    .any(|n| self.enclosing_bounds.contains_key(n))
+            {
+                unshadowed = id_to_name
+                    .iter()
+                    .filter(|(_, n)| !self.enclosing_bounds.contains_key(*n))
+                    .map(|(k, v)| (*k, v.clone()))
+                    .collect();
+                &unshadowed
+            } else {
+                &id_to_name
+            };
             let resolved = resolve_type_vars(
                 bound_sig.as_ref().unwrap_or(sub_param_ty),
                 &self.env.substitutions,
-                &id_to_name,
+                names,
                 &self.env.const_substitutions,
                 &const_id_to_name,
             );
