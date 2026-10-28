@@ -1269,6 +1269,35 @@ impl Pipeline {
         }
         // A `comptime` error is kept wherever it points: a derive body in the
         // library raises it about the user's type.
+        self.dedup_default_copy_diagnostics();
+    }
+
+    /// A trait default body copied into N impls is checked once per copy, and
+    /// the copies share its spans, so one mistake in it gave N identical
+    /// diagnostics. Each is reported once (B-2026-10-28-13).
+    fn dedup_default_copy_diagnostics(&mut self) {
+        let Some(t) = self.typed.as_mut() else {
+            return;
+        };
+        if t.default_copy_spans.is_empty() {
+            return;
+        }
+        let copies = &t.default_copy_spans;
+        let first =
+            |span: &crate::token::Span,
+             message: &str,
+             seen: &mut std::collections::HashSet<(usize, usize, String)>| {
+                !copies.contains(&crate::resolver::SpanKey::from_span(span))
+                    || seen.insert((span.offset, span.length, message.to_string()))
+            };
+        let mut seen = std::collections::HashSet::new();
+        t.errors.retain(|e| first(&e.span, &e.message, &mut seen));
+        let mut seen = std::collections::HashSet::new();
+        t.warnings.retain(|e| first(&e.span, &e.message, &mut seen));
+        if let Some(o) = self.ownership.as_mut() {
+            let mut seen = std::collections::HashSet::new();
+            o.errors.retain(|e| first(&e.span, &e.message, &mut seen));
+        }
     }
 
     /// Move each resolve or type error in a gated module's item to the
