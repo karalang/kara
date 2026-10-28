@@ -58,9 +58,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| false-positive | 53 |
-| missing-feature | 46 |
-| diagnostics | 42 |
+| false-positive | 55 |
+| missing-feature | 47 |
+| diagnostics | 43 |
 | soundness | 24 |
 | perf | 20 |
 | miscompile | 14 |
@@ -73,13 +73,13 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 99 |
-| mir | 47 |
+| typecheck | 101 |
+| mir | 49 |
 | mir-llvm | 30 |
-| ownership | 24 |
+| ownership | 25 |
 | interp | 22 |
 | codegen | 22 |
-| cli | 19 |
+| cli | 20 |
 | runtime | 11 |
 | parser | 8 |
 | resolver | 3 |
@@ -101,6 +101,10 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-28-21 | 2026-10-28 | typecheck | medium | A type with two `Index` impls that differ in the index type (`Index[String]` and `Index[i64]` for a `Frame`, so `f["a"]` and `f[0]`) only consults the first: `f[1]` is refused with "expected 'String', found 'i64'" | — |
 | B-2026-10-28-22 | 2026-10-28 | typecheck | medium | A user operator impl is not found for an operand of explicit `ref T` type: `fn add_refs(x: ref Col, y: ref Col) -> Col { x + y }` is refused with "type 'ref Col' does not implement trait Add", even when the impl borrows (`fn add(self, rhs: Col)`); `x * 2.0` likewise, and `-x` reads "unary '-' requires numeric type, found 'ref Col'" | — |
 | B-2026-10-28-23 | 2026-10-28 | typecheck+mir | medium | A closure whose error type comes only from a `?` inside it passes `karac check` but does not build on MIR: `let get = |s: Str| { if s.len() > 0 { Ok(Some(num(s)?)) } else { Ok(None) } };` fails with `an expression whose type does not lower (Type(UnknownParam("E")))`, and the `|..| -> Result[..]` annotation that would pin E is refused by the parser and deleted by `karac fix` | — |
+| B-2026-10-28-24 | 2026-10-28 | typecheck+mir | medium | Calling a closure bound by `let` moves its non-Copy arguments, contrary to core-semantics §5.10 (a closure's parameters are ordinary bare, borrowed, parameters): `karac check` refuses `eq(v, w[0])` on a borrowed `v`, the MIR build refuses it with a type mismatch, and the fixes offered cascade into the callers | — |
+| B-2026-10-28-25 | 2026-10-28 | ownership+mir | medium | `let r = match rx { Some(ref r) => r, None => return .. }` over an `Option` of a type with no `.clone()` (a `Regex`) is refused by `karac check` (borrow_projection_copy) and by the MIR build, though §5.9 lets a local be bound to a `ref` binding and it is exactly what `karac fix` writes for the move-in-loop error; the same code over `Option[String]` passes | — |
+| B-2026-10-28-26 | 2026-10-28 | typecheck | medium | `karac check` passes a program that builds a `Column`, `DataFrame`, `LazyExpr` or `Tensor` from the legacy library's baked surface, and `karac run` then refuses it: no v2 backend lowers those kara-data types, so the target is a refusal at check with the message `Stats` already gets | — |
+| B-2026-10-28-27 | 2026-10-28 | cli | low | The manifest keys design.md §4 promises for import names are not implemented: a dependency's `alias = "..."`, the optional `[package].import = "..."`, and the rule that a hyphen in a package name maps to `_` in the import path (`kara-data` is imported from `kara_data`); kara-data's `import data` depends on all three | — |
 
 ### Relocated
 

@@ -1364,7 +1364,10 @@ impl Walk<'_, '_> {
         if ty == "Server" && method.starts_with("serve") && method != "serve_static" {
             self.check_handler_response(call, method);
         }
-        if !matches!(ty, "Base64" | "Hex" | "Url" | "Stats") {
+        if !matches!(
+            ty,
+            "Base64" | "Hex" | "Url" | "Stats" | "Column" | "DataFrame" | "LazyExpr" | "Tensor"
+        ) {
             return false;
         }
         // A local of that name, or a program's own type, is not the library's.
@@ -1386,6 +1389,10 @@ impl Walk<'_, '_> {
     /// (docs/library/encoding.md), and `Stats` is the `kara-data` package's
     /// (docs/deferred.md § Numerical types), so a call of either is refused
     /// with the spelling that replaces it rather than reach the backend.
+    /// The baked `Column`, `DataFrame`, `LazyExpr` and `Tensor` are the
+    /// package's too (docs/library/data.md), and no backend lowers them, so
+    /// their constructors are refused the same way: a value of the type
+    /// cannot be made, and a program that checks clean runs (B-2026-10-28-26).
     fn check_removed_namespace(&mut self, call: &Expr, ty: &str, method: &str) {
         let instead = match (ty, method) {
             ("Base64", "encode") => "`base64_encode(bytes)`",
@@ -1403,6 +1410,21 @@ impl Walk<'_, '_> {
                         "`Stats.{method}` is not in the standard library: statistics come \
                          with the `kara-data` package after v1 (docs/deferred.md § \
                          Numerical types)"
+                    ),
+                ));
+                return;
+            }
+            ("Column" | "DataFrame" | "LazyExpr" | "Tensor", _) => {
+                let doc = if ty == "Tensor" {
+                    "docs/deferred.md § Numerical types"
+                } else {
+                    "docs/library/data.md"
+                };
+                self.removed_calls.push((
+                    call.span,
+                    format!(
+                        "`{ty}.{method}` is not in the standard library: `{ty}` comes \
+                         with the `kara-data` package after v1 ({doc})"
                     ),
                 ));
                 return;

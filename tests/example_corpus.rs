@@ -165,6 +165,17 @@ const KNOWN_BROKEN_FILES: &[(&str, &str)] = &[
          (docs/spikes/windows-iocp-scale-investigation.md), and \
          ws_echo_spawn.kara is the TaskGroup form.",
     ),
+    (
+        "autograd_training.kara",
+        "typecheck: `Tensor.from` is refused at check; `Tensor` comes with the \
+         `kara-data` package after v1, and no v2 backend lowers the legacy \
+         library's baked surface for it (B-2026-10-28-26).",
+    ),
+    (
+        "semantic_search.kara",
+        "typecheck: `Tensor.from` is refused at check (same cause as \
+         autograd_training.kara).",
+    ),
 ];
 
 fn is_excluded(rel: &Path) -> bool {
