@@ -1287,6 +1287,12 @@ impl<'a> super::TypeChecker<'a> {
                 // false for a scrutinee that does own the variant, so a
                 // dotted `Color.Red` against a `Color` scrutinee falls through
                 // untouched.
+                if name.contains('.') {
+                    let path: Vec<String> = name.split('.').map(str::to_string).collect();
+                    if self.report_wrong_variant_root(&path, expected, pattern.span) {
+                        return;
+                    }
+                }
                 let variant_name = name.rsplit('.').next().unwrap_or(name);
                 let is_variant_pattern = name.contains('.')
                     || (variant_name
@@ -1484,6 +1490,7 @@ impl<'a> super::TypeChecker<'a> {
                 self.check_literal_pattern(lit, expected, &pattern.span);
             }
             PatternKind::TupleVariant { path, patterns } => {
+                self.report_wrong_variant_root(path, expected, pattern.span);
                 let variant_name = path.last().cloned().unwrap_or_default();
                 if let Type::Named { name, args } = expected {
                     if let Some(enum_info) = self.env.enums.get(name).cloned() {
@@ -1596,6 +1603,7 @@ impl<'a> super::TypeChecker<'a> {
                 fields,
                 has_rest,
             } => {
+                self.report_wrong_variant_root(path, expected, pattern.span);
                 let struct_name = path.last().cloned().unwrap_or_default();
 
                 // B-2026-09-01-38 — design.md § Part 8 `Drop` rejects a
@@ -2146,6 +2154,70 @@ impl<'a> super::TypeChecker<'a> {
             TypeErrorKind::MoveOutOfNoMovePlace,
             fix_it,
         );
+    }
+
+    /// A type name through import renames and type aliases.
+    fn canonical_type_name(&self, name: &str) -> String {
+        let mut n = name.to_string();
+        for _ in 0..8 {
+            if let Some(c) = self.env.type_alias_canonical.get(&n) {
+                n = c.clone();
+            } else if let Some(Type::Named { name: t, .. }) = self.env.type_aliases.get(&n) {
+                n = t.clone();
+            } else {
+                break;
+            }
+        }
+        n
+    }
+
+    /// A dotted variant pattern names a variant of the enum before its last
+    /// segment (design.md § Enums: `E.V` is `E`'s `V`). When that is a
+    /// known enum other than the scrutinee's, the pattern cannot match, even
+    /// where the scrutinee's enum has a variant of the same name: report it
+    /// and say so (B-2026-10-27-27). Silent for `Self`, a name no enum has
+    /// (a module path, a renamed library type), and a scrutinee that is not
+    /// a known enum, whose own checks speak for them.
+    fn report_wrong_variant_root(&mut self, path: &[String], expected: &Type, span: Span) -> bool {
+        let [.., root, variant] = path else {
+            return false;
+        };
+        let mut ty = expected;
+        while let Type::Ref(inner) | Type::MutRef(inner) = ty {
+            ty = inner;
+        }
+        let Type::Named { name, .. } = ty else {
+            return false;
+        };
+        let own = self.canonical_type_name(name);
+        let named = self.canonical_type_name(root);
+        if root == "Self"
+            || named == own
+            || !self.env.enums.contains_key(&own)
+            || !self.env.enums.contains_key(&named)
+        {
+            return false;
+        }
+        let own_has = self.env.enums[&own]
+            .variants
+            .iter()
+            .any(|(vn, _)| vn == variant);
+        let hint = if own_has {
+            format!("; the scrutinee's own variant is `{own}.{variant}`")
+        } else {
+            String::new()
+        };
+        self.type_error(
+            format!(
+                "pattern `{}` names a variant of `{named}`, but the scrutinee has type `{}`, \
+                 so it can never match{hint}",
+                path.join("."),
+                type_display(expected),
+            ),
+            span,
+            TypeErrorKind::PatternScrutineeMismatch,
+        );
+        true
     }
 
     fn is_known_unit_variant(&self, name: &str) -> bool {
