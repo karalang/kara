@@ -39,7 +39,8 @@ what the command wrote. An error prints after the output the command had
 already written, as xsv's buffered CSV writer flushes it on the way out,
 each line after `! `, then `[exit 1]`; output that ends without a newline
 (the record a writer refused is already in its buffer) is followed by
-`\ no newline at end of output`.
+`\ no newline at end of output`. A carriage return in the output (`fmt --crlf`) is
+shown as `^M`, as `cat -v` shows it, so the transcript stays plain text.
 
 ```
 python3 -s -P -B mk.py          # writes data/ and data/jobs.txt

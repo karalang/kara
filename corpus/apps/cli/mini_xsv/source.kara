@@ -1976,7 +1976,8 @@ fn main() {
             Ok(a) => run(cmd, a, mut job),
             Err(e) => Err(e),
         };
-        let printed = job.w.buf.clone() + job.out;
+        // A carriage return is shown as ^M, as `cat -v` shows it.
+        let printed = (job.w.buf.clone() + job.out).replace("\r", "^M");
         print(printed);
         if printed.len() > 0 and not printed.ends_with("\n") {
             println("");

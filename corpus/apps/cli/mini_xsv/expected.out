@@ -928,10 +928,10 @@ $ xsv fmt --quote-always data/regions.tsv
 "east","K. Tanaka",""
 "central","A. Novak","7000"
 $ xsv fmt --crlf data/dupes.csv
-name,age,name
-ada,36,lovelace
-alan,41,turing
-grace,85,hopper
+name,age,name^M
+ada,36,lovelace^M
+alan,41,turing^M
+grace,85,hopper^M
 $ xsv fmt --ascii data/dupes.csv
 nameagenameada36lovelacealan41turinggrace85hopper
 \ no newline at end of output
