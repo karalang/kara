@@ -46,6 +46,9 @@ impl SpanKey {
 pub struct NodeRef {
     pub symbol: SymbolId,
     pub rest: Vec<String>,
+    /// A library body's call of a builtin the program declares a function
+    /// of the same name as ([`Resolver::library_builtin`]).
+    pub builtin: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -1625,6 +1628,28 @@ impl<'a> Resolver<'a> {
         })
     }
 
+    /// The builtin a library body's `name` means when the program declares a
+    /// function of that name: `Option.expect`'s `panic(msg)` panics whatever
+    /// `fn panic` the program has (B-2026-10-27-29). The library is appended
+    /// to the program's text, so the program's items are in its scope.
+    /// A name the library declares itself (`sleep_ms`) is left to it.
+    pub(crate) fn library_builtin(&self, sym: &Symbol, at: Span) -> Option<SymbolId> {
+        let library = self.program.library_start?;
+        if at.offset < library
+            || sym.span.offset >= library
+            || sym.span.line == 0
+            || !matches!(sym.kind, SymbolKind::Function { .. })
+            || self.library_declares(&sym.name)
+        {
+            return None;
+        }
+        self.table
+            .prelude_fn_ids
+            .iter()
+            .copied()
+            .find(|&id| self.table.get_symbol(id).name == sym.name)
+    }
+
     /// B-2026-08-02-6 — a builtin function referenced outside call position.
     ///
     /// The message names the correct call form rather than saying only what is
@@ -2092,6 +2117,7 @@ impl<'a> Resolver<'a> {
             NodeRef {
                 symbol: id,
                 rest: rest.to_vec(),
+                builtin: false,
             },
         );
     }

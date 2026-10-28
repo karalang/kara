@@ -335,7 +335,8 @@ impl<'a> super::Resolver<'a> {
 
             ExprKind::Identifier(name) => {
                 if let Some(sym) = self.table.lookup(name) {
-                    let id = sym.id;
+                    let builtin = self.library_builtin(sym, expr.span);
+                    let id = builtin.unwrap_or(sym.id);
                     // B-2026-08-02-6 — a BUILTIN function name outside call
                     // position. The name resolves (it is a real scope-0
                     // symbol), so resolve and typecheck both passed and the
@@ -356,6 +357,9 @@ impl<'a> super::Resolver<'a> {
                     }
                     self.record_resolution(&expr.span, id);
                     self.record_node_ref(expr.id, id, &[]);
+                    if let (Some(_), Some(r)) = (builtin, self.node_refs.get_mut(&expr.id)) {
+                        r.builtin = true;
+                    }
                     // `expr.span` can run past the identifier — a method
                     // call records its receiver under the whole call — but
                     // it always *starts* at it. B-2026-07-31-33.

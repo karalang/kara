@@ -90,6 +90,11 @@ fn res_of(
     r: &NodeRef,
 ) -> Res {
     let sym = result.symbol_table.get_symbol(r.symbol);
+    // A library body's builtin call is the compiler's, whatever function of
+    // its name the program declares (B-2026-10-27-29).
+    if r.builtin {
+        return builtin(&sym.name, &r.rest);
+    }
     let start = match &sym.kind {
         SymbolKind::Variable { .. } | SymbolKind::SelfValue => {
             return if r.rest.is_empty() {

@@ -1151,7 +1151,7 @@ impl<'a> super::TypeChecker<'a> {
             // (which would accept any type and then miscompile a non-shared arg).
             if name == "ref_eq"
                 && self.local_scope.lookup("ref_eq").is_none()
-                && !self.program_defines_fn("ref_eq")
+                && !self.program_defines_fn("ref_eq", span)
             {
                 return self.infer_ref_eq_intrinsic(args, span);
             }
@@ -1735,7 +1735,7 @@ impl<'a> super::TypeChecker<'a> {
         if let ExprKind::Identifier(name) = &callee.kind {
             if (name == "todo" || name == "unreachable" || name == "panic")
                 && self.local_scope.lookup(name).is_none()
-                && !self.program_defines_fn(name)
+                && !self.program_defines_fn(name, span)
             {
                 match args.len() {
                     0 => {}
@@ -2943,9 +2943,14 @@ impl<'a> super::TypeChecker<'a> {
     /// Whether the program itself (not the appended library) declares a
     /// top-level `fn name`. A program's own function shadows a prelude name
     /// (design.md § The prelude), the builtin intercepts included
-    /// (B-2026-10-23-10).
-    pub(super) fn program_defines_fn(&self, name: &str) -> bool {
+    /// (B-2026-10-23-10). Not in a library body at `at`, whose builtin
+    /// calls are the compiler's whatever the program declares
+    /// (B-2026-10-27-29).
+    pub(super) fn program_defines_fn(&self, name: &str, at: &Span) -> bool {
         let library = self.program.library_start.unwrap_or(usize::MAX);
+        if at.offset >= library || self.current_fn_stdlib_origin {
+            return false;
+        }
         self.program.items.iter().any(
             |item| matches!(item, Item::Function(f) if f.name == name && f.span.offset < library),
         )
