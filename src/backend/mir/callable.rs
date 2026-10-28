@@ -201,6 +201,7 @@ impl<'ctx> Cx<'ctx, '_> {
                             i.into(),
                             i.into(),
                             i.into(),
+                            i.into(),
                         ],
                         false,
                     ),
@@ -1542,6 +1543,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 zero.into(),
                 ld(v_gate)?.into(),
                 one.into(),
+                zero.into(),
             ],
             "",
         )
@@ -1559,15 +1561,22 @@ impl<'ctx> Cx<'ctx, '_> {
     }
 
     /// The body of a [`Shim::Partition`] (`f`). Each element of the range
-    /// is compared once with a copy of the middle one, its side kept in
-    /// `tags`; then the range is written to the other buffer in three runs
-    /// (less, tied, greater), each in the order it had, and the two sides
-    /// are partitioned from there: the buffers swap roles each level, and
-    /// a range reaches the sort's own buffer (`home`, the last parameter,
-    /// says whether it is in it) only when it is finished, so no level
-    /// copies the whole range back. A tied run is in place: it is stable,
-    /// so for a comparator that is an order the result is the merge sort's. A range that is short, or too deep,
-    /// or (with the tie gate on) ties too rarely to pay for the pass, is
+    /// is compared once with a copy of the median of three of its
+    /// elements, and the range is written to the other buffer split
+    /// around it; the two sides are partitioned from there. The buffers
+    /// swap roles each level, and a range reaches the sort's own buffer
+    /// (`home` says whether it is in it) only when it is finished, so no
+    /// level copies the whole range back.
+    ///
+    /// Ungated, one fused pass splits the range into the less elements, in
+    /// order, and the rest, back to front (`rev` on that side's call): no
+    /// count and no tags, and a reversed range is read from its end. Gated,
+    /// or with nothing less than the pivot, the side of each element is
+    /// counted first into `tags`, then the range is written in three runs
+    /// (less, tied, greater), each in the order it had; a tied run is
+    /// finished. Either way the split is stable, so for a comparator that
+    /// is an order the result is the merge sort's. A range that is short,
+    /// or too deep, or (gated) ties too rarely to pay for the pass, is
     /// merge sorted.
     fn build_partition(
         &mut self,
@@ -1603,8 +1612,10 @@ impl<'ctx> Cx<'ctx, '_> {
                 .ok_or("a partition is missing a parameter")?
                 .into_int_value())
         };
-        // The range is in `buf`; `tmp` is the other buffer.
-        let (buf, tmp, tags, lo, hi, ctx, depth, gated, home) = (
+        // The range is in `buf`; `tmp` is the other buffer. `rev` says the
+        // range is in `buf` back to front, as a fused pass leaves its upper
+        // side.
+        let (buf, tmp, tags, lo, hi, ctx, depth, gated, home, rev) = (
             pp(0)?,
             pp(1)?,
             pp(2)?,
@@ -1614,6 +1625,7 @@ impl<'ctx> Cx<'ctx, '_> {
             pi(6)?,
             pi(7)?,
             pi(8)?,
+            pi(9)?,
         );
         let bb = |name: &str| self.llcx.append_basic_block(f, name);
         let (count, c_head, c_body, judge, split, s_head, s_body, s_done) = (
@@ -1642,6 +1654,26 @@ impl<'ctx> Cx<'ctx, '_> {
             bb("leaf.go"),
             bb("leaf.home"),
         );
+        let (pre, unrev, u_head, u_body, route) = (
+            bb("pre"),
+            bb("unrev"),
+            bb("unrev.k"),
+            bb("unrev.body"),
+            bb("route"),
+        );
+        let (fused, f_done, f_split, f_retry) = (
+            bb("fused"),
+            bb("fused.done"),
+            bb("fused.split"),
+            bb("fused.retry"),
+        );
+        let (f_back, f_settled, f_left, f_after_left, f_right) = (
+            bb("fused.back"),
+            bb("fused.settled"),
+            bb("fused.left"),
+            bb("fused.left.done"),
+            bb("fused.right"),
+        );
         let b = &self.builder;
         let i64t = self.llcx.i64_type();
         let i8t = self.llcx.i8_type();
@@ -1649,13 +1681,16 @@ impl<'ctx> Cx<'ctx, '_> {
         let one = i64t.const_int(1, false);
         let zero = i64t.const_zero();
         let var = |name: &str| b.build_alloca(i64t, name).map_err(e);
-        let (v_k, v_lt, v_eq) = (var("k")?, var("lt")?, var("eq")?);
+        let (v_k, v_lt, v_eq, v_piv) = (var("k")?, var("lt")?, var("eq")?, var("piv.at")?);
         // The three runs' next free slots, as scalars so they live in
         // registers: an array indexed by the tag would carry each step's
         // cursor through memory into the next one's.
         let curs = [var("cur.lt")?, var("cur.eq")?, var("cur.gt")?];
         let piv = b
             .build_alloca(i8t.array_type(size as u32), "pivot")
+            .map_err(e)?;
+        let swp = b
+            .build_alloca(i8t.array_type(size as u32), "swap")
             .map_err(e)?;
         let ld = |v: PointerValue<'ctx>| -> R<IntValue<'ctx>> {
             Ok(b.build_load(i64t, v, "").map_err(e)?.into_int_value())
@@ -1669,7 +1704,12 @@ impl<'ctx> Cx<'ctx, '_> {
         let ult = |x: IntValue<'ctx>, y: IntValue<'ctx>| {
             b.build_int_compare(IntPredicate::ULT, x, y, "").map_err(e)
         };
+        let nonzero = |x: IntValue<'ctx>| {
+            b.build_int_compare(IntPredicate::NE, x, zero, "")
+                .map_err(e)
+        };
         let len = b.build_int_sub(hi, lo, "len").map_err(e)?;
+        let last = b.build_int_sub(hi, one, "").map_err(e)?;
         let short = b
             .build_int_compare(IntPredicate::ULE, len, i64t.const_int(span, false), "")
             .map_err(e)?;
@@ -1682,12 +1722,214 @@ impl<'ctx> Cx<'ctx, '_> {
             )
             .map_err(e)?;
         let stop = b.build_or(short, deep, "").map_err(e)?;
+        let is_rev = nonzero(rev)?;
+        let half = b.build_right_shift(len, one, false, "").map_err(e)?;
+        let quarter = b
+            .build_right_shift(len, i64t.const_int(2, false), false, "")
+            .map_err(e)?;
+        let flipped = b.build_xor(home, one, "").map_err(e)?;
+        let deeper = b.build_int_add(depth, one, "").map_err(e)?;
+        // An ungated range is split by one fused pass; the leaf and the
+        // counted split take the range front to back.
+        let counted = b.build_or(stop, nonzero(gated)?, "").map_err(e)?;
+        b.build_conditional_branch(counted, pre, fused).map_err(e)?;
+        b.position_at_end(pre);
+        b.build_conditional_branch(is_rev, unrev, route)
+            .map_err(e)?;
+        // Back to front: turned around in place.
+        b.position_at_end(unrev);
+        b.build_store(v_k, zero).map_err(e)?;
+        b.build_unconditional_branch(u_head).map_err(e)?;
+        b.position_at_end(u_head);
+        let k = ld(v_k)?;
+        b.build_conditional_branch(ult(k, half)?, u_body, route)
+            .map_err(e)?;
+        b.position_at_end(u_body);
+        let (x, y) = (
+            at(buf, b.build_int_add(lo, k, "").map_err(e)?)?,
+            at(buf, b.build_int_sub(last, k, "").map_err(e)?)?,
+        );
+        b.build_memcpy(swp, 1, x, 1, sz).map_err(e)?;
+        b.build_memcpy(x, 1, y, 1, sz).map_err(e)?;
+        b.build_memcpy(y, 1, swp, 1, sz).map_err(e)?;
+        b.build_store(v_k, b.build_int_add(k, one, "").map_err(e)?)
+            .map_err(e)?;
+        b.build_unconditional_branch(u_head).map_err(e)?;
+        b.position_at_end(route);
         b.build_conditional_branch(stop, leaf, count).map_err(e)?;
+        // The pivot, copied to `piv`: the median of the quartiles and the
+        // middle, in the interpreter's `median3` order of calls. `flip`
+        // reads the range back to front.
+        let median = |flip: IntValue<'ctx>| -> R<()> {
+            let mid = b.build_int_add(lo, half, "").map_err(e)?;
+            let qa = b.build_int_add(lo, quarter, "").map_err(e)?;
+            let qc = b.build_int_add(mid, quarter, "").map_err(e)?;
+            let place = |x: IntValue<'ctx>| -> R<IntValue<'ctx>> {
+                let back = b
+                    .build_int_sub(b.build_int_add(lo, last, "").map_err(e)?, x, "")
+                    .map_err(e)?;
+                Ok(b.build_select(flip, back, x, "")
+                    .map_err(e)?
+                    .into_int_value())
+            };
+            let order = |x: IntValue<'ctx>, y: IntValue<'ctx>| -> R<IntValue<'ctx>> {
+                Ok(b.build_call(
+                    cmp,
+                    &[
+                        ctx.into(),
+                        at(buf, place(x)?)?.into(),
+                        at(buf, place(y)?)?.into(),
+                    ],
+                    "",
+                )
+                .map_err(e)?
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_int_value())
+            };
+            let sgt = |o: IntValue<'ctx>| {
+                b.build_int_compare(IntPredicate::SGT, o, o.get_type().const_zero(), "")
+                    .map_err(e)
+            };
+            let swap = sgt(order(qa, mid)?)?;
+            let small = b
+                .build_select(swap, mid, qa, "")
+                .map_err(e)?
+                .into_int_value();
+            let big = b
+                .build_select(swap, qa, mid, "")
+                .map_err(e)?
+                .into_int_value();
+            b.build_store(v_piv, big).map_err(e)?;
+            let (m_c, m_done) = (bb("median.c"), bb("median.done"));
+            let past = sgt(order(big, qc)?)?;
+            b.build_conditional_branch(past, m_c, m_done).map_err(e)?;
+            b.position_at_end(m_c);
+            let below = sgt(order(small, qc)?)?;
+            let pick = b.build_select(below, small, qc, "").map_err(e)?;
+            b.build_store(v_piv, pick).map_err(e)?;
+            b.build_unconditional_branch(m_done).map_err(e)?;
+            b.position_at_end(m_done);
+            b.build_memcpy(piv, 1, at(buf, place(ld(v_piv)?)?)?, 1, sz)
+                .map_err(e)?;
+            Ok(())
+        };
+        let recurse = |from: IntValue<'ctx>, to: IntValue<'ctx>, rev: IntValue<'ctx>| -> R<()> {
+            b.build_call(
+                f,
+                &[
+                    tmp.into(),
+                    buf.into(),
+                    tags.into(),
+                    from.into(),
+                    to.into(),
+                    ctx.into(),
+                    deeper.into(),
+                    gated.into(),
+                    flipped.into(),
+                    rev.into(),
+                ],
+                "",
+            )
+            .map_err(e)?;
+            Ok(())
+        };
+        // One pass: each element against the pivot, the less ones to the
+        // front of `tmp` in order and the rest to its back, back to front
+        // (legacy's fused pass). A range read back to front is read from
+        // its end, so the comparator sees each range front to back. With
+        // nothing less than the pivot the split would not shrink, so the
+        // range is counted instead, from the start.
+        b.position_at_end(fused);
+        median(is_rev)?;
+        b.build_store(curs[0], lo).map_err(e)?;
+        b.build_store(curs[2], last).map_err(e)?;
+        let (f_fwd, f_bwd) = (bb("fused.fwd"), bb("fused.bwd"));
+        b.build_conditional_branch(is_rev, f_bwd, f_fwd)
+            .map_err(e)?;
+        // A loop per direction, so each walks its range with a plain step.
+        for (entry, from, step) in [(f_fwd, lo, one), (f_bwd, last, i64t.const_all_ones())] {
+            let (head, body) = (bb("fused.k"), bb("fused.body"));
+            b.position_at_end(entry);
+            b.build_store(v_k, zero).map_err(e)?;
+            b.build_unconditional_branch(head).map_err(e)?;
+            b.position_at_end(head);
+            b.build_conditional_branch(ult(ld(v_k)?, len)?, body, f_done)
+                .map_err(e)?;
+            b.position_at_end(body);
+            let j = ld(v_k)?;
+            let k = b
+                .build_int_add(from, b.build_int_mul(j, step, "").map_err(e)?, "")
+                .map_err(e)?;
+            let x = at(buf, k)?;
+            let o = b
+                .build_call(cmp, &[ctx.into(), x.into(), piv.into()], "")
+                .map_err(e)?
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_int_value();
+            let is_lt = b
+                .build_int_compare(IntPredicate::SLT, o, o.get_type().const_zero(), "")
+                .map_err(e)?;
+            let (l, r) = (ld(curs[0])?, ld(curs[2])?);
+            let to = b.build_select(is_lt, l, r, "").map_err(e)?.into_int_value();
+            b.build_memcpy(at(tmp, to)?, 1, x, 1, sz).map_err(e)?;
+            let lt1 = b.build_int_z_extend(is_lt, i64t, "").map_err(e)?;
+            b.build_store(curs[0], b.build_int_add(l, lt1, "").map_err(e)?)
+                .map_err(e)?;
+            b.build_store(
+                curs[2],
+                b.build_int_sub(b.build_int_add(r, lt1, "").map_err(e)?, one, "")
+                    .map_err(e)?,
+            )
+            .map_err(e)?;
+            b.build_store(v_k, b.build_int_add(j, one, "").map_err(e)?)
+                .map_err(e)?;
+            b.build_unconditional_branch(head).map_err(e)?;
+        }
+        b.position_at_end(f_done);
+        let c1 = ld(curs[0])?;
+        let nlt = b.build_int_sub(c1, lo, "").map_err(e)?;
+        let nge = b.build_int_sub(hi, c1, "").map_err(e)?;
+        b.build_conditional_branch(nonzero(nlt)?, f_split, f_retry)
+            .map_err(e)?;
+        // `buf` is as it was: the counted split, from the start.
+        b.position_at_end(f_retry);
+        b.build_conditional_branch(is_rev, unrev, count)
+            .map_err(e)?;
+        // A side of one element is finished: home with it, when `tmp` is
+        // not home.
+        b.position_at_end(f_split);
+        b.build_conditional_branch(nonzero(home)?, f_back, f_settled)
+            .map_err(e)?;
+        b.position_at_end(f_back);
+        for (n, from) in [(nlt, lo), (nge, c1)] {
+            let single = b
+                .build_int_compare(IntPredicate::EQ, n, one, "")
+                .map_err(e)?;
+            let bytes = b
+                .build_select(single, sz, zero, "")
+                .map_err(e)?
+                .into_int_value();
+            b.build_memcpy(at(buf, from)?, 1, at(tmp, from)?, 1, bytes)
+                .map_err(e)?;
+        }
+        b.build_unconditional_branch(f_settled).map_err(e)?;
+        b.position_at_end(f_settled);
+        b.build_conditional_branch(ult(one, nlt)?, f_left, f_after_left)
+            .map_err(e)?;
+        b.position_at_end(f_left);
+        recurse(lo, c1, zero)?;
+        b.build_unconditional_branch(f_after_left).map_err(e)?;
+        b.position_at_end(f_after_left);
+        b.build_conditional_branch(ult(one, nge)?, f_right, done)
+            .map_err(e)?;
+        b.position_at_end(f_right);
+        recurse(c1, hi, one)?;
+        b.build_unconditional_branch(done).map_err(e)?;
         // Each element against the pivot: tag 0 less, 1 tied, 2 greater.
         b.position_at_end(count);
-        let half = b.build_right_shift(len, one, false, "").map_err(e)?;
-        let mid = b.build_int_add(lo, half, "").map_err(e)?;
-        b.build_memcpy(piv, 1, at(buf, mid)?, 1, sz).map_err(e)?;
+        median(self.llcx.bool_type().const_zero())?;
         b.build_store(v_k, lo).map_err(e)?;
         b.build_store(v_lt, zero).map_err(e)?;
         b.build_store(v_eq, zero).map_err(e)?;
@@ -1837,37 +2079,16 @@ impl<'ctx> Cx<'ctx, '_> {
         }
         b.build_unconditional_branch(settled).map_err(e)?;
         b.position_at_end(settled);
-        let flipped = b.build_xor(home, one, "").map_err(e)?;
-        let deeper = b.build_int_add(depth, one, "").map_err(e)?;
-        let recurse = |from: IntValue<'ctx>, to: IntValue<'ctx>| -> R<()> {
-            b.build_call(
-                f,
-                &[
-                    tmp.into(),
-                    buf.into(),
-                    tags.into(),
-                    from.into(),
-                    to.into(),
-                    ctx.into(),
-                    deeper.into(),
-                    gated.into(),
-                    flipped.into(),
-                ],
-                "",
-            )
-            .map_err(e)?;
-            Ok(())
-        };
         b.build_conditional_branch(ult(one, lt)?, left, after_left)
             .map_err(e)?;
         b.position_at_end(left);
-        recurse(lo, c1)?;
+        recurse(lo, c1, zero)?;
         b.build_unconditional_branch(after_left).map_err(e)?;
         b.position_at_end(after_left);
         b.build_conditional_branch(ult(one, gt)?, right, done)
             .map_err(e)?;
         b.position_at_end(right);
-        recurse(c2, hi)?;
+        recurse(c2, hi, zero)?;
         b.build_unconditional_branch(done).map_err(e)?;
         // The merge sort of the range, in its home buffer with the other as
         // scratch: its narrow passes here, or the whole schedule for a long

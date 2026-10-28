@@ -3653,9 +3653,41 @@ impl<'a> Interp<'a> {
         Ok(order)
     }
 
-    /// Partitions `order[lo..hi]` around its middle element: each element
-    /// compared once with it, then the less, tied and greater ones in
-    /// their order, and the same on the less and then the greater part. A
+    /// The position of the median of `order[a]`, `order[m]` and
+    /// `order[c]`: `a` against `m`, the larger of them against `c`, and
+    /// only when that one is past `c`, the smaller against `c`. The
+    /// compiled partition makes the same calls.
+    fn median3(
+        &mut self,
+        order: &[usize],
+        a: usize,
+        m: usize,
+        c: usize,
+        cmp: &mut dyn FnMut(&mut Self, usize, usize) -> R<std::cmp::Ordering>,
+    ) -> R<usize> {
+        let (small, big) = if cmp(self, order[a], order[m])?.is_gt() {
+            (m, a)
+        } else {
+            (a, m)
+        };
+        if !cmp(self, order[big], order[c])?.is_gt() {
+            return Ok(big);
+        }
+        Ok(if cmp(self, order[small], order[c])?.is_gt() {
+            small
+        } else {
+            c
+        })
+    }
+
+    /// Partitions `order[lo..hi]` around the median of its quartiles and
+    /// middle element ([`Interp::median3`]). Not `gated`, each element is
+    /// compared once with it and the less ones go first, the rest after,
+    /// each in their order (the compiled sort's fused pass); when none is
+    /// less, the range is counted instead, from the start. Counted, each
+    /// element is compared once with it, then the less, tied and greater
+    /// ones go in their order. Either way the less part is partitioned
+    /// next, then the other. A
     /// short or deep range, or (when `gated`) one whose ties are fewer than
     /// one in [`PART_GATE`], is merge sorted.
     fn partition(
@@ -3668,8 +3700,36 @@ impl<'a> Interp<'a> {
         cmp: &mut dyn FnMut(&mut Self, usize, usize) -> R<std::cmp::Ordering>,
     ) -> R<()> {
         let len = hi - lo;
+        let (a, m, c) = (lo + len / 4, lo + len / 2, lo + len / 2 + len / 4);
+        if len > PART_SPAN && depth < PART_DEPTH && !gated {
+            // One pass: the less elements, then the rest. With none less
+            // the split would not shrink, so the range is counted below,
+            // from the start.
+            let pivot = order[self.median3(order, a, m, c, cmp)?];
+            let mut sides = Vec::with_capacity(len);
+            for &x in &order[lo..hi] {
+                sides.push(cmp(self, x, pivot)?.is_lt());
+            }
+            let lt = sides.iter().filter(|s| **s).count();
+            if lt > 0 {
+                let (less, rest): (Vec<_>, Vec<_>) = (lo..hi).zip(&sides).partition(|(_, s)| **s);
+                let split: Vec<usize> = less
+                    .into_iter()
+                    .chain(rest)
+                    .map(|(k, _)| order[k])
+                    .collect();
+                order[lo..hi].copy_from_slice(&split);
+                if lt > 1 {
+                    self.partition(order, lo, lo + lt, depth + 1, gated, cmp)?;
+                }
+                if len - lt > 1 {
+                    self.partition(order, lo + lt, hi, depth + 1, gated, cmp)?;
+                }
+                return Ok(());
+            }
+        }
         if len > PART_SPAN && depth < PART_DEPTH {
-            let pivot = order[lo + len / 2];
+            let pivot = order[self.median3(order, a, m, c, cmp)?];
             let mut sides = Vec::with_capacity(len);
             for &x in &order[lo..hi] {
                 sides.push(cmp(self, x, pivot)?);
