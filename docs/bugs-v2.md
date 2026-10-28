@@ -58,11 +58,11 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| false-positive | 51 |
-| diagnostics | 39 |
+| false-positive | 52 |
+| diagnostics | 40 |
 | missing-feature | 39 |
 | soundness | 24 |
-| perf | 16 |
+| perf | 17 |
 | miscompile | 14 |
 | run-vs-build | 9 |
 | other | 5 |
@@ -73,12 +73,12 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 87 |
+| typecheck | 89 |
 | mir | 45 |
-| mir-llvm | 25 |
+| mir-llvm | 26 |
 | codegen | 22 |
+| ownership | 21 |
 | interp | 21 |
-| ownership | 19 |
 | cli | 19 |
 | runtime | 11 |
 | parser | 8 |
@@ -99,6 +99,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-28-1 | 2026-10-28 | mir-llvm | low | After 45524985d1 a one-worker auto-par build runs the in-order build's instructions, yet 16 of 129 M4b programs still time under 0.9x of it in one 9-run pass (kata 7 0.764, 8 0.727, 125 0.696, 153 0.798, 895 0.79, word_freq_multi 0.787): the code is the same and lands elsewhere, so the floor at one worker is at the resolution of code placement | — |
 | B-2026-10-28-3 | 2026-10-28 | mir-llvm | low | A compiled program's run time moves 10-20% with where its hot function lands, and the runtime archive is one of the things that moves it: kata 125 runs about 10% slower whenever karac.main sits at 16 mod 64 (the full archive's larger headers shift user code by 0x3130 bytes), kata 28 KMP 0.41 vs 0.52 s between layouts; no alignment setting tried removes the swing without slowing another program 7-20% | — |
 | B-2026-10-28-6 | 2026-10-28 | mir-llvm | medium | An auto-par build (the default) of apps/cli/mini_inflect (6,994 lines) takes 84 s against 9.5 s with KARAC_AUTO_PAR=0: compile_mir (MIR to LLVM IR) 61.8 s against 0.38 s, for 365,133 LLVM instructions against 177,690; the binaries run alike (0.08 s, same output). | — |
+| B-2026-10-28-7 | 2026-10-28 | typecheck+ownership | high | `karac check` refuses correct programs at offset-specific places: the baked stdlib (STDLIB_PROGRAMS, e.g. hash.kara) is parsed at offset 0, so a trait default body desugar copies into an impl records expression types under spans that collide with the user's expressions; frozen benches 86 partition_list and 165 compare_version stopped building at a1e167c756 | — |
+| B-2026-10-28-8 | 2026-10-28 | mir-llvm | medium | Auto-par default-on links the task pool into every binary with a parallel site: two_sum brute_force is 511,928 B against 412,672 B with KARAC_AUTO_PAR=0 (+24%), putting the ADR-2 size geomean at 1.241x against the 1.25x bar; the next runtime growth breaks ADR-2 | — |
+| B-2026-10-28-9 | 2026-10-28 | typecheck+ownership | medium | `karac check` verdict on a trait default body depends on impl order: desugar copies the body into every impl with the same spans, the typechecker keeps the LAST impl's expression types, and the move-out-of-element check reads them, so a `v[0]` that moves a String passes check when a `Pick[i64]` impl comes after the `Pick[String]` one (MIR build still refuses it) | — |
 
 ### Relocated
 

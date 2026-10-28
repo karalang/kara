@@ -1367,10 +1367,16 @@ pub fn library_declares_resource(name: &str) -> bool {
 /// a bug in the stdlib source itself, not in user code, and there is no
 /// recoverable path. The error message names the offending file so the
 /// fix is obvious.
+///
+/// Each source is parsed at its own [`stdlib_span_base`], past any program
+/// text: a trait default body checked for an impl (`Hasher.write_u8` for the
+/// library's `TableKeyBytes`) records its expression types under its own
+/// spans, which at offset 0 landed on the user's expressions at the same
+/// offsets (B-2026-10-28-7).
 pub static STDLIB_PROGRAMS: LazyLock<Vec<(&'static str, Program)>> = LazyLock::new(|| {
     let mut out = Vec::with_capacity(STDLIB_SOURCES.len());
-    for &(name, src) in STDLIB_SOURCES {
-        let parsed = crate::parse(src);
+    for (i, &(name, src)) in STDLIB_SOURCES.iter().enumerate() {
+        let parsed = crate::parse_at_offset(src, stdlib_span_base(i));
         if !parsed.errors.is_empty() {
             let msgs = parsed
                 .errors
@@ -1489,6 +1495,13 @@ pub static GATED_STDLIB_PROGRAMS: LazyLock<Vec<(Vec<String>, Program)>> = LazyLo
 /// quarter of the address range up, with room for a 16 MiB module each.
 pub fn gated_span_base(index: usize) -> usize {
     usize::MAX / 4 + index * (1 << 24)
+}
+
+/// Where the spans of the [`STDLIB_SOURCES`] entry at `index` start: half of
+/// the address range up, above every gated module, with room for a 16 MiB
+/// source each. [`gated_module_at`] finds none of them.
+pub fn stdlib_span_base(index: usize) -> usize {
+    usize::MAX / 2 + index * (1 << 24)
 }
 
 /// The gated module whose text a span at `offset` lies in, with that
