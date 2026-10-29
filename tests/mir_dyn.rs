@@ -269,8 +269,8 @@ fn main() {
 /// A value of a type that does not implement the trait, or implements it
 /// with another associated type, a borrow into an owned `dyn`, a `dyn` type
 /// leaving an associated type unbound, and a method the trait does not
-/// have are errors. A `dyn` of a type parameter is refused until the
-/// builder builds it.
+/// have are errors, and so is a `dyn` of a type parameter whose bounds do
+/// not give the trait or fix its associated types.
 #[test]
 fn mir_dyn_refuses_what_it_cannot_coerce_or_call() {
     let cases = [
@@ -295,8 +295,12 @@ fn mir_dyn_refuses_what_it_cannot_coerce_or_call() {
             "no method 'perimeter' on `dyn Shape`",
         ),
         (
-            "fn wrap[T: Shape](t: own T) -> dyn Shape { t }\nfn main() { let a = wrap(Circle { r: 1.0 }); }",
-            "E_DYN_TRAIT_NOT_IMPLEMENTED_YET]: a `dyn` value of the type parameter `T` is not built yet",
+            "fn wrap[T](t: own T) -> dyn Shape { t }\nfn main() { let a = wrap(Circle { r: 1.0 }); }",
+            "`T` does not implement `Shape`; bound it `[T: Shape]`",
+        ),
+        (
+            "fn make[I: Iterator](it: own I) -> dyn Iterator[Item = i64] { it }\nfn main() { }",
+            "`I.Item` is not fixed; bound it `[I: Iterator[Item = i64]]`",
         ),
     ];
     for (main, want) in cases {
@@ -692,5 +696,96 @@ fn main() {
 }
 "#,
         "5 hi Sq(3) true\n5\nSq(3)\nSq(4) has area 16\n<1.5>\n<owned>\n<Sq(2)>\n<q>\n7\nc\nSq(9)\n",
+    );
+}
+
+/// A type parameter bounded by the trait becomes `dyn` (design.md § `dyn
+/// Trait`): each instance builds the table of the type it is given, a
+/// number's or a struct's, and an instance at a `dyn` type passes the value
+/// through without wrapping it again. A bound that fixes an associated type
+/// lets the parameter fill a `dyn` type that binds it.
+#[test]
+fn mir_dyn_takes_a_bounded_type_parameter() {
+    runs(
+        r#"
+trait Shape {
+    fn area(ref self) -> i64;
+}
+
+struct Sq {
+    s: i64,
+    name: String,
+}
+
+impl Shape for Sq {
+    fn area(ref self) -> i64 {
+        self.s * self.s
+    }
+}
+
+impl Shape for i64 {
+    fn area(ref self) -> i64 {
+        self * 2
+    }
+}
+
+struct Count {
+    i: i64,
+    end: i64,
+}
+
+impl Iterator for Count {
+    type Item = i64;
+    fn next(mut ref self) -> Option[i64] {
+        if self.i < self.end {
+            self.i += 1;
+            Some(self.i)
+        } else {
+            None
+        }
+    }
+}
+
+fn wrap[T: Shape](x: own T) -> dyn Shape {
+    x
+}
+
+fn push_all[T: Shape](v: mut ref Vec[dyn Shape], items: own Vec[T]) {
+    for it in items.into_iter() {
+        v.push(it);
+    }
+}
+
+fn show[T: Shape](x: ref T) -> i64 {
+    let d: ref dyn Shape = x;
+    d.area()
+}
+
+fn boxed[I: Iterator[Item = i64]](it: own I) -> dyn Iterator[Item = i64] {
+    it
+}
+
+fn main() {
+    let a = wrap(Sq { s: 3, name: "a".to_string() });
+    let b = wrap(5);
+    println(f"{a.area()} {b.area()}");
+    let mut v: Vec[dyn Shape] = Vec.new();
+    push_all(mut v, [Sq { s: 1, name: "p".to_string() }, Sq { s: 2, name: "q".to_string() }].to_vec());
+    push_all(mut v, [7, 8].to_vec());
+    let mut t = 0;
+    for s in v.iter() {
+        t += s.area();
+    }
+    println(t);
+    println(show(Sq { s: 4, name: "s".to_string() }));
+    println(show(6));
+    println(show(a));
+    let w = wrap(a);
+    println(w.area());
+    let d = boxed(Count { i: 0, end: 3 });
+    println(d.sum());
+}
+"#,
+        "9 10\n35\n16\n12\n9\n9\n6\n",
     );
 }

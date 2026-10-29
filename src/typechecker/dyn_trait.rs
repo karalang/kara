@@ -234,22 +234,64 @@ impl<'a> super::TypeChecker<'a> {
     /// Why `concrete` cannot become `dyn trait_name[args, assoc]`, or
     /// `None` when it can.
     fn dyn_unfit(
-        &self,
+        &mut self,
         concrete: &Type,
         trait_name: &str,
         args: &[Type],
         assoc: &[(String, Type)],
     ) -> Option<String> {
         let shown = type_display(concrete);
-        // The method table is built from the impls of a concrete type: a
-        // number's, a `String`'s or a struct's. A type parameter's is not
-        // built yet.
-        if self.type_param_name(concrete).is_some() {
-            return Some(format!(
-                "error[E_DYN_TRAIT_NOT_IMPLEMENTED_YET]: a `dyn` value of the type parameter \
-                 `{shown}` is not built yet; coerce the concrete value where it is known, or \
-                 keep the parameter `[{shown}: {trait_name}]`"
-            ));
+        // A type parameter fits through its bounds: each instance builds the
+        // table of the type it is given.
+        if let Some(name) = self.type_param_name(concrete).cloned() {
+            let bounded = self.enclosing_bounds.get(&name).is_some_and(|bs| {
+                bs.iter().any(|b| {
+                    b.path.last().is_some_and(|t| {
+                        self.env
+                            .supertrait_closure_traits(t)
+                            .iter()
+                            .any(|s| s == trait_name)
+                    })
+                })
+            });
+            if !bounded {
+                return Some(format!(
+                    "`{shown}` does not implement `{trait_name}`; bound it `[{shown}: {trait_name}]`"
+                ));
+            }
+            if !args.is_empty() {
+                return Some(format!(
+                    "error[E_DYN_TRAIT_NOT_IMPLEMENTED_YET]: a `dyn` value with trait \
+                     arguments of the type parameter `{shown}` is not built yet; coerce the \
+                     concrete value where it is known"
+                ));
+            }
+            for (assoc, promised) in assoc {
+                let projection = Type::AssocProjection {
+                    param: name.clone(),
+                    assoc: assoc.clone(),
+                    args: Vec::new(),
+                    receiver_args: Vec::new(),
+                    trait_name: None,
+                };
+                let actual = self.normalize_enclosing_assoc_eqs(&projection);
+                let actual = self.resolve_assoc_projections(&actual);
+                if matches!(actual, Type::AssocProjection { .. } | Type::Error) {
+                    return Some(format!(
+                        "`{shown}.{assoc}` is not fixed; bound it `[{shown}: \
+                         {trait_name}[{assoc} = {}]]`",
+                        type_display(promised)
+                    ));
+                }
+                if !types_compatible(promised, &actual) {
+                    return Some(format!(
+                        "`{shown}` implements `{trait_name}` with `{assoc} = {}`, not `{}`",
+                        type_display(&actual),
+                        type_display(promised),
+                    ));
+                }
+            }
+            return None;
         }
         if !self.type_satisfies_bound(concrete, trait_name) {
             return Some(format!("`{shown}` does not implement `{trait_name}`"));
