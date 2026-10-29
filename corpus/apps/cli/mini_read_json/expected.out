@@ -1,0 +1,1332 @@
+$ read issues.json
+shape (4, 10)
+  'id': int64
+  'number': int64
+  'title': str
+  'state': str
+  'user': object
+  'labels': object
+  'comments': int64
+  'created_at': datetime64[us, UTC]
+  'closed_at': datetime64[us, UTC]
+  'locked': bool
+  index: int64
+,id,number,title,state,user,labels,comments,created_at,closed_at,locked
+0,2381001,412,Crash on empty config file,closed,"{'login': 'ana-r', 'id': 501}","[{'name': 'bug'}, {'name': 'p1'}]",7,2026-09-14 08:12:44+00:00,2026-09-16 17:03:10+00:00,False
+1,2381377,418,Add --dry-run to sync,open,"{'login': 'bo-l', 'id': 502}",[{'name': 'enhancement'}],2,2026-09-21 13:40:02+00:00,,False
+2,2382950,431,"Docs: ""retry"" section is out of date",open,"{'login': 'chidi-o', 'id': 503}",[],0,2026-10-02 22:05:51+00:00,,True
+3,2384114,437,Ünïcödé file names fail on Windows,closed,"{'login': 'dee-p', 'id': 504}","[{'name': 'bug'}, {'name': 'windows'}]",12,2026-10-09 06:30:00+00:00,2026-10-11 09:45:30+00:00,False
+$ read issues.json orient=records head=2
+shape (4, 10)
+  'id': int64
+  'number': int64
+  'title': str
+  'state': str
+  'user': object
+  'labels': object
+  'comments': int64
+  'created_at': datetime64[us, UTC]
+  'closed_at': datetime64[us, UTC]
+  'locked': bool
+  index: int64
+,id,number,title,state,user,labels,comments,created_at,closed_at,locked
+0,2381001,412,Crash on empty config file,closed,"{'login': 'ana-r', 'id': 501}","[{'name': 'bug'}, {'name': 'p1'}]",7,2026-09-14 08:12:44+00:00,2026-09-16 17:03:10+00:00,False
+1,2381377,418,Add --dry-run to sync,open,"{'login': 'bo-l', 'id': 502}",[{'name': 'enhancement'}],2,2026-09-21 13:40:02+00:00,,False
+$ read issues.json convert_dates=False head=2
+shape (4, 10)
+  'id': int64
+  'number': int64
+  'title': str
+  'state': str
+  'user': object
+  'labels': object
+  'comments': int64
+  'created_at': str
+  'closed_at': str
+  'locked': bool
+  index: int64
+,id,number,title,state,user,labels,comments,created_at,closed_at,locked
+0,2381001,412,Crash on empty config file,closed,"{'login': 'ana-r', 'id': 501}","[{'name': 'bug'}, {'name': 'p1'}]",7,2026-09-14T08:12:44Z,2026-09-16T17:03:10Z,False
+1,2381377,418,Add --dry-run to sync,open,"{'login': 'bo-l', 'id': 502}",[{'name': 'enhancement'}],2,2026-09-21T13:40:02Z,,False
+$ read issues.json keep_default_dates=False head=2
+shape (4, 10)
+  'id': int64
+  'number': int64
+  'title': str
+  'state': str
+  'user': object
+  'labels': object
+  'comments': int64
+  'created_at': str
+  'closed_at': str
+  'locked': bool
+  index: int64
+,id,number,title,state,user,labels,comments,created_at,closed_at,locked
+0,2381001,412,Crash on empty config file,closed,"{'login': 'ana-r', 'id': 501}","[{'name': 'bug'}, {'name': 'p1'}]",7,2026-09-14T08:12:44Z,2026-09-16T17:03:10Z,False
+1,2381377,418,Add --dry-run to sync,open,"{'login': 'bo-l', 'id': 502}",[{'name': 'enhancement'}],2,2026-09-21T13:40:02Z,,False
+$ read issues.json convert_dates=closed_at keep_default_dates=False head=2
+shape (4, 10)
+  'id': int64
+  'number': int64
+  'title': str
+  'state': str
+  'user': object
+  'labels': object
+  'comments': int64
+  'created_at': str
+  'closed_at': datetime64[us, UTC]
+  'locked': bool
+  index: int64
+,id,number,title,state,user,labels,comments,created_at,closed_at,locked
+0,2381001,412,Crash on empty config file,closed,"{'login': 'ana-r', 'id': 501}","[{'name': 'bug'}, {'name': 'p1'}]",7,2026-09-14T08:12:44Z,2026-09-16 17:03:10+00:00,False
+1,2381377,418,Add --dry-run to sync,open,"{'login': 'bo-l', 'id': 502}",[{'name': 'enhancement'}],2,2026-09-21T13:40:02Z,,False
+$ read issues.json dtype=False head=2
+shape (4, 10)
+  'id': int64
+  'number': int64
+  'title': str
+  'state': str
+  'user': object
+  'labels': object
+  'comments': int64
+  'created_at': str
+  'closed_at': str
+  'locked': bool
+  index: int64
+,id,number,title,state,user,labels,comments,created_at,closed_at,locked
+0,2381001,412,Crash on empty config file,closed,"{'login': 'ana-r', 'id': 501}","[{'name': 'bug'}, {'name': 'p1'}]",7,2026-09-14T08:12:44Z,2026-09-16T17:03:10Z,False
+1,2381377,418,Add --dry-run to sync,open,"{'login': 'bo-l', 'id': 502}",[{'name': 'enhancement'}],2,2026-09-21T13:40:02Z,,False
+$ read issues.json dtype=number:float64,comments:float64 head=2
+shape (4, 10)
+  'id': int64
+  'number': float64
+  'title': str
+  'state': str
+  'user': object
+  'labels': object
+  'comments': float64
+  'created_at': datetime64[us, UTC]
+  'closed_at': datetime64[us, UTC]
+  'locked': bool
+  index: int64
+,id,number,title,state,user,labels,comments,created_at,closed_at,locked
+0,2381001,412.0,Crash on empty config file,closed,"{'login': 'ana-r', 'id': 501}","[{'name': 'bug'}, {'name': 'p1'}]",7.0,2026-09-14 08:12:44+00:00,2026-09-16 17:03:10+00:00,False
+1,2381377,418.0,Add --dry-run to sync,open,"{'login': 'bo-l', 'id': 502}",[{'name': 'enhancement'}],2.0,2026-09-21 13:40:02+00:00,,False
+$ read issues.json dtype=id:str head=2
+shape (4, 10)
+  'id': str
+  'number': int64
+  'title': str
+  'state': str
+  'user': object
+  'labels': object
+  'comments': int64
+  'created_at': datetime64[us, UTC]
+  'closed_at': datetime64[us, UTC]
+  'locked': bool
+  index: int64
+,id,number,title,state,user,labels,comments,created_at,closed_at,locked
+0,2381001,412,Crash on empty config file,closed,"{'login': 'ana-r', 'id': 501}","[{'name': 'bug'}, {'name': 'p1'}]",7,2026-09-14 08:12:44+00:00,2026-09-16 17:03:10+00:00,False
+1,2381377,418,Add --dry-run to sync,open,"{'login': 'bo-l', 'id': 502}",[{'name': 'enhancement'}],2,2026-09-21 13:40:02+00:00,,False
+$ read issues.json dtype_backend=numpy_nullable head=2
+shape (4, 10)
+  'id': Int64
+  'number': Int64
+  'title': string
+  'state': string
+  'user': object
+  'labels': object
+  'comments': Int64
+  'created_at': datetime64[us, UTC]
+  'closed_at': datetime64[us, UTC]
+  'locked': boolean
+  index: int64
+,id,number,title,state,user,labels,comments,created_at,closed_at,locked
+0,2381001,412,Crash on empty config file,closed,"{'login': 'ana-r', 'id': 501}","[{'name': 'bug'}, {'name': 'p1'}]",7,2026-09-14 08:12:44+00:00,2026-09-16 17:03:10+00:00,False
+1,2381377,418,Add --dry-run to sync,open,"{'login': 'bo-l', 'id': 502}",[{'name': 'enhancement'}],2,2026-09-21 13:40:02+00:00,,False
+$ read issues.json orient=split
+! AttributeError: 'list' object has no attribute 'items'
+$ read issues.json orient=index
+! AttributeError: 'list' object has no attribute 'values'
+$ read issues.json orient=columns head=2
+shape (4, 10)
+  'id': int64
+  'number': int64
+  'title': str
+  'state': str
+  'user': object
+  'labels': object
+  'comments': int64
+  'created_at': datetime64[us, UTC]
+  'closed_at': datetime64[us, UTC]
+  'locked': bool
+  index: int64
+,id,number,title,state,user,labels,comments,created_at,closed_at,locked
+0,2381001,412,Crash on empty config file,closed,"{'login': 'ana-r', 'id': 501}","[{'name': 'bug'}, {'name': 'p1'}]",7,2026-09-14 08:12:44+00:00,2026-09-16 17:03:10+00:00,False
+1,2381377,418,Add --dry-run to sync,open,"{'login': 'bo-l', 'id': 502}",[{'name': 'enhancement'}],2,2026-09-21 13:40:02+00:00,,False
+$ read issues.json orient=values head=2
+shape (4, 10)
+  'id': int64
+  'number': int64
+  'title': str
+  'state': str
+  'user': object
+  'labels': object
+  'comments': int64
+  'created_at': datetime64[us, UTC]
+  'closed_at': datetime64[us, UTC]
+  'locked': bool
+  index: int64
+,id,number,title,state,user,labels,comments,created_at,closed_at,locked
+0,2381001,412,Crash on empty config file,closed,"{'login': 'ana-r', 'id': 501}","[{'name': 'bug'}, {'name': 'p1'}]",7,2026-09-14 08:12:44+00:00,2026-09-16 17:03:10+00:00,False
+1,2381377,418,Add --dry-run to sync,open,"{'login': 'bo-l', 'id': 502}",[{'name': 'enhancement'}],2,2026-09-21 13:40:02+00:00,,False
+$ read issues.json orient=table
+! TypeError: list indices must be integers or slices, not str
+$ read issues.json orient=sideways head=2
+shape (4, 10)
+  'id': int64
+  'number': int64
+  'title': str
+  'state': str
+  'user': object
+  'labels': object
+  'comments': int64
+  'created_at': datetime64[us, UTC]
+  'closed_at': datetime64[us, UTC]
+  'locked': bool
+  index: int64
+,id,number,title,state,user,labels,comments,created_at,closed_at,locked
+0,2381001,412,Crash on empty config file,closed,"{'login': 'ana-r', 'id': 501}","[{'name': 'bug'}, {'name': 'p1'}]",7,2026-09-14 08:12:44+00:00,2026-09-16 17:03:10+00:00,False
+1,2381377,418,Add --dry-run to sync,open,"{'login': 'bo-l', 'id': 502}",[{'name': 'enhancement'}],2,2026-09-21 13:40:02+00:00,,False
+$ read issues.json typ=series head=2
+series (4,) object name=None
+  index: int64
+,0
+0,"{'id': 2381001, 'number': 412, 'title': 'Crash on empty config file', 'state': 'closed', 'user': {'login': 'ana-r', 'id': 501}, 'labels': [{'name': 'bug'}, {'name': 'p1'}], 'comments': 7, 'created_at': '2026-09-14T08:12:44Z', 'closed_at': '2026-09-16T17:03:10Z', 'locked': False}"
+1,"{'id': 2381377, 'number': 418, 'title': 'Add --dry-run to sync', 'state': 'open', 'user': {'login': 'bo-l', 'id': 502}, 'labels': [{'name': 'enhancement'}], 'comments': 2, 'created_at': '2026-09-21T13:40:02Z', 'closed_at': None, 'locked': False}"
+$ read issues.json typ=table
+! ValueError: typ='table' must be 'frame' or 'series'.
+$ read requests.ndjson lines=True
+shape (7, 6)
+  'timestamp': datetime64[ms]
+  'method': str
+  'path': str
+  'status': int64
+  'ms': float64
+  'user': str
+  index: int64
+,timestamp,method,path,status,ms,user
+0,2026-10-01 08:00:00.123,GET,/api/items,200,12.5,
+1,2026-10-01 08:00:00.480,POST,/api/items,201,48.25,u-17
+2,2026-10-01 08:00:01.002,GET,/api/items/9,404,3.0,
+3,2026-10-01 08:00:01.777,DELETE,/api/items/4,204,20.0,u-17
+4,2026-10-01 08:00:02.350,GET,/health,200,0.75,
+5,2026-10-01 08:00:03.901,PUT,/api/items/4,409,31.125,u-23
+6,2026-10-01 08:00:04.010,GET,/api/items,500,1003.5,
+$ read requests.ndjson lines=True convert_dates=False
+shape (7, 6)
+  'timestamp': int64
+  'method': str
+  'path': str
+  'status': int64
+  'ms': float64
+  'user': str
+  index: int64
+,timestamp,method,path,status,ms,user
+0,1790841600123,GET,/api/items,200,12.5,
+1,1790841600480,POST,/api/items,201,48.25,u-17
+2,1790841601002,GET,/api/items/9,404,3.0,
+3,1790841601777,DELETE,/api/items/4,204,20.0,u-17
+4,1790841602350,GET,/health,200,0.75,
+5,1790841603901,PUT,/api/items/4,409,31.125,u-23
+6,1790841604010,GET,/api/items,500,1003.5,
+$ read requests.ndjson lines=True date_unit=ms
+shape (7, 6)
+  'timestamp': datetime64[ms]
+  'method': str
+  'path': str
+  'status': int64
+  'ms': float64
+  'user': str
+  index: int64
+,timestamp,method,path,status,ms,user
+0,2026-10-01 08:00:00.123,GET,/api/items,200,12.5,
+1,2026-10-01 08:00:00.480,POST,/api/items,201,48.25,u-17
+2,2026-10-01 08:00:01.002,GET,/api/items/9,404,3.0,
+3,2026-10-01 08:00:01.777,DELETE,/api/items/4,204,20.0,u-17
+4,2026-10-01 08:00:02.350,GET,/health,200,0.75,
+5,2026-10-01 08:00:03.901,PUT,/api/items/4,409,31.125,u-23
+6,2026-10-01 08:00:04.010,GET,/api/items,500,1003.5,
+$ read requests.ndjson lines=True date_unit=s
+shape (7, 6)
+  'timestamp': datetime64[s]
+  'method': str
+  'path': str
+  'status': int64
+  'ms': float64
+  'user': str
+  index: int64
+,timestamp,method,path,status,ms,user
+0,58719-07-07 08:02:03,GET,/api/items,200,12.5,
+1,58719-07-07 08:08:00,POST,/api/items,201,48.25,u-17
+2,58719-07-07 08:16:42,GET,/api/items/9,404,3.0,
+3,58719-07-07 08:29:37,DELETE,/api/items/4,204,20.0,u-17
+4,58719-07-07 08:39:10,GET,/health,200,0.75,
+5,58719-07-07 09:05:01,PUT,/api/items/4,409,31.125,u-23
+6,58719-07-07 09:06:50,GET,/api/items,500,1003.5,
+$ read requests.ndjson lines=True date_unit=MS
+shape (7, 6)
+  'timestamp': datetime64[ms]
+  'method': str
+  'path': str
+  'status': int64
+  'ms': float64
+  'user': str
+  index: int64
+,timestamp,method,path,status,ms,user
+0,2026-10-01 08:00:00.123,GET,/api/items,200,12.5,
+1,2026-10-01 08:00:00.480,POST,/api/items,201,48.25,u-17
+2,2026-10-01 08:00:01.002,GET,/api/items/9,404,3.0,
+3,2026-10-01 08:00:01.777,DELETE,/api/items/4,204,20.0,u-17
+4,2026-10-01 08:00:02.350,GET,/health,200,0.75,
+5,2026-10-01 08:00:03.901,PUT,/api/items/4,409,31.125,u-23
+6,2026-10-01 08:00:04.010,GET,/api/items,500,1003.5,
+$ read requests.ndjson lines=True date_unit=d
+! ValueError: date_unit must be one of ('s', 'ms', 'us', 'ns')
+$ read requests.ndjson lines=True nrows=3
+shape (3, 6)
+  'timestamp': datetime64[ms]
+  'method': str
+  'path': str
+  'status': int64
+  'ms': float64
+  'user': str
+  index: int64
+,timestamp,method,path,status,ms,user
+0,2026-10-01 08:00:00.123,GET,/api/items,200,12.5,
+1,2026-10-01 08:00:00.480,POST,/api/items,201,48.25,u-17
+2,2026-10-01 08:00:01.002,GET,/api/items/9,404,3.0,
+$ read requests.ndjson lines=True nrows=5
+shape (4, 6)
+  'timestamp': datetime64[ms]
+  'method': str
+  'path': str
+  'status': int64
+  'ms': float64
+  'user': str
+  index: int64
+,timestamp,method,path,status,ms,user
+0,2026-10-01 08:00:00.123,GET,/api/items,200,12.5,
+1,2026-10-01 08:00:00.480,POST,/api/items,201,48.25,u-17
+2,2026-10-01 08:00:01.002,GET,/api/items/9,404,3.0,
+3,2026-10-01 08:00:01.777,DELETE,/api/items/4,204,20.0,u-17
+$ read requests.ndjson lines=True nrows=0
+shape (7, 6)
+  'timestamp': datetime64[ms]
+  'method': str
+  'path': str
+  'status': int64
+  'ms': float64
+  'user': str
+  index: int64
+,timestamp,method,path,status,ms,user
+0,2026-10-01 08:00:00.123,GET,/api/items,200,12.5,
+1,2026-10-01 08:00:00.480,POST,/api/items,201,48.25,u-17
+2,2026-10-01 08:00:01.002,GET,/api/items/9,404,3.0,
+3,2026-10-01 08:00:01.777,DELETE,/api/items/4,204,20.0,u-17
+4,2026-10-01 08:00:02.350,GET,/health,200,0.75,
+5,2026-10-01 08:00:03.901,PUT,/api/items/4,409,31.125,u-23
+6,2026-10-01 08:00:04.010,GET,/api/items,500,1003.5,
+$ read requests.ndjson lines=True chunksize=3
+chunk 0
+shape (3, 6)
+  'timestamp': datetime64[ms]
+  'method': str
+  'path': str
+  'status': int64
+  'ms': float64
+  'user': str
+  index: int64
+,timestamp,method,path,status,ms,user
+0,2026-10-01 08:00:00.123,GET,/api/items,200,12.5,
+1,2026-10-01 08:00:00.480,POST,/api/items,201,48.25,u-17
+2,2026-10-01 08:00:01.002,GET,/api/items/9,404,3.0,
+chunk 1
+shape (2, 6)
+  'timestamp': datetime64[ms]
+  'method': str
+  'path': str
+  'status': int64
+  'ms': float64
+  'user': str
+  index: int64
+,timestamp,method,path,status,ms,user
+3,2026-10-01 08:00:01.777,DELETE,/api/items/4,204,20.0,u-17
+4,2026-10-01 08:00:02.350,GET,/health,200,0.75,
+chunk 2
+shape (2, 6)
+  'timestamp': datetime64[ms]
+  'method': str
+  'path': str
+  'status': int64
+  'ms': float64
+  'user': str
+  index: int64
+,timestamp,method,path,status,ms,user
+5,2026-10-01 08:00:03.901,PUT,/api/items/4,409,31.125,u-23
+6,2026-10-01 08:00:04.010,GET,/api/items,500,1003.5,
+done
+$ read requests.ndjson lines=True chunksize=3 nrows=4
+chunk 0
+shape (3, 6)
+  'timestamp': datetime64[ms]
+  'method': str
+  'path': str
+  'status': int64
+  'ms': float64
+  'user': str
+  index: int64
+,timestamp,method,path,status,ms,user
+0,2026-10-01 08:00:00.123,GET,/api/items,200,12.5,
+1,2026-10-01 08:00:00.480,POST,/api/items,201,48.25,u-17
+2,2026-10-01 08:00:01.002,GET,/api/items/9,404,3.0,
+chunk 1
+shape (2, 6)
+  'timestamp': datetime64[ms]
+  'method': str
+  'path': str
+  'status': int64
+  'ms': float64
+  'user': str
+  index: int64
+,timestamp,method,path,status,ms,user
+3,2026-10-01 08:00:01.777,DELETE,/api/items/4,204,20.0,u-17
+4,2026-10-01 08:00:02.350,GET,/health,200,0.75,
+done
+$ read requests.ndjson lines=True chunksize=0
+! ValueError: 'chunksize' must be an integer >=1
+$ read requests.ndjson chunksize=3
+! ValueError: chunksize can only be passed if lines=True
+$ read requests.ndjson nrows=3
+! ValueError: nrows can only be passed if lines=True
+$ read requests.ndjson
+! ValueError: Trailing data
+$ read requests.ndjson lines=True dtype_backend=numpy_nullable
+shape (7, 6)
+  'timestamp': datetime64[ms]
+  'method': string
+  'path': string
+  'status': Int64
+  'ms': Float64
+  'user': string
+  index: int64
+,timestamp,method,path,status,ms,user
+0,2026-10-01 08:00:00.123,GET,/api/items,200,12.5,
+1,2026-10-01 08:00:00.480,POST,/api/items,201,48.25,u-17
+2,2026-10-01 08:00:01.002,GET,/api/items/9,404,3.0,
+3,2026-10-01 08:00:01.777,DELETE,/api/items/4,204,20.0,u-17
+4,2026-10-01 08:00:02.350,GET,/health,200,0.75,
+5,2026-10-01 08:00:03.901,PUT,/api/items/4,409,31.125,u-23
+6,2026-10-01 08:00:04.010,GET,/api/items,500,1003.5,
+$ read requests.ndjson lines=True dtype=status:str
+shape (7, 6)
+  'timestamp': datetime64[ms]
+  'method': str
+  'path': str
+  'status': str
+  'ms': float64
+  'user': str
+  index: int64
+,timestamp,method,path,status,ms,user
+0,2026-10-01 08:00:00.123,GET,/api/items,200,12.5,
+1,2026-10-01 08:00:00.480,POST,/api/items,201,48.25,u-17
+2,2026-10-01 08:00:01.002,GET,/api/items/9,404,3.0,
+3,2026-10-01 08:00:01.777,DELETE,/api/items/4,204,20.0,u-17
+4,2026-10-01 08:00:02.350,GET,/health,200,0.75,
+5,2026-10-01 08:00:03.901,PUT,/api/items/4,409,31.125,u-23
+6,2026-10-01 08:00:04.010,GET,/api/items,500,1003.5,
+$ read cutoff.ndjson lines=True
+! ValueError: Unmatched ''"' when when decoding 'string'
+$ read cutoff.ndjson lines=True nrows=3
+shape (3, 6)
+  'timestamp': datetime64[ms]
+  'method': str
+  'path': str
+  'status': int64
+  'ms': float64
+  'user': str
+  index: int64
+,timestamp,method,path,status,ms,user
+0,2026-10-01 08:00:00.123,GET,/api/items,200,12.5,
+1,2026-10-01 08:00:00.480,POST,/api/items,201,48.25,u-17
+2,2026-10-01 08:00:01.002,GET,/api/items/9,404,3.0,
+$ read cutoff.ndjson lines=True chunksize=2
+chunk 0
+shape (2, 6)
+  'timestamp': datetime64[ms]
+  'method': str
+  'path': str
+  'status': int64
+  'ms': float64
+  'user': str
+  index: int64
+,timestamp,method,path,status,ms,user
+0,2026-10-01 08:00:00.123,GET,/api/items,200,12.5,
+1,2026-10-01 08:00:00.480,POST,/api/items,201,48.25,u-17
+! ValueError: Unmatched ''"' when when decoding 'string'
+$ read crlf.ndjson lines=True
+shape (3, 6)
+  'timestamp': datetime64[ms]
+  'method': str
+  'path': str
+  'status': int64
+  'ms': float64
+  'user': str
+  index: int64
+,timestamp,method,path,status,ms,user
+0,2026-10-01 08:00:00.123,GET,/api/items,200,12.5,
+1,2026-10-01 08:00:00.480,POST,/api/items,201,48.25,u-17
+2,2026-10-01 08:00:01.002,GET,/api/items/9,404,3.0,
+$ read sensors.ndjson lines=True
+shape (9, 5)
+  'time': int64
+  'sensor': str
+  'temp_c': float64
+  'rh': object
+  'low_battery': bool
+  index: int64
+,time,sensor,temp_c,rh,low_battery
+0,1790812800,s-1,21.5,40,False
+1,1790813400,s-2,21.75,41,False
+2,1790814000,s-3,,39,True
+3,1790814600,s-1,22.0,45,False
+4,1790815200,s-2,22.25,44,False
+5,1790815800,s-3,21.0,ERR,False
+6,1790816400,s-1,20.5,52,False
+7,1790817000,s-2,,51,True
+8,1790817600,s-3,19.75,55,False
+$ read sensors.ndjson lines=True convert_dates=time
+shape (9, 5)
+  'time': datetime64[s]
+  'sensor': str
+  'temp_c': float64
+  'rh': object
+  'low_battery': bool
+  index: int64
+,time,sensor,temp_c,rh,low_battery
+0,2026-10-01 00:00:00,s-1,21.5,40,False
+1,2026-10-01 00:10:00,s-2,21.75,41,False
+2,2026-10-01 00:20:00,s-3,,39,True
+3,2026-10-01 00:30:00,s-1,22.0,45,False
+4,2026-10-01 00:40:00,s-2,22.25,44,False
+5,2026-10-01 00:50:00,s-3,21.0,ERR,False
+6,2026-10-01 01:00:00,s-1,20.5,52,False
+7,2026-10-01 01:10:00,s-2,,51,True
+8,2026-10-01 01:20:00,s-3,19.75,55,False
+$ read sensors.ndjson lines=True convert_dates=time date_unit=s
+shape (9, 5)
+  'time': datetime64[s]
+  'sensor': str
+  'temp_c': float64
+  'rh': object
+  'low_battery': bool
+  index: int64
+,time,sensor,temp_c,rh,low_battery
+0,2026-10-01 00:00:00,s-1,21.5,40,False
+1,2026-10-01 00:10:00,s-2,21.75,41,False
+2,2026-10-01 00:20:00,s-3,,39,True
+3,2026-10-01 00:30:00,s-1,22.0,45,False
+4,2026-10-01 00:40:00,s-2,22.25,44,False
+5,2026-10-01 00:50:00,s-3,21.0,ERR,False
+6,2026-10-01 01:00:00,s-1,20.5,52,False
+7,2026-10-01 01:10:00,s-2,,51,True
+8,2026-10-01 01:20:00,s-3,19.75,55,False
+$ read sensors.ndjson lines=True dtype=rh:float64
+shape (9, 5)
+  'time': int64
+  'sensor': str
+  'temp_c': float64
+  'rh': object
+  'low_battery': bool
+  index: int64
+,time,sensor,temp_c,rh,low_battery
+0,1790812800,s-1,21.5,40,False
+1,1790813400,s-2,21.75,41,False
+2,1790814000,s-3,,39,True
+3,1790814600,s-1,22.0,45,False
+4,1790815200,s-2,22.25,44,False
+5,1790815800,s-3,21.0,ERR,False
+6,1790816400,s-1,20.5,52,False
+7,1790817000,s-2,,51,True
+8,1790817600,s-3,19.75,55,False
+$ read sensors.ndjson lines=True dtype_backend=numpy_nullable
+shape (9, 5)
+  'time': Int64
+  'sensor': string
+  'temp_c': Float64
+  'rh': object
+  'low_battery': boolean
+  index: int64
+,time,sensor,temp_c,rh,low_battery
+0,1790812800,s-1,21.5,40,False
+1,1790813400,s-2,21.75,41,False
+2,1790814000,s-3,,39,True
+3,1790814600,s-1,22.0,45,False
+4,1790815200,s-2,22.25,44,False
+5,1790815800,s-3,21.0,ERR,False
+6,1790816400,s-1,20.5,52,False
+7,1790817000,s-2,,51,True
+8,1790817600,s-3,19.75,55,False
+$ read sensors.ndjson lines=True chunksize=4
+chunk 0
+shape (4, 5)
+  'time': int64
+  'sensor': str
+  'temp_c': float64
+  'rh': int64
+  'low_battery': bool
+  index: int64
+,time,sensor,temp_c,rh,low_battery
+0,1790812800,s-1,21.5,40,False
+1,1790813400,s-2,21.75,41,False
+2,1790814000,s-3,,39,True
+3,1790814600,s-1,22.0,45,False
+chunk 1
+shape (4, 5)
+  'time': int64
+  'sensor': str
+  'temp_c': float64
+  'rh': object
+  'low_battery': bool
+  index: int64
+,time,sensor,temp_c,rh,low_battery
+4,1790815200,s-2,22.25,44,False
+5,1790815800,s-3,21.0,ERR,False
+6,1790816400,s-1,20.5,52,False
+7,1790817000,s-2,,51,True
+chunk 2
+shape (1, 5)
+  'time': int64
+  'sensor': str
+  'temp_c': float64
+  'rh': int64
+  'low_battery': bool
+  index: int64
+,time,sensor,temp_c,rh,low_battery
+8,1790817600,s-3,19.75,55,False
+done
+$ read split.json orient=split
+shape (3, 4)
+  'sku': str
+  'name': str
+  'price': float64
+  'in_stock': bool
+  index: int64
+,sku,name,price,in_stock
+0,A-100,Kettle,24.99,True
+1,A-101,Toaster,39.5,False
+2,A-102,"Mug, 4 pack",18.0,True
+$ read split.json orient=split dtype_backend=numpy_nullable
+shape (3, 4)
+  'sku': string
+  'name': string
+  'price': Float64
+  'in_stock': boolean
+  index: int64
+,sku,name,price,in_stock
+0,A-100,Kettle,24.99,True
+1,A-101,Toaster,39.5,False
+2,A-102,"Mug, 4 pack",18.0,True
+$ read split.json
+! ValueError: All arrays must be of the same length
+$ read split_named.json orient=split
+shape (3, 2)
+  'qty': int64
+  'price': float64
+  index: datetime64[us]
+,qty,price
+2026-10-01,3,9.5
+2026-10-02,1,24.0
+2026-10-05,7,1.25
+$ read split_named.json orient=split convert_axes=False
+shape (3, 2)
+  'qty': int64
+  'price': float64
+  index: str
+,qty,price
+2026-10-01,3,9.5
+2026-10-02,1,24.0
+2026-10-05,7,1.25
+$ read split_bad.json orient=split
+! ValueError: JSON data had unexpected key(s): name
+$ read split_dup.json orient=split
+shape (2, 3)
+  'a': int64
+  'b': int64
+  'a.1': int64
+  index: int64
+,a,b,a.1
+0,1,2,3
+1,4,5,6
+$ read index.json orient=index
+shape (3, 4)
+  'city': str
+  'country': str
+  'pop_k': int64
+  'founded': float64
+  index: str
+,city,country,pop_k,founded
+ber,Berlin,DE,3755,1237.0
+osl,Oslo,NO,709,1048.0
+lis,Lisbon,PT,545,
+$ read index.json
+shape (4, 3)
+  'ber': object
+  'osl': object
+  'lis': object
+  index: str
+,ber,osl,lis
+city,Berlin,Oslo,Lisbon
+country,DE,NO,PT
+pop_k,3755,709,545
+founded,1237,1048,
+$ read index.json orient=index dtype=pop_k:float64
+shape (3, 4)
+  'city': str
+  'country': str
+  'pop_k': float64
+  'founded': float64
+  index: str
+,city,country,pop_k,founded
+ber,Berlin,DE,3755.0,1237.0
+osl,Oslo,NO,709.0,1048.0
+lis,Lisbon,PT,545.0,
+$ read columns.json
+shape (4, 3)
+  'region': str
+  'units': float64
+  'revenue': float64
+  index: int64
+,region,units,revenue
+0,north,120.0,1500.0
+1,south,95.0,1187.5
+2,east,,0.0
+3,west,140.0,1750.25
+$ read columns.json convert_axes=False
+shape (4, 3)
+  'region': str
+  'units': float64
+  'revenue': float64
+  index: str
+,region,units,revenue
+0,north,120.0,1500.0
+1,south,95.0,1187.5
+2,east,,0.0
+3,west,140.0,1750.25
+$ read columns.json orient=index
+shape (3, 4)
+  0: object
+  1: object
+  2: object
+  3: object
+  index: str
+,0,1,2,3
+region,north,south,east,west
+units,120,95,,140
+revenue,1500.0,1187.5,0.0,1750.25
+$ read columns.json dtype=units:Int64
+shape (4, 3)
+  'region': str
+  'units': Int64
+  'revenue': float64
+  index: int64
+,region,units,revenue
+0,north,120,1500.0
+1,south,95,1187.5
+2,east,,0.0
+3,west,140,1750.25
+$ read columns_dates.json
+shape (3, 2)
+  'close': float64
+  'volume': int64
+  index: datetime64[ms]
+,close,volume
+2026-10-01,101.5,1200
+2026-10-02,102.25,980
+2026-10-05,99.75,1510
+$ read columns_dates.json convert_axes=False
+shape (3, 2)
+  'close': float64
+  'volume': int64
+  index: str
+,close,volume
+1790812800000,101.5,1200
+1790899200000,102.25,980
+1791158400000,99.75,1510
+$ read values.json orient=values
+shape (3, 3)
+  0: int64
+  1: str
+  2: float64
+  index: int64
+,0,1,2
+0,1,north,120.5
+1,2,south,
+2,3,east,98.25
+$ read values.json
+shape (3, 3)
+  0: int64
+  1: str
+  2: float64
+  index: int64
+,0,1,2
+0,1,north,120.5
+1,2,south,
+2,3,east,98.25
+$ read ragged.json orient=values
+shape (3, 3)
+  0: int64
+  1: str
+  2: float64
+  index: int64
+,0,1,2
+0,1,north,
+1,2,south,3.5
+2,3,,
+$ read records_mixed.json
+shape (3, 4)
+  'a': float64
+  'b': str
+  'c': float64
+  'd': float64
+  index: int64
+,a,b,c,d
+0,1.0,x,,
+1,,y,1.0,
+2,3.0,,0.0,
+$ read records_mixed.json dtype_backend=numpy_nullable
+shape (3, 4)
+  'a': Int64
+  'b': string
+  'c': boolean
+  'd': Int64
+  index: int64
+,a,b,c,d
+0,1,x,,
+1,,y,True,
+2,3,,False,
+$ read table.json orient=table
+shape (3, 6)
+  'placed': datetime64[ns, UTC]
+  'status': category
+  'total': float64
+  'gift': bool
+  'note': str
+  'items': Int64
+  index: int64
+order_id,placed,status,total,gift,note,items
+9001,2026-10-03 09:15:00+00:00,paid,59.9,False,leave at door,2
+9002,2026-10-03 11:02:30.500000+00:00,new,12.0,True,,
+9003,2026-10-04 18:45:00+00:00,shipped,240.75,False,fragile,5
+$ read table.json orient=table dtype=total:float64
+! ValueError: cannot pass both dtype and orient='table'
+$ read table.json orient=table convert_axes=True
+! ValueError: cannot pass both convert_axes and orient='table'
+$ read table.json
+! ValueError: Mixing dicts with non-Series may lead to ambiguous ordering.
+$ read table_noindex.json orient=table
+shape (2, 2)
+  'day': datetime64[ns]
+  'kwh': float64
+  index: int64
+,day,kwh
+0,2026-10-01,7.5
+1,2026-10-02,6.25
+$ read daily.json typ=series
+series (4,) int64 name=None
+  index: datetime64[us]
+,0
+2026-10-01,412
+2026-10-02,398
+2026-10-03,455
+2026-10-04,0
+$ read daily.json typ=series convert_axes=False
+series (4,) int64 name=None
+  index: str
+,0
+2026-10-01,412
+2026-10-02,398
+2026-10-03,455
+2026-10-04,0
+$ read daily.json typ=series orient=index
+series (4,) int64 name=None
+  index: datetime64[us]
+,0
+2026-10-01,412
+2026-10-02,398
+2026-10-03,455
+2026-10-04,0
+$ read daily.json
+! ValueError: If using all scalar values, you must pass an index
+$ read series_split.json typ=series orient=split
+series (3,) int64 name='visits'
+  index: str
+,visits
+mon,120
+tue,98
+wed,143
+$ read series_split.json typ=series
+series (3,) object name=None
+  index: str
+,0
+name,visits
+index,"['mon', 'tue', 'wed']"
+data,"[120, 98, 143]"
+$ read series_list.json typ=series
+series (4,) float64 name=None
+  index: int64
+,0
+0,3.5
+1,
+2,4.25
+3,1.0
+$ read series_list.json typ=series orient=values
+series (4,) float64 name=None
+  index: int64
+,0
+0,3.5
+1,
+2,4.25
+3,1.0
+$ read series_list.json typ=series dtype_backend=numpy_nullable
+series (4,) Float64 name=None
+  index: int64
+,0
+0,3.5
+1,
+2,4.25
+3,1.0
+$ read split.json typ=series orient=split
+! ValueError: JSON data had unexpected key(s): columns
+$ read prices.json
+shape (4, 3)
+  'sku': str
+  'price': float64
+  'rate': float64
+  index: int64
+,sku,price,rate
+0,P-1,0.1,1.0
+1,P-2,3.14159265358979,0.30000000000000004
+2,P-3,1577.2,0.0025
+3,P-4,12345.678901234567,6.0221407600000005e+23
+$ read prices.json precise_float=True
+shape (4, 3)
+  'sku': str
+  'price': float64
+  'rate': float64
+  index: int64
+,sku,price,rate
+0,P-1,0.1,1.0000000000000002
+1,P-2,3.14159265358979,0.30000000000000004
+2,P-3,1577.2,0.0025
+3,P-4,12345.678901234567,6.02214076e+23
+$ read customers.json
+shape (3, 5)
+  'cust_id': int64
+  'zip': int64
+  'phone': int64
+  'balance': float64
+  'name': str
+  index: int64
+,cust_id,zip,phone,balance,name
+0,123,2139,5550142,120.5,Ana Ruiz
+1,124,10001,5550199,-3.0,Bo Lindgren
+2,125,94105,5550123,0.0,Chidi Okafor
+$ read customers.json dtype=False
+shape (3, 5)
+  'cust_id': str
+  'zip': str
+  'phone': str
+  'balance': str
+  'name': str
+  index: int64
+,cust_id,zip,phone,balance,name
+0,000123,02139,5550142,120.50,Ana Ruiz
+1,000124,10001,5550199,-3,Bo Lindgren
+2,000125,94105,5550123,0,Chidi Okafor
+$ read customers.json dtype=cust_id:str,zip:str
+shape (3, 5)
+  'cust_id': str
+  'zip': str
+  'phone': int64
+  'balance': float64
+  'name': str
+  index: int64
+,cust_id,zip,phone,balance,name
+0,000123,02139,5550142,120.5,Ana Ruiz
+1,000124,10001,5550199,-3.0,Bo Lindgren
+2,000125,94105,5550123,0.0,Chidi Okafor
+$ read customers.json dtype=str
+shape (3, 5)
+  'cust_id': str
+  'zip': str
+  'phone': str
+  'balance': str
+  'name': str
+  index: int64
+,cust_id,zip,phone,balance,name
+0,000123,02139,5550142,120.50,Ana Ruiz
+1,000124,10001,5550199,-3,Bo Lindgren
+2,000125,94105,5550123,0,Chidi Okafor
+$ read customers.json dtype_backend=numpy_nullable
+shape (3, 5)
+  'cust_id': string
+  'zip': string
+  'phone': string
+  'balance': string
+  'name': string
+  index: int64
+,cust_id,zip,phone,balance,name
+0,000123,02139,5550142,120.50,Ana Ruiz
+1,000124,10001,5550199,-3,Bo Lindgren
+2,000125,94105,5550123,0,Chidi Okafor
+$ read big_ids.json
+shape (2, 2)
+  'id': uint64
+  'n': int64
+  index: int64
+,id,n
+0,9223372036854775807,1
+1,9223372036854775808,2
+$ read too_big.json
+! ValueError: Value is too big!
+$ read too_small.json
+! ValueError: Value is too small
+$ read nan.json
+shape (3, 2)
+  'x': float64
+  'y': float64
+  index: int64
+,x,y
+0,,1.5
+1,inf,-inf
+2,2.0,
+$ read bools.json
+shape (3, 2)
+  'flag': bool
+  'maybe': float64
+  index: int64
+,flag,maybe
+0,True,1.0
+1,False,
+2,True,0.0
+$ read bools.json dtype_backend=numpy_nullable
+shape (3, 2)
+  'flag': boolean
+  'maybe': boolean
+  index: int64
+,flag,maybe
+0,True,True
+1,False,
+2,True,False
+$ read dates.json
+shape (2, 7)
+  'date': datetime64[us]
+  'updated_at': datetime64[us, UTC+02:00]
+  'end_time': datetime64[s]
+  'timestamp_ms': datetime64[ms]
+  'modified': str
+  'due': str
+  'datetime': datetime64[us]
+  index: int64
+,date,updated_at,end_time,timestamp_ms,modified,due,datetime
+0,2026-10-01,2026-10-01 09:00:00+02:00,2026-10-01 08:00:00,2026-10-01 08:00:00.000,yesterday,2026-10-15,2026-10-01 09:30:00
+1,2026-10-02,2026-10-02 09:00:00+02:00,2026-10-02 08:00:00,2026-10-02 08:00:00.500,last week,2026-10-16,2026-10-02 18:05:00
+$ read dates.json convert_dates=False
+shape (2, 7)
+  'date': str
+  'updated_at': str
+  'end_time': int64
+  'timestamp_ms': int64
+  'modified': str
+  'due': str
+  'datetime': str
+  index: int64
+,date,updated_at,end_time,timestamp_ms,modified,due,datetime
+0,2026-10-01,2026-10-01T09:00:00+02:00,1790841600,1790841600000,yesterday,2026-10-15,2026-10-01 09:30
+1,2026-10-02,2026-10-02T09:00:00+02:00,1790928000,1790928000500,last week,2026-10-16,2026-10-02 18:05
+$ read dates.json convert_dates=due
+shape (2, 7)
+  'date': datetime64[us]
+  'updated_at': datetime64[us, UTC+02:00]
+  'end_time': datetime64[s]
+  'timestamp_ms': datetime64[ms]
+  'modified': str
+  'due': datetime64[us]
+  'datetime': datetime64[us]
+  index: int64
+,date,updated_at,end_time,timestamp_ms,modified,due,datetime
+0,2026-10-01,2026-10-01 09:00:00+02:00,2026-10-01 08:00:00,2026-10-01 08:00:00.000,yesterday,2026-10-15,2026-10-01 09:30:00
+1,2026-10-02,2026-10-02 09:00:00+02:00,2026-10-02 08:00:00,2026-10-02 08:00:00.500,last week,2026-10-16,2026-10-02 18:05:00
+$ read dates.json convert_dates=due keep_default_dates=False
+shape (2, 7)
+  'date': str
+  'updated_at': str
+  'end_time': int64
+  'timestamp_ms': int64
+  'modified': str
+  'due': datetime64[us]
+  'datetime': str
+  index: int64
+,date,updated_at,end_time,timestamp_ms,modified,due,datetime
+0,2026-10-01,2026-10-01T09:00:00+02:00,1790841600,1790841600000,yesterday,2026-10-15,2026-10-01 09:30
+1,2026-10-02,2026-10-02T09:00:00+02:00,1790928000,1790928000500,last week,2026-10-16,2026-10-02 18:05
+$ read dates.json date_unit=ms
+shape (2, 7)
+  'date': datetime64[us]
+  'updated_at': datetime64[us, UTC+02:00]
+  'end_time': int64
+  'timestamp_ms': datetime64[ms]
+  'modified': str
+  'due': str
+  'datetime': datetime64[us]
+  index: int64
+,date,updated_at,end_time,timestamp_ms,modified,due,datetime
+0,2026-10-01,2026-10-01 09:00:00+02:00,1790841600,2026-10-01 08:00:00.000,yesterday,2026-10-15,2026-10-01 09:30:00
+1,2026-10-02,2026-10-02 09:00:00+02:00,1790928000,2026-10-02 08:00:00.500,last week,2026-10-16,2026-10-02 18:05:00
+$ read dates.json dtype=date:str
+shape (2, 7)
+  'date': datetime64[us]
+  'updated_at': datetime64[us, UTC+02:00]
+  'end_time': datetime64[s]
+  'timestamp_ms': datetime64[ms]
+  'modified': str
+  'due': str
+  'datetime': datetime64[us]
+  index: int64
+,date,updated_at,end_time,timestamp_ms,modified,due,datetime
+0,2026-10-01,2026-10-01 09:00:00+02:00,2026-10-01 08:00:00,2026-10-01 08:00:00.000,yesterday,2026-10-15,2026-10-01 09:30:00
+1,2026-10-02,2026-10-02 09:00:00+02:00,2026-10-02 08:00:00,2026-10-02 08:00:00.500,last week,2026-10-16,2026-10-02 18:05:00
+$ read tz_mixed.json
+shape (2, 1)
+  'seen_at': str
+  index: int64
+,seen_at
+0,2026-10-01T09:00:00+02:00
+1,2026-10-01T09:00:00-04:00
+$ read us_dates.json
+shape (3, 2)
+  'order_date': str
+  'n': int64
+  index: int64
+,order_date,n
+0,10/03/2026,1
+1,10/14/2026,2
+2,11/02/2026,3
+$ read us_dates.json convert_dates=order_date
+shape (3, 2)
+  'order_date': datetime64[us]
+  'n': int64
+  index: int64
+,order_date,n
+0,2026-10-03,1
+1,2026-10-14,2
+2,2026-11-02,3
+$ read eu_dates.json
+shape (3, 2)
+  'date': datetime64[us]
+  'n': int64
+  index: int64
+,date,n
+0,2026-10-03,1
+1,2026-03-13,2
+2,2026-12-25,3
+$ read named_dates.json
+shape (3, 1)
+  'date': datetime64[us]
+  index: int64
+,date
+0,2026-10-03
+1,2026-10-14
+2,2026-11-02
+$ read long_dates.json
+shape (2, 1)
+  'date': datetime64[us]
+  index: int64
+,date
+0,2026-10-03
+1,2026-10-14
+$ read iso_mixed.json
+shape (3, 1)
+  'date': datetime64[us]
+  index: int64
+,date
+0,2026-10-01 00:00:00.000
+1,2026-10-02 09:30:00.000
+2,2026-10-03 18:45:10.250
+$ read utc_two_ways.json
+shape (2, 1)
+  'sent_at': str
+  index: int64
+,sent_at
+0,2026-10-01T09:00:00Z
+1,2026-10-01T11:00:00+02:00
+$ read utc_offsets.json
+shape (2, 1)
+  'sent_at': datetime64[us, UTC]
+  index: int64
+,sent_at
+0,2026-10-01 09:00:00+00:00
+1,2026-10-01 11:00:00+00:00
+$ read naive_aware.json
+shape (2, 1)
+  'sent_at': str
+  index: int64
+,sent_at
+0,2026-10-01T09:00:00
+1,2026-10-01T09:00:00Z
+$ read nanos.json
+shape (2, 1)
+  'captured_at': datetime64[ns, UTC]
+  index: int64
+,captured_at
+0,2026-10-01 09:00:00.123456789+00:00
+1,2026-10-01 09:00:01+00:00
+$ read millis.json
+shape (2, 1)
+  'captured_at': datetime64[us]
+  index: int64
+,captured_at
+0,2026-10-01 09:00:00.500
+1,2026-10-01 09:00:01.000
+$ read null_dates.json
+shape (3, 2)
+  'date': datetime64[us]
+  'v': int64
+  index: int64
+,date,v
+0,2026-10-01,1
+1,,2
+2,2026-10-03,3
+$ read compact_dates.json
+shape (2, 1)
+  'date': int64
+  index: int64
+,date
+0,20261001
+1,20261002
+$ read year_only.json
+shape (2, 1)
+  'date': int64
+  index: int64
+,date
+0,2026
+1,2027
+$ read words.json
+shape (2, 1)
+  'date': str
+  index: int64
+,date
+0,soon
+1,2026-10-01
+$ read small_epoch.json
+shape (2, 2)
+  'created_at': int64
+  'n': int64
+  index: int64
+,created_at,n
+0,1000,1
+1,2000,2
+$ read small_epoch.json date_unit=s
+shape (2, 2)
+  'created_at': int64
+  'n': int64
+  index: int64
+,created_at,n
+0,1000,1
+1,2000,2
+$ read bom.json
+! ValueError: Expected object or value
+$ read bom.json encoding=utf-8-sig
+shape (1, 2)
+  'id': int64
+  'name': str
+  index: int64
+,id,name
+0,1,Ana
+$ read latin1.json
+! UnicodeDecodeError: 'utf-8' codec can't decode byte 0xfc in position 11: invalid start byte
+$ read latin1.json encoding=latin-1
+shape (1, 2)
+  'city': str
+  'temp': str
+  index: int64
+,city,temp
+0,München,12°C
+$ read latin1.json encoding_errors=replace
+shape (1, 2)
+  'city': str
+  'temp': str
+  index: int64
+,city,temp
+0,M�nchen,12�C
+$ read escapes.json
+shape (1, 4)
+  's': str
+  't': str
+  'u': str
+  'v': str
+  index: int64
+,s,t,u,v
+0,tab	here,été,😀,a/b
+$ read bad_escape.json
+! ValueError: Unrecognized escape sequence when decoding 'string'
+$ read python_dict.json
+! ValueError: Expected object or value
+$ read trailing.json
+! ValueError: Trailing data
+$ read trailing_comma.json
+! ValueError: Unexpected character found when decoding array value (1)
+$ read scalars.json
+! ValueError: If using all scalar values, you must pass an index
+$ read scalars.json typ=series
+series (2,) int64 name=None
+  index: str
+,0
+a,1
+b,2
+$ read scalars.json orient=index
+shape (2, 1)
+  0: int64
+  index: str
+,0
+a,1
+b,2
+$ read empty.json
+! ValueError: Expected object or value
+$ read empty.json lines=True
+shape (0, 0)
+  index: int64
+""
+$ read empty_list.json
+shape (0, 0)
+  index: int64
+""
+$ read empty_obj.json
+shape (0, 0)
+  index: int64
+""
+$ read empty_list.json typ=series
+series (0,) float64 name=None
+  index: int64
+,0
+$ read missing.json
+! FileNotFoundError: File data/missing.json does not exist
+$ read issues.json orient=table dtype=id:str
+! ValueError: cannot pass both dtype and orient='table'
+$ read issues.json dtype_backend=arrow
+! ValueError: dtype_backend arrow is invalid, only 'numpy_nullable' and 'pyarrow' are allowed.
+$ read issues.json engine=simdjson
+! ValueError: The engine type simdjson is currently not supported.
+$ read issues.json engine=pyarrow
+! ValueError: currently pyarrow engine only supports the line-delimited JSON format
