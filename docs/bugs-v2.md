@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| false-positive | 63 |
+| false-positive | 64 |
 | diagnostics | 62 |
 | missing-feature | 49 |
 | perf | 39 |
@@ -77,7 +77,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | typecheck | 116 |
 | mir | 58 |
 | mir-llvm | 49 |
-| ownership | 27 |
+| ownership | 28 |
 | interp | 25 |
 | cli | 25 |
 | codegen | 22 |
@@ -132,7 +132,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-29-35 | 2026-10-29 | typecheck | low | A comparison does not give a constructor or tuple operand the other operand's type, so a `ref` to a Copy value inside it is refused: with `n: ref i64` from `for n in v.iter()`, `value == Some(n)`, `Some(n) == value`, `value != Some(n)` and `pair == (n, 5)` fail "cannot compare 'Option[i64]' and 'Option[ref i64]'" (or the tuple form) with no fix-it, though `let w: Option[i64] = Some(n)`, `same(value, Some(n))` and `vec![Some(n)]` into a `Vec[Option[i64]]` all read `n` as an `i64` | — |
 | B-2026-10-29-40 | 2026-10-29 | mir | low | `Vec[String].from_iter(it)` (an associated call on a type written with its generic arguments) passes `karac check` and fails `karac run` / `karac build` with "an expression with no recorded type is not lowered yet"; `let v: Vec[String] = Vec.from_iter(it)` runs | — |
 | B-2026-10-29-41 | 2026-10-29 | mir-llvm+runtime | medium | A MIR binary that uses a Map or Set still links std's panic hook and backtrace symbolizer: kata 1's hash_map is 358,680 B on Linux against 71,768 B for its brute_force | — |
-| B-2026-10-29-42 | 2026-10-29 | mir-llvm+runtime | low | A MIR program that reaches an auto-par site peaks about 1 MiB higher in RSS than its legacy build: kata 1's auto-par brute_force and hash_map at 2.4 MiB against 1.4 / 1.3 MiB | — |
+| B-2026-10-29-43 | 2026-10-29 | ownership | medium | `karac check` still refuses moving a binding after an iterator adapter's closure that only reads it (`h.iter().filter(|u| mask[*u % 2]).count(); let m2 = mask;`, "moved inside a loop"); B-2026-10-29-37's fix covers only a `let`-bound closure, and both MIR backends run the program correctly | — |
 
 ### Relocated
 
@@ -395,6 +395,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-29-37 | ownership | medium | `karac check` refuses moving a binding after a non-escaping closure that only reads it ("moved inside a loop" with no loop in the program); both MIR… | 39fd8d115b |
 | B-2026-10-29-38 | interp | low | The MIR interpreter's `Str.bytes()` copies the whole string into a fresh snapshot on every call, so code that calls `s.bytes()` once per step pays th… | d86cab30a8 |
 | B-2026-10-29-39 | parser+cli | low | `s.parse::<i64>()` gets E0001 whose machine fix deletes `::<i64>`, so `karac fix` leaves `s.parse()`, which E0236 then refuses for want of a type (wi… | d9c29910ec |
+| B-2026-10-29-42 | mir-llvm+runtime | low | A MIR program that reaches an auto-par site peaks about 1 MiB higher in RSS than its legacy build: kata 1's auto-par brute_force and hash_map at 2.4… | 0e42c916c4 |
 
 </details>
 
