@@ -65,7 +65,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | soundness | 25 |
 | miscompile | 17 |
 | run-vs-build | 11 |
-| codegen-gap | 7 |
+| codegen-gap | 8 |
 | other | 6 |
 | crash | 2 |
 | leak | 1 |
@@ -75,7 +75,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 116 |
-| mir | 57 |
+| mir | 58 |
 | mir-llvm | 47 |
 | ownership | 27 |
 | interp | 25 |
@@ -147,6 +147,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-29-37 | 2026-10-29 | ownership | medium | `karac check` refuses moving a binding after a non-escaping closure that only reads it ("moved inside a loop" with no loop in the program); both MIR backends accept it and print the right answer | — |
 | B-2026-10-29-38 | 2026-10-29 | interp | low | The MIR interpreter's `Str.bytes()` copies the whole string into a fresh snapshot on every call, so code that calls `s.bytes()` once per step pays the string's length each time: 2,000 one-byte reads through `bytes()` on a 100,000-letter string take 3.3 s under `__mir-run` and nothing measurable under `__mir-llvm-run` | — |
 | B-2026-10-29-39 | 2026-10-29 | parser+cli | low | `s.parse::<i64>()` gets E0001 whose machine fix deletes `::<i64>`, so `karac fix` leaves `s.parse()`, which E0236 then refuses for want of a type (with no edit), though the type was in the source until the first fix removed it; the edit could write `i64.parse(s)` | — |
+| B-2026-10-29-40 | 2026-10-29 | mir | low | `Vec[String].from_iter(it)` (an associated call on a type written with its generic arguments) passes `karac check` and fails `karac run` / `karac build` with "an expression with no recorded type is not lowered yet"; `let v: Vec[String] = Vec.from_iter(it)` runs | — |
 
 ### Relocated
 
