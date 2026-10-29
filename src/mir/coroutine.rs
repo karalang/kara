@@ -115,6 +115,40 @@ pub const FN_START: &str = "__fn_start";
 /// resumes it.
 pub const FRAME_START: &str = "__frame_start";
 
+/// A method that suspends called through a `dyn` value is called as a
+/// coroutine erased into a function value is ([`FN_SUSPENDS`]): its table
+/// has, beside the slot, the `M#dstart` that starts its frame
+/// ([`Vtable::starts`]). `__dyn_suspends(view, const slot)` is `true` when
+/// the table of the `dyn` value `view` (a view of it, or a reference to it)
+/// has a start for `slot`; `__dyn_start(const slot, receiver, args..)` then
+/// calls that start with the receiver and the arguments as the slot's call
+/// would pass them, and answers the started frame as the erased `MutFn()
+/// -> Poll[T]` the caller resumes until it is ready.
+pub const DYN_SUSPENDS: &str = "__dyn_suspends";
+/// See [`DYN_SUSPENDS`].
+pub const DYN_START: &str = "__dyn_start";
+
+/// The name a program that cancels gives the calls through `slot` of a
+/// `dyn` type of `trait_` that may suspend, among the callees whose calls
+/// get a cancel exit (`lower::cancel_points`).
+pub fn dyn_slot_key(trait_: DefId, slot: u32) -> String {
+    format!("dyn slot {}#{slot}", trait_.0)
+}
+
+/// The trait and slot a call through `func` calls, when it is a `dyn` call.
+fn called_dyn_slot(tys: &TyInterner, func: &Operand) -> Option<(DefId, u32)> {
+    match func {
+        Operand::Const(Const {
+            kind: ConstKind::DynSlot { dyn_ty, slot },
+            ..
+        }) => match tys.kind(*dyn_ty) {
+            TyKind::Dyn { trait_, .. } => Some((trait_, *slot)),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 /// The body that starts coroutine `name`'s frame for a call through a
 /// function value ([`FN_START`]).
 pub fn dstart_name(name: &str) -> String {
@@ -192,6 +226,9 @@ pub struct DynCalls {
     /// The erased types ([`fn_key`]) those values have; a call through one
     /// may suspend.
     pub tainted: BTreeSet<Ty>,
+    /// The `dyn` slots, by trait, some table fills with a coroutine; a
+    /// call through one may suspend ([`DYN_SUSPENDS`]).
+    pub dyn_slots: BTreeSet<(DefId, u32)>,
 }
 
 /// [`coroutines_from`] with calls through function values: a coroutine
@@ -199,10 +236,31 @@ pub struct DynCalls {
 /// type may suspend, so its body is a coroutine too, and so on until
 /// nothing changes. A function type carries no effects in MIR, so every
 /// value of a tainted type is asked at the call whether it suspends.
-pub fn dyn_calls(bodies: &[Body], tys: &TyInterner, seed: &BTreeSet<String>) -> DynCalls {
+///
+/// A `dyn` table's slot filled with a coroutine is erased the same way:
+/// the coroutine gets a `dstart`, and a call through that slot of any
+/// `dyn` type of the trait may suspend.
+pub fn dyn_calls(
+    bodies: &[Body],
+    tys: &TyInterner,
+    seed: &BTreeSet<String>,
+    vtables: &[Vtable],
+) -> DynCalls {
     let mut set = coroutines_from(bodies, seed);
     loop {
-        let (erased, tainted) = erased_coroutines(bodies, tys, &set);
+        let (mut erased, tainted) = erased_coroutines(bodies, tys, &set);
+        let mut dyn_slots = BTreeSet::new();
+        for v in vtables {
+            let TyKind::Dyn { trait_, .. } = tys.kind(v.dyn_ty) else {
+                continue;
+            };
+            for (k, s) in v.slots.iter().enumerate() {
+                if set.contains(s) {
+                    erased.insert(s.clone());
+                    dyn_slots.insert((trait_, k as u32));
+                }
+            }
+        }
         let callers: Vec<String> = bodies
             .iter()
             .filter(|b| !set.contains(&b.instance.name))
@@ -210,6 +268,7 @@ pub fn dyn_calls(bodies: &[Body], tys: &TyInterner, seed: &BTreeSet<String>) -> 
                 b.blocks.iter().any(|d| match &d.terminator.kind {
                     TerminatorKind::Call { func, .. } => {
                         called_fn_key(b, tys, func).is_some_and(|k| tainted.contains(&k))
+                            || called_dyn_slot(tys, func).is_some_and(|k| dyn_slots.contains(&k))
                     }
                     _ => false,
                 })
@@ -221,6 +280,7 @@ pub fn dyn_calls(bodies: &[Body], tys: &TyInterner, seed: &BTreeSet<String>) -> 
                 set,
                 erased,
                 tainted,
+                dyn_slots,
             };
         }
         set.extend(callers);
@@ -329,13 +389,19 @@ fn dstart(body: &Body, tys: &TyInterner, polls: &mut BTreeMap<Ty, Ty>) -> Body {
 ///
 /// so a value that suspends runs in its own frame, resumed each time the
 /// task is, while any other is called as before.
+///
+/// A call through a `dyn` slot some table fills with a coroutine
+/// ([`DynCalls::dyn_slots`]) is rewritten the same way, asking
+/// `__dyn_suspends(view, const slot)` and starting it with
+/// `__dyn_start(const slot, args..)`, its receiver the first argument.
 fn rewrite_dyn_calls(
     body: &mut Body,
     tys: &TyInterner,
     tainted: &BTreeSet<Ty>,
+    dyn_slots: &BTreeSet<(DefId, u32)>,
     polls: &mut BTreeMap<Ty, Ty>,
 ) -> Result<(), String> {
-    if tainted.is_empty() {
+    if tainted.is_empty() && dyn_slots.is_empty() {
         return Ok(());
     }
     for i in 0..body.blocks.len() {
@@ -350,11 +416,19 @@ fn rewrite_dyn_calls(
         else {
             continue;
         };
-        let Some(key) = called_fn_key(body, tys, func).filter(|k| tainted.contains(k)) else {
-            continue;
-        };
-        let TyKind::Fn { ret, .. } = tys.kind(key) else {
-            unreachable!("fn_key answers a function type")
+        let slot = called_dyn_slot(tys, func)
+            .filter(|k| dyn_slots.contains(k))
+            .map(|(_, slot)| slot);
+        let ret = match (slot, called_fn_key(body, tys, func)) {
+            (Some(_), _) => match super::place_ty::place_ty(body, tys, destination) {
+                Ok(t) => t.ty,
+                Err(e) => return Err(format!("a `dyn` call's destination: {e:?}")),
+            },
+            (None, Some(key)) if tainted.contains(&key) => match tys.kind(key) {
+                TyKind::Fn { ret, .. } => ret,
+                _ => unreachable!("fn_key answers a function type"),
+            },
+            _ => continue,
         };
         let (func, args, dest, next, unwind, si) = (
             func.clone(),
@@ -378,9 +452,15 @@ fn rewrite_dyn_calls(
             });
             Local(body.locals.len() as u32 - 1)
         };
-        let fty = operand_ty(body, tys, &func).ok_or("a call through an untyped value")?;
+        // What `__fn_suspends` / `__dyn_suspends` asks: the function value,
+        // or the `dyn` receiver, borrowed where it is not a borrow.
+        let asked = match slot {
+            Some(_) => args.first().ok_or("a `dyn` call with no receiver")?,
+            None => &func,
+        };
+        let fty = operand_ty(body, tys, asked).ok_or("a call through an untyped value")?;
         let mut pre = Vec::new();
-        let query = match &func {
+        let query = match asked {
             Operand::Copy(p) | Operand::Move(p)
                 if matches!(tys.kind(fty), TyKind::Ref(_) | TyKind::MutRef(_)) =>
             {
@@ -398,6 +478,24 @@ fn rewrite_dyn_calls(
                 Operand::Move(Place::local(r))
             }
             Operand::Const(_) => return Err("a call through a constant function value".into()),
+        };
+        let slot_const = |slot: u32| {
+            Operand::Const(Const {
+                ty: tys.int(IntTy::U32),
+                kind: ConstKind::Scalar(u128::from(slot)),
+            })
+        };
+        let (suspends_native, suspends_args, start_native, start_args) = match slot {
+            Some(k) => {
+                let mut start = vec![slot_const(k)];
+                start.extend(args);
+                (DYN_SUSPENDS, vec![query, slot_const(k)], DYN_START, start)
+            }
+            None => {
+                let mut start = vec![func];
+                start.extend(args);
+                (FN_SUSPENDS, vec![query], FN_START, start)
+            }
         };
         let q = new_local(body, tys.bool());
         let h = new_local(body, poller);
@@ -425,7 +523,7 @@ fn rewrite_dyn_calls(
         };
         let orig = std::mem::replace(
             &mut body.blocks[i].terminator,
-            term(call(native_fn(tys, FN_SUSPENDS), vec![query], q, sw)),
+            term(call(native_fn(tys, suspends_native), suspends_args, q, sw)),
         );
         body.blocks[i].statements.extend(pre);
         body.blocks.push(block(
@@ -442,11 +540,9 @@ fn rewrite_dyn_calls(
             statements: vec![],
             terminator: orig,
         });
-        let mut start_args = vec![func];
-        start_args.extend(args);
         body.blocks.push(block(
             vec![],
-            call(native_fn(tys, FN_START), start_args, h, poll),
+            call(native_fn(tys, start_native), start_args, h, poll),
         ));
         body.blocks.push(block(
             vec![Statement {
@@ -1575,6 +1671,18 @@ pub fn transform_from(
     suspending: &BTreeSet<String>,
     borrows: Option<&crate::mir::lower::BorrowSummary>,
 ) -> Result<(Vec<Body>, BTreeMap<String, FrameInfo>), String> {
+    transform_with_tables(bodies, tys, suspending, borrows, &mut [])
+}
+
+/// [`transform_from`], with the program's `dyn` tables, whose
+/// [`Vtable::starts`] it fills.
+pub fn transform_with_tables(
+    bodies: &[Body],
+    tys: &TyInterner,
+    suspending: &BTreeSet<String>,
+    borrows: Option<&crate::mir::lower::BorrowSummary>,
+    vtables: &mut [Vtable],
+) -> Result<(Vec<Body>, BTreeMap<String, FrameInfo>), String> {
     // A spawned closure runs as a task: its task body is a task root, and
     // a coroutine, whether or not the closure suspends.
     let mut bodies: Vec<Body> = bodies.to_vec();
@@ -1587,8 +1695,15 @@ pub fn transform_from(
     }
     let mut seed = suspending.clone();
     seed.extend(task_names.iter().cloned());
-    let dyn_calls = dyn_calls(&bodies, tys, &seed);
+    let dyn_calls = dyn_calls(&bodies, tys, &seed, vtables);
     let set = dyn_calls.set;
+    for v in vtables.iter_mut() {
+        v.starts = v
+            .slots
+            .iter()
+            .map(|s| dyn_calls.erased.contains(s).then(|| dstart_name(s)))
+            .collect();
+    }
     let bodies = bodies.as_slice();
     // A spawned closure is made as a value, but its one caller is its task
     // body.
@@ -1621,7 +1736,13 @@ pub fn transform_from(
         .map(|b| {
             let mut b = b.clone();
             if set.contains(&b.instance.name) {
-                rewrite_dyn_calls(&mut b, tys, &dyn_calls.tainted, &mut polls)?;
+                rewrite_dyn_calls(
+                    &mut b,
+                    tys,
+                    &dyn_calls.tainted,
+                    &dyn_calls.dyn_slots,
+                    &mut polls,
+                )?;
                 insert_ready_loops(&mut b, tys)?;
             }
             Ok(b)

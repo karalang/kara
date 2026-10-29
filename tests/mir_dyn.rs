@@ -987,3 +987,128 @@ fn mir_dyn_refuses_other_trait_arguments_and_uncloned_copies() {
         "`.to_vec()` on 'Vec[Sq]' clones each element, and 'Sq' has no `.clone()`",
     );
 }
+
+/// The interpreter prints `want` and finishes with nothing leaked. The
+/// compiled half of what uses it is not built yet; such a test moves to
+/// [`runs`] when it is.
+fn interpreted(src: &str, want: &str) {
+    let run = karac::mir::lower::run_source(src).expect("MIR");
+    assert!(
+        matches!(run.outcome, Outcome::Returned(_)),
+        "{:?}
+{}",
+        run.outcome,
+        run.output
+    );
+    assert_eq!(run.output, want);
+}
+
+/// A method that suspends runs through `dyn` in a frame of its own, which
+/// its caller waits on as on any coroutine (design.md § `dyn Trait`): a
+/// router of `dyn Handler`s whose upstream handler waits on a channel
+/// another task fills, and `mut ref self` and `own self` slots that wait.
+/// Called plainly, the first wait would never be answered.
+#[test]
+fn mir_dyn_suspends_in_a_slot() {
+    interpreted(
+        r#"trait Handler {
+    fn handle(ref self, req: i64) -> i64;
+}
+struct Echo {}
+impl Handler for Echo {
+    fn handle(ref self, req: i64) -> i64 { req }
+}
+struct Upstream {
+    rx: Receiver[i64],
+}
+impl Handler for Upstream {
+    fn handle(ref self, req: i64) -> i64 {
+        let answer = self.rx.recv().unwrap();
+        req + answer
+    }
+}
+struct Router {
+    routes: Vec[dyn Handler],
+}
+impl Router {
+    fn dispatch(ref self, route: i64, req: i64) -> i64 {
+        self.routes[route].handle(req)
+    }
+}
+fn serve(r: ref Router, reqs: ref Vec[(i64, i64)]) -> i64 {
+    let mut served = 0;
+    for (route, req) in reqs.iter() {
+        let resp = r.dispatch(route, req);
+        println(f"route {route}: {req} -> {resp}");
+        served += 1;
+    }
+    served
+}
+fn main() {
+    let (tx, rx) = channel(4);
+    let mut routes: Vec[dyn Handler] = Vec.new();
+    routes.push(Echo {});
+    routes.push(Upstream { rx: rx });
+    let router = Router { routes: routes };
+    let reqs: Vec[(i64, i64)] = [(0, 5), (1, 7), (0, 9), (1, 1)].to_vec();
+    let group = TaskGroup.new();
+    let server = group.spawn(|| serve(router, reqs));
+    let upstream = group.spawn(|| {
+        tx.send(100).unwrap();
+        tx.send(200).unwrap();
+        2
+    });
+    println(f"served {server.join()}");
+    println(f"answered {upstream.join()}");
+}
+"#,
+        "route 0: 5 -> 5
+route 1: 7 -> 107
+route 0: 9 -> 9
+route 1: 1 -> 201
+served 4
+answered 2
+",
+    );
+    interpreted(
+        r#"trait Job {
+    fn step(mut ref self) -> i64;
+    fn finish(own self) -> i64;
+}
+struct Waits {
+    rx: Receiver[i64],
+    seen: i64,
+}
+impl Job for Waits {
+    fn step(mut ref self) -> i64 {
+        self.seen += self.rx.recv().unwrap();
+        self.seen
+    }
+    fn finish(own self) -> i64 {
+        self.seen * 100 + self.rx.recv().unwrap()
+    }
+}
+fn run(j: own dyn Job) -> i64 {
+    let mut j = j;
+    let a = j.step();
+    let b = j.step();
+    a + b + j.finish()
+}
+fn main() {
+    let (tx, rx) = channel(4);
+    let j: dyn Job = Waits { rx: rx, seen: 0 };
+    let group = TaskGroup.new();
+    let r = group.spawn(|| run(j));
+    let s = group.spawn(|| {
+        tx.send(1).unwrap();
+        tx.send(2).unwrap();
+        tx.send(7).unwrap();
+        3
+    });
+    println(f"{r.join()} {s.join()}");
+}
+"#,
+        "311 3
+",
+    );
+}

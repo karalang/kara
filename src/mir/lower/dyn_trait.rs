@@ -174,11 +174,13 @@ impl<'l, 'a> Bx<'l, 'a> {
             }
             _ => None,
         };
+        let starts = vec![None; slots.len()];
         self.lcx.program.vtables.push(Vtable {
             dyn_ty,
             concrete,
             slots,
             clone,
+            starts,
         });
         Ok((self.lcx.program.vtables.len() - 1) as u32)
     }

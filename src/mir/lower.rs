@@ -4194,6 +4194,21 @@ impl<'l, 'a> Bx<'l, 'a> {
                     || crate::mir::coroutine::suspends_native(n)
                     || self.lcx.cancel_at.as_ref().is_some_and(|a| a.contains(n))
             }
+            // A call through a `dyn` slot a table fills with a coroutine.
+            Operand::Const(Const {
+                kind: ConstKind::DynSlot { dyn_ty, slot },
+                ..
+            }) => {
+                let key = match self.tys().tcx().kind(*dyn_ty) {
+                    HK::Dyn { trait_, .. } => {
+                        Some(crate::mir::coroutine::dyn_slot_key(trait_, *slot))
+                    }
+                    _ => None,
+                };
+                self.lcx.cancel_at.as_ref().is_some_and(|a| {
+                    key.is_some_and(|k| a.contains(&k)) || a.contains(crate::mir::coroutine::PANIC)
+                })
+            }
             // A call through a function value a coroutine is erased into,
             // or any call through a value in a program whose isolating
             // tasks leave at a panic (§11.12): the value may panic.
@@ -24633,13 +24648,21 @@ fn cancel_points(lowered: &Lowered) -> Option<FxHashSet<String>> {
     // And the calls through the function values a coroutine is erased
     // into (M4 item 4), by their types.
     let bodies: Vec<Body> = lowered.program.bodies.values().cloned().collect();
-    let calls = crate::mir::coroutine::dyn_calls(&bodies, &lowered.tys, &seed);
+    let calls =
+        crate::mir::coroutine::dyn_calls(&bodies, &lowered.tys, &seed, &lowered.program.vtables);
     let mut at: FxHashSet<String> = calls.set.into_iter().collect();
     at.extend(
         calls
             .tainted
             .iter()
             .filter_map(|&t| crate::mir::coroutine::fn_value_key(&lowered.tys, t)),
+    );
+    // And the `dyn` slots a table fills with a coroutine.
+    at.extend(
+        calls
+            .dyn_slots
+            .iter()
+            .map(|&(t, k)| crate::mir::coroutine::dyn_slot_key(t, k)),
     );
     Some(at)
 }
@@ -24855,20 +24878,6 @@ fn finish_build(mut lowered: Lowered) -> Result<Lowered, String> {
             .as_ref()
             .unwrap_or(&Default::default()),
     );
-    // A `dyn` call is a plain call: one whose method suspends is not
-    // lowered yet, since its caller would not wait for it.
-    if let Some(slot) = lowered
-        .program
-        .vtables
-        .iter()
-        .flat_map(|v| &v.slots)
-        .find(|s| coroutines.contains(*s))
-    {
-        return Err(format!(
-            "`{slot}` suspends and is called through a `dyn` value: a suspending \
-             method through `dyn` is not lowered yet"
-        ));
-    }
     for body in lowered.program.bodies.values_mut() {
         if dump.as_deref() == Some("built") {
             eprintln!("{}", crate::mir::pretty::pretty_body(body, &lowered.tys));

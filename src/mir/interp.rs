@@ -674,7 +674,14 @@ pub fn coroutines_flag() -> bool {
 pub fn with_coroutines(program: &Program, tys: &TyInterner) -> Result<Program, String> {
     let bodies: Vec<Body> = program.bodies.values().cloned().collect();
     let seed = program.suspending.clone().unwrap_or_default();
-    let (bodies, _) = coroutine::transform_from(&bodies, tys, &seed, program.borrows.as_deref())?;
+    let mut vtables = program.vtables.clone();
+    let (bodies, _) = coroutine::transform_with_tables(
+        &bodies,
+        tys,
+        &seed,
+        program.borrows.as_deref(),
+        &mut vtables,
+    )?;
     // `KARAC_MIR_DUMP=coroutines` prints every body after the transform.
     if std::env::var("KARAC_MIR_DUMP").as_deref() == Ok("coroutines") {
         for b in &bodies {
@@ -682,6 +689,7 @@ pub fn with_coroutines(program: &Program, tys: &TyInterner) -> Result<Program, S
         }
     }
     let mut p = program.clone();
+    p.vtables = vtables;
     p.bodies = bodies
         .into_iter()
         .map(|b| (b.instance.name.clone(), b))
@@ -1963,6 +1971,35 @@ impl<'a> Interp<'a> {
                 };
                 let start = coroutine::dstart_name(&body);
                 Ok(Value::Bool(self.program.bodies.contains_key(&start)))
+            }
+            // A call through a `dyn` slot that may suspend
+            // (`coroutine::DYN_SUSPENDS`).
+            ("__dyn_suspends", "") => {
+                let (Some(view), Some(slot)) = (args.first(), args.get(1)) else {
+                    return err("__dyn_suspends takes a `dyn` view and a slot");
+                };
+                let Value::Int(slot) = *slot else {
+                    return err("__dyn_suspends takes its slot as a number");
+                };
+                let slot = slot as usize;
+                let vtable = self.dyn_table_of(view)?;
+                Ok(Value::Bool(
+                    self.program
+                        .vtables
+                        .get(vtable as usize)
+                        .and_then(|v| v.starts.get(slot))
+                        .is_some_and(Option::is_some),
+                ))
+            }
+            ("__dyn_start", "") => {
+                let mut args = args;
+                if args.len() < 2 {
+                    return err("__dyn_start takes a slot and a receiver");
+                }
+                let Value::Int(slot) = args.remove(0) else {
+                    return err("__dyn_start takes its slot as a number");
+                };
+                Ok(self.call_dyn_as(slot as u32, args, true)?.1)
             }
             ("__fn_start", "") => {
                 let mut args = args;
@@ -4136,7 +4173,26 @@ impl<'a> Interp<'a> {
     /// its slot), a view made from a reference, or a reference to the place
     /// holding an owned `dyn` value. The method gets the concrete value the
     /// way its first parameter takes it. Returns the instance's name too.
-    fn call_dyn(&mut self, slot: u32, mut vals: Vec<Value>) -> R<(String, Value)> {
+    fn call_dyn(&mut self, slot: u32, vals: Vec<Value>) -> R<(String, Value)> {
+        self.call_dyn_as(slot, vals, false)
+    }
+
+    /// The table of the `dyn` value `v` is, views, or refers to.
+    fn dyn_table_of(&mut self, v: &Value) -> R<u32> {
+        match v {
+            Value::Dyn { vtable, .. } | Value::DynView { vtable, .. } => Ok(*vtable),
+            Value::Ref(a) => match self.slot(a)? {
+                Value::Dyn { vtable, .. } | Value::DynView { vtable, .. } => Ok(vtable),
+                other => err(format!("a `dyn` table through a reference to {other:?}")),
+            },
+            other => err(format!("a `dyn` table of {other:?}")),
+        }
+    }
+
+    /// [`Self::call_dyn`], or (`start`) the call that starts the slot's
+    /// suspending method in a frame of its own: its table's start, called
+    /// as the slot would be (`coroutine::DYN_START`).
+    fn call_dyn_as(&mut self, slot: u32, mut vals: Vec<Value>, start: bool) -> R<(String, Value)> {
         if vals.is_empty() {
             return err("a `dyn` call has no receiver");
         }
@@ -4166,11 +4222,15 @@ impl<'a> Interp<'a> {
             other => return err(format!("a `dyn` call on {other:?}")),
         };
         let program: &'a Program = self.program;
-        let name = program
-            .vtables
-            .get(vtable as usize)
-            .and_then(|v| v.slots.get(slot as usize))
-            .ok_or_else(|| Stop::Error(format!("no slot {slot} in vtable {vtable}")))?;
+        let table = program.vtables.get(vtable as usize);
+        let name = if start {
+            table
+                .and_then(|v| v.starts.get(slot as usize))
+                .and_then(Option::as_ref)
+        } else {
+            table.and_then(|v| v.slots.get(slot as usize))
+        }
+        .ok_or_else(|| Stop::Error(format!("no slot {slot} in vtable {vtable}")))?;
         let callee = program
             .bodies
             .get(name)

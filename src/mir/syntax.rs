@@ -341,13 +341,16 @@ pub enum ConstKind {
 /// `slots` are the instances of the concrete type's methods in slot order:
 /// the supertraits' dispatchable methods depth-first in declaration order,
 /// then the trait's own. `clone` is the concrete type's `clone` when the
-/// trait has `Clone` as a supertrait.
+/// trait has `Clone` as a supertrait. `starts`, beside `slots`, is each
+/// slot's `M#dstart` when its instance suspends, which the coroutine
+/// transform fills (`coroutine::DYN_SUSPENDS`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Vtable {
     pub dyn_ty: Ty,
     pub concrete: Ty,
     pub slots: Vec<String>,
     pub clone: Option<String>,
+    pub starts: Vec<Option<String>>,
 }
 
 /// A module binding that lives in one global place: its value is computed
