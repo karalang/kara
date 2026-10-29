@@ -1,0 +1,15 @@
+time = [30,20,150,100,40] -> 3
+time = [60,60,60] -> 3
+time = [1] -> 0
+time = [30,30] -> 1
+time = [59,1,61,119,2] -> 4
+time = [120,180,240,300,360] -> 10
+time = [10,50,110,70,20,40,30,90] -> 6
+time = [500,40,100,20,499,1] -> 4
+60000 songs of 60 -> 1799970000
+60000 songs of 30 and 90 -> 1799970000
+60000 songs cycling 1..500 -> 29951040
+60000 songs of 7 -> 0
+3000 random playlists of 16820 songs: 843 pairs, checksum 60295352
+300 random playlists of 161760 songs: 938464 pairs, checksum 165930170
+5 random playlists of 87765 songs: 15393554 pairs, checksum 241917995

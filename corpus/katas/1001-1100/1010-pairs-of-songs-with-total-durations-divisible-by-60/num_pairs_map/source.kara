@@ -1,0 +1,93 @@
+// LeetCode #1010: Pairs of Songs With Total Durations Divisible by 60 --
+// a map of remainders
+//
+// The one-pass count kept in a map from remainder to how many earlier
+// songs have it, looking up the remainder each song needs before adding
+// its own. O(n) map operations.
+
+fn num_pairs(time: ref Vec[i64]) -> i64 {
+    let mut seen: Map[i64, i64] = Map.new();
+    let mut pairs = 0;
+    for t in time.iter() {
+        let r = t % 60;
+        let need = (60 - r) % 60;
+        if seen.contains_key(need) {
+            pairs += seen[need];
+        }
+        if seen.contains_key(r) {
+            seen[r] = seen[r] + 1;
+        } else {
+            seen.insert(r, 1);
+        }
+    }
+    pairs
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(nums: ref Vec[i64]) -> String {
+    let parts: Vec[String] = nums.iter().map(|x| x.to_string()).collect();
+    "[" + parts.join(",") + "]"
+}
+
+fn main() {
+    // LeetCode's two examples, then a few more
+    let examples: Vec[Vec[i64]] = vec![
+        vec![30, 20, 150, 100, 40],
+        vec![60, 60, 60],
+        vec![1],
+        vec![30, 30],
+        vec![59, 1, 61, 119, 2],
+        vec![120, 180, 240, 300, 360],
+        vec![10, 50, 110, 70, 20, 40, 30, 90],
+        vec![500, 40, 100, 20, 499, 1],
+    ];
+    for time in examples.iter() {
+        println(f"time = {show(time)} -> {num_pairs(time)}");
+    }
+    // LeetCode's longest, 60000 songs
+    let mut sixties: Vec[i64] = Vec.new();
+    let mut thirties: Vec[i64] = Vec.new();
+    let mut cycle: Vec[i64] = Vec.new();
+    let mut sevens: Vec[i64] = Vec.new();
+    for i in 0..60000 {
+        sixties.push(60);
+        thirties.push(if i % 2 == 0 { 30 } else { 90 });
+        cycle.push(1 + i % 500);
+        sevens.push(7);
+    }
+    let large: Vec[(String, Vec[i64])] = vec![
+        ("60000 songs of 60".to_string(), sixties),
+        ("60000 songs of 30 and 90".to_string(), thirties),
+        ("60000 songs cycling 1..500".to_string(), cycle),
+        ("60000 songs of 7".to_string(), sevens),
+    ];
+    for (name, time) in large.iter() {
+        println(f"{name} -> {num_pairs(time)}");
+    }
+    // random playlists, durations from 1 to 500
+    let mut seed = 1010;
+    let groups: Vec[(i64, i64)] = vec![(3000, 10), (300, 1000), (5, 60000)];
+    for (count, most) in groups.iter() {
+        let mut songs = 0;
+        let mut total = 0;
+        let mut check = 0;
+        for _ in 0..count {
+            let size = 1 + next_random(mut seed) % most;
+            let mut time: Vec[i64] = Vec.new();
+            for _ in 0..size {
+                time.push(1 + next_random(mut seed) % 500);
+            }
+            let pairs = num_pairs(time);
+            songs += size;
+            total += pairs;
+            check = (check * 31 + pairs) % 1000000007;
+        }
+        println(f"{count} random playlists of {songs} songs: {total} pairs, checksum {check}");
+    }
+}

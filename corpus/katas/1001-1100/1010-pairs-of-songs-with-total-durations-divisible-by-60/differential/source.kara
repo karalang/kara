@@ -1,0 +1,239 @@
+// LeetCode #1010: Pairs of Songs With Total Durations Divisible by 60 --
+// differential
+//
+// The five arms, copied, against the statement read literally and five
+// more properties. See README.md § Differential.
+
+fn pairs_star(time: ref Vec[i64]) -> i64 {
+    let mut seen: Vec[i64] = Vec.filled(60, 0);
+    let mut pairs = 0;
+    for t in time.iter() {
+        let r = t % 60;
+        pairs += seen[(60 - r) % 60];
+        seen[r] += 1;
+    }
+    pairs
+}
+
+fn pairs_tally(time: ref Vec[i64]) -> i64 {
+    let mut count: Vec[i64] = Vec.filled(60, 0);
+    for t in time.iter() {
+        count[t % 60] += 1;
+    }
+    let mut pairs = count[0] * (count[0] - 1) / 2 + count[30] * (count[30] - 1) / 2;
+    for r in 1..30 {
+        pairs += count[r] * count[60 - r];
+    }
+    pairs
+}
+
+fn pairs_map(time: ref Vec[i64]) -> i64 {
+    let mut seen: Map[i64, i64] = Map.new();
+    let mut pairs = 0;
+    for t in time.iter() {
+        let r = t % 60;
+        let need = (60 - r) % 60;
+        if seen.contains_key(need) {
+            pairs += seen[need];
+        }
+        if seen.contains_key(r) {
+            seen[r] = seen[r] + 1;
+        } else {
+            seen.insert(r, 1);
+        }
+    }
+    pairs
+}
+
+fn pairs_sort(time: ref Vec[i64]) -> i64 {
+    let mut rem: Vec[i64] = time.iter().map(|t| t % 60).collect();
+    rem.sort();
+    let n = rem.len();
+    let mut pairs = 0;
+    for i in 0..n {
+        let need = (60 - rem[i]) % 60;
+        pairs += first_above(rem, i + 1, need) - first_at_least(rem, i + 1, need);
+    }
+    pairs
+}
+
+// the first index from `lo` whose value is at least `v`
+fn first_at_least(rem: ref Vec[i64], lo: i64, v: i64) -> i64 {
+    let mut a = lo;
+    let mut b = rem.len();
+    while a < b {
+        let mid = a + (b - a) / 2;
+        if rem[mid] < v {
+            a = mid + 1;
+        } else {
+            b = mid;
+        }
+    }
+    a
+}
+
+// the first index from `lo` whose value is above `v`
+fn first_above(rem: ref Vec[i64], lo: i64, v: i64) -> i64 {
+    let mut a = lo;
+    let mut b = rem.len();
+    while a < b {
+        let mid = a + (b - a) / 2;
+        if rem[mid] <= v {
+            a = mid + 1;
+        } else {
+            b = mid;
+        }
+    }
+    a
+}
+
+fn pairs_durations(time: ref Vec[i64]) -> i64 {
+    let mut count: Vec[i64] = Vec.filled(501, 0);
+    for t in time.iter() {
+        count[t] += 1;
+    }
+    let mut pairs = 0;
+    for a in 1..501 {
+        if count[a] == 0 {
+            continue;
+        }
+        // the smallest b >= a with (a + b) % 60 == 0
+        let mut b = a + (60 - (2 * a) % 60) % 60;
+        while b <= 500 {
+            if b == a {
+                pairs += count[a] * (count[a] - 1) / 2;
+            } else {
+                pairs += count[a] * count[b];
+            }
+            b += 60;
+        }
+    }
+    pairs
+}
+
+fn arms(time: ref Vec[i64]) -> Vec[i64] {
+    vec![pairs_star(time), pairs_tally(time), pairs_map(time), pairs_sort(time), pairs_durations(time)]
+}
+
+// The statement read literally: the indices i < j with
+// (time[i] + time[j]) % 60 == 0
+fn statement(time: ref Vec[i64]) -> i64 {
+    let mut pairs = 0;
+    for i in 0..time.len() {
+        for j in (i + 1)..time.len() {
+            if (time[i] + time[j]) % 60 == 0 {
+                pairs += 1;
+            }
+        }
+    }
+    pairs
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let names = ["star", "tally", "map", "sort", "durations"];
+    let mut failures: Vec[i64] = vec![0; 6];
+    let mut checks = 0;
+    let mut rows = 0;
+    let mut songs = 0;
+    let mut check = 0;
+    let mut seed = 10101;
+    for t in 0..3300 {
+        // 3000 playlists of 1 to 40 songs, then 300 of up to 2000; the
+        // durations of a playlist come from 1 to a random top, so short
+        // tops repeat remainders often
+        let small = t < 3000;
+        let size = if small { 1 + next_random(mut seed) % 40 } else { 1 + next_random(mut seed) % 2000 };
+        let top = 1 + next_random(mut seed) % 500;
+        let mut time: Vec[i64] = Vec.new();
+        for _ in 0..size {
+            time.push(1 + next_random(mut seed) % top);
+        }
+        let extra = 1 + next_random(mut seed) % 500;
+        let got = arms(time);
+        rows += 1;
+        songs += size;
+        check = (check * 31 + got[0]) % 1000000007;
+        let brute = if small { statement(time) } else { 0 };
+        let mut back = time.clone();
+        back.reverse();
+        let reversed = arms(back);
+        let moved_input: Vec[i64] = time.iter().map(|x| {
+            let r = x % 60;
+            if r == 0 { 60 * (1 + (x * 7) % 8) } else { r + 60 * ((x * 7) % 8) }
+        }).collect();
+        let moved = arms(moved_input);
+        let mut twice = time.clone();
+        for x in time.iter() {
+            twice.push(x);
+        }
+        let doubled = arms(twice);
+        let mut halves = 0;
+        let mut partners = 0;
+        for x in time.iter() {
+            if x % 30 == 0 {
+                halves += 1;
+            }
+            if (x + extra) % 60 == 0 {
+                partners += 1;
+            }
+        }
+        let mut longer = time.clone();
+        longer.push(extra);
+        let appended = arms(longer);
+        for a in 0..5 {
+            // P1: the statement, on the short playlists
+            if small {
+                checks += 1;
+                if got[a] != brute {
+                    failures[0] += 1;
+                }
+            }
+            // P2: the songs in reverse order give the same count
+            checks += 1;
+            if reversed[a] != got[a] {
+                failures[1] += 1;
+            }
+            // P3: moving each duration by a multiple of 60, within 1 to
+            // 500, gives the same count
+            checks += 1;
+            if moved[a] != got[a] {
+                failures[2] += 1;
+            }
+            // P4: the playlist played twice has 4 times the pairs plus one
+            // for each song that pairs with its own copy, a multiple of 30
+            checks += 1;
+            if doubled[a] != 4 * got[a] + halves {
+                failures[3] += 1;
+            }
+            // P5: one more song adds the earlier songs it pairs with
+            checks += 1;
+            if appended[a] != got[a] + partners {
+                failures[4] += 1;
+            }
+            // P6: each arm agrees with at least two of the other four
+            checks += 1;
+            let mut agree = 0;
+            for b in 0..5 {
+                if b != a and got[b] == got[a] {
+                    agree += 1;
+                }
+            }
+            if agree < 2 {
+                failures[5] += 1;
+            }
+        }
+    }
+    let mut total = 0;
+    for p in 0..6 {
+        total += failures[p];
+        if failures[p] > 0 {
+            println(f"P{p + 1}: {failures[p]} failures");
+        }
+    }
+    println(f"{rows} playlists of {songs} songs: checksum {check}, {checks} checks over {names.len()} arms: {total} failures");
+}
