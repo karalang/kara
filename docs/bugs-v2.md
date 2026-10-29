@@ -58,30 +58,31 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| false-positive | 59 |
+| false-positive | 60 |
 | diagnostics | 58 |
 | missing-feature | 49 |
 | perf | 34 |
 | soundness | 24 |
-| miscompile | 15 |
+| miscompile | 16 |
 | run-vs-build | 11 |
 | other | 6 |
 | codegen-gap | 6 |
 | crash | 2 |
+| leak | 1 |
 
 ### By surface
 
 | surface | total |
 |---|---|
-| typecheck | 111 |
+| typecheck | 112 |
 | mir | 55 |
-| mir-llvm | 42 |
+| mir-llvm | 44 |
 | ownership | 26 |
-| interp | 23 |
+| interp | 24 |
 | cli | 23 |
 | codegen | 22 |
+| runtime | 16 |
 | parser | 16 |
-| runtime | 15 |
 | effect | 4 |
 | other | 3 |
 | resolver | 3 |
@@ -133,9 +134,12 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-29-17 | 2026-10-29 | parser | low | A struct item left unclosed (`struct A { x: i64,` with no `}`) before the next item reports only E0003 "'struct' is a reserved keyword and cannot be used as an identifier; write `r#struct` to use it as an ordinary identifier" at the NEXT `struct`, so the one error points at the wrong line and suggests a wrong remedy; the missing `}` is never named | — |
 | B-2026-10-29-18 | 2026-10-29 | typecheck | low | Comparing `x.count_ones()` (a `u32`) with an `i64` is refused with E0208 and no machine-applicable fix, though `as i64` widens without loss and E0200 already offers that cast | — |
 | B-2026-10-29-19 | 2026-10-29 | typecheck | low | `count_ones`, `count_zeros`, `leading_zeros` and `trailing_zeros` return `u32`, while design.md says Kāra code uses `i64` for every size, length, count and index, so every use beside a length needs `as i64` | — |
-| B-2026-10-29-20 | 2026-10-29 | effect+mir | medium | Under a `Network` override, TLS, WebSocket and the `Server.serve` family must be refused by `karac check` with `E_PROVIDER_UNSUPPORTED` naming the call and `Network` (§14.12); today they are accepted and reach the real network, and a `Network` provider's handle method that uses a resource overridden at the binding site is refused only by the MIR build | — |
+| B-2026-10-29-20 | 2026-10-29 | effect+mir | medium | Under a `Network` override, TLS, WebSocket, `UdpSocket` (ruled cc02f4f3e) and the `Server.serve` family must be refused by `karac check` with `E_PROVIDER_UNSUPPORTED` naming the call and `Network` (§14.12); today they are accepted and reach the real network, and a `Network` provider's handle method that uses a resource overridden at the binding site is refused only by the MIR build | — |
 | B-2026-10-29-22 | 2026-10-29 | mir+mir-llvm | high | The implicit numeric widening of a CALL's result is dropped when the call initializes an annotated `let` (`let x: f64 = f()` with `f() -> f32`, `let n: i64 = g()` with `g() -> i32`, a method call alike), is a function's return value (`return f()` or a tail `f()` in a `-> f64` function) or is an `if` arm: `__mir-run` prints the right value, while `__mir-llvm-run`, `karac run`, `karac build` and `__mir-llvm-asan` read a half-written slot (1.5 prints as 5.28426686e-315, -7 as 4294967289 or stack junk under ASan); an argument, a field, a `push` and an assignment widen correctly | — |
 | B-2026-10-29-23 | 2026-10-29 | parser | low | Rust-style angle-bracket generics in a type (`-> Result<(), String>`, `let v: Vec<i64>`, `x: Option<i64>`) get a bare token error ("Expected LeftBrace, found LessThan", "Expected Equal, found LessThan", "Expected RightParen, found LessThan") with no pointer to Kāra's `Result[(), String]` and no fix; in a method of an `impl` the parser also reports a false "Expected expression, found RightBrace" at the `impl`'s closing brace | — |
+| B-2026-10-29-24 | 2026-10-29 | typecheck | medium | An unsuffixed integer literal inside `Vec.filled(n, 0)` does not take its element type from the expected type when the call is a METHOD argument (`d.push(Vec.filled(2, 0))` with `d: Vec[Vec[u64]]`, a struct field's `c.d.push(...)`), a tuple element under an annotated `let`, or an `Option` payload (`let o: Option[Vec[u64]] = Some(Vec.filled(2, 0))`): each is refused as `Vec[i64]`, with no fix-it although the help names the suffix; a `let` annotation, a free-function argument and a `vec![...]` struct field all infer `u64` | — |
+| B-2026-10-29-25 | 2026-10-29 | mir-llvm | high | `d.push(Vec.filled(n, None))` with `d: Vec[Vec[Option[T]]]` clones its `None` from a stack slot too small for an `Option[T]` on the compiled backends: `__mir-llvm-asan` reports a stack-buffer-overflow READ of 32 bytes in `clone.Option[Vec[u8]]` (16 for `Option[i64]`) from `kara.main`; the interpreter, a `let`-annotated `Vec.filled(3, None)`, a free-function argument, `Some(4)` in the same place and a `None` bound by a typed `let` first are all clean | — |
+| B-2026-10-29-26 | 2026-10-29 | interp+mir-llvm+runtime | medium | (v1) A `Request` a program builds with `Request.new` / `with_header` / `with_body` is never freed, on either MIR backend: each call appends to a process-wide table of built requests that nothing shrinks, so a client that builds requests in a loop (a poller, a crawler, a retrying client) grows without bound | — |
 
 ### Relocated
 
