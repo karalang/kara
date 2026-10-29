@@ -1,0 +1,129 @@
+// LeetCode #1012: Numbers With Repeated Digits -- three digits at a time
+//
+// Count the complement, reading n in base 1000: each "digit" is a block
+// of three decimal digits, the first block possibly shorter. Numbers
+// shorter than n are counted by length. A number of n's length first
+// falls below n in some block: it copies n's earlier blocks, takes a
+// smaller block (the first one without a leading zero) whose digits are
+// distinct and avoid the earlier blocks' digits, and fills the remaining
+// 3r places from the unused digits in any order. The walk stops at the
+// first block of n that repeats a digit. O(log n * 1000).
+
+fn num_dup_digits_at_most_n(n: i64) -> i64 {
+    let mut blocks: Vec[i64] = Vec.new();
+    let mut rest = n;
+    while rest > 0 {
+        blocks.push(rest % 1000);
+        rest /= 1000;
+    }
+    blocks.reverse();
+    let mut length = 0;
+    rest = n;
+    while rest > 0 {
+        length += 1;
+        rest /= 10;
+    }
+    let mut distinct = 0;
+    for k in 1..length {
+        distinct += 9 * arrangements(9, k - 1);
+    }
+    let count = blocks.len();
+    let mut used = 0;
+    let mut placed = 0;
+    for b in 0..count {
+        let width = if b == 0 { length - 3 * (count - 1) } else { 3 };
+        let mut lowest = 0;
+        if b == 0 {
+            lowest = 1;
+            for _ in 1..width {
+                lowest *= 10;
+            }
+        }
+        let after = 3 * (count - 1 - b);
+        for value in lowest..blocks[b] {
+            let set = digit_set(value, width);
+            if set >= 0 and set & used == 0 {
+                distinct += arrangements(10 - placed - width, after);
+            }
+        }
+        let set = digit_set(blocks[b], width);
+        if set < 0 or set & used != 0 {
+            return n - distinct;
+        }
+        used = used | set;
+        placed += width;
+    }
+    n - distinct - 1
+}
+
+// the set of a block's digits, `width` of them with leading zeros, or -1
+// if one repeats
+fn digit_set(value: i64, width: i64) -> i64 {
+    let mut set = 0;
+    let mut rest = value;
+    for _ in 0..width {
+        let bit = 1 << (rest % 10);
+        if set & bit != 0 {
+            return -1;
+        }
+        set = set | bit;
+        rest /= 10;
+    }
+    set
+}
+
+// the ways to fill `slots` places in order from `free` digits, each used once
+fn arrangements(free: i64, slots: i64) -> i64 {
+    let mut ways = 1;
+    for j in 0..slots {
+        ways *= free - j;
+    }
+    ways
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let examples: Vec[i64] = vec![20, 100, 1000, 1, 10, 11, 99, 101, 110, 1022, 98765, 123456789, 987654321, 999999999, 1000000000];
+    for n in examples.iter() {
+        println(f"n = {n} -> {num_dup_digits_at_most_n(n)}");
+    }
+    // just below each power of ten
+    let mut below: Vec[String] = Vec.new();
+    let mut power = 10;
+    for _ in 0..9 {
+        below.push(num_dup_digits_at_most_n(power - 1).to_string());
+        power *= 10;
+    }
+    let shown = below.join(",");
+    println(f"10^k - 1 for k = 1..9 -> [{shown}]");
+    // every n up to 5000
+    let mut total = 0;
+    let mut check = 0;
+    for n in 1..5001 {
+        let count = num_dup_digits_at_most_n(n);
+        total += count;
+        check = (check * 31 + count) % 1000000007;
+    }
+    println(f"every n up to 5000: counts sum to {total}, checksum {check}");
+    // random n up to a thousand, a million and a billion
+    let mut seed = 1012;
+    let groups: Vec[(i64, i64)] = vec![(1000, 1000), (1000, 1000000), (200, 1000000000)];
+    for (draws, top) in groups.iter() {
+        let mut total = 0;
+        let mut check = 0;
+        for _ in 0..draws {
+            let n = 1 + (next_random(mut seed) * 32768 + next_random(mut seed)) % top;
+            let count = num_dup_digits_at_most_n(n);
+            total += count;
+            check = (check * 31 + count) % 1000000007;
+        }
+        println(f"{draws} random n up to {top}: counts sum to {total}, checksum {check}");
+    }
+}

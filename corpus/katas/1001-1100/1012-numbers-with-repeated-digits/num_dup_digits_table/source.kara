@@ -1,0 +1,107 @@
+// LeetCode #1012: Numbers With Repeated Digits -- a table of digit sets
+//
+// Read n's digits from the left, keeping, for every set of digits, how
+// many prefixes with distinct digits use it and are already below n's
+// prefix of the same length. The prefix equal to n's is followed on its
+// own, until n repeats a digit. A prefix below n extends by any digit it
+// has not used. A number shorter than n is a prefix that starts late:
+// at every position after the first, each nonzero digit starts a new
+// one, already below n. At the end the numbers up to n with distinct
+// digits are the table's total, plus n itself when its digits are
+// distinct. O(log n * 2^10 * 10).
+
+fn num_dup_digits_at_most_n(n: i64) -> i64 {
+    let mut digits: Vec[i64] = Vec.new();
+    let mut rest = n;
+    while rest > 0 {
+        digits.push(rest % 10);
+        rest /= 10;
+    }
+    digits.reverse();
+    let mut below: Vec[i64] = Vec.filled(1024, 0);
+    // the set of n's prefix, or -1 once a digit of n repeats
+    let mut tight = 0;
+    for i in 0..digits.len() {
+        let d = digits[i];
+        let mut next: Vec[i64] = Vec.filled(1024, 0);
+        for set in 0..1024 {
+            let ways = below[set];
+            if ways > 0 {
+                for digit in 0..10 {
+                    let bit = 1 << digit;
+                    if set & bit == 0 {
+                        next[set | bit] += ways;
+                    }
+                }
+            }
+        }
+        if tight >= 0 {
+            let lowest = if i == 0 { 1 } else { 0 };
+            for digit in lowest..d {
+                let bit = 1 << digit;
+                if tight & bit == 0 {
+                    next[tight | bit] += 1;
+                }
+            }
+            tight = if tight & (1 << d) == 0 { tight | (1 << d) } else { -1 };
+        }
+        if i > 0 {
+            for digit in 1..10 {
+                next[1 << digit] += 1;
+            }
+        }
+        below = next;
+    }
+    let mut distinct = if tight >= 0 { 1 } else { 0 };
+    for ways in below.iter() {
+        distinct += ways;
+    }
+    n - distinct
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let examples: Vec[i64] = vec![20, 100, 1000, 1, 10, 11, 99, 101, 110, 1022, 98765, 123456789, 987654321, 999999999, 1000000000];
+    for n in examples.iter() {
+        println(f"n = {n} -> {num_dup_digits_at_most_n(n)}");
+    }
+    // just below each power of ten
+    let mut below: Vec[String] = Vec.new();
+    let mut power = 10;
+    for _ in 0..9 {
+        below.push(num_dup_digits_at_most_n(power - 1).to_string());
+        power *= 10;
+    }
+    let shown = below.join(",");
+    println(f"10^k - 1 for k = 1..9 -> [{shown}]");
+    // every n up to 5000
+    let mut total = 0;
+    let mut check = 0;
+    for n in 1..5001 {
+        let count = num_dup_digits_at_most_n(n);
+        total += count;
+        check = (check * 31 + count) % 1000000007;
+    }
+    println(f"every n up to 5000: counts sum to {total}, checksum {check}");
+    // random n up to a thousand, a million and a billion
+    let mut seed = 1012;
+    let groups: Vec[(i64, i64)] = vec![(1000, 1000), (1000, 1000000), (200, 1000000000)];
+    for (draws, top) in groups.iter() {
+        let mut total = 0;
+        let mut check = 0;
+        for _ in 0..draws {
+            let n = 1 + (next_random(mut seed) * 32768 + next_random(mut seed)) % top;
+            let count = num_dup_digits_at_most_n(n);
+            total += count;
+            check = (check * 31 + count) % 1000000007;
+        }
+        println(f"{draws} random n up to {top}: counts sum to {total}, checksum {check}");
+    }
+}

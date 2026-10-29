@@ -59,21 +59,21 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | false-positive | 59 |
-| diagnostics | 56 |
+| diagnostics | 57 |
 | missing-feature | 48 |
 | perf | 34 |
 | soundness | 24 |
 | miscompile | 14 |
 | run-vs-build | 9 |
+| other | 6 |
 | codegen-gap | 6 |
-| other | 5 |
 | crash | 2 |
 
 ### By surface
 
 | surface | total |
 |---|---|
-| typecheck | 109 |
+| typecheck | 111 |
 | mir | 53 |
 | mir-llvm | 40 |
 | ownership | 26 |
@@ -132,6 +132,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-29-15 | 2026-10-29 | effect+mir | low | A `FileSystem` provider whose handle methods (`read_handle`, `write_handle`, `close`) use a resource overridden where the provider is bound is refused only by the MIR build (`error[mir]: providers: ... uses `Stdout`, which is overridden ...`); §14.11 (b2655d3ef) requires `karac check` to report it as a structured diagnostic naming the method and the resource | — |
 | B-2026-10-29-16 | 2026-10-29 | parser | low | `for x in mut v { .. }` (mutable iteration written with `mut` before the iterable) gets E0003 "'mut' is a reserved keyword and cannot be used as an identifier", with no fix and no pointer to `v.iter_mut()`, then two cascade errors: "Expected expression, found RightBrace" at the closing `}` of `main` and a false "file contains both top-level statements and an explicit `fn main()`" on the next statement | — |
 | B-2026-10-29-17 | 2026-10-29 | parser | low | A struct item left unclosed (`struct A { x: i64,` with no `}`) before the next item reports only E0003 "'struct' is a reserved keyword and cannot be used as an identifier; write `r#struct` to use it as an ordinary identifier" at the NEXT `struct`, so the one error points at the wrong line and suggests a wrong remedy; the missing `}` is never named | — |
+| B-2026-10-29-18 | 2026-10-29 | typecheck | low | Comparing `x.count_ones()` (a `u32`) with an `i64` is refused with E0208 and no machine-applicable fix, though `as i64` widens without loss and E0200 already offers that cast | — |
+| B-2026-10-29-19 | 2026-10-29 | typecheck | low | `count_ones`, `count_zeros`, `leading_zeros` and `trailing_zeros` return `u32`, while design.md says Kāra code uses `i64` for every size, length, count and index, so every use beside a length needs `as i64` | — |
 
 ### Relocated
 

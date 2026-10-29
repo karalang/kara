@@ -1,0 +1,428 @@
+// LeetCode #1012: Numbers With Repeated Digits -- differential
+//
+// The five arms, copied, against the statement read literally and five
+// more properties. See README.md § Differential.
+
+fn dup_star(n: i64) -> i64 {
+    n - distinct_star(n)
+}
+
+// the positive integers up to n whose digits are all different
+fn distinct_star(n: i64) -> i64 {
+    let mut digits: Vec[i64] = Vec.new();
+    let mut rest = n;
+    while rest > 0 {
+        digits.push(rest % 10);
+        rest /= 10;
+    }
+    digits.reverse();
+    let len = digits.len();
+    let mut count = 0;
+    for k in 1..len {
+        count += 9 * arrangements_star(9, k - 1);
+    }
+    let mut seen: Vec[bool] = Vec.filled(10, false);
+    for i in 0..len {
+        let d = digits[i];
+        let lowest = if i == 0 { 1 } else { 0 };
+        for smaller in lowest..d {
+            if not seen[smaller] {
+                count += arrangements_star(9 - i, len - i - 1);
+            }
+        }
+        if seen[d] {
+            return count;
+        }
+        seen[d] = true;
+    }
+    count + 1
+}
+
+// the ways to fill `slots` places in order from `free` digits, each used once
+fn arrangements_star(free: i64, slots: i64) -> i64 {
+    let mut ways = 1;
+    for j in 0..slots {
+        ways *= free - j;
+    }
+    ways
+}
+
+fn dup_dp(n: i64) -> i64 {
+    let mut digits: Vec[i64] = Vec.new();
+    let mut rest = n;
+    while rest > 0 {
+        digits.push(rest % 10);
+        rest /= 10;
+    }
+    digits.reverse();
+    let mut memo: Vec[i64] = Vec.filled(digits.len() * 1024, -1);
+    with_repeat_dp(digits, 0, 0, false, true, false, mut memo)
+}
+
+// the completions of a prefix that have a repeated digit
+fn with_repeat_dp(
+    digits: ref Vec[i64],
+    pos: i64,
+    used: i64,
+    repeated: bool,
+    tight: bool,
+    started: bool,
+    memo: mut ref Vec[i64],
+) -> i64 {
+    let len = digits.len();
+    if pos == len {
+        return if repeated { 1 } else { 0 };
+    }
+    if repeated and not tight {
+        let mut all = 1;
+        for _ in pos..len {
+            all *= 10;
+        }
+        return all;
+    }
+    let key = pos * 1024 + used;
+    let remembered = started and not tight;
+    if remembered and memo[key] >= 0 {
+        return memo[key];
+    }
+    let top = if tight { digits[pos] } else { 9 };
+    let mut total = 0;
+    for d in 0..top + 1 {
+        let bit = 1 << d;
+        let now_started = started or d > 0;
+        let again = repeated or (now_started and used & bit != 0);
+        let next_used = if now_started { used | bit } else { used };
+        total += with_repeat_dp(digits, pos + 1, next_used, again, tight and d == top, now_started, mut memo);
+    }
+    if remembered {
+        memo[key] = total;
+    }
+    total
+}
+
+fn dup_sets(n: i64) -> i64 {
+    let mut digits: Vec[i64] = Vec.new();
+    let mut rest = n;
+    while rest > 0 {
+        digits.push(rest % 10);
+        rest /= 10;
+    }
+    digits.reverse();
+    let len = digits.len();
+    let mut factorial: Vec[i64] = Vec.filled(11, 1);
+    for i in 1..11 {
+        factorial[i] = factorial[i - 1] * i;
+    }
+    let mut distinct = 0;
+    for set in 1..1024 {
+        let k = set.count_ones() as i64;
+        if k < len {
+            distinct += factorial[k];
+            if set & 1 != 0 {
+                distinct -= factorial[k - 1];
+            }
+        } else if k == len {
+            distinct += orders_sets(digits, set, factorial);
+        }
+    }
+    n - distinct
+}
+
+// the orders of the set's digits, without a leading 0, that are at most
+// the number with these digits
+fn orders_sets(digits: ref Vec[i64], set: i64, factorial: ref Vec[i64]) -> i64 {
+    let len = digits.len();
+    let mut left = set;
+    let mut count = 0;
+    for i in 0..len {
+        let d = digits[i];
+        let lowest = if i == 0 { 1 } else { 0 };
+        for smaller in lowest..d {
+            if left & (1 << smaller) != 0 {
+                count += factorial[len - i - 1];
+            }
+        }
+        if left & (1 << d) == 0 {
+            return count;
+        }
+        left -= 1 << d;
+    }
+    count + 1
+}
+
+fn dup_table(n: i64) -> i64 {
+    let mut digits: Vec[i64] = Vec.new();
+    let mut rest = n;
+    while rest > 0 {
+        digits.push(rest % 10);
+        rest /= 10;
+    }
+    digits.reverse();
+    let mut below: Vec[i64] = Vec.filled(1024, 0);
+    // the set of n's prefix, or -1 once a digit of n repeats
+    let mut tight = 0;
+    for i in 0..digits.len() {
+        let d = digits[i];
+        let mut next: Vec[i64] = Vec.filled(1024, 0);
+        for set in 0..1024 {
+            let ways = below[set];
+            if ways > 0 {
+                for digit in 0..10 {
+                    let bit = 1 << digit;
+                    if set & bit == 0 {
+                        next[set | bit] += ways;
+                    }
+                }
+            }
+        }
+        if tight >= 0 {
+            let lowest = if i == 0 { 1 } else { 0 };
+            for digit in lowest..d {
+                let bit = 1 << digit;
+                if tight & bit == 0 {
+                    next[tight | bit] += 1;
+                }
+            }
+            tight = if tight & (1 << d) == 0 { tight | (1 << d) } else { -1 };
+        }
+        if i > 0 {
+            for digit in 1..10 {
+                next[1 << digit] += 1;
+            }
+        }
+        below = next;
+    }
+    let mut distinct = if tight >= 0 { 1 } else { 0 };
+    for ways in below.iter() {
+        distinct += ways;
+    }
+    n - distinct
+}
+
+fn dup_blocks(n: i64) -> i64 {
+    let mut blocks: Vec[i64] = Vec.new();
+    let mut rest = n;
+    while rest > 0 {
+        blocks.push(rest % 1000);
+        rest /= 1000;
+    }
+    blocks.reverse();
+    let mut length = 0;
+    rest = n;
+    while rest > 0 {
+        length += 1;
+        rest /= 10;
+    }
+    let mut distinct = 0;
+    for k in 1..length {
+        distinct += 9 * arrangements_blocks(9, k - 1);
+    }
+    let count = blocks.len();
+    let mut used = 0;
+    let mut placed = 0;
+    for b in 0..count {
+        let width = if b == 0 { length - 3 * (count - 1) } else { 3 };
+        let mut lowest = 0;
+        if b == 0 {
+            lowest = 1;
+            for _ in 1..width {
+                lowest *= 10;
+            }
+        }
+        let after = 3 * (count - 1 - b);
+        for value in lowest..blocks[b] {
+            let set = digit_set_blocks(value, width);
+            if set >= 0 and set & used == 0 {
+                distinct += arrangements_blocks(10 - placed - width, after);
+            }
+        }
+        let set = digit_set_blocks(blocks[b], width);
+        if set < 0 or set & used != 0 {
+            return n - distinct;
+        }
+        used = used | set;
+        placed += width;
+    }
+    n - distinct - 1
+}
+
+// the set of a block's digits, `width` of them with leading zeros, or -1
+// if one repeats
+fn digit_set_blocks(value: i64, width: i64) -> i64 {
+    let mut set = 0;
+    let mut rest = value;
+    for _ in 0..width {
+        let bit = 1 << (rest % 10);
+        if set & bit != 0 {
+            return -1;
+        }
+        set = set | bit;
+        rest /= 10;
+    }
+    set
+}
+
+// the ways to fill `slots` places in order from `free` digits, each used once
+fn arrangements_blocks(free: i64, slots: i64) -> i64 {
+    let mut ways = 1;
+    for j in 0..slots {
+        ways *= free - j;
+    }
+    ways
+}
+
+fn arms(n: i64) -> Vec[i64] {
+    vec![dup_star(n), dup_dp(n), dup_sets(n), dup_table(n), dup_blocks(n)]
+}
+
+// The statement read literally: a number has a repeated digit when two
+// of the digits it is written with are the same.
+fn has_repeat(m: i64) -> bool {
+    let text: Vec[char] = m.to_string().chars().collect();
+    for i in 0..text.len() {
+        for j in i + 1..text.len() {
+            if text[i] == text[j] {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+// the orders of `slots` digits out of `free`, each used once
+fn falling(free: i64, slots: i64) -> i64 {
+    let mut ways = 1;
+    for j in 0..slots {
+        ways *= free - j;
+    }
+    ways
+}
+
+fn digit_count(m: i64) -> i64 {
+    m.to_string().len()
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let names = ["star", "dp", "sets", "table", "blocks"];
+    // the statement's count for every n up to 200000, one number at a time
+    let limit = 200000;
+    let mut counted: Vec[i64] = Vec.filled(limit + 1, 0);
+    for m in 1..limit + 1 {
+        counted[m] = counted[m - 1] + if has_repeat(m) { 1 } else { 0 };
+    }
+    let mut failures: Vec[i64] = Vec.filled(6, 0);
+    let mut checks = 0;
+    let mut rows = 0;
+    let mut check = 0;
+    let mut seed = 10121;
+    for t in 0..4150 {
+        // every n up to 3000, then 1000 random n up to 200000 and 150 up
+        // to a billion
+        let n = if t < 3000 {
+            t + 1
+        } else if t < 4000 {
+            1 + (next_random(mut seed) * 32768 + next_random(mut seed)) % limit
+        } else {
+            1 + (next_random(mut seed) * 32768 + next_random(mut seed)) % 1000000000
+        };
+        let got = arms(n);
+        rows += 1;
+        check = (check * 31 + got[0]) % 1000000007;
+        let before = if n > 1 { arms(n - 1) } else { vec![0, 0, 0, 0, 0] };
+        // a window of up to 300 numbers ending at n
+        let width = (1 + next_random(mut seed) % 300).min(n - 1);
+        let window = if width > 0 { arms(n - width) } else { vec![0, 0, 0, 0, 0] };
+        let mut in_window = 0;
+        for m in n - width + 1..n + 1 {
+            if has_repeat(m) {
+                in_window += 1;
+            }
+        }
+        // a block of 10^k numbers sharing n's leading digits
+        let length = digit_count(n);
+        let mut block = false;
+        let mut low: Vec[i64] = vec![0, 0, 0, 0, 0];
+        let mut high: Vec[i64] = vec![0, 0, 0, 0, 0];
+        let mut expected = 0;
+        if length >= 2 {
+            let k = 1 + next_random(mut seed) % (length - 1);
+            let mut size = 1;
+            for _ in 0..k {
+                size *= 10;
+            }
+            let lead = n / size;
+            if lead * size + size - 1 <= 1000000000 {
+                block = true;
+                low = arms(lead * size - 1);
+                high = arms(lead * size + size - 1);
+                expected = size;
+                if not has_repeat(lead) {
+                    expected -= falling(10 - digit_count(lead), k);
+                }
+            }
+        }
+        for a in 0..5 {
+            let c = got[a];
+            // P1: the statement, for n up to 200000
+            if n <= limit {
+                checks += 1;
+                if c != counted[n] {
+                    failures[0] += 1;
+                }
+            }
+            // P2: one more number adds at most one to the count
+            checks += 1;
+            let step = c - before[a];
+            if step < 0 or step > 1 {
+                failures[1] += 1;
+            }
+            // P3: none of 1 to 9 repeats, and only 8877690 positive
+            // numbers have distinct digits at all
+            checks += 1;
+            if c < 0 or c > n - n.min(9) or n - c > 8877690 {
+                failures[2] += 1;
+            }
+            // P4: a block of 10^k numbers below a prefix with distinct
+            // digits holds the arrangements of the unused digits, the
+            // rest repeat; below a prefix that repeats, every one does
+            if block {
+                checks += 1;
+                if high[a] - low[a] != expected {
+                    failures[3] += 1;
+                }
+            }
+            // P5: the window's count is its numbers' repeats, read one by
+            // one
+            if width > 0 {
+                checks += 1;
+                if c - window[a] != in_window {
+                    failures[4] += 1;
+                }
+            }
+            // P6: each arm agrees with at least two of the other four
+            checks += 1;
+            let mut agree = 0;
+            for b in 0..5 {
+                if b != a and got[b] == c {
+                    agree += 1;
+                }
+            }
+            if agree < 2 {
+                failures[5] += 1;
+            }
+        }
+    }
+    let mut total = 0;
+    for p in 0..6 {
+        total += failures[p];
+        if failures[p] > 0 {
+            println(f"P{p + 1}: {failures[p]} failures");
+        }
+    }
+    println(f"{rows} values of n: checksum {check}, {checks} checks over {names.len()} arms: {total} failures");
+}

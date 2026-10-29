@@ -1,0 +1,11 @@
+source = "kara-katas/leetcode/1001-1100/1012-numbers-with-repeated-digits/bench/num_dup_digits.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["bench"]
+class = "e"
+expected_from = "mirror"
+note = "mirror: the C, Rust, Go and Python bench programs print this line (kara-katas 1012 bench/); there is no legacy record (the legacy compiler went at M3)"
+bucket = "timeout"
+classified_with = "852f593fd+local"
+extracted_src = "34fe4a96"

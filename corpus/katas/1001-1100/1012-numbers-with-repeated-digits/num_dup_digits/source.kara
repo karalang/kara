@@ -1,0 +1,101 @@
+// LeetCode #1012: Numbers With Repeated Digits -- counting arrangements
+//
+// Count the complement: the numbers up to n whose digits are all
+// different. A shorter number has a nonzero first digit and then
+// distinct others, 9 * 9 * 8 * ... of them. A number of n's length
+// first falls below n at some position i: it copies n's first i digits,
+// puts a smaller unused digit at i, and fills the rest from the unused
+// digits in any order. The walk stops at the first digit of n that
+// repeats, since every number copying that prefix repeats too; if none
+// does, n itself is counted. O(log^2 n).
+
+fn num_dup_digits_at_most_n(n: i64) -> i64 {
+    n - distinct_up_to(n)
+}
+
+// the positive integers up to n whose digits are all different
+fn distinct_up_to(n: i64) -> i64 {
+    let mut digits: Vec[i64] = Vec.new();
+    let mut rest = n;
+    while rest > 0 {
+        digits.push(rest % 10);
+        rest /= 10;
+    }
+    digits.reverse();
+    let len = digits.len();
+    let mut count = 0;
+    for k in 1..len {
+        count += 9 * arrangements(9, k - 1);
+    }
+    let mut seen: Vec[bool] = Vec.filled(10, false);
+    for i in 0..len {
+        let d = digits[i];
+        let lowest = if i == 0 { 1 } else { 0 };
+        for smaller in lowest..d {
+            if not seen[smaller] {
+                count += arrangements(9 - i, len - i - 1);
+            }
+        }
+        if seen[d] {
+            return count;
+        }
+        seen[d] = true;
+    }
+    count + 1
+}
+
+// the ways to fill `slots` places in order from `free` digits, each used once
+fn arrangements(free: i64, slots: i64) -> i64 {
+    let mut ways = 1;
+    for j in 0..slots {
+        ways *= free - j;
+    }
+    ways
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let examples: Vec[i64] = vec![20, 100, 1000, 1, 10, 11, 99, 101, 110, 1022, 98765, 123456789, 987654321, 999999999, 1000000000];
+    for n in examples.iter() {
+        println(f"n = {n} -> {num_dup_digits_at_most_n(n)}");
+    }
+    // just below each power of ten
+    let mut below: Vec[String] = Vec.new();
+    let mut power = 10;
+    for _ in 0..9 {
+        below.push(num_dup_digits_at_most_n(power - 1).to_string());
+        power *= 10;
+    }
+    let shown = below.join(",");
+    println(f"10^k - 1 for k = 1..9 -> [{shown}]");
+    // every n up to 5000
+    let mut total = 0;
+    let mut check = 0;
+    for n in 1..5001 {
+        let count = num_dup_digits_at_most_n(n);
+        total += count;
+        check = (check * 31 + count) % 1000000007;
+    }
+    println(f"every n up to 5000: counts sum to {total}, checksum {check}");
+    // random n up to a thousand, a million and a billion
+    let mut seed = 1012;
+    let groups: Vec[(i64, i64)] = vec![(1000, 1000), (1000, 1000000), (200, 1000000000)];
+    for (draws, top) in groups.iter() {
+        let mut total = 0;
+        let mut check = 0;
+        for _ in 0..draws {
+            let n = 1 + (next_random(mut seed) * 32768 + next_random(mut seed)) % top;
+            let count = num_dup_digits_at_most_n(n);
+            total += count;
+            check = (check * 31 + count) % 1000000007;
+        }
+        println(f"{draws} random n up to {top}: counts sum to {total}, checksum {check}");
+    }
+}

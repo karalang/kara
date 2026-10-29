@@ -1,0 +1,11 @@
+source = "kara-katas/leetcode/1001-1100/1012-numbers-with-repeated-digits/differential.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["differential"]
+class = "e"
+expected_from = "oracle"
+note = "no legacy record (the legacy compiler went at M3); expected.out is the differential's own verdict with 0 failures, as the kata README records it"
+bucket = "timeout"
+classified_with = "852f593fd+local"
+extracted_src = "aa8af6bb"

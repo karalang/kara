@@ -1,0 +1,107 @@
+// LeetCode #1012: Numbers With Repeated Digits -- by the set of digits
+//
+// Group the numbers whose digits are all different by the set of digits
+// they use. A set of k digits makes k! orders of length k, less the
+// (k - 1)! that start with 0 when 0 is in the set; every number shorter
+// than n is one of those. For each set as large as n's length, count
+// its orders at most n by walking n's digits: at each position every
+// unused digit of the set below n's digit (not 0 first) starts
+// (remaining)! orders, and the walk goes on only while n's digit is in
+// the set and unused. O(2^10 * log n).
+
+fn num_dup_digits_at_most_n(n: i64) -> i64 {
+    let mut digits: Vec[i64] = Vec.new();
+    let mut rest = n;
+    while rest > 0 {
+        digits.push(rest % 10);
+        rest /= 10;
+    }
+    digits.reverse();
+    let len = digits.len();
+    let mut factorial: Vec[i64] = Vec.filled(11, 1);
+    for i in 1..11 {
+        factorial[i] = factorial[i - 1] * i;
+    }
+    let mut distinct = 0;
+    for set in 1..1024 {
+        let k = set.count_ones() as i64;
+        if k < len {
+            distinct += factorial[k];
+            if set & 1 != 0 {
+                distinct -= factorial[k - 1];
+            }
+        } else if k == len {
+            distinct += orders_at_most(digits, set, factorial);
+        }
+    }
+    n - distinct
+}
+
+// the orders of the set's digits, without a leading 0, that are at most
+// the number with these digits
+fn orders_at_most(digits: ref Vec[i64], set: i64, factorial: ref Vec[i64]) -> i64 {
+    let len = digits.len();
+    let mut left = set;
+    let mut count = 0;
+    for i in 0..len {
+        let d = digits[i];
+        let lowest = if i == 0 { 1 } else { 0 };
+        for smaller in lowest..d {
+            if left & (1 << smaller) != 0 {
+                count += factorial[len - i - 1];
+            }
+        }
+        if left & (1 << d) == 0 {
+            return count;
+        }
+        left -= 1 << d;
+    }
+    count + 1
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let examples: Vec[i64] = vec![20, 100, 1000, 1, 10, 11, 99, 101, 110, 1022, 98765, 123456789, 987654321, 999999999, 1000000000];
+    for n in examples.iter() {
+        println(f"n = {n} -> {num_dup_digits_at_most_n(n)}");
+    }
+    // just below each power of ten
+    let mut below: Vec[String] = Vec.new();
+    let mut power = 10;
+    for _ in 0..9 {
+        below.push(num_dup_digits_at_most_n(power - 1).to_string());
+        power *= 10;
+    }
+    let shown = below.join(",");
+    println(f"10^k - 1 for k = 1..9 -> [{shown}]");
+    // every n up to 5000
+    let mut total = 0;
+    let mut check = 0;
+    for n in 1..5001 {
+        let count = num_dup_digits_at_most_n(n);
+        total += count;
+        check = (check * 31 + count) % 1000000007;
+    }
+    println(f"every n up to 5000: counts sum to {total}, checksum {check}");
+    // random n up to a thousand, a million and a billion
+    let mut seed = 1012;
+    let groups: Vec[(i64, i64)] = vec![(1000, 1000), (1000, 1000000), (200, 1000000000)];
+    for (draws, top) in groups.iter() {
+        let mut total = 0;
+        let mut check = 0;
+        for _ in 0..draws {
+            let n = 1 + (next_random(mut seed) * 32768 + next_random(mut seed)) % top;
+            let count = num_dup_digits_at_most_n(n);
+            total += count;
+            check = (check * 31 + count) % 1000000007;
+        }
+        println(f"{draws} random n up to {top}: counts sum to {total}, checksum {check}");
+    }
+}
