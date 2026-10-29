@@ -154,7 +154,8 @@ those written as `let none: Option[String] = None; [none].to_vec()` and
   needed; it could move it onto the binding as an `Fn` type.
 - **B-2026-10-29-8** (open): the turbofish fix mid-chain deletes the type and
   leaves an error at the next method.
-- **B-2026-10-29-9** (open): `[None].to_vec()` checks but does not build on MIR.
+- **B-2026-10-29-9** (fixed in af7bbf1e39): `[None].to_vec()` checked but did not
+  build on MIR; the app now writes it that way.
 - **B-2026-10-29-10** (open): `??` on a `ref Option[String]` loop item passes
   check and is refused by the build.
 

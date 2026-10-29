@@ -327,11 +327,7 @@ impl Index {
 
     fn names(self) -> Vec[Option[String]] {
         match self {
-            Index.Range(_, _) => {
-                // B-2026-10-29-9: `[None].to_vec()` checks but does not build on MIR.
-                let none: Option[String] = None;
-                [none].to_vec()
-            }
+            Index.Range(_, _) => [None].to_vec(),
             Index.Flat(_, n) => [n.clone()].to_vec(),
             Index.Multi(_, ns) => ns.clone(),
         }
@@ -2029,9 +2025,7 @@ fn pivot_table(f: Frame, o: PivotOpts) -> Result[Frame, String] {
             lv[2].push(tl[1].get(j));
         }
     }
-    // B-2026-10-29-9
-    let none: Option[String] = None;
-    let mut names: Vec[Option[String]] = [none].to_vec();
+    let mut names: Vec[Option[String]] = [None].to_vec();
     for n in tables[0].columns.names() {
         names.push(n.clone());
     }
