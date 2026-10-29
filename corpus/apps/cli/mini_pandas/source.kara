@@ -1044,9 +1044,7 @@ fn contains_rows(f: Frame, name: Str, pat: Str, case: bool, prefix: bool) -> Res
             } else if case {
                 s.contains(pat)
             } else {
-                // B-2026-10-28-28: `.contains(upper_pat)` after a call on the
-                // receiver counts as consuming the capture.
-                s.to_uppercase().contains(upper_pat.as_str())
+                s.to_uppercase().contains(upper_pat)
             }
         }
     }).collect();

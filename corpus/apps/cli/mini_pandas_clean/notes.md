@@ -136,11 +136,12 @@ job. `mini_pandas_clean.orig.kara` is the program as first written.
   `fn(i64) -> i64`, Rust's two spellings, gets only `Expected
   RightParen, found LeftParen` (or `Expected type, found Fn`), with no
   hint that Kāra writes `Fn(i64) -> i64` and no fix-it.
-- **B-2026-10-29-2** (open): `|s| s.replace(old, new)` with `old` a
-  captured `String` is typed as consuming `old`, so `.map(...)` and any
-  `Fn` slot refuse it. `replacen`, `split`, `find` and `strip_prefix` do
-  the same; `starts_with`, `contains` and `ends_with` pass. All of them
-  borrow their argument.
+- **B-2026-10-29-2** (fixed in 80e76392cf): `|s| s.replace(old, new)`
+  with `old` a captured `String` was typed as consuming `old`, so
+  `.map(...)` and any `Fn` slot refused it. `replacen`, `split`, `find`
+  and `strip_prefix` did the same; `starts_with`, `contains` and
+  `ends_with` passed. All of them borrow their argument, and the app
+  passes `old` itself again.
 - **B-2026-10-29-3** (open): `s.bytes().collect()` is refused with a
   message that spells out `s.bytes().iter().collect(...)`, but the
   diagnostic carries no fix, so `karac fix` leaves it.

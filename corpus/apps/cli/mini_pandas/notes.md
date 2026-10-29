@@ -144,12 +144,12 @@ but the inner merge above, which led to porting pandas' join.
 
 ## Gaps found
 
-- **B-2026-10-28-28** (open): a closure that calls a method on its
-  parameter and passes a captured `String` to `contains`
-  (`|s| s.to_uppercase().contains(upper)`) is typed as consuming the
-  capture, so it is a once-callable closure and `map(...).collect()`
-  refuses it; `|s| s.contains(upper)` passes. `contains_rows` passes
-  `upper_pat.as_str()` instead.
+- **B-2026-10-28-28** (fixed in 80e76392cf): a closure that calls a
+  method on its parameter and passes a captured `String` to `contains`
+  (`|s| s.to_uppercase().contains(upper)`) was typed as consuming the
+  capture, so it was a once-callable closure and `map(...).collect()`
+  refused it; `|s| s.contains(upper)` passed. `contains_rows` passed
+  `upper_pat.as_str()` until the fix, and passes `upper_pat` again.
 - **B-2026-10-28-29** (fixed in cd5a50673e): `Ok((out, qs.iter().map(|q|
   q.to_string()).collect()))` passed `karac check`, but the MIR build
   refused it ("an expression whose type does not lower

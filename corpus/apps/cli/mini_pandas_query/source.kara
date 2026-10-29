@@ -3109,17 +3109,15 @@ fn call_str_method(s: Series, name: Str, a: CallArgs) -> Result[V, String] {
                 return Err("NotImplementedError: mini_pandas_query matches str.contains patterns literally; pass regex=False".to_string());
             }
             let p = if case { pat.clone() } else { pat.to_lowercase() };
-            // B-2026-10-28-28: passing the captured `p` itself makes the
-            // closure once-callable; `p.as_str()` does not.
             let m: Vec[bool] = v.iter().map(|x| match x {
                 Some(t) => {
                     let t2 = if case { t.clone() } else { t.to_lowercase() };
                     if name == "startswith" {
-                        t2.starts_with(p.as_str())
+                        t2.starts_with(p)
                     } else if name == "endswith" {
-                        t2.ends_with(p.as_str())
+                        t2.ends_with(p)
                     } else {
-                        t2.contains(p.as_str())
+                        t2.contains(p)
                     }
                 }
                 None => false,

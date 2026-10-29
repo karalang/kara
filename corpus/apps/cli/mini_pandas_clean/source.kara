@@ -1587,8 +1587,7 @@ fn str_op(c: Col, op: Str, args: Vec[String], a: Args) -> Result[Col, String] {
         "replace" => {
             let old = arg(0);
             let new = arg(1);
-            // B-2026-10-29-2: passing `old` itself makes the closure once-callable.
-            Ok(map_text(cells, |s| s.replace(old.as_str(), new.as_str())))
+            Ok(map_text(cells, |s| s.replace(old, new)))
         }
         "removeprefix" => {
             let p = arg(0);

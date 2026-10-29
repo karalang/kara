@@ -146,8 +146,8 @@ the first run matched pandas on all 1,803 lines.
   name renames the binding and none of its uses.
 - **B-2026-10-29-14** (open): a `Vec` built from borrowed parameters
   passed where a `Vec` is expected has no help or fix.
-- **B-2026-10-28-28** (open) and **B-2026-10-29-10** (open), each met
-  once more.
+- **B-2026-10-28-28** (fixed in 80e76392cf; the app passes `p` itself
+  again) and **B-2026-10-29-10** (open), each met once more.
 
 ## What query and eval would need (notes for M4c)
 
