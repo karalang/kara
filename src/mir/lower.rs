@@ -3818,6 +3818,43 @@ impl<'l, 'a> Bx<'l, 'a> {
         }
     }
 
+    /// Whether `at` is `pt` with some parts `()`: the type the checker gave
+    /// a value whose type parameter it never solved.
+    fn fills_unit_holes(&self, at: Ty, pt: Ty) -> bool {
+        if at == pt {
+            return true;
+        }
+        let tcx = self.tys().tcx();
+        let all = |a: crate::ty::TyList, b: crate::ty::TyList| {
+            let (a, b) = (tcx.list(a), tcx.list(b));
+            a.len() == b.len() && a.iter().zip(&b).all(|(&x, &y)| self.fills_unit_holes(x, y))
+        };
+        match (tcx.kind(at), tcx.kind(pt)) {
+            _ if at == self.unit() => true,
+            (HK::Adt { def: d, args: x }, HK::Adt { def: e, args: y }) => d == e && all(x, y),
+            (HK::Intrinsic { kind: k, args: x }, HK::Intrinsic { kind: l, args: y }) => {
+                k == l && all(x, y)
+            }
+            (HK::Tuple(x), HK::Tuple(y)) => all(x, y),
+            _ => false,
+        }
+    }
+
+    /// `a` as an operand of type `want`. A value whose type the checker
+    /// left with an unsolved part, lowered as `()` (the `None` of
+    /// `Vec.filled(3, None)` pushed into a `Vec[Vec[Option[i64]]]`), is
+    /// built at the type its slot knows, so it has the slot's size
+    /// (B-2026-10-29-25).
+    fn operand_filling_holes(&mut self, a: &'a Expr, want: Ty) -> R<Operand> {
+        let at = self.expr_ty(a)?;
+        if at == want || !self.fills_unit_holes(at, want) {
+            return self.expr_operand(a);
+        }
+        let l = self.temp(want);
+        self.expr_into(a, Place::local(l))?;
+        Ok(Operand::Move(Place::local(l)))
+    }
+
     /// `op` widened into the numeric slot `t`, if it needs it.
     fn widen(&mut self, op: Operand, t: Ty) -> Operand {
         if self.dyn_cast(&op, t).is_some() {
@@ -8397,7 +8434,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 elem,
                 len: crate::ty::ArrayLen::Known(n),
             } if self.is_copy(elem) => {
-                let v = match self.expr_operand(value)? {
+                let v = match self.operand_filling_holes(value, elem)? {
                     // An unsuffixed literal takes the element type.
                     Operand::Const(Const {
                         kind: ConstKind::Scalar(x),
@@ -8446,7 +8483,11 @@ impl<'l, 'a> Bx<'l, 'a> {
                     self.assign(c, Rvalue::Cast(CastKind::IntToInt, n, i64_t));
                     Operand::Copy(Place::local(c))
                 };
-                let v = self.expr_operand(value)?;
+                let elem = match self.tys().tcx().kind(t) {
+                    HK::Intrinsic { args, .. } => self.tys().tcx().list(args)[0],
+                    _ => unreachable!(),
+                };
+                let v = self.operand_filling_holes(value, elem)?;
                 let name = format!("{}.filled", self.tys().display(t));
                 self.call_native(&name, vec![n, v], dest);
                 Ok(())
@@ -16393,6 +16434,9 @@ impl<'l, 'a> Bx<'l, 'a> {
             _ => None,
         };
         let at = self.expr_ty(a)?;
+        if at != pt && self.fills_unit_holes(at, pt) {
+            return self.operand_filling_holes(a, pt);
+        }
         let slice_t = match self.tys().tcx().kind(pt) {
             HK::Ref(t) | HK::MutRef(t) => t,
             _ => pt,
@@ -17795,13 +17839,24 @@ impl<'l, 'a> Bx<'l, 'a> {
                 // nothing of it, so its closure borrows what it captures, as
                 // a method native's does (B-2026-10-22-1).
                 let calls_in_place = m == "from_fn" && matches!(owner, "Vec" | "Array");
+                // `Vec.filled(n, None)`: the value is built at the element
+                // type the call's own type names.
+                let elem = match self.tys().tcx().kind(t) {
+                    HK::Intrinsic { args: ea, .. } if m == "filled" => {
+                        self.tys().tcx().list(ea).first().copied()
+                    }
+                    _ => None,
+                };
                 let mut ops = Vec::new();
-                for a in args {
+                for (i, a) in args.iter().enumerate() {
                     if calls_in_place && matches!(a.value.kind, ExprKind::Closure { .. }) {
                         ops.push(self.fn_value(&a.value)?.0);
                         continue;
                     }
-                    ops.push(self.expr_operand(&a.value)?);
+                    ops.push(match elem {
+                        Some(el) if i == 1 => self.operand_filling_holes(&a.value, el)?,
+                        _ => self.expr_operand(&a.value)?,
+                    });
                 }
                 self.call_native(&format!("{ty_name}.{m}"), ops, dest);
                 Ok(())
