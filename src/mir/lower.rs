@@ -19331,22 +19331,24 @@ impl<'l, 'a> Bx<'l, 'a> {
             .filter(|_| self.lcx.user_defaults.contains(r))
         {
             // A program's own default (§14.14) is a provider like any
-            // other; one with fields is a static built before `main`.
+            // other, held in a static built before `main` and never
+            // dropped. One with fields is read-only; a field-less one,
+            // which no write can change, is lent `mut ref` too.
             let t = self.expr_ty(d)?;
             decl.impls.insert(t, self.provider_methods(d.span, r, t)?);
             decl.default = Some(t);
-            if self.tys().field_ty(t, None, 0).is_some() {
-                let idx = self.lcx.program.statics.len() as u32;
-                let init = format!("static.default.{r}");
-                self.lcx.program.statics.push(StaticDef {
-                    name: format!("default.{r}"),
-                    ty: t,
-                    mutable: false,
-                    init: init.clone(),
-                });
-                self.lcx.default_queue.push((d, t, init));
-                decl.default_static = Some(idx);
-            }
+            let stateful = self.tys().field_ty(t, None, 0).is_some();
+            let idx = self.lcx.program.statics.len() as u32;
+            let init = format!("static.default.{r}");
+            self.lcx.program.statics.push(StaticDef {
+                name: format!("default.{r}"),
+                ty: t,
+                mutable: !stateful,
+                init: init.clone(),
+            });
+            self.lcx.default_queue.push((d, t, init));
+            decl.default_static = Some(idx);
+            decl.default_stateful = stateful;
         } else if let Some(&d) = self.lcx.resource_defaults.get(r) {
             // The library's defaults keep their methods as natives, named
             // as `provider_recv` names them.

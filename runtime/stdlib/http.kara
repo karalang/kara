@@ -213,10 +213,17 @@ struct Server { }
 // `with_header`, `with_body`, core-semantics §14.12), so a `Network`
 // provider's `send` and a test that calls a handler directly both have
 // one. `__id` is 0 for the request a server's handler is answering, else
-// the runtime's id for one built; a program reads it only through the
-// methods below.
+// the runtime's id for one built, which its drop frees; a program reads it
+// only through the methods below.
 struct Request {
     __id: i64,
+}
+
+// Drop-skip-sound: skipping this Drop leaks the built request's runtime
+// entry (its URL, headers and body); no UB, no type-system violation.
+impl Drop for Request {
+    #[compiler_builtin]
+    fn drop(mut ref self) {}
 }
 
 impl Request {

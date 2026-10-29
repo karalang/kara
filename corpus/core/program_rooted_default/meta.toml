@@ -8,5 +8,5 @@ expected_from = "spec"
 rules = ["14.14", "14.7"]
 backends = []
 env = {}
-note = "core-semantics §14.14: a program-declared default with fields is one static evaluated before `main` and never dropped (its `Drop` prints nothing); calls outside an override borrow it, in a spawned task too; an override replaces it; a field-less default keeps its `mut ref self` method."
+note = "core-semantics §14.14: a program-declared default with fields is one static evaluated before `main` and never dropped (its `Drop` prints nothing); calls outside an override borrow it, in a spawned task too; an override replaces it; a field-less default keeps its `mut ref self` method and, being one static too, never runs its `Drop` either."
 bucket = "a"

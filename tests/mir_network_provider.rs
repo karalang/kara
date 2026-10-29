@@ -496,3 +496,55 @@ err down
 "#,
     );
 }
+
+/// B-2026-10-29-26: a `Request` a program builds frees its runtime entry
+/// when it drops, so a client that builds requests in a loop runs in
+/// constant memory. 400000 of them reached 108 MB of resident memory
+/// before; the bound leaves room for the runtime and the allocator.
+#[cfg(target_os = "linux")]
+#[test]
+fn provider_network_built_requests_are_freed() {
+    let src = "fn main() {\n\
+                   let mut n = 0;\n\
+                   for i in 0..ROUNDS {\n\
+                       let r = Request.new(\"GET\".to_string(), f\"http://api.test/items/{i}?page=1\".to_string()).with_body(\"x\".to_string());\n\
+                       n = n + r.url().len();\n\
+                   }\n\
+                   println(n);\n\
+               }\n";
+    let dir = Scratch::new("built_requests");
+    let (interp, _) = interp_and_build(dir.path(), &src.replace("ROUNDS", "2000"));
+    assert_eq!(interp, "64890\n");
+    let file = dir.path().join("loop.kara");
+    std::fs::write(&file, src.replace("ROUNDS", "400000")).unwrap();
+    let exe = dir.path().join("loop");
+    let karac = env!("CARGO_BIN_EXE_karac");
+    let built = Command::new(karac)
+        .args(["build", file.to_str().unwrap(), "-o", exe.to_str().unwrap()])
+        .output()
+        .unwrap();
+    if common::link_or_skip(if built.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&built.stderr).to_string())
+    })
+    .is_none()
+    {
+        return;
+    }
+    // `wait4` below reaps it, with its own resource usage.
+    #[allow(clippy::zombie_processes)]
+    let child = Command::new(&exe).stdout(Stdio::null()).spawn().unwrap();
+    let mut status = 0;
+    // SAFETY: an all-zero `rusage` is a valid value, and `wait4` reaps the
+    // child it is given, which nothing else waits for.
+    let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
+    let pid = unsafe { libc::wait4(child.id() as i32, &mut status, 0, &mut usage) };
+    assert_eq!(pid, child.id() as i32);
+    assert!(libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0);
+    assert!(
+        usage.ru_maxrss < 40_000,
+        "400000 built requests reached {} KB",
+        usage.ru_maxrss
+    );
+}

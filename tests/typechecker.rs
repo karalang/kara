@@ -28278,6 +28278,8 @@ fn drop_method_keys_empty_when_no_drop_impl() {
         "CriticalSectionGuard",
         "Semaphore",
         "RateLimiter",
+        // `Request` (core semantics §14.12): frees a built request.
+        "Request",
     ];
     let user_keys: Vec<&String> = result
         .drop_method_keys

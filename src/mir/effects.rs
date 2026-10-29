@@ -330,10 +330,12 @@ pub struct ResourceDecl {
     /// resource (`Env`, `Clock`, `RandomSource`, §14.7); `None` for a
     /// resource only `with_provider` can bind.
     pub default: Option<Ty>,
-    /// The static holding a default the program declares whose type has
-    /// fields (§14.14), built before `main`: a call outside an override
-    /// borrows it. A field-less default is built where it is called.
+    /// The static holding a default the program declares (§14.14), built
+    /// before `main` and never dropped: a call outside an override borrows
+    /// it, `mut ref` only when its type has no fields.
     pub default_static: Option<u32>,
+    /// Whether that default's type has fields, which makes it read-only.
+    pub default_stateful: bool,
     /// For each provider type bound to `R` anywhere, and the default, the
     /// instance name of each of its methods; those bodies are in the
     /// program.
@@ -540,7 +542,7 @@ pub(crate) fn analyze_with(program: &Program, tys: &TyInterner, size_gate: bool)
                 };
                 if d.default.is_none() {
                     report.no_provider.push(site);
-                } else if d.default_static.is_some() && *access == Access::Writes {
+                } else if d.default_stateful && *access == Access::Writes {
                     let callee = match &main.blocks[block.index()].terminator.kind {
                         TerminatorKind::Call {
                             func:
@@ -4440,6 +4442,7 @@ fn main() -> () {
             methods: BTreeMap::from([("now".to_string(), false), ("bump".to_string(), true)]),
             default: None,
             default_static: None,
+            default_stateful: false,
             impls: BTreeMap::from([(fake, methods("Fake")), (loud, methods("Loud"))]),
         };
         p.resources.insert("Clock".to_string(), decl.clone());

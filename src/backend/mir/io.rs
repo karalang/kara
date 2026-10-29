@@ -1418,12 +1418,16 @@ impl<'ctx> Cx<'ctx, '_> {
 
     /// The `#[compiler_builtin]` `Drop` of the I/O type `name`, whose
     /// `mut ref` is in `slot`: `true` when it is one. A socket closes its
-    /// descriptor, leaving the reactor first (`karac_mir_sock_close`).
+    /// descriptor, leaving the reactor first (`karac_mir_sock_close`), and
+    /// a `Request` its runtime entry.
     pub(super) fn io_drop(&mut self, name: &str, slot: PointerValue<'ctx>) -> R<bool> {
         let close = match name {
             "TcpListener" | "TcpStream" | "UdpSocket" => "karac_mir_sock_close",
             // A stream sends `close_notify` first (`mir_tls.rs`).
             "TlsListener" | "TlsStream" => "karac_mir_tls_close",
+            // A `Request` a program built frees its entry (core semantics
+            // §14.12); the served one, id 0, is the server's.
+            "Request" => "karac_mir_http_request_release",
             _ => return Ok(false),
         };
         let v = self.load_ptr(slot)?;

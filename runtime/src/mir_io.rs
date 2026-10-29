@@ -1273,22 +1273,63 @@ fn with_request<T>(f: impl FnOnce(&http1::Request) -> T) -> T {
 }
 
 /// The requests a program built (`Request.new`, core semantics §14.12),
-/// by `__id` - 1: the URL and the request.
+/// by `__id` - 1: the URL and the request, until the `Request` drops; and
+/// the slots dropped ones left, which the next ones take.
 #[cfg(feature = "net")]
-static BUILT_REQUESTS: std::sync::Mutex<Vec<(String, http1::Request)>> =
-    std::sync::Mutex::new(Vec::new());
+struct BuiltRequests {
+    slots: Vec<Option<(String, http1::Request)>>,
+    free: Vec<usize>,
+}
 
 #[cfg(feature = "net")]
-fn built_requests() -> std::sync::MutexGuard<'static, Vec<(String, http1::Request)>> {
+static BUILT_REQUESTS: std::sync::Mutex<BuiltRequests> = std::sync::Mutex::new(BuiltRequests {
+    slots: Vec::new(),
+    free: Vec::new(),
+});
+
+#[cfg(feature = "net")]
+fn built_requests() -> std::sync::MutexGuard<'static, BuiltRequests> {
     BUILT_REQUESTS.lock().unwrap_or_else(|p| p.into_inner())
+}
+
+#[cfg(feature = "net")]
+impl BuiltRequests {
+    fn get_mut(&mut self, id: i64) -> Option<&mut (String, http1::Request)> {
+        let i = usize::try_from(id - 1).ok()?;
+        self.slots.get_mut(i)?.as_mut()
+    }
 }
 
 /// Keeps the request `req` to `url` a program built; its `__id`.
 #[cfg(feature = "net")]
 fn built_request(url: String, req: http1::Request) -> i64 {
     let mut b = built_requests();
-    b.push((url, req));
-    b.len() as i64
+    let i = match b.free.pop() {
+        Some(i) => {
+            b.slots[i] = Some((url, req));
+            i
+        }
+        None => {
+            b.slots.push(Some((url, req)));
+            b.slots.len() - 1
+        }
+    };
+    i as i64 + 1
+}
+
+/// `Request`'s drop: frees the request `id` a program built.
+#[cfg(feature = "net")]
+#[no_mangle]
+pub extern "C" fn karac_mir_http_request_release(id: i64) {
+    if id <= 0 {
+        return;
+    }
+    let mut b = built_requests();
+    if b.get_mut(id).is_some() {
+        let i = (id - 1) as usize;
+        b.slots[i] = None;
+        b.free.push(i);
+    }
 }
 
 /// A `RequestBuilder`'s request (`__request`, core semantics §14.12): its
@@ -1313,8 +1354,8 @@ fn with_request_id<T>(id: i64, f: impl FnOnce(&str, &http1::Request) -> T) -> T 
     if id == 0 {
         return with_request(|r| f(&r.target, r));
     }
-    let b = built_requests();
-    match usize::try_from(id - 1).ok().and_then(|i| b.get(i)) {
+    let mut b = built_requests();
+    match b.get_mut(id) {
         Some((url, r)) => f(url, r),
         None => f("", &http1::Request::default()),
     }
@@ -1366,7 +1407,7 @@ pub unsafe extern "C" fn karac_mir_http_request_set(
     // SAFETY: the caller's contract.
     let (a, b) = unsafe { (bytes_at(a, a_len as usize), bytes_at(b, b_len as usize)) };
     let mut all = built_requests();
-    if let Some((_, r)) = usize::try_from(id - 1).ok().and_then(|i| all.get_mut(i)) {
+    if let Some((_, r)) = all.get_mut(id) {
         let text = |t: &[u8]| String::from_utf8_lossy(t).into_owned();
         match op {
             0 => r.headers.push((text(a), text(b))),

@@ -1,7 +1,8 @@
 // core-semantics §14.14: a program's own default provider. `Audit`'s has
 // fields, so it is one static, built before `main` and never dropped, which
 // its calls borrow; an override replaces it for the closure's extent.
-// `Tick`'s has none, so its `mut ref self` method may be called anywhere.
+// `Tick`'s has none, so its `mut ref self` method may be called anywhere;
+// it too is one static, never dropped, however many calls reach it.
 trait Log {
     fn count(self) -> i64;
     fn name(self) -> String;
@@ -33,6 +34,10 @@ struct Ticks { }
 
 impl Counter for Ticks {
     fn next(mut ref self) -> i64 { 1 }
+}
+
+impl Drop for Ticks {
+    fn drop(mut ref self) { println("ticks dropped") }
 }
 
 effect resource Audit: Log = RealLog { base: 41, label: "real".to_string() };

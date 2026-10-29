@@ -3747,6 +3747,7 @@ mod tests {
             "Pool",
             "PooledConnection",
             "RateLimiter",
+            "Request",
             "Semaphore",
             "Sha1",
             "Sha256",

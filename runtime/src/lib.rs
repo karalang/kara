@@ -645,6 +645,7 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         mir_io::karac_mir_http_request,
         mir_io::karac_mir_http_request_new,
         mir_io::karac_mir_http_request_set,
+        mir_io::karac_mir_http_request_release,
         mir_io::karac_mir_http_install,
         mir_io::karac_mir_http_wire,
         mir_io::karac_mir_http_keep_alive,

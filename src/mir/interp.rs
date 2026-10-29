@@ -820,6 +820,7 @@ fn run_with(
         http_bodies: rustc_hash::FxHashMap::default(),
         http_requests: rustc_hash::FxHashMap::default(),
         built_requests: Vec::new(),
+        free_requests: Vec::new(),
         cancel_after: match tasks {
             Tasks::CancelAfter(n) => Some(n),
             _ => None,
@@ -1329,8 +1330,11 @@ struct Interp<'a> {
     /// connection in a task of its own (B-2026-10-25-41).
     http_requests: rustc_hash::FxHashMap<usize, crate::http1::Request>,
     /// The requests a program built (`Request.new`, core semantics
-    /// §14.12), by `__id` - 1: its URL and the request.
-    built_requests: Vec<(String, crate::http1::Request)>,
+    /// §14.12), by `__id` - 1: its URL and the request, until the
+    /// `Request` drops.
+    built_requests: Vec<Option<(String, crate::http1::Request)>>,
+    /// The slots of `built_requests` dropped requests left.
+    free_requests: Vec<usize>,
 }
 
 /// Where a native copy of interpreter values came from: `count` scalars of
@@ -15136,8 +15140,7 @@ impl<'a> Interp<'a> {
                         req.headers = b.headers.clone();
                         req.body = b.body.clone().into_bytes();
                         let url = b.url.clone();
-                        self.built_requests.push((url, req));
-                        let id = self.built_requests.len() as i128;
+                        let id = self.keep_request(url, req) as i128;
                         return Ok(Value::Agg(vec![Value::Int(id)]));
                     }
                     _ => return err(format!("call of unknown function {name}")),
@@ -15443,18 +15446,40 @@ impl<'a> Interp<'a> {
         match self.struct_value(v, name)?.as_slice() {
             [] => Ok(0),
             [Value::Int(id)] => match usize::try_from(*id) {
-                Ok(i) if i <= self.built_requests.len() => Ok(i),
+                Ok(0) => Ok(0),
+                Ok(i) if self.built_requests.get(i - 1).is_some_and(Option::is_some) => Ok(i),
                 _ => err(format!("{name} of an unknown request {id}")),
             },
             other => err(format!("{name} of a request holding {other:?}")),
         }
     }
 
+    /// Keeps the request `req` to `url` a program built; its `__id`.
+    fn keep_request(&mut self, url: String, req: crate::http1::Request) -> usize {
+        match self.free_requests.pop() {
+            Some(i) => {
+                self.built_requests[i] = Some((url, req));
+                i + 1
+            }
+            None => {
+                self.built_requests.push(Some((url, req)));
+                self.built_requests.len()
+            }
+        }
+    }
+
+    /// The URL and request `id` (one built, so not 0) names.
+    fn built(&mut self, id: usize) -> &mut (String, crate::http1::Request) {
+        self.built_requests[id - 1]
+            .as_mut()
+            .expect("a request id `request_id` checked")
+    }
+
     /// The request `id` names: the served one at 0, else one built.
     fn request_of(&mut self, id: usize) -> &crate::http1::Request {
         match id {
             0 => self.served(),
-            _ => &self.built_requests[id - 1].1,
+            _ => &self.built(id).1,
         }
     }
 
@@ -15540,35 +15565,41 @@ impl<'a> Interp<'a> {
                 let method = text_of(self, 0)?;
                 let url = text_of(self, 1)?;
                 let req = crate::http1::Request::built(method, &url);
-                self.built_requests.push((url, req));
-                Ok(Value::Agg(vec![Value::Int(
-                    self.built_requests.len() as i128
-                )]))
+                let id = self.keep_request(url, req);
+                Ok(Value::Agg(vec![Value::Int(id as i128)]))
+            }
+            ("Request", "drop") => {
+                // A request the program built frees its slot; the served
+                // one, id 0, is the server's.
+                let id = self.request_id(&args[0], name)?;
+                if id > 0 && self.built_requests[id - 1].take().is_some() {
+                    self.free_requests.push(id - 1);
+                }
+                Ok(Value::Unit)
             }
             ("Request", "with_header" | "with_body") => {
                 let id = self.request_id(&args[0], name)?;
-                let at = if id == 0 {
+                let id = if id == 0 {
                     // The served request, copied into one the program owns.
                     let req = self.served().clone();
-                    self.built_requests.push((req.target.clone(), req));
-                    self.built_requests.len() - 1
+                    self.keep_request(req.target.clone(), req)
                 } else {
-                    id - 1
+                    id
                 };
                 if method == "with_header" {
                     let (k, v) = (text_of(self, 1)?, text_of(self, 2)?);
-                    self.built_requests[at].1.headers.push((k, v));
+                    self.built(id).1.headers.push((k, v));
                 } else {
                     let b = text_of(self, 1)?;
-                    self.built_requests[at].1.body = b.into_bytes();
+                    self.built(id).1.body = b.into_bytes();
                 }
-                Ok(Value::Agg(vec![Value::Int(at as i128 + 1)]))
+                Ok(Value::Agg(vec![Value::Int(id as i128)]))
             }
             ("Request", "url") => {
                 let id = self.request_id(&args[0], name)?;
                 let text = match id {
                     0 => self.served().target.clone(),
-                    _ => self.built_requests[id - 1].0.clone(),
+                    _ => self.built(id).0.clone(),
                 };
                 Ok(self.alloc_box("String", Value::Str(text)))
             }

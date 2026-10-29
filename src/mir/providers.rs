@@ -363,10 +363,10 @@ pub fn specialise(
         let mut env = Env::new();
         let mut rooted = true;
         for (r, access) in needs.get(&name).into_iter().flatten() {
-            match resources.get(r).map(|d| (d.default, d.default_static)) {
+            match resources.get(r).map(|d| (d.default, d.default_stateful)) {
                 // A body that writes a default with state runs only under
                 // an override (§14.14): `main` writing one was refused.
-                Some((Some(_), Some(_))) if *access == Access::Writes => rooted = false,
+                Some((Some(_), true)) if *access == Access::Writes => rooted = false,
                 Some((Some(t), _)) => {
                     env.insert(r.clone(), Binding::Default(t));
                 }
@@ -720,7 +720,7 @@ impl Spec<'_> {
             (Binding::Default(t), Some(i)) => {
                 // A default with state is read-only (§14.14): a `mut ref
                 // self` method on it would be a global every task writes.
-                if mutable {
+                if mutable && decl.default_stateful {
                     return Err(format!(
                         "providers: `{r}.{m}` takes `mut ref self`, but `{r}`'s default \
                          `{}` has fields, so outside an override the call would write a \
@@ -731,7 +731,7 @@ impl Spec<'_> {
                     ));
                 }
                 Operand::Const(Const {
-                    ty: self.tys.tcx().reference(t, false),
+                    ty: self.tys.tcx().reference(t, mutable),
                     kind: ConstKind::Static(i),
                 })
             }
