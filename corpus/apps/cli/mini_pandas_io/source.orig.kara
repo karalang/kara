@@ -1,0 +1,3126 @@
+// mini_pandas_io: a Kāra port of the part of pandas 3.0.5 (BSD-3-Clause,
+// the pandas development team) that reads exports from other systems and
+// writes them back out: read_csv's C parser with the options an ETL job
+// reaches for (separators, skipped rows, comments, quoting and escapes,
+// missing-value markers, true and false words, thousands separators and
+// decimal commas, column types, bad lines), to_csv with Python's csv
+// writer and its quoting modes, and the cleaning steps in between
+// (fillna, ffill and bfill, dropna, shift, diff, cumulative sums, clip,
+// round, replace, astype, drop_duplicates, groupby aggregation).
+//
+// It reads data/jobs.txt, one pipeline per line (`read statement.csv
+// sep=; skiprows=3 decimal=, thousands=. | write quoting=2`), runs each
+// in a task of its own, and prints, in job order, `$ <job>`, any
+// ParserWarning after `~ `, and the frame as to_csv writes it, or the
+// error pandas raises after `! `.
+//
+// The C parser's tokenizer (tokenizer.c's tokenize_bytes) is ported
+// state for state, with its number readers (precise_xstrtod,
+// str_to_int64, str_to_uint64, to_boolean), since every quirk a user
+// sees comes from there: a date read as an integer under thousands=".",
+// a comment character that cuts a field short, a first line with more
+// fields than the header turning into the index.
+
+import std.sync.{TaskGroup};
+
+// ============================================================ values
+// A column of one dtype. A missing float is NaN; a missing string is
+// None. `UInt` is the uint64 a column of ids past i64's range reads as.
+// `Obj` is pandas' `object` dtype: a column of booleans with gaps, or of
+// integers past uint64, held as the text pandas writes for each value.
+#[derive(Clone)]
+enum Col {
+    Int(Vec[i64]),
+    UInt(Vec[u64]),
+    Float(Vec[f64]),
+    Bool(Vec[bool]),
+    Str(Vec[Option[String]]),
+    Obj(Vec[Option[String]]),
+}
+
+impl Col {
+    fn len(self) -> i64 {
+        match self {
+            Col.Int(v) => v.len(),
+            Col.UInt(v) => v.len(),
+            Col.Float(v) => v.len(),
+            Col.Bool(v) => v.len(),
+            Col.Str(v) => v.len(),
+            Col.Obj(v) => v.len(),
+        }
+    }
+
+    fn dtype(self) -> String {
+        match self {
+            Col.Int(_) => "int64".to_string(),
+            Col.UInt(_) => "uint64".to_string(),
+            Col.Float(_) => "float64".to_string(),
+            Col.Bool(_) => "bool".to_string(),
+            Col.Str(_) => "str".to_string(),
+            Col.Obj(_) => "object".to_string(),
+        }
+    }
+
+    fn is_numeric(self) -> bool {
+        match self {
+            Col.Int(_) => true,
+            Col.UInt(_) => true,
+            Col.Float(_) => true,
+            _ => false,
+        }
+    }
+
+    fn get(self, i: i64) -> Val {
+        match self {
+            Col.Int(v) => Val.I(v[i]),
+            Col.UInt(v) => if v[i] <= 9223372036854775807 { Val.I(v[i] as i64) } else { Val.F(v[i] as f64) },
+            Col.Float(v) => if is_nan(v[i]) { Val.Na } else { Val.F(v[i]) },
+            Col.Bool(v) => Val.B(v[i]),
+            Col.Str(v) => match v[i] {
+                Some(s) => Val.S(s.clone()),
+                None => Val.Na,
+            },
+            Col.Obj(v) => match v[i] {
+                Some(s) => Val.S(s.clone()),
+                None => Val.Na,
+            },
+        }
+    }
+
+    fn is_na(self, i: i64) -> bool {
+        match self {
+            Col.Float(v) => is_nan(v[i]),
+            Col.Str(v) => v[i].is_none(),
+            Col.Obj(v) => v[i].is_none(),
+            _ => false,
+        }
+    }
+
+    // The rows at `idx`, in that order; -1 is a missing row.
+    fn take(self, idx: Vec[i64]) -> Col {
+        let missing = idx.iter().any(|i| *i < 0);
+        match self {
+            Col.Int(v) => {
+                if missing {
+                    Col.Float(idx.iter().map(|i| if *i < 0 { nan() } else { v[*i] as f64 }).collect())
+                } else {
+                    Col.Int(idx.iter().map(|i| v[*i]).collect())
+                }
+            }
+            Col.UInt(v) => {
+                if missing {
+                    Col.Float(idx.iter().map(|i| if *i < 0 { nan() } else { v[*i] as f64 }).collect())
+                } else {
+                    Col.UInt(idx.iter().map(|i| v[*i]).collect())
+                }
+            }
+            Col.Float(v) => Col.Float(idx.iter().map(|i| if *i < 0 { nan() } else { v[*i] }).collect()),
+            Col.Bool(v) => {
+                if missing {
+                    Col.Obj(idx.iter().map(|i| if *i < 0 { None } else { Some(bool_text(v[*i])) }).collect())
+                } else {
+                    Col.Bool(idx.iter().map(|i| v[*i]).collect())
+                }
+            }
+            Col.Str(v) => Col.Str(idx.iter().map(|i| if *i < 0 { None } else { v[*i].clone() }).collect()),
+            Col.Obj(v) => Col.Obj(idx.iter().map(|i| if *i < 0 { None } else { v[*i].clone() }).collect()),
+        }
+    }
+
+    // The column as floats, as pandas casts it for a numeric kernel.
+    fn floats(self) -> Vec[f64] {
+        match self {
+            Col.Int(v) => v.iter().map(|x| *x as f64).collect(),
+            Col.UInt(v) => v.iter().map(|x| *x as f64).collect(),
+            Col.Float(v) => v.clone(),
+            Col.Bool(v) => v.iter().map(|b| if *b { 1.0 } else { 0.0 }).collect(),
+            _ => Vec.new(),
+        }
+    }
+
+    fn empty_like(self) -> Col {
+        match self {
+            Col.Int(_) => Col.Int(Vec.new()),
+            Col.UInt(_) => Col.UInt(Vec.new()),
+            Col.Float(_) => Col.Float(Vec.new()),
+            Col.Bool(_) => Col.Bool(Vec.new()),
+            Col.Str(_) => Col.Str(Vec.new()),
+            Col.Obj(_) => Col.Obj(Vec.new()),
+        }
+    }
+}
+
+// One cell, for keys, comparisons and literals.
+#[derive(Clone)]
+enum Val {
+    I(i64),
+    F(f64),
+    B(bool),
+    S(String),
+    Na,
+}
+
+#[derive(Clone)]
+struct Frame {
+    names: Vec[String],
+    cols: Vec[Col],
+}
+
+impl Frame {
+    fn new() -> Frame {
+        Frame { names: Vec.new(), cols: Vec.new() }
+    }
+
+    fn height(self) -> i64 {
+        if self.cols.len() == 0 { 0 } else { self.cols[0].len() }
+    }
+
+    fn find(self, name: Str) -> Option[i64] {
+        for i in 0..self.names.len() {
+            if self.names[i] == name {
+                return Some(i);
+            }
+        }
+        None
+    }
+
+    fn col(self, name: Str) -> Result[Col, String] {
+        match self.find(name) {
+            Some(i) => Ok(self.cols[i].clone()),
+            None => Err(key_error(name)),
+        }
+    }
+
+    // Sets a column, replacing one of that name or appending it.
+    fn put(mut ref self, name: Str, c: own Col) {
+        match self.find(name) {
+            Some(i) => self.cols[i] = c,
+            None => {
+                self.names.push(name.to_string());
+                self.cols.push(c);
+            }
+        }
+    }
+
+    fn take(self, idx: Vec[i64]) -> Frame {
+        Frame { names: self.names.clone(), cols: self.cols.iter().map(|c| c.take(idx)).collect() }
+    }
+
+    fn rows_where(self, keep: Vec[bool]) -> Frame {
+        let mut idx: Vec[i64] = Vec.new();
+        for i in 0..keep.len() {
+            if keep[i] {
+                idx.push(i);
+            }
+        }
+        self.take(idx)
+    }
+
+    fn row(self, i: i64, which: Vec[i64]) -> Vec[Val] {
+        which.iter().map(|j| self.cols[*j].get(i)).collect()
+    }
+}
+
+fn nan() -> f64 {
+    0.0 / 0.0
+}
+
+fn is_nan(x: f64) -> bool {
+    x != x
+}
+
+fn signbit(x: f64) -> bool {
+    1.0.copysign(x) < 0.0
+}
+
+fn bool_text(b: bool) -> String {
+    if b { "True".to_string() } else { "False".to_string() }
+}
+
+// How to_csv writes one cell.
+fn cell_text(c: Col, i: i64) -> String {
+    match c {
+        Col.Int(v) => v[i].to_string(),
+        Col.UInt(v) => v[i].to_string(),
+        Col.Float(v) => if is_nan(v[i]) { String.new() } else { v[i].to_string() },
+        Col.Bool(v) => bool_text(v[i]),
+        Col.Str(v) => v[i].clone() ?? String.new(),
+        Col.Obj(v) => v[i].clone() ?? String.new(),
+    }
+}
+
+fn val_text(v: Val) -> String {
+    match v {
+        Val.I(n) => n.to_string(),
+        Val.F(x) => x.to_string(),
+        Val.B(b) => bool_text(b),
+        Val.S(s) => s.clone(),
+        Val.Na => String.new(),
+    }
+}
+
+// The order pandas sorts keys in: numbers by value, strings by code
+// point, NaN after everything.
+fn val_cmp(a: Val, b: Val) -> Ordering {
+    match (a, b) {
+        (Val.Na, Val.Na) => Ordering.Equal,
+        (Val.Na, _) => Ordering.Greater,
+        (_, Val.Na) => Ordering.Less,
+        (Val.S(x), Val.S(y)) => x.cmp(y),
+        (Val.B(x), Val.B(y)) => (x as i64).cmp(y as i64),
+        (Val.I(x), Val.I(y)) => x.cmp(y),
+        (x, y) => {
+            let p = num_of(x);
+            let q = num_of(y);
+            if p < q {
+                Ordering.Less
+            } else if p > q {
+                Ordering.Greater
+            } else {
+                Ordering.Equal
+            }
+        }
+    }
+}
+
+// The opposite order, for a descending sort.
+fn flip(o: Ordering) -> Ordering {
+    match o {
+        Ordering.Less => Ordering.Greater,
+        Ordering.Greater => Ordering.Less,
+        Ordering.Equal => Ordering.Equal,
+    }
+}
+
+fn num_of(v: Val) -> f64 {
+    match v {
+        Val.I(n) => n as f64,
+        Val.F(x) => x,
+        Val.B(b) => if b { 1.0 } else { 0.0 },
+        _ => nan(),
+    }
+}
+
+// Equality as factorize sees it: NaN equals NaN.
+fn val_eq(a: Val, b: Val) -> bool {
+    val_cmp(a, b) == Ordering.Equal
+}
+
+// A key made of several cells, as one string for a Map.
+fn key_text(vals: Vec[Val]) -> String {
+    let mut t = String.new();
+    for v in vals {
+        match v {
+            Val.I(n) => t.push_str(f"i{n}"),
+            Val.F(x) => {
+                // 1 and 1.0 are one key, as in a pandas hash table.
+                if x == x.trunc() and x.abs() < 9.0e15 {
+                    t.push_str(f"i{x as i64}");
+                } else {
+                    t.push_str(f"f{x.to_bits()}");
+                }
+            }
+            Val.B(b) => t.push_str(if b { "b1" } else { "b0" }),
+            Val.S(s) => {
+                t.push_str("s");
+                t.push_str(s.replace("\\", "\\\\").replace("\u{1f}", "\\u"));
+            }
+            Val.Na => t.push_str("n"),
+        }
+        t.push('\u{1f}');
+    }
+    t
+}
+
+fn key_error(name: Str) -> String {
+    f"KeyError: '{name}'"
+}
+
+fn index_of_all(f: Frame, names: Vec[String]) -> Result[Vec[i64], String] {
+    let mut out: Vec[i64] = Vec.new();
+    for n in names {
+        match f.find(n) {
+            Some(i) => out.push(i),
+            None => return Err(key_error(n)),
+        }
+    }
+    Ok(out)
+}
+
+fn range_idx(n: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for i in 0..n {
+        v.push(i);
+    }
+    v
+}
+
+// numpy's add.reduce over float64: a pairwise sum, eight accumulators
+// at a time, from 0.0. pandas reaches it from Series.mean and describe.
+fn pairwise_sum(a: Vec[f64], lo: i64, n: i64) -> f64 {
+    if n < 8 {
+        let mut res = 0.0;
+        for i in lo..lo + n {
+            res = res + a[i];
+        }
+        return res;
+    }
+    if n <= 128 {
+        let mut r: Vec[f64] = Vec.new();
+        for j in 0..8 {
+            r.push(a[lo + j]);
+        }
+        let mut i = 8;
+        while i < n - n % 8 {
+            for j in 0..8 {
+                r[j] = r[j] + a[lo + i + j];
+            }
+            i += 8;
+        }
+        let mut res = ((r[0] + r[1]) + (r[2] + r[3])) + ((r[4] + r[5]) + (r[6] + r[7]));
+        while i < n {
+            res = res + a[lo + i];
+            i += 1;
+        }
+        return res;
+    }
+    let mut n2 = n / 2;
+    n2 -= n2 % 8;
+    pairwise_sum(a, lo, n2) + pairwise_sum(a, lo + n2, n - n2)
+}
+
+fn np_sum(a: Vec[f64]) -> f64 {
+    pairwise_sum(a, 0, a.len())
+}
+
+// Kahan summation as pandas' groupby kernels run it.
+struct Kahan {
+    sum: f64,
+    comp: f64,
+    n: i64,
+}
+
+impl Kahan {
+    fn add(mut ref self, val: f64) {
+        self.n += 1;
+        let y = val - self.comp;
+        let t = self.sum + y;
+        self.comp = t - self.sum - y;
+        if is_nan(self.comp) or self.comp.abs() == 1.0 / 0.0 {
+            self.comp = 0.0;
+        }
+        self.sum = t;
+    }
+}
+
+fn kahan() -> Kahan {
+    Kahan { sum: 0.0, comp: 0.0, n: 0 }
+}
+
+// Series.mean: numpy's sum with NaN as 0, over the non-NaN count.
+fn series_mean(a: Vec[f64]) -> f64 {
+    let mut filled: Vec[f64] = Vec.new();
+    let mut count = 0;
+    for x in a {
+        if is_nan(x) {
+            filled.push(0.0);
+        } else {
+            filled.push(x);
+            count += 1;
+        }
+    }
+    if count == 0 {
+        return nan();
+    }
+    np_sum(filled) / (count as f64)
+}
+
+// The strings read_csv reads as missing unless keep_default_na=False.
+fn sorted_valid(a: Vec[f64]) -> Vec[f64] {
+    let mut v: Vec[f64] = a.iter().filter(|x| not is_nan(*x)).map(|x| *x).collect();
+    v.sort_by(f64.total_cmp);
+    v
+}
+
+fn default_na(s: Str) -> bool {
+    match s {
+        "" | "#N/A" | "#N/A N/A" | "#NA" | "-1.#IND" | "-1.#QNAN" | "-NaN" | "-nan" | "1.#IND"
+        | "1.#QNAN" | "<NA>" | "N/A" | "NA" | "NULL" | "NaN" | "None" | "n/a" | "nan" | "null" => true,
+        _ => false,
+    }
+}
+
+fn names_of(s: Str) -> Vec[String] {
+    if s.len() == 0 {
+        return Vec.new();
+    }
+    s.split(",").map(|p| p.to_string()).collect()
+}
+
+struct Args {
+    pos: Vec[String],
+    kw: Vec[(String, String)],
+}
+
+impl Args {
+    fn get(self, k: Str) -> Option[String] {
+        for (key, v) in self.kw {
+            if *key == k {
+                return Some(v.clone());
+            }
+        }
+        None
+    }
+
+    fn arg(self, i: i64) -> Result[String, String] {
+        if i < self.pos.len() {
+            Ok(self.pos[i].clone())
+        } else {
+            Err("TypeError: missing a required argument".to_string())
+        }
+    }
+
+    fn has(self, word: Str) -> bool {
+        self.pos.iter().any(|p| p == word)
+    }
+}
+
+fn int_arg(s: Str) -> Result[i64, String] {
+    match i64.parse(s) {
+        Ok(n) => Ok(n),
+        Err(_) => Err(f"ValueError: invalid literal for int() with base 10: '{s}'"),
+    }
+}
+
+fn select(f: Frame, want: Vec[String]) -> Result[Frame, String] {
+    let mut missing: Vec[String] = Vec.new();
+    for w in want {
+        if f.find(w).is_none() {
+            missing.push(w.clone());
+        }
+    }
+    if missing.len() == want.len() and want.len() > 0 {
+        return Err(f"KeyError: \"None of [Index([{quoted_list(want)}], dtype='str')] are in the [columns]\"");
+    }
+    if missing.len() > 0 {
+        return Err(f"KeyError: \"[{quoted_list(missing)}] not in index\"");
+    }
+    let mut out = Frame.new();
+    for w in want {
+        out.names.push(w.clone());
+        out.cols.push(f.col(w)?);
+    }
+    Ok(out)
+}
+
+fn quoted_list(xs: Vec[String]) -> String {
+    let parts: Vec[String] = xs.iter().map(|x| f"'{x}'").collect();
+    parts.join(", ")
+}
+
+fn head(f: Frame, n: i64) -> Frame {
+    let h = f.height();
+    let k = if n < h { n } else { h };
+    f.take(range_idx(k))
+}
+
+fn tail(f: Frame, n: i64) -> Frame {
+    let h = f.height();
+    let k = if n < h { n } else { h };
+    let mut idx: Vec[i64] = Vec.new();
+    for i in h - k..h {
+        idx.push(i);
+    }
+    f.take(idx)
+}
+
+fn dtypes(f: Frame) -> Frame {
+    let mut out = Frame.new();
+    out.put("column", Col.Str(f.names.iter().map(|n| Some(n.clone())).collect()));
+    out.put("dtype", Col.Str(f.cols.iter().map(|c| Some(c.dtype())).collect()));
+    out
+}
+
+fn compare(a: Val, rel: Str, b: Val) -> bool {
+    let missing = match (a, b) {
+        (Val.Na, _) => true,
+        (_, Val.Na) => true,
+        _ => false,
+    };
+    if missing {
+        return rel == "!=";
+    }
+    let o = val_cmp(a, b);
+    match rel {
+        "==" => o == Ordering.Equal,
+        "!=" => o != Ordering.Equal,
+        "<" => o == Ordering.Less,
+        "<=" => o != Ordering.Greater,
+        ">" => o == Ordering.Greater,
+        _ => o != Ordering.Less,
+    }
+}
+
+fn where_rows(f: Frame, name: Str, rel: Str, rhs: Str) -> Result[Frame, String] {
+    let c = f.col(name)?;
+    let other: Option[Col] = if rhs.starts_with("@") { Some(f.col(rhs[1..])?) } else { None };
+    let lit = literal(rhs);
+    let mut keep: Vec[bool] = Vec.new();
+    for i in 0..f.height() {
+        let b = match other {
+            Some(ref o) => o.get(i),
+            None => lit.clone(),
+        };
+        keep.push(compare(c.get(i), rel, b));
+    }
+    Ok(f.rows_where(keep))
+}
+
+// The groups of a frame by key columns: the observed keys in sorted
+// order, the rows of each in frame order, and each row's group (-1 when
+// a key is missing, as dropna=True drops it).
+#[derive(Clone)]
+struct Groups {
+    keys: Vec[Vec[Val]],
+    rows: Vec[Vec[i64]],
+    label: Vec[i64],
+}
+
+fn group_rows(f: Frame, by: Vec[String]) -> Result[Groups, String] {
+    let which = index_of_all(f, by)?;
+    let mut ids: Map[String, i64] = Map.new();
+    let mut keys: Vec[Vec[Val]] = Vec.new();
+    let mut members: Vec[Vec[i64]] = Vec.new();
+    let mut first_label: Vec[i64] = Vec.new();
+    for i in 0..f.height() {
+        let k = f.row(i, which);
+        if k.iter().any(|v| match v {
+            Val.Na => true,
+            _ => false,
+        }) {
+            first_label.push(-1);
+            continue;
+        }
+        let t = key_text(k);
+        let id = match ids.get(t) {
+            Some(g) => *g,
+            None => {
+                ids[t.clone()] = keys.len();
+                keys.push(k.clone());
+                members.push(Vec.new());
+                keys.len() - 1
+            }
+        };
+        members[id].push(i);
+        first_label.push(id);
+    }
+    let mut order = range_idx(keys.len());
+    order.sort_by(|a, b| {
+        for j in 0..which.len() {
+            let o = val_cmp(keys[a][j], keys[b][j]);
+            if o != Ordering.Equal {
+                return o;
+            }
+        }
+        Ordering.Equal
+    });
+    let mut rank: Vec[i64] = Vec.filled(keys.len(), 0);
+    for p in 0..order.len() {
+        rank[order[p]] = p;
+    }
+    let label: Vec[i64] = first_label.iter().map(|l| if *l < 0 { -1 } else { rank[*l] }).collect();
+    Ok(Groups {
+        keys: order.iter().map(|g| keys[*g].clone()).collect(),
+        rows: order.iter().map(|g| members[*g].clone()).collect(),
+        label: label,
+    })
+}
+
+// The key columns of a grouped result, typed as their source columns.
+fn key_columns(f: Frame, by: Vec[String], g: Groups) -> Result[Frame, String] {
+    let mut out = Frame.new();
+    for j in 0..by.len() {
+        let src = f.col(by[j])?;
+        let firsts: Vec[i64] = g.rows.iter().map(|r| r[0]).collect();
+        out.put(by[j], src.take(firsts));
+    }
+    Ok(out)
+}
+
+fn welford(vals: Vec[f64], ddof: i64, sqrt: bool) -> f64 {
+    let mut nobs = 0;
+    let mut mean = 0.0;
+    let mut ssq = 0.0;
+    for v in vals {
+        if is_nan(v) {
+            continue;
+        }
+        nobs += 1;
+        let old = mean;
+        mean = mean + (v - old) / (nobs as f64);
+        ssq = ssq + (v - mean) * (v - old);
+    }
+    if nobs <= ddof {
+        return nan();
+    }
+    let var = ssq / ((nobs - ddof) as f64);
+    if sqrt { var.sqrt() } else { var }
+}
+
+fn median_of(vals: Vec[f64]) -> f64 {
+    let s = sorted_valid(vals);
+    let n = s.len();
+    if n == 0 {
+        return nan();
+    }
+    if n % 2 == 1 {
+        s[n / 2]
+    } else {
+        (s[n / 2] + s[n / 2 - 1]) / 2.0
+    }
+}
+
+fn agg_known(func: Str) -> bool {
+    match func {
+        "sum" | "mean" | "count" | "size" | "min" | "max" | "median" | "std" | "var" | "nunique" | "first"
+        | "last" => true,
+        _ => false,
+    }
+}
+
+// One aggregate of one column over each group, as pandas' cython kernel
+// for it computes it.
+fn agg_one(c: Col, g: Groups, func: Str) -> Result[Col, String] {
+    if not agg_known(func) {
+        return Err(f"AttributeError: 'SeriesGroupBy' object has no attribute '{func}'");
+    }
+    match func {
+        "size" => return Ok(Col.Int(g.rows.iter().map(|r| r.len()).collect())),
+        "count" => return Ok(Col.Int(g.rows.iter().map(|r| r.iter().filter(|i| not c.is_na(*i)).count()).collect())),
+        "nunique" => {
+            let mut out: Vec[i64] = Vec.new();
+            for r in g.rows {
+                let mut seen: Set[String] = Set.new();
+                for i in r {
+                    let v = c.get(i);
+                    match v {
+                        Val.Na => {}
+                        _ => {
+                            seen.insert(key_text([v].to_vec()));
+                        }
+                    }
+                }
+                out.push(seen.len());
+            }
+            return Ok(Col.Int(out));
+        }
+        "first" | "last" => {
+            let mut idx: Vec[i64] = Vec.new();
+            for r in g.rows {
+                let mut pick = -1;
+                for i in r {
+                    if not c.is_na(i) {
+                        pick = i;
+                        if func == "first" {
+                            break;
+                        }
+                    }
+                }
+                idx.push(pick);
+            }
+            return Ok(c.take(idx));
+        }
+        _ => {}
+    }
+    match c {
+        Col.Int(v) => match func {
+            "sum" => Ok(Col.Int(g.rows.iter().map(|r| {
+                let mut s: i64 = 0;
+                for i in r {
+                    s = s.wrapping_add(v[*i]);
+                }
+                s
+            }).collect())),
+            "min" => Ok(Col.Int(g.rows.iter().map(|r| r.iter().map(|i| v[*i]).min() ?? 0).collect())),
+            "max" => Ok(Col.Int(g.rows.iter().map(|r| r.iter().map(|i| v[*i]).max() ?? 0).collect())),
+            _ => agg_float(Col.Float(c.floats()), g, func),
+        },
+        Col.Float(_) => agg_float(c, g, func),
+        Col.Bool(_) => agg_float(Col.Float(c.floats()), g, func),
+        _ => match func {
+            "min" | "max" => {
+                let mut out: Vec[Option[String]] = Vec.new();
+                for r in g.rows {
+                    let mut best: Option[String] = None;
+                    for i in r {
+                        if let Val.S(s) = c.get(i) {
+                            let better = match best {
+                                None => true,
+                                Some(ref b) => if func == "min" { s < b } else { s > b },
+                            };
+                            if better {
+                                best = Some(s.clone());
+                            }
+                        }
+                    }
+                    out.push(best);
+                }
+                Ok(Col.Str(out))
+            }
+            _ => Err(f"TypeError: agg function failed [how->{func},dtype->str]"),
+        },
+    }
+}
+
+fn agg_float(c: Col, g: Groups, func: Str) -> Result[Col, String] {
+    let v = c.floats();
+    let mut out: Vec[f64] = Vec.new();
+    for r in g.rows {
+        let vals: Vec[f64] = r.iter().map(|i| v[*i]).collect();
+        out.push(match func {
+            "sum" => {
+                let mut k = kahan();
+                for x in vals {
+                    if not is_nan(x) {
+                        k.add(x);
+                    }
+                }
+                k.sum
+            }
+            "mean" => {
+                let mut k = kahan();
+                for x in vals {
+                    if not is_nan(x) {
+                        k.add(x);
+                    }
+                }
+                if k.n == 0 { nan() } else { k.sum / (k.n as f64) }
+            }
+            "min" | "max" => {
+                let mut best = nan();
+                for x in vals {
+                    if is_nan(x) {
+                        continue;
+                    }
+                    if is_nan(best) or (func == "min" and x < best) or (func == "max" and x > best) {
+                        best = x;
+                    }
+                }
+                best
+            }
+            "median" => median_of(vals),
+            "std" => welford(vals, 1, true),
+            _ => welford(vals, 1, false),
+        });
+    }
+    Ok(Col.Float(out))
+}
+
+struct AggSpec {
+    out: String,
+    col: String,
+    func: String,
+}
+
+// `out=col:func,...`, the named aggregation agg(out=(col, func)).
+fn parse_specs(s: Str) -> Vec[AggSpec] {
+    let mut out: Vec[AggSpec] = Vec.new();
+    for p in names_of(s) {
+        let (name, rest) = p.split_once("=") ?? (p.as_str(), p.as_str());
+        match rest.split_once(":") {
+            Some((c, f)) => out.push(AggSpec { out: name.to_string(), col: c.to_string(), func: f.to_string() }),
+            None => out.push(AggSpec { out: name.to_string(), col: rest.to_string(), func: String.new() }),
+        }
+    }
+    out
+}
+
+// groupby(keys).agg(**{out: (col, func)}).reset_index().
+// Each aggregate runs in a task of its own; the columns join in order.
+fn agg(f: Frame, by: Vec[String], specs: Vec[AggSpec]) -> Result[Frame, String] {
+    let missing: Vec[String] = specs.iter().filter(|s| f.find(s.col).is_none()).map(|s| s.col.clone()).collect();
+    let g = group_rows(f, by)?;
+    if missing.len() > 0 {
+        return Err(f"KeyError: \"Label(s) [{quoted_list(missing)}] do not exist\"");
+    }
+    let mut out = key_columns(f, by, g)?;
+    let group = TaskGroup.new();
+    let mut handles = Vec.new();
+    for s in specs {
+        let c = f.col(s.col)?;
+        let gg = g.clone();
+        let func = s.func.clone();
+        handles.push(group.spawn(|| agg_one(c, gg, func)));
+    }
+    let mut k = 0;
+    for h in handles.into_iter() {
+        let col = h.join()?;
+        out.put(specs[k].out, col);
+        k += 1;
+    }
+    Ok(out)
+}
+
+// ============================================================ numbers from text
+
+// What precise_xstrtod read: the value and where it stopped.
+struct Parsed {
+    value: f64,
+    end: i64,
+}
+
+fn is_space(b: u8) -> bool {
+    b == 32 or (b >= 9 and b <= 13)
+}
+
+fn is_digit(b: u8) -> bool {
+    b >= 48 and b <= 57
+}
+
+fn byte_at(bs: Vec[u8], i: i64) -> u8 {
+    if i < bs.len() { bs[i] } else { 0 }
+}
+
+// 10^k as the C compiler rounds the literal `1ek`.
+fn p10(k: i64) -> f64 {
+    f64.parse(f"1e{k}") ?? 0.0
+}
+
+// pandas' precise_xstrtod (tokenizer.c), with the decimal point and the
+// thousands separator read_csv was given: skips spaces, reads at most 17
+// digits, counting leading zeros, skips one separator after any digit of
+// the whole part, turns any digit past the 17th into a power of ten, then
+// multiplies or divides by one power of ten. None when no digit was read.
+fn precise_xstrtod(s: Str, decimal: u8, tsep: u8) -> Option[Parsed] {
+    let bs: Vec[u8] = s.bytes().iter().collect();
+    let max_digits = 17;
+    let mut p = 0;
+    while is_space(byte_at(bs, p)) {
+        p += 1;
+    }
+    let mut negative = false;
+    if byte_at(bs, p) == b'-' {
+        negative = true;
+        p += 1;
+    } else if byte_at(bs, p) == b'+' {
+        p += 1;
+    }
+    let mut number = 0.0;
+    let mut exponent = 0;
+    let mut num_digits = 0;
+    let mut num_decimals = 0;
+    while is_digit(byte_at(bs, p)) {
+        if num_digits < max_digits {
+            number = number * 10.0 + (byte_at(bs, p) - b'0') as f64;
+            num_digits += 1;
+        } else {
+            exponent += 1;
+        }
+        p += 1;
+        if tsep != 0 and byte_at(bs, p) == tsep {
+            p += 1;
+        }
+    }
+    if p < bs.len() and bs[p] == decimal {
+        p += 1;
+        while num_digits < max_digits and is_digit(byte_at(bs, p)) {
+            number = number * 10.0 + (byte_at(bs, p) - b'0') as f64;
+            p += 1;
+            num_digits += 1;
+            num_decimals += 1;
+        }
+        if num_digits >= max_digits {
+            while is_digit(byte_at(bs, p)) {
+                p += 1;
+            }
+        }
+        exponent -= num_decimals;
+    }
+    if num_digits == 0 {
+        return None;
+    }
+    if negative {
+        number = -number;
+    }
+    if byte_at(bs, p) == b'e' or byte_at(bs, p) == b'E' {
+        p += 1;
+        // strtol: spaces, a sign, digits.
+        let mut q = p;
+        while is_space(byte_at(bs, q)) {
+            q += 1;
+        }
+        let mut eneg = false;
+        if byte_at(bs, q) == b'-' {
+            eneg = true;
+            q += 1;
+        } else if byte_at(bs, q) == b'+' {
+            q += 1;
+        }
+        let digits_from = q;
+        let mut n = 0;
+        while is_digit(byte_at(bs, q)) {
+            n = n * 10 + (byte_at(bs, q) - b'0') as i64;
+            q += 1;
+        }
+        if q == digits_from {
+            // No digits after the 'e': un-consume it.
+            p -= 1;
+        } else {
+            exponent += if eneg { -n } else { n };
+            p = q;
+        }
+    }
+    if exponent > 308 {
+        number = if number == 0.0 { 0.0 } else if number < 0.0 { -1.0 / 0.0 } else { 1.0 / 0.0 };
+    } else if exponent > 0 {
+        number *= p10(exponent);
+    } else if exponent < -308 {
+        if exponent < -616 {
+            number = 0.0;
+        } else {
+            number /= p10(-308 - exponent);
+            number /= p10(308);
+        }
+    } else {
+        number /= p10(-exponent);
+    }
+    while is_space(byte_at(bs, p)) {
+        p += 1;
+    }
+    Some(Parsed { value: number, end: p })
+}
+
+// How the C parser reads a float cell (_try_double): the whole token
+// must parse, or be one of the infinities, spelled in any case.
+fn parse_float(s: Str, decimal: u8, tsep: u8) -> Option[f64] {
+    if let Some(p) = precise_xstrtod(s, decimal, tsep) {
+        if p.end == s.len() {
+            return Some(p.value);
+        }
+    }
+    let low = s.to_lowercase();
+    match low.as_str() {
+        "inf" | "+inf" | "infinity" | "+infinity" => Some(1.0 / 0.0),
+        "-inf" | "-infinity" => Some(-1.0 / 0.0),
+        _ => None,
+    }
+}
+
+// Why str_to_int64 or str_to_uint64 gave up on a token.
+enum IntError {
+    NotInt,
+    Overflow,
+}
+
+// The digits of an integer token as str_to_int64 sees them: leading
+// spaces skipped, a sign, digits with any thousands separator between
+// them dropped, then only trailing spaces. The sign, the digits, and
+// whether the digits ended the token (strtoll's overflow is an overflow
+// only then; with spaces after it, it is a token that is not an int).
+fn int_digits(s: Str, tsep: u8) -> Result[(u8, Vec[u8], bool), IntError] {
+    let bs: Vec[u8] = s.bytes().iter().collect();
+    let mut p = 0;
+    while is_space(byte_at(bs, p)) {
+        p += 1;
+    }
+    let mut sign = 0;
+    if byte_at(bs, p) == b'-' or byte_at(bs, p) == b'+' {
+        sign = bs[p];
+        p += 1;
+    }
+    if not is_digit(byte_at(bs, p)) {
+        return Err(IntError.NotInt);
+    }
+    let mut digits: Vec[u8] = Vec.new();
+    while p < bs.len() and (is_digit(bs[p]) or (tsep != 0 and bs[p] == tsep)) {
+        if bs[p] != tsep {
+            digits.push(bs[p]);
+        }
+        p += 1;
+    }
+    let at_end = p == bs.len();
+    while is_space(byte_at(bs, p)) {
+        p += 1;
+    }
+    if p < bs.len() {
+        return Err(IntError.NotInt);
+    }
+    Ok((sign, digits, at_end))
+}
+
+// str_to_int64 (tokenizer.c), strtoll's range included.
+fn str_to_int64(s: Str, tsep: u8) -> Result[i64, IntError] {
+    let (sign, digits, at_end) = int_digits(s, tsep)?;
+    let overflow = if at_end { IntError.Overflow } else { IntError.NotInt };
+    let mut n: i64 = 0;
+    for d in digits {
+        let v = (d - b'0') as i64;
+        // Accumulate negatively, so i64's minimum fits.
+        if n < (-9223372036854775807 - 1 + v) / 10 {
+            return Err(overflow);
+        }
+        n = n * 10 - v;
+    }
+    if sign == b'-' {
+        return Ok(n);
+    }
+    if n == -9223372036854775807 - 1 {
+        return Err(overflow);
+    }
+    Ok(-n)
+}
+
+// str_to_uint64: a minus sign is recorded (seen_sint) rather than read.
+fn str_to_uint64(s: Str, tsep: u8) -> Result[(u64, bool), IntError] {
+    let (sign, digits, at_end) = int_digits(s, tsep)?;
+    if sign == b'-' {
+        return Ok((0, true));
+    }
+    let mut n: u64 = 0;
+    for d in digits {
+        let v = (d - b'0') as u64;
+        if n > (18446744073709551615 - v) / 10 {
+            return Err(if at_end { IntError.Overflow } else { IntError.NotInt });
+        }
+        n = n * 10 + v;
+    }
+    Ok((n, false))
+}
+
+// to_boolean (tokenizer.c): TRUE or FALSE in any case.
+fn to_boolean(s: Str) -> Option[bool] {
+    let up = s.to_uppercase();
+    if up == "TRUE" {
+        Some(true)
+    } else if up == "FALSE" {
+        Some(false)
+    } else {
+        None
+    }
+}
+
+// ============================================================ job arguments
+
+// A value written in a job: 'text', True or False, an int, a float, or a
+// bare word.
+fn literal(tok: Str) -> Val {
+    if tok.len() >= 2 and tok.starts_with("'") and tok.ends_with("'") {
+        return Val.S(tok[1..tok.len() - 1].to_string());
+    }
+    if tok == "True" or tok == "False" {
+        return Val.B(tok == "True");
+    }
+    if let Ok(n) = i64.parse(tok) {
+        return Val.I(n);
+    }
+    if let Ok(x) = f64.parse(tok) {
+        return Val.F(x);
+    }
+    Val.S(tok.to_string())
+}
+
+// A text argument: \s is a space, \t a tab and \e the empty string.
+fn text_arg(tok: Str) -> String {
+    if tok == "\\e" { String.new() } else { tok.replace("\\s", " ").replace("\\t", "\t") }
+}
+
+fn is_rel(t: Str) -> bool {
+    t == "==" or t == "!=" or t == "<=" or t == ">=" or t == "<" or t == ">"
+}
+
+fn split_args(toks: Vec[String]) -> Args {
+    let mut a = Args { pos: Vec.new(), kw: Vec.new() };
+    for t in toks {
+        match t.split_once("=") {
+            Some((k, v)) => {
+                if k.len() > 0 and not is_rel(t) {
+                    a.kw.push((k.to_string(), v.to_string()));
+                } else {
+                    a.pos.push(t.clone());
+                }
+            }
+            None => a.pos.push(t.clone()),
+        }
+    }
+    a
+}
+
+// ============================================================ read_csv: the C tokenizer
+
+// tokenize_bytes' states (tokenizer.c).
+#[derive(Clone)]
+enum St {
+    StartRecord,
+    StartField,
+    EscapedChar,
+    InField,
+    InQuotedField,
+    EscapeInQuotedField,
+    QuoteInQuotedField,
+    EatCrnl,
+    EatCrnlNop,
+    EatWhitespace,
+    EatComment,
+    EatLineComment,
+    WhitespaceLine,
+    StartFieldInSkipLine,
+    InFieldInSkipLine,
+    InQuotedFieldInSkipLine,
+    QuoteInQuotedFieldInSkipLine,
+}
+
+fn in_skip_line(s: St) -> bool {
+    match s {
+        St.StartFieldInSkipLine | St.InFieldInSkipLine | St.InQuotedFieldInSkipLine | St.QuoteInQuotedFieldInSkipLine => true,
+        _ => false,
+    }
+}
+
+// The options read_csv was called with.
+#[derive(Clone)]
+struct ReadOpts {
+    sep: char,
+    delim_ws: bool,
+    header: bool,
+    names: Option[Vec[String]],
+    skip_first: i64,
+    skipset: Option[Vec[i64]],
+    nrows: i64,
+    comment: Option[char],
+    quotechar: char,
+    escapechar: Option[char],
+    doublequote: bool,
+    skipinitialspace: bool,
+    quote_none: bool,
+    decimal: u8,
+    thousands: u8,
+    on_bad_lines: String,
+    na: Vec[String],
+    keep_default_na: bool,
+    skip_blank_lines: bool,
+    true_values: Vec[String],
+    false_values: Vec[String],
+    usecols: Option[Vec[String]],
+    dtype: Vec[(String, String)],
+}
+
+fn read_opts() -> ReadOpts {
+    ReadOpts {
+        sep: ',',
+        delim_ws: false,
+        header: true,
+        names: None,
+        skip_first: 0,
+        skipset: None,
+        nrows: -1,
+        comment: None,
+        quotechar: '"',
+        escapechar: None,
+        doublequote: true,
+        skipinitialspace: false,
+        quote_none: false,
+        decimal: b'.',
+        thousands: 0,
+        on_bad_lines: "error".to_string(),
+        na: Vec.new(),
+        keep_default_na: true,
+        skip_blank_lines: true,
+        true_values: Vec.new(),
+        false_values: Vec.new(),
+        usecols: None,
+        dtype: Vec.new(),
+    }
+}
+
+// The parser_t fields the state machine reads and writes. `lines` holds
+// the lines kept so far (the header first), `cur` the fields of the line
+// in progress and `field` the text of the field in progress.
+struct Tok {
+    o: ReadOpts,
+    state: St,
+    lines: Vec[Vec[String]],
+    cur: Vec[String],
+    field: String,
+    file_lines: i64,
+    header_end: i64,
+    line_limit: i64,
+    warnings: Vec[String],
+}
+
+fn is_blank(c: char) -> bool {
+    c == ' ' or c == '\t'
+}
+
+impl Tok {
+    fn is_quote(self, c: char) -> bool {
+        c == self.o.quotechar and not self.o.quote_none
+    }
+
+    fn is_comment(self, c: char) -> bool {
+        self.o.comment == Some(c)
+    }
+
+    fn is_escape(self, c: char) -> bool {
+        self.o.escapechar == Some(c)
+    }
+
+    fn is_delimiter(self, c: char) -> bool {
+        if self.o.delim_ws { is_blank(c) } else { c == self.o.sep }
+    }
+
+    fn is_skippable_space(self, c: char) -> bool {
+        not self.o.delim_ws and c == ' ' and self.o.skipinitialspace
+    }
+
+    // skip_this_line: a listed row, or one of the first `skiprows`.
+    fn skip_this_line(self) -> bool {
+        match self.o.skipset {
+            Some(ref rows) => rows.iter().any(|r| *r == self.file_lines),
+            None => self.file_lines < self.o.skip_first,
+        }
+    }
+
+    fn end_field(mut ref self) {
+        self.cur.push(self.field.clone());
+        self.field = String.new();
+    }
+
+    // end_line: a line in a skipped row is dropped; a line with more
+    // fields than the one before it (past the header and the first data
+    // line) is an error, a warning or dropped, as on_bad_lines says,
+    // unless usecols is given; a shorter one is padded with empty fields.
+    fn end_line(mut ref self) -> Result[(), String] {
+        let fields = self.cur.len();
+        let ex = if self.lines.len() > 0 { self.lines[self.lines.len() - 1].len() } else { -1 };
+        if in_skip_line(self.state) {
+            self.file_lines += 1;
+            self.cur = Vec.new();
+            return Ok(());
+        }
+        if not (self.lines.len() <= self.header_end + 1) and fields > ex and self.o.usecols.is_none() {
+            self.file_lines += 1;
+            self.cur = Vec.new();
+            if self.o.on_bad_lines == "error" {
+                return Err(f"Expected {ex} fields in line {self.file_lines}, saw {fields}");
+            }
+            if self.o.on_bad_lines == "warn" {
+                self.warnings.push(f"Skipping line {self.file_lines}: expected {ex} fields, saw {fields}");
+            }
+            return Ok(());
+        }
+        if self.lines.len() >= self.header_end + 1 and fields < ex {
+            for _ in fields..ex {
+                self.cur.push(String.new());
+            }
+        }
+        self.file_lines += 1;
+        self.lines.push(self.cur.clone());
+        self.cur = Vec.new();
+        Ok(())
+    }
+
+    // END_LINE_STATE: true when the line limit (nrows) is reached.
+    fn end_line_state(mut ref self, next: St) -> Result[bool, String] {
+        self.end_line()?;
+        self.state = next;
+        Ok(self.line_limit > 0 and self.lines.len() == self.line_limit)
+    }
+
+    fn end_line_and_field_state(mut ref self, next: St) -> Result[bool, String] {
+        self.end_line()?;
+        self.end_field();
+        self.state = next;
+        Ok(self.line_limit > 0 and self.lines.len() == self.line_limit)
+    }
+}
+
+// tokenize_bytes over the whole text, then parser_handle_eof. The kept
+// lines, or the C error message.
+fn tokenize(text: Str, o: ReadOpts) -> Result[Tok, String] {
+    let line_limit = if o.nrows >= 0 { o.nrows + (if o.header { 1 } else { 0 }) } else { 0 };
+    let mut t = Tok {
+        o: o.clone(),
+        state: St.StartRecord,
+        lines: Vec.new(),
+        cur: Vec.new(),
+        field: String.new(),
+        file_lines: 0,
+        header_end: if o.header { 0 } else { -1 },
+        line_limit: line_limit,
+        warnings: Vec.new(),
+    };
+    let chars: Vec[char] = text.chars().collect();
+    let n = chars.len();
+    // CHECK_FOR_BOM
+    let mut i = if n > 0 and chars[0] == '\u{feff}' { 1 } else { 0 };
+    let mut done = false;
+    while i < n and not done {
+        let c = chars[i];
+        // The case whose code runs: a case that falls through to the next
+        // one in the C switch runs that one's code too, while the state
+        // stays as the first one set it.
+        let mut code = t.state.clone();
+        let mut fall = true;
+        while fall {
+            fall = false;
+            match code {
+                St.StartFieldInSkipLine => {
+                    if c == '\n' {
+                        done = t.end_line_state(St.StartRecord)?;
+                    } else if c == '\r' {
+                        t.file_lines += 1;
+                        t.state = St.EatCrnlNop;
+                    } else if t.is_quote(c) {
+                        t.state = St.InQuotedFieldInSkipLine;
+                    } else if t.is_delimiter(c) {
+                        // a new field again
+                    } else {
+                        t.state = St.InFieldInSkipLine;
+                    }
+                }
+                St.InFieldInSkipLine => {
+                    if c == '\n' {
+                        done = t.end_line_state(St.StartRecord)?;
+                    } else if c == '\r' {
+                        t.file_lines += 1;
+                        t.state = St.EatCrnlNop;
+                    } else if t.is_delimiter(c) {
+                        t.state = St.StartFieldInSkipLine;
+                    }
+                }
+                St.InQuotedFieldInSkipLine => {
+                    if t.is_quote(c) {
+                        t.state = if t.o.doublequote { St.QuoteInQuotedFieldInSkipLine } else { St.InFieldInSkipLine };
+                    }
+                }
+                St.QuoteInQuotedFieldInSkipLine => {
+                    if t.is_quote(c) {
+                        t.state = St.InQuotedFieldInSkipLine;
+                    } else if c == '\n' {
+                        done = t.end_line_state(St.StartRecord)?;
+                    } else if c == '\r' {
+                        t.file_lines += 1;
+                        t.state = St.EatCrnlNop;
+                    } else if t.is_delimiter(c) {
+                        t.state = St.StartFieldInSkipLine;
+                    } else {
+                        t.state = St.InFieldInSkipLine;
+                    }
+                }
+                St.WhitespaceLine => {
+                    if c == '\n' {
+                        t.file_lines += 1;
+                        t.state = St.StartRecord;
+                    } else if c == '\r' {
+                        t.file_lines += 1;
+                        t.state = St.EatCrnlNop;
+                    } else if not t.o.delim_ws {
+                        if is_blank(c) and c != t.o.sep {
+                            // still a line of blanks
+                        } else {
+                            // Back up to the start of the line and read it
+                            // as fields.
+                            let mut j = i + 1;
+                            loop {
+                                j -= 1;
+                                i -= 1;
+                                if not (i + 1 > 0 and chars[j] != '\n') {
+                                    break;
+                                }
+                            }
+                            if chars[j] == '\n' {
+                                i += 1;
+                            }
+                            t.state = St.StartField;
+                        }
+                    } else {
+                        code = St.EatWhitespace;
+                        fall = true;
+                    }
+                }
+                St.EatWhitespace => {
+                    if c == '\n' {
+                        done = t.end_line_state(St.StartRecord)?;
+                    } else if c == '\r' {
+                        t.state = St.EatCrnl;
+                    } else if t.is_comment(c) {
+                        t.state = St.EatComment;
+                    } else if not is_blank(c) {
+                        t.state = St.StartField;
+                        code = St.StartRecord;
+                        fall = true;
+                    }
+                }
+                St.StartRecord => {
+                    if t.skip_this_line() {
+                        if t.is_quote(c) {
+                            t.state = St.InQuotedFieldInSkipLine;
+                        } else {
+                            t.state = St.InFieldInSkipLine;
+                            if c == '\n' {
+                                done = t.end_line_state(St.StartRecord)?;
+                            }
+                        }
+                    } else if c == '\n' {
+                        if t.o.skip_blank_lines {
+                            t.file_lines += 1;
+                        } else {
+                            done = t.end_line_state(St.StartRecord)?;
+                        }
+                    } else if c == '\r' {
+                        if t.o.skip_blank_lines {
+                            t.file_lines += 1;
+                            t.state = St.EatCrnlNop;
+                        } else {
+                            t.state = St.EatCrnl;
+                        }
+                    } else if t.is_comment(c) {
+                        t.state = St.EatLineComment;
+                    } else if is_blank(c) and t.o.delim_ws {
+                        t.state = if t.o.skip_blank_lines { St.WhitespaceLine } else { St.EatWhitespace };
+                    } else if is_blank(c) and c != t.o.sep and t.o.skip_blank_lines {
+                        t.state = St.WhitespaceLine;
+                    } else {
+                        t.state = St.StartField;
+                        code = St.StartField;
+                        fall = true;
+                    }
+                }
+                St.StartField => {
+                    if c == '\n' {
+                        t.end_field();
+                        done = t.end_line_state(St.StartRecord)?;
+                    } else if c == '\r' {
+                        t.end_field();
+                        t.state = St.EatCrnl;
+                    } else if t.is_quote(c) {
+                        t.state = St.InQuotedField;
+                    } else if t.is_escape(c) {
+                        t.state = St.EscapedChar;
+                    } else if t.is_skippable_space(c) {
+                        // a space at the start of a field
+                    } else if t.is_delimiter(c) {
+                        if t.o.delim_ws {
+                            t.state = St.EatWhitespace;
+                        } else {
+                            t.end_field();
+                        }
+                    } else if t.is_comment(c) {
+                        t.end_field();
+                        t.state = St.EatComment;
+                    } else {
+                        t.field.push(c);
+                        t.state = St.InField;
+                    }
+                }
+                St.EscapedChar => {
+                    t.field.push(c);
+                    t.state = St.InField;
+                }
+                St.EatLineComment => {
+                    if c == '\n' {
+                        t.file_lines += 1;
+                        t.state = St.StartRecord;
+                    } else if c == '\r' {
+                        t.file_lines += 1;
+                        t.state = St.EatCrnlNop;
+                    }
+                }
+                St.InField => {
+                    if c == '\n' {
+                        t.end_field();
+                        done = t.end_line_state(St.StartRecord)?;
+                    } else if c == '\r' {
+                        t.end_field();
+                        t.state = St.EatCrnl;
+                    } else if t.is_escape(c) {
+                        t.state = St.EscapedChar;
+                    } else if t.is_delimiter(c) {
+                        t.end_field();
+                        t.state = if t.o.delim_ws { St.EatWhitespace } else { St.StartField };
+                    } else if t.is_comment(c) {
+                        t.end_field();
+                        t.state = St.EatComment;
+                    } else {
+                        t.field.push(c);
+                    }
+                }
+                St.InQuotedField => {
+                    if t.is_escape(c) {
+                        t.state = St.EscapeInQuotedField;
+                    } else if t.is_quote(c) {
+                        t.state = if t.o.doublequote { St.QuoteInQuotedField } else { St.InField };
+                    } else {
+                        t.field.push(c);
+                    }
+                }
+                St.EscapeInQuotedField => {
+                    t.field.push(c);
+                    t.state = St.InQuotedField;
+                }
+                St.QuoteInQuotedField => {
+                    if t.is_quote(c) {
+                        t.field.push(c);
+                        t.state = St.InQuotedField;
+                    } else if t.is_delimiter(c) {
+                        t.end_field();
+                        t.state = if t.o.delim_ws { St.EatWhitespace } else { St.StartField };
+                    } else if c == '\n' {
+                        t.end_field();
+                        done = t.end_line_state(St.StartRecord)?;
+                    } else if c == '\r' {
+                        t.end_field();
+                        t.state = St.EatCrnl;
+                    } else {
+                        t.field.push(c);
+                        t.state = St.InField;
+                    }
+                }
+                St.EatComment => {
+                    if c == '\n' {
+                        done = t.end_line_state(St.StartRecord)?;
+                    } else if c == '\r' {
+                        t.state = St.EatCrnl;
+                    }
+                }
+                St.EatCrnl => {
+                    if c == '\n' {
+                        done = t.end_line_state(St.StartRecord)?;
+                    } else if t.is_delimiter(c) {
+                        if t.o.delim_ws {
+                            done = t.end_line_state(St.EatWhitespace)?;
+                        } else {
+                            // a \r-delimited file
+                            done = t.end_line_and_field_state(St.StartField)?;
+                        }
+                    } else {
+                        // A bare \r ends the line; read this character
+                        // again as the start of the next one.
+                        done = t.end_line_state(St.StartRecord)?;
+                        i -= 1;
+                    }
+                }
+                St.EatCrnlNop => {
+                    t.state = St.StartRecord;
+                    if c != '\n' and not t.is_delimiter(c) {
+                        i -= 1;
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+    if done {
+        return Ok(t);
+    }
+    // parser_handle_eof
+    match t.state {
+        St.StartRecord | St.WhitespaceLine | St.EatCrnlNop | St.EatLineComment => return Ok(t),
+        St.EscapeInQuotedField | St.InQuotedField => return Err(f"EOF inside string starting at row {t.file_lines}"),
+        St.EscapedChar => return Err("EOF following escape character".to_string()),
+        St.InField | St.StartField | St.QuoteInQuotedField => t.end_field(),
+        _ => {}
+    }
+    t.end_line()?;
+    Ok(t)
+}
+
+// ============================================================ read_csv: the TextReader
+
+fn is_na_text(s: Str, o: ReadOpts) -> bool {
+    if o.keep_default_na and default_na(s) {
+        return true;
+    }
+    o.na.iter().any(|n| n == s)
+}
+
+// _try_bool_flex: a word in true_values or false_values (each with
+// True/TRUE/true and False/FALSE/false), else TRUE or FALSE in any case.
+fn parse_bool(s: Str, o: ReadOpts) -> Option[bool] {
+    if s == "True" or s == "TRUE" or s == "true" or o.true_values.iter().any(|v| v == s) {
+        return Some(true);
+    }
+    if s == "False" or s == "FALSE" or s == "false" or o.false_values.iter().any(|v| v == s) {
+        return Some(false);
+    }
+    to_boolean(s)
+}
+
+// The text Python writes for an int past uint64 that read_csv kept as an
+// object.
+fn py_int_text(s: Str) -> String {
+    let t = s.trim();
+    let digits = if t.starts_with("+") { t[1..] } else { t };
+    let neg = digits.starts_with("-");
+    let body = if neg { digits[1..] } else { digits };
+    let mut k = 0;
+    while k + 1 < body.len() and body[k..k + 1] == "0" {
+        k += 1;
+    }
+    let sign = if neg { "-" } else { "" };
+    f"{sign}{body[k..]}"
+}
+
+// The uint64 attempt after an int64 overflow: a column of uint64, the
+// text of its cells (an int with a minus sign or a gap next to one past
+// i64: pandas keeps the column as text), or an object column of Python
+// ints when one is past uint64 too. None when a cell is not an int.
+fn try_uint64(cells: Vec[Option[String]], tsep: u8) -> Option[Col] {
+    let mut v: Vec[u64] = Vec.new();
+    let mut seen_sint = false;
+    let mut seen_null = false;
+    let mut seen_uint = false;
+    for c in cells {
+        match c {
+            None => {
+                seen_null = true;
+                v.push(0);
+            }
+            Some(s) => match str_to_uint64(s, tsep) {
+                Ok((n, neg)) => {
+                    if neg {
+                        seen_sint = true;
+                    }
+                    if n > 9223372036854775807 {
+                        seen_uint = true;
+                    }
+                    v.push(n);
+                }
+                Err(IntError.Overflow) => {
+                    return Some(Col.Obj(cells.iter().map(|c| c.clone().map(|s| py_int_text(s))).collect()));
+                }
+                Err(IntError.NotInt) => return None,
+            },
+        }
+    }
+    if seen_uint and (seen_sint or seen_null) {
+        return Some(Col.Str(cells.clone()));
+    }
+    Some(Col.UInt(v))
+}
+
+// One column's cells, typed the way the C parser infers them: int64
+// (uint64 past its range), then float64, then bool, else text. A gap
+// rules out the integers, and makes a bool column an object column.
+fn infer(cells: Vec[Option[String]], o: ReadOpts) -> Col {
+    let na_count = cells.iter().filter(|c| c.is_none()).count();
+    if na_count == 0 {
+        let mut ints: Vec[i64] = Vec.new();
+        let mut overflow = false;
+        let mut all_int = true;
+        for c in cells {
+            let s = c.clone() ?? String.new();
+            match str_to_int64(s, o.thousands) {
+                Ok(n) => ints.push(n),
+                Err(IntError.Overflow) => {
+                    overflow = true;
+                    break;
+                }
+                Err(IntError.NotInt) => {
+                    all_int = false;
+                    break;
+                }
+            }
+        }
+        if overflow {
+            if let Some(col) = try_uint64(cells, o.thousands) {
+                return col;
+            }
+        } else if all_int {
+            return Col.Int(ints);
+        }
+    }
+    let mut floats: Vec[f64] = Vec.new();
+    let mut all_float = true;
+    for c in cells {
+        match c {
+            None => floats.push(nan()),
+            Some(s) => match parse_float(s, o.decimal, o.thousands) {
+                Some(x) => floats.push(x),
+                None => {
+                    all_float = false;
+                    break;
+                }
+            },
+        }
+    }
+    if all_float {
+        return Col.Float(floats);
+    }
+    let mut bools: Vec[Option[bool]] = Vec.new();
+    let mut all_bool = true;
+    for c in cells {
+        match c {
+            None => bools.push(None),
+            Some(s) => match parse_bool(s, o) {
+                Some(b) => bools.push(Some(b)),
+                None => {
+                    all_bool = false;
+                    break;
+                }
+            },
+        }
+    }
+    if all_bool {
+        if na_count > 0 {
+            return Col.Obj(bools.iter().map(|b| b.map(|x| bool_text(x))).collect());
+        }
+        return Col.Bool(bools.iter().map(|b| *b ?? false).collect());
+    }
+    Col.Str(cells.clone())
+}
+
+// A column read with the dtype a job asked for.
+fn convert(cells: Vec[Option[String]], dtype: Str, j: i64, o: ReadOpts) -> Result[Col, String] {
+    match dtype {
+        "str" => Ok(Col.Str(cells.clone())),
+        "float" | "float64" => {
+            let mut v: Vec[f64] = Vec.new();
+            for c in cells {
+                match c {
+                    None => v.push(nan()),
+                    Some(s) => match parse_float(s, o.decimal, o.thousands) {
+                        Some(x) => v.push(x),
+                        None => return Err(f"ValueError: could not convert string to float: '{s}'"),
+                    },
+                }
+            }
+            Ok(Col.Float(v))
+        }
+        "int" | "int64" => {
+            if cells.iter().any(|c| c.is_none()) {
+                return Err(f"ValueError: Integer column has NA values in column {j}");
+            }
+            let mut v: Vec[i64] = Vec.new();
+            for c in cells {
+                let s = c.clone() ?? String.new();
+                match str_to_int64(s, o.thousands) {
+                    Ok(n) => v.push(n),
+                    Err(_) => return Err(f"ValueError: invalid literal for int() with base 10: '{s}'"),
+                }
+            }
+            Ok(Col.Int(v))
+        }
+        _ => Ok(infer(cells, o)),
+    }
+}
+
+// pandas' dedup_names: a repeated name gets `.1`, `.2` and so on, past
+// any name already taken.
+fn dedup_names(names: Vec[String]) -> Vec[String] {
+    let mut counts: Map[String, i64] = Map.new();
+    let mut out: Vec[String] = Vec.new();
+    for name in names {
+        let mut col = name.clone();
+        let mut cur = counts.get(col).map(|n| *n) ?? 0;
+        while cur > 0 {
+            counts[col.clone()] = cur + 1;
+            col = f"{col}.{cur}";
+            cur = counts.get(col).map(|n| *n) ?? 0;
+        }
+        counts[col.clone()] = cur + 1;
+        out.push(col);
+    }
+    out
+}
+
+// The frame read_csv returns, and the ParserWarning lines it emitted. A
+// first data line with more fields than the header makes the extra
+// leading fields the index, which `to_csv(index=False)` then leaves out.
+fn read_csv(path: Str, o: ReadOpts) -> Result[(Frame, Vec[String]), String] {
+    let full = f"data/{path}";
+    let text = match fs.read_to_string(full.clone()) {
+        Ok(t) => t,
+        Err(_) => return Err(f"FileNotFoundError: [Errno 2] No such file or directory: '{full}'"),
+    };
+    let t = match tokenize(text, o) {
+        Ok(t) => t,
+        Err(e) => return Err(f"ParserError: Error tokenizing data. C error: {e}"),
+    };
+    let lines = t.lines;
+    if lines.len() == 0 {
+        return Err("EmptyDataError: No columns to parse from file".to_string());
+    }
+    let mut names: Vec[String] = Vec.new();
+    let mut start = 0;
+    if o.header {
+        for k in 0..lines[0].len() {
+            names.push(if lines[0][k].len() == 0 { f"Unnamed: {k}" } else { lines[0][k].clone() });
+        }
+        names = dedup_names(names);
+        start = 1;
+    } else if let Some(given) = o.names {
+        names = given.clone();
+    } else {
+        for k in 0..lines[0].len() {
+            names.push(k.to_string());
+        }
+    }
+    let leading = if lines.len() > start and lines[start].len() > names.len() { lines[start].len() - names.len() } else { 0 };
+    if let Some(want) = o.usecols {
+        let missing: Vec[String] = want.iter().filter(|w| not names.iter().any(|n| n == *w)).map(|w| w.clone()).collect();
+        if missing.len() > 0 {
+            return Err(f"ValueError: Usecols do not match columns, columns expected but not found: [{quoted_list(missing)}]");
+        }
+    }
+    let mut f = Frame.new();
+    for j in 0..names.len() {
+        let name = names[j].clone();
+        if let Some(want) = o.usecols {
+            if not want.iter().any(|w| *w == name) {
+                continue;
+            }
+        }
+        let mut cells: Vec[Option[String]] = Vec.new();
+        for r in start..lines.len() {
+            let k = leading + j;
+            let raw = if k < lines[r].len() { lines[r][k].clone() } else { String.new() };
+            if is_na_text(raw, o) {
+                cells.push(None);
+            } else {
+                cells.push(Some(raw));
+            }
+        }
+        let mut dtype = String.new();
+        for (n, ty) in o.dtype {
+            if *n == name {
+                dtype = ty.clone();
+            }
+        }
+        f.put(name, convert(cells, dtype, j, o)?);
+    }
+    Ok((f, t.warnings))
+}
+
+// ============================================================ float_format: printf on the exact value
+
+// A big natural number in base 10^9, least significant limb first.
+fn big_mul(limbs: mut ref Vec[i64], by: i64) {
+    let mut carry = 0;
+    for i in 0..limbs.len() {
+        let v = limbs[i] * by + carry;
+        limbs[i] = v % 1000000000;
+        carry = v / 1000000000;
+    }
+    while carry > 0 {
+        limbs.push(carry % 1000000000);
+        carry /= 1000000000;
+    }
+}
+
+fn big_text(limbs: Vec[i64]) -> String {
+    let mut t = String.new();
+    let mut i = limbs.len() - 1;
+    while i > 0 and limbs[i] == 0 {
+        i -= 1;
+    }
+    t.push_str(limbs[i].to_string());
+    while i > 0 {
+        i -= 1;
+        t.push_str(f"{limbs[i]:09}");
+    }
+    t
+}
+
+// The exact decimal value of a finite double's magnitude: digits D and a
+// power of ten s with |x| = D * 10^s. A double is m * 2^e; for e < 0 that
+// is m * 5^-e / 10^-e.
+fn exact_decimal(x: f64) -> (Vec[u8], i64) {
+    let bits = x.to_bits();
+    let exp_bits = ((bits >> 52) & 2047) as i64;
+    let frac = (bits & 4503599627370495) as i64;
+    if exp_bits == 0 and frac == 0 {
+        return ([b'0'].to_vec(), 0);
+    }
+    let (m, e) = if exp_bits == 0 { (frac, -1074) } else { (frac + 4503599627370496, exp_bits - 1075) };
+    let mut limbs: Vec[i64] = [m % 1000000000, m / 1000000000 % 1000000000, m / 1000000000000000000].to_vec();
+    let mut shift = 0;
+    if e >= 0 {
+        let mut k = e;
+        while k >= 30 {
+            big_mul(mut limbs, 1073741824);
+            k -= 30;
+        }
+        big_mul(mut limbs, 1 << k);
+    } else {
+        let mut k = -e;
+        while k >= 13 {
+            big_mul(mut limbs, 1220703125);
+            k -= 13;
+        }
+        let mut f = 1;
+        for _ in 0..k {
+            f *= 5;
+        }
+        big_mul(mut limbs, f);
+        shift = e;
+    }
+    (big_text(limbs).bytes().iter().collect(), shift)
+}
+
+// The first `keep` digits of d, rounded half to even on the digits
+// after them (keep may be 0 or less, or past the end, which pads with
+// zeros). A carry can make the result one digit longer.
+fn round_digits(d: Vec[u8], keep: i64) -> Vec[u8] {
+    if keep < 0 {
+        return [b'0'].to_vec();
+    }
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..keep {
+        out.push(if i < d.len() { d[i] } else { b'0' });
+    }
+    if keep >= d.len() {
+        return out;
+    }
+    let next = d[keep];
+    let rest_zero = d[keep + 1..].iter().all(|x| *x == b'0');
+    let odd = if keep == 0 { false } else { (out[keep - 1] - b'0') % 2 == 1 };
+    if next > b'5' or (next == b'5' and (not rest_zero or odd)) {
+        let mut i = keep - 1;
+        loop {
+            if i < 0 {
+                out.insert(0, b'1');
+                break;
+            }
+            if out[i] == b'9' {
+                out[i] = b'0';
+                i -= 1;
+            } else {
+                out[i] += 1;
+                break;
+            }
+        }
+    }
+    if out.len() == 0 {
+        out.push(b'0');
+    }
+    out
+}
+
+fn digits_text(d: Vec[u8]) -> String {
+    let mut t = String.new();
+    for b in d {
+        t.push(b as char);
+    }
+    t
+}
+
+// The magnitude rounded to `prec` decimals, as digits with the point
+// before the last `prec` of them (at least prec + 1 digits).
+fn fixed_digits(x: f64, prec: i64) -> Vec[u8] {
+    let (d, s) = exact_decimal(x);
+    let mut r = round_digits(d, d.len() + s + prec);
+    while r.len() > 1 and r[0] == b'0' {
+        r.remove(0);
+    }
+    while r.len() < prec + 1 {
+        r.insert(0, b'0');
+    }
+    r
+}
+
+fn with_point(r: Vec[u8], prec: i64) -> String {
+    let whole = digits_text(r[..r.len() - prec].to_vec());
+    if prec == 0 {
+        whole
+    } else {
+        whole + "." + digits_text(r[r.len() - prec..].to_vec())
+    }
+}
+
+// The magnitude rounded to prec + 1 significant digits, and the power of
+// ten of the first one.
+fn sci_digits(x: f64, prec: i64) -> (Vec[u8], i64) {
+    let (d, s) = exact_decimal(x);
+    if d.len() == 1 and d[0] == b'0' {
+        return (round_digits(d, prec + 1), 0);
+    }
+    let mut exp10 = d.len() - 1 + s;
+    let mut r = round_digits(d, prec + 1);
+    if r.len() > prec + 1 {
+        r.pop();
+        exp10 += 1;
+    }
+    (r, exp10)
+}
+
+fn exp_text(e: i64) -> String {
+    let sign = if e < 0 { "-" } else { "+" };
+    f"e{sign}{e.abs():02}"
+}
+
+// %g's trailing zeros, and a point left with nothing after it.
+fn strip_zeros(s: Str) -> String {
+    let mut m = s.to_string();
+    if m.contains(".") {
+        while m.ends_with("0") {
+            m.pop();
+        }
+        if m.ends_with(".") {
+            m.pop();
+        }
+    }
+    m
+}
+
+// Python's `fmt % x` for the float formats a float_format names: %.Nf,
+// %.Ne and %.Ng (6 digits when no precision is given).
+fn py_format(fmt: Str, x: f64) -> String {
+    let kind = fmt[fmt.len() - 1..].to_string();
+    let prec = match fmt.find(".") {
+        Some(k) => i64.parse(fmt[k + 1..fmt.len() - 1]).ok() ?? 6,
+        None => 6,
+    };
+    let sign = if signbit(x) { "-" } else { "" };
+    if is_nan(x) {
+        return "nan".to_string();
+    }
+    if x.abs() == 1.0 / 0.0 {
+        return f"{sign}inf";
+    }
+    let v = x.abs();
+    let body = match kind.as_str() {
+        "f" | "F" => with_point(fixed_digits(v, prec), prec),
+        "e" | "E" => {
+            let (r, e) = sci_digits(v, prec);
+            with_point(r, prec) + exp_text(e)
+        }
+        _ => {
+            // %g: the exponent after rounding to P significant digits
+            // picks fixed or exponent form; trailing zeros go.
+            let p = if prec == 0 { 1 } else { prec };
+            let (r, e) = sci_digits(v, p - 1);
+            if e >= -4 and e < p {
+                strip_zeros(with_point(fixed_digits(v, p - 1 - e), p - 1 - e))
+            } else {
+                strip_zeros(with_point(r, p - 1)) + exp_text(e)
+            }
+        }
+    };
+    f"{sign}{body}"
+}
+
+// ============================================================ to_csv: Python's csv writer
+
+// One field handed to csv.writer: a number (an int, float or bool
+// object, which QUOTE_NONNUMERIC and QUOTE_STRINGS leave unquoted) or a
+// string.
+enum Cell {
+    Num(String),
+    Text(String),
+}
+
+#[derive(Clone)]
+struct WriteOpts {
+    sep: char,
+    na_rep: String,
+    float_format: Option[String],
+    quoting: i64,
+    quotechar: char,
+    escapechar: Option[char],
+    doublequote: bool,
+    decimal: String,
+    header: bool,
+    columns: Option[Vec[String]],
+}
+
+fn write_opts() -> WriteOpts {
+    WriteOpts {
+        sep: ',',
+        na_rep: String.new(),
+        float_format: None,
+        quoting: 0,
+        quotechar: '"',
+        escapechar: None,
+        doublequote: true,
+        decimal: ".".to_string(),
+        header: true,
+        columns: None,
+    }
+}
+
+// join_append (_csv.c): the field with its escapes, quoted when a
+// character in it needs quoting or the quoting mode says so.
+fn csv_field(cell: Cell, o: WriteOpts) -> Result[String, String] {
+    let (text, is_num) = match cell {
+        Cell.Num(s) => (s, true),
+        Cell.Text(s) => (s, false),
+    };
+    let mut quoted = match o.quoting {
+        1 | 5 => true,
+        2 | 4 => not is_num,
+        _ => false,
+    };
+    // pandas hands csv no quotechar under QUOTE_NONE without an escapechar.
+    let quotechar = if o.quoting == 3 and o.escapechar.is_none() { None } else { Some(o.quotechar) };
+    let mut out = String.new();
+    for c in text.chars() {
+        if c == o.sep or Some(c) == o.escapechar or Some(c) == quotechar or c == '\n' or c == '\r' {
+            let mut want_escape = false;
+            if o.quoting == 3 {
+                want_escape = true;
+            } else {
+                if Some(c) == quotechar {
+                    if o.doublequote {
+                        out.push(c);
+                    } else {
+                        want_escape = true;
+                    }
+                } else if Some(c) == o.escapechar {
+                    want_escape = true;
+                }
+                if not want_escape {
+                    quoted = true;
+                }
+            }
+            if want_escape {
+                match o.escapechar {
+                    Some(e) => out.push(e),
+                    None => return Err("Error: need to escape, but no escapechar set".to_string()),
+                }
+            }
+        }
+        out.push(c);
+    }
+    if quoted {
+        let q = o.quotechar.to_string();
+        return Ok(q.clone() + out + q);
+    }
+    Ok(out)
+}
+
+// writerow: the fields joined, and a record of one empty field quoted.
+fn csv_row(cells: Vec[Cell], o: WriteOpts) -> Result[String, String] {
+    let n = cells.len();
+    let mut parts: Vec[String] = Vec.new();
+    for c in cells {
+        parts.push(csv_field(c, o)?);
+    }
+    let mut line = parts.join(o.sep.to_string().as_str());
+    if n > 0 and line.len() == 0 {
+        if o.quoting == 3 {
+            return Err("Error: single empty field record must be quoted".to_string());
+        }
+        let q = o.quotechar.to_string();
+        line = q.clone() + q;
+    }
+    line.push('\n');
+    Ok(line)
+}
+
+// get_values_for_csv: what each cell of a column hands the writer. A
+// float column is str() of each value (Python floats, numbers to csv,
+// under a quoting mode) unless float_format or a decimal other than "."
+// turns it into strings; a gap is na_rep, a string.
+fn csv_cell(c: Col, i: i64, o: WriteOpts) -> Cell {
+    match c {
+        Col.Int(v) => Cell.Num(v[i].to_string()),
+        Col.UInt(v) => Cell.Num(v[i].to_string()),
+        Col.Bool(v) => Cell.Num(bool_text(v[i])),
+        Col.Float(v) => {
+            let x = v[i];
+            if is_nan(x) {
+                return Cell.Text(o.na_rep.clone());
+            }
+            match o.float_format {
+                Some(ref fmt) => Cell.Text(py_format(fmt, x).replacen(".", o.decimal.as_str(), 1)),
+                None => {
+                    if o.decimal != "." {
+                        Cell.Text(x.to_string().replacen(".", o.decimal.as_str(), 1))
+                    } else {
+                        Cell.Num(x.to_string())
+                    }
+                }
+            }
+        }
+        Col.Str(v) => Cell.Text(v[i].clone() ?? o.na_rep.clone()),
+        Col.Obj(v) => Cell.Text(v[i].clone() ?? o.na_rep.clone()),
+    }
+}
+
+// df.to_csv(index=False, ...) with the options of a `write` step.
+fn to_csv(f: Frame, o: WriteOpts) -> Result[String, String] {
+    let g = match o.columns {
+        Some(ref cols) => select(f, cols.clone())?,
+        None => f.clone(),
+    };
+    let mut out = String.new();
+    if o.header {
+        out.push_str(csv_row(g.names.iter().map(|n| Cell.Text(n.clone())).collect(), o)?);
+    }
+    for i in 0..g.height() {
+        let cells: Vec[Cell] = g.cols.iter().map(|c| csv_cell(c, i, o)).collect();
+        out.push_str(csv_row(cells, o)?);
+    }
+    Ok(out)
+}
+
+// ============================================================ cleaning steps
+
+// Series.ffill / bfill(limit): each gap takes the nearest value before
+// it (after it, for bfill), at most `limit` gaps in a row. The rows of
+// one group, in order, for groupby(...).ffill.
+fn fill_rows(c: Col, rows: Vec[i64], forward: bool, limit: Option[i64], idx: mut ref Vec[i64]) {
+    let n = rows.len();
+    let mut last = -1;
+    let mut run = 0;
+    for k in 0..n {
+        let r = if forward { rows[k] } else { rows[n - 1 - k] };
+        if c.is_na(r) {
+            run += 1;
+            let within = match limit {
+                Some(l) => run <= l,
+                None => true,
+            };
+            idx[r] = if last >= 0 and within { last } else { -1 };
+        } else {
+            last = r;
+            run = 0;
+            idx[r] = r;
+        }
+    }
+}
+
+fn fill(f: Frame, name: Str, forward: bool, limit: Option[i64], by: Option[String]) -> Result[Col, String] {
+    let c = f.col(name)?;
+    let mut idx: Vec[i64] = Vec.filled(f.height(), -1);
+    match by {
+        Some(key) => {
+            let g = group_rows(f, [key].to_vec())?;
+            for rows in g.rows {
+                fill_rows(c, rows, forward, limit, mut idx);
+            }
+        }
+        None => fill_rows(c, range_idx(f.height()), forward, limit, mut idx),
+    }
+    if not range_idx(f.height()).iter().any(|i| c.is_na(*i)) {
+        return Ok(c.clone());
+    }
+    Ok(c.take(idx))
+}
+
+// Series.fillna(value): a number fills a float column; text fills a text
+// column.
+fn fillna(c: Col, v: Val) -> Col {
+    match c {
+        Col.Float(xs) => match v {
+            Val.I(_) | Val.F(_) | Val.B(_) => {
+                let x = num_of(v);
+                Col.Float(xs.iter().map(|y| if is_nan(*y) { x } else { *y }).collect())
+            }
+            _ => Col.Obj(xs.iter().map(|y| if is_nan(*y) { Some(val_text(v)) } else { Some(y.to_string()) }).collect()),
+        },
+        Col.Str(cells) => Col.Str(cells.iter().map(|s| Some(s.clone() ?? val_text(v))).collect()),
+        Col.Obj(cells) => Col.Obj(cells.iter().map(|s| Some(s.clone() ?? val_text(v))).collect()),
+        _ => c.clone(),
+    }
+}
+
+// Series.shift(n): values move n rows down (up for a negative n), with
+// gaps where nothing moved in.
+fn shift(c: Col, n: i64) -> Col {
+    let h = c.len();
+    let idx: Vec[i64] = range_idx(h).iter().map(|i| if *i - n >= 0 and *i - n < h { *i - n } else { -1 }).collect();
+    c.take(idx)
+}
+
+fn num_values(c: Col, step: Str) -> Result[Vec[f64], String] {
+    if not c.is_numeric() {
+        return Err(f"TypeError: unsupported operand type(s) for -: 'str' and 'str' in {step}");
+    }
+    Ok(c.floats())
+}
+
+// Series.diff(periods): x[i] - x[i - periods].
+fn diff(c: Col, periods: i64) -> Result[Col, String] {
+    let v = num_values(c, "diff")?;
+    let h = v.len();
+    Ok(Col.Float(range_idx(h).iter().map(|i| if *i - periods >= 0 and *i - periods < h { v[*i] - v[*i - periods] } else { nan() }).collect()))
+}
+
+// Series.pct_change(): x / x.shift(1) - 1, with no filling first.
+fn pct_change(c: Col) -> Result[Col, String] {
+    let v = num_values(c, "pct_change")?;
+    Ok(Col.Float(range_idx(v.len()).iter().map(|i| if *i >= 1 { v[*i] / v[*i - 1] - 1.0 } else { nan() }).collect()))
+}
+
+// cumsum, cumprod, cummax and cummin with skipna: a gap stays a gap and
+// is passed over.
+fn accumulate(c: Col, op: Str) -> Result[Col, String] {
+    match c {
+        Col.Int(v) => {
+            let mut out: Vec[i64] = Vec.new();
+            let mut acc: i64 = 0;
+            for i in 0..v.len() {
+                acc = if i == 0 {
+                    v[i]
+                } else {
+                    match op {
+                        "cumsum" => acc + v[i],
+                        "cumprod" => acc * v[i],
+                        "cummax" => if v[i] > acc { v[i] } else { acc },
+                        _ => if v[i] < acc { v[i] } else { acc },
+                    }
+                };
+                out.push(acc);
+            }
+            Ok(Col.Int(out))
+        }
+        Col.Float(v) => {
+            let mut out: Vec[f64] = Vec.new();
+            let mut acc = match op {
+                "cumsum" => 0.0,
+                "cumprod" => 1.0,
+                "cummax" => -1.0 / 0.0,
+                _ => 1.0 / 0.0,
+            };
+            for x in v {
+                if is_nan(x) {
+                    out.push(nan());
+                    continue;
+                }
+                acc = match op {
+                    "cumsum" => acc + x,
+                    "cumprod" => acc * x,
+                    "cummax" => if x > acc { x } else { acc },
+                    _ => if x < acc { x } else { acc },
+                };
+                out.push(acc);
+            }
+            Ok(Col.Float(out))
+        }
+        _ => Err(f"TypeError: unsupported operand for {op}"),
+    }
+}
+
+// Series.clip(lower, upper): a gap stays a gap.
+fn clip(c: Col, lower: Option[Val], upper: Option[Val]) -> Result[Col, String] {
+    let lo = lower.map(|v| num_of(v));
+    let hi = upper.map(|v| num_of(v));
+    let floats = match c {
+        Col.Int(_) => {
+            let int_bounds = [lower.clone(), upper.clone()].to_vec().iter().all(|b| match b {
+                Some(Val.F(_)) => false,
+                _ => true,
+            });
+            if int_bounds {
+                let v: Vec[i64] = match c {
+                    Col.Int(ref xs) => xs.clone(),
+                    _ => Vec.new(),
+                };
+                return Ok(Col.Int(v.iter().map(|x| {
+                    let mut y = *x;
+                    if let Some(l) = lo {
+                        if (y as f64) < l {
+                            y = l as i64;
+                        }
+                    }
+                    if let Some(h) = hi {
+                        if (y as f64) > h {
+                            y = h as i64;
+                        }
+                    }
+                    y
+                }).collect()));
+            }
+            c.floats()
+        }
+        Col.Float(ref v) => v.clone(),
+        _ => return Err("TypeError: '>=' not supported between instances of 'str' and 'int'".to_string()),
+    };
+    Ok(Col.Float(floats.iter().map(|x| {
+        let mut y = *x;
+        if is_nan(y) {
+            return y;
+        }
+        if let Some(l) = lo {
+            if y < l {
+                y = l;
+            }
+        }
+        if let Some(h) = hi {
+            if y > h {
+                y = h;
+            }
+        }
+        y
+    }).collect()))
+}
+
+// numpy's rint: to the nearest integer, a half to the even one.
+fn rint(x: f64) -> f64 {
+    if is_nan(x) or x.abs() == 1.0 / 0.0 {
+        return x;
+    }
+    let fl = x.floor();
+    let d = x - fl;
+    let r = if d > 0.5 {
+        fl + 1.0
+    } else if d < 0.5 {
+        fl
+    } else if (fl / 2.0).floor() * 2.0 == fl {
+        fl
+    } else {
+        fl + 1.0
+    };
+    // rint keeps the sign of a zero result.
+    if r == 0.0 { 0.0.copysign(x) } else { r }
+}
+
+// Series.round(decimals), as numpy rounds: x * 10^d through rint, / 10^d.
+fn round_col(c: Col, decimals: i64) -> Col {
+    match c {
+        Col.Float(v) => {
+            if decimals == 0 {
+                return Col.Float(v.iter().map(|x| rint(*x)).collect());
+            }
+            let f = p10(decimals);
+            Col.Float(v.iter().map(|x| rint(*x * f) / f).collect())
+        }
+        _ => c.clone(),
+    }
+}
+
+// Series.replace(old, new): cells equal to old, compared as numbers in a
+// number column and as text in a text one.
+fn replace_val(c: Col, old: Val, new: Val) -> Col {
+    match c {
+        Col.Float(v) => match (old, new) {
+            (Val.S(_), _) | (_, Val.S(_)) => c.clone(),
+            _ => {
+                let a = num_of(old);
+                let b = num_of(new);
+                Col.Float(v.iter().map(|x| if *x == a { b } else { *x }).collect())
+            }
+        },
+        Col.Int(v) => match (old, new) {
+            (Val.I(a), Val.I(b)) => Col.Int(v.iter().map(|x| if *x == a { b } else { *x }).collect()),
+            _ => c.clone(),
+        },
+        Col.Str(cells) => match (old, new) {
+            (Val.S(a), Val.S(b)) => Col.Str(cells.iter().map(|s| match s {
+                Some(t) => Some(if *t == a { b.clone() } else { t.clone() }),
+                None => None,
+            }).collect()),
+            _ => c.clone(),
+        },
+        _ => c.clone(),
+    }
+}
+
+// Series.astype(dtype).
+fn astype(c: Col, dtype: Str) -> Result[Col, String] {
+    match dtype {
+        "int64" => match c {
+            Col.Float(v) => {
+                if v.iter().any(|x| is_nan(*x) or x.abs() == 1.0 / 0.0) {
+                    return Err("IntCastingNaNError: Cannot convert non-finite values (NA or inf) to integer.Replace or remove non-finite values or cast to an integer typethat supports these values (e.g. 'Int64')".to_string());
+                }
+                Ok(Col.Int(v.iter().map(|x| *x as i64).collect()))
+            }
+            Col.Int(_) => Ok(c.clone()),
+            Col.Bool(v) => Ok(Col.Int(v.iter().map(|b| if *b { 1 } else { 0 }).collect())),
+            _ => Err("ValueError: invalid literal for int() with base 10".to_string()),
+        },
+        "float64" => match c {
+            Col.Str(cells) => {
+                let mut v: Vec[f64] = Vec.new();
+                for s in cells {
+                    match s {
+                        None => v.push(nan()),
+                        Some(t) => match f64.parse(t) {
+                            Ok(x) => v.push(x),
+                            Err(_) => return Err(f"ValueError: could not convert string to float: '{t}'"),
+                        },
+                    }
+                }
+                Ok(Col.Float(v))
+            }
+            _ => Ok(Col.Float(c.floats())),
+        },
+        "str" => Ok(Col.Str(range_idx(c.len()).iter().map(|i| match c.get(*i) {
+            Val.Na => None,
+            v => Some(val_text(v)),
+        }).collect())),
+        _ => Err(f"TypeError: data type '{dtype}' not understood"),
+    }
+}
+
+// Series.str.strip().
+fn strip(c: Col) -> Result[Col, String] {
+    match c {
+        Col.Str(cells) => Ok(Col.Str(cells.iter().map(|s| s.clone().map(|t| t.trim().to_string())).collect())),
+        _ => Err("AttributeError: Can only use .str accessor with string values!".to_string()),
+    }
+}
+
+// DataFrame.dropna(how, thresh, subset).
+fn dropna(f: Frame, how: Str, thresh: Option[i64], subset: Option[Vec[String]]) -> Result[Frame, String] {
+    let which = match subset {
+        Some(s) => index_of_all(f, s)?,
+        None => range_idx(f.names.len()),
+    };
+    let mut keep: Vec[bool] = Vec.new();
+    for i in 0..f.height() {
+        let present = which.iter().filter(|j| not f.cols[**j].is_na(i)).count();
+        keep.push(match thresh {
+            Some(t) => present >= t,
+            None => if how == "all" { present > 0 } else { present == which.len() },
+        });
+    }
+    Ok(f.rows_where(keep))
+}
+
+// DataFrame.drop_duplicates(subset, keep): first, last, or False (drop
+// every row that has a twin).
+fn drop_duplicates(f: Frame, subset: Option[Vec[String]], keep: Str) -> Result[Frame, String] {
+    let which = match subset {
+        Some(s) => index_of_all(f, s)?,
+        None => range_idx(f.names.len()),
+    };
+    let keys: Vec[String] = range_idx(f.height()).iter().map(|i| key_text(f.row(*i, which))).collect();
+    let mut count: Map[String, i64] = Map.new();
+    for k in keys {
+        let n = count.get(k).map(|c| *c) ?? 0;
+        count[k.clone()] = n + 1;
+    }
+    let mut seen: Set[String] = Set.new();
+    let mut dup: Vec[bool] = Vec.filled(keys.len(), false);
+    match keep {
+        "False" => {
+            for i in 0..keys.len() {
+                dup[i] = (count.get(keys[i]).map(|c| *c) ?? 0) > 1;
+            }
+        }
+        "last" => {
+            for i in (0..keys.len()).rev() {
+                dup[i] = seen.contains(keys[i]);
+                seen.insert(keys[i].clone());
+            }
+        }
+        _ => {
+            for i in 0..keys.len() {
+                dup[i] = seen.contains(keys[i]);
+                seen.insert(keys[i].clone());
+            }
+        }
+    }
+    Ok(f.rows_where(dup.iter().map(|d| not *d).collect()))
+}
+
+// DataFrame.rename(columns={old: new}).
+fn rename(f: Frame, spec: Str) -> Frame {
+    let mut g = f.clone();
+    for p in names_of(spec) {
+        if let Some((a, b)) = p.rsplit_once(":") {
+            let old = text_arg(a);
+            for k in 0..g.names.len() {
+                if g.names[k] == old {
+                    g.names[k] = text_arg(b);
+                }
+            }
+        }
+    }
+    g
+}
+
+// ============================================================ jobs
+
+fn first_char(s: Str) -> char {
+    s.chars().next() ?? ','
+}
+
+fn int_list(s: Str) -> Result[Vec[i64], String] {
+    let mut out: Vec[i64] = Vec.new();
+    for p in names_of(s) {
+        out.push(int_arg(p)?);
+    }
+    Ok(out)
+}
+
+// `read <file> [option=value ...]`: read_csv with the options the job
+// names.
+fn read_step(toks: Vec[String]) -> Result[(Frame, Vec[String]), String] {
+    let a = split_args(toks);
+    let path = a.arg(0)?;
+    let mut o = read_opts();
+    if let Some(s) = a.get("sep") {
+        if s == "ws" {
+            o.delim_ws = true;
+            o.sep = ' ';
+        } else {
+            o.sep = first_char(text_arg(s));
+        }
+    }
+    if a.get("header") == Some("none".to_string()) {
+        o.header = false;
+    }
+    if let Some(s) = a.get("names") {
+        o.names = Some(names_of(s));
+    }
+    if let Some(s) = a.get("skiprows") {
+        o.skip_first = int_arg(s)?;
+    }
+    if let Some(s) = a.get("skiplines") {
+        o.skipset = Some(int_list(s)?);
+    }
+    if let Some(s) = a.get("nrows") {
+        o.nrows = int_arg(s)?;
+    }
+    if let Some(s) = a.get("comment") {
+        o.comment = Some(first_char(s));
+    }
+    if let Some(s) = a.get("quotechar") {
+        o.quotechar = first_char(s);
+    }
+    if let Some(s) = a.get("escapechar") {
+        o.escapechar = Some(first_char(s));
+    }
+    if let Some(s) = a.get("decimal") {
+        o.decimal = s.bytes()[0];
+    }
+    if let Some(s) = a.get("thousands") {
+        o.thousands = s.bytes()[0];
+    }
+    if let Some(s) = a.get("on_bad_lines") {
+        o.on_bad_lines = s;
+    }
+    o.doublequote = a.get("doublequote") != Some("0".to_string());
+    o.skipinitialspace = a.get("skipinitialspace") == Some("1".to_string());
+    o.keep_default_na = a.get("keep_default_na") != Some("0".to_string());
+    o.skip_blank_lines = a.get("skip_blank_lines") != Some("0".to_string());
+    o.quote_none = a.get("quoting") == Some("3".to_string());
+    if let Some(s) = a.get("na") {
+        o.na = names_of(s);
+    }
+    if let Some(s) = a.get("true") {
+        o.true_values = names_of(s);
+    }
+    if let Some(s) = a.get("false") {
+        o.false_values = names_of(s);
+    }
+    if let Some(s) = a.get("usecols") {
+        o.usecols = Some(names_of(s));
+    }
+    if let Some(s) = a.get("dtype") {
+        for p in names_of(s) {
+            if let Some((c, t)) = p.split_once(":") {
+                o.dtype.push((c.to_string(), t.to_string()));
+            }
+        }
+    }
+    read_csv(path, o)
+}
+
+// `write [option=value ...]`: to_csv(index=False) with those options.
+fn write_step(f: Frame, toks: Vec[String]) -> Result[String, String] {
+    let a = split_args(toks);
+    let mut o = write_opts();
+    if let Some(s) = a.get("sep") {
+        o.sep = first_char(text_arg(s));
+    }
+    if let Some(s) = a.get("na") {
+        o.na_rep = text_arg(s);
+    }
+    o.float_format = a.get("float");
+    if let Some(s) = a.get("quoting") {
+        o.quoting = int_arg(s)?;
+    }
+    if let Some(s) = a.get("quotechar") {
+        o.quotechar = first_char(s);
+    }
+    if let Some(s) = a.get("escapechar") {
+        o.escapechar = Some(first_char(s));
+    }
+    if let Some(s) = a.get("decimal") {
+        o.decimal = s;
+    }
+    o.doublequote = a.get("doublequote") != Some("0".to_string());
+    o.header = a.get("header") != Some("0".to_string());
+    if let Some(s) = a.get("columns") {
+        o.columns = Some(names_of(s));
+    }
+    to_csv(f, o)
+}
+
+fn with_col(f: Frame, name: Str, c: own Col) -> Frame {
+    let mut g = f.clone();
+    g.put(name, c);
+    g
+}
+
+fn opt_literal(a: Args, k: Str) -> Option[Val] {
+    a.get(k).map(|s| literal(s))
+}
+
+// One step of a job applied to the frame.
+fn step(f: Frame, op: Str, toks: Vec[String]) -> Result[Frame, String] {
+    let a = split_args(toks);
+    match op {
+        "dtypes" => return Ok(dtypes(f)),
+        "head" => return Ok(head(f, int_arg(a.arg(0)?)?)),
+        "select" => return select(f, names_of(a.arg(0)?)),
+        "where" => return where_rows(f, toks[0], toks[1], toks[2]),
+        "agg" => return agg(f, names_of(toks[0]), parse_specs(toks[1])),
+        "dropna" => {
+            let thresh = match a.get("thresh") {
+                Some(t) => Some(int_arg(t)?),
+                None => None,
+            };
+            return dropna(f, a.get("how") ?? "any".to_string(), thresh, a.get("subset").map(|s| names_of(s)));
+        }
+        "dedup" => return drop_duplicates(f, a.get("subset").map(|s| names_of(s)), a.get("keep") ?? "first".to_string()),
+        "rename" => return Ok(rename(f, a.arg(0)?)),
+        _ => {}
+    }
+    let name = a.arg(0)?;
+    let out = a.get("as") ?? name.clone();
+    let limit = match a.get("limit") {
+        Some(t) => Some(int_arg(t)?),
+        None => None,
+    };
+    let c = f.col(name)?;
+    let col = match op {
+        "ffill" | "bfill" => fill(f, name, op == "ffill", limit, a.get("by"))?,
+        "fillna" => fillna(c, literal(a.arg(1)?)),
+        "shift" => shift(c, int_arg(a.arg(1)?)?),
+        "diff" => diff(c, int_arg(a.get("periods") ?? "1".to_string())?)?,
+        "pct_change" => pct_change(c)?,
+        "cumsum" | "cumprod" | "cummax" | "cummin" => accumulate(c, op)?,
+        "clip" => clip(c, opt_literal(a, "lower"), opt_literal(a, "upper"))?,
+        "round" => round_col(c, int_arg(a.arg(1)?)?),
+        "replace" => replace_val(c, literal(a.arg(1)?), literal(a.arg(2)?)),
+        "astype" => astype(c, a.arg(1)?)?,
+        "strip" => strip(c)?,
+        _ => return Err(f"ValueError: unknown step {op}"),
+    };
+    Ok(with_col(f, out, col))
+}
+
+fn run(line: Str) -> Result[String, String] {
+    let steps: Vec[String] = line.split(" | ").map(|s| s.to_string()).collect();
+    let first: Vec[String] = steps[0].split(" ").map(|s| s.to_string()).collect();
+    let (mut cur, warnings) = read_step(first[1..].to_vec())?;
+    let mut t = String.new();
+    for w in warnings {
+        t.push_str(f"~ ParserWarning: {w}\n");
+    }
+    for k in 1..steps.len() {
+        let toks: Vec[String] = steps[k].split(" ").map(|s| s.to_string()).collect();
+        if toks[0] == "write" {
+            t.push_str(write_step(cur, toks[1..].to_vec())?);
+            return Ok(t);
+        }
+        cur = step(cur, toks[0], toks[1..].to_vec())?;
+    }
+    t.push_str(to_csv(cur, write_opts())?);
+    Ok(t)
+}
+
+fn transcript(line: Str) -> String {
+    let mut t = f"$ {line}\n";
+    match run(line) {
+        Ok(text) => t.push_str(text),
+        Err(e) => t.push_str(f"! {e}\n"),
+    }
+    t
+}
+
+struct DataFile {
+    path: String,
+    body: String,
+}
+
+fn write_data() -> Result[(), String] {
+    if let Err(e) = fs.create_dir_all("data".to_string()) {
+        return Err(f"cannot create data: {e}");
+    }
+    for file in data_files() {
+        if let Err(e) = fs.write(f"data/{file.path}", file.body.clone()) {
+            return Err(f"cannot write {file.path}: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = write_data() {
+        eprintln(e);
+        return;
+    }
+    let jobs = match fs.read_to_string("data/jobs.txt".to_string()) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln(f"cannot read jobs.txt: {e}");
+            return;
+        }
+    };
+    let lines: Vec[String] = jobs.lines().filter(|l| l.len() > 0).map(|l| l.to_string()).collect();
+    // Every job in a task of its own; the transcript prints in job order.
+    let group = TaskGroup.new();
+    let mut handles = Vec.new();
+    for line in lines {
+        handles.push(group.spawn(|| transcript(line)));
+    }
+    for h in handles.into_iter() {
+        print(h.join());
+    }
+}
+
+// ============================================================ data
+
+// The files under data/, in path order.
+fn data_files() -> Vec[DataFile] {
+    let mut v: Vec[DataFile] = Vec.new();
+    data_part_0(mut v);
+    data_part_1(mut v);
+    v
+}
+
+fn data_part_0(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("sku,title,description,price,stock,tags\n");
+    t.push_str("M-24,\"Monitor 24\"\", IPS\",\"Matte, 75 Hz\",149.00,12,office\n");
+    t.push_str("K-01,Keyboard,\"Mechanical\n");
+    t.push_str("brown switches\",89.5,0,\"office,gaming\"\n");
+    t.push_str("C-10,Cable, USB-C,2 m braided,9.99,140,\n");
+    t.push_str("H-07,\"Headset \"\"Pro\"\"\",Closed back,59,8,gaming\n");
+    t.push_str("D-02,Dock,,129.00\n");
+    t.push_str("W-33,Webcam,1080p,45.25,31,office\n");
+    v.push(DataFile { path: "feed.csv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("sku,title,price\n");
+    t.push_str("M-24,\"Monitor 24\\\", IPS\",149.00\n");
+    t.push_str("H-07,\"Headset \\\"Pro\\\"\",59\n");
+    t.push_str("B-12,Bag\\, padded,24.50\n");
+    v.push(DataFile { path: "feed_esc.csv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("event_id,user_id,signed,count,amount,code\n");
+    t.push_str("18446744073709551615,9223372036854775807,-9223372036854775808,\"1,234\", 42 ,007\n");
+    t.push_str("1,1,+7,\"12,000,000\",1e3,010\n");
+    t.push_str("9223372036854775808,2,0,5,  -0.5,099\n");
+    v.push(DataFile { path: "ids.csv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("event_id,user\n");
+    t.push_str("18446744073709551616,a\n");
+    t.push_str("2,b\n");
+    v.push(DataFile { path: "ids_big.csv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("event_id,user\n");
+    t.push_str("18446744073709551615,a\n");
+    t.push_str("-2,b\n");
+    v.push(DataFile { path: "ids_neg.csv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("read statement.csv\n");
+    t.push_str("read statement.csv sep=;\n");
+    t.push_str("read statement.csv sep=; skiprows=3\n");
+    t.push_str("read statement.csv sep=; skiprows=3 | dtypes\n");
+    t.push_str("read statement.csv sep=; skiprows=3 decimal=,\n");
+    t.push_str("read statement.csv sep=; skiprows=3 decimal=, | dtypes\n");
+    t.push_str("read statement.csv sep=; skiprows=3 decimal=, thousands=.\n");
+    t.push_str("read statement.csv sep=; skiprows=3 decimal=, thousands=. | dtypes\n");
+    t.push_str("read statement.csv sep=; skiprows=3 decimal=, thousands=. usecols=Buchungstag,Betrag,Saldo\n");
+    t.push_str("read statement.csv sep=; skiprows=3 decimal=, thousands=. | cumsum Betrag as=laufend | select Buchungstag,Betrag,Saldo,laufend\n");
+    t.push_str("read statement.csv sep=; skiprows=3 decimal=, thousands=. | where Betrag < 0 | agg W\u{e4}hrung n=Betrag:count,ausgaben=Betrag:sum\n");
+    t.push_str("read statement.csv sep=; skiprows=3 decimal=, thousands=. nrows=3\n");
+    t.push_str("read statement.csv sep=; skiplines=0,1,2,5\n");
+    t.push_str("read statement.csv sep=; skiprows=3 decimal=, thousands=. | write sep=, decimal=.\n");
+    t.push_str("read statement.csv sep=; skiprows=3 decimal=, thousands=. | write sep=; decimal=, float=%.2f\n");
+    t.push_str("read statement.csv sep=; skiprows=3 decimal=, thousands=. | write quoting=1\n");
+    t.push_str("read statement.csv sep=; skiprows=3 decimal=, thousands=. | write quoting=2 float=%.2f\n");
+    t.push_str("read legacy.dat sep=| header=none\n");
+    t.push_str("read legacy.dat sep=| header=none comment=#\n");
+    t.push_str("read legacy.dat sep=| header=none comment=# names=acct,name,region,balance,limit,opened\n");
+    t.push_str("read legacy.dat sep=| header=none comment=# names=acct,name,region,balance,limit,opened | dtypes\n");
+    t.push_str("read legacy.dat sep=| header=none comment=# names=acct,name,region,balance,limit,opened dtype=acct:str na=-9999,n.a.\n");
+    t.push_str("read legacy.dat sep=| header=none comment=# names=acct,name,region,balance,limit,opened dtype=acct:str na=-9999,n.a. | dtypes\n");
+    t.push_str("read legacy.dat sep=| header=none comment=# names=acct,name,region,balance,limit,opened dtype=acct:str,opened:str na=-9999,n.a. skipinitialspace=1 | strip name | strip region\n");
+    t.push_str("read legacy.dat sep=| header=none comment=# names=acct,name,region,balance,limit,opened dtype=acct:str na=-9999,n.a. | fillna balance 0 | fillna limit 0 | write float=%.2f\n");
+    t.push_str("read legacy.dat sep=| header=none comment=# names=acct,name,region,balance,limit,opened dtype=acct:str na=-9999,n.a. keep_default_na=0\n");
+    t.push_str("read legacy.dat sep=| header=none comment=# names=acct,name,region,balance dtype=acct:str\n");
+    t.push_str("read legacy.dat sep=| header=none comment=# names=acct,name,region,balance,limit,opened dtype=balance:float\n");
+    t.push_str("read legacy.dat sep=| header=none comment=# names=acct,name,region,balance,limit,opened dtype=limit:int64\n");
+    t.push_str("read legacy.dat sep=| header=none comment=# names=acct,name,region,balance,limit,opened dtype=acct:str na=-9999,n.a. | dropna\n");
+    t.push_str("read legacy.dat sep=| header=none comment=# names=acct,name,region,balance,limit,opened dtype=acct:str na=-9999,n.a. | dropna subset=balance\n");
+    t.push_str("read legacy.dat sep=| header=none comment=# names=acct,name,region,balance,limit,opened dtype=acct:str na=-9999,n.a. | dropna thresh=6\n");
+    t.push_str("read sensors.tsv sep=\\t\n");
+    t.push_str("read sensors.tsv sep=\\t | dtypes\n");
+    t.push_str("read sensors.tsv sep=\\t na=-9999,ERR\n");
+    t.push_str("read sensors.tsv sep=\\t na=-9999,ERR | dtypes\n");
+    t.push_str("read sensors.tsv sep=\\t na=-9999,ERR | ffill temp_c\n");
+    t.push_str("read sensors.tsv sep=\\t na=-9999,ERR | ffill temp_c by=device\n");
+    t.push_str("read sensors.tsv sep=\\t na=-9999,ERR | ffill temp_c by=device limit=1\n");
+    t.push_str("read sensors.tsv sep=\\t na=-9999,ERR | bfill temp_c by=device\n");
+    t.push_str("read sensors.tsv sep=\\t na=-9999,ERR | bfill humidity limit=1\n");
+    t.push_str("read sensors.tsv sep=\\t na=-9999,ERR | where device == 'roof' | ffill temp_c | diff temp_c as=change\n");
+    t.push_str("read sensors.tsv sep=\\t na=-9999,ERR | where device == 'server' | diff temp_c as=d1 | diff temp_c periods=2 as=d2\n");
+    t.push_str("read sensors.tsv sep=\\t na=-9999,ERR | where device == 'server' | pct_change temp_c as=pct\n");
+    t.push_str("read sensors.tsv sep=\\t na=-9999,ERR | where device == 'lobby' | shift temp_c 1 as=prev | shift temp_c -1 as=next\n");
+    t.push_str("read sensors.tsv sep=\\t na=-9999,ERR | where device == 'lobby' | shift humidity 2 as=lag2\n");
+    t.push_str("read sensors.tsv sep=\\t na=-9999,ERR | where device == 'roof' | cumsum humidity as=cs | cummax humidity as=cmax | cummin humidity as=cmin\n");
+    t.push_str("read sensors.tsv sep=\\t na=-9999,ERR | where device == 'roof' | cumprod humidity as=cp\n");
+    t.push_str("read sensors.tsv sep=\\t na=-9999,ERR | clip temp_c lower=15 upper=25\n");
+    t.push_str("read sensors.tsv sep=\\t na=-9999,ERR | clip humidity upper=75 | where device == 'roof'\n");
+    t.push_str("read sensors.tsv sep=\\t na=-9999,ERR | round temp_c 0 | where device == 'lobby'\n");
+    t.push_str("read sensors.tsv sep=\\t na=-9999,ERR | ffill temp_c by=device | agg device n=temp_c:count,mean=temp_c:mean,max=temp_c:max\n");
+    t.push_str("read sensors.tsv sep=\\t na=-9999,ERR | dropna how=all subset=temp_c,humidity\n");
+    t.push_str("read sensors.tsv sep=\\t na=-9999,ERR | dropna subset=temp_c,humidity\n");
+    t.push_str("read sensors.tsv sep=\\t na=-9999,ERR | fillna status 'missing' | agg status n=device:count\n");
+    t.push_str("read sensors.tsv sep=\\t na=-9999,ERR | astype humidity int64\n");
+    t.push_str("read sensors.tsv sep=\\t na=-9999,ERR | where device == 'server' | astype humidity str\n");
+    t.push_str("read sensors.tsv sep=\\t na=-9999,ERR | where device == 'server' | astype temp_c str | dtypes\n");
+    t.push_str("read sensors.tsv sep=\\t | replace temp_c '-9999' 'none' | replace temp_c 'ERR' 'none' | where device == 'lobby'\n");
+    t.push_str("read sensors.tsv sep=\\t na=-9999,ERR | replace humidity 41 40 | where device == 'lobby'\n");
+    t.push_str("read sensors.tsv sep=\\t na=-9999,ERR | where device == 'roof' | write na=NULL\n");
+    t.push_str("read sensors.tsv sep=\\t na=-9999,ERR | where device == 'roof' | write sep=\\t float=%.1f\n");
+    t.push_str("read sensors.tsv sep=\\t na=-9999,ERR | where device == 'lobby' | write float=%.3e\n");
+    t.push_str("read sensors.tsv sep=\\t na=-9999,ERR | where device == 'lobby' | write float=%.3g\n");
+    t.push_str("read feed.csv\n");
+    t.push_str("read feed.csv on_bad_lines=skip\n");
+    t.push_str("read feed.csv on_bad_lines=warn\n");
+    t.push_str("read feed.csv on_bad_lines=skip | dtypes\n");
+    t.push_str("read feed.csv usecols=sku,price\n");
+    t.push_str("read feed.csv on_bad_lines=skip | write quoting=1\n");
+    t.push_str("read feed.csv on_bad_lines=skip | write quoting=2\n");
+    t.push_str("read feed.csv on_bad_lines=skip | write quoting=3\n");
+    t.push_str("read feed.csv on_bad_lines=skip | write quoting=3 escapechar=\\\n");
+    t.push_str("read feed.csv on_bad_lines=skip | write quoting=4\n");
+    t.push_str("read feed.csv on_bad_lines=skip | write quoting=5\n");
+    t.push_str("read feed.csv on_bad_lines=skip | write escapechar=\\ doublequote=0\n");
+    t.push_str("read feed.csv on_bad_lines=skip | write quotechar='\n");
+    t.push_str("read feed.csv on_bad_lines=skip | write sep=|\n");
+    t.push_str("read feed.csv on_bad_lines=skip | write sep=; header=0 columns=price,sku\n");
+    t.push_str("read feed.csv on_bad_lines=skip quoting=3\n");
+    t.push_str("read feed_esc.csv\n");
+    t.push_str("read feed_esc.csv escapechar=\\\n");
+    t.push_str("read feed_esc.csv escapechar=\\ doublequote=0\n");
+    t.push_str("read feed_esc.csv escapechar=\\ doublequote=0 | write escapechar=\\ doublequote=0\n");
+    t.push_str("read feed_esc.csv quotechar='\n");
+    t.push_str("read survey.csv\n");
+    t.push_str("read survey.csv | dtypes\n");
+    t.push_str("read survey.csv true=Yes,yes,Y false=No,N\n");
+    t.push_str("read survey.csv true=Yes,yes,Y false=No,N | dtypes\n");
+    t.push_str("read survey.csv true=Yes,Y false=No,N | dtypes\n");
+    t.push_str("read survey.csv skip_blank_lines=0\n");
+    t.push_str("read survey.csv skip_blank_lines=0 | dtypes\n");
+    t.push_str("read survey.csv | rename q1:q1_first,q1.1:q1_second,Unnamed:\\s4:group\n");
+    t.push_str("read survey.csv | rename q1:q1_first,q1.1:q1_second | dedup subset=q1_first,q1_second\n");
+    t.push_str("read survey.csv | dedup subset=consent\n");
+    t.push_str("read survey.csv | dedup subset=consent keep=last\n");
+    t.push_str("read survey.csv | dedup subset=consent keep=False\n");
+    t.push_str("read survey.csv | fillna q1 0 | astype q1 int64 | dtypes\n");
+    t.push_str("read survey.csv true=Yes,yes,Y false=No,N | write quoting=2\n");
+    t.push_str("read report.txt sep=ws\n");
+    t.push_str("read report.txt sep=ws | dtypes\n");
+    t.push_str("read report.txt sep=ws | write float=%.2f sep=\\t\n");
+    t.push_str("read report.txt\n");
+    t.push_str("read windows.csv\n");
+    t.push_str("read windows.csv | dtypes\n");
+    t.push_str("read mac.csv\n");
+    t.push_str("read mac.csv | dtypes\n");
+    t.push_str("read ids.csv\n");
+    t.push_str("read ids.csv | dtypes\n");
+    t.push_str("read ids.csv thousands=,\n");
+    t.push_str("read ids.csv thousands=, | dtypes\n");
+    t.push_str("read ids.csv thousands=, dtype=code:str | dtypes\n");
+    t.push_str("read ids_neg.csv | dtypes\n");
+    t.push_str("read ids_big.csv | dtypes\n");
+    t.push_str("read ids_big.csv\n");
+    t.push_str("read truncated.csv\n");
+    t.push_str("read missing.csv\n");
+    t.push_str("read feed.csv usecols=sku,weight\n");
+    t.push_str("read sensors.tsv sep=\\t na=-9999,ERR | astype temp_c int64\n");
+    t.push_str("read sensors.tsv sep=\\t | astype temp_c float64\n");
+    v.push(DataFile { path: "jobs.txt".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("# EXTRACT ACCTMAST  RUN 2026-10-29 02:00\n");
+    t.push_str("# FIELDS: ACCT|NAME|REGION|BALANCE|LIMIT|OPENED\n");
+    t.push_str("000123|ACME CORP           |WEST |   15000.00|  50000|19980312\n");
+    t.push_str("000124|  BLUE RIVER LLC    |EAST |    -250.75|  -9999|20010704\n");
+    t.push_str("000125|WIDGETS #2 SUPPLY   |WEST |       n.a.|  10000|20150101\n");
+    t.push_str("000126|CEDAR & PINE        |NORTH|     980.10|  25000|20200229\n");
+    t.push_str("# 4 RECORDS\n");
+    t.push_str("000127|DELTA FREIGHT       |-9999|    1234.5 |   7500|20221111\n");
+    v.push(DataFile { path: "legacy.dat".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("id,city,visits\r");
+    t.push_str("1,Lyon,4\r");
+    t.push_str("2,Krak\u{f3}w,7\r");
+    t.push_str("3,Porto,\r");
+    v.push(DataFile { path: "mac.csv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("  host        cpu   mem_mb   uptime_d  state\n");
+    t.push_str("  web-01      12.5    2048      41      up\n");
+    t.push_str("  web-02       7.0    2048      41      up\n");
+    t.push_str("    db-01     55.25   16384    210      up\n");
+    t.push_str("  cache-01     0.5     512       3      degraded\n");
+    t.push_str("\n");
+    t.push_str("   \n");
+    v.push(DataFile { path: "report.txt".to_string(), body: t });
+}
+
+fn data_part_1(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("device\tts\ttemp_c\thumidity\tstatus\n");
+    t.push_str("lobby\t2026-10-29T08:00\t21.5\t40\tok\n");
+    t.push_str("roof\t2026-10-29T08:00\t14.2\t71\tok\n");
+    t.push_str("server\t2026-10-29T08:00\t24.0\t30\tok\n");
+    t.push_str("lobby\t2026-10-29T08:15\t21.7\t41\tok\n");
+    t.push_str("roof\t2026-10-29T08:15\t\t\t\n");
+    t.push_str("server\t2026-10-29T08:15\t24.6\t30\tok\n");
+    t.push_str("lobby\t2026-10-29T08:30\t\t41\t\n");
+    t.push_str("roof\t2026-10-29T08:30\t13.8\t74\tok\n");
+    t.push_str("server\t2026-10-29T08:30\t25.9\t29\tok\n");
+    t.push_str("lobby\t2026-10-29T08:45\t\t\t\n");
+    t.push_str("roof\t2026-10-29T08:45\t13.1\t78\tok\n");
+    t.push_str("server\t2026-10-29T08:45\tERR\t29\tfault\n");
+    t.push_str("lobby\t2026-10-29T09:00\t22.4\t43\tok\n");
+    t.push_str("roof\t2026-10-29T09:00\t\t79\t\n");
+    t.push_str("server\t2026-10-29T09:00\t27.3\t\tok\n");
+    t.push_str("lobby\t2026-10-29T09:15\t22.1\t42\tok\n");
+    t.push_str("roof\t2026-10-29T09:15\t\t\t\n");
+    t.push_str("server\t2026-10-29T09:15\t26.8\t28\tok\n");
+    t.push_str("lobby\t2026-10-29T09:30\t-9999\t42\tfault\n");
+    t.push_str("roof\t2026-10-29T09:30\t\t81\t\n");
+    t.push_str("server\t2026-10-29T09:30\t25.5\t28\tok\n");
+    t.push_str("lobby\t2026-10-29T09:45\t21.9\t40\tok\n");
+    t.push_str("roof\t2026-10-29T09:45\t12.4\t83\tok\n");
+    t.push_str("server\t2026-10-29T09:45\t24.9\t29\tok\n");
+    v.push(DataFile { path: "sensors.tsv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("Kontoauszug;Girokonto\n");
+    t.push_str("IBAN;DE00 0000 0000 0000 0000 00\n");
+    t.push_str("Zeitraum;01.09.2026 - 30.09.2026\n");
+    t.push_str("Buchungstag;Valuta;Empf\u{e4}nger;Verwendungszweck;Betrag;Saldo;W\u{e4}hrung\n");
+    t.push_str("01.09.2026;01.09.2026;Stadtwerke Musterstadt;\"Abschlag Strom; Gas\";-142,50;2.857,50;EUR\n");
+    t.push_str("01.09.2026;01.09.2026;Arbeitgeber GmbH;Gehalt 09/2026;3.250,00;6.107,50;EUR\n");
+    t.push_str("02.09.2026;02.09.2026;Vermieterin K.;Miete September;-1.180,00;4.927,50;EUR\n");
+    t.push_str("05.09.2026;04.09.2026;Supermarkt 0815;Kartenzahlung;-63,17;4.864,33;EUR\n");
+    t.push_str("09.09.2026;09.09.2026;Versicherung AG;\"Beitrag \"\"Hausrat\"\"\";-12,90;4.851,43;EUR\n");
+    t.push_str("15.09.2026;15.09.2026;Bargeld;Geldautomat;-200;4.651,43;EUR\n");
+    t.push_str("21.09.2026;22.09.2026;Online-Shop;R\u{fc}cksendung;+49,99;4.701,42;EUR\n");
+    t.push_str("30.09.2026;30.09.2026;Bank;Kontof\u{fc}hrung;-4,95;4.696,47;EUR\n");
+    t.push_str("\n");
+    v.push(DataFile { path: "statement.csv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("respondent,consent,q1,q1,,score,newsletter,active\n");
+    t.push_str("r01,Yes,4,5,a,8.5,Y,TRUE\n");
+    t.push_str("r02,No,3,3,,7,N,false\n");
+    t.push_str("\n");
+    t.push_str("r03,Yes,5,4,b,,Y,True\n");
+    t.push_str("   \n");
+    t.push_str("r04,yes,2,2,c,9,N,tRuE\n");
+    t.push_str("r05,No,,1,,6.5,Y,FALSE\n");
+    v.push(DataFile { path: "survey.csv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("id,note\n");
+    t.push_str("1,fine\n");
+    t.push_str("2,\"cut off here\n");
+    v.push(DataFile { path: "truncated.csv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("\u{feff}id,name,amount,paid\r\n");
+    t.push_str("1,Zo\u{eb},3.50,TRUE\r\n");
+    t.push_str("2,\u{141}ukasz,12,FALSE\r\n");
+    t.push_str("3,Ana,,TRUE\r\n");
+    v.push(DataFile { path: "windows.csv".to_string(), body: t });
+}

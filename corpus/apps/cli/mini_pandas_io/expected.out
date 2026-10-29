@@ -1,0 +1,1021 @@
+$ read statement.csv
+! ParserError: Error tokenizing data. C error: Expected 1 fields in line 5, saw 3
+$ read statement.csv sep=;
+! ParserError: Error tokenizing data. C error: Expected 2 fields in line 4, saw 7
+$ read statement.csv sep=; skiprows=3
+Buchungstag,Valuta,Empfänger,Verwendungszweck,Betrag,Saldo,Währung
+01.09.2026,01.09.2026,Stadtwerke Musterstadt,Abschlag Strom; Gas,"-142,50","2.857,50",EUR
+01.09.2026,01.09.2026,Arbeitgeber GmbH,Gehalt 09/2026,"3.250,00","6.107,50",EUR
+02.09.2026,02.09.2026,Vermieterin K.,Miete September,"-1.180,00","4.927,50",EUR
+05.09.2026,04.09.2026,Supermarkt 0815,Kartenzahlung,"-63,17","4.864,33",EUR
+09.09.2026,09.09.2026,Versicherung AG,"Beitrag ""Hausrat""","-12,90","4.851,43",EUR
+15.09.2026,15.09.2026,Bargeld,Geldautomat,-200,"4.651,43",EUR
+21.09.2026,22.09.2026,Online-Shop,Rücksendung,"+49,99","4.701,42",EUR
+30.09.2026,30.09.2026,Bank,Kontoführung,"-4,95","4.696,47",EUR
+$ read statement.csv sep=; skiprows=3 | dtypes
+column,dtype
+Buchungstag,str
+Valuta,str
+Empfänger,str
+Verwendungszweck,str
+Betrag,str
+Saldo,str
+Währung,str
+$ read statement.csv sep=; skiprows=3 decimal=,
+Buchungstag,Valuta,Empfänger,Verwendungszweck,Betrag,Saldo,Währung
+01.09.2026,01.09.2026,Stadtwerke Musterstadt,Abschlag Strom; Gas,"-142,50","2.857,50",EUR
+01.09.2026,01.09.2026,Arbeitgeber GmbH,Gehalt 09/2026,"3.250,00","6.107,50",EUR
+02.09.2026,02.09.2026,Vermieterin K.,Miete September,"-1.180,00","4.927,50",EUR
+05.09.2026,04.09.2026,Supermarkt 0815,Kartenzahlung,"-63,17","4.864,33",EUR
+09.09.2026,09.09.2026,Versicherung AG,"Beitrag ""Hausrat""","-12,90","4.851,43",EUR
+15.09.2026,15.09.2026,Bargeld,Geldautomat,-200,"4.651,43",EUR
+21.09.2026,22.09.2026,Online-Shop,Rücksendung,"+49,99","4.701,42",EUR
+30.09.2026,30.09.2026,Bank,Kontoführung,"-4,95","4.696,47",EUR
+$ read statement.csv sep=; skiprows=3 decimal=, | dtypes
+column,dtype
+Buchungstag,str
+Valuta,str
+Empfänger,str
+Verwendungszweck,str
+Betrag,str
+Saldo,str
+Währung,str
+$ read statement.csv sep=; skiprows=3 decimal=, thousands=.
+Buchungstag,Valuta,Empfänger,Verwendungszweck,Betrag,Saldo,Währung
+1092026,1092026,Stadtwerke Musterstadt,Abschlag Strom; Gas,-142.5,2857.5,EUR
+1092026,1092026,Arbeitgeber GmbH,Gehalt 09/2026,3250.0,6107.5,EUR
+2092026,2092026,Vermieterin K.,Miete September,-1180.0,4927.5,EUR
+5092026,4092026,Supermarkt 0815,Kartenzahlung,-63.17,4864.33,EUR
+9092026,9092026,Versicherung AG,"Beitrag ""Hausrat""",-12.9,4851.43,EUR
+15092026,15092026,Bargeld,Geldautomat,-200.0,4651.43,EUR
+21092026,22092026,Online-Shop,Rücksendung,49.99,4701.42,EUR
+30092026,30092026,Bank,Kontoführung,-4.95,4696.47,EUR
+$ read statement.csv sep=; skiprows=3 decimal=, thousands=. | dtypes
+column,dtype
+Buchungstag,int64
+Valuta,int64
+Empfänger,str
+Verwendungszweck,str
+Betrag,float64
+Saldo,float64
+Währung,str
+$ read statement.csv sep=; skiprows=3 decimal=, thousands=. usecols=Buchungstag,Betrag,Saldo
+Buchungstag,Betrag,Saldo
+1092026,-142.5,2857.5
+1092026,3250.0,6107.5
+2092026,-1180.0,4927.5
+5092026,-63.17,4864.33
+9092026,-12.9,4851.43
+15092026,-200.0,4651.43
+21092026,49.99,4701.42
+30092026,-4.95,4696.47
+$ read statement.csv sep=; skiprows=3 decimal=, thousands=. | cumsum Betrag as=laufend | select Buchungstag,Betrag,Saldo,laufend
+Buchungstag,Betrag,Saldo,laufend
+1092026,-142.5,2857.5,-142.5
+1092026,3250.0,6107.5,3107.5
+2092026,-1180.0,4927.5,1927.5
+5092026,-63.17,4864.33,1864.33
+9092026,-12.9,4851.43,1851.4299999999998
+15092026,-200.0,4651.43,1651.4299999999998
+21092026,49.99,4701.42,1701.4199999999998
+30092026,-4.95,4696.47,1696.4699999999998
+$ read statement.csv sep=; skiprows=3 decimal=, thousands=. | where Betrag < 0 | agg Währung n=Betrag:count,ausgaben=Betrag:sum
+Währung,n,ausgaben
+EUR,6,-1603.52
+$ read statement.csv sep=; skiprows=3 decimal=, thousands=. nrows=3
+Buchungstag,Valuta,Empfänger,Verwendungszweck,Betrag,Saldo,Währung
+1092026,1092026,Stadtwerke Musterstadt,Abschlag Strom; Gas,-142.5,2857.5,EUR
+1092026,1092026,Arbeitgeber GmbH,Gehalt 09/2026,3250.0,6107.5,EUR
+2092026,2092026,Vermieterin K.,Miete September,-1180.0,4927.5,EUR
+$ read statement.csv sep=; skiplines=0,1,2,5
+Buchungstag,Valuta,Empfänger,Verwendungszweck,Betrag,Saldo,Währung
+01.09.2026,01.09.2026,Stadtwerke Musterstadt,Abschlag Strom; Gas,"-142,50","2.857,50",EUR
+02.09.2026,02.09.2026,Vermieterin K.,Miete September,"-1.180,00","4.927,50",EUR
+05.09.2026,04.09.2026,Supermarkt 0815,Kartenzahlung,"-63,17","4.864,33",EUR
+09.09.2026,09.09.2026,Versicherung AG,"Beitrag ""Hausrat""","-12,90","4.851,43",EUR
+15.09.2026,15.09.2026,Bargeld,Geldautomat,-200,"4.651,43",EUR
+21.09.2026,22.09.2026,Online-Shop,Rücksendung,"+49,99","4.701,42",EUR
+30.09.2026,30.09.2026,Bank,Kontoführung,"-4,95","4.696,47",EUR
+$ read statement.csv sep=; skiprows=3 decimal=, thousands=. | write sep=, decimal=.
+Buchungstag,Valuta,Empfänger,Verwendungszweck,Betrag,Saldo,Währung
+1092026,1092026,Stadtwerke Musterstadt,Abschlag Strom; Gas,-142.5,2857.5,EUR
+1092026,1092026,Arbeitgeber GmbH,Gehalt 09/2026,3250.0,6107.5,EUR
+2092026,2092026,Vermieterin K.,Miete September,-1180.0,4927.5,EUR
+5092026,4092026,Supermarkt 0815,Kartenzahlung,-63.17,4864.33,EUR
+9092026,9092026,Versicherung AG,"Beitrag ""Hausrat""",-12.9,4851.43,EUR
+15092026,15092026,Bargeld,Geldautomat,-200.0,4651.43,EUR
+21092026,22092026,Online-Shop,Rücksendung,49.99,4701.42,EUR
+30092026,30092026,Bank,Kontoführung,-4.95,4696.47,EUR
+$ read statement.csv sep=; skiprows=3 decimal=, thousands=. | write sep=; decimal=, float=%.2f
+Buchungstag;Valuta;Empfänger;Verwendungszweck;Betrag;Saldo;Währung
+1092026;1092026;Stadtwerke Musterstadt;"Abschlag Strom; Gas";-142,50;2857,50;EUR
+1092026;1092026;Arbeitgeber GmbH;Gehalt 09/2026;3250,00;6107,50;EUR
+2092026;2092026;Vermieterin K.;Miete September;-1180,00;4927,50;EUR
+5092026;4092026;Supermarkt 0815;Kartenzahlung;-63,17;4864,33;EUR
+9092026;9092026;Versicherung AG;"Beitrag ""Hausrat""";-12,90;4851,43;EUR
+15092026;15092026;Bargeld;Geldautomat;-200,00;4651,43;EUR
+21092026;22092026;Online-Shop;Rücksendung;49,99;4701,42;EUR
+30092026;30092026;Bank;Kontoführung;-4,95;4696,47;EUR
+$ read statement.csv sep=; skiprows=3 decimal=, thousands=. | write quoting=1
+"Buchungstag","Valuta","Empfänger","Verwendungszweck","Betrag","Saldo","Währung"
+"1092026","1092026","Stadtwerke Musterstadt","Abschlag Strom; Gas","-142.5","2857.5","EUR"
+"1092026","1092026","Arbeitgeber GmbH","Gehalt 09/2026","3250.0","6107.5","EUR"
+"2092026","2092026","Vermieterin K.","Miete September","-1180.0","4927.5","EUR"
+"5092026","4092026","Supermarkt 0815","Kartenzahlung","-63.17","4864.33","EUR"
+"9092026","9092026","Versicherung AG","Beitrag ""Hausrat""","-12.9","4851.43","EUR"
+"15092026","15092026","Bargeld","Geldautomat","-200.0","4651.43","EUR"
+"21092026","22092026","Online-Shop","Rücksendung","49.99","4701.42","EUR"
+"30092026","30092026","Bank","Kontoführung","-4.95","4696.47","EUR"
+$ read statement.csv sep=; skiprows=3 decimal=, thousands=. | write quoting=2 float=%.2f
+"Buchungstag","Valuta","Empfänger","Verwendungszweck","Betrag","Saldo","Währung"
+1092026,1092026,"Stadtwerke Musterstadt","Abschlag Strom; Gas","-142.50","2857.50","EUR"
+1092026,1092026,"Arbeitgeber GmbH","Gehalt 09/2026","3250.00","6107.50","EUR"
+2092026,2092026,"Vermieterin K.","Miete September","-1180.00","4927.50","EUR"
+5092026,4092026,"Supermarkt 0815","Kartenzahlung","-63.17","4864.33","EUR"
+9092026,9092026,"Versicherung AG","Beitrag ""Hausrat""","-12.90","4851.43","EUR"
+15092026,15092026,"Bargeld","Geldautomat","-200.00","4651.43","EUR"
+21092026,22092026,"Online-Shop","Rücksendung","49.99","4701.42","EUR"
+30092026,30092026,"Bank","Kontoführung","-4.95","4696.47","EUR"
+$ read legacy.dat sep=| header=none
+! ParserError: Error tokenizing data. C error: Expected 1 fields in line 2, saw 6
+$ read legacy.dat sep=| header=none comment=#
+0,1,2,3,4,5
+123,ACME CORP           ,WEST ,15000.0,50000.0,19980312.0
+124,  BLUE RIVER LLC    ,EAST ,-250.75,-9999.0,20010704.0
+125,WIDGETS ,,,,
+126,CEDAR & PINE        ,NORTH,980.1,25000.0,20200229.0
+127,DELTA FREIGHT       ,-9999,1234.5,7500.0,20221111.0
+$ read legacy.dat sep=| header=none comment=# names=acct,name,region,balance,limit,opened
+acct,name,region,balance,limit,opened
+123,ACME CORP           ,WEST ,15000.0,50000.0,19980312.0
+124,  BLUE RIVER LLC    ,EAST ,-250.75,-9999.0,20010704.0
+125,WIDGETS ,,,,
+126,CEDAR & PINE        ,NORTH,980.1,25000.0,20200229.0
+127,DELTA FREIGHT       ,-9999,1234.5,7500.0,20221111.0
+$ read legacy.dat sep=| header=none comment=# names=acct,name,region,balance,limit,opened | dtypes
+column,dtype
+acct,int64
+name,str
+region,str
+balance,float64
+limit,float64
+opened,float64
+$ read legacy.dat sep=| header=none comment=# names=acct,name,region,balance,limit,opened dtype=acct:str na=-9999,n.a.
+acct,name,region,balance,limit,opened
+000123,ACME CORP           ,WEST ,15000.0,50000.0,19980312.0
+000124,  BLUE RIVER LLC    ,EAST ,-250.75,-9999.0,20010704.0
+000125,WIDGETS ,,,,
+000126,CEDAR & PINE        ,NORTH,980.1,25000.0,20200229.0
+000127,DELTA FREIGHT       ,,1234.5,7500.0,20221111.0
+$ read legacy.dat sep=| header=none comment=# names=acct,name,region,balance,limit,opened dtype=acct:str na=-9999,n.a. | dtypes
+column,dtype
+acct,str
+name,str
+region,str
+balance,float64
+limit,float64
+opened,float64
+$ read legacy.dat sep=| header=none comment=# names=acct,name,region,balance,limit,opened dtype=acct:str,opened:str na=-9999,n.a. skipinitialspace=1 | strip name | strip region
+acct,name,region,balance,limit,opened
+000123,ACME CORP,WEST,15000.0,50000.0,19980312
+000124,BLUE RIVER LLC,EAST,-250.75,,20010704
+000125,WIDGETS,,,,
+000126,CEDAR & PINE,NORTH,980.1,25000.0,20200229
+000127,DELTA FREIGHT,,1234.5,7500.0,20221111
+$ read legacy.dat sep=| header=none comment=# names=acct,name,region,balance,limit,opened dtype=acct:str na=-9999,n.a. | fillna balance 0 | fillna limit 0 | write float=%.2f
+acct,name,region,balance,limit,opened
+000123,ACME CORP           ,WEST ,15000.00,50000.00,19980312.00
+000124,  BLUE RIVER LLC    ,EAST ,-250.75,-9999.00,20010704.00
+000125,WIDGETS ,,0.00,0.00,
+000126,CEDAR & PINE        ,NORTH,980.10,25000.00,20200229.00
+000127,DELTA FREIGHT       ,,1234.50,7500.00,20221111.00
+$ read legacy.dat sep=| header=none comment=# names=acct,name,region,balance,limit,opened dtype=acct:str na=-9999,n.a. keep_default_na=0
+acct,name,region,balance,limit,opened
+000123,ACME CORP           ,WEST ,   15000.00,  50000,19980312
+000124,  BLUE RIVER LLC    ,EAST ,    -250.75,  -9999,20010704
+000125,WIDGETS ,,,,
+000126,CEDAR & PINE        ,NORTH,     980.10,  25000,20200229
+000127,DELTA FREIGHT       ,,    1234.5 ,   7500,20221111
+$ read legacy.dat sep=| header=none comment=# names=acct,name,region,balance dtype=acct:str
+acct,name,region,balance
+WEST ,15000.0,50000.0,19980312.0
+EAST ,-250.75,-9999.0,20010704.0
+,,,
+NORTH,980.1,25000.0,20200229.0
+-9999,1234.5,7500.0,20221111.0
+$ read legacy.dat sep=| header=none comment=# names=acct,name,region,balance,limit,opened dtype=balance:float
+acct,name,region,balance,limit,opened
+123,ACME CORP           ,WEST ,15000.0,50000.0,19980312.0
+124,  BLUE RIVER LLC    ,EAST ,-250.75,-9999.0,20010704.0
+125,WIDGETS ,,,,
+126,CEDAR & PINE        ,NORTH,980.1,25000.0,20200229.0
+127,DELTA FREIGHT       ,-9999,1234.5,7500.0,20221111.0
+$ read legacy.dat sep=| header=none comment=# names=acct,name,region,balance,limit,opened dtype=limit:int64
+! ValueError: Integer column has NA values in column 4
+$ read legacy.dat sep=| header=none comment=# names=acct,name,region,balance,limit,opened dtype=acct:str na=-9999,n.a. | dropna
+acct,name,region,balance,limit,opened
+000123,ACME CORP           ,WEST ,15000.0,50000.0,19980312.0
+000124,  BLUE RIVER LLC    ,EAST ,-250.75,-9999.0,20010704.0
+000126,CEDAR & PINE        ,NORTH,980.1,25000.0,20200229.0
+$ read legacy.dat sep=| header=none comment=# names=acct,name,region,balance,limit,opened dtype=acct:str na=-9999,n.a. | dropna subset=balance
+acct,name,region,balance,limit,opened
+000123,ACME CORP           ,WEST ,15000.0,50000.0,19980312.0
+000124,  BLUE RIVER LLC    ,EAST ,-250.75,-9999.0,20010704.0
+000126,CEDAR & PINE        ,NORTH,980.1,25000.0,20200229.0
+000127,DELTA FREIGHT       ,,1234.5,7500.0,20221111.0
+$ read legacy.dat sep=| header=none comment=# names=acct,name,region,balance,limit,opened dtype=acct:str na=-9999,n.a. | dropna thresh=6
+acct,name,region,balance,limit,opened
+000123,ACME CORP           ,WEST ,15000.0,50000.0,19980312.0
+000124,  BLUE RIVER LLC    ,EAST ,-250.75,-9999.0,20010704.0
+000126,CEDAR & PINE        ,NORTH,980.1,25000.0,20200229.0
+$ read sensors.tsv sep=\t
+device,ts,temp_c,humidity,status
+lobby,2026-10-29T08:00,21.5,40.0,ok
+roof,2026-10-29T08:00,14.2,71.0,ok
+server,2026-10-29T08:00,24.0,30.0,ok
+lobby,2026-10-29T08:15,21.7,41.0,ok
+roof,2026-10-29T08:15,,,
+server,2026-10-29T08:15,24.6,30.0,ok
+lobby,2026-10-29T08:30,,41.0,
+roof,2026-10-29T08:30,13.8,74.0,ok
+server,2026-10-29T08:30,25.9,29.0,ok
+lobby,2026-10-29T08:45,,,
+roof,2026-10-29T08:45,13.1,78.0,ok
+server,2026-10-29T08:45,ERR,29.0,fault
+lobby,2026-10-29T09:00,22.4,43.0,ok
+roof,2026-10-29T09:00,,79.0,
+server,2026-10-29T09:00,27.3,,ok
+lobby,2026-10-29T09:15,22.1,42.0,ok
+roof,2026-10-29T09:15,,,
+server,2026-10-29T09:15,26.8,28.0,ok
+lobby,2026-10-29T09:30,-9999,42.0,fault
+roof,2026-10-29T09:30,,81.0,
+server,2026-10-29T09:30,25.5,28.0,ok
+lobby,2026-10-29T09:45,21.9,40.0,ok
+roof,2026-10-29T09:45,12.4,83.0,ok
+server,2026-10-29T09:45,24.9,29.0,ok
+$ read sensors.tsv sep=\t | dtypes
+column,dtype
+device,str
+ts,str
+temp_c,str
+humidity,float64
+status,str
+$ read sensors.tsv sep=\t na=-9999,ERR
+device,ts,temp_c,humidity,status
+lobby,2026-10-29T08:00,21.5,40.0,ok
+roof,2026-10-29T08:00,14.2,71.0,ok
+server,2026-10-29T08:00,24.0,30.0,ok
+lobby,2026-10-29T08:15,21.7,41.0,ok
+roof,2026-10-29T08:15,,,
+server,2026-10-29T08:15,24.6,30.0,ok
+lobby,2026-10-29T08:30,,41.0,
+roof,2026-10-29T08:30,13.8,74.0,ok
+server,2026-10-29T08:30,25.9,29.0,ok
+lobby,2026-10-29T08:45,,,
+roof,2026-10-29T08:45,13.1,78.0,ok
+server,2026-10-29T08:45,,29.0,fault
+lobby,2026-10-29T09:00,22.4,43.0,ok
+roof,2026-10-29T09:00,,79.0,
+server,2026-10-29T09:00,27.3,,ok
+lobby,2026-10-29T09:15,22.1,42.0,ok
+roof,2026-10-29T09:15,,,
+server,2026-10-29T09:15,26.8,28.0,ok
+lobby,2026-10-29T09:30,,42.0,fault
+roof,2026-10-29T09:30,,81.0,
+server,2026-10-29T09:30,25.5,28.0,ok
+lobby,2026-10-29T09:45,21.9,40.0,ok
+roof,2026-10-29T09:45,12.4,83.0,ok
+server,2026-10-29T09:45,24.9,29.0,ok
+$ read sensors.tsv sep=\t na=-9999,ERR | dtypes
+column,dtype
+device,str
+ts,str
+temp_c,float64
+humidity,float64
+status,str
+$ read sensors.tsv sep=\t na=-9999,ERR | ffill temp_c
+device,ts,temp_c,humidity,status
+lobby,2026-10-29T08:00,21.5,40.0,ok
+roof,2026-10-29T08:00,14.2,71.0,ok
+server,2026-10-29T08:00,24.0,30.0,ok
+lobby,2026-10-29T08:15,21.7,41.0,ok
+roof,2026-10-29T08:15,21.7,,
+server,2026-10-29T08:15,24.6,30.0,ok
+lobby,2026-10-29T08:30,24.6,41.0,
+roof,2026-10-29T08:30,13.8,74.0,ok
+server,2026-10-29T08:30,25.9,29.0,ok
+lobby,2026-10-29T08:45,25.9,,
+roof,2026-10-29T08:45,13.1,78.0,ok
+server,2026-10-29T08:45,13.1,29.0,fault
+lobby,2026-10-29T09:00,22.4,43.0,ok
+roof,2026-10-29T09:00,22.4,79.0,
+server,2026-10-29T09:00,27.3,,ok
+lobby,2026-10-29T09:15,22.1,42.0,ok
+roof,2026-10-29T09:15,22.1,,
+server,2026-10-29T09:15,26.8,28.0,ok
+lobby,2026-10-29T09:30,26.8,42.0,fault
+roof,2026-10-29T09:30,26.8,81.0,
+server,2026-10-29T09:30,25.5,28.0,ok
+lobby,2026-10-29T09:45,21.9,40.0,ok
+roof,2026-10-29T09:45,12.4,83.0,ok
+server,2026-10-29T09:45,24.9,29.0,ok
+$ read sensors.tsv sep=\t na=-9999,ERR | ffill temp_c by=device
+device,ts,temp_c,humidity,status
+lobby,2026-10-29T08:00,21.5,40.0,ok
+roof,2026-10-29T08:00,14.2,71.0,ok
+server,2026-10-29T08:00,24.0,30.0,ok
+lobby,2026-10-29T08:15,21.7,41.0,ok
+roof,2026-10-29T08:15,14.2,,
+server,2026-10-29T08:15,24.6,30.0,ok
+lobby,2026-10-29T08:30,21.7,41.0,
+roof,2026-10-29T08:30,13.8,74.0,ok
+server,2026-10-29T08:30,25.9,29.0,ok
+lobby,2026-10-29T08:45,21.7,,
+roof,2026-10-29T08:45,13.1,78.0,ok
+server,2026-10-29T08:45,25.9,29.0,fault
+lobby,2026-10-29T09:00,22.4,43.0,ok
+roof,2026-10-29T09:00,13.1,79.0,
+server,2026-10-29T09:00,27.3,,ok
+lobby,2026-10-29T09:15,22.1,42.0,ok
+roof,2026-10-29T09:15,13.1,,
+server,2026-10-29T09:15,26.8,28.0,ok
+lobby,2026-10-29T09:30,22.1,42.0,fault
+roof,2026-10-29T09:30,13.1,81.0,
+server,2026-10-29T09:30,25.5,28.0,ok
+lobby,2026-10-29T09:45,21.9,40.0,ok
+roof,2026-10-29T09:45,12.4,83.0,ok
+server,2026-10-29T09:45,24.9,29.0,ok
+$ read sensors.tsv sep=\t na=-9999,ERR | ffill temp_c by=device limit=1
+device,ts,temp_c,humidity,status
+lobby,2026-10-29T08:00,21.5,40.0,ok
+roof,2026-10-29T08:00,14.2,71.0,ok
+server,2026-10-29T08:00,24.0,30.0,ok
+lobby,2026-10-29T08:15,21.7,41.0,ok
+roof,2026-10-29T08:15,14.2,,
+server,2026-10-29T08:15,24.6,30.0,ok
+lobby,2026-10-29T08:30,21.7,41.0,
+roof,2026-10-29T08:30,13.8,74.0,ok
+server,2026-10-29T08:30,25.9,29.0,ok
+lobby,2026-10-29T08:45,,,
+roof,2026-10-29T08:45,13.1,78.0,ok
+server,2026-10-29T08:45,25.9,29.0,fault
+lobby,2026-10-29T09:00,22.4,43.0,ok
+roof,2026-10-29T09:00,13.1,79.0,
+server,2026-10-29T09:00,27.3,,ok
+lobby,2026-10-29T09:15,22.1,42.0,ok
+roof,2026-10-29T09:15,,,
+server,2026-10-29T09:15,26.8,28.0,ok
+lobby,2026-10-29T09:30,22.1,42.0,fault
+roof,2026-10-29T09:30,,81.0,
+server,2026-10-29T09:30,25.5,28.0,ok
+lobby,2026-10-29T09:45,21.9,40.0,ok
+roof,2026-10-29T09:45,12.4,83.0,ok
+server,2026-10-29T09:45,24.9,29.0,ok
+$ read sensors.tsv sep=\t na=-9999,ERR | bfill temp_c by=device
+device,ts,temp_c,humidity,status
+lobby,2026-10-29T08:00,21.5,40.0,ok
+roof,2026-10-29T08:00,14.2,71.0,ok
+server,2026-10-29T08:00,24.0,30.0,ok
+lobby,2026-10-29T08:15,21.7,41.0,ok
+roof,2026-10-29T08:15,13.8,,
+server,2026-10-29T08:15,24.6,30.0,ok
+lobby,2026-10-29T08:30,22.4,41.0,
+roof,2026-10-29T08:30,13.8,74.0,ok
+server,2026-10-29T08:30,25.9,29.0,ok
+lobby,2026-10-29T08:45,22.4,,
+roof,2026-10-29T08:45,13.1,78.0,ok
+server,2026-10-29T08:45,27.3,29.0,fault
+lobby,2026-10-29T09:00,22.4,43.0,ok
+roof,2026-10-29T09:00,12.4,79.0,
+server,2026-10-29T09:00,27.3,,ok
+lobby,2026-10-29T09:15,22.1,42.0,ok
+roof,2026-10-29T09:15,12.4,,
+server,2026-10-29T09:15,26.8,28.0,ok
+lobby,2026-10-29T09:30,21.9,42.0,fault
+roof,2026-10-29T09:30,12.4,81.0,
+server,2026-10-29T09:30,25.5,28.0,ok
+lobby,2026-10-29T09:45,21.9,40.0,ok
+roof,2026-10-29T09:45,12.4,83.0,ok
+server,2026-10-29T09:45,24.9,29.0,ok
+$ read sensors.tsv sep=\t na=-9999,ERR | bfill humidity limit=1
+device,ts,temp_c,humidity,status
+lobby,2026-10-29T08:00,21.5,40.0,ok
+roof,2026-10-29T08:00,14.2,71.0,ok
+server,2026-10-29T08:00,24.0,30.0,ok
+lobby,2026-10-29T08:15,21.7,41.0,ok
+roof,2026-10-29T08:15,,30.0,
+server,2026-10-29T08:15,24.6,30.0,ok
+lobby,2026-10-29T08:30,,41.0,
+roof,2026-10-29T08:30,13.8,74.0,ok
+server,2026-10-29T08:30,25.9,29.0,ok
+lobby,2026-10-29T08:45,,78.0,
+roof,2026-10-29T08:45,13.1,78.0,ok
+server,2026-10-29T08:45,,29.0,fault
+lobby,2026-10-29T09:00,22.4,43.0,ok
+roof,2026-10-29T09:00,,79.0,
+server,2026-10-29T09:00,27.3,42.0,ok
+lobby,2026-10-29T09:15,22.1,42.0,ok
+roof,2026-10-29T09:15,,28.0,
+server,2026-10-29T09:15,26.8,28.0,ok
+lobby,2026-10-29T09:30,,42.0,fault
+roof,2026-10-29T09:30,,81.0,
+server,2026-10-29T09:30,25.5,28.0,ok
+lobby,2026-10-29T09:45,21.9,40.0,ok
+roof,2026-10-29T09:45,12.4,83.0,ok
+server,2026-10-29T09:45,24.9,29.0,ok
+$ read sensors.tsv sep=\t na=-9999,ERR | where device == 'roof' | ffill temp_c | diff temp_c as=change
+device,ts,temp_c,humidity,status,change
+roof,2026-10-29T08:00,14.2,71.0,ok,
+roof,2026-10-29T08:15,14.2,,,0.0
+roof,2026-10-29T08:30,13.8,74.0,ok,-0.3999999999999986
+roof,2026-10-29T08:45,13.1,78.0,ok,-0.7000000000000011
+roof,2026-10-29T09:00,13.1,79.0,,0.0
+roof,2026-10-29T09:15,13.1,,,0.0
+roof,2026-10-29T09:30,13.1,81.0,,0.0
+roof,2026-10-29T09:45,12.4,83.0,ok,-0.6999999999999993
+$ read sensors.tsv sep=\t na=-9999,ERR | where device == 'server' | diff temp_c as=d1 | diff temp_c periods=2 as=d2
+device,ts,temp_c,humidity,status,d1,d2
+server,2026-10-29T08:00,24.0,30.0,ok,,
+server,2026-10-29T08:15,24.6,30.0,ok,0.6000000000000014,
+server,2026-10-29T08:30,25.9,29.0,ok,1.2999999999999972,1.8999999999999986
+server,2026-10-29T08:45,,29.0,fault,,
+server,2026-10-29T09:00,27.3,,ok,,1.4000000000000021
+server,2026-10-29T09:15,26.8,28.0,ok,-0.5,
+server,2026-10-29T09:30,25.5,28.0,ok,-1.3000000000000007,-1.8000000000000007
+server,2026-10-29T09:45,24.9,29.0,ok,-0.6000000000000014,-1.9000000000000021
+$ read sensors.tsv sep=\t na=-9999,ERR | where device == 'server' | pct_change temp_c as=pct
+device,ts,temp_c,humidity,status,pct
+server,2026-10-29T08:00,24.0,30.0,ok,
+server,2026-10-29T08:15,24.6,30.0,ok,0.025000000000000133
+server,2026-10-29T08:30,25.9,29.0,ok,0.05284552845528445
+server,2026-10-29T08:45,,29.0,fault,
+server,2026-10-29T09:00,27.3,,ok,
+server,2026-10-29T09:15,26.8,28.0,ok,-0.01831501831501836
+server,2026-10-29T09:30,25.5,28.0,ok,-0.04850746268656714
+server,2026-10-29T09:45,24.9,29.0,ok,-0.02352941176470591
+$ read sensors.tsv sep=\t na=-9999,ERR | where device == 'lobby' | shift temp_c 1 as=prev | shift temp_c -1 as=next
+device,ts,temp_c,humidity,status,prev,next
+lobby,2026-10-29T08:00,21.5,40.0,ok,,21.7
+lobby,2026-10-29T08:15,21.7,41.0,ok,21.5,
+lobby,2026-10-29T08:30,,41.0,,21.7,
+lobby,2026-10-29T08:45,,,,,22.4
+lobby,2026-10-29T09:00,22.4,43.0,ok,,22.1
+lobby,2026-10-29T09:15,22.1,42.0,ok,22.4,
+lobby,2026-10-29T09:30,,42.0,fault,22.1,21.9
+lobby,2026-10-29T09:45,21.9,40.0,ok,,
+$ read sensors.tsv sep=\t na=-9999,ERR | where device == 'lobby' | shift humidity 2 as=lag2
+device,ts,temp_c,humidity,status,lag2
+lobby,2026-10-29T08:00,21.5,40.0,ok,
+lobby,2026-10-29T08:15,21.7,41.0,ok,
+lobby,2026-10-29T08:30,,41.0,,40.0
+lobby,2026-10-29T08:45,,,,41.0
+lobby,2026-10-29T09:00,22.4,43.0,ok,41.0
+lobby,2026-10-29T09:15,22.1,42.0,ok,
+lobby,2026-10-29T09:30,,42.0,fault,43.0
+lobby,2026-10-29T09:45,21.9,40.0,ok,42.0
+$ read sensors.tsv sep=\t na=-9999,ERR | where device == 'roof' | cumsum humidity as=cs | cummax humidity as=cmax | cummin humidity as=cmin
+device,ts,temp_c,humidity,status,cs,cmax,cmin
+roof,2026-10-29T08:00,14.2,71.0,ok,71.0,71.0,71.0
+roof,2026-10-29T08:15,,,,,,
+roof,2026-10-29T08:30,13.8,74.0,ok,145.0,74.0,71.0
+roof,2026-10-29T08:45,13.1,78.0,ok,223.0,78.0,71.0
+roof,2026-10-29T09:00,,79.0,,302.0,79.0,71.0
+roof,2026-10-29T09:15,,,,,,
+roof,2026-10-29T09:30,,81.0,,383.0,81.0,71.0
+roof,2026-10-29T09:45,12.4,83.0,ok,466.0,83.0,71.0
+$ read sensors.tsv sep=\t na=-9999,ERR | where device == 'roof' | cumprod humidity as=cp
+device,ts,temp_c,humidity,status,cp
+roof,2026-10-29T08:00,14.2,71.0,ok,71.0
+roof,2026-10-29T08:15,,,,
+roof,2026-10-29T08:30,13.8,74.0,ok,5254.0
+roof,2026-10-29T08:45,13.1,78.0,ok,409812.0
+roof,2026-10-29T09:00,,79.0,,32375148.0
+roof,2026-10-29T09:15,,,,
+roof,2026-10-29T09:30,,81.0,,2622386988.0
+roof,2026-10-29T09:45,12.4,83.0,ok,217658120004.0
+$ read sensors.tsv sep=\t na=-9999,ERR | clip temp_c lower=15 upper=25
+device,ts,temp_c,humidity,status
+lobby,2026-10-29T08:00,21.5,40.0,ok
+roof,2026-10-29T08:00,15.0,71.0,ok
+server,2026-10-29T08:00,24.0,30.0,ok
+lobby,2026-10-29T08:15,21.7,41.0,ok
+roof,2026-10-29T08:15,,,
+server,2026-10-29T08:15,24.6,30.0,ok
+lobby,2026-10-29T08:30,,41.0,
+roof,2026-10-29T08:30,15.0,74.0,ok
+server,2026-10-29T08:30,25.0,29.0,ok
+lobby,2026-10-29T08:45,,,
+roof,2026-10-29T08:45,15.0,78.0,ok
+server,2026-10-29T08:45,,29.0,fault
+lobby,2026-10-29T09:00,22.4,43.0,ok
+roof,2026-10-29T09:00,,79.0,
+server,2026-10-29T09:00,25.0,,ok
+lobby,2026-10-29T09:15,22.1,42.0,ok
+roof,2026-10-29T09:15,,,
+server,2026-10-29T09:15,25.0,28.0,ok
+lobby,2026-10-29T09:30,,42.0,fault
+roof,2026-10-29T09:30,,81.0,
+server,2026-10-29T09:30,25.0,28.0,ok
+lobby,2026-10-29T09:45,21.9,40.0,ok
+roof,2026-10-29T09:45,15.0,83.0,ok
+server,2026-10-29T09:45,24.9,29.0,ok
+$ read sensors.tsv sep=\t na=-9999,ERR | clip humidity upper=75 | where device == 'roof'
+device,ts,temp_c,humidity,status
+roof,2026-10-29T08:00,14.2,71.0,ok
+roof,2026-10-29T08:15,,,
+roof,2026-10-29T08:30,13.8,74.0,ok
+roof,2026-10-29T08:45,13.1,75.0,ok
+roof,2026-10-29T09:00,,75.0,
+roof,2026-10-29T09:15,,,
+roof,2026-10-29T09:30,,75.0,
+roof,2026-10-29T09:45,12.4,75.0,ok
+$ read sensors.tsv sep=\t na=-9999,ERR | round temp_c 0 | where device == 'lobby'
+device,ts,temp_c,humidity,status
+lobby,2026-10-29T08:00,22.0,40.0,ok
+lobby,2026-10-29T08:15,22.0,41.0,ok
+lobby,2026-10-29T08:30,,41.0,
+lobby,2026-10-29T08:45,,,
+lobby,2026-10-29T09:00,22.0,43.0,ok
+lobby,2026-10-29T09:15,22.0,42.0,ok
+lobby,2026-10-29T09:30,,42.0,fault
+lobby,2026-10-29T09:45,22.0,40.0,ok
+$ read sensors.tsv sep=\t na=-9999,ERR | ffill temp_c by=device | agg device n=temp_c:count,mean=temp_c:mean,max=temp_c:max
+device,n,mean,max
+lobby,8,21.8875,22.4
+roof,8,13.375,14.2
+server,8,25.6125,27.3
+$ read sensors.tsv sep=\t na=-9999,ERR | dropna how=all subset=temp_c,humidity
+device,ts,temp_c,humidity,status
+lobby,2026-10-29T08:00,21.5,40.0,ok
+roof,2026-10-29T08:00,14.2,71.0,ok
+server,2026-10-29T08:00,24.0,30.0,ok
+lobby,2026-10-29T08:15,21.7,41.0,ok
+server,2026-10-29T08:15,24.6,30.0,ok
+lobby,2026-10-29T08:30,,41.0,
+roof,2026-10-29T08:30,13.8,74.0,ok
+server,2026-10-29T08:30,25.9,29.0,ok
+roof,2026-10-29T08:45,13.1,78.0,ok
+server,2026-10-29T08:45,,29.0,fault
+lobby,2026-10-29T09:00,22.4,43.0,ok
+roof,2026-10-29T09:00,,79.0,
+server,2026-10-29T09:00,27.3,,ok
+lobby,2026-10-29T09:15,22.1,42.0,ok
+server,2026-10-29T09:15,26.8,28.0,ok
+lobby,2026-10-29T09:30,,42.0,fault
+roof,2026-10-29T09:30,,81.0,
+server,2026-10-29T09:30,25.5,28.0,ok
+lobby,2026-10-29T09:45,21.9,40.0,ok
+roof,2026-10-29T09:45,12.4,83.0,ok
+server,2026-10-29T09:45,24.9,29.0,ok
+$ read sensors.tsv sep=\t na=-9999,ERR | dropna subset=temp_c,humidity
+device,ts,temp_c,humidity,status
+lobby,2026-10-29T08:00,21.5,40.0,ok
+roof,2026-10-29T08:00,14.2,71.0,ok
+server,2026-10-29T08:00,24.0,30.0,ok
+lobby,2026-10-29T08:15,21.7,41.0,ok
+server,2026-10-29T08:15,24.6,30.0,ok
+roof,2026-10-29T08:30,13.8,74.0,ok
+server,2026-10-29T08:30,25.9,29.0,ok
+roof,2026-10-29T08:45,13.1,78.0,ok
+lobby,2026-10-29T09:00,22.4,43.0,ok
+lobby,2026-10-29T09:15,22.1,42.0,ok
+server,2026-10-29T09:15,26.8,28.0,ok
+server,2026-10-29T09:30,25.5,28.0,ok
+lobby,2026-10-29T09:45,21.9,40.0,ok
+roof,2026-10-29T09:45,12.4,83.0,ok
+server,2026-10-29T09:45,24.9,29.0,ok
+$ read sensors.tsv sep=\t na=-9999,ERR | fillna status 'missing' | agg status n=device:count
+status,n
+fault,2
+missing,6
+ok,16
+$ read sensors.tsv sep=\t na=-9999,ERR | astype humidity int64
+! IntCastingNaNError: Cannot convert non-finite values (NA or inf) to integer.Replace or remove non-finite values or cast to an integer typethat supports these values (e.g. 'Int64')
+$ read sensors.tsv sep=\t na=-9999,ERR | where device == 'server' | astype humidity str
+device,ts,temp_c,humidity,status
+server,2026-10-29T08:00,24.0,30.0,ok
+server,2026-10-29T08:15,24.6,30.0,ok
+server,2026-10-29T08:30,25.9,29.0,ok
+server,2026-10-29T08:45,,29.0,fault
+server,2026-10-29T09:00,27.3,,ok
+server,2026-10-29T09:15,26.8,28.0,ok
+server,2026-10-29T09:30,25.5,28.0,ok
+server,2026-10-29T09:45,24.9,29.0,ok
+$ read sensors.tsv sep=\t na=-9999,ERR | where device == 'server' | astype temp_c str | dtypes
+column,dtype
+device,str
+ts,str
+temp_c,str
+humidity,float64
+status,str
+$ read sensors.tsv sep=\t | replace temp_c '-9999' 'none' | replace temp_c 'ERR' 'none' | where device == 'lobby'
+device,ts,temp_c,humidity,status
+lobby,2026-10-29T08:00,21.5,40.0,ok
+lobby,2026-10-29T08:15,21.7,41.0,ok
+lobby,2026-10-29T08:30,,41.0,
+lobby,2026-10-29T08:45,,,
+lobby,2026-10-29T09:00,22.4,43.0,ok
+lobby,2026-10-29T09:15,22.1,42.0,ok
+lobby,2026-10-29T09:30,none,42.0,fault
+lobby,2026-10-29T09:45,21.9,40.0,ok
+$ read sensors.tsv sep=\t na=-9999,ERR | replace humidity 41 40 | where device == 'lobby'
+device,ts,temp_c,humidity,status
+lobby,2026-10-29T08:00,21.5,40.0,ok
+lobby,2026-10-29T08:15,21.7,40.0,ok
+lobby,2026-10-29T08:30,,40.0,
+lobby,2026-10-29T08:45,,,
+lobby,2026-10-29T09:00,22.4,43.0,ok
+lobby,2026-10-29T09:15,22.1,42.0,ok
+lobby,2026-10-29T09:30,,42.0,fault
+lobby,2026-10-29T09:45,21.9,40.0,ok
+$ read sensors.tsv sep=\t na=-9999,ERR | where device == 'roof' | write na=NULL
+device,ts,temp_c,humidity,status
+roof,2026-10-29T08:00,14.2,71.0,ok
+roof,2026-10-29T08:15,NULL,NULL,NULL
+roof,2026-10-29T08:30,13.8,74.0,ok
+roof,2026-10-29T08:45,13.1,78.0,ok
+roof,2026-10-29T09:00,NULL,79.0,NULL
+roof,2026-10-29T09:15,NULL,NULL,NULL
+roof,2026-10-29T09:30,NULL,81.0,NULL
+roof,2026-10-29T09:45,12.4,83.0,ok
+$ read sensors.tsv sep=\t na=-9999,ERR | where device == 'roof' | write sep=\t float=%.1f
+device	ts	temp_c	humidity	status
+roof	2026-10-29T08:00	14.2	71.0	ok
+roof	2026-10-29T08:15			
+roof	2026-10-29T08:30	13.8	74.0	ok
+roof	2026-10-29T08:45	13.1	78.0	ok
+roof	2026-10-29T09:00		79.0	
+roof	2026-10-29T09:15			
+roof	2026-10-29T09:30		81.0	
+roof	2026-10-29T09:45	12.4	83.0	ok
+$ read sensors.tsv sep=\t na=-9999,ERR | where device == 'lobby' | write float=%.3e
+device,ts,temp_c,humidity,status
+lobby,2026-10-29T08:00,2.150e+01,4.000e+01,ok
+lobby,2026-10-29T08:15,2.170e+01,4.100e+01,ok
+lobby,2026-10-29T08:30,,4.100e+01,
+lobby,2026-10-29T08:45,,,
+lobby,2026-10-29T09:00,2.240e+01,4.300e+01,ok
+lobby,2026-10-29T09:15,2.210e+01,4.200e+01,ok
+lobby,2026-10-29T09:30,,4.200e+01,fault
+lobby,2026-10-29T09:45,2.190e+01,4.000e+01,ok
+$ read sensors.tsv sep=\t na=-9999,ERR | where device == 'lobby' | write float=%.3g
+device,ts,temp_c,humidity,status
+lobby,2026-10-29T08:00,21.5,40,ok
+lobby,2026-10-29T08:15,21.7,41,ok
+lobby,2026-10-29T08:30,,41,
+lobby,2026-10-29T08:45,,,
+lobby,2026-10-29T09:00,22.4,43,ok
+lobby,2026-10-29T09:15,22.1,42,ok
+lobby,2026-10-29T09:30,,42,fault
+lobby,2026-10-29T09:45,21.9,40,ok
+$ read feed.csv
+! ParserError: Error tokenizing data. C error: Expected 6 fields in line 4, saw 7
+$ read feed.csv on_bad_lines=skip
+sku,title,description,price,stock,tags
+M-24,"Monitor 24"", IPS","Matte, 75 Hz",149.0,12.0,office
+K-01,Keyboard,"Mechanical
+brown switches",89.5,0.0,"office,gaming"
+H-07,"Headset ""Pro""",Closed back,59.0,8.0,gaming
+D-02,Dock,,129.0,,
+W-33,Webcam,1080p,45.25,31.0,office
+$ read feed.csv on_bad_lines=warn
+~ ParserWarning: Skipping line 4: expected 6 fields, saw 7
+sku,title,description,price,stock,tags
+M-24,"Monitor 24"", IPS","Matte, 75 Hz",149.0,12.0,office
+K-01,Keyboard,"Mechanical
+brown switches",89.5,0.0,"office,gaming"
+H-07,"Headset ""Pro""",Closed back,59.0,8.0,gaming
+D-02,Dock,,129.0,,
+W-33,Webcam,1080p,45.25,31.0,office
+$ read feed.csv on_bad_lines=skip | dtypes
+column,dtype
+sku,str
+title,str
+description,str
+price,float64
+stock,float64
+tags,str
+$ read feed.csv usecols=sku,price
+sku,price
+M-24,149.00
+K-01,89.5
+C-10,2 m braided
+H-07,59
+D-02,129.00
+W-33,45.25
+$ read feed.csv on_bad_lines=skip | write quoting=1
+"sku","title","description","price","stock","tags"
+"M-24","Monitor 24"", IPS","Matte, 75 Hz","149.0","12.0","office"
+"K-01","Keyboard","Mechanical
+brown switches","89.5","0.0","office,gaming"
+"H-07","Headset ""Pro""","Closed back","59.0","8.0","gaming"
+"D-02","Dock","","129.0","",""
+"W-33","Webcam","1080p","45.25","31.0","office"
+$ read feed.csv on_bad_lines=skip | write quoting=2
+"sku","title","description","price","stock","tags"
+"M-24","Monitor 24"", IPS","Matte, 75 Hz",149.0,12.0,"office"
+"K-01","Keyboard","Mechanical
+brown switches",89.5,0.0,"office,gaming"
+"H-07","Headset ""Pro""","Closed back",59.0,8.0,"gaming"
+"D-02","Dock","",129.0,"",""
+"W-33","Webcam","1080p",45.25,31.0,"office"
+$ read feed.csv on_bad_lines=skip | write quoting=3
+! Error: need to escape, but no escapechar set
+$ read feed.csv on_bad_lines=skip | write quoting=3 escapechar=\
+sku,title,description,price,stock,tags
+M-24,Monitor 24\"\, IPS,Matte\, 75 Hz,149.0,12.0,office
+K-01,Keyboard,Mechanical\
+brown switches,89.5,0.0,office\,gaming
+H-07,Headset \"Pro\",Closed back,59.0,8.0,gaming
+D-02,Dock,,129.0,,
+W-33,Webcam,1080p,45.25,31.0,office
+$ read feed.csv on_bad_lines=skip | write quoting=4
+"sku","title","description","price","stock","tags"
+"M-24","Monitor 24"", IPS","Matte, 75 Hz",149.0,12.0,"office"
+"K-01","Keyboard","Mechanical
+brown switches",89.5,0.0,"office,gaming"
+"H-07","Headset ""Pro""","Closed back",59.0,8.0,"gaming"
+"D-02","Dock","",129.0,"",""
+"W-33","Webcam","1080p",45.25,31.0,"office"
+$ read feed.csv on_bad_lines=skip | write quoting=5
+"sku","title","description","price","stock","tags"
+"M-24","Monitor 24"", IPS","Matte, 75 Hz","149.0","12.0","office"
+"K-01","Keyboard","Mechanical
+brown switches","89.5","0.0","office,gaming"
+"H-07","Headset ""Pro""","Closed back","59.0","8.0","gaming"
+"D-02","Dock","","129.0","",""
+"W-33","Webcam","1080p","45.25","31.0","office"
+$ read feed.csv on_bad_lines=skip | write escapechar=\ doublequote=0
+sku,title,description,price,stock,tags
+M-24,"Monitor 24\", IPS","Matte, 75 Hz",149.0,12.0,office
+K-01,Keyboard,"Mechanical
+brown switches",89.5,0.0,"office,gaming"
+H-07,Headset \"Pro\",Closed back,59.0,8.0,gaming
+D-02,Dock,,129.0,,
+W-33,Webcam,1080p,45.25,31.0,office
+$ read feed.csv on_bad_lines=skip | write quotechar='
+sku,title,description,price,stock,tags
+M-24,'Monitor 24", IPS','Matte, 75 Hz',149.0,12.0,office
+K-01,Keyboard,'Mechanical
+brown switches',89.5,0.0,'office,gaming'
+H-07,Headset "Pro",Closed back,59.0,8.0,gaming
+D-02,Dock,,129.0,,
+W-33,Webcam,1080p,45.25,31.0,office
+$ read feed.csv on_bad_lines=skip | write sep=|
+sku|title|description|price|stock|tags
+M-24|"Monitor 24"", IPS"|Matte, 75 Hz|149.0|12.0|office
+K-01|Keyboard|"Mechanical
+brown switches"|89.5|0.0|office,gaming
+H-07|"Headset ""Pro"""|Closed back|59.0|8.0|gaming
+D-02|Dock||129.0||
+W-33|Webcam|1080p|45.25|31.0|office
+$ read feed.csv on_bad_lines=skip | write sep=; header=0 columns=price,sku
+149.0;M-24
+89.5;K-01
+59.0;H-07
+129.0;D-02
+45.25;W-33
+$ read feed.csv on_bad_lines=skip quoting=3
+sku,title,description,price,stock,tags
+" IPS""","""Matte"," 75 Hz""",149.00,12.0,office
+"""Mechanical",,,,,
+0,"""office","gaming""",,,
+ USB-C,2 m braided,9.99,140,,
+Closed back,59,8,gaming,,
+,129.00,,,,
+1080p,45.25,31,office,,
+$ read feed_esc.csv
+sku,title,price
+Monitor 24\," IPS""",149.0
+"Headset \Pro\""""",59,
+Bag\, padded,24.5
+$ read feed_esc.csv escapechar=\
+sku,title,price
+M-24,"Monitor 24"", IPS",149.0
+H-07,"Headset ""Pro""",59.0
+B-12,"Bag, padded",24.5
+$ read feed_esc.csv escapechar=\ doublequote=0
+sku,title,price
+M-24,"Monitor 24"", IPS",149.0
+H-07,"Headset ""Pro""",59.0
+B-12,"Bag, padded",24.5
+$ read feed_esc.csv escapechar=\ doublequote=0 | write escapechar=\ doublequote=0
+sku,title,price
+M-24,"Monitor 24\", IPS",149.0
+H-07,Headset \"Pro\",59.0
+B-12,"Bag, padded",24.5
+$ read feed_esc.csv quotechar='
+sku,title,price
+"""Monitor 24\"""," IPS""",149.0
+"""Headset \""Pro\""""",59,
+Bag\, padded,24.5
+$ read survey.csv
+respondent,consent,q1,q1.1,Unnamed: 4,score,newsletter,active
+r01,Yes,4.0,5,a,8.5,Y,True
+r02,No,3.0,3,,7.0,N,False
+r03,Yes,5.0,4,b,,Y,True
+r04,yes,2.0,2,c,9.0,N,True
+r05,No,,1,,6.5,Y,False
+$ read survey.csv | dtypes
+column,dtype
+respondent,str
+consent,str
+q1,float64
+q1.1,int64
+Unnamed: 4,str
+score,float64
+newsletter,str
+active,bool
+$ read survey.csv true=Yes,yes,Y false=No,N
+respondent,consent,q1,q1.1,Unnamed: 4,score,newsletter,active
+r01,True,4.0,5,a,8.5,True,True
+r02,False,3.0,3,,7.0,False,False
+r03,True,5.0,4,b,,True,True
+r04,True,2.0,2,c,9.0,False,True
+r05,False,,1,,6.5,True,False
+$ read survey.csv true=Yes,yes,Y false=No,N | dtypes
+column,dtype
+respondent,str
+consent,bool
+q1,float64
+q1.1,int64
+Unnamed: 4,str
+score,float64
+newsletter,bool
+active,bool
+$ read survey.csv true=Yes,Y false=No,N | dtypes
+column,dtype
+respondent,str
+consent,str
+q1,float64
+q1.1,int64
+Unnamed: 4,str
+score,float64
+newsletter,bool
+active,bool
+$ read survey.csv skip_blank_lines=0
+respondent,consent,q1,q1.1,Unnamed: 4,score,newsletter,active
+r01,Yes,4.0,5.0,a,8.5,Y,True
+r02,No,3.0,3.0,,7.0,N,False
+,,,,,,,
+r03,Yes,5.0,4.0,b,,Y,True
+   ,,,,,,,
+r04,yes,2.0,2.0,c,9.0,N,True
+r05,No,,1.0,,6.5,Y,False
+$ read survey.csv skip_blank_lines=0 | dtypes
+column,dtype
+respondent,str
+consent,str
+q1,float64
+q1.1,float64
+Unnamed: 4,str
+score,float64
+newsletter,str
+active,object
+$ read survey.csv | rename q1:q1_first,q1.1:q1_second,Unnamed:\s4:group
+respondent,consent,q1_first,q1_second,group,score,newsletter,active
+r01,Yes,4.0,5,a,8.5,Y,True
+r02,No,3.0,3,,7.0,N,False
+r03,Yes,5.0,4,b,,Y,True
+r04,yes,2.0,2,c,9.0,N,True
+r05,No,,1,,6.5,Y,False
+$ read survey.csv | rename q1:q1_first,q1.1:q1_second | dedup subset=q1_first,q1_second
+respondent,consent,q1_first,q1_second,Unnamed: 4,score,newsletter,active
+r01,Yes,4.0,5,a,8.5,Y,True
+r02,No,3.0,3,,7.0,N,False
+r03,Yes,5.0,4,b,,Y,True
+r04,yes,2.0,2,c,9.0,N,True
+r05,No,,1,,6.5,Y,False
+$ read survey.csv | dedup subset=consent
+respondent,consent,q1,q1.1,Unnamed: 4,score,newsletter,active
+r01,Yes,4.0,5,a,8.5,Y,True
+r02,No,3.0,3,,7.0,N,False
+r04,yes,2.0,2,c,9.0,N,True
+$ read survey.csv | dedup subset=consent keep=last
+respondent,consent,q1,q1.1,Unnamed: 4,score,newsletter,active
+r03,Yes,5.0,4,b,,Y,True
+r04,yes,2.0,2,c,9.0,N,True
+r05,No,,1,,6.5,Y,False
+$ read survey.csv | dedup subset=consent keep=False
+respondent,consent,q1,q1.1,Unnamed: 4,score,newsletter,active
+r04,yes,2.0,2,c,9.0,N,True
+$ read survey.csv | fillna q1 0 | astype q1 int64 | dtypes
+column,dtype
+respondent,str
+consent,str
+q1,int64
+q1.1,int64
+Unnamed: 4,str
+score,float64
+newsletter,str
+active,bool
+$ read survey.csv true=Yes,yes,Y false=No,N | write quoting=2
+"respondent","consent","q1","q1.1","Unnamed: 4","score","newsletter","active"
+"r01",True,4.0,5,"a",8.5,True,True
+"r02",False,3.0,3,"",7.0,False,False
+"r03",True,5.0,4,"b","",True,True
+"r04",True,2.0,2,"c",9.0,False,True
+"r05",False,"",1,"",6.5,True,False
+$ read report.txt sep=ws
+host,cpu,mem_mb,uptime_d,state
+web-01,12.5,2048,41,up
+web-02,7.0,2048,41,up
+db-01,55.25,16384,210,up
+cache-01,0.5,512,3,degraded
+$ read report.txt sep=ws | dtypes
+column,dtype
+host,str
+cpu,float64
+mem_mb,int64
+uptime_d,int64
+state,str
+$ read report.txt sep=ws | write float=%.2f sep=\t
+host	cpu	mem_mb	uptime_d	state
+web-01	12.50	2048	41	up
+web-02	7.00	2048	41	up
+db-01	55.25	16384	210	up
+cache-01	0.50	512	3	degraded
+$ read report.txt
+  host        cpu   mem_mb   uptime_d  state
+  web-01      12.5    2048      41      up
+  web-02       7.0    2048      41      up
+    db-01     55.25   16384    210      up
+  cache-01     0.5     512       3      degraded
+$ read windows.csv
+id,name,amount,paid
+1,Zoë,3.5,True
+2,Łukasz,12.0,False
+3,Ana,,True
+$ read windows.csv | dtypes
+column,dtype
+id,int64
+name,str
+amount,float64
+paid,bool
+$ read mac.csv
+id,city,visits
+1,Lyon,4.0
+2,Kraków,7.0
+3,Porto,
+$ read mac.csv | dtypes
+column,dtype
+id,int64
+city,str
+visits,float64
+$ read ids.csv
+event_id,user_id,signed,count,amount,code
+18446744073709551615,9223372036854775807,-9223372036854775808,"1,234",42.0,7
+1,1,7,"12,000,000",1000.0,10
+9223372036854775808,2,0,5,-0.5,99
+$ read ids.csv | dtypes
+column,dtype
+event_id,uint64
+user_id,int64
+signed,int64
+count,str
+amount,float64
+code,int64
+$ read ids.csv thousands=,
+event_id,user_id,signed,count,amount,code
+18446744073709551615,9223372036854775807,-9223372036854775808,1234,42.0,7
+1,1,7,12000000,1000.0,10
+9223372036854775808,2,0,5,-0.5,99
+$ read ids.csv thousands=, | dtypes
+column,dtype
+event_id,uint64
+user_id,int64
+signed,int64
+count,int64
+amount,float64
+code,int64
+$ read ids.csv thousands=, dtype=code:str | dtypes
+column,dtype
+event_id,uint64
+user_id,int64
+signed,int64
+count,int64
+amount,float64
+code,str
+$ read ids_neg.csv | dtypes
+column,dtype
+event_id,str
+user,str
+$ read ids_big.csv | dtypes
+column,dtype
+event_id,object
+user,str
+$ read ids_big.csv
+event_id,user
+18446744073709551616,a
+2,b
+$ read truncated.csv
+! ParserError: Error tokenizing data. C error: EOF inside string starting at row 2
+$ read missing.csv
+! FileNotFoundError: [Errno 2] No such file or directory: 'data/missing.csv'
+$ read feed.csv usecols=sku,weight
+! ValueError: Usecols do not match columns, columns expected but not found: ['weight']
+$ read sensors.tsv sep=\t na=-9999,ERR | astype temp_c int64
+! IntCastingNaNError: Cannot convert non-finite values (NA or inf) to integer.Replace or remove non-finite values or cast to an integer typethat supports these values (e.g. 'Int64')
+$ read sensors.tsv sep=\t | astype temp_c float64
+! ValueError: could not convert string to float: 'ERR'
