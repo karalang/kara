@@ -2134,9 +2134,23 @@ impl super::Parser {
                 self.error("Expected `{` or `;` after struct name");
                 return None;
             }
+            let open = self.current_span();
             self.expect(&Token::LeftBrace)?;
             let body = self.parse_struct_body()?;
-            self.expect(&Token::RightBrace)?;
+            if !self.check(&Token::RightBrace) && self.at_next_item() {
+                // The struct ends where the next item begins; that item
+                // parses on as itself (B-2026-10-29-17).
+                let line = self.current_span().line;
+                self.error_at(
+                    &format!(
+                        "unclosed `{{` of struct `{name}`: its `}}` is missing before the \
+                         item on line {line}"
+                    ),
+                    open,
+                );
+            } else {
+                self.expect(&Token::RightBrace)?;
+            }
             body
         };
 

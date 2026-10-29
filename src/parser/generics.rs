@@ -490,6 +490,32 @@ impl super::Parser {
         clauses
     }
 
+    /// Whether the current token, first on its line, begins an item (`fn`,
+    /// `struct`, `enum`, `trait`, `impl`, `const`, `extern`, with or without
+    /// `pub` or `shared` before it): inside a field list that is never a
+    /// field, so the list's `}` is missing (B-2026-10-29-17).
+    pub(crate) fn at_next_item(&self) -> bool {
+        let first_on_line = self
+            .pos
+            .checked_sub(1)
+            .is_none_or(|prev| self.tokens[prev].span.line < self.current_span().line);
+        let mut at = 0;
+        if matches!(self.peek_token_ref(), Token::Pub)
+            || matches!(self.peek_token_ref(), Token::Identifier { name, .. } if name == "shared")
+        {
+            at = 1;
+        }
+        first_on_line
+            && match self.peek_token_ref_at(at) {
+                Token::Impl => self.peek_token_ref_at(at + 1) != &Token::Invariant,
+                Token::Fn | Token::Struct | Token::Enum | Token::Trait | Token::Const => {
+                    matches!(self.peek_token_ref_at(at + 1), Token::Identifier { .. })
+                }
+                Token::Extern => true,
+                _ => false,
+            }
+    }
+
     pub(crate) fn parse_struct_body(&mut self) -> Option<(Vec<StructField>, Vec<Expr>, Vec<Expr>)> {
         let mut fields = Vec::new();
         let mut invariants = Vec::new();
@@ -497,6 +523,10 @@ impl super::Parser {
 
         while !self.check(&Token::RightBrace) && !self.is_at_end() {
             self.collect_leading_doc_comments();
+            // The next item, its `}` missing: the caller reports it.
+            if self.at_next_item() {
+                break;
+            }
             // `impl invariant <expr>` — checked at *every* method exit (pub
             // and private), unlike the plain `invariant` form below
             // (design.md § Contracts — `impl invariant`).
