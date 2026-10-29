@@ -1017,6 +1017,13 @@ impl Parser {
             );
             if matches!(expected, Token::Semicolon) {
                 self.record_missing_semicolon_insertion(&found_span);
+                // A `;` missing before the `}` that closes the block: parse
+                // on as if it were there, so the block closes where it
+                // should and a statement after it is not misread
+                // (B-2026-10-28-31).
+                if self.check(&Token::RightBrace) {
+                    return Some(());
+                }
             }
             None
         }
