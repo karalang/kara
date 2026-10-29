@@ -10096,7 +10096,14 @@ impl<'l, 'a> Bx<'l, 'a> {
         let Some(first) = self.user_impl_method(t, tr, method) else {
             return Ok(None);
         };
-        if self.nth_impl_method(t, tr, method, 1).is_none() {
+        // B-2026-10-28-16 — on a primitive left operand (`2.0 * col` with
+        // `impl Mul[Col] for f64`) only an impl whose `rhs` is the right
+        // operand's type applies; `2.0 * 3.0` stays the built-in operator.
+        let scalar = matches!(
+            self.tys().tcx().kind(t),
+            HK::Int(_) | HK::UInt(_) | HK::Float(_) | HK::Bool | HK::Char
+        );
+        if !scalar && self.nth_impl_method(t, tr, method, 1).is_none() {
             return Ok(Some(first));
         }
         let rt = self.expr_ty(right)?;
@@ -10113,7 +10120,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             }
             n += 1;
         }
-        Ok(Some(first))
+        Ok((!scalar).then_some(first))
     }
 
     /// `dbg(x)` where `x` names a place: the argument.

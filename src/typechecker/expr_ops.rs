@@ -2849,7 +2849,7 @@ impl<'a> super::TypeChecker<'a> {
                 (name.clone(), args.clone())
             }
             Type::Shared(name) => (name.clone(), Vec::new()),
-            _ => return None,
+            _ => return self.primitive_operator_impl(tr, method, &left, right_ty, right, span),
         };
         let (sig, at) = self.operator_impl_for_rhs(tr, method, &name, &args, &left, right_ty)?;
         self.user_operator_calls
@@ -2857,6 +2857,69 @@ impl<'a> super::TypeChecker<'a> {
         let ret = self.operator_sig_at(&sig.return_type, &left, &name, &args, at);
         if let Some(rhs) = sig.params.first() {
             let rhs = self.operator_sig_at(rhs, &left, &name, &args, at);
+            self.check_assignable(&rhs, right_ty, right.span);
+        }
+        Some(ret)
+    }
+
+    /// B-2026-10-28-16 — `2.0 * col` with the program's `impl Mul[Col] for
+    /// f64`: a primitive left operand calls an impl of the operator for the
+    /// primitive whose `rhs` is the right operand's user type. The
+    /// primitive's own impls (`Mul for f64`) take a primitive `rhs`, so
+    /// they never match here and `2.0 * 3.0` stays the built-in operator.
+    fn primitive_operator_impl(
+        &mut self,
+        tr: &str,
+        method: &str,
+        left: &Type,
+        right_ty: &Type,
+        right: &Expr,
+        span: &Span,
+    ) -> Option<Type> {
+        if !matches!(
+            left,
+            Type::Int(_) | Type::UInt(_) | Type::Float(_) | Type::Bool | Type::Char
+        ) {
+            return None;
+        }
+        let name = super::types::method_callee_type_name(left)?;
+        let peel = |t: &Type| -> Type {
+            let mut t = resolve_type_var_top(t, &self.env.substitutions);
+            while let Type::Ref(inner) | Type::MutRef(inner) = t {
+                t = resolve_type_var_top(&inner, &self.env.substitutions);
+            }
+            t
+        };
+        let rhs_ty = peel(right_ty);
+        let user = match &rhs_ty {
+            Type::Named { name, .. } => {
+                self.env.structs.contains_key(name) || self.env.enums.contains_key(name)
+            }
+            Type::Shared(_) => true,
+            _ => false,
+        };
+        if !user {
+            return None;
+        }
+        let (sig, at) = self
+            .env
+            .impls_by_trait
+            .get(tr)?
+            .iter()
+            .map(|&i| (&self.env.impls[i], i))
+            .filter(|(imp, _)| imp.target_type == name)
+            .filter_map(|(imp, i)| Some((imp.methods.get(method)?, i)))
+            .find(|(s, i)| {
+                s.params.first().is_some_and(|p| {
+                    peel(&self.subst_operator_self_in(p, left, &name, Some(*i))) == rhs_ty
+                })
+            })
+            .map(|(s, i)| (s.clone(), i))?;
+        self.user_operator_calls
+            .insert(SpanKey::from_span(span), format!("{name}.{method}"));
+        let ret = self.operator_sig_at(&sig.return_type, left, &name, &[], at);
+        if let Some(rhs) = sig.params.first() {
+            let rhs = self.operator_sig_at(rhs, left, &name, &[], at);
             self.check_assignable(&rhs, right_ty, right.span);
         }
         Some(ret)
