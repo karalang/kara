@@ -170,6 +170,13 @@ pub struct EffectSet {
     /// each caller substitutes the effects of the argument it passes
     /// (core §12, D6). Never escapes a body as anything but a parameter.
     pub calls: BTreeSet<u32>,
+    /// The values through whose stored function values a call is made
+    /// (design.md § Effect variables): a body whose clause names an effect
+    /// variable calls a handler it reads out of `self`, and each caller
+    /// substitutes the function values that can flow into the value it
+    /// passes. A local's key is resolved in its own body
+    /// ([`Analysis::resolve_stored`]), so a summary keeps only parameters.
+    pub stored: BTreeSet<Key>,
     /// Logs through `std.log`: no effect, and no conflict with anything
     /// but the console (design.md § Observability). Auto-par holds an
     /// auto-par task's records until its join (B-2026-10-27-22), so a
@@ -199,6 +206,7 @@ impl EffectSet {
         self.why.extend(other.why);
         self.effects.extend(other.effects);
         self.calls.extend(other.calls);
+        self.stored.extend(other.stored);
         self.logs |= other.logs;
         self.log_setup |= other.log_setup;
     }
@@ -207,6 +215,7 @@ impl EffectSet {
         !self.unknown
             && self.effects.is_empty()
             && self.calls.is_empty()
+            && self.stored.is_empty()
             && !self.logs
             && !self.log_setup
     }
@@ -214,10 +223,38 @@ impl EffectSet {
     pub fn display(&self) -> Vec<String> {
         let mut v: Vec<String> = self.effects.iter().map(Effect::display).collect();
         v.extend(self.calls.iter().map(|p| format!("calls(p{p})")));
+        v.extend(
+            self.stored
+                .iter()
+                .map(|k| format!("calls(in {})", key_text(k))),
+        );
         if self.unknown {
             v.insert(0, "unknown".to_string());
         }
         v
+    }
+}
+
+/// `p1.0`, `l3`, `some value`, `a fresh value`: a key, as
+/// `Effect::display` writes a rooted one.
+fn key_text(k: &Key) -> String {
+    match k {
+        Key::Any => "some value".to_string(),
+        Key::Fresh => "a fresh value".to_string(),
+        Key::Param(r, path) | Key::Local(r, path) => {
+            let mut s = format!(
+                "{}{r}",
+                if matches!(k, Key::Param(..)) {
+                    "p"
+                } else {
+                    "l"
+                }
+            );
+            for f in path {
+                s.push_str(&format!(".{f}"));
+            }
+            s
+        }
     }
 }
 
@@ -367,6 +404,8 @@ pub(crate) fn analyze_with(program: &Program, tys: &TyInterner, size_gate: bool)
         .map(|n| Origins::of(&program.bodies[*n], tys))
         .collect();
     let mut report = EffectReport::default();
+    // Per body, the function values it makes ([`Analysis::made_effects`]).
+    let mut made: BTreeMap<String, EffectSet> = BTreeMap::new();
     // Tarjan yields each component after every component it reaches, so
     // callees are summarised before their callers.
     for scc in tarjan(&edges) {
@@ -374,7 +413,13 @@ pub(crate) fn analyze_with(program: &Program, tys: &TyInterner, size_gate: bool)
             let mut changed = false;
             for &i in &scc {
                 let body = &program.bodies[names[i]];
-                let sites = a.body_sites(body, &report.summaries);
+                let mut sites = a.body_sites(body, &report.summaries);
+                let m = a.made_effects(body, &report.summaries, &made);
+                if made.get(names[i]) != Some(&m) {
+                    made.insert(names[i].clone(), m);
+                    changed = true;
+                }
+                a.resolve_stored(body, &origins[i], &mut sites, &report.summaries, &made);
                 let mut summary = EffectSet::default();
                 // A declared `suspends` stands even with no suspending
                 // call below it.
@@ -981,7 +1026,16 @@ fn top(s: &EffectSet) -> Option<String> {
             None => "unknown".to_string(),
         });
     }
-    s.calls.iter().next().map(|p| format!("calls(p{p})"))
+    s.calls
+        .iter()
+        .next()
+        .map(|p| format!("calls(p{p})"))
+        .or_else(|| {
+            s.stored
+                .iter()
+                .next()
+                .map(|k| format!("calls(in {})", key_text(k)))
+        })
 }
 
 /// An effect of `s` that an unknown effect would conflict with: one that
@@ -2043,6 +2097,19 @@ impl<'p> Analysis<'p> {
                 Some(Key::Param(p, path)) if path.is_empty() => {
                     eff.calls.insert(p);
                 }
+                // A body whose clause names an effect variable calls the
+                // function values that can flow into the value it calls
+                // (design.md § Effect variables): a handler read out of
+                // `self` is one `self`'s caller put there.
+                Some(k @ (Key::Param(..) | Key::Local(..)))
+                    if body.clause_names_var
+                        && func
+                            .place()
+                            .and_then(|p| declared_fn_value_effects(body, p))
+                            .is_none() =>
+                {
+                    eff.stored.insert(k);
+                }
                 _ => match func
                     .place()
                     .and_then(|p| declared_fn_value_effects(body, p))
@@ -2164,6 +2231,245 @@ impl<'p> Analysis<'p> {
         }
     }
 
+    /// The effects of the function values `body` makes (each one it
+    /// erases to a function type) and of the ones its callees make, which a
+    /// call can hand back or store through an argument: an
+    /// over-approximation of what a call can put into a value that did not
+    /// come in through its arguments (design.md § Effect variables).
+    fn made_effects(
+        &self,
+        body: &Body,
+        summaries: &BTreeMap<String, EffectSet>,
+        made: &BTreeMap<String, EffectSet>,
+    ) -> EffectSet {
+        let defs = single_defs(body);
+        let mut out = EffectSet::default();
+        for bb in &body.blocks {
+            for st in &bb.statements {
+                if let StatementKind::Assign(_, Rvalue::Cast(_, op, _)) = &st.kind {
+                    if is_fn_value(body, self.tys, op) {
+                        out.union(self.fn_value_effects(body, &defs, Some(op), summaries));
+                    }
+                }
+            }
+            if let TerminatorKind::Call {
+                func,
+                args,
+                destination,
+                ..
+            } = &bb.terminator.kind
+            {
+                out.union(self.call_made(body, &defs, func, args, destination, summaries, made));
+            }
+        }
+        out
+    }
+
+    /// The function values a call can hand back, or store through an
+    /// argument it can write through, that it did not take in: those its
+    /// callee makes. A
+    /// native makes none, though a closure it is handed may; a function
+    /// value may hand back one of its own when its result can hold one.
+    #[allow(clippy::too_many_arguments)]
+    fn call_made(
+        &self,
+        body: &Body,
+        defs: &BTreeMap<u32, Place>,
+        func: &Operand,
+        args: &[Operand],
+        destination: &Place,
+        summaries: &BTreeMap<String, EffectSet>,
+        made: &BTreeMap<String, EffectSet>,
+    ) -> EffectSet {
+        let Operand::Const(Const {
+            kind: ConstKind::FnDef(inst),
+            ..
+        }) = func
+        else {
+            let holds = |p: &Place| {
+                place_ty(body, self.tys, p).map_or(true, |t| self.holds_fn(t.ty, &mut Vec::new()))
+            };
+            let writes_one = args.iter().any(|a| {
+                a.place().is_some_and(|p| {
+                    matches!(place_ty(body, self.tys, p), Ok(t)
+                        if refers(self.tys.tcx(), t.ty, 0))
+                        && holds(p)
+                })
+            });
+            return if holds(destination) || writes_one {
+                EffectSet::unknown(format!(
+                    "{}: a function value a call through a value hands back",
+                    body.instance.name
+                ))
+            } else {
+                EffectSet::default()
+            };
+        };
+        if self.program.bodies.contains_key(&inst.name) {
+            let arg_key = |i: usize| -> Key {
+                match args.get(i).and_then(Operand::place) {
+                    Some(p) => place_key(body, defs, p),
+                    None => Key::Any,
+                }
+            };
+            let arg_fn = |i: usize| self.fn_value_effects(body, defs, args.get(i), summaries);
+            return made
+                .get(&inst.name)
+                .map(|m| substitute(m, &arg_key, &arg_fn))
+                .unwrap_or_default();
+        }
+        let mut out = EffectSet::default();
+        for a in args {
+            for b in self.fn_value_bodies(body, a) {
+                if let Some(m) = made.get(&b) {
+                    out.union(substitute(m, &|_| Key::Any, &|_| opaque()));
+                }
+            }
+        }
+        out
+    }
+
+    /// Can a value of type `ty` hold a function value?
+    fn holds_fn(&self, ty: Ty, seen: &mut Vec<Ty>) -> bool {
+        let tcx = self.tys.tcx();
+        let mut t = ty;
+        while let SK::Ref(i) | SK::MutRef(i) | SK::RawPtr { pointee: i, .. } | SK::Weak(i) =
+            tcx.kind(t)
+        {
+            t = i;
+        }
+        if matches!(
+            tcx.kind(t),
+            SK::Fn { .. }
+                | SK::Closure { .. }
+                | SK::Dyn { .. }
+                | SK::Opaque { .. }
+                | SK::Param(_)
+                | SK::Proj { .. }
+                | SK::Error
+        ) {
+            return true;
+        }
+        if seen.contains(&t) {
+            return false;
+        }
+        seen.push(t);
+        self.parts(t).into_iter().any(|p| self.holds_fn(p, seen))
+    }
+
+    /// Resolve each call through the function values stored in a local
+    /// (design.md § Effect variables): the local holds the function values
+    /// that can flow into it ([`Analysis::stored_in`]). A call through
+    /// those of a value this body cannot name has every effect; those of a
+    /// parameter stay for the caller.
+    fn resolve_stored(
+        &self,
+        body: &Body,
+        origins: &Origins,
+        sites: &mut [Site],
+        summaries: &BTreeMap<String, EffectSet>,
+        made: &BTreeMap<String, EffectSet>,
+    ) {
+        let open = |s: &Site| {
+            s.effects
+                .stored
+                .iter()
+                .any(|k| !matches!(k, Key::Param(..)))
+        };
+        if !sites.iter().any(open) {
+            return;
+        }
+        let defs = single_defs(body);
+        let mut solved: BTreeMap<u32, EffectSet> = BTreeMap::new();
+        for s in sites.iter_mut() {
+            let keys: Vec<Key> = s
+                .effects
+                .stored
+                .iter()
+                .filter(|k| !matches!(k, Key::Param(..)))
+                .cloned()
+                .collect();
+            for k in keys {
+                s.effects.stored.remove(&k);
+                let add = match k {
+                    Key::Local(l, _) => solved
+                        .entry(l)
+                        .or_insert_with(|| self.stored_in(body, &defs, origins, l, summaries, made))
+                        .clone(),
+                    _ => EffectSet::unknown(format!(
+                        "{}: a call through a function value stored in a value it cannot trace",
+                        body.instance.name
+                    )),
+                };
+                s.effects.union(add);
+            }
+        }
+    }
+
+    /// The effects of calling the function values the local `l` can hold:
+    /// every one that can flow into it ([`Origins`]), whether erased here,
+    /// made by a call that stores into it or hands it back, or passed in by
+    /// the caller: a parameter's own function value is called (`calls`),
+    /// and the ones a parameter holds are its caller's to resolve.
+    fn stored_in(
+        &self,
+        body: &Body,
+        defs: &BTreeMap<u32, Place>,
+        origins: &Origins,
+        l: u32,
+        summaries: &BTreeMap<String, EffectSet>,
+        made: &BTreeMap<String, EffectSet>,
+    ) -> EffectSet {
+        let tcx = self.tys.tcx();
+        let os = origins.origins(l);
+        let mut out = EffectSet::default();
+        for a in body.args() {
+            if !os.contains(&a.0) {
+                continue;
+            }
+            let ty = body.local(a).ty;
+            let mut t = ty;
+            while let SK::Ref(i) | SK::MutRef(i) = tcx.kind(t) {
+                t = i;
+            }
+            if matches!(tcx.kind(t), SK::Fn { .. } | SK::Closure { .. }) {
+                out.calls.insert(a.0);
+            } else if self.holds_fn(ty, &mut Vec::new()) {
+                out.stored.insert(Key::Param(a.0, Vec::new()));
+            }
+        }
+        for bb in &body.blocks {
+            for st in &bb.statements {
+                if let StatementKind::Assign(d, Rvalue::Cast(_, op, _)) = &st.kind {
+                    if os.contains(&d.local.0) && is_fn_value(body, self.tys, op) {
+                        out.union(self.fn_value_effects(body, defs, Some(op), summaries));
+                    }
+                }
+            }
+            if let TerminatorKind::Call {
+                func,
+                args,
+                destination,
+                ..
+            } = &bb.terminator.kind
+            {
+                // An argument the callee can store through: a reference,
+                // or a value holding one or a `shared` handle.
+                let through = |a: &Operand| {
+                    a.place().is_some_and(|p| {
+                        os.contains(&p.local.0)
+                            && matches!(place_ty(body, self.tys, p), Ok(t)
+                                if refers(tcx, t.ty, 0))
+                    })
+                };
+                if os.contains(&destination.local.0) || args.iter().any(through) {
+                    out.union(self.call_made(body, defs, func, args, destination, summaries, made));
+                }
+            }
+        }
+        out
+    }
+
     /// The effects of the task a `TaskGroup.spawn` starts with the closure
     /// `arg`. When this body makes that closure, what the closure's body
     /// reaches through its environment is keyed by the value the matching
@@ -2219,36 +2525,27 @@ impl<'p> Analysis<'p> {
             if !s.calls.is_empty() {
                 out.union(opaque());
             }
-            for e in &s.effects {
-                let key = match &e.key {
-                    Key::Param(1, path) => match path.split_first() {
-                        Some((k, rest)) => match caps.get(*k as usize) {
-                            Some(Key::Param(r, base)) => {
-                                let mut base = base.clone();
-                                base.extend(rest);
-                                base.truncate(MAX_PATH);
-                                Key::Param(*r, base)
-                            }
-                            Some(Key::Local(r, base)) => {
-                                let mut base = base.clone();
-                                base.extend(rest);
-                                base.truncate(MAX_PATH);
-                                Key::Local(*r, base)
-                            }
-                            Some(Key::Fresh) => Key::Fresh,
-                            _ => Key::Any,
-                        },
-                        None => Key::Any,
+            let key = |k: &Key| match k {
+                Key::Param(1, path) => match path.split_first() {
+                    Some((k, rest)) => match caps.get(*k as usize) {
+                        Some(c @ (Key::Param(..) | Key::Local(..) | Key::Fresh)) => {
+                            extend_key(c.clone(), rest)
+                        }
+                        _ => Key::Any,
                     },
-                    Key::Param(..) => Key::Any,
-                    k => k.clone(),
-                };
+                    None => Key::Any,
+                },
+                Key::Param(..) => Key::Any,
+                k => k.clone(),
+            };
+            for e in &s.effects {
                 out.add(Effect {
                     verb: e.verb,
                     class: e.class.clone(),
-                    key,
+                    key: key(&e.key),
                 });
             }
+            out.stored.extend(s.stored.iter().map(key));
         }
         out
     }
@@ -2402,31 +2699,36 @@ fn substitute(
     for p in &callee.calls {
         out.union(arg_fn(*p as usize - 1));
     }
+    let key = |k: &Key| match k {
+        Key::Param(p, path) => extend_key(arg_key(*p as usize - 1), path),
+        k => k.clone(),
+    };
     for e in &callee.effects {
-        let key = match &e.key {
-            Key::Param(p, path) => match arg_key(*p as usize - 1) {
-                Key::Any => Key::Any,
-                Key::Fresh => Key::Fresh,
-                Key::Param(r, mut base) => {
-                    base.extend(path);
-                    base.truncate(MAX_PATH);
-                    Key::Param(r, base)
-                }
-                Key::Local(r, mut base) => {
-                    base.extend(path);
-                    base.truncate(MAX_PATH);
-                    Key::Local(r, base)
-                }
-            },
-            k => k.clone(),
-        };
         out.add(Effect {
             verb: e.verb,
             class: e.class.clone(),
-            key,
+            key: key(&e.key),
         });
     }
+    out.stored.extend(callee.stored.iter().map(key));
     out
+}
+
+/// `base` with `path` appended, cut to [`MAX_PATH`].
+fn extend_key(base: Key, path: &[u32]) -> Key {
+    match base {
+        Key::Param(r, mut base) => {
+            base.extend(path);
+            base.truncate(MAX_PATH);
+            Key::Param(r, base)
+        }
+        Key::Local(r, mut base) => {
+            base.extend(path);
+            base.truncate(MAX_PATH);
+            Key::Local(r, base)
+        }
+        k => k,
+    }
 }
 
 /// Temporaries assigned exactly once from a borrow or a use of a place:

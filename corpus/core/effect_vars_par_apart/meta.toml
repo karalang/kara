@@ -1,0 +1,12 @@
+source = "design.md § Effect variables"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure", "par"]
+class = "a"
+expected_from = "spec"
+rules = []
+backends = []
+env = {}
+note = "A call through a value typed `with E` has the solved set: the two buses' handlers are known per value, so a `par` over their `emit`s is accepted when the sets do not conflict."
+bucket = "a"

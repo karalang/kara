@@ -1,0 +1,31 @@
+struct Event { n: i64 }
+
+// Two buses (design.md § Effect variables) whose handlers both write
+// standard output: each value's `E` holds `writes(Stdout)`, so the two
+// `emit`s must keep their order and the `par` is refused (core semantics
+// §11.2).
+struct EventBus[with E] {
+    handlers: Vec[Fn(Event) with E],
+}
+
+impl[with E] EventBus[with E] {
+    fn register(mut ref self, h: escaping Fn(Event) with E) {
+        self.handlers.push(h);
+    }
+
+    fn emit(self, e: Event) with E {
+        for h in self.handlers { h(e); }
+    }
+}
+
+fn shout(e: Event) { println(f"order {e.n}"); }
+fn note(e: Event) { println(f"note {e.n}"); }
+
+fn main() {
+    let mut orders = EventBus { handlers: Vec.new() };
+    orders.register(shout);
+    let mut notes = EventBus { handlers: vec![note] };
+    notes.register(|e| note(e));
+    par { orders.emit(Event { n: 1 }), notes.emit(Event { n: 2 }) };
+    println("done");
+}

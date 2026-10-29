@@ -2481,6 +2481,7 @@ fn main() -> () {
             // § Effect variables).
             "err_effect_var_unfit",
             "err_effect_var_public_clause",
+            "err_effect_vars_par_shared",
         ];
         // Pins that call Kāra library functions, which `check_built` does
         // not append (a `select` desugars to calls into sync.kara;

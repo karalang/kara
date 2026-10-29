@@ -1,0 +1,31 @@
+struct Event { n: i64 }
+
+// Two buses (design.md § Effect variables): each value's `E` is the set
+// of the handlers bound into it, so a call through `orders`' handlers
+// writes standard output and one through `tally`'s writes nothing, and
+// the two `emit`s may run at once (core semantics §11.2).
+struct EventBus[with E] {
+    handlers: Vec[Fn(Event) with E],
+}
+
+impl[with E] EventBus[with E] {
+    fn register(mut ref self, h: escaping Fn(Event) with E) {
+        self.handlers.push(h);
+    }
+
+    fn emit(self, e: Event) with E {
+        for h in self.handlers { h(e); }
+    }
+}
+
+fn shout(e: Event) { println(f"order {e.n}"); }
+fn ignore(e: Event) { let _ = e.n * 2; }
+
+fn main() {
+    let mut orders = EventBus { handlers: Vec.new() };
+    orders.register(shout);
+    let mut tally = EventBus { handlers: vec![ignore] };
+    tally.register(|e| ignore(e));
+    par { orders.emit(Event { n: 1 }), tally.emit(Event { n: 2 }) };
+    println("done");
+}

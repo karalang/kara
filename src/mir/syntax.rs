@@ -160,6 +160,13 @@ pub struct Body {
     /// builder cannot carry (a keyed resource, a user-defined verb) leaves
     /// none (B-2026-10-27-2).
     pub fn_value_effects: Vec<(Local, Vec<DeclaredEffect>)>,
+    /// The body's declared clause names an effect variable (`fn emit(self,
+    /// e: Event) with E`, design.md § Effect variables): a call through a
+    /// function value it holds in a local (a handler read out of
+    /// `self.handlers`) has the effects of the function values that can
+    /// flow into that local, which callers resolve for the values they
+    /// pass, rather than every effect.
+    pub clause_names_var: bool,
 }
 
 /// One effect of a function type's `with` clause, as written: the verb's

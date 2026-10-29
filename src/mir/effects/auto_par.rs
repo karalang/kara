@@ -462,9 +462,12 @@ pub(super) fn verdict(
         .map(|set| {
             set.iter()
                 .filter_map(|b| at.get(b))
-                .find(|e| e.unknown || !e.calls.is_empty())
+                .find(|e| e.unknown || !e.calls.is_empty() || !e.stored.is_empty())
                 .map(|e| match e.why.iter().next() {
                     Some(why) => why.clone(),
+                    None if e.calls.is_empty() => {
+                        "a call through a function value a parameter holds".to_string()
+                    }
                     None => "a call through a parameter".to_string(),
                 })
         })

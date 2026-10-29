@@ -4846,6 +4846,12 @@ impl<'l, 'a> Bx<'l, 'a> {
             }
         }
         self.bind_destructured(destructured)?;
+        // See [`Body::clause_names_var`].
+        self.b.clause_names_var = f.effects.as_ref().is_some_and(|c| {
+            c.items
+                .iter()
+                .any(|i| matches!(i, ast::EffectItem::Variable(_)))
+        });
         if self
             .lcx
             .signatures_only_from

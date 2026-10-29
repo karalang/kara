@@ -24,6 +24,8 @@ pub struct BodyBuilder {
     pub suspends: bool,
     /// See [`Body::fn_value_effects`].
     pub fn_value_effects: Vec<(Local, Vec<DeclaredEffect>)>,
+    /// See [`Body::clause_names_var`].
+    pub clause_names_var: bool,
 }
 
 impl BodyBuilder {
@@ -56,6 +58,7 @@ impl BodyBuilder {
             provided: Vec::new(),
             suspends: false,
             fn_value_effects: Vec::new(),
+            clause_names_var: false,
         }
     }
 
@@ -206,6 +209,7 @@ impl BodyBuilder {
             suspends: self.suspends,
             drop_flags: Vec::new(),
             fn_value_effects: self.fn_value_effects,
+            clause_names_var: self.clause_names_var,
         })
     }
 }
