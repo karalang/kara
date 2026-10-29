@@ -1014,7 +1014,10 @@ impl super::Parser {
                         kind: ExprKind::Error,
                     });
                 }
-                self.error("the `!` operator is not used in Kāra; use `not` instead");
+                self.error(
+                    "the `!` operator is not used in Kāra; use `not` for a bool, `~` for an \
+                     integer's bitwise complement",
+                );
                 self.advance();
                 // `not` is a word operator, so it needs a separator that `!`
                 // did not: `!first` must become `not first`, never `notfirst`.

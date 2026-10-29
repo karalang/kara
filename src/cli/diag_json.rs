@@ -1441,6 +1441,7 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
     let mut diags = DiagnosticJson::new();
     let filename = &pipeline.filename;
     let mut id_counter = 0u32;
+    let complemented = super::fix_cmds::complemented_bangs(pipeline);
 
     for err in &pipeline.parsed.errors {
         id_counter += 1;
@@ -1453,11 +1454,17 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
             .fix_edits
             .get(&crate::resolver::SpanKey::from_span(&err.span))
             .map(|e| {
+                // An integer's `!` is fixed to `~`, as `karac fix` writes it.
+                let text = if complemented.contains(&e.offset) {
+                    "~"
+                } else {
+                    &e.replacement
+                };
                 format!(
                     "\"replacement\":{{\"offset\":{},\"length\":{},\"text\":{}}}",
                     e.offset,
                     e.length,
-                    json_string(&e.replacement),
+                    json_string(text),
                 )
             });
         // Multi-edit parse envelope, rendered exactly like the resolver's and

@@ -555,6 +555,26 @@ fn complement_integer_bangs(filename: &str, source: &str, fixes: &mut FixSet) {
     }
 }
 
+/// The offsets of the `!` operators whose fix [`complement_integer_bangs`]
+/// turns into the complement `~`, so `karac check`'s JSON carries the
+/// replacement `karac fix` writes (B-2026-10-29-29). Empty when the parse
+/// wrote no `not` for a `!`, or the pipeline has no single source text.
+pub(super) fn complemented_bangs(pipeline: &Pipeline) -> std::collections::HashSet<usize> {
+    let Some(source) = pipeline.source.as_deref() else {
+        return Default::default();
+    };
+    let mut fixes = FixSet::default();
+    fixes.singles(pipeline.parsed.fix_edits.values().cloned());
+    fixes.groups(pipeline.parsed.fix_diffs.values());
+    complement_integer_bangs(&pipeline.filename, source, &mut fixes);
+    fixes
+        .edits
+        .iter()
+        .filter(|(_, e)| e.replacement == "~")
+        .map(|(_, e)| e.offset)
+        .collect()
+}
+
 #[derive(Default)]
 struct FixSet {
     edits: Vec<(usize, crate::resolver::TextEdit)>,
