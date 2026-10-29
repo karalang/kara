@@ -10,7 +10,7 @@
 
 use crate::ast::*;
 use crate::parser::ImplTraitBlockReason;
-use crate::token::Token;
+use crate::token::{Span, Token};
 
 impl super::Parser {
     // ── Types ────────────────────────────────────────────────────
@@ -40,6 +40,176 @@ impl super::Parser {
         let t = self.parse_type();
         self.return_tail = false;
         t
+    }
+
+    /// A function type, `Fn(T) -> U with _`, and the once-callable variant
+    /// `OnceFn(...)` (round 12.46, Step 4), the current token being `name`. Both share the same AST shape; the
+    /// `is_once` flag distinguishes them so `lower_type_expr` can emit
+    /// `Type::OnceFunction` for the OnceFn form.
+    /// `MutFn(...)` (`docs/core-semantics.md` §9.6) parses as a
+    /// non-once `FnType` and is recorded in `mut_fn_types`.
+    fn parse_fn_type(&mut self, name: &str, start: Span, return_tail: bool) -> Option<TypeExpr> {
+        let is_once = name == "OnceFn";
+        let is_mut = name == "MutFn";
+        self.advance();
+        self.expect(&Token::LeftParen)?;
+        let mut params = Vec::new();
+        let mut own_params = Vec::new();
+        while !self.check(&Token::RightParen) && !self.is_at_end() {
+            // `Fn(own T)` (D5): an owned parameter of the function type.
+            own_params.push(
+                self.at_kw("own")
+                    && !matches!(self.peek_token_ref_at(1), Token::Comma | Token::RightParen)
+                    && self.eat_kw("own"),
+            );
+            params.push(self.parse_type()?);
+            if !self.eat(&Token::Comma) {
+                break;
+            }
+        }
+        self.expect(&Token::RightParen)?;
+
+        // A tail `Fn` passes the return position on to its own
+        // return type: `-> Fn(i64) -> Fn(i64) with E` still ends in
+        // the function's clause.
+        let return_type = if self.eat(&Token::Arrow) {
+            self.return_tail = return_tail;
+            Some(Box::new(self.parse_type()?))
+        } else {
+            None
+        };
+
+        let effect_spec = if !return_tail && self.at_kw("with") {
+            // Peek-only: `parse_effect_list` consumes the `with`
+            // keyword itself and then handles `_` / verbs / named
+            // effect variables / group names uniformly. Pre-
+            // consuming would force the call into the without-
+            // `with`-prefix branch, which only handles bare verbs
+            // and silently drops named variables (latent bug fixed
+            // here as part of round 9).
+            let saved = self.pos;
+            if let Some(token) = self.tokens.get(self.pos + 1) {
+                if matches!(token.token, Token::Underscore) {
+                    self.advance(); // with
+                    self.advance(); // _
+                    Some(EffectSpec::Polymorphic)
+                } else {
+                    let effect_vars: Vec<String> = self.current_effect_vars().to_vec();
+                    // Nested `Fn(...) with E` type: a comma after the
+                    // clause separates fields or arguments, so it is
+                    // taken as a stray separator only before another
+                    // verb (`comma_continues_effect_clause`).
+                    match self.parse_effect_list(&effect_vars, false) {
+                        Some(effects) => Some(EffectSpec::Specific(effects)),
+                        None => {
+                            self.pos = saved;
+                            return None;
+                        }
+                    }
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let span = self.span_from(&start);
+        if is_mut {
+            self.mut_fn_types
+                .insert(crate::resolver::SpanKey::from_span(&span));
+        }
+        Some(TypeExpr {
+            kind: TypeKind::FnType {
+                params,
+                return_type,
+                effect_spec,
+                is_once,
+                own_params: if own_params.contains(&true) {
+                    own_params
+                } else {
+                    Vec::new()
+                },
+            },
+            span,
+        })
+    }
+
+    /// The name of the function type the current token begins (`Fn`,
+    /// `MutFn` or `OnceFn`), if it begins one. Rust's spellings, `fn(..)`
+    /// (a function pointer), `FnMut(..)`, `FnOnce(..)` and any of them
+    /// after `impl`, are each reported with the edit that writes Kāra's,
+    /// and the type is then parsed as Kāra's, so nothing cascades
+    /// (B-2026-10-29-1). On return the current token is the name.
+    fn fn_type_head(&mut self) -> Option<&'static str> {
+        fn kara_name(t: &Token) -> Option<(&'static str, bool)> {
+            match t {
+                Token::Identifier { name, raw: false } => match name.as_str() {
+                    "Fn" => Some(("Fn", false)),
+                    "MutFn" => Some(("MutFn", false)),
+                    "OnceFn" => Some(("OnceFn", false)),
+                    "FnMut" => Some(("MutFn", true)),
+                    "FnOnce" => Some(("OnceFn", true)),
+                    _ => None,
+                },
+                Token::Fn => Some(("Fn", true)),
+                _ => None,
+            }
+        }
+        let after_impl = matches!(self.peek_token_ref(), Token::Impl);
+        let at = usize::from(after_impl);
+        let (name, rust) = kara_name(self.peek_token_ref_at(at))?;
+        // A Rust spelling, or anything after `impl`, is only taken for a
+        // function type when its `(` follows.
+        if (rust || after_impl) && !matches!(self.peek_token_ref_at(at + 1), Token::LeftParen) {
+            return None;
+        }
+        if after_impl {
+            let kw = self.current_span();
+            let name_at = self.tokens[self.pos + 1].span.offset;
+            let written = match self.peek_token_ref_at(1) {
+                Token::Identifier { name, .. } => name.as_str(),
+                _ => "fn",
+            };
+            self.error_at(
+                &format!(
+                    "`impl {written}(..)` is Rust syntax: in Kāra a function type \
+                     is written `{name}(..) -> T`, with no `impl`"
+                ),
+                kw,
+            );
+            self.fix_edits.insert(
+                crate::resolver::SpanKey::from_span(&kw),
+                crate::resolver::TextEdit {
+                    offset: kw.offset,
+                    length: name_at.saturating_sub(kw.offset),
+                    replacement: String::new(),
+                },
+            );
+            self.advance();
+        }
+        if rust {
+            let span = self.current_span();
+            let message = match self.peek_token_ref() {
+                Token::Fn => "`fn(..) -> T` is Rust's function-pointer type: Kāra writes \
+                              a function type `Fn(..) -> T`"
+                    .to_string(),
+                _ => {
+                    let written = if name == "MutFn" { "FnMut" } else { "FnOnce" };
+                    format!("`{written}` is Rust's name: Kāra writes `{name}(..) -> T`")
+                }
+            };
+            self.error_at(&message, span);
+            self.fix_edits.insert(
+                crate::resolver::SpanKey::from_span(&span),
+                crate::resolver::TextEdit {
+                    offset: span.offset,
+                    length: span.length,
+                    replacement: name.to_string(),
+                },
+            );
+        }
+        Some(name)
     }
 
     pub(crate) fn parse_type(&mut self) -> Option<TypeExpr> {
@@ -180,6 +350,9 @@ impl super::Parser {
             }
         }
 
+        if let Some(name) = self.fn_type_head() {
+            return self.parse_fn_type(name, start, return_tail);
+        }
         match self.peek_token_ref() {
             // ref Type
             Token::Ref => {
@@ -473,103 +646,6 @@ impl super::Parser {
                         assoc_bindings,
                         use_effects,
                         span,
-                    },
-                    span,
-                })
-            }
-            // Fn(T) -> U with _ — and the once-callable variant `OnceFn(...)`
-            // (round 12.46, Step 4). Both share the same AST shape; the
-            // `is_once` flag distinguishes them so `lower_type_expr` can emit
-            // `Type::OnceFunction` for the OnceFn form.
-            // `MutFn(...)` (`docs/core-semantics.md` §9.6) parses as a
-            // non-once `FnType` and is recorded in `mut_fn_types`.
-            Token::Identifier { ref name, .. }
-                if name == "Fn" || name == "MutFn" || name == "OnceFn" =>
-            {
-                let is_once = name == "OnceFn";
-                let is_mut = name == "MutFn";
-                self.advance();
-                self.expect(&Token::LeftParen)?;
-                let mut params = Vec::new();
-                let mut own_params = Vec::new();
-                while !self.check(&Token::RightParen) && !self.is_at_end() {
-                    // `Fn(own T)` (D5): an owned parameter of the function type.
-                    own_params.push(
-                        self.at_kw("own")
-                            && !matches!(
-                                self.peek_token_ref_at(1),
-                                Token::Comma | Token::RightParen
-                            )
-                            && self.eat_kw("own"),
-                    );
-                    params.push(self.parse_type()?);
-                    if !self.eat(&Token::Comma) {
-                        break;
-                    }
-                }
-                self.expect(&Token::RightParen)?;
-
-                // A tail `Fn` passes the return position on to its own
-                // return type: `-> Fn(i64) -> Fn(i64) with E` still ends in
-                // the function's clause.
-                let return_type = if self.eat(&Token::Arrow) {
-                    self.return_tail = return_tail;
-                    Some(Box::new(self.parse_type()?))
-                } else {
-                    None
-                };
-
-                let effect_spec = if !return_tail && self.at_kw("with") {
-                    // Peek-only: `parse_effect_list` consumes the `with`
-                    // keyword itself and then handles `_` / verbs / named
-                    // effect variables / group names uniformly. Pre-
-                    // consuming would force the call into the without-
-                    // `with`-prefix branch, which only handles bare verbs
-                    // and silently drops named variables (latent bug fixed
-                    // here as part of round 9).
-                    let saved = self.pos;
-                    if let Some(token) = self.tokens.get(self.pos + 1) {
-                        if matches!(token.token, Token::Underscore) {
-                            self.advance(); // with
-                            self.advance(); // _
-                            Some(EffectSpec::Polymorphic)
-                        } else {
-                            let effect_vars: Vec<String> = self.current_effect_vars().to_vec();
-                            // Nested `Fn(...) with E` type: a comma after the
-                            // clause separates fields or arguments, so it is
-                            // taken as a stray separator only before another
-                            // verb (`comma_continues_effect_clause`).
-                            match self.parse_effect_list(&effect_vars, false) {
-                                Some(effects) => Some(EffectSpec::Specific(effects)),
-                                None => {
-                                    self.pos = saved;
-                                    return None;
-                                }
-                            }
-                        }
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
-
-                let span = self.span_from(&start);
-                if is_mut {
-                    self.mut_fn_types
-                        .insert(crate::resolver::SpanKey::from_span(&span));
-                }
-                Some(TypeExpr {
-                    kind: TypeKind::FnType {
-                        params,
-                        return_type,
-                        effect_spec,
-                        is_once,
-                        own_params: if own_params.contains(&true) {
-                            own_params
-                        } else {
-                            Vec::new()
-                        },
                     },
                     span,
                 })
