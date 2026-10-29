@@ -257,6 +257,12 @@ pub struct Classification {
     /// captures the binding by move, keyed by the use's span: the closure's
     /// span (see [`UseSite::capture_scope`]).
     pub core_capture_scopes: FxHashMap<SpanKey, SpanKey>,
+    /// Closure literals passed to a method of a statement's receiver chain
+    /// whose value holds no closure (`let n = h.iter().filter(|u| ..).count();`),
+    /// keyed by the literal's span: the statement's offset and length. Every
+    /// call of such a closure is over by the end of the statement
+    /// (B-2026-10-29-43).
+    pub statement_closures: FxHashMap<SpanKey, (usize, usize)>,
 }
 
 /// A basic block in the CFG. Statements are not stored — only the use
@@ -292,6 +298,8 @@ pub struct Cfg {
     /// The binding a `let f = |..| ..` gives each closure literal, keyed by
     /// the literal's span (B-2026-10-29-37).
     pub let_closures: FxHashMap<SpanKey, String>,
+    /// [`Classification::statement_closures`].
+    pub statement_closures: FxHashMap<SpanKey, (usize, usize)>,
 }
 
 impl Cfg {
@@ -358,6 +366,7 @@ pub fn build_cfg_with_classification<'a>(
         closure_creations: builder.closure_creations,
         closure_body_owner: builder.closure_body_owner,
         let_closures: builder.let_closures,
+        statement_closures: classification.statement_closures.clone(),
     }
 }
 

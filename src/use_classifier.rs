@@ -593,7 +593,53 @@ impl<'a> UseClassifier<'a> {
         }
     }
 
+    /// B-2026-10-29-43: record the closure literals handed to a method of a
+    /// function-level statement's receiver chain
+    /// (`let n = h.iter().filter(|u| ..).count();`), when nothing the
+    /// statement leaves behind can hold them: its value (a `let`'s; an
+    /// expression statement's drops at the `;`) and the chain's root receiver
+    /// have types that hold no closure. The methods take the closure as a
+    /// non-escaping parameter or as a value of the adaptor they return, so it
+    /// lives at most as long as the chain's temporaries.
+    fn record_statement_closures(&mut self, stmt: &Stmt) {
+        if !self.closure_span_stack.is_empty() {
+            return;
+        }
+        let value = match &stmt.kind {
+            StmtKind::Let { value, .. } => {
+                if !self.tc.expr_type(value).is_some_and(holds_no_closure) {
+                    return;
+                }
+                value
+            }
+            StmtKind::Expr(e) => e,
+            _ => return,
+        };
+        let mut found = Vec::new();
+        let mut e = value;
+        while let ExprKind::MethodCall { object, args, .. } = &e.kind {
+            for a in args {
+                if matches!(a.value.kind, ExprKind::Closure { .. }) {
+                    found.push(SpanKey::from_span(&a.value.span));
+                }
+            }
+            e = object;
+        }
+        if found.is_empty()
+            || matches!(e.kind, ExprKind::MethodCall { .. })
+            || !self.tc.expr_type(e).is_some_and(holds_no_closure)
+        {
+            return;
+        }
+        for k in found {
+            self.classification
+                .statement_closures
+                .insert(k, (stmt.span.offset, stmt.span.length));
+        }
+    }
+
     fn walk_stmt(&mut self, stmt: &Stmt) {
+        self.record_statement_closures(stmt);
         match &stmt.kind {
             StmtKind::MultiAssign { .. } => unreachable!(
                 "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
@@ -2556,6 +2602,40 @@ fn builds_a_temporary(e: &Expr) -> bool {
         e.kind,
         ExprKind::Tuple(_) | ExprKind::ArrayLiteral(_) | ExprKind::StructLiteral { .. }
     )
+}
+
+/// A type that cannot hold a closure: scalars, strings, and the standard
+/// collections, `Option` and `Result` over such types (B-2026-10-29-43). A
+/// user type, a type parameter or a `dyn` might hold one, so none counts.
+fn holds_no_closure(ty: &Type) -> bool {
+    match ty {
+        Type::Int(_)
+        | Type::UInt(_)
+        | Type::Float(_)
+        | Type::Bool
+        | Type::Char
+        | Type::Str
+        | Type::Unit
+        | Type::Never => true,
+        Type::Ref(t) | Type::MutRef(t) => holds_no_closure(t),
+        Type::Tuple(ts) => ts.iter().all(holds_no_closure),
+        Type::Array { element, .. } | Type::Slice { element, .. } => holds_no_closure(element),
+        Type::Named { name, args } => {
+            matches!(
+                name.as_str(),
+                "String"
+                    | "Vec"
+                    | "VecDeque"
+                    | "Map"
+                    | "Set"
+                    | "SortedMap"
+                    | "SortedSet"
+                    | "Option"
+                    | "Result"
+            ) && args.iter().all(holds_no_closure)
+        }
+        _ => false,
+    }
 }
 
 #[cfg(test)]

@@ -334,6 +334,24 @@ fn let_closure_runs_before(cfg: &Cfg, cb: BlockId, ci: usize, ub: BlockId) -> bo
     true
 }
 
+/// B-2026-10-29-43: whether the body of a closure handed to a method of a
+/// statement's receiver chain, whose value holds no closure, runs only
+/// before the consume at `(cb, ci)`: every call of it is over when the
+/// statement ends, so the consume must lie outside the statement and the
+/// statement must not be reachable from it.
+fn statement_closure_runs_before(cfg: &Cfg, cb: BlockId, c: &UseSite, ub: BlockId) -> bool {
+    let Some(k) = cfg.closure_body_owner.get(&ub) else {
+        return false;
+    };
+    let (Some(&(off, len)), Some(&made)) =
+        (cfg.statement_closures.get(k), cfg.closure_creations.get(k))
+    else {
+        return false;
+    };
+    let inside = off <= c.span.offset && c.span.offset < off + len;
+    !inside && made != cb && !cfg_reaches(cfg, cb, made)
+}
+
 fn first_witness(
     binding: &str,
     uses: &[(BlockId, usize, &UseSite)],
@@ -481,6 +499,16 @@ fn first_witness(
                 && !cfg.closure_body_blocks.contains(cb)
                 && cfg.closure_body_blocks.contains(ub)
                 && let_closure_runs_before(cfg, *cb, *ci, *ub)
+            {
+                continue;
+            }
+            // B-2026-10-29-43: a read in the body of a closure an adaptor
+            // chain consumes within its statement runs before that
+            // statement ends.
+            if c.consume_origin == ConsumeOrigin::Direct
+                && !cfg.closure_body_blocks.contains(cb)
+                && cfg.closure_body_blocks.contains(ub)
+                && statement_closure_runs_before(cfg, *cb, c, *ub)
             {
                 continue;
             }
