@@ -1114,6 +1114,16 @@ fn unify_fn_param(
         (Type::Ref(inner), other) | (other, Type::Ref(inner)) if scalar(other) => {
             unify_types(inner, other, substitutions, const_substitutions)
         }
+        // A function whose parameter borrows may fill a slot that hands the
+        // value over (`|s: ref String|` for `OnceFn(own T) -> U`), as an impl
+        // may take a parameter in a weaker mode than its trait (core-semantics
+        // §4.7); `is_subtype` accepts the pair. Binding through the borrow
+        // solves `T`, and so the slot's return (B-2026-10-29-44).
+        (other, Type::Ref(inner))
+            if !matches!(other, Type::Ref(_) | Type::MutRef(_) | Type::Weak(_)) =>
+        {
+            unify_types(inner, other, substitutions, const_substitutions)
+        }
         _ => false,
     }
 }

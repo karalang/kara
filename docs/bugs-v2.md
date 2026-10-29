@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| false-positive | 64 |
+| false-positive | 65 |
 | diagnostics | 62 |
 | missing-feature | 49 |
 | perf | 39 |
@@ -74,7 +74,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 116 |
+| typecheck | 117 |
 | mir | 58 |
 | mir-llvm | 49 |
 | ownership | 28 |
@@ -130,6 +130,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-29-32 | 2026-10-29 | mir-llvm | medium | On the MIR compiled backend, `String.contains` with a needle of at most 16 bytes calls `memchr` and then `memcmp` at every place the needle's first byte occurs, so on a two-letter haystack (a binary string, where that byte is every other one) it costs 3.2 ns per haystack byte: 9.4x C `strstr` and 7.2x Rust `str::contains`; kata 1016's bench is 8.5x C | — |
 | B-2026-10-29-35 | 2026-10-29 | typecheck | low | A comparison does not give a constructor or tuple operand the other operand's type, so a `ref` to a Copy value inside it is refused: with `n: ref i64` from `for n in v.iter()`, `value == Some(n)`, `Some(n) == value`, `value != Some(n)` and `pair == (n, 5)` fail "cannot compare 'Option[i64]' and 'Option[ref i64]'" (or the tuple form) with no fix-it, though `let w: Option[i64] = Some(n)`, `same(value, Some(n))` and `vec![Some(n)]` into a `Vec[Option[i64]]` all read `n` as an `i64` | — |
 | B-2026-10-29-43 | 2026-10-29 | ownership | medium | `karac check` still refuses moving a binding after an iterator adapter's closure that only reads it (`h.iter().filter(|u| mask[*u % 2]).count(); let m2 = mask;`, "moved inside a loop"); B-2026-10-29-37's fix covers only a `let`-bound closure, and both MIR backends run the program correctly | — |
+| B-2026-10-29-44 | 2026-10-29 | typecheck | medium | A closure whose annotated parameter borrows (`|x: ref String|`), passed to an owning slot (`OnceFn(own T) -> U`: `Option.map`, `Result.map`, `into_iter().map`, a user generic), leaves the call's result type unsolved: "cannot infer type parameter 'U'" | — |
 
 ### Relocated
 
