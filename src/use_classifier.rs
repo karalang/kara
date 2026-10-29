@@ -1988,8 +1988,9 @@ impl<'a> UseClassifier<'a> {
     /// help then advised declaring the parameter `ref`, which it already was.
     ///
     /// Only ever turns a Consume into a Read, and only where the type says
-    /// `ref` / `mut ref` in that position. A `Fn(String)` slot keeps the
-    /// consume default, because there the call really does take ownership.
+    /// `ref` / `mut ref`, or a view (`Str`, `Slice[T]`), in that position.
+    /// A `Fn(String)` slot keeps the consume default, because there the call
+    /// really does take ownership.
     fn fn_typed_callee_modes(
         &self,
         callee: &Expr,
@@ -2035,8 +2036,12 @@ impl<'a> UseClassifier<'a> {
         params
             .iter()
             .map(|p| match p {
-                Type::Ref(_) => OwnershipMode::Ref,
-                Type::MutRef(_) => OwnershipMode::MutRef,
+                // A `Str` or `Slice[T]` slot is a view: a `String` or `Vec`
+                // argument passes borrowed, as to a function's `Str`
+                // parameter (`param_modes_from_signature`, B-2026-10-29-49).
+                Type::Ref(_) | Type::Slice { mutable: false, .. } => OwnershipMode::Ref,
+                Type::Named { name, .. } if name == "StringSlice" => OwnershipMode::Ref,
+                Type::MutRef(_) | Type::Slice { mutable: true, .. } => OwnershipMode::MutRef,
                 _ => OwnershipMode::Own,
             })
             .collect()
