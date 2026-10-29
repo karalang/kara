@@ -766,6 +766,7 @@ fn run_with(
         forgotten: Vec::new(),
         snapshot_bytes: 0,
         sweep_at: SWEEP_FLOOR,
+        bytes_snapshots: Vec::new(),
         calls: 0,
         arenas: 0,
         channels: Vec::new(),
@@ -1043,6 +1044,8 @@ enum Mode {
     Probe,
 }
 
+/// How many `bytes` snapshots [`Interp::bytes_snapshots`] keeps for reuse.
+const BYTES_SNAPSHOTS_KEPT: usize = 4;
 /// The bytes `String.bytes` copies before the first sweep of the copies
 /// nothing refers to ([`Interp::sweep_snapshots`]).
 const SWEEP_FLOOR: usize = 1 << 20;
@@ -1168,6 +1171,11 @@ struct Interp<'a> {
     /// count that starts the next one.
     snapshot_bytes: usize,
     sweep_at: usize,
+    /// The last few `bytes` snapshots, by the text they copy: a string
+    /// asked for its bytes again unchanged gets the same read-only
+    /// snapshot instead of a fresh copy (B-2026-10-29-38). A sweep keeps
+    /// these.
+    bytes_snapshots: Vec<(Box<[u8]>, AllocId)>,
     /// How many [`Interp::call`]s are running: the entry's, and one per
     /// call back into Kāra from a library method or a drop.
     calls: u32,
@@ -11293,9 +11301,25 @@ impl<'a> Interp<'a> {
             }
             "char_count" => Ok(Value::Int(s.chars().count() as i128)),
             "bytes" => {
-                // A read-only `Slice[u8]` over a snapshot of the bytes.
+                // A read-only `Slice[u8]` over a snapshot of the bytes, the
+                // same one as last time when the text is unchanged.
+                let n = s.len() as u64;
+                let slice = |id| Value::Slice {
+                    base: Box::new(Addr {
+                        root: Root::Heap(id),
+                        path: Path::new(),
+                    }),
+                    lo: 0,
+                    len: n,
+                };
+                if let Some((_, id)) = self
+                    .bytes_snapshots
+                    .iter()
+                    .find(|(text, _)| **text == *s.as_bytes())
+                {
+                    return Ok(slice(*id));
+                }
                 let bytes: Vec<Value> = s.bytes().map(|b| Value::Int(b as i128)).collect();
-                let n = bytes.len() as u64;
                 // Between calls back into Kāra, every value is in a frame,
                 // the heap or the interpreter's own tables, so the copies
                 // nothing refers to can go.
@@ -11307,14 +11331,13 @@ impl<'a> Interp<'a> {
                     unreachable!("alloc_box makes a box")
                 };
                 self.snapshots.insert(id);
-                Ok(Value::Slice {
-                    base: Box::new(Addr {
-                        root: Root::Heap(id),
-                        path: Path::new(),
-                    }),
-                    lo: 0,
-                    len: n,
-                })
+                // Only the last few are kept; an older one is swept once
+                // nothing refers to it.
+                if self.bytes_snapshots.len() >= BYTES_SNAPSHOTS_KEPT {
+                    self.bytes_snapshots.remove(0);
+                }
+                self.bytes_snapshots.push((s.as_bytes().into(), id));
+                Ok(slice(id))
             }
             _ => err(format!("call of unknown function {name}")),
         }
@@ -16442,7 +16465,7 @@ impl<'a> Interp<'a> {
             .snapshots
             .iter()
             .copied()
-            .filter(|id| !used.contains(id))
+            .filter(|id| !used.contains(id) && !self.bytes_snapshots.iter().any(|(_, k)| k == id))
             .collect();
         for id in dead {
             self.snapshots.remove(&id);
