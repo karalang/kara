@@ -10403,16 +10403,7 @@ impl<'a> super::TypeChecker<'a> {
                             _ => {}
                         }
                     }
-                    let ret = ret_ty.unwrap_or(Type::Never);
-                    // A return or tail typed only partly (`return None`,
-                    // `Ok(x)`) takes the closure's merged type (B-2026-10-14-59).
-                    if !self.mentions_foreign_param(&ret) && !matches!(ret, Type::Never) {
-                        for id in collected.return_exprs.iter().copied() {
-                            self.retype_partial_node(id, &ret);
-                        }
-                        self.retype_partial_tails(body, &ret);
-                    }
-                    ret
+                    ret_ty.unwrap_or(Type::Never)
                 };
                 // B-2026-07-31-19 — solve the closure's Result/Option shape
                 // from the `?` demands its body raised. A `?` on Err returns
@@ -10426,6 +10417,16 @@ impl<'a> super::TypeChecker<'a> {
                     collected.question_option,
                     &expr.span,
                 );
+                // A return or tail typed only partly (`return None`, `Ok(x)`)
+                // takes the closure's merged type (B-2026-10-14-59), once the
+                // `?` demands have solved its error side: an `if` whose arms
+                // are `Ok(..)` otherwise keeps the unsolved `E` (B-2026-10-28-23).
+                if !self.mentions_foreign_param(&body_ty) && !matches!(body_ty, Type::Never) {
+                    for id in collected.return_exprs.iter().copied() {
+                        self.retype_partial_node(id, &body_ty);
+                    }
+                    self.retype_partial_tails(body, &body_ty);
+                }
                 self.closure_type_with_capture_inference(
                     &expr.span,
                     *capture_mode,
