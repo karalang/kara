@@ -2399,7 +2399,53 @@ impl super::Parser {
         let pattern = self.parse_pattern()?;
         let muts = self.take_pattern_muts(m0);
         self.expect(&Token::In)?;
+        // `for x in mut v` (Rust's `&mut v`): a loop iterates for writing
+        // with `v.iter_mut()`. Say so, offer the rewrite where the iterable
+        // takes a method call as written, and parse on past the `mut`
+        // (B-2026-10-29-16).
+        let mut_span = (self.check(&Token::Mut)
+            && !matches!(self.peek_token_ref_at(1), Token::Ref | Token::LeftBrace))
+        .then(|| self.current_span());
+        if mut_span.is_some() {
+            let v = match self.peek_token_ref_at(1) {
+                Token::Identifier { name, .. } => name.clone(),
+                _ => "v".to_string(),
+            };
+            self.error(&format!(
+                "`mut {v}` after `in` is not Kāra: a `for` loop iterates for writing with \
+                 `{v}.iter_mut()`, which binds each item as a `mut ref`"
+            ));
+            self.advance();
+        }
         let iterable = self.parse_condition_expr()?;
+        if let Some(span) = mut_span {
+            if matches!(
+                iterable.kind,
+                ExprKind::Identifier(_)
+                    | ExprKind::Path { .. }
+                    | ExprKind::FieldAccess { .. }
+                    | ExprKind::MethodCall { .. }
+                    | ExprKind::Call { .. }
+                    | ExprKind::Index { .. }
+            ) {
+                let end = iterable.span.offset + iterable.span.length;
+                self.fix_diffs.insert(
+                    crate::resolver::SpanKey::from_span(&span),
+                    vec![
+                        crate::resolver::TextEdit {
+                            offset: span.offset,
+                            length: iterable.span.offset - span.offset,
+                            replacement: String::new(),
+                        },
+                        crate::resolver::TextEdit {
+                            offset: end,
+                            length: 0,
+                            replacement: ".iter_mut()".to_string(),
+                        },
+                    ],
+                );
+            }
+        }
         let body = self.parse_block()?;
         self.fix_pattern_muts(muts, body.span, true);
         if label.is_some() {

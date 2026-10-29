@@ -138,9 +138,34 @@ impl super::Parser {
                 if !matches!(self.peek_token_ref(), Token::Mut)
                     || matches!(self.peek_token_ref_at(1), Token::Ref) =>
             {
-                let is_mut = self.eat(&Token::Mut);
+                let mut is_mut = self.eat(&Token::Mut);
                 let ref_offset = self.current_span().offset;
                 self.advance();
+                // `ref mut m` is Rust's order for Kāra's `mut ref m`: say so,
+                // offer the swap, and parse on as `mut ref m` (B-2026-10-29-34).
+                if !is_mut
+                    && self.check(&Token::Mut)
+                    && matches!(self.peek_token_ref_at(1), Token::Identifier { .. })
+                {
+                    let mut_span = self.current_span();
+                    let name = match self.peek_token_ref_at(1) {
+                        Token::Identifier { name, .. } => name.clone(),
+                        _ => String::new(),
+                    };
+                    self.error(&format!(
+                        "`ref mut {name}` is Rust syntax -- in Kāra write `mut ref {name}`"
+                    ));
+                    self.fix_edits.insert(
+                        crate::resolver::SpanKey::from_span(&mut_span),
+                        crate::resolver::TextEdit {
+                            offset: ref_offset,
+                            length: mut_span.offset + mut_span.length - ref_offset,
+                            replacement: "mut ref".to_string(),
+                        },
+                    );
+                    self.advance();
+                    is_mut = true;
+                }
                 let name_start = self.current_span();
                 let name = self.expect_identifier()?;
                 let name_span = self.span_from(&start);
