@@ -4965,20 +4965,76 @@ impl<'a> super::TypeChecker<'a> {
     /// operation and is already hardened. That lowering reads the payload type
     /// from `method_unwrap_inner_types`, so this records the entry under the
     /// key the desugared call will present.
+    /// B-2026-10-29-10, B-2026-10-28-32 — `n ?? d` where `n` is a borrowed
+    /// `Option` or `Result` (a `ref` parameter, a bare `for` element, a
+    /// field behind a borrow) yields its payload by value, which moves a
+    /// non-`Copy` payload out of the borrow (core-semantics §3.7). Reported
+    /// at the operand with `.clone()` as the fix, so the check refuses what
+    /// the build would.
+    fn reject_nil_coalesce_out_of_borrow(&mut self, left: &Expr, wrapper: &Type, payload: &Type) {
+        let payload = resolve_type_var_top(payload, &self.env.substitutions);
+        if matches!(payload, Type::TypeVar(_) | Type::Error)
+            || self.is_copy_type_during_check(&payload)
+        {
+            return;
+        }
+        let message = format!(
+            "'??' on a borrowed '{}' would move its '{}' out of the borrow: \
+             take a copy with `.clone()` first (core-semantics §3.7)",
+            type_display(wrapper),
+            type_display(&payload),
+        );
+        let postfix = matches!(
+            left.kind,
+            ExprKind::Identifier(_)
+                | ExprKind::SelfValue
+                | ExprKind::FieldAccess { .. }
+                | ExprKind::TupleIndex { .. }
+                | ExprKind::MethodCall { .. }
+                | ExprKind::Call { .. }
+                | ExprKind::Index { .. }
+        );
+        if postfix && self.env.type_supports_clone(wrapper) {
+            let at = &left.span;
+            let fix = FixIt {
+                span: Span {
+                    offset: at.offset + at.length,
+                    length: 0,
+                    line: at.line,
+                    column: at.column,
+                },
+                replacement: ".clone()".to_string(),
+            };
+            self.type_error_with_fix_it(
+                message,
+                left.span,
+                TypeErrorKind::NilCoalesceNotWrapped,
+                fix,
+            );
+        } else {
+            self.type_error(message, left.span, TypeErrorKind::NilCoalesceNotWrapped);
+        }
+    }
+
     pub(super) fn infer_nil_coalesce(&mut self, left: &Expr, right: &Expr, span: &Span) -> Type {
         let l_ty = resolve_type_var_top(&self.infer_expr(left), &self.env.substitutions);
-        // design.md § `*` and `ref` in expressions: a `ref` of a `Copy`
-        // wrapper is read as the wrapper, an operator operand included, so
-        // `v ?? 0` over `values.iter()` is `*v ?? 0` (B-2026-10-14-40).
-        let l_ty = match &l_ty {
+        // design.md § `*` and `ref` in expressions: a `ref` of a wrapper is
+        // read as the wrapper, an operator operand included, so `v ?? 0`
+        // over `values.iter()` is `*v ?? 0` (B-2026-10-14-40). Its payload
+        // is copied out of the borrow, so it must be `Copy` (checked below).
+        let v2 = self.cli_lint_overrides.strict_core || self.library_methods_from_source;
+        let (l_ty, borrowed) = match &l_ty {
             Type::Ref(inner) | Type::MutRef(inner)
-                if (self.cli_lint_overrides.strict_core || self.library_methods_from_source)
-                    && matches!(&**inner, Type::Named { name, .. } if name == "Option" || name == "Result")
-                    && self.is_copy_type_during_check(inner) =>
+                if v2
+                    && matches!(&**inner, Type::Named { name, .. } if name == "Option" || name == "Result") =>
             {
-                (**inner).clone()
+                ((**inner).clone(), true)
             }
-            _ => l_ty,
+            _ => {
+                let view =
+                    self.cli_lint_overrides.strict_core && self.core_receiver_is_borrowed(left);
+                (l_ty, view)
+            }
         };
 
         // `Option[T]` -> (T, no error payload); `Result[T, E]` -> (T, E).
@@ -5016,6 +5072,10 @@ impl<'a> super::TypeChecker<'a> {
             }
             return Type::Error;
         };
+
+        if borrowed {
+            self.reject_nil_coalesce_out_of_borrow(left, &l_ty, &payload);
+        }
 
         // A string literal is a `Str` where a `Str` is expected (design.md §
         // String literals), and the fallback of an `Option[Str]` is one:
