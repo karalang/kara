@@ -7372,6 +7372,16 @@ impl<'l, 'a> Bx<'l, 'a> {
                 self.assign(dest, Rvalue::Use(op));
                 return Ok(());
             }
+            // A number the slot widens (`let x: f64 = f()` with `f() ->
+            // f32`, design.md §5): the call writes a temporary of its own
+            // type, which is widened into the slot (B-2026-10-29-22).
+            if self.widening(et, dt).is_some() && self.lossless(et, dt) {
+                let l = self.temp(et);
+                self.expr_into(e, Place::local(l))?;
+                let op = self.widen(Operand::Move(Place::local(l)), dt);
+                self.assign(dest, Rvalue::Use(op));
+                return Ok(());
+            }
         }
         // A strong handle or an `Option` of one, made by a call, a
         // constructor or a branch, stored into a `weak` slot: made in a
