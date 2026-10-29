@@ -945,8 +945,8 @@ fn bus_cal(mask: own Vec[bool], hols: ref Vec[i64]) -> BusCal {
     let mut hs: Vec[i64] = hols.iter().filter(|u| mask[weekday_of(*u)]).map(|u| *u).collect();
     hs.sort();
     hs.dedup();
-    // The clone works around B-2026-10-29-37 (a move after a closure
-    // that reads `mask` is refused); `mask: mask` is the natural form.
+    // The clone works around B-2026-10-29-43 (a move after an adapter's
+    // closure that reads `mask` is refused); `mask: mask` is the natural form.
     BusCal { mask: mask.clone(), holidays: hs }
 }
 

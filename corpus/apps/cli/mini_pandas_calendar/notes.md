@@ -166,10 +166,14 @@ then matched pandas except for seven lines, all one bug of the port's
 
 ## Gaps found
 
-- **B-2026-10-29-37** (Thread A): `karac check` refuses moving a binding
-  after a non-escaping closure that only reads it, as "moved inside a
-  loop" in a program with no loop; both MIR backends accept and run it.
-  `bus_cal` clones `mask` until it is fixed.
+- **B-2026-10-29-37** (fixed in kara 39fd8d115b): `karac check` refused
+  moving a binding after a non-escaping closure that only reads it, as
+  "moved inside a loop" in a program with no loop; both MIR backends
+  accepted and ran it. The fix covers a closure bound by `let`.
+- **B-2026-10-29-43** (Thread A, open): the same refusal for a closure
+  passed straight to an iterator adapter (`hols.iter().filter(|u|
+  mask[..])` and then `mask` moved), which is this app's shape. `bus_cal`
+  clones `mask` until it is fixed.
 
 ## What calendar work would need (notes for M4c)
 
