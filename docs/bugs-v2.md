@@ -61,7 +61,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | false-positive | 69 |
 | diagnostics | 63 |
 | missing-feature | 49 |
-| perf | 39 |
+| perf | 40 |
 | soundness | 25 |
 | miscompile | 17 |
 | run-vs-build | 11 |
@@ -86,7 +86,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | effect | 5 |
 | other | 3 |
 | resolver | 3 |
-| autopar | 2 |
+| autopar | 3 |
 | lexer | 1 |
 ## Current state
 
@@ -101,7 +101,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-28-27 | 2026-10-28 | cli | low | The manifest keys design.md §4 promises for import names are not implemented: a dependency's `alias = "..."`, the optional `[package].import = "..."`, and the rule that a hyphen in a package name maps to `_` in the import path (`kara-data` is imported from `kara_data`); kara-data's `import data` depends on all three | — |
 | B-2026-10-28-33 | 2026-10-28 | mir-llvm | medium | The MIR compiled backend runs kata 5's expand-around-center seq bench 1.22x legacy's instructions and 1.45x its cycles, turning a kata that beat Rust (0.95x) into one that trails it (1.17x rustc -O, 1.28x overflow-checked rustc, 1.43x clang -O3) | — |
 | B-2026-10-28-34 | 2026-10-28 | mir-llvm | medium | The MIR compiled backend runs kata 2's add-two-numbers seq bench 1.15x legacy's instructions and 1.17x its cycles, so kara drops from clang -O3 parity (1.01x) to 1.23x C | — |
-| B-2026-10-28-35 | 2026-10-28 | autopar+runtime | medium | Kata 4's auto-par binary executes a constant +207M instructions (+37%) whenever it has two or more workers, and two workers buy no speedup at twice the CPU: 6.9 ms at 18 workers against rayon's 4.1 ms and the legacy karac_par_reduce build's 3.9 ms | — |
 | B-2026-10-28-37 | 2026-10-28 | other | low | Compiling a 40-line kata now takes about 158 ms and 68 MB peak against 92 ms and 24 MB in July, slower and larger than rustc -O on the same program (102 ms, 32 MB), and `karac run` of kata 1's 1.8 ms hash_map program takes 106 ms | — |
 | B-2026-10-28-38 | 2026-10-28 | autopar | low | Auto-par fans out kata 1's hash_map two-sum, a 2 ms program, for no wall-clock gain: the default build runs 31.2M instructions and 15.3M cycles at 223% CPU against 26.8M and 7.0M for its KARAC_AUTO_PAR=0 twin, where the legacy runtime declined it | — |
 | B-2026-10-28-40 | 2026-10-28 | mir-llvm | medium | MIR checks the full upper bound on indexes legacy proved in range from the loop guard, and the extra checks push kata 139's 4-trip inner loop over LLVM's peel budget: 2.03x legacy's instructions, 97.8% of it recovered by removing two bounds checks | — |
@@ -127,6 +126,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-29-47 | 2026-10-29 | ownership | medium | A program's own `struct Mask` is read as the SIMD scalar `Mask` by D5 (`COPY_SCALARS` in src/d5_params.rs lists "Mask" by name), so a bare `m: Mask` parameter is not rewritten to `ref Mask` and every call moves its argument: `count(m)` twice is refused as a use of moved `m`, and the same struct renamed `Bits` checks and runs | — |
 | B-2026-10-29-48 | 2026-10-29 | effect | low | With a program `impl Mul[Col] for f64`, every `f64 * f64` in the program is attributed to that impl's `f64.mul` by the effect checker: a helper doing `*x * k` that the impl calls is reported as a mutual recursion group with `f64.mul`, and the impl's effects flow to every float multiplication | — |
 | B-2026-10-29-49 | 2026-10-29 | ownership | medium | A `let` closure whose parameter is typed `Str` still moves a `String` argument in `karac check` (`let skip = |n: Str| ..; skip(n); n.len()` is "moved here, used again here"); `|n: String|` and `fn skip(n: Str)` check, and `__mir-run` runs all three | — |
+| B-2026-10-29-50 | 2026-10-29 | autopar | low | An auto-par task's loop takes its run's bounds as plain captures, so LLVM knows nothing of the counter's range: kata 4's `k % R` becomes a signed 64-bit magic division in the task (about 10 instructions) where the in-order loop, knowing 0 <= k < 10M, uses a 32-bit unsigned one (about 5) | — |
 
 ### Relocated
 
@@ -369,6 +369,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-28-30 | mir-llvm | medium | `s = s + (n - x).to_string()` copies `s` on every add, so building a string in a loop is quadratic: the concat pass (src/mir/concat.rs) gives up when… | f59be6dac3 |
 | B-2026-10-28-31 | parser+cli | low | `if c { a = x } else { b = y }` (an assignment ending each arm, no `;`) gets a correct `;` fix-it for the first arm only, and `karac fix` refuses to… | d9df626fe4 |
 | B-2026-10-28-32 | typecheck | medium | `prefix ?? default` on a bare (borrowed) `Option[String]` parameter is refused as "'??' requires an `Option` or a `Result` on the left, found 'ref Op… | 03e92379b1 |
+| B-2026-10-28-35 | autopar+runtime | medium | Kata 4's auto-par binary executes a constant +207M instructions (+37%) whenever it has two or more workers, and two workers buy no speedup at twice t… | 5b6aab2a3c |
 | B-2026-10-28-36 | mir-llvm+runtime | medium | Every compute-only binary is about 250 KB larger on the MIR backend: a seq kata binary is 337 KB at g04628b0eb against 85 KB from legacy, and the aut… | 1f4c30c7de |
 | B-2026-10-28-39 | mir-llvm | medium | The MIR backend never ported legacy's partial-unroll hint (`llvm.loop.unroll.count 4` on pure-scalar counted `while` loops, B-2026-07-08-24), so kata… | 721602d810 |
 | B-2026-10-29-1 | parser | medium | A function-typed parameter in Rust's spelling, `f: impl Fn(i64) -> i64` or `f: fn(i64) -> i64`, gets only a bare parse error (`Expected RightParen, f… | 38876d470b |
