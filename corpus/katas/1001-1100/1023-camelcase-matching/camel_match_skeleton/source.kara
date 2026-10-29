@@ -11,8 +11,8 @@ fn camel_match(queries: Vec[String], pattern: Str) -> Vec[bool] {
     let capitals: String = pattern.chars().filter(|c| c.is_ascii_uppercase()).collect();
     let mut answers: Vec[bool] = Vec.new();
     for query in queries.iter() {
-        // bound with its type: compared directly, `collect()` is refused
-        // in the MIR builder though `karac check` passes it (B-2026-10-29-36)
+        // bound with its type: compared directly, nothing fixes what
+        // `collect()` builds, and `karac check` refuses it (B-2026-10-29-36)
         let caps: String = query.chars().filter(|c| c.is_ascii_uppercase()).collect();
         let same_capitals = caps == capitals;
         let mut rest = query.chars();
