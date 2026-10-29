@@ -2276,9 +2276,14 @@ impl<'a> super::TypeChecker<'a> {
                         // B-2026-10-14-68: and a tuple holding a string
                         // literal where the slot has a `Str` view:
                         // `Some(("a", "b"))` into `Option[(Str, Str)]`.
+                        // B-2026-10-28-29: and, on the MIR pipeline, a tuple
+                        // holding a bare `collect()`, whose target only the
+                        // slot names: `Ok((n, it.collect()))`.
                         let payload_needs_slot =
                             Self::literal_needs_array_slot(&args[0].value, &slot)
-                                || tuple_literal_has_str_slot(&args[0].value, &slot);
+                                || tuple_literal_has_str_slot(&args[0].value, &slot)
+                                || (self.library_methods_from_source
+                                    && tuple_literal_has_bare_collect(&args[0].value));
                         if payload_is_inferred_ctor
                             || payload_is_unsuffixed_int
                             || payload_needs_slot
@@ -2394,7 +2399,7 @@ impl<'a> super::TypeChecker<'a> {
                             ))
                         // B-2026-10-14-19 — the library's `collect()` is
                         // generic in its target, which only the slot names.
-                        || (library && is_bare_collect(e))
+                        || (library && (is_bare_collect(e) || tuple_literal_has_bare_collect(e)))
                         // B-2026-10-23-7 — a list literal follows a concrete
                         // collection slot, as at a `let`: `vec![1, 2]` for a
                         // `Vec[u8]` element builds a `Vec[u8]`. A collection
@@ -11461,6 +11466,17 @@ fn tuple_literal_has_str_slot(e: &Expr, slot: &Type) -> bool {
                 _ => tuple_literal_has_str_slot(e, s),
             })
         }
+        _ => false,
+    }
+}
+
+/// Whether `e` is a tuple literal with a bare `collect()` among its
+/// elements, at any depth of nested tuple literals.
+fn tuple_literal_has_bare_collect(e: &Expr) -> bool {
+    match &e.kind {
+        ExprKind::Tuple(items) => items
+            .iter()
+            .any(|e| is_bare_collect(e) || tuple_literal_has_bare_collect(e)),
         _ => false,
     }
 }
