@@ -1,0 +1,77 @@
+// LeetCode #1021: Remove Outermost Parentheses -- bench
+//
+// The ★ arm (../remove_outer.kara) on 100 random valid strings of 1 to
+// 50,000 pairs (up to LeetCode's 10^5 characters), opening with
+// probability 2/8 to 6/8, built once and each answered 30 times, folding
+// each answer's length and middle byte into a sum and a checksum. See
+// ../README.md § Benchmarks.
+
+fn remove_outer_parentheses(s: Str) -> String {
+    let mut out = String.new();
+    let mut depth = 0;
+    for c in s.chars() {
+        if c == '(' {
+            if depth > 0 {
+                out.push(c);
+            }
+            depth += 1;
+        } else {
+            depth -= 1;
+            if depth > 0 {
+                out.push(c);
+            }
+        }
+    }
+    out
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let count = 100;
+    let rounds = 30;
+    let mut seed = 1021;
+    let mut strings: Vec[String] = Vec.new();
+    let mut chars = 0;
+    for _ in 0..count {
+        let pairs = (next_random(mut seed) * 32768 + next_random(mut seed)) % 50000 + 1;
+        let open = 2 + next_random(mut seed) % 5;
+        let mut s = String.new();
+        let mut left = pairs;
+        let mut depth = 0;
+        while left > 0 or depth > 0 {
+            let opens = if depth == 0 {
+                true
+            } else if left == 0 {
+                false
+            } else {
+                next_random(mut seed) % 8 < open
+            };
+            if opens {
+                s.push('(');
+                left -= 1;
+                depth += 1;
+            } else {
+                s.push(')');
+                depth -= 1;
+            }
+        }
+        chars += s.len();
+        strings.push(s);
+    }
+    let mut kept = 0;
+    let mut check = 0;
+    for _ in 0..rounds {
+        for s in strings.iter() {
+            let answer = remove_outer_parentheses(s);
+            let n = answer.len();
+            let middle = if n > 0 { answer.bytes()[n / 2] as i64 } else { 0 };
+            kept += n;
+            check = (check * 31 + n * 2 + middle) % 1000000007;
+        }
+    }
+    println(f"{count} strings, {chars} characters, {rounds} rounds: {kept} kept, checksum {check}");
+}

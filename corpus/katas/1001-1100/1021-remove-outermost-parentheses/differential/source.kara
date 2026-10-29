@@ -1,0 +1,288 @@
+// LeetCode #1021: Remove Outermost Parentheses -- differential
+//
+// The five arms, copied, against the statement read literally and five
+// more properties. See README.md § Differential.
+
+fn d_star(s: Str) -> String {
+    let mut out = String.new();
+    let mut depth = 0;
+    for c in s.chars() {
+        if c == '(' {
+            if depth > 0 {
+                out.push(c);
+            }
+            depth += 1;
+        } else {
+            depth -= 1;
+            if depth > 0 {
+                out.push(c);
+            }
+        }
+    }
+    out
+}
+
+fn d_split(s: Str) -> String {
+    let mut out = String.new();
+    let mut depth = 0;
+    let mut start = 0;
+    let bytes = s.bytes();
+    for i in 0..s.len() {
+        if bytes[i] == b'(' {
+            depth += 1;
+        } else {
+            depth -= 1;
+            if depth == 0 {
+                out.push_str(s[start + 1..i]);
+                start = i + 1;
+            }
+        }
+    }
+    out
+}
+
+fn d_match(s: Str) -> String {
+    let cs: Vec[char] = s.chars().collect();
+    let n = cs.len();
+    let mut partner: Vec[i64] = Vec.filled(n, 0);
+    let mut open: Vec[i64] = Vec.new();
+    for i in 0..n {
+        if cs[i] == '(' {
+            open.push(i);
+        } else {
+            let j = open.pop().unwrap();
+            partner[j] = i;
+            partner[i] = j;
+        }
+    }
+    let mut out = String.new();
+    let mut i = 0;
+    while i < n {
+        let j = partner[i];
+        for k in i + 1..j {
+            out.push(cs[k]);
+        }
+        i = j + 1;
+    }
+    out
+}
+
+// parse the group opening at `i`, at nesting `depth`; return where it ends
+fn group(cs: ref Vec[char], i: i64, depth: i64, out: mut ref String) -> i64 {
+    if depth > 0 {
+        out.push('(');
+    }
+    let mut k = i + 1;
+    while cs[k] == '(' {
+        k = group(cs, k, depth + 1, mut out);
+    }
+    if depth > 0 {
+        out.push(')');
+    }
+    k + 1
+}
+
+fn d_recursive(s: Str) -> String {
+    let cs: Vec[char] = s.chars().collect();
+    let mut out = String.new();
+    let mut i = 0;
+    while i < cs.len() {
+        i = group(cs, i, 0, mut out);
+    }
+    out
+}
+
+fn d_iter(s: Str) -> String {
+    let mut inside: Vec[i64] = Vec.new();
+    let mut depth = 0;
+    for c in s.chars() {
+        if c == '(' {
+            depth += 1;
+            inside.push(depth);
+        } else {
+            inside.push(depth);
+            depth -= 1;
+        }
+    }
+    s.chars().zip(inside.iter()).filter(|(_, d)| d > 1).map(|(c, _)| c).collect()
+}
+
+fn arms(s: Str) -> Vec[String] {
+    vec![d_star(s), d_split(s), d_match(s), d_recursive(s), d_iter(s)]
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// whether the brackets from `a` up to `b` are a valid string
+fn valid(cs: ref Vec[char], a: i64, b: i64) -> bool {
+    let mut depth = 0;
+    for k in a..b {
+        depth += if cs[k] == '(' { 1 } else { -1 };
+        if depth < 0 {
+            return false;
+        }
+    }
+    depth == 0
+}
+
+// the statement read literally: the shortest valid prefix is the first
+// primitive; drop its first and last bracket and go on with the rest
+fn literal(s: Str) -> String {
+    let cs: Vec[char] = s.chars().collect();
+    let mut out = String.new();
+    let mut start = 0;
+    while start < cs.len() {
+        let mut end = start + 2;
+        while not valid(cs, start, end) {
+            end += 2;
+        }
+        for k in start + 1..end - 1 {
+            out.push(cs[k]);
+        }
+        start = end;
+    }
+    out
+}
+
+// the string read right to left with each bracket turned round
+fn mirrored(s: Str) -> String {
+    let mut out = String.new();
+    for c in s.chars().rev() {
+        out.push(if c == '(' { ')' } else { '(' });
+    }
+    out
+}
+
+// a random valid string of `pairs` pairs: open with probability `open` / 8
+// while both an open and a close are allowed
+fn random_valid(seed: mut ref i64, pairs: i64, open: i64) -> String {
+    let mut s = String.new();
+    let mut left = pairs;
+    let mut depth = 0;
+    while left > 0 or depth > 0 {
+        let opens = if depth == 0 {
+            true
+        } else if left == 0 {
+            false
+        } else {
+            next_random(mut seed) % 8 < open
+        };
+        if opens {
+            s.push('(');
+            left -= 1;
+            depth += 1;
+        } else {
+            s.push(')');
+            depth -= 1;
+        }
+    }
+    s
+}
+
+fn main() {
+    let mut failures: Vec[i64] = Vec.filled(6, 0);
+    let mut checks = 0;
+    let mut check = 0;
+    let mut seed = 10211;
+    // every valid string of 1 to 8 pairs (2055), then 1000 random of 9 to
+    // 40 pairs, 100 of 41 to 300 and 5 of 1000, opening with probability
+    // 2/8 to 7/8
+    let mut todo: Vec[String] = Vec.new();
+    for pairs in 1..9 {
+        for code in 0..(1 << (2 * pairs)) {
+            let mut s = String.new();
+            for k in 0..2 * pairs {
+                s.push(if (code >> k) & 1 == 1 { '(' } else { ')' });
+            }
+            let cs: Vec[char] = s.chars().collect();
+            if valid(cs, 0, cs.len()) {
+                todo.push(s);
+            }
+        }
+    }
+    for t in 0..1105 {
+        let pairs = if t < 1000 {
+            9 + next_random(mut seed) % 32
+        } else if t < 1100 {
+            41 + next_random(mut seed) % 260
+        } else {
+            1000
+        };
+        let open = 2 + next_random(mut seed) % 6;
+        todo.push(random_valid(mut seed, pairs, open));
+    }
+    let mut got: Vec[Vec[String]] = Vec.new();
+    for s in todo.iter() {
+        got.push(arms(s));
+    }
+    for t in 0..todo.len() {
+        let s = todo[t].clone();
+        let next = todo[(t + 1) % todo.len()].clone();
+        check = (check * 31 + got[t][0].len()) % 1000000007;
+        let mut primitives = 0;
+        let mut depth = 0;
+        for c in s.chars() {
+            depth += if c == '(' { 1 } else { -1 };
+            if depth == 0 {
+                primitives += 1;
+            }
+        }
+        let joined = arms(s + next);
+        let wrapped = arms("(" + s + ")");
+        let twice = arms("((" + s + "))");
+        let mirror = arms(mirrored(s));
+        let exact = literal(s);
+        for a in 0..5 {
+            let c = got[t][a].clone();
+            // P1: the statement
+            checks += 1;
+            if c != exact {
+                failures[0] += 1;
+            }
+            // P2: valid, and two brackets shorter for each primitive
+            checks += 1;
+            let cs: Vec[char] = c.chars().collect();
+            if not valid(cs, 0, cs.len()) or c.len() != s.len() - 2 * primitives {
+                failures[1] += 1;
+            }
+            // P3: two strings one after the other answer one after the other
+            checks += 1;
+            if joined[a] != c + got[(t + 1) % todo.len()][a] {
+                failures[2] += 1;
+            }
+            // P4: inside one more pair the answer is the string itself, and
+            // inside two it is the string in one pair
+            checks += 1;
+            if wrapped[a] != s or twice[a] != "(" + s + ")" {
+                failures[3] += 1;
+            }
+            // P5: the mirror image of the string answers the mirror image
+            checks += 1;
+            if mirror[a] != mirrored(c) {
+                failures[4] += 1;
+            }
+            // P6: each arm agrees with at least two of the other four
+            checks += 1;
+            let mut agree = 0;
+            for o in 0..5 {
+                if o != a and got[t][o] == c {
+                    agree += 1;
+                }
+            }
+            if agree < 2 {
+                failures[5] += 1;
+            }
+        }
+    }
+    let mut total = 0;
+    for p in 0..6 {
+        if failures[p] > 0 {
+            println(f"P{p + 1}: {failures[p]} failures");
+        }
+        total += failures[p];
+    }
+    println(f"{todo.len()} strings: checksum {check}, {checks} checks over 5 arms: {total} failures");
+}

@@ -1,0 +1,110 @@
+// LeetCode #1021: Remove Outermost Parentheses -- matching brackets
+//
+// Pair every bracket with its match, using a stack of open brackets, then
+// jump from primitive to primitive: one starting at `i` ends at its
+// match `j`, so keep `i + 1` to `j - 1` and go on from `j + 1`. O(n).
+
+fn remove_outer_parentheses(s: Str) -> String {
+    let cs: Vec[char] = s.chars().collect();
+    let n = cs.len();
+    let mut partner: Vec[i64] = Vec.filled(n, 0);
+    let mut open: Vec[i64] = Vec.new();
+    for i in 0..n {
+        if cs[i] == '(' {
+            open.push(i);
+        } else {
+            let j = open.pop().unwrap();
+            partner[j] = i;
+            partner[i] = j;
+        }
+    }
+    let mut out = String.new();
+    let mut i = 0;
+    while i < n {
+        let j = partner[i];
+        for k in i + 1..j {
+            out.push(cs[k]);
+        }
+        i = j + 1;
+    }
+    out
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// a random valid string of `pairs` pairs: open with probability `open` / 8
+// while both an open and a close are allowed
+fn random_valid(seed: mut ref i64, pairs: i64, open: i64) -> String {
+    let mut s = String.new();
+    let mut left = pairs;
+    let mut depth = 0;
+    while left > 0 or depth > 0 {
+        let opens = if depth == 0 {
+            true
+        } else if left == 0 {
+            false
+        } else {
+            next_random(mut seed) % 8 < open
+        };
+        if opens {
+            s.push('(');
+            left -= 1;
+            depth += 1;
+        } else {
+            s.push(')');
+            depth -= 1;
+        }
+    }
+    s
+}
+
+fn checksum(check: i64, s: Str) -> i64 {
+    let mut h = check;
+    for c in s.chars() {
+        h = (h * 31 + if c == '(' { 1 } else { 2 }) % 1000000007;
+    }
+    h
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let examples: Vec[String] = vec!["(()())(())", "(()())(())(()(()))", "()()", "()", "(())", "((()))", "(()(()))()(((())))", "()(())()((()))"];
+    for s in examples.iter() {
+        println(f"\"{s}\" -> \"{remove_outer_parentheses(s)}\"");
+    }
+    // random strings: the characters kept, the primitives removed and a
+    // checksum of the answers
+    let mut seed = 1021;
+    let groups: Vec[(i64, i64, i64)] = vec![(3000, 5, 4), (1000, 20, 4), (300, 100, 2), (300, 100, 6), (30, 2000, 4), (30, 2000, 7)];
+    for (count, pairs, open) in groups.iter() {
+        let mut kept = 0;
+        let mut primitives = 0;
+        let mut check = 0;
+        for _ in 0..count {
+            let s = random_valid(mut seed, pairs, open);
+            let answer = remove_outer_parentheses(s);
+            kept += answer.len();
+            primitives += (s.len() - answer.len()) / 2;
+            check = checksum(check, answer);
+        }
+        println(f"{count} random strings of {pairs} pairs ({open}/8 open): {kept} kept, {primitives} primitives, checksum {check}");
+    }
+    // one primitive nested 3000 deep, and 3000 primitives side by side
+    let mut deep = String.new();
+    let mut flat = String.new();
+    for _ in 0..3000 {
+        deep.push('(');
+        flat.push_str("()");
+    }
+    for _ in 0..3000 {
+        deep.push(')');
+    }
+    let d = remove_outer_parentheses(deep);
+    let f = remove_outer_parentheses(flat);
+    println(f"nested 3000 deep: {d.len()} kept, checksum {checksum(0, d)}; 3000 side by side: {f.len()} kept");
+}

@@ -1,0 +1,15 @@
+"(()())(())" -> "()()()"
+"(()())(())(()(()))" -> "()()()()(())"
+"()()" -> ""
+"()" -> ""
+"(())" -> "()"
+"((()))" -> "(())"
+"(()(()))()(((())))" -> "()(())((()))"
+"()(())()((()))" -> "()(())"
+3000 random strings of 5 pairs (4/8 open): 15160 kept, 7420 primitives, checksum 195225626
+1000 random strings of 20 pairs (4/8 open): 29794 kept, 5103 primitives, checksum 755557458
+300 random strings of 100 pairs (2/8 open): 19516 kept, 20242 primitives, checksum 337831548
+300 random strings of 100 pairs (6/8 open): 59122 kept, 439 primitives, checksum 615270481
+30 random strings of 2000 pairs (4/8 open): 117142 kept, 1429 primitives, checksum 431109354
+30 random strings of 2000 pairs (7/8 open): 119932 kept, 34 primitives, checksum 709078674
+nested 3000 deep: 5998 kept, checksum 418060234; 3000 side by side: 0 kept
