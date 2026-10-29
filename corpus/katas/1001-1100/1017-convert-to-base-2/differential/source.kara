@@ -1,0 +1,300 @@
+// LeetCode #1017: Convert to Base -2 -- differential
+//
+// The five arms, copied, against the base -2 value of what they print and
+// five more properties. See README.md § Differential.
+
+fn d_star(n: i64) -> String {
+    if n == 0 {
+        return "0".to_string();
+    }
+    let mut rest = n;
+    let mut digits = String.new();
+    while rest != 0 {
+        let bit = rest & 1;
+        digits.push(if bit == 1 { '1' } else { '0' });
+        rest = (rest - bit) / -2;
+    }
+    digits.chars().rev().collect()
+}
+
+fn d_mask(n: i64) -> String {
+    let mask = 0x2AAA_AAAA_AAAA_AAAA;
+    f"{(n + mask) ^ mask:b}"
+}
+
+fn d_digits(n: i64) -> String {
+    let mut digits: Vec[i64] = Vec.new();
+    let mut rest = n;
+    let mut place = 0;
+    while rest > 0 {
+        let bit = rest % 2;
+        digits.push(if place % 2 == 1 { -bit } else { bit });
+        rest /= 2;
+        place += 1;
+    }
+    let mut i = 0;
+    while i < digits.len() {
+        let d = digits[i];
+        let r = d & 1;
+        if d != r {
+            if i + 1 == digits.len() {
+                digits.push(0);
+            }
+            digits[i] = r;
+            digits[i + 1] += (d - r) / -2;
+        }
+        i += 1;
+    }
+    while digits.len() > 1 and digits[digits.len() - 1] == 0 {
+        digits.pop();
+    }
+    if digits.is_empty() {
+        return "0".to_string();
+    }
+    let mut form = String.new();
+    let mut k = digits.len();
+    while k > 0 {
+        k -= 1;
+        form.push(if digits[k] == 1 { '1' } else { '0' });
+    }
+    form
+}
+
+fn d_greedy(n: i64) -> String {
+    // place values (-2)^i and, for each i, the range the places below reach
+    let mut value: Vec[i64] = vec![1];
+    let mut low: Vec[i64] = vec![0];
+    let mut high: Vec[i64] = vec![0];
+    while high[high.len() - 1] < n {
+        let i = value.len() - 1;
+        let v = value[i];
+        low.push(low[i] + v.min(0));
+        high.push(high[i] + v.max(0));
+        value.push(v * -2);
+    }
+    let mut form = String.new();
+    let mut left = n;
+    let mut i = value.len() - 1;
+    let mut started = false;
+    loop {
+        let set = left < low[i] or left > high[i];
+        if set {
+            left -= value[i];
+        }
+        if set or started or i == 0 {
+            form.push(if set { '1' } else { '0' });
+            started = true;
+        }
+        if i == 0 {
+            break;
+        }
+        i -= 1;
+    }
+    form
+}
+
+// a + b in base -2, both lowest digit first
+fn add_neg2(a: ref Vec[i64], b: ref Vec[i64]) -> Vec[i64] {
+    let mut sum: Vec[i64] = Vec.new();
+    let mut carry = 0;
+    let mut i = 0;
+    while i < a.len() or i < b.len() or carry != 0 {
+        let mut column = carry;
+        if i < a.len() {
+            column += a[i];
+        }
+        if i < b.len() {
+            column += b[i];
+        }
+        if column >= 2 {
+            sum.push(column - 2);
+            carry = -1;
+        } else if column == -1 {
+            sum.push(1);
+            carry = 1;
+        } else {
+            sum.push(column);
+            carry = 0;
+        }
+        i += 1;
+    }
+    while sum.len() > 0 and sum[sum.len() - 1] == 0 {
+        sum.pop();
+    }
+    sum
+}
+
+fn d_powers(n: i64) -> String {
+    let mut total: Vec[i64] = Vec.new();
+    let mut rest = n;
+    let mut k = 0;
+    while rest > 0 {
+        if rest % 2 == 1 {
+            let mut power: Vec[i64] = Vec.filled(k, 0);
+            power.push(1);
+            if k % 2 == 1 {
+                power.push(1);
+            }
+            total = add_neg2(total, power);
+        }
+        rest /= 2;
+        k += 1;
+    }
+    if total.is_empty() {
+        return "0".to_string();
+    }
+    let mut form = String.new();
+    for d in total.iter().rev() {
+        form.push(if d == 1 { '1' } else { '0' });
+    }
+    form
+}
+
+fn arms(n: i64) -> Vec[String] {
+    vec![d_star(n), d_mask(n), d_digits(n), d_greedy(n), d_powers(n)]
+}
+
+// the value a string of base -2 digits spells, or none when it holds
+// anything but digits, or a leading zero
+fn value_of(form: Str) -> Option[i64] {
+    let bytes = form.bytes();
+    if bytes.len() == 0 or (bytes.len() > 1 and bytes[0] == b'0') {
+        return None;
+    }
+    let mut total = 0;
+    let mut place = 1;
+    let mut k = bytes.len();
+    while k > 0 {
+        k -= 1;
+        if bytes[k] == b'1' {
+            total += place;
+        } else if bytes[k] != b'0' {
+            return None;
+        }
+        place *= -2;
+    }
+    Some(total)
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // every string of 1 to 11 digits with no leading zero, by the value it
+    // spells (-682 to 1365); each value must come from one string only
+    let offset = 682;
+    let mut table: Vec[String] = Vec.filled(2048, "".to_string());
+    let mut clashes = 0;
+    for len in 1..12 {
+        let first = if len == 1 { 0 } else { 1 << (len - 1) };
+        for bits in first..(1 << len) {
+            let form = f"{bits:b}";
+            let v = value_of(form).unwrap();
+            if table[v + offset] != "" {
+                clashes += 1;
+            }
+            table[v + offset] = form;
+        }
+    }
+    let mut ns: Vec[i64] = Vec.new();
+    for n in 0..1366 {
+        ns.push(n);
+    }
+    // the largest value of 1, 3, 5, ... digits, (4^k - 1) / 3, and its
+    // neighbours; powers of two and one below
+    let mut top = 1;
+    while top < 1000000000 {
+        ns.push(top);
+        ns.push(top + 1);
+        top = top * 4 + 1;
+    }
+    let mut power = 1;
+    while power <= 1000000000 {
+        ns.push(power);
+        ns.push(power - 1);
+        power *= 2;
+    }
+    let mut seed = 10171;
+    for _ in 0..6000 {
+        ns.push((next_random(mut seed) * 32768 + next_random(mut seed)) % 1000000001);
+    }
+    let mut failures: Vec[i64] = Vec.filled(6, 0);
+    let mut checks = 0;
+    let mut check = 0;
+    for n in ns.iter() {
+        let got = arms(n);
+        let mut star = 0;
+        for b in got[0].bytes().iter() {
+            star = star * 2 + if b == b'1' { 1 } else { 0 };
+        }
+        check = (check * 7 + star % 1000000007 + got[0].len()) % 1000000007;
+        // the shortest odd length whose largest value reaches n
+        let mut length = 1;
+        let mut largest = 1;
+        while largest < n {
+            largest = largest * 4 + 1;
+            length += 2;
+        }
+        let (four, four_one) = if n >= 1 { (arms(4 * n), arms(4 * n + 1)) } else { (got.clone(), got.clone()) };
+        for a in 0..5 {
+            let form = got[a].clone();
+            let value = value_of(form);
+            // P1: the form spells n in base -2 (`*n`: a comparison does not
+            // yet read the `ref` inside `Some(n)`, kara B-2026-10-29-35)
+            checks += 1;
+            if value != Some(*n) {
+                failures[0] += 1;
+            }
+            // P2: digits only, no leading zero, and "0" for 0
+            checks += 1;
+            if value.is_none() or (n == 0) != (form == "0") {
+                failures[1] += 1;
+            }
+            // P3: the one string of at most 11 digits that spells n
+            if n <= 1365 {
+                checks += 1;
+                if form != table[n + offset] {
+                    failures[2] += 1;
+                }
+            }
+            // P4: a positive n has the shortest odd length that reaches it
+            if n >= 1 {
+                checks += 1;
+                if form.len() != length {
+                    failures[3] += 1;
+                }
+            }
+            // P5: 4n and 4n + 1 add "00" and "01"
+            if n >= 1 {
+                checks += 1;
+                if four[a] != f"{form}00" or four_one[a] != f"{form}01" {
+                    failures[4] += 1;
+                }
+            }
+            // P6: each arm agrees with at least two of the other four
+            checks += 1;
+            let mut agree = 0;
+            for o in 0..5 {
+                if o != a and got[o] == form {
+                    agree += 1;
+                }
+            }
+            if agree < 2 {
+                failures[5] += 1;
+            }
+        }
+    }
+    let mut total = clashes;
+    for p in 0..6 {
+        if failures[p] > 0 {
+            println(f"P{p + 1}: {failures[p]} failures");
+        }
+        total += failures[p];
+    }
+    if clashes > 0 {
+        println(f"{clashes} values spelled twice");
+    }
+    println(f"{ns.len()} values: checksum {check}, {checks} checks over 5 arms: {total} failures");
+}

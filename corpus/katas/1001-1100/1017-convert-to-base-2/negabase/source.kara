@@ -1,0 +1,68 @@
+// LeetCode #1017: Convert to Base -2 -- division by -2
+//
+// The last digit of n in base -2 is n's parity, as in base 2. Taking it
+// off leaves n - bit, a multiple of -2, and dividing by -2 gives the
+// number the remaining digits spell. The digits come out last first.
+// O(log n).
+
+fn base_neg2(n: i64) -> String {
+    if n == 0 {
+        return "0".to_string();
+    }
+    let mut rest = n;
+    let mut digits = String.new();
+    while rest != 0 {
+        let bit = rest & 1;
+        digits.push(if bit == 1 { '1' } else { '0' });
+        rest = (rest - bit) / -2;
+    }
+    digits.chars().rev().collect()
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// folds a string's digits into a running checksum
+fn fold(check: i64, digits: Str) -> i64 {
+    let mut c = check;
+    for b in digits.bytes().iter() {
+        c = (c * 3 + if b == b'1' { 2 } else { 1 }) % 1000000007;
+    }
+    (c * 3) % 1000000007
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let examples = [2, 3, 4, 0, 1, 5, 6, 7, 10, 21, 42, 100, 1365, 1366, 1000000, 999999999, 1000000000];
+    for n in examples.iter() {
+        println(f"n = {n} -> {base_neg2(n)}");
+    }
+    // every n up to 20000, then 2000 random n up to 10^9: the digits and
+    // ones in all, the longest form and a checksum of the forms in order
+    let mut seed = 1017;
+    for round in 0..2 {
+        let count = if round == 0 { 20001 } else { 2000 };
+        let mut digits = 0;
+        let mut ones = 0;
+        let mut longest = 0;
+        let mut check = 0;
+        for i in 0..count {
+            let n = if round == 0 { i } else { (next_random(mut seed) * 32768 + next_random(mut seed)) % 1000000001 };
+            let form = base_neg2(n);
+            digits += form.len();
+            for b in form.bytes().iter() {
+                if b == b'1' {
+                    ones += 1;
+                }
+            }
+            longest = longest.max(form.len());
+            check = fold(check, form);
+        }
+        let label = if round == 0 { "n = 0..20000" } else { "2000 random n up to 10^9" };
+        println(f"{label}: {digits} digits, {ones} ones, longest {longest}, checksum {check}");
+    }
+}

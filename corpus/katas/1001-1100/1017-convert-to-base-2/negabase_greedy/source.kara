@@ -1,0 +1,88 @@
+// LeetCode #1017: Convert to Base -2 -- place values from the top
+//
+// The places below i can add up to anything from low[i] (every negative
+// place set) to high[i] (every positive one). Going down from the top
+// place, set place i exactly when what is left could not be reached from
+// the places below without it; the value left over must then lie in the
+// range below, so each choice is forced. O(log n).
+
+fn base_neg2(n: i64) -> String {
+    // place values (-2)^i and, for each i, the range the places below reach
+    let mut value: Vec[i64] = vec![1];
+    let mut low: Vec[i64] = vec![0];
+    let mut high: Vec[i64] = vec![0];
+    while high[high.len() - 1] < n {
+        let i = value.len() - 1;
+        let v = value[i];
+        low.push(low[i] + v.min(0));
+        high.push(high[i] + v.max(0));
+        value.push(v * -2);
+    }
+    let mut form = String.new();
+    let mut left = n;
+    let mut i = value.len() - 1;
+    let mut started = false;
+    loop {
+        let set = left < low[i] or left > high[i];
+        if set {
+            left -= value[i];
+        }
+        if set or started or i == 0 {
+            form.push(if set { '1' } else { '0' });
+            started = true;
+        }
+        if i == 0 {
+            break;
+        }
+        i -= 1;
+    }
+    form
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// folds a string's digits into a running checksum
+fn fold(check: i64, digits: Str) -> i64 {
+    let mut c = check;
+    for b in digits.bytes().iter() {
+        c = (c * 3 + if b == b'1' { 2 } else { 1 }) % 1000000007;
+    }
+    (c * 3) % 1000000007
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let examples = [2, 3, 4, 0, 1, 5, 6, 7, 10, 21, 42, 100, 1365, 1366, 1000000, 999999999, 1000000000];
+    for n in examples.iter() {
+        println(f"n = {n} -> {base_neg2(n)}");
+    }
+    // every n up to 20000, then 2000 random n up to 10^9: the digits and
+    // ones in all, the longest form and a checksum of the forms in order
+    let mut seed = 1017;
+    for round in 0..2 {
+        let count = if round == 0 { 20001 } else { 2000 };
+        let mut digits = 0;
+        let mut ones = 0;
+        let mut longest = 0;
+        let mut check = 0;
+        for i in 0..count {
+            let n = if round == 0 { i } else { (next_random(mut seed) * 32768 + next_random(mut seed)) % 1000000001 };
+            let form = base_neg2(n);
+            digits += form.len();
+            for b in form.bytes().iter() {
+                if b == b'1' {
+                    ones += 1;
+                }
+            }
+            longest = longest.max(form.len());
+            check = fold(check, form);
+        }
+        let label = if round == 0 { "n = 0..20000" } else { "2000 random n up to 10^9" };
+        println(f"{label}: {digits} digits, {ones} ones, longest {longest}, checksum {check}");
+    }
+}
