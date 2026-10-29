@@ -3544,7 +3544,16 @@ impl<'a> super::TypeChecker<'a> {
         ty: &Type,
     ) {
         let library = self.program.library_start.unwrap_or(usize::MAX);
-        if r.span.offset >= library || matches!(ty, Type::Error | Type::TypeParam(_)) {
+        if r.span.offset >= library {
+            return;
+        }
+        // §14.14: `e` is a constant expression, evaluated once before `main`.
+        self.const_init_strict = true;
+        self.const_init_resource_default = true;
+        self.check_module_binding_init(default, &r.name);
+        self.const_init_strict = false;
+        self.const_init_resource_default = false;
+        if matches!(ty, Type::Error | Type::TypeParam(_)) {
             return;
         }
         let declared = r
@@ -6018,15 +6027,32 @@ impl<'a> super::TypeChecker<'a> {
 
     fn reject_module_binding_init(&mut self, e: &Expr, binding_name: &str, what: &str) {
         if self.const_init_strict {
+            // §14.14: a resource's default is evaluated into a static, so it
+            // is a constant expression too; run-time setup is an override.
+            let (subject, help) = if self.const_init_resource_default {
+                (
+                    format!("the default provider of `effect resource {binding_name}`"),
+                    format!(
+                        "a provider that needs run-time setup is built in `main` and \
+                         installed with `with_provider[{binding_name}](p, || ..)` \
+                         (core-semantics.md §14.14)"
+                    ),
+                )
+            } else {
+                (
+                    format!("constant '{binding_name}' initializer"),
+                    "build the value in `main`, or a function it calls, and pass it down"
+                        .to_string(),
+                )
+            };
             self.type_error(
                 format!(
-                    "error[E_MODULE_BINDING_EFFECTFUL_INIT]: constant '{binding_name}' \
-                     initializer must be a compile-time constant; {what} requires run-time \
-                     evaluation (design.md § Constants). Permitted forms: literals, \
-                     arithmetic / boolean / comparison operations over constants, enum \
-                     variants, struct and tuple literals of constants, list and repeat \
-                     literals at an 'Array' type, and other constants\nhelp: build the \
-                     value in `main`, or a function it calls, and pass it down"
+                    "error[E_MODULE_BINDING_EFFECTFUL_INIT]: {subject} must be a compile-time \
+                     constant; {what} requires run-time evaluation (design.md § Constants). \
+                     Permitted forms: literals, arithmetic / boolean / comparison operations \
+                     over constants, enum variants, struct and tuple literals of constants, \
+                     list and repeat literals at an 'Array' type, and other constants\nhelp: \
+                     {help}"
                 ),
                 e.span,
                 TypeErrorKind::ModuleBindingEffectfulInit,

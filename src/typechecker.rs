@@ -3054,6 +3054,9 @@ pub struct TypeChecker<'a> {
     /// so the module-binding special forms (`Vec.new()`, `LazyLock.new`, ...)
     /// are refused, and the diagnostic speaks of a constant.
     pub(super) const_init_strict: bool,
+    /// The strict walk is checking an `effect resource R: T = e;` default
+    /// (core-semantics.md §14.14), which names the resource in its refusal.
+    pub(super) const_init_resource_default: bool,
     /// This function's BORROWED parameter names — every `ref T` / `mut ref T`
     /// parameter, plus `self` under `ref self` / `mut ref self`. B-2026-09-01-4.
     ///
@@ -3804,6 +3807,7 @@ impl<'a> TypeChecker<'a> {
             current_fn_frozen_params: FxHashSet::default(),
             current_fn_frozen_lets: FxHashSet::default(),
             const_init_strict: false,
+            const_init_resource_default: false,
             current_fn_ref_params: FxHashSet::default(),
             borrowed_deref_operands: FxHashSet::default(),
             current_fn_mut_self: false,
