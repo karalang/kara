@@ -18775,6 +18775,21 @@ impl<'l, 'a> Bx<'l, 'a> {
         };
         let callee = rc.callee.clone();
         let substs = self.lcx.tys.tcx().list(rc.substs);
+        // `2.0.mul(3.0)` beside the program's `impl Mul[Col] for f64` is the
+        // number's own operator, which the check picked by the argument
+        // (B-2026-10-28-18).
+        if let ([other], Some(op)) = (args, operator_method(method)) {
+            let rt = self.expr_ty(object)?;
+            let at = self.expr_ty(&other.value)?;
+            let (lt, at) = (self.strip_ty_full(rt).1, self.strip_ty_full(at).1);
+            let number = matches!(
+                self.tys().tcx().kind(lt),
+                HK::Int(_) | HK::UInt(_) | HK::Float(_)
+            );
+            if number && lt == at {
+                return self.binary(op, object, &other.value, dest);
+            }
+        }
         match callee {
             Callee::Def(d) if self.lcx.fns.get(&d).is_some_and(|i| i.impl_dyn.is_none()) => {
                 let inst_args = self.instance_args(e.span, &substs)?;

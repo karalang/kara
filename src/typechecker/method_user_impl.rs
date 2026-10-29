@@ -732,12 +732,16 @@ impl<'a> super::TypeChecker<'a> {
             let c = self
                 .env
                 .find_methods_with_args(&type_name, &type_args, method);
+            // B-2026-10-28-18 — an operator trait's impl written without
+            // its argument (`impl Mul for f64`) takes `Rhs = Self`, so it
+            // sits beside `impl Mul[Col] for f64` the same way.
             c.len() > 1
                 && c.iter().all(|(imp, _)| {
                     imp.trait_name.is_some()
                         && imp.trait_name == c[0].0.trait_name
-                        && imp.trait_args.len() == 1
+                        && imp.trait_args.len() <= 1
                 })
+                && c.iter().any(|(imp, _)| imp.trait_args.len() == 1)
         };
         let first_arg = match args.first() {
             Some(first) if same_trait => {
@@ -755,15 +759,30 @@ impl<'a> super::TypeChecker<'a> {
             .env
             .find_methods_with_args(&type_name, &type_args, method);
         if let Some((at, item)) = &first_arg {
-            let fits: Vec<_> = candidates
+            let receiver = Self::peel_borrow(receiver_for_lookup);
+            let want = |imp: &ImplInfo| imp.trait_args.first().unwrap_or(receiver).clone();
+            // An argument of exactly one impl's type picks it, before a
+            // looser fit does: `col.mul(2.0)` beside `Mul[i64]` and
+            // `Mul[Col]` is the `Mul[f64]` impl.
+            let arg = Self::peel_borrow(at);
+            let exact: Vec<_> = candidates
                 .iter()
-                .filter(|(imp, _)| {
-                    let want = &imp.trait_args[0];
-                    types_compatible(want, at)
-                        || (!matches!(item, Type::Error) && types_compatible(want, item))
-                })
+                .filter(|(imp, _)| Self::peel_borrow(&want(imp)) == arg)
                 .cloned()
                 .collect();
+            let fits: Vec<_> = if exact.len() == 1 {
+                exact
+            } else {
+                candidates
+                    .iter()
+                    .filter(|(imp, _)| {
+                        let want = want(imp);
+                        types_compatible(&want, at)
+                            || (!matches!(item, Type::Error) && types_compatible(&want, item))
+                    })
+                    .cloned()
+                    .collect()
+            };
             if fits.len() == 1 {
                 candidates = fits;
             }

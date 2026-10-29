@@ -1,8 +1,9 @@
 //! A binary operator whose left operand is a primitive and whose impl is
 //! the program's (`impl Mul[Col] for f64`, then `2.0 * col`, design.md
 //! § Operator traits; B-2026-10-28-16): the check consulted only the
-//! primitive's own `Mul for f64` and refused the right operand. Outputs
-//! are worked out by hand.
+//! primitive's own `Mul for f64` and refused the right operand. The method
+//! form of such a call, `col.mul(2.0)` with several `Mul` impls, was refused
+//! as ambiguous (B-2026-10-28-18). Outputs are worked out by hand.
 //!
 //! With `--features llvm` each program is also compiled, at -O0 and -O2,
 //! and must print the same.
@@ -172,5 +173,70 @@ fn main() {
 42 40
 6.0 8
 ",
+    );
+}
+
+/// `col.mul(2.0)` on a type with several `Mul` impls that differ in the
+/// right operand, `2.5.mul(col)` beside the number's own `Mul`, and the
+/// trait-qualified `Mul.mul(..)` each take the impl their argument names,
+/// and `2.0.mul(3.0)` stays the number's operator (B-2026-10-28-18).
+#[test]
+fn operator_method_call_picks_its_impl_by_argument() {
+    runs(
+        r#"struct Col { v: Vec[f64] }
+struct Flags { on: Vec[bool] }
+
+fn scaled(c: ref Col, k: f64) -> Col {
+    let mut out: Vec[f64] = Vec.new();
+    for x in c.v { out.push(*x * k); }
+    Col { v: out }
+}
+
+impl Mul[f64] for Col {
+    type Output = Col;
+    fn mul(self, rhs: f64) -> Col { scaled(self, rhs) }
+}
+impl Mul[i64] for Col {
+    type Output = Col;
+    fn mul(self, rhs: i64) -> Col { scaled(self, rhs as f64) }
+}
+impl Mul[Col] for Col {
+    type Output = Col;
+    fn mul(self, rhs: Col) -> Col {
+        let mut out: Vec[f64] = Vec.new();
+        for i in 0..self.v.len() { out.push(self.v[i] * rhs.v[i]); }
+        Col { v: out }
+    }
+}
+impl Mul[Flags] for Col {
+    type Output = Col;
+    fn mul(self, rhs: Flags) -> Col {
+        let mut out: Vec[f64] = Vec.new();
+        for i in 0..self.v.len() { out.push(if rhs.on[i] { self.v[i] } else { 0.0 }); }
+        Col { v: out }
+    }
+}
+impl Mul[Col] for f64 {
+    type Output = Col;
+    fn mul(self, rhs: Col) -> Col { scaled(rhs, self) }
+}
+
+fn show(c: Col) { println(f"{c.v[0]} {c.v[1]}"); }
+
+fn main() {
+    let c = Col { v: vec![1.0, 2.0] };
+    let m = Flags { on: vec![false, true] };
+    show(c.mul(2.0));
+    show(c.mul(3));
+    show(c.mul(c));
+    show(c.mul(m));
+    show(2.5.mul(c));
+    show(Mul.mul(c, 4.0));
+    show(Mul.mul(c, m));
+    show(Mul.mul(10.0, c));
+    println(f"{2.0.mul(3.0)} {Mul.mul(2.0, 0.5)}");
+}
+"#,
+        "2.0 4.0\n3.0 6.0\n1.0 4.0\n0.0 2.0\n2.5 5.0\n4.0 8.0\n0.0 2.0\n10.0 20.0\n6.0 1.0\n",
     );
 }
