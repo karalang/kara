@@ -58,10 +58,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| false-positive | 61 |
-| diagnostics | 59 |
+| false-positive | 62 |
+| diagnostics | 60 |
 | missing-feature | 49 |
-| perf | 34 |
+| perf | 36 |
 | soundness | 25 |
 | miscompile | 17 |
 | run-vs-build | 11 |
@@ -74,15 +74,15 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 114 |
+| typecheck | 115 |
 | mir | 57 |
-| mir-llvm | 46 |
+| mir-llvm | 47 |
 | ownership | 26 |
 | interp | 24 |
 | cli | 24 |
 | codegen | 22 |
-| parser | 17 |
-| runtime | 16 |
+| parser | 18 |
+| runtime | 17 |
 | effect | 4 |
 | other | 3 |
 | resolver | 3 |
@@ -140,8 +140,11 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-29-27 | 2026-10-29 | typecheck | medium | Inside a subtrait's generic default method, `let (i, u) = self.tag(u)` calling a SUPERTRAIT's generic default `tag[T](self, t: own T) -> (i64, T)` is refused with "cannot infer type parameter 'T'; add a type annotation to this binding"; annotating the binding (`let p: (i64, U) = self.tag(u)`) or calling `tag` from the same trait's default checks and runs | — |
 | B-2026-10-29-28 | 2026-10-29 | typecheck+mir | medium | An unsuffixed literal on the left of `<<` / `>>` with a non-constant count is typed `i64` whatever the context: `r | (255 << b)` with `r: u64` passes `karac check` and fails as invalid MIR ("binary operands of different types u64 and i64") on every backend, and `r + (255 << b)` is refused | — |
 | B-2026-10-29-29 | 2026-10-29 | parser+cli | low | For `!x` on an integer, `karac check` says "use `not` instead" and its JSON `replacement` is `not `, while `karac fix` correctly writes `~x`: a reader of the message or the JSON gets a fix that then fails typecheck | — |
-| B-2026-10-29-30 | 2026-10-29 | mir-llvm | high | `m[k]` (and `ref m[k]`) on a `Map[K, dyn T]` is wrong compiled: the index stores a POINTER to the map's value into a `ref dyn T` destination, which is the two-word `dyn` pair itself, so LLVM treats the found-key path as unreachable; `__mir-llvm-run` aborts with `key not found` on a key that is there, `__mir-llvm-asan` SEGVs. The interpreter, `m.get(k)` and `v[i]` on a `Vec[dyn T]` are right | — |
 | B-2026-10-29-31 | 2026-10-29 | mir+mir-llvm | medium | A call through `dyn Display` (or another library trait the MIR library does not carry: `Debug`, `Hash`, `Eq`, `Ord`) is not dispatched: `d.to_string()` on `d: dyn Display` fails at run time on the interpreter (`print cannot show Dyn {..}`) and is refused by the compiled backends (`printing a dyn ... is not lowered yet`), for a struct with its own `impl Display` as for a number; `karac check` accepts it, and `f"{d}"` is refused by check | — |
+| B-2026-10-29-32 | 2026-10-29 | mir-llvm | medium | On the MIR compiled backend, `String.contains` with a needle of at most 16 bytes calls `memchr` and then `memcmp` at every place the needle's first byte occurs, so on a two-letter haystack (a binary string, where that byte is every other one) it costs 3.2 ns per haystack byte: 9.4x C `strstr` and 7.2x Rust `str::contains`; kata 1016's bench is 8.5x C | — |
+| B-2026-10-29-33 | 2026-10-29 | runtime | low | `f"{x:b}"` (any format spec but `{v:N}` / `{v:0N}`) re-parses its spec text on every call: `karac_mir_fmt_spec` copies the spec into a String, runs `FormatSpec::parse` and formats through a second String, 130 ns per call against 38 ns for Rust `format!("{:b}")` and 22 ns for C (malloc and a bit loop) | — |
+| B-2026-10-29-34 | 2026-10-29 | parser | low | `ref mut m` in a pattern (Rust's order for Kāra's `mut ref m`) is reported as "'mut' is a reserved keyword and cannot be used as an identifier" plus a cascading "Expected expression, found RightBrace" at the next `}`, with no fix; `mut m` in a pattern already gets a Rust-syntax diagnostic and a fix | — |
+| B-2026-10-29-35 | 2026-10-29 | typecheck | low | A comparison does not give a constructor or tuple operand the other operand's type, so a `ref` to a Copy value inside it is refused: with `n: ref i64` from `for n in v.iter()`, `value == Some(n)`, `Some(n) == value`, `value != Some(n)` and `pair == (n, 5)` fail "cannot compare 'Option[i64]' and 'Option[ref i64]'" (or the tuple form) with no fix-it, though `let w: Option[i64] = Some(n)`, `same(value, Some(n))` and `vec![Some(n)]` into a `Vec[Option[i64]]` all read `n` as an `i64` | — |
 
 ### Relocated
 
@@ -384,6 +387,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-29-22 | mir+mir-llvm | high | The implicit numeric widening of a CALL's result is dropped when the call initializes an annotated `let` (`let x: f64 = f()` with `f() -> f32`, `let… | 46a1f3e2e3 |
 | B-2026-10-29-25 | mir-llvm | high | `d.push(Vec.filled(n, None))` with `d: Vec[Vec[Option[T]]]` clones its `None` from a stack slot too small for an `Option[T]` on the compiled backends… | e5f935eb0b |
 | B-2026-10-29-26 | interp+mir-llvm+runtime | medium | (v1) A `Request` a program builds with `Request.new` / `with_header` / `with_body` is never freed, on either MIR backend: each call appends to a proc… | a1b960dd5d |
+| B-2026-10-29-30 | mir-llvm | high | `m[k]` (and `ref m[k]`) on a `Map[K, dyn T]` is wrong compiled: the index stores a POINTER to the map's value into a `ref dyn T` destination, which i… | 4d4e122e46 |
 
 </details>
 
