@@ -1,0 +1,127 @@
+// LeetCode #1013: Partition Array Into Three Parts With Equal Sum -- two cuts
+//
+// Three parts with equal sums each hold a third of the total, so the
+// total must divide by 3. The first part can end at the first prefix
+// that reaches a third, since ending it later only shortens the rest;
+// the second then ends at the first later prefix that reaches two
+// thirds, before the last element so the third part is not empty. O(n).
+
+fn can_three_parts_equal_sum(arr: ref Vec[i64]) -> bool {
+    let mut total = 0;
+    for x in arr.iter() {
+        total += x;
+    }
+    if total % 3 != 0 {
+        return false;
+    }
+    let target = total / 3;
+    let mut prefix = 0;
+    let mut cuts = 0;
+    for i in 0..arr.len() - 1 {
+        prefix += arr[i];
+        if cuts == 0 and prefix == target {
+            cuts = 1;
+        } else if cuts == 1 and prefix == 2 * target {
+            return true;
+        }
+    }
+    false
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `len` values drawn from -spread..=spread
+fn random_array(seed: mut ref i64, len: i64, spread: i64) -> Vec[i64] {
+    let mut arr: Vec[i64] = Vec.new();
+    for _ in 0..len {
+        arr.push(next_random(mut seed) % (2 * spread + 1) - spread);
+    }
+    arr
+}
+
+// three random parts of 1..=most values each, the last value of each
+// set so that every part sums to the same random amount
+fn built_array(seed: mut ref i64, most: i64, spread: i64) -> Vec[i64] {
+    let share = next_random(mut seed) % (2 * spread + 1) - spread;
+    let mut arr: Vec[i64] = Vec.new();
+    for _ in 0..3 {
+        let len = 1 + next_random(mut seed) % most;
+        let mut sum = 0;
+        for _ in 0..len - 1 {
+            let x = next_random(mut seed) % (2 * spread + 1) - spread;
+            arr.push(x);
+            sum += x;
+        }
+        arr.push(share - sum);
+    }
+    arr
+}
+
+fn shown(arr: ref Vec[i64]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for x in arr.iter() {
+        parts.push(x.to_string());
+    }
+    let inner = parts.join(",");
+    f"[{inner}]"
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let examples: Vec[Vec[i64]] = vec![
+        vec![0, 2, 1, -6, 6, -7, 9, 1, 2, 0, 1],
+        vec![0, 2, 1, -6, 6, 7, 9, -1, 2, 0, 1],
+        vec![3, 3, 6, 5, -2, 2, 5, 1, -9, 4],
+        vec![0, 0, 0],
+        vec![0, 0, 0, 0],
+        vec![1, -1, 1, -1],
+        vec![1, -1, 0, 0],
+        vec![1, 1, 1],
+        vec![1, 2, 3],
+        vec![6, 0, 0],
+        vec![2, 2, 2, -2, 2],
+        vec![10000, -10000, 10000, -10000, 10000, -10000],
+        vec![1, 2, -3, 3, 0, 0, 3, -6, 6],
+    ];
+    for arr in examples.iter() {
+        let s = shown(arr);
+        println(f"arr = {s} -> {can_three_parts_equal_sum(arr)}");
+    }
+    // random arrays: how many split, and a checksum of the answers in order
+    let mut seed = 1013;
+    let groups: Vec[(i64, i64, i64)] = vec![(3000, 3, 2), (3000, 8, 3), (1000, 60, 5), (200, 1000, 20), (6, 50000, 10000), (6, 50000, 2)];
+    for (count, len, spread) in groups.iter() {
+        let mut yes = 0;
+        let mut check = 0;
+        for _ in 0..count {
+            let arr = random_array(mut seed, len, spread);
+            let answer = can_three_parts_equal_sum(arr);
+            if answer {
+                yes += 1;
+            }
+            check = (check * 2 + if answer { 1 } else { 0 }) % 1000000007;
+        }
+        println(f"{count} random arrays of {len} values within {spread}: {yes} split, checksum {check}");
+    }
+    // arrays built from three parts with equal sums, and the same with one
+    // value moved by three, which keeps the total a multiple of 3
+    let mut built = 0;
+    let mut moved = 0;
+    for _ in 0..1000 {
+        let mut arr = built_array(mut seed, 100, 50);
+        if can_three_parts_equal_sum(arr) {
+            built += 1;
+        }
+        let at = next_random(mut seed) % arr.len();
+        arr[at] += 3;
+        if can_three_parts_equal_sum(arr) {
+            moved += 1;
+        }
+    }
+    println(f"1000 built arrays: {built} split; with one value moved by three: {moved} split");
+}

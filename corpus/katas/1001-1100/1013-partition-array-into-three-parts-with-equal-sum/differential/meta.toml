@@ -1,0 +1,11 @@
+source = "kara-katas/leetcode/1001-1100/1013-partition-array-into-three-parts-with-equal-sum/differential.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["differential", "lib:map"]
+class = "e"
+expected_from = "oracle"
+note = "no legacy record (the legacy compiler went at M3); expected.out is the differential's own verdict with 0 failures, as the kata README records it e-spec: legacy differs from the drop model; v2 matches it"
+bucket = "e-spec"
+classified_with = "0613882da"
+extracted_src = "c384aefe"

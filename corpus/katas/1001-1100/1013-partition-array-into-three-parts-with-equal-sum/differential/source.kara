@@ -1,0 +1,335 @@
+// LeetCode #1013: Partition Array Into Three Parts With Equal Sum -- differential
+//
+// The five arms, copied, against the statement read literally and five
+// more properties. See README.md § Differential.
+
+fn split_star(arr: ref Vec[i64]) -> bool {
+    let mut total = 0;
+    for x in arr.iter() {
+        total += x;
+    }
+    if total % 3 != 0 {
+        return false;
+    }
+    let target = total / 3;
+    let mut prefix = 0;
+    let mut cuts = 0;
+    for i in 0..arr.len() - 1 {
+        prefix += arr[i];
+        if cuts == 0 and prefix == target {
+            cuts = 1;
+        } else if cuts == 1 and prefix == 2 * target {
+            return true;
+        }
+    }
+    false
+}
+
+fn split_ends(arr: ref Vec[i64]) -> bool {
+    let mut total = 0;
+    for x in arr.iter() {
+        total += x;
+    }
+    if total % 3 != 0 {
+        return false;
+    }
+    let target = total / 3;
+    let n = arr.len();
+    // the first part is arr[0..=l]
+    let mut l = 0;
+    let mut left = arr[0];
+    while left != target and l < n - 3 {
+        l += 1;
+        left += arr[l];
+    }
+    if left != target {
+        return false;
+    }
+    // the last part is arr[r..], with arr[l + 1..r] between them
+    let mut r = n - 1;
+    let mut right = arr[r];
+    while right != target and r > l + 2 {
+        r -= 1;
+        right += arr[r];
+    }
+    right == target
+}
+
+fn split_count(arr: ref Vec[i64]) -> bool {
+    let mut total = 0;
+    for x in arr.iter() {
+        total += x;
+    }
+    if total % 3 != 0 {
+        return false;
+    }
+    let target = total / 3;
+    let mut parts = 0;
+    let mut sum = 0;
+    for x in arr.iter() {
+        sum += x;
+        if sum == target {
+            parts += 1;
+            sum = 0;
+        }
+    }
+    parts >= 3
+}
+
+fn split_ways(arr: ref Vec[i64]) -> bool {
+    ways_ways(arr) > 0
+}
+
+// the pairs of cuts that leave three parts with equal sums
+fn ways_ways(arr: ref Vec[i64]) -> i64 {
+    let mut total = 0;
+    for x in arr.iter() {
+        total += x;
+    }
+    if total % 3 != 0 {
+        return 0;
+    }
+    let target = total / 3;
+    let mut prefix = 0;
+    let mut firsts = 0;
+    let mut ways = 0;
+    for i in 0..arr.len() - 1 {
+        prefix += arr[i];
+        if prefix == 2 * target {
+            ways += firsts;
+        }
+        if prefix == target {
+            firsts += 1;
+        }
+    }
+    ways
+}
+
+fn split_map(arr: ref Vec[i64]) -> bool {
+    let mut total = 0;
+    for x in arr.iter() {
+        total += x;
+    }
+    if total % 3 != 0 {
+        return false;
+    }
+    let target = total / 3;
+    let mut first: Map[i64, i64] = Map.new();
+    let mut last: Map[i64, i64] = Map.new();
+    let mut prefix = 0;
+    for i in 0..arr.len() - 1 {
+        prefix += arr[i];
+        if not first.contains_key(prefix) {
+            first.insert(prefix, i);
+        }
+        last.insert(prefix, i);
+    }
+    match (first.get(target), last.get(2 * target)) {
+        (Some(a), Some(b)) => a < b,
+        _ => false,
+    }
+}
+
+// the statement read literally: every pair of cuts, each part summed
+fn literal_ways(arr: ref Vec[i64]) -> i64 {
+    let n = arr.len();
+    let mut ways = 0;
+    // the first part is arr[0..i], the second arr[i..j], the third arr[j..]
+    for i in 1..n - 1 {
+        for j in i + 1..n {
+            let a = part_sum(arr, 0, i);
+            let b = part_sum(arr, i, j);
+            let c = part_sum(arr, j, n);
+            if a == b and b == c {
+                ways += 1;
+            }
+        }
+    }
+    ways
+}
+
+fn part_sum(arr: ref Vec[i64], from: i64, to: i64) -> i64 {
+    let mut sum = 0;
+    for k in from..to {
+        sum += arr[k];
+    }
+    sum
+}
+
+fn arms(arr: ref Vec[i64]) -> Vec[bool] {
+    vec![split_star(arr), split_ends(arr), split_count(arr), split_ways(arr), split_map(arr)]
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_array(seed: mut ref i64, len: i64, spread: i64) -> Vec[i64] {
+    let mut arr: Vec[i64] = Vec.new();
+    for _ in 0..len {
+        arr.push(next_random(mut seed) % (2 * spread + 1) - spread);
+    }
+    arr
+}
+
+// three parts of 1..=most values each, all summing to the same amount
+fn built_array(seed: mut ref i64, most: i64, spread: i64) -> Vec[i64] {
+    let share = next_random(mut seed) % (2 * spread + 1) - spread;
+    let mut arr: Vec[i64] = Vec.new();
+    for _ in 0..3 {
+        let len = 1 + next_random(mut seed) % most;
+        let mut sum = 0;
+        for _ in 0..len - 1 {
+            let x = next_random(mut seed) % (2 * spread + 1) - spread;
+            arr.push(x);
+            sum += x;
+        }
+        arr.push(share - sum);
+    }
+    arr
+}
+
+// the t-th array of length 3 to 6 over -1, 0 and 1, shortest first
+fn small_array(t: i64) -> Vec[i64] {
+    let mut len = 3;
+    let mut count = 27;
+    let mut index = t;
+    while index >= count {
+        index -= count;
+        len += 1;
+        count *= 3;
+    }
+    let mut arr: Vec[i64] = Vec.new();
+    for _ in 0..len {
+        arr.push(index % 3 - 1);
+        index /= 3;
+    }
+    arr
+}
+
+fn main() {
+    let names = ["star", "ends", "count", "ways", "map"];
+    let scales = [-1, 2, -3, 5];
+    let mut failures: Vec[i64] = Vec.filled(6, 0);
+    let mut checks = 0;
+    let mut rows = 0;
+    let mut check = 0;
+    let mut seed = 10131;
+    for t in 0..4984 {
+        // every array of 3 to 6 values over -1..1 (1080), then 2000 random
+        // of 3 to 12 values, 1000 built of 3 to 12, 500 random of 13 to
+        // 200, 300 built of up to 300, 100 random of up to 2000 and 4 of
+        // 50000
+        let mut built = false;
+        let arr = if t < 1080 {
+            small_array(t)
+        } else if t < 3080 {
+            let len = 3 + next_random(mut seed) % 10;
+            random_array(mut seed, len, 3)
+        } else if t < 4080 {
+            built = true;
+            built_array(mut seed, 4, 3)
+        } else if t < 4580 {
+            let len = 13 + next_random(mut seed) % 188;
+            random_array(mut seed, len, 3)
+        } else if t < 4880 {
+            built = true;
+            built_array(mut seed, 100, 100)
+        } else if t < 4980 {
+            let len = 3 + next_random(mut seed) % 1998;
+            random_array(mut seed, len, 20)
+        } else {
+            random_array(mut seed, 50000, 2)
+        };
+        let n = arr.len();
+        let got = arms(arr);
+        let ways = ways_ways(arr);
+        rows += 1;
+        check = (check * 31 + ways) % 1000000007;
+        let literal = if n <= 12 { literal_ways(arr) } else { -1 };
+        let mut reversed: Vec[i64] = Vec.new();
+        for k in 0..n {
+            reversed.push(arr[n - 1 - k]);
+        }
+        let flipped = arms(reversed);
+        let scale = scales[t % 4];
+        let mut scaled: Vec[i64] = Vec.new();
+        for x in arr.iter() {
+            scaled.push(x * scale);
+        }
+        let stretched = arms(scaled);
+        // the cases the statement settles by itself
+        let mut total = 0;
+        let mut zeros = true;
+        for x in arr.iter() {
+            total += x;
+            if x != 0 {
+                zeros = false;
+            }
+        }
+        let mut forced = 0;
+        if total % 3 != 0 {
+            forced = -1;
+        } else if n == 3 {
+            forced = if arr[0] == arr[1] and arr[1] == arr[2] { 1 } else { -1 };
+        } else if zeros {
+            forced = 1;
+        }
+        for a in 0..5 {
+            let c = got[a];
+            // P1: the statement, for arrays of up to 12 values; the ways
+            // arm's count too
+            if n <= 12 {
+                checks += 1;
+                if c != (literal > 0) or (a == 3 and ways != literal) {
+                    failures[0] += 1;
+                }
+            }
+            // P2: the reversed array splits the same way
+            checks += 1;
+            if flipped[a] != c {
+                failures[1] += 1;
+            }
+            // P3: no split when the total is not a multiple of 3, three
+            // values split when equal, and zeros always split
+            if forced != 0 {
+                checks += 1;
+                if c != (forced > 0) {
+                    failures[2] += 1;
+                }
+            }
+            // P4: an array built from three parts with equal sums splits
+            if built {
+                checks += 1;
+                if not c {
+                    failures[3] += 1;
+                }
+            }
+            // P5: scaling every value by -1, 2, -3 or 5 splits the same way
+            checks += 1;
+            if stretched[a] != c {
+                failures[4] += 1;
+            }
+            // P6: each arm agrees with at least two of the other four
+            checks += 1;
+            let mut agree = 0;
+            for b in 0..5 {
+                if b != a and got[b] == c {
+                    agree += 1;
+                }
+            }
+            if agree < 2 {
+                failures[5] += 1;
+            }
+        }
+    }
+    let mut total = 0;
+    for p in 0..6 {
+        total += failures[p];
+        if failures[p] > 0 {
+            println(f"P{p + 1}: {failures[p]} failures");
+        }
+    }
+    println(f"{rows} arrays: checksum {check}, {checks} checks over {names.len()} arms: {total} failures");
+}
