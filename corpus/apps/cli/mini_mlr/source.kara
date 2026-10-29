@@ -2929,47 +2929,41 @@ fn v_sort(v: Verb, recs: own Vec[Rec]) -> Vec[Rec] {
 
 // BsearchMlrvalArrayFor{Descending,Ascending}Insert, as Miller's top
 // keeper uses it.
-//
-// B-2026-10-28-24: `gt` and `lt` were closures (`let gt = |a: Val, b: Val|
-// ...`, kept in mini_mlr.orig.kara), but a call to a closure bound by `let`
-// moves its arguments, so the comparisons are named functions.
-fn ahead(a: Val, b: Val, descending: bool) -> bool {
-    let c = collate(a, b);
-    if descending { c == Ordering.Greater } else { c == Ordering.Less }
-}
-
-fn behind(a: Val, b: Val, descending: bool) -> bool {
-    let c = collate(a, b);
-    if descending { c == Ordering.Less } else { c == Ordering.Greater }
-}
-
 fn bsearch_insert(arr: Vec[Val], value: Val, descending: bool) -> i64 {
     let size = arr.len();
     if size == 0 {
         return 0;
     }
+    let gt = |a: Val, b: Val| {
+        let c = collate(a, b);
+        if descending { c == Ordering.Greater } else { c == Ordering.Less }
+    };
+    let lt = |a: Val, b: Val| {
+        let c = collate(a, b);
+        if descending { c == Ordering.Less } else { c == Ordering.Greater }
+    };
     let mut lo = 0;
     let mut hi = size - 1;
     let mut mid = (hi + lo) / 2;
-    if ahead(value, arr[0], descending) {
+    if gt(value, arr[0]) {
         return 0;
     }
-    if behind(value, arr[hi], descending) {
+    if lt(value, arr[hi]) {
         return size;
     }
     while lo < hi {
         if collate(value, arr[mid]) == Ordering.Equal {
             return mid;
-        } else if ahead(value, arr[mid], descending) {
+        } else if gt(value, arr[mid]) {
             hi = mid;
         } else {
             lo = mid;
         }
         let newmid = (hi + lo) / 2;
         if mid == newmid {
-            if not behind(value, arr[lo], descending) {
+            if not lt(value, arr[lo]) {
                 return lo;
-            } else if not behind(value, arr[hi], descending) {
+            } else if not lt(value, arr[hi]) {
                 return hi;
             }
             return hi + 1;

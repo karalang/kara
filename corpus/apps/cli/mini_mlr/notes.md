@@ -121,13 +121,14 @@ first written.
 
 ## Gaps found
 
-- **B-2026-10-28-24** (open): calling a closure bound by `let` moves its
-  non-`Copy` arguments, though core-semantics §5.10 makes a closure's
-  parameters ordinary bare (borrowed) parameters. `karac check` refuses
-  `eq(v, w[0])` on a borrowed `v`, `__mir-run` refuses it with a type
-  mismatch, and the fixes `karac fix` offers (an `own` parameter and a
-  `.clone()` on every argument) cascade into the callers. `top`'s binary
-  search compares with named functions (`ahead`, `behind`) instead.
+- **B-2026-10-28-24** (fixed in kara da37ab3afe): calling a closure
+  bound by `let` moved its non-`Copy` arguments, though core-semantics
+  §5.10 makes a closure's parameters ordinary bare (borrowed)
+  parameters. `karac check` refused `eq(v, w[0])` on a borrowed `v`,
+  `__mir-run` refused it with a type mismatch, and the fixes `karac fix`
+  offered (an `own` parameter and a `.clone()` on every argument)
+  cascaded into the callers. `top`'s binary search compared with named
+  functions until the fix and is back to its `gt` and `lt` closures.
 - **B-2026-10-28-25** (fixed in kara af329e798c and 0d1ad90014):
   `let r = match rx { Some(ref r) => r, None => ... }`, the form
   `karac fix` writes for an `Option` matched in a loop, was refused by

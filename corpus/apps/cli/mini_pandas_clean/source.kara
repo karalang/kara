@@ -1536,7 +1536,6 @@ fn py_count(s: Str, sub: Str) -> i64 {
     n
 }
 
-// B-2026-10-29-1: the Rust spelling `impl Fn(Str) -> String` is a bare parse error.
 // A text result: a missing cell stays missing.
 fn map_text(cells: Vec[Option[String]], f: Fn(Str) -> String) -> Col {
     Col.Str(cells.iter().map(|c| match c {
@@ -1952,6 +1951,8 @@ fn merge_asof(left: Frame, right: Frame, o: AsofOpts) -> Result[Frame, String] {
         }
         _ => asof_backward(l, r, lby, rby, use_by, o.exact, tol),
     };
+    // `skip(n.clone())` below works around B-2026-10-29-49 (a `Str`
+    // closure parameter moves a `String` argument); `skip(n)` is natural.
     let skip = |n: Str| {
         n == o.on or match o.by {
             Some(ref b) => n == b,
