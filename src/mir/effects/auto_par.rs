@@ -92,8 +92,48 @@ pub enum VerdictKind {
     /// A run of statements. Each group is a run of consecutive statements
     /// (indices into the candidate's branches) that lowers as one
     /// statement `par {}`; the statements in no group stay in order.
-    /// Empty when the verdict is a refusal.
-    Statements { groups: Vec<Vec<usize>> },
+    /// Empty when the verdict is a refusal. `tasks` has, for each group,
+    /// the statements that start one of its tasks ([`task_starts`]).
+    Statements {
+        groups: Vec<Vec<usize>>,
+        tasks: Vec<Vec<usize>>,
+    },
+}
+
+/// The most tasks a statement group runs as. Each task is a coroutine
+/// state of its function and a closure body of its own, so a group of
+/// every statement as a task made `mini_inflect`'s `new_tab` 25 tasks
+/// and 51,722 instructions of resume function, its build's long pole
+/// (B-2026-10-28-10); a few tasks keep the work apart on a small pool.
+pub(crate) const STMT_TASKS: usize = 4;
+
+/// Where the tasks of group `g` start: the statements, of `g`, that begin
+/// each run of consecutive statements one task runs in order. `heavy`
+/// says which statements of `g` passed the cost gate's weight; they are
+/// shared out between at most `cap` tasks as evenly as their order lets,
+/// and the light ones ride in the task before them (the first ones in
+/// the first task).
+pub(crate) fn task_starts(g: &[usize], heavy: &[bool], cap: usize) -> Vec<usize> {
+    let n = heavy.iter().filter(|&&h| h).count();
+    if n == 0 || heavy.len() != g.len() {
+        return g.to_vec();
+    }
+    let k = n.min(cap.max(1));
+    let quota = |t: usize| n / k + usize::from(t < n % k);
+    let mut starts = vec![g[0]];
+    let (mut task, mut held) = (0, 0);
+    for (i, &h) in heavy.iter().enumerate() {
+        if !h {
+            continue;
+        }
+        if held == quota(task) {
+            task += 1;
+            held = 0;
+            starts.push(g[i]);
+        }
+        held += 1;
+    }
+    starts
 }
 
 /// `local = local op e` in a loop body, or `local.push(e)` on a `Vec`
@@ -765,9 +805,11 @@ pub(super) fn verdict(
             }
             // The cost gate.
             let mut groups = Vec::new();
+            let mut tasks = Vec::new();
             for g in safe {
                 let blocks: BTreeSet<BasicBlock> =
                     g.iter().flat_map(|&k| sets[k].iter().copied()).collect();
+                let mut heavy = Vec::new();
                 let refused = match cost.hot_reason(name, &blocks) {
                     Some(why) => Some(why),
                     None => {
@@ -777,24 +819,28 @@ pub(super) fn verdict(
                         } else {
                             (1, "loop")
                         };
-                        let heavy = g
+                        let weighty: Vec<bool> = g
                             .iter()
-                            .filter(|&&k| {
+                            .map(|&k| {
                                 let set: BTreeSet<BasicBlock> =
                                     r.branches[k].iter().copied().collect();
                                 cost.weight_of(name, &set) >= need
                             })
-                            .count();
-                        (heavy < 2).then(|| {
-                            format!("{heavy} of its {} statements {what} or recurse", g.len())
-                        })
+                            .collect();
+                        heavy = weighty;
+                        let n = heavy.iter().filter(|&&h| h).count();
+                        (n < 2)
+                            .then(|| format!("{n} of its {} statements {what} or recurse", g.len()))
                     }
                 };
                 match refused {
                     Some(why) => {
                         first_refusal = Some(Refusal::Cost(why));
                     }
-                    None => groups.push(g),
+                    None => {
+                        tasks.push(task_starts(&g, &heavy, STMT_TASKS));
+                        groups.push(g);
+                    }
                 }
             }
             let verdict = if groups.is_empty() {
@@ -805,7 +851,7 @@ pub(super) fn verdict(
             AutoParVerdict {
                 instance: name.to_string(),
                 span: r.span,
-                kind: VerdictKind::Statements { groups },
+                kind: VerdictKind::Statements { groups, tasks },
                 verdict,
             }
         }
@@ -1107,7 +1153,7 @@ mod tests {
 
     fn groups(v: &AutoParVerdict) -> Vec<Vec<usize>> {
         match &v.kind {
-            VerdictKind::Statements { groups } => groups.clone(),
+            VerdictKind::Statements { groups, .. } => groups.clone(),
             VerdictKind::Loop => panic!("a loop: {v:#?}"),
         }
     }
@@ -1524,6 +1570,25 @@ fn main() {{
             .into_iter()
             .filter(|v| matches!(v.kind, VerdictKind::Statements { .. }))
             .collect()
+    }
+
+    /// A group's heavy statements are shared between at most four tasks
+    /// in order, the light ones riding in the task before them
+    /// (B-2026-10-28-10).
+    #[test]
+    fn auto_par_statement_group_tasks_share_its_heavy_statements() {
+        let h = |s: &str| s.chars().map(|c| c == 'H').collect::<Vec<bool>>();
+        let g = |n: usize| (10..10 + n).collect::<Vec<usize>>();
+        // Two heavy statements: two tasks, the light one in the first.
+        assert_eq!(task_starts(&g(3), &h("HLH"), 4), vec![10, 12]);
+        // Leading light statements go to the first task.
+        assert_eq!(task_starts(&g(4), &h("LLHH"), 4), vec![10, 13]);
+        // Seven heavy among nine: 2, 2, 2 and 1 of them.
+        assert_eq!(task_starts(&g(9), &h("HLHHLHHHH"), 4), vec![10, 13, 16, 18]);
+        // As many tasks as heavy statements when that is fewer than four.
+        assert_eq!(task_starts(&g(3), &h("HHH"), 4), vec![10, 11, 12]);
+        // No weights: every statement its own task, as before.
+        assert_eq!(task_starts(&g(3), &[], 4), vec![10, 11, 12]);
     }
 
     /// A statement whose whole arm ends in `return` still does its work

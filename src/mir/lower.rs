@@ -480,6 +480,7 @@ fn lower_program_inner<'a>(
         par_task_exprs: FxHashMap::default(),
         isolating_task_exprs: FxHashMap::default(),
         par_for_task_exprs: FxHashMap::default(),
+        stmt_chunk_exprs: FxHashMap::default(),
         counted_whiles: FxHashMap::default(),
         auto_par_wides: FxHashMap::default(),
         const_lets: FxHashMap::default(),
@@ -1164,6 +1165,9 @@ struct Lcx<'a> {
     isolating_task_exprs: FxHashMap<NodeId, &'a Expr>,
     /// The closure `|| { body }` a `par for` iteration runs as, by body.
     par_for_task_exprs: FxHashMap<*const Block, &'a Expr>,
+    /// The tuples a statement-run task evaluates ([`Builder::stmt_chunk`]),
+    /// by the run's first statement and its length.
+    stmt_chunk_exprs: FxHashMap<(*const Stmt, usize), &'a Expr>,
     /// Each `while`'s counting shape, by the loop's node, or `None` when
     /// it has none (see [`CountedWhile`]).
     counted_whiles: FxHashMap<NodeId, Option<CountedWhile<'a>>>,
@@ -5109,14 +5113,22 @@ impl<'l, 'a> Bx<'l, 'a> {
             if let Some(groups) = groups {
                 let mut k = 0;
                 while k < block.stmts.len() {
-                    let run = groups.iter().find(|g| g.first() == Some(&k));
+                    let run = groups.iter().find(|g| g.stmts.first() == Some(&k));
                     if let Some(g) = run {
-                        let end = k + g.len();
-                        let consecutive = g.iter().copied().eq(k..end);
-                        if consecutive
-                            && end <= block.stmts.len()
-                            && self.stmt_tasks(&block.stmts[k..end])?
-                        {
+                        let end = k + g.stmts.len();
+                        let consecutive = g.stmts.iter().copied().eq(k..end);
+                        let starts: Option<Vec<usize>> = g
+                            .starts
+                            .iter()
+                            .map(|&s| s.checked_sub(k).filter(|&s| s < end - k))
+                            .collect();
+                        let tasks = match starts {
+                            Some(starts) if consecutive && end <= block.stmts.len() => {
+                                self.stmt_tasks(&block.stmts[k..end], &starts)?
+                            }
+                            _ => false,
+                        };
+                        if tasks {
                             k = end;
                             continue;
                         }
@@ -5165,13 +5177,15 @@ impl<'l, 'a> Bx<'l, 'a> {
         self.cur = after;
     }
 
-    /// A run of statements an auto-par verdict said may run together,
-    /// each as a task, as a statement `par {}` runs its branches; the
-    /// `let`s bind their task's result once all are joined. `false`, with
-    /// nothing lowered, for a run with a statement that is not a `let` of
-    /// one name or an expression, or whose value is a reference, a
-    /// function or never returns: the run then stays in order.
-    fn stmt_tasks(&mut self, run: &'a [Stmt]) -> R<bool> {
+    /// A run of statements an auto-par verdict said may run together, as
+    /// tasks, as a statement `par {}` runs its branches: one for each of
+    /// `starts` (indices into `run`), which runs the statements from it to
+    /// the next in order. The `let`s bind their results once all are
+    /// joined. `false`, with nothing lowered, for a run with a statement
+    /// that is not a `let` of one name or an expression, or whose value is
+    /// a reference, a function or never returns: the run then stays in
+    /// order.
+    fn stmt_tasks(&mut self, run: &'a [Stmt], starts: &[usize]) -> R<bool> {
         let mut es: Vec<&'a Expr> = Vec::new();
         let mut slots = Vec::new();
         for s in run {
@@ -5229,15 +5243,55 @@ impl<'l, 'a> Bx<'l, 'a> {
                 return Ok(false);
             }
         }
+        // The tasks: a statement of its own, or a chunk of consecutive
+        // ones evaluated in order as a tuple, where each statement is a
+        // field (B-2026-10-28-10).
+        let mut bounds: Vec<usize> = starts.iter().copied().filter(|&k| k < es.len()).collect();
+        bounds.push(0);
+        bounds.sort_unstable();
+        bounds.dedup();
+        bounds.push(es.len());
+        let mut tasks: Vec<&'a Expr> = Vec::new();
+        let mut task_tys: Vec<Ty> = Vec::new();
+        // Where each statement's value is: its task, and its field there.
+        let mut at: Vec<(usize, Option<u32>)> = Vec::new();
+        for w in bounds.windows(2) {
+            let (a, b) = (w[0], w[1]);
+            let tys: Vec<Ty> = slots[a..b].iter().map(|&(_, t)| t).collect();
+            let chunk = match b - a {
+                1 => None,
+                _ => self.stmt_chunk(&run[a], &es[a..b], &tys),
+            };
+            match chunk {
+                Some(x) => {
+                    for j in 0..b - a {
+                        at.push((tasks.len(), Some(j as u32)));
+                    }
+                    tasks.push(x);
+                    task_tys.push(self.tys().tcx().tuple(&tys));
+                }
+                None => {
+                    for k in a..b {
+                        at.push((tasks.len(), None));
+                        tasks.push(es[k]);
+                        task_tys.push(slots[k].1);
+                    }
+                }
+            }
+        }
         let region = self.open_par_region(ParKind::Block, run[0].span);
-        let tys: Vec<Ty> = slots.iter().map(|&(_, t)| t).collect();
-        let tt = self.tys().tcx().tuple(&tys);
+        let tt = self.tys().tcx().tuple(&task_tys);
         let tup = self.temp(tt);
         self.push_scope();
-        self.par_tasks(region, &es, Place::local(tup), true)?;
+        self.par_tasks(region, &tasks, Place::local(tup), true)?;
         let mut binds = Vec::new();
         for (k, (slot, t)) in slots.into_iter().enumerate() {
-            let field = Operand::Move(Place::local(tup).field(k as u32, t));
+            let (task, part) = at[k];
+            let of_task = Place::local(tup).field(task as u32, task_tys[task]);
+            let field = Operand::Move(match part {
+                Some(j) => of_task.field(j, t),
+                None => of_task,
+            });
             match slot {
                 Some((name, id)) => {
                     let l = self.user_local(name, t, id);
@@ -5258,6 +5312,38 @@ impl<'l, 'a> Bx<'l, 'a> {
         let at = format!("{}@{}", self.name, run[0].span.line);
         self.lcx.auto_par_groups.push(at);
         Ok(true)
+    }
+
+    /// The tuple `(e1, e2, ..)` of statement values `es`, the run from
+    /// `first` on, that one task evaluates in order, typed as the tuple
+    /// of `tys`; made once per run, kept for every instance lowered.
+    /// `None` when a value's recorded type is not the one `tys` gives it
+    /// here: the statements then run as tasks of their own.
+    fn stmt_chunk(&mut self, first: &'a Stmt, es: &[&'a Expr], tys: &[Ty]) -> Option<&'a Expr> {
+        let mut hir = Vec::new();
+        for (e, &t) in es.iter().zip(tys) {
+            let &h = self.lcx.node_types.get(&e.id)?;
+            let h2 = self.fill_erased_target(h);
+            if self.lcx.mir_ty(h2, &self.args).ok()? != t {
+                return None;
+            }
+            hir.push(h);
+        }
+        let key = (first as *const Stmt, es.len());
+        if let Some(&x) = self.lcx.stmt_chunk_exprs.get(&key) {
+            return Some(x);
+        }
+        let id = NodeId(self.lcx.next_synthetic_node);
+        self.lcx.next_synthetic_node -= 1;
+        let tt = self.tys().tcx().tuple(&hir);
+        self.lcx.node_types.insert(id, tt);
+        let x: &'a Expr = Box::leak(Box::new(Expr {
+            kind: ExprKind::Tuple(es.iter().map(|e| (*e).clone()).collect()),
+            span: es[0].span,
+            id,
+        }));
+        self.lcx.stmt_chunk_exprs.insert(key, x);
+        Some(x)
     }
 
     /// Record the closure literals inside the value the body whose tail is
@@ -23826,6 +23912,15 @@ pub(crate) enum AutoPar {
     Apply(AutoParHints),
 }
 
+/// A run of statements an auto-par verdict said may run together: its
+/// statements (indices into the block's), and those that start each of
+/// its tasks.
+#[derive(Clone, Debug)]
+struct StmtGroup {
+    stmts: Vec<usize>,
+    starts: Vec<usize>,
+}
+
 /// The loops whose iterations may run as tasks, by instance and the
 /// loop's span (offset, length), each with the spans of the reductions
 /// its verdict names; and the blocks with runs of statements that may,
@@ -23834,7 +23929,7 @@ pub(crate) enum AutoPar {
 #[derive(Default, Clone)]
 pub(crate) struct AutoParHints {
     loops: FxHashMap<(String, usize, usize), Vec<Span>>,
-    stmts: FxHashMap<(String, usize, usize), Vec<Vec<usize>>>,
+    stmts: FxHashMap<(String, usize, usize), Vec<StmtGroup>>,
     /// Whether the program reads a `capacity()`, which a collecting loop's
     /// tasks would change: they grow their own `Vec`s, which the join then
     /// appends, where the loop grew one by its pushes.
@@ -23852,8 +23947,16 @@ impl AutoParHints {
                 (VerdictKind::Loop, Ok(reductions)) => {
                     loops.insert(key, reductions.iter().map(|r| r.span).collect());
                 }
-                (VerdictKind::Statements { groups }, Ok(_)) if !groups.is_empty() => {
-                    stmts.insert(key, groups.clone());
+                (VerdictKind::Statements { groups, tasks }, Ok(_)) if !groups.is_empty() => {
+                    let gs = groups
+                        .iter()
+                        .zip(tasks)
+                        .map(|(g, t)| StmtGroup {
+                            stmts: g.clone(),
+                            starts: t.clone(),
+                        })
+                        .collect();
+                    stmts.insert(key, gs);
                 }
                 _ => {}
             }
