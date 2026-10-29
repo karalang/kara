@@ -1,0 +1,16 @@
+[0, 1, 1] -> [true, false, false]
+[1, 1, 1] -> [false, false, false]
+[0] -> [true]
+[1] -> [false]
+[1, 0, 1] -> [false, false, true]
+[1, 0, 1, 0] -> [false, false, true, true]
+[1, 1, 1, 1] -> [false, false, false, true]
+[1, 1, 0, 0, 1, 0, 0, 0] -> [false, false, false, false, true, true, true, true]
+[0, 0, 0, 1, 0, 1] -> [true, true, true, false, false, true]
+[1, 0, 0, 1, 0, 1, 1, 0, 1, 1] -> [false, false, false, false, false, false, true, true, false, false]
+2000 random arrays of 10 bits (4/8 ones): 5072 true, longest run 10, checksum 271129131
+300 random arrays of 100 bits (4/8 ones): 6053 true, longest run 12, checksum 797213548
+30 random arrays of 1000 bits (4/8 ones): 5783 true, longest run 15, checksum 619102307
+30 random arrays of 1000 bits (1/8 ones): 6532 true, longest run 61, checksum 62100173
+30 random arrays of 1000 bits (7/8 ones): 5953 true, longest run 5, checksum 835845512
+3 random arrays of 3000 bits (4/8 ones): 1814 true, longest run 9, checksum 858819003

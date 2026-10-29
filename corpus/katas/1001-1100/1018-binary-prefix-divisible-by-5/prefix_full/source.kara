@@ -1,0 +1,90 @@
+// LeetCode #1018: Binary Prefix Divisible By 5 -- the prefix in full
+//
+// Keep each prefix exactly, in base 10^9 limbs lowest first, doubling it
+// and adding the new bit; a number is a multiple of 5 exactly when its
+// last decimal digit is 0 or 5, which the lowest limb shows. O(n^2 / 30).
+
+fn prefixes_div_by5(nums: Vec[i64]) -> Vec[bool] {
+    let base = 1000000000;
+    let mut limbs: Vec[i64] = vec![0];
+    let mut answer: Vec[bool] = Vec.new();
+    for bit in nums.iter() {
+        let mut carry = bit;
+        for i in 0..limbs.len() {
+            let v = limbs[i] * 2 + carry;
+            limbs[i] = v % base;
+            carry = v / base;
+        }
+        if carry > 0 {
+            limbs.push(carry);
+        }
+        answer.push(limbs[0] % 5 == 0);
+    }
+    answer
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn shown(answer: ref Vec[bool]) -> String {
+    let mut out = "[".to_string();
+    for i in 0..answer.len() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(if answer[i] { "true" } else { "false" });
+    }
+    out.push(']');
+    out
+}
+
+fn main() {
+    // LeetCode's two examples, then a few more
+    let examples: Vec[Vec[i64]] = vec![
+        vec![0, 1, 1],
+        vec![1, 1, 1],
+        vec![0],
+        vec![1],
+        vec![1, 0, 1],
+        vec![1, 0, 1, 0],
+        vec![1, 1, 1, 1],
+        vec![1, 1, 0, 0, 1, 0, 0, 0],
+        vec![0, 0, 0, 1, 0, 1],
+        vec![1, 0, 0, 1, 0, 1, 1, 0, 1, 1],
+    ];
+    for nums in examples.iter() {
+        println(f"{nums} -> {shown(prefixes_div_by5(nums))}");
+    }
+    // random arrays: how many answers are true, the longest run of true
+    // answers and a checksum of all of them
+    let mut seed = 1018;
+    let groups: Vec[(i64, i64, i64)] = vec![(2000, 10, 4), (300, 100, 4), (30, 1000, 4), (30, 1000, 1), (30, 1000, 7), (3, 3000, 4)];
+    for (count, len, ones) in groups.iter() {
+        let mut trues = 0;
+        let mut longest = 0;
+        let mut check = 0;
+        for _ in 0..count {
+            let mut nums: Vec[i64] = Vec.new();
+            for _ in 0..len {
+                nums.push(if next_random(mut seed) % 8 < ones { 1 } else { 0 });
+            }
+            let answer = prefixes_div_by5(nums);
+            let mut run = 0;
+            for a in answer.iter() {
+                if a {
+                    trues += 1;
+                    run += 1;
+                    longest = longest.max(run);
+                } else {
+                    run = 0;
+                }
+                check = (check * 2 + if a { 1 } else { 0 }) % 1000000007;
+            }
+        }
+        println(f"{count} random arrays of {len} bits ({ones}/8 ones): {trues} true, longest run {longest}, checksum {check}");
+    }
+}

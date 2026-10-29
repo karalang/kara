@@ -1,0 +1,236 @@
+// LeetCode #1018: Binary Prefix Divisible By 5 -- differential
+//
+// The five arms, copied, against the prefixes computed exactly and five
+// more properties. See README.md § Differential.
+
+fn d_star(nums: Vec[i64]) -> Vec[bool] {
+    let mut answer: Vec[bool] = Vec.new();
+    let mut r = 0;
+    for bit in nums.iter() {
+        r = (r * 2 + bit) % 5;
+        answer.push(r == 0);
+    }
+    answer
+}
+
+fn d_table(nums: Vec[i64]) -> Vec[bool] {
+    // step[2r + b] is the state after bit b from state r
+    let step = [0, 1, 2, 3, 4, 0, 1, 2, 3, 4];
+    let mut answer: Vec[bool] = Vec.new();
+    let mut state = 0;
+    for bit in nums.iter() {
+        state = step[2 * state + bit];
+        answer.push(state == 0);
+    }
+    answer
+}
+
+fn d_full(nums: Vec[i64]) -> Vec[bool] {
+    let base = 1000000000;
+    let mut limbs: Vec[i64] = vec![0];
+    let mut answer: Vec[bool] = Vec.new();
+    for bit in nums.iter() {
+        let mut carry = bit;
+        for i in 0..limbs.len() {
+            let v = limbs[i] * 2 + carry;
+            limbs[i] = v % base;
+            carry = v / base;
+        }
+        if carry > 0 {
+            limbs.push(carry);
+        }
+        answer.push(limbs[0] % 5 == 0);
+    }
+    answer
+}
+
+fn d_weights(nums: Vec[i64]) -> Vec[bool] {
+    let weight = [1, 2, 4, 3];
+    let mut ones = [0, 0, 0, 0];
+    let mut answer: Vec[bool] = Vec.new();
+    for l in 0..nums.len() {
+        if nums[l] == 1 {
+            ones[l % 4] += 1;
+        }
+        // index j = l - k (mod 4) sits k places above the last bit
+        let mut total = 0;
+        for k in 0..4 {
+            total += ones[(l - k + 4) % 4] * weight[k];
+        }
+        answer.push(total % 5 == 0);
+    }
+    answer
+}
+
+fn d_lazy(nums: Vec[i64]) -> Vec[bool] {
+    let limit = 1 << 60;
+    let mut value = 0;
+    let mut answer: Vec[bool] = Vec.new();
+    for bit in nums.iter() {
+        value = value * 2 + bit;
+        answer.push(value % 5 == 0);
+        if value >= limit {
+            value %= 5;
+        }
+    }
+    answer
+}
+
+fn arms(nums: ref Vec[i64]) -> Vec[Vec[bool]] {
+    vec![d_star(nums), d_table(nums), d_full(nums), d_weights(nums), d_lazy(nums)]
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let mut failures: Vec[i64] = Vec.filled(6, 0);
+    let mut checks = 0;
+    let mut check = 0;
+    let mut seed = 10181;
+    let mut arrays = 0;
+    // every array of 1 to 12 bits (8190), then 1500 random of 13 to 200
+    // bits and 30 random of 1000, with 1 to 7 ones in 8
+    for t in 0..9720 {
+        let mut nums: Vec[i64] = Vec.new();
+        if t < 8190 {
+            // t + 2 in binary without its leading 1
+            let mut len = 1;
+            while (1 << (len + 1)) - 2 <= t {
+                len += 1;
+            }
+            let code = t + 2 - (1 << len);
+            for k in 0..len {
+                nums.push((code >> (len - 1 - k)) & 1);
+            }
+        } else {
+            let len = if t < 9690 { 13 + next_random(mut seed) % 188 } else { 1000 };
+            let ones = 1 + next_random(mut seed) % 7;
+            for _ in 0..len {
+                nums.push(if next_random(mut seed) % 8 < ones { 1 } else { 0 });
+            }
+        }
+        arrays += 1;
+        let len = nums.len();
+        let got = arms(nums);
+        for a in got[0].iter() {
+            check = (check * 2 + if a { 1 } else { 0 }) % 1000000007;
+        }
+        // the array with a 0 after it, a 0 before it, 0000 put in at
+        // `at`, and the bit at `flip` turned over
+        let mut after = nums.clone();
+        after.push(0);
+        let mut before: Vec[i64] = vec![0];
+        for b in nums.iter() {
+            before.push(b);
+        }
+        let at = next_random(mut seed) % (len + 1);
+        let mut padded: Vec[i64] = Vec.new();
+        for i in 0..len + 1 {
+            if i == at {
+                for _ in 0..4 {
+                    padded.push(0);
+                }
+            }
+            if i < len {
+                padded.push(nums[i]);
+            }
+        }
+        let flip = next_random(mut seed) % len;
+        let mut flipped = nums.clone();
+        flipped[flip] = 1 - flipped[flip];
+        let got_after = arms(after);
+        let got_before = arms(before);
+        let got_padded = arms(padded);
+        let got_flipped = arms(flipped);
+        for a in 0..5 {
+            let ans = got[a].clone();
+            // P1: the prefixes themselves, for the first 62
+            checks += 1;
+            let mut value = 0;
+            let mut bad = ans.len() != len;
+            for i in 0..len.min(62) {
+                value = value * 2 + nums[i];
+                if not bad and ans[i] != (value % 5 == 0) {
+                    bad = true;
+                }
+            }
+            if bad {
+                failures[0] += 1;
+            }
+            if ans.len() != len {
+                continue;
+            }
+            // P2: a 0 after it repeats the last answer
+            checks += 1;
+            let mut want = ans.clone();
+            want.push(ans[len - 1]);
+            if got_after[a] != want {
+                failures[1] += 1;
+            }
+            // P3: a 0 before it adds a true answer in front
+            checks += 1;
+            let mut want = vec![true];
+            for x in ans.iter() {
+                want.push(x);
+            }
+            if got_before[a] != want {
+                failures[2] += 1;
+            }
+            // P4: 0000 put in anywhere: 16 is 1 mod 5, so the later answers
+            // are unchanged and the four new ones repeat the answer before
+            checks += 1;
+            let mut want: Vec[bool] = Vec.new();
+            for i in 0..len + 1 {
+                if i == at {
+                    let held = if at == 0 { true } else { ans[at - 1] };
+                    for _ in 0..4 {
+                        want.push(held);
+                    }
+                }
+                if i < len {
+                    want.push(ans[i]);
+                }
+            }
+            if got_padded[a] != want {
+                failures[3] += 1;
+            }
+            // P5: turning a bit over moves every later prefix by a power of
+            // 2, never a multiple of 5, so no answer from there on stays true
+            checks += 1;
+            let mut bad = got_flipped[a].len() != len;
+            if not bad {
+                for i in 0..len {
+                    let other = got_flipped[a][i];
+                    if (i < flip and other != ans[i]) or (i >= flip and other and ans[i]) {
+                        bad = true;
+                    }
+                }
+            }
+            if bad {
+                failures[4] += 1;
+            }
+            // P6: each arm agrees with at least two of the other four
+            checks += 1;
+            let mut agree = 0;
+            for o in 0..5 {
+                if o != a and got[o] == ans {
+                    agree += 1;
+                }
+            }
+            if agree < 2 {
+                failures[5] += 1;
+            }
+        }
+    }
+    let mut total = 0;
+    for p in 0..6 {
+        if failures[p] > 0 {
+            println(f"P{p + 1}: {failures[p]} failures");
+        }
+        total += failures[p];
+    }
+    println(f"{arrays} arrays: checksum {check}, {checks} checks over 5 arms: {total} failures");
+}

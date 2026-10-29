@@ -1,0 +1,45 @@
+// LeetCode #1018: Binary Prefix Divisible By 5 -- bench
+//
+// The ★ arm (../prefix.kara) on one random array of 2,000,000 bits,
+// answered 50 times with one bit turned over before each round, folding
+// the answers into a count and a sum of the true answers' indices. See
+// ../README.md § Benchmarks.
+
+fn prefixes_div_by5(nums: Vec[i64]) -> Vec[bool] {
+    let mut answer: Vec[bool] = Vec.new();
+    let mut r = 0;
+    for bit in nums.iter() {
+        r = (r * 2 + bit) % 5;
+        answer.push(r == 0);
+    }
+    answer
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let len = 2000000;
+    let rounds = 50;
+    let mut seed = 1018;
+    let mut nums: Vec[i64] = Vec.new();
+    for _ in 0..len {
+        nums.push(next_random(mut seed) % 2);
+    }
+    let mut trues = 0;
+    let mut sum = 0;
+    for round in 0..rounds {
+        let at = round * 39989 % len;
+        nums[at] = 1 - nums[at];
+        let answer = prefixes_div_by5(nums);
+        for i in 0..answer.len() {
+            if answer[i] {
+                trues += 1;
+                sum = (sum + i) % 1000000007;
+            }
+        }
+    }
+    println(f"{rounds} rounds over {len} bits: {trues} true, index sum {sum}");
+}
