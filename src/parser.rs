@@ -397,6 +397,11 @@ pub struct Parser {
     /// recognizers see the same `!` when recovery re-parses it (`expect` and
     /// the prefix parser), and each reported it (B-2026-10-20-5).
     pub(crate) macro_bangs_reported: rustc_hash::FxHashSet<usize>,
+    /// The keywords a binding was named by and recovered as `r#NAME`
+    /// ([`Self::recover_keyword_as_ident`]): a later use of one before a `{`
+    /// (`if and { .. }`) is that binding, and gets the same rename
+    /// (B-2026-10-29-13).
+    pub(crate) escaped_bindings: rustc_hash::FxHashSet<&'static str>,
     /// The text the tokens were lexed from, and the offset its first byte
     /// has in span coordinates, when the caller supplied it
     /// ([`Self::with_source`]). A fix that moves source text (the
@@ -494,6 +499,7 @@ impl Parser {
             let_pattern: None,
             pattern_muts: Vec::new(),
             macro_bangs_reported: rustc_hash::FxHashSet::default(),
+            escaped_bindings: rustc_hash::FxHashSet::default(),
             source: None,
             turbofishes: Vec::new(),
         }
@@ -1714,7 +1720,15 @@ impl Parser {
             && matches!(
                 self.tokens.get(self.pos + 1).map(|t| &t.token),
                 Some(Token::In | Token::FatArrow | Token::If | Token::At)
-            ));
+            ))
+            // A use of a binding already recovered under this name, as the
+            // condition or scrutinee before a block (B-2026-10-29-13).
+            || (expected == "expression"
+                && self.escaped_bindings.contains(kw)
+                && matches!(
+                    self.tokens.get(self.pos + 1).map(|t| &t.token),
+                    Some(Token::LeftBrace)
+                ));
         if !follows_a_name {
             return false;
         }
@@ -1728,6 +1742,9 @@ impl Parser {
                 replacement: format!("r#{kw}"),
             },
         );
+        if expected != "expression" {
+            self.escaped_bindings.insert(kw);
+        }
         self.tokens[self.pos].token = Token::Identifier {
             name: kw.to_string(),
             raw: true,
