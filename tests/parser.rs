@@ -16099,7 +16099,8 @@ fn map_literal_survives_a_formatter_round_trip() {
 /// turbofish. Kāra has no call-site type arguments, and the `::` used to
 /// surface as "Expected Semicolon, found ColonColon". It is now one named
 /// error whose fix deletes the type list, for angle and square brackets, a
-/// nested `>>`, and a turbofish in the middle of a chain.
+/// nested `>>`, and a turbofish in the middle of a chain; on `parse` it
+/// writes the type as the call's receiver instead.
 #[test]
 fn method_turbofish_is_named_and_deleted() {
     for (src, repaired) in [
@@ -16111,9 +16112,11 @@ fn method_turbofish_is_named_and_deleted() {
             "fn main() {\n let s: i64 = (1..4).sum::[i64]();\n println(f\"{s}\");\n}",
             "let s: i64 = (1..4).sum();",
         ),
+        // `parse`'s type argument becomes the type it is called on
+        // (B-2026-10-29-39), which flips this case's delete-only pin.
         (
             "fn main() {\n let n: i64 = \"42\".parse::<i64>().unwrap() + 1;\n println(f\"{n}\");\n}",
-            "let n: i64 = \"42\".parse().unwrap() + 1;",
+            "let n: i64 = i64.parse(\"42\").unwrap() + 1;",
         ),
     ] {
         let result = karac::parse(src);
@@ -16124,7 +16127,13 @@ fn method_turbofish_is_named_and_deleted() {
             result.errors[0].message
         );
         assert_eq!(&src[result.errors[0].span.offset..][..2], "::");
-        let fixed = apply_parse_fixes(src, &result);
+        let mut edits: Vec<_> = result.fix_edits.values().cloned().collect();
+        edits.extend(result.fix_diffs.values().flatten().cloned());
+        edits.sort_by_key(|e| std::cmp::Reverse(e.offset));
+        let mut fixed = src.to_string();
+        for e in edits {
+            fixed.replace_range(e.offset..e.offset + e.length, &e.replacement);
+        }
         assert!(fixed.contains(repaired), "repaired: {fixed}");
         assert!(karac::parse(&fixed).errors.is_empty(), "repaired source parses: {fixed}");
     }

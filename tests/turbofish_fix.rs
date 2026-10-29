@@ -63,7 +63,7 @@ fn turbofish_outside_a_whole_let_initializer_is_only_deleted() {
             "let w = \"ab\".chars().collect();",
         ),
         // A method whose type argument is not what it returns.
-        ("let r = \"4\".parse::<i64>();", "let r = \"4\".parse();"),
+        ("let r = it.unzip::<Vec<i64>>();", "let r = it.unzip();"),
         // A destructuring pattern, and an annotated binding.
         (
             "let (a, b) = p.unzip::<Vec<i64>>();",
@@ -108,4 +108,29 @@ fn turbofish_on_a_receiver_collect_names_a_typed_let_with_no_fix() {
         );
         assert!(result.fix_edits.is_empty() && result.fix_diffs.is_empty());
     }
+}
+
+/// `s.parse::<i64>()` names the type to parse to, which Kāra writes as the
+/// receiver of an associated call: the fix rewrites it to `i64.parse(s)`
+/// rather than deleting the one fact the next diagnostic needs
+/// (B-2026-10-29-39). This flips the pin that held the delete,
+/// `"4".parse::<i64>()` to `"4".parse()`.
+#[test]
+fn turbofish_on_parse_is_rewritten_to_an_associated_call() {
+    let src = "fn main() {\n\
+               let piece = \"42\";\n\
+               let v = piece.parse::<i64>().unwrap();\n\
+               let w: i64 = (\"1\" + \"7\").parse::[i64]().unwrap() + 1;\n\
+               println(f\"{v} {w}\");\n\
+               }\n";
+    let out = fixed(src);
+    for want in [
+        "let v = i64.parse(piece).unwrap();",
+        // A parenthesized receiver keeps its parentheses around the call.
+        "let w: i64 = (i64.parse(\"1\" + \"7\")).unwrap() + 1;",
+    ] {
+        assert!(out.contains(want), "missing {want:?} in:\n{out}");
+    }
+    let run = karac::mir::lower::run_source(&out).unwrap_or_else(|e| panic!("build: {e}"));
+    assert_eq!(run.output, "42 18\n");
 }

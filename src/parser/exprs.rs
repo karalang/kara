@@ -501,7 +501,7 @@ impl super::Parser {
                             // `ptr.mut(x)`, `opt.or(alt)` (B-2026-07-14-6),
                             // `handle.await`.
                             let method = self.expect_method_name()?;
-                            self.reject_method_turbofish();
+                            self.reject_method_turbofish(lhs.span);
                             let turbofish = None;
                             if self.check(&Token::LeftParen) {
                                 // Method call
@@ -3345,7 +3345,7 @@ impl super::Parser {
     /// whatever the enclosing construct expected next -- at the `::`. Name
     /// it, skip the type list so the call still parses, and offer its
     /// deletion as a fix. Called with the method name consumed.
-    fn reject_method_turbofish(&mut self) {
+    fn reject_method_turbofish(&mut self, receiver: Span) {
         if !self.check(&Token::ColonColon)
             || !matches!(
                 self.peek_token_ref_at(1),
@@ -3359,6 +3359,12 @@ impl super::Parser {
             Some(Token::Identifier { name, .. }) => name.clone(),
             _ => String::new(),
         };
+        let dot = self
+            .pos
+            .checked_sub(2)
+            .map(|i| &self.tokens[i])
+            .filter(|t| t.token == Token::Dot)
+            .map(|t| t.span.offset);
         self.advance();
         let open = self.pos;
         // One depth counter for both bracket kinds: the list is a type, so
@@ -3399,6 +3405,41 @@ impl super::Parser {
             );
             self.turbofishes.push((start, method, self.pos, ty));
             return;
+        }
+        // `s.parse::<i64>()`: the type argument names what is parsed to, and
+        // Kāra names it as the receiver of an associated call, so the fix
+        // writes `i64.parse(s)` (B-2026-10-29-39).
+        if let (true, Some(t), Some(dot)) = (method == "parse", &ty, dot) {
+            if self.check(&Token::LeftParen)
+                && matches!(self.peek_token_ref_at(1), Token::RightParen)
+            {
+                let close = self.tokens[self.pos + 1].span;
+                self.error_at(
+                    &format!(
+                        "`::<..>` after a method name is Rust's turbofish; Kāra has no \
+                         call-site type arguments -- the type to parse to is named before \
+                         the call: `{t}.parse(s)`"
+                    ),
+                    start,
+                );
+                self.fix_diffs.insert(
+                    crate::resolver::SpanKey::from_span(&start),
+                    vec![
+                        crate::resolver::TextEdit {
+                            offset: receiver.offset,
+                            length: 0,
+                            replacement: format!("{t}.parse("),
+                        },
+                        crate::resolver::TextEdit {
+                            offset: dot,
+                            length: close.offset + close.length - dot,
+                            replacement: ")".to_string(),
+                        },
+                    ],
+                );
+                self.turbofishes.push((start, method, self.pos, None));
+                return;
+            }
         }
         self.turbofishes.push((start, method, self.pos, ty));
         self.error_at(
