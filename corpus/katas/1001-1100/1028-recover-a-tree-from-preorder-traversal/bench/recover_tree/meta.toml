@@ -1,0 +1,11 @@
+source = "kara-katas/leetcode/1001-1100/1028-recover-a-tree-from-preorder-traversal/bench/recover_tree.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["bench"]
+class = "e"
+expected_from = "mirror"
+note = "mirror: the C, Rust, Go and Python bench programs print this line (kara-katas 1028 bench/); there is no legacy record (the legacy compiler went at M3)"
+bucket = "timeout"
+classified_with = "7427e7b66"
+extracted_src = "47a6992b"

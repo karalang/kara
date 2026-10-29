@@ -1,0 +1,126 @@
+// LeetCode #1028: Recover a Tree From Preorder Traversal -- bench
+// Mirrors ../recover_tree.kara; see ../README.md § Benchmarks.
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn recover_from_preorder(traversal: Str) -> Option[TreeNode] {
+    let bytes = traversal.bytes();
+    let mut path: Vec[TreeNode] = Vec.new();
+    let mut i = 0;
+    while i < bytes.len() {
+        let mut depth = 0;
+        while bytes[i] == 45 {
+            depth += 1;
+            i += 1;
+        }
+        let mut value = 0;
+        while i < bytes.len() and bytes[i] != 45 {
+            value = value * 10 + (bytes[i] - 48) as i64;
+            i += 1;
+        }
+        let node = TreeNode { val: value, left: None, right: None };
+        while path.len() > depth {
+            path.pop();
+        }
+        if path.len() > 0 {
+            let parent = path[path.len() - 1];
+            if parent.left.is_none() {
+                parent.left = Some(node);
+            } else {
+                parent.right = Some(node);
+            }
+        }
+        path.push(node);
+    }
+    if path.len() > 0 { Some(path[0]) } else { None }
+}
+
+// a fold of the tree's values and shape
+fn digest(node: Option[TreeNode]) -> i64 {
+    match node {
+        None => 1,
+        Some(n) => (n.val + 3 * digest(n.left) + 7 * digest(n.right)) % 1000000007,
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_value(seed: mut ref i64, top: i64) -> i64 {
+    (next_random(mut seed) * 32768 + next_random(mut seed)) % top + 1
+}
+
+// writes the subtree at `at` in preorder, each node as `depth` dashes and
+// its value; a node with one child writes it as its only child, which is
+// read back on the left
+fn write(at: i64, depth: i64, vals: Vec[i64], left: Vec[i64], right: Vec[i64], out: mut ref String) {
+    for _ in 0..depth {
+        out.push('-');
+    }
+    out.push_str(f"{vals[at]}");
+    if left[at] >= 0 {
+        write(left[at], depth + 1, vals, left, right, mut out);
+    }
+    if right[at] >= 0 {
+        write(right[at], depth + 1, vals, left, right, mut out);
+    }
+}
+
+// a random traversal of `n` nodes: random values put into a binary search
+// tree one at a time, then written out
+fn make_traversal(seed: mut ref i64, n: i64) -> String {
+    let mut vals: Vec[i64] = Vec.new();
+    let mut left: Vec[i64] = Vec.new();
+    let mut right: Vec[i64] = Vec.new();
+    for k in 0..n {
+        let v = random_value(mut seed, 1000000000);
+        vals.push(v);
+        left.push(-1);
+        right.push(-1);
+        let mut at = 0;
+        while k > 0 {
+            if v < vals[at] {
+                if left[at] < 0 {
+                    left[at] = k;
+                    break;
+                }
+                at = left[at];
+            } else {
+                if right[at] < 0 {
+                    right[at] = k;
+                    break;
+                }
+                at = right[at];
+            }
+        }
+    }
+    let mut out = String.new();
+    write(0, 0, vals, left, right, mut out);
+    out
+}
+
+fn main() {
+    let count = 200;
+    let rounds = 50;
+    let mut seed = 1028;
+    let mut traversals: Vec[String] = Vec.new();
+    let mut letters = 0;
+    for _ in 0..count {
+        let s = make_traversal(mut seed, 1000);
+        letters += s.len();
+        traversals.push(s);
+    }
+    let mut check = 0;
+    for _ in 0..rounds {
+        for s in traversals.iter() {
+            check = (check * 131 + digest(recover_from_preorder(s))) % 1000000007;
+        }
+    }
+    println(f"{count} traversals of 1000 nodes, {letters} letters, {rounds} rounds: checksum {check}");
+}

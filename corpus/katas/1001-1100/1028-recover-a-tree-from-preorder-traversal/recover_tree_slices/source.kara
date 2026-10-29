@@ -1,0 +1,181 @@
+// LeetCode #1028: Recover a Tree From Preorder Traversal -- cutting the list
+//
+// Turn the string into a list of (depth, value) nodes first. In preorder
+// a subtree is a stretch of the list: its root, then its left subtree,
+// then its right one, which starts at the next node one level below the
+// root. Find that place and build both halves the same way. O(n * height).
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+// the string as a list of nodes, each its depth and its value
+fn tokens(traversal: Str) -> Vec[(i64, i64)] {
+    let bytes = traversal.bytes();
+    let mut out: Vec[(i64, i64)] = Vec.new();
+    let mut i = 0;
+    while i < bytes.len() {
+        let mut depth = 0;
+        while bytes[i] == 45 {
+            depth += 1;
+            i += 1;
+        }
+        let mut value = 0;
+        while i < bytes.len() and bytes[i] != 45 {
+            value = value * 10 + (bytes[i] - 48) as i64;
+            i += 1;
+        }
+        out.push((depth, value));
+    }
+    out
+}
+
+fn recover_from_preorder(traversal: Str) -> Option[TreeNode] {
+    let list = tokens(traversal);
+    build(list, 0, list.len())
+}
+
+// the subtree held by list[lo..hi], which starts with its root
+fn build(list: ref Vec[(i64, i64)], lo: i64, hi: i64) -> Option[TreeNode] {
+    if lo >= hi {
+        return None;
+    }
+    let (depth, value) = list[lo];
+    let mut split = hi;
+    let mut seen_child = false;
+    for k in lo + 1..hi {
+        if list[k].0 == depth + 1 {
+            if seen_child {
+                split = k;
+                break;
+            }
+            seen_child = true;
+        }
+    }
+    Some(TreeNode { val: value, left: build(list, lo + 1, split), right: build(list, split, hi) })
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// a random value from 1 to `top`, from two draws of 15 bits
+fn random_value(seed: mut ref i64, top: i64) -> i64 {
+    (next_random(mut seed) * 32768 + next_random(mut seed)) % top + 1
+}
+
+// a random tree of `n` nodes in which a node with one child has it on the
+// left: each new node walks down from the root, and becomes the left child
+// of the first node it meets without one, or, with probability 1/2, the
+// right child of a node that has a left child and no right one
+fn random_tree(seed: mut ref i64, n: i64, top: i64) -> TreeNode {
+    let root = TreeNode { val: random_value(mut seed, top), left: None, right: None };
+    let mut placed = 1;
+    while placed < n {
+        let leaf = TreeNode { val: random_value(mut seed, top), left: None, right: None };
+        let mut node = root;
+        loop {
+            match node.left {
+                None => {
+                    node.left = Some(leaf);
+                    break;
+                }
+                Some(l) => {
+                    if next_random(mut seed) % 2 == 0 {
+                        node = l;
+                    } else {
+                        match node.right {
+                            None => {
+                                node.right = Some(leaf);
+                                break;
+                            }
+                            Some(r) => {
+                                node = r;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        placed += 1;
+    }
+    root
+}
+
+// the traversal the problem starts from: each node as `depth` dashes
+// followed by its value, in preorder
+fn traversal(node: Option[TreeNode], depth: i64, out: mut ref String) {
+    if let Some(n) = node {
+        for _ in 0..depth {
+            out.push('-');
+        }
+        out.push_str(f"{n.val}");
+        traversal(n.left, depth + 1, mut out);
+        traversal(n.right, depth + 1, mut out);
+    }
+}
+
+// LeetCode's level order: every node's children in turn, `null` for a
+// missing one, with trailing nulls left off
+fn level_order(root: Option[TreeNode]) -> String {
+    let mut items: Vec[String] = Vec.new();
+    let mut queue: VecDeque[Option[TreeNode]] = VecDeque.new();
+    queue.push_back(root);
+    while let Some(entry) = queue.pop_front() {
+        match entry {
+            None => items.push("null".to_string()),
+            Some(n) => {
+                items.push(f"{n.val}");
+                queue.push_back(n.left);
+                queue.push_back(n.right);
+            }
+        }
+    }
+    while items.len() > 0 and items[items.len() - 1] == "null" {
+        items.pop();
+    }
+    "[" + items.join(",") + "]"
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let examples: Vec[String] = vec![
+        "1-2--3--4-5--6--7".to_string(),
+        "1-2--3---4-5--6---7".to_string(),
+        "1-401--349---90--88".to_string(),
+        "7".to_string(),
+        "10-20".to_string(),
+        "1-2--3---4----5".to_string(),
+        "1000000000-1--1000000000-999999999".to_string(),
+    ];
+    for s in examples.iter() {
+        println(f"{s} -> {level_order(recover_from_preorder(s))}");
+    }
+    // random trees: written out, recovered and written out again
+    let mut seed = 1028;
+    let groups: Vec[(i64, i64, i64)] = vec![(2000, 5, 9), (1000, 20, 100), (300, 100, 1000000000), (100, 300, 5), (20, 1000, 1000000000), (2, 1000, 1)];
+    for (count, n, top) in groups.iter() {
+        let mut exact = 0;
+        let mut letters = 0;
+        let mut check = 0;
+        for _ in 0..count {
+            let tree = random_tree(mut seed, n, top);
+            let mut s = String.new();
+            traversal(Some(tree), 0, mut s);
+            letters += s.len();
+            let back = level_order(recover_from_preorder(s));
+            if back == level_order(Some(tree)) {
+                exact += 1;
+            }
+            for b in back.bytes() {
+                check = (check * 131 + b as i64) % 1000000007;
+            }
+        }
+        println(f"{count} trees of {n} nodes (values up to {top}), {letters} letters: {exact} recovered exactly, checksum {check}");
+    }
+}

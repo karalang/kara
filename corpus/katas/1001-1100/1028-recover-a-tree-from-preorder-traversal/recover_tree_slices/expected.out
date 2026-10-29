@@ -1,0 +1,13 @@
+1-2--3--4-5--6--7 -> [1,2,5,3,4,6,7]
+1-2--3---4-5--6---7 -> [1,2,5,3,null,6,null,4,null,7]
+1-401--349---90--88 -> [1,401,null,349,88,90]
+7 -> [7]
+10-20 -> [10,20]
+1-2--3---4----5 -> [1,2,null,3,null,4,null,5]
+1000000000-1--1000000000-999999999 -> [1000000000,1,999999999,1000000000]
+2000 trees of 5 nodes (values up to 9), 23074 letters: 2000 recovered exactly, checksum 749396001
+1000 trees of 20 nodes (values up to 100), 95947 letters: 1000 recovered exactly, checksum 570526263
+300 trees of 100 nodes (values up to 1000000000), 414868 letters: 300 recovered exactly, checksum 814269870
+100 trees of 300 nodes (values up to 5), 226384 letters: 100 recovered exactly, checksum 781262938
+20 trees of 1000 nodes (values up to 1000000000), 341566 letters: 20 recovered exactly, checksum 477470990
+2 trees of 1000 nodes (values up to 1), 18525 letters: 2 recovered exactly, checksum 23753179
