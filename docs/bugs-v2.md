@@ -60,11 +60,11 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | false-positive | 59 |
 | diagnostics | 57 |
-| missing-feature | 48 |
+| missing-feature | 49 |
 | perf | 34 |
 | soundness | 24 |
 | miscompile | 14 |
-| run-vs-build | 9 |
+| run-vs-build | 10 |
 | other | 6 |
 | codegen-gap | 6 |
 | crash | 2 |
@@ -74,17 +74,17 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 111 |
-| mir | 53 |
+| mir | 54 |
 | mir-llvm | 40 |
 | ownership | 26 |
 | interp | 23 |
+| cli | 23 |
 | codegen | 22 |
-| cli | 22 |
 | parser | 15 |
 | runtime | 14 |
+| effect | 4 |
 | other | 3 |
 | resolver | 3 |
-| effect | 3 |
 | autopar | 2 |
 | lexer | 1 |
 ## Current state
@@ -134,6 +134,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-29-17 | 2026-10-29 | parser | low | A struct item left unclosed (`struct A { x: i64,` with no `}`) before the next item reports only E0003 "'struct' is a reserved keyword and cannot be used as an identifier; write `r#struct` to use it as an ordinary identifier" at the NEXT `struct`, so the one error points at the wrong line and suggests a wrong remedy; the missing `}` is never named | — |
 | B-2026-10-29-18 | 2026-10-29 | typecheck | low | Comparing `x.count_ones()` (a `u32`) with an `i64` is refused with E0208 and no machine-applicable fix, though `as i64` widens without loss and E0200 already offers that cast | — |
 | B-2026-10-29-19 | 2026-10-29 | typecheck | low | `count_ones`, `count_zeros`, `leading_zeros` and `trailing_zeros` return `u32`, while design.md says Kāra code uses `i64` for every size, length, count and index, so every use beside a length needs `as i64` | — |
+| B-2026-10-29-20 | 2026-10-29 | effect+mir | medium | Under a `Network` override, TLS, WebSocket and the `Server.serve` family must be refused by `karac check` with `E_PROVIDER_UNSUPPORTED` naming the call and `Network` (§14.12); today they are accepted and reach the real network, and a `Network` provider's handle method that uses a resource overridden at the binding site is refused only by the MIR build | — |
 
 ### Relocated
 
@@ -370,6 +371,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-28-39 | mir-llvm | medium | The MIR backend never ported legacy's partial-unroll hint (`llvm.loop.unroll.count 4` on pure-scalar counted `while` loops, B-2026-07-08-24), so kata… | 721602d810 |
 | B-2026-10-29-9 | mir | medium | `let v: Vec[Option[String]] = [None].to_vec();` passes `karac check` but does not build on MIR: `an expression whose type does not lower (Type(Unknow… | af7bbf1e39 |
 | B-2026-10-29-11 | interp | medium | `for x in v.iter()` over a `Vec` calls the library `VecIter.next` once an element, so in the MIR interpreter it runs 8.5 times slower than `for x in… | 70e887275e |
+| B-2026-10-29-21 | cli | medium | `karac test` on a package refuses a program that uses a v2-only library item (`NetError`, `NetworkProvider`) with `E0104 undefined type`, where `kara… | 927b03363c |
 
 </details>
 
