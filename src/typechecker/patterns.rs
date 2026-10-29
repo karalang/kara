@@ -827,7 +827,7 @@ impl<'a> super::TypeChecker<'a> {
                         // A borrowed arm beside owned ones moves out of a
                         // borrow (core semantics §3.7): say so, and clone.
                         if let Some(owned) = self.reject_borrowed_arm_among_owned(
-                            &result_ty, arm_ty, i, arms, &arm_types,
+                            &result_ty, arm_ty, i, arms, &arm_types, scrutinee,
                         ) {
                             result_ty = owned;
                             reported = true;
@@ -854,7 +854,10 @@ impl<'a> super::TypeChecker<'a> {
     /// One arm hands back a `ref T` (a `Map.get` payload, a bare `for`
     /// element) where the other arms are an owned, non-`Copy` `T`: the match
     /// would move the borrowed value out. Reports it at the borrowed arm,
-    /// with `.clone()` when `T` has one, and returns the owned type.
+    /// with `.clone()` when `T` has one, and returns the owned type. When the
+    /// scrutinee is a closure's annotated bare parameter, the borrow is that
+    /// parameter's, and the fix is its `own`, as for a closure that gives the
+    /// parameter itself away (B-2026-10-28-24).
     fn reject_borrowed_arm_among_owned(
         &mut self,
         result_ty: &Type,
@@ -862,6 +865,7 @@ impl<'a> super::TypeChecker<'a> {
         i: usize,
         arms: &[MatchArm],
         arm_types: &[Type],
+        scrutinee: &Expr,
     ) -> Option<Type> {
         let peel = |t: &Type| match t {
             Type::Ref(t) | Type::MutRef(t) => Some((**t).clone()),
@@ -883,6 +887,40 @@ impl<'a> super::TypeChecker<'a> {
             ExprKind::Identifier(n) => format!("cannot move '{n}': it borrows its value"),
             _ => "cannot move a non-`Copy` value out of a borrowed place".to_string(),
         };
+        let closure_param = match &scrutinee.kind {
+            ExprKind::Identifier(p) if self.closure_d5_params.contains(p) => self
+                .current_fn_d5_params
+                .get(p)
+                .copied()
+                .zip(match self.local_scope.lookup(p) {
+                    Some(Type::Ref(t)) => Some(type_display(t)),
+                    _ => None,
+                })
+                .map(|(at, t)| (p.clone(), at, t)),
+            _ => None,
+        };
+        if let Some((p, at, t)) = closure_param {
+            self.type_error_with_fix_it(
+                format!(
+                    "{what}, and the other arms of this `match` are an owned '{}': an \
+                     annotated bare closure parameter borrows (design.md § Parameter \
+                     modes). Take `{p}` by value with `|{p}: own {t}|`{}",
+                    type_display(&owned),
+                    if has_clone {
+                        ", or write `.clone()` to take a copy"
+                    } else {
+                        ""
+                    }
+                ),
+                body.span,
+                TypeErrorKind::BranchTypeMismatch,
+                crate::typechecker::FixIt {
+                    span: at,
+                    replacement: "own ".to_string(),
+                },
+            );
+            return Some(owned);
+        }
         // A block, `if` or `match` arm yields its value from its tails, so the
         // copy goes there: `.clone()` after the arm's block does not parse
         // (B-2026-10-20-36), and each tail that lends carries its own fix.

@@ -7,7 +7,7 @@ fn shadowed() -> i64 {
     take(9)
 }
 fn heap_shadowed() -> i64 {
-    let take = |x: String| {
+    let take = |x: own String| {
         let mut v: Vec[String] = Vec.new();
         v.push(x);
         v.len()

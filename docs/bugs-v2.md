@@ -59,7 +59,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | false-positive | 65 |
-| diagnostics | 62 |
+| diagnostics | 63 |
 | missing-feature | 49 |
 | perf | 39 |
 | soundness | 25 |
@@ -74,7 +74,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 117 |
+| typecheck | 118 |
 | mir | 58 |
 | mir-llvm | 49 |
 | ownership | 28 |
@@ -131,6 +131,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-29-35 | 2026-10-29 | typecheck | low | A comparison does not give a constructor or tuple operand the other operand's type, so a `ref` to a Copy value inside it is refused: with `n: ref i64` from `for n in v.iter()`, `value == Some(n)`, `Some(n) == value`, `value != Some(n)` and `pair == (n, 5)` fail "cannot compare 'Option[i64]' and 'Option[ref i64]'" (or the tuple form) with no fix-it, though `let w: Option[i64] = Some(n)`, `same(value, Some(n))` and `vec![Some(n)]` into a `Vec[Option[i64]]` all read `n` as an `i64` | — |
 | B-2026-10-29-43 | 2026-10-29 | ownership | medium | `karac check` still refuses moving a binding after an iterator adapter's closure that only reads it (`h.iter().filter(|u| mask[*u % 2]).count(); let m2 = mask;`, "moved inside a loop"); B-2026-10-29-37's fix covers only a `let`-bound closure, and both MIR backends run the program correctly | — |
 | B-2026-10-29-44 | 2026-10-29 | typecheck | medium | A closure whose annotated parameter borrows (`|x: ref String|`), passed to an owning slot (`OnceFn(own T) -> U`: `Option.map`, `Result.map`, `into_iter().map`, a user generic), leaves the call's result type unsolved: "cannot infer type parameter 'U'" | — |
+| B-2026-10-29-45 | 2026-10-29 | typecheck | low | `karac fix` has no `own` fix for a closure's bare parameter given away by an `own self` method (it offers `#[derive(Copy)]`), by a writing method (it says `mut ref`), by `return x` / `let y = x; y` (the caller gets E0516 instead), or by a returned closure that captures it (E0509 at the store) | — |
 
 ### Relocated
 

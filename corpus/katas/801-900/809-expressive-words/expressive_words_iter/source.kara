@@ -10,7 +10,7 @@ fn expressive_words(s: String, words: Vec[String]) -> i64 {
 }
 
 fn groups(text: String) -> Vec[(u8, i64)] {
-    text.bytes().iter().fold(Vec.new(), |out: Vec[(u8, i64)], b| {
+    text.bytes().iter().fold(Vec.new(), |out: own Vec[(u8, i64)], b| {
         let mut out = out;
         if out.last().map(|g| g.0 == *b).unwrap_or(false) {
             let last = out.len() - 1;

@@ -27,7 +27,7 @@ fn main() {
     let n2 = fw2([W2 { v: 3, s: f"sssssssssssssssssssssssssss{3}" }]);
     let fs = |x: Vec[String]| x.len();
     let n3 = fs([f"aaaaaaaaaaaaaaaaaaaaaaaaaaaaa{1}", "b".to_string()]);
-    let id = |x: Vec[i64]| x;
+    let id = |x: own Vec[i64]| x;
     let w = id([4, 5]);
     println(f"{n1} {n2} {n3} {w.len()}");
     let mut i = 0;

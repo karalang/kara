@@ -84,7 +84,7 @@ fn subdomain_visits_iter(cpdomains: Vec[String]) -> Vec[String] {
     let counts = cpdomains
         .iter()
         .flat_map(|entry| subdomains_iter(entry).into_iter())
-        .fold(Map.new(), |acc: Map[String, i64], pair| {
+        .fold(Map.new(), |acc: own Map[String, i64], pair| {
             let mut acc = acc;
             *acc.entry(pair.0).or_insert(0) += pair.1;
             acc

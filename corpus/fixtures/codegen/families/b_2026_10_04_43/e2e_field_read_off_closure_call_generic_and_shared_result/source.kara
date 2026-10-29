@@ -1,7 +1,7 @@
 struct Bx[T] { a: T, b: i64 }
 shared struct S { v: i64, t: String }
 fn main() {
-    let h = |x: Bx[String]| x;
+    let h = |x: own Bx[String]| x;
     println(f"a:{h(Bx { a: "s".to_string(), b: 1 }).a} {h(Bx { a: f"w{2}", b: 4 }).b}");
     let k = |n: i64| Bx { a: f"q{n}", b: n };
     println(f"b:{k(3).a} {k(5).b}");

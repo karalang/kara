@@ -1,11 +1,11 @@
 fn main() {
 let mut m: Map[String, i64] = Map.new();
 m.insert("a".to_string(), 1);
-let put = |k: String, v: i64| m.insert(k, v);
+let put = |k: own String, v: i64| m.insert(k, v);
 let old = put("a".to_string(), 9);
 match old { Some(x) => println(x), None => println(0), }
 let mut v: Vec[i64] = Vec.new();
 v.push(7); v.push(8);
-let take_last = |vv: Vec[i64]| vv.pop();
+let take_last = |vv: own Vec[i64]| vv.pop();
 match take_last(v) { Some(x) => println(x), None => println(-1), }
 }

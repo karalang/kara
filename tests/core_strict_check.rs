@@ -2621,7 +2621,7 @@ fn a_closure_moving_its_own_match_binding_is_not_once_callable() {
         r#"
 enum Ho { Full(String), Empty }
 fn main() {
-    let f = |q: Ho| { match q { Ho.Full(s) => s, Ho.Empty => "e".to_string() } };
+    let f = |q: own Ho| { match q { Ho.Full(s) => s, Ho.Empty => "e".to_string() } };
     let a = f(Ho.Full("x".to_string()));
     let b = f(Ho.Empty);
     println(f"{a} {b}");
@@ -4014,7 +4014,7 @@ fn a_capture_lent_through_a_closure_local_is_read() {
          }\n\
          fn main() {\n\
              let tree = vec![0, 0];\n\
-             let eat = |a: ref Vec[i64], b: Vec[i64]| a[0] + b.len();\n\
+             let eat = |a: ref Vec[i64], b: own Vec[i64]| a[0] + b.len();\n\
              println(f\"{twice(|n| eat(n, tree))}\");\n\
          }\n",
     );
@@ -8434,8 +8434,6 @@ fn a_bitwise_operation_on_mixed_integer_types_is_refused() {
 /// that wants the value (a struct field).
 #[test]
 fn a_closure_that_gives_away_a_bare_param_is_refused_at_the_closure() {
-    // The closure half of D5 is opt-in (`KARAC_D5_CLOSURES=1`) until the
-    // programs that move a bare closure parameter are migrated to `own`.
     let check = |tag: &str, src: &str| {
         let (_, path) = fixture(tag, src);
         let out = karac()
@@ -10462,9 +10460,9 @@ fn a_fold_init_takes_its_element_from_the_closure() {
         "fold-vec-new-annotated-acc",
         "fn main() {\n\
              let v: Vec[i64] = [1, 2, 3];\n\
-             let out = v.iter().fold(Vec.new(), |acc: Vec[i64], x| { let mut acc = acc; acc.push(*x * 2); acc });\n\
+             let out = v.iter().fold(Vec.new(), |acc: own Vec[i64], x| { let mut acc = acc; acc.push(*x * 2); acc });\n\
              println(f\"{out.len()} {out[2]}\");\n\
-             let pairs = v.iter().map(|x| *x).fold(Vec.new(), |acc: Vec[(i64, i64)], x: i64| { let mut acc = acc; acc.push((x, x + 1)); acc });\n\
+             let pairs = v.iter().map(|x| *x).fold(Vec.new(), |acc: own Vec[(i64, i64)], x: i64| { let mut acc = acc; acc.push((x, x + 1)); acc });\n\
              println(f\"{pairs.len()} {pairs[0].1}\");\n\
              let typed: Vec[i64] = v.iter().fold(Vec.new(), |acc, x| { let mut acc = acc; acc.push(*x); acc });\n\
              println(f\"{typed.len()}\");\n\

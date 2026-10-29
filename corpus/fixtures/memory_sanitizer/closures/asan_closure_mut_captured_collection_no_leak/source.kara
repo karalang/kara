@@ -13,7 +13,7 @@ fn main() {
     append("alpha beta gamma delta epsilon zeta well past inline");
     println(buf.len());
     let mut m: Map[String, i64] = Map.new();
-    let mut record = |k: String, v: i64| { m.insert(k, v); };
+    let mut record = |k: own String, v: i64| { m.insert(k, v); };
     record("one", 1);
     println(m.len());
 }

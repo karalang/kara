@@ -548,7 +548,7 @@ fn parse_query(msg: Slice[u8]) -> Result[Query, (i64, String)] {
         Ok(v) => v,
         Err(e) => return Err((-1, e)),
     };
-    let fail = |e: String| (id, e);
+    let fail = |e: own String| (id, e);
     let flags = r.u16().map_err(fail)?;
     let qd = r.u16().map_err(fail)?;
     r.u16().map_err(fail)?;

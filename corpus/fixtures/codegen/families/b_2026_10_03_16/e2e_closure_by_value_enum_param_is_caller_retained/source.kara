@@ -11,22 +11,22 @@ enum Hp { Full(P), Empty }
 fn mkw(s: own String) -> W { return W { s: s + "-heap-string-long-enough" }; }
 fn mko(s: own String) -> Option[String] { return Some(s + "-heap-string-long-enough"); }
 fn mkr(s: own String) -> Result[String, String] { return Ok(s + "-heap-string-long-enough"); }
-fn mk() -> Fn(own Ho[String]) -> i64 { |q: Ho[String]| keep(q) }
+fn mk() -> Fn(own Ho[String]) -> i64 { |q: own Ho[String]| keep(q) }
 fn k1() { let f = |q: Ho[String]| { match q { Ho.Full(s) => s.len(), Ho.Empty => 0 } }; println(f"k1 {f(mkh("a"))}"); }
 fn k2() { let h = mkh("bb"); let f = |q: Ho[String]| { match q { Ho.Full(s) => s.len(), Ho.Empty => 0 } }; println(f"k2 {f(h)}"); }
 fn k3() { let f = |q: Ho[String]| 5; println(f"k3 {f(mkh("c"))}"); }
 fn k4() { let f = |q: Ho[String]| { match q { Ho.Full(s) => takes(s), Ho.Empty => 0 } }; println(f"k4 {f(mkh("d"))}"); }
-fn k5() { let f = |q: Ho[String]| q; println(f"k5 {keep(f(mkh("e")))}"); }
+fn k5() { let f = |q: own Ho[String]| q; println(f"k5 {keep(f(mkh("e")))}"); }
 fn k6() { let f = |q: Hc| { match q { Hc.Full(s) => s.len(), Hc.Empty => 0 } }; println(f"k6 {f(mkc("f"))}"); }
-fn k7() { let f = |q: Ho[String]| keep(q); println(f"k7 {f(mkh("g"))} {f(mkh("gg"))}"); }
+fn k7() { let f = |q: own Ho[String]| keep(q); println(f"k7 {f(mkh("g"))} {f(mkh("gg"))}"); }
 fn k8() { let f = |q: Ho[String]| { if let Ho.Full(s) = q { s.len() } else { 0 } }; println(f"k8 {f(mkh("h"))}"); }
 fn k9() { let f = |q: Ho[String]| { match q { Ho.Full(s) => s.len(), Ho.Empty => 0 } }; println(f"k9 {f(Ho.Empty)}"); }
 fn k10() { let v: Vec[Ho[String]] = [mkh("i"), Ho.Empty]; let f = |q: Ho[String]| { match q { Ho.Full(s) => s.len(), Ho.Empty => 0 } }; for h in v.into_iter() { println(f"k10 {f(h)}") } }
-fn k11() { let f = |q: Ho[String]| { let r = match q { Ho.Full(s) => s, Ho.Empty => "e".to_string() }; r.len() }; println(f"k11 {f(mkh("j"))}"); }
+fn k11() { let f = |q: own Ho[String]| { let r = match q { Ho.Full(s) => s, Ho.Empty => "e".to_string() }; r.len() }; println(f"k11 {f(mkh("j"))}"); }
 fn k12() { let f = |q: Ho[String]| { match q { Ho.Full(s) => s.len(), Ho.Empty => 0 } }; println(f"k12 {f(Ho.Full("k".to_string() + "-heap-string-long-enough"))}"); }
 fn k13() { mkh("l"); println("k13"); }
 fn k14() { let f = |q: Hc| { match q { Hc.Full(s) => takes(s), Hc.Empty => 0 } }; println(f"k14 {f(mkc("m"))}"); }
-fn k15() { let f = |q: Hc| q; let r = f(mkc("n")); println(f"k15 {match r { Hc.Full(s) => s.len(), Hc.Empty => 0 }}"); }
+fn k15() { let f = |q: own Hc| q; let r = f(mkc("n")); println(f"k15 {match r { Hc.Full(s) => s.len(), Hc.Empty => 0 }}"); }
 fn k16() { let f = |w: W| takes(w.s); println(f"k16 {f(mkw("o"))}"); }
 fn k17() { let w = mkw("pp"); let f = |w: W| w.s.len(); println(f"k17 {f(w)}"); }
 fn k18() { let g = mk(); println(f"k18 {g(mkh("q"))}"); }
@@ -36,7 +36,7 @@ fn k21() { let f = |r: Result[String, String]| { match r { Ok(s) => s.len(), Err
 fn k22() { let f = |h: Hp| { match h { Hp.Full(p) => p.a.len() + p.b, Hp.Empty => 0 } }; println(f"k22 {f(Hp.Full(P { a: "u".to_string() + "-heap-string-long-enough", b: 1 }))}"); }
 fn k23() { let f = |h: Hp| { match h { Hp.Full(P { a, b }) => takes(a) + b, Hp.Empty => 0 } }; let h = Hp.Full(P { a: "v".to_string() + "-heap-string-long-enough", b: 2 }); println(f"k23 {f(h)}"); }
 fn k24() { let v: Vec[W] = [mkw("w"), mkw("ww")]; let f = |w: W| w.s.len(); for w in v.into_iter() { println(f"k24 {f(w)}") } }
-fn k25() { let f = |q: Ho[String]| { match q { Ho.Full(s) => s, Ho.Empty => "e".to_string() } }; let a = f(mkh("x")); let b = f(mkh("xx")); println(f"k25 {a.len()} {b.len()}"); }
+fn k25() { let f = |q: own Ho[String]| { match q { Ho.Full(s) => s, Ho.Empty => "e".to_string() } }; let a = f(mkh("x")); let b = f(mkh("xx")); println(f"k25 {a.len()} {b.len()}"); }
 fn main() {
     k1();
     k2();

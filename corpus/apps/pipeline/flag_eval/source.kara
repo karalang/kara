@@ -109,7 +109,7 @@ fn evaluate(cfg: ref Config, req: ref EvalRequest) -> Decision {
         Some(f) => f,
         None => return Decision { user: req.user.clone(), flag: req.flag.clone(), on: false, variant: None, reason: "unknown flag".to_string() },
     };
-    let off = |why: String| Decision { user: req.user.clone(), flag: req.flag.clone(), on: false, variant: None, reason: why };
+    let off = |why: own String| Decision { user: req.user.clone(), flag: req.flag.clone(), on: false, variant: None, reason: why };
     if not flag.enabled {
         return off("disabled".to_string());
     }

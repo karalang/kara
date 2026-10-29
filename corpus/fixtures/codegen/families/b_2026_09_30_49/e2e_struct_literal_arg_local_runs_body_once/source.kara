@@ -42,7 +42,7 @@ fn main() {
     println(K.a(Hr { v: r8, n: 80 }));
     let r9 = R { id: 9 };
     println(gg(G { v: r9, n: 90 }));
-    let f = |g: Hr| g.n;
+    let f = |g: own Hr| g.n;
     let r11 = R { id: 11 };
     println(f(Hr { v: r11, n: 110 }));
     let r12 = R { id: 12 };

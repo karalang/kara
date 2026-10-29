@@ -5,7 +5,7 @@ struct Q { s: String, n: i64 }
 fn mk(i: i64) -> R { return R { id: i, name: f"h{i}", p: P { x: i * 2, y: 0 } }; }
 fn main() {
     let base = 100;
-    let h = |x: R| x;
+    let h = |x: own R| x;
     let g = |n: i64| Q { s: f"q{n + base}", n: n };
     println(f"r{h(mk(47)).id}");
     println(f"a:{h(mk(1)).name}");

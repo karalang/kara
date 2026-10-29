@@ -2345,7 +2345,7 @@ fn format_floats(v: Vec[f64], a: ArrayFmt, cx: Ctx) -> Result[Vec[String], Strin
     let digits = cx.precision;
     let na = if a.justify == "left" { " ".to_string() + a.na_rep } else { a.na_rep.clone() };
     let sign = if a.leading_space { ' ' } else { '-' };
-    let dec = |s: String| { if a.decimal != "." { s.replacen(".", a.decimal.as_str(), 1) } else { s } };
+    let dec = |s: own String| { if a.decimal != "." { s.replacen(".", a.decimal.as_str(), 1) } else { s } };
     if let Some(ref ff) = a.float_format {
         // A float_format string: `fmt % value`, no fixed width, no trim.
         let mut out: Vec[String] = Vec.new();

@@ -92,7 +92,7 @@ fn mir_closure_from_a_closure_is_stored_past_the_call() {
 fn mir_closure_from_a_closure_owns_its_moved_argument() {
     runs_everywhere(
         "moved",
-        "fn main() {\n    let make = |s: String| |x: i64| x + s.len();\n    let mut fs: Vec[Fn(i64) -> i64] = Vec.new();\n    fs.push(make(\"abc\".to_string()));\n    fs.push(make(\"hello\".to_string()));\n    println(f\"{fs[0](0)} {fs[1](1)}\");\n}\n",
+        "fn main() {\n    let make = |s: own String| |x: i64| x + s.len();\n    let mut fs: Vec[Fn(i64) -> i64] = Vec.new();\n    fs.push(make(\"abc\".to_string()));\n    fs.push(make(\"hello\".to_string()));\n    println(f\"{fs[0](0)} {fs[1](1)}\");\n}\n",
         "3 6\n",
     );
 }

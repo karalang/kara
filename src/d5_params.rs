@@ -21,12 +21,13 @@ pub fn on() -> bool {
 }
 
 /// A closure literal's annotated bare parameter borrows as a function's
-/// does (`|w: Vec[i64]|` reads `|w: ref Vec[i64]|`), opt-in with
-/// `KARAC_D5_CLOSURES=1` until the programs that move one are migrated to
-/// `|w: own T|`; the strict check reports such a closure at the closure.
+/// does (`|w: Vec[i64]|` reads `|w: ref Vec[i64]|`), and only `|w: own T|`
+/// owns; the strict check reports a closure that gives one away at the
+/// closure. On, with `KARAC_D5_CLOSURES=0` to read an annotated closure
+/// parameter by value as before the migration (B-2026-10-28-24).
 pub fn closures_on() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var("KARAC_D5_CLOSURES").is_ok_and(|v| v == "1"))
+    *ON.get_or_init(|| std::env::var("KARAC_D5_CLOSURES").map_or(true, |v| v != "0"))
 }
 
 const COPY_SCALARS: &[&str] = &[

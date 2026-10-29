@@ -1,7 +1,7 @@
 
 fn main() {
-    let id1 = |s: String| s;
-    let id2 = |s: String| { s };
+    let id1 = |s: own String| s;
+    let id2 = |s: own String| { s };
     let mut i: i64 = 0i64;
     let mut total: i64 = 0i64;
     while i < 30i64 {

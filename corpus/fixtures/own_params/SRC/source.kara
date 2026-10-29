@@ -13,5 +13,5 @@ fn apply(x: own S, f: Fn(own S, i64) -> i64) -> i64 { f(x, 1) }
 
 fn main() {
     let s = S { n: 41 };
-    println(apply(s, |t: S, k: i64| t.take() + k));
+    println(apply(s, |t: own S, k: i64| t.take() + k));
 }
