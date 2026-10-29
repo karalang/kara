@@ -58,9 +58,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| false-positive | 57 |
-| diagnostics | 48 |
-| missing-feature | 47 |
+| false-positive | 59 |
+| diagnostics | 51 |
+| missing-feature | 48 |
 | perf | 27 |
 | soundness | 24 |
 | miscompile | 14 |
@@ -73,15 +73,15 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 106 |
-| mir | 50 |
+| typecheck | 108 |
+| mir | 52 |
 | mir-llvm | 34 |
-| ownership | 25 |
+| ownership | 26 |
 | interp | 22 |
 | codegen | 22 |
 | cli | 22 |
 | runtime | 13 |
-| parser | 10 |
+| parser | 12 |
 | other | 3 |
 | resolver | 3 |
 | effect | 2 |
@@ -106,7 +106,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-28-25 | 2026-10-28 | ownership+mir | medium | `let r = match rx { Some(ref r) => r, None => return .. }` over an `Option` of a type with no `.clone()` (a `Regex`) is refused by `karac check` (borrow_projection_copy) and by the MIR build, though §5.9 lets a local be bound to a `ref` binding and it is exactly what `karac fix` writes for the move-in-loop error; the same code over `Option[String]` passes | — |
 | B-2026-10-28-27 | 2026-10-28 | cli | low | The manifest keys design.md §4 promises for import names are not implemented: a dependency's `alias = "..."`, the optional `[package].import = "..."`, and the rule that a hyphen in a package name maps to `_` in the import path (`kara-data` is imported from `kara_data`); kara-data's `import data` depends on all three | — |
 | B-2026-10-28-28 | 2026-10-28 | typecheck | medium | A closure that calls a method on its parameter and passes a captured `String` to `contains` (`|s| s.to_uppercase().contains(upper)`) is typed as consuming the capture, so it is once-callable and `map(...).collect()` refuses it; `|s| s.contains(upper)` passes | — |
-| B-2026-10-28-29 | 2026-10-28 | mir | medium | `Ok((n, it.map(..).collect()))` and `Some((n, it.map(..).collect()))` pass `karac check` but the MIR build refuses them (an expression whose type does not lower, UnsolvedParam(C)): a `collect` that is a tuple element inside an enum constructor keeps its target type unsolved; in a bare tuple, or directly inside `Ok`, it builds | — |
 | B-2026-10-28-31 | 2026-10-28 | parser+cli | low | `if c { a = x } else { b = y }` (an assignment ending each arm, no `;`) gets a correct `;` fix-it for the first arm only, and `karac fix` refuses to apply it: the parser does not recover as if the `;` were there, so the fixed file reports three errors to the original two and the safety check rejects the edit; one arm alone (`if c { a = x }`) is fixed | — |
 | B-2026-10-28-32 | 2026-10-28 | typecheck | medium | `prefix ?? default` on a bare (borrowed) `Option[String]` parameter is refused as "'??' requires an `Option` or a `Result` on the left, found 'ref Option[String]'" with the help "an unwrapped value needs no fallback — drop the '?? ...'", which is wrong advice; the same on `Option[i64]` checks and runs, and `prefix.clone() ?? default` is the fix the message should offer | — |
 | B-2026-10-28-33 | 2026-10-28 | mir-llvm | medium | The MIR compiled backend runs kata 5's expand-around-center seq bench 1.22x legacy's instructions and 1.45x its cycles, turning a kata that beat Rust (0.95x) into one that trails it (1.17x rustc -O, 1.28x overflow-checked rustc, 1.43x clang -O3) | — |
@@ -119,6 +118,12 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-29-2 | 2026-10-29 | typecheck | high | A closure that passes a captured `String` to `replace`, `replacen`, `split`, `find` or `strip_prefix` on its parameter (`|s| s.replace(old, new)`) is typed as consuming the capture, so it is once-callable and `.map(...)` or any `Fn` slot refuses it; all five take `Str` (strings.md), and `starts_with`, `contains` and `ends_with` with the same capture pass | — |
 | B-2026-10-29-3 | 2026-10-29 | typecheck+cli | low | `s.bytes().collect()` is refused with a message that spells out the rewrite ("iterator adaptors/terminals require an explicit `.iter()` — write `s.bytes().iter().collect(...)`") but the diagnostic carries no fix, so `karac fix` leaves it for a hand edit | — |
 | B-2026-10-29-4 | 2026-10-29 | typecheck | low | A borrowed parameter or match binding put in an array literal where an owned `Vec[String]` is wanted (`count([key].to_vec())`, `key` a bare `String` parameter or a `Some(key)` arm on a borrowed `Option[String]`) gets only `expected 'ref Vec[String]', found 'Vec[ref String]'`, with no hint and no fix, while the same through a `Some(ref key)` binding gets borrow_projection_copy's message and a machine-applicable `.clone()` | — |
+| B-2026-10-29-5 | 2026-10-29 | typecheck | medium | A `fold` whose result is the payload of an enum-variant constructor in tail position is refused: in `fn total(v: Vec[i64]) -> Val { Val.I(v.iter().fold(0, |a, x| a.wrapping_add(*x))) }` the fold takes the function's return type `Val` as its accumulator ("expected 'Val', found 'i64'" at the `0`, "no method 'wrapping_add' on type 'Val'"), though `let a = Val.I(..)` and `Some(Val.I(..))` check | — |
+| B-2026-10-29-6 | 2026-10-29 | typecheck | medium | An `if` or `match` whose type is known (a function's tail, or a `let` with an annotation) does not pass it into its branches, so `strs.iter().map(|s| s.chars().skip(n).collect()).collect()` in a branch is E0238 "cannot infer type parameter 'C'" for the inner collect, though the same expression checks as the function's tail, after `return`, or as a typed `let`'s whole initializer | — |
+| B-2026-10-29-7 | 2026-10-29 | parser | low | The fix for a Rust closure return type (`|r: i64| -> Vec[String] { ..collect() }`) deletes `-> Vec[String]` and leaves a closure whose body cannot infer (E0238 "cannot infer type parameter 'C'", then "no method 'join' on type parameter 'C'"); when the closure is a `let`'s whole initializer with every parameter typed, the fix could move the type onto the binding as `let row: Fn(i64) -> Vec[String] = |r: i64| ..`, which checks and runs | — |
+| B-2026-10-29-8 | 2026-10-29 | parser | low | The turbofish fix on a `collect::[Vec[String]]()` in the middle of a chain (`"(" + it.collect::[Vec[String]]().join(", ") + ")"`) deletes the type arguments and leaves `no method 'join' on type parameter 'C'`; B-2026-10-24-13 made the fix two-sided only when the call is a `let`'s whole initializer, and a mid-chain call has no binding to move the type to | — |
+| B-2026-10-29-9 | 2026-10-29 | mir | medium | `let v: Vec[Option[String]] = [None].to_vec();` passes `karac check` but does not build on MIR: `an expression whose type does not lower (Type(UnknownParam("T"))) is not lowered yet`, also as a function's `return [None].to_vec();` with a `Vec[Option[String]]` return type; `let none: Option[String] = None; [none].to_vec()` builds | — |
+| B-2026-10-29-10 | 2026-10-29 | ownership+mir | medium | `for n in v { out.push(n ?? String.new()); }` over a `Vec[Option[String]]` (so `n` is `ref Option[String]`) passes `karac check` and is refused only by the MIR build ("cannot move a non-`Copy` value out of a borrowed place: take a copy with `.clone()`"); check should report it with the `.clone()` fix, and B-2026-10-28-32 is the same `??` on a bare parameter refused by check with the wrong help | — |
 
 ### Relocated
 
@@ -349,6 +354,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-28-19 | interp+mir-llvm | low | An operator trait's method called by name on a primitive (`2.add(3)`) passes `karac check` but does not run: the interpreter stops with "call of unkn… | 5ae4458dbf |
 | B-2026-10-28-20 | typecheck | low | A type-qualified call of a trait method (`P.add(a, b)` for `impl Add for P`) is refused by `karac check` with "expected 1 argument(s), found 2", thou… | 5ae4458dbf |
 | B-2026-10-28-26 | typecheck | medium | `karac check` passes a program that builds a `Column`, `DataFrame`, `LazyExpr` or `Tensor` from the legacy library's baked surface, and `karac run` t… | 816f2e1a52 |
+| B-2026-10-28-29 | mir | medium | `Ok((n, it.map(..).collect()))` and `Some((n, it.map(..).collect()))` pass `karac check` but the MIR build refuses them (an expression whose type doe… | cd5a50673e |
 | B-2026-10-28-30 | mir-llvm | medium | `s = s + (n - x).to_string()` copies `s` on every add, so building a string in a loop is quadratic: the concat pass (src/mir/concat.rs) gives up when… | f59be6dac3 |
 
 </details>
