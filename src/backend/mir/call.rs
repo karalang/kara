@@ -36,7 +36,7 @@ impl<'ctx> Cx<'ctx, '_> {
             Operand::Const(Const {
                 kind: ConstKind::DynSlot { slot, .. },
                 ..
-            }) => self.call_dyn(*slot, args, dest)?,
+            }) => self.call_dyn(*slot, false, args, dest)?,
             Operand::Const(c) => {
                 let ConstKind::FnDef(inst) = &c.kind else {
                     return Err("MIR to LLVM: a call to a constant that is not a function".into());
@@ -877,6 +877,18 @@ impl<'ctx> Cx<'ctx, '_> {
             ("__fn_suspends" | "__fn_start", "") => {
                 self.fn_value_native(base == "__fn_start", args, dest)
             }
+            // A call through a `dyn` value whose method may suspend.
+            ("__dyn_suspends", "") => self.dyn_suspends(args, dest),
+            ("__dyn_start", "") => match args.split_first() {
+                Some((
+                    Operand::Const(Const {
+                        kind: ConstKind::Scalar(slot),
+                        ..
+                    }),
+                    rest,
+                )) => self.call_dyn(*slot as u32, true, rest, dest),
+                _ => Err("__dyn_start takes a constant slot first".into()),
+            },
             ("__frame_start", "") => self.frame_start(args, dest),
             // An `Abort` in a program with an isolating group: a task of
             // one takes it, and the call's cancel exit leaves; anywhere

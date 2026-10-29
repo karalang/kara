@@ -8,13 +8,19 @@
 //! never freed, so the first word is never null. The table is a constant:
 //!
 //! ```text
-//! { ptr drop, i64 size, i64 align, ptr clone, ptr slot_0, ..., ptr slot_n }
+//! { ptr drop, i64 size, i64 align, ptr clone,
+//!   ptr slot_0, ptr start_0, ..., ptr slot_n, ptr start_n }
 //! ```
 //!
 //! `drop` is the concrete type's glue, or null when it owns nothing.
 //! `clone`, for a trait with `Clone` among its supertraits, writes a clone
 //! of the value at `data` to `ret` (`void (ptr ret, ptr data)`), and is
-//! null otherwise. It and each
+//! null otherwise. `start_k`, when slot `k`'s method suspends, starts its
+//! frame (`Vtable.starts`, the method's `dstart`): it writes the erased
+//! `MutFn() -> Poll[T]` that resumes it to `ret`, for `__dyn_start`, and
+//! is null otherwise, which `__dyn_suspends` tests (M4 item 4,
+//! `coroutine::FN_SUSPENDS`); `slot_k` is null when it is not, since such
+//! a method is only a coroutine. It, `clone` and each
 //! slot are a [`Shim::DynSlot`] taking `(ptr ret, ptr data, ptr arg...)`,
 //! which hands the method its receiver the way its body takes it: the
 //! address for a `ref self` or `mut ref self` body, a copy of the value
@@ -42,14 +48,22 @@ const CLONE: u64 = 24;
 /// Where the first slot is in a table: after `clone`.
 const FIRST_SLOT: u64 = 32;
 
+/// Where slot `slot`'s method (`start` false) or its `start` entry is in a
+/// table: each slot is a pair of them.
+fn slot_offset(slot: u32, start: bool) -> u64 {
+    FIRST_SLOT + 16 * u64::from(slot) + if start { 8 } else { 0 }
+}
+
 /// The [`Shim::DynSlot`] slot that is a table's `clone`.
 pub(super) const CLONE_SLOT: u32 = u32::MAX;
 
-/// The instance a table's slot calls: `slots[slot]`, or the table's
-/// `clone` for [`CLONE_SLOT`].
-fn slot_method(table: &Vtable, slot: u32) -> Option<&String> {
+/// The instance a table's slot calls: `slots[slot]`, or its `dstart` for
+/// `start`, or the table's `clone` for [`CLONE_SLOT`].
+fn slot_method(table: &Vtable, slot: u32, start: bool) -> Option<&String> {
     if slot == CLONE_SLOT {
         table.clone.as_ref()
+    } else if start {
+        table.starts.get(slot as usize)?.as_ref()
     } else {
         table.slots.get(slot as usize)
     }
@@ -81,6 +95,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 .shim_fn(Shim::DynSlot {
                     vtable: vt,
                     slot: CLONE_SLOT,
+                    start: false,
                 })
                 .as_global_value()
                 .as_pointer_value(),
@@ -93,8 +108,23 @@ impl<'ctx> Cx<'ctx, '_> {
             clone.into(),
         ];
         for slot in 0..table.slots.len() as u32 {
-            let f = self.shim_fn(Shim::DynSlot { vtable: vt, slot });
-            parts.push(f.as_global_value().as_pointer_value().into());
+            for start in [false, true] {
+                // A method that suspends is only a coroutine: its slot
+                // is never called plainly, since `__dyn_suspends` says so
+                // first, and only its `start` is.
+                let suspends = slot_method(table, slot, true).is_some();
+                let f = if start != suspends {
+                    null
+                } else {
+                    let s = Shim::DynSlot {
+                        vtable: vt,
+                        slot,
+                        start,
+                    };
+                    self.shim_fn(s).as_global_value().as_pointer_value()
+                };
+                parts.push(f.into());
+            }
         }
         let init = self.llcx.const_struct(&parts, false);
         let g = self.module.add_global(init.get_type(), None, &name);
@@ -162,8 +192,16 @@ impl<'ctx> Cx<'ctx, '_> {
 
     /// A call of the method at `slot` of the receiver `args[0]`'s table: a
     /// view, or an owned value moved in by an `own self` call, whose block
-    /// is freed once the method has the value.
-    pub(super) fn call_dyn(&mut self, slot: u32, args: &[Operand], dest: &Place) -> R<()> {
+    /// is freed once the method has the value. With `start`, the slot's
+    /// `start` entry: `__dyn_start(const slot, recv, args..)`, which
+    /// answers the started frame.
+    pub(super) fn call_dyn(
+        &mut self,
+        slot: u32,
+        start: bool,
+        args: &[Operand],
+        dest: &Place,
+    ) -> R<()> {
         let (recv, rest) = args
             .split_first()
             .ok_or("a call through a `dyn` value has no receiver")?;
@@ -171,7 +209,7 @@ impl<'ctx> Cx<'ctx, '_> {
         let pair = self.operand_ptr(recv)?;
         let data = self.load_ptr(pair)?;
         let table = self.load_ptr(self.offset(pair, 8)?)?;
-        let code = self.load_ptr(self.offset(table, FIRST_SLOT + 8 * u64::from(slot))?)?;
+        let code = self.load_ptr(self.offset(table, slot_offset(slot, start))?)?;
         let dty = self.place_type(dest)?;
         let ret = self.temp(dty, "ret")?;
         let mut vals: Vec<BasicMetadataValueEnum> = vec![ret.into(), data.into()];
@@ -192,6 +230,24 @@ impl<'ctx> Cx<'ctx, '_> {
         }
         let d = self.place_ptr(dest)?;
         self.copy(d, ret, dty)
+    }
+
+    /// `__dyn_suspends(view, const slot)`: whether the method at `slot` of
+    /// the table of `view` (a view of the receiver, an owned one's
+    /// included) suspends, which its `start` entry says.
+    pub(super) fn dyn_suspends(&mut self, args: &[Operand], dest: &Place) -> R<()> {
+        let [view, Operand::Const(crate::mir::Const {
+            kind: crate::mir::ConstKind::Scalar(slot),
+            ..
+        })] = args
+        else {
+            return Err("__dyn_suspends takes a view and a constant slot".into());
+        };
+        let pair = self.operand_ptr(view)?;
+        let table = self.load_ptr(self.offset(pair, 8)?)?;
+        let start = self.load_ptr(self.offset(table, slot_offset(*slot as u32, true))?)?;
+        let some = self.builder.build_is_not_null(start, "").map_err(e)?;
+        self.store_bool(dest, some)
     }
 
     /// Frees the block of an owned `dyn` value at `data`, unless its type
@@ -267,25 +323,28 @@ impl<'ctx> Cx<'ctx, '_> {
         self.store(self.offset(dst, 8)?, table.into())
     }
 
-    /// The type of [`Shim::DynSlot`] `slot` of table `vt`: `void (ptr ret,
-    /// ptr data, ptr arg...)`, one `arg` for each parameter after the
-    /// receiver. Its name, too.
+    /// The type of [`Shim::DynSlot`] `slot` (or its `start`) of table `vt`:
+    /// `void (ptr ret, ptr data, ptr arg...)`, one `arg` for each parameter
+    /// after the receiver. Its name, too.
     pub(super) fn dyn_slot_sig(
         &self,
         vt: u32,
         slot: u32,
+        start: bool,
     ) -> (String, inkwell::types::FunctionType<'ctx>) {
         let program = self.program;
         let n = program
             .vtables
             .get(vt as usize)
-            .and_then(|t| slot_method(t, slot))
+            .and_then(|t| slot_method(t, slot, start))
             .and_then(|name| program.bodies.get(name))
             .map_or(0, |b| b.arg_count.saturating_sub(1));
         let p = self.ptr_ty();
         let ps: Vec<BasicMetadataTypeEnum> = (0..n + 2).map(|_| p.into()).collect();
         let tag = if slot == CLONE_SLOT {
             "clone".to_string()
+        } else if start {
+            format!("{slot}.start")
         } else {
             slot.to_string()
         };
@@ -295,15 +354,23 @@ impl<'ctx> Cx<'ctx, '_> {
         )
     }
 
-    /// The body of [`Shim::DynSlot`] `slot` of table `vt`, the builder in
-    /// its entry block: the slot's method called on the value at `data`.
-    pub(super) fn build_dyn_slot(&mut self, f: FunctionValue<'ctx>, vt: u32, slot: u32) -> R<()> {
+    /// The body of [`Shim::DynSlot`] `slot` (or its `start`) of table
+    /// `vt`, the builder in its entry block: the slot's method (or its
+    /// `dstart`, which takes the receiver as the method does) called on
+    /// the value at `data`.
+    pub(super) fn build_dyn_slot(
+        &mut self,
+        f: FunctionValue<'ctx>,
+        vt: u32,
+        slot: u32,
+        start: bool,
+    ) -> R<()> {
         let program = self.program;
         let table = program
             .vtables
             .get(vt as usize)
             .ok_or_else(|| format!("no vtable {vt}"))?;
-        let name = slot_method(table, slot)
+        let name = slot_method(table, slot, start)
             .ok_or_else(|| format!("no slot {slot} in vtable {vt}"))?
             .clone();
         let body = program

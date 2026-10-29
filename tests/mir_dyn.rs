@@ -988,21 +988,6 @@ fn mir_dyn_refuses_other_trait_arguments_and_uncloned_copies() {
     );
 }
 
-/// The interpreter prints `want` and finishes with nothing leaked. The
-/// compiled half of what uses it is not built yet; such a test moves to
-/// [`runs`] when it is.
-fn interpreted(src: &str, want: &str) {
-    let run = karac::mir::lower::run_source(src).expect("MIR");
-    assert!(
-        matches!(run.outcome, Outcome::Returned(_)),
-        "{:?}
-{}",
-        run.outcome,
-        run.output
-    );
-    assert_eq!(run.output, want);
-}
-
 /// A method that suspends runs through `dyn` in a frame of its own, which
 /// its caller waits on as on any coroutine (design.md § `dyn Trait`): a
 /// router of `dyn Handler`s whose upstream handler waits on a channel
@@ -1010,7 +995,7 @@ fn interpreted(src: &str, want: &str) {
 /// Called plainly, the first wait would never be answered.
 #[test]
 fn mir_dyn_suspends_in_a_slot() {
-    interpreted(
+    runs(
         r#"trait Handler {
     fn handle(ref self, req: i64) -> i64;
 }
@@ -1070,7 +1055,7 @@ served 4
 answered 2
 ",
     );
-    interpreted(
+    runs(
         r#"trait Job {
     fn step(mut ref self) -> i64;
     fn finish(own self) -> i64;
