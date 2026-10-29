@@ -2485,6 +2485,8 @@ fn main() -> () {
             // A default with state written outside an override (§14.14),
             // refused by the effect pass.
             "err_stateful_default",
+            // Calls through `dyn` values (design.md § `dyn Trait`).
+            "err_effect_dyn_par_shared",
         ];
         // Pins that call Kāra library functions, which `check_built` does
         // not append (a `select` desugars to calls into sync.kara;

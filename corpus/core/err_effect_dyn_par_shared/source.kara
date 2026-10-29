@@ -1,0 +1,27 @@
+// Both values' `draw` writes standard output, so a `par` over two calls
+// through a `dyn` parameter conflicts (design.md § `dyn Trait`).
+trait Shape {
+    fn area(self) -> f64;
+    fn draw(self);
+}
+
+struct Circle { r: f64 }
+struct Square { side: f64 }
+
+impl Shape for Circle {
+    fn area(self) -> f64 { 3.0 * self.r * self.r }
+    fn draw(self) { println(f"circle {self.r}"); }
+}
+
+impl Shape for Square {
+    fn area(self) -> f64 { self.side * self.side }
+    fn draw(self) { println(f"square {self.side}"); }
+}
+
+fn paint(s: ref dyn Shape) { s.draw(); }
+
+fn main() {
+    let c = Circle { r: 1.0 };
+    let q = Square { side: 2.0 };
+    par { paint(c), paint(q) };
+}

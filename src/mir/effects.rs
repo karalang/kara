@@ -177,6 +177,11 @@ pub struct EffectSet {
     /// passes. A local's key is resolved in its own body
     /// ([`Analysis::resolve_stored`]), so a summary keeps only parameters.
     pub stored: BTreeSet<Key>,
+    /// Calls through a `dyn Trait` value's method table (design.md §
+    /// `dyn Trait`): each has the effects of the method of every concrete
+    /// type coerced into the value, resolved where the coercion is in view
+    /// ([`Analysis::resolve_stored`]), so a summary keeps only parameters.
+    pub slots: BTreeSet<Slot>,
     /// Logs through `std.log`: no effect, and no conflict with anything
     /// but the console (design.md § Observability). Auto-par holds an
     /// auto-par task's records until its join (B-2026-10-27-22), so a
@@ -207,6 +212,7 @@ impl EffectSet {
         self.effects.extend(other.effects);
         self.calls.extend(other.calls);
         self.stored.extend(other.stored);
+        self.slots.extend(other.slots);
         self.logs |= other.logs;
         self.log_setup |= other.log_setup;
     }
@@ -216,6 +222,7 @@ impl EffectSet {
             && self.effects.is_empty()
             && self.calls.is_empty()
             && self.stored.is_empty()
+            && self.slots.is_empty()
             && !self.logs
             && !self.log_setup
     }
@@ -228,10 +235,28 @@ impl EffectSet {
                 .iter()
                 .map(|k| format!("calls(in {})", key_text(k))),
         );
+        v.extend(self.slots.iter().map(Slot::display));
         if self.unknown {
             v.insert(0, "unknown".to_string());
         }
         v
+    }
+}
+
+/// A call of the method at `slot` of the `dyn` type `dyn_ty` on the value
+/// `key`; `name` is the method's, for a reader.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Slot {
+    pub key: Key,
+    pub dyn_ty: Ty,
+    pub slot: u32,
+    pub name: String,
+}
+
+impl Slot {
+    /// `calls(p1.area)`.
+    fn display(&self) -> String {
+        format!("calls({}.{})", key_text(&self.key), self.name)
     }
 }
 
@@ -1059,6 +1084,7 @@ fn top(s: &EffectSet) -> Option<String> {
                 .next()
                 .map(|k| format!("calls(in {})", key_text(k)))
         })
+        .or_else(|| s.slots.iter().next().map(Slot::display))
 }
 
 /// An effect of `s` that an unknown effect would conflict with: one that
@@ -1684,6 +1710,23 @@ impl<'p> Analysis<'p> {
     fn block_callees(&self, body: &Body, bb: &BasicBlockData) -> Vec<String> {
         let mut out = Vec::new();
         match &bb.terminator.kind {
+            // A `dyn` method call runs the method of any table.
+            TerminatorKind::Call {
+                func:
+                    Operand::Const(Const {
+                        kind: ConstKind::DynSlot { dyn_ty, slot },
+                        ..
+                    }),
+                ..
+            } => out.extend(
+                self.program
+                    .vtables
+                    .iter()
+                    .filter(|vt| vt.dyn_ty == *dyn_ty)
+                    .filter_map(|vt| vt.slots.get(*slot as usize))
+                    .filter(|m| self.program.bodies.contains_key(*m))
+                    .cloned(),
+            ),
             TerminatorKind::Call {
                 func:
                     Operand::Const(Const {
@@ -1763,6 +1806,18 @@ impl<'p> Analysis<'p> {
                     }
                 }
                 ops
+            }
+            Rvalue::Cast(CastKind::ToDyn(idx), _, _) => {
+                // A coerced value can run its type's methods.
+                if let Some(vt) = self.program.vtables.get(*idx as usize) {
+                    out.extend(
+                        vt.slots
+                            .iter()
+                            .filter(|m| self.program.bodies.contains_key(*m))
+                            .cloned(),
+                    );
+                }
+                &[]
             }
             Rvalue::Use(o) | Rvalue::Cast(_, o, _) => std::slice::from_ref(o),
             _ => &[],
@@ -2107,6 +2162,14 @@ impl<'p> Analysis<'p> {
         summaries: &BTreeMap<String, EffectSet>,
         eff: &mut EffectSet,
     ) {
+        if let Operand::Const(Const {
+            kind: ConstKind::DynSlot { dyn_ty, slot },
+            ..
+        }) = func
+        {
+            self.slot_call_effects(body, defs, *dyn_ty, *slot, args.first(), summaries, eff);
+            return;
+        }
         let Operand::Const(Const {
             kind: ConstKind::FnDef(inst),
             ..
@@ -2165,7 +2228,30 @@ impl<'p> Analysis<'p> {
         }
         if self.program.bodies.contains_key(&inst.name) {
             if let Some(callee) = summaries.get(&inst.name) {
-                eff.union(substitute(callee, &arg_key, &arg_fn));
+                // A `dyn` parameter's method called on a value coerced for
+                // this call (`show(c)`): the coerced type's method.
+                let here: Vec<(&Slot, u32, Key)> = callee
+                    .slots
+                    .iter()
+                    .filter_map(|s| match &s.key {
+                        Key::Param(p, path) if path.is_empty() => {
+                            let a = args.get(*p as usize - 1)?.place()?;
+                            let (idx, k) = self.coerced_here(body, defs, a)?;
+                            Some((s, idx, k))
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                if here.is_empty() {
+                    eff.union(substitute(callee, &arg_key, &arg_fn));
+                } else {
+                    let mut rest = callee.clone();
+                    for (s, idx, k) in here {
+                        rest.slots.remove(s);
+                        eff.union(self.slot_effects(idx, Some(s.dyn_ty), s.slot, k, summaries));
+                    }
+                    eff.union(substitute(&rest, &arg_key, &arg_fn));
+                }
             }
             return;
         }
@@ -2269,8 +2355,19 @@ impl<'p> Analysis<'p> {
         let mut out = EffectSet::default();
         for bb in &body.blocks {
             for st in &bb.statements {
-                if let StatementKind::Assign(_, Rvalue::Cast(_, op, _)) = &st.kind {
-                    if is_fn_value(body, self.tys, op) {
+                if let StatementKind::Assign(_, Rvalue::Cast(kind, op, _)) = &st.kind {
+                    if let CastKind::ToDyn(idx) = kind {
+                        // Any of a coerced value's methods may be called on
+                        // what a call hands back.
+                        let n = self
+                            .program
+                            .vtables
+                            .get(*idx as usize)
+                            .map_or(0, |vt| vt.slots.len());
+                        for slot in 0..n as u32 {
+                            out.union(self.slot_effects(*idx, None, slot, Key::Any, summaries));
+                        }
+                    } else if is_fn_value(body, self.tys, op) {
                         out.union(self.fn_value_effects(body, &defs, Some(op), summaries));
                     }
                 }
@@ -2304,6 +2401,30 @@ impl<'p> Analysis<'p> {
         summaries: &BTreeMap<String, EffectSet>,
         made: &BTreeMap<String, EffectSet>,
     ) -> EffectSet {
+        // A `dyn` method makes what the method of any table can.
+        if let Operand::Const(Const {
+            kind: ConstKind::DynSlot { dyn_ty, slot },
+            ..
+        }) = func
+        {
+            let mut out = EffectSet::default();
+            for vt in self
+                .program
+                .vtables
+                .iter()
+                .filter(|vt| vt.dyn_ty == *dyn_ty)
+            {
+                match vt.slots.get(*slot as usize) {
+                    Some(m) if self.program.bodies.contains_key(m) => {
+                        if let Some(m) = made.get(m) {
+                            out.union(substitute(m, &|_| Key::Any, &|_| opaque()));
+                        }
+                    }
+                    _ => out.union(opaque()),
+                }
+            }
+            return out;
+        }
         let Operand::Const(Const {
             kind: ConstKind::FnDef(inst),
             ..
@@ -2346,6 +2467,230 @@ impl<'p> Analysis<'p> {
             for b in self.fn_value_bodies(body, a) {
                 if let Some(m) = made.get(&b) {
                     out.union(substitute(m, &|_| Key::Any, &|_| opaque()));
+                }
+            }
+        }
+        out
+    }
+
+    /// The effects of calling the method at `slot` of `dyn_ty` on `recv`
+    /// (design.md § `dyn Trait`): the coerced type's method when the
+    /// receiver is coerced right here, a [`Slot`] for the receiver's value
+    /// when it is a parameter's or a local's (resolved by
+    /// [`Analysis::resolve_stored`]), and every effect otherwise.
+    #[allow(clippy::too_many_arguments)]
+    fn slot_call_effects(
+        &self,
+        body: &Body,
+        defs: &BTreeMap<u32, Place>,
+        dyn_ty: Ty,
+        slot: u32,
+        recv: Option<&Operand>,
+        summaries: &BTreeMap<String, EffectSet>,
+        eff: &mut EffectSet,
+    ) {
+        let untraced = || {
+            EffectSet::unknown(format!(
+                "{}: a call through a `dyn` value it cannot trace",
+                body.instance.name
+            ))
+        };
+        let Some(p) = recv.and_then(Operand::place) else {
+            eff.union(untraced());
+            return;
+        };
+        if let Some((idx, k)) = self.coerced_here(body, defs, p) {
+            eff.union(self.slot_effects(idx, Some(dyn_ty), slot, k, summaries));
+            return;
+        }
+        match place_key(body, defs, p) {
+            key @ (Key::Param(..) | Key::Local(..)) => {
+                eff.slots.insert(Slot {
+                    key,
+                    dyn_ty,
+                    slot,
+                    name: self.slot_name(dyn_ty, slot),
+                });
+            }
+            _ => eff.union(untraced()),
+        }
+    }
+
+    /// The `dyn` method's name, from any table of `dyn_ty`.
+    fn slot_name(&self, dyn_ty: Ty, slot: u32) -> String {
+        self.program
+            .vtables
+            .iter()
+            .filter(|vt| vt.dyn_ty == dyn_ty)
+            .find_map(|vt| vt.slots.get(slot as usize))
+            .and_then(|m| m.rsplit_once('.'))
+            .map_or_else(|| format!("slot {slot}"), |(_, m)| m.to_string())
+    }
+
+    /// The table and the key of the value a temporary `p` coerces to a
+    /// `dyn` type, when its one assignment is that coercion (`show(c)`
+    /// coerces `c` into the argument).
+    fn coerced_here(
+        &self,
+        body: &Body,
+        defs: &BTreeMap<u32, Place>,
+        p: &Place,
+    ) -> Option<(u32, Key)> {
+        let mut cur = p.clone();
+        while cur.projection.is_empty() {
+            match defs.get(&cur.local.0) {
+                Some(src) => cur = src.clone(),
+                None => break,
+            }
+        }
+        if !cur.projection.is_empty()
+            || !matches!(body.locals[cur.local.index()].kind, LocalKind::Temp)
+        {
+            return None;
+        }
+        let mut found = None;
+        for bb in &body.blocks {
+            for st in &bb.statements {
+                if let StatementKind::Assign(d, rv) = &st.kind {
+                    if d.local == cur.local {
+                        match (rv, found) {
+                            (Rvalue::Cast(CastKind::ToDyn(idx), op, _), None)
+                                if d.projection.is_empty() =>
+                            {
+                                found = Some((*idx, op));
+                            }
+                            _ => return None,
+                        }
+                    }
+                }
+            }
+            if let TerminatorKind::Call { destination, .. } = &bb.terminator.kind {
+                if destination.local == cur.local {
+                    return None;
+                }
+            }
+        }
+        let (idx, op) = found?;
+        let key = match op.place() {
+            Some(q) => place_key(body, defs, q),
+            None => Key::Fresh,
+        };
+        Some((idx, key))
+    }
+
+    /// The effects of the method at `slot` of the table `idx` called on the
+    /// value `recv`: none when `dyn_ty` names another `dyn` type, whose
+    /// calls this table never answers.
+    fn slot_effects(
+        &self,
+        idx: u32,
+        dyn_ty: Option<Ty>,
+        slot: u32,
+        recv: Key,
+        summaries: &BTreeMap<String, EffectSet>,
+    ) -> EffectSet {
+        let Some(vt) = self.program.vtables.get(idx as usize) else {
+            return opaque();
+        };
+        if dyn_ty.is_some_and(|t| t != vt.dyn_ty) {
+            return EffectSet::default();
+        }
+        let Some(m) = vt.slots.get(slot as usize) else {
+            return opaque();
+        };
+        if !self.program.bodies.contains_key(m) {
+            return EffectSet::unknown(format!("no body for {m}"));
+        }
+        // The method's receiver is the value; its other arguments are the
+        // caller's, which a `Slot` does not keep.
+        summaries
+            .get(m)
+            .map(|s| {
+                substitute(
+                    s,
+                    &|i| if i == 0 { recv.clone() } else { Key::Any },
+                    &|_| opaque(),
+                )
+            })
+            .unwrap_or_default()
+    }
+
+    /// The effects of the `dyn` method `s` names called on the local `l`:
+    /// the method of each table coerced into a value that can flow into it
+    /// ([`Origins`]), here or by a call it is lent to, and for a `dyn`
+    /// parameter's, the caller's to resolve. A value a call hands back (a
+    /// return, a collection's element) or one moved out of a parameter's
+    /// field has the effects its type declares (design.md § `dyn Trait`).
+    #[allow(clippy::too_many_arguments)]
+    fn slot_in(
+        &self,
+        body: &Body,
+        defs: &BTreeMap<u32, Place>,
+        origins: &Origins,
+        l: u32,
+        s: &Slot,
+        summaries: &BTreeMap<String, EffectSet>,
+        made: &BTreeMap<String, EffectSet>,
+    ) -> EffectSet {
+        let tcx = self.tys.tcx();
+        let os = origins.origins(l);
+        let mut out = EffectSet::default();
+        let declared = |what: &str| {
+            EffectSet::unknown(format!(
+                "{}: a call through a `dyn` value {what}",
+                body.instance.name
+            ))
+        };
+        for a in body.args() {
+            let ty = body.local(a).ty;
+            if !os.contains(&a.0) || !self.holds_fn(ty, &mut Vec::new()) {
+                continue;
+            }
+            let mut t = ty;
+            while let SK::Ref(i) | SK::MutRef(i) = tcx.kind(t) {
+                t = i;
+            }
+            if matches!(tcx.kind(t), SK::Dyn { .. }) {
+                out.slots.insert(Slot {
+                    key: Key::Param(a.0, Vec::new()),
+                    ..s.clone()
+                });
+            } else {
+                out.union(declared("taken out of a parameter"));
+            }
+        }
+        for bb in &body.blocks {
+            for st in &bb.statements {
+                if let StatementKind::Assign(d, Rvalue::Cast(CastKind::ToDyn(idx), ..)) = &st.kind {
+                    if os.contains(&d.local.0) {
+                        out.union(self.slot_effects(
+                            *idx,
+                            Some(s.dyn_ty),
+                            s.slot,
+                            s.key.clone(),
+                            summaries,
+                        ));
+                    }
+                }
+            }
+            if let TerminatorKind::Call {
+                func,
+                args,
+                destination,
+                ..
+            } = &bb.terminator.kind
+            {
+                let through = |a: &Operand| {
+                    a.place().is_some_and(|p| {
+                        os.contains(&p.local.0)
+                            && matches!(place_ty(body, self.tys, p), Ok(t)
+                                if refers(tcx, t.ty, 0))
+                    })
+                };
+                if os.contains(&destination.local.0) {
+                    out.union(declared("a call hands back"));
+                } else if args.iter().any(through) {
+                    out.union(self.call_made(body, defs, func, args, destination, summaries, made));
                 }
             }
         }
@@ -2397,6 +2742,7 @@ impl<'p> Analysis<'p> {
             s.effects
                 .stored
                 .iter()
+                .chain(s.effects.slots.iter().map(|s| &s.key))
                 .any(|k| !matches!(k, Key::Param(..)))
         };
         if !sites.iter().any(open) {
@@ -2404,7 +2750,37 @@ impl<'p> Analysis<'p> {
         }
         let defs = single_defs(body);
         let mut solved: BTreeMap<u32, EffectSet> = BTreeMap::new();
+        let mut solved_slots: BTreeMap<Slot, EffectSet> = BTreeMap::new();
         for s in sites.iter_mut() {
+            let calls: Vec<Slot> = s
+                .effects
+                .slots
+                .iter()
+                .filter(|c| !matches!(c.key, Key::Param(..)))
+                .cloned()
+                .collect();
+            for c in calls {
+                s.effects.slots.remove(&c);
+                let add = match c.key {
+                    // A field's `dyn` value has the effects its type
+                    // declares (design.md § `dyn Trait`).
+                    Key::Local(_, ref path) if !path.is_empty() => EffectSet::unknown(format!(
+                        "{}: a call through a `dyn` value in a field",
+                        body.instance.name
+                    )),
+                    Key::Local(l, _) => solved_slots
+                        .entry(c.clone())
+                        .or_insert_with(|| {
+                            self.slot_in(body, &defs, origins, l, &c, summaries, made)
+                        })
+                        .clone(),
+                    _ => EffectSet::unknown(format!(
+                        "{}: a call through a `dyn` value it cannot trace",
+                        body.instance.name
+                    )),
+                };
+                s.effects.union(add);
+            }
             let keys: Vec<Key> = s
                 .effects
                 .stored
@@ -2569,6 +2945,10 @@ impl<'p> Analysis<'p> {
                 });
             }
             out.stored.extend(s.stored.iter().map(key));
+            out.slots.extend(s.slots.iter().map(|s| Slot {
+                key: key(&s.key),
+                ..s.clone()
+            }));
         }
         out
     }
@@ -2734,6 +3114,10 @@ fn substitute(
         });
     }
     out.stored.extend(callee.stored.iter().map(key));
+    out.slots.extend(callee.slots.iter().map(|s| Slot {
+        key: key(&s.key),
+        ..s.clone()
+    }));
     out
 }
 

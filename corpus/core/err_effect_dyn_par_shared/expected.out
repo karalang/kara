@@ -1,0 +1,1 @@
+ERROR at line 26: branches 1 and 2 of the `par` conflict: `writes(Stdout)` and `writes(Stdout)`

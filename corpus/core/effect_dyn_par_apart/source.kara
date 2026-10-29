@@ -1,0 +1,33 @@
+// A call through a `dyn` parameter has, at each call site, the effects of
+// the value passed there (design.md § `dyn Trait`): a circle's area writes
+// nothing, so the two `show`s run apart; and a local coerced in view has
+// its concrete type's methods' effects.
+trait Shape {
+    fn area(self) -> f64;
+    fn draw(self);
+}
+
+struct Circle { r: f64 }
+struct Square { side: f64 }
+
+impl Shape for Circle {
+    fn area(self) -> f64 { 3.0 * self.r * self.r }
+    fn draw(self) { println(f"circle {self.r}"); }
+}
+
+impl Shape for Square {
+    fn area(self) -> f64 { self.side * self.side }
+    fn draw(self) { println(f"square {self.side}"); }
+}
+
+fn show(s: ref dyn Shape) -> f64 { s.area() }
+
+fn main() {
+    let c = Circle { r: 1.0 };
+    let q = Square { side: 2.0 };
+    let (x, y) = par { show(c), show(q) };
+    println(f"{x} {y}");
+    let owned: dyn Shape = Square { side: 3.0 };
+    let (a, _) = par { owned.area(), q.draw() };
+    println(f"{a}");
+}
