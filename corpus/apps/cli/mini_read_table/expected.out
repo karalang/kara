@@ -1,0 +1,1300 @@
+$ read ratings.dat sep=:: header=None names=user,movie,rating,ts
+shape (18, 4)
+  'user': int64
+  'movie': int64
+  'rating': int64
+  'ts': int64
+,user,movie,rating,ts
+0,1,1193,5,978300760
+1,1,661,3,978302109
+2,1,914,3,978301968
+3,1,3408,4,978300275
+4,1,2355,5,978824291
+5,2,1357,5,978298709
+6,2,3068,4,978299000
+7,2,1537,4,978299620
+8,2,647,3,978299351
+9,3,3421,4,978298147
+10,3,1641,2,978298430
+11,3,648,3,978297867
+12,4,3468,5,978294008
+13,4,1210,3,978293924
+14,5,2717,1,978242084
+15,5,1193,4,978244568
+16,5,661,2,978246576
+17,6,914,5,978236567
+$ read ratings.dat sep=:: header=None names=user,movie,rating,ts usecols=user,rating nrows=6
+shape (6, 2)
+  'user': int64
+  'rating': int64
+,user,rating
+0,1,5
+1,1,3
+2,1,3
+3,1,4
+4,1,5
+5,2,5
+$ read ratings.dat sep=:: header=None names=user,movie,rating,ts index_col=0,1 head=4
+shape (18, 2)
+  'rating': int64
+  'ts': int64
+user,movie,rating,ts
+1,1193,5,978300760
+1,661,3,978302109
+1,914,3,978301968
+1,3408,4,978300275
+$ read ratings.dat sep=:: header=None names=user,movie,rating,ts chunksize=7
+chunk 0
+shape (7, 4)
+  'user': int64
+  'movie': int64
+  'rating': int64
+  'ts': int64
+,user,movie,rating,ts
+0,1,1193,5,978300760
+1,1,661,3,978302109
+2,1,914,3,978301968
+3,1,3408,4,978300275
+4,1,2355,5,978824291
+5,2,1357,5,978298709
+6,2,3068,4,978299000
+chunk 1
+shape (7, 4)
+  'user': int64
+  'movie': int64
+  'rating': int64
+  'ts': int64
+,user,movie,rating,ts
+7,2,1537,4,978299620
+8,2,647,3,978299351
+9,3,3421,4,978298147
+10,3,1641,2,978298430
+11,3,648,3,978297867
+12,4,3468,5,978294008
+13,4,1210,3,978293924
+chunk 2
+shape (4, 4)
+  'user': int64
+  'movie': int64
+  'rating': int64
+  'ts': int64
+,user,movie,rating,ts
+14,5,2717,1,978242084
+15,5,1193,4,978244568
+16,5,661,2,978246576
+17,6,914,5,978236567
+done
+$ read ratings.dat sep=:: header=None names=user,movie,rating,ts dtype=rating:float64,user:str head=3
+shape (18, 4)
+  'user': str
+  'movie': int64
+  'rating': float64
+  'ts': int64
+,user,movie,rating,ts
+0,1,1193,5.0,978300760
+1,1,661,3.0,978302109
+2,1,914,3.0,978301968
+$ read ratings.dat sep=:: header=None names=user,movie,rating,ts dtype_backend=numpy_nullable head=3
+shape (18, 4)
+  'user': Int64
+  'movie': Int64
+  'rating': Int64
+  'ts': Int64
+,user,movie,rating,ts
+0,1,1193,5,978300760
+1,1,661,3,978302109
+2,1,914,3,978301968
+$ read ratings.dat sep=:: header=None
+shape (18, 4)
+  0: int64
+  1: int64
+  2: int64
+  3: int64
+,0,1,2,3
+0,1,1193,5,978300760
+1,1,661,3,978302109
+2,1,914,3,978301968
+3,1,3408,4,978300275
+4,1,2355,5,978824291
+5,2,1357,5,978298709
+6,2,3068,4,978299000
+7,2,1537,4,978299620
+8,2,647,3,978299351
+9,3,3421,4,978298147
+10,3,1641,2,978298430
+11,3,648,3,978297867
+12,4,3468,5,978294008
+13,4,1210,3,978293924
+14,5,2717,1,978242084
+15,5,1193,4,978244568
+16,5,661,2,978246576
+17,6,914,5,978236567
+$ read ratings.dat sep=:: head=3
+shape (17, 4)
+  '1': int64
+  '1193': int64
+  '5': int64
+  '978300760': int64
+,1,1193,5,978300760
+0,1,661,3,978302109
+1,1,914,3,978301968
+2,1,3408,4,978300275
+$ read ratings.dat sep=: header=None head=2
+shape (18, 7)
+  0: int64
+  1: float64
+  2: int64
+  3: float64
+  4: int64
+  5: float64
+  6: int64
+,0,1,2,3,4,5,6
+0,1,,1193,,5,,978300760
+1,1,,661,,3,,978302109
+$ read movies.dat sep=:: header=None names=movie,title,genres
+! UnicodeDecodeError: 'utf-8' codec can't decode byte 0xe9 in position 74: invalid continuation byte
+$ read movies.dat sep=:: header=None names=movie,title,genres encoding=latin-1
+shape (10, 3)
+  'movie': int64
+  'title': str
+  'genres': str
+,movie,title,genres
+0,661,Giant Peach Express (1996),Animation|Children's|Musical
+1,914,Mon Café à Montréal (1964),Musical|Romance
+2,1193,Over the Nest (1975),Drama
+3,1210,Return of the Starfarer: Part VI (1983),Action|Adventure|Sci-Fi
+4,1357,Brillant (1996),Drama|Romance
+5,1537,Shall We Dance? (1996),Comedy
+6,2355,A Bug's Day (1998),Animation|Children's|Comedy
+7,3408,Erin's Case (2000),Drama
+8,3421,Animal Haus (1978),Comedy
+9,3468,Der Hustler (1961),Drama
+$ read movies.dat sep=:: header=None names=movie,title,genres encoding=latin-1 index_col=movie usecols=movie,genres
+shape (10, 1)
+  'genres': str
+movie,genres
+661,Animation|Children's|Musical
+914,Musical|Romance
+1193,Drama
+1210,Action|Adventure|Sci-Fi
+1357,Drama|Romance
+1537,Comedy
+2355,Animation|Children's|Comedy
+3408,Drama
+3421,Comedy
+3468,Drama
+$ read movies.dat sep=:: header=None names=movie,title,genres encoding_errors=replace
+shape (10, 3)
+  'movie': int64
+  'title': str
+  'genres': str
+,movie,title,genres
+0,661,Giant Peach Express (1996),Animation|Children's|Musical
+1,914,Mon Caf� � Montr�al (1964),Musical|Romance
+2,1193,Over the Nest (1975),Drama
+3,1210,Return of the Starfarer: Part VI (1983),Action|Adventure|Sci-Fi
+4,1357,Brillant (1996),Drama|Romance
+5,1537,Shall We Dance? (1996),Comedy
+6,2355,A Bug's Day (1998),Animation|Children's|Comedy
+7,3408,Erin's Case (2000),Drama
+8,3421,Animal Haus (1978),Comedy
+9,3468,Der Hustler (1961),Drama
+$ read movies.dat sep=:: header=None names=movie,title,genres encoding_errors=ignore head=3
+shape (10, 3)
+  'movie': int64
+  'title': str
+  'genres': str
+,movie,title,genres
+0,661,Giant Peach Express (1996),Animation|Children's|Musical
+1,914,Mon Caf  Montral (1964),Musical|Romance
+2,1193,Over the Nest (1975),Drama
+$ read movies.dat sep=:: header=None names=movie,title,genres encoding_errors=backslashreplace head=3
+shape (10, 3)
+  'movie': int64
+  'title': str
+  'genres': str
+,movie,title,genres
+0,661,Giant Peach Express (1996),Animation|Children's|Musical
+1,914,Mon Caf\xe9 \xe0 Montr\xe9al (1964),Musical|Romance
+2,1193,Over the Nest (1975),Drama
+$ read movies.dat sep=[:|] header=None encoding=latin-1
+! ParserError: Expected 7 fields in line 4, saw 8. Error could possibly be due to quotes being ignored when a multi-char delimiter is used.
+$ read ls.txt sep=\s+ skiprows=1 header=None
+! ParserError: Expected 9 fields in line 6, saw 11. Error could possibly be due to quotes being ignored when a multi-char delimiter is used.
+$ read ls.txt sep=\s+ skiprows=1 header=None on_bad_lines=warn
+warn: Skipping line 6: Expected 9 fields in line 6, saw 11. Error could possibly be due to quotes being ignored when a multi-char delimiter is used.
+warn: Skipping line 7: Expected 9 fields in line 7, saw 11. Error could possibly be due to quotes being ignored when a multi-char delimiter is used.
+shape (5, 9)
+  0: str
+  1: int64
+  2: str
+  3: str
+  4: int64
+  5: str
+  6: int64
+  7: str
+  8: str
+,0,1,2,3,4,5,6,7,8
+0,-rw-r--r--,1,dana,staff,4210,Oct,27,09:14,budget.xlsx
+1,-rw-r--r--,1,dana,staff,18733,Oct,28,17:02,report.pdf
+2,drwxr-xr-x,5,dana,staff,160,Oct,29,08:30,photos
+3,-rwxr-xr-x,1,dana,staff,912,Sep,3,2025,backup.sh
+4,-rw-------,1,dana,staff,220,Oct,29,11:05,.env
+$ read ls.txt sep=\s+ skiprows=1 header=None on_bad_lines=skip names=mode,links,owner,group,size,month,day,time,name
+shape (5, 9)
+  'mode': str
+  'links': int64
+  'owner': str
+  'group': str
+  'size': int64
+  'month': str
+  'day': int64
+  'time': str
+  'name': str
+,mode,links,owner,group,size,month,day,time,name
+0,-rw-r--r--,1,dana,staff,4210,Oct,27,09:14,budget.xlsx
+1,-rw-r--r--,1,dana,staff,18733,Oct,28,17:02,report.pdf
+2,drwxr-xr-x,5,dana,staff,160,Oct,29,08:30,photos
+3,-rwxr-xr-x,1,dana,staff,912,Sep,3,2025,backup.sh
+4,-rw-------,1,dana,staff,220,Oct,29,11:05,.env
+$ read ls.txt sep=\s+ skiprows=1 header=None usecols=4,8
+shape (7, 2)
+  4: int64
+  8: str
+,4,8
+0,4210,budget.xlsx
+1,18733,report.pdf
+2,160,photos
+3,912,backup.sh
+4,1534,notes
+5,11,latest
+6,220,.env
+$ read ls.txt sep=\s+ header=None on_bad_lines=skip
+shape (1, 2)
+  0: str
+  1: int64
+,0,1
+0,total,48
+$ read ls.txt sep={sp} skiprows=1 header=None
+! ParserError: Expected 11 fields in line 4, saw 12
+$ read vmstat.txt sep=\s+ skiprows=1
+shape (4, 17)
+  'r': int64
+  'b': int64
+  'swpd': int64
+  'free': int64
+  'buff': int64
+  'cache': int64
+  'si': int64
+  'so': int64
+  'bi': int64
+  'bo': int64
+  'in': int64
+  'cs': int64
+  'us': int64
+  'sy': int64
+  'id': int64
+  'wa': int64
+  'st': int64
+,r,b,swpd,free,buff,cache,si,so,bi,bo,in,cs,us,sy,id,wa,st
+0,2,0,0,812344,102400,2938112,0,0,5,21,310,622,7,2,90,1,0
+1,1,0,0,811920,102400,2938220,0,0,0,48,402,811,12,3,84,1,0
+2,4,1,256,790112,102404,2939004,0,12,188,960,1210,2904,41,9,38,12,0
+3,0,0,256,805776,102404,2939100,0,0,0,8,288,590,3,1,96,0,0
+$ read vmstat.txt sep=\s+ header=1 usecols=r,b,free,us,sy,id,wa
+shape (4, 7)
+  'r': int64
+  'b': int64
+  'free': int64
+  'us': int64
+  'sy': int64
+  'id': int64
+  'wa': int64
+,r,b,free,us,sy,id,wa
+0,2,0,812344,7,2,90,1
+1,1,0,811920,12,3,84,1
+2,4,1,790112,41,9,38,12
+3,0,0,805776,3,1,96,0
+$ read vmstat.txt sep=\s+ header=0,1
+! ParserError: Header rows must have an equal number of columns.
+$ read vmstat.txt sep=\s+
+shape (5, 6)
+  'procs': str
+  '-----------memory----------': str
+  '---swap--': str
+  '-----io----': str
+  '-system--': str
+  '------cpu-----': str
+,,,,,,,,,,,procs,-----------memory----------,---swap--,-----io----,-system--,------cpu-----
+r,b,swpd,free,buff,cache,si,so,bi,bo,in,cs,us,sy,id,wa,st
+2,0,0,812344,102400,2938112,0,0,5,21,310,622,7,2,90,1,0
+1,0,0,811920,102400,2938220,0,0,0,48,402,811,12,3,84,1,0
+4,1,256,790112,102404,2939004,0,12,188,960,1210,2904,41,9,38,12,0
+0,0,256,805776,102404,2939100,0,0,0,8,288,590,3,1,96,0,0
+$ read psql.txt sep=\s*\|\s* skiprows=[1] skipfooter=2
+shape (4, 5)
+  'id': int64
+  'name': str
+  'city': str
+  'balance': float64
+  'active': str
+,id,name,city,balance,active
+0,1,Ana Ruiz,Valencia,1200.5,t
+1,2,Bo Lindgren,Malmö,0.0,f
+2,3,Chidi Okafor,Lagos,-340.25,t
+3,4,Dee Park,,88.1,
+$ read psql.txt sep=\s*\|\s* skiprows=[1] skipfooter=2 true_values=t false_values=f
+shape (4, 5)
+  'id': int64
+  'name': str
+  'city': str
+  'balance': float64
+  'active': object
+,id,name,city,balance,active
+0,1,Ana Ruiz,Valencia,1200.5,True
+1,2,Bo Lindgren,Malmö,0.0,False
+2,3,Chidi Okafor,Lagos,-340.25,True
+3,4,Dee Park,,88.1,
+$ read psql.txt sep=\s*\|\s* skiprows=[1] skipfooter=2 true_values=t false_values=f dtype_backend=numpy_nullable
+shape (4, 5)
+  'id': Int64
+  'name': string
+  'city': string
+  'balance': Float64
+  'active': boolean
+,id,name,city,balance,active
+0,1,Ana Ruiz,Valencia,1200.5,True
+1,2,Bo Lindgren,Malmö,0.0,False
+2,3,Chidi Okafor,Lagos,-340.25,True
+3,4,Dee Park,,88.1,
+$ read psql.txt sep=\s*\|\s* skiprows=[1] skipfooter=2 index_col=id
+shape (4, 4)
+  'name': str
+  'city': str
+  'balance': float64
+  'active': str
+id,name,city,balance,active
+1,Ana Ruiz,Valencia,1200.5,t
+2,Bo Lindgren,Malmö,0.0,f
+3,Chidi Okafor,Lagos,-340.25,t
+4,Dee Park,,88.1,
+$ read psql.txt sep=| skiprows=[1] skipfooter=2
+shape (4, 5)
+  ' id ': int64
+  '    name     ': str
+  '   city    ': str
+  ' balance  ': float64
+  ' active': str
+, id ,    name     ,   city    , balance  , active
+0,1, Ana Ruiz    , Valencia  ,1200.5, t
+1,2, Bo Lindgren , Malmö     ,0.0, f
+2,3, Chidi Okafor, Lagos     ,-340.25, t
+3,4, Dee Park    ,           ,88.1,
+$ read psql.txt sep=\s*\|\s* skiprows=[1]
+shape (5, 5)
+  'id': str
+  'name': str
+  'city': str
+  'balance': float64
+  'active': str
+,id,name,city,balance,active
+0,1,Ana Ruiz,Valencia,1200.5,t
+1,2,Bo Lindgren,Malmö,0.0,f
+2,3,Chidi Okafor,Lagos,-340.25,t
+3,4,Dee Park,,88.1,
+4,(4 rows),,,,
+$ read psql.txt sep=\s*\|\s* skiprows=[1] nrows=4
+shape (4, 5)
+  'id': int64
+  'name': str
+  'city': str
+  'balance': float64
+  'active': str
+,id,name,city,balance,active
+0,1,Ana Ruiz,Valencia,1200.5,t
+1,2,Bo Lindgren,Malmö,0.0,f
+2,3,Chidi Okafor,Lagos,-340.25,t
+3,4,Dee Park,,88.1,
+$ read psql.txt sep=\s*\|\s* skiprows=[1] skipfooter=2 nrows=4
+! ValueError: 'skipfooter' not supported with 'nrows'
+$ read services.md sep=\s*\|\s* skiprows=[1]
+shape (3, 6)
+  'Unnamed: 0': float64
+  'Service': str
+  'Port': int64
+  'Owner': str
+  'SLO': str
+  'Unnamed: 5': float64
+,Unnamed: 0,Service,Port,Owner,SLO,Unnamed: 5
+0,,api,8080,platform,99.9%,
+1,,billing,9000,payments,99.95%,
+2,,search,9200,discovery,,
+$ read services.md sep=\s*\|\s* skiprows=[1] usecols=Service,Port,SLO
+shape (3, 3)
+  'Service': str
+  'Port': int64
+  'SLO': str
+,Service,Port,SLO
+0,api,8080,99.9%
+1,billing,9000,99.95%
+2,search,9200,
+$ read services.md sep=| skiprows=[1] skipinitialspace=True
+shape (3, 6)
+  'Unnamed: 0': float64
+  'Service ': str
+  'Port ': int64
+  'Owner     ': str
+  'SLO    ': str
+  'Unnamed: 5': float64
+,Unnamed: 0,Service ,Port ,Owner     ,SLO    ,Unnamed: 5
+0,,api     ,8080,platform  ,99.9%  ,
+1,,billing ,9000,payments  ,99.95% ,
+2,,search  ,9200,discovery ,,
+$ read mysql.tsv sep={tab} header=None names=id,name,email,note,since
+shape (5, 5)
+  'id': str
+  'name': str
+  'email': str
+  'note': str
+  'since': str
+,id,name,email,note,since
+0,1,Ana Ruiz,ana@example.com,\N,2026-01-04
+1,2,Bo Lindgren,bo@example.com,Prefers email\tno calls,2026-02-11
+2,3,Chidi Okafor,\N,Line one\,
+3,line two,2026-03-09,,,
+4,4,Dee Park,dee@example.com,C:\\Users\\dee,\N
+$ read mysql.tsv sep={tab} header=None names=id,name,email,note,since escapechar=\ na_values=\N
+shape (4, 5)
+  'id': int64
+  'name': str
+  'email': str
+  'note': str
+  'since': str
+,id,name,email,note,since
+0,1,Ana Ruiz,ana@example.com,N,2026-01-04
+1,2,Bo Lindgren,bo@example.com,Prefers emailtno calls,2026-02-11
+2,3,Chidi Okafor,N,"Line one
+line two",2026-03-09
+3,4,Dee Park,dee@example.com,C:\Users\dee,N
+$ read mysql.tsv sep={tab} header=None names=id,name,email,note,since escapechar=\ na_values=\N quoting=3
+shape (4, 5)
+  'id': int64
+  'name': str
+  'email': str
+  'note': str
+  'since': str
+,id,name,email,note,since
+0,1,Ana Ruiz,ana@example.com,N,2026-01-04
+1,2,Bo Lindgren,bo@example.com,Prefers emailtno calls,2026-02-11
+2,3,Chidi Okafor,N,"Line one
+line two",2026-03-09
+3,4,Dee Park,dee@example.com,C:\Users\dee,N
+$ read mysql.tsv fn=table header=None escapechar=\ na_values=\N keep_default_na=False
+shape (4, 5)
+  0: int64
+  1: str
+  2: str
+  3: str
+  4: str
+,0,1,2,3,4
+0,1,Ana Ruiz,ana@example.com,N,2026-01-04
+1,2,Bo Lindgren,bo@example.com,Prefers emailtno calls,2026-02-11
+2,3,Chidi Okafor,N,"Line one
+line two",2026-03-09
+3,4,Dee Park,dee@example.com,C:\Users\dee,N
+$ read mysql.tsv sep={tab} header=None escapechar=\ quoting=3 na_filter=False
+shape (4, 5)
+  0: int64
+  1: str
+  2: str
+  3: str
+  4: str
+,0,1,2,3,4
+0,1,Ana Ruiz,ana@example.com,N,2026-01-04
+1,2,Bo Lindgren,bo@example.com,Prefers emailtno calls,2026-02-11
+2,3,Chidi Okafor,N,"Line one
+line two",2026-03-09
+3,4,Dee Park,dee@example.com,C:\Users\dee,N
+$ read orders.csv sep=None
+shape (3, 4)
+  'Bestellung': str
+  'Datum': str
+  'Betrag': str
+  'Land': str
+,Bestellung,Datum,Betrag,Land
+0,A-1001,01.10.2026,"1.199,00",DE
+1,A-1002,02.10.2026,"49,95",AT
+2,A-1003,02.10.2026,"12.000,50",CH
+$ read orders.csv sep=None decimal=, thousands=.
+shape (3, 4)
+  'Bestellung': str
+  'Datum': int64
+  'Betrag': float64
+  'Land': str
+,Bestellung,Datum,Betrag,Land
+0,A-1001,1102026,1199.0,DE
+1,A-1002,2102026,49.95,AT
+2,A-1003,2102026,12000.5,CH
+$ read orders.csv sep=None decimal=, thousands=. dtype=Datum:str
+shape (3, 4)
+  'Bestellung': str
+  'Datum': str
+  'Betrag': float64
+  'Land': str
+,Bestellung,Datum,Betrag,Land
+0,A-1001,01.10.2026,1199.0,DE
+1,A-1002,02.10.2026,49.95,AT
+2,A-1003,02.10.2026,12000.5,CH
+$ read umsatz.csv sep=None encoding=cp1252
+shape (3, 2)
+  'Datum;Kunde;Ort;Umsatz': str
+  ' netto;MwSt': int64
+,Datum;Kunde;Ort;Umsatz, netto;MwSt
+03.10.2026;Bäckerei Groß;Köln;1.250,00;237,50
+07.10.2026;Café Müller;Bonn;89,90;17,8
+12.10.2026;Hôtel Zürich;Zürich;12.400,00;0,0
+$ read umsatz.csv sep=; encoding=cp1252 decimal=, thousands=.
+shape (3, 5)
+  'Datum': int64
+  'Kunde': str
+  'Ort': str
+  'Umsatz, netto': float64
+  'MwSt': float64
+,Datum,Kunde,Ort,"Umsatz, netto",MwSt
+0,3102026,Bäckerei Groß,Köln,1250.0,237.5
+1,7102026,Café Müller,Bonn,89.9,17.08
+2,12102026,Hôtel Zürich,Zürich,12400.0,0.0
+$ read umsatz.csv sep=; encoding=cp1252 decimal=, thousands=. dtype=Datum:str
+shape (3, 5)
+  'Datum': str
+  'Kunde': str
+  'Ort': str
+  'Umsatz, netto': float64
+  'MwSt': float64
+,Datum,Kunde,Ort,"Umsatz, netto",MwSt
+0,03.10.2026,Bäckerei Groß,Köln,1250.0,237.5
+1,07.10.2026,Café Müller,Bonn,89.9,17.08
+2,12.10.2026,Hôtel Zürich,Zürich,12400.0,0.0
+$ read umsatz.csv sep=;
+! UnicodeDecodeError: 'utf-8' codec can't decode byte 0xe4 in position 47: invalid continuation byte
+$ read cities.tsv sep=None
+shape (3, 3)
+  'city': str
+  'country': str
+  'pop_k': int64
+,city,country,pop_k
+0,Oslo,Norway,709
+1,Bergen,Norway,291
+2,Aarhus,Denmark,285
+$ read survey.csv sep=None
+shape (4, 5)
+  'id': str
+  ' name': str
+  ' likes_python': str
+  ' team': str
+  ' score': float64
+,id, name, likes_python, team, score
+1, 'Ana', yes, 'Data, Platform',4.5
+2, 'Bo', no, Web, 3,
+3, 'Chidi', Y, 'Infra', 5,
+4, 'Dee', N, , 2.5,
+$ read ls.txt sep=None skiprows=1 header=None
+! ParserError: Expected 11 fields in line 4, saw 12
+$ read onecol.txt sep=None
+shape (2, 3)
+  'Unnamed: 0': str
+  'lph': str
+  'Unnamed: 2': float64
+,Unnamed: 0,lph,Unnamed: 2
+0,bet,,
+1,g,mm,
+$ read bom.csv sep=None
+shape (2, 2)
+  '\ufeffid': int64
+  'name': str
+,﻿id,name
+0,1,Ana
+1,2,Bo
+$ read bom.csv sep=;
+shape (2, 2)
+  'id': int64
+  'name': str
+,id,name
+0,1,Ana
+1,2,Bo
+$ read roles.csv sep=None comment=#
+shape (3, 3)
+  'role': str
+  'openings': float64
+  'notes': str
+,role,openings,notes
+0,C,,
+1,F,,
+2,Python developer,2.0,office
+$ read services.md sep=None
+shape (4, 16)
+  '|': str
+  'Service': str
+  '|.1': str
+  'Port': str
+  '|.2': str
+  'Owner': str
+  'Unnamed: 6': str
+  'Unnamed: 7': str
+  'Unnamed: 8': str
+  'Unnamed: 9': str
+  '|.3': float64
+  'SLO': str
+  'Unnamed: 12': str
+  'Unnamed: 13': float64
+  'Unnamed: 14': str
+  '|.4': str
+,|,Service,|.1,Port,|.2,Owner,Unnamed: 6,Unnamed: 7,Unnamed: 8,Unnamed: 9,|.3,SLO,Unnamed: 12,Unnamed: 13,Unnamed: 14,|.4
+0,|---------|------|-----------|--------|,,,,,,,,,,,,,,,
+1,|,api,,,,,|,8080,|,platform,,|,99.9%,,|,
+2,|,billing,|,9000,|,payments,,|,99.95%,|,,,,,,
+3,|,search,,|,9200,|,discovery,|,,,,,,,,|
+$ read survey.csv
+shape (4, 5)
+  'id': str
+  ' name': str
+  ' likes_python': str
+  ' team': str
+  ' score': float64
+,id, name, likes_python, team, score
+1, 'Ana', yes, 'Data, Platform',4.5
+2, 'Bo', no, Web, 3,
+3, 'Chidi', Y, 'Infra', 5,
+4, 'Dee', N, , 2.5,
+$ read survey.csv skipinitialspace=True
+shape (4, 5)
+  'id': str
+  'name': str
+  'likes_python': str
+  'team': str
+  'score': float64
+,id,name,likes_python,team,score
+1,'Ana',yes,'Data,Platform',4.5
+2,'Bo',no,Web,3,
+3,'Chidi',Y,'Infra',5,
+4,'Dee',N,,2.5,
+$ read survey.csv skipinitialspace=True quotechar='
+shape (4, 5)
+  'id': int64
+  'name': str
+  'likes_python': str
+  'team': str
+  'score': float64
+,id,name,likes_python,team,score
+0,1,Ana,yes,"Data, Platform",4.5
+1,2,Bo,no,Web,3.0
+2,3,Chidi,Y,Infra,5.0
+3,4,Dee,N,,2.5
+$ read survey.csv skipinitialspace=True quotechar=' true_values=yes,Y false_values=no,N
+shape (4, 5)
+  'id': int64
+  'name': str
+  'likes_python': bool
+  'team': str
+  'score': float64
+,id,name,likes_python,team,score
+0,1,Ana,True,"Data, Platform",4.5
+1,2,Bo,False,Web,3.0
+2,3,Chidi,True,Infra,5.0
+3,4,Dee,False,,2.5
+$ read survey.csv skipinitialspace=True quotechar=' true_values=yes,Y false_values=no,N dtype_backend=numpy_nullable
+shape (4, 5)
+  'id': Int64
+  'name': string
+  'likes_python': boolean
+  'team': string
+  'score': Float64
+,id,name,likes_python,team,score
+0,1,Ana,True,"Data, Platform",4.5
+1,2,Bo,False,Web,3.0
+2,3,Chidi,True,Infra,5.0
+3,4,Dee,False,,2.5
+$ read survey.csv skipinitialspace=True quotechar=' true_values=yes false_values=no
+shape (4, 5)
+  'id': int64
+  'name': str
+  'likes_python': str
+  'team': str
+  'score': float64
+,id,name,likes_python,team,score
+0,1,Ana,yes,"Data, Platform",4.5
+1,2,Bo,no,Web,3.0
+2,3,Chidi,Y,Infra,5.0
+3,4,Dee,N,,2.5
+$ read survey.csv skipinitialspace=True quotechar=' dtype=likes_python:bool
+shape (4, 5)
+  'id': int64
+  'name': str
+  'likes_python': bool
+  'team': str
+  'score': float64
+,id,name,likes_python,team,score
+0,1,Ana,True,"Data, Platform",4.5
+1,2,Bo,True,Web,3.0
+2,3,Chidi,True,Infra,5.0
+3,4,Dee,True,,2.5
+$ read survey.csv skipinitialspace=True quotechar=' index_col=0 usecols=id,team
+shape (4, 1)
+  'team': str
+id,team
+1,"Data, Platform"
+2,Web
+3,Infra
+4,
+$ read survey.csv sep=\s*,\s* quotechar='
+shape (4, 5)
+  'id': str
+  'name': str
+  'likes_python': str
+  'team': str
+  'score': float64
+,id,name,likes_python,team,score
+1,'Ana',yes,'Data,Platform',4.5
+2,'Bo',no,Web,3,
+3,'Chidi',Y,'Infra',5,
+4,'Dee',N,,2.5,
+$ read feedback.csv
+! ParserError: ',' expected after '"'
+$ read feedback.csv on_bad_lines=warn
+warn: Skipping line 5: ',' expected after '"'
+warn: Skipping line 3: Expected 4 fields in line 3, saw 5
+shape (3, 4)
+  'ts': str
+  'user': str
+  'rating': int64
+  'comment': str
+,ts,user,rating,comment
+0,2026-10-01 09:12,ana,5,Great
+1,2026-10-02 14:03,chidi,4,Fine
+2,2026-10-03 08:05,eli,5,Love it
+$ read feedback.csv on_bad_lines=skip
+shape (3, 4)
+  'ts': str
+  'user': str
+  'rating': int64
+  'comment': str
+,ts,user,rating,comment
+0,2026-10-01 09:12,ana,5,Great
+1,2026-10-02 14:03,chidi,4,Fine
+2,2026-10-03 08:05,eli,5,Love it
+$ read feedback2.csv
+! ParserError: Expected 4 fields in line 3, saw 5
+$ read feedback2.csv on_bad_lines=warn
+warn: Skipping line 3: Expected 4 fields in line 3, saw 5
+warn: Skipping line 5: Expected 4 fields in line 5, saw 6
+shape (2, 4)
+  'ts': str
+  'user': str
+  'rating': int64
+  'comment': str
+,ts,user,rating,comment
+0,2026-10-01 09:12,ana,5,Great
+1,2026-10-03 08:05,eli,5,Love it
+$ read feedback2.csv on_bad_lines=skip usecols=user,rating
+shape (4, 2)
+  'user': str
+  'rating': int64
+,user,rating
+0,ana,5
+1,bo,3
+2,eli,5
+3,fay,1
+$ read feedback2.csv on_bad_lines=warn index_col=False
+warn: Length of header or names does not match length of data. This leads to a loss of data with index_col=False.
+shape (4, 4)
+  'ts': str
+  'user': str
+  'rating': int64
+  'comment': str
+,ts,user,rating,comment
+0,2026-10-01 09:12,ana,5,Great
+1,2026-10-01 10:40,bo,3,Slow
+2,2026-10-03 08:05,eli,5,Love it
+3,2026-10-04 11:20,fay,1,No
+$ read feedback2.csv on_bad_lines=warn skipfooter=1
+warn: Skipping line 3: Expected 4 fields in line 3, saw 5
+shape (2, 4)
+  'ts': str
+  'user': str
+  'rating': int64
+  'comment': str
+,ts,user,rating,comment
+0,2026-10-01 09:12,ana,5,Great
+1,2026-10-03 08:05,eli,5,Love it
+$ read feedback.csv on_bad_lines=skip skipfooter=1
+shape (2, 4)
+  'ts': str
+  'user': str
+  'rating': int64
+  'comment': str
+,ts,user,rating,comment
+0,2026-10-01 09:12,ana,5,Great
+1,2026-10-02 14:03,chidi,4,Fine
+$ read feedback2.csv on_bad_lines=warn chunksize=2
+warn: Skipping line 3: Expected 4 fields in line 3, saw 5
+chunk 0
+shape (1, 4)
+  'ts': str
+  'user': str
+  'rating': int64
+  'comment': str
+,ts,user,rating,comment
+0,2026-10-01 09:12,ana,5,Great
+warn: Skipping line 5: Expected 4 fields in line 5, saw 6
+chunk 1
+shape (1, 4)
+  'ts': str
+  'user': str
+  'rating': int64
+  'comment': str
+,ts,user,rating,comment
+1,2026-10-03 08:05,eli,5,Love it
+done
+$ read feedback2.csv on_bad_lines=warn names=ts,user,rating,comment,more header=0
+! ValueError: Number of passed names did not match number of header fields in the file
+$ read claims.txt sep=|
+! ParserError: '|' expected after '"'
+$ read claims.txt sep=| on_bad_lines=warn
+warn: Skipping line 4: '|' expected after '"'
+shape (3, 4)
+  'claim': str
+  'member': str
+  'item': str
+  'amount': float64
+,claim,member,item,amount
+0,C-01,M-100,"27"" monitor",229.0
+1,C-02,M-101,USB-C hub,39.9
+2,C-04,M-103,"Desk lamp 12""",24.5
+$ read claims.txt sep=| quoting=3
+shape (4, 4)
+  'claim': str
+  'member': str
+  'item': str
+  'amount': float64
+,claim,member,item,amount
+0,C-01,M-100,"27"" monitor",229.0
+1,C-02,M-101,USB-C hub,39.9
+2,C-03,M-102,"""Pro"" keyboard",119.0
+3,C-04,M-103,"Desk lamp 12""",24.5
+$ read claims.txt sep=| quoting=3 index_col=claim
+shape (4, 3)
+  'member': str
+  'item': str
+  'amount': float64
+claim,member,item,amount
+C-01,M-100,"27"" monitor",229.0
+C-02,M-101,USB-C hub,39.9
+C-03,M-102,"""Pro"" keyboard",119.0
+C-04,M-103,"Desk lamp 12""",24.5
+$ read claims.txt sep=| quotechar=~
+shape (4, 4)
+  'claim': str
+  'member': str
+  'item': str
+  'amount': float64
+,claim,member,item,amount
+0,C-01,M-100,"27"" monitor",229.0
+1,C-02,M-101,USB-C hub,39.9
+2,C-03,M-102,"""Pro"" keyboard",119.0
+3,C-04,M-103,"Desk lamp 12""",24.5
+$ read claims.txt sep=| doublequote=False escapechar=\
+shape (4, 4)
+  'claim': str
+  'member': str
+  'item': str
+  'amount': float64
+,claim,member,item,amount
+0,C-01,M-100,"27"" monitor",229.0
+1,C-02,M-101,USB-C hub,39.9
+2,C-03,M-102,Pro keyboard,119.0
+3,C-04,M-103,"Desk lamp 12""",24.5
+$ read trailing.csv
+shape (3, 3)
+  'sku': int64
+  'qty': float64
+  'price': float64
+,sku,qty,price
+P-1,3,9.99,
+P-2,1,24.0,
+P-3,12,1.25,
+$ read trailing.csv index_col=False
+shape (3, 3)
+  'sku': str
+  'qty': int64
+  'price': float64
+,sku,qty,price
+0,P-1,3,9.99
+1,P-2,1,24.0
+2,P-3,12,1.25
+$ read trailing.csv index_col=False usecols=sku,price
+shape (3, 2)
+  'sku': str
+  'price': float64
+,sku,price
+0,P-1,9.99
+1,P-2,24.0
+2,P-3,1.25
+$ read trailing.csv header=None
+! ParserError: Expected 3 fields in line 2, saw 4
+$ read roles.csv
+shape (4, 3)
+  'role': str
+  'openings': float64
+  'notes': str
+,role,openings,notes
+0,C# developer,3.0,remote
+1,"F# engineer, senior",1.0,# urgent
+2,Python developer,2.0,office
+3,# end of list,,
+$ read roles.csv comment=#
+shape (3, 3)
+  'role': str
+  'openings': float64
+  'notes': str
+,role,openings,notes
+0,C,,
+1,F,,
+2,Python developer,2.0,office
+$ read roles.csv comment=# skip_blank_lines=False
+shape (4, 3)
+  'role': str
+  'openings': float64
+  'notes': str
+,role,openings,notes
+0,C,,
+1,F,,
+2,Python developer,2.0,office
+3,,,
+$ read mixed.csv sep=[;,]
+shape (3, 3)
+  'name ': str
+  'qty': int64
+  'price': float64
+,name ,qty,price
+0,bolt ,120,0.05
+1,nut ,300,0.02
+2,washer,75,0.01
+$ read mixed.csv sep=\s*[;,]\s*
+shape (3, 3)
+  'name': str
+  'qty': int64
+  'price': float64
+,name,qty,price
+0,bolt,120,0.05
+1,nut,300,0.02
+2,washer,75,0.01
+$ read mixed.csv sep=(;|,)
+shape (3, 5)
+  'name ': str
+  ',': str
+  'qty': int64
+  ';': str
+  'price': float64
+,name ,",",qty,;,price
+0,bolt ,",",120,;,0.05
+1,nut ,",",300,;,0.02
+2,washer,",",75,;,0.01
+$ read mixed.csv sep=,
+shape (3, 2)
+  'name ': str
+  'qty;price': str
+,name ,qty;price
+0,bolt , 120;0.05
+1,nut ,300 ; 0.02
+2,washer, 75;0.01
+$ read cities.tsv fn=table
+shape (3, 3)
+  'city': str
+  'country': str
+  'pop_k': int64
+,city,country,pop_k
+0,Oslo,Norway,709
+1,Bergen,Norway,291
+2,Aarhus,Denmark,285
+$ read cities.tsv dialect=excel-tab
+shape (3, 3)
+  'city': str
+  'country': str
+  'pop_k': int64
+,city,country,pop_k
+0,Oslo,Norway,709
+1,Bergen,Norway,291
+2,Aarhus,Denmark,285
+$ read cities.tsv dialect=excel-tab sep=,
+shape (3, 3)
+  'city': str
+  'country': str
+  'pop_k': int64
+,city,country,pop_k
+0,Oslo,Norway,709
+1,Bergen,Norway,291
+2,Aarhus,Denmark,285
+$ read cities.tsv dialect=excel-tab sep=;
+warn: Conflicting values for 'delimiter': ';' was provided, but the dialect specifies '	'. Using the dialect-specified value.
+shape (3, 3)
+  'city': str
+  'country': str
+  'pop_k': int64
+,city,country,pop_k
+0,Oslo,Norway,709
+1,Bergen,Norway,291
+2,Aarhus,Denmark,285
+$ read survey.csv dialect=unix skipinitialspace=True
+warn: Conflicting values for 'skipinitialspace': 'True' was provided, but the dialect specifies 'False'. Using the dialect-specified value.
+shape (4, 5)
+  'id': str
+  ' name': str
+  ' likes_python': str
+  ' team': str
+  ' score': float64
+,id, name, likes_python, team, score
+1, 'Ana', yes, 'Data, Platform',4.5
+2, 'Bo', no, Web, 3,
+3, 'Chidi', Y, 'Infra', 5,
+4, 'Dee', N, , 2.5,
+$ read cities.tsv sep={tab} index_col=0 dtype=pop_k:Int64
+shape (3, 2)
+  'country': str
+  'pop_k': Int64
+city,country,pop_k
+Oslo,Norway,709
+Bergen,Norway,291
+Aarhus,Denmark,285
+$ read quoted.csv
+shape (3, 3)
+  'id': int64
+  'label': str
+  'text': str
+,id,label,text
+0,1,a,"He said ""hi"""
+1,2,b,"two
+lines"
+2,3,c,plain
+$ read quoted.csv quoting=3
+shape (4, 3)
+  'id': str
+  'label': str
+  'text': str
+,id,label,text
+0,1,a,"""He said """"hi"""""""
+1,2,b,"""two"
+2,"lines""",,
+3,3,c,plain
+$ read quoted.csv skiprows=[2]
+shape (2, 3)
+  'id': int64
+  'label': str
+  'text': str
+,id,label,text
+0,1,a,"He said ""hi"""
+1,3,c,plain
+$ read quoted.csv skiprows=1 header=None
+shape (3, 3)
+  0: int64
+  1: str
+  2: str
+,0,1,2
+0,1,a,"He said ""hi"""
+1,2,b,"two
+lines"
+2,3,c,plain
+$ read quoted.csv sep=, doublequote=False
+shape (3, 3)
+  'id': int64
+  'label': str
+  'text': str
+,id,label,text
+0,1,a,"He said ""hi"""""""
+1,2,b,"two
+lines"
+2,3,c,plain
+$ read single.csv sep=; quotechar='
+shape (2, 3)
+  'id': int64
+  'name': str
+  'note': str
+,id,name,note
+0,1,Ana,x;y
+1,2,Bo,it's
+$ read single.csv sep=; quotechar=' doublequote=False
+shape (2, 3)
+  'id': int64
+  'name': str
+  'note': str
+,id,name,note
+0,1,Ana,x;y
+1,2,Bo,it's'
+$ read cr.csv
+shape (2, 2)
+  'a': int64
+  'b': int64
+,a,b
+0,1,2
+1,3,4
+$ read cr.csv sep=,
+shape (2, 2)
+  'a': int64
+  'b': int64
+,a,b
+0,1,2
+1,3,4
+$ read win.csv
+! UnicodeDecodeError: 'utf-8' codec can't decode byte 0x93 in position 19: invalid start byte
+$ read win.csv encoding=cp1252
+shape (2, 3)
+  'code': str
+  'item': str
+  'price': float64
+,code,item,price
+0,A1,“Deluxe” kettle,49.9
+1,A2,Mug – 4 pack,18.0
+$ read win.csv encoding_errors=replace
+shape (2, 3)
+  'code': str
+  'item': str
+  'price': float64
+,code,item,price
+0,A1,�Deluxe� kettle,49.9
+1,A2,Mug � 4 pack,18.0
+$ read win.csv encoding_errors=ignore
+shape (2, 3)
+  'code': str
+  'item': str
+  'price': float64
+,code,item,price
+0,A1,Deluxe kettle,49.9
+1,A2,Mug  4 pack,18.0
+$ read win.csv encoding_errors=backslashreplace
+shape (2, 3)
+  'code': str
+  'item': str
+  'price': float64
+,code,item,price
+0,A1,\x93Deluxe\x94 kettle,49.9
+1,A2,Mug \x96 4 pack,18.0
+$ read win.csv encoding=ascii encoding_errors=replace
+shape (2, 3)
+  'code': str
+  'item': str
+  'price': float64
+,code,item,price
+0,A1,�Deluxe� kettle,49.9
+1,A2,Mug � 4 pack,18.0
+$ read win.csv encoding=latin-1
+shape (2, 3)
+  'code': str
+  'item': str
+  'price': float64
+,code,item,price
+0,A1,Deluxe kettle,49.9
+1,A2,Mug  4 pack,18.0
+$ read umsatz.csv encoding=utf-8 encoding_errors=replace sep=;
+shape (3, 5)
+  'Datum': str
+  'Kunde': str
+  'Ort': str
+  'Umsatz, netto': str
+  'MwSt': str
+,Datum,Kunde,Ort,"Umsatz, netto",MwSt
+0,03.10.2026,B�ckerei Gro�,K�ln,"1.250,00","237,50"
+1,07.10.2026,Caf� M�ller,Bonn,"89,90","17,08"
+2,12.10.2026,H�tel Z�rich,Z�rich,"12.400,00","0,00"
+$ read nul.csv usecols=a
+shape (2, 1)
+  'a': int64
+,a
+0,1
+1,2
+$ read nul.csv usecols=a sep=None
+shape (2, 1)
+  'a': int64
+,a
+0,1
+1,2
+$ read eof.csv
+! ParserError: unexpected end of data
+$ read eof.csv on_bad_lines=skip
+shape (0, 2)
+  'a': object
+  'b': object
+,a,b
+$ read empty.csv
+! EmptyDataError: No columns to parse from file
+$ read empty.csv sep=None
+! Error: Could not determine delimiter
+$ read empty.csv names=a,b
+shape (0, 2)
+  'a': object
+  'b': object
+,a,b
+$ read blank.csv
+! EmptyDataError: No columns to parse from file
+$ read blank.csv sep=None
+! Error: Could not determine delimiter
+$ read missing.csv
+! FileNotFoundError: [Errno 2] No such file or directory: 'data/missing.csv'
+$ read ratings.dat sep=:: header=None names=a,b,a,c
+! ValueError: Duplicate names are not allowed.
+$ read ratings.dat sep=:: header=None on_bad_lines=maybe
+! ValueError: Argument maybe is invalid for on_bad_lines
+$ read ratings.dat sep=:: header=None quoting=7
+shape (18, 4)
+  0: int64
+  1: int64
+  2: int64
+  3: int64
+,0,1,2,3
+0,1,1193,5,978300760
+1,1,661,3,978302109
+2,1,914,3,978301968
+3,1,3408,4,978300275
+4,1,2355,5,978824291
+5,2,1357,5,978298709
+6,2,3068,4,978299000
+7,2,1537,4,978299620
+8,2,647,3,978299351
+9,3,3421,4,978298147
+10,3,1641,2,978298430
+11,3,648,3,978297867
+12,4,3468,5,978294008
+13,4,1210,3,978293924
+14,5,2717,1,978242084
+15,5,1193,4,978244568
+16,5,661,2,978246576
+17,6,914,5,978236567
+$ read cities.tsv sep={tab} quoting=7
+! TypeError: bad "quoting" value
+$ read cities.tsv sep={tab} escapechar=ab
+! TypeError: "escapechar" must be a 1-character string
+$ read cities.tsv sep={tab} quotechar=~~
+! TypeError: "quotechar" must be a 1-character string
+$ read ratings.dat sep=::( header=None
+! PatternError: missing ), unterminated subpattern at position 2
+$ read ratings.dat sep=[:: header=None
+! PatternError: unterminated character set at position 0
+$ read ratings.dat sep=:: header=None delimiter=,
+! ValueError: Specified a sep and a delimiter; you can only specify one.
+$ read ratings.dat sep=:: header=None encoding_errors=loud
+! LookupError: unknown error handler name 'loud'
+$ read ratings.dat sep=:: header=None index_col=True
+! ValueError: The value of index_col couldn't be 'True'
+$ read ratings.dat sep=:: header=None usecols=0,9
+! ParserError: Defining usecols with out-of-bounds indices is not allowed. [9] are out-of-bounds.
+$ read survey.csv quotechar=''
+! TypeError: "quotechar" must be a 1-character string
+$ read survey.csv sep=,, header=None
+shape (5, 1)
+  0: str
+,0
+0,"id, name, likes_python, team, score"
+1,"1, 'Ana', yes, 'Data, Platform', 4.5"
+2,"2, 'Bo', no, Web, 3"
+3,"3, 'Chidi', Y, 'Infra', 5"
+4,"4, 'Dee', N, , 2.5"
+$ read survey.csv dialect=fancy
+! ValueError: Invalid dialect fancy provided
