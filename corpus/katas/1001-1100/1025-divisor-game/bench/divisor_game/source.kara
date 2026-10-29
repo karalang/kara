@@ -1,0 +1,45 @@
+// LeetCode #1025: Divisor Game -- bench
+// Mirrors ../divisor_game_sieve.kara; see ../README.md § Benchmarks.
+
+fn divisor_game(n: i64) -> bool {
+    let mut divisors: Vec[Vec[i64]] = Vec.filled(n + 1, Vec.new());
+    for x in 1..n / 2 + 1 {
+        let mut m = 2 * x;
+        while m <= n {
+            divisors[m].push(x);
+            m += x;
+        }
+    }
+    let mut wins: Vec[bool] = Vec.filled(n + 1, false);
+    for m in 2..n + 1 {
+        wins[m] = divisors[m].iter().any(|x| not wins[m - x]);
+    }
+    wins[n]
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let count = 100;
+    let rounds = 100;
+    let mut seed = 1025;
+    let mut games: Vec[i64] = Vec.new();
+    for _ in 0..count {
+        games.push(500 + next_random(mut seed) % 501);
+    }
+    let mut wins = 0;
+    let mut check = 0;
+    for _ in 0..rounds {
+        for n in games.iter() {
+            let alice = divisor_game(n);
+            if alice {
+                wins += 1;
+            }
+            check = (check * 131 + n * 2 + if alice { 1 } else { 0 }) % 1000000007;
+        }
+    }
+    println(f"{count} games of n from 500 to 1000, {rounds} rounds: Alice wins {wins}, checksum {check}");
+}

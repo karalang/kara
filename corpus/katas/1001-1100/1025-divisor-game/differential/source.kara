@@ -1,0 +1,202 @@
+// LeetCode #1025: Divisor Game -- differential
+//
+// The five arms, copied, against the statement read literally and five
+// more properties. See README.md § Differential.
+
+fn d_star(n: i64) -> bool {
+    n % 2 == 0
+}
+
+fn d_dp(n: i64) -> bool {
+    let mut wins: Vec[bool] = Vec.filled(n + 1, false);
+    for m in 2..n + 1 {
+        let mut d = 1;
+        while d * d <= m and not wins[m] {
+            if m % d == 0 {
+                if not wins[m - d] or (d > 1 and not wins[m - m / d]) {
+                    wins[m] = true;
+                }
+            }
+            d += 1;
+        }
+    }
+    wins[n]
+}
+
+fn d_sieve(n: i64) -> bool {
+    let mut divisors: Vec[Vec[i64]] = Vec.filled(n + 1, Vec.new());
+    for x in 1..n / 2 + 1 {
+        let mut m = 2 * x;
+        while m <= n {
+            divisors[m].push(x);
+            m += x;
+        }
+    }
+    let mut wins: Vec[bool] = Vec.filled(n + 1, false);
+    for m in 2..n + 1 {
+        wins[m] = divisors[m].iter().any(|x| not wins[m - x]);
+    }
+    wins[n]
+}
+
+fn wins(n: i64, memo: mut ref Map[i64, bool]) -> bool {
+    if let Some(known) = memo.get(n) {
+        return known;
+    }
+    let mut result = false;
+    let mut x = 1;
+    while 2 * x <= n and not result {
+        if n % x == 0 and not wins(n - x, mut memo) {
+            result = true;
+        }
+        x += 1;
+    }
+    memo.insert(n, result);
+    result
+}
+
+fn d_memo(n: i64) -> bool {
+    let mut memo: Map[i64, bool] = Map.new();
+    wins(n, mut memo)
+}
+
+fn d_iter(n: i64) -> bool {
+    let mut wins: Vec[bool] = vec![false, false];
+    for m in 2..n + 1 {
+        let win = (1..m / 2 + 1).filter(|x| m % x == 0).any(|x| not wins[m - x]);
+        wins.push(win);
+    }
+    wins[n]
+}
+fn arms(n: i64) -> Vec[bool] {
+    vec![d_star(n), d_dp(n), d_sieve(n), d_memo(n), d_iter(n)]
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// the statement read literally: the player to move at `n` wins when some
+// `x` with 0 < x < n and n % x == 0 leaves the other player a number
+// they lose at, searched afresh with no table
+fn literal(n: i64) -> bool {
+    for x in 1..n {
+        if n % x == 0 and not literal(n - x) {
+            return true;
+        }
+    }
+    false
+}
+
+// the moves from `m`: every divisor of `m` other than `m` itself
+fn moves(m: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for x in 1..m {
+        if m % x == 0 {
+            out.push(x);
+        }
+    }
+    out
+}
+
+fn main() {
+    let most = 400;
+    let searched = 70;
+    let mut failures: Vec[i64] = Vec.filled(6, 0);
+    let mut checks = 0;
+    let mut check = 0;
+    // every arm's answer for every n from 1 to `most`, each asked afresh;
+    // answers[a][n] is arm a's answer at n
+    let mut answers: Vec[Vec[bool]] = Vec.filled(5, vec![false]);
+    for n in 1..most + 1 {
+        let got = arms(n);
+        for a in 0..5 {
+            answers[a].push(got[a]);
+        }
+    }
+    for n in 1..most + 1 {
+        check = (check * 131 + n * 2 + if answers[0][n] { 1 } else { 0 }) % 1000000007;
+        let exact = n <= searched and literal(n);
+        let options = moves(n);
+        for a in 0..5 {
+            let win = answers[a][n];
+            // P1: the statement, searched in full up to `searched`
+            if n <= searched {
+                checks += 1;
+                if win != exact {
+                    failures[0] += 1;
+                }
+            }
+            // P2: a winning number has a move to a losing one, and P3: a
+            // losing number has none, both by the arm's own answers
+            let to_losing = options.iter().any(|x| not answers[a][n - x]);
+            checks += 1;
+            if win and not to_losing {
+                failures[1] += 1;
+            }
+            checks += 1;
+            if not win and to_losing {
+                failures[2] += 1;
+            }
+            // P4: two losing numbers are never neighbours, since from n
+            // taking 1 leaves n - 1
+            if n > 1 {
+                checks += 1;
+                if not win and not answers[a][n - 1] {
+                    failures[3] += 1;
+                }
+            }
+            // P5: a game played out from n, the player the arm says is
+            // winning always moving to a number it says is losing and
+            // the other moving at random, is won by the player predicted
+            checks += 1;
+            let mut at = n;
+            let mut seed = 10251 + n;
+            let mut alice_to_move = true;
+            let mut stuck = false;
+            while at > 1 and not stuck {
+                let here = moves(at);
+                if answers[a][at] {
+                    let mut chosen = 0;
+                    for x in here.iter() {
+                        if chosen == 0 and not answers[a][at - x] {
+                            chosen = x;
+                        }
+                    }
+                    if chosen == 0 {
+                        stuck = true;
+                    } else {
+                        at -= chosen;
+                    }
+                } else {
+                    at -= here[next_random(mut seed) % here.len()];
+                }
+                alice_to_move = not alice_to_move;
+            }
+            // the player left to move at 1 has lost
+            if stuck or win != not alice_to_move {
+                failures[4] += 1;
+            }
+            // P6: each arm agrees with at least two of the other four
+            checks += 1;
+            let mut agree = 0;
+            for o in 0..5 {
+                if o != a and answers[o][n] == win {
+                    agree += 1;
+                }
+            }
+            if agree < 2 {
+                failures[5] += 1;
+            }
+        }
+    }
+    let mut total = 0;
+    for p in 0..6 {
+        if failures[p] > 0 {
+            println(f"P{p + 1}: {failures[p]} failures");
+        }
+        total += failures[p];
+    }
+    println(f"n = 1 to {most} ({searched} searched in full): checksum {check}, {checks} checks over 5 arms: {total} failures");
+}

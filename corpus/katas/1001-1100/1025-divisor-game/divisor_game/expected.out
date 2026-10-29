@@ -1,0 +1,10 @@
+n = 2 -> true
+n = 3 -> false
+n = 1 to 60: BABABABABABABABABABABABABABABABABABABABABABABABABABABABABABA
+500 games, n up to 10: Alice wins 235, checksum 15119175
+300 games, n up to 50: Alice wins 148, checksum 811557767
+200 games, n up to 100: Alice wins 91, checksum 328552698
+60 games, n up to 300: Alice wins 28, checksum 89670708
+20 games, n up to 600: Alice wins 9, checksum 718383730
+10 games, n up to 1000: Alice wins 5, checksum 541559258
+n = 1000 -> true, n = 999 -> false

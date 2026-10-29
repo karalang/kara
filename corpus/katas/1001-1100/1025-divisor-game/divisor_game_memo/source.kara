@@ -1,0 +1,65 @@
+// LeetCode #1025: Divisor Game -- recursion with a memo
+//
+// Search the game from `n` down: the player to move wins when some
+// divisor `x` of the number, other than the number itself and so no more
+// than half of it, leaves the other player a number they lose at. Each
+// number is solved once and kept in a `Map`. O(n^2).
+
+fn wins(n: i64, memo: mut ref Map[i64, bool]) -> bool {
+    if let Some(known) = memo.get(n) {
+        return known;
+    }
+    let mut result = false;
+    let mut x = 1;
+    while 2 * x <= n and not result {
+        if n % x == 0 and not wins(n - x, mut memo) {
+            result = true;
+        }
+        x += 1;
+    }
+    memo.insert(n, result);
+    result
+}
+
+fn divisor_game(n: i64) -> bool {
+    let mut memo: Map[i64, bool] = Map.new();
+    wins(n, mut memo)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // LeetCode's two examples
+    for n in vec![2, 3] {
+        println(f"n = {n} -> {divisor_game(n)}");
+    }
+    // the winner for every n from 1 to 60, A for Alice and B for Bob
+    let mut line = String.new();
+    for n in 1..61 {
+        line.push(if divisor_game(n) { 'A' } else { 'B' });
+    }
+    println(f"n = 1 to 60: {line}");
+    // random games: how many Alice wins, and a checksum
+    let mut seed = 1025;
+    let groups: Vec[(i64, i64)] = vec![(500, 10), (300, 50), (200, 100), (60, 300), (20, 600), (10, 1000)];
+    for (count, top) in groups.iter() {
+        let mut wins = 0;
+        let mut check = 0;
+        for _ in 0..count {
+            let n = 1 + next_random(mut seed) % top;
+            let alice = divisor_game(n);
+            if alice {
+                wins += 1;
+            }
+            check = (check * 131 + n * 2 + if alice { 1 } else { 0 }) % 1000000007;
+        }
+        println(f"{count} games, n up to {top}: Alice wins {wins}, checksum {check}");
+    }
+    // the largest n LeetCode allows
+    println(f"n = 1000 -> {divisor_game(1000)}, n = 999 -> {divisor_game(999)}");
+}
