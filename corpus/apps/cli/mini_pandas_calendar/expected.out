@@ -1,0 +1,2021 @@
+$ off 2026-11-25T16:30 BusinessHour(3)
+repr: <3 * BusinessHours: bh=09:00-17:00>
+freqstr: 3bh
++: 2026-11-26 11:30:00
+-: 2026-11-25 13:30:00
+rollforward: 2026-11-25 16:30:00
+rollback: 2026-11-25 16:30:00
+is_on_offset: True
+$ off 2026-11-25T16:30 BusinessHour(-3)
+repr: <-3 * BusinessHours: bh=09:00-17:00>
+freqstr: -3bh
++: 2026-11-25 13:30:00
+-: 2026-11-26 11:30:00
+rollforward: 2026-11-25 16:30:00
+rollback: 2026-11-25 16:30:00
+is_on_offset: True
+$ off 2026-11-25T08:00 BusinessHour(1)
+repr: <BusinessHour: bh=09:00-17:00>
+freqstr: bh
++: 2026-11-25 10:00:00
+-: 2026-11-24 16:00:00
+rollforward: 2026-11-25 09:00:00
+rollback: 2026-11-24 17:00:00
+is_on_offset: False
+$ off 2026-11-27T17:00 BusinessHour(1)
+repr: <BusinessHour: bh=09:00-17:00>
+freqstr: bh
++: 2026-11-30 10:00:00
+-: 2026-11-27 16:00:00
+rollforward: 2026-11-27 17:00:00
+rollback: 2026-11-27 17:00:00
+is_on_offset: True
+$ off 2026-11-28T10:00 BusinessHour(2)
+repr: <2 * BusinessHours: bh=09:00-17:00>
+freqstr: 2bh
++: 2026-11-30 11:00:00
+-: 2026-11-27 15:00:00
+rollforward: 2026-11-30 09:00:00
+rollback: 2026-11-27 17:00:00
+is_on_offset: False
+$ off 2026-11-25T16:30 BusinessHour(10)
+repr: <10 * BusinessHours: bh=09:00-17:00>
+freqstr: 10bh
++: 2026-11-27 10:30:00
+-: 2026-11-24 14:30:00
+rollforward: 2026-11-25 16:30:00
+rollback: 2026-11-25 16:30:00
+is_on_offset: True
+$ off 2026-11-25T16:30 BusinessHour(3,start=22:00,end=06:00)
+repr: <3 * BusinessHours: bh=22:00-06:00>
+freqstr: 3bh
++: 2026-11-26 01:00:00
+-: 2026-11-25 03:00:00
+rollforward: 2026-11-25 22:00:00
+rollback: 2026-11-25 06:00:00
+is_on_offset: False
+$ off 2026-11-25T23:30 BusinessHour(2,start=22:00,end=06:00)
+repr: <2 * BusinessHours: bh=22:00-06:00>
+freqstr: 2bh
++: 2026-11-26 01:30:00
+-: 2026-11-25 05:30:00
+rollforward: 2026-11-25 23:30:00
+rollback: 2026-11-25 23:30:00
+is_on_offset: True
+$ off 2026-11-25T12:15 BusinessHour(2,start=[09:00;13:00],end=[12:00;17:00])
+repr: <2 * BusinessHours: bh=09:00-12:00,13:00-17:00>
+freqstr: 2bh
++: 2026-11-25 15:00:00
+-: 2026-11-25 10:00:00
+rollforward: 2026-11-25 13:00:00
+rollback: 2026-11-25 12:00:00
+is_on_offset: False
+$ off 2026-11-25T16:30 BusinessHour(3,normalize=True)
+repr: <3 * BusinessHours: bh=09:00-17:00>
+freqstr: 3bh
++: 2026-11-26 00:00:00
+-: 2026-11-25 00:00:00
+rollforward: 2026-11-26 00:00:00
+rollback: 2026-11-25 00:00:00
+is_on_offset: False
+$ off 2026-11-25T16:30 BusinessHour(1,offset=td:30min)
+repr: <BusinessHour: offset=Timedelta('0 days 00:30:00'): bh=09:00-17:00>
+freqstr: bh
++: 2026-11-26 09:30:00
+-: 2026-11-25 15:30:00
+rollforward: 2026-11-25 16:30:00
+rollback: 2026-11-25 16:30:00
+is_on_offset: True
+$ off 2026-11-25T16:30 BusinessDay(1,offset=td:2h)
+repr: <BusinessDay: offset=Timedelta('0 days 02:00:00')>
+freqstr: B+2h
++: 2026-11-26 18:30:00
+-: 2026-11-24 18:30:00
+rollforward: 2026-11-25 16:30:00
+rollback: 2026-11-25 16:30:00
+is_on_offset: True
+$ off 2026-11-27T16:45 BusinessHour(1,offset=td:30min)
+repr: <BusinessHour: offset=Timedelta('0 days 00:30:00'): bh=09:00-17:00>
+freqstr: bh
++: 2026-11-30 09:45:00
+-: 2026-11-27 15:45:00
+rollforward: 2026-11-27 16:45:00
+rollback: 2026-11-27 16:45:00
+is_on_offset: True
+$ off 2026-11-25T16:30 CustomBusinessHour(3,cal=us)
+repr: <3 * CustomBusinessHours: cbh=09:00-17:00>
+freqstr: 3cbh
++: 2026-11-27 11:30:00
+-: 2026-11-25 13:30:00
+rollforward: 2026-11-25 16:30:00
+rollback: 2026-11-25 16:30:00
+is_on_offset: True
+$ off 2026-11-25T16:30 CustomBusinessHour(3,start=10:00,end=18:00,weekmask=1111000)
+repr: <3 * CustomBusinessHours: cbh=10:00-18:00>
+freqstr: 3cbh
++: 2026-11-26 11:30:00
+-: 2026-11-25 13:30:00
+rollforward: 2026-11-25 16:30:00
+rollback: 2026-11-25 16:30:00
+is_on_offset: True
+$ off 2026-12-24T17:30 CustomBusinessHour(1,cal=us,start=08:00,end=18:00)
+repr: <CustomBusinessHour: cbh=08:00-18:00>
+freqstr: cbh
++: 2026-12-28 08:30:00
+-: 2026-12-24 16:30:00
+rollforward: 2026-12-24 17:30:00
+rollback: 2026-12-24 17:30:00
+is_on_offset: True
+$ off 2026-11-25T16:30 BusinessDay()
+repr: <BusinessDay>
+freqstr: B
++: 2026-11-26 16:30:00
+-: 2026-11-24 16:30:00
+rollforward: 2026-11-25 16:30:00
+rollback: 2026-11-25 16:30:00
+is_on_offset: True
+$ off 2026-11-27T16:30 BusinessDay()
+repr: <BusinessDay>
+freqstr: B
++: 2026-11-30 16:30:00
+-: 2026-11-26 16:30:00
+rollforward: 2026-11-27 16:30:00
+rollback: 2026-11-27 16:30:00
+is_on_offset: True
+$ off 2026-11-28 BusinessDay()
+repr: <BusinessDay>
+freqstr: B
++: 2026-11-30 00:00:00
+-: 2026-11-27 00:00:00
+rollforward: 2026-11-30 00:00:00
+rollback: 2026-11-27 00:00:00
+is_on_offset: False
+$ off 2026-11-28 BusinessDay(-1)
+repr: <-1 * BusinessDay>
+freqstr: -1B
++: 2026-11-27 00:00:00
+-: 2026-11-30 00:00:00
+rollforward: 2026-11-30 00:00:00
+rollback: 2026-11-27 00:00:00
+is_on_offset: False
+$ off 2026-11-28 BusinessDay(0)
+repr: <0 * BusinessDays>
+freqstr: 0B
++: 2026-11-30 00:00:00
+-: 2026-11-30 00:00:00
+rollforward: 2026-11-30 00:00:00
+rollback: 2026-11-27 00:00:00
+is_on_offset: False
+$ off 2026-11-25T16:30 BusinessDay(5)
+repr: <5 * BusinessDays>
+freqstr: 5B
++: 2026-12-02 16:30:00
+-: 2026-11-18 16:30:00
+rollforward: 2026-11-25 16:30:00
+rollback: 2026-11-25 16:30:00
+is_on_offset: True
+$ off 2026-11-25T16:30 BusinessDay(-13)
+repr: <-13 * BusinessDays>
+freqstr: -13B
++: 2026-11-06 16:30:00
+-: 2026-12-14 16:30:00
+rollforward: 2026-11-25 16:30:00
+rollback: 2026-11-25 16:30:00
+is_on_offset: True
+$ off 2026-11-25 BusinessDay(2,normalize=True)
+repr: <2 * BusinessDays>
+freqstr: 2B
++: 2026-11-27 00:00:00
+-: 2026-11-23 00:00:00
+rollforward: 2026-11-25 00:00:00
+rollback: 2026-11-25 00:00:00
+is_on_offset: True
+$ off 2026-11-25T16:30 BusinessDay(2,normalize=True)
+repr: <2 * BusinessDays>
+freqstr: 2B
++: 2026-11-27 00:00:00
+-: 2026-11-23 00:00:00
+rollforward: 2026-11-26 00:00:00
+rollback: 2026-11-25 00:00:00
+is_on_offset: False
+$ off 2026-11-25T16:30 CustomBusinessDay(cal=us)
+repr: <CustomBusinessDay>
+freqstr: C
++: 2026-11-27 16:30:00
+-: 2026-11-24 16:30:00
+rollforward: 2026-11-25 16:30:00
+rollback: 2026-11-25 16:30:00
+is_on_offset: True
+$ off 2026-11-25 CustomBusinessDay(2,cal=nyse)
+repr: <2 * CustomBusinessDays>
+freqstr: 2C
++: 2026-11-30 00:00:00
+-: 2026-11-23 00:00:00
+rollforward: 2026-11-25 00:00:00
+rollback: 2026-11-25 00:00:00
+is_on_offset: True
+$ off 2026-04-02 CustomBusinessDay(1,cal=nyse)
+repr: <CustomBusinessDay>
+freqstr: C
++: 2026-04-06 00:00:00
+-: 2026-04-01 00:00:00
+rollforward: 2026-04-02 00:00:00
+rollback: 2026-04-02 00:00:00
+is_on_offset: True
+$ off 2026-04-02 CustomBusinessDay(1,cal=uk)
+repr: <CustomBusinessDay>
+freqstr: C
++: 2026-04-07 00:00:00
+-: 2026-04-01 00:00:00
+rollforward: 2026-04-02 00:00:00
+rollback: 2026-04-02 00:00:00
+is_on_offset: True
+$ off 2026-12-24 CustomBusinessDay(1,cal=uk)
+repr: <CustomBusinessDay>
+freqstr: C
++: 2026-12-29 00:00:00
+-: 2026-12-23 00:00:00
+rollforward: 2026-12-24 00:00:00
+rollback: 2026-12-24 00:00:00
+is_on_offset: True
+$ off 2026-12-24 CustomBusinessDay(2,holidays=[2026-12-25;2026-12-28])
+repr: <2 * CustomBusinessDays>
+freqstr: 2C
++: 2026-12-30 00:00:00
+-: 2026-12-22 00:00:00
+rollforward: 2026-12-24 00:00:00
+rollback: 2026-12-24 00:00:00
+is_on_offset: True
+$ off 2026-12-24 CustomBusinessDay(1,weekmask=0111110)
+repr: <CustomBusinessDay>
+freqstr: C
++: 2026-12-25 00:00:00
+-: 2026-12-23 00:00:00
+rollforward: 2026-12-24 00:00:00
+rollback: 2026-12-24 00:00:00
+is_on_offset: True
+$ off 2026-11-28 CustomBusinessDay(0,cal=us)
+repr: <0 * CustomBusinessDays>
+freqstr: 0C
++: 2026-11-30 00:00:00
+-: 2026-11-30 00:00:00
+rollforward: 2026-11-30 00:00:00
+rollback: 2026-11-27 00:00:00
+is_on_offset: False
+$ off 2026-01-15 MonthEnd()
+repr: <MonthEnd>
+freqstr: ME
++: 2026-01-31 00:00:00
+-: 2025-12-31 00:00:00
+rollforward: 2026-01-31 00:00:00
+rollback: 2025-12-31 00:00:00
+is_on_offset: False
+$ off 2026-01-31 MonthEnd()
+repr: <MonthEnd>
+freqstr: ME
++: 2026-02-28 00:00:00
+-: 2025-12-31 00:00:00
+rollforward: 2026-01-31 00:00:00
+rollback: 2026-01-31 00:00:00
+is_on_offset: True
+$ off 2026-01-31 MonthEnd(0)
+repr: <0 * MonthEnds>
+freqstr: 0ME
++: 2026-01-31 00:00:00
+-: 2026-01-31 00:00:00
+rollforward: 2026-01-31 00:00:00
+rollback: 2026-01-31 00:00:00
+is_on_offset: True
+$ off 2026-01-31 MonthEnd(-1)
+repr: <-1 * MonthEnd>
+freqstr: -1ME
++: 2025-12-31 00:00:00
+-: 2026-02-28 00:00:00
+rollforward: 2026-01-31 00:00:00
+rollback: 2026-01-31 00:00:00
+is_on_offset: True
+$ off 2026-02-15 MonthBegin(2)
+repr: <2 * MonthBegins>
+freqstr: 2MS
++: 2026-04-01 00:00:00
+-: 2026-01-01 00:00:00
+rollforward: 2026-03-01 00:00:00
+rollback: 2026-02-01 00:00:00
+is_on_offset: False
+$ off 2026-01-30T09:00 BusinessMonthEnd()
+repr: <BusinessMonthEnd>
+freqstr: BME
++: 2026-02-27 09:00:00
+-: 2025-12-31 09:00:00
+rollforward: 2026-01-30 09:00:00
+rollback: 2026-01-30 09:00:00
+is_on_offset: True
+$ off 2026-05-30 BusinessMonthEnd(0)
+repr: <0 * BusinessMonthEnds>
+freqstr: 0BME
++: 2026-06-30 00:00:00
+-: 2026-06-30 00:00:00
+rollforward: 2026-06-30 00:00:00
+rollback: 2026-05-29 00:00:00
+is_on_offset: False
+$ off 2026-05-30 BusinessMonthEnd(-1)
+repr: <-1 * BusinessMonthEnd>
+freqstr: -1BME
++: 2026-05-29 00:00:00
+-: 2026-06-30 00:00:00
+rollforward: 2026-06-30 00:00:00
+rollback: 2026-05-29 00:00:00
+is_on_offset: False
+$ off 2026-08-01 BusinessMonthBegin()
+repr: <BusinessMonthBegin>
+freqstr: BMS
++: 2026-08-03 00:00:00
+-: 2026-07-01 00:00:00
+rollforward: 2026-08-03 00:00:00
+rollback: 2026-07-01 00:00:00
+is_on_offset: False
+$ off 2026-08-03 BusinessMonthBegin(-1)
+repr: <-1 * BusinessMonthBegin>
+freqstr: -1BMS
++: 2026-07-01 00:00:00
+-: 2026-09-01 00:00:00
+rollforward: 2026-08-03 00:00:00
+rollback: 2026-08-03 00:00:00
+is_on_offset: True
+$ off 2026-11-02 CustomBusinessMonthEnd(cal=us)
+repr: <CustomBusinessMonthEnd>
+freqstr: CBME
++: 2026-11-30 00:00:00
+-: 2026-10-30 00:00:00
+rollforward: 2026-11-30 00:00:00
+rollback: 2026-10-30 00:00:00
+is_on_offset: False
+$ off 2026-12-01 CustomBusinessMonthBegin(cal=us)
+repr: <CustomBusinessMonthBegin>
+freqstr: CBMS
++: 2027-01-04 00:00:00
+-: 2026-11-02 00:00:00
+rollforward: 2026-12-01 00:00:00
+rollback: 2026-12-01 00:00:00
+is_on_offset: True
+$ off 2026-05-01 CustomBusinessMonthBegin(-1,cal=uk)
+repr: <-1 * CustomBusinessMonthBegin>
+freqstr: -1CBMS
++: 2026-04-01 00:00:00
+-: 2026-06-01 00:00:00
+rollforward: 2026-05-01 00:00:00
+rollback: 2026-05-01 00:00:00
+is_on_offset: True
+$ off 2026-02-10 SemiMonthEnd()
+repr: <SemiMonthEnd: day_of_month=15>
+freqstr: SME-15
++: 2026-02-15 00:00:00
+-: 2026-01-31 00:00:00
+rollforward: 2026-02-15 00:00:00
+rollback: 2026-01-31 00:00:00
+is_on_offset: False
+$ off 2026-02-15 SemiMonthEnd()
+repr: <SemiMonthEnd: day_of_month=15>
+freqstr: SME-15
++: 2026-02-28 00:00:00
+-: 2026-01-31 00:00:00
+rollforward: 2026-02-15 00:00:00
+rollback: 2026-02-15 00:00:00
+is_on_offset: True
+$ off 2026-02-20 SemiMonthEnd(day_of_month=20)
+repr: <SemiMonthEnd: day_of_month=20>
+freqstr: SME-20
++: 2026-02-28 00:00:00
+-: 2026-01-31 00:00:00
+rollforward: 2026-02-20 00:00:00
+rollback: 2026-02-20 00:00:00
+is_on_offset: True
+$ off 2026-02-28 SemiMonthEnd(-2)
+repr: <-2 * SemiMonthEnds: day_of_month=15>
+freqstr: -2SME-15
++: 2026-01-31 00:00:00
+-: 2026-03-31 00:00:00
+rollforward: 2026-02-28 00:00:00
+rollback: 2026-02-28 00:00:00
+is_on_offset: True
+$ off 2026-02-10 SemiMonthBegin()
+repr: <SemiMonthBegin: day_of_month=15>
+freqstr: SMS-15
++: 2026-02-15 00:00:00
+-: 2026-02-01 00:00:00
+rollforward: 2026-02-15 00:00:00
+rollback: 2026-02-01 00:00:00
+is_on_offset: False
+$ off 2026-02-15 SemiMonthBegin(day_of_month=15)
+repr: <SemiMonthBegin: day_of_month=15>
+freqstr: SMS-15
++: 2026-03-01 00:00:00
+-: 2026-02-01 00:00:00
+rollforward: 2026-02-15 00:00:00
+rollback: 2026-02-15 00:00:00
+is_on_offset: True
+$ off 2026-02-16 SemiMonthBegin(3,day_of_month=10)
+repr: <3 * SemiMonthBegins: day_of_month=10>
+freqstr: 3SMS-10
++: 2026-04-01 00:00:00
+-: 2026-01-10 00:00:00
+rollforward: 2026-03-01 00:00:00
+rollback: 2026-02-10 00:00:00
+is_on_offset: False
+$ off 2026-11-25 Week()
+repr: <Week: weekday=None>
+freqstr: W
++: 2026-12-02 00:00:00
+-: 2026-11-18 00:00:00
+rollforward: 2026-11-25 00:00:00
+rollback: 2026-11-25 00:00:00
+is_on_offset: True
+$ off 2026-11-25 Week(weekday=4)
+repr: <Week: weekday=4>
+freqstr: W-FRI
++: 2026-11-27 00:00:00
+-: 2026-11-20 00:00:00
+rollforward: 2026-11-27 00:00:00
+rollback: 2026-11-20 00:00:00
+is_on_offset: False
+$ off 2026-11-27 Week(weekday=4)
+repr: <Week: weekday=4>
+freqstr: W-FRI
++: 2026-12-04 00:00:00
+-: 2026-11-20 00:00:00
+rollforward: 2026-11-27 00:00:00
+rollback: 2026-11-27 00:00:00
+is_on_offset: True
+$ off 2026-11-27 Week(-1,weekday=4)
+repr: <-1 * Week: weekday=4>
+freqstr: -1W-FRI
++: 2026-11-20 00:00:00
+-: 2026-12-04 00:00:00
+rollforward: 2026-11-27 00:00:00
+rollback: 2026-11-27 00:00:00
+is_on_offset: True
+$ off 2026-11-25 Week(2,weekday=0)
+repr: <2 * Weeks: weekday=0>
+freqstr: 2W-MON
++: 2026-12-07 00:00:00
+-: 2026-11-16 00:00:00
+rollforward: 2026-11-30 00:00:00
+rollback: 2026-11-23 00:00:00
+is_on_offset: False
+$ off 2026-11-25 WeekOfMonth(week=2,weekday=3)
+repr: <WeekOfMonth: week=2, weekday=3>
+freqstr: WOM-3THU
++: 2026-12-17 00:00:00
+-: 2026-11-19 00:00:00
+rollforward: 2026-12-17 00:00:00
+rollback: 2026-11-19 00:00:00
+is_on_offset: False
+$ off 2026-11-19 WeekOfMonth(week=2,weekday=3)
+repr: <WeekOfMonth: week=2, weekday=3>
+freqstr: WOM-3THU
++: 2026-12-17 00:00:00
+-: 2026-10-15 00:00:00
+rollforward: 2026-11-19 00:00:00
+rollback: 2026-11-19 00:00:00
+is_on_offset: True
+$ off 2026-11-19 WeekOfMonth(-1,week=2,weekday=3)
+repr: <-1 * WeekOfMonth: week=2, weekday=3>
+freqstr: -1WOM-3THU
++: 2026-10-15 00:00:00
+-: 2026-12-17 00:00:00
+rollforward: 2026-11-19 00:00:00
+rollback: 2026-11-19 00:00:00
+is_on_offset: True
+$ off 2026-11-25 WeekOfMonth(week=0,weekday=0)
+repr: <WeekOfMonth: week=0, weekday=0>
+freqstr: WOM-1MON
++: 2026-12-07 00:00:00
+-: 2026-11-02 00:00:00
+rollforward: 2026-12-07 00:00:00
+rollback: 2026-11-02 00:00:00
+is_on_offset: False
+$ off 2026-11-25 LastWeekOfMonth(weekday=4)
+repr: <LastWeekOfMonth: weekday=4>
+freqstr: LWOM-FRI
++: 2026-11-27 00:00:00
+-: 2026-10-30 00:00:00
+rollforward: 2026-11-27 00:00:00
+rollback: 2026-10-30 00:00:00
+is_on_offset: False
+$ off 2026-11-27 LastWeekOfMonth(weekday=4)
+repr: <LastWeekOfMonth: weekday=4>
+freqstr: LWOM-FRI
++: 2026-12-25 00:00:00
+-: 2026-10-30 00:00:00
+rollforward: 2026-11-27 00:00:00
+rollback: 2026-11-27 00:00:00
+is_on_offset: True
+$ off 2026-11-27 LastWeekOfMonth(-2,weekday=4)
+repr: <-2 * LastWeekOfMonths: weekday=4>
+freqstr: -2LWOM-FRI
++: 2026-09-25 00:00:00
+-: 2027-01-29 00:00:00
+rollforward: 2026-11-27 00:00:00
+rollback: 2026-11-27 00:00:00
+is_on_offset: True
+$ off 2026-05-15 QuarterEnd()
+repr: <QuarterEnd: startingMonth=3>
+freqstr: QE-MAR
++: 2026-06-30 00:00:00
+-: 2026-03-31 00:00:00
+rollforward: 2026-06-30 00:00:00
+rollback: 2026-03-31 00:00:00
+is_on_offset: False
+$ off 2026-05-15 QuarterEnd(startingMonth=2)
+repr: <QuarterEnd: startingMonth=2>
+freqstr: QE-FEB
++: 2026-05-31 00:00:00
+-: 2026-02-28 00:00:00
+rollforward: 2026-05-31 00:00:00
+rollback: 2026-02-28 00:00:00
+is_on_offset: False
+$ off 2026-06-30 QuarterEnd(-1)
+repr: <-1 * QuarterEnd: startingMonth=3>
+freqstr: -1QE-MAR
++: 2026-03-31 00:00:00
+-: 2026-09-30 00:00:00
+rollforward: 2026-06-30 00:00:00
+rollback: 2026-06-30 00:00:00
+is_on_offset: True
+$ off 2026-05-15 QuarterBegin()
+repr: <QuarterBegin: startingMonth=3>
+freqstr: QS-MAR
++: 2026-06-01 00:00:00
+-: 2026-03-01 00:00:00
+rollforward: 2026-06-01 00:00:00
+rollback: 2026-03-01 00:00:00
+is_on_offset: False
+$ off 2026-05-15 QuarterBegin(startingMonth=1)
+repr: <QuarterBegin: startingMonth=1>
+freqstr: QS-JAN
++: 2026-07-01 00:00:00
+-: 2026-04-01 00:00:00
+rollforward: 2026-07-01 00:00:00
+rollback: 2026-04-01 00:00:00
+is_on_offset: False
+$ off 2026-05-15 BQuarterEnd(startingMonth=6)
+repr: <BusinessQuarterEnd: startingMonth=6>
+freqstr: BQE-JUN
++: 2026-06-30 00:00:00
+-: 2026-03-31 00:00:00
+rollforward: 2026-06-30 00:00:00
+rollback: 2026-03-31 00:00:00
+is_on_offset: False
+$ off 2026-03-31 BQuarterEnd(0,startingMonth=3)
+repr: <0 * BusinessQuarterEnds: startingMonth=3>
+freqstr: 0BQE-MAR
++: 2026-03-31 00:00:00
+-: 2026-03-31 00:00:00
+rollforward: 2026-03-31 00:00:00
+rollback: 2026-03-31 00:00:00
+is_on_offset: True
+$ off 2026-05-15 BQuarterBegin(startingMonth=2)
+repr: <BusinessQuarterBegin: startingMonth=2>
+freqstr: BQS-FEB
++: 2026-08-03 00:00:00
+-: 2026-05-01 00:00:00
+rollforward: 2026-08-03 00:00:00
+rollback: 2026-05-01 00:00:00
+is_on_offset: False
+$ off 2026-05-15 YearEnd()
+repr: <YearEnd: month=12>
+freqstr: YE-DEC
++: 2026-12-31 00:00:00
+-: 2025-12-31 00:00:00
+rollforward: 2026-12-31 00:00:00
+rollback: 2025-12-31 00:00:00
+is_on_offset: False
+$ off 2026-05-15 YearEnd(month=6)
+repr: <YearEnd: month=6>
+freqstr: YE-JUN
++: 2026-06-30 00:00:00
+-: 2025-06-30 00:00:00
+rollforward: 2026-06-30 00:00:00
+rollback: 2025-06-30 00:00:00
+is_on_offset: False
+$ off 2026-12-31 YearEnd(-1)
+repr: <-1 * YearEnd: month=12>
+freqstr: -1YE-DEC
++: 2025-12-31 00:00:00
+-: 2027-12-31 00:00:00
+rollforward: 2026-12-31 00:00:00
+rollback: 2026-12-31 00:00:00
+is_on_offset: True
+$ off 2026-05-15 YearBegin(month=7)
+repr: <YearBegin: month=7>
+freqstr: YS-JUL
++: 2026-07-01 00:00:00
+-: 2025-07-01 00:00:00
+rollforward: 2026-07-01 00:00:00
+rollback: 2025-07-01 00:00:00
+is_on_offset: False
+$ off 2026-05-15 BYearEnd()
+repr: <BYearEnd: month=12>
+freqstr: BYE-DEC
++: 2026-12-31 00:00:00
+-: 2025-12-31 00:00:00
+rollforward: 2026-12-31 00:00:00
+rollback: 2025-12-31 00:00:00
+is_on_offset: False
+$ off 2026-05-15 BYearEnd(month=10)
+repr: <BYearEnd: month=10>
+freqstr: BYE-OCT
++: 2026-10-30 00:00:00
+-: 2025-10-31 00:00:00
+rollforward: 2026-10-30 00:00:00
+rollback: 2025-10-31 00:00:00
+is_on_offset: False
+$ off 2026-05-15 BYearBegin()
+repr: <BYearBegin: month=1>
+freqstr: BYS-JAN
++: 2027-01-01 00:00:00
+-: 2026-01-01 00:00:00
+rollforward: 2027-01-01 00:00:00
+rollback: 2026-01-01 00:00:00
+is_on_offset: False
+$ off 2026-05-15 HalfYearEnd()
+repr: <HalfYearEnd: startingMonth=6>
+freqstr: HYE-JUN
++: 2026-06-30 00:00:00
+-: 2025-12-31 00:00:00
+rollforward: 2026-06-30 00:00:00
+rollback: 2025-12-31 00:00:00
+is_on_offset: False
+$ off 2026-05-15 HalfYearBegin(startingMonth=4)
+repr: <HalfYearBegin: startingMonth=4>
+freqstr: HYS-APR
++: 2026-10-01 00:00:00
+-: 2026-04-01 00:00:00
+rollforward: 2026-10-01 00:00:00
+rollback: 2026-04-01 00:00:00
+is_on_offset: False
+$ off 2026-05-15 BHalfYearEnd()
+repr: <BusinessHalfYearEnd: startingMonth=6>
+freqstr: BHYE-JUN
++: 2026-06-30 00:00:00
+-: 2025-12-31 00:00:00
+rollforward: 2026-06-30 00:00:00
+rollback: 2025-12-31 00:00:00
+is_on_offset: False
+$ off 2026-05-15 FY5253(weekday=5,startingMonth=1,variation=last)
+repr: <FY5253: startingMonth=1, variation=last, weekday=5>
+freqstr: RE-L-JAN-SAT
++: 2027-01-30 00:00:00
+-: 2026-01-31 00:00:00
+rollforward: 2027-01-30 00:00:00
+rollback: 2026-01-31 00:00:00
+is_on_offset: False
+$ off 2026-05-15 FY5253(weekday=5,startingMonth=1,variation=nearest)
+repr: <FY5253: startingMonth=1, variation=nearest, weekday=5>
+freqstr: RE-N-JAN-SAT
++: 2027-01-30 00:00:00
+-: 2026-01-31 00:00:00
+rollforward: 2027-01-30 00:00:00
+rollback: 2026-01-31 00:00:00
+is_on_offset: False
+$ off 2026-01-31 FY5253(weekday=5,startingMonth=1,variation=last)
+repr: <FY5253: startingMonth=1, variation=last, weekday=5>
+freqstr: RE-L-JAN-SAT
++: 2027-01-30 00:00:00
+-: 2025-01-25 00:00:00
+rollforward: 2026-01-31 00:00:00
+rollback: 2026-01-31 00:00:00
+is_on_offset: True
+$ off 2027-01-30 FY5253(-1,weekday=5,startingMonth=1,variation=last)
+repr: <-1 * FY5253: startingMonth=1, variation=last, weekday=5>
+freqstr: -1RE-L-JAN-SAT
++: 2026-01-31 00:00:00
+-: 2028-01-29 00:00:00
+rollforward: 2027-01-30 00:00:00
+rollback: 2027-01-30 00:00:00
+is_on_offset: True
+$ off 2026-08-29 FY5253(weekday=5,startingMonth=8,variation=nearest)
+repr: <FY5253: startingMonth=8, variation=nearest, weekday=5>
+freqstr: RE-N-AUG-SAT
++: 2027-08-28 00:00:00
+-: 2025-08-30 00:00:00
+rollforward: 2026-08-29 00:00:00
+rollback: 2026-08-29 00:00:00
+is_on_offset: True
+$ off 2026-05-15 FY5253Quarter(weekday=5,startingMonth=1,qtr_with_extra_week=4,variation=last)
+repr: <FY5253Quarter: qtr_with_extra_week=4, startingMonth=1, variation=last, weekday=5>
+freqstr: REQ-L-JAN-SAT-4
++: 2026-08-01 00:00:00
+-: 2026-05-02 00:00:00
+rollforward: 2026-08-01 00:00:00
+rollback: 2026-05-02 00:00:00
+is_on_offset: False
+$ off 2026-05-15 FY5253Quarter(2,weekday=5,startingMonth=1,qtr_with_extra_week=4,variation=nearest)
+repr: <2 * FY5253Quarters: qtr_with_extra_week=4, startingMonth=1, variation=nearest, weekday=5>
+freqstr: 2REQ-N-JAN-SAT-4
++: 2026-10-31 00:00:00
+-: 2026-01-31 00:00:00
+rollforward: 2026-08-01 00:00:00
+rollback: 2026-05-02 00:00:00
+is_on_offset: False
+$ off 2026-10-31 FY5253Quarter(-1,weekday=5,startingMonth=1,qtr_with_extra_week=4,variation=last)
+repr: <-1 * FY5253Quarter: qtr_with_extra_week=4, startingMonth=1, variation=last, weekday=5>
+freqstr: -1REQ-L-JAN-SAT-4
++: 2026-08-01 00:00:00
+-: 2027-01-30 00:00:00
+rollforward: 2026-10-31 00:00:00
+rollback: 2026-10-31 00:00:00
+is_on_offset: True
+$ off 2026-05-15 Easter()
+repr: <Easter: method=3>
+freqstr: <Easter: method=3>
++: 2027-03-28 00:00:00
+-: 2026-04-05 00:00:00
+rollforward: 2027-03-28 00:00:00
+rollback: 2026-04-05 00:00:00
+is_on_offset: False
+$ off 2026-04-05 Easter()
+repr: <Easter: method=3>
+freqstr: <Easter: method=3>
++: 2027-03-28 00:00:00
+-: 2025-04-20 00:00:00
+rollforward: 2026-04-05 00:00:00
+rollback: 2026-04-05 00:00:00
+is_on_offset: True
+$ off 2026-04-05 Easter(-1)
+repr: <-1 * Easter: method=3>
+freqstr: <-1 * Easter: method=3>
++: 2025-04-20 00:00:00
+-: 2027-03-28 00:00:00
+rollforward: 2026-04-05 00:00:00
+rollback: 2026-04-05 00:00:00
+is_on_offset: True
+$ off 2026-01-31 DateOffset(months=1)
+repr: <DateOffset: months=1>
+freqstr: <DateOffset: months=1>
++: 2026-02-28 00:00:00
+-: 2025-12-31 00:00:00
+rollforward: 2026-01-31 00:00:00
+rollback: 2026-01-31 00:00:00
+is_on_offset: True
+$ off 2026-01-31T10:00 DateOffset(months=1,days=-1)
+repr: <DateOffset: days=-1, months=1>
+freqstr: <DateOffset: days=-1, months=1>
++: 2026-02-27 10:00:00
+-: 2026-01-01 10:00:00
+rollforward: 2026-01-31 10:00:00
+rollback: 2026-01-31 10:00:00
+is_on_offset: True
+$ off 2026-11-01 DateOffset(weekday=TH(4))
+repr: <DateOffset: weekday=TH(+4)>
+freqstr: <DateOffset: weekday=TH(+4)>
++: 2026-11-26 00:00:00
+-: 2026-11-26 00:00:00
+rollforward: 2026-11-01 00:00:00
+rollback: 2026-11-01 00:00:00
+is_on_offset: True
+$ off 2026-05-31 DateOffset(weekday=MO(-1))
+repr: <DateOffset: weekday=MO(-1)>
+freqstr: <DateOffset: weekday=MO(-1)>
++: 2026-05-25 00:00:00
+-: 2026-05-25 00:00:00
+rollforward: 2026-05-31 00:00:00
+rollback: 2026-05-31 00:00:00
+is_on_offset: True
+$ off 2026-11-25 DateOffset(2,months=1)
+repr: <2 * DateOffsets: months=1>
+freqstr: <2 * DateOffsets: months=1>
++: 2027-01-25 00:00:00
+-: 2026-09-25 00:00:00
+rollforward: 2026-11-25 00:00:00
+rollback: 2026-11-25 00:00:00
+is_on_offset: True
+$ off 2026-11-25T16:30 DateOffset(hour=9,minute=0)
+repr: <DateOffset: hour=9, minute=0>
+freqstr: <DateOffset: hour=9, minute=0>
++: 2026-11-25 09:00:00
+-: 2026-11-25 09:00:00
+rollforward: 2026-11-25 16:30:00
+rollback: 2026-11-25 16:30:00
+is_on_offset: True
+$ off 2024-02-29 DateOffset(years=1)
+repr: <DateOffset: years=1>
+freqstr: <DateOffset: years=1>
++: 2025-02-28 00:00:00
+-: 2023-02-28 00:00:00
+rollforward: 2024-02-29 00:00:00
+rollback: 2024-02-29 00:00:00
+is_on_offset: True
+$ off 2026-11-25T16:30 DateOffset(days=1,normalize=True)
+repr: <DateOffset: days=1>
+freqstr: <DateOffset: days=1>
++: 2026-11-26 00:00:00
+-: 2026-11-24 00:00:00
+rollforward: 2026-11-26 00:00:00
+rollback: 2026-11-25 00:00:00
+is_on_offset: False
+$ off 2026-11-25 DateOffset(month=13)
+repr: <DateOffset: month=13>
+freqstr: <DateOffset: month=13>
++: ! IllegalMonthError: bad month number 13; must be 1-12
+-: ! IllegalMonthError: bad month number 13; must be 1-12
+rollforward: 2026-11-25 00:00:00
+rollback: 2026-11-25 00:00:00
+is_on_offset: True
+$ off 2026-11-25T16:30 Day(3)
+repr: <3 * Days>
+freqstr: 3D
++: 2026-11-28 16:30:00
+-: 2026-11-22 16:30:00
+rollforward: 2026-11-25 16:30:00
+rollback: 2026-11-25 16:30:00
+is_on_offset: True
+$ off 2026-11-25T16:30 Hour(36)
+repr: <36 * Hours>
+freqstr: 36h
++: 2026-11-27 04:30:00
+-: 2026-11-24 04:30:00
+rollforward: 2026-11-25 16:30:00
+rollback: 2026-11-25 16:30:00
+is_on_offset: True
+$ off 2026-11-25T16:30 Minute(-90)
+repr: <-90 * Minutes>
+freqstr: -90min
++: 2026-11-25 15:00:00
+-: 2026-11-25 18:00:00
+rollforward: 2026-11-25 16:30:00
+rollback: 2026-11-25 16:30:00
+is_on_offset: True
+$ off 2026-11-25T16:30 Second(3600)
+repr: <3600 * Seconds>
+freqstr: 3600s
++: 2026-11-25 17:30:00
+-: 2026-11-25 15:30:00
+rollforward: 2026-11-25 16:30:00
+rollback: 2026-11-25 16:30:00
+is_on_offset: True
+$ off 2026-11-25T16:30 Milli(1500)
+repr: <1500 * Millis>
+freqstr: 1500ms
++: 2026-11-25 16:30:01.500000
+-: 2026-11-25 16:29:58.500000
+rollforward: 2026-11-25 16:30:00
+rollback: 2026-11-25 16:30:00
+is_on_offset: True
+$ off 2026-11-25T16:30 Micro(7)
+repr: <7 * Micros>
+freqstr: 7us
++: 2026-11-25 16:30:00.000007
+-: 2026-11-25 16:29:59.999993
+rollforward: 2026-11-25 16:30:00
+rollback: 2026-11-25 16:30:00
+is_on_offset: True
+$ off 2026-11-25T16:30 Nano(5)
+repr: <5 * Nanos>
+freqstr: 5ns
++: 2026-11-25 16:30:00.000000005
+-: 2026-11-25 16:29:59.999999995
+rollforward: 2026-11-25 16:30:00
+rollback: 2026-11-25 16:30:00
+is_on_offset: True
+$ off 2026-03-07T12:00@America/New_York Day(1)
+repr: <Day>
+freqstr: D
++: 2026-03-08 12:00:00-04:00
+-: 2026-03-06 12:00:00-05:00
+rollforward: 2026-03-07 12:00:00-05:00
+rollback: 2026-03-07 12:00:00-05:00
+is_on_offset: True
+$ off 2026-03-07T12:00@America/New_York Hour(24)
+repr: <24 * Hours>
+freqstr: 24h
++: 2026-03-08 13:00:00-04:00
+-: 2026-03-06 12:00:00-05:00
+rollforward: 2026-03-07 12:00:00-05:00
+rollback: 2026-03-07 12:00:00-05:00
+is_on_offset: True
+$ off 2026-03-07T12:00@America/New_York BusinessDay(1)
+repr: <BusinessDay>
+freqstr: B
++: 2026-03-09 12:00:00-04:00
+-: 2026-03-06 12:00:00-05:00
+rollforward: 2026-03-09 12:00:00-04:00
+rollback: 2026-03-06 12:00:00-05:00
+is_on_offset: False
+$ off 2026-10-31T12:00@America/New_York Week(weekday=6)
+repr: <Week: weekday=6>
+freqstr: W-SUN
++: 2026-11-01 12:00:00-05:00
+-: 2026-10-25 12:00:00-04:00
+rollforward: 2026-11-01 12:00:00-05:00
+rollback: 2026-10-25 12:00:00-04:00
+is_on_offset: False
+$ off 2026-03-08T01:30@America/New_York Hour(1)
+repr: <Hour>
+freqstr: h
++: 2026-03-08 03:30:00-04:00
+-: 2026-03-08 00:30:00-05:00
+rollforward: 2026-03-08 01:30:00-05:00
+rollback: 2026-03-08 01:30:00-05:00
+is_on_offset: True
+$ off 2026-01-31T12:00@UTC MonthEnd()
+repr: <MonthEnd>
+freqstr: ME
++: 2026-02-28 12:00:00+00:00
+-: 2025-12-31 12:00:00+00:00
+rollforward: 2026-01-31 12:00:00+00:00
+rollback: 2026-01-31 12:00:00+00:00
+is_on_offset: True
+$ freq 2h30min
+repr: <150 * Minutes>
+freqstr: 150min
+$ freq 1D
+repr: <Day>
+freqstr: D
+$ freq -2BME
+repr: <-2 * BusinessMonthEnds>
+freqstr: -2BME
+$ freq Q-JUN
+! ValueError: Invalid frequency: Q-JUN. Failed to parse with error message: ValueError("'Q-JUN' is no longer supported for offsets. Please use 'QE-JUN' instead.")
+$ freq QS-NOV
+repr: <QuarterBegin: startingMonth=11>
+freqstr: QS-NOV
+$ freq W-WED
+repr: <Week: weekday=2>
+freqstr: W-WED
+$ freq WOM-1MON
+repr: <WeekOfMonth: week=0, weekday=0>
+freqstr: WOM-1MON
+$ freq LWOM-FRI
+repr: <LastWeekOfMonth: weekday=4>
+freqstr: LWOM-FRI
+$ freq RE-N-DEC-FRI
+repr: <FY5253: startingMonth=12, variation=nearest, weekday=4>
+freqstr: RE-N-DEC-FRI
+$ freq REQ-L-JAN-SAT-4
+repr: <FY5253Quarter: qtr_with_extra_week=4, startingMonth=1, variation=last, weekday=5>
+freqstr: REQ-L-JAN-SAT-4
+$ freq SME-20
+repr: <SemiMonthEnd: day_of_month=20>
+freqstr: SME-20
+$ freq SMS
+repr: <SemiMonthBegin: day_of_month=15>
+freqstr: SMS-15
+$ freq BYE-MAR
+repr: <BYearEnd: month=3>
+freqstr: BYE-MAR
+$ freq BYS
+repr: <BYearBegin: month=1>
+freqstr: BYS-JAN
+$ freq C
+repr: <CustomBusinessDay>
+freqstr: C
+$ freq CBME
+repr: <CustomBusinessMonthEnd>
+freqstr: CBME
+$ freq CBMS
+repr: <CustomBusinessMonthBegin>
+freqstr: CBMS
+$ freq 1.5h
+repr: <90 * Minutes>
+freqstr: 90min
+$ freq 0.5D
+repr: <12 * Hours>
+freqstr: 12h
+$ freq 90s
+repr: <90 * Seconds>
+freqstr: 90s
+$ freq 3us
+repr: <3 * Micros>
+freqstr: 3us
+$ freq 250ms
+repr: <250 * Millis>
+freqstr: 250ms
+$ freq YE-MAR
+repr: <YearEnd: month=3>
+freqstr: YE-MAR
+$ freq YS
+repr: <YearBegin: month=1>
+freqstr: YS-JAN
+$ freq bh
+repr: <BusinessHour: bh=09:00-17:00>
+freqstr: bh
+$ freq cbh
+repr: <CustomBusinessHour: cbh=09:00-17:00>
+freqstr: cbh
+$ freq B
+repr: <BusinessDay>
+freqstr: B
+$ freq h
+repr: <Hour>
+freqstr: h
+$ freq 15min
+repr: <15 * Minutes>
+freqstr: 15min
+$ freq M
+! ValueError: Invalid frequency: M. Failed to parse with error message: ValueError("'M' is no longer supported for offsets. Please use 'ME' instead.")
+$ freq Q
+! ValueError: Invalid frequency: Q. Failed to parse with error message: ValueError("'Q' is no longer supported for offsets. Please use 'QE' instead.")
+$ freq Y
+! ValueError: Invalid frequency: Y. Failed to parse with error message: ValueError("'Y' is no longer supported for offsets. Please use 'YE' instead.")
+$ freq A
+! ValueError: Invalid frequency: A. Failed to parse with error message: ValueError("Invalid frequency: A. Failed to parse with error message: KeyError('A'). Did you mean Y?") Did you mean Y?
+$ freq H
+! ValueError: Invalid frequency: H. Failed to parse with error message: ValueError("Invalid frequency: H. Failed to parse with error message: KeyError('H'). Did you mean h?") Did you mean h?
+$ freq T
+! ValueError: Invalid frequency: T. Failed to parse with error message: ValueError("Invalid frequency: T. Failed to parse with error message: KeyError('T'). Did you mean min?") Did you mean min?
+$ freq S
+! ValueError: Invalid frequency: S. Failed to parse with error message: ValueError("Invalid frequency: S. Failed to parse with error message: KeyError('S'). Did you mean s?") Did you mean s?
+$ freq BM
+! ValueError: Invalid frequency: BM. Failed to parse with error message: ValueError("'BM' is no longer supported for offsets. Please use 'BME' instead.")
+$ freq Q-FOO
+! ValueError: Invalid frequency: Q-FOO. Failed to parse with error message: ValueError("Invalid frequency: Q-FOO. Failed to parse with error message: KeyError('Q').")
+$ freq W-XYZ
+! ValueError: Invalid frequency: W-XYZ. Failed to parse with error message: ValueError("Invalid frequency: W-XYZ. Failed to parse with error message: KeyError('XYZ').")
+$ freq 2.5ME
+! ValueError: Invalid frequency: 2.5ME. Failed to parse with error message: ValueError("invalid literal for int() with base 10: '2.5'")
+$ freq 3QE-JUL
+repr: <3 * QuarterEnds: startingMonth=7>
+freqstr: 3QE-JUL
+$ freq 0h
+repr: <0 * Hours>
+freqstr: 0h
+$ range start=2026-01-01 periods=6 freq=BME
+n=6 freq=BME dtype=datetime64[us]
+  2026-01-30 00:00:00
+  2026-02-27 00:00:00
+  2026-03-31 00:00:00
+  2026-04-30 00:00:00
+  2026-05-29 00:00:00
+  2026-06-30 00:00:00
+$ range start=2026-01-01 end=2026-12-31 freq=QE-JUN
+n=4 freq=QE-JUN dtype=datetime64[us]
+  2026-03-31 00:00:00
+  2026-06-30 00:00:00
+  2026-09-30 00:00:00
+  2026-12-31 00:00:00
+$ range start=2026-11-23T09:00 periods=10 freq=bh
+n=10 freq=bh dtype=datetime64[us]
+  2026-11-23 09:00:00
+  2026-11-23 10:00:00
+  2026-11-23 11:00:00
+  2026-11-23 12:00:00
+  2026-11-23 13:00:00
+  2026-11-23 14:00:00
+  2026-11-23 15:00:00
+  2026-11-23 16:00:00
+  2026-11-24 09:00:00
+  2026-11-24 10:00:00
+$ range start=2026-11-23 end=2026-12-04 freq=W-FRI
+n=2 freq=W-FRI dtype=datetime64[us]
+  2026-11-27 00:00:00
+  2026-12-04 00:00:00
+$ range start=2026-01-01 end=2026-06-30 freq=SMS
+n=12 freq=SMS-15 dtype=datetime64[us]
+  2026-01-01 00:00:00
+  2026-01-15 00:00:00
+  2026-02-01 00:00:00
+  2026-02-15 00:00:00
+  2026-03-01 00:00:00
+  2026-03-15 00:00:00
+  2026-04-01 00:00:00
+  2026-04-15 00:00:00
+  2026-05-01 00:00:00
+  2026-05-15 00:00:00
+  2026-06-01 00:00:00
+  2026-06-15 00:00:00
+$ range start=2026-01-01 end=2026-06-30 freq=SME
+n=12 freq=SME-15 dtype=datetime64[us]
+  2026-01-15 00:00:00
+  2026-01-31 00:00:00
+  2026-02-15 00:00:00
+  2026-02-28 00:00:00
+  2026-03-15 00:00:00
+  2026-03-31 00:00:00
+  2026-04-15 00:00:00
+  2026-04-30 00:00:00
+  2026-05-15 00:00:00
+  2026-05-31 00:00:00
+  2026-06-15 00:00:00
+  2026-06-30 00:00:00
+$ range start=2026-01-01 periods=12 freq=WOM-2TUE
+n=12 freq=WOM-2TUE dtype=datetime64[us]
+  2026-01-13 00:00:00
+  2026-02-10 00:00:00
+  2026-03-10 00:00:00
+  2026-04-14 00:00:00
+  2026-05-12 00:00:00
+  2026-06-09 00:00:00
+  2026-07-14 00:00:00
+  2026-08-11 00:00:00
+  2026-09-08 00:00:00
+  2026-10-13 00:00:00
+  2026-11-10 00:00:00
+  2026-12-08 00:00:00
+$ range start=2025-01-01 periods=4 freq=RE-L-JAN-SAT
+n=4 freq=RE-L-JAN-SAT dtype=datetime64[us]
+  2025-01-25 00:00:00
+  2026-01-31 00:00:00
+  2027-01-30 00:00:00
+  2028-01-29 00:00:00
+$ range start=2025-01-01 periods=8 freq=REQ-N-JAN-SAT-4
+n=8 freq=REQ-N-JAN-SAT-4 dtype=datetime64[us]
+  2025-02-01 00:00:00
+  2025-05-03 00:00:00
+  2025-08-02 00:00:00
+  2025-11-01 00:00:00
+  2026-01-31 00:00:00
+  2026-05-02 00:00:00
+  2026-08-01 00:00:00
+  2026-10-31 00:00:00
+$ range end=2026-12-31 periods=5 freq=LWOM-FRI
+n=5 freq=LWOM-FRI dtype=datetime64[us]
+  2026-08-28 00:00:00
+  2026-09-25 00:00:00
+  2026-10-30 00:00:00
+  2026-11-27 00:00:00
+  2026-12-25 00:00:00
+$ range start=2026-03-07T12:00 periods=4 freq=D tz=America/New_York
+n=4 freq=D dtype=datetime64[us, America/New_York]
+  2026-03-07 12:00:00-05:00
+  2026-03-08 12:00:00-04:00
+  2026-03-09 12:00:00-04:00
+  2026-03-10 12:00:00-04:00
+$ range start=2026-03-07T12:00 periods=4 freq=24h tz=America/New_York
+n=4 freq=24h dtype=datetime64[us, America/New_York]
+  2026-03-07 12:00:00-05:00
+  2026-03-08 13:00:00-04:00
+  2026-03-09 13:00:00-04:00
+  2026-03-10 13:00:00-04:00
+$ range start=2026-01-01 end=2026-01-10 freq=2D inclusive=left
+n=5 freq=2D dtype=datetime64[us]
+  2026-01-01 00:00:00
+  2026-01-03 00:00:00
+  2026-01-05 00:00:00
+  2026-01-07 00:00:00
+  2026-01-09 00:00:00
+$ range start=2026-01-01 end=2026-01-10 freq=3D inclusive=neither
+n=2 freq=3D dtype=datetime64[us]
+  2026-01-04 00:00:00
+  2026-01-07 00:00:00
+$ range start=2026-01-01T10:30 periods=3 freq=D normalize=True
+n=3 freq=D dtype=datetime64[us]
+  2026-01-01 00:00:00
+  2026-01-02 00:00:00
+  2026-01-03 00:00:00
+$ range start=2026-01-01 end=2026-03-01 periods=4
+n=4 freq=None dtype=datetime64[us]
+  2026-01-01 00:00:00
+  2026-01-20 16:00:00
+  2026-02-09 08:00:00
+  2026-03-01 00:00:00
+$ range start=2026-01-01 end=2026-03-01 periods=4 freq=D
+! ValueError: Of the four parameters: start, end, periods, and freq, exactly three must be specified
+$ range start=2026-01-01 periods=3 freq=M
+! ValueError: Invalid frequency: M. Failed to parse with error message: ValueError("'M' is no longer supported for offsets. Please use 'ME' instead.")
+$ range start=2026-01-31 periods=4 freq=-1ME
+n=4 freq=-1ME dtype=datetime64[us]
+  2026-01-31 00:00:00
+  2025-12-31 00:00:00
+  2025-11-30 00:00:00
+  2025-10-31 00:00:00
+$ range start=2026-01-01 end=2025-12-01 freq=ME
+n=0 freq=ME dtype=datetime64[us]
+$ range start=2026-01-01 periods=0 freq=D
+n=0 freq=D dtype=datetime64[us]
+$ range start=2026-01-01 periods=5 freq=1h30min
+n=5 freq=90min dtype=datetime64[us]
+  2026-01-01 00:00:00
+  2026-01-01 01:30:00
+  2026-01-01 03:00:00
+  2026-01-01 04:30:00
+  2026-01-01 06:00:00
+$ brange start=2026-11-20 end=2026-12-04
+n=11 freq=B dtype=datetime64[us]
+  2026-11-20 00:00:00
+  2026-11-23 00:00:00
+  2026-11-24 00:00:00
+  2026-11-25 00:00:00
+  2026-11-26 00:00:00
+  2026-11-27 00:00:00
+  2026-11-30 00:00:00
+  2026-12-01 00:00:00
+  2026-12-02 00:00:00
+  2026-12-03 00:00:00
+  2026-12-04 00:00:00
+$ brange start=2026-11-20 end=2026-12-04 freq=C cal=us
+n=10 freq=C dtype=datetime64[us]
+  2026-11-20 00:00:00
+  2026-11-23 00:00:00
+  2026-11-24 00:00:00
+  2026-11-25 00:00:00
+  2026-11-27 00:00:00
+  2026-11-30 00:00:00
+  2026-12-01 00:00:00
+  2026-12-02 00:00:00
+  2026-12-03 00:00:00
+  2026-12-04 00:00:00
+$ brange start=2026-12-18 end=2027-01-08 freq=C holidays=[2026-12-25;2026-12-28;2027-01-01]
+n=13 freq=C dtype=datetime64[us]
+  2026-12-18 00:00:00
+  2026-12-21 00:00:00
+  2026-12-22 00:00:00
+  2026-12-23 00:00:00
+  2026-12-24 00:00:00
+  2026-12-29 00:00:00
+  2026-12-30 00:00:00
+  2026-12-31 00:00:00
+  2027-01-04 00:00:00
+  2027-01-05 00:00:00
+  2027-01-06 00:00:00
+  2027-01-07 00:00:00
+  2027-01-08 00:00:00
+$ brange start=2026-11-20 end=2026-12-04 freq=C weekmask=1111000
+n=8 freq=C dtype=datetime64[us]
+  2026-11-23 00:00:00
+  2026-11-24 00:00:00
+  2026-11-25 00:00:00
+  2026-11-26 00:00:00
+  2026-11-30 00:00:00
+  2026-12-01 00:00:00
+  2026-12-02 00:00:00
+  2026-12-03 00:00:00
+$ brange start=2026-11-20 end=2026-12-04 holidays=[2026-11-26]
+! ValueError: a custom frequency string is required when holidays or weekmask are passed, got frequency B
+$ brange start=2026-11-20 periods=5 freq=C cal=nyse
+n=5 freq=C dtype=datetime64[us]
+  2026-11-20 00:00:00
+  2026-11-23 00:00:00
+  2026-11-24 00:00:00
+  2026-11-25 00:00:00
+  2026-11-27 00:00:00
+$ brange start=2026-11-20 end=2026-11-27 freq=CBME cal=us
+n=0 freq=CBME dtype=datetime64[us]
+$ hol us 2026-01-01 2027-12-31
+2026-01-01 Thu New Year's Day
+2026-01-19 Mon Birthday of Martin Luther King, Jr.
+2026-02-16 Mon Washington's Birthday
+2026-05-25 Mon Memorial Day
+2026-06-19 Fri Juneteenth National Independence Day
+2026-07-03 Fri Independence Day
+2026-09-07 Mon Labor Day
+2026-10-12 Mon Columbus Day
+2026-11-11 Wed Veterans Day
+2026-11-26 Thu Thanksgiving Day
+2026-12-25 Fri Christmas Day
+2027-01-01 Fri New Year's Day
+2027-01-18 Mon Birthday of Martin Luther King, Jr.
+2027-02-15 Mon Washington's Birthday
+2027-05-31 Mon Memorial Day
+2027-06-18 Fri Juneteenth National Independence Day
+2027-07-05 Mon Independence Day
+2027-09-06 Mon Labor Day
+2027-10-11 Mon Columbus Day
+2027-11-11 Thu Veterans Day
+2027-11-25 Thu Thanksgiving Day
+2027-12-24 Fri Christmas Day
+2027-12-31 Fri New Year's Day
+$ hol us 2021-06-01 2021-07-10
+2021-06-18 Fri Juneteenth National Independence Day
+2021-07-05 Mon Independence Day
+$ hol nyse 2026-01-01 2026-12-31
+2026-01-01 Thu New Year's Day
+2026-01-19 Mon Birthday of Martin Luther King, Jr.
+2026-02-16 Mon Washington's Birthday
+2026-04-03 Fri Good Friday
+2026-05-25 Mon Memorial Day
+2026-06-19 Fri Juneteenth
+2026-07-03 Fri Independence Day
+2026-09-07 Mon Labor Day
+2026-11-26 Thu Thanksgiving Day
+2026-12-25 Fri Christmas
+$ hol nyse 2027-01-01 2028-01-31
+2027-01-01 Fri New Year's Day
+2027-01-18 Mon Birthday of Martin Luther King, Jr.
+2027-02-15 Mon Washington's Birthday
+2027-03-26 Fri Good Friday
+2027-05-31 Mon Memorial Day
+2027-06-18 Fri Juneteenth
+2027-07-05 Mon Independence Day
+2027-09-06 Mon Labor Day
+2027-11-25 Thu Thanksgiving Day
+2027-12-24 Fri Christmas
+2027-12-31 Fri New Year's Day
+2028-01-17 Mon Birthday of Martin Luther King, Jr.
+$ hol uk 2026-01-01 2026-12-31
+2026-01-01 Thu New Year's Day
+2026-04-03 Fri Good Friday
+2026-04-06 Mon Easter Monday
+2026-05-04 Mon Early May bank holiday
+2026-05-25 Mon Spring bank holiday
+2026-08-31 Mon Summer bank holiday
+2026-12-25 Fri Christmas Day
+2026-12-28 Mon Boxing Day
+$ hol uk 2027-01-01 2027-12-31
+2027-01-01 Fri New Year's Day
+2027-03-26 Fri Good Friday
+2027-03-29 Mon Easter Monday
+2027-05-03 Mon Early May bank holiday
+2027-05-31 Mon Spring bank holiday
+2027-08-30 Mon Summer bank holiday
+2027-12-27 Mon Christmas Day
+2027-12-28 Tue Boxing Day
+$ hol uk 2022-12-20 2023-01-10
+2022-12-26 Mon Christmas Day
+2022-12-27 Tue Boxing Day
+2023-01-02 Mon New Year's Day
+$ hol us 2027-12-25 2028-01-05
+2027-12-31 Fri New Year's Day
+$ hol us 1985-01-01 1986-02-01
+1985-01-01 Tue New Year's Day
+1985-02-18 Mon Washington's Birthday
+1985-05-27 Mon Memorial Day
+1985-07-04 Thu Independence Day
+1985-09-02 Mon Labor Day
+1985-10-14 Mon Columbus Day
+1985-11-11 Mon Veterans Day
+1985-11-28 Thu Thanksgiving Day
+1985-12-25 Wed Christmas Day
+1986-01-01 Wed New Year's Day
+1986-01-20 Mon Birthday of Martin Luther King, Jr.
+$ per 2026-03 M
+repr: Period('2026-03', 'M')
+start_time: 2026-03-01 00:00:00
+end_time: 2026-03-31 23:59:59.999999
+year=2026 quarter=1 qyear=2026 month=3 day=31 dayofweek=1 dayofyear=90 week=14 days_in_month=31 is_leap_year=False ordinal=674
+$ per 2026-03-15 Q-JUN
+repr: Period('2026Q3', 'Q-JUN')
+start_time: 2026-01-01 00:00:00
+end_time: 2026-03-31 23:59:59.999999
+year=2026 quarter=3 qyear=2026 month=3 day=31 dayofweek=1 dayofyear=90 week=14 days_in_month=31 is_leap_year=False ordinal=226
+$ per 2026-03-15 Q-DEC
+repr: Period('2026Q1', 'Q-DEC')
+start_time: 2026-01-01 00:00:00
+end_time: 2026-03-31 23:59:59.999999
+year=2026 quarter=1 qyear=2026 month=3 day=31 dayofweek=1 dayofyear=90 week=14 days_in_month=31 is_leap_year=False ordinal=224
+$ per 2026-03-15 Y-MAR
+repr: Period('2026', 'Y-MAR')
+start_time: 2025-04-01 00:00:00
+end_time: 2026-03-31 23:59:59.999999
+year=2026 quarter=1 qyear=2026 month=3 day=31 dayofweek=1 dayofyear=90 week=14 days_in_month=31 is_leap_year=False ordinal=56
+$ per 2026 Y
+repr: Period('2026', 'Y-DEC')
+start_time: 2026-01-01 00:00:00
+end_time: 2026-12-31 23:59:59.999999
+year=2026 quarter=4 qyear=2026 month=12 day=31 dayofweek=3 dayofyear=365 week=53 days_in_month=31 is_leap_year=False ordinal=56
+$ per 2026-11-25 W
+repr: Period('2026-11-23/2026-11-29', 'W-SUN')
+start_time: 2026-11-23 00:00:00
+end_time: 2026-11-29 23:59:59.999999
+year=2026 quarter=4 qyear=2026 month=11 day=29 dayofweek=6 dayofyear=333 week=48 days_in_month=30 is_leap_year=False ordinal=2970
+$ per 2026-11-25 W-SAT
+repr: Period('2026-11-22/2026-11-28', 'W-SAT')
+start_time: 2026-11-22 00:00:00
+end_time: 2026-11-28 23:59:59.999999
+year=2026 quarter=4 qyear=2026 month=11 day=28 dayofweek=5 dayofyear=332 week=48 days_in_month=30 is_leap_year=False ordinal=2969
+$ per 2026-11-25 D
+repr: Period('2026-11-25', 'D')
+start_time: 2026-11-25 00:00:00
+end_time: 2026-11-25 23:59:59.999999
+year=2026 quarter=4 qyear=2026 month=11 day=25 dayofweek=2 dayofyear=329 week=48 days_in_month=30 is_leap_year=False ordinal=20782
+$ per 2026-11-28 B
+repr: Period('2026-11-30', 'B')
+start_time: 2026-11-30 00:00:00
+end_time: 2026-11-30 23:59:59.999999
+year=2026 quarter=4 qyear=2026 month=11 day=30 dayofweek=0 dayofyear=334 week=49 days_in_month=30 is_leap_year=False ordinal=14847
+warn: FutureWarning: Period with BDay freq is deprecated and will be removed in a future version. Use a DatetimeIndex with BDay freq instead.
+$ per 2026-11-25T16:30 h
+repr: Period('2026-11-25 16:00', 'h')
+start_time: 2026-11-25 16:00:00
+end_time: 2026-11-25 16:59:59.999999
+year=2026 quarter=4 qyear=2026 month=11 day=25 dayofweek=2 dayofyear=329 week=48 days_in_month=30 is_leap_year=False ordinal=498784
+$ per 2026-11-25T16:30:15 s
+repr: Period('2026-11-25 16:30:15', 's')
+start_time: 2026-11-25 16:30:15
+end_time: 2026-11-25 16:30:15.999999
+year=2026 quarter=4 qyear=2026 month=11 day=25 dayofweek=2 dayofyear=329 week=48 days_in_month=30 is_leap_year=False ordinal=1795624215
+$ per 2026Q1 Q-JUN
+repr: Period('2026Q1', 'Q-JUN')
+start_time: 2025-07-01 00:00:00
+end_time: 2025-09-30 23:59:59.999999
+year=2025 quarter=1 qyear=2026 month=9 day=30 dayofweek=1 dayofyear=273 week=40 days_in_month=30 is_leap_year=False ordinal=224
+$ per 2026Q4 Q
+repr: Period('2026Q4', 'Q-DEC')
+start_time: 2026-10-01 00:00:00
+end_time: 2026-12-31 23:59:59.999999
+year=2026 quarter=4 qyear=2026 month=12 day=31 dayofweek=3 dayofyear=365 week=53 days_in_month=31 is_leap_year=False ordinal=227
+$ per 2024-02 M
+repr: Period('2024-02', 'M')
+start_time: 2024-02-01 00:00:00
+end_time: 2024-02-29 23:59:59.999999
+year=2024 quarter=1 qyear=2024 month=2 day=29 dayofweek=3 dayofyear=60 week=9 days_in_month=29 is_leap_year=True ordinal=649
+$ per 2026-11-25 BME
+! ValueError: Invalid frequency: BME. Failed to parse with error message: ValueError("for Period, please use 'M' instead of 'BME'")
+$ per 2026-11-25 Y-FOO
+! ValueError: Invalid frequency: Y-FOO. Failed to parse with error message: ValueError("Invalid frequency: Y-FOO. Failed to parse with error message: KeyError('Y').")
+$ pasfreq 2026-03 M Q-JUN e
+Period('2026Q3', 'Q-JUN')
+$ pasfreq 2026Q3 Q-JUN M s
+Period('2026-01', 'M')
+$ pasfreq 2026Q3 Q-JUN M e
+Period('2026-03', 'M')
+$ pasfreq 2026Q3 Q-JUN D s
+Period('2026-01-01', 'D')
+$ pasfreq 2026Q3 Q-JUN D e
+Period('2026-03-31', 'D')
+$ pasfreq 2026Q3 Q-JUN Y-JUN e
+Period('2026', 'Y-JUN')
+$ pasfreq 2026Q3 Q-JUN Q-DEC e
+Period('2026Q1', 'Q-DEC')
+$ pasfreq 2026 Y-MAR M s
+Period('2025-04', 'M')
+$ pasfreq 2026 Y-MAR M e
+Period('2026-03', 'M')
+$ pasfreq 2026-11-25 D W e
+Period('2026-11-23/2026-11-29', 'W-SUN')
+$ pasfreq 2026-11-28 D B e
+Period('2026-11-30', 'B')
+warn: FutureWarning: Period with BDay freq is deprecated and will be removed in a future version. Use a DatetimeIndex with BDay freq instead.
+$ pasfreq 2026-11-29 D B s
+Period('2026-11-27', 'B')
+warn: FutureWarning: Period with BDay freq is deprecated and will be removed in a future version. Use a DatetimeIndex with BDay freq instead.
+$ pasfreq 2026-11-29 D B e
+Period('2026-11-30', 'B')
+warn: FutureWarning: Period with BDay freq is deprecated and will be removed in a future version. Use a DatetimeIndex with BDay freq instead.
+$ pasfreq 2026-11-23/2026-11-29 W h e
+Period('2026-11-29 23:00', 'h')
+$ pasfreq 2026-11-25 D h s
+Period('2026-11-25 00:00', 'h')
+$ pasfreq 2026-11-25 D h e
+Period('2026-11-25 23:00', 'h')
+$ pasfreq 2026-11-25 D s e
+Period('2026-11-25 23:59:59', 's')
+$ padd 2026-03 M 10
+Period('2027-01', 'M')
+$ padd 2026Q3 Q-JUN 2
+Period('2027Q1', 'Q-JUN')
+$ padd 2026Q1 Q-JUN -1
+Period('2025Q4', 'Q-JUN')
+$ padd 2026-11-27 B 1
+Period('2026-11-30', 'B')
+warn: FutureWarning: Period with BDay freq is deprecated and will be removed in a future version. Use a DatetimeIndex with BDay freq instead.
+$ padd 2026 Y-MAR -3
+Period('2023', 'Y-MAR')
+$ padd 2026-11-25 W 6
+Period('2027-01-04/2027-01-10', 'W-SUN')
+$ pfmt 2026Q3 Q-JUN FY%F_Q%q
+FY2026 Q3
+$ pfmt 2026Q3 Q-JUN %Y-%m-%d
+2026-03-31
+$ pfmt 2026-03 M %b_%Y
+Mar 2026
+$ pfmt 2026-11-25T16:30 h %d/%m/%Y_%H:%M
+25/11/2026 16:00
+$ pfmt 2026-11-25 W %Y-W%W_%a
+2026-W47 Sun
+$ pfmt 2026 Y-MAR %F_%f_%Y_%y
+2026 26 2026 26
+$ pfmt 2026-11-25 D %j_%A_%B
+329 Wednesday November
+$ pdiff 2026-01 2026-11 M
+<10 * MonthEnds>
+$ pdiff 2025Q3 2026Q4 Q-JUN
+<5 * QuarterEnds: startingMonth=6>
+$ pdiff 2026-11-02 2026-11-30 B
+<20 * BusinessDays>
+warn: FutureWarning: Period with BDay freq is deprecated and will be removed in a future version. Use a DatetimeIndex with BDay freq instead.
+$ prange start=2025Q3 end=2026Q2 freq=Q-JUN
+n=4 freq=Q-JUN dtype=period[Q-JUN]
+  2025Q3 2025Q4 2026Q1 2026Q2
+$ prange start=2026-01 periods=6 freq=M
+n=6 freq=M dtype=period[M]
+  2026-01 2026-02 2026-03 2026-04 2026-05 2026-06
+$ prange start=2026-11-23 end=2026-12-06 freq=W
+n=2 freq=W-SUN dtype=period[W-SUN]
+  2026-11-23/2026-11-29 2026-11-30/2026-12-06
+$ prange start=2026-11-23 end=2026-11-30 freq=B
+n=6 freq=B dtype=period[B]
+  2026-11-23 2026-11-24 2026-11-25 2026-11-26 2026-11-27 2026-11-30
+warn: FutureWarning: Period with BDay freq is deprecated and will be removed in a future version. Use a DatetimeIndex with BDay freq instead.
+warn: FutureWarning: PeriodDtype[B] is deprecated and will be removed in a future version. Use a DatetimeIndex with freq='B' instead
+$ prange start=2025 end=2027 freq=Y-MAR
+n=3 freq=Y-MAR dtype=period[Y-MAR]
+  2025 2026 2027
+$ prange end=2026-12 periods=4 freq=2M
+n=4 freq=2M dtype=period[2M]
+  2026-06 2026-08 2026-10 2026-12
+$ td 1_days_02:03:04
+repr: Timedelta('1 days 02:03:04')
+str: 1 days 02:03:04
+isoformat: P1DT2H3M4S
+total_seconds: 93784.0
+components: Components(days=1, hours=2, minutes=3, seconds=4, milliseconds=0, microseconds=0, nanoseconds=0)
+$ td 1h30m
+repr: Timedelta('0 days 01:30:00')
+str: 0 days 01:30:00
+isoformat: P0DT1H30M0S
+total_seconds: 5400.0
+components: Components(days=0, hours=1, minutes=30, seconds=0, milliseconds=0, microseconds=0, nanoseconds=0)
+$ td -1_days_+23:59:59.5
+repr: Timedelta('-1 days +23:59:59.500000')
+str: -1 days +23:59:59.500000
+isoformat: P-1DT23H59M59.5S
+total_seconds: -0.5
+components: Components(days=-1, hours=23, minutes=59, seconds=59, milliseconds=500, microseconds=0, nanoseconds=0)
+$ td P1DT2H
+repr: Timedelta('1 days 02:00:00')
+str: 1 days 02:00:00
+isoformat: P1DT2H0M0S
+total_seconds: 93600.0
+components: Components(days=1, hours=2, minutes=0, seconds=0, milliseconds=0, microseconds=0, nanoseconds=0)
+$ td 3W
+repr: Timedelta('21 days 00:00:00')
+str: 21 days 00:00:00
+isoformat: P21DT0H0M0S
+total_seconds: 1814400.0
+components: Components(days=21, hours=0, minutes=0, seconds=0, milliseconds=0, microseconds=0, nanoseconds=0)
+$ td 1.5us
+repr: Timedelta('0 days 00:00:00.000001500')
+str: 0 days 00:00:00.000001500
+isoformat: P0DT0H0M0.0000015S
+total_seconds: 1e-06
+components: Components(days=0, hours=0, minutes=0, seconds=0, milliseconds=0, microseconds=1, nanoseconds=500)
+$ td 00:00:01.000000001
+repr: Timedelta('0 days 00:00:01.000000001')
+str: 0 days 00:00:01.000000001
+isoformat: P0DT0H0M1.000000001S
+total_seconds: 1.0
+components: Components(days=0, hours=0, minutes=0, seconds=1, milliseconds=0, microseconds=0, nanoseconds=1)
+$ td 2_days
+repr: Timedelta('2 days 00:00:00')
+str: 2 days 00:00:00
+isoformat: P2DT0H0M0S
+total_seconds: 172800.0
+components: Components(days=2, hours=0, minutes=0, seconds=0, milliseconds=0, microseconds=0, nanoseconds=0)
+$ td -00:30:00
+repr: Timedelta('-1 days +23:30:00')
+str: -1 days +23:30:00
+isoformat: P-1DT23H30M0S
+total_seconds: -1800.0
+components: Components(days=-1, hours=23, minutes=30, seconds=0, milliseconds=0, microseconds=0, nanoseconds=0)
+$ td 1d2h3m4s5ms6us7ns
+repr: Timedelta('1 days 02:03:04.005006007')
+str: 1 days 02:03:04.005006007
+isoformat: P1DT2H3M4.005006007S
+total_seconds: 93784.005006
+components: Components(days=1, hours=2, minutes=3, seconds=4, milliseconds=5, microseconds=6, nanoseconds=7)
+warn: Pandas4Warning: 'd' is deprecated and will be removed in a future version. Please use 'D' instead of 'd'.
+$ td 1_day,_10:11:12
+repr: Timedelta('1 days 10:11:12')
+str: 1 days 10:11:12
+isoformat: P1DT10H11M12S
+total_seconds: 123072.0
+components: Components(days=1, hours=10, minutes=11, seconds=12, milliseconds=0, microseconds=0, nanoseconds=0)
+$ td 90_minutes
+repr: Timedelta('0 days 01:30:00')
+str: 0 days 01:30:00
+isoformat: P0DT1H30M0S
+total_seconds: 5400.0
+components: Components(days=0, hours=1, minutes=30, seconds=0, milliseconds=0, microseconds=0, nanoseconds=0)
+$ td 1.25h
+repr: Timedelta('0 days 01:15:00')
+str: 0 days 01:15:00
+isoformat: P0DT1H15M0S
+total_seconds: 4500.0
+components: Components(days=0, hours=1, minutes=15, seconds=0, milliseconds=0, microseconds=0, nanoseconds=0)
+$ td -1.5d
+repr: Timedelta('-2 days +12:00:00')
+str: -2 days +12:00:00
+isoformat: P-2DT12H0M0S
+total_seconds: -129600.0
+components: Components(days=-2, hours=12, minutes=0, seconds=0, milliseconds=0, microseconds=0, nanoseconds=0)
+warn: Pandas4Warning: 'd' is deprecated and will be removed in a future version. Please use 'D' instead of 'd'.
+$ td 3w
+repr: Timedelta('21 days 00:00:00')
+str: 21 days 00:00:00
+isoformat: P21DT0H0M0S
+total_seconds: 1814400.0
+components: Components(days=21, hours=0, minutes=0, seconds=0, milliseconds=0, microseconds=0, nanoseconds=0)
+warn: Pandas4Warning: 'w' is deprecated and will be removed in a future version. Please use 'W' instead of 'w'.
+$ td 1y
+! ValueError: Units 'M', 'Y' and 'y' do not represent unambiguous timedelta values and are not supported.
+$ td 0
+repr: Timedelta('0 days 00:00:00')
+str: 0 days 00:00:00
+isoformat: P0DT0H0M0S
+total_seconds: 0.0
+components: Components(days=0, hours=0, minutes=0, seconds=0, milliseconds=0, microseconds=0, nanoseconds=0)
+$ td 5
+repr: Timedelta('0 days 00:00:00.000000005')
+str: 0 days 00:00:00.000000005
+isoformat: P0DT0H0M0.000000005S
+total_seconds: 0.0
+components: Components(days=0, hours=0, minutes=0, seconds=0, milliseconds=0, microseconds=0, nanoseconds=5)
+$ td bogus
+! ValueError: unit abbreviation w/o a number
+$ td 1_days_25:00:00
+repr: Timedelta('2 days 01:00:00')
+str: 2 days 01:00:00
+isoformat: P2DT1H0M0S
+total_seconds: 176400.0
+components: Components(days=2, hours=1, minutes=0, seconds=0, milliseconds=0, microseconds=0, nanoseconds=0)
+$ td PT36H
+repr: Timedelta('1 days 12:00:00')
+str: 1 days 12:00:00
+isoformat: P1DT12H0M0S
+total_seconds: 129600.0
+components: Components(days=1, hours=12, minutes=0, seconds=0, milliseconds=0, microseconds=0, nanoseconds=0)
+$ td P0DT0H0M0.000001S
+repr: Timedelta('0 days 00:00:00.000001')
+str: 0 days 00:00:00.000001
+isoformat: P0DT0H0M0.000001S
+total_seconds: 1e-06
+components: Components(days=0, hours=0, minutes=0, seconds=0, milliseconds=0, microseconds=1, nanoseconds=0)
+$ td 10000_days
+repr: Timedelta('10000 days 00:00:00')
+str: 10000 days 00:00:00
+isoformat: P10000DT0H0M0S
+total_seconds: 864000000.0
+components: Components(days=10000, hours=0, minutes=0, seconds=0, milliseconds=0, microseconds=0, nanoseconds=0)
+$ td 106752_days
+! OutOfBoundsDatetime: cannot convert input 106752.0 with the unit 'D'
+$ tdround 1_days_02:03:04.5 h floor
+Timedelta('1 days 02:00:00')
+$ tdround 1_days_02:03:04.5 h ceil
+Timedelta('1 days 03:00:00')
+$ tdround 1_days_02:30:00 h round
+Timedelta('1 days 02:00:00')
+$ tdround 1_days_03:30:00 h round
+Timedelta('1 days 04:00:00')
+$ tdround -1_days_+23:59:59.5 s round
+Timedelta('0 days 00:00:00')
+$ tdround 1_days_02:03:04 D ceil
+Timedelta('2 days 00:00:00')
+$ tdround 1_days_02:03:04 15min floor
+Timedelta('1 days 02:00:00')
+$ tdround 1_days_02:03:04 ME floor
+! ValueError: <MonthEnd> is a non-fixed frequency
+$ tsadd 2026-03-07T12:00@America/New_York 1_days
+2026-03-08 13:00:00-04:00
+$ tsadd 2026-03-07T12:00@America/New_York 24h
+2026-03-08 13:00:00-04:00
+$ tsadd 2026-11-25T16:30 -3_days_+01:00:00
+2026-11-22 17:30:00
+$ tsadd 2026-12-31T23:59:59 1s
+2027-01-01 00:00:00
+$ busday count 2026-11-01 2026-12-01
+21
+$ busday count 2026-11-01 2026-12-01 cal=us
+19
+$ busday count 2026-12-01 2026-11-01
+-22
+$ busday count 2026-11-01 2026-12-01 weekmask=1111000
+17
+$ busday count 2026-11-28 2026-11-29
+0
+$ busday offset 2026-11-28 0 roll=forward
+2026-11-30
+$ busday offset 2026-11-28 0 roll=backward
+2026-11-27
+$ busday offset 2026-11-28 0 roll=following
+2026-11-30
+$ busday offset 2026-11-26 1 roll=forward cal=us
+2026-11-30
+$ busday offset 2026-11-26 -1 roll=backward cal=us
+2026-11-24
+$ busday offset 2026-11-28 1 roll=modifiedfollowing
+2026-12-01
+$ busday offset 2026-10-31 0 roll=modifiedfollowing
+2026-10-30
+$ busday offset 2026-08-01 0 roll=modifiedpreceding
+2026-08-03
+$ busday offset 2026-11-28 0
+! ValueError: Non-business day date in busday_offset
+$ busday offset 2026-11-28 0 roll=nat
+NaT
+$ busday offset 2026-11-28 0 roll=sideways
+! ValueError: Invalid business day roll parameter "sideways"
+$ busday is 2026-11-26
+True
+$ busday is 2026-11-26 cal=us
+False
+$ busday is 2026-11-26 weekmask=1111000
+True
+$ due tickets.csv opened add CustomBusinessHour(4,cal=us,start=08:00,end=18:00)
+id,opened,priority,result
+T-1001,2026-11-24 16:45:00,P2,2026-11-25 10:45:00
+T-1002,2026-11-25 08:05:00,P1,2026-11-25 12:05:00
+T-1003,2026-11-25 17:59:00,P3,2026-11-27 11:59:00
+T-1004,2026-11-26 10:00:00,P2,2026-11-27 12:00:00
+T-1005,2026-11-27 23:30:00,P1,2026-11-30 12:00:00
+T-1006,2026-11-28 09:15:00,P3,2026-11-30 12:00:00
+T-1007,2026-12-23 15:20:00,P2,2026-12-24 09:20:00
+T-1008,2026-12-24 12:00:00,P1,2026-12-24 16:00:00
+T-1009,2026-12-31 18:00:00,P2,2027-01-04 12:00:00
+T-1010,2027-01-01 07:30:00,P3,2027-01-04 12:00:00
+T-1011,2027-01-04 06:59:59,P1,2027-01-04 12:00:00
+T-1012,2027-01-15 16:59:00,P2,2027-01-19 10:59:00
+warn: PerformanceWarning: Non-vectorized DateOffset being applied to Series or DatetimeIndex.
+$ due tickets.csv opened add BusinessHour(8)
+id,opened,priority,result
+T-1001,2026-11-24 16:45:00,P2,2026-11-25 16:45:00
+T-1002,2026-11-25 08:05:00,P1,2026-11-26 09:00:00
+T-1003,2026-11-25 17:59:00,P3,2026-11-27 09:00:00
+T-1004,2026-11-26 10:00:00,P2,2026-11-27 10:00:00
+T-1005,2026-11-27 23:30:00,P1,2026-12-01 09:00:00
+T-1006,2026-11-28 09:15:00,P3,2026-12-01 09:00:00
+T-1007,2026-12-23 15:20:00,P2,2026-12-24 15:20:00
+T-1008,2026-12-24 12:00:00,P1,2026-12-25 12:00:00
+T-1009,2026-12-31 18:00:00,P2,2027-01-04 09:00:00
+T-1010,2027-01-01 07:30:00,P3,2027-01-04 09:00:00
+T-1011,2027-01-04 06:59:59,P1,2027-01-05 09:00:00
+T-1012,2027-01-15 16:59:00,P2,2027-01-18 16:59:00
+warn: PerformanceWarning: Non-vectorized DateOffset being applied to Series or DatetimeIndex.
+$ due tickets.csv opened rollforward CustomBusinessHour(cal=us,start=08:00,end=18:00)
+id,opened,priority,result
+T-1001,2026-11-24 16:45:00,P2,2026-11-24 16:45:00
+T-1002,2026-11-25 08:05:00,P1,2026-11-25 08:05:00
+T-1003,2026-11-25 17:59:00,P3,2026-11-25 17:59:00
+T-1004,2026-11-26 10:00:00,P2,2026-11-27 08:00:00
+T-1005,2026-11-27 23:30:00,P1,2026-11-30 08:00:00
+T-1006,2026-11-28 09:15:00,P3,2026-11-30 08:00:00
+T-1007,2026-12-23 15:20:00,P2,2026-12-23 15:20:00
+T-1008,2026-12-24 12:00:00,P1,2026-12-24 12:00:00
+T-1009,2026-12-31 18:00:00,P2,2026-12-31 18:00:00
+T-1010,2027-01-01 07:30:00,P3,2027-01-04 08:00:00
+T-1011,2027-01-04 06:59:59,P1,2027-01-04 08:00:00
+T-1012,2027-01-15 16:59:00,P2,2027-01-15 16:59:00
+$ due tickets.csv opened on BusinessHour()
+id,opened,priority,result
+T-1001,2026-11-24 16:45:00,P2,True
+T-1002,2026-11-25 08:05:00,P1,False
+T-1003,2026-11-25 17:59:00,P3,False
+T-1004,2026-11-26 10:00:00,P2,True
+T-1005,2026-11-27 23:30:00,P1,False
+T-1006,2026-11-28 09:15:00,P3,False
+T-1007,2026-12-23 15:20:00,P2,True
+T-1008,2026-12-24 12:00:00,P1,True
+T-1009,2026-12-31 18:00:00,P2,False
+T-1010,2027-01-01 07:30:00,P3,False
+T-1011,2027-01-04 06:59:59,P1,False
+T-1012,2027-01-15 16:59:00,P2,True
+$ due invoices.csv issued add DateOffset(days=30)
+invoice,issued,amount,result
+INV-2041,2026-01-30,1250.0,2026-03-01
+INV-2042,2026-01-31,980.5,2026-03-02
+INV-2043,2026-02-27,4410.0,2026-03-29
+INV-2044,2026-02-28,75.25,2026-03-30
+INV-2045,2026-05-29,610.0,2026-06-28
+INV-2046,2026-06-30,12000.0,2026-07-30
+INV-2047,2026-08-31,333.33,2026-09-30
+INV-2048,2026-10-30,870.0,2026-11-29
+INV-2049,2026-11-30,2290.1,2026-12-30
+INV-2050,2026-12-31,515.0,2027-01-30
+$ due invoices.csv issued add MonthEnd()
+invoice,issued,amount,result
+INV-2041,2026-01-30,1250.0,2026-01-31
+INV-2042,2026-01-31,980.5,2026-02-28
+INV-2043,2026-02-27,4410.0,2026-02-28
+INV-2044,2026-02-28,75.25,2026-03-31
+INV-2045,2026-05-29,610.0,2026-05-31
+INV-2046,2026-06-30,12000.0,2026-07-31
+INV-2047,2026-08-31,333.33,2026-09-30
+INV-2048,2026-10-30,870.0,2026-10-31
+INV-2049,2026-11-30,2290.1,2026-12-31
+INV-2050,2026-12-31,515.0,2027-01-31
+$ due invoices.csv issued add BusinessMonthEnd()
+invoice,issued,amount,result
+INV-2041,2026-01-30,1250.0,2026-02-27
+INV-2042,2026-01-31,980.5,2026-02-27
+INV-2043,2026-02-27,4410.0,2026-03-31
+INV-2044,2026-02-28,75.25,2026-03-31
+INV-2045,2026-05-29,610.0,2026-06-30
+INV-2046,2026-06-30,12000.0,2026-07-31
+INV-2047,2026-08-31,333.33,2026-09-30
+INV-2048,2026-10-30,870.0,2026-11-30
+INV-2049,2026-11-30,2290.1,2026-12-31
+INV-2050,2026-12-31,515.0,2027-01-29
+$ due invoices.csv issued rollforward CustomBusinessDay(cal=us)
+invoice,issued,amount,result
+INV-2041,2026-01-30,1250.0,2026-01-30
+INV-2042,2026-01-31,980.5,2026-02-02
+INV-2043,2026-02-27,4410.0,2026-02-27
+INV-2044,2026-02-28,75.25,2026-03-02
+INV-2045,2026-05-29,610.0,2026-05-29
+INV-2046,2026-06-30,12000.0,2026-06-30
+INV-2047,2026-08-31,333.33,2026-08-31
+INV-2048,2026-10-30,870.0,2026-10-30
+INV-2049,2026-11-30,2290.1,2026-11-30
+INV-2050,2026-12-31,515.0,2026-12-31
+$ due invoices.csv issued add CustomBusinessMonthEnd(cal=us)
+invoice,issued,amount,result
+INV-2041,2026-01-30,1250.0,2026-02-27
+INV-2042,2026-01-31,980.5,2026-02-27
+INV-2043,2026-02-27,4410.0,2026-03-31
+INV-2044,2026-02-28,75.25,2026-03-31
+INV-2045,2026-05-29,610.0,2026-06-30
+INV-2046,2026-06-30,12000.0,2026-07-31
+INV-2047,2026-08-31,333.33,2026-09-30
+INV-2048,2026-10-30,870.0,2026-11-30
+INV-2049,2026-11-30,2290.1,2026-12-31
+INV-2050,2026-12-31,515.0,2027-01-29
+warn: PerformanceWarning: Non-vectorized DateOffset being applied to Series or DatetimeIndex.
+$ due trades.csv trade_date add CustomBusinessDay(1,cal=nyse)
+trade_date,symbol,qty,result
+2026-04-01,AAPL,100,2026-04-02
+2026-04-02,MSFT,50,2026-04-06
+2026-04-03,AAPL,25,2026-04-06
+2026-05-22,NVDA,10,2026-05-26
+2026-06-18,MSFT,70,2026-06-22
+2026-07-02,AAPL,40,2026-07-06
+2026-07-03,NVDA,15,2026-07-06
+2026-11-25,MSFT,20,2026-11-27
+2026-12-24,AAPL,60,2026-12-28
+2026-12-31,NVDA,5,2027-01-04
+warn: PerformanceWarning: Non-vectorized DateOffset being applied to Series or DatetimeIndex.
+$ due trades.csv trade_date add CustomBusinessDay(2,cal=nyse)
+trade_date,symbol,qty,result
+2026-04-01,AAPL,100,2026-04-06
+2026-04-02,MSFT,50,2026-04-07
+2026-04-03,AAPL,25,2026-04-07
+2026-05-22,NVDA,10,2026-05-27
+2026-06-18,MSFT,70,2026-06-23
+2026-07-02,AAPL,40,2026-07-07
+2026-07-03,NVDA,15,2026-07-07
+2026-11-25,MSFT,20,2026-11-30
+2026-12-24,AAPL,60,2026-12-29
+2026-12-31,NVDA,5,2027-01-05
+warn: PerformanceWarning: Non-vectorized DateOffset being applied to Series or DatetimeIndex.
+$ due trades.csv trade_date sub BusinessDay(1)
+trade_date,symbol,qty,result
+2026-04-01,AAPL,100,2026-03-31
+2026-04-02,MSFT,50,2026-04-01
+2026-04-03,AAPL,25,2026-04-02
+2026-05-22,NVDA,10,2026-05-21
+2026-06-18,MSFT,70,2026-06-17
+2026-07-02,AAPL,40,2026-07-01
+2026-07-03,NVDA,15,2026-07-02
+2026-11-25,MSFT,20,2026-11-24
+2026-12-24,AAPL,60,2026-12-23
+2026-12-31,NVDA,5,2026-12-30
+$ due pay.csv paid on SemiMonthEnd()
+period,paid,result
+2026-01,2026-01-15,True
+2026-01,2026-01-30,False
+2026-02,2026-02-13,False
+2026-02,2026-02-27,False
+2026-05,2026-05-15,True
+2026-05,2026-05-29,False
+2026-08,2026-08-14,False
+2026-08,2026-08-31,True
+2026-11,2026-11-13,False
+2026-11,2026-11-30,True
+$ due pay.csv paid rollforward SemiMonthEnd()
+period,paid,result
+2026-01,2026-01-15,2026-01-15
+2026-01,2026-01-30,2026-01-31
+2026-02,2026-02-13,2026-02-15
+2026-02,2026-02-27,2026-02-28
+2026-05,2026-05-15,2026-05-15
+2026-05,2026-05-29,2026-05-31
+2026-08,2026-08-14,2026-08-15
+2026-08,2026-08-31,2026-08-31
+2026-11,2026-11-13,2026-11-15
+2026-11,2026-11-30,2026-11-30
+$ due pay.csv paid add Week(weekday=4)
+period,paid,result
+2026-01,2026-01-15,2026-01-16
+2026-01,2026-01-30,2026-02-06
+2026-02,2026-02-13,2026-02-20
+2026-02,2026-02-27,2026-03-06
+2026-05,2026-05-15,2026-05-22
+2026-05,2026-05-29,2026-06-05
+2026-08,2026-08-14,2026-08-21
+2026-08,2026-08-31,2026-09-04
+2026-11,2026-11-13,2026-11-20
+2026-11,2026-11-30,2026-12-04
+$ bucket sales.csv date Q-JUN amount
+date,count,sum
+2026Q1,79,44643.75
+2026Q2,79,51151.28
+2026Q3,77,43804.44
+2026Q4,78,44481.97
+2027Q1,79,45108.99
+2027Q2,79,51036.52
+$ bucket sales.csv date Y-JUN amount
+date,count,sum
+2026,313,184081.44
+2027,158,96145.51
+$ bucket sales.csv date M amount
+date,count,sum
+2025-07,27,15014.39
+2025-08,26,14920.83
+2025-09,26,14708.53
+2025-10,27,15430.83
+2025-11,25,14317.55
+2025-12,27,21402.9
+2026-01,27,15127.27
+2026-02,24,14332.48
+2026-03,26,14344.69
+2026-04,26,14789.13
+2026-05,26,14805.57
+2026-06,26,14887.27
+2026-07,27,15266.06
+2026-08,26,15045.18
+2026-09,26,14797.75
+2026-10,27,15542.5
+2026-11,25,14418.45
+2026-12,27,21075.57
+$ bucket sales.csv date W-SAT amount
+date,count,sum
+2025-06-29/2025-07-05,5,2521.3
+2025-07-06/2025-07-12,6,3279.63
+2025-07-13/2025-07-19,6,3384.09
+2025-07-20/2025-07-26,6,3488.55
+2025-07-27/2025-08-02,6,3592.01
+2025-08-03/2025-08-09,6,3696.47
+2025-08-10/2025-08-16,6,3510.93
+2025-08-17/2025-08-23,6,3324.39
+2025-08-24/2025-08-30,6,3137.85
+2025-08-31/2025-09-06,6,3241.31
+2025-09-07/2025-09-13,6,3345.77
+2025-09-14/2025-09-20,6,3449.23
+2025-09-21/2025-09-27,6,3553.69
+2025-09-28/2025-10-04,6,3658.15
+2025-10-05/2025-10-11,6,3471.61
+2025-10-12/2025-10-18,6,3576.07
+2025-10-19/2025-10-25,6,3390.53
+2025-10-26/2025-11-01,6,3204.99
+2025-11-02/2025-11-08,6,3308.45
+2025-11-09/2025-11-15,6,3411.91
+2025-11-16/2025-11-22,6,3515.37
+2025-11-23/2025-11-29,6,3329.83
+2025-11-30/2025-12-06,6,4753.29
+2025-12-07/2025-12-13,6,4857.75
+2025-12-14/2025-12-20,6,4962.21
+2025-12-21/2025-12-27,6,4775.67
+2025-12-28/2026-01-03,6,3930.13
+2026-01-04/2026-01-10,6,3374.59
+2026-01-11/2026-01-17,6,3188.05
+2026-01-18/2026-01-24,6,3292.51
+2026-01-25/2026-01-31,6,3395.97
+2026-02-01/2026-02-07,6,3499.43
+2026-02-08/2026-02-14,6,3603.89
+2026-02-15/2026-02-21,6,3707.35
+2026-02-22/2026-02-28,6,3521.81
+2026-03-01/2026-03-07,6,3336.27
+2026-03-08/2026-03-14,6,3149.73
+2026-03-15/2026-03-21,6,3254.19
+2026-03-22/2026-03-28,6,3358.65
+2026-03-29/2026-04-04,6,3462.11
+2026-04-05/2026-04-11,6,3566.57
+2026-04-12/2026-04-18,6,3380.03
+2026-04-19/2026-04-25,6,3483.49
+2026-04-26/2026-05-02,6,3586.95
+2026-05-03/2026-05-09,6,3401.41
+2026-05-10/2026-05-16,6,3215.87
+2026-05-17/2026-05-23,6,3320.33
+2026-05-24/2026-05-30,6,3423.79
+2026-05-31/2026-06-06,6,3528.25
+2026-06-07/2026-06-13,6,3342.71
+2026-06-14/2026-06-20,6,3446.17
+2026-06-21/2026-06-27,6,3550.63
+2026-06-28/2026-07-04,6,3654.09
+2026-07-05/2026-07-11,6,3467.55
+2026-07-12/2026-07-18,6,3281.01
+2026-07-19/2026-07-25,6,3385.47
+2026-07-26/2026-08-01,6,3199.93
+2026-08-02/2026-08-08,6,3303.39
+2026-08-09/2026-08-15,6,3407.85
+2026-08-16/2026-08-22,6,3512.31
+2026-08-23/2026-08-29,6,3616.77
+2026-08-30/2026-09-05,6,3720.23
+2026-09-06/2026-09-12,6,3534.69
+2026-09-13/2026-09-19,6,3348.15
+2026-09-20/2026-09-26,6,3161.61
+2026-09-27/2026-10-03,6,3265.07
+2026-10-04/2026-10-10,6,3369.53
+2026-10-11/2026-10-17,6,3473.99
+2026-10-18/2026-10-24,6,3577.45
+2026-10-25/2026-10-31,6,3391.91
+2026-11-01/2026-11-07,6,3496.37
+2026-11-08/2026-11-14,6,3599.83
+2026-11-15/2026-11-21,6,3414.29
+2026-11-22/2026-11-28,6,3228.75
+2026-11-29/2026-12-05,6,4432.21
+2026-12-06/2026-12-12,6,4755.67
+2026-12-13/2026-12-19,6,4569.13
+2026-12-20/2026-12-26,6,4673.59
+2026-12-27/2027-01-02,4,3324.18
+$ bucket sales.csv date Q-DEC till
+date,count,sum
+2025Q3,79,156
+2025Q4,79,159
+2026Q1,77,154
+2026Q2,78,155
+2026Q3,79,159
+2026Q4,79,159
+$ bucket sales.csv date ME amount
+! ValueError: Invalid frequency: ME. Failed to parse with error message: ValueError("for Period, please use 'M' instead of 'ME'")
+$ bucket sales.csv date RE-L-JAN-SAT amount
+! ValueError: RE-L-JAN-SAT is not supported as period frequency
