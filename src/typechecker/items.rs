@@ -3503,6 +3503,7 @@ impl<'a> super::TypeChecker<'a> {
             // and for every `if` / `match` arm that produces a value through it,
             // exactly as the owned rule's note above says. Measured: two bodies.
             self.warn_borrow_projection_copy(expr, expected);
+            self.note_ref_result(expr);
             t
         } else if diverged {
             // Tail-less but diverging — bottom, not unit (see #12).
@@ -6066,6 +6067,7 @@ impl<'a> super::TypeChecker<'a> {
             self.warn_partial_move_of_drop_struct(expr, &t);
             // B-2026-09-06-31 — the borrowed-root twin of the un-annotated tail.
             self.warn_borrow_projection_copy(expr, &t);
+            self.note_ref_result(expr);
             t
         } else if diverged {
             // A tail-less block whose body diverges (e.g. `{ return e; }`)
@@ -7408,6 +7410,126 @@ impl<'a> super::TypeChecker<'a> {
         let inner = inner.as_ref().clone();
         for t in out {
             self.warn_borrow_projection_copy_at(t, &inner, false);
+        }
+    }
+
+    /// v2 core §4.6 (B-2026-10-28-25): note a result of a `match`, `if` or
+    /// block that is a reference (a view, which covers a `ref` pattern
+    /// binding, a bare parameter and a local copied from either, or a
+    /// borrowed `self`), while the binding it names is in scope.
+    pub(super) fn note_ref_result(&mut self, e: &Expr) {
+        if !self.cli_lint_overrides.strict_core {
+            return;
+        }
+        let is_ref = match &e.kind {
+            ExprKind::Identifier(n) => self.local_scope.is_view(n),
+            ExprKind::SelfValue => self.current_fn_ref_params.contains("self"),
+            _ => false,
+        };
+        if is_ref {
+            self.core_ref_results.insert(e.id);
+        }
+    }
+
+    /// v2 core §4.6: whether a `match`, `if` or block is a reference: every
+    /// result of it that does not diverge is one ([`Self::note_ref_result`]),
+    /// and at least one does not diverge. `Some(true)` is a reference,
+    /// `Some(false)` an owned value, `None` an expression that always
+    /// diverges.
+    pub(super) fn core_ref_valued(&self, e: &Expr) -> Option<bool> {
+        fn join(a: Option<bool>, b: Option<bool>) -> Option<bool> {
+            match (a, b) {
+                (Some(false), _) | (_, Some(false)) => Some(false),
+                (None, x) | (x, None) => x,
+                _ => Some(true),
+            }
+        }
+        match &e.kind {
+            ExprKind::Block(b) => self.core_block_ref_valued(b),
+            ExprKind::If {
+                then_block,
+                else_branch,
+                ..
+            }
+            | ExprKind::IfLet {
+                then_block,
+                else_branch,
+                ..
+            } => join(
+                self.core_block_ref_valued(then_block),
+                else_branch
+                    .as_deref()
+                    .map_or(Some(false), |x| self.core_ref_valued(x)),
+            ),
+            ExprKind::Match { arms, .. } => arms
+                .iter()
+                .map(|a| self.core_ref_valued(&a.body))
+                .fold(None, join),
+            _ if self.core_ref_results.contains(&e.id) => Some(true),
+            _ if self.core_expr_diverges(e) => None,
+            _ => Some(false),
+        }
+    }
+
+    fn core_block_ref_valued(&self, b: &Block) -> Option<bool> {
+        match b.final_expr.as_deref() {
+            Some(t) => self.core_ref_valued(t),
+            None if b
+                .stmts
+                .iter()
+                .any(|s| matches!(&s.kind, StmtKind::Expr(e) if self.core_expr_diverges(e))) =>
+            {
+                None
+            }
+            None => Some(false),
+        }
+    }
+
+    fn core_expr_diverges(&self, e: &Expr) -> bool {
+        matches!(
+            e.kind,
+            ExprKind::Return(_) | ExprKind::Break { .. } | ExprKind::Continue { .. }
+        ) || self.node_types.get(&e.id).is_some_and(|(t, _)| {
+            matches!(
+                resolve_type_var_top(t, &self.env.substitutions),
+                Type::Never
+            )
+        })
+    }
+
+    /// The results of `e` that [`Self::note_ref_result`] noted, whose
+    /// moves out of a borrow are not moves once `e` is a reference.
+    pub(super) fn core_ref_result_spans(&self, e: &Expr, out: &mut Vec<Span>) {
+        match &e.kind {
+            ExprKind::Block(b) => {
+                if let Some(t) = b.final_expr.as_deref() {
+                    self.core_ref_result_spans(t, out);
+                }
+            }
+            ExprKind::If {
+                then_block,
+                else_branch,
+                ..
+            }
+            | ExprKind::IfLet {
+                then_block,
+                else_branch,
+                ..
+            } => {
+                if let Some(t) = then_block.final_expr.as_deref() {
+                    self.core_ref_result_spans(t, out);
+                }
+                if let Some(t) = else_branch.as_deref() {
+                    self.core_ref_result_spans(t, out);
+                }
+            }
+            ExprKind::Match { arms, .. } => {
+                for a in arms {
+                    self.core_ref_result_spans(&a.body, out);
+                }
+            }
+            _ if self.core_ref_results.contains(&e.id) => out.push(e.span),
+            _ => {}
         }
     }
 
@@ -9206,6 +9328,30 @@ impl<'a> super::TypeChecker<'a> {
                 // The MIR pipeline binds it the same way, so it reads it as
                 // a copy of the reference too (B-2026-10-20-24's `ref` arm
                 // bindings are views there).
+                // §4.6 (B-2026-10-28-25): a `match`, `if` or block whose every
+                // result that does not diverge is a reference is a reference,
+                // so `let r = match rx { Some(ref r) => r, None => return };`
+                // copies it, and its results moved out of nothing.
+                let ref_valued = self.cli_lint_overrides.strict_core
+                    && ty.is_none()
+                    && matches!(pattern.kind, PatternKind::Binding(_))
+                    && matches!(
+                        value.kind,
+                        ExprKind::Block(_)
+                            | ExprKind::If { .. }
+                            | ExprKind::IfLet { .. }
+                            | ExprKind::Match { .. }
+                    )
+                    && !self.is_copy_type_during_check(&expected_ty)
+                    && self.core_ref_valued(value) == Some(true);
+                if ref_valued {
+                    let mut spans = Vec::new();
+                    self.core_ref_result_spans(value, &mut spans);
+                    self.errors.retain(|e| {
+                        e.lint_name.as_deref() != Some("borrow_projection_copy")
+                            || !spans.contains(&e.span)
+                    });
+                }
                 let ref_copy = (self.cli_lint_overrides.strict_core
                     || self.library_methods_from_source)
                     && ty.is_none()
@@ -9217,7 +9363,8 @@ impl<'a> super::TypeChecker<'a> {
                             && matches!(value.kind, ExprKind::SelfValue)
                             && self.current_fn_ref_params.contains("self"))
                         || self.core_map_get_view(value, true)
-                        || self.core_map_get_view(value, false));
+                        || self.core_map_get_view(value, false)
+                        || ref_valued);
                 if (!self.cli_lint_overrides.strict_core
                     || matches!(pattern.kind, PatternKind::Binding(_)))
                     && !ref_copy

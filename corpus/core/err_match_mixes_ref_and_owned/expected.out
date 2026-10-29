@@ -1,0 +1,1 @@
+ERROR at line 7: cannot move 'r': it borrows its value, and the other arms of this `match` are an owned 'Matcher'

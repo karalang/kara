@@ -24609,7 +24609,11 @@ pub(crate) mod tests {
 
     /// Core pins the builder cannot run yet, each with what it waits on.
     /// A listed pin must still fail, so the list only shrinks.
-    pub(crate) const NOT_YET: &[&str] = &[];
+    pub(crate) const NOT_YET: &[&str] = &[
+        // §4.6: the `let` of a `match` whose results are `ref` bindings into
+        // an owned local is refused by the MIR build (PREDICTS B-2026-10-28-25).
+        "ok_match_result_is_a_ref",
+    ];
 
     /// Every runnable core pin, built from source, elaborated and run, prints
     /// its expected output and exits with its expected code.

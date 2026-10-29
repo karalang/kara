@@ -1,0 +1,12 @@
+source = "docs/core-semantics.md §4.6"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["move-from-borrow", "ref-binding"]
+class = "e"
+expected_from = "decision"
+rules = ["4.6"]
+backends = []
+env = {}
+note = "core-semantics §4.6, ruled 2026-10-29 (B-2026-10-28-25): a match, if or block whose every non-diverging result is a reference is a reference, so the let binds a ref and nothing moves; over a payload type with no .clone()"
+bucket = "e-spec"

@@ -1,0 +1,15 @@
+struct Matcher { prefix: String }
+
+// One result is a `ref` binding and one an owned value, so the `match` is a
+// value and its `ref` result moves out of a borrow (§4.6, §3.7).
+fn width(m: Option[Matcher]) -> i64 {
+    let r = match m {
+        Some(ref r) => r,
+        None => Matcher { prefix: "".to_string() },
+    };
+    r.prefix.len()
+}
+
+fn main() {
+    println(width(Some(Matcher { prefix: "ab".to_string() })));
+}

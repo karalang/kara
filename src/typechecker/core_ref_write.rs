@@ -981,6 +981,16 @@ impl Walk<'_, '_> {
                     ExprKind::SelfValue if self.self_read_only => {
                         (Origin::SelfCopy, self.self_fix.clone())
                     }
+                    // A `match`, `if` or block whose every result is a
+                    // reference is one (§4.6; B-2026-10-28-25).
+                    ExprKind::Block(_)
+                    | ExprKind::If { .. }
+                    | ExprKind::IfLet { .. }
+                    | ExprKind::Match { .. }
+                        if self.tc.core_ref_copy_nodes.contains(&value.id) =>
+                    {
+                        (Origin::RefPattern, None)
+                    }
                     _ => (Origin::Owned, None),
                 };
                 self.bind(pattern, origin, fix);

@@ -1,0 +1,66 @@
+// A type with no `.clone()`.
+struct Matcher { prefix: String }
+
+impl Matcher {
+    fn hits(self, s: Str) -> bool { s.starts_with(self.prefix) }
+}
+
+// Every result of the `match` that does not diverge is a `ref` binding, so
+// the `match` is a reference and `r` is a `ref` (§4.6): nothing moves out of
+// `m`, in the loop or anywhere.
+fn count_hits(keys: Vec[String], m: Option[Matcher]) -> i64 {
+    let mut total = 0;
+    for k in keys {
+        let r = match m {
+            Some(ref r) => r,
+            None => return -1,
+        };
+        if r.hits(k) {
+            total += 1;
+        }
+    }
+    total
+}
+
+// The same over an owned local: the `match` borrows `m` and moves nothing
+// out of it, so the next iteration matches it again.
+fn count_local(keys: Vec[String], pat: Str, on: bool) -> i64 {
+    let m = if on { Some(Matcher { prefix: pat.to_string() }) } else { None };
+    let mut total = 0;
+    for k in keys {
+        let r = match m {
+            Some(ref r) => r,
+            None => return -1,
+        };
+        if r.hits(k) {
+            total += 1;
+        }
+    }
+    total
+}
+
+// The same through an `if` of bare parameters and a block whose tail is a
+// local copied from one.
+fn pick(a: Matcher, b: Matcher, first: bool) -> i64 {
+    let m = if first { a } else { b };
+    let n = {
+        let x = m;
+        x
+    };
+    n.prefix.len() + m.prefix.len()
+}
+
+fn main() {
+    let keys: Vec[String] = ["ab".to_string(), "b".to_string(), "abc".to_string()].to_vec();
+    let on = Some(Matcher { prefix: "a".to_string() });
+    let off: Option[Matcher] = None;
+    println(count_hits(keys, on));
+    println(count_hits(keys, off));
+    println(count_local(keys, "ab", true));
+    println(count_local(keys, "ab", false));
+    let a = Matcher { prefix: "xy".to_string() };
+    let b = Matcher { prefix: "z".to_string() };
+    println(pick(a, b, true));
+    println(pick(a, b, false));
+    println(a.prefix);
+}

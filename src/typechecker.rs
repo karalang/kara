@@ -2746,6 +2746,10 @@ pub struct TypeChecker<'a> {
     pub(super) core_ref_copy_spans: FxHashSet<SpanKey>,
     /// See [`TypeCheckResult::core_ref_copy_nodes`].
     pub(super) core_ref_copy_nodes: FxHashSet<crate::ids::NodeId>,
+    /// v2 core §4.6 (B-2026-10-28-25): the results of a `match`, `if` or
+    /// block (a block's tail, a bare arm body) that are references, noted by
+    /// [`Self::note_ref_result`] while the bindings they name are in scope.
+    pub(super) core_ref_results: FxHashSet<crate::ids::NodeId>,
     /// See [`TypeCheckResult::core_consuming_for_iterables`].
     pub(super) core_consuming_for_iterables: FxHashSet<SpanKey>,
     /// The edit that copies each `Str` piece before a `collect` into a
@@ -3751,6 +3755,7 @@ impl<'a> TypeChecker<'a> {
             core_shared_depth: 0,
             core_ref_copy_spans: FxHashSet::default(),
             core_ref_copy_nodes: FxHashSet::default(),
+            core_ref_results: FxHashSet::default(),
             core_consuming_for_iterables: FxHashSet::default(),
             collect_strings_fixes: FxHashMap::default(),
             into_iter_sites: FxHashMap::default(),

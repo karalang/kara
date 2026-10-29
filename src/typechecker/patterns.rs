@@ -318,6 +318,7 @@ impl<'a> super::TypeChecker<'a> {
             if self.cli_lint_overrides.strict_core && !matches!(arm.body.kind, ExprKind::Block(_)) {
                 self.warn_borrow_projection_copy(&arm.body, expected);
             }
+            self.note_ref_result(&arm.body);
             if scrut_borrows_an_element {
                 self.reject_consuming_arm_binding_out_of_index(&dispatch_ty, arm);
             }
@@ -723,6 +724,7 @@ impl<'a> super::TypeChecker<'a> {
             if self.cli_lint_overrides.strict_core && !matches!(arm.body.kind, ExprKind::Block(_)) {
                 self.warn_borrow_projection_copy(&arm.body, &arm_ty);
             }
+            self.note_ref_result(&arm.body);
             if scrut_borrows_an_element {
                 self.reject_consuming_arm_binding_out_of_index(&dispatch_ty, arm);
             }

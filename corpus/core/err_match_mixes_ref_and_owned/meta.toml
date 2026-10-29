@@ -1,0 +1,12 @@
+source = "docs/core-semantics.md §4.6"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["move-from-borrow", "ref-binding"]
+class = "a"
+expected_from = "decision"
+rules = ["4.6", "3.7"]
+backends = []
+env = {}
+note = "core-semantics §4.6, ruled 2026-10-29 (B-2026-10-28-25): some results references and some owned values is the §3.7 error, fixed by .clone() on the reference result (here there is none). The expected.out wording of an error pin is guidance, not a byte oracle."
+bucket = "a:refused"
