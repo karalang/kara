@@ -150,12 +150,13 @@ but the inner merge above, which led to porting pandas' join.
   capture, so it is a once-callable closure and `map(...).collect()`
   refuses it; `|s| s.contains(upper)` passes. `contains_rows` passes
   `upper_pat.as_str()` instead.
-- **B-2026-10-28-29** (open): `Ok((out, qs.iter().map(|q|
-  q.to_string()).collect()))` passes `karac check`, but the MIR build
-  refuses it ("an expression whose type does not lower
-  (UnsolvedParam("C"))"). A `collect` that is a tuple element inside
-  `Ok` or `Some` fails; in a bare tuple, or directly inside `Ok`, it
-  builds. `quantile` binds the labels first.
+- **B-2026-10-28-29** (fixed in cd5a50673e): `Ok((out, qs.iter().map(|q|
+  q.to_string()).collect()))` passed `karac check`, but the MIR build
+  refused it ("an expression whose type does not lower
+  (UnsolvedParam("C"))"). A `collect` that was a tuple element inside
+  `Ok` or `Some` failed; in a bare tuple, or directly inside `Ok`, it
+  built. `quantile` bound the labels first until the fix, and now
+  returns them in place.
 
 ## What a dataframe API would need (notes for M4c)
 

@@ -2526,10 +2526,7 @@ fn quantile(f: Frame, cols: Vec[String], qs: Vec[f64]) -> Result[(Frame, Vec[Str
         let s = sorted_valid(f.col(n)?.floats());
         out.put(n, Col.Float(qs.iter().map(|q| np_quantile(s, *q)).collect()));
     }
-    // B-2026-10-28-29: `Ok((out, qs.iter().map(..).collect()))` checks but
-    // does not build on MIR, so the labels are bound first.
-    let labels: Vec[String] = qs.iter().map(|q| q.to_string()).collect();
-    Ok((out, labels))
+    Ok((out, qs.iter().map(|q| q.to_string()).collect()))
 }
 
 // ============================================================ jobs

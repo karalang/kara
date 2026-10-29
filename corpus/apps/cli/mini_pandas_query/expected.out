@@ -1,0 +1,1803 @@
+$ read orders.csv | query units > 7 | head 8
+    order_id        date region channel  product  units  unit_price  discount  \
+2      10003  2026-09-01   West     web    Scale      9       24.00      0.10   
+9      10010  2026-09-03  South   phone  Grinder      9      129.95       NaN   
+15     10016  2026-09-05  South   store  Blender      9       89.00      0.10   
+18     10019  2026-09-06  South   phone  Toaster      9       54.50       NaN   
+20     10021  2026-09-07   East     web  Toaster      8       54.50      0.00   
+29     10030  2026-09-10   West     web  Blender      8       89.00      0.00   
+42     10043  2026-09-14   East     web  Grinder      9      129.95      0.15   
+57     10058  2026-09-18  North   phone   Kettle      8       39.99       NaN   
+
+    revenue   gift                  note  
+2    194.40  False                   NaN  
+9   1169.55  False                   NaN  
+15   720.90  False  gift wrap\tred paper  
+18   490.50  False                   NaN  
+20   436.00  False       repeat customer  
+29   712.00  False                   NaN  
+42   994.12  False                   NaN  
+57   319.92  False  gift wrap\tred paper  
+$ read orders.csv | query units >= 8 and region == 'West'
+    order_id        date region channel  product  units  unit_price  discount  \
+2      10003  2026-09-01   West     web    Scale      9        24.0       0.1   
+29     10030  2026-09-10   West     web  Blender      8        89.0       0.0   
+
+    revenue   gift note  
+2     194.4  False  NaN  
+29    712.0  False  NaN  
+$ read orders.csv | query units >= 8 & region == 'West'
+    order_id        date region channel  product  units  unit_price  discount  \
+2      10003  2026-09-01   West     web    Scale      9        24.0       0.1   
+29     10030  2026-09-10   West     web  Blender      8        89.0       0.0   
+
+    revenue   gift note  
+2     194.4  False  NaN  
+29    712.0  False  NaN  
+$ read orders.csv | query units == 9 or units == 1 | head 6
+    order_id        date region channel  product  units  unit_price  discount  \
+2      10003  2026-09-01   West     web    Scale      9       24.00       0.1   
+4      10005  2026-09-02   West   phone  Toaster      1       54.50       0.1   
+9      10010  2026-09-03  South   phone  Grinder      9      129.95       NaN   
+15     10016  2026-09-05  South   store  Blender      9       89.00       0.1   
+18     10019  2026-09-06  South   phone  Toaster      9       54.50       NaN   
+23     10024  2026-09-08  South   phone   Kettle      1       39.99       0.1   
+
+    revenue   gift                  note  
+2    194.40  False                   NaN  
+4     49.05  False  gift wrap\tred paper  
+9   1169.55  False                   NaN  
+15   720.90  False  gift wrap\tred paper  
+18   490.50  False                   NaN  
+23    35.99   True                   NaN  
+$ read orders.csv | query (units == 9)|(units == 1) | head 6
+    order_id        date region channel  product  units  unit_price  discount  \
+2      10003  2026-09-01   West     web    Scale      9       24.00       0.1   
+4      10005  2026-09-02   West   phone  Toaster      1       54.50       0.1   
+9      10010  2026-09-03  South   phone  Grinder      9      129.95       NaN   
+15     10016  2026-09-05  South   store  Blender      9       89.00       0.1   
+18     10019  2026-09-06  South   phone  Toaster      9       54.50       NaN   
+23     10024  2026-09-08  South   phone   Kettle      1       39.99       0.1   
+
+    revenue   gift                  note  
+2    194.40  False                   NaN  
+4     49.05  False  gift wrap\tred paper  
+9   1169.55  False                   NaN  
+15   720.90  False  gift wrap\tred paper  
+18   490.50  False                   NaN  
+23    35.99   True                   NaN  
+$ read orders.csv | query (units == 9 or units == 1) and channel == 'web'
+    order_id        date region channel  product  units  unit_price  discount  \
+2      10003  2026-09-01   West     web    Scale      9       24.00      0.10   
+28     10029  2026-09-09   East     web  Toaster      1       54.50       NaN   
+39     10040  2026-09-13   West     web  Blender      1       89.00      0.15   
+42     10043  2026-09-14   East     web  Grinder      9      129.95      0.15   
+48     10049  2026-09-16   East     web   Kettle      1       39.99      0.05   
+51     10052  2026-09-16  North     web  Grinder      1      129.95      0.00   
+59     10060  2026-09-19   West     web  Blender      1       89.00      0.05   
+73     10074  2026-09-23   East     web  Grinder      1      129.95      0.00   
+84     10085  2026-09-27  North     web  Blender      9       89.00      0.10   
+
+    revenue   gift                    note  
+2    194.40  False                     NaN  
+28    54.50  False   call before\ndelivery  
+39    75.65  False  leave at the back door  
+42   994.12  False                     NaN  
+48    37.99   True  leave at the back door  
+51   129.95  False   call before\ndelivery  
+59    84.55   True         repeat customer  
+73   129.95  False                     NaN  
+84   720.90  False         repeat customer  
+$ read orders.csv | query not gift and units > 8
+    order_id        date region channel  product  units  unit_price  discount  \
+2      10003  2026-09-01   West     web    Scale      9       24.00      0.10   
+9      10010  2026-09-03  South   phone  Grinder      9      129.95       NaN   
+15     10016  2026-09-05  South   store  Blender      9       89.00      0.10   
+18     10019  2026-09-06  South   phone  Toaster      9       54.50       NaN   
+42     10043  2026-09-14   East     web  Grinder      9      129.95      0.15   
+84     10085  2026-09-27  North     web  Blender      9       89.00      0.10   
+95     10096  2026-09-30  South   store    Scale      9       24.00      0.10   
+
+    revenue   gift                   note  
+2    194.40  False                    NaN  
+9   1169.55  False                    NaN  
+15   720.90  False   gift wrap\tred paper  
+18   490.50  False                    NaN  
+42   994.12  False                    NaN  
+84   720.90  False        repeat customer  
+95   194.40  False  call before\ndelivery  
+$ read orders.csv | query ~gift & (units > 8)
+    order_id        date region channel  product  units  unit_price  discount  \
+2      10003  2026-09-01   West     web    Scale      9       24.00      0.10   
+9      10010  2026-09-03  South   phone  Grinder      9      129.95       NaN   
+15     10016  2026-09-05  South   store  Blender      9       89.00      0.10   
+18     10019  2026-09-06  South   phone  Toaster      9       54.50       NaN   
+42     10043  2026-09-14   East     web  Grinder      9      129.95      0.15   
+84     10085  2026-09-27  North     web  Blender      9       89.00      0.10   
+95     10096  2026-09-30  South   store    Scale      9       24.00      0.10   
+
+    revenue   gift                   note  
+2    194.40  False                    NaN  
+9   1169.55  False                    NaN  
+15   720.90  False   gift wrap\tred paper  
+18   490.50  False                    NaN  
+42   994.12  False                    NaN  
+84   720.90  False        repeat customer  
+95   194.40  False  call before\ndelivery  
+$ read orders.csv | query gift
+    order_id        date region channel  product  units  unit_price  discount  \
+0      10001  2026-09-01   West   store  Toaster      5       54.50      0.05   
+8      10009  2026-09-03   East   phone   Kettle      3       39.99      0.00   
+10     10011  2026-09-04   West     web  Blender      4       89.00      0.00   
+12     10013  2026-09-04   West   phone  Toaster      7       54.50      0.10   
+19     10020  2026-09-06  South   store    Scale      4       24.00      0.15   
+21     10022  2026-09-07  South     web  Grinder      3      129.95       NaN   
+22     10023  2026-09-07   East   store  Blender      3       89.00      0.00   
+23     10024  2026-09-08  South   phone   Kettle      1       39.99      0.10   
+31     10032  2026-09-10  South     web  Mug set      5       18.25      0.00   
+35     10036  2026-09-11   East     web  Toaster      7       54.50      0.05   
+38     10039  2026-09-12  North   phone   Kettle      5       39.99      0.10   
+48     10049  2026-09-16   East     web   Kettle      1       39.99      0.05   
+58     10059  2026-09-19  South   phone    Scale      6       24.00      0.15   
+59     10060  2026-09-19   West     web  Blender      1       89.00      0.05   
+61     10062  2026-09-20  North   phone   Kettle      1       39.99       NaN   
+65     10066  2026-09-21   West   phone  Grinder      3      129.95      0.10   
+69     10070  2026-09-22  North     web  Toaster      4       54.50      0.15   
+80     10081  2026-09-26  South   store  Blender      7       89.00      0.10   
+85     10086  2026-09-27   East   phone    Scale      1       24.00      0.10   
+87     10088  2026-09-28  South     web  Blender      7       89.00      0.15   
+89     10090  2026-09-28  South   store    Scale      5       24.00       NaN   
+91     10092  2026-09-29   East   phone  Toaster      2       54.50       NaN   
+92     10093  2026-09-29   East   phone  Mug set      8       18.25      0.05   
+
+    revenue  gift                                               note  
+0    258.88  True                                                NaN  
+8    119.97  True                                                NaN  
+10   356.00  True                                                NaN  
+12   343.35  True                                                NaN  
+19    81.60  True                              call before\ndelivery  
+21   389.85  True                                                NaN  
+22   267.00  True                                                NaN  
+23    35.99  True                                                NaN  
+31    91.25  True                              call before\ndelivery  
+35   362.43  True                                                NaN  
+38   179.96  True                                                NaN  
+48    37.99  True                             leave at the back door  
+58   122.40  True                                                NaN  
+59    84.55  True                                    repeat customer  
+61    39.99  True  customer asked for the invoice to be sent to t...  
+65   350.86  True                                    repeat customer  
+69   185.30  True                                                NaN  
+80   560.70  True                                    repeat customer  
+85    21.60  True                                                NaN  
+87   529.55  True                                                NaN  
+89   120.00  True                                                NaN  
+91   109.00  True                                                NaN  
+92   138.70  True                                    repeat customer  
+$ read orders.csv | query gift == True and region != 'North'
+    order_id        date region channel  product  units  unit_price  discount  \
+0      10001  2026-09-01   West   store  Toaster      5       54.50      0.05   
+8      10009  2026-09-03   East   phone   Kettle      3       39.99      0.00   
+10     10011  2026-09-04   West     web  Blender      4       89.00      0.00   
+12     10013  2026-09-04   West   phone  Toaster      7       54.50      0.10   
+19     10020  2026-09-06  South   store    Scale      4       24.00      0.15   
+21     10022  2026-09-07  South     web  Grinder      3      129.95       NaN   
+22     10023  2026-09-07   East   store  Blender      3       89.00      0.00   
+23     10024  2026-09-08  South   phone   Kettle      1       39.99      0.10   
+31     10032  2026-09-10  South     web  Mug set      5       18.25      0.00   
+35     10036  2026-09-11   East     web  Toaster      7       54.50      0.05   
+48     10049  2026-09-16   East     web   Kettle      1       39.99      0.05   
+58     10059  2026-09-19  South   phone    Scale      6       24.00      0.15   
+59     10060  2026-09-19   West     web  Blender      1       89.00      0.05   
+65     10066  2026-09-21   West   phone  Grinder      3      129.95      0.10   
+80     10081  2026-09-26  South   store  Blender      7       89.00      0.10   
+85     10086  2026-09-27   East   phone    Scale      1       24.00      0.10   
+87     10088  2026-09-28  South     web  Blender      7       89.00      0.15   
+89     10090  2026-09-28  South   store    Scale      5       24.00       NaN   
+91     10092  2026-09-29   East   phone  Toaster      2       54.50       NaN   
+92     10093  2026-09-29   East   phone  Mug set      8       18.25      0.05   
+
+    revenue  gift                    note  
+0    258.88  True                     NaN  
+8    119.97  True                     NaN  
+10   356.00  True                     NaN  
+12   343.35  True                     NaN  
+19    81.60  True   call before\ndelivery  
+21   389.85  True                     NaN  
+22   267.00  True                     NaN  
+23    35.99  True                     NaN  
+31    91.25  True   call before\ndelivery  
+35   362.43  True                     NaN  
+48    37.99  True  leave at the back door  
+58   122.40  True                     NaN  
+59    84.55  True         repeat customer  
+65   350.86  True         repeat customer  
+80   560.70  True         repeat customer  
+85    21.60  True                     NaN  
+87   529.55  True                     NaN  
+89   120.00  True                     NaN  
+91   109.00  True                     NaN  
+92   138.70  True         repeat customer  
+$ read orders.csv | query 3 < units <= 4 | head 6
+    order_id        date region channel  product  units  unit_price  discount  \
+10     10011  2026-09-04   West     web  Blender      4       89.00      0.00   
+19     10020  2026-09-06  South   store    Scale      4       24.00      0.15   
+26     10027  2026-09-09   West     web  Blender      4       89.00       NaN   
+30     10031  2026-09-10   West   store  Toaster      4       54.50      0.05   
+43     10044  2026-09-14   West     web   Kettle      4       39.99      0.10   
+45     10046  2026-09-15  North   store   Kettle      4       39.99      0.05   
+
+    revenue   gift                    note  
+10   356.00   True                     NaN  
+19    81.60   True   call before\ndelivery  
+26   356.00  False         repeat customer  
+30   207.10  False                     NaN  
+43   143.96  False  leave at the back door  
+45   151.96  False         repeat customer  
+$ read orders.csv | query 3 < units <= 4 < unit_price | head 6
+    order_id        date region channel  product  units  unit_price  discount  \
+10     10011  2026-09-04   West     web  Blender      4       89.00      0.00   
+19     10020  2026-09-06  South   store    Scale      4       24.00      0.15   
+26     10027  2026-09-09   West     web  Blender      4       89.00       NaN   
+30     10031  2026-09-10   West   store  Toaster      4       54.50      0.05   
+43     10044  2026-09-14   West     web   Kettle      4       39.99      0.10   
+45     10046  2026-09-15  North   store   Kettle      4       39.99      0.05   
+
+    revenue   gift                    note  
+10   356.00   True                     NaN  
+19    81.60   True   call before\ndelivery  
+26   356.00  False         repeat customer  
+30   207.10  False                     NaN  
+43   143.96  False  leave at the back door  
+45   151.96  False         repeat customer  
+$ read orders.csv | query units > 7 > 3 | head 3
+    order_id        date region channel  product  units  unit_price  discount  \
+2      10003  2026-09-01   West     web    Scale      9       24.00       0.1   
+9      10010  2026-09-03  South   phone  Grinder      9      129.95       NaN   
+15     10016  2026-09-05  South   store  Blender      9       89.00       0.1   
+
+    revenue   gift                  note  
+2    194.40  False                   NaN  
+9   1169.55  False                   NaN  
+15   720.90  False  gift wrap\tred paper  
+$ read orders.csv | query unit_price > 100 and units >= 5
+    order_id        date region channel  product  units  unit_price  discount  \
+6      10007  2026-09-02   East     web  Grinder      7      129.95       NaN   
+9      10010  2026-09-03  South   phone  Grinder      9      129.95       NaN   
+42     10043  2026-09-14   East     web  Grinder      9      129.95      0.15   
+46     10047  2026-09-15  North     web  Grinder      5      129.95      0.10   
+49     10050  2026-09-16  North     web  Grinder      7      129.95      0.10   
+71     10072  2026-09-23   East   phone  Grinder      6      129.95      0.05   
+82     10083  2026-09-26  North   store  Grinder      8      129.95      0.15   
+
+    revenue   gift                    note  
+6    909.65  False  leave at the back door  
+9   1169.55  False                     NaN  
+42   994.12  False                     NaN  
+46   584.77  False                     NaN  
+49   818.68  False    gift wrap\tred paper  
+71   740.71  False                     NaN  
+82   883.66  False                     NaN  
+$ read orders.csv | query revenue < 30
+    order_id        date region channel  product  units  unit_price  discount  \
+40     10041  2026-09-13  North   store  Mug set      1       18.25      0.00   
+72     10073  2026-09-23  South   store    Scale      1       24.00      0.05   
+85     10086  2026-09-27   East   phone    Scale      1       24.00      0.10   
+
+    revenue   gift                  note  
+40    18.25  False                   NaN  
+72    22.80  False  gift wrap\tred paper  
+85    21.60   True                   NaN  
+$ read orders.csv | query revenue != revenue
+Empty DataFrame
+Columns: [order_id, date, region, channel, product, units, unit_price, discount, revenue, gift, note]
+Index: []
+$ read orders.csv | query discount > 0.1
+    order_id        date region channel  product  units  unit_price  discount  \
+19     10020  2026-09-06  South   store    Scale      4       24.00      0.15   
+33     10034  2026-09-11   East   phone  Toaster      1       54.50      0.15   
+39     10040  2026-09-13   West     web  Blender      1       89.00      0.15   
+42     10043  2026-09-14   East     web  Grinder      9      129.95      0.15   
+53     10054  2026-09-17  South   store    Scale      7       24.00      0.15   
+58     10059  2026-09-19  South   phone    Scale      6       24.00      0.15   
+66     10067  2026-09-21   East   store  Grinder      4      129.95      0.15   
+69     10070  2026-09-22  North     web  Toaster      4       54.50      0.15   
+70     10071  2026-09-22   East     web  Blender      2       89.00      0.15   
+79     10080  2026-09-25  South     web  Toaster      3       54.50      0.15   
+82     10083  2026-09-26  North   store  Grinder      8      129.95      0.15   
+83     10084  2026-09-26  South   phone   Kettle      1       39.99      0.15   
+87     10088  2026-09-28  South     web  Blender      7       89.00      0.15   
+93     10094  2026-09-30   East   phone  Grinder      3      129.95      0.15   
+
+    revenue   gift                                               note  
+19    81.60   True                              call before\ndelivery  
+33    46.32  False                                                NaN  
+39    75.65  False                             leave at the back door  
+42   994.12  False                                                NaN  
+53   142.80  False                                                NaN  
+58   122.40   True                                                NaN  
+66   441.83  False                                                NaN  
+69   185.30   True                                                NaN  
+70   151.30  False                                                NaN  
+79   138.97  False                             leave at the back door  
+82   883.66  False                                                NaN  
+83    33.99  False                                                NaN  
+87   529.55   True                                                NaN  
+93   331.37  False  customer asked for the invoice to be sent to t...  
+$ read orders.csv | query discount != 0.1 | head 6
+   order_id        date region channel  product  units  unit_price  discount  \
+0     10001  2026-09-01   West   store  Toaster      5       54.50      0.05   
+1     10002  2026-09-01  North   store   Kettle      6       39.99       NaN   
+5     10006  2026-09-02  North   store   Kettle      7       39.99      0.05   
+6     10007  2026-09-02   East     web  Grinder      7      129.95       NaN   
+7     10008  2026-09-03  North     web  Blender      3       89.00       NaN   
+8     10009  2026-09-03   East   phone   Kettle      3       39.99      0.00   
+
+   revenue   gift                    note  
+0   258.88   True                     NaN  
+1   239.94  False  leave at the back door  
+5   265.93  False                     NaN  
+6   909.65  False  leave at the back door  
+7   267.00  False    gift wrap\tred paper  
+8   119.97   True                     NaN  
+$ read orders.csv | query discount == discount and discount < 0.05 | head 6
+    order_id        date region channel  product  units  unit_price  discount  \
+8      10009  2026-09-03   East   phone   Kettle      3       39.99       0.0   
+10     10011  2026-09-04   West     web  Blender      4       89.00       0.0   
+13     10014  2026-09-05  South     web   Kettle      7       39.99       0.0   
+14     10015  2026-09-05  South     web  Blender      3       89.00       0.0   
+17     10018  2026-09-06  South     web  Toaster      2       54.50       0.0   
+20     10021  2026-09-07   East     web  Toaster      8       54.50       0.0   
+
+    revenue   gift                   note  
+8    119.97   True                    NaN  
+10   356.00   True                    NaN  
+13   279.93  False                    NaN  
+14   267.00  False                    NaN  
+17   109.00  False  call before\ndelivery  
+20   436.00  False        repeat customer  
+$ read orders.csv | query 2 * units > revenue / 20 | head 5
+    order_id        date region channel product  units  unit_price  discount  \
+1      10002  2026-09-01  North   store  Kettle      6       39.99       NaN   
+2      10003  2026-09-01   West     web   Scale      9       24.00      0.10   
+5      10006  2026-09-02  North   store  Kettle      7       39.99      0.05   
+8      10009  2026-09-03   East   phone  Kettle      3       39.99      0.00   
+13     10014  2026-09-05  South     web  Kettle      7       39.99      0.00   
+
+    revenue   gift                    note  
+1    239.94  False  leave at the back door  
+2    194.40  False                     NaN  
+5    265.93  False                     NaN  
+8    119.97   True                     NaN  
+13   279.93  False                     NaN  
+$ read orders.csv | query -units < -8
+    order_id        date region channel  product  units  unit_price  discount  \
+2      10003  2026-09-01   West     web    Scale      9       24.00      0.10   
+9      10010  2026-09-03  South   phone  Grinder      9      129.95       NaN   
+15     10016  2026-09-05  South   store  Blender      9       89.00      0.10   
+18     10019  2026-09-06  South   phone  Toaster      9       54.50       NaN   
+42     10043  2026-09-14   East     web  Grinder      9      129.95      0.15   
+84     10085  2026-09-27  North     web  Blender      9       89.00      0.10   
+95     10096  2026-09-30  South   store    Scale      9       24.00      0.10   
+
+    revenue   gift                   note  
+2    194.40  False                    NaN  
+9   1169.55  False                    NaN  
+15   720.90  False   gift wrap\tred paper  
+18   490.50  False                    NaN  
+42   994.12  False                    NaN  
+84   720.90  False        repeat customer  
+95   194.40  False  call before\ndelivery  
+$ read orders.csv | query units * unit_price > 1000
+    order_id        date region channel  product  units  unit_price  discount  \
+9      10010  2026-09-03  South   phone  Grinder      9      129.95       NaN   
+42     10043  2026-09-14   East     web  Grinder      9      129.95      0.15   
+82     10083  2026-09-26  North   store  Grinder      8      129.95      0.15   
+
+    revenue   gift note  
+9   1169.55  False  NaN  
+42   994.12  False  NaN  
+82   883.66  False  NaN  
+$ read orders.csv | query units // 3 == 2 and units % 2 == 1 | head 5
+    order_id        date region channel  product  units  unit_price  discount  \
+5      10006  2026-09-02  North   store   Kettle      7       39.99      0.05   
+6      10007  2026-09-02   East     web  Grinder      7      129.95       NaN   
+12     10013  2026-09-04   West   phone  Toaster      7       54.50      0.10   
+13     10014  2026-09-05  South     web   Kettle      7       39.99      0.00   
+16     10017  2026-09-06  South     web   Kettle      7       39.99      0.10   
+
+    revenue   gift                    note  
+5    265.93  False                     NaN  
+6    909.65  False  leave at the back door  
+12   343.35   True                     NaN  
+13   279.93  False                     NaN  
+16   251.94  False  leave at the back door  
+$ read orders.csv | query units ** 2 > 70 | head 4
+    order_id        date region channel  product  units  unit_price  discount  \
+2      10003  2026-09-01   West     web    Scale      9       24.00       0.1   
+9      10010  2026-09-03  South   phone  Grinder      9      129.95       NaN   
+15     10016  2026-09-05  South   store  Blender      9       89.00       0.1   
+18     10019  2026-09-06  South   phone  Toaster      9       54.50       NaN   
+
+    revenue   gift                  note  
+2    194.40  False                   NaN  
+9   1169.55  False                   NaN  
+15   720.90  False  gift wrap\tred paper  
+18   490.50  False                   NaN  
+$ read orders.csv | query order_id % 10 == 0
+    order_id        date region channel  product  units  unit_price  discount  \
+9      10010  2026-09-03  South   phone  Grinder      9      129.95       NaN   
+19     10020  2026-09-06  South   store    Scale      4       24.00      0.15   
+29     10030  2026-09-10   West     web  Blender      8       89.00      0.00   
+39     10040  2026-09-13   West     web  Blender      1       89.00      0.15   
+49     10050  2026-09-16  North     web  Grinder      7      129.95      0.10   
+59     10060  2026-09-19   West     web  Blender      1       89.00      0.05   
+69     10070  2026-09-22  North     web  Toaster      4       54.50      0.15   
+79     10080  2026-09-25  South     web  Toaster      3       54.50      0.15   
+89     10090  2026-09-28  South   store    Scale      5       24.00       NaN   
+
+    revenue   gift                    note  
+9   1169.55  False                     NaN  
+19    81.60   True   call before\ndelivery  
+29   712.00  False                     NaN  
+39    75.65  False  leave at the back door  
+49   818.68  False    gift wrap\tred paper  
+59    84.55   True         repeat customer  
+69   185.30   True                     NaN  
+79   138.97  False  leave at the back door  
+89   120.00   True                     NaN  
+$ read orders.csv | query units > 100
+Empty DataFrame
+Columns: [order_id, date, region, channel, product, units, unit_price, discount, revenue, gift, note]
+Index: []
+$ read orders.csv | query region == 'West' | head 5
+    order_id        date region channel  product  units  unit_price  discount  \
+0      10001  2026-09-01   West   store  Toaster      5        54.5      0.05   
+2      10003  2026-09-01   West     web    Scale      9        24.0      0.10   
+4      10005  2026-09-02   West   phone  Toaster      1        54.5      0.10   
+10     10011  2026-09-04   West     web  Blender      4        89.0      0.00   
+12     10013  2026-09-04   West   phone  Toaster      7        54.5      0.10   
+
+    revenue   gift                  note  
+0    258.88   True                   NaN  
+2    194.40  False                   NaN  
+4     49.05  False  gift wrap\tred paper  
+10   356.00   True                   NaN  
+12   343.35   True                   NaN  
+$ read orders.csv | query region == "West" and product == "Scale"
+    order_id        date region channel product  units  unit_price  discount  \
+2      10003  2026-09-01   West     web   Scale      9        24.0       0.1   
+50     10051  2026-09-16   West     web   Scale      7        24.0       0.0   
+94     10095  2026-09-30   West     web   Scale      3        24.0       NaN   
+
+    revenue   gift                   note  
+2     194.4  False                    NaN  
+50    168.0  False                    NaN  
+94     72.0  False  call before\ndelivery  
+$ read orders.csv | query region != 'West' | head 5
+   order_id        date region channel  product  units  unit_price  discount  \
+1     10002  2026-09-01  North   store   Kettle      6       39.99       NaN   
+3     10004  2026-09-01  North   store  Grinder      2      129.95      0.10   
+5     10006  2026-09-02  North   store   Kettle      7       39.99      0.05   
+6     10007  2026-09-02   East     web  Grinder      7      129.95       NaN   
+7     10008  2026-09-03  North     web  Blender      3       89.00       NaN   
+
+   revenue   gift                    note  
+1   239.94  False  leave at the back door  
+3   233.91  False   call before\ndelivery  
+5   265.93  False                     NaN  
+6   909.65  False  leave at the back door  
+7   267.00  False    gift wrap\tred paper  
+$ read orders.csv | query region == ['West', 'East'] and units == 9
+    order_id        date region channel  product  units  unit_price  discount  \
+2      10003  2026-09-01   West     web    Scale      9       24.00      0.10   
+42     10043  2026-09-14   East     web  Grinder      9      129.95      0.15   
+
+    revenue   gift note  
+2    194.40  False  NaN  
+42   994.12  False  NaN  
+$ read orders.csv | query region != ['West', 'East'] and units == 9
+    order_id        date region channel  product  units  unit_price  discount  \
+9      10010  2026-09-03  South   phone  Grinder      9      129.95       NaN   
+15     10016  2026-09-05  South   store  Blender      9       89.00       0.1   
+18     10019  2026-09-06  South   phone  Toaster      9       54.50       NaN   
+84     10085  2026-09-27  North     web  Blender      9       89.00       0.1   
+95     10096  2026-09-30  South   store    Scale      9       24.00       0.1   
+
+    revenue   gift                   note  
+9   1169.55  False                    NaN  
+15   720.90  False   gift wrap\tred paper  
+18   490.50  False                    NaN  
+84   720.90  False        repeat customer  
+95   194.40  False  call before\ndelivery  
+$ read orders.csv | query region in ['North', 'South'] and units == 9
+    order_id        date region channel  product  units  unit_price  discount  \
+9      10010  2026-09-03  South   phone  Grinder      9      129.95       NaN   
+15     10016  2026-09-05  South   store  Blender      9       89.00       0.1   
+18     10019  2026-09-06  South   phone  Toaster      9       54.50       NaN   
+84     10085  2026-09-27  North     web  Blender      9       89.00       0.1   
+95     10096  2026-09-30  South   store    Scale      9       24.00       0.1   
+
+    revenue   gift                   note  
+9   1169.55  False                    NaN  
+15   720.90  False   gift wrap\tred paper  
+18   490.50  False                    NaN  
+84   720.90  False        repeat customer  
+95   194.40  False  call before\ndelivery  
+$ read orders.csv | query region not in ('North', 'South') and units > 8
+    order_id        date region channel  product  units  unit_price  discount  \
+2      10003  2026-09-01   West     web    Scale      9       24.00      0.10   
+42     10043  2026-09-14   East     web  Grinder      9      129.95      0.15   
+
+    revenue   gift note  
+2    194.40  False  NaN  
+42   994.12  False  NaN  
+$ read orders.csv | query ['North', 'South'] in region and units == 9
+    order_id        date region channel  product  units  unit_price  discount  \
+9      10010  2026-09-03  South   phone  Grinder      9      129.95       NaN   
+15     10016  2026-09-05  South   store  Blender      9       89.00       0.1   
+18     10019  2026-09-06  South   phone  Toaster      9       54.50       NaN   
+84     10085  2026-09-27  North     web  Blender      9       89.00       0.1   
+95     10096  2026-09-30  South   store    Scale      9       24.00       0.1   
+
+    revenue   gift                   note  
+9   1169.55  False                    NaN  
+15   720.90  False   gift wrap\tred paper  
+18   490.50  False                    NaN  
+84   720.90  False        repeat customer  
+95   194.40  False  call before\ndelivery  
+$ read orders.csv | query units in [1, 9] and channel == 'phone'
+    order_id        date region channel  product  units  unit_price  discount  \
+4      10005  2026-09-02   West   phone  Toaster      1       54.50      0.10   
+9      10010  2026-09-03  South   phone  Grinder      9      129.95       NaN   
+18     10019  2026-09-06  South   phone  Toaster      9       54.50       NaN   
+23     10024  2026-09-08  South   phone   Kettle      1       39.99      0.10   
+33     10034  2026-09-11   East   phone  Toaster      1       54.50      0.15   
+61     10062  2026-09-20  North   phone   Kettle      1       39.99       NaN   
+83     10084  2026-09-26  South   phone   Kettle      1       39.99      0.15   
+85     10086  2026-09-27   East   phone    Scale      1       24.00      0.10   
+
+    revenue   gift                                               note  
+4     49.05  False                               gift wrap\tred paper  
+9   1169.55  False                                                NaN  
+18   490.50  False                                                NaN  
+23    35.99   True                                                NaN  
+33    46.32  False                                                NaN  
+61    39.99   True  customer asked for the invoice to be sent to t...  
+83    33.99  False                                                NaN  
+85    21.60   True                                                NaN  
+$ read orders.csv | query units == [1, 9] and channel == 'phone'
+    order_id        date region channel  product  units  unit_price  discount  \
+4      10005  2026-09-02   West   phone  Toaster      1       54.50      0.10   
+9      10010  2026-09-03  South   phone  Grinder      9      129.95       NaN   
+18     10019  2026-09-06  South   phone  Toaster      9       54.50       NaN   
+23     10024  2026-09-08  South   phone   Kettle      1       39.99      0.10   
+33     10034  2026-09-11   East   phone  Toaster      1       54.50      0.15   
+61     10062  2026-09-20  North   phone   Kettle      1       39.99       NaN   
+83     10084  2026-09-26  South   phone   Kettle      1       39.99      0.15   
+85     10086  2026-09-27   East   phone    Scale      1       24.00      0.10   
+
+    revenue   gift                                               note  
+4     49.05  False                               gift wrap\tred paper  
+9   1169.55  False                                                NaN  
+18   490.50  False                                                NaN  
+23    35.99   True                                                NaN  
+33    46.32  False                                                NaN  
+61    39.99   True  customer asked for the invoice to be sent to t...  
+83    33.99  False                                                NaN  
+85    21.60   True                                                NaN  
+$ read orders.csv | query 'web' == channel and units > 8
+    order_id        date region channel  product  units  unit_price  discount  \
+2      10003  2026-09-01   West     web    Scale      9       24.00      0.10   
+42     10043  2026-09-14   East     web  Grinder      9      129.95      0.15   
+84     10085  2026-09-27  North     web  Blender      9       89.00      0.10   
+
+    revenue   gift             note  
+2    194.40  False              NaN  
+42   994.12  False              NaN  
+84   720.90  False  repeat customer  
+$ read orders.csv | query product > 'S' | head 5
+    order_id        date region channel  product  units  unit_price  discount  \
+0      10001  2026-09-01   West   store  Toaster      5        54.5      0.05   
+2      10003  2026-09-01   West     web    Scale      9        24.0      0.10   
+4      10005  2026-09-02   West   phone  Toaster      1        54.5      0.10   
+12     10013  2026-09-04   West   phone  Toaster      7        54.5      0.10   
+17     10018  2026-09-06  South     web  Toaster      2        54.5      0.00   
+
+    revenue   gift                   note  
+0    258.88   True                    NaN  
+2    194.40  False                    NaN  
+4     49.05  False   gift wrap\tred paper  
+12   343.35   True                    NaN  
+17   109.00  False  call before\ndelivery  
+$ read orders.csv | query product <= 'Blender' | head 5
+    order_id        date region channel  product  units  unit_price  discount  \
+7      10008  2026-09-03  North     web  Blender      3        89.0       NaN   
+10     10011  2026-09-04   West     web  Blender      4        89.0      0.00   
+11     10012  2026-09-04  North   phone  Blender      3        89.0      0.05   
+14     10015  2026-09-05  South     web  Blender      3        89.0      0.00   
+15     10016  2026-09-05  South   store  Blender      9        89.0      0.10   
+
+    revenue   gift                  note  
+7    267.00  False  gift wrap\tred paper  
+10   356.00   True                   NaN  
+11   253.65  False                   NaN  
+14   267.00  False                   NaN  
+15   720.90  False  gift wrap\tred paper  
+$ read orders.csv | query note == 'repeat customer'
+    order_id        date region channel  product  units  unit_price  discount  \
+20     10021  2026-09-07   East     web  Toaster      8       54.50      0.00   
+26     10027  2026-09-09   West     web  Blender      4       89.00       NaN   
+44     10045  2026-09-14   East   store  Mug set      2       18.25      0.10   
+45     10046  2026-09-15  North   store   Kettle      4       39.99      0.05   
+59     10060  2026-09-19   West     web  Blender      1       89.00      0.05   
+60     10061  2026-09-19   West   store  Blender      1       89.00      0.00   
+65     10066  2026-09-21   West   phone  Grinder      3      129.95      0.10   
+67     10068  2026-09-21  South   store  Toaster      3       54.50       NaN   
+80     10081  2026-09-26  South   store  Blender      7       89.00      0.10   
+81     10082  2026-09-26   West   phone   Kettle      2       39.99      0.10   
+84     10085  2026-09-27  North     web  Blender      9       89.00      0.10   
+92     10093  2026-09-29   East   phone  Mug set      8       18.25      0.05   
+
+    revenue   gift             note  
+20   436.00  False  repeat customer  
+26   356.00  False  repeat customer  
+44    32.85  False  repeat customer  
+45   151.96  False  repeat customer  
+59    84.55   True  repeat customer  
+60    89.00  False  repeat customer  
+65   350.86   True  repeat customer  
+67   163.50  False  repeat customer  
+80   560.70   True  repeat customer  
+81    71.98  False  repeat customer  
+84   720.90  False  repeat customer  
+92   138.70   True  repeat customer  
+$ read orders.csv | query note != 'repeat customer' and units == 9
+    order_id        date region channel  product  units  unit_price  discount  \
+2      10003  2026-09-01   West     web    Scale      9       24.00      0.10   
+9      10010  2026-09-03  South   phone  Grinder      9      129.95       NaN   
+15     10016  2026-09-05  South   store  Blender      9       89.00      0.10   
+18     10019  2026-09-06  South   phone  Toaster      9       54.50       NaN   
+42     10043  2026-09-14   East     web  Grinder      9      129.95      0.15   
+95     10096  2026-09-30  South   store    Scale      9       24.00      0.10   
+
+    revenue   gift                   note  
+2    194.40  False                    NaN  
+9   1169.55  False                    NaN  
+15   720.90  False   gift wrap\tred paper  
+18   490.50  False                    NaN  
+42   994.12  False                    NaN  
+95   194.40  False  call before\ndelivery  
+$ read orders.csv | query note in ['repeat customer', 'leave at the back door'] and units > 6
+    order_id        date region channel  product  units  unit_price  discount  \
+6      10007  2026-09-02   East     web  Grinder      7      129.95       NaN   
+16     10017  2026-09-06  South     web   Kettle      7       39.99      0.10   
+20     10021  2026-09-07   East     web  Toaster      8       54.50      0.00   
+80     10081  2026-09-26  South   store  Blender      7       89.00      0.10   
+84     10085  2026-09-27  North     web  Blender      9       89.00      0.10   
+92     10093  2026-09-29   East   phone  Mug set      8       18.25      0.05   
+
+    revenue   gift                    note  
+6    909.65  False  leave at the back door  
+16   251.94  False  leave at the back door  
+20   436.00  False         repeat customer  
+80   560.70   True         repeat customer  
+84   720.90  False         repeat customer  
+92   138.70   True         repeat customer  
+$ read orders.csv | query date == '2026-09-30'
+    order_id        date region channel  product  units  unit_price  discount  \
+93     10094  2026-09-30   East   phone  Grinder      3      129.95      0.15   
+94     10095  2026-09-30   West     web    Scale      3       24.00       NaN   
+95     10096  2026-09-30  South   store    Scale      9       24.00      0.10   
+
+    revenue   gift                                               note  
+93   331.37  False  customer asked for the invoice to be sent to t...  
+94    72.00  False                              call before\ndelivery  
+95   194.40  False                              call before\ndelivery  
+$ read orders.csv | query date > '2026-09-27' and region == 'East'
+    order_id        date region channel  product  units  unit_price  discount  \
+91     10092  2026-09-29   East   phone  Toaster      2       54.50       NaN   
+92     10093  2026-09-29   East   phone  Mug set      8       18.25      0.05   
+93     10094  2026-09-30   East   phone  Grinder      3      129.95      0.15   
+
+    revenue   gift                                               note  
+91   109.00   True                                                NaN  
+92   138.70   True                                    repeat customer  
+93   331.37  False  customer asked for the invoice to be sent to t...  
+$ read orders.csv | query units > units.mean() and revenue > revenue.median() | head 6
+   order_id        date region channel  product  units  unit_price  discount  \
+0     10001  2026-09-01   West   store  Toaster      5       54.50      0.05   
+1     10002  2026-09-01  North   store   Kettle      6       39.99       NaN   
+2     10003  2026-09-01   West     web    Scale      9       24.00      0.10   
+5     10006  2026-09-02  North   store   Kettle      7       39.99      0.05   
+6     10007  2026-09-02   East     web  Grinder      7      129.95       NaN   
+9     10010  2026-09-03  South   phone  Grinder      9      129.95       NaN   
+
+   revenue   gift                    note  
+0   258.88   True                     NaN  
+1   239.94  False  leave at the back door  
+2   194.40  False                     NaN  
+5   265.93  False                     NaN  
+6   909.65  False  leave at the back door  
+9  1169.55  False                     NaN  
+$ read orders.csv | query revenue == revenue.max()
+   order_id        date region channel  product  units  unit_price  discount  \
+9     10010  2026-09-03  South   phone  Grinder      9      129.95       NaN   
+
+   revenue   gift note  
+9  1169.55  False  NaN  
+$ read orders.csv | query revenue == revenue.min() or units == units.max() | head 4
+    order_id        date region channel  product  units  unit_price  discount  \
+2      10003  2026-09-01   West     web    Scale      9       24.00       0.1   
+9      10010  2026-09-03  South   phone  Grinder      9      129.95       NaN   
+15     10016  2026-09-05  South   store  Blender      9       89.00       0.1   
+18     10019  2026-09-06  South   phone  Toaster      9       54.50       NaN   
+
+    revenue   gift                  note  
+2    194.40  False                   NaN  
+9   1169.55  False                   NaN  
+15   720.90  False  gift wrap\tred paper  
+18   490.50  False                   NaN  
+$ read orders.csv | query discount.isna() | head 6
+    order_id        date region channel  product  units  unit_price  discount  \
+1      10002  2026-09-01  North   store   Kettle      6       39.99       NaN   
+6      10007  2026-09-02   East     web  Grinder      7      129.95       NaN   
+7      10008  2026-09-03  North     web  Blender      3       89.00       NaN   
+9      10010  2026-09-03  South   phone  Grinder      9      129.95       NaN   
+18     10019  2026-09-06  South   phone  Toaster      9       54.50       NaN   
+21     10022  2026-09-07  South     web  Grinder      3      129.95       NaN   
+
+    revenue   gift                    note  
+1    239.94  False  leave at the back door  
+6    909.65  False  leave at the back door  
+7    267.00  False    gift wrap\tred paper  
+9   1169.55  False                     NaN  
+18   490.50  False                     NaN  
+21   389.85   True                     NaN  
+$ read orders.csv | query discount.notna() and discount >= 0.15 | head 6
+    order_id        date region channel  product  units  unit_price  discount  \
+19     10020  2026-09-06  South   store    Scale      4       24.00      0.15   
+33     10034  2026-09-11   East   phone  Toaster      1       54.50      0.15   
+39     10040  2026-09-13   West     web  Blender      1       89.00      0.15   
+42     10043  2026-09-14   East     web  Grinder      9      129.95      0.15   
+53     10054  2026-09-17  South   store    Scale      7       24.00      0.15   
+58     10059  2026-09-19  South   phone    Scale      6       24.00      0.15   
+
+    revenue   gift                    note  
+19    81.60   True   call before\ndelivery  
+33    46.32  False                     NaN  
+39    75.65  False  leave at the back door  
+42   994.12  False                     NaN  
+53   142.80  False                     NaN  
+58   122.40   True                     NaN  
+$ read orders.csv | query discount.fillna(0) == 0 and units > 7
+    order_id        date region channel  product  units  unit_price  discount  \
+9      10010  2026-09-03  South   phone  Grinder      9      129.95       NaN   
+18     10019  2026-09-06  South   phone  Toaster      9       54.50       NaN   
+20     10021  2026-09-07   East     web  Toaster      8       54.50       0.0   
+29     10030  2026-09-10   West     web  Blender      8       89.00       0.0   
+57     10058  2026-09-18  North   phone   Kettle      8       39.99       NaN   
+76     10077  2026-09-24  North   store  Mug set      8       18.25       NaN   
+
+    revenue   gift                  note  
+9   1169.55  False                   NaN  
+18   490.50  False                   NaN  
+20   436.00  False       repeat customer  
+29   712.00  False                   NaN  
+57   319.92  False  gift wrap\tred paper  
+76   146.00  False                   NaN  
+$ read orders.csv | query units.between(4, 5) and channel == 'store' | head 6
+    order_id        date region channel  product  units  unit_price  discount  \
+0      10001  2026-09-01   West   store  Toaster      5       54.50      0.05   
+19     10020  2026-09-06  South   store    Scale      4       24.00      0.15   
+30     10031  2026-09-10   West   store  Toaster      4       54.50      0.05   
+45     10046  2026-09-15  North   store   Kettle      4       39.99      0.05   
+52     10053  2026-09-17  North   store  Blender      4       89.00      0.00   
+66     10067  2026-09-21   East   store  Grinder      4      129.95      0.15   
+
+    revenue   gift                   note  
+0    258.88   True                    NaN  
+19    81.60   True  call before\ndelivery  
+30   207.10  False                    NaN  
+45   151.96  False        repeat customer  
+52   356.00  False  call before\ndelivery  
+66   441.83  False                    NaN  
+$ read orders.csv | query units.isin([2, 3]) and product == 'Grinder'
+    order_id        date region channel  product  units  unit_price  discount  \
+3      10004  2026-09-01  North   store  Grinder      2      129.95      0.10   
+21     10022  2026-09-07  South     web  Grinder      3      129.95       NaN   
+37     10038  2026-09-12  North     web  Grinder      3      129.95      0.00   
+41     10042  2026-09-13   West   store  Grinder      3      129.95      0.00   
+55     10056  2026-09-18   West   phone  Grinder      2      129.95      0.00   
+65     10066  2026-09-21   West   phone  Grinder      3      129.95      0.10   
+86     10087  2026-09-27   East   store  Grinder      2      129.95       NaN   
+93     10094  2026-09-30   East   phone  Grinder      3      129.95      0.15   
+
+    revenue   gift                                               note  
+3    233.91  False                              call before\ndelivery  
+21   389.85   True                                                NaN  
+37   389.85  False                               gift wrap\tred paper  
+41   389.85  False                                                NaN  
+55   259.90  False                                                NaN  
+65   350.86   True                                    repeat customer  
+86   259.90  False                                                NaN  
+93   331.37  False  customer asked for the invoice to be sent to t...  
+$ read orders.csv | query product.str.startswith('K') and units > 6
+    order_id        date region channel product  units  unit_price  discount  \
+5      10006  2026-09-02  North   store  Kettle      7       39.99      0.05   
+13     10014  2026-09-05  South     web  Kettle      7       39.99      0.00   
+16     10017  2026-09-06  South     web  Kettle      7       39.99      0.10   
+57     10058  2026-09-18  North   phone  Kettle      8       39.99       NaN   
+62     10063  2026-09-20  North   store  Kettle      7       39.99      0.05   
+
+    revenue   gift                    note  
+5    265.93  False                     NaN  
+13   279.93  False                     NaN  
+16   251.94  False  leave at the back door  
+57   319.92  False    gift wrap\tred paper  
+62   265.93  False                     NaN  
+$ read orders.csv | query product.str.endswith('er') and units == 9
+    order_id        date region channel  product  units  unit_price  discount  \
+9      10010  2026-09-03  South   phone  Grinder      9      129.95       NaN   
+15     10016  2026-09-05  South   store  Blender      9       89.00      0.10   
+18     10019  2026-09-06  South   phone  Toaster      9       54.50       NaN   
+42     10043  2026-09-14   East     web  Grinder      9      129.95      0.15   
+84     10085  2026-09-27  North     web  Blender      9       89.00      0.10   
+
+    revenue   gift                  note  
+9   1169.55  False                   NaN  
+15   720.90  False  gift wrap\tred paper  
+18   490.50  False                   NaN  
+42   994.12  False                   NaN  
+84   720.90  False       repeat customer  
+$ read orders.csv | query note.str.contains('call', regex=False)
+    order_id        date region channel  product  units  unit_price  discount  \
+3      10004  2026-09-01  North   store  Grinder      2      129.95      0.10   
+17     10018  2026-09-06  South     web  Toaster      2       54.50      0.00   
+19     10020  2026-09-06  South   store    Scale      4       24.00      0.15   
+28     10029  2026-09-09   East     web  Toaster      1       54.50       NaN   
+31     10032  2026-09-10  South     web  Mug set      5       18.25      0.00   
+51     10052  2026-09-16  North     web  Grinder      1      129.95      0.00   
+52     10053  2026-09-17  North   store  Blender      4       89.00      0.00   
+94     10095  2026-09-30   West     web    Scale      3       24.00       NaN   
+95     10096  2026-09-30  South   store    Scale      9       24.00      0.10   
+
+    revenue   gift                   note  
+3    233.91  False  call before\ndelivery  
+17   109.00  False  call before\ndelivery  
+19    81.60   True  call before\ndelivery  
+28    54.50  False  call before\ndelivery  
+31    91.25   True  call before\ndelivery  
+51   129.95  False  call before\ndelivery  
+52   356.00  False  call before\ndelivery  
+94    72.00  False  call before\ndelivery  
+95   194.40  False  call before\ndelivery  
+$ read orders.csv | query note.str.contains('back') | head 4
+    order_id        date region channel  product  units  unit_price  discount  \
+1      10002  2026-09-01  North   store   Kettle      6       39.99       NaN   
+6      10007  2026-09-02   East     web  Grinder      7      129.95       NaN   
+16     10017  2026-09-06  South     web   Kettle      7       39.99       0.1   
+32     10033  2026-09-11   West   phone   Kettle      5       39.99       0.0   
+
+    revenue   gift                    note  
+1    239.94  False  leave at the back door  
+6    909.65  False  leave at the back door  
+16   251.94  False  leave at the back door  
+32   199.95  False  leave at the back door  
+$ read orders.csv | query region.str.lower() == 'east' and units == 9
+    order_id        date region channel  product  units  unit_price  discount  \
+42     10043  2026-09-14   East     web  Grinder      9      129.95      0.15   
+
+    revenue   gift note  
+42   994.12  False  NaN  
+$ read orders.csv | query product.str.upper() == 'MUG SET' and units > 7
+    order_id        date region channel  product  units  unit_price  discount  \
+76     10077  2026-09-24  North   store  Mug set      8       18.25       NaN   
+78     10079  2026-09-25  North   store  Mug set      8       18.25      0.10   
+92     10093  2026-09-29   East   phone  Mug set      8       18.25      0.05   
+
+    revenue   gift             note  
+76    146.0  False              NaN  
+78    131.4  False              NaN  
+92    138.7   True  repeat customer  
+$ read orders.csv | query product.str.len() > 6 and units == 9
+    order_id        date region channel  product  units  unit_price  discount  \
+9      10010  2026-09-03  South   phone  Grinder      9      129.95       NaN   
+15     10016  2026-09-05  South   store  Blender      9       89.00      0.10   
+18     10019  2026-09-06  South   phone  Toaster      9       54.50       NaN   
+42     10043  2026-09-14   East     web  Grinder      9      129.95      0.15   
+84     10085  2026-09-27  North     web  Blender      9       89.00      0.10   
+
+    revenue   gift                  note  
+9   1169.55  False                   NaN  
+15   720.90  False  gift wrap\tred paper  
+18   490.50  False                   NaN  
+42   994.12  False                   NaN  
+84   720.90  False       repeat customer  
+$ read orders.csv | query note.str.len() > 30
+    order_id        date region channel  product  units  unit_price  discount  \
+27     10028  2026-09-09  North     web  Blender      5       89.00      0.10   
+61     10062  2026-09-20  North   phone   Kettle      1       39.99       NaN   
+88     10089  2026-09-28   West     web  Toaster      5       54.50      0.00   
+93     10094  2026-09-30   East   phone  Grinder      3      129.95      0.15   
+
+    revenue   gift                                               note  
+27   400.50  False  customer asked for the invoice to be sent to t...  
+61    39.99   True  customer asked for the invoice to be sent to t...  
+88   272.50  False  customer asked for the invoice to be sent to t...  
+93   331.37  False  customer asked for the invoice to be sent to t...  
+$ read orders.csv | query revenue.round(0) == 109
+    order_id        date region channel  product  units  unit_price  discount  \
+17     10018  2026-09-06  South     web  Toaster      2        54.5       0.0   
+91     10092  2026-09-29   East   phone  Toaster      2        54.5       NaN   
+
+    revenue   gift                   note  
+17    109.0  False  call before\ndelivery  
+91    109.0   True                    NaN  
+$ read orders.csv | query (revenue - units * unit_price).abs() > 40
+    order_id        date region channel  product  units  unit_price  discount  \
+15     10016  2026-09-05  South   store  Blender      9       89.00      0.10   
+27     10028  2026-09-09  North     web  Blender      5       89.00      0.10   
+42     10043  2026-09-14   East     web  Grinder      9      129.95      0.15   
+46     10047  2026-09-15  North     web  Grinder      5      129.95      0.10   
+49     10050  2026-09-16  North     web  Grinder      7      129.95      0.10   
+66     10067  2026-09-21   East   store  Grinder      4      129.95      0.15   
+80     10081  2026-09-26  South   store  Blender      7       89.00      0.10   
+82     10083  2026-09-26  North   store  Grinder      8      129.95      0.15   
+84     10085  2026-09-27  North     web  Blender      9       89.00      0.10   
+87     10088  2026-09-28  South     web  Blender      7       89.00      0.15   
+93     10094  2026-09-30   East   phone  Grinder      3      129.95      0.15   
+
+    revenue   gift                                               note  
+15   720.90  False                               gift wrap\tred paper  
+27   400.50  False  customer asked for the invoice to be sent to t...  
+42   994.12  False                                                NaN  
+46   584.77  False                                                NaN  
+49   818.68  False                               gift wrap\tred paper  
+66   441.83  False                                                NaN  
+80   560.70   True                                    repeat customer  
+82   883.66  False                                                NaN  
+84   720.90  False                                    repeat customer  
+87   529.55   True                                                NaN  
+93   331.37  False  customer asked for the invoice to be sent to t...  
+$ read orders.csv | query abs(revenue - units * unit_price) > 40
+    order_id        date region channel  product  units  unit_price  discount  \
+15     10016  2026-09-05  South   store  Blender      9       89.00      0.10   
+27     10028  2026-09-09  North     web  Blender      5       89.00      0.10   
+42     10043  2026-09-14   East     web  Grinder      9      129.95      0.15   
+46     10047  2026-09-15  North     web  Grinder      5      129.95      0.10   
+49     10050  2026-09-16  North     web  Grinder      7      129.95      0.10   
+66     10067  2026-09-21   East   store  Grinder      4      129.95      0.15   
+80     10081  2026-09-26  South   store  Blender      7       89.00      0.10   
+82     10083  2026-09-26  North   store  Grinder      8      129.95      0.15   
+84     10085  2026-09-27  North     web  Blender      9       89.00      0.10   
+87     10088  2026-09-28  South     web  Blender      7       89.00      0.15   
+93     10094  2026-09-30   East   phone  Grinder      3      129.95      0.15   
+
+    revenue   gift                                               note  
+15   720.90  False                               gift wrap\tred paper  
+27   400.50  False  customer asked for the invoice to be sent to t...  
+42   994.12  False                                                NaN  
+46   584.77  False                                                NaN  
+49   818.68  False                               gift wrap\tred paper  
+66   441.83  False                                                NaN  
+80   560.70   True                                    repeat customer  
+82   883.66  False                                                NaN  
+84   720.90  False                                    repeat customer  
+87   529.55   True                                                NaN  
+93   331.37  False  customer asked for the invoice to be sent to t...  
+$ read orders.csv | let lo=3 hi=4 | query units >= @lo and units < @hi and region == 'North'
+    order_id        date region channel  product  units  unit_price  discount  \
+7      10008  2026-09-03  North     web  Blender      3       89.00       NaN   
+11     10012  2026-09-04  North   phone  Blender      3       89.00      0.05   
+37     10038  2026-09-12  North     web  Grinder      3      129.95      0.00   
+
+    revenue   gift                  note  
+7    267.00  False  gift wrap\tred paper  
+11   253.65  False                   NaN  
+37   389.85  False  gift wrap\tred paper  
+$ read orders.csv | let regs=['West','North'] | query region in @regs and units == 9
+    order_id        date region channel  product  units  unit_price  discount  \
+2      10003  2026-09-01   West     web    Scale      9        24.0       0.1   
+84     10085  2026-09-27  North     web  Blender      9        89.0       0.1   
+
+    revenue   gift             note  
+2     194.4  False              NaN  
+84    720.9  False  repeat customer  
+$ read orders.csv | let want='Kettle' | query product == @want and units > 6
+    order_id        date region channel product  units  unit_price  discount  \
+5      10006  2026-09-02  North   store  Kettle      7       39.99      0.05   
+13     10014  2026-09-05  South     web  Kettle      7       39.99      0.00   
+16     10017  2026-09-06  South     web  Kettle      7       39.99      0.10   
+57     10058  2026-09-18  North   phone  Kettle      8       39.99       NaN   
+62     10063  2026-09-20  North   store  Kettle      7       39.99      0.05   
+
+    revenue   gift                    note  
+5    265.93  False                     NaN  
+13   279.93  False                     NaN  
+16   251.94  False  leave at the back door  
+57   319.92  False    gift wrap\tred paper  
+62   265.93  False                     NaN  
+$ read orders.csv | let cap=1000.0 | query revenue > @cap * 0.9
+    order_id        date region channel  product  units  unit_price  discount  \
+6      10007  2026-09-02   East     web  Grinder      7      129.95       NaN   
+9      10010  2026-09-03  South   phone  Grinder      9      129.95       NaN   
+42     10043  2026-09-14   East     web  Grinder      9      129.95      0.15   
+
+    revenue   gift                    note  
+6    909.65  False  leave at the back door  
+9   1169.55  False                     NaN  
+42   994.12  False                     NaN  
+$ read orders.csv | let units=100 | query units > @units
+Empty DataFrame
+Columns: [order_id, date, region, channel, product, units, unit_price, discount, revenue, gift, note]
+Index: []
+$ read orders.csv | let units=8 | query units > @units and @units < 9 | head 4
+    order_id        date region channel  product  units  unit_price  discount  \
+2      10003  2026-09-01   West     web    Scale      9       24.00       0.1   
+9      10010  2026-09-03  South   phone  Grinder      9      129.95       NaN   
+15     10016  2026-09-05  South   store  Blender      9       89.00       0.1   
+18     10019  2026-09-06  South   phone  Toaster      9       54.50       NaN   
+
+    revenue   gift                  note  
+2    194.40  False                   NaN  
+9   1169.55  False                   NaN  
+15   720.90  False  gift wrap\tred paper  
+18   490.50  False                   NaN  
+$ read orders.csv | query units > @limit
+! UndefinedVariableError: local variable 'limit' is not defined
+$ read orders.csv | query units > limit
+! UndefinedVariableError: name 'limit' is not defined
+$ read orders.csv | let n=2 | query units ** @n == 81 and channel == 'web'
+    order_id        date region channel  product  units  unit_price  discount  \
+2      10003  2026-09-01   West     web    Scale      9       24.00      0.10   
+42     10043  2026-09-14   East     web  Grinder      9      129.95      0.15   
+84     10085  2026-09-27  North     web  Blender      9       89.00      0.10   
+
+    revenue   gift             note  
+2    194.40  False              NaN  
+42   994.12  False              NaN  
+84   720.90  False  repeat customer  
+$ read inventory.csv | query `on hand` < `reorder at`
+         sku      item name  on hand  reorder at  unit cost (€)  last count  \
+0   SKU-1000    hex bolt M6        2          10          18.74  2026-10-02   
+2   SKU-1014      washer M6        2          20           4.24  2026-10-05   
+5   SKU-1035    wall plug 6       -4           5           7.16  2026-10-16   
+8   SKU-1056      shelf pin       14          20          28.39  2026-10-10   
+14  SKU-1098     glue 250ml        0          10          35.84  2026-10-03   
+18  SKU-1126  drill bit 6mm       18          25          24.20  2026-10-16   
+19  SKU-1133        zip bag       20          25           9.99  2026-10-25   
+
+    active  bin  
+0     True   D6  
+2     True  NaN  
+5    False  D12  
+8     True   B5  
+14    True  NaN  
+18    True  NaN  
+19    True   D8  
+$ read inventory.csv | query `on hand` <= 0
+         sku    item name  on hand  reorder at  unit cost (€)  last count  \
+5   SKU-1035  wall plug 6       -4           5           7.16  2026-10-16   
+14  SKU-1098   glue 250ml        0          10          35.84  2026-10-03   
+
+    active  bin  
+5    False  D12  
+14    True  NaN  
+$ read inventory.csv | query `unit cost (€)` > 30
+         sku      item name  on hand  reorder at  unit cost (€)  last count  \
+4   SKU-1028  cable tie 200       44          25          31.51  2026-10-06   
+7   SKU-1049   drawer slide       30          10          31.56  2026-10-20   
+9   SKU-1063      door stop       22          20          34.80  2026-10-13   
+13  SKU-1091  utility knife       10          10          34.46  2026-10-05   
+14  SKU-1098     glue 250ml        0          10          35.84  2026-10-03   
+15  SKU-1105  sandpaper 120       26          25          36.08  2026-10-07   
+
+    active  bin  
+4     True   C4  
+7     True  B12  
+9     True  NaN  
+13    True   B9  
+14    True  NaN  
+15    True  NaN  
+$ read inventory.csv | query `unit cost (€)`.isna()
+         sku     item name  on hand  reorder at  unit cost (€)  last count  \
+6   SKU-1042    hinge 75mm       34          20            NaN  2026-10-02   
+10  SKU-1070  cabinet knob       41          25            NaN  2026-10-01   
+
+    active  bin  
+6     True   B9  
+10   False  NaN  
+$ read inventory.csv | query active and `on hand` < `reorder at` and bin.notna()
+         sku    item name  on hand  reorder at  unit cost (€)  last count  \
+0   SKU-1000  hex bolt M6        2          10          18.74  2026-10-02   
+8   SKU-1056    shelf pin       14          20          28.39  2026-10-10   
+19  SKU-1133      zip bag       20          25           9.99  2026-10-25   
+
+    active bin  
+0     True  D6  
+8     True  B5  
+19    True  D8  
+$ read inventory.csv | query `item name`.str.contains('bolt') or `item name`.str.startswith('wood')
+        sku        item name  on hand  reorder at  unit cost (€)  last count  \
+0  SKU-1000      hex bolt M6        2          10          18.74  2026-10-02   
+1  SKU-1007      hex bolt M8       52           5           8.17  2026-10-08   
+3  SKU-1021  wood screw 4x40       45          25           1.95  2026-10-27   
+
+   active  bin  
+0    True   D6  
+1   False   C6  
+3    True  NaN  
+$ read inventory.csv | query bin.str.startswith('A')
+Empty DataFrame
+Columns: [sku, item name, on hand, reorder at, unit cost (€), last count, active, bin]
+Index: []
+$ read inventory.csv | query `last count` < '2026-10-08'
+         sku      item name  on hand  reorder at  unit cost (€)  last count  \
+0   SKU-1000    hex bolt M6        2          10          18.74  2026-10-02   
+2   SKU-1014      washer M6        2          20           4.24  2026-10-05   
+4   SKU-1028  cable tie 200       44          25          31.51  2026-10-06   
+6   SKU-1042     hinge 75mm       34          20            NaN  2026-10-02   
+10  SKU-1070   cabinet knob       41          25            NaN  2026-10-01   
+13  SKU-1091  utility knife       10          10          34.46  2026-10-05   
+14  SKU-1098     glue 250ml        0          10          35.84  2026-10-03   
+15  SKU-1105  sandpaper 120       26          25          36.08  2026-10-07   
+
+    active  bin  
+0     True   D6  
+2     True  NaN  
+4     True   C4  
+6     True   B9  
+10   False  NaN  
+13    True   B9  
+14    True  NaN  
+15    True  NaN  
+$ read inventory.csv | eval value = `on hand` * `unit cost (€)` | select sku,value | head 8
+        sku    value
+0  SKU-1000    37.48
+1  SKU-1007   424.84
+2  SKU-1014     8.48
+3  SKU-1021    87.75
+4  SKU-1028  1386.44
+5  SKU-1035   -28.64
+6  SKU-1042      NaN
+7  SKU-1049   946.80
+$ read inventory.csv | eval `to order` = `reorder at` - `on hand` | query `to order` > 0 | head 3
+        sku    item name  on hand  reorder at  unit cost (€)  last count  \
+0  SKU-1000  hex bolt M6        2          10          18.74  2026-10-02   
+2  SKU-1014    washer M6        2          20           4.24  2026-10-05   
+5  SKU-1035  wall plug 6       -4           5           7.16  2026-10-16   
+
+   active  bin  BACKTICK_QUOTED_STRING_to_order  
+0    True   D6                                8  
+2    True  NaN                               18  
+5   False  D12                                9  
+$ read orders.csv | query index < 3
+   order_id        date region channel  product  units  unit_price  discount  \
+0     10001  2026-09-01   West   store  Toaster      5       54.50      0.05   
+1     10002  2026-09-01  North   store   Kettle      6       39.99       NaN   
+2     10003  2026-09-01   West     web    Scale      9       24.00      0.10   
+
+   revenue   gift                    note  
+0   258.88   True                     NaN  
+1   239.94  False  leave at the back door  
+2   194.40  False                     NaN  
+$ read orders.csv | query index % 24 == 0
+    order_id        date region channel  product  units  unit_price  discount  \
+0      10001  2026-09-01   West   store  Toaster      5       54.50      0.05   
+24     10025  2026-09-08  North   phone  Toaster      2       54.50      0.10   
+48     10049  2026-09-16   East     web   Kettle      1       39.99      0.05   
+72     10073  2026-09-23  South   store    Scale      1       24.00      0.05   
+
+    revenue   gift                    note  
+0    258.88   True                     NaN  
+24    98.10  False                     NaN  
+48    37.99   True  leave at the back door  
+72    22.80  False    gift wrap\tred paper  
+$ read orders.csv | query index >= 90 and units < 5
+    order_id        date region channel  product  units  unit_price  discount  \
+91     10092  2026-09-29   East   phone  Toaster      2       54.50       NaN   
+93     10094  2026-09-30   East   phone  Grinder      3      129.95      0.15   
+94     10095  2026-09-30   West     web    Scale      3       24.00       NaN   
+
+    revenue   gift                                               note  
+91   109.00   True                                                NaN  
+93   331.37  False  customer asked for the invoice to be sent to t...  
+94    72.00  False                              call before\ndelivery  
+$ read orders.csv | query ilevel_0 == 50
+    order_id        date region channel product  units  unit_price  discount  \
+50     10051  2026-09-16   West     web   Scale      7        24.0       0.0   
+
+    revenue   gift note  
+50    168.0  False  NaN  
+$ read orders.csv | setidx order_id | query index > 10093
+                date region channel  product  units  unit_price  discount  \
+order_id                                                                    
+10094     2026-09-30   East   phone  Grinder      3      129.95      0.15   
+10095     2026-09-30   West     web    Scale      3       24.00       NaN   
+10096     2026-09-30  South   store    Scale      9       24.00      0.10   
+
+          revenue   gift                                               note  
+order_id                                                                     
+10094      331.37  False  customer asked for the invoice to be sent to t...  
+10095       72.00  False                              call before\ndelivery  
+10096      194.40  False                              call before\ndelivery  
+$ read orders.csv | setidx order_id | query order_id < 10003
+                date region channel  product  units  unit_price  discount  \
+order_id                                                                    
+10001     2026-09-01   West   store  Toaster      5       54.50      0.05   
+10002     2026-09-01  North   store   Kettle      6       39.99       NaN   
+
+          revenue   gift                    note  
+order_id                                          
+10001      258.88   True                     NaN  
+10002      239.94  False  leave at the back door  
+$ read orders.csv | setidx region,channel | query region == 'East' and channel == 'phone' and units > 6
+                order_id        date  product  units  unit_price  discount  \
+region channel                                                               
+East   phone       10093  2026-09-29  Mug set      8       18.25      0.05   
+
+                revenue  gift             note  
+region channel                                  
+East   phone      138.7  True  repeat customer  
+$ read orders.csv | setidx region,channel | query ilevel_0 == 'x'
+! UndefinedVariableError: name 'ilevel_0' is not defined
+$ read staff.csv index=name | query name == 'Ana'
+      id   dept  salary       start  remote  \
+name                                          
+Ana   30  Sales   68000  2024-02-01    True   
+
+                                           bio  
+name                                            
+Ana   New hire; shadowing the West region team  
+$ read staff.csv index=name | query index.str.contains('a') and salary > 60000
+              id         dept  salary       start  remote  \
+name                                                        
+Zoë Martín     7  Engineering   98000  2019-04-01    True   
+Wang Fang     12  Engineering  105500  2021-09-15   False   
+Olga Petrova  15        Sales   72000  2018-01-08    True   
+Ana           30        Sales   68000  2024-02-01    True   
+
+                                                            bio  
+name                                                             
+Zoë Martín    Backend lead; owns the billing service and on-...  
+Wang Fang                                         Data platform  
+Olga Petrova                                      EMEA accounts  
+Ana                    New hire; shadowing the West region team  
+$ read staff.csv index=name | query dept == 'Sales' or remote == False
+              id         dept  salary       start  remote  \
+name                                                        
+Wang Fang     12  Engineering  105500  2021-09-15   False   
+Olga Petrova  15        Sales   72000  2018-01-08    True   
+José Núñez    21      Support   51000  2023-06-19   False   
+Ana           30        Sales   68000  2024-02-01    True   
+
+                                                   bio  
+name                                                    
+Wang Fang                                Data platform  
+Olga Petrova                             EMEA accounts  
+José Núñez                                         NaN  
+Ana           New hire; shadowing the West region team  
+$ read staff.csv index=name | query salary > salary.mean()
+            id         dept  salary       start  remote  \
+name                                                      
+Zoë Martín   7  Engineering   98000  2019-04-01    True   
+Wang Fang   12  Engineering  105500  2021-09-15   False   
+
+                                                          bio  
+name                                                           
+Zoë Martín  Backend lead; owns the billing service and on-...  
+Wang Fang                                       Data platform  
+$ read staff.csv index=name | query bio.isna()
+            id     dept  salary       start  remote  bio
+name                                                    
+José Núñez  21  Support   51000  2023-06-19   False  NaN
+$ read orders.csv | eval units * unit_price | head 5
+0    272.50
+1    239.94
+2    216.00
+3    259.90
+4     54.50
+dtype: float64
+$ read orders.csv | eval revenue / units | head 5
+0     51.776
+1     39.990
+2     21.600
+3    116.955
+4     49.050
+dtype: float64
+$ read orders.csv | eval units * 2 | head 3
+0    10
+1    12
+2    18
+Name: units, dtype: int64
+$ read orders.csv | eval units > 5 | head 3
+0    False
+1     True
+2     True
+Name: units, dtype: bool
+$ read orders.csv | eval -units | head 3
+0   -5
+1   -6
+2   -9
+Name: units, dtype: int64
+$ read orders.csv | eval +revenue | head 3
+0    258.88
+1    239.94
+2    194.40
+Name: revenue, dtype: float64
+$ read orders.csv | eval ~gift | head 3
+0    False
+1     True
+2     True
+Name: gift, dtype: bool
+$ read orders.csv | eval not gift | head 3
+0    False
+1     True
+2     True
+Name: gift, dtype: bool
+$ read orders.csv | eval units + revenue * 2 - 1 | head 3
+0    521.76
+1    484.88
+2    396.80
+dtype: float64
+$ read orders.csv | eval (units + revenue) * 2 | head 3
+0    527.76
+1    491.88
+2    406.80
+dtype: float64
+$ read orders.csv | eval units ** 2 ** 2 | head 3
+0     625
+1    1296
+2    6561
+Name: units, dtype: int64
+$ read orders.csv | eval -units ** 2 | head 3
+0   -25
+1   -36
+2   -81
+Name: units, dtype: int64
+$ read orders.csv | eval (-units) ** 2 | head 3
+0    25
+1    36
+2    81
+Name: units, dtype: int64
+$ read orders.csv | eval units / 0 | head 2
+0    inf
+1    inf
+Name: units, dtype: float64
+$ read orders.csv | eval revenue.round(-1) | head 4
+0    260.0
+1    240.0
+2    190.0
+3    230.0
+Name: revenue, dtype: float64
+$ read orders.csv | eval discount.fillna(0) * revenue | head 4
+0    12.944
+1     0.000
+2    19.440
+3    23.391
+dtype: float64
+$ read orders.csv | eval region + '/' + channel | head 4
+! TypeError: unsupported operand type(s) for +: 'str' and '<class 'str'>'
+$ read orders.csv | eval region * 2 | head 2
+! TypeError: unsupported operand type(s) for *: 'str' and '<class 'int'>'
+$ read orders.csv | eval units.sum()
+np.int64(427)
+$ read orders.csv | eval units.max() - units.min()
+np.int64(8)
+$ read orders.csv | eval 2 + 3 * 4
+14
+$ read orders.csv | eval 7 / 2
+3.5
+$ read orders.csv | eval 2 ** 10
+1024
+$ read orders.csv | eval units.mean()
+np.float64(4.447916666666667)
+$ read orders.csv | eval revenue.sum() / units.sum()
+np.float64(58.6268149882904)
+$ read pairs.csv | eval a // b
+0         3.0
+1        -4.0
+2        -4.0
+3         3.0
+4         0.0
+5         inf
+6         NaN
+7    123456.0
+dtype: float64
+$ read pairs.csv | eval a % b
+0      2.0
+1      3.0
+2     -3.0
+3     -2.0
+4      0.0
+5      NaN
+6      NaN
+7    789.0
+dtype: float64
+$ read pairs.csv | eval a / b
+0         3.400
+1        -3.400
+2        -3.400
+3         3.400
+4         0.000
+5           inf
+6           NaN
+7    123456.789
+dtype: float64
+$ read pairs.csv | eval a ** 2
+0                  289
+1                  289
+2                  289
+3                  289
+4                    0
+5                   81
+6                    0
+7    15241578750190521
+Name: a, dtype: int64
+$ read pairs.csv | eval b ** a
+! ValueError: Integers to negative integer powers are not allowed.
+$ read pairs.csv | eval a ** -1
+! ValueError: Integers to negative integer powers are not allowed.
+$ read pairs.csv | eval a // x
+0        6.0
+1        6.0
+2        inf
+3   -17000.0
+4        NaN
+5        2.0
+6       -0.0
+7      123.0
+dtype: float64
+$ read pairs.csv | eval a % x
+0    2.000000e+00
+1   -2.000000e+00
+2             NaN
+3    3.538836e-16
+4             NaN
+5    1.000000e+00
+6   -0.000000e+00
+7    4.567890e+05
+dtype: float64
+$ read pairs.csv | eval x ** 0.5
+0       1.581139
+1            NaN
+2       0.000000
+3       0.031623
+4            NaN
+5       2.000000
+6            NaN
+7    1000.000000
+Name: x, dtype: float64
+$ read pairs.csv | eval -a // b
+0        -4.0
+1         3.0
+2         3.0
+3        -4.0
+4         0.0
+5        -inf
+6         NaN
+7   -123457.0
+dtype: float64
+$ read pairs.csv | eval a // 0
+0    inf
+1   -inf
+2    inf
+3   -inf
+4    NaN
+5    inf
+6    NaN
+7    inf
+Name: a, dtype: float64
+$ read pairs.csv | eval a % 0
+0   NaN
+1   NaN
+2   NaN
+3   NaN
+4   NaN
+5   NaN
+6   NaN
+7   NaN
+Name: a, dtype: float64
+$ read pairs.csv | eval a & b
+0      1
+1      5
+2     17
+3    -21
+4      0
+5      0
+6      0
+7    256
+dtype: int64
+$ read pairs.csv | eval (a > 0) & (b > 0)
+0     True
+1    False
+2    False
+3    False
+4    False
+5    False
+6    False
+7     True
+dtype: bool
+$ read pairs.csv | eval a > 0 & b > 0
+0     True
+1    False
+2    False
+3    False
+4    False
+5    False
+6    False
+7     True
+dtype: bool
+$ read pairs.csv | eval a * 100000000000
+0          1700000000000
+1         -1700000000000
+2          1700000000000
+3         -1700000000000
+4                      0
+5           900000000000
+6                      0
+7   -6101065173709551616
+Name: a, dtype: int64
+$ read pairs.csv | eval a - b * 3 + 7 // 2
+0            5
+1          -29
+2           35
+3            1
+4           -6
+5           12
+6            3
+7    123453792
+dtype: int64
+$ read orders.csv | eval total = units * unit_price | select order_id,units,unit_price,total | head 5
+   order_id  units  unit_price   total
+0     10001      5       54.50  272.50
+1     10002      6       39.99  239.94
+2     10003      9       24.00  216.00
+3     10004      2      129.95  259.90
+4     10005      1       54.50   54.50
+$ read orders.csv | eval gross = units * unit_price ; saved = gross - revenue | select order_id,gross,saved,revenue | head 5
+   order_id   gross  saved  revenue
+0     10001  272.50  13.62   258.88
+1     10002  239.94   0.00   239.94
+2     10003  216.00  21.60   194.40
+3     10004  259.90  25.99   233.91
+4     10005   54.50   5.45    49.05
+$ read orders.csv | eval units = units * 10 | select order_id,units | head 3
+   order_id  units
+0     10001     50
+1     10002     60
+2     10003     90
+$ read orders.csv | eval big = units > 7 ; half = units / 2 | select order_id,big,half | head 4
+   order_id    big  half
+0     10001  False   2.5
+1     10002  False   3.0
+2     10003   True   4.5
+3     10004  False   1.0
+$ read orders.csv | eval per = revenue / units ; per = per.round(1) | select per | head 4
+     per
+0   51.8
+1   40.0
+2   21.6
+3  117.0
+$ read orders.csv | eval share = revenue / revenue.sum() | select order_id,share | head 4
+   order_id     share
+0     10001  0.010341
+1     10002  0.009585
+2     10003  0.007766
+3     10004  0.009344
+$ read orders.csv | eval a = 1 | select order_id,a | head 2
+   order_id  a
+0     10001  1
+1     10002  1
+$ read orders.csv | eval units * 2 ; b = 1
+! ValueError: Multi-line expressions are only valid if all expressions contain an assignment
+$ read orders.csv | query big = units > 7
+! ValueError: cannot assign without a target object
+$ read orders.csv | eval a = units ; units * 2
+! ValueError: Multi-line expressions are only valid if all expressions contain an assignment
+$ read readings.csv | eval sqrt(wind_ms) | head 6
+0    3.807887
+1    0.000000
+2    0.547723
+3    1.183216
+4    3.049590
+5    3.660601
+Name: wind_ms, dtype: float64
+$ read readings.csv | eval log(rain_mm) | head 8
+0        -inf
+1    2.379546
+2    1.945910
+3    2.186051
+4        -inf
+5        -inf
+6        -inf
+7        -inf
+Name: rain_mm, dtype: float64
+$ read readings.csv | eval log10(pressure_hpa) | head 4
+0    3.003159
+1    2.999565
+2    3.007620
+3    2.995723
+Name: pressure_hpa, dtype: float64
+$ read readings.csv | eval exp(temp_c / 10) | head 4
+0    8.331137
+1    1.336427
+2    1.138828
+3    4.392946
+Name: temp_c, dtype: float64
+$ read readings.csv | eval sin(wind_dir_deg * 3.141592653589793 / 180) | head 6
+0    0.087156
+1    0.965926
+2    0.990268
+3    0.017452
+4   -0.087156
+5   -0.309017
+Name: wind_dir_deg, dtype: float64
+$ read readings.csv | eval cos(wind_dir_deg * 3.141592653589793 / 180) | head 6
+0   -0.996195
+1    0.258819
+2    0.139173
+3    0.999848
+4    0.996195
+5   -0.951057
+Name: wind_dir_deg, dtype: float64
+$ read readings.csv | eval arctan2(temp_c, wind_ms) | head 6
+0    0.970915
+1    1.570796
+2    1.343997
+3    1.476482
+4    0.769006
+5    0.682878
+dtype: float64
+$ read readings.csv | eval floor(temp_c) | head 6
+0    21.0
+1     2.0
+2     1.0
+3    14.0
+4     9.0
+5    10.0
+Name: temp_c, dtype: float64
+$ read readings.csv | eval ceil(temp_c) | head 6
+0    22.0
+1     3.0
+2     2.0
+3    15.0
+4     9.0
+5    11.0
+Name: temp_c, dtype: float64
+$ read readings.csv | eval abs(temp_c) | head 6
+0    21.2
+1     2.9
+2     1.3
+3    14.8
+4     9.0
+5    10.9
+Name: temp_c, dtype: float64
+$ read readings.csv | eval log1p(rain_mm) | head 6
+0    0.000000
+1    2.468100
+2    2.079442
+3    2.292535
+4    0.000000
+5    0.000000
+Name: rain_mm, dtype: float64
+$ read readings.csv | eval expm1(rain_mm / 10) | head 6
+0    0.000000
+1    1.944680
+2    1.013753
+3    1.435130
+4    0.000000
+5    0.000000
+Name: rain_mm, dtype: float64
+$ read readings.csv | eval tanh(temp_c / 10) | head 4
+0    0.971594
+1    0.282135
+2    0.129273
+3    0.901468
+Name: temp_c, dtype: float64
+$ read readings.csv | eval east = wind_ms * sin(wind_dir_deg * 3.141592653589793 / 180) ; north = wind_ms * cos(wind_dir_deg * 3.141592653589793 / 180) | select station,hour,east,north | head 8
+   station  hour      east      north
+0  harbour     0  1.263758 -14.444823
+1  harbour     4  0.000000   0.000000
+2  harbour     8  0.297080   0.041752
+3  harbour    12  0.024433   1.399787
+4  harbour    16 -0.810548   9.264611
+5  harbour    20 -4.140828 -12.744157
+6  airport     0 -5.988882   4.679027
+7  airport     4  0.000000  -0.000000
+$ read readings.csv | query sqrt(wind_ms) > 3 and station == 'ridge'
+   station  hour  temp_c  pressure_hpa  wind_ms  wind_dir_deg  rain_mm
+12   ridge     0     NaN        1012.2     11.7         328.0      0.0
+14   ridge     8     6.3        1016.9     16.7          63.0      5.4
+15   ridge    12    17.8         997.3     10.8         203.0      0.0
+16   ridge    16    18.9        1007.5      9.8          23.0      0.0
+$ read readings.csv | query temp_c < 0 and rain_mm > 0
+Empty DataFrame
+Columns: [station, hour, temp_c, pressure_hpa, wind_ms, wind_dir_deg, rain_mm]
+Index: []
+$ read readings.csv | query temp_c != temp_c or pressure_hpa != pressure_hpa or wind_ms != wind_ms
+    station  hour  temp_c  pressure_hpa  wind_ms  wind_dir_deg  rain_mm
+9   airport    12     5.6        1017.1      NaN          90.0     11.9
+12    ridge     0     NaN        1012.2     11.7         328.0      0.0
+$ read readings.csv | query floor(temp_c) == ceil(temp_c)
+    station  hour  temp_c  pressure_hpa  wind_ms  wind_dir_deg  rain_mm
+4   harbour    16     9.0         998.9      9.3         355.0      0.0
+6   airport     0    -4.0        1004.0      7.6         308.0      0.0
+7   airport     4    12.0        1006.7      0.0         150.0      0.0
+11  airport    20     0.0        1027.4      6.7         121.0      0.0
+$ read readings.csv | eval round(temp_c)
+! ValueError: "round" is not a supported function
+$ read readings.csv | eval sqrt(x=temp_c)
+! TypeError: Function "sqrt" does not support keyword arguments
+$ read readings.csv | eval hypot(temp_c, wind_ms)
+! ValueError: "hypot" is not a supported function
+$ read orders.csv | query units ^ 2
+! AttributeError: 'PandasExprVisitor' object has no attribute 'visit_BitXor'
+$ read orders.csv | query units if gift else revenue
+! NotImplementedError: 'IfExp' nodes are not implemented
+$ read orders.csv | query note is None
+! NotImplementedError: 'Is' nodes are not implemented
+$ read orders.csv | query units > 5 and 2
+! NotImplementedError: cannot evaluate scalar only bool ops
+$ read orders.csv | query nope == 1
+! UndefinedVariableError: name 'nope' is not defined
+$ read orders.csv | eval region - 1
+! TypeError: unsupported operand type(s) for -: 'str' and '<class 'int'>'
+$ read orders.csv | query region > 5
+! TypeError: '>' not supported between instances of 'str' and 'int'
+$ read orders.csv | query units > 'five'
+! TypeError: Invalid comparison between dtype=int64 and str
+$ read orders.csv | query @lo < units
+! UndefinedVariableError: local variable 'lo' is not defined
+$ read orders.csv | query units == 9 | show max_rows=6
+    order_id        date region channel  product  units  unit_price  discount  \
+2      10003  2026-09-01   West     web    Scale      9       24.00      0.10   
+9      10010  2026-09-03  South   phone  Grinder      9      129.95       NaN   
+15     10016  2026-09-05  South   store  Blender      9       89.00      0.10   
+..       ...         ...    ...     ...      ...    ...         ...       ...   
+42     10043  2026-09-14   East     web  Grinder      9      129.95      0.15   
+84     10085  2026-09-27  North     web  Blender      9       89.00      0.10   
+95     10096  2026-09-30  South   store    Scale      9       24.00      0.10   
+
+    revenue   gift                   note  
+2    194.40  False                    NaN  
+9   1169.55  False                    NaN  
+15   720.90  False   gift wrap\tred paper  
+..      ...    ...                    ...  
+42   994.12  False                    NaN  
+84   720.90  False        repeat customer  
+95   194.40  False  call before\ndelivery  
+
+[7 rows x 11 columns]
+$ read orders.csv | query revenue > 600 | sort by=revenue asc=0 | select order_id,region,revenue
+    order_id region  revenue
+9      10010  South  1169.55
+42     10043   East   994.12
+6      10007   East   909.65
+82     10083  North   883.66
+49     10050  North   818.68
+71     10072   East   740.71
+15     10016  South   720.90
+84     10085  North   720.90
+29     10030   West   712.00
+$ read orders.csv | query channel == 'web' and units > 6 | string index=0
+ order_id       date region channel product  units  unit_price  discount  revenue  gift                   note
+    10003 2026-09-01   West     web   Scale      9       24.00      0.10   194.40 False                    NaN
+    10007 2026-09-02   East     web Grinder      7      129.95       NaN   909.65 False leave at the back door
+    10014 2026-09-05  South     web  Kettle      7       39.99      0.00   279.93 False                    NaN
+    10017 2026-09-06  South     web  Kettle      7       39.99      0.10   251.94 False leave at the back door
+    10021 2026-09-07   East     web Toaster      8       54.50      0.00   436.00 False        repeat customer
+    10030 2026-09-10   West     web Blender      8       89.00      0.00   712.00 False                    NaN
+    10036 2026-09-11   East     web Toaster      7       54.50      0.05   362.43  True                    NaN
+    10043 2026-09-14   East     web Grinder      9      129.95      0.15   994.12 False                    NaN
+    10050 2026-09-16  North     web Grinder      7      129.95      0.10   818.68 False   gift wrap\tred paper
+    10051 2026-09-16   West     web   Scale      7       24.00      0.00   168.00 False                    NaN
+    10085 2026-09-27  North     web Blender      9       89.00      0.10   720.90 False        repeat customer
+    10088 2026-09-28  South     web Blender      7       89.00      0.15   529.55  True                    NaN
+$ read orders.csv | query units < 3 | select region,units,revenue | tail 4
+   region  units  revenue
+83  South      1    33.99
+85   East      1    21.60
+86   East      2   259.90
+91   East      2   109.00
