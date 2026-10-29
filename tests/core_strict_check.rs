@@ -10424,14 +10424,33 @@ fn a_resource_is_called_through_its_bounds() {
          }\n",
         "does not implement `EnvProvider`",
     );
-    rejected(
+    // §14.14: a program declares its own default, whose type implements
+    // every bound; one with state is read-only outside an override.
+    accepted_and_runs(
         "provider-user-default",
         "trait Log { fn count(self) -> i64; }\n\
          struct RealLog {}\n\
          impl Log for RealLog { fn count(self) -> i64 { 0 } }\n\
          effect resource AuditLog: Log = RealLog {};\n\
          fn main() { println(AuditLog.count()); }\n",
-        "until the services track (M4a) only the library declares one",
+        "0\n",
+    );
+    rejected(
+        "provider-user-default-not-a-provider",
+        "trait Log { fn count(self) -> i64; }\n\
+         struct RealLog {}\n\
+         effect resource AuditLog: Log = RealLog {};\n\
+         fn main() { println(AuditLog.count()); }\n",
+        "does not implement `Log`",
+    );
+    rejected(
+        "provider-user-default-stateful-write",
+        "trait Ids { fn next(mut ref self) -> i64; }\n\
+         struct Seq { n: i64 }\n\
+         impl Ids for Seq { fn next(mut ref self) -> i64 { self.n = self.n + 1; self.n } }\n\
+         effect resource Id: Ids = Seq { n: 0 };\n\
+         fn main() { println(Id.next()); }\n",
+        "E_STATEFUL_DEFAULT",
     );
 }
 

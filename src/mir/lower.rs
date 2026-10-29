@@ -442,6 +442,8 @@ fn lower_program_inner<'a>(
         builtin_own_self: FxHashSet::default(),
         consts: FxHashMap::default(),
         resource_defaults: FxHashMap::default(),
+        user_defaults: FxHashSet::default(),
+        default_queue: Vec::new(),
         resource_bounds: FxHashMap::default(),
         trait_defs: FxHashMap::default(),
         trait_impl_fns: FxHashMap::default(),
@@ -590,6 +592,8 @@ fn lower_program_inner<'a>(
             lcx.lower_static(def, &name);
         } else if let Some((e, t, name)) = lcx.literal_queue.pop() {
             lcx.lower_literal_static(e, t, &name);
+        } else if let Some((e, t, name)) = lcx.default_queue.pop() {
+            lcx.lower_default_static(e, t, &name);
         } else if let Some((t, name)) = lcx.eq_queue.pop() {
             lcx.lower_derived_eq(t, &name);
         } else if !lcx.note_table_hashes() {
@@ -1075,6 +1079,13 @@ struct Lcx<'a> {
     /// declares (`effect resource Env: EnvProvider = OsEnv {};`,
     /// core-semantics §14.7), by the resource's name.
     resource_defaults: FxHashMap<String, &'a Expr>,
+    /// The resources whose default the program declares rather than the
+    /// library (core semantics §14.14): their calls go through
+    /// `providers::specialise` even where nothing overrides them.
+    user_defaults: FxHashSet<String>,
+    /// The initializers still to be built of the statics holding such
+    /// defaults: the expression, its type and the body's name.
+    default_queue: Vec<(&'a Expr, Ty, String)>,
     /// The provider trait bounds of each resource the program declares
     /// (`effect resource Db: Store;`, core semantics §14.1), by name.
     resource_bounds: FxHashMap<String, Vec<String>>,
@@ -1487,6 +1498,9 @@ impl<'a> Lcx<'a> {
                 Item::EffectResource(r) => {
                     if let Some(d) = &r.default {
                         self.resource_defaults.insert(r.name.clone(), d);
+                        if r.span.offset < program.library_start.unwrap_or(usize::MAX) {
+                            self.user_defaults.insert(r.name.clone());
+                        }
                     }
                     self.resource_bounds.insert(
                         r.name.clone(),
@@ -2242,6 +2256,24 @@ impl<'a> Lcx<'a> {
         };
         let mut bx = Bx::new(self, instance, t, Vec::new());
         let _ = bx.lower_literal_init(e, t);
+        let (body, errors) = bx.finish();
+        self.errors.extend(errors);
+        if let Some(body) = body {
+            self.program.add(body);
+        }
+    }
+
+    /// The initializer of the static holding a program's default provider
+    /// (core semantics §14.14): its declaration's expression, evaluated
+    /// once before `main`.
+    fn lower_default_static(&mut self, e: &'a Expr, t: Ty, name: &str) {
+        let instance = InstanceId {
+            def: DefId(u32::MAX),
+            args: Vec::new(),
+            name: name.to_string(),
+        };
+        let mut bx = Bx::new(self, instance, t, Vec::new());
+        let _ = bx.lower_static_init(e);
         let (body, errors) = bx.finish();
         self.errors.extend(errors);
         if let Some(body) = body {
@@ -19213,12 +19245,15 @@ impl<'l, 'a> Bx<'l, 'a> {
     }
 
     /// Whether a call on `r` goes through its provider (core semantics
-    /// §14.3): `r` is a resource with no default provider, or one with a
-    /// default that some `with_provider` overrides. A call on it stays a
-    /// placeholder until `providers::specialise`.
+    /// §14.3): `r` is a resource with no default provider, one whose
+    /// default the program declares (§14.14), or one with a default that
+    /// some `with_provider` overrides. A call on it stays a placeholder
+    /// until `providers::specialise`.
     fn resource_via_provider(&self, r: &str) -> bool {
         self.lcx.resource_bounds.contains_key(r)
-            && (!self.lcx.resource_defaults.contains_key(r) || self.lcx.bound_resources.contains(r))
+            && (!self.lcx.resource_defaults.contains_key(r)
+                || self.lcx.user_defaults.contains(r)
+                || self.lcx.bound_resources.contains(r))
     }
 
     /// The declaration of `m` in one of `r`'s bounds.
@@ -19268,7 +19303,30 @@ impl<'l, 'a> Bx<'l, 'a> {
             let writes = matches!(bm.self_param, Some(ast::SelfParam::MutRef));
             decl.methods.insert(bm.name.to_string(), writes);
         }
-        if let Some(&d) = self.lcx.resource_defaults.get(r) {
+        if let Some(&d) = self
+            .lcx
+            .resource_defaults
+            .get(r)
+            .filter(|_| self.lcx.user_defaults.contains(r))
+        {
+            // A program's own default (§14.14) is a provider like any
+            // other; one with fields is a static built before `main`.
+            let t = self.expr_ty(d)?;
+            decl.impls.insert(t, self.provider_methods(d.span, r, t)?);
+            decl.default = Some(t);
+            if self.tys().field_ty(t, None, 0).is_some() {
+                let idx = self.lcx.program.statics.len() as u32;
+                let init = format!("static.default.{r}");
+                self.lcx.program.statics.push(StaticDef {
+                    name: format!("default.{r}"),
+                    ty: t,
+                    mutable: false,
+                    init: init.clone(),
+                });
+                self.lcx.default_queue.push((d, t, init));
+                decl.default_static = Some(idx);
+            }
+        } else if let Some(&d) = self.lcx.resource_defaults.get(r) {
             // The library's defaults keep their methods as natives, named
             // as `provider_recv` names them.
             let t = self.expr_ty(d)?;
@@ -19338,6 +19396,20 @@ impl<'l, 'a> Bx<'l, 'a> {
         if self.lcx.program.resources[r].impls.contains_key(&t) {
             return Ok(());
         }
+        let methods = self.provider_methods(span, r, t)?;
+        if let Some(decl) = self.lcx.program.resources.get_mut(r) {
+            decl.impls.insert(t, methods);
+        }
+        Ok(())
+    }
+
+    /// The instance of each of `r`'s methods for the provider type `t`.
+    fn provider_methods(
+        &mut self,
+        span: Span,
+        r: &str,
+        t: Ty,
+    ) -> R<std::collections::BTreeMap<String, String>> {
         let mut methods = std::collections::BTreeMap::new();
         for bm in self.bound_methods(r) {
             match self.user_impl_method(t, &bm.bound, bm.name) {
@@ -19358,10 +19430,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 None => {}
             }
         }
-        if let Some(decl) = self.lcx.program.resources.get_mut(r) {
-            decl.impls.insert(t, methods);
-        }
-        Ok(())
+        Ok(methods)
     }
 
     /// `providers { R1 => e1, .. } in { body }` (core semantics §14.8):
@@ -22442,6 +22511,14 @@ pub fn par_check(lowered: &Lowered) -> Result<(), String> {
                 no_provider_text(&n.resource)
             ));
         }
+        if let Some((n, callee)) = report.stateful_default.first() {
+            return Err(format!(
+                "effects: in `{}` at line {}, {}",
+                n.instance,
+                n.span.line,
+                stateful_default_text(&n.resource, callee)
+            ));
+        }
     }
     Ok(())
 }
@@ -22454,6 +22531,21 @@ fn par_conflict(
         .par_conflicts
         .iter()
         .find_map(|(n, v)| v.first().map(|c| (n, c)))
+}
+
+/// The message for a call of `callee` that writes `resource`, whose default
+/// has state, outside every override (core semantics §14.14).
+pub fn stateful_default_text(resource: &str, callee: &str) -> String {
+    let what = match callee.strip_prefix(&format!("{resource}.")) {
+        Some(m) => format!("`{resource}.{m}` takes `mut ref self`"),
+        None => format!("`{callee}` calls a `mut ref self` method of `{resource}`"),
+    };
+    format!(
+        "{what}, but `{resource}`'s default has fields, so outside an override the call \
+         would write a global every task shares (E_STATEFUL_DEFAULT, core semantics \
+         §14.14): make the method take `self`, or run the call inside \
+         `with_provider[{resource}](provider, || ...)`"
+    )
 }
 
 /// The message for a call that needs `resource`'s provider where nothing
@@ -22488,6 +22580,8 @@ pub enum SourceEffectError {
     Par,
     /// A call needs a provider nothing supplies (§14.6).
     NoProvider,
+    /// A call writes a resource whose default has state (§14.14).
+    StatefulDefault,
 }
 
 /// `karac check`'s run of [`par_check`] (B-2026-10-19-39, B-2026-10-20-7):
@@ -22536,6 +22630,13 @@ pub fn source_effect_errors(src: &str) -> Vec<((usize, usize), SourceEffectError
             n.span,
             SourceEffectError::NoProvider,
             no_provider_text(&n.resource),
+        );
+    }
+    for (n, callee) in &report.stateful_default {
+        add(
+            n.span,
+            SourceEffectError::StatefulDefault,
+            stateful_default_text(&n.resource, callee),
         );
     }
     out.sort();
@@ -24362,7 +24463,10 @@ fn finish_build(mut lowered: Lowered) -> Result<Lowered, String> {
         crate::mir::providers::route_files(&mut lowered.program, &lowered.tys);
         crate::mir::providers::route_network(&mut lowered.program, &lowered.tys);
         let report = crate::mir::effects::analyze(&lowered.program, &lowered.tys);
-        if report.no_provider.is_empty() && par_conflict(&report).is_none() {
+        if report.no_provider.is_empty()
+            && report.stateful_default.is_empty()
+            && par_conflict(&report).is_none()
+        {
             crate::mir::providers::specialise(
                 &mut lowered.program,
                 &lowered.tys,

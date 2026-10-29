@@ -1,0 +1,1 @@
+ERROR at line 24: `bump` calls a `mut ref self` method of `Ids`, but `Ids`'s default has fields (E_STATEFUL_DEFAULT)

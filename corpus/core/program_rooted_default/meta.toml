@@ -1,0 +1,12 @@
+source = "corpus/core/program_rooted_default"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["providers"]
+class = "a"
+expected_from = "spec"
+rules = ["14.14", "14.7"]
+backends = []
+env = {}
+note = "core-semantics §14.14: a program-declared default with fields is one static evaluated before `main` and never dropped (its `Drop` prints nothing); calls outside an override borrow it, in a spawned task too; an override replaces it; a field-less default keeps its `mut ref self` method."
+bucket = "a"

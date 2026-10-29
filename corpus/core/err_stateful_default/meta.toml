@@ -1,0 +1,12 @@
+source = "corpus/core/err_stateful_default"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["providers"]
+class = "a"
+expected_from = "spec"
+rules = ["14.14"]
+backends = []
+env = {}
+note = "core-semantics §14.14: `main` reaching a `mut ref self` method of a resource whose default has fields, outside every override, is refused (E_STATEFUL_DEFAULT); the call inside `with_provider` is accepted. The expected.out wording of an error pin is guidance, not a byte oracle."
+bucket = "a:refused"

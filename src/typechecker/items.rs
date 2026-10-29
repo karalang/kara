@@ -3533,24 +3533,41 @@ impl<'a> super::TypeChecker<'a> {
     ///
     /// Reuses `WrongNumberOfArgs` rather than minting a kind for one shape;
     /// the message carries the specificity.
-    /// core-semantics.md §14.7 (B-2026-10-20-8): a resource with a default
-    /// is program-rooted, and until M4a only the library declares one.
-    fn check_resource_default(&mut self, r: &crate::ast::EffectResourceDecl, default: &Expr) {
+    /// core-semantics.md §14.14: a program may declare its own default
+    /// provider, `effect resource R: T = e;`, whose type implements every
+    /// bound, as a `with_provider` provider must.
+    fn check_resource_default(
+        &mut self,
+        r: &crate::ast::EffectResourceDecl,
+        default: &Expr,
+        ty: &Type,
+    ) {
         let library = self.program.library_start.unwrap_or(usize::MAX);
-        if r.span.offset >= library {
+        if r.span.offset >= library || matches!(ty, Type::Error | Type::TypeParam(_)) {
             return;
         }
-        self.type_error(
-            format!(
-                "`effect resource {} = ...;` declares a default provider, which makes `{}` \
-                 program-rooted; until the services track (M4a) only the library declares \
-                 one (core-semantics.md §14.7). Drop the default and bind a provider with \
-                 `with_provider[{}](p, || ...)`",
-                r.name, r.name, r.name
-            ),
-            default.span,
-            TypeErrorKind::DeferredToM4a,
-        );
+        let declared = r
+            .provider_bounds
+            .iter()
+            .map(|b| b.name.clone())
+            .collect::<Vec<_>>()
+            .join(" + ");
+        for bound in &r.provider_bounds {
+            if self.type_satisfies_bound(ty, &bound.name) {
+                continue;
+            }
+            let shown = crate::typechecker::types::type_display(ty);
+            self.type_error(
+                format!(
+                    "the default provider of type '{shown}' does not implement `{}`, a \
+                     provider trait declared by `effect resource {}: {declared} = ...;` — \
+                     add `impl {} for {shown} {{ ... }}`",
+                    bound.name, r.name, bound.name
+                ),
+                default.span,
+                TypeErrorKind::TraitBoundNotSatisfied,
+            );
+        }
     }
 
     /// B-2026-10-22-21: the export surfaces that went to the archive with
@@ -3610,8 +3627,8 @@ impl<'a> super::TypeChecker<'a> {
         // The default provider (§14.7) is typed like any expression, so a
         // call that falls back to it can be lowered.
         if let Some(d) = &r.default {
-            self.infer_expr(d);
-            self.check_resource_default(r, d);
+            let ty = self.infer_expr(d);
+            self.check_resource_default(r, d, &ty);
         }
         self.check_effect_resource_bound_overlap(r);
         for bound in &r.provider_bounds {

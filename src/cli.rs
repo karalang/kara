@@ -2154,6 +2154,9 @@ impl Pipeline {
                 crate::mir::lower::SourceEffectError::NoProvider => {
                     (text, crate::effectchecker::EffectErrorKind::NoProvider)
                 }
+                crate::mir::lower::SourceEffectError::StatefulDefault => {
+                    (text, crate::effectchecker::EffectErrorKind::StatefulDefault)
+                }
             };
             effects.errors.push(crate::effectchecker::EffectError {
                 message,

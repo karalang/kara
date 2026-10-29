@@ -362,12 +362,15 @@ pub fn specialise(
     for name in names {
         let mut env = Env::new();
         let mut rooted = true;
-        for r in needs.get(&name).into_iter().flat_map(|n| n.keys()) {
-            match resources.get(r).and_then(|d| d.default) {
-                Some(t) => {
+        for (r, access) in needs.get(&name).into_iter().flatten() {
+            match resources.get(r).map(|d| (d.default, d.default_static)) {
+                // A body that writes a default with state runs only under
+                // an override (§14.14): `main` writing one was refused.
+                Some((Some(_), Some(_))) if *access == Access::Writes => rooted = false,
+                Some((Some(t), _)) => {
                     env.insert(r.clone(), Binding::Default(t));
                 }
-                None => rooted = false,
+                _ => rooted = false,
             }
         }
         if !rooted {
@@ -709,12 +712,30 @@ impl Spec<'_> {
             },
             None => decl.methods.get(m).copied().unwrap_or(false),
         };
-        let recv = match binding {
-            Binding::Bound(_) => {
+        let recv = match (binding, decl.default_static) {
+            (Binding::Bound(_), _) => {
                 let p = fx.src[r].clone();
                 fx.borrow(bb, p, mutable, self.tys)
             }
-            Binding::Default(t) => {
+            (Binding::Default(t), Some(i)) => {
+                // A default with state is read-only (§14.14): a `mut ref
+                // self` method on it would be a global every task writes.
+                if mutable {
+                    return Err(format!(
+                        "providers: `{r}.{m}` takes `mut ref self`, but `{r}`'s default \
+                         `{}` has fields, so outside an override the call would write a \
+                         global every task shares (core semantics §14.14, \
+                         E_STATEFUL_DEFAULT): make it take `self`, or bind a provider with \
+                         `with_provider`",
+                        self.tys.display(t)
+                    ));
+                }
+                Operand::Const(Const {
+                    ty: self.tys.tcx().reference(t, false),
+                    kind: ConstKind::Static(i),
+                })
+            }
+            (Binding::Default(t), None) => {
                 let v = fx.temp(t);
                 fx.push(
                     bb,

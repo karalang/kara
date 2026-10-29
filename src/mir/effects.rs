@@ -285,6 +285,10 @@ pub struct EffectReport {
     /// The calls in `main` or a test body that need a provider nothing
     /// supplies (`E_NO_PROVIDER`, core semantics §14.6).
     pub no_provider: Vec<NoProvider>,
+    /// The calls in `main` that write a resource whose default has state,
+    /// outside every override (`E_STATEFUL_DEFAULT`, core semantics
+    /// §14.14): `callee` is the function the call names.
+    pub stateful_default: Vec<(NoProvider, String)>,
 }
 
 /// A resource a program can bind with `with_provider[R](p, f)` (core
@@ -301,6 +305,10 @@ pub struct ResourceDecl {
     /// resource (`Env`, `Clock`, `RandomSource`, §14.7); `None` for a
     /// resource only `with_provider` can bind.
     pub default: Option<Ty>,
+    /// The static holding a default the program declares whose type has
+    /// fields (§14.14), built before `main`: a call outside an override
+    /// borrows it. A field-less default is built where it is called.
+    pub default_static: Option<u32>,
     /// For each provider type bound to `R` anywhere, and the default, the
     /// instance name of each of its methods; those bodies are in the
     /// program.
@@ -491,20 +499,35 @@ pub(crate) fn analyze_with(program: &Program, tys: &TyInterner, size_gate: bool)
     // `main` takes no hidden parameter, so a provider it needs must come
     // from a `with_provider` inside it, or be a program-rooted resource's
     // default (core semantics §14.6, §14.7).
+    // A default with state is read-only (§14.14): `main` may not write
+    // its resource outside an override.
     if let Some(main) = program.bodies.get("main") {
         for (block, span, n) in a.needs_sites(main, &report.providers) {
-            for r in n.keys() {
-                if program
-                    .resources
-                    .get(r)
-                    .is_some_and(|d| d.default.is_none())
-                {
-                    report.no_provider.push(NoProvider {
-                        instance: "main".to_string(),
-                        block,
-                        span,
-                        resource: r.clone(),
-                    });
+            for (r, access) in &n {
+                let Some(d) = program.resources.get(r) else {
+                    continue;
+                };
+                let site = NoProvider {
+                    instance: "main".to_string(),
+                    block,
+                    span,
+                    resource: r.clone(),
+                };
+                if d.default.is_none() {
+                    report.no_provider.push(site);
+                } else if d.default_static.is_some() && *access == Access::Writes {
+                    let callee = match &main.blocks[block.index()].terminator.kind {
+                        TerminatorKind::Call {
+                            func:
+                                Operand::Const(Const {
+                                    kind: ConstKind::FnDef(i),
+                                    ..
+                                }),
+                            ..
+                        } => i.name.clone(),
+                        _ => r.clone(),
+                    };
+                    report.stateful_default.push((site, callee));
                 }
             }
         }
@@ -4032,6 +4055,7 @@ fn main() -> () {
         let mut decl = ResourceDecl {
             methods: BTreeMap::from([("now".to_string(), false), ("bump".to_string(), true)]),
             default: None,
+            default_static: None,
             impls: BTreeMap::from([(fake, methods("Fake")), (loud, methods("Loud"))]),
         };
         p.resources.insert("Clock".to_string(), decl.clone());

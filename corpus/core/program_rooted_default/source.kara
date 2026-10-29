@@ -1,0 +1,53 @@
+// core-semantics §14.14: a program's own default provider. `Audit`'s has
+// fields, so it is one static, built before `main` and never dropped, which
+// its calls borrow; an override replaces it for the closure's extent.
+// `Tick`'s has none, so its `mut ref self` method may be called anywhere.
+trait Log {
+    fn count(self) -> i64;
+    fn name(self) -> String;
+}
+
+trait Counter {
+    fn next(mut ref self) -> i64;
+}
+
+struct RealLog { base: i64, label: String }
+
+impl Log for RealLog {
+    fn count(self) -> i64 { self.base }
+    fn name(self) -> String { self.label.clone() }
+}
+
+impl Drop for RealLog {
+    fn drop(mut ref self) { println("dropped") }
+}
+
+struct FakeLog { n: i64 }
+
+impl Log for FakeLog {
+    fn count(self) -> i64 { self.n }
+    fn name(self) -> String { "fake".to_string() }
+}
+
+struct Ticks { }
+
+impl Counter for Ticks {
+    fn next(mut ref self) -> i64 { 1 }
+}
+
+effect resource Audit: Log = RealLog { base: 41, label: "real".to_string() };
+effect resource Tick: Counter = Ticks {};
+
+fn report() -> String {
+    f"{Audit.count() + Tick.next()} {Audit.name()}"
+}
+
+fn main() {
+    println(report());
+    with_provider[Audit](FakeLog { n: 7 }, || {
+        println(report());
+    });
+    let mut group = TaskGroup.new();
+    let h = group.spawn(|| report());
+    println(h.join());
+}

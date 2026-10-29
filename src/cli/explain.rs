@@ -742,6 +742,9 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
     // for the reason `DropBodyMayPanic` is: no published class describes a
     // call whose resource nothing binds.
     ("E0419", eff("NoProvider", None)),
+    // `E_STATEFUL_DEFAULT` (core semantics §14.14), unclassified like
+    // `NoProvider`.
+    ("E0420", eff("StatefulDefault", None)),
     (
         "L0001",
         eff("FfiLintHint", Some(DiagnosticClass::LintWarning)),
@@ -2320,6 +2323,7 @@ mod tests {
             ("E0417", E::DropBodyMayPanic),
             ("E0418", E::ParBranchConflict),
             ("E0419", E::NoProvider),
+            ("E0420", E::StatefulDefault),
             ("L0001", E::FfiLintHint),
             ("L0002", E::MutualRecursionNote),
             ("L0003", E::PureLoopInPar),

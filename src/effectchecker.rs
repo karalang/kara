@@ -419,6 +419,11 @@ pub enum EffectErrorKind {
     /// parameter (B-2026-10-20-7). `main` takes none, so a resource it
     /// reaches must be bound by a `with_provider` inside it.
     NoProvider,
+    /// `main` calls a `mut ref self` method of a resource whose default
+    /// has fields, outside every override (`E_STATEFUL_DEFAULT`, core
+    /// semantics §14.14): the default would be a global every task
+    /// writes. Found by the MIR effect pass, as `NoProvider` is.
+    StatefulDefault,
     /// Phase-10 target gate: a function reachable from the build's
     /// entry point requires a HOST resource the current compilation
     /// target does not provide (and no provider is bound on the call
@@ -574,6 +579,7 @@ pub(crate) fn class_for_effect_error_kind(
         | EffectErrorKind::ImplExceedsTraitCeiling
         | EffectErrorKind::DropBodyMayPanic
         | EffectErrorKind::NoProvider
+        | EffectErrorKind::StatefulDefault
         | EffectErrorKind::TraitDefaultExceedsCeiling
         | EffectErrorKind::EffectVariableConflict
         | EffectErrorKind::ProfileIncompatibleEffect
