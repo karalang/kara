@@ -303,6 +303,37 @@ fn in_capture_scope(c: &UseSite, u: &UseSite) -> bool {
         .is_some_and(|k| k.0 <= u.span.offset && u.span.offset < k.0 + k.1)
 }
 
+/// B-2026-10-29-37: whether the body of the `let`-bound closure holding
+/// block `ub` runs only before the consume at `(cb, ci)`: the closure
+/// binding is never moved (a moved closure can be called from wherever it
+/// went) and no use of it, a call included, is reachable from the consume
+/// or sits in another closure's body.
+fn let_closure_runs_before(cfg: &Cfg, cb: BlockId, ci: usize, ub: BlockId) -> bool {
+    let Some(f) = cfg
+        .closure_body_owner
+        .get(&ub)
+        .and_then(|k| cfg.let_closures.get(k))
+    else {
+        return false;
+    };
+    for (b, block) in cfg.blocks.iter().enumerate() {
+        for (i, u) in block.uses.iter().enumerate() {
+            if u.binding != *f || u.kind == UseKind::Define {
+                continue;
+            }
+            let after = if b == cb {
+                i > ci || cfg_reaches(cfg, cb, cb)
+            } else {
+                cfg_reaches(cfg, cb, b)
+            };
+            if u.kind == UseKind::Consume || after || cfg.closure_body_blocks.contains(&b) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
 fn first_witness(
     binding: &str,
     uses: &[(BlockId, usize, &UseSite)],
@@ -440,6 +471,16 @@ fn first_witness(
                 && outside_closures(cb)
                 && outside_closures(ub)
                 && !cfg_reaches(cfg, *cb, *ub)
+            {
+                continue;
+            }
+            // B-2026-10-29-37: a read in the body of `let f = |..| ..` runs at
+            // a call of `f`, so it follows the consume only if `f` is used
+            // after it (or moved, and called from wherever it went).
+            if c.consume_origin == ConsumeOrigin::Direct
+                && !cfg.closure_body_blocks.contains(cb)
+                && cfg.closure_body_blocks.contains(ub)
+                && let_closure_runs_before(cfg, *cb, *ci, *ub)
             {
                 continue;
             }

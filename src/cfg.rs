@@ -286,6 +286,12 @@ pub struct Cfg {
     /// an escaping or task closure moves its captures in (core semantics
     /// §9.3, B-2026-10-26-11).
     pub closure_creations: FxHashMap<SpanKey, BlockId>,
+    /// For each closure-body block, the span of the outermost closure literal
+    /// whose body holds it: that closure's invocations are when it runs.
+    pub closure_body_owner: FxHashMap<BlockId, SpanKey>,
+    /// The binding a `let f = |..| ..` gives each closure literal, keyed by
+    /// the literal's span (B-2026-10-29-37).
+    pub let_closures: FxHashMap<SpanKey, String>,
 }
 
 impl Cfg {
@@ -350,6 +356,8 @@ pub fn build_cfg_with_classification<'a>(
         closure_body_blocks: builder.closure_body_blocks,
         sink_continuations: builder.sink_continuations,
         closure_creations: builder.closure_creations,
+        closure_body_owner: builder.closure_body_owner,
+        let_closures: builder.let_closures,
     }
 }
 
@@ -491,6 +499,10 @@ struct CfgBuilder<'a> {
     closure_depth: usize,
     sink_continuations: FxHashMap<BlockId, BlockId>,
     closure_creations: FxHashMap<SpanKey, BlockId>,
+    /// The closure literals being lowered, outermost first.
+    closure_owner_stack: Vec<SpanKey>,
+    closure_body_owner: FxHashMap<BlockId, SpanKey>,
+    let_closures: FxHashMap<SpanKey, String>,
 }
 
 impl<'a> CfgBuilder<'a> {
@@ -506,6 +518,9 @@ impl<'a> CfgBuilder<'a> {
             closure_depth: 0,
             sink_continuations: FxHashMap::default(),
             closure_creations: FxHashMap::default(),
+            closure_owner_stack: Vec::new(),
+            closure_body_owner: FxHashMap::default(),
+            let_closures: FxHashMap::default(),
         }
     }
 
@@ -640,6 +655,9 @@ impl<'a> CfgBuilder<'a> {
         });
         if self.closure_depth > 0 {
             self.closure_body_blocks.insert(id);
+        }
+        if let Some(k) = self.closure_owner_stack.first() {
+            self.closure_body_owner.insert(id, *k);
         }
         id
     }
@@ -872,6 +890,16 @@ impl<'a> CfgBuilder<'a> {
                             capture_scope: None,
                         },
                     );
+                }
+                // B-2026-10-29-37: `let f = |..| ..` names the closure, so its
+                // body runs where `f` is called.
+                if let (ExprKind::Closure { .. }, PatternKind::Binding(_)) =
+                    (&value.kind, &pattern.kind)
+                {
+                    if let Some(def) = self.blocks[after].uses.last() {
+                        self.let_closures
+                            .insert(SpanKey::from_span(&value.span), def.binding.clone());
+                    }
                 }
                 after
             }
@@ -1530,6 +1558,11 @@ impl<'a> CfgBuilder<'a> {
                 // IDs keep their original mint order so witness scan order is
                 // unperturbed (B-2026-07-11-9).
                 self.closure_body_blocks.insert(closure_body_block);
+                let owner = SpanKey::from_span(&expr.span);
+                let outermost = *self.closure_owner_stack.first().unwrap_or(&owner);
+                self.closure_body_owner
+                    .insert(closure_body_block, outermost);
+                self.closure_owner_stack.push(owner);
                 self.closure_depth += 1;
                 // B-2026-10-02-94 — scope the closure's params to a frame of
                 // their own, as an `if let` or `match` arm's bindings are: a
@@ -1557,6 +1590,7 @@ impl<'a> CfgBuilder<'a> {
                 }
                 self.lower_expr(body, closure_body_block, exit, loops);
                 self.pop_cleanup_rename_frame();
+                self.closure_owner_stack.pop();
                 self.closure_depth -= 1;
                 after_creation
             }

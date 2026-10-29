@@ -4941,6 +4941,7 @@ fn slice3_whole_root_capture_does_not_push_borrow_routes_through_rc_fallback() {
                fn make_handler(cfg: Config) {\n\
                    let h = || cfg.id();\n\
                    log(cfg);\n\
+                   h();\n\
                }";
     let parsed = parse(src);
     let resolved = resolve(&parsed.program);
@@ -5186,6 +5187,7 @@ fn closure_capture_with_terminal_outer_consume_still_rc() {
          fn make_handler(cfg: Config) {\n\
         \x20    let h = || cfg.id();\n\
         \x20    log(cfg);\n\
+        \x20    h();\n\
          }",
     );
     let rc = result
@@ -5532,6 +5534,7 @@ fn slice6_n0503_note_includes_method_call_reason() {
                    let u = User { name: 1, history: Inner { v: 3 } };\n\
                    let _f = || u.show();\n\
                    take(u.history);\n\
+                   _f();\n\
                }";
     let parsed = parse(src);
     let resolved = resolve(&parsed.program);
@@ -5573,6 +5576,7 @@ fn slice6_n0503_note_includes_method_call_fix_it_suggestion() {
                    let u = User { name: 1, history: Inner { v: 3 } };\n\
                    let _f = || u.show();\n\
                    take(u.history);\n\
+                   _f();\n\
                }";
     let parsed = parse(src);
     let resolved = resolve(&parsed.program);

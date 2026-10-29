@@ -749,6 +749,7 @@ fn trigger2_read_only_capture_keeps_consume_site_flavor() {
                fn make_handler(cfg: Config) {\n\
                    let h = || cfg.id();\n\
                    log(cfg);\n\
+                   h();\n\
                }";
     let result = run(src);
     assert!(
