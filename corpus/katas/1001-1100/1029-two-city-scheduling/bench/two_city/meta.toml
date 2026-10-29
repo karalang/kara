@@ -1,0 +1,11 @@
+source = "kara-katas/leetcode/1001-1100/1029-two-city-scheduling/bench/two_city.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["bench"]
+class = "e"
+expected_from = "mirror"
+note = "mirror: the C, Rust, Go and Python bench programs print this line (kara-katas 1029 bench/); there is no legacy record (the legacy compiler went at M3) e-spec: legacy differs from the drop model; v2 matches it"
+bucket = "e-spec"
+classified_with = "910205b0d"
+extracted_src = "d1026c9a"

@@ -1,0 +1,44 @@
+// LeetCode #1029: Two City Scheduling -- bench
+// Mirrors ../two_city.kara; see ../README.md § Benchmarks.
+
+fn two_city_sched_cost(costs: Vec[Vec[i64]]) -> i64 {
+    let mut order = costs.clone();
+    order.sort_by_key(|c| c[0] - c[1]);
+    let half = order.len() / 2;
+    let mut total = 0;
+    for i in 0..order.len() {
+        total += if i < half { order[i][0] } else { order[i][1] };
+    }
+    total
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let count = 1000;
+    let rounds = 100;
+    let mut seed = 1029;
+    let mut cases: Vec[Vec[Vec[i64]]] = Vec.new();
+    for _ in 0..count {
+        let mut costs: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..100 {
+            let a = next_random(mut seed) % 1000 + 1;
+            let b = next_random(mut seed) % 1000 + 1;
+            costs.push(vec![a, b]);
+        }
+        cases.push(costs);
+    }
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..rounds {
+        for costs in cases.iter() {
+            let answer = two_city_sched_cost(costs);
+            total += answer;
+            check = (check * 131 + answer) % 1000000007;
+        }
+    }
+    println(f"{count} cases of 100 people, {rounds} rounds: sum {total}, checksum {check}");
+}

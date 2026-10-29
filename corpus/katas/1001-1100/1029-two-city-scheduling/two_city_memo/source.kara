@@ -1,0 +1,86 @@
+// LeetCode #1029: Two City Scheduling -- recursion with a memo
+//
+// From person `i` on, with `left_a` places left in city a and the rest
+// in city b, the least cost is the person's fare to a city with room
+// plus the least cost of the rest, the cheaper of the two; each state is
+// solved once and kept in a `Map`. O(n^2).
+
+fn least(costs: ref Vec[Vec[i64]], i: i64, left_a: i64, memo: mut ref Map[(i64, i64), i64]) -> i64 {
+    if i == costs.len() {
+        return 0;
+    }
+    if let Some(known) = memo.get((i, left_a)) {
+        return known;
+    }
+    let left_b = costs.len() - i - left_a;
+    let mut best = i64.MAX;
+    if left_a > 0 {
+        best = costs[i][0] + least(costs, i + 1, left_a - 1, mut memo);
+    }
+    if left_b > 0 {
+        best = best.min(costs[i][1] + least(costs, i + 1, left_a, mut memo));
+    }
+    memo.insert((i, left_a), best);
+    best
+}
+
+fn two_city_sched_cost(costs: Vec[Vec[i64]]) -> i64 {
+    let mut memo: Map[(i64, i64), i64] = Map.new();
+    least(costs, 0, costs.len() / 2, mut memo)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(costs: ref Vec[Vec[i64]]) -> String {
+    let pairs: Vec[String] = costs.iter().map(|c| f"[{c[0]},{c[1]}]").collect();
+    "[" + pairs.join(",") + "]"
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let examples: Vec[Vec[Vec[i64]]] = vec![
+        vec![vec![10, 20], vec![30, 200], vec![400, 50], vec![30, 20]],
+        vec![vec![259, 770], vec![448, 54], vec![926, 667], vec![184, 139], vec![840, 118], vec![577, 469]],
+        vec![vec![515, 563], vec![451, 713], vec![537, 709], vec![343, 819], vec![855, 779], vec![457, 60], vec![650, 359], vec![631, 42]],
+        vec![vec![1, 1000], vec![1000, 1]],
+        vec![vec![1, 1000], vec![2, 1000]],
+        vec![vec![5, 5], vec![5, 5], vec![5, 5], vec![5, 5]],
+        vec![vec![1000, 1000], vec![1, 1], vec![500, 1], vec![1, 500], vec![999, 998], vec![2, 3]],
+    ];
+    for costs in examples.iter() {
+        println(f"{show(costs)} -> {two_city_sched_cost(costs)}");
+    }
+    // random cases: `pairs` people to each city, costs from 1 to `top`
+    let mut seed = 1029;
+    let groups: Vec[(i64, i64, i64)] = vec![(2000, 1, 10), (1000, 3, 1000), (500, 10, 50), (200, 25, 1000), (50, 50, 1000), (20, 50, 3)];
+    for (count, pairs, top) in groups.iter() {
+        let mut total = 0;
+        let mut check = 0;
+        for _ in 0..count {
+            let mut costs: Vec[Vec[i64]] = Vec.new();
+            for _ in 0..2 * pairs {
+                let a = next_random(mut seed) % top + 1;
+                let b = next_random(mut seed) % top + 1;
+                costs.push(vec![a, b]);
+            }
+            let answer = two_city_sched_cost(costs);
+            total += answer;
+            check = (check * 131 + answer) % 1000000007;
+        }
+        println(f"{count} cases of {2 * pairs} people (costs 1 to {top}): sum {total}, checksum {check}");
+    }
+    // one city always cheaper, and every cost the same
+    let mut cheap_a: Vec[Vec[i64]] = Vec.new();
+    let mut level: Vec[Vec[i64]] = Vec.new();
+    for k in 0..100 {
+        cheap_a.push(vec![k + 1, k + 500]);
+        level.push(vec![1000, 1000]);
+    }
+    println(f"100 people, a always cheaper by 499: {two_city_sched_cost(cheap_a)}");
+    println(f"100 people, every cost 1000: {two_city_sched_cost(level)}");
+}

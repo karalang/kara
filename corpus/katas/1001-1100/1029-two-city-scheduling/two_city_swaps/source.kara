@@ -1,0 +1,90 @@
+// LeetCode #1029: Two City Scheduling -- swapping until nothing helps
+//
+// Send the first half to city a and the rest to b, then look for a
+// person in a and one in b whose swap would cost less, and swap them,
+// until no swap helps. Swapping `i` in a with `j` in b changes the cost
+// by `(b_i - a_i) + (a_j - b_j)`; when no swap lowers it, everyone in a
+// saves at least as much as anyone in b, which is the sorted answer.
+// O(n^3) at worst.
+
+fn two_city_sched_cost(costs: Vec[Vec[i64]]) -> i64 {
+    let people = costs.len();
+    let mut in_a: Vec[bool] = Vec.new();
+    for i in 0..people {
+        in_a.push(i < people / 2);
+    }
+    let mut improved = true;
+    while improved {
+        improved = false;
+        for i in 0..people {
+            for j in 0..people {
+                if in_a[i] and not in_a[j] and costs[i][1] - costs[i][0] + costs[j][0] - costs[j][1] < 0 {
+                    in_a[i] = false;
+                    in_a[j] = true;
+                    improved = true;
+                }
+            }
+        }
+    }
+    let mut total = 0;
+    for i in 0..people {
+        total += if in_a[i] { costs[i][0] } else { costs[i][1] };
+    }
+    total
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(costs: ref Vec[Vec[i64]]) -> String {
+    let pairs: Vec[String] = costs.iter().map(|c| f"[{c[0]},{c[1]}]").collect();
+    "[" + pairs.join(",") + "]"
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let examples: Vec[Vec[Vec[i64]]] = vec![
+        vec![vec![10, 20], vec![30, 200], vec![400, 50], vec![30, 20]],
+        vec![vec![259, 770], vec![448, 54], vec![926, 667], vec![184, 139], vec![840, 118], vec![577, 469]],
+        vec![vec![515, 563], vec![451, 713], vec![537, 709], vec![343, 819], vec![855, 779], vec![457, 60], vec![650, 359], vec![631, 42]],
+        vec![vec![1, 1000], vec![1000, 1]],
+        vec![vec![1, 1000], vec![2, 1000]],
+        vec![vec![5, 5], vec![5, 5], vec![5, 5], vec![5, 5]],
+        vec![vec![1000, 1000], vec![1, 1], vec![500, 1], vec![1, 500], vec![999, 998], vec![2, 3]],
+    ];
+    for costs in examples.iter() {
+        println(f"{show(costs)} -> {two_city_sched_cost(costs)}");
+    }
+    // random cases: `pairs` people to each city, costs from 1 to `top`
+    let mut seed = 1029;
+    let groups: Vec[(i64, i64, i64)] = vec![(2000, 1, 10), (1000, 3, 1000), (500, 10, 50), (200, 25, 1000), (50, 50, 1000), (20, 50, 3)];
+    for (count, pairs, top) in groups.iter() {
+        let mut total = 0;
+        let mut check = 0;
+        for _ in 0..count {
+            let mut costs: Vec[Vec[i64]] = Vec.new();
+            for _ in 0..2 * pairs {
+                let a = next_random(mut seed) % top + 1;
+                let b = next_random(mut seed) % top + 1;
+                costs.push(vec![a, b]);
+            }
+            let answer = two_city_sched_cost(costs);
+            total += answer;
+            check = (check * 131 + answer) % 1000000007;
+        }
+        println(f"{count} cases of {2 * pairs} people (costs 1 to {top}): sum {total}, checksum {check}");
+    }
+    // one city always cheaper, and every cost the same
+    let mut cheap_a: Vec[Vec[i64]] = Vec.new();
+    let mut level: Vec[Vec[i64]] = Vec.new();
+    for k in 0..100 {
+        cheap_a.push(vec![k + 1, k + 500]);
+        level.push(vec![1000, 1000]);
+    }
+    println(f"100 people, a always cheaper by 499: {two_city_sched_cost(cheap_a)}");
+    println(f"100 people, every cost 1000: {two_city_sched_cost(level)}");
+}
