@@ -1,0 +1,14 @@
+[3, 6, 9, 12] -> 4
+[9, 4, 7, 2, 10] -> 3
+[20, 1, 15, 3, 10, 5, 8] -> 4
+[83, 20, 17, 43, 52, 78, 68, 45] -> 2
+[1, 1] -> 2
+[0, 500, 250, 0, 500] -> 3
+[12, 28, 13, 6, 34, 36, 53, 24, 29, 2, 23, 0, 22, 25, 53, 34, 23, 50, 35, 43, 53, 11, 48, 56, 44, 53, 31, 6, 31, 57, 46, 6, 17, 42, 48, 28, 5, 24, 0, 14, 43, 12, 21, 6, 30, 37, 16, 56, 19, 45, 51, 10, 22, 38, 39, 23, 8, 29, 60, 18] -> 4
+500 arrays of 8 values from 0 to 10: sum 1510, longest 6, checksum 299195660
+300 arrays of 30 values from 0 to 20: sum 1483, longest 8, checksum 969096687
+100 arrays of 100 values from 0 to 3: sum 3024, longest 35, checksum 705042435
+60 arrays of 100 values from 0 to 500: sum 254, longest 5, checksum 389340848
+5 arrays of 1000 values from 0 to 500: sum 47, longest 10, checksum 670905023
+2 arrays of 1000 values from 0 to 50: sum 61, longest 31, checksum 4091
+rising: 501, alternating: 100, doubled steps of 7: 72

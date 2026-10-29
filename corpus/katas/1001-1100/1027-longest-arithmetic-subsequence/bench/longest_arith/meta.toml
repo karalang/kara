@@ -1,0 +1,11 @@
+source = "kara-katas/leetcode/1001-1100/1027-longest-arithmetic-subsequence/bench/longest_arith.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["bench"]
+class = "e"
+expected_from = "mirror"
+note = "mirror: the C, Rust, Go and Python bench programs print this line (kara-katas 1027 bench/); there is no legacy record (the legacy compiler went at M3)"
+bucket = "timeout"
+classified_with = "395d9813d"
+extracted_src = "18022647"

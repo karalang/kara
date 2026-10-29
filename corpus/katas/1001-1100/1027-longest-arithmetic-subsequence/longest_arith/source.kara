@@ -1,0 +1,81 @@
+// LeetCode #1027: Longest Arithmetic Subsequence -- a table by difference
+//
+// `run[i][d + 500]` is the length of the longest arithmetic subsequence
+// ending at `nums[i]` with difference `d`; values lie in 0..=500, so `d`
+// lies in -500..=500 and indexes a row directly. Each earlier `j` extends
+// the run ending at `j` with the same difference by one, or starts a
+// pair. O(n^2) time, O(n * 1001) space.
+
+fn longest_arith_seq_length(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut run: Vec[Vec[i64]] = Vec.filled(n, Vec.filled(1001, 0));
+    let mut best = 2;
+    for i in 1..n {
+        for j in 0..i {
+            let d = nums[i] - nums[j] + 500;
+            let length = if run[j][d] > 0 { run[j][d] + 1 } else { 2 };
+            if length > run[i][d] {
+                run[i][d] = length;
+            }
+            best = best.max(length);
+        }
+    }
+    best
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let examples: Vec[Vec[i64]] = vec![
+        vec![3, 6, 9, 12],
+        vec![9, 4, 7, 2, 10],
+        vec![20, 1, 15, 3, 10, 5, 8],
+        vec![83, 20, 17, 43, 52, 78, 68, 45],
+        vec![1, 1],
+        vec![0, 500, 250, 0, 500],
+        vec![12, 28, 13, 6, 34, 36, 53, 24, 29, 2, 23, 0, 22, 25, 53, 34, 23, 50, 35, 43, 53, 11, 48, 56, 44, 53, 31, 6, 31, 57, 46, 6, 17, 42, 48, 28, 5, 24, 0, 14, 43, 12, 21, 6, 30, 37, 16, 56, 19, 45, 51, 10, 22, 38, 39, 23, 8, 29, 60, 18],
+    ];
+    for nums in examples.iter() {
+        println(f"{nums} -> {longest_arith_seq_length(nums)}");
+    }
+    // random arrays: the sum of the answers, the longest and a checksum
+    let mut seed = 1027;
+    let groups: Vec[(i64, i64, i64)] = vec![(500, 8, 10), (300, 30, 20), (100, 100, 3), (60, 100, 500), (5, 1000, 500), (2, 1000, 50)];
+    for (count, n, top) in groups.iter() {
+        let mut total = 0;
+        let mut longest = 0;
+        let mut check = 0;
+        for _ in 0..count {
+            let mut nums: Vec[i64] = Vec.new();
+            for _ in 0..n {
+                nums.push(next_random(mut seed) % (top + 1));
+            }
+            let answer = longest_arith_seq_length(nums);
+            total += answer;
+            longest = longest.max(answer);
+            check = (check * 131 + answer) % 1000000007;
+        }
+        println(f"{count} arrays of {n} values from 0 to {top}: sum {total}, longest {longest}, checksum {check}");
+    }
+    // 0 to 500 rising, 200 values alternating 0 and 500, and 0 to 500 in
+    // steps of 7 with every value repeated
+    let rising: Vec[i64] = (0..501).collect();
+    let mut alternating: Vec[i64] = Vec.new();
+    for k in 0..200 {
+        alternating.push(if k % 2 == 0 { 0 } else { 500 });
+    }
+    let mut doubled: Vec[i64] = Vec.new();
+    let mut v = 0;
+    while v <= 500 {
+        doubled.push(v);
+        doubled.push(v);
+        v += 7;
+    }
+    println(f"rising: {longest_arith_seq_length(rising)}, alternating: {longest_arith_seq_length(alternating)}, doubled steps of 7: {longest_arith_seq_length(doubled)}");
+}

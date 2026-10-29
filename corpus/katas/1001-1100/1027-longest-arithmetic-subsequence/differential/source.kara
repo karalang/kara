@@ -1,0 +1,254 @@
+// LeetCode #1027: Longest Arithmetic Subsequence -- differential
+//
+// The five arms, copied, against the statement read literally and five
+// more properties. See README.md § Differential.
+
+fn d_star(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut run: Vec[Vec[i64]] = Vec.filled(n, Vec.filled(1001, 0));
+    let mut best = 2;
+    for i in 1..n {
+        for j in 0..i {
+            let d = nums[i] - nums[j] + 500;
+            let length = if run[j][d] > 0 { run[j][d] + 1 } else { 2 };
+            if length > run[i][d] {
+                run[i][d] = length;
+            }
+            best = best.max(length);
+        }
+    }
+    best
+}
+
+fn d_map(nums: Vec[i64]) -> i64 {
+    let mut ending: Vec[Map[i64, i64]] = Vec.new();
+    let mut best = 2;
+    for i in 0..nums.len() {
+        let mut here: Map[i64, i64] = Map.new();
+        for j in 0..i {
+            let d = nums[i] - nums[j];
+            let length = ending[j].get(d).unwrap_or(1) + 1;
+            if length > here.get(d).unwrap_or(0) {
+                here.insert(d, length);
+            }
+            best = best.max(length);
+        }
+        ending.push(here);
+    }
+    best
+}
+
+fn d_pairs(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut pair: Vec[Vec[i64]] = Vec.filled(n, Vec.filled(n, 2));
+    let mut latest: Vec[i64] = Vec.filled(501, -1);
+    let mut best = 2;
+    for j in 0..n {
+        for i in j + 1..n {
+            let before = 2 * nums[j] - nums[i];
+            if before >= 0 and before <= 500 and latest[before] >= 0 {
+                pair[j][i] = pair[latest[before]][j] + 1;
+                best = best.max(pair[j][i]);
+            }
+        }
+        latest[nums[j]] = j;
+    }
+    best
+}
+
+fn d_by_difference(nums: Vec[i64]) -> i64 {
+    let spread = nums.iter().max().unwrap() - nums.iter().min().unwrap();
+    let mut best = 0;
+    for d in -spread..spread + 1 {
+        let mut ending: Vec[i64] = Vec.filled(501, 0);
+        for v in nums.iter() {
+            let before = v - d;
+            let length = if before >= 0 and before <= 500 { ending[before] + 1 } else { 1 };
+            ending[v] = ending[v].max(length);
+            best = best.max(length);
+        }
+    }
+    best
+}
+
+fn d_extend(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    // next[k][v]: the first index at or after k holding v, or n
+    let mut next: Vec[Vec[i64]] = Vec.filled(n + 1, Vec.filled(501, n));
+    for k in (0..n).rev() {
+        next[k] = next[k + 1].clone();
+        next[k][nums[k]] = k;
+    }
+    let mut best = 2;
+    for i in 0..n {
+        for j in i + 1..n {
+            let d = nums[j] - nums[i];
+            let mut length = 2;
+            let mut at = j;
+            let mut want = nums[j] + d;
+            while want >= 0 and want <= 500 and next[at + 1][want] < n {
+                at = next[at + 1][want];
+                length += 1;
+                want += d;
+            }
+            best = best.max(length);
+        }
+    }
+    best
+}
+fn arms(nums: ref Vec[i64]) -> Vec[i64] {
+    vec![d_star(nums.clone()), d_map(nums.clone()), d_pairs(nums.clone()), d_by_difference(nums.clone()), d_extend(nums.clone())]
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// the statement read literally: the most terms of any subsequence, picked
+// out by the bits of a mask, whose neighbouring terms all differ by the
+// same amount
+fn literal(nums: ref Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut best = 0;
+    for mask in 1..1 << n {
+        let mut picked: Vec[i64] = Vec.new();
+        for k in 0..n {
+            if (mask >> k) & 1 == 1 {
+                picked.push(nums[k]);
+            }
+        }
+        let mut arithmetic = true;
+        for k in 2..picked.len() {
+            if picked[k] - picked[k - 1] != picked[1] - picked[0] {
+                arithmetic = false;
+            }
+        }
+        if arithmetic {
+            best = best.max(picked.len());
+        }
+    }
+    best
+}
+
+fn main() {
+    let mut failures: Vec[i64] = Vec.filled(6, 0);
+    let mut checks = 0;
+    let mut check = 0;
+    let mut searched = 0;
+    let mut seed = 10271;
+    // every array of 2 to 4 values below 4 and of 5 values below 3 (579),
+    // then 400 random arrays of 6 to 10 values and 10 of 60 to 150, with
+    // values up to 3, 20, 100 or 500
+    let mut cases: Vec[Vec[i64]] = Vec.new();
+    for (length, base) in vec![(2, 4), (3, 4), (4, 4), (5, 3)] {
+        let mut total = 1;
+        for _ in 0..length {
+            total *= base;
+        }
+        for code in 0..total {
+            let mut nums: Vec[i64] = Vec.new();
+            let mut c = code;
+            for _ in 0..length {
+                nums.push(c % base);
+                c /= base;
+            }
+            cases.push(nums);
+        }
+    }
+    let tops: Vec[i64] = vec![3, 20, 100, 500];
+    for k in 0..410 {
+        let n = if k < 400 { 6 + next_random(mut seed) % 5 } else { 60 + next_random(mut seed) % 91 };
+        let top = tops[next_random(mut seed) % 4];
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            nums.push(next_random(mut seed) % (top + 1));
+        }
+        cases.push(nums);
+    }
+    for nums in cases.iter() {
+        let n = nums.len();
+        let got = arms(nums);
+        // P2: the array read backwards
+        let mut backwards: Vec[i64] = Vec.new();
+        for k in 0..n {
+            backwards.push(nums[n - 1 - k]);
+        }
+        let got_backwards = arms(backwards);
+        // P3: every value v turned into 500 - v
+        let mut flipped: Vec[i64] = Vec.new();
+        for v in nums.iter() {
+            flipped.push(500 - v);
+        }
+        let got_flipped = arms(flipped);
+        // P4: the first or the last value taken off, when three or more
+        let out_at = if next_random(mut seed) % 2 == 0 { 0 } else { n - 1 };
+        let mut fewer = nums.clone();
+        fewer.remove(out_at);
+        let got_fewer = if n >= 3 { arms(fewer) } else { Vec.new() };
+        // P5: one random value, no more than one above the largest, put
+        // on the front or the back
+        let in_at = if next_random(mut seed) % 2 == 0 { 0 } else { n };
+        let mut more = nums.clone();
+        let highest = nums.iter().max().unwrap();
+        more.insert(in_at, next_random(mut seed) % (highest + 2));
+        let got_more = arms(more);
+        let exact = if n <= 10 { literal(nums) } else { -1 };
+        if exact >= 0 {
+            searched += 1;
+        }
+        check = (check * 131 + got[0]) % 1000000007;
+        for a in 0..5 {
+            let c = got[a];
+            // P1: the statement, on the arrays of at most 10 values
+            if exact >= 0 {
+                checks += 1;
+                if c != exact {
+                    failures[0] += 1;
+                }
+            }
+            // P2: read backwards, an arithmetic subsequence still is one
+            checks += 1;
+            if got_backwards[a] != c {
+                failures[1] += 1;
+            }
+            // P3: turning every value round keeps every difference's size
+            checks += 1;
+            if got_flipped[a] != c {
+                failures[2] += 1;
+            }
+            // P4: taking an end off loses at most that one term, since a
+            // subsequence that used it is still arithmetic without it
+            if n >= 3 {
+                checks += 1;
+                if got_fewer[a] > c or got_fewer[a] < c - 1 {
+                    failures[3] += 1;
+                }
+            }
+            // P5: putting a value on an end adds at most that one term
+            checks += 1;
+            if got_more[a] < c or got_more[a] > c + 1 {
+                failures[4] += 1;
+            }
+            // P6: each arm agrees with at least two of the other four
+            checks += 1;
+            let mut agree = 0;
+            for o in 0..5 {
+                if o != a and got[o] == c {
+                    agree += 1;
+                }
+            }
+            if agree < 2 {
+                failures[5] += 1;
+            }
+        }
+    }
+    let mut total = 0;
+    for p in 0..6 {
+        if failures[p] > 0 {
+            println(f"P{p + 1}: {failures[p]} failures");
+        }
+        total += failures[p];
+    }
+    println(f"{cases.len()} arrays ({searched} searched in full): checksum {check}, {checks} checks over 5 arms: {total} failures");
+}
