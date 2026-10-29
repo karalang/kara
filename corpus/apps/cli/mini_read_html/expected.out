@@ -1,0 +1,1435 @@
+$ read cities.html
+tables 4
+table 0
+shape (4, 2)
+  'Communes of France': str
+  'Communes of France.1': str
+,Communes of France,Communes of France.1
+0,Country,France
+1,Communes,"34,945[2]"
+2,Largest,Paris
+3,Census,1 January 2021
+table 1
+shape (8, 7)
+  'Rank': int64
+  'Commune': str
+  'Region': str
+  'Population (2021)': str
+  'Area (km2)': float64
+  'Density (/km2)': int64
+  'Change 2015–21': str
+,Rank,Commune,Region,Population (2021),Area (km2),Density (/km2),Change 2015–21
+0,1,Paris,Île-de-France,"2,102,650[a]",105.4,19950,−1.2%
+1,2,Boulogne-Billancourt,Île-de-France,121583,6.17,19705,+0.4%
+2,3,Marseille,Provence-Alpes-Côte d'Azur,873076,240.6,3629,+0.9%
+3,4,Nice,Provence-Alpes-Côte d'Azur,348085,71.9,4841,+0.3%
+4,5,Lyon,Auvergne-Rhône-Alpes,522250,47.87,10910,+1.1%
+5,6,Saint-Étienne (Loire),Auvergne-Rhône-Alpes,173089,79.97,2164,−0.1%
+6,7,Toulouse,Occitanie,504078,118.3,4261,+1.4%
+7,8,Montpellier,Occitanie,302454,56.88,5317,+1.6%
+table 2
+shape (5, 3)
+  'Region': str
+  'Communes': int64
+  'Share': str
+,Region,Communes,Share
+0,Île-de-France,5,11.9%
+1,Auvergne-Rhône-Alpes,4,9.5%
+2,Occitanie,2,4.8%
+3,Grand Est,3,7.1%
+4,Total,42,100%
+table 3
+shape (2, 2)
+  0: str
+  1: str
+,0,1
+0,Prefectures,Lyon · Marseille · Toulouse
+1,Rivers,Rhône · Garonne
+$ read cities.html match=Population
+tables 1
+table 0
+shape (8, 7)
+  'Rank': int64
+  'Commune': str
+  'Region': str
+  'Population (2021)': str
+  'Area (km2)': float64
+  'Density (/km2)': int64
+  'Change 2015–21': str
+,Rank,Commune,Region,Population (2021),Area (km2),Density (/km2),Change 2015–21
+0,1,Paris,Île-de-France,"2,102,650[a]",105.4,19950,−1.2%
+1,2,Boulogne-Billancourt,Île-de-France,121583,6.17,19705,+0.4%
+2,3,Marseille,Provence-Alpes-Côte d'Azur,873076,240.6,3629,+0.9%
+3,4,Nice,Provence-Alpes-Côte d'Azur,348085,71.9,4841,+0.3%
+4,5,Lyon,Auvergne-Rhône-Alpes,522250,47.87,10910,+1.1%
+5,6,Saint-Étienne (Loire),Auvergne-Rhône-Alpes,173089,79.97,2164,−0.1%
+6,7,Toulouse,Occitanie,504078,118.3,4261,+1.4%
+7,8,Montpellier,Occitanie,302454,56.88,5317,+1.6%
+$ read cities.html match=Prefectures
+tables 1
+table 0
+shape (2, 2)
+  0: str
+  1: str
+,0,1
+0,Prefectures,Lyon · Marseille · Toulouse
+1,Rivers,Rhône · Garonne
+$ read cities.html attrs=id:largest
+tables 1
+table 0
+shape (8, 7)
+  'Rank': int64
+  'Commune': str
+  'Region': str
+  'Population (2021)': str
+  'Area (km2)': float64
+  'Density (/km2)': int64
+  'Change 2015–21': str
+,Rank,Commune,Region,Population (2021),Area (km2),Density (/km2),Change 2015–21
+0,1,Paris,Île-de-France,"2,102,650[a]",105.4,19950,−1.2%
+1,2,Boulogne-Billancourt,Île-de-France,121583,6.17,19705,+0.4%
+2,3,Marseille,Provence-Alpes-Côte d'Azur,873076,240.6,3629,+0.9%
+3,4,Nice,Provence-Alpes-Côte d'Azur,348085,71.9,4841,+0.3%
+4,5,Lyon,Auvergne-Rhône-Alpes,522250,47.87,10910,+1.1%
+5,6,Saint-Étienne (Loire),Auvergne-Rhône-Alpes,173089,79.97,2164,−0.1%
+6,7,Toulouse,Occitanie,504078,118.3,4261,+1.4%
+7,8,Montpellier,Occitanie,302454,56.88,5317,+1.6%
+$ read cities.html attrs=class:wikitable
+tables 1
+table 0
+shape (5, 3)
+  'Region': str
+  'Communes': int64
+  'Share': str
+,Region,Communes,Share
+0,Île-de-France,5,11.9%
+1,Auvergne-Rhône-Alpes,4,9.5%
+2,Occitanie,2,4.8%
+3,Grand Est,3,7.1%
+4,Total,42,100%
+$ read cities.html attrs=class:wikitable\ssortable
+tables 1
+table 0
+shape (8, 7)
+  'Rank': int64
+  'Commune': str
+  'Region': str
+  'Population (2021)': str
+  'Area (km2)': float64
+  'Density (/km2)': int64
+  'Change 2015–21': str
+,Rank,Commune,Region,Population (2021),Area (km2),Density (/km2),Change 2015–21
+0,1,Paris,Île-de-France,"2,102,650[a]",105.4,19950,−1.2%
+1,2,Boulogne-Billancourt,Île-de-France,121583,6.17,19705,+0.4%
+2,3,Marseille,Provence-Alpes-Côte d'Azur,873076,240.6,3629,+0.9%
+3,4,Nice,Provence-Alpes-Côte d'Azur,348085,71.9,4841,+0.3%
+4,5,Lyon,Auvergne-Rhône-Alpes,522250,47.87,10910,+1.1%
+5,6,Saint-Étienne (Loire),Auvergne-Rhône-Alpes,173089,79.97,2164,−0.1%
+6,7,Toulouse,Occitanie,504078,118.3,4261,+1.4%
+7,8,Montpellier,Occitanie,302454,56.88,5317,+1.6%
+$ read cities.html match=Share index_col=0
+tables 1
+table 0
+shape (5, 2)
+  'Communes': int64
+  'Share': str
+Region,Communes,Share
+Île-de-France,5,11.9%
+Auvergne-Rhône-Alpes,4,9.5%
+Occitanie,2,4.8%
+Grand Est,3,7.1%
+Total,42,100%
+$ read cities.html match=Population displayed_only=False
+tables 1
+table 0
+shape (8, 7)
+  'Rank': int64
+  'Commune': str
+  'Region': str
+  'Population (2021)': str
+  'Area (km2)': float64
+  'Density (/km2)': int64
+  'Change 2015–21': str
+,Rank,Commune,Region,Population (2021),Area (km2),Density (/km2),Change 2015–21
+0,1,Paris,Île-de-France,"2,102,650[a]",105.4,1995019950,−1.2%
+1,2,Boulogne-Billancourt,Île-de-France,121583,6.17,1970519705,+0.4%
+2,3,Marseille,Provence-Alpes-Côte d'Azur,873076,240.6,36293629,+0.9%
+3,4,Nice,Provence-Alpes-Côte d'Azur,348085,71.9,48414841,+0.3%
+4,5,Lyon,Auvergne-Rhône-Alpes,522250,47.87,1091010910,+1.1%
+5,6,Saint-Étienne (Loire),Auvergne-Rhône-Alpes,173089,79.97,21642164,−0.1%
+6,7,Toulouse,Occitanie,504078,118.3,42614261,+1.4%
+7,8,Montpellier,Occitanie,302454,56.88,53175317,+1.6%
+$ read cities.html match=Population thousands=None
+tables 1
+table 0
+shape (8, 7)
+  'Rank': int64
+  'Commune': str
+  'Region': str
+  'Population (2021)': str
+  'Area (km2)': float64
+  'Density (/km2)': str
+  'Change 2015–21': str
+,Rank,Commune,Region,Population (2021),Area (km2),Density (/km2),Change 2015–21
+0,1,Paris,Île-de-France,"2,102,650[a]",105.4,"19,950",−1.2%
+1,2,Boulogne-Billancourt,Île-de-France,"121,583",6.17,"19,705",+0.4%
+2,3,Marseille,Provence-Alpes-Côte d'Azur,"873,076",240.6,"3,629",+0.9%
+3,4,Nice,Provence-Alpes-Côte d'Azur,"348,085",71.9,"4,841",+0.3%
+4,5,Lyon,Auvergne-Rhône-Alpes,"522,250",47.87,"10,910",+1.1%
+5,6,Saint-Étienne (Loire),Auvergne-Rhône-Alpes,"173,089",79.97,"2,164",−0.1%
+6,7,Toulouse,Occitanie,"504,078",118.3,"4,261",+1.4%
+7,8,Montpellier,Occitanie,"302,454",56.88,"5,317",+1.6%
+$ read cities.html match=Population extract_links=body head=3
+tables 1
+table 0
+shape (8, 7)
+  'Rank': object
+  'Commune': object
+  'Region': object
+  'Population (2021)': object
+  'Area (km2)': object
+  'Density (/km2)': object
+  'Change 2015–21': object
+,Rank,Commune,Region,Population (2021),Area (km2),Density (/km2),Change 2015–21
+0,"('1', None)","('Paris', '/wiki/Paris')","('Île-de-France', '/wiki/Île-de-France')","('2,102,650[a]', '#cite_note-insee-1')","('105.4', None)","('19,950', None)","('−1.2%', None)"
+1,"('2', None)","('Boulogne-Billancourt', '/wiki/Boulogne-Billancourt')","('Île-de-France', '/wiki/Île-de-France')","('121,583', None)","('6.17', None)","('19,705', None)","('+0.4%', None)"
+2,"('3', None)","('Marseille', '/wiki/Marseille')","(""Provence-Alpes-Côte d'Azur"", ""/wiki/Provence-Alpes-Côte_d'Azur"")","('873,076', None)","('240.6', None)","('3,629', None)","('+0.9%', None)"
+$ read cities.html match=Population extract_links=all head=2
+tables 1
+table 0
+shape (8, 7)
+  ('Rank', None): object
+  ('Commune', None): object
+  ('Region', None): object
+  ('Population (2021)', None): object
+  ('Area (km2)', None): object
+  ('Density (/km2)', None): object
+  ('Change 2015–21', None): object
+,"('Rank', None)","('Commune', None)","('Region', None)","('Population (2021)', None)","('Area (km2)', None)","('Density (/km2)', None)","('Change 2015–21', None)"
+0,"('1', None)","('Paris', '/wiki/Paris')","('Île-de-France', '/wiki/Île-de-France')","('2,102,650[a]', '#cite_note-insee-1')","('105.4', None)","('19,950', None)","('−1.2%', None)"
+1,"('2', None)","('Boulogne-Billancourt', '/wiki/Boulogne-Billancourt')","('Île-de-France', '/wiki/Île-de-France')","('121,583', None)","('6.17', None)","('19,705', None)","('+0.4%', None)"
+$ read cities.html match=Population extract_links=header head=1
+tables 1
+table 0
+shape (8, 7)
+  ('Rank', None): int64
+  ('Commune', None): str
+  ('Region', None): str
+  ('Population (2021)', None): str
+  ('Area (km2)', None): float64
+  ('Density (/km2)', None): int64
+  ('Change 2015–21', None): str
+,"('Rank', None)","('Commune', None)","('Region', None)","('Population (2021)', None)","('Area (km2)', None)","('Density (/km2)', None)","('Change 2015–21', None)"
+0,1,Paris,Île-de-France,"2,102,650[a]",105.4,19950,−1.2%
+$ read cities.html match=Prefectures extract_links=all
+tables 1
+table 0
+shape (2, 2)
+  0: object
+  1: object
+,0,1
+0,"('Prefectures', None)","('Lyon · Marseille · Toulouse', '/wiki/Lyon')"
+1,"('Rivers', None)","('Rhône · Garonne', '/wiki/Rh%C3%B4ne')"
+$ read cities.html match=Population skiprows=2
+tables 1
+table 0
+shape (6, 7)
+  '2': int64
+  'Boulogne-Billancourt': str
+  'Île-de-France': str
+  '121,583': int64
+  '6.17': float64
+  '19,705': int64
+  '+0.4%': str
+,2,Boulogne-Billancourt,Île-de-France,"121,583",6.17,"19,705",+0.4%
+0,3,Marseille,Provence-Alpes-Côte d'Azur,873076,240.6,3629,+0.9%
+1,4,Nice,Provence-Alpes-Côte d'Azur,348085,71.9,4841,+0.3%
+2,5,Lyon,Auvergne-Rhône-Alpes,522250,47.87,10910,+1.1%
+3,6,Saint-Étienne (Loire),Auvergne-Rhône-Alpes,173089,79.97,2164,−0.1%
+4,7,Toulouse,Occitanie,504078,118.3,4261,+1.4%
+5,8,Montpellier,Occitanie,302454,56.88,5317,+1.6%
+$ read cities.html match=Population skiprows=1,3
+tables 1
+table 0
+shape (6, 7)
+  'Rank': int64
+  'Commune': str
+  'Region': str
+  'Population (2021)': int64
+  'Area (km2)': float64
+  'Density (/km2)': int64
+  'Change 2015–21': str
+,Rank,Commune,Region,Population (2021),Area (km2),Density (/km2),Change 2015–21
+0,2,Boulogne-Billancourt,Île-de-France,121583,6.17,19705,+0.4%
+1,4,Nice,Provence-Alpes-Côte d'Azur,348085,71.9,4841,+0.3%
+2,5,Lyon,Auvergne-Rhône-Alpes,522250,47.87,10910,+1.1%
+3,6,Saint-Étienne (Loire),Auvergne-Rhône-Alpes,173089,79.97,2164,−0.1%
+4,7,Toulouse,Occitanie,504078,118.3,4261,+1.4%
+5,8,Montpellier,Occitanie,302454,56.88,5317,+1.6%
+$ read cities.html match=Population header=1
+tables 1
+table 0
+shape (7, 7)
+  '1': int64
+  'Paris': str
+  'Île-de-France': str
+  '2,102,650[a]': int64
+  '105.4': float64
+  '19,950': int64
+  '−1.2%': str
+,1,Paris,Île-de-France,"2,102,650[a]",105.4,"19,950",−1.2%
+0,2,Boulogne-Billancourt,Île-de-France,121583,6.17,19705,+0.4%
+1,3,Marseille,Provence-Alpes-Côte d'Azur,873076,240.6,3629,+0.9%
+2,4,Nice,Provence-Alpes-Côte d'Azur,348085,71.9,4841,+0.3%
+3,5,Lyon,Auvergne-Rhône-Alpes,522250,47.87,10910,+1.1%
+4,6,Saint-Étienne (Loire),Auvergne-Rhône-Alpes,173089,79.97,2164,−0.1%
+5,7,Toulouse,Occitanie,504078,118.3,4261,+1.4%
+6,8,Montpellier,Occitanie,302454,56.88,5317,+1.6%
+$ read cities.html match=Population index_col=1 head=4
+tables 1
+table 0
+shape (8, 6)
+  'Rank': int64
+  'Region': str
+  'Population (2021)': str
+  'Area (km2)': float64
+  'Density (/km2)': int64
+  'Change 2015–21': str
+Commune,Rank,Region,Population (2021),Area (km2),Density (/km2),Change 2015–21
+Paris,1,Île-de-France,"2,102,650[a]",105.4,19950,−1.2%
+Boulogne-Billancourt,2,Île-de-France,121583,6.17,19705,+0.4%
+Marseille,3,Provence-Alpes-Côte d'Azur,873076,240.6,3629,+0.9%
+Nice,4,Provence-Alpes-Côte d'Azur,348085,71.9,4841,+0.3%
+$ read cities.html match=Population na_values=+0.4%
+tables 1
+table 0
+shape (8, 7)
+  'Rank': int64
+  'Commune': str
+  'Region': str
+  'Population (2021)': str
+  'Area (km2)': float64
+  'Density (/km2)': int64
+  'Change 2015–21': str
+,Rank,Commune,Region,Population (2021),Area (km2),Density (/km2),Change 2015–21
+0,1,Paris,Île-de-France,"2,102,650[a]",105.4,19950,−1.2%
+1,2,Boulogne-Billancourt,Île-de-France,121583,6.17,19705,
+2,3,Marseille,Provence-Alpes-Côte d'Azur,873076,240.6,3629,+0.9%
+3,4,Nice,Provence-Alpes-Côte d'Azur,348085,71.9,4841,+0.3%
+4,5,Lyon,Auvergne-Rhône-Alpes,522250,47.87,10910,+1.1%
+5,6,Saint-Étienne (Loire),Auvergne-Rhône-Alpes,173089,79.97,2164,−0.1%
+6,7,Toulouse,Occitanie,504078,118.3,4261,+1.4%
+7,8,Montpellier,Occitanie,302454,56.88,5317,+1.6%
+$ read cities.html match=Population dtype_backend=numpy_nullable
+tables 1
+table 0
+shape (8, 7)
+  'Rank': Int64
+  'Commune': string
+  'Region': string
+  'Population (2021)': string
+  'Area (km2)': Float64
+  'Density (/km2)': Int64
+  'Change 2015–21': string
+,Rank,Commune,Region,Population (2021),Area (km2),Density (/km2),Change 2015–21
+0,1,Paris,Île-de-France,"2,102,650[a]",105.4,19950,−1.2%
+1,2,Boulogne-Billancourt,Île-de-France,121583,6.17,19705,+0.4%
+2,3,Marseille,Provence-Alpes-Côte d'Azur,873076,240.6,3629,+0.9%
+3,4,Nice,Provence-Alpes-Côte d'Azur,348085,71.9,4841,+0.3%
+4,5,Lyon,Auvergne-Rhône-Alpes,522250,47.87,10910,+1.1%
+5,6,Saint-Étienne (Loire),Auvergne-Rhône-Alpes,173089,79.97,2164,−0.1%
+6,7,Toulouse,Occitanie,504078,118.3,4261,+1.4%
+7,8,Montpellier,Occitanie,302454,56.88,5317,+1.6%
+$ read cities.html match=communes\sof\smetropolitan
+! ValueError: No tables found matching regex 'communes of metropolitan'
+$ read cities.html match=(?i)DENSITY
+tables 1
+table 0
+shape (8, 7)
+  'Rank': int64
+  'Commune': str
+  'Region': str
+  'Population (2021)': str
+  'Area (km2)': float64
+  'Density (/km2)': int64
+  'Change 2015–21': str
+,Rank,Commune,Region,Population (2021),Area (km2),Density (/km2),Change 2015–21
+0,1,Paris,Île-de-France,"2,102,650[a]",105.4,19950,−1.2%
+1,2,Boulogne-Billancourt,Île-de-France,121583,6.17,19705,+0.4%
+2,3,Marseille,Provence-Alpes-Côte d'Azur,873076,240.6,3629,+0.9%
+3,4,Nice,Provence-Alpes-Côte d'Azur,348085,71.9,4841,+0.3%
+4,5,Lyon,Auvergne-Rhône-Alpes,522250,47.87,10910,+1.1%
+5,6,Saint-Étienne (Loire),Auvergne-Rhône-Alpes,173089,79.97,2164,−0.1%
+6,7,Toulouse,Occitanie,504078,118.3,4261,+1.4%
+7,8,Montpellier,Occitanie,302454,56.88,5317,+1.6%
+$ read cities.html match=^Rank$
+tables 1
+table 0
+shape (8, 7)
+  'Rank': int64
+  'Commune': str
+  'Region': str
+  'Population (2021)': str
+  'Area (km2)': float64
+  'Density (/km2)': int64
+  'Change 2015–21': str
+,Rank,Commune,Region,Population (2021),Area (km2),Density (/km2),Change 2015–21
+0,1,Paris,Île-de-France,"2,102,650[a]",105.4,19950,−1.2%
+1,2,Boulogne-Billancourt,Île-de-France,121583,6.17,19705,+0.4%
+2,3,Marseille,Provence-Alpes-Côte d'Azur,873076,240.6,3629,+0.9%
+3,4,Nice,Provence-Alpes-Côte d'Azur,348085,71.9,4841,+0.3%
+4,5,Lyon,Auvergne-Rhône-Alpes,522250,47.87,10910,+1.1%
+5,6,Saint-Étienne (Loire),Auvergne-Rhône-Alpes,173089,79.97,2164,−0.1%
+6,7,Toulouse,Occitanie,504078,118.3,4261,+1.4%
+7,8,Montpellier,Occitanie,302454,56.88,5317,+1.6%
+$ read cities.html match=[0-9]{3},[0-9]{3}
+tables 2
+table 0
+shape (8, 7)
+  'Rank': int64
+  'Commune': str
+  'Region': str
+  'Population (2021)': str
+  'Area (km2)': float64
+  'Density (/km2)': int64
+  'Change 2015–21': str
+,Rank,Commune,Region,Population (2021),Area (km2),Density (/km2),Change 2015–21
+0,1,Paris,Île-de-France,"2,102,650[a]",105.4,19950,−1.2%
+1,2,Boulogne-Billancourt,Île-de-France,121583,6.17,19705,+0.4%
+2,3,Marseille,Provence-Alpes-Côte d'Azur,873076,240.6,3629,+0.9%
+3,4,Nice,Provence-Alpes-Côte d'Azur,348085,71.9,4841,+0.3%
+4,5,Lyon,Auvergne-Rhône-Alpes,522250,47.87,10910,+1.1%
+5,6,Saint-Étienne (Loire),Auvergne-Rhône-Alpes,173089,79.97,2164,−0.1%
+6,7,Toulouse,Occitanie,504078,118.3,4261,+1.4%
+7,8,Montpellier,Occitanie,302454,56.88,5317,+1.6%
+table 1
+shape (5, 3)
+  'Region': str
+  'Communes': int64
+  'Share': str
+,Region,Communes,Share
+0,Île-de-France,5,11.9%
+1,Auvergne-Rhône-Alpes,4,9.5%
+2,Occitanie,2,4.8%
+3,Grand Est,3,7.1%
+4,Total,42,100%
+$ read cities.html match=nowhere
+! ValueError: No tables found matching regex 'nowhere'
+$ read cities.html match=(unclosed
+! PatternError: missing ), unterminated subpattern at position 0
+$ read cities.html attrs=id:missing
+! ValueError: No tables found matching regex '.+'
+$ read standings.html
+tables 2
+table 0
+shape (6, 9)
+  ('Pos', 'Pos'): str
+  ('Team', 'Team'): str
+  ('Home', 'W'): str
+  ('Home', 'D'): str
+  ('Home', 'L'): str
+  ('Away', 'W'): str
+  ('Away', 'D'): str
+  ('Away', 'L'): str
+  ('Pts', 'Pts'): str
+,Pos,Team,Home,Home,Home,Away,Away,Away,Pts
+,Pos,Team,W,D,L,W,D,L,Pts
+0,1,Lyon Rovers (C),9,2,1,6,3,1,50
+1,2,Harbour City,8,3,1,5,4,2,46
+2,3,Northbridge United,7,2,3,5,2,3,40
+3,4,St. Clement's,6,4,2,3,5,4,36
+4,5,Vale Athletic (R),2,3,7,1,2,9,14
+5,"Source: league office, 2026-04-30. (C) champion, (R) relegated.","Source: league office, 2026-04-30. (C) champion, (R) relegated.","Source: league office, 2026-04-30. (C) champion, (R) relegated.","Source: league office, 2026-04-30. (C) champion, (R) relegated.","Source: league office, 2026-04-30. (C) champion, (R) relegated.","Source: league office, 2026-04-30. (C) champion, (R) relegated.","Source: league office, 2026-04-30. (C) champion, (R) relegated.","Source: league office, 2026-04-30. (C) champion, (R) relegated.","Source: league office, 2026-04-30. (C) champion, (R) relegated."
+table 1
+shape (3, 5)
+  'Date': str
+  'Home': str
+  'Score': str
+  'Away': str
+  'Attendance': float64
+,Date,Home,Score,Away,Attendance
+0,2026-04-25,Lyon Rovers,2–1,Vale Athletic,18204.0
+1,2026-04-25,Harbour City,0–0,St. Clement's,9870.0
+2,2026-04-26,Northbridge United,3–2,Visitors XI,
+$ read standings.html attrs=id:standings
+tables 1
+table 0
+shape (6, 9)
+  ('Pos', 'Pos'): str
+  ('Team', 'Team'): str
+  ('Home', 'W'): str
+  ('Home', 'D'): str
+  ('Home', 'L'): str
+  ('Away', 'W'): str
+  ('Away', 'D'): str
+  ('Away', 'L'): str
+  ('Pts', 'Pts'): str
+,Pos,Team,Home,Home,Home,Away,Away,Away,Pts
+,Pos,Team,W,D,L,W,D,L,Pts
+0,1,Lyon Rovers (C),9,2,1,6,3,1,50
+1,2,Harbour City,8,3,1,5,4,2,46
+2,3,Northbridge United,7,2,3,5,2,3,40
+3,4,St. Clement's,6,4,2,3,5,4,36
+4,5,Vale Athletic (R),2,3,7,1,2,9,14
+5,"Source: league office, 2026-04-30. (C) champion, (R) relegated.","Source: league office, 2026-04-30. (C) champion, (R) relegated.","Source: league office, 2026-04-30. (C) champion, (R) relegated.","Source: league office, 2026-04-30. (C) champion, (R) relegated.","Source: league office, 2026-04-30. (C) champion, (R) relegated.","Source: league office, 2026-04-30. (C) champion, (R) relegated.","Source: league office, 2026-04-30. (C) champion, (R) relegated.","Source: league office, 2026-04-30. (C) champion, (R) relegated.","Source: league office, 2026-04-30. (C) champion, (R) relegated."
+$ read standings.html attrs=id:standings header=0
+tables 1
+table 0
+shape (7, 9)
+  'Pos': str
+  'Team': str
+  'Home': str
+  'Home.1': str
+  'Home.2': str
+  'Away': str
+  'Away.1': str
+  'Away.2': str
+  'Pts': str
+,Pos,Team,Home,Home.1,Home.2,Away,Away.1,Away.2,Pts
+0,Pos,Team,W,D,L,W,D,L,Pts
+1,1,Lyon Rovers (C),9,2,1,6,3,1,50
+2,2,Harbour City,8,3,1,5,4,2,46
+3,3,Northbridge United,7,2,3,5,2,3,40
+4,4,St. Clement's,6,4,2,3,5,4,36
+5,5,Vale Athletic (R),2,3,7,1,2,9,14
+6,"Source: league office, 2026-04-30. (C) champion, (R) relegated.","Source: league office, 2026-04-30. (C) champion, (R) relegated.","Source: league office, 2026-04-30. (C) champion, (R) relegated.","Source: league office, 2026-04-30. (C) champion, (R) relegated.","Source: league office, 2026-04-30. (C) champion, (R) relegated.","Source: league office, 2026-04-30. (C) champion, (R) relegated.","Source: league office, 2026-04-30. (C) champion, (R) relegated.","Source: league office, 2026-04-30. (C) champion, (R) relegated.","Source: league office, 2026-04-30. (C) champion, (R) relegated."
+$ read standings.html attrs=id:standings header=1
+tables 1
+table 0
+shape (6, 9)
+  'Pos': str
+  'Team': str
+  'W': str
+  'D': str
+  'L': str
+  'W.1': str
+  'D.1': str
+  'L.1': str
+  'Pts': str
+,Pos,Team,W,D,L,W.1,D.1,L.1,Pts
+0,1,Lyon Rovers (C),9,2,1,6,3,1,50
+1,2,Harbour City,8,3,1,5,4,2,46
+2,3,Northbridge United,7,2,3,5,2,3,40
+3,4,St. Clement's,6,4,2,3,5,4,36
+4,5,Vale Athletic (R),2,3,7,1,2,9,14
+5,"Source: league office, 2026-04-30. (C) champion, (R) relegated.","Source: league office, 2026-04-30. (C) champion, (R) relegated.","Source: league office, 2026-04-30. (C) champion, (R) relegated.","Source: league office, 2026-04-30. (C) champion, (R) relegated.","Source: league office, 2026-04-30. (C) champion, (R) relegated.","Source: league office, 2026-04-30. (C) champion, (R) relegated.","Source: league office, 2026-04-30. (C) champion, (R) relegated.","Source: league office, 2026-04-30. (C) champion, (R) relegated.","Source: league office, 2026-04-30. (C) champion, (R) relegated."
+$ read standings.html attrs=id:standings index_col=0
+tables 1
+table 0
+shape (6, 8)
+  ('Team', 'Team'): str
+  ('Home', 'W'): str
+  ('Home', 'D'): str
+  ('Home', 'L'): str
+  ('Away', 'W'): str
+  ('Away', 'D'): str
+  ('Away', 'L'): str
+  ('Pts', 'Pts'): str
+Pos,Team,Home,Home,Home,Away,Away,Away,Pts
+Pos,Team,W,D,L,W,D,L,Pts
+1,Lyon Rovers (C),9,2,1,6,3,1,50
+2,Harbour City,8,3,1,5,4,2,46
+3,Northbridge United,7,2,3,5,2,3,40
+4,St. Clement's,6,4,2,3,5,4,36
+5,Vale Athletic (R),2,3,7,1,2,9,14
+"Source: league office, 2026-04-30. (C) champion, (R) relegated.","Source: league office, 2026-04-30. (C) champion, (R) relegated.","Source: league office, 2026-04-30. (C) champion, (R) relegated.","Source: league office, 2026-04-30. (C) champion, (R) relegated.","Source: league office, 2026-04-30. (C) champion, (R) relegated.","Source: league office, 2026-04-30. (C) champion, (R) relegated.","Source: league office, 2026-04-30. (C) champion, (R) relegated.","Source: league office, 2026-04-30. (C) champion, (R) relegated.","Source: league office, 2026-04-30. (C) champion, (R) relegated."
+$ read standings.html attrs=id:standings index_col=0,1
+tables 1
+table 0
+shape (6, 7)
+  ('Home', 'W'): str
+  ('Home', 'D'): str
+  ('Home', 'L'): str
+  ('Away', 'W'): str
+  ('Away', 'D'): str
+  ('Away', 'L'): str
+  ('Pts', 'Pts'): str
+Pos,,Home,Home,Home,Away,Away,Away,Pts
+Pos,,W,D,L,W,D,L,Pts
+1,Lyon Rovers (C),9,2,1,6,3,1,50
+2,Harbour City,8,3,1,5,4,2,46
+3,Northbridge United,7,2,3,5,2,3,40
+4,St. Clement's,6,4,2,3,5,4,36
+5,Vale Athletic (R),2,3,7,1,2,9,14
+"Source: league office, 2026-04-30. (C) champion, (R) relegated.","Source: league office, 2026-04-30. (C) champion, (R) relegated.","Source: league office, 2026-04-30. (C) champion, (R) relegated.","Source: league office, 2026-04-30. (C) champion, (R) relegated.","Source: league office, 2026-04-30. (C) champion, (R) relegated.","Source: league office, 2026-04-30. (C) champion, (R) relegated.","Source: league office, 2026-04-30. (C) champion, (R) relegated.","Source: league office, 2026-04-30. (C) champion, (R) relegated.","Source: league office, 2026-04-30. (C) champion, (R) relegated."
+$ read standings.html attrs=id:standings extract_links=body
+tables 1
+table 0
+shape (6, 9)
+  ('Pos', 'Pos'): object
+  ('Team', 'Team'): object
+  ('Home', 'W'): object
+  ('Home', 'D'): object
+  ('Home', 'L'): object
+  ('Away', 'W'): object
+  ('Away', 'D'): object
+  ('Away', 'L'): object
+  ('Pts', 'Pts'): object
+,Pos,Team,Home,Home,Home,Away,Away,Away,Pts
+,Pos,Team,W,D,L,W,D,L,Pts
+0,"('1', None)","('Lyon Rovers (C)', '/teams/lyon-rovers')","('9', None)","('2', None)","('1', None)","('6', None)","('3', None)","('1', None)","('50', None)"
+1,"('2', None)","('Harbour City', '/teams/harbour-city')","('8', None)","('3', None)","('1', None)","('5', None)","('4', None)","('2', None)","('46', None)"
+2,"('3', None)","('Northbridge United', '/teams/northbridge')","('7', None)","('2', None)","('3', None)","('5', None)","('2', None)","('3', None)","('40', None)"
+3,"('4', None)","(""St. Clement's"", '/teams/st-clements')","('6', None)","('4', None)","('2', None)","('3', None)","('5', None)","('4', None)","('36', None)"
+4,"('5', None)","('Vale Athletic (R)', '/teams/vale')","('2', None)","('3', None)","('7', None)","('1', None)","('2', None)","('9', None)","('14', None)"
+5,"Source: league office, 2026-04-30. (C) champion, (R) relegated.","Source: league office, 2026-04-30. (C) champion, (R) relegated.","Source: league office, 2026-04-30. (C) champion, (R) relegated.","Source: league office, 2026-04-30. (C) champion, (R) relegated.","Source: league office, 2026-04-30. (C) champion, (R) relegated.","Source: league office, 2026-04-30. (C) champion, (R) relegated.","Source: league office, 2026-04-30. (C) champion, (R) relegated.","Source: league office, 2026-04-30. (C) champion, (R) relegated.","Source: league office, 2026-04-30. (C) champion, (R) relegated."
+$ read standings.html attrs=id:standings extract_links=header
+tables 1
+table 0
+shape (6, 9)
+  (('Pos', None), ('Pos', None)): str
+  (('Team', None), ('Team', None)): str
+  (('Home', None), ('W', None)): str
+  (('Home', None), ('D', None)): str
+  (('Home', None), ('L', None)): str
+  (('Away', None), ('W', None)): str
+  (('Away', None), ('D', None)): str
+  (('Away', None), ('L', None)): str
+  (('Pts', None), ('Pts', None)): str
+,"(('Pos', None), ('Pos', None))","(('Team', None), ('Team', None))","(('Home', None), ('W', None))","(('Home', None), ('D', None))","(('Home', None), ('L', None))","(('Away', None), ('W', None))","(('Away', None), ('D', None))","(('Away', None), ('L', None))","(('Pts', None), ('Pts', None))"
+0,1,Lyon Rovers (C),9,2,1,6,3,1,50
+1,2,Harbour City,8,3,1,5,4,2,46
+2,3,Northbridge United,7,2,3,5,2,3,40
+3,4,St. Clement's,6,4,2,3,5,4,36
+4,5,Vale Athletic (R),2,3,7,1,2,9,14
+5,"Source: league office, 2026-04-30. (C) champion, (R) relegated.","Source: league office, 2026-04-30. (C) champion, (R) relegated.","Source: league office, 2026-04-30. (C) champion, (R) relegated.","Source: league office, 2026-04-30. (C) champion, (R) relegated.","Source: league office, 2026-04-30. (C) champion, (R) relegated.","Source: league office, 2026-04-30. (C) champion, (R) relegated.","Source: league office, 2026-04-30. (C) champion, (R) relegated.","Source: league office, 2026-04-30. (C) champion, (R) relegated.","Source: league office, 2026-04-30. (C) champion, (R) relegated."
+$ read standings.html attrs=id:standings extract_links=footer
+tables 1
+table 0
+shape (6, 9)
+  ('Pos', 'Pos'): object
+  ('Team', 'Team'): object
+  ('Home', 'W'): object
+  ('Home', 'D'): object
+  ('Home', 'L'): object
+  ('Away', 'W'): object
+  ('Away', 'D'): object
+  ('Away', 'L'): object
+  ('Pts', 'Pts'): object
+,Pos,Team,Home,Home,Home,Away,Away,Away,Pts
+,Pos,Team,W,D,L,W,D,L,Pts
+0,1,Lyon Rovers (C),9,2,1,6,3,1,50
+1,2,Harbour City,8,3,1,5,4,2,46
+2,3,Northbridge United,7,2,3,5,2,3,40
+3,4,St. Clement's,6,4,2,3,5,4,36
+4,5,Vale Athletic (R),2,3,7,1,2,9,14
+5,"('Source: league office, 2026-04-30. (C) champion, (R) relegated.', None)","('Source: league office, 2026-04-30. (C) champion, (R) relegated.', None)","('Source: league office, 2026-04-30. (C) champion, (R) relegated.', None)","('Source: league office, 2026-04-30. (C) champion, (R) relegated.', None)","('Source: league office, 2026-04-30. (C) champion, (R) relegated.', None)","('Source: league office, 2026-04-30. (C) champion, (R) relegated.', None)","('Source: league office, 2026-04-30. (C) champion, (R) relegated.', None)","('Source: league office, 2026-04-30. (C) champion, (R) relegated.', None)","('Source: league office, 2026-04-30. (C) champion, (R) relegated.', None)"
+$ read standings.html attrs=id:standings extract_links=all head=2
+tables 1
+table 0
+shape (6, 9)
+  (('Pos', None), ('Pos', None)): object
+  (('Team', None), ('Team', None)): object
+  (('Home', None), ('W', None)): object
+  (('Home', None), ('D', None)): object
+  (('Home', None), ('L', None)): object
+  (('Away', None), ('W', None)): object
+  (('Away', None), ('D', None)): object
+  (('Away', None), ('L', None)): object
+  (('Pts', None), ('Pts', None)): object
+,"(('Pos', None), ('Pos', None))","(('Team', None), ('Team', None))","(('Home', None), ('W', None))","(('Home', None), ('D', None))","(('Home', None), ('L', None))","(('Away', None), ('W', None))","(('Away', None), ('D', None))","(('Away', None), ('L', None))","(('Pts', None), ('Pts', None))"
+0,"('1', None)","('Lyon Rovers (C)', '/teams/lyon-rovers')","('9', None)","('2', None)","('1', None)","('6', None)","('3', None)","('1', None)","('50', None)"
+1,"('2', None)","('Harbour City', '/teams/harbour-city')","('8', None)","('3', None)","('1', None)","('5', None)","('4', None)","('2', None)","('46', None)"
+$ read standings.html attrs=id:fixtures
+tables 1
+table 0
+shape (3, 5)
+  'Date': str
+  'Home': str
+  'Score': str
+  'Away': str
+  'Attendance': float64
+,Date,Home,Score,Away,Attendance
+0,2026-04-25,Lyon Rovers,2–1,Vale Athletic,18204.0
+1,2026-04-25,Harbour City,0–0,St. Clement's,9870.0
+2,2026-04-26,Northbridge United,3–2,Visitors XI,
+$ read standings.html attrs=id:fixtures extract_links=body
+tables 1
+table 0
+shape (3, 5)
+  'Date': object
+  'Home': object
+  'Score': object
+  'Away': object
+  'Attendance': object
+,Date,Home,Score,Away,Attendance
+0,"('2026-04-25', None)","('Lyon Rovers', '/teams/lyon-rovers')","('2–1', None)","('Vale Athletic', '/teams/vale')","('18,204', None)"
+1,"('2026-04-25', None)","('Harbour City', '/teams/harbour-city')","('0–0', None)","(""St. Clement's"", '/teams/st-clements')","('9,870', None)"
+2,"('2026-04-26', None)","('Northbridge United', '/teams/northbridge')","('3–2', None)","('Visitors XI', 'https://example.org/clubs/visitors')","('', None)"
+$ read standings.html attrs=id:fixtures thousands=None
+tables 1
+table 0
+shape (3, 5)
+  'Date': str
+  'Home': str
+  'Score': str
+  'Away': str
+  'Attendance': str
+,Date,Home,Score,Away,Attendance
+0,2026-04-25,Lyon Rovers,2–1,Vale Athletic,"18,204"
+1,2026-04-25,Harbour City,0–0,St. Clement's,"9,870"
+2,2026-04-26,Northbridge United,3–2,Visitors XI,
+$ read standings.html attrs=id:fixtures keep_default_na=False
+tables 1
+table 0
+shape (3, 5)
+  'Date': str
+  'Home': str
+  'Score': str
+  'Away': str
+  'Attendance': str
+,Date,Home,Score,Away,Attendance
+0,2026-04-25,Lyon Rovers,2–1,Vale Athletic,18204
+1,2026-04-25,Harbour City,0–0,St. Clement's,9870
+2,2026-04-26,Northbridge United,3–2,Visitors XI,
+$ read standings.html attrs=id:fixtures index_col=0
+tables 1
+table 0
+shape (3, 4)
+  'Home': str
+  'Score': str
+  'Away': str
+  'Attendance': float64
+Date,Home,Score,Away,Attendance
+2026-04-25,Lyon Rovers,2–1,Vale Athletic,18204.0
+2026-04-25,Harbour City,0–0,St. Clement's,9870.0
+2026-04-26,Northbridge United,3–2,Visitors XI,
+$ read standings.html attrs=id:fixtures dtype_backend=numpy_nullable
+tables 1
+table 0
+shape (3, 5)
+  'Date': string
+  'Home': string
+  'Score': string
+  'Away': string
+  'Attendance': Int64
+,Date,Home,Score,Away,Attendance
+0,2026-04-25,Lyon Rovers,2–1,Vale Athletic,18204
+1,2026-04-25,Harbour City,0–0,St. Clement's,9870
+2,2026-04-26,Northbridge United,3–2,Visitors XI,
+$ read standings.html match=Visitors
+tables 1
+table 0
+shape (3, 5)
+  'Date': str
+  'Home': str
+  'Score': str
+  'Away': str
+  'Attendance': float64
+,Date,Home,Score,Away,Attendance
+0,2026-04-25,Lyon Rovers,2–1,Vale Athletic,18204.0
+1,2026-04-25,Harbour City,0–0,St. Clement's,9870.0
+2,2026-04-26,Northbridge United,3–2,Visitors XI,
+$ read standings.html extract_links=bogus
+! ValueError: `extract_links` must be one of {None, "header", "footer", "body", "all"}, got "bogus"
+$ read statement.html
+tables 2
+table 0
+shape (3, 2)
+  0: str
+  1: str
+,0,1
+0,IBAN,DE00 1234 5678 9012 3456 78
+1,Währung,€ (EUR)
+2,Eröffnungssaldo,"1.512,04 €"
+table 1
+shape (9, 5)
+  'Buchungstag': str
+  'Valuta': str
+  'Verwendungszweck': str
+  'Soll (€)': str
+  'Haben (€)': str
+,Buchungstag,Valuta,Verwendungszweck,Soll (€),Haben (€)
+0,01.10.2026,01.10.2026,Gehalt Oktober / Arbeitgeber GmbH,,"3.250,00"
+1,02.10.2026,02.10.2026,Miete Oktober,"1.150,00",
+2,03.10.2026,05.10.2026,REWE Markt Köln – Kartenzahlung,8437,
+3,07.10.2026,07.10.2026,Stadtwerke Abschlag,9600,
+4,09.10.2026,09.10.2026,Erstattung »Bürobedarf«,,4590
+5,12.10.2026,12.10.2026,Bargeldauszahlung Geldautomat,20000,
+6,15.10.2026,16.10.2026,Überweisung an M. Müller,"1.020,50",
+7,Summe,Summe,Summe,"2.550,87","3.295,90"
+8,Schlusssaldo,Schlusssaldo,Schlusssaldo,"2.257,07","2.257,07"
+$ read statement.html attrs=id:tx
+tables 1
+table 0
+shape (9, 5)
+  'Buchungstag': str
+  'Valuta': str
+  'Verwendungszweck': str
+  'Soll (€)': str
+  'Haben (€)': str
+,Buchungstag,Valuta,Verwendungszweck,Soll (€),Haben (€)
+0,01.10.2026,01.10.2026,Gehalt Oktober / Arbeitgeber GmbH,,"3.250,00"
+1,02.10.2026,02.10.2026,Miete Oktober,"1.150,00",
+2,03.10.2026,05.10.2026,REWE Markt Köln – Kartenzahlung,8437,
+3,07.10.2026,07.10.2026,Stadtwerke Abschlag,9600,
+4,09.10.2026,09.10.2026,Erstattung »Bürobedarf«,,4590
+5,12.10.2026,12.10.2026,Bargeldauszahlung Geldautomat,20000,
+6,15.10.2026,16.10.2026,Überweisung an M. Müller,"1.020,50",
+7,Summe,Summe,Summe,"2.550,87","3.295,90"
+8,Schlusssaldo,Schlusssaldo,Schlusssaldo,"2.257,07","2.257,07"
+$ read statement.html attrs=id:tx thousands=. decimal=,
+tables 1
+table 0
+shape (9, 5)
+  'Buchungstag': str
+  'Valuta': str
+  'Verwendungszweck': str
+  'Soll (€)': float64
+  'Haben (€)': float64
+,Buchungstag,Valuta,Verwendungszweck,Soll (€),Haben (€)
+0,01102026,01102026,Gehalt Oktober / Arbeitgeber GmbH,,3250.0
+1,02102026,02102026,Miete Oktober,1150.0,
+2,03102026,05102026,REWE Markt Köln – Kartenzahlung,84.37,
+3,07102026,07102026,Stadtwerke Abschlag,96.0,
+4,09102026,09102026,Erstattung »Bürobedarf«,,45.9
+5,12102026,12102026,Bargeldauszahlung Geldautomat,200.0,
+6,15102026,16102026,Überweisung an M. Müller,1020.5,
+7,Summe,Summe,Summe,2550.87,3295.9
+8,Schlusssaldo,Schlusssaldo,Schlusssaldo,2257.07,2257.07
+$ read statement.html attrs=class:meta header=None
+tables 1
+table 0
+shape (3, 2)
+  0: str
+  1: str
+,0,1
+0,IBAN,DE00 1234 5678 9012 3456 78
+1,Währung,€ (EUR)
+2,Eröffnungssaldo,"1.512,04 €"
+$ read statement.html attrs=class:meta header=None index_col=0
+tables 1
+table 0
+shape (3, 1)
+  1: str
+0,1
+IBAN,DE00 1234 5678 9012 3456 78
+Währung,€ (EUR)
+Eröffnungssaldo,"1.512,04 €"
+$ read statement.html attrs=id:tx thousands=. decimal=, dtype_backend=numpy_nullable
+tables 1
+table 0
+shape (9, 5)
+  'Buchungstag': string
+  'Valuta': string
+  'Verwendungszweck': string
+  'Soll (€)': Float64
+  'Haben (€)': Float64
+,Buchungstag,Valuta,Verwendungszweck,Soll (€),Haben (€)
+0,01102026,01102026,Gehalt Oktober / Arbeitgeber GmbH,,3250.0
+1,02102026,02102026,Miete Oktober,1150.0,
+2,03102026,05102026,REWE Markt Köln – Kartenzahlung,84.37,
+3,07102026,07102026,Stadtwerke Abschlag,96.0,
+4,09102026,09102026,Erstattung »Bürobedarf«,,45.9
+5,12102026,12102026,Bargeldauszahlung Geldautomat,200.0,
+6,15102026,16102026,Überweisung an M. Müller,1020.5,
+7,Summe,Summe,Summe,2550.87,3295.9
+8,Schlusssaldo,Schlusssaldo,Schlusssaldo,2257.07,2257.07
+$ read statement.html match=Schlusssaldo thousands=. decimal=,
+tables 1
+table 0
+shape (9, 5)
+  'Buchungstag': str
+  'Valuta': str
+  'Verwendungszweck': str
+  'Soll (€)': float64
+  'Haben (€)': float64
+,Buchungstag,Valuta,Verwendungszweck,Soll (€),Haben (€)
+0,01102026,01102026,Gehalt Oktober / Arbeitgeber GmbH,,3250.0
+1,02102026,02102026,Miete Oktober,1150.0,
+2,03102026,05102026,REWE Markt Köln – Kartenzahlung,84.37,
+3,07102026,07102026,Stadtwerke Abschlag,96.0,
+4,09102026,09102026,Erstattung »Bürobedarf«,,45.9
+5,12102026,12102026,Bargeldauszahlung Geldautomat,200.0,
+6,15102026,16102026,Überweisung an M. Müller,1020.5,
+7,Summe,Summe,Summe,2550.87,3295.9
+8,Schlusssaldo,Schlusssaldo,Schlusssaldo,2257.07,2257.07
+$ read statement.html encoding=latin-1 attrs=class:meta header=None
+! LookupError: unknown encoding: 'b'latin-1''
+$ read statement.html encoding=utf-8 attrs=class:meta header=None
+tables 1
+table 0
+shape (3, 2)
+  0: str
+  1: str
+,0,1
+0,IBAN,DE00 1234 5678 9012 3456 78
+1,W�hrung,� (EUR)
+2,Er�ffnungssaldo,"1.512,04 €"
+$ read release.html
+tables 4
+table 0
+shape (7, 5)
+  'Region': str
+  'Jul-Sep 2026': str
+  'Change on quarter': str
+  'Change on year': str
+  'Unnamed: 4': str
+,Region,Jul-Sep 2026,Change on quarter,Change on year,Unnamed: 4
+0,North East,71.4,0.3,-0.2,
+1,North West,73.9,-0.1,0.6,
+2,Wales,72.0,..,x,
+3,Scotland,74.6,–,1.1,
+4,Northern Ireland,-,-,-,
+5,Home > Releases,"Labour market overview Table 1: Employment rate (%), people aged 16 to 64, seasonally adjusted RegionJul-Sep 2026Change on quarterChange on year North East71.40.3-0.2 North West73.9-0.10.6 Wales72.0..x Scotland74.6–1.1 Northern Ireland--- .. not available; x suppressed; – no change. Source: Labour Force Survey. IndustryVacancies (thousands)Rate Health and social work1623.9 Accommodation & food1044.8 Information & communication392.6 All industries1,0143.0",,,
+6,.. not available; x suppressed; – no change. Source: Labour Force Survey.,.. not available; x suppressed; – no change. Source: Labour Force Survey.,.. not available; x suppressed; – no change. Source: Labour Force Survey.,.. not available; x suppressed; – no change. Source: Labour Force Survey.,.. not available; x suppressed; – no change. Source: Labour Force Survey.
+table 1
+shape (6, 5)
+  'Region': str
+  'Jul-Sep 2026': str
+  'Change on quarter': str
+  'Change on year': str
+  'Unnamed: 4': str
+,Region,Jul-Sep 2026,Change on quarter,Change on year,Unnamed: 4
+0,North East,71.4,0.3,-0.2,
+1,North West,73.9,-0.1,0.6,
+2,Wales,72.0,..,x,
+3,Scotland,74.6,–,1.1,
+4,Northern Ireland,-,-,-,
+5,.. not available; x suppressed; – no change. Source: Labour Force Survey.,.. not available; x suppressed; – no change. Source: Labour Force Survey.,.. not available; x suppressed; – no change. Source: Labour Force Survey.,.. not available; x suppressed; – no change. Source: Labour Force Survey.,.. not available; x suppressed; – no change. Source: Labour Force Survey.
+table 2
+shape (4, 3)
+  'Industry': str
+  'Vacancies (thousands)': int64
+  'Rate': float64
+,Industry,Vacancies (thousands),Rate
+0,Health and social work,162,3.9
+1,Accommodation & food,104,4.8
+2,Information & communication,39,2.6
+3,All industries,1014,3.0
+table 3
+shape (1, 2)
+  0: float64
+  1: float64
+,0,1
+0,,
+$ read release.html attrs=id:t1
+tables 1
+table 0
+shape (6, 5)
+  'Region': str
+  'Jul-Sep 2026': str
+  'Change on quarter': str
+  'Change on year': str
+  'Unnamed: 4': str
+,Region,Jul-Sep 2026,Change on quarter,Change on year,Unnamed: 4
+0,North East,71.4,0.3,-0.2,
+1,North West,73.9,-0.1,0.6,
+2,Wales,72.0,..,x,
+3,Scotland,74.6,–,1.1,
+4,Northern Ireland,-,-,-,
+5,.. not available; x suppressed; – no change. Source: Labour Force Survey.,.. not available; x suppressed; – no change. Source: Labour Force Survey.,.. not available; x suppressed; – no change. Source: Labour Force Survey.,.. not available; x suppressed; – no change. Source: Labour Force Survey.,.. not available; x suppressed; – no change. Source: Labour Force Survey.
+$ read release.html attrs=id:t1 displayed_only=False
+tables 1
+table 0
+shape (6, 5)
+  'Region': str
+  'Jul-Sep 2026': str
+  'Change on quarter': str
+  'Code': str
+  'Change on year': str
+,Region,Jul-Sep 2026,Change on quarter,Code,Change on year
+0,North East,71.4,0.3,E12000001,-0.2
+1,North West,73.9,-0.1,E12000002,0.6
+2,Wales,72.0,..,W92000004,x
+3,Scotland,74.6,–,S92000003,1.1
+4,Northern Ireland,-,-,N92000002,-
+5,.. not available; x suppressed; – no change. Source: Labour Force Survey.,.. not available; x suppressed; – no change. Source: Labour Force Survey.,.. not available; x suppressed; – no change. Source: Labour Force Survey.,.. not available; x suppressed; – no change. Source: Labour Force Survey.,.. not available; x suppressed; – no change. Source: Labour Force Survey.
+$ read release.html attrs=id:t1 na_values=..,x
+tables 1
+table 0
+shape (6, 5)
+  'Region': str
+  'Jul-Sep 2026': str
+  'Change on quarter': str
+  'Change on year': str
+  'Unnamed: 4': str
+,Region,Jul-Sep 2026,Change on quarter,Change on year,Unnamed: 4
+0,North East,71.4,0.3,-0.2,
+1,North West,73.9,-0.1,0.6,
+2,Wales,72.0,,,
+3,Scotland,74.6,–,1.1,
+4,Northern Ireland,-,-,-,
+5,.. not available; x suppressed; – no change. Source: Labour Force Survey.,.. not available; x suppressed; – no change. Source: Labour Force Survey.,.. not available; x suppressed; – no change. Source: Labour Force Survey.,.. not available; x suppressed; – no change. Source: Labour Force Survey.,.. not available; x suppressed; – no change. Source: Labour Force Survey.
+$ read release.html attrs=id:t1 na_values=..,x,– index_col=0
+tables 1
+table 0
+shape (6, 4)
+  'Jul-Sep 2026': str
+  'Change on quarter': str
+  'Change on year': str
+  'Unnamed: 4': str
+Region,Jul-Sep 2026,Change on quarter,Change on year,Unnamed: 4
+North East,71.4,0.3,-0.2,
+North West,73.9,-0.1,0.6,
+Wales,72.0,,,
+Scotland,74.6,,1.1,
+Northern Ireland,-,-,-,
+.. not available; x suppressed; – no change. Source: Labour Force Survey.,.. not available; x suppressed; – no change. Source: Labour Force Survey.,.. not available; x suppressed; – no change. Source: Labour Force Survey.,.. not available; x suppressed; – no change. Source: Labour Force Survey.,.. not available; x suppressed; – no change. Source: Labour Force Survey.
+$ read release.html attrs=id:t1 keep_default_na=False
+tables 1
+table 0
+shape (6, 5)
+  'Region': str
+  'Jul-Sep 2026': str
+  'Change on quarter': str
+  'Change on year': str
+  'Unnamed: 4': str
+,Region,Jul-Sep 2026,Change on quarter,Change on year,Unnamed: 4
+0,North East,71.4,0.3,-0.2,
+1,North West,73.9,-0.1,0.6,
+2,Wales,72.0,..,x,
+3,Scotland,74.6,–,1.1,
+4,Northern Ireland,-,-,-,
+5,.. not available; x suppressed; – no change. Source: Labour Force Survey.,.. not available; x suppressed; – no change. Source: Labour Force Survey.,.. not available; x suppressed; – no change. Source: Labour Force Survey.,.. not available; x suppressed; – no change. Source: Labour Force Survey.,.. not available; x suppressed; – no change. Source: Labour Force Survey.
+$ read release.html attrs=id:t1 keep_default_na=False na_values=..
+tables 1
+table 0
+shape (6, 5)
+  'Region': str
+  'Jul-Sep 2026': str
+  'Change on quarter': str
+  'Change on year': str
+  'Unnamed: 4': str
+,Region,Jul-Sep 2026,Change on quarter,Change on year,Unnamed: 4
+0,North East,71.4,0.3,-0.2,
+1,North West,73.9,-0.1,0.6,
+2,Wales,72.0,,x,
+3,Scotland,74.6,–,1.1,
+4,Northern Ireland,-,-,-,
+5,.. not available; x suppressed; – no change. Source: Labour Force Survey.,.. not available; x suppressed; – no change. Source: Labour Force Survey.,.. not available; x suppressed; – no change. Source: Labour Force Survey.,.. not available; x suppressed; – no change. Source: Labour Force Survey.,.. not available; x suppressed; – no change. Source: Labour Force Survey.
+$ read release.html attrs=id:t2
+tables 1
+table 0
+shape (4, 3)
+  'Industry': str
+  'Vacancies (thousands)': int64
+  'Rate': float64
+,Industry,Vacancies (thousands),Rate
+0,Health and social work,162,3.9
+1,Accommodation & food,104,4.8
+2,Information & communication,39,2.6
+3,All industries,1014,3.0
+$ read release.html attrs=id:t2 thousands=None
+tables 1
+table 0
+shape (4, 3)
+  'Industry': str
+  'Vacancies (thousands)': str
+  'Rate': float64
+,Industry,Vacancies (thousands),Rate
+0,Health and social work,162,3.9
+1,Accommodation & food,104,4.8
+2,Information & communication,39,2.6
+3,All industries,"1,014",3.0
+$ read release.html attrs=id:t2 displayed_only=False
+tables 1
+table 0
+shape (4, 3)
+  'Industry': str
+  'Vacancies (thousands)': int64
+  'Rate': float64
+,Industry,Vacancies (thousands),Rate
+0,Health and social work,162,3.9
+1,Accommodation & food,104,4.8
+2,Information & communication,39,2.6
+3,All industries,1014,3.0
+$ read release.html attrs=id:draft
+! ValueError: No tables found matching regex '.+'
+$ read release.html attrs=id:draft displayed_only=False
+tables 1
+table 0
+shape (1, 1)
+  'Draft': str
+,Draft
+0,Do not publish
+$ read release.html attrs=id:empty
+! ValueError: No tables found matching regex '.+'
+$ read release.html attrs=id:blank
+tables 1
+table 0
+shape (1, 2)
+  0: float64
+  1: float64
+,0,1
+0,,
+$ read release.html attrs=class:layout
+tables 1
+table 0
+shape (7, 5)
+  'Region': str
+  'Jul-Sep 2026': str
+  'Change on quarter': str
+  'Change on year': str
+  'Unnamed: 4': str
+,Region,Jul-Sep 2026,Change on quarter,Change on year,Unnamed: 4
+0,North East,71.4,0.3,-0.2,
+1,North West,73.9,-0.1,0.6,
+2,Wales,72.0,..,x,
+3,Scotland,74.6,–,1.1,
+4,Northern Ireland,-,-,-,
+5,Home > Releases,"Labour market overview Table 1: Employment rate (%), people aged 16 to 64, seasonally adjusted RegionJul-Sep 2026Change on quarterChange on year North East71.40.3-0.2 North West73.9-0.10.6 Wales72.0..x Scotland74.6–1.1 Northern Ireland--- .. not available; x suppressed; – no change. Source: Labour Force Survey. IndustryVacancies (thousands)Rate Health and social work1623.9 Accommodation & food1044.8 Information & communication392.6 All industries1,0143.0",,,
+6,.. not available; x suppressed; – no change. Source: Labour Force Survey.,.. not available; x suppressed; – no change. Source: Labour Force Survey.,.. not available; x suppressed; – no change. Source: Labour Force Survey.,.. not available; x suppressed; – no change. Source: Labour Force Survey.,.. not available; x suppressed; – no change. Source: Labour Force Survey.
+$ read release.html attrs=class:layout displayed_only=False
+tables 1
+table 0
+shape (7, 5)
+  'Region': str
+  'Jul-Sep 2026': str
+  'Change on quarter': str
+  'Code': str
+  'Change on year': str
+,Region,Jul-Sep 2026,Change on quarter,Code,Change on year
+0,North East,71.4,0.3,E12000001,-0.2
+1,North West,73.9,-0.1,E12000002,0.6
+2,Wales,72.0,..,W92000004,x
+3,Scotland,74.6,–,S92000003,1.1
+4,Northern Ireland,-,-,N92000002,-
+5,Home > Releases,"Labour market overview Table 1: Employment rate (%), people aged 16 to 64, seasonally adjusted RegionJul-Sep 2026Change on quarterCodeChange on year North East71.40.3E12000001-0.2 North West73.9-0.1E120000020.6 Wales72.0..W92000004x Scotland74.6–S920000031.1 Northern Ireland--N92000002- .. not available; x suppressed; – no change. Source: Labour Force Survey. #t2 td.n { text-align: right } IndustryVacancies (thousands)Rate Health and social work1623.9 Accommodation & food1044.8 Information & communication392.6 All industries1,0143.0 DraftDo not publish",,,
+6,.. not available; x suppressed; – no change. Source: Labour Force Survey.,.. not available; x suppressed; – no change. Source: Labour Force Survey.,.. not available; x suppressed; – no change. Source: Labour Force Survey.,.. not available; x suppressed; – no change. Source: Labour Force Survey.,.. not available; x suppressed; – no change. Source: Labour Force Survey.
+$ read release.html match=Vacancies
+tables 2
+table 0
+shape (7, 5)
+  'Region': str
+  'Jul-Sep 2026': str
+  'Change on quarter': str
+  'Change on year': str
+  'Unnamed: 4': str
+,Region,Jul-Sep 2026,Change on quarter,Change on year,Unnamed: 4
+0,North East,71.4,0.3,-0.2,
+1,North West,73.9,-0.1,0.6,
+2,Wales,72.0,..,x,
+3,Scotland,74.6,–,1.1,
+4,Northern Ireland,-,-,-,
+5,Home > Releases,"Labour market overview Table 1: Employment rate (%), people aged 16 to 64, seasonally adjusted RegionJul-Sep 2026Change on quarterChange on year North East71.40.3-0.2 North West73.9-0.10.6 Wales72.0..x Scotland74.6–1.1 Northern Ireland--- .. not available; x suppressed; – no change. Source: Labour Force Survey. IndustryVacancies (thousands)Rate Health and social work1623.9 Accommodation & food1044.8 Information & communication392.6 All industries1,0143.0",,,
+6,.. not available; x suppressed; – no change. Source: Labour Force Survey.,.. not available; x suppressed; – no change. Source: Labour Force Survey.,.. not available; x suppressed; – no change. Source: Labour Force Survey.,.. not available; x suppressed; – no change. Source: Labour Force Survey.,.. not available; x suppressed; – no change. Source: Labour Force Survey.
+table 1
+shape (4, 3)
+  'Industry': str
+  'Vacancies (thousands)': int64
+  'Rate': float64
+,Industry,Vacancies (thousands),Rate
+0,Health and social work,162,3.9
+1,Accommodation & food,104,4.8
+2,Information & communication,39,2.6
+3,All industries,1014,3.0
+$ read release.html match=Labour\sForce
+tables 2
+table 0
+shape (7, 5)
+  'Region': str
+  'Jul-Sep 2026': str
+  'Change on quarter': str
+  'Change on year': str
+  'Unnamed: 4': str
+,Region,Jul-Sep 2026,Change on quarter,Change on year,Unnamed: 4
+0,North East,71.4,0.3,-0.2,
+1,North West,73.9,-0.1,0.6,
+2,Wales,72.0,..,x,
+3,Scotland,74.6,–,1.1,
+4,Northern Ireland,-,-,-,
+5,Home > Releases,"Labour market overview Table 1: Employment rate (%), people aged 16 to 64, seasonally adjusted RegionJul-Sep 2026Change on quarterChange on year North East71.40.3-0.2 North West73.9-0.10.6 Wales72.0..x Scotland74.6–1.1 Northern Ireland--- .. not available; x suppressed; – no change. Source: Labour Force Survey. IndustryVacancies (thousands)Rate Health and social work1623.9 Accommodation & food1044.8 Information & communication392.6 All industries1,0143.0",,,
+6,.. not available; x suppressed; – no change. Source: Labour Force Survey.,.. not available; x suppressed; – no change. Source: Labour Force Survey.,.. not available; x suppressed; – no change. Source: Labour Force Survey.,.. not available; x suppressed; – no change. Source: Labour Force Survey.,.. not available; x suppressed; – no change. Source: Labour Force Survey.
+table 1
+shape (6, 5)
+  'Region': str
+  'Jul-Sep 2026': str
+  'Change on quarter': str
+  'Change on year': str
+  'Unnamed: 4': str
+,Region,Jul-Sep 2026,Change on quarter,Change on year,Unnamed: 4
+0,North East,71.4,0.3,-0.2,
+1,North West,73.9,-0.1,0.6,
+2,Wales,72.0,..,x,
+3,Scotland,74.6,–,1.1,
+4,Northern Ireland,-,-,-,
+5,.. not available; x suppressed; – no change. Source: Labour Force Survey.,.. not available; x suppressed; – no change. Source: Labour Force Survey.,.. not available; x suppressed; – no change. Source: Labour Force Survey.,.. not available; x suppressed; – no change. Source: Labour Force Survey.,.. not available; x suppressed; – no change. Source: Labour Force Survey.
+$ read legacy.html
+tables 2
+table 0
+shape (6, 4)
+  0: str
+  1: str
+  2: str
+  3: str
+,0,1,2,3
+0,Item #,Description,Price,In stock?
+1,1001,Model train setHO scale,$129.99,Yes
+2,1002,NEW! Café diorama,$45.00,No
+3,1003,Paint & brushes,$12.50,Yes
+4,1004,Glue — 2 oz.,$3.25,
+5,1005,Track (per foot),$1.10,
+table 1
+shape (2, 2)
+  0: str
+  1: str
+,0,1
+0,Hours,Mon-Fri 9-5
+1,Sat,10-2
+$ read legacy.html match=Item
+tables 1
+table 0
+shape (6, 4)
+  0: str
+  1: str
+  2: str
+  3: str
+,0,1,2,3
+0,Item #,Description,Price,In stock?
+1,1001,Model train setHO scale,$129.99,Yes
+2,1002,NEW! Café diorama,$45.00,No
+3,1003,Paint & brushes,$12.50,Yes
+4,1004,Glue — 2 oz.,$3.25,
+5,1005,Track (per foot),$1.10,
+$ read legacy.html match=Item header=0
+tables 1
+table 0
+shape (5, 4)
+  'Item #': int64
+  'Description': str
+  'Price': str
+  'In stock?': str
+,Item #,Description,Price,In stock?
+0,1001,Model train setHO scale,$129.99,Yes
+1,1002,NEW! Café diorama,$45.00,No
+2,1003,Paint & brushes,$12.50,Yes
+3,1004,Glue — 2 oz.,$3.25,
+4,1005,Track (per foot),$1.10,
+$ read legacy.html match=Item index_col=0
+tables 1
+table 0
+shape (6, 3)
+  1: str
+  2: str
+  3: str
+0,1,2,3
+Item #,Description,Price,In stock?
+1001,Model train setHO scale,$129.99,Yes
+1002,NEW! Café diorama,$45.00,No
+1003,Paint & brushes,$12.50,Yes
+1004,Glue — 2 oz.,$3.25,
+1005,Track (per foot),$1.10,
+$ read legacy.html match=Hours header=None
+tables 1
+table 0
+shape (2, 2)
+  0: str
+  1: str
+,0,1
+0,Hours,Mon-Fri 9-5
+1,Sat,10-2
+$ read legacy.html match=not\sa\stable
+! ValueError: No tables found matching regex 'not a table'
+$ read legacy.html match=Hours
+tables 1
+table 0
+shape (2, 2)
+  0: str
+  1: str
+,0,1
+0,Hours,Mon-Fri 9-5
+1,Sat,10-2
+$ read prices.html
+tables 2
+table 0
+shape (6, 5)
+  'SKU': str
+  'Product': str
+  'Price': str
+  'Price.1': str
+  'Stock': float64
+,SKU,Product,Price,Price.1,Stock
+0,A-100,Espresso machine,"1 299,00","1 199,00",4.0
+1,A-101,Milk frother,8990,7990,12.0
+2,A-102,Grinder,24900,,
+3,,,,,
+4,B-200,"Beans, 1 kg",1850,1690,140.0
+5,B-201,Descaler,999,,0.0
+table 1
+shape (2, 3)
+  'Bundle': str
+  'Items': str
+  'Save': str
+,Bundle,Items,Save
+0,Starter,"A-101, B-200",10%
+1,Barista,"A-100, A-102, B-200",15%
+$ read prices.html attrs=class:prices
+tables 2
+table 0
+shape (6, 5)
+  'SKU': str
+  'Product': str
+  'Price': str
+  'Price.1': str
+  'Stock': float64
+,SKU,Product,Price,Price.1,Stock
+0,A-100,Espresso machine,"1 299,00","1 199,00",4.0
+1,A-101,Milk frother,8990,7990,12.0
+2,A-102,Grinder,24900,,
+3,,,,,
+4,B-200,"Beans, 1 kg",1850,1690,140.0
+5,B-201,Descaler,999,,0.0
+table 1
+shape (2, 3)
+  'Bundle': str
+  'Items': str
+  'Save': str
+,Bundle,Items,Save
+0,Starter,"A-101, B-200",10%
+1,Barista,"A-100, A-102, B-200",15%
+$ read prices.html attrs=class:prices thousands=\s decimal=,
+tables 2
+table 0
+shape (6, 5)
+  'SKU': str
+  'Product': str
+  'Price': float64
+  'Price.1': float64
+  'Stock': float64
+,SKU,Product,Price,Price.1,Stock
+0,A-100,Espresso machine,1299.0,1199.0,4.0
+1,A-101,Milk frother,89.9,79.9,12.0
+2,A-102,Grinder,249.0,,
+3,,,,,
+4,B-200,"Beans, 1 kg",18.5,16.9,140.0
+5,B-201,Descaler,9.99,,0.0
+table 1
+shape (2, 3)
+  'Bundle': str
+  'Items': str
+  'Save': str
+,Bundle,Items,Save
+0,Starter,"A-101, B-200",10%
+1,Barista,"A-100, A-102, B-200",15%
+$ read prices.html attrs=class:prices thousands=\s decimal=, index_col=0
+tables 2
+table 0
+shape (6, 4)
+  'Product': str
+  'Price': float64
+  'Price.1': float64
+  'Stock': float64
+SKU,Product,Price,Price.1,Stock
+A-100,Espresso machine,1299.0,1199.0,4.0
+A-101,Milk frother,89.9,79.9,12.0
+A-102,Grinder,249.0,,
+,,,,
+B-200,"Beans, 1 kg",18.5,16.9,140.0
+B-201,Descaler,9.99,,0.0
+table 1
+shape (2, 2)
+  'Items': str
+  'Save': str
+Bundle,Items,Save
+Starter,"A-101, B-200",10%
+Barista,"A-100, A-102, B-200",15%
+$ read prices.html attrs=class:prices header=None
+tables 2
+table 0
+shape (6, 5)
+  'SKU': str
+  'Product': str
+  'Price': str
+  'Price.1': str
+  'Stock': float64
+,SKU,Product,Price,Price.1,Stock
+0,A-100,Espresso machine,"1 299,00","1 199,00",4.0
+1,A-101,Milk frother,8990,7990,12.0
+2,A-102,Grinder,24900,,
+3,,,,,
+4,B-200,"Beans, 1 kg",1850,1690,140.0
+5,B-201,Descaler,999,,0.0
+table 1
+shape (2, 3)
+  'Bundle': str
+  'Items': str
+  'Save': str
+,Bundle,Items,Save
+0,Starter,"A-101, B-200",10%
+1,Barista,"A-100, A-102, B-200",15%
+$ read prices.html attrs=id:bundles
+tables 1
+table 0
+shape (2, 3)
+  'Bundle': str
+  'Items': str
+  'Save': str
+,Bundle,Items,Save
+0,Starter,"A-101, B-200",10%
+1,Barista,"A-100, A-102, B-200",15%
+$ read prices.html attrs=id:bundles index_col=0 na_values=10%
+tables 1
+table 0
+shape (2, 2)
+  'Items': str
+  'Save': str
+Bundle,Items,Save
+Starter,"A-101, B-200",
+Barista,"A-100, A-102, B-200",15%
+$ read prices.html attrs=id:bundles skiprows=1
+tables 1
+table 0
+shape (1, 3)
+  'Starter': str
+  'A-101, B-200': str
+  '10%': str
+,Starter,"A-101, B-200",10%
+0,Barista,"A-100, A-102, B-200",15%
+$ read prices.html attrs=id:bundles skiprows=0:3:2
+tables 1
+table 0
+shape (0, 3)
+  'Starter': object
+  'A-101, B-200': object
+  '10%': object
+,Starter,"A-101, B-200",10%
+$ read prices.html attrs=id:bundles header=None skiprows=5
+tables 0
+$ read latin1.html
+tables 1
+table 0
+shape (2, 2)
+  'Équipe': str
+  'Points': int64
+,Équipe,Points
+0,Montélimar,12
+1,Béziers,9
+$ read latin1.html encoding=latin-1
+! LookupError: unknown encoding: 'b'latin-1''
+$ read latin1.html encoding=cp1252
+tables 1
+table 0
+shape (2, 2)
+  'Équipe': str
+  'Points': int64
+,Équipe,Points
+0,Montélimar,12
+1,Béziers,9
+$ read fragment.html
+! ValueError: No tables found matching regex '.+'
+$ read no_tables.html
+! ValueError: No tables found matching regex '.+'
+$ read no_tables.html match=Nothing
+! ValueError: No tables found matching regex 'Nothing'
+$ read empty.html
+! XMLSyntaxError: no text parsed from document (line 0)
+$ read missing.html
+! FileNotFoundError: [Errno 2] No such file or directory: data/missing.html
+$ read cities.html flavor=lxml match=Share
+tables 1
+table 0
+shape (5, 3)
+  'Region': str
+  'Communes': int64
+  'Share': str
+,Region,Communes,Share
+0,Île-de-France,5,11.9%
+1,Auvergne-Rhône-Alpes,4,9.5%
+2,Occitanie,2,4.8%
+3,Grand Est,3,7.1%
+4,Total,42,100%
+$ read cities.html match=Share index_col=5
+! IndexError: list index out of range
+$ read cities.html match=Share header=7
+! ValueError: Passed header=[7], len of 1, but only 6 lines in file
