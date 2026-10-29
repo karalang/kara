@@ -1,0 +1,148 @@
+// LeetCode #1026: Maximum Difference Between Node and Ancestor -- every ancestor
+//
+// The statement as written: walk the tree depth first keeping the values
+// of the path from the root in a `Vec`, pushed on the way down and
+// popped on the way back, and compare every node with every ancestor on
+// it. O(n * height).
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn max_ancestor_diff(root: Option[TreeNode]) -> i64 {
+    let mut path: Vec[i64] = Vec.new();
+    let mut best = 0;
+    walk(root, mut path, mut best);
+    best
+}
+
+fn walk(node: Option[TreeNode], path: mut ref Vec[i64], best: mut ref i64) {
+    if let Some(n) = node {
+        for a in path.iter() {
+            *best = (*best).max((n.val - a).abs());
+        }
+        path.push(n.val);
+        walk(n.left, mut path, mut best);
+        walk(n.right, mut path, mut best);
+        path.pop();
+    }
+}
+
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// a tree from LeetCode's level order, with -1 for a missing child
+fn from_level_order(values: ref Vec[i64]) -> Option[TreeNode] {
+    if values.len() == 0 or values[0] < 0 {
+        return None;
+    }
+    let root = TreeNode { val: values[0], left: None, right: None };
+    let mut queue: VecDeque[TreeNode] = VecDeque.new();
+    queue.push_back(root);
+    let mut k = 1;
+    while k < values.len() {
+        let node = queue.pop_front().unwrap();
+        if values[k] >= 0 {
+            let child = TreeNode { val: values[k], left: None, right: None };
+            node.left = Some(child);
+            queue.push_back(child);
+        }
+        k += 1;
+        if k < values.len() and values[k] >= 0 {
+            let child = TreeNode { val: values[k], left: None, right: None };
+            node.right = Some(child);
+            queue.push_back(child);
+        }
+        k += 1;
+    }
+    Some(root)
+}
+
+// a random value below `top`, from two draws of 15 bits
+fn random_value(seed: mut ref i64, top: i64) -> i64 {
+    (next_random(mut seed) * 32768 + next_random(mut seed)) % top
+}
+
+// a random tree of `n` nodes, each new node hung at the end of a random
+// walk down from the root, with values below `top`
+fn random_tree(seed: mut ref i64, n: i64, top: i64) -> Option[TreeNode] {
+    let root = TreeNode { val: random_value(mut seed, top), left: None, right: None };
+    let mut placed = 1;
+    while placed < n {
+        let mut node = root;
+        loop {
+            let go_left = next_random(mut seed) % 2 == 0;
+            let next = if go_left { node.left } else { node.right };
+            match next {
+                Some(child) => {
+                    node = child;
+                }
+                None => {
+                    let leaf = TreeNode { val: random_value(mut seed, top), left: None, right: None };
+                    if go_left {
+                        node.left = Some(leaf);
+                    } else {
+                        node.right = Some(leaf);
+                    }
+                    placed += 1;
+                    break;
+                }
+            }
+        }
+    }
+    Some(root)
+}
+
+// a chain of `n` nodes, each the right child of the one before, holding
+// `value(k)` at depth k
+fn chain(n: i64, zigzag: bool) -> Option[TreeNode] {
+    let root = TreeNode { val: 0, left: None, right: None };
+    let mut node = root;
+    for k in 1..n {
+        let v = if zigzag { if k % 2 == 0 { k } else { 100000 - k } } else { k * 20 };
+        let next = TreeNode { val: v, left: None, right: None };
+        node.right = Some(next);
+        node = next;
+    }
+    Some(root)
+}
+
+fn main() {
+    // LeetCode's two examples, then a few more
+    let examples: Vec[Vec[i64]] = vec![
+        vec![8, 3, 10, 1, 6, -1, 14, -1, -1, 4, 7, 13],
+        vec![1, -1, 2, -1, 0, 3],
+        vec![5, 5],
+        vec![0, 100000],
+        vec![7, 1, 9, -1, 4, 2, 12],
+        vec![50, 40, 60, 30, 45, 55, 70, 45, -1, -1, 46, 54],
+        vec![3, 3, 3, 3, -1, -1, 3, 0],
+    ];
+    for values in examples.iter() {
+        println(f"{values} -> {max_ancestor_diff(from_level_order(values))}");
+    }
+    // random trees: the sum of the answers, the largest and a checksum
+    let mut seed = 1026;
+    let groups: Vec[(i64, i64, i64)] = vec![(3000, 7, 10), (1000, 30, 100), (300, 200, 100000), (300, 200, 2), (50, 1000, 100000), (10, 5000, 100000)];
+    for (count, n, top) in groups.iter() {
+        let mut total = 0;
+        let mut most = 0;
+        let mut check = 0;
+        for _ in 0..count {
+            let answer = max_ancestor_diff(random_tree(mut seed, n, top));
+            total += answer;
+            most = most.max(answer);
+            check = (check * 31 + answer) % 1000000007;
+        }
+        println(f"{count} random trees of {n} nodes (values below {top}): sum {total}, most {most}, checksum {check}");
+    }
+    // chains of 5000 nodes, values rising by 20 and zigzagging
+    println(f"a rising chain of 5000: {max_ancestor_diff(chain(5000, false))}; a zigzag chain of 5000: {max_ancestor_diff(chain(5000, true))}");
+}

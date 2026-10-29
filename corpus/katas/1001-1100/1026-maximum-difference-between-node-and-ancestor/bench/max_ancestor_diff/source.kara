@@ -1,0 +1,86 @@
+// LeetCode #1026: Maximum Difference Between Node and Ancestor -- bench
+// Mirrors ../max_ancestor_diff.kara; see ../README.md § Benchmarks.
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn max_ancestor_diff(root: Option[TreeNode]) -> i64 {
+    match root {
+        None => 0,
+        Some(r) => best_below(Some(r), r.val, r.val),
+    }
+}
+
+fn best_below(node: Option[TreeNode], low: i64, high: i64) -> i64 {
+    match node {
+        None => high - low,
+        Some(n) => {
+            let lo = low.min(n.val);
+            let hi = high.max(n.val);
+            best_below(n.left, lo, hi).max(best_below(n.right, lo, hi))
+        }
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_value(seed: mut ref i64, top: i64) -> i64 {
+    (next_random(mut seed) * 32768 + next_random(mut seed)) % top
+}
+
+fn random_tree(seed: mut ref i64, n: i64) -> Option[TreeNode] {
+    let root = TreeNode { val: random_value(mut seed, 100001), left: None, right: None };
+    let mut placed = 1;
+    while placed < n {
+        let mut node = root;
+        loop {
+            let go_left = next_random(mut seed) % 2 == 0;
+            let next = if go_left { node.left } else { node.right };
+            match next {
+                Some(child) => {
+                    node = child;
+                }
+                None => {
+                    let leaf = TreeNode { val: random_value(mut seed, 100001), left: None, right: None };
+                    if go_left {
+                        node.left = Some(leaf);
+                    } else {
+                        node.right = Some(leaf);
+                    }
+                    placed += 1;
+                    break;
+                }
+            }
+        }
+    }
+    Some(root)
+}
+
+fn main() {
+    let count = 200;
+    let rounds = 50;
+    let mut seed = 1026;
+    let mut trees: Vec[Option[TreeNode]] = Vec.new();
+    let mut nodes = 0;
+    for _ in 0..count {
+        let n = next_random(mut seed) % 4999 + 2;
+        nodes += n;
+        trees.push(random_tree(mut seed, n));
+    }
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..rounds {
+        for tree in trees.iter() {
+            let answer = max_ancestor_diff(tree);
+            total += answer;
+            check = (check * 31 + answer) % 1000000007;
+        }
+    }
+    println(f"{count} trees, {nodes} nodes, {rounds} rounds: sum {total}, checksum {check}");
+}

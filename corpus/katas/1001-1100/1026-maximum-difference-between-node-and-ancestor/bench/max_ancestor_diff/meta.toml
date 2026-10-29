@@ -1,0 +1,11 @@
+source = "kara-katas/leetcode/1001-1100/1026-maximum-difference-between-node-and-ancestor/bench/max_ancestor_diff.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["bench"]
+class = "e"
+expected_from = "mirror"
+note = "mirror: the C, Rust, Go and Python bench programs print this line (kara-katas 1026 bench/); there is no legacy record (the legacy compiler went at M3)"
+bucket = "timeout"
+classified_with = "62f5c9239"
+extracted_src = "984417b4"

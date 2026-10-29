@@ -1,0 +1,331 @@
+// LeetCode #1026: Maximum Difference Between Node and Ancestor -- differential
+//
+// The five arms, copied, against the statement read literally and five
+// more properties. See README.md § Differential.
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn d_star(root: Option[TreeNode]) -> i64 {
+    match root {
+        None => 0,
+        Some(r) => best_below(Some(r), r.val, r.val),
+    }
+}
+
+fn best_below(node: Option[TreeNode], low: i64, high: i64) -> i64 {
+    match node {
+        None => high - low,
+        Some(n) => {
+            let lo = low.min(n.val);
+            let hi = high.max(n.val);
+            best_below(n.left, lo, hi).max(best_below(n.right, lo, hi))
+        }
+    }
+}
+
+fn d_stack(root: Option[TreeNode]) -> i64 {
+    let mut best = 0;
+    let mut stack: Vec[(TreeNode, i64, i64)] = Vec.new();
+    if let Some(r) = root {
+        stack.push((r, r.val, r.val));
+    }
+    while let Some((node, low, high)) = stack.pop() {
+        best = best.max((node.val - low).abs()).max((high - node.val).abs());
+        let lo = low.min(node.val);
+        let hi = high.max(node.val);
+        if let Some(l) = node.left {
+            stack.push((l, lo, hi));
+        }
+        if let Some(r) = node.right {
+            stack.push((r, lo, hi));
+        }
+    }
+    best
+}
+
+fn d_bfs(root: Option[TreeNode]) -> i64 {
+    let mut best = 0;
+    let mut queue: VecDeque[(TreeNode, i64, i64)] = VecDeque.new();
+    if let Some(r) = root {
+        queue.push_back((r, r.val, r.val));
+    }
+    while let Some((node, low, high)) = queue.pop_front() {
+        best = best.max(node.val - low).max(high - node.val);
+        let lo = low.min(node.val);
+        let hi = high.max(node.val);
+        for child in vec![node.left, node.right] {
+            if let Some(c) = child {
+                queue.push_back((c, lo, hi));
+            }
+        }
+    }
+    best
+}
+
+fn d_bottom_up(root: Option[TreeNode]) -> i64 {
+    let mut best = 0;
+    if let Some(r) = root {
+        range_of(r, mut best);
+    }
+    best
+}
+
+// the least and greatest value in the subtree at `node`
+fn range_of(node: TreeNode, best: mut ref i64) -> (i64, i64) {
+    let mut low = node.val;
+    let mut high = node.val;
+    for child in vec![node.left, node.right] {
+        if let Some(c) = child {
+            let (lo, hi) = range_of(c, mut best);
+            *best = (*best).max(node.val - lo).max(hi - node.val);
+            low = low.min(lo);
+            high = high.max(hi);
+        }
+    }
+    (low, high)
+}
+
+fn d_path(root: Option[TreeNode]) -> i64 {
+    let mut path: Vec[i64] = Vec.new();
+    let mut best = 0;
+    walk(root, mut path, mut best);
+    best
+}
+
+fn walk(node: Option[TreeNode], path: mut ref Vec[i64], best: mut ref i64) {
+    if let Some(n) = node {
+        for a in path.iter() {
+            *best = (*best).max((n.val - a).abs());
+        }
+        path.push(n.val);
+        walk(n.left, mut path, mut best);
+        walk(n.right, mut path, mut best);
+        path.pop();
+    }
+}
+fn arms(root: ref Option[TreeNode]) -> Vec[i64] {
+    vec![d_star(root), d_stack(root), d_bfs(root), d_bottom_up(root), d_path(root)]
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_value(seed: mut ref i64, top: i64) -> i64 {
+    (next_random(mut seed) * 32768 + next_random(mut seed)) % top
+}
+
+// every tree shape of `n` nodes, written in preorder with 1 for a node
+// and 0 for a missing child
+fn shapes(n: i64) -> Vec[String] {
+    if n == 0 {
+        return vec!["0".to_string()];
+    }
+    let mut out: Vec[String] = Vec.new();
+    for l in 0..n {
+        for a in shapes(l).iter() {
+            for b in shapes(n - 1 - l).iter() {
+                out.push("1" + a + b);
+            }
+        }
+    }
+    out
+}
+
+// the tree a preorder shape describes, from place `at`, with random values
+fn build(shape: ref String, at: mut ref i64, seed: mut ref i64, top: i64) -> Option[TreeNode] {
+    let here = shape.bytes()[*at];
+    *at += 1;
+    if here == 48 {
+        return None;
+    }
+    let node = TreeNode { val: random_value(mut seed, top), left: None, right: None };
+    node.left = build(shape, mut at, mut seed, top);
+    node.right = build(shape, mut at, mut seed, top);
+    Some(node)
+}
+
+// a random tree of `n` nodes, each new node hung at the end of a random
+// walk down from the root
+fn random_tree(seed: mut ref i64, n: i64, top: i64) -> Option[TreeNode] {
+    let root = TreeNode { val: random_value(mut seed, top), left: None, right: None };
+    let mut placed = 1;
+    while placed < n {
+        let mut node = root;
+        loop {
+            let go_left = next_random(mut seed) % 2 == 0;
+            let next = if go_left { node.left } else { node.right };
+            match next {
+                Some(child) => {
+                    node = child;
+                }
+                None => {
+                    let leaf = TreeNode { val: random_value(mut seed, top), left: None, right: None };
+                    if go_left {
+                        node.left = Some(leaf);
+                    } else {
+                        node.right = Some(leaf);
+                    }
+                    placed += 1;
+                    break;
+                }
+            }
+        }
+    }
+    Some(root)
+}
+
+// a copy of the tree with each value `v` turned into `scale * v + shift`,
+// and each pair of children swapped if `mirrored`
+fn copy(node: ref Option[TreeNode], scale: i64, shift: i64, mirrored: bool) -> Option[TreeNode] {
+    match node {
+        None => None,
+        Some(n) => {
+            let (l, r) = if mirrored { (n.right, n.left) } else { (n.left, n.right) };
+            Some(TreeNode { val: scale * n.val + shift, left: copy(l, scale, shift, mirrored), right: copy(r, scale, shift, mirrored) })
+        }
+    }
+}
+
+// every node of the tree, in preorder
+fn nodes(node: ref Option[TreeNode], out: mut ref Vec[TreeNode]) {
+    if let Some(n) = node {
+        out.push(n);
+        nodes(n.left, mut out);
+        nodes(n.right, mut out);
+    }
+}
+
+// whether `a` is an ancestor of `b`: a child of `a` is `b`, or is an
+// ancestor of it
+fn is_ancestor(a: TreeNode, b: TreeNode) -> bool {
+    for child in vec![a.left, a.right] {
+        if let Some(c) = child {
+            if c.ref_eq(b) or is_ancestor(c, b) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+// the statement read literally: the largest |a.val - b.val| over every
+// pair of different nodes a and b with a an ancestor of b
+fn literal(root: ref Option[TreeNode]) -> i64 {
+    let mut all: Vec[TreeNode] = Vec.new();
+    nodes(root, mut all);
+    let mut best = 0;
+    for a in all.iter() {
+        for b in all.iter() {
+            if not a.ref_eq(b) and is_ancestor(a, b) {
+                best = best.max((a.val - b.val).abs());
+            }
+        }
+    }
+    best
+}
+
+fn main() {
+    let mut failures: Vec[i64] = Vec.filled(6, 0);
+    let mut checks = 0;
+    let mut check = 0;
+    let mut searched = 0;
+    let mut seed = 10261;
+    // every shape of 1 to 7 nodes, each with three draws of values below 4
+    // (1,875 trees); then 600 random trees of 8 to 40 nodes and 20 of 300
+    // to 2,000, with values below 10 to 100,000
+    let mut trees: Vec[Option[TreeNode]] = Vec.new();
+    for n in 1..8 {
+        for shape in shapes(n).iter() {
+            for _ in 0..3 {
+                let mut at = 0;
+                trees.push(build(shape, mut at, mut seed, 4));
+            }
+        }
+    }
+    let tops: Vec[i64] = vec![10, 100, 1000, 100000];
+    for k in 0..620 {
+        let n = if k < 600 { 8 + next_random(mut seed) % 33 } else { 300 + next_random(mut seed) % 1701 };
+        let top = tops[next_random(mut seed) % 4];
+        trees.push(random_tree(mut seed, n, top));
+    }
+    for root in trees.iter() {
+        let got = arms(root);
+        // P2: every value doubled and 3 added doubles every difference
+        let got_scaled = arms(copy(root, 2, 3, false));
+        // P3: every value v turned into 100000 - v keeps every difference
+        let got_flipped = arms(copy(root, -1, 100000, false));
+        // P4: the mirror image keeps every ancestor
+        let got_mirrored = arms(copy(root, 1, 0, true));
+        // P5: hung below a new root, every node gains it as an ancestor
+        let mut all: Vec[TreeNode] = Vec.new();
+        nodes(root, mut all);
+        let top_value = random_value(mut seed, 100000);
+        let mut lowest = top_value;
+        let mut highest = top_value;
+        for n in all.iter() {
+            lowest = lowest.min(n.val);
+            highest = highest.max(n.val);
+        }
+        let hung = Some(TreeNode { val: top_value, left: copy(root, 1, 0, false), right: None });
+        let got_hung = arms(hung);
+        let exact = if all.len() <= 40 { literal(root) } else { -1 };
+        if exact >= 0 {
+            searched += 1;
+        }
+        check = (check * 31 + got[0]) % 1000000007;
+        for a in 0..5 {
+            let c = got[a];
+            // P1: the statement, on the trees of at most 40 nodes
+            if exact >= 0 {
+                checks += 1;
+                if c != exact {
+                    failures[0] += 1;
+                }
+            }
+            checks += 1;
+            if got_scaled[a] != 2 * c {
+                failures[1] += 1;
+            }
+            checks += 1;
+            if got_flipped[a] != c {
+                failures[2] += 1;
+            }
+            checks += 1;
+            if got_mirrored[a] != c {
+                failures[3] += 1;
+            }
+            // P5: the new root's differences with every node join the old
+            // ones, and the largest of those is with the least or the
+            // greatest value
+            checks += 1;
+            if got_hung[a] != c.max(top_value - lowest).max(highest - top_value) {
+                failures[4] += 1;
+            }
+            // P6: each arm agrees with at least two of the other four
+            checks += 1;
+            let mut agree = 0;
+            for o in 0..5 {
+                if o != a and got[o] == c {
+                    agree += 1;
+                }
+            }
+            if agree < 2 {
+                failures[5] += 1;
+            }
+        }
+    }
+    let mut total = 0;
+    for p in 0..6 {
+        if failures[p] > 0 {
+            println(f"P{p + 1}: {failures[p]} failures");
+        }
+        total += failures[p];
+    }
+    println(f"{trees.len()} trees ({searched} searched in full): checksum {check}, {checks} checks over 5 arms: {total} failures");
+}

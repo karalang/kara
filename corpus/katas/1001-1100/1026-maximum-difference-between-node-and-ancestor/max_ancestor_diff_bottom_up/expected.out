@@ -1,0 +1,14 @@
+[8, 3, 10, 1, 6, -1, 14, -1, -1, 4, 7, 13] -> 7
+[1, -1, 2, -1, 0, 3] -> 3
+[5, 5] -> 0
+[0, 100000] -> 100000
+[7, 1, 9, -1, 4, 2, 12] -> 7
+[50, 40, 60, 30, 45, 55, 70, 45, -1, -1, 46, 54] -> 20
+[3, 3, 3, 3, -1, -1, 3, 0] -> 3
+3000 random trees of 7 nodes (values below 10): sum 20849, most 9, checksum 443087688
+1000 random trees of 30 nodes (values below 100): sum 89119, most 99, checksum 134197543
+300 random trees of 200 nodes (values below 100000): sum 29013752, most 99958, checksum 779651535
+300 random trees of 200 nodes (values below 2): sum 300, most 1, checksum 30265473
+50 random trees of 1000 nodes (values below 100000): sum 4935867, most 99772, checksum 936919827
+10 random trees of 5000 nodes (values below 100000): sum 994401, most 99816, checksum 366260889
+a rising chain of 5000: 99980; a zigzag chain of 5000: 99999
