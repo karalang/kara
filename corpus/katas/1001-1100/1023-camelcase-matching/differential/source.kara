@@ -1,0 +1,332 @@
+// LeetCode #1023: Camelcase Matching -- differential
+//
+// The five arms, copied, against the statement read literally and five
+// more properties. See README.md § Differential.
+
+fn d_star(queries: Vec[String], pattern: Str) -> Vec[bool] {
+    let p: Vec[char] = pattern.chars().collect();
+    let mut answers: Vec[bool] = Vec.new();
+    for query in queries.iter() {
+        let mut i = 0;
+        let mut ok = true;
+        for c in query.chars() {
+            if i < p.len() and c == p[i] {
+                i += 1;
+            } else if c.is_ascii_uppercase() {
+                ok = false;
+                break;
+            }
+        }
+        answers.push(ok and i == p.len());
+    }
+    answers
+}
+
+fn d_backward(queries: Vec[String], pattern: Str) -> Vec[bool] {
+    let p: Vec[char] = pattern.chars().collect();
+    let mut answers: Vec[bool] = Vec.new();
+    for query in queries.iter() {
+        let q: Vec[char] = query.chars().collect();
+        let mut j = p.len();
+        let mut ok = true;
+        let mut k = q.len();
+        while k > 0 {
+            k -= 1;
+            if j > 0 and q[k] == p[j - 1] {
+                j -= 1;
+            } else if q[k].is_ascii_uppercase() {
+                ok = false;
+                break;
+            }
+        }
+        answers.push(ok and j == 0);
+    }
+    answers
+}
+
+fn words(s: Str) -> Vec[String] {
+    let mut out: Vec[String] = vec![String.new()];
+    for c in s.chars() {
+        if c.is_ascii_uppercase() {
+            out.push(String.new());
+        }
+        let last = out.len() - 1;
+        out[last].push(c);
+    }
+    out
+}
+
+// whether the letters of `small` appear in order in `big`
+fn in_order(small: Str, big: Str) -> bool {
+    let s: Vec[char] = small.chars().collect();
+    let mut i = 0;
+    for c in big.chars() {
+        if i < s.len() and c == s[i] {
+            i += 1;
+        }
+    }
+    i == s.len()
+}
+
+fn d_split(queries: Vec[String], pattern: Str) -> Vec[bool] {
+    let pw = words(pattern);
+    let mut answers: Vec[bool] = Vec.new();
+    for query in queries.iter() {
+        let qw = words(query);
+        let mut ok = qw.len() == pw.len();
+        let mut k = 0;
+        while ok and k < pw.len() {
+            if k > 0 and qw[k].chars().next() != pw[k].chars().next() {
+                ok = false;
+            } else if not in_order(pw[k], qw[k]) {
+                ok = false;
+            }
+            k += 1;
+        }
+        answers.push(ok);
+    }
+    answers
+}
+
+fn d_dp(queries: Vec[String], pattern: Str) -> Vec[bool] {
+    let p: Vec[char] = pattern.chars().collect();
+    let mut answers: Vec[bool] = Vec.new();
+    for query in queries.iter() {
+        let q: Vec[char] = query.chars().collect();
+        let mut can: Vec[Vec[bool]] = Vec.filled(p.len() + 1, Vec.filled(q.len() + 1, false));
+        can[0][0] = true;
+        for j in 1..q.len() + 1 {
+            can[0][j] = can[0][j - 1] and not q[j - 1].is_ascii_uppercase();
+        }
+        for i in 1..p.len() + 1 {
+            for j in 1..q.len() + 1 {
+                let matched = q[j - 1] == p[i - 1] and can[i - 1][j - 1];
+                let inserted = not q[j - 1].is_ascii_uppercase() and can[i][j - 1];
+                can[i][j] = matched or inserted;
+            }
+        }
+        answers.push(can[p.len()][q.len()]);
+    }
+    answers
+}
+
+fn d_skeleton(queries: Vec[String], pattern: Str) -> Vec[bool] {
+    let capitals: String = pattern.chars().filter(|c| c.is_ascii_uppercase()).collect();
+    let mut answers: Vec[bool] = Vec.new();
+    for query in queries.iter() {
+        // bound with its type: compared directly, `collect()` is refused
+        // in the MIR builder though `karac check` passes it (B-2026-10-29-36)
+        let caps: String = query.chars().filter(|c| c.is_ascii_uppercase()).collect();
+        let same_capitals = caps == capitals;
+        let mut rest = query.chars();
+        let subsequence = pattern.chars().all(|c| rest.any(|x| x == c));
+        answers.push(same_capitals and subsequence);
+    }
+    answers
+}
+
+fn arms(queries: ref Vec[String], pattern: Str) -> Vec[Vec[bool]] {
+    vec![d_star(queries, pattern), d_backward(queries, pattern), d_split(queries, pattern), d_dp(queries, pattern), d_skeleton(queries, pattern)]
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// a random letter: one of the first `letters` capitals with probability
+// `capitals` / 8, otherwise one of the first `letters` small letters
+fn random_letter(seed: mut ref i64, letters: i64, capitals: i64) -> char {
+    let upper = next_random(mut seed) % 8 < capitals;
+    let k = next_random(mut seed) % letters;
+    let base = if upper { 65 } else { 97 };
+    char.try_from((base + k) as u32).unwrap()
+}
+
+// the statement read literally: each letter of the query is either the
+// pattern's next letter or a small letter put in; try both ways
+fn made_from(q: ref Vec[char], p: ref Vec[char], qi: i64, pi: i64) -> bool {
+    if qi == q.len() {
+        return pi == p.len();
+    }
+    if q.len() - qi < p.len() - pi {
+        return false;
+    }
+    if pi < p.len() and q[qi] == p[pi] and made_from(q, p, qi + 1, pi + 1) {
+        return true;
+    }
+    not q[qi].is_ascii_uppercase() and made_from(q, p, qi + 1, pi)
+}
+
+fn literal(query: Str, pattern: Str) -> bool {
+    let q: Vec[char] = query.chars().collect();
+    let p: Vec[char] = pattern.chars().collect();
+    made_from(q, p, 0, 0)
+}
+
+// `s` with `c` put in at place `at`
+fn put_in(s: Str, at: i64, c: char) -> String {
+    let mut out = String.new();
+    let mut k = 0;
+    for x in s.chars() {
+        if k == at {
+            out.push(c);
+        }
+        out.push(x);
+        k += 1;
+    }
+    if at >= k {
+        out.push(c);
+    }
+    out
+}
+
+fn reversed(s: Str) -> String {
+    let mut out = String.new();
+    for c in s.chars().rev() {
+        out.push(c);
+    }
+    out
+}
+
+// every string of 1 to `most` letters over `alphabet`
+fn all_strings(alphabet: ref Vec[char], most: i64) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut level: Vec[String] = vec![String.new()];
+    for _ in 0..most {
+        let mut next: Vec[String] = Vec.new();
+        for s in level.iter() {
+            for c in alphabet.iter() {
+                let mut t = s.clone();
+                t.push(c);
+                next.push(t.clone());
+                out.push(t);
+            }
+        }
+        level = next;
+    }
+    out
+}
+
+fn main() {
+    let mut failures: Vec[i64] = Vec.filled(6, 0);
+    let mut checks = 0;
+    let mut check = 0;
+    let mut pairs = 0;
+    let mut seed = 10231;
+    // every pattern of 1 to 3 letters over a, b and A against every query
+    // of 1 to 5 letters over them (39 x 363), then 300 random patterns of
+    // 1 to 8 letters over four letters each and their capitals, each with
+    // 20 queries of up to 16 letters, half grown from the pattern
+    let alphabet: Vec[char] = vec!['a', 'b', 'A'];
+    let mut cases: Vec[(String, Vec[String])] = Vec.new();
+    let all_queries = all_strings(alphabet, 5);
+    for pattern in all_strings(alphabet, 3).iter() {
+        cases.push((pattern.clone(), all_queries.clone()));
+    }
+    for _ in 0..300 {
+        let mut pattern = String.new();
+        for _ in 0..1 + next_random(mut seed) % 8 {
+            pattern.push(random_letter(mut seed, 4, 2));
+        }
+        let mut queries: Vec[String] = Vec.new();
+        for k in 0..20 {
+            if k % 2 == 0 {
+                let mut q = pattern.clone();
+                for _ in 0..next_random(mut seed) % 9 {
+                    let at = next_random(mut seed) % (q.len() + 1);
+                    q = put_in(q, at, random_letter(mut seed, 4, 1));
+                }
+                queries.push(q);
+            } else {
+                let mut q = String.new();
+                for _ in 0..1 + next_random(mut seed) % 16 {
+                    q.push(random_letter(mut seed, 4, 2));
+                }
+                queries.push(q);
+            }
+        }
+        cases.push((pattern, queries));
+    }
+    for (pattern, queries) in cases.iter() {
+        let got = arms(queries, pattern);
+        // P2 and P3: a small letter and a capital put in at random places
+        let mut small: Vec[String] = Vec.new();
+        let mut capital: Vec[String] = Vec.new();
+        for q in queries.iter() {
+            let at = next_random(mut seed) % (q.len() + 1);
+            small.push(put_in(q, at, random_letter(mut seed, 4, 0)));
+            let at2 = next_random(mut seed) % (q.len() + 1);
+            capital.push(put_in(q, at2, random_letter(mut seed, 4, 8)));
+        }
+        let got_small = arms(small, pattern);
+        let got_capital = arms(capital, pattern);
+        // P4: everything read backwards
+        let mut back: Vec[String] = Vec.new();
+        for q in queries.iter() {
+            back.push(reversed(q));
+        }
+        let got_back = arms(back, reversed(pattern));
+        // P5: the same text added after the query and the pattern
+        let tail = queries[0].clone();
+        let mut longer: Vec[String] = Vec.new();
+        for q in queries.iter() {
+            longer.push(q + tail);
+        }
+        let got_longer = arms(longer, pattern + tail);
+        for k in 0..queries.len() {
+            pairs += 1;
+            let exact = literal(queries[k], pattern);
+            check = (check * 3 + if got[0][k] { 2 } else { 1 }) % 1000000007;
+            for a in 0..5 {
+                let c = got[a][k];
+                // P1: the statement
+                checks += 1;
+                if c != exact {
+                    failures[0] += 1;
+                }
+                // P2: a match stays a match with a small letter put in
+                checks += 1;
+                if c and not got_small[a][k] {
+                    failures[1] += 1;
+                }
+                // P3: a match is lost with a capital put in, which the
+                // pattern does not have
+                checks += 1;
+                if c and got_capital[a][k] {
+                    failures[2] += 1;
+                }
+                // P4: the query matches exactly when it matches read
+                // backwards against the pattern read backwards
+                checks += 1;
+                if got_back[a][k] != c {
+                    failures[3] += 1;
+                }
+                // P5: a match stays a match with the same text after both
+                checks += 1;
+                if c and not got_longer[a][k] {
+                    failures[4] += 1;
+                }
+                // P6: each arm agrees with at least two of the other four
+                checks += 1;
+                let mut agree = 0;
+                for o in 0..5 {
+                    if o != a and got[o][k] == c {
+                        agree += 1;
+                    }
+                }
+                if agree < 2 {
+                    failures[5] += 1;
+                }
+            }
+        }
+    }
+    let mut total = 0;
+    for p in 0..6 {
+        if failures[p] > 0 {
+            println(f"P{p + 1}: {failures[p]} failures");
+        }
+        total += failures[p];
+    }
+    println(f"{pairs} queries: checksum {check}, {checks} checks over 5 arms: {total} failures");
+}

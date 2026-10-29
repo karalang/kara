@@ -1,0 +1,112 @@
+// LeetCode #1023: Camelcase Matching -- a table of prefixes
+//
+// Let `can[i][j]` say whether the first `j` letters of the query can be
+// made from the first `i` of the pattern. With none of the pattern, only
+// small letters; otherwise the query's last letter either is the
+// pattern's last, matched, or is a small letter put in. O(query length *
+// pattern length) per query.
+
+fn camel_match(queries: Vec[String], pattern: Str) -> Vec[bool] {
+    let p: Vec[char] = pattern.chars().collect();
+    let mut answers: Vec[bool] = Vec.new();
+    for query in queries.iter() {
+        let q: Vec[char] = query.chars().collect();
+        let mut can: Vec[Vec[bool]] = Vec.filled(p.len() + 1, Vec.filled(q.len() + 1, false));
+        can[0][0] = true;
+        for j in 1..q.len() + 1 {
+            can[0][j] = can[0][j - 1] and not q[j - 1].is_ascii_uppercase();
+        }
+        for i in 1..p.len() + 1 {
+            for j in 1..q.len() + 1 {
+                let matched = q[j - 1] == p[i - 1] and can[i - 1][j - 1];
+                let inserted = not q[j - 1].is_ascii_uppercase() and can[i][j - 1];
+                can[i][j] = matched or inserted;
+            }
+        }
+        answers.push(can[p.len()][q.len()]);
+    }
+    answers
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// a random letter: one of the first `letters` capitals with probability
+// `capitals` / 8, otherwise one of the first `letters` small letters
+fn random_letter(seed: mut ref i64, letters: i64, capitals: i64) -> char {
+    let upper = next_random(mut seed) % 8 < capitals;
+    let k = next_random(mut seed) % letters;
+    let base = if upper { 65 } else { 97 };
+    char.try_from((base + k) as u32).unwrap()
+}
+
+// a query made from the pattern by putting in random letters, with a
+// capital among them with probability `stray` / 8 per letter
+fn grown(seed: mut ref i64, pattern: ref String, extra: i64, letters: i64, stray: i64) -> String {
+    let mut out = String.new();
+    let cs: Vec[char] = pattern.chars().collect();
+    let mut k = 0;
+    let mut left = extra;
+    while k < cs.len() or left > 0 {
+        if left > 0 and (k == cs.len() or next_random(mut seed) % 2 == 0) {
+            out.push(random_letter(mut seed, letters, stray));
+            left -= 1;
+        } else {
+            out.push(cs[k]);
+            k += 1;
+        }
+    }
+    out
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let queries: Vec[String] = vec!["FooBar", "FooBarTest", "FootBall", "FrameBuffer", "ForceFeedBack"];
+    for pattern in ["FB", "FoBa", "FoBaT"].iter() {
+        println(f"{pattern}: {camel_match(queries, pattern)}");
+    }
+    let small: Vec[String] = vec!["a", "A", "ba", "ab", "Ba", "aB", "aa", "b"];
+    for pattern in ["a", "A", "aa", "B"].iter() {
+        println(f"{pattern}: {camel_match(small, pattern)}");
+    }
+    // random cases: half the queries grown from the pattern, half drawn at
+    // random; how many match and a checksum of the answers
+    let mut seed = 1023;
+    let groups: Vec[(i64, i64, i64, i64, i64)] = vec![(2000, 4, 3, 2, 3), (1000, 10, 8, 3, 2), (300, 30, 20, 4, 2), (100, 100, 40, 5, 1), (30, 100, 100, 26, 1), (100, 100, 2, 26, 4)];
+    for (cases, count, length, letters, capitals) in groups.iter() {
+        let mut matched = 0;
+        let mut check = 0;
+        for _ in 0..cases {
+            let plen = 1 + next_random(mut seed) % length;
+            let mut pattern = String.new();
+            for _ in 0..plen {
+                pattern.push(random_letter(mut seed, letters, capitals));
+            }
+            let mut qs: Vec[String] = Vec.new();
+            for k in 0..count {
+                let room = 100 - plen;
+                let extra = if room == 0 { 0 } else { next_random(mut seed) % (room.min(length) + 1) };
+                if k % 2 == 0 {
+                    qs.push(grown(mut seed, pattern, extra, letters, 1));
+                } else {
+                    let mut q = String.new();
+                    for _ in 0..1 + next_random(mut seed) % length.max(plen) {
+                        q.push(random_letter(mut seed, letters, capitals));
+                    }
+                    qs.push(q);
+                }
+            }
+            for answer in camel_match(qs, pattern).iter() {
+                if answer {
+                    matched += 1;
+                }
+                check = (check * 3 + if answer { 2 } else { 1 }) % 1000000007;
+            }
+        }
+        println(f"{cases} cases of {count} queries ({letters} letters, {capitals}/8 capitals): {matched} match, checksum {check}");
+    }
+}

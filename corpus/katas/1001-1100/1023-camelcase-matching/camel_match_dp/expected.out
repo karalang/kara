@@ -1,0 +1,13 @@
+FB: [true, false, true, true, false]
+FoBa: [true, false, true, false, false]
+FoBaT: [false, true, false, false, false]
+a: [true, false, true, true, false, false, true, false]
+A: [false, true, false, false, false, false, false, false]
+aa: [false, false, false, false, false, false, true, false]
+B: [false, false, false, false, true, true, false, false]
+2000 cases of 4 queries (2 letters, 3/8 capitals): 3680 match, checksum 205499206
+1000 cases of 10 queries (3 letters, 2/8 capitals): 3393 match, checksum 8795833
+300 cases of 30 queries (4 letters, 2/8 capitals): 1661 match, checksum 495957427
+100 cases of 100 queries (5 letters, 1/8 capitals): 1008 match, checksum 851998883
+30 cases of 100 queries (26 letters, 1/8 capitals): 304 match, checksum 208842963
+100 cases of 100 queries (26 letters, 4/8 capitals): 4455 match, checksum 641261038
