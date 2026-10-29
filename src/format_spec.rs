@@ -244,16 +244,6 @@ impl FormatSpec {
         }
     }
 
-    fn render_int_magnitude(&self, mag: u128) -> String {
-        match self.radix {
-            Radix::Dec => mag.to_string(),
-            Radix::Hex => format!("{mag:x}"),
-            Radix::HexUpper => format!("{mag:X}"),
-            Radix::Oct => format!("{mag:o}"),
-            Radix::Bin => format!("{mag:b}"),
-        }
-    }
-
     /// Render a sign plus an ALREADY-REINTERPRETED magnitude. Zero-pad inserts
     /// zeros between the sign and the digits (`{-7:05}` -> `-0007`); otherwise
     /// the whole rendered number is padded per `align` (default right).
@@ -266,24 +256,82 @@ impl FormatSpec {
     /// `i128` one; both are correct, and folding the two together here is
     /// exactly the mistake that would silently make one of them wrong.
     fn apply_magnitude(&self, neg: bool, mag: u128) -> String {
-        let digits = self.render_int_magnitude(mag);
-        let sign = if neg {
-            "-"
-        } else if self.plus {
-            "+"
-        } else {
-            ""
+        let mut out = Vec::new();
+        self.write_magnitude(neg, mag, &mut out);
+        String::from_utf8(out).unwrap_or_default()
+    }
+
+    /// [`Self::apply_magnitude`], appending to `out` with no allocation of
+    /// its own: the compiled runtime formats `{x:b}` through this into one
+    /// reused buffer (B-2026-10-29-33).
+    pub fn write_magnitude(&self, neg: bool, mag: u128, out: &mut Vec<u8>) {
+        let (base, upper) = match self.radix {
+            Radix::Dec => (10, false),
+            Radix::Hex => (16, false),
+            Radix::HexUpper => (16, true),
+            Radix::Oct => (8, false),
+            Radix::Bin => (2, false),
         };
-        if self.zero_pad {
-            if let Some(width) = self.width {
-                let have = sign.len() + digits.chars().count();
-                if have < width {
-                    let zeros = "0".repeat(width - have);
-                    return format!("{sign}{zeros}{digits}");
+        let digit = |d: u8| match d {
+            0..=9 => b'0' + d,
+            _ if upper => b'A' + d - 10,
+            _ => b'a' + d - 10,
+        };
+        let mut buf = [0u8; 128];
+        let mut i = buf.len();
+        match u64::try_from(mag) {
+            Ok(mut m) => loop {
+                i -= 1;
+                buf[i] = digit((m % base) as u8);
+                m /= base;
+                if m == 0 {
+                    break;
+                }
+            },
+            Err(_) => {
+                let mut m = mag;
+                loop {
+                    i -= 1;
+                    buf[i] = digit((m % u128::from(base)) as u8);
+                    m /= u128::from(base);
+                    if m == 0 {
+                        break;
+                    }
                 }
             }
         }
-        self.pad(&format!("{sign}{digits}"), false)
+        let digits = &buf[i..];
+        let sign: &[u8] = if neg {
+            b"-"
+        } else if self.plus {
+            b"+"
+        } else {
+            b""
+        };
+        let have = sign.len() + digits.len();
+        let pad = self.width.map_or(0, |w| w.saturating_sub(have));
+        // Zero-pad inserts zeros between the sign and the digits.
+        if self.zero_pad && pad > 0 {
+            out.extend_from_slice(sign);
+            out.resize(out.len() + pad, b'0');
+            out.extend_from_slice(digits);
+            return;
+        }
+        let (left, right) = match self.align.unwrap_or(Align::Right) {
+            Align::Left => (0, pad),
+            Align::Right => (pad, 0),
+            Align::Center => (pad / 2, pad - pad / 2),
+        };
+        let mut fill = [0u8; 4];
+        let fill = self.fill.unwrap_or(' ').encode_utf8(&mut fill).as_bytes();
+        for _ in 0..left {
+            out.extend_from_slice(fill);
+        }
+        out.extend_from_slice(sign);
+        out.extend_from_slice(digits);
+        for _ in 0..right {
+            out.extend_from_slice(fill);
+        }
     }
 
     /// Format a signed integer AT 64-BIT WIDTH. Only decimal takes the sign; a
@@ -302,6 +350,14 @@ impl FormatSpec {
     /// Format an unsigned integer at 64-bit width (same rules, never negative).
     pub fn apply_uint(&self, v: u64) -> String {
         self.apply_magnitude(false, u128::from(v))
+    }
+
+    /// [`Self::apply_int`] (`signed`) or [`Self::apply_uint`] on the 64 bits
+    /// `v`, appended to `out`.
+    pub fn write_int64(&self, v: u64, signed: bool, out: &mut Vec<u8>) {
+        let neg = signed && (v as i64) < 0 && self.radix == Radix::Dec;
+        let mag = if neg { (v as i64).unsigned_abs() } else { v };
+        self.write_magnitude(neg, u128::from(mag), out);
     }
 
     /// Format a signed integer AT 128-BIT WIDTH — the `i128` twin of
@@ -876,6 +932,70 @@ mod tests {
         for raw in ["-", "-5", " 5"] {
             let e = FormatSpec::parse(raw).unwrap_err();
             assert!(e.contains("sign flag"), "{raw:?}: {e}");
+        }
+    }
+
+    /// The allocation-free integer writer (B-2026-10-29-33) renders exactly
+    /// what the `format!`-based code it replaced did, which this oracle
+    /// keeps: digits by Rust's own radix formatting, zeros after the sign,
+    /// otherwise the whole number padded per `align` (default right).
+    #[test]
+    fn integer_writer_matches_the_format_based_rendering() {
+        fn oracle(fs: &FormatSpec, neg: bool, mag: u128) -> String {
+            let digits = match fs.radix {
+                Radix::Dec => mag.to_string(),
+                Radix::Hex => format!("{mag:x}"),
+                Radix::HexUpper => format!("{mag:X}"),
+                Radix::Oct => format!("{mag:o}"),
+                Radix::Bin => format!("{mag:b}"),
+            };
+            let sign = if neg {
+                "-"
+            } else if fs.plus {
+                "+"
+            } else {
+                ""
+            };
+            if fs.zero_pad {
+                if let Some(width) = fs.width {
+                    let have = sign.len() + digits.chars().count();
+                    if have < width {
+                        return format!("{sign}{}{digits}", "0".repeat(width - have));
+                    }
+                }
+            }
+            fs.pad(&format!("{sign}{digits}"), false)
+        }
+        let specs = [
+            "b", "x", "X", "o", "d", "5", "05", "08b", "+", "+x", "+05", ">8", "<8", "^9", "*>7x",
+            "_<6", "é^7b", "+010X", "3", "040b",
+        ];
+        let values: [i64; 9] = [0, 1, -1, 7, -7, 255, 400, i64::MIN, i64::MAX];
+        for raw in specs {
+            let fs = FormatSpec::parse(raw).unwrap_or_else(|e| panic!("{raw}: {e}"));
+            for v in values {
+                let dec = fs.radix == Radix::Dec;
+                let mag = if dec {
+                    u128::from(v.unsigned_abs())
+                } else {
+                    u128::from(v as u64)
+                };
+                let want = oracle(&fs, v < 0 && dec, mag);
+                assert_eq!(fs.apply_int(v), want, "{raw} on {v}");
+                let mut out = Vec::new();
+                fs.write_int64(v as u64, true, &mut out);
+                assert_eq!(String::from_utf8(out).unwrap(), want, "{raw} on {v}");
+                let mut out = Vec::new();
+                fs.write_int64(v as u64, false, &mut out);
+                assert_eq!(
+                    String::from_utf8(out).unwrap(),
+                    oracle(&fs, false, u128::from(v as u64)),
+                    "{raw} on {v} unsigned"
+                );
+            }
+            for v in [u128::MAX, 1 << 100, 12345] {
+                assert_eq!(fs.apply_uint128(v), oracle(&fs, false, v), "{raw} on {v}");
+            }
         }
     }
 

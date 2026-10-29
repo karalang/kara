@@ -293,24 +293,68 @@ pub unsafe extern "C" fn karac_mir_fmt_spec(
             return;
         }
     }
-    let raw = String::from_utf8_lossy(spec_bytes).into_owned();
+    let Some(fs) = parsed_spec(spec_bytes) else {
+        let raw = String::from_utf8_lossy(spec_bytes);
+        let text = match FormatSpec::parse(&raw) {
+            Err(e) => format!("<bad format spec: {e}>"),
+            Ok(_) => String::new(),
+        };
+        // SAFETY: the caller's contract.
+        unsafe { string_of(out, text.as_bytes()) };
+        return;
+    };
+    if kind == 0 || kind == 1 {
+        // An integer is written straight into a reused buffer.
+        SPEC_TEXT.with(|t| {
+            let mut t = t.borrow_mut();
+            t.clear();
+            fs.write_int64(lo, kind == 0, &mut t);
+            // SAFETY: the caller's contract.
+            unsafe { string_of(out, &t) };
+        });
+        return;
+    }
     let wide = (u128::from(hi) << 64) | u128::from(lo);
-    let text = match FormatSpec::parse(&raw) {
-        Err(e) => format!("<bad format spec: {e}>"),
-        Ok(fs) => match kind {
-            0 => fs.apply_int(lo as i64),
-            1 => fs.apply_uint(lo),
-            2 => fs.apply_int128(wide as i128),
-            3 => fs.apply_uint128(wide),
-            4 => fs.apply_float(f),
-            _ => {
-                let shown = fmt_pop(|t| String::from_utf8_lossy(t).into_owned());
-                fs.apply_str(&shown)
-            }
-        },
+    let text = match kind {
+        2 => fs.apply_int128(wide as i128),
+        3 => fs.apply_uint128(wide),
+        4 => fs.apply_float(f),
+        _ => {
+            let shown = fmt_pop(|t| String::from_utf8_lossy(t).into_owned());
+            fs.apply_str(&shown)
+        }
     };
     // SAFETY: the caller's contract.
     unsafe { string_of(out, text.as_bytes()) };
+}
+
+thread_local! {
+    /// The specs `karac_mir_fmt_spec` has parsed, by their text: an
+    /// f-string's spec is a constant, so each is parsed once rather than on
+    /// every call (B-2026-10-29-33).
+    static SPECS: std::cell::RefCell<Vec<(Box<[u8]>, crate::fmt::format_spec::FormatSpec)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+    /// The buffer an integer's text is written into before it is copied out.
+    static SPEC_TEXT: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// The parsed spec `spec`, from the cache when it has been parsed before.
+/// `None` for a spec that does not parse, which is not cached.
+fn parsed_spec(spec: &[u8]) -> Option<crate::fmt::format_spec::FormatSpec> {
+    SPECS.with(|c| {
+        let mut c = c.borrow_mut();
+        if let Some((_, fs)) = c.iter().find(|(k, _)| **k == *spec) {
+            return Some(fs.clone());
+        }
+        let fs =
+            crate::fmt::format_spec::FormatSpec::parse(std::str::from_utf8(spec).ok()?).ok()?;
+        // A program's specs are few; a runaway set starts over.
+        if c.len() >= 64 {
+            c.clear();
+        }
+        c.push((spec.into(), fs.clone()));
+        Some(fs)
+    })
 }
 
 /// `{v:N}` and `{v:0N}` for a 64-bit integer (`signed` says how to
