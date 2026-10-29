@@ -14819,6 +14819,7 @@ fn test_io_error_variants_are_known() {
                  IoError.InvalidUtf8 => \"invalid utf-8\",
                  IoError.Interrupted => \"interrupted\",
                  IoError.Unsupported => \"unsupported\",
+                 IoError.ProviderUnavailable => \"provider unavailable\",
                  IoError.Other(_) => \"other\",
              }
          }",

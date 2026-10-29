@@ -243,6 +243,15 @@ pub unsafe extern "C" fn karac_mir_stdio(
         0 => StdioCfg::Inherit,
         1 => StdioCfg::Null,
         2 => StdioCfg::Piped,
+        // A file a `FileSystem` provider opened has no descriptor for the
+        // child (core semantics §14.11).
+        3 if crate::fs_provider::is_provided(handle.cast()) => {
+            crate::fatal::write_stderr(
+                b"error: Stdio.from_file of a file a FileSystem provider opened; \
+                  a child process can only use a file the OS opened\n",
+            );
+            std::process::exit(101);
+        }
         // SAFETY: the caller's contract.
         3 => StdioCfg::File(unsafe { crate::file::take_file(handle.cast()) }),
         // SAFETY: the caller's contract.

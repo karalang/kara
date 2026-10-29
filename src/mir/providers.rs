@@ -56,6 +56,9 @@ struct Sig {
     first: Option<Ty>,
     /// The closure type of a closure body's environment, if it is one.
     closure: Option<Ty>,
+    /// The parameter types and the return type.
+    params: Vec<Ty>,
+    ret: Ty,
 }
 
 /// A copy of a closure's body that reads its providers from its
@@ -103,6 +106,110 @@ pub fn fused_print(r: &str, m: &str) -> Option<&'static str> {
     })
 }
 
+/// The `File` methods that, in a program binding `FileSystem`, are calls
+/// on the resource (core semantics §14.11): `f.read(buf)` is
+/// `FileSystem.file_read(f, buf)`, so the code that makes it takes the
+/// provider as any call on `FileSystem` does, and a task or `par` branch
+/// that reads a file is checked like one that calls the provider.
+pub const FILE_OPS: [&str; 7] = [
+    "read",
+    "write",
+    "flush",
+    "sync_all",
+    "sync_data",
+    "seek",
+    "set_len",
+];
+
+/// The calls on `FileSystem` that stand for a `File` native: the native,
+/// which takes the same arguments in and out of an override. `open_file`
+/// (path, flags) is `File.open_flags`; under an override it opens through
+/// the provider instead (`Spec::open_via`).
+pub fn file_native(r: &str, m: &str) -> Option<String> {
+    if r != "FileSystem" {
+        return None;
+    }
+    if m == "open_file" {
+        return Some("File.open_flags".to_string());
+    }
+    let op = m.strip_prefix("file_")?;
+    FILE_OPS.contains(&op).then(|| format!("File.{op}"))
+}
+
+/// The provider method a call `r.m` reaches: `m` itself, or for the calls
+/// that stand for something else, the method that serves them (`print`
+/// writes, `open_file` opens, `file_read` reads through `read_handle`).
+pub fn via_method<'m>(r: &str, m: &'m str) -> &'m str {
+    match (r, m) {
+        (_, _) if fused_print(r, m).is_some() => "write",
+        ("FileSystem", "open_file") => "open",
+        ("FileSystem", "file_read") => "read_handle",
+        ("FileSystem", "file_write") => "write_handle",
+        _ => m,
+    }
+}
+
+/// `OpenOptions`' bits for `File.open`, `File.create` and `File.append`
+/// (read 1, write 2, append 4, truncate 8, create 16; io.kara).
+fn open_flags(m: &str) -> Option<u128> {
+    Some(match m {
+        "open" => 1,
+        "create" => 2 | 8 | 16,
+        "append" => 4 | 16,
+        _ => return None,
+    })
+}
+
+/// In a program that binds `FileSystem`, its `File` natives become calls
+/// on the resource (core semantics §14.11): an open is
+/// `FileSystem.open_file(path, flags)`, and an operation on an open file
+/// `FileSystem.file_<op>`. Runs before effect inference, which then sees
+/// them as the resource's, so `specialise` passes the provider to the code
+/// that makes them. A program with no binding of `FileSystem` is left as it
+/// is.
+pub fn route_files(program: &mut Program, tys: &TyInterner) {
+    if !program.resources.contains_key("FileSystem") {
+        return;
+    }
+    let i64t = tys.int(super::ty::IntTy::I64);
+    for body in program.bodies.values_mut() {
+        for bb in &mut body.blocks {
+            let TerminatorKind::Call { func, args, .. } = &mut bb.terminator.kind else {
+                continue;
+            };
+            let Operand::Const(Const {
+                kind: ConstKind::FnDef(inst),
+                ..
+            }) = func
+            else {
+                continue;
+            };
+            let Some((base, m)) = inst.name.split_once('.') else {
+                continue;
+            };
+            let new = match (base, m, args.as_mut_slice()) {
+                ("File", _, [path]) if open_flags(m).is_some() => {
+                    let flags = Operand::Const(Const {
+                        ty: i64t,
+                        kind: ConstKind::Scalar(open_flags(m).unwrap_or(0)),
+                    });
+                    *args = vec![path.clone(), flags];
+                    "FileSystem.open_file".to_string()
+                }
+                // `OpenOptions { flags }`, behind the `ref self`.
+                ("OpenOptions", "open", [Operand::Move(o) | Operand::Copy(o), path]) => {
+                    let flags = Operand::Copy(o.project(ProjElem::Deref).field(0, i64t));
+                    *args = vec![path.clone(), flags];
+                    "FileSystem.open_file".to_string()
+                }
+                ("File", op, _) if FILE_OPS.contains(&op) => format!("FileSystem.file_{op}"),
+                _ => continue,
+            };
+            *func = fn_def(tys, DefId(u32::MAX), Vec::new(), new);
+        }
+    }
+}
+
 /// Closure types made here take their ids from this one down, far from the
 /// ids the resolver hands out.
 const CARRIED_DEFS: u32 = u32::MAX - 1;
@@ -132,6 +239,8 @@ pub fn specialise(
                 args: b.instance.args.clone(),
                 first,
                 closure,
+                params: b.args().map(|l| b.local(l).ty).collect(),
+                ret: b.locals[0].ty,
             },
         );
     }
@@ -322,6 +431,28 @@ impl Spec<'_> {
                 continue;
             };
             let callee = inst.name.clone();
+            if callee == "FileSystem.enter" && self.resources.contains_key("FileSystem") {
+                // A `providers` block's: its handle methods run with the
+                // resources outside the block's own `FileSystem` binding.
+                let mut outer = env.clone();
+                let mut own = provided
+                    .iter()
+                    .rev()
+                    .filter(|p| p.blocks.contains(&bb))
+                    .collect::<Vec<_>>();
+                if let Some(i) = own.iter().rposition(|p| p.resource == "FileSystem") {
+                    own.remove(i);
+                }
+                for p in own {
+                    let t = fx.body.local(p.local).ty;
+                    outer.insert(p.resource.clone(), Binding::Bound(t));
+                }
+                self.region_extent(&mut fx, bb, &outer)?;
+                continue;
+            }
+            if callee == "FileSystem.exit" {
+                continue;
+            }
             if let Some(r) = callee
                 .strip_prefix("with_provider[")
                 .and_then(|r| r.strip_suffix(']'))
@@ -409,6 +540,20 @@ impl Spec<'_> {
                 fx.body.instance.name
             )
         })?;
+        if let Some(native) = file_native(r, m) {
+            if let (Binding::Bound(_), "open_file") = (binding, m) {
+                return self.open_via(fx, bb, r);
+            }
+            // Out of an override and in one alike, an operation on an open
+            // `File` is the native, which finds the provider a file opened
+            // under one belongs to (core semantics §14.11).
+            let TerminatorKind::Call { func, .. } = &mut fx.body.blocks[bb.index()].terminator.kind
+            else {
+                unreachable!()
+            };
+            *func = fn_def(self.tys, DefId(u32::MAX), Vec::new(), native);
+            return Ok(());
+        }
         if let Some(native) = fused_print(r, m) {
             return match binding {
                 Binding::Default(_) => {
@@ -563,6 +708,95 @@ impl Spec<'_> {
         self.resource_call(fx, write, r, "write")
     }
 
+    /// `FileSystem.open_file(path, flags)` under an override (core
+    /// semantics §14.11): the provider's `open` with the options, then
+    /// `File.adopt`, which makes the `File` of the id it returned, tied to
+    /// this provider.
+    fn open_via(&mut self, fx: &mut Fx, bb: BasicBlock, r: &str) -> Result<(), String> {
+        let TerminatorKind::Call {
+            args,
+            destination,
+            target,
+            ..
+        } = fx.body.blocks[bb.index()].terminator.kind.clone()
+        else {
+            unreachable!()
+        };
+        let here = fx.body.instance.name.clone();
+        let [path, flags] = args.as_slice() else {
+            return Err(format!(
+                "providers: in `{here}`, an open without a path and flags"
+            ));
+        };
+        let (Some(Binding::Bound(t)) | Some(Binding::Default(t))) = fx.env.get(r).copied() else {
+            unreachable!()
+        };
+        let open = self.resources[r]
+            .impls
+            .get(&t)
+            .and_then(|ms| ms.get("open"))
+            .cloned()
+            .ok_or_else(|| format!("providers: `{}` has no `open`", self.tys.display(t)))?;
+        let sig = self
+            .sigs
+            .get(&open)
+            .ok_or_else(|| format!("providers: no body for `{open}`"))?;
+        let (opts_ref, res) = match sig.params.as_slice() {
+            [_, _, o] => (*o, sig.ret),
+            _ => {
+                return Err(format!(
+                    "providers: `{open}` is not `open(self, path, opts)`"
+                ))
+            }
+        };
+        let opts_ty = self
+            .tys
+            .pointee(opts_ref)
+            .ok_or_else(|| format!("providers: `{open}` takes its options by value"))?;
+        let info = fx.body.blocks[bb.index()].terminator.source_info;
+        let after = target
+            .ok_or_else(|| format!("providers: in `{here}`, an open that does not return"))?;
+        let opts = fx.temp(opts_ty);
+        fx.push(
+            bb,
+            StatementKind::Assign(
+                Place::local(opts),
+                Rvalue::Aggregate(
+                    AggregateKind::Adt {
+                        ty: opts_ty,
+                        variant: VariantIdx(0),
+                    },
+                    vec![flags.clone()],
+                ),
+            ),
+        );
+        let opts_arg = fx.borrow(bb, Place::local(opts), false, self.tys);
+        let id = fx.temp(res);
+        let adopt = fx.block(TerminatorKind::Goto { target: after }, info);
+        let provider = fx.borrow(adopt, fx.src[r].clone(), true, self.tys);
+        fx.body.blocks[adopt.index()].terminator.kind = TerminatorKind::Call {
+            func: fn_def(
+                self.tys,
+                DefId(u32::MAX),
+                Vec::new(),
+                "File.adopt".to_string(),
+            ),
+            args: vec![provider, Operand::Move(Place::local(id))],
+            destination,
+            target: Some(after),
+            unwind: UnwindAction::Abort,
+        };
+        fx.body.blocks[bb.index()].terminator.kind = TerminatorKind::Call {
+            func: fn_def(self.tys, DefId(u32::MAX), Vec::new(), format!("{r}.open")),
+            args: vec![path.clone(), opts_arg],
+            destination: Place::local(id),
+            target: Some(adopt),
+            unwind: UnwindAction::Abort,
+        };
+        // The open is a call on the resource like any other.
+        self.resource_call(fx, bb, r, "open")
+    }
+
     /// `with_provider[R](p, f)`: `p` kept in a local while `f`'s copy for
     /// `p`'s type runs with a borrow of it, then the closure and `p`
     /// dropped (core semantics §14.4).
@@ -614,6 +848,7 @@ impl Spec<'_> {
             bb,
             StatementKind::Assign(Place::local(pv), Rvalue::Use(p.clone())),
         );
+        let entered = fx.body.blocks[bb.index()].statements.len();
         let mut env = fx.env.clone();
         env.insert(r.to_string(), Binding::Bound(pt));
         let new = self.request(&callee, &env)?;
@@ -664,13 +899,162 @@ impl Spec<'_> {
             None => drop_p,
         };
         let sig = &self.sigs[&callee];
-        fx.body.blocks[bb.index()].terminator.kind = TerminatorKind::Call {
+        let call = TerminatorKind::Call {
             func: fn_def(self.tys, sig.def, sig.args.clone(), new),
             args: ops,
             destination,
             target: Some(next),
             unwind: UnwindAction::Abort,
         };
+        if r == "FileSystem" {
+            return self.file_extent(fx, bb, entered, pv, pt, call);
+        }
+        fx.body.blocks[bb.index()].terminator.kind = call;
+        Ok(())
+    }
+
+    /// The call `call` of a `with_provider[FileSystem]` closure, made at
+    /// the end of `bb`, inside the provider's extent (core semantics
+    /// §14.11): `FileSystem.enter` registers the provider `pv` and its
+    /// methods for an open file's reads, writes and close before the
+    /// statements from `entered` on, which borrow it for the call, and
+    /// `FileSystem.exit` ends it after, so that a file of the provider
+    /// used later fails with `ProviderUnavailable` and drops quietly.
+    fn file_extent(
+        &mut self,
+        fx: &mut Fx,
+        bb: BasicBlock,
+        entered: usize,
+        pv: Local,
+        pt: Ty,
+        call: TerminatorKind,
+    ) -> Result<(), String> {
+        let env = fx.env.clone();
+        let handlers = self.file_handlers(fx, &env, pt, "the `with_provider[FileSystem]` call")?;
+        let info = fx.body.blocks[bb.index()].terminator.source_info;
+        let TerminatorKind::Call {
+            target: Some(next), ..
+        } = call
+        else {
+            unreachable!()
+        };
+        let i64t = self.tys.int(super::ty::IntTy::I64);
+        let extent = fx.temp(i64t);
+        let unit = fx.temp(self.tys.unit());
+        let exit = fx.block(
+            TerminatorKind::Call {
+                func: fn_def(
+                    self.tys,
+                    DefId(u32::MAX),
+                    Vec::new(),
+                    "FileSystem.exit".to_string(),
+                ),
+                args: vec![Operand::Move(Place::local(extent))],
+                destination: Place::local(unit),
+                target: Some(next),
+                unwind: UnwindAction::Abort,
+            },
+            info,
+        );
+        let TerminatorKind::Call {
+            func,
+            args,
+            destination,
+            unwind,
+            ..
+        } = call
+        else {
+            unreachable!()
+        };
+        let body = fx.block(
+            TerminatorKind::Call {
+                func,
+                args,
+                destination,
+                target: Some(exit),
+                unwind,
+            },
+            info,
+        );
+        let moved = fx.body.blocks[bb.index()].statements.split_off(entered);
+        fx.body.blocks[body.index()].statements = moved;
+        let mut args = vec![fx.borrow(bb, Place::local(pv), true, self.tys)];
+        args.extend(handlers);
+        fx.body.blocks[bb.index()].terminator.kind = TerminatorKind::Call {
+            func: fn_def(
+                self.tys,
+                DefId(u32::MAX),
+                Vec::new(),
+                "FileSystem.enter".to_string(),
+            ),
+            args,
+            destination: Place::local(extent),
+            target: Some(body),
+            unwind: UnwindAction::Abort,
+        };
+        Ok(())
+    }
+
+    /// The handle methods of the `FileSystem` provider type `pt` that a
+    /// `FileSystem.enter` registers, specialised for `env`, the resources
+    /// around `site`. The interpreter calls the first three; the compiled
+    /// runtime, which cannot build an `IoError`, calls `close` and the
+    /// last two.
+    fn file_handlers(
+        &mut self,
+        fx: &Fx,
+        env: &Env,
+        pt: Ty,
+        site: &str,
+    ) -> Result<Vec<Operand>, String> {
+        let here = fx.body.instance.name.clone();
+        let mut handlers = Vec::new();
+        for m in ["read_handle", "write_handle", "close", "__read", "__write"] {
+            let method = self.resources["FileSystem"]
+                .impls
+                .get(&pt)
+                .and_then(|ms| ms.get(m))
+                .cloned()
+                .ok_or_else(|| format!("providers: `{}` has no `{m}`", self.tys.display(pt)))?;
+            // The library calls it with no hidden arguments, so it may use
+            // only resources that are at their defaults here.
+            for r in self.needs.get(&method).into_iter().flat_map(|n| n.keys()) {
+                if let Some(Binding::Bound(_)) = env.get(r) {
+                    return Err(format!(
+                        "providers: in `{here}`, `{method}` uses `{r}`, which is overridden \
+                         where {site} is; a file's `{m}` runs with every other resource at \
+                         its default (core semantics §14.11)"
+                    ));
+                }
+            }
+            let name = self.request(&method, env)?;
+            let sig = &self.sigs[&method];
+            handlers.push(fn_def(self.tys, sig.def, sig.args.clone(), name));
+        }
+        Ok(handlers)
+    }
+
+    /// The `FileSystem.enter(&mut p)` a `providers { FileSystem => p }`
+    /// block starts with (core semantics §14.11): `p`'s handle methods,
+    /// specialised for `outer`, added after the provider.
+    fn region_extent(&mut self, fx: &mut Fx, bb: BasicBlock, outer: &Env) -> Result<(), String> {
+        let TerminatorKind::Call { args, .. } = &fx.body.blocks[bb.index()].terminator.kind else {
+            unreachable!()
+        };
+        let [p] = args.as_slice() else {
+            return Ok(());
+        };
+        let rt = fx.operand_ty(p, self.tys)?;
+        let pt = match self.tys.tcx().kind(rt) {
+            SK::MutRef(t) => t,
+            _ => return Err("providers: a `FileSystem.enter` without its provider".to_string()),
+        };
+        let handlers = self.file_handlers(fx, outer, pt, "the `providers` block")?;
+        let TerminatorKind::Call { args, .. } = &mut fx.body.blocks[bb.index()].terminator.kind
+        else {
+            unreachable!()
+        };
+        args.extend(handlers);
         Ok(())
     }
 

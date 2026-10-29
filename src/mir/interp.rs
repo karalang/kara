@@ -188,6 +188,17 @@ enum Root {
     Static(u32),
 }
 
+/// A `with_provider[FileSystem]` call while and after it runs (core
+/// semantics §14.11).
+#[derive(Debug, Clone)]
+struct FsExtent {
+    provider: Value,
+    read: String,
+    write: String,
+    close: String,
+    live: bool,
+}
+
 /// Where a value lives: a root and the field or element indices below it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Addr {
@@ -741,6 +752,8 @@ fn run_with(
         channels: Vec::new(),
         chan_epoch: 0,
         files: Vec::new(),
+        fs_extents: Vec::new(),
+        fake_files: Vec::new(),
         bufs: Vec::new(),
         buf_windows: Default::default(),
         procs: Procs::default(),
@@ -1144,6 +1157,14 @@ struct Interp<'a> {
     chan_epoch: i64,
     /// The open files behind `File` values, by id - 1; `None` once closed.
     files: Vec<Option<std::fs::File>>,
+    /// The `with_provider[FileSystem]` calls (core semantics §14.11), by
+    /// the id `FileSystem.enter` returned: the provider, its
+    /// `read_handle`, `write_handle` and `close`, and whether the call is
+    /// still running.
+    fs_extents: Vec<FsExtent>,
+    /// The files a provider opened, by -id - 1 of their `File`: the
+    /// extent and the provider's own id; `None` once dropped.
+    fake_files: Vec<Option<(usize, i128)>>,
     /// The `BufReader`s and `BufWriter`s, by id - 1; `None` once dropped.
     bufs: Vec<Option<Buf>>,
     /// A `BufReader`'s window, by its id: the box of bytes the last
@@ -2954,6 +2975,7 @@ impl<'a> Interp<'a> {
                 self.vec_more_method(ty_name, method, args, arg_tys)
             }
             ("Vec" | "String", _) => self.collection_method(ty_name, method, args, arg_tys, ret),
+            ("FileSystem", "enter" | "exit") => self.fs_extent(method, args),
             ("FileSystem", m) if FS_METHODS.contains(&m) => self.fs_method(method, args, ret),
             (t, "parse" | "from_str_radix")
                 if t == "f64" || t == "f32" || int_width(t).is_some() =>
@@ -5313,6 +5335,22 @@ impl<'a> Interp<'a> {
                 Err(e) => self.io_err(ret, e),
             };
         }
+        // An open in a program that overrides `FileSystem` somewhere, out
+        // of any override: the options' bits, then the path.
+        if let ("open_flags", [path, Value::Int(flags)]) = (method, args.as_slice()) {
+            let text = self.string_at(path)?;
+            return match crate::mir::fs::open_options(*flags as i64).and_then(|o| o.open(text)) {
+                Ok(f) => {
+                    self.files.push(Some(f));
+                    let file = Value::Agg(vec![Value::Int(self.files.len() as i128)]);
+                    self.variant_named(ret, None, "Ok", vec![file])
+                }
+                Err(e) => self.io_err(ret, e),
+            };
+        }
+        if let ("adopt", [provider, opened]) = (method, args.as_slice()) {
+            return self.adopt_file(provider, opened, arg_tys, ret);
+        }
         if let ("open" | "create" | "append", [path]) = (method, args.as_slice()) {
             let text = self.string_at(path)?;
             // `append` is a method name the builder hands its argument to
@@ -5340,6 +5378,9 @@ impl<'a> Interp<'a> {
             };
         }
         let id = self.chan_id(args.first(), name)?;
+        if id < 0 {
+            return self.fake_file_method(name, method, id, args, ret);
+        }
         let slot = usize::try_from(id - 1).ok();
         let Some(Some(mut f)) = slot.and_then(|i| self.files.get_mut(i)).map(Option::take) else {
             return err(format!("{name} of a closed file"));
@@ -5423,6 +5464,144 @@ impl<'a> Interp<'a> {
         }
     }
 
+    /// `FileSystem.enter(&mut p, read, write, close)`, which a
+    /// `with_provider[FileSystem]` call makes before its closure runs (core
+    /// semantics §14.11), and `FileSystem.exit(id)` after.
+    fn fs_extent(&mut self, method: &str, args: Vec<Value>) -> R<Value> {
+        match (method, args.as_slice()) {
+            ("enter", [provider, Value::Fn(read), Value::Fn(write), Value::Fn(close), ..]) => {
+                self.fs_extents.push(FsExtent {
+                    provider: provider.clone(),
+                    read: read.name.clone(),
+                    write: write.name.clone(),
+                    close: close.name.clone(),
+                    live: true,
+                });
+                Ok(Value::Int(self.fs_extents.len() as i128 - 1))
+            }
+            ("exit", [Value::Int(id)]) => {
+                if let Some(x) = usize::try_from(*id)
+                    .ok()
+                    .and_then(|i| self.fs_extents.get_mut(i))
+                {
+                    x.live = false;
+                }
+                Ok(Value::Unit)
+            }
+            _ => err(format!("FileSystem.{method} of {args:?}")),
+        }
+    }
+
+    /// `File.adopt(&mut p, r)`: the `Result` of the provider `p`'s `open`,
+    /// with its id made into a `File` that belongs to the running
+    /// `with_provider` call of `p`.
+    fn adopt_file(
+        &mut self,
+        provider: &Value,
+        opened: &Value,
+        arg_tys: &[Ty],
+        ret: Ty,
+    ) -> R<Value> {
+        let Some(&rt) = arg_tys.get(1) else {
+            return err("File.adopt needs the open's result".to_string());
+        };
+        let Value::Variant(k, fields) = opened else {
+            return err(format!("File.adopt of {opened:?}"));
+        };
+        let ok = self
+            .tys
+            .tcx()
+            .adt_of(rt)
+            .and_then(|(adt, _)| adt.variants.get(*k as usize).map(|v| v.name == "Ok"))
+            .unwrap_or(false);
+        if !ok {
+            return self.variant_named(ret, None, "Err", fields.clone());
+        }
+        let [Value::Int(h)] = fields.as_slice() else {
+            return err(format!("File.adopt of an id {fields:?}"));
+        };
+        let Some(extent) = self
+            .fs_extents
+            .iter()
+            .rposition(|x| x.live && x.provider == *provider)
+        else {
+            return self.provider_unavailable(ret);
+        };
+        self.fake_files.push(Some((extent, *h)));
+        let file = Value::Agg(vec![Value::Int(-(self.fake_files.len() as i128))]);
+        self.variant_named(ret, None, "Ok", vec![file])
+    }
+
+    /// `Err(IoError.ProviderUnavailable)` in the `Result` type `ret`.
+    fn provider_unavailable(&mut self, ret: Ty) -> R<Value> {
+        let payload = self.variant_named(ret, Some("Err"), "ProviderUnavailable", Vec::new())?;
+        self.variant_named(ret, None, "Err", vec![payload])
+    }
+
+    /// An operation on a `File` a provider opened (core semantics §14.11):
+    /// a read or write through the provider's `read_handle` or
+    /// `write_handle` while its `with_provider` call runs, and
+    /// `ProviderUnavailable` after; a flush or sync does nothing, and a
+    /// seek or `set_len` is `Unsupported`. A drop closes it through the
+    /// provider's `close`, or does nothing once the call has returned.
+    fn fake_file_method(
+        &mut self,
+        name: &str,
+        method: &str,
+        id: i128,
+        args: Vec<Value>,
+        ret: Ty,
+    ) -> R<Value> {
+        let at = usize::try_from(-id - 1).ok();
+        let Some(Some((extent, h))) = at.and_then(|i| self.fake_files.get(i)).cloned() else {
+            return err(format!("{name} of a closed file"));
+        };
+        let x = self.fs_extents[extent].clone();
+        if method == "drop" {
+            if let Some(i) = at {
+                self.fake_files[i] = None;
+            }
+            if x.live {
+                self.call(&x.close, vec![x.provider, Value::Int(h)])?;
+            }
+            return Ok(Value::Unit);
+        }
+        if !x.live {
+            return self.provider_unavailable(ret);
+        }
+        // The bytes, which the native takes behind a reference and the
+        // provider's method as the view itself.
+        let view = |me: &mut Self, buf: &Value| -> R<Value> {
+            let (base, lo, len) = me.view_of(buf)?;
+            Ok(Value::Slice {
+                base: Box::new(base),
+                lo,
+                len,
+            })
+        };
+        match (method, &args[1..]) {
+            ("read", [buf]) => {
+                let buf = view(self, buf)?;
+                self.call(&x.read, vec![x.provider, Value::Int(h), buf])
+            }
+            ("write", [buf]) => {
+                let buf = view(self, buf)?;
+                self.call(&x.write, vec![x.provider, Value::Int(h), buf])
+            }
+            ("flush" | "sync_all" | "sync_data", []) => {
+                self.variant_named(ret, None, "Ok", vec![Value::Unit])
+            }
+            ("seek" | "set_len", _) => self.io_err(
+                ret,
+                std::io::Error::new(
+                    std::io::ErrorKind::Unsupported,
+                    "a provider's file has no position",
+                ),
+            ),
+            _ => err(format!("call of unknown function {name}")),
+        }
+    }
+
     /// `BufReader` / `BufWriter` (docs/library/io.md § Buffered I/O): an id
     /// into `bufs`, wrapping the `File` its constructor took out of `files`,
     /// closed (a writer flushed first) when it drops. A `LinesIter` holds
@@ -5463,6 +5642,14 @@ impl<'a> Interp<'a> {
                     }
                     _ => return err(format!("{name} of a pipe of the other direction")),
                 }
+            } else if self.chan_id(Some(file), name)? < 0 {
+                Buf::Provided {
+                    file: self.chan_id(Some(file), name)?,
+                    cap,
+                    data: std::collections::VecDeque::new(),
+                    eof: false,
+                    writer: !reader,
+                }
             } else {
                 let id = self.chan_id(Some(file), name)?;
                 let f = usize::try_from(id - 1)
@@ -5487,11 +5674,20 @@ impl<'a> Interp<'a> {
         let Some(Some(mut b)) = slot.and_then(|i| self.bufs.get_mut(i)).map(Option::take) else {
             return err(format!("{name} of a closed reader or writer"));
         };
+        if let Buf::Provided { .. } = b {
+            let res = self.provided_buf_op(name, method, id, &mut b, &args[1..], ret);
+            if let Some(i) = slot {
+                self.bufs[i] = Some(b);
+            }
+            return res;
+        }
         if method == "fill_buf" {
             use std::io::BufRead;
             let bytes = match &mut b {
                 Buf::Reader(r) => r.fill_buf().map(<[u8]>::to_vec),
-                Buf::Writer(_) => Err(std::io::Error::other("fill_buf of a writer")),
+                Buf::Writer(_) | Buf::Provided { .. } => {
+                    Err(std::io::Error::other("fill_buf of a writer"))
+                }
             };
             if let Some(i) = slot {
                 self.bufs[i] = Some(b);
@@ -5509,6 +5705,301 @@ impl<'a> Interp<'a> {
             self.bufs[i] = Some(b);
         }
         res
+    }
+
+    /// [`Self::buf_method`] on a `BufReader` or `BufWriter` over a file a
+    /// provider opened: its reads refill through the provider's
+    /// `read_handle` and its writes go out through `write_handle`, as the
+    /// standard library's buffers do over an OS file.
+    fn provided_buf_op(
+        &mut self,
+        name: &str,
+        method: &str,
+        id: i128,
+        b: &mut Buf,
+        args: &[Value],
+        ret: Ty,
+    ) -> R<Value> {
+        let Buf::Provided {
+            file,
+            cap,
+            data,
+            eof,
+            ..
+        } = b
+        else {
+            unreachable!()
+        };
+        let (file, cap) = (*file, *cap);
+        // Reads ahead until `enough` holds of the bytes or the input ends.
+        macro_rules! fill {
+            ($enough:expr) => {
+                while !*eof && !$enough(&*data) {
+                    match self.provided_read(file, cap)? {
+                        Ok(bytes) if bytes.is_empty() => *eof = true,
+                        Ok(bytes) => data.extend(bytes),
+                        Err(f) => return self.fail_into(ret, f),
+                    }
+                }
+            };
+        }
+        let line = |d: &std::collections::VecDeque<u8>| d.contains(&b'\n');
+        match (method, args) {
+            ("read_line" | "read_to_string" | "next", _) => {
+                if method == "read_to_string" {
+                    fill!(|_: &std::collections::VecDeque<u8>| false);
+                } else {
+                    fill!(line);
+                }
+                let n = match data.iter().position(|&c| c == b'\n') {
+                    Some(i) if method != "read_to_string" => i + 1,
+                    _ => data.len(),
+                };
+                let bytes: Vec<u8> = data.drain(..n).collect();
+                let text = String::from_utf8(bytes).map_err(|_| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "stream did not contain valid UTF-8",
+                    )
+                });
+                if method == "next" {
+                    let inner = self
+                        .tys
+                        .tcx()
+                        .adt_of(ret)
+                        .and_then(|(adt, _)| adt.variants.iter().position(|v| v.name == "Some"))
+                        .and_then(|k| self.tys.field_ty(ret, Some(k as u32), 0))
+                        .ok_or_else(|| Stop::Error(format!("{name} returns no `Option`")))?;
+                    let item = match text {
+                        Ok(s) if s.is_empty() => return self.option(ret, None),
+                        Ok(mut s) => {
+                            if s.ends_with('\n') {
+                                s.pop();
+                                if s.ends_with('\r') {
+                                    s.pop();
+                                }
+                            }
+                            let line = self.alloc_box("String", Value::Str(s));
+                            self.variant_named(inner, None, "Ok", vec![line])?
+                        }
+                        Err(e) => self.io_err(inner, e)?,
+                    };
+                    return self.option(ret, Some(item));
+                }
+                let s = match text {
+                    Ok(s) => s,
+                    Err(e) => return self.io_err(ret, e),
+                };
+                let [buf] = args else {
+                    return err(format!("{name} needs a String"));
+                };
+                let to = self.box_behind(buf)?;
+                match &mut self.live(to)?.value {
+                    Value::Str(t) => t.push_str(&s),
+                    other => return err(format!("{name} into {other:?}")),
+                }
+                self.variant_named(ret, None, "Ok", vec![Value::Int(s.len() as i128)])
+            }
+            ("read", [buf]) => {
+                let (base, lo, len) = self.view_of(buf)?;
+                // As the standard library's: a read at least as long as the
+                // buffer, with nothing buffered, goes to the file directly.
+                if data.is_empty() && len as usize >= cap && !*eof {
+                    match self.provided_read(file, len as usize)? {
+                        Ok(bytes) => data.extend(bytes),
+                        Err(f) => return self.fail_into(ret, f),
+                    }
+                } else {
+                    fill!(|d: &std::collections::VecDeque<u8>| !d.is_empty());
+                }
+                let n = (len as usize).min(data.len());
+                for (i, byte) in data.drain(..n).enumerate() {
+                    let at = base.child(lo + i as u64);
+                    *self.slot_mut(&at)? = Value::Int(i128::from(byte));
+                }
+                self.variant_named(ret, None, "Ok", vec![Value::Int(n as i128)])
+            }
+            ("fill_buf", []) => {
+                fill!(|d: &std::collections::VecDeque<u8>| !d.is_empty());
+                let bytes: Vec<u8> = data.iter().copied().collect();
+                let v = self.buf_window(id, bytes)?;
+                self.variant_named(ret, None, "Ok", vec![v])
+            }
+            ("consume", [Value::Int(n)]) => {
+                let n = (*n).max(0) as usize;
+                data.drain(..n.min(data.len()));
+                Ok(Value::Unit)
+            }
+            ("write" | "write_all", [buf]) => {
+                let (base, lo, len) = self.view_of(buf)?;
+                let mut bytes = std::collections::VecDeque::new();
+                for i in 0..len {
+                    match self.slot(&base.child(lo + i))? {
+                        Value::Int(byte) => bytes.push_back(byte as u8),
+                        other => return err(format!("{name} of a byte holding {other:?}")),
+                    }
+                }
+                // As the standard library's: what is buffered goes out
+                // first when the bytes do not fit, and bytes at least as
+                // long as the buffer go to the file directly, in one write
+                // for `write` and until all are written for `write_all`.
+                if data.len() + bytes.len() > cap {
+                    if let Err(f) = self.provided_flush(file, data, false)? {
+                        return self.fail_into(ret, f);
+                    }
+                }
+                if bytes.len() < cap {
+                    data.extend(bytes);
+                    let v = if method == "write" {
+                        Value::Int(i128::from(len))
+                    } else {
+                        Value::Unit
+                    };
+                    return self.variant_named(ret, None, "Ok", vec![v]);
+                }
+                let once = method == "write";
+                match self.provided_flush(file, &mut bytes, once)? {
+                    Ok(()) if once => {
+                        let n = len as usize - bytes.len();
+                        self.variant_named(ret, None, "Ok", vec![Value::Int(n as i128)])
+                    }
+                    Ok(()) => self.variant_named(ret, None, "Ok", vec![Value::Unit]),
+                    Err(f) => self.fail_into(ret, f),
+                }
+            }
+            ("flush", []) => match self.provided_flush(file, data, false)? {
+                // The file's own flush, which needs its provider.
+                Ok(()) if self.provided(file)?.is_none() => self.provider_unavailable(ret),
+                Ok(()) => self.variant_named(ret, None, "Ok", vec![Value::Unit]),
+                Err(f) => self.fail_into(ret, f),
+            },
+            _ => err(format!("call of unknown function {name}")),
+        }
+    }
+
+    /// The provider's file `file` and the running call it belongs to, or
+    /// `None` once that call has returned.
+    fn provided(&self, file: i128) -> R<Option<(FsExtent, i128)>> {
+        let at = usize::try_from(-file - 1).ok();
+        let Some(Some((extent, h))) = at.and_then(|i| self.fake_files.get(i)).cloned() else {
+            return err("an operation on a closed file".to_string());
+        };
+        let x = self.fs_extents[extent].clone();
+        Ok(x.live.then_some((x, h)))
+    }
+
+    /// Up to `cap` bytes of the provider's file `file`, through its
+    /// `read_handle`: none at the end of the file.
+    fn provided_read(&mut self, file: i128, cap: usize) -> R<Result<Vec<u8>, Fail>> {
+        let Some((x, h)) = self.provided(file)? else {
+            return Ok(Err(Fail::Unavailable));
+        };
+        let zeros = Value::Agg(vec![Value::Int(0); cap]);
+        let Value::Box(w) = self.alloc_box("Vec[u8]", zeros) else {
+            return err("a read buffer".to_string());
+        };
+        let view = Value::Slice {
+            base: Box::new(Addr {
+                root: Root::Heap(w),
+                path: Path::new(),
+            }),
+            lo: 0,
+            len: cap as u64,
+        };
+        let res = self.call(&x.read, vec![x.provider, Value::Int(h), view])?;
+        let got = match self.ok_fields(res)? {
+            Ok(fields) => match fields.as_slice() {
+                [Value::Int(n)] => {
+                    let n = (*n).clamp(0, cap as i128) as usize;
+                    let elems = self.vec_elems(w)?;
+                    let bytes = elems[..n]
+                        .iter()
+                        .map(|v| match v {
+                            Value::Int(b) => *b as u8,
+                            _ => 0,
+                        })
+                        .collect();
+                    Ok(bytes)
+                }
+                other => return err(format!("read_handle returned {other:?}")),
+            },
+            Err(fields) => Err(Fail::Io(fields)),
+        };
+        self.free_slot(w);
+        if self.trace {
+            self.events.push(Event::Free(w));
+        }
+        Ok(got)
+    }
+
+    /// Writes `data` to the provider's file `file` through its
+    /// `write_handle`, taking what it wrote off the front: all of it, or
+    /// what one call takes when `once`.
+    fn provided_flush(
+        &mut self,
+        file: i128,
+        data: &mut std::collections::VecDeque<u8>,
+        once: bool,
+    ) -> R<Result<(), Fail>> {
+        let mut calls = 0;
+        while !data.is_empty() && !(once && calls == 1) {
+            calls += 1;
+            let Some((x, h)) = self.provided(file)? else {
+                return Ok(Err(Fail::Unavailable));
+            };
+            let elems = data.iter().map(|&b| Value::Int(b.into())).collect();
+            let Value::Box(w) = self.alloc_box("Vec[u8]", Value::Agg(elems)) else {
+                return err("a write buffer".to_string());
+            };
+            let view = Value::Slice {
+                base: Box::new(Addr {
+                    root: Root::Heap(w),
+                    path: Path::new(),
+                }),
+                lo: 0,
+                len: data.len() as u64,
+            };
+            let res = self.call(&x.write, vec![x.provider, Value::Int(h), view])?;
+            self.free_slot(w);
+            if self.trace {
+                self.events.push(Event::Free(w));
+            }
+            match self.ok_fields(res)? {
+                Ok(fields) => match fields.as_slice() {
+                    [Value::Int(n)] if *n > 0 => {
+                        data.drain(..(*n as usize).min(data.len()));
+                    }
+                    // As the standard library's `BufWriter` reports a
+                    // writer that takes nothing.
+                    _ => return Ok(Err(Fail::Other("failed to write the buffered data".into()))),
+                },
+                Err(fields) => return Ok(Err(Fail::Io(fields))),
+            }
+        }
+        Ok(Ok(()))
+    }
+
+    /// A `Result`'s fields, as `Ok` or `Err`.
+    fn ok_fields(&mut self, v: Value) -> R<Result<Vec<Value>, Vec<Value>>> {
+        match v {
+            // `Result`'s variants are `Ok` then `Err`.
+            Value::Variant(0, fields) => Ok(Ok(fields)),
+            Value::Variant(_, fields) => Ok(Err(fields)),
+            other => err(format!("a provider's method returned {other:?}")),
+        }
+    }
+
+    /// The failure `f` as the `Err` of the `Result` type `ret`.
+    fn fail_into(&mut self, ret: Ty, f: Fail) -> R<Value> {
+        match f {
+            Fail::Unavailable => self.provider_unavailable(ret),
+            Fail::Io(fields) => self.variant_named(ret, None, "Err", fields),
+            Fail::Other(m) => {
+                let m = self.alloc_box("String", Value::Str(m));
+                let payload = self.variant_named(ret, Some("Err"), "Other", vec![m])?;
+                self.variant_named(ret, None, "Err", vec![payload])
+            }
+        }
     }
 
     /// A view of `bytes` in the window of the `BufReader` `id`, which is
@@ -5656,6 +6147,13 @@ impl<'a> Interp<'a> {
                 ("piped", None) => StdioCfg::Piped,
                 ("from_file", Some(f)) => {
                     let id = self.handle_id(f, name)?;
+                    if id < 0 {
+                        return err(
+                            "Stdio.from_file of a file a FileSystem provider opened; a child \
+                             process can only use a file the OS opened"
+                                .to_string(),
+                        );
+                    }
                     let f = usize::try_from(id - 1)
                         .ok()
                         .and_then(|i| self.files.get_mut(i))
@@ -13428,11 +13926,24 @@ impl<'a> Interp<'a> {
                         // A `BufWriter`'s own drop flushes, ignoring a
                         // failure (docs/library/io.md § Buffered I/O).
                         if adt.name.starts_with("Buf") {
-                            if let Some(b) = usize::try_from(id - 1)
+                            let held = usize::try_from(id - 1)
                                 .ok()
                                 .and_then(|i| self.bufs.get_mut(i))
+                                .and_then(Option::take);
+                            // Over a provider's file: a writer's bytes go
+                            // out, ignoring a failure, then the file closes.
+                            if let Some(Buf::Provided {
+                                file,
+                                mut data,
+                                writer,
+                                ..
+                            }) = held
                             {
-                                *b = None;
+                                if writer {
+                                    let _ = self.provided_flush(file, &mut data, false)?;
+                                }
+                                let unit = self.tys.unit();
+                                self.fake_file_method("File.drop", "drop", file, Vec::new(), unit)?;
                             }
                             if let Some(w) = self.buf_windows.remove(&id) {
                                 self.free_slot(w);
@@ -13440,6 +13951,11 @@ impl<'a> Interp<'a> {
                                     self.events.push(Event::Free(w));
                                 }
                             }
+                            return Ok(());
+                        }
+                        if adt.name == "File" && id < 0 {
+                            let unit = self.tys.unit();
+                            self.fake_file_method("File.drop", "drop", id, Vec::new(), unit)?;
                             return Ok(());
                         }
                         if adt.name == "File" {
@@ -16415,6 +16931,24 @@ fn cmp_keys(xs: &[Value], ys: &[Value]) -> std::cmp::Ordering {
 enum Buf {
     Reader(std::io::BufReader<Box<dyn std::io::Read>>),
     Writer(std::io::BufWriter<Box<dyn std::io::Write>>),
+    /// Over a `File` a `FileSystem` provider opened (core semantics
+    /// §14.11), whose bytes only the provider's methods reach: a reader's
+    /// bytes read ahead, or a writer's not yet written.
+    Provided {
+        file: i128,
+        cap: usize,
+        data: std::collections::VecDeque<u8>,
+        eof: bool,
+        writer: bool,
+    },
+}
+
+/// Why an operation on a provider's file failed: its provider's call has
+/// returned, or the provider's `Err` fields.
+enum Fail {
+    Unavailable,
+    Io(Vec<Value>),
+    Other(String),
 }
 
 /// `Vec[R].len` -> (`Vec[R]`, `len`); a plain `println` -> (`println`, ``).

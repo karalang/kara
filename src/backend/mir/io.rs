@@ -21,7 +21,7 @@ fn e<T: ToString>(x: T) -> String {
 }
 
 /// The `IoError` variants by the runtime's code for them.
-pub(super) const IO_ERRORS: [&str; 9] = [
+pub(super) const IO_ERRORS: [&str; 10] = [
     "NotFound",
     "PermissionDenied",
     "AlreadyExists",
@@ -31,6 +31,7 @@ pub(super) const IO_ERRORS: [&str; 9] = [
     "Other",
     "InvalidInput",
     "Unsupported",
+    "ProviderUnavailable",
 ];
 
 /// The `NetError` variants by the runtime's code for them.
@@ -72,6 +73,8 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.native(&format!("{resource}.{method}"), &args[1..], dest)
                     .map(Some)
             }
+            ("FileSystem", "enter" | "exit") => self.fs_extent_native(method, args, dest).map(Some),
+            ("File", "adopt") => self.adopt_native(args, dest).map(Some),
             ("File", "options") => self.options_native(method, args, dest),
             ("File", _) => self.file_native(method, args, dest),
             ("OpenOptions", "open") => self.file_native("options_open", args, dest),
@@ -194,13 +197,20 @@ impl<'ctx> Cx<'ctx, '_> {
             "sync_data" => 7,
             "seek" => 8,
             "set_len" => 9,
-            "options_open" => 10,
+            "options_open" | "open_flags" => 10,
             _ => return Ok(None),
         };
         let null = self.ptr_ty().const_null();
         let (handle, ptr, len, n) = if op <= 2 {
             let (p, n) = self.str_parts(&args[0])?;
             (null, p, n, self.i64(0))
+        } else if method == "open_flags" {
+            // The path, then the options' bits, in a program that overrides
+            // `FileSystem` somewhere (`providers::route_files`).
+            let (p, n) = self.str_parts(&args[0])?;
+            let flags = self.operand_ptr(&args[1])?;
+            let flags = self.load_i64(flags)?;
+            (null, p, n, flags)
         } else if op == 10 {
             // `OpenOptions { flags }`, by value or behind a reference, then
             // the path (B-2026-10-15-28).
@@ -258,6 +268,87 @@ impl<'ctx> Cx<'ctx, '_> {
             dest,
         )?;
         Ok(Some(()))
+    }
+
+    /// `FileSystem.enter(&mut p, read, write, close, raw_read, raw_write)`
+    /// and `FileSystem.exit(id)` around a `with_provider[FileSystem]` call
+    /// (core semantics §14.11): the runtime's table of the providers whose
+    /// calls run, which a `File` one of them opened is routed through. The
+    /// runtime calls the provider's `close`, `__read` and `__write` by
+    /// their bodies' pointer convention (a result slot, then a slot per
+    /// argument), so none of them may suspend.
+    fn fs_extent_native(&mut self, method: &str, args: &[Operand], dest: &Place) -> R<()> {
+        if method == "exit" {
+            let id = self.operand_ptr(&args[0])?;
+            let id = self.load_i64(id)?;
+            return self.rt("fs_exit", &[id.into()]);
+        }
+        let at = self.operand_ptr(&args[0])?;
+        let provider = self.load_ptr(at)?;
+        let mut call = vec![provider.into()];
+        for a in &args[3..6] {
+            let Operand::Const(crate::mir::Const {
+                kind: crate::mir::ConstKind::FnDef(inst),
+                ..
+            }) = a
+            else {
+                return Err("FileSystem.enter takes the provider's methods".into());
+            };
+            if self
+                .program
+                .bodies
+                .contains_key(&crate::mir::coroutine::dstart_name(&inst.name))
+            {
+                return Err(format!(
+                    "`{}` may suspend, and a file's provider method must run to completion \
+                     (core semantics §14.11)",
+                    inst.name
+                ));
+            }
+            let f = self.function(&inst.name)?;
+            call.push(f.as_global_value().as_pointer_value().into());
+        }
+        let id = self.rt_int("fs_enter", &call, 64)?;
+        let d = self.place_ptr(dest)?;
+        self.store(d, id.into())
+    }
+
+    /// `File.adopt(&mut p, r)`: the `Result` of the provider `p`'s `open`
+    /// made into a `File` of `p`'s running call, by the runtime's id for it
+    /// in place of the provider's own. `Result[i64, IoError]` and
+    /// `Result[File, IoError]` have one layout, the `File` a word.
+    fn adopt_native(&mut self, args: &[Operand], dest: &Place) -> R<()> {
+        let at = self.operand_ptr(&args[0])?;
+        let provider = self.load_ptr(at)?;
+        let (src, st) = (self.operand_ptr(&args[1])?, self.operand_type(&args[1])?);
+        let (d, dt) = (self.place_ptr(dest)?, self.place_type(dest)?);
+        let (sl, dl) = (self.layout(st)?, self.layout(dt)?);
+        let (sok, dok) = (self.variant_of(st, "Ok")?, self.variant_of(dt, "Ok")?);
+        let (so, dof) = (
+            self.field_offset(st, Some(sok), 0)?,
+            self.field_offset(dt, Some(dok), 0)?,
+        );
+        if sl.size != dl.size || so != dof || sok != dok {
+            return Err("File.adopt of a `Result` laid out apart from its `File`'s".into());
+        }
+        self.copy(d, src, st)?;
+        let tag = self.load_tag(src, st)?;
+        let is_ok = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                tag,
+                tag.get_type().const_int(u64::from(sok), false),
+                "",
+            )
+            .map_err(e)?;
+        self.if_then(is_ok, |cx| {
+            let h = cx.offset(src, so)?;
+            let h = cx.load_i64(h)?;
+            let word = cx.rt_int("fs_adopt", &[provider.into(), h.into()], 64)?;
+            let at = cx.offset(d, dof)?;
+            cx.store(at, word.into())
+        })
     }
 
     /// Whether `t` is one of a child's pipes.

@@ -126,6 +126,20 @@ pub unsafe extern "C" fn karac_mir_file(
     msg: *mut RawVec,
 ) -> i32 {
     use crate::file as f;
+    use crate::fs_provider as fp;
+    // A file a `FileSystem` provider opened (core semantics §14.11): a read
+    // or write goes to the provider, a flush or sync does nothing and a
+    // seek or `set_len` is `Unsupported`, while the provider's call runs;
+    // everything is `ProviderUnavailable` after.
+    if (3..=9).contains(&op) && fp::is_provided(handle.cast()) {
+        return match op {
+            // SAFETY: the caller's contract.
+            3 | 4 => unsafe { fp::read_write(handle.cast(), op == 4, ptr, len, value, msg) },
+            _ if !fp::live(handle.cast()) => fp::PROVIDER_UNAVAILABLE,
+            5..=7 => -1,
+            _ => 8,
+        };
+    }
     let mut r = blank();
     if op == 8 && n == 0 && len < 0 {
         // `SeekFrom.Start` of a negative offset, refused before the OS
@@ -256,6 +270,17 @@ pub(crate) unsafe fn push_bytes(s: *mut RawVec, b: &[u8]) {
 /// `msg` is writable for a `String`.
 pub(crate) unsafe fn io_error_code(e: &std::io::Error, msg: *mut RawVec) -> i32 {
     use std::io::ErrorKind as K;
+    // A provider's own `IoError`, through a buffer over its file.
+    if let Some(p) = e
+        .get_ref()
+        .and_then(|x| x.downcast_ref::<crate::fs_provider::ProvidedError>())
+    {
+        if p.code == 6 {
+            // SAFETY: the caller's contract.
+            unsafe { string_of(msg, p.text.as_bytes()) };
+        }
+        return p.code;
+    }
     match e.kind() {
         K::NotFound => 0,
         K::PermissionDenied => 1,
@@ -309,13 +334,27 @@ pub unsafe extern "C" fn karac_mir_buf(
                 Err(w) => KaracBuf::Writer(std::io::BufWriter::with_capacity(cap, w)),
             }
         } else {
-            // SAFETY: a live handle from `karac_runtime_file_open` & co.,
-            // which this takes.
-            let file = unsafe { crate::file::take_file(handle.cast()) };
+            // A provider's file (core semantics §14.11) is read and written
+            // through the provider; an OS file is taken.
+            let provided = crate::fs_provider::is_provided(handle.cast());
+            let p = || crate::fs_provider::ProvidedFile(handle as usize);
             if op == 0 {
-                KaracBuf::Reader(std::io::BufReader::with_capacity(cap, Box::new(file)))
+                let r: Box<dyn std::io::Read> = if provided {
+                    Box::new(p())
+                } else {
+                    // SAFETY: a live handle from `karac_runtime_file_open`
+                    // & co., which this takes.
+                    Box::new(unsafe { crate::file::take_file(handle.cast()) })
+                };
+                KaracBuf::Reader(std::io::BufReader::with_capacity(cap, r))
             } else {
-                KaracBuf::Writer(std::io::BufWriter::with_capacity(cap, Box::new(file)))
+                let w: Box<dyn std::io::Write> = if provided {
+                    Box::new(p())
+                } else {
+                    // SAFETY: as above.
+                    Box::new(unsafe { crate::file::take_file(handle.cast()) })
+                };
+                KaracBuf::Writer(std::io::BufWriter::with_capacity(cap, w))
             }
         };
         // SAFETY: the caller's contract.

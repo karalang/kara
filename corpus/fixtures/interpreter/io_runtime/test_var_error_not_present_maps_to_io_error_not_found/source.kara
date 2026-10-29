@@ -9,6 +9,7 @@ fn main() {
              IoError.InvalidUtf8 => println("invalid_utf8"),
              IoError.Interrupted => println("interrupted"),
              IoError.Unsupported => println("unsupported"),
+             IoError.ProviderUnavailable => println("provider_unavailable"),
              IoError.Other(_) => println("other"),
          }
      }

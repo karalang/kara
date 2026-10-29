@@ -163,6 +163,7 @@ fn describe_io(e: own IoError) -> String {
         IoError.InvalidUtf8 => "invalid utf-8",
         IoError.Interrupted => "interrupted",
         IoError.Unsupported => "unsupported",
+        IoError.ProviderUnavailable => "provider unavailable",
         IoError.Other(msg) => msg,
     }
 }

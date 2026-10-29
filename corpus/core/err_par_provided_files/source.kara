@@ -1,0 +1,32 @@
+// Two `par` branches reading files a `FileSystem` provider opened would
+// both reach the provider through its table, so each read writes
+// `FileSystem` and the branches conflict (core semantics §14.11, §11.2).
+struct Counter { reads: i64 }
+
+impl FileSystemProvider for Counter {
+    fn open(mut ref self, path: Str, opts: ref OpenOptions) -> Result[i64, IoError] { Ok(1) }
+
+    fn read_handle(mut ref self, h: i64, buf: mut Slice[u8]) -> Result[i64, IoError] {
+        self.reads = self.reads + 1;
+        Ok(0)
+    }
+
+    fn close(mut ref self, h: i64) { }
+}
+
+fn peek(f: ref File) -> i64 {
+    let mut b = [0u8; 2];
+    match f.read(b[..]) {
+        Ok(n) => n,
+        Err(_) => -1,
+    }
+}
+
+fn main() {
+    with_provider[FileSystem](Counter { reads: 0 }, || {
+        let f = File.open("a").unwrap();
+        let g = File.open("b").unwrap();
+        let (x, y) = par { peek(f), peek(g) };
+        println(f"{x} {y}");
+    });
+}

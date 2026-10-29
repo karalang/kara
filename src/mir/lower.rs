@@ -2858,6 +2858,10 @@ enum ScopeEntry<'a> {
     /// drops front to back. The `reverse` native, and the `mut ref` type
     /// it takes.
     Unreverse(Local, Ty, String),
+    /// The extent id a `providers { FileSystem => p }` block's
+    /// `FileSystem.enter` returned: `FileSystem.exit` ends it on every
+    /// exit from the block (core semantics §14.11).
+    FsExit(Local),
 }
 
 /// An iterator type's `next`, instantiated for a `for` loop: its definition,
@@ -4460,6 +4464,15 @@ impl<'l, 'a> Bx<'l, 'a> {
                     self.b.push(bb, StatementKind::StorageDead(*l));
                 }
                 ScopeEntry::Unreverse(v, mt, native) => self.reverse_vec(*v, *mt, native),
+                ScopeEntry::FsExit(id) => {
+                    let t = self.unit();
+                    let u = self.temp(t);
+                    self.call_native(
+                        "FileSystem.exit",
+                        vec![Operand::Copy(Place::local(*id))],
+                        Place::local(u),
+                    );
+                }
             }
         }
         Ok(())
@@ -18991,6 +19004,26 @@ impl<'l, 'a> Bx<'l, 'a> {
                 }
             }
         }
+        // An open and the operations on an open `File` are calls on
+        // `FileSystem` in a program that binds it (§14.11,
+        // `providers::route_files`); each writes, as the provider's
+        // `open`, `read_handle` and `write_handle` do.
+        if r == "FileSystem" {
+            let ops = crate::mir::providers::FILE_OPS
+                .iter()
+                .map(|op| format!("file_{op}"));
+            for m in std::iter::once("open_file".to_string()).chain(ops) {
+                decl.methods.insert(m.clone(), true);
+                if let Some(t) = decl.default {
+                    if let (Some(ms), Some(native)) = (
+                        decl.impls.get_mut(&t),
+                        crate::mir::providers::file_native(r, &m),
+                    ) {
+                        ms.insert(m, native);
+                    }
+                }
+            }
+        }
         self.lcx.program.resources.insert(r.to_string(), decl);
         Ok(())
     }
@@ -19054,6 +19087,26 @@ impl<'l, 'a> Bx<'l, 'a> {
         let start = self.b.new_block();
         self.goto(start);
         self.cur = start;
+        // A `FileSystem` provider's files reach it while the block runs
+        // (core semantics §14.11): provider specialisation adds its
+        // handle methods to the `enter`, inside the block's region.
+        for (resource, l) in &bound {
+            if resource != "FileSystem" {
+                continue;
+            }
+            let pt = self.b.local_ty(*l);
+            let mt = self.tys().tcx().reference(pt, true);
+            let r = self.temp(mt);
+            self.assign(r, Rvalue::Ref(BorrowKind::Mut, Place::local(*l)));
+            let i64t = self.tys().tcx().intern(HK::Int(IntSize::I64));
+            let id = self.temp(i64t);
+            self.call_native(
+                "FileSystem.enter",
+                vec![Operand::Move(Place::local(r))],
+                Place::local(id),
+            );
+            self.schedule(ScopeEntry::FsExit(id));
+        }
         self.block_into(body, dest)?;
         let end = self.b.new_block();
         self.goto(end);
@@ -23991,6 +24044,7 @@ fn finish_build(mut lowered: Lowered) -> Result<Lowered, String> {
     // (core semantics §14.3), decided by the effects of the program as
     // built, which `par_check` reports from.
     if !lowered.program.resources.is_empty() {
+        crate::mir::providers::route_files(&mut lowered.program, &lowered.tys);
         let report = crate::mir::effects::analyze(&lowered.program, &lowered.tys);
         if report.no_provider.is_empty() && par_conflict(&report).is_none() {
             crate::mir::providers::specialise(

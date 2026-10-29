@@ -99,6 +99,7 @@ mod fatal;
 #[cfg(any(target_family = "wasm", test))]
 mod f16;
 pub mod file;
+pub mod fs_provider;
 pub mod pool;
 pub mod rate_limiter;
 pub mod semaphore;
@@ -348,6 +349,9 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         mir_task::karac_mir_ready_select,
         mir_task::karac_mir_select_park,
         mir_io::karac_mir_file,
+        fs_provider::karac_mir_fs_enter,
+        fs_provider::karac_mir_fs_exit,
+        fs_provider::karac_mir_fs_adopt,
         mir_io::karac_mir_buf,
         mir_io::karac_mir_buf_free,
         mir_io::karac_mir_std_stream,

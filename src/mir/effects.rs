@@ -1635,11 +1635,9 @@ impl<'p> Analysis<'p> {
         } else {
             Access::Reads
         };
-        // A stream's `print` calls its provider's `write` (§14.10).
-        let via = match super::providers::fused_print(r, m) {
-            Some(_) => "write",
-            None => m,
-        };
+        // A stream's `print` calls its provider's `write` (§14.10), and an
+        // open its `open` (§14.11).
+        let via = super::providers::via_method(r, m);
         let impls = decl
             .impls
             .values()

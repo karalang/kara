@@ -232,7 +232,7 @@ fn main() {
 }
 ```
 
-`File`, `OpenOptions` and the buffered types over a file go to the operating system in this version, also under an override; their routing to the fake (§14.11's `open`, `read_handle`, `write_handle` and `close`) is the next step.
+**Files under an override.** `File.open`, `File.create`, `File.append` and `OpenOptions.open` inside the override call the fake's `open(mut ref self, path: Str, opts: ref OpenOptions) -> Result[i64, IoError]`, which names the new file by an `i64` id of the fake's choosing. Reads and writes on that `File`, and on a `BufReader` or `BufWriter` over it, call `read_handle(mut ref self, h: i64, buf: mut Slice[u8]) -> Result[i64, IoError]` and `write_handle(mut ref self, h: i64, buf: Slice[u8]) -> Result[i64, IoError]`, which return the count read or written as `std` does (a short count is fine; a read of `0` is the end of the file), and dropping the file calls `close(mut ref self, h: i64)`. On a fake's file `flush`, `sync_all` and `sync_data` return `Ok(())`, and `seek` and `set_len` return `Err(IoError.Unsupported)`. A file belongs to the override it was opened under: it reaches that fake inside a nested override too, and once the `with_provider` call (or `providers { FileSystem => .. } in { .. }` block) has ended, every operation on it returns `Err(IoError.ProviderUnavailable)` and its drop does nothing. A file opened outside every override is the operating system's and works anywhere. A fake's file cannot become a child process's standard stream (`Stdio.from_file`). In a program that overrides `FileSystem` anywhere, an operation on an open file can reach a provider, so it counts as a write of `FileSystem`: two `par` branches or tasks that both use files conflict the way two writers of any value do. The handle methods run with every other resource at its default, so a fake whose `close` prints is refused where `Stdout` is overridden.
 
 ## Errors
 
@@ -246,6 +246,7 @@ enum IoError {
     InvalidUtf8,
     Interrupted,
     Unsupported,
+    ProviderUnavailable,
     Other(String),
 }
 
@@ -255,7 +256,7 @@ enum VarError {
 }
 ```
 
-`InvalidInput` is an argument the operation refuses: a negative length or offset, or `OpenOptions` that open nothing. `Unsupported` is an operation this platform does not provide. `Other` carries the system's message for every other failure.
+`InvalidInput` is an argument the operation refuses: a negative length or offset, or `OpenOptions` that open nothing. `Unsupported` is an operation this platform does not provide. `ProviderUnavailable` is an operation on a file opened under a `FileSystem` override after that override's `with_provider` call has returned ([Overriding the file system](#files)). `Other` carries the system's message for every other failure.
 
 Both are prelude types. `IoError` covers the standard streams and files; `VarError` covers environment-variable lookup ([time-random-env.md](time-random-env.md#env)). They are kept separate so that each has a tight set of variants: a handler for `env.var` does not have to consider `NotFound` or `PermissionDenied`. The two overlap on one point (`IoError.InvalidUtf8` and `VarError.NotUnicode` describe the same condition from different sources), and the library provides `impl From[VarError] for IoError` (`NotPresent` becomes `NotFound`, `NotUnicode` becomes `InvalidUtf8`), so a function that uses `?` on both can return `IoError` alone.
 

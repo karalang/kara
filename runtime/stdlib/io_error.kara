@@ -13,8 +13,11 @@
 // `InvalidInput` (an argument the operation refuses: a negative length,
 // a negative `SeekFrom.Start`, an `OpenOptions` combination that opens
 // nothing) and `Unsupported` (an operation this platform does not have)
-// joined at B-2026-10-15-28. Every backend builds a variant by NAME, so
-// the order here is the documented one, not a runtime code.
+// joined at B-2026-10-15-28; `ProviderUnavailable` (a file opened under a
+// `FileSystem` override, used after that override's call returned,
+// core-semantics §14.11) with provider overrides. Every backend builds a
+// variant by NAME, so the order here is the documented one, not a runtime
+// code.
 
 #[derive(Display)]
 enum IoError {
@@ -26,5 +29,6 @@ enum IoError {
     InvalidUtf8,
     Interrupted,
     Unsupported,
+    ProviderUnavailable,
     Other(String),
 }

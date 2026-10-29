@@ -498,7 +498,66 @@ trait FileSystemProvider {
     fn set_modified(mut ref self, path: Str, ms: i64) -> Result[(), IoError] {
         panic("FileSystem.set_modified called on a provider that does not implement it")
     }
+
+    // Files (§14.11). `open` returns the provider's own id for the file,
+    // which the library keeps inside the `File` it gives the program and
+    // passes back to `read_handle`, `write_handle` and, when the `File`
+    // drops, `close`.
+    fn open(mut ref self, path: Str, opts: ref OpenOptions) -> Result[i64, IoError] {
+        panic("FileSystem.open called on a provider that does not implement it")
+    }
+
+    fn read_handle(mut ref self, h: i64, buf: mut Slice[u8]) -> Result[i64, IoError] {
+        panic("FileSystem.read_handle called on a provider that does not implement it")
+    }
+
+    fn write_handle(mut ref self, h: i64, buf: Slice[u8]) -> Result[i64, IoError] {
+        panic("FileSystem.write_handle called on a provider that does not implement it")
+    }
+
+    fn close(mut ref self, h: i64) {
+        panic("FileSystem.close called on a provider that does not implement it")
+    }
+
+    // The library's own, which a provider does not define: a read or a
+    // write of an open file as the compiled runtime calls it, the count,
+    // or an error as `-1 - code` with `Other`'s text left in `msg`.
+    fn __read(mut ref self, h: i64, buf: mut Slice[u8], msg: mut ref String) -> i64 {
+        match self.read_handle(h, buf) {
+            Ok(n) => n,
+            Err(e) => self.__error_code(e, msg),
+        }
+    }
+
+    fn __write(mut ref self, h: i64, buf: Slice[u8], msg: mut ref String) -> i64 {
+        match self.write_handle(h, buf) {
+            Ok(n) => n,
+            Err(e) => self.__error_code(e, msg),
+        }
+    }
+
+    // `-1 - code` for `e`, with the runtime's codes for `IoError`'s variants
+    // (src/backend/mir/io.rs `IO_ERRORS`), and `Other`'s text pushed onto `msg`.
+    fn __error_code(ref self, e: own IoError, msg: mut ref String) -> i64 {
+        let code = match e {
+            IoError.NotFound => 0,
+            IoError.PermissionDenied => 1,
+            IoError.AlreadyExists => 2,
+            IoError.UnexpectedEof => 3,
+            IoError.InvalidUtf8 => 4,
+            IoError.Interrupted => 5,
+            IoError.Other(m) => {
+                msg.push_str(m);
+                6
+            }
+            IoError.InvalidInput => 7,
+            IoError.Unsupported => 8,
+            IoError.ProviderUnavailable => 9,
+        };
+        -1 - code
+    }
 }
+
 
 struct Env { }
 

@@ -648,6 +648,9 @@ pub unsafe extern "C" fn karac_runtime_file_close(handle: *mut KaracFile) {
         if handle.is_null() {
             return;
         }
+        if crate::fs_provider::is_provided(handle.cast()) {
+            return crate::fs_provider::close(handle.cast());
+        }
         drop(Box::from_raw(handle));
     }
 }

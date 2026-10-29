@@ -1,0 +1,12 @@
+source = "review/core-pins/err_par_provided_files"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["par", "providers"]
+class = "a"
+expected_from = "pin"
+rules = ["14.11", "11.2"]
+backends = []
+env = {}
+note = "the expected.out wording of an error pin is guidance, not a byte oracle"
+bucket = "a:refused"
