@@ -2555,6 +2555,8 @@ impl super::Parser {
                 ),
                 arrow_span,
             );
+            self.closure_returns
+                .push((start.offset, arrow_span, ty_text.clone()));
             self.fix_edits.insert(
                 crate::resolver::SpanKey::from_span(&arrow_span),
                 crate::resolver::TextEdit {
@@ -3378,6 +3380,26 @@ impl super::Parser {
         let last = self.tokens[self.pos - 1].span;
         let end = last.offset + last.length;
         let ty = self.turbofish_binding_type(open, self.pos);
+        // A `collect` / `sum` / `product` whose result is the receiver of a
+        // further call (`it.collect::<Vec<String>>().join(", ")`): its type
+        // cannot come from where it is used, so deleting the list leaves an
+        // error far from here. Name the typed `let` instead, with no fix
+        // (B-2026-10-29-8).
+        if matches!(method.as_str(), "collect" | "sum" | "product") && self.call_is_a_receiver() {
+            let shown = ty.clone().unwrap_or_else(|| "T".to_string());
+            self.error_at(
+                &format!(
+                    "`::<..>` after a method name is Rust's turbofish; Kāra has no call-site \
+                     type arguments, and this `{method}`'s result is the receiver of a \
+                     further call, so its type cannot be inferred from its use: bind it \
+                     first with a typed `let` (`let v: {shown} = it.{method}();`) and call \
+                     on `v`"
+                ),
+                start,
+            );
+            self.turbofishes.push((start, method, self.pos, ty));
+            return;
+        }
         self.turbofishes.push((start, method, self.pos, ty));
         self.error_at(
             "`::<..>` after a method name is Rust's turbofish; Kāra has no call-site type \
@@ -3393,6 +3415,32 @@ impl super::Parser {
                 replacement: String::new(),
             },
         );
+    }
+
+    /// Whether the call whose `(` is the current token is followed by a
+    /// further `.method` / `?.method`, which makes its result a receiver.
+    fn call_is_a_receiver(&self) -> bool {
+        if !self.check(&Token::LeftParen) {
+            return false;
+        }
+        let mut depth = 0usize;
+        for (i, t) in self.tokens.iter().enumerate().skip(self.pos) {
+            match t.token {
+                Token::LeftParen | Token::LeftBracket | Token::LeftBrace => depth += 1,
+                Token::RightParen | Token::RightBracket | Token::RightBrace => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return matches!(
+                            self.tokens.get(i + 1).map(|t| &t.token),
+                            Some(Token::Dot | Token::QuestionDot)
+                        );
+                    }
+                }
+                Token::EOF => return false,
+                _ => {}
+            }
+        }
+        false
     }
 
     /// The Kāra spelling of the turbofish list whose tokens run from `open`

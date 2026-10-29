@@ -818,6 +818,69 @@ impl super::Parser {
         );
     }
 
+    /// `let row = |r: i64| -> Vec[String] { .. };`: the arrow's fix deletes
+    /// the return type, which leaves a `collect` / `sum` / `product` tail
+    /// that cannot infer. When the closure is the whole initializer of a
+    /// `let` binding one name with no annotation, and every parameter is
+    /// typed, the fix
+    /// also writes the closure's type onto the binding,
+    /// `let row: Fn(i64) -> Vec[String] = |r: i64| { .. };`
+    /// (B-2026-10-29-7). `since` is how many such closures had been seen
+    /// before the initializer.
+    fn move_closure_return_to_binding(&mut self, since: usize, pattern: &Pattern, value: &Expr) {
+        let PatternKind::Binding(_) = pattern.kind else {
+            return;
+        };
+        let ExprKind::Closure { params, body, .. } = &value.kind else {
+            return;
+        };
+        // Only where deleting the type loses what the body needs: a tail
+        // whose type comes from its use (`collect`, `sum`, `product`). Any
+        // other body infers, and its closure may be a `MutFn` or `OnceFn`,
+        // which an `Fn` annotation would refuse.
+        let tail = match &body.kind {
+            ExprKind::Block(b) => b.final_expr.as_deref(),
+            _ => Some(&**body),
+        };
+        if !tail.is_some_and(|t| {
+            matches!(&t.kind, ExprKind::MethodCall { method, .. }
+                if matches!(method.as_str(), "collect" | "sum" | "product"))
+        }) {
+            return;
+        }
+        let Some((_, arrow, ret)) = self.closure_returns[since..]
+            .iter()
+            .find(|(at, ..)| *at == value.span.offset)
+            .cloned()
+        else {
+            return;
+        };
+        let mut types = Vec::new();
+        for p in params {
+            let Some(ty) = &p.ty else {
+                return;
+            };
+            let ty = crate::formatter::render_type_expr(ty);
+            types.push(if p.is_own { format!("own {ty}") } else { ty });
+        }
+        let key = crate::resolver::SpanKey::from_span(&arrow);
+        let Some(delete) = self.fix_edits.remove(&key) else {
+            return;
+        };
+        let name_end = pattern.span.offset + pattern.span.length;
+        self.fix_diffs.insert(
+            key,
+            vec![
+                crate::resolver::TextEdit {
+                    offset: name_end,
+                    length: 0,
+                    replacement: format!(": Fn({}) -> {ret}", types.join(", ")),
+                },
+                delete,
+            ],
+        );
+    }
+
     fn parse_let_statement(&mut self) -> Option<Stmt> {
         let start = self.current_span();
         self.expect(&Token::Let)?;
@@ -890,9 +953,11 @@ impl super::Parser {
             self.advance();
         }
         let turbofishes = self.turbofishes.len();
+        let closures = self.closure_returns.len();
         let value = self.parse_expression()?;
         if ty.is_none() {
             self.move_turbofish_to_binding(turbofishes, &pattern, &value);
+            self.move_closure_return_to_binding(closures, &pattern, &value);
         }
         if freeze_kw {
             // Recorded against the FROZEN PLACE's span, which is the span the

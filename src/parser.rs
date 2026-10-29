@@ -414,6 +414,11 @@ pub struct Parser {
     /// annotation can carry. A `let` whose whole initializer is that call
     /// moves the type onto its binding (B-2026-10-24-13).
     pub(crate) turbofishes: Vec<(Span, String, usize, Option<String>)>,
+    /// Each closure written with Rust's return type (`|x: i64| -> T`): where
+    /// its `|` starts, the arrow's span (its diagnostic's key) and `T`'s
+    /// text. A `let` whose whole initializer is that closure moves the type
+    /// onto its binding (B-2026-10-29-7).
+    pub(crate) closure_returns: Vec<(usize, Span, String)>,
 }
 
 /// The Rust macros whose name is also a Kāra function, so deleting the `!`
@@ -502,6 +507,7 @@ impl Parser {
             escaped_bindings: rustc_hash::FxHashSet::default(),
             source: None,
             turbofishes: Vec::new(),
+            closure_returns: Vec::new(),
         }
     }
 

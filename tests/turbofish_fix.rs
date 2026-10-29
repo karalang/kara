@@ -52,11 +52,6 @@ fn turbofish_in_an_unannotated_let_moves_its_type_to_the_binding() {
 #[test]
 fn turbofish_outside_a_whole_let_initializer_is_only_deleted() {
     for (src, want) in [
-        // Not the whole initializer.
-        (
-            "let n = \"ab\".chars().collect::<Vec<char>>().len();",
-            "let n = \"ab\".chars().collect().len();",
-        ),
         // Inside an argument.
         (
             "let n = f(\"ab\".chars().collect::<Vec<char>>());",
@@ -82,5 +77,35 @@ fn turbofish_outside_a_whole_let_initializer_is_only_deleted() {
         let src = format!("fn main() {{\n{src}\n}}\n");
         let out = fixed(&src);
         assert!(out.contains(want), "missing {want:?} in:\n{out}");
+    }
+}
+
+/// A `collect` whose result is the receiver of a further call has no type to
+/// infer from its use, so deleting the list is not offered: the message
+/// names the typed `let` instead, at the turbofish (B-2026-10-29-8). This
+/// flips the pin that held the delete-only fix for
+/// `.collect::<Vec<char>>().len()`.
+#[test]
+fn turbofish_on_a_receiver_collect_names_a_typed_let_with_no_fix() {
+    for (src, shown) in [
+        (
+            "let text = \"(\" + lab.iter().map(|v| v.to_string()).collect::[Vec[String]]().join(\", \") + \")\";",
+            "let v: Vec[String] = it.collect();",
+        ),
+        (
+            "let n = \"ab\".chars().collect::<Vec<char>>().len();",
+            "let v: Vec[char] = it.collect();",
+        ),
+    ] {
+        let src = format!("fn main() {{\n{src}\n}}\n");
+        let result = karac::parse(&src);
+        assert_eq!(result.errors.len(), 1, "{:?}", result.errors);
+        assert!(
+            result.errors[0].message.contains("is the receiver of a further call")
+                && result.errors[0].message.contains(shown),
+            "{}",
+            result.errors[0].message
+        );
+        assert!(result.fix_edits.is_empty() && result.fix_diffs.is_empty());
     }
 }
