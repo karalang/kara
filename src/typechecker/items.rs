@@ -6245,36 +6245,53 @@ impl<'a> super::TypeChecker<'a> {
             // The receiver of a method call: its type is final there, where
             // a call's own recorded type may predate the context that fixes
             // it (`s.chars().collect()` returned as a `Vec[char]`).
-            let ExprKind::MethodCall { object, .. } = &e.kind else {
-                return;
+            // B-2026-10-29-36: an operand of a comparison or an arithmetic
+            // operator whose type is a bare unsolved parameter is final there
+            // too. `==` takes its own `Rhs` (`PartialEq[Rhs]`), so
+            // `s.chars().collect() == t` fixes nothing. A nested one there
+            // (`f(x) == Ok(true)`'s `Result[bool, E]`) is fixed by the other
+            // side after the operand's type was recorded.
+            let (operands, bare): (Vec<&Expr>, bool) = match &e.kind {
+                ExprKind::MethodCall { object, .. } => (vec![object.as_ref()], false),
+                ExprKind::Binary { op, left, right } if !matches!(op, BinOp::And | BinOp::Or) => {
+                    (vec![left.as_ref(), right.as_ref()], true)
+                }
+                _ => return,
             };
-            if !matches!(
-                object.kind,
-                ExprKind::MethodCall { .. } | ExprKind::Call { .. }
-            ) {
-                return;
-            }
-            let Some(t) = self.expr_types.get(&SpanKey::from_span(&object.span)) else {
-                return;
-            };
-            let t = match t {
-                Type::Ref(t) | Type::MutRef(t) => t.as_ref(),
-                t => t,
-            };
-            if matches!(t, Type::Pointer { .. } | Type::TypeParam(_)) {
-                return;
-            }
-            if let Some(name) = find_unbound_type_param(t, &in_scope) {
-                found = Some((object.span, name.to_string(), t.clone()));
+            for operand in operands {
+                if !matches!(
+                    operand.kind,
+                    ExprKind::MethodCall { .. } | ExprKind::Call { .. }
+                ) {
+                    continue;
+                }
+                let Some(t) = self.expr_types.get(&SpanKey::from_span(&operand.span)) else {
+                    continue;
+                };
+                let t = match t {
+                    Type::Ref(t) | Type::MutRef(t) => t.as_ref(),
+                    t => t,
+                };
+                if matches!(t, Type::Pointer { .. }) || bare != matches!(t, Type::TypeParam(_)) {
+                    continue;
+                }
+                if let Some(name) = find_unbound_type_param(t, &in_scope) {
+                    found = Some((operand.span, name.to_string(), t.clone()));
+                    return;
+                }
             }
         });
         if let Some((span, name, ty)) = found {
+            let of = if matches!(ty, Type::TypeParam(_)) {
+                String::new()
+            } else {
+                format!(" of `{}`", type_display(&ty))
+            };
             self.type_error(
                 format!(
-                    "cannot infer type parameter '{name}' of `{}`, this call's result: \
+                    "cannot infer type parameter '{name}'{of}, this call's result: \
                      nothing in the body fixes it (design.md § Type inference); bind \
-                     the result with a type annotation",
-                    type_display(&ty)
+                     the result with a type annotation"
                 ),
                 span,
                 TypeErrorKind::CannotInferTypeParam,
