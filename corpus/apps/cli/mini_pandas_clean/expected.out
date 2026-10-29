@@ -1,0 +1,954 @@
+$ read contacts.csv dtype=zip:str | dtypes
+column,dtype
+id,int64
+name,str
+email,str
+phone,str
+zip,str
+country,str
+plan,str
+fee,str
+visits,int64
+referrer,str
+$ read contacts.csv dtype=zip:str | select id,name,fee,zip
+id,name,fee,zip
+101,  alice SMITH ,12.50,94107
+102,BOB o'neil,0,2134
+103,carol-ann lee,"1,200",501
+104,3rd street deli, 35 ,10001-4356
+105,dr. zoë ADLER,,10115
+106,Seán O'Brien,free,D02
+107,ALICE SMITH,12.5,94107
+108,mei-ling wu,,18956
+109,o'hara & sons,1e3,601
+110,  ,-0,
+111,JOSÉ  núñez,49.99,06700
+112,bob o'neil,0.0,2134
+$ read contacts.csv dtype=zip:str | str name strip as=n1 | str n1 title as=n2 | select id,name,n2
+id,name,n2
+101,  alice SMITH ,Alice Smith
+102,BOB o'neil,Bob O'Neil
+103,carol-ann lee,Carol-Ann Lee
+104,3rd street deli,3Rd Street Deli
+105,dr. zoë ADLER,Dr. Zoë Adler
+106,Seán O'Brien,Seán O'Brien
+107,ALICE SMITH,Alice Smith
+108,mei-ling wu,Mei-Ling Wu
+109,o'hara & sons,O'Hara & Sons
+110,  ,
+111,JOSÉ  núñez,José  Núñez
+112,bob o'neil,Bob O'Neil
+$ read contacts.csv dtype=zip:str | str name capitalize as=cap | str name swapcase as=swap | select id,cap,swap
+id,cap,swap
+101,  alice smith ,  ALICE smith 
+102,Bob o'neil,bob O'NEIL
+103,Carol-ann lee,CAROL-ANN LEE
+104,3rd street deli,3RD STREET DELI
+105,Dr. zoë adler,DR. ZOË adler
+106,Seán o'brien,sEÁN o'bRIEN
+107,Alice smith,alice smith
+108,Mei-ling wu,MEI-LING WU
+109,O'hara & sons,O'HARA & SONS
+110,  ,  
+111,José  núñez,josé  NÚÑEZ
+112,Bob o'neil,BOB O'NEIL
+$ read contacts.csv dtype=zip:str | str name lower | str name strip | str name title | select id,name
+id,name
+101,Alice Smith
+102,Bob O'Neil
+103,Carol-Ann Lee
+104,3Rd Street Deli
+105,Dr. Zoë Adler
+106,Seán O'Brien
+107,Alice Smith
+108,Mei-Ling Wu
+109,O'Hara & Sons
+110,
+111,José  Núñez
+112,Bob O'Neil
+$ read contacts.csv dtype=zip:str | str email strip | str email lower | str email removeprefix mailto: | select id,email
+id,email
+101,alice@example.com
+102,bob@example.org
+103,carol@example.net
+104,orders@3rdstreet.example
+105,zoe@example.de
+106,sean@example.ie
+107,alice@example.com
+108,mei@example.sg
+109,info@ohara.example
+110,nobody@example.com
+111,jose@example.mx
+112,bob@example.org
+$ read contacts.csv dtype=zip:str | str email find @ as=at | str email count e as=es | select id,email,at,es
+id,email,at,es
+101,Alice@Example.com,5,2
+102, bob@example.org,4,2
+103,mailto:carol@example.net,12,3
+104,orders@3rdstreet.example,6,5
+105,zoe@example.de,3,4
+106,sean@example.ie,4,4
+107,alice@example.com ,5,3
+108,mei@example.sg,3,3
+109,Info@OHara.example,4,2
+110,nobody@example.com,6,2
+111,jose@example.mx,4,3
+112,BOB@example.org,3,2
+$ read contacts.csv dtype=zip:str | str zip zfill 5 | select id,zip
+id,zip
+101,94107
+102,02134
+103,00501
+104,10001-4356
+105,10115
+106,00D02
+107,94107
+108,18956
+109,00601
+110,
+111,06700
+112,02134
+$ read contacts.csv dtype=zip:str | str zip slice 0 5 | str zip zfill 5 | select id,zip,country
+id,zip,country
+101,94107,US
+102,02134,US
+103,00501,US
+104,10001,US
+105,10115,DE
+106,00D02,IE
+107,94107,US
+108,18956,SG
+109,00601,US
+110,,US
+111,06700,MX
+112,02134,US
+$ read contacts.csv dtype=zip:str | str phone replace ( \e | str phone replace ) \e | str phone replace - \e | str phone replace . \e | str phone replace \s \e | select id,phone
+id,phone
+101,4155550101
+102,4155550102
+103,+14155550103
+104,4155550104
+105,+49305550105
+106,+35315550106
+107,4155550101
+108,+6555500108
+109,4155550109
+110,
+111,+525555500111
+112,4155550102
+$ read contacts.csv dtype=zip:str | str phone slice -4 as=last4 | select id,phone,last4
+id,phone,last4
+101,(415) 555-0101,0101
+102,415.555.0102,0102
+103,+1 415 555 0103,0103
+104,4155550104,0104
+105,+49 30 5550105,0105
+106,+353 1 555 0106,0106
+107,(415) 555-0101,0101
+108,+65 5550 0108,0108
+109,415-555-0109,0109
+110,,
+111,+52 55 5550 0111,0111
+112,415.555.0102,0102
+$ read contacts.csv dtype=zip:str | str phone slice 1 4 as=s | select id,s
+id,s
+101,415
+102,15.
+103,1 4
+104,155
+105,49 
+106,353
+107,415
+108,65 
+109,15-
+110,
+111,52 
+112,15.
+$ read contacts.csv dtype=zip:str | str plan pad 6 as=a | str plan pad 6 side=right fill=. as=b | str plan pad 7 side=both fill=* as=c | select plan,a,b,c
+plan,a,b,c
+pro,   pro,pro...,**pro**
+free,  free,free..,**free*
+team,  team,team..,**team*
+pro,   pro,pro...,**pro**
+team,  team,team..,**team*
+pro,   pro,pro...,**pro**
+pro,   pro,pro...,**pro**
+free,  free,free..,**free*
+team,  team,team..,**team*
+free,  free,free..,**free*
+pro,   pro,pro...,**pro**
+free,  free,free..,**free*
+$ read contacts.csv dtype=zip:str | str plan upper | str plan len as=n | select id,plan,n
+id,plan,n
+101,PRO,3
+102,FREE,4
+103,TEAM,4
+104,PRO,3
+105,TEAM,4
+106,PRO,3
+107,PRO,3
+108,FREE,4
+109,TEAM,4
+110,FREE,4
+111,PRO,3
+112,FREE,4
+$ read contacts.csv dtype=zip:str | str country removesuffix E | select id,country
+id,country
+101,US
+102,US
+103,US
+104,US
+105,D
+106,I
+107,US
+108,SG
+109,US
+110,US
+111,MX
+112,US
+$ read contacts.csv dtype=zip:str | cat name country sep=/ as=nc | select id,nc
+id,nc
+101,  alice SMITH /US
+102,BOB o'neil/US
+103,carol-ann lee/US
+104,3rd street deli/US
+105,dr. zoë ADLER/DE
+106,Seán O'Brien/IE
+107,ALICE SMITH/US
+108,mei-ling wu/SG
+109,o'hara & sons/US
+110,  /US
+111,JOSÉ  núñez/MX
+112,bob o'neil/US
+$ read contacts.csv dtype=zip:str | cat plan referrer sep=- as=pr | select id,pr
+id,pr
+101,pro-ads
+102,
+103,team-partner
+104,pro-ads
+105,team-conference
+106,pro-ads
+107,pro-ads
+108,free-search
+109,team-partner
+110,
+111,pro-search
+112,free-ads
+$ read contacts.csv dtype=zip:str | cat plan referrer sep=- na=none as=pr | select id,pr
+id,pr
+101,pro-ads
+102,free-none
+103,team-partner
+104,pro-ads
+105,team-conference
+106,pro-ads
+107,pro-ads
+108,free-search
+109,team-partner
+110,free-none
+111,pro-search
+112,free-ads
+$ read contacts.csv dtype=zip:str | str id upper
+! AttributeError: Can only use .str accessor with string values, not integer
+$ read contacts.csv dtype=zip:str | numeric fee coerce | select id,fee
+id,fee
+101,12.5
+102,0.0
+103,
+104,35.0
+105,
+106,
+107,12.5
+108,
+109,1000.0
+110,-0.0
+111,49.99
+112,0.0
+$ read contacts.csv dtype=zip:str | numeric fee coerce | dtypes
+column,dtype
+id,int64
+name,str
+email,str
+phone,str
+zip,str
+country,str
+plan,str
+fee,float64
+visits,int64
+referrer,str
+$ read contacts.csv dtype=zip:str | numeric fee
+! ValueError: Unable to parse string "1,200" at position 2
+$ read contacts.csv dtype=zip:str | numeric visits | dtypes
+column,dtype
+id,int64
+name,str
+email,str
+phone,str
+zip,str
+country,str
+plan,str
+fee,str
+visits,int64
+referrer,str
+$ read contacts.csv dtype=zip:str | numeric zip coerce | select id,zip
+id,zip
+101,94107.0
+102,2134.0
+103,501.0
+104,
+105,10115.0
+106,
+107,94107.0
+108,18956.0
+109,601.0
+110,
+111,6700.0
+112,2134.0
+$ read contacts.csv dtype=zip:str | numeric phone coerce | select id,phone
+id,phone
+101,
+102,
+103,
+104,4155550104.0
+105,
+106,
+107,
+108,
+109,
+110,
+111,
+112,
+$ read contacts.csv dtype=zip:str | str fee replace , \e | numeric fee coerce | select id,fee
+id,fee
+101,12.5
+102,0.0
+103,1200.0
+104,35.0
+105,
+106,
+107,12.5
+108,
+109,1000.0
+110,-0.0
+111,49.99
+112,0.0
+$ read contacts.csv dtype=zip:str | str fee replace , \e | numeric fee coerce | agg plan fee:sum,fee:mean,fee:count
+plan,fee_sum,fee_mean,fee_count
+free,0.0,0.0,3
+pro,109.99000000000001,27.497500000000002,4
+team,2200.0,1100.0,2
+$ read fees.csv dtype=fee:str | numeric fee | dtypes
+column,dtype
+id,int64
+fee,float64
+visits,int64
+credits,int64
+$ read fees.csv dtype=fee:str | numeric fee | select id,fee
+id,fee
+101,12.5
+102,0.0
+103,1200.0
+104,35.0
+105,
+106,5.0
+107,12.5
+$ read fees.csv dtype=credits:str | numeric credits | dtypes
+column,dtype
+id,int64
+fee,float64
+visits,int64
+credits,int64
+$ read fees.csv dtype=fee:str,credits:str | numeric fee coerce as=f | numeric credits as=c | select id,f,c
+id,f,c
+101,12.5,10
+102,0.0,-4
+103,1200.0,250
+104,35.0,0
+105,,75
+106,5.0,15
+107,12.5,10
+$ read contacts.csv dtype=zip:str | str email strip | str email lower | duplicated subset=email as=dup | select id,email,dup
+id,email,dup
+101,alice@example.com,False
+102,bob@example.org,False
+103,mailto:carol@example.net,False
+104,orders@3rdstreet.example,False
+105,zoe@example.de,False
+106,sean@example.ie,False
+107,alice@example.com,True
+108,mei@example.sg,False
+109,info@ohara.example,False
+110,nobody@example.com,False
+111,jose@example.mx,False
+112,bob@example.org,True
+$ read contacts.csv dtype=zip:str | str email strip | str email lower | duplicated subset=email keep=last as=dup | select id,email,dup
+id,email,dup
+101,alice@example.com,True
+102,bob@example.org,True
+103,mailto:carol@example.net,False
+104,orders@3rdstreet.example,False
+105,zoe@example.de,False
+106,sean@example.ie,False
+107,alice@example.com,False
+108,mei@example.sg,False
+109,info@ohara.example,False
+110,nobody@example.com,False
+111,jose@example.mx,False
+112,bob@example.org,False
+$ read contacts.csv dtype=zip:str | str email strip | str email lower | duplicated subset=email keep=false as=dup | select id,email,dup
+id,email,dup
+101,alice@example.com,True
+102,bob@example.org,True
+103,mailto:carol@example.net,False
+104,orders@3rdstreet.example,False
+105,zoe@example.de,False
+106,sean@example.ie,False
+107,alice@example.com,True
+108,mei@example.sg,False
+109,info@ohara.example,False
+110,nobody@example.com,False
+111,jose@example.mx,False
+112,bob@example.org,True
+$ read contacts.csv dtype=zip:str | duplicated subset=phone,zip as=dup | select id,phone,zip,dup
+id,phone,zip,dup
+101,(415) 555-0101,94107,False
+102,415.555.0102,2134,False
+103,+1 415 555 0103,501,False
+104,4155550104,10001-4356,False
+105,+49 30 5550105,10115,False
+106,+353 1 555 0106,D02,False
+107,(415) 555-0101,94107,True
+108,+65 5550 0108,18956,False
+109,415-555-0109,601,False
+110,,,False
+111,+52 55 5550 0111,06700,False
+112,415.555.0102,2134,True
+$ read contacts.csv dtype=zip:str | duplicated as=dup | select id,dup
+id,dup
+101,False
+102,False
+103,False
+104,False
+105,False
+106,False
+107,False
+108,False
+109,False
+110,False
+111,False
+112,False
+$ read contacts.csv dtype=zip:str | str email strip | str email lower | duplicated subset=email as=dup | where dup == False | select id,email
+id,email
+101,alice@example.com
+102,bob@example.org
+103,mailto:carol@example.net
+104,orders@3rdstreet.example
+105,zoe@example.de
+106,sean@example.ie
+108,mei@example.sg
+109,info@ohara.example
+110,nobody@example.com
+111,jose@example.mx
+$ read contacts.csv dtype=zip:str | duplicated subset=phone keep=false as=dup | where dup == True | select id,phone
+id,phone
+101,(415) 555-0101
+102,415.555.0102
+107,(415) 555-0101
+112,415.555.0102
+$ read contacts.csv dtype=zip:str | mask visits > 10 other=10 | select id,visits
+id,visits
+101,3
+102,10
+103,7
+104,0
+105,10
+106,5
+107,4
+108,2
+109,9
+110,1
+111,10
+112,10
+$ read contacts.csv dtype=zip:str | mask visits > 10 | select id,visits
+id,visits
+101,3.0
+102,
+103,7.0
+104,0.0
+105,
+106,5.0
+107,4.0
+108,2.0
+109,9.0
+110,1.0
+111,
+112,
+$ read contacts.csv dtype=zip:str | keep visits >= 5 other=0 | select id,visits
+id,visits
+101,0
+102,11
+103,7
+104,0
+105,21
+106,5
+107,0
+108,0
+109,9
+110,0
+111,14
+112,12
+$ read contacts.csv dtype=zip:str | keep visits >= 5 other=0.5 | select id,visits
+id,visits
+101,0.5
+102,11.0
+103,7.0
+104,0.5
+105,21.0
+106,5.0
+107,0.5
+108,0.5
+109,9.0
+110,0.5
+111,14.0
+112,12.0
+$ read contacts.csv dtype=zip:str | mask plan == 'free' other='trial' | select id,plan
+id,plan
+101,pro
+102,trial
+103,team
+104,pro
+105,team
+106,pro
+107,pro
+108,trial
+109,team
+110,trial
+111,pro
+112,trial
+$ read contacts.csv dtype=zip:str | numeric fee coerce | keep fee < 100 | select id,fee
+id,fee
+101,12.5
+102,0.0
+103,
+104,35.0
+105,
+106,
+107,12.5
+108,
+109,
+110,-0.0
+111,49.99
+112,0.0
+$ read contacts.csv dtype=zip:str | numeric fee coerce | mask fee > 100 other=100 | select id,fee
+id,fee
+101,12.5
+102,0.0
+103,
+104,35.0
+105,
+106,
+107,12.5
+108,
+109,100.0
+110,-0.0
+111,49.99
+112,0.0
+$ read catalog.csv | combine vendor.csv on=sku
+sku,name,price,stock,color,weight
+k1,Mug,8.0,40.0,,0.35
+k2,Kettle,24.0,7.0,white,1.2
+k3,Desk lamp,39.0,12.0,black,
+k4,Teapot,31.5,,,0.9
+k5,Notebook,4.5,200.0,red,
+$ read catalog.csv | combine vendor.csv on=sku | dtypes
+column,dtype
+sku,str
+name,str
+price,float64
+stock,float64
+color,str
+weight,float64
+$ read vendor.csv | combine catalog.csv on=sku
+sku,name,price,weight,stock,color
+k1,Ceramic mug,8.0,0.35,40.0,
+k2,Electric kettle,24.0,1.2,7.0,white
+k3,Desk lamp,39.0,,12.0,black
+k4,Teapot,31.5,0.9,,
+k5,Notebook A5,4.25,,200.0,red
+$ read catalog.csv | update vendor.csv on=sku
+sku,name,price,stock,color
+k3,Desk lamp,39.0,12,black
+k1,Ceramic mug,8.0,40,
+k5,Notebook A5,4.25,200,red
+k2,Electric kettle,24.0,7,white
+$ read catalog.csv | update vendor.csv on=sku | dtypes
+column,dtype
+sku,str
+name,str
+price,float64
+stock,int64
+color,str
+$ read vendor.csv | update catalog.csv on=sku
+sku,name,price,weight
+k1,Mug,8.0,0.35
+k4,Teapot,31.5,0.9
+k2,Kettle,24.0,1.2
+k5,Notebook,4.5,
+$ read trades.csv | asof quotes.csv on=ms
+ms,ticker_x,qty,price,ticker_y,bid,ask,venue
+100,ACME,200,51.1,ACME,51.05,51.11,X
+130,GLOB,50,720.0,GLOB,719.5,720.5,Y
+150,ACME,100,51.12,ACME,51.09,51.13,X
+150,GLOB,25,720.5,ACME,51.09,51.13,X
+205,ACME,300,51.08,GLOB,720.0,721.0,Y
+260,GLOB,10,721.25,ACME,51.04,51.09,Y
+400,ACME,75,51.3,GLOB,721.0,721.5,X
+$ read trades.csv | asof quotes.csv on=ms by=ticker
+ms,ticker,qty,price,bid,ask,venue
+100,ACME,200,51.1,51.05,51.11,X
+130,GLOB,50,720.0,719.5,720.5,Y
+150,ACME,100,51.12,51.09,51.13,X
+150,GLOB,25,720.5,719.5,720.5,Y
+205,ACME,300,51.08,51.1,51.14,Z
+260,GLOB,10,721.25,720.0,721.0,Y
+400,ACME,75,51.3,51.04,51.09,Y
+$ read trades.csv | asof quotes.csv on=ms by=ticker | dtypes
+column,dtype
+ms,int64
+ticker,str
+qty,int64
+price,float64
+bid,float64
+ask,float64
+venue,str
+$ read trades.csv | asof quotes.csv on=ms by=ticker direction=forward
+ms,ticker,qty,price,bid,ask,venue
+100,ACME,200,51.1,51.09,51.13,X
+130,GLOB,50,720.0,720.0,721.0,Y
+150,ACME,100,51.12,51.09,51.13,X
+150,GLOB,25,720.5,720.0,721.0,Y
+205,ACME,300,51.08,51.04,51.09,Y
+260,GLOB,10,721.25,721.0,721.5,X
+400,ACME,75,51.3,,,
+$ read trades.csv | asof quotes.csv on=ms by=ticker direction=nearest
+ms,ticker,qty,price,bid,ask,venue
+100,ACME,200,51.1,51.05,51.11,X
+130,GLOB,50,720.0,719.5,720.5,Y
+150,ACME,100,51.12,51.09,51.13,X
+150,GLOB,25,720.5,719.5,720.5,Y
+205,ACME,300,51.08,51.04,51.09,Y
+260,GLOB,10,721.25,720.0,721.0,Y
+400,ACME,75,51.3,51.04,51.09,Y
+$ read trades.csv | asof quotes.csv on=ms by=ticker tolerance=10
+ms,ticker,qty,price,bid,ask,venue
+100,ACME,200,51.1,51.05,51.11,X
+130,GLOB,50,720.0,719.5,720.5,Y
+150,ACME,100,51.12,51.09,51.13,X
+150,GLOB,25,720.5,,,
+205,ACME,300,51.08,,,
+260,GLOB,10,721.25,,,
+400,ACME,75,51.3,,,
+$ read trades.csv | asof quotes.csv on=ms by=ticker exact=0
+ms,ticker,qty,price,bid,ask,venue
+100,ACME,200,51.1,51.05,51.11,X
+130,GLOB,50,720.0,719.5,720.5,Y
+150,ACME,100,51.12,51.05,51.11,X
+150,GLOB,25,720.5,719.5,720.5,Y
+205,ACME,300,51.08,51.1,51.14,Z
+260,GLOB,10,721.25,720.0,721.0,Y
+400,ACME,75,51.3,51.04,51.09,Y
+$ read trades.csv | asof quotes.csv on=ms by=ticker direction=forward exact=0 tolerance=20
+ms,ticker,qty,price,bid,ask,venue
+100,ACME,200,51.1,,,
+130,GLOB,50,720.0,,,
+150,ACME,100,51.12,51.1,51.14,Z
+150,GLOB,25,720.5,,,
+205,ACME,300,51.08,51.04,51.09,Y
+260,GLOB,10,721.25,,,
+400,ACME,75,51.3,,,
+$ read trades.csv | asof quotes.csv on=ms by=ticker | agg ticker qty:sum,bid:mean,ask:max
+ticker,qty_sum,bid_mean,ask_max
+ACME,675,51.07,51.14
+GLOB,85,719.6666666666666,721.0
+$ read quotes.csv | asof trades.csv on=ms by=ticker
+ms,ticker,bid,ask,venue,qty,price
+90,ACME,51.05,51.11,X,,
+120,GLOB,719.5,720.5,Y,,
+150,ACME,51.09,51.13,X,100.0,51.12
+155,ACME,51.1,51.14,Z,100.0,51.12
+200,GLOB,720.0,721.0,Y,25.0,720.5
+210,ACME,51.04,51.09,Y,300.0,51.08
+390,GLOB,721.0,721.5,X,10.0,721.25
+$ read trades_late.csv | asof quotes.csv on=ms
+! ValueError: left keys must be sorted
+$ read quotes.csv | asof trades_late.csv on=ms
+! ValueError: right keys must be sorted
+$ read trades.csv | asof quotes_f.csv on=ms
+! MergeError: incompatible merge keys [0] dtype('int64') and dtype('float64'), must be the same type
+$ read trades.csv | asof quotes.csv on=ms tolerance=-5
+! MergeError: tolerance must be positive
+$ read closes.csv | where ticker == 'ACME' | ewm close mean span=3 as=ema | select day,close,ema
+day,close,ema
+1,51.2,51.2
+2,51.9,51.666666666666664
+3,,51.666666666666664
+4,52.4,52.2
+5,50.8,51.370370370370374
+6,,51.370370370370374
+7,,51.370370370370374
+8,53.1,52.79870967741935
+9,53.0,52.92408759124088
+10,52.2,52.52242686890574
+$ read closes.csv | where ticker == 'ACME' | ewm close mean span=3 adjust=0 as=ema | select day,close,ema
+day,close,ema
+1,51.2,51.2
+2,51.9,51.55
+3,,51.55
+4,52.4,52.1875
+5,50.8,51.49375
+6,,51.49375
+7,,51.49375
+8,53.1,52.899218749999996
+9,53.0,52.949609374999994
+10,52.2,52.5748046875
+$ read closes.csv | where ticker == 'ACME' | ewm close mean span=3 ignore_na=1 as=ema | select day,close,ema
+day,close,ema
+1,51.2,51.2
+2,51.9,51.666666666666664
+3,,51.666666666666664
+4,52.4,52.08571428571429
+5,50.8,51.4
+6,,51.4
+7,,51.4
+8,53.1,52.277419354838706
+9,53.0,52.644444444444446
+10,52.2,52.42047244094488
+$ read closes.csv | where ticker == 'ACME' | ewm close mean span=3 adjust=0 ignore_na=1 as=ema | select day,close,ema
+day,close,ema
+1,51.2,51.2
+2,51.9,51.55
+3,,51.55
+4,52.4,51.974999999999994
+5,50.8,51.387499999999996
+6,,51.387499999999996
+7,,51.387499999999996
+8,53.1,52.24375
+9,53.0,52.621875
+10,52.2,52.4109375
+$ read closes.csv | where ticker == 'ACME' | ewm close mean com=1 adjust=0 as=ema | select day,close,ema
+day,close,ema
+1,51.2,51.2
+2,51.9,51.55
+3,,51.55
+4,52.4,52.1875
+5,50.8,51.49375
+6,,51.49375
+7,,51.49375
+8,53.1,52.899218749999996
+9,53.0,52.949609374999994
+10,52.2,52.5748046875
+$ read closes.csv | where ticker == 'ACME' | ewm close mean alpha=0.3 minp=3 as=ema | select day,close,ema
+day,close,ema
+1,51.2,
+2,51.9,
+3,,
+4,52.4,52.041789416257494
+5,50.8,51.49788445534579
+6,,51.49788445534579
+7,,51.49788445534579
+8,53.1,52.39638290165241
+9,53.0,52.66487526572195
+10,52.2,52.48425143940166
+$ read closes.csv | where ticker == 'GLOB' | ewm close mean halflife=2 as=ema | select day,close,ema
+day,close,ema
+1,720.0,720.0
+2,722.5,721.4644660940673
+3,719.0,720.3478612632207
+4,,720.3478612632207
+5,725.25,722.6782697799242
+6,731.0,726.0237738730016
+7,728.0,726.7400876078309
+8,,726.7400876078309
+9,735.5,730.4215866129895
+10,741.0,734.3650486554884
+$ read closes.csv | where ticker == 'GLOB' | ewm close std span=4 as=sd | ewm close var span=4 as=v | select day,close,sd,v
+day,close,sd,v
+1,720.0,,
+2,722.5,1.7677669529663687,3.124999999999999
+3,719.0,1.962661666290584,3.8520408163265314
+4,,1.962661666290584,3.852040816326532
+5,725.25,3.4514656254624487,11.912614963748894
+6,731.0,5.378301237875611,28.926124205334332
+7,728.0,3.9069835135051205,15.264520174800817
+8,,3.9069835135051205,15.264520174800817
+9,735.5,5.715278778989852,32.664411521571736
+10,741.0,6.825268384361623,46.58428851856632
+$ read closes.csv | where ticker == 'GLOB' | ewm close std span=4 bias=1 as=sd | select day,close,sd
+day,close,sd
+1,720.0,0.0
+2,722.5,1.2103072956898178
+3,719.0,1.535705810540042
+4,,1.535705810540042
+5,725.25,2.650863934074141
+6,731.0,4.338891187672317
+7,728.0,3.247762593282504
+8,,3.247762593282504
+9,735.5,4.534771260452019
+10,741.0,5.581520987020257
+$ read closes.csv | where ticker == 'ACME' | ewm close var com=2 adjust=0 as=v | select day,close,v
+day,close,v
+1,51.2,
+2,51.9,0.24499999999999703
+3,,0.24499999999999705
+4,52.4,0.45842857142856624
+5,50.8,0.6026907073508964
+6,,0.6026907073508962
+7,,0.6026907073508964
+8,53.1,1.2820958799754587
+9,53.0,0.8928247623811717
+10,52.2,0.6065894455396701
+$ read closes.csv | where ticker == 'FLAT' | ewm close mean span=5 as=ema | ewm close std span=5 as=sd | select day,close,ema,sd
+day,close,ema,sd
+1,10.0,10.0,
+2,10.0,10.0,0.0
+3,10.0,10.0,0.0
+4,10.0,10.0,0.0
+5,,10.0,0.0
+6,10.0,10.0,0.0
+7,10.0,10.0,0.0
+8,10.0,10.0,0.0
+9,10.0,10.0,0.0
+10,10.0,10.0,0.0
+$ read closes.csv | ewm close mean span=3 by=ticker as=ema | select day,ticker,close,ema
+day,ticker,close,ema
+1,ACME,51.2,51.2
+1,GLOB,720.0,720.0
+1,FLAT,10.0,10.0
+2,ACME,51.9,51.666666666666664
+2,GLOB,722.5,721.6666666666666
+2,FLAT,10.0,10.0
+3,ACME,,51.666666666666664
+3,GLOB,719.0,720.1428571428571
+3,FLAT,10.0,10.0
+4,ACME,52.4,52.2
+4,GLOB,,720.1428571428571
+4,FLAT,10.0,10.0
+5,ACME,50.8,51.370370370370374
+5,GLOB,725.25,723.695652173913
+5,FLAT,,10.0
+6,ACME,,51.370370370370374
+6,GLOB,731.0,727.9454545454546
+6,FLAT,10.0,10.0
+7,ACME,,51.370370370370374
+7,GLOB,728.0,727.9747899159664
+7,FLAT,10.0,10.0
+8,ACME,53.1,52.79870967741935
+8,GLOB,,727.9747899159664
+8,FLAT,10.0,10.0
+9,ACME,53.0,52.92408759124088
+9,GLOB,735.5,733.112
+9,FLAT,10.0,10.0
+10,ACME,52.2,52.52242686890574
+10,GLOB,741.0,737.6651634723788
+10,FLAT,10.0,10.0
+$ read closes.csv | ewm volume mean alpha=0.5 by=ticker as=ev | where day > 7 | select day,ticker,ev
+day,ticker,ev
+8,ACME,1235.9843137254902
+8,GLOB,1248.8078431372548
+8,FLAT,1261.6313725490197
+9,ACME,1281.0802348336595
+9,GLOB,1302.508806262231
+9,FLAT,1323.9373776908024
+10,ACME,1307.0654936461387
+10,GLOB,1317.7693059628543
+10,FLAT,1328.47311827957
+$ read closes.csv | ewm close mean span=0.5 as=ema
+! ValueError: span must satisfy: span >= 1
+$ read closes.csv | ewm close mean alpha=1.5 as=ema
+! ValueError: alpha must satisfy: 0 < alpha <= 1
+$ read closes.csv | ewm ticker mean span=3 as=ema
+! DataError: No numeric types to aggregate
+$ read contacts.csv dtype=zip:str | select id,name,fee,visits | head 4 | json records
+[{"id":101,"name":"  alice SMITH ","fee":"12.50","visits":3},{"id":102,"name":"BOB o'neil","fee":"0","visits":11},{"id":103,"name":"carol-ann lee","fee":"1,200","visits":7},{"id":104,"name":"3rd street deli","fee":" 35 ","visits":0}]
+$ read contacts.csv dtype=zip:str | select id,name,fee,visits | head 4 | json records ascii=0
+[{"id":101,"name":"  alice SMITH ","fee":"12.50","visits":3},{"id":102,"name":"BOB o'neil","fee":"0","visits":11},{"id":103,"name":"carol-ann lee","fee":"1,200","visits":7},{"id":104,"name":"3rd street deli","fee":" 35 ","visits":0}]
+$ read contacts.csv dtype=zip:str | select id,name,email | tail 3 | json split
+{"columns":["id","name","email"],"index":[0,1,2],"data":[[110,"  ","nobody@example.com"],[111,"JOS\u00c9  n\u00fa\u00f1ez","jose@example.mx"],[112,"bob o'neil","BOB@example.org"]]}
+$ read contacts.csv dtype=zip:str | select id,name,visits | head 3 | json index
+{"0":{"id":101,"name":"  alice SMITH ","visits":3},"1":{"id":102,"name":"BOB o'neil","visits":11},"2":{"id":103,"name":"carol-ann lee","visits":7}}
+$ read contacts.csv dtype=zip:str | select id,country,visits | head 3 | json columns
+{"id":{"0":101,"1":102,"2":103},"country":{"0":"US","1":"US","2":"US"},"visits":{"0":3,"1":11,"2":7}}
+$ read contacts.csv dtype=zip:str | select id,phone,referrer | head 3 | json values
+[[101,"(415) 555-0101","ads"],[102,"415.555.0102",null],[103,"+1 415 555 0103","partner"]]
+$ read contacts.csv dtype=zip:str | select id,plan,visits | head 3 | json table
+{"schema":{"fields":[{"name":"index","type":"integer"},{"name":"id","type":"integer"},{"name":"plan","type":"string","extDtype":"str"},{"name":"visits","type":"integer"}],"primaryKey":["index"],"pandas_version":"1.4.0"},"data":[{"index":0,"id":101,"plan":"pro","visits":3},{"index":1,"id":102,"plan":"free","visits":11},{"index":2,"id":103,"plan":"team","visits":7}]}
+$ read contacts.csv dtype=zip:str | select id,name,zip | head 3 | json records lines=1
+{"id":101,"name":"  alice SMITH ","zip":"94107"}
+{"id":102,"name":"BOB o'neil","zip":"2134"}
+{"id":103,"name":"carol-ann lee","zip":"501"}
+$ read trades.csv | asof quotes.csv on=ms by=ticker | json records
+[{"ms":100,"ticker":"ACME","qty":200,"price":51.1,"bid":51.05,"ask":51.11,"venue":"X"},{"ms":130,"ticker":"GLOB","qty":50,"price":720.0,"bid":719.5,"ask":720.5,"venue":"Y"},{"ms":150,"ticker":"ACME","qty":100,"price":51.12,"bid":51.09,"ask":51.13,"venue":"X"},{"ms":150,"ticker":"GLOB","qty":25,"price":720.5,"bid":719.5,"ask":720.5,"venue":"Y"},{"ms":205,"ticker":"ACME","qty":300,"price":51.08,"bid":51.1,"ask":51.14,"venue":"Z"},{"ms":260,"ticker":"GLOB","qty":10,"price":721.25,"bid":720.0,"ask":721.0,"venue":"Y"},{"ms":400,"ticker":"ACME","qty":75,"price":51.3,"bid":51.04,"ask":51.09,"venue":"Y"}]
+$ read trades.csv | asof quotes.csv on=ms by=ticker | json records precision=2
+[{"ms":100,"ticker":"ACME","qty":200,"price":51.1,"bid":51.05,"ask":51.11,"venue":"X"},{"ms":130,"ticker":"GLOB","qty":50,"price":720.0,"bid":719.5,"ask":720.5,"venue":"Y"},{"ms":150,"ticker":"ACME","qty":100,"price":51.12,"bid":51.09,"ask":51.13,"venue":"X"},{"ms":150,"ticker":"GLOB","qty":25,"price":720.5,"bid":719.5,"ask":720.5,"venue":"Y"},{"ms":205,"ticker":"ACME","qty":300,"price":51.08,"bid":51.1,"ask":51.14,"venue":"Z"},{"ms":260,"ticker":"GLOB","qty":10,"price":721.25,"bid":720.0,"ask":721.0,"venue":"Y"},{"ms":400,"ticker":"ACME","qty":75,"price":51.3,"bid":51.04,"ask":51.09,"venue":"Y"}]
+$ read trades.csv | asof quotes.csv on=ms by=ticker | json values precision=0
+[[100,"ACME",200,51,51,51,"X"],[130,"GLOB",50,720,720,721,"Y"],[150,"ACME",100,51,51,51,"X"],[150,"GLOB",25,721,720,721,"Y"],[205,"ACME",300,51,51,51,"Z"],[260,"GLOB",10,721,720,721,"Y"],[400,"ACME",75,51,51,51,"Y"]]
+$ read closes.csv | where ticker == 'ACME' | ewm close mean span=3 as=ema | select day,ema | json split
+{"columns":["day","ema"],"index":[0,1,2,3,4,5,6,7,8,9],"data":[[1,51.2],[2,51.6666666667],[3,51.6666666667],[4,52.2],[5,51.3703703704],[6,51.3703703704],[7,51.3703703704],[8,52.7987096774],[9,52.9240875912],[10,52.5224268689]]}
+$ read closes.csv | where ticker == 'GLOB' | ewm close std span=4 as=sd | select day,sd | json records precision=15
+[{"day":1,"sd":null},{"day":2,"sd":1.767766952966369},{"day":3,"sd":1.962661666290584},{"day":4,"sd":1.962661666290584},{"day":5,"sd":3.451465625462449},{"day":6,"sd":5.378301237875611},{"day":7,"sd":3.90698351350512},{"day":8,"sd":3.90698351350512},{"day":9,"sd":5.715278778989852},{"day":10,"sd":6.825268384361623}]
+$ read fees.csv dtype=fee:str | numeric fee | select id,fee,credits | json table
+{"schema":{"fields":[{"name":"index","type":"integer"},{"name":"id","type":"integer"},{"name":"fee","type":"number"},{"name":"credits","type":"integer"}],"primaryKey":["index"],"pandas_version":"1.4.0"},"data":[{"index":0,"id":101,"fee":12.5,"credits":10},{"index":1,"id":102,"fee":0.0,"credits":-4},{"index":2,"id":103,"fee":1200.0,"credits":250},{"index":3,"id":104,"fee":35.0,"credits":0},{"index":4,"id":105,"fee":null,"credits":75},{"index":5,"id":106,"fee":5.0,"credits":15},{"index":6,"id":107,"fee":12.5,"credits":10}]}
+$ read contacts.csv dtype=zip:str | numeric fee coerce | select id,fee | json records
+[{"id":101,"fee":12.5},{"id":102,"fee":0.0},{"id":103,"fee":null},{"id":104,"fee":35.0},{"id":105,"fee":null},{"id":106,"fee":null},{"id":107,"fee":12.5},{"id":108,"fee":null},{"id":109,"fee":1000.0},{"id":110,"fee":0.0},{"id":111,"fee":49.99},{"id":112,"fee":0.0}]
+$ read contacts.csv dtype=zip:str | str fee replace , \e | numeric fee coerce | agg plan fee:mean,visits:sum | json table
+{"schema":{"fields":[{"name":"index","type":"integer"},{"name":"plan","type":"string","extDtype":"str"},{"name":"fee_mean","type":"number"},{"name":"visits_sum","type":"integer"}],"primaryKey":["index"],"pandas_version":"1.4.0"},"data":[{"index":0,"plan":"free","fee_mean":0.0,"visits_sum":26},{"index":1,"plan":"pro","fee_mean":27.4975,"visits_sum":26},{"index":2,"plan":"team","fee_mean":1100.0,"visits_sum":37}]}
+$ read catalog.csv | combine vendor.csv on=sku | json records
+[{"sku":"k1","name":"Mug","price":8.0,"stock":40.0,"color":null,"weight":0.35},{"sku":"k2","name":"Kettle","price":24.0,"stock":7.0,"color":"white","weight":1.2},{"sku":"k3","name":"Desk lamp","price":39.0,"stock":12.0,"color":"black","weight":null},{"sku":"k4","name":"Teapot","price":31.5,"stock":null,"color":null,"weight":0.9},{"sku":"k5","name":"Notebook","price":4.5,"stock":200.0,"color":"red","weight":null}]
+$ read catalog.csv | update vendor.csv on=sku | json columns
+{"sku":{"0":"k3","1":"k1","2":"k5","3":"k2"},"name":{"0":"Desk lamp","1":"Ceramic mug","2":"Notebook A5","3":"Electric kettle"},"price":{"0":39.0,"1":8.0,"2":4.25,"3":24.0},"stock":{"0":12,"1":40,"2":200,"3":7},"color":{"0":"black","1":null,"2":"red","3":"white"}}
+$ read contacts.csv dtype=zip:str | cat name country sep=/ as=nc | select id,nc | head 3 | json records
+[{"id":101,"nc":"  alice SMITH \/US"},{"id":102,"nc":"BOB o'neil\/US"},{"id":103,"nc":"carol-ann lee\/US"}]
+$ read sci.csv
+name,x,raw
+avogadro,6.02214076e+23,6.02214076e+23
+planck,6.62607015e-34,6.62607015e-34
+tiny,1e-20,0.0
+edge,1e-15,1e-15
+below,9.9e-16,9.9e-16
+big,1.5e+17,1.5e+17
+e16,1e+16,1e+16
+under,9999999999999998.0,9999999999999998.0
+long,0.1234567890123456,0.1234567890123456
+imax,9.223372036854776e+18,9.223372036854778e+18
+odd,315667262066627.0,315667262066626.94
+inf,inf,-inf
+half,2.5,2.5
+neg,-0.125,-0.125
+$ read sci.csv | json values
+[["avogadro",6.02214076e+23,6.02214076e+23],["planck",6.62607015e-34,6.62607015e-34],["tiny",1e-20,0.0],["edge",0.0,0.0],["below",9.9e-16,9.9e-16],["big",1.5e+17,1.5e+17],["e16",10000000000000000.0,10000000000000000.0],["under",9999999999999998.0,9999999999999998.0],["long",0.123456789,0.123456789],["imax",9.223372037e+18,9.223372037e+18],["odd",315667262066627.0,315667262066626.9375],["inf",null,null],["half",2.5,2.5],["neg",-0.125,-0.125]]
+$ read sci.csv | json values precision=3
+[["avogadro",6.02e+23,6.02e+23],["planck",6.63e-34,6.63e-34],["tiny",1e-20,0.0],["edge",0.0,0.0],["below",9.9e-16,9.9e-16],["big",1.5e+17,1.5e+17],["e16",10000000000000000.0,10000000000000000.0],["under",9999999999999998.0,9999999999999998.0],["long",0.123,0.123],["imax",9.22e+18,9.22e+18],["odd",315667262066627.0,315667262066626.938],["inf",null,null],["half",2.5,2.5],["neg",-0.125,-0.125]]
+$ read sci.csv | json values precision=0
+[["avogadro",6e+23,6e+23],["planck",7e-34,7e-34],["tiny",1e-20,0],["edge",0,0],["below",1e-15,1e-15],["big",2e+17,2e+17],["e16",10000000000000000,10000000000000000],["under",9999999999999998,9999999999999998],["long",0,0],["imax",9e+18,9e+18],["odd",315667262066627,315667262066627],["inf",null,null],["half",3,3],["neg",-0,-0]]
+$ read sci.csv | json records precision=15
+[{"name":"avogadro","x":6.02214076e+23,"raw":6.02214076e+23},{"name":"planck","x":6.62607015e-34,"raw":6.62607015e-34},{"name":"tiny","x":1e-20,"raw":0.0},{"name":"edge","x":0.000000000000001,"raw":0.000000000000001},{"name":"below","x":9.9e-16,"raw":9.9e-16},{"name":"big","x":1.5e+17,"raw":1.5e+17},{"name":"e16","x":10000000000000000.0,"raw":10000000000000000.0},{"name":"under","x":9999999999999998.0,"raw":9999999999999998.0},{"name":"long","x":0.123456789012346,"raw":0.123456789012346},{"name":"imax","x":9.22337203685478e+18,"raw":9.22337203685478e+18},{"name":"odd","x":315667262066627.0,"raw":315667262066626.9375},{"name":"inf","x":null,"raw":null},{"name":"half","x":2.5,"raw":2.5},{"name":"neg","x":-0.125,"raw":-0.125}]
+$ read sci.csv | numeric raw | select name,x,raw
+name,x,raw
+avogadro,6.02214076e+23,6.02214076e+23
+planck,6.62607015e-34,6.62607015e-34
+tiny,1e-20,0.0
+edge,1e-15,1e-15
+below,9.9e-16,9.9e-16
+big,1.5e+17,1.5e+17
+e16,1e+16,1e+16
+under,9999999999999998.0,9999999999999998.0
+long,0.1234567890123456,0.1234567890123456
+imax,9.223372036854776e+18,9.223372036854778e+18
+odd,315667262066627.0,315667262066626.94
+inf,inf,-inf
+half,2.5,2.5
+neg,-0.125,-0.125
+$ read sci.csv | numeric raw | json values precision=15
+[["avogadro",6.02214076e+23,6.02214076e+23],["planck",6.62607015e-34,6.62607015e-34],["tiny",1e-20,0.0],["edge",0.000000000000001,0.000000000000001],["below",9.9e-16,9.9e-16],["big",1.5e+17,1.5e+17],["e16",10000000000000000.0,10000000000000000.0],["under",9999999999999998.0,9999999999999998.0],["long",0.123456789012346,0.123456789012346],["imax",9.22337203685478e+18,9.22337203685478e+18],["odd",315667262066627.0,315667262066626.9375],["inf",null,null],["half",2.5,2.5],["neg",-0.125,-0.125]]
+$ read sci.csv | where name != 'inf' | numeric raw | agg name x:sum,raw:sum | json split
+{"columns":["name","x_sum","raw_sum"],"index":[0,1,2,3,4,5,6,7,8,9,10,11,12],"data":[["avogadro",6.02214076e+23,6.02214076e+23],["below",9.9e-16,9.9e-16],["big",1.5e+17,1.5e+17],["e16",10000000000000000.0,10000000000000000.0],["edge",0.0,0.0],["half",2.5,2.5],["imax",9.223372037e+18,9.223372037e+18],["long",0.123456789,0.123456789],["neg",-0.125,-0.125],["odd",315667262066627.0,315667262066626.9375],["planck",6.62607015e-34,6.62607015e-34],["tiny",1e-20,0.0],["under",9999999999999998.0,9999999999999998.0]]}
