@@ -1,0 +1,1347 @@
+$ sheets sales_q3.xlsx
+sheets ['Orders', 'Summary', 'Lookups']
+epoch 1899-12-30
+'Orders' visible rows 1..32 cols 1..11 A1:K32
+'Summary' visible rows 1..9 cols 1..4 A1:D9
+'Lookups' visible rows 1..6 cols 1..6 A1:F6
+$ sheets stock_mac.xlsx
+sheets ['Count']
+epoch 1904-01-01
+'Count' visible rows 1..14 cols 1..14 A1:N14
+$ sheets crm_contacts.xlsx
+sheets ['Contacts']
+epoch 1899-12-30
+'Contacts' visible rows 1..None cols 1..None ! Worksheet is unsized, use calculate_dimension(force=True)
+$ sheets ledger_stale.xlsx
+sheets ['Ledger', 'Scratch', 'Config']
+epoch 1899-12-30
+'Ledger' visible rows 1..4 cols 1..3 A1:C4
+'Scratch' hidden rows 1..1 cols 1..1 A1:A1
+'Config' veryHidden rows 2..2 cols 2..2 B2:B2
+$ sheets survey.xlsx
+sheets ['Responses']
+epoch 1899-12-30
+'Responses' visible rows 1..10 cols 1..10 A1:J10
+$ sheets timesheet.xlsx
+sheets ['Week 41', 'Week 42']
+epoch 1899-12-30
+'Week 41' visible rows 1..13 cols 1..6 A1:F13
+'Week 42' visible rows 1..1 cols 1..6 A1:F1
+$ sheets stored.xlsx
+sheets ['Empty', 'Header only']
+epoch 1899-12-30
+'Empty' visible rows 1..1 cols 1..1 A1:A1
+'Header only' visible rows 1..1 cols 1..3 A1:C1
+$ rows sales_q3.xlsx Orders
+('Order ID', 'Order Date', 'Region', 'Rep', 'Units', 'Unit Price', 'Discount', 'Total', 'Shipped', 'Ship Time', 'Notes')
+(10301, datetime.datetime(2024, 7, 1, 0, 0), 'East', 'Cy Okafor', 36, 149, 0.05, 5095.8, False, datetime.timedelta(days=2, seconds=46860), None)
+(10302, datetime.datetime(2024, 7, 5, 0, 0), 'South', 'Ana Lima', 4, 0.85, 0.15, 2.8899999999999997, True, datetime.timedelta(days=1, seconds=5040), None)
+(10303, datetime.datetime(2024, 7, 8, 0, 0), 'West', 'Cy Okafor', 39, 0.85, None, 33.15, True, datetime.timedelta(seconds=56100), None)
+(10304, datetime.datetime(2024, 7, 12, 0, 0), 'South', 'Ana Lima', 1, 0.85, None, 0.85, True, datetime.timedelta(seconds=60720), 'call first')
+(10305, datetime.datetime(2024, 7, 15, 0, 0), 'South', 'Ana Lima', 34, 7.25, None, 246.5, False, datetime.timedelta(seconds=21540), 'URGENT - ship today')
+(10306, datetime.datetime(2024, 7, 16, 0, 0), 'North', 'Bo Chen', 16, 12.5, None, 200, True, datetime.timedelta(seconds=21420), None)
+(10307, datetime.datetime(2024, 7, 19, 0, 0), 'East', 'Dee Varga', 27, 149, None, 4023, True, datetime.timedelta(days=1, seconds=24660), 'call first')
+(10308, datetime.datetime(2024, 7, 24, 0, 0), 'South', 'Cy Okafor', 4, 19.99, 0.1, 71.964, True, datetime.timedelta(seconds=85380), None)
+(10309, datetime.datetime(2024, 7, 26, 0, 0), 'East', 'Bo Chen', 20, 0.85, 0.1, 15.3, False, datetime.timedelta(seconds=28140), None)
+(10310, datetime.datetime(2024, 7, 30, 0, 0), 'East', 'Ana Lima', 5, 19.99, None, 99.94999999999999, True, datetime.timedelta(days=2, seconds=58620), 'Dock 4_x000D_\nGate B')
+(10311, datetime.datetime(2024, 8, 2, 0, 0), 'West', 'Bo Chen', 38, 7.25, 0.05, 261.72499999999997, False, datetime.timedelta(days=1, seconds=52260), None)
+(10312, datetime.datetime(2024, 8, 5, 0, 0), 'North', 'Ana Lima', 4, 7.25, 0.05, '#N/A', False, datetime.timedelta(days=1, seconds=33360), 'call first')
+(10313, datetime.datetime(2024, 8, 6, 0, 0), 'West', 'Dee Varga', 37, 149, None, 5513, True, datetime.timedelta(days=1, seconds=8040), 'call first')
+(10314, datetime.datetime(2024, 8, 10, 0, 0), 'South', 'Cy Okafor', 13, 19.99, None, 259.87, True, datetime.timedelta(days=2, seconds=58800), '007')
+(10315, datetime.datetime(2024, 8, 13, 0, 0), 'North', 'Bo Chen', 34, 19.99, None, 679.66, True, datetime.timedelta(seconds=47340), None)
+(10316, datetime.datetime(2024, 8, 16, 0, 0), 'North', 'Ana Lima', 24, 7.25, 0.05, 165.29999999999998, False, datetime.timedelta(days=1, seconds=50940), None)
+(10317, datetime.datetime(2024, 8, 18, 0, 0), 'North', 'Cy Okafor', 13, 149, None, 1937, False, datetime.timedelta(days=1, seconds=62040), None)
+(None, None, None, None, None, None, None, None, None, None, None)
+(10318, datetime.datetime(2024, 8, 22, 0, 0), 'West', 'Dee Varga', 5, 19.99, 0.05, 94.95249999999999, True, datetime.timedelta(days=1, seconds=31140), 'call first')
+(10319, datetime.datetime(2024, 8, 24, 0, 0), 'East', 'Ana Lima', 12, 0.85, 0.05, 9.69, True, datetime.timedelta(seconds=34980), 'rush')
+(10320, datetime.datetime(2024, 8, 29, 0, 0), 'South', 'Cy Okafor', 27, 149, None, 4023, True, datetime.timedelta(seconds=10920), 'rush')
+(10321, datetime.datetime(2024, 8, 30, 0, 0), 'West', 'Bo Chen', 26, 19.99, 0.1, 467.766, False, datetime.timedelta(days=1, seconds=31680), None)
+(10322, datetime.datetime(2024, 9, 2, 0, 0), 'West', 'Cy Okafor', 10, 0.85, 0.15, 7.225, True, datetime.timedelta(days=1, seconds=23340), 'Fish & Chips Ltd <wholesale>')
+(10323, datetime.datetime(2024, 9, 6, 0, 0), 'North', 'Ana Lima', 7, 12.5, None, 87.5, True, datetime.timedelta(days=2, seconds=27180), None)
+(10324, datetime.datetime(2024, 9, 9, 0, 0), 'East', 'Ana Lima', 10, 149, None, 1490, False, datetime.timedelta(days=1, seconds=3660), None)
+(10325, datetime.datetime(2024, 9, 13, 0, 0), 'East', 'Ana Lima', 38, 0.85, None, 32.3, True, datetime.timedelta(seconds=76920), 'call first')
+(10326, datetime.datetime(2024, 9, 16, 0, 0), 'South', 'Cy Okafor', 28, 149, 0.15, 3546.2, True, datetime.timedelta(days=1, seconds=5220), None)
+(10327, datetime.datetime(2024, 9, 19, 0, 0), 'West', 'Bo Chen', 13, 7.25, None, 94.25, True, datetime.timedelta(seconds=48600), None)
+(10328, datetime.datetime(2024, 9, 20, 0, 0), 'North', 'Ana Lima', 39, 149, 0.1, 5229.900000000001, False, datetime.timedelta(days=2, seconds=4980), None)
+(10329, datetime.datetime(2024, 9, 23, 0, 0), 'North', 'Dee Varga', 8, 19.99, 0.1, 143.928, True, datetime.timedelta(days=2, seconds=52740), None)
+(10330, datetime.datetime(2024, 9, 28, 0, 0), 'West', 'Cy Okafor', 25, 19.99, 0.1, 449.775, True, datetime.timedelta(days=1, seconds=45780), None)
+(32 rows)
+$ rows sales_q3.xlsx Orders formulas
+('Order ID', 'Order Date', 'Region', 'Rep', 'Units', 'Unit Price', 'Discount', 'Total', 'Shipped', 'Ship Time', 'Notes')
+(10301, datetime.datetime(2024, 7, 1, 0, 0), 'East', 'Cy Okafor', 36, 149, 0.05, '=E2*F2*(1-G2)', False, datetime.timedelta(days=2, seconds=46860), None)
+(10302, datetime.datetime(2024, 7, 5, 0, 0), 'South', 'Ana Lima', 4, 0.85, 0.15, '=E3*F3*(1-G3)', True, datetime.timedelta(days=1, seconds=5040), None)
+(10303, datetime.datetime(2024, 7, 8, 0, 0), 'West', 'Cy Okafor', 39, 0.85, None, '=E4*F4*(1-G4)', True, datetime.timedelta(seconds=56100), None)
+(10304, datetime.datetime(2024, 7, 12, 0, 0), 'South', 'Ana Lima', 1, 0.85, None, '=E5*F5*(1-G5)', True, datetime.timedelta(seconds=60720), 'call first')
+(10305, datetime.datetime(2024, 7, 15, 0, 0), 'South', 'Ana Lima', 34, 7.25, None, '=E6*F6*(1-G6)', False, datetime.timedelta(seconds=21540), 'URGENT - ship today')
+(10306, datetime.datetime(2024, 7, 16, 0, 0), 'North', 'Bo Chen', 16, 12.5, None, '=E7*F7*(1-G7)', True, datetime.timedelta(seconds=21420), None)
+(10307, datetime.datetime(2024, 7, 19, 0, 0), 'East', 'Dee Varga', 27, 149, None, '=E8*F8*(1-G8)', True, datetime.timedelta(days=1, seconds=24660), 'call first')
+(10308, datetime.datetime(2024, 7, 24, 0, 0), 'South', 'Cy Okafor', 4, 19.99, 0.1, '=E9*F9*(1-G9)', True, datetime.timedelta(seconds=85380), None)
+(10309, datetime.datetime(2024, 7, 26, 0, 0), 'East', 'Bo Chen', 20, 0.85, 0.1, '=E10*F10*(1-G10)', False, datetime.timedelta(seconds=28140), None)
+(10310, datetime.datetime(2024, 7, 30, 0, 0), 'East', 'Ana Lima', 5, 19.99, None, '=E11*F11*(1-G11)', True, datetime.timedelta(days=2, seconds=58620), 'Dock 4_x000D_\nGate B')
+(10311, datetime.datetime(2024, 8, 2, 0, 0), 'West', 'Bo Chen', 38, 7.25, 0.05, '=E12*F12*(1-G12)', False, datetime.timedelta(days=1, seconds=52260), None)
+(10312, datetime.datetime(2024, 8, 5, 0, 0), 'North', 'Ana Lima', 4, 7.25, 0.05, '=VLOOKUP(A13,Lookups!A:B,2,FALSE)', False, datetime.timedelta(days=1, seconds=33360), 'call first')
+(10313, datetime.datetime(2024, 8, 6, 0, 0), 'West', 'Dee Varga', 37, 149, None, '=E14*F14*(1-G14)', True, datetime.timedelta(days=1, seconds=8040), 'call first')
+(10314, datetime.datetime(2024, 8, 10, 0, 0), 'South', 'Cy Okafor', 13, 19.99, None, '=E15*F15*(1-G15)', True, datetime.timedelta(days=2, seconds=58800), '007')
+(10315, datetime.datetime(2024, 8, 13, 0, 0), 'North', 'Bo Chen', 34, 19.99, None, '=E16*F16*(1-G16)', True, datetime.timedelta(seconds=47340), None)
+(10316, datetime.datetime(2024, 8, 16, 0, 0), 'North', 'Ana Lima', 24, 7.25, 0.05, '=E17*F17*(1-G17)', False, datetime.timedelta(days=1, seconds=50940), None)
+(10317, datetime.datetime(2024, 8, 18, 0, 0), 'North', 'Cy Okafor', 13, 149, None, '=E18*F18*(1-G18)', False, datetime.timedelta(days=1, seconds=62040), None)
+(None, None, None, None, None, None, None, None, None, None, None)
+(10318, datetime.datetime(2024, 8, 22, 0, 0), 'West', 'Dee Varga', 5, 19.99, 0.05, '=E20*F20*(1-G20)', True, datetime.timedelta(days=1, seconds=31140), 'call first')
+(10319, datetime.datetime(2024, 8, 24, 0, 0), 'East', 'Ana Lima', 12, 0.85, 0.05, '=E21*F21*(1-G21)', True, datetime.timedelta(seconds=34980), 'rush')
+(10320, datetime.datetime(2024, 8, 29, 0, 0), 'South', 'Cy Okafor', 27, 149, None, '=E22*F22*(1-G22)', True, datetime.timedelta(seconds=10920), 'rush')
+(10321, datetime.datetime(2024, 8, 30, 0, 0), 'West', 'Bo Chen', 26, 19.99, 0.1, '=E23*F23*(1-G23)', False, datetime.timedelta(days=1, seconds=31680), None)
+(10322, datetime.datetime(2024, 9, 2, 0, 0), 'West', 'Cy Okafor', 10, 0.85, 0.15, '=E24*F24*(1-G24)', True, datetime.timedelta(days=1, seconds=23340), 'Fish & Chips Ltd <wholesale>')
+(10323, datetime.datetime(2024, 9, 6, 0, 0), 'North', 'Ana Lima', 7, 12.5, None, '=E25*F25*(1-G25)', True, datetime.timedelta(days=2, seconds=27180), None)
+(10324, datetime.datetime(2024, 9, 9, 0, 0), 'East', 'Ana Lima', 10, 149, None, '=E26*F26*(1-G26)', False, datetime.timedelta(days=1, seconds=3660), None)
+(10325, datetime.datetime(2024, 9, 13, 0, 0), 'East', 'Ana Lima', 38, 0.85, None, '=E27*F27*(1-G27)', True, datetime.timedelta(seconds=76920), 'call first')
+(10326, datetime.datetime(2024, 9, 16, 0, 0), 'South', 'Cy Okafor', 28, 149, 0.15, '=E28*F28*(1-G28)', True, datetime.timedelta(days=1, seconds=5220), None)
+(10327, datetime.datetime(2024, 9, 19, 0, 0), 'West', 'Bo Chen', 13, 7.25, None, '=E29*F29*(1-G29)', True, datetime.timedelta(seconds=48600), None)
+(10328, datetime.datetime(2024, 9, 20, 0, 0), 'North', 'Ana Lima', 39, 149, 0.1, '=E30*F30*(1-G30)', False, datetime.timedelta(days=2, seconds=4980), None)
+(10329, datetime.datetime(2024, 9, 23, 0, 0), 'North', 'Dee Varga', 8, 19.99, 0.1, '=E31*F31*(1-G31)', True, datetime.timedelta(days=2, seconds=52740), None)
+(10330, datetime.datetime(2024, 9, 28, 0, 0), 'West', 'Cy Okafor', 25, 19.99, 0.1, '=E32*F32*(1-G32)', True, datetime.timedelta(days=1, seconds=45780), None)
+(32 rows)
+$ rows sales_q3.xlsx Orders min_row=1 max_row=4 min_col=6 max_col=9 formulas
+('Unit Price', 'Discount', 'Total', 'Shipped')
+(149, 0.05, '=E2*F2*(1-G2)', False)
+(0.85, 0.15, '=E3*F3*(1-G3)', True)
+(0.85, None, '=E4*F4*(1-G4)', True)
+(4 rows)
+$ cells sales_q3.xlsx Orders max_row=6
+A1 s 'General' False 'Order ID' | B1 s 'General' False 'Order Date' | C1 s 'General' False 'Region' | D1 s 'General' False 'Rep' | E1 s 'General' False 'Units' | F1 s 'General' False 'Unit Price' | G1 s 'General' False 'Discount' | H1 s 'General' False 'Total' | I1 s 'General' False 'Shipped' | J1 s 'General' False 'Ship Time' | K1 s 'General' False 'Notes'
+A2 n 'General' False 10301 | B2 d 'mm-dd-yy' True datetime.datetime(2024, 7, 1, 0, 0) | C2 s 'General' False 'East' | D2 s 'General' False 'Cy Okafor' | E2 n 'General' False 36 | F2 n '"$"#,##0.00' False 149 | G2 n '0%' False 0.05 | H2 n '"$"#,##0.00' False 5095.8 | I2 b 'General' False False | J2 d '[h]:mm' True datetime.timedelta(days=2, seconds=46860) | -
+A3 n 'General' False 10302 | B3 d 'mm-dd-yy' True datetime.datetime(2024, 7, 5, 0, 0) | C3 s 'General' False 'South' | D3 s 'General' False 'Ana Lima' | E3 n 'General' False 4 | F3 n '"$"#,##0.00' False 0.85 | G3 n '0%' False 0.15 | H3 n '"$"#,##0.00' False 2.8899999999999997 | I3 b 'General' False True | J3 d '[h]:mm' True datetime.timedelta(days=1, seconds=5040) | -
+A4 n 'General' False 10303 | B4 d 'mm-dd-yy' True datetime.datetime(2024, 7, 8, 0, 0) | C4 s 'General' False 'West' | D4 s 'General' False 'Cy Okafor' | E4 n 'General' False 39 | F4 n '"$"#,##0.00' False 0.85 | G4 n '0%' False None | H4 n '"$"#,##0.00' False 33.15 | I4 b 'General' False True | J4 d '[h]:mm' True datetime.timedelta(seconds=56100) | -
+A5 n 'General' False 10304 | B5 d 'mm-dd-yy' True datetime.datetime(2024, 7, 12, 0, 0) | C5 s 'General' False 'South' | D5 s 'General' False 'Ana Lima' | E5 n 'General' False 1 | F5 n '"$"#,##0.00' False 0.85 | G5 n '0%' False None | H5 n '"$"#,##0.00' False 0.85 | I5 b 'General' False True | J5 d '[h]:mm' True datetime.timedelta(seconds=60720) | K5 s 'General' False 'call first'
+A6 n 'General' False 10305 | B6 d 'mm-dd-yy' True datetime.datetime(2024, 7, 15, 0, 0) | C6 s 'General' False 'South' | D6 s 'General' False 'Ana Lima' | E6 n 'General' False 34 | F6 n '"$"#,##0.00' False 7.25 | G6 n '0%' False None | H6 n '"$"#,##0.00' False 246.5 | I6 b 'General' False False | J6 d '[h]:mm' True datetime.timedelta(seconds=21540) | K6 s 'General' False 'URGENT - ship today'
+(6 rows)
+$ cells sales_q3.xlsx Orders min_row=12 max_row=20 min_col=7 max_col=11 formulas
+G12 n '0%' False 0.05 | H12 f '"$"#,##0.00' False '=E12*F12*(1-G12)' | I12 b 'General' False False | J12 d '[h]:mm' True datetime.timedelta(days=1, seconds=52260) | -
+G13 n '0%' False 0.05 | H13 f '"$"#,##0.00' False '=VLOOKUP(A13,Lookups!A:B,2,FALSE)' | I13 b 'General' False False | J13 d '[h]:mm' True datetime.timedelta(days=1, seconds=33360) | K13 s 'General' False 'call first'
+G14 n '0%' False None | H14 f '"$"#,##0.00' False '=E14*F14*(1-G14)' | I14 b 'General' False True | J14 d '[h]:mm' True datetime.timedelta(days=1, seconds=8040) | K14 s 'General' False 'call first'
+G15 n '0%' False None | H15 f '"$"#,##0.00' False '=E15*F15*(1-G15)' | I15 b 'General' False True | J15 d '[h]:mm' True datetime.timedelta(days=2, seconds=58800) | K15 s '@' False '007'
+G16 n '0%' False None | H16 f '"$"#,##0.00' False '=E16*F16*(1-G16)' | I16 b 'General' False True | J16 d '[h]:mm' True datetime.timedelta(seconds=47340) | -
+G17 n '0%' False 0.05 | H17 f '"$"#,##0.00' False '=E17*F17*(1-G17)' | I17 b 'General' False False | J17 d '[h]:mm' True datetime.timedelta(days=1, seconds=50940) | -
+G18 n '0%' False None | H18 f '"$"#,##0.00' False '=E18*F18*(1-G18)' | I18 b 'General' False False | J18 d '[h]:mm' True datetime.timedelta(days=1, seconds=62040) | -
+- | - | - | - | -
+G20 n '0%' False 0.05 | H20 f '"$"#,##0.00' False '=E20*F20*(1-G20)' | I20 b 'General' False True | J20 d '[h]:mm' True datetime.timedelta(days=1, seconds=31140) | K20 s 'General' False 'call first'
+(9 rows)
+$ rows sales_q3.xlsx Summary
+('Q3 Sales Summary', None, None, None)
+('Generated 2024-10-01 from the CRM export', None, None, None)
+(None, None, None, None)
+('Region', 'Orders', 'Revenue', 'Share')
+('North', 9, 38211.4, 0.3275897913352631)
+('South', 6, 27450, 0.23533133494593164)
+('East', 7, 19980.55, 0.17129506391453314)
+('West', 8, 31002.1, 0.265783809804272)
+('Total', 30, 116644.05, 1)
+(9 rows)
+$ rows sales_q3.xlsx Summary formulas
+('Q3 Sales Summary', None, None, None)
+('Generated 2024-10-01 from the CRM export', None, None, None)
+(None, None, None, None)
+('Region', 'Orders', 'Revenue', 'Share')
+('North', '=COUNTIF(Orders!C:C,A5)', '=SUMIF(Orders!C:C,A5,Orders!H:H)', '=C5/$C$9')
+('South', '=COUNTIF(Orders!C:C,A6)', '=SUMIF(Orders!C:C,A6,Orders!H:H)', '=C6/$C$9')
+('East', '=COUNTIF(Orders!C:C,A7)', '=SUMIF(Orders!C:C,A7,Orders!H:H)', '=C7/$C$9')
+('West', '=COUNTIF(Orders!C:C,A8)', '=SUMIF(Orders!C:C,A8,Orders!H:H)', '=C8/$C$9')
+('Total', '=SUM(B5:B8)', '=SUM(C5:C8)', '=SUM(D5:D8)')
+(9 rows)
+$ cells sales_q3.xlsx Summary formulas
+A1 s 'General' False 'Q3 Sales Summary' | B1 n 'General' False None | C1 n 'General' False None | D1 n 'General' False None
+A2 s 'General' False 'Generated 2024-10-01 from the CRM export' | - | - | -
+- | - | - | -
+A4 s 'General' False 'Region' | B4 s 'General' False 'Orders' | C4 s 'General' False 'Revenue' | D4 s 'General' False 'Share'
+A5 s 'General' False 'North' | B5 f 'General' False '=COUNTIF(Orders!C:C,A5)' | C5 f '"$"#,##0.00' False '=SUMIF(Orders!C:C,A5,Orders!H:H)' | D5 f '0%' False '=C5/$C$9'
+A6 s 'General' False 'South' | B6 f 'General' False '=COUNTIF(Orders!C:C,A6)' | C6 f '"$"#,##0.00' False '=SUMIF(Orders!C:C,A6,Orders!H:H)' | D6 f '0%' False '=C6/$C$9'
+A7 s 'General' False 'East' | B7 f 'General' False '=COUNTIF(Orders!C:C,A7)' | C7 f '"$"#,##0.00' False '=SUMIF(Orders!C:C,A7,Orders!H:H)' | D7 f '0%' False '=C7/$C$9'
+A8 s 'General' False 'West' | B8 f 'General' False '=COUNTIF(Orders!C:C,A8)' | C8 f '"$"#,##0.00' False '=SUMIF(Orders!C:C,A8,Orders!H:H)' | D8 f '0%' False '=C8/$C$9'
+A9 s 'General' False 'Total' | B9 f 'General' False '=SUM(B5:B8)' | C9 f '"$"#,##0.00' False '=SUM(C5:C8)' | D9 f '0%' False '=SUM(D5:D8)'
+(9 rows)
+$ rows sales_q3.xlsx Lookups
+('Code', 'Region', None, 'Rep', 'Quota', 'Start')
+('N', 'North', None, 'Ana Lima', 120000, datetime.datetime(2019, 4, 1, 0, 0))
+('S', 'South', None, 'Bo Chen', 95000, datetime.datetime(2021, 1, 11, 0, 0))
+('E', 'East', None, 'Cy Okafor', 101500.5, datetime.datetime(2016, 9, 5, 0, 0))
+('W', 'West', None, 'Dee Varga', 88000, datetime.datetime(1900, 2, 28, 0, 0))
+('C', 'Central', None, None, None, None)
+(6 rows)
+$ cells sales_q3.xlsx Lookups min_col=5
+E1 s 'General' False 'Quota' | F1 s 'General' False 'Start'
+E2 n '#,##0' False 120000 | F2 d '[$-409]mmmm\\ d\\,\\ yyyy;@' True datetime.datetime(2019, 4, 1, 0, 0)
+E3 n '#,##0' False 95000 | F3 d '[$-409]mmmm\\ d\\,\\ yyyy;@' True datetime.datetime(2021, 1, 11, 0, 0)
+E4 n '#,##0' False 101500.5 | F4 d '[$-409]mmmm\\ d\\,\\ yyyy;@' True datetime.datetime(2016, 9, 5, 0, 0)
+E5 n '#,##0' False 88000 | F5 d '[$-409]mmmm\\ d\\,\\ yyyy;@' True datetime.datetime(1900, 2, 28, 0, 0)
+- | -
+(6 rows)
+$ rows stock_mac.xlsx Count
+('SKU', 'Counted', 'At', 'Last move', 'Lot date', 'Expires', 'Received', 'On hand', 'Bin', 'Cycle', 'Variance', 'Logged', 'Shift start', 'Batch')
+('SKU-0311', datetime.datetime(2023, 11, 6, 0, 0), datetime.time(7, 38, 57), datetime.datetime(2023, 11, 6, 7, 38, 57), 43734, datetime.datetime(2024, 11, 5, 0, 0), datetime.datetime(2023, 11, 3, 0, 0), 695, 130, datetime.time(0, 1, 9, 250000), -3.625, datetime.datetime(2023, 11, 6, 13, 38, 57), datetime.time(6, 0), 4400)
+('SKU-0318', datetime.datetime(2023, 11, 7, 0, 0), datetime.time(15, 59, 47), datetime.datetime(2023, 11, 7, 15, 59, 47), 43735, datetime.datetime(2024, 11, 6, 0, 0), datetime.datetime(2023, 11, 4, 0, 0), 719, 129, datetime.time(0, 6, 47, 550000), 9.75, datetime.datetime(2023, 11, 7, 21, 59, 47), datetime.time(14, 0), 4401)
+('SKU-0325', datetime.datetime(2023, 11, 8, 0, 0), datetime.time(9, 25, 8), datetime.datetime(2023, 11, 8, 9, 25, 8), 43736, datetime.datetime(2024, 11, 7, 0, 0), datetime.datetime(2023, 11, 5, 0, 0), 39, 122, datetime.time(0, 6, 46, 950000), -19.625, datetime.datetime(2023, 11, 8, 15, 25, 8), datetime.time(22, 0), 4402)
+('SKU-0332', datetime.datetime(2023, 11, 9, 0, 0), datetime.time(8, 9, 43), datetime.datetime(2023, 11, 9, 8, 9, 43), 43737, datetime.datetime(2024, 11, 8, 0, 0), datetime.datetime(2023, 11, 6, 0, 0), 57, 121, datetime.time(0, 6, 31, 850000), 2, datetime.datetime(2023, 11, 9, 14, 9, 43), datetime.time(6, 0), 4403)
+('SKU-0339', datetime.datetime(2023, 11, 10, 0, 0), datetime.time(9, 7, 45), datetime.datetime(2023, 11, 10, 9, 7, 45), 43738, datetime.datetime(2024, 11, 9, 0, 0), datetime.datetime(2023, 11, 7, 0, 0), 658, 136, datetime.time(0, 7, 58, 650000), -22.375, datetime.datetime(2023, 11, 10, 15, 7, 45), datetime.time(14, 0), 4404)
+('SKU-0346', datetime.datetime(2023, 11, 11, 0, 0), datetime.time(7, 41, 3), datetime.datetime(2023, 11, 11, 7, 41, 3), 43739, datetime.datetime(2024, 11, 10, 0, 0), datetime.datetime(2023, 11, 8, 0, 0), 555, 127, datetime.time(0, 8, 17, 250000), 24.875, datetime.datetime(2023, 11, 11, 13, 41, 3), datetime.time(22, 0), 4405)
+('SKU-0353', datetime.datetime(2023, 11, 12, 0, 0), datetime.time(15, 37, 42), datetime.datetime(2023, 11, 12, 15, 37, 42), 43740, datetime.datetime(2024, 11, 11, 0, 0), datetime.datetime(2023, 11, 9, 0, 0), 426, 129, datetime.time(0, 3, 35, 950000), 21.125, datetime.datetime(2023, 11, 12, 21, 37, 42), datetime.time(6, 0), 4406)
+('SKU-0360', datetime.datetime(2023, 11, 13, 0, 0), datetime.time(13, 55), datetime.datetime(2023, 11, 13, 13, 55), 43741, datetime.datetime(2024, 11, 12, 0, 0), datetime.datetime(2023, 11, 10, 0, 0), 788, 127, datetime.time(0, 4, 48, 550000), -12.75, datetime.datetime(2023, 11, 13, 19, 55), datetime.time(14, 0), 4407)
+('SKU-0367', datetime.datetime(2023, 11, 14, 0, 0), datetime.time(11, 27, 30), datetime.datetime(2023, 11, 14, 11, 27, 30), 43742, datetime.datetime(2024, 11, 13, 0, 0), datetime.datetime(2023, 11, 11, 0, 0), 115, 120, datetime.time(0, 6, 3, 950000), -9.25, datetime.datetime(2023, 11, 14, 17, 27, 30), datetime.time(22, 0), 4408)
+('SKU-0374', datetime.datetime(2023, 11, 15, 0, 0), datetime.time(13, 55, 9), datetime.datetime(2023, 11, 15, 13, 55, 9), 43743, datetime.datetime(2024, 11, 14, 0, 0), datetime.datetime(2023, 11, 12, 0, 0), 787, 138, datetime.time(0, 5, 36, 850000), -5.25, datetime.datetime(2023, 11, 15, 19, 55, 9), datetime.time(6, 0), 4409)
+('SKU-0381', datetime.datetime(2023, 11, 16, 0, 0), datetime.time(12, 25, 47), datetime.datetime(2023, 11, 16, 12, 25, 47), 43744, datetime.datetime(2024, 11, 15, 0, 0), datetime.datetime(2023, 11, 13, 0, 0), 672, 131, datetime.time(0, 4, 45, 350000), 2.75, datetime.datetime(2023, 11, 16, 18, 25, 47), datetime.time(14, 0), 4410)
+('SKU-0388', datetime.datetime(2023, 11, 17, 0, 0), datetime.time(9, 32, 11), datetime.datetime(2023, 11, 17, 9, 32, 11), 43745, datetime.datetime(2024, 11, 16, 0, 0), datetime.datetime(2023, 11, 14, 0, 0), 289, 110, datetime.time(0, 3, 50, 850000), -6.5, datetime.datetime(2023, 11, 17, 15, 32, 11), datetime.time(22, 0), 4411)
+('SKU-EDGE', datetime.time(0, 0), datetime.time(0, 0), datetime.datetime(1904, 1, 2, 12, 0), 0, datetime.datetime(1903, 12, 31, 0, 0), None, None, None, None, None, None, None, None)
+(14 rows)
+$ cells stock_mac.xlsx Count
+A1 s 'General' False 'SKU' | B1 s 'General' False 'Counted' | C1 s 'General' False 'At' | D1 s 'General' False 'Last move' | E1 s 'General' False 'Lot date' | F1 s 'General' False 'Expires' | G1 s 'General' False 'Received' | H1 s 'General' False 'On hand' | I1 s 'General' False 'Bin' | J1 s 'General' False 'Cycle' | K1 s 'General' False 'Variance' | L1 s 'General' False 'Logged' | M1 s 'General' False 'Shift start' | N1 s 'General' False 'Batch'
+A2 s 'General' False 'SKU-0311' | B2 d 'mm-dd-yy' True datetime.datetime(2023, 11, 6, 0, 0) | C2 d 'h:mm:ss' True datetime.time(7, 38, 57) | D2 d 'm/d/yy h:mm' True datetime.datetime(2023, 11, 6, 7, 38, 57) | E2 n 'General' False 43734 | F2 d 'yyyy\\-mm\\-dd' True datetime.datetime(2024, 11, 5, 0, 0) | G2 d '[$-F800]dddd\\,\\ mmmm\\ dd\\,\\ yyyy' True datetime.datetime(2023, 11, 3, 0, 0) | H2 n '[Red]#,##0' False 695 | I2 n '"Bin "0' False 130 | J2 d 'mm:ss.0' True datetime.time(0, 1, 9, 250000) | K2 n '0.00_);[Red]\\(0.00\\)' False -3.625 | L2 d 'd/m/yyyy h:mm:ss' True datetime.datetime(2023, 11, 6, 13, 38, 57) | M2 d 'h:mm' True datetime.time(6, 0) | N2 n 'General' False 4400
+A3 s 'General' False 'SKU-0318' | B3 d 'mm-dd-yy' True datetime.datetime(2023, 11, 7, 0, 0) | C3 d 'h:mm:ss' True datetime.time(15, 59, 47) | D3 d 'm/d/yy h:mm' True datetime.datetime(2023, 11, 7, 15, 59, 47) | E3 n 'General' False 43735 | F3 d 'yyyy\\-mm\\-dd' True datetime.datetime(2024, 11, 6, 0, 0) | G3 d '[$-F800]dddd\\,\\ mmmm\\ dd\\,\\ yyyy' True datetime.datetime(2023, 11, 4, 0, 0) | H3 n '[Red]#,##0' False 719 | I3 n '"Bin "0' False 129 | J3 d 'mm:ss.0' True datetime.time(0, 6, 47, 550000) | K3 n '0.00_);[Red]\\(0.00\\)' False 9.75 | L3 d 'd/m/yyyy h:mm:ss' True datetime.datetime(2023, 11, 7, 21, 59, 47) | M3 d 'h:mm' True datetime.time(14, 0) | N3 n 'General' False 4401
+A4 s 'General' False 'SKU-0325' | B4 d 'mm-dd-yy' True datetime.datetime(2023, 11, 8, 0, 0) | C4 d 'h:mm:ss' True datetime.time(9, 25, 8) | D4 d 'm/d/yy h:mm' True datetime.datetime(2023, 11, 8, 9, 25, 8) | E4 n 'General' False 43736 | F4 d 'yyyy\\-mm\\-dd' True datetime.datetime(2024, 11, 7, 0, 0) | G4 d '[$-F800]dddd\\,\\ mmmm\\ dd\\,\\ yyyy' True datetime.datetime(2023, 11, 5, 0, 0) | H4 n '[Red]#,##0' False 39 | I4 n '"Bin "0' False 122 | J4 d 'mm:ss.0' True datetime.time(0, 6, 46, 950000) | K4 n '0.00_);[Red]\\(0.00\\)' False -19.625 | L4 d 'd/m/yyyy h:mm:ss' True datetime.datetime(2023, 11, 8, 15, 25, 8) | M4 d 'h:mm' True datetime.time(22, 0) | N4 n 'General' False 4402
+A5 s 'General' False 'SKU-0332' | B5 d 'mm-dd-yy' True datetime.datetime(2023, 11, 9, 0, 0) | C5 d 'h:mm:ss' True datetime.time(8, 9, 43) | D5 d 'm/d/yy h:mm' True datetime.datetime(2023, 11, 9, 8, 9, 43) | E5 n 'General' False 43737 | F5 d 'yyyy\\-mm\\-dd' True datetime.datetime(2024, 11, 8, 0, 0) | G5 d '[$-F800]dddd\\,\\ mmmm\\ dd\\,\\ yyyy' True datetime.datetime(2023, 11, 6, 0, 0) | H5 n '[Red]#,##0' False 57 | I5 n '"Bin "0' False 121 | J5 d 'mm:ss.0' True datetime.time(0, 6, 31, 850000) | K5 n '0.00_);[Red]\\(0.00\\)' False 2 | L5 d 'd/m/yyyy h:mm:ss' True datetime.datetime(2023, 11, 9, 14, 9, 43) | M5 d 'h:mm' True datetime.time(6, 0) | N5 n 'General' False 4403
+A6 s 'General' False 'SKU-0339' | B6 d 'mm-dd-yy' True datetime.datetime(2023, 11, 10, 0, 0) | C6 d 'h:mm:ss' True datetime.time(9, 7, 45) | D6 d 'm/d/yy h:mm' True datetime.datetime(2023, 11, 10, 9, 7, 45) | E6 n 'General' False 43738 | F6 d 'yyyy\\-mm\\-dd' True datetime.datetime(2024, 11, 9, 0, 0) | G6 d '[$-F800]dddd\\,\\ mmmm\\ dd\\,\\ yyyy' True datetime.datetime(2023, 11, 7, 0, 0) | H6 n '[Red]#,##0' False 658 | I6 n '"Bin "0' False 136 | J6 d 'mm:ss.0' True datetime.time(0, 7, 58, 650000) | K6 n '0.00_);[Red]\\(0.00\\)' False -22.375 | L6 d 'd/m/yyyy h:mm:ss' True datetime.datetime(2023, 11, 10, 15, 7, 45) | M6 d 'h:mm' True datetime.time(14, 0) | N6 n 'General' False 4404
+A7 s 'General' False 'SKU-0346' | B7 d 'mm-dd-yy' True datetime.datetime(2023, 11, 11, 0, 0) | C7 d 'h:mm:ss' True datetime.time(7, 41, 3) | D7 d 'm/d/yy h:mm' True datetime.datetime(2023, 11, 11, 7, 41, 3) | E7 n 'General' False 43739 | F7 d 'yyyy\\-mm\\-dd' True datetime.datetime(2024, 11, 10, 0, 0) | G7 d '[$-F800]dddd\\,\\ mmmm\\ dd\\,\\ yyyy' True datetime.datetime(2023, 11, 8, 0, 0) | H7 n '[Red]#,##0' False 555 | I7 n '"Bin "0' False 127 | J7 d 'mm:ss.0' True datetime.time(0, 8, 17, 250000) | K7 n '0.00_);[Red]\\(0.00\\)' False 24.875 | L7 d 'd/m/yyyy h:mm:ss' True datetime.datetime(2023, 11, 11, 13, 41, 3) | M7 d 'h:mm' True datetime.time(22, 0) | N7 n 'General' False 4405
+A8 s 'General' False 'SKU-0353' | B8 d 'mm-dd-yy' True datetime.datetime(2023, 11, 12, 0, 0) | C8 d 'h:mm:ss' True datetime.time(15, 37, 42) | D8 d 'm/d/yy h:mm' True datetime.datetime(2023, 11, 12, 15, 37, 42) | E8 n 'General' False 43740 | F8 d 'yyyy\\-mm\\-dd' True datetime.datetime(2024, 11, 11, 0, 0) | G8 d '[$-F800]dddd\\,\\ mmmm\\ dd\\,\\ yyyy' True datetime.datetime(2023, 11, 9, 0, 0) | H8 n '[Red]#,##0' False 426 | I8 n '"Bin "0' False 129 | J8 d 'mm:ss.0' True datetime.time(0, 3, 35, 950000) | K8 n '0.00_);[Red]\\(0.00\\)' False 21.125 | L8 d 'd/m/yyyy h:mm:ss' True datetime.datetime(2023, 11, 12, 21, 37, 42) | M8 d 'h:mm' True datetime.time(6, 0) | N8 n 'General' False 4406
+A9 s 'General' False 'SKU-0360' | B9 d 'mm-dd-yy' True datetime.datetime(2023, 11, 13, 0, 0) | C9 d 'h:mm:ss' True datetime.time(13, 55) | D9 d 'm/d/yy h:mm' True datetime.datetime(2023, 11, 13, 13, 55) | E9 n 'General' False 43741 | F9 d 'yyyy\\-mm\\-dd' True datetime.datetime(2024, 11, 12, 0, 0) | G9 d '[$-F800]dddd\\,\\ mmmm\\ dd\\,\\ yyyy' True datetime.datetime(2023, 11, 10, 0, 0) | H9 n '[Red]#,##0' False 788 | I9 n '"Bin "0' False 127 | J9 d 'mm:ss.0' True datetime.time(0, 4, 48, 550000) | K9 n '0.00_);[Red]\\(0.00\\)' False -12.75 | L9 d 'd/m/yyyy h:mm:ss' True datetime.datetime(2023, 11, 13, 19, 55) | M9 d 'h:mm' True datetime.time(14, 0) | N9 n 'General' False 4407
+A10 s 'General' False 'SKU-0367' | B10 d 'mm-dd-yy' True datetime.datetime(2023, 11, 14, 0, 0) | C10 d 'h:mm:ss' True datetime.time(11, 27, 30) | D10 d 'm/d/yy h:mm' True datetime.datetime(2023, 11, 14, 11, 27, 30) | E10 n 'General' False 43742 | F10 d 'yyyy\\-mm\\-dd' True datetime.datetime(2024, 11, 13, 0, 0) | G10 d '[$-F800]dddd\\,\\ mmmm\\ dd\\,\\ yyyy' True datetime.datetime(2023, 11, 11, 0, 0) | H10 n '[Red]#,##0' False 115 | I10 n '"Bin "0' False 120 | J10 d 'mm:ss.0' True datetime.time(0, 6, 3, 950000) | K10 n '0.00_);[Red]\\(0.00\\)' False -9.25 | L10 d 'd/m/yyyy h:mm:ss' True datetime.datetime(2023, 11, 14, 17, 27, 30) | M10 d 'h:mm' True datetime.time(22, 0) | N10 n 'General' False 4408
+A11 s 'General' False 'SKU-0374' | B11 d 'mm-dd-yy' True datetime.datetime(2023, 11, 15, 0, 0) | C11 d 'h:mm:ss' True datetime.time(13, 55, 9) | D11 d 'm/d/yy h:mm' True datetime.datetime(2023, 11, 15, 13, 55, 9) | E11 n 'General' False 43743 | F11 d 'yyyy\\-mm\\-dd' True datetime.datetime(2024, 11, 14, 0, 0) | G11 d '[$-F800]dddd\\,\\ mmmm\\ dd\\,\\ yyyy' True datetime.datetime(2023, 11, 12, 0, 0) | H11 n '[Red]#,##0' False 787 | I11 n '"Bin "0' False 138 | J11 d 'mm:ss.0' True datetime.time(0, 5, 36, 850000) | K11 n '0.00_);[Red]\\(0.00\\)' False -5.25 | L11 d 'd/m/yyyy h:mm:ss' True datetime.datetime(2023, 11, 15, 19, 55, 9) | M11 d 'h:mm' True datetime.time(6, 0) | N11 n 'General' False 4409
+A12 s 'General' False 'SKU-0381' | B12 d 'mm-dd-yy' True datetime.datetime(2023, 11, 16, 0, 0) | C12 d 'h:mm:ss' True datetime.time(12, 25, 47) | D12 d 'm/d/yy h:mm' True datetime.datetime(2023, 11, 16, 12, 25, 47) | E12 n 'General' False 43744 | F12 d 'yyyy\\-mm\\-dd' True datetime.datetime(2024, 11, 15, 0, 0) | G12 d '[$-F800]dddd\\,\\ mmmm\\ dd\\,\\ yyyy' True datetime.datetime(2023, 11, 13, 0, 0) | H12 n '[Red]#,##0' False 672 | I12 n '"Bin "0' False 131 | J12 d 'mm:ss.0' True datetime.time(0, 4, 45, 350000) | K12 n '0.00_);[Red]\\(0.00\\)' False 2.75 | L12 d 'd/m/yyyy h:mm:ss' True datetime.datetime(2023, 11, 16, 18, 25, 47) | M12 d 'h:mm' True datetime.time(14, 0) | N12 n 'General' False 4410
+A13 s 'General' False 'SKU-0388' | B13 d 'mm-dd-yy' True datetime.datetime(2023, 11, 17, 0, 0) | C13 d 'h:mm:ss' True datetime.time(9, 32, 11) | D13 d 'm/d/yy h:mm' True datetime.datetime(2023, 11, 17, 9, 32, 11) | E13 n 'General' False 43745 | F13 d 'yyyy\\-mm\\-dd' True datetime.datetime(2024, 11, 16, 0, 0) | G13 d '[$-F800]dddd\\,\\ mmmm\\ dd\\,\\ yyyy' True datetime.datetime(2023, 11, 14, 0, 0) | H13 n '[Red]#,##0' False 289 | I13 n '"Bin "0' False 110 | J13 d 'mm:ss.0' True datetime.time(0, 3, 50, 850000) | K13 n '0.00_);[Red]\\(0.00\\)' False -6.5 | L13 d 'd/m/yyyy h:mm:ss' True datetime.datetime(2023, 11, 17, 15, 32, 11) | M13 d 'h:mm' True datetime.time(22, 0) | N13 n 'General' False 4411
+A14 s 'General' False 'SKU-EDGE' | B14 d 'mm-dd-yy' True datetime.time(0, 0) | C14 d 'h:mm:ss' True datetime.time(0, 0) | D14 d 'm/d/yy h:mm' True datetime.datetime(1904, 1, 2, 12, 0) | E14 n 'General' False 0 | F14 d 'yyyy\\-mm\\-dd' True datetime.datetime(1903, 12, 31, 0, 0) | - | - | - | - | - | - | - | -
+(14 rows)
+$ rows crm_contacts.xlsx Contacts
+('Name', 'Email', 'Phone', 'Zip', 'Since', 'Opt in', 'Score', 'Tier', 'Signed')
+('Okonkwo, Ada', 'ada.okonkwo@example.com', '+1 415 555 0134', '02134', datetime.date(2021, 3, 4), True, 1000.0, 'Gold', '2021-03-04')
+('  Rui Tanaka ', 'rui@example.org', '415-555-0199', '94107', datetime.datetime(2022, 11, 30, 8, 15), False, 250, 'Silver', 'n/a')
+('Marta Nowak', None, '(212) 555-0100', '10001', datetime.date(2020, 1, 15), True, 0.5, None, '2022-12-01')
+('Lee & Partners', 'office@example.net', None, '00501', datetime.date(2019, 7, 4), False, -12.75, 'Bronze', 'NA')
+('Zoë Ångström', 'zoe@example.se', '+46 8 555 010 00', '11122', datetime.datetime(2023, 5, 9, 23, 59, 59, 500000), True, 0.0125, 'Gold', '-')
+(6 rows)
+$ cells crm_contacts.xlsx Contacts
+A1 s 'General' False 'Name' | B1 s 'General' False 'Email' | C1 s 'General' False 'Phone' | D1 s 'General' False 'Zip' | E1 s 'General' False 'Since' | F1 s 'General' False 'Opt in' | G1 s 'General' False 'Score' | H1 s 'General' False 'Tier' | I1 s 'General' False 'Signed'
+A2 s 'General' False 'Okonkwo, Ada' | B2 s 'General' False 'ada.okonkwo@example.com' | C2 s 'General' False '+1 415 555 0134' | D2 s 'General' False '02134' | E2 d 'General' True datetime.date(2021, 3, 4) | F2 b 'General' False True | G2 n 'General' False 1000.0 | H2 s 'General' False 'Gold' | I2 s 'General' False '2021-03-04'
+A3 s 'General' False '  Rui Tanaka ' | B3 s 'General' False 'rui@example.org' | C3 s 'General' False '415-555-0199' | D3 s 'General' False '94107' | E3 d 'General' True datetime.datetime(2022, 11, 30, 8, 15) | F3 b 'General' False False | G3 n 'General' False 250 | H3 s 'General' False 'Silver' | I3 s 'General' False 'n/a'
+A4 s 'General' False 'Marta Nowak' | B4 n 'General' False None | C4 s 'General' False '(212) 555-0100' | D4 s 'General' False '10001' | E4 d 'General' True datetime.date(2020, 1, 15) | F4 b 'General' False True | G4 n 'General' False 0.5 | H4 n 'General' False None | I4 s 'General' False '2022-12-01'
+A5 s 'General' False 'Lee & Partners' | B5 s 'General' False 'office@example.net' | C5 n 'General' False None | D5 s 'General' False '00501' | E5 d 'General' True datetime.date(2019, 7, 4) | F5 b 'General' False False | G5 n 'General' False -12.75 | H5 s 'General' False 'Bronze' | I5 s 'General' False 'NA'
+A6 s 'General' False 'Zoë Ångström' | B6 s 'General' False 'zoe@example.se' | C6 s 'General' False '+46 8 555 010 00' | D6 s 'General' False '11122' | E6 d 'General' True datetime.datetime(2023, 5, 9, 23, 59, 59, 500000) | F6 b 'General' False True | G6 n 'General' False 0.0125 | H6 s 'General' False 'Gold' | I6 s 'General' False '-'
+(6 rows)
+$ rows ledger_stale.xlsx Ledger
+('Date', 'Account', 'Memo')
+(datetime.datetime(2024, 9, 2, 0, 0), '4000 Sales', None)
+(datetime.datetime(2024, 9, 4, 0, 0), '6200 Rent', 'INV-2291 partial')
+(datetime.datetime(2024, 9, 6, 0, 0), '5100 Freight', None)
+(4 rows)
+$ rows ledger_stale.xlsx Ledger reset
+('Date', 'Account', 'Memo', 'Debit', 'Credit', 'Balance')
+(datetime.datetime(2024, 9, 2, 0, 0), '4000 Sales', None, 484.69, None, 1484.69)
+(datetime.datetime(2024, 9, 4, 0, 0), '6200 Rent', 'INV-2291 partial', None, 333.95, 1150.74)
+(datetime.datetime(2024, 9, 6, 0, 0), '5100 Freight', None, None, 73.05, 1077.69)
+(datetime.datetime(2024, 9, 8, 0, 0), '5100 Freight', None, None, 264.13, 813.56)
+(datetime.datetime(2024, 9, 10, 0, 0), '1200 Receivables', None, 177.47, None, 991.03)
+(datetime.datetime(2024, 9, 12, 0, 0), '6200 Rent', 'reversal of 9/3', 854.15, None, 1845.18)
+(datetime.datetime(2024, 9, 14, 0, 0), '1200 Receivables', None, None, 467.37, 1377.81)
+(datetime.datetime(2024, 9, 16, 0, 0), '5100 Freight', None, 126.15, None, 1503.96)
+(datetime.datetime(2024, 9, 18, 0, 0), '4000 Sales', None, None, 423.29, 1080.67)
+(datetime.datetime(2024, 9, 20, 0, 0), '5100 Freight', '  ', 814.1, None, 1894.77)
+(datetime.datetime(2024, 9, 22, 0, 0), '5100 Freight', None, 792.86, None, 2687.63)
+(12 rows)
+$ rows ledger_stale.xlsx Ledger reset formulas
+('Date', 'Account', 'Memo', 'Debit', 'Credit', 'Balance')
+(datetime.datetime(2024, 9, 2, 0, 0), '4000 Sales', None, 484.69, None, 1484.69)
+(datetime.datetime(2024, 9, 4, 0, 0), '6200 Rent', 'INV-2291 partial', None, 333.95, '=ROUND(F2 +  D3-E3,2)')
+(datetime.datetime(2024, 9, 6, 0, 0), '5100 Freight', None, None, 73.05, '=ROUND(F3 + D4-E4,2)')
+(datetime.datetime(2024, 9, 8, 0, 0), '5100 Freight', None, None, 264.13, '=ROUND(F4 + D5-E5,2)')
+(datetime.datetime(2024, 9, 10, 0, 0), '1200 Receivables', None, 177.47, None, '=ROUND(F5 + D6-E6,2)')
+(datetime.datetime(2024, 9, 12, 0, 0), '6200 Rent', 'reversal of 9/3', 854.15, None, '=ROUND(F6 + D7-E7,2)')
+(datetime.datetime(2024, 9, 14, 0, 0), '1200 Receivables', None, None, 467.37, '=ROUND(F7 + D8-E8,2)')
+(datetime.datetime(2024, 9, 16, 0, 0), '5100 Freight', None, 126.15, None, '=ROUND(F8 + D9-E9,2)')
+(datetime.datetime(2024, 9, 18, 0, 0), '4000 Sales', None, None, 423.29, '=ROUND(F9 + D10-E10,2)')
+(datetime.datetime(2024, 9, 20, 0, 0), '5100 Freight', '  ', 814.1, None, '=ROUND(F10 + D11-E11,2)')
+(datetime.datetime(2024, 9, 22, 0, 0), '5100 Freight', None, 792.86, None, '=ROUND(F11 + D12-E12,2)')
+(12 rows)
+$ rows ledger_stale.xlsx Ledger max_row=20 max_col=7
+('Date', 'Account', 'Memo', 'Debit', 'Credit', 'Balance', None)
+(datetime.datetime(2024, 9, 2, 0, 0), '4000 Sales', None, 484.69, None, 1484.69, None)
+(datetime.datetime(2024, 9, 4, 0, 0), '6200 Rent', 'INV-2291 partial', None, 333.95, 1150.74, None)
+(datetime.datetime(2024, 9, 6, 0, 0), '5100 Freight', None, None, 73.05, 1077.69, None)
+(datetime.datetime(2024, 9, 8, 0, 0), '5100 Freight', None, None, 264.13, 813.56, None)
+(datetime.datetime(2024, 9, 10, 0, 0), '1200 Receivables', None, 177.47, None, 991.03, None)
+(datetime.datetime(2024, 9, 12, 0, 0), '6200 Rent', 'reversal of 9/3', 854.15, None, 1845.18, None)
+(datetime.datetime(2024, 9, 14, 0, 0), '1200 Receivables', None, None, 467.37, 1377.81, None)
+(datetime.datetime(2024, 9, 16, 0, 0), '5100 Freight', None, 126.15, None, 1503.96, None)
+(datetime.datetime(2024, 9, 18, 0, 0), '4000 Sales', None, None, 423.29, 1080.67, None)
+(datetime.datetime(2024, 9, 20, 0, 0), '5100 Freight', '  ', 814.1, None, 1894.77, None)
+(datetime.datetime(2024, 9, 22, 0, 0), '5100 Freight', None, 792.86, None, 2687.63, None)
+(12 rows)
+$ rows ledger_stale.xlsx Config
+(None, 'secret sauce')
+(1 rows)
+$ rows survey.xlsx Responses
+(None, 'About you', 'About you', 'Ratings', 'Ratings', 'Ratings', 'Ratings', None, None, None)
+('Respondent', 'Age', 'Team', 'Tools', 'Support', 'Tools', None, 'Comment', None, None)
+(101, 34, 'Ops', 4, 5, 3, 2, 'fine', None, None)
+(102, 'N/A', 'Dev', 5, 'N/A', 4, 4, None, None, None)
+(103, 51, 'Dev', 2, 3, '-', 1, 'slow laptop', None, None)
+(104, 28, None, 3, 4, 5, None, None, None, None)
+(105, '41', 'Sales', 'five', 2, 3, 3, 'more training', None, None)
+(106, 39.5, 'Ops', 4, 4, 4, 4, 'N/A', None, None)
+(None, None, None, None, None, None, None, None, None, None)
+(None, None, None, None, None, None, None, None, None, None)
+(10 rows)
+$ rows timesheet.xlsx Week\s41
+('Timesheet', None, None, None, None, None)
+('Employee', 'Day', 'In', 'Out', 'Break', 'Hours')
+('Priya', datetime.datetime(2024, 10, 7, 0, 0), datetime.time(9, 15), datetime.time(17, 15), datetime.timedelta(seconds=2700), None)
+('Tomasz', datetime.datetime(2024, 10, 7, 0, 0), datetime.time(8, 30), datetime.time(16, 15), datetime.timedelta(seconds=2700), None)
+('Kwame', datetime.datetime(2024, 10, 7, 0, 0), datetime.time(9, 30), datetime.time(15, 45), datetime.timedelta(seconds=1800), None)
+('Priya', datetime.datetime(2024, 10, 8, 0, 0), datetime.time(9, 30), datetime.time(17, 0), datetime.timedelta(seconds=3600), None)
+('Tomasz', datetime.datetime(2024, 10, 8, 0, 0), datetime.time(7, 45), datetime.time(15, 45, 30), datetime.timedelta(seconds=1800), None)
+('Kwame', datetime.datetime(2024, 10, 8, 0, 0), datetime.time(7, 45), datetime.time(17, 30), None, None)
+('Priya', datetime.datetime(2024, 10, 9, 0, 0), datetime.time(9, 0), datetime.time(17, 45), datetime.timedelta(seconds=3600), None)
+('Tomasz', datetime.datetime(2024, 10, 9, 0, 0), datetime.time(9, 15), datetime.time(17, 15), datetime.timedelta(seconds=2700), None)
+('Kwame', datetime.datetime(2024, 10, 9, 0, 0), datetime.time(7, 30), datetime.time(15, 0), datetime.timedelta(seconds=3600), None)
+('Total', None, None, None, None, None)
+('Signed off', datetime.datetime(2024, 10, 11, 17, 42, 9, 250000), None, None, None, None)
+(13 rows)
+$ rows timesheet.xlsx Week\s41 formulas
+('Timesheet', None, None, None, None, None)
+('Employee', 'Day', 'In', 'Out', 'Break', 'Hours')
+('Priya', datetime.datetime(2024, 10, 7, 0, 0), datetime.time(9, 15), datetime.time(17, 15), datetime.timedelta(seconds=2700), '=(D3-C3)*24-E3*24')
+('Tomasz', datetime.datetime(2024, 10, 7, 0, 0), datetime.time(8, 30), datetime.time(16, 15), datetime.timedelta(seconds=2700), '=(D4-C4)*24-E4*24')
+('Kwame', datetime.datetime(2024, 10, 7, 0, 0), datetime.time(9, 30), datetime.time(15, 45), datetime.timedelta(seconds=1800), '=(D5-C5)*24-E5*24')
+('Priya', datetime.datetime(2024, 10, 8, 0, 0), datetime.time(9, 30), datetime.time(17, 0), datetime.timedelta(seconds=3600), '=(D6-C6)*24-E6*24')
+('Tomasz', datetime.datetime(2024, 10, 8, 0, 0), datetime.time(7, 45), datetime.time(15, 45, 30), datetime.timedelta(seconds=1800), '=(D7-C7)*24-E7*24')
+('Kwame', datetime.datetime(2024, 10, 8, 0, 0), datetime.time(7, 45), datetime.time(17, 30), None, '=(D8-C8)*24-E8*24')
+('Priya', datetime.datetime(2024, 10, 9, 0, 0), datetime.time(9, 0), datetime.time(17, 45), datetime.timedelta(seconds=3600), '=(D9-C9)*24-E9*24')
+('Tomasz', datetime.datetime(2024, 10, 9, 0, 0), datetime.time(9, 15), datetime.time(17, 15), datetime.timedelta(seconds=2700), '=(D10-C10)*24-E10*24')
+('Kwame', datetime.datetime(2024, 10, 9, 0, 0), datetime.time(7, 30), datetime.time(15, 0), datetime.timedelta(seconds=3600), '=(D11-C11)*24-E11*24')
+('Total', None, None, None, None, '=SUM(F3:F11)')
+('Signed off', datetime.datetime(2024, 10, 11, 17, 42, 9, 250000), None, None, None, None)
+(13 rows)
+$ cells timesheet.xlsx Week\s41 min_row=3 max_row=4
+A3 s 'General' False 'Priya' | B3 d 'yyyy-mm-dd' True datetime.datetime(2024, 10, 7, 0, 0) | C3 d 'h:mm:ss' True datetime.time(9, 15) | D3 d 'h:mm:ss' True datetime.time(17, 15) | E3 d '[hh]:mm:ss' True datetime.timedelta(seconds=2700) | F3 n 'General' False None
+A4 s 'General' False 'Tomasz' | B4 d 'yyyy-mm-dd' True datetime.datetime(2024, 10, 7, 0, 0) | C4 d 'h:mm:ss' True datetime.time(8, 30) | D4 d 'h:mm:ss' True datetime.time(16, 15) | E4 d '[hh]:mm:ss' True datetime.timedelta(seconds=2700) | F4 n 'General' False None
+(2 rows)
+$ rows timesheet.xlsx Week\s42
+('Employee', 'Day', 'In', 'Out', 'Break', 'Hours')
+(1 rows)
+$ rows stored.xlsx Empty
+(0 rows)
+$ rows stored.xlsx Header\sonly
+('id', 'name', 'amount')
+(1 rows)
+$ rows sales_q3.xlsx Missing
+! KeyError: 'Worksheet Missing does not exist.'
+$ sheets renamed.xlsx
+! BadZipFile: File is not a zip file
+$ sheets photos.xlsx
+! OSError: File contains no valid workbook part
+$ sheets old.xls
+! InvalidFileException: openpyxl does not support the old .xls file format, please use xlrd to read this file, or convert it to the more recent .xlsx file format.
+$ sheets nowhere.xlsx
+! FileNotFoundError: [Errno 2] No such file or directory: 'data/nowhere.xlsx'
+$ read sales_q3.xlsx
+shape (31, 11)
+  'Order ID': float64
+  'Order Date': datetime64[us]
+  'Region': str
+  'Rep': str
+  'Units': float64
+  'Unit Price': float64
+  'Discount': float64
+  'Total': float64
+  'Shipped': float64
+  'Ship Time': timedelta64[us]
+  'Notes': str
+Order ID,Order Date,Region,Rep,Units,Unit Price,Discount,Total,Shipped,Ship Time,Notes
+10301.0,2024-07-01,East,Cy Okafor,36.0,149.0,0.05,5095.8,0.0,2 days 13:01:00,
+10302.0,2024-07-05,South,Ana Lima,4.0,0.85,0.15,2.8899999999999997,1.0,1 days 01:24:00,
+10303.0,2024-07-08,West,Cy Okafor,39.0,0.85,,33.15,1.0,0 days 15:35:00,
+10304.0,2024-07-12,South,Ana Lima,1.0,0.85,,0.85,1.0,0 days 16:52:00,call first
+10305.0,2024-07-15,South,Ana Lima,34.0,7.25,,246.5,0.0,0 days 05:59:00,URGENT - ship today
+10306.0,2024-07-16,North,Bo Chen,16.0,12.5,,200.0,1.0,0 days 05:57:00,
+10307.0,2024-07-19,East,Dee Varga,27.0,149.0,,4023.0,1.0,1 days 06:51:00,call first
+10308.0,2024-07-24,South,Cy Okafor,4.0,19.99,0.1,71.964,1.0,0 days 23:43:00,
+10309.0,2024-07-26,East,Bo Chen,20.0,0.85,0.1,15.3,0.0,0 days 07:49:00,
+10310.0,2024-07-30,East,Ana Lima,5.0,19.99,,99.94999999999999,1.0,2 days 16:17:00,"Dock 4_x000D_
+Gate B"
+10311.0,2024-08-02,West,Bo Chen,38.0,7.25,0.05,261.72499999999997,0.0,1 days 14:31:00,
+10312.0,2024-08-05,North,Ana Lima,4.0,7.25,0.05,,0.0,1 days 09:16:00,call first
+10313.0,2024-08-06,West,Dee Varga,37.0,149.0,,5513.0,1.0,1 days 02:14:00,call first
+10314.0,2024-08-10,South,Cy Okafor,13.0,19.99,,259.87,1.0,2 days 16:20:00,007
+10315.0,2024-08-13,North,Bo Chen,34.0,19.99,,679.66,1.0,0 days 13:09:00,
+10316.0,2024-08-16,North,Ana Lima,24.0,7.25,0.05,165.29999999999998,0.0,1 days 14:09:00,
+10317.0,2024-08-18,North,Cy Okafor,13.0,149.0,,1937.0,0.0,1 days 17:14:00,
+,,,,,,,,,,
+10318.0,2024-08-22,West,Dee Varga,5.0,19.99,0.05,94.95249999999999,1.0,1 days 08:39:00,call first
+10319.0,2024-08-24,East,Ana Lima,12.0,0.85,0.05,9.69,1.0,0 days 09:43:00,rush
+10320.0,2024-08-29,South,Cy Okafor,27.0,149.0,,4023.0,1.0,0 days 03:02:00,rush
+10321.0,2024-08-30,West,Bo Chen,26.0,19.99,0.1,467.766,0.0,1 days 08:48:00,
+10322.0,2024-09-02,West,Cy Okafor,10.0,0.85,0.15,7.225,1.0,1 days 06:29:00,Fish & Chips Ltd <wholesale>
+10323.0,2024-09-06,North,Ana Lima,7.0,12.5,,87.5,1.0,2 days 07:33:00,
+10324.0,2024-09-09,East,Ana Lima,10.0,149.0,,1490.0,0.0,1 days 01:01:00,
+10325.0,2024-09-13,East,Ana Lima,38.0,0.85,,32.3,1.0,0 days 21:22:00,call first
+10326.0,2024-09-16,South,Cy Okafor,28.0,149.0,0.15,3546.2,1.0,1 days 01:27:00,
+10327.0,2024-09-19,West,Bo Chen,13.0,7.25,,94.25,1.0,0 days 13:30:00,
+10328.0,2024-09-20,North,Ana Lima,39.0,149.0,0.1,5229.900000000001,0.0,2 days 01:23:00,
+10329.0,2024-09-23,North,Dee Varga,8.0,19.99,0.1,143.928,1.0,2 days 14:39:00,
+10330.0,2024-09-28,West,Cy Okafor,25.0,19.99,0.1,449.775,1.0,1 days 12:43:00,
+$ read sales_q3.xlsx sheet_name=Orders usecols=A:E nrows=5
+shape (5, 5)
+  'Order ID': int64
+  'Order Date': datetime64[us]
+  'Region': str
+  'Rep': str
+  'Units': int64
+Order ID,Order Date,Region,Rep,Units
+10301,2024-07-01,East,Cy Okafor,36
+10302,2024-07-05,South,Ana Lima,4
+10303,2024-07-08,West,Cy Okafor,39
+10304,2024-07-12,South,Ana Lima,1
+10305,2024-07-15,South,Ana Lima,34
+$ read sales_q3.xlsx usecols=A,C,H:I
+shape (31, 4)
+  'Order ID': float64
+  'Region': str
+  'Total': float64
+  'Shipped': float64
+Order ID,Region,Total,Shipped
+10301.0,East,5095.8,0.0
+10302.0,South,2.8899999999999997,1.0
+10303.0,West,33.15,1.0
+10304.0,South,0.85,1.0
+10305.0,South,246.5,0.0
+10306.0,North,200.0,1.0
+10307.0,East,4023.0,1.0
+10308.0,South,71.964,1.0
+10309.0,East,15.3,0.0
+10310.0,East,99.94999999999999,1.0
+10311.0,West,261.72499999999997,0.0
+10312.0,North,,0.0
+10313.0,West,5513.0,1.0
+10314.0,South,259.87,1.0
+10315.0,North,679.66,1.0
+10316.0,North,165.29999999999998,0.0
+10317.0,North,1937.0,0.0
+,,,
+10318.0,West,94.95249999999999,1.0
+10319.0,East,9.69,1.0
+10320.0,South,4023.0,1.0
+10321.0,West,467.766,0.0
+10322.0,West,7.225,1.0
+10323.0,North,87.5,1.0
+10324.0,East,1490.0,0.0
+10325.0,East,32.3,1.0
+10326.0,South,3546.2,1.0
+10327.0,West,94.25,1.0
+10328.0,North,5229.900000000001,0.0
+10329.0,North,143.928,1.0
+10330.0,West,449.775,1.0
+$ read sales_q3.xlsx usecols=Order\sID,Rep,Total
+shape (31, 3)
+  'Order ID': float64
+  'Rep': str
+  'Total': float64
+Order ID,Rep,Total
+10301.0,Cy Okafor,5095.8
+10302.0,Ana Lima,2.8899999999999997
+10303.0,Cy Okafor,33.15
+10304.0,Ana Lima,0.85
+10305.0,Ana Lima,246.5
+10306.0,Bo Chen,200.0
+10307.0,Dee Varga,4023.0
+10308.0,Cy Okafor,71.964
+10309.0,Bo Chen,15.3
+10310.0,Ana Lima,99.94999999999999
+10311.0,Bo Chen,261.72499999999997
+10312.0,Ana Lima,
+10313.0,Dee Varga,5513.0
+10314.0,Cy Okafor,259.87
+10315.0,Bo Chen,679.66
+10316.0,Ana Lima,165.29999999999998
+10317.0,Cy Okafor,1937.0
+,,
+10318.0,Dee Varga,94.95249999999999
+10319.0,Ana Lima,9.69
+10320.0,Cy Okafor,4023.0
+10321.0,Bo Chen,467.766
+10322.0,Cy Okafor,7.225
+10323.0,Ana Lima,87.5
+10324.0,Ana Lima,1490.0
+10325.0,Ana Lima,32.3
+10326.0,Cy Okafor,3546.2
+10327.0,Bo Chen,94.25
+10328.0,Ana Lima,5229.900000000001
+10329.0,Dee Varga,143.928
+10330.0,Cy Okafor,449.775
+$ read sales_q3.xlsx usecols=0,4,5
+shape (31, 3)
+  'Order ID': float64
+  'Units': float64
+  'Unit Price': float64
+Order ID,Units,Unit Price
+10301.0,36.0,149.0
+10302.0,4.0,0.85
+10303.0,39.0,0.85
+10304.0,1.0,0.85
+10305.0,34.0,7.25
+10306.0,16.0,12.5
+10307.0,27.0,149.0
+10308.0,4.0,19.99
+10309.0,20.0,0.85
+10310.0,5.0,19.99
+10311.0,38.0,7.25
+10312.0,4.0,7.25
+10313.0,37.0,149.0
+10314.0,13.0,19.99
+10315.0,34.0,19.99
+10316.0,24.0,7.25
+10317.0,13.0,149.0
+,,
+10318.0,5.0,19.99
+10319.0,12.0,0.85
+10320.0,27.0,149.0
+10321.0,26.0,19.99
+10322.0,10.0,0.85
+10323.0,7.0,12.5
+10324.0,10.0,149.0
+10325.0,38.0,0.85
+10326.0,28.0,149.0
+10327.0,13.0,7.25
+10328.0,39.0,149.0
+10329.0,8.0,19.99
+10330.0,25.0,19.99
+$ read sales_q3.xlsx index_col=0 usecols=A,E,K nrows=12
+shape (12, 2)
+  index 'Order ID': int64
+  'Units': int64
+  'Notes': str
+Order ID,Units,Notes
+10301,36,
+10302,4,
+10303,39,
+10304,1,call first
+10305,34,URGENT - ship today
+10306,16,
+10307,27,call first
+10308,4,
+10309,20,
+10310,5,"Dock 4_x000D_
+Gate B"
+10311,38,
+10312,4,call first
+$ read sales_q3.xlsx dtype=Order\sID:str,Units:float
+shape (31, 11)
+  'Order ID': str
+  'Order Date': datetime64[us]
+  'Region': str
+  'Rep': str
+  'Units': float64
+  'Unit Price': float64
+  'Discount': float64
+  'Total': float64
+  'Shipped': float64
+  'Ship Time': timedelta64[us]
+  'Notes': str
+Order ID,Order Date,Region,Rep,Units,Unit Price,Discount,Total,Shipped,Ship Time,Notes
+10301,2024-07-01,East,Cy Okafor,36.0,149.0,0.05,5095.8,0.0,2 days 13:01:00,
+10302,2024-07-05,South,Ana Lima,4.0,0.85,0.15,2.8899999999999997,1.0,1 days 01:24:00,
+10303,2024-07-08,West,Cy Okafor,39.0,0.85,,33.15,1.0,0 days 15:35:00,
+10304,2024-07-12,South,Ana Lima,1.0,0.85,,0.85,1.0,0 days 16:52:00,call first
+10305,2024-07-15,South,Ana Lima,34.0,7.25,,246.5,0.0,0 days 05:59:00,URGENT - ship today
+10306,2024-07-16,North,Bo Chen,16.0,12.5,,200.0,1.0,0 days 05:57:00,
+10307,2024-07-19,East,Dee Varga,27.0,149.0,,4023.0,1.0,1 days 06:51:00,call first
+10308,2024-07-24,South,Cy Okafor,4.0,19.99,0.1,71.964,1.0,0 days 23:43:00,
+10309,2024-07-26,East,Bo Chen,20.0,0.85,0.1,15.3,0.0,0 days 07:49:00,
+10310,2024-07-30,East,Ana Lima,5.0,19.99,,99.94999999999999,1.0,2 days 16:17:00,"Dock 4_x000D_
+Gate B"
+10311,2024-08-02,West,Bo Chen,38.0,7.25,0.05,261.72499999999997,0.0,1 days 14:31:00,
+10312,2024-08-05,North,Ana Lima,4.0,7.25,0.05,,0.0,1 days 09:16:00,call first
+10313,2024-08-06,West,Dee Varga,37.0,149.0,,5513.0,1.0,1 days 02:14:00,call first
+10314,2024-08-10,South,Cy Okafor,13.0,19.99,,259.87,1.0,2 days 16:20:00,007
+10315,2024-08-13,North,Bo Chen,34.0,19.99,,679.66,1.0,0 days 13:09:00,
+10316,2024-08-16,North,Ana Lima,24.0,7.25,0.05,165.29999999999998,0.0,1 days 14:09:00,
+10317,2024-08-18,North,Cy Okafor,13.0,149.0,,1937.0,0.0,1 days 17:14:00,
+,,,,,,,,,,
+10318,2024-08-22,West,Dee Varga,5.0,19.99,0.05,94.95249999999999,1.0,1 days 08:39:00,call first
+10319,2024-08-24,East,Ana Lima,12.0,0.85,0.05,9.69,1.0,0 days 09:43:00,rush
+10320,2024-08-29,South,Cy Okafor,27.0,149.0,,4023.0,1.0,0 days 03:02:00,rush
+10321,2024-08-30,West,Bo Chen,26.0,19.99,0.1,467.766,0.0,1 days 08:48:00,
+10322,2024-09-02,West,Cy Okafor,10.0,0.85,0.15,7.225,1.0,1 days 06:29:00,Fish & Chips Ltd <wholesale>
+10323,2024-09-06,North,Ana Lima,7.0,12.5,,87.5,1.0,2 days 07:33:00,
+10324,2024-09-09,East,Ana Lima,10.0,149.0,,1490.0,0.0,1 days 01:01:00,
+10325,2024-09-13,East,Ana Lima,38.0,0.85,,32.3,1.0,0 days 21:22:00,call first
+10326,2024-09-16,South,Cy Okafor,28.0,149.0,0.15,3546.2,1.0,1 days 01:27:00,
+10327,2024-09-19,West,Bo Chen,13.0,7.25,,94.25,1.0,0 days 13:30:00,
+10328,2024-09-20,North,Ana Lima,39.0,149.0,0.1,5229.900000000001,0.0,2 days 01:23:00,
+10329,2024-09-23,North,Dee Varga,8.0,19.99,0.1,143.928,1.0,2 days 14:39:00,
+10330,2024-09-28,West,Cy Okafor,25.0,19.99,0.1,449.775,1.0,1 days 12:43:00,
+$ read sales_q3.xlsx dtype=Notes:object usecols=A,K
+shape (31, 2)
+  'Order ID': float64
+  'Notes': object
+Order ID,Notes
+10301.0,
+10302.0,
+10303.0,
+10304.0,call first
+10305.0,URGENT - ship today
+10306.0,
+10307.0,call first
+10308.0,
+10309.0,
+10310.0,"Dock 4_x000D_
+Gate B"
+10311.0,
+10312.0,call first
+10313.0,call first
+10314.0,007
+10315.0,
+10316.0,
+10317.0,
+,
+10318.0,call first
+10319.0,rush
+10320.0,rush
+10321.0,
+10322.0,Fish & Chips Ltd <wholesale>
+10323.0,
+10324.0,
+10325.0,call first
+10326.0,
+10327.0,
+10328.0,
+10329.0,
+10330.0,
+$ read sales_q3.xlsx na_values=rush usecols=A,K
+shape (31, 2)
+  'Order ID': float64
+  'Notes': str
+Order ID,Notes
+10301.0,
+10302.0,
+10303.0,
+10304.0,call first
+10305.0,URGENT - ship today
+10306.0,
+10307.0,call first
+10308.0,
+10309.0,
+10310.0,"Dock 4_x000D_
+Gate B"
+10311.0,
+10312.0,call first
+10313.0,call first
+10314.0,007
+10315.0,
+10316.0,
+10317.0,
+,
+10318.0,call first
+10319.0,
+10320.0,
+10321.0,
+10322.0,Fish & Chips Ltd <wholesale>
+10323.0,
+10324.0,
+10325.0,call first
+10326.0,
+10327.0,
+10328.0,
+10329.0,
+10330.0,
+$ read sales_q3.xlsx keep_default_na=False usecols=A,G,K nrows=8
+shape (8, 3)
+  'Order ID': int64
+  'Discount': object
+  'Notes': str
+Order ID,Discount,Notes
+10301,0.05,
+10302,0.15,
+10303,,
+10304,,call first
+10305,,URGENT - ship today
+10306,,
+10307,,call first
+10308,0.1,
+$ read sales_q3.xlsx keep_default_na=False na_values=#N/A usecols=A,H
+shape (31, 2)
+  'Order ID': object
+  'Total': object
+Order ID,Total
+10301,5095.8
+10302,2.8899999999999997
+10303,33.15
+10304,0.85
+10305,246.5
+10306,200
+10307,4023
+10308,71.964
+10309,15.3
+10310,99.94999999999999
+10311,261.72499999999997
+10312,
+10313,5513
+10314,259.87
+10315,679.66
+10316,165.29999999999998
+10317,1937
+,
+10318,94.95249999999999
+10319,9.69
+10320,4023
+10321,467.766
+10322,7.225
+10323,87.5
+10324,1490
+10325,32.3
+10326,3546.2
+10327,94.25
+10328,5229.900000000001
+10329,143.928
+10330,449.775
+$ read sales_q3.xlsx skiprows=1,2,3 nrows=4 usecols=A:D
+shape (4, 4)
+  'Order ID': int64
+  'Order Date': datetime64[us]
+  'Region': str
+  'Rep': str
+Order ID,Order Date,Region,Rep
+10304,2024-07-12,South,Ana Lima
+10305,2024-07-15,South,Ana Lima
+10306,2024-07-16,North,Bo Chen
+10307,2024-07-19,East,Dee Varga
+$ read sales_q3.xlsx header=None nrows=3 usecols=A:D
+shape (3, 4)
+  0: object
+  1: object
+  2: str
+  3: str
+0,1,2,3
+Order ID,Order Date,Region,Rep
+10301,2024-07-01 00:00:00,East,Cy Okafor
+10302,2024-07-05 00:00:00,South,Ana Lima
+$ read sales_q3.xlsx header=None names=id,day,where,who skiprows=1 nrows=3 usecols=A:D
+shape (3, 4)
+  'id': int64
+  'day': datetime64[us]
+  'where': str
+  'who': str
+id,day,where,who
+10301,2024-07-01,East,Cy Okafor
+10302,2024-07-05,South,Ana Lima
+10303,2024-07-08,West,Cy Okafor
+$ read sales_q3.xlsx names=id,day,where usecols=A:C nrows=2
+shape (2, 3)
+  'id': int64
+  'day': datetime64[us]
+  'where': str
+id,day,where
+10301,2024-07-01,East
+10302,2024-07-05,South
+$ read sales_q3.xlsx skipfooter=25 usecols=A,B,J
+shape (6, 3)
+  'Order ID': int64
+  'Order Date': datetime64[us]
+  'Ship Time': timedelta64[us]
+Order ID,Order Date,Ship Time
+10301,2024-07-01,2 days 13:01:00
+10302,2024-07-05,1 days 01:24:00
+10303,2024-07-08,0 days 15:35:00
+10304,2024-07-12,0 days 16:52:00
+10305,2024-07-15,0 days 05:59:00
+10306,2024-07-16,0 days 05:57:00
+$ read sales_q3.xlsx sheet_name=1
+shape (8, 4)
+  'Q3 Sales Summary': str
+  'Unnamed: 1': object
+  'Unnamed: 2': object
+  'Unnamed: 3': object
+Q3 Sales Summary,Unnamed: 1,Unnamed: 2,Unnamed: 3
+Generated 2024-10-01 from the CRM export,,,
+,,,
+Region,Orders,Revenue,Share
+North,9,38211.4,0.3275897913352631
+South,6,27450,0.23533133494593164
+East,7,19980.55,0.17129506391453314
+West,8,31002.1,0.265783809804272
+Total,30,116644.05,1
+$ read sales_q3.xlsx sheet_name=Summary skiprows=3
+shape (5, 4)
+  'Region': str
+  'Orders': int64
+  'Revenue': float64
+  'Share': float64
+Region,Orders,Revenue,Share
+North,9,38211.4,0.3275897913352631
+South,6,27450.0,0.23533133494593164
+East,7,19980.55,0.17129506391453314
+West,8,31002.1,0.265783809804272
+Total,30,116644.05,1.0
+$ read sales_q3.xlsx sheet_name=Summary header=3 skipfooter=1
+shape (4, 4)
+  'Region': str
+  'Orders': int64
+  'Revenue': float64
+  'Share': float64
+Region,Orders,Revenue,Share
+North,9,38211.4,0.3275897913352631
+South,6,27450.0,0.23533133494593164
+East,7,19980.55,0.17129506391453314
+West,8,31002.1,0.265783809804272
+$ read sales_q3.xlsx sheet_name=Summary header=3 index_col=Region
+shape (5, 3)
+  index 'Region': str
+  'Orders': int64
+  'Revenue': float64
+  'Share': float64
+Region,Orders,Revenue,Share
+North,9,38211.4,0.3275897913352631
+South,6,27450.0,0.23533133494593164
+East,7,19980.55,0.17129506391453314
+West,8,31002.1,0.265783809804272
+Total,30,116644.05,1.0
+$ read sales_q3.xlsx sheet_name=Lookups
+shape (5, 6)
+  'Code': str
+  'Region': str
+  'Unnamed: 2': float64
+  'Rep': str
+  'Quota': float64
+  'Start': datetime64[us]
+Code,Region,Unnamed: 2,Rep,Quota,Start
+N,North,,Ana Lima,120000.0,2019-04-01
+S,South,,Bo Chen,95000.0,2021-01-11
+E,East,,Cy Okafor,101500.5,2016-09-05
+W,West,,Dee Varga,88000.0,1900-02-28
+C,Central,,,,
+$ read sales_q3.xlsx sheet_name=Lookups usecols=D:F
+shape (5, 3)
+  'Rep': str
+  'Quota': float64
+  'Start': datetime64[us]
+Rep,Quota,Start
+Ana Lima,120000.0,2019-04-01
+Bo Chen,95000.0,2021-01-11
+Cy Okafor,101500.5,2016-09-05
+Dee Varga,88000.0,1900-02-28
+,,
+$ read sales_q3.xlsx sheet_name=Lookups usecols=A:B true_values=N false_values=S
+shape (5, 2)
+  'Code': str
+  'Region': str
+Code,Region
+N,North
+S,South
+E,East
+W,West
+C,Central
+$ read sales_q3.xlsx sheet_name=Summary,Lookups header=3 nrows=2
+['Summary']
+shape (2, 4)
+  'Region': str
+  'Orders': int64
+  'Revenue': float64
+  'Share': float64
+Region,Orders,Revenue,Share
+North,9,38211.4,0.3275897913352631
+South,6,27450.0,0.23533133494593164
+['Lookups']
+shape (2, 6)
+  'E': str
+  'East': str
+  'Unnamed: 2': float64
+  'Cy Okafor': str
+  101500.5: float64
+  datetime.datetime(2016, 9, 5, 0, 0): datetime64[us]
+E,East,Unnamed: 2,Cy Okafor,101500.5,2016-09-05 00:00:00
+W,West,,Dee Varga,88000.0,1900-02-28
+C,Central,,,,
+$ read sales_q3.xlsx sheet_name=Missing
+! ValueError: Worksheet named 'Missing' not found
+$ read sales_q3.xlsx sheet_name=7
+! ValueError: Worksheet index 7 is invalid, 3 worksheets found
+$ read sales_q3.xlsx usecols=Order\sID,Price
+! ValueError: Usecols do not match columns, columns expected but not found: ['Price'] (sheet: 0)
+$ read sales_q3.xlsx usecols=A:Z nrows=1
+! ParserError: Defining usecols with out-of-bounds indices is not allowed. [11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25] are out-of-bounds. (sheet: 0)
+$ read sales_q3.xlsx header=40
+! ValueError: Passed header=[40], len of 1, but only 32 lines in file (sheet: 0)
+$ read sales_q3.xlsx index_col=0 dtype=Units:int
+! ValueError: Unable to convert column Units to type int64 (sheet: 0)
+$ read sales_q3.xlsx dtype=Discount:int usecols=A,G
+! ValueError: Unable to convert column Discount to type int64 (sheet: 0)
+$ read stock_mac.xlsx
+shape (13, 14)
+  'SKU': str
+  'Counted': object
+  'At': object
+  'Last move': datetime64[us]
+  'Lot date': int64
+  'Expires': datetime64[us]
+  'Received': datetime64[us]
+  'On hand': float64
+  'Bin': float64
+  'Cycle': object
+  'Variance': float64
+  'Logged': datetime64[us]
+  'Shift start': object
+  'Batch': float64
+SKU,Counted,At,Last move,Lot date,Expires,Received,On hand,Bin,Cycle,Variance,Logged,Shift start,Batch
+SKU-0311,2023-11-06 00:00:00,07:38:57,2023-11-06 07:38:57,43734,2024-11-05,2023-11-03,695.0,130.0,00:01:09.250000,-3.625,2023-11-06 13:38:57,06:00:00,4400.0
+SKU-0318,2023-11-07 00:00:00,15:59:47,2023-11-07 15:59:47,43735,2024-11-06,2023-11-04,719.0,129.0,00:06:47.550000,9.75,2023-11-07 21:59:47,14:00:00,4401.0
+SKU-0325,2023-11-08 00:00:00,09:25:08,2023-11-08 09:25:08,43736,2024-11-07,2023-11-05,39.0,122.0,00:06:46.950000,-19.625,2023-11-08 15:25:08,22:00:00,4402.0
+SKU-0332,2023-11-09 00:00:00,08:09:43,2023-11-09 08:09:43,43737,2024-11-08,2023-11-06,57.0,121.0,00:06:31.850000,2.0,2023-11-09 14:09:43,06:00:00,4403.0
+SKU-0339,2023-11-10 00:00:00,09:07:45,2023-11-10 09:07:45,43738,2024-11-09,2023-11-07,658.0,136.0,00:07:58.650000,-22.375,2023-11-10 15:07:45,14:00:00,4404.0
+SKU-0346,2023-11-11 00:00:00,07:41:03,2023-11-11 07:41:03,43739,2024-11-10,2023-11-08,555.0,127.0,00:08:17.250000,24.875,2023-11-11 13:41:03,22:00:00,4405.0
+SKU-0353,2023-11-12 00:00:00,15:37:42,2023-11-12 15:37:42,43740,2024-11-11,2023-11-09,426.0,129.0,00:03:35.950000,21.125,2023-11-12 21:37:42,06:00:00,4406.0
+SKU-0360,2023-11-13 00:00:00,13:55:00,2023-11-13 13:55:00,43741,2024-11-12,2023-11-10,788.0,127.0,00:04:48.550000,-12.75,2023-11-13 19:55:00,14:00:00,4407.0
+SKU-0367,2023-11-14 00:00:00,11:27:30,2023-11-14 11:27:30,43742,2024-11-13,2023-11-11,115.0,120.0,00:06:03.950000,-9.25,2023-11-14 17:27:30,22:00:00,4408.0
+SKU-0374,2023-11-15 00:00:00,13:55:09,2023-11-15 13:55:09,43743,2024-11-14,2023-11-12,787.0,138.0,00:05:36.850000,-5.25,2023-11-15 19:55:09,06:00:00,4409.0
+SKU-0381,2023-11-16 00:00:00,12:25:47,2023-11-16 12:25:47,43744,2024-11-15,2023-11-13,672.0,131.0,00:04:45.350000,2.75,2023-11-16 18:25:47,14:00:00,4410.0
+SKU-0388,2023-11-17 00:00:00,09:32:11,2023-11-17 09:32:11,43745,2024-11-16,2023-11-14,289.0,110.0,00:03:50.850000,-6.5,2023-11-17 15:32:11,22:00:00,4411.0
+SKU-EDGE,00:00:00,00:00:00,1904-01-02 12:00:00,0,1903-12-31,,,,,,,,
+$ read stock_mac.xlsx usecols=A:D parse_dates=False
+shape (13, 4)
+  'SKU': str
+  'Counted': object
+  'At': object
+  'Last move': datetime64[us]
+SKU,Counted,At,Last move
+SKU-0311,2023-11-06 00:00:00,07:38:57,2023-11-06 07:38:57
+SKU-0318,2023-11-07 00:00:00,15:59:47,2023-11-07 15:59:47
+SKU-0325,2023-11-08 00:00:00,09:25:08,2023-11-08 09:25:08
+SKU-0332,2023-11-09 00:00:00,08:09:43,2023-11-09 08:09:43
+SKU-0339,2023-11-10 00:00:00,09:07:45,2023-11-10 09:07:45
+SKU-0346,2023-11-11 00:00:00,07:41:03,2023-11-11 07:41:03
+SKU-0353,2023-11-12 00:00:00,15:37:42,2023-11-12 15:37:42
+SKU-0360,2023-11-13 00:00:00,13:55:00,2023-11-13 13:55:00
+SKU-0367,2023-11-14 00:00:00,11:27:30,2023-11-14 11:27:30
+SKU-0374,2023-11-15 00:00:00,13:55:09,2023-11-15 13:55:09
+SKU-0381,2023-11-16 00:00:00,12:25:47,2023-11-16 12:25:47
+SKU-0388,2023-11-17 00:00:00,09:32:11,2023-11-17 09:32:11
+SKU-EDGE,00:00:00,00:00:00,1904-01-02 12:00:00
+$ read stock_mac.xlsx usecols=A,E,F,G nrows=4
+shape (4, 4)
+  'SKU': str
+  'Lot date': int64
+  'Expires': datetime64[us]
+  'Received': datetime64[us]
+SKU,Lot date,Expires,Received
+SKU-0311,43734,2024-11-05,2023-11-03
+SKU-0318,43735,2024-11-06,2023-11-04
+SKU-0325,43736,2024-11-07,2023-11-05
+SKU-0332,43737,2024-11-08,2023-11-06
+$ read stock_mac.xlsx usecols=H:N
+shape (13, 7)
+  'On hand': float64
+  'Bin': float64
+  'Cycle': object
+  'Variance': float64
+  'Logged': datetime64[us]
+  'Shift start': object
+  'Batch': float64
+On hand,Bin,Cycle,Variance,Logged,Shift start,Batch
+695.0,130.0,00:01:09.250000,-3.625,2023-11-06 13:38:57,06:00:00,4400.0
+719.0,129.0,00:06:47.550000,9.75,2023-11-07 21:59:47,14:00:00,4401.0
+39.0,122.0,00:06:46.950000,-19.625,2023-11-08 15:25:08,22:00:00,4402.0
+57.0,121.0,00:06:31.850000,2.0,2023-11-09 14:09:43,06:00:00,4403.0
+658.0,136.0,00:07:58.650000,-22.375,2023-11-10 15:07:45,14:00:00,4404.0
+555.0,127.0,00:08:17.250000,24.875,2023-11-11 13:41:03,22:00:00,4405.0
+426.0,129.0,00:03:35.950000,21.125,2023-11-12 21:37:42,06:00:00,4406.0
+788.0,127.0,00:04:48.550000,-12.75,2023-11-13 19:55:00,14:00:00,4407.0
+115.0,120.0,00:06:03.950000,-9.25,2023-11-14 17:27:30,22:00:00,4408.0
+787.0,138.0,00:05:36.850000,-5.25,2023-11-15 19:55:09,06:00:00,4409.0
+672.0,131.0,00:04:45.350000,2.75,2023-11-16 18:25:47,14:00:00,4410.0
+289.0,110.0,00:03:50.850000,-6.5,2023-11-17 15:32:11,22:00:00,4411.0
+,,,,,,
+$ read stock_mac.xlsx index_col=0 usecols=A,B,C
+shape (13, 2)
+  index 'SKU': str
+  'Counted': object
+  'At': object
+SKU,Counted,At
+SKU-0311,2023-11-06 00:00:00,07:38:57
+SKU-0318,2023-11-07 00:00:00,15:59:47
+SKU-0325,2023-11-08 00:00:00,09:25:08
+SKU-0332,2023-11-09 00:00:00,08:09:43
+SKU-0339,2023-11-10 00:00:00,09:07:45
+SKU-0346,2023-11-11 00:00:00,07:41:03
+SKU-0353,2023-11-12 00:00:00,15:37:42
+SKU-0360,2023-11-13 00:00:00,13:55:00
+SKU-0367,2023-11-14 00:00:00,11:27:30
+SKU-0374,2023-11-15 00:00:00,13:55:09
+SKU-0381,2023-11-16 00:00:00,12:25:47
+SKU-0388,2023-11-17 00:00:00,09:32:11
+SKU-EDGE,00:00:00,00:00:00
+$ read crm_contacts.xlsx
+shape (5, 9)
+  'Name': str
+  'Email': str
+  'Phone': str
+  'Zip': int64
+  'Since': object
+  'Opt in': bool
+  'Score': float64
+  'Tier': str
+  'Signed': str
+Name,Email,Phone,Zip,Since,Opt in,Score,Tier,Signed
+"Okonkwo, Ada",ada.okonkwo@example.com,+1 415 555 0134,2134,2021-03-04,True,1000.0,Gold,2021-03-04
+  Rui Tanaka ,rui@example.org,415-555-0199,94107,2022-11-30 08:15:00,False,250.0,Silver,
+Marta Nowak,,(212) 555-0100,10001,2020-01-15,True,0.5,,2022-12-01
+Lee & Partners,office@example.net,,501,2019-07-04,False,-12.75,Bronze,
+Zoë Ångström,zoe@example.se,+46 8 555 010 00,11122,2023-05-09 23:59:59.500000,True,0.0125,Gold,-
+$ read crm_contacts.xlsx dtype=Zip:str usecols=A,D
+shape (5, 2)
+  'Name': str
+  'Zip': str
+Name,Zip
+"Okonkwo, Ada",02134
+  Rui Tanaka ,94107
+Marta Nowak,10001
+Lee & Partners,00501
+Zoë Ångström,11122
+$ read crm_contacts.xlsx usecols=Name,Signed na_values=n/a
+shape (5, 2)
+  'Name': str
+  'Signed': str
+Name,Signed
+"Okonkwo, Ada",2021-03-04
+  Rui Tanaka ,
+Marta Nowak,2022-12-01
+Lee & Partners,
+Zoë Ångström,-
+$ read crm_contacts.xlsx keep_default_na=False usecols=Email,Tier,Signed
+shape (5, 3)
+  'Email': str
+  'Tier': str
+  'Signed': str
+Email,Tier,Signed
+ada.okonkwo@example.com,Gold,2021-03-04
+rui@example.org,Silver,n/a
+,,2022-12-01
+office@example.net,Bronze,NA
+zoe@example.se,Gold,-
+$ read crm_contacts.xlsx usecols=Opt\sin,Score true_values=1 false_values=0
+shape (5, 2)
+  'Opt in': bool
+  'Score': float64
+Opt in,Score
+True,1000.0
+False,250.0
+True,0.5
+False,-12.75
+True,0.0125
+$ read ledger_stale.xlsx
+shape (11, 6)
+  'Date': datetime64[us]
+  'Account': str
+  'Memo': str
+  'Debit': float64
+  'Credit': float64
+  'Balance': float64
+Date,Account,Memo,Debit,Credit,Balance
+2024-09-02,4000 Sales,,484.69,,1484.69
+2024-09-04,6200 Rent,INV-2291 partial,,333.95,1150.74
+2024-09-06,5100 Freight,,,73.05,1077.69
+2024-09-08,5100 Freight,,,264.13,813.56
+2024-09-10,1200 Receivables,,177.47,,991.03
+2024-09-12,6200 Rent,reversal of 9/3,854.15,,1845.18
+2024-09-14,1200 Receivables,,,467.37,1377.81
+2024-09-16,5100 Freight,,126.15,,1503.96
+2024-09-18,4000 Sales,,,423.29,1080.67
+2024-09-20,5100 Freight,  ,814.1,,1894.77
+2024-09-22,5100 Freight,,792.86,,2687.63
+$ read ledger_stale.xlsx sheet_name=None
+['Ledger']
+shape (11, 6)
+  'Date': datetime64[us]
+  'Account': str
+  'Memo': str
+  'Debit': float64
+  'Credit': float64
+  'Balance': float64
+Date,Account,Memo,Debit,Credit,Balance
+2024-09-02,4000 Sales,,484.69,,1484.69
+2024-09-04,6200 Rent,INV-2291 partial,,333.95,1150.74
+2024-09-06,5100 Freight,,,73.05,1077.69
+2024-09-08,5100 Freight,,,264.13,813.56
+2024-09-10,1200 Receivables,,177.47,,991.03
+2024-09-12,6200 Rent,reversal of 9/3,854.15,,1845.18
+2024-09-14,1200 Receivables,,,467.37,1377.81
+2024-09-16,5100 Freight,,126.15,,1503.96
+2024-09-18,4000 Sales,,,423.29,1080.67
+2024-09-20,5100 Freight,  ,814.1,,1894.77
+2024-09-22,5100 Freight,,792.86,,2687.63
+['Scratch']
+shape (0, 1)
+  'internal': object
+internal
+['Config']
+shape (0, 2)
+  'Unnamed: 0': object
+  'secret sauce': object
+Unnamed: 0,secret sauce
+$ read ledger_stale.xlsx usecols=Memo
+shape (11, 1)
+  'Memo': str
+Memo
+""
+INV-2291 partial
+""
+""
+""
+reversal of 9/3
+""
+""
+""
+  
+""
+$ read ledger_stale.xlsx index_col=0 usecols=A,D,E
+shape (11, 2)
+  index 'Date': datetime64[us]
+  'Debit': float64
+  'Credit': float64
+Date,Debit,Credit
+2024-09-02,484.69,
+2024-09-04,,333.95
+2024-09-06,,73.05
+2024-09-08,,264.13
+2024-09-10,177.47,
+2024-09-12,854.15,
+2024-09-14,,467.37
+2024-09-16,126.15,
+2024-09-18,,423.29
+2024-09-20,814.1,
+2024-09-22,792.86,
+$ read ledger_stale.xlsx nrows=3
+shape (3, 6)
+  'Date': datetime64[us]
+  'Account': str
+  'Memo': str
+  'Debit': float64
+  'Credit': float64
+  'Balance': float64
+Date,Account,Memo,Debit,Credit,Balance
+2024-09-02,4000 Sales,,484.69,,1484.69
+2024-09-04,6200 Rent,INV-2291 partial,,333.95,1150.74
+2024-09-06,5100 Freight,,,73.05,1077.69
+$ read survey.xlsx
+shape (7, 8)
+  'Unnamed: 0': object
+  'About you': object
+  'About you.1': str
+  'Ratings': object
+  'Ratings.1': object
+  'Ratings.2': object
+  'Ratings.3': float64
+  'Unnamed: 7': str
+Unnamed: 0,About you,About you.1,Ratings,Ratings.1,Ratings.2,Ratings.3,Unnamed: 7
+Respondent,Age,Team,Tools,Support,Tools,,Comment
+101,34,Ops,4,5,3,2.0,fine
+102,,Dev,5,,4,4.0,
+103,51,Dev,2,3,-,1.0,slow laptop
+104,28,,3,4,5,,
+105,41,Sales,five,2,3,3.0,more training
+106,39.5,Ops,4,4,4,4.0,
+$ read survey.xlsx header=1
+shape (6, 8)
+  'Respondent': int64
+  'Age': float64
+  'Team': str
+  'Tools': object
+  'Support': float64
+  'Tools.1': object
+  'Unnamed: 6': float64
+  'Comment': str
+Respondent,Age,Team,Tools,Support,Tools.1,Unnamed: 6,Comment
+101,34.0,Ops,4,5.0,3,2.0,fine
+102,,Dev,5,,4,4.0,
+103,51.0,Dev,2,3.0,-,1.0,slow laptop
+104,28.0,,3,4.0,5,,
+105,41.0,Sales,five,2.0,3,3.0,more training
+106,39.5,Ops,4,4.0,4,4.0,
+$ read survey.xlsx header=1 na_values=-
+shape (6, 8)
+  'Respondent': int64
+  'Age': float64
+  'Team': str
+  'Tools': object
+  'Support': float64
+  'Tools.1': float64
+  'Unnamed: 6': float64
+  'Comment': str
+Respondent,Age,Team,Tools,Support,Tools.1,Unnamed: 6,Comment
+101,34.0,Ops,4,5.0,3.0,2.0,fine
+102,,Dev,5,,4.0,4.0,
+103,51.0,Dev,2,3.0,,1.0,slow laptop
+104,28.0,,3,4.0,5.0,,
+105,41.0,Sales,five,2.0,3.0,3.0,more training
+106,39.5,Ops,4,4.0,4.0,4.0,
+$ read survey.xlsx header=1 index_col=0 usecols=A:E
+shape (6, 4)
+  index 'Respondent': int64
+  'Age': float64
+  'Team': str
+  'Tools': object
+  'Support': float64
+Respondent,Age,Team,Tools,Support
+101,34.0,Ops,4,5.0
+102,,Dev,5,
+103,51.0,Dev,2,3.0
+104,28.0,,3,4.0
+105,41.0,Sales,five,2.0
+106,39.5,Ops,4,4.0
+$ read survey.xlsx header=1 dtype=Age:float usecols=A,B
+shape (6, 2)
+  'Respondent': int64
+  'Age': float64
+Respondent,Age
+101,34.0
+102,
+103,51.0
+104,28.0
+105,41.0
+106,39.5
+$ read survey.xlsx header=1 dtype=Tools:str
+shape (6, 8)
+  'Respondent': int64
+  'Age': float64
+  'Team': str
+  'Tools': str
+  'Support': float64
+  'Tools.1': str
+  'Unnamed: 6': float64
+  'Comment': str
+Respondent,Age,Team,Tools,Support,Tools.1,Unnamed: 6,Comment
+101,34.0,Ops,4,5.0,3,2.0,fine
+102,,Dev,5,,4,4.0,
+103,51.0,Dev,2,3.0,-,1.0,slow laptop
+104,28.0,,3,4.0,5,,
+105,41.0,Sales,five,2.0,3,3.0,more training
+106,39.5,Ops,4,4.0,4,4.0,
+$ read survey.xlsx skiprows=2 header=None
+shape (6, 8)
+  0: int64
+  1: float64
+  2: str
+  3: object
+  4: float64
+  5: object
+  6: float64
+  7: str
+0,1,2,3,4,5,6,7
+101,34.0,Ops,4,5.0,3,2.0,fine
+102,,Dev,5,,4,4.0,
+103,51.0,Dev,2,3.0,-,1.0,slow laptop
+104,28.0,,3,4.0,5,,
+105,41.0,Sales,five,2.0,3,3.0,more training
+106,39.5,Ops,4,4.0,4,4.0,
+$ read timesheet.xlsx
+shape (12, 6)
+  'Timesheet': str
+  'Unnamed: 1': object
+  'Unnamed: 2': object
+  'Unnamed: 3': object
+  'Unnamed: 4': object
+  'Unnamed: 5': str
+Timesheet,Unnamed: 1,Unnamed: 2,Unnamed: 3,Unnamed: 4,Unnamed: 5
+Employee,Day,In,Out,Break,Hours
+Priya,2024-10-07 00:00:00,09:15:00,17:15:00,0:45:00,
+Tomasz,2024-10-07 00:00:00,08:30:00,16:15:00,0:45:00,
+Kwame,2024-10-07 00:00:00,09:30:00,15:45:00,0:30:00,
+Priya,2024-10-08 00:00:00,09:30:00,17:00:00,1:00:00,
+Tomasz,2024-10-08 00:00:00,07:45:00,15:45:30,0:30:00,
+Kwame,2024-10-08 00:00:00,07:45:00,17:30:00,,
+Priya,2024-10-09 00:00:00,09:00:00,17:45:00,1:00:00,
+Tomasz,2024-10-09 00:00:00,09:15:00,17:15:00,0:45:00,
+Kwame,2024-10-09 00:00:00,07:30:00,15:00:00,1:00:00,
+Total,,,,,
+Signed off,2024-10-11 17:42:09.250000,,,,
+$ read timesheet.xlsx header=1
+shape (11, 6)
+  'Employee': str
+  'Day': datetime64[us]
+  'In': object
+  'Out': object
+  'Break': timedelta64[us]
+  'Hours': float64
+Employee,Day,In,Out,Break,Hours
+Priya,2024-10-07 00:00:00.000,09:15:00,17:15:00,0 days 00:45:00,
+Tomasz,2024-10-07 00:00:00.000,08:30:00,16:15:00,0 days 00:45:00,
+Kwame,2024-10-07 00:00:00.000,09:30:00,15:45:00,0 days 00:30:00,
+Priya,2024-10-08 00:00:00.000,09:30:00,17:00:00,0 days 01:00:00,
+Tomasz,2024-10-08 00:00:00.000,07:45:00,15:45:30,0 days 00:30:00,
+Kwame,2024-10-08 00:00:00.000,07:45:00,17:30:00,,
+Priya,2024-10-09 00:00:00.000,09:00:00,17:45:00,0 days 01:00:00,
+Tomasz,2024-10-09 00:00:00.000,09:15:00,17:15:00,0 days 00:45:00,
+Kwame,2024-10-09 00:00:00.000,07:30:00,15:00:00,0 days 01:00:00,
+Total,,,,,
+Signed off,2024-10-11 17:42:09.250,,,,
+$ read timesheet.xlsx header=1 nrows=4
+shape (4, 6)
+  'Employee': str
+  'Day': datetime64[us]
+  'In': object
+  'Out': object
+  'Break': timedelta64[us]
+  'Hours': float64
+Employee,Day,In,Out,Break,Hours
+Priya,2024-10-07,09:15:00,17:15:00,0 days 00:45:00,
+Tomasz,2024-10-07,08:30:00,16:15:00,0 days 00:45:00,
+Kwame,2024-10-07,09:30:00,15:45:00,0 days 00:30:00,
+Priya,2024-10-08,09:30:00,17:00:00,0 days 01:00:00,
+$ read timesheet.xlsx header=1 usecols=Employee,Break skipfooter=2
+shape (9, 2)
+  'Employee': str
+  'Break': timedelta64[us]
+Employee,Break
+Priya,0 days 00:45:00
+Tomasz,0 days 00:45:00
+Kwame,0 days 00:30:00
+Priya,0 days 01:00:00
+Tomasz,0 days 00:30:00
+Kwame,
+Priya,0 days 01:00:00
+Tomasz,0 days 00:45:00
+Kwame,0 days 01:00:00
+$ read timesheet.xlsx sheet_name=Week\s42
+shape (0, 6)
+  'Employee': object
+  'Day': object
+  'In': object
+  'Out': object
+  'Break': object
+  'Hours': object
+Employee,Day,In,Out,Break,Hours
+$ read timesheet.xlsx sheet_name=Week\s42 index_col=0
+shape (0, 5)
+  index 'Employee': object
+  'Day': object
+  'In': object
+  'Out': object
+  'Break': object
+  'Hours': object
+Employee,Day,In,Out,Break,Hours
+$ read stored.xlsx
+shape (0, 0)
+
+$ read stored.xlsx sheet_name=1
+shape (0, 3)
+  'id': object
+  'name': object
+  'amount': object
+id,name,amount
+$ read stored.xlsx sheet_name=None
+['Empty']
+shape (0, 0)
+
+['Header only']
+shape (0, 3)
+  'id': object
+  'name': object
+  'amount': object
+id,name,amount
+$ read renamed.xlsx
+! BadZipFile: File is not a zip file
+$ read old.xls
+! BadZipFile: File is not a zip file
+$ read nowhere.xlsx
+! FileNotFoundError: [Errno 2] No such file or directory: 'data/nowhere.xlsx'
