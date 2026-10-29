@@ -1,0 +1,113 @@
+// LeetCode #1020: Number of Enclaves -- sinking the coast
+//
+// A land cell can walk off the grid exactly when its island touches the
+// border. Flood the land reachable from every border land cell, turning
+// it to water, with a stack of cells to visit; the land left is the
+// enclaves. O(mn).
+
+fn num_enclaves(grid: Vec[Vec[i64]]) -> i64 {
+    let m = grid.len();
+    let n = grid[0].len();
+    let mut land = grid.clone();
+    let mut stack: Vec[(i64, i64)] = Vec.new();
+    for i in 0..m {
+        for j in 0..n {
+            if (i == 0 or j == 0 or i == m - 1 or j == n - 1) and land[i][j] == 1 {
+                land[i][j] = 0;
+                stack.push((i, j));
+            }
+        }
+    }
+    let steps = [(1, 0), (-1, 0), (0, 1), (0, -1)];
+    while let Some((i, j)) = stack.pop() {
+        for (di, dj) in steps.iter() {
+            let (a, b) = (i + di, j + dj);
+            if a >= 0 and a < m and b >= 0 and b < n and land[a][b] == 1 {
+                land[a][b] = 0;
+                stack.push((a, b));
+            }
+        }
+    }
+    let mut left = 0;
+    for row in land.iter() {
+        for c in row.iter() {
+            left += c;
+        }
+    }
+    left
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// an m x n grid with land at each cell with probability `land` / 8
+fn random_grid(seed: mut ref i64, m: i64, n: i64, land: i64) -> Vec[Vec[i64]] {
+    let mut grid: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..m {
+        let mut row: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            row.push(if next_random(mut seed) % 8 < land { 1 } else { 0 });
+        }
+        grid.push(row);
+    }
+    grid
+}
+
+fn main() {
+    // LeetCode's two examples, then a few more
+    let examples: Vec[Vec[Vec[i64]]] = vec![
+        vec![vec![0, 0, 0, 0], vec![1, 0, 1, 0], vec![0, 1, 1, 0], vec![0, 0, 0, 0]],
+        vec![vec![0, 1, 1, 0], vec![0, 0, 1, 0], vec![0, 0, 1, 0], vec![0, 0, 0, 0]],
+        vec![vec![1]],
+        vec![vec![1, 1, 1], vec![1, 1, 1], vec![1, 1, 1]],
+        vec![vec![0, 0, 0], vec![0, 1, 0], vec![0, 0, 0]],
+        vec![vec![0, 0, 0, 0, 0], vec![0, 1, 1, 1, 0], vec![0, 1, 0, 1, 0], vec![0, 1, 1, 1, 0], vec![0, 0, 0, 0, 0]],
+        vec![vec![0, 0, 0, 0, 0], vec![0, 1, 1, 1, 0], vec![0, 1, 0, 1, 1], vec![0, 1, 1, 1, 0], vec![0, 0, 0, 0, 0]],
+    ];
+    for grid in examples.iter() {
+        println(f"{grid} -> {num_enclaves(grid)}");
+    }
+    // random grids: the enclaves in all, the most in one grid and a checksum
+    let mut seed = 1020;
+    let groups: Vec[(i64, i64, i64, i64)] = vec![(2000, 4, 4, 4), (500, 8, 12, 4), (100, 30, 30, 4), (100, 30, 30, 5), (30, 60, 80, 6), (30, 60, 80, 3)];
+    for (count, m, n, land) in groups.iter() {
+        let mut total = 0;
+        let mut most = 0;
+        let mut check = 0;
+        for _ in 0..count {
+            let grid = random_grid(mut seed, m, n, land);
+            let answer = num_enclaves(grid);
+            total += answer;
+            most = most.max(answer);
+            check = (check * 31 + answer) % 1000000007;
+        }
+        println(f"{count} random {m}x{n} grids ({land}/8 land): {total} enclaves, most {most}, checksum {check}");
+    }
+    // 61x61 nested rings: land at every odd depth, each joined to the
+    // next one in by a single cell, inside a border of water, so one
+    // winding island with no way off
+    let size = 61;
+    let mut spiral: Vec[Vec[i64]] = Vec.new();
+    for i in 0..size {
+        let mut row: Vec[i64] = Vec.new();
+        for j in 0..size {
+            // odd depths are land; at an even depth one cell joins the
+            // rings on either side
+            let depth = i.min(j).min(size - 1 - i).min(size - 1 - j);
+            let land = depth % 2 == 1 or (j == depth + 1 and i == depth and depth % 2 == 0 and depth > 0);
+            row.push(if land and depth > 0 { 1 } else { 0 });
+        }
+        spiral.push(row);
+    }
+    let mut cells = 0;
+    for row in spiral.iter() {
+        for c in row.iter() {
+            cells += c;
+        }
+    }
+    println(f"61x61 rings: {cells} land, {num_enclaves(spiral)} enclaves");
+}

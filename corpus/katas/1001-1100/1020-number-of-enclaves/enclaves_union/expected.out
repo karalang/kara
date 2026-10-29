@@ -1,0 +1,14 @@
+[[0, 0, 0, 0], [1, 0, 1, 0], [0, 1, 1, 0], [0, 0, 0, 0]] -> 3
+[[0, 1, 1, 0], [0, 0, 1, 0], [0, 0, 1, 0], [0, 0, 0, 0]] -> 0
+[[1]] -> 0
+[[1, 1, 1], [1, 1, 1], [1, 1, 1]] -> 0
+[[0, 0, 0], [0, 1, 0], [0, 0, 0]] -> 1
+[[0, 0, 0, 0, 0], [0, 1, 1, 1, 0], [0, 1, 0, 1, 0], [0, 1, 1, 1, 0], [0, 0, 0, 0, 0]] -> 8
+[[0, 0, 0, 0, 0], [0, 1, 1, 1, 0], [0, 1, 0, 1, 1], [0, 1, 1, 1, 0], [0, 0, 0, 0, 0]] -> 0
+2000 random 4x4 grids (4/8 land): 332 enclaves, most 3, checksum 762209106
+500 random 8x12 grids (4/8 land): 2876 enclaves, most 22, checksum 311386076
+100 random 30x30 grids (4/8 land): 19060 enclaves, most 296, checksum 702898724
+100 random 30x30 grids (5/8 land): 3038 enclaves, most 160, checksum 766275929
+30 random 60x80 grids (6/8 land): 647 enclaves, most 35, checksum 342447124
+30 random 60x80 grids (3/8 land): 46547 enclaves, most 1651, checksum 738913090
+61x61 rings: 1814 land, 1814 enclaves

@@ -1,0 +1,406 @@
+// LeetCode #1020: Number of Enclaves -- differential
+//
+// The five arms, copied, against the statement read literally and five
+// more properties. See README.md § Differential.
+
+fn d_star(grid: Vec[Vec[i64]]) -> i64 {
+    let m = grid.len();
+    let n = grid[0].len();
+    let mut land = grid.clone();
+    let mut stack: Vec[(i64, i64)] = Vec.new();
+    for i in 0..m {
+        for j in 0..n {
+            if (i == 0 or j == 0 or i == m - 1 or j == n - 1) and land[i][j] == 1 {
+                land[i][j] = 0;
+                stack.push((i, j));
+            }
+        }
+    }
+    let steps = [(1, 0), (-1, 0), (0, 1), (0, -1)];
+    while let Some((i, j)) = stack.pop() {
+        for (di, dj) in steps.iter() {
+            let (a, b) = (i + di, j + dj);
+            if a >= 0 and a < m and b >= 0 and b < n and land[a][b] == 1 {
+                land[a][b] = 0;
+                stack.push((a, b));
+            }
+        }
+    }
+    let mut left = 0;
+    for row in land.iter() {
+        for c in row.iter() {
+            left += c;
+        }
+    }
+    left
+}
+
+fn d_bfs(grid: Vec[Vec[i64]]) -> i64 {
+    let m = grid.len();
+    let n = grid[0].len();
+    let mut seen: Vec[Vec[bool]] = Vec.filled(m, Vec.filled(n, false));
+    let mut queue: Vec[(i64, i64)] = Vec.new();
+    let mut land = 0;
+    for i in 0..m {
+        for j in 0..n {
+            if grid[i][j] == 1 {
+                land += 1;
+                if i == 0 or j == 0 or i == m - 1 or j == n - 1 {
+                    seen[i][j] = true;
+                    queue.push((i, j));
+                }
+            }
+        }
+    }
+    let mut head = 0;
+    while head < queue.len() {
+        let (i, j) = queue[head];
+        head += 1;
+        if i > 0 and grid[i - 1][j] == 1 and not seen[i - 1][j] {
+            seen[i - 1][j] = true;
+            queue.push((i - 1, j));
+        }
+        if i + 1 < m and grid[i + 1][j] == 1 and not seen[i + 1][j] {
+            seen[i + 1][j] = true;
+            queue.push((i + 1, j));
+        }
+        if j > 0 and grid[i][j - 1] == 1 and not seen[i][j - 1] {
+            seen[i][j - 1] = true;
+            queue.push((i, j - 1));
+        }
+        if j + 1 < n and grid[i][j + 1] == 1 and not seen[i][j + 1] {
+            seen[i][j + 1] = true;
+            queue.push((i, j + 1));
+        }
+    }
+    land - queue.len()
+}
+
+fn find(parent: mut ref Vec[i64], x: i64) -> i64 {
+    let mut root = x;
+    while parent[root] != root {
+        root = parent[root];
+    }
+    // point the whole path at the root
+    let mut cur = x;
+    while parent[cur] != root {
+        let next = parent[cur];
+        parent[cur] = root;
+        cur = next;
+    }
+    root
+}
+
+fn join(parent: mut ref Vec[i64], size: mut ref Vec[i64], a: i64, b: i64) {
+    let ra = find(mut parent, a);
+    let rb = find(mut parent, b);
+    if ra == rb {
+        return;
+    }
+    if size[ra] < size[rb] {
+        parent[ra] = rb;
+        size[rb] += size[ra];
+    } else {
+        parent[rb] = ra;
+        size[ra] += size[rb];
+    }
+}
+
+fn d_union(grid: Vec[Vec[i64]]) -> i64 {
+    let m = grid.len();
+    let n = grid[0].len();
+    let outside = m * n;
+    let mut parent: Vec[i64] = Vec.new();
+    for k in 0..outside + 1 {
+        parent.push(k);
+    }
+    let mut size: Vec[i64] = Vec.filled(outside + 1, 1);
+    for i in 0..m {
+        for j in 0..n {
+            if grid[i][j] != 1 {
+                continue;
+            }
+            let k = i * n + j;
+            if i == 0 or j == 0 or i == m - 1 or j == n - 1 {
+                join(mut parent, mut size, k, outside);
+            }
+            if i + 1 < m and grid[i + 1][j] == 1 {
+                join(mut parent, mut size, k, k + n);
+            }
+            if j + 1 < n and grid[i][j + 1] == 1 {
+                join(mut parent, mut size, k, k + 1);
+            }
+        }
+    }
+    let out = find(mut parent, outside);
+    let mut count = 0;
+    for i in 0..m {
+        for j in 0..n {
+            if grid[i][j] == 1 and find(mut parent, i * n + j) != out {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
+fn d_islands(grid: Vec[Vec[i64]]) -> i64 {
+    let m = grid.len();
+    let n = grid[0].len();
+    let mut seen: Vec[Vec[bool]] = Vec.filled(m, Vec.filled(n, false));
+    let mut total = 0;
+    for si in 0..m {
+        for sj in 0..n {
+            if grid[si][sj] != 1 or seen[si][sj] {
+                continue;
+            }
+            let mut cells = 0;
+            let mut coast = false;
+            let mut stack: Vec[(i64, i64)] = vec![(si, sj)];
+            seen[si][sj] = true;
+            while let Some((i, j)) = stack.pop() {
+                cells += 1;
+                if i == 0 or j == 0 or i == m - 1 or j == n - 1 {
+                    coast = true;
+                }
+                for (a, b) in [(i + 1, j), (i - 1, j), (i, j + 1), (i, j - 1)].iter() {
+                    if a >= 0 and a < m and b >= 0 and b < n and grid[a][b] == 1 and not seen[a][b] {
+                        seen[a][b] = true;
+                        stack.push((a, b));
+                    }
+                }
+            }
+            if not coast {
+                total += cells;
+            }
+        }
+    }
+    total
+}
+
+fn sink(land: mut ref Vec[Vec[i64]], i: i64, j: i64) {
+    if i < 0 or j < 0 or i >= land.len() or j >= land[0].len() or land[i][j] == 0 {
+        return;
+    }
+    land[i][j] = 0;
+    sink(mut land, i + 1, j);
+    sink(mut land, i - 1, j);
+    sink(mut land, i, j + 1);
+    sink(mut land, i, j - 1);
+}
+
+fn d_recursive(grid: Vec[Vec[i64]]) -> i64 {
+    let m = grid.len();
+    let n = grid[0].len();
+    let mut land = grid.clone();
+    for i in 0..m {
+        sink(mut land, i, 0);
+        sink(mut land, i, n - 1);
+    }
+    for j in 0..n {
+        sink(mut land, 0, j);
+        sink(mut land, m - 1, j);
+    }
+    let mut left = 0;
+    for row in land.iter() {
+        for c in row.iter() {
+            left += c;
+        }
+    }
+    left
+}
+
+fn arms(grid: ref Vec[Vec[i64]]) -> Vec[i64] {
+    vec![d_star(grid), d_bfs(grid), d_union(grid), d_islands(grid), d_recursive(grid)]
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// the statement read literally: from each land cell, search the land it
+// can walk to for a border cell, from which it can walk off
+fn literal(grid: ref Vec[Vec[i64]]) -> i64 {
+    let m = grid.len();
+    let n = grid[0].len();
+    let mut count = 0;
+    for si in 0..m {
+        for sj in 0..n {
+            if grid[si][sj] != 1 {
+                continue;
+            }
+            let mut seen: Vec[Vec[bool]] = Vec.filled(m, Vec.filled(n, false));
+            let mut todo: Vec[(i64, i64)] = vec![(si, sj)];
+            seen[si][sj] = true;
+            let mut off = false;
+            while let Some((i, j)) = todo.pop() {
+                if i == 0 or j == 0 or i == m - 1 or j == n - 1 {
+                    off = true;
+                }
+                for (a, b) in [(i + 1, j), (i - 1, j), (i, j + 1), (i, j - 1)].iter() {
+                    if a >= 0 and a < m and b >= 0 and b < n and grid[a][b] == 1 and not seen[a][b] {
+                        seen[a][b] = true;
+                        todo.push((a, b));
+                    }
+                }
+            }
+            if not off {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
+// the grid with a ring of `fill` around it
+fn ringed(grid: ref Vec[Vec[i64]], fill: i64) -> Vec[Vec[i64]] {
+    let n = grid[0].len();
+    let mut out: Vec[Vec[i64]] = vec![Vec.filled(n + 2, fill)];
+    for row in grid.iter() {
+        let mut r: Vec[i64] = vec![fill];
+        for c in row.iter() {
+            r.push(c);
+        }
+        r.push(fill);
+        out.push(r);
+    }
+    out.push(Vec.filled(n + 2, fill));
+    out
+}
+
+fn main() {
+    let mut failures: Vec[i64] = Vec.filled(6, 0);
+    let mut checks = 0;
+    let mut check = 0;
+    let mut seed = 10201;
+    let mut grids = 0;
+    // every grid of at most 9 cells (3210), then 500 random of 4x4 to
+    // 5x5, 600 of 1x1 to 15x15 and 5 of 40x40, with 2 to 6 land in 8
+    let mut shapes: Vec[(i64, i64)] = Vec.new();
+    for cells in 1..10 {
+        for m in 1..cells + 1 {
+            if cells % m == 0 {
+                shapes.push((m, cells / m));
+            }
+        }
+    }
+    let mut todo: Vec[Vec[Vec[i64]]] = Vec.new();
+    for (m, n) in shapes.iter() {
+        for code in 0..(1 << (m * n)) {
+            let mut grid: Vec[Vec[i64]] = Vec.new();
+            for i in 0..m {
+                let mut row: Vec[i64] = Vec.new();
+                for j in 0..n {
+                    row.push((code >> (i * n + j)) & 1);
+                }
+                grid.push(row);
+            }
+            todo.push(grid);
+        }
+    }
+    for t in 0..1105 {
+        let (m, n) = if t < 500 {
+            (4 + next_random(mut seed) % 2, 4 + next_random(mut seed) % 2)
+        } else if t < 1100 {
+            (1 + next_random(mut seed) % 15, 1 + next_random(mut seed) % 15)
+        } else {
+            (40, 40)
+        };
+        let land = 2 + next_random(mut seed) % 5;
+        let mut grid: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..m {
+            let mut row: Vec[i64] = Vec.new();
+            for _ in 0..n {
+                row.push(if next_random(mut seed) % 8 < land { 1 } else { 0 });
+            }
+            grid.push(row);
+        }
+        todo.push(grid);
+    }
+    for grid in todo.iter() {
+        grids += 1;
+        let m = grid.len();
+        let n = grid[0].len();
+        let got = arms(grid);
+        check = (check * 31 + got[0]) % 1000000007;
+        let mut cells = 0;
+        let mut inner = 0;
+        for i in 0..m {
+            for j in 0..n {
+                cells += grid[i][j];
+                if i > 0 and j > 0 and i < m - 1 and j < n - 1 {
+                    inner += grid[i][j];
+                }
+            }
+        }
+        let mut turned: Vec[Vec[i64]] = Vec.new();
+        for j in 0..n {
+            let mut row: Vec[i64] = Vec.new();
+            for i in 0..m {
+                row.push(grid[i][j]);
+            }
+            turned.push(row);
+        }
+        let mut flipped: Vec[Vec[i64]] = Vec.new();
+        let mut i = m;
+        while i > 0 {
+            i -= 1;
+            flipped.push(grid[i].clone());
+        }
+        let got_turned = arms(turned);
+        let got_flipped = arms(flipped);
+        let got_water = arms(ringed(grid, 0));
+        let got_land = arms(ringed(grid, 1));
+        let exact = literal(grid);
+        for a in 0..5 {
+            let c = got[a];
+            // P1: the statement
+            checks += 1;
+            if c != exact {
+                failures[0] += 1;
+            }
+            // P2: the same answer transposed and upside down
+            checks += 1;
+            if got_turned[a] != c or got_flipped[a] != c {
+                failures[1] += 1;
+            }
+            // P3: no more than the land off the border, and none at all
+            // when every cell is on the border
+            checks += 1;
+            if c < 0 or c > inner or ((m <= 2 or n <= 2) and c != 0) {
+                failures[2] += 1;
+            }
+            // P4: a ring of water around it makes every land cell an enclave
+            checks += 1;
+            if got_water[a] != cells {
+                failures[3] += 1;
+            }
+            // P5: a ring of land around it joins the border land to the new
+            // border and changes nothing
+            checks += 1;
+            if got_land[a] != c {
+                failures[4] += 1;
+            }
+            // P6: each arm agrees with at least two of the other four
+            checks += 1;
+            let mut agree = 0;
+            for o in 0..5 {
+                if o != a and got[o] == c {
+                    agree += 1;
+                }
+            }
+            if agree < 2 {
+                failures[5] += 1;
+            }
+        }
+    }
+    let mut total = 0;
+    for p in 0..6 {
+        if failures[p] > 0 {
+            println(f"P{p + 1}: {failures[p]} failures");
+        }
+        total += failures[p];
+    }
+    println(f"{grids} grids: checksum {check}, {checks} checks over 5 arms: {total} failures");
+}
