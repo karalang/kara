@@ -12576,19 +12576,30 @@ mod tests {
     // fan out at every recursion level (that nests parallel regions per
     // depth and exhausts the stack). The runtime caps fan-out depth: only
     // the outermost level parallelizes, deeper levels run inline. The
-    // worker below reads the thread-local depth it runs at and records the
-    // max; with the cap, no worker ever exceeds it.
+    // worker below checks each nested level against the level that called
+    // it: run inline, the nested worker sees the whole range on the same
+    // thread at the same depth.
+    //
+    // It compares depths along one chain rather than reading the absolute
+    // depth, because the absolute depth of a top-level chunk is not this
+    // test's to choose: a thread waiting on a nested explicit `par` block
+    // (depth 1, since a branch body counts) work-helps by popping any queued
+    // task, this reduction's chunks included, and runs it at depth 2. That
+    // happened under `cargo test --all` with other tests sharing the pool.
 
     #[cfg(any(not(target_family = "wasm"), feature = "wasm-threads"))]
     struct RecCtx {
-        max_depth: *const AtomicUsize,
+        /// Nested levels that fanned out, or ran a level deeper.
+        fanned: *const AtomicUsize,
+        /// The depth the calling level's worker ran at; `None` at the top.
+        caller_depth: Option<usize>,
         levels: u32,
     }
 
-    /// Recursive reduction worker: records its run-depth, then (while
-    /// `levels` remain) nests another multi-worker `karac_par_reduce`. The
-    /// nested `iter_total = 8` would fan out again absent the cap, pushing
-    /// observed depth past 1; with the cap it runs inline and depth holds.
+    /// Recursive reduction worker: checks it was run inline (when it is
+    /// nested), then, while `levels` remain, nests another multi-worker
+    /// `karac_par_reduce` of `iter_total = 8`, which would fan out again
+    /// absent the cap.
     #[cfg(any(not(target_family = "wasm"), feature = "wasm-threads"))]
     unsafe extern "C" fn worker_recursive_reduce(
         slot: *mut u8,
@@ -12600,14 +12611,19 @@ mod tests {
         unsafe {
             let rc = &*(ctx as *const RecCtx);
             let depth = super::PAR_REDUCE_DEPTH.with(|d| d.get()) as usize;
-            (*rc.max_depth).fetch_max(depth, std::sync::atomic::Ordering::SeqCst);
+            if let Some(caller) = rc.caller_depth {
+                if depth != caller || (start, end) != (0, 8) {
+                    (*rc.fanned).fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
+            }
             let mut acc: i64 = *(slot as *const i64);
             for _ in start..end {
                 acc += 1;
             }
             if rc.levels > 0 {
                 let nested = RecCtx {
-                    max_depth: rc.max_depth,
+                    fanned: rc.fanned,
+                    caller_depth: Some(depth),
                     levels: rc.levels - 1,
                 };
                 let desc = KaracReduceDescriptor {
@@ -12628,17 +12644,21 @@ mod tests {
         }
     }
 
-    /// The depth cap bounds recursive-reduction nesting: no worker runs
-    /// above `KARAC_PAR_MAX_FORK_DEPTH` (default 1), so the runaway nesting
-    /// that crashed B-2026-07-03-14 is structurally impossible while the
-    /// outermost level still parallelizes. Without the cap the four
-    /// recursion levels would each fan out, driving observed depth to 4+.
+    /// The depth cap bounds recursive-reduction nesting: below the top
+    /// level (`KARAC_PAR_MAX_FORK_DEPTH`, default 1) no reduction fans out
+    /// or raises the depth, so the runaway nesting that crashed
+    /// B-2026-07-03-14 is structurally impossible while the outermost
+    /// level still parallelizes. Without the cap each of the four nested
+    /// levels would split its range across the pool (or, on one worker,
+    /// run a level deeper).
     #[cfg(any(not(target_family = "wasm"), feature = "wasm-threads"))]
     #[test]
     fn test_par_reduce_fork_depth_cap_bounds_recursive_nesting() {
-        let max_depth = AtomicUsize::new(0);
+        assert_eq!(super::resolve_max_fork_depth(), 1, "the default cap");
+        let fanned = AtomicUsize::new(0);
         let top = RecCtx {
-            max_depth: &max_depth as *const AtomicUsize,
+            fanned: &fanned as *const AtomicUsize,
+            caller_depth: None,
             levels: 4,
         };
         let desc = KaracReduceDescriptor {
@@ -12655,15 +12675,13 @@ mod tests {
         unsafe {
             karac_par_reduce(&desc, &mut out as *mut i64 as *mut u8, 0);
         }
-        let cap = super::resolve_max_fork_depth() as usize;
-        let seen = max_depth.load(std::sync::atomic::Ordering::SeqCst);
+        let n = fanned.load(std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(n, 0, "{n} nested reductions fanned out below the cap");
+        // The 8 top iterations, and 8 + 8 + 8 + 8 nested ones (the four
+        // levels, inline) under each top-level chunk.
         assert!(
-            seen <= cap,
-            "reduction worker ran at depth {seen}, above fork cap {cap} — nesting not bounded"
-        );
-        assert!(
-            out > 0,
-            "recursive fold should complete with a nonzero result"
+            out > 8 && (out - 8) % 32 == 0,
+            "the recursive fold gave {out}"
         );
     }
 
