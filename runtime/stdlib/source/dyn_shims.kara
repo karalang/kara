@@ -1,0 +1,19 @@
+// Method-table entries the builder generates for a `dyn Trait` value
+// (design.md § `dyn Trait`):
+//
+// - `dyn_display_to_string`: the `to_string` slot of a `dyn Display` for a
+//   type with no `impl Display` of its own, a number, a `bool`, a `char` or
+//   a `String` (B-2026-10-29-31).
+// - `dyn_clone_value`: the table's `clone` entry when the trait has `Clone`
+//   among its supertraits; cloning the `dyn` value boxes its result.
+//
+// The MIR pipeline appends this file to the program, and the builder names
+// the functions. The legacy backends do not read it.
+
+fn dyn_display_to_string[T: Display](x: T) -> String {
+    x.to_string()
+}
+
+fn dyn_clone_value[T: Clone](x: T) -> T {
+    x.clone()
+}

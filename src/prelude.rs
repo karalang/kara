@@ -907,8 +907,8 @@ pub const LIBRARY_SOURCES: &[(&str, &str)] = &[
         include_str!("../runtime/stdlib/source/table_hash.kara"),
     ),
     (
-        "source/dyn_display.kara",
-        include_str!("../runtime/stdlib/source/dyn_display.kara"),
+        "source/dyn_shims.kara",
+        include_str!("../runtime/stdlib/source/dyn_shims.kara"),
     ),
 ];
 

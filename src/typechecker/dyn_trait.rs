@@ -349,6 +349,20 @@ impl<'a> super::TypeChecker<'a> {
         let dyn_ty = base.clone();
         let (trait_name, trait_args, assoc) =
             (trait_name.clone(), trait_args.clone(), assoc.clone());
+        // A `dyn` of a trait under `Clone` is `Clone`: its `clone` copies the
+        // concrete value into a new block, of the same `dyn` type (design.md
+        // § Which traits can be used as `dyn`). `clone` returns `Self`, so it
+        // has no slot of its own.
+        if method == "clone"
+            && args.is_empty()
+            && self
+                .env
+                .supertrait_closure_traits(&trait_name)
+                .iter()
+                .any(|t| t == "Clone")
+        {
+            return Some(dyn_ty);
+        }
         let declared = self
             .env
             .supertrait_closure_traits(&trait_name)

@@ -4606,7 +4606,19 @@ impl<'a> super::TypeChecker<'a> {
                             .env
                             .distinct_types
                             .get(&type_name)
-                            .is_some_and(|set| set.contains(supertrait.as_str()));
+                            .is_some_and(|set| set.contains(supertrait.as_str()))
+                        // A primitive or `String` has its builtin impls
+                        // (`Clone`, `Copy`, `Display`, ...) with no entry in
+                        // the impl table.
+                        || (matches!(
+                            self_type,
+                            Type::Int(_)
+                                | Type::UInt(_)
+                                | Type::Float(_)
+                                | Type::Bool
+                                | Type::Char
+                                | Type::Str
+                        ) && self.type_satisfies_bound(&self_type, supertrait));
                     if !has_impl {
                         self.type_error(
                             format!(

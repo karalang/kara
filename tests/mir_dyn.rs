@@ -789,3 +789,96 @@ fn main() {
         "9 10\n35\n16\n12\n9\n9\n6\n",
     );
 }
+
+/// A `dyn` value of a trait with `Clone` among its supertraits is `Clone`
+/// (design.md § Which traits can be used as `dyn`): `clone` copies the
+/// concrete value into a new block, through the table, for a struct, a
+/// number and a `String`, and a `Vec` of them clones each element. The
+/// copy is independent of the original. The compiled backends' half is the
+/// drop schedule's, so this runs on the interpreter only for now.
+#[test]
+fn mir_dyn_clones_through_its_table() {
+    let src = r#"
+trait Shape: Clone {
+    fn area(ref self) -> i64;
+    fn grow(mut ref self);
+}
+
+#[derive(Clone)]
+struct Sq {
+    s: i64,
+    name: String,
+}
+
+impl Shape for Sq {
+    fn area(ref self) -> i64 {
+        self.s * self.s
+    }
+    fn grow(mut ref self) {
+        self.s += 1;
+        self.name.push_str("+");
+    }
+}
+
+impl Shape for i64 {
+    fn area(ref self) -> i64 {
+        self * 10
+    }
+    fn grow(mut ref self) {}
+}
+
+impl Shape for String {
+    fn area(ref self) -> i64 {
+        self.len()
+    }
+    fn grow(mut ref self) {
+        self.push_str("!");
+    }
+}
+
+fn main() {
+    let mut a: dyn Shape = Sq { s: 3, name: "a".to_string() };
+    let b = a.clone();
+    a.grow();
+    println(f"{a.area()} {b.area()}");
+    let mut s: dyn Shape = "hey".to_string();
+    let t = s.clone();
+    s.grow();
+    println(f"{s.area()} {t.area()}");
+    let v: Vec[dyn Shape] = [a, b, s, t, 4].to_vec();
+    let mut w = v.clone();
+    for x in w.iter_mut() {
+        x.grow();
+    }
+    let mut tv = 0;
+    for x in v.iter() {
+        tv += x.area();
+    }
+    let mut tw = 0;
+    for x in w.iter() {
+        tw += x.area();
+    }
+    println(f"{tv} {tw}");
+}
+"#;
+    let run = karac::mir::lower::run_source(src).expect("MIR");
+    assert!(
+        matches!(run.outcome, Outcome::Returned(_)),
+        "{:?}\n{}",
+        run.outcome,
+        run.output
+    );
+    assert_eq!(run.output, "16 9\n4 3\n72 90\n");
+}
+
+/// `clone` on a `dyn` value of a trait without `Clone` among its
+/// supertraits is not a method of it.
+#[test]
+fn mir_dyn_refuses_clone_without_the_supertrait() {
+    refused(
+        &format!(
+            "{SHAPES}fn main() {{ let a: dyn Shape = Circle {{ r: 1.0 }}; let b = a.clone(); }}\n"
+        ),
+        "no method 'clone' on `dyn Shape`",
+    );
+}

@@ -10586,6 +10586,47 @@ impl<'a> Interp<'a> {
                 }
                 r
             }
+            // A `dyn` value of a trait under `Clone`: its table's clone of
+            // the concrete value, in a new block (design.md § `dyn Trait`).
+            (TyKind::Dyn { .. }, Value::Dyn { data, vtable }) => {
+                let program: &'a Program = self.program;
+                let Some(name) = program
+                    .vtables
+                    .get(*vtable as usize)
+                    .and_then(|t| t.clone.as_ref())
+                else {
+                    return err(format!(
+                        "clone of {}: its method table has no clone",
+                        self.tys.display(ty)
+                    ));
+                };
+                let callee = program
+                    .bodies
+                    .get(name)
+                    .ok_or_else(|| Stop::Error(format!("no body for the `dyn` clone {name}")))?;
+                let at = Addr {
+                    root: Root::Heap(*data),
+                    path: Path::new(),
+                };
+                let by_ref = callee.locals.get(1).is_some_and(|l| {
+                    matches!(self.tys.kind(l.ty), TyKind::Ref(_) | TyKind::MutRef(_))
+                });
+                let arg = if by_ref {
+                    Value::Ref(at)
+                } else {
+                    self.slot(&at)?
+                };
+                let copy = self.call_body(name, callee, vec![arg])?;
+                let data = self.alloc(HeapObj {
+                    count: 1,
+                    weak: 0,
+                    value: copy,
+                });
+                Ok(Value::Dyn {
+                    data,
+                    vtable: *vtable,
+                })
+            }
             // A struct or enum with no user `Clone` body: field by field,
             // as `#[derive(Clone)]` does, whether or not it has a `Drop`
             // body (design.md §9). The checker allows `.clone()` only on a

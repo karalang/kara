@@ -43,6 +43,34 @@ impl<'l, 'a> Bx<'l, 'a> {
         out
     }
 
+    /// Whether `tr` has `Clone` among its supertraits, at any depth.
+    fn clones_under(&self, tr: &str) -> bool {
+        let mut seen = FxHashSet::default();
+        let mut todo = vec![tr.to_string()];
+        while let Some(t) = todo.pop() {
+            if t == "Clone" {
+                return true;
+            }
+            if !seen.insert(t.clone()) {
+                continue;
+            }
+            let def = self
+                .lcx
+                .trait_defs
+                .get(t.as_str())
+                .copied()
+                .or_else(|| checker_library_trait(&t));
+            if let Some(def) = def {
+                todo.extend(
+                    def.supertraits
+                        .iter()
+                        .filter_map(|st| st.path.last().cloned()),
+                );
+            }
+        }
+        false
+    }
+
     fn collect_slots(
         &self,
         tr: &str,
@@ -113,11 +141,25 @@ impl<'l, 'a> Bx<'l, 'a> {
             }
             slots.push(self.lcx.instance(d, inst));
         }
+        // A trait under `Clone` makes the `dyn` value `Clone`: the table
+        // carries the concrete value's clone, which a clone of the `dyn`
+        // value boxes (design.md § Which traits can be used as `dyn`).
+        let clone = match self.tys().tcx().kind(dyn_ty) {
+            HK::Dyn { trait_, .. } if self.clones_under(&self.lcx.def_name(trait_)) => {
+                let d = self
+                    .lcx
+                    .defs
+                    .lookup(0, "dyn_clone_value")
+                    .filter(|d| self.lcx.fns.contains_key(d));
+                d.map(|d| self.lcx.instance(d, vec![concrete]))
+            }
+            _ => None,
+        };
         self.lcx.program.vtables.push(Vtable {
             dyn_ty,
             concrete,
             slots,
-            clone: None,
+            clone,
         });
         Ok((self.lcx.program.vtables.len() - 1) as u32)
     }
