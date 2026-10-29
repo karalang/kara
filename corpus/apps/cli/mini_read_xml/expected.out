@@ -1,0 +1,1808 @@
+$ read ecb_rates.xml
+shape (3, 3)
+  'subject': str
+  'name': str
+  'Cube': str
+,subject,name,Cube
+0,Reference rates,,
+1,,European Central Bank,
+2,,,"
+			"
+$ read ecb_rates.xml xpath=//doc:Cube[@currency] namespaces=doc=http://www.ecb.int/vocabulary/2002-08-01/eurofxref
+shape (18, 2)
+  'currency': str
+  'rate': float64
+,currency,rate
+0,USD,1.0807
+1,JPY,160.32
+2,GBP,0.863
+3,CHF,0.9522
+4,PLN,4.2825
+5,INR,90.233
+6,USD,1.0904
+7,JPY,160.96
+8,GBP,0.8479
+9,CHF,0.9486
+10,PLN,4.2895
+11,INR,89.763
+12,USD,1.0881
+13,JPY,160.33
+14,GBP,0.855
+15,CHF,0.9483
+16,PLN,4.3462
+17,INR,90.053
+$ read ecb_rates.xml parser=etree xpath=.//doc:Cube[@currency] namespaces=doc=http://www.ecb.int/vocabulary/2002-08-01/eurofxref
+shape (18, 2)
+  'currency': str
+  'rate': float64
+,currency,rate
+0,USD,1.0807
+1,JPY,160.32
+2,GBP,0.863
+3,CHF,0.9522
+4,PLN,4.2825
+5,INR,90.233
+6,USD,1.0904
+7,JPY,160.96
+8,GBP,0.8479
+9,CHF,0.9486
+10,PLN,4.2895
+11,INR,89.763
+12,USD,1.0881
+13,JPY,160.33
+14,GBP,0.855
+15,CHF,0.9483
+16,PLN,4.3462
+17,INR,90.053
+$ read ecb_rates.xml xpath=//doc:Cube[@time] namespaces=doc=http://www.ecb.int/vocabulary/2002-08-01/eurofxref attrs_only=True parse_dates=time
+shape (3, 1)
+  'time': datetime64[us]
+,time
+0,2024-03-01
+1,2024-03-04
+2,2024-03-05
+$ read ecb_rates.xml xpath=//doc:Cube[@currency='USD'] namespaces=doc=http://www.ecb.int/vocabulary/2002-08-01/eurofxref
+shape (3, 2)
+  'currency': str
+  'rate': float64
+,currency,rate
+0,USD,1.0807
+1,USD,1.0904
+2,USD,1.0881
+$ read ecb_rates.xml xpath=//Cube
+! ValueError: xpath does not return any nodes or attributes. Be sure to specify in `xpath` the parent nodes of children and attributes to parse. If document uses namespaces denoted with xmlns, be sure to define namespaces and use them in xpath.
+$ read ecb_rates.xml xpath=//doc:Cube[@currency] namespaces=x=http://www.ecb.int/vocabulary/2002-08-01/eurofxref
+! XPathEvalError: Undefined namespace prefix
+$ read ecb_rates.xml parser=etree xpath=.//doc:Cube namespaces=x=http://www.ecb.int/vocabulary/2002-08-01/eurofxref
+! SyntaxError: You have used an incorrect or unsupported XPath expression for etree library or you used an undeclared namespace prefix.
+$ read ecb_rates.xml xpath=//*[local-name()='Cube'][@rate>100]
+shape (3, 2)
+  'currency': str
+  'rate': float64
+,currency,rate
+0,JPY,160.32
+1,JPY,160.96
+2,JPY,160.33
+$ write ecb_rates.xml xpath=//doc:Cube[@currency='USD'] namespaces=doc=http://www.ecb.int/vocabulary/2002-08-01/eurofxref | index=False
+<?xml version='1.0' encoding='utf-8'?>
+<data>
+  <row>
+    <currency>USD</currency>
+    <rate>1.0807</rate>
+  </row>
+  <row>
+    <currency>USD</currency>
+    <rate>1.0904</rate>
+  </row>
+  <row>
+    <currency>USD</currency>
+    <rate>1.0881</rate>
+  </row>
+</data>
+$ write ecb_rates.xml xpath=//doc:Cube[@currency='CHF'] namespaces=doc=http://www.ecb.int/vocabulary/2002-08-01/eurofxref | parser=etree attr_cols=currency,rate
+<?xml version="1.0" encoding="utf-8"?>
+<data>
+  <row index="0" currency="CHF" rate="0.9522"/>
+  <row index="1" currency="CHF" rate="0.9486"/>
+  <row index="2" currency="CHF" rate="0.9483"/>
+</data>
+$ read orders.xml
+shape (8, 8)
+  'id': str
+  'status': str
+  'customer': str
+  'placed': str
+  'total': float64
+  'items': str
+  'note': str
+  'gift': bool
+,id,status,customer,placed,total,items,note,gift
+0,SO-10420,paid,Zoë Ångström,2024-03-01T00:00:00,811.55,"
+      ",,False
+1,SO-10427,shipped,Marc O'Neil,2024-03-04T05:13:00,102.14,"
+      ",,True
+2,SO-10434,refunded,Søren Kjær,2024-03-07T10:26:00,226.75,"
+      ","Customer wrote: ""box arrived <crushed>"" & asked for refund",False
+3,SO-10441,paid,Ana-María Ruiz,2024-03-10T15:39:00,287.54,"
+      ",,False
+4,SO-10448,pending,李 小龍,2024-03-13T20:52:00,258.52,"
+      ",,False
+5,SO-10455,shipped,Chloé & Théo Martin,2024-03-16T01:05:00,400.79,"
+      ",Leave at door — ,True
+6,SO-10462,paid,Priya <Ops> Nair,2024-03-19T06:18:00,,"
+      ",,False
+7,SO-10469,cancelled,Olu Adeyemi,2024-03-22T11:31:00,189.03,"
+      ",,False
+$ read orders.xml parser=etree
+shape (8, 8)
+  'id': str
+  'status': str
+  'customer': str
+  'placed': str
+  'total': float64
+  'items': str
+  'note': str
+  'gift': bool
+,id,status,customer,placed,total,items,note,gift
+0,SO-10420,paid,Zoë Ångström,2024-03-01T00:00:00,811.55,"
+      ",,False
+1,SO-10427,shipped,Marc O'Neil,2024-03-04T05:13:00,102.14,"
+      ",,True
+2,SO-10434,refunded,Søren Kjær,2024-03-07T10:26:00,226.75,"
+      ","Customer wrote: ""box arrived <crushed>"" & asked for refund",False
+3,SO-10441,paid,Ana-María Ruiz,2024-03-10T15:39:00,287.54,"
+      ",,False
+4,SO-10448,pending,李 小龍,2024-03-13T20:52:00,258.52,"
+      ",,False
+5,SO-10455,shipped,Chloé & Théo Martin,2024-03-16T01:05:00,400.79,"
+      ",Leave at door —  code 4417 B,True
+6,SO-10462,paid,Priya <Ops> Nair,2024-03-19T06:18:00,,"
+      ",,False
+7,SO-10469,cancelled,Olu Adeyemi,2024-03-22T11:31:00,189.03,"
+      ",,False
+$ read orders.xml elems_only=True
+shape (8, 6)
+  'customer': str
+  'placed': str
+  'total': float64
+  'items': str
+  'note': str
+  'gift': bool
+,customer,placed,total,items,note,gift
+0,Zoë Ångström,2024-03-01T00:00:00,811.55,"
+      ",,False
+1,Marc O'Neil,2024-03-04T05:13:00,102.14,"
+      ",,True
+2,Søren Kjær,2024-03-07T10:26:00,226.75,"
+      ","Customer wrote: ""box arrived <crushed>"" & asked for refund",False
+3,Ana-María Ruiz,2024-03-10T15:39:00,287.54,"
+      ",,False
+4,李 小龍,2024-03-13T20:52:00,258.52,"
+      ",,False
+5,Chloé & Théo Martin,2024-03-16T01:05:00,400.79,"
+      ",Leave at door — ,True
+6,Priya <Ops> Nair,2024-03-19T06:18:00,,"
+      ",,False
+7,Olu Adeyemi,2024-03-22T11:31:00,189.03,"
+      ",,False
+$ read orders.xml attrs_only=True
+shape (8, 2)
+  'id': str
+  'status': str
+,id,status
+0,SO-10420,paid
+1,SO-10427,shipped
+2,SO-10434,refunded
+3,SO-10441,paid
+4,SO-10448,pending
+5,SO-10455,shipped
+6,SO-10462,paid
+7,SO-10469,cancelled
+$ read orders.xml elems_only=True attrs_only=True
+! ValueError: Either element or attributes can be parsed not both.
+$ read orders.xml names=order_id,state,cust,placed,total,items,note,gift
+shape (8, 8)
+  'order_id': str
+  'state': str
+  'cust': str
+  'placed': str
+  'total': str
+  'items': str
+  'note': str
+  'gift': object
+,order_id,state,cust,placed,total,items,note,gift
+0,SO-10420,paid,Zoë Ångström,2024-03-01T00:00:00,811.55,"
+      ",,False
+1,SO-10427,shipped,Marc O'Neil,2024-03-04T05:13:00,102.14,"
+      ",,True
+2,SO-10434,refunded,Søren Kjær,2024-03-07T10:26:00,226.75,"
+      ","Customer wrote: ""box arrived <crushed>"" & asked for refund",False
+3,SO-10441,paid,Ana-María Ruiz,2024-03-10T15:39:00,287.54,"
+      ",,False
+4,SO-10448,pending,李 小龍,2024-03-13T20:52:00,258.52,"
+      ",,False
+5,SO-10455,shipped,Chloé & Théo Martin,2024-03-16T01:05:00,400.79,"
+      ",Leave at door — ,True
+6,SO-10462,paid,Priya <Ops> Nair,2024-03-19T06:18:00,"
+      ",,false,
+7,SO-10469,cancelled,Olu Adeyemi,2024-03-22T11:31:00,189.03,"
+      ",,False
+$ read orders.xml parser=etree names=a,b,c
+! ValueError: names does not match length of child elements in xpath.
+$ read orders.xml dtype=gift:str,total:float64 parse_dates=placed
+shape (8, 8)
+  'id': str
+  'status': str
+  'customer': str
+  'placed': datetime64[us]
+  'total': float64
+  'items': str
+  'note': str
+  'gift': str
+,id,status,customer,placed,total,items,note,gift
+0,SO-10420,paid,Zoë Ångström,2024-03-01 00:00:00,811.55,"
+      ",,false
+1,SO-10427,shipped,Marc O'Neil,2024-03-04 05:13:00,102.14,"
+      ",,true
+2,SO-10434,refunded,Søren Kjær,2024-03-07 10:26:00,226.75,"
+      ","Customer wrote: ""box arrived <crushed>"" & asked for refund",false
+3,SO-10441,paid,Ana-María Ruiz,2024-03-10 15:39:00,287.54,"
+      ",,false
+4,SO-10448,pending,李 小龍,2024-03-13 20:52:00,258.52,"
+      ",,false
+5,SO-10455,shipped,Chloé & Théo Martin,2024-03-16 01:05:00,400.79,"
+      ",Leave at door — ,true
+6,SO-10462,paid,Priya <Ops> Nair,2024-03-19 06:18:00,,"
+      ",,false
+7,SO-10469,cancelled,Olu Adeyemi,2024-03-22 11:31:00,189.03,"
+      ",,false
+$ read orders.xml xpath=//item
+shape (15, 2)
+  'sku': str
+  'qty': int64
+,sku,qty
+0,SKU-100,1
+1,SKU-110,2
+2,SKU-111,3
+3,SKU-120,3
+4,SKU-121,4
+5,SKU-122,1
+6,SKU-130,4
+7,SKU-140,1
+8,SKU-141,2
+9,SKU-150,2
+10,SKU-151,3
+11,SKU-152,4
+12,SKU-160,3
+13,SKU-170,4
+14,SKU-171,1
+$ read orders.xml xpath=//order[gift='true']
+shape (2, 8)
+  'id': str
+  'status': str
+  'customer': str
+  'placed': str
+  'total': float64
+  'items': str
+  'note': str
+  'gift': bool
+,id,status,customer,placed,total,items,note,gift
+0,SO-10427,shipped,Marc O'Neil,2024-03-04T05:13:00,102.14,"
+      ",,True
+1,SO-10455,shipped,Chloé & Théo Martin,2024-03-16T01:05:00,400.79,"
+      ",Leave at door — ,True
+$ read orders.xml parser=etree xpath=.//order[gift='true']
+shape (2, 8)
+  'id': str
+  'status': str
+  'customer': str
+  'placed': str
+  'total': float64
+  'items': str
+  'note': str
+  'gift': bool
+,id,status,customer,placed,total,items,note,gift
+0,SO-10427,shipped,Marc O'Neil,2024-03-04T05:13:00,102.14,"
+      ",,True
+1,SO-10455,shipped,Chloé & Théo Martin,2024-03-16T01:05:00,400.79,"
+      ",Leave at door —  code 4417 B,True
+$ read orders.xml xpath=//order[position()>6]
+shape (2, 8)
+  'id': str
+  'status': str
+  'customer': str
+  'placed': str
+  'items': str
+  'note': float64
+  'gift': bool
+  'total': float64
+,id,status,customer,placed,items,note,gift,total
+0,SO-10462,paid,Priya <Ops> Nair,2024-03-19T06:18:00,"
+      ",,False,
+1,SO-10469,cancelled,Olu Adeyemi,2024-03-22T11:31:00,"
+      ",,False,189.03
+$ read orders.xml parser=etree xpath=.//order[last()]
+shape (1, 8)
+  'id': str
+  'status': str
+  'customer': str
+  'placed': str
+  'total': float64
+  'items': str
+  'note': float64
+  'gift': bool
+,id,status,customer,placed,total,items,note,gift
+0,SO-10469,cancelled,Olu Adeyemi,2024-03-22T11:31:00,189.03,"
+      ",,False
+$ read orders.xml xpath=//order/@id
+! AttributeError: 'lxml.etree._ElementUnicodeResult' object has no attribute 'xpath'
+$ read orders.xml xpath=count(//order)
+! TypeError: 'float' object is not iterable
+$ read orders.xml xpath=boolean(//order)
+! TypeError: 'bool' object is not iterable
+$ read blog.rss xpath=string(//title)
+! AttributeError: 'str' object has no attribute 'xpath'
+$ read orders.xml xpath=//order[1]/@id|//order[2]
+! AttributeError: 'lxml.etree._ElementUnicodeResult' object has no attribute 'xpath'
+$ read orders.xml xpath=//items elems_only=True names=x,y
+! ValueError: names does not match length of child elements in xpath.
+$ read orders.xml parser=etree xpath=//order
+! SyntaxError: You have used an incorrect or unsupported XPath expression for etree library or you used an undeclared namespace prefix.
+$ read orders.xml xpath=//order[
+! XPathEvalError: Invalid expression
+$ read orders.xml parser=etree xpath=.//order[@id=
+! TypeError: 'NoneType' object is not callable
+$ read orders.xml xpath=//invoice
+! ValueError: xpath does not return any nodes or attributes. Be sure to specify in `xpath` the parent nodes of children and attributes to parse. If document uses namespaces denoted with xmlns, be sure to define namespaces and use them in xpath.
+$ read orders.xml iterparse=order:id,status,customer,total,sku
+shape (8, 5)
+  'id': str
+  'status': str
+  'customer': str
+  'total': float64
+  'sku': str
+,id,status,customer,total,sku
+0,SO-10420,paid,Zoë Ångström,811.55,SKU-100
+1,SO-10427,shipped,Marc O'Neil,102.14,SKU-111
+2,SO-10434,refunded,Søren Kjær,226.75,SKU-122
+3,SO-10441,paid,Ana-María Ruiz,287.54,SKU-130
+4,SO-10448,pending,李 小龍,258.52,SKU-141
+5,SO-10455,shipped,Chloé & Théo Martin,400.79,SKU-152
+6,SO-10462,paid,Priya <Ops> Nair,,SKU-160
+7,SO-10469,cancelled,Olu Adeyemi,189.03,SKU-171
+$ read orders.xml parser=etree iterparse=order:id,status,customer,total,qty
+shape (8, 5)
+  'id': str
+  'status': str
+  'customer': str
+  'total': float64
+  'qty': int64
+,id,status,customer,total,qty
+0,SO-10420,paid,Zoë Ångström,811.55,1
+1,SO-10427,shipped,Marc O'Neil,102.14,3
+2,SO-10434,refunded,Søren Kjær,226.75,1
+3,SO-10441,paid,Ana-María Ruiz,287.54,4
+4,SO-10448,pending,李 小龍,258.52,2
+5,SO-10455,shipped,Chloé & Théo Martin,400.79,4
+6,SO-10462,paid,Priya <Ops> Nair,,3
+7,SO-10469,cancelled,Olu Adeyemi,189.03,1
+$ read orders.xml iterparse=order:customer,customer,id names=a,b,c
+! ValueError: zip() argument 2 is shorter than argument 1
+$ read orders.xml parser=lexml
+! ValueError: Values for parser can only be lxml or etree.
+$ write orders.xml | attr_cols=id,status elem_cols=customer,total
+<?xml version='1.0' encoding='utf-8'?>
+<data>
+  <row index="0" id="SO-10420" status="paid">
+    <index>0</index>
+    <customer>Zoë Ångström</customer>
+    <total>811.55</total>
+  </row>
+  <row index="1" id="SO-10427" status="shipped">
+    <index>1</index>
+    <customer>Marc O'Neil</customer>
+    <total>102.14</total>
+  </row>
+  <row index="2" id="SO-10434" status="refunded">
+    <index>2</index>
+    <customer>Søren Kjær</customer>
+    <total>226.75</total>
+  </row>
+  <row index="3" id="SO-10441" status="paid">
+    <index>3</index>
+    <customer>Ana-María Ruiz</customer>
+    <total>287.54</total>
+  </row>
+  <row index="4" id="SO-10448" status="pending">
+    <index>4</index>
+    <customer>李 小龍</customer>
+    <total>258.52</total>
+  </row>
+  <row index="5" id="SO-10455" status="shipped">
+    <index>5</index>
+    <customer>Chloé &amp; Théo Martin</customer>
+    <total>400.79</total>
+  </row>
+  <row index="6" id="SO-10462" status="paid">
+    <index>6</index>
+    <customer>Priya &lt;Ops&gt; Nair</customer>
+    <total/>
+  </row>
+  <row index="7" id="SO-10469" status="cancelled">
+    <index>7</index>
+    <customer>Olu Adeyemi</customer>
+    <total>189.03</total>
+  </row>
+</data>
+$ write orders.xml | parser=etree attr_cols=id,status elem_cols=customer,total
+<?xml version="1.0" encoding="utf-8"?>
+<data>
+  <row index="0" id="SO-10420" status="paid">
+    <index>0</index>
+    <customer>Zoë Ångström</customer>
+    <total>811.55</total>
+  </row>
+  <row index="1" id="SO-10427" status="shipped">
+    <index>1</index>
+    <customer>Marc O'Neil</customer>
+    <total>102.14</total>
+  </row>
+  <row index="2" id="SO-10434" status="refunded">
+    <index>2</index>
+    <customer>Søren Kjær</customer>
+    <total>226.75</total>
+  </row>
+  <row index="3" id="SO-10441" status="paid">
+    <index>3</index>
+    <customer>Ana-María Ruiz</customer>
+    <total>287.54</total>
+  </row>
+  <row index="4" id="SO-10448" status="pending">
+    <index>4</index>
+    <customer>李 小龍</customer>
+    <total>258.52</total>
+  </row>
+  <row index="5" id="SO-10455" status="shipped">
+    <index>5</index>
+    <customer>Chloé &amp; Théo Martin</customer>
+    <total>400.79</total>
+  </row>
+  <row index="6" id="SO-10462" status="paid">
+    <index>6</index>
+    <customer>Priya &lt;Ops&gt; Nair</customer>
+    <total/>
+  </row>
+  <row index="7" id="SO-10469" status="cancelled">
+    <index>7</index>
+    <customer>Olu Adeyemi</customer>
+    <total>189.03</total>
+  </row>
+</data>
+$ write orders.xml dtype=gift:str parse_dates=placed | index=False root_name=export row_name=sale
+<?xml version='1.0' encoding='utf-8'?>
+<export>
+  <sale>
+    <id>SO-10420</id>
+    <status>paid</status>
+    <customer>Zoë Ångström</customer>
+    <placed>2024-03-01 00:00:00</placed>
+    <total>811.55</total>
+    <items>
+      </items>
+    <note/>
+    <gift>false</gift>
+  </sale>
+  <sale>
+    <id>SO-10427</id>
+    <status>shipped</status>
+    <customer>Marc O'Neil</customer>
+    <placed>2024-03-04 05:13:00</placed>
+    <total>102.14</total>
+    <items>
+      </items>
+    <note/>
+    <gift>true</gift>
+  </sale>
+  <sale>
+    <id>SO-10434</id>
+    <status>refunded</status>
+    <customer>Søren Kjær</customer>
+    <placed>2024-03-07 10:26:00</placed>
+    <total>226.75</total>
+    <items>
+      </items>
+    <note>Customer wrote: "box arrived &lt;crushed&gt;" &amp; asked for refund</note>
+    <gift>false</gift>
+  </sale>
+  <sale>
+    <id>SO-10441</id>
+    <status>paid</status>
+    <customer>Ana-María Ruiz</customer>
+    <placed>2024-03-10 15:39:00</placed>
+    <total>287.54</total>
+    <items>
+      </items>
+    <note/>
+    <gift>false</gift>
+  </sale>
+  <sale>
+    <id>SO-10448</id>
+    <status>pending</status>
+    <customer>李 小龍</customer>
+    <placed>2024-03-13 20:52:00</placed>
+    <total>258.52</total>
+    <items>
+      </items>
+    <note/>
+    <gift>false</gift>
+  </sale>
+  <sale>
+    <id>SO-10455</id>
+    <status>shipped</status>
+    <customer>Chloé &amp; Théo Martin</customer>
+    <placed>2024-03-16 01:05:00</placed>
+    <total>400.79</total>
+    <items>
+      </items>
+    <note>Leave at door — </note>
+    <gift>true</gift>
+  </sale>
+  <sale>
+    <id>SO-10462</id>
+    <status>paid</status>
+    <customer>Priya &lt;Ops&gt; Nair</customer>
+    <placed>2024-03-19 06:18:00</placed>
+    <total/>
+    <items>
+      </items>
+    <note/>
+    <gift>false</gift>
+  </sale>
+  <sale>
+    <id>SO-10469</id>
+    <status>cancelled</status>
+    <customer>Olu Adeyemi</customer>
+    <placed>2024-03-22 11:31:00</placed>
+    <total>189.03</total>
+    <items>
+      </items>
+    <note/>
+    <gift>false</gift>
+  </sale>
+</export>
+$ write orders.xml | parser=etree
+<?xml version="1.0" encoding="utf-8"?>
+<data>
+  <row>
+    <index>0</index>
+    <id>SO-10420</id>
+    <status>paid</status>
+    <customer>Zoë Ångström</customer>
+    <placed>2024-03-01T00:00:00</placed>
+    <total>811.55</total>
+    <items>
+      </items>
+    <note/>
+    <gift>False</gift>
+  </row>
+  <row>
+    <index>1</index>
+    <id>SO-10427</id>
+    <status>shipped</status>
+    <customer>Marc O'Neil</customer>
+    <placed>2024-03-04T05:13:00</placed>
+    <total>102.14</total>
+    <items>
+      </items>
+    <note/>
+    <gift>True</gift>
+  </row>
+  <row>
+    <index>2</index>
+    <id>SO-10434</id>
+    <status>refunded</status>
+    <customer>Søren Kjær</customer>
+    <placed>2024-03-07T10:26:00</placed>
+    <total>226.75</total>
+    <items>
+      </items>
+    <note>Customer wrote: "box arrived &lt;crushed&gt;" &amp; asked for refund</note>
+    <gift>False</gift>
+  </row>
+  <row>
+    <index>3</index>
+    <id>SO-10441</id>
+    <status>paid</status>
+    <customer>Ana-María Ruiz</customer>
+    <placed>2024-03-10T15:39:00</placed>
+    <total>287.54</total>
+    <items>
+      </items>
+    <note/>
+    <gift>False</gift>
+  </row>
+  <row>
+    <index>4</index>
+    <id>SO-10448</id>
+    <status>pending</status>
+    <customer>李 小龍</customer>
+    <placed>2024-03-13T20:52:00</placed>
+    <total>258.52</total>
+    <items>
+      </items>
+    <note/>
+    <gift>False</gift>
+  </row>
+  <row>
+    <index>5</index>
+    <id>SO-10455</id>
+    <status>shipped</status>
+    <customer>Chloé &amp; Théo Martin</customer>
+    <placed>2024-03-16T01:05:00</placed>
+    <total>400.79</total>
+    <items>
+      </items>
+    <note>Leave at door — </note>
+    <gift>True</gift>
+  </row>
+  <row>
+    <index>6</index>
+    <id>SO-10462</id>
+    <status>paid</status>
+    <customer>Priya &lt;Ops&gt; Nair</customer>
+    <placed>2024-03-19T06:18:00</placed>
+    <total/>
+    <items>
+      </items>
+    <note/>
+    <gift>False</gift>
+  </row>
+  <row>
+    <index>7</index>
+    <id>SO-10469</id>
+    <status>cancelled</status>
+    <customer>Olu Adeyemi</customer>
+    <placed>2024-03-22T11:31:00</placed>
+    <total>189.03</total>
+    <items>
+      </items>
+    <note/>
+    <gift>False</gift>
+  </row>
+</data>
+$ write orders.xml | parser=etree xml_declaration=False elem_cols=note
+<?xml version="1.0" encoding="utf-8"?>
+<data>
+  <row>
+    <index>0</index>
+    <note/>
+  </row>
+  <row>
+    <index>1</index>
+    <note/>
+  </row>
+  <row>
+    <index>2</index>
+    <note>Customer wrote: "box arrived &lt;crushed&gt;" &amp; asked for refund</note>
+  </row>
+  <row>
+    <index>3</index>
+    <note/>
+  </row>
+  <row>
+    <index>4</index>
+    <note/>
+  </row>
+  <row>
+    <index>5</index>
+    <note>Leave at door — </note>
+  </row>
+  <row>
+    <index>6</index>
+    <note/>
+  </row>
+  <row>
+    <index>7</index>
+    <note/>
+  </row>
+</data>
+$ write orders.xml | parser=etree pretty_print=False xml_declaration=False
+<data><row><index>0</index><id>SO-10420</id><status>paid</status><customer>Zoë Ångström</customer><placed>2024-03-01T00:00:00</placed><total>811.55</total><items>
+      </items><note /><gift>False</gift></row><row><index>1</index><id>SO-10427</id><status>shipped</status><customer>Marc O'Neil</customer><placed>2024-03-04T05:13:00</placed><total>102.14</total><items>
+      </items><note /><gift>True</gift></row><row><index>2</index><id>SO-10434</id><status>refunded</status><customer>Søren Kjær</customer><placed>2024-03-07T10:26:00</placed><total>226.75</total><items>
+      </items><note>Customer wrote: "box arrived &lt;crushed&gt;" &amp; asked for refund</note><gift>False</gift></row><row><index>3</index><id>SO-10441</id><status>paid</status><customer>Ana-María Ruiz</customer><placed>2024-03-10T15:39:00</placed><total>287.54</total><items>
+      </items><note /><gift>False</gift></row><row><index>4</index><id>SO-10448</id><status>pending</status><customer>李 小龍</customer><placed>2024-03-13T20:52:00</placed><total>258.52</total><items>
+      </items><note /><gift>False</gift></row><row><index>5</index><id>SO-10455</id><status>shipped</status><customer>Chloé &amp; Théo Martin</customer><placed>2024-03-16T01:05:00</placed><total>400.79</total><items>
+      </items><note>Leave at door — </note><gift>True</gift></row><row><index>6</index><id>SO-10462</id><status>paid</status><customer>Priya &lt;Ops&gt; Nair</customer><placed>2024-03-19T06:18:00</placed><total /><items>
+      </items><note /><gift>False</gift></row><row><index>7</index><id>SO-10469</id><status>cancelled</status><customer>Olu Adeyemi</customer><placed>2024-03-22T11:31:00</placed><total>189.03</total><items>
+      </items><note /><gift>False</gift></row></data>
+$ write orders.xml | pretty_print=False
+<?xml version='1.0' encoding='utf-8'?>
+<data><row><index>0</index><id>SO-10420</id><status>paid</status><customer>Zoë Ångström</customer><placed>2024-03-01T00:00:00</placed><total>811.55</total><items>
+      </items><note/><gift>False</gift></row><row><index>1</index><id>SO-10427</id><status>shipped</status><customer>Marc O'Neil</customer><placed>2024-03-04T05:13:00</placed><total>102.14</total><items>
+      </items><note/><gift>True</gift></row><row><index>2</index><id>SO-10434</id><status>refunded</status><customer>Søren Kjær</customer><placed>2024-03-07T10:26:00</placed><total>226.75</total><items>
+      </items><note>Customer wrote: "box arrived &lt;crushed&gt;" &amp; asked for refund</note><gift>False</gift></row><row><index>3</index><id>SO-10441</id><status>paid</status><customer>Ana-María Ruiz</customer><placed>2024-03-10T15:39:00</placed><total>287.54</total><items>
+      </items><note/><gift>False</gift></row><row><index>4</index><id>SO-10448</id><status>pending</status><customer>李 小龍</customer><placed>2024-03-13T20:52:00</placed><total>258.52</total><items>
+      </items><note/><gift>False</gift></row><row><index>5</index><id>SO-10455</id><status>shipped</status><customer>Chloé &amp; Théo Martin</customer><placed>2024-03-16T01:05:00</placed><total>400.79</total><items>
+      </items><note>Leave at door — </note><gift>True</gift></row><row><index>6</index><id>SO-10462</id><status>paid</status><customer>Priya &lt;Ops&gt; Nair</customer><placed>2024-03-19T06:18:00</placed><total/><items>
+      </items><note/><gift>False</gift></row><row><index>7</index><id>SO-10469</id><status>cancelled</status><customer>Olu Adeyemi</customer><placed>2024-03-22T11:31:00</placed><total>189.03</total><items>
+      </items><note/><gift>False</gift></row></data>
+$ write orders.xml | na_rep=- elem_cols=customer,note
+<?xml version='1.0' encoding='utf-8'?>
+<data>
+  <row>
+    <index>0</index>
+    <customer>Zoë Ångström</customer>
+    <note>-</note>
+  </row>
+  <row>
+    <index>1</index>
+    <customer>Marc O'Neil</customer>
+    <note>-</note>
+  </row>
+  <row>
+    <index>2</index>
+    <customer>Søren Kjær</customer>
+    <note>Customer wrote: "box arrived &lt;crushed&gt;" &amp; asked for refund</note>
+  </row>
+  <row>
+    <index>3</index>
+    <customer>Ana-María Ruiz</customer>
+    <note>-</note>
+  </row>
+  <row>
+    <index>4</index>
+    <customer>李 小龍</customer>
+    <note>-</note>
+  </row>
+  <row>
+    <index>5</index>
+    <customer>Chloé &amp; Théo Martin</customer>
+    <note>Leave at door — </note>
+  </row>
+  <row>
+    <index>6</index>
+    <customer>Priya &lt;Ops&gt; Nair</customer>
+    <note>-</note>
+  </row>
+  <row>
+    <index>7</index>
+    <customer>Olu Adeyemi</customer>
+    <note>-</note>
+  </row>
+</data>
+$ write orders.xml | parser=etree na_rep=- elem_cols=customer,note
+<?xml version="1.0" encoding="utf-8"?>
+<data>
+  <row>
+    <index>0</index>
+    <customer>Zoë Ångström</customer>
+    <note>-</note>
+  </row>
+  <row>
+    <index>1</index>
+    <customer>Marc O'Neil</customer>
+    <note>-</note>
+  </row>
+  <row>
+    <index>2</index>
+    <customer>Søren Kjær</customer>
+    <note>Customer wrote: "box arrived &lt;crushed&gt;" &amp; asked for refund</note>
+  </row>
+  <row>
+    <index>3</index>
+    <customer>Ana-María Ruiz</customer>
+    <note>-</note>
+  </row>
+  <row>
+    <index>4</index>
+    <customer>李 小龍</customer>
+    <note>-</note>
+  </row>
+  <row>
+    <index>5</index>
+    <customer>Chloé &amp; Théo Martin</customer>
+    <note>Leave at door — </note>
+  </row>
+  <row>
+    <index>6</index>
+    <customer>Priya &lt;Ops&gt; Nair</customer>
+    <note>-</note>
+  </row>
+  <row>
+    <index>7</index>
+    <customer>Olu Adeyemi</customer>
+    <note>-</note>
+  </row>
+</data>
+$ write orders.xml | na_rep=n/a elem_cols=total attr_cols=id
+<?xml version='1.0' encoding='utf-8'?>
+<data>
+  <row index="0" id="SO-10420">
+    <index>0</index>
+    <total>811.55</total>
+  </row>
+  <row index="1" id="SO-10427">
+    <index>1</index>
+    <total>102.14</total>
+  </row>
+  <row index="2" id="SO-10434">
+    <index>2</index>
+    <total>226.75</total>
+  </row>
+  <row index="3" id="SO-10441">
+    <index>3</index>
+    <total>287.54</total>
+  </row>
+  <row index="4" id="SO-10448">
+    <index>4</index>
+    <total>258.52</total>
+  </row>
+  <row index="5" id="SO-10455">
+    <index>5</index>
+    <total>400.79</total>
+  </row>
+  <row index="6" id="SO-10462">
+    <index>6</index>
+    <total>n/a</total>
+  </row>
+  <row index="7" id="SO-10469">
+    <index>7</index>
+    <total>189.03</total>
+  </row>
+</data>
+$ write orders.xml | attr_cols=id,missing
+! KeyError: 'no valid column, missing'
+$ write orders.xml | namespaces=s=https://example.com/s prefix=s elem_cols=customer
+<?xml version='1.0' encoding='utf-8'?>
+<s:data xmlns:s="https://example.com/s">
+  <s:row>
+    <s:index>0</s:index>
+    <s:customer>Zoë Ångström</s:customer>
+  </s:row>
+  <s:row>
+    <s:index>1</s:index>
+    <s:customer>Marc O'Neil</s:customer>
+  </s:row>
+  <s:row>
+    <s:index>2</s:index>
+    <s:customer>Søren Kjær</s:customer>
+  </s:row>
+  <s:row>
+    <s:index>3</s:index>
+    <s:customer>Ana-María Ruiz</s:customer>
+  </s:row>
+  <s:row>
+    <s:index>4</s:index>
+    <s:customer>李 小龍</s:customer>
+  </s:row>
+  <s:row>
+    <s:index>5</s:index>
+    <s:customer>Chloé &amp; Théo Martin</s:customer>
+  </s:row>
+  <s:row>
+    <s:index>6</s:index>
+    <s:customer>Priya &lt;Ops&gt; Nair</s:customer>
+  </s:row>
+  <s:row>
+    <s:index>7</s:index>
+    <s:customer>Olu Adeyemi</s:customer>
+  </s:row>
+</s:data>
+$ write orders.xml | parser=etree namespaces=s=https://example.com/s prefix=s elem_cols=customer
+<?xml version="1.0" encoding="utf-8"?>
+<s:data xmlns:s="https://example.com/s">
+  <s:row>
+    <s:index>0</s:index>
+    <s:customer>Zoë Ångström</s:customer>
+  </s:row>
+  <s:row>
+    <s:index>1</s:index>
+    <s:customer>Marc O'Neil</s:customer>
+  </s:row>
+  <s:row>
+    <s:index>2</s:index>
+    <s:customer>Søren Kjær</s:customer>
+  </s:row>
+  <s:row>
+    <s:index>3</s:index>
+    <s:customer>Ana-María Ruiz</s:customer>
+  </s:row>
+  <s:row>
+    <s:index>4</s:index>
+    <s:customer>李 小龍</s:customer>
+  </s:row>
+  <s:row>
+    <s:index>5</s:index>
+    <s:customer>Chloé &amp; Théo Martin</s:customer>
+  </s:row>
+  <s:row>
+    <s:index>6</s:index>
+    <s:customer>Priya &lt;Ops&gt; Nair</s:customer>
+  </s:row>
+  <s:row>
+    <s:index>7</s:index>
+    <s:customer>Olu Adeyemi</s:customer>
+  </s:row>
+</s:data>
+$ write orders.xml | parser=etree namespaces=s=https://example.com/s prefix=t
+! KeyError: 't is not included in namespaces'
+$ write orders.xml | namespaces==https://example.com/d elem_cols=customer index=False
+<?xml version='1.0' encoding='utf-8'?>
+<data xmlns="https://example.com/d">
+  <row>
+    <customer>Zoë Ångström</customer>
+  </row>
+  <row>
+    <customer>Marc O'Neil</customer>
+  </row>
+  <row>
+    <customer>Søren Kjær</customer>
+  </row>
+  <row>
+    <customer>Ana-María Ruiz</customer>
+  </row>
+  <row>
+    <customer>李 小龍</customer>
+  </row>
+  <row>
+    <customer>Chloé &amp; Théo Martin</customer>
+  </row>
+  <row>
+    <customer>Priya &lt;Ops&gt; Nair</customer>
+  </row>
+  <row>
+    <customer>Olu Adeyemi</customer>
+  </row>
+</data>
+$ write orders.xml | parser=etree namespaces==https://example.com/d elem_cols=customer index=False
+<?xml version="1.0" encoding="utf-8"?>
+<data xmlns="https://example.com/d">
+  <row>
+    <customer>Zoë Ångström</customer>
+  </row>
+  <row>
+    <customer>Marc O'Neil</customer>
+  </row>
+  <row>
+    <customer>Søren Kjær</customer>
+  </row>
+  <row>
+    <customer>Ana-María Ruiz</customer>
+  </row>
+  <row>
+    <customer>李 小龍</customer>
+  </row>
+  <row>
+    <customer>Chloé &amp; Théo Martin</customer>
+  </row>
+  <row>
+    <customer>Priya &lt;Ops&gt; Nair</customer>
+  </row>
+  <row>
+    <customer>Olu Adeyemi</customer>
+  </row>
+</data>
+$ write orders.xml | encoding=latin-1 elem_cols=customer index=False
+! LookupError: unknown encoding: 'latin-1'
+$ write orders.xml | parser=etree encoding=ascii elem_cols=customer index=False
+<?xml version="1.0" encoding="ascii"?>
+<data>
+  <row>
+    <customer>Zo&#235; &#197;ngstr&#246;m</customer>
+  </row>
+  <row>
+    <customer>Marc O'Neil</customer>
+  </row>
+  <row>
+    <customer>S&#248;ren Kj&#230;r</customer>
+  </row>
+  <row>
+    <customer>Ana-Mar&#237;a Ruiz</customer>
+  </row>
+  <row>
+    <customer>&#26446; &#23567;&#40845;</customer>
+  </row>
+  <row>
+    <customer>Chlo&#233; &amp; Th&#233;o Martin</customer>
+  </row>
+  <row>
+    <customer>Priya &lt;Ops&gt; Nair</customer>
+  </row>
+  <row>
+    <customer>Olu Adeyemi</customer>
+  </row>
+</data>
+$ write orders.xml | encoding=ascii elem_cols=customer index=False
+<?xml version='1.0' encoding='ascii'?>
+<data>
+  <row>
+    <customer>Zo&#235; &#197;ngstr&#246;m</customer>
+  </row>
+  <row>
+    <customer>Marc O'Neil</customer>
+  </row>
+  <row>
+    <customer>S&#248;ren Kj&#230;r</customer>
+  </row>
+  <row>
+    <customer>Ana-Mar&#237;a Ruiz</customer>
+  </row>
+  <row>
+    <customer>&#26446; &#23567;&#40845;</customer>
+  </row>
+  <row>
+    <customer>Chlo&#233; &amp; Th&#233;o Martin</customer>
+  </row>
+  <row>
+    <customer>Priya &lt;Ops&gt; Nair</customer>
+  </row>
+  <row>
+    <customer>Olu Adeyemi</customer>
+  </row>
+</data>
+$ write orders.xml | parser=etree encoding=ascii attr_cols=customer index=False
+<?xml version="1.0" encoding="ascii"?>
+<data>
+  <row customer="Zo&#235; &#197;ngstr&#246;m"/>
+  <row customer="Marc O'Neil"/>
+  <row customer="S&#248;ren Kj&#230;r"/>
+  <row customer="Ana-Mar&#237;a Ruiz"/>
+  <row customer="&#26446; &#23567;&#40845;"/>
+  <row customer="Chlo&#233; &amp; Th&#233;o Martin"/>
+  <row customer="Priya &lt;Ops&gt; Nair"/>
+  <row customer="Olu Adeyemi"/>
+</data>
+$ write orders.xml | parser=etree pretty_print=False elem_cols=customer index=False
+<?xml version='1.0' encoding='utf-8'?>
+<data><row><customer>Zoë Ångström</customer></row><row><customer>Marc O'Neil</customer></row><row><customer>Søren Kjær</customer></row><row><customer>Ana-María Ruiz</customer></row><row><customer>李 小龍</customer></row><row><customer>Chloé &amp; Théo Martin</customer></row><row><customer>Priya &lt;Ops&gt; Nair</customer></row><row><customer>Olu Adeyemi</customer></row></data>
+$ write orders.xml xpath=//order[position()>6] | na_rep=x
+<?xml version='1.0' encoding='utf-8'?>
+<data>
+  <row>
+    <index>0</index>
+    <id>SO-10462</id>
+    <status>paid</status>
+    <customer>Priya &lt;Ops&gt; Nair</customer>
+    <placed>2024-03-19T06:18:00</placed>
+    <items>
+      </items>
+    <note>x</note>
+    <gift>False</gift>
+    <total>x</total>
+  </row>
+  <row>
+    <index>1</index>
+    <id>SO-10469</id>
+    <status>cancelled</status>
+    <customer>Olu Adeyemi</customer>
+    <placed>2024-03-22T11:31:00</placed>
+    <items>
+      </items>
+    <note>x</note>
+    <gift>False</gift>
+    <total>189.03</total>
+  </row>
+</data>
+$ write orders.xml names=a,b,c,d,e,f,g,h | parser=etree index=False elem_cols=a,h
+<?xml version="1.0" encoding="utf-8"?>
+<data>
+  <row>
+    <a>SO-10420</a>
+    <h>False</h>
+  </row>
+  <row>
+    <a>SO-10427</a>
+    <h>True</h>
+  </row>
+  <row>
+    <a>SO-10434</a>
+    <h>False</h>
+  </row>
+  <row>
+    <a>SO-10441</a>
+    <h>False</h>
+  </row>
+  <row>
+    <a>SO-10448</a>
+    <h>False</h>
+  </row>
+  <row>
+    <a>SO-10455</a>
+    <h>True</h>
+  </row>
+  <row>
+    <a>SO-10462</a>
+    <h/>
+  </row>
+  <row>
+    <a>SO-10469</a>
+    <h>False</h>
+  </row>
+</data>
+$ write munich.osm xpath=//node attrs_only=True parse_dates=timestamp | parser=etree elem_cols=timestamp index=False
+<?xml version="1.0" encoding="utf-8"?>
+<data>
+  <row>
+    <timestamp>2023-01-10 00:15:00+00:00</timestamp>
+  </row>
+  <row>
+    <timestamp>2023-02-11 01:15:00+00:00</timestamp>
+  </row>
+  <row>
+    <timestamp>2023-03-12 02:15:00+00:00</timestamp>
+  </row>
+  <row>
+    <timestamp>2023-04-13 03:15:00+00:00</timestamp>
+  </row>
+  <row>
+    <timestamp>2023-05-14 04:15:00+00:00</timestamp>
+  </row>
+  <row>
+    <timestamp>2023-06-15 05:15:00+00:00</timestamp>
+  </row>
+  <row>
+    <timestamp>2023-07-16 06:15:00+00:00</timestamp>
+  </row>
+  <row>
+    <timestamp>2023-08-17 07:15:00+00:00</timestamp>
+  </row>
+</data>
+$ read camt053.xml xpath=//doc:Ntry namespaces=doc=urn:iso:std:iso:20022:tech:xsd:camt.053.001.08
+shape (8, 6)
+  'Amt': float64
+  'CdtDbtInd': str
+  'Sts': float64
+  'BookgDt': float64
+  'AcctSvcrRef': str
+  'AddtlNtryInf': str
+,Amt,CdtDbtInd,Sts,BookgDt,AcctSvcrRef,AddtlNtryInf
+0,2094.98,DBIT,,,REF880100,Stadtwerke Musterstadt
+1,492.23,DBIT,,,REF880117,ACME Logistics GmbH
+2,407.61,CRDT,,,REF880134,Payroll 03/2024
+3,1234.16,DBIT,,,REF880151,Café Kränzchen
+4,859.56,DBIT,,,REF880168,Fake Insurance AG
+5,3697.95,DBIT,,,REF880185,Card settlement
+6,1170.97,CRDT,,,REF880202,Refund SO-10434
+7,3819.89,DBIT,,,REF880219,Rent April
+$ read camt053.xml xpath=//doc:Ntry namespaces=doc=urn:iso:std:iso:20022:tech:xsd:camt.053.001.08 elems_only=True dtype=AcctSvcrRef:str
+shape (8, 6)
+  'Amt': float64
+  'CdtDbtInd': str
+  'Sts': float64
+  'BookgDt': float64
+  'AcctSvcrRef': str
+  'AddtlNtryInf': str
+,Amt,CdtDbtInd,Sts,BookgDt,AcctSvcrRef,AddtlNtryInf
+0,2094.98,DBIT,,,REF880100,Stadtwerke Musterstadt
+1,492.23,DBIT,,,REF880117,ACME Logistics GmbH
+2,407.61,CRDT,,,REF880134,Payroll 03/2024
+3,1234.16,DBIT,,,REF880151,Café Kränzchen
+4,859.56,DBIT,,,REF880168,Fake Insurance AG
+5,3697.95,DBIT,,,REF880185,Card settlement
+6,1170.97,CRDT,,,REF880202,Refund SO-10434
+7,3819.89,DBIT,,,REF880219,Rent April
+$ read camt053.xml xpath=//doc:Ntry/doc:BookgDt namespaces=doc=urn:iso:std:iso:20022:tech:xsd:camt.053.001.08 parse_dates=Dt
+shape (8, 1)
+  'Dt': datetime64[us]
+,Dt
+0,2024-03-02
+1,2024-03-05
+2,2024-03-08
+3,2024-03-11
+4,2024-03-14
+5,2024-03-17
+6,2024-03-20
+7,2024-03-23
+$ read camt053.xml parser=etree xpath=.//doc:Ntry namespaces=doc=urn:iso:std:iso:20022:tech:xsd:camt.053.001.08
+shape (8, 6)
+  'Amt': float64
+  'CdtDbtInd': str
+  'Sts': float64
+  'BookgDt': float64
+  'AcctSvcrRef': str
+  'AddtlNtryInf': str
+,Amt,CdtDbtInd,Sts,BookgDt,AcctSvcrRef,AddtlNtryInf
+0,2094.98,DBIT,,,REF880100,Stadtwerke Musterstadt
+1,492.23,DBIT,,,REF880117,ACME Logistics GmbH
+2,407.61,CRDT,,,REF880134,Payroll 03/2024
+3,1234.16,DBIT,,,REF880151,Café Kränzchen
+4,859.56,DBIT,,,REF880168,Fake Insurance AG
+5,3697.95,DBIT,,,REF880185,Card settlement
+6,1170.97,CRDT,,,REF880202,Refund SO-10434
+7,3819.89,DBIT,,,REF880219,Rent April
+$ read camt053.xml xpath=//Ntry
+! ValueError: xpath does not return any nodes or attributes. Be sure to specify in `xpath` the parent nodes of children and attributes to parse. If document uses namespaces denoted with xmlns, be sure to define namespaces and use them in xpath.
+$ read camt053.xml xpath=//doc:Ntry[doc:CdtDbtInd='CRDT'] namespaces=doc=urn:iso:std:iso:20022:tech:xsd:camt.053.001.08
+shape (2, 6)
+  'Amt': float64
+  'CdtDbtInd': str
+  'Sts': float64
+  'BookgDt': float64
+  'AcctSvcrRef': str
+  'AddtlNtryInf': str
+,Amt,CdtDbtInd,Sts,BookgDt,AcctSvcrRef,AddtlNtryInf
+0,407.61,CRDT,,,REF880134,Payroll 03/2024
+1,1170.97,CRDT,,,REF880202,Refund SO-10434
+$ write camt053.xml xpath=//doc:Ntry namespaces=doc=urn:iso:std:iso:20022:tech:xsd:camt.053.001.08 | index=False row_name=entry
+<?xml version='1.0' encoding='utf-8'?>
+<data>
+  <entry>
+    <Amt>2094.98</Amt>
+    <CdtDbtInd>DBIT</CdtDbtInd>
+    <Sts/>
+    <BookgDt/>
+    <AcctSvcrRef>REF880100</AcctSvcrRef>
+    <AddtlNtryInf>Stadtwerke Musterstadt</AddtlNtryInf>
+  </entry>
+  <entry>
+    <Amt>492.23</Amt>
+    <CdtDbtInd>DBIT</CdtDbtInd>
+    <Sts/>
+    <BookgDt/>
+    <AcctSvcrRef>REF880117</AcctSvcrRef>
+    <AddtlNtryInf>ACME Logistics GmbH</AddtlNtryInf>
+  </entry>
+  <entry>
+    <Amt>407.61</Amt>
+    <CdtDbtInd>CRDT</CdtDbtInd>
+    <Sts/>
+    <BookgDt/>
+    <AcctSvcrRef>REF880134</AcctSvcrRef>
+    <AddtlNtryInf>Payroll 03/2024</AddtlNtryInf>
+  </entry>
+  <entry>
+    <Amt>1234.16</Amt>
+    <CdtDbtInd>DBIT</CdtDbtInd>
+    <Sts/>
+    <BookgDt/>
+    <AcctSvcrRef>REF880151</AcctSvcrRef>
+    <AddtlNtryInf>Café Kränzchen</AddtlNtryInf>
+  </entry>
+  <entry>
+    <Amt>859.56</Amt>
+    <CdtDbtInd>DBIT</CdtDbtInd>
+    <Sts/>
+    <BookgDt/>
+    <AcctSvcrRef>REF880168</AcctSvcrRef>
+    <AddtlNtryInf>Fake Insurance AG</AddtlNtryInf>
+  </entry>
+  <entry>
+    <Amt>3697.95</Amt>
+    <CdtDbtInd>DBIT</CdtDbtInd>
+    <Sts/>
+    <BookgDt/>
+    <AcctSvcrRef>REF880185</AcctSvcrRef>
+    <AddtlNtryInf>Card settlement</AddtlNtryInf>
+  </entry>
+  <entry>
+    <Amt>1170.97</Amt>
+    <CdtDbtInd>CRDT</CdtDbtInd>
+    <Sts/>
+    <BookgDt/>
+    <AcctSvcrRef>REF880202</AcctSvcrRef>
+    <AddtlNtryInf>Refund SO-10434</AddtlNtryInf>
+  </entry>
+  <entry>
+    <Amt>3819.89</Amt>
+    <CdtDbtInd>DBIT</CdtDbtInd>
+    <Sts/>
+    <BookgDt/>
+    <AcctSvcrRef>REF880219</AcctSvcrRef>
+    <AddtlNtryInf>Rent April</AddtlNtryInf>
+  </entry>
+</data>
+$ read munich.osm xpath=//node attrs_only=True
+shape (8, 5)
+  'id': int64
+  'version': int64
+  'timestamp': str
+  'lat': float64
+  'lon': float64
+,id,version,timestamp,lat,lon
+0,240119000,1,2023-01-10T00:15:00Z,48.1359488,11.5774558
+1,240119031,2,2023-02-11T01:15:00Z,48.1410117,11.5720444
+2,240119062,3,2023-03-12T02:15:00Z,48.1411748,11.5694833
+3,240119093,4,2023-04-13T03:15:00Z,48.1379547,11.5755393
+4,240119124,1,2023-05-14T04:15:00Z,48.1384182,11.5778558
+5,240119155,2,2023-06-15T05:15:00Z,48.1415973,11.5608078
+6,240119186,3,2023-07-16T06:15:00Z,48.1386019,11.5727105
+7,240119217,4,2023-08-17T07:15:00Z,48.1394142,11.5767229
+$ read munich.osm parser=etree xpath=./node
+shape (8, 6)
+  'id': int64
+  'version': int64
+  'timestamp': str
+  'lat': float64
+  'lon': float64
+  'tag': float64
+,id,version,timestamp,lat,lon,tag
+0,240119000,1,2023-01-10T00:15:00Z,48.1359488,11.5774558,
+1,240119031,2,2023-02-11T01:15:00Z,48.1410117,11.5720444,
+2,240119062,3,2023-03-12T02:15:00Z,48.1411748,11.5694833,
+3,240119093,4,2023-04-13T03:15:00Z,48.1379547,11.5755393,
+4,240119124,1,2023-05-14T04:15:00Z,48.1384182,11.5778558,
+5,240119155,2,2023-06-15T05:15:00Z,48.1415973,11.5608078,
+6,240119186,3,2023-07-16T06:15:00Z,48.1386019,11.5727105,
+7,240119217,4,2023-08-17T07:15:00Z,48.1394142,11.5767229,
+$ read munich.osm xpath=//node[tag/@k='amenity']/tag
+shape (6, 2)
+  'k': str
+  'v': str
+,k,v
+0,amenity,cafe
+1,name,Café Frischhut
+2,amenity,bicycle_parking
+3,amenity,pharmacy
+4,name,Rathaus-Apotheke
+5,amenity,bench
+$ read munich.osm xpath=//tag[@k='name']
+shape (5, 2)
+  'k': str
+  'v': str
+,k,v
+0,name,Café Frischhut
+1,name,Bäckerei Zöttl
+2,name,Stadtmuseum
+3,name,Rathaus-Apotheke
+4,name,Marienplatz
+$ read munich.osm iterparse=node:id,lat,lon,k,v
+shape (8, 5)
+  'id': int64
+  'lat': float64
+  'lon': float64
+  'k': str
+  'v': str
+,id,lat,lon,k,v
+0,240119000,48.1359488,11.5774558,name,Café Frischhut
+1,240119031,48.1410117,11.5720444,amenity,bicycle_parking
+2,240119062,48.1411748,11.5694833,name,Bäckerei Zöttl
+3,240119093,48.1379547,11.5755393,,
+4,240119124,48.1384182,11.5778558,name,Stadtmuseum
+5,240119155,48.1415973,11.5608078,name,Rathaus-Apotheke
+6,240119186,48.1386019,11.5727105,name,Marienplatz
+7,240119217,48.1394142,11.5767229,amenity,bench
+$ read munich.osm parser=etree iterparse=node:id,lat,lon,v
+shape (8, 4)
+  'id': int64
+  'lat': float64
+  'lon': float64
+  'v': str
+,id,lat,lon,v
+0,240119000,48.1359488,11.5774558,Café Frischhut
+1,240119031,48.1410117,11.5720444,bicycle_parking
+2,240119062,48.1411748,11.5694833,Bäckerei Zöttl
+3,240119093,48.1379547,11.5755393,
+4,240119124,48.1384182,11.5778558,Stadtmuseum
+5,240119155,48.1415973,11.5608078,Rathaus-Apotheke
+6,240119186,48.1386019,11.5727105,Marienplatz
+7,240119217,48.1394142,11.5767229,bench
+$ read munich.osm xpath=//bounds
+shape (1, 4)
+  'minlat': float64
+  'minlon': float64
+  'maxlat': float64
+  'maxlon': float64
+,minlat,minlon,maxlat,maxlon
+0,48.135,11.56,48.142,11.58
+$ read munich.osm xpath=//node attrs_only=True parse_dates=timestamp
+shape (8, 5)
+  'id': int64
+  'version': int64
+  'timestamp': datetime64[us, UTC]
+  'lat': float64
+  'lon': float64
+,id,version,timestamp,lat,lon
+0,240119000,1,2023-01-10 00:15:00+00:00,48.1359488,11.5774558
+1,240119031,2,2023-02-11 01:15:00+00:00,48.1410117,11.5720444
+2,240119062,3,2023-03-12 02:15:00+00:00,48.1411748,11.5694833
+3,240119093,4,2023-04-13 03:15:00+00:00,48.1379547,11.5755393
+4,240119124,1,2023-05-14 04:15:00+00:00,48.1384182,11.5778558
+5,240119155,2,2023-06-15 05:15:00+00:00,48.1415973,11.5608078
+6,240119186,3,2023-07-16 06:15:00+00:00,48.1386019,11.5727105
+7,240119217,4,2023-08-17 07:15:00+00:00,48.1394142,11.5767229
+$ write munich.osm xpath=//node attrs_only=True | attr_cols=id,lat,lon elem_cols=timestamp
+<?xml version='1.0' encoding='utf-8'?>
+<data>
+  <row index="0" id="240119000" lat="48.1359488" lon="11.5774558">
+    <index>0</index>
+    <timestamp>2023-01-10T00:15:00Z</timestamp>
+  </row>
+  <row index="1" id="240119031" lat="48.1410117" lon="11.5720444">
+    <index>1</index>
+    <timestamp>2023-02-11T01:15:00Z</timestamp>
+  </row>
+  <row index="2" id="240119062" lat="48.1411748" lon="11.5694833">
+    <index>2</index>
+    <timestamp>2023-03-12T02:15:00Z</timestamp>
+  </row>
+  <row index="3" id="240119093" lat="48.1379547" lon="11.5755393">
+    <index>3</index>
+    <timestamp>2023-04-13T03:15:00Z</timestamp>
+  </row>
+  <row index="4" id="240119124" lat="48.1384182" lon="11.5778558">
+    <index>4</index>
+    <timestamp>2023-05-14T04:15:00Z</timestamp>
+  </row>
+  <row index="5" id="240119155" lat="48.1415973" lon="11.5608078">
+    <index>5</index>
+    <timestamp>2023-06-15T05:15:00Z</timestamp>
+  </row>
+  <row index="6" id="240119186" lat="48.1386019" lon="11.5727105">
+    <index>6</index>
+    <timestamp>2023-07-16T06:15:00Z</timestamp>
+  </row>
+  <row index="7" id="240119217" lat="48.1394142" lon="11.5767229">
+    <index>7</index>
+    <timestamp>2023-08-17T07:15:00Z</timestamp>
+  </row>
+</data>
+$ write munich.osm xpath=//node attrs_only=True | parser=etree attr_cols=id,lat,lon index=False
+<?xml version="1.0" encoding="utf-8"?>
+<data>
+  <row id="240119000" lat="48.1359488" lon="11.5774558"/>
+  <row id="240119031" lat="48.1410117" lon="11.5720444"/>
+  <row id="240119062" lat="48.1411748" lon="11.5694833"/>
+  <row id="240119093" lat="48.1379547" lon="11.5755393"/>
+  <row id="240119124" lat="48.1384182" lon="11.5778558"/>
+  <row id="240119155" lat="48.1415973" lon="11.5608078"/>
+  <row id="240119186" lat="48.1386019" lon="11.5727105"/>
+  <row id="240119217" lat="48.1394142" lon="11.5767229"/>
+</data>
+$ read sitemap.xml xpath=//s:url namespaces=s=http://www.sitemaps.org/schemas/sitemap/0.9
+shape (6, 5)
+  'loc': str
+  'lastmod': str
+  'changefreq': str
+  'priority': float64
+  'link': float64
+,loc,lastmod,changefreq,priority,link
+0,https://example.com/,2024-01-10,daily,1.0,
+1,https://example.com/pricing,2024-02-11,weekly,0.8,
+2,https://example.com/docs/getting-started,2024-03-12,monthly,0.6,
+3,https://example.com/blog/2024/03/release-4-2,2024-01-13,daily,0.5,
+4,https://example.com/careers,,weekly,0.3,
+5,https://example.com/legal/privacy,2024-03-15,monthly,0.1,
+$ read sitemap.xml xpath=//s:url namespaces=s=http://www.sitemaps.org/schemas/sitemap/0.9 parse_dates=lastmod
+shape (6, 5)
+  'loc': str
+  'lastmod': datetime64[us]
+  'changefreq': str
+  'priority': float64
+  'link': float64
+,loc,lastmod,changefreq,priority,link
+0,https://example.com/,2024-01-10,daily,1.0,
+1,https://example.com/pricing,2024-02-11,weekly,0.8,
+2,https://example.com/docs/getting-started,2024-03-12,monthly,0.6,
+3,https://example.com/blog/2024/03/release-4-2,2024-01-13,daily,0.5,
+4,https://example.com/careers,,weekly,0.3,
+5,https://example.com/legal/privacy,2024-03-15,monthly,0.1,
+$ read sitemap.xml.gz xpath=//s:url namespaces=s=http://www.sitemaps.org/schemas/sitemap/0.9 elems_only=True
+shape (6, 5)
+  'loc': str
+  'lastmod': str
+  'changefreq': str
+  'priority': float64
+  'link': float64
+,loc,lastmod,changefreq,priority,link
+0,https://example.com/,2024-01-10,daily,1.0,
+1,https://example.com/pricing,2024-02-11,weekly,0.8,
+2,https://example.com/docs/getting-started,2024-03-12,monthly,0.6,
+3,https://example.com/blog/2024/03/release-4-2,2024-01-13,daily,0.5,
+4,https://example.com/careers,,weekly,0.3,
+5,https://example.com/legal/privacy,2024-03-15,monthly,0.1,
+$ read sitemap.zip parser=etree xpath=.//s:url namespaces=s=http://www.sitemaps.org/schemas/sitemap/0.9
+shape (6, 5)
+  'loc': str
+  'lastmod': str
+  'changefreq': str
+  'priority': float64
+  'link': float64
+,loc,lastmod,changefreq,priority,link
+0,https://example.com/,2024-01-10,daily,1.0,
+1,https://example.com/pricing,2024-02-11,weekly,0.8,
+2,https://example.com/docs/getting-started,2024-03-12,monthly,0.6,
+3,https://example.com/blog/2024/03/release-4-2,2024-01-13,daily,0.5,
+4,https://example.com/careers,,weekly,0.3,
+5,https://example.com/legal/privacy,2024-03-15,monthly,0.1,
+$ read sitemap.xml xpath=//x:link namespaces=x=http://www.w3.org/1999/xhtml
+shape (6, 3)
+  'rel': str
+  'hreflang': str
+  'href': str
+,rel,hreflang,href
+0,alternate,de,https://example.com/de/
+1,alternate,fr,https://example.com/fr/
+2,alternate,de,https://example.com/de/pricing
+3,alternate,fr,https://example.com/fr/pricing
+4,alternate,de,https://example.com/de/docs/getting-started
+5,alternate,fr,https://example.com/fr/docs/getting-started
+$ read sitemap.xml.gz iterparse=url:loc,lastmod
+! ParserError: iterparse is designed for large XML files that are fully extracted on local disk and not as compressed files or online sources.
+$ read sitemap.xml xpath=//s:url namespaces=s=http://www.sitemaps.org/schemas/sitemap/0.9 compression=gzip
+! BadGzipFile: Not a gzipped file (b'<?')
+$ read blog.rss xpath=//item
+shape (4, 7)
+  'title': str
+  'link': str
+  'creator': str
+  'pubDate': str
+  'guid': str
+  'encoded': str
+  'content': float64
+,title,link,creator,pubDate,guid,encoded,content
+0,Release 4.2: faster joins,https://example.com/blog/1,Mei Chen,"Mon, 04 Mar 2024 09:00:00 +0000",post-900,<p>Release 4.2: faster joins.</p>,
+1,Why we moved our queue to Postgres,https://example.com/blog/2,Tomás Ortega,"Thu, 14 Mar 2024 16:30:00 +0000",post-901,<p>Why we moved our queue to Postgres.</p>,
+2,Incident review: 12 March,https://example.com/blog/3,Ada Obi,"Fri, 22 Mar 2024 11:05:00 +0000",post-902,<p>Incident review: 12 March.</p>,
+3,Hiring: SRE (Berlin),https://example.com/blog/4,Mei Chen,"Tue, 02 Apr 2024 08:00:00 +0000",post-903,<p>Hiring: SRE (Berlin).</p>,
+$ read blog.rss parser=etree xpath=./channel/item
+shape (4, 7)
+  'title': str
+  'link': str
+  'creator': str
+  'pubDate': str
+  'guid': str
+  'encoded': str
+  'content': float64
+,title,link,creator,pubDate,guid,encoded,content
+0,Release 4.2: faster joins,https://example.com/blog/1,Mei Chen,"Mon, 04 Mar 2024 09:00:00 +0000",post-900,<p>Release 4.2: faster joins.</p>,
+1,Why we moved our queue to Postgres,https://example.com/blog/2,Tomás Ortega,"Thu, 14 Mar 2024 16:30:00 +0000",post-901,<p>Why we moved our queue to Postgres.</p>,
+2,Incident review: 12 March,https://example.com/blog/3,Ada Obi,"Fri, 22 Mar 2024 11:05:00 +0000",post-902,<p>Incident review: 12 March.</p>,
+3,Hiring: SRE (Berlin),https://example.com/blog/4,Mei Chen,"Tue, 02 Apr 2024 08:00:00 +0000",post-903,<p>Hiring: SRE (Berlin).</p>,
+$ read blog.rss xpath=//item dtype=guid:str elems_only=True
+shape (4, 7)
+  'title': str
+  'link': str
+  'creator': str
+  'pubDate': str
+  'guid': str
+  'encoded': str
+  'content': float64
+,title,link,creator,pubDate,guid,encoded,content
+0,Release 4.2: faster joins,https://example.com/blog/1,Mei Chen,"Mon, 04 Mar 2024 09:00:00 +0000",post-900,<p>Release 4.2: faster joins.</p>,
+1,Why we moved our queue to Postgres,https://example.com/blog/2,Tomás Ortega,"Thu, 14 Mar 2024 16:30:00 +0000",post-901,<p>Why we moved our queue to Postgres.</p>,
+2,Incident review: 12 March,https://example.com/blog/3,Ada Obi,"Fri, 22 Mar 2024 11:05:00 +0000",post-902,<p>Incident review: 12 March.</p>,
+3,Hiring: SRE (Berlin),https://example.com/blog/4,Mei Chen,"Tue, 02 Apr 2024 08:00:00 +0000",post-903,<p>Hiring: SRE (Berlin).</p>,
+$ read blog.rss xpath=//media:content namespaces=media=http://search.yahoo.com/mrss/
+shape (3, 3)
+  'url': str
+  'medium': str
+  'width': int64
+,url,medium,width
+0,https://cdn.example.com/0.jpg,image,1840
+1,https://cdn.example.com/1.jpg,image,2210
+2,https://cdn.example.com/3.jpg,image,640
+$ read blog.rss xpath=//channel
+shape (1, 4)
+  'title': str
+  'link': str
+  'description': str
+  'item': str
+,title,link,description,item
+0,Example Engineering,https://example.com/blog,Notes from the platform team,"
+    "
+$ write blog.rss xpath=//item elems_only=True | index=False pretty_print=False
+<?xml version='1.0' encoding='utf-8'?>
+<data><row><title>Release 4.2: faster joins</title><link>https://example.com/blog/1</link><creator>Mei Chen</creator><pubDate>Mon, 04 Mar 2024 09:00:00 +0000</pubDate><guid>post-900</guid><encoded>&lt;p&gt;Release 4.2: faster joins.&lt;/p&gt;</encoded><content/></row><row><title>Why we moved our queue to Postgres</title><link>https://example.com/blog/2</link><creator>Tomás Ortega</creator><pubDate>Thu, 14 Mar 2024 16:30:00 +0000</pubDate><guid>post-901</guid><encoded>&lt;p&gt;Why we moved our queue to Postgres.&lt;/p&gt;</encoded><content/></row><row><title>Incident review: 12 March</title><link>https://example.com/blog/3</link><creator>Ada Obi</creator><pubDate>Fri, 22 Mar 2024 11:05:00 +0000</pubDate><guid>post-902</guid><encoded>&lt;p&gt;Incident review: 12 March.&lt;/p&gt;</encoded><content/></row><row><title>Hiring: SRE (Berlin)</title><link>https://example.com/blog/4</link><creator>Mei Chen</creator><pubDate>Tue, 02 Apr 2024 08:00:00 +0000</pubDate><guid>post-903</guid><encoded>&lt;p&gt;Hiring: SRE (Berlin).&lt;/p&gt;</encoded><content/></row></data>
+$ read station_log.xml
+! UnicodeDecodeError: 'utf-8' codec can't decode byte 0xfc in position 125: invalid start byte
+$ read station_log.xml encoding=ISO-8859-1
+shape (7, 6)
+  'date': str
+  'qc': int64
+  'tmax': float64
+  'tmin': float64
+  'rain': float64
+  'wx': str
+,date,qc,tmax,tmin,rain,wx
+0,2024-02-12,1,4.8,-2.5,0.0,Schnee
+1,2024-02-13,1,6.1,-2.0,1.2,Regen
+2,2024-02-14,3,,-1.5,0.0,Nebel
+3,2024-02-15,1,-0.4,-1.0,7.75,Graupel
+4,2024-02-16,2,,-0.5,0.1,heiter
+5,2024-02-17,1,3.3,0.0,0.0,Föhn
+6,2024-02-18,1,,0.5,2.0,trüb
+$ read station_log.xml encoding=latin-1
+! LookupError: unknown encoding: 'b'latin-1''
+$ read station_log.xml parser=etree encoding=latin-1
+shape (7, 6)
+  'date': str
+  'qc': int64
+  'tmax': float64
+  'tmin': float64
+  'rain': float64
+  'wx': str
+,date,qc,tmax,tmin,rain,wx
+0,2024-02-12,1,4.8,-2.5,0.0,Schnee
+1,2024-02-13,1,6.1,-2.0,1.2,Regen
+2,2024-02-14,3,,-1.5,0.0,Nebel
+3,2024-02-15,1,-0.4,-1.0,7.75,Graupel
+4,2024-02-16,2,,-0.5,0.1,heiter
+5,2024-02-17,1,3.3,0.0,0.0,Föhn
+6,2024-02-18,1,,0.5,2.0,trüb
+$ read station_log.xml parser=etree encoding=cp1252 dtype=qc:float64
+shape (7, 6)
+  'date': str
+  'qc': float64
+  'tmax': float64
+  'tmin': float64
+  'rain': float64
+  'wx': str
+,date,qc,tmax,tmin,rain,wx
+0,2024-02-12,1.0,4.8,-2.5,0.0,Schnee
+1,2024-02-13,1.0,6.1,-2.0,1.2,Regen
+2,2024-02-14,3.0,,-1.5,0.0,Nebel
+3,2024-02-15,1.0,-0.4,-1.0,7.75,Graupel
+4,2024-02-16,2.0,,-0.5,0.1,heiter
+5,2024-02-17,1.0,3.3,0.0,0.0,Föhn
+6,2024-02-18,1.0,,0.5,2.0,trüb
+$ read station_log.xml encoding=ISO-8859-1 xpath=/station attrs_only=True
+shape (1, 3)
+  'id': str
+  'name': str
+  'unit': str
+,id,name,unit
+0,DWD-01262,München-Flughafen,°C
+$ read station_log.xml encoding=ISO-8859-1 dtype=tmax:float64
+shape (7, 6)
+  'date': str
+  'qc': int64
+  'tmax': float64
+  'tmin': float64
+  'rain': float64
+  'wx': str
+,date,qc,tmax,tmin,rain,wx
+0,2024-02-12,1,4.8,-2.5,0.0,Schnee
+1,2024-02-13,1,6.1,-2.0,1.2,Regen
+2,2024-02-14,3,,-1.5,0.0,Nebel
+3,2024-02-15,1,-0.4,-1.0,7.75,Graupel
+4,2024-02-16,2,,-0.5,0.1,heiter
+5,2024-02-17,1,3.3,0.0,0.0,Föhn
+6,2024-02-18,1,,0.5,2.0,trüb
+$ read station_log.xml encoding=ISO-8859-1 dtype=wx:int64
+! ValueError: Unable to convert column wx to type int64
+$ read station_log.xml iterparse=day:date,tmax,wx
+shape (7, 3)
+  'date': str
+  'tmax': float64
+  'wx': str
+,date,tmax,wx
+0,2024-02-12,4.8,Schnee
+1,2024-02-13,6.1,Regen
+2,2024-02-14,,Nebel
+3,2024-02-15,-0.4,Graupel
+4,2024-02-16,,heiter
+5,2024-02-17,3.3,Föhn
+6,2024-02-18,,trüb
+$ read station_log.xml parser=etree iterparse=day:date,tmax,tmax names=date,t1,t2
+! ValueError: zip() argument 2 is shorter than argument 1
+$ write station_log.xml encoding=ISO-8859-1 | encoding=ISO-8859-1 index=False
+<?xml version='1.0' encoding='ISO-8859-1'?>
+<data>
+  <row>
+    <date>2024-02-12</date>
+    <qc>1</qc>
+    <tmax>4.8</tmax>
+    <tmin>-2.5</tmin>
+    <rain>0.0</rain>
+    <wx>Schnee</wx>
+  </row>
+  <row>
+    <date>2024-02-13</date>
+    <qc>1</qc>
+    <tmax>6.1</tmax>
+    <tmin>-2.0</tmin>
+    <rain>1.2</rain>
+    <wx>Regen</wx>
+  </row>
+  <row>
+    <date>2024-02-14</date>
+    <qc>3</qc>
+    <tmax/>
+    <tmin>-1.5</tmin>
+    <rain>0.0</rain>
+    <wx>Nebel</wx>
+  </row>
+  <row>
+    <date>2024-02-15</date>
+    <qc>1</qc>
+    <tmax>-0.4</tmax>
+    <tmin>-1.0</tmin>
+    <rain>7.75</rain>
+    <wx>Graupel</wx>
+  </row>
+  <row>
+    <date>2024-02-16</date>
+    <qc>2</qc>
+    <tmax/>
+    <tmin>-0.5</tmin>
+    <rain>0.1</rain>
+    <wx>heiter</wx>
+  </row>
+  <row>
+    <date>2024-02-17</date>
+    <qc>1</qc>
+    <tmax>3.3</tmax>
+    <tmin>0.0</tmin>
+    <rain>0.0</rain>
+    <wx>Föhn</wx>
+  </row>
+  <row>
+    <date>2024-02-18</date>
+    <qc>1</qc>
+    <tmax/>
+    <tmin>0.5</tmin>
+    <rain>2.0</rain>
+    <wx>trüb</wx>
+  </row>
+</data>
+$ read catalog.xml iterparse=product:sku,active,price,stock,w head=5
+shape (400, 5)
+  'sku': str
+  'active': str
+  'price': float64
+  'stock': int64
+  'w': int64
+,sku,active,price,stock,w
+0,P00000,no,211.69,0,0
+1,P00001,yes,164.98,37,1
+2,P00002,yes,219.53,74,2
+3,P00003,yes,320.98,111,3
+4,P00004,yes,368.84,28,4
+$ read catalog.xml parser=etree iterparse=product:sku,price head=3
+shape (400, 2)
+  'sku': str
+  'price': float64
+,sku,price
+0,P00000,211.69
+1,P00001,164.98
+2,P00002,219.53
+$ read catalog.xml xpath=//product[price>490] elems_only=True
+shape (11, 4)
+  'name': str
+  'price': float64
+  'stock': int64
+  'dims': float64
+,name,price,stock,dims
+0,Part 10,497.45,10,
+1,Part 25,499.79,85,
+2,Part 112,498.24,64,
+3,Part 113,495.42,101,
+4,Part 199,497.57,43,
+5,Part 231,497.46,27,
+6,Part 234,490.25,18,
+7,Part 256,490.62,112,
+8,Part 269,491.04,113,
+9,Part 313,492.09,61,
+10,Part 388,498.3,76,
+$ read catalog.xml xpath=//product[stock=0]
+shape (4, 6)
+  'sku': str
+  'active': str
+  'name': str
+  'price': float64
+  'stock': int64
+  'dims': float64
+,sku,active,name,price,stock,dims
+0,P00000,no,Part 0,211.69,0,
+1,P00120,yes,Part 120,352.59,0,
+2,P00240,yes,Part 240,221.3,0,
+3,P00360,no,Part 360,21.2,0,
+$ read catalog.xml iterparse=product
+! EmptyDataError: No columns to parse from file
+$ read catalog.xml iterparse=products:sku
+! ParserError: No result from selected items in iterparse.
+$ read truncated.xml parser=etree
+! ParseError: no element found: line 39, column 12
+$ read mismatch.xml parser=etree
+! ParseError: mismatched tag: line 2, column 21
+$ read export.csv parser=etree
+! ParseError: syntax error: line 1, column 0
+$ read empty.xml parser=etree
+! ParseError: no element found: line 1, column 0
+$ read flat.xml
+! ValueError: xpath does not return any nodes or attributes. Be sure to specify in `xpath` the parent nodes of children and attributes to parse. If document uses namespaces denoted with xmlns, be sure to define namespaces and use them in xpath.
+$ read flat.xml parser=etree
+! ValueError: xpath does not return any nodes or attributes. Be sure to specify in `xpath` the parent nodes of children and attributes to parse. If document uses namespaces denoted with xmlns, be sure to define namespaces and use them in xpath.
+$ read missing.xml
+! FileNotFoundError: [Errno 2] No such file or directory: 'data/missing.xml'
