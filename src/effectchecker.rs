@@ -3124,7 +3124,16 @@ fn collect_effect_var_names_in_type(ty: &TypeExpr, out: &mut Vec<String>) {
         // surface today (per-method effect contracts live on the
         // trait declaration, Phase 8). Walk generic args for nested
         // `FnType` effect vars.
-        TypeKind::Dyn { args, .. } => {
+        TypeKind::Dyn { args, effects, .. } => {
+            if let Some(list) = effects {
+                for item in &list.items {
+                    if let EffectItem::Variable(name) = item {
+                        if !out.contains(name) {
+                            out.push(name.clone());
+                        }
+                    }
+                }
+            }
             for arg in args {
                 if let GenericArg::Type(t) = arg {
                     collect_effect_var_names_in_type(t, out);
@@ -3319,12 +3328,25 @@ fn format_type_expr_with_subs(
         // (mirrors the `impl Trait` arm above). Per-method effect
         // substitution lands with Phase 8's dyn-Trait effect checking.
         TypeKind::Dyn {
-            trait_path, args, ..
+            trait_path,
+            args,
+            effects,
+            cross_task,
+            ..
         } => {
             out.push_str("dyn ");
             out.push_str(&trait_path.segments.join("."));
             if !args.is_empty() {
                 format_generic_args(args, type_subs, var_bindings, out);
+            }
+            if *cross_task {
+                out.push_str(" + CrossTask");
+            }
+            if let Some(list) = effects {
+                let resolved = resolve_effect_list_for_render(list, var_bindings);
+                out.push_str(" with [");
+                out.push_str(&resolved.join(", "));
+                out.push(']');
             }
         }
         TypeKind::Unit => out.push_str("()"),

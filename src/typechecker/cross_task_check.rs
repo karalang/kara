@@ -105,6 +105,12 @@ impl<'a> super::TypeChecker<'a> {
                 continue;
             };
             if let Err(path) = is_cross_task_safe_with(ty, &self.env.structs, &self.env.enums) {
+                if path.fix_it == CrossTaskUnsafeFixIt::DynCrossTask {
+                    // A task may view a `dyn` value under the view rules
+                    // (design.md § `dyn Trait`: "a view follows the view
+                    // rules"), and this pass sees no capture modes.
+                    continue;
+                }
                 self.emit_cross_task_unsafe(
                     name.as_str(),
                     ty,
@@ -194,6 +200,10 @@ impl<'a> super::TypeChecker<'a> {
                 continue;
             };
             if let Err(path) = is_cross_task_safe_with(ty, &self.env.structs, &self.env.enums) {
+                // A branch may view a `dyn` value, as a task may (above).
+                if path.fix_it == CrossTaskUnsafeFixIt::DynCrossTask {
+                    continue;
+                }
                 // Sole-ownership carve-out: shared struct/enum leaves are
                 // the branch-precise ownership phase's territory (see the
                 // doc comment above). Deferring here avoids both double-

@@ -48,7 +48,9 @@
 //! - `Function` / `OnceFunction` — closures are checked at their own
 //!   boundary site (their capture set), not transitively through the
 //!   function type
-//! - `ImplTrait` / `Dyn` — unresolved at the type layer
+//! - `ImplTrait` — unresolved at the type layer
+//! - `Dyn` — only `dyn Trait + CrossTask` may cross, and its coercions
+//!   checked the concrete types
 //! - `TypeParam` / `TypeVar` / `AssocProjection` — conservatively
 //!   accepted; the check fires post-monomorphization in slice 3, so
 //!   unresolved type parameters at this layer can't carry an unsafe
@@ -97,6 +99,9 @@ pub enum CrossTaskUnsafeFixIt {
     OnceCellToLock,
     /// Raw pointers — wrap in `Atomic[*mut T]` or transfer through a channel.
     RawPointer,
+    /// `dyn Trait` → `dyn Trait + CrossTask`: the concrete type is not in
+    /// the type, so only the marked form may cross.
+    DynCrossTask,
 }
 
 impl CrossTaskUnsafeFixIt {
@@ -118,6 +123,11 @@ impl CrossTaskUnsafeFixIt {
             ),
             CrossTaskUnsafeFixIt::RawPointer => format!(
                 "wrap `{}` in `Atomic[*mut T]` or transfer ownership through a channel",
+                unsafe_leaf
+            ),
+            CrossTaskUnsafeFixIt::DynCrossTask => format!(
+                "write `{} + CrossTask`, so that each value coerced into it is checked \
+                 to be `CrossTask` (design.md § `dyn Trait`)",
                 unsafe_leaf
             ),
         }
@@ -204,6 +214,20 @@ fn walk<S1: BuildHasher, S2: BuildHasher>(
                 path: path.clone(),
                 unsafe_leaf: type_display(ty),
                 fix_it: CrossTaskUnsafeFixIt::RawPointer,
+            });
+        }
+        // Whether a `dyn` value may cross depends on its concrete type,
+        // which the type does not show: only `dyn Trait + CrossTask` may,
+        // since each coercion into it checks the concrete type
+        // (design.md § `dyn Trait`).
+        Type::Dyn {
+            cross_task: false, ..
+        } => {
+            return Err(CrossTaskUnsafePath {
+                root: root.to_string(),
+                path: path.clone(),
+                unsafe_leaf: type_display(ty),
+                fix_it: CrossTaskUnsafeFixIt::DynCrossTask,
             });
         }
         Type::Named { name, .. } if name == "OnceCell" => {
@@ -354,9 +378,14 @@ fn walk<S1: BuildHasher, S2: BuildHasher>(
         // layer; concrete witnesses are walked when they're
         // substituted in.
         Type::Existential { .. } => {}
-        // Whether a `dyn` value may cross is its `+ CrossTask`, which the
-        // coercion into it checks (design.md § `dyn Trait`).
-        Type::Dyn { .. } => {}
+        // `dyn Trait + CrossTask` (the unmarked form returned above): the
+        // coercion into it checked the concrete type, so its trait
+        // arguments are all that is left to walk.
+        Type::Dyn { args, assoc, .. } => {
+            for arg in args.iter().chain(assoc.iter().map(|(_, t)| t)) {
+                walk(arg, struct_info, enum_info, path, root, seen)?;
+            }
+        }
         // Already returned via early-hit match above.
         Type::Shared(_) | Type::Rc(_) | Type::Pointer { .. } => unreachable!(),
         // Type::Error — accepted (downstream diagnostics already cover

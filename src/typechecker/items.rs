@@ -4588,6 +4588,32 @@ impl<'a> super::TypeChecker<'a> {
                 // Traits), so `#[derive(PartialEq, Eq)]` plus a hand-written
                 // `impl PartialOrd` / `impl Ord` is a complete set.
                 for supertrait in &trait_info.supertraits {
+                    // `CrossTask` is computed, never implemented (design.md
+                    // § `CrossTask`): the target must hold no task-local value.
+                    if supertrait == "CrossTask" {
+                        if let Err(path) = crate::cross_task_safe::is_cross_task_safe_with(
+                            &self_type,
+                            &self.env.structs,
+                            &self.env.enums,
+                        ) {
+                            let at = if path.path.is_empty() {
+                                String::new()
+                            } else {
+                                format!(" (through {})", path.path.join(", "))
+                            };
+                            self.type_error(
+                                format!(
+                                    "error[E_NOT_CROSS_TASK]: impl {trait_name} for {type_name} \
+                                     requires `{type_name}: CrossTask`, but it holds `{}`{at}, \
+                                     which cannot cross a task boundary",
+                                    path.unsafe_leaf
+                                ),
+                                imp.span,
+                                TypeErrorKind::MissingSupertrait,
+                            );
+                        }
+                        continue;
+                    }
                     let derived = |set: &HashSet<String>| set.contains(supertrait.as_str());
                     let has_impl = self.env.impls.iter().any(|info| {
                         info.trait_name.as_deref() == Some(supertrait.as_str())

@@ -1697,6 +1697,7 @@ fn visit_type_spans_mut(t: &mut TypeExpr, visit: &mut impl MutVisitor) {
             args,
             assoc_bindings,
             span,
+            ..
         } => {
             visit.span(span);
             visit_path_expr_mut(trait_path, visit);

@@ -236,24 +236,28 @@ impl super::Parser {
         // Same one-shot shape: only the return type's own tail sees it.
         let return_tail = std::mem::replace(&mut self.return_tail, false);
 
-        // `escaping Fn(...)` (`docs/core-semantics.md` §9.3): a contextual
-        // keyword, recognised only before `Fn` / `OnceFn`, and accepted only
-        // as a parameter's outermost type. The mark is kept beside the tree
-        // (`Program::escaping_fn_types`), so the type itself is unchanged.
+        // `escaping Fn(...)` (`docs/core-semantics.md` §9.3) and `escaping
+        // dyn Trait` (design.md § `dyn Trait`): a contextual keyword,
+        // recognised only before `Fn` / `MutFn` / `OnceFn` / `dyn`, and
+        // accepted only as a parameter's outermost type. The mark is kept
+        // beside the tree (`Program::escaping_fn_types`), so the type itself
+        // is unchanged.
         if let Token::Identifier { name, .. } = self.peek_token_ref() {
             if name == "escaping"
-                && matches!(
-                    self.peek_token_ref_at(1),
-                    Token::Identifier { name, .. }
-                        if name == "Fn" || name == "MutFn" || name == "OnceFn"
-                )
+                && (matches!(self.peek_token_ref_at(1), Token::Dyn)
+                    || matches!(
+                        self.peek_token_ref_at(1),
+                        Token::Identifier { name, .. }
+                            if name == "Fn" || name == "MutFn" || name == "OnceFn"
+                    ))
             {
                 let kw_span = self.current_span();
                 self.advance();
                 if !escaping_ok {
                     self.error_at(
-                        "`escaping` marks a function-typed parameter that the function \
-                         may store or return; it is only accepted on a parameter's type",
+                        "`escaping` marks a function-typed or `dyn` parameter that the \
+                         function may store or return; it is only accepted on a parameter's \
+                         type",
                         kw_span,
                     );
                 }
@@ -510,16 +514,10 @@ impl super::Parser {
             // segment paths (`std.iter.Iterator`) and generic args
             // (`Iterator[Item = i64]`) are handled uniformly with
             // regular path types.
-            // `dyn TraitPath[GENERIC_ARGS]` — trait-object type marker.
-            // The general `dyn Trait` feature is P1-deferred per
-            // design.md § Polymorphism; the parser surface lands today
-            // only so the `impl Trait` epic's slice-5 check
-            // (RPITIT-blocks-dyn) has a syntactic target. The
-            // typechecker emits one of two focused diagnostics on
-            // lowering (`E_RPITIT_INCOMPATIBLE_WITH_DYN` /
-            // `E_DYN_TRAIT_NOT_IMPLEMENTED_YET`); the parser builds the
-            // `TypeKind::Dyn` node regardless so error recovery stays
-            // clean.
+            // `dyn TraitPath[GENERIC_ARGS] [+ CrossTask] [with E]`
+            // (design.md § `dyn Trait`). A `dyn` type names one trait; the
+            // one trait allowed after `+` is `CrossTask`. In a return type
+            // a `with` is the function's clause, as after a function type.
             Token::Dyn => {
                 let dyn_kw_span = self.current_span();
                 self.advance(); // consume `dyn`
@@ -532,12 +530,37 @@ impl super::Parser {
                     effect_args: None,
                     span: self.span_from(&dyn_kw_span),
                 };
+                let mut cross_task = false;
+                while self.peek_token_ref() == &Token::Plus {
+                    self.advance(); // `+`
+                    let bound_start = self.current_span();
+                    let bound = self.parse_path_type()?;
+                    if bound.segments.last().map(String::as_str) == Some("CrossTask")
+                        && bound.generic_args.is_none()
+                    {
+                        cross_task = true;
+                    } else {
+                        self.error_at(
+                            &format!(
+                                "error[E_DYN_SECOND_TRAIT]: a `dyn` type names one trait, and \
+                                 the only trait allowed after `+` is `CrossTask`; `{}` cannot \
+                                 be added. Declare a trait with both as supertraits and use \
+                                 `dyn` of that (design.md § `dyn Trait`)",
+                                bound.segments.join(".")
+                            ),
+                            self.span_from(&bound_start),
+                        );
+                    }
+                }
+                let effects = self.parse_type_effect_clause(&dyn_kw_span, return_tail)?;
                 let span = self.span_from(&start);
                 Some(TypeExpr {
                     kind: TypeKind::Dyn {
                         trait_path: trait_path_clean,
                         args,
                         assoc_bindings,
+                        effects,
+                        cross_task,
                         span,
                     },
                     span,
@@ -601,42 +624,8 @@ impl super::Parser {
                     span: self.span_from(&impl_kw_span),
                 };
 
-                // Optional `with EFFECT_LIST` clause. Mirrors the
-                // `FnType` arm above — `parse_effect_list` itself
-                // consumes the `with` keyword, so we peek-only and
-                // dispatch on the token immediately following `with`.
-                let use_effects = if !return_tail && self.at_kw("with") {
-                    let saved = self.pos;
-                    if let Some(token) = self.tokens.get(self.pos + 1) {
-                        if matches!(token.token, Token::Underscore) {
-                            // `impl Trait with _` — anonymous-
-                            // polymorphic use-effect ceiling. Same
-                            // shape as `Fn(...) with _`.
-                            self.advance(); // with
-                            self.advance(); // _
-                            Some(EffectList {
-                                items: vec![EffectItem::Polymorphic],
-                                span: self.span_from(&impl_kw_span),
-                            })
-                        } else {
-                            let effect_vars: Vec<String> = self.current_effect_vars().to_vec();
-                            // Nested `Fn(...) with E` type: a trailing comma is
-                            // a legitimate param/list separator, not a stray
-                            // effect-clause comma — recovery off.
-                            match self.parse_effect_list(&effect_vars, false) {
-                                Some(effects) => Some(effects),
-                                None => {
-                                    self.pos = saved;
-                                    return None;
-                                }
-                            }
-                        }
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
+                // Optional `with EFFECT_LIST` clause, as on a function type.
+                let use_effects = self.parse_type_effect_clause(&impl_kw_span, return_tail)?;
 
                 let span = self.span_from(&start);
                 Some(TypeExpr {
@@ -750,6 +739,45 @@ impl super::Parser {
     /// the same reason: the shared arg parser collects bindings into
     /// `pending_assoc_bindings`, and the saved/restored pair keeps a nested
     /// occurrence from inheriting or clobbering an outer one's.
+    /// The optional `with EFFECT_LIST` after `impl Trait` or `dyn Trait`,
+    /// mirroring the function type's clause: `with _` is one
+    /// `EffectItem::Polymorphic`, and in a return type's tail the `with`
+    /// is the function's, so nothing is taken. `parse_effect_list`
+    /// consumes the `with` itself, so this peeks only. `None` is a parse
+    /// failure; `Some(None)` is no clause.
+    fn parse_type_effect_clause(
+        &mut self,
+        kw_span: &Span,
+        return_tail: bool,
+    ) -> Option<Option<EffectList>> {
+        if return_tail || !self.at_kw("with") {
+            return Some(None);
+        }
+        let saved = self.pos;
+        let Some(token) = self.tokens.get(self.pos + 1) else {
+            return Some(None);
+        };
+        if matches!(token.token, Token::Underscore) {
+            self.advance(); // with
+            self.advance(); // _
+            return Some(Some(EffectList {
+                items: vec![EffectItem::Polymorphic],
+                span: self.span_from(kw_span),
+            }));
+        }
+        let effect_vars: Vec<String> = self.current_effect_vars().to_vec();
+        // Nested `Fn(...) with E` type: a trailing comma is a legitimate
+        // param/list separator, not a stray effect-clause comma — recovery
+        // off.
+        match self.parse_effect_list(&effect_vars, false) {
+            Some(effects) => Some(Some(effects)),
+            None => {
+                self.pos = saved;
+                None
+            }
+        }
+    }
+
     fn parse_trait_path_with_bindings(&mut self) -> Option<(PathExpr, Vec<AssocBinding>)> {
         let saved_allowed = self.assoc_bindings_allowed;
         let saved_pending = std::mem::take(&mut self.pending_assoc_bindings);

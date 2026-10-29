@@ -561,37 +561,28 @@ pub enum TypeKind {
         use_effects: Option<EffectList>,
         span: Span,
     },
-    /// `dyn TRAIT_PATH[GENERIC_ARGS]` — trait-object type marker. The
-    /// general `dyn Trait` feature (vtable construction, dynamic
-    /// dispatch, effect-opacity story) is **P1-deferred** per design.md
-    /// § Polymorphism. The parser accepts the surface today only so
-    /// the `impl Trait` epic's slice-5 check (RPITIT blocks `dyn Trait`)
-    /// has a syntactic target. The typechecker lowers `TypeKind::Dyn`
-    /// to `Type::Error` with one of two focused diagnostics:
-    ///
-    /// 1. `E_RPITIT_INCOMPATIBLE_WITH_DYN` — when the named trait has
-    ///    one or more methods that return `impl Trait` (no fixed
-    ///    vtable slot can be synthesized for those methods); the
-    ///    diagnostic names the offending method so the user can
-    ///    refactor.
-    /// 2. `E_DYN_TRAIT_NOT_IMPLEMENTED_YET` — otherwise, the generic
-    ///    P1-deferred stub; the trait is not RPITIT but `dyn Trait`
-    ///    as a value/type form is not yet wired through the type
-    ///    system / codegen / effect checker.
-    ///
-    /// Fields mirror `ImplTrait` — `trait_path` is the trait's path
-    /// (e.g. `Display`, `std.io.Read`); `args` carries positional
-    /// generic args on the trait; `span` is the full source span of
-    /// the `dyn Trait[…]` type expression.
+    /// `dyn TRAIT_PATH[GENERIC_ARGS] [+ CrossTask] [with EFFECTS]`, a trait
+    /// object (design.md § `dyn Trait`). The typechecker lowers it to
+    /// `Type::Dyn` (`lower_dyn_type`). Fields mirror `ImplTrait`:
+    /// `trait_path` is the trait's path (e.g. `Display`, `std.io.Read`);
+    /// `args` carries positional generic args on the trait; `span` is the
+    /// full source span of the type expression.
     Dyn {
         trait_path: PathExpr,
         args: Vec<GenericArg>,
-        /// Inline associated-type bindings — see the `ImplTrait` field of the
-        /// same name. Parsed for surface parity with `impl Trait` (a parse
-        /// error here would be a strictly worse diagnostic than the focused
-        /// P1-deferred one the lowering already emits) and then dropped:
-        /// `dyn Trait` lowers to `Type::Error` regardless.
+        /// Inline associated-type bindings, `dyn Iterator[Item = i64]` — see
+        /// the `ImplTrait` field of the same name.
         assoc_bindings: Vec<AssocBinding>,
+        /// `with EFFECT_LIST`: the effects of every call through the value
+        /// when it escapes (a field, an element, an `escaping` parameter, a
+        /// return). The same shape as `ImplTrait::use_effects`: `with _`
+        /// is one `EffectItem::Polymorphic`, and `with E` names an effect
+        /// variable. `None` when no clause is written.
+        effects: Option<EffectList>,
+        /// `+ CrossTask` written after the trait: every coercion into the
+        /// type checks that the concrete type is `CrossTask`. The parser
+        /// refuses any other trait after `+`.
+        cross_task: bool,
         span: Span,
     },
     Unit,

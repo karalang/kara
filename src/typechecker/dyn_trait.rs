@@ -33,6 +33,7 @@ impl<'a> super::TypeChecker<'a> {
         trait_path: &PathExpr,
         args: &[GenericArg],
         assoc_bindings: &[AssocBinding],
+        cross_task: bool,
         span: Span,
         generic_scope: &[String],
     ) -> Type {
@@ -109,11 +110,19 @@ impl<'a> super::TypeChecker<'a> {
             };
             assoc.push((name, ty.clone()));
         }
+        // `+ CrossTask` written, or `CrossTask` among the trait's
+        // supertraits: every `dyn` of such a trait may cross.
+        let cross_task = cross_task
+            || self
+                .env
+                .supertrait_closure_traits(&trait_name)
+                .iter()
+                .any(|t| t == "CrossTask");
         Type::Dyn {
             trait_name,
             args: lowered_args,
             assoc,
-            cross_task: false,
+            cross_task,
         }
     }
 
@@ -186,12 +195,39 @@ impl<'a> super::TypeChecker<'a> {
             trait_name,
             args,
             assoc,
-            ..
+            cross_task,
         } = target
         else {
             return None;
         };
-        if let Some(why) = self.dyn_unfit(concrete, trait_name, args, assoc) {
+        let why = self
+            .dyn_unfit(concrete, trait_name, args, assoc)
+            .or_else(|| {
+                // `dyn Trait + CrossTask`: the concrete type must be `CrossTask`,
+                // since the `dyn` type no longer shows it (design.md § `dyn Trait`).
+                let leak = cross_task
+                    .then(|| {
+                        crate::cross_task_safe::is_cross_task_safe_with(
+                            concrete,
+                            &self.env.structs,
+                            &self.env.enums,
+                        )
+                        .err()
+                    })
+                    .flatten()?;
+                let at = if leak.path.is_empty() {
+                    String::new()
+                } else {
+                    format!(" (through {})", leak.path.join(", "))
+                };
+                Some(format!(
+                    "`{}` is not `CrossTask`: it holds `{}`{at}, which cannot cross a task \
+                 boundary",
+                    type_display(concrete),
+                    leak.unsafe_leaf
+                ))
+            });
+        if let Some(why) = why {
             self.type_error(
                 format!(
                     "expected '{}', found '{}': {why}",

@@ -16723,7 +16723,9 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// of a non-`Copy` type borrows; `own T`, the written borrow forms and
     /// function values keep their type.
     fn param_mode_ty(&self, p: &ast::Param, t: Ty) -> Ty {
-        if !d5_params() || p.is_own || self.is_copy(t) {
+        // An `escaping` parameter is owned (design.md § Escaping function
+        // values), `escaping dyn Trait` as much as `escaping Fn(..)`.
+        if !d5_params() || p.is_own || self.is_copy(t) || self.fn_param_owned(p) {
             return t;
         }
         let tcx = self.tys().tcx();

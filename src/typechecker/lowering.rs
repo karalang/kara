@@ -238,6 +238,7 @@ impl<'a> super::TypeChecker<'a> {
                 trait_path,
                 args,
                 assoc_bindings,
+                cross_task,
                 ..
             } => {
                 let trait_name = trait_path.segments.join(".");
@@ -262,7 +263,14 @@ impl<'a> super::TypeChecker<'a> {
                     );
                     return Type::Error;
                 }
-                self.lower_dyn_type(trait_path, args, assoc_bindings, ty.span, generic_scope)
+                self.lower_dyn_type(
+                    trait_path,
+                    args,
+                    assoc_bindings,
+                    *cross_task,
+                    ty.span,
+                    generic_scope,
+                )
             }
             TypeKind::Unit => Type::Unit,
             TypeKind::Error => Type::Error,

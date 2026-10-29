@@ -15,6 +15,7 @@ impl super::Formatter {
                     ..
                 } => effect_spec.is_some() || return_type.as_deref().is_some_and(tail_has_with),
                 TypeKind::ImplTrait { use_effects, .. } => use_effects.is_some(),
+                TypeKind::Dyn { effects, .. } => effects.is_some(),
                 _ => false,
             }
         }
@@ -193,7 +194,7 @@ impl super::Formatter {
     // ── Types ───────────────────────────────────────────────────
 
     pub(super) fn format_type_expr(&mut self, ty: &TypeExpr) {
-        if matches!(ty.kind, TypeKind::FnType { .. })
+        if matches!(ty.kind, TypeKind::FnType { .. } | TypeKind::Dyn { .. })
             && self
                 .escaping_fn_types
                 .contains(&crate::resolver::SpanKey::from_span(&ty.span))
@@ -329,11 +330,17 @@ impl super::Formatter {
                 trait_path,
                 args,
                 assoc_bindings,
+                effects,
+                cross_task,
                 ..
             } => {
                 self.write_str("dyn ");
                 self.write_path(&trait_path.segments);
                 self.format_bracket_args(args, assoc_bindings);
+                if *cross_task {
+                    self.write_str(" + CrossTask");
+                }
+                self.format_effects(effects);
             }
             TypeKind::Unit => self.write_str("()"),
             TypeKind::Error => self.write_str("/* error */"),

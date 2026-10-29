@@ -2106,7 +2106,10 @@ fn write_type_for_diagnostic(ty: &TypeExpr, out: &mut String) {
         // anonymous-parameter `_: <type>` fix-it covers `dyn Trait`
         // signatures uniformly with the `impl Trait` shape above.
         TypeKind::Dyn {
-            trait_path, args, ..
+            trait_path,
+            args,
+            cross_task,
+            ..
         } => {
             out.push_str("dyn ");
             for (i, seg) in trait_path.segments.iter().enumerate() {
@@ -2137,6 +2140,9 @@ fn write_type_for_diagnostic(ty: &TypeExpr, out: &mut String) {
                     }
                 }
                 out.push(']');
+            }
+            if *cross_task {
+                out.push_str(" + CrossTask");
             }
         }
         TypeKind::Unit => out.push_str("()"),

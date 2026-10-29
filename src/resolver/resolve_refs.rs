@@ -124,8 +124,12 @@ impl<'a> super::Resolver<'a> {
                 trait_path,
                 args,
                 assoc_bindings,
+                effects,
                 ..
             } => {
+                if let Some(list) = effects {
+                    self.resolve_effect_list(list);
+                }
                 self.resolve_path_expr(trait_path);
                 for arg in args {
                     match arg {
