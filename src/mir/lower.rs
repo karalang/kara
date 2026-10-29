@@ -23768,6 +23768,48 @@ pub fn build_source(src: &str) -> Result<Lowered, String> {
     )
 }
 
+/// [`build_source`] with the in-order program of a build that runs tasks
+/// ([`Lowered::in_order`]) not yet lowered: a native build lowers it while
+/// the parallel program's module optimises.
+pub fn build_source_in_order_later(src: &str) -> Result<(Lowered, Option<InOrder>), String> {
+    in_order_later(
+        src,
+        crate::par_cost::auto_par_enabled() && !crate::target::active_target_is_wasm(),
+    )
+}
+
+fn in_order_later(src: &str, auto_par: bool) -> Result<(Lowered, Option<InOrder>), String> {
+    let (_, renames) = rename_compiler_name_shadows(src);
+    let unrename = |mut e: String| {
+        for (new, old) in &renames {
+            e = e.replace(new.as_str(), old);
+        }
+        e
+    };
+    let (lowered, front) = build_renamed_source(src, auto_par).map_err(unrename)?;
+    Ok((lowered, front.map(|front| InOrder { front, renames })))
+}
+
+/// The in-order program of a build that runs tasks, before it is lowered
+/// ([`build_source_in_order_later`]).
+pub struct InOrder {
+    front: Frontend,
+    renames: Vec<(String, String)>,
+}
+
+impl InOrder {
+    /// The program as `KARAC_AUTO_PAR=0` builds it.
+    pub fn lower(self) -> Result<Lowered, String> {
+        let lowered = self.front.lower(AutoPar::Off).and_then(finish_build);
+        lowered.map_err(|mut e| {
+            for (new, old) in &self.renames {
+                e = e.replace(new.as_str(), old);
+            }
+            e
+        })
+    }
+}
+
 /// [`build_source`] as `KARAC_AUTO_PAR=0` builds it, for a caller that
 /// reads the sequential MIR without setting the process-wide variable.
 pub fn build_sequential_source(src: &str) -> Result<Lowered, String> {
@@ -23775,18 +23817,19 @@ pub fn build_sequential_source(src: &str) -> Result<Lowered, String> {
 }
 
 fn build_source_with(src: &str, auto_par: bool) -> Result<Lowered, String> {
-    let (_, renames) = rename_compiler_name_shadows(src);
-    build_renamed_source(src, auto_par).map_err(|mut e| {
-        for (new, old) in &renames {
-            e = e.replace(new.as_str(), old);
-        }
-        e
-    })
+    let (mut lowered, seq) = in_order_later(src, auto_par)?;
+    if let Some(seq) = seq {
+        lowered.in_order = Some(Box::new(seq.lower()?));
+    }
+    Ok(lowered)
 }
 
-fn build_renamed_source(src: &str, auto_par: bool) -> Result<Lowered, String> {
+/// The build, and for one that runs loops or statements as tasks, the
+/// checked program to lower in order ([`Lowered::in_order`]).
+fn build_renamed_source(src: &str, auto_par: bool) -> Result<(Lowered, Option<Frontend>), String> {
     if !auto_par {
-        return finish_build(lower_source_for_checks(src, false, AutoPar::Off)?);
+        let lowered = finish_build(lower_source_for_checks(src, false, AutoPar::Off)?)?;
+        return Ok((lowered, None));
     }
     // M4 item 14: built once recording the candidates, whose verdicts
     // then pick the loops a second build lowers as tasks. That build's
@@ -23859,11 +23902,8 @@ fn build_renamed_source(src: &str, auto_par: bool) -> Result<Lowered, String> {
             }
             // The recording build is not the in-order one (its loops are
             // lowered for the verdicts), so that is lowered a third time.
-            let mut second = second;
-            if !second.auto_par_tasks.is_empty() || !second.auto_par_groups.is_empty() {
-                second.in_order = Some(Box::new(finish_build(front.lower(AutoPar::Off)?)?));
-            }
-            return Ok(second);
+            let tasks = !second.auto_par_tasks.is_empty() || !second.auto_par_groups.is_empty();
+            return Ok((second, tasks.then_some(front)));
         };
         if debug {
             eprintln!("auto-par: `{name}` would suspend and is used as a function value");
@@ -23875,7 +23915,7 @@ fn build_renamed_source(src: &str, auto_par: bool) -> Result<Lowered, String> {
             break;
         }
     }
-    Ok(first)
+    Ok((first, None))
 }
 
 /// A body the parallel build `second` made suspend, by joining a loop's

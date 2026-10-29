@@ -77,15 +77,15 @@ const IN_ORDER_MAIN: &str = "karac.main.seq";
 
 /// [`compile_program_object`] for a build that runs loops or statements as
 /// tasks and carries the program as `KARAC_AUTO_PAR=0` builds it
-/// (`Lowered::in_order`): each is its own module, optimised and emitted as
-/// its own build would be, and the objects are merged. `karac.main` asks
-/// the pool once and, on one worker, where the tasks only cost, runs the
-/// in-order program's. Its code is the in-order build's, so it runs that
-/// build's instructions, which an in-order copy of each function beside
-/// the tasks in one module did not (B-2026-10-28-1).
+/// (`Lowered::in_order`, lowered by `seq`): each is its own module,
+/// optimised and emitted as its own build would be, and the objects are
+/// merged. `karac.main` asks the pool once and, on one worker, where the
+/// tasks only cost, runs the in-order program's. Its code is the in-order
+/// build's, so it runs that build's instructions, which an in-order copy of
+/// each function beside the tasks in one module did not (B-2026-10-28-1).
 pub fn compile_dual_program_object(
     (program, tys): (&crate::mir::interp::Program, &crate::mir::TyInterner),
-    (seq, seq_tys): (&crate::mir::interp::Program, &crate::mir::TyInterner),
+    seq: impl FnOnce() -> Result<crate::mir::lower::Lowered, String>,
     obj: &Path,
     opt: u8,
     keep_ll: Option<&Path>,
@@ -94,15 +94,9 @@ pub fn compile_dual_program_object(
     let llcx = Context::create();
     let module = super::mir::compile_mir_with(&llcx, "main", program, tys, &[])?;
     pick_by_pool(&llcx, &module)?;
-    let seq_llcx = Context::create();
-    let seq_module = super::mir::compile_mir_with(&seq_llcx, "main", seq, seq_tys, &[])?;
-    in_order_module(&seq_module)?;
     crate::mir::lower::phase_time("compile_mir", &mut t);
     if let Some(path) = keep_ll {
         let _ = std::fs::write(path, module.print_to_string().to_string());
-        let mut seq_path = path.as_os_str().to_owned();
-        seq_path.push(".seq.ll");
-        let _ = std::fs::write(seq_path, seq_module.print_to_string().to_string());
     }
     let part = |tag: &str| {
         let mut p = obj.as_os_str().to_owned();
@@ -110,22 +104,35 @@ pub fn compile_dual_program_object(
         std::path::PathBuf::from(p)
     };
     let parts = [part("par"), part("seq")];
-    // The two modules share nothing, so they are optimised and emitted at
-    // once, the in-order one read back in a context of its own thread.
-    let seq_bitcode = split::bitcode(seq_module.as_mut_ptr());
-    drop(seq_module);
+    // The two modules share nothing, so the parallel one is optimised and
+    // emitted, read back in a context of its own thread, while this one
+    // lowers and builds the in-order program.
+    let par_bitcode = split::bitcode(module.as_mut_ptr());
+    drop(module);
     let built = std::thread::scope(|s| {
-        let seq = s.spawn(|| {
-            let seq_llcx = Context::create();
-            let buf = MemoryBuffer::create_from_memory_range_copy(&seq_bitcode, "seq");
-            let m = Module::parse_bitcode_from_buffer(&buf, &seq_llcx)
-                .map_err(|e| format!("read the in-order module: {}", e.to_string()))?;
-            compile_module(&seq_llcx, &m, &parts[1], opt, false)
+        let par = s.spawn(|| {
+            let llcx = Context::create();
+            let buf = MemoryBuffer::create_from_memory_range_copy(&par_bitcode, "par");
+            let m = Module::parse_bitcode_from_buffer(&buf, &llcx)
+                .map_err(|e| format!("read the parallel module: {}", e.to_string()))?;
+            compile_module(&llcx, &m, &parts[0], opt, true)
         });
-        let par = compile_module(&llcx, &module, &parts[0], opt, true);
-        let seq = seq
+        let seq = seq().and_then(|seq| {
+            let mut t = std::time::Instant::now();
+            let llcx = Context::create();
+            let module = super::mir::compile_mir_with(&llcx, "main", &seq.program, &seq.tys, &[])?;
+            in_order_module(&module)?;
+            crate::mir::lower::phase_time("compile_mir (in order)", &mut t);
+            if let Some(path) = keep_ll {
+                let mut seq_path = path.as_os_str().to_owned();
+                seq_path.push(".seq.ll");
+                let _ = std::fs::write(seq_path, module.print_to_string().to_string());
+            }
+            compile_module(&llcx, &module, &parts[1], opt, false)
+        });
+        let par = par
             .join()
-            .unwrap_or_else(|_| Err("the in-order module's build panicked".to_string()));
+            .unwrap_or_else(|_| Err("the parallel module's build panicked".to_string()));
         par.and(seq)
     })
     .and_then(|()| split::partial_link(obj, &parts));

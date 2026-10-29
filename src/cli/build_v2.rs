@@ -622,16 +622,14 @@ fn build(
             .unwrap_or("main");
         let obj = std::env::temp_dir().join(format!("karac_mir_{}_{stem}.o", process::id()));
         let keep_ll = std::env::var_os("KARAC_MIR_LL").map(std::path::PathBuf::from);
-        let lowered = crate::mir::lower::build_source(&source)
-            .and_then(|l| {
-                // Conflicting `par` branches and invalid MIR are refused,
-                // as on every MIR backend.
-                crate::mir::lower::compiled_check(&l)?;
-                if let Some(seq) = &l.in_order {
-                    crate::mir::lower::compiled_check(seq)?;
-                }
-                Ok(l)
-            })
+        // Conflicting `par` branches and invalid MIR are refused, as on
+        // every MIR backend.
+        let checked = |l: crate::mir::lower::Lowered| {
+            crate::mir::lower::compiled_check(&l)?;
+            Ok(l)
+        };
+        let (lowered, in_order) = crate::mir::lower::build_source_in_order_later(&source)
+            .and_then(|(l, seq)| Ok((checked(l)?, seq)))
             .unwrap_or_else(|e| super::run_v2::refused(&e, output));
         let hot_swap = if a.enable_hot_swap {
             hot_swap_names(&source)
@@ -641,11 +639,15 @@ fn build(
         // A build with tasks carries its in-order program, which runs on
         // one worker; a hot-swap build swaps the bodies of one program, so
         // it keeps the tasks.
-        let built = match &lowered.in_order {
+        let built = match in_order {
             Some(seq) if hot_swap.is_empty() => {
                 crate::backend::mir_aot::compile_dual_program_object(
                     (&lowered.program, &lowered.tys),
-                    (&seq.program, &seq.tys),
+                    || {
+                        seq.lower()
+                            .and_then(checked)
+                            .map_err(|e| super::run_v2::refused(&e, output))
+                    },
                     &obj,
                     opt,
                     keep_ll.as_deref(),
