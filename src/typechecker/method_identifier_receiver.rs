@@ -1047,6 +1047,43 @@ impl<'a> super::TypeChecker<'a> {
                         }
                         return Some(return_ty);
                     }
+                    let solutions: HashMap<String, Type> = imp
+                        .generic_params
+                        .as_ref()
+                        .map(|gp| {
+                            gp.params
+                                .iter()
+                                .zip(target_args.iter())
+                                .map(|(p, t)| (p.name.clone(), t.clone()))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    // A method with parameters of its own (`from_iter[I]` of
+                    // `Vec[String].from_iter(it)`) solves them from the
+                    // arguments, as the unqualified call does, its bounds
+                    // reading the impl's parameters the receiver pinned
+                    // (B-2026-10-29-40).
+                    if sig
+                        .generic_params
+                        .iter()
+                        .any(|g| !solutions.contains_key(g))
+                    {
+                        let saved = self.call_bound_receiver_subs.replace(subs.clone());
+                        let ret = self.check_call_args_with_substitution_full(
+                            args,
+                            &param_types,
+                            &return_ty,
+                            span,
+                            /* apply_call_site_marker = */ false,
+                            None,
+                            Some(&sig.generic_params),
+                            sig.where_clause.as_ref(),
+                            span,
+                        );
+                        self.call_bound_receiver_subs = saved;
+                        self.record_call_type_subs(span, &solutions);
+                        return Some(ret);
+                    }
                     for (arg, param) in args.iter().zip(param_types.iter()) {
                         let arg_ty = self.infer_expr(&arg.value);
                         self.check_assignable(param, &arg_ty, arg.value.span);
@@ -1060,17 +1097,6 @@ impl<'a> super::TypeChecker<'a> {
                     // a structural mangle whose monomorph skipped the entry deep
                     // copy, so the callee and the caller's argument temp both
                     // freed one heap field.
-                    let solutions: HashMap<String, Type> = imp
-                        .generic_params
-                        .as_ref()
-                        .map(|gp| {
-                            gp.params
-                                .iter()
-                                .zip(target_args.iter())
-                                .map(|(p, t)| (p.name.clone(), t.clone()))
-                                .collect()
-                        })
-                        .unwrap_or_default();
                     self.record_call_type_subs(span, &solutions);
                     return Some(return_ty);
                 }
