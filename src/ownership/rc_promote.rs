@@ -265,12 +265,12 @@ impl<'a> super::OwnershipChecker<'a> {
                 )
             } else if supports_clone {
                 format!(
-                    "clone '{binding}' at the move site (`{binding}.clone()`), declare the \
-                     callee parameter `ref` if it only reads, or restructure to avoid reuse"
+                    "clone '{binding}' at the move site (`{binding}.clone()`), drop `own` from \
+                     the callee parameter if it only reads, or restructure to avoid reuse"
                 )
             } else {
                 format!(
-                    "declare the callee parameter `ref` if it only reads, or restructure to \
+                    "drop `own` from the callee parameter if it only reads, or restructure to \
                      avoid reuse ('{binding}' has no `.clone()`)"
                 )
             };

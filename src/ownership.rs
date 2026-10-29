@@ -3538,8 +3538,8 @@ impl<'a> OwnershipChecker<'a> {
                 // walked into exactly this way.
                 suggestion: Some(if supports_clone {
                     format!(
-                        "clone '{}' at the move site (`{}.clone()`), declare the callee \
-                         parameter `ref` if it only reads, or restructure to avoid reuse",
+                        "clone '{}' at the move site (`{}.clone()`), drop `own` from the \
+                         callee parameter if it only reads, or restructure to avoid reuse",
                         binding, binding
                     )
                 } else if let Some((ty, edit)) = derive_copy {
@@ -3549,12 +3549,12 @@ impl<'a> OwnershipChecker<'a> {
                         .contains(&SpanKey::from_span(&w.consume_span));
                     let advice = crate::ownership::derive_advice(ty, edit, binding, first);
                     format!(
-                        "{advice}, declare the callee parameter `ref` if it only reads, or \
+                        "{advice}, drop `own` from the callee parameter if it only reads, or \
                          restructure to avoid reuse"
                     )
                 } else {
                     format!(
-                        "declare the callee parameter `ref` if it only reads, or \
+                        "drop `own` from the callee parameter if it only reads, or \
                          restructure to avoid reuse ('{}' has no `.clone()` — that \
                          exists only on `String`, the built-in heap collections and \
                          RC types)",

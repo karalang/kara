@@ -1272,7 +1272,8 @@ fn class_description(class: DiagnosticClass) -> &'static str {
         }
         DiagnosticClass::OwnershipMoveAfterUse => {
             "A binding was used after its value was moved. Clone before the move, \
-             borrow with `ref` / `mut ref`, or restructure to avoid the second use."
+             drop `own` from a callee parameter that only reads (a bare parameter \
+             borrows), or restructure to avoid the second use."
         }
         DiagnosticClass::OwnershipBorrowConflict => {
             "A live borrow conflicts with a later operation. Includes ref-vs-mut-ref \
