@@ -5774,8 +5774,11 @@ fn frame_text(f: ref Frame, head: ref Option[i64]) -> String {
         }
         out.push_str(csv_row(row));
     }
-    out
+    // A carriage return inside a field prints as `\r`, as the oracle
+    // prints it: kara's checkout turns a raw CR in expected.out into LF.
+    replace_all(out, "\r", "\\r")
 }
+
 // ------------------------------------------------------------ the job's arguments
 
 fn int_arg(v: Str) -> Result[i64, PyErr] {

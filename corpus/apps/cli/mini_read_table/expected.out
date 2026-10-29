@@ -1072,7 +1072,7 @@ shape (3, 3)
   'text': str
 ,id,label,text
 0,1,a,"He said ""hi"""
-1,2,b,"two
+1,2,b,"two\r
 lines"
 2,3,c,plain
 $ read quoted.csv quoting=3
@@ -1100,7 +1100,7 @@ shape (3, 3)
   2: str
 ,0,1,2
 0,1,a,"He said ""hi"""
-1,2,b,"two
+1,2,b,"two\r
 lines"
 2,3,c,plain
 $ read quoted.csv sep=, doublequote=False
@@ -1110,7 +1110,7 @@ shape (3, 3)
   'text': str
 ,id,label,text
 0,1,a,"He said ""hi"""""""
-1,2,b,"two
+1,2,b,"two\r
 lines"
 2,3,c,plain
 $ read single.csv sep=; quotechar='

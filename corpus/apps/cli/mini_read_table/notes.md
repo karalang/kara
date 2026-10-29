@@ -63,6 +63,8 @@ shapes, csv's `Error` from the Sniffer, `TypeError` and `ValueError`
 from csv's dialect validation, `PatternError` from a separator that is
 not a valid regular expression, decode errors, an unknown codec or
 error handler, an empty file, a missing file). 13 jobs print warnings.
+A carriage return inside a field prints as `\r`, since kara's checkout
+turns a raw CR in `expected.out` into a line feed.
 
 ```
 python3 -s -P -B mk.py          # writes data/ and data/jobs.txt
