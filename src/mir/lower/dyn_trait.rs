@@ -115,6 +115,24 @@ impl<'l, 'a> Bx<'l, 'a> {
         {
             return Ok(i as u32);
         }
+        // The dyn type's own trait's slots come from the impl its arguments
+        // name; a supertrait's from its first impl.
+        // Its arguments lead the `dyn` type's, before the associated types.
+        let (own_trait, mut own_args) = match self.tys().tcx().kind(dyn_ty) {
+            HK::Dyn { trait_, args, .. } => {
+                (self.lcx.def_name(trait_), self.tys().tcx().list(args))
+            }
+            _ => (String::new(), Vec::new()),
+        };
+        let own_params = self
+            .lcx
+            .trait_defs
+            .get(own_trait.as_str())
+            .copied()
+            .or_else(|| checker_library_trait(&own_trait))
+            .and_then(|d| d.generic_params.as_ref())
+            .map_or(0, |g| g.params.len());
+        own_args.truncate(own_params);
         let mut slots = Vec::new();
         for (tr, m) in self.dyn_slots(dyn_ty) {
             // A type with no `impl Display` of its own (a number, a
@@ -124,8 +142,9 @@ impl<'l, 'a> Bx<'l, 'a> {
                 .then(|| self.lcx.defs.lookup(0, "dyn_display_to_string"))
                 .flatten()
                 .filter(|d| self.lcx.fns.contains_key(d));
+            let trait_args: &[Ty] = if tr == own_trait { &own_args } else { &[] };
             let found = self
-                .user_impl_method(concrete, &tr, &m.name)
+                .trait_impl_method(concrete, &tr, &m.name, trait_args)
                 .or_else(|| shim.map(|d| (d, vec![concrete])));
             let Some((d, inst)) = found else {
                 let what = format!(

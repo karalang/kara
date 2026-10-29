@@ -828,6 +828,8 @@ struct FnItem<'a> {
     impl_slice: bool,
     /// The impl's generic parameters, which come before the method's.
     impl_generics: Option<&'a ast::GenericParams>,
+    /// The trait's arguments as the impl writes them (`Handler[i64]`).
+    impl_trait_args: Option<&'a [ast::GenericArg]>,
     /// Where each impl parameter sits among the target's arguments, when
     /// that is not simply the leading ones in order: `impl[I, B] ... for
     /// MapIter[I, I.Item, B]` gives `[0, 2]`.
@@ -1423,6 +1425,7 @@ impl<'a> Lcx<'a> {
                     impl_prim: None,
                     impl_slice: false,
                     impl_generics: Some(&d.generics),
+                    impl_trait_args: None,
                     impl_arg_pos: None,
                     impl_span: None,
                     impl_dispatch: None,
@@ -1485,6 +1488,7 @@ impl<'a> Lcx<'a> {
                                 impl_prim: None,
                                 impl_slice: false,
                                 impl_generics: None,
+                                impl_trait_args: None,
                                 impl_arg_pos: None,
                                 impl_span: None,
                                 impl_dispatch: None,
@@ -1622,6 +1626,10 @@ impl<'a> Lcx<'a> {
                                     impl_prim: prim,
                                     impl_slice: slice,
                                     impl_generics: b.generic_params.as_ref(),
+                                    impl_trait_args: b
+                                        .trait_name
+                                        .as_ref()
+                                        .and_then(|t| t.generic_args.as_deref()),
                                     impl_arg_pos: impl_arg_pos.clone(),
                                     impl_span: Some(SpanKey::from_span(&b.span)),
                                     impl_dispatch: impl_dispatch.clone(),
@@ -9894,6 +9902,141 @@ impl<'l, 'a> Bx<'l, 'a> {
                 .then(|| self.dyn_impl_method(t, tr, method))
                 .flatten();
         }
+        let (d, targs) = self.nth_impl_def(t, tr, method, n)?;
+        match targs {
+            Some(args) => Some((d, self.lcx.fns.get(&d)?.impl_args(&args)?)),
+            None => Some((d, Vec::new())),
+        }
+    }
+
+    /// `method` of the impl of `tr[trait_args]` for `t`: of `impl
+    /// Handler[i64] for Both` and `impl Handler[String] for Both`, the one
+    /// the arguments name, and an impl parameter only the trait's
+    /// arguments name (`T` of `impl[T] Handler[T] for Echo`) read off them.
+    pub(super) fn trait_impl_method(
+        &self,
+        t: Ty,
+        tr: &str,
+        method: &str,
+        trait_args: &[Ty],
+    ) -> Option<(DefId, Vec<Ty>)> {
+        if trait_args.is_empty() || matches!(self.tys().tcx().kind(t), HK::Dyn { .. }) {
+            return self.user_impl_method(t, tr, method);
+        }
+        let mut n = 0;
+        while let Some((d, targs)) = self.nth_impl_def(t, tr, method, n) {
+            n += 1;
+            let item = self.lcx.fns.get(&d)?;
+            let Some(written) = item.impl_trait_args else {
+                continue;
+            };
+            let written: Vec<&ast::TypeExpr> = written
+                .iter()
+                .filter_map(|a| match a {
+                    ast::GenericArg::Type(te) => Some(te),
+                    _ => None,
+                })
+                .collect();
+            if written.len() != trait_args.len() {
+                continue;
+            }
+            let names: Vec<&str> = item
+                .impl_generics
+                .map(|g| g.params.iter().map(|p| p.name.as_str()).collect())
+                .unwrap_or_default();
+            let mut out: Vec<Option<Ty>> = vec![None; item.impl_params];
+            if let Some(from_target) = targs.as_deref().and_then(|a| item.impl_args(a)) {
+                for (slot, a) in out.iter_mut().zip(from_target) {
+                    *slot = Some(a);
+                }
+            }
+            let fits = written
+                .iter()
+                .zip(trait_args)
+                .all(|(w, &a)| self.written_fits(w, a, &names, &mut out));
+            if let (true, Some(inst)) = (fits, out.into_iter().collect::<Option<Vec<_>>>()) {
+                return Some((d, inst));
+            }
+        }
+        None
+    }
+
+    /// Whether `te`, a type an impl writes, can be `t`, binding each of the
+    /// impl's parameters (`names`) it writes to its part of `t`.
+    fn written_fits(
+        &self,
+        te: &ast::TypeExpr,
+        t: Ty,
+        names: &[&str],
+        out: &mut [Option<Ty>],
+    ) -> bool {
+        let tcx = self.tys().tcx();
+        match &te.kind {
+            ast::TypeKind::Path(q) => {
+                let Some(last) = q.segments.last() else {
+                    return false;
+                };
+                if q.generic_args.is_none() && q.segments.len() == 1 {
+                    if let Some(i) = names.iter().position(|n| n == last) {
+                        return match out.get_mut(i) {
+                            Some(Some(b)) => *b == t,
+                            Some(slot) => {
+                                *slot = Some(t);
+                                true
+                            }
+                            None => false,
+                        };
+                    }
+                    if let Some(p) = self.lcx.primitive(last) {
+                        return p == t;
+                    }
+                }
+                let (name, args) = match tcx.kind(t) {
+                    HK::Adt { def, args } | HK::Shared { def, args } => {
+                        (self.lcx.def_name(def), tcx.list(args))
+                    }
+                    HK::Intrinsic { kind, args } => (kind.name().to_string(), tcx.list(args)),
+                    _ => return false,
+                };
+                let written = q.generic_args.as_deref().unwrap_or(&[]);
+                &name == last
+                    && written.len() == args.len()
+                    && written.iter().zip(args).all(|(w, a)| match w {
+                        ast::GenericArg::Type(w) => self.written_fits(w, a, names, out),
+                        _ => true,
+                    })
+            }
+            ast::TypeKind::Tuple(ws) => match tcx.kind(t) {
+                HK::Tuple(l) => {
+                    let l = tcx.list(l);
+                    ws.len() == l.len()
+                        && ws
+                            .iter()
+                            .zip(l)
+                            .all(|(w, a)| self.written_fits(w, a, names, out))
+                }
+                HK::Unit => ws.is_empty(),
+                _ => false,
+            },
+            ast::TypeKind::Ref(w) => {
+                matches!(tcx.kind(t), HK::Ref(i) if self.written_fits(w, i, names, out))
+            }
+            ast::TypeKind::MutRef(w) => {
+                matches!(tcx.kind(t), HK::MutRef(i) if self.written_fits(w, i, names, out))
+            }
+            _ => false,
+        }
+    }
+
+    /// The `n`th impl of `tr` for `t`'s type that has `method`, with
+    /// `t`'s arguments (`None` for a primitive, whose impl has no target).
+    fn nth_impl_def(
+        &self,
+        t: Ty,
+        tr: &str,
+        method: &str,
+        n: usize,
+    ) -> Option<(DefId, Option<Vec<Ty>>)> {
         let label = format!("impl {tr}#{n}");
         let (def, args) = match self.tys().tcx().adt_of(t) {
             Some((adt, args)) => (adt.def, args),
@@ -9911,7 +10054,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                             && i.f.name == method
                             && path.len() >= 2
                             && path[path.len() - 2] == label)
-                            .then(|| (d, Vec::new()))
+                            .then_some((d, None))
                     });
                 }
             },
@@ -9921,8 +10064,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         path.push(method.to_string());
         let d = self.lcx.defs.table.lookup(&DefPath::new(path))?;
         let d = self.lcx.lowered_def(d)?;
-        let item = self.lcx.fns.get(&d)?;
-        Some((d, item.impl_args(&args)?))
+        self.lcx.fns.contains_key(&d).then_some((d, Some(args)))
     }
 
     /// B-2026-10-15-76 — the operator method `a <op> right` calls on `t`:

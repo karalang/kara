@@ -874,3 +874,116 @@ fn mir_dyn_refuses_clone_without_the_supertrait() {
         "no method 'clone' on `dyn Shape`",
     );
 }
+
+/// A generic function or method that makes `dyn Handler[T]` from a type
+/// parameter takes the trait's arguments off the parameter's bound
+/// (`[H: Handler[T]]`); a call solves `T` from the impl its argument has,
+/// and the method table is that impl's, of several on one type, or a
+/// generic impl's at `T`.
+#[test]
+fn mir_dyn_reads_trait_arguments_off_a_bound() {
+    runs(
+        r#"trait Handler[T] {
+    fn handle(ref self, x: own T) -> T;
+}
+struct Doubler {}
+impl Handler[i64] for Doubler {
+    fn handle(ref self, x: own i64) -> i64 { x * 2 }
+}
+struct Echo {}
+impl[T] Handler[T] for Echo {
+    fn handle(ref self, x: own T) -> T { x }
+}
+struct Both { k: i64 }
+impl Handler[i64] for Both {
+    fn handle(ref self, x: own i64) -> i64 { x + self.k }
+}
+impl Handler[String] for Both {
+    fn handle(ref self, x: own String) -> String { x + "!" }
+}
+struct Router[T] {
+    hs: Vec[dyn Handler[T]],
+}
+impl[T] Router[T] {
+    fn new() -> Router[T] { Router { hs: Vec.new() } }
+    fn add[H: Handler[T]](mut ref self, h: own H) {
+        self.hs.push(h);
+    }
+    fn run(ref self, x: own T) -> T {
+        let mut v = x;
+        for h in self.hs.iter() {
+            v = h.handle(v);
+        }
+        v
+    }
+}
+fn wrap[T, H: Handler[T]](h: own H) -> dyn Handler[T] {
+    h
+}
+fn main() {
+    let a = wrap(Doubler {});
+    println(a.handle(21));
+    let mut r: Router[i64] = Router.new();
+    r.add(Doubler {});
+    r.add(Echo {});
+    r.add(Both { k: 3 });
+    println(r.run(5));
+    let mut s: Router[String] = Router.new();
+    s.add(Both { k: 0 });
+    s.add(Echo {});
+    println(s.run("go".to_string()));
+    let e: dyn Handler[String] = wrap(Echo {});
+    let n: dyn Handler[i64] = wrap(Both { k: 10 });
+    println(e.handle("x".to_string()));
+    println(n.handle(1));
+    r.hs.push(a);
+    println(r.run(1));
+}
+"#,
+        "42\n13\ngo!\nx\n11\n10\n",
+    );
+}
+
+/// `karac check` refuses the program with a message containing `want`: the
+/// v2 core's rules that `run_source` does not apply.
+fn check_refuses(tag: &str, src: &str, want: &str) {
+    let path = std::env::temp_dir().join(format!("karac-dyn-{tag}-{}.kara", std::process::id()));
+    std::fs::write(&path, src).expect("write");
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_karac"))
+        .arg("check")
+        .arg(&path)
+        .output()
+        .expect("karac");
+    let _ = std::fs::remove_file(&path);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{tag}: checked");
+    assert!(err.contains(want), "{tag}: {err}");
+}
+
+/// A bound whose trait arguments are not the `dyn` type's does not make
+/// it, and a copy of each element (`to_vec`, `clone`) needs the `dyn`
+/// trait to be under `Clone`.
+#[test]
+fn mir_dyn_refuses_other_trait_arguments_and_uncloned_copies() {
+    let handler = "trait Handler[T] {\n    fn handle(ref self, x: own T) -> T;\n}\n";
+    refused(
+        &format!("{handler}fn bad[T, H: Handler[T]](h: own H) -> dyn Handler[i64] {{\n    h\n}}\nfn main() {{}}\n"),
+        "no bound of `H` gives `Handler[i64]`; bound it `[H: Handler[i64]]`",
+    );
+    let shape = "trait Shape {\n    fn area(ref self) -> i64;\n}\nstruct Sq { s: i64 }\nimpl Shape for Sq {\n    fn area(ref self) -> i64 { self.s * self.s }\n}\n";
+    check_refuses(
+        "to-vec",
+        &format!("{shape}fn main() {{\n    let v: Vec[dyn Shape] = Vec.new();\n    let w = v.to_vec();\n}}\n"),
+        "`.to_vec()` on 'Vec[dyn Shape]' clones each element, and `dyn Shape` has no `.clone()`: give `Shape` a `Clone` supertrait",
+    );
+    check_refuses(
+        "clone",
+        &format!("{shape}fn main() {{\n    let v: Vec[dyn Shape] = Vec.new();\n    let w = v.clone();\n}}\n"),
+        "`.clone()` on 'Vec[dyn Shape]' clones each element, and `dyn Shape` has no `.clone()`",
+    );
+    check_refuses(
+        "to-vec-struct",
+        &format!("{shape}fn main() {{\n    let v: Vec[Sq] = [Sq {{ s: 1 }}].to_vec();\n}}\n"),
+        "`.to_vec()` on 'Vec[Sq]' clones each element, and 'Sq' has no `.clone()`",
+    );
+}

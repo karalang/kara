@@ -1395,10 +1395,12 @@ impl<'a> super::TypeChecker<'a> {
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                 }
-                Type::Named {
+                let vec = Type::Named {
                     name: "Vec".to_string(),
                     args: vec![elem.clone()],
-                }
+                };
+                self.require_elements_clone(".to_vec()", &vec, span);
+                vec
             }
             // Mutation methods (require mut Slice[T])
             "sort" | "reverse" => {
@@ -1923,10 +1925,12 @@ impl<'a> super::TypeChecker<'a> {
             // into a new `Vec`, the value `clone` gives.
             "to_vec" => {
                 self.expect_no_args("Vec.to_vec", args, span);
-                Type::Named {
+                let vec = Type::Named {
                     name: "Vec".to_string(),
                     args: vec![elem.clone()],
-                }
+                };
+                self.require_elements_clone(".to_vec()", &vec, span);
+                vec
             }
             "chunks" | "windows" => {
                 for arg in args {

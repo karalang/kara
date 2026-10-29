@@ -4439,6 +4439,13 @@ impl<'a> super::TypeChecker<'a> {
                 formal_generic_params,
             );
         }
+        self.solve_from_bound_trait_args(
+            where_clause,
+            &name_to_id,
+            &id_to_name,
+            &const_id_to_name,
+            formal_generic_params,
+        );
         // Pass 2: check each arg against the resolved slot. For
         // closure args, the resolved slot may be a concrete
         // `Fn(i64) -> i64` (when T solved) and check_expr's pushdown
@@ -5673,23 +5680,42 @@ impl<'a> super::TypeChecker<'a> {
                         // couldn't be pinned from a type-erased `Column`
                         // receiver) — skip the comparison so it isn't
                         // false-rejected.
+                        // A method's bound may name its impl's parameters
+                        // (`T` of `impl[T] Router[T]`), which the receiver
+                        // binds.
+                        let mut scope = all_param_names.to_vec();
+                        let receiver_subs = self.call_bound_receiver_subs.clone();
+                        if let Some(r) = &receiver_subs {
+                            scope.extend(r.keys().filter(|k| *k != "Self").cloned());
+                        }
                         let want: Vec<Type> = bound_arg_asts
                             .iter()
                             .filter_map(|a| match a {
                                 crate::ast::GenericArg::Type(te) => {
-                                    let t = self.lower_type_expr(te, all_param_names);
+                                    let mut t = self.lower_type_expr(te, &scope);
+                                    if let Some(r) = &receiver_subs {
+                                        t = substitute_type_params(&t, r);
+                                    }
                                     Some(substitute_type_params(&t, &solutions_subs))
                                 }
                                 _ => None,
                             })
                             .collect();
-                        let decidable = impl_args.len() == want.len()
-                            && !impl_args.iter().chain(want.iter()).any(contains_type_param)
-                            && impl_args
+                        // Every impl of the trait is a candidate: a type may
+                        // implement `Handler[i64]` and `Handler[String]` both.
+                        let all_impls = self.env.impls_concrete_trait_args(concrete_ty, trait_name);
+                        let decidable = all_impls.iter().all(|a| a.len() == want.len())
+                            && !all_impls
                                 .iter()
+                                .flatten()
+                                .chain(want.iter())
+                                .any(contains_type_param)
+                            && all_impls
+                                .iter()
+                                .flatten()
                                 .chain(want.iter())
                                 .all(type_is_fully_concrete);
-                        if decidable && impl_args != want {
+                        if decidable && !all_impls.contains(&want) {
                             let render = |v: &[Type]| {
                                 v.iter().map(type_display).collect::<Vec<_>>().join(", ")
                             };
@@ -5873,6 +5899,92 @@ impl<'a> super::TypeChecker<'a> {
                 &mut self.env.substitutions,
                 &mut self.env.const_substitutions,
             );
+        }
+    }
+
+    /// Unify each argument of a parameterized bound (`H: Handler[T]`) with
+    /// the trait arguments of the impl `H`'s solution has, so a parameter
+    /// written only in a bound is solved from it: `wrap(Doubler {})` under
+    /// `impl Handler[i64] for Doubler` fixes `T = i64`. A type with several
+    /// impls of the trait solves nothing here.
+    fn solve_from_bound_trait_args(
+        &mut self,
+        where_clause: Option<&WhereClause>,
+        name_to_id: &HashMap<String, super::types::TypeVarId>,
+        id_to_name: &HashMap<super::types::TypeVarId, String>,
+        const_id_to_name: &HashMap<super::types::ConstVarId, String>,
+        formal_generic_params: Option<&[String]>,
+    ) {
+        let Some(where_clause) = where_clause else {
+            return;
+        };
+        let mut scope: Vec<String> = name_to_id.keys().cloned().collect();
+        for p in formal_generic_params.unwrap_or(&[]) {
+            if !name_to_id.contains_key(p) {
+                scope.push(p.clone());
+            }
+        }
+        // A method's bound may name its impl's parameters, which the receiver
+        // binds.
+        let receiver_subs = self.call_bound_receiver_subs.clone().unwrap_or_default();
+        scope.extend(receiver_subs.keys().filter(|k| *k != "Self").cloned());
+        let metas: HashMap<String, SubstValue> = name_to_id
+            .iter()
+            .map(|(n, id)| (n.clone(), SubstValue::Type(Type::TypeVar(*id))))
+            .collect();
+        for constraint in &where_clause.constraints {
+            let WhereConstraint::TypeBound {
+                type_name, bounds, ..
+            } = constraint
+            else {
+                continue;
+            };
+            let Some(&id) = name_to_id.get(type_name) else {
+                continue;
+            };
+            let solved = resolve_type_vars(
+                &Type::TypeVar(id),
+                &self.env.substitutions,
+                id_to_name,
+                &self.env.const_substitutions,
+                const_id_to_name,
+            );
+            if !type_is_fully_concrete(&solved) {
+                continue;
+            }
+            for bound in bounds {
+                let (Some(trait_name), Some(written)) = (bound.path.last(), &bound.generic_args)
+                else {
+                    continue;
+                };
+                let Some(have) = self.env.sole_impl_trait_args(&solved, trait_name) else {
+                    continue;
+                };
+                let want: Vec<Type> = written
+                    .iter()
+                    .filter_map(|a| match a {
+                        GenericArg::Type(te) => Some(substitute_type_params(
+                            &substitute_type_params(
+                                &self.lower_type_expr(te, &scope),
+                                &receiver_subs,
+                            ),
+                            &metas,
+                        )),
+                        _ => None,
+                    })
+                    .collect();
+                if want.len() != have.len() || !have.iter().all(type_is_fully_concrete) {
+                    continue;
+                }
+                for (w, h) in want.iter().zip(&have) {
+                    unify_types(
+                        w,
+                        h,
+                        &mut self.env.substitutions,
+                        &mut self.env.const_substitutions,
+                    );
+                }
+            }
         }
     }
 

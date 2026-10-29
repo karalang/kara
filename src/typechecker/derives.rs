@@ -2488,8 +2488,13 @@ impl super::env::TypeEnv {
             // not the witness's derive metadata; the derive-matches-bound
             // path is handled directly in `type_satisfies_bound` by the
             // existential-trait-name comparison, not via these helpers.
-            | Type::Existential { .. }
-            | Type::Dyn { .. } => false,
+            | Type::Existential { .. } => false,
+            // A `dyn` value clones through its table, which has a `clone`
+            // entry when the trait has `Clone` as a supertrait.
+            Type::Dyn { trait_name, .. } => self
+                .supertrait_closure_traits(trait_name)
+                .iter()
+                .any(|t| t == "Clone"),
             // Shape-kinded args are not value types — no derive surface.
             Type::Shape(_) => false,
         }

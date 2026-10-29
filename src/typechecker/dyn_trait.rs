@@ -19,7 +19,8 @@ use crate::token::Span;
 use super::expr_method_call::BoundReceiver;
 use super::inference::{resolve_type_var_top, substitute_type_params};
 use super::types::{
-    substitute_existential_assoc_bindings, type_display, types_compatible, SubstValue, Type,
+    contains_type_param, substitute_existential_assoc_bindings, type_display, types_compatible,
+    SubstValue, Type,
 };
 use super::TypeErrorKind;
 
@@ -233,6 +234,55 @@ impl<'a> super::TypeChecker<'a> {
 
     /// Why `concrete` cannot become `dyn trait_name[args, assoc]`, or
     /// `None` when it can.
+    /// v2 core: a collection's `.clone()` (and `to_vec`) clones each element,
+    /// so the element type needs `.clone()` too (design.md § Derive). A local
+    /// type that lacks it gets a derive; a `dyn` element needs its trait to
+    /// have `Clone` as a supertrait, or its table has no `clone` entry.
+    pub(super) fn require_elements_clone(&mut self, what: &str, self_ty: &Type, span: &Span) {
+        if !self.cli_lint_overrides.strict_core || self.type_supports_clone(self_ty) {
+            return;
+        }
+        let shown = type_display(self_ty);
+        if let Some((name, fix)) = self.copy_derive_fix_named(self_ty) {
+            self.type_error_with_fix_it(
+                format!(
+                    "`{what}` on '{shown}' clones each element, and '{name}' has no \
+                     `.clone()`: add `{}` to it",
+                    fix.replacement.trim()
+                ),
+                *span,
+                TypeErrorKind::TraitBoundNotSatisfied,
+                fix,
+            );
+        } else if let Some(trait_name) = self.uncloneable_dyn_within(self_ty) {
+            self.type_error(
+                format!(
+                    "`{what}` on '{shown}' clones each element, and `dyn {trait_name}` has no \
+                     `.clone()`: give `{trait_name}` a `Clone` supertrait (`trait \
+                     {trait_name}: Clone`)"
+                ),
+                *span,
+                TypeErrorKind::TraitBoundNotSatisfied,
+            );
+        }
+    }
+
+    /// The trait of the first `dyn` inside `ty` whose values do not clone.
+    fn uncloneable_dyn_within(&self, ty: &Type) -> Option<String> {
+        match ty {
+            Type::Dyn { trait_name, .. } => {
+                (!self.type_supports_clone(ty)).then(|| trait_name.clone())
+            }
+            Type::Named { args, .. } | Type::Tuple(args) => {
+                args.iter().find_map(|a| self.uncloneable_dyn_within(a))
+            }
+            Type::Array { element, .. } | Type::Ref(element) | Type::MutRef(element) => {
+                self.uncloneable_dyn_within(element)
+            }
+            _ => None,
+        }
+    }
+
     fn dyn_unfit(
         &mut self,
         concrete: &Type,
@@ -259,12 +309,50 @@ impl<'a> super::TypeChecker<'a> {
                     "`{shown}` does not implement `{trait_name}`; bound it `[{shown}: {trait_name}]`"
                 ));
             }
+            // Trait arguments are read off a bound on the trait itself
+            // (`[H: Handler[T]]`); a supertrait's are not written there.
             if !args.is_empty() {
-                return Some(format!(
-                    "error[E_DYN_TRAIT_NOT_IMPLEMENTED_YET]: a `dyn` value with trait \
-                     arguments of the type parameter `{shown}` is not built yet; coerce the \
-                     concrete value where it is known"
-                ));
+                let scope: Vec<String> = self.enclosing_bounds.keys().cloned().collect();
+                let written: Vec<Vec<GenericArg>> = self
+                    .enclosing_bounds
+                    .get(&name)
+                    .into_iter()
+                    .flatten()
+                    .filter(|b| b.path.last().is_some_and(|t| t == trait_name))
+                    .filter_map(|b| b.generic_args.clone())
+                    .collect();
+                let mut agree = false;
+                for gargs in written {
+                    let have: Vec<Type> = gargs
+                        .iter()
+                        .filter_map(|g| match g {
+                            GenericArg::Type(te) => Some(self.lower_type_expr(te, &scope)),
+                            _ => None,
+                        })
+                        .collect();
+                    // A type parameter matches only itself here:
+                    // `types_compatible` lets it stand for anything.
+                    let same = |h: &Type, w: &Type| {
+                        if contains_type_param(h) || contains_type_param(w) {
+                            h == w
+                        } else {
+                            types_compatible(h, w) && types_compatible(w, h)
+                        }
+                    };
+                    if have.len() == args.len() && have.iter().zip(args).all(|(h, w)| same(h, w)) {
+                        agree = true;
+                        break;
+                    }
+                }
+                if !agree {
+                    let want: Vec<String> = args.iter().map(type_display).collect();
+                    return Some(format!(
+                        "no bound of `{shown}` gives `{trait_name}[{}]`; bound it `[{shown}: \
+                         {trait_name}[{}]]`",
+                        want.join(", "),
+                        want.join(", ")
+                    ));
+                }
             }
             for (assoc, promised) in assoc {
                 let projection = Type::AssocProjection {

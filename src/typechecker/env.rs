@@ -1403,31 +1403,58 @@ impl TypeEnv {
         concrete_ty: &Type,
         trait_name: &str,
     ) -> Option<Vec<Type>> {
-        let (ty_name, ty_args) = impl_table_key(concrete_ty)?;
-        for imp in &self.impls {
-            if imp.target_type != ty_name || imp.trait_name.as_deref() != Some(trait_name) {
-                continue;
-            }
-            if !impl_args_match(&imp.target_args, &ty_args) {
-                continue;
-            }
-            if imp.trait_args.is_empty() {
-                return None;
-            }
-            let mut subst: HashMap<String, Type> = HashMap::new();
-            bind_impl_params(&imp.target_generic_args, &ty_args, &mut subst);
-            let subs: HashMap<String, super::types::SubstValue> = subst
-                .into_iter()
-                .map(|(k, v)| (k, super::types::SubstValue::Type(v)))
-                .collect();
-            return Some(
+        self.impls_concrete_trait_args(concrete_ty, trait_name)
+            .into_iter()
+            .next()
+            .filter(|args| !args.is_empty())
+    }
+
+    /// The trait arguments of every impl of `trait_name` for `concrete_ty`, in
+    /// declaration order: a type may implement `Handler[i64]` and
+    /// `Handler[String]` both.
+    pub(super) fn impls_concrete_trait_args(
+        &self,
+        concrete_ty: &Type,
+        trait_name: &str,
+    ) -> Vec<Vec<Type>> {
+        let Some((ty_name, ty_args)) = impl_table_key(concrete_ty) else {
+            return Vec::new();
+        };
+        self.impls
+            .iter()
+            .filter(|imp| {
+                imp.target_type == ty_name
+                    && imp.trait_name.as_deref() == Some(trait_name)
+                    && impl_args_match(&imp.target_args, &ty_args)
+            })
+            .map(|imp| {
+                let mut subst: HashMap<String, Type> = HashMap::new();
+                bind_impl_params(&imp.target_generic_args, &ty_args, &mut subst);
+                let subs: HashMap<String, super::types::SubstValue> = subst
+                    .into_iter()
+                    .map(|(k, v)| (k, super::types::SubstValue::Type(v)))
+                    .collect();
                 imp.trait_args
                     .iter()
                     .map(|t| super::inference::substitute_type_params(t, &subs))
-                    .collect(),
-            );
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// The trait arguments of `concrete_ty`'s impl of `trait_name` when it
+    /// has exactly one such impl: what a call may infer its parameters from.
+    pub(super) fn sole_impl_trait_args(
+        &self,
+        concrete_ty: &Type,
+        trait_name: &str,
+    ) -> Option<Vec<Type>> {
+        let mut all = self.impls_concrete_trait_args(concrete_ty, trait_name);
+        if all.len() == 1 && !all[0].is_empty() {
+            all.pop()
+        } else {
+            None
         }
-        None
     }
 
     /// BFS over the supertrait graph. `true` iff `target_trait` is reachable
