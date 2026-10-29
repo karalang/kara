@@ -14,6 +14,7 @@ use crate::resolver::SpanKey;
 use crate::token::Span;
 use std::collections::{HashMap, HashSet};
 
+use super::inference::resolve_type_var_top;
 use super::types::Type;
 use super::{CaptureWalkMode, OnceReason};
 
@@ -299,12 +300,12 @@ impl<'a> super::TypeChecker<'a> {
             return false;
         };
         match recv {
-            // A `String` receiver's substring predicates: the needle is scanned
-            // for, never kept.
-            Type::Str => matches!(method, "contains" | "starts_with" | "ends_with"),
-            Type::Named { name, .. } if name == "StringSlice" => {
-                matches!(method, "contains" | "starts_with" | "ends_with")
-            }
+            // A `String` or `Str` receiver's methods take text as `Str`, and
+            // characters and counts by value (docs/library/strings.md), so an
+            // argument is read and copied from, never kept. `extend` is the
+            // one that takes `own I` (B-2026-10-28-28, B-2026-10-29-2).
+            Type::Str => method != "extend",
+            Type::Named { name, .. } if name == "StringSlice" => method != "extend",
             // Container membership: the probe is compared against stored
             // elements/keys, never adopted.
             Type::Named { name, .. } if name == "Vec" || name == "VecDeque" => method == "contains",
@@ -588,11 +589,20 @@ impl<'a> super::TypeChecker<'a> {
                 // `fn forbids(bad: String) -> Fn(ref String) -> bool
                 //  { |s| not s.contains(bad) }`, the ordinary way to build a rule
                 // list — was rejected as `OnceFn` with no spelling that compiles.
+                // A receiver that is no captured name (the closure's own
+                // parameter, or a call's result as in `s.trim().contains(x)`)
+                // has the type its body recorded.
                 let recv_ty = match &object.kind {
-                    ExprKind::Identifier(n) => outer.get(n.as_str()),
-                    ExprKind::SelfValue => outer.get("self"),
+                    ExprKind::Identifier(n) => outer.get(n.as_str()).cloned(),
+                    ExprKind::SelfValue => outer.get("self").cloned(),
                     _ => None,
-                };
+                }
+                .or_else(|| {
+                    self.node_types
+                        .get(&object.id)
+                        .map(|(t, _)| resolve_type_var_top(t, &self.env.substitutions))
+                });
+                let recv_ty = recv_ty.as_ref();
                 let arg_is_read_only = Self::builtin_read_only_arg_method(recv_ty, method);
                 // A user method's parameter borrows unless it is `own`, as a
                 // free function's does in the `Call` arm (B-2026-10-25-13).
