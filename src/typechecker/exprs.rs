@@ -8074,6 +8074,7 @@ impl<'a> super::TypeChecker<'a> {
                         return false;
                     }
                     self.record_expr_type(&operand.span, ty);
+                    self.record_node_type(operand.id, ty);
                 } else if !self.promote_int_literal_operator_tree(operand, ty) {
                     return false;
                 }
@@ -8109,7 +8110,10 @@ impl<'a> super::TypeChecker<'a> {
             }
             _ => {}
         }
+        // By node too: the MIR builder reads the typed HIR, and a shift by a
+        // run-time count keeps its literal's type there (B-2026-10-29-28).
         self.record_expr_type(&e.span, ty);
+        self.record_node_type(e.id, ty);
         true
     }
 

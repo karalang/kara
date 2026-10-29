@@ -3692,7 +3692,26 @@ impl<'a> super::TypeChecker<'a> {
         // operand's integer type, each leaf range-checked at it: `0xC0 | c`
         // with `c: u8` is a `u8`. When both sides are such trees there is no
         // typed peer, and the context types the whole tree (B-2026-10-06-88).
-        let (left_ty, right_ty) = if matches!(op, BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor) {
+        // Arithmetic and comparisons too (B-2026-10-29-28): `r + (255 << b)`
+        // and `r == (1 << b)` with `r: u64` shift a `u64`, since a shift has
+        // the type of its left operand.
+        let (left_ty, right_ty) = if matches!(
+            op,
+            BinOp::BitAnd
+                | BinOp::BitOr
+                | BinOp::BitXor
+                | BinOp::Add
+                | BinOp::Sub
+                | BinOp::Mul
+                | BinOp::Div
+                | BinOp::Mod
+                | BinOp::Lt
+                | BinOp::LtEq
+                | BinOp::Gt
+                | BinOp::GtEq
+                | BinOp::Eq
+                | BinOp::NotEq
+        ) {
             let is_int = |t: &Type| matches!(t, Type::Int(_) | Type::UInt(_));
             let left_tree = Self::is_int_literal_operator_tree(left);
             let right_tree = Self::is_int_literal_operator_tree(right);
