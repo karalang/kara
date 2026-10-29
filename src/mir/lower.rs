@@ -6023,7 +6023,9 @@ impl<'l, 'a> Bx<'l, 'a> {
                 return self.index_set(target, object, index, value, base, &targs);
             }
             // A user type's `impl IndexSet` (B-2026-10-14-47).
-            if let Some((d, inst_args)) = self.user_impl_method(base, "IndexSet", "index_set") {
+            if let Some((d, inst_args)) =
+                self.user_operator_method(base, "IndexSet", "index_set", index)?
+            {
                 return self.user_index_set(target, object, index, value, base, d, inst_args);
             }
         }
@@ -6800,6 +6802,28 @@ impl<'l, 'a> Bx<'l, 'a> {
                 return self.lib_arg(index, true);
             }
         }
+        // A user type's `index` that borrows its key (a bare `name: String`
+        // under D5) is lent a place key, which stays the caller's
+        // (B-2026-10-28-21).
+        if matches!(self.tys().tcx().kind(t), HK::Adt { .. } | HK::Shared { .. })
+            && self.is_place(index)
+        {
+            let kt = self.expr_ty(index)?;
+            if !self.is_copy(kt) && !self.is_reference(kt) {
+                let picked = match self.user_operator_method(t, "Index", "index", index)? {
+                    Some(m) => Some(m),
+                    None => self.user_operator_method(t, "IndexMut", "index_mut", index)?,
+                };
+                if let Some((d, args)) = picked {
+                    if let [p] = self.lcx.fns[&d].f.params.as_slice() {
+                        let pt = self.callee_param_ty(p, &args)?;
+                        if matches!(self.tys().tcx().kind(pt), HK::Ref(_)) {
+                            return self.lib_arg(index, true);
+                        }
+                    }
+                }
+            }
+        }
         // A position held through a `mut ref` reads through it.
         Ok(self.scalar_operand(index)?.0)
     }
@@ -6834,7 +6858,15 @@ impl<'l, 'a> Bx<'l, 'a> {
                 } else {
                     ("Index", "index")
                 };
-                return match self.user_impl_method(bt, tr, method) {
+                // Of several impls (`Index[String]` and `Index[i64]`), the
+                // key's type picks one (B-2026-10-28-21).
+                let picked = match &e.kind {
+                    ExprKind::Index { index, .. } => {
+                        self.user_operator_method(bt, tr, method, index)?
+                    }
+                    _ => self.user_impl_method(bt, tr, method),
+                };
+                return match picked {
                     Some((d, inst_args)) => self.user_index_place(base, bt, idx, d, inst_args, e),
                     None => self.unsupported(e.span, "indexing this type"),
                 };

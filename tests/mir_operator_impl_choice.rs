@@ -3,7 +3,9 @@
 //! § Operator traits; B-2026-10-28-16): the check consulted only the
 //! primitive's own `Mul for f64` and refused the right operand. The method
 //! form of such a call, `col.mul(2.0)` with several `Mul` impls, was refused
-//! as ambiguous (B-2026-10-28-18). Outputs are worked out by hand.
+//! as ambiguous (B-2026-10-28-18), and of a type's two `Index` impls only
+//! the first was consulted (B-2026-10-28-21). Outputs are worked out by
+//! hand.
 //!
 //! With `--features llvm` each program is also compiled, at -O0 and -O2,
 //! and must print the same.
@@ -46,7 +48,7 @@ mod compiled {
         karac::mir::lower::compiled_check(&lowered).expect("checks");
         let ir = karac::backend::mir::compile_mir_ir(&lowered.program, &lowered.tys).expect("IR");
         let n = N.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!("karac-prim-op-{}-{n}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("karac-op-choice-{}-{n}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("scratch dir");
         let (obj, exe) = (dir.join("main.o"), dir.join("main"));
         karac::backend::mir_aot::compile_object(&ir, &obj, opt).expect("object");
@@ -238,5 +240,112 @@ fn main() {
 }
 "#,
         "2.0 4.0\n3.0 6.0\n1.0 4.0\n0.0 2.0\n2.5 5.0\n4.0 8.0\n0.0 2.0\n10.0 20.0\n6.0 1.0\n",
+    );
+}
+
+/// A type with `Index[String]` and `Index[i64]` impls reads through the
+/// one the key's type names, and a `String` key lent to the borrowing
+/// impl stays usable (B-2026-10-28-21).
+#[test]
+fn index_picks_its_impl_by_the_key() {
+    runs(
+        r#"struct Col { v: Vec[f64] }
+struct Frame { names: Vec[String], cols: Vec[Col] }
+
+impl Index[i64] for Col {
+    type Output = f64;
+    fn index(self, i: i64) -> ref f64 { ref self.v[i] }
+}
+
+impl Index[String] for Frame {
+    type Output = Col;
+    fn index(self, name: String) -> ref Col {
+        let mut at = 0;
+        for i in 0..self.names.len() {
+            if self.names[i] == name { at = i; }
+        }
+        ref self.cols[at]
+    }
+}
+
+impl Index[i64] for Frame {
+    type Output = Col;
+    fn index(self, i: i64) -> ref Col { ref self.cols[i] }
+}
+
+fn main() {
+    let f = Frame {
+        names: ["a".to_string(), "b".to_string()].to_vec(),
+        cols: vec![Col { v: vec![1.0, 2.0] }, Col { v: vec![3.0, 4.0] }],
+    };
+    println(f"{f[1][0]} {f["a"][1]} {f[0][0]} {f["b"][1]}");
+    let k = "b".to_string();
+    println(f"{f[k][0]} {k}");
+}
+"#,
+        "3.0 2.0 1.0 4.0\n3.0 b\n",
+    );
+}
+
+/// The same with two `IndexMut` impls: plain and compound stores through
+/// either key.
+#[test]
+fn index_mut_picks_its_impl_by_the_key() {
+    runs(
+        r#"struct Col { v: Vec[f64] }
+struct Frame { names: Vec[String], cols: Vec[Col] }
+
+impl Index[i64] for Col {
+    type Output = f64;
+    fn index(self, i: i64) -> ref f64 { ref self.v[i] }
+}
+impl IndexMut[i64] for Col {
+    type Output = f64;
+    fn index_mut(mut ref self, i: i64) -> mut ref f64 { mut ref self.v[i] }
+}
+
+fn find(names: ref Vec[String], name: ref String) -> i64 {
+    let mut at = 0;
+    for i in 0..names.len() {
+        if names[i] == *name { at = i; }
+    }
+    at
+}
+
+impl Index[String] for Frame {
+    type Output = Col;
+    fn index(self, name: String) -> ref Col { ref self.cols[find(self.names, name)] }
+}
+impl IndexMut[String] for Frame {
+    type Output = Col;
+    fn index_mut(mut ref self, name: String) -> mut ref Col {
+        let at = find(self.names, name);
+        mut ref self.cols[at]
+    }
+}
+impl Index[i64] for Frame {
+    type Output = Col;
+    fn index(self, i: i64) -> ref Col { ref self.cols[i] }
+}
+impl IndexMut[i64] for Frame {
+    type Output = Col;
+    fn index_mut(mut ref self, i: i64) -> mut ref Col { mut ref self.cols[i] }
+}
+
+fn main() {
+    let mut f = Frame {
+        names: vec!["a".to_string(), "b".to_string()],
+        cols: vec![Col { v: vec![1.0, 2.0] }, Col { v: vec![3.0, 4.0] }],
+    };
+    f[1][0] = 9.0;
+    f["a"][1] = 7.0;
+    f[0][0] += 0.5;
+    f["b"][1] *= 2.0;
+    let k = "b".to_string();
+    f[k][0] -= 1.0;
+    println(f"{f[0][0]} {f[0][1]} {f[1][0]} {f[1][1]} {f[k][0]} {k}");
+}
+"#,
+        "1.5 7.0 8.0 8.0 8.0 b\n",
     );
 }

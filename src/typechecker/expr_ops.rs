@@ -3065,10 +3065,12 @@ impl<'a> super::TypeChecker<'a> {
             _ => return None,
         };
         // The impl's own parameters (`impl[T] Index[i64] for Stack[T]`) read
-        // at the receiver's arguments.
+        // at the receiver's arguments. Of several impls (`Index[String]` and
+        // `Index[i64]` for a `Frame`), the key's type picks one
+        // (B-2026-10-28-21).
         let lookup = |tr: &str, method: &str| {
-            let imp = self.env.find_impl(tr, &name, &args)?;
-            let sig = imp.methods.get(method)?.clone();
+            let (sig, at) = self.operator_impl_for_rhs(tr, method, &name, &args, &recv, idx_ty)?;
+            let imp = &self.env.impls[at];
             let subs: HashMap<String, super::types::SubstValue> = imp
                 .target_generic_args
                 .iter()
@@ -3080,20 +3082,20 @@ impl<'a> super::TypeChecker<'a> {
                     _ => None,
                 })
                 .collect();
-            Some((sig, subs))
+            Some((sig, subs, at))
         };
         // B-2026-10-14-47 — a plain `c[k] = v` to the whole element stores
         // through `IndexSet` when the type implements it: the key may not be
         // present yet. Its type is the stored value's, `index_set`'s second
         // parameter.
         let whole_store = write && self.index_set_target == Some(SpanKey::from_span(span));
-        if let Some((sig, subs)) = whole_store
+        if let Some((sig, subs, imp)) = whole_store
             .then(|| lookup("IndexSet", "index_set"))
             .flatten()
         {
             let at = |this: &Self, t: &Type| {
                 super::inference::substitute_type_params(
-                    &this.subst_operator_self(t, &recv, &name),
+                    &this.subst_operator_self_in(t, &recv, &name, Some(imp)),
                     &subs,
                 )
             };
@@ -3111,7 +3113,7 @@ impl<'a> super::TypeChecker<'a> {
         }
         let read = lookup("Index", "index");
         let written = lookup("IndexMut", "index_mut");
-        let (sig, subs) = match (write, written, read) {
+        let (sig, subs, imp) = match (write, written, read) {
             (true, Some(sig), _) | (false, _, Some(sig)) | (false, Some(sig), None) => sig,
             (true, None, Some(_)) => {
                 self.type_error(
@@ -3142,7 +3144,7 @@ impl<'a> super::TypeChecker<'a> {
         };
         let at = |this: &Self, t: &Type| {
             super::inference::substitute_type_params(
-                &this.subst_operator_self(t, &recv, &name),
+                &this.subst_operator_self_in(t, &recv, &name, Some(imp)),
                 &subs,
             )
         };
@@ -3161,13 +3163,8 @@ impl<'a> super::TypeChecker<'a> {
     }
 
     /// `Self` and `Self.Assoc` in an operator impl's signature, read at the
-    /// left operand's type `left` (named `name`).
-    fn subst_operator_self(&self, t: &Type, left: &Type, name: &str) -> Type {
-        self.subst_operator_self_in(t, left, name, None)
-    }
-
-    /// [`Self::subst_operator_self`], reading `Self.X` from the impl at
-    /// index `imp` first (B-2026-10-15-76): a type's `impl Add` and `impl
+    /// left operand's type `left` (named `name`), reading `Self.X` from the
+    /// impl at index `imp` first (B-2026-10-15-76): a type's `impl Add` and `impl
     /// Mul` each have their own `Output`.
     fn subst_operator_self_in(
         &self,
