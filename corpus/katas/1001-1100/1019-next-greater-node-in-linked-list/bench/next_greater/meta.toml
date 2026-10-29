@@ -1,0 +1,11 @@
+source = "kara-katas/leetcode/1001-1100/1019-next-greater-node-in-linked-list/bench/next_greater.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["bench"]
+class = "e"
+expected_from = "mirror"
+note = "mirror: the C, Rust, Go and Python bench programs print this line (kara-katas 1019 bench/); there is no legacy record (the legacy compiler went at M3)"
+bucket = "timeout"
+classified_with = "1874757ab"
+extracted_src = "fe1127f6"

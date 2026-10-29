@@ -1,0 +1,14 @@
+[2, 1, 5] -> [5, 5, 0]
+[2, 7, 4, 3, 5] -> [7, 0, 5, 5, 0]
+[1] -> [0]
+[5, 4, 3, 2, 1] -> [0, 0, 0, 0, 0]
+[1, 2, 3, 4, 5] -> [2, 3, 4, 5, 0]
+[3, 3, 3] -> [0, 0, 0]
+[1, 7, 5, 1, 9, 2, 5, 1] -> [7, 9, 9, 9, 0, 5, 0, 0]
+[9, 1, 1, 1, 9, 10] -> [10, 9, 9, 9, 10, 0]
+1000 random lists of 10 values up to 10: answers sum to 51662, 3372 are 0, checksum 191954919
+300 random lists of 100 values up to 1000: answers sum to 21099334, 1629 are 0, checksum 235937762
+30 random lists of 1000 values up to 1000000000: answers sum to 21677987793878, 223 are 0, checksum 744333901
+30 random lists of 1000 values up to 3: answers sum to 54923, 10023 are 0, checksum 302892621
+3 random lists of 3000 values up to 1000000000: answers sum to 6631794955684, 26 are 0, checksum 762054439
+falling 3000: answers sum to 0; rising 3000: answers sum to 4501499

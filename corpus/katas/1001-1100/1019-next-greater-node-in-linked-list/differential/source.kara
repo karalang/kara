@@ -1,0 +1,317 @@
+// LeetCode #1019: Next Greater Node In Linked List -- differential
+//
+// The five arms, copied, against the statement read literally and five
+// more properties. See README.md § Differential.
+
+shared struct ListNode {
+    mut val: i64,
+    mut next: Option[ListNode],
+}
+
+fn d_star(head: Option[ListNode]) -> Vec[i64] {
+    let mut values: Vec[i64] = Vec.new();
+    let mut answer: Vec[i64] = Vec.new();
+    let mut waiting: Vec[i64] = Vec.new();
+    let mut cur = head;
+    while let Some(node) = cur {
+        let v = node.val;
+        while not waiting.is_empty() and values[waiting[waiting.len() - 1]] < v {
+            answer[waiting.pop().unwrap()] = v;
+        }
+        waiting.push(values.len());
+        values.push(v);
+        answer.push(0);
+        cur = node.next;
+    }
+    answer
+}
+
+fn d_backward(head: Option[ListNode]) -> Vec[i64] {
+    let mut values: Vec[i64] = Vec.new();
+    let mut cur = head;
+    while let Some(node) = cur {
+        values.push(node.val);
+        cur = node.next;
+    }
+    let mut answer: Vec[i64] = Vec.filled(values.len(), 0);
+    let mut stack: Vec[i64] = Vec.new();
+    let mut i = values.len();
+    while i > 0 {
+        i -= 1;
+        while not stack.is_empty() and stack[stack.len() - 1] <= values[i] {
+            stack.pop();
+        }
+        if not stack.is_empty() {
+            answer[i] = stack[stack.len() - 1];
+        }
+        stack.push(values[i]);
+    }
+    answer
+}
+
+fn d_scan(head: Option[ListNode]) -> Vec[i64] {
+    let mut answer: Vec[i64] = Vec.new();
+    let mut cur = head;
+    while let Some(node) = cur {
+        let mut found = 0;
+        let mut ahead = node.next;
+        while let Some(other) = ahead {
+            if other.val > node.val {
+                found = other.val;
+                break;
+            }
+            ahead = other.next;
+        }
+        answer.push(found);
+        cur = node.next;
+    }
+    answer
+}
+
+// the list turned around, its old last node now first
+fn reversed_list(head: Option[ListNode]) -> Option[ListNode] {
+    let mut done: Option[ListNode] = None;
+    let mut cur = head;
+    while let Some(node) = cur {
+        let rest = node.next;
+        node.next = done;
+        done = Some(node);
+        cur = rest;
+    }
+    done
+}
+
+fn d_reverse(head: Option[ListNode]) -> Vec[i64] {
+    let tail_first = reversed_list(head);
+    let mut backwards: Vec[i64] = Vec.new();
+    let mut stack: Vec[i64] = Vec.new();
+    let mut cur = tail_first;
+    while let Some(node) = cur {
+        while not stack.is_empty() and stack[stack.len() - 1] <= node.val {
+            stack.pop();
+        }
+        backwards.push(if stack.is_empty() { 0 } else { stack[stack.len() - 1] });
+        stack.push(node.val);
+        cur = node.next;
+    }
+    // the list put back as it was; its head is `head` again
+    let _ = reversed_list(tail_first);
+    let mut answer: Vec[i64] = Vec.new();
+    let mut i = backwards.len();
+    while i > 0 {
+        i -= 1;
+        answer.push(backwards[i]);
+    }
+    answer
+}
+
+// answers the nodes from `node` on, which sits at position `at`
+fn answer_from(node: Option[ListNode], at: i64, answer: mut ref Vec[i64], stack: mut ref Vec[i64]) {
+    let Some(n) = node else {
+        return;
+    };
+    answer.push(0);
+    answer_from(n.next, at + 1, mut answer, mut stack);
+    while not stack.is_empty() and stack[stack.len() - 1] <= n.val {
+        stack.pop();
+    }
+    if not stack.is_empty() {
+        answer[at] = stack[stack.len() - 1];
+    }
+    stack.push(n.val);
+}
+
+fn d_recursive(head: Option[ListNode]) -> Vec[i64] {
+    let mut answer: Vec[i64] = Vec.new();
+    let mut stack: Vec[i64] = Vec.new();
+    answer_from(head, 0, mut answer, mut stack);
+    answer
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn from_values(values: ref Vec[i64]) -> Option[ListNode] {
+    let mut head: Option[ListNode] = None;
+    let mut k = values.len() - 1;
+    while k >= 0 {
+        head = Some(ListNode { val: values[k], next: head });
+        k -= 1;
+    }
+    head
+}
+
+fn to_values(head: Option[ListNode]) -> Vec[i64] {
+    let mut values: Vec[i64] = Vec.new();
+    let mut cur = head;
+    while let Some(node) = cur {
+        values.push(node.val);
+        cur = node.next;
+    }
+    values
+}
+
+// each arm's answers, and whether it left the list as it found it
+fn arms(values: ref Vec[i64]) -> (Vec[Vec[i64]], Vec[bool]) {
+    let mut answers: Vec[Vec[i64]] = Vec.new();
+    let mut intact: Vec[bool] = Vec.new();
+    for a in 0..5 {
+        let head = from_values(values);
+        let got = if a == 0 {
+            d_star(head)
+        } else if a == 1 {
+            d_backward(head)
+        } else if a == 2 {
+            d_scan(head)
+        } else if a == 3 {
+            d_reverse(head)
+        } else {
+            d_recursive(head)
+        };
+        answers.push(got);
+        intact.push(to_values(head) == values);
+    }
+    (answers, intact)
+}
+
+// the statement read literally, on the values
+fn literal(values: ref Vec[i64]) -> Vec[i64] {
+    let mut answer: Vec[i64] = Vec.new();
+    for i in 0..values.len() {
+        let mut found = 0;
+        for j in i + 1..values.len() {
+            if found == 0 and values[j] > values[i] {
+                found = values[j];
+            }
+        }
+        answer.push(found);
+    }
+    answer
+}
+
+fn main() {
+    let mut failures: Vec[i64] = Vec.filled(6, 0);
+    let mut checks = 0;
+    let mut check = 0;
+    let mut seed = 10191;
+    let mut lists = 0;
+    // every list of 1 to 6 values from 1 to 4 (5460), then 600 random of
+    // 7 to 100 values and 10 of 1000, up to 3, 100 or 10^9
+    for t in 0..6070 {
+        let mut values: Vec[i64] = Vec.new();
+        if t < 5460 {
+            let mut len = 1;
+            let mut first = 0;
+            let mut size = 4;
+            while t >= first + size {
+                first += size;
+                size *= 4;
+                len += 1;
+            }
+            let mut code = t - first;
+            for _ in 0..len {
+                values.push(code % 4 + 1);
+                code /= 4;
+            }
+        } else {
+            let len = if t < 6060 { 7 + next_random(mut seed) % 94 } else { 1000 };
+            let pick = next_random(mut seed) % 3;
+            let most = if pick == 0 { 3 } else if pick == 1 { 100 } else { 1000000000 };
+            for _ in 0..len {
+                values.push((next_random(mut seed) * 32768 + next_random(mut seed)) % most + 1);
+            }
+        }
+        lists += 1;
+        let len = values.len();
+        let (got, intact) = arms(values);
+        for x in got[0].iter() {
+            check = (check * 31 + x) % 1000000007;
+        }
+        // the list with a value above all of them after it, and with every
+        // value v made 3v + 1
+        let mut top = 0;
+        for v in values.iter() {
+            top = top.max(v);
+        }
+        let mut longer = values.clone();
+        longer.push(top + 1);
+        let mut mapped: Vec[i64] = Vec.new();
+        for v in values.iter() {
+            mapped.push(3 * v + 1);
+        }
+        let (got_longer, _) = arms(longer);
+        let (got_mapped, _) = arms(mapped);
+        let exact = literal(values);
+        for a in 0..5 {
+            let ans = got[a].clone();
+            // P1: the statement
+            checks += 1;
+            if ans != exact {
+                failures[0] += 1;
+            }
+            // P2: one answer per node, and the list left as it was
+            checks += 1;
+            if ans.len() != len or not intact[a] {
+                failures[1] += 1;
+                continue;
+            }
+            // P3: an answer is 0 exactly when no later value is greater,
+            // and otherwise is greater than its node's
+            checks += 1;
+            let mut later = 0;
+            let mut bad = false;
+            let mut i = len;
+            while i > 0 {
+                i -= 1;
+                if (ans[i] == 0) != (later <= values[i]) or (ans[i] != 0 and ans[i] <= values[i]) {
+                    bad = true;
+                }
+                later = later.max(values[i]);
+            }
+            if bad {
+                failures[2] += 1;
+            }
+            // P4: a value above all after the list answers every 0 and
+            // changes nothing else
+            checks += 1;
+            let mut want: Vec[i64] = Vec.new();
+            for x in ans.iter() {
+                want.push(if x == 0 { top + 1 } else { x });
+            }
+            want.push(0);
+            if got_longer[a] != want {
+                failures[3] += 1;
+            }
+            // P5: v -> 3v + 1 keeps the order, so it maps the answers too
+            checks += 1;
+            let mut want: Vec[i64] = Vec.new();
+            for x in ans.iter() {
+                want.push(if x == 0 { 0 } else { 3 * x + 1 });
+            }
+            if got_mapped[a] != want {
+                failures[4] += 1;
+            }
+            // P6: each arm agrees with at least two of the other four
+            checks += 1;
+            let mut agree = 0;
+            for o in 0..5 {
+                if o != a and got[o] == ans {
+                    agree += 1;
+                }
+            }
+            if agree < 2 {
+                failures[5] += 1;
+            }
+        }
+    }
+    let mut total = 0;
+    for p in 0..6 {
+        if failures[p] > 0 {
+            println(f"P{p + 1}: {failures[p]} failures");
+        }
+        total += failures[p];
+    }
+    println(f"{lists} lists: checksum {check}, {checks} checks over 5 arms: {total} failures");
+}

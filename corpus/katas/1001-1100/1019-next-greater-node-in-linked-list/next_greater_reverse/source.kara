@@ -1,0 +1,121 @@
+// LeetCode #1019: Next Greater Node In Linked List -- reversing the list
+//
+// Turn the list around in place so that it can be read from its last
+// node, answer each node from a stack of the greater values seen so far
+// (as from the back), then turn the list around again to leave it as it
+// was and put the answers back in order. O(n), no copy of the values.
+
+shared struct ListNode {
+    mut val: i64,
+    mut next: Option[ListNode],
+}
+
+// the list turned around, its old last node now first
+fn reversed(head: Option[ListNode]) -> Option[ListNode] {
+    let mut done: Option[ListNode] = None;
+    let mut cur = head;
+    while let Some(node) = cur {
+        let rest = node.next;
+        node.next = done;
+        done = Some(node);
+        cur = rest;
+    }
+    done
+}
+
+fn next_larger_nodes(head: Option[ListNode]) -> Vec[i64] {
+    let tail_first = reversed(head);
+    let mut backwards: Vec[i64] = Vec.new();
+    let mut stack: Vec[i64] = Vec.new();
+    let mut cur = tail_first;
+    while let Some(node) = cur {
+        while not stack.is_empty() and stack[stack.len() - 1] <= node.val {
+            stack.pop();
+        }
+        backwards.push(if stack.is_empty() { 0 } else { stack[stack.len() - 1] });
+        stack.push(node.val);
+        cur = node.next;
+    }
+    // the list put back as it was; its head is `head` again
+    let _ = reversed(tail_first);
+    let mut answer: Vec[i64] = Vec.new();
+    let mut i = backwards.len();
+    while i > 0 {
+        i -= 1;
+        answer.push(backwards[i]);
+    }
+    answer
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn from_values(values: Vec[i64]) -> Option[ListNode] {
+    let mut head: Option[ListNode] = None;
+    let mut k = values.len() - 1;
+    while k >= 0 {
+        head = Some(ListNode { val: values[k], next: head });
+        k -= 1;
+    }
+    head
+}
+
+fn main() {
+    // LeetCode's two examples, then a few more
+    let examples: Vec[Vec[i64]] = vec![
+        vec![2, 1, 5],
+        vec![2, 7, 4, 3, 5],
+        vec![1],
+        vec![5, 4, 3, 2, 1],
+        vec![1, 2, 3, 4, 5],
+        vec![3, 3, 3],
+        vec![1, 7, 5, 1, 9, 2, 5, 1],
+        vec![9, 1, 1, 1, 9, 10],
+    ];
+    for values in examples.iter() {
+        println(f"{values} -> {next_larger_nodes(from_values(values.clone()))}");
+    }
+    // random lists: the sum of the answers, how many are 0, and a checksum
+    let mut seed = 1019;
+    let groups: Vec[(i64, i64, i64)] = vec![(1000, 10, 10), (300, 100, 1000), (30, 1000, 1000000000), (30, 1000, 3), (3, 3000, 1000000000)];
+    for (count, len, most) in groups.iter() {
+        let mut total = 0;
+        let mut zeros = 0;
+        let mut check = 0;
+        for _ in 0..count {
+            let mut values: Vec[i64] = Vec.new();
+            for _ in 0..len {
+                values.push((next_random(mut seed) * 32768 + next_random(mut seed)) % most + 1);
+            }
+            let answer = next_larger_nodes(from_values(values));
+            for a in answer.iter() {
+                total += a;
+                if a == 0 {
+                    zeros += 1;
+                }
+                check = (check * 31 + a) % 1000000007;
+            }
+        }
+        println(f"{count} random lists of {len} values up to {most}: answers sum to {total}, {zeros} are 0, checksum {check}");
+    }
+    // a falling list, then a rising one, of 3000 values
+    let mut falling: Vec[i64] = Vec.new();
+    let mut rising: Vec[i64] = Vec.new();
+    for i in 0..3000 {
+        falling.push(3000 - i);
+        rising.push(i + 1);
+    }
+    let down = next_larger_nodes(from_values(falling));
+    let up = next_larger_nodes(from_values(rising));
+    let mut down_sum = 0;
+    let mut up_sum = 0;
+    for i in 0..3000 {
+        down_sum += down[i];
+        up_sum += up[i];
+    }
+    println(f"falling 3000: answers sum to {down_sum}; rising 3000: answers sum to {up_sum}");
+}
