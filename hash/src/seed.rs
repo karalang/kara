@@ -112,10 +112,19 @@ fn init_once() {
 /// failing the process, because a mistyped env var should not make a program
 /// refuse to run, and the security posture of the fallback is the STRONGER
 /// one.
-#[cfg(feature = "std")]
+#[cfg(all(feature = "std", not(unix)))]
 pub fn seed_override_from_env() -> Option<u64> {
     let raw = std::env::var("KARAC_HASH_SEED").ok()?;
     parse_seed(&raw)
+}
+
+/// The override through libc's `getenv`: `std::env::var` reaches a panic,
+/// which in a compiled program keeps std's panic hook and backtrace
+/// symbolizer (~250 KB) in every binary that hashes a key (B-2026-10-29-41).
+#[cfg(all(feature = "std", unix))]
+pub fn seed_override_from_env() -> Option<u64> {
+    let raw = lean::getenv(c"KARAC_HASH_SEED")?;
+    parse_seed(core::str::from_utf8(raw).ok()?)
 }
 
 /// `no_std` builds (embedded, and the wasm archives that drop `std::env`) have
@@ -174,13 +183,7 @@ fn splitmix64(mut x: u64) -> u64 {
 /// Cortex-M target matrix.
 #[cfg(feature = "std")]
 fn random_pair() -> (u64, u64) {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let boxed = Box::new(0u8);
-    let addr = (&*boxed as *const u8) as u64;
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos() as u64)
-        .unwrap_or(0);
+    let (addr, nanos) = heap_address_and_clock();
     // The process id differs between processes, and the address of a stack
     // local carries the stack's ASLR offset, which is independent of the
     // heap's. Neither allocates. This term used to be the current thread's id
@@ -195,6 +198,91 @@ fn random_pair() -> (u64, u64) {
     let k0 = splitmix64(addr ^ nanos);
     let k1 = splitmix64(k0 ^ pid ^ stack.rotate_left(29) ^ addr.rotate_left(17));
     (k0, k1)
+}
+
+/// The address of a fresh heap allocation and the wall clock in
+/// nanoseconds.
+#[cfg(all(feature = "std", not(unix)))]
+fn heap_address_and_clock() -> (u64, u64) {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let boxed = Box::new(0u8);
+    let addr = (&*boxed as *const u8) as u64;
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    (addr, nanos)
+}
+
+/// As above, through libc: `Box::new`'s allocation-failure path and
+/// `SystemTime`'s subtraction both reach a panic (B-2026-10-29-41).
+#[cfg(all(feature = "std", unix))]
+fn heap_address_and_clock() -> (u64, u64) {
+    (lean::heap_address(), lean::clock_nanos())
+}
+
+/// libc calls in place of std's, none of which can panic.
+#[cfg(all(feature = "std", unix))]
+mod lean {
+    extern "C" {
+        #[link_name = "getenv"]
+        fn c_getenv(name: *const u8) -> *const u8;
+        fn malloc(size: usize) -> *mut u8;
+        fn free(ptr: *mut u8);
+        fn time(t: *mut i64) -> i64;
+    }
+
+    /// The value of the environment variable `name`.
+    pub(super) fn getenv(name: &core::ffi::CStr) -> Option<&'static [u8]> {
+        // SAFETY: `name` is NUL-terminated; nothing here writes the
+        // environment.
+        let v = unsafe { c_getenv(name.as_ptr().cast()) };
+        if v.is_null() {
+            None
+        } else {
+            // SAFETY: `getenv` answers a NUL-terminated string.
+            Some(unsafe { core::ffi::CStr::from_ptr(v.cast()) }.to_bytes())
+        }
+    }
+
+    /// The address of a fresh heap allocation, freed again.
+    pub(super) fn heap_address() -> u64 {
+        // SAFETY: a one-byte allocation, freed at once; only its address is
+        // kept (null when there was none).
+        unsafe {
+            let p = malloc(1);
+            free(p);
+            p as u64
+        }
+    }
+
+    /// The wall clock in nanoseconds since the epoch.
+    pub(super) fn clock_nanos() -> u64 {
+        #[cfg(all(
+            any(target_os = "linux", target_os = "macos"),
+            target_pointer_width = "64"
+        ))]
+        {
+            #[repr(C)]
+            struct Timespec {
+                sec: i64,
+                nsec: i64,
+            }
+            extern "C" {
+                fn clock_gettime(clock: i32, t: *mut Timespec) -> i32;
+            }
+            let mut t = Timespec { sec: 0, nsec: 0 };
+            // SAFETY: CLOCK_REALTIME (0 on Linux and macOS) into a
+            // 64-bit `timespec`.
+            if unsafe { clock_gettime(0, &mut t) } == 0 {
+                return (t.sec as u64)
+                    .wrapping_mul(1_000_000_000)
+                    .wrapping_add(t.nsec as u64);
+            }
+        }
+        // SAFETY: a null result pointer is allowed.
+        (unsafe { time(core::ptr::null_mut()) } as u64).wrapping_mul(1_000_000_000)
+    }
 }
 
 #[cfg(not(feature = "std"))]

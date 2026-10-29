@@ -9,7 +9,8 @@
 
 use std::cell::RefCell;
 
-use crate::alloc::{karac_free, karac_realloc_or_panic};
+use crate::alloc::karac_realloc_or_panic;
+use crate::lean_vec::LeanVec;
 
 /// A `String` or `Vec[T]` as compiled code holds it.
 #[repr(C)]
@@ -52,13 +53,13 @@ thread_local! {
     /// its result.
     static FMT: RefCell<ThreadOwned<FmtBuf>> = const {
         RefCell::new(thread_owned(FmtBuf {
-            buf: Buf::new(),
-            starts: Buf::new(),
+            buf: LeanVec::new(),
+            starts: LeanVec::new(),
         }))
     };
     /// Standard output off the pool ([`OUT_SHARED`] on it).
-    static OUT_LOCAL: RefCell<ThreadOwned<Buf<u8>>> = const {
-        RefCell::new(thread_owned(Buf::new()))
+    static OUT_LOCAL: RefCell<ThreadOwned<LeanVec<u8>>> = const {
+        RefCell::new(thread_owned(LeanVec::new()))
     };
     /// The message `panic(msg)` set for the abort that follows it.
     static PANIC: RefCell<Option<String>> = const { RefCell::new(None) };
@@ -68,11 +69,11 @@ thread_local! {
 /// pool's workers write in order. Standard output is flushed at exit, at an
 /// abort, and before anything is written to standard error so the two stay
 /// in order on a terminal.
-static OUT_SHARED: std::sync::Mutex<Buf<u8>> = std::sync::Mutex::new(Buf::new());
+static OUT_SHARED: std::sync::Mutex<LeanVec<u8>> = std::sync::Mutex::new(LeanVec::new());
 
 /// `f` of the program's standard output buffer, as `program_state!`
-/// shares one, but panic-free ([`Buf`]).
-fn with_out<R>(f: impl FnOnce(&mut Buf<u8>) -> R) -> R {
+/// shares one, but panic-free ([`LeanVec`]).
+fn with_out<R>(f: impl FnOnce(&mut LeanVec<u8>) -> R) -> R {
     if crate::mir_task::pooled() {
         return f(&mut OUT_SHARED.lock().unwrap_or_else(|p| p.into_inner()));
     }
@@ -87,7 +88,7 @@ fn with_out<R>(f: impl FnOnce(&mut Buf<u8>) -> R) -> R {
 
 /// A print buffer asked for while it is in use, which only a runtime
 /// defect could do: the process ends, as a panic here would not let it
-/// stay panic-free ([`Buf`]).
+/// stay panic-free ([`LeanVec`]).
 #[cold]
 fn buffer_in_use() -> ! {
     crate::fatal::write_stderr(b"fatal runtime error: a print buffer is in use\n");
@@ -118,7 +119,7 @@ mod thread_bufs {
     use std::cell::Cell;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use super::{Buf, FMT, OUT_LOCAL};
+    use super::{FMT, OUT_LOCAL};
 
     /// The key, plus one; 0 before it is made.
     static KEY: AtomicUsize = AtomicUsize::new(0);
@@ -166,13 +167,13 @@ mod thread_bufs {
         let _ = SET.try_with(|s| s.set(false));
         let _ = FMT.try_with(|f| {
             if let Ok(mut f) = f.try_borrow_mut() {
-                drop(std::mem::replace(&mut f.buf, Buf::new()));
-                drop(std::mem::replace(&mut f.starts, Buf::new()));
+                drop(std::mem::take(&mut f.buf));
+                drop(std::mem::take(&mut f.starts));
             }
         });
         let _ = OUT_LOCAL.try_with(|o| {
             if let Ok(mut o) = o.try_borrow_mut() {
-                drop(std::mem::replace(&mut **o, Buf::new()));
+                drop(std::mem::take(&mut **o));
             }
         });
     }
@@ -188,86 +189,8 @@ mod thread_bufs {
 const OUT_LIMIT: usize = 1 << 16;
 
 struct FmtBuf {
-    buf: Buf<u8>,
-    starts: Buf<usize>,
-}
-
-/// A growable buffer of `Copy` values for the print path, which nothing in
-/// it can make panic: growth that cannot be had aborts the way an
-/// allocation does. `Vec`'s capacity-overflow panic, like any panic the
-/// print path can reach, keeps std's panic hook and its backtrace
-/// symbolizer (~250 KB) in every binary that prints (B-2026-10-28-36).
-struct Buf<T: Copy> {
-    ptr: *mut T,
-    len: usize,
-    cap: usize,
-}
-
-// SAFETY: a `Buf` owns its buffer, as a `Vec` does.
-unsafe impl<T: Copy + Send> Send for Buf<T> {}
-
-impl<T: Copy> Buf<T> {
-    const fn new() -> Self {
-        Buf {
-            ptr: std::ptr::null_mut(),
-            len: 0,
-            cap: 0,
-        }
-    }
-
-    fn len(&self) -> usize {
-        self.len
-    }
-
-    fn is_empty(&self) -> bool {
-        self.len == 0
-    }
-
-    fn as_slice(&self) -> &[T] {
-        if self.len == 0 {
-            &[]
-        } else {
-            // SAFETY: the first `len` slots are written.
-            unsafe { std::slice::from_raw_parts(self.ptr, self.len) }
-        }
-    }
-
-    fn extend_from_slice(&mut self, s: &[T]) {
-        let want = self.len.saturating_add(s.len());
-        if want > self.cap {
-            let cap = want.max(self.cap.saturating_mul(2)).max(64);
-            let bytes = cap.saturating_mul(std::mem::size_of::<T>());
-            self.ptr = karac_realloc_or_panic(self.ptr.cast(), bytes).cast();
-            self.cap = cap;
-        }
-        // SAFETY: the buffer has room for `want` values.
-        unsafe { std::ptr::copy_nonoverlapping(s.as_ptr(), self.ptr.add(self.len), s.len()) };
-        self.len = want;
-    }
-
-    fn push(&mut self, v: T) {
-        self.extend_from_slice(std::slice::from_ref(&v));
-    }
-
-    fn pop(&mut self) -> Option<T> {
-        self.len = self.len.checked_sub(1)?;
-        // SAFETY: the slot was written.
-        Some(unsafe { self.ptr.add(self.len).read() })
-    }
-
-    fn truncate(&mut self, len: usize) {
-        self.len = self.len.min(len);
-    }
-
-    fn clear(&mut self) {
-        self.len = 0;
-    }
-}
-
-impl<T: Copy> Drop for Buf<T> {
-    fn drop(&mut self) {
-        karac_free(self.ptr.cast());
-    }
+    buf: LeanVec<u8>,
+    starts: LeanVec<usize>,
 }
 
 /// `f` of this thread's format buffer.
@@ -3037,7 +2960,7 @@ pub unsafe extern "C" fn karac_mir_abort_at(
     // place, and the error return trace that is the place alone.
     // SAFETY: the caller's contract.
     let (msg, at) = unsafe { (bytes(ptr, len as usize), bytes(at, at_len as usize)) };
-    let mut report = Buf::<u8>::new();
+    let mut report = LeanVec::<u8>::new();
     report.extend_from_slice(b"runtime error: ");
     if crate::in_contract_predicate() {
         report.extend_from_slice(CONTRACT_PREDICATE_PANICKED.as_bytes());

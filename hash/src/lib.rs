@@ -510,7 +510,12 @@ pub fn walk_perm_by(n: u64, hash: impl Fn(u64) -> u64) -> (u64, u64) {
 /// [`walk_perm`]`(n) = (a, c)`.
 #[inline]
 pub fn walk_index(i: u64, n: u64, a: u64, c: u64) -> u64 {
-    ((u128::from(a) * u128::from(i) + u128::from(c)) % u128::from(n)) as u64
+    // `checked_rem`: a walk has `n > 0`, and `%` would keep a
+    // division-by-zero panic, and with it std's panic hook, in every
+    // compiled program that walks a table (B-2026-10-29-41).
+    (u128::from(a) * u128::from(i) + u128::from(c))
+        .checked_rem(u128::from(n))
+        .unwrap_or(0) as u64
 }
 
 /// The words [`walk_perm`] hashes for its multiplier and its offset.

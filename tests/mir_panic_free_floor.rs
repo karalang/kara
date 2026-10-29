@@ -7,7 +7,8 @@
 //! "RUST_BACKTRACE" note is the marker: it is in the binary exactly when the
 //! hook is. A `panic(msg)` with a formatted message still reports through
 //! the full report, which the last test checks against the interpreter's
-//! wording.
+//! wording. The table natives and the hash seed are held to the same floor
+//! (B-2026-10-29-41).
 #![cfg(feature = "llvm")]
 
 use std::path::{Path, PathBuf};
@@ -107,4 +108,27 @@ fn mir_formatted_panic_message_still_reports_in_full() {
         String::from_utf8_lossy(&out.stderr),
         "runtime error: too big: 7\n  at main.kara:5:9\nError return trace:\n  main.kara:5:9\n"
     );
+}
+
+/// The table natives (`Map`, `Set`, `SortedMap`: insert, remove, lookup,
+/// walk) and the hash seed reach no panic either (B-2026-10-29-41: kata 1's
+/// hash_map was 358,680 B on Linux against 71,768 B for its brute force).
+/// The expected line is a Python mirror's.
+#[test]
+fn mir_table_program_links_no_panic_hook() {
+    let src = "fn main() {\n    let mut m: Map[i64, i64] = Map.new();\n    let mut s: Set[i64] = Set.new();\n    let mut sm: SortedMap[i64, i64] = SortedMap.new();\n    for i in 0..5000 {\n        m.insert(i % 997, i);\n        s.insert(i % 1013);\n        sm.insert(i % 89, i);\n    }\n    for i in 0..300 {\n        m.remove(i * 3);\n        s.remove(i * 2);\n    }\n    let mut total = 0;\n    for (k, v) in m {\n        total += k + v;\n    }\n    for x in s {\n        total += x;\n    }\n    for (k, v) in sm {\n        total += k * v;\n    }\n    println(f\"{total} {m.len()} {s.len()} {sm.len()}\");\n}\n";
+    let Some(exe) = build("tables", src) else {
+        return;
+    };
+    let out = run(&exe);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "23346940 697 713 89\n"
+    );
+    assert!(!links_panic_hook(&exe), "std's panic hook is linked");
 }

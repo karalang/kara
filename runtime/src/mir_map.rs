@@ -11,7 +11,8 @@
 //! bisection. A handle is a pointer to a [`MirMap`], null while the table
 //! has never held an entry.
 
-use crate::alloc::karac_realloc_or_panic;
+use crate::alloc::{karac_free, karac_realloc_or_panic};
+use crate::lean_vec::LeanVec;
 
 pub type HashFn = unsafe extern "C" fn(*const u8) -> u64;
 pub type EqFn = unsafe extern "C" fn(*const u8, *const u8) -> bool;
@@ -48,16 +49,16 @@ pub struct MirMap {
     perm_c: std::sync::atomic::AtomicUsize,
     cap: usize,
     /// Each slot's hash, for the hashed kinds.
-    hashes: Vec<u64>,
+    hashes: LeanVec<u64>,
     /// An open-addressing table of the live slots, by hash, for the
     /// hashed kinds: a power of two long (or empty), at most half full
     /// counting [`TOMB`]s, probed linearly. A cell holds a slot in its low
     /// half and the top half of the slot's hash in its high half, so a
     /// probe reads neither `hashes` nor `buf` for a key it passes over.
-    index: Vec<u64>,
+    index: LeanVec<u64>,
     /// The cells of `index` that are not [`EMPTY`].
     index_used: usize,
-    dead: Vec<bool>,
+    dead: LeanVec<bool>,
     /// A Fenwick tree over `cap` slots counting the live ones, kept only
     /// while there are holes: index to slot and back in `O(log n)`. Built
     /// when an index is first asked of a holed table, not by the removal
@@ -65,7 +66,7 @@ pub struct MirMap {
     /// a table that is only searched and changed never needs it. Readers
     /// may share a table, so the one that finds it stale builds it while
     /// the others wait ([`MirMap::ensure_live`]).
-    live: std::cell::UnsafeCell<Vec<i64>>,
+    live: std::cell::UnsafeCell<LeanVec<i64>>,
     /// Whether `live` counts the current slots: [`LIVE_OK`], [`LIVE_STALE`]
     /// or [`LIVE_BUILDING`].
     live_state: std::sync::atomic::AtomicU8,
@@ -330,7 +331,7 @@ impl MirMap {
     /// table is changed only through `&mut`, so while readers share it
     /// nothing else writes `live`, and the one reader that claims the
     /// build writes it while the rest wait for [`LIVE_OK`].
-    fn ensure_live(&self) -> &[i64] {
+    fn ensure_live(&self) -> &LeanVec<i64> {
         use std::sync::atomic::Ordering::{Acquire, Release};
         loop {
             match self.live_state.load(Acquire) {
@@ -357,10 +358,10 @@ impl MirMap {
     }
 
     /// The Fenwick tree over the current slots, into `live`.
-    fn build_live(&self, live: &mut Vec<i64>) {
+    fn build_live(&self, live: &mut LeanVec<i64>) {
         live.clear();
         live.resize(self.cap, 0);
-        for (n, &dead) in live.iter_mut().zip(&self.dead[..self.slots]) {
+        for (n, &dead) in live.as_mut_slice().iter_mut().zip(&self.dead[..self.slots]) {
             if !dead {
                 *n += 1;
             }
@@ -598,28 +599,38 @@ pub unsafe extern "C" fn karac_mir_map_insert_hv(
     }
 }
 
-/// A new table with no entries, of `entry_size`-byte entries.
+/// A new table with no entries, of `entry_size`-byte entries. Allocated
+/// as its entries are, not boxed: `Box::new`'s allocation-failure path
+/// reaches a panic, which keeps std's panic hook and backtrace symbolizer
+/// in every binary with a table (B-2026-10-29-41).
 fn empty(entry_size: usize) -> *mut MirMap {
-    Box::into_raw(Box::new(MirMap {
-        buf: std::ptr::null_mut(),
-        entry_size,
-        slots: 0,
-        holes: 0,
-        cells: std::ptr::null(),
-        ncells: 0,
-        perm_len: std::sync::atomic::AtomicUsize::new(usize::MAX),
-        perm_a: std::sync::atomic::AtomicUsize::new(1),
-        perm_c: std::sync::atomic::AtomicUsize::new(0),
-        cap: 0,
-        hashes: Vec::new(),
-        index: Vec::new(),
-        index_used: 0,
-        dead: Vec::new(),
-        live: std::cell::UnsafeCell::new(Vec::new()),
-        live_state: std::sync::atomic::AtomicU8::new(LIVE_STALE),
-        pair: std::sync::atomic::AtomicU64::new(NO_PAIR),
-        unkeyed: false,
-    }))
+    let h = karac_realloc_or_panic(std::ptr::null_mut(), std::mem::size_of::<MirMap>())
+        .cast::<MirMap>();
+    // SAFETY: a fresh allocation of a `MirMap`'s size, aligned as `malloc`
+    // aligns, which is at least a `MirMap`'s alignment.
+    unsafe {
+        h.write(MirMap {
+            buf: std::ptr::null_mut(),
+            entry_size,
+            slots: 0,
+            holes: 0,
+            cells: std::ptr::null(),
+            ncells: 0,
+            perm_len: std::sync::atomic::AtomicUsize::new(usize::MAX),
+            perm_a: std::sync::atomic::AtomicUsize::new(1),
+            perm_c: std::sync::atomic::AtomicUsize::new(0),
+            cap: 0,
+            hashes: LeanVec::new(),
+            index: LeanVec::new(),
+            index_used: 0,
+            dead: LeanVec::new(),
+            live: std::cell::UnsafeCell::new(LeanVec::new()),
+            live_state: std::sync::atomic::AtomicU8::new(LIVE_STALE),
+            pair: std::sync::atomic::AtomicU64::new(NO_PAIR),
+            unkeyed: false,
+        })
+    };
+    h
 }
 
 /// The table at `h` (null for one that never held an entry), made to walk
@@ -702,8 +713,12 @@ unsafe fn insert(
         m.add_live(at, 1);
     }
     if let Some(hv) = hash {
-        // A slot must fit the low half of an `index` cell.
-        assert!((at as u64) < TOMB, "a hashed table of 2^32 entries");
+        // A slot must fit the low half of an `index` cell. Not `assert!`,
+        // whose panic keeps std's panic hook in every binary with a table.
+        if at as u64 >= TOMB {
+            crate::fatal::write_stderr(b"panic: a hashed table of 2^32 entries\n");
+            std::process::abort()
+        }
         m.hashes.push(hv);
         m.index_place(hv, at);
     }
@@ -946,11 +961,14 @@ pub unsafe extern "C" fn karac_mir_map_free(h: *mut MirMap) {
     if h.is_null() {
         return;
     }
-    // SAFETY: the caller's contract; the table came from `Box::into_raw`.
-    let m = unsafe { Box::from_raw(h) };
-    if m.cap != 0 {
-        // SAFETY: `buf` came from `karac_realloc_or_panic`.
-        unsafe { free(m.buf.cast()) };
+    // SAFETY: the caller's contract; the table came from `empty`.
+    unsafe {
+        if (*h).cap != 0 {
+            // `buf` came from `karac_realloc_or_panic`.
+            free((*h).buf.cast());
+        }
+        std::ptr::drop_in_place(h);
+        karac_free(h.cast());
     }
 }
 
