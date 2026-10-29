@@ -7444,7 +7444,9 @@ impl<'a> super::TypeChecker<'a> {
     /// binding, a bare parameter and a local copied from either, or a
     /// borrowed `self`), while the binding it names is in scope.
     pub(super) fn note_ref_result(&mut self, e: &Expr) {
-        if !self.cli_lint_overrides.strict_core {
+        // The MIR pipeline's check too: the builder binds the `let` a
+        // reference by it.
+        if !(self.cli_lint_overrides.strict_core || self.library_methods_from_source) {
             return;
         }
         let is_ref = match &e.kind {
@@ -9358,7 +9360,8 @@ impl<'a> super::TypeChecker<'a> {
                 // result that does not diverge is a reference is a reference,
                 // so `let r = match rx { Some(ref r) => r, None => return };`
                 // copies it, and its results moved out of nothing.
-                let ref_valued = self.cli_lint_overrides.strict_core
+                let ref_valued = (self.cli_lint_overrides.strict_core
+                    || self.library_methods_from_source)
                     && ty.is_none()
                     && matches!(pattern.kind, PatternKind::Binding(_))
                     && matches!(

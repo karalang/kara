@@ -2513,6 +2513,10 @@ fn main() -> () {
             "log_transparent",
             // `std.net`'s sockets are the library's.
             "par_real_clients",
+            // A `ref` binding over an owned local is a view, and a `match`
+            // of such results a reference, in the check the build runs with
+            // the library (core semantics §4.6, B-2026-10-28-25).
+            "ok_match_result_is_a_ref",
         ];
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus/core");
         let mut pins: Vec<_> = std::fs::read_dir(&root)

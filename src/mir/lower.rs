@@ -5539,6 +5539,19 @@ impl<'l, 'a> Bx<'l, 'a> {
                     if ty.is_none() {
                         if let Some(rt) = self.ref_rebind(value, t)? {
                             t = rt;
+                        } else if (is_branching(value) || matches!(value.kind, ExprKind::Block(_)))
+                            && !(self.is_copy(t)
+                                || self.is_handle(t)
+                                || self.is_handle_aggregate(t))
+                            && !matches!(self.tys().tcx().kind(t), HK::Ref(_) | HK::MutRef(_))
+                            && self.lcx.tc.core_ref_copy_nodes.contains(&value.id)
+                        {
+                            // A `match`, `if` or block whose every result is a
+                            // view (`Some(ref r) => r`) is a reference, and the
+                            // local binds it (core semantics §4.6,
+                            // B-2026-10-28-25): nothing moves out of the place
+                            // the results borrow.
+                            t = self.tys().tcx().reference(t, false);
                         }
                         if is_branching(value) {
                             t = self.arm_width(value, t);
@@ -24632,11 +24645,7 @@ pub(crate) mod tests {
 
     /// Core pins the builder cannot run yet, each with what it waits on.
     /// A listed pin must still fail, so the list only shrinks.
-    pub(crate) const NOT_YET: &[&str] = &[
-        // §4.6: the `let` of a `match` whose results are `ref` bindings into
-        // an owned local is refused by the MIR build (PREDICTS B-2026-10-28-25).
-        "ok_match_result_is_a_ref",
-    ];
+    pub(crate) const NOT_YET: &[&str] = &[];
 
     /// Every runnable core pin, built from source, elaborated and run, prints
     /// its expected output and exits with its expected code.
