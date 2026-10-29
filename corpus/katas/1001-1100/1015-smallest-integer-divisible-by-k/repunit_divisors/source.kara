@@ -1,0 +1,122 @@
+// LeetCode #1015: Smallest Integer Divisible by K -- divisors of phi
+//
+// As in the order arm, the answer is the multiplicative order of 10 mod
+// m = 9k when k is not a multiple of 2 or 5. By Euler's theorem that
+// order divides phi(m), so factor m by trial division, build phi(m) and
+// its divisors, and try the divisors smallest first with fast
+// exponentiation. O(sqrt(k) + d log k) for d divisors.
+
+fn power_mod(base: i64, exp: i64, m: i64) -> i64 {
+    let mut result = 1 % m;
+    let mut b = base % m;
+    let mut e = exp;
+    while e > 0 {
+        if e % 2 == 1 {
+            result = result * b % m;
+        }
+        b = b * b % m;
+        e /= 2;
+    }
+    result
+}
+
+// the distinct primes dividing n, smallest first
+fn prime_factors(n: i64) -> Vec[i64] {
+    let mut primes: Vec[i64] = Vec.new();
+    let mut rest = n;
+    let mut p = 2;
+    while p * p <= rest {
+        if rest % p == 0 {
+            primes.push(p);
+            while rest % p == 0 {
+                rest /= p;
+            }
+        }
+        p += 1;
+    }
+    if rest > 1 {
+        primes.push(rest);
+    }
+    primes
+}
+
+fn smallest_repunit_div_by_k(k: i64) -> i64 {
+    if k % 2 == 0 or k % 5 == 0 {
+        return -1;
+    }
+    let m = 9 * k;
+    let mut phi = m;
+    for p in prime_factors(m).iter() {
+        phi = phi / p * (p - 1);
+    }
+    let mut divisors: Vec[i64] = Vec.new();
+    let mut d = 1;
+    while d * d <= phi {
+        if phi % d == 0 {
+            divisors.push(d);
+            if d * d != phi {
+                divisors.push(phi / d);
+            }
+        }
+        d += 1;
+    }
+    divisors.sort();
+    for n in divisors.iter() {
+        if power_mod(10, n, m) == 1 {
+            return n;
+        }
+    }
+    -1
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let examples = [1, 2, 3, 5, 7, 9, 11, 13, 17, 19, 27, 41, 81, 99, 101, 9091, 99989, 99991, 99999, 100000];
+    for k in examples.iter() {
+        println(f"k = {k} -> {smallest_repunit_div_by_k(k)}");
+    }
+    // every k up to 10000: how many have no answer, the sum of the others,
+    // and a checksum of all the answers in order
+    let mut none = 0;
+    let mut total = 0;
+    let mut check = 0;
+    let mut longest = 0;
+    let mut longest_k = 0;
+    for k in 1..10001 {
+        let answer = smallest_repunit_div_by_k(k);
+        if answer < 0 {
+            none += 1;
+        } else {
+            total += answer;
+            if answer > longest {
+                longest = answer;
+                longest_k = k;
+            }
+        }
+        check = (check * 31 + answer + 1) % 1000000007;
+    }
+    println(f"k = 1..10000: {none} with no answer, the rest sum to {total}, longest {longest} at k = {longest_k}, checksum {check}");
+    // random k up to 100000
+    let mut seed = 1015;
+    let mut none = 0;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..1000 {
+        let k = 1 + (next_random(mut seed) * 32768 + next_random(mut seed)) % 100000;
+        let answer = smallest_repunit_div_by_k(k);
+        if answer < 0 {
+            none += 1;
+        } else {
+            total += answer;
+        }
+        check = (check * 31 + answer + 1) % 1000000007;
+    }
+    println(f"1000 random k up to 100000: {none} with no answer, the rest sum to {total}, checksum {check}");
+}

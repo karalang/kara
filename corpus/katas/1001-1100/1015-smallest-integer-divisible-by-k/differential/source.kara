@@ -1,0 +1,268 @@
+// LeetCode #1015: Smallest Integer Divisible by K -- differential
+//
+// The five arms, copied, against the statement read literally and five
+// more properties. See README.md § Differential.
+
+fn ans_star(k: i64) -> i64 {
+    if k % 2 == 0 or k % 5 == 0 {
+        return -1;
+    }
+    let mut r = 0;
+    for length in 1..k + 1 {
+        r = (r * 10 + 1) % k;
+        if r == 0 {
+            return length;
+        }
+    }
+    -1
+}
+
+fn ans_set(k: i64) -> i64 {
+    let mut seen: Set[i64] = Set.new();
+    let mut r = 1 % k;
+    let mut length = 1;
+    while r != 0 {
+        if seen.contains(r) {
+            return -1;
+        }
+        seen.insert(r);
+        r = (r * 10 + 1) % k;
+        length += 1;
+    }
+    length
+}
+
+fn floyd_step(r: i64, k: i64) -> i64 {
+    (r * 10 + 1) % k
+}
+
+fn ans_floyd(k: i64) -> i64 {
+    let mut slow = floyd_step(0, k);
+    let mut fast = floyd_step(floyd_step(0, k), k);
+    while slow != fast {
+        slow = floyd_step(slow, k);
+        fast = floyd_step(floyd_step(fast, k), k);
+    }
+    // the cycle's length
+    let mut length = 1;
+    let mut probe = floyd_step(slow, k);
+    while probe != slow {
+        probe = floyd_step(probe, k);
+        length += 1;
+    }
+    // the start, 0, is on the cycle when `length` steps lead back to it
+    let mut ahead = 0;
+    for _ in 0..length {
+        ahead = floyd_step(ahead, k);
+    }
+    if ahead == 0 {
+        length
+    } else {
+        -1
+    }
+}
+
+fn ans_order(k: i64) -> i64 {
+    if k % 2 == 0 or k % 5 == 0 {
+        return -1;
+    }
+    let m = 9 * k;
+    let mut power = 10 % m;
+    let mut n = 1;
+    while power != 1 {
+        power = power * 10 % m;
+        n += 1;
+    }
+    n
+}
+
+fn power_mod(base: i64, exp: i64, m: i64) -> i64 {
+    let mut result = 1 % m;
+    let mut b = base % m;
+    let mut e = exp;
+    while e > 0 {
+        if e % 2 == 1 {
+            result = result * b % m;
+        }
+        b = b * b % m;
+        e /= 2;
+    }
+    result
+}
+
+// the distinct primes dividing n, smallest first
+fn prime_factors(n: i64) -> Vec[i64] {
+    let mut primes: Vec[i64] = Vec.new();
+    let mut rest = n;
+    let mut p = 2;
+    while p * p <= rest {
+        if rest % p == 0 {
+            primes.push(p);
+            while rest % p == 0 {
+                rest /= p;
+            }
+        }
+        p += 1;
+    }
+    if rest > 1 {
+        primes.push(rest);
+    }
+    primes
+}
+
+fn ans_divisors(k: i64) -> i64 {
+    if k % 2 == 0 or k % 5 == 0 {
+        return -1;
+    }
+    let m = 9 * k;
+    let mut phi = m;
+    for p in prime_factors(m).iter() {
+        phi = phi / p * (p - 1);
+    }
+    let mut divisors: Vec[i64] = Vec.new();
+    let mut d = 1;
+    while d * d <= phi {
+        if phi % d == 0 {
+            divisors.push(d);
+            if d * d != phi {
+                divisors.push(phi / d);
+            }
+        }
+        d += 1;
+    }
+    divisors.sort();
+    for n in divisors.iter() {
+        if power_mod(10, n, m) == 1 {
+            return n;
+        }
+    }
+    -1
+}
+
+// the statement read literally, as far as i64 reaches: the repunits of 1
+// to 18 digits themselves, divided by k; 0 when none of them is a
+// multiple of k
+fn literal(k: i64) -> i64 {
+    let mut repunit = 0;
+    for n in 1..19 {
+        repunit = repunit * 10 + 1;
+        if repunit % k == 0 {
+            return n;
+        }
+    }
+    0
+}
+
+// the n-digit repunit mod k, summed digit by digit from its powers of 10
+fn repunit_mod(n: i64, k: i64) -> i64 {
+    let mut sum = 0;
+    let mut power = 1 % k;
+    for _ in 0..n {
+        sum = (sum + power) % k;
+        power = power * 10 % k;
+    }
+    sum
+}
+
+fn gcd(a: i64, b: i64) -> i64 {
+    if b == 0 { a } else { gcd(b, a % b) }
+}
+
+fn arms(k: i64) -> Vec[i64] {
+    vec![ans_star(k), ans_set(k), ans_floyd(k), ans_order(k), ans_divisors(k)]
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let names = ["star", "set", "floyd", "order", "divisors"];
+    let partners = [3, 7, 11, 13, 17, 19, 21, 23];
+    let mut failures: Vec[i64] = Vec.filled(6, 0);
+    let mut checks = 0;
+    let mut rows = 0;
+    let mut check = 0;
+    let mut seed = 10151;
+    for t in 0..2200 {
+        // every k up to 2000, then 200 random up to 100000
+        let k = if t < 2000 { t + 1 } else { 1 + (next_random(mut seed) * 32768 + next_random(mut seed)) % 100000 };
+        let got = arms(k);
+        rows += 1;
+        check = (check * 31 + got[0] + 1) % 1000000007;
+        let exact = if k <= 2000 { literal(k) } else { -1 };
+        let coprime = k % 2 != 0 and k % 5 != 0;
+        // a divisor of k: k without its smallest prime factor
+        let mut p = 2;
+        while p * p <= k and k % p != 0 {
+            p += 1;
+        }
+        let part = if k > 1 and k % p == 0 { k / p } else { 1 };
+        let part_got = arms(part);
+        // a partner sharing no factor with k or 10
+        let b = partners[t % 8];
+        let joint = coprime and gcd(k, b) == 1;
+        let joint_got = if joint { arms(k * b) } else { vec![0, 0, 0, 0, 0] };
+        let b_alone = ans_star(b);
+        for a in 0..5 {
+            let c = got[a];
+            // P1: the statement, for k up to 2000 whose answer has at most
+            // 18 digits; no answer of at most 18 otherwise
+            if exact >= 0 {
+                checks += 1;
+                let ok = if exact > 0 { c == exact } else { c < 0 or c > 18 };
+                if not ok {
+                    failures[0] += 1;
+                }
+            }
+            // P2: the answer's repunit is a multiple of k
+            if c > 0 {
+                checks += 1;
+                if repunit_mod(c, k) != 0 {
+                    failures[1] += 1;
+                }
+            }
+            // P3: no answer exactly when k shares a factor with 10, and
+            // otherwise at most k digits
+            checks += 1;
+            if coprime != (c > 0) or c > k {
+                failures[2] += 1;
+            }
+            // P4: the answer for a divisor of k divides the answer for k
+            if coprime {
+                checks += 1;
+                if part_got[a] <= 0 or c % part_got[a] != 0 {
+                    failures[3] += 1;
+                }
+            }
+            // P5: for a partner b sharing no factor with k or 10, the
+            // answer for kb is the lcm of the answers for k and b
+            if joint {
+                checks += 1;
+                if joint_got[a] != c / gcd(c, b_alone) * b_alone {
+                    failures[4] += 1;
+                }
+            }
+            // P6: each arm agrees with at least two of the other four
+            checks += 1;
+            let mut agree = 0;
+            for o in 0..5 {
+                if o != a and got[o] == c {
+                    agree += 1;
+                }
+            }
+            if agree < 2 {
+                failures[5] += 1;
+            }
+        }
+    }
+    let mut total = 0;
+    for p in 0..6 {
+        total += failures[p];
+        if failures[p] > 0 {
+            println(f"P{p + 1}: {failures[p]} failures");
+        }
+    }
+    println(f"{rows} values of k: checksum {check}, {checks} checks over {names.len()} arms: {total} failures");
+}

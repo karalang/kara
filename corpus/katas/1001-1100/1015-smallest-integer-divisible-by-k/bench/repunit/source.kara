@@ -1,0 +1,35 @@
+// LeetCode #1015: Smallest Integer Divisible by K -- bench
+//
+// The ★ arm (../repunit.kara) for every k from 1 to 30,000, folding each
+// answer into a sum and a checksum. See ../README.md § Benchmarks.
+
+fn smallest_repunit_div_by_k(k: i64) -> i64 {
+    if k % 2 == 0 or k % 5 == 0 {
+        return -1;
+    }
+    let mut r = 0;
+    for length in 1..k + 1 {
+        r = (r * 10 + 1) % k;
+        if r == 0 {
+            return length;
+        }
+    }
+    -1
+}
+
+fn main() {
+    let last = 30000;
+    let mut none = 0;
+    let mut total = 0;
+    let mut check = 0;
+    for k in 1..last + 1 {
+        let answer = smallest_repunit_div_by_k(k);
+        if answer < 0 {
+            none += 1;
+        } else {
+            total += answer;
+        }
+        check = (check * 31 + answer + 1) % 1000000007;
+    }
+    println(f"k = 1..{last}: {none} with no answer, the rest sum to {total}, checksum {check}");
+}
