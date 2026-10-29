@@ -1,0 +1,4265 @@
+// mini_read_fwf: a Kāra port of pandas 3.0.5's read_fwf (BSD-3-Clause,
+// the pandas development team): FixedWidthReader, which cuts each line
+// at the column specifications (given, from widths, or inferred from the
+// first infer_nrows rows) and strips the fill characters, and the python
+// engine's PythonParser that FixedWidthFieldParser runs it under: header
+// rows (one, several, or none) and names, usecols by name or position,
+// index_col with the implicit index, skiprows, skipfooter, nrows,
+// chunksize, comment, skip_blank_lines, thousands and decimal through
+// pandas' number pattern, na_values (one list or one per column),
+// keep_default_na, na_filter, dtype and dtype_backend, with pandas' type
+// inference for each column, and to_csv. The file is decoded as Python
+// opens it: UTF-8 (strict, with Python's error messages), UTF-8 with a
+// signature, ISO-8859-1, windows-1252 or ASCII, and split into lines at
+// \n, \r\n and \r.
+//
+// It reads data/jobs.txt, one job per line, runs each in a task of its
+// own, and prints, in job order, `$ <job>` and what the oracle prints:
+// the frame's shape, its dtypes and to_csv, for each chunk with
+// chunksize. An error prints as `! <exception>: <message>`.
+
+import std.sync.{TaskGroup};
+
+// ------------------------------------------------------------ bytes and text
+
+fn byte_str(b: ref Vec[u8], from: i64, to: i64) -> String {
+    let mut v: Vec[u8] = Vec.new();
+    for i in from..to {
+        v.push(b[i]);
+    }
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn bytes_of(b: ref Vec[u8], from: i64, to: i64) -> Vec[u8] {
+    let mut v: Vec[u8] = Vec.new();
+    for i in from..to {
+        v.push(b[i]);
+    }
+    v
+}
+
+fn to_bytes(s: Str) -> Vec[u8] {
+    s.bytes().to_vec()
+}
+
+fn from_bytes(v: Vec[u8]) -> String {
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn is_digit(c: u8) -> bool {
+    c >= b'0' and c <= b'9'
+}
+
+fn is_letter(c: u8) -> bool {
+    (c >= b'a' and c <= b'z') or (c >= b'A' and c <= b'Z')
+}
+
+fn is_alnum(c: u8) -> bool {
+    is_digit(c) or is_letter(c)
+}
+
+fn is_hex_digit(c: u8) -> bool {
+    is_digit(c) or ((c | 32) >= b'a' and (c | 32) <= b'f')
+}
+
+// IS_WS_HTML: space, tab, line feed, form feed and carriage return.
+fn is_ws_html(c: u8) -> bool {
+    c == 32 or (c >= 9 and c <= 13 and c != 11)
+}
+
+fn lower_ascii(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    for c in b {
+        out.push(if c >= b'A' and c <= b'Z' { c + 32 } else { c });
+    }
+    from_bytes(out)
+}
+
+fn split_on(s: Str, sep: u8) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut st: i64 = 0;
+    for i in 0..b.len() {
+        if b[i] == sep {
+            out.push(byte_str(b, st, i));
+            st = i + 1;
+        }
+    }
+    out.push(byte_str(b, st, b.len()));
+    out
+}
+
+fn split_spaces(s: Str) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        while i < b.len() and (b[i] == b' ' or b[i] == b'\n') {
+            i += 1;
+        }
+        let st = i;
+        while i < b.len() and b[i] != b' ' and b[i] != b'\n' {
+            i += 1;
+        }
+        if i > st {
+            out.push(byte_str(b, st, i));
+        }
+    }
+    out
+}
+
+fn join(parts: ref Vec[String], sep: Str) -> String {
+    let mut out = String.new();
+    for i in 0..parts.len() {
+        if i > 0 {
+            out.push_str(sep);
+        }
+        out.push_str(parts[i]);
+    }
+    out
+}
+
+fn lines_of(text: Str) -> Vec[String] {
+    let mut v = split_on(text, b'\n');
+    if v.len() > 0 and v[v.len() - 1].len() == 0 {
+        v.pop();
+    }
+    v
+}
+
+fn has_byte(s: Str, c: u8) -> bool {
+    for x in s.bytes() {
+        if x == c {
+            return true;
+        }
+    }
+    false
+}
+
+fn replace_all(s: Str, from: Str, to: Str) -> String {
+    let b = to_bytes(s);
+    let f = to_bytes(from);
+    let mut out = String.new();
+    let mut i: i64 = 0;
+    let mut st: i64 = 0;
+    while i + f.len() <= b.len() {
+        let mut hit = f.len() > 0;
+        for k in 0..f.len() {
+            if hit and b[i + k] != f[k] {
+                hit = false;
+            }
+        }
+        if hit {
+            out.push_str(byte_str(b, st, i));
+            out.push_str(to);
+            i += f.len();
+            st = i;
+        } else {
+            i += 1;
+        }
+    }
+    out.push_str(byte_str(b, st, b.len()));
+    out
+}
+
+// The position of `pat` in `b` at or after `from`, ignoring ASCII case;
+// -1 when it is not there (xmlStrcasestr).
+
+fn hex_val(c: u8) -> u8 {
+    if is_digit(c) { c - b'0' } else { (c | 32) - b'a' + 10 }
+}
+
+// The bytes a run of hex digits spells; anything else is skipped.
+fn unhex(s: Str) -> Vec[u8] {
+    let mut digits: Vec[u8] = Vec.new();
+    for c in s.bytes() {
+        if is_hex_digit(c) {
+            digits.push(hex_val(c));
+        }
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i + 1 < digits.len() {
+        out.push(digits[i] * 16 + digits[i + 1]);
+        i += 2;
+    }
+    out
+}
+
+
+// ------------------------------------------------------------ code points (from mini_re)
+
+fn codepoints(b: ref Slice[u8]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i] as i64;
+        if c < 0x80 {
+            out.push(c);
+            i += 1;
+        } else if c < 0xE0 {
+            out.push(((c & 0x1F) << 6) | ((b[i + 1] as i64) & 0x3F));
+            i += 2;
+        } else if c < 0xF0 {
+            out.push(((c & 0x0F) << 12) | (((b[i + 1] as i64) & 0x3F) << 6) | ((b[i + 2] as i64) & 0x3F));
+            i += 3;
+        } else {
+            out.push(((c & 0x07) << 18) | (((b[i + 1] as i64) & 0x3F) << 12) | (((b[i + 2] as i64) & 0x3F) << 6) | ((b[i + 3] as i64) & 0x3F));
+            i += 4;
+        }
+    }
+    out
+}
+
+fn to_string(s: ref Vec[i64]) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    for cp in s {
+        if cp < 0x80 {
+            out.push(cp as u8);
+        } else if cp < 0x800 {
+            out.push((0xC0 | (cp >> 6)) as u8);
+            out.push((0x80 | (cp & 0x3F)) as u8);
+        } else if cp < 0x10000 {
+            out.push((0xE0 | (cp >> 12)) as u8);
+            out.push((0x80 | ((cp >> 6) & 0x3F)) as u8);
+            out.push((0x80 | (cp & 0x3F)) as u8);
+        } else {
+            out.push((0xF0 | (cp >> 18)) as u8);
+            out.push((0x80 | ((cp >> 12) & 0x3F)) as u8);
+            out.push((0x80 | ((cp >> 6) & 0x3F)) as u8);
+            out.push((0x80 | (cp & 0x3F)) as u8);
+        }
+    }
+    String.from_utf8(out).unwrap()
+}
+
+fn push_ascii(out: mut ref Vec[i64], s: Str) {
+    for b in s.bytes() {
+        out.push(b as i64);
+    }
+}
+
+fn push_all(out: mut ref Vec[i64], s: ref Vec[i64]) {
+    for c in s {
+        out.push(c);
+    }
+}
+
+fn slice(s: ref Vec[i64], start: i64, end: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = start;
+    while i < end {
+        out.push(s[i]);
+        i += 1;
+    }
+    out
+}
+
+fn same(a: ref Vec[i64], b: ref Vec[i64]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+fn hex_n(cp: i64, width: i64) -> String {
+    let digits = "0123456789abcdef".bytes();
+    let mut out: Vec[u8] = Vec.new();
+    let mut shift = (width - 1) * 4;
+    while shift >= 0 {
+        out.push(digits[(cp >> shift) & 15]);
+        shift -= 4;
+    }
+    String.from_utf8(out).unwrap()
+}
+
+// str.isprintable outside ASCII, for repr: controls, format characters,
+// separators other than space, surrogates and private use are not.
+fn is_printable(c: i64) -> bool {
+    if c < 0x20 or (c >= 0x7F and c <= 0xA0) or c == 0xAD {
+        return false;
+    }
+    if (c >= 0x600 and c <= 0x605) or c == 0x61C or c == 0x6DD or c == 0x70F or c == 0x180E {
+        return false;
+    }
+    if c == 0x1680 or (c >= 0x2000 and c <= 0x200F) or (c >= 0x2028 and c <= 0x202F) {
+        return false;
+    }
+    if (c >= 0x205F and c <= 0x206F) or c == 0x3000 or (c >= 0xD800 and c <= 0xF8FF) {
+        return false;
+    }
+    if c == 0xFEFF or (c >= 0xFFF9 and c <= 0xFFFB) or c >= 0xF0000 {
+        return false;
+    }
+    true
+}
+
+fn str_repr(s: ref Vec[i64], out: mut ref Vec[i64]) {
+    let mut has_single = false;
+    let mut has_double = false;
+    for c in s {
+        if c == 39 {
+            has_single = true;
+        } else if c == 34 {
+            has_double = true;
+        }
+    }
+    let quote = if has_single and not has_double { 34 } else { 39 };
+    out.push(quote);
+    for c in s {
+        if c == quote or c == 92 {
+            out.push(92);
+            out.push(c);
+        } else if c == 9 {
+            push_ascii(mut out, "\\t");
+        } else if c == 10 {
+            push_ascii(mut out, "\\n");
+        } else if c == 13 {
+            push_ascii(mut out, "\\r");
+        } else if c < 0x20 or c == 0x7F {
+            push_ascii(mut out, "\\x");
+            push_ascii(mut out, hex_n(c, 2));
+        } else if c < 0x7F or is_printable(c) {
+            out.push(c);
+        } else if c <= 0xFF {
+            push_ascii(mut out, "\\x");
+            push_ascii(mut out, hex_n(c, 2));
+        } else if c <= 0xFFFF {
+            push_ascii(mut out, "\\u");
+            push_ascii(mut out, hex_n(c, 4));
+        } else {
+            push_ascii(mut out, "\\U");
+            push_ascii(mut out, hex_n(c, 8));
+        }
+    }
+    out.push(quote);
+}
+
+fn repr_of(s: ref Vec[i64]) -> String {
+    let mut out: Vec[i64] = Vec.new();
+    str_repr(s, mut out);
+    to_string(out)
+}
+
+fn is_space(c: i64, ascii: bool) -> bool {
+    if c == 32 or (c >= 9 and c <= 13) {
+        return true;
+    }
+    if ascii {
+        return false;
+    }
+    (c >= 0x1C and c <= 0x1F) or c == 0x85 or c == 0xA0 or c == 0x1680 or (c >= 0x2000 and c <= 0x200A) or c == 0x2028 or c == 0x2029 or c == 0x202F or c == 0x205F or c == 0x3000
+}
+
+
+// ------------------------------------------------------------ Python values
+
+struct PyErr {
+    kind: String,
+    msg: String,
+}
+
+fn py_err(kind: Str, msg: Str) -> PyErr {
+    PyErr { kind: kind.to_string(), msg: msg.to_string() }
+}
+
+fn nan() -> f64 {
+    0.0 / 0.0
+}
+
+fn inf() -> f64 {
+    1.0 / 0.0
+}
+
+fn is_nan(x: f64) -> bool {
+    x != x
+}
+
+fn cps_of(s: Str) -> Vec[i64] {
+    codepoints(s.bytes())
+}
+
+// repr() of a str.
+fn py_repr(s: Str) -> String {
+    repr_of(cps_of(s))
+}
+
+// str.strip(): Python's white space off both ends.
+fn py_strip(s: Str) -> String {
+    let c = cps_of(s);
+    let mut a: i64 = 0;
+    let mut b = c.len();
+    while a < b and is_space(c[a], false) {
+        a += 1;
+    }
+    while b > a and is_space(c[b - 1], false) {
+        b -= 1;
+    }
+    to_string(slice(c, a, b))
+}
+
+// repr() of a float.
+fn float_repr(x: f64) -> String {
+    if is_nan(x) {
+        "nan".to_string()
+    } else if x == inf() {
+        "inf".to_string()
+    } else if x == -inf() {
+        "-inf".to_string()
+    } else {
+        x.to_string()
+    }
+}
+
+// int(s) for a str: an optional sign and decimal digits, with
+// surrounding white space and single underscores between digits.
+fn py_int(s: Str) -> Option[i64] {
+    let b = to_bytes(py_strip(s));
+    let mut i: i64 = 0;
+    let mut neg = false;
+    if i < b.len() and (b[i] == b'+' or b[i] == b'-') {
+        neg = b[i] == b'-';
+        i += 1;
+    }
+    if i >= b.len() {
+        return None;
+    }
+    let mut v: i64 = 0;
+    let mut last_digit = false;
+    while i < b.len() {
+        let c = b[i];
+        if is_digit(c) {
+            if v > 922337203685477580 {
+                return None;
+            }
+            v = v * 10 + (c - b'0') as i64;
+            last_digit = true;
+        } else if c == b'_' and last_digit and i + 1 < b.len() and is_digit(b[i + 1]) {
+            last_digit = false;
+        } else {
+            return None;
+        }
+        i += 1;
+    }
+    Some(if neg { -v } else { v })
+}
+
+// float(s) for a str: what Python's float() accepts, including inf,
+// infinity and nan in any case.
+fn py_float(s: Str) -> Option[f64] {
+    let t = py_strip(s);
+    let low = lower_ascii(t);
+    let (sign, body) = if low.starts_with("-") {
+        (-1.0, low[1..].to_string())
+    } else if low.starts_with("+") {
+        (1.0, low[1..].to_string())
+    } else {
+        (1.0, low.clone())
+    };
+    if body == "inf" or body == "infinity" {
+        return Some(sign * inf());
+    }
+    if body == "nan" {
+        return Some(nan());
+    }
+    let b = to_bytes(body);
+    if b.len() == 0 {
+        return None;
+    }
+    let mut i: i64 = 0;
+    let mut digits = 0;
+    while i < b.len() and is_digit(b[i]) {
+        i += 1;
+        digits += 1;
+    }
+    if i < b.len() and b[i] == b'.' {
+        i += 1;
+        while i < b.len() and is_digit(b[i]) {
+            i += 1;
+            digits += 1;
+        }
+    }
+    if digits == 0 {
+        return None;
+    }
+    if i < b.len() and b[i] == b'e' {
+        i += 1;
+        if i < b.len() and (b[i] == b'+' or b[i] == b'-') {
+            i += 1;
+        }
+        let st = i;
+        while i < b.len() and is_digit(b[i]) {
+            i += 1;
+        }
+        if i == st {
+            return None;
+        }
+    }
+    if i != b.len() {
+        return None;
+    }
+    match f64.parse(t) {
+        Ok(x) => Some(x),
+        Err(_) => None,
+    }
+}
+
+// ------------------------------------------------------------ cells and labels
+
+// A value in an object column: a string, a bool, or NaN.
+#[derive(Clone)]
+enum Val {
+    Na,
+    S(String),
+    B(bool),
+}
+
+// One element of a column or index label.
+#[derive(Clone)]
+enum Lab {
+    Nil,
+    I(i64),
+    S(String),
+}
+
+// A column picked by position or by name (usecols, index_col).
+#[derive(Clone)]
+enum Ic {
+    I(i64),
+    S(String),
+}
+
+fn val_text(v: ref Val) -> String {
+    match v {
+        Val.Na => "".to_string(),
+        Val.S(s) => s.clone(),
+        Val.B(b) => if b { "True".to_string() } else { "False".to_string() },
+    }
+}
+
+fn lab_eq(a: ref Lab, b: ref Lab) -> bool {
+    match (a, b) {
+        (Lab.Nil, Lab.Nil) => true,
+        (Lab.I(x), Lab.I(y)) => x == y,
+        (Lab.S(x), Lab.S(y)) => x == y,
+        _ => false,
+    }
+}
+
+fn key_eq(a: ref Vec[Lab], b: ref Vec[Lab]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    for i in 0..a.len() {
+        if not lab_eq(a[i], b[i]) {
+            return false;
+        }
+    }
+    true
+}
+
+fn lab_repr(l: ref Lab) -> String {
+    match l {
+        Lab.Nil => "None".to_string(),
+        Lab.I(n) => n.to_string(),
+        Lab.S(s) => py_repr(s),
+    }
+}
+
+// str() of a label, as an f-string writes it.
+fn lab_fstr(l: ref Lab) -> String {
+    match l {
+        Lab.Nil => "None".to_string(),
+        Lab.I(n) => n.to_string(),
+        Lab.S(s) => s.clone(),
+    }
+}
+
+// A label as the csv writer writes it: None is empty.
+fn lab_csv(l: ref Lab) -> String {
+    match l {
+        Lab.Nil => "".to_string(),
+        _ => lab_fstr(l),
+    }
+}
+
+// A column label is a key: one label, or the tuple of a MultiIndex.
+fn key_repr(k: ref Vec[Lab]) -> String {
+    if k.len() == 1 {
+        return lab_repr(k[0]);
+    }
+    let mut parts: Vec[String] = Vec.new();
+    for l in k {
+        parts.push(lab_repr(l));
+    }
+    f"({join(parts, ", ")})"
+}
+
+fn key_csv(k: ref Vec[Lab]) -> String {
+    if k.len() == 1 {
+        return lab_csv(k[0]);
+    }
+    key_repr(k)
+}
+
+fn key_fstr(k: ref Vec[Lab]) -> String {
+    if k.len() == 1 {
+        return lab_fstr(k[0]);
+    }
+    key_repr(k)
+}
+
+fn key_of(s: Str) -> Vec[Lab] {
+    vec![Lab.S(s.to_string())]
+}
+
+// The key a dtype or na_values entry names: only a plain string label.
+fn key_name(k: ref Vec[Lab]) -> Option[String] {
+    if k.len() != 1 {
+        return None;
+    }
+    match k[0] {
+        Lab.S(s) => Some(s.clone()),
+        _ => None,
+    }
+}
+
+fn int_in(v: ref Vec[i64], x: i64) -> bool {
+    for y in v {
+        if y == x {
+            return true;
+        }
+    }
+    false
+}
+
+fn str_in(v: ref Vec[String], s: Str) -> bool {
+    for x in v {
+        if x == s {
+            return true;
+        }
+    }
+    false
+}
+
+fn sorted_ints(v: ref Vec[i64]) -> Vec[i64] {
+    let mut out = v.clone();
+    let n = out.len();
+    for i in 0..n {
+        for j in 0..n - 1 - i {
+            if out[j] > out[j + 1] {
+                let t = out[j];
+                out[j] = out[j + 1];
+                out[j + 1] = t;
+            }
+        }
+    }
+    out
+}
+
+fn ic_eq(a: ref Ic, b: ref Ic) -> bool {
+    match (a, b) {
+        (Ic.I(x), Ic.I(y)) => x == y,
+        (Ic.S(x), Ic.S(y)) => x == y,
+        _ => false,
+    }
+}
+
+fn ic_lab(ic: ref Ic, l: ref Lab) -> bool {
+    match (ic, l) {
+        (Ic.I(a), Lab.I(b)) => a == b,
+        (Ic.S(a), Lab.S(b)) => a == b,
+        _ => false,
+    }
+}
+
+fn ic_matches(ic: ref Ic, k: ref Vec[Lab]) -> bool {
+    k.len() == 1 and ic_lab(ic, k[0])
+}
+
+// is_potential_multi_index: every label outside the index is a tuple.
+fn potential_mi(cols: ref Vec[Vec[Lab]], index_col: ref Option[Vec[Ic]]) -> bool {
+    if cols.len() == 0 {
+        return false;
+    }
+    let ic = match index_col {
+        Some(ref v) => v.clone(),
+        None => Vec.new(),
+    };
+    for k in cols {
+        let mut in_index = false;
+        for c in ic {
+            if ic_matches(c, k) {
+                in_index = true;
+            }
+        }
+        if not in_index and k.len() < 2 {
+            return false;
+        }
+    }
+    true
+}
+
+fn key_count(seen: ref Vec[(Vec[Lab], i64)], k: ref Vec[Lab]) -> i64 {
+    for (s, n) in seen {
+        if key_eq(s, k) {
+            return n;
+        }
+    }
+    0
+}
+
+fn set_key_count(seen: mut ref Vec[(Vec[Lab], i64)], k: ref Vec[Lab], n: i64) {
+    for i in 0..seen.len() {
+        if key_eq(seen[i].0, k) {
+            seen[i].1 = n;
+            return;
+        }
+    }
+    seen.push((k.clone(), n));
+}
+
+// The label dedup_names makes of a repeat: `x.1`, or the tuple with
+// its last element so marked.
+fn renamed(col: ref Vec[Lab], n: i64, mi: bool) -> Vec[Lab] {
+    if mi and col.len() > 1 {
+        let mut c = col.clone();
+        let last = c.len() - 1;
+        c[last] = Lab.S(f"{lab_fstr(col[last])}.{n}");
+        return c;
+    }
+    vec![Lab.S(f"{key_fstr(col)}.{n}")]
+}
+
+// pandas.io.common.dedup_names.
+fn dedup_names(names: ref Vec[Vec[Lab]], mi: bool) -> Vec[Vec[Lab]] {
+    let mut out = names.clone();
+    let mut counts: Vec[(Vec[Lab], i64)] = Vec.new();
+    for i in 0..out.len() {
+        let mut col = out[i].clone();
+        let mut cur = key_count(counts, col);
+        while cur > 0 {
+            set_key_count(mut counts, col, cur + 1);
+            col = renamed(col, cur, mi);
+            cur = key_count(counts, col);
+        }
+        out[i] = col.clone();
+        set_key_count(mut counts, col, cur + 1);
+    }
+    out
+}
+
+// A Python list as repr prints it.
+fn list_repr(items: ref Vec[String]) -> String {
+    f"[{join(items, ", ")}]"
+}
+
+// ------------------------------------------------------------ missing values
+
+fn str_na_values() -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    for c in ["", "#N/A", "#N/A N/A", "#NA", "-1.#IND", "-1.#QNAN", "-NaN", "-nan", "1.#IND", "1.#QNAN", "<NA>", "N/A", "NA", "NULL", "NaN", "None", "n/a", "nan", "null"] {
+        v.push(c.to_string());
+    }
+    v
+}
+
+// The values a column reads as missing: strings, and the numbers equal
+// to them.
+#[derive(Clone)]
+struct NaSet {
+    strs: Vec[String],
+    nums: Vec[f64],
+}
+
+impl NaSet {
+    fn has(ref self, v: ref Val) -> bool {
+        match v {
+            Val.S(s) => str_in(self.strs, s),
+            _ => false,
+        }
+    }
+
+    fn has_num(ref self, x: f64) -> bool {
+        for n in self.nums {
+            if n == x {
+                return true;
+            }
+        }
+        false
+    }
+}
+
+fn empty_na() -> NaSet {
+    NaSet { strs: Vec.new(), nums: Vec.new() }
+}
+
+// _stringify_na_values and _floatify_na_values of the values given,
+// with the default ones when keep_default_na.
+fn na_set(given: ref Vec[String], keep_default_na: bool) -> NaSet {
+    let mut strs: Vec[String] = Vec.new();
+    let mut nums: Vec[f64] = Vec.new();
+    let mut all = given.clone();
+    if keep_default_na {
+        for s in str_na_values() {
+            all.push(s.clone());
+        }
+    }
+    for x in all {
+        strs.push(x.clone());
+        if let Some(v) = py_float(x) {
+            if not is_nan(v) and v != inf() and v != -inf() {
+                if v == v.floor() {
+                    let iv = v as i64;
+                    strs.push(f"{iv}.0");
+                    strs.push(iv.to_string());
+                }
+                nums.push(v);
+            }
+        }
+    }
+    NaSet { strs: strs, nums: nums }
+}
+
+// na_values after _clean_na_values: one set for every column, or one
+// per named column with the defaults (or nothing) for the rest.
+#[derive(Clone)]
+struct NaSpec {
+    filter: bool,
+    keep_default_na: bool,
+    all: NaSet,
+    by_col: Option[Vec[(String, NaSet)]],
+}
+
+impl NaSpec {
+    // get_na_values for a data column.
+    fn for_col(ref self, k: ref Vec[Lab]) -> NaSet {
+        if not self.filter {
+            return empty_na();
+        }
+        match self.by_col {
+            None => self.all.clone(),
+            Some(ref m) => {
+                if let Some(name) = key_name(k) {
+                    for (c, s) in m {
+                        if c == name {
+                            return s.clone();
+                        }
+                    }
+                }
+                if self.keep_default_na { na_set(Vec.new(), true) } else { empty_na() }
+            }
+        }
+    }
+
+    // The set _agg_index uses for an index level.
+    fn for_index(ref self, name: ref Vec[Lab]) -> NaSet {
+        if not self.filter {
+            return empty_na();
+        }
+        match self.by_col {
+            None => self.all.clone(),
+            Some(_) => {
+                if name.len() == 1 and lab_eq(name[0], Lab.Nil) {
+                    return empty_na();
+                }
+                self.for_col(name)
+            }
+        }
+    }
+
+    // `x in self.na_values` in _check_comments: a value of the set, or a
+    // key of the dict.
+    fn holds(ref self, x: Str) -> bool {
+        match self.by_col {
+            None => str_in(self.all.strs, x),
+            Some(ref m) => {
+                for (c, _) in m {
+                    if c == x {
+                        return true;
+                    }
+                }
+                false
+            }
+        }
+    }
+}
+
+// ------------------------------------------------------------ columns
+
+// A column as numpy and pandas hold it: numpy int64, float64 and bool,
+// an object array (Val.Na is NaN), a Categorical, pandas 3's str, and
+// the masked arrays of the nullable dtypes, where None is <NA>.
+#[derive(Clone)]
+enum Col {
+    Int(Vec[i64]),
+    Float(Vec[f64]),
+    Bool(Vec[bool]),
+    Obj(Vec[Val]),
+    Cat(Vec[Val]),
+    Str(Vec[Option[String]]),
+    NInt(Vec[Option[i64]]),
+    NFloat(Vec[Option[f64]]),
+    NBool(Vec[Option[bool]]),
+    NStr(Vec[Option[String]]),
+}
+
+// The dtype a DataFrame gives the column: an object array of strings
+// and NaN becomes pandas 3's str.
+fn dtype_name(c: ref Col) -> String {
+    match c {
+        Col.Int(_) => "int64".to_string(),
+        Col.Float(_) => "float64".to_string(),
+        Col.Bool(_) => "bool".to_string(),
+        Col.Obj(v) => {
+            let mut strs = 0;
+            for x in v {
+                match x {
+                    Val.S(_) => strs += 1,
+                    Val.Na => {}
+                    _ => return "object".to_string(),
+                }
+            }
+            if strs == 0 { "object".to_string() } else { "str".to_string() }
+        }
+        Col.Cat(_) => "category".to_string(),
+        Col.Str(_) => "str".to_string(),
+        Col.NInt(_) => "Int64".to_string(),
+        Col.NFloat(_) => "Float64".to_string(),
+        Col.NBool(_) => "boolean".to_string(),
+        Col.NStr(_) => "string".to_string(),
+    }
+}
+
+fn bool_word(b: bool) -> String {
+    if b { "True".to_string() } else { "False".to_string() }
+}
+
+// One value as to_csv writes it: missing values are empty.
+fn cell_text(c: ref Col, i: i64) -> String {
+    match c {
+        Col.Int(v) => v[i].to_string(),
+        Col.Float(v) => if is_nan(v[i]) { "".to_string() } else { float_repr(v[i]) },
+        Col.Bool(v) => bool_word(v[i]),
+        Col.Obj(v) => val_text(v[i]),
+        Col.Cat(v) => val_text(v[i]),
+        Col.Str(v) => match v[i] {
+            Some(s) => s.clone(),
+            None => "".to_string(),
+        },
+        Col.NInt(v) => match v[i] {
+            Some(n) => n.to_string(),
+            None => "".to_string(),
+        },
+        Col.NFloat(v) => match v[i] {
+            Some(x) => float_repr(x),
+            None => "".to_string(),
+        },
+        Col.NBool(v) => match v[i] {
+            Some(b) => bool_word(b),
+            None => "".to_string(),
+        },
+        Col.NStr(v) => match v[i] {
+            Some(s) => s.clone(),
+            None => "".to_string(),
+        },
+    }
+}
+
+// floatify: the number a string spells, and whether it could be an int.
+fn floatify(s: Str) -> Option[(f64, bool)] {
+    let t = py_strip(s);
+    let low = lower_ascii(t);
+    let body = if low.starts_with("-") or low.starts_with("+") { low[1..].to_string() } else { low.clone() };
+    if body == "inf" or body == "infinity" or body == "nan" {
+        return match py_float(t) {
+            Some(x) => Some((x, false)),
+            None => None,
+        };
+    }
+    if has_byte(t, b'_') {
+        return None;
+    }
+    match py_float(t) {
+        Some(x) => Some((x, not (has_byte(t, b'.') or has_byte(t, b'e') or has_byte(t, b'E')))),
+        None => None,
+    }
+}
+
+// maybe_convert_numeric over strings; None where it raises. With
+// `masked` a missing value goes in the mask instead of making the
+// column float.
+fn convert_numeric(vals: ref Vec[Val], na: ref NaSet, masked: bool) -> Option[Col] {
+    let mut floats: Vec[f64] = Vec.new();
+    let mut ints: Vec[i64] = Vec.new();
+    let mut mask: Vec[bool] = Vec.new();
+    let mut seen_float = false;
+    for v in vals {
+        let mut null = false;
+        match v {
+            Val.S(s) => {
+                if na.has(v) {
+                    null = true;
+                } else {
+                    if s.len() == 0 {
+                        return None;
+                    }
+                    let (x, maybe) = floatify(s)?;
+                    if na.has_num(x) {
+                        null = true;
+                    } else {
+                        floats.push(x);
+                        mask.push(false);
+                        if maybe {
+                            ints.push(py_int(s)?);
+                        } else {
+                            ints.push(0);
+                            seen_float = true;
+                        }
+                    }
+                }
+            }
+            Val.Na => null = true,
+            _ => return None,
+        }
+        if null {
+            floats.push(nan());
+            ints.push(0);
+            mask.push(true);
+            if not masked {
+                seen_float = true;
+            }
+        }
+    }
+    if masked {
+        let mut all = true;
+        for m in mask {
+            if not m {
+                all = false;
+            }
+        }
+        if all or not seen_float {
+            let mut out: Vec[Option[i64]] = Vec.new();
+            for i in 0..ints.len() {
+                out.push(if mask[i] { None } else { Some(ints[i]) });
+            }
+            return Some(Col.NInt(out));
+        }
+        let mut out: Vec[Option[f64]] = Vec.new();
+        for i in 0..floats.len() {
+            out.push(if mask[i] { None } else { Some(floats[i]) });
+        }
+        return Some(Col.NFloat(out));
+    }
+    if seen_float {
+        Some(Col.Float(floats))
+    } else {
+        Some(Col.Int(ints))
+    }
+}
+
+// sanitize_objects: the missing values become NaN; the count of them.
+fn sanitize(vals: own Vec[Val], na: ref NaSet) -> (Vec[Val], i64) {
+    let mut out: Vec[Val] = Vec.new();
+    let mut n: i64 = 0;
+    for v in vals.into_iter() {
+        if na.has(v) {
+            out.push(Val.Na);
+            n += 1;
+        } else {
+            out.push(v);
+        }
+    }
+    (out, n)
+}
+
+// maybe_convert_bool; None where it hands the values back.
+fn convert_bool(vals: ref Vec[Val], masked: bool) -> Option[Col] {
+    let mut out: Vec[Option[bool]] = Vec.new();
+    let mut has_na = false;
+    for v in vals {
+        match v {
+            Val.B(b) => out.push(Some(b)),
+            Val.S(s) => {
+                if s == "True" or s == "TRUE" or s == "true" {
+                    out.push(Some(true));
+                } else if s == "False" or s == "FALSE" or s == "false" {
+                    out.push(Some(false));
+                } else {
+                    return None;
+                }
+            }
+            Val.Na => {
+                out.push(None);
+                has_na = true;
+            }
+        }
+    }
+    if masked {
+        return Some(Col.NBool(out));
+    }
+    if has_na {
+        let mut objs: Vec[Val] = Vec.new();
+        for b in out {
+            objs.push(match b {
+                Some(x) => Val.B(x),
+                None => Val.Na,
+            });
+        }
+        return Some(Col.Obj(objs));
+    }
+    let mut bools: Vec[bool] = Vec.new();
+    for b in out {
+        bools.push(b.unwrap_or(false));
+    }
+    Some(Col.Bool(bools))
+}
+
+fn nan_count(c: ref Col) -> i64 {
+    let mut n: i64 = 0;
+    match c {
+        Col.Float(v) => {
+            for x in v {
+                if is_nan(x) {
+                    n += 1;
+                }
+            }
+        }
+        Col.NInt(v) => {
+            for x in v {
+                if x.is_none() {
+                    n += 1;
+                }
+            }
+        }
+        Col.NFloat(v) => {
+            for x in v {
+                if x.is_none() {
+                    n += 1;
+                }
+            }
+        }
+        _ => {}
+    }
+    n
+}
+
+// _infer_types for an object column of cells: the column and the
+// number of missing values in it.
+fn infer_types(vals: own Vec[Val], na: ref NaSet, masked: bool, try_num_bool: bool) -> (Col, i64) {
+    if try_num_bool {
+        if let Some(c) = convert_numeric(vals, na, masked) {
+            let n = nan_count(c);
+            return (c, n);
+        }
+    }
+    let (v, count) = sanitize(vals, na);
+    if try_num_bool {
+        if let Some(c) = convert_bool(v, masked) {
+            return (c, count);
+        }
+        if masked {
+            let mut out: Vec[Option[String]] = Vec.new();
+            for x in v {
+                out.push(match x {
+                    Val.Na => None,
+                    _ => Some(val_text(x)),
+                });
+            }
+            return (Col.NStr(out), count);
+        }
+    }
+    (Col.Obj(v), count)
+}
+
+// ------------------------------------------------------------ dtypes
+
+// pandas_dtype of a dtype argument, by the names the jobs use.
+fn known_dtype(kind: Str) -> bool {
+    kind == "str" or kind == "object" or kind == "string" or kind == "category" or kind == "int64" or kind == "float64" or kind == "bool" or kind == "Int64" or kind == "Float64" or kind == "boolean"
+}
+
+fn is_ea_dtype(kind: Str) -> bool {
+    kind == "str" or kind == "string" or kind == "category" or kind == "Int64" or kind == "Float64" or kind == "boolean"
+}
+
+fn is_string_dtype(kind: Str) -> bool {
+    kind == "str" or kind == "object" or kind == "string"
+}
+
+fn is_numeric_dtype(kind: Str) -> bool {
+    kind == "int64" or kind == "float64" or kind == "bool" or kind == "Int64" or kind == "Float64" or kind == "boolean"
+}
+
+fn is_bool_dtype(kind: Str) -> bool {
+    kind == "bool" or kind == "boolean"
+}
+
+fn dtype_error(kind: Str) -> PyErr {
+    py_err("TypeError", f"data type {py_repr(kind)} not understood")
+}
+
+// The values of a column as Python objects: a string, a number, NaN.
+fn as_vals(c: ref Col) -> Vec[Val] {
+    let mut out: Vec[Val] = Vec.new();
+    match c {
+        Col.Obj(v) => return v.clone(),
+        Col.Cat(v) => return v.clone(),
+        Col.Int(v) => {
+            for x in v {
+                out.push(Val.S(x.to_string()));
+            }
+        }
+        Col.Float(v) => {
+            for x in v {
+                out.push(if is_nan(x) { Val.Na } else { Val.S(float_repr(x)) });
+            }
+        }
+        Col.Bool(v) => {
+            for x in v {
+                out.push(Val.B(x));
+            }
+        }
+        _ => {
+            for i in 0..col_len(c) {
+                let t = cell_text(c, i);
+                out.push(if t.len() == 0 { Val.Na } else { Val.S(t) });
+            }
+        }
+    }
+    out
+}
+
+fn col_len(c: ref Col) -> i64 {
+    match c {
+        Col.Int(v) => v.len(),
+        Col.Float(v) => v.len(),
+        Col.Bool(v) => v.len(),
+        Col.Obj(v) => v.len(),
+        Col.Cat(v) => v.len(),
+        Col.Str(v) => v.len(),
+        Col.NInt(v) => v.len(),
+        Col.NFloat(v) => v.len(),
+        Col.NBool(v) => v.len(),
+        Col.NStr(v) => v.len(),
+    }
+}
+
+// float(x) and int(x) on an object array's element, as astype calls them.
+fn obj_float(v: ref Val) -> Option[f64] {
+    match v {
+        Val.Na => Some(nan()),
+        Val.S(s) => py_float(s),
+        Val.B(b) => Some(if b { 1.0 } else { 0.0 }),
+    }
+}
+
+fn obj_int(v: ref Val) -> Option[i64] {
+    match v {
+        Val.Na => None,
+        Val.S(s) => py_int(s),
+        Val.B(b) => Some(if b { 1 } else { 0 }),
+    }
+}
+
+// _cast_types for the dtypes the jobs name; `column` is the name an
+// error carries.
+fn cast_col(c: own Col, kind: Str, column: Str) -> Result[Col, PyErr] {
+    let fail = py_err("ValueError", f"Unable to convert column {column} to type {kind}");
+    if kind == "category" {
+        return Ok(Col.Cat(as_vals(c)));
+    }
+    if kind == "str" or kind == "string" {
+        let mut out: Vec[Option[String]] = Vec.new();
+        for v in as_vals(c) {
+            out.push(match v {
+                Val.Na => None,
+                _ => Some(val_text(v)),
+            });
+        }
+        return Ok(if kind == "str" { Col.Str(out) } else { Col.NStr(out) });
+    }
+    if kind == "Int64" or kind == "Float64" {
+        let mut ints: Vec[Option[i64]] = Vec.new();
+        let mut floats: Vec[Option[f64]] = Vec.new();
+        for v in as_vals(c) {
+            match v {
+                Val.Na => {
+                    ints.push(None);
+                    floats.push(None);
+                }
+                _ => {
+                    let t = val_text(v);
+                    match floatify(t) {
+                        Some((x, maybe)) => {
+                            floats.push(Some(x));
+                            if kind == "Int64" {
+                                if not maybe {
+                                    return Err(py_err("TypeError", "cannot safely cast non-equivalent float64 to int64"));
+                                }
+                                ints.push(py_int(t));
+                            }
+                        }
+                        None => return Err(py_err("ValueError", f"Unable to parse string \"{t}\"")),
+                    }
+                }
+            }
+        }
+        return Ok(if kind == "Int64" { Col.NInt(ints) } else { Col.NFloat(floats) });
+    }
+    if kind == "object" {
+        return Ok(Col.Obj(as_vals(c)));
+    }
+    if kind == "float64" {
+        let mut out: Vec[f64] = Vec.new();
+        match c {
+            Col.Int(v) => {
+                for x in v {
+                    out.push(x as f64);
+                }
+            }
+            Col.Bool(v) => {
+                for x in v {
+                    out.push(if x { 1.0 } else { 0.0 });
+                }
+            }
+            Col.Float(v) => return Ok(Col.Float(v)),
+            _ => {
+                for v in as_vals(c) {
+                    match obj_float(v) {
+                        Some(x) => out.push(x),
+                        None => return Err(fail),
+                    }
+                }
+            }
+        }
+        return Ok(Col.Float(out));
+    }
+    if kind == "int64" {
+        let mut out: Vec[i64] = Vec.new();
+        match c {
+            Col.Float(v) => {
+                for x in v {
+                    if is_nan(x) or x == inf() or x == -inf() {
+                        return Err(fail);
+                    }
+                    out.push(x as i64);
+                }
+            }
+            Col.Bool(v) => {
+                for x in v {
+                    out.push(if x { 1 } else { 0 });
+                }
+            }
+            Col.Int(v) => return Ok(Col.Int(v)),
+            _ => {
+                for v in as_vals(c) {
+                    match obj_int(v) {
+                        Some(x) => out.push(x),
+                        None => return Err(fail),
+                    }
+                }
+            }
+        }
+        return Ok(Col.Int(out));
+    }
+    if kind == "bool" {
+        let mut out: Vec[bool] = Vec.new();
+        match c {
+            Col.Int(v) => {
+                for x in v {
+                    out.push(x != 0);
+                }
+            }
+            Col.Float(v) => {
+                for x in v {
+                    out.push(x != 0.0);
+                }
+            }
+            Col.Bool(v) => return Ok(Col.Bool(v)),
+            _ => {
+                // numpy's object-to-bool is each value's truth: a string
+                // is True unless empty, NaN is True.
+                for v in as_vals(c) {
+                    out.push(match v {
+                        Val.Na => true,
+                        Val.S(s) => s.len() > 0,
+                        Val.B(b) => b,
+                    });
+                }
+            }
+        }
+        return Ok(Col.Bool(out));
+    }
+    Err(dtype_error(kind))
+}
+
+// Whether a column already has the dtype a cast asks for.
+fn has_dtype(c: ref Col, kind: Str) -> bool {
+    match c {
+        Col.Int(_) => kind == "int64",
+        Col.Float(_) => kind == "float64",
+        Col.Bool(_) => kind == "bool",
+        Col.Obj(_) => kind == "object",
+        _ => false,
+    }
+}
+
+// One data column through _convert_to_ndarrays: inference, then the
+// dtype asked for.
+fn convert_col(vals: own Vec[Val], na: ref NaSet, cast: ref Option[String], backend: bool, column: Str) -> Result[Col, PyErr] {
+    let (is_ea, try_num_bool) = match cast {
+        Some(k) => {
+            if not known_dtype(k) {
+                return Err(dtype_error(k));
+            }
+            (is_ea_dtype(k), not (is_ea_dtype(k) or is_string_dtype(k)))
+        }
+        None => (false, true),
+    };
+    let (cvals, na_count) = infer_types(vals, na, cast.is_none() and backend, try_num_bool);
+    match cast {
+        Some(k) => {
+            if not has_dtype(cvals, k) or is_ea {
+                if not is_ea and na_count > 0 and k == "bool" {
+                    return Err(py_err("ValueError", f"Bool column has NA values in column {column}"));
+                }
+                return cast_col(cvals, k, column);
+            }
+            Ok(cvals)
+        }
+        None => Ok(cvals),
+    }
+}
+// ------------------------------------------------------------ codecs
+
+// codecs.lookup: encodings.normalize_encoding, then the aliases of the
+// codecs this port carries. 0 is unknown; 1 utf-8, 2 utf-8-sig,
+// 3 latin-1, 4 cp1252, 5 ascii.
+fn normalize_encoding(name: Str) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    let mut punct = false;
+    for ch in lower_ascii(name).chars() {
+        if ch.is_alphanumeric() or ch == '.' {
+            if punct and out.len() > 0 {
+                out.push(b'_');
+            }
+            if (ch as u32) < 128 {
+                out.push(ch as u32 as u8);
+            }
+            punct = false;
+        } else {
+            punct = true;
+        }
+    }
+    from_bytes(out)
+}
+
+fn codec_id(name: Str) -> i64 {
+    let n = normalize_encoding(name);
+    let groups = [
+        (1, "utf_8 utf8 u8 utf utf8_ucs2 utf8_ucs4 cp65001"),
+        (2, "utf_8_sig"),
+        (3, "latin_1 latin1 latin l1 iso_8859_1 iso8859_1 8859 cp819 iso_ir_100 csisolatin1 ibm819 iso8859 iso_8859_1_1987"),
+        (4, "cp1252 windows_1252 1252"),
+        (5, "ascii us_ascii 646 ansi_x3.4_1968 ansi_x3_4_1968 ansi_x3.4_1986 cp367 csascii ibm367 iso646_us iso_646.irv_1991 iso_ir_6 us"),
+    ];
+    for (id, names) in groups {
+        for a in split_spaces(names) {
+            if a == n or a == replace_all(n, ".", "_") {
+                return id;
+            }
+        }
+    }
+    0
+}
+
+// The code points windows-1252 gives 0x80..0x9F; 0 where it has none.
+fn cp1252_high(b: i64) -> i64 {
+    let t = [0x20AC, 0, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021, 0x02C6, 0x2030, 0x0160, 0x2039, 0x0152, 0, 0x017D, 0, 0, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014, 0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0, 0x017E, 0x0178];
+    t[b - 0x80]
+}
+
+fn decode_error(codec: Str, b: ref Vec[u8], start: i64, end: i64, reason: Str) -> PyErr {
+    let what = if end - start == 1 {
+        f"byte 0x{hex_n(b[start] as i64, 2)} in position {start}"
+    } else {
+        f"bytes in position {start}-{end - 1}"
+    };
+    py_err("UnicodeDecodeError", f"'{codec}' codec can't decode {what}: {reason}")
+}
+
+// Python's strict UTF-8 decoder, with its error ranges and reasons.
+fn decode_utf8(b: ref Vec[u8], from: i64) -> Result[Vec[i64], PyErr] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = from;
+    let n = b.len();
+    while i < n {
+        let c = b[i] as i64;
+        if c < 0x80 {
+            out.push(c);
+            i += 1;
+            continue;
+        }
+        let (len, lo, hi) = if c >= 0xC2 and c <= 0xDF {
+            (2, 0x80, 0xBF)
+        } else if c == 0xE0 {
+            (3, 0xA0, 0xBF)
+        } else if c == 0xED {
+            (3, 0x80, 0x9F)
+        } else if c >= 0xE1 and c <= 0xEF {
+            (3, 0x80, 0xBF)
+        } else if c == 0xF0 {
+            (4, 0x90, 0xBF)
+        } else if c == 0xF4 {
+            (4, 0x80, 0x8F)
+        } else if c >= 0xF1 and c <= 0xF3 {
+            (4, 0x80, 0xBF)
+        } else {
+            return Err(decode_error("utf-8", b, i, i + 1, "invalid start byte"));
+        };
+        let mut cp = if len == 2 { c & 0x1F } else if len == 3 { c & 0x0F } else { c & 0x07 };
+        let mut k: i64 = 1;
+        while k < len {
+            if i + k >= n {
+                return Err(decode_error("utf-8", b, i, n, "unexpected end of data"));
+            }
+            let d = b[i + k] as i64;
+            let (l, h) = if k == 1 { (lo, hi) } else { (0x80, 0xBF) };
+            if d < l or d > h {
+                return Err(decode_error("utf-8", b, i, i + k, "invalid continuation byte"));
+            }
+            cp = (cp << 6) | (d & 0x3F);
+            k += 1;
+        }
+        out.push(cp);
+        i += len;
+    }
+    Ok(out)
+}
+
+// The file's bytes as text, as open(..., encoding=...) reads them.
+fn decode(b: ref Vec[u8], codec: i64) -> Result[Vec[i64], PyErr] {
+    if codec == 1 {
+        return decode_utf8(b, 0);
+    }
+    if codec == 2 {
+        let from = if b.len() >= 3 and b[0] == 0xEF and b[1] == 0xBB and b[2] == 0xBF { 3 } else { 0 };
+        return decode_utf8(b, from);
+    }
+    let mut out: Vec[i64] = Vec.new();
+    for i in 0..b.len() {
+        let c = b[i] as i64;
+        if codec == 5 and c >= 0x80 {
+            return Err(decode_error("ascii", b, i, i + 1, "ordinal not in range(128)"));
+        }
+        if codec == 4 and c >= 0x80 and c < 0xA0 {
+            let h = cp1252_high(c);
+            if h == 0 {
+                return Err(decode_error("charmap", b, i, i + 1, "character maps to <undefined>"));
+            }
+            out.push(h);
+        } else {
+            out.push(c);
+        }
+    }
+    Ok(out)
+}
+
+// The lines of the text as a file opened with newline="" yields them:
+// split after \n, \r\n or \r, with the line end kept.
+fn text_lines(t: ref Vec[i64]) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let mut cur: Vec[i64] = Vec.new();
+    let mut i: i64 = 0;
+    while i < t.len() {
+        let c = t[i];
+        cur.push(c);
+        if c == 10 {
+            out.push(cur);
+            cur = Vec.new();
+        } else if c == 13 {
+            if i + 1 < t.len() and t[i + 1] == 10 {
+                cur.push(10);
+                i += 1;
+            }
+            out.push(cur);
+            cur = Vec.new();
+        }
+        i += 1;
+    }
+    if cur.len() > 0 {
+        out.push(cur);
+    }
+    out
+}
+
+// ------------------------------------------------------------ FixedWidthReader
+
+// A column specification: a half-open interval of a line, either end
+// left open.
+#[derive(Clone)]
+struct Spec {
+    from: Option[i64],
+    to: Option[i64],
+}
+
+fn cp_in(set: ref Vec[i64], c: i64) -> bool {
+    for x in set {
+        if x == c {
+            return true;
+        }
+    }
+    false
+}
+
+// str.strip(chars).
+fn strip_chars(s: ref Vec[i64], chars: ref Vec[i64]) -> Vec[i64] {
+    let mut a: i64 = 0;
+    let mut b = s.len();
+    while a < b and cp_in(chars, s[a]) {
+        a += 1;
+    }
+    while b > a and cp_in(chars, s[b - 1]) {
+        b -= 1;
+    }
+    slice(s, a, b)
+}
+
+// A slice bound as Python resolves it.
+fn bound(x: ref Option[i64], n: i64, dflt: i64) -> i64 {
+    match x {
+        None => dflt,
+        Some(v) => {
+            let mut k = v;
+            if k < 0 {
+                k += n;
+                if k < 0 {
+                    k = 0;
+                }
+            }
+            if k > n { n } else { k }
+        }
+    }
+}
+
+// The index of a code-point string inside another, or -1.
+fn find_cps(s: ref Vec[i64], pat: ref Vec[i64]) -> i64 {
+    if pat.len() == 0 {
+        return 0;
+    }
+    let mut i: i64 = 0;
+    while i + pat.len() <= s.len() {
+        let mut ok = true;
+        for j in 0..pat.len() {
+            if s[i + j] != pat[j] {
+                ok = false;
+                break;
+            }
+        }
+        if ok {
+            return i;
+        }
+        i += 1;
+    }
+    -1
+}
+
+// The reader read_fwf's parser pulls rows from: each line cut at the
+// column specifications, every field stripped of the fill characters.
+struct Fwr {
+    lines: Vec[Vec[i64]],
+    at: i64,
+    specs: Vec[Spec],
+    delim: Vec[i64],
+}
+
+impl Fwr {
+    fn next(mut ref self) -> Option[Vec[String]] {
+        if self.at >= self.lines.len() {
+            return None;
+        }
+        let line = self.lines[self.at].clone();
+        self.at += 1;
+        let n = line.len();
+        let mut out: Vec[String] = Vec.new();
+        for sp in self.specs {
+            let a = bound(sp.from, n, 0);
+            let b = bound(sp.to, n, n);
+            let f = if a < b { slice(line, a, b) } else { Vec.new() };
+            out.push(to_string(strip_chars(f, self.delim)));
+        }
+        Some(out)
+    }
+}
+
+// The fill characters: "\n\r\t " unless a delimiter is given, which
+// joins "\r\n".
+fn fill_chars(delimiter: ref Option[String]) -> Vec[i64] {
+    match delimiter {
+        Some(d) => {
+            if d.len() > 0 {
+                let mut v = vec![13, 10];
+                for c in cps_of(d) {
+                    v.push(c);
+                }
+                return v;
+            }
+            vec![10, 13, 9, 32]
+        }
+        None => vec![10, 13, 9, 32],
+    }
+}
+
+// detect_colspecs: the runs of columns where any of the first
+// infer_nrows rows that skiprows keeps has a character that is not a
+// fill character.
+fn detect_colspecs(lines: ref Vec[Vec[i64]], infer_nrows: i64, skip: ref Vec[i64], delim: ref Vec[i64], comment: ref Option[String]) -> Result[Vec[Spec], PyErr] {
+    let mut rows: Vec[Vec[i64]] = Vec.new();
+    for i in 0..lines.len() {
+        if not int_in(skip, i) {
+            rows.push(lines[i].clone());
+        }
+        if rows.len() >= infer_nrows {
+            break;
+        }
+    }
+    if rows.len() == 0 {
+        return Err(py_err("EmptyDataError", "No rows from which to infer column width"));
+    }
+    let mut max_len: i64 = 0;
+    for r in rows {
+        if r.len() > max_len {
+            max_len = r.len();
+        }
+    }
+    let mut mask: Vec[bool] = Vec.new();
+    for _ in 0..max_len + 1 {
+        mask.push(false);
+    }
+    let cmt = match comment {
+        Some(c) => Some(cps_of(c)),
+        None => None,
+    };
+    for r0 in rows {
+        let r = match cmt {
+            Some(ref c) => {
+                let at = find_cps(r0, c);
+                if at >= 0 { slice(r0, 0, at) } else { r0.clone() }
+            }
+            None => r0.clone(),
+        };
+        for k in 0..r.len() {
+            if not cp_in(delim, r[k]) {
+                mask[k] = true;
+            }
+        }
+    }
+    let mut edges: Vec[i64] = Vec.new();
+    for k in 0..mask.len() {
+        let prev = if k == 0 { false } else { mask[k - 1] };
+        if mask[k] != prev {
+            edges.push(k);
+        }
+    }
+    let mut out: Vec[Spec] = Vec.new();
+    let mut k: i64 = 0;
+    while k + 1 < edges.len() {
+        out.push(Spec { from: Some(edges[k]), to: Some(edges[k + 1]) });
+        k += 2;
+    }
+    Ok(out)
+}
+// ------------------------------------------------------------ the options
+
+#[derive(Clone)]
+enum Hdr {
+    Infer,
+    NoHeader,
+    One(i64),
+    Many(Vec[i64]),
+}
+
+#[derive(Clone)]
+enum Cs {
+    Infer,
+    Unset,
+    Given(Vec[Spec]),
+}
+
+#[derive(Clone)]
+enum NaArg {
+    Default,
+    List(Vec[String]),
+    Map(Vec[(String, Vec[String])]),
+}
+
+#[derive(Clone)]
+enum Dt {
+    NoDt,
+    All(String),
+    Map(Vec[(String, String)]),
+}
+
+// The keyword arguments of one read_fwf call.
+#[derive(Clone)]
+struct Opts {
+    colspecs: Cs,
+    widths: Option[Vec[i64]],
+    infer_nrows: i64,
+    header: Hdr,
+    names: Option[Vec[String]],
+    usecols: Option[Vec[Ic]],
+    index_col: Option[Vec[Ic]],
+    index_col_list: bool,
+    skiprows: Vec[i64],
+    skipfooter: i64,
+    nrows: Option[i64],
+    chunksize: Option[i64],
+    comment: Option[String],
+    delimiter: Option[String],
+    thousands: Option[String],
+    decimal: String,
+    encoding: Option[String],
+    na_values: NaArg,
+    keep_default_na: bool,
+    na_filter: bool,
+    skip_blank_lines: bool,
+    dtype: Dt,
+    backend: Option[String],
+    head: Option[i64],
+}
+
+fn dtype_of(dt: ref Dt, k: ref Vec[Lab]) -> Option[String] {
+    match dt {
+        Dt.NoDt => None,
+        Dt.All(t) => Some(t.clone()),
+        Dt.Map(m) => {
+            let name = key_name(k)?;
+            for (c, t) in m {
+                if c == name {
+                    return Some(t.clone());
+                }
+            }
+            None
+        }
+    }
+}
+
+// ------------------------------------------------------------ the number pattern
+
+fn is_dcp(c: i64) -> bool {
+    c >= 48 and c <= 57
+}
+
+fn at_cps(s: ref Vec[i64], i: i64, pat: ref Vec[i64]) -> bool {
+    if pat.len() == 0 or i + pat.len() > s.len() {
+        return false;
+    }
+    for j in 0..pat.len() {
+        if s[i + j] != pat[j] {
+            return false;
+        }
+    }
+    true
+}
+
+// PythonParser.num.search on a stripped cell:
+// ^[\-\+]?([0-9]+T|[0-9])*(D[0-9]*)?([0-9]?(E|e)\-?[0-9]+)?$ with T the
+// thousands separator, or ^[\-\+]?[0-9]*(D[0-9]*)?(...)?$ without one.
+// The language is matched with sets of reachable positions.
+fn num_match(s: ref Vec[i64], thousands: ref Option[Vec[i64]], dec: i64) -> bool {
+    let n = s.len();
+    let mut p: i64 = 0;
+    if p < n and (s[p] == 45 or s[p] == 43) {
+        p = 1;
+    }
+    let mut r1: Vec[bool] = Vec.new();
+    for _ in 0..n + 1 {
+        r1.push(false);
+    }
+    r1[p] = true;
+    match thousands {
+        None => {
+            let mut q = p;
+            while q < n and is_dcp(s[q]) {
+                q += 1;
+                r1[q] = true;
+            }
+        }
+        Some(t) => {
+            for q in p..n {
+                if not r1[q] {
+                    continue;
+                }
+                if is_dcp(s[q]) {
+                    r1[q + 1] = true;
+                    let mut k = q;
+                    while k < n and is_dcp(s[k]) {
+                        k += 1;
+                        if at_cps(s, k, t) {
+                            r1[k + t.len()] = true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let mut r2 = r1.clone();
+    for q in 0..n {
+        if r1[q] and s[q] == dec {
+            r2[q + 1] = true;
+            let mut k = q + 1;
+            while k < n and is_dcp(s[k]) {
+                k += 1;
+                r2[k] = true;
+            }
+        }
+    }
+    let mut r3 = r2.clone();
+    for q in 0..n + 1 {
+        if not r2[q] {
+            continue;
+        }
+        let mut starts = vec![q];
+        if q < n and is_dcp(s[q]) {
+            starts.push(q + 1);
+        }
+        for e in starts {
+            if e < n and (s[e] == 69 or s[e] == 101) {
+                let mut k = e + 1;
+                if k < n and s[k] == 45 {
+                    k += 1;
+                }
+                while k < n and is_dcp(s[k]) {
+                    k += 1;
+                    r3[k] = true;
+                }
+            }
+        }
+    }
+    r3[n]
+}
+
+// ------------------------------------------------------------ the python engine
+
+// PythonParser with FixedWidthFieldParser's reader, as read_fwf drives
+// it: the reader's rows, the buffer of rows read ahead, and what
+// __init__ works out about the columns.
+struct Engine {
+    rd: Fwr,
+    buf: Vec[Vec[String]],
+    pos: i64,
+    line_pos: i64,
+    skip: Vec[i64],
+    skipfooter: i64,
+    comment: Option[String],
+    skip_blank: bool,
+    names: Option[Vec[String]],
+    header: Option[Vec[i64]],
+    have_mi: bool,
+    index_col: Option[Vec[Ic]],
+    usecols: Option[Vec[Ic]],
+    usecols_str: bool,
+    col_indices: Option[Vec[i64]],
+    implicit_index: bool,
+    num_orig: i64,
+    unnamed: Vec[String],
+    header_line: Option[Vec[String]],
+    na: NaSpec,
+    dtype: Dt,
+    backend: bool,
+    thousands: Option[Vec[i64]],
+    decimal: Vec[i64],
+    no_thousands: Vec[i64],
+    orig_names: Vec[Vec[Lab]],
+    columns: Vec[Vec[Lab]],
+    index_names: Option[Vec[Vec[Lab]]],
+    col_names: Option[Vec[Lab]],
+    first_chunk: bool,
+    delimiter: Option[String],
+}
+
+fn strs_to_labs(v: ref Vec[String]) -> Vec[Lab] {
+    let mut out: Vec[Lab] = Vec.new();
+    for s in v {
+        out.push(Lab.S(s.clone()));
+    }
+    out
+}
+
+fn ic_repr(c: ref Ic) -> String {
+    match c {
+        Ic.I(n) => n.to_string(),
+        Ic.S(s) => py_repr(s),
+    }
+}
+
+fn index_error() -> PyErr {
+    py_err("IndexError", "list index out of range")
+}
+
+// A Python list index, negative ones from the end.
+fn py_index(i: i64, n: i64) -> Result[i64, PyErr] {
+    let k = if i < 0 { i + n } else { i };
+    if k < 0 or k >= n {
+        return Err(index_error());
+    }
+    Ok(k)
+}
+
+impl Engine {
+    fn skipped(ref self, i: i64) -> bool {
+        int_in(self.skip, i)
+    }
+
+    // _check_comments on one row: the first field holding the comment
+    // character is cut there, and the fields after it go.
+    fn check_comments(ref self, line: own Vec[String]) -> Vec[String] {
+        let c = match self.comment {
+            Some(ref c) => cps_of(c),
+            None => return line,
+        };
+        let mut rl: Vec[String] = Vec.new();
+        for x in line.into_iter() {
+            let xc = cps_of(x);
+            let at = find_cps(xc, c);
+            if at < 0 or self.na.holds(x) {
+                rl.push(x);
+            } else {
+                if at > 0 {
+                    rl.push(to_string(slice(xc, 0, at)));
+                }
+                break;
+            }
+        }
+        rl
+    }
+
+    // _next_line: skips the rows skiprows names (only before the first
+    // read), then the comment and blank rows.
+    fn next_line(mut ref self) -> Result[Option[Vec[String]], PyErr] {
+        while self.skipped(self.pos) {
+            self.pos += 1;
+            if self.rd.next().is_none() {
+                return Ok(None);
+            }
+        }
+        let mut line: Vec[String] = Vec.new();
+        loop {
+            let orig = match self.rd.next() {
+                Some(l) => l,
+                None => return Ok(None),
+            };
+            self.pos += 1;
+            let l = self.check_comments(orig.clone());
+            if self.skip_blank {
+                if fwf_keep(l) {
+                    line = l;
+                    break;
+                }
+            } else if is_line_empty(orig) or l.len() > 0 {
+                line = l;
+                break;
+            }
+        }
+        if self.pos == 1 {
+            line = check_for_bom(line)?;
+        }
+        self.line_pos += 1;
+        self.buf.push(line.clone());
+        Ok(Some(line))
+    }
+
+    fn buffered_line(mut ref self) -> Result[Option[Vec[String]], PyErr] {
+        if self.buf.len() > 0 {
+            return Ok(Some(self.buf[0].clone()));
+        }
+        self.next_line()
+    }
+
+    // The _header_line property (header=None): the first row, kept.
+    fn get_header_line(mut ref self) -> Result[Vec[String], PyErr] {
+        if let Some(ref l) = self.header_line {
+            return Ok(l.clone());
+        }
+        let line = match self.buffered_line()? {
+            Some(l) => l,
+            None => match self.names {
+                Some(ref n) => {
+                    if n.len() == 0 {
+                        return Err(no_columns());
+                    }
+                    n.clone()
+                }
+                None => return Err(no_columns()),
+            },
+        };
+        self.header_line = Some(line.clone());
+        Ok(line)
+    }
+
+    // _handle_usecols: sets col_indices and keeps those columns of each
+    // header row.
+    fn handle_usecols(mut ref self, columns: own Vec[Vec[Lab]], key: ref Vec[Lab], num_orig: i64) -> Result[Vec[Vec[Lab]], PyErr] {
+        let uc = match self.usecols {
+            Some(ref u) => u.clone(),
+            None => return Ok(columns),
+        };
+        let mut picked: Vec[i64] = Vec.new();
+        if self.usecols_str {
+            if columns.len() > 1 {
+                return Err(py_err("ValueError", "If using multiple headers, usecols must be integers."));
+            }
+            for c in uc {
+                match c {
+                    Ic.S(name) => {
+                        let mut found: i64 = -1;
+                        for j in 0..key.len() {
+                            if found < 0 and lab_eq(key[j], Lab.S(name.clone())) {
+                                found = j;
+                            }
+                        }
+                        if found < 0 {
+                            let mut missing: Vec[String] = Vec.new();
+                            for d in uc {
+                                if let Ic.S(m) = d {
+                                    let mut there = false;
+                                    for l in key {
+                                        if lab_eq(l, Lab.S(m.clone())) {
+                                            there = true;
+                                        }
+                                    }
+                                    if not there {
+                                        missing.push(py_repr(m));
+                                    }
+                                }
+                            }
+                            return Err(py_err("ValueError", f"Usecols do not match columns, columns expected but not found: {list_repr(missing)}"));
+                        }
+                        picked.push(found);
+                    }
+                    Ic.I(n) => picked.push(n),
+                }
+            }
+        } else {
+            let mut missing: Vec[String] = Vec.new();
+            let mut ints: Vec[i64] = Vec.new();
+            for c in uc {
+                if let Ic.I(n) = c {
+                    ints.push(n);
+                }
+            }
+            for n in sorted_ints(ints) {
+                if n >= num_orig {
+                    missing.push(n.to_string());
+                }
+            }
+            if missing.len() > 0 {
+                return Err(py_err("ParserError", f"Defining usecols with out-of-bounds indices is not allowed. {list_repr(missing)} are out-of-bounds."));
+            }
+            picked = ints;
+        }
+        let mut out: Vec[Vec[Lab]] = Vec.new();
+        for col in columns {
+            let mut row: Vec[Lab] = Vec.new();
+            for i in 0..col.len() {
+                if int_in(picked, i) {
+                    row.push(col[i].clone());
+                }
+            }
+            out.push(row);
+        }
+        let mut uniq: Vec[i64] = Vec.new();
+        for p in picked {
+            if not int_in(uniq, p) {
+                uniq.push(p);
+            }
+        }
+        self.col_indices = Some(sorted_ints(uniq));
+        Ok(out)
+    }
+
+    // The dtype dict follows a renamed duplicate column.
+    fn carry_dtype(mut ref self, old: ref Vec[Lab], new: ref Vec[Lab]) {
+        let (o, n) = match (key_name(old), key_name(new)) {
+            (Some(a), Some(b)) => (a, b),
+            _ => return,
+        };
+        let mut m = match self.dtype {
+            Dt.Map(ref m) => m.clone(),
+            _ => return,
+        };
+        let mut have_old: Option[String] = None;
+        let mut have_new = false;
+        for (c, t) in m {
+            if c == o {
+                have_old = Some(t.clone());
+            }
+            if c == n {
+                have_new = true;
+            }
+        }
+        if let Some(t) = have_old {
+            if not have_new {
+                m.push((n, t));
+                self.dtype = Dt.Map(m);
+            }
+        }
+    }
+
+    // _infer_columns: the header rows (or names, or positions), and the
+    // number of columns in the file.
+    fn infer_columns(mut ref self) -> Result[Vec[Vec[Lab]], PyErr] {
+        let names = self.names.clone();
+        let mut num_orig: i64 = 0;
+        let mut clear_buffer = true;
+        let mut columns: Vec[Vec[Lab]] = Vec.new();
+        match self.header.clone() {
+            Some(h0) => {
+                let have_mi = self.have_mi;
+                let mut hs = h0.clone();
+                if have_mi {
+                    hs.push(h0[h0.len() - 1] + 1);
+                }
+                let last = hs[hs.len() - 1];
+                let mut level: i64 = 0;
+                for hr in hs {
+                    let mut got = self.buffered_line()?;
+                    let mut stopped = got.is_none();
+                    while not stopped and self.line_pos <= hr {
+                        got = self.next_line()?;
+                        stopped = got.is_none();
+                    }
+                    let line: Vec[String] = if stopped {
+                        if 0 < self.line_pos and self.line_pos <= hr and (not have_mi or hr != last) {
+                            let mut joi: Vec[String] = Vec.new();
+                            let n = if have_mi { hs.len() - 1 } else { hs.len() };
+                            for i in 0..n {
+                                joi.push(hs[i].to_string());
+                            }
+                            return Err(py_err("ValueError", f"Passed header=[{join(joi, ",")}], len of {joi.len()}, but only {self.line_pos} lines in file"));
+                        }
+                        if have_mi and hr > 0 {
+                            if clear_buffer {
+                                self.buf.clear();
+                            }
+                            let mut nils: Vec[Lab] = Vec.new();
+                            for _ in 0..columns[columns.len() - 1].len() {
+                                nils.push(Lab.Nil);
+                            }
+                            columns.push(nils);
+                            self.num_orig = num_orig;
+                            return Ok(columns);
+                        }
+                        match names {
+                            Some(ref n) => {
+                                if n.len() == 0 {
+                                    return Err(no_columns());
+                                }
+                                n.clone()
+                            }
+                            None => return Err(no_columns()),
+                        }
+                    } else {
+                        got.unwrap()
+                    };
+                    let mut this: Vec[Lab] = Vec.new();
+                    let mut this_unnamed: Vec[i64] = Vec.new();
+                    for i in 0..line.len() {
+                        if line[i].len() == 0 {
+                            this.push(Lab.S(if have_mi { f"Unnamed: {i}_level_{level}" } else { f"Unnamed: {i}" }));
+                            this_unnamed.push(i);
+                        } else {
+                            this.push(Lab.S(line[i].clone()));
+                        }
+                    }
+                    if not have_mi {
+                        let mut order: Vec[i64] = Vec.new();
+                        for i in 0..this.len() {
+                            if not int_in(this_unnamed, i) {
+                                order.push(i);
+                            }
+                        }
+                        for i in this_unnamed {
+                            order.push(i);
+                        }
+                        let mut counts: Vec[(Vec[Lab], i64)] = Vec.new();
+                        for i in order {
+                            let old = vec![this[i].clone()];
+                            let mut col = old.clone();
+                            let mut cur = key_count(counts, col);
+                            if cur > 0 {
+                                while cur > 0 {
+                                    set_key_count(mut counts, old, cur + 1);
+                                    col = vec![Lab.S(f"{key_fstr(old)}.{cur}")];
+                                    let mut present = false;
+                                    for t in this {
+                                        if lab_eq(t, col[0]) {
+                                            present = true;
+                                        }
+                                    }
+                                    if present {
+                                        cur += 1;
+                                    } else {
+                                        cur = key_count(counts, col);
+                                    }
+                                }
+                                self.carry_dtype(old, col);
+                            }
+                            this[i] = col[0].clone();
+                            set_key_count(mut counts, col, cur + 1);
+                        }
+                    } else if hr == last {
+                        let lc = this.len();
+                        let ic = match self.index_col {
+                            Some(ref v) => v.len(),
+                            None => 0,
+                        };
+                        let uc = this_unnamed.len();
+                        if (lc != uc and lc - ic > uc) or ic == 0 {
+                            clear_buffer = false;
+                            let mut nils: Vec[Lab] = Vec.new();
+                            for _ in 0..lc {
+                                nils.push(Lab.Nil);
+                            }
+                            this = nils;
+                            let keep = self.buf[self.buf.len() - 1].clone();
+                            self.buf = vec![keep];
+                        }
+                    }
+                    for i in this_unnamed {
+                        if let Lab.S(s) = this[i] {
+                            self.unnamed.push(s.clone());
+                        }
+                    }
+                    columns.push(this);
+                    if columns.len() == 1 {
+                        num_orig = columns[0].len();
+                    }
+                    level += 1;
+                }
+                if clear_buffer {
+                    self.buf.clear();
+                }
+                match names {
+                    Some(ref nm) => {
+                        let first_line = self.next_line()?;
+                        let len_first = match first_line {
+                            Some(ref l) => l.len(),
+                            None => 0,
+                        };
+                        if nm.len() > columns[0].len() and nm.len() > len_first {
+                            return Err(names_mismatch());
+                        }
+                        if columns.len() > 1 {
+                            return Err(py_err("TypeError", "Cannot pass names with multi-index columns"));
+                        }
+                        let labs = strs_to_labs(nm);
+                        if self.usecols.is_some() {
+                            let _ = self.handle_usecols(columns.clone(), labs, num_orig)?;
+                        } else {
+                            num_orig = nm.len();
+                        }
+                        let mut done = false;
+                        if let Some(ref ci) = self.col_indices {
+                            if nm.len() != ci.len() {
+                                let mut row: Vec[Lab] = Vec.new();
+                                for i in sorted_ints(ci) {
+                                    if i >= labs.len() {
+                                        return Err(index_error());
+                                    }
+                                    row.push(labs[i].clone());
+                                }
+                                columns = vec![row];
+                                done = true;
+                            }
+                        }
+                        if not done {
+                            columns = vec![labs];
+                        }
+                    }
+                    None => {
+                        let key = columns[0].clone();
+                        columns = self.handle_usecols(columns, key, num_orig)?;
+                    }
+                }
+            }
+            None => {
+                let line = self.get_header_line()?;
+                let ncols = line.len();
+                num_orig = ncols;
+                let empty_names = match names {
+                    Some(ref n) => n.len() == 0,
+                    None => true,
+                };
+                if empty_names {
+                    let mut labs: Vec[Lab] = Vec.new();
+                    for i in 0..ncols {
+                        labs.push(Lab.I(i));
+                    }
+                    let key = labs.clone();
+                    columns = self.handle_usecols(vec![labs], key, ncols)?;
+                } else {
+                    let nm = names.clone().unwrap();
+                    let labs = strs_to_labs(nm);
+                    let uc_len = match self.usecols {
+                        Some(ref u) => Some(u.len()),
+                        None => None,
+                    };
+                    match uc_len {
+                        None => {
+                            columns = self.handle_usecols(vec![labs.clone()], labs, ncols)?;
+                            num_orig = nm.len();
+                        }
+                        Some(ul) => {
+                            if nm.len() >= ncols {
+                                columns = self.handle_usecols(vec![labs.clone()], labs, ncols)?;
+                                num_orig = nm.len();
+                            } else if nm.len() != ul {
+                                return Err(names_mismatch());
+                            } else {
+                                columns = vec![labs.clone()];
+                                let _ = self.handle_usecols(columns.clone(), labs, ncols)?;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        self.num_orig = num_orig;
+        Ok(columns)
+    }
+
+    // _clean_index_names: the names of the index columns and the index
+    // columns as positions (a name not found stays a name).
+    fn clean_index_names(ref self, cols: ref Vec[Vec[Lab]], index_col: ref Option[Vec[Ic]]) -> Result[(Option[Vec[Vec[Lab]]], Vec[Vec[Lab]], Option[Vec[Ic]]), PyErr] {
+        let ic = match index_col {
+            Some(ref v) => v.clone(),
+            None => return Ok((None, cols.clone(), None)),
+        };
+        if cols.len() == 0 {
+            let mut names: Vec[Vec[Lab]] = Vec.new();
+            for _ in ic {
+                names.push(vec![Lab.Nil]);
+            }
+            return Ok((Some(names), Vec.new(), Some(ic)));
+        }
+        let mut columns = cols.clone();
+        let mut names: Vec[Vec[Lab]] = Vec.new();
+        let mut out_ic = ic.clone();
+        for i in 0..ic.len() {
+            match ic[i] {
+                Ic.S(ref c) => {
+                    names.push(key_of(c));
+                    let mut j: i64 = 0;
+                    while j < cols.len() {
+                        if key_eq(cols[j], key_of(c)) {
+                            out_ic[i] = Ic.I(j);
+                            let mut k: i64 = 0;
+                            while k < columns.len() and not key_eq(columns[k], key_of(c)) {
+                                k += 1;
+                            }
+                            if k < columns.len() {
+                                let _ = columns.remove(k);
+                            }
+                            break;
+                        }
+                        j += 1;
+                    }
+                }
+                Ic.I(c) => {
+                    let at = py_index(c, cols.len())?;
+                    let name = cols[at].clone();
+                    let mut k: i64 = 0;
+                    while k < columns.len() and not key_eq(columns[k], name) {
+                        k += 1;
+                    }
+                    if k >= columns.len() {
+                        return Err(py_err("ValueError", "list.remove(x): x not in list"));
+                    }
+                    let _ = columns.remove(k);
+                    names.push(name);
+                }
+            }
+        }
+        for i in 0..names.len() {
+            if names[i].len() == 1 {
+                if let Lab.S(ref s) = names[i][0] {
+                    if str_in(self.unnamed, s) {
+                        names[i] = vec![Lab.Nil];
+                    }
+                }
+            }
+        }
+        Ok((Some(names), columns, Some(out_ic)))
+    }
+
+    // _extract_multi_indexer_columns: with several header rows, the
+    // tuples, the index names from the last row, and the level names.
+    fn extract_mi(mut ref self, header0: own Vec[Vec[Lab]]) -> Result[Vec[Vec[Lab]], PyErr] {
+        let mut header = header0;
+        if header.len() < 2 {
+            let mut names: Vec[Vec[Lab]] = Vec.new();
+            for l in header[0] {
+                names.push(vec![l.clone()]);
+            }
+            return Ok(names);
+        }
+        let mut ic: Vec[i64] = Vec.new();
+        if let Some(ref v) = self.index_col {
+            for c in v {
+                if let Ic.I(n) = c {
+                    ic.push(n);
+                }
+            }
+        }
+        let idx_row = header.pop().unwrap();
+        let mut idx_keys: Vec[Vec[Lab]] = Vec.new();
+        for l in idx_row {
+            idx_keys.push(vec![l.clone()]);
+        }
+        let (n0, _, _) = self.clean_index_names(idx_keys, self.index_col)?;
+        self.index_names = n0;
+        let field_count = header[0].len();
+        for r in header {
+            if r.len() != field_count {
+                return Err(py_err("ParserError", "Header rows must have an equal number of columns."));
+            }
+        }
+        let mut names: Vec[Vec[Lab]] = Vec.new();
+        for i in 0..field_count {
+            if not int_in(ic, i) {
+                let mut t: Vec[Lab] = Vec.new();
+                for r in header {
+                    t.push(r[i].clone());
+                }
+                names.push(t);
+            }
+        }
+        for c in sorted_ints(ic) {
+            let at = if c > names.len() { names.len() } else { c };
+            names.insert(at, vec![Lab.I(c)]);
+        }
+        let mut col_names: Vec[Lab] = Vec.new();
+        for r in header {
+            if ic.len() > 0 {
+                let l = r[ic[0]].clone();
+                let keep = match l {
+                    Lab.Nil => false,
+                    Lab.S(ref s) => not str_in(self.unnamed, s),
+                    _ => true,
+                };
+                col_names.push(if keep { l } else { Lab.Nil });
+            } else {
+                col_names.push(Lab.Nil);
+            }
+        }
+        self.col_names = Some(col_names);
+        Ok(names)
+    }
+
+    // _get_index_name: an index named on its own row, an implicit index
+    // (more fields than names), or the index columns asked for.
+    fn get_index_name(mut ref self) -> Result[Option[Vec[Vec[Lab]]], PyErr] {
+        let mut columns = self.orig_names.clone();
+        let line = if self.header.is_none() {
+            Some(self.get_header_line()?)
+        } else {
+            self.next_line()?
+        };
+        let next = self.next_line()?;
+        let mut implicit: i64 = 0;
+        if let Some(ref l) = line {
+            implicit = l.len() - self.num_orig;
+            if let Some(ref nl) = next {
+                if self.header.is_some() and nl.len() == l.len() + self.num_orig {
+                    let mut ic: Vec[Ic] = Vec.new();
+                    for i in 0..l.len() {
+                        ic.push(Ic.I(i));
+                    }
+                    self.index_col = Some(ic);
+                    let rest: Vec[Vec[String]] = self.buf[1..].to_vec();
+                    self.buf = rest;
+                    let mut k = l.len();
+                    while k > 0 {
+                        k -= 1;
+                        columns.insert(0, key_of(l[k]));
+                    }
+                    self.orig_names = columns.clone();
+                    self.columns = columns.clone();
+                    self.num_orig = columns.len();
+                    return Ok(Some(strs_to_keys(l)));
+                }
+            }
+        }
+        self.columns = columns.clone();
+        if implicit > 0 {
+            self.implicit_index = true;
+            if self.index_col.is_none() {
+                let mut ic: Vec[Ic] = Vec.new();
+                for i in 0..implicit {
+                    ic.push(Ic.I(i));
+                }
+                self.index_col = Some(ic);
+            }
+            return Ok(None);
+        }
+        let (names, _, ic) = self.clean_index_names(columns, self.index_col)?;
+        self.index_col = ic;
+        Ok(names)
+    }
+
+    // _set_no_thousand_columns: the columns a non-numeric dtype keeps
+    // out of the thousands and decimal replacement.
+    fn set_no_thousands(mut ref self) -> Result[(), PyErr] {
+        let ci = self.col_indices.clone().unwrap();
+        let any = match self.dtype {
+            Dt.NoDt => false,
+            Dt.All(_) => true,
+            Dt.Map(ref m) => m.len() > 0,
+        };
+        if self.columns.len() == 0 or not any {
+            return Ok(());
+        }
+        if ci.len() != self.columns.len() {
+            let how = if self.columns.len() < ci.len() { "shorter" } else { "longer" };
+            return Err(py_err("ValueError", f"zip() argument 2 is {how} than argument 1"));
+        }
+        for k in 0..ci.len() {
+            match self.dtype {
+                Dt.All(ref t) => {
+                    if not is_numeric_dtype(t) {
+                        self.no_thousands.push(ci[k]);
+                    }
+                }
+                Dt.Map(_) => {
+                    if let Some(t) = dtype_of(self.dtype, self.columns[k]) {
+                        if not is_numeric_dtype(t) or is_bool_dtype(t) {
+                            self.no_thousands.push(ci[k]);
+                        }
+                    }
+                }
+                Dt.NoDt => {}
+            }
+        }
+        Ok(())
+    }
+
+    fn remove_skipped(ref self, rows: own Vec[Vec[String]]) -> Vec[Vec[String]] {
+        if self.skip.len() == 0 {
+            return rows;
+        }
+        let mut out: Vec[Vec[String]] = Vec.new();
+        let mut i: i64 = 0;
+        for r in rows.into_iter() {
+            if not self.skipped(i + self.pos) {
+                out.push(r);
+            }
+            i += 1;
+        }
+        out
+    }
+
+    // _search_replace_num_columns.
+    fn replace_num(ref self, lines: own Vec[Vec[String]], search: ref Vec[i64], replace: Str) -> Vec[Vec[String]] {
+        let srch = to_string(search);
+        let mut out: Vec[Vec[String]] = Vec.new();
+        for line in lines.into_iter() {
+            let mut rl: Vec[String] = Vec.new();
+            let mut i: i64 = 0;
+            for x in line.into_iter() {
+                let hit = find_cps(cps_of(x), search) >= 0 and not int_in(self.no_thousands, i) and num_match(cps_of(py_strip(x)), self.thousands, self.decimal[0]);
+                if hit {
+                    rl.push(replace_all(x, srch, replace));
+                } else {
+                    rl.push(x);
+                }
+                i += 1;
+            }
+            out.push(rl);
+        }
+        out
+    }
+
+    // _get_lines: the buffer and then `rows` more rows (all of them
+    // without a count) that skiprows keeps; None where it raises
+    // StopIteration.
+    fn get_lines(mut ref self, rows0: Option[i64]) -> Option[Vec[Vec[String]]] {
+        let mut lines: Vec[Vec[String]] = self.buf.clone();
+        let mut from_buf: Option[Vec[Vec[String]]] = None;
+        let mut rows = rows0;
+        if let Some(r) = rows0 {
+            if self.buf.len() >= r {
+                let head: Vec[Vec[String]] = self.buf[..r].to_vec();
+                let tail: Vec[Vec[String]] = self.buf[r..].to_vec();
+                from_buf = Some(head);
+                self.buf = tail;
+            } else {
+                rows = Some(r - self.buf.len());
+            }
+        }
+        match from_buf {
+            Some(h) => lines = h,
+            None => {
+                let mut new_rows: Vec[Vec[String]] = Vec.new();
+                let mut stopped = false;
+                match rows {
+                    Some(r) => {
+                        let mut row_index: i64 = 0;
+                        let mut row_ct: i64 = 0;
+                        let offset = self.pos;
+                        while row_ct < r {
+                            let row = match self.rd.next() {
+                                Some(x) => x,
+                                None => {
+                                    stopped = true;
+                                    break;
+                                }
+                            };
+                            if not self.skipped(offset + row_index) {
+                                row_ct += 1;
+                            }
+                            row_index += 1;
+                            new_rows.push(row);
+                        }
+                    }
+                    None => {
+                        loop {
+                            match self.rd.next() {
+                                Some(x) => new_rows.push(x),
+                                None => break,
+                            }
+                        }
+                        stopped = true;
+                    }
+                }
+                let len_new = new_rows.len();
+                let kept = self.remove_skipped(new_rows);
+                for r in kept.into_iter() {
+                    lines.push(r);
+                }
+                if stopped and lines.len() == 0 {
+                    return None;
+                }
+                self.pos += len_new;
+                self.buf.clear();
+            }
+        }
+        if self.skipfooter > 0 {
+            let keep = if lines.len() > self.skipfooter { lines.len() - self.skipfooter } else { 0 };
+            let cut: Vec[Vec[String]] = lines[..keep].to_vec();
+            lines = cut;
+        }
+        let mut out: Vec[Vec[String]] = Vec.new();
+        for l in lines.into_iter() {
+            let c = self.check_comments(l);
+            if not self.skip_blank or fwf_keep(c) {
+                out.push(c);
+            }
+        }
+        if let Some(t) = self.thousands.clone() {
+            out = self.replace_num(out, t, "");
+        }
+        if to_string(self.decimal) != "." {
+            let d = self.decimal.clone();
+            out = self.replace_num(out, d, ".");
+        }
+        Some(out)
+    }
+}
+
+fn no_columns() -> PyErr {
+    py_err("EmptyDataError", "No columns to parse from file")
+}
+
+fn names_mismatch() -> PyErr {
+    py_err("ValueError", "Number of passed names did not match number of header fields in the file")
+}
+
+fn strs_to_keys(v: ref Vec[String]) -> Vec[Vec[Lab]] {
+    let mut out: Vec[Vec[Lab]] = Vec.new();
+    for s in v {
+        out.push(key_of(s));
+    }
+    out
+}
+
+// FixedWidthFieldParser._remove_empty_lines keeps a row with a field
+// that is not blank.
+fn fwf_keep(line: ref Vec[String]) -> bool {
+    for x in line {
+        if py_strip(x).len() > 0 {
+            return true;
+        }
+    }
+    false
+}
+
+fn is_line_empty(line: ref Vec[String]) -> bool {
+    for x in line {
+        if x.len() > 0 {
+            return false;
+        }
+    }
+    true
+}
+
+// _check_for_bom: a byte-order mark at the start of the first field
+// goes, with the quotes after it.
+fn check_for_bom(line: own Vec[String]) -> Result[Vec[String], PyErr] {
+    if line.len() == 0 {
+        return Ok(line);
+    }
+    let f = cps_of(line[0]);
+    if f.len() == 0 or f[0] != 0xFEFF {
+        return Ok(line);
+    }
+    let mut new: Vec[i64] = Vec.new();
+    if f.len() > 1 and f[1] == 34 {
+        let mut end: i64 = -1;
+        for k in 2..f.len() {
+            if end < 0 and f[k] == 34 {
+                end = k;
+            }
+        }
+        if end < 0 {
+            return Err(py_err("ValueError", "substring not found"));
+        }
+        new = slice(f, 2, end);
+        if f.len() > end + 1 {
+            push_all(mut new, slice(f, end + 1, f.len()));
+        }
+    } else {
+        new = slice(f, 1, f.len());
+    }
+    let mut out = line;
+    out[0] = to_string(new);
+    Ok(out)
+}
+// ------------------------------------------------------------ reading a chunk
+
+// A DataFrame as to_csv needs it.
+struct Frame {
+    cols: Vec[Vec[Lab]],
+    mi: bool,
+    col_names: Vec[Lab],
+    data: Vec[Col],
+    index: Vec[Col],
+    index_names: Vec[Vec[Lab]],
+    nrows: i64,
+    start: i64,
+}
+
+// An empty column of a dtype, as Series([], dtype=...) makes it.
+fn empty_col(kind: ref Option[String]) -> Col {
+    match kind {
+        None => Col.Obj(Vec.new()),
+        Some(k) => {
+            if k == "int64" {
+                Col.Int(Vec.new())
+            } else if k == "float64" {
+                Col.Float(Vec.new())
+            } else if k == "bool" {
+                Col.Bool(Vec.new())
+            } else if k == "category" {
+                Col.Cat(Vec.new())
+            } else if k == "str" {
+                Col.Str(Vec.new())
+            } else if k == "string" {
+                Col.NStr(Vec.new())
+            } else if k == "Int64" {
+                Col.NInt(Vec.new())
+            } else if k == "Float64" {
+                Col.NFloat(Vec.new())
+            } else if k == "boolean" {
+                Col.NBool(Vec.new())
+            } else {
+                Col.Obj(Vec.new())
+            }
+        }
+    }
+}
+
+fn nas(n: i64) -> Vec[Val] {
+    let mut v: Vec[Val] = Vec.new();
+    for _ in 0..n {
+        v.push(Val.Na);
+    }
+    v
+}
+
+impl Engine {
+    // _rows_to_cols: the rows as columns, short rows padded with NaN, a
+    // row with too many fields an error.
+    fn rows_to_cols(ref self, content: ref Vec[Vec[String]]) -> Result[Vec[Vec[Val]], PyErr] {
+        let mut col_len = self.num_orig;
+        let nidx = match self.index_col {
+            Some(ref v) => v.len(),
+            None => 0,
+        };
+        if self.implicit_index {
+            col_len += nidx;
+        }
+        let mut max_len: i64 = 0;
+        for r in content {
+            if r.len() > max_len {
+                max_len = r.len();
+            }
+        }
+        if max_len > col_len and self.usecols.is_none() {
+            let n = content.len();
+            for i in 0..n {
+                if content[i].len() > col_len {
+                    let row_num = self.pos - (n - i + self.skipfooter);
+                    let mut msg = f"Expected {col_len} fields in line {row_num + 1}, saw {content[i].len()}";
+                    if let Some(ref d) = self.delimiter {
+                        if cps_of(d).len() > 1 {
+                            msg.push_str(". Error could possibly be due to quotes being ignored when a multi-char delimiter is used.");
+                        }
+                    }
+                    return Err(py_err("ParserError", msg));
+                }
+            }
+        }
+        let width = if max_len > col_len { max_len } else { col_len };
+        let mut cols: Vec[Vec[Val]] = Vec.new();
+        for j in 0..width {
+            let mut c: Vec[Val] = Vec.new();
+            for r in content {
+                c.push(if j < r.len() { Val.S(r[j].clone()) } else { Val.Na });
+            }
+            cols.push(c);
+        }
+        let picked = match self.usecols {
+            Some(ref u) => u.len() > 0,
+            None => false,
+        };
+        if picked {
+            let ci = self.col_indices.clone().unwrap();
+            let mut out: Vec[Vec[Val]] = Vec.new();
+            let mut i: i64 = 0;
+            for c in cols.into_iter() {
+                let keep = if self.implicit_index { i < nidx or int_in(ci, i - nidx) } else { int_in(ci, i) };
+                if keep {
+                    out.push(c);
+                }
+                i += 1;
+            }
+            return Ok(out);
+        }
+        Ok(cols)
+    }
+
+    // _get_empty_meta: the columns and index levels of a frame with no
+    // rows, typed by dtype.
+    fn empty_meta(ref self, names: own Vec[Vec[Lab]], start: i64) -> Result[Frame, PyErr] {
+        let mut columns = names;
+        let mut index: Vec[Col] = Vec.new();
+        let mut inames: Vec[Vec[Lab]] = Vec.new();
+        if let (Some(ic), Some(ns)) = (self.index_col.clone(), self.index_names.clone()) {
+            for n in ns {
+                index.push(empty_col(dtype_of(self.dtype, n)));
+                inames.push(n.clone());
+            }
+            let mut pos: Vec[i64] = Vec.new();
+            for c in ic {
+                match c {
+                    Ic.I(n) => pos.push(n),
+                    Ic.S(_) => return Err(py_err("TypeError", "'<' not supported between instances of 'str' and 'int'")),
+                }
+            }
+            let s = sorted_ints(pos);
+            for i in 0..s.len() {
+                let at = py_index(s[i] - i, columns.len())?;
+                let _ = columns.remove(at);
+            }
+        }
+        let mut data: Vec[Col] = Vec.new();
+        for c in columns {
+            data.push(empty_col(dtype_of(self.dtype, c)));
+        }
+        let mi = potential_mi(columns, None);
+        let cn = self.level_names(columns);
+        Ok(Frame { cols: columns, mi: mi, col_names: cn, data: data, index: index, index_names: inames, nrows: 0, start: start })
+    }
+
+    fn level_names(ref self, columns: ref Vec[Vec[Lab]]) -> Vec[Lab] {
+        match self.col_names {
+            Some(ref c) => c.clone(),
+            None => {
+                let levels = if columns.len() > 0 { columns[0].len() } else { 0 };
+                let mut v: Vec[Lab] = Vec.new();
+                for _ in 0..levels {
+                    v.push(Lab.Nil);
+                }
+                v
+            }
+        }
+    }
+
+    // _agg_index: the index columns, each through _infer_types and the
+    // dtype its name is given.
+    fn agg_index(ref self, arrays: own Vec[Vec[Val]]) -> Result[(Vec[Col], Vec[Vec[Lab]]), PyErr] {
+        let mut out: Vec[Col] = Vec.new();
+        let mut names: Vec[Vec[Lab]] = Vec.new();
+        if let Some(ref ns) = self.index_names {
+            if ns.len() != arrays.len() {
+                let how = if ns.len() < arrays.len() { "shorter" } else { "longer" };
+                return Err(py_err("ValueError", f"zip() argument 2 is {how} than argument 1"));
+            }
+        }
+        let mut i: i64 = 0;
+        for arr in arrays.into_iter() {
+            let name = match self.index_names {
+                Some(ref ns) => ns[i].clone(),
+                None => vec![Lab.Nil],
+            };
+            let na = self.na.for_index(name);
+            let cast = match self.index_names {
+                Some(_) => match self.dtype {
+                    Dt.Map(_) => dtype_of(self.dtype, name),
+                    _ => None,
+                },
+                None => None,
+            };
+            let try_num_bool = match cast {
+                Some(ref k) => not is_string_dtype(k),
+                None => true,
+            };
+            let (c, _) = infer_types(arr, na, cast.is_none() and self.backend, try_num_bool);
+            let c2 = match cast {
+                Some(ref k) => {
+                    if has_dtype(c, k) { c } else { cast_col(c, k, key_fstr(name))? }
+                }
+                None => c,
+            };
+            out.push(c2);
+            names.push(name);
+            i += 1;
+        }
+        Ok((out, names))
+    }
+
+    // read(rows): the next `rows` rows as a frame; None where the reader
+    // is done (StopIteration).
+    fn read(mut ref self, rows: Option[i64], start: i64) -> Result[Option[Frame], PyErr] {
+        let content = match self.get_lines(rows) {
+            Some(c) => c,
+            None => {
+                if self.first_chunk {
+                    Vec.new()
+                } else {
+                    return Ok(None);
+                }
+            }
+        };
+        self.first_chunk = false;
+        let names = dedup_names(self.orig_names, potential_mi(self.orig_names, self.index_col));
+        if content.len() == 0 {
+            return Ok(Some(self.empty_meta(names, start)?));
+        }
+        let mut alldata = self.rows_to_cols(content)?;
+        let nrows = content.len();
+        // _exclude_implicit_index and _convert_data
+        let offset = if self.implicit_index {
+            match self.index_col {
+                Some(ref v) => v.len(),
+                None => 0,
+            }
+        } else {
+            0
+        };
+        let mut conv: Vec[(Vec[Lab], Col)] = Vec.new();
+        for i in 0..names.len() {
+            if i < alldata.len() {
+                if i + offset >= alldata.len() {
+                    return Err(index_error());
+                }
+                let na = self.na.for_col(names[i]);
+                let cast = dtype_of(self.dtype, names[i]);
+                let c = convert_col(alldata[i + offset].clone(), na, cast, self.backend, key_fstr(names[i]))?;
+                conv.push((names[i].clone(), c));
+            }
+        }
+        // _make_index
+        let mut columns = names.clone();
+        let mut index: Vec[Col] = Vec.new();
+        let mut inames: Vec[Vec[Lab]] = Vec.new();
+        if let Some(ic) = self.index_col.clone() {
+            if ic.len() > 0 {
+                let mut to_remove: Vec[i64] = Vec.new();
+                let mut arrays: Vec[Vec[Val]] = Vec.new();
+                for c in ic {
+                    match c {
+                        Ic.S(s) => return Err(py_err("ValueError", f"Index {s} invalid")),
+                        Ic.I(n) => {
+                            let at = py_index(n, alldata.len())?;
+                            to_remove.push(n);
+                            arrays.push(alldata[at].clone());
+                        }
+                    }
+                }
+                let s = sorted_ints(to_remove);
+                let mut k = s.len();
+                while k > 0 {
+                    k -= 1;
+                    let at = py_index(s[k], alldata.len())?;
+                    let _ = alldata.remove(at);
+                    if not self.implicit_index {
+                        let ct = py_index(s[k], columns.len())?;
+                        let _ = columns.remove(ct);
+                    }
+                }
+                let (cols, ns) = self.agg_index(arrays)?;
+                index = cols;
+                inames = ns;
+            }
+        }
+        let mut data: Vec[Col] = Vec.new();
+        for k in columns {
+            let mut found: Option[Col] = None;
+            for (n, c) in conv {
+                if found.is_none() and key_eq(n, k) {
+                    found = Some(c.clone());
+                }
+            }
+            data.push(match found {
+                Some(c) => c,
+                None => Col.Obj(nas(nrows)),
+            });
+        }
+        let mi = potential_mi(columns, None);
+        let cn = self.level_names(columns);
+        Ok(Some(Frame { cols: columns, mi: mi, col_names: cn, data: data, index: index, index_names: inames, nrows: nrows, start: start }))
+    }
+}
+
+// ------------------------------------------------------------ to_csv
+
+fn csv_field(s: Str) -> String {
+    if has_byte(s, b',') or has_byte(s, b'"') or has_byte(s, b'\n') or has_byte(s, b'\r') {
+        f"\"{replace_all(s, "\"", "\"\"")}\""
+    } else {
+        s.to_string()
+    }
+}
+
+fn csv_row(fields: ref Vec[String]) -> String {
+    if fields.len() == 1 and fields[0].len() == 0 {
+        return "\"\"\n".to_string();
+    }
+    let mut parts: Vec[String] = Vec.new();
+    for f in fields {
+        parts.push(csv_field(f));
+    }
+    f"{join(parts, ",")}\n"
+}
+
+fn is_falsy(k: ref Vec[Lab]) -> bool {
+    if k.len() != 1 {
+        return false;
+    }
+    match k[0] {
+        Lab.Nil => true,
+        Lab.I(n) => n == 0,
+        Lab.S(s) => s.len() == 0,
+    }
+}
+
+// shape, dtypes and df.head(n).to_csv(lineterminator="\n").
+fn frame_text(f: ref Frame, head: ref Option[i64]) -> String {
+    let mut out = f"shape ({f.nrows}, {f.cols.len()})\n";
+    for i in 0..f.cols.len() {
+        out.push_str(f"  {key_repr(f.cols[i])}: {dtype_name(f.data[i])}\n");
+    }
+    let mut labels: Vec[String] = Vec.new();
+    if f.index.len() == 0 {
+        labels.push("".to_string());
+    } else if f.index.len() == 1 {
+        labels.push(key_csv(f.index_names[0]));
+    } else {
+        for n in f.index_names {
+            labels.push(if is_falsy(n) { "".to_string() } else { key_csv(n) });
+        }
+    }
+    if not f.mi {
+        let mut row = labels.clone();
+        for k in f.cols {
+            row.push(key_csv(k));
+        }
+        out.push_str(csv_row(row));
+    } else {
+        let levels = if f.cols.len() > 0 { f.cols[0].len() } else { f.col_names.len() };
+        for lv in 0..levels {
+            let mut row: Vec[String] = Vec.new();
+            row.push(if lv < f.col_names.len() { lab_csv(f.col_names[lv]) } else { "".to_string() });
+            for _ in 1..labels.len() {
+                row.push("".to_string());
+            }
+            for k in f.cols {
+                row.push(lab_csv(k[lv]));
+            }
+            out.push_str(csv_row(row));
+        }
+        let mut any = false;
+        for l in labels {
+            if l.len() > 0 {
+                any = true;
+            }
+        }
+        if any {
+            let mut row = labels.clone();
+            for _ in f.cols {
+                row.push("".to_string());
+            }
+            out.push_str(csv_row(row));
+        }
+    }
+    let n = match head {
+        Some(h) => if h < f.nrows { h } else { f.nrows },
+        None => f.nrows,
+    };
+    for r in 0..n {
+        let mut row: Vec[String] = Vec.new();
+        if f.index.len() == 0 {
+            row.push((f.start + r).to_string());
+        } else {
+            for c in f.index {
+                row.push(cell_text(c, r));
+            }
+        }
+        for c in f.data {
+            row.push(cell_text(c, r));
+        }
+        out.push_str(csv_row(row));
+    }
+    out
+}
+// ------------------------------------------------------------ the job's arguments
+
+fn int_arg(v: Str) -> Result[i64, PyErr] {
+    match py_int(v) {
+        Some(n) => Ok(n),
+        None => Err(py_err("ValueError", f"invalid literal for int() with base 10: {py_repr(v)}")),
+    }
+}
+
+fn ints_arg(v: Str) -> Result[Vec[i64], PyErr] {
+    let mut out: Vec[i64] = Vec.new();
+    for x in split_on(v, b',') {
+        out.push(int_arg(x)?);
+    }
+    Ok(out)
+}
+
+fn all_digits(s: Str) -> bool {
+    if s.len() == 0 {
+        return false;
+    }
+    for b in s.bytes() {
+        if not is_digit(b) {
+            return false;
+        }
+    }
+    true
+}
+
+// name_or_int in the oracle: digits are a position.
+fn ic_arg(s: Str) -> Ic {
+    if all_digits(s) {
+        Ic.I(int_arg(s).unwrap_or(0))
+    } else {
+        Ic.S(s.to_string())
+    }
+}
+
+fn bound_arg(s: Str) -> Result[Option[i64], PyErr] {
+    if s.len() == 0 {
+        return Ok(None);
+    }
+    Ok(Some(int_arg(s)?))
+}
+
+// The first `:` splits a `k:v` pair.
+fn split_pair(s: Str) -> (String, String) {
+    let b = to_bytes(s);
+    let mut c: i64 = 0;
+    while c < b.len() and b[c] != b':' {
+        c += 1;
+    }
+    (byte_str(b, 0, c), byte_str(b, c + 1, b.len()))
+}
+
+fn default_opts() -> Opts {
+    Opts {
+        colspecs: Cs.Infer,
+        widths: None,
+        infer_nrows: 100,
+        header: Hdr.Infer,
+        names: None,
+        usecols: None,
+        index_col: None,
+        index_col_list: false,
+        skiprows: Vec.new(),
+        skipfooter: 0,
+        nrows: None,
+        chunksize: None,
+        comment: None,
+        delimiter: None,
+        thousands: None,
+        decimal: ".".to_string(),
+        encoding: None,
+        na_values: NaArg.Default,
+        keep_default_na: true,
+        na_filter: true,
+        skip_blank_lines: true,
+        dtype: Dt.NoDt,
+        backend: None,
+        head: None,
+    }
+}
+
+// The keyword arguments the oracle builds from a job's `k=v` words.
+fn parse_opts(words: ref Vec[String]) -> Result[Opts, PyErr] {
+    let mut o = default_opts();
+    for w in words {
+        let b = to_bytes(w);
+        let mut eq: i64 = 0;
+        while eq < b.len() and b[eq] != b'=' {
+            eq += 1;
+        }
+        let k = byte_str(b, 0, eq);
+        let v = replace_all(byte_str(b, eq + 1, b.len()), "\\s", " ");
+        if k == "colspecs" {
+            if v == "None" {
+                o.colspecs = Cs.Unset;
+            } else if v == "infer" {
+                o.colspecs = Cs.Infer;
+            } else {
+                let mut specs: Vec[Spec] = Vec.new();
+                for p in split_on(v, b',') {
+                    let (a, z) = split_pair(p);
+                    specs.push(Spec { from: bound_arg(a)?, to: bound_arg(z)? });
+                }
+                o.colspecs = Cs.Given(specs);
+            }
+        } else if k == "widths" {
+            o.widths = Some(ints_arg(v)?);
+        } else if k == "infer_nrows" {
+            o.infer_nrows = int_arg(v)?;
+        } else if k == "nrows" {
+            o.nrows = Some(int_arg(v)?);
+        } else if k == "chunksize" {
+            o.chunksize = Some(int_arg(v)?);
+        } else if k == "skipfooter" {
+            o.skipfooter = int_arg(v)?;
+        } else if k == "header" {
+            o.header = if v == "None" {
+                Hdr.NoHeader
+            } else if has_byte(v, b',') {
+                Hdr.Many(ints_arg(v)?)
+            } else {
+                Hdr.One(int_arg(v)?)
+            };
+        } else if k == "names" {
+            o.names = Some(split_on(v, b','));
+        } else if k == "usecols" {
+            let mut u: Vec[Ic] = Vec.new();
+            for x in split_on(v, b',') {
+                let c = ic_arg(x);
+                let mut dup = false;
+                for d in u {
+                    if ic_eq(d, c) {
+                        dup = true;
+                    }
+                }
+                if not dup {
+                    u.push(c);
+                }
+            }
+            o.usecols = Some(u);
+        } else if k == "index_col" {
+            let mut ic: Vec[Ic] = Vec.new();
+            for x in split_on(v, b',') {
+                ic.push(ic_arg(x));
+            }
+            o.index_col_list = has_byte(v, b',');
+            o.index_col = Some(ic);
+        } else if k == "skiprows" {
+            if v.starts_with("[") {
+                o.skiprows = ints_arg(v[1..v.len() - 1])?;
+            } else if has_byte(v, b',') {
+                o.skiprows = ints_arg(v)?;
+            } else {
+                let n = int_arg(v)?;
+                o.skiprows = Vec.new();
+                for i in 0..n {
+                    o.skiprows.push(i);
+                }
+            }
+        } else if k == "dtype" {
+            if has_byte(v, b':') {
+                let mut m: Vec[(String, String)] = Vec.new();
+                for p in split_on(v, b',') {
+                    let (c, t) = split_pair(p);
+                    let mut set = false;
+                    for i in 0..m.len() {
+                        if m[i].0 == c {
+                            m[i].1 = t.clone();
+                            set = true;
+                        }
+                    }
+                    if not set {
+                        m.push((c, t));
+                    }
+                }
+                o.dtype = Dt.Map(m);
+            } else {
+                o.dtype = Dt.All(v.clone());
+            }
+        } else if k == "na_values" {
+            if has_byte(v, b':') {
+                let mut m: Vec[(String, Vec[String])] = Vec.new();
+                for p in split_on(v, b',') {
+                    let (c, x) = split_pair(p);
+                    m.push((c, split_on(x, b'|')));
+                }
+                o.na_values = NaArg.Map(m);
+            } else {
+                o.na_values = NaArg.List(split_on(v, b','));
+            }
+        } else if k == "keep_default_na" {
+            o.keep_default_na = v == "True";
+        } else if k == "na_filter" {
+            o.na_filter = v == "True";
+        } else if k == "skip_blank_lines" {
+            o.skip_blank_lines = v == "True";
+        } else if k == "head" {
+            o.head = Some(int_arg(v)?);
+        } else if k == "comment" {
+            o.comment = Some(v.clone());
+        } else if k == "delimiter" {
+            o.delimiter = Some(v.clone());
+        } else if k == "thousands" {
+            o.thousands = Some(v.clone());
+        } else if k == "decimal" {
+            o.decimal = v.clone();
+        } else if k == "encoding" {
+            o.encoding = Some(v.clone());
+        } else if k == "dtype_backend" {
+            o.backend = Some(v.clone());
+        } else {
+            return Err(py_err("TypeError", f"read_fwf() got an unexpected keyword argument '{k}'"));
+        }
+    }
+    Ok(o)
+}
+
+// ------------------------------------------------------------ read_fwf
+
+fn na_spec(o: ref Opts) -> NaSpec {
+    match o.na_values {
+        NaArg.Default => NaSpec { filter: o.na_filter, keep_default_na: o.keep_default_na, all: na_set(Vec.new(), o.keep_default_na), by_col: None },
+        NaArg.List(ref v) => NaSpec { filter: o.na_filter, keep_default_na: o.keep_default_na, all: na_set(v, o.keep_default_na), by_col: None },
+        NaArg.Map(ref m) => {
+            let mut by: Vec[(String, NaSet)] = Vec.new();
+            for (c, v) in m {
+                by.push((c.clone(), na_set(v, o.keep_default_na)));
+            }
+            NaSpec { filter: o.na_filter, keep_default_na: o.keep_default_na, all: empty_na(), by_col: Some(by) }
+        }
+    }
+}
+
+// pd.read_fwf(path, ...): its own checks, TextFileReader's, the file,
+// the parser's __init__, then read() once or a chunk at a time. What it
+// prints goes to `out`, so the chunks before an error stay.
+fn read_fwf(path: Str, o: ref Opts, out: mut ref String) -> Result[(), PyErr] {
+    let given = match o.colspecs {
+        Cs.Given(ref s) => Some(s.clone()),
+        _ => None,
+    };
+    let is_unset = match o.colspecs {
+        Cs.Unset => true,
+        _ => false,
+    };
+    if is_unset and o.widths.is_none() {
+        return Err(py_err("ValueError", "Must specify either colspecs or widths"));
+    }
+    if given.is_some() and o.widths.is_some() {
+        return Err(py_err("ValueError", "You must specify only one of 'widths' and 'colspecs'"));
+    }
+    let mut specs: Option[Vec[Spec]] = given;
+    if let Some(ref ws) = o.widths {
+        let mut v: Vec[Spec] = Vec.new();
+        let mut col: i64 = 0;
+        for w in ws {
+            v.push(Spec { from: Some(col), to: Some(col + w) });
+            col += w;
+        }
+        specs = Some(v);
+    }
+    if let Some(ref names) = o.names {
+        if let Some(ref s) = specs {
+            if names.len() != s.len() {
+                let len_index = match o.index_col {
+                    Some(ref v) => v.len(),
+                    None => 0,
+                };
+                if o.usecols.is_none() and names.len() + len_index != s.len() {
+                    return Err(py_err("ValueError", "Length of colspecs must match length of names"));
+                }
+            }
+        }
+    }
+    let backend = match o.backend {
+        Some(ref b) => {
+            if b != "numpy_nullable" and b != "pyarrow" {
+                return Err(py_err("ValueError", f"dtype_backend {b} is invalid, only 'numpy_nullable' and 'pyarrow' are allowed."));
+            }
+            true
+        }
+        None => false,
+    };
+    if let Some(c) = o.chunksize {
+        if c < 1 {
+            return Err(py_err("ValueError", "'chunksize' must be an integer >=1"));
+        }
+    }
+    if let Some(ref names) = o.names {
+        for i in 0..names.len() {
+            for j in 0..i {
+                if names[i] == names[j] {
+                    return Err(py_err("ValueError", "Duplicate names are not allowed."));
+                }
+            }
+        }
+    }
+    // TextFileReader
+    let header: Option[Vec[i64]] = match o.header {
+        Hdr.Infer => if o.names.is_some() { None } else { Some(vec![0]) },
+        Hdr.NoHeader => None,
+        Hdr.One(n) => Some(vec![n]),
+        Hdr.Many(ref v) => Some(v.clone()),
+    };
+    let header_list = match o.header {
+        Hdr.Many(_) => true,
+        _ => false,
+    };
+    if o.skipfooter != 0 {
+        if o.chunksize.is_some() {
+            return Err(py_err("ValueError", "'skipfooter' not supported for iteration"));
+        }
+        if let Some(n) = o.nrows {
+            if n != 0 {
+                return Err(py_err("ValueError", "'skipfooter' not supported with 'nrows'"));
+            }
+        }
+    }
+    if let Some(ref h) = header {
+        for x in h {
+            if x < 0 {
+                return Err(py_err("ValueError", "header must be integer or list of integers"));
+            }
+        }
+    }
+    // get_handle
+    let enc = match o.encoding {
+        Some(ref e) => e.clone(),
+        None => "utf-8".to_string(),
+    };
+    let codec = codec_id(enc);
+    if codec == 0 {
+        return Err(py_err("LookupError", f"unknown encoding: {enc}"));
+    }
+    let bytes = match fs.read_bytes(path.to_string()) {
+        Ok(b) => b,
+        Err(_) => return Err(py_err("FileNotFoundError", f"[Errno 2] No such file or directory: {py_repr(path)}")),
+    };
+    // ParserBase.__init__
+    if header_list {
+        let usecols_given = match o.usecols {
+            Some(ref u) => u.len() > 0,
+            None => false,
+        };
+        if usecols_given {
+            return Err(py_err("ValueError", "cannot specify usecols when specifying a multi-index header"));
+        }
+        let names_given = match o.names {
+            Some(ref n) => n.len() > 0,
+            None => false,
+        };
+        if names_given {
+            return Err(py_err("ValueError", "cannot specify names when specifying a multi-index header"));
+        }
+        if let Some(ref ic) = o.index_col {
+            for c in ic {
+                if let Ic.S(_) = c {
+                    return Err(py_err("ValueError", "index_col must only contain integers of column positions when specifying a multi-index header"));
+                }
+            }
+        }
+    }
+    let mut usecols_str = false;
+    if let Some(ref u) = o.usecols {
+        let mut strs = 0;
+        for c in u {
+            if let Ic.S(_) = c {
+                strs += 1;
+            }
+        }
+        if strs > 0 and strs < u.len() {
+            return Err(py_err("ValueError", "'usecols' must either be list-like of all strings, all unicode, all integers or a callable."));
+        }
+        usecols_str = strs > 0;
+    }
+    if o.skipfooter < 0 {
+        return Err(py_err("ValueError", "skipfooter cannot be negative"));
+    }
+    // FixedWidthReader: the file read, the column specifications.
+    let text = decode(bytes, codec)?;
+    let lines = text_lines(text);
+    let delim = fill_chars(o.delimiter);
+    let specs = match specs {
+        Some(s) => s,
+        None => detect_colspecs(lines, o.infer_nrows, o.skiprows, delim, o.comment)?,
+    };
+    let rd = Fwr { lines: lines, at: 0, specs: specs, delim: delim };
+    let thousands = match o.thousands {
+        Some(ref t) => Some(cps_of(t)),
+        None => None,
+    };
+    let mut p = Engine {
+        rd: rd,
+        buf: Vec.new(),
+        pos: 0,
+        line_pos: 0,
+        skip: o.skiprows.clone(),
+        skipfooter: o.skipfooter,
+        comment: o.comment.clone(),
+        skip_blank: o.skip_blank_lines,
+        names: o.names.clone(),
+        header: header.clone(),
+        have_mi: header_list and match header {
+            Some(ref h) => h.len() > 1,
+            None => false,
+        },
+        index_col: o.index_col.clone(),
+        usecols: o.usecols.clone(),
+        usecols_str: usecols_str,
+        col_indices: None,
+        implicit_index: false,
+        num_orig: 0,
+        unnamed: Vec.new(),
+        header_line: None,
+        na: na_spec(o),
+        dtype: o.dtype.clone(),
+        backend: backend,
+        thousands: thousands,
+        decimal: cps_of(o.decimal),
+        no_thousands: Vec.new(),
+        orig_names: Vec.new(),
+        columns: Vec.new(),
+        index_names: None,
+        col_names: None,
+        first_chunk: true,
+        delimiter: o.delimiter.clone(),
+    };
+    // PythonParser.__init__
+    let columns = p.infer_columns()?;
+    let names = p.extract_mi(columns)?;
+    p.orig_names = names.clone();
+    p.columns = names;
+    let index_names = p.get_index_name()?;
+    if p.index_names.is_none() {
+        p.index_names = index_names;
+    }
+    if p.col_indices.is_none() {
+        let mut ci: Vec[i64] = Vec.new();
+        for i in 0..p.columns.len() {
+            ci.push(i);
+        }
+        p.col_indices = Some(ci);
+    }
+    p.set_no_thousands()?;
+    if p.decimal.len() != 1 {
+        return Err(py_err("ValueError", "Only length-1 decimal markers supported"));
+    }
+    // TextFileReader.read / get_chunk
+    match o.chunksize {
+        None => {
+            let f = match p.read(o.nrows, 0)? {
+                Some(f) => f,
+                None => return Err(py_err("StopIteration", "")),
+            };
+            out.push_str(frame_text(f, o.head));
+        }
+        Some(size) => {
+            let mut currow: i64 = 0;
+            let mut k: i64 = 0;
+            loop {
+                let mut n = size;
+                if let Some(limit) = o.nrows {
+                    if currow >= limit {
+                        break;
+                    }
+                    if limit - currow < n {
+                        n = limit - currow;
+                    }
+                }
+                let f = match p.read(Some(n), currow)? {
+                    Some(f) => f,
+                    None => break,
+                };
+                currow += f.nrows;
+                out.push_str(f"chunk {k}\n");
+                out.push_str(frame_text(f, o.head));
+                k += 1;
+            }
+            out.push_str("done\n");
+        }
+    }
+    Ok(())
+}
+
+fn run_job(line: Str, out: mut ref String) -> Result[(), PyErr] {
+    let w = split_on(line, b' ');
+    if w.len() < 2 or w[0] != "read" {
+        return Err(py_err("ValueError", f"unknown job {py_repr(line)}"));
+    }
+    let mut rest: Vec[String] = Vec.new();
+    for i in 2..w.len() {
+        rest.push(w[i].clone());
+    }
+    let o = parse_opts(rest)?;
+    read_fwf(f"data/{w[1]}", o, mut out)
+}
+
+// The transcript of one job.
+fn transcript(line: Str) -> String {
+    let mut t = f"$ {line}\n";
+    let mut body = String.new();
+    let r = run_job(line, mut body);
+    t.push_str(body);
+    if let Err(e) = r {
+        t.push_str(f"! {e.kind}: {e.msg}\n");
+    }
+    t
+}
+
+fn put_bytes(path: Str, b: Vec[u8]) -> Result[(), String] {
+    if let Err(e) = fs.write_bytes(path.to_string(), b) {
+        return Err(f"cannot write {path}: {e}");
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = fs.create_dir_all("data".to_string()) {
+        eprintln(f"cannot create data: {e}");
+        return;
+    }
+    if let Err(e) = write_data() {
+        eprintln(e);
+        return;
+    }
+    let jobs = match fs.read_to_string("data/jobs.txt".to_string()) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln(f"cannot read jobs.txt: {e}");
+            return;
+        }
+    };
+    let mut lines: Vec[String] = Vec.new();
+    for l in lines_of(jobs) {
+        if l.len() > 0 {
+            lines.push(l.clone());
+        }
+    }
+    // Every job in a task of its own; the transcript prints in job order.
+    let group = TaskGroup.new();
+    let mut handles = Vec.new();
+    for line in lines {
+        handles.push(group.spawn(|| transcript(line)));
+    }
+    for h in handles.into_iter() {
+        print(h.join());
+    }
+}
+
+// ============================================================ data
+
+// The files under data/, in name order.
+fn write_data() -> Result[(), String] {
+    put_bytes("data/blank.txt", unhex(file_0()))?;
+    put_bytes("data/bom.txt", unhex(file_1()))?;
+    put_bytes("data/df.txt", unhex(file_2()))?;
+    put_bytes("data/docker.txt", unhex(file_3()))?;
+    put_bytes("data/empty.txt", unhex(file_4()))?;
+    put_bytes("data/frame.txt", unhex(file_5()))?;
+    put_bytes("data/grouped.txt", unhex(file_6()))?;
+    put_bytes("data/invoice.txt", unhex(file_7()))?;
+    put_bytes("data/jobs.txt", unhex(file_8()))?;
+    put_bytes("data/ledger.txt", unhex(file_9()))?;
+    put_bytes("data/mac.txt", unhex(file_10()))?;
+    put_bytes("data/named.txt", unhex(file_11()))?;
+    put_bytes("data/payroll.dat", unhex(file_12()))?;
+    put_bytes("data/pods.txt", unhex(file_13()))?;
+    put_bytes("data/register.txt", unhex(file_14()))?;
+    put_bytes("data/sensors.log", unhex(file_15()))?;
+    put_bytes("data/stations.txt", unhex(file_16()))?;
+    Ok(())
+}
+
+// data/blank.txt
+fn file_0() -> String {
+    """
+0a2020200a0a
+"""
+}
+
+// data/bom.txt
+fn file_1() -> String {
+    """
+efbbbf736b752020202020717479202070726963650a41422d3130302020202033202031392e39390a41422d31303120
+20203132202020342e35300a43442d3230302020202031203132302e30300a
+"""
+}
+
+// data/df.txt
+fn file_2() -> String {
+    """
+46696c6573797374656d20202020202053697a6520205573656420417661696c2055736525204d6f756e746564206f6e
+0a2f6465762f6e766d65306e3170322020343638472020323031472020323434472020343625202f0a746d7066732020
+202020202020202020372e38472020312e324d2020372e38472020203125202f6465762f73686d0a2f6465762f6e766d
+65306e31703120203531314d2020362e314d20203530354d2020203225202f626f6f742f6566690a2f6465762f736461
+3120202020202020332e36542020322e39542020353430472020383525202f6d6e742f6261636b75700a6e61733a2f65
+78706f72742020202020313154202020382e34542020322e31542020383125202f6d6e742f6e61730a
+"""
+}
+
+// data/docker.txt
+fn file_3() -> String {
+    """
+434f4e5441494e4552204944202020494d41474520202020202020202020202020202020434f4d4d414e442020202020
+202020202020202020202020204352454154454420202020202020205354415455532020202020202020202020202020
+202020202020504f52545320202020202020202020202020202020202020204e414d45530a3366326139633164376534
+622020206e67696e783a312e32372d616c70696e6520202020222f646f636b65722d656e747279706f696e742ee280a6
+222020203220686f7572732061676f202020205570203220686f75727320202020202020202020202020202020302e30
+2e302e303a383038302d3e38302f74637020202020207765620a613831633535653062396633202020706f7374677265
+733a31362020202020202020202022646f636b65722d656e747279706f696e742e73e280a62220202033206461797320
+61676f202020202055702033206461797320286865616c7468792920202020202020353433322f746370202020202020
+202020202020202020202064620a35626537643034326336613120202072656469733a372e3420202020202020202020
+202022646f636b65722d656e747279706f696e742e73e280a6222020203320646179732061676f202020202055702033
+20646179732020202020202020202020202020202020363337392f746370202020202020202020202020202020202063
+616368650a63303965316633613264383820202061636d652f776f726b65723a322e332e312020202022707974686f6e
+202d6d20776f726b657222202020202020203435206d696e757465732061676f2045786974656420283129203430206d
+696e757465732061676f2020202020202020202020202020202020202020202020202020776f726b65720a
+"""
+}
+
+// data/empty.txt
+fn file_4() -> String {
+    """
+
+"""
+}
+
+// data/frame.txt
+fn file_5() -> String {
+    """
+20202020202020202063697479202074656d705f6320207261696e5f6d6d202073746174696f6e730a30202020202020
+20204f736c6f2020202d332e35302020202020204e614e202020202020202020340a312020205265796b6a6176c3ad6b
+20202020312e3235202020202031322e30202020202020202020320a322020202048656c73696e6b692020202d372e30
+30202020202020302e34202020202020202020360a3320202053746f636b686f6c6d2020202d312e3030202020202020
+332e32202020202020202020350a342020436f70656e686167656e20202020322e35302020202020204e614e20202020
+2020202020330a3520202020202054726f6d73c3b820202d31312e3735202020202020382e3120202020202020202031
+0a
+"""
+}
+
+// data/grouped.txt
+fn file_6() -> String {
+    """
+2020202020202020202020202020202074656d700a636f756e747279206369747920202020202020200a4e4f20202020
+20204f736c6f20202020312e35300a202020202020202042657267656e2020322e30300a53452020202020204c756e64
+20202020204e614e0a20202020202020204d616c6dc3b6202020342e32350a
+"""
+}
+
+// data/invoice.txt
+fn file_7() -> String {
+    """
+436f6465202020934974656d942020202020202020202020202020202020202050726963650a412d3130302020934465
+6c75786594206b6574746c6520202020202020202020202034392c393020800a412d31303120204d7567209620736574
+206f6620342020202020202020202020202031382c303020800a422d323030202054656120286c6f6f73652c20323530
+20672920202020202020202020372c323520800a
+"""
+}
+
+// data/jobs.txt
+fn file_8() -> String {
+    """
+726561642073746174696f6e732e74787420636f6c73706563733d303a31312c31323a32302c32313a33302c33313a33
+372c33383a34302c34313a37312c37323a37352c37363a37392c38303a3835206865616465723d4e6f6e65206e616d65
+733d69642c6c61742c6c6f6e2c656c65762c73746174652c6e616d652c67736e2c68636e2c776d6f20686561643d360a
+726561642073746174696f6e732e74787420636f6c73706563733d303a31312c31323a32302c32313a33302c33313a33
+372c33383a34302c34313a37312c37323a37352c37363a37392c38303a3835206865616465723d4e6f6e65206e616d65
+733d69642c6c61742c6c6f6e2c656c65762c73746174652c6e616d652c67736e2c68636e2c776d6f2064747970653d77
+6d6f3a7374722c68636e3a737472206e615f76616c7565733d656c65763a2d3939392e3920686561643d360a72656164
+2073746174696f6e732e74787420636f6c73706563733d303a31312c31323a32302c32313a33302c33313a33372c3338
+3a34302c34313a37312c37323a37352c37363a37392c38303a3835206865616465723d4e6f6e65206e616d65733d6964
+2c6c61742c6c6f6e2c656c65762c73746174652c6e616d652c67736e2c68636e2c776d6f206b6565705f64656661756c
+745f6e613d46616c73652064747970653d73747220686561643d340a726561642073746174696f6e732e74787420636f
+6c73706563733d303a31312c31323a32302c32313a33302c33313a33372c33383a34302c34313a37312c37323a37352c
+37363a37392c38303a3835206865616465723d4e6f6e65206e616d65733d69642c6c61742c6c6f6e2c656c65762c7374
+6174652c6e616d652c67736e2c68636e2c776d6f20757365636f6c733d69642c6e616d652c656c657620696e6465785f
+636f6c3d696420686561643d380a726561642073746174696f6e732e74787420636f6c73706563733d303a31312c3132
+3a32302c32313a33302c33313a33372c33383a34302c34313a37312c37323a37352c37363a37392c38303a3835206865
+616465723d4e6f6e65206e616d65733d69642c6c61742c6c6f6e2c656c65762c73746174652c6e616d652c67736e2c68
+636e2c776d6f20757365636f6c733d302c3520686561643d330a726561642073746174696f6e732e7478742068656164
+65723d4e6f6e6520686561643d360a726561642073746174696f6e732e747874206865616465723d4e6f6e6520696e66
+65725f6e726f77733d3320686561643d360a726561642073746174696f6e732e74787420636f6c73706563733d3a3131
+2c34313a3731206865616465723d4e6f6e65206e616d65733d69642c6e616d6520686561643d340a7265616420737461
+74696f6e732e74787420636f6c73706563733d3a31312c34313a206865616465723d4e6f6e65206e616d65733d69642c
+7265737420686561643d340a726561642073746174696f6e732e747874207769647468733d31312c392c31302c372c33
+2c33312c342c342c36206865616465723d4e6f6e6520686561643d330a726561642073746174696f6e732e7478742077
+69647468733d31312c392c3130206865616465723d4e6f6e65206e616d65733d69642c6c61742c6c6f6e206e726f7773
+3d340a726561642073746174696f6e732e74787420636f6c73706563733d303a31312c31323a32302c32313a33302c33
+313a33372c33383a34302c34313a37312c37323a37352c37363a37392c38303a3835206865616465723d4e6f6e65206e
+616d65733d69642c6c61742c6c6f6e2c656c65762c73746174652c6e616d652c67736e2c68636e2c776d6f20736b6970
+726f77733d302c312c32206e726f77733d330a726561642073746174696f6e732e74787420636f6c73706563733d303a
+31312c31323a32302c32313a33302c33313a33372c33383a34302c34313a37312c37323a37352c37363a37392c38303a
+3835206865616465723d4e6f6e65206e616d65733d69642c6c61742c6c6f6e2c656c65762c73746174652c6e616d652c
+67736e2c68636e2c776d6f20736b6970726f77733d32300a726561642073746174696f6e732e74787420636f6c737065
+63733d303a31312c31323a32302c32313a33302c33313a33372c33383a34302c34313a37312c37323a37352c37363a37
+392c38303a3835206865616465723d4e6f6e65206e616d65733d69642c6c61742c6c6f6e2c656c65762c73746174652c
+6e616d652c67736e2c68636e2c776d6f206368756e6b73697a653d313020757365636f6c733d69642c73746174650a72
+6561642073746174696f6e732e74787420636f6c73706563733d303a31312c31323a32302c32313a33302c33313a3337
+2c33383a34302c34313a37312c37323a37352c37363a37392c38303a3835206865616465723d4e6f6e65206e616d6573
+3d69642c6c61742c6c6f6e2c656c65762c73746174652c6e616d652c67736e2c68636e2c776d6f206e726f77733d3132
+206368756e6b73697a653d3520757365636f6c733d69642c656c65760a726561642073746174696f6e732e7478742063
+6f6c73706563733d303a31312c31323a32302c32313a33302c33313a33372c33383a34302c34313a37312c37323a3735
+2c37363a37392c38303a3835206865616465723d4e6f6e65206e616d65733d69642c6c61742c6c6f6e2c656c65762c73
+746174652c6e616d652c67736e2c68636e2c776d6f20696e6465785f636f6c3d342c3020757365636f6c733d69642c73
+746174652c6c617420686561643d350a7265616420706179726f6c6c2e646174207769647468733d312c362c31352c31
+322c342c382c392c31206865616465723d4e6f6e65206e616d65733d7265632c656d702c6c6173742c66697273742c64
+6570742c68697265642c73616c6172792c7374617475730a7265616420706179726f6c6c2e646174207769647468733d
+312c362c31352c31322c342c382c392c31206865616465723d4e6f6e65206e616d65733d7265632c656d702c6c617374
+2c66697273742c646570742c68697265642c73616c6172792c73746174757320736b6970726f77733d3120736b697066
+6f6f7465723d310a7265616420706179726f6c6c2e646174207769647468733d312c362c31352c31322c342c382c392c
+31206865616465723d4e6f6e65206e616d65733d7265632c656d702c6c6173742c66697273742c646570742c68697265
+642c73616c6172792c73746174757320736b6970726f77733d3120736b6970666f6f7465723d312064747970653d656d
+703a7374722c68697265643a73747220696e6465785f636f6c3d656d700a7265616420706179726f6c6c2e6461742077
+69647468733d312c362c31352c31322c342c382c392c31206865616465723d4e6f6e65206e616d65733d7265632c656d
+702c6c6173742c66697273742c646570742c68697265642c73616c6172792c73746174757320736b6970726f77733d31
+20736b6970666f6f7465723d3120757365636f6c733d656d702c6c6173742c73616c6172792064747970653d656d703a
+7374720a7265616420706179726f6c6c2e646174207769647468733d312c362c31352c31322c342c382c392c31206865
+616465723d4e6f6e65206e616d65733d7265632c656d702c6c6173742c66697273742c646570742c68697265642c7361
+6c6172792c73746174757320736b6970726f77733d3120736b6970666f6f7465723d312064747970653d73616c617279
+3a666c6f617436342c646570743a63617465676f72790a7265616420706179726f6c6c2e646174207769647468733d31
+2c362c31352c31322c342c382c392c31206865616465723d4e6f6e65206e616d65733d7265632c656d702c6c6173742c
+66697273742c646570742c68697265642c73616c6172792c73746174757320736b6970726f77733d3120736b6970666f
+6f7465723d312064747970653d7374617475733a626f6f6c0a7265616420706179726f6c6c2e64617420776964746873
+3d312c362c31352c31322c342c382c392c31206865616465723d4e6f6e65206e616d65733d7265632c656d702c6c6173
+742c66697273742c646570742c68697265642c73616c6172792c73746174757320736b6970726f77733d3120736b6970
+666f6f7465723d312064747970653d656d703a496e7436342c73616c6172793a466c6f617436342c6c6173743a737472
+696e670a7265616420706179726f6c6c2e646174207769647468733d312c362c31352c31322c342c382c392c31206865
+616465723d4e6f6e65206e616d65733d7265632c656d702c6c6173742c66697273742c646570742c68697265642c7361
+6c6172792c73746174757320736b6970726f77733d3120736b6970666f6f7465723d312064747970655f6261636b656e
+643d6e756d70795f6e756c6c61626c650a7265616420706179726f6c6c2e646174207769647468733d312c362c31352c
+31322c342c382c392c31206865616465723d4e6f6e65206e616d65733d7265632c656d702c6c6173742c66697273742c
+646570742c68697265642c73616c6172792c73746174757320736b6970726f77733d3120736b6970666f6f7465723d31
+2064747970653d6c6173743a696e7436340a7265616420706179726f6c6c2e646174207769647468733d312c362c3135
+2c31322c342c382c392c31206865616465723d4e6f6e65206e616d65733d7265632c656d702c6c6173742c6669727374
+2c646570742c68697265642c73616c6172792c73746174757320736b6970726f77733d31206e726f77733d330a726561
+6420706179726f6c6c2e646174207769647468733d312c362c31352c31322c342c382c392c31206865616465723d4e6f
+6e65206e616d65733d7265632c656d702c6c6173742c66697273742c646570742c68697265642c73616c6172792c7374
+6174757320736b6970726f77733d3120736b6970666f6f7465723d31206e726f77733d330a7265616420706179726f6c
+6c2e646174207769647468733d312c362c31352c31322c342c382c392c31206865616465723d4e6f6e65206e616d6573
+3d7265632c656d702c6c6173742c66697273742c646570742c68697265642c73616c6172792c73746174757320736b69
+70726f77733d3120736b6970666f6f7465723d31206368756e6b73697a653d340a7265616420706179726f6c6c2e6461
+74207769647468733d312c362c3135206865616465723d4e6f6e65206e616d65733d7265632c656d702c6c6173742c66
+697273740a7265616420706179726f6c6c2e646174207769647468733d312c362c3135206865616465723d4e6f6e6520
+6e616d65733d7265632c656d700a7265616420706179726f6c6c2e646174207769647468733d312c362c313520686561
+6465723d4e6f6e65206e616d65733d656d702c6c61737420696e6465785f636f6c3d300a7265616420706179726f6c6c
+2e646174207769647468733d312c362c313520636f6c73706563733d303a31206865616465723d4e6f6e650a72656164
+20706179726f6c6c2e64617420636f6c73706563733d4e6f6e650a7265616420706f64732e7478740a7265616420706f
+64732e74787420636f6c73706563733d303a33362c33363a34342c34343a36332c36333a37382c37383a0a7265616420
+706f64732e74787420636f6c73706563733d303a33362c33363a34342c34343a36332c36333a37382c37383a20757365
+636f6c733d4e414d452c5354415455532c52455354415254530a7265616420706f64732e74787420636f6c7370656373
+3d303a33362c33363a34342c34343a36332c36333a37382c37383a20696e6465785f636f6c3d4e414d4520757365636f
+6c733d4e414d452c52454144590a7265616420706f64732e74787420636f6c73706563733d303a33362c33363a34342c
+34343a36332c36333a37382c37383a20757365636f6c733d4e414d452c555054494d450a7265616420706f64732e7478
+7420636f6c73706563733d303a33362c33363a34342c34343a36332c36333a37382c37383a20757365636f6c733d302c
+370a726561642064662e7478740a726561642064662e74787420636f6c73706563733d303a31352c31353a32312c3231
+3a32372c32373a33332c33333a33382c33383a0a726561642064662e74787420636f6c73706563733d303a31352c3135
+3a32312c32313a32372c32373a33332c33333a33382c33383a206e615f76616c7565733d3131540a7265616420646f63
+6b65722e7478740a7265616420646f636b65722e74787420636f6c73706563733d303a31352c31353a33362c33363a36
+312c36313a37362c37363a3130322c3130323a3132372c3132373a0a7265616420646f636b65722e74787420636f6c73
+706563733d303a31352c31353a33362c33363a36312c36313a37362c37363a3130322c3130323a3132372c3132373a20
+6b6565705f64656661756c745f6e613d46616c736520757365636f6c733d4e414d45532c504f5254530a726561642066
+72616d652e7478740a72656164206672616d652e74787420696e6465785f636f6c3d300a72656164206672616d652e74
+787420696e6465785f636f6c3d310a72656164206672616d652e74787420696e6465785f636f6c3d302064747970653d
+73746174696f6e733a666c6f61743634206e615f76616c7565733d4f736c6f0a72656164206672616d652e7478742069
+6e6465785f636f6c3d3020757365636f6c733d636974792c7261696e5f6d6d0a72656164206672616d652e7478742068
+65616465723d3120686561643d320a72656164206672616d652e747874206865616465723d302c3120696e6465785f63
+6f6c3d300a72656164206672616d652e747874206865616465723d390a72656164206672616d652e747874206e616d65
+733d612c622c632c642c650a72656164206672616d652e747874206e616d65733d6964782c636974792c74656d702c72
+61696e2c6e20736b6970726f77733d310a72656164206672616d652e747874206e616d65733d636974792c74656d702c
+7261696e2c6e20736b6970726f77733d310a72656164206672616d652e747874206e616d65733d612c622c6320736b69
+70726f77733d310a72656164206672616d652e74787420696e6465785f636f6c3d370a72656164206c65646765722e74
+78740a72656164206c65646765722e74787420656e636f64696e673d6c6174696e2d310a72656164206c65646765722e
+74787420656e636f64696e673d6c6174696e2d3120736b6970726f77733d310a72656164206c65646765722e74787420
+656e636f64696e673d6c6174696e2d3120736b6970726f77733d5b315d20646563696d616c3d2c2074686f7573616e64
+733d2e0a72656164206c65646765722e74787420656e636f64696e673d63703132353220736b6970726f77733d5b315d
+20646563696d616c3d2c2074686f7573616e64733d2e2064747970655f6261636b656e643d6e756d70795f6e756c6c61
+626c650a72656164206c65646765722e74787420656e636f64696e673d69736f2d383835392d3120736b6970726f7773
+3d5b315d2074686f7573616e64733d2e20757365636f6c733d446174756d2c4265747261670a72656164206c65646765
+722e74787420656e636f64696e673d6c6174696e2d3120736b6970726f77733d5b315d20646563696d616c3d2c2c2074
+686f7573616e64733d2e0a72656164206c65646765722e74787420656e636f64696e673d6562636469630a7265616420
+73656e736f72732e6c6f670a726561642073656e736f72732e6c6f6720636f6d6d656e743d230a726561642073656e73
+6f72732e6c6f6720636f6d6d656e743d23206e615f76616c7565733d2d393939392c4552520a726561642073656e736f
+72732e6c6f6720636f6d6d656e743d23206e615f76616c7565733d2d393939392c45525220696e6665725f6e726f7773
+3d350a726561642073656e736f72732e6c6f6720636f6d6d656e743d2320636f6c73706563733d303a31362c31383a32
+342c32363a33322c33343a34302c34323a3438206e615f76616c7565733d2d393939392c4552520a726561642073656e
+736f72732e6c6f6720636f6d6d656e743d2320636f6c73706563733d303a31362c31383a32342c32363a33322c33343a
+34302c34323a343820736b69705f626c616e6b5f6c696e65733d46616c73650a726561642073656e736f72732e6c6f67
+20636f6d6d656e743d2320636f6c73706563733d303a31362c31383a32342c32363a33322c33343a34302c34323a3438
+206368756e6b73697a653d340a726561642073656e736f72732e6c6f6720636f6d6d656e743d2320636f6c7370656373
+3d303a31362c31383a32342c32363a33322c33343a34302c34323a3438206e726f77733d3520736b6970726f77733d34
+2c380a726561642073656e736f72732e6c6f6720736b6970726f77733d302c3120636f6c73706563733d303a31362c31
+383a32342c32363a33322c33343a34302c34323a34380a726561642073656e736f72732e6c6f6720736b6970726f7773
+3d3220636f6d6d656e743d23206865616465723d4e6f6e6520636f6c73706563733d303a31362c31383a32342c32363a
+33322c33343a34302c34323a34380a726561642073656e736f72732e6c6f6720636f6d6d656e743d2320636f6c737065
+63733d303a31362c31383a32342c32363a33322c33343a34302c34323a3438206e615f66696c7465723d46616c73650a
+726561642073656e736f72732e6c6f6720636f6d6d656e743d2320636f6c73706563733d303a31362c31383a32342c32
+363a33322c33343a34302c34323a34382064747970653d6870613a696e7436340a726561642073656e736f72732e6c6f
+6720636f6d6d656e743d2320636f6c73706563733d303a31362c31383a32342c32363a33322c33343a34302c34323a34
+38206e615f76616c7565733d2d393939392c4552522064747970653d72685f7063743a696e7436340a72656164207265
+6769737465722e7478740a726561642072656769737465722e7478742064656c696d697465723d5f0a72656164207265
+6769737465722e7478742064656c696d697465723d5f2074686f7573616e64733d2c0a72656164207265676973746572
+2e7478742064656c696d697465723d5f2074686f7573616e64733d2c2064747970655f6261636b656e643d6e756d7079
+5f6e756c6c61626c650a726561642072656769737465722e7478742064656c696d697465723d5f20636f6c7370656373
+3d303a362c363a32372c32373a33392c33393a34352074686f7573616e64733d2c0a726561642072656769737465722e
+7478742064656c696d697465723d5f2c2074686f7573616e64733d2c0a7265616420626f6d2e7478740a726561642062
+6f6d2e74787420636f6c73706563733d303a362c363a31322c31323a31390a7265616420626f6d2e74787420636f6c73
+706563733d303a362c363a31322c31323a313920656e636f64696e673d7574662d382d7369670a7265616420626f6d2e
+747874206865616465723d4e6f6e650a72656164206e616d65642e7478740a72656164206e616d65642e74787420696e
+6465785f636f6c3d300a72656164206e616d65642e747874206865616465723d302c3120696e6465785f636f6c3d300a
+726561642067726f757065642e7478740a726561642067726f757065642e747874206865616465723d302c310a726561
+642067726f757065642e747874206865616465723d302c3120696e6465785f636f6c3d302c310a726561642067726f75
+7065642e74787420736b6970726f77733d5b315d20696e6465785f636f6c3d302c310a72656164206d61632e7478740a
+72656164206d61632e747874206865616465723d4e6f6e650a7265616420696e766f6963652e7478740a726561642069
+6e766f6963652e74787420656e636f64696e673d6370313235320a7265616420696e766f6963652e74787420656e636f
+64696e673d77696e646f77732d3132353220646563696d616c3d2c0a7265616420696e766f6963652e74787420656e63
+6f64696e673d6c6174696e2d310a7265616420696e766f6963652e74787420656e636f64696e673d61736369690a7265
+616420706f64732e747874206e616d65733d612c622c632c642c65206865616465723d300a7265616420706f64732e74
+7874206e616d65733d612c622c63206865616465723d300a726561642073746174696f6e732e74787420686561646572
+3d4e6f6e6520757365636f6c733d302c34206e726f77733d330a726561642073746174696f6e732e74787420636f6c73
+706563733d303a31312c31323a32302c32313a33302c33313a33372c33383a34302c34313a37312c37323a37352c3736
+3a37392c38303a3835206865616465723d4e6f6e65206e616d65733d69642c6c61742c6c6f6e2c656c65762c73746174
+652c6e616d652c67736e2c68636e2c776d6f206e615f76616c7565733d73746174653a494c7c43412c776d6f3a373235
+3330206b6565705f64656661756c745f6e613d46616c736520686561643d350a726561642073746174696f6e732e7478
+7420636f6c73706563733d303a31312c31323a32302c32313a33302c33313a33372c33383a34302c34313a37312c3732
+3a37352c37363a37392c38303a3835206865616465723d4e6f6e65206e616d65733d69642c6c61742c6c6f6e2c656c65
+762c73746174652c6e616d652c67736e2c68636e2c776d6f2064747970653d73747220696e6465785f636f6c3d302068
+6561643d330a726561642073746174696f6e732e74787420636f6c73706563733d303a31312c31323a32302c32313a33
+302c33313a33372c33383a34302c34313a37312c37323a37352c37363a37392c38303a3835206865616465723d4e6f6e
+65206e616d65733d69642c6c61742c6c6f6e2c656c65762c73746174652c6e616d652c67736e2c68636e2c776d6f2073
+6b6970726f77733d33300a726561642073746174696f6e732e74787420636f6c73706563733d303a31312c31323a3230
+2c32313a33302c33313a33372c33383a34302c34313a37312c37323a37352c37363a37392c38303a3835206865616465
+723d4e6f6e65206e616d65733d69642c6c61742c6c6f6e2c656c65762c73746174652c6e616d652c67736e2c68636e2c
+776d6f206368756e6b73697a653d34206e726f77733d313020696e6465785f636f6c3d696420757365636f6c733d6964
+2c6c61740a726561642073746174696f6e732e74787420636f6c73706563733d303a352c333a382c3130303a31323020
+6865616465723d4e6f6e65206e726f77733d320a72656164206c65646765722e74787420656e636f64696e673d6c6174
+696e2d3120736b6970726f77733d5b315d2074686f7573616e64733d2e20646563696d616c3d2c2064747970653d4461
+74756d3a7374720a726561642072656769737465722e7478742064656c696d697465723d5f2064747970653d616d6f75
+6e743a666c6f617436340a726561642072656769737465722e7478742064656c696d697465723d5f206e616d65733d63
+6f64652c6e616d652c636974792c616d6f756e740a726561642064662e74787420757365636f6c733d302c3520686561
+6465723d4e6f6e650a72656164206672616d652e74787420696e6465785f636f6c3d30206368756e6b73697a653d340a
+72656164206672616d652e747874206865616465723d302c3120696e6465785f636f6c3d30206e726f77733d320a7265
+6164206672616d652e74787420696e6465785f636f6c3d636974790a72656164206672616d652e74787420696e646578
+5f636f6c3d6e6f70650a72656164206672616d652e7478742064747970653d636974793a63617465676f72792c737461
+74696f6e733a466c6f6174363420696e6465785f636f6c3d300a7265616420656d7074792e7478740a7265616420656d
+7074792e74787420636f6c73706563733d303a352c353a390a7265616420656d7074792e74787420636f6c7370656373
+3d303a352c353a39206e616d65733d612c620a7265616420626c616e6b2e7478740a7265616420626c616e6b2e747874
+20636f6c73706563733d303a350a7265616420626c616e6b2e74787420636f6c73706563733d303a35206e616d65733d
+610a72656164206d697373696e672e7478740a726561642073746174696f6e732e74787420696e6665725f6e726f7773
+3d300a
+"""
+}
+
+// data/ledger.txt
+fn file_9() -> String {
+    """
+446174756d2020202020202042756368756e677374657874202020202020202020202020202020202020202042657472
+6167202020202057e46872756e670a2d2d2d2d2d2d2d2d2d2d20202d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d
+2d2d2d2d2d2d2d2d2d20202d2d2d2d2d2d2d2d2d20202d2d2d2d2d2d2d0a30312e31302e323032362020476568616c74
+204f6b746f62657220202020202020202020202020202020202020332e3235302c30302020455552202020200a30322e
+31302e3230323620204d6965746520576f686e756e67204bf66c6e20202020202020202020202020202d312e3138302c
+30302020455552202020200a30352e31302e323032362020436166e9204dfc6c6c657220202020202020202020202020
+20202020202020202020202d31322c34302020455552202020200a30372e31302e323032362020dc6265727765697375
+6e6720537061726b6f6e746f202020202020202020202020202d3530302c30302020455552202020200a31322e31302e
+32303236202052fc636b65727374617474756e672048f474656c205afc7269636820202020202020202038362c313520
+20434846202020200a31352e31302e32303236202042e4636b657265692047726fdf2020202020202020202020202020
+2020202020202020202d372c39352020455552202020200a32302e31302e3230323620205374726f6d20284162736368
+6c616729202020202020202020202020202020202020202d37342c30302020455552202020200a32382e31302e323032
+3620205a696e73656e20202020202020202020202020202020202020202020202020202020202020302c383320204555
+52202020200a
+"""
+}
+
+// data/mac.txt
+fn file_10() -> String {
+    """
+6964202071747920206974656d0d312020202020352020626f6c740d3220202020313220206e75740d33202020202037
+20207761736865720d
+"""
+}
+
+// data/named.txt
+fn file_11() -> String {
+    """
+202020202020202020202074656d705f63202073746174696f6e730a6369747920202020202020202020202020202020
+202020202020200a4f736c6f20202020202020202d332e3530202020202020202020340a5265796b6a6176c3ad6b2020
+2020312e3235202020202020202020320a48656c73696e6b69202020202d372e3030202020202020202020360a
+"""
+}
+
+// data/payroll.dat
+fn file_12() -> String {
+    """
+483230323631303331504159524f4c4c204558504f52542056322041434d4520434f52500a443030303031374f4b4f4e
+4b574f2020202020202020414441455a4520202020202046494e203230313230333035303039383735303030410a4430
+30303034324c494e4451564953542020202020204d414a412020202020202020454e4720323031353039313430313234
+3530303030410a443030303130384845524e414e44455a2020202020204a4f5345204c554953202020454e4720323031
+38303130323031313830303035304c0a443030303231354e414b414d555241202020202020204b454e4a492020202020
+20204f5053203230313930363137303036343230303030410a443030303337374f27425249454e202020202020202053
+494f4248414e2020202020485220203230323030383130303037313030303030540a443030303531324455424f495320
+202020202020202043414d494c4c45202020202046494e203230323130323031303038333530303735410a4430303036
+34304d42454b4920202020202020202020544841424f202020202020204f505320323032323037313130303539383030
+3030410a443030303733334b4f57414c534b492020202020202050494f545220202020202020454e4720323032333033
+3230303130353030303030410a4430303039303153494e47482020202020202020202048415250524545542020202053
+414c453230323430313135303036383735303030410a44303031303234524f535349202020202020202020204749554c
+494120202020202053414c4532303235303530363030373231303030304c0a5430303030313030303030303030383635
+36303132350a
+"""
+}
+
+// data/pods.txt
+fn file_13() -> String {
+    """
+4e414d452020202020202020202020202020202020202020202020202020202020202020524541445920202053544154
+5553202020202020202020202020205245535441525453202020202020204147450a6170692d676174657761792d3764
+396638623663342d32786b7170202020202020202020312f31202020202052756e6e696e672020202020202020202020
+20302020202020202020202020202020336434680a6170692d676174657761792d3764396638623663342d39777a6c6d
+202020202020202020312f31202020202052756e6e696e6720202020202020202020202031202832642061676f292020
+202020336434680a62696c6c696e672d776f726b65722d3563366237643865392d6162636465202020202020302f3120
+2020202043726173684c6f6f704261636b4f666620202031322028346d2061676f292020202036316d0a62696c6c696e
+672d776f726b65722d3563366237643865392d666768696a202020202020312f31202020202052756e6e696e67202020
+20202020202020202030202020202020202020202020202036316d0a6e696768746c792d7265706f72742d3238393131
+3334302d78376b327020202020202020302f312020202020436f6d706c65746564202020202020202020203020202020
+2020202020202020202037680a706f7374677265732d3020202020202020202020202020202020202020202020202020
+20322f32202020202052756e6e696e672020202020202020202020203020202020202020202020202020203134640a72
+656469732d3666386439633762352d7134723874202020202020202020202020202020312f31202020202052756e6e69
+6e6720202020202020202020202033202835643132682061676f2920203134640a7365617263682d696e64657865722d
+3834633766366439622d7474326d6e202020202020302f31202020202050656e64696e67202020202020202020202020
+30202020202020202020202020202038730a
+"""
+}
+
+// data/register.txt
+fn file_14() -> String {
+    """
+636f64655f5f6e616d655f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f636974795f5f5f5f5f5f5f5f616d6f756e740a412d
+315f5f5f416e61204d6172c3ad61204cc3b370657a5f5f5f5f5f5f56616c656e6369615f5f5f5f5f312c3230300a412d
+325f5f5f426f6220536d6974685f5f5f5f5f5f5f5f5f5f5f5f4c656564735f5f5f5f5f5f5f5f5f5f3935300a422d315f
+5f5f4368656e205765695f5f5f5f5f5f5f5f5f5f5f5f5f5368656e7a68656e5f5f5f5f5f322c3037350a422d325f5f5f
+4461676e7920c398646567616172645f5f5f5f5f5f5f42657267656e5f5f5f5f5f5f5f5f5f5f5f5f0a
+"""
+}
+
+// data/sensors.log
+fn file_15() -> String {
+    """
+232073746174696f6e206578706f72742076330d0a23206669656c64733a2074696d652073656e736f722074656d705f
+632072685f706374206870610d0a74696d65202020202020202020202020202073656e736f72202074656d705f632020
+72685f70637420206870610d0a323032362d31302d32392030363a30302020542d313031202020202020342e32202020
+20202038312020313031332e320d0a323032362d31302d32392030363a31302020542d313031202020202020342e3120
+202020202038322020313031332e310d0a323032362d31302d32392030363a32302020542d313032202020202d393939
+3920202020202038302020313031332e300d0a323032362d31302d32392030363a33302020542d313032202020202020
+332e3820202020204552522020313031322e380d0a0d0a23206c6f67676572207265737461727465640d0a323032362d
+31302d32392030363a34302020542d313031202020202020332e3620202020202038342020313031322e370d0a323032
+362d31302d32392030363a35302020542d313033202020202020332e3520202020202038352020313031322e350d0a32
+3032362d31302d32392030373a30302020542d313033202020202020332e3920202020202038332020313031322e3620
+20202320677573740d0a323032362d31302d32392030373a31302020542d313031202020202020342e34202020202020
+37392020313031322e390d0a323032362d31302d32392030373a32302020542d3130343420202d31322e373520202020
+2031303020203939382e32350d0a323032362d31302d32392030373a33302020542d313034342020202d31332e352020
+2020203130302020203939372e350d0a0d0a
+"""
+}
+
+// data/stations.txt
+fn file_16() -> String {
+    """
+5553573030303134383139202034312e3738363120202d38372e3735323220203138362e3520494c204348494341474f
+204d49445741592041502020202020202020202020202020202020202020202037323533340a55535730303039343834
+36202034312e3939353020202d38372e3933333620203230312e3820494c204348494341474f204f4841524520494e54
+4c20415020202020202020202020202020202020202037323533300a5553433030313131353737202034312e37333732
+20202d38372e3737373520203138392e3020494c204348494341474f204d494457415920332053572020202020202020
+202020202020202048434e2020202020200a5553433030313136363130202034312e3031383120202d38382e30343732
+202d3939392e3920494c2050454f544f4e45202020202020202020202020202020202020202020202020202020204843
+4e2020202020200a5553573030303233313734202033332e39333831202d3131382e3338383920202032392e36204341
+204c4f5320414e47454c455320494e544c204150202020202020202020202020202020202020202037323239350a5553
+573030303233313838202033322e37333336202d3131372e3138333120202020342e362043412053414e20444945474f
+204c494e44424552474820464c44202020202020202047534e202020202037323239300a555343303030343531313420
+2033372e34383036202d3131392e3937373220203634302e31204341204d415249504f53412052532020202020202020
+202020202020202020202020202020202020202020202020200a5553533030323048313353202033392e33323030202d
+3132302e3337303020323133332e3620434120494e444550454e44454e4345204c414b45202020202020202020202020
+2020202020202020202020202020200a5553573030303934373238202034302e3737383920202d37332e393639322020
+2033392e36204e59204e455720594f524b20434e54524c20504b20545752202020202020202020202020202048434e20
+37323530360a5553573030303134373332202034302e3737393420202d37332e3838303320202020332e34204e59204e
+455720594f524b204c414755415244494120415020202020202020202020202020202020202037323530330a55534330
+30333030313833202034322e3736363720202d37382e3631363720203237342e33204e59204155524f52412020202020
+2020202020202020202020202020202020202020202020202020202020202020200a5553573030303132383339202032
+352e3738383120202d38302e3331363920202020382e3820464c204d49414d4920494e544c2041502020202020202020
+2020202020202020202047534e202020202037323230320a5553573030303132393231202032392e3534343220202d39
+382e3438333920203234312e372054582053414e20414e544f4e494f20494e544c204150202020202020202020202020
+202020202020202037323235330a5553433030343135313936202033302e3238343420202d39372e3733343720203137
+322e322054582041555354494e2043414d50204d4142525920202020202020202020202020202020202048434e202020
+2020200a5553573030303234323333202034372e34343434202d3132322e3331333920203131322e3820574120534541
+54544c45205441434f4d4120494e544c20415020202020202020202047534e202020202037323739330a555352303030
+305754524f202034382e34353030202d3132302e3136363720313231392e322057412054574953502052415753202020
+202020202020202020202020202020202020202020202020202020202020200a5553573030303236343531202036312e
+31363839202d3135302e3032373820202033362e3620414b20414e43484f5241474520494e544c204150202020202020
+202020202020202047534e202020202037303237330a4341303031313038333935202034392e31393530202d3132332e
+3138313420202020342e332042432056414e434f5556455220494e544c20412020202020202020202020202020202020
+20202020202037313839320a4341303036313538333535202034332e3637373220202d37392e3633303620203137332e
+34204f4e20544f524f4e544f20494e544c20412020202020202020202020202020202020202020202020202037313632
+340a4d584e3030303039303438202031392e3430303020202d39392e3138333320323330332e30202020205441435542
+4159412043454e5452414c20442e462e2020202020202020202047534e202020202037363638300a474d453030313237
+373836202035322e3436333120202031332e3330313720202035312e30202020204245524c494e2d4441484c454d2020
+2020202020202020202020202020202047534e202020202031303338310a4652453030313036323037202034382e3831
+363720202020322e3333333320202037352e302020202050415249532f4c4520424f5552474554202020202020202020
+202020202020202020202020202030373135300a554b303030303536323235202035312e343738302020202d302e3436
+313020202032352e30202020204845415448524f57202020202020202020202020202020202020202020202020202020
+2020202030333737320a41534e3030303636303632202d33332e3836303720203135312e3230353020202033392e3020
+2020205359444e455920284f425345525641544f52592048494c4c2920202020202047534e202020202039343736380a
+4a41303030303437363632202033352e3638333020203133392e3736373020202033362e3020202020544f4b594f2020
+20202020202020202020202020202020202020202020202047534e202020202034373636320a53463030303036383831
+36202d33332e3936373020202031382e3630303020202034362e30202020204341504520544f574e20494e544c202020
+202020202020202020202020202047534e202020202036383831360a41594d3030303839363036202d36362e32383330
+20203131302e35313730202d3939392e3920202020434153455920202020202020202020202020202020202020202020
+20202020202020202020202038393631310a
+"""
+}

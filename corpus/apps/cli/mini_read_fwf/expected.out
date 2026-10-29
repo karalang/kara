@@ -1,0 +1,1575 @@
+$ read stations.txt colspecs=0:11,12:20,21:30,31:37,38:40,41:71,72:75,76:79,80:85 header=None names=id,lat,lon,elev,state,name,gsn,hcn,wmo head=6
+shape (27, 9)
+  'id': str
+  'lat': float64
+  'lon': float64
+  'elev': float64
+  'state': str
+  'name': str
+  'gsn': str
+  'hcn': str
+  'wmo': float64
+,id,lat,lon,elev,state,name,gsn,hcn,wmo
+0,USW00014819,41.7861,-87.7522,186.5,IL,CHICAGO MIDWAY AP,,,72534.0
+1,USW00094846,41.995,-87.9336,201.8,IL,CHICAGO OHARE INTL AP,,,72530.0
+2,USC00111577,41.7372,-87.7775,189.0,IL,CHICAGO MIDWAY 3 SW,,HCN,
+3,USC00116610,41.0181,-88.0472,-999.9,IL,PEOTONE,,HCN,
+4,USW00023174,33.9381,-118.3889,29.6,CA,LOS ANGELES INTL AP,,,72295.0
+5,USW00023188,32.7336,-117.1831,4.6,CA,SAN DIEGO LINDBERGH FLD,GSN,,72290.0
+$ read stations.txt colspecs=0:11,12:20,21:30,31:37,38:40,41:71,72:75,76:79,80:85 header=None names=id,lat,lon,elev,state,name,gsn,hcn,wmo dtype=wmo:str,hcn:str na_values=elev:-999.9 head=6
+shape (27, 9)
+  'id': str
+  'lat': float64
+  'lon': float64
+  'elev': float64
+  'state': str
+  'name': str
+  'gsn': str
+  'hcn': str
+  'wmo': str
+,id,lat,lon,elev,state,name,gsn,hcn,wmo
+0,USW00014819,41.7861,-87.7522,186.5,IL,CHICAGO MIDWAY AP,,,72534
+1,USW00094846,41.995,-87.9336,201.8,IL,CHICAGO OHARE INTL AP,,,72530
+2,USC00111577,41.7372,-87.7775,189.0,IL,CHICAGO MIDWAY 3 SW,,HCN,
+3,USC00116610,41.0181,-88.0472,,IL,PEOTONE,,HCN,
+4,USW00023174,33.9381,-118.3889,29.6,CA,LOS ANGELES INTL AP,,,72295
+5,USW00023188,32.7336,-117.1831,4.6,CA,SAN DIEGO LINDBERGH FLD,GSN,,72290
+$ read stations.txt colspecs=0:11,12:20,21:30,31:37,38:40,41:71,72:75,76:79,80:85 header=None names=id,lat,lon,elev,state,name,gsn,hcn,wmo keep_default_na=False dtype=str head=4
+shape (27, 9)
+  'id': str
+  'lat': str
+  'lon': str
+  'elev': str
+  'state': str
+  'name': str
+  'gsn': str
+  'hcn': str
+  'wmo': str
+,id,lat,lon,elev,state,name,gsn,hcn,wmo
+0,USW00014819,41.7861,-87.7522,186.5,IL,CHICAGO MIDWAY AP,,,72534
+1,USW00094846,41.9950,-87.9336,201.8,IL,CHICAGO OHARE INTL AP,,,72530
+2,USC00111577,41.7372,-87.7775,189.0,IL,CHICAGO MIDWAY 3 SW,,HCN,
+3,USC00116610,41.0181,-88.0472,-999.9,IL,PEOTONE,,HCN,
+$ read stations.txt colspecs=0:11,12:20,21:30,31:37,38:40,41:71,72:75,76:79,80:85 header=None names=id,lat,lon,elev,state,name,gsn,hcn,wmo usecols=id,name,elev index_col=id head=8
+shape (27, 2)
+  'elev': float64
+  'name': str
+id,elev,name
+USW00014819,186.5,CHICAGO MIDWAY AP
+USW00094846,201.8,CHICAGO OHARE INTL AP
+USC00111577,189.0,CHICAGO MIDWAY 3 SW
+USC00116610,-999.9,PEOTONE
+USW00023174,29.6,LOS ANGELES INTL AP
+USW00023188,4.6,SAN DIEGO LINDBERGH FLD
+USC00045114,640.1,MARIPOSA RS
+USS0020H13S,2133.6,INDEPENDENCE LAKE
+$ read stations.txt colspecs=0:11,12:20,21:30,31:37,38:40,41:71,72:75,76:79,80:85 header=None names=id,lat,lon,elev,state,name,gsn,hcn,wmo usecols=0,5 head=3
+shape (27, 2)
+  'id': str
+  'name': str
+,id,name
+0,USW00014819,CHICAGO MIDWAY AP
+1,USW00094846,CHICAGO OHARE INTL AP
+2,USC00111577,CHICAGO MIDWAY 3 SW
+$ read stations.txt header=None head=6
+shape (27, 9)
+  0: str
+  1: float64
+  2: float64
+  3: float64
+  4: str
+  5: str
+  6: str
+  7: str
+  8: float64
+,0,1,2,3,4,5,6,7,8
+0,USW00014819,41.7861,-87.7522,186.5,IL,CHICAGO MIDWAY AP,,,72534.0
+1,USW00094846,41.995,-87.9336,201.8,IL,CHICAGO OHARE INTL AP,,,72530.0
+2,USC00111577,41.7372,-87.7775,189.0,IL,CHICAGO MIDWAY 3 SW,,HCN,
+3,USC00116610,41.0181,-88.0472,-999.9,IL,PEOTONE,,HCN,
+4,USW00023174,33.9381,-118.3889,29.6,CA,LOS ANGELES INTL AP,,,72295.0
+5,USW00023188,32.7336,-117.1831,4.6,CA,SAN DIEGO LINDBERGH FLD,GSN,,72290.0
+$ read stations.txt header=None infer_nrows=3 head=6
+shape (27, 9)
+  0: str
+  1: float64
+  2: float64
+  3: float64
+  4: str
+  5: str
+  6: str
+  7: str
+  8: float64
+,0,1,2,3,4,5,6,7,8
+0,USW00014819,41.7861,-87.7522,186.5,IL,CHICAGO,MIDWAY AP,,72534.0
+1,USW00094846,41.995,-87.9336,201.8,IL,CHICAGO,OHARE INTL AP,,72530.0
+2,USC00111577,41.7372,-87.7775,189.0,IL,CHICAGO,MIDWAY 3 SW,HCN,
+3,USC00116610,41.0181,-88.0472,999.9,IL,PEOTONE,,HCN,
+4,USW00023174,33.9381,118.3889,29.6,CA,LOS ANG,LES INTL AP,,72295.0
+5,USW00023188,32.7336,117.1831,4.6,CA,SAN DIE,O LINDBERGH F,,72290.0
+$ read stations.txt colspecs=:11,41:71 header=None names=id,name head=4
+shape (27, 2)
+  'id': str
+  'name': str
+,id,name
+0,USW00014819,CHICAGO MIDWAY AP
+1,USW00094846,CHICAGO OHARE INTL AP
+2,USC00111577,CHICAGO MIDWAY 3 SW
+3,USC00116610,PEOTONE
+$ read stations.txt colspecs=:11,41: header=None names=id,rest head=4
+shape (27, 2)
+  'id': str
+  'rest': str
+,id,rest
+0,USW00014819,CHICAGO MIDWAY AP                      72534
+1,USW00094846,CHICAGO OHARE INTL AP                  72530
+2,USC00111577,CHICAGO MIDWAY 3 SW                HCN
+3,USC00116610,PEOTONE                            HCN
+$ read stations.txt widths=11,9,10,7,3,31,4,4,6 header=None head=3
+shape (27, 9)
+  0: str
+  1: float64
+  2: float64
+  3: float64
+  4: str
+  5: str
+  6: str
+  7: str
+  8: float64
+,0,1,2,3,4,5,6,7,8
+0,USW00014819,41.7861,-87.7522,186.5,IL,CHICAGO MIDWAY AP,,,72534.0
+1,USW00094846,41.995,-87.9336,201.8,IL,CHICAGO OHARE INTL AP,,,72530.0
+2,USC00111577,41.7372,-87.7775,189.0,IL,CHICAGO MIDWAY 3 SW,,HCN,
+$ read stations.txt widths=11,9,10 header=None names=id,lat,lon nrows=4
+shape (4, 3)
+  'id': str
+  'lat': float64
+  'lon': float64
+,id,lat,lon
+0,USW00014819,41.7861,-87.7522
+1,USW00094846,41.995,-87.9336
+2,USC00111577,41.7372,-87.7775
+3,USC00116610,41.0181,-88.0472
+$ read stations.txt colspecs=0:11,12:20,21:30,31:37,38:40,41:71,72:75,76:79,80:85 header=None names=id,lat,lon,elev,state,name,gsn,hcn,wmo skiprows=0,1,2 nrows=3
+shape (3, 9)
+  'id': str
+  'lat': float64
+  'lon': float64
+  'elev': float64
+  'state': str
+  'name': str
+  'gsn': str
+  'hcn': str
+  'wmo': float64
+,id,lat,lon,elev,state,name,gsn,hcn,wmo
+0,USC00116610,41.0181,-88.0472,-999.9,IL,PEOTONE,,HCN,
+1,USW00023174,33.9381,-118.3889,29.6,CA,LOS ANGELES INTL AP,,,72295.0
+2,USW00023188,32.7336,-117.1831,4.6,CA,SAN DIEGO LINDBERGH FLD,GSN,,72290.0
+$ read stations.txt colspecs=0:11,12:20,21:30,31:37,38:40,41:71,72:75,76:79,80:85 header=None names=id,lat,lon,elev,state,name,gsn,hcn,wmo skiprows=20
+shape (7, 9)
+  'id': str
+  'lat': float64
+  'lon': float64
+  'elev': float64
+  'state': float64
+  'name': str
+  'gsn': str
+  'hcn': float64
+  'wmo': int64
+,id,lat,lon,elev,state,name,gsn,hcn,wmo
+0,GME00127786,52.4631,13.3017,51.0,,BERLIN-DAHLEM,GSN,,10381
+1,FRE00106207,48.8167,2.3333,75.0,,PARIS/LE BOURGET,,,7150
+2,UK000056225,51.478,-0.461,25.0,,HEATHROW,,,3772
+3,ASN00066062,-33.8607,151.205,39.0,,SYDNEY (OBSERVATORY HILL),GSN,,94768
+4,JA000047662,35.683,139.767,36.0,,TOKYO,GSN,,47662
+5,SF000068816,-33.967,18.6,46.0,,CAPE TOWN INTL,GSN,,68816
+6,AYM00089606,-66.283,110.517,-999.9,,CASEY,,,89611
+$ read stations.txt colspecs=0:11,12:20,21:30,31:37,38:40,41:71,72:75,76:79,80:85 header=None names=id,lat,lon,elev,state,name,gsn,hcn,wmo chunksize=10 usecols=id,state
+chunk 0
+shape (10, 2)
+  'id': str
+  'state': str
+,id,state
+0,USW00014819,IL
+1,USW00094846,IL
+2,USC00111577,IL
+3,USC00116610,IL
+4,USW00023174,CA
+5,USW00023188,CA
+6,USC00045114,CA
+7,USS0020H13S,CA
+8,USW00094728,NY
+9,USW00014732,NY
+chunk 1
+shape (10, 2)
+  'id': str
+  'state': str
+,id,state
+10,USC00300183,NY
+11,USW00012839,FL
+12,USW00012921,TX
+13,USC00415196,TX
+14,USW00024233,WA
+15,USR0000WTRO,WA
+16,USW00026451,AK
+17,CA001108395,BC
+18,CA006158355,ON
+19,MXN00009048,
+chunk 2
+shape (7, 2)
+  'id': str
+  'state': float64
+,id,state
+20,GME00127786,
+21,FRE00106207,
+22,UK000056225,
+23,ASN00066062,
+24,JA000047662,
+25,SF000068816,
+26,AYM00089606,
+done
+$ read stations.txt colspecs=0:11,12:20,21:30,31:37,38:40,41:71,72:75,76:79,80:85 header=None names=id,lat,lon,elev,state,name,gsn,hcn,wmo nrows=12 chunksize=5 usecols=id,elev
+chunk 0
+shape (5, 2)
+  'id': str
+  'elev': float64
+,id,elev
+0,USW00014819,186.5
+1,USW00094846,201.8
+2,USC00111577,189.0
+3,USC00116610,-999.9
+4,USW00023174,29.6
+chunk 1
+shape (5, 2)
+  'id': str
+  'elev': float64
+,id,elev
+5,USW00023188,4.6
+6,USC00045114,640.1
+7,USS0020H13S,2133.6
+8,USW00094728,39.6
+9,USW00014732,3.4
+chunk 2
+shape (2, 2)
+  'id': str
+  'elev': float64
+,id,elev
+10,USC00300183,274.3
+11,USW00012839,8.8
+done
+$ read stations.txt colspecs=0:11,12:20,21:30,31:37,38:40,41:71,72:75,76:79,80:85 header=None names=id,lat,lon,elev,state,name,gsn,hcn,wmo index_col=4,0 usecols=id,state,lat head=5
+! IndexError: list index out of range
+$ read payroll.dat widths=1,6,15,12,4,8,9,1 header=None names=rec,emp,last,first,dept,hired,salary,status
+shape (12, 8)
+  'rec': str
+  'emp': int64
+  'last': str
+  'first': str
+  'dept': str
+  'hired': float64
+  'salary': float64
+  'status': str
+,rec,emp,last,first,dept,hired,salary,status
+0,H,202610,31PAYROLL EXPOR,T V2 ACME CO,RP,,,
+1,D,17,OKONKWO,ADAEZE,FIN,20120305.0,9875000.0,A
+2,D,42,LINDQVIST,MAJA,ENG,20150914.0,12450000.0,A
+3,D,108,HERNANDEZ,JOSE LUIS,ENG,20180102.0,11800050.0,L
+4,D,215,NAKAMURA,KENJI,OPS,20190617.0,6420000.0,A
+5,D,377,O'BRIEN,SIOBHAN,HR,20200810.0,7100000.0,T
+6,D,512,DUBOIS,CAMILLE,FIN,20210201.0,8350075.0,A
+7,D,640,MBEKI,THABO,OPS,20220711.0,5980000.0,A
+8,D,733,KOWALSKI,PIOTR,ENG,20230320.0,10500000.0,A
+9,D,901,SINGH,HARPREET,SALE,20240115.0,6875000.0,A
+10,D,1024,ROSSI,GIULIA,SALE,20250506.0,7210000.0,L
+11,T,10,000000086560125,,,,,
+$ read payroll.dat widths=1,6,15,12,4,8,9,1 header=None names=rec,emp,last,first,dept,hired,salary,status skiprows=1 skipfooter=1
+shape (10, 8)
+  'rec': str
+  'emp': int64
+  'last': str
+  'first': str
+  'dept': str
+  'hired': int64
+  'salary': int64
+  'status': str
+,rec,emp,last,first,dept,hired,salary,status
+0,D,17,OKONKWO,ADAEZE,FIN,20120305,9875000,A
+1,D,42,LINDQVIST,MAJA,ENG,20150914,12450000,A
+2,D,108,HERNANDEZ,JOSE LUIS,ENG,20180102,11800050,L
+3,D,215,NAKAMURA,KENJI,OPS,20190617,6420000,A
+4,D,377,O'BRIEN,SIOBHAN,HR,20200810,7100000,T
+5,D,512,DUBOIS,CAMILLE,FIN,20210201,8350075,A
+6,D,640,MBEKI,THABO,OPS,20220711,5980000,A
+7,D,733,KOWALSKI,PIOTR,ENG,20230320,10500000,A
+8,D,901,SINGH,HARPREET,SALE,20240115,6875000,A
+9,D,1024,ROSSI,GIULIA,SALE,20250506,7210000,L
+$ read payroll.dat widths=1,6,15,12,4,8,9,1 header=None names=rec,emp,last,first,dept,hired,salary,status skiprows=1 skipfooter=1 dtype=emp:str,hired:str index_col=emp
+shape (10, 7)
+  'rec': str
+  'last': str
+  'first': str
+  'dept': str
+  'hired': str
+  'salary': int64
+  'status': str
+emp,rec,last,first,dept,hired,salary,status
+000017,D,OKONKWO,ADAEZE,FIN,20120305,9875000,A
+000042,D,LINDQVIST,MAJA,ENG,20150914,12450000,A
+000108,D,HERNANDEZ,JOSE LUIS,ENG,20180102,11800050,L
+000215,D,NAKAMURA,KENJI,OPS,20190617,6420000,A
+000377,D,O'BRIEN,SIOBHAN,HR,20200810,7100000,T
+000512,D,DUBOIS,CAMILLE,FIN,20210201,8350075,A
+000640,D,MBEKI,THABO,OPS,20220711,5980000,A
+000733,D,KOWALSKI,PIOTR,ENG,20230320,10500000,A
+000901,D,SINGH,HARPREET,SALE,20240115,6875000,A
+001024,D,ROSSI,GIULIA,SALE,20250506,7210000,L
+$ read payroll.dat widths=1,6,15,12,4,8,9,1 header=None names=rec,emp,last,first,dept,hired,salary,status skiprows=1 skipfooter=1 usecols=emp,last,salary dtype=emp:str
+shape (10, 3)
+  'emp': str
+  'last': str
+  'salary': int64
+,emp,last,salary
+0,000017,OKONKWO,9875000
+1,000042,LINDQVIST,12450000
+2,000108,HERNANDEZ,11800050
+3,000215,NAKAMURA,6420000
+4,000377,O'BRIEN,7100000
+5,000512,DUBOIS,8350075
+6,000640,MBEKI,5980000
+7,000733,KOWALSKI,10500000
+8,000901,SINGH,6875000
+9,001024,ROSSI,7210000
+$ read payroll.dat widths=1,6,15,12,4,8,9,1 header=None names=rec,emp,last,first,dept,hired,salary,status skiprows=1 skipfooter=1 dtype=salary:float64,dept:category
+shape (10, 8)
+  'rec': str
+  'emp': int64
+  'last': str
+  'first': str
+  'dept': category
+  'hired': int64
+  'salary': float64
+  'status': str
+,rec,emp,last,first,dept,hired,salary,status
+0,D,17,OKONKWO,ADAEZE,FIN,20120305,9875000.0,A
+1,D,42,LINDQVIST,MAJA,ENG,20150914,12450000.0,A
+2,D,108,HERNANDEZ,JOSE LUIS,ENG,20180102,11800050.0,L
+3,D,215,NAKAMURA,KENJI,OPS,20190617,6420000.0,A
+4,D,377,O'BRIEN,SIOBHAN,HR,20200810,7100000.0,T
+5,D,512,DUBOIS,CAMILLE,FIN,20210201,8350075.0,A
+6,D,640,MBEKI,THABO,OPS,20220711,5980000.0,A
+7,D,733,KOWALSKI,PIOTR,ENG,20230320,10500000.0,A
+8,D,901,SINGH,HARPREET,SALE,20240115,6875000.0,A
+9,D,1024,ROSSI,GIULIA,SALE,20250506,7210000.0,L
+$ read payroll.dat widths=1,6,15,12,4,8,9,1 header=None names=rec,emp,last,first,dept,hired,salary,status skiprows=1 skipfooter=1 dtype=status:bool
+shape (10, 8)
+  'rec': str
+  'emp': int64
+  'last': str
+  'first': str
+  'dept': str
+  'hired': int64
+  'salary': int64
+  'status': bool
+,rec,emp,last,first,dept,hired,salary,status
+0,D,17,OKONKWO,ADAEZE,FIN,20120305,9875000,True
+1,D,42,LINDQVIST,MAJA,ENG,20150914,12450000,True
+2,D,108,HERNANDEZ,JOSE LUIS,ENG,20180102,11800050,True
+3,D,215,NAKAMURA,KENJI,OPS,20190617,6420000,True
+4,D,377,O'BRIEN,SIOBHAN,HR,20200810,7100000,True
+5,D,512,DUBOIS,CAMILLE,FIN,20210201,8350075,True
+6,D,640,MBEKI,THABO,OPS,20220711,5980000,True
+7,D,733,KOWALSKI,PIOTR,ENG,20230320,10500000,True
+8,D,901,SINGH,HARPREET,SALE,20240115,6875000,True
+9,D,1024,ROSSI,GIULIA,SALE,20250506,7210000,True
+$ read payroll.dat widths=1,6,15,12,4,8,9,1 header=None names=rec,emp,last,first,dept,hired,salary,status skiprows=1 skipfooter=1 dtype=emp:Int64,salary:Float64,last:string
+shape (10, 8)
+  'rec': str
+  'emp': Int64
+  'last': string
+  'first': str
+  'dept': str
+  'hired': int64
+  'salary': Float64
+  'status': str
+,rec,emp,last,first,dept,hired,salary,status
+0,D,17,OKONKWO,ADAEZE,FIN,20120305,9875000.0,A
+1,D,42,LINDQVIST,MAJA,ENG,20150914,12450000.0,A
+2,D,108,HERNANDEZ,JOSE LUIS,ENG,20180102,11800050.0,L
+3,D,215,NAKAMURA,KENJI,OPS,20190617,6420000.0,A
+4,D,377,O'BRIEN,SIOBHAN,HR,20200810,7100000.0,T
+5,D,512,DUBOIS,CAMILLE,FIN,20210201,8350075.0,A
+6,D,640,MBEKI,THABO,OPS,20220711,5980000.0,A
+7,D,733,KOWALSKI,PIOTR,ENG,20230320,10500000.0,A
+8,D,901,SINGH,HARPREET,SALE,20240115,6875000.0,A
+9,D,1024,ROSSI,GIULIA,SALE,20250506,7210000.0,L
+$ read payroll.dat widths=1,6,15,12,4,8,9,1 header=None names=rec,emp,last,first,dept,hired,salary,status skiprows=1 skipfooter=1 dtype_backend=numpy_nullable
+shape (10, 8)
+  'rec': string
+  'emp': Int64
+  'last': string
+  'first': string
+  'dept': string
+  'hired': Int64
+  'salary': Int64
+  'status': string
+,rec,emp,last,first,dept,hired,salary,status
+0,D,17,OKONKWO,ADAEZE,FIN,20120305,9875000,A
+1,D,42,LINDQVIST,MAJA,ENG,20150914,12450000,A
+2,D,108,HERNANDEZ,JOSE LUIS,ENG,20180102,11800050,L
+3,D,215,NAKAMURA,KENJI,OPS,20190617,6420000,A
+4,D,377,O'BRIEN,SIOBHAN,HR,20200810,7100000,T
+5,D,512,DUBOIS,CAMILLE,FIN,20210201,8350075,A
+6,D,640,MBEKI,THABO,OPS,20220711,5980000,A
+7,D,733,KOWALSKI,PIOTR,ENG,20230320,10500000,A
+8,D,901,SINGH,HARPREET,SALE,20240115,6875000,A
+9,D,1024,ROSSI,GIULIA,SALE,20250506,7210000,L
+$ read payroll.dat widths=1,6,15,12,4,8,9,1 header=None names=rec,emp,last,first,dept,hired,salary,status skiprows=1 skipfooter=1 dtype=last:int64
+! ValueError: Unable to convert column last to type int64
+$ read payroll.dat widths=1,6,15,12,4,8,9,1 header=None names=rec,emp,last,first,dept,hired,salary,status skiprows=1 nrows=3
+shape (3, 8)
+  'rec': str
+  'emp': int64
+  'last': str
+  'first': str
+  'dept': str
+  'hired': int64
+  'salary': int64
+  'status': str
+,rec,emp,last,first,dept,hired,salary,status
+0,D,17,OKONKWO,ADAEZE,FIN,20120305,9875000,A
+1,D,42,LINDQVIST,MAJA,ENG,20150914,12450000,A
+2,D,108,HERNANDEZ,JOSE LUIS,ENG,20180102,11800050,L
+$ read payroll.dat widths=1,6,15,12,4,8,9,1 header=None names=rec,emp,last,first,dept,hired,salary,status skiprows=1 skipfooter=1 nrows=3
+! ValueError: 'skipfooter' not supported with 'nrows'
+$ read payroll.dat widths=1,6,15,12,4,8,9,1 header=None names=rec,emp,last,first,dept,hired,salary,status skiprows=1 skipfooter=1 chunksize=4
+! ValueError: 'skipfooter' not supported for iteration
+$ read payroll.dat widths=1,6,15 header=None names=rec,emp,last,first
+! ValueError: Length of colspecs must match length of names
+$ read payroll.dat widths=1,6,15 header=None names=rec,emp
+! ValueError: Length of colspecs must match length of names
+$ read payroll.dat widths=1,6,15 header=None names=emp,last index_col=0
+shape (12, 2)
+  'emp': int64
+  'last': str
+,emp,last
+H,202610,31PAYROLL EXPOR
+D,17,OKONKWO
+D,42,LINDQVIST
+D,108,HERNANDEZ
+D,215,NAKAMURA
+D,377,O'BRIEN
+D,512,DUBOIS
+D,640,MBEKI
+D,733,KOWALSKI
+D,901,SINGH
+D,1024,ROSSI
+T,10,000000086560125
+$ read payroll.dat widths=1,6,15 colspecs=0:1 header=None
+! ValueError: You must specify only one of 'widths' and 'colspecs'
+$ read payroll.dat colspecs=None
+! ValueError: Must specify either colspecs or widths
+$ read pods.txt
+shape (8, 5)
+  'NAME': str
+  'READY': str
+  'STATUS': str
+  'RESTARTS': str
+  'AGE': str
+,NAME,READY,STATUS,RESTARTS,AGE
+0,api-gateway-7d9f8b6c4-2xkqp,1/1,Running,0,3d4h
+1,api-gateway-7d9f8b6c4-9wzlm,1/1,Running,1 (2d ago),3d4h
+2,billing-worker-5c6b7d8e9-abcde,0/1,CrashLoopBackOff,12 (4m ago),61m
+3,billing-worker-5c6b7d8e9-fghij,1/1,Running,0,61m
+4,nightly-report-28911340-x7k2p,0/1,Completed,0,7h
+5,postgres-0,2/2,Running,0,14d
+6,redis-6f8d9c7b5-q4r8t,1/1,Running,3 (5d12h ago),14d
+7,search-indexer-84c7f6d9b-tt2mn,0/1,Pending,0,8s
+$ read pods.txt colspecs=0:36,36:44,44:63,63:78,78:
+shape (8, 5)
+  'NAME': str
+  'READY': str
+  'STATUS': str
+  'RESTARTS': str
+  'AGE': str
+,NAME,READY,STATUS,RESTARTS,AGE
+0,api-gateway-7d9f8b6c4-2xkqp,1/1,Running,0,3d4h
+1,api-gateway-7d9f8b6c4-9wzlm,1/1,Running,1 (2d ago),3d4h
+2,billing-worker-5c6b7d8e9-abcde,0/1,CrashLoopBackOff,12 (4m ago),61m
+3,billing-worker-5c6b7d8e9-fghij,1/1,Running,0,61m
+4,nightly-report-28911340-x7k2p,0/1,Completed,0,7h
+5,postgres-0,2/2,Running,0,14d
+6,redis-6f8d9c7b5-q4r8t,1/1,Running,3 (5d12h ago),14d
+7,search-indexer-84c7f6d9b-tt2mn,0/1,Pending,0,8s
+$ read pods.txt colspecs=0:36,36:44,44:63,63:78,78: usecols=NAME,STATUS,RESTARTS
+shape (8, 3)
+  'NAME': str
+  'STATUS': str
+  'RESTARTS': str
+,NAME,STATUS,RESTARTS
+0,api-gateway-7d9f8b6c4-2xkqp,Running,0
+1,api-gateway-7d9f8b6c4-9wzlm,Running,1 (2d ago)
+2,billing-worker-5c6b7d8e9-abcde,CrashLoopBackOff,12 (4m ago)
+3,billing-worker-5c6b7d8e9-fghij,Running,0
+4,nightly-report-28911340-x7k2p,Completed,0
+5,postgres-0,Running,0
+6,redis-6f8d9c7b5-q4r8t,Running,3 (5d12h ago)
+7,search-indexer-84c7f6d9b-tt2mn,Pending,0
+$ read pods.txt colspecs=0:36,36:44,44:63,63:78,78: index_col=NAME usecols=NAME,READY
+shape (8, 1)
+  'READY': str
+NAME,READY
+api-gateway-7d9f8b6c4-2xkqp,1/1
+api-gateway-7d9f8b6c4-9wzlm,1/1
+billing-worker-5c6b7d8e9-abcde,0/1
+billing-worker-5c6b7d8e9-fghij,1/1
+nightly-report-28911340-x7k2p,0/1
+postgres-0,2/2
+redis-6f8d9c7b5-q4r8t,1/1
+search-indexer-84c7f6d9b-tt2mn,0/1
+$ read pods.txt colspecs=0:36,36:44,44:63,63:78,78: usecols=NAME,UPTIME
+! ValueError: Usecols do not match columns, columns expected but not found: ['UPTIME']
+$ read pods.txt colspecs=0:36,36:44,44:63,63:78,78: usecols=0,7
+! ParserError: Defining usecols with out-of-bounds indices is not allowed. [7] are out-of-bounds.
+$ read df.txt
+shape (5, 6)
+  'Filesystem': str
+  'Size': str
+  'Used': str
+  'Avail': str
+  'Use%': str
+  'Mounted on': str
+,Filesystem,Size,Used,Avail,Use%,Mounted on
+0,/dev/nvme0n1p2,468G,201G,244G,46%,/
+1,tmpfs,7.8G,1.2M,7.8G,1%,/dev/shm
+2,/dev/nvme0n1p1,511M,6.1M,505M,2%,/boot/efi
+3,/dev/sda1,3.6T,2.9T,540G,85%,/mnt/backup
+4,nas:/export,11T,8.4T,2.1T,81%,/mnt/nas
+$ read df.txt colspecs=0:15,15:21,21:27,27:33,33:38,38:
+shape (5, 6)
+  'Filesystem': str
+  'Size': str
+  'Used': str
+  'Avail': str
+  'Use%': str
+  'Mounted on': str
+,Filesystem,Size,Used,Avail,Use%,Mounted on
+0,/dev/nvme0n1p2,468G,201G,244G,46%,/
+1,tmpfs,7.8G,1.2M,7.8G,1%,/dev/shm
+2,/dev/nvme0n1p1,511M,6.1M,505M,2%,/boot/efi
+3,/dev/sda1,3.6T,2.9T,540G,85%,/mnt/backup
+4,nas:/export,11T,8.4T,2.1T,81%,/mnt/nas
+$ read df.txt colspecs=0:15,15:21,21:27,27:33,33:38,38: na_values=11T
+shape (5, 6)
+  'Filesystem': str
+  'Size': str
+  'Used': str
+  'Avail': str
+  'Use%': str
+  'Mounted on': str
+,Filesystem,Size,Used,Avail,Use%,Mounted on
+0,/dev/nvme0n1p2,468G,201G,244G,46%,/
+1,tmpfs,7.8G,1.2M,7.8G,1%,/dev/shm
+2,/dev/nvme0n1p1,511M,6.1M,505M,2%,/boot/efi
+3,/dev/sda1,3.6T,2.9T,540G,85%,/mnt/backup
+4,nas:/export,,8.4T,2.1T,81%,/mnt/nas
+$ read docker.txt
+shape (4, 8)
+  'CONTAINER ID': str
+  'IMAGE': str
+  'COMMAND': str
+  'CREATED': str
+  'STATUS': str
+  'Unnamed: 5': str
+  'PORTS': str
+  'NAMES': str
+,CONTAINER ID,IMAGE,COMMAND,CREATED,STATUS,Unnamed: 5,PORTS,NAMES
+0,3f2a9c1d7e4b,nginx:1.27-alpine,"""/docker-entrypoint.…""",2 hours ago,Up 2 hours,,0.0.0.0:8080->80/tcp,web
+1,a81c55e0b9f3,postgres:16,"""docker-entrypoint.s…""",3 days ago,Up 3 days (healthy),,5432/tcp,db
+2,5be7d042c6a1,redis:7.4,"""docker-entrypoint.s…""",3 days ago,Up 3 days,,6379/tcp,cache
+3,c09e1f3a2d88,acme/worker:2.3.1,"""python -m worker""",45 minutes ago,Exited (1) 40 minutes,ago,,worker
+$ read docker.txt colspecs=0:15,15:36,36:61,61:76,76:102,102:127,127:
+shape (4, 7)
+  'CONTAINER ID': str
+  'IMAGE': str
+  'COMMAND': str
+  'CREATED': str
+  'STATUS': str
+  'PORTS': str
+  'NAMES': str
+,CONTAINER ID,IMAGE,COMMAND,CREATED,STATUS,PORTS,NAMES
+0,3f2a9c1d7e4b,nginx:1.27-alpine,"""/docker-entrypoint.…""",2 hours ago,Up 2 hours,0.0.0.0:8080->80/tcp,web
+1,a81c55e0b9f3,postgres:16,"""docker-entrypoint.s…""",3 days ago,Up 3 days (healthy),5432/tcp,db
+2,5be7d042c6a1,redis:7.4,"""docker-entrypoint.s…""",3 days ago,Up 3 days,6379/tcp,cache
+3,c09e1f3a2d88,acme/worker:2.3.1,"""python -m worker""",45 minutes ago,Exited (1) 40 minutes ago,,worker
+$ read docker.txt colspecs=0:15,15:36,36:61,61:76,76:102,102:127,127: keep_default_na=False usecols=NAMES,PORTS
+shape (4, 2)
+  'PORTS': str
+  'NAMES': str
+,PORTS,NAMES
+0,0.0.0.0:8080->80/tcp,web
+1,5432/tcp,db
+2,6379/tcp,cache
+3,,worker
+$ read frame.txt
+shape (6, 5)
+  'Unnamed: 0': int64
+  'city': str
+  'temp_c': float64
+  'rain_mm': float64
+  'stations': int64
+,Unnamed: 0,city,temp_c,rain_mm,stations
+0,0,Oslo,-3.5,,4
+1,1,Reykjavík,1.25,12.0,2
+2,2,Helsinki,-7.0,0.4,6
+3,3,Stockholm,-1.0,3.2,5
+4,4,Copenhagen,2.5,,3
+5,5,Tromsø,-11.75,8.1,1
+$ read frame.txt index_col=0
+shape (6, 4)
+  'city': str
+  'temp_c': float64
+  'rain_mm': float64
+  'stations': int64
+,city,temp_c,rain_mm,stations
+0,Oslo,-3.5,,4
+1,Reykjavík,1.25,12.0,2
+2,Helsinki,-7.0,0.4,6
+3,Stockholm,-1.0,3.2,5
+4,Copenhagen,2.5,,3
+5,Tromsø,-11.75,8.1,1
+$ read frame.txt index_col=1
+shape (6, 4)
+  'Unnamed: 0': int64
+  'temp_c': float64
+  'rain_mm': float64
+  'stations': int64
+city,Unnamed: 0,temp_c,rain_mm,stations
+Oslo,0,-3.5,,4
+Reykjavík,1,1.25,12.0,2
+Helsinki,2,-7.0,0.4,6
+Stockholm,3,-1.0,3.2,5
+Copenhagen,4,2.5,,3
+Tromsø,5,-11.75,8.1,1
+$ read frame.txt index_col=0 dtype=stations:float64 na_values=Oslo
+shape (6, 4)
+  'city': str
+  'temp_c': float64
+  'rain_mm': float64
+  'stations': float64
+,city,temp_c,rain_mm,stations
+0,,-3.5,,4.0
+1,Reykjavík,1.25,12.0,2.0
+2,Helsinki,-7.0,0.4,6.0
+3,Stockholm,-1.0,3.2,5.0
+4,Copenhagen,2.5,,3.0
+5,Tromsø,-11.75,8.1,1.0
+$ read frame.txt index_col=0 usecols=city,rain_mm
+shape (6, 1)
+  'rain_mm': float64
+city,rain_mm
+Oslo,
+Reykjavík,12.0
+Helsinki,0.4
+Stockholm,3.2
+Copenhagen,
+Tromsø,8.1
+$ read frame.txt header=1 head=2
+shape (5, 5)
+  '0': int64
+  'Oslo': str
+  '-3.50': float64
+  'NaN': float64
+  '4': int64
+,0,Oslo,-3.50,NaN,4
+0,1,Reykjavík,1.25,12.0,2
+1,2,Helsinki,-7.0,0.4,6
+$ read frame.txt header=0,1 index_col=0
+shape (5, 4)
+  ('city', 'Oslo'): str
+  ('temp_c', '-3.50'): float64
+  ('rain_mm', 'NaN'): float64
+  ('stations', '4'): int64
+,city,temp_c,rain_mm,stations
+0,Oslo,-3.50,NaN,4
+1,Reykjavík,1.25,12.0,2
+2,Helsinki,-7.0,0.4,6
+3,Stockholm,-1.0,3.2,5
+4,Copenhagen,2.5,,3
+5,Tromsø,-11.75,8.1,1
+$ read frame.txt header=9
+! ValueError: Passed header=[9], len of 1, but only 7 lines in file
+$ read frame.txt names=a,b,c,d,e
+shape (7, 5)
+  'a': float64
+  'b': str
+  'c': str
+  'd': str
+  'e': str
+,a,b,c,d,e
+0,,city,temp_c,rain_mm,stations
+1,0.0,Oslo,-3.50,,4
+2,1.0,Reykjavík,1.25,12.0,2
+3,2.0,Helsinki,-7.00,0.4,6
+4,3.0,Stockholm,-1.00,3.2,5
+5,4.0,Copenhagen,2.50,,3
+6,5.0,Tromsø,-11.75,8.1,1
+$ read frame.txt names=idx,city,temp,rain,n skiprows=1
+shape (6, 5)
+  'idx': int64
+  'city': str
+  'temp': float64
+  'rain': float64
+  'n': int64
+,idx,city,temp,rain,n
+0,0,Oslo,-3.5,,4
+1,1,Reykjavík,1.25,12.0,2
+2,2,Helsinki,-7.0,0.4,6
+3,3,Stockholm,-1.0,3.2,5
+4,4,Copenhagen,2.5,,3
+5,5,Tromsø,-11.75,8.1,1
+$ read frame.txt names=city,temp,rain,n skiprows=1
+shape (6, 4)
+  'city': str
+  'temp': float64
+  'rain': float64
+  'n': int64
+,city,temp,rain,n
+0,Oslo,-3.5,,4
+1,Reykjavík,1.25,12.0,2
+2,Helsinki,-7.0,0.4,6
+3,Stockholm,-1.0,3.2,5
+4,Copenhagen,2.5,,3
+5,Tromsø,-11.75,8.1,1
+$ read frame.txt names=a,b,c skiprows=1
+shape (6, 3)
+  'a': float64
+  'b': float64
+  'c': int64
+,,a,b,c
+0,Oslo,-3.5,,4
+1,Reykjavík,1.25,12.0,2
+2,Helsinki,-7.0,0.4,6
+3,Stockholm,-1.0,3.2,5
+4,Copenhagen,2.5,,3
+5,Tromsø,-11.75,8.1,1
+$ read frame.txt index_col=7
+! IndexError: list index out of range
+$ read ledger.txt
+! UnicodeDecodeError: 'utf-8' codec can't decode byte 0xe4 in position 56: invalid continuation byte
+$ read ledger.txt encoding=latin-1
+shape (9, 4)
+  'Datum': str
+  'Buchungstext': str
+  'Betrag': str
+  'Währung': str
+,Datum,Buchungstext,Betrag,Währung
+0,----------,------------------------------,---------,-------
+1,01.10.2026,Gehalt Oktober,"3.250,00",EUR
+2,02.10.2026,Miete Wohnung Köln,"-1.180,00",EUR
+3,05.10.2026,Café Müller,"-12,40",EUR
+4,07.10.2026,Überweisung Sparkonto,"-500,00",EUR
+5,12.10.2026,Rückerstattung Hôtel Zürich,"86,15",CHF
+6,15.10.2026,Bäckerei Groß,"-7,95",EUR
+7,20.10.2026,Strom (Abschlag),"-74,00",EUR
+8,28.10.2026,Zinsen,"0,83",EUR
+$ read ledger.txt encoding=latin-1 skiprows=1
+shape (8, 4)
+  '----------': str
+  '------------------------------': str
+  '---------': str
+  '-------': str
+,----------,------------------------------,---------,-------
+0,01.10.2026,Gehalt Oktober,"3.250,00",EUR
+1,02.10.2026,Miete Wohnung Köln,"-1.180,00",EUR
+2,05.10.2026,Café Müller,"-12,40",EUR
+3,07.10.2026,Überweisung Sparkonto,"-500,00",EUR
+4,12.10.2026,Rückerstattung Hôtel Zürich,"86,15",CHF
+5,15.10.2026,Bäckerei Groß,"-7,95",EUR
+6,20.10.2026,Strom (Abschlag),"-74,00",EUR
+7,28.10.2026,Zinsen,"0,83",EUR
+$ read ledger.txt encoding=latin-1 skiprows=[1] decimal=, thousands=.
+shape (8, 4)
+  'Datum': int64
+  'Buchungstext': str
+  'Betrag': float64
+  'Währung': str
+,Datum,Buchungstext,Betrag,Währung
+0,1102026,Gehalt Oktober,3250.0,EUR
+1,2102026,Miete Wohnung Köln,-1180.0,EUR
+2,5102026,Café Müller,-12.4,EUR
+3,7102026,Überweisung Sparkonto,-500.0,EUR
+4,12102026,Rückerstattung Hôtel Zürich,86.15,CHF
+5,15102026,Bäckerei Groß,-7.95,EUR
+6,20102026,Strom (Abschlag),-74.0,EUR
+7,28102026,Zinsen,0.83,EUR
+$ read ledger.txt encoding=cp1252 skiprows=[1] decimal=, thousands=. dtype_backend=numpy_nullable
+shape (8, 4)
+  'Datum': Int64
+  'Buchungstext': string
+  'Betrag': Float64
+  'Währung': string
+,Datum,Buchungstext,Betrag,Währung
+0,1102026,Gehalt Oktober,3250.0,EUR
+1,2102026,Miete Wohnung Köln,-1180.0,EUR
+2,5102026,Café Müller,-12.4,EUR
+3,7102026,Überweisung Sparkonto,-500.0,EUR
+4,12102026,Rückerstattung Hôtel Zürich,86.15,CHF
+5,15102026,Bäckerei Groß,-7.95,EUR
+6,20102026,Strom (Abschlag),-74.0,EUR
+7,28102026,Zinsen,0.83,EUR
+$ read ledger.txt encoding=iso-8859-1 skiprows=[1] thousands=. usecols=Datum,Betrag
+shape (8, 2)
+  'Datum': int64
+  'Betrag': str
+,Datum,Betrag
+0,1102026,"3.250,00"
+1,2102026,"-1.180,00"
+2,5102026,"-12,40"
+3,7102026,"-500,00"
+4,12102026,"86,15"
+5,15102026,"-7,95"
+6,20102026,"-74,00"
+7,28102026,"0,83"
+$ read ledger.txt encoding=latin-1 skiprows=[1] decimal=,, thousands=.
+! ValueError: Only length-1 decimal markers supported
+$ read ledger.txt encoding=ebcdic
+! LookupError: unknown encoding: ebcdic
+$ read sensors.log
+shape (13, 4)
+  '# station export v3': str
+  'Unnamed: 1': str
+  'Unnamed: 2': str
+  'Unnamed: 3': str
+,# station export v3,Unnamed: 1,Unnamed: 2,Unnamed: 3
+0,# fields: time sensor temp_c rh_pct hpa,,,
+1,time              sensor  temp_c  rh_pct,hpa,,
+2,2026-10-29 06:00  T-101      4.2      81,1013.2,,
+3,2026-10-29 06:10  T-101      4.1      82,1013.1,,
+4,2026-10-29 06:20  T-102    -9999      80,1013.0,,
+5,2026-10-29 06:30  T-102      3.8     ERR,1012.8,,
+6,# logger restarted,,,
+7,2026-10-29 06:40  T-101      3.6      84,1012.7,,
+8,2026-10-29 06:50  T-103      3.5      85,1012.5,,
+9,2026-10-29 07:00  T-103      3.9      83,1012.6,#,gust
+10,2026-10-29 07:10  T-101      4.4      79,1012.9,,
+11,2026-10-29 07:20  T-1044  -12.75     100,998.25,,
+12,2026-10-29 07:30  T-1044   -13.5     100,997.5,,
+$ read sensors.log comment=#
+shape (10, 6)
+  'time': str
+  'Unnamed: 1': str
+  'sensor': str
+  'temp_c': float64
+  'rh_pct': str
+  'hpa': float64
+,time,Unnamed: 1,sensor,temp_c,rh_pct,hpa
+0,2026-10-29,06:00,T-101,4.2,81,1013.2
+1,2026-10-29,06:10,T-101,4.1,82,1013.1
+2,2026-10-29,06:20,T-102,-9999.0,80,1013.0
+3,2026-10-29,06:30,T-102,3.8,ERR,1012.8
+4,2026-10-29,06:40,T-101,3.6,84,1012.7
+5,2026-10-29,06:50,T-103,3.5,85,1012.5
+6,2026-10-29,07:00,T-103,3.9,83,1012.6
+7,2026-10-29,07:10,T-101,4.4,79,1012.9
+8,2026-10-29,07:20,T-1044,-12.75,100,998.25
+9,2026-10-29,07:30,T-1044,-13.5,100,997.5
+$ read sensors.log comment=# na_values=-9999,ERR
+shape (10, 6)
+  'time': str
+  'Unnamed: 1': str
+  'sensor': str
+  'temp_c': float64
+  'rh_pct': float64
+  'hpa': float64
+,time,Unnamed: 1,sensor,temp_c,rh_pct,hpa
+0,2026-10-29,06:00,T-101,4.2,81.0,1013.2
+1,2026-10-29,06:10,T-101,4.1,82.0,1013.1
+2,2026-10-29,06:20,T-102,,80.0,1013.0
+3,2026-10-29,06:30,T-102,3.8,,1012.8
+4,2026-10-29,06:40,T-101,3.6,84.0,1012.7
+5,2026-10-29,06:50,T-103,3.5,85.0,1012.5
+6,2026-10-29,07:00,T-103,3.9,83.0,1012.6
+7,2026-10-29,07:10,T-101,4.4,79.0,1012.9
+8,2026-10-29,07:20,T-1044,-12.75,100.0,998.25
+9,2026-10-29,07:30,T-1044,-13.5,100.0,997.5
+$ read sensors.log comment=# na_values=-9999,ERR infer_nrows=5
+shape (10, 6)
+  'time': str
+  'Unnamed: 1': str
+  'sensor': str
+  'temp_c': float64
+  'rh_pct': float64
+  'hpa': float64
+,time,Unnamed: 1,sensor,temp_c,rh_pct,hpa
+0,2026-10-29,06:00,T-101,4.2,81.0,1013.2
+1,2026-10-29,06:10,T-101,4.1,82.0,1013.1
+2,2026-10-29,06:20,T-102,,80.0,1013.0
+3,2026-10-29,06:30,T-102,3.8,,1012.8
+4,2026-10-29,06:40,T-101,3.6,84.0,1012.7
+5,2026-10-29,06:50,T-103,3.5,85.0,1012.5
+6,2026-10-29,07:00,T-103,3.9,83.0,1012.6
+7,2026-10-29,07:10,T-101,4.4,79.0,1012.9
+8,2026-10-29,07:20,T-1044,-12.75,100.0,998.25
+9,2026-10-29,07:30,T-1044,-13.5,100.0,997.5
+$ read sensors.log comment=# colspecs=0:16,18:24,26:32,34:40,42:48 na_values=-9999,ERR
+shape (10, 5)
+  'time': str
+  'sensor': str
+  'temp_c': float64
+  'rh_pct': float64
+  'hpa': float64
+,time,sensor,temp_c,rh_pct,hpa
+0,2026-10-29 06:00,T-101,4.2,81.0,1013.2
+1,2026-10-29 06:10,T-101,4.1,82.0,1013.1
+2,2026-10-29 06:20,T-102,,80.0,1013.0
+3,2026-10-29 06:30,T-102,3.8,,1012.8
+4,2026-10-29 06:40,T-101,3.6,84.0,1012.7
+5,2026-10-29 06:50,T-103,3.5,85.0,1012.5
+6,2026-10-29 07:00,T-103,3.9,83.0,1012.6
+7,2026-10-29 07:10,T-101,4.4,79.0,1012.9
+8,2026-10-29 07:20,T-1044,-12.75,100.0,998.25
+9,2026-10-29 07:30,T-1044,-13.5,100.0,997.5
+$ read sensors.log comment=# colspecs=0:16,18:24,26:32,34:40,42:48 skip_blank_lines=False
+shape (13, 5)
+  'time': str
+  'sensor': str
+  'temp_c': float64
+  'rh_pct': str
+  'hpa': float64
+,time,sensor,temp_c,rh_pct,hpa
+0,2026-10-29 06:00,T-101,4.2,81,1013.2
+1,2026-10-29 06:10,T-101,4.1,82,1013.1
+2,2026-10-29 06:20,T-102,-9999.0,80,1013.0
+3,2026-10-29 06:30,T-102,3.8,ERR,1012.8
+4,,,,,
+5,,,,,
+6,2026-10-29 06:40,T-101,3.6,84,1012.7
+7,2026-10-29 06:50,T-103,3.5,85,1012.5
+8,2026-10-29 07:00,T-103,3.9,83,1012.6
+9,2026-10-29 07:10,T-101,4.4,79,1012.9
+10,2026-10-29 07:20,T-1044,-12.75,100,998.25
+11,2026-10-29 07:30,T-1044,-13.5,100,997.5
+12,,,,,
+$ read sensors.log comment=# colspecs=0:16,18:24,26:32,34:40,42:48 chunksize=4
+chunk 0
+shape (4, 5)
+  'time': str
+  'sensor': str
+  'temp_c': float64
+  'rh_pct': str
+  'hpa': float64
+,time,sensor,temp_c,rh_pct,hpa
+0,2026-10-29 06:00,T-101,4.2,81,1013.2
+1,2026-10-29 06:10,T-101,4.1,82,1013.1
+2,2026-10-29 06:20,T-102,-9999.0,80,1013.0
+3,2026-10-29 06:30,T-102,3.8,ERR,1012.8
+chunk 1
+shape (2, 5)
+  'time': str
+  'sensor': str
+  'temp_c': float64
+  'rh_pct': int64
+  'hpa': float64
+,time,sensor,temp_c,rh_pct,hpa
+4,2026-10-29 06:40,T-101,3.6,84,1012.7
+5,2026-10-29 06:50,T-103,3.5,85,1012.5
+chunk 2
+shape (4, 5)
+  'time': str
+  'sensor': str
+  'temp_c': float64
+  'rh_pct': int64
+  'hpa': float64
+,time,sensor,temp_c,rh_pct,hpa
+6,2026-10-29 07:00,T-103,3.9,83,1012.6
+7,2026-10-29 07:10,T-101,4.4,79,1012.9
+8,2026-10-29 07:20,T-1044,-12.75,100,998.25
+9,2026-10-29 07:30,T-1044,-13.5,100,997.5
+chunk 3
+shape (0, 5)
+  'time': object
+  'sensor': object
+  'temp_c': object
+  'rh_pct': object
+  'hpa': object
+,time,sensor,temp_c,rh_pct,hpa
+done
+$ read sensors.log comment=# colspecs=0:16,18:24,26:32,34:40,42:48 nrows=5 skiprows=4,8
+shape (4, 5)
+  'time': str
+  'sensor': str
+  'temp_c': float64
+  'rh_pct': str
+  'hpa': float64
+,time,sensor,temp_c,rh_pct,hpa
+0,2026-10-29 06:00,T-101,4.2,81,1013.2
+1,2026-10-29 06:20,T-102,-9999.0,80,1013.0
+2,2026-10-29 06:30,T-102,3.8,ERR,1012.8
+3,2026-10-29 06:40,T-101,3.6,84,1012.7
+$ read sensors.log skiprows=0,1 colspecs=0:16,18:24,26:32,34:40,42:48
+shape (11, 5)
+  'time': str
+  'sensor': str
+  'temp_c': float64
+  'rh_pct': str
+  'hpa': float64
+,time,sensor,temp_c,rh_pct,hpa
+0,2026-10-29 06:00,T-101,4.2,81,1013.2
+1,2026-10-29 06:10,T-101,4.1,82,1013.1
+2,2026-10-29 06:20,T-102,-9999.0,80,1013.0
+3,2026-10-29 06:30,T-102,3.8,ERR,1012.8
+4,# logger restart,,,,
+5,2026-10-29 06:40,T-101,3.6,84,1012.7
+6,2026-10-29 06:50,T-103,3.5,85,1012.5
+7,2026-10-29 07:00,T-103,3.9,83,1012.6
+8,2026-10-29 07:10,T-101,4.4,79,1012.9
+9,2026-10-29 07:20,T-1044,-12.75,100,998.25
+10,2026-10-29 07:30,T-1044,-13.5,100,997.5
+$ read sensors.log skiprows=2 comment=# header=None colspecs=0:16,18:24,26:32,34:40,42:48
+shape (11, 5)
+  0: str
+  1: str
+  2: str
+  3: str
+  4: str
+,0,1,2,3,4
+0,time,sensor,temp_c,rh_pct,hpa
+1,2026-10-29 06:00,T-101,4.2,81,1013.2
+2,2026-10-29 06:10,T-101,4.1,82,1013.1
+3,2026-10-29 06:20,T-102,-9999,80,1013.0
+4,2026-10-29 06:30,T-102,3.8,ERR,1012.8
+5,2026-10-29 06:40,T-101,3.6,84,1012.7
+6,2026-10-29 06:50,T-103,3.5,85,1012.5
+7,2026-10-29 07:00,T-103,3.9,83,1012.6
+8,2026-10-29 07:10,T-101,4.4,79,1012.9
+9,2026-10-29 07:20,T-1044,-12.75,100,998.25
+10,2026-10-29 07:30,T-1044,-13.5,100,997.5
+$ read sensors.log comment=# colspecs=0:16,18:24,26:32,34:40,42:48 na_filter=False
+shape (10, 5)
+  'time': str
+  'sensor': str
+  'temp_c': float64
+  'rh_pct': str
+  'hpa': float64
+,time,sensor,temp_c,rh_pct,hpa
+0,2026-10-29 06:00,T-101,4.2,81,1013.2
+1,2026-10-29 06:10,T-101,4.1,82,1013.1
+2,2026-10-29 06:20,T-102,-9999.0,80,1013.0
+3,2026-10-29 06:30,T-102,3.8,ERR,1012.8
+4,2026-10-29 06:40,T-101,3.6,84,1012.7
+5,2026-10-29 06:50,T-103,3.5,85,1012.5
+6,2026-10-29 07:00,T-103,3.9,83,1012.6
+7,2026-10-29 07:10,T-101,4.4,79,1012.9
+8,2026-10-29 07:20,T-1044,-12.75,100,998.25
+9,2026-10-29 07:30,T-1044,-13.5,100,997.5
+$ read sensors.log comment=# colspecs=0:16,18:24,26:32,34:40,42:48 dtype=hpa:int64
+shape (10, 5)
+  'time': str
+  'sensor': str
+  'temp_c': float64
+  'rh_pct': str
+  'hpa': int64
+,time,sensor,temp_c,rh_pct,hpa
+0,2026-10-29 06:00,T-101,4.2,81,1013
+1,2026-10-29 06:10,T-101,4.1,82,1013
+2,2026-10-29 06:20,T-102,-9999.0,80,1013
+3,2026-10-29 06:30,T-102,3.8,ERR,1012
+4,2026-10-29 06:40,T-101,3.6,84,1012
+5,2026-10-29 06:50,T-103,3.5,85,1012
+6,2026-10-29 07:00,T-103,3.9,83,1012
+7,2026-10-29 07:10,T-101,4.4,79,1012
+8,2026-10-29 07:20,T-1044,-12.75,100,998
+9,2026-10-29 07:30,T-1044,-13.5,100,997
+$ read sensors.log comment=# colspecs=0:16,18:24,26:32,34:40,42:48 na_values=-9999,ERR dtype=rh_pct:int64
+! ValueError: Unable to convert column rh_pct to type int64
+$ read register.txt
+shape (4, 1)
+  'code__name_________________city________amount': str
+,code__name_________________city________amount
+0,"A-1___Ana María López______Valencia_____1,200"
+1,A-2___Bob Smith____________Leeds__________950
+2,"B-1___Chen Wei_____________Shenzhen_____2,075"
+3,B-2___Dagny Ødegaard_______Bergen____________
+$ read register.txt delimiter=_
+shape (4, 4)
+  'code': str
+  'name': str
+  'city': str
+  'amount': str
+,code,name,city,amount
+0,A-1,Ana María López,Valencia,"1,200"
+1,A-2,Bob Smith,Leeds,950
+2,B-1,Chen Wei,Shenzhen,"2,075"
+3,B-2,Dagny Ødegaard,Bergen,
+$ read register.txt delimiter=_ thousands=,
+shape (4, 4)
+  'code': str
+  'name': str
+  'city': str
+  'amount': float64
+,code,name,city,amount
+0,A-1,Ana María López,Valencia,1200.0
+1,A-2,Bob Smith,Leeds,950.0
+2,B-1,Chen Wei,Shenzhen,2075.0
+3,B-2,Dagny Ødegaard,Bergen,
+$ read register.txt delimiter=_ thousands=, dtype_backend=numpy_nullable
+shape (4, 4)
+  'code': string
+  'name': string
+  'city': string
+  'amount': Int64
+,code,name,city,amount
+0,A-1,Ana María López,Valencia,1200
+1,A-2,Bob Smith,Leeds,950
+2,B-1,Chen Wei,Shenzhen,2075
+3,B-2,Dagny Ødegaard,Bergen,
+$ read register.txt delimiter=_ colspecs=0:6,6:27,27:39,39:45 thousands=,
+shape (4, 4)
+  'code': str
+  'name': str
+  'city': str
+  'amount': float64
+,code,name,city,amount
+0,A-1,Ana María López,Valencia,1200.0
+1,A-2,Bob Smith,Leeds,950.0
+2,B-1,Chen Wei,Shenzhen,2075.0
+3,B-2,Dagny Ødegaard,Bergen,
+$ read register.txt delimiter=_, thousands=,
+shape (4, 4)
+  'code': str
+  'name': str
+  'city': str
+  'amount': float64
+,code,name,city,amount
+0,A-1,Ana María López,Valencia,1200.0
+1,A-2,Bob Smith,Leeds,950.0
+2,B-1,Chen Wei,Shenzhen,2075.0
+3,B-2,Dagny Ødegaard,Bergen,
+$ read bom.txt
+shape (3, 2)
+  'sku': str
+  'qty  price': str
+,sku,qty  price
+0,AB-100,3  19.99
+1,AB-101,12   4.50
+2,CD-200,1 120.00
+$ read bom.txt colspecs=0:6,6:12,12:19
+shape (3, 3)
+  'sku': str
+  'qty': int64
+  'price': float64
+,sku,qty,price
+0,AB-100,3,19.99
+1,AB-101,12,4.5
+2,CD-200,1,120.0
+$ read bom.txt colspecs=0:6,6:12,12:19 encoding=utf-8-sig
+shape (3, 3)
+  'sku': str
+  'qty': int64
+  'price': float64
+,sku,qty,price
+0,AB-100,3,19.99
+1,AB-101,12,4.5
+2,CD-200,1,120.0
+$ read bom.txt header=None
+shape (4, 2)
+  0: str
+  1: str
+,0,1
+0,sku,qty  price
+1,AB-100,3  19.99
+2,AB-101,12   4.50
+3,CD-200,1 120.00
+$ read named.txt
+shape (4, 3)
+  'Unnamed: 0': str
+  'temp_c': float64
+  'stations': float64
+,Unnamed: 0,temp_c,stations
+0,city,,
+1,Oslo,-3.5,4.0
+2,Reykjavík,1.25,2.0
+3,Helsinki,-7.0,6.0
+$ read named.txt index_col=0
+shape (4, 2)
+  'temp_c': float64
+  'stations': float64
+,temp_c,stations
+city,,
+Oslo,-3.5,4.0
+Reykjavík,1.25,2.0
+Helsinki,-7.0,6.0
+$ read named.txt header=0,1 index_col=0
+shape (3, 2)
+  ('temp_c', 'Unnamed: 1_level_1'): float64
+  ('stations', 'Unnamed: 2_level_1'): int64
+,temp_c,stations
+city,Unnamed: 1_level_1,Unnamed: 2_level_1
+Oslo,-3.5,4
+Reykjavík,1.25,2
+Helsinki,-7.0,6
+$ read grouped.txt
+shape (5, 3)
+  'Unnamed: 0': str
+  'Unnamed: 1': str
+  'temp': float64
+,Unnamed: 0,Unnamed: 1,temp
+0,country,city,
+1,NO,Oslo,1.5
+2,,Bergen,2.0
+3,SE,Lund,
+4,,Malmö,4.25
+$ read grouped.txt header=0,1
+shape (4, 3)
+  ('Unnamed: 0_level_0', 'country'): str
+  ('Unnamed: 1_level_0', 'city'): str
+  ('temp', 'Unnamed: 2_level_1'): float64
+,Unnamed: 0_level_0,Unnamed: 1_level_0,temp
+,country,city,Unnamed: 2_level_1
+0,NO,Oslo,1.5
+1,,Bergen,2.0
+2,SE,Lund,
+3,,Malmö,4.25
+$ read grouped.txt header=0,1 index_col=0,1
+shape (4, 1)
+  ('temp', 'Unnamed: 2_level_1'): float64
+,,temp
+country,,Unnamed: 2_level_1
+NO,Oslo,1.5
+,Bergen,2.0
+SE,Lund,
+,Malmö,4.25
+$ read grouped.txt skiprows=[1] index_col=0,1
+shape (4, 1)
+  'temp': float64
+,,temp
+NO,Oslo,1.5
+,Bergen,2.0
+SE,Lund,
+,Malmö,4.25
+$ read mac.txt
+shape (3, 3)
+  'id': int64
+  'qty': int64
+  'item': str
+,id,qty,item
+0,1,5,bolt
+1,2,12,nut
+2,3,7,washer
+$ read mac.txt header=None
+shape (4, 3)
+  0: str
+  1: str
+  2: str
+,0,1,2
+0,id,qty,item
+1,1,5,bolt
+2,2,12,nut
+3,3,7,washer
+$ read invoice.txt
+! UnicodeDecodeError: 'utf-8' codec can't decode byte 0x93 in position 7: invalid start byte
+$ read invoice.txt encoding=cp1252
+shape (3, 5)
+  'Code': str
+  '“Item”': str
+  'Unnamed: 2': str
+  'Price': str
+  'Unnamed: 4': str
+,Code,“Item”,Unnamed: 2,Price,Unnamed: 4
+0,A-100,“Deluxe” kettle,,"49,90",€
+1,A-101,Mug – set of 4,,"18,00",€
+2,B-200,"Tea (loose, 250",g),"7,25",€
+$ read invoice.txt encoding=windows-1252 decimal=,
+shape (3, 5)
+  'Code': str
+  '“Item”': str
+  'Unnamed: 2': str
+  'Price': float64
+  'Unnamed: 4': str
+,Code,“Item”,Unnamed: 2,Price,Unnamed: 4
+0,A-100,“Deluxe” kettle,,49.9,€
+1,A-101,Mug – set of 4,,18.0,€
+2,B-200,"Tea (loose, 250",g),7.25,€
+$ read invoice.txt encoding=latin-1
+shape (3, 5)
+  'Code': str
+  '\x93Item\x94': str
+  'Unnamed: 2': str
+  'Price': str
+  'Unnamed: 4': str
+,Code,Item,Unnamed: 2,Price,Unnamed: 4
+0,A-100,Deluxe kettle,,"49,90",
+1,A-101,Mug  set of 4,,"18,00",
+2,B-200,"Tea (loose, 250",g),"7,25",
+$ read invoice.txt encoding=ascii
+! UnicodeDecodeError: 'ascii' codec can't decode byte 0x93 in position 7: ordinal not in range(128)
+$ read pods.txt names=a,b,c,d,e header=0
+shape (8, 5)
+  'a': str
+  'b': str
+  'c': str
+  'd': str
+  'e': str
+,a,b,c,d,e
+0,api-gateway-7d9f8b6c4-2xkqp,1/1,Running,0,3d4h
+1,api-gateway-7d9f8b6c4-9wzlm,1/1,Running,1 (2d ago),3d4h
+2,billing-worker-5c6b7d8e9-abcde,0/1,CrashLoopBackOff,12 (4m ago),61m
+3,billing-worker-5c6b7d8e9-fghij,1/1,Running,0,61m
+4,nightly-report-28911340-x7k2p,0/1,Completed,0,7h
+5,postgres-0,2/2,Running,0,14d
+6,redis-6f8d9c7b5-q4r8t,1/1,Running,3 (5d12h ago),14d
+7,search-indexer-84c7f6d9b-tt2mn,0/1,Pending,0,8s
+$ read pods.txt names=a,b,c header=0
+shape (8, 3)
+  'a': str
+  'b': str
+  'c': str
+,,a,b,c
+api-gateway-7d9f8b6c4-2xkqp,1/1,Running,0,3d4h
+api-gateway-7d9f8b6c4-9wzlm,1/1,Running,1 (2d ago),3d4h
+billing-worker-5c6b7d8e9-abcde,0/1,CrashLoopBackOff,12 (4m ago),61m
+billing-worker-5c6b7d8e9-fghij,1/1,Running,0,61m
+nightly-report-28911340-x7k2p,0/1,Completed,0,7h
+postgres-0,2/2,Running,0,14d
+redis-6f8d9c7b5-q4r8t,1/1,Running,3 (5d12h ago),14d
+search-indexer-84c7f6d9b-tt2mn,0/1,Pending,0,8s
+$ read stations.txt header=None usecols=0,4 nrows=3
+shape (3, 2)
+  0: str
+  4: str
+,0,4
+0,USW00014819,IL
+1,USW00094846,IL
+2,USC00111577,IL
+$ read stations.txt colspecs=0:11,12:20,21:30,31:37,38:40,41:71,72:75,76:79,80:85 header=None names=id,lat,lon,elev,state,name,gsn,hcn,wmo na_values=state:IL|CA,wmo:72530 keep_default_na=False head=5
+shape (27, 9)
+  'id': str
+  'lat': float64
+  'lon': float64
+  'elev': float64
+  'state': str
+  'name': str
+  'gsn': str
+  'hcn': str
+  'wmo': str
+,id,lat,lon,elev,state,name,gsn,hcn,wmo
+0,USW00014819,41.7861,-87.7522,186.5,,CHICAGO MIDWAY AP,,,72534
+1,USW00094846,41.995,-87.9336,201.8,,CHICAGO OHARE INTL AP,,,
+2,USC00111577,41.7372,-87.7775,189.0,,CHICAGO MIDWAY 3 SW,,HCN,
+3,USC00116610,41.0181,-88.0472,-999.9,,PEOTONE,,HCN,
+4,USW00023174,33.9381,-118.3889,29.6,,LOS ANGELES INTL AP,,,72295
+$ read stations.txt colspecs=0:11,12:20,21:30,31:37,38:40,41:71,72:75,76:79,80:85 header=None names=id,lat,lon,elev,state,name,gsn,hcn,wmo dtype=str index_col=0 head=3
+shape (27, 8)
+  'lat': str
+  'lon': str
+  'elev': str
+  'state': str
+  'name': str
+  'gsn': str
+  'hcn': str
+  'wmo': str
+id,lat,lon,elev,state,name,gsn,hcn,wmo
+USW00014819,41.7861,-87.7522,186.5,IL,CHICAGO MIDWAY AP,,,72534
+USW00094846,41.9950,-87.9336,201.8,IL,CHICAGO OHARE INTL AP,,,72530
+USC00111577,41.7372,-87.7775,189.0,IL,CHICAGO MIDWAY 3 SW,,HCN,
+$ read stations.txt colspecs=0:11,12:20,21:30,31:37,38:40,41:71,72:75,76:79,80:85 header=None names=id,lat,lon,elev,state,name,gsn,hcn,wmo skiprows=30
+shape (0, 9)
+  'id': object
+  'lat': object
+  'lon': object
+  'elev': object
+  'state': object
+  'name': object
+  'gsn': object
+  'hcn': object
+  'wmo': object
+,id,lat,lon,elev,state,name,gsn,hcn,wmo
+$ read stations.txt colspecs=0:11,12:20,21:30,31:37,38:40,41:71,72:75,76:79,80:85 header=None names=id,lat,lon,elev,state,name,gsn,hcn,wmo chunksize=4 nrows=10 index_col=id usecols=id,lat
+chunk 0
+shape (4, 1)
+  'lat': float64
+id,lat
+USW00014819,41.7861
+USW00094846,41.995
+USC00111577,41.7372
+USC00116610,41.0181
+chunk 1
+shape (4, 1)
+  'lat': float64
+id,lat
+USW00023174,33.9381
+USW00023188,32.7336
+USC00045114,37.4806
+USS0020H13S,39.32
+chunk 2
+shape (2, 1)
+  'lat': float64
+id,lat
+USW00094728,40.7789
+USW00014732,40.7794
+done
+$ read stations.txt colspecs=0:5,3:8,100:120 header=None nrows=2
+shape (2, 3)
+  0: str
+  1: int64
+  2: float64
+,0,1,2
+0,USW00,14,
+1,USW00,94,
+$ read ledger.txt encoding=latin-1 skiprows=[1] thousands=. decimal=, dtype=Datum:str
+shape (8, 4)
+  'Datum': str
+  'Buchungstext': str
+  'Betrag': float64
+  'Währung': str
+,Datum,Buchungstext,Betrag,Währung
+0,01.10.2026,Gehalt Oktober,3250.0,EUR
+1,02.10.2026,Miete Wohnung Köln,-1180.0,EUR
+2,05.10.2026,Café Müller,-12.4,EUR
+3,07.10.2026,Überweisung Sparkonto,-500.0,EUR
+4,12.10.2026,Rückerstattung Hôtel Zürich,86.15,CHF
+5,15.10.2026,Bäckerei Groß,-7.95,EUR
+6,20.10.2026,Strom (Abschlag),-74.0,EUR
+7,28.10.2026,Zinsen,0.83,EUR
+$ read register.txt delimiter=_ dtype=amount:float64
+! ValueError: Unable to convert column amount to type float64
+$ read register.txt delimiter=_ names=code,name,city,amount
+shape (5, 4)
+  'code': str
+  'name': str
+  'city': str
+  'amount': str
+,code,name,city,amount
+0,code,name,city,amount
+1,A-1,Ana María López,Valencia,"1,200"
+2,A-2,Bob Smith,Leeds,950
+3,B-1,Chen Wei,Shenzhen,"2,075"
+4,B-2,Dagny Ødegaard,Bergen,
+$ read df.txt usecols=0,5 header=None
+shape (6, 2)
+  0: str
+  5: str
+,0,5
+0,Filesystem,Mounted on
+1,/dev/nvme0n1p2,/
+2,tmpfs,/dev/shm
+3,/dev/nvme0n1p1,/boot/efi
+4,/dev/sda1,/mnt/backup
+5,nas:/export,/mnt/nas
+$ read frame.txt index_col=0 chunksize=4
+chunk 0
+shape (4, 4)
+  'city': str
+  'temp_c': float64
+  'rain_mm': float64
+  'stations': int64
+,city,temp_c,rain_mm,stations
+0,Oslo,-3.5,,4
+1,Reykjavík,1.25,12.0,2
+2,Helsinki,-7.0,0.4,6
+3,Stockholm,-1.0,3.2,5
+chunk 1
+shape (2, 4)
+  'city': str
+  'temp_c': float64
+  'rain_mm': float64
+  'stations': int64
+,city,temp_c,rain_mm,stations
+4,Copenhagen,2.5,,3
+5,Tromsø,-11.75,8.1,1
+done
+$ read frame.txt header=0,1 index_col=0 nrows=2
+shape (2, 4)
+  ('city', 'Oslo'): str
+  ('temp_c', '-3.50'): float64
+  ('rain_mm', 'NaN'): float64
+  ('stations', '4'): int64
+,city,temp_c,rain_mm,stations
+0,Oslo,-3.50,NaN,4
+1,Reykjavík,1.25,12.0,2
+2,Helsinki,-7.0,0.4,6
+$ read frame.txt index_col=city
+shape (6, 4)
+  'Unnamed: 0': int64
+  'temp_c': float64
+  'rain_mm': float64
+  'stations': int64
+city,Unnamed: 0,temp_c,rain_mm,stations
+Oslo,0,-3.5,,4
+Reykjavík,1,1.25,12.0,2
+Helsinki,2,-7.0,0.4,6
+Stockholm,3,-1.0,3.2,5
+Copenhagen,4,2.5,,3
+Tromsø,5,-11.75,8.1,1
+$ read frame.txt index_col=nope
+! ValueError: Index nope invalid
+$ read frame.txt dtype=city:category,stations:Float64 index_col=0
+shape (6, 4)
+  'city': category
+  'temp_c': float64
+  'rain_mm': float64
+  'stations': Float64
+,city,temp_c,rain_mm,stations
+0,Oslo,-3.5,,4.0
+1,Reykjavík,1.25,12.0,2.0
+2,Helsinki,-7.0,0.4,6.0
+3,Stockholm,-1.0,3.2,5.0
+4,Copenhagen,2.5,,3.0
+5,Tromsø,-11.75,8.1,1.0
+$ read empty.txt
+! EmptyDataError: No rows from which to infer column width
+$ read empty.txt colspecs=0:5,5:9
+! EmptyDataError: No columns to parse from file
+$ read empty.txt colspecs=0:5,5:9 names=a,b
+shape (0, 2)
+  'a': object
+  'b': object
+,a,b
+$ read blank.txt
+! EmptyDataError: No columns to parse from file
+$ read blank.txt colspecs=0:5
+! EmptyDataError: No columns to parse from file
+$ read blank.txt colspecs=0:5 names=a
+shape (0, 1)
+  'a': object
+,a
+$ read missing.txt
+! FileNotFoundError: [Errno 2] No such file or directory: 'data/missing.txt'
+$ read stations.txt infer_nrows=0
+shape (26, 9)
+  'USW00014819': str
+  '41.7861': float64
+  '-87.7522': float64
+  '186.5': float64
+  'IL': str
+  'CHICAGO': str
+  'MIDWAY': str
+  'AP': str
+  '72534': float64
+,USW00014819,41.7861,-87.7522,186.5,IL,CHICAGO,MIDWAY,AP,72534
+0,USW00094846,41.995,-87.9336,201.8,IL,CHICAGO,OHARE,NT,72530.0
+1,USC00111577,41.7372,-87.7775,189.0,IL,CHICAGO,MIDWAY,3,
+2,USC00116610,41.0181,-88.0472,999.9,IL,PEOTONE,,,
+3,USW00023174,33.9381,118.3889,29.6,CA,LOS ANG,LES IN,L,72295.0
+4,USW00023188,32.7336,117.1831,4.6,CA,SAN DIE,O LIND,ER,72290.0
+5,USC00045114,37.4806,119.9772,640.1,CA,MARIPOS,RS,,
+6,USS0020H13S,39.32,120.37,133.6,CA,INDEPEN,ENCE L,KE,
+7,USW00094728,40.7789,-73.9692,39.6,NY,NEW YOR,CNTRL,PK,72506.0
+8,USW00014732,40.7794,-73.8803,3.4,NY,NEW YOR,LAGUA,DI,72503.0
+9,USC00300183,42.7667,-78.6167,274.3,NY,AURORA,,,
+10,USW00012839,25.7881,-80.3169,8.8,FL,MIAMI I,TL AP,,72202.0
+11,USW00012921,29.5442,-98.4839,241.7,TX,SAN ANT,NIO IN,L,72253.0
+12,USC00415196,30.2844,-97.7347,172.2,TX,AUSTIN,AMP MA,RY,
+13,USW00024233,47.4444,122.3139,112.8,WA,SEATTLE,TACOMA,IN,72793.0
+14,USR0000WTRO,48.45,120.1667,219.2,WA,TWISP R,WS,,
+15,USW00026451,61.1689,150.0278,36.6,AK,ANCHORA,E INTL,AP,70273.0
+16,CA001108395,49.195,123.1814,4.3,BC,VANCOUV,R INTL,A,71892.0
+17,CA006158355,43.6772,-79.6306,173.4,ON,TORONTO,INTL A,,71624.0
+18,MXN00009048,19.4,-99.1833,303.0,,TACUBAY,CENTR,L,76680.0
+19,GME00127786,52.4631,13.3017,51.0,,BERLIN-,AHLEM,,10381.0
+20,FRE00106207,48.8167,2.3333,75.0,,PARIS/L,BOURG,T,7150.0
+21,UK000056225,51.478,-0.461,25.0,,HEATHRO,,,3772.0
+22,ASN00066062,33.8607,151.205,39.0,,SYDNEY,OBSERV,TO,94768.0
+23,JA000047662,35.683,139.767,36.0,,TOKYO,,,47662.0
+24,SF000068816,33.967,18.6,46.0,,CAPE TO,N INTL,,68816.0
+25,AYM00089606,66.283,110.517,999.9,,CASEY,,,89611.0
