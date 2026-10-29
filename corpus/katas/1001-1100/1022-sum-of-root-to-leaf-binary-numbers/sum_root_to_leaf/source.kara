@@ -1,0 +1,141 @@
+// LeetCode #1022: Sum of Root To Leaf Binary Numbers -- recursion
+//
+// Going down to a child doubles the number read so far and adds the
+// child's bit. Recurse with the number read down to each node; a leaf
+// gives its number and any other node the sum of its children's. O(n).
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn sum_root_to_leaf(root: Option[TreeNode]) -> i64 {
+    sum_from(root, 0)
+}
+
+fn sum_from(node: Option[TreeNode], above: i64) -> i64 {
+    match node {
+        None => 0,
+        Some(n) => {
+            let value = above * 2 + n.val;
+            if n.left.is_none() and n.right.is_none() {
+                value
+            } else {
+                sum_from(n.left, value) + sum_from(n.right, value)
+            }
+        }
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// a tree from LeetCode's level order, with -1 for a missing child
+fn from_level_order(values: ref Vec[i64]) -> Option[TreeNode] {
+    if values.len() == 0 or values[0] < 0 {
+        return None;
+    }
+    let root = TreeNode { val: values[0], left: None, right: None };
+    let mut queue: VecDeque[TreeNode] = VecDeque.new();
+    queue.push_back(root);
+    let mut k = 1;
+    while k < values.len() {
+        let node = queue.pop_front().unwrap();
+        if values[k] >= 0 {
+            let child = TreeNode { val: values[k], left: None, right: None };
+            node.left = Some(child);
+            queue.push_back(child);
+        }
+        k += 1;
+        if k < values.len() and values[k] >= 0 {
+            let child = TreeNode { val: values[k], left: None, right: None };
+            node.right = Some(child);
+            queue.push_back(child);
+        }
+        k += 1;
+    }
+    Some(root)
+}
+
+// a random tree of `n` nodes no more than `depth` deep, each new node hung
+// at the end of a random walk down from the root, with a 1 at each node
+// with probability `ones` / 8
+fn random_tree(seed: mut ref i64, n: i64, depth: i64, ones: i64) -> Option[TreeNode] {
+    let root = TreeNode { val: if next_random(mut seed) % 8 < ones { 1 } else { 0 }, left: None, right: None };
+    let mut placed = 1;
+    while placed < n {
+        let mut node = root;
+        let mut level = 1;
+        loop {
+            let go_left = next_random(mut seed) % 2 == 0;
+            let next = if go_left { node.left } else { node.right };
+            match next {
+                Some(child) => {
+                    node = child;
+                    level += 1;
+                    if level == depth {
+                        break;
+                    }
+                }
+                None => {
+                    let leaf = TreeNode { val: if next_random(mut seed) % 8 < ones { 1 } else { 0 }, left: None, right: None };
+                    if go_left {
+                        node.left = Some(leaf);
+                    } else {
+                        node.right = Some(leaf);
+                    }
+                    placed += 1;
+                    break;
+                }
+            }
+        }
+    }
+    Some(root)
+}
+
+fn main() {
+    // LeetCode's two examples, then a few more
+    let examples: Vec[Vec[i64]] = vec![
+        vec![1, 0, 1, 0, 1, 0, 1],
+        vec![0],
+        vec![1],
+        vec![1, 1],
+        vec![1, -1, 0],
+        vec![0, 1, -1, 1, 0],
+        vec![1, 0, 0, -1, 1, 1, -1, 0, -1, -1, 1],
+    ];
+    for values in examples.iter() {
+        println(f"{values} -> {sum_root_to_leaf(from_level_order(values))}");
+    }
+    // random trees: the sum of the answers, the largest and a checksum
+    let mut seed = 1022;
+    let groups: Vec[(i64, i64, i64)] = vec![(3000, 7, 4), (1000, 30, 4), (300, 200, 1), (300, 200, 7), (50, 1000, 4), (50, 1000, 8)];
+    for (count, n, ones) in groups.iter() {
+        let mut total = 0;
+        let mut most = 0;
+        let mut check = 0;
+        for _ in 0..count {
+            let answer = sum_root_to_leaf(random_tree(mut seed, n, 31, ones));
+            total += answer;
+            most = most.max(answer);
+            check = (check * 31 + answer) % 1000000007;
+        }
+        println(f"{count} random trees of {n} nodes ({ones}/8 ones): sum {total}, most {most}, checksum {check}");
+    }
+    // a path of 31 ones, and the full tree of 10 levels, all ones
+    let mut path: Vec[i64] = vec![1];
+    for _ in 1..31 {
+        path.push(-1);
+        path.push(1);
+    }
+    let mut full: Vec[i64] = Vec.new();
+    for _ in 0..1023 {
+        full.push(1);
+    }
+    println(f"a path of 31 ones: {sum_root_to_leaf(from_level_order(path))}; 10 full levels of ones: {sum_root_to_leaf(from_level_order(full))}");
+}

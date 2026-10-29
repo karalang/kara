@@ -1,0 +1,433 @@
+// LeetCode #1022: Sum of Root To Leaf Binary Numbers -- differential
+//
+// The five arms, copied, against the statement read literally and five
+// more properties. See README.md § Differential.
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn d_star(root: Option[TreeNode]) -> i64 {
+    sum_from(root, 0)
+}
+
+fn sum_from(node: Option[TreeNode], above: i64) -> i64 {
+    match node {
+        None => 0,
+        Some(n) => {
+            let value = above * 2 + n.val;
+            if n.left.is_none() and n.right.is_none() {
+                value
+            } else {
+                sum_from(n.left, value) + sum_from(n.right, value)
+            }
+        }
+    }
+}
+
+fn d_stack(root: Option[TreeNode]) -> i64 {
+    let mut total = 0;
+    let mut stack: Vec[(TreeNode, i64)] = Vec.new();
+    if let Some(r) = root {
+        stack.push((r, 0));
+    }
+    while let Some((node, above)) = stack.pop() {
+        let value = above * 2 + node.val;
+        if node.left.is_none() and node.right.is_none() {
+            total += value;
+        }
+        if let Some(r) = node.right {
+            stack.push((r, value));
+        }
+        if let Some(l) = node.left {
+            stack.push((l, value));
+        }
+    }
+    total
+}
+
+fn d_bfs(root: Option[TreeNode]) -> i64 {
+    let mut total = 0;
+    let mut queue: VecDeque[(TreeNode, i64)] = VecDeque.new();
+    if let Some(r) = root {
+        queue.push_back((r, r.val));
+    }
+    while let Some((node, value)) = queue.pop_front() {
+        match (node.left, node.right) {
+            (None, None) => total += value,
+            (left, right) => {
+                if let Some(l) = left {
+                    queue.push_back((l, value * 2 + l.val));
+                }
+                if let Some(r) = right {
+                    queue.push_back((r, value * 2 + r.val));
+                }
+            }
+        }
+    }
+    total
+}
+
+fn collect(node: TreeNode, bits: mut ref Vec[i64], paths: mut ref Vec[Vec[i64]]) {
+    bits.push(node.val);
+    match (node.left, node.right) {
+        (None, None) => paths.push(bits.clone()),
+        (left, right) => {
+            if let Some(l) = left {
+                collect(l, mut bits, mut paths);
+            }
+            if let Some(r) = right {
+                collect(r, mut bits, mut paths);
+            }
+        }
+    }
+    let _ = bits.pop();
+}
+
+fn d_paths(root: Option[TreeNode]) -> i64 {
+    let mut paths: Vec[Vec[i64]] = Vec.new();
+    if let Some(r) = root {
+        let mut bits: Vec[i64] = Vec.new();
+        collect(r, mut bits, mut paths);
+    }
+    let mut total = 0;
+    for path in paths.iter() {
+        let mut number = 0;
+        for k in 0..path.len() {
+            if path[k] == 1 {
+                number += 1 << (path.len() - 1 - k);
+            }
+        }
+        total += number;
+    }
+    total
+}
+
+fn d_morris(root: Option[TreeNode]) -> i64 {
+    let mut total = 0;
+    let mut number = 0;
+    let mut cur = root;
+    while let Some(node) = cur {
+        match node.left {
+            Some(left) => {
+                // the last node of the left subtree's right spine
+                let mut pre = left;
+                let mut steps = 1;
+                loop {
+                    match pre.right {
+                        Some(next) if not next.ref_eq(node) => {
+                            pre = next;
+                            steps += 1;
+                        }
+                        _ => break,
+                    }
+                }
+                if pre.right.is_none() {
+                    number = number * 2 + node.val;
+                    pre.right = Some(node);
+                    cur = node.left;
+                } else {
+                    if pre.left.is_none() {
+                        total += number;
+                    }
+                    number = number >> steps;
+                    pre.right = None;
+                    cur = node.right;
+                }
+            }
+            None => {
+                number = number * 2 + node.val;
+                if node.right.is_none() {
+                    total += number;
+                }
+                cur = node.right;
+            }
+        }
+    }
+    total
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// every tree shape of `n` nodes, written in preorder with 1 for a node and
+// 0 for a missing child
+fn shapes(n: i64) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    if n == 0 {
+        out.push(vec![0]);
+        return out;
+    }
+    for i in 0..n {
+        for l in shapes(i).iter() {
+            for r in shapes(n - 1 - i).iter() {
+                let mut code: Vec[i64] = vec![1];
+                for x in l.iter() {
+                    code.push(x);
+                }
+                for x in r.iter() {
+                    code.push(x);
+                }
+                out.push(code);
+            }
+        }
+    }
+    out
+}
+
+// the tree a shape spells, with its bits taken in preorder from `bits`
+fn build(code: ref Vec[i64], at: mut ref i64, bits: ref Vec[i64], next_bit: mut ref i64) -> Option[TreeNode] {
+    let here = code[*at];
+    *at += 1;
+    if here == 0 {
+        return None;
+    }
+    let val = bits[*next_bit];
+    *next_bit += 1;
+    let left = build(code, mut at, bits, mut next_bit);
+    let right = build(code, mut at, bits, mut next_bit);
+    Some(TreeNode { val: val, left: left, right: right })
+}
+
+// a random tree of `n` nodes no more than `depth` deep
+fn random_tree(seed: mut ref i64, n: i64, depth: i64, ones: i64) -> Option[TreeNode] {
+    let root = TreeNode { val: if next_random(mut seed) % 8 < ones { 1 } else { 0 }, left: None, right: None };
+    let mut placed = 1;
+    while placed < n {
+        let mut node = root;
+        let mut level = 1;
+        loop {
+            let go_left = next_random(mut seed) % 2 == 0;
+            let next = if go_left { node.left } else { node.right };
+            match next {
+                Some(child) => {
+                    node = child;
+                    level += 1;
+                    if level == depth {
+                        break;
+                    }
+                }
+                None => {
+                    let leaf = TreeNode { val: if next_random(mut seed) % 8 < ones { 1 } else { 0 }, left: None, right: None };
+                    if go_left {
+                        node.left = Some(leaf);
+                    } else {
+                        node.right = Some(leaf);
+                    }
+                    placed += 1;
+                    break;
+                }
+            }
+        }
+    }
+    Some(root)
+}
+
+// a fresh copy of the tree, its bits turned over if `flip` and its
+// children swapped if `swap`
+fn copied(node: ref Option[TreeNode], flip: bool, swap: bool) -> Option[TreeNode] {
+    match node {
+        None => None,
+        Some(n) => {
+            let left = copied(n.left, flip, swap);
+            let right = copied(n.right, flip, swap);
+            let val = if flip { 1 - n.val } else { n.val };
+            if swap {
+                Some(TreeNode { val: val, left: right, right: left })
+            } else {
+                Some(TreeNode { val: val, left: left, right: right })
+            }
+        }
+    }
+}
+
+// the tree in preorder, -1 for a missing child, giving up past `budget`
+// entries (a link left pointing back up would never end)
+fn written(node: ref Option[TreeNode], out: mut ref Vec[i64], budget: i64) {
+    if out.len() > budget {
+        return;
+    }
+    match node {
+        None => out.push(-1),
+        Some(n) => {
+            out.push(n.val);
+            written(n.left, mut out, budget);
+            written(n.right, mut out, budget);
+        }
+    }
+}
+
+fn leaves(node: ref Option[TreeNode], depth: i64, found: mut ref Vec[TreeNode], depths: mut ref Vec[i64]) {
+    if let Some(n) = node {
+        if n.left.is_none() and n.right.is_none() {
+            found.push(n);
+            depths.push(depth + 1);
+        }
+        leaves(n.left, depth + 1, mut found, mut depths);
+        leaves(n.right, depth + 1, mut found, mut depths);
+    }
+}
+
+// the bits on the way down from `node` to `target`, if it is below
+fn path_to(node: ref Option[TreeNode], target: ref TreeNode, bits: mut ref String) -> bool {
+    match node {
+        None => false,
+        Some(n) => {
+            bits.push(if n.val == 1 { '1' } else { '0' });
+            if n.ref_eq(target) or path_to(n.left, target, mut bits) or path_to(n.right, target, mut bits) {
+                return true;
+            }
+            let _ = bits.pop();
+            false
+        }
+    }
+}
+
+// the statement read literally: for each leaf, spell the path from the
+// root to it as a binary numeral and read it
+fn literal(root: ref Option[TreeNode]) -> i64 {
+    let mut found: Vec[TreeNode] = Vec.new();
+    let mut depths: Vec[i64] = Vec.new();
+    leaves(root, 0, mut found, mut depths);
+    let mut total = 0;
+    for leaf in found.iter() {
+        let mut bits = String.new();
+        let _ = path_to(root, leaf, mut bits);
+        let mut number = 0;
+        for c in bits.chars() {
+            number = number * 2 + if c == '1' { 1 } else { 0 };
+        }
+        total += number;
+    }
+    total
+}
+
+// arm `a` on the tree it is given
+fn arm(a: i64, mine: ref Option[TreeNode]) -> i64 {
+    if a == 0 {
+        d_star(mine)
+    } else if a == 1 {
+        d_stack(mine)
+    } else if a == 2 {
+        d_bfs(mine)
+    } else if a == 3 {
+        d_paths(mine)
+    } else {
+        d_morris(mine)
+    }
+}
+
+// arm `a` on a copy of its own
+fn run(a: i64, tree: ref Option[TreeNode]) -> i64 {
+    arm(a, copied(tree, false, false))
+}
+
+fn main() {
+    let mut failures: Vec[i64] = Vec.filled(6, 0);
+    let mut checks = 0;
+    let mut check = 0;
+    let mut seed = 10221;
+    // every tree of 1 to 5 nodes with every choice of bits (1618), every
+    // shape of 6 or 7 nodes with random bits (561), 600 random trees of 8
+    // to 60 nodes and 20 of 300 to 1000, no more than 31 deep
+    let mut todo: Vec[Option[TreeNode]] = Vec.new();
+    for n in 1..8 {
+        for code in shapes(n).iter() {
+            let labellings = if n <= 5 { 1 << n } else { 1 };
+            for mask in 0..labellings {
+                let mut bits: Vec[i64] = Vec.new();
+                for k in 0..n {
+                    bits.push(if n <= 5 { (mask >> k) & 1 } else { next_random(mut seed) % 2 });
+                }
+                let mut at = 0;
+                let mut next_bit = 0;
+                todo.push(build(code, mut at, bits, mut next_bit));
+            }
+        }
+    }
+    for t in 0..620 {
+        let n = if t < 600 { 8 + next_random(mut seed) % 53 } else { 300 + next_random(mut seed) % 701 };
+        let ones = 1 + next_random(mut seed) % 7;
+        todo.push(random_tree(mut seed, n, 31, ones));
+    }
+    for tree in todo.iter() {
+        let mut shape: Vec[i64] = Vec.new();
+        written(tree, mut shape, 1 << 40);
+        let budget = shape.len() + 4;
+        let mut found: Vec[TreeNode] = Vec.new();
+        let mut depths: Vec[i64] = Vec.new();
+        leaves(tree, 0, mut found, mut depths);
+        let mut all_ones = 0;
+        let mut weight = 0;
+        for d in depths.iter() {
+            all_ones += (1 << d) - 1;
+            weight += 1 << d;
+        }
+        let flipped = copied(tree, true, false);
+        let swapped = copied(tree, false, true);
+        let under0 = Some(TreeNode { val: 0, left: copied(tree, false, false), right: None });
+        let under1 = Some(TreeNode { val: 1, left: None, right: copied(tree, false, false) });
+        let exact = literal(tree);
+        let mut got: Vec[i64] = Vec.new();
+        for a in 0..5 {
+            let mine = copied(tree, false, false);
+            got.push(arm(a, mine));
+            // P2: the tree left as the arm found it
+            checks += 1;
+            let mut after: Vec[i64] = Vec.new();
+            written(mine, mut after, budget);
+            if after != shape {
+                failures[1] += 1;
+            }
+        }
+        check = (check * 31 + got[0]) % 1000000007;
+        for a in 0..5 {
+            let c = got[a];
+            // P1: the statement
+            checks += 1;
+            if c != exact {
+                failures[0] += 1;
+            }
+            // P3: with every bit turned over, each path reads as its
+            // complement, so the two answers add up to all ones on every path
+            checks += 1;
+            if c + run(a, flipped) != all_ones {
+                failures[2] += 1;
+            }
+            // P4: below a new root of 0 nothing changes; below a new root of
+            // 1 each path gains its top bit
+            checks += 1;
+            if run(a, under0) != c or run(a, under1) != c + weight {
+                failures[3] += 1;
+            }
+            // P5: the mirror image has the same paths
+            checks += 1;
+            if run(a, swapped) != c {
+                failures[4] += 1;
+            }
+            // P6: each arm agrees with at least two of the other four
+            checks += 1;
+            let mut agree = 0;
+            for o in 0..5 {
+                if o != a and got[o] == c {
+                    agree += 1;
+                }
+            }
+            if agree < 2 {
+                failures[5] += 1;
+            }
+        }
+    }
+    let mut total = 0;
+    for p in 0..6 {
+        if failures[p] > 0 {
+            println(f"P{p + 1}: {failures[p]} failures");
+        }
+        total += failures[p];
+    }
+    println(f"{todo.len()} trees: checksum {check}, {checks} checks over 5 arms: {total} failures");
+}

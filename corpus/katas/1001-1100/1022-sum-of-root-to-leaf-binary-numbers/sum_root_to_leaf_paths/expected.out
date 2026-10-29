@@ -1,0 +1,14 @@
+[1, 0, 1, 0, 1, 0, 1] -> 22
+[0] -> 0
+[1] -> 1
+[1, 1] -> 3
+[1, -1, 0] -> 2
+[0, 1, -1, 1, 0] -> 5
+[1, 0, 0, -1, 1, 1, -1, 0, -1, -1, 1] -> 21
+3000 random trees of 7 nodes (4/8 ones): sum 49541, most 68, checksum 367034233
+1000 random trees of 30 nodes (4/8 ones): sum 288803, most 792, checksum 382522912
+300 random trees of 200 nodes (1/8 ones): sum 793239, most 18768, checksum 510124907
+300 random trees of 200 nodes (7/8 ones): sum 6589972, most 29678, checksum 925647089
+50 random trees of 1000 nodes (4/8 ones): sum 16005919, most 591072, checksum 532123425
+50 random trees of 1000 nodes (8/8 ones): sum 31341408, most 668808, checksum 890555354
+a path of 31 ones: 2147483647; 10 full levels of ones: 523776
