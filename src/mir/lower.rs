@@ -11917,9 +11917,30 @@ impl<'l, 'a> Bx<'l, 'a> {
             }
             _ => false,
         };
+        // `v.iter()` and `v.iter_mut()` over a `Vec` are library `VecIter`s
+        // whose `next` reads by position; the loop below reads `v` by
+        // position itself, in the same order, without a call per element.
+        let vec_walk = match &under.kind {
+            ExprKind::MethodCall {
+                object,
+                method,
+                args,
+                ..
+            } if args.is_empty() && matches!(method.as_str(), "iter" | "iter_mut") => {
+                let ot = self.expr_ty(object)?;
+                matches!(
+                    self.strip_ty_full(ot).0,
+                    HK::Intrinsic {
+                        kind: IntrinsicKind::Vec,
+                        ..
+                    }
+                )
+            }
+            _ => false,
+        };
         // An `Iterator` implementation in source, the library's adaptors
         // included (`it.skip(2).enumerate()`), loops through its own `next`.
-        if !into_iter {
+        if !into_iter && !vec_walk {
             if let Some(next) = self.iterator_next(iterable)? {
                 return self.for_iterator(label, pattern, iterable, next, body, dest);
             }
