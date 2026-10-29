@@ -1,0 +1,3971 @@
+// mini_read_stata: a Kāra port of pandas 3.0.5's read_stata (BSD-3-Clause,
+// the pandas development team). It reads Stata .dta files of every format
+// pandas does: the old fixed-width layouts (102 to 115, either byte
+// order) and the tagged XML-like ones (117 to 119), with their variable
+// descriptors, expansion fields, value-label tables, and the strL table
+// of long and binary strings. On top of that it runs read_stata: column
+// selection, string decoding (latin-1 before 118, UTF-8 from it), the
+// missing values .a to .z (as NaN, or kept with convert_missing), the
+// %tc %td %tw %tm %tq %th %ty date formats, value labels to
+// categoricals (and the order they take when read in chunks),
+// preserve_dtypes, index_col, compression inferred from the file name
+// (gzip and a one-member zip), and to_csv.
+//
+// It reads data/jobs.txt, one job per line, runs each in a task of its
+// own, and prints, in job order, `$ <job>` and what the oracle prints:
+// `meta` is what StataReader knows from the header and the value labels,
+// `read` is read_stata's frame, and `chunks` reads it chunksize rows at a
+// time. An error prints as `! <exception>: <message>`.
+
+import std.sync.{TaskGroup};
+// ------------------------------------------------------------ bytes and text
+
+fn byte_str(b: ref Vec[u8], from: i64, to: i64) -> String {
+    let mut v: Vec[u8] = Vec.new();
+    for i in from..to {
+        v.push(b[i]);
+    }
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn to_bytes(s: Str) -> Vec[u8] {
+    s.bytes().to_vec()
+}
+
+fn from_bytes(v: Vec[u8]) -> String {
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn is_digit(c: u8) -> bool {
+    c >= b'0' and c <= b'9'
+}
+
+fn is_alpha(c: u8) -> bool {
+    (c >= b'a' and c <= b'z') or (c >= b'A' and c <= b'Z')
+}
+
+fn is_alnum(c: u8) -> bool {
+    is_digit(c) or is_alpha(c)
+}
+
+// A word character, as `\w` and `\b` see it.
+fn is_word(c: u8) -> bool {
+    is_alnum(c) or c == b'_' or c >= 128
+}
+
+// White space, as `\s` and str.strip see it.
+fn is_ws(c: u8) -> bool {
+    c == b' ' or c == b'\t' or c == b'\n' or c == b'\r' or c == 11 or c == 12
+}
+
+fn lower_byte(c: u8) -> u8 {
+    if c >= b'A' and c <= b'Z' { c + 32 } else { c }
+}
+
+fn lower(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        out.push(lower_byte(b[i]));
+    }
+    from_bytes(out)
+}
+
+fn strip(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut i: i64 = 0;
+    let mut j = b.len();
+    while i < j and is_ws(b[i]) {
+        i += 1;
+    }
+    while j > i and is_ws(b[j - 1]) {
+        j -= 1;
+    }
+    byte_str(b, i, j)
+}
+
+fn split_ws(s: Str) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        while i < b.len() and is_ws(b[i]) {
+            i += 1;
+        }
+        let st = i;
+        while i < b.len() and not is_ws(b[i]) {
+            i += 1;
+        }
+        if i > st {
+            out.push(byte_str(b, st, i));
+        }
+    }
+    out
+}
+
+fn split_on(s: Str, sep: u8) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut st: i64 = 0;
+    for i in 0..b.len() {
+        if b[i] == sep {
+            out.push(byte_str(b, st, i));
+            st = i + 1;
+        }
+    }
+    out.push(byte_str(b, st, b.len()));
+    out
+}
+
+fn join(parts: ref Vec[String], sep: Str) -> String {
+    let mut out = String.new();
+    for i in 0..parts.len() {
+        if i > 0 {
+            out.push_str(sep);
+        }
+        out.push_str(parts[i]);
+    }
+    out
+}
+
+// The lines of a file, without their newlines.
+fn lines_of(text: Str) -> Vec[String] {
+    let mut v = split_on(text, b'\n');
+    if v.len() > 0 and v[v.len() - 1].len() == 0 {
+        v.pop();
+    }
+    v
+}
+
+fn contains_str(v: ref Vec[String], s: Str) -> bool {
+    for i in 0..v.len() {
+        if v[i] == s {
+            return true;
+        }
+    }
+    false
+}
+
+// A stable sort of strings.
+fn sort_strings(v: own Vec[String]) -> Vec[String] {
+    let mut v = v;
+    for i in 1..v.len() {
+        let mut j = i;
+        while j > 0 and v[j - 1] > v[j] {
+            v.swap(j - 1, j);
+            j -= 1;
+        }
+    }
+    v
+}
+
+// Python's repr of a str.
+fn py_repr(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut has_single = false;
+    let mut has_double = false;
+    for i in 0..b.len() {
+        if b[i] == b'\'' {
+            has_single = true;
+        }
+        if b[i] == b'"' {
+            has_double = true;
+        }
+    }
+    let q: u8 = if has_single and not has_double { b'"' } else { b'\'' };
+    let hex = to_bytes("0123456789abcdef");
+    let mut out: Vec[u8] = Vec.new();
+    out.push(q);
+    for i in 0..b.len() {
+        let c = b[i];
+        if c == q or c == b'\\' {
+            out.push(b'\\');
+            out.push(c);
+        } else if c == b'\n' {
+            out.push(b'\\');
+            out.push(b'n');
+        } else if c == b'\r' {
+            out.push(b'\\');
+            out.push(b'r');
+        } else if c == b'\t' {
+            out.push(b'\\');
+            out.push(b't');
+        } else if c < 32 or c == 127 {
+            out.push(b'\\');
+            out.push(b'x');
+            out.push(hex[(c / 16) as i64]);
+            out.push(hex[(c % 16) as i64]);
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    from_bytes(out)
+}
+// ------------------------------------------------------------ CRC-32
+
+fn crc_table() -> Vec[i64] {
+    let mut t: Vec[i64] = Vec.new();
+    for n in 0..256 {
+        let mut c: i64 = n;
+        for _ in 0..8 {
+            c = if c & 1 == 1 { 0xEDB88320 ^ (c >> 1) } else { c >> 1 };
+        }
+        t.push(c);
+    }
+    t
+}
+
+fn crc_byte(t: ref Vec[i64], crc: i64, b: i64) -> i64 {
+    t[(crc ^ b) & 0xFF] ^ (crc >> 8)
+}
+
+fn crc32(t: ref Vec[i64], data: ref Vec[u8]) -> i64 {
+    let mut c: i64 = 0xFFFFFFFF;
+    for b in data {
+        c = crc_byte(t, c, b as i64);
+    }
+    c ^ 0xFFFFFFFF
+}
+
+fn u16(b: ref Vec[u8], i: i64) -> i64 {
+    b[i] as i64 | (b[i + 1] as i64) << 8
+}
+
+fn u32(b: ref Vec[u8], i: i64) -> i64 {
+    u16(b, i) | u16(b, i + 2) << 16
+}
+
+fn u64(b: ref Vec[u8], i: i64) -> i64 {
+    u32(b, i) | u32(b, i + 4) << 32
+}
+
+fn zeros(n: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        v.push(0);
+    }
+    v
+}
+
+fn bytes_of(b: ref Vec[u8], from: i64, to: i64) -> Vec[u8] {
+    let mut v: Vec[u8] = Vec.new();
+    let end = if to > b.len() { b.len() } else { to };
+    let mut i = from;
+    while i < end {
+        v.push(b[i]);
+        i += 1;
+    }
+    v
+}
+
+// Text from bytes, with U+FFFD for anything that is not UTF-8.
+fn lossy(b: ref Vec[u8]) -> String {
+    match String.from_utf8(b.clone()) {
+        Ok(s) => s,
+        Err(_) => {
+            let mut out = String.new();
+            for c in b {
+                if c < 0x80 {
+                    out.push_str(byte_str(vec_of(c), 0, 1));
+                } else {
+                    out.push_str("\u{FFFD}");
+                }
+            }
+            out
+        }
+    }
+}
+
+fn vec_of(c: u8) -> Vec[u8] {
+    let mut v: Vec[u8] = Vec.new();
+    v.push(c);
+    v
+}
+
+// ------------------------------------------------------------ inflate (RFC 1951)
+
+struct Bits {
+    data: Vec[u8],
+    pos: i64,
+    bit: i64,
+    nbits: i64,
+    bad: bool,
+}
+
+fn need(br: mut ref Bits, n: i64) -> bool {
+    while br.nbits < n {
+        if br.pos >= br.data.len() {
+            br.bad = true;
+            return false;
+        }
+        br.bit = br.bit | (br.data[br.pos] as i64) << br.nbits;
+        br.pos += 1;
+        br.nbits += 8;
+    }
+    true
+}
+
+fn get_bits(br: mut ref Bits, n: i64) -> i64 {
+    if n == 0 {
+        return 0;
+    }
+    if not need(mut br, n) {
+        return 0;
+    }
+    let v = br.bit & ((1 << n) - 1);
+    br.bit = br.bit >> n;
+    br.nbits -= n;
+    v
+}
+
+// A canonical Huffman code: how many codes of each length, and the
+// symbols in code order.
+struct Huff {
+    count: Vec[i64],
+    symbol: Vec[i64],
+}
+
+fn huff(lengths: ref Vec[i64]) -> Huff {
+    let mut count = zeros(16);
+    for l in lengths {
+        count[l] += 1;
+    }
+    count[0] = 0;
+    let mut offs = zeros(16);
+    for i in 1..16 {
+        offs[i] = offs[i - 1] + count[i - 1];
+    }
+    let mut symbol = zeros(lengths.len());
+    for s in 0..lengths.len() {
+        let l = lengths[s];
+        if l != 0 {
+            symbol[offs[l]] = s;
+            offs[l] += 1;
+        }
+    }
+    Huff { count: count, symbol: symbol }
+}
+
+fn decode(br: mut ref Bits, h: ref Huff) -> i64 {
+    let mut code: i64 = 0;
+    let mut first: i64 = 0;
+    let mut index: i64 = 0;
+    for l in 1..16 {
+        code = code | get_bits(mut br, 1);
+        if br.bad {
+            return -1;
+        }
+        let count = h.count[l];
+        if code - count < first {
+            return h.symbol[index + (code - first)];
+        }
+        index += count;
+        first += count;
+        first = first << 1;
+        code = code << 1;
+    }
+    -1
+}
+
+const LEN_BASE: Array[i64, 29] = [3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59,
+    67, 83, 99, 115, 131, 163, 195, 227, 258];
+const LEN_EXTRA: Array[i64, 29] = [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4,
+    5, 5, 5, 5, 0];
+const DIST_BASE: Array[i64, 30] = [1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385,
+    513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577];
+const DIST_EXTRA: Array[i64, 30] = [0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10,
+    10, 11, 11, 12, 12, 13, 13];
+const CL_ORDER: Array[i64, 19] = [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15];
+
+fn codes(br: mut ref Bits, out: mut ref Vec[u8], lit: ref Huff, dist: ref Huff) -> bool {
+    loop {
+        let sym = decode(mut br, lit);
+        if sym < 0 {
+            return false;
+        }
+        if sym < 256 {
+            out.push(sym as u8);
+        } else if sym == 256 {
+            return true;
+        } else {
+            let s = sym - 257;
+            if s >= 29 {
+                return false;
+            }
+            let n = LEN_BASE[s] + get_bits(mut br, LEN_EXTRA[s]);
+            let d = decode(mut br, dist);
+            if d < 0 or d >= 30 {
+                return false;
+            }
+            let back = DIST_BASE[d] + get_bits(mut br, DIST_EXTRA[d]);
+            if br.bad or back > out.len() {
+                return false;
+            }
+            for _ in 0..n {
+                let c = out[out.len() - back];
+                out.push(c);
+            }
+        }
+    }
+}
+
+fn repeat_len(n: i64, l: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        v.push(l);
+    }
+    v
+}
+
+// The bytes `data` inflates to, and whether it was a whole stream.
+fn inflate(data: own Vec[u8]) -> (Vec[u8], bool) {
+    let mut br = Bits { data: data, pos: 0, bit: 0, nbits: 0, bad: false };
+    let mut out: Vec[u8] = Vec.new();
+    let mut fl = repeat_len(144, 8);
+    fl.extend(repeat_len(112, 9));
+    fl.extend(repeat_len(24, 7));
+    fl.extend(repeat_len(8, 8));
+    let fixed_lit = huff(fl);
+    let fixed_dist = huff(repeat_len(30, 5));
+    loop {
+        let last = get_bits(mut br, 1);
+        let kind = get_bits(mut br, 2);
+        if br.bad {
+            return (out, false);
+        }
+        if kind == 0 {
+            br.bit = 0;
+            br.nbits = 0;
+            if br.pos + 4 > br.data.len() {
+                return (out, false);
+            }
+            let n = u16(br.data, br.pos);
+            let nn = u16(br.data, br.pos + 2);
+            if n != (nn ^ 0xFFFF) or br.pos + 4 + n > br.data.len() {
+                return (out, false);
+            }
+            for i in 0..n {
+                out.push(br.data[br.pos + 4 + i]);
+            }
+            br.pos += 4 + n;
+        } else if kind == 1 {
+            if not codes(mut br, mut out, fixed_lit, fixed_dist) {
+                return (out, false);
+            }
+        } else if kind == 2 {
+            let nlen = get_bits(mut br, 5) + 257;
+            let ndist = get_bits(mut br, 5) + 1;
+            let ncode = get_bits(mut br, 4) + 4;
+            let mut cl = zeros(19);
+            for i in 0..ncode {
+                cl[CL_ORDER[i]] = get_bits(mut br, 3);
+            }
+            let clh = huff(cl);
+            let mut lengths: Vec[i64] = Vec.new();
+            while lengths.len() < nlen + ndist {
+                let sym = decode(mut br, clh);
+                if sym < 0 {
+                    return (out, false);
+                }
+                if sym < 16 {
+                    lengths.push(sym);
+                } else if sym == 16 {
+                    if lengths.len() == 0 {
+                        return (out, false);
+                    }
+                    let prev = lengths[lengths.len() - 1];
+                    lengths.extend(repeat_len(3 + get_bits(mut br, 2), prev));
+                } else if sym == 17 {
+                    lengths.extend(repeat_len(3 + get_bits(mut br, 3), 0));
+                } else {
+                    lengths.extend(repeat_len(11 + get_bits(mut br, 7), 0));
+                }
+            }
+            if lengths.len() > nlen + ndist or br.bad {
+                return (out, false);
+            }
+            let lit = huff(lengths[0..nlen].to_vec());
+            let dist = huff(lengths[nlen..].to_vec());
+            if not codes(mut br, mut out, lit, dist) {
+                return (out, false);
+            }
+        } else {
+            return (out, false);
+        }
+        if last == 1 {
+            return (out, true);
+        }
+    }
+}
+
+const US_DAY: i64 = 86400000000;
+const US_SEC: i64 = 1000000;
+
+fn nan() -> f64 {
+    0.0 / 0.0
+}
+
+fn inf() -> f64 {
+    1.0 / 0.0
+}
+
+fn is_nan(x: f64) -> bool {
+    x != x
+}
+
+fn fdiv(a: i64, b: i64) -> i64 {
+    let q = a / b;
+    if (a % b != 0) and ((a < 0) != (b < 0)) { q - 1 } else { q }
+}
+
+fn fmod(a: i64, b: i64) -> i64 {
+    a - fdiv(a, b) * b
+}
+
+fn bool_text(b: bool) -> String {
+    if b { "True".to_string() } else { "False".to_string() }
+}
+
+// repr() of a float.
+fn float_repr(x: f64) -> String {
+    if is_nan(x) {
+        "nan".to_string()
+    } else if x == inf() {
+        "inf".to_string()
+    } else if x == -inf() {
+        "-inf".to_string()
+    } else {
+        x.to_string()
+    }
+}
+
+// round() of a float to an int: to nearest, ties to even.
+fn py_round(x: f64) -> i64 {
+    let f = x.floor();
+    let d = x - f;
+    let fi = f as i64;
+    if d > 0.5 {
+        fi + 1
+    } else if d < 0.5 {
+        fi
+    } else if fi % 2 == 0 {
+        fi
+    } else {
+        fi + 1
+    }
+}
+
+// round(n, -3) of an int: to the nearest thousand, ties to even.
+fn round_thousands(n: i64) -> i64 {
+    let q = fdiv(n, 1000);
+    let r = n - q * 1000;
+    if r > 500 or (r == 500 and q % 2 != 0) {
+        (q + 1) * 1000
+    } else {
+        q * 1000
+    }
+}
+
+fn days_from_civil(y0: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y0 - 1 } else { y0 };
+    let era = if y >= 0 { y / 400 } else { (y - 399) / 400 };
+    let yoe = y - era * 400;
+    let mp = if m > 2 { m - 3 } else { m + 9 };
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146097 + doe - 719468
+}
+
+fn civil_from_days(z0: i64) -> (i64, i64, i64) {
+    let z = z0 + 719468;
+    let era = if z >= 0 { z / 146097 } else { (z - 146096) / 146097 };
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + if m <= 2 { 1 } else { 0 };
+    (y, m, d)
+}
+
+fn days_in_month(y: i64, m: i64) -> i64 {
+    if m == 2 {
+        if (y % 4 == 0 and y % 100 != 0) or y % 400 == 0 { 29 } else { 28 }
+    } else if m == 4 or m == 6 or m == 9 or m == 11 {
+        30
+    } else {
+        31
+    }
+}
+
+// The parts of a moment: year, month, day, hour, minute, second, and
+// microsecond.
+
+// ------------------------------------------------------------ Python errors
+
+// An exception: its class and its str(). A KeyError's str() is the repr
+// of its key.
+#[derive(Clone)]
+struct PyErr {
+    kind: String,
+    msg: String,
+}
+
+fn py_err(kind: Str, msg: Str) -> PyErr {
+    PyErr { kind: kind.to_string(), msg: msg.to_string() }
+}
+
+fn key_error(key: Str) -> PyErr {
+    PyErr { kind: "KeyError".to_string(), msg: py_repr(key) }
+}
+
+fn value_error(msg: Str) -> PyErr {
+    py_err("ValueError", msg)
+}
+
+fn bad_zip(msg: Str) -> PyErr {
+    py_err("BadZipFile", msg)
+}
+
+
+// ------------------------------------------------------------ zipfile
+
+// A member of a zip archive, from the central directory.
+#[derive(Clone)]
+struct ZEntry {
+    name: String,
+    flags: i64,
+    method: i64,
+    crc: i64,
+    csize: i64,
+    usize: i64,
+    offset: i64,
+}
+
+struct Zip {
+    data: Vec[u8],
+    entries: Vec[ZEntry],
+}
+
+fn is_eocd(d: ref Vec[u8], i: i64) -> bool {
+    d[i] == 0x50 and d[i + 1] == 0x4B and d[i + 2] == 5 and d[i + 3] == 6
+}
+
+// zipfile.ZipFile(f): the end record, then the central directory.
+fn open_zip(data: own Vec[u8]) -> Result[Zip, PyErr] {
+    let n = data.len();
+    if n < 22 {
+        return Err(bad_zip("File is not a zip file"));
+    }
+    // the end record with no comment is the last 22 bytes; otherwise it
+    // is the last signature in the 64 KiB before them
+    let mut at: i64 = -1;
+    if is_eocd(data, n - 22) and data[n - 2] == 0 and data[n - 1] == 0 {
+        at = n - 22;
+    } else {
+        let start = if n - 65536 - 22 > 0 { n - 65536 - 22 } else { 0 };
+        let mut i = n - 4;
+        while i >= start {
+            if is_eocd(data, i) {
+                at = i;
+                break;
+            }
+            i -= 1;
+        }
+        if at >= 0 and at + 22 > n {
+            at = -1;
+        }
+    }
+    if at < 0 {
+        return Err(bad_zip("File is not a zip file"));
+    }
+    let count = u16(data, at + 10);
+    let cd_size = u32(data, at + 12);
+    let cd_off = u32(data, at + 16);
+    // bytes before the archive (a self-extractor's stub) shift every offset
+    let concat = at - cd_size - cd_off;
+    if concat < 0 {
+        return Err(bad_zip("Bad offset for central directory"));
+    }
+    let mut entries: Vec[ZEntry] = Vec.new();
+    let mut p = cd_off + concat;
+    let end = p + cd_size;
+    let _ = count;
+    while p < end {
+        if p + 46 > n {
+            return Err(bad_zip("Truncated central directory"));
+        }
+        if u32(data, p) != 0x02014B50 {
+            return Err(bad_zip("Bad magic number for central directory"));
+        }
+        let nlen = u16(data, p + 28);
+        let xlen = u16(data, p + 30);
+        let klen = u16(data, p + 32);
+        entries.push(ZEntry {
+            name: lossy(bytes_of(data, p + 46, p + 46 + nlen)),
+            flags: u16(data, p + 8),
+            method: u16(data, p + 10),
+            crc: u32(data, p + 16),
+            csize: u32(data, p + 20),
+            usize: u32(data, p + 24),
+            offset: u32(data, p + 42) + concat,
+        });
+        p += 46 + nlen + xlen + klen;
+    }
+    Ok(Zip { data: data, entries: entries })
+}
+
+impl Zip {
+    fn has(ref self, name: Str) -> bool {
+        for e in self.entries {
+            if e.name == name {
+                return true;
+            }
+        }
+        false
+    }
+
+    // ZipFile.read(name): the last member of that name, inflated and
+    // checked against its CRC.
+    fn read(ref self, name: Str) -> Result[Vec[u8], PyErr] {
+        let mut found: i64 = -1;
+        for i in 0..self.entries.len() {
+            if self.entries[i].name == name {
+                found = i;
+            }
+        }
+        if found < 0 {
+            return Err(key_error(f"There is no item named {py_repr(name)} in the archive"));
+        }
+        let e = ref self.entries[found];
+        let d = ref self.data;
+        let p = e.offset;
+        if p + 30 > d.len() {
+            return Err(bad_zip("Truncated file header"));
+        }
+        if u32(d, p) != 0x04034B50 {
+            return Err(bad_zip("Bad magic number for file header"));
+        }
+        let nlen = u16(d, p + 26);
+        let xlen = u16(d, p + 28);
+        let local = lossy(bytes_of(d, p + 30, p + 30 + nlen));
+        if local != e.name {
+            return Err(bad_zip(f"File name in directory {py_repr(e.name)} and header {bytes_repr(to_bytes(local))} differ."));
+        }
+        let start = p + 30 + nlen + xlen;
+        let raw = bytes_of(d, start, start + e.csize);
+        let out = if e.method == 0 {
+            raw
+        } else if e.method == 8 {
+            let (b, whole) = inflate(raw);
+            if not whole {
+                return Err(py_err("zlib.error", "Error -3 while decompressing data: invalid block type"));
+            }
+            b
+        } else {
+            return Err(py_err("NotImplementedError", "That compression method is not supported"));
+        };
+        if crc32(crc_table(), out) != e.crc {
+            return Err(bad_zip(f"Bad CRC-32 for file {py_repr(e.name)}"));
+        }
+        Ok(out)
+    }
+
+    fn read_text(ref self, name: Str) -> Result[String, PyErr] {
+        let b = self.read(name)?;
+        Ok(lossy(b))
+    }
+}
+
+fn bytes_eq(b: ref Vec[u8], s: Str) -> bool {
+    let t = to_bytes(s);
+    if b.len() != t.len() {
+        return false;
+    }
+    for i in 0..b.len() {
+        if b[i] != t[i] {
+            return false;
+        }
+    }
+    true
+}
+
+// Python's repr of a bytes object.
+fn bytes_repr(b: ref Vec[u8]) -> String {
+    let mut has_single = false;
+    let mut has_double = false;
+    for c in b {
+        if c == b'\'' {
+            has_single = true;
+        }
+        if c == b'"' {
+            has_double = true;
+        }
+    }
+    let q: u8 = if has_single and not has_double { b'"' } else { b'\'' };
+    let hex = to_bytes("0123456789abcdef");
+    let mut out: Vec[u8] = Vec.new();
+    out.push(b'b');
+    out.push(q);
+    for c in b {
+        if c == q or c == b'\\' {
+            out.push(b'\\');
+            out.push(c);
+        } else if c == b'\t' {
+            out.push(b'\\');
+            out.push(b't');
+        } else if c == b'\n' {
+            out.push(b'\\');
+            out.push(b'n');
+        } else if c == b'\r' {
+            out.push(b'\\');
+            out.push(b'r');
+        } else if c < 32 or c >= 127 {
+            out.push(b'\\');
+            out.push(b'x');
+            out.push(hex[(c / 16) as i64]);
+            out.push(hex[(c % 16) as i64]);
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    from_bytes(out)
+}
+
+// bytes.decode("latin-1"): each byte is the code point of the same number.
+fn latin1(b: ref Vec[u8]) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    for c in b {
+        if c < 0x80 {
+            out.push(c);
+        } else {
+            out.push(0xC0 | (c >> 6));
+            out.push(0x80 | (c & 0x3F));
+        }
+    }
+    from_bytes(out)
+}
+
+// b.partition(b"\0")[0]
+fn before_nul(b: ref Vec[u8]) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    for c in b {
+        if c == 0 {
+            break;
+        }
+        out.push(c);
+    }
+    out
+}
+
+// b[from:to] with Python's slice rules: a negative end counts from the
+// back, and both ends are clamped to the bytes there are.
+fn py_slice(b: ref Vec[u8], from: i64, to: i64) -> Vec[u8] {
+    let n = b.len();
+    let clamp = |i: i64| {
+        let j = if i < 0 { i + n } else { i };
+        if j < 0 { 0 } else if j > n { n } else { j }
+    };
+    let a = clamp(from);
+    let e = clamp(to);
+    if a >= e { Vec.new() } else { b[a..e].to_vec() }
+}
+
+// int(b) of a bytes object holding a decimal number.
+fn py_int_bytes(b: ref Vec[u8]) -> Result[i64, PyErr] {
+    let text = latin1(b);
+    let t = text.trim();
+    let bad = py_err("ValueError", f"invalid literal for int() with base 10: {bytes_repr(b)}");
+    let digits = if t.starts_with("-") or t.starts_with("+") { t[1..] } else { t };
+    if digits.len() == 0 {
+        return Err(bad);
+    }
+    for c in to_bytes(digits) {
+        if not is_digit(c) {
+            return Err(bad);
+        }
+    }
+    match i64.parse(t) {
+        Ok(v) => Ok(v),
+        Err(_) => Err(bad),
+    }
+}
+
+// int(s) of a str.
+fn py_int(s: Str) -> Result[i64, PyErr] {
+    match i64.parse(s.trim()) {
+        Ok(v) => Ok(v),
+        Err(_) => Err(py_err("ValueError", f"invalid literal for int() with base 10: {py_repr(s)}")),
+    }
+}
+
+fn str_list_repr(v: ref Vec[String]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for s in v {
+        parts.push(py_repr(s));
+    }
+    f"[{join(parts, ", ")}]"
+}
+
+// ------------------------------------------------------------ gzip
+
+// gzip.GzipFile(f).read() of a one-member file: the header, the deflate
+// stream, and the CRC-32 and length in the last 8 bytes.
+fn gunzip(d: own Vec[u8]) -> Result[Vec[u8], PyErr] {
+    let n = d.len();
+    if n < 2 or d[0] != 0x1F or d[1] != 0x8B {
+        return Err(py_err("BadGzipFile", f"Not a gzipped file ({bytes_repr(bytes_of(d, 0, 2))})"));
+    }
+    if n < 10 {
+        return Err(py_err("EOFError", "Compressed file ended before the end-of-stream marker was reached"));
+    }
+    if d[2] != 8 {
+        return Err(py_err("BadGzipFile", "Unknown compression method"));
+    }
+    let flags = d[3];
+    let mut p: i64 = 10;
+    if (flags & 4) != 0 {
+        p += 2 + u16(d, p);
+    }
+    if (flags & 8) != 0 {
+        while p < n and d[p] != 0 {
+            p += 1;
+        }
+        p += 1;
+    }
+    if (flags & 16) != 0 {
+        while p < n and d[p] != 0 {
+            p += 1;
+        }
+        p += 1;
+    }
+    if (flags & 2) != 0 {
+        p += 2;
+    }
+    if p + 8 > n {
+        return Err(py_err("EOFError", "Compressed file ended before the end-of-stream marker was reached"));
+    }
+    let crc = u32(d, n - 8);
+    let size = u32(d, n - 4);
+    let (out, whole) = inflate(bytes_of(d, p, n - 8));
+    if not whole {
+        return Err(py_err("EOFError", "Compressed file ended before the end-of-stream marker was reached"));
+    }
+    let got = crc32(crc_table(), out);
+    if got != crc {
+        return Err(py_err("BadGzipFile", f"CRC check failed {hex_of(crc)} != {hex_of(got)}"));
+    }
+    if size != out.len() % 4294967296 {
+        return Err(py_err("BadGzipFile", "Incorrect length of data produced"));
+    }
+    Ok(out)
+}
+
+// hex(n)
+fn hex_of(n: i64) -> String {
+    if n == 0 {
+        return "0x0".to_string();
+    }
+    let digits = to_bytes("0123456789abcdef");
+    let mut out: Vec[u8] = Vec.new();
+    let mut m = n;
+    while m > 0 {
+        out.push(digits[m % 16]);
+        m = m / 16;
+    }
+    out.push(b'x');
+    out.push(b'0');
+    out.reverse();
+    from_bytes(out)
+}
+
+// ------------------------------------------------------------ files
+
+fn read_file(path: Str) -> Result[Vec[u8], PyErr] {
+    match fs.read_bytes(path.to_string()) {
+        Ok(b) => Ok(b),
+        Err(_) => Err(py_err("FileNotFoundError", f"[Errno 2] No such file or directory: {py_repr(path)}")),
+    }
+}
+
+// pandas' get_handle with compression="infer": the method comes from the
+// file name's extension, and a zip must hold exactly one member.
+fn open_bytes(path: Str) -> Result[Vec[u8], PyErr] {
+    let data = read_file(path)?;
+    let name = path.to_lowercase();
+    if name.ends_with(".tar") or name.ends_with(".tar.gz") or name.ends_with(".tar.bz2") or name.ends_with(".tar.xz") {
+        return Err(py_err("NotImplementedError", "tar archives are not read by this port"));
+    }
+    if name.ends_with(".gz") {
+        return gunzip(data);
+    }
+    if name.ends_with(".bz2") or name.ends_with(".xz") or name.ends_with(".zst") {
+        return Err(py_err("NotImplementedError", "bz2, xz and zstd are not read by this port"));
+    }
+    if name.ends_with(".zip") {
+        let z = open_zip(data)?;
+        let mut names: Vec[String] = Vec.new();
+        for e in z.entries {
+            names.push(e.name.clone());
+        }
+        if names.len() == 0 {
+            return Err(value_error(f"Zero files found in ZIP file {path}"));
+        }
+        if names.len() > 1 {
+            return Err(value_error(f"Multiple files found in ZIP file. Only one file per ZIP: {str_list_repr(names)}"));
+        }
+        return z.read(names[0]);
+    }
+    Ok(data)
+}
+
+// ------------------------------------------------------------ a file being read
+
+// A BytesIO: reads past the end come back short, and a seek may land
+// anywhere at or after the start.
+struct Buf {
+    data: Vec[u8],
+    pos: i64,
+}
+
+impl Buf {
+    // f.read(n): at most n bytes, or everything left when n is negative.
+    fn read(mut ref self, n: i64) -> Vec[u8] {
+        let len = self.data.len();
+        if self.pos >= len {
+            return Vec.new();
+        }
+        let end = if n < 0 or self.pos + n > len { len } else { self.pos + n };
+        let out = self.data[self.pos..end].to_vec();
+        self.pos = end;
+        out
+    }
+
+    fn skip(mut ref self, n: i64) {
+        let _ = self.read(n);
+    }
+
+    fn seek(mut ref self, at: i64) -> Result[(), PyErr] {
+        if at < 0 {
+            return Err(value_error(f"negative seek value {at}"));
+        }
+        self.pos = at;
+        Ok(())
+    }
+}
+
+// The n bytes at `at` as an unsigned number, in the file's byte order.
+fn word(b: ref Vec[u8], at: i64, n: i64, big: bool) -> u64 {
+    let mut w: u64 = 0;
+    for k in 0..n {
+        let i = if big { at + k } else { at + n - 1 - k };
+        w = (w << 8) | (b[i] as u64);
+    }
+    w
+}
+
+// The same bytes as a two's-complement number.
+fn signed(w: u64, n: i64) -> i64 {
+    if n == 1 {
+        (w as u8 as i8) as i64
+    } else if n == 2 {
+        (w as u16 as i16) as i64
+    } else if n == 4 {
+        (w as u32 as i32) as i64
+    } else {
+        w as i64
+    }
+}
+
+fn unpack_error(n: i64) -> PyErr {
+    py_err("error", f"unpack requires a buffer of {n} bytes")
+}
+
+// ------------------------------------------------------------ Stata types
+
+const VERSION_ERROR: Str = "pandas supports importing versions 102, 103, 104, 105, 108, 110 (Stata 7), 111 (Stata 7SE),  113 (Stata 8/9), 114 (Stata 10/11), 115 (Stata 12), 117 (Stata 13), 118 (Stata 14/15/16), and 119 (Stata 15/16, over 32,767 variables).";
+
+fn version_error(v: i64) -> PyErr {
+    value_error(f"Version of given Stata file is {v}. {VERSION_ERROR}")
+}
+
+// A variable's storage type: a fixed-width string of so many bytes, the
+// five numbers, or a strL (a key into the file's string table).
+#[derive(Clone)]
+enum Typ {
+    Str(i64),
+    Byte,
+    Int,
+    Long,
+    Float,
+    Double,
+    StrL,
+}
+
+fn typ_size(t: ref Typ) -> i64 {
+    match t {
+        Typ.Str(n) => n,
+        Typ.Byte => 1,
+        Typ.Int => 2,
+        Typ.Long => 4,
+        Typ.Float => 4,
+        Typ.Double => 8,
+        Typ.StrL => 8,
+    }
+}
+
+// The letter pandas keeps in _typlist ('' for a string).
+fn typ_letter(t: ref Typ) -> String {
+    match t {
+        Typ.Str(_) => String.new(),
+        Typ.Byte => "b".to_string(),
+        Typ.Int => "h".to_string(),
+        Typ.Long => "l".to_string(),
+        Typ.Float => "f".to_string(),
+        Typ.Double => "d".to_string(),
+        Typ.StrL => "Q".to_string(),
+    }
+}
+
+fn typ_repr(t: ref Typ) -> String {
+    match t {
+        Typ.Str(n) => n.to_string(),
+        _ => py_repr(typ_letter(t)),
+    }
+}
+
+// The 117+ type codes.
+fn xml_typ(code: i64) -> Result[Typ, PyErr] {
+    if code <= 2045 {
+        Ok(Typ.Str(code))
+    } else if code == 32768 {
+        Ok(Typ.StrL)
+    } else if code == 65526 {
+        Ok(Typ.Double)
+    } else if code == 65527 {
+        Ok(Typ.Float)
+    } else if code == 65528 {
+        Ok(Typ.Long)
+    } else if code == 65529 {
+        Ok(Typ.Int)
+    } else if code == 65530 {
+        Ok(Typ.Byte)
+    } else {
+        Err(value_error(f"cannot convert stata types [{code}]"))
+    }
+}
+
+// The codes before 117: 1..244 a string's width, 251..255 a number.
+fn old_typ(code: i64) -> Typ {
+    if code == 251 {
+        Typ.Byte
+    } else if code == 252 {
+        Typ.Int
+    } else if code == 253 {
+        Typ.Long
+    } else if code == 254 {
+        Typ.Float
+    } else if code == 255 {
+        Typ.Double
+    } else {
+        Typ.Str(code)
+    }
+}
+
+// ------------------------------------------------------------ the reader
+
+// pandas.io.stata.StataReader: the header, the variable descriptors, and
+// what reading has got through so far.
+struct Reader {
+    buf: Buf,
+    version: i64,
+    big: bool,
+    utf8: bool,
+    nvar: i64,
+    nobs: i64,
+    data_label: String,
+    time_stamp: Option[String],
+    // every variable, as the records lay them out
+    layout: Vec[Typ],
+    names: Vec[String],
+    // _typlist and the rest: narrowed once a `columns` is applied
+    typs: Vec[Typ],
+    fmts: Vec[String],
+    lbls: Vec[String],
+    var_labels: Vec[String],
+    data_location: i64,
+    seek_strls: i64,
+    seek_value_labels: i64,
+    tables: Vec[(String, Vec[(i64, String)])],
+    labels_read: bool,
+    gso: Map[i64, String],
+    lines_read: i64,
+    selected: bool,
+    using_iterator: bool,
+}
+
+fn open_reader(path: Str) -> Result[Reader, PyErr] {
+    let data = open_bytes(path)?;
+    let mut r = Reader {
+        buf: Buf { data: data, pos: 0 },
+        version: 0,
+        big: false,
+        utf8: false,
+        nvar: 0,
+        nobs: 0,
+        data_label: String.new(),
+        time_stamp: None,
+        layout: Vec.new(),
+        names: Vec.new(),
+        typs: Vec.new(),
+        fmts: Vec.new(),
+        lbls: Vec.new(),
+        var_labels: Vec.new(),
+        data_location: 0,
+        seek_strls: 0,
+        seek_value_labels: 0,
+        tables: Vec.new(),
+        labels_read: false,
+        gso: Map.new(),
+        lines_read: 0,
+        selected: false,
+        using_iterator: false,
+    };
+    r.read_header()?;
+    Ok(r)
+}
+
+impl Reader {
+    // struct.unpack of n bytes: a short read is an error.
+    fn take(mut ref self, n: i64) -> Result[Vec[u8], PyErr] {
+        let b = self.buf.read(n);
+        if b.len() != n {
+            return Err(unpack_error(n));
+        }
+        Ok(b)
+    }
+
+    fn read_uint(mut ref self, n: i64) -> Result[i64, PyErr] {
+        let b = self.take(n)?;
+        Ok(word(b, 0, n, self.big) as i64)
+    }
+
+    fn read_int(mut ref self, n: i64) -> Result[i64, PyErr] {
+        let b = self.take(n)?;
+        Ok(signed(word(b, 0, n, self.big), n))
+    }
+
+    // _decode: up to the first NUL, in the file's encoding, falling back
+    // to latin-1 when that fails.
+    fn decode(ref self, b: ref Vec[u8]) -> String {
+        let s = before_nul(b);
+        if self.utf8 {
+            match String.from_utf8(s.clone()) {
+                Ok(t) => t,
+                Err(_) => latin1(s),
+            }
+        } else {
+            latin1(s)
+        }
+    }
+
+    fn read_str(mut ref self, n: i64) -> String {
+        let b = self.buf.read(n);
+        self.decode(b)
+    }
+
+    fn read_strs(mut ref self, width: i64) -> Vec[String] {
+        let mut out: Vec[String] = Vec.new();
+        for _ in 0..self.nvar {
+            out.push(self.read_str(width));
+        }
+        out
+    }
+
+    fn read_header(mut ref self) -> Result[(), PyErr] {
+        let first = self.take(1)?;
+        if first[0] == b'<' {
+            self.read_new_header()
+        } else {
+            self.read_old_header(first[0] as i64)
+        }
+    }
+
+    // Formats 117 to 119: tagged sections found through the map.
+    fn read_new_header(mut ref self) -> Result[(), PyErr] {
+        self.buf.skip(27);
+        let v = self.buf.read(3);
+        self.version = py_int_bytes(v)?;
+        if self.version < 117 or self.version > 119 {
+            return Err(version_error(self.version));
+        }
+        self.utf8 = self.version >= 118;
+        self.buf.skip(21);
+        self.big = bytes_eq(self.buf.read(3), "MSF");
+        self.buf.skip(15);
+        self.nvar = if self.version <= 118 { self.read_uint(2)? } else { self.read_uint(4)? };
+        self.buf.skip(7);
+        self.nobs = if self.version >= 118 { self.read_uint(8)? } else { self.read_uint(4)? };
+        self.buf.skip(11);
+        let label_len = if self.version >= 118 { self.read_uint(2)? } else { self.read_int(1)? };
+        self.data_label = self.read_str(label_len);
+        self.buf.skip(19);
+        let stamp_len = self.read_int(1)?;
+        self.time_stamp = if self.version >= 118 {
+            Some(lossy(self.buf.read(stamp_len)))
+        } else {
+            Some(self.read_str(stamp_len))
+        };
+        self.buf.skip(26);
+        self.buf.skip(8);
+        self.buf.skip(8);
+        let seek_vartypes = self.read_int(8)? + 16;
+        let seek_varnames = self.read_int(8)? + 10;
+        let seek_sortlist = self.read_int(8)? + 10;
+        let seek_formats = self.read_int(8)? + 9;
+        let seek_value_label_names = self.read_int(8)? + 19;
+        let seek_variable_labels = if self.version == 117 {
+            self.buf.skip(8);
+            // 117 files do not follow their map here: the labels sit right
+            // after the value-label names and their tags
+            seek_value_label_names + 33 * self.nvar + 20 + 17
+        } else {
+            self.read_int(8)? + 17
+        };
+        self.buf.skip(8);
+        self.data_location = self.read_int(8)? + 6;
+        self.seek_strls = self.read_int(8)? + 7;
+        self.seek_value_labels = self.read_int(8)? + 14;
+
+        self.buf.seek(seek_vartypes)?;
+        let mut typs: Vec[Typ] = Vec.new();
+        for _ in 0..self.nvar {
+            let code = self.read_uint(2)?;
+            typs.push(xml_typ(code)?);
+        }
+        self.layout = typs.clone();
+        self.typs = typs;
+        self.buf.seek(seek_varnames)?;
+        self.names = self.read_strs(if self.version < 118 { 33 } else { 129 });
+        self.buf.seek(seek_sortlist)?;
+        let _ = self.take(2 * (self.nvar + 1))?;
+        self.buf.seek(seek_formats)?;
+        self.fmts = self.read_strs(if self.version >= 118 { 57 } else { 49 });
+        self.buf.seek(seek_value_label_names)?;
+        self.lbls = self.read_strs(if self.version >= 118 { 129 } else { 33 });
+        self.buf.seek(seek_variable_labels)?;
+        self.var_labels = self.read_strs(if self.version >= 118 { 321 } else { 81 });
+        Ok(())
+    }
+
+    // Formats 102 to 115: fixed-width fields one after another.
+    fn read_old_header(mut ref self, version: i64) -> Result[(), PyErr] {
+        self.version = version;
+        let known: Vec[i64] = [102, 103, 104, 105, 108, 110, 111, 113, 114, 115].to_vec();
+        if not known.contains(version) {
+            return Err(version_error(version));
+        }
+        // 102 has a zero here, so anything but 1 is little-endian
+        self.big = self.read_int(1)? == 1;
+        let _filetype = self.read_int(1)?;
+        self.buf.skip(1);
+        self.nvar = self.read_uint(2)?;
+        self.nobs = if version >= 103 { self.read_uint(4)? } else { self.read_uint(2)? };
+        self.data_label = self.read_str(if version > 105 { 81 } else { 32 });
+        if version >= 105 {
+            self.time_stamp = Some(self.read_str(18));
+        }
+        let raw = self.buf.read(self.nvar);
+        let mut codes: Vec[i64] = Vec.new();
+        for c in raw {
+            let tp = c as i64;
+            if version >= 111 {
+                codes.push(tp);
+            } else if tp == 98 {
+                codes.push(251);
+            } else if tp == 105 {
+                codes.push(252);
+            } else if tp == 108 {
+                codes.push(253);
+            } else if tp == 102 {
+                codes.push(254);
+            } else if tp == 100 {
+                codes.push(255);
+            } else {
+                codes.push(tp - 127);
+            }
+        }
+        // TYPE_MAP is a list of 256, DTYPE_MAP a dict of the valid codes
+        for c in codes {
+            if c >= 256 or c < -256 {
+                return Err(py_err("IndexError", "list index out of range"));
+            }
+        }
+        let mut typs: Vec[Typ] = Vec.new();
+        for c in codes {
+            if c < 1 or (c > 244 and c < 251) {
+                return Err(py_err("KeyError", c.to_string()));
+            }
+            typs.push(old_typ(c));
+        }
+        self.layout = typs.clone();
+        self.typs = typs;
+        self.names = self.read_strs(if version > 108 { 33 } else { 9 });
+        let _ = self.take(2 * (self.nvar + 1))?;
+        self.fmts = self.read_strs(if version > 113 { 49 } else if version > 104 { 12 } else { 7 });
+        self.lbls = self.read_strs(if version > 108 { 33 } else { 9 });
+        self.var_labels = self.read_strs(if version > 105 { 81 } else { 32 });
+        // expansion fields: a type and a length, until a type of 0
+        if version > 104 {
+            loop {
+                let kind = self.read_int(1)?;
+                let len = if version > 108 { self.read_int(4)? } else { self.read_int(2)? };
+                if kind == 0 {
+                    break;
+                }
+                self.buf.skip(len);
+            }
+        }
+        self.data_location = self.buf.pos;
+        Ok(())
+    }
+
+    fn itemsize(ref self) -> i64 {
+        let mut n: i64 = 0;
+        for t in self.layout {
+            n += typ_size(t);
+        }
+        n
+    }
+
+    // np.frombuffer(f.read(4 * n), dtype="i4", count=n)
+    fn read_i32s(mut ref self, n: i64) -> Result[Vec[i64], PyErr] {
+        let b = self.buf.read(4 * n);
+        if b.len() < 4 * n {
+            return Err(value_error("buffer is smaller than requested size"));
+        }
+        let mut out: Vec[i64] = Vec.new();
+        for i in 0..n {
+            out.push(signed(word(b, 4 * i, 4, self.big), 4));
+        }
+        Ok(out)
+    }
+
+    fn set_table(mut ref self, name: own String, entries: own Vec[(i64, String)]) {
+        for i in 0..self.tables.len() {
+            if self.tables[i].0 == name {
+                self.tables[i] = (name, entries);
+                return;
+            }
+        }
+        self.tables.push((name, entries));
+    }
+
+    fn table(ref self, name: Str) -> Option[Vec[(i64, String)]] {
+        for (n, t) in self.tables {
+            if n == name {
+                return Some(t.clone());
+            }
+        }
+        None
+    }
+
+    // Value labels with offsets into a text block (108 and later).
+    fn read_new_value_labels(mut ref self) -> Result[(), PyErr] {
+        if self.version >= 117 {
+            self.buf.seek(self.seek_value_labels)?;
+        } else {
+            self.buf.seek(self.data_location + self.nobs * self.itemsize())?;
+        }
+        loop {
+            if self.version >= 117 {
+                if bytes_eq(self.buf.read(5), "</val") {
+                    break;
+                }
+            }
+            let slength = self.buf.read(4);
+            if slength.len() == 0 {
+                break;
+            }
+            let width = if self.version == 108 { 9 } else if self.version <= 117 { 33 } else { 129 };
+            let name = self.read_str(width);
+            self.buf.skip(3);
+            let n = self.read_uint(4)?;
+            let txtlen = self.read_uint(4)?;
+            let off = self.read_i32s(n)?;
+            let val = self.read_i32s(n)?;
+            let mut pairs: Vec[(i64, i64)] = Vec.new();
+            for i in 0..n {
+                pairs.push((off[i], val[i]));
+            }
+            pairs.sort_by_key(|p| p.0);
+            let txt = self.buf.read(txtlen);
+            let mut entries: Vec[(i64, String)] = Vec.new();
+            for i in 0..n {
+                let end = if i < n - 1 { pairs[i + 1].0 } else { txtlen };
+                let text = self.decode(py_slice(txt, pairs[i].0, end));
+                put_entry(mut entries, pairs[i].1, text);
+            }
+            self.set_table(name, entries);
+            if self.version >= 117 {
+                self.buf.skip(6);
+            }
+        }
+        Ok(())
+    }
+
+    // Value labels of 8 bytes each (105 and earlier).
+    fn read_old_value_labels(mut ref self) -> Result[(), PyErr] {
+        self.buf.seek(self.data_location + self.nobs * self.itemsize())?;
+        loop {
+            let probe = self.buf.read(2);
+            if probe.len() == 0 {
+                break;
+            }
+            let back = self.buf.pos - 2;
+            self.buf.seek(back)?;
+            let n = self.read_uint(2)?;
+            let name = self.read_str(9);
+            self.buf.skip(1);
+            let b = self.buf.read(2 * n);
+            if b.len() < 2 * n {
+                return Err(value_error("buffer is smaller than requested size"));
+            }
+            let mut entries: Vec[(i64, String)] = Vec.new();
+            for i in 0..n {
+                let code = signed(word(b, 2 * i, 2, self.big), 2);
+                let text = self.read_str(8);
+                put_entry(mut entries, code, text);
+            }
+            self.set_table(name, entries);
+        }
+        Ok(())
+    }
+
+    fn read_value_labels(mut ref self) -> Result[(), PyErr] {
+        if self.labels_read {
+            return Ok(());
+        }
+        if self.version >= 108 {
+            self.read_new_value_labels()?;
+        } else {
+            self.read_old_value_labels()?;
+        }
+        self.labels_read = true;
+        Ok(())
+    }
+
+    // The strL table: GSO records keyed as the data refers to them.
+    fn read_strls(mut ref self) -> Result[(), PyErr] {
+        self.buf.seek(self.seek_strls)?;
+        self.gso = Map.new();
+        self.gso.insert(0, String.new());
+        loop {
+            if not bytes_eq(self.buf.read(3), "GSO") {
+                break;
+            }
+            let key = if self.version == 117 {
+                self.read_uint(8)?
+            } else {
+                // (v, o) as 4 + 8 bytes, packed into the 8 a record holds:
+                // v in 2 bytes (118) or 3 (119), o in the rest
+                let b = self.buf.read(12);
+                let v_size = if self.version == 118 { 2 } else { 3 };
+                let packed = if not self.big {
+                    let mut p = py_slice(b, 0, v_size);
+                    p.extend(py_slice(b, 4, 12 - v_size));
+                    p
+                } else {
+                    let mut p = py_slice(b, 4 - v_size, 4);
+                    p.extend(py_slice(b, 4 + v_size, 12));
+                    p
+                };
+                if packed.len() != 8 {
+                    return Err(unpack_error(8));
+                }
+                word(packed, 0, 8, self.big) as i64
+            };
+            let kind = self.read_uint(1)?;
+            let len = self.read_uint(4)?;
+            let va = self.buf.read(len);
+            let text = if kind == 130 {
+                let body = py_slice(va, 0, -1);
+                if self.utf8 { lossy(body) } else { latin1(body) }
+            } else {
+                // a binary strL comes out as str() of its bytes
+                bytes_repr(va)
+            };
+            self.gso.insert(key, text);
+        }
+        Ok(())
+    }
+}
+
+// d[k] = v on a dict: a key already there keeps its place.
+fn put_entry(entries: mut ref Vec[(i64, String)], key: i64, text: own String) {
+    for i in 0..entries.len() {
+        if entries[i].0 == key {
+            entries[i] = (key, text);
+            return;
+        }
+    }
+    entries.push((key, text));
+}
+
+// ------------------------------------------------------------ columns
+
+// A cell of an object column that convert_missing made: the number, or
+// the missing value Stata wrote ('.', '.a', ..., '.z').
+#[derive(Clone)]
+enum Ov {
+    I(i64),
+    F(f64),
+    Miss(String),
+}
+
+// A category: a label, or a number no label covers.
+#[derive(Clone)]
+enum Cv {
+    I(i64),
+    F(f64),
+    S(String),
+}
+
+#[derive(Clone)]
+enum Col {
+    // int8 .. int64, by width in bits
+    Int(i64, Vec[i64]),
+    // uint8 (an empty strL column) and uint64 (strL keys)
+    UInt(i64, Vec[i64]),
+    F32(Vec[f32]),
+    F64(Vec[f64]),
+    Str(Vec[String]),
+    Obj(Vec[Ov]),
+    // codes (-1 for NaN), categories, ordered
+    Cat(Vec[i64], Vec[Cv], bool),
+    // datetime64 in seconds (1) or milliseconds (1000); None is NaT
+    Dt(i64, Vec[Option[i64]]),
+}
+
+fn col_len(c: ref Col) -> i64 {
+    match c {
+        Col.Int(_, v) => v.len(),
+        Col.UInt(_, v) => v.len(),
+        Col.F32(v) => v.len(),
+        Col.F64(v) => v.len(),
+        Col.Str(v) => v.len(),
+        Col.Obj(v) => v.len(),
+        Col.Cat(codes, _, _) => codes.len(),
+        Col.Dt(_, v) => v.len(),
+    }
+}
+
+fn dtype_name(c: ref Col) -> String {
+    match c {
+        Col.Int(bits, _) => f"int{bits}",
+        Col.UInt(bits, _) => f"uint{bits}",
+        Col.F32(_) => "float32".to_string(),
+        Col.F64(_) => "float64".to_string(),
+        Col.Str(_) => "str".to_string(),
+        Col.Obj(_) => "object".to_string(),
+        Col.Cat(_, _, _) => "category".to_string(),
+        Col.Dt(unit, _) => if unit == 1000 { "datetime64[ms]".to_string() } else { "datetime64[s]".to_string() },
+    }
+}
+
+fn cv_eq(a: ref Cv, b: ref Cv) -> bool {
+    match (a, b) {
+        (Cv.I(x), Cv.I(y)) => x == y,
+        (Cv.F(x), Cv.F(y)) => x == y,
+        (Cv.I(x), Cv.F(y)) => (x as f64) == y,
+        (Cv.F(x), Cv.I(y)) => x == (y as f64),
+        (Cv.S(x), Cv.S(y)) => x == y,
+        _ => false,
+    }
+}
+
+// str() of a category, as to_csv writes it.
+fn cv_text(c: ref Cv) -> String {
+    match c {
+        Cv.I(n) => n.to_string(),
+        Cv.F(x) => float_repr(x),
+        Cv.S(s) => s.clone(),
+    }
+}
+
+// repr() of a category, as the oracle lists them.
+fn cv_repr(c: ref Cv) -> String {
+    match c {
+        Cv.S(s) => py_repr(s),
+        _ => cv_text(c),
+    }
+}
+
+// The bits of f32 and f64 values that pandas compares against.
+fn f32_of(bits: u32) -> f32 {
+    bits.bits_as_f32()
+}
+
+fn f64_of(bits: u64) -> f64 {
+    bits.bits_as_f64()
+}
+
+// ------------------------------------------------------------ missing values
+
+// StataMissingValue's table: '.' and '.a' to '.z' for each base.
+fn letter_code(k: i64) -> String {
+    if k == 0 {
+        ".".to_string()
+    } else {
+        let mut v: Vec[u8] = Vec.new();
+        v.push(b'.');
+        v.push((96 + k) as u8);
+        from_bytes(v)
+    }
+}
+
+// StataMissingValue(value).string for an integer type's value.
+fn int_missing(v: i64) -> Result[String, PyErr] {
+    let bases: Vec[i64] = [101, 32741, 2147483621].to_vec();
+    for b in bases {
+        if v >= b and v <= b + 26 {
+            return Ok(letter_code(v - b));
+        }
+    }
+    Err(py_err("KeyError", v.to_string()))
+}
+
+// The same for a float: the 27 float32 codes and the 27 float64 codes.
+fn float_missing(x: f64) -> Result[String, PyErr] {
+    let base32: u32 = 0x7F000000;
+    let base64: u64 = 0x7FE0000000000000;
+    for k in 0..27 {
+        // `as`, not `let f: f64 = f32_of(..)`: B-2026-10-29-22
+        let f = f32_of(base32 + (k as u32) * 0x800) as f64;
+        if x == f {
+            return Ok(letter_code(k));
+        }
+        if x == f64_of(base64 + (k as u64) * 0x10000000000) {
+            return Ok(letter_code(k));
+        }
+    }
+    if x >= -2147483648.0 and x < 2147483648.0 and x == x.trunc() {
+        return int_missing(x as i64);
+    }
+    Err(py_err("KeyError", float_repr(x)))
+}
+
+// VALID_RANGE (formats 113 and later) and OLD_VALID_RANGE (111 and
+// before) for the integer types, by width in bits.
+fn int_range(bits: i64, old: bool) -> (i64, i64) {
+    if bits == 8 {
+        if old { (-128, 126) } else { (-127, 100) }
+    } else if bits == 16 {
+        if old { (-32768, 32766) } else { (-32767, 32740) }
+    } else if old {
+        (-2147483648, 2147483646)
+    } else {
+        (-2147483647, 2147483620)
+    }
+}
+
+fn f32_range() -> (f64, f64) {
+    (f32_of(0xFEFFFFFF), f32_of(0x7EFFFFFF))
+}
+
+fn f64_range() -> (f64, f64) {
+    (f64_of(0xFFEFFFFFFFFFFFFF), f64_of(0x7FDFFFFFFFFFFFFF))
+}
+
+// ------------------------------------------------------------ dates
+
+const DATE_FORMATS: Array[Str, 9] = ["%tc", "%tC", "%td", "%d", "%tw", "%tm", "%tq", "%th", "%ty"];
+
+fn is_date_format(fmt: Str) -> bool {
+    for d in DATE_FORMATS {
+        if fmt.starts_with(d) {
+            return true;
+        }
+    }
+    false
+}
+
+fn starts_any(fmt: Str, a: Str, b: Str) -> bool {
+    fmt.starts_with(a) or fmt.starts_with(b)
+}
+
+// The seconds since 1970 at the start of a month (months since 1970-01).
+fn month_start(ordinal: i64) -> i64 {
+    let y = 1970 + fdiv(ordinal, 12);
+    let m = fmod(ordinal, 12) + 1;
+    days_from_civil(y, m, 1) * 86400
+}
+
+// _stata_elapsed_date_to_datetime_vec for one column.
+fn to_datetimes(col: ref Col, fmt: Str) -> Result[Col, PyErr] {
+    // the values as numpy sees them; None is NaN
+    let mut vals: Vec[Option[f64]] = Vec.new();
+    let mut object = false;
+    match col {
+        Col.Int(_, v) => {
+            for x in v {
+                vals.push(Some(x as f64));
+            }
+        }
+        Col.F32(v) => {
+            for x in v {
+                let w: f64 = x;
+                vals.push(if is_nan(w) { None } else { Some(w) });
+            }
+        }
+        Col.F64(v) => {
+            for x in v {
+                vals.push(if is_nan(x) { None } else { Some(x) });
+            }
+        }
+        _ => {
+            object = true;
+        }
+    }
+    let shifted = |delta: f64, sign: Str| {
+        if object {
+            return Err(py_err("TypeError", f"unsupported operand type(s) for {sign}: 'StataMissingValue' and 'int'"));
+        }
+        let mut out: Vec[Option[i64]] = Vec.new();
+        for v in vals {
+            out.push(match v {
+                Some(x) => Some((x + delta).trunc() as i64),
+                None => None,
+            });
+        }
+        Ok(out)
+    };
+    if starts_any(fmt, "%tc", "tc") {
+        if object {
+            return Err(value_error("Could not convert object to NumPy datetime"));
+        }
+        let mut out: Vec[Option[i64]] = Vec.new();
+        for v in vals {
+            out.push(match v {
+                Some(x) => Some(x.trunc() as i64 - 315619200000),
+                None => None,
+            });
+        }
+        return Ok(Col.Dt(1000, out));
+    }
+    if starts_any(fmt, "%td", "td") or starts_any(fmt, "%d", "d") {
+        if object {
+            return Err(value_error("Could not convert object to NumPy datetime"));
+        }
+        let mut out: Vec[Option[i64]] = Vec.new();
+        for v in vals {
+            out.push(match v {
+                Some(x) => Some((x.trunc() as i64 - 3653) * 86400),
+                None => None,
+            });
+        }
+        return Ok(Col.Dt(1, out));
+    }
+    if starts_any(fmt, "%tm", "tm") {
+        let ords = shifted(-120.0, "+")?;
+        return Ok(Col.Dt(1, ords.iter().map(|o| o.map(|n| month_start(n))).collect()));
+    }
+    if starts_any(fmt, "%tq", "tq") {
+        let ords = shifted(-40.0, "+")?;
+        return Ok(Col.Dt(1, ords.iter().map(|o| o.map(|n| month_start(n * 3))).collect()));
+    }
+    if starts_any(fmt, "%th", "th") {
+        let ords = shifted(-20.0, "+")?;
+        return Ok(Col.Dt(1, ords.iter().map(|o| o.map(|n| month_start(n * 6))).collect()));
+    }
+    if starts_any(fmt, "%ty", "ty") {
+        let ords = shifted(-1970.0, "-")?;
+        return Ok(Col.Dt(1, ords.iter().map(|o| o.map(|n| month_start(n * 12))).collect()));
+    }
+    // np.isnan comes first for what is left
+    if object {
+        return Err(py_err("TypeError", "ufunc 'isnan' not supported for the input types, and the inputs could not be safely coerced to any supported types according to the casting rule ''safe''"));
+    }
+    if starts_any(fmt, "%tw", "tw") {
+        // 52 weeks a year, the 52nd taking what is left of it
+        let mut out: Vec[Option[i64]] = Vec.new();
+        for v in vals {
+            out.push(match v {
+                Some(x) => {
+                    let d = x.trunc() as i64;
+                    let year = 1960 + fdiv(d, 52);
+                    let days = fmod(d, 52) * 7;
+                    Some((days_from_civil(year, 1, 1) + days) * 86400)
+                }
+                None => None,
+            });
+        }
+        return Ok(Col.Dt(1, out));
+    }
+    Err(py_err("NotImplementedError", f"the {fmt} format (left in Stata's internal form by pandas) is not converted by this port"))
+}
+
+// to_csv's text for each datetime: the date alone when every value is a
+// midnight, and milliseconds only when some value has them.
+fn datetime_cells(unit: i64, v: ref Vec[Option[i64]]) -> Vec[String] {
+    let mut dates_only = true;
+    let mut show_ms = false;
+    for x in v {
+        if let Some(t) = x {
+            let ms = if unit == 1000 { t } else { t * 1000 };
+            if fmod(ms, 86400000) != 0 {
+                dates_only = false;
+            }
+            if fmod(ms, 1000) != 0 {
+                show_ms = true;
+            }
+        }
+    }
+    let mut out: Vec[String] = Vec.new();
+    for x in v {
+        out.push(match x {
+            None => String.new(),
+            Some(t) => {
+                let ms = if unit == 1000 { t } else { t * 1000 };
+                let day = fdiv(ms, 86400000);
+                let rest = ms - day * 86400000;
+                let (y, m, d) = civil_from_days(day);
+                let date = f"{pad(y, 4)}-{pad(m, 2)}-{pad(d, 2)}";
+                if dates_only {
+                    date
+                } else {
+                    let secs = rest / 1000;
+                    let clock = f"{pad(secs / 3600, 2)}:{pad(secs / 60 % 60, 2)}:{pad(secs % 60, 2)}";
+                    if show_ms { f"{date} {clock}.{pad(rest % 1000, 3)}" } else { f"{date} {clock}" }
+                }
+            }
+        });
+    }
+    out
+}
+
+fn pad(n: i64, width: i64) -> String {
+    let mut s = n.to_string();
+    while s.len() < width {
+        s = f"0{s}";
+    }
+    s
+}
+
+// ------------------------------------------------------------ categoricals
+
+// One labelled column to a Categorical, as _do_convert_categoricals does.
+fn to_category(col: ref Col, vl: ref Vec[(i64, String)], iterating: bool, ordered: bool, name: Str) -> Result[Col, PyErr] {
+    let mut vals: Vec[Option[Cv]] = Vec.new();
+    match col {
+        Col.Obj(_) => {
+            return Err(py_err("TypeError", "unhashable type: 'StataMissingValue'"));
+        }
+        Col.Int(_, v) => {
+            for x in v {
+                vals.push(Some(Cv.I(x)));
+            }
+        }
+        Col.F32(v) => {
+            for x in v {
+                let w: f64 = x;
+                vals.push(if is_nan(w) { None } else { Some(Cv.F(w)) });
+            }
+        }
+        Col.F64(v) => {
+            for x in v {
+                vals.push(if is_nan(x) { None } else { Some(Cv.F(x)) });
+            }
+        }
+        Col.Str(v) => {
+            for s in v {
+                vals.push(Some(Cv.S(s.clone())));
+            }
+        }
+        _ => {
+            return Ok(col.clone());
+        }
+    }
+    let key_of = |c: ref Cv| {
+        for i in 0..vl.len() {
+            if cv_eq(c, Cv.I(vl[i].0)) {
+                return Some(i);
+            }
+        }
+        None
+    };
+    let mut all_match = true;
+    for v in vals {
+        match v {
+            Some(c) => {
+                if key_of(c).is_none() {
+                    all_match = false;
+                }
+            }
+            None => {
+                all_match = false;
+            }
+        }
+    }
+    let mut cats: Vec[Cv] = Vec.new();
+    let mut renamed: Vec[Cv] = Vec.new();
+    if iterating and all_match {
+        // every value has a label: the categories are the labels, in
+        // the table's order, the same for every chunk
+        for (k, text) in vl {
+            cats.push(Cv.I(k));
+            renamed.push(Cv.S(text.clone()));
+        }
+    } else {
+        // the sorted distinct values, each renamed to its label if it has one
+        let mut ints: Vec[i64] = Vec.new();
+        let mut floats: Vec[f64] = Vec.new();
+        let mut strs: Vec[String] = Vec.new();
+        for v in vals {
+            match v {
+                Some(Cv.I(n)) => ints.push(n),
+                Some(Cv.F(x)) => floats.push(x),
+                Some(Cv.S(s)) => strs.push(s.clone()),
+                None => {}
+            }
+        }
+        ints.sort();
+        ints.dedup();
+        floats.sort_by(f64.total_cmp);
+        floats.dedup();
+        strs.sort();
+        strs.dedup();
+        for n in ints {
+            cats.push(Cv.I(n));
+        }
+        for x in floats {
+            cats.push(Cv.F(x));
+        }
+        for s in strs {
+            cats.push(Cv.S(s.clone()));
+        }
+        for c in cats {
+            renamed.push(match key_of(c) {
+                Some(i) => Cv.S(vl[i].1.clone()),
+                None => c.clone(),
+            });
+        }
+    }
+    // rename_categories refuses duplicates
+    let mut repeated: Vec[(Cv, i64)] = Vec.new();
+    for c in renamed {
+        let mut found = false;
+        for i in 0..repeated.len() {
+            if cv_eq(repeated[i].0, c) {
+                repeated[i].1 += 1;
+                found = true;
+            }
+        }
+        if not found {
+            repeated.push((c.clone(), 1));
+        }
+    }
+    let mut dups: Vec[(Cv, i64)] = Vec.new();
+    for (c, n) in repeated {
+        if n > 1 {
+            dups.push((c.clone(), n));
+        }
+    }
+    if dups.len() > 0 {
+        dups.sort_by_key(|p| -p.1);
+        let mut lines: Vec[String] = Vec.new();
+        for (c, _) in dups {
+            lines.push(cv_text(c));
+        }
+        let repeats = f"{"-".repeat(80)}\n{join(lines, "\n")}";
+        return Err(value_error(f"\nValue labels for column {name} are not unique. These cannot be converted to\npandas categoricals.\n\nEither read the file with `convert_categoricals` set to False or use the\nlow level interface in `StataReader` to separately read the values and the\nvalue_labels.\n\nThe repeated labels are:\n{repeats}\n"));
+    }
+    let mut codes: Vec[i64] = Vec.new();
+    for v in vals {
+        codes.push(match v {
+            None => -1,
+            Some(c) => {
+                let mut at: i64 = -1;
+                for i in 0..cats.len() {
+                    if cv_eq(cats[i], c) {
+                        at = i;
+                        break;
+                    }
+                }
+                at
+            }
+        });
+    }
+    Ok(Col.Cat(codes, renamed, ordered))
+}
+
+// ------------------------------------------------------------ frames
+
+enum Index {
+    // a RangeIndex
+    Range(i64, i64),
+    // a column made the index
+    Named(String, Col),
+}
+
+struct Frame {
+    names: Vec[String],
+    cols: Vec[Col],
+    index: Index,
+}
+
+fn frame_rows(f: ref Frame) -> i64 {
+    match f.index {
+        Index.Range(a, b) => b - a,
+        Index.Named(_, c) => col_len(c),
+    }
+}
+
+// set_index turns integers that step evenly into a RangeIndex.
+fn index_dtype(c: ref Col) -> String {
+    match c {
+        Col.Int(_, v) => {
+            if v.len() == 1 {
+                return dtype_name(c);
+            }
+            if v.len() == 0 {
+                return "int64".to_string();
+            }
+            let diff = v[1] - v[0];
+            if diff == 0 {
+                return dtype_name(c);
+            }
+            for i in 1..v.len() {
+                if v[i] - v[i - 1] != diff {
+                    return dtype_name(c);
+                }
+            }
+            "int64".to_string()
+        }
+        _ => dtype_name(c),
+    }
+}
+
+// What to_csv writes for each value of a column.
+fn cells(c: ref Col) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    match c {
+        Col.Int(_, v) => {
+            for x in v {
+                out.push(x.to_string());
+            }
+        }
+        Col.UInt(_, v) => {
+            for x in v {
+                out.push(x.to_string());
+            }
+        }
+        Col.F32(v) => {
+            for x in v {
+                out.push(if x != x { String.new() } else { x.to_string() });
+            }
+        }
+        Col.F64(v) => {
+            for x in v {
+                out.push(if is_nan(x) { String.new() } else { float_repr(x) });
+            }
+        }
+        Col.Str(v) => {
+            for s in v {
+                out.push(s.clone());
+            }
+        }
+        Col.Obj(v) => {
+            for o in v {
+                out.push(match o {
+                    Ov.I(n) => n.to_string(),
+                    Ov.F(x) => if is_nan(x) { String.new() } else { float_repr(x) },
+                    Ov.Miss(s) => s.clone(),
+                });
+            }
+        }
+        Col.Cat(codes, cats, _) => {
+            for k in codes {
+                out.push(if k < 0 { String.new() } else { cv_text(cats[k]) });
+            }
+        }
+        Col.Dt(unit, v) => {
+            return datetime_cells(unit, v);
+        }
+    }
+    out
+}
+
+fn csv_field(s: Str) -> String {
+    if s.contains(",") or s.contains("\"") or s.contains("\n") or s.contains("\r") {
+        f"\"{s.replace("\"", "\"\"")}\""
+    } else {
+        s.to_string()
+    }
+}
+
+// The oracle's show(): the shape, the index's name and dtype if it has
+// one, each column's dtype, then to_csv.
+fn show(f: ref Frame) -> String {
+    let rows = frame_rows(f);
+    let mut out = f"shape: {rows} x {f.cols.len()}\n";
+    if let Index.Named(name, c) = f.index {
+        out.push_str(f"index: {py_repr(name)} {index_dtype(c)}\n");
+    }
+    for i in 0..f.cols.len() {
+        let c = ref f.cols[i];
+        match c {
+            Col.Cat(_, cats, ordered) => {
+                let mut parts: Vec[String] = Vec.new();
+                for x in cats {
+                    parts.push(cv_repr(x));
+                }
+                out.push_str(f"  {py_repr(f.names[i])}: category [{join(parts, ", ")}] ordered={bool_text(ordered)}\n");
+            }
+            _ => out.push_str(f"  {py_repr(f.names[i])}: {dtype_name(c)}\n"),
+        }
+    }
+    let mut header: Vec[String] = Vec.new();
+    let mut labels: Vec[String] = Vec.new();
+    match f.index {
+        Index.Range(a, b) => {
+            header.push(String.new());
+            for k in a..b {
+                labels.push(k.to_string());
+            }
+        }
+        Index.Named(name, c) => {
+            header.push(csv_field(name));
+            labels = cells(c);
+        }
+    }
+    for n in f.names {
+        header.push(csv_field(n));
+    }
+    out.push_str(f"{join(header, ",")}\n");
+    let mut columns: Vec[Vec[String]] = Vec.new();
+    for c in f.cols {
+        columns.push(cells(c));
+    }
+    for r in 0..rows {
+        let mut line: Vec[String] = Vec.new();
+        line.push(csv_field(labels[r]));
+        for c in columns {
+            line.push(csv_field(c[r]));
+        }
+        out.push_str(f"{join(line, ",")}\n");
+    }
+    out
+}
+
+// ------------------------------------------------------------ read_stata
+
+// The keyword arguments a job passes.
+struct Opts {
+    convert_dates: bool,
+    convert_categoricals: bool,
+    convert_missing: bool,
+    preserve_dtypes: bool,
+    order_categoricals: bool,
+    index_col: Option[String],
+    columns: Option[Vec[String]],
+}
+
+fn parse_opts(words: ref Vec[String]) -> Result[Opts, PyErr] {
+    let mut o = Opts {
+        convert_dates: true,
+        convert_categoricals: true,
+        convert_missing: false,
+        preserve_dtypes: true,
+        order_categoricals: true,
+        index_col: None,
+        columns: None,
+    };
+    for w in words {
+        let (k, v) = match w.split_once("=") {
+            Some(kv) => kv,
+            None => return Err(value_error("not enough values to unpack (expected 2, got 1)")),
+        };
+        let flag = v == "True";
+        if k == "columns" {
+            o.columns = Some(split_on(v, b','));
+        } else if k == "index_col" {
+            o.index_col = Some(v.to_string());
+        } else if k == "convert_dates" {
+            o.convert_dates = flag;
+        } else if k == "convert_categoricals" {
+            o.convert_categoricals = flag;
+        } else if k == "convert_missing" {
+            o.convert_missing = flag;
+        } else if k == "preserve_dtypes" {
+            o.preserve_dtypes = flag;
+        } else if k == "order_categoricals" {
+            o.order_categoricals = flag;
+        } else {
+            return Err(py_err("TypeError", f"read_stata() got an unexpected keyword argument {py_repr(k)}"));
+        }
+    }
+    Ok(o)
+}
+
+// DataFrame(columns=varlist) with each non-string column cast to its type.
+fn empty_col(t: ref Typ) -> Col {
+    match t {
+        Typ.Str(_) => Col.Obj(Vec.new()),
+        Typ.Byte => Col.Int(8, Vec.new()),
+        Typ.Int => Col.Int(16, Vec.new()),
+        Typ.Long => Col.Int(32, Vec.new()),
+        Typ.Float => Col.F32(Vec.new()),
+        Typ.Double => Col.F64(Vec.new()),
+        Typ.StrL => Col.UInt(8, Vec.new()),
+    }
+}
+
+// _do_convert_missing for one column.
+fn missing_col(c: own Col, old: bool, old_double: bool, conv: bool) -> Result[Col, PyErr] {
+    match c {
+        Col.Int(bits, v) => {
+            let (lo, hi) = int_range(bits, old);
+            let mut any = false;
+            for x in v {
+                if x < lo or x > hi {
+                    any = true;
+                }
+            }
+            if not any {
+                return Ok(Col.Int(bits, v));
+            }
+            if conv {
+                let mut out: Vec[Ov] = Vec.new();
+                for x in v {
+                    if x < lo or x > hi {
+                        out.push(Ov.Miss(if old { ".".to_string() } else { int_missing(x)? }));
+                    } else {
+                        out.push(Ov.I(x));
+                    }
+                }
+                Ok(Col.Obj(out))
+            } else {
+                let mut out: Vec[f64] = Vec.new();
+                for x in v {
+                    out.push(if x < lo or x > hi { nan() } else { x as f64 });
+                }
+                Ok(Col.F64(out))
+            }
+        }
+        Col.F32(v) => {
+            let (lo, hi) = f32_range();
+            let mut any = false;
+            for x in v {
+                let w: f64 = x;
+                if w < lo or w > hi {
+                    any = true;
+                }
+            }
+            if not any {
+                return Ok(Col.F32(v));
+            }
+            if conv {
+                let mut out: Vec[Ov] = Vec.new();
+                for x in v {
+                    let w: f64 = x;
+                    if w < lo or w > hi {
+                        out.push(Ov.Miss(if old { ".".to_string() } else { float_missing(w)? }));
+                    } else {
+                        out.push(Ov.F(w));
+                    }
+                }
+                Ok(Col.Obj(out))
+            } else {
+                let mut out: Vec[f32] = Vec.new();
+                for x in v {
+                    let w: f64 = x;
+                    out.push(if w < lo or w > hi { nan() as f32 } else { x });
+                }
+                Ok(Col.F32(out))
+            }
+        }
+        Col.F64(v0) => {
+            // before 106 a double's missing value was 2^333
+            let mut v = v0;
+            if old_double {
+                for i in 0..v.len() {
+                    if v[i] == f64_of(0x54C0000000000000) {
+                        v[i] = f64_of(0x7FE0000000000000);
+                    }
+                }
+            }
+            let (lo, hi) = f64_range();
+            let mut any = false;
+            for x in v {
+                if x < lo or x > hi {
+                    any = true;
+                }
+            }
+            if not any {
+                return Ok(Col.F64(v));
+            }
+            if conv {
+                let mut out: Vec[Ov] = Vec.new();
+                for x in v {
+                    if x < lo or x > hi {
+                        out.push(Ov.Miss(if old { ".".to_string() } else { float_missing(x)? }));
+                    } else {
+                        out.push(Ov.F(x));
+                    }
+                }
+                Ok(Col.Obj(out))
+            } else {
+                let mut out: Vec[f64] = Vec.new();
+                for x in v {
+                    out.push(if x < lo or x > hi { nan() } else { x });
+                }
+                Ok(Col.F64(out))
+            }
+        }
+        other => Ok(other),
+    }
+}
+
+// preserve_dtypes=False: float32 to float64, the narrow ints to int64.
+fn widen(c: own Col) -> Col {
+    match c {
+        Col.F32(v) => {
+            let mut out: Vec[f64] = Vec.new();
+            for x in v {
+                out.push(x);
+            }
+            Col.F64(out)
+        }
+        Col.Int(_, v) => Col.Int(64, v),
+        other => other,
+    }
+}
+
+impl Reader {
+    // The records cut into columns, with fixed-width strings decoded.
+    fn columns_of(ref self, raw: ref Vec[u8], rows: i64) -> Vec[Col] {
+        let size = self.itemsize();
+        let mut cols: Vec[Col] = Vec.new();
+        let mut at: i64 = 0;
+        for t in self.layout {
+            let w = typ_size(t);
+            let col = match t {
+                Typ.Str(_) => {
+                    let mut v: Vec[String] = Vec.new();
+                    for r in 0..rows {
+                        let start = r * size + at;
+                        v.push(self.decode(bytes_of(raw, start, start + w)));
+                    }
+                    Col.Str(v)
+                }
+                Typ.Float => {
+                    let mut v: Vec[f32] = Vec.new();
+                    for r in 0..rows {
+                        v.push(f32_of(word(raw, r * size + at, 4, self.big) as u32));
+                    }
+                    Col.F32(v)
+                }
+                Typ.Double => {
+                    let mut v: Vec[f64] = Vec.new();
+                    for r in 0..rows {
+                        v.push(f64_of(word(raw, r * size + at, 8, self.big)));
+                    }
+                    Col.F64(v)
+                }
+                Typ.StrL => {
+                    let mut v: Vec[i64] = Vec.new();
+                    for r in 0..rows {
+                        v.push(word(raw, r * size + at, 8, self.big) as i64);
+                    }
+                    Col.UInt(64, v)
+                }
+                _ => {
+                    let mut v: Vec[i64] = Vec.new();
+                    for r in 0..rows {
+                        v.push(signed(word(raw, r * size + at, w, self.big), w));
+                    }
+                    Col.Int(w * 8, v)
+                }
+            };
+            cols.push(col);
+            at += w;
+        }
+        cols
+    }
+
+    // _do_select_columns: checked, and the descriptors narrowed, once.
+    fn select(mut ref self, f: own Frame, cols: ref Vec[String]) -> Result[Frame, PyErr] {
+        if not self.selected {
+            let mut seen: Vec[String] = Vec.new();
+            for c in cols {
+                if not contains_str(seen, c) {
+                    seen.push(c.clone());
+                }
+            }
+            if seen.len() != cols.len() {
+                return Err(value_error("columns contains duplicate entries"));
+            }
+            let mut unmatched: Vec[String] = Vec.new();
+            for c in seen {
+                if not contains_str(f.names, c) {
+                    unmatched.push(c.clone());
+                }
+            }
+            if unmatched.len() > 0 {
+                return Err(value_error(f"The following columns were not found in the Stata data set: {join(unmatched, ", ")}"));
+            }
+            let mut typs: Vec[Typ] = Vec.new();
+            let mut fmts: Vec[String] = Vec.new();
+            let mut lbls: Vec[String] = Vec.new();
+            for c in cols {
+                let i = position(f.names, c);
+                typs.push(self.typs[i].clone());
+                fmts.push(self.fmts[i].clone());
+                lbls.push(self.lbls[i].clone());
+            }
+            self.typs = typs;
+            self.fmts = fmts;
+            self.lbls = lbls;
+            self.selected = true;
+        }
+        let mut names: Vec[String] = Vec.new();
+        let mut out: Vec[Col] = Vec.new();
+        for c in cols {
+            let i = position(f.names, c);
+            names.push(c.clone());
+            out.push(f.cols[i].clone());
+        }
+        Ok(Frame { names: names, cols: out, index: f.index })
+    }
+
+    // _insert_strls: each strL key replaced by its text.
+    fn insert_strls(ref self, cols: own Vec[Col]) -> Result[Vec[Col], PyErr] {
+        let mut out: Vec[Col] = Vec.new();
+        let mut i: i64 = 0;
+        for c in cols.into_iter() {
+            let is_strl = match self.typs[i] {
+                Typ.StrL => true,
+                _ => false,
+            };
+            i += 1;
+            if not is_strl {
+                out.push(c);
+                continue;
+            }
+            match c {
+                Col.UInt(_, keys) => {
+                    let mut v: Vec[String] = Vec.new();
+                    for k in keys {
+                        match self.gso.get(k) {
+                            Some(s) => v.push(s.clone()),
+                            None => return Err(key_error(k.to_string())),
+                        }
+                    }
+                    out.push(Col.Str(v));
+                }
+                other => out.push(other),
+            }
+        }
+        Ok(out)
+    }
+
+    // StataReader.read(nrows): None once an iterator has run out.
+    fn read(mut ref self, nrows_arg: Option[i64], o: ref Opts) -> Result[Option[Frame], PyErr] {
+        let nrows = match nrows_arg {
+            Some(n) => n,
+            None => self.nobs,
+        };
+        if self.nobs == 0 and nrows == 0 {
+            let mut cols: Vec[Col] = Vec.new();
+            for t in self.layout {
+                cols.push(empty_col(t));
+            }
+            let mut f = Frame { names: self.names.clone(), cols: cols, index: Index.Range(0, 0) };
+            if let Some(want) = o.columns {
+                f = self.select(f, want)?;
+            }
+            return Ok(Some(f));
+        }
+        if self.version >= 117 and not self.labels_read {
+            self.read_strls()?;
+        }
+        let size = self.itemsize();
+        let max_read_len = (self.nobs - self.lines_read) * size;
+        let mut read_len = nrows * size;
+        if read_len > max_read_len {
+            read_len = max_read_len;
+        }
+        if read_len <= 0 {
+            if o.convert_categoricals {
+                self.read_value_labels()?;
+            }
+            return Ok(None);
+        }
+        self.buf.seek(self.data_location + self.lines_read * size)?;
+        let left = self.nobs - self.lines_read;
+        let read_lines = if nrows < left { nrows } else { left };
+        let raw = self.buf.read(read_len);
+        if raw.len() < read_lines * size {
+            return Err(value_error("buffer is smaller than requested size"));
+        }
+        self.lines_read += read_lines;
+        if o.convert_categoricals {
+            self.read_value_labels()?;
+        }
+        let cols = self.columns_of(raw, read_lines);
+        let mut f = Frame {
+            names: self.names.clone(),
+            cols: cols,
+            index: Index.Range(self.lines_read - read_lines, self.lines_read),
+        };
+        if let Some(want) = o.columns {
+            f = self.select(f, want)?;
+        }
+        f.cols = self.insert_strls(f.cols)?;
+        let old = self.version <= 111;
+        let old_double = self.version <= 105;
+        let mut fixed: Vec[Col] = Vec.new();
+        for c in f.cols.into_iter() {
+            fixed.push(missing_col(c, old, old_double, o.convert_missing)?);
+        }
+        f.cols = fixed;
+        if o.convert_dates {
+            let mut out: Vec[Col] = Vec.new();
+            for i in 0..f.cols.len() {
+                if is_date_format(self.fmts[i]) {
+                    out.push(to_datetimes(f.cols[i], self.fmts[i])?);
+                } else {
+                    out.push(f.cols[i].clone());
+                }
+            }
+            f.cols = out;
+        }
+        if o.convert_categoricals and self.tables.len() > 0 {
+            let mut out: Vec[Col] = Vec.new();
+            for i in 0..f.cols.len() {
+                match self.table(self.lbls[i]) {
+                    Some(vl) => out.push(to_category(f.cols[i], vl, self.using_iterator, o.order_categoricals, f.names[i])?),
+                    None => out.push(f.cols[i].clone()),
+                }
+            }
+            f.cols = out;
+        }
+        if not o.preserve_dtypes {
+            let mut out: Vec[Col] = Vec.new();
+            for c in f.cols.into_iter() {
+                out.push(widen(c));
+            }
+            f.cols = out;
+        }
+        if let Some(name) = o.index_col {
+            let at = position(f.names, name);
+            if at < 0 {
+                return Err(key_error(name));
+            }
+            let c = f.cols.remove(at);
+            f.names.remove(at);
+            f.index = Index.Named(name.clone(), c);
+        }
+        Ok(Some(f))
+    }
+}
+
+fn position(v: ref Vec[String], s: Str) -> i64 {
+    for i in 0..v.len() {
+        if v[i] == s {
+            return i;
+        }
+    }
+    -1
+}
+
+// ------------------------------------------------------------ jobs
+
+// meta: what StataReader knows before reading any data.
+fn job_meta(path: Str, out: mut ref String) -> Result[(), PyErr] {
+    let mut r = open_reader(path)?;
+    let order = if r.big { "'>'" } else { "'<'" };
+    out.push_str(f"format {r.version}, byteorder {order}, {r.nobs} obs, {r.nvar} vars\n");
+    out.push_str(f"data_label: {py_repr(r.data_label)}\n");
+    match r.time_stamp {
+        Some(ref t) => out.push_str(f"time_stamp: {py_repr(t)}\n"),
+        None => return Err(py_err("AttributeError", "'StataReader' object has no attribute '_time_stamp'")),
+    }
+    for i in 0..r.names.len() {
+        // variable_labels() is a dict: the last label of a name wins
+        let mut label = String.new();
+        for j in 0..r.names.len() {
+            if r.names[j] == r.names[i] and j < r.var_labels.len() {
+                label = r.var_labels[j].clone();
+            }
+        }
+        out.push_str(f"  {py_repr(r.names[i])}: type={typ_repr(r.typs[i])} fmt={py_repr(r.fmts[i])} lbl={py_repr(r.lbls[i])} label={py_repr(label)}\n");
+    }
+    r.read_value_labels()?;
+    for (name, table) in r.tables {
+        let mut pairs: Vec[String] = Vec.new();
+        for (k, text) in table {
+            pairs.push(f"{k}: {py_repr(text)}");
+        }
+        out.push_str(f"  value labels {py_repr(name)}: {{{join(pairs, ", ")}}}\n");
+    }
+    Ok(())
+}
+
+// read: read_stata(path, **options).
+fn job_read(path: Str, words: ref Vec[String], out: mut ref String) -> Result[(), PyErr] {
+    let o = parse_opts(words)?;
+    let mut r = open_reader(path)?;
+    match r.read(None, o)? {
+        Some(f) => out.push_str(show(f)),
+        None => return Err(py_err("StopIteration", "")),
+    }
+    Ok(())
+}
+
+// chunks: read_stata(path, chunksize=n, **options), chunk by chunk.
+fn job_chunks(path: Str, size: Str, words: ref Vec[String], out: mut ref String) -> Result[(), PyErr] {
+    let n = py_int(size)?;
+    let o = parse_opts(words)?;
+    if n <= 0 {
+        return Err(value_error("chunksize must be a positive integer when set."));
+    }
+    let mut r = open_reader(path)?;
+    r.using_iterator = true;
+    loop {
+        match r.read(Some(n), o)? {
+            Some(f) => {
+                out.push_str("-- chunk\n");
+                out.push_str(show(f));
+            }
+            None => break,
+        }
+    }
+    Ok(())
+}
+
+fn run_job(line: Str, out: mut ref String) -> Result[(), PyErr] {
+    let w = split_on(line, b' ');
+    if w.len() < 2 {
+        return Err(py_err("IndexError", "list index out of range"));
+    }
+    let path = f"data/{w[1]}";
+    if w[0] == "meta" {
+        job_meta(path, mut out)
+    } else if w[0] == "read" {
+        job_read(path, w[2..].to_vec(), mut out)
+    } else if w[0] == "chunks" {
+        if w.len() < 3 {
+            return Err(py_err("IndexError", "list index out of range"));
+        }
+        job_chunks(path, w[2], w[3..].to_vec(), mut out)
+    } else {
+        Ok(())
+    }
+}
+
+fn transcript(line: Str) -> String {
+    let mut t = f"$ {line}\n";
+    if let Err(e) = run_job(line, mut t) {
+        t.push_str(f"! {e.kind}: {e.msg}\n");
+    }
+    t
+}
+
+// ------------------------------------------------------------ data/
+
+fn is_hex(c: u8) -> bool {
+    is_digit(c) or (c >= b'a' and c <= b'f')
+}
+
+fn hex_val(c: u8) -> u8 {
+    if is_digit(c) { c - b'0' } else { c - b'a' + 10 }
+}
+
+// The bytes a block of hex digits spells; line breaks are skipped.
+fn unhex(s: String) -> Vec[u8] {
+    let mut digits: Vec[u8] = Vec.new();
+    for c in to_bytes(s) {
+        if is_hex(c) {
+            digits.push(hex_val(c));
+        }
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i + 1 < digits.len() {
+        out.push(digits[i] * 16 + digits[i + 1]);
+        i += 2;
+    }
+    out
+}
+
+fn put_bytes(path: Str, b: Vec[u8]) -> Result[(), String] {
+    if let Err(e) = fs.write_bytes(path.to_string(), b) {
+        return Err(f"cannot write {path}: {e}");
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = fs.create_dir_all("data".to_string()) {
+        eprintln(f"cannot create data: {e}");
+        return;
+    }
+    if let Err(e) = write_data() {
+        eprintln(e);
+        return;
+    }
+    let jobs = match fs.read_to_string("data/jobs.txt".to_string()) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln(f"cannot read jobs.txt: {e}");
+            return;
+        }
+    };
+    let mut lines: Vec[String] = Vec.new();
+    for l in lines_of(jobs) {
+        if l.len() > 0 {
+            lines.push(l.clone());
+        }
+    }
+    // Every job in a task of its own; the transcript prints in job order.
+    let group = TaskGroup.new();
+    let mut handles = Vec.new();
+    for line in lines {
+        handles.push(group.spawn(|| transcript(line)));
+    }
+    for h in handles.into_iter() {
+        print(h.join());
+    }
+}
+
+// ============================================================ data
+
+// The files under data/, in name order.
+fn write_data() -> Result[(), String] {
+    put_bytes("data/allnan_118.dta", unhex(file_0()))?;
+    put_bytes("data/clinic_visits.dta", unhex(file_1()))?;
+    put_bytes("data/cpi_regions.dta", unhex(file_2()))?;
+    put_bytes("data/cpi_regions.dta.gz", unhex(file_3()))?;
+    put_bytes("data/cpi_regions.zip", unhex(file_4()))?;
+    put_bytes("data/empty_118.dta", unhex(file_5()))?;
+    put_bytes("data/hh_survey_w3.dta", unhex(file_6()))?;
+    put_bytes("data/jobs.txt", unhex(file_7()))?;
+    put_bytes("data/lfs_104.dta", unhex(file_8()))?;
+    put_bytes("data/lfs_105.dta", unhex(file_9()))?;
+    put_bytes("data/lfs_108.dta", unhex(file_10()))?;
+    put_bytes("data/lfs_110.dta", unhex(file_11()))?;
+    put_bytes("data/lfs_111.dta", unhex(file_12()))?;
+    put_bytes("data/lfs_113.dta", unhex(file_13()))?;
+    put_bytes("data/lfs_114.dta", unhex(file_14()))?;
+    put_bytes("data/lfs_115.dta", unhex(file_15()))?;
+    put_bytes("data/release_116.dta", unhex(file_16()))?;
+    put_bytes("data/survey.csv.dta", unhex(file_17()))?;
+    put_bytes("data/trade_119.dta", unhex(file_18()))?;
+    put_bytes("data/v112.dta", unhex(file_19()))?;
+    put_bytes("data/ward_census_117.dta", unhex(file_20()))?;
+    Ok(())
+}
+
+// data/allnan_118.dta
+fn file_0() -> String {
+    """
+3c73746174615f6474613e3c6865616465723e3c72656c656173653e3131383c2f72656c656173653e3c627974656f72
+6465723e4c53463c2f627974656f726465723e3c4b3e03003c2f4b3e3c4e3e03000000000000003c2f4e3e3c6c616265
+6c3e00003c2f6c6162656c3e3c74696d657374616d703e113031204f637420323032342030393a33303c2f74696d6573
+74616d703e3c2f6865616465723e3c6d61703e00000000000000009e0000000000000019010000000000004001000000
+000000d802000000000000f502000000000000b3030000000000005d0500000000000043090000000000006609000000
+0000009a09000000000000a909000000000000c609000000000000d2090000000000003c2f6d61703e3c766172696162
+6c655f74797065733efafff6fff7ff3c2f7661726961626c655f74797065733e3c7661726e616d65733e6b0000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000760000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000770000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000003c2f76
+61726e616d65733e3c736f72746c6973743e00000000000000003c2f736f72746c6973743e3c666f726d6174733e2538
+2e3067000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000002531302e30670000000000000000000000000000000000000000000000000000000000000000000000
+0000000000000000000000000000000025392e3067000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000003c2f666f726d6174733e3c76616c75655f6c6162656c5f
+6e616d65733e000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+0000000000000000003c2f76616c75655f6c6162656c5f6e616d65733e3c7661726961626c655f6c6162656c733e0000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+003c2f7661726961626c655f6c6162656c733e3c6368617261637465726973746963733e3c2f63686172616374657269
+73746963733e3c646174613e01000000000000e07f0000007f02000000000000e07f0000c03f03000000000000e07f00
+00007f3c2f646174613e3c7374726c733e3c2f7374726c733e3c76616c75655f6c6162656c733e3c2f76616c75655f6c
+6162656c733e3c2f73746174615f6474613e
+"""
+}
+
+// data/clinic_visits.dta
+fn file_1() -> String {
+    """
+3c73746174615f6474613e3c6865616465723e3c72656c656173653e3131373c2f72656c656173653e3c627974656f72
+6465723e4d53463c2f627974656f726465723e3c4b3e000b3c2f4b3e3c4e3e000000063c2f4e3e3c6c6162656c3e1843
+6c696e6963207669736974732c204a756c7920323032343c2f6c6162656c3e3c74696d657374616d703e113031204f63
+7420323032342030393a33303c2f74696d657374616d703e3c2f6865616465723e3c6d61703e00000000000000000000
+0000000000b1000000000000012c000000000000016300000000000002e30000000000000310000000000000053e0000
+0000000006d00000000000000a6e0000000000000a910000000000000be20000000000000db90000000000000e510000
+000000000e5d3c2f6d61703e3c7661726961626c655f74797065733efff8fff80006fff6fff6fffafff9fff7fff6fffa
+80003c2f7661726961626c655f74797065733e3c7661726e616d65733e696e6465780000000000000000000000000000
+000000000000000000000000000076697369745f69640000000000000000000000000000000000000000000000000070
+617469656e7400000000000000000000000000000000000000000000000000007365656e000000000000000000000000
+0000000000000000000000000000000000646f6200000000000000000000000000000000000000000000000000000000
+000064780000000000000000000000000000000000000000000000000000000000000073627000000000000000000000
+000000000000000000000000000000000000000074656d705f6300000000000000000000000000000000000000000000
+0000000000626d69000000000000000000000000000000000000000000000000000000000000666f6c6c6f7775700000
+00000000000000000000000000000000000000000000006e6f7465730000000000000000000000000000000000000000
+00000000000000003c2f7661726e616d65733e3c736f72746c6973743e00000000000000000000000000000000000000
+00000000003c2f736f72746c6973743e3c666f726d6174733e2531322e30670000000000000000000000000000000000
+00000000000000000000000000000000000000000000000000002531322e306700000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000253673000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000002574630000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000025746400000000000000000000000000000000
+00000000000000000000000000000000000000000000000000000000000025382e306700000000000000000000000000
+0000000000000000000000000000000000000000000000000000000000000025382e3067000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000025392e30670000000000000000000000
+0000000000000000000000000000000000000000000000000000000000000000002531302e3067000000000000000000
+0000000000000000000000000000000000000000000000000000000000000000000025382e3067000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000025397300000000000000000000
+0000000000000000000000000000000000000000000000000000000000000000000000003c2f666f726d6174733e3c76
+616c75655f6c6162656c5f6e616d65733e00000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000064780000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00000000000000000000000000000000000000000000000000000000000000000000000000000000000000003c2f7661
+6c75655f6c6162656c5f6e616d65733e3c7661726961626c655f6c6162656c733e000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+0000000000005072696d61727920646961676e6f73697300000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000537973746f6c696320
+425020286d6d486729000000000000000000000000000000000000000000000000000000000000000000000000000000
+00000000000000000000000000000000000000000000000054656d706572617475726520284329000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+0000000000000000000000003c2f7661726961626c655f6c6162656c733e3c6368617261637465726973746963733e3c
+2f6368617261637465726973746963733e3c646174613e00000064000dbba1502d30313933427d9e9bb57a0000c08588
+000000000002009842133333403f333333333333010000000b0000000100000065000dbba2502d30303435427d9ea092
+98000040c61c8000000000000076421466664036d9999999999a000000000b0000000200000066000dbba3502d303139
+33427d9f02222e0000c0858800000000000200937f000000403ee6666666666601000000000000000000000067000dbb
+a4502d30333130427d9f483a84000040d53140000000000300604219999a7fe0000000000000010000000b0000000400
+000068000dbba5502d30303435427da0fa3eea000040c61c80000000000000794213999a403700000000000000000000
+0b0000000500000069000dbba6502d30373737427da13979700000c0b5d0000000000001008b421400004033c0000000
+0000010000000b000000063c2f646174613e3c7374726c733e47534f0000000b00000001820000002d4250207374696c
+6c20686967683b20696e63726561736520616d6c6f646970696e6520746f203130206d672e0047534f0000000b000000
+02820000001c496e68616c657220746563686e697175652072657669657765642e0047534f0000000b00000004820000
+00414c656674206561722c20616d6f786963696c6c696e203720646179732e20506172656e7420696e666f726d656420
+61626f7574202272656420666c616773222e0047534f0000000b0000000582000000114e6f20776865657a6520746f64
+61792e0047534f0000000b0000000682000000dd537069726f6d6574727920626f6f6b65643b20464556312f46564320
+302e3632206c6173742074696d652e20537069726f6d6574727920626f6f6b65643b20464556312f46564320302e3632
+206c6173742074696d652e20537069726f6d6574727920626f6f6b65643b20464556312f46564320302e3632206c6173
+742074696d652e20537069726f6d6574727920626f6f6b65643b20464556312f46564320302e3632206c617374207469
+6d652e20537069726f6d6574727920626f6f6b65643b20464556312f46564320302e3632206c6173742074696d652e20
+003c2f7374726c733e3c76616c75655f6c6162656c733e3c6c626c3e0000004864780000000000000000000000000000
+0000000000000000000000000000000000000000000000040000002000000000000000070000000c0000001900000000
+000000010000000200000003617374686d6100636f706400687970657274656e73696f6e006f7469746973003c2f6c62
+6c3e3c2f76616c75655f6c6162656c733e3c2f73746174615f6474613e
+"""
+}
+
+// data/cpi_regions.dta
+fn file_2() -> String {
+    """
+7202010007000800000043504920627920726567696f6e2028323032303d313030290000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000003031204f63
+7420323032342030393a333000fbfffffffe04ff726567696f6e00000000000000000000000000000000000000000000
+00000000006d6f6e74680000000000000000000000000000000000000000000000000000000071756172746572000000
+000000000000000000000000000000000000000000000079656172000000000000000000000000000000000000000000
+00000000000000006370690000000000000000000000000000000000000000000000000000000000006261736b657400
+000000000000000000000000000000000000000000000000000077656967687400000000000000000000000000000000
+00000000000000000000000000000000000000000000000000000025382e306700000000000000000000000000000000
+0000000000000000000000000000000000000000000000000000000025746d0000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000025747100000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000257479000000000000000000000000000000
+0000000000000000000000000000000000000000000000000000000000000025392e3067000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000025347300000000000000000000000000
+0000000000000000000000000000000000000000000000000000000000000000002531302e3067000000000000000000
+00000000000000000000000000000000000000000000000000000000000000000000726567696f6e0000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000010000000000a087400000000000806f4000000000009c9f409a99
+ca42666f6f64d7a3703d0ad7d33f010000000000a887400000000000806f4000000000009c9f40cdcccb42666f6f64d7
+a3703d0ad7d33f020000000000b087400000000000806f4000000000009c9f409a99c7426675656cb81e85eb51b8be3f
+020000000000b887400000000000a06f4000000000009c9f40cdccc8426675656cb81e85eb51b8be3f030000000000c0
+87400000000000a06f4000000000009c9f400080cf4272656e7448e17a14ae47d13f030000000000c887400000000000
+a06f4000000000009c9f406666d04272656e7448e17a14ae47d13f010000000000d087400000000000c06f4000000000
+009c9f403333cd42666f6f64d7a3703d0ad7d33f020000000000d887400000000000c06f4000000000009c9f40cdccc9
+426675656cb81e85eb51b8be3f37000000726567696f6e00000000000000000000000000000000000000000000000000
+00000000000300000017000000000000000600000010000000010000000200000003000000436f61737400486967686c
+616e647300416d617a6f6e00
+"""
+}
+
+// data/cpi_regions.dta.gz
+fn file_3() -> String {
+    """
+1f8b08000000000002ff2b6262646067e0606060700ef05448aa54284a4dcfcccf53d030323032b0353430d064201718
+182af8279728000d325130b0b4323660f8fdffffff7f2cff2156e0d1999b9f579281cfe8c2d2c4a292d422dc0a2a5313
+8bf03a2eb92013bfeb93128bb3534bf028284fcd4ccf2821213c542df40cd2490940d5925cd2425cb5a490540d95246a
+b024d50f26c524da6068409a150453d3281805231b3082c905ed0e60ba211f42cf99ef306be629a7b4fcfc94eb8b0b6c
+b9ae5fb687285c81a9f0ec99d3280a99c0121bb09978dc29ad343567875cebebc01dfba00a7740152e4036f1048a4266
+b0c4014c850c0de79d8a52f34a3c1e5689ac73bf0855780253615ada05148510cf5c802a3c8050686c7c168b676e602a
+3c7be6248a1bcd892c6e404e1487b2d98058001a074c5039e7fcc4e212060f60fd9193989752cce0989b58053413006b
+c6cce48c070000
+"""
+}
+
+// data/cpi_regions.zip
+fn file_4() -> String {
+    """
+504b0304140000000800c04b41596bc6cce4470100008c0700000f0000006370695f726567696f6e732e6474612b6262
+646067e0606060700ef05448aa54284a4dcfcccf53d030323032b0353430d064201718182af8279728000d325130b0b4
+323660f8fdffffff7f2cff2156e0d1999b9f579281cfe8c2d2c4a292d422dc0a2a5313f1c802417241265e7986a4c4e2
+ecd4123c0aca5333d333f0294007aa167a06e924a867502dc9254539484321a91a2a49d46049aa1f4c8a49b4c1d08034
+2b08a6a651300a46366004930bda1dc074433e849e33df61d6cc534e69f9f929d71717d8725dbf6c0f51b80253e1d933
+a75114328125366033f1b8535a696ace0eb9d6d7813bf64115ee802a5c806ce2091485cc608903980a191ace3b15a5e6
+95783cac1259e77e11aaf004a6c2b4b40b280a219eb900557800a1d0d8f82c16cfdcc05478f6cc4914379a331057dc80
+9c280e65b301b100340e98a072cef989c5250c1ec0fa2327312fa598c13137b10a682600504b01021403140000000800
+c04b41596bc6cce4470100008c0700000f00000000000000000000008001000000006370695f726567696f6e732e6474
+61504b050600000000010001003d000000740100000000
+"""
+}
+
+// data/empty_118.dta
+fn file_5() -> String {
+    """
+3c73746174615f6474613e3c6865616465723e3c72656c656173653e3131383c2f72656c656173653e3c627974656f72
+6465723e4d53463c2f627974656f726465723e3c4b3e00043c2f4b3e3c4e3e00000000000000003c2f4e3e3c6c616265
+6c3e00003c2f6c6162656c3e3c74696d657374616d703e113031204f637420323032342030393a33303c2f74696d6573
+74616d703e3c2f6865616465723e3c6d61703e0000000000000000000000000000009e00000000000001190000000000
+000142000000000000035b000000000000037a0000000000000471000000000000069c0000000000000bc30000000000
+000be60000000000000bf30000000000000c020000000000000cce0000000000000cda3c2f6d61703e3c766172696162
+6c655f74797065733efff80008fff6fffa3c2f7661726961626c655f74797065733e3c7661726e616d65733e69640000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00000000000000000000000000000000000000000000000000000000006e616d65000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000073636f72650000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000067
+726164650000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00000000000000000000000000000000000000000000000000000000000000003c2f7661726e616d65733e3c736f7274
+6c6973743e000000000000000000003c2f736f72746c6973743e3c666f726d6174733e2531322e306700000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000025387300
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00000000002531302e306700000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000025382e30670000000000000000000000000000000000000000000000000000000000
+00000000000000000000000000000000000000000000003c2f666f726d6174733e3c76616c75655f6c6162656c5f6e61
+6d65733e0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000006772616465000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000003c2f76616c75655f
+6c6162656c5f6e616d65733e3c7661726961626c655f6c6162656c733e00000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00000000000000000000000000000000003c2f7661726961626c655f6c6162656c733e3c636861726163746572697374
+6963733e3c2f6368617261637465726973746963733e3c646174613e3c2f646174613e3c7374726c733e3c2f7374726c
+733e3c76616c75655f6c6162656c733e3c6c626c3e0000001c6772616465000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00000000000000000000000000000000020000000400000000000000020000000100000002410042003c2f6c626c3e3c
+2f76616c75655f6c6162656c733e3c2f73746174615f6474613e
+"""
+}
+
+// data/hh_survey_w3.dta
+fn file_6() -> String {
+    """
+3c73746174615f6474613e3c6865616465723e3c72656c656173653e3131383c2f72656c656173653e3c627974656f72
+6465723e4c53463c2f627974656f726465723e3c4b3e0c003c2f4b3e3c4e3e0b000000000000003c2f4e3e3c6c616265
+6c3e2a00486f757365686f6c642053757276657920576176652033202832303234292c207075626c6963207573653c2f
+6c6162656c3e3c74696d657374616d703e113031204f637420323032342030393a33303c2f74696d657374616d703e3c
+2f6865616465723e3c6d61703e0000000000000000c80000000000000043010000000000007c010000000000009d0700
+0000000000cc070000000000008b0a000000000000be10000000000000ed1f0000000000001020000000000000a62200
+0000000000b522000000000000f72500000000000003260000000000003c2f6d61703e3c7661726961626c655f747970
+65733ef8fffaff1800fafffafffafff9fff7fffafff6fff8fff6ff3c2f7661726961626c655f74797065733e3c766172
+6e616d65733e686869640000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000726567696f6e000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000686561645f6e616d65000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000686561645f73657800000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000686561645f61
+676500000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000656475630000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000686873697a65000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000696e63
+6f6d65000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000776174657200000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000776569676874000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+696e745f6461746500000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00000000000000000000000000000000000000000000000000000000000000000073796e636564000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+0000000000000000000000000000000000003c2f7661726e616d65733e3c736f72746c6973743e000000000000000000
+00000000000000000000000000000000003c2f736f72746c6973743e3c666f726d6174733e2531322e30670000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002538
+2e3067000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000002532347300000000000000000000000000000000000000000000000000000000000000000000000000
+0000000000000000000000000000000025382e3067000000000000000000000000000000000000000000000000000000
+0000000000000000000000000000000000000000000000000025382e3067000000000000000000000000000000000000
+0000000000000000000000000000000000000000000000000000000000000000000025382e3067000000000000000000
+0000000000000000000000000000000000000000000000000000000000000000000000000000000000000025382e3067
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+0000000025392e3067000000000000000000000000000000000000000000000000000000000000000000000000000000
+0000000000000000000000000025382e3067000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000002531302e30670000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000002574640000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000002574630000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+003c2f666f726d6174733e3c76616c75655f6c6162656c5f6e616d65733e000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000726567696f6e000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000736578000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000656475630000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+0000000000007965736e6f00000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+0000000000000000000000000000000000000000000000000000000000000000000000000000000000003c2f76616c75
+655f6c6162656c5f6e616d65733e3c7661726961626c655f6c6162656c733e486f757365686f6c642049440000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00000000000000000000000000000000526567696f6e206f66207265736964656e636500000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+004e616d65206f6620686f757365686f6c64206865616400000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00000000000000000000000000000000000000000000000000000000000000000000536578206f662068656164000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00000000000000000000000000000000000000416765206f662068656164202879656172732900000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+0000000048696768657374206c6576656c20636f6d706c65746564000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00000000000000000000000000000000000000000000000000000000000000000000000000486f757365686f6c642073
+697a65000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000004d6f6e74686c7920696e636f6d6520286c6f63616c2063757272
+656e63792900000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00000000000000506970656420776174657220696e206477656c6c696e67000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+0000000000000000000000000000000000000000000000000000000000000000000000000000000053616d706c696e67
+207765696768740000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00000000000000000000000000000000000000000000000000496e746572766965772064617465000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000005461626c65742073796e632074696d6500000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000003c2f766172
+6961626c655f6c6162656c733e3c6368617261637465726973746963733e3c2f6368617261637465726973746963733e
+3c646174613e75270000014a6f73c3a920c3816c766172657a00000000000000000000012f03050000509c4401000000
+00008c73408f5b000000209b0270787d427627000001416d61727520517569737065000000000000000000000000013e
+020700000020440000000000008c73408f5b000000209b0270787d42db270000024c7563c3ad6120c391616875690000
+000000000000000000022304030000641045019a99999999017240905b00000000467df1787d42dc27000002526f7361
+204d616d616e690000000000000000000000000002660204000008007f019a99999999017240905b00000000467df178
+7d424128000003457761204b6f77616c637a796b0000000000000000000000021d6702000010007f666666666666d672
+40925b0000000000000000e07f42280000035468e1baaf6e67204e677579e1bb856e0000000000000000013303e67f00
+007544016666666666d67240925b0000000020e0a4797d42a72800000453c3b872656e204461686c0000000000000000
+000000000001460101000060cd43670000000000307140e5ffff7f005035dced797d42a8280000045a61696e61622042
+656c6c6f000000000000000000000000022c0306000060ea44010000000000307140945b0000005035dced797d420d29
+0000054368656e205765690000000000000000000000000000000001260404000004a045010000000000447040965b00
+0000f087f7ba7a7d420e29000005416e612d4d6172c3ad61204f7961727ac3ba6e000000000002666603000008007f00
+0000000000447040965b000000f087f7ba7a7d420f29000009556e6b6e6f776e00000000000000000000000000000000
+0065000900000000000009000000000000f03f975b0000000000000001e07f3c2f646174613e3c7374726c733e3c2f73
+74726c733e3c76616c75655f6c6162656c733e3c6c626c3e4e000000726567696f6e0000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00000000000000000000000000000000050000001e00000008000000130000000e000000190000000000000001000000
+020000000300000004000000050000004361706974616c004e6f727468004561737400536f7574680057657374003c2f
+6c626c3e3c6c626c3e240000007365780000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00020000000c000000000000000500000001000000020000004d616c650046656d616c65003c2f6c626c3e3c6c626c3e
+480000006564756300000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000400000020000000
+1b000000130000000900000000000000010000000200000003000000040000005465727469617279005365636f6e6461
+7279005072696d617279004e6f6e65003c2f6c626c3e3c6c626c3e1f0000007965736e6f000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00000000000000000000000000000000000000020000000700000004000000000000000000000001000000596573004e
+6f003c2f6c626c3e3c2f76616c75655f6c6162656c733e3c2f73746174615f6474613e
+"""
+}
+
+// data/jobs.txt
+fn file_7() -> String {
+    """
+6d6574612068685f7375727665795f77332e6474610a6d65746120636c696e69635f7669736974732e6474610a6d6574
+61206370695f726567696f6e732e6474610a6d6574612074726164655f3131392e6474610a6d657461206c66735f3130
+342e6474610a6d657461206c66735f3130352e6474610a6d657461206c66735f3130382e6474610a6d657461206c6673
+5f3131302e6474610a6d657461206c66735f3131312e6474610a6d657461206c66735f3131332e6474610a6d65746120
+6c66735f3131342e6474610a6d657461206c66735f3131352e6474610a6d65746120776172645f63656e7375735f3131
+372e6474610a6d65746120656d7074795f3131382e6474610a6d65746120616c6c6e616e5f3131382e6474610a726561
+642068685f7375727665795f77332e6474610a7265616420636c696e69635f7669736974732e6474610a726561642063
+70695f726567696f6e732e6474610a726561642074726164655f3131392e6474610a72656164206c66735f3130342e64
+74610a72656164206c66735f3130352e6474610a72656164206c66735f3130382e6474610a72656164206c66735f3131
+302e6474610a72656164206c66735f3131312e6474610a72656164206c66735f3131332e6474610a72656164206c6673
+5f3131342e6474610a72656164206c66735f3131352e6474610a7265616420776172645f63656e7375735f3131372e64
+74610a7265616420656d7074795f3131382e6474610a7265616420616c6c6e616e5f3131382e6474610a726561642068
+685f7375727665795f77332e64746120636f6e766572745f63617465676f726963616c733d46616c73650a7265616420
+68685f7375727665795f77332e64746120636f6e766572745f6d697373696e673d547275650a726561642068685f7375
+727665795f77332e64746120636f6e766572745f6d697373696e673d5472756520636f6e766572745f64617465733d46
+616c736520636f6e766572745f63617465676f726963616c733d46616c73650a726561642068685f7375727665795f77
+332e64746120636f6e766572745f6d697373696e673d5472756520636f6c756d6e733d686869642c686561645f616765
+2c686873697a652c696e636f6d652c7765696768740a726561642068685f7375727665795f77332e64746120636f6e76
+6572745f6d697373696e673d547275652070726573657276655f6474797065733d46616c736520636f6c756d6e733d68
+6869642c686561645f6167652c696e636f6d650a726561642068685f7375727665795f77332e64746120636f6e766572
+745f64617465733d46616c736520636f6c756d6e733d686869642c696e745f646174652c73796e6365640a7265616420
+68685f7375727665795f77332e6474612070726573657276655f6474797065733d46616c736520636f6c756d6e733d68
+6869642c686561645f6167652c686873697a652c696e636f6d652c7765696768740a726561642068685f737572766579
+5f77332e647461206f726465725f63617465676f726963616c733d46616c736520636f6c756d6e733d726567696f6e2c
+656475630a726561642068685f7375727665795f77332e64746120696e6465785f636f6c3d6868696420636f6c756d6e
+733d686869642c686561645f6e616d652c726567696f6e0a726561642068685f7375727665795f77332e64746120636f
+6c756d6e733d696e636f6d652c686869640a726561642068685f7375727665795f77332e64746120636f6c756d6e733d
+686869642c686869640a726561642068685f7375727665795f77332e64746120636f6c756d6e733d686869642c646973
+74726963740a726561642068685f7375727665795f77332e64746120696e6465785f636f6c3d6e6f626f64790a726561
+6420636c696e69635f7669736974732e64746120636f6e766572745f64617465733d46616c73650a7265616420636c69
+6e69635f7669736974732e64746120636f6e766572745f63617465676f726963616c733d46616c736520636f6c756d6e
+733d696e6465782c64780a7265616420636c696e69635f7669736974732e64746120696e6465785f636f6c3d696e6465
+7820636f6c756d6e733d696e6465782c70617469656e742c6e6f7465730a7265616420636c696e69635f766973697473
+2e6474612070726573657276655f6474797065733d46616c73650a7265616420636c696e69635f7669736974732e6474
+6120636f6e766572745f6d697373696e673d5472756520636f6c756d6e733d696e6465782c74656d705f632c626d690a
+72656164206370695f726567696f6e732e64746120636f6e766572745f64617465733d46616c73650a72656164206370
+695f726567696f6e732e64746120636f6e766572745f63617465676f726963616c733d46616c73652070726573657276
+655f6474797065733d46616c73650a72656164206370695f726567696f6e732e6474612e677a0a72656164206370695f
+726567696f6e732e7a697020636f6c756d6e733d726567696f6e2c6370690a726561642074726164655f3131392e6474
+6120636f6e766572745f6d697373696e673d547275650a726561642074726164655f3131392e64746120636f6e766572
+745f6d697373696e673d5472756520636f6c756d6e733d6465636c2c68616c660a726561642074726164655f3131392e
+64746120636f6e766572745f6d697373696e673d5472756520636f6c756d6e733d6465636c2c706172746e65722c666c
+6f770a726561642074726164655f3131392e64746120636f6e766572745f6d697373696e673d5472756520636f6e7665
+72745f64617465733d46616c736520636f6e766572745f63617465676f726963616c733d46616c73650a726561642074
+726164655f3131392e64746120636f6e766572745f64617465733d46616c736520636f6e766572745f63617465676f72
+6963616c733d46616c73650a72656164206c66735f3130342e64746120636f6e766572745f6d697373696e673d547275
+650a72656164206c66735f3130342e64746120636f6e766572745f6d697373696e673d5472756520636f6e766572745f
+63617465676f726963616c733d46616c73650a72656164206c66735f3130352e64746120636f6e766572745f6d697373
+696e673d5472756520636f6e766572745f63617465676f726963616c733d46616c73650a72656164206c66735f313038
+2e64746120636f6e766572745f6d697373696e673d5472756520636f6e766572745f63617465676f726963616c733d46
+616c73650a72656164206c66735f3131312e64746120636f6e766572745f6d697373696e673d5472756520636f6e7665
+72745f63617465676f726963616c733d46616c73650a72656164206c66735f3131332e64746120636f6e766572745f6d
+697373696e673d5472756520636f6e766572745f63617465676f726963616c733d46616c73650a72656164206c66735f
+3131342e64746120636f6e766572745f6d697373696e673d5472756520636f6e766572745f63617465676f726963616c
+733d46616c73650a72656164206c66735f3131352e64746120636f6e766572745f63617465676f726963616c733d4661
+6c73652070726573657276655f6474797065733d46616c73650a7265616420776172645f63656e7375735f3131372e64
+746120636f6e766572745f63617465676f726963616c733d46616c73650a7265616420776172645f63656e7375735f31
+31372e64746120636f6c756d6e733d776172642c726f6f6d732c72656e740a7265616420776172645f63656e7375735f
+3131372e64746120636f6e766572745f6d697373696e673d5472756520636f6e766572745f63617465676f726963616c
+733d46616c73650a7265616420656d7074795f3131382e64746120636f6c756d6e733d73636f72652c69640a72656164
+20616c6c6e616e5f3131382e64746120636f6e766572745f6d697373696e673d547275650a6368756e6b732068685f73
+75727665795f77332e64746120340a6368756e6b732068685f7375727665795f77332e647461203420636f6e76657274
+5f63617465676f726963616c733d46616c736520636f6c756d6e733d686869642c726567696f6e2c696e636f6d650a63
+68756e6b73206370695f726567696f6e732e647461203320636f6c756d6e733d726567696f6e2c6d6f6e74682c637069
+0a6368756e6b7320636c696e69635f7669736974732e647461203520636f6c756d6e733d696e6465782c64782c6e6f74
+65730a6368756e6b732074726164655f3131392e647461203420636f6e766572745f63617465676f726963616c733d46
+616c736520636f6c756d6e733d6465636c2c706172746e65722c666c6f770a6368756e6b73206c66735f3130382e6474
+6120320a6368756e6b7320656d7074795f3131382e64746120320a6368756e6b732068685f7375727665795f77332e64
+746120300a726561642072656c656173655f3131362e6474610a7265616420763131322e6474610a7265616420737572
+7665792e6373762e6474610a72656164206e6f77686572652e6474610a6d6574612072656c656173655f3131362e6474
+610a
+"""
+}
+
+// data/lfs_104.dta
+fn file_8() -> String {
+    """
+680201000700050000004c61626f757220666f7263652c20666f726d6174203130340000000000000000696262666489
+6c706572736f6e000000616765000000000000737461747573000000686f757273000000006561726e696e6773007375
+726e616d650000736563746f720000000000000000000000000000000000000025382e3067000025382e306700002538
+2e3067000025392e306700002531302e306700253130730000002531322e306700000000000000000000000000000000
+000000737461747573000000000000000000000000000000000000000000000000000000000000736563746f72000000
+506572736f6e206e756d6265720000000000000000000000000000000000000041676500000000000000000000000000
+00000000000000000000000000000000456d706c6f796d656e7420737461747573000000000000000000000000000000
+557375616c207765656b6c7920686f75727300000000000000000000000000004d6f6e74686c79206561726e696e6773
+000000000000000000000000000000005375726e616d6500000000000000000000000000000000000000000000000000
+536563746f7200000000000000000000000000000000000000000000000000000100220100002a420000000000c09740
+536d69746800000000000200000002003302000018420000000000899d4047617263ed61000000000100000003001301
+0000007f00000000000084404f274e65696c000000000300000004007f0200002042000000000000c0544dfc6c6c6572
+00000000020000000500420300000000000000000000000049746f00000000000000ffffff7f03007374617475730000
+0000010002000300456d706c6f796564556e656d706c6f79496e6163746976650300736563746f720000000001000200
+03005075626c6963000050726976617465004f776e206163636f
+"""
+}
+
+// data/lfs_105.dta
+fn file_9() -> String {
+    """
+690101000007000000054c61626f757220666f7263652c20666f726d61742031303500000000000000002031204f6374
+20313939392030393a3330006962626664896c706572736f6e000000616765000000000000737461747573000000686f
+757273000000006561726e696e6773007375726e616d650000736563746f720000000000000000000000000000000000
+000025382e30670000000000000025382e30670000000000000025382e30670000000000000025392e30670000000000
+00002531302e30670000000000002531307300000000000000002531322e306700000000000000000000000000000000
+000000000000000073746174757300000000000000000000000000000000000000000000000000000000000073656374
+6f72000000506572736f6e206e756d626572000000000000000000000000000000000000004167650000000000000000
+000000000000000000000000000000000000000000456d706c6f796d656e742073746174757300000000000000000000
+0000000000557375616c207765656b6c7920686f75727300000000000000000000000000004d6f6e74686c7920656172
+6e696e6773000000000000000000000000000000005375726e616d650000000000000000000000000000000000000000
+0000000000536563746f7200000000000000000000000000000000000000000000000000000100100000000000000000
+00006e6f7465300000000000012201422a00004097c00000000000536d69746800000000000000000200023302421800
+00409d89000000000047617263ed610000000000000001000313017f00000040840000000000004f274e65696c000000
+000000000300047f024220000054c00000000000004dfc6c6c6572000000000000000200054203000000000000000000
+00000049746f000000000000007fffffff000373746174757300000000000100020003456d706c6f796564556e656d70
+6c6f79496e6163746976650003736563746f72000000000001000200035075626c6963000050726976617465004f776e
+206163636f
+"""
+}
+
+// data/lfs_108.dta
+fn file_10() -> String {
+    """
+6c0201000700050000004c61626f757220666f7263652c20666f726d6174203130380000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000002031204f63
+7420313939392030393a3330006962626664896c706572736f6e00000061676500000000000073746174757300000068
+6f757273000000006561726e696e6773007375726e616d650000736563746f7200000000000000000000000000000000
+00000025382e30670000000000000025382e30670000000000000025382e30670000000000000025392e306700000000
+0000002531302e30670000000000002531307300000000000000002531322e3067000000000000000000000000000000
+000000000000000000737461747573000000000000000000000000000000000000000000000000000000000000736563
+746f72000000506572736f6e206e756d6265720000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000416765000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000456d706c6f796d656e742073746174757300000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000557375616c207765656b6c7920686f757273000000000000000000000000000000000000000000
+0000000000000000000000000000000000000000000000000000000000000000000000000000000000004d6f6e74686c
+79206561726e696e67730000000000000000000000000000000000000000000000000000000000000000000000000000
+0000000000000000000000000000000000000000000000000000005375726e616d650000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000536563746f72000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000011000
+000000000000000000006e6f746530000000000100220100002a420000000000c09740536d6974680000000000020000
+0002003302000018420000000000899d4047617263ed610000000001000000030013010000007f00000000000084404f
+274e65696c000000000300000004007f0200002042000000000000e07f4dfc6c6c657200000000020000000500420300
+000000000000000000000049746f00000000000000ffffff7f3d000000737461747573000000000000030000001d0000
+00090000001200000000000000010000000200000003000000496e61637469766500456d706c6f79656400556e656d70
+6c6f796564003b000000736563746f72000000000000030000001b00000000000000070000000f000000010000000200
+0000030000005075626c69630050726976617465004f776e206163636f756e7400
+"""
+}
+
+// data/lfs_110.dta
+fn file_11() -> String {
+    """
+6e0101000007000000054c61626f757220666f7263652c20666f726d6174203131300000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000002031204f63
+7420313939392030393a3330006962626664896c706572736f6e00000000000000000000000000000000000000000000
+000000000061676500000000000000000000000000000000000000000000000000000000000073746174757300000000
+0000000000000000000000000000000000000000000000686f7572730000000000000000000000000000000000000000
+00000000000000006561726e696e6773000000000000000000000000000000000000000000000000007375726e616d65
+0000000000000000000000000000000000000000000000000000736563746f7200000000000000000000000000000000
+00000000000000000000000000000000000000000000000000000025382e30670000000000000025382e306700000000
+00000025382e30670000000000000025392e3067000000000000002531302e3067000000000000253130730000000000
+0000002531322e3067000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000737461747573000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000736563746f72000000000000000000000000000000000000000000
+000000000000506572736f6e206e756d6265720000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000416765000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000456d706c6f796d656e742073746174757300000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000557375616c207765656b6c7920686f757273000000000000000000000000000000000000000000
+0000000000000000000000000000000000000000000000000000000000000000000000000000000000004d6f6e74686c
+79206561726e696e67730000000000000000000000000000000000000000000000000000000000000000000000000000
+0000000000000000000000000000000000000000000000000000005375726e616d650000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000536563746f72000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000
+0010000000000000000000006e6f74653000000000000000012201422a00004097c00000000000536d69746800000000
+00000000020002330242180000409d89000000000047617263ed610000000000000001000313017f0000004084000000
+0000004f274e65696c000000000000000300047f02422000007fe00000000000004dfc6c6c6572000000000000000200
+05420300000000000000000000000049746f000000000000007fffffff0000003d737461747573000000000000000000
+000000000000000000000000000000000000000000000000030000001d00000009000000120000000000000001000000
+0200000003496e61637469766500456d706c6f79656400556e656d706c6f796564000000003b736563746f7200000000
+0000000000000000000000000000000000000000000000000000000000030000001b00000000000000070000000f0000
+000100000002000000035075626c69630050726976617465004f776e206163636f756e7400
+"""
+}
+
+// data/lfs_111.dta
+fn file_12() -> String {
+    """
+6f0201000700050000004c61626f757220666f7263652c20666f726d6174203131310000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000002031204f63
+7420313939392030393a333000fcfbfbfeff0afd706572736f6e00000000000000000000000000000000000000000000
+000000000061676500000000000000000000000000000000000000000000000000000000000073746174757300000000
+0000000000000000000000000000000000000000000000686f7572730000000000000000000000000000000000000000
+00000000000000006561726e696e6773000000000000000000000000000000000000000000000000007375726e616d65
+0000000000000000000000000000000000000000000000000000736563746f7200000000000000000000000000000000
+00000000000000000000000000000000000000000000000000000025382e30670000000000000025382e306700000000
+00000025382e30670000000000000025392e3067000000000000002531302e3067000000000000253130730000000000
+0000002531322e3067000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000737461747573000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000736563746f72000000000000000000000000000000000000000000
+000000000000506572736f6e206e756d6265720000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000416765000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000456d706c6f796d656e742073746174757300000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000557375616c207765656b6c7920686f757273000000000000000000000000000000000000000000
+0000000000000000000000000000000000000000000000000000000000000000000000000000000000004d6f6e74686c
+79206561726e696e67730000000000000000000000000000000000000000000000000000000000000000000000000000
+0000000000000000000000000000000000000000000000000000005375726e616d650000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000536563746f72000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000011000
+0000000000000000000000006e6f7465300000000000000100220100002a420000000000c09740536d69746800000000
+000200000002003302000018420000000000899d4047617263ed610000000001000000030013010000007f0000000000
+0084404f274e65696c000000000300000004007f0200002042000000000000e07f4dfc6c6c6572000000000200000005
+00420300000000000000000000000049746f00000000000000ffffff7f3d000000737461747573000000000000000000
+000000000000000000000000000000000000000000030000001d00000009000000120000000000000001000000020000
+0003000000496e61637469766500456d706c6f79656400556e656d706c6f796564003b000000736563746f7200000000
+0000000000000000000000000000000000000000000000000000030000001b00000000000000070000000f0000000100
+000002000000030000005075626c69630050726976617465004f776e206163636f756e7400
+"""
+}
+
+// data/lfs_113.dta
+fn file_13() -> String {
+    """
+710101000007000000054c61626f757220666f7263652c20666f726d6174203131330000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000002031204f63
+7420313939392030393a333000fcfbfbfeff0afd706572736f6e00000000000000000000000000000000000000000000
+000000000061676500000000000000000000000000000000000000000000000000000000000073746174757300000000
+0000000000000000000000000000000000000000000000686f7572730000000000000000000000000000000000000000
+00000000000000006561726e696e6773000000000000000000000000000000000000000000000000007375726e616d65
+0000000000000000000000000000000000000000000000000000736563746f7200000000000000000000000000000000
+00000000000000000000000000000000000000000000000000000025382e30670000000000000025382e306700000000
+00000025382e30670000000000000025392e3067000000000000002531302e3067000000000000253130730000000000
+0000002531322e3067000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000737461747573000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000736563746f72000000000000000000000000000000000000000000
+000000000000506572736f6e206e756d6265720000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000416765000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000456d706c6f796d656e742073746174757300000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000557375616c207765656b6c7920686f757273000000000000000000000000000000000000000000
+0000000000000000000000000000000000000000000000000000000000000000000000000000000000004d6f6e74686c
+79206561726e696e67730000000000000000000000000000000000000000000000000000000000000000000000000000
+0000000000000000000000000000000000000000000000000000005375726e616d650000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000536563746f72000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000
+0010000000000000000000006e6f74653000000000000000012201422a00004097c00000000000536d69746800000000
+00000000020002330242180000409d89000000000047617263ed610000000000000001000313017f0018004084000000
+0000004f274e65696c000000000000000300046602422000007fe01800000000004dfc6c6c6572000000000000000200
+05420300000000000000000000000049746f000000000000007fffffff0000003d737461747573000000000000000000
+000000000000000000000000000000000000000000000000030000001d00000009000000120000000000000001000000
+0200000003496e61637469766500456d706c6f79656400556e656d706c6f796564000000003b736563746f7200000000
+0000000000000000000000000000000000000000000000000000000000030000001b00000000000000070000000f0000
+000100000002000000035075626c69630050726976617465004f776e206163636f756e7400
+"""
+}
+
+// data/lfs_114.dta
+fn file_14() -> String {
+    """
+720201000700050000004c61626f757220666f7263652c20666f726d6174203131340000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000002031204f63
+7420313939392030393a333000fcfbfbfeff0afd706572736f6e00000000000000000000000000000000000000000000
+000000000061676500000000000000000000000000000000000000000000000000000000000073746174757300000000
+0000000000000000000000000000000000000000000000686f7572730000000000000000000000000000000000000000
+00000000000000006561726e696e6773000000000000000000000000000000000000000000000000007375726e616d65
+0000000000000000000000000000000000000000000000000000736563746f7200000000000000000000000000000000
+00000000000000000000000000000000000000000000000000000025382e306700000000000000000000000000000000
+0000000000000000000000000000000000000000000000000000000025382e3067000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000025382e30670000000000000000000000000000
+00000000000000000000000000000000000000000000000000000000000025392e306700000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000002531302e30670000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000025313073000000000000000000000000
+0000000000000000000000000000000000000000000000000000000000000000002531322e3067000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000007374617475730000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00000000000000000000000000000000000000000000000000000000000000000000000000000000736563746f720000
+00000000000000000000000000000000000000000000000000506572736f6e206e756d62657200000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000004167650000000000000000000000000000000000000000000000000000000000000000000000
+00000000000000000000000000000000000000000000000000000000000000000000000000000000000000456d706c6f
+796d656e7420737461747573000000000000000000000000000000000000000000000000000000000000000000000000
+00000000000000000000000000000000000000000000000000000000557375616c207765656b6c7920686f7572730000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000004d6f6e74686c79206561726e696e677300000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000005375
+726e616d6500000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00000000000000000000000000000000000000000000000000000000000000536563746f720000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000110000000000000000000000000006e6f746530000000000000010022010000
+2a420000000000c09740536d69746800000000000200000002003302000018420000000000899d4047617263ed610000
+000001000000030013010018007f00000000000084404f274e65696c0000000003000000040066020000204200000000
+0018e07f4dfc6c6c657200000000020000000500420300000000000000000000000049746f00000000000000ffffff7f
+3d000000737461747573000000000000000000000000000000000000000000000000000000000000030000001d000000
+090000001200000000000000010000000200000003000000496e61637469766500456d706c6f79656400556e656d706c
+6f796564003b000000736563746f72000000000000000000000000000000000000000000000000000000000000030000
+001b00000000000000070000000f0000000100000002000000030000005075626c69630050726976617465004f776e20
+6163636f756e7400
+"""
+}
+
+// data/lfs_115.dta
+fn file_15() -> String {
+    """
+730101000007000000054c61626f757220666f7263652c20666f726d6174203131350000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000002031204f63
+7420313939392030393a333000fcfbfbfeff0afd706572736f6e00000000000000000000000000000000000000000000
+000000000061676500000000000000000000000000000000000000000000000000000000000073746174757300000000
+0000000000000000000000000000000000000000000000686f7572730000000000000000000000000000000000000000
+00000000000000006561726e696e6773000000000000000000000000000000000000000000000000007375726e616d65
+0000000000000000000000000000000000000000000000000000736563746f7200000000000000000000000000000000
+00000000000000000000000000000000000000000000000000000025382e306700000000000000000000000000000000
+0000000000000000000000000000000000000000000000000000000025382e3067000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000025382e30670000000000000000000000000000
+00000000000000000000000000000000000000000000000000000000000025392e306700000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000002531302e30670000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000025313073000000000000000000000000
+0000000000000000000000000000000000000000000000000000000000000000002531322e3067000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000007374617475730000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00000000000000000000000000000000000000000000000000000000000000000000000000000000736563746f720000
+00000000000000000000000000000000000000000000000000506572736f6e206e756d62657200000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000004167650000000000000000000000000000000000000000000000000000000000000000000000
+00000000000000000000000000000000000000000000000000000000000000000000000000000000000000456d706c6f
+796d656e7420737461747573000000000000000000000000000000000000000000000000000000000000000000000000
+00000000000000000000000000000000000000000000000000000000557375616c207765656b6c7920686f7572730000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000004d6f6e74686c79206561726e696e677300000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000005375
+726e616d6500000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00000000000000000000000000000000000000000000000000000000000000536563746f720000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000100000010000000000000000000006e6f74653000000000000000012201422a
+00004097c00000000000536d6974680000000000000000020002330242180000409d89000000000047617263ed610000
+000000000001000313017f00180040840000000000004f274e65696c000000000000000300046602422000007fe01800
+000000004dfc6c6c657200000000000000020005420300000000000000000000000049746f000000000000007fffffff
+0000003d737461747573000000000000000000000000000000000000000000000000000000000000000000030000001d
+000000090000001200000000000000010000000200000003496e61637469766500456d706c6f79656400556e656d706c
+6f796564000000003b736563746f72000000000000000000000000000000000000000000000000000000000000000000
+030000001b00000000000000070000000f0000000100000002000000035075626c69630050726976617465004f776e20
+6163636f756e7400
+"""
+}
+
+// data/release_116.dta
+fn file_16() -> String {
+    """
+3c73746174615f6474613e3c6865616465723e3c72656c656173653e3131363c2f72656c656173653e00000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000
+"""
+}
+
+// data/survey.csv.dta
+fn file_17() -> String {
+    """
+686869642c726567696f6e2c696e636f6d650a31303130312c312c313235302e350a
+"""
+}
+
+// data/trade_119.dta
+fn file_18() -> String {
+    """
+3c73746174615f6474613e3c6865616465723e3c72656c656173653e3131393c2f72656c656173653e3c627974656f72
+6465723e4c53463c2f627974656f726465723e3c4b3e0a0000003c2f4b3e3c4e3e06000000000000003c2f4e3e3c6c61
+62656c3e1c00437573746f6d73206465636c61726174696f6e732c2073616d706c653c2f6c6162656c3e3c74696d6573
+74616d703e113031204f637420323032342030393a33303c2f74696d657374616d703e3c2f6865616465723e3c6d6170
+3e0000000000000000bc0000000000000037010000000000006c010000000000008b06000000000000cc060000000000
+0019090000000000004a0e000000000000f71a0000000000001a1b000000000000471c0000000000000e1d0000000000
+00e41d000000000000f01d0000000000003c2f6d61703e3c7661726961626c655f74797065733ef8ff06000080fafff9
+fff9fff6fff6fffaff00803c2f7661726961626c655f74797065733e3c7661726e616d65733e6465636c000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000068733600000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+0000000000000000706172746e6572000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+0000000000000000000000000000000000000000000000000000000000000000000000000000000000666c6f77000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00000000000000000000000000000000000000000000000000007765656b000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000068616c66000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00000000000000000000000000000000000000000000000000000000000000000000000000000000000000006b670000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+0000000000000000000000000000000000000000000000000000000000666f625f757364000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000061646a00000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000073
+63616e000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00000000000000000000000000000000000000000000000000000000000000003c2f7661726e616d65733e3c736f7274
+6c6973743e00000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+003c2f736f72746c6973743e3c666f726d6174733e2531322e3067000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000253673000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000253973000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+25382e306700000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000257477000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000257468000000000000000000000000000000000000000000000000000000
+0000000000000000000000000000000000000000000000000000002531302e3067000000000000000000000000000000
+0000000000000000000000000000000000000000000000000000000000000000000000002531322e3266000000000000
+00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000025382e
+306700000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000253973000000000000000000000000000000000000000000000000000000000000000000000000000000
+0000000000000000000000000000003c2f666f726d6174733e3c76616c75655f6c6162656c5f6e616d65733e00000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000066
+6c6f77000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00000000000000000000000000000000000000000000000000000000000000000000000000003c2f76616c75655f6c61
+62656c5f6e616d65733e3c7661726961626c655f6c6162656c733e4465636c61726174696f6e206e756d626572000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000485320323031372073756268656164696e67000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000506172
+746e657220636f756e747279000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000466c6f770000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+0000000000000000000000000000005765656b206f6620636c656172616e636500000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+48616c662d79656172000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+0000000000000000000000000000000000000000000000000000000000000000004e6574206d61737320286b67290000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000464f422076616c7565202855534429000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00000041646a7573746d656e7420636f6465000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+0000000000000000000000000000000000000000000000000000000000000000000000005363616e6e656420666f726d
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+0000000000000000000000000000000000000000003c2f7661726961626c655f6c6162656c733e3c6368617261637465
+726973746963733e3c2f6368617261637465726973746963733e3c646174613ec5ec5300303930313131030000010000
+000002000d8000000000000094d140cdcccccc4ce8ed40000a00000100000000c6ec5300303930313131030000010000
+000002000d8000000000000094c1400000000000b0dd40640000000000000000c7ec5300323730393030030000030000
+000001020d800000000000084cfd400000000000a4ef40810a00000300000000c8ec5300383437313330030000040000
+000001030d80000000000000e475400000000000edf740650000000000000000c9ec5300303930313131030000010000
+000002180d8100000000000094b140000000006078ce40010a00000500000000caec5300303830333930030000060000
+000002e57fe57f000000000000e07f00000000007cd5400000000000000000003c2f646174613e3c7374726c733e4753
+4f03000000010000000000000082080000004765726d616e790047534f0a0000000100000000000000810a0000002550
+44462d312e3400ff47534f030000000300000000000000820800000045637561646f720047534f0a0000000300000000
+00000082010000000047534f03000000040000000000000082060000004368696e610047534f0a000000050000000000
+0000810400000089504e4747534f030000000600000000000000820700000050616e616d61003c2f7374726c733e3c76
+616c75655f6c6162656c733e3c6c626c3e26000000666c6f770000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000020000000e00000000000000070000000100000002000000496d706f7274004578706f7274003c
+2f6c626c3e3c2f76616c75655f6c6162656c733e3c2f73746174615f6474613e
+"""
+}
+
+// data/v112.dta
+fn file_19() -> String {
+    """
+700201000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+0000000000000000000000000000000000000000
+"""
+}
+
+// data/ward_census_117.dta
+fn file_20() -> String {
+    """
+3c73746174615f6474613e3c6865616465723e3c72656c656173653e3131373c2f72656c656173653e3c627974656f72
+6465723e4c53463c2f627974656f726465723e3c4b3e04003c2f4b3e3c4e3e060000003c2f4e3e3c6c6162656c3e0b57
+6172642063656e7375733c2f6c6162656c3e3c74696d657374616d703e113031204f637420323032342030393a33303c
+2f74696d657374616d703e3c2f6865616465723e3c6d61703e0000000000000000a4000000000000001f010000000000
+004801000000000000e1010000000000000002000000000000d7020000000000008203000000000000e9040000000000
+00250500000000000062050000000000007105000000000000760600000000000082060000000000003c2f6d61703e3c
+7661726961626c655f74797065733ef9fffafffafff7ff3c2f7661726961626c655f74797065733e3c7661726e616d65
+733e77617264000000000000000000000000000000000000000000000000000000000074656e75726500000000000000
+0000000000000000000000000000000000000000726f6f6d730000000000000000000000000000000000000000000000
+000000000072656e7400000000000000000000000000000000000000000000000000000000003c2f7661726e616d6573
+3e3c736f72746c6973743e000000000000000000003c2f736f72746c6973743e3c666f726d6174733e25382e30670000
+00000000000000000000000000000000000000000000000000000000000000000000000000000000000025382e306700
+0000000000000000000000000000000000000000000000000000000000000000000000000000000000000025382e3067
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000025392e30
+6700000000000000000000000000000000000000000000000000000000000000000000000000000000000000003c2f66
+6f726d6174733e3c76616c75655f6c6162656c5f6e616d65733e00000000000000000000000000000000000000000000
+000000000000000000000074656e757265000000000000000000000000000000000000000000000000000000726f6f6d
+730000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00000000000000000000000000003c2f76616c75655f6c6162656c5f6e616d65733e3c7661726961626c655f6c616265
+6c733e576172640000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00000000000000000000000000000000000000000000000000000000000000000000000054656e757265000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000526f6f6d7300000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+0000000000004d6f6e74686c792072656e74000000000000000000000000000000000000000000000000000000000000
+0000000000000000000000000000000000000000000000000000000000000000000000000000003c2f7661726961626c
+655f6c6162656c733e3c6368617261637465726973746963733e3c63683e0c0000005f647461006e6f74653100003c2f
+63683e3c2f6368617261637465726973746963733e3c646174613e010001020000af4301000203000000000200030100
+40cd43020004050018007f0300010900a0894303000265000000003c2f646174613e3c7374726c733e3c2f7374726c73
+3e3c76616c75655f6c6162656c733e3c6c626c3e4100000074656e757265000000000000000000000000000000000000
+000000000000000000000000040000001900000000000000060000000d00000013000000010000000200000003000000
+040000004f776e65640052656e746564004f74686572004f74686572003c2f6c626c3e3c6c626c3e41000000726f6f6d
+73000000000000000000000000000000000000000000000000000000000000000300000021000000180000000e000000
+000000000100000002000000030000005468726565206f72206d6f72650054776f20726f6f6d73004f6e6520726f6f6d
+003c2f6c626c3e3c2f76616c75655f6c6162656c733e3c2f73746174615f6474613e
+"""
+}

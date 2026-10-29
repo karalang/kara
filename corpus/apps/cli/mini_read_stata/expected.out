@@ -1,0 +1,1153 @@
+$ meta hh_survey_w3.dta
+format 118, byteorder '<', 11 obs, 12 vars
+data_label: 'Household Survey Wave 3 (2024), public use'
+time_stamp: '01 Oct 2024 09:30'
+  'hhid': type='l' fmt='%12.0g' lbl='' label='Household ID'
+  'region': type='b' fmt='%8.0g' lbl='region' label='Region of residence'
+  'head_name': type=24 fmt='%24s' lbl='' label='Name of household head'
+  'head_sex': type='b' fmt='%8.0g' lbl='sex' label='Sex of head'
+  'head_age': type='b' fmt='%8.0g' lbl='' label='Age of head (years)'
+  'educ': type='b' fmt='%8.0g' lbl='educ' label='Highest level completed'
+  'hhsize': type='h' fmt='%8.0g' lbl='' label='Household size'
+  'income': type='f' fmt='%9.0g' lbl='' label='Monthly income (local currency)'
+  'water': type='b' fmt='%8.0g' lbl='yesno' label='Piped water in dwelling'
+  'weight': type='d' fmt='%10.0g' lbl='' label='Sampling weight'
+  'int_date': type='l' fmt='%td' lbl='' label='Interview date'
+  'synced': type='d' fmt='%tc' lbl='' label='Tablet sync time'
+  value labels 'region': {5: 'Capital', 1: 'North', 3: 'East', 2: 'South', 4: 'West'}
+  value labels 'sex': {1: 'Male', 2: 'Female'}
+  value labels 'educ': {4: 'Tertiary', 3: 'Secondary', 2: 'Primary', 1: 'None'}
+  value labels 'yesno': {1: 'Yes', 0: 'No'}
+$ meta clinic_visits.dta
+format 117, byteorder '>', 6 obs, 11 vars
+data_label: 'Clinic visits, July 2024'
+time_stamp: '01 Oct 2024 09:30'
+  'index': type='l' fmt='%12.0g' lbl='' label=''
+  'visit_id': type='l' fmt='%12.0g' lbl='' label=''
+  'patient': type=6 fmt='%6s' lbl='' label=''
+  'seen': type='d' fmt='%tc' lbl='' label=''
+  'dob': type='d' fmt='%td' lbl='' label=''
+  'dx': type='b' fmt='%8.0g' lbl='dx' label='Primary diagnosis'
+  'sbp': type='h' fmt='%8.0g' lbl='' label='Systolic BP (mmHg)'
+  'temp_c': type='f' fmt='%9.0g' lbl='' label='Temperature (C)'
+  'bmi': type='d' fmt='%10.0g' lbl='' label=''
+  'followup': type='b' fmt='%8.0g' lbl='' label=''
+  'notes': type='Q' fmt='%9s' lbl='' label=''
+  value labels 'dx': {0: 'asthma', 1: 'copd', 2: 'hypertension', 3: 'otitis'}
+$ meta cpi_regions.dta
+format 114, byteorder '<', 8 obs, 7 vars
+data_label: 'CPI by region (2020=100)'
+time_stamp: '01 Oct 2024 09:30'
+  'region': type='b' fmt='%8.0g' lbl='region' label=''
+  'month': type='d' fmt='%tm' lbl='' label=''
+  'quarter': type='d' fmt='%tq' lbl='' label=''
+  'year': type='d' fmt='%ty' lbl='' label=''
+  'cpi': type='f' fmt='%9.0g' lbl='' label=''
+  'basket': type=4 fmt='%4s' lbl='' label=''
+  'weight': type='d' fmt='%10.0g' lbl='' label=''
+  value labels 'region': {1: 'Coast', 2: 'Highlands', 3: 'Amazon'}
+$ meta trade_119.dta
+format 119, byteorder '<', 6 obs, 10 vars
+data_label: 'Customs declarations, sample'
+time_stamp: '01 Oct 2024 09:30'
+  'decl': type='l' fmt='%12.0g' lbl='' label='Declaration number'
+  'hs6': type=6 fmt='%6s' lbl='' label='HS 2017 subheading'
+  'partner': type='Q' fmt='%9s' lbl='' label='Partner country'
+  'flow': type='b' fmt='%8.0g' lbl='flow' label='Flow'
+  'week': type='h' fmt='%tw' lbl='' label='Week of clearance'
+  'half': type='h' fmt='%th' lbl='' label='Half-year'
+  'kg': type='d' fmt='%10.0g' lbl='' label='Net mass (kg)'
+  'fob_usd': type='d' fmt='%12.2f' lbl='' label='FOB value (USD)'
+  'adj': type='b' fmt='%8.0g' lbl='' label='Adjustment code'
+  'scan': type='Q' fmt='%9s' lbl='' label='Scanned form'
+  value labels 'flow': {1: 'Import', 2: 'Export'}
+$ meta lfs_104.dta
+format 104, byteorder '<', 5 obs, 7 vars
+data_label: 'Labour force, format 104'
+! AttributeError: 'StataReader' object has no attribute '_time_stamp'
+$ meta lfs_105.dta
+format 105, byteorder '>', 5 obs, 7 vars
+data_label: 'Labour force, format 105'
+time_stamp: ' 1 Oct 1999 09:30'
+  'person': type='h' fmt='%8.0g' lbl='' label='Person number'
+  'age': type='b' fmt='%8.0g' lbl='' label='Age'
+  'status': type='b' fmt='%8.0g' lbl='status' label='Employment status'
+  'hours': type='f' fmt='%9.0g' lbl='' label='Usual weekly hours'
+  'earnings': type='d' fmt='%10.0g' lbl='' label='Monthly earnings'
+  'surname': type=10 fmt='%10s' lbl='' label='Surname'
+  'sector': type='l' fmt='%12.0g' lbl='sector' label='Sector'
+  value labels 'status': {1: 'Employed', 2: 'Unemploy', 3: 'Inactive'}
+  value labels 'sector': {1: 'Public', 2: 'Private', 3: 'Own acco'}
+$ meta lfs_108.dta
+format 108, byteorder '<', 5 obs, 7 vars
+data_label: 'Labour force, format 108'
+time_stamp: ' 1 Oct 1999 09:30'
+  'person': type='h' fmt='%8.0g' lbl='' label='Person number'
+  'age': type='b' fmt='%8.0g' lbl='' label='Age'
+  'status': type='b' fmt='%8.0g' lbl='status' label='Employment status'
+  'hours': type='f' fmt='%9.0g' lbl='' label='Usual weekly hours'
+  'earnings': type='d' fmt='%10.0g' lbl='' label='Monthly earnings'
+  'surname': type=10 fmt='%10s' lbl='' label='Surname'
+  'sector': type='l' fmt='%12.0g' lbl='sector' label='Sector'
+  value labels 'status': {3: 'Inactive', 1: 'Employed', 2: 'Unemployed'}
+  value labels 'sector': {1: 'Public', 2: 'Private', 3: 'Own account'}
+$ meta lfs_110.dta
+format 110, byteorder '>', 5 obs, 7 vars
+data_label: 'Labour force, format 110'
+time_stamp: ' 1 Oct 1999 09:30'
+  'person': type='h' fmt='%8.0g' lbl='' label='Person number'
+  'age': type='b' fmt='%8.0g' lbl='' label='Age'
+  'status': type='b' fmt='%8.0g' lbl='status' label='Employment status'
+  'hours': type='f' fmt='%9.0g' lbl='' label='Usual weekly hours'
+  'earnings': type='d' fmt='%10.0g' lbl='' label='Monthly earnings'
+  'surname': type=10 fmt='%10s' lbl='' label='Surname'
+  'sector': type='l' fmt='%12.0g' lbl='sector' label='Sector'
+  value labels 'status': {3: 'Inactive', 1: 'Employed', 2: 'Unemployed'}
+  value labels 'sector': {1: 'Public', 2: 'Private', 3: 'Own account'}
+$ meta lfs_111.dta
+format 111, byteorder '<', 5 obs, 7 vars
+data_label: 'Labour force, format 111'
+time_stamp: ' 1 Oct 1999 09:30'
+  'person': type='h' fmt='%8.0g' lbl='' label='Person number'
+  'age': type='b' fmt='%8.0g' lbl='' label='Age'
+  'status': type='b' fmt='%8.0g' lbl='status' label='Employment status'
+  'hours': type='f' fmt='%9.0g' lbl='' label='Usual weekly hours'
+  'earnings': type='d' fmt='%10.0g' lbl='' label='Monthly earnings'
+  'surname': type=10 fmt='%10s' lbl='' label='Surname'
+  'sector': type='l' fmt='%12.0g' lbl='sector' label='Sector'
+  value labels 'status': {3: 'Inactive', 1: 'Employed', 2: 'Unemployed'}
+  value labels 'sector': {1: 'Public', 2: 'Private', 3: 'Own account'}
+$ meta lfs_113.dta
+format 113, byteorder '>', 5 obs, 7 vars
+data_label: 'Labour force, format 113'
+time_stamp: ' 1 Oct 1999 09:30'
+  'person': type='h' fmt='%8.0g' lbl='' label='Person number'
+  'age': type='b' fmt='%8.0g' lbl='' label='Age'
+  'status': type='b' fmt='%8.0g' lbl='status' label='Employment status'
+  'hours': type='f' fmt='%9.0g' lbl='' label='Usual weekly hours'
+  'earnings': type='d' fmt='%10.0g' lbl='' label='Monthly earnings'
+  'surname': type=10 fmt='%10s' lbl='' label='Surname'
+  'sector': type='l' fmt='%12.0g' lbl='sector' label='Sector'
+  value labels 'status': {3: 'Inactive', 1: 'Employed', 2: 'Unemployed'}
+  value labels 'sector': {1: 'Public', 2: 'Private', 3: 'Own account'}
+$ meta lfs_114.dta
+format 114, byteorder '<', 5 obs, 7 vars
+data_label: 'Labour force, format 114'
+time_stamp: ' 1 Oct 1999 09:30'
+  'person': type='h' fmt='%8.0g' lbl='' label='Person number'
+  'age': type='b' fmt='%8.0g' lbl='' label='Age'
+  'status': type='b' fmt='%8.0g' lbl='status' label='Employment status'
+  'hours': type='f' fmt='%9.0g' lbl='' label='Usual weekly hours'
+  'earnings': type='d' fmt='%10.0g' lbl='' label='Monthly earnings'
+  'surname': type=10 fmt='%10s' lbl='' label='Surname'
+  'sector': type='l' fmt='%12.0g' lbl='sector' label='Sector'
+  value labels 'status': {3: 'Inactive', 1: 'Employed', 2: 'Unemployed'}
+  value labels 'sector': {1: 'Public', 2: 'Private', 3: 'Own account'}
+$ meta lfs_115.dta
+format 115, byteorder '>', 5 obs, 7 vars
+data_label: 'Labour force, format 115'
+time_stamp: ' 1 Oct 1999 09:30'
+  'person': type='h' fmt='%8.0g' lbl='' label='Person number'
+  'age': type='b' fmt='%8.0g' lbl='' label='Age'
+  'status': type='b' fmt='%8.0g' lbl='status' label='Employment status'
+  'hours': type='f' fmt='%9.0g' lbl='' label='Usual weekly hours'
+  'earnings': type='d' fmt='%10.0g' lbl='' label='Monthly earnings'
+  'surname': type=10 fmt='%10s' lbl='' label='Surname'
+  'sector': type='l' fmt='%12.0g' lbl='sector' label='Sector'
+  value labels 'status': {3: 'Inactive', 1: 'Employed', 2: 'Unemployed'}
+  value labels 'sector': {1: 'Public', 2: 'Private', 3: 'Own account'}
+$ meta ward_census_117.dta
+format 117, byteorder '<', 6 obs, 4 vars
+data_label: 'Ward census'
+time_stamp: '01 Oct 2024 09:30'
+  'ward': type='h' fmt='%8.0g' lbl='' label='Ward'
+  'tenure': type='b' fmt='%8.0g' lbl='tenure' label='Tenure'
+  'rooms': type='b' fmt='%8.0g' lbl='rooms' label='Rooms'
+  'rent': type='f' fmt='%9.0g' lbl='' label='Monthly rent'
+  value labels 'tenure': {1: 'Owned', 2: 'Rented', 3: 'Other', 4: 'Other'}
+  value labels 'rooms': {3: 'Three or more', 2: 'Two rooms', 1: 'One room'}
+$ meta empty_118.dta
+format 118, byteorder '>', 0 obs, 4 vars
+data_label: ''
+time_stamp: '01 Oct 2024 09:30'
+  'id': type='l' fmt='%12.0g' lbl='' label=''
+  'name': type=8 fmt='%8s' lbl='' label=''
+  'score': type='d' fmt='%10.0g' lbl='' label=''
+  'grade': type='b' fmt='%8.0g' lbl='grade' label=''
+  value labels 'grade': {1: 'A', 2: 'B'}
+$ meta allnan_118.dta
+format 118, byteorder '<', 3 obs, 3 vars
+data_label: ''
+time_stamp: '01 Oct 2024 09:30'
+  'k': type='b' fmt='%8.0g' lbl='' label=''
+  'v': type='d' fmt='%10.0g' lbl='' label=''
+  'w': type='f' fmt='%9.0g' lbl='' label=''
+$ read hh_survey_w3.dta
+shape: 11 x 12
+  'hhid': int32
+  'region': category ['North', 'South', 'East', 'West', 'Capital', 9] ordered=True
+  'head_name': str
+  'head_sex': category ['Male', 'Female'] ordered=True
+  'head_age': float64
+  'educ': category ['None', 'Primary', 'Secondary', 'Tertiary', 9.0] ordered=True
+  'hhsize': float64
+  'income': float32
+  'water': category ['No', 'Yes', 9.0] ordered=True
+  'weight': float64
+  'int_date': datetime64[s]
+  'synced': datetime64[ms]
+,hhid,region,head_name,head_sex,head_age,educ,hhsize,income,water,weight,int_date,synced
+0,10101,North,José Álvarez,Male,47.0,Secondary,5.0,1250.5,Yes,312.75,2024-03-04,2024-03-04 18:02:11.250
+1,10102,North,Amaru Quispe,Male,62.0,Primary,7.0,640.0,No,312.75,2024-03-04,2024-03-04 18:02:11.250
+2,10203,South,Lucía Ñahui,Female,35.0,Tertiary,3.0,2310.25,Yes,288.1,2024-03-05,2024-03-06 07:45:00.000
+3,10204,South,Rosa Mamani,Female,,Primary,4.0,,Yes,288.1,2024-03-05,2024-03-06 07:45:00.000
+4,10305,East,Ewa Kowalczyk,Female,29.0,,2.0,,,301.4,2024-03-07,
+5,10306,East,Thắng Nguyễn,Male,51.0,Secondary,,980.0,Yes,301.4,2024-03-07,2024-03-08 12:00:00.000
+6,10407,West,Søren Dahl,Male,70.0,None,1.0,410.75,,275.0,,2024-03-09 09:15:30.005
+7,10408,West,Zainab Bello,Female,44.0,Secondary,6.0,1875.0,Yes,275.0,2024-03-09,2024-03-09 09:15:30.005
+8,10509,Capital,Chen Wei,Male,38.0,Tertiary,4.0,5120.5,Yes,260.25,2024-03-11,2024-03-11 20:59:59.999
+9,10510,Capital,Ana-María Oyarzún,Female,,,3.0,,No,260.25,2024-03-11,2024-03-11 20:59:59.999
+10,10511,9,Unknown,,0.0,9.0,0.0,0.0,9.0,1.0,2024-03-12,
+$ read clinic_visits.dta
+shape: 6 x 11
+  'index': int32
+  'visit_id': int32
+  'patient': str
+  'seen': datetime64[ms]
+  'dob': datetime64[s]
+  'dx': category ['asthma', 'copd', 'hypertension', 'otitis'] ordered=True
+  'sbp': int16
+  'temp_c': float32
+  'bmi': float64
+  'followup': int8
+  'notes': str
+,index,visit_id,patient,seen,dob,dx,sbp,temp_c,bmi,followup,notes
+0,100,900001,P-0193,2024-07-01 08:15:00,1958-02-11,hypertension,152,36.8,31.2,1,BP still high; increase amlodipine to 10 mg.
+1,101,900002,P-0045,2024-07-01 09:40:00,1990-12-30,asthma,118,37.1,22.85,0,Inhaler technique reviewed.
+2,102,900003,P-0193,2024-07-02 14:05:00,1958-02-11,hypertension,147,,30.9,1,
+3,103,900004,P-0310,2024-07-03 10:30:00,2019-06-01,otitis,96,38.4,,1,"Left ear, amoxicillin 7 days. Parent informed about ""red flags""."
+4,104,900005,P-0045,2024-07-08 16:55:00,1990-12-30,asthma,121,36.9,23.0,0,No wheeze today.
+5,105,900006,P-0777,2024-07-09 11:20:00,1944-09-17,copd,139,37.0,19.75,1,Spirometry booked; FEV1/FVC 0.62 last time. Spirometry booked; FEV1/FVC 0.62 last time. Spirometry booked; FEV1/FVC 0.62 last time. Spirometry booked; FEV1/FVC 0.62 last time. Spirometry booked; FEV1/FVC 0.62 last time. 
+$ read cpi_regions.dta
+shape: 8 x 7
+  'region': category ['Coast', 'Highlands', 'Amazon'] ordered=True
+  'month': datetime64[s]
+  'quarter': datetime64[s]
+  'year': datetime64[s]
+  'cpi': float32
+  'basket': str
+  'weight': float64
+,region,month,quarter,year,cpi,basket,weight
+0,Coast,2023-01-01,2023-01-01,2023-01-01,101.3,food,0.31
+1,Coast,2023-02-01,2023-01-01,2023-01-01,101.9,food,0.31
+2,Highlands,2023-03-01,2023-01-01,2023-01-01,99.8,fuel,0.12
+3,Highlands,2023-04-01,2023-04-01,2023-01-01,100.4,fuel,0.12
+4,Amazon,2023-05-01,2023-04-01,2023-01-01,103.75,rent,0.27
+5,Amazon,2023-06-01,2023-04-01,2023-01-01,104.2,rent,0.27
+6,Coast,2023-07-01,2023-07-01,2023-01-01,102.6,food,0.31
+7,Highlands,2023-08-01,2023-07-01,2023-01-01,100.9,fuel,0.12
+$ read trade_119.dta
+shape: 6 x 10
+  'decl': int32
+  'hs6': str
+  'partner': str
+  'flow': category ['Import', 'Export'] ordered=True
+  'week': datetime64[s]
+  'half': datetime64[s]
+  'kg': float64
+  'fob_usd': float64
+  'adj': float64
+  'scan': str
+,decl,hs6,partner,flow,week,half,kg,fob_usd,adj,scan
+0,5500101,090111,Germany,Export,2024-01-01,2024-01-01,18000.0,61250.4,0.0,b'%PDF-1.4\x00\xff'
+1,5500102,090111,Germany,Export,2024-01-01,2024-01-01,9000.0,30400.0,100.0,
+2,5500103,270900,Ecuador,Import,2024-01-15,2024-01-01,120000.5,64800.0,-127.0,
+3,5500104,847130,China,Import,2024-01-22,2024-01-01,350.25,98000.0,,
+4,5500105,090111,Germany,Export,2024-06-17,2024-07-01,4500.0,15600.75,1.0,b'\x89PNG'
+5,5500106,080390,Panama,Export,,,,22000.0,0.0,
+$ read lfs_104.dta
+shape: 5 x 7
+  'person': int16
+  'age': float64
+  'status': category ['Employed', 'Unemploy', 'Inactive'] ordered=True
+  'hours': float32
+  'earnings': float64
+  'surname': str
+  'sector': category ['Public', 'Private', 'Own acco'] ordered=True
+,person,age,status,hours,earnings,surname,sector
+0,1,34.0,Employed,42.5,1520.0,Smith,Private
+1,2,51.0,Unemploy,38.0,1890.25,García,Public
+2,3,19.0,Employed,,640.0,O'Neil,Own acco
+3,4,,Unemploy,40.0,,Müller,Private
+4,5,66.0,Inactive,0.0,0.0,Ito,
+$ read lfs_105.dta
+shape: 5 x 7
+  'person': int16
+  'age': float64
+  'status': category ['Employed', 'Unemploy', 'Inactive'] ordered=True
+  'hours': float32
+  'earnings': float64
+  'surname': str
+  'sector': category ['Public', 'Private', 'Own acco'] ordered=True
+,person,age,status,hours,earnings,surname,sector
+0,1,34.0,Employed,42.5,1520.0,Smith,Private
+1,2,51.0,Unemploy,38.0,1890.25,García,Public
+2,3,19.0,Employed,,640.0,O'Neil,Own acco
+3,4,,Unemploy,40.0,,Müller,Private
+4,5,66.0,Inactive,0.0,0.0,Ito,
+$ read lfs_108.dta
+shape: 5 x 7
+  'person': int16
+  'age': float64
+  'status': category ['Employed', 'Unemployed', 'Inactive'] ordered=True
+  'hours': float32
+  'earnings': float64
+  'surname': str
+  'sector': category ['Public', 'Private', 'Own account'] ordered=True
+,person,age,status,hours,earnings,surname,sector
+0,1,34.0,Employed,42.5,1520.0,Smith,Private
+1,2,51.0,Unemployed,38.0,1890.25,García,Public
+2,3,19.0,Employed,,640.0,O'Neil,Own account
+3,4,,Unemployed,40.0,,Müller,Private
+4,5,66.0,Inactive,0.0,0.0,Ito,
+$ read lfs_110.dta
+shape: 5 x 7
+  'person': int16
+  'age': float64
+  'status': category ['Employed', 'Unemployed', 'Inactive'] ordered=True
+  'hours': float32
+  'earnings': float64
+  'surname': str
+  'sector': category ['Public', 'Private', 'Own account'] ordered=True
+,person,age,status,hours,earnings,surname,sector
+0,1,34.0,Employed,42.5,1520.0,Smith,Private
+1,2,51.0,Unemployed,38.0,1890.25,García,Public
+2,3,19.0,Employed,,640.0,O'Neil,Own account
+3,4,,Unemployed,40.0,,Müller,Private
+4,5,66.0,Inactive,0.0,0.0,Ito,
+$ read lfs_111.dta
+shape: 5 x 7
+  'person': int16
+  'age': float64
+  'status': category ['Employed', 'Unemployed', 'Inactive'] ordered=True
+  'hours': float32
+  'earnings': float64
+  'surname': str
+  'sector': category ['Public', 'Private', 'Own account'] ordered=True
+,person,age,status,hours,earnings,surname,sector
+0,1,34.0,Employed,42.5,1520.0,Smith,Private
+1,2,51.0,Unemployed,38.0,1890.25,García,Public
+2,3,19.0,Employed,,640.0,O'Neil,Own account
+3,4,,Unemployed,40.0,,Müller,Private
+4,5,66.0,Inactive,0.0,0.0,Ito,
+$ read lfs_113.dta
+shape: 5 x 7
+  'person': int16
+  'age': float64
+  'status': category ['Employed', 'Unemployed', 'Inactive'] ordered=True
+  'hours': float32
+  'earnings': float64
+  'surname': str
+  'sector': category ['Public', 'Private', 'Own account'] ordered=True
+,person,age,status,hours,earnings,surname,sector
+0,1,34.0,Employed,42.5,1520.0,Smith,Private
+1,2,51.0,Unemployed,38.0,1890.25,García,Public
+2,3,19.0,Employed,,640.0,O'Neil,Own account
+3,4,,Unemployed,40.0,,Müller,Private
+4,5,66.0,Inactive,0.0,0.0,Ito,
+$ read lfs_114.dta
+shape: 5 x 7
+  'person': int16
+  'age': float64
+  'status': category ['Employed', 'Unemployed', 'Inactive'] ordered=True
+  'hours': float32
+  'earnings': float64
+  'surname': str
+  'sector': category ['Public', 'Private', 'Own account'] ordered=True
+,person,age,status,hours,earnings,surname,sector
+0,1,34.0,Employed,42.5,1520.0,Smith,Private
+1,2,51.0,Unemployed,38.0,1890.25,García,Public
+2,3,19.0,Employed,,640.0,O'Neil,Own account
+3,4,,Unemployed,40.0,,Müller,Private
+4,5,66.0,Inactive,0.0,0.0,Ito,
+$ read lfs_115.dta
+shape: 5 x 7
+  'person': int16
+  'age': float64
+  'status': category ['Employed', 'Unemployed', 'Inactive'] ordered=True
+  'hours': float32
+  'earnings': float64
+  'surname': str
+  'sector': category ['Public', 'Private', 'Own account'] ordered=True
+,person,age,status,hours,earnings,surname,sector
+0,1,34.0,Employed,42.5,1520.0,Smith,Private
+1,2,51.0,Unemployed,38.0,1890.25,García,Public
+2,3,19.0,Employed,,640.0,O'Neil,Own account
+3,4,,Unemployed,40.0,,Müller,Private
+4,5,66.0,Inactive,0.0,0.0,Ito,
+$ read ward_census_117.dta
+! ValueError: 
+Value labels for column tenure are not unique. These cannot be converted to
+pandas categoricals.
+
+Either read the file with `convert_categoricals` set to False or use the
+low level interface in `StataReader` to separately read the values and the
+value_labels.
+
+The repeated labels are:
+--------------------------------------------------------------------------------
+Other
+
+$ read empty_118.dta
+shape: 0 x 4
+  'id': int32
+  'name': object
+  'score': float64
+  'grade': int8
+,id,name,score,grade
+$ read allnan_118.dta
+shape: 3 x 3
+  'k': int8
+  'v': float64
+  'w': float32
+,k,v,w
+0,1,,
+1,2,,1.5
+2,3,,
+$ read hh_survey_w3.dta convert_categoricals=False
+shape: 11 x 12
+  'hhid': int32
+  'region': int8
+  'head_name': str
+  'head_sex': float64
+  'head_age': float64
+  'educ': float64
+  'hhsize': float64
+  'income': float32
+  'water': float64
+  'weight': float64
+  'int_date': datetime64[s]
+  'synced': datetime64[ms]
+,hhid,region,head_name,head_sex,head_age,educ,hhsize,income,water,weight,int_date,synced
+0,10101,1,José Álvarez,1.0,47.0,3.0,5.0,1250.5,1.0,312.75,2024-03-04,2024-03-04 18:02:11.250
+1,10102,1,Amaru Quispe,1.0,62.0,2.0,7.0,640.0,0.0,312.75,2024-03-04,2024-03-04 18:02:11.250
+2,10203,2,Lucía Ñahui,2.0,35.0,4.0,3.0,2310.25,1.0,288.1,2024-03-05,2024-03-06 07:45:00.000
+3,10204,2,Rosa Mamani,2.0,,2.0,4.0,,1.0,288.1,2024-03-05,2024-03-06 07:45:00.000
+4,10305,3,Ewa Kowalczyk,2.0,29.0,,2.0,,,301.4,2024-03-07,
+5,10306,3,Thắng Nguyễn,1.0,51.0,3.0,,980.0,1.0,301.4,2024-03-07,2024-03-08 12:00:00.000
+6,10407,4,Søren Dahl,1.0,70.0,1.0,1.0,410.75,,275.0,,2024-03-09 09:15:30.005
+7,10408,4,Zainab Bello,2.0,44.0,3.0,6.0,1875.0,1.0,275.0,2024-03-09,2024-03-09 09:15:30.005
+8,10509,5,Chen Wei,1.0,38.0,4.0,4.0,5120.5,1.0,260.25,2024-03-11,2024-03-11 20:59:59.999
+9,10510,5,Ana-María Oyarzún,2.0,,,3.0,,0.0,260.25,2024-03-11,2024-03-11 20:59:59.999
+10,10511,9,Unknown,,0.0,9.0,0.0,0.0,9.0,1.0,2024-03-12,
+$ read hh_survey_w3.dta convert_missing=True
+! ValueError: Could not convert object to NumPy datetime
+$ read hh_survey_w3.dta convert_missing=True convert_dates=False convert_categoricals=False
+shape: 11 x 12
+  'hhid': int32
+  'region': int8
+  'head_name': str
+  'head_sex': object
+  'head_age': object
+  'educ': object
+  'hhsize': object
+  'income': object
+  'water': object
+  'weight': float64
+  'int_date': object
+  'synced': object
+,hhid,region,head_name,head_sex,head_age,educ,hhsize,income,water,weight,int_date,synced
+0,10101,1,José Álvarez,1,47,3,5,1250.5,1,312.75,23439,2025194531250.0
+1,10102,1,Amaru Quispe,1,62,2,7,640.0,0,312.75,23439,2025194531250.0
+2,10203,2,Lucía Ñahui,2,35,4,3,2310.25,1,288.1,23440,2025330300000.0
+3,10204,2,Rosa Mamani,2,.a,2,4,.a,1,288.1,23440,2025330300000.0
+4,10305,3,Ewa Kowalczyk,2,29,.b,2,.b,.a,301.4,23442,.
+5,10306,3,Thắng Nguyễn,1,51,3,.a,980.0,1,301.4,23442,2025518400000.0
+6,10407,4,Søren Dahl,1,70,1,1,410.75,.b,275.0,.,2025594930005.0
+7,10408,4,Zainab Bello,2,44,3,6,1875.0,1,275.0,23444,2025594930005.0
+8,10509,5,Chen Wei,1,38,4,4,5120.5,1,260.25,23446,2025809999999.0
+9,10510,5,Ana-María Oyarzún,2,.a,.a,3,.a,0,260.25,23446,2025809999999.0
+10,10511,9,Unknown,.,0,9,0,0.0,9,1.0,23447,.a
+$ read hh_survey_w3.dta convert_missing=True columns=hhid,head_age,hhsize,income,weight
+shape: 11 x 5
+  'hhid': int32
+  'head_age': object
+  'hhsize': object
+  'income': object
+  'weight': float64
+,hhid,head_age,hhsize,income,weight
+0,10101,47,5,1250.5,312.75
+1,10102,62,7,640.0,312.75
+2,10203,35,3,2310.25,288.1
+3,10204,.a,4,.a,288.1
+4,10305,29,2,.b,301.4
+5,10306,51,.a,980.0,301.4
+6,10407,70,1,410.75,275.0
+7,10408,44,6,1875.0,275.0
+8,10509,38,4,5120.5,260.25
+9,10510,.a,3,.a,260.25
+10,10511,0,0,0.0,1.0
+$ read hh_survey_w3.dta convert_missing=True preserve_dtypes=False columns=hhid,head_age,income
+shape: 11 x 3
+  'hhid': int64
+  'head_age': object
+  'income': object
+,hhid,head_age,income
+0,10101,47,1250.5
+1,10102,62,640.0
+2,10203,35,2310.25
+3,10204,.a,.a
+4,10305,29,.b
+5,10306,51,980.0
+6,10407,70,410.75
+7,10408,44,1875.0
+8,10509,38,5120.5
+9,10510,.a,.a
+10,10511,0,0.0
+$ read hh_survey_w3.dta convert_dates=False columns=hhid,int_date,synced
+shape: 11 x 3
+  'hhid': int32
+  'int_date': float64
+  'synced': float64
+,hhid,int_date,synced
+0,10101,23439.0,2025194531250.0
+1,10102,23439.0,2025194531250.0
+2,10203,23440.0,2025330300000.0
+3,10204,23440.0,2025330300000.0
+4,10305,23442.0,
+5,10306,23442.0,2025518400000.0
+6,10407,,2025594930005.0
+7,10408,23444.0,2025594930005.0
+8,10509,23446.0,2025809999999.0
+9,10510,23446.0,2025809999999.0
+10,10511,23447.0,
+$ read hh_survey_w3.dta preserve_dtypes=False columns=hhid,head_age,hhsize,income,weight
+shape: 11 x 5
+  'hhid': int64
+  'head_age': float64
+  'hhsize': float64
+  'income': float64
+  'weight': float64
+,hhid,head_age,hhsize,income,weight
+0,10101,47.0,5.0,1250.5,312.75
+1,10102,62.0,7.0,640.0,312.75
+2,10203,35.0,3.0,2310.25,288.1
+3,10204,,4.0,,288.1
+4,10305,29.0,2.0,,301.4
+5,10306,51.0,,980.0,301.4
+6,10407,70.0,1.0,410.75,275.0
+7,10408,44.0,6.0,1875.0,275.0
+8,10509,38.0,4.0,5120.5,260.25
+9,10510,,3.0,,260.25
+10,10511,0.0,0.0,0.0,1.0
+$ read hh_survey_w3.dta order_categoricals=False columns=region,educ
+shape: 11 x 2
+  'region': category ['North', 'South', 'East', 'West', 'Capital', 9] ordered=False
+  'educ': category ['None', 'Primary', 'Secondary', 'Tertiary', 9.0] ordered=False
+,region,educ
+0,North,Secondary
+1,North,Primary
+2,South,Tertiary
+3,South,Primary
+4,East,
+5,East,Secondary
+6,West,None
+7,West,Secondary
+8,Capital,Tertiary
+9,Capital,
+10,9,9.0
+$ read hh_survey_w3.dta index_col=hhid columns=hhid,head_name,region
+shape: 11 x 2
+index: 'hhid' int32
+  'head_name': str
+  'region': category ['North', 'South', 'East', 'West', 'Capital', 9] ordered=True
+hhid,head_name,region
+10101,José Álvarez,North
+10102,Amaru Quispe,North
+10203,Lucía Ñahui,South
+10204,Rosa Mamani,South
+10305,Ewa Kowalczyk,East
+10306,Thắng Nguyễn,East
+10407,Søren Dahl,West
+10408,Zainab Bello,West
+10509,Chen Wei,Capital
+10510,Ana-María Oyarzún,Capital
+10511,Unknown,9
+$ read hh_survey_w3.dta columns=income,hhid
+shape: 11 x 2
+  'income': float32
+  'hhid': int32
+,income,hhid
+0,1250.5,10101
+1,640.0,10102
+2,2310.25,10203
+3,,10204
+4,,10305
+5,980.0,10306
+6,410.75,10407
+7,1875.0,10408
+8,5120.5,10509
+9,,10510
+10,0.0,10511
+$ read hh_survey_w3.dta columns=hhid,hhid
+! ValueError: columns contains duplicate entries
+$ read hh_survey_w3.dta columns=hhid,district
+! ValueError: The following columns were not found in the Stata data set: district
+$ read hh_survey_w3.dta index_col=nobody
+! KeyError: 'nobody'
+$ read clinic_visits.dta convert_dates=False
+shape: 6 x 11
+  'index': int32
+  'visit_id': int32
+  'patient': str
+  'seen': float64
+  'dob': float64
+  'dx': category ['asthma', 'copd', 'hypertension', 'otitis'] ordered=True
+  'sbp': int16
+  'temp_c': float32
+  'bmi': float64
+  'followup': int8
+  'notes': str
+,index,visit_id,patient,seen,dob,dx,sbp,temp_c,bmi,followup,notes
+0,100,900001,P-0193,2035440900000.0,-689.0,hypertension,152,36.8,31.2,1,BP still high; increase amlodipine to 10 mg.
+1,101,900002,P-0045,2035446000000.0,11321.0,asthma,118,37.1,22.85,0,Inhaler technique reviewed.
+2,102,900003,P-0193,2035548300000.0,-689.0,hypertension,147,,30.9,1,
+3,103,900004,P-0310,2035621800000.0,21701.0,otitis,96,38.4,,1,"Left ear, amoxicillin 7 days. Parent informed about ""red flags""."
+4,104,900005,P-0045,2036076900000.0,11321.0,asthma,121,36.9,23.0,0,No wheeze today.
+5,105,900006,P-0777,2036143200000.0,-5584.0,copd,139,37.0,19.75,1,Spirometry booked; FEV1/FVC 0.62 last time. Spirometry booked; FEV1/FVC 0.62 last time. Spirometry booked; FEV1/FVC 0.62 last time. Spirometry booked; FEV1/FVC 0.62 last time. Spirometry booked; FEV1/FVC 0.62 last time. 
+$ read clinic_visits.dta convert_categoricals=False columns=index,dx
+shape: 6 x 2
+  'index': int32
+  'dx': int8
+,index,dx
+0,100,2
+1,101,0
+2,102,2
+3,103,3
+4,104,0
+5,105,1
+$ read clinic_visits.dta index_col=index columns=index,patient,notes
+shape: 6 x 2
+index: 'index' int64
+  'patient': str
+  'notes': str
+index,patient,notes
+100,P-0193,BP still high; increase amlodipine to 10 mg.
+101,P-0045,Inhaler technique reviewed.
+102,P-0193,
+103,P-0310,"Left ear, amoxicillin 7 days. Parent informed about ""red flags""."
+104,P-0045,No wheeze today.
+105,P-0777,Spirometry booked; FEV1/FVC 0.62 last time. Spirometry booked; FEV1/FVC 0.62 last time. Spirometry booked; FEV1/FVC 0.62 last time. Spirometry booked; FEV1/FVC 0.62 last time. Spirometry booked; FEV1/FVC 0.62 last time. 
+$ read clinic_visits.dta preserve_dtypes=False
+shape: 6 x 11
+  'index': int64
+  'visit_id': int64
+  'patient': str
+  'seen': datetime64[ms]
+  'dob': datetime64[s]
+  'dx': category ['asthma', 'copd', 'hypertension', 'otitis'] ordered=True
+  'sbp': int64
+  'temp_c': float64
+  'bmi': float64
+  'followup': int64
+  'notes': str
+,index,visit_id,patient,seen,dob,dx,sbp,temp_c,bmi,followup,notes
+0,100,900001,P-0193,2024-07-01 08:15:00,1958-02-11,hypertension,152,36.79999923706055,31.2,1,BP still high; increase amlodipine to 10 mg.
+1,101,900002,P-0045,2024-07-01 09:40:00,1990-12-30,asthma,118,37.099998474121094,22.85,0,Inhaler technique reviewed.
+2,102,900003,P-0193,2024-07-02 14:05:00,1958-02-11,hypertension,147,,30.9,1,
+3,103,900004,P-0310,2024-07-03 10:30:00,2019-06-01,otitis,96,38.400001525878906,,1,"Left ear, amoxicillin 7 days. Parent informed about ""red flags""."
+4,104,900005,P-0045,2024-07-08 16:55:00,1990-12-30,asthma,121,36.900001525878906,23.0,0,No wheeze today.
+5,105,900006,P-0777,2024-07-09 11:20:00,1944-09-17,copd,139,37.0,19.75,1,Spirometry booked; FEV1/FVC 0.62 last time. Spirometry booked; FEV1/FVC 0.62 last time. Spirometry booked; FEV1/FVC 0.62 last time. Spirometry booked; FEV1/FVC 0.62 last time. Spirometry booked; FEV1/FVC 0.62 last time. 
+$ read clinic_visits.dta convert_missing=True columns=index,temp_c,bmi
+shape: 6 x 3
+  'index': int32
+  'temp_c': object
+  'bmi': object
+,index,temp_c,bmi
+0,100,36.79999923706055,31.2
+1,101,37.099998474121094,22.85
+2,102,.,30.9
+3,103,38.400001525878906,.
+4,104,36.900001525878906,23.0
+5,105,37.0,19.75
+$ read cpi_regions.dta convert_dates=False
+shape: 8 x 7
+  'region': category ['Coast', 'Highlands', 'Amazon'] ordered=True
+  'month': float64
+  'quarter': float64
+  'year': float64
+  'cpi': float32
+  'basket': str
+  'weight': float64
+,region,month,quarter,year,cpi,basket,weight
+0,Coast,756.0,252.0,2023.0,101.3,food,0.31
+1,Coast,757.0,252.0,2023.0,101.9,food,0.31
+2,Highlands,758.0,252.0,2023.0,99.8,fuel,0.12
+3,Highlands,759.0,253.0,2023.0,100.4,fuel,0.12
+4,Amazon,760.0,253.0,2023.0,103.75,rent,0.27
+5,Amazon,761.0,253.0,2023.0,104.2,rent,0.27
+6,Coast,762.0,254.0,2023.0,102.6,food,0.31
+7,Highlands,763.0,254.0,2023.0,100.9,fuel,0.12
+$ read cpi_regions.dta convert_categoricals=False preserve_dtypes=False
+shape: 8 x 7
+  'region': int64
+  'month': datetime64[s]
+  'quarter': datetime64[s]
+  'year': datetime64[s]
+  'cpi': float64
+  'basket': str
+  'weight': float64
+,region,month,quarter,year,cpi,basket,weight
+0,1,2023-01-01,2023-01-01,2023-01-01,101.30000305175781,food,0.31
+1,1,2023-02-01,2023-01-01,2023-01-01,101.9000015258789,food,0.31
+2,2,2023-03-01,2023-01-01,2023-01-01,99.80000305175781,fuel,0.12
+3,2,2023-04-01,2023-04-01,2023-01-01,100.4000015258789,fuel,0.12
+4,3,2023-05-01,2023-04-01,2023-01-01,103.75,rent,0.27
+5,3,2023-06-01,2023-04-01,2023-01-01,104.19999694824219,rent,0.27
+6,1,2023-07-01,2023-07-01,2023-01-01,102.5999984741211,food,0.31
+7,2,2023-08-01,2023-07-01,2023-01-01,100.9000015258789,fuel,0.12
+$ read cpi_regions.dta.gz
+shape: 8 x 7
+  'region': category ['Coast', 'Highlands', 'Amazon'] ordered=True
+  'month': datetime64[s]
+  'quarter': datetime64[s]
+  'year': datetime64[s]
+  'cpi': float32
+  'basket': str
+  'weight': float64
+,region,month,quarter,year,cpi,basket,weight
+0,Coast,2023-01-01,2023-01-01,2023-01-01,101.3,food,0.31
+1,Coast,2023-02-01,2023-01-01,2023-01-01,101.9,food,0.31
+2,Highlands,2023-03-01,2023-01-01,2023-01-01,99.8,fuel,0.12
+3,Highlands,2023-04-01,2023-04-01,2023-01-01,100.4,fuel,0.12
+4,Amazon,2023-05-01,2023-04-01,2023-01-01,103.75,rent,0.27
+5,Amazon,2023-06-01,2023-04-01,2023-01-01,104.2,rent,0.27
+6,Coast,2023-07-01,2023-07-01,2023-01-01,102.6,food,0.31
+7,Highlands,2023-08-01,2023-07-01,2023-01-01,100.9,fuel,0.12
+$ read cpi_regions.zip columns=region,cpi
+shape: 8 x 2
+  'region': category ['Coast', 'Highlands', 'Amazon'] ordered=True
+  'cpi': float32
+,region,cpi
+0,Coast,101.3
+1,Coast,101.9
+2,Highlands,99.8
+3,Highlands,100.4
+4,Amazon,103.75
+5,Amazon,104.2
+6,Coast,102.6
+7,Highlands,100.9
+$ read trade_119.dta convert_missing=True
+! TypeError: ufunc 'isnan' not supported for the input types, and the inputs could not be safely coerced to any supported types according to the casting rule ''safe''
+$ read trade_119.dta convert_missing=True columns=decl,half
+! TypeError: unsupported operand type(s) for +: 'StataMissingValue' and 'int'
+$ read trade_119.dta convert_missing=True columns=decl,partner,flow
+shape: 6 x 3
+  'decl': int32
+  'partner': str
+  'flow': category ['Import', 'Export'] ordered=True
+,decl,partner,flow
+0,5500101,Germany,Export
+1,5500102,Germany,Export
+2,5500103,Ecuador,Import
+3,5500104,China,Import
+4,5500105,Germany,Export
+5,5500106,Panama,Export
+$ read trade_119.dta convert_missing=True convert_dates=False convert_categoricals=False
+shape: 6 x 10
+  'decl': int32
+  'hs6': str
+  'partner': str
+  'flow': int8
+  'week': object
+  'half': object
+  'kg': object
+  'fob_usd': float64
+  'adj': object
+  'scan': str
+,decl,hs6,partner,flow,week,half,kg,fob_usd,adj,scan
+0,5500101,090111,Germany,2,3328,128,18000.0,61250.4,0,b'%PDF-1.4\x00\xff'
+1,5500102,090111,Germany,2,3328,128,9000.0,30400.0,100,
+2,5500103,270900,Ecuador,1,3330,128,120000.5,64800.0,-127,
+3,5500104,847130,China,1,3331,128,350.25,98000.0,.,
+4,5500105,090111,Germany,2,3352,129,4500.0,15600.75,1,b'\x89PNG'
+5,5500106,080390,Panama,2,.,.,.,22000.0,0,
+$ read trade_119.dta convert_dates=False convert_categoricals=False
+shape: 6 x 10
+  'decl': int32
+  'hs6': str
+  'partner': str
+  'flow': int8
+  'week': float64
+  'half': float64
+  'kg': float64
+  'fob_usd': float64
+  'adj': float64
+  'scan': str
+,decl,hs6,partner,flow,week,half,kg,fob_usd,adj,scan
+0,5500101,090111,Germany,2,3328.0,128.0,18000.0,61250.4,0.0,b'%PDF-1.4\x00\xff'
+1,5500102,090111,Germany,2,3328.0,128.0,9000.0,30400.0,100.0,
+2,5500103,270900,Ecuador,1,3330.0,128.0,120000.5,64800.0,-127.0,
+3,5500104,847130,China,1,3331.0,128.0,350.25,98000.0,,
+4,5500105,090111,Germany,2,3352.0,129.0,4500.0,15600.75,1.0,b'\x89PNG'
+5,5500106,080390,Panama,2,,,,22000.0,0.0,
+$ read lfs_104.dta convert_missing=True
+! TypeError: unhashable type: 'StataMissingValue'
+$ read lfs_104.dta convert_missing=True convert_categoricals=False
+shape: 5 x 7
+  'person': int16
+  'age': object
+  'status': int8
+  'hours': object
+  'earnings': object
+  'surname': str
+  'sector': object
+,person,age,status,hours,earnings,surname,sector
+0,1,34,1,42.5,1520.0,Smith,2
+1,2,51,2,38.0,1890.25,García,1
+2,3,19,1,.,640.0,O'Neil,3
+3,4,.,2,40.0,.,Müller,2
+4,5,66,3,0.0,0.0,Ito,.
+$ read lfs_105.dta convert_missing=True convert_categoricals=False
+shape: 5 x 7
+  'person': int16
+  'age': object
+  'status': int8
+  'hours': object
+  'earnings': object
+  'surname': str
+  'sector': object
+,person,age,status,hours,earnings,surname,sector
+0,1,34,1,42.5,1520.0,Smith,2
+1,2,51,2,38.0,1890.25,García,1
+2,3,19,1,.,640.0,O'Neil,3
+3,4,.,2,40.0,.,Müller,2
+4,5,66,3,0.0,0.0,Ito,.
+$ read lfs_108.dta convert_missing=True convert_categoricals=False
+shape: 5 x 7
+  'person': int16
+  'age': object
+  'status': int8
+  'hours': object
+  'earnings': object
+  'surname': str
+  'sector': object
+,person,age,status,hours,earnings,surname,sector
+0,1,34,1,42.5,1520.0,Smith,2
+1,2,51,2,38.0,1890.25,García,1
+2,3,19,1,.,640.0,O'Neil,3
+3,4,.,2,40.0,.,Müller,2
+4,5,66,3,0.0,0.0,Ito,.
+$ read lfs_111.dta convert_missing=True convert_categoricals=False
+shape: 5 x 7
+  'person': int16
+  'age': object
+  'status': int8
+  'hours': object
+  'earnings': object
+  'surname': str
+  'sector': object
+,person,age,status,hours,earnings,surname,sector
+0,1,34,1,42.5,1520.0,Smith,2
+1,2,51,2,38.0,1890.25,García,1
+2,3,19,1,.,640.0,O'Neil,3
+3,4,.,2,40.0,.,Müller,2
+4,5,66,3,0.0,0.0,Ito,.
+$ read lfs_113.dta convert_missing=True convert_categoricals=False
+shape: 5 x 7
+  'person': int16
+  'age': object
+  'status': int8
+  'hours': object
+  'earnings': object
+  'surname': str
+  'sector': object
+,person,age,status,hours,earnings,surname,sector
+0,1,34,1,42.5,1520.0,Smith,2
+1,2,51,2,38.0,1890.25,García,1
+2,3,19,1,.c,640.0,O'Neil,3
+3,4,.a,2,40.0,.x,Müller,2
+4,5,66,3,0.0,0.0,Ito,.z
+$ read lfs_114.dta convert_missing=True convert_categoricals=False
+shape: 5 x 7
+  'person': int16
+  'age': object
+  'status': int8
+  'hours': object
+  'earnings': object
+  'surname': str
+  'sector': object
+,person,age,status,hours,earnings,surname,sector
+0,1,34,1,42.5,1520.0,Smith,2
+1,2,51,2,38.0,1890.25,García,1
+2,3,19,1,.c,640.0,O'Neil,3
+3,4,.a,2,40.0,.x,Müller,2
+4,5,66,3,0.0,0.0,Ito,.z
+$ read lfs_115.dta convert_categoricals=False preserve_dtypes=False
+shape: 5 x 7
+  'person': int64
+  'age': float64
+  'status': int64
+  'hours': float64
+  'earnings': float64
+  'surname': str
+  'sector': float64
+,person,age,status,hours,earnings,surname,sector
+0,1,34.0,1,42.5,1520.0,Smith,2.0
+1,2,51.0,2,38.0,1890.25,García,1.0
+2,3,19.0,1,,640.0,O'Neil,3.0
+3,4,,2,40.0,,Müller,2.0
+4,5,66.0,3,0.0,0.0,Ito,
+$ read ward_census_117.dta convert_categoricals=False
+shape: 6 x 4
+  'ward': int16
+  'tenure': int8
+  'rooms': float64
+  'rent': float32
+,ward,tenure,rooms,rent
+0,1,1,2.0,350.0
+1,1,2,3.0,0.0
+2,2,3,1.0,410.5
+3,2,4,5.0,
+4,3,1,9.0,275.25
+5,3,2,,0.0
+$ read ward_census_117.dta columns=ward,rooms,rent
+shape: 6 x 3
+  'ward': int16
+  'rooms': category ['One room', 'Two rooms', 'Three or more', 5.0, 9.0] ordered=True
+  'rent': float32
+,ward,rooms,rent
+0,1,Two rooms,350.0
+1,1,Three or more,0.0
+2,2,One room,410.5
+3,2,5.0,
+4,3,9.0,275.25
+5,3,,0.0
+$ read ward_census_117.dta convert_missing=True convert_categoricals=False
+shape: 6 x 4
+  'ward': int16
+  'tenure': int8
+  'rooms': object
+  'rent': object
+,ward,tenure,rooms,rent
+0,1,1,2,350.0
+1,1,2,3,0.0
+2,2,3,1,410.5
+3,2,4,5,.c
+4,3,1,9,275.25
+5,3,2,.,0.0
+$ read empty_118.dta columns=score,id
+shape: 0 x 2
+  'score': float64
+  'id': int32
+,score,id
+$ read allnan_118.dta convert_missing=True
+shape: 3 x 3
+  'k': int8
+  'v': object
+  'w': object
+,k,v,w
+0,1,.,.
+1,2,.,1.5
+2,3,.,.
+$ chunks hh_survey_w3.dta 4
+-- chunk
+shape: 4 x 12
+  'hhid': int32
+  'region': category ['Capital', 'North', 'East', 'South', 'West'] ordered=True
+  'head_name': str
+  'head_sex': category ['Male', 'Female'] ordered=True
+  'head_age': float64
+  'educ': category ['Tertiary', 'Secondary', 'Primary', 'None'] ordered=True
+  'hhsize': int16
+  'income': float32
+  'water': category ['Yes', 'No'] ordered=True
+  'weight': float64
+  'int_date': datetime64[s]
+  'synced': datetime64[ms]
+,hhid,region,head_name,head_sex,head_age,educ,hhsize,income,water,weight,int_date,synced
+0,10101,North,José Álvarez,Male,47.0,Secondary,5,1250.5,Yes,312.75,2024-03-04,2024-03-04 18:02:11.250
+1,10102,North,Amaru Quispe,Male,62.0,Primary,7,640.0,No,312.75,2024-03-04,2024-03-04 18:02:11.250
+2,10203,South,Lucía Ñahui,Female,35.0,Tertiary,3,2310.25,Yes,288.1,2024-03-05,2024-03-06 07:45:00.000
+3,10204,South,Rosa Mamani,Female,,Primary,4,,Yes,288.1,2024-03-05,2024-03-06 07:45:00.000
+-- chunk
+shape: 4 x 12
+  'hhid': int32
+  'region': category ['Capital', 'North', 'East', 'South', 'West'] ordered=True
+  'head_name': str
+  'head_sex': category ['Male', 'Female'] ordered=True
+  'head_age': int8
+  'educ': category ['None', 'Secondary'] ordered=True
+  'hhsize': float64
+  'income': float32
+  'water': category ['Yes'] ordered=True
+  'weight': float64
+  'int_date': datetime64[s]
+  'synced': datetime64[ms]
+,hhid,region,head_name,head_sex,head_age,educ,hhsize,income,water,weight,int_date,synced
+4,10305,East,Ewa Kowalczyk,Female,29,,2.0,,,301.4,2024-03-07,
+5,10306,East,Thắng Nguyễn,Male,51,Secondary,,980.0,Yes,301.4,2024-03-07,2024-03-08 12:00:00.000
+6,10407,West,Søren Dahl,Male,70,None,1.0,410.75,,275.0,,2024-03-09 09:15:30.005
+7,10408,West,Zainab Bello,Female,44,Secondary,6.0,1875.0,Yes,275.0,2024-03-09,2024-03-09 09:15:30.005
+-- chunk
+shape: 3 x 12
+  'hhid': int32
+  'region': category ['Capital', 9] ordered=True
+  'head_name': str
+  'head_sex': category ['Male', 'Female'] ordered=True
+  'head_age': float64
+  'educ': category ['Tertiary', 9.0] ordered=True
+  'hhsize': int16
+  'income': float32
+  'water': category ['No', 'Yes', 9] ordered=True
+  'weight': float64
+  'int_date': datetime64[s]
+  'synced': datetime64[ms]
+,hhid,region,head_name,head_sex,head_age,educ,hhsize,income,water,weight,int_date,synced
+8,10509,Capital,Chen Wei,Male,38.0,Tertiary,4,5120.5,Yes,260.25,2024-03-11,2024-03-11 20:59:59.999
+9,10510,Capital,Ana-María Oyarzún,Female,,,3,,No,260.25,2024-03-11,2024-03-11 20:59:59.999
+10,10511,9,Unknown,,0.0,9.0,0,0.0,9,1.0,2024-03-12,
+$ chunks hh_survey_w3.dta 4 convert_categoricals=False columns=hhid,region,income
+-- chunk
+shape: 4 x 3
+  'hhid': int32
+  'region': int8
+  'income': float32
+,hhid,region,income
+0,10101,1,1250.5
+1,10102,1,640.0
+2,10203,2,2310.25
+3,10204,2,
+-- chunk
+shape: 4 x 3
+  'hhid': int32
+  'region': int8
+  'income': float32
+,hhid,region,income
+4,10305,3,
+5,10306,3,980.0
+6,10407,4,410.75
+7,10408,4,1875.0
+-- chunk
+shape: 3 x 3
+  'hhid': int32
+  'region': int8
+  'income': float32
+,hhid,region,income
+8,10509,5,5120.5
+9,10510,5,
+10,10511,9,0.0
+$ chunks cpi_regions.dta 3 columns=region,month,cpi
+-- chunk
+shape: 3 x 3
+  'region': category ['Coast', 'Highlands', 'Amazon'] ordered=True
+  'month': datetime64[s]
+  'cpi': float32
+,region,month,cpi
+0,Coast,2023-01-01,101.3
+1,Coast,2023-02-01,101.9
+2,Highlands,2023-03-01,99.8
+-- chunk
+shape: 3 x 3
+  'region': category ['Coast', 'Highlands', 'Amazon'] ordered=True
+  'month': datetime64[s]
+  'cpi': float32
+,region,month,cpi
+3,Highlands,2023-04-01,100.4
+4,Amazon,2023-05-01,103.75
+5,Amazon,2023-06-01,104.2
+-- chunk
+shape: 2 x 3
+  'region': category ['Coast', 'Highlands', 'Amazon'] ordered=True
+  'month': datetime64[s]
+  'cpi': float32
+,region,month,cpi
+6,Coast,2023-07-01,102.6
+7,Highlands,2023-08-01,100.9
+$ chunks clinic_visits.dta 5 columns=index,dx,notes
+-- chunk
+shape: 5 x 3
+  'index': int32
+  'dx': category ['asthma', 'copd', 'hypertension', 'otitis'] ordered=True
+  'notes': str
+,index,dx,notes
+0,100,hypertension,BP still high; increase amlodipine to 10 mg.
+1,101,asthma,Inhaler technique reviewed.
+2,102,hypertension,
+3,103,otitis,"Left ear, amoxicillin 7 days. Parent informed about ""red flags""."
+4,104,asthma,No wheeze today.
+-- chunk
+shape: 1 x 3
+  'index': int32
+  'dx': category ['asthma', 'copd', 'hypertension', 'otitis'] ordered=True
+  'notes': str
+,index,dx,notes
+5,105,copd,Spirometry booked; FEV1/FVC 0.62 last time. Spirometry booked; FEV1/FVC 0.62 last time. Spirometry booked; FEV1/FVC 0.62 last time. Spirometry booked; FEV1/FVC 0.62 last time. Spirometry booked; FEV1/FVC 0.62 last time. 
+$ chunks trade_119.dta 4 convert_categoricals=False columns=decl,partner,flow
+-- chunk
+shape: 4 x 3
+  'decl': int32
+  'partner': str
+  'flow': int8
+,decl,partner,flow
+0,5500101,Germany,2
+1,5500102,Germany,2
+2,5500103,Ecuador,1
+3,5500104,China,1
+-- chunk
+shape: 2 x 3
+  'decl': int32
+  'partner': str
+  'flow': int8
+,decl,partner,flow
+4,5500105,Germany,2
+5,5500106,Panama,2
+$ chunks lfs_108.dta 2
+-- chunk
+shape: 2 x 7
+  'person': int16
+  'age': int8
+  'status': category ['Inactive', 'Employed', 'Unemployed'] ordered=True
+  'hours': float32
+  'earnings': float64
+  'surname': str
+  'sector': category ['Public', 'Private', 'Own account'] ordered=True
+,person,age,status,hours,earnings,surname,sector
+0,1,34,Employed,42.5,1520.0,Smith,Private
+1,2,51,Unemployed,38.0,1890.25,García,Public
+-- chunk
+shape: 2 x 7
+  'person': int16
+  'age': float64
+  'status': category ['Inactive', 'Employed', 'Unemployed'] ordered=True
+  'hours': float32
+  'earnings': float64
+  'surname': str
+  'sector': category ['Public', 'Private', 'Own account'] ordered=True
+,person,age,status,hours,earnings,surname,sector
+2,3,19.0,Employed,,640.0,O'Neil,Own account
+3,4,,Unemployed,40.0,,Müller,Private
+-- chunk
+shape: 1 x 7
+  'person': int16
+  'age': int8
+  'status': category ['Inactive', 'Employed', 'Unemployed'] ordered=True
+  'hours': float32
+  'earnings': float64
+  'surname': str
+  'sector': category [] ordered=True
+,person,age,status,hours,earnings,surname,sector
+4,5,66,Inactive,0.0,0.0,Ito,
+$ chunks empty_118.dta 2
+$ chunks hh_survey_w3.dta 0
+! ValueError: chunksize must be a positive integer when set.
+$ read release_116.dta
+! ValueError: Version of given Stata file is 116. pandas supports importing versions 102, 103, 104, 105, 108, 110 (Stata 7), 111 (Stata 7SE),  113 (Stata 8/9), 114 (Stata 10/11), 115 (Stata 12), 117 (Stata 13), 118 (Stata 14/15/16), and 119 (Stata 15/16, over 32,767 variables).
+$ read v112.dta
+! ValueError: Version of given Stata file is 112. pandas supports importing versions 102, 103, 104, 105, 108, 110 (Stata 7), 111 (Stata 7SE),  113 (Stata 8/9), 114 (Stata 10/11), 115 (Stata 12), 117 (Stata 13), 118 (Stata 14/15/16), and 119 (Stata 15/16, over 32,767 variables).
+$ read survey.csv.dta
+! error: unpack requires a buffer of 58458 bytes
+$ read nowhere.dta
+! FileNotFoundError: [Errno 2] No such file or directory: 'data/nowhere.dta'
+$ meta release_116.dta
+! ValueError: Version of given Stata file is 116. pandas supports importing versions 102, 103, 104, 105, 108, 110 (Stata 7), 111 (Stata 7SE),  113 (Stata 8/9), 114 (Stata 10/11), 115 (Stata 12), 117 (Stata 13), 118 (Stata 14/15/16), and 119 (Stata 15/16, over 32,767 variables).
