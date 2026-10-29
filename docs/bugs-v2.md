@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| false-positive | 68 |
+| false-positive | 69 |
 | diagnostics | 63 |
 | missing-feature | 49 |
 | perf | 39 |
@@ -77,7 +77,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | typecheck | 118 |
 | mir | 58 |
 | mir-llvm | 49 |
-| ownership | 30 |
+| ownership | 31 |
 | interp | 25 |
 | cli | 25 |
 | codegen | 22 |
@@ -99,7 +99,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-28-3 | 2026-10-28 | mir-llvm | low | A compiled program's run time moves 10-20% with where its hot function lands, and the runtime archive is one of the things that moves it: kata 125 runs about 10% slower whenever karac.main sits at 16 mod 64 (the full archive's larger headers shift user code by 0x3130 bytes), kata 28 KMP 0.41 vs 0.52 s between layouts; no alignment setting tried removes the swing without slowing another program 7-20% | — |
 | B-2026-10-28-10 | 2026-10-28 | mir-llvm | low | An auto-par build of apps/cli/mini_inflect takes about 13 s against 6 s with KARAC_AUTO_PAR=0 (20 s before 630f13fdf6 and the unit schedule, KARAC_MIR_UNIT_SCHEDULE). The cost is one function, not the parallel program as a whole: statement auto-par makes `new_tab` (the inflection tables, run once) a 25-task coroutine, and its `new_tab#resume` (51,722 instructions) costs 3.7 s of opt + llc alone, against 1.2 s for the in-order `new_tab#seq`. Corrected 10-29: the parallel module costs 1.18x the in-order one's CPU, not 2.8x; the 2.8x was the two modules' wall times while they shared 4 cores | — |
 | B-2026-10-28-27 | 2026-10-28 | cli | low | The manifest keys design.md §4 promises for import names are not implemented: a dependency's `alias = "..."`, the optional `[package].import = "..."`, and the rule that a hyphen in a package name maps to `_` in the import path (`kara-data` is imported from `kara_data`); kara-data's `import data` depends on all three | — |
-| B-2026-10-28-32 | 2026-10-28 | typecheck | medium | `prefix ?? default` on a bare (borrowed) `Option[String]` parameter is refused as "'??' requires an `Option` or a `Result` on the left, found 'ref Option[String]'" with the help "an unwrapped value needs no fallback — drop the '?? ...'", which is wrong advice; the same on `Option[i64]` checks and runs, and `prefix.clone() ?? default` is the fix the message should offer | — |
 | B-2026-10-28-33 | 2026-10-28 | mir-llvm | medium | The MIR compiled backend runs kata 5's expand-around-center seq bench 1.22x legacy's instructions and 1.45x its cycles, turning a kata that beat Rust (0.95x) into one that trails it (1.17x rustc -O, 1.28x overflow-checked rustc, 1.43x clang -O3) | — |
 | B-2026-10-28-34 | 2026-10-28 | mir-llvm | medium | The MIR compiled backend runs kata 2's add-two-numbers seq bench 1.15x legacy's instructions and 1.17x its cycles, so kara drops from clang -O3 parity (1.01x) to 1.23x C | — |
 | B-2026-10-28-35 | 2026-10-28 | autopar+runtime | medium | Kata 4's auto-par binary executes a constant +207M instructions (+37%) whenever it has two or more workers, and two workers buy no speedup at twice the CPU: 6.9 ms at 18 workers against rayon's 4.1 ms and the legacy karac_par_reduce build's 3.9 ms | — |
@@ -114,7 +113,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-29-4 | 2026-10-29 | typecheck | low | A borrowed parameter or match binding put in an array literal where an owned `Vec[String]` is wanted (`count([key].to_vec())`, `key` a bare `String` parameter or a `Some(key)` arm on a borrowed `Option[String]`) gets only `expected 'ref Vec[String]', found 'Vec[ref String]'`, with no hint and no fix, while the same through a `Some(ref key)` binding gets borrow_projection_copy's message and a machine-applicable `.clone()` | — |
 | B-2026-10-29-5 | 2026-10-29 | typecheck | medium | A `fold` whose result is the payload of an enum-variant constructor in tail position is refused: in `fn total(v: Vec[i64]) -> Val { Val.I(v.iter().fold(0, |a, x| a.wrapping_add(*x))) }` the fold takes the function's return type `Val` as its accumulator ("expected 'Val', found 'i64'" at the `0`, "no method 'wrapping_add' on type 'Val'"), though `let a = Val.I(..)` and `Some(Val.I(..))` check | — |
 | B-2026-10-29-6 | 2026-10-29 | typecheck | medium | An `if` or `match` whose type is known (a function's tail, or a `let` with an annotation) does not pass it into its branches, so `strs.iter().map(|s| s.chars().skip(n).collect()).collect()` in a branch is E0238 "cannot infer type parameter 'C'" for the inner collect, though the same expression checks as the function's tail, after `return`, or as a typed `let`'s whole initializer | — |
-| B-2026-10-29-10 | 2026-10-29 | ownership+mir | medium | `for n in v { out.push(n ?? String.new()); }` over a `Vec[Option[String]]` (so `n` is `ref Option[String]`) passes `karac check` and is refused only by the MIR build ("cannot move a non-`Copy` value out of a borrowed place: take a copy with `.clone()`"); check should report it with the `.clone()` fix, and B-2026-10-28-32 is the same `??` on a bare parameter refused by check with the wrong help | — |
 | B-2026-10-29-14 | 2026-10-29 | typecheck | low | `total([a, b].to_vec())` with `a` and `b` borrowed parameters and `total(ps: Vec[P])` is E0200 "expected 'ref Vec[P]', found 'Vec[ref P]'" with no help and no fix, while the same values pushed one by one (`v.push(a)`) get "cannot give away parameter `a`" with a machine-applicable `own` on the parameter | — |
 | B-2026-10-29-15 | 2026-10-29 | effect+mir | low | A `FileSystem` provider whose handle methods (`read_handle`, `write_handle`, `close`) use a resource overridden where the provider is bound is refused only by the MIR build (`error[mir]: providers: ... uses `Stdout`, which is overridden ...`); §14.11 (b2655d3ef) requires `karac check` to report it as a structured diagnostic naming the method and the resource | — |
 | B-2026-10-29-18 | 2026-10-29 | typecheck | low | Comparing `x.count_ones()` (a `u32`) with an `i64` is refused with E0208 and no machine-applicable fix, though `as i64` widens without loss and E0200 already offers that cast | — |
@@ -128,6 +126,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-29-46 | 2026-10-29 | ownership | medium | `method_param_modes` is keyed by `"Type.method"`, so a type with two impls of one operator trait (`impl Add for Col` with a borrowing `rhs: Col` and `impl Add[Flags] for Col` with `rhs: own Flags`) gives every `col + x` the LAST impl's parameter modes: `a + b` then `a + b` is refused as a use of moved `b`, though the impl `a + b` calls borrows it and the MIR build runs it | — |
 | B-2026-10-29-47 | 2026-10-29 | ownership | medium | A program's own `struct Mask` is read as the SIMD scalar `Mask` by D5 (`COPY_SCALARS` in src/d5_params.rs lists "Mask" by name), so a bare `m: Mask` parameter is not rewritten to `ref Mask` and every call moves its argument: `count(m)` twice is refused as a use of moved `m`, and the same struct renamed `Bits` checks and runs | — |
 | B-2026-10-29-48 | 2026-10-29 | effect | low | With a program `impl Mul[Col] for f64`, every `f64 * f64` in the program is attributed to that impl's `f64.mul` by the effect checker: a helper doing `*x * k` that the impl calls is reported as a mutual recursion group with `f64.mul`, and the impl's effects flow to every float multiplication | — |
+| B-2026-10-29-49 | 2026-10-29 | ownership | medium | A `let` closure whose parameter is typed `Str` still moves a `String` argument in `karac check` (`let skip = |n: Str| ..; skip(n); n.len()` is "moved here, used again here"); `|n: String|` and `fn skip(n: Str)` check, and `__mir-run` runs all three | — |
 
 ### Relocated
 
@@ -369,6 +368,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-28-29 | mir | medium | `Ok((n, it.map(..).collect()))` and `Some((n, it.map(..).collect()))` pass `karac check` but the MIR build refuses them (an expression whose type doe… | cd5a50673e |
 | B-2026-10-28-30 | mir-llvm | medium | `s = s + (n - x).to_string()` copies `s` on every add, so building a string in a loop is quadratic: the concat pass (src/mir/concat.rs) gives up when… | f59be6dac3 |
 | B-2026-10-28-31 | parser+cli | low | `if c { a = x } else { b = y }` (an assignment ending each arm, no `;`) gets a correct `;` fix-it for the first arm only, and `karac fix` refuses to… | d9df626fe4 |
+| B-2026-10-28-32 | typecheck | medium | `prefix ?? default` on a bare (borrowed) `Option[String]` parameter is refused as "'??' requires an `Option` or a `Result` on the left, found 'ref Op… | 03e92379b1 |
 | B-2026-10-28-36 | mir-llvm+runtime | medium | Every compute-only binary is about 250 KB larger on the MIR backend: a seq kata binary is 337 KB at g04628b0eb against 85 KB from legacy, and the aut… | 1f4c30c7de |
 | B-2026-10-28-39 | mir-llvm | medium | The MIR backend never ported legacy's partial-unroll hint (`llvm.loop.unroll.count 4` on pure-scalar counted `while` loops, B-2026-07-08-24), so kata… | 721602d810 |
 | B-2026-10-29-1 | parser | medium | A function-typed parameter in Rust's spelling, `f: impl Fn(i64) -> i64` or `f: fn(i64) -> i64`, gets only a bare parse error (`Expected RightParen, f… | 38876d470b |
@@ -376,6 +376,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-29-7 | parser | low | The fix for a Rust closure return type (`\|r: i64\| -> Vec[String] { ..collect() }`) deletes `-> Vec[String]` and leaves a closure whose body cannot in… | 0a5d255d8a |
 | B-2026-10-29-8 | parser | low | The turbofish fix on a `collect::[Vec[String]]()` in the middle of a chain (`"(" + it.collect::[Vec[String]]().join(", ") + ")"`) deletes the type ar… | 0a5d255d8a |
 | B-2026-10-29-9 | mir | medium | `let v: Vec[Option[String]] = [None].to_vec();` passes `karac check` but does not build on MIR: `an expression whose type does not lower (Type(Unknow… | af7bbf1e39 |
+| B-2026-10-29-10 | ownership+mir | medium | `for n in v { out.push(n ?? String.new()); }` over a `Vec[Option[String]]` (so `n` is `ref Option[String]`) passes `karac check` and is refused only… | 03e92379b1 |
 | B-2026-10-29-11 | interp | medium | `for x in v.iter()` over a `Vec` calls the library `VecIter.next` once an element, so in the MIR interpreter it runs 8.5 times slower than `for x in… | 70e887275e |
 | B-2026-10-29-12 | mir-llvm | low | Kata 1011's bench built with auto-par on (the default) runs 1.23 times the time and 16% more instructions than with `KARAC_AUTO_PAR=0`, though nothin… | 70e887275e |
 | B-2026-10-29-13 | parser | low | A keyword used as a binding name (`let and = op == "&";`) gets E0003 with a fix renaming the binding to `r#and`, but each use (`if and { . | 9d11090195 |
