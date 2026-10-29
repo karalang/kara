@@ -59,9 +59,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | false-positive | 59 |
-| diagnostics | 51 |
+| diagnostics | 53 |
 | missing-feature | 48 |
-| perf | 29 |
+| perf | 34 |
 | soundness | 24 |
 | miscompile | 14 |
 | run-vs-build | 9 |
@@ -73,15 +73,15 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 108 |
+| typecheck | 109 |
 | mir | 52 |
-| mir-llvm | 35 |
+| mir-llvm | 40 |
 | ownership | 26 |
 | interp | 23 |
 | codegen | 22 |
 | cli | 22 |
-| runtime | 13 |
-| parser | 12 |
+| runtime | 14 |
+| parser | 13 |
 | other | 3 |
 | resolver | 3 |
 | effect | 2 |
@@ -114,6 +114,11 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-28-36 | 2026-10-28 | mir-llvm+runtime | medium | Every compute-only binary is about 250 KB larger on the MIR backend: a seq kata binary is 337 KB at g04628b0eb against 85 KB from legacy, and the auto-par one 404 KB | — |
 | B-2026-10-28-37 | 2026-10-28 | other | low | Compiling a 40-line kata now takes about 158 ms and 68 MB peak against 92 ms and 24 MB in July, slower and larger than rustc -O on the same program (102 ms, 32 MB), and `karac run` of kata 1's 1.8 ms hash_map program takes 106 ms | — |
 | B-2026-10-28-38 | 2026-10-28 | autopar | low | Auto-par fans out kata 1's hash_map two-sum, a 2 ms program, for no wall-clock gain: the default build runs 31.2M instructions and 15.3M cycles at 223% CPU against 26.8M and 7.0M for its KARAC_AUTO_PAR=0 twin, where the legacy runtime declined it | — |
+| B-2026-10-28-39 | 2026-10-28 | mir-llvm | medium | The MIR backend never ported legacy's partial-unroll hint (`llvm.loop.unroll.count 4` on pure-scalar counted `while` loops, B-2026-07-08-24), so kata 70's Fibonacci recurrence runs 1.58x legacy's instructions; adding the one hint to MIR's IR closes 89% of the gap | — |
+| B-2026-10-28-40 | 2026-10-28 | mir-llvm | medium | MIR checks the full upper bound on indexes legacy proved in range from the loop guard, and the extra checks push kata 139's 4-trip inner loop over LLVM's peel budget: 2.03x legacy's instructions, 97.8% of it recovered by removing two bounds checks | — |
+| B-2026-10-28-41 | 2026-10-28 | mir-llvm | medium | MIR never ported legacy's binary-search midpoint assume (B-2026-06-16-1) and passes a Slice through memory, so `len` reaches IPSCCP only after inlining: kata 153's search loop runs 14 instructions per iteration against legacy's 9 (1.55x), and the same shape regresses katas 34, 35, 74 and 275 | — |
+| B-2026-10-28-42 | 2026-10-28 | mir-llvm+runtime | high | MIR heap-copies every string literal a function returns and builds `a + " " + b` one realloc per operand (copying a dead left operand), where legacy returned a borrowed static and allocated a `+` chain once: kata 273 runs 2.31x legacy's instructions and 2.3x its mallocs | — |
+| B-2026-10-28-43 | 2026-10-28 | mir-llvm | medium | MIR stores the panic location into `@karac.site` / `@karac.site.len` on every loop latch and before every unwrap, and since da5bdc59fc (B-2026-10-26-7) those globals are thread_local, a TLV-getter call per access on Mach-O: kata 38 went 1.17x -> 1.67x legacy's instructions | — |
 | B-2026-10-29-1 | 2026-10-29 | parser | medium | A function-typed parameter in Rust's spelling, `f: impl Fn(i64) -> i64` or `f: fn(i64) -> i64`, gets only a bare parse error (`Expected RightParen, found LeftParen` at the `(`; `Expected type, found Fn` for `fn`) with no hint that Kāra writes `Fn(i64) -> i64`, and no fix-it, so `karac fix` leaves it | — |
 | B-2026-10-29-2 | 2026-10-29 | typecheck | high | A closure that passes a captured `String` to `replace`, `replacen`, `split`, `find` or `strip_prefix` on its parameter (`|s| s.replace(old, new)`) is typed as consuming the capture, so it is once-callable and `.map(...)` or any `Fn` slot refuses it; all five take `Str` (strings.md), and `starts_with`, `contains` and `ends_with` with the same capture pass | — |
 | B-2026-10-29-3 | 2026-10-29 | typecheck+cli | low | `s.bytes().collect()` is refused with a message that spells out the rewrite ("iterator adaptors/terminals require an explicit `.iter()` — write `s.bytes().iter().collect(...)`") but the diagnostic carries no fix, so `karac fix` leaves it for a hand edit | — |
@@ -125,6 +130,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-29-9 | 2026-10-29 | mir | medium | `let v: Vec[Option[String]] = [None].to_vec();` passes `karac check` but does not build on MIR: `an expression whose type does not lower (Type(UnknownParam("T"))) is not lowered yet`, also as a function's `return [None].to_vec();` with a `Vec[Option[String]]` return type; `let none: Option[String] = None; [none].to_vec()` builds | — |
 | B-2026-10-29-10 | 2026-10-29 | ownership+mir | medium | `for n in v { out.push(n ?? String.new()); }` over a `Vec[Option[String]]` (so `n` is `ref Option[String]`) passes `karac check` and is refused only by the MIR build ("cannot move a non-`Copy` value out of a borrowed place: take a copy with `.clone()`"); check should report it with the `.clone()` fix, and B-2026-10-28-32 is the same `??` on a bare parameter refused by check with the wrong help | — |
 | B-2026-10-29-12 | 2026-10-29 | mir-llvm | low | Kata 1011's bench built with auto-par on (the default) runs 1.23 times the time and 16% more instructions than with `KARAC_AUTO_PAR=0`, though nothing fans out | — |
+| B-2026-10-29-13 | 2026-10-29 | parser | low | A keyword used as a binding name (`let and = op == "&";`) gets E0003 with a fix renaming the binding to `r#and`, but each use (`if and { .. } else { .. }`) gets the same E0003 with no replacement, so `karac fix` leaves the binding renamed and every use not; the uses also cascade into "'else' is a reserved keyword" at the `else`, and a use inside a closure is reported twice | — |
+| B-2026-10-29-14 | 2026-10-29 | typecheck | low | `total([a, b].to_vec())` with `a` and `b` borrowed parameters and `total(ps: Vec[P])` is E0200 "expected 'ref Vec[P]', found 'Vec[ref P]'" with no help and no fix, while the same values pushed one by one (`v.push(a)`) get "cannot give away parameter `a`" with a machine-applicable `own` on the parameter | — |
 
 ### Relocated
 
