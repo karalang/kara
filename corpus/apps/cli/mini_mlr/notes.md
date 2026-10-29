@@ -128,12 +128,12 @@ first written.
   mismatch, and the fixes `karac fix` offers (an `own` parameter and a
   `.clone()` on every argument) cascade into the callers. `top`'s binary
   search compares with named functions (`ahead`, `behind`) instead.
-- **B-2026-10-28-25** (open): `let r = match rx { Some(ref r) => r,
-  None => ... }`, the form `karac fix` writes for an `Option` matched in
-  a loop, is refused by `karac check` and by the MIR build when the
-  payload type has no `.clone()` (here a `Regex`); the same code over an
-  `Option[String]` passes. `having-fields` uses the regex inside the
-  arm instead.
+- **B-2026-10-28-25** (fixed in kara af329e798c and 0d1ad90014):
+  `let r = match rx { Some(ref r) => r, None => ... }`, the form
+  `karac fix` writes for an `Option` matched in a loop, was refused by
+  `karac check` and by the MIR build when the payload type has no
+  `.clone()` (here a `Regex`). `having-fields` binds the regex that way
+  again.
 
 ## What a dataframe API would need (notes for M4c)
 

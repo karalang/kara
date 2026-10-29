@@ -2541,18 +2541,14 @@ fn v_having_fields(v: Verb, recs: own Vec[Rec]) -> Result[Vec[Rec], String] {
             "--which-are" => keys.len() == names.len() and names.iter().all(|n| rec.has(n)),
             "--at-most" => keys.iter().all(|k| names.contains(k)),
             _ => {
-                // B-2026-10-28-25: `let r = match rx { Some(ref r) => r, .. }`,
-                // the form `karac fix` writes for the regex moved in the
-                // loop, is refused for a type with no `.clone()`, so the
-                // regex is used inside the arm.
-                let hits = match rx {
-                    Some(ref r) => keys.iter().filter(|k| r.is_match(k)).count(),
+                let r = match rx {
+                    Some(ref r) => r,
                     None => return Err(f"mlr having-fields: option \"{mode}\" not recognized.\n"),
                 };
                 match mode.as_str() {
-                    "--all-matching" => keys.len() > 0 and hits == keys.len(),
-                    "--any-matching" => hits > 0,
-                    _ => hits == 0,
+                    "--all-matching" => keys.len() > 0 and keys.iter().all(|k| r.is_match(k)),
+                    "--any-matching" => keys.iter().any(|k| r.is_match(k)),
+                    _ => not keys.iter().any(|k| r.is_match(k)),
                 }
             }
         };
