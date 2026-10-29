@@ -246,6 +246,192 @@ impl<'l, 'a> Bx<'l, 'a> {
         Ok(true)
     }
 
+    /// The default `method` of the trait `tr` (the `dyn` type's own or a
+    /// supertrait) run on the `dyn` type `t`, with its `Self` and trait
+    /// arguments. `None` when the trait declares no such default body.
+    pub(super) fn dyn_impl_method(
+        &self,
+        t: Ty,
+        tr: &str,
+        method: &str,
+    ) -> Option<(DefId, Vec<Ty>)> {
+        let tcx = self.tys().tcx();
+        let HK::Dyn { trait_, args, .. } = tcx.kind(t) else {
+            return None;
+        };
+        let d = self.lcx.defs.lookup(0, tr)?;
+        let mut path = self.lcx.defs.table.get(d).path.segments.clone();
+        path.push(method.to_string());
+        let m = self.lcx.defs.table.lookup(&DefPath::new(path))?;
+        let item = self.lcx.fns.get(&m).filter(|i| i.impl_dyn.is_some())?;
+        // The trait's own arguments: the `dyn` type's leading ones for its
+        // own trait; a supertrait's are not written on the `dyn` type, so
+        // only one with none is reached.
+        let own = item.impl_params - 1;
+        let targs = if self.lcx.def_name(trait_) == tr {
+            tcx.list(args).get(..own)?.to_vec()
+        } else if own == 0 {
+            Vec::new()
+        } else {
+            return None;
+        };
+        let mut inst = vec![t];
+        inst.extend(targs);
+        Some((m, inst))
+    }
+
+    /// `object.method(args)` of a `dyn` receiver whose method is in no slot
+    /// (a default method such as `map`, which takes `Self` by value or is
+    /// generic): the trait's default body, instanced at the `dyn` type.
+    /// `callee` is the trait's declaration of the method, `own` the
+    /// method's own type arguments.
+    pub(super) fn dyn_default_call(
+        &mut self,
+        e: &'a Expr,
+        object: &'a Expr,
+        callee: DefId,
+        own: Vec<Ty>,
+        args: &'a [CallArg],
+        dest: Place,
+    ) -> R<bool> {
+        if !self
+            .lcx
+            .fns
+            .get(&callee)
+            .is_some_and(|i| i.impl_dyn.is_some())
+        {
+            return Ok(false);
+        }
+        let rt = self.expr_ty(object)?;
+        let Some(dyn_ty) = self.dyn_under(rt) else {
+            return Ok(false);
+        };
+        let segs = &self.lcx.defs.table.get(callee).path.segments;
+        let (Some(method), Some(tr)) = (segs.last().cloned(), segs.iter().rev().nth(1).cloned())
+        else {
+            return Ok(false);
+        };
+        let Some((d, mut inst)) = self.dyn_impl_method(dyn_ty, &tr, &method) else {
+            return Ok(false);
+        };
+        inst.extend(own);
+        self.user_method_call(e, object, d, inst, args, dest)?;
+        Ok(true)
+    }
+
+    /// In a generic body instanced at a `dyn` type (`[I: Iterator]` at a
+    /// `dyn Iterator`), where the call records no callee: the trait's
+    /// default `method` for the receiver `rt`, its own type arguments read
+    /// off the arguments and the result `ret`.
+    pub(super) fn dyn_default_by_receiver(
+        &mut self,
+        rt: Ty,
+        method: &str,
+        args: &'a [CallArg],
+        ret: Option<Ty>,
+    ) -> R<Option<(DefId, Vec<Ty>)>> {
+        let Some(dyn_ty) = self.dyn_under(rt) else {
+            return Ok(None);
+        };
+        let HK::Dyn { trait_, .. } = self.tys().tcx().kind(dyn_ty) else {
+            return Ok(None);
+        };
+        let mut frontier = std::collections::VecDeque::from([self.lcx.def_name(trait_)]);
+        let mut seen = FxHashSet::default();
+        let mut owner = None;
+        while let Some(tr) = frontier.pop_front() {
+            if !seen.insert(tr.clone()) {
+                continue;
+            }
+            let Some(&def) = self.lcx.trait_defs.get(&tr) else {
+                continue;
+            };
+            let declares = def.items.iter().any(|it| {
+                matches!(it, ast::TraitItem::Method(m) if m.name == method && m.body.is_some())
+            });
+            if declares {
+                owner = Some(tr);
+                break;
+            }
+            frontier.extend(
+                def.supertraits
+                    .iter()
+                    .filter_map(|b| b.path.last().cloned()),
+            );
+        }
+        let Some((d, inst)) = owner.and_then(|tr| self.dyn_impl_method(dyn_ty, &tr, method)) else {
+            return Ok(None);
+        };
+        let generic = self.lcx.fns[&d]
+            .f
+            .generic_params
+            .as_ref()
+            .is_some_and(|g| !g.params.is_empty());
+        if generic {
+            return self.own_generics_from_args(d, inst, args, ret);
+        }
+        Ok(Some((d, inst)))
+    }
+
+    /// `next` for a loop over an owned `dyn` value of an `Iterator`: its
+    /// slot, which [`Self::dyn_next_func`] turns the returned `NextFn` into.
+    pub(super) fn dyn_iterator_next(&mut self, iterable: &'a Expr) -> R<Option<NextFn>> {
+        let before = self.errors.len();
+        let Ok(t) = self.expr_ty(iterable) else {
+            self.errors.truncate(before);
+            return Ok(None);
+        };
+        let tcx = self.tys().tcx();
+        let HK::Dyn { trait_, args, .. } = tcx.kind(t) else {
+            return Ok(None);
+        };
+        let has_next = self
+            .dyn_slots(t)
+            .iter()
+            .any(|(tr, m)| tr == "Iterator" && m.name == "next");
+        let tr = self.lcx.def_name(trait_);
+        let item = self
+            .lcx
+            .dyn_assoc_index(&tr, "Item")
+            .and_then(|i| tcx.list(args).get(i).copied());
+        let (true, Some(item)) = (has_next, item) else {
+            return Ok(None);
+        };
+        let Some(opt_t) = self.option_of(item) else {
+            return Ok(None);
+        };
+        let Some(next) = self.lcx.defs.lookup(0, "Iterator").and_then(|d| {
+            let mut path = self.lcx.defs.table.get(d).path.segments.clone();
+            path.push("next".to_string());
+            self.lcx.defs.table.lookup(&DefPath::new(path))
+        }) else {
+            return Ok(None);
+        };
+        Ok(Some((next, vec![t], String::new(), opt_t)))
+    }
+
+    /// The callee of a loop's `next`: the `dyn` value's slot for the
+    /// `NextFn` [`Self::dyn_iterator_next`] made (no instance name, the
+    /// `dyn` type its one argument), else the instance.
+    pub(super) fn dyn_next_func(&self, (d, args, name, _): &NextFn) -> Operand {
+        if let ([t], true) = (args.as_slice(), name.is_empty()) {
+            let slot = self
+                .dyn_slots(*t)
+                .iter()
+                .position(|(tr, m)| tr == "Iterator" && m.name == "next");
+            if let Some(slot) = slot {
+                return Operand::Const(Const {
+                    ty: self.unit(),
+                    kind: ConstKind::DynSlot {
+                        dyn_ty: *t,
+                        slot: slot as u32,
+                    },
+                });
+            }
+        }
+        self.fn_operand(name, *d, args.clone())
+    }
+
     /// A slot method's parameter as its instances take it, from the
     /// argument's type: every impl's parameter has the trait's type, so its
     /// mode follows the declaration (`ref`, `mut ref`, or D5's borrow of a

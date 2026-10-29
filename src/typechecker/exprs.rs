@@ -7060,6 +7060,22 @@ impl<'a> super::TypeChecker<'a> {
                 return true;
             }
         }
+        // design.md § `dyn Trait`: a `dyn` type implements its trait and the
+        // trait's supertraits, through the compiler-supplied impl.
+        if let Type::Dyn {
+            trait_name: dyn_trait,
+            ..
+        } = ty
+        {
+            if self
+                .env
+                .supertrait_closure_traits(dyn_trait)
+                .iter()
+                .any(|t| t == trait_name)
+            {
+                return true;
+            }
+        }
         // Built-in coverage via the type_supports_* helpers — these
         // recognize primitives implicitly + named types via
         // `#[derive(Trait)]` registration.

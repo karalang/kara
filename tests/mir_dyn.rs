@@ -269,8 +269,8 @@ fn main() {
 /// A value of a type that does not implement the trait, or implements it
 /// with another associated type, a borrow into an owned `dyn`, a `dyn` type
 /// leaving an associated type unbound, and a method the trait does not
-/// have are errors. A default method with no slot, and a `dyn` of a
-/// primitive, are refused until the builder builds them.
+/// have are errors. A `dyn` of a primitive is refused until the builder
+/// builds it.
 #[test]
 fn mir_dyn_refuses_what_it_cannot_coerce_or_call() {
     let cases = [
@@ -293,10 +293,6 @@ fn mir_dyn_refuses_what_it_cannot_coerce_or_call() {
         (
             "fn main() { let g: dyn Shape = Circle { r: 1.0 }; g.perimeter(); }",
             "no method 'perimeter' on `dyn Shape`",
-        ),
-        (
-            "struct C { i: i64 }\nimpl Iterator for C { type Item = i64; fn next(mut ref self) -> Option[i64] { None } }\nfn main() { let c: dyn Iterator[Item = i64] = C { i: 0 }; let v: Vec[i64] = c.map(|x| x + 1).collect(); }",
-            "E_DYN_TRAIT_NOT_IMPLEMENTED_YET]: `map` cannot be called through `dyn Iterator[Item = i64]` yet",
         ),
         (
             "impl Shape for i64 { fn area(self) -> f64 { 1.0 } }\nfn main() { let a: dyn Shape = 5; }",
@@ -378,6 +374,117 @@ struct P { n: i64 }
 impl Pair for P { fn pair(self) -> Vec[P] { vec![P { n: self.n }] } fn one(self) -> i64 { self.n } }
 fn main() { let d: dyn Pair = P { n: 1 }; let x = d.one(); let v = d.pair(); }
 "#,
-        "`pair` cannot be called through `dyn Pair` yet",
+        "`pair` cannot be called through `dyn Pair`",
     );
+}
+
+const COUNT: &str = r#"struct Count { i: i64, end: i64 }
+impl Iterator for Count {
+    type Item = i64;
+    fn next(mut ref self) -> Option[i64] {
+        if self.i < self.end { self.i += 1; Some(self.i) } else { None }
+    }
+}
+fn make(n: i64) -> dyn Iterator[Item = i64] { Count { i: 0, end: n } }
+"#;
+
+/// A default method with no slot (`map`, `filter`, `sum`, `collect`, which
+/// are generic or take `Self` by value) runs its body with `Self` the `dyn`
+/// type, its calls to `next` dispatching; one with a slot (`any`) runs the
+/// value's own copy. A `for` loop over an owned `dyn` iterator calls its
+/// `next` slot, and one through `mut ref dyn` reads it in place.
+#[test]
+fn mir_dyn_runs_iterator_default_methods() {
+    let src = format!(
+        "{COUNT}{}",
+        r#"fn drain(it: mut ref dyn Iterator[Item = i64]) -> i64 {
+    let mut t = 0;
+    while let Some(x) = it.next() { t += x; }
+    t
+}
+fn main() {
+    let s: i64 = make(4).sum();
+    let c = make(5).count();
+    let f = make(5).fold(0, |a, x| a + x * x);
+    let v: Vec[i64] = make(6).filter(|x| *x % 2 == 0).collect();
+    let m: Vec[bool] = make(3).map(|x| x == 2).collect();
+    println(f"{s} {c} {f} {v} {m}");
+    let mut it = make(5);
+    let a = it.any(|x| x == 2);
+    let n = it.next();
+    for x in make(2) { println(f"x {x}"); }
+    let mut total = 0;
+    for x in it { total += x; }
+    println(f"{a} {n} {total}");
+    let mut d: dyn Iterator[Item = i64] = Count { i: 0, end: 3 };
+    let mut k = Count { i: 0, end: 4 };
+    println(f"{drain(mut d)} {drain(mut k)}");
+    let words: dyn Iterator[Item = String] = vec!["a", "", "bc"].into_iter().map(|w| w.to_string());
+    let kept: Vec[String] = words.filter(|w| w.len() > 0).collect();
+    println(f"{kept}");
+}
+"#
+    );
+    runs(
+        &src,
+        "10 5 55 [2, 4, 6] [false, true, false]\nx 1\nx 2\ntrue Some(3) 9\n6 10\n[a, bc]\n",
+    );
+}
+
+/// A generic function's `[I: Iterator]` takes a `dyn` iterator, and its
+/// calls of default methods run them at the `dyn` type; a `Vec` of them
+/// is consumed one by one.
+#[test]
+fn mir_dyn_fills_a_generic_parameter() {
+    let src = format!(
+        "{COUNT}{}",
+        r#"fn total[I: Iterator[Item = i64]](it: own I) -> i64 { it.sum() }
+fn main() {
+    println(f"{total(make(4))}");
+    let v: Vec[dyn Iterator[Item = i64]] = vec![make(2), make(3)];
+    for it in v.into_iter() {
+        let w: Vec[i64] = it.map(|x| x + 1).collect();
+        println(f"{w}");
+    }
+}
+"#
+    );
+    runs(&src, "10\n[2, 3]\n[2, 3, 4]\n");
+}
+
+/// A user trait's generic default methods run over a `dyn` value and a
+/// view of one, a supertrait's included, and one default calls another
+/// and the slots.
+#[test]
+fn mir_dyn_runs_generic_user_default_methods() {
+    let src = r#"trait Named {
+    fn id(self) -> i64;
+    fn tag[T](self, t: own T) -> (i64, T) { (self.id(), t) }
+}
+trait Shape: Named {
+    fn area(self) -> i64;
+    fn both[U](self, u: own U) -> (i64, U) {
+        let p: (i64, U) = self.tag(u);
+        (p.0 + self.area(), p.1)
+    }
+}
+struct Sq { s: i64 }
+impl Named for Sq { fn id(self) -> i64 { 100 } }
+impl Shape for Sq { fn area(self) -> i64 { self.s * self.s } }
+struct Pt {}
+impl Named for Pt { fn id(self) -> i64 { 7 } }
+impl Shape for Pt { fn area(self) -> i64 { 0 } }
+fn main() {
+    let d: dyn Shape = Sq { s: 3 };
+    let (a, b) = d.tag("x");
+    let (c, e) = d.both(true);
+    println(f"{a} {b} {c} {e}");
+    let shapes: Vec[dyn Shape] = vec![Sq { s: 2 }, Pt {}];
+    for s in shapes.iter() {
+        let (n, w) = s.both("w");
+        println(f"{n} {w}");
+    }
+}
+"#;
+    runs(src, "100 x 109 true\n104 w\n7 w\n");
 }

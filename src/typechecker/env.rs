@@ -1305,6 +1305,15 @@ impl TypeEnv {
         {
             return self.trait_reaches(has, trait_name);
         }
+        // A `dyn Trait` value is a `Trait` in the same way: the compiler
+        // supplies `impl Trait for dyn Trait`, whose required methods are the
+        // vtable's slots.
+        if let Type::Dyn {
+            trait_name: has, ..
+        } = ty
+        {
+            return self.trait_reaches(has, trait_name);
+        }
         let Some((ty_name, ty_args)) = impl_table_key(ty) else {
             // Type variables, function types, etc. don't appear in
             // `env.impls`. Conservative: drop. Generic call-site resolution

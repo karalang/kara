@@ -370,6 +370,7 @@ fn lower_program_inner<'a>(
         calls,
         errors: hir_errors,
     } = hir;
+    let defaults = trait_defaults(program, tc);
     let mut lcx = Lcx {
         tc,
         source,
@@ -492,7 +493,7 @@ fn lower_program_inner<'a>(
         extern_fns: FxHashMap::default(),
         cancel_at,
     };
-    lcx.index_functions(program);
+    lcx.index_functions(program, &defaults);
     // Statics are initialized in declaration order, so they are numbered
     // in it.
     for item in &program.items {
@@ -838,6 +839,9 @@ struct FnItem<'a> {
     /// (`impl From[S] for E` beside `impl From[T] for E`), which keeps
     /// its methods' bodies apart from the first impl's.
     impl_suffix: Option<String>,
+    /// A trait's default method (`TraitDefault`): the trait. Its first
+    /// argument is `Self`, a `dyn` type.
+    impl_dyn: Option<DefId>,
 }
 
 impl FnItem<'_> {
@@ -867,6 +871,89 @@ impl FnItem<'_> {
             None => targs.get(..self.impl_params).map(<[Ty]>::to_vec),
         }
     }
+}
+
+/// A trait's default method as a function of its own, called on a `dyn`
+/// value (design.md § `dyn Trait`): a default that is in no slot (`map`,
+/// `collect`) runs this body, instanced with `Self` the `dyn` type. Its
+/// generics are `Self` and the trait's, then the method's, as the checker
+/// placed the body's types.
+struct TraitDefault {
+    trait_name: String,
+    generics: ast::GenericParams,
+    f: Function,
+}
+
+/// The default methods with a receiver of each trait a `dyn` type the
+/// program makes names, and of their supertraits.
+fn trait_defaults(program: &ast::Program, tc: &TypeCheckResult) -> Vec<TraitDefault> {
+    let traits: FxHashMap<&str, &ast::TraitDef> = program
+        .items
+        .iter()
+        .filter_map(|i| match i {
+            Item::TraitDef(t) => Some((t.name.as_str(), t)),
+            _ => None,
+        })
+        .collect();
+    let mut work: Vec<&str> = tc
+        .node_dyn_coercions
+        .values()
+        .filter_map(|(_, target)| {
+            let mut t = target;
+            while let Type::Ref(inner) | Type::MutRef(inner) = t {
+                t = inner;
+            }
+            match t {
+                Type::Dyn { trait_name, .. } => Some(trait_name.as_str()),
+                _ => None,
+            }
+        })
+        .collect();
+    let mut seen = FxHashSet::default();
+    let mut out = Vec::new();
+    while let Some(name) = work.pop() {
+        if !seen.insert(name) {
+            continue;
+        }
+        let Some(&t) = traits.get(name) else { continue };
+        work.extend(
+            t.supertraits
+                .iter()
+                .filter_map(|b| b.path.last().map(String::as_str)),
+        );
+        let own = t.generic_params.as_ref();
+        let mut params = vec![ast::GenericParam {
+            name: "Self".to_string(),
+            bounds: Vec::new(),
+            is_const: false,
+            const_type: None,
+            variance: ast::Variance::Invariant,
+            variance_span: None,
+            is_variadic_shape: false,
+            default: None,
+            span: t.span,
+        }];
+        params.extend(own.iter().flat_map(|g| g.params.iter().cloned()));
+        let generics = ast::GenericParams {
+            params,
+            effect_params: Vec::new(),
+            span: t.span,
+        };
+        for it in &t.items {
+            let ast::TraitItem::Method(m) = it else {
+                continue;
+            };
+            if m.body.is_none() || m.self_param.is_none() || m.is_dyn_dispatchable() {
+                continue;
+            }
+            out.push(TraitDefault {
+                trait_name: t.name.clone(),
+                generics: generics.clone(),
+                f: crate::desugar::trait_method_to_function(m, t.stdlib_origin),
+            });
+        }
+    }
+    out
 }
 
 /// Whether `b` is `impl[T] Slice[T]`, the library's slice methods.
@@ -1302,7 +1389,33 @@ impl<'a> Lcx<'a> {
     /// DefId comes from the definition table, which numbered the program's
     /// impl blocks in item order after the stdlib's: a program's
     /// `impl Option[T]` is `impl#1` when the stdlib already has one.
-    fn index_functions(&mut self, program: &'a ast::Program) {
+    fn index_functions(&mut self, program: &'a ast::Program, defaults: &'a [TraitDefault]) {
+        for d in defaults {
+            let Some(tr) = self.defs.lookup(0, &d.trait_name) else {
+                continue;
+            };
+            let mut path = self.defs.table.get(tr).path.segments.clone();
+            path.push(d.f.name.clone());
+            let Some(m) = self.defs.table.lookup(&DefPath::new(path)) else {
+                continue;
+            };
+            self.fns.insert(
+                m,
+                FnItem {
+                    f: &d.f,
+                    impl_target: None,
+                    impl_params: d.generics.params.len(),
+                    impl_prim: None,
+                    impl_slice: false,
+                    impl_generics: Some(&d.generics),
+                    impl_arg_pos: None,
+                    impl_span: None,
+                    impl_dispatch: None,
+                    impl_suffix: None,
+                    impl_dyn: Some(tr),
+                },
+            );
+        }
         let baked = crate::prelude::STDLIB_PROGRAMS
             .iter()
             .map(|(_, p)| p)
@@ -1361,6 +1474,7 @@ impl<'a> Lcx<'a> {
                                 impl_span: None,
                                 impl_dispatch: None,
                                 impl_suffix: None,
+                                impl_dyn: None,
                             },
                         );
                     }
@@ -1494,6 +1608,7 @@ impl<'a> Lcx<'a> {
                                     impl_span: Some(SpanKey::from_span(&b.span)),
                                     impl_dispatch: impl_dispatch.clone(),
                                     impl_suffix: impl_suffix.clone(),
+                                    impl_dyn: None,
                                 },
                             );
                             let key = (target, prim, slice, impl_dispatch.clone(), &f.name);
@@ -1969,6 +2084,22 @@ impl<'a> Lcx<'a> {
                 if let Some(k) = impl_suffix {
                     s.push_str(k);
                 }
+                if !own.is_empty() {
+                    s = format!("{s}[{}]", show(own));
+                }
+                s
+            }
+            Some(FnItem {
+                impl_dyn: Some(tr),
+                impl_params,
+                ..
+            }) if !args.is_empty() => {
+                let (impl_args, own) = args.split_at((*impl_params).min(args.len()));
+                let mut s = self.tys.display(impl_args[0]);
+                if impl_args.len() > 1 {
+                    s = format!("{s} as {}[{}]", self.def_name(*tr), show(&impl_args[1..]));
+                }
+                s = format!("{s}.{name}");
                 if !own.is_empty() {
                     s = format!("{s}[{}]", show(own));
                 }
@@ -2489,6 +2620,38 @@ impl<'a> Lcx<'a> {
         Ok(())
     }
 
+    /// Where `assoc` sits in the arguments of a `dyn tr`: after the trait's
+    /// own generics, the associated types of the trait and its supertraits,
+    /// breadth-first and each once (the checker's `dyn_assoc_names`).
+    pub(super) fn dyn_assoc_index(&self, tr: &str, assoc: &str) -> Option<usize> {
+        let own = self.trait_defs.get(tr)?;
+        let generics = own.generic_params.as_ref().map_or(0, |g| g.params.len());
+        let mut names: Vec<&str> = Vec::new();
+        let mut seen: FxHashSet<&str> = FxHashSet::default();
+        let mut frontier = std::collections::VecDeque::from([tr]);
+        seen.insert(tr);
+        while let Some(t) = frontier.pop_front() {
+            let Some(def) = self.trait_defs.get(t) else {
+                continue;
+            };
+            for item in &def.items {
+                if let ast::TraitItem::AssocType(a) = item {
+                    if !names.contains(&a.name.as_str()) {
+                        names.push(&a.name);
+                    }
+                }
+            }
+            for st in &def.supertraits {
+                if let Some(n) = st.path.last() {
+                    if seen.insert(n) {
+                        frontier.push_back(n);
+                    }
+                }
+            }
+        }
+        names.iter().position(|n| *n == assoc).map(|i| generics + i)
+    }
+
     /// `base.assoc` at an instance: the binding of `assoc` in the impl for
     /// `base`'s type, instantiated with `base`'s arguments. With `trait_`
     /// (`T.Output` under `T: Add`), the binding of that trait's impl, so a
@@ -2512,6 +2675,19 @@ impl<'a> Lcx<'a> {
                 if &*tcx.resolve_name(assoc) == "Output" =>
             {
                 return Ok(base);
+            }
+            // A `dyn` type carries its bindings in its arguments.
+            HK::Dyn { trait_, args, .. } => {
+                let tr = self.def_name(trait_);
+                if let Some(i) = self.dyn_assoc_index(&tr, &tcx.resolve_name(assoc)) {
+                    if let Some(&t) = tcx.list(args).get(i) {
+                        return Ok(t);
+                    }
+                }
+                return Err(format!(
+                    "an associated type of `{}`",
+                    tcx.display(base, &|d| self.def_name(d))
+                ));
             }
             _ => {
                 return Err(format!(
@@ -4600,6 +4776,8 @@ impl<'l, 'a> Bx<'l, 'a> {
                 Some(t) => t,
                 // A blanket impl's `self` is its parameter, the receiver.
                 None if self.lcx.is_blanket_fn(self.b.instance().def) => self.args[0],
+                // A trait's default body run on a `dyn` value: `Self`.
+                None if self.lcx.fns[&self.b.instance().def].impl_dyn.is_some() => self.args[0],
                 None if self.lcx.fns[&self.b.instance().def].impl_slice => {
                     let elem = self.args[0];
                     self.tys().tcx().intern(HK::Slice {
@@ -9523,6 +9701,11 @@ impl<'l, 'a> Bx<'l, 'a> {
 
     /// `method` of the `n`th impl of `tr` for `t`'s type, in source order.
     fn nth_impl_method(&self, t: Ty, tr: &str, method: &str, n: usize) -> Option<(DefId, Vec<Ty>)> {
+        if let HK::Dyn { .. } = self.tys().tcx().kind(t) {
+            return (n == 0)
+                .then(|| self.dyn_impl_method(t, tr, method))
+                .flatten();
+        }
         let (adt, args) = self.tys().tcx().adt_of(t)?;
         let mut path = self.lcx.defs.table.get(adt.def).path.segments.clone();
         path.push(format!("impl {tr}#{n}"));
@@ -11942,6 +12125,9 @@ impl<'l, 'a> Bx<'l, 'a> {
         // An `Iterator` implementation in source, the library's adaptors
         // included (`it.skip(2).enumerate()`), loops through its own `next`.
         if !into_iter && !vec_walk {
+            if let Some(next) = self.dyn_iterator_next(iterable)? {
+                return self.for_iterator(label, pattern, iterable, next, body, dest);
+            }
             if let Some(next) = self.iterator_next(iterable)? {
                 return self.for_iterator(label, pattern, iterable, next, body, dest);
             }
@@ -13661,7 +13847,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         let r = self.temp(rt);
         self.assign(r, Rvalue::Ref(BorrowKind::Mut, Place::local(it)));
         let opt = self.scoped_temp(opt_t);
-        let func = self.fn_operand(&name, d, args);
+        let func = self.dyn_next_func(&(d, args, name, opt_t));
         let next = self.b.new_block();
         self.goto_with(
             TerminatorKind::Call {
@@ -18077,6 +18263,14 @@ impl<'l, 'a> Bx<'l, 'a> {
             if let Some((d, inst_args)) = bound {
                 return self.user_method_call(e, object, d, inst_args, args, dest);
             }
+            let ret = if self.lcx.node_types.contains_key(&e.id) {
+                Some(self.expr_ty(e)?)
+            } else {
+                None
+            };
+            if let Some((d, inst_args)) = self.dyn_default_by_receiver(rt, method, args, ret)? {
+                return self.user_method_call(e, object, d, inst_args, args, dest);
+            }
             if let Some((d, inst_args)) = self.method_by_receiver(rt, method) {
                 return self.user_method_call(e, object, d, inst_args, args, dest);
             }
@@ -18166,7 +18360,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         let callee = rc.callee.clone();
         let substs = self.lcx.tys.tcx().list(rc.substs);
         match callee {
-            Callee::Def(d) if self.lcx.fns.contains_key(&d) => {
+            Callee::Def(d) if self.lcx.fns.get(&d).is_some_and(|i| i.impl_dyn.is_none()) => {
                 let inst_args = self.instance_args(e.span, &substs)?;
                 let mut inst_args = inst_args;
                 if method == "collect" && args.is_empty() && inst_args.len() >= 2 {
@@ -18185,7 +18379,11 @@ impl<'l, 'a> Bx<'l, 'a> {
                 self.user_method_call(e, object, d, inst_args, args, dest)
             }
             Callee::Def(d) => {
-                if let Some(t) = self.lcx.lowered_def(d) {
+                let own = self.instance_args(e.span, &substs)?;
+                if self.dyn_default_call(e, object, d, own, args, dest.clone())? {
+                    return Ok(());
+                }
+                if let Some(t) = self.lcx.lowered_def(d).filter(|&t| t != d) {
                     let inst_args = self.instance_args(e.span, &substs)?;
                     return self.user_method_call(e, object, t, inst_args, args, dest);
                 }

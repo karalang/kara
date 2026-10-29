@@ -1377,7 +1377,15 @@ impl<'a> super::TypeChecker<'a> {
             }
         } else {
             for (arg, param) in args.iter().zip(param_types.iter()) {
-                let arg_ty = self.infer_expr(&arg.value);
+                // A closure takes its parameters' types from the slot
+                // (`it.any(|x| x == 2)` through a `dyn Iterator[Item = i64]`).
+                let arg_ty = match (&arg.value.kind, param) {
+                    (
+                        ExprKind::Closure { .. },
+                        Type::Function { .. } | Type::OnceFunction { .. },
+                    ) => self.check_expr(&arg.value, param),
+                    _ => self.infer_expr(&arg.value),
+                };
                 // A `String` passes as a `Str` parameter here as it does on
                 // the concrete type (B-2026-10-15-19).
                 if !(super::exprs::is_str_view(param)

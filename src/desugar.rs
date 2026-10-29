@@ -1166,7 +1166,7 @@ pub(crate) fn subst_expr(expr: &mut Expr, subst: &std::collections::HashMap<Stri
 /// inline/cold/gpu hints, deprecation/unstable, attributes) so a synthesized
 /// default behaves like a hand-written impl method. Only called for methods
 /// whose `body` is `Some`.
-fn trait_method_to_function(m: &TraitMethod, stdlib_origin: bool) -> Function {
+pub(crate) fn trait_method_to_function(m: &TraitMethod, stdlib_origin: bool) -> Function {
     Function {
         span: m.span,
         attributes: m.attributes.clone(),

@@ -1941,10 +1941,15 @@ impl<'a> super::TypeChecker<'a> {
                 self.resolve_assoc_projections(&substitute_type_params(&entry.ty, &subs))
             }
             // An `impl Iterator[Item = T]` yields its inline `Item`
-            // (B-2026-10-20-32).
+            // (B-2026-10-20-32), as a `dyn Iterator[Item = T]` does.
             Type::Existential {
                 trait_name,
                 assoc_bindings,
+                ..
+            }
+            | Type::Dyn {
+                trait_name,
+                assoc: assoc_bindings,
                 ..
             } if self
                 .env

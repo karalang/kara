@@ -332,20 +332,21 @@ impl<'a> super::TypeChecker<'a> {
             );
             return Some(Type::Error);
         };
-        // A default method with no slot runs over the `dyn` value through
-        // the compiler-supplied `impl Trait for dyn Trait`, which the MIR
-        // builder does not instantiate yet.
-        if !m.is_dyn_dispatchable() {
+        // A default method with no slot runs its body with `Self` the `dyn`
+        // type, its calls to the slots dispatching (design.md § Which traits
+        // can be used as `dyn`). A required one with no slot makes the `dyn`
+        // type itself an error (`E_DYN_NOT_DISPATCHABLE`), so this is only
+        // the backstop for a type that slipped past that check.
+        if !m.is_dyn_dispatchable() && m.body.is_none() {
             for arg in args {
                 self.infer_expr(&arg.value);
             }
             self.type_error(
                 format!(
-                    "error[E_DYN_TRAIT_NOT_IMPLEMENTED_YET]: `{method}` cannot be called \
-                     through `{}` yet: it has no slot in the method table (it is generic or \
-                     names `Self`), and running a default method over a `dyn` value is not \
-                     built yet; call it on the concrete type, or through a generic \
-                     parameter `[T: {owner}]`",
+                    "error[E_DYN_NOT_DISPATCHABLE]: `{method}` cannot be called through \
+                     `{}`: it has no slot in the method table (it is generic or names \
+                     `Self`) and no default body; call it on the concrete type, or \
+                     through a generic parameter `[T: {owner}]`",
                     type_display(&dyn_ty)
                 ),
                 *span,
@@ -375,23 +376,47 @@ impl<'a> super::TypeChecker<'a> {
         } else {
             Vec::new()
         };
+        // `Self` stands for the `dyn` value as a type parameter no program
+        // can name, whose associated types are the `dyn` type's bindings
+        // for the call (a method's bound reads them too: `map`'s
+        // `MutFn(own Self.Item) -> B`).
+        let stand_in = format!("dyn {trait_name}");
+        let saved: Vec<_> = assoc
+            .iter()
+            .map(|(n, t)| {
+                let key = (stand_in.clone(), n.clone());
+                let entry = super::env::ImplAssocTypeEntry {
+                    ty: t.clone(),
+                    gat_params: Vec::new(),
+                    param_bound_traits: Vec::new(),
+                    where_clause: None,
+                };
+                (key.clone(), self.env.impl_assoc_types.insert(key, entry))
+            })
+            .collect();
         let ret = self.dispatch_trait_method_on(
-            Type::TypeParam(trait_name.clone()),
+            Type::TypeParam(stand_in.clone()),
             &m,
             &trait_subs,
             None,
             Some(BoundReceiver {
-                key: &trait_name,
+                key: &stand_in,
                 trait_name: &owner,
                 bindings: &assoc,
             }),
             args,
             span,
         );
-        let ret = substitute_existential_assoc_bindings(&ret, &trait_name, &assoc);
+        for (key, old) in saved {
+            match old {
+                Some(e) => self.env.impl_assoc_types.insert(key, e),
+                None => self.env.impl_assoc_types.remove(&key),
+            };
+        }
+        let ret = substitute_existential_assoc_bindings(&ret, &stand_in, &assoc);
         // `Self` in the signature is the `dyn` type itself (`Clone.clone`).
         let mut self_sub = std::collections::HashMap::new();
-        self_sub.insert(trait_name, SubstValue::Type(dyn_ty));
+        self_sub.insert(stand_in, SubstValue::Type(dyn_ty));
         Some(substitute_type_params(&ret, &self_sub))
     }
 
