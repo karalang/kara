@@ -1,0 +1,109 @@
+// LeetCode #1011: Capacity To Ship Packages Within D Days -- binary search
+// on the capacity
+//
+// With a fixed capacity, loading each day greedily, as many packages in
+// order as fit, uses the fewest days; and more capacity never needs more
+// days. So the answer is the smallest capacity whose greedy count is at
+// most `days`, found by bisection between the heaviest package (every
+// package must fit) and the total (one day). O(n log(sum)).
+
+fn ship_within_days(weights: ref Vec[i64], days: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = 0;
+    for w in weights.iter() {
+        lo = lo.max(w);
+        hi += w;
+    }
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if days_needed(weights, mid) <= days {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    lo
+}
+
+// the days the greedy loading takes at this capacity
+fn days_needed(weights: ref Vec[i64], capacity: i64) -> i64 {
+    let mut used = 1;
+    let mut load = 0;
+    for w in weights.iter() {
+        if load + w > capacity {
+            used += 1;
+            load = 0;
+        }
+        load += w;
+    }
+    used
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(nums: ref Vec[i64]) -> String {
+    let parts: Vec[String] = nums.iter().map(|x| x.to_string()).collect();
+    "[" + parts.join(",") + "]"
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let examples: Vec[(Vec[i64], i64)] = vec![
+        (vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 5),
+        (vec![3, 2, 2, 4, 1, 4], 3),
+        (vec![1, 2, 3, 1, 1], 4),
+        (vec![500], 1),
+        (vec![1, 1, 1, 1], 4),
+        (vec![1, 1, 1, 1], 1),
+        (vec![10, 50, 100, 100, 50, 10], 2),
+        (vec![7, 2, 5, 10, 8], 2),
+        (vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 10),
+    ];
+    for (weights, days) in examples.iter() {
+        println(f"weights = {show(weights)}, days = {days} -> {ship_within_days(weights, days)}");
+    }
+    // LeetCode's longest, 50000 packages
+    let mut heavy: Vec[i64] = Vec.new();
+    let mut cycle: Vec[i64] = Vec.new();
+    for i in 0..50000 {
+        heavy.push(500);
+        cycle.push(1 + i % 500);
+    }
+    let large: Vec[(String, Vec[i64], i64)] = vec![
+        ("50000 packages of 500, 1 day".to_string(), heavy.clone(), 1),
+        ("50000 packages of 500, 50000 days".to_string(), heavy.clone(), 50000),
+        ("50000 packages of 500, 7 days".to_string(), heavy, 7),
+        ("50000 packages cycling 1..500, 100 days".to_string(), cycle.clone(), 100),
+        ("50000 packages cycling 1..500, 49999 days".to_string(), cycle, 49999),
+    ];
+    for (name, weights, days) in large.iter() {
+        println(f"{name} -> {ship_within_days(weights, days)}");
+    }
+    // random shipments, weights from 1 to a random top, days from 1 to n
+    let mut seed = 1011;
+    let groups: Vec[(i64, i64)] = vec![(2000, 10), (200, 1000), (5, 50000)];
+    for (count, most) in groups.iter() {
+        let mut packages = 0;
+        let mut total = 0;
+        let mut check = 0;
+        for _ in 0..count {
+            let size = 1 + next_random(mut seed) % most;
+            let top = 1 + next_random(mut seed) % 500;
+            let mut weights: Vec[i64] = Vec.new();
+            for _ in 0..size {
+                weights.push(1 + next_random(mut seed) % top);
+            }
+            let days = 1 + next_random(mut seed) % size;
+            let capacity = ship_within_days(weights, days);
+            packages += size;
+            total += capacity;
+            check = (check * 31 + capacity) % 1000000007;
+        }
+        println(f"{count} random shipments of {packages} packages: capacities sum to {total}, checksum {check}");
+    }
+}

@@ -1,0 +1,17 @@
+weights = [1,2,3,4,5,6,7,8,9,10], days = 5 -> 15
+weights = [3,2,2,4,1,4], days = 3 -> 6
+weights = [1,2,3,1,1], days = 4 -> 3
+weights = [500], days = 1 -> 500
+weights = [1,1,1,1], days = 4 -> 1
+weights = [1,1,1,1], days = 1 -> 4
+weights = [10,50,100,100,50,10], days = 2 -> 160
+weights = [7,2,5,10,8], days = 2 -> 18
+weights = [1,2,3,4,5,6,7,8,9,10], days = 10 -> 10
+50000 packages of 500, 1 day -> 25000000
+50000 packages of 500, 50000 days -> 500
+50000 packages of 500, 7 days -> 3571500
+50000 packages cycling 1..500, 100 days -> 125250
+50000 packages cycling 1..500, 49999 days -> 500
+2000 random shipments of 10940 packages: capacities sum to 663176, checksum 735946813
+200 random shipments of 99377 packages: capacities sum to 154177, checksum 629913014
+5 random shipments of 106856 packages: capacities sum to 7396, checksum 106515149

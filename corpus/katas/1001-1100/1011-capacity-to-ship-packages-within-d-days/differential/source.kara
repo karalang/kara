@@ -1,0 +1,335 @@
+// LeetCode #1011: Capacity To Ship Packages Within D Days -- differential
+//
+// The five arms, copied, against the statement read literally and five
+// more properties. See README.md § Differential.
+
+fn ship_star(weights: ref Vec[i64], days: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = 0;
+    for w in weights.iter() {
+        lo = lo.max(w);
+        hi += w;
+    }
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if days_star(weights, mid) <= days {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    lo
+}
+
+// the days the greedy loading takes at this capacity
+fn days_star(weights: ref Vec[i64], capacity: i64) -> i64 {
+    let mut used = 1;
+    let mut load = 0;
+    for w in weights.iter() {
+        if load + w > capacity {
+            used += 1;
+            load = 0;
+        }
+        load += w;
+    }
+    used
+}
+
+fn ship_prefix(weights: ref Vec[i64], days: i64) -> i64 {
+    let n = weights.len();
+    let mut prefix: Vec[i64] = vec![0];
+    let mut lo = 0;
+    for w in weights.iter() {
+        prefix.push(prefix[prefix.len() - 1] + w);
+        lo = lo.max(w);
+    }
+    let mut hi = prefix[n];
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if fits_prefix(prefix, days, mid) {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    lo
+}
+
+// whether `days` days of this capacity carry every package
+fn fits_prefix(prefix: ref Vec[i64], days: i64, capacity: i64) -> bool {
+    let n = prefix.len() - 1;
+    let mut at = 0;
+    for _ in 0..days {
+        // the last index whose prefix is within reach of this day
+        let reach = prefix[at] + capacity;
+        let mut a = at;
+        let mut b = n;
+        while a < b {
+            let mid = a + (b - a + 1) / 2;
+            if prefix[mid] <= reach {
+                a = mid;
+            } else {
+                b = mid - 1;
+            }
+        }
+        at = a;
+        if at == n {
+            return true;
+        }
+    }
+    false
+}
+
+fn ship_next(weights: ref Vec[i64], days: i64) -> i64 {
+    let mut heaviest = 0;
+    let mut total = 0;
+    for w in weights.iter() {
+        heaviest = heaviest.max(w);
+        total += w;
+    }
+    let mut capacity = heaviest.max((total + days - 1) / days);
+    loop {
+        let mut used = 1;
+        let mut load = 0;
+        let mut bump = i64.MAX;
+        for w in weights.iter() {
+            if load + w > capacity {
+                bump = bump.min(load + w);
+                used += 1;
+                load = 0;
+            }
+            load += w;
+        }
+        if used <= days {
+            return capacity;
+        }
+        capacity = bump;
+    }
+}
+
+fn ship_backward(weights: ref Vec[i64], days: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = 0;
+    for w in weights.iter() {
+        lo = lo.max(w);
+        hi += w;
+    }
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if days_backward(weights, mid) <= days {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    lo
+}
+
+// the days the greedy loading takes at this capacity, from the last package
+fn days_backward(weights: ref Vec[i64], capacity: i64) -> i64 {
+    let mut used = 1;
+    let mut load = 0;
+    let mut i = weights.len();
+    while i > 0 {
+        i -= 1;
+        if load + weights[i] > capacity {
+            used += 1;
+            load = 0;
+        }
+        load += weights[i];
+    }
+    used
+}
+
+fn ship_gallop(weights: ref Vec[i64], days: i64) -> i64 {
+    let mut heaviest = 0;
+    for w in weights.iter() {
+        heaviest = heaviest.max(w);
+    }
+    if loads_gallop(weights, heaviest) <= days {
+        return heaviest;
+    }
+    // `bad` fails, `good` fits
+    let mut bad = heaviest;
+    let mut step = 1;
+    let mut good = bad + step;
+    while loads_gallop(weights, good) > days {
+        bad = good;
+        step *= 2;
+        good = bad + step;
+    }
+    while good - bad > 1 {
+        let mid = bad + (good - bad) / 2;
+        if loads_gallop(weights, mid) <= days {
+            good = mid;
+        } else {
+            bad = mid;
+        }
+    }
+    good
+}
+
+// the days the greedy loading takes at this capacity
+fn loads_gallop(weights: ref Vec[i64], capacity: i64) -> i64 {
+    let mut used = 1;
+    let mut load = 0;
+    for w in weights.iter() {
+        if load + w > capacity {
+            used += 1;
+            load = 0;
+        }
+        load += w;
+    }
+    used
+}
+
+fn arms(weights: ref Vec[i64], days: i64) -> Vec[i64] {
+    vec![
+        ship_star(weights, days),
+        ship_prefix(weights, days),
+        ship_next(weights, days),
+        ship_backward(weights, days),
+        ship_gallop(weights, days),
+    ]
+}
+
+// The statement read literally: every way to cut the row into at most
+// `days` runs of consecutive packages, one run a day, and the least
+// capacity any of them needs, its heaviest day.
+fn statement(weights: ref Vec[i64], days: i64) -> i64 {
+    let n = weights.len();
+    let mut best = i64.MAX;
+    // bit i of `cuts` set: a new day starts after package i
+    for cuts in 0..(1 << (n - 1)) {
+        let mut runs = 1;
+        let mut load = 0;
+        let mut heaviest = 0;
+        for i in 0..n {
+            load += weights[i];
+            if i == n - 1 or (cuts >> i) % 2 == 1 {
+                heaviest = heaviest.max(load);
+                load = 0;
+                if i < n - 1 {
+                    runs += 1;
+                }
+            }
+        }
+        if runs <= days {
+            best = best.min(heaviest);
+        }
+    }
+    best
+}
+
+// whether loading each day as full as it goes carries the row in `days`
+fn carries(weights: ref Vec[i64], days: i64, capacity: i64) -> bool {
+    let mut used = 1;
+    let mut load = 0;
+    for w in weights.iter() {
+        if w > capacity {
+            return false;
+        }
+        if load + w > capacity {
+            used += 1;
+            load = 0;
+        }
+        load += w;
+    }
+    used <= days
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let names = ["star", "prefix", "next", "backward", "gallop"];
+    let mut failures: Vec[i64] = vec![0; 6];
+    let mut checks = 0;
+    let mut rows = 0;
+    let mut packages = 0;
+    let mut check = 0;
+    let mut seed = 10111;
+    for t in 0..2800 {
+        // 2500 rows of 1 to 8 packages, then 300 of up to 1500; weights
+        // from 1 to a random top, days from 1 to the row's length
+        let small = t < 2500;
+        let size = if small { 1 + next_random(mut seed) % 8 } else { 1 + next_random(mut seed) % 1500 };
+        let top = 1 + next_random(mut seed) % 500;
+        let mut weights: Vec[i64] = Vec.new();
+        for _ in 0..size {
+            weights.push(1 + next_random(mut seed) % top);
+        }
+        let days = 1 + next_random(mut seed) % size;
+        let got = arms(weights, days);
+        rows += 1;
+        packages += size;
+        check = (check * 31 + got[0]) % 1000000007;
+        let brute = if small { statement(weights, days) } else { 0 };
+        let mut heaviest = 0;
+        let mut total = 0;
+        for w in weights.iter() {
+            heaviest = heaviest.max(w);
+            total += w;
+        }
+        let mut back = weights.clone();
+        back.reverse();
+        let reversed = arms(back, days);
+        let tripled_input: Vec[i64] = weights.iter().map(|w| 3 * w).collect();
+        let tripled = arms(tripled_input, days);
+        for a in 0..5 {
+            let c = got[a];
+            // P1: the statement, on the short rows
+            if small {
+                checks += 1;
+                if c != brute {
+                    failures[0] += 1;
+                }
+            }
+            // P2: at least the heaviest package and the total spread over
+            // the days, and at most the total (tested first, so a wild
+            // answer cannot overflow the product)
+            checks += 1;
+            if c < heaviest or c > total or c * days < total {
+                failures[1] += 1;
+            }
+            // P3: the capacity carries the row in time, and one less does
+            // not
+            checks += 1;
+            if not carries(weights, days, c) or carries(weights, days, c - 1) {
+                failures[2] += 1;
+            }
+            // P4: the packages in reverse order need the same capacity
+            checks += 1;
+            if reversed[a] != c {
+                failures[3] += 1;
+            }
+            // P5: every package three times as heavy needs three times the
+            // capacity
+            checks += 1;
+            if tripled[a] != 3 * c {
+                failures[4] += 1;
+            }
+            // P6: each arm agrees with at least two of the other four
+            checks += 1;
+            let mut agree = 0;
+            for b in 0..5 {
+                if b != a and got[b] == c {
+                    agree += 1;
+                }
+            }
+            if agree < 2 {
+                failures[5] += 1;
+            }
+        }
+    }
+    let mut total = 0;
+    for p in 0..6 {
+        total += failures[p];
+        if failures[p] > 0 {
+            println(f"P{p + 1}: {failures[p]} failures");
+        }
+    }
+    println(f"{rows} rows of {packages} packages: checksum {check}, {checks} checks over {names.len()} arms: {total} failures");
+}

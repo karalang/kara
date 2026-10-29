@@ -1,0 +1,62 @@
+// LeetCode #1011 bench: the ★ arm (binary search on the capacity) over 20
+// rows of 50,000 packages, LeetCode's longest, drawn once; each of 20
+// rounds ships every row, each call with its own number of days, and
+// folds each capacity into a checksum.
+
+fn ship_within_days(weights: ref Vec[i64], days: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = 0;
+    for w in weights.iter() {
+        lo = lo.max(w);
+        hi += w;
+    }
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if days_needed(weights, mid) <= days {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    lo
+}
+
+fn days_needed(weights: ref Vec[i64], capacity: i64) -> i64 {
+    let mut used = 1;
+    let mut load = 0;
+    for w in weights.iter() {
+        if load + w > capacity {
+            used += 1;
+            load = 0;
+        }
+        load += w;
+    }
+    used
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let count = 20;
+    let rounds = 20;
+    let mut seed = 1011;
+    let mut rows: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..count {
+        let mut weights: Vec[i64] = Vec.new();
+        for _ in 0..50000 {
+            weights.push(1 + next_random(mut seed) % 500);
+        }
+        rows.push(weights);
+    }
+    let mut check = 0;
+    for r in 0..rounds {
+        for k in 0..count {
+            let days = 1 + ((r * count + k) * 7919) % 50000;
+            check = (check * 31 + ship_within_days(rows[k], days)) % 1000000007;
+        }
+    }
+    println(f"{rounds} rounds over {count} rows of 50000 packages: checksum {check}");
+}

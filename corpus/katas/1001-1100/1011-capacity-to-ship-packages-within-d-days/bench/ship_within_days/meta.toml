@@ -1,0 +1,11 @@
+source = "kara-katas/leetcode/1001-1100/1011-capacity-to-ship-packages-within-d-days/bench/ship_within_days.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["bench"]
+class = "e"
+expected_from = "mirror"
+note = "mirror: the C, Rust, Go and Python bench programs print this line (kara-katas 1011 bench/); there is no legacy record (the legacy compiler went at M3)"
+bucket = "timeout"
+classified_with = "70e887275"
+extracted_src = "50d1c48a"

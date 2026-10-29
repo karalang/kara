@@ -61,7 +61,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | false-positive | 59 |
 | diagnostics | 51 |
 | missing-feature | 48 |
-| perf | 27 |
+| perf | 29 |
 | soundness | 24 |
 | miscompile | 14 |
 | run-vs-build | 9 |
@@ -75,9 +75,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | typecheck | 108 |
 | mir | 52 |
-| mir-llvm | 34 |
+| mir-llvm | 35 |
 | ownership | 26 |
-| interp | 22 |
+| interp | 23 |
 | codegen | 22 |
 | cli | 22 |
 | runtime | 13 |
@@ -124,6 +124,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-29-8 | 2026-10-29 | parser | low | The turbofish fix on a `collect::[Vec[String]]()` in the middle of a chain (`"(" + it.collect::[Vec[String]]().join(", ") + ")"`) deletes the type arguments and leaves `no method 'join' on type parameter 'C'`; B-2026-10-24-13 made the fix two-sided only when the call is a `let`'s whole initializer, and a mid-chain call has no binding to move the type to | — |
 | B-2026-10-29-9 | 2026-10-29 | mir | medium | `let v: Vec[Option[String]] = [None].to_vec();` passes `karac check` but does not build on MIR: `an expression whose type does not lower (Type(UnknownParam("T"))) is not lowered yet`, also as a function's `return [None].to_vec();` with a `Vec[Option[String]]` return type; `let none: Option[String] = None; [none].to_vec()` builds | — |
 | B-2026-10-29-10 | 2026-10-29 | ownership+mir | medium | `for n in v { out.push(n ?? String.new()); }` over a `Vec[Option[String]]` (so `n` is `ref Option[String]`) passes `karac check` and is refused only by the MIR build ("cannot move a non-`Copy` value out of a borrowed place: take a copy with `.clone()`"); check should report it with the `.clone()` fix, and B-2026-10-28-32 is the same `??` on a bare parameter refused by check with the wrong help | — |
+| B-2026-10-29-12 | 2026-10-29 | mir-llvm | low | Kata 1011's bench built with auto-par on (the default) runs 1.23 times the time and 16% more instructions than with `KARAC_AUTO_PAR=0`, though nothing fans out | — |
 
 ### Relocated
 
@@ -356,6 +357,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-28-26 | typecheck | medium | `karac check` passes a program that builds a `Column`, `DataFrame`, `LazyExpr` or `Tensor` from the legacy library's baked surface, and `karac run` t… | 816f2e1a52 |
 | B-2026-10-28-29 | mir | medium | `Ok((n, it.map(..).collect()))` and `Some((n, it.map(..).collect()))` pass `karac check` but the MIR build refuses them (an expression whose type doe… | cd5a50673e |
 | B-2026-10-28-30 | mir-llvm | medium | `s = s + (n - x).to_string()` copies `s` on every add, so building a string in a loop is quadratic: the concat pass (src/mir/concat.rs) gives up when… | f59be6dac3 |
+| B-2026-10-29-11 | interp | medium | `for x in v.iter()` over a `Vec` calls the library `VecIter.next` once an element, so in the MIR interpreter it runs 8.5 times slower than `for x in… | 70e887275e |
 
 </details>
 
