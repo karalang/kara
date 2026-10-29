@@ -85,8 +85,11 @@ pub(super) fn build_callee_effectful_table(
     //
     // Seeded FIRST so the real entries below overwrite on any collision: a user
     // impl supplying one of these operator methods for its OWN type is a real
-    // function with real inferred effects. Only primitive heads are seeded, and
-    // a primitive cannot carry a user impl.
+    // function with real inferred effects. Only primitive heads are seeded. A
+    // primitive can carry a user impl on another type (`impl Mul[Col] for f64`,
+    // B-2026-10-28-16), whose entry then wins here; the lowered `f64 * f64`
+    // never reaches this table by that key, since the MIR backend keeps it a
+    // built-in operator and the effect walkers skip it (B-2026-10-29-48).
     //
     // Overflow-trapping does not make these effectful: a trap is `panics`,
     // which the classifier already excludes along with `allocates` and the

@@ -10,8 +10,12 @@ impl<'a> super::ConcurrencyChecker<'a> {
     pub(super) fn collect_expr_effects(&self, expr: &Expr, info: &mut StmtInfo) {
         match &expr.kind {
             ExprKind::Call { callee, args } => {
-                // Look up callee effects
-                if let Some(name) = self.extract_callee_name(callee) {
+                // Look up callee effects. A lowered built-in operator on two
+                // primitives has none, whatever a program impl under the same
+                // `f64.mul` key does (B-2026-10-29-48).
+                let builtin_op =
+                    crate::effectchecker::is_lowered_builtin_operator_call(callee, args);
+                if let Some(name) = self.extract_callee_name(callee).filter(|_| !builtin_op) {
                     info.called_fn_names.insert(name.clone());
                     let from = info.effects.len();
                     self.add_function_effects(&name, info);

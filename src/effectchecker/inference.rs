@@ -17,6 +17,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::ast::*;
 use crate::intern::Symbol;
+use crate::resolver::SpanKey;
 use crate::token::Span;
 
 use super::{
@@ -1118,19 +1119,24 @@ impl<'a> super::EffectChecker<'a> {
                 // caller. Concrete-type dispatch (`Wrapper.method()`) and
                 // ordinary free-function calls still use `extract_callee_name`.
                 let trait_keys = self.extract_trait_assoc_fn_keys(callee, bounds);
-                let callee_name: Option<Symbol> = if !trait_keys.is_empty() {
-                    for &key in &trait_keys {
-                        calls.push((key, expr.span));
-                    }
-                    trait_keys.into_iter().next()
-                } else {
-                    let n = self.extract_callee_name(callee);
-                    if let Some(name) = n {
-                        calls.push((name, expr.span));
-                        self.charge_bound_calls_at(name, expr.id, expr.span, calls);
-                    }
-                    n
-                };
+                let callee_name: Option<Symbol> =
+                    if super::is_lowered_builtin_operator_call(callee, args) {
+                        // The built-in operator, never a program impl under the
+                        // same `f64.mul` key (B-2026-10-29-48): pure.
+                        None
+                    } else if !trait_keys.is_empty() {
+                        for &key in &trait_keys {
+                            calls.push((key, expr.span));
+                        }
+                        trait_keys.into_iter().next()
+                    } else {
+                        let n = self.extract_callee_name(callee);
+                        if let Some(name) = n {
+                            calls.push((name, expr.span));
+                            self.charge_bound_calls_at(name, expr.id, expr.span, calls);
+                        }
+                        n
+                    };
                 // Combined distinct-type constructor `T(value)` where
                 // `distinct type T = Base where pred`: the constructor runs a
                 // runtime predicate assertion → propagates `panics`,
@@ -1147,7 +1153,11 @@ impl<'a> super::EffectChecker<'a> {
                         calls.push((self.syms.builtin_refinement_assert, expr.span));
                     }
                 }
-                self.collect_calls_in_expr(callee, calls, bounds);
+                // The callee path of a lowered built-in operator would read as
+                // a reference to the program impl under its key.
+                if !super::is_lowered_builtin_operator_call(callee, args) {
+                    self.collect_calls_in_expr(callee, calls, bounds);
+                }
                 for arg in args {
                     self.collect_calls_in_expr(&arg.value, calls, bounds);
                 }
@@ -1422,6 +1432,18 @@ impl<'a> super::EffectChecker<'a> {
                 }
             }
             ExprKind::Binary { left, op, right } => {
+                // An operator on a program impl the lowering did not rewrite
+                // (its operands differ in type) calls that impl
+                // (B-2026-10-29-51).
+                if let Some(&key) = self
+                    .user_operator_calls
+                    .get(&SpanKey::from_span(&expr.span))
+                {
+                    calls.push((key, expr.span));
+                    if self.method_bodies.contains_key(&key) {
+                        self.charge_bound_calls_at(key, expr.id, expr.span, calls);
+                    }
+                }
                 self.collect_calls_in_expr(left, calls, bounds);
                 self.collect_calls_in_expr(right, calls, bounds);
                 if matches!(op, BinOp::Div | BinOp::Mod) {

@@ -2684,6 +2684,9 @@ fn call_ident(name: &str, arg: Expr) -> ExprKind {
 }
 
 fn call_path(segments: Vec<String>, args: Vec<Expr>) -> ExprKind {
+    // The callee takes the first argument's span, which no written path callee
+    // has: `effectchecker::is_lowered_builtin_operator_call` tells a lowered
+    // `f64.mul(x, k)` from a written one by it (B-2026-10-29-48).
     let span = args.first().map(|a| a.span).unwrap_or_else(|| Span {
         line: 0,
         column: 0,

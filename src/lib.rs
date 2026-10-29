@@ -574,6 +574,9 @@ pub fn effectcheck_with_typecheck_data(
 /// the typechecker's `node_call_subs` and the expressions it typed by a type
 /// parameter ([`typeparam_value_nodes`]).
 /// Without them such a call is charged every impl of the method.
+/// `user_operator_calls` names the program impl each operator the lowering
+/// leaves in place calls (`v * 2.0` on `impl Mul[f64] for V`), which is
+/// charged that impl's effects (B-2026-10-29-51).
 #[allow(clippy::too_many_arguments)]
 pub fn effectcheck_with_typecheck_tables(
     program: &Program,
@@ -589,11 +592,13 @@ pub fn effectcheck_with_typecheck_tables(
         rustc_hash::FxHashMap<String, crate::typechecker::Type>,
     >,
     typeparam_nodes: rustc_hash::FxHashMap<crate::ids::NodeId, String>,
+    user_operator_calls: rustc_hash::FxHashMap<crate::resolver::SpanKey, String>,
 ) -> EffectCheckResult {
     let checker = EffectChecker::new_with_policy_and_config(program, policy, profile_config.into())
         .with_method_callee_types(method_callee_types)
         .with_call_type_subs(call_type_subs)
-        .with_bound_dispatch_tables(node_call_subs, typeparam_nodes);
+        .with_bound_dispatch_tables(node_call_subs, typeparam_nodes)
+        .with_user_operator_calls(user_operator_calls);
     checker.check()
 }
 

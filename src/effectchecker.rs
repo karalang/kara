@@ -288,6 +288,34 @@ pub fn lowered_builtin_op_is_pure(key: &str) -> bool {
     LOWERED_OP_HEADS.contains(&head) && LOWERED_PURE_OPS.contains(&op)
 }
 
+/// True for a call the lowering wrote for a built-in operator on two
+/// primitives: `x * k` on `f64` becomes `f64.mul(x, k)`.
+///
+/// Such a call names the same `head.op` key as a program's own
+/// `impl Mul[Col] for f64` (admitted since B-2026-10-28-16), and the effect
+/// tables hold that impl under the key, so resolving the call by name charged
+/// every float multiply in the program the impl's effects, and could report
+/// a helper the impl calls as mutually recursive with it (B-2026-10-29-48).
+/// It is always the built-in: the lowering rewrites only an operator whose two
+/// operands have one type, and no impl gives a primitive an operator on
+/// itself. The built-in is pure (see [`LOWERED_PURE_OPS`]).
+///
+/// `crate::lowering`'s `call_path` gives the callee its first argument's span,
+/// while a written `f64.mul(a, b)` names its callee with its own text, so the
+/// two spans coincide only on a lowered call.
+pub fn is_lowered_builtin_operator_call(callee: &Expr, args: &[CallArg]) -> bool {
+    let ExprKind::Path { segments, .. } = &callee.kind else {
+        return false;
+    };
+    let [head, op] = segments.as_slice() else {
+        return false;
+    };
+    args.len() == 2
+        && callee.span == args[0].value.span
+        && LOWERED_OP_HEADS.contains(&head.as_str())
+        && LOWERED_PURE_OPS.contains(&op.as_str())
+}
+
 /// True for the NOTE-severity effect diagnostics — the ones rendered
 /// `note[effect]`, never counted toward an exit code, and never an error in
 /// any harness.
@@ -914,6 +942,14 @@ pub struct EffectChecker<'a> {
     /// callee precisely instead of falling back to per-method-name heuristics.
     /// Empty when constructed via the unparameterised `new` family.
     pub(crate) method_callee_types: FxHashMap<SpanKey, Symbol>,
+    /// Each operator expression the typechecker dispatched to a program impl
+    /// (`TypeCheckResult.user_operator_calls`), by span, with its `Type.method`
+    /// key. The lowering rewrites an operator only when its operands share a
+    /// type, so `v * 2.0` on `impl Mul[f64] for V` (and `2.0 * c` on
+    /// `impl Mul[Col] for f64`) stays a `Binary`, and this is what charges it
+    /// the impl's effects (B-2026-10-29-51). Empty when constructed via the
+    /// unparameterised `new` family.
+    pub(crate) user_operator_calls: FxHashMap<SpanKey, Symbol>,
     /// Per-call-site type-parameter substitutions, populated by the
     /// typechecker (`TypeCheckResult.call_type_subs`). Maps a call-expression
     /// span to a `param_name → resolved_type_name` table — concrete entries
@@ -1121,6 +1157,7 @@ impl<'a> EffectChecker<'a> {
             fn_effect_var_positions: FxHashMap::default(),
             impl_effect_var_positions: FxHashMap::default(),
             method_callee_types: FxHashMap::default(),
+            user_operator_calls: FxHashMap::default(),
             call_type_subs: FxHashMap::default(),
             node_call_subs: FxHashMap::default(),
             typeparam_nodes: FxHashMap::default(),
@@ -1189,6 +1226,17 @@ impl<'a> EffectChecker<'a> {
     ) -> Self {
         self.node_call_subs = node_call_subs;
         self.typeparam_nodes = typeparam_nodes;
+        self
+    }
+
+    /// Attach the typechecker's operator-to-impl table, so an operator the
+    /// lowering leaves in place is charged the program impl it calls
+    /// (B-2026-10-29-51).
+    pub fn with_user_operator_calls(mut self, calls: FxHashMap<SpanKey, String>) -> Self {
+        self.user_operator_calls = calls
+            .into_iter()
+            .map(|(k, v)| (k, self.interner.intern(&v)))
+            .collect();
         self
     }
 
