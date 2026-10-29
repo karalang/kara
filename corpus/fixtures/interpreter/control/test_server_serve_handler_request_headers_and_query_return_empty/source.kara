@@ -1,6 +1,6 @@
 
 fn main() {
-    let req = Request { };
+    let req = Request.new("".to_string(), "".to_string());
     let h = req.headers();
     let q = req.query();
     println(h.len());

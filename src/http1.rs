@@ -17,7 +17,7 @@
 pub type Headers = Vec<(String, String)>;
 
 /// One request, as read off the wire.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct Request {
     pub method: String,
     /// The request target: the path, then `?` and the query if there is one.
@@ -29,6 +29,25 @@ pub struct Request {
 }
 
 impl Request {
+    /// A request a program builds (`Request.new(method, url)`, core
+    /// semantics §14.12): an absolute URL's target is its path and query,
+    /// `/` when it has neither, and any other URL is the target itself.
+    pub fn built(method: String, url: &str) -> Request {
+        let target = match url.split_once("://") {
+            Some((_, rest)) => match rest.find(['/', '?']) {
+                Some(i) if rest[i..].starts_with('/') => rest[i..].to_string(),
+                Some(i) => format!("/{}", &rest[i..]),
+                None => "/".to_string(),
+            },
+            None => url.to_string(),
+        };
+        Request {
+            method,
+            target,
+            ..Request::default()
+        }
+    }
+
     pub fn path(&self) -> &str {
         self.target.split('?').next().unwrap_or_default()
     }
@@ -338,6 +357,19 @@ mod tests {
         read_request(&mut raw.as_bytes(), &mut Vec::new())
             .unwrap()
             .unwrap()
+    }
+
+    /// A built request's target is its URL's path and query.
+    #[test]
+    fn a_built_request_takes_its_target_from_the_url() {
+        let target = |url: &str| Request::built("GET".to_string(), url).target;
+        assert_eq!(target("http://h:8080/a/b?x=1"), "/a/b?x=1");
+        assert_eq!(target("https://h?x=1"), "/?x=1");
+        assert_eq!(target("http://h"), "/");
+        assert_eq!(target("/plain?y=2"), "/plain?y=2");
+        assert_eq!(target(""), "");
+        let r = Request::built("POST".to_string(), "http://h/p?q=a+b");
+        assert_eq!((r.path(), r.query()[0].1.as_str()), ("/p", "a b"));
     }
 
     #[test]

@@ -12,6 +12,7 @@ fn show(e: TcpError) -> String {
         TcpError.Tls(_) => "tls".to_string(),
         TcpError.Protocol => "protocol".to_string(),
         TcpError.ProviderUnavailable => "provider unavailable".to_string(),
+        TcpError.Unsupported => "unsupported".to_string(),
     }
 }
 

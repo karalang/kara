@@ -1,6 +1,6 @@
 
 fn main() {
-    let req = Request { };
+    let req = Request.new("".to_string(), "".to_string());
     match req.header("content-type") {
         Some(v) => println(v),
         None => println("none"),

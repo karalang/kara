@@ -819,6 +819,7 @@ fn run_with(
         http_headers: rustc_hash::FxHashMap::default(),
         http_bodies: rustc_hash::FxHashMap::default(),
         http_requests: rustc_hash::FxHashMap::default(),
+        built_requests: Vec::new(),
         cancel_after: match tasks {
             Tasks::CancelAfter(n) => Some(n),
             _ => None,
@@ -1327,6 +1328,9 @@ struct Interp<'a> {
     /// at 0), which `Request`'s methods read: a server answers each
     /// connection in a task of its own (B-2026-10-25-41).
     http_requests: rustc_hash::FxHashMap<usize, crate::http1::Request>,
+    /// The requests a program built (`Request.new`, core semantics
+    /// §14.12), by `__id` - 1: its URL and the request.
+    built_requests: Vec<(String, crate::http1::Request)>,
 }
 
 /// Where a native copy of interpreter values came from: `count` scalars of
@@ -5572,7 +5576,7 @@ impl<'a> Interp<'a> {
     /// An operation on a socket a provider opened (core semantics §14.12):
     /// a read, write, shutdown or accept through the provider while its
     /// override runs, and `ProviderUnavailable` after. Anything else is
-    /// `Other(-1)`. A drop closes it through the provider's `close`, or
+    /// `Unsupported`. A drop closes it through the provider's `close`, or
     /// does nothing once the override has ended.
     fn fake_socket_method(&mut self, method: &str, fd: i64, rest: &[Value], ret: Ty) -> R<Value> {
         let at = usize::try_from(-2 - fd).ok();
@@ -5635,8 +5639,7 @@ impl<'a> Interp<'a> {
                 }
             }
             _ => {
-                let payload =
-                    self.variant_named(ret, Some("Err"), "Other", vec![Value::Int(-1)])?;
+                let payload = self.variant_named(ret, Some("Err"), "Unsupported", Vec::new())?;
                 self.variant_named(ret, None, "Err", vec![payload])
             }
         }
@@ -15127,6 +15130,16 @@ impl<'a> Interp<'a> {
                         let (req, with_body) = self.http_request(base, method, &args, name)?;
                         return self.http_send(req, with_body, ret);
                     }
+                    "__request" => {
+                        let b = &self.http_builders[i];
+                        let mut req = crate::http1::Request::built(b.method.clone(), &b.url);
+                        req.headers = b.headers.clone();
+                        req.body = b.body.clone().into_bytes();
+                        let url = b.url.clone();
+                        self.built_requests.push((url, req));
+                        let id = self.built_requests.len() as i128;
+                        return Ok(Value::Agg(vec![Value::Int(id)]));
+                    }
                     _ => return err(format!("call of unknown function {name}")),
                 }
                 Ok(recv)
@@ -15425,6 +15438,26 @@ impl<'a> Interp<'a> {
         self.http_requests.entry(self.cur_task).or_default()
     }
 
+    /// A `Request`'s `__id` (an empty `Request` is the served one).
+    fn request_id(&mut self, v: &Value, name: &str) -> R<usize> {
+        match self.struct_value(v, name)?.as_slice() {
+            [] => Ok(0),
+            [Value::Int(id)] => match usize::try_from(*id) {
+                Ok(i) if i <= self.built_requests.len() => Ok(i),
+                _ => err(format!("{name} of an unknown request {id}")),
+            },
+            other => err(format!("{name} of a request holding {other:?}")),
+        }
+    }
+
+    /// The request `id` names: the served one at 0, else one built.
+    fn request_of(&mut self, id: usize) -> &crate::http1::Request {
+        match id {
+            0 => self.served(),
+            _ => &self.built_requests[id - 1].1,
+        }
+    }
+
     /// `bytes` as a `Vec[u8]`.
     fn bytes_box(&mut self, bytes: Vec<u8>) -> Value {
         let elems = bytes
@@ -15436,8 +15469,9 @@ impl<'a> Interp<'a> {
 
     /// The natives of the servers in runtime/stdlib/source/http_server.kara
     /// and `Request`'s methods, over `crate::http1`, which the compiled
-    /// backend's runtime uses too. A `Request` is empty, its methods
-    /// reading the request the running task is answering.
+    /// backend's runtime uses too. A `Request`'s `__id` is 0 for the
+    /// request the running task is answering, else one a program built
+    /// (`built_requests`).
     fn http_server_method(
         &mut self,
         name: &str,
@@ -15502,30 +15536,67 @@ impl<'a> Interp<'a> {
                 Ok(self.bytes_box(wire))
             }
             ("Server", "__keep_alive") => Ok(Value::Bool(self.served().keep_alive())),
-            ("Request", "path") => {
-                let text = self.served().path().to_string();
+            ("Request", "new") => {
+                let method = text_of(self, 0)?;
+                let url = text_of(self, 1)?;
+                let req = crate::http1::Request::built(method, &url);
+                self.built_requests.push((url, req));
+                Ok(Value::Agg(vec![Value::Int(
+                    self.built_requests.len() as i128
+                )]))
+            }
+            ("Request", "with_header" | "with_body") => {
+                let id = self.request_id(&args[0], name)?;
+                let at = if id == 0 {
+                    // The served request, copied into one the program owns.
+                    let req = self.served().clone();
+                    self.built_requests.push((req.target.clone(), req));
+                    self.built_requests.len() - 1
+                } else {
+                    id - 1
+                };
+                if method == "with_header" {
+                    let (k, v) = (text_of(self, 1)?, text_of(self, 2)?);
+                    self.built_requests[at].1.headers.push((k, v));
+                } else {
+                    let b = text_of(self, 1)?;
+                    self.built_requests[at].1.body = b.into_bytes();
+                }
+                Ok(Value::Agg(vec![Value::Int(at as i128 + 1)]))
+            }
+            ("Request", "url") => {
+                let id = self.request_id(&args[0], name)?;
+                let text = match id {
+                    0 => self.served().target.clone(),
+                    _ => self.built_requests[id - 1].0.clone(),
+                };
                 Ok(self.alloc_box("String", Value::Str(text)))
             }
-            ("Request", "method") => {
-                let text = self.served().method.clone();
-                Ok(self.alloc_box("String", Value::Str(text)))
-            }
-            ("Request", "body") => {
-                let text = self.served().body_text();
+            ("Request", "path" | "method" | "body") => {
+                let id = self.request_id(&args[0], name)?;
+                let req = self.request_of(id);
+                let text = match method {
+                    "path" => req.path().to_string(),
+                    "method" => req.method.clone(),
+                    _ => req.body_text(),
+                };
                 Ok(self.alloc_box("String", Value::Str(text)))
             }
             ("Request", "header") if args.len() == 2 => {
+                let id = self.request_id(&args[0], name)?;
                 let want = text_of(self, 1)?;
-                let found = self.served().header(&want).map(str::to_string);
+                let found = self.request_of(id).header(&want).map(str::to_string);
                 let found = found.map(|v| self.alloc_box("String", Value::Str(v)));
                 self.option(ret, found)
             }
-            ("Request", "headers") => {
-                let all = self.served().headers.clone();
-                Ok(pairs(self, all))
-            }
-            ("Request", "query") => {
-                let all = self.served().query();
+            ("Request", "headers" | "query") => {
+                let id = self.request_id(&args[0], name)?;
+                let req = self.request_of(id);
+                let all = if method == "headers" {
+                    req.headers.clone()
+                } else {
+                    req.query()
+                };
                 Ok(pairs(self, all))
             }
             _ => err(format!("call of unknown function {name}")),
@@ -17575,8 +17646,16 @@ fn http_exchange(
 ) -> Result<ureq::Response, String> {
     // A URL without a scheme is a bare authority to the runtime's client
     // (`hyper::Uri`), so it fails at the connect, as the compiled
-    // program reports it, before `ureq` would refuse it as a bad URL.
+    // program reports it, before `ureq` would refuse it as a bad URL. A
+    // path after that authority is a URI `hyper` refuses, and a bare path
+    // one with no host.
     if !url.contains("://") {
+        if url.starts_with('/') {
+            return Err(format!("{url}: url has no host"));
+        }
+        if url.contains(['/', '?', '#']) {
+            return Err(format!("{url}: bad url: invalid format"));
+        }
         let authority = url.split('/').next().unwrap_or_default();
         let (host, port) = match authority.rsplit_once(':') {
             Some((h, p)) => (h, p.parse().unwrap_or(80)),

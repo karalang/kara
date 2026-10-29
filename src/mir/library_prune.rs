@@ -355,6 +355,12 @@ pub fn prune(program: &mut Program, src: &str, user_len: usize) -> Pruned {
             reached.extend(names.iter().chain(extra).map(|n| n.to_string()));
         }
     }
+    // And its client calls, for a program that makes one (a program with no
+    // `Client` keeps the HTTP client's natives out of its link).
+    if reached.contains("NetworkProvider") && reached.contains("Client") {
+        let client = ["__get", "__post", "__send_builder", "send", "__request"];
+        reached.extend(client.iter().map(|n| n.to_string()));
+    }
     let text = |r: (usize, usize)| src.get(r.0..r.1).unwrap_or("");
     loop {
         let mut changed = false;

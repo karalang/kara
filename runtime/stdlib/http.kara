@@ -128,6 +128,11 @@ impl RequestBuilder {
     fn send(ref self) -> Result[Response, HttpError] {
         Err(HttpError { message: "" })
     }
+
+    // The `Request` the builder describes (its timeout aside), which a
+    // `Network` provider's `send` takes (core-semantics §14.12).
+    #[compiler_builtin]
+    fn __request(ref self) -> Request { Request { __id: 0 } }
 }
 
 impl Response {
@@ -204,13 +209,35 @@ struct Server { }
 // `Vec[(String, String)]` (a Vec, not a Map, so repeated header names /
 // duplicate query keys survive).
 //
-// At codegen, `Request` lowers to an opaque pointer wrapping the
-// runtime's `*const KaracHttpRequest` (mirrors `Map[K, V]`'s opaque-
-// ptr precedent). User code never sees the raw pointer — it interacts
-// only through the methods below.
-struct Request { }
+// A `Request` is also a value a program builds (`Request.new`,
+// `with_header`, `with_body`, core-semantics §14.12), so a `Network`
+// provider's `send` and a test that calls a handler directly both have
+// one. `__id` is 0 for the request a server's handler is answering, else
+// the runtime's id for one built; a program reads it only through the
+// methods below.
+struct Request {
+    __id: i64,
+}
 
 impl Request {
+    // A request to `url` with the verb `method`. The client fills `url`
+    // with the absolute URL; `path()` and `query()` read its target.
+    #[compiler_builtin]
+    fn new(method: own String, url: own String) -> Request { Request { __id: 0 } }
+
+    // The request with the header `(name, value)` added after the others.
+    #[compiler_builtin]
+    fn with_header(own self, name: own String, value: own String) -> Request { self }
+
+    // The request with `b` as its body.
+    #[compiler_builtin]
+    fn with_body(own self, b: own String) -> Request { self }
+
+    // The URL: the absolute URL a client request was built with, or the
+    // request target (path and query) of the one a server is answering.
+    #[compiler_builtin]
+    fn url(ref self) -> String { "" }
+
     // Return the request URL path as an owned `String`. The runtime
     // exposes the path as a borrowed `*const c_char`; this method
     // copies the bytes so the resulting String outlives the request

@@ -196,6 +196,18 @@ impl<'a> super::TypeChecker<'a> {
             {
                 return None;
             }
+            // The library's own builder methods (`__request`, which a
+            // `Network` provider's `__send_builder` calls) resolve through
+            // its `impl` (core-semantics §14.12).
+            if name == "RequestBuilder"
+                && !matches!(method, "header" | "body" | "timeout" | "send")
+                && !self
+                    .env
+                    .find_methods_with_args("RequestBuilder", &[], method)
+                    .is_empty()
+            {
+                return None;
+            }
             if matches!(
                 name.as_str(),
                 "Client" | "Response" | "HttpError" | "RequestBuilder"

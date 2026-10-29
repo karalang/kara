@@ -888,11 +888,9 @@ pub unsafe extern "C" fn karac_mir_net(
     use std::os::fd::IntoRawFd;
     let armed = sock::take_armed();
     // A provider's socket (core semantics §14.12) has no address or
-    // timeout: `Other(-1)`.
+    // timeout.
     if crate::net_provider::is_provided(fd) {
-        // SAFETY: the caller's contract.
-        unsafe { *value = -1 };
-        return 1;
+        return crate::net_provider::UNSUPPORTED;
     }
     // A datagram call that can wait, under the reactor contract
     // (`mir_sock.rs`): an armed one that would block is `IO_NOT_READY`.
@@ -1274,6 +1272,110 @@ fn with_request<T>(f: impl FnOnce(&http1::Request) -> T) -> T {
     })
 }
 
+/// The requests a program built (`Request.new`, core semantics §14.12),
+/// by `__id` - 1: the URL and the request.
+#[cfg(feature = "net")]
+static BUILT_REQUESTS: std::sync::Mutex<Vec<(String, http1::Request)>> =
+    std::sync::Mutex::new(Vec::new());
+
+#[cfg(feature = "net")]
+fn built_requests() -> std::sync::MutexGuard<'static, Vec<(String, http1::Request)>> {
+    BUILT_REQUESTS.lock().unwrap_or_else(|p| p.into_inner())
+}
+
+/// Keeps the request `req` to `url` a program built; its `__id`.
+#[cfg(feature = "net")]
+fn built_request(url: String, req: http1::Request) -> i64 {
+    let mut b = built_requests();
+    b.push((url, req));
+    b.len() as i64
+}
+
+/// A `RequestBuilder`'s request (`__request`, core semantics §14.12): its
+/// `__id`.
+#[cfg(feature = "tls")]
+pub(crate) fn request_of_builder(
+    method: String,
+    url: String,
+    headers: Vec<(String, String)>,
+    body: Vec<u8>,
+) -> i64 {
+    let mut req = http1::Request::built(method, &url);
+    req.headers = headers;
+    req.body = body;
+    built_request(url, req)
+}
+
+/// `f` of the request `id` names, with its URL: the served one at 0 (its
+/// target), else one built; an unknown id reads as an empty request.
+#[cfg(feature = "net")]
+fn with_request_id<T>(id: i64, f: impl FnOnce(&str, &http1::Request) -> T) -> T {
+    if id == 0 {
+        return with_request(|r| f(&r.target, r));
+    }
+    let b = built_requests();
+    match usize::try_from(id - 1).ok().and_then(|i| b.get(i)) {
+        Some((url, r)) => f(url, r),
+        None => f("", &http1::Request::default()),
+    }
+}
+
+/// `Request.new(method, url)`: a request a program builds; its `__id`.
+///
+/// # Safety
+///
+/// `m`/`m_len` and `u`/`u_len` describe readable bytes.
+#[cfg(feature = "net")]
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_http_request_new(
+    m: *const u8,
+    m_len: u64,
+    u: *const u8,
+    u_len: u64,
+) -> i64 {
+    // SAFETY: the caller's contract.
+    let (m, u) = unsafe { (bytes_at(m, m_len as usize), bytes_at(u, u_len as usize)) };
+    let url = String::from_utf8_lossy(u).into_owned();
+    let req = http1::Request::built(String::from_utf8_lossy(m).into_owned(), &url);
+    built_request(url, req)
+}
+
+/// `with_header(name, value)` (`op` 0, `a` the name and `b` the value) or
+/// `with_body(b)` (1, `a` the body) on the request `id`; the `__id` of the
+/// request it makes, a copy of the served one when `id` is 0.
+///
+/// # Safety
+///
+/// `a`/`a_len` and `b`/`b_len` describe readable bytes.
+#[cfg(feature = "net")]
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_http_request_set(
+    id: i64,
+    op: i32,
+    a: *const u8,
+    a_len: u64,
+    b: *const u8,
+    b_len: u64,
+) -> i64 {
+    let id = if id == 0 {
+        let (url, req) = with_request(|r| (r.target.clone(), r.clone()));
+        built_request(url, req)
+    } else {
+        id
+    };
+    // SAFETY: the caller's contract.
+    let (a, b) = unsafe { (bytes_at(a, a_len as usize), bytes_at(b, b_len as usize)) };
+    let mut all = built_requests();
+    if let Some((_, r)) = usize::try_from(id - 1).ok().and_then(|i| all.get_mut(i)) {
+        let text = |t: &[u8]| String::from_utf8_lossy(t).into_owned();
+        match op {
+            0 => r.headers.push((text(a), text(b))),
+            _ => r.body = a.to_vec(),
+        }
+    }
+    id
+}
+
 /// `Server.__install(buf, eof)` for the servers in
 /// runtime/stdlib/source/http_server.kara: makes the request at the start
 /// of the `n` bytes at `p` the current one, and returns the bytes it took;
@@ -1361,10 +1463,10 @@ unsafe fn header_pairs(headers: *const RawVec, n: usize) -> Vec<(String, String)
     pairs
 }
 
-/// `Request`'s methods, on the current request: `op` 0 `path`, 1 `method`
-/// and 2 `body`, each a `String` at `out`; 3 `header(name)`, 1 with its
-/// value at `out` or 0; 4 `headers` and 5 `query`, a `Vec[(String,
-/// String)]` at `out`.
+/// `Request`'s methods, on the request `id` names (0 the current one):
+/// `op` 0 `path`, 1 `method`, 2 `body` and 6 `url`, each a `String` at
+/// `out`; 3 `header(name)`, 1 with its value at `out` or 0; 4 `headers`
+/// and 5 `query`, a `Vec[(String, String)]` at `out`.
 ///
 /// # Safety
 ///
@@ -1373,13 +1475,14 @@ unsafe fn header_pairs(headers: *const RawVec, n: usize) -> Vec<(String, String)
 #[cfg(feature = "net")]
 #[no_mangle]
 pub unsafe extern "C" fn karac_mir_http_request(
+    id: i64,
     op: i32,
     name: *const u8,
     name_len: u64,
     out: *mut RawVec,
 ) -> i32 {
     let name_len = name_len as usize;
-    with_request(|r| {
+    with_request_id(id, |url, r| {
         // SAFETY: the caller's contract.
         unsafe {
             match op {
@@ -1394,7 +1497,8 @@ pub unsafe extern "C" fn karac_mir_http_request(
                     }
                 }
                 4 => pairs_of(out, &r.headers),
-                _ => pairs_of(out, &r.query()),
+                5 => pairs_of(out, &r.query()),
+                _ => string_of(out, url.as_bytes()),
             }
         }
         1

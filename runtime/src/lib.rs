@@ -643,10 +643,16 @@ pub fn __preserve_no_mangle_symbols() -> usize {
     #[cfg(feature = "net")]
     keep!(
         mir_io::karac_mir_http_request,
+        mir_io::karac_mir_http_request_new,
+        mir_io::karac_mir_http_request_set,
         mir_io::karac_mir_http_install,
         mir_io::karac_mir_http_wire,
         mir_io::karac_mir_http_keep_alive,
     );
+    // A `RequestBuilder`'s request for a `Network` provider's `send` (core
+    // semantics §14.12; full archive only, with the client).
+    #[cfg(feature = "tls")]
+    keep!(karac_runtime_http_builder_request);
     // `std.crypto`'s digests on the MIR backend (full archive only).
     #[cfg(feature = "tls")]
     keep!(mir_crypto::karac_crypto_mir);
@@ -8056,6 +8062,27 @@ pub extern "C" fn karac_runtime_http_builder_free(handle: i64) {
     if let Ok(mut map) = HTTP_BUILDERS.lock() {
         map.remove(&handle);
     }
+}
+
+/// `RequestBuilder.__request()`: the `Request` the builder `handle`
+/// describes (its timeout aside), for a `Network` provider's `send`
+/// (core semantics §14.12); its `__id`. The builder keeps its entry.
+#[cfg(feature = "tls")]
+#[no_mangle]
+pub extern "C" fn karac_runtime_http_builder_request(handle: i64) -> i64 {
+    let (method, url, headers, body) = match HTTP_BUILDERS.lock() {
+        Ok(map) => match map.get(&handle) {
+            Some(b) => (
+                b.method.clone(),
+                b.url.clone(),
+                b.headers.clone(),
+                b.body.clone(),
+            ),
+            None => Default::default(),
+        },
+        Err(_) => Default::default(),
+    };
+    crate::mir_io::request_of_builder(method, url, headers, body)
 }
 
 /// Drive the configured request and populate the success / error

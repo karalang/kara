@@ -121,12 +121,15 @@ pub const FILE_OPS: [&str; 7] = [
     "set_len",
 ];
 
-/// The socket natives that, in a program binding `Network`, are calls on
-/// the resource (core semantics §14.12), with the call that stands for
-/// each: a `bind` or `connect` reaches the provider under an override, and
-/// an operation on a socket the native, which finds the provider a socket
-/// opened under one belongs to.
-pub const NET_ROUTES: [(&str, &str); 6] = [
+/// The HTTP client and socket natives that, in a program binding
+/// `Network`, are calls on the resource (core semantics §14.12), with the
+/// call that stands for each: a client call, `bind` or `connect` reaches
+/// the provider under an override, and an operation on a socket the
+/// native, which finds the provider a socket opened under one belongs to.
+pub const NET_ROUTES: [(&str, &str); 9] = [
+    ("Client.get", "http_get"),
+    ("Client.post", "http_post"),
+    ("RequestBuilder.send", "http_send"),
     ("TcpListener.bind", "tcp_bind"),
     ("TcpStream.connect", "tcp_connect"),
     ("TcpListener.accept", "tcp_accept"),
@@ -189,6 +192,9 @@ pub fn via_method<'m>(r: &str, m: &'m str) -> &'m str {
         ("FileSystem", "open_file") => "open",
         ("FileSystem", "file_read") => "read_handle",
         ("FileSystem", "file_write") => "write_handle",
+        ("Network", "http_get") => "__get",
+        ("Network", "http_post") => "__post",
+        ("Network", "http_send") => "__send_builder",
         ("Network", "tcp_bind") => "__bind",
         ("Network", "tcp_connect") => "__connect",
         ("Network", "tcp_accept") => "accept",
@@ -636,11 +642,19 @@ impl Spec<'_> {
                 fx.body.instance.name
             )
         })?;
+        let bb = match (binding, m) {
+            (Binding::Bound(_), "http_get" | "http_post") => self.owned_texts(fx, bb),
+            _ => bb,
+        };
         if let Some(native) = file_native(r, m) {
             match (binding, m) {
                 (Binding::Bound(_), "open_file") => return self.open_via(fx, bb, r),
-                // The provider's `__bind` / `__connect`, below.
-                (Binding::Bound(_), "tcp_bind" | "tcp_connect") => {}
+                // The provider's `__get`, `__post`, `__send_builder`,
+                // `__bind` or `__connect`, below.
+                (
+                    Binding::Bound(_),
+                    "http_get" | "http_post" | "http_send" | "tcp_bind" | "tcp_connect",
+                ) => {}
                 // Out of an override and in one alike, an operation on an
                 // open `File` or socket is the native, which finds the
                 // provider a handle opened under one belongs to (core
@@ -736,6 +750,45 @@ impl Spec<'_> {
         ops.insert(0, recv);
         ops.extend(extra);
         Ok(())
+    }
+
+    /// A client call's text arguments as the natives take them, where a
+    /// literal (`c.get("http://..")`) stays a view, made `String`s for the
+    /// library's `__get` / `__post`, which own them (core semantics
+    /// §14.12): each literal formatted into a temporary before the call.
+    /// The block that makes the call.
+    fn owned_texts(&mut self, fx: &mut Fx, bb: BasicBlock) -> BasicBlock {
+        let string = self.tys.tcx().intern(SK::Str);
+        let info = fx.body.blocks[bb.index()].terminator.source_info;
+        let mut at = bb;
+        let TerminatorKind::Call { args, .. } = &fx.body.blocks[bb.index()].terminator.kind else {
+            unreachable!()
+        };
+        for i in 0..args.len() {
+            let mut call = fx.body.blocks[at.index()].terminator.kind.clone();
+            let TerminatorKind::Call { args, .. } = &mut call else {
+                unreachable!()
+            };
+            let lit @ Operand::Const(Const {
+                kind: ConstKind::Str(_),
+                ..
+            }) = args[i].clone()
+            else {
+                continue;
+            };
+            let text = fx.temp(string);
+            args[i] = Operand::Move(Place::local(text));
+            let next = fx.block(call, info);
+            fx.body.blocks[at.index()].terminator.kind = TerminatorKind::Call {
+                func: fn_def(self.tys, DefId(u32::MAX), Vec::new(), "format".to_string()),
+                args: vec![lit],
+                destination: Place::local(text),
+                target: Some(next),
+                unwind: UnwindAction::Abort,
+            };
+            at = next;
+        }
+        at
     }
 
     /// `print` / `println` on a stream bound to a provider (core semantics

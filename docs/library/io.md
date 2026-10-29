@@ -304,6 +304,7 @@ enum NetError {
     Tls(TlsFailure),
     Protocol,
     ProviderUnavailable,
+    Unsupported,
     Other(i32),
 }
 
@@ -325,12 +326,13 @@ type TcpError = NetError;
 
 **Timeouts.** `set_read_timeout(Some(ms))` makes a later `read`, `recv` or `recv_from` that waits longer than `ms` milliseconds fail with `NetError.TimedOut`; `None` waits for ever, the default. A timeout is how a UDP program avoids waiting for ever on a lost datagram. A timeout below 1 ms fails with `InvalidInput`. Inside a task, a read that waits suspends its task, and the timeout still ends it, so the program's other tasks run until the data or the deadline arrives ([core semantics §11.10](../core-semantics.md)).
 
-**Errors.** `NetError` is the error of every socket operation. `Interrupted` is a call a signal interrupted, which is safe to retry. `TimedOut` is a read timeout expiring. `WouldBlock` is a non-blocking socket with nothing to do; v1 sockets block, so no v1 operation returns it, and it exists so that matches written now stay exhaustive when non-blocking sockets come. `InvalidInput` is an argument the operation refuses: an address that does not parse, a timeout below 1 ms, or a certificate or key that does not parse. `Tls` is a TLS failure on a `TlsStream`, and `Protocol` a WebSocket peer that broke the protocol, or a send after the close. `ProviderUnavailable` is an operation on a socket opened under a `Network` override after that override has ended (below). `Other` carries the OS error code, or -1 when the OS gave none. `TcpError` is the earlier name of `NetError`, kept until M3.
+**Errors.** `NetError` is the error of every socket operation. `Interrupted` is a call a signal interrupted, which is safe to retry. `TimedOut` is a read timeout expiring. `WouldBlock` is a non-blocking socket with nothing to do; v1 sockets block, so no v1 operation returns it, and it exists so that matches written now stay exhaustive when non-blocking sockets come. `InvalidInput` is an argument the operation refuses: an address that does not parse, a timeout below 1 ms, or a certificate or key that does not parse. `Tls` is a TLS failure on a `TlsStream`, and `Protocol` a WebSocket peer that broke the protocol, or a send after the close. `ProviderUnavailable` is an operation on a socket opened under a `Network` override after that override has ended, and `Unsupported` one a fake's socket does not have (below). `Other` carries the OS error code, or -1 when the OS gave none. `TcpError` is the earlier name of `NetError`, kept until M3.
 
 **Sockets under an override** ([core semantics §14.12](../core-semantics.md)). `Network`'s bound is `NetworkProvider`, whose methods name a socket by an `i64` id of the fake's choosing, each with a default that panics, so a fake states only the ones it uses:
 
 ```kara
 trait NetworkProvider {
+    fn send(mut ref self, req: Request) -> Result[Response, HttpError]
     fn bind(mut ref self, addr: Str) -> Result[i64, NetError]
     fn connect(mut ref self, addr: Str) -> Result[i64, NetError]
     fn accept(mut ref self, listener: i64) -> Result[i64, NetError]
@@ -341,7 +343,7 @@ trait NetworkProvider {
 }
 ```
 
-Inside `with_provider[Network](fake, || ..)` (or a `providers { Network => fake } in { .. }` block), `TcpListener.bind` and `TcpStream.connect` call the fake's `bind` and `connect`, and the listener or stream they return belongs to the fake: its `accept` calls the fake's `accept` (the accepted stream belongs to the fake too), `read` and `write` (and so `write_all`) call `read_stream` and `write_stream`, `shutdown_write` calls `shutdown`, and dropping it calls `close`. `try_clone`, `local_addr` and `set_read_timeout` on a fake's socket return `Err(NetError.Other(-1))`. A fake's methods run to completion: a read of a fake's stream inside a task never suspends it. As with files, a socket reaches the fake it was opened under inside a nested override too, and once that override has ended every operation on it returns `Err(NetError.ProviderUnavailable)` and its drop does nothing. A socket opened outside every override is the operating system's and works anywhere. In a program that overrides `Network` anywhere, a socket's operations can reach a provider, so they count as writes of `Network`: two `par` branches or tasks that both use sockets conflict there. A program that never overrides `Network` keeps the socket natives and their per-socket effects, and pays nothing for the override. The handle methods run with every other resource at its default, as a file's do. UDP sockets, TLS, WebSocket and the HTTP server are not served by a provider.
+Inside `with_provider[Network](fake, || ..)` (or a `providers { Network => fake } in { .. }` block), `TcpListener.bind` and `TcpStream.connect` call the fake's `bind` and `connect`, and the listener or stream they return belongs to the fake: its `accept` calls the fake's `accept` (the accepted stream belongs to the fake too), `read` and `write` (and so `write_all`) call `read_stream` and `write_stream`, `shutdown_write` calls `shutdown`, and dropping it calls `close`. `try_clone`, `local_addr` and `set_read_timeout` on a fake's socket return `Err(NetError.Unsupported)`. A fake's methods run to completion: a read of a fake's stream inside a task never suspends it. As with files, a socket reaches the fake it was opened under inside a nested override too, and once that override has ended every operation on it returns `Err(NetError.ProviderUnavailable)` and its drop does nothing. A socket opened outside every override is the operating system's and works anywhere. In a program that overrides `Network` anywhere, a socket's operations can reach a provider, so they count as writes of `Network`: two `par` branches or tasks that both use sockets conflict there. A program that never overrides `Network` keeps the socket natives and their per-socket effects, and pays nothing for the override. The handle methods run with every other resource at its default, as a file's do. `send` is the HTTP client's ([HTTP client](#http-client)). UDP sockets, TLS, WebSocket and the HTTP servers are not served by a provider: under an override the check refuses them (`E_PROVIDER_UNSUPPORTED`), so a test never reaches the real network by accident. That check is not in place yet (B-2026-10-29-20).
 
 ### TLS server
 
@@ -409,7 +411,11 @@ impl Server {
 }
 
 impl Request {
+    fn new(method: String, url: String) -> Request
+    fn with_header(own self, name: String, value: String) -> Request
+    fn with_body(own self, b: String) -> Request
     fn method(self) -> String
+    fn url(self) -> String
     fn path(self) -> String
     fn query(self) -> Vec[(String, String)]
     fn header(self, name: String) -> Option[String]
@@ -420,7 +426,9 @@ impl Request {
 struct Response { status: i64, body: String }
 ```
 
-Each server binds `addr` and answers every request with what `handler` returns for it; it returns only when binding or accepting fails, with that `HttpError`. It prints `BOUND_PORT=<n>` on standard error once it is bound, so a test harness that bound port 0 can find it. A program may declare its own `Response` as `struct Response { status: i64, body: String, headers: Vec[(String, String)] }` to send headers. A response gets a JSON `content-type` when its headers give none, and its body's `content-length` in place of any they give. `header` compares names without case.
+Each server binds `addr` and answers every request with what `handler` returns for it; it returns only when binding or accepting fails, with that `HttpError`. It prints `BOUND_PORT=<n>` on standard error once it is bound, so a test harness that bound port 0 can find it. A program may declare its own `Response` as `struct Response { status: i64, body: String, headers: Vec[(String, String)] }` to send headers.
+
+A `Request` is also a value a program builds, so a test calls a handler directly: `handle(Request.new("GET", "/items?id=3").with_header("Accept", "text/plain"))`. `url` is the URL the request was built with, or for a request a server is answering its target, the path and query. `path` and `query` read the target, which for an absolute URL (`http://host/items?id=3`) is its path and query, `/` when it has neither. `with_header` adds a header after the others, and `with_body` sets the body. A response gets a JSON `content-type` when its headers give none, and its body's `content-length` in place of any they give. `header` compares names without case.
 
 Each connection is served by a task of its own, in an isolating group ([core semantics §11.12](../core-semantics.md)), so a client that is slow to send its request, or holds its connection open, holds up no other, and a handler that panics ends only the connection it was answering. A connection is kept for the client's next request until the client closes it or asks to (`Connection: close`, or HTTP/1.0 without `keep-alive`); the response to a request that asks gets `connection: close`. Requests on one connection are answered in the order they came, pipelined ones included.
 
@@ -480,6 +488,8 @@ impl HttpError {
 **Inside a task**, `get`, `post` and `send` suspend their task until the answer is in, and the program's other tasks run meanwhile ([core semantics §11.8](../core-semantics.md)). For now each request runs on a helper thread, at most 64 at once; the rest queue, and their tasks stay suspended until a helper is free. A request whose task is cancelled still runs to its end, and its answer is dropped. This is interim: the client will run on the executor's own non-blocking sockets, with no helper.
 
 A URL is `http://` or `https://`. The client follows up to five redirects, and a status outside 2xx is an `Err`. A redirect keeps the request's `Authorization` and `Cookie` headers only while it stays on the original request's origin (scheme, host and port); the first hop anywhere else drops both for the rest of the chain, an `https://` to `http://` downgrade included. `header` compares names without case.
+
+**Under an override** ([core semantics §14.12](../core-semantics.md)), `Client.get`, `Client.post` and `RequestBuilder.send` call the `Network` provider's `send(mut ref self, req: Request) -> Result[Response, HttpError]` with the `Request` they describe: the method, the absolute URL, the builder's headers in order and the body (a `get` has none). The builder's timeout is not part of the request. The fake's `Response` (`Response { status: 200, body: .. }`) or `HttpError` comes back as the call's result as it is, without the redirects or the status check of the real client, and its `header` and `headers` find none. A fake states `send` only when it serves HTTP: `NetworkProvider`'s default panics, as its socket methods' do (above).
 
 **HTTPS.** An `https://` URL is fetched over TLS, and the server's certificate must chain to a trusted root. The trusted roots are the Mozilla bundle, built into every program so it needs no system CA store, plus the PEM certificates in the file that the environment variable `KARAC_HTTP_EXTRA_CA` names, for a private CA or a test's own. A certificate that does not verify is an `Err` naming the failure; there is no way to turn verification off.
 

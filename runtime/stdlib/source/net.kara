@@ -40,6 +40,9 @@ enum NetError {
     // `with_provider` call or `providers` block has ended
     // (core-semantics §14.12).
     ProviderUnavailable,
+    // An operation a `Network` provider's socket does not have:
+    // `try_clone`, `local_addr` or an option setter (core-semantics §14.12).
+    Unsupported,
 }
 
 // How a TLS connection failed (`NetError.Tls`).

@@ -145,7 +145,7 @@ impl Server {
             if used < 0 {
                 return;
             }
-            let req = Request { };
+            let req = Request { __id: 0 };
             let resp = handler(req);
             if upgrades and resp.status == 101 {
                 match Server.__handshake_key(req) {
@@ -265,6 +265,7 @@ impl Server {
             NetError.Tls(_) => "TLS failure".to_string(),
             NetError.Protocol => "protocol error".to_string(),
             NetError.ProviderUnavailable => "provider unavailable".to_string(),
+            NetError.Unsupported => "unsupported".to_string(),
         };
         HttpError { message: f"{what}: {why}" }
     }

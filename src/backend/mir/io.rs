@@ -35,7 +35,7 @@ pub(super) const IO_ERRORS: [&str; 10] = [
 ];
 
 /// The `NetError` variants by the runtime's code for them.
-const NET_ERRORS: [&str; 11] = [
+const NET_ERRORS: [&str; 12] = [
     "Interrupted",
     "Other",
     "AddrInUse",
@@ -47,6 +47,7 @@ const NET_ERRORS: [&str; 11] = [
     "Tls",
     "Protocol",
     "ProviderUnavailable",
+    "Unsupported",
 ];
 
 /// `TlsFailure`'s variants, in the order `src/tls_conn.rs` numbers them.
@@ -1547,6 +1548,15 @@ impl<'ctx> Cx<'ctx, '_> {
                 let d = self.place_ptr(dest)?;
                 self.store(d, h.into())?;
             }
+            // The `Request` it describes, for a `Network` provider's `send`
+            // (core semantics §14.12): a `Request` is its `__id`.
+            ("RequestBuilder", "__request") => {
+                let (at, _) = self.behind_refs(&args[0])?;
+                let h = self.load_i64(at)?;
+                let id = self.rt_named("karac_runtime_http_builder_request", &[h.into()], 64)?;
+                let d = self.place_ptr(dest)?;
+                self.store(d, id.into())?;
+            }
             ("RequestBuilder", "header" | "body" | "timeout") => {
                 let (at, ty) = self.behind_refs(&args[0])?;
                 let h = self.load_i64(at)?;
@@ -1791,9 +1801,52 @@ impl<'ctx> Cx<'ctx, '_> {
         self.drop_moved(args)
     }
 
-    /// `Request`'s methods, on the request the running task is answering,
-    /// through `karac_mir_http_request(op, name, len, out)`.
+    /// `Request`'s methods, through `karac_mir_http_request(id, op, name,
+    /// len, out)`, and `Request.new` / `with_header` / `with_body`, which
+    /// build one (`karac_mir_http_request_new` / `_set`).
     fn request_native(&mut self, method: &str, args: &[Operand], dest: &Place) -> R<Option<()>> {
+        // A `Request` is its `__id`: 0 the one the running task's handler
+        // is answering, else one the program built (core semantics §14.12).
+        let d = self.place_ptr(dest)?;
+        match method {
+            "new" => {
+                let (m, mn) = self.str_parts(&args[0])?;
+                let (u, un) = self.str_parts(&args[1])?;
+                let id = self.rt_named(
+                    "karac_mir_http_request_new",
+                    &[m.into(), mn.into(), u.into(), un.into()],
+                    64,
+                )?;
+                self.drop_moved(args)?;
+                return self.store(d, id.into()).map(Some);
+            }
+            "with_header" | "with_body" => {
+                let (at, _) = self.behind_refs(&args[0])?;
+                let id = self.load_i64(at)?;
+                let (a, an) = self.str_parts(&args[1])?;
+                let (b, bn) = match args.get(2) {
+                    Some(v) => self.str_parts(v)?,
+                    None => (self.ptr_ty().const_null(), self.i64(0)),
+                };
+                let op = u64::from(method == "with_body");
+                let op = self.llcx.i32_type().const_int(op, false);
+                let id = self.rt_named(
+                    "karac_mir_http_request_set",
+                    &[
+                        id.into(),
+                        op.into(),
+                        a.into(),
+                        an.into(),
+                        b.into(),
+                        bn.into(),
+                    ],
+                    64,
+                )?;
+                self.drop_moved(&args[1..])?;
+                return self.store(d, id.into()).map(Some);
+            }
+            _ => {}
+        }
         let op: u64 = match method {
             "path" => 0,
             "method" => 1,
@@ -1801,16 +1854,24 @@ impl<'ctx> Cx<'ctx, '_> {
             "header" => 3,
             "headers" => 4,
             "query" => 5,
+            "url" => 6,
             _ => return Ok(None),
         };
+        let (at, _) = self.behind_refs(&args[0])?;
+        let id = self.load_i64(at)?;
         let i32t = self.llcx.i32_type();
         let op = i32t.const_int(op, false);
-        let d = self.place_ptr(dest)?;
         if method != "header" {
             let null = self.ptr_ty().const_null();
             self.rt_named(
                 "karac_mir_http_request",
-                &[op.into(), null.into(), self.i64(0).into(), d.into()],
+                &[
+                    id.into(),
+                    op.into(),
+                    null.into(),
+                    self.i64(0).into(),
+                    d.into(),
+                ],
                 32,
             )?;
             return Ok(Some(()));
@@ -1820,7 +1881,7 @@ impl<'ctx> Cx<'ctx, '_> {
         let out = self.temp(string, "request.header")?;
         let found = self.rt_named(
             "karac_mir_http_request",
-            &[op.into(), n.into(), nn.into(), out.into()],
+            &[id.into(), op.into(), n.into(), nn.into(), out.into()],
             32,
         )?;
         self.drop_moved(&args[1..])?;

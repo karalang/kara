@@ -9,7 +9,7 @@
 //! shutdown and accepts go to the provider while its override runs, and
 //! fail with `ProviderUnavailable` after; its drop calls the provider's
 //! `close`, or does nothing once the override has ended. Every other
-//! operation on it fails with `Other(-1)`.
+//! operation on it fails with `Unsupported`.
 //!
 //! The methods are the library's code-returning `__read`, `__write`,
 //! `__accept` and `__shutdown` (runtime/stdlib/source/net_provider.kara),
@@ -25,6 +25,9 @@ use std::sync::Mutex;
 /// The runtime's code for `NetError.ProviderUnavailable`
 /// (src/backend/mir/io.rs `NET_ERRORS`).
 const PROVIDER_UNAVAILABLE: i32 = 10;
+
+/// The runtime's code for `NetError.Unsupported`.
+pub(crate) const UNSUPPORTED: i32 = 11;
 
 struct Extent {
     provider: u64,
@@ -197,11 +200,8 @@ pub(crate) unsafe fn tcp(op: i32, fd: i64, ptr: *mut u8, len: i64, value: *mut i
                     v = done;
                 }
             }
-            _ => {
-                // No `try_clone` of a provider's socket.
-                value.write(-1);
-                return 1;
-            }
+            // No `try_clone` of a provider's socket.
+            _ => return UNSUPPORTED,
         }
     }
     if ret < 0 {

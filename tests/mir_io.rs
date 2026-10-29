@@ -373,6 +373,7 @@ fn show(e: TcpError) -> String {
         TcpError.Tls(_) => "tls".to_string(),
         TcpError.Protocol => "protocol".to_string(),
         TcpError.ProviderUnavailable => "provider unavailable".to_string(),
+        TcpError.Unsupported => "unsupported".to_string(),
     }
 }
 
@@ -489,6 +490,7 @@ fn show(e: NetError) -> String {
         NetError.Tls(_) => "tls".to_string(),
         NetError.Protocol => "protocol".to_string(),
         NetError.ProviderUnavailable => "provider unavailable".to_string(),
+        NetError.Unsupported => "unsupported".to_string(),
     }
 }
 
@@ -2359,6 +2361,37 @@ fn redirects_keep_credentials_only_on_the_first_origin_on_both_backends() {
     assert_eq!(
         interp,
         format!("authorization=Bearer t cookie=c=1\n{dropped}{dropped}{dropped}")
+    );
+    if let Some(built) = built {
+        assert_eq!(built, interp);
+    }
+}
+
+/// A URL without a scheme is a bare authority to the client: one with a
+/// path after it is a bad URL and a bare path has no host, on both MIR
+/// backends, before either tries to connect.
+#[test]
+fn schemeless_urls_fail_alike_on_both_backends() {
+    let dir = Scratch::new("schemeless_urls");
+    let src = r#"fn fetch(url: own String) {
+    match Client.new().request("GET", url).send() {
+        Ok(r) => println(r.body()),
+        Err(e) => println(f"error: {e.message()}"),
+    }
+}
+
+fn main() {
+    fetch("FIRST/same");
+    fetch("/only/path");
+    fetch("127.0.0.1:1?q");
+}
+"#;
+    let (interp, built) = interp_and_build(dir.path(), src);
+    assert_eq!(
+        interp,
+        "error: FIRST/same: bad url: invalid format\n\
+         error: /only/path: url has no host\n\
+         error: 127.0.0.1:1?q: bad url: invalid format\n"
     );
     if let Some(built) = built {
         assert_eq!(built, interp);

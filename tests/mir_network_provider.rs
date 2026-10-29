@@ -129,6 +129,7 @@ fn why(e: NetError) -> String {
         NetError.ConnectionRefused => "refused".to_string(),
         NetError.ProviderUnavailable => "provider unavailable".to_string(),
         NetError.Other(c) => f"other {c}",
+        NetError.Unsupported => "unsupported".to_string(),
         _ => "else".to_string(),
     }
 }
@@ -176,7 +177,7 @@ fn provider_network_override_takes_client_sockets() {
 
 /// A server in a `providers` block: `bind` and `accept` reach the fake,
 /// an accepted stream belongs to it too, its errors keep their payloads,
-/// and `try_clone` on a fake's socket is `Other(-1)`.
+/// and `try_clone` on a fake's socket is `Unsupported`.
 const SERVER: &str = r#"
 struct Wire { next: i64, pending: Vec[i64], log: Vec[String] }
 
@@ -222,6 +223,7 @@ fn why(e: NetError) -> String {
         NetError.TimedOut => "timed out".to_string(),
         NetError.ProviderUnavailable => "provider unavailable".to_string(),
         NetError.Other(c) => f"other {c}",
+        NetError.Unsupported => "unsupported".to_string(),
         _ => "else".to_string(),
     }
 }
@@ -273,7 +275,7 @@ fn provider_network_block_takes_listeners_and_accepted_streams() {
     assert_both(
         "server",
         SERVER,
-        "write 8 2\nclone other -1\nclose 8\nread timed out\nclone other -1\nclose 7\n\
+        "write 8 2\nclone unsupported\nclose 8\nread timed out\nclone unsupported\nclose 7\n\
          accept other 42\nclose 100\nserved 2\nbind in use\n",
     );
 }
@@ -433,4 +435,64 @@ test "refused names NetError" {
         "package binary",
     );
     assert_eq!(printed, "2 2\n");
+}
+
+/// The HTTP client under an override: `get`, `post` and a built request's
+/// `send` reach the provider's `send` with a `Request` it can read, and a
+/// handler takes a `Request` a program built itself.
+#[test]
+fn provider_network_send_takes_the_http_client() {
+    assert_both(
+        "http",
+        r#"struct Recorder { seen: i64 }
+
+impl NetworkProvider for Recorder {
+    fn send(mut ref self, req: Request) -> Result[Response, HttpError] {
+        self.seen = self.seen + 1;
+        let mut text = f"{req.method()} {req.url()} path={req.path()}";
+        for (k, v) in req.query() {
+            text = text + f" q:{k}={v}";
+        }
+        for (k, v) in req.headers() {
+            text = text + f" h:{k}={v}";
+        }
+        text = text + f" body={req.body()} n={self.seen}";
+        if req.path() == "/fail" {
+            return Err(HttpError { message: "down".to_string() });
+        }
+        Ok(Response { status: 200, body: text })
+    }
+}
+
+fn show(r: Result[Response, HttpError]) {
+    match r {
+        Ok(resp) => println(f"{resp.status()} {resp.body()}"),
+        Err(e) => println(f"err {e.message()}"),
+    }
+}
+
+fn handler(req: ref Request) -> Response {
+    Response { status: 201, body: f"handled {req.method()} {req.path()} {req.body()}" }
+}
+
+fn main() {
+    with_provider[Network](Recorder { seen: 0 }, || {
+        let c = Client.new();
+        show(c.get("http://api.test/items?id=7&q=a+b"));
+        show(c.post("http://api.test/items", "{\"x\":1}"));
+        show(c.request("PUT", "https://api.test").header("X-Key", "k1").body("pp").send());
+        show(c.get("http://api.test/fail"));
+    });
+    let req = Request.new("DELETE".to_string(), "/items/3?force=1".to_string()).with_header("A".to_string(), "b".to_string()).with_body("bye".to_string());
+    let resp = handler(req);
+    println(f"{resp.status} {resp.body} url={req.url()} q={req.query().len()} h={req.header("a".to_string())}");
+}
+"#,
+        r#"200 GET http://api.test/items?id=7&q=a+b path=/items q:id=7 q:q=a b body= n=1
+200 POST http://api.test/items path=/items body={"x":1} n=2
+200 PUT https://api.test path=/ h:X-Key=k1 body=pp n=3
+err down
+201 handled DELETE /items/3 bye url=/items/3?force=1 q=1 h=Some(b)
+"#,
+    );
 }

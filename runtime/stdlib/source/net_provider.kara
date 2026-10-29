@@ -6,14 +6,20 @@
 // the trait (`BAKED_SOURCES` in src/mir/lower.rs); a program that never
 // overrides `Network` keeps its socket and HTTP natives untouched.
 //
-// In a program that binds `Network`, `TcpListener.bind` and
-// `TcpStream.connect` inside an override call the provider's `bind` and
-// `connect`, and an operation on a socket the provider opened (`accept`,
-// `read`, `write`, `shutdown_write`, its drop) goes to the provider it
-// was opened under while that provider's call or block runs, and fails
-// with `NetError.ProviderUnavailable` after.
+// In a program that binds `Network`, `Client.get`, `Client.post` and
+// `RequestBuilder.send` inside an override call the provider's `send`
+// with the `Request` they describe; `TcpListener.bind` and
+// `TcpStream.connect` call its `bind` and `connect`, and an operation on
+// a socket the provider opened (`accept`, `read`, `write`,
+// `shutdown_write`, its drop) goes to the provider it was opened under
+// while that provider's call or block runs, and fails with
+// `NetError.ProviderUnavailable` after.
 
 trait NetworkProvider {
+    fn send(mut ref self, req: Request) -> Result[Response, HttpError] {
+        panic("Network.send called on a provider that does not implement it")
+    }
+
     fn bind(mut ref self, addr: Str) -> Result[i64, NetError] {
         panic("Network.bind called on a provider that does not implement it")
     }
@@ -43,7 +49,21 @@ trait NetworkProvider {
     }
 
     // The library's own, which a provider does not define: an override's
-    // `bind` and `connect`, the socket of the id the provider returned.
+    // client calls, each the `Request` it describes sent through `send`.
+    fn __get(mut ref self, c: ref Client, url: own String) -> Result[Response, HttpError] {
+        self.send(Request.new("GET".to_string(), url))
+    }
+
+    fn __post(mut ref self, c: ref Client, url: own String, body: own String) -> Result[Response, HttpError] {
+        self.send(Request.new("POST".to_string(), url).with_body(body))
+    }
+
+    fn __send_builder(mut ref self, b: ref RequestBuilder) -> Result[Response, HttpError] {
+        self.send(b.__request())
+    }
+
+    // And an override's `bind` and `connect`, the socket of the id the
+    // provider returned.
     fn __bind(mut ref self, addr: Str) -> Result[TcpListener, NetError] {
         match self.bind(addr) {
             Ok(h) => Ok(TcpListener { fd: TcpStream.__adopt(mut self, h) }),
@@ -125,6 +145,7 @@ trait NetworkProvider {
             }
             NetError.Protocol => 9,
             NetError.ProviderUnavailable => 10,
+            NetError.Unsupported => 11,
         };
         -1 - code
     }
