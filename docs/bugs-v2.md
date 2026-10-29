@@ -58,10 +58,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| false-positive | 62 |
-| diagnostics | 61 |
+| false-positive | 63 |
+| diagnostics | 62 |
 | missing-feature | 49 |
-| perf | 36 |
+| perf | 37 |
 | soundness | 25 |
 | miscompile | 17 |
 | run-vs-build | 11 |
@@ -77,11 +77,11 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | typecheck | 116 |
 | mir | 57 |
 | mir-llvm | 47 |
-| ownership | 26 |
-| interp | 24 |
-| cli | 24 |
+| ownership | 27 |
+| interp | 25 |
+| cli | 25 |
 | codegen | 22 |
-| parser | 18 |
+| parser | 19 |
 | runtime | 17 |
 | effect | 4 |
 | other | 3 |
@@ -144,6 +144,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-29-34 | 2026-10-29 | parser | low | `ref mut m` in a pattern (Rust's order for Kāra's `mut ref m`) is reported as "'mut' is a reserved keyword and cannot be used as an identifier" plus a cascading "Expected expression, found RightBrace" at the next `}`, with no fix; `mut m` in a pattern already gets a Rust-syntax diagnostic and a fix | — |
 | B-2026-10-29-35 | 2026-10-29 | typecheck | low | A comparison does not give a constructor or tuple operand the other operand's type, so a `ref` to a Copy value inside it is refused: with `n: ref i64` from `for n in v.iter()`, `value == Some(n)`, `Some(n) == value`, `value != Some(n)` and `pair == (n, 5)` fail "cannot compare 'Option[i64]' and 'Option[ref i64]'" (or the tuple form) with no fix-it, though `let w: Option[i64] = Some(n)`, `same(value, Some(n))` and `vec![Some(n)]` into a `Vec[Option[i64]]` all read `n` as an `i64` | — |
 | B-2026-10-29-36 | 2026-10-29 | typecheck | medium | A call whose result type nothing fixes passes `karac check` when it is an operand of `==` and fails in the MIR builder: `s.chars().filter(..).collect() == t` (t: String) and `v.iter().map(..).collect() == w` (w: Vec[i64]) report "All checks passed" and then `an expression whose type does not lower (UnsolvedParam("C"))` under __mir-run, __mir-llvm-run and build; `karac fix`'s turbofish fix produces exactly this shape | — |
+| B-2026-10-29-37 | 2026-10-29 | ownership | medium | `karac check` refuses moving a binding after a non-escaping closure that only reads it ("moved inside a loop" with no loop in the program); both MIR backends accept it and print the right answer | — |
+| B-2026-10-29-38 | 2026-10-29 | interp | low | The MIR interpreter's `Str.bytes()` copies the whole string into a fresh snapshot on every call, so code that calls `s.bytes()` once per step pays the string's length each time: 2,000 one-byte reads through `bytes()` on a 100,000-letter string take 3.3 s under `__mir-run` and nothing measurable under `__mir-llvm-run` | — |
+| B-2026-10-29-39 | 2026-10-29 | parser+cli | low | `s.parse::<i64>()` gets E0001 whose machine fix deletes `::<i64>`, so `karac fix` leaves `s.parse()`, which E0236 then refuses for want of a type (with no edit), though the type was in the source until the first fix removed it; the edit could write `i64.parse(s)` | — |
 
 ### Relocated
 
