@@ -59,6 +59,8 @@ struct Sig {
     /// The parameter types and the return type.
     params: Vec<Ty>,
     ret: Ty,
+    /// Whether the body is the library's, after the program's own text.
+    library: bool,
 }
 
 /// A copy of a closure's body that reads its providers from its
@@ -137,6 +139,56 @@ pub const NET_ROUTES: [(&str, &str); 9] = [
     ("TcpStream.write", "tcp_write"),
     ("TcpStream.shutdown_write", "tcp_shutdown_write"),
 ];
+
+/// The types whose network calls a `Network` provider does not serve
+/// (core semantics §14.12): UDP, TLS, WebSocket and the servers. Under an
+/// override of `Network` the check refuses a call of the library's
+/// function of one that reaches the network (`E_PROVIDER_UNSUPPORTED`),
+/// so that a test never reaches the real network by accident.
+pub const NET_UNSUPPORTED: [&str; 5] = [
+    "UdpSocket",
+    "TlsListener",
+    "TlsStream",
+    "WebSocket",
+    "Server",
+];
+
+/// Is `name` a function of one of the [`NET_UNSUPPORTED`] types?
+pub fn net_unsupported(name: &str) -> bool {
+    name.split_once('.')
+        .is_some_and(|(t, _)| NET_UNSUPPORTED.contains(&t))
+}
+
+/// Is `b` the library's, after the program's own `user_len` bytes? Its
+/// terminators' places say; a body with none is the compiler's.
+pub fn is_library(b: &Body, user_len: Option<usize>) -> bool {
+    let at = b
+        .blocks
+        .iter()
+        .map(|bb| bb.terminator.source_info.span)
+        .find(|s| s.line > 0);
+    match (at, user_len) {
+        (Some(s), Some(n)) => s.offset >= n,
+        _ => true,
+    }
+}
+
+/// What [`specialise`] finds a program's overrides cannot do, which the
+/// check reports and every backend refuses.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Refusal {
+    /// A call of the library's [`NET_UNSUPPORTED`] function `callee`
+    /// under an override of `Network` (§14.12).
+    Unsupported { callee: String },
+    /// A provider's handle method uses a resource overridden where the
+    /// provider is bound (§14.11, §14.12): the message.
+    HandleUsesOverride { text: String },
+}
+
+/// A [`Refusal`] and where it is: the call, or the `with_provider` call or
+/// `providers` block that binds the provider; `resource` is `Network` or
+/// the resource the handle method uses.
+pub type Refused = (super::effects::NoProvider, Refusal);
 
 /// The resources whose open handles a provider can serve (§14.11, §14.12):
 /// a `with_provider` or `providers` block of one registers its provider's
@@ -312,14 +364,17 @@ const CARRIED_DEFS: u32 = u32::MAX - 1;
 /// Rewrites `program`, built with resource placeholders, so that every
 /// provider is passed explicitly. `needs` is effect inference's
 /// [`super::effects::EffectReport::providers`] for the program as built.
+/// What an override cannot do is returned, not an error, so that the
+/// check can report each with its place; a program with any runs nowhere.
 pub fn specialise(
     program: &mut Program,
     tys: &TyInterner,
     needs: &BTreeMap<String, Needs>,
-) -> Result<(), String> {
+) -> Result<Vec<Refused>, String> {
     if program.resources.is_empty() {
-        return Ok(());
+        return Ok(Vec::new());
     }
+    let user_len = program.user_source_len;
     let mut sigs = BTreeMap::new();
     for (name, b) in &program.bodies {
         let first = b.args().next().map(|l| b.local(l).ty);
@@ -336,6 +391,7 @@ pub fn specialise(
                 closure,
                 params: b.args().map(|l| b.local(l).ty).collect(),
                 ret: b.locals[0].ty,
+                library: is_library(b, user_len),
             },
         );
     }
@@ -348,6 +404,7 @@ pub fn specialise(
         queued: BTreeMap::new(),
         queue: Vec::new(),
         carried: BTreeMap::new(),
+        refused: Vec::new(),
     };
     // A body that reaches only resources with a default runs against the
     // defaults under its own name; it is also the template of its copies.
@@ -392,7 +449,7 @@ pub fn specialise(
             program.bodies.remove(&name);
         }
     }
-    Ok(())
+    Ok(s.refused)
 }
 
 struct Spec<'p> {
@@ -406,6 +463,8 @@ struct Spec<'p> {
     queue: Vec<(String, Env, String)>,
     /// The closure body copies that carry their providers, by name.
     carried: BTreeMap<String, Carried>,
+    /// What the overrides cannot do, each once.
+    refused: Vec<Refused>,
 }
 
 /// One body being rewritten under one environment.
@@ -529,6 +588,7 @@ impl Spec<'_> {
                 continue;
             };
             let callee = inst.name.clone();
+            self.refuse_unsupported(&fx, bb, template, &callee);
             let extent = callee
                 .split_once('.')
                 .filter(|(r, m)| {
@@ -1109,7 +1169,7 @@ impl Spec<'_> {
     ) -> Result<(), String> {
         let env = fx.env.clone();
         let site = format!("the `with_provider[{r}]` call");
-        let handlers = self.file_handlers(fx, r, &env, pt, &site)?;
+        let handlers = self.file_handlers(fx, bb, r, &env, pt, &site)?;
         let info = fx.body.blocks[bb.index()].terminator.source_info;
         let TerminatorKind::Call {
             target: Some(next), ..
@@ -1164,6 +1224,56 @@ impl Spec<'_> {
         Ok(())
     }
 
+    /// Records `why` at the terminator of `bb`, once per place.
+    fn refuse(&mut self, fx: &Fx, bb: BasicBlock, resource: &str, why: Refusal) {
+        let site = super::effects::NoProvider {
+            instance: fx.body.instance.name.clone(),
+            block: bb,
+            span: fx.body.blocks[bb.index()].terminator.source_info.span,
+            resource: resource.to_string(),
+        };
+        let seen = self
+            .refused
+            .iter()
+            .any(|(s, w)| s.span == site.span && *w == why);
+        if !seen {
+            self.refused.push((site, why));
+        }
+    }
+
+    /// A call of `callee` from a copy of `template` under an override of
+    /// `Network`, refused when `callee` is the library's function of a
+    /// type a provider does not serve that reaches the network (§14.12).
+    /// The library's calls of them are the program's call's, not reported
+    /// again.
+    fn refuse_unsupported(&mut self, fx: &Fx, bb: BasicBlock, template: &str, callee: &str) {
+        if !matches!(fx.env.get("Network"), Some(Binding::Bound(_)))
+            || !net_unsupported(callee)
+            || self.sigs.get(template).is_some_and(|s| s.library)
+        {
+            return;
+        }
+        let reaches = match self.sigs.get(callee) {
+            Some(sig) => {
+                sig.library
+                    && self
+                        .needs
+                        .get(callee)
+                        .is_some_and(|n| n.contains_key("Network"))
+            }
+            // A native.
+            None => true,
+        };
+        if reaches {
+            // As the program wrote it: `Server.serve`, not its instance.
+            let end = callee.find(['{', '[']).unwrap_or(callee.len());
+            let why = Refusal::Unsupported {
+                callee: callee[..end].to_string(),
+            };
+            self.refuse(fx, bb, "Network", why);
+        }
+    }
+
     /// The handle methods of the `FileSystem` provider type `pt` that a
     /// `FileSystem.enter` registers, specialised for `env`, the resources
     /// around `site`. The interpreter calls the first three; the compiled
@@ -1172,12 +1282,12 @@ impl Spec<'_> {
     fn file_handlers(
         &mut self,
         fx: &Fx,
+        bb: BasicBlock,
         r: &str,
         env: &Env,
         pt: Ty,
         site: &str,
     ) -> Result<Vec<Operand>, String> {
-        let here = fx.body.instance.name.clone();
         let mut handlers = Vec::new();
         for &m in handle_methods(r).unwrap_or_default() {
             let method = self.resources[r]
@@ -1192,13 +1302,16 @@ impl Spec<'_> {
                 "Network" => ("socket", "§14.12"),
                 _ => ("file", "§14.11"),
             };
+            // A handle method that uses one is refused (the program then
+            // runs nowhere), and its copy made as if it did not.
             for used in self.needs.get(&method).into_iter().flat_map(|n| n.keys()) {
                 if let Some(Binding::Bound(_)) = env.get(used) {
-                    return Err(format!(
-                        "providers: in `{here}`, `{method}` uses `{used}`, which is overridden \
-                         where {site} is; a {what}'s `{m}` runs with every other resource at \
-                         its default (core semantics {rule})"
-                    ));
+                    let text = format!(
+                        "`{method}` uses `{used}`, which is overridden where {site} is; a \
+                         {what}'s `{m}` runs with every other resource at its default (core \
+                         semantics {rule})"
+                    );
+                    self.refuse(fx, bb, used, Refusal::HandleUsesOverride { text });
                 }
             }
             let name = self.request(&method, env)?;
@@ -1229,7 +1342,7 @@ impl Spec<'_> {
             SK::MutRef(t) => t,
             _ => return Err(format!("providers: a `{r}.enter` without its provider")),
         };
-        let handlers = self.file_handlers(fx, r, outer, pt, "the `providers` block")?;
+        let handlers = self.file_handlers(fx, bb, r, outer, pt, "the `providers` block")?;
         let TerminatorKind::Call { args, .. } = &mut fx.body.blocks[bb.index()].terminator.kind
         else {
             unreachable!()

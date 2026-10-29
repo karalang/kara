@@ -22991,8 +22991,30 @@ pub fn par_check(lowered: &Lowered) -> Result<(), String> {
                 stateful_default_text(&n.resource, callee)
             ));
         }
+        if let Some((n, why)) = report.refused.first() {
+            return Err(format!(
+                "effects: in `{}` at line {}, {}",
+                n.instance,
+                n.span.line,
+                refusal_text(why)
+            ));
+        }
     }
     Ok(())
+}
+
+/// The message for what an override cannot do (core semantics §14.11,
+/// §14.12).
+pub fn refusal_text(why: &crate::mir::providers::Refusal) -> String {
+    match why {
+        crate::mir::providers::Refusal::Unsupported { callee } => format!(
+            "`{callee}` is not served by a `Network` provider, so under an override of \
+             `Network` it would reach the real network (core semantics §14.12, \
+             E_PROVIDER_UNSUPPORTED): UDP, TLS, WebSocket and the servers run outside every \
+             override; test a handler by calling it with a `Request`"
+        ),
+        crate::mir::providers::Refusal::HandleUsesOverride { text } => text.clone(),
+    }
 }
 
 /// The first conflicting `par` region `report` found, with its body.
@@ -23054,17 +23076,26 @@ pub enum SourceEffectError {
     NoProvider,
     /// A call writes a resource whose default has state (§14.14).
     StatefulDefault,
+    /// A call no `Network` provider serves, under an override (§14.12).
+    ProviderUnsupported,
+    /// A provider's handle method uses a resource overridden where the
+    /// provider is bound (§14.11, §14.12).
+    HandleUsesOverride,
 }
 
 /// `karac check`'s run of [`par_check`] (B-2026-10-19-39, B-2026-10-20-7):
 /// the conflicting `par` regions and the calls with no provider in the
 /// program's own text, as the build finds them, each with its line and
-/// column, its kind and the message. A program with neither `par` nor
-/// `effect resource` in its text, or one the builder stops on, gives none.
-/// `KARAC_MIR_EFFECTS=0` skips it, as it does for a run.
+/// column, its kind and the message, and what the program's overrides
+/// cannot do (§14.11, §14.12). A program with no `par`, `effect resource`,
+/// `with_provider` or `providers` in its text, or one the builder stops
+/// on, gives none. `KARAC_MIR_EFFECTS=0` skips it, as it does for a run.
 pub fn source_effect_errors(src: &str) -> Vec<((usize, usize), SourceEffectError, String)> {
     if std::env::var("KARAC_MIR_EFFECTS").as_deref() == Ok("0")
-        || !(mentions_par(src) || src.contains("effect resource"))
+        || !(mentions_par(src)
+            || src.contains("effect resource")
+            || src.contains("with_provider")
+            || src.contains("providers"))
     {
         return Vec::new();
     }
@@ -23110,6 +23141,17 @@ pub fn source_effect_errors(src: &str) -> Vec<((usize, usize), SourceEffectError
             SourceEffectError::StatefulDefault,
             stateful_default_text(&n.resource, callee),
         );
+    }
+    for (n, why) in &report.refused {
+        let kind = match why {
+            crate::mir::providers::Refusal::Unsupported { .. } => {
+                SourceEffectError::ProviderUnsupported
+            }
+            crate::mir::providers::Refusal::HandleUsesOverride { .. } => {
+                SourceEffectError::HandleUsesOverride
+            }
+        };
+        add(n.span, kind, refusal_text(why));
     }
     out.sort();
     out
@@ -24999,12 +25041,12 @@ fn finish_build(mut lowered: Lowered) -> Result<Lowered, String> {
     if !lowered.program.resources.is_empty() {
         crate::mir::providers::route_files(&mut lowered.program, &lowered.tys);
         crate::mir::providers::route_network(&mut lowered.program, &lowered.tys);
-        let report = crate::mir::effects::analyze(&lowered.program, &lowered.tys);
+        let mut report = crate::mir::effects::analyze(&lowered.program, &lowered.tys);
         if report.no_provider.is_empty()
             && report.stateful_default.is_empty()
             && par_conflict(&report).is_none()
         {
-            crate::mir::providers::specialise(
+            report.refused = crate::mir::providers::specialise(
                 &mut lowered.program,
                 &lowered.tys,
                 &report.providers,

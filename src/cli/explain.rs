@@ -745,6 +745,10 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
     // `E_STATEFUL_DEFAULT` (core semantics §14.14), unclassified like
     // `NoProvider`.
     ("E0420", eff("StatefulDefault", None)),
+    // `E_PROVIDER_UNSUPPORTED` (core semantics §14.12) and a handle method
+    // using an overridden resource (§14.11), unclassified like `NoProvider`.
+    ("E0421", eff("ProviderUnsupported", None)),
+    ("E0422", eff("HandleUsesOverride", None)),
     (
         "L0001",
         eff("FfiLintHint", Some(DiagnosticClass::LintWarning)),
@@ -2324,6 +2328,8 @@ mod tests {
             ("E0418", E::ParBranchConflict),
             ("E0419", E::NoProvider),
             ("E0420", E::StatefulDefault),
+            ("E0421", E::ProviderUnsupported),
+            ("E0422", E::HandleUsesOverride),
             ("L0001", E::FfiLintHint),
             ("L0002", E::MutualRecursionNote),
             ("L0003", E::PureLoopInPar),

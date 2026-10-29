@@ -452,6 +452,16 @@ pub enum EffectErrorKind {
     /// semantics §14.14): the default would be a global every task
     /// writes. Found by the MIR effect pass, as `NoProvider` is.
     StatefulDefault,
+    /// Under an override of `Network`, a call of UDP, TLS, WebSocket or a
+    /// server, which no provider serves (`E_PROVIDER_UNSUPPORTED`, core
+    /// semantics §14.12): the call would reach the real network. Found by
+    /// MIR provider specialisation (`mir::providers`, B-2026-10-29-20).
+    ProviderUnsupported,
+    /// A `FileSystem` or `Network` provider's handle method uses a
+    /// resource overridden where the provider is bound, though it runs
+    /// with every other resource at its default (core semantics §14.11,
+    /// §14.12). Found as `ProviderUnsupported` is (B-2026-10-29-15).
+    HandleUsesOverride,
     /// Phase-10 target gate: a function reachable from the build's
     /// entry point requires a HOST resource the current compilation
     /// target does not provide (and no provider is bound on the call
@@ -608,6 +618,8 @@ pub(crate) fn class_for_effect_error_kind(
         | EffectErrorKind::DropBodyMayPanic
         | EffectErrorKind::NoProvider
         | EffectErrorKind::StatefulDefault
+        | EffectErrorKind::ProviderUnsupported
+        | EffectErrorKind::HandleUsesOverride
         | EffectErrorKind::TraitDefaultExceedsCeiling
         | EffectErrorKind::EffectVariableConflict
         | EffectErrorKind::ProfileIncompatibleEffect

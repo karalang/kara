@@ -2091,6 +2091,8 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 crate::effectchecker::EffectErrorKind::ParBranchConflict => ("E0418", "error"),
                 crate::effectchecker::EffectErrorKind::NoProvider => ("E0419", "error"),
                 crate::effectchecker::EffectErrorKind::StatefulDefault => ("E0420", "error"),
+                crate::effectchecker::EffectErrorKind::ProviderUnsupported => ("E0421", "error"),
+                crate::effectchecker::EffectErrorKind::HandleUsesOverride => ("E0422", "error"),
                 crate::effectchecker::EffectErrorKind::GpuEffectViolation => ("E0802", "error"),
             };
             let subtype_json = err.subtype_trace.as_ref().map(|t| {

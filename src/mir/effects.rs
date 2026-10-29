@@ -314,6 +314,10 @@ pub struct EffectReport {
     /// outside every override (`E_STATEFUL_DEFAULT`, core semantics
     /// §14.14): `callee` is the function the call names.
     pub stateful_default: Vec<(NoProvider, String)>,
+    /// What the program's overrides cannot do, which provider
+    /// specialisation finds (`E_PROVIDER_UNSUPPORTED` and a handle method
+    /// using an overridden resource, §14.11, §14.12).
+    pub refused: Vec<super::providers::Refused>,
 }
 
 /// A resource a program can bind with `with_provider[R](p, f)` (core
@@ -1962,6 +1966,19 @@ impl<'p> Analysis<'p> {
                     fs_handler = extent.and_then(|r| h.get(&r).map(|a| (r, *a)));
                     for (r, a) in h {
                         need(&mut n, &r, a);
+                    }
+                    // A call of the library's UDP, TLS, WebSocket or
+                    // server functions, which no provider serves: the code
+                    // that makes it is copied for an override of
+                    // `Network`, so that the override refuses it (core
+                    // semantics §14.12), check's stand-in bodies too.
+                    let unserved = super::providers::net_unsupported(&inst.name)
+                        && self.program.resources.contains_key("Network")
+                        && self.program.bodies.get(&inst.name).is_none_or(|b| {
+                            super::providers::is_library(b, self.program.user_source_len)
+                        });
+                    if unserved {
+                        need(&mut n, "Network", Access::Reads);
                     }
                     if self.program.bodies.contains_key(&inst.name) {
                         of(vec![inst.name.clone()], &mut n, None);

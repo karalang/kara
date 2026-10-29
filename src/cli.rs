@@ -2161,6 +2161,14 @@ impl Pipeline {
                 crate::mir::lower::SourceEffectError::StatefulDefault => {
                     (text, crate::effectchecker::EffectErrorKind::StatefulDefault)
                 }
+                crate::mir::lower::SourceEffectError::ProviderUnsupported => (
+                    text,
+                    crate::effectchecker::EffectErrorKind::ProviderUnsupported,
+                ),
+                crate::mir::lower::SourceEffectError::HandleUsesOverride => (
+                    text,
+                    crate::effectchecker::EffectErrorKind::HandleUsesOverride,
+                ),
             };
             effects.errors.push(crate::effectchecker::EffectError {
                 message,
