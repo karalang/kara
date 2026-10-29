@@ -379,6 +379,7 @@ impl super::Parser {
                         kind: TypeKind::Path(PathExpr {
                             segments: vec![type_name, assoc_name],
                             generic_args: projection_generic_args,
+                            effect_args: None,
                             span: self.span_from(&cstart),
                         }),
                         span: self.span_from(&cstart),
@@ -586,6 +587,9 @@ impl super::Parser {
     }
 
     pub(crate) fn parse_generic_type_args(&mut self) -> Option<Vec<GenericArg>> {
+        // Only the list a type path opens may end in an effect argument; a
+        // list nested inside one (a trait bound's) clears the flag here.
+        let effect_args_allowed = std::mem::replace(&mut self.effect_args_allowed, false);
         self.expect(&Token::LeftBracket)?;
         let mut args = Vec::new();
         loop {
@@ -627,6 +631,25 @@ impl super::Parser {
                     break;
                 }
                 continue;
+            }
+            // `S[with E]`, `S[T, with writes(R) sends(N)]`: a type's effect
+            // argument, last, as one clause running to the `]` (design.md
+            // § Effect variables). It names no type, so it leaves the list
+            // for `PathExpr::effect_args`; only a type path takes one.
+            if self.at_kw("with") {
+                let at = self.current_span();
+                let vars = self.current_effect_vars().to_vec();
+                let list = self.parse_effect_list(&vars, false)?;
+                if effect_args_allowed {
+                    self.pending_effect_args = Some(list);
+                } else {
+                    self.error_at(
+                        "an effect argument (`with ...`) is written on a type, such as \
+                         `EventBus[with E]`, not in this bracket list",
+                        at,
+                    );
+                }
+                break;
             }
             // Shape literal args: a `[` starting a generic argument is a
             // SHAPE_LIT (`Tensor[f64, [3, 4, ?]]`) — no other generic-arg

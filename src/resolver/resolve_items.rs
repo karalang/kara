@@ -12,7 +12,7 @@
 //! `resolve_const_decl`, `resolve_type_alias_def`,
 //! `resolve_extern_function`, `resolve_effect_group_def`) plus the
 //! three trait-restriction checks (`check_into_trait_restriction`,
-//! `check_impl_level_effect_vars`, `check_operator_trait_restriction`)
+//! `check_trait_effect_vars`, `check_operator_trait_restriction`)
 //! that fire during `resolve_impl_block` / `resolve_trait_def`.
 //!
 //! Lives in a sibling `impl<'a> super::Resolver<'a>` block.
@@ -20,6 +20,7 @@
 use std::collections::HashMap;
 
 use crate::ast::*;
+use crate::token::Span;
 
 use super::{ResolveError, ResolveErrorKind, ScopeKind, SymbolId, SymbolKind};
 
@@ -28,6 +29,7 @@ impl<'a> super::Resolver<'a> {
 
     pub(crate) fn resolve_items(&mut self) {
         let items: &[Item] = &self.program.items;
+        self.collect_effectless_types(items);
         for item in items {
             match item {
                 Item::Function(f) => self.resolve_function(f),
@@ -61,9 +63,110 @@ impl<'a> super::Resolver<'a> {
                 _ => {}
             }
         }
+        self.check_public_effect_args();
+    }
+
+    /// A public signature writes the effect set of every type it names that
+    /// declares `[with E]`: `pub fn bus() -> EventBus[with writes(Db)]`, not
+    /// a bare `EventBus` (design.md § Effect variables, "must be in a public
+    /// signature"). Syntactic: it reads the written types, not a solution.
+    fn check_public_effect_args(&mut self) {
+        let items: &[Item] = &self.program.items;
+        let declares: std::collections::HashSet<&str> = items
+            .iter()
+            .filter_map(|it| match it {
+                Item::StructDef(s) if !s.stdlib_origin => Some((&s.name, &s.generic_params)),
+                Item::EnumDef(e) if !e.stdlib_origin => Some((&e.name, &e.generic_params)),
+                _ => None,
+            })
+            .filter(|(_, g)| g.as_ref().is_some_and(|g| !g.effect_params.is_empty()))
+            .map(|(n, _)| n.as_str())
+            .collect();
+        if declares.is_empty() {
+            return;
+        }
+        let mut fns: Vec<&Function> = Vec::new();
+        for item in items {
+            match item {
+                Item::Function(f) if f.is_pub && !f.stdlib_origin => fns.push(f),
+                Item::ImplBlock(imp) => {
+                    for it in &imp.items {
+                        if let ImplItem::Method(m) = it {
+                            if m.is_pub && !m.stdlib_origin {
+                                fns.push(m);
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut missing: Vec<(String, Span, String)> = Vec::new();
+        for f in fns {
+            let types = f.params.iter().map(|p| &p.ty).chain(f.return_type.iter());
+            for ty in types {
+                bare_effect_typed(ty, &declares, &mut |name, span| {
+                    missing.push((name.to_string(), span, f.name.clone()))
+                });
+            }
+        }
+        for (name, span, fn_name) in missing {
+            self.errors.push(ResolveError {
+                message: format!(
+                    "public function `{fn_name}` writes `{name}` without its effect set; a \
+                     public signature spells it, as `{name}[with ...]` (or `{name}[with E]` for \
+                     a variable the function declares)"
+                ),
+                span,
+                kind: ResolveErrorKind::EffectArgsMissingInPublicSignature,
+                suggestion: None,
+                replacement: None,
+                stub_hint: None,
+            });
+        }
+    }
+
+    fn collect_effectless_types(&mut self, items: &[Item]) {
+        let mut with_vars: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        let mut without: Vec<&str> = Vec::new();
+        for item in items {
+            let (name, generics) = match item {
+                Item::StructDef(s) => (&s.name, &s.generic_params),
+                Item::EnumDef(e) => (&e.name, &e.generic_params),
+                _ => continue,
+            };
+            if generics
+                .as_ref()
+                .is_some_and(|g| !g.effect_params.is_empty())
+            {
+                with_vars.insert(name);
+            } else {
+                without.push(name);
+            }
+        }
+        self.effectless_types = without
+            .into_iter()
+            .filter(|n| !with_vars.contains(n))
+            .map(str::to_string)
+            .collect();
+    }
+
+    /// Opens an item's effect-variable scope (its own `[with E]`, on top of an
+    /// enclosing impl's) for `f`, and closes it after.
+    fn with_effect_vars(&mut self, generics: Option<&GenericParams>, f: impl FnOnce(&mut Self)) {
+        let depth = self.effect_vars_in_scope.len();
+        for ep in generics.iter().flat_map(|g| g.effect_params.iter()) {
+            self.effect_vars_in_scope.push(ep.name.clone());
+        }
+        f(self);
+        self.effect_vars_in_scope.truncate(depth);
     }
 
     fn resolve_function(&mut self, f: &Function) {
+        self.with_effect_vars(f.generic_params.as_ref(), |r| r.resolve_function_scoped(f));
+    }
+
+    fn resolve_function_scoped(&mut self, f: &Function) {
         self.table.push_scope(ScopeKind::Function);
 
         // Register generic type params (with inline trait bounds). Where-clause
@@ -163,6 +266,12 @@ impl<'a> super::Resolver<'a> {
     }
 
     fn resolve_struct_def(&mut self, s: &StructDef) {
+        self.with_effect_vars(s.generic_params.as_ref(), |r| {
+            r.resolve_struct_def_scoped(s)
+        });
+    }
+
+    fn resolve_struct_def_scoped(&mut self, s: &StructDef) {
         if let Some(ref generics) = s.generic_params {
             self.table.push_scope(ScopeKind::Block);
             let params_by_name = self.define_generic_params(generics);
@@ -190,6 +299,10 @@ impl<'a> super::Resolver<'a> {
     }
 
     fn resolve_enum_def(&mut self, e: &EnumDef) {
+        self.with_effect_vars(e.generic_params.as_ref(), |r| r.resolve_enum_def_scoped(e));
+    }
+
+    fn resolve_enum_def_scoped(&mut self, e: &EnumDef) {
         if let Some(ref generics) = e.generic_params {
             self.table.push_scope(ScopeKind::Block);
             let params_by_name = self.define_generic_params(generics);
@@ -222,6 +335,11 @@ impl<'a> super::Resolver<'a> {
     }
 
     fn resolve_trait_def(&mut self, t: &TraitDef) {
+        self.check_trait_effect_vars(t);
+        self.with_effect_vars(t.generic_params.as_ref(), |r| r.resolve_trait_def_scoped(t));
+    }
+
+    fn resolve_trait_def_scoped(&mut self, t: &TraitDef) {
         // Push a trait-level scope that exposes `Self` (and any trait-level
         // generic params) to every method signature and default body.
         self.table.push_scope(ScopeKind::Block);
@@ -362,13 +480,11 @@ impl<'a> super::Resolver<'a> {
         });
     }
 
-    /// Reject `impl[T, U, with E] Trait[U] for T { ... }` and any other
-    /// impl block that binds a named effect variable at the impl level.
-    /// Effect polymorphism on trait methods is expressed by declaring the
-    /// method `with _` on the trait; impl-level binding would imply a
-    /// per-monomorphization rewrite that the language does not model.
-    fn check_impl_level_effect_vars(&mut self, imp: &ImplBlock) {
-        let generics = match &imp.generic_params {
+    /// Reject `trait Sink[with E]`: a trait takes no effect variable in v1
+    /// (design.md § Effect variables). Its methods may declare their own,
+    /// or use their impl block's, so an `impl[with E]` is fine.
+    fn check_trait_effect_vars(&mut self, t: &TraitDef) {
+        let generics = match &t.generic_params {
             Some(g) if !g.effect_params.is_empty() => g,
             _ => return,
         };
@@ -380,15 +496,13 @@ impl<'a> super::Resolver<'a> {
             .join(", ");
         self.errors.push(ResolveError {
             message: format!(
-                "impl-level effect variables ({var_list}) are not supported; \
-                 use `with _` on the trait method instead"
+                "a trait takes no effect variable ({var_list}) in v1; declare it on the \
+                 method that uses it, or on the impl block"
             ),
             span: generics.span,
-            kind: ResolveErrorKind::ImplLevelEffectVarNotAllowed,
+            kind: ResolveErrorKind::TraitEffectVarNotAllowed,
             suggestion: Some(
-                "remove the `with E` from the impl's generic parameters and declare the \
-                 trait method `with _` so impls may carry any effects"
-                    .to_string(),
+                "move the `with E` to the trait method's own generic list".to_string(),
             ),
             replacement: None,
             stub_hint: None,
@@ -469,6 +583,12 @@ impl<'a> super::Resolver<'a> {
     }
 
     fn resolve_impl_block(&mut self, imp: &ImplBlock) {
+        self.with_effect_vars(imp.generic_params.as_ref(), |r| {
+            r.resolve_impl_block_scoped(imp)
+        });
+    }
+
+    fn resolve_impl_block_scoped(&mut self, imp: &ImplBlock) {
         let type_name = self.type_expr_name(&imp.target_type).unwrap_or_default();
 
         self.current_impl_type = Some(type_name.clone());
@@ -544,7 +664,6 @@ impl<'a> super::Resolver<'a> {
             }
             self.check_into_trait_restriction(trait_path);
         }
-        self.check_impl_level_effect_vars(imp);
 
         // Register Self as a type
         let _ = self
@@ -679,5 +798,50 @@ impl<'a> super::Resolver<'a> {
                 }
             }
         }
+    }
+}
+
+/// Reports each type written in `ty` whose name is in `declares` (it takes
+/// effect arguments) and that is written without them.
+fn bare_effect_typed(
+    ty: &TypeExpr,
+    declares: &std::collections::HashSet<&str>,
+    out: &mut dyn FnMut(&str, Span),
+) {
+    match &ty.kind {
+        TypeKind::Path(p) => {
+            if let Some(last) = p.segments.last() {
+                if p.effect_args.is_none() && declares.contains(last.as_str()) {
+                    out(last, p.span);
+                }
+            }
+            for arg in p.generic_args.iter().flatten() {
+                if let GenericArg::Type(t) = arg {
+                    bare_effect_typed(t, declares, out);
+                }
+            }
+        }
+        TypeKind::Tuple(ts) => ts.iter().for_each(|t| bare_effect_typed(t, declares, out)),
+        TypeKind::Array { element, .. } | TypeKind::MutSlice(element) => {
+            bare_effect_typed(element, declares, out)
+        }
+        TypeKind::Ref(inner)
+        | TypeKind::MutRef(inner)
+        | TypeKind::Weak(inner)
+        | TypeKind::Frozen(inner)
+        | TypeKind::Pointer { inner, .. } => bare_effect_typed(inner, declares, out),
+        TypeKind::FnType {
+            params,
+            return_type,
+            ..
+        } => {
+            for p in params {
+                bare_effect_typed(p, declares, out);
+            }
+            if let Some(r) = return_type {
+                bare_effect_typed(r, declares, out);
+            }
+        }
+        _ => {}
     }
 }

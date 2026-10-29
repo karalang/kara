@@ -815,11 +815,17 @@ pub enum ResolveErrorKind {
     /// rejected because these are derived from `From` / `TryFrom` via blanket
     /// impl. The user must implement `From` / `TryFrom` instead.
     IntoTraitImplNotAllowed,
-    /// `impl[..., with E] Trait for Type` — impl-level effect-variable
-    /// quantification is not supported. Effect polymorphism is expressed
-    /// via `with _` on the trait method declaration, not bound at impl
-    /// level. See design.md § Conversion Traits.
-    ImplLevelEffectVarNotAllowed,
+    /// `trait Sink[with E]` — a trait takes no effect variable in v1; its
+    /// methods may use their impl's or their own (design.md § Effect
+    /// variables). An `impl[with E]` is allowed.
+    TraitEffectVarNotAllowed,
+    /// An effect variable written where a type goes (`x: E`), or a type
+    /// parameter written in a `with` clause (`with T`): the two kinds never
+    /// stand in for each other (design.md § Effect variables).
+    EffectVarKindMismatch,
+    /// A public signature writes a type that declares `[with E]` without its
+    /// effect argument (design.md § Effect variables).
+    EffectArgsMissingInPublicSignature,
     /// `import a.b.c;` — the prefix `a.b` does not match any module in the
     /// project graph (CR-24 slice 5, `E0112`).
     UnknownModule,
@@ -1212,6 +1218,14 @@ pub struct Resolver<'a> {
     /// it, and leaking the set across signatures would let one function's
     /// `tx` satisfy another's verb clause.
     pub(crate) channel_resource_params: Vec<String>,
+    /// The effect variables in scope: the enclosing impl's and the item's own
+    /// `[with E]` (design.md § Effect variables). Read only to say that a
+    /// name used as a type is an effect variable.
+    pub(crate) effect_vars_in_scope: Vec<String>,
+    /// The program's structs and enums that declare no effect variable, by
+    /// name, so `Pair[with E]` on one of them is refused. A name declared
+    /// both with and without one (in two modules) is left out.
+    pub(crate) effectless_types: std::collections::HashSet<String>,
     /// The target type name when inside an impl block.
     pub(crate) current_impl_type: Option<String>,
     /// Stack of label-stack entries for validating `break` / `continue`
@@ -1363,6 +1377,8 @@ impl<'a> Resolver<'a> {
             binding_nodes: FxHashMap::default(),
             errors: Vec::new(),
             channel_resource_params: Vec::new(),
+            effect_vars_in_scope: Vec::new(),
+            effectless_types: std::collections::HashSet::new(),
             current_impl_type: None,
             loop_labels: Vec::new(),
             par_sibling_bindings: FxHashMap::default(),
@@ -2077,6 +2093,20 @@ impl<'a> Resolver<'a> {
 
     fn error_undefined_type(&mut self, name: &str, span: Span) {
         if self.report_ambiguous_wildcard(name, span) {
+            return;
+        }
+        if self.effect_vars_in_scope.iter().any(|v| v == name) {
+            self.errors.push(ResolveError {
+                message: format!(
+                    "`{name}` is an effect variable, not a type; it goes in a `with` clause \
+                     (`Fn(T) with {name}`) or a type's effect argument (`S[with {name}]`)"
+                ),
+                span,
+                kind: ResolveErrorKind::EffectVarKindMismatch,
+                suggestion: None,
+                replacement: None,
+                stub_hint: None,
+            });
             return;
         }
         if self.wildcard_hides_unresolved_names() {

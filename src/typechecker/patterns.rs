@@ -2761,6 +2761,7 @@ impl<'a> super::TypeChecker<'a> {
                 } else {
                     Some(args.into_iter().map(GenericArg::Type).collect())
                 },
+                effect_args: None,
                 span,
             }),
             span,
@@ -2829,6 +2830,7 @@ impl<'a> super::TypeChecker<'a> {
                         } else {
                             Some(generic_args)
                         },
+                        effect_args: None,
                         span,
                     }),
                     span,
@@ -2880,6 +2882,7 @@ impl<'a> super::TypeChecker<'a> {
                             span,
                         }),
                     ]),
+                    effect_args: None,
                     span,
                 }),
                 span,

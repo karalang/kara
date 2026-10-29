@@ -221,6 +221,11 @@ pub struct Parser {
     /// Bindings collected by [`Parser::parse_generic_type_args`] while
     /// `assoc_bindings_allowed` is set; drained by `parse_trait_bound`.
     pub(crate) pending_assoc_bindings: Vec<crate::ast::AssocBinding>,
+    /// Set while a type path's bracket list is parsed: the one list that may
+    /// end in an effect argument (`EventBus[with E]`), which is left in
+    /// `pending_effect_args` for the path to take.
+    pub(crate) effect_args_allowed: bool,
+    pub(crate) pending_effect_args: Option<EffectList>,
     /// Set by `parse_type` when it consumes a *permitted* `frozen` keyword,
     /// read and cleared by `parse_param` into [`Param::is_frozen`]. The
     /// keyword is recognized deep inside the type parse (so the misplaced-use
@@ -458,6 +463,8 @@ impl Parser {
             mut_fn_types: rustc_hash::FxHashSet::default(),
             assoc_bindings_allowed: false,
             pending_assoc_bindings: Vec::new(),
+            effect_args_allowed: false,
+            pending_effect_args: None,
             frozen_consumed: false,
             frozen_self_consumed: false,
             own_self_consumed: false,
@@ -517,6 +524,21 @@ impl Parser {
             .last()
             .map(|v| v.as_slice())
             .unwrap_or(&[])
+    }
+
+    /// Opens an item's effect-variable scope: the enclosing item's variables
+    /// (an `impl[with E]` around its methods) and the item's own `[with E]`
+    /// (design.md § Effect variables). Returns the combined list; the caller
+    /// pops it when the item ends.
+    pub(crate) fn push_effect_scope(&mut self, gp: Option<&GenericParams>) -> Vec<String> {
+        let mut vars = self.current_effect_vars().to_vec();
+        for ep in gp.iter().flat_map(|gp| gp.effect_params.iter()) {
+            if !vars.contains(&ep.name) {
+                vars.push(ep.name.clone());
+            }
+        }
+        self.effect_var_stack.push(vars.clone());
+        vars
     }
 
     /// Drain pending leading `///` doc-comment text. Returns `None` when no

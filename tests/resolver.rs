@@ -2135,46 +2135,33 @@ fn test_user_impl_tryinto_rejected() {
 }
 
 #[test]
-fn test_impl_level_effect_var_rejected() {
-    // `impl[..., with E] Trait for Type` is rejected: effect polymorphism is
-    // expressed via `with _` on the trait method, not bound at impl level.
-    // (Round 6 step 4 — design.md § Conversion Traits.)
-    let errors = resolve_errors(
+fn test_impl_level_effect_var_accepted() {
+    // design.md § Effect variables: an `impl[with E]` declares a variable
+    // its methods use (it was refused before the v1 spec).
+    resolve_ok(
         "trait Sink { fn drain(ref self); }\n\
          struct LogSink { name: String }\n\
          impl[with E] Sink for LogSink {\n\
              fn drain(ref self) {}\n\
          }",
     );
-    assert!(
-        errors.iter().any(|e| matches!(
-            e.kind,
-            karac::resolver::ResolveErrorKind::ImplLevelEffectVarNotAllowed
-        )),
-        "expected ImplLevelEffectVarNotAllowed, got: {:?}",
-        errors
-    );
+}
+
+#[test]
+fn test_trait_level_effect_var_rejected() {
+    // A trait itself takes no effect variable in v1; the diagnostic names
+    // it and points at the method's own generic list.
+    let errors = resolve_errors("trait Sink[with E] { fn drain(ref self) with E; }");
     let err = errors
         .iter()
         .find(|e| {
             matches!(
                 e.kind,
-                karac::resolver::ResolveErrorKind::ImplLevelEffectVarNotAllowed
+                karac::resolver::ResolveErrorKind::TraitEffectVarNotAllowed
             )
         })
-        .unwrap();
-    assert!(
-        err.message.contains("`E`"),
-        "diagnostic should name the offending effect variable, got: {}",
-        err.message
-    );
-    assert!(
-        err.suggestion
-            .as_ref()
-            .is_some_and(|s| s.contains("with _")),
-        "suggestion should point at `with _` on the trait method, got: {:?}",
-        err.suggestion
-    );
+        .unwrap_or_else(|| panic!("expected TraitEffectVarNotAllowed, got: {errors:?}"));
+    assert!(err.message.contains("`E`"), "{}", err.message);
 }
 
 #[test]
@@ -2207,38 +2194,15 @@ fn test_slice_8ac_effect_bound_form_resolves_ok() {
 }
 
 #[test]
-fn test_slice_8ac_effect_bound_form_on_impl_still_rejected() {
-    // The impl-level effect-variable rejection (slice 4) applies to both
-    // spellings — the bound form does not bypass the rule. The diagnostic
-    // should still name `E` and point at the `with _` workaround.
-    let errors = resolve_errors(
+fn test_slice_8ac_effect_bound_form_on_impl_accepted() {
+    // The bound-form spelling resolves as the positional one does: an
+    // impl-level effect variable is allowed (design.md § Effect variables).
+    resolve_ok(
         "trait Sink { fn drain(ref self); }\n\
          struct LogSink { name: String }\n\
          impl[E: Effect] Sink for LogSink {\n\
              fn drain(ref self) {}\n\
          }",
-    );
-    assert!(
-        errors.iter().any(|e| matches!(
-            e.kind,
-            karac::resolver::ResolveErrorKind::ImplLevelEffectVarNotAllowed
-        )),
-        "expected ImplLevelEffectVarNotAllowed for bound-form impl, got: {:?}",
-        errors
-    );
-    let err = errors
-        .iter()
-        .find(|e| {
-            matches!(
-                e.kind,
-                karac::resolver::ResolveErrorKind::ImplLevelEffectVarNotAllowed
-            )
-        })
-        .unwrap();
-    assert!(
-        err.message.contains("`E`"),
-        "diagnostic should name `E` even for the bound-form spelling, got: {}",
-        err.message
     );
 }
 

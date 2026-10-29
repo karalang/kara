@@ -2065,6 +2065,7 @@ fn type_alias_of(alias: &str, ty: &Item, span: Span) -> Item {
                     kind: crate::ast::TypeKind::Path(crate::ast::PathExpr {
                         segments: vec![p.name.clone()],
                         generic_args: None,
+                        effect_args: None,
                         span,
                     }),
                     span,
@@ -2084,6 +2085,7 @@ fn type_alias_of(alias: &str, ty: &Item, span: Span) -> Item {
             kind: crate::ast::TypeKind::Path(crate::ast::PathExpr {
                 segments: vec![name.clone()],
                 generic_args,
+                effect_args: None,
                 span,
             }),
             span,

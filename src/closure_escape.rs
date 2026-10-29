@@ -2711,6 +2711,7 @@ pub fn rewrite_self_in_type_expr(te: &TypeExpr, type_name: &str) -> TypeExpr {
                 TypeKind::Path(PathExpr {
                     segments: vec![type_name.to_string()],
                     generic_args: None,
+                    effect_args: None,
                     span: p.span,
                 })
             } else {
@@ -2726,6 +2727,7 @@ pub fn rewrite_self_in_type_expr(te: &TypeExpr, type_name: &str) -> TypeExpr {
                             })
                             .collect()
                     }),
+                    effect_args: p.effect_args.clone(),
                     span: p.span,
                 })
             }
@@ -2833,6 +2835,7 @@ pub fn make_impl_method_function(
             kind: TypeKind::Path(PathExpr {
                 segments: vec![type_name.to_string()],
                 generic_args: self_generic_args,
+                effect_args: None,
                 span,
             }),
             span,

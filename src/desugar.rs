@@ -658,6 +658,7 @@ fn rename_generics_shadowing_the_impls(f: &mut Function, outer: Option<&GenericP
                 kind: TypeKind::Path(PathExpr {
                     segments: vec![fresh],
                     generic_args: None,
+                    effect_args: None,
                     span,
                 }),
                 span,
@@ -757,6 +758,7 @@ pub(crate) fn subst_type_expr(
                         })
                         .collect()
                 }),
+                effect_args: p.effect_args.clone(),
                 span: p.span,
             })
         }
@@ -1528,6 +1530,7 @@ fn make_default_impl(type_name: &str, body: Expr, span: Span) -> Item {
         kind: TypeKind::Path(PathExpr {
             segments: vec![type_name.to_string()],
             generic_args: None,
+            effect_args: None,
             span,
         }),
         span,
@@ -2860,6 +2863,7 @@ fn desugar_impl_trait_args_in_function(f: &mut Function) {
             kind: TypeKind::Path(PathExpr {
                 segments: vec![synthetic_name],
                 generic_args: None,
+                effect_args: None,
                 span: original_span,
             }),
             span: original_span,

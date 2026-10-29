@@ -157,6 +157,24 @@ impl<'a> super::Resolver<'a> {
                 self.error_undefined_type(first, path.span);
             }
         }
+        if let Some(ref effects) = path.effect_args {
+            if let Some(name) = path.segments.last() {
+                if self.effectless_types.contains(name) {
+                    self.errors.push(ResolveError {
+                        message: format!(
+                            "`{name}` declares no effect variable, so it takes no `with` \
+                             argument"
+                        ),
+                        span: effects.span,
+                        kind: ResolveErrorKind::EffectVarKindMismatch,
+                        suggestion: None,
+                        replacement: None,
+                        stub_hint: None,
+                    });
+                }
+            }
+            self.resolve_effect_list(effects);
+        }
         // Resolve generic args
         if let Some(ref args) = path.generic_args {
             for arg in args {
@@ -647,6 +665,20 @@ impl<'a> super::Resolver<'a> {
                 }
                 EffectItem::Group(name) => {
                     if let Some(sym) = self.table.lookup(name) {
+                        if matches!(sym.kind, SymbolKind::TypeParam) && name != "Self" {
+                            self.errors.push(ResolveError {
+                                message: format!(
+                                    "`{name}` is a type parameter, not an effect variable; an \
+                                     effect set is declared `[with {name}]`"
+                                ),
+                                span: effects.span,
+                                kind: ResolveErrorKind::EffectVarKindMismatch,
+                                suggestion: None,
+                                replacement: None,
+                                stub_hint: None,
+                            });
+                            continue;
+                        }
                         let id = sym.id;
                         self.record_resolution(&effects.span, id);
                     } else {

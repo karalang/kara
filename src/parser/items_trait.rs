@@ -143,7 +143,12 @@ impl super::Parser {
                 .map(Item::TraitAlias);
         }
 
-        self.parse_trait_def_tail(
+        // A trait takes no effect variable in v1, but its `[with E]` still
+        // scopes over the methods, so the resolver reports the declaration
+        // once rather than each `with E` as an undefined name.
+        let depth = self.effect_var_stack.len();
+        self.push_effect_scope(generic_params.as_ref());
+        let def = self.parse_trait_def_tail(
             attributes,
             is_pub,
             is_private,
@@ -151,8 +156,9 @@ impl super::Parser {
             generic_params,
             doc_comment,
             &start,
-        )
-        .map(Item::TraitDef)
+        );
+        self.effect_var_stack.truncate(depth);
+        def.map(Item::TraitDef)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -414,11 +420,7 @@ impl super::Parser {
         let name_span = self.span_from(&start);
         self.check_ident_class(&name, IdentClass::Value, "fn", name_span);
         let generic_params = self.parse_optional_generic_params();
-        let effect_vars: Vec<String> = generic_params
-            .as_ref()
-            .map(|gp| gp.effect_params.iter().map(|ep| ep.name.clone()).collect())
-            .unwrap_or_default();
-        self.effect_var_stack.push(effect_vars.clone());
+        let effect_vars = self.push_effect_scope(generic_params.as_ref());
 
         self.expect(&Token::LeftParen)?;
         self.fn_context_stack.push(FnContext::TraitMethod);
@@ -532,11 +534,22 @@ impl super::Parser {
         );
     }
 
+    /// An `impl[with E]`'s effect variables are in scope in its header and
+    /// its methods (design.md § Effect variables); the scope closes however
+    /// the block's parse ends.
     pub(super) fn parse_impl_block(&mut self, attributes: Vec<Attribute>) -> Option<ImplBlock> {
+        let depth = self.effect_var_stack.len();
+        let block = self.parse_impl_block_scoped(attributes);
+        self.effect_var_stack.truncate(depth);
+        block
+    }
+
+    fn parse_impl_block_scoped(&mut self, attributes: Vec<Attribute>) -> Option<ImplBlock> {
         let start = self.current_span();
         self.expect(&Token::Impl)?;
 
         let generic_params = self.parse_optional_generic_params();
+        self.push_effect_scope(generic_params.as_ref());
 
         // Parse the type or trait name
         let first_type = self.parse_type()?;

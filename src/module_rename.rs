@@ -368,6 +368,7 @@ fn name_type_expr(name: &str, span: Span) -> TypeExpr {
         kind: TypeKind::Path(PathExpr {
             segments: vec![name.to_string()],
             generic_args: None,
+            effect_args: None,
             span,
         }),
         span,

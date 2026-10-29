@@ -3089,6 +3089,7 @@ impl super::Parser {
             kind: TypeKind::Path(PathExpr {
                 segments,
                 generic_args,
+                effect_args: None,
                 span: ty.span,
             }),
             span: ty.span,

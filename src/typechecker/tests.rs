@@ -187,6 +187,7 @@ mod once_function_carrier_tests {
             } else {
                 Some(args.into_iter().map(GenericArg::Type).collect())
             },
+            effect_args: None,
             span: Span::default(),
         }
     }

@@ -356,6 +356,7 @@ impl super::Parser {
                 let trait_path_clean = PathExpr {
                     segments,
                     generic_args: None,
+                    effect_args: None,
                     span: self.span_from(&dyn_kw_span),
                 };
                 let span = self.span_from(&start);
@@ -423,6 +424,7 @@ impl super::Parser {
                 let trait_path_clean = PathExpr {
                     segments,
                     generic_args: None,
+                    effect_args: None,
                     span: self.span_from(&impl_kw_span),
                 };
 
@@ -626,6 +628,7 @@ impl super::Parser {
                         kind: TypeKind::Path(PathExpr {
                             segments: vec!["Array".to_string()],
                             generic_args: Some(vec![GenericArg::Type(elem), len]),
+                            effect_args: None,
                             span,
                         }),
                         span,
@@ -644,6 +647,7 @@ impl super::Parser {
                     kind: TypeKind::Path(PathExpr {
                         segments: vec!["Slice".to_string()],
                         generic_args: Some(vec![GenericArg::Type(elem)]),
+                        effect_args: None,
                         span,
                     }),
                     span,
@@ -684,11 +688,22 @@ impl super::Parser {
         let start = self.current_span();
         let segments = self.parse_path_segments()?;
 
-        // Check for generic args [T, U] — unambiguous in type position
-        let mut generic_args = if self.check(&Token::LeftBracket) {
-            Some(self.parse_generic_type_args()?)
+        // Check for generic args [T, U] — unambiguous in type position. The
+        // flag lets this list, and no other, end in an effect argument.
+        let saved_allowed = std::mem::replace(&mut self.effect_args_allowed, true);
+        let saved_pending = self.pending_effect_args.take();
+        let generic_args = if self.check(&Token::LeftBracket) {
+            Some(self.parse_generic_type_args())
         } else {
             None
+        };
+        self.effect_args_allowed = saved_allowed;
+        let effect_args = std::mem::replace(&mut self.pending_effect_args, saved_pending);
+        // `EventBus[with E]` writes no type argument: the list is absent, as
+        // for a bare `EventBus`.
+        let mut generic_args = match generic_args {
+            Some(args) => Some(args?).filter(|a| !a.is_empty() || effect_args.is_none()),
+            None => None,
         };
 
         let span = self.span_from(&start);
@@ -697,6 +712,7 @@ impl super::Parser {
         Some(PathExpr {
             segments,
             generic_args,
+            effect_args,
             span,
         })
     }

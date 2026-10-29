@@ -505,11 +505,7 @@ impl super::Parser {
         // overwrite it.
         let doc_comment = self.take_pending_doc();
         let generic_params = self.parse_optional_generic_params();
-        let effect_vars: Vec<String> = generic_params
-            .as_ref()
-            .map(|gp| gp.effect_params.iter().map(|ep| ep.name.clone()).collect())
-            .unwrap_or_default();
-        self.effect_var_stack.push(effect_vars.clone());
+        let effect_vars = self.push_effect_scope(generic_params.as_ref());
 
         self.expect(&Token::LeftParen)?;
         self.fn_context_stack.push(FnContext::Function);
@@ -2068,7 +2064,32 @@ impl super::Parser {
 
     // ── Structs ──────────────────────────────────────────────────
 
+    /// A struct's `[with E]` is in scope in its field types (design.md
+    /// § Effect variables); the scope closes however the parse ends.
+    #[allow(clippy::too_many_arguments)]
     fn parse_struct_def(
+        &mut self,
+        attributes: Vec<Attribute>,
+        is_pub: bool,
+        is_private: bool,
+        is_shared: bool,
+        is_par: bool,
+        kind_keyword_span: Option<Span>,
+    ) -> Option<StructDef> {
+        let depth = self.effect_var_stack.len();
+        let def = self.parse_struct_def_scoped(
+            attributes,
+            is_pub,
+            is_private,
+            is_shared,
+            is_par,
+            kind_keyword_span,
+        );
+        self.effect_var_stack.truncate(depth);
+        def
+    }
+
+    fn parse_struct_def_scoped(
         &mut self,
         attributes: Vec<Attribute>,
         is_pub: bool,
@@ -2090,6 +2111,7 @@ impl super::Parser {
         self.generic_defaults_ok = true;
         let generic_params = self.parse_optional_generic_params();
         self.generic_defaults_ok = false;
+        self.push_effect_scope(generic_params.as_ref());
         let where_clause = self.parse_optional_where_clause();
 
         // Unit struct: `struct Name;` is sugar for `struct Name {}`.
@@ -2323,7 +2345,22 @@ impl super::Parser {
 
     // ── Enums ────────────────────────────────────────────────────
 
+    /// An enum's `[with E]` is in scope in its variants' payload types.
     fn parse_enum_def(
+        &mut self,
+        attributes: Vec<Attribute>,
+        is_pub: bool,
+        is_private: bool,
+        is_shared: bool,
+        is_par: bool,
+    ) -> Option<EnumDef> {
+        let depth = self.effect_var_stack.len();
+        let def = self.parse_enum_def_scoped(attributes, is_pub, is_private, is_shared, is_par);
+        self.effect_var_stack.truncate(depth);
+        def
+    }
+
+    fn parse_enum_def_scoped(
         &mut self,
         attributes: Vec<Attribute>,
         is_pub: bool,
@@ -2343,6 +2380,7 @@ impl super::Parser {
         self.generic_defaults_ok = true;
         let generic_params = self.parse_optional_generic_params();
         self.generic_defaults_ok = false;
+        self.push_effect_scope(generic_params.as_ref());
         let where_clause = self.parse_optional_where_clause();
 
         self.expect(&Token::LeftBrace)?;

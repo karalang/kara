@@ -268,7 +268,7 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
     ("E0107", res("UndefinedLabel", None)),
     ("E0108", res("OperatorTraitImplRestricted", None)),
     ("E0109", res("IntoTraitImplNotAllowed", None)),
-    ("E0110", res("ImplLevelEffectVarNotAllowed", None)),
+    ("E0110", res("TraitEffectVarNotAllowed", None)),
     ("E0111", res("PrivateItemAccess", None)),
     ("E0112", res("UnknownModule", None)),
     ("E0113", res("UnknownItemInModule", None)),
@@ -283,6 +283,8 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
     ("E0122", res("ProfileInvalidTarget", None)),
     ("E0123", res("UnknownProfile", None)),
     ("E0124", res("AmbiguousWildcardImport", None)),
+    ("E0125", res("EffectVarKindMismatch", None)),
+    ("E0126", res("EffectArgsMissingInPublicSignature", None)),
     // `E08xx` is the shared target/GPU-placement band — the resolver
     // owns E0800, the typechecker E0801. Shared band, disjoint numbers.
     ("E0800", res("GpuInvalidTarget", None)),

@@ -999,6 +999,7 @@ impl<'a> super::EffectChecker<'a> {
                     kind: TypeKind::Path(PathExpr {
                         segments: vec![head.clone()],
                         generic_args: None,
+                        effect_args: None,
                         span: expr.span,
                     }),
                     span: expr.span,

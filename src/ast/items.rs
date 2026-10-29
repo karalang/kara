@@ -8590,6 +8590,7 @@ pub fn closure_as_function(params: &[super::ClosureParam], body: &Expr) -> Funct
         kind: super::TypeKind::Path(PathExpr {
             segments: vec!["_".to_string()],
             generic_args: None,
+            effect_args: None,
             span: sp,
         }),
         span: sp,

@@ -436,6 +436,18 @@ pub struct TypeExpr {
     pub span: Span,
 }
 
+impl TypeExpr {
+    /// The effect argument written on this type, `EventBus[with E]`'s
+    /// `with E` (design.md § Effect variables): outermost path only, and
+    /// `None` for a type written without one.
+    pub fn effect_args(&self) -> Option<&EffectList> {
+        match &self.kind {
+            TypeKind::Path(p) => p.effect_args.as_ref(),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum TypeKind {
     Path(PathExpr),
@@ -598,6 +610,11 @@ pub enum EffectSpec {
 pub struct PathExpr {
     pub segments: Vec<String>,
     pub generic_args: Option<Vec<GenericArg>>,
+    /// `with E` / `with writes(R)` written last in a type's bracket list,
+    /// `EventBus[with writes(OrderDb)]` (design.md § Effect variables). Kept
+    /// apart from `generic_args` because it names no type: type lowering and
+    /// instance keys never see it. Only a type path carries one.
+    pub effect_args: Option<EffectList>,
     pub span: Span,
 }
 

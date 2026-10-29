@@ -2209,6 +2209,7 @@ impl<'a> Lowerer<'a> {
             kind: TypeKind::Path(PathExpr {
                 segments: vec![segments[0].clone()],
                 generic_args: None,
+                effect_args: None,
                 span: callee.span,
             }),
             span: callee.span,

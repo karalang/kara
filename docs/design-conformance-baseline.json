@@ -64,13 +64,6 @@
       "reason": "catalogue of alternative forms — each line rebinds the same name; not one program",
       "first_diagnostic": "'Session' is already defined in this scope (first defined at 2:8)"
     },
-    "c72c169ad586": {
-      "line": 5517,
-      "heading": "Function values and effects > Effect variables",
-      "outcome": "REJECTED",
-      "reason": "Spec ahead of the parser: effect variables (`[with E]`) specified 2026-10-28 for v1; kata thread + Thread A implement them.",
-      "first_diagnostic": "Expected RightBracket, found Identifier { name: \"E\", raw: false }"
-    },
     "11755d38072b": {
       "line": 6032,
       "heading": "`unsafe` > `undocumented_unsafe` lint",

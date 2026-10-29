@@ -1805,6 +1805,7 @@ fn path_ty(name: &str) -> TypeExpr {
         kind: TypeKind::Path(PathExpr {
             segments: vec![name.to_string()],
             generic_args: None,
+            effect_args: None,
             span: Span::default(),
         }),
         span: Span::default(),

@@ -38,6 +38,7 @@ fn path_type(name: &str) -> TypeExpr {
         kind: TypeKind::Path(PathExpr {
             segments: vec![name.to_string()],
             generic_args: None,
+            effect_args: None,
             span: syn_span(),
         }),
         span: syn_span(),
@@ -154,6 +155,7 @@ fn impl_block_trait(trait_name: &str, target: &str, methods: Vec<Function>) -> I
         trait_name: Some(PathExpr {
             segments: vec![trait_name.to_string()],
             generic_args: None,
+            effect_args: None,
             span: syn_span(),
         }),
         target_type: path_type(target),
