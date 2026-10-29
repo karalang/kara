@@ -1346,21 +1346,38 @@ impl<'ctx> Cx<'ctx, '_> {
                 Ok(())
             }
             ("String", "add") => {
-                // Takes the left, borrows the right.
+                // Takes the left, borrows the rights: one, or a chain's
+                // (`mir::concat`), whose lengths are summed so the result
+                // grows once.
                 let d = self.place_ptr(dest)?;
+                let mut parts = Vec::with_capacity(args.len() - 1);
+                for a in &args[1..] {
+                    parts.push(self.str_parts(a)?);
+                }
+                let mut more = parts[0].1;
+                for &(_, n) in &parts[1..] {
+                    more = self.builder.build_int_add(more, n, "").map_err(e)?;
+                }
                 let lt = self.operand_type(&args[0])?;
                 match (&args[0], self.tys.kind(lt)) {
                     (Operand::Move(p), TyKind::Intrinsic(IntrinsicTy::String)) => {
                         let src = self.place_ptr(p)?;
                         self.copy(d, src, lt)?;
+                        if parts.len() > 1 {
+                            self.rt("vec_reserve", &[d.into(), more.into(), self.i64(1).into()])?;
+                        }
                     }
                     _ => {
                         let (s, n) = self.str_parts(&args[0])?;
-                        self.rt("string_from", &[d.into(), s.into(), n.into()])?;
+                        let all = self.builder.build_int_add(n, more, "").map_err(e)?;
+                        self.vec_alloc(d, all, 1)?;
+                        self.store(self.offset(d, 8)?, self.i64(0).into())?;
+                        parts.insert(0, (s, n));
                     }
                 }
-                let (s, n) = self.str_parts(&args[1])?;
-                self.rt("string_push_str", &[d.into(), s.into(), n.into()])?;
+                for (s, n) in parts {
+                    self.rt("string_push_str", &[d.into(), s.into(), n.into()])?;
+                }
                 self.drop_moved(&args[1..])
             }
             ("String", "eq") => {

@@ -3411,21 +3411,29 @@ impl<'a> Interp<'a> {
                 let text = self.string_at(s)?;
                 Ok(self.alloc_box(ty_name, Value::Str(text)))
             }
-            // A left side moved in (`mir::concat`) is appended to in place.
-            (false, "add", [a @ Value::Box(id), b])
-                if arg_tys.first().is_some_and(|t| {
-                    matches!(self.tys.kind(*t), TyKind::Intrinsic(IntrinsicTy::String))
-                }) =>
+            // A left side moved in (`mir::concat`) is appended to in place;
+            // a fused chain (`a + b + c`) has more than one right side.
+            (false, "add", [a @ Value::Box(id), rest @ ..])
+                if !rest.is_empty()
+                    && arg_tys.first().is_some_and(|t| {
+                        matches!(self.tys.kind(*t), TyKind::Intrinsic(IntrinsicTy::String))
+                    }) =>
             {
-                let tail = self.string_at(b)?;
+                let mut tail = String::new();
+                for b in rest {
+                    tail += &self.string_at(b)?;
+                }
                 match &mut self.live(*id)?.value {
                     Value::Str(text) => text.push_str(&tail),
                     other => return err(format!("{name} of {other:?}")),
                 }
                 Ok(a.clone())
             }
-            (false, "add", [a, b]) => {
-                let text = self.string_at(a)? + &self.string_at(b)?;
+            (false, "add", [a, rest @ ..]) if !rest.is_empty() => {
+                let mut text = self.string_at(a)?;
+                for b in rest {
+                    text += &self.string_at(b)?;
+                }
                 Ok(self.alloc_box(ty_name, Value::Str(text)))
             }
             (false, "eq", [a, b]) => {

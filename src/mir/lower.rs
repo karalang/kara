@@ -25038,6 +25038,8 @@ fn finish_build(mut lowered: Lowered) -> Result<Lowered, String> {
     let presize = std::env::var("KARAC_MIR_PRESIZE").as_deref() != Ok("0");
     // `KARAC_MIR_CONCAT=0` copies every `String.add`'s left side (`concat`).
     let concat = std::env::var("KARAC_MIR_CONCAT").as_deref() != Ok("0");
+    // `KARAC_MIR_CONCAT_FUSE=0` grows a `+` chain once per operand.
+    let concat_fuse = std::env::var("KARAC_MIR_CONCAT_FUSE").as_deref() != Ok("0");
     // `KARAC_MIR_ASCII_CHARS=0` decodes every char of an ASCII literal
     // (`ascii_chars`).
     let ascii_chars = std::env::var("KARAC_MIR_ASCII_CHARS").as_deref() != Ok("0");
@@ -25119,6 +25121,9 @@ fn finish_build(mut lowered: Lowered) -> Result<Lowered, String> {
         }
         if concat && !coroutines.contains(&body.instance.name) {
             crate::mir::concat::take_concat_lefts(body, &lowered.tys);
+            if concat_fuse {
+                crate::mir::concat::fuse_concat_chains(body, &lowered.tys);
+            }
         }
         if ascii_chars && !coroutines.contains(&body.instance.name) {
             crate::mir::ascii_chars::walk_ascii_chars(body, &lowered.tys);

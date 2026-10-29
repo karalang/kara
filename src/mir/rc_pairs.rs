@@ -234,7 +234,7 @@ fn operand_mentions(o: &Operand, l: Local) -> bool {
     }
 }
 
-fn rvalue_mentions(rv: &Rvalue, l: Local) -> bool {
+pub(super) fn rvalue_mentions(rv: &Rvalue, l: Local) -> bool {
     match rv {
         Rvalue::Use(o) | Rvalue::UnaryOp(_, o) | Rvalue::Cast(_, o, _) => operand_mentions(o, l),
         Rvalue::BinaryOp(_, a, b) | Rvalue::CheckedBinaryOp(_, a, b) => {

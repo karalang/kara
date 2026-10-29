@@ -63,7 +63,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | missing-feature | 49 |
 | perf | 40 |
 | soundness | 26 |
-| miscompile | 17 |
+| miscompile | 18 |
 | run-vs-build | 13 |
 | codegen-gap | 8 |
 | other | 6 |
@@ -75,7 +75,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 118 |
-| mir | 60 |
+| mir | 61 |
 | mir-llvm | 49 |
 | ownership | 33 |
 | interp | 25 |
@@ -123,6 +123,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-29-46 | 2026-10-29 | ownership | medium | `method_param_modes` is keyed by `"Type.method"`, so a type with two impls of one operator trait (`impl Add for Col` with a borrowing `rhs: Col` and `impl Add[Flags] for Col` with `rhs: own Flags`) gives every `col + x` the LAST impl's parameter modes: `a + b` then `a + b` is refused as a use of moved `b`, though the impl `a + b` calls borrows it and the MIR build runs it | — |
 | B-2026-10-29-47 | 2026-10-29 | ownership | medium | A program's own `struct Mask` is read as the SIMD scalar `Mask` by D5 (`COPY_SCALARS` in src/d5_params.rs lists "Mask" by name), so a bare `m: Mask` parameter is not rewritten to `ref Mask` and every call moves its argument: `count(m)` twice is refused as a use of moved `m`, and the same struct renamed `Bits` checks and runs | — |
 | B-2026-10-29-50 | 2026-10-29 | autopar | low | An auto-par task's loop takes its run's bounds as plain captures, so LLVM knows nothing of the counter's range: kata 4's `k % R` becomes a signed 64-bit magic division in the task (about 10 instructions) where the in-order loop, knowing 0 <= k < 10M, uses a 32-bit unsigned one (about 5) | — |
+| B-2026-10-29-52 | 2026-10-29 | mir | high | `mir::concat` moved the left side of `a + b` into the add while a closure still borrowed it: `let f = || println(a); let b = a + "y"; f()` printed freed bytes (compiled) and the MIR interpreter stopped on a read through a reference to an uninitialized value | — |
 | B-2026-10-30-2 | 2026-10-30 | ownership+mir | medium | A call through a `let` closure never moves an owned argument in check: `let take = |n: own String| n.len(); take(n); take(n)` passes check, and `__mir-run` refuses it ("use of _3, which may have been moved") | — |
 
 ### Relocated
