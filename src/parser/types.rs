@@ -760,9 +760,106 @@ impl super::Parser {
         Some((path?, bindings))
     }
 
+    /// `Name<T, U>`, Rust's generic arguments, in a type (the `<` being the
+    /// current token): reported at the `<`, with the edit that writes each
+    /// of the list's angle brackets as Kāra's square ones when the list is
+    /// balanced, and the tokens rewritten the same way so the list parses as
+    /// `Name[T, U]` and nothing cascades (B-2026-10-29-23). An unbalanced
+    /// list is reported with no fix and left as it was.
+    fn angle_generic_args(&mut self, name: &str) {
+        let open = self.current_span();
+        // The open brackets, innermost last; each closer must match its own.
+        let mut open_brackets = Vec::new();
+        let mut angles = Vec::new();
+        let mut end = None;
+        for (i, t) in self.tokens.iter().enumerate().skip(self.pos) {
+            let closes: &[Token] = match t.token {
+                Token::LessThan | Token::LeftBracket | Token::LeftParen => {
+                    if t.token == Token::LessThan {
+                        angles.push(i);
+                    }
+                    open_brackets.push(t.token.clone());
+                    &[]
+                }
+                Token::GreaterThan => &[Token::LessThan],
+                Token::GreaterGreater => &[Token::LessThan, Token::LessThan],
+                Token::RightBracket => &[Token::LeftBracket],
+                Token::RightParen => &[Token::LeftParen],
+                Token::EOF
+                | Token::Semicolon
+                | Token::LeftBrace
+                | Token::RightBrace
+                | Token::Equal => break,
+                _ => &[],
+            };
+            if matches!(t.token, Token::GreaterThan | Token::GreaterGreater) {
+                angles.push(i);
+            }
+            if closes
+                .iter()
+                .any(|c| open_brackets.pop().as_ref() != Some(c))
+            {
+                break;
+            }
+            if open_brackets.is_empty() {
+                end = Some(i);
+                break;
+            }
+        }
+        self.error_at(
+            &format!(
+                "`{name}<..>` is Rust's spelling: Kāra writes generic arguments in \
+                 brackets, `{name}[..]`"
+            ),
+            open,
+        );
+        if end.is_none() {
+            return;
+        }
+        let mut edits = Vec::new();
+        for &i in angles.iter().rev() {
+            let span = self.tokens[i].span;
+            let (bracket, text) = match self.tokens[i].token {
+                Token::LessThan => (Token::LeftBracket, "["),
+                Token::GreaterThan => (Token::RightBracket, "]"),
+                _ => (Token::RightBracket, "]]"),
+            };
+            edits.push(crate::resolver::TextEdit {
+                offset: span.offset,
+                length: span.length,
+                replacement: text.to_string(),
+            });
+            self.tokens[i].token = bracket;
+            if text == "]]" {
+                // `>>` closes two lists: split it into two `]`.
+                self.tokens[i].span.length = 1;
+                let second = Span {
+                    column: span.column + 1,
+                    offset: span.offset + 1,
+                    length: 1,
+                    ..span
+                };
+                self.tokens.insert(
+                    i + 1,
+                    crate::token::SpannedToken {
+                        token: Token::RightBracket,
+                        span: second,
+                    },
+                );
+            }
+        }
+        edits.reverse();
+        self.fix_diffs
+            .insert(crate::resolver::SpanKey::from_span(&open), edits);
+    }
+
     pub(crate) fn parse_path_type(&mut self) -> Option<PathExpr> {
         let start = self.current_span();
         let segments = self.parse_path_segments()?;
+        if self.check(&Token::LessThan) && !self.cast_type {
+            let name = segments.last().map_or("", |s| s.as_str()).to_string();
+            self.angle_generic_args(&name);
+        }
 
         // Check for generic args [T, U] — unambiguous in type position. The
         // flag lets this list, and no other, end in an effect argument.

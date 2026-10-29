@@ -446,7 +446,10 @@ impl super::Parser {
                         break;
                     }
                     self.advance();
-                    let ty = self.parse_type()?;
+                    let saved_cast = std::mem::replace(&mut self.cast_type, true);
+                    let ty = self.parse_type();
+                    self.cast_type = saved_cast;
+                    let ty = ty?;
                     // B-2026-08-18-33 — span the whole cast (lhs start -> past
                     // the target type) rather than copying `lhs.span`, so
                     // `x as i64 as u8` gives its two nodes distinct keys.

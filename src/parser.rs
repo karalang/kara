@@ -250,6 +250,9 @@ pub struct Parser {
     /// `impl` return with its own clause is parenthesized
     /// (`-> (Fn(Str) with writes(Log)) with allocates(Heap)`).
     pub(crate) return_tail: bool,
+    /// While the type after `as` is parsed: a `<` after it is a comparison
+    /// (`x as i64 < y`), not Rust's generic arguments.
+    pub(crate) cast_type: bool,
     /// Set by an `impl` body just before it parses a method: the next
     /// `parse_function` reads its name as a member name, which any keyword
     /// may be (design.md §3). Taken one-shot, like `return_tail`.
@@ -469,6 +472,7 @@ impl Parser {
             frozen_self_consumed: false,
             own_self_consumed: false,
             return_tail: false,
+            cast_type: false,
             member_fn_name: false,
             freeze_spans: rustc_hash::FxHashSet::default(),
             ref_binding_spans: rustc_hash::FxHashSet::default(),
