@@ -58,11 +58,11 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| false-positive | 56 |
+| false-positive | 57 |
+| diagnostics | 48 |
 | missing-feature | 47 |
-| diagnostics | 43 |
+| perf | 27 |
 | soundness | 24 |
-| perf | 21 |
 | miscompile | 14 |
 | run-vs-build | 9 |
 | codegen-gap | 6 |
@@ -73,22 +73,23 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 102 |
+| typecheck | 106 |
 | mir | 50 |
-| mir-llvm | 31 |
+| mir-llvm | 34 |
 | ownership | 25 |
 | interp | 22 |
 | codegen | 22 |
-| cli | 20 |
-| runtime | 11 |
-| parser | 8 |
+| cli | 22 |
+| runtime | 13 |
+| parser | 10 |
+| other | 3 |
 | resolver | 3 |
-| other | 2 |
 | effect | 2 |
+| autopar | 2 |
 | lexer | 1 |
 ## Current state
 
-_Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-10-28). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-10-29). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open
 
@@ -106,6 +107,18 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-28-27 | 2026-10-28 | cli | low | The manifest keys design.md §4 promises for import names are not implemented: a dependency's `alias = "..."`, the optional `[package].import = "..."`, and the rule that a hyphen in a package name maps to `_` in the import path (`kara-data` is imported from `kara_data`); kara-data's `import data` depends on all three | — |
 | B-2026-10-28-28 | 2026-10-28 | typecheck | medium | A closure that calls a method on its parameter and passes a captured `String` to `contains` (`|s| s.to_uppercase().contains(upper)`) is typed as consuming the capture, so it is once-callable and `map(...).collect()` refuses it; `|s| s.contains(upper)` passes | — |
 | B-2026-10-28-29 | 2026-10-28 | mir | medium | `Ok((n, it.map(..).collect()))` and `Some((n, it.map(..).collect()))` pass `karac check` but the MIR build refuses them (an expression whose type does not lower, UnsolvedParam(C)): a `collect` that is a tuple element inside an enum constructor keeps its target type unsolved; in a bare tuple, or directly inside `Ok`, it builds | — |
+| B-2026-10-28-31 | 2026-10-28 | parser+cli | low | `if c { a = x } else { b = y }` (an assignment ending each arm, no `;`) gets a correct `;` fix-it for the first arm only, and `karac fix` refuses to apply it: the parser does not recover as if the `;` were there, so the fixed file reports three errors to the original two and the safety check rejects the edit; one arm alone (`if c { a = x }`) is fixed | — |
+| B-2026-10-28-32 | 2026-10-28 | typecheck | medium | `prefix ?? default` on a bare (borrowed) `Option[String]` parameter is refused as "'??' requires an `Option` or a `Result` on the left, found 'ref Option[String]'" with the help "an unwrapped value needs no fallback — drop the '?? ...'", which is wrong advice; the same on `Option[i64]` checks and runs, and `prefix.clone() ?? default` is the fix the message should offer | — |
+| B-2026-10-28-33 | 2026-10-28 | mir-llvm | medium | The MIR compiled backend runs kata 5's expand-around-center seq bench 1.22x legacy's instructions and 1.45x its cycles, turning a kata that beat Rust (0.95x) into one that trails it (1.17x rustc -O, 1.28x overflow-checked rustc, 1.43x clang -O3) | — |
+| B-2026-10-28-34 | 2026-10-28 | mir-llvm | medium | The MIR compiled backend runs kata 2's add-two-numbers seq bench 1.15x legacy's instructions and 1.17x its cycles, so kara drops from clang -O3 parity (1.01x) to 1.23x C | — |
+| B-2026-10-28-35 | 2026-10-28 | autopar+runtime | medium | Kata 4's auto-par binary executes a constant +207M instructions (+37%) whenever it has two or more workers, and two workers buy no speedup at twice the CPU: 6.9 ms at 18 workers against rayon's 4.1 ms and the legacy karac_par_reduce build's 3.9 ms | — |
+| B-2026-10-28-36 | 2026-10-28 | mir-llvm+runtime | medium | Every compute-only binary is about 250 KB larger on the MIR backend: a seq kata binary is 337 KB at g04628b0eb against 85 KB from legacy, and the auto-par one 404 KB | — |
+| B-2026-10-28-37 | 2026-10-28 | other | low | Compiling a 40-line kata now takes about 158 ms and 68 MB peak against 92 ms and 24 MB in July, slower and larger than rustc -O on the same program (102 ms, 32 MB), and `karac run` of kata 1's 1.8 ms hash_map program takes 106 ms | — |
+| B-2026-10-28-38 | 2026-10-28 | autopar | low | Auto-par fans out kata 1's hash_map two-sum, a 2 ms program, for no wall-clock gain: the default build runs 31.2M instructions and 15.3M cycles at 223% CPU against 26.8M and 7.0M for its KARAC_AUTO_PAR=0 twin, where the legacy runtime declined it | — |
+| B-2026-10-29-1 | 2026-10-29 | parser | medium | A function-typed parameter in Rust's spelling, `f: impl Fn(i64) -> i64` or `f: fn(i64) -> i64`, gets only a bare parse error (`Expected RightParen, found LeftParen` at the `(`; `Expected type, found Fn` for `fn`) with no hint that Kāra writes `Fn(i64) -> i64`, and no fix-it, so `karac fix` leaves it | — |
+| B-2026-10-29-2 | 2026-10-29 | typecheck | high | A closure that passes a captured `String` to `replace`, `replacen`, `split`, `find` or `strip_prefix` on its parameter (`|s| s.replace(old, new)`) is typed as consuming the capture, so it is once-callable and `.map(...)` or any `Fn` slot refuses it; all five take `Str` (strings.md), and `starts_with`, `contains` and `ends_with` with the same capture pass | — |
+| B-2026-10-29-3 | 2026-10-29 | typecheck+cli | low | `s.bytes().collect()` is refused with a message that spells out the rewrite ("iterator adaptors/terminals require an explicit `.iter()` — write `s.bytes().iter().collect(...)`") but the diagnostic carries no fix, so `karac fix` leaves it for a hand edit | — |
+| B-2026-10-29-4 | 2026-10-29 | typecheck | low | A borrowed parameter or match binding put in an array literal where an owned `Vec[String]` is wanted (`count([key].to_vec())`, `key` a bare `String` parameter or a `Some(key)` arm on a borrowed `Option[String]`) gets only `expected 'ref Vec[String]', found 'Vec[ref String]'`, with no hint and no fix, while the same through a `Some(ref key)` binding gets borrow_projection_copy's message and a machine-applicable `.clone()` | — |
 
 ### Relocated
 
