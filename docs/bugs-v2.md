@@ -59,12 +59,12 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | false-positive | 59 |
-| diagnostics | 57 |
+| diagnostics | 58 |
 | missing-feature | 49 |
 | perf | 34 |
 | soundness | 24 |
-| miscompile | 14 |
-| run-vs-build | 10 |
+| miscompile | 15 |
+| run-vs-build | 11 |
 | other | 6 |
 | codegen-gap | 6 |
 | crash | 2 |
@@ -74,14 +74,14 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 111 |
-| mir | 54 |
-| mir-llvm | 40 |
+| mir | 55 |
+| mir-llvm | 42 |
 | ownership | 26 |
 | interp | 23 |
 | cli | 23 |
 | codegen | 22 |
-| parser | 15 |
-| runtime | 14 |
+| parser | 16 |
+| runtime | 15 |
 | effect | 4 |
 | other | 3 |
 | resolver | 3 |
@@ -117,6 +117,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-28-41 | 2026-10-28 | mir-llvm | medium | MIR never ported legacy's binary-search midpoint assume (B-2026-06-16-1) and passes a Slice through memory, so `len` reaches IPSCCP only after inlining: kata 153's search loop runs 14 instructions per iteration against legacy's 9 (1.55x), and the same shape regresses katas 34, 35, 74 and 275 | — |
 | B-2026-10-28-42 | 2026-10-28 | mir-llvm+runtime | high | MIR heap-copies every string literal a function returns and builds `a + " " + b` one realloc per operand (copying a dead left operand), where legacy returned a borrowed static and allocated a `+` chain once: kata 273 runs 2.31x legacy's instructions and 2.3x its mallocs | — |
 | B-2026-10-28-43 | 2026-10-28 | mir-llvm | medium | MIR stores the panic location into `@karac.site` / `@karac.site.len` on every loop latch and before every unwrap, and since da5bdc59fc (B-2026-10-26-7) those globals are thread_local, a TLV-getter call per access on Mach-O: kata 38 went 1.17x -> 1.67x legacy's instructions | — |
+| B-2026-10-28-44 | 2026-10-28 | mir-llvm+runtime | low | On macOS, `karac run` of a program with several pool workers can report ANOTHER task's source location for a panic: the JIT keeps `@karac.site` / `@karac.site.len` process-wide because RuntimeDyldMachO cannot link thread-locals, and B-2026-10-26-7's comment says that sharing 'costs speed only' — it also makes the reported place a race, and tests/mir_site_thread_local.rs's `karac run` assertion passes by chance on a Mac | — |
 | B-2026-10-29-1 | 2026-10-29 | parser | medium | A function-typed parameter in Rust's spelling, `f: impl Fn(i64) -> i64` or `f: fn(i64) -> i64`, gets only a bare parse error (`Expected RightParen, found LeftParen` at the `(`; `Expected type, found Fn` for `fn`) with no hint that Kāra writes `Fn(i64) -> i64`, and no fix-it, so `karac fix` leaves it | — |
 | B-2026-10-29-2 | 2026-10-29 | typecheck | high | A closure that passes a captured `String` to `replace`, `replacen`, `split`, `find` or `strip_prefix` on its parameter (`|s| s.replace(old, new)`) is typed as consuming the capture, so it is once-callable and `.map(...)` or any `Fn` slot refuses it; all five take `Str` (strings.md), and `starts_with`, `contains` and `ends_with` with the same capture pass | — |
 | B-2026-10-29-3 | 2026-10-29 | typecheck+cli | low | `s.bytes().collect()` is refused with a message that spells out the rewrite ("iterator adaptors/terminals require an explicit `.iter()` — write `s.bytes().iter().collect(...)`") but the diagnostic carries no fix, so `karac fix` leaves it for a hand edit | — |
@@ -135,6 +136,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-29-18 | 2026-10-29 | typecheck | low | Comparing `x.count_ones()` (a `u32`) with an `i64` is refused with E0208 and no machine-applicable fix, though `as i64` widens without loss and E0200 already offers that cast | — |
 | B-2026-10-29-19 | 2026-10-29 | typecheck | low | `count_ones`, `count_zeros`, `leading_zeros` and `trailing_zeros` return `u32`, while design.md says Kāra code uses `i64` for every size, length, count and index, so every use beside a length needs `as i64` | — |
 | B-2026-10-29-20 | 2026-10-29 | effect+mir | medium | Under a `Network` override, TLS, WebSocket and the `Server.serve` family must be refused by `karac check` with `E_PROVIDER_UNSUPPORTED` naming the call and `Network` (§14.12); today they are accepted and reach the real network, and a `Network` provider's handle method that uses a resource overridden at the binding site is refused only by the MIR build | — |
+| B-2026-10-29-22 | 2026-10-29 | mir+mir-llvm | high | The implicit numeric widening of a CALL's result is dropped when the call initializes an annotated `let` (`let x: f64 = f()` with `f() -> f32`, `let n: i64 = g()` with `g() -> i32`, a method call alike), is a function's return value (`return f()` or a tail `f()` in a `-> f64` function) or is an `if` arm: `__mir-run` prints the right value, while `__mir-llvm-run`, `karac run`, `karac build` and `__mir-llvm-asan` read a half-written slot (1.5 prints as 5.28426686e-315, -7 as 4294967289 or stack junk under ASan); an argument, a field, a `push` and an assignment widen correctly | — |
+| B-2026-10-29-23 | 2026-10-29 | parser | low | Rust-style angle-bracket generics in a type (`-> Result<(), String>`, `let v: Vec<i64>`, `x: Option<i64>`) get a bare token error ("Expected LeftBrace, found LessThan", "Expected Equal, found LessThan", "Expected RightParen, found LessThan") with no pointer to Kāra's `Result[(), String]` and no fix; in a method of an `impl` the parser also reports a false "Expected expression, found RightBrace" at the `impl`'s closing brace | — |
 
 ### Relocated
 
