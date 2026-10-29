@@ -20762,6 +20762,17 @@ impl<'l, 'a> Bx<'l, 'a> {
                 {
                     CapMode::Ref
                 }
+                // An auto-par loop's tasks are joined before the loop
+                // ends, so a fixed array they only read is borrowed rather
+                // than copied into each of them (kata 1's 40 KB input into
+                // all 16, B-2026-10-29-42).
+                _ if !explicit
+                    && auto_par
+                    && !assigned.contains(&sym)
+                    && matches!(self.tys().tcx().kind(t), HK::Array { .. }) =>
+                {
+                    CapMode::Ref
+                }
                 // A task copies them: its group outlives a loop body's
                 // locals, which is the usual place to spawn from.
                 _ if !explicit && !task && self.is_copy(t) => CapMode::Ref,
