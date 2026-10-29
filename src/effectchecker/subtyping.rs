@@ -184,6 +184,9 @@ struct SubtypingWalk {
     /// `method_bodies` key (`"Registry.add"` → `Registry`). `None` in a free
     /// function, where `self` is not in scope at all (B-2026-08-24-17).
     self_type: Option<String>,
+    /// Each value's solution for its type's effect variable, by the place
+    /// holding the value (`effect_vars.rs`).
+    instances: super::effect_vars::Instances,
 }
 
 impl SubtypingWalk {
@@ -221,6 +224,7 @@ impl<'a> super::EffectChecker<'a> {
                 slots: Vec::new(),
                 return_ty: f.return_type.clone(),
                 self_type,
+                instances: Vec::new(),
             };
             // PARAMETERS are declared slots too, and were missed by every
             // position in this family until now: the stack was filled only by
@@ -321,6 +325,9 @@ impl<'a> super::EffectChecker<'a> {
                     remember_slot(w, pattern, ty);
                 }
                 self.check_subtyping_in_expr(value, w);
+                if let PatternKind::Binding(name) = &pattern.kind {
+                    self.bind_construction(name, ty.as_ref(), value, &mut w.instances);
+                }
             }
             // `let f: Fn(..);` has no value to check against the slot HERE —
             // but it declares one, and the later `f = save;` fills it
@@ -392,6 +399,7 @@ impl<'a> super::EffectChecker<'a> {
         callee_name: Symbol,
         args: &[CallArg],
         call_span: &Span,
+        solved: &[usize],
     ) {
         let params = self
             .function_bodies
@@ -447,6 +455,9 @@ impl<'a> super::EffectChecker<'a> {
             let Some(param) = params.get(i) else {
                 continue;
             };
+            if solved.contains(&i) {
+                continue;
+            }
             let slot_effects = match &param.ty.kind {
                 TypeKind::FnType {
                     effect_spec: Some(EffectSpec::Polymorphic),
@@ -617,7 +628,7 @@ impl<'a> super::EffectChecker<'a> {
     /// slot whose clause omits them". It goes through
     /// [`Self::is_default_permitted_effect`], so the `embedded` / `kernel`
     /// profiles, which forbid it, still check it.
-    fn is_slot_transparent(&self, effect: &Effect) -> bool {
+    pub(super) fn is_slot_transparent(&self, effect: &Effect) -> bool {
         matches!(effect.verb, EffectVerbKind::Panics)
             || self.is_transparent_verb(&effect.verb)
             || self.is_default_permitted_effect(effect)
@@ -631,7 +642,7 @@ impl<'a> super::EffectChecker<'a> {
     /// rare enough that building and invalidating a table would cost more
     /// than it saves. Returns `None` for an unknown struct or field, which
     /// is the right answer for a literal the typechecker will reject anyway.
-    fn struct_field_type(&self, struct_name: &str, field: &str) -> Option<TypeExpr> {
+    pub(super) fn struct_field_type(&self, struct_name: &str, field: &str) -> Option<TypeExpr> {
         self.program.items.iter().find_map(|item| match item {
             Item::StructDef(sd) if sd.name == struct_name => sd
                 .fields
@@ -1099,7 +1110,7 @@ impl<'a> super::EffectChecker<'a> {
         match &expr.kind {
             ExprKind::Call { callee, args } => {
                 if let Some(cname) = self.extract_callee_name(callee) {
-                    self.check_call_args_subtyping(cname, args, &expr.span);
+                    self.check_call_args_subtyping(cname, args, &expr.span, &[]);
                 }
                 // Recurse into callee and args
                 self.check_subtyping_in_expr(callee, w);
@@ -1178,7 +1189,23 @@ impl<'a> super::EffectChecker<'a> {
                 // satisfy a method's pure `Fn()` slot whenever the enclosing
                 // caller declared the effects.
                 if let Some(callee_key) = self.resolve_method_callee_key(&expr.span) {
-                    self.check_call_args_subtyping(callee_key, args, &expr.span);
+                    // A position naming a variable the callee's `impl`
+                    // declares is solved per receiver value instead.
+                    let in_own_impl = matches!(
+                        receiver_place(object),
+                        Some(p) if p == "self" || p.starts_with("self.")
+                    ) && w.self_type.as_deref()
+                        == self.interner.resolve(callee_key).split('.').next();
+                    let written = self.receiver_declared_type(object, w);
+                    let solved = self.bind_receiver_vars(
+                        callee_key,
+                        receiver_place(object),
+                        written,
+                        in_own_impl,
+                        args,
+                        &mut w.instances,
+                    );
+                    self.check_call_args_subtyping(callee_key, args, &expr.span, &solved);
                 }
                 // The check above reads the slot off the CALLEE's parameter
                 // list, which a baked stdlib method does not have. This one

@@ -1,0 +1,38 @@
+effect resource OrderDb;
+effect resource Log;
+
+struct Event { n: i64 }
+
+// The spec's stored-callback bus (design.md § Effect variables): `E` is
+// the set of effects its handlers have, solved for each bus where it is
+// built and filled.
+struct EventBus[with E] {
+    handlers: Vec[Fn(Event) with E],
+}
+
+impl[with E] EventBus[with E] {
+    fn register(mut ref self, h: escaping Fn(Event) with E) {
+        self.handlers.push(h);
+    }
+
+    fn emit(self, e: Event) with E {
+        for h in self.handlers { h(e); }
+    }
+}
+
+fn record(e: Event) with writes(OrderDb) { }
+fn note(e: Event) with writes(Log) { }
+
+// The first handler fixes `E` = {writes(OrderDb)}; the second brings
+// `writes(Log)`, outside it, and is refused, naming where the set was
+// fixed.
+fn audit() {
+    let mut bus = EventBus { handlers: Vec.new() };
+    bus.register(record);
+    bus.register(note);
+    bus.emit(Event { n: 7 });
+}
+
+fn main() {
+    audit();
+}

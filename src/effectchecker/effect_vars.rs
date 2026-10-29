@@ -1,0 +1,345 @@
+//! Effect variables solved per value (design.md § Effect variables).
+//!
+//! A variable an `impl[with E]` block or a `struct S[with E]` declares
+//! belongs to each value of the type, not to a call: `bus.register(h)` binds
+//! `h`'s effects into `bus`'s instance of `E`, and every later binding into
+//! the same value must fit it. The variables of a function's own
+//! `[with E]` are solved per call by `compute_call_var_bindings`.
+//!
+//! The first value bound fixes the set: the function values in the fields
+//! of the value's construction, unioned as a collection literal of them is,
+//! or else the first argument a method binds into it. A type argument
+//! written on the value's declaration (`EventBus[with writes(OrderDb)]`)
+//! fixes it instead. A later value with an effect outside the set is
+//! refused, naming the effect and where the set was fixed. A value nothing
+//! fills has the empty set, which needs no entry.
+//!
+//! What a call through the value is charged needs nothing here: naming a
+//! function value charges its effects to the function that names it
+//! (B-2026-08-23-7), and that is the function where the variable is solved.
+
+use std::collections::HashSet;
+
+use rustc_hash::FxHashMap;
+
+use crate::ast::*;
+use crate::intern::Symbol;
+use crate::token::Span;
+
+use super::{
+    declared_admits, effect_var_names_in_type, verb_name, Effect, EffectError, EffectErrorKind,
+    EffectSubtypeTrace,
+};
+
+/// One value's solution for its type's effect variable.
+#[derive(Debug, Clone)]
+pub(super) struct VarInstance {
+    var: String,
+    set: HashSet<Effect>,
+    /// Where the set was fixed: the first function value bound, or the
+    /// written type argument.
+    fixed_at: Span,
+    by_type: bool,
+}
+
+/// Each value's instances, by the place that holds the value (`bus`,
+/// `self.bus`), for one body.
+pub(super) type Instances = Vec<(String, VarInstance)>;
+
+fn effect_text(e: &Effect) -> String {
+    format!("{}({})", verb_name(&e.verb), e.resource)
+}
+
+fn set_text(set: &HashSet<Effect>) -> Vec<String> {
+    let mut v: Vec<String> = set.iter().map(effect_text).collect();
+    v.sort();
+    v
+}
+
+/// Whether `ty` names `var` in a function type's clause, inside generic
+/// arguments too (`Vec[Fn(Event) with E]`), which
+/// [`effect_var_names_in_type`] does not walk.
+fn mentions_var(ty: &TypeExpr, var: &str) -> bool {
+    if effect_var_names_in_type(ty).iter().any(|n| n == var) {
+        return true;
+    }
+    match &ty.kind {
+        TypeKind::Path(p) => p.generic_args.iter().flatten().any(|a| match a {
+            GenericArg::Type(t) => mentions_var(t, var),
+            _ => false,
+        }),
+        TypeKind::Tuple(elems) => elems.iter().any(|t| mentions_var(t, var)),
+        TypeKind::Array { element, .. } => mentions_var(element, var),
+        _ => false,
+    }
+}
+
+/// The function values a field initializer binds: the value itself, or the
+/// elements of a collection literal of them.
+fn bound_values(e: &Expr) -> Vec<&Expr> {
+    match &e.kind {
+        ExprKind::Closure { .. } | ExprKind::Identifier(_) => vec![e],
+        ExprKind::ArrayLiteral(items) | ExprKind::PrefixCollectionLiteral { items, .. } => {
+            items.iter().flat_map(bound_values).collect()
+        }
+        _ => Vec::new(),
+    }
+}
+
+impl<'a> super::EffectChecker<'a> {
+    /// For each method of an `impl[with E]` block, the parameter positions
+    /// whose function type names a variable the block declares (and the
+    /// method does not redeclare), keyed like `fn_effect_var_positions`.
+    pub(crate) fn build_impl_effect_var_positions(
+        &self,
+    ) -> FxHashMap<Symbol, FxHashMap<String, Vec<usize>>> {
+        let mut index: FxHashMap<Symbol, FxHashMap<String, Vec<usize>>> = FxHashMap::default();
+        for item in &self.program.items {
+            let Item::ImplBlock(imp) = item else {
+                continue;
+            };
+            let Some(gp) = &imp.generic_params else {
+                continue;
+            };
+            if gp.effect_params.is_empty() {
+                continue;
+            }
+            let TypeKind::Path(p) = &imp.target_type.kind else {
+                continue;
+            };
+            let Some(type_name) = p.segments.last() else {
+                continue;
+            };
+            for impl_item in &imp.items {
+                let ImplItem::Method(m) = impl_item else {
+                    continue;
+                };
+                let own: HashSet<&str> = m
+                    .generic_params
+                    .as_ref()
+                    .map(|g| g.effect_params.iter().map(|e| e.name.as_str()).collect())
+                    .unwrap_or_default();
+                let mut by_var: FxHashMap<String, Vec<usize>> = FxHashMap::default();
+                for (idx, param) in m.params.iter().enumerate() {
+                    for name in effect_var_names_in_type(&param.ty) {
+                        if !own.contains(name.as_str())
+                            && gp.effect_params.iter().any(|e| e.name == name)
+                        {
+                            by_var.entry(name).or_default().push(idx);
+                        }
+                    }
+                }
+                if !by_var.is_empty() {
+                    index.insert(self.interner.dotted_str(type_name, &m.name), by_var);
+                }
+            }
+        }
+        index
+    }
+
+    /// The non-transparent effects of a function value bound to a slot.
+    fn bound_effects(&self, value: &Expr) -> HashSet<Effect> {
+        self.get_arg_effects(value)
+            .effects
+            .iter()
+            .filter(|te| !self.is_slot_transparent(&te.effect))
+            .map(|te| te.effect.clone())
+            .collect()
+    }
+
+    /// The instance a written type argument fixes, when `ty` writes one on
+    /// a type that declares a variable.
+    fn written_instance(&self, ty: &TypeExpr) -> Option<VarInstance> {
+        let list = ty.effect_args()?;
+        let TypeKind::Path(p) = &ty.kind else {
+            return None;
+        };
+        let var = self.type_effect_var(p.segments.last()?)?;
+        Some(VarInstance {
+            var,
+            set: self.resolve_effect_list_to_set(list, None),
+            fixed_at: list.span,
+            by_type: true,
+        })
+    }
+
+    /// The effect variable a struct or enum declares, by name.
+    fn type_effect_var(&self, type_name: &str) -> Option<String> {
+        self.program.items.iter().find_map(|item| {
+            let gp = match item {
+                Item::StructDef(sd) if sd.name == type_name => sd.generic_params.as_ref(),
+                Item::EnumDef(ed) if ed.name == type_name => ed.generic_params.as_ref(),
+                _ => None,
+            }?;
+            gp.effect_params.first().map(|e| e.name.clone())
+        })
+    }
+
+    /// Bind `value` into `inst`: refused when it brings an effect outside the
+    /// set, with the set and where it was fixed.
+    fn fit_bound_value(&mut self, inst: &VarInstance, value: &Expr) {
+        let effects = self.bound_effects(value);
+        let mut extra: Vec<String> = effects
+            .iter()
+            .filter(|e| !declared_admits(&inst.set, e))
+            .map(effect_text)
+            .collect();
+        if extra.is_empty() {
+            return;
+        }
+        extra.sort();
+        let set = set_text(&inst.set);
+        let extra_text: Vec<String> = extra.iter().map(|e| format!("`{e}`")).collect();
+        let message = format!(
+            "function value has {}, outside the effect set of `{}` (`{{{}}}`), which was \
+             fixed at {}:{} by {}",
+            extra_text.join(", "),
+            inst.var,
+            set.join(", "),
+            inst.fixed_at.line,
+            inst.fixed_at.column,
+            if inst.by_type {
+                "its type argument"
+            } else {
+                "the first value bound to it"
+            },
+        );
+        self.errors.push(EffectError {
+            message,
+            span: value.span,
+            kind: EffectErrorKind::EffectSubtypeViolation,
+            subtype_trace: Some(EffectSubtypeTrace {
+                slot_effects: set,
+                argument_effects: set_text(&effects),
+                offending_effects: extra,
+                monomorphized_signature: None,
+            }),
+            replacement: None,
+        });
+    }
+
+    /// `let name[: ty] = value;`: a fresh value under `name`. Its instance is
+    /// fixed by a written type argument, or by the function values its
+    /// construction binds.
+    pub(super) fn bind_construction(
+        &mut self,
+        name: &str,
+        ty: Option<&TypeExpr>,
+        value: &Expr,
+        instances: &mut Instances,
+    ) {
+        let prefix = format!("{name}.");
+        instances.retain(|(place, _)| place != name && !place.starts_with(&prefix));
+        let mut inst = ty.and_then(|t| self.written_instance(t));
+        if let ExprKind::StructLiteral { path, fields, .. } = &value.kind {
+            if let Some(var) = path.last().and_then(|s| self.type_effect_var(s)) {
+                let sname = path.last().cloned().unwrap_or_default();
+                let mut fixed: Option<VarInstance> = None;
+                for f in fields {
+                    let Some(field_ty) = self.struct_field_type(&sname, &f.name) else {
+                        continue;
+                    };
+                    if !mentions_var(&field_ty, &var) {
+                        continue;
+                    }
+                    for v in bound_values(&f.value) {
+                        match &inst {
+                            Some(written) => {
+                                let written = written.clone();
+                                self.fit_bound_value(&written, v);
+                            }
+                            None => {
+                                let effects = self.bound_effects(v);
+                                let entry = fixed.get_or_insert_with(|| VarInstance {
+                                    var: var.clone(),
+                                    set: HashSet::new(),
+                                    fixed_at: v.span,
+                                    by_type: false,
+                                });
+                                entry.set.extend(effects);
+                            }
+                        }
+                    }
+                }
+                if inst.is_none() {
+                    inst = fixed;
+                }
+            }
+        }
+        if let Some(inst) = inst {
+            instances.push((name.to_string(), inst));
+        }
+    }
+
+    /// `recv.m(args)` where `m` binds an argument into a variable its
+    /// `impl` declares: the first binding into the receiver's value fixes its
+    /// instance, and each later one must fit. Returns the argument positions
+    /// handled here, which the per-call slot check skips.
+    ///
+    /// Inside the type's own methods (`self.register(h)`) the variable is
+    /// the method's own, unsolved, so the positions are skipped unbound.
+    pub(super) fn bind_receiver_vars(
+        &mut self,
+        callee_key: Symbol,
+        place: Option<String>,
+        written: Option<TypeExpr>,
+        in_own_impl: bool,
+        args: &[CallArg],
+        instances: &mut Instances,
+    ) -> Vec<usize> {
+        let Some(by_var) = self.impl_effect_var_positions.get(&callee_key).cloned() else {
+            return Vec::new();
+        };
+        let mut handled: Vec<usize> = by_var.values().flatten().copied().collect();
+        handled.sort_unstable();
+        handled.dedup();
+        if in_own_impl {
+            return handled;
+        }
+        let Some(place) = place else {
+            return handled;
+        };
+        let head = self
+            .interner
+            .resolve(callee_key)
+            .split('.')
+            .next()
+            .unwrap_or_default()
+            .to_string();
+        let var = self
+            .type_effect_var(&head)
+            .or_else(|| by_var.keys().next().cloned())
+            .unwrap_or_default();
+        if !instances.iter().any(|(p, _)| *p == place) {
+            if let Some(inst) = written.as_ref().and_then(|t| self.written_instance(t)) {
+                instances.push((place.clone(), inst));
+            }
+        }
+        for &idx in &handled {
+            let Some(arg) = args.get(idx) else {
+                continue;
+            };
+            let existing = instances
+                .iter()
+                .rev()
+                .find(|(p, _)| *p == place)
+                .map(|(_, i)| i.clone());
+            match existing {
+                Some(inst) => self.fit_bound_value(&inst, &arg.value),
+                None => {
+                    let set = self.bound_effects(&arg.value);
+                    instances.push((
+                        place.clone(),
+                        VarInstance {
+                            var: var.clone(),
+                            set,
+                            fixed_at: arg.value.span,
+                            by_type: false,
+                        },
+                    ));
+                }
+            }
+        }
+        handled
+    }
+}

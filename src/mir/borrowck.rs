@@ -2477,6 +2477,10 @@ fn main() -> () {
             "err_observability_attr",
             // A generic item's own parameter is rigid (B-2026-10-27-19).
             "err_rigid_type_param",
+            // Effect variables, refused by the effect checker (design.md
+            // § Effect variables).
+            "err_effect_var_unfit",
+            "err_effect_var_public_clause",
         ];
         // Pins that call Kāra library functions, which `check_built` does
         // not append (a `select` desugars to calls into sync.kara;

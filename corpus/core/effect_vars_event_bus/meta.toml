@@ -1,0 +1,12 @@
+source = "design.md § Effect variables"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure"]
+class = "a"
+expected_from = "spec"
+rules = []
+backends = []
+env = {}
+note = "The spec's EventBus: each value's `E` is solved from the handlers bound into it, and the function that solves it is charged the set."
+bucket = "a"

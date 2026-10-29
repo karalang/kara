@@ -16,6 +16,7 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 mod bounds;
+mod effect_vars;
 mod extern_ffi;
 mod gpu_effect_gate;
 mod inference;
@@ -894,6 +895,11 @@ pub struct EffectChecker<'a> {
     /// a variable at 2+ positions requires every closure argument's effect
     /// set to agree, with a conflict diagnostic otherwise.
     pub(crate) fn_effect_var_positions: FxHashMap<Symbol, FxHashMap<String, Vec<usize>>>,
+    /// The parameter positions of each method whose function type names an
+    /// effect variable its `impl` block declares (design.md § Effect
+    /// variables). Those are solved per receiver value, not per call
+    /// (`effect_vars.rs`).
+    pub(crate) impl_effect_var_positions: FxHashMap<Symbol, FxHashMap<String, Vec<usize>>>,
     /// Method-call → resolved `Type.method` key, populated by the typechecker
     /// (`TypeCheckResult.method_callee_types`). Used by `MethodCall` arms in
     /// `collect_calls_in_expr` (function-reference arg propagation), in
@@ -1107,6 +1113,7 @@ impl<'a> EffectChecker<'a> {
             fn_uses_with_underscore: FxHashSet::default(),
             fn_bounds_index: FxHashMap::default(),
             fn_effect_var_positions: FxHashMap::default(),
+            impl_effect_var_positions: FxHashMap::default(),
             method_callee_types: FxHashMap::default(),
             call_type_subs: FxHashMap::default(),
             node_call_subs: FxHashMap::default(),
@@ -2077,6 +2084,7 @@ impl<'a> EffectChecker<'a> {
         self.collect_function_info();
         self.fn_bounds_index = self.build_fn_bounds_index();
         self.fn_effect_var_positions = self.build_fn_effect_var_positions();
+        self.impl_effect_var_positions = self.build_impl_effect_var_positions();
         self.compute_bound_calls();
 
         // Phase B: Infer and verify

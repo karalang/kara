@@ -1,0 +1,1 @@
+ERROR at line 32: function value has `writes(Log)`, outside the effect set of `E` (`{writes(OrderDb)}`), which was fixed at 31:18 by the first value bound to it
