@@ -1,0 +1,177 @@
+// LeetCode #1008: Construct Binary Search Tree from Preorder Traversal --
+// recursion with an upper bound
+//
+// In preorder the root comes first, then its whole left subtree, then its
+// right. Read the values with one cursor: a call builds the subtree whose
+// values are all below `bound`, taking the next value as its root, then
+// the root's left subtree (values below the root), then its right
+// (values below `bound`). A value at or above the bound is not this
+// subtree's, so the call returns empty and leaves it for an ancestor.
+// Each value is read once: O(n).
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn bst_from_preorder(preorder: ref Vec[i64]) -> Option[TreeNode] {
+    let mut next = 0;
+    build(preorder, mut next, i64.MAX)
+}
+
+fn build(preorder: ref Vec[i64], next: mut ref i64, bound: i64) -> Option[TreeNode] {
+    if *next == preorder.len() or preorder[*next] >= bound {
+        return None;
+    }
+    let val = preorder[*next];
+    *next += 1;
+    let left = build(preorder, mut next, val);
+    let right = build(preorder, mut next, bound);
+    Some(TreeNode { val: val, left: left, right: right })
+}
+
+// LeetCode's level order, with `null` for a missing child and the
+// trailing `null`s dropped
+fn serialize(root: Option[TreeNode]) -> String {
+    let mut out: Vec[String] = Vec.new();
+    let mut queue: VecDeque[Option[TreeNode]] = VecDeque.new();
+    queue.push_back(root);
+    while queue.len() > 0 {
+        match queue.pop_front().unwrap() {
+            Some(node) => {
+                out.push(node.val.to_string());
+                queue.push_back(node.left);
+                queue.push_back(node.right);
+            }
+            None => out.push("null".to_string()),
+        }
+    }
+    while out.len() > 0 and out[out.len() - 1] == "null" {
+        out.pop();
+    }
+    "[" + out.join(",") + "]"
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The preorder of a BST of `n` distinct values from 1 to `most`, inserted
+// in random order: the tree is kept as arrays of children, -1 for none.
+fn random_preorder(n: i64, most: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut seen: Vec[bool] = Vec.filled(most + 1, false);
+    let mut vals: Vec[i64] = Vec.new();
+    let mut left: Vec[i64] = Vec.new();
+    let mut right: Vec[i64] = Vec.new();
+    while vals.len() < n {
+        let v = 1 + next_random(mut seed) % most;
+        if seen[v] {
+            continue;
+        }
+        seen[v] = true;
+        vals.push(v);
+        left.push(-1);
+        right.push(-1);
+        let me = vals.len() - 1;
+        if me > 0 {
+            let mut at = 0;
+            loop {
+                if v < vals[at] {
+                    if left[at] == -1 {
+                        left[at] = me;
+                        break;
+                    }
+                    at = left[at];
+                } else {
+                    if right[at] == -1 {
+                        right[at] = me;
+                        break;
+                    }
+                    at = right[at];
+                }
+            }
+        }
+    }
+    let mut out: Vec[i64] = Vec.new();
+    let mut stack: Vec[i64] = vec![0];
+    while stack.len() > 0 {
+        let at = stack.pop().unwrap();
+        out.push(vals[at]);
+        if right[at] != -1 {
+            stack.push(right[at]);
+        }
+        if left[at] != -1 {
+            stack.push(left[at]);
+        }
+    }
+    out
+}
+
+fn show(nums: ref Vec[i64]) -> String {
+    let parts: Vec[String] = nums.iter().map(|x| x.to_string()).collect();
+    "[" + parts.join(",") + "]"
+}
+
+fn text_hash(s: ref String) -> i64 {
+    let mut h = 0;
+    for c in s.chars() {
+        h = (h * 131 + (c as i64)) % 1000000007;
+    }
+    h
+}
+
+fn main() {
+    // LeetCode's two examples, then a few more
+    let examples: Vec[Vec[i64]] = vec![
+        vec![8, 5, 1, 7, 10, 12],
+        vec![1, 3],
+        vec![1],
+        vec![3, 2, 1],
+        vec![1, 2, 3],
+        vec![4, 2, 1, 3, 6, 5, 7],
+        vec![10, 5, 7, 6, 8, 20, 15],
+        vec![5, 1, 4, 2, 3],
+        vec![2, 1, 9, 3, 8, 4, 7],
+    ];
+    for preorder in examples.iter() {
+        println(f"preorder = {show(preorder)} -> {serialize(bst_from_preorder(preorder))}");
+    }
+    // LeetCode's longest: 100 values, from 1 to 1000
+    let mut rising: Vec[i64] = Vec.new();
+    let mut falling: Vec[i64] = Vec.new();
+    let mut zigzag: Vec[i64] = Vec.new();
+    for i in 0..100 {
+        rising.push(10 * i + 1);
+        falling.push(1000 - 10 * i);
+        zigzag.push(if i % 2 == 0 { 1000 - i / 2 } else { 1 + i / 2 });
+    }
+    let large: Vec[(String, Vec[i64])] = vec![
+        ("100 rising".to_string(), rising),
+        ("100 falling".to_string(), falling),
+        ("100 alternating high and low".to_string(), zigzag),
+    ];
+    for (name, preorder) in large.iter() {
+        let text = serialize(bst_from_preorder(preorder));
+        println(f"{name} -> {text.len()} characters, hash {text_hash(text)}");
+    }
+    let mut seed = 1008;
+    let groups: Vec[(i64, i64, i64)] = vec![(2000, 8, 20), (500, 100, 1000), (5, 100, 100)];
+    for (count, most, top) in groups.iter() {
+        let mut total = 0;
+        let mut chars = 0;
+        let mut check = 0;
+        for _ in 0..count {
+            let size = 1 + next_random(mut seed) % most;
+            let preorder = random_preorder(size, top, mut seed);
+            let text = serialize(bst_from_preorder(preorder));
+            total += size;
+            chars += text.len();
+            check = (check * 31 + text_hash(text)) % 1000000007;
+        }
+        println(f"{count} random trees of {total} values: {chars} characters, checksum {check}");
+    }
+}

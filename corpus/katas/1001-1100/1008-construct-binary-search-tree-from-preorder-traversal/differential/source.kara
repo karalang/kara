@@ -1,0 +1,449 @@
+// LeetCode #1008: Construct Binary Search Tree from Preorder Traversal --
+// differential
+//
+// The five arms, copied, against the statement read literally and five
+// more properties. See README.md § Differential.
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn bst_star(preorder: ref Vec[i64]) -> Option[TreeNode] {
+    let mut next = 0;
+    build_star(preorder, mut next, i64.MAX)
+}
+
+fn build_star(preorder: ref Vec[i64], next: mut ref i64, bound: i64) -> Option[TreeNode] {
+    if *next == preorder.len() or preorder[*next] >= bound {
+        return None;
+    }
+    let val = preorder[*next];
+    *next += 1;
+    let left = build_star(preorder, mut next, val);
+    let right = build_star(preorder, mut next, bound);
+    Some(TreeNode { val: val, left: left, right: right })
+}
+
+fn bst_insert(preorder: ref Vec[i64]) -> Option[TreeNode] {
+    if preorder.len() == 0 {
+        return None;
+    }
+    let root = TreeNode { val: preorder[0], left: None, right: None };
+    for i in 1..preorder.len() {
+        let v = preorder[i];
+        let mut at = root;
+        loop {
+            if v < at.val {
+                match at.left {
+                    Some(next) => at = next,
+                    None => {
+                        at.left = Some(TreeNode { val: v, left: None, right: None });
+                        break;
+                    }
+                }
+            } else {
+                match at.right {
+                    Some(next) => at = next,
+                    None => {
+                        at.right = Some(TreeNode { val: v, left: None, right: None });
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    Some(root)
+}
+
+struct Nodes {
+    vals: Vec[i64],
+    left: Vec[i64],
+    right: Vec[i64],
+}
+
+fn bst_stack(preorder: ref Vec[i64]) -> Nodes {
+    let mut tree = Nodes { vals: Vec.new(), left: Vec.new(), right: Vec.new() };
+    let mut stack: Vec[i64] = Vec.new();
+    for v in preorder.iter() {
+        let me = tree.vals.len();
+        tree.vals.push(v);
+        tree.left.push(-1);
+        tree.right.push(-1);
+        if stack.len() > 0 {
+            let top = stack[stack.len() - 1];
+            if v < tree.vals[top] {
+                tree.left[top] = me;
+            } else {
+                let mut parent = top;
+                while stack.len() > 0 and tree.vals[stack[stack.len() - 1]] < v {
+                    parent = stack.pop().unwrap();
+                }
+                tree.right[parent] = me;
+            }
+        }
+        stack.push(me);
+    }
+    tree
+}
+
+shared enum Split {
+    Empty,
+    Node(i64, Split, Split),
+}
+
+fn bst_split(preorder: ref Vec[i64]) -> Split {
+    build_split(preorder, 0, preorder.len())
+}
+
+fn build_split(preorder: ref Vec[i64], lo: i64, hi: i64) -> Split {
+    if lo == hi {
+        return Split.Empty;
+    }
+    let root = preorder[lo];
+    let mut split = lo + 1;
+    while split < hi and preorder[split] < root {
+        split += 1;
+    }
+    Split.Node(root, build_split(preorder, lo + 1, split), build_split(preorder, split, hi))
+}
+
+fn bst_inorder(preorder: ref Vec[i64]) -> Option[TreeNode] {
+    let mut inorder = preorder.clone();
+    inorder.sort();
+    let mut place: Map[i64, i64] = Map.new();
+    for i in 0..inorder.len() {
+        place.insert(inorder[i], i);
+    }
+    let mut next = 0;
+    build_inorder(preorder, place, mut next, 0, inorder.len())
+}
+
+fn build_inorder(preorder: ref Vec[i64], place: ref Map[i64, i64], next: mut ref i64, lo: i64, hi: i64) -> Option[TreeNode] {
+    if lo == hi {
+        return None;
+    }
+    let val = preorder[*next];
+    *next += 1;
+    let at = place[val];
+    let left = build_inorder(preorder, place, mut next, lo, at);
+    let right = build_inorder(preorder, place, mut next, at + 1, hi);
+    Some(TreeNode { val: val, left: left, right: right })
+}
+
+// ---- one shape for every arm's tree ----------------------------------------
+
+shared enum T {
+    E,
+    N(i64, T, T),
+}
+
+fn from_node(node: Option[TreeNode]) -> T {
+    match node {
+        Some(n) => T.N(n.val, from_node(n.left), from_node(n.right)),
+        None => T.E,
+    }
+}
+
+fn from_nodes(tree: ref Nodes, at: i64) -> T {
+    if at == -1 {
+        T.E
+    } else {
+        T.N(tree.vals[at], from_nodes(tree, tree.left[at]), from_nodes(tree, tree.right[at]))
+    }
+}
+
+fn from_split(tree: Split) -> T {
+    match tree {
+        Split.Node(v, l, r) => T.N(v, from_split(l), from_split(r)),
+        Split.Empty => T.E,
+    }
+}
+
+fn arms(preorder: ref Vec[i64]) -> Vec[T] {
+    let nodes = bst_stack(preorder);
+    vec![
+        from_node(bst_star(preorder)),
+        from_node(bst_insert(preorder)),
+        from_nodes(nodes, if preorder.len() > 0 { 0 } else { -1 }),
+        from_split(bst_split(preorder)),
+        from_node(bst_inorder(preorder)),
+    ]
+}
+
+// LeetCode's level order
+fn text(root: T) -> String {
+    let mut out: Vec[String] = Vec.new();
+    let mut queue: VecDeque[T] = VecDeque.new();
+    queue.push_back(root);
+    while queue.len() > 0 {
+        match queue.pop_front().unwrap() {
+            T.N(v, l, r) => {
+                out.push(v.to_string());
+                queue.push_back(l);
+                queue.push_back(r);
+            }
+            T.E => out.push("null".to_string()),
+        }
+    }
+    while out.len() > 0 and out[out.len() - 1] == "null" {
+        out.pop();
+    }
+    "[" + out.join(",") + "]"
+}
+
+fn preorder_of(t: T, out: mut ref Vec[i64]) {
+    match t {
+        T.N(v, l, r) => {
+            out.push(v);
+            preorder_of(l, mut out);
+            preorder_of(r, mut out);
+        }
+        T.E => {}
+    }
+}
+
+fn inorder_of(t: T, out: mut ref Vec[i64]) {
+    match t {
+        T.N(v, l, r) => {
+            inorder_of(l, mut out);
+            out.push(v);
+            inorder_of(r, mut out);
+        }
+        T.E => {}
+    }
+}
+
+fn relabel(t: T) -> T {
+    match t {
+        T.N(v, l, r) => T.N(3 * v + 7, relabel(l), relabel(r)),
+        T.E => T.E,
+    }
+}
+
+fn child(t: T, right: bool) -> T {
+    match t {
+        T.N(_, l, r) => if right { r } else { l },
+        T.E => T.E,
+    }
+}
+
+// ---- the statement read literally ------------------------------------------
+
+// every binary tree whose preorder is preorder[lo..hi]
+fn all_trees(preorder: ref Vec[i64], lo: i64, hi: i64) -> Vec[T] {
+    let mut out: Vec[T] = Vec.new();
+    if lo == hi {
+        out.push(T.E);
+        return out;
+    }
+    for k in 0..(hi - lo) {
+        let lefts = all_trees(preorder, lo + 1, lo + 1 + k);
+        let rights = all_trees(preorder, lo + 1 + k, hi);
+        for l in lefts.iter() {
+            for r in rights.iter() {
+                out.push(T.N(preorder[lo], l, r));
+            }
+        }
+    }
+    out
+}
+
+// a binary search tree: every node greater than every value in its left
+// subtree and less than every value in its right
+fn is_search_tree(t: T) -> bool {
+    match t {
+        T.N(v, l, r) => {
+            let mut below: Vec[i64] = Vec.new();
+            preorder_of(l, mut below);
+            let mut above: Vec[i64] = Vec.new();
+            preorder_of(r, mut above);
+            for x in below.iter() {
+                if x >= v {
+                    return false;
+                }
+            }
+            for x in above.iter() {
+                if x <= v {
+                    return false;
+                }
+            }
+            is_search_tree(l) and is_search_tree(r)
+        }
+        T.E => true,
+    }
+}
+
+// the text of the one search tree among them, or a mark when there is not
+// exactly one
+fn statement(preorder: ref Vec[i64]) -> String {
+    let mut found: Vec[String] = Vec.new();
+    for t in all_trees(preorder, 0, preorder.len()).iter() {
+        if is_search_tree(t) {
+            found.push(text(t));
+        }
+    }
+    if found.len() == 1 { found[0].clone() } else { f"{found.len()} trees" }
+}
+
+// ---- inputs ------------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The preorder of a BST of `n` distinct values from 1 to `most`, inserted
+// in random order: the tree is kept as arrays of children, -1 for none.
+fn random_preorder(n: i64, most: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut seen: Vec[bool] = Vec.filled(most + 1, false);
+    let mut vals: Vec[i64] = Vec.new();
+    let mut left: Vec[i64] = Vec.new();
+    let mut right: Vec[i64] = Vec.new();
+    while vals.len() < n {
+        let v = 1 + next_random(mut seed) % most;
+        if seen[v] {
+            continue;
+        }
+        seen[v] = true;
+        vals.push(v);
+        left.push(-1);
+        right.push(-1);
+        let me = vals.len() - 1;
+        if me > 0 {
+            let mut at = 0;
+            loop {
+                if v < vals[at] {
+                    if left[at] == -1 {
+                        left[at] = me;
+                        break;
+                    }
+                    at = left[at];
+                } else {
+                    if right[at] == -1 {
+                        right[at] = me;
+                        break;
+                    }
+                    at = right[at];
+                }
+            }
+        }
+    }
+    let mut out: Vec[i64] = Vec.new();
+    let mut stack: Vec[i64] = vec![0];
+    while stack.len() > 0 {
+        let at = stack.pop().unwrap();
+        out.push(vals[at]);
+        if right[at] != -1 {
+            stack.push(right[at]);
+        }
+        if left[at] != -1 {
+            stack.push(left[at]);
+        }
+    }
+    out
+}
+
+fn text_hash(s: ref String) -> i64 {
+    let mut h = 0;
+    for c in s.chars() {
+        h = (h * 131 + (c as i64)) % 1000000007;
+    }
+    h
+}
+
+fn main() {
+    let names = ["star", "insert", "stack", "split", "inorder"];
+    let mut failures: Vec[i64] = vec![0; 6];
+    let mut checks = 0;
+    let mut rows = 0;
+    let mut values = 0;
+    let mut check = 0;
+    let mut seed = 10081;
+    for t in 0..2400 {
+        let small = t < 2000;
+        let size = if small { 1 + next_random(mut seed) % 7 } else { 1 + next_random(mut seed) % 300 };
+        let preorder = random_preorder(size, if small { 20 } else { 1000 }, mut seed);
+        let got = arms(preorder);
+        let texts: Vec[String] = got.iter().map(|x| text(x)).collect();
+        rows += 1;
+        values += size;
+        check = (check * 31 + text_hash(texts[0])) % 1000000007;
+        let brute = if small { statement(preorder) } else { "".to_string() };
+        let scaled_input: Vec[i64] = preorder.iter().map(|x| 3 * x + 7).collect();
+        let scaled = arms(scaled_input);
+        let root = preorder[0];
+        let mut below: Vec[i64] = Vec.new();
+        let mut above: Vec[i64] = Vec.new();
+        for i in 1..preorder.len() {
+            if preorder[i] < root {
+                below.push(preorder[i]);
+            } else {
+                above.push(preorder[i]);
+            }
+        }
+        let lefts = arms(below);
+        let rights = arms(above);
+        for a in 0..5 {
+            // P1: the statement, on the short rows
+            if small {
+                checks += 1;
+                if texts[a] != brute {
+                    failures[0] += 1;
+                }
+            }
+            // P2: the tree's preorder is the input
+            checks += 1;
+            let mut pre: Vec[i64] = Vec.new();
+            preorder_of(got[a], mut pre);
+            if pre != preorder {
+                failures[1] += 1;
+            }
+            // P3: the tree's inorder rises strictly
+            checks += 1;
+            let mut ino: Vec[i64] = Vec.new();
+            inorder_of(got[a], mut ino);
+            let mut rising = true;
+            for i in 1..ino.len() {
+                if ino[i - 1] >= ino[i] {
+                    rising = false;
+                }
+            }
+            if not rising {
+                failures[2] += 1;
+            }
+            // P4: the values mapped by v -> 3v + 7, which keeps their
+            // order, give the same tree with its values mapped
+            checks += 1;
+            if text(scaled[a]) != text(relabel(got[a])) {
+                failures[3] += 1;
+            }
+            // P5: the root's subtrees are the trees of the values below
+            // and above it, in their order in the input
+            checks += 1;
+            if text(child(got[a], false)) != text(lefts[a]) or text(child(got[a], true)) != text(rights[a]) {
+                failures[4] += 1;
+            }
+            // P6: each arm agrees with at least two of the other four
+            checks += 1;
+            let mut agree = 0;
+            for b in 0..5 {
+                if b != a and texts[b] == texts[a] {
+                    agree += 1;
+                }
+            }
+            if agree < 2 {
+                failures[5] += 1;
+            }
+        }
+    }
+    let mut total = 0;
+    for p in 0..6 {
+        total += failures[p];
+        if failures[p] > 0 {
+            println(f"P{p + 1}: {failures[p]} failures");
+        }
+    }
+    println(f"{rows} rows of {values} values: checksum {check}, {checks} checks over {names.len()} arms: {total} failures");
+}

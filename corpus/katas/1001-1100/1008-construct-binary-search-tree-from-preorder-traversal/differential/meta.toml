@@ -1,0 +1,11 @@
+source = "kara-katas/leetcode/1001-1100/1008-construct-binary-search-tree-from-preorder-traversal/differential.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["differential", "lib:map", "lib:vecdeque"]
+class = "e"
+expected_from = "oracle"
+note = "no legacy record (the legacy compiler went at M3); expected.out is the differential's own verdict with 0 failures, as the kata README records it e-spec: legacy differs from the drop model; v2 matches it"
+bucket = "e-spec"
+classified_with = "168e32dfd"
+extracted_src = "618d0b5a"
