@@ -18,7 +18,10 @@
 //!   passes (argument promotion) that need internal linkage.
 //!
 //! `KARAC_MIR_CODEGEN_UNITS=<n>` sets the number of units; `1` turns the
-//! split off.
+//! split off. A unit is weighed by an estimate of what it costs the
+//! optimiser, which grows faster than its size, and every unit of a build
+//! (a parallel build has two modules) waits for a free core, the costliest
+//! first; `KARAC_MIR_UNIT_SCHEDULE=0` turns both off.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -33,6 +36,8 @@ const MIN_UNIT_INSTS: usize = 15_000;
 const COPY_MAX_INSTS: usize = 40;
 /// At most this many units, whatever the machine.
 const MAX_UNITS: usize = 8;
+/// The size at which a function's cost to the optimiser counts double.
+const QUADRATIC_INSTS: usize = 20_000;
 
 /// How a module is cut: which definitions each unit keeps.
 pub(super) struct Plan {
@@ -40,12 +45,21 @@ pub(super) struct Plan {
     keep: Vec<Vec<bool>>,
     /// The definitions' names, to check a copy lines up with the plan.
     names: Vec<String>,
+    /// Each unit's estimated cost, which orders their compilation.
+    cost: Vec<usize>,
 }
 
 impl Plan {
     pub(super) fn units(&self) -> usize {
         self.keep.len()
     }
+}
+
+/// Whether units are weighed by their cost and share the machine's cores
+/// across modules, costliest first (`Cores`); `KARAC_MIR_UNIT_SCHEDULE=0`
+/// weighs them by size and runs each module's at once.
+fn scheduled() -> bool {
+    std::env::var("KARAC_MIR_UNIT_SCHEDULE").as_deref() != Ok("0")
 }
 
 /// The number of units the environment asks for, if it says.
@@ -269,9 +283,20 @@ pub(super) fn plan(m: LLVMModuleRef) -> Option<Plan> {
             let r = find(&mut parent, f);
             groups.entry(r).or_default().push(f);
         }
+        // A unit's cost grows faster than its instructions: one large
+        // function (a coroutine's resume, a table builder) costs the
+        // optimiser more per instruction than many small ones.
+        let weighed = scheduled();
+        let cost = |s: usize| {
+            if weighed {
+                s + s * s / QUADRATIC_INSTS
+            } else {
+                s
+            }
+        };
         let mut groups: Vec<(usize, Vec<usize>)> = groups
-            .into_iter()
-            .map(|(r, fs)| (group_size[r], fs))
+            .into_values()
+            .map(|fs| (fs.iter().map(|&f| cost(size[f])).sum(), fs))
             .collect();
         groups.sort_by(|a, b| b.0.cmp(&a.0).then(a.1[0].cmp(&b.1[0])));
         let mut owner = vec![usize::MAX; n];
@@ -334,7 +359,11 @@ pub(super) fn plan(m: LLVMModuleRef) -> Option<Plan> {
             }
         }
         let names = defs.iter().map(|&v| name_of(v)).collect();
-        Some(Plan { keep, names })
+        Some(Plan {
+            keep,
+            names,
+            cost: load,
+        })
     }
 }
 
@@ -456,13 +485,16 @@ pub(super) fn compile_units(
             PathBuf::from(p)
         })
         .collect();
+    // The costliest unit first, each waiting for a core (`Cores`).
+    let mut order: Vec<usize> = (0..plan.units()).collect();
+    order.sort_by_key(|&u| std::cmp::Reverse(plan.cost[u]));
     let results: Vec<Result<(), String>> = std::thread::scope(|s| {
-        let handles: Vec<_> = parts
+        let handles: Vec<_> = order
             .iter()
-            .enumerate()
-            .map(|(u, part)| {
-                let bitcode = &bitcode;
+            .map(|&u| {
+                let (bitcode, part) = (&bitcode, &parts[u]);
                 s.spawn(move || -> Result<(), String> {
+                    let _core = scheduled().then(|| CORES.wait(plan.cost[u]));
                     let llcx = inkwell::context::Context::create();
                     let buf = inkwell::memory_buffer::MemoryBuffer::create_from_memory_range_copy(
                         bitcode, "unit",
@@ -470,7 +502,13 @@ pub(super) fn compile_units(
                     let m = inkwell::module::Module::parse_bitcode_from_buffer(&buf, &llcx)
                         .map_err(|e| format!("read unit {u}: {}", e.to_string()))?;
                     unsafe { cut(m.as_mut_ptr(), plan, u)? };
-                    compile(&m, part)
+                    let mut t = std::time::Instant::now();
+                    let r = compile(&m, part);
+                    crate::mir::lower::phase_time(
+                        &format!("unit {u} of {}, cost {}", plan.units(), plan.cost[u]),
+                        &mut t,
+                    );
+                    r
                 })
             })
             .collect();
@@ -490,6 +528,65 @@ pub(super) fn compile_units(
         let _ = std::fs::remove_file(p);
     }
     merged
+}
+
+/// The cores codegen units share across every module a build compiles (a
+/// parallel build compiles its in-order program beside it): a unit runs
+/// once a core is free, the costliest waiting unit first, so the unit that
+/// takes longest is not slowed by others sharing its core.
+struct Cores {
+    state: std::sync::Mutex<CoreState>,
+    freed: std::sync::Condvar,
+}
+
+/// The cores in use, each waiting unit's cost and number, and the next
+/// number.
+struct CoreState {
+    in_use: usize,
+    waiting: Vec<(usize, u64)>,
+    next: u64,
+}
+
+static CORES: Cores = Cores {
+    state: std::sync::Mutex::new(CoreState {
+        in_use: 0,
+        waiting: Vec::new(),
+        next: 0,
+    }),
+    freed: std::sync::Condvar::new(),
+};
+
+/// A core a unit holds while it runs.
+struct Core;
+
+impl Cores {
+    fn lock(&self) -> std::sync::MutexGuard<'_, CoreState> {
+        self.state.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// A core for a unit of estimated cost `cost`, once one is free and no
+    /// costlier unit waits.
+    fn wait(&self, cost: usize) -> Core {
+        let cores = std::thread::available_parallelism().map_or(1, |p| p.get());
+        let mut s = self.lock();
+        let me = (cost, s.next);
+        s.next += 1;
+        s.waiting.push(me);
+        while s.in_use >= cores || s.waiting.iter().max() != Some(&me) {
+            s = self.freed.wait(s).unwrap_or_else(|p| p.into_inner());
+        }
+        s.waiting.retain(|w| *w != me);
+        s.in_use += 1;
+        self.freed.notify_all();
+        Core
+    }
+}
+
+impl Drop for Core {
+    fn drop(&mut self) {
+        CORES.lock().in_use -= 1;
+        CORES.freed.notify_all();
+    }
 }
 
 /// Merge the objects `parts` into the one object `obj` (`cc -r`).
