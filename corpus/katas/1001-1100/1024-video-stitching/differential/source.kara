@@ -1,0 +1,305 @@
+// LeetCode #1024: Video Stitching -- differential
+//
+// The five arms, copied, against the statement read literally and five
+// more properties. See README.md § Differential.
+
+fn d_star(clips: Vec[Vec[i64]], time: i64) -> i64 {
+    let mut furthest: Vec[i64] = Vec.filled(time + 1, 0);
+    for clip in clips.iter() {
+        if clip[0] <= time {
+            furthest[clip[0]] = furthest[clip[0]].max(clip[1]);
+        }
+    }
+    let mut taken = 0;
+    let mut covered = 0;
+    let mut reach = 0;
+    for t in 0..time {
+        reach = reach.max(furthest[t]);
+        if reach <= t {
+            return -1;
+        }
+        if t == covered {
+            taken += 1;
+            covered = reach;
+        }
+    }
+    taken
+}
+
+fn d_sort(clips: Vec[Vec[i64]], time: i64) -> i64 {
+    let mut sorted = clips.clone();
+    sorted.sort_by_key(|c| c[0]);
+    let mut taken = 0;
+    let mut end = 0;
+    let mut k = 0;
+    while end < time {
+        let mut best = end;
+        while k < sorted.len() and sorted[k][0] <= end {
+            best = best.max(sorted[k][1]);
+            k += 1;
+        }
+        if best == end {
+            return -1;
+        }
+        taken += 1;
+        end = best;
+    }
+    taken
+}
+
+fn d_dp(clips: Vec[Vec[i64]], time: i64) -> i64 {
+    let unreachable = i64.MAX;
+    let mut fewest: Vec[i64] = Vec.filled(time + 1, unreachable);
+    fewest[0] = 0;
+    for t in 1..time + 1 {
+        for clip in clips.iter() {
+            let (s, e) = (clip[0], clip[1]);
+            if s < t and t <= e and fewest[s] != unreachable {
+                fewest[t] = fewest[t].min(fewest[s] + 1);
+            }
+        }
+    }
+    if fewest[time] == unreachable { -1 } else { fewest[time] }
+}
+
+fn d_bfs(clips: Vec[Vec[i64]], time: i64) -> i64 {
+    let mut steps: Vec[i64] = Vec.filled(time + 1, -1);
+    steps[0] = 0;
+    let mut queue: VecDeque[i64] = VecDeque.new();
+    queue.push_back(0);
+    while let Some(x) = queue.pop_front() {
+        if x == time {
+            return steps[x];
+        }
+        for clip in clips.iter() {
+            if clip[0] <= x and x < clip[1] {
+                let y = clip[1].min(time);
+                if steps[y] < 0 {
+                    steps[y] = steps[x] + 1;
+                    queue.push_back(y);
+                }
+            }
+        }
+    }
+    -1
+}
+
+fn need(clips: ref Vec[Vec[i64]], time: i64, x: i64, memo: mut ref Map[i64, i64]) -> i64 {
+    if x >= time {
+        return 0;
+    }
+    if let Some(known) = memo.get(x) {
+        return known;
+    }
+    let mut best = -1;
+    for clip in clips.iter() {
+        if clip[0] <= x and x < clip[1] {
+            let rest = need(clips, time, clip[1], mut memo);
+            if rest >= 0 and (best < 0 or rest + 1 < best) {
+                best = rest + 1;
+            }
+        }
+    }
+    memo.insert(x, best);
+    best
+}
+
+fn d_memo(clips: Vec[Vec[i64]], time: i64) -> i64 {
+    let mut memo: Map[i64, i64] = Map.new();
+    need(clips, time, 0, mut memo)
+}
+fn arms(clips: ref Vec[Vec[i64]], time: i64) -> Vec[i64] {
+    vec![d_star(clips.clone(), time), d_sort(clips.clone(), time), d_dp(clips.clone(), time), d_bfs(clips.clone(), time), d_memo(clips.clone(), time)]
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// whether the clips picked out by the bits of `mask` cover every second
+// from 0 to `time`: each stretch [t, t + 1] lies inside one of them
+fn covers(clips: ref Vec[Vec[i64]], mask: i64, time: i64) -> bool {
+    for t in 0..time {
+        let mut found = false;
+        for i in 0..clips.len() {
+            if (mask >> i) & 1 == 1 and clips[i][0] <= t and t + 1 <= clips[i][1] {
+                found = true;
+            }
+        }
+        if not found {
+            return false;
+        }
+    }
+    true
+}
+
+fn bits(mask: i64) -> i64 {
+    let mut m = mask;
+    let mut n = 0;
+    while m > 0 {
+        n += m & 1;
+        m = m >> 1;
+    }
+    n
+}
+
+// the statement read literally: the fewest clips of any set of them that
+// covers [0, time], over every set; -1 when not even all of them do
+fn literal(clips: ref Vec[Vec[i64]], time: i64) -> i64 {
+    let all = (1 << clips.len()) - 1;
+    if not covers(clips, all, time) {
+        return -1;
+    }
+    let mut best = clips.len();
+    for mask in 0..all {
+        let n = bits(mask);
+        if n < best and covers(clips, mask, time) {
+            best = n;
+        }
+    }
+    best
+}
+
+fn main() {
+    let mut failures: Vec[i64] = Vec.filled(6, 0);
+    let mut checks = 0;
+    let mut check = 0;
+    let mut literal_cases = 0;
+    let mut seed = 10241;
+    // every set of distinct clips within the seconds 0 to 3 (the 10 clips
+    // [s, e] with 0 <= s <= e <= 3) for a video of 1 to 3 seconds, then
+    // 1500 random cases with time up to 20, and 60 with time up to 100,
+    // most of the 60 too many clips for the literal search
+    let mut kinds: Vec[Vec[i64]] = Vec.new();
+    for s in 0..4 {
+        for e in s..4 {
+            kinds.push(vec![s, e]);
+        }
+    }
+    let mut cases: Vec[(Vec[Vec[i64]], i64)] = Vec.new();
+    for mask in 1..1 << kinds.len() {
+        let mut clips: Vec[Vec[i64]] = Vec.new();
+        for i in 0..kinds.len() {
+            if (mask >> i) & 1 == 1 {
+                clips.push(kinds[i].clone());
+            }
+        }
+        for time in 1..4 {
+            cases.push((clips.clone(), time));
+        }
+    }
+    for g in 0..2 {
+        let (count, top, extra) = if g == 0 { (1500, 20, 5) } else { (60, 100, 80) };
+        for _ in 0..count {
+            let time = 1 + next_random(mut seed) % top;
+            let mut clips: Vec[Vec[i64]] = Vec.new();
+            // three cases in four start from a chain of clips from 0 to
+            // `time`, each overlapping the last by up to 2 seconds
+            if next_random(mut seed) % 4 != 0 {
+                let mut at = 0;
+                while at < time {
+                    let length = 1 + next_random(mut seed) % (time / 3 + 1);
+                    let back = next_random(mut seed) % 3;
+                    clips.push(vec![(at - back).max(0), (at + length).min(100)]);
+                    at += length;
+                }
+            }
+            // then up to `extra` clips anywhere, in a random place
+            for _ in 0..next_random(mut seed) % (extra + 1) {
+                let start = next_random(mut seed) % (time + 1);
+                let end = (start + next_random(mut seed) % (time / 2 + 2)).min(100);
+                let at = next_random(mut seed) % (clips.len() + 1);
+                clips.insert(at, vec![start, end]);
+            }
+            if clips.len() == 0 {
+                clips.push(vec![0, time]);
+            }
+            cases.push((clips, time));
+        }
+    }
+    for (clips, time) in cases.iter() {
+        let got = arms(clips, time);
+        // P2: the clips in the opposite order
+        let mut backwards: Vec[Vec[i64]] = Vec.new();
+        for i in 0..clips.len() {
+            backwards.push(clips[clips.len() - 1 - i].clone());
+        }
+        let got_backwards = arms(backwards, time);
+        // P3: one more clip, drawn at random
+        let mut more = clips.clone();
+        let start = next_random(mut seed) % (time + 1);
+        more.push(vec![start, (start + next_random(mut seed) % (time + 1)).min(100)]);
+        let got_more = arms(more, time);
+        // P4: the video played backwards, each clip [s, e] becoming
+        // [time - e, time - s] once cut to the video; a clip starting at
+        // or after `time` covers nothing and is left out
+        let mut mirrored: Vec[Vec[i64]] = Vec.new();
+        for c in clips.iter() {
+            if c[0] < time {
+                mirrored.push(vec![time - c[1].min(time), time - c[0]]);
+            }
+        }
+        let got_mirrored = arms(mirrored, time);
+        // P5: every second counted twice
+        let mut doubled: Vec[Vec[i64]] = Vec.new();
+        for c in clips.iter() {
+            doubled.push(vec![2 * c[0], 2 * c[1]]);
+        }
+        let got_doubled = arms(doubled, 2 * time);
+        let exact = if clips.len() <= 12 { literal(clips, time) } else { -2 };
+        if exact != -2 {
+            literal_cases += 1;
+        }
+        check = (check * 131 + got[0] + 1) % 1000000007;
+        for a in 0..5 {
+            let c = got[a];
+            // P1: the statement, where the search is small enough
+            if exact != -2 {
+                checks += 1;
+                if c != exact {
+                    failures[0] += 1;
+                }
+            }
+            // P2: the order of the clips does not matter
+            checks += 1;
+            if got_backwards[a] != c {
+                failures[1] += 1;
+            }
+            // P3: one more clip never makes it worse
+            checks += 1;
+            if c >= 0 and (got_more[a] < 0 or got_more[a] > c) {
+                failures[2] += 1;
+            }
+            // P4: the video played backwards needs as many clips
+            checks += 1;
+            if got_mirrored[a] != c {
+                failures[3] += 1;
+            }
+            // P5: so does the video with every second counted twice
+            checks += 1;
+            if got_doubled[a] != c {
+                failures[4] += 1;
+            }
+            // P6: each arm agrees with at least two of the other four
+            checks += 1;
+            let mut agree = 0;
+            for o in 0..5 {
+                if o != a and got[o] == c {
+                    agree += 1;
+                }
+            }
+            if agree < 2 {
+                failures[5] += 1;
+            }
+        }
+    }
+    let mut total = 0;
+    for p in 0..6 {
+        if failures[p] > 0 {
+            println(f"P{p + 1}: {failures[p]} failures");
+        }
+        total += failures[p];
+    }
+    println(f"{cases.len()} cases ({literal_cases} searched in full): checksum {check}, {checks} checks over 5 arms: {total} failures");
+}

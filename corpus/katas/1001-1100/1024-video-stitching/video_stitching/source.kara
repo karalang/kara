@@ -1,0 +1,81 @@
+// LeetCode #1024: Video Stitching -- a greedy jump
+//
+// For each start second, note the furthest end of a clip starting there.
+// Walk the seconds from 0 keeping how far the clips taken so far reach
+// and how far one more clip could reach from any second already covered;
+// on reaching the end of what is covered, take the clip that reaches
+// furthest. If nothing reaches past a second, the video has a gap. O(n +
+// time).
+
+fn video_stitching(clips: Vec[Vec[i64]], time: i64) -> i64 {
+    let mut furthest: Vec[i64] = Vec.filled(time + 1, 0);
+    for clip in clips.iter() {
+        if clip[0] <= time {
+            furthest[clip[0]] = furthest[clip[0]].max(clip[1]);
+        }
+    }
+    let mut taken = 0;
+    let mut covered = 0;
+    let mut reach = 0;
+    for t in 0..time {
+        reach = reach.max(furthest[t]);
+        if reach <= t {
+            return -1;
+        }
+        if t == covered {
+            taken += 1;
+            covered = reach;
+        }
+    }
+    taken
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let examples: Vec[(Vec[Vec[i64]], i64)] = vec![
+        (vec![vec![0, 2], vec![4, 6], vec![8, 10], vec![1, 9], vec![1, 5], vec![5, 9]], 10),
+        (vec![vec![0, 1], vec![1, 2]], 5),
+        (vec![vec![0, 1], vec![6, 8], vec![0, 2], vec![5, 6], vec![0, 4], vec![0, 3], vec![6, 7], vec![1, 3], vec![4, 7], vec![1, 4], vec![2, 5], vec![2, 6], vec![3, 4], vec![4, 5], vec![5, 7], vec![6, 9]], 9),
+        (vec![vec![0, 4], vec![2, 8]], 5),
+        (vec![vec![0, 5], vec![0, 5], vec![5, 10]], 10),
+        (vec![vec![1, 5], vec![0, 1]], 5),
+        (vec![vec![0, 3], vec![4, 6]], 6),
+        (vec![vec![0, 0], vec![0, 100]], 100),
+    ];
+    for (clips, time) in examples.iter() {
+        println(f"{clips}, time {time} -> {video_stitching(clips, time)}");
+    }
+    // random cases: the answers that exist added up, how many have none,
+    // and a checksum
+    let mut seed = 1024;
+    let groups: Vec[(i64, i64, i64, i64)] = vec![(3000, 4, 6, 10), (2000, 10, 20, 20), (1000, 30, 50, 40), (500, 100, 100, 100), (500, 100, 30, 100), (300, 60, 100, 100)];
+    for (cases, count, longest, top) in groups.iter() {
+        let mut total = 0;
+        let mut none = 0;
+        let mut check = 0;
+        for _ in 0..cases {
+            let time = 1 + next_random(mut seed) % top;
+            let mut clips: Vec[Vec[i64]] = Vec.new();
+            for _ in 0..count {
+                let start = next_random(mut seed) % (time + 1);
+                let end = (start + next_random(mut seed) % (longest + 1)).min(100);
+                clips.push(vec![start, end]);
+            }
+            let answer = video_stitching(clips, time);
+            if answer < 0 {
+                none += 1;
+            } else {
+                total += answer;
+            }
+            check = (check * 131 + answer + 1) % 1000000007;
+        }
+        println(f"{cases} cases of {count} clips (up to {longest} long, time up to {top}): {total} clips used, {none} impossible, checksum {check}");
+    }
+}

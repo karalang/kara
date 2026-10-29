@@ -1,0 +1,14 @@
+[[0, 2], [4, 6], [8, 10], [1, 9], [1, 5], [5, 9]], time 10 -> 3
+[[0, 1], [1, 2]], time 5 -> -1
+[[0, 1], [6, 8], [0, 2], [5, 6], [0, 4], [0, 3], [6, 7], [1, 3], [4, 7], [1, 4], [2, 5], [2, 6], [3, 4], [4, 5], [5, 7], [6, 9]], time 9 -> 3
+[[0, 4], [2, 8]], time 5 -> 2
+[[0, 5], [0, 5], [5, 10]], time 10 -> 2
+[[1, 5], [0, 1]], time 5 -> 2
+[[0, 3], [4, 6]], time 6 -> -1
+[[0, 0], [0, 100]], time 100 -> 1
+3000 cases of 4 clips (up to 6 long, time up to 10): 1452 clips used, 1923 impossible, checksum 560358174
+2000 cases of 10 clips (up to 20 long, time up to 20): 1661 clips used, 740 impossible, checksum 92069899
+1000 cases of 30 clips (up to 50 long, time up to 40): 946 clips used, 241 impossible, checksum 911037085
+500 cases of 100 clips (up to 100 long, time up to 100): 558 clips used, 75 impossible, checksum 95006979
+500 cases of 100 clips (up to 30 long, time up to 100): 1061 clips used, 69 impossible, checksum 621661261
+300 cases of 60 clips (up to 100 long, time up to 100): 308 clips used, 66 impossible, checksum 549648996
