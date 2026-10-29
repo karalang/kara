@@ -331,6 +331,9 @@ pub(crate) fn close(fd: RawFd) {
 /// `TcpStream` or `UdpSocket`.
 #[no_mangle]
 pub extern "C" fn karac_mir_sock_close(fd: i64) {
+    if crate::net_provider::is_provided(fd) {
+        return crate::net_provider::close(fd);
+    }
     if fd >= 0 {
         close(fd as RawFd);
     }

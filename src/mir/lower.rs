@@ -2859,9 +2859,10 @@ enum ScopeEntry<'a> {
     /// it takes.
     Unreverse(Local, Ty, String),
     /// The extent id a `providers { FileSystem => p }` block's
-    /// `FileSystem.enter` returned: `FileSystem.exit` ends it on every
-    /// exit from the block (core semantics §14.11).
-    FsExit(Local),
+    /// `FileSystem.enter` returned, and the resource (`Network` too):
+    /// `R.exit` ends it on every exit from the block (core semantics
+    /// §14.11, §14.12).
+    FsExit(Local, &'static str),
 }
 
 /// An iterator type's `next`, instantiated for a `for` loop: its definition,
@@ -4464,11 +4465,11 @@ impl<'l, 'a> Bx<'l, 'a> {
                     self.b.push(bb, StatementKind::StorageDead(*l));
                 }
                 ScopeEntry::Unreverse(v, mt, native) => self.reverse_vec(*v, *mt, native),
-                ScopeEntry::FsExit(id) => {
+                ScopeEntry::FsExit(id, r) => {
                     let t = self.unit();
                     let u = self.temp(t);
                     self.call_native(
-                        "FileSystem.exit",
+                        &format!("{r}.exit"),
                         vec![Operand::Copy(Place::local(*id))],
                         Place::local(u),
                     );
@@ -19029,19 +19030,30 @@ impl<'l, 'a> Bx<'l, 'a> {
         // `FileSystem` in a program that binds it (§14.11,
         // `providers::route_files`); each writes, as the provider's
         // `open`, `read_handle` and `write_handle` do.
-        if r == "FileSystem" {
-            let ops = crate::mir::providers::FILE_OPS
+        // The socket natives are calls on `Network` likewise (§14.12,
+        // `providers::route_network`).
+        let routed: Vec<String> = match r {
+            "FileSystem" => std::iter::once("open_file".to_string())
+                .chain(
+                    crate::mir::providers::FILE_OPS
+                        .iter()
+                        .map(|op| format!("file_{op}")),
+                )
+                .collect(),
+            "Network" => crate::mir::providers::NET_ROUTES
                 .iter()
-                .map(|op| format!("file_{op}"));
-            for m in std::iter::once("open_file".to_string()).chain(ops) {
-                decl.methods.insert(m.clone(), true);
-                if let Some(t) = decl.default {
-                    if let (Some(ms), Some(native)) = (
-                        decl.impls.get_mut(&t),
-                        crate::mir::providers::file_native(r, &m),
-                    ) {
-                        ms.insert(m, native);
-                    }
+                .map(|(_, call)| call.to_string())
+                .collect(),
+            _ => Vec::new(),
+        };
+        for m in routed {
+            decl.methods.insert(m.clone(), true);
+            if let Some(t) = decl.default {
+                if let (Some(ms), Some(native)) = (
+                    decl.impls.get_mut(&t),
+                    crate::mir::providers::file_native(r, &m),
+                ) {
+                    ms.insert(m, native);
                 }
             }
         }
@@ -19108,25 +19120,28 @@ impl<'l, 'a> Bx<'l, 'a> {
         let start = self.b.new_block();
         self.goto(start);
         self.cur = start;
-        // A `FileSystem` provider's files reach it while the block runs
-        // (core semantics §14.11): provider specialisation adds its
-        // handle methods to the `enter`, inside the block's region.
+        // A `FileSystem` or `Network` provider's handles reach it while
+        // the block runs (core semantics §14.11, §14.12): provider
+        // specialisation adds its handle methods to the `enter`, inside
+        // the block's region.
         for (resource, l) in &bound {
-            if resource != "FileSystem" {
-                continue;
-            }
+            let r = match resource.as_str() {
+                "FileSystem" => "FileSystem",
+                "Network" => "Network",
+                _ => continue,
+            };
             let pt = self.b.local_ty(*l);
             let mt = self.tys().tcx().reference(pt, true);
-            let r = self.temp(mt);
-            self.assign(r, Rvalue::Ref(BorrowKind::Mut, Place::local(*l)));
+            let p = self.temp(mt);
+            self.assign(p, Rvalue::Ref(BorrowKind::Mut, Place::local(*l)));
             let i64t = self.tys().tcx().intern(HK::Int(IntSize::I64));
             let id = self.temp(i64t);
             self.call_native(
-                "FileSystem.enter",
-                vec![Operand::Move(Place::local(r))],
+                &format!("{r}.enter"),
+                vec![Operand::Move(Place::local(p))],
                 Place::local(id),
             );
-            self.schedule(ScopeEntry::FsExit(id));
+            self.schedule(ScopeEntry::FsExit(id, r));
         }
         self.block_into(body, dest)?;
         let end = self.b.new_block();
@@ -22349,6 +22364,13 @@ const BAKED_SOURCES: &[(&str, &[&str], &[&str])] = &[
         &["Server"],
     ),
     (
+        // `Network`'s provider trait and default (§14.12), for a program
+        // that overrides it; `NET_WORDS` brings net.kara along.
+        include_str!("../../runtime/stdlib/source/net_provider.kara"),
+        &["NetworkProvider", "OsNetwork"],
+        &["OsNetwork", "NetworkProvider"],
+    ),
+    (
         // The program-rooted resources' default providers (§14.7,
         // B-2026-10-20-11). Legacy keeps its ambient `Env` / `Clock` /
         // `RandomSource`.
@@ -22525,6 +22547,9 @@ const NET_WORDS: &[&str] = &[
     "serve_tls",
     "serve_ws",
     "serve_ws_tls",
+    // A `Network` provider's (source/net_provider.kara).
+    "NetworkProvider",
+    "OsNetwork",
 ];
 
 /// Whether `src` uses `std.process`, `std.net`, `std.regex` or `Json` as
@@ -24066,6 +24091,7 @@ fn finish_build(mut lowered: Lowered) -> Result<Lowered, String> {
     // built, which `par_check` reports from.
     if !lowered.program.resources.is_empty() {
         crate::mir::providers::route_files(&mut lowered.program, &lowered.tys);
+        crate::mir::providers::route_network(&mut lowered.program, &lowered.tys);
         let report = crate::mir::effects::analyze(&lowered.program, &lowered.tys);
         if report.no_provider.is_empty() && par_conflict(&report).is_none() {
             crate::mir::providers::specialise(

@@ -1,0 +1,32 @@
+// Two `par` branches reading sockets a `Network` provider opened would
+// both reach the provider, which each read borrows `mut ref`, so the
+// branches conflict (core semantics §14.12, §14.3, §11.2).
+struct Loop { reads: i64 }
+
+impl NetworkProvider for Loop {
+    fn connect(mut ref self, addr: Str) -> Result[i64, NetError] { Ok(1) }
+
+    fn read_stream(mut ref self, h: i64, buf: mut Slice[u8]) -> Result[i64, NetError] {
+        self.reads = self.reads + 1;
+        Ok(0)
+    }
+
+    fn close(mut ref self, h: i64) { }
+}
+
+fn peek(s: ref TcpStream) -> i64 {
+    let mut b = [0u8; 2];
+    match s.read(b[..]) {
+        Ok(n) => n,
+        Err(_) => -1,
+    }
+}
+
+fn main() {
+    with_provider[Network](Loop { reads: 0 }, || {
+        let s = TcpStream.connect("a:1").unwrap();
+        let t = TcpStream.connect("b:1").unwrap();
+        let (x, y) = par { peek(s), peek(t) };
+        println(f"{x} {y}");
+    });
+}

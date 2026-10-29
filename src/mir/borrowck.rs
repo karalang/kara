@@ -2505,6 +2505,8 @@ fn main() -> () {
             "log_json_format",
             "log_text_format",
             "log_transparent",
+            // `std.net`'s sockets are the library's.
+            "par_real_clients",
         ];
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus/core");
         let mut pins: Vec<_> = std::fs::read_dir(&root)

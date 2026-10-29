@@ -180,13 +180,10 @@ impl HttpError {
 
 // ── Server surface (Slice B, 2026-05-09) ──────────────────────────────
 
-// `Network` — effect resource for inbound + outbound HTTP traffic. v1
-// unifies sends and receives under one resource (no separate
-// `NetworkSend` / `NetworkReceive`); mirrors the `Stdin` / `Stdout` /
-// `FileSystem` shape declared elsewhere in the stdlib. Used by
-// `Server.serve(handler)` to express the per-request `sends(Network)
-// receives(Network)` effect set.
-effect resource Network;
+// `Network`, the resource for inbound and outbound traffic, is a prelude
+// resource (src/prelude.rs `PRELUDE_EFFECT_RESOURCES`); a program that
+// overrides it gets its declaration, with its provider trait and default,
+// from runtime/stdlib/source/net_provider.kara (core-semantics §14.12).
 
 // `Server` is an opaque marker; v1 has no per-server state because
 // `Server.serve_static` is a "bind + serve until process exit"

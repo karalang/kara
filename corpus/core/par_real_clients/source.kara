@@ -1,0 +1,15 @@
+// Two `par` branches each making a real connection do not conflict: a
+// socket native sends and receives on `Network`, which reads it, and no
+// provider is borrowed (core semantics §14.12, §11.2).
+fn dial(addr: Str) -> String {
+    match TcpStream.connect(addr) {
+        Ok(_) => "connected".to_string(),
+        Err(NetError.ConnectionRefused) => "refused".to_string(),
+        Err(_) => "failed".to_string(),
+    }
+}
+
+fn main() {
+    let (x, y) = par { dial("127.0.0.1:1"), dial("127.0.0.1:1") };
+    println(f"{x} {y}");
+}

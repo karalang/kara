@@ -199,6 +199,25 @@ struct FsExtent {
     live: bool,
 }
 
+/// A `with_provider[Network]` call or `providers` block while and after it
+/// runs (core semantics §14.12): its provider and the methods, by name,
+/// that serve a socket it opened, in `providers::handle_methods` order.
+#[derive(Debug, Clone)]
+struct NetExtent {
+    provider: Value,
+    methods: Vec<String>,
+    live: bool,
+}
+
+impl NetExtent {
+    fn method(&self, m: &str) -> &str {
+        let at = crate::mir::providers::handle_methods("Network")
+            .and_then(|ms| ms.iter().position(|x| *x == m))
+            .expect("a Network handle method");
+        &self.methods[at]
+    }
+}
+
 /// Where a value lives: a root and the field or element indices below it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Addr {
@@ -754,6 +773,8 @@ fn run_with(
         files: Vec::new(),
         fs_extents: Vec::new(),
         fake_files: Vec::new(),
+        net_extents: Vec::new(),
+        fake_sockets: Vec::new(),
         bufs: Vec::new(),
         buf_windows: Default::default(),
         procs: Procs::default(),
@@ -1165,6 +1186,13 @@ struct Interp<'a> {
     /// The files a provider opened, by -id - 1 of their `File`: the
     /// extent and the provider's own id; `None` once dropped.
     fake_files: Vec<Option<(usize, i128)>>,
+    /// The `with_provider[Network]` calls and blocks (§14.12), by the id
+    /// `Network.enter` returned.
+    net_extents: Vec<NetExtent>,
+    /// The sockets a provider opened, by -2 - fd of their `TcpStream` or
+    /// `TcpListener`: the extent and the provider's own id; `None` once
+    /// dropped.
+    fake_sockets: Vec<Option<(usize, i128)>>,
     /// The `BufReader`s and `BufWriter`s, by id - 1; `None` once dropped.
     bufs: Vec<Option<Buf>>,
     /// A `BufReader`'s window, by its id: the box of bytes the last
@@ -2976,6 +3004,7 @@ impl<'a> Interp<'a> {
             }
             ("Vec" | "String", _) => self.collection_method(ty_name, method, args, arg_tys, ret),
             ("FileSystem", "enter" | "exit") => self.fs_extent(method, args),
+            ("Network", "enter" | "exit") => self.net_extent(method, args),
             ("FileSystem", m) if FS_METHODS.contains(&m) => self.fs_method(method, args, ret),
             (t, "parse" | "from_str_radix")
                 if t == "f64" || t == "f32" || int_width(t).is_some() =>
@@ -5492,6 +5521,127 @@ impl<'a> Interp<'a> {
         }
     }
 
+    /// `Network.enter(&mut p, handlers..)`, which a `with_provider[Network]`
+    /// call or a `providers` block binding it makes before it runs (core
+    /// semantics §14.12), and `Network.exit(id)` after.
+    fn net_extent(&mut self, method: &str, args: Vec<Value>) -> R<Value> {
+        match (method, args.as_slice()) {
+            ("enter", [provider, handlers @ ..]) => {
+                let methods = handlers
+                    .iter()
+                    .map(|h| match h {
+                        Value::Fn(f) => Ok(f.name.clone()),
+                        other => err(format!("Network.enter of a handler {other:?}")),
+                    })
+                    .collect::<R<Vec<_>>>()?;
+                self.net_extents.push(NetExtent {
+                    provider: provider.clone(),
+                    methods,
+                    live: true,
+                });
+                Ok(Value::Int(self.net_extents.len() as i128 - 1))
+            }
+            ("exit", [Value::Int(id)]) => {
+                if let Some(x) = usize::try_from(*id)
+                    .ok()
+                    .and_then(|i| self.net_extents.get_mut(i))
+                {
+                    x.live = false;
+                }
+                Ok(Value::Unit)
+            }
+            _ => err(format!("Network.{method} of {args:?}")),
+        }
+    }
+
+    /// `TcpStream.__adopt(&mut p, h)`: the descriptor of a socket the
+    /// provider `p` opened as `h` under its running override, -2 - its
+    /// index in `fake_sockets` (-1 is no socket).
+    fn adopt_socket(&mut self, provider: &Value, h: i128) -> R<Value> {
+        let Some(extent) = self
+            .net_extents
+            .iter()
+            .rposition(|x| x.live && x.provider == *provider)
+        else {
+            return err("TcpStream.__adopt outside its provider's override".to_string());
+        };
+        self.fake_sockets.push(Some((extent, h)));
+        Ok(Value::Int(-1 - self.fake_sockets.len() as i128))
+    }
+
+    /// An operation on a socket a provider opened (core semantics §14.12):
+    /// a read, write, shutdown or accept through the provider while its
+    /// override runs, and `ProviderUnavailable` after. Anything else is
+    /// `Other(-1)`. A drop closes it through the provider's `close`, or
+    /// does nothing once the override has ended.
+    fn fake_socket_method(&mut self, method: &str, fd: i64, rest: &[Value], ret: Ty) -> R<Value> {
+        let at = usize::try_from(-2 - fd).ok();
+        let Some(Some((extent, h))) = at.and_then(|i| self.fake_sockets.get(i)).cloned() else {
+            return err(format!("{method} of a closed socket"));
+        };
+        let x = self.net_extents[extent].clone();
+        if method == "drop" {
+            if let Some(i) = at {
+                self.fake_sockets[i] = None;
+            }
+            if x.live {
+                let close = x.method("close").to_string();
+                self.call(&close, vec![x.provider, Value::Int(h)])?;
+            }
+            return Ok(Value::Unit);
+        }
+        if !x.live {
+            return self.provider_unavailable(ret);
+        }
+        let view = |me: &mut Self, buf: &Value| -> R<Value> {
+            let (base, lo, len) = me.view_of(buf)?;
+            Ok(Value::Slice {
+                base: Box::new(base),
+                lo,
+                len,
+            })
+        };
+        let provider = x.provider.clone();
+        match (method, rest) {
+            ("read", [buf]) => {
+                let buf = view(self, buf)?;
+                self.call(x.method("read_stream"), vec![provider, Value::Int(h), buf])
+            }
+            ("write", [buf]) => {
+                let buf = view(self, buf)?;
+                self.call(x.method("write_stream"), vec![provider, Value::Int(h), buf])
+            }
+            ("shutdown_write", []) => {
+                self.call(x.method("shutdown"), vec![provider, Value::Int(h)])
+            }
+            ("accept", []) => {
+                let got = self.call(x.method("accept"), vec![provider, Value::Int(h)])?;
+                let Value::Variant(k, fields) = got else {
+                    return err(format!("TcpListener.accept of a provider's {got:?}"));
+                };
+                let ok = self
+                    .tys
+                    .tcx()
+                    .adt_of(ret)
+                    .and_then(|(adt, _)| adt.variants.get(k as usize).map(|v| v.name == "Ok"))
+                    .unwrap_or(false);
+                match fields.as_slice() {
+                    [Value::Int(n)] if ok => {
+                        self.fake_sockets.push(Some((extent, *n)));
+                        let fd = Value::Int(-1 - self.fake_sockets.len() as i128);
+                        self.variant_named(ret, None, "Ok", vec![Value::Agg(vec![fd])])
+                    }
+                    _ => Ok(Value::Variant(k, fields)),
+                }
+            }
+            _ => {
+                let payload =
+                    self.variant_named(ret, Some("Err"), "Other", vec![Value::Int(-1)])?;
+                self.variant_named(ret, None, "Err", vec![payload])
+            }
+        }
+    }
+
     /// `File.adopt(&mut p, r)`: the `Result` of the provider `p`'s `open`,
     /// with its id made into a `File` that belongs to the running
     /// `with_provider` call of `p`.
@@ -6569,6 +6719,22 @@ impl<'a> Interp<'a> {
         let unit = |r: std::io::Result<()>| r.map(|()| Value::Unit).map_err(|e| cause(&e));
         let count =
             |r: std::io::Result<usize>| r.map(|n| Value::Int(n as i128)).map_err(|e| cause(&e));
+        if let ("__adopt", [provider, Value::Int(h)]) = (method, args.as_slice()) {
+            return self.adopt_socket(provider, *h);
+        }
+        if base != "UdpSocket" {
+            if let Some(recv) = args
+                .first()
+                .filter(|_| !matches!(method, "bind" | "connect"))
+            {
+                if let [Value::Int(fd)] = self.struct_value(recv, name)?.as_slice() {
+                    if *fd < -1 {
+                        let fd = *fd as i64;
+                        return self.fake_socket_method(method, fd, &args[1..], ret);
+                    }
+                }
+            }
+        }
         let res: Result<Value, (&str, Option<i32>)> = match (base, method, args.as_slice()) {
             ("UdpSocket", "bind", [addr]) => {
                 let text = self.spent_string(addr, arg_tys.first())?;
@@ -14670,6 +14836,11 @@ impl<'a> Interp<'a> {
             }
             _ => return err(format!("__ready of {callee}, which does not suspend")),
         };
+        // A provider's socket (core semantics §14.12) is ready at once: its
+        // operation is a call of the provider's method.
+        let wait = wait.filter(
+            |w| !matches!(w, Wait::Accept(fd) | Wait::Read(fd, _) | Wait::Write(fd, _) if *fd < -1),
+        );
         let ready = match &wait {
             None => true,
             Some(w) => self.holds(w)?,

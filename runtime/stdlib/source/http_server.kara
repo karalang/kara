@@ -264,6 +264,7 @@ impl Server {
             NetError.InvalidInput => "invalid input".to_string(),
             NetError.Tls(_) => "TLS failure".to_string(),
             NetError.Protocol => "protocol error".to_string(),
+            NetError.ProviderUnavailable => "provider unavailable".to_string(),
         };
         HttpError { message: f"{what}: {why}" }
     }

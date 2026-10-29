@@ -35,7 +35,7 @@ pub(super) const IO_ERRORS: [&str; 10] = [
 ];
 
 /// The `NetError` variants by the runtime's code for them.
-const NET_ERRORS: [&str; 10] = [
+const NET_ERRORS: [&str; 11] = [
     "Interrupted",
     "Other",
     "AddrInUse",
@@ -46,6 +46,7 @@ const NET_ERRORS: [&str; 10] = [
     "InvalidInput",
     "Tls",
     "Protocol",
+    "ProviderUnavailable",
 ];
 
 /// `TlsFailure`'s variants, in the order `src/tls_conn.rs` numbers them.
@@ -73,7 +74,18 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.native(&format!("{resource}.{method}"), &args[1..], dest)
                     .map(Some)
             }
-            ("FileSystem", "enter" | "exit") => self.fs_extent_native(method, args, dest).map(Some),
+            ("FileSystem" | "Network", "enter" | "exit") => {
+                self.fs_extent_native(base, method, args, dest).map(Some)
+            }
+            ("TcpStream", "__adopt") => {
+                let at = self.operand_ptr(&args[0])?;
+                let provider = self.load_ptr(at)?;
+                let h = self.operand_ptr(&args[1])?;
+                let h = self.load_i64(h)?;
+                let fd = self.rt_int("net_adopt", &[provider.into(), h.into()], 64)?;
+                let d = self.place_ptr(dest)?;
+                self.store(d, fd.into()).map(Some)
+            }
             ("File", "adopt") => self.adopt_native(args, dest).map(Some),
             ("File", "options") => self.options_native(method, args, dest),
             ("File", _) => self.file_native(method, args, dest),
@@ -276,23 +288,35 @@ impl<'ctx> Cx<'ctx, '_> {
     /// calls run, which a `File` one of them opened is routed through. The
     /// runtime calls the provider's `close`, `__read` and `__write` by
     /// their bodies' pointer convention (a result slot, then a slot per
-    /// argument), so none of them may suspend.
-    fn fs_extent_native(&mut self, method: &str, args: &[Operand], dest: &Place) -> R<()> {
+    /// argument), so none of them may suspend. `Network.enter` (§14.12)
+    /// likewise, with `close` and the library's `__read`, `__write`,
+    /// `__accept` and `__shutdown` (`providers::handle_methods`).
+    fn fs_extent_native(
+        &mut self,
+        base: &str,
+        method: &str,
+        args: &[Operand],
+        dest: &Place,
+    ) -> R<()> {
+        let (prefix, rule, handlers) = match base {
+            "Network" => ("net", "§14.12", [3usize, 6, 7, 8, 9].as_slice()),
+            _ => ("fs", "§14.11", [3usize, 4, 5].as_slice()),
+        };
         if method == "exit" {
             let id = self.operand_ptr(&args[0])?;
             let id = self.load_i64(id)?;
-            return self.rt("fs_exit", &[id.into()]);
+            return self.rt(&format!("{prefix}_exit"), &[id.into()]);
         }
         let at = self.operand_ptr(&args[0])?;
         let provider = self.load_ptr(at)?;
         let mut call = vec![provider.into()];
-        for a in &args[3..6] {
+        for a in handlers.iter().map(|&i| &args[i]) {
             let Operand::Const(crate::mir::Const {
                 kind: crate::mir::ConstKind::FnDef(inst),
                 ..
             }) = a
             else {
-                return Err("FileSystem.enter takes the provider's methods".into());
+                return Err(format!("{base}.enter takes the provider's methods"));
             };
             if self
                 .program
@@ -300,15 +324,15 @@ impl<'ctx> Cx<'ctx, '_> {
                 .contains_key(&crate::mir::coroutine::dstart_name(&inst.name))
             {
                 return Err(format!(
-                    "`{}` may suspend, and a file's provider method must run to completion \
-                     (core semantics §14.11)",
+                    "`{}` may suspend, and a provider's handle method must run to completion \
+                     (core semantics {rule})",
                     inst.name
                 ));
             }
             let f = self.function(&inst.name)?;
             call.push(f.as_global_value().as_pointer_value().into());
         }
-        let id = self.rt_int("fs_enter", &call, 64)?;
+        let id = self.rt_int(&format!("{prefix}_enter"), &call, 64)?;
         let d = self.place_ptr(dest)?;
         self.store(d, id.into())
     }

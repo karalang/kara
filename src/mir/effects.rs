@@ -303,6 +303,13 @@ pub struct NoProvider {
 /// the accesses that need it.
 type Needs = BTreeMap<String, Access>;
 
+/// The resource whose provider's handle methods the native `name`
+/// registers, when it is a `providers` block's `R.enter` (§14.11, §14.12).
+fn extent_enter(name: &str) -> Option<String> {
+    let r = name.strip_suffix(".enter")?;
+    super::providers::handle_methods(r).map(|_| r.to_string())
+}
+
 fn need(n: &mut Needs, resource: &str, access: Access) {
     let e = n.entry(resource.to_string()).or_insert(access);
     *e = (*e).max(access);
@@ -1324,6 +1331,8 @@ fn native_effects(base: &str, method: &str) -> Option<Vec<(Verb, &'static str, O
         // files and ending that (core semantics §14.11).
         ("FileSystem", "enter") => vec![(Writes, "FileSystem", None), HEAP],
         ("FileSystem", "exit") => vec![(Writes, "FileSystem", None)],
+        ("Network", "enter") => vec![(Sends, "Network", None), HEAP],
+        ("Network", "exit") => vec![(Sends, "Network", None)],
         ("Stdout", "println" | "print" | "flush") => vec![(Writes, "Stdout", None), HEAP],
         ("Stderr", "println" | "print" | "flush") => vec![(Writes, "Stderr", None), HEAP],
         ("format", "") | (_, "to_string") => vec![HEAP],
@@ -1407,6 +1416,16 @@ fn native_effects(base: &str, method: &str) -> Option<Vec<(Verb, &'static str, O
             vec![(Sends, "Network", Some(0)), (Blocks, "", None)]
         }
         ("TlsStream", "read") => vec![(Receives, "Network", Some(0)), (Blocks, "", None)],
+        // Opening a connection or a listener sends and receives on the
+        // network; accepting receives on the listener (core semantics
+        // §14.12: two clients of the real network do not conflict).
+        ("TcpStream", "connect") | ("TcpListener", "bind") => vec![
+            (Sends, "Network", None),
+            (Receives, "Network", None),
+            (Blocks, "", None),
+        ],
+        ("TcpListener", "accept") => vec![(Receives, "Network", Some(0)), (Blocks, "", None)],
+        ("TcpStream", "shutdown_write") => vec![(Sends, "Network", Some(0))],
         ("TcpStream", "write" | "write_all" | "flush") => {
             vec![(Sends, "Network", Some(0)), (Blocks, "", None)]
         }
@@ -1794,18 +1813,19 @@ impl<'p> Analysis<'p> {
                     // A `FileSystem` provider's handle methods run while
                     // its call or block does, with the resources around it
                     // (core semantics §14.11).
-                    let handlers = match (binds.map(String::as_str), inst.name.as_str()) {
-                        (Some("FileSystem"), _) | (_, "FileSystem.enter") => args
+                    let extent = binds.cloned().or_else(|| extent_enter(&inst.name));
+                    let handlers = match &extent {
+                        Some(r) => args
                             .first()
                             .and_then(Operand::place)
                             .and_then(|p| place_ty(body, self.tys, p).ok())
-                            .map(|pt| self.file_handlers(pt.ty))
+                            .map(|pt| self.file_handlers(r, pt.ty))
                             .unwrap_or_default(),
-                        _ => Vec::new(),
+                        None => Vec::new(),
                     };
                     let mut h = Needs::new();
                     of(handlers, &mut h, None);
-                    fs_handler = h.get("FileSystem").copied();
+                    fs_handler = extent.and_then(|r| h.get(&r).map(|a| (r, *a)));
                     for (r, a) in h {
                         need(&mut n, &r, a);
                     }
@@ -1854,8 +1874,8 @@ impl<'p> Analysis<'p> {
             provided(&mut n);
             // The block's own `FileSystem` binding is not around its
             // provider's handle methods.
-            if let Some(a) = fs_handler {
-                need(&mut n, "FileSystem", a);
+            if let Some((r, a)) = &fs_handler {
+                need(&mut n, r, *a);
             }
             if !n.is_empty() {
                 out.push((block, bb.terminator.source_info.span, n));
@@ -1869,6 +1889,7 @@ impl<'p> Analysis<'p> {
     fn handler_effects(
         &self,
         body: &Body,
+        r: &str,
         p: Option<&Operand>,
         summaries: &BTreeMap<String, EffectSet>,
         eff: &mut EffectSet,
@@ -1879,26 +1900,22 @@ impl<'p> Analysis<'p> {
         else {
             return;
         };
-        for m in self.file_handlers(pt.ty) {
+        for m in self.file_handlers(r, pt.ty) {
             if let Some(s) = summaries.get(&m) {
                 eff.union(substitute(s, &|_| Key::Any, &|_| opaque()));
             }
         }
     }
 
-    /// The handle methods of the `FileSystem` provider of type `t` (or
-    /// behind a reference of it) that its `enter` registers.
-    fn file_handlers(&self, t: Ty) -> Vec<String> {
+    /// The handle methods of the `FileSystem` or `Network` provider `r` of
+    /// type `t` (or behind a reference of it) that its `enter` registers.
+    fn file_handlers(&self, r: &str, t: Ty) -> Vec<String> {
         let t = self.tys.pointee(t).unwrap_or(t);
-        let Some(ms) = self
-            .program
-            .resources
-            .get("FileSystem")
-            .and_then(|d| d.impls.get(&t))
-        else {
+        let Some(ms) = self.program.resources.get(r).and_then(|d| d.impls.get(&t)) else {
             return Vec::new();
         };
-        ["read_handle", "write_handle", "close", "__read", "__write"]
+        super::providers::handle_methods(r)
+            .unwrap_or_default()
             .iter()
             .filter_map(|m| ms.get(*m).cloned())
             .collect()
@@ -2065,6 +2082,11 @@ impl<'p> Analysis<'p> {
         // A call on a resource reads or writes it as its method's receiver
         // says (core semantics §14.2), and has the effects of the method of
         // every provider bound to it.
+        // A socket native routed through `Network` (§14.12) borrows the
+        // provider as the others do, so in a program that binds `Network`
+        // its reads and writes charge `Network` rather than the socket, and
+        // keeps the native's own effects besides (blocking, suspending).
+        let mut routed = None;
         if let Some((r, access, impls)) = self.resource_call(&inst.name) {
             eff.add(Effect::new(access.verb(), r, Key::Any));
             for m in impls {
@@ -2072,16 +2094,21 @@ impl<'p> Analysis<'p> {
                     eff.union(substitute(s, &|_| Key::Any, &|_| opaque()));
                 }
             }
-            return;
+            let m = inst.name.split_once('.').map_or("", |(_, m)| m);
+            routed = super::providers::file_native(r, m).filter(|_| r == "Network");
+            if routed.is_none() {
+                return;
+            }
         }
+        let name = routed.as_deref().unwrap_or(&inst.name);
         // `with_provider[R](p, f)` has `f`'s effects but `R`'s, which the
         // call supplies (§14.4), and drops `p` when it returns.
         if let Some(r) = self.with_provider(&inst.name) {
             let mut inner = self.fn_value_effects(body, defs, args.get(1), summaries);
             inner.effects.retain(|e| e.class != *r);
             eff.union(inner);
-            if r == "FileSystem" {
-                self.handler_effects(body, args.first(), summaries, eff);
+            if super::providers::handle_methods(r).is_some() {
+                self.handler_effects(body, r, args.first(), summaries, eff);
             }
             if let Some(p) = args.first().and_then(Operand::place) {
                 if let Ok(pt) = place_ty(body, self.tys, p) {
@@ -2100,16 +2127,16 @@ impl<'p> Analysis<'p> {
             eff.union(task);
             return;
         }
-        if inst.name == "FileSystem.enter" {
-            self.handler_effects(body, args.first(), summaries, eff);
+        if let Some(r) = extent_enter(&inst.name) {
+            self.handler_effects(body, &r, args.first(), summaries, eff);
         }
         let native = inst.def == DefId(u32::MAX);
         // Whether or not the table below knows the native: the list of the
         // natives the executor parks on is the coroutine transform's.
-        if native && super::coroutine::suspends_native(&inst.name) {
+        if native && super::coroutine::suspends_native(name) {
             eff.add(Effect::new(Verb::Suspends, "", Key::Any));
         }
-        let (base, method) = split_native(&inst.name);
+        let (base, method) = split_native(name);
         match native_effects(base, method).filter(|_| native) {
             Some(table) => {
                 for (verb, class, key_arg) in table {

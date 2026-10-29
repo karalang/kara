@@ -100,6 +100,7 @@ mod fatal;
 mod f16;
 pub mod file;
 pub mod fs_provider;
+pub mod net_provider;
 pub mod pool;
 pub mod rate_limiter;
 pub mod semaphore;
@@ -352,6 +353,9 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         fs_provider::karac_mir_fs_enter,
         fs_provider::karac_mir_fs_exit,
         fs_provider::karac_mir_fs_adopt,
+        net_provider::karac_mir_net_enter,
+        net_provider::karac_mir_net_exit,
+        net_provider::karac_mir_net_adopt,
         mir_io::karac_mir_buf,
         mir_io::karac_mir_buf_free,
         mir_io::karac_mir_std_stream,

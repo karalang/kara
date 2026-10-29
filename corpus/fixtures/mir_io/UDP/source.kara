@@ -11,6 +11,7 @@ fn show(e: NetError) -> String {
         NetError.InvalidInput => "invalid input".to_string(),
         NetError.Tls(_) => "tls".to_string(),
         NetError.Protocol => "protocol".to_string(),
+        NetError.ProviderUnavailable => "provider unavailable".to_string(),
     }
 }
 

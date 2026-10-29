@@ -545,8 +545,15 @@ pub(super) fn test_front(filter: Option<&str>, core_places: bool) -> TestFront {
 
     let cycles = module::detect_cycles(&tree);
 
+    // The v2 library a build appends to every module (B-2026-10-24-43), so
+    // a test file sees `NetError` or `NetworkProvider` as the build does.
+    let lib = if parse_errors.is_empty() && cycles.is_empty() {
+        super::build_cmds::PackageLibrary::of(&tree)
+    } else {
+        None
+    };
     let resolve_errors: Vec<ModuleResolveErrors> = if parse_errors.is_empty() && cycles.is_empty() {
-        resolve_modules(&tree, None)
+        resolve_modules(&tree, lib.as_ref())
     } else {
         Vec::new()
     };
@@ -560,7 +567,7 @@ pub(super) fn test_front(filter: Option<&str>, core_places: bool) -> TestFront {
     module_lint_overrides.core_places = core_places;
     let type_errors: Vec<ModuleTypeErrors> =
         if parse_errors.is_empty() && cycles.is_empty() && resolve_errors.is_empty() {
-            typecheck_modules(&tree, &module_lint_overrides, None).errors
+            typecheck_modules(&tree, &module_lint_overrides, lib.as_ref()).errors
         } else {
             Vec::new()
         };

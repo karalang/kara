@@ -36,6 +36,10 @@ enum NetError {
     Tls(TlsFailure),
     // The peer broke the WebSocket protocol.
     Protocol,
+    // A socket a `Network` provider opened, used after that provider's
+    // `with_provider` call or `providers` block has ended
+    // (core-semantics §14.12).
+    ProviderUnavailable,
 }
 
 // How a TLS connection failed (`NetError.Tls`).
@@ -144,6 +148,14 @@ impl TcpStream {
     #[compiler_builtin]
     fn set_read_timeout(ref self, ms: Option[i64]) -> Result[(), NetError] {
         Err(NetError.Other(-1))
+    }
+
+    // The descriptor of the socket that the `Network` provider at `p`
+    // opened as its own id `h`, inside that provider's running call
+    // (core-semantics §14.12; net_provider.kara).
+    #[compiler_builtin]
+    fn __adopt[P](p: mut ref P, h: i64) -> i64 {
+        -1
     }
 }
 

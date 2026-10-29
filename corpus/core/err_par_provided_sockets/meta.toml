@@ -1,0 +1,12 @@
+source = "corpus/core/err_par_provided_sockets"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["par", "providers"]
+class = "a"
+expected_from = "spec"
+rules = ["14.12", "14.3", "11.2"]
+backends = []
+env = {}
+note = "core-semantics §14.12: under an override each routed socket call borrows the fake `mut ref` (14.3), so two `par` branches reaching one fake conflict by §11.2. The expected.out wording of an error pin is guidance, not a byte oracle."
+bucket = "a:refused"

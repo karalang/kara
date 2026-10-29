@@ -342,6 +342,19 @@ pub fn prune(program: &mut Program, src: &str, user_len: usize) -> Pruned {
 
     let mut reached: FxHashSet<String> = ALWAYS_KEPT.iter().map(|s| s.to_string()).collect();
     words(&src[..user_len.min(src.len())], &mut reached);
+    // A provider's handle methods, which the compiler registers by name
+    // for a `with_provider` or `providers` block of `FileSystem` or
+    // `Network` (core semantics §14.11, §14.12), and the library's `bind`
+    // and `connect` under an override.
+    for (r, extra) in [
+        ("FileSystem", &[][..]),
+        ("Network", &["__bind", "__connect"][..]),
+    ] {
+        if reached.contains(&format!("{r}Provider")) {
+            let names = crate::mir::providers::handle_methods(r).unwrap_or_default();
+            reached.extend(names.iter().chain(extra).map(|n| n.to_string()));
+        }
+    }
     let text = |r: (usize, usize)| src.get(r.0..r.1).unwrap_or("");
     loop {
         let mut changed = false;

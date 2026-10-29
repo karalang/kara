@@ -653,6 +653,12 @@ impl PackageLibrary {
             src.push_str(&std::fs::read_to_string(&m.file).ok()?);
             src.push('\n');
         }
+        // The `_test.kara` companions `karac test` merges into their
+        // modules name library items too (a fake's `NetworkProvider`).
+        for f in tree.modules.iter().filter_map(|m| m.test_file.as_ref()) {
+            src.push_str(&std::fs::read_to_string(f).ok()?);
+            src.push('\n');
+        }
         let user_items = crate::parse(&src).program.items.len();
         let (text, start) = crate::mir::lower::library_source(&src);
         let mut parsed = crate::parse(&text);

@@ -1,0 +1,12 @@
+source = "corpus/core/par_real_clients"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["par", "providers", "net"]
+class = "a"
+expected_from = "spec"
+rules = ["14.12", "11.2"]
+backends = []
+env = {}
+note = "core-semantics §14.12: network calls keep the verbs the library declares (`sends(Network)`, `receives(Network)`), so two clients of the real network in a program that never binds `Network` do not conflict. Both dial a closed local port and are refused."
+bucket = "a"

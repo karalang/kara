@@ -606,6 +606,12 @@ pub unsafe extern "C" fn karac_mir_tcp(
     value: *mut i64,
 ) -> i32 {
     use crate::event_loop as ev;
+    if op >= 2 && crate::net_provider::is_provided(fd) {
+        #[cfg(unix)]
+        crate::mir_sock::take_armed();
+        // SAFETY: the caller's contract.
+        return unsafe { crate::net_provider::tcp(op, fd, ptr, len, value) };
+    }
     #[cfg(unix)]
     {
         // SAFETY: the caller's contract.
@@ -881,6 +887,13 @@ pub unsafe extern "C" fn karac_mir_net(
     use std::net::{TcpListener, TcpStream, UdpSocket};
     use std::os::fd::IntoRawFd;
     let armed = sock::take_armed();
+    // A provider's socket (core semantics §14.12) has no address or
+    // timeout: `Other(-1)`.
+    if crate::net_provider::is_provided(fd) {
+        // SAFETY: the caller's contract.
+        unsafe { *value = -1 };
+        return 1;
+    }
     // A datagram call that can wait, under the reactor contract
     // (`mir_sock.rs`): an armed one that would block is `IO_NOT_READY`.
     let driven = |write: bool, call: &mut dyn FnMut() -> std::io::Result<i64>| match sock::drive(

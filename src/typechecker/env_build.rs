@@ -197,8 +197,12 @@ impl<'a> super::TypeChecker<'a> {
                     // provider traits; a program's own declaration of one
                     // shadowed it with a resource no check or build could
                     // bind (B-2026-10-25-24).
+                    // A program's own `effect resource Network;` predates
+                    // the provider (§14.12), which only a program that
+                    // names `NetworkProvider` gets, and stays its own.
                     if self.cli_lint_overrides.strict_core
                         && r.span.offset < self.program.library_start.unwrap_or(usize::MAX)
+                        && r.name != "Network"
                     {
                         if let Some(t) = crate::typechecker::library_provider_trait(&r.name) {
                             self.type_error_with_fix_it(

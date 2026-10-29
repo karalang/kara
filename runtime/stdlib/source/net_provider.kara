@@ -1,0 +1,138 @@
+// runtime/stdlib/source/net_provider.kara
+//
+// `Network` as a program-rooted resource (core-semantics §14.12): the
+// `NetworkProvider` trait and the operating system's default provider. The
+// MIR pipeline appends this file, with net.kara, to a program that names
+// the trait (`BAKED_SOURCES` in src/mir/lower.rs); a program that never
+// overrides `Network` keeps its socket and HTTP natives untouched.
+//
+// In a program that binds `Network`, `TcpListener.bind` and
+// `TcpStream.connect` inside an override call the provider's `bind` and
+// `connect`, and an operation on a socket the provider opened (`accept`,
+// `read`, `write`, `shutdown_write`, its drop) goes to the provider it
+// was opened under while that provider's call or block runs, and fails
+// with `NetError.ProviderUnavailable` after.
+
+trait NetworkProvider {
+    fn bind(mut ref self, addr: Str) -> Result[i64, NetError] {
+        panic("Network.bind called on a provider that does not implement it")
+    }
+
+    fn connect(mut ref self, addr: Str) -> Result[i64, NetError] {
+        panic("Network.connect called on a provider that does not implement it")
+    }
+
+    fn accept(mut ref self, listener: i64) -> Result[i64, NetError] {
+        panic("Network.accept called on a provider that does not implement it")
+    }
+
+    fn read_stream(mut ref self, h: i64, buf: mut Slice[u8]) -> Result[i64, NetError] {
+        panic("Network.read_stream called on a provider that does not implement it")
+    }
+
+    fn write_stream(mut ref self, h: i64, buf: Slice[u8]) -> Result[i64, NetError] {
+        panic("Network.write_stream called on a provider that does not implement it")
+    }
+
+    fn shutdown(mut ref self, h: i64) -> Result[(), NetError] {
+        panic("Network.shutdown called on a provider that does not implement it")
+    }
+
+    fn close(mut ref self, h: i64) {
+        panic("Network.close called on a provider that does not implement it")
+    }
+
+    // The library's own, which a provider does not define: an override's
+    // `bind` and `connect`, the socket of the id the provider returned.
+    fn __bind(mut ref self, addr: Str) -> Result[TcpListener, NetError] {
+        match self.bind(addr) {
+            Ok(h) => Ok(TcpListener { fd: TcpStream.__adopt(mut self, h) }),
+            Err(e) => Err(e),
+        }
+    }
+
+    fn __connect(mut ref self, addr: Str) -> Result[TcpStream, NetError] {
+        match self.connect(addr) {
+            Ok(h) => Ok(TcpStream { fd: TcpStream.__adopt(mut self, h) }),
+            Err(e) => Err(e),
+        }
+    }
+
+    // An operation on a provider's socket as the compiled runtime calls
+    // it: `0` (a read's or write's count, an accepted id, in `value`), or
+    // an error as `-1 - code` with `Other`'s or `Tls`'s payload in `value`.
+    fn __read(mut ref self, h: i64, buf: mut Slice[u8], value: mut ref i64) -> i64 {
+        match self.read_stream(h, buf) {
+            Ok(n) => {
+                *value = n;
+                0
+            }
+            Err(e) => self.__net_code(e, mut value),
+        }
+    }
+
+    fn __write(mut ref self, h: i64, buf: Slice[u8], value: mut ref i64) -> i64 {
+        match self.write_stream(h, buf) {
+            Ok(n) => {
+                *value = n;
+                0
+            }
+            Err(e) => self.__net_code(e, mut value),
+        }
+    }
+
+    fn __accept(mut ref self, h: i64, value: mut ref i64) -> i64 {
+        match self.accept(h) {
+            Ok(n) => {
+                *value = n;
+                0
+            }
+            Err(e) => self.__net_code(e, mut value),
+        }
+    }
+
+    fn __shutdown(mut ref self, h: i64, value: mut ref i64) -> i64 {
+        match self.shutdown(h) {
+            Ok(_) => 0,
+            Err(e) => self.__net_code(e, mut value),
+        }
+    }
+
+    // `-1 - code` for `e`, with the runtime's codes for `NetError`'s
+    // variants (src/backend/mir/io.rs `NET_ERRORS`) and `TlsFailure`'s
+    // (`TLS_FAILURES`), the payload in `value`.
+    fn __net_code(ref self, e: own NetError, value: mut ref i64) -> i64 {
+        let code = match e {
+            NetError.Interrupted => 0,
+            NetError.Other(c) => {
+                *value = c as i64;
+                1
+            }
+            NetError.AddrInUse => 2,
+            NetError.ConnectionRefused => 3,
+            NetError.PermissionDenied => 4,
+            NetError.TimedOut => 5,
+            NetError.WouldBlock => 6,
+            NetError.InvalidInput => 7,
+            NetError.Tls(f) => {
+                *value = match f {
+                    TlsFailure.Handshake => 0,
+                    TlsFailure.BadCertificate => 1,
+                    TlsFailure.Protocol => 2,
+                    TlsFailure.UnexpectedClose => 3,
+                };
+                8
+            }
+            NetError.Protocol => 9,
+            NetError.ProviderUnavailable => 10,
+        };
+        -1 - code
+    }
+}
+
+// The operating system's network: the sockets' own natives.
+struct OsNetwork {}
+
+impl NetworkProvider for OsNetwork {}
+
+effect resource Network: NetworkProvider = OsNetwork {};

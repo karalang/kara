@@ -372,6 +372,7 @@ fn show(e: TcpError) -> String {
         TcpError.InvalidInput => "invalid input".to_string(),
         TcpError.Tls(_) => "tls".to_string(),
         TcpError.Protocol => "protocol".to_string(),
+        TcpError.ProviderUnavailable => "provider unavailable".to_string(),
     }
 }
 
@@ -487,6 +488,7 @@ fn show(e: NetError) -> String {
         NetError.InvalidInput => "invalid input".to_string(),
         NetError.Tls(_) => "tls".to_string(),
         NetError.Protocol => "protocol".to_string(),
+        NetError.ProviderUnavailable => "provider unavailable".to_string(),
     }
 }
 
