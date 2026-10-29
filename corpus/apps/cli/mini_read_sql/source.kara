@@ -4622,9 +4622,7 @@ fn bit_op(op: i64, a: i64, b0: i64) -> i64 {
     } else {
         let mut r = u >> b;
         if a < 0 {
-            // WORKAROUND B-2026-10-29-28: the mask is a named u64, not a literal
-            let ones: u64 = 18446744073709551615;
-            r = r | (ones << (64 - b));
+            r = r | (0xffffffffffffffff << (64 - b));
         }
         r as i64
     }

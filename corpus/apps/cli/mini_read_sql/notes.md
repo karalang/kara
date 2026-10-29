@@ -149,18 +149,19 @@ on an integer, where Kāra's bitwise not is `~x`. I fixed those by hand;
 parameters and `.clone()` calls); for one parameter it chose
 `mut ref Vec[Cte]` where the function keeps the vector, and `own` was
 the right call. The interpreter run then failed with invalid MIR
-(B-2026-10-29-28, below); after the workaround, one job differed from
+(B-2026-10-29-28, below); after a workaround, since reverted, one job differed from
 `expected.out`, the bare-column rule above, which was my port's
 mistake.
 
 ## Gaps found
 
-- **B-2026-10-29-28** (open): `r | (255 << b)` with `r: u64` and
+- **B-2026-10-29-28** (fixed in kara ef433a7c5b): `r | (255 << b)` with `r: u64` and
   `b: i64` passes `karac check` and then fails as invalid MIR on every
   backend ("binary operands of different types u64 and i64"). The
   unsuffixed literal on the left of a shift by a variable is typed `i64`
   before the context reaches it, so `r + (255 << b)` is refused as well.
-  Worked around in `bit_op` by naming the mask as a `u64`.
+  `bit_op` named the mask as a `u64` until the fix; it is back to the
+  literal.
 - **B-2026-10-29-29** (open): for `!x` on an integer, the message and
   the JSON replacement of `karac check` say `not`, which then fails
   typecheck; `karac fix` itself writes the right `~x`.
