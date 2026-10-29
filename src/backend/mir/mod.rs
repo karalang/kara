@@ -787,14 +787,15 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
     }
 
     /// Marks the back edge `br` `!llvm.loop !{!self,
-    /// !{!"llvm.loop.unroll.full"}}`, the self-referential loop id built
-    /// through a temporary node, as the legacy backend does
-    /// (`attach_unroll_full_metadata`).
-    fn unroll_full(&self, br: inkwell::values::InstructionValue<'ctx>) {
+    /// !{!"llvm.loop.unroll.full"}}`, or with `count`,
+    /// `!{!"llvm.loop.unroll.count", i32 count}`: the self-referential loop
+    /// id built through a temporary node, as the legacy backend does
+    /// (`attach_unroll_full_metadata`, `attach_unroll_count_metadata`).
+    fn unroll_hint(&self, br: inkwell::values::InstructionValue<'ctx>, count: Option<u32>) {
         use inkwell::values::AsValueRef;
         use llvm_sys::core::{
-            LLVMGetMDKindIDInContext, LLVMMDNodeInContext2, LLVMMDStringInContext2,
-            LLVMMetadataAsValue, LLVMSetMetadata,
+            LLVMConstInt, LLVMGetMDKindIDInContext, LLVMInt32TypeInContext, LLVMMDNodeInContext2,
+            LLVMMDStringInContext2, LLVMMetadataAsValue, LLVMSetMetadata, LLVMValueAsMetadata,
         };
         use llvm_sys::debuginfo::{LLVMMetadataReplaceAllUsesWith, LLVMTemporaryMDNode};
         use std::os::raw::{c_char, c_uint};
@@ -802,10 +803,25 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
         // SAFETY: every node is made in `ctx`, which outlives the module,
         // and the temporary is replaced (and so freed) before it escapes.
         unsafe {
-            let key = b"llvm.loop.unroll.full";
-            let prop = LLVMMDStringInContext2(ctx, key.as_ptr() as *const c_char, key.len());
-            let mut prop_ops = [prop];
-            let prop = LLVMMDNodeInContext2(ctx, prop_ops.as_mut_ptr(), prop_ops.len());
+            let prop = match count {
+                None => {
+                    let key = b"llvm.loop.unroll.full";
+                    let k = LLVMMDStringInContext2(ctx, key.as_ptr() as *const c_char, key.len());
+                    let mut prop_ops = [k];
+                    LLVMMDNodeInContext2(ctx, prop_ops.as_mut_ptr(), prop_ops.len())
+                }
+                Some(n) => {
+                    let key = b"llvm.loop.unroll.count";
+                    let k = LLVMMDStringInContext2(ctx, key.as_ptr() as *const c_char, key.len());
+                    let n = LLVMValueAsMetadata(LLVMConstInt(
+                        LLVMInt32TypeInContext(ctx),
+                        u64::from(n),
+                        0,
+                    ));
+                    let mut prop_ops = [k, n];
+                    LLVMMDNodeInContext2(ctx, prop_ops.as_mut_ptr(), prop_ops.len())
+                }
+            };
             let temp = LLVMTemporaryMDNode(ctx, std::ptr::null_mut(), 0);
             let mut ops = [temp, prop];
             let id = LLVMMDNodeInContext2(ctx, ops.as_mut_ptr(), ops.len());
@@ -979,11 +995,20 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
         self.builder
             .build_unconditional_branch(self.blocks[0])
             .map_err(|e| e.to_string())?;
-        // `KARAC_MIR_UNROLL=0` leaves out the full-unroll hints.
-        let unroll = if std::env::var("KARAC_MIR_UNROLL").as_deref() == Ok("0") {
-            Vec::new()
+        // `KARAC_MIR_UNROLL=0` leaves out the unroll hints, full and partial;
+        // `KARAC_MIR_UNROLL_PARTIAL=0` only the partial ones.
+        let (unroll, partial) = if std::env::var("KARAC_MIR_UNROLL").as_deref() == Ok("0") {
+            (Vec::new(), Vec::new())
+        } else if std::env::var("KARAC_MIR_UNROLL_PARTIAL").as_deref() == Ok("0") {
+            (
+                crate::mir::counters::unroll_full_latches(body, self.tys),
+                Vec::new(),
+            )
         } else {
-            crate::mir::counters::unroll_full_latches(body, self.tys)
+            (
+                crate::mir::counters::unroll_full_latches(body, self.tys),
+                crate::mir::counters::unroll_partial_latches(body, self.tys),
+            )
         };
         for (i, block) in body.blocks.iter().enumerate() {
             self.builder.position_at_end(self.blocks[i]);
@@ -999,13 +1024,22 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
                 }
                 kind => self.terminator(kind)?,
             }
-            if unroll.contains(&i) && matches!(block.terminator.kind, TerminatorKind::Goto { .. }) {
-                if let Some(br) = self
-                    .builder
-                    .get_insert_block()
-                    .and_then(|b| b.get_terminator())
-                {
-                    self.unroll_full(br);
+            let hint = if unroll.contains(&i) {
+                Some(None)
+            } else if partial.contains(&i) {
+                Some(Some(4))
+            } else {
+                None
+            };
+            if let Some(count) = hint {
+                if matches!(block.terminator.kind, TerminatorKind::Goto { .. }) {
+                    if let Some(br) = self
+                        .builder
+                        .get_insert_block()
+                        .and_then(|b| b.get_terminator())
+                    {
+                        self.unroll_hint(br, count);
+                    }
                 }
             }
         }

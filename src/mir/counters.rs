@@ -178,6 +178,117 @@ pub fn unroll_full_latches(body: &Body, tys: &TyInterner) -> Vec<usize> {
     out
 }
 
+/// The most statements a loop hinted by [`unroll_partial_latches`] may hold:
+/// the full-unroll limit, since a pure-scalar body is small anyway.
+const UNROLL_PARTIAL_MAX_STATEMENTS: usize = UNROLL_FULL_MAX_STATEMENTS;
+
+/// The latches of `body`'s pure-scalar counting loops, whose back edges
+/// codegen marks `llvm.loop.unroll.count 4`: the legacy backend's partial
+/// unroll (`while_loop_wants_partial_unroll`, B-2026-07-08-24), ported for
+/// B-2026-10-28-39. A guard `i < n` or `i <= n` with any bound, `i` written
+/// twice (its start and a constant step `>= 1` once per trip), and a body
+/// that touches nothing but scalar locals: no call, no element access, no
+/// borrow and no place through a pointer. That is a loop-carried scalar
+/// recurrence such as kata 70's `next = a + b`, which LLVM 18's cost model
+/// declines to unroll; four copies drop the `mov` shuffles and the branch
+/// per trip (5.19G to 3.90G instructions on kata 70, legacy 3.74G). A loop
+/// that touches memory is left to the cost model, which serves it: forcing
+/// a count there only bloats it. [`unroll_full_latches`] takes precedence.
+pub fn unroll_partial_latches(body: &Body, tys: &TyInterner) -> Vec<usize> {
+    let mut out = Vec::new();
+    if body.blocks.is_empty() {
+        return out;
+    }
+    let preds = predecessors(body);
+    let idom = dominators(body, &preds);
+    let loops = natural_loops(body, &preds, &idom);
+    let writes = local_writes(body);
+    let scalar_ty = |t: super::ty::Ty| match tys.kind(t) {
+        TyKind::Bool | TyKind::Char | TyKind::Int(_) | TyKind::Float(_) | TyKind::Unit => true,
+        // A checked operation's `(result, overflowed)` pair.
+        TyKind::Tuple(ts) => ts.iter().all(|t| {
+            matches!(
+                tys.kind(*t),
+                TyKind::Bool | TyKind::Char | TyKind::Int(_) | TyKind::Float(_)
+            )
+        }),
+        _ => false,
+    };
+    // A scalar local, or a field of one: never a place reached through a
+    // pointer or an index, which is memory.
+    let scalar_place = |p: &Place| {
+        scalar_ty(body.local(p.local).ty)
+            && p.projection
+                .iter()
+                .all(|e| matches!(e, ProjElem::Field(..)))
+    };
+    let scalar_operand = |o: &Operand| match o {
+        Operand::Copy(p) | Operand::Move(p) => scalar_place(p),
+        Operand::Const(_) => true,
+    };
+    let scalar_rvalue = |rv: &Rvalue| match rv {
+        Rvalue::Use(a) | Rvalue::UnaryOp(_, a) | Rvalue::Cast(_, a, _) => scalar_operand(a),
+        Rvalue::BinaryOp(_, a, b) | Rvalue::CheckedBinaryOp(_, a, b) => {
+            scalar_operand(a) && scalar_operand(b)
+        }
+        _ => false,
+    };
+    for lp in &loops {
+        let inner = loops
+            .iter()
+            .any(|o| o.header != lp.header && lp.blocks[o.header]);
+        if inner {
+            continue;
+        }
+        let mut statements = 0;
+        let scalar = lp
+            .blocks
+            .iter()
+            .enumerate()
+            .filter(|(_, &b)| b)
+            .all(|(b, _)| {
+                let data = &body.blocks[b];
+                statements += data.statements.len();
+                matches!(
+                    data.terminator.kind,
+                    TerminatorKind::Goto { .. }
+                        | TerminatorKind::SwitchInt { .. }
+                        | TerminatorKind::Abort { .. }
+                        | TerminatorKind::Unreachable
+                ) && data.statements.iter().all(|s| match &s.kind {
+                    StatementKind::Assign(p, rv) => scalar_place(p) && scalar_rvalue(rv),
+                    StatementKind::StorageLive(_)
+                    | StatementKind::StorageDead(_)
+                    | StatementKind::Nop => true,
+                    _ => false,
+                })
+            });
+        if !scalar || statements > UNROLL_PARTIAL_MAX_STATEMENTS {
+            continue;
+        }
+        let counted = body.blocks.iter().enumerate().any(|(g, gb)| {
+            if !lp.blocks[g] || !lp.latches.iter().all(|&t| dominates(&idom, g, t)) {
+                return false;
+            }
+            let Some((i, (bits, signed))) = guard_by(body, tys, lp, gb, true) else {
+                return false;
+            };
+            if writes.other[i.index()] || writes.assigns[i.index()].len() != 2 {
+                return false;
+            }
+            let nonneg = |v: u128| !signed || mask(v, bits) >> (bits - 1) == 0;
+            increment(body, &writes, i).is_some_and(|(cb, _, c)| {
+                let c = mask(c, bits);
+                c != 0 && nonneg(c) && lp.latches.iter().all(|&t| dominates(&idom, cb, t))
+            })
+        });
+        if counted {
+            out.extend(lp.latches.iter().copied());
+        }
+    }
+    out
+}
+
 /// Whether `func` is a `Vec`'s, slice's or array's element access.
 fn element_access(func: &Operand) -> bool {
     let Operand::Const(Const {
@@ -378,6 +489,18 @@ fn guard(
     lp: &Loop,
     gb: &BasicBlockData,
 ) -> Option<(Local, (u32, bool))> {
+    guard_by(body, tys, lp, gb, false)
+}
+
+/// [`guard`], also admitting `i <= bound` when `le` is set. Only a hint may
+/// take the `<=` form: the check elision's proof needs the strict bound.
+fn guard_by(
+    body: &Body,
+    tys: &TyInterner,
+    lp: &Loop,
+    gb: &BasicBlockData,
+    le: bool,
+) -> Option<(Local, (u32, bool))> {
     let TerminatorKind::SwitchInt {
         discr: Operand::Copy(c),
         targets,
@@ -396,8 +519,10 @@ fn guard(
         StatementKind::Assign(d, rv) if d == c => Some(rv),
         _ => None,
     })?;
-    let Rvalue::BinaryOp(BinOp::Lt, Operand::Copy(ip), _) = cmp else {
-        return None;
+    let ip = match cmp {
+        Rvalue::BinaryOp(BinOp::Lt, Operand::Copy(ip), _) => ip,
+        Rvalue::BinaryOp(BinOp::Le, Operand::Copy(ip), _) if le => ip,
+        _ => return None,
     };
     if !ip.projection.is_empty() {
         return None;
