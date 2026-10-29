@@ -59,7 +59,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | false-positive | 59 |
-| diagnostics | 53 |
+| diagnostics | 54 |
 | missing-feature | 48 |
 | perf | 34 |
 | soundness | 24 |
@@ -74,7 +74,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 109 |
-| mir | 52 |
+| mir | 53 |
 | mir-llvm | 40 |
 | ownership | 26 |
 | interp | 23 |
@@ -84,7 +84,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | parser | 13 |
 | other | 3 |
 | resolver | 3 |
-| effect | 2 |
+| effect | 3 |
 | autopar | 2 |
 | lexer | 1 |
 ## Current state
@@ -131,6 +131,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-29-12 | 2026-10-29 | mir-llvm | low | Kata 1011's bench built with auto-par on (the default) runs 1.23 times the time and 16% more instructions than with `KARAC_AUTO_PAR=0`, though nothing fans out | — |
 | B-2026-10-29-13 | 2026-10-29 | parser | low | A keyword used as a binding name (`let and = op == "&";`) gets E0003 with a fix renaming the binding to `r#and`, but each use (`if and { .. } else { .. }`) gets the same E0003 with no replacement, so `karac fix` leaves the binding renamed and every use not; the uses also cascade into "'else' is a reserved keyword" at the `else`, and a use inside a closure is reported twice | — |
 | B-2026-10-29-14 | 2026-10-29 | typecheck | low | `total([a, b].to_vec())` with `a` and `b` borrowed parameters and `total(ps: Vec[P])` is E0200 "expected 'ref Vec[P]', found 'Vec[ref P]'" with no help and no fix, while the same values pushed one by one (`v.push(a)`) get "cannot give away parameter `a`" with a machine-applicable `own` on the parameter | — |
+| B-2026-10-29-15 | 2026-10-29 | effect+mir | low | A `FileSystem` provider whose handle methods (`read_handle`, `write_handle`, `close`) use a resource overridden where the provider is bound is refused only by the MIR build (`error[mir]: providers: ... uses `Stdout`, which is overridden ...`); §14.11 (b2655d3ef) requires `karac check` to report it as a structured diagnostic naming the method and the resource | — |
 
 ### Relocated
 

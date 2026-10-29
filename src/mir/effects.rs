@@ -1320,6 +1320,10 @@ fn native_effects(base: &str, method: &str) -> Option<Vec<(Verb, &'static str, O
         ("error_trace_push" | "error_trace_clear", "") => vec![],
         // Fixing a new table's walk order where its type names a hasher.
         ("table_unkeyed", "") => vec![HEAP],
+        // A `providers { FileSystem => p }` block registering `p` for its
+        // files and ending that (core semantics §14.11).
+        ("FileSystem", "enter") => vec![(Writes, "FileSystem", None), HEAP],
+        ("FileSystem", "exit") => vec![(Writes, "FileSystem", None)],
         ("Stdout", "println" | "print" | "flush") => vec![(Writes, "Stdout", None), HEAP],
         ("Stderr", "println" | "print" | "flush") => vec![(Writes, "Stderr", None), HEAP],
         ("format", "") | (_, "to_string") => vec![HEAP],
@@ -1775,6 +1779,7 @@ impl<'p> Analysis<'p> {
                 }
             }
             let mut n = Needs::new();
+            let mut fs_handler = None;
             match &bb.terminator.kind {
                 TerminatorKind::Call {
                     func:
@@ -1786,6 +1791,24 @@ impl<'p> Analysis<'p> {
                     ..
                 } => {
                     let binds = self.with_provider(&inst.name);
+                    // A `FileSystem` provider's handle methods run while
+                    // its call or block does, with the resources around it
+                    // (core semantics §14.11).
+                    let handlers = match (binds.map(String::as_str), inst.name.as_str()) {
+                        (Some("FileSystem"), _) | (_, "FileSystem.enter") => args
+                            .first()
+                            .and_then(Operand::place)
+                            .and_then(|p| place_ty(body, self.tys, p).ok())
+                            .map(|pt| self.file_handlers(pt.ty))
+                            .unwrap_or_default(),
+                        _ => Vec::new(),
+                    };
+                    let mut h = Needs::new();
+                    of(handlers, &mut h, None);
+                    fs_handler = h.get("FileSystem").copied();
+                    for (r, a) in h {
+                        need(&mut n, &r, a);
+                    }
                     if self.program.bodies.contains_key(&inst.name) {
                         of(vec![inst.name.clone()], &mut n, None);
                     } else if let Some((r, access, impls)) = self.resource_call(&inst.name) {
@@ -1829,11 +1852,56 @@ impl<'p> Analysis<'p> {
                 _ => {}
             }
             provided(&mut n);
+            // The block's own `FileSystem` binding is not around its
+            // provider's handle methods.
+            if let Some(a) = fs_handler {
+                need(&mut n, "FileSystem", a);
+            }
             if !n.is_empty() {
                 out.push((block, bb.terminator.source_info.span, n));
             }
         }
         out
+    }
+
+    /// The effects of the handle methods of the `FileSystem` provider
+    /// `p` is (or borrows), which run while its call or block does.
+    fn handler_effects(
+        &self,
+        body: &Body,
+        p: Option<&Operand>,
+        summaries: &BTreeMap<String, EffectSet>,
+        eff: &mut EffectSet,
+    ) {
+        let Some(Ok(pt)) = p
+            .and_then(Operand::place)
+            .map(|p| place_ty(body, self.tys, p))
+        else {
+            return;
+        };
+        for m in self.file_handlers(pt.ty) {
+            if let Some(s) = summaries.get(&m) {
+                eff.union(substitute(s, &|_| Key::Any, &|_| opaque()));
+            }
+        }
+    }
+
+    /// The handle methods of the `FileSystem` provider of type `t` (or
+    /// behind a reference of it) that its `enter` registers.
+    fn file_handlers(&self, t: Ty) -> Vec<String> {
+        let t = self.tys.pointee(t).unwrap_or(t);
+        let Some(ms) = self
+            .program
+            .resources
+            .get("FileSystem")
+            .and_then(|d| d.impls.get(&t))
+        else {
+            return Vec::new();
+        };
+        ["read_handle", "write_handle", "close", "__read", "__write"]
+            .iter()
+            .filter_map(|m| ms.get(*m).cloned())
+            .collect()
     }
 
     /// The bodies of a closure or function item passed as `arg` (behind
@@ -2012,6 +2080,9 @@ impl<'p> Analysis<'p> {
             let mut inner = self.fn_value_effects(body, defs, args.get(1), summaries);
             inner.effects.retain(|e| e.class != *r);
             eff.union(inner);
+            if r == "FileSystem" {
+                self.handler_effects(body, args.first(), summaries, eff);
+            }
             if let Some(p) = args.first().and_then(Operand::place) {
                 if let Ok(pt) = place_ty(body, self.tys, p) {
                     self.drop_glue(pt.ty, Key::Any, summaries, &mut Vec::new(), eff);
@@ -2028,6 +2099,9 @@ impl<'p> Analysis<'p> {
             task.effects.retain(|e| e.verb != Verb::Suspends);
             eff.union(task);
             return;
+        }
+        if inst.name == "FileSystem.enter" {
+            self.handler_effects(body, args.first(), summaries, eff);
         }
         let native = inst.def == DefId(u32::MAX);
         // Whether or not the table below knows the native: the list of the

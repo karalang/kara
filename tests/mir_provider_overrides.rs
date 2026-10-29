@@ -773,3 +773,56 @@ fn provider_block_files_end_on_every_exit() {
         assert_eq!(built, interp);
     }
 }
+
+/// A `FileSystem` provider's handle methods run with the resources around
+/// its `with_provider` call or `providers` block: at their defaults they
+/// print, and a `Stdout` overridden there refuses the program, naming the
+/// method (core-semantics §14.11; check side B-2026-10-29-15).
+const HANDLER_RESOURCES: &str = r#"
+struct MemFs { n: i64 }
+
+impl FileSystemProvider for MemFs {
+    fn open(mut ref self, path: Str, opts: ref OpenOptions) -> Result[i64, IoError] { Ok(1) }
+    fn close(mut ref self, h: i64) { println(f"close {h}"); }
+}
+
+fn main() {
+    with_provider[FileSystem](MemFs { n: 0 }, || {
+        let _ = File.open("a");
+    });
+    providers { FileSystem => MemFs { n: 0 } } in {
+        let _ = File.open("b");
+    }
+}
+"#;
+
+#[test]
+fn provider_file_handle_methods_see_the_resources_around_the_override() {
+    let dir = Scratch::new("fs_handler_resources");
+    let (interp, built) = interp_and_build(dir.path(), HANDLER_RESOURCES, "");
+    assert_eq!(interp, ("close 1\nclose 1\n".to_string(), String::new()));
+    if let Some(built) = built {
+        assert_eq!(built, interp);
+    }
+    let refused = HANDLER_RESOURCES
+        .replace(
+            "fn main() {\n    with_provider[FileSystem]",
+            "struct Cap { }\n\nimpl StdoutProvider for Cap {\n    fn write(mut ref self, s: Str) { }\n}\n\n\
+             fn main() {\n    with_provider[Stdout](Cap { }, || main2());\n}\n\n\
+             fn main2() with writes(Stdout) {\n    with_provider[FileSystem]",
+        );
+    assert!(refused.contains("main2"));
+    let file = dir.path().join("refused.kara");
+    std::fs::write(&file, refused).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_karac"))
+        .args(["__mir-run", file.to_str().unwrap()])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "ran: {err}");
+    assert!(
+        err.contains("`MemFs.close` uses `Stdout`, which is overridden"),
+        "{err}"
+    );
+}
