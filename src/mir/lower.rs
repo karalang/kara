@@ -17964,7 +17964,20 @@ impl<'l, 'a> Bx<'l, 'a> {
             _ => {
                 let t = self.expr_ty(a)?;
                 let (_, base) = self.strip_ty_full(t);
-                if let Some((d, args)) = self.user_impl_method(base, "Display", "to_string") {
+                let dyn_display = self.dyn_under(t).filter(|&d| {
+                    self.dyn_slots(d)
+                        .iter()
+                        .any(|(tr, m)| tr == "Display" && m.name == "to_string")
+                });
+                if dyn_display.is_some() {
+                    // A `dyn` value of `Display` prints through its
+                    // `to_string` slot, into a String the statement drops.
+                    let st = self.tys().tcx().intern(HK::Str);
+                    let s = self.scoped_temp(st);
+                    self.dyn_method_call(a, "to_string", &[], Place::local(s))?;
+                    ops.push(self.ref_to(Place::local(s), st));
+                } else if let Some((d, args)) = self.user_impl_method(base, "Display", "to_string")
+                {
                     // A user type prints through its `Display`: its
                     // `to_string` into a String the statement drops.
                     let p = self.expr_place(a, false)?;
@@ -18487,6 +18500,22 @@ impl<'l, 'a> Bx<'l, 'a> {
                     let name = format!("{}.parse", self.tys().display(nt));
                     self.call_native(&name, vec![s], dest);
                     return Ok(());
+                }
+            }
+            // `x.to_string()` under `T: Display` at a number, a `bool`, a
+            // `char` or a `String`: the builtin conversion, as on the type
+            // itself (B-2026-10-29-31).
+            let display_bound = self
+                .lcx
+                .tc
+                .method_typeparam_trait_key
+                .get(&SpanKey::from_span(&e.span))
+                .is_some_and(|k| k == "Display.to_string");
+            if display_bound && method == "to_string" && args.is_empty() {
+                let (_, base) = self.strip_ty_full(rt);
+                if self.tys().tcx().adt_of(base).is_none() {
+                    let key = format!("{}.to_string", self.tys().display(base));
+                    return self.builtin_method(e, &key, object, method, args, dest);
                 }
             }
             return self.unsupported(

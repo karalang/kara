@@ -629,3 +629,68 @@ fn main() {
         "int 41\nvec of 3\nint 7\nyes\nvec of 2\nchar q\nstring hi\n8\nint 3\n5\n",
     );
 }
+
+/// A `dyn Display` (and a trait under `Display`) shows through its
+/// `to_string` slot: a call, an f-string, `println` of the value, a
+/// `ref dyn Display` parameter and a `Vec[dyn Display]`, for a struct with
+/// its own `impl Display` and for a number, a string, a `bool` and a `char`,
+/// whose `to_string` is the library's (B-2026-10-29-31). A generic
+/// `[T: Display]` body calls a primitive's `to_string` too.
+#[test]
+fn mir_dyn_display_shows_through_its_to_string_slot() {
+    runs(
+        r#"
+trait Shape: Display {
+    fn area(ref self) -> i64;
+}
+
+struct Sq {
+    s: i64,
+}
+
+impl Display for Sq {
+    fn to_string(ref self) -> String {
+        f"Sq({self.s})"
+    }
+}
+
+impl Shape for Sq {
+    fn area(ref self) -> i64 {
+        self.s * self.s
+    }
+}
+
+fn show(d: ref dyn Display) -> String {
+    f"<{d}>"
+}
+
+fn stringify[T: Display](x: T) -> String {
+    x.to_string()
+}
+
+fn main() {
+    let a: dyn Display = 5;
+    let b: dyn Display = "hi";
+    let c: dyn Display = Sq { s: 3 };
+    let e: dyn Display = true;
+    println(f"{a} {b} {c} {e}");
+    println(a);
+    println(c.to_string());
+    let s: dyn Shape = Sq { s: 4 };
+    println(f"{s} has area {s.area()}");
+    let mut v: Vec[dyn Display] = Vec.new();
+    v.push(1.5);
+    v.push(String.from("owned"));
+    v.push(Sq { s: 2 });
+    v.push('q');
+    for d in v.iter() {
+        println(show(d));
+    }
+    println(stringify(7));
+    println(stringify('c'));
+    println(stringify(Sq { s: 9 }));
+}
+"#,
+        "5 hi Sq(3) true\n5\nSq(3)\nSq(4) has area 16\n<1.5>\n<owned>\n<Sq(2)>\n<q>\n7\nc\nSq(9)\n",
+    );
+}

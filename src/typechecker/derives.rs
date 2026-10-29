@@ -381,6 +381,13 @@ impl<'a> super::TypeChecker<'a> {
             Type::Vector { element, .. } => self.type_supports_display(element),
             Type::Slice { element, .. } => self.type_supports_display(element),
             Type::Ref(inner) | Type::MutRef(inner) => self.type_supports_display(inner),
+            // A `dyn` value of `Display` or a trait under it shows through
+            // its `to_string` slot (design.md § `dyn Trait`).
+            Type::Dyn { trait_name, .. } => self
+                .env
+                .supertrait_closure_traits(trait_name)
+                .iter()
+                .any(|t| t == "Display"),
             Type::Named { name, args } => match name.as_str() {
                 "Vec" | "VecDeque" | "Option" | "SortedSet" | "Set"
                     if crate::typechecker::types::element_args(name, args).len() == 1 =>
@@ -442,8 +449,7 @@ impl<'a> super::TypeChecker<'a> {
             // not the witness's derive metadata; the derive-matches-bound
             // path is handled directly in `type_satisfies_bound` by the
             // existential-trait-name comparison, not via these helpers.
-            | Type::Existential { .. }
-            | Type::Dyn { .. } => false,
+            | Type::Existential { .. } => false,
             // Shape-kinded args are not value types — no derive surface.
             Type::Shape(_) => false,
         }

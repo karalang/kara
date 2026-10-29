@@ -52,7 +52,13 @@ impl<'l, 'a> Bx<'l, 'a> {
         if !seen.insert(tr.to_string()) {
             return;
         }
-        let Some(&def) = self.lcx.trait_defs.get(tr) else {
+        let Some(def) = self
+            .lcx
+            .trait_defs
+            .get(tr)
+            .copied()
+            .or_else(|| checker_library_trait(tr))
+        else {
             return;
         };
         for st in &def.supertraits {
@@ -83,7 +89,17 @@ impl<'l, 'a> Bx<'l, 'a> {
         }
         let mut slots = Vec::new();
         for (tr, m) in self.dyn_slots(dyn_ty) {
-            let Some((d, inst)) = self.user_impl_method(concrete, &tr, &m.name) else {
+            // A type with no `impl Display` of its own (a number, a
+            // `String`) fills `to_string`'s slot with the library's
+            // conversion (B-2026-10-29-31).
+            let shim = (tr == "Display" && m.name == "to_string")
+                .then(|| self.lcx.defs.lookup(0, "dyn_display_to_string"))
+                .flatten()
+                .filter(|d| self.lcx.fns.contains_key(d));
+            let found = self
+                .user_impl_method(concrete, &tr, &m.name)
+                .or_else(|| shim.map(|d| (d, vec![concrete])));
+            let Some((d, inst)) = found else {
                 let what = format!(
                     "`{}` as `{}` (no `{tr}.{}` of it to put in the method table)",
                     self.tys().display(concrete),
@@ -92,7 +108,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 );
                 return self.unsupported(m.span, &what);
             };
-            if self.lcx.fns[&d].impl_params == 0 {
+            if self.lcx.fns[&d].impl_params == 0 && Some(d) != shim {
                 self.lcx.self_tys.entry(d).or_insert(concrete);
             }
             slots.push(self.lcx.instance(d, inst));
@@ -452,4 +468,17 @@ impl<'l, 'a> Bx<'l, 'a> {
 
 fn is_ref_or_dyn(k: &HK) -> bool {
     matches!(k, HK::Ref(_) | HK::MutRef(_) | HK::Dyn { .. })
+}
+
+/// A trait the checker's library declares and the MIR library does not
+/// (`Display`), for the slots of a `dyn` type of it: its declaration,
+/// parsed once.
+fn checker_library_trait(tr: &str) -> Option<&'static ast::TraitDef> {
+    static TRAITS: std::sync::LazyLock<ast::Program> = std::sync::LazyLock::new(|| {
+        crate::parse(include_str!("../../../runtime/stdlib/display.kara")).program
+    });
+    TRAITS.items.iter().find_map(|i| match i {
+        ast::Item::TraitDef(t) if t.name == tr => Some(t),
+        _ => None,
+    })
 }
