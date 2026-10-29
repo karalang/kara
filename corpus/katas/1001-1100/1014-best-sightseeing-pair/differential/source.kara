@@ -1,0 +1,242 @@
+// LeetCode #1014: Best Sightseeing Pair -- differential
+//
+// The five arms, copied, against the statement read literally and five
+// more properties. See README.md § Differential.
+
+fn best_star(values: ref Vec[i64]) -> i64 {
+    let mut best_first = values[0];
+    let mut best = 0;
+    for j in 1..values.len() {
+        best = best.max(best_first + values[j] - j);
+        best_first = best_first.max(values[j] + j);
+    }
+    best
+}
+
+fn best_prefix(values: ref Vec[i64]) -> i64 {
+    let n = values.len();
+    let mut first: Vec[i64] = Vec.filled(n, 0);
+    first[1] = values[0];
+    for j in 2..n {
+        first[j] = first[j - 1].max(values[j - 1] + j - 1);
+    }
+    let mut best = 0;
+    for j in 1..n {
+        best = best.max(first[j] + values[j] - j);
+    }
+    best
+}
+
+fn best_suffix(values: ref Vec[i64]) -> i64 {
+    let n = values.len();
+    let mut second: Vec[i64] = Vec.filled(n, 0);
+    second[n - 2] = values[n - 1] - (n - 1);
+    for i in (0..n - 2).rev() {
+        second[i] = second[i + 1].max(values[i + 1] - (i + 1));
+    }
+    let mut best = 0;
+    for i in 0..n - 1 {
+        best = best.max(values[i] + i + second[i]);
+    }
+    best
+}
+
+fn best_decay(values: ref Vec[i64]) -> i64 {
+    let mut view = values[0];
+    let mut best = 0;
+    for j in 1..values.len() {
+        view -= 1;
+        best = best.max(view + values[j]);
+        view = view.max(values[j]);
+    }
+    best
+}
+
+fn split_in(values: ref Vec[i64], lo: i64, hi: i64) -> i64 {
+    if hi - lo < 2 {
+        return 0;
+    }
+    let mid = (lo + hi) / 2;
+    let mut left = values[lo] + lo;
+    for i in lo + 1..mid {
+        left = left.max(values[i] + i);
+    }
+    let mut right = values[mid] - mid;
+    for j in mid + 1..hi {
+        right = right.max(values[j] - j);
+    }
+    (left + right).max(split_in(values, lo, mid)).max(split_in(values, mid, hi))
+}
+
+fn best_split(values: ref Vec[i64]) -> i64 {
+    split_in(values, 0, values.len())
+}
+
+// the statement read literally: every pair i < j
+fn literal(values: ref Vec[i64]) -> i64 {
+    let n = values.len();
+    let mut best = values[0] + values[1] - 1;
+    for i in 0..n - 1 {
+        for j in i + 1..n {
+            let score = values[i] + values[j] + i - j;
+            if score > best {
+                best = score;
+            }
+        }
+    }
+    best
+}
+
+fn arms(values: ref Vec[i64]) -> Vec[i64] {
+    vec![best_star(values), best_prefix(values), best_suffix(values), best_decay(values), best_split(values)]
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_values(seed: mut ref i64, len: i64, most: i64) -> Vec[i64] {
+    let mut values: Vec[i64] = Vec.new();
+    for _ in 0..len {
+        values.push(1 + next_random(mut seed) % most);
+    }
+    values
+}
+
+// the t-th array of 2 to 6 values over 1..=3, shortest first
+fn small_values(t: i64) -> Vec[i64] {
+    let mut len = 2;
+    let mut count = 9;
+    let mut index = t;
+    while index >= count {
+        index -= count;
+        len += 1;
+        count *= 3;
+    }
+    let mut values: Vec[i64] = Vec.new();
+    for _ in 0..len {
+        values.push(index % 3 + 1);
+        index /= 3;
+    }
+    values
+}
+
+fn main() {
+    let names = ["star", "prefix", "suffix", "decay", "split"];
+    let mut failures: Vec[i64] = Vec.filled(6, 0);
+    let mut checks = 0;
+    let mut rows = 0;
+    let mut check = 0;
+    let mut seed = 10141;
+    for t in 0..4193 {
+        // every array of 2 to 6 values over 1..=3 (1089), then 2000 random
+        // of 2 to 12 values up to 10, 500 random of 13 to 200 up to 1000,
+        // 500 random of 2 to 60 up to 3, 100 random of up to 2000 up to
+        // 1000 and 4 of 50000
+        let values = if t < 1089 {
+            small_values(t)
+        } else if t < 3089 {
+            let len = 2 + next_random(mut seed) % 11;
+            random_values(mut seed, len, 10)
+        } else if t < 3589 {
+            let len = 13 + next_random(mut seed) % 188;
+            random_values(mut seed, len, 1000)
+        } else if t < 4089 {
+            let len = 2 + next_random(mut seed) % 59;
+            random_values(mut seed, len, 3)
+        } else if t < 4189 {
+            let len = 2 + next_random(mut seed) % 1999;
+            random_values(mut seed, len, 1000)
+        } else {
+            random_values(mut seed, 50000, 1000)
+        };
+        let n = values.len();
+        let got = arms(values);
+        rows += 1;
+        check = (check * 31 + got[0]) % 1000000007;
+        let exact = if n <= 200 { literal(values) } else { -1 };
+        let mut reversed: Vec[i64] = Vec.new();
+        for k in 0..n {
+            reversed.push(values[n - 1 - k]);
+        }
+        let flipped = arms(reversed);
+        let lift = 1 + t % 5;
+        let mut lifted: Vec[i64] = Vec.new();
+        for x in values.iter() {
+            lifted.push(x + lift);
+        }
+        let raised = arms(lifted);
+        let tail = if t % 2 == 0 { 1 } else { 1000 };
+        let mut longer = values.clone();
+        longer.push(tail);
+        let extended = arms(longer);
+        // the bounds: the best neighbours below, the two largest values
+        // a step apart above
+        let mut neighbours = values[0] + values[1] - 1;
+        let mut top = 0;
+        let mut second = 0;
+        for k in 0..n {
+            if k + 1 < n {
+                neighbours = neighbours.max(values[k] + values[k + 1] - 1);
+            }
+            if values[k] > top {
+                second = top;
+                top = values[k];
+            } else if values[k] > second {
+                second = values[k];
+            }
+        }
+        for a in 0..5 {
+            let c = got[a];
+            // P1: the statement, for arrays of up to 200 values
+            if n <= 200 {
+                checks += 1;
+                if c != exact {
+                    failures[0] += 1;
+                }
+            }
+            // P2: the reversed array scores the same
+            checks += 1;
+            if flipped[a] != c {
+                failures[1] += 1;
+            }
+            // P3: between the best neighbours and the two largest values
+            // one step apart
+            checks += 1;
+            if c < neighbours or c > top + second - 1 {
+                failures[2] += 1;
+            }
+            // P4: lifting every value by 1 to 5 lifts the score by twice that
+            checks += 1;
+            if raised[a] != c + 2 * lift {
+                failures[3] += 1;
+            }
+            // P5: a spot added at the end never lowers the score, and a 1000
+            // there pairs with the last spot at least
+            checks += 1;
+            if extended[a] < c or (tail == 1000 and extended[a] < 999 + values[n - 1]) {
+                failures[4] += 1;
+            }
+            // P6: each arm agrees with at least two of the other four
+            checks += 1;
+            let mut agree = 0;
+            for b in 0..5 {
+                if b != a and got[b] == c {
+                    agree += 1;
+                }
+            }
+            if agree < 2 {
+                failures[5] += 1;
+            }
+        }
+    }
+    let mut total = 0;
+    for p in 0..6 {
+        total += failures[p];
+        if failures[p] > 0 {
+            println(f"P{p + 1}: {failures[p]} failures");
+        }
+    }
+    println(f"{rows} arrays: checksum {check}, {checks} checks over {names.len()} arms: {total} failures");
+}
