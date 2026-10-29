@@ -748,10 +748,6 @@ impl Args {
         }
     }
 
-    fn maybe_num(self, name: Str) -> Result[Option[i64], String] {
-        if self.flag(name) { Ok(Some(self.num(name, 0)?)) } else { Ok(None) }
-    }
-
     fn delimiter(self) -> Option[u8] {
         match self.get("d") {
             None => None,
@@ -908,10 +904,10 @@ fn cmd_slice(a: Args, job: mut ref Job) -> Result[(), String] {
     if not nh and r.headers.len() > 0 {
         job.w.write(r.headers.clone())?;
     }
-    // WORKAROUND B-2026-10-28-23: the closure form, `let num = |k: Str| { if a.flag(k)
-    // { Ok(Some(a.num(k, 0)?)) } else { Ok(None) } };`, passes check but
-    // does not build on MIR; it is in mini_xsv.orig.kara.
-    let (s, e, l, i) = (a.maybe_num("s")?, a.maybe_num("e")?, a.maybe_num("l")?, a.maybe_num("i")?);
+    let num = |k: Str| {
+        if a.flag(k) { Ok(Some(a.num(k, 0)?)) } else { Ok(None) }
+    };
+    let (s, e, l, i) = (num("s")?, num("e")?, num("l")?, num("i")?);
     let (start, end) = match (s, e, l, i) {
         (None, None, None, Some(i)) => (i, i + 1),
         (_, _, _, Some(_)) => return Err("--index cannot be used with --start, --end or --len".to_string()),

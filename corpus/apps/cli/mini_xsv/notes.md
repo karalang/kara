@@ -98,11 +98,10 @@ hand. `mini_xsv.orig.kara` is the program as first written.
 
 ## Gaps found
 
-- **B-2026-10-28-23** (open): the closure the fix left behind passes
-  `karac check` but does not build on MIR, because nothing fixes the error
-  type its `?` converts into. `slice` reads its flags through a named
-  method instead (`maybe_num`, marked in the source); the closure is in
-  `mini_xsv.orig.kara`.
+- **B-2026-10-28-23** (fixed in ed940b7730): the closure the fix left
+  behind passed `karac check` but did not build on MIR, because nothing
+  fixed the error type its `?` converts into. `slice` read its flags
+  through a named method until the fix; it is back to the closure.
 
 ## What a dataframe API would need (notes for M4c)
 
