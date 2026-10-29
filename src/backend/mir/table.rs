@@ -66,6 +66,18 @@ impl<'ctx> Cx<'ctx, '_> {
         }
     }
 
+    /// Writes a reference to the stored value at `v` into `d`: its address,
+    /// or for a `dyn` value its pair, which is what a `ref dyn` is
+    /// (B-2026-10-29-30).
+    fn lend_value(&mut self, d: PointerValue<'ctx>, v: PointerValue<'ctx>, t: Table) -> R<()> {
+        let vt = t.val.unwrap_or(t.key);
+        if matches!(self.tys.kind(vt), TyKind::Dyn { .. }) {
+            self.copy(d, v, vt)
+        } else {
+            self.store(d, v.into())
+        }
+    }
+
     pub(super) fn mrt_ptr(
         &self,
         name: &str,
@@ -697,7 +709,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.abort_unless(found, "key not found")?;
                 let v = self.offset(at, self.val_off(t)?)?;
                 let d = self.place_ptr(dest)?;
-                self.store(d, v.into())?;
+                self.lend_value(d, v, t)?;
                 self.drop_moved(&args[1..])?;
             }
             ("entry_at", [i]) => {
@@ -778,7 +790,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 let at = self.load_ptr(slot)?;
                 let vp = self.offset(at, self.val_off(t)?)?;
                 let d = self.place_ptr(dest)?;
-                self.store(d, vp.into())?;
+                self.lend_value(d, vp, t)?;
                 let _ = v;
             }
             ("remove", [k]) => {
@@ -901,7 +913,9 @@ impl<'ctx> Cx<'ctx, '_> {
                     let at = cx.walk_at(h, i, t)?;
                     let src = cx.offset(at, off)?;
                     let out = cx.elem_ptr(buf, i, size)?;
-                    if by_ref {
+                    if by_ref && method == "values" {
+                        cx.lend_value(out, src, t)
+                    } else if by_ref {
                         cx.store(out, src.into())
                     } else {
                         cx.clone_into(out, src, part_ty)
@@ -933,7 +947,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.store_tag(d, dty, occ)?;
                 let v = self.offset(at, self.val_off(t)?)?;
                 let q = self.offset(d, self.field_offset(dty, Some(occ), 0)?)?;
-                self.store(q, v.into())?;
+                self.lend_value(q, v, t)?;
                 self.builder.build_unconditional_branch(done).map_err(e)?;
                 self.builder.position_at_end(new);
                 self.store_tag(d, dty, vac)?;
@@ -1287,7 +1301,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 let h = self.load_ptr(hp)?;
                 let at = self.entry_at(h, i)?;
                 let v = self.offset(at, self.val_off(t)?)?;
-                self.store(d, v.into())?;
+                self.lend_value(d, v, t)?;
                 self.builder.build_unconditional_branch(done).map_err(e)?;
                 self.builder.position_at_end(done);
             }
