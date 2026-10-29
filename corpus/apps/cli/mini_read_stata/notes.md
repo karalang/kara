@@ -114,17 +114,18 @@ The first run printed `! KeyError: 1.7014118346046923e+38` for every job
 that keeps float32 missing values: `let f: f64 = f32_of(bits)` gave a
 denormal on the compiled backends (B-2026-10-29-22, below). With that one line
 written as `f32_of(bits) as f64`, the first run matched all 1,153 lines.
+Since the fix (46a1f3e2e3) the line is back as first written.
 `mini_read_stata.orig.kara` is the program as first written.
 
 ## Gaps found
 
-- **B-2026-10-29-22** (open): the implicit widening of a call's result is dropped
+- **B-2026-10-29-22** (fixed in 46a1f3e2e3, workaround reverted): the implicit widening of a call's result is dropped
   when the call initializes an annotated `let` (`let x: f64 = f()` with
   `f() -> f32`, or `let n: i64 = g()` with `g() -> i32`), is a function's
   return value (`return f()` or a tail `f()`), or is an `if` arm. The
   interpreter prints the right value; `__mir-llvm-run`, `karac run`,
   `karac build` and the ASan lane read a half-written slot (1.5 prints
-  as `5.28426686e-315`, -7 as `4294967289` or junk). The workaround is
+  as `5.28426686e-315`, -7 as `4294967289` or junk). The workaround was
   one `as f64` in `float_missing`.
 - **B-2026-10-29-23** (open): Rust-style `Result<(), E>`, `Vec<i64>` or
   `Option<i64>` in a type gets a bare token error with no pointer to

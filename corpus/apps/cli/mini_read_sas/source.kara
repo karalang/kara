@@ -2325,10 +2325,7 @@ impl Sas7 {
                 // inferred from the pushed-to element type).
                 ch.d.push(Vec.filled(nrows, 0u64));
             } else {
-                // A typed binding, not a bare `None`: B-2026-10-29-25 (the
-                // compiled backends clone the `None` from a too-small slot).
-                let empty: Option[Vec[u8]] = None;
-                ch.s.push(Vec.filled(nrows, empty));
+                ch.s.push(Vec.filled(nrows, None));
             }
         }
         for _ in 0..nrows {

@@ -136,7 +136,8 @@ The first run matched all 2,857 lines on the interpreter and the compiled
 backends, but the ASan lane stopped with a stack-buffer-overflow:
 `Vec.filled(nrows, None)` pushed into a `Vec[Vec[Option[Vec[u8]]]]`
 clones its `None` from a slot too small for it (B-2026-10-29-25). With
-the `None` given a typed `let`, every lane matches.
+the `None` given a typed `let`, every lane matched; since the fix
+(e5f935eb0b) the bare `None` is back.
 `mini_read_sas.orig.kara` is the program as first written.
 
 ## Gaps found
@@ -146,7 +147,7 @@ the `None` given a typed `let`, every lane matches.
   method argument (`d.push(Vec.filled(2, 0))` with `d: Vec[Vec[u64]]`), a
   tuple element or an `Option` payload. A `let` annotation, a function
   argument and a struct field all work.
-- **B-2026-10-29-25** (open): `d.push(Vec.filled(n, None))` with `d` a
+- **B-2026-10-29-25** (fixed in e5f935eb0b, workaround reverted): `d.push(Vec.filled(n, None))` with `d` a
   `Vec[Vec[Option[T]]]` reads past the `None` it clones on the compiled
   backends (16 bytes from a 1-byte slot for `Option[i64]`). The
   interpreter is right, and `__mir-llvm-run` prints the right answer

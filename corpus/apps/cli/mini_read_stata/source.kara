@@ -1743,8 +1743,7 @@ fn float_missing(x: f64) -> Result[String, PyErr] {
     let base32: u32 = 0x7F000000;
     let base64: u64 = 0x7FE0000000000000;
     for k in 0..27 {
-        // `as`, not `let f: f64 = f32_of(..)`: B-2026-10-29-22
-        let f = f32_of(base32 + (k as u32) * 0x800) as f64;
+        let f: f64 = f32_of(base32 + (k as u32) * 0x800);
         if x == f {
             return Ok(letter_code(k));
         }

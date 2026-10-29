@@ -1,0 +1,1586 @@
+$ read shop.db head=8 :: SELECT * FROM customers
+shape (60, 9)
+  'id': int64
+  'name': str
+  'email': str
+  'country': str
+  'city': str
+  'signup': str
+  'balance': float64
+  'vip': object
+  'tier': str
+,id,name,email,country,city,signup,balance,vip,tier
+0,1,Grace Chen,grace.1@example.com,IN,Pune,2024-01-12,456.97,0,basic
+1,2,Linus Rao,linus.2@example.com,BR,Recife,2024-01-23,164.31,0,basic
+2,3,Zoë Hopper,zoë.3@example.com,FR,Paris,2024-02-03,871.97,1,basic
+3,4,Jürgen Adeyemi,jürgen.4@example.com,US,Austin,2024-02-14,387.18,0,basic
+4,5,Søren Haddad,søren.5@example.com,DE,München,2024-02-25,122.05,0,basic
+5,6,Amélie Okafor,amélie.6@example.com,JP,Ōsaka,2024-03-07,600.8,1,basic
+6,7,Hiroshi Sharma,hiroshi.7@example.com,TR,İzmir,2024-03-18,881.19,0,gold
+7,8,Mei Ferreira,mei.8@example.com,GB,Leeds,2024-03-29,352.9,0,basic
+$ read shop.db :: SELECT type, name, tbl_name, rootpage FROM sqlite_master ORDER BY type, name
+shape (8, 4)
+  'type': str
+  'name': str
+  'tbl_name': str
+  'rootpage': int64
+,type,name,tbl_name,rootpage
+0,index,idx_items_order,order_items,8
+1,index,idx_orders_customer,orders,7
+2,index,sqlite_autoindex_customers_1,customers,3
+3,table,customers,customers,2
+4,table,order_items,order_items,6
+5,table,orders,orders,5
+6,table,products,products,4
+7,view,order_totals,order_totals,0
+$ read shop.db :: PRAGMA table_info(customers)
+shape (9, 6)
+  'cid': int64
+  'name': str
+  'type': str
+  'notnull': int64
+  'dflt_value': str
+  'pk': int64
+,cid,name,type,notnull,dflt_value,pk
+0,0,id,INTEGER,0,,1
+1,1,name,TEXT,1,,0
+2,2,email,TEXT,0,,0
+3,3,country,TEXT,0,,0
+4,4,city,TEXT,0,,0
+5,5,signup,DATE,0,,0
+6,6,balance,REAL,0,,0
+7,7,vip,BOOLEAN,0,0,0
+8,8,tier,TEXT,0,'basic',0
+$ read shop.db index_col=id parse_dates=signup :: SELECT id, name, signup, balance FROM customers WHERE country = 'DE' ORDER BY signup
+shape (10, 3)
+  index 'id': int64
+  'name': str
+  'signup': datetime64[us]
+  'balance': float64
+id,name,signup,balance
+5,Søren Haddad,2024-02-25,122.05
+12,Inès Berg,2024-05-12,198.63
+17,Tomás Ng,2024-07-06,192.43
+24,Jürgen Adeyemi,2024-09-21,246.98
+29,Olu Müller,2024-11-15,65.86
+36,Noor Mensah,2025-01-31,857.17
+41,Grace Chen,2025-03-27,788.0
+48,Mei Ferreira,2025-06-12,845.34
+53,Kwame Silva,2025-08-06,744.34
+60,Ada Lovelace,2025-10-22,110.42
+$ read shop.db :: SELECT country, count(*) AS customers, round(avg(balance), 2) AS avg_balance, sum(balance IS NULL) AS no_balance FROM customers GROUP BY country
+shape (9, 4)
+  'country': str
+  'customers': int64
+  'avg_balance': float64
+  'no_balance': int64
+,country,customers,avg_balance,no_balance
+0,BR,5,506.03,0
+1,DE,10,417.12,0
+2,FR,10,501.35,1
+3,GB,5,393.5,1
+4,IN,5,218.52,0
+5,JP,5,444.4,0
+6,NG,5,464.47,1
+7,TR,5,495.1,1
+8,US,10,385.25,1
+$ read shop.db :: SELECT status, count(*) AS n, sum(total_cents) / 100.0 AS revenue FROM orders GROUP BY status ORDER BY revenue DESC
+shape (5, 3)
+  'status': str
+  'n': int64
+  'revenue': float64
+,status,n,revenue
+0,delivered,119,27999.12
+1,shipped,44,21142.53
+2,cancelled,45,15492.57
+3,refunded,44,10211.3
+4,paid,45,5678.89
+$ read shop.db parse_dates=month :: SELECT strftime('%Y-%m', placed) AS month, count(*) AS orders, sum(total_cents) AS cents FROM orders WHERE status != 'cancelled' GROUP BY month ORDER BY month
+shape (10, 3)
+  'month': datetime64[us]
+  'orders': int64
+  'cents': int64
+,month,orders,cents
+0,2026-01-01,21,512262
+1,2026-02-01,25,690154
+2,2026-03-01,27,679144
+3,2026-04-01,27,751501
+4,2026-05-01,27,668880
+5,2026-06-01,27,681919
+6,2026-07-01,28,680086
+7,2026-08-01,27,706774
+8,2026-09-01,26,757864
+9,2026-10-01,17,374600
+$ read shop.db :: SELECT c.name, o.id AS order_id, o.placed, o.total_cents FROM orders o JOIN customers c ON c.id = o.customer_id WHERE o.total_cents > 50000 ORDER BY o.total_cents DESC LIMIT 10
+shape (10, 4)
+  'name': str
+  'order_id': int64
+  'placed': str
+  'total_cents': int64
+,name,order_id,placed,total_cents
+0,Mateo Sato,227,2026-08-09 01:34:00,94696
+1,Ada Lovelace,107,2026-04-16 06:34:00,93199
+2,Ada Lovelace,259,2026-09-08 20:38:00,90719
+3,Lena Yılmaz,47,2026-02-17 14:34:00,90530
+4,Lena Yılmaz,263,2026-09-12 18:46:00,89894
+5,Yuki Tanaka,182,2026-06-26 19:49:00,88699
+6,Zoë Hopper,203,2026-07-17 02:46:00,88485
+7,Hiroshi Sharma,111,2026-04-20 04:42:00,86218
+8,Grace Chen,186,2026-06-30 17:57:00,84719
+9,Inès Berg,34,2026-02-05 03:53:00,84219
+$ read shop.db :: SELECT o.id, o.customer_id, c.name FROM orders o LEFT JOIN customers c ON c.id = o.customer_id WHERE c.id IS NULL ORDER BY o.id
+shape (6, 3)
+  'id': int64
+  'customer_id': int64
+  'name': object
+,id,customer_id,name
+0,50,999,
+1,100,999,
+2,150,999,
+3,200,999,
+4,250,999,
+5,300,999,
+$ read shop.db :: SELECT id, name FROM customers WHERE id NOT IN (SELECT customer_id FROM orders WHERE status <> 'cancelled') ORDER BY id
+shape (5, 2)
+  'id': int64
+  'name': str
+,id,name
+0,14,Lena Yılmaz
+1,31,Mateo Sato
+2,55,Arjun Poulain
+3,57,Tomás Ng
+4,58,Yuki Tanaka
+$ read shop.db :: SELECT coupon, count(*) AS n FROM orders GROUP BY coupon
+shape (4, 2)
+  'coupon': str
+  'n': int64
+,coupon,n
+0,,149
+1,SPRING10,49
+2,VIP,50
+3,spring10,49
+$ read shop.db :: SELECT coupon, count(*) AS n FROM orders GROUP BY coupon COLLATE NOCASE
+shape (3, 2)
+  'coupon': str
+  'n': int64
+,coupon,n
+0,,149
+1,spring10,98
+2,VIP,50
+$ read shop.db :: SELECT upper(coupon) AS code, count(*) AS n, count(DISTINCT customer_id) AS buyers FROM orders WHERE coupon IS NOT NULL GROUP BY 1
+shape (2, 3)
+  'code': str
+  'n': int64
+  'buyers': int64
+,code,n,buyers
+0,SPRING10,98,47
+1,VIP,50,27
+$ read shop.db :: SELECT * FROM order_totals ORDER BY amount DESC LIMIT 5
+shape (5, 4)
+  'order_id': int64
+  'customer_id': int64
+  'lines': int64
+  'amount': float64
+,order_id,customer_id,lines,amount
+0,227,51,4,946.96
+1,107,60,4,931.99
+2,259,40,4,907.19
+3,47,34,4,905.3
+4,263,54,4,898.94
+$ read shop.db :: SELECT p.category, sum(i.qty) AS units, round(sum(i.qty * i.unit_price), 2) AS revenue FROM order_items i JOIN products p ON p.sku = i.sku GROUP BY p.category ORDER BY revenue DESC
+shape (6, 3)
+  'category': str
+  'units': int64
+  'revenue': float64
+,category,units,revenue
+0,audio,300,58008.0
+1,kitchen,300,7297.8
+2,books,240,6298.2
+3,garden,300,5520.0
+4,toys,300,2739.0
+5,,60,1500.0
+$ read shop.db :: SELECT sku, price, round(price, 2) AS rounded, printf('%.2f', price) AS shown, CAST(price * 100 AS INTEGER) AS cents, typeof(price) AS type FROM products ORDER BY sku
+shape (25, 6)
+  'sku': str
+  'price': float64
+  'rounded': float64
+  'shown': str
+  'cents': int64
+  'type': str
+,sku,price,rounded,shown,cents,type
+0,AUD-128,249.0,249.0,249.00,24900,integer
+1,AUD-163,89.9,89.9,89.90,8990,real
+2,AUD-198,259.0,259.0,259.00,25900,integer
+3,AUD-233,99.9,99.9,99.90,9990,real
+4,AUD-268,269.0,269.0,269.00,26900,integer
+5,BOO-114,19.99,19.99,19.99,1998,real
+6,BOO-149,15.0,15.0,15.00,1500,integer
+7,BOO-184,29.99,29.99,29.99,2999,real
+8,BOO-219,25.0,25.0,25.00,2500,integer
+9,BOO-254,39.99,39.99,39.99,3999,real
+10,GAR-107,12.5,12.5,12.50,1250,real
+11,GAR-142,7.25,7.25,7.25,725,real
+12,GAR-177,22.5,22.5,22.50,2250,real
+13,GAR-212,17.25,17.25,17.25,1725,real
+14,GAR-247,32.5,32.5,32.50,3250,real
+15,KIT-100,4.99,4.99,4.99,499,real
+16,KIT-135,33.33,33.33,33.33,3333,real
+17,KIT-170,14.99,14.99,14.99,1499,real
+18,KIT-205,43.33,43.33,43.33,4333,real
+19,KIT-240,24.99,24.99,24.99,2499,real
+20,TOY-121,0.1,0.1,0.10,10,real
+21,TOY-156,2.675,2.67,2.67,267,real
+22,TOY-191,10.1,10.1,10.10,1010,real
+23,TOY-226,12.675,12.68,12.68,1267,real
+24,TOY-261,20.1,20.1,20.10,2010,real
+$ read shop.db :: SELECT title, weight_g, weight_g / 1000 AS kg_int, weight_g / 1000.0 AS kg, weight_g % 1000 AS rest FROM products WHERE weight_g IS NOT NULL ORDER BY weight_g DESC LIMIT 6
+shape (6, 5)
+  'title': str
+  'weight_g': int64
+  'kg_int': int64
+  'kg': float64
+  'rest': int64
+,title,weight_g,kg_int,kg,rest
+0,Speaker 3,938,0,0.938,938
+1,Kite 3,901,0,0.901,901
+2,Atlas 3,864,0,0.864,864
+3,Trowel 3,827,0,0.827,827
+4,Kettle 3,790,0,0.79,790
+5,Puzzle 2,716,0,0.716,716
+$ read shop.db params='shipped',13 :: SELECT id, placed, total_cents FROM orders WHERE status = ? AND customer_id = ? ORDER BY id
+shape (3, 3)
+  'id': int64
+  'placed': str
+  'total_cents': int64
+,id,placed,total_cents
+0,2,2026-01-05 08:49:00,82699
+1,117,2026-04-25 12:24:00,16656
+2,167,2026-06-12 22:34:00,42750
+$ read shop.db named=st='paid',lo=20000 :: SELECT count(*) AS n, min(total_cents) AS lo, max(total_cents) AS hi, avg(total_cents) AS mean FROM orders WHERE status = :st AND total_cents >= :lo
+shape (1, 4)
+  'n': int64
+  'lo': int64
+  'hi': int64
+  'mean': float64
+,n,lo,hi,mean
+0,2,20247,26277,23262.0
+$ read shop.db :: SELECT customer_id, max(total_cents) AS biggest, placed FROM orders
+shape (1, 3)
+  'customer_id': int64
+  'biggest': int64
+  'placed': str
+,customer_id,biggest,placed
+0,51,94696,2026-08-09 01:34:00
+$ read shop.db :: SELECT name, email FROM customers WHERE email LIKE '%9@EXAMPLE.COM' ORDER BY id
+shape (6, 2)
+  'name': str
+  'email': str
+,name,email
+0,Olu Müller,OLU.9@EXAMPLE.COM
+1,Elif Novak,elif.19@example.com
+2,Olu Müller,olu.29@example.com
+3,Elif Novak,elif.39@example.com
+4,Olu Müller,olu.49@example.com
+5,Elif Novak,elif.59@example.com
+$ read shop.db :: SELECT id, name, email FROM customers WHERE email = 'ADA.20@example.com' OR email GLOB '*[0-9][0-9]@EXAMPLE.COM'
+shape (6, 3)
+  'id': int64
+  'name': str
+  'email': str
+,id,name,email
+0,18,Yuki Tanaka,YUKI.18@EXAMPLE.COM
+1,20,Ada Lovelace,ada.20@example.com
+2,27,Hiroshi Sharma,HIROSHI.27@EXAMPLE.COM
+3,36,Noor Mensah,NOOR.36@EXAMPLE.COM
+4,45,Søren Haddad,SØREN.45@EXAMPLE.COM
+5,54,Lena Yılmaz,LENA.54@EXAMPLE.COM
+$ read shop.db :: SELECT DISTINCT country FROM customers
+shape (9, 1)
+  'country': str
+,country
+0,IN
+1,BR
+2,FR
+3,US
+4,DE
+5,JP
+6,TR
+7,GB
+8,NG
+$ read shop.db :: SELECT country, group_concat(DISTINCT city) AS cities, group_concat(id, ';') AS ids FROM customers GROUP BY country
+shape (9, 3)
+  'country': str
+  'cities': str
+  'ids': str
+,country,cities,ids
+0,BR,Recife,2;14;26;38;50
+1,DE,"München,Berlin",5;12;17;24;29;36;41;48;53;60
+2,FR,"Paris,Lyon",3;10;15;22;27;34;39;46;51;58
+3,GB,Leeds,8;20;32;44;56
+4,IN,Pune,1;13;25;37;49
+5,JP,Ōsaka,6;18;30;42;54
+6,NG,Lagos,11;23;35;47;59
+7,TR,İzmir,7;19;31;43;55
+8,US,"Austin,Boston",4;9;16;21;28;33;40;45;52;57
+$ read shop.db :: SELECT CASE WHEN total_cents >= 50000 THEN 'large' WHEN total_cents >= 10000 THEN 'medium' ELSE 'small' END AS size, count(*) AS n FROM orders GROUP BY size ORDER BY n DESC
+shape (3, 2)
+  'size': str
+  'n': int64
+,size,n
+0,medium,140
+1,small,98
+2,large,59
+$ read shop.db :: SELECT customer_id, count(*) AS orders, sum(total_cents) AS spent FROM orders GROUP BY customer_id HAVING count(*) >= 6 ORDER BY spent DESC
+shape (19, 3)
+  'customer_id': int64
+  'orders': int64
+  'spent': int64
+,customer_id,orders,spent
+0,1,26,660459
+1,2,15,418432
+2,23,6,290701
+3,4,10,286490
+4,9,8,253744
+5,13,7,250884
+6,41,9,250294
+7,17,7,235390
+8,6,8,200294
+9,32,8,180134
+10,11,7,177525
+11,30,8,171452
+12,60,6,163831
+13,10,6,135580
+14,46,6,127152
+15,24,9,125077
+16,20,7,115720
+17,50,7,112977
+18,999,6,43482
+$ read shop.db :: SELECT id, placed, date(placed) AS day, time(placed) AS at, strftime('%w %j %W', placed) AS week, julianday(placed) - julianday('2026-01-01') AS days_in, unixepoch(placed) AS epoch FROM orders ORDER BY id LIMIT 5
+shape (5, 7)
+  'id': int64
+  'placed': str
+  'day': str
+  'at': str
+  'week': str
+  'days_in': float64
+  'epoch': int64
+,id,placed,day,at,week,days_in,epoch
+0,1,2026-01-04 15:32:00,2026-01-04,15:32:00,0 004 00,3.6472222222946584,1767540720
+1,2,2026-01-05 08:49:00,2026-01-05,08:49:00,1 005 01,4.367361111100763,1767602940
+2,3,2026-01-06 15:06:00,2026-01-06,15:06:00,2 006 01,5.629166666883975,1767711960
+3,4,2026-01-07 07:23:00,2026-01-07,07:23:00,3 007 01,6.307638888712972,1767770580
+4,5,2026-01-08 13:40:00,2026-01-08,13:40:00,4 008 01,7.569444444496185,1767879600
+$ read shop.db :: SELECT strftime('%H', placed) AS hour, count(*) AS n FROM orders GROUP BY hour ORDER BY n DESC, hour LIMIT 5
+shape (5, 2)
+  'hour': str
+  'n': int64
+,hour,n
+0,03,15
+1,07,14
+2,10,14
+3,13,14
+4,15,14
+$ read shop.db :: SELECT name, signup, date(signup, '+1 year') AS renewal, date(signup, 'start of month', '+1 month', '-1 day') AS month_end, date(signup, '+1 month') AS next_month FROM customers WHERE signup IS NOT NULL ORDER BY id LIMIT 8
+shape (8, 5)
+  'name': str
+  'signup': str
+  'renewal': str
+  'month_end': str
+  'next_month': str
+,name,signup,renewal,month_end,next_month
+0,Grace Chen,2024-01-12,2025-01-12,2024-01-31,2024-02-12
+1,Linus Rao,2024-01-23,2025-01-23,2024-01-31,2024-02-23
+2,Zoë Hopper,2024-02-03,2025-02-03,2024-02-29,2024-03-03
+3,Jürgen Adeyemi,2024-02-14,2025-02-14,2024-02-29,2024-03-14
+4,Søren Haddad,2024-02-25,2025-02-25,2024-02-29,2024-03-25
+5,Amélie Okafor,2024-03-07,2025-03-07,2024-03-31,2024-04-07
+6,Hiroshi Sharma,2024-03-18,2025-03-18,2024-03-31,2024-04-18
+7,Mei Ferreira,2024-03-29,2025-03-29,2024-03-31,2024-04-29
+$ read shop.db :: SELECT id, customer_id, total_cents, sum(total_cents) OVER (PARTITION BY customer_id ORDER BY placed) AS running, row_number() OVER (PARTITION BY customer_id ORDER BY placed) AS n FROM orders WHERE customer_id IN (1, 2) ORDER BY customer_id, placed
+shape (41, 5)
+  'id': int64
+  'customer_id': int64
+  'total_cents': int64
+  'running': int64
+  'n': int64
+,id,customer_id,total_cents,running,n
+0,31,1,31928,31928,1
+1,35,1,13252,45180,2
+2,39,1,28212,73392,3
+3,61,1,7028,80420,4
+4,62,1,30919,111339,5
+5,71,1,42244,153583,6
+6,72,1,24900,178483,7
+7,104,1,30,178513,8
+8,106,1,30930,209443,9
+9,113,1,7174,216617,10
+10,118,1,13507,230124,11
+11,127,1,63545,293669,12
+12,132,1,26900,320569,13
+13,133,1,8950,329519,14
+14,135,1,11459,340978,15
+15,164,1,6030,347008,16
+16,178,1,12268,359276,17
+17,184,1,2020,361296,18
+18,186,1,84719,446015,19
+19,217,1,29979,475994,20
+20,247,1,70047,546041,21
+21,268,1,2500,548541,22
+22,279,1,55557,604098,23
+23,280,1,2998,607096,24
+24,286,1,33928,641024,25
+25,295,1,19435,660459,26
+26,4,2,20,20,1
+27,43,2,31487,31507,2
+28,79,2,82719,114226,3
+29,84,2,1010,115236,4
+30,86,2,60807,176043,5
+31,112,2,17980,194023,6
+32,121,2,8800,202823,7
+33,122,2,81533,284356,8
+34,144,2,268,284624,9
+35,146,2,32245,316869,10
+36,149,2,28703,345572,11
+37,166,2,21018,366590,12
+38,213,2,5723,372313,13
+39,256,2,5000,377313,14
+40,299,2,41119,418432,15
+$ read shop.db :: SELECT customer_id, sum(total_cents) AS spent, rank() OVER (ORDER BY sum(total_cents) DESC) AS rnk, dense_rank() OVER (ORDER BY count(*) DESC) AS by_orders FROM orders GROUP BY customer_id ORDER BY rnk LIMIT 8
+shape (8, 4)
+  'customer_id': int64
+  'spent': int64
+  'rnk': int64
+  'by_orders': int64
+,customer_id,spent,rnk,by_orders
+0,1,660459,1,1
+1,2,418432,2,2
+2,23,290701,3,7
+3,4,286490,4,3
+4,9,253744,5,5
+5,13,250884,6,6
+6,41,250294,7,4
+7,17,235390,8,6
+$ read shop.db :: WITH spend AS (SELECT customer_id, sum(total_cents) AS cents FROM orders WHERE status IN ('paid', 'shipped', 'delivered') GROUP BY customer_id) SELECT c.country, count(*) AS buyers, max(s.cents) AS top FROM spend s JOIN customers c ON c.id = s.customer_id GROUP BY c.country ORDER BY top DESC
+shape (9, 3)
+  'country': str
+  'buyers': int64
+  'top': int64
+,country,buyers,top
+0,IN,5,387783
+1,BR,4,258352
+2,DE,9,239244
+3,JP,5,190025
+4,US,9,170676
+5,GB,5,169684
+6,NG,5,167263
+7,TR,3,162382
+8,FR,9,162150
+$ read shop.db :: SELECT name, (SELECT count(*) FROM orders o WHERE o.customer_id = c.id) AS orders FROM customers c ORDER BY orders DESC, name LIMIT 5
+shape (5, 2)
+  'name': str
+  'orders': int64
+,name,orders
+0,Grace Chen,26
+1,Linus Rao,15
+2,Jürgen Adeyemi,10
+3,Grace Chen,9
+4,Jürgen Adeyemi,9
+$ read shop.db :: SELECT id, name FROM customers c WHERE NOT EXISTS (SELECT 1 FROM orders o WHERE o.customer_id = c.id AND o.status = 'delivered') ORDER BY id
+shape (12, 2)
+  'id': int64
+  'name': str
+,id,name
+0,8,Mei Ferreira
+1,10,Priya García
+2,12,Inès Berg
+3,14,Lena Yılmaz
+4,31,Mateo Sato
+5,35,Arjun Poulain
+6,39,Elif Novak
+7,45,Søren Haddad
+8,54,Lena Yılmaz
+9,55,Arjun Poulain
+10,57,Tomás Ng
+11,58,Yuki Tanaka
+$ read shop.db :: SELECT country FROM customers UNION SELECT 'XX' UNION SELECT 'DE'
+shape (10, 1)
+  'country': str
+,country
+0,BR
+1,DE
+2,FR
+3,GB
+4,IN
+5,JP
+6,NG
+7,TR
+8,US
+9,XX
+$ read shop.db :: SELECT 'customer' AS kind, count(*) AS n FROM customers UNION ALL SELECT 'order', count(*) FROM orders UNION ALL SELECT 'item', count(*) FROM order_items
+shape (3, 2)
+  'kind': str
+  'n': int64
+,kind,n
+0,customer,60
+1,order,297
+2,item,750
+$ read shop.db index_col=country,city :: SELECT country, city, count(*) AS n FROM customers GROUP BY country, city
+shape (16, 1)
+  index 'country': str
+  index 'city': str
+  'n': int64
+country,city,n
+BR,,1
+BR,Recife,4
+DE,Berlin,5
+DE,München,5
+FR,,1
+FR,Lyon,5
+FR,Paris,4
+GB,Leeds,5
+IN,,1
+IN,Pune,4
+JP,Ōsaka,5
+NG,Lagos,5
+TR,İzmir,5
+US,,1
+US,Austin,4
+US,Boston,5
+$ read shop.db dtype=total_cents:float64,customer_id:Int64 head=4 :: SELECT id, customer_id, total_cents FROM orders
+shape (297, 3)
+  'id': int64
+  'customer_id': Int64
+  'total_cents': float64
+,id,customer_id,total_cents
+0,1,30,6803.0
+1,2,13,82699.0
+2,3,23,34953.0
+3,4,2,20.0
+$ read shop.db dtype_backend=numpy_nullable head=12 :: SELECT id, balance, email, vip, tier FROM customers
+shape (60, 5)
+  'id': Int64
+  'balance': Float64
+  'email': string
+  'vip': string
+  'tier': string
+,id,balance,email,vip,tier
+0,1,456.97,grace.1@example.com,0,basic
+1,2,164.31,linus.2@example.com,0,basic
+2,3,871.97,zoë.3@example.com,1,basic
+3,4,387.18,jürgen.4@example.com,0,basic
+4,5,122.05,søren.5@example.com,0,basic
+5,6,600.8,amélie.6@example.com,1,basic
+6,7,881.19,hiroshi.7@example.com,0,gold
+7,8,352.9,mei.8@example.com,0,basic
+8,9,32.66,OLU.9@EXAMPLE.COM,,basic
+9,10,207.75,priya.10@example.com,0,basic
+10,11,,mateo.11@example.com,0,basic
+11,12,198.63,inès.12@example.com,yes,basic
+$ read shop.db head=12 :: SELECT id, vip, typeof(vip) AS type FROM customers WHERE id % 3 = 0
+shape (20, 3)
+  'id': int64
+  'vip': object
+  'type': str
+,id,vip,type
+0,3,1,integer
+1,6,1,integer
+2,9,,null
+3,12,yes,text
+4,15,0,integer
+5,18,1,integer
+6,21,1,integer
+7,24,,null
+8,27,yes,text
+9,30,0,integer
+10,33,1,integer
+11,36,1,integer
+$ chunks shop.db chunksize=4 :: SELECT id, email, balance FROM customers WHERE id BETWEEN 19 AND 30
+chunk 0
+shape (4, 3)
+  'id': int64
+  'email': str
+  'balance': float64
+,id,email,balance
+0,19,elif.19@example.com,505.91
+1,20,ada.20@example.com,805.7
+2,21,grace.21@example.com,49.31
+3,22,linus.22@example.com,
+chunk 1
+shape (4, 3)
+  'id': int64
+  'email': str
+  'balance': float64
+,id,email,balance
+0,23,,182.17
+1,24,jürgen.24@example.com,246.98
+2,25,søren.25@example.com,216.04
+3,26,amélie.26@example.com,367.74
+chunk 2
+shape (4, 3)
+  'id': int64
+  'email': str
+  'balance': float64
+,id,email,balance
+0,27,HIROSHI.27@EXAMPLE.COM,141.95
+1,28,mei.28@example.com,446.99
+2,29,olu.29@example.com,65.86
+3,30,priya.30@example.com,45.74
+$ read shop.db :: SELECT * FROM refunds
+! DatabaseError: Execution failed on sql 'SELECT * FROM refunds': no such table: refunds
+$ read shop.db :: SELECT id, nmae FROM customers
+! DatabaseError: Execution failed on sql 'SELECT id, nmae FROM customers': no such column: nmae
+$ read shop.db :: SELECT id FORM customers
+! DatabaseError: Execution failed on sql 'SELECT id FORM customers': near "customers": syntax error
+$ read shop.db :: SELECT id, name FROM customers c JOIN orders o ON o.customer_id = c.id
+! DatabaseError: Execution failed on sql 'SELECT id, name FROM customers c JOIN orders o ON o.customer_id = c.id': ambiguous column name: id
+$ read shop.db :: SELECT country FROM customers WHERE count(*) > 3
+! DatabaseError: Execution failed on sql 'SELECT country FROM customers WHERE count(*) > 3': misuse of aggregate function count()
+$ read shop.db params='paid' :: SELECT id FROM orders WHERE status = ? AND customer_id = ?
+! DatabaseError: Execution failed on sql 'SELECT id FROM orders WHERE status = ? AND customer_id = ?': Incorrect number of bindings supplied. The current statement uses 2, and there are 1 supplied.
+$ read shop.db :: customers
+! DatabaseError: Execution failed on sql 'customers': near "customers": syntax error
+$ read shop.db index_col=customer :: SELECT id, name FROM customers LIMIT 3
+! KeyError: "None of ['customer'] are in the columns"
+$ read shop.db dtype=balance:int64 :: SELECT id, balance FROM customers WHERE id BETWEEN 9 AND 12
+! IntCastingNaNError: Cannot convert non-finite values (NA or inf) to integer.Replace or remove non-finite values or cast to an integer typethat supports these values (e.g. 'Int64'): Error while type casting for column 'balance'
+$ read history.db :: SELECT u.title, datetime(v.visit_time / 1000000 - 11644473600, 'unixepoch') AS visited, v.transition & 255 AS core FROM visits v JOIN urls u ON u.id = v.url ORDER BY v.visit_time DESC LIMIT 8
+shape (8, 3)
+  'title': str
+  'visited': str
+  'core': int64
+,title,visited,core
+0,karalang/kara,2026-10-26 04:33:24,5
+1,pandas documentation,2026-10-26 04:04:48,1
+2,,2026-10-26 03:46:12,0
+3,Your cart,2026-10-26 03:17:36,8
+4,sqlite3 — DB-API 2.0 interface for SQLite databases,2026-10-26 02:49:00,2
+5,karalang/kara,2026-10-26 02:20:24,0
+6,pandas documentation,2026-10-26 01:51:48,1
+7,,2026-10-26 01:33:12,0
+$ read history.db parse_dates=t:us :: SELECT id, visit_time - 11644473600000000 AS t FROM visits ORDER BY id LIMIT 5
+shape (5, 2)
+  'id': int64
+  't': datetime64[us]
+,id,t
+0,1,2026-10-20 07:00:00.000000
+1,2,2026-10-20 07:28:36.123457
+2,3,2026-10-20 07:57:12.246914
+3,4,2026-10-20 08:25:48.370371
+4,5,2026-10-20 08:54:24.493828
+$ read history.db :: SELECT substr(url, instr(url, '//') + 2, instr(substr(url, instr(url, '//') + 2), '/') - 1) AS host, sum(visit_count) AS visits FROM urls GROUP BY host ORDER BY visits DESC, host
+shape (10, 2)
+  'host': str
+  'visits': int64
+,host,visits
+0,docs.python.org,64
+1,github.com,64
+2,maps.example.com,64
+3,pandas.pydata.org,64
+4,shop.example.com,64
+5,en.wikipedia.org,0
+6,mail.example.com,0
+7,news.example.org,0
+8,weather.example.net,0
+9,www.sqlite.org,0
+$ read history.db parse_dates=day :: SELECT date(visit_time / 1000000 - 11644473600, 'unixepoch') AS day, count(*) AS visits, round(sum(visit_duration) / 1e6 / 60, 1) AS minutes FROM visits GROUP BY day
+shape (7, 3)
+  'day': datetime64[us]
+  'visits': int64
+  'minutes': float64
+,day,visits,minutes
+0,2026-10-20,39,253.0
+1,2026-10-21,54,345.1
+2,2026-10-22,54,344.7
+3,2026-10-23,54,314.4
+4,2026-10-24,54,329.0
+5,2026-10-25,54,358.7
+6,2026-10-26,11,45.4
+$ read history.db :: SELECT CASE transition & 255 WHEN 0 THEN 'link' WHEN 1 THEN 'typed' WHEN 2 THEN 'bookmark' WHEN 5 THEN 'generated' ELSE 'other' END AS how, (transition & 805306368) != 0 AS chain, count(*) AS n FROM visits GROUP BY 1, 2 ORDER BY 1, 2
+shape (6, 3)
+  'how': str
+  'chain': int64
+  'n': int64
+,how,chain,n
+0,bookmark,1,40
+1,generated,1,40
+2,link,0,40
+3,link,1,80
+4,other,0,40
+5,typed,1,80
+$ read history.db :: SELECT * FROM sqlite_sequence
+shape (1, 2)
+  'name': str
+  'seq': int64
+,name,seq
+0,urls,13
+$ read history.db :: SELECT id, coalesce(title, url) AS label, visit_count, typed_count, hidden FROM urls ORDER BY id
+shape (12, 5)
+  'id': int64
+  'label': str
+  'visit_count': int64
+  'typed_count': int64
+  'hidden': int64
+,id,label,visit_count,typed_count,hidden
+0,1,sqlite3 — DB-API 2.0 interface for SQLite databases,64,16,0
+1,2,pandas documentation,64,16,0
+2,3,SELECT,0,0,0
+3,5,Inbox (3),0,0,0
+4,6,B-tree - Wikipedia,0,0,0
+5,7,karalang/kara,64,16,0
+6,8,https://maps.example.com/?q=Lyon,64,16,1
+7,9,Datatypes In SQLite,0,0,0
+8,10,Your cart,64,16,0
+9,11,Lyon weather,0,0,0
+10,12,Julian day - Wikipedia,0,0,0
+11,13,Today,0,0,0
+$ read history.db :: SELECT id, (visit_time - lag(visit_time) OVER (ORDER BY visit_time)) / 1000000 AS gap_s, lead(url, 1, -1) OVER (ORDER BY visit_time) AS next_url FROM visits ORDER BY visit_time LIMIT 6
+shape (6, 3)
+  'id': int64
+  'gap_s': float64
+  'next_url': int64
+,id,gap_s,next_url
+0,1,,10
+1,2,1716.0,8
+2,3,1716.0,2
+3,4,1716.0,7
+4,5,1716.0,1
+5,6,1716.0,10
+$ read history.db :: SELECT url, visit_count, round(100.0 * visit_count / (SELECT sum(visit_count) FROM urls), 1) AS pct FROM urls WHERE url LIKE 'https://www.sqlite.org/%' OR url LIKE '%wikipedia%' ORDER BY visit_count DESC
+shape (4, 3)
+  'url': str
+  'visit_count': int64
+  'pct': float64
+,url,visit_count,pct
+0,https://www.sqlite.org/lang_select.html,0,0.0
+1,https://en.wikipedia.org/wiki/B-tree,0,0.0
+2,https://www.sqlite.org/datatype3.html,0,0.0
+3,https://en.wikipedia.org/wiki/Julian_day,0,0.0
+$ read sensors.db parse_dates=ts :: SELECT * FROM readings WHERE device = 'th-03' ORDER BY ts LIMIT 6
+shape (6, 5)
+  'device': str
+  'ts': datetime64[s]
+  'temp_c': float64
+  'humidity': float64
+  'battery': int64
+,device,ts,temp_c,humidity,battery
+0,th-03,2026-10-25 00:00:14,11.7,73.5,90
+1,th-03,2026-10-25 00:30:14,11.1,65.0,90
+2,th-03,2026-10-25 01:00:14,11.65,57.2,90
+3,th-03,2026-10-25 01:30:14,11.05,49.5,89
+4,th-03,2026-10-25 02:00:14,11.6,71.0,89
+5,th-03,2026-10-25 02:30:14,11.0,63.2,89
+$ read sensors.db parse_dates=hour :: SELECT device, strftime('%Y-%m-%d %H:00', ts, 'unixepoch') AS hour, round(avg(temp_c), 2) AS t FROM readings WHERE temp_c > -100 GROUP BY device, hour ORDER BY device, hour LIMIT 8
+shape (8, 3)
+  'device': str
+  'hour': datetime64[us]
+  't': float64
+,device,hour,t
+0,th-01,2026-10-25 00:00:00,16.8
+1,th-01,2026-10-25 01:00:00,17.35
+2,th-01,2026-10-25 02:00:00,17.6
+3,th-01,2026-10-25 03:00:00,17.85
+4,th-01,2026-10-25 04:00:00,18.1
+5,th-01,2026-10-25 05:00:00,18.35
+6,th-01,2026-10-25 06:00:00,19.15
+7,th-01,2026-10-25 07:00:00,19.4
+$ read sensors.db :: SELECT device, count(*) AS n, count(temp_c) AS with_temp, sum(temp_c = -999) AS sentinels, min(temp_c) AS lo, max(temp_c) AS hi, round(avg(humidity), 3) AS hum FROM readings GROUP BY device
+shape (5, 7)
+  'device': str
+  'n': int64
+  'with_temp': int64
+  'sentinels': int64
+  'lo': float64
+  'hi': float64
+  'hum': float64
+,device,n,with_temp,sentinels,lo,hi,hum
+0,th-01,237,233,1,-999.0,25.35,69.329
+1,th-02,237,232,1,-999.0,26.3,66.365
+2,th-03,238,233,1,-999.0,13.05,61.355
+3,th-04,238,234,2,-999.0,24.0,58.32
+4,th-09,10,9,0,11.5,22.8,54.456
+$ read sensors.db :: SELECT r.device, d.site, count(*) AS n FROM readings r LEFT JOIN devices d ON d.device = r.device GROUP BY r.device ORDER BY d.site, r.device
+shape (5, 3)
+  'device': str
+  'site': str
+  'n': int64
+,device,site,n
+0,th-09,,10
+1,th-04,attic,238
+2,th-03,cellar,238
+3,th-01,greenhouse,237
+4,th-02,greenhouse,237
+$ read sensors.db head=8 :: SELECT device, ts, temp_c, round(avg(temp_c) OVER (PARTITION BY device ORDER BY ts ROWS BETWEEN 3 PRECEDING AND CURRENT ROW), 3) AS smooth FROM readings WHERE device = 'th-01' ORDER BY ts
+shape (237, 4)
+  'device': str
+  'ts': int64
+  'temp_c': float64
+  'smooth': float64
+,device,ts,temp_c,smooth
+0,th-01,1792888200,16.8,16.8
+1,th-01,1792890000,17.65,17.225
+2,th-01,1792891800,17.05,17.167
+3,th-01,1792893600,17.9,17.35
+4,th-01,1792895400,17.3,17.475
+5,th-01,1792897200,18.15,17.6
+6,th-01,1792899000,17.55,17.725
+7,th-01,1792900800,18.4,17.85
+$ read sensors.db :: SELECT device, date(ts, 'unixepoch') AS day, max(battery) - min(battery) AS drop_pct, min(battery) AS low FROM readings GROUP BY 1, 2 ORDER BY 1, 2
+shape (25, 4)
+  'device': str
+  'day': str
+  'drop_pct': int64
+  'low': int64
+,device,day,drop_pct,low
+0,th-01,2026-10-25,15,85
+1,th-01,2026-10-26,15,69
+2,th-01,2026-10-27,15,53
+3,th-01,2026-10-28,15,37
+4,th-01,2026-10-29,15,21
+5,th-02,2026-10-25,15,80
+6,th-02,2026-10-26,15,64
+7,th-02,2026-10-27,15,48
+8,th-02,2026-10-28,15,32
+9,th-02,2026-10-29,15,16
+10,th-03,2026-10-25,15,75
+11,th-03,2026-10-26,15,59
+12,th-03,2026-10-27,15,43
+13,th-03,2026-10-28,15,27
+14,th-03,2026-10-29,15,11
+15,th-04,2026-10-25,15,70
+16,th-04,2026-10-26,15,54
+17,th-04,2026-10-27,15,38
+18,th-04,2026-10-28,15,22
+19,th-04,2026-10-29,15,6
+20,th-09,2026-10-25,13,87
+21,th-09,2026-10-26,13,61
+22,th-09,2026-10-27,13,55
+23,th-09,2026-10-28,13,29
+24,th-09,2026-10-29,13,23
+$ read sensors.db dtype_backend=numpy_nullable head=5 :: SELECT device, ts, humidity, battery FROM readings WHERE ts % 3600 < 10 ORDER BY ts
+shape (240, 4)
+  'device': string
+  'ts': Int64
+  'humidity': Float64
+  'battery': Int64
+,device,ts,humidity,battery
+0,th-09,1792886400,,100
+1,th-02,1792886407,64.2,95
+2,th-01,1792890000,69.5,100
+3,th-02,1792890007,78.0,95
+4,th-01,1792893600,83.2,99
+$ chunks sensors.db chunksize=250 head=2 parse_dates=ts:s :: SELECT device, ts, temp_c FROM readings
+chunk 0
+shape (250, 3)
+  'device': str
+  'ts': datetime64[s]
+  'temp_c': float64
+,device,ts,temp_c
+0,th-09,2026-10-25 00:00:00,
+1,th-02,2026-10-25 00:00:07,18.8
+chunk 1
+shape (250, 3)
+  'device': str
+  'ts': datetime64[s]
+  'temp_c': float64
+,device,ts,temp_c
+0,th-03,2026-10-26 07:00:14,12.25
+1,th-04,2026-10-26 07:00:21,15.3
+chunk 2
+shape (250, 3)
+  'device': str
+  'ts': datetime64[s]
+  'temp_c': float64
+,device,ts,temp_c
+0,th-01,2026-10-27 14:30:00,22.1
+1,th-02,2026-10-27 14:30:07,22.8
+chunk 3
+shape (210, 3)
+  'device': str
+  'ts': datetime64[s]
+  'temp_c': float64
+,device,ts,temp_c
+0,th-03,2026-10-28 21:30:14,12.75
+1,th-04,2026-10-28 21:30:21,22.1
+$ read sensors.db parse_dates=ts:s :: SELECT device, ts, temp_c, humidity FROM readings WHERE temp_c IS NULL ORDER BY ts
+shape (19, 4)
+  'device': str
+  'ts': datetime64[s]
+  'temp_c': object
+  'humidity': float64
+,device,ts,temp_c,humidity
+0,th-09,2026-10-25 00:00:00,,
+1,th-02,2026-10-25 06:30:07,,80.5
+2,th-03,2026-10-25 13:00:14,,75.2
+3,th-04,2026-10-25 19:30:21,,70.0
+4,th-01,2026-10-26 02:30:00,,81.5
+5,th-02,2026-10-26 09:00:07,,76.2
+6,th-03,2026-10-26 15:30:14,,71.0
+7,th-04,2026-10-26 22:00:21,,66.5
+8,th-01,2026-10-27 05:00:00,,77.2
+9,th-02,2026-10-27 11:30:07,,72.0
+10,th-03,2026-10-27 18:00:14,,67.5
+11,th-04,2026-10-28 00:30:21,,62.2
+12,th-01,2026-10-28 07:30:00,,73.0
+13,th-02,2026-10-28 14:00:07,,68.5
+14,th-03,2026-10-28 20:30:14,,63.2
+15,th-04,2026-10-29 03:00:21,,58.0
+16,th-01,2026-10-29 10:00:00,,69.5
+17,th-02,2026-10-29 16:30:07,,64.2
+18,th-03,2026-10-29 23:00:14,,59.0
+$ read sensors.db :: SELECT typeof(ts), typeof(temp_c), count(*) FROM readings GROUP BY 1, 2
+shape (2, 3)
+  'typeof(ts)': str
+  'typeof(temp_c)': str
+  'count(*)': int64
+,typeof(ts),typeof(temp_c),count(*)
+0,integer,null,19
+1,integer,real,941
+$ read sensors.db :: SELECT device, ntile(4) OVER (ORDER BY temp_c) AS quartile, temp_c FROM readings WHERE ts % 21600 < 10 AND temp_c > -100 ORDER BY temp_c, device LIMIT 10
+shape (10, 3)
+  'device': str
+  'quartile': int64
+  'temp_c': float64
+,device,quartile,temp_c
+0,th-01,1,16.6
+1,th-01,1,16.8
+2,th-01,1,17.0
+3,th-01,1,17.2
+4,th-02,1,18.4
+5,th-01,1,18.5
+6,th-02,1,18.6
+7,th-01,1,18.7
+8,th-02,1,18.8
+9,th-01,1,18.9
+$ read sensors.db :: SELECT site, count(*) AS devices, group_concat(device, ', ') AS ids, min(installed) AS first FROM devices GROUP BY site ORDER BY site
+shape (3, 4)
+  'site': str
+  'devices': int64
+  'ids': str
+  'first': str
+,site,devices,ids,first
+0,attic,1,th-04,
+1,cellar,2,"th-03, th-05",2026-05-02
+2,greenhouse,2,"th-01, th-02",2026-03-14
+$ read ledger16.db head=8 :: SELECT * FROM txns ORDER BY id
+shape (150, 7)
+  'id': int64
+  'account_id': int64
+  'booked': str
+  'amount': object
+  'payee': str
+  'memo': str
+  'category': str
+,id,account_id,booked,amount,payee,memo,category
+0,1,2,2026-07-01,-80,Stadtwerke,,utilities
+1,2,1,2026-07-02,-69.4,Amazon,,
+2,3,2,2026-07-03,"-1,857.00",Rewe,,groceries
+3,4,1,2026-07-03,2850,Arbeitgeber GmbH,Ref 000388 – Arbeitgeber,salary
+4,5,2,2026-07-04,-36,café müller,,eating out
+5,6,1,2026-07-05,-26.1,Ünal Market,,groceries
+6,7,2,2026-07-05,"-1,533.00",ÖBB,,travel
+7,8,1,2026-07-06,-4.52,Deutsche Bahn,Ref 000776 – Deutsche,travel
+$ read ledger16.db :: SELECT typeof(amount) AS type, count(*) AS n FROM txns GROUP BY 1
+shape (4, 2)
+  'type': str
+  'n': int64
+,type,n
+0,integer,49
+1,null,5
+2,real,55
+3,text,41
+$ read ledger16.db :: SELECT payee, count(*) AS n, sum(amount) AS total FROM txns GROUP BY payee ORDER BY payee
+shape (10, 3)
+  'payee': str
+  'n': int64
+  'total': float64
+,payee,n,total
+0,Amazon,13,-683.8000000000001
+1,Arbeitgeber GmbH,13,37050.0
+2,Bäckerei Groß,12,-536.0
+3,café müller,25,-996.84
+4,Deutsche Bahn,12,-410.76
+5,Rewe,25,-518.8000000000001
+6,Spotify,12,-12.0
+7,Stadtwerke,13,-514.0
+8,ÖBB,12,-12.0
+9,Ünal Market,13,-594.2
+$ read ledger16.db :: SELECT id, booked, amount FROM txns WHERE booked NOT LIKE '____-__-__' OR amount IS NULL OR typeof(amount) = 'text' ORDER BY id
+shape (48, 3)
+  'id': int64
+  'booked': str
+  'amount': object
+,id,booked,amount
+0,3,2026-07-03,"-1,857.00"
+1,7,2026-07-05,"-1,533.00"
+2,11,2026-07-08,"-1,209.00"
+3,15,2026-07-11,"-1,885.00"
+4,17,2026-07-12,"-1,723.00"
+5,19,2026-07-13,"-1,561.00"
+6,23,2026-07-16,"-1,237.00"
+7,27,2026-07-19,"-1,913.00"
+8,29,2026-07-20,
+9,31,2026-07-21,"-1,589.00"
+10,34,2026-07-23,"-1,346.00"
+11,35,2026-07-24,"-1,265.00"
+12,39,2026-07-27,"-1,941.00"
+13,41,21.07.2026,-7
+14,43,2026-07-29,"-1,617.00"
+15,47,2026-08-01,"-1,293.00"
+16,51,2026-08-04,"-1,969.00"
+17,55,2026-08-06,"-1,645.00"
+18,58,2026-08-08,
+19,59,2026-08-09,"-1,321.00"
+20,63,2026-08-12,"-1,997.00"
+21,67,2026-08-14,"-1,673.00"
+22,68,2026-08-15,"-1,592.00"
+23,71,2026-08-17,"-1,349.00"
+24,75,2026-08-20,"-1,025.00"
+25,79,2026-08-22,"-1,701.00"
+26,82,11.08.2026,-14.6
+27,83,2026-08-25,"-1,377.00"
+28,85,2026-08-26,"-1,215.00"
+29,87,2026-08-28,
+30,91,2026-08-30,"-1,729.00"
+31,95,2026-09-02,"-1,405.00"
+32,99,2026-09-05,"-1,081.00"
+33,102,2026-09-07,"-1,838.00"
+34,103,2026-09-07,"-1,757.00"
+35,107,2026-09-10,"-1,433.00"
+36,111,2026-09-13,"-1,109.00"
+37,115,2026-09-15,"-1,785.00"
+38,116,2026-09-16,
+39,119,2026-09-18,"-1,461.00"
+40,123,31.08.2026,"-1,137.00"
+41,127,2026-09-23,"-1,813.00"
+42,131,2026-09-26,"-1,489.00"
+43,135,2026-09-29,"-1,165.00"
+44,139,2026-10-01,"-1,841.00"
+45,143,2026-10-04,"-1,517.00"
+46,145,2026-10-05,
+47,147,2026-10-07,"-1,193.00"
+$ read ledger16.db parse_dates=booked head=6 :: SELECT id, booked FROM txns WHERE id >= 38 ORDER BY id
+shape (113, 2)
+  'id': int64
+  'booked': datetime64[us]
+,id,booked
+0,38,2026-07-26
+1,39,2026-07-27
+2,40,2026-07-27
+3,41,
+4,42,2026-07-29
+5,43,2026-07-29
+$ read ledger16.db :: SELECT a.name, a.currency, count(t.id) AS n, round(total(t.amount), 2) AS total FROM accounts a LEFT JOIN txns t ON t.account_id = a.id GROUP BY a.id ORDER BY a.id
+shape (3, 4)
+  'name': str
+  'currency': str
+  'n': int64
+  'total': float64
+,name,currency,n,total
+0,Girokonto,EUR,75,34340.6
+1,Visa ✈,EUR,75,-1569.0
+2,Savings,GBP,0,0.0
+$ read ledger16.db :: SELECT payee, length(payee) AS chars, upper(payee) AS shout, lower(payee) AS quiet, hex(payee) AS hex FROM txns GROUP BY payee ORDER BY payee LIMIT 5
+shape (5, 5)
+  'payee': str
+  'chars': int64
+  'shout': str
+  'quiet': str
+  'hex': str
+,payee,chars,shout,quiet,hex
+0,Amazon,6,AMAZON,amazon,41006D0061007A006F006E00
+1,Arbeitgeber GmbH,16,ARBEITGEBER GMBH,arbeitgeber gmbh,41007200620065006900740067006500620065007200200047006D0062004800
+2,Bäckerei Groß,13,BäCKEREI GROß,bäckerei groß,4200E40063006B0065007200650069002000470072006F00DF00
+3,café müller,11,CAFé MüLLER,café müller,630061006600E90020006D00FC006C006C0065007200
+4,Deutsche Bahn,13,DEUTSCHE BAHN,deutsche bahn,4400650075007400730063006800650020004200610068006E00
+$ read ledger16.db :: SELECT category, count(*) AS n, round(sum(amount), 2) AS naive, round(sum(CAST(replace(amount, ',', '') AS REAL)), 2) AS spent FROM txns WHERE amount < 0 OR typeof(amount) = 'text' GROUP BY category ORDER BY spent
+shape (6, 4)
+  'category': str
+  'n': int64
+  'naive': float64
+  'spent': float64
+,category,n,naive,spent
+0,groceries,36,-1113.0,-22555.0
+1,travel,23,-422.76,-22245.76
+2,subscriptions,12,-12.0,-16356.0
+3,eating out,36,-1532.84,-3254.84
+4,utilities,12,-514.0,-1728.0
+5,,13,-683.8,-683.8
+$ read ledger16.db :: SELECT strftime('%Y-%m', booked) AS month, count(*) AS n FROM txns GROUP BY month
+shape (5, 2)
+  'month': str
+  'n': int64
+,month,n
+0,,3
+1,2026-07,45
+2,2026-08,45
+3,2026-09,44
+4,2026-10,13
+$ read ledger16.db :: SELECT memo, instr(memo, '–') AS dash, substr(memo, -6) AS tail, trim(memo, 'Ref ') AS trimmed FROM txns WHERE memo IS NOT NULL ORDER BY id LIMIT 5
+shape (5, 4)
+  'memo': str
+  'dash': int64
+  'tail': str
+  'trimmed': str
+,memo,dash,tail,trimmed
+0,Ref 000388 – Arbeitgeber,12,tgeber,000388 – Arbeitgeber
+1,Ref 000776 – Deutsche,12,utsche,000776 – Deutsch
+2,Ref 001164 – Café,12,– Café,001164 – Café
+3,Ref 001552 – Arbeitgeber,12,tgeber,001552 – Arbeitgeber
+4,Ref 001940 – Deutsche,12,utsche,001940 – Deutsch
+$ read mixed.db :: SELECT label, typeof(anything) AS none, typeof(n) AS numeric, typeof(t) AS text, typeof(r) AS real, typeof(i) AS integer, typeof(d) AS datetime, typeof(flag) AS boolean, typeof(price) AS decimal, typeof(code) AS varchar, typeof(raw) AS blob, typeof(f) AS floating_point, typeof(ch) AS charint FROM typed ORDER BY id
+shape (20, 13)
+  'label': str
+  'none': str
+  'numeric': str
+  'text': str
+  'real': str
+  'integer': str
+  'datetime': str
+  'boolean': str
+  'decimal': str
+  'varchar': str
+  'blob': str
+  'floating_point': str
+  'charint': str
+,label,none,numeric,text,real,integer,datetime,boolean,decimal,varchar,blob,floating_point,charint
+0,int,integer,integer,text,real,integer,integer,integer,integer,text,integer,integer,integer
+1,text int,text,integer,text,real,integer,integer,integer,integer,text,text,integer,integer
+2,text real,text,real,text,real,real,real,real,real,text,text,real,real
+3,real,real,real,text,real,real,real,real,real,text,real,real,real
+4,whole real,real,integer,text,real,integer,integer,integer,integer,text,real,integer,integer
+5,text exp,text,integer,text,real,integer,integer,integer,integer,text,text,integer,integer
+6,padded,text,integer,text,real,integer,integer,integer,integer,text,text,integer,integer
+7,hex text,text,text,text,text,text,text,text,text,text,text,text,text
+8,word,text,text,text,text,text,text,text,text,text,text,text,text
+9,date text,text,text,text,text,text,text,text,text,text,text,text,text
+10,compact date,text,integer,text,real,integer,integer,integer,integer,text,text,integer,integer
+11,blob,blob,blob,blob,blob,blob,blob,blob,blob,blob,blob,blob,blob
+12,null,null,null,null,null,null,null,null,null,null,null,null,null
+13,big,integer,integer,text,real,integer,integer,integer,integer,text,integer,integer,integer
+14,text big,text,real,text,real,real,real,real,real,text,text,real,real
+15,neg zero,real,integer,text,real,integer,integer,integer,integer,text,real,integer,integer
+16,tiny,real,real,text,real,real,real,real,real,text,real,real,real
+17,true,text,text,text,text,text,text,text,text,text,text,text,text
+18,comma,text,text,text,text,text,text,text,text,text,text,text,text
+19,empty,text,text,text,text,text,text,text,text,text,text,text,text
+$ read mixed.db :: SELECT * FROM typed ORDER BY id
+shape (20, 14)
+  'id': int64
+  'label': str
+  'anything': object
+  'n': object
+  't': object
+  'r': object
+  'i': object
+  'd': object
+  'flag': object
+  'price': object
+  'code': object
+  'raw': object
+  'f': object
+  'ch': object
+,id,label,anything,n,t,r,i,d,flag,price,code,raw,f,ch
+0,1,int,42,42,42,42.0,42,42,42,42,42,42,42,42
+1,2,text int,42,42,42,42.0,42,42,42,42,42,42,42,42
+2,3,text real,3.50,3.5,3.50,3.5,3.5,3.5,3.5,3.5,3.50,3.50,3.5,3.5
+3,4,real,3.5,3.5,3.5,3.5,3.5,3.5,3.5,3.5,3.5,3.5,3.5,3.5
+4,5,whole real,7.0,7,7.0,7.0,7,7,7,7,7.0,7.0,7,7
+5,6,text exp,1e3,1000,1e3,1000.0,1000,1000,1000,1000,1e3,1e3,1000,1000
+6,7,padded, 12 ,12, 12 ,12.0,12,12,12,12, 12 , 12 ,12,12
+7,8,hex text,0x1A,0x1A,0x1A,0x1A,0x1A,0x1A,0x1A,0x1A,0x1A,0x1A,0x1A,0x1A
+8,9,word,abc,abc,abc,abc,abc,abc,abc,abc,abc,abc,abc,abc
+9,10,date text,2026-10-29,2026-10-29,2026-10-29,2026-10-29,2026-10-29,2026-10-29,2026-10-29,2026-10-29,2026-10-29,2026-10-29,2026-10-29,2026-10-29
+10,11,compact date,20261029,20261029,20261029,20261029.0,20261029,20261029,20261029,20261029,20261029,20261029,20261029,20261029
+11,12,blob,b'AB',b'AB',b'AB',b'AB',b'AB',b'AB',b'AB',b'AB',b'AB',b'AB',b'AB',b'AB'
+12,13,null,,,,,,,,,,,,
+13,14,big,9223372036854775807,9223372036854775807,9223372036854775807,9.223372036854776e+18,9223372036854775807,9223372036854775807,9223372036854775807,9223372036854775807,9223372036854775807,9223372036854775807,9223372036854775807,9223372036854775807
+14,15,text big,9223372036854775808,9.223372036854776e+18,9223372036854775808,9.223372036854776e+18,9.223372036854776e+18,9.223372036854776e+18,9.223372036854776e+18,9.223372036854776e+18,9223372036854775808,9223372036854775808,9.223372036854776e+18,9.223372036854776e+18
+15,16,neg zero,-0.0,0,0.0,0.0,0,0,0,0,0.0,-0.0,0,0
+16,17,tiny,1e-07,1e-07,1.0e-07,1e-07,1e-07,1e-07,1e-07,1e-07,1.0e-07,1e-07,1e-07,1e-07
+17,18,true,true,true,true,true,true,true,true,true,true,true,true,true
+18,19,comma,"1,5","1,5","1,5","1,5","1,5","1,5","1,5","1,5","1,5","1,5","1,5","1,5"
+19,20,empty,,,,,,,,,,,,
+$ read mixed.db :: SELECT label, n = 42 AS n_is_42, t = 42 AS t_is_42, anything = 42 AS any_is_42, anything = '42' AS any_is_text_42, r > 3 AS r_over_3, t < 5 AS t_under_5 FROM typed ORDER BY id
+shape (20, 7)
+  'label': str
+  'n_is_42': float64
+  't_is_42': float64
+  'any_is_42': float64
+  'any_is_text_42': float64
+  'r_over_3': float64
+  't_under_5': float64
+,label,n_is_42,t_is_42,any_is_42,any_is_text_42,r_over_3,t_under_5
+0,int,1.0,1.0,1.0,0.0,1.0,1.0
+1,text int,1.0,1.0,0.0,1.0,1.0,1.0
+2,text real,0.0,0.0,0.0,0.0,1.0,1.0
+3,real,0.0,0.0,0.0,0.0,1.0,1.0
+4,whole real,0.0,0.0,0.0,0.0,1.0,0.0
+5,text exp,0.0,0.0,0.0,0.0,1.0,1.0
+6,padded,0.0,0.0,0.0,0.0,1.0,1.0
+7,hex text,0.0,0.0,0.0,0.0,1.0,1.0
+8,word,0.0,0.0,0.0,0.0,1.0,0.0
+9,date text,0.0,0.0,0.0,0.0,1.0,1.0
+10,compact date,0.0,0.0,0.0,0.0,1.0,1.0
+11,blob,0.0,0.0,0.0,0.0,1.0,0.0
+12,null,,,,,,
+13,big,0.0,0.0,0.0,0.0,1.0,0.0
+14,text big,0.0,0.0,0.0,0.0,1.0,0.0
+15,neg zero,0.0,0.0,0.0,0.0,0.0,1.0
+16,tiny,0.0,0.0,0.0,0.0,0.0,1.0
+17,true,0.0,0.0,0.0,0.0,1.0,0.0
+18,comma,0.0,0.0,0.0,0.0,1.0,1.0
+19,empty,0.0,0.0,0.0,0.0,1.0,1.0
+$ read mixed.db :: SELECT label, anything + 1 AS plus, anything || '!' AS cat, CAST(anything AS INTEGER) AS as_int, CAST(anything AS REAL) AS as_real, CAST(anything AS NUMERIC) AS as_num, CAST(anything AS TEXT) AS as_text FROM typed ORDER BY id
+shape (20, 7)
+  'label': str
+  'plus': float64
+  'cat': str
+  'as_int': float64
+  'as_real': float64
+  'as_num': float64
+  'as_text': str
+,label,plus,cat,as_int,as_real,as_num,as_text
+0,int,43.0,42!,42.0,42.0,42.0,42
+1,text int,43.0,42!,42.0,42.0,42.0,42
+2,text real,4.5,3.50!,3.0,3.5,3.5,3.50
+3,real,4.5,3.5!,3.0,3.5,3.5,3.5
+4,whole real,8.0,7.0!,7.0,7.0,7.0,7.0
+5,text exp,1001.0,1e3!,1.0,1000.0,1000.0,1e3
+6,padded,13.0, 12 !,12.0,12.0,12.0, 12 
+7,hex text,1.0,0x1A!,0.0,0.0,0.0,0x1A
+8,word,1.0,abc!,0.0,0.0,0.0,abc
+9,date text,2027.0,2026-10-29!,2026.0,2026.0,2026.0,2026-10-29
+10,compact date,20261030.0,20261029!,20261029.0,20261029.0,20261029.0,20261029
+11,blob,1.0,AB!,0.0,0.0,0.0,AB
+12,null,,,,,,
+13,big,9.223372036854776e+18,9223372036854775807!,9.223372036854776e+18,9.223372036854776e+18,9.223372036854776e+18,9223372036854775807
+14,text big,9.223372036854776e+18,9223372036854775808!,9.223372036854776e+18,9.223372036854776e+18,9.223372036854776e+18,9223372036854775808
+15,neg zero,1.0,0.0!,0.0,-0.0,-0.0,0.0
+16,tiny,1.0000001,1.0e-07!,0.0,1e-07,1e-07,1.0e-07
+17,true,1.0,true!,0.0,0.0,0.0,true
+18,comma,2.0,"1,5!",1.0,1.0,1.0,"1,5"
+19,empty,1.0,!,0.0,0.0,0.0,
+$ read mixed.db :: SELECT label, length(anything) AS len, abs(anything) AS abs, round(anything) AS rnd, quote(anything) AS quoted, anything IS NULL AS missing, coalesce(nullif(anything, ''), '(empty)') AS shown FROM typed ORDER BY id
+shape (20, 7)
+  'label': str
+  'len': float64
+  'abs': float64
+  'rnd': float64
+  'quoted': str
+  'missing': int64
+  'shown': object
+,label,len,abs,rnd,quoted,missing,shown
+0,int,2.0,42.0,42.0,42,0,42
+1,text int,2.0,42.0,42.0,'42',0,42
+2,text real,4.0,3.5,4.0,'3.50',0,3.50
+3,real,3.0,3.5,4.0,3.5,0,3.5
+4,whole real,3.0,7.0,7.0,7.0,0,7.0
+5,text exp,3.0,1000.0,1000.0,'1e3',0,1e3
+6,padded,4.0,12.0,12.0,' 12 ',0, 12 
+7,hex text,4.0,0.0,0.0,'0x1A',0,0x1A
+8,word,3.0,0.0,0.0,'abc',0,abc
+9,date text,10.0,2026.0,2026.0,'2026-10-29',0,2026-10-29
+10,compact date,8.0,20261029.0,20261029.0,'20261029',0,20261029
+11,blob,2.0,0.0,0.0,X'4142',0,b'AB'
+12,null,,,,NULL,1,(empty)
+13,big,19.0,9.223372036854776e+18,9.223372036854776e+18,9223372036854775807,0,9223372036854775807
+14,text big,19.0,9.223372036854776e+18,9.223372036854776e+18,'9223372036854775808',0,9223372036854775808
+15,neg zero,3.0,-0.0,0.0,0.0,0,-0.0
+16,tiny,7.0,1e-07,0.0,1.0e-07,0,1e-07
+17,true,4.0,0.0,0.0,'true',0,true
+18,comma,3.0,1.0,1.0,"'1,5'",0,"1,5"
+19,empty,0.0,0.0,0.0,'',0,(empty)
+$ read mixed.db :: SELECT region, sum(units) AS units, sum(revenue) AS revenue, count(revenue) AS months, max(units) AS max_text, max(CAST(units AS INTEGER)) AS max_units FROM imported GROUP BY region
+shape (4, 6)
+  'region': str
+  'units': int64
+  'revenue': float64
+  'months': int64
+  'max_text': str
+  'max_units': int64
+,region,units,revenue,months,max_text,max_units
+0,East,774,4655.0,12,91,118
+1,North,666,5824.17,12,92,111
+2,South,666,7287.5,12,92,111
+3,West,774,6816.25,12,91,118
+$ read mixed.db :: SELECT region, month, units FROM imported WHERE units > 100 ORDER BY region, month
+shape (44, 3)
+  'region': str
+  'month': str
+  'units': str
+,region,month,units
+0,East,2026-01,81
+1,East,2026-02,118
+2,East,2026-03,35
+3,East,2026-04,72
+4,East,2026-05,109
+5,East,2026-06,26
+6,East,2026-07,63
+7,East,2026-09,17
+8,East,2026-10,54
+9,East,2026-11,91
+10,East,2026-12,8
+11,North,2026-01,92
+12,North,2026-02,9
+13,North,2026-03,46
+14,North,2026-04,83
+15,North,2026-06,37
+16,North,2026-07,74
+17,North,2026-08,111
+18,North,2026-09,28
+19,North,2026-10,65
+20,North,2026-11,102
+21,North,2026-12,19
+22,South,2026-01,92
+23,South,2026-02,9
+24,South,2026-03,46
+25,South,2026-04,83
+26,South,2026-06,37
+27,South,2026-07,74
+28,South,2026-08,111
+29,South,2026-09,28
+30,South,2026-10,65
+31,South,2026-11,102
+32,South,2026-12,19
+33,West,2026-01,81
+34,West,2026-02,118
+35,West,2026-03,35
+36,West,2026-04,72
+37,West,2026-05,109
+38,West,2026-06,26
+39,West,2026-07,63
+40,West,2026-09,17
+41,West,2026-10,54
+42,West,2026-11,91
+43,West,2026-12,8
+$ read mixed.db :: SELECT region, month, units FROM imported WHERE CAST(units AS INTEGER) > 100 ORDER BY region, month
+shape (8, 3)
+  'region': str
+  'month': str
+  'units': str
+,region,month,units
+0,East,2026-02,118
+1,East,2026-05,109
+2,North,2026-08,111
+3,North,2026-11,102
+4,South,2026-08,111
+5,South,2026-11,102
+6,West,2026-02,118
+7,West,2026-05,109
+$ read mixed.db :: SELECT k, v, typeof(v) AS type FROM kv
+shape (5, 3)
+  'k': str
+  'v': object
+  'type': str
+,k,v,type
+0,logo,b'\x89PNG',blob
+1,note,,null
+2,owner,ops,text
+3,ratio,0.75,real
+4,schema,3,integer
+$ read mixed.db :: SELECT 1 / 0 AS div0, 5 % 0 AS mod0, 7 / 2 AS idiv, -7 / 2 AS neg, -7 % 3 AS negmod, 7.5 % 2 AS fmod, 9223372036854775807 + 1 AS over, -9223372036854775808 - 1 AS under, 1 << 62 AS shl, -1 >> 1 AS shr, ~5 AS inv, 0.1 + 0.2 AS tenths, 1e308 * 10 AS inf, 2 * 3 + 4 AS p
+shape (1, 14)
+  'div0': object
+  'mod0': object
+  'idiv': int64
+  'neg': int64
+  'negmod': int64
+  'fmod': float64
+  'over': float64
+  'under': float64
+  'shl': int64
+  'shr': int64
+  'inv': int64
+  'tenths': float64
+  'inf': float64
+  'p': int64
+,div0,mod0,idiv,neg,negmod,fmod,over,under,shl,shr,inv,tenths,inf,p
+0,,,3,-3,-1,1.0,9.223372036854776e+18,-9.223372036854776e+18,4611686018427387904,-1,-6,0.30000000000000004,inf,10
+$ read mixed.db :: SELECT 'a' < 'b' AS lt, 'a' < 'B' AS lt_upper, 'a' = 'A' COLLATE NOCASE AS nocase, 'x ' = 'x' COLLATE RTRIM AS rtrim, NULL = NULL AS eq_null, NULL IS NULL AS is_null, 1 IN (1, NULL) AS in1, 2 IN (1, NULL) AS in2, 2 NOT IN (1, NULL) AS notin, 5 BETWEEN 1 AND 10 AS btw, 'abc' LIKE 'A_C' AS lk, 'abc' GLOB 'A*' AS gl, x'41' = 'A' AS blob_text
+shape (1, 13)
+  'lt': int64
+  'lt_upper': int64
+  'nocase': int64
+  'rtrim': int64
+  'eq_null': object
+  'is_null': int64
+  'in1': int64
+  'in2': object
+  'notin': object
+  'btw': int64
+  'lk': int64
+  'gl': int64
+  'blob_text': int64
+,lt,lt_upper,nocase,rtrim,eq_null,is_null,in1,in2,notin,btw,lk,gl,blob_text
+0,1,0,1,1,,1,1,,,1,1,0,0
+$ read mixed.db :: SELECT round(2.5) AS a, round(-2.5) AS b, round(0.125, 2) AS c, round(2.675, 2) AS d, round(1.005, 2) AS e, round(1234.5678, -2) AS f, round(123456789.123456789, 4) AS g, printf('%5.1f|%-6s|%06d|%,d|%x|%e|%g', 3.14159, 'ab', 42, 1234567, 255, 12345.678, 0.0001) AS fmt, printf('%.3s', 'abcdef') AS cut
+shape (1, 9)
+  'a': float64
+  'b': float64
+  'c': float64
+  'd': float64
+  'e': float64
+  'f': float64
+  'g': float64
+  'fmt': str
+  'cut': str
+,a,b,c,d,e,f,g,fmt,cut
+0,3.0,-3.0,0.13,2.67,1.0,1235.0,123456789.1235,"  3.1|ab    |000042|1,234,567|ff|1.234568e+04|0.0001",abc
+$ read mixed.db :: SELECT date('2026-01-31', '+1 month') AS a, date('2024-02-29', '+1 year') AS b, datetime('2026-10-29 13:45:10.250', '+90 minutes') AS c, strftime('%Y-%m-%dT%H:%M:%fZ', '2026-10-29 13:45:10.250') AS d, date('2026-10-29', 'weekday 0') AS e, julianday('2000-01-01') AS f, date(2461343.5) AS g, datetime(1798000000, 'unixepoch') AS h, time('13:45') AS i, date('2026-13-01') AS bad, strftime('%s', '2026-10-29') AS secs, date('2026-10-29', '-0029 days', 'start of year') AS j
+shape (1, 12)
+  'a': str
+  'b': str
+  'c': str
+  'd': str
+  'e': str
+  'f': float64
+  'g': str
+  'h': str
+  'i': str
+  'bad': object
+  'secs': str
+  'j': str
+,a,b,c,d,e,f,g,h,i,bad,secs,j
+0,2026-03-03,2025-03-01,2026-10-29 15:15:10,2026-10-29T13:45:10.250Z,2026-11-01,2451544.5,2026-10-30,2026-12-23 04:26:40,13:45:00,,1793232000,2026-01-01
+$ read mixed.db :: SELECT upper('straße') AS up, lower('ÄÖÜ') AS low, length('naïve') AS chars, length(x'00ff00') AS bytes, substr('Grüße', 3, 2) AS mid, substr('abcdef', -3, 2) AS neg, substr('abcdef', 0, 3) AS zero, replace('a-b-c', '-', '+') AS rep, instr('banana', 'na') AS pos, ltrim('  x  ') || '|' AS lt, rtrim('xxhixx', 'x') AS rt, hex('é') AS hx, unicode('€') AS cp, char(75, 257) AS ch, concat('a', NULL, 1, 2.5) AS cc, concat_ws('-', 'a', NULL, 'b') AS cw, iif(1 > 2, 'yes', 'no') AS ii, max(3, 'a', 2.5) AS mx, min(3, NULL, 2) AS mn, typeof(min(3, NULL, 2)) AS mn_type
+shape (1, 20)
+  'up': str
+  'low': str
+  'chars': int64
+  'bytes': int64
+  'mid': str
+  'neg': str
+  'zero': str
+  'rep': str
+  'pos': int64
+  'lt': str
+  'rt': str
+  'hx': str
+  'cp': int64
+  'ch': str
+  'cc': str
+  'cw': str
+  'ii': str
+  'mx': str
+  'mn': object
+  'mn_type': str
+,up,low,chars,bytes,mid,neg,zero,rep,pos,lt,rt,hx,cp,ch,cc,cw,ii,mx,mn,mn_type
+0,STRAßE,ÄÖÜ,5,3,üß,de,ab,a+b+c,3,x  |,xxhi,C3A9,8364,Kā,a12.5,a-b,no,a,,null
+$ schema shop.db name=order_facts keys=id parse_dates=placed :: SELECT id, placed, total_cents / 100.0 AS total, status = 'paid' AS paid, coupon FROM orders LIMIT 3
+CREATE TABLE "order_facts" (
+"id" INTEGER,
+  "placed" TIMESTAMP,
+  "total" REAL,
+  "paid" INTEGER,
+  "coupon" TEXT,
+  CONSTRAINT order_facts_pk PRIMARY KEY ("id")
+)
+$ schema shop.db name=my"table sqltype=n:BIGINT :: SELECT count(*) AS n, NULL AS missing FROM orders
+CREATE TABLE "my""table" (
+"n" BIGINT,
+  "missing" TEXT
+)
+$ tosql mixed.db name=units_by_region :: SELECT region, sum(CAST(units AS INTEGER)) AS units, avg(revenue) AS avg_rev FROM imported GROUP BY region ;; SELECT type, name, sql FROM sqlite_master WHERE tbl_name = 'units_by_region' ;; SELECT * FROM units_by_region
+to_sql 4
+> SELECT type, name, sql FROM sqlite_master WHERE tbl_name = 'units_by_region'
+shape (2, 3)
+  'type': str
+  'name': str
+  'sql': str
+,type,name,sql
+0,table,units_by_region,"CREATE TABLE ""units_by_region"" (
+""index"" INTEGER,
+  ""region"" TEXT,
+  ""units"" INTEGER,
+  ""avg_rev"" REAL
+)"
+1,index,ix_units_by_region_index,"CREATE INDEX ""ix_units_by_region_index""ON ""units_by_region"" (""index"")"
+> SELECT * FROM units_by_region
+shape (4, 4)
+  'index': int64
+  'region': str
+  'units': int64
+  'avg_rev': float64
+,index,region,units,avg_rev
+0,0,East,774,387.9166666666667
+1,1,North,666,485.3475
+2,2,South,666,607.2916666666666
+3,3,West,774,568.0208333333334
+$ tosql shop.db name=customers :: SELECT 1 AS x
+! ValueError: Table 'customers' already exists.
+$ tosql shop.db name=customers if_exists=append index=False :: SELECT 61 AS id, 'Test Person' AS name, 'test@example.com' AS email, 'XX' AS country, '1' AS vip ;; SELECT id, name, vip, typeof(vip) AS type, tier, signup FROM customers WHERE id > 58
+to_sql 1
+> SELECT id, name, vip, typeof(vip) AS type, tier, signup FROM customers WHERE id > 58
+shape (3, 6)
+  'id': int64
+  'name': str
+  'vip': int64
+  'type': str
+  'tier': str
+  'signup': str
+,id,name,vip,type,tier,signup
+0,59,Elif Novak,0,integer,basic,2025-10-11
+1,60,Ada Lovelace,0,integer,basic,2025-10-22
+2,61,Test Person,1,integer,basic,
+$ tosql shop.db name=daily parse_dates=day index_label=row :: SELECT date(placed) AS day, count(*) AS orders, sum(total_cents) AS cents FROM orders GROUP BY day ORDER BY day LIMIT 4 ;; SELECT sql FROM sqlite_master WHERE name = 'daily' ;; SELECT row, day, typeof(day) AS type, orders FROM daily
+to_sql 4
+> SELECT sql FROM sqlite_master WHERE name = 'daily'
+shape (1, 1)
+  'sql': str
+,sql
+0,"CREATE TABLE ""daily"" (
+""row"" INTEGER,
+  ""day"" TIMESTAMP,
+  ""orders"" INTEGER,
+  ""cents"" INTEGER
+)"
+> SELECT row, day, typeof(day) AS type, orders FROM daily
+shape (4, 4)
+  'row': int64
+  'day': str
+  'type': str
+  'orders': int64
+,row,day,type,orders
+0,0,2026-01-04 00:00:00,text,1
+1,1,2026-01-05 00:00:00,text,1
+2,2,2026-01-06 00:00:00,text,1
+3,3,2026-01-07 00:00:00,text,1
+$ tosql sensors.db name=devices if_exists=replace index=False sqltype=installed:DATE :: SELECT device, site, installed FROM devices WHERE installed IS NOT NULL ;; SELECT sql FROM sqlite_master WHERE name = 'devices' ;; SELECT * FROM devices
+to_sql 4
+> SELECT sql FROM sqlite_master WHERE name = 'devices'
+shape (1, 1)
+  'sql': str
+,sql
+0,"CREATE TABLE ""devices"" (
+""device"" TEXT,
+  ""site"" TEXT,
+  ""installed"" DATE
+)"
+> SELECT * FROM devices
+shape (4, 3)
+  'device': str
+  'site': str
+  'installed': str
+,device,site,installed
+0,th-01,greenhouse,2026-03-14
+1,th-02,greenhouse,2026-03-14
+2,th-03,cellar,2026-05-02
+3,th-05,cellar,2026-07-30
+$ read notadb.db :: SELECT * FROM t
+! DatabaseError: Execution failed on sql 'SELECT * FROM t': file is not a database
+$ read empty.db :: SELECT * FROM sqlite_master
+shape (0, 5)
+  'type': object
+  'name': object
+  'tbl_name': object
+  'rootpage': object
+  'sql': object
+,type,name,tbl_name,rootpage,sql
+$ read empty.db :: SELECT * FROM t
+! DatabaseError: Execution failed on sql 'SELECT * FROM t': no such table: t
+$ read missing.db :: SELECT 1
+! OperationalError: unable to open database file
+$ read mixed.db :: SELECT sum(i) FROM typed WHERE label IN ('big', 'int')
+! DatabaseError: Execution failed on sql 'SELECT sum(i) FROM typed WHERE label IN ('big', 'int')': integer overflow
+$ read mixed.db :: SELECT abs(-9223372036854775808)
+! DatabaseError: Execution failed on sql 'SELECT abs(-9223372036854775808)': integer overflow
