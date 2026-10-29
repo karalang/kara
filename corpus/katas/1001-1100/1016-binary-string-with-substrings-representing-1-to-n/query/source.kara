@@ -1,0 +1,103 @@
+// LeetCode #1016: Binary String With Substrings Representing 1 To N --
+// the upper half
+//
+// Dropping the last bit of x's binary form leaves x / 2's, a substring of
+// it, so if every x in (n / 2, n] is a substring of s then so is every
+// smaller number. Those numbers have at most two bit lengths, and s has
+// at most len(s) substrings of each, so more than 2 len(s) of them cannot
+// all appear; otherwise each is searched for. O(len(s)^2 log n).
+
+fn query_string(s: Str, n: i64) -> bool {
+    if n - n / 2 > 2 * s.len() {
+        return false;
+    }
+    let mut x = n;
+    while x > n / 2 {
+        if not s.contains(f"{x:b}") {
+            return false;
+        }
+        x -= 1;
+    }
+    true
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `len` random bits, each a 1 with probability `ones` / 8
+fn random_bits(seed: mut ref i64, len: i64, ones: i64) -> String {
+    let mut s = String.new();
+    for _ in 0..len {
+        if next_random(mut seed) % 8 < ones {
+            s.push('1');
+        } else {
+            s.push('0');
+        }
+    }
+    s
+}
+
+fn main() {
+    // LeetCode's two examples, then a few more
+    let examples: Vec[(Str, i64)] = vec![
+        ("0110", 3),
+        ("0110", 4),
+        ("1", 1),
+        ("0", 1),
+        ("10", 2),
+        ("110", 3),
+        ("1101100", 6),
+        ("11011100", 6),
+        ("1111000101", 5),
+        ("1111000101", 6),
+        ("10010111011", 7),
+        ("1", 1000000000),
+    ];
+    for (s, n) in examples.iter() {
+        println(f"s = \"{s}\", n = {n} -> {query_string(s, n)}");
+    }
+    // random strings against every n up to a limit: how many pairs hold,
+    // the largest n that holds for any of them, and a checksum
+    let mut seed = 1016;
+    let groups: Vec[(i64, i64, i64, i64)] = vec![(300, 8, 4, 12), (300, 30, 4, 40), (30, 200, 4, 100), (3, 1000, 4, 300), (3, 1000, 7, 40), (3, 1000, 1, 40)];
+    for (count, len, ones, most) in groups.iter() {
+        let mut holds = 0;
+        let mut largest = 0;
+        let mut check = 0;
+        for _ in 0..count {
+            let s = random_bits(mut seed, len, ones);
+            for n in 1..most + 1 {
+                let answer = query_string(s, n);
+                if answer {
+                    holds += 1;
+                    largest = largest.max(n);
+                }
+                check = (check * 2 + if answer { 1 } else { 0 }) % 1000000007;
+            }
+        }
+        println(f"{count} random strings of {len} bits ({ones}/8 ones), n = 1..{most}: {holds} hold, largest {largest}, checksum {check}");
+    }
+    // the binary forms of 1..m written one after another hold for n = m
+    // and, with m's own form cut off the end, still hold unless m's form
+    // is nowhere else in them
+    let mut built = 0;
+    let mut cut = 0;
+    for m in 1..301 {
+        let mut s = String.new();
+        for x in 1..m + 1 {
+            s.push_str(f"{x:b}");
+        }
+        if query_string(s, m) {
+            built += 1;
+        }
+        let shorter = s.substring(0, s.len() - f"{m:b}".len());
+        if query_string(shorter, m) {
+            cut += 1;
+        }
+    }
+    println(f"300 built strings: {built} hold; with the last form cut off: {cut} hold");
+}

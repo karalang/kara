@@ -1,0 +1,19 @@
+s = "0110", n = 3 -> true
+s = "0110", n = 4 -> false
+s = "1", n = 1 -> true
+s = "0", n = 1 -> false
+s = "10", n = 2 -> true
+s = "110", n = 3 -> true
+s = "1101100", n = 6 -> true
+s = "11011100", n = 6 -> true
+s = "1111000101", n = 5 -> true
+s = "1111000101", n = 6 -> true
+s = "10010111011", n = 7 -> true
+s = "1", n = 1000000000 -> false
+300 random strings of 8 bits (4/8 ones), n = 1..12: 1095 hold, largest 8, checksum 120967138
+300 random strings of 30 bits (4/8 ones), n = 1..40: 3068 hold, largest 20, checksum 550826369
+30 random strings of 200 bits (4/8 ones), n = 1..100: 1395 hold, largest 70, checksum 286272615
+3 random strings of 1000 bits (4/8 ones), n = 1..300: 444 hold, largest 207, checksum 780215340
+3 random strings of 1000 bits (7/8 ones), n = 1..40: 46 hold, largest 32, checksum 607439293
+3 random strings of 1000 bits (1/8 ones), n = 1..40: 32 hold, largest 14, checksum 246000393
+300 built strings: 300 hold; with the last form cut off: 287 hold

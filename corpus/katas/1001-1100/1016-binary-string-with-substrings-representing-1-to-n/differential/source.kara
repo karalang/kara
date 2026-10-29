@@ -1,0 +1,291 @@
+// LeetCode #1016: Binary String With Substrings Representing 1 To N --
+// differential
+//
+// The five arms, copied, against the statement read literally and five
+// more properties. See README.md § Differential.
+
+fn q_star(s: Str, n: i64) -> bool {
+    if n - n / 2 > 2 * s.len() {
+        return false;
+    }
+    let mut x = n;
+    while x > n / 2 {
+        if not s.contains(f"{x:b}") {
+            return false;
+        }
+        x -= 1;
+    }
+    true
+}
+
+fn q_all(s: Str, n: i64) -> bool {
+    if n - n / 2 > 2 * s.len() {
+        return false;
+    }
+    for x in 1..n + 1 {
+        if not s.contains(f"{x:b}") {
+            return false;
+        }
+    }
+    true
+}
+
+fn q_set(s: Str, n: i64) -> bool {
+    let bits = s.bytes();
+    let mut values: Set[i64] = Set.new();
+    for i in 0..bits.len() {
+        if bits[i] != b'1' {
+            continue;
+        }
+        let mut value = 0;
+        let mut j = i;
+        while j < bits.len() {
+            value = value * 2 + if bits[j] == b'1' { 1 } else { 0 };
+            if value > n {
+                break;
+            }
+            values.insert(value);
+            j += 1;
+        }
+    }
+    values.len() == n
+}
+
+fn q_window(s: Str, n: i64) -> bool {
+    let bits = s.bytes();
+    let len = bits.len();
+    let mut low = 1;
+    let mut length = 1;
+    while low <= n {
+        let high = (2 * low - 1).min(n);
+        let need = high - low + 1;
+        if need > len - length + 1 {
+            return false;
+        }
+        let mut seen: Vec[bool] = Vec.filled(need, false);
+        let mut found = 0;
+        let mut window = 0;
+        for j in 0..len {
+            window = window * 2 + if bits[j] == b'1' { 1 } else { 0 };
+            if j >= length {
+                // the bit that left the window was worth 2^length
+                window -= if bits[j - length] == b'1' { 2 * low } else { 0 };
+            }
+            if j + 1 >= length and window >= low and window <= high and not seen[window - low] {
+                seen[window - low] = true;
+                found += 1;
+            }
+        }
+        if found < need {
+            return false;
+        }
+        low *= 2;
+        length += 1;
+    }
+    true
+}
+
+fn q_trie(s: Str, n: i64) -> bool {
+    let bits = s.bytes();
+    // node k's children are next[2k] (a 0) and next[2k + 1] (a 1); 0 is
+    // none, the root being node 0
+    let mut next: Vec[i64] = vec![0, 0];
+    let mut nodes = 0;
+    for i in 0..bits.len() {
+        if bits[i] != b'1' {
+            continue;
+        }
+        let mut node = 0;
+        let mut value = 0;
+        let mut j = i;
+        while j < bits.len() {
+            let bit = if bits[j] == b'1' { 1 } else { 0 };
+            value = value * 2 + bit;
+            if value > n {
+                break;
+            }
+            if next[2 * node + bit] == 0 {
+                next.push(0);
+                next.push(0);
+                nodes += 1;
+                next[2 * node + bit] = nodes;
+            }
+            node = next[2 * node + bit];
+            j += 1;
+        }
+    }
+    nodes == n
+}
+
+// the statement read literally: each of 1..n written out bit by bit and
+// looked for at every position of s
+fn literal(s: Str, n: i64) -> bool {
+    let bits = s.bytes();
+    for x in 1..n + 1 {
+        // x's bits, most significant first
+        let mut form: Vec[u8] = Vec.new();
+        let mut rest = x;
+        while rest > 0 {
+            form.insert(0, if rest % 2 == 1 { b'1' } else { b'0' });
+            rest /= 2;
+        }
+        let mut found = false;
+        let mut at = 0;
+        while not found and at + form.len() <= bits.len() {
+            let mut same = true;
+            for k in 0..form.len() {
+                if bits[at + k] != form[k] {
+                    same = false;
+                }
+            }
+            found = same;
+            at += 1;
+        }
+        if not found {
+            return false;
+        }
+    }
+    true
+}
+
+fn arms(s: Str, n: i64) -> Vec[bool] {
+    vec![q_star(s, n), q_all(s, n), q_set(s, n), q_window(s, n), q_trie(s, n)]
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_bits(seed: mut ref i64, len: i64, ones: i64) -> String {
+    let mut s = String.new();
+    for _ in 0..len {
+        if next_random(mut seed) % 8 < ones {
+            s.push('1');
+        } else {
+            s.push('0');
+        }
+    }
+    s
+}
+
+// the t-th string of 1 to 9 bits, shortest first
+fn small_bits(t: i64) -> String {
+    let mut len = 1;
+    let mut count = 2;
+    let mut index = t;
+    while index >= count {
+        index -= count;
+        len += 1;
+        count *= 2;
+    }
+    let mut s = String.new();
+    for _ in 0..len {
+        s.push(if index % 2 == 1 { '1' } else { '0' });
+        index /= 2;
+    }
+    s
+}
+
+fn main() {
+    let names = ["star", "all", "set", "window", "trie"];
+    let mut failures: Vec[i64] = Vec.filled(6, 0);
+    let mut checks = 0;
+    let mut rows = 0;
+    let mut check = 0;
+    let mut seed = 10161;
+    for t in 0..1177 {
+        // every string of 1 to 9 bits (1022) against n = 1..12, then 100
+        // random of 10 to 60 bits against n = 1..40, 15 random of 200 bits
+        // against n = 1..60, and the binary forms of 1..m written out for m
+        // up to 40, against n = 1..m + 2
+        let (s, most) = if t < 1022 {
+            (small_bits(t), 12)
+        } else if t < 1122 {
+            let len = 10 + next_random(mut seed) % 51;
+            let ones = 2 + next_random(mut seed) % 5;
+            (random_bits(mut seed, len, ones), 40)
+        } else if t < 1137 {
+            (random_bits(mut seed, 200, 4), 60)
+        } else {
+            let m = t - 1136;
+            let mut built = String.new();
+            for x in 1..m + 1 {
+                built.push_str(f"{x:b}");
+            }
+            (built, m + 2)
+        };
+        let len = s.len();
+        let longer = f"{s}0";
+        let led = f"1{s}";
+        // s without its leading zeros
+        let bytes = s.bytes();
+        let mut first = 0;
+        while first < len and bytes[first] == b'0' {
+            first += 1;
+        }
+        let stripped = s.substring(first, len);
+        let mut before: Vec[bool] = vec![true, true, true, true, true];
+        for n in 1..most + 1 {
+            let got = arms(s, n);
+            rows += 1;
+            check = (check * 2 + if got[0] { 1 } else { 0 }) % 1000000007;
+            let exact = literal(s, n);
+            let grown = arms(longer, n);
+            let fronted = arms(led, n);
+            let bare = arms(stripped, n);
+            for a in 0..5 {
+                let c = got[a];
+                // P1: the statement
+                checks += 1;
+                if c != exact {
+                    failures[0] += 1;
+                }
+                // P2: holding for n means holding for n - 1
+                checks += 1;
+                if c and not before[a] {
+                    failures[1] += 1;
+                }
+                // P3: a bit added at either end keeps it holding
+                checks += 1;
+                if c and not (grown[a] and fronted[a]) {
+                    failures[2] += 1;
+                }
+                // P4: never for n >= 4 len(s) + 2, and for n = 1 exactly
+                // when s has a 1
+                if n >= 4 * len + 2 or n == 1 {
+                    checks += 1;
+                    let want = n == 1 and first < len;
+                    if c != want {
+                        failures[3] += 1;
+                    }
+                }
+                // P5: leading zeros change nothing
+                checks += 1;
+                if bare[a] != c {
+                    failures[4] += 1;
+                }
+                // P6: each arm agrees with at least two of the other four
+                checks += 1;
+                let mut agree = 0;
+                for o in 0..5 {
+                    if o != a and got[o] == c {
+                        agree += 1;
+                    }
+                }
+                if agree < 2 {
+                    failures[5] += 1;
+                }
+            }
+            before = got;
+        }
+    }
+    let mut total = 0;
+    for p in 0..6 {
+        total += failures[p];
+        if failures[p] > 0 {
+            println(f"P{p + 1}: {failures[p]} failures");
+        }
+    }
+    println(f"{rows} queries: checksum {check}, {checks} checks over {names.len()} arms: {total} failures");
+}

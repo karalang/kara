@@ -1,0 +1,48 @@
+// LeetCode #1016: Binary String With Substrings Representing 1 To N --
+// bench
+//
+// The ★ arm (../query.kara) on 200 random strings of 1,000 bits, each
+// asked for every n from 1 to 400, folding the answers into a count and a
+// checksum. See ../README.md § Benchmarks.
+
+fn query_string(s: Str, n: i64) -> bool {
+    if n - n / 2 > 2 * s.len() {
+        return false;
+    }
+    let mut x = n;
+    while x > n / 2 {
+        if not s.contains(f"{x:b}") {
+            return false;
+        }
+        x -= 1;
+    }
+    true
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let strings = 200;
+    let len = 1000;
+    let most = 400;
+    let mut seed = 1016;
+    let mut holds = 0;
+    let mut check = 0;
+    for _ in 0..strings {
+        let mut s = String.new();
+        for _ in 0..len {
+            s.push(if next_random(mut seed) % 2 == 1 { '1' } else { '0' });
+        }
+        for n in 1..most + 1 {
+            let answer = query_string(s, n);
+            if answer {
+                holds += 1;
+            }
+            check = (check * 2 + if answer { 1 } else { 0 }) % 1000000007;
+        }
+    }
+    println(f"{strings} strings of {len} bits, n = 1..{most}: {holds} hold, checksum {check}");
+}
