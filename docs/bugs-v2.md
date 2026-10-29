@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| false-positive | 65 |
+| false-positive | 68 |
 | diagnostics | 63 |
 | missing-feature | 49 |
 | perf | 39 |
@@ -77,13 +77,13 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | typecheck | 118 |
 | mir | 58 |
 | mir-llvm | 49 |
-| ownership | 28 |
+| ownership | 30 |
 | interp | 25 |
 | cli | 25 |
 | codegen | 22 |
 | runtime | 19 |
 | parser | 19 |
-| effect | 4 |
+| effect | 5 |
 | other | 3 |
 | resolver | 3 |
 | autopar | 2 |
@@ -98,10 +98,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 |---|---|---|---|---|---|
 | B-2026-10-28-3 | 2026-10-28 | mir-llvm | low | A compiled program's run time moves 10-20% with where its hot function lands, and the runtime archive is one of the things that moves it: kata 125 runs about 10% slower whenever karac.main sits at 16 mod 64 (the full archive's larger headers shift user code by 0x3130 bytes), kata 28 KMP 0.41 vs 0.52 s between layouts; no alignment setting tried removes the swing without slowing another program 7-20% | — |
 | B-2026-10-28-10 | 2026-10-28 | mir-llvm | low | An auto-par build of apps/cli/mini_inflect takes about 13 s against 6 s with KARAC_AUTO_PAR=0 (20 s before 630f13fdf6 and the unit schedule, KARAC_MIR_UNIT_SCHEDULE). The cost is one function, not the parallel program as a whole: statement auto-par makes `new_tab` (the inflection tables, run once) a 25-task coroutine, and its `new_tab#resume` (51,722 instructions) costs 3.7 s of opt + llc alone, against 1.2 s for the in-order `new_tab#seq`. Corrected 10-29: the parallel module costs 1.18x the in-order one's CPU, not 2.8x; the 2.8x was the two modules' wall times while they shared 4 cores | — |
-| B-2026-10-28-16 | 2026-10-28 | typecheck | medium | A binary operator whose left operand is a primitive and whose impl is the program's (`impl Mul[Col] for f64`, then `2.0 * col`) is refused by `karac check` with "expected 'f64', found 'Col'"; the same for `10.0 - col` (`impl Sub[Col] for f64`) and `5 * icol` (`impl Mul[ICol] for i64`) | — |
-| B-2026-10-28-18 | 2026-10-28 | typecheck | low | A method call of a generic operator trait's method whose receiver type has several impls of it that differ only in the right operand (`col.mul(2.0)` with `Mul[f64]`, `Mul[i64]`, `Mul[Col]` and `Mul[Mask]` for `Col`) is refused as "ambiguous method 'mul' ... use UFCS", although the argument's type selects exactly one impl; the operator form `col * 2.0` resolves the same impls; since B-2026-10-28-17's fix the UFCS form it suggests (`Mul.mul(col, 2.0)`, and `Mul.mul(2.0, col)` with `impl Mul[Col] for f64`) is refused as ambiguous the same way, because UFCS selects by trait but not yet by the trait's argument | — |
-| B-2026-10-28-21 | 2026-10-28 | typecheck | medium | A type with two `Index` impls that differ in the index type (`Index[String]` and `Index[i64]` for a `Frame`, so `f["a"]` and `f[0]`) only consults the first: `f[1]` is refused with "expected 'String', found 'i64'" | — |
-| B-2026-10-28-22 | 2026-10-28 | typecheck | medium | A user operator impl is not found for an operand of explicit `ref T` type: `fn add_refs(x: ref Col, y: ref Col) -> Col { x + y }` is refused with "type 'ref Col' does not implement trait Add", even when the impl borrows (`fn add(self, rhs: Col)`); `x * 2.0` likewise, and `-x` reads "unary '-' requires numeric type, found 'ref Col'" | — |
 | B-2026-10-28-27 | 2026-10-28 | cli | low | The manifest keys design.md §4 promises for import names are not implemented: a dependency's `alias = "..."`, the optional `[package].import = "..."`, and the rule that a hyphen in a package name maps to `_` in the import path (`kara-data` is imported from `kara_data`); kara-data's `import data` depends on all three | — |
 | B-2026-10-28-32 | 2026-10-28 | typecheck | medium | `prefix ?? default` on a bare (borrowed) `Option[String]` parameter is refused as "'??' requires an `Option` or a `Result` on the left, found 'ref Option[String]'" with the help "an unwrapped value needs no fallback — drop the '?? ...'", which is wrong advice; the same on `Option[i64]` checks and runs, and `prefix.clone() ?? default` is the fix the message should offer | — |
 | B-2026-10-28-33 | 2026-10-28 | mir-llvm | medium | The MIR compiled backend runs kata 5's expand-around-center seq bench 1.22x legacy's instructions and 1.45x its cycles, turning a kata that beat Rust (0.95x) into one that trails it (1.17x rustc -O, 1.28x overflow-checked rustc, 1.43x clang -O3) | — |
@@ -129,6 +125,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-29-32 | 2026-10-29 | mir-llvm | medium | On the MIR compiled backend, `String.contains` with a needle of at most 16 bytes calls `memchr` and then `memcmp` at every place the needle's first byte occurs, so on a two-letter haystack (a binary string, where that byte is every other one) it costs 3.2 ns per haystack byte: 9.4x C `strstr` and 7.2x Rust `str::contains`; kata 1016's bench is 8.5x C | — |
 | B-2026-10-29-35 | 2026-10-29 | typecheck | low | A comparison does not give a constructor or tuple operand the other operand's type, so a `ref` to a Copy value inside it is refused: with `n: ref i64` from `for n in v.iter()`, `value == Some(n)`, `Some(n) == value`, `value != Some(n)` and `pair == (n, 5)` fail "cannot compare 'Option[i64]' and 'Option[ref i64]'" (or the tuple form) with no fix-it, though `let w: Option[i64] = Some(n)`, `same(value, Some(n))` and `vec![Some(n)]` into a `Vec[Option[i64]]` all read `n` as an `i64` | — |
 | B-2026-10-29-45 | 2026-10-29 | typecheck | low | `karac fix` has no `own` fix for a closure's bare parameter given away by an `own self` method (it offers `#[derive(Copy)]`), by a writing method (it says `mut ref`), by `return x` / `let y = x; y` (the caller gets E0516 instead), or by a returned closure that captures it (E0509 at the store) | — |
+| B-2026-10-29-46 | 2026-10-29 | ownership | medium | `method_param_modes` is keyed by `"Type.method"`, so a type with two impls of one operator trait (`impl Add for Col` with a borrowing `rhs: Col` and `impl Add[Flags] for Col` with `rhs: own Flags`) gives every `col + x` the LAST impl's parameter modes: `a + b` then `a + b` is refused as a use of moved `b`, though the impl `a + b` calls borrows it and the MIR build runs it | — |
+| B-2026-10-29-47 | 2026-10-29 | ownership | medium | A program's own `struct Mask` is read as the SIMD scalar `Mask` by D5 (`COPY_SCALARS` in src/d5_params.rs lists "Mask" by name), so a bare `m: Mask` parameter is not rewritten to `ref Mask` and every call moves its argument: `count(m)` twice is refused as a use of moved `m`, and the same struct renamed `Bits` checks and runs | — |
+| B-2026-10-29-48 | 2026-10-29 | effect | low | With a program `impl Mul[Col] for f64`, every `f64 * f64` in the program is attributed to that impl's `f64.mul` by the effect checker: a helper doing `*x * k` that the impl calls is reported as a mutual recursion group with `f64.mul`, and the impl's effects flow to every float multiplication | — |
 
 ### Relocated
 
@@ -355,9 +354,13 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-28-13 | typecheck+ownership | low | `karac check` reports one identical diagnostic per impl for a mistake in a trait default body copied into several impls: a use after a move in `Use.r… | ac5a67f639 |
 | B-2026-10-28-14 | mir-llvm | low | apps/pipeline/grain_intake's auto-par build runs under 0.9x of its in-order build at four workers (21-run medians 0.886, 0.881, 0.989, 0.88, 0.91 ove… | 01665b3473 |
 | B-2026-10-28-15 | mir-llvm | low | A native program that reaches an auto-par site pays a fixed cost for going multi-threaded: about 0.2-0.3 ms per worker to start the pool on a 4-core… | 9a4a2338b8 |
+| B-2026-10-28-16 | typecheck | medium | A binary operator whose left operand is a primitive and whose impl is the program's (`impl Mul[Col] for f64`, then `2.0 * col`) is refused by `karac… | b3b51adb23 |
 | B-2026-10-28-17 | typecheck+mir | medium | A trait-qualified call of an operator method (`Add.add(p, q)`, `Mul.mul(2.0, col)`, `Add.add(2, 3)`) passes `karac check` but leaves its result untyp… | 5ae4458dbf |
+| B-2026-10-28-18 | typecheck | low | A method call of a generic operator trait's method whose receiver type has several impls of it that differ only in the right operand (`col.mul(2.0)`… | 64981e4919 |
 | B-2026-10-28-19 | interp+mir-llvm | low | An operator trait's method called by name on a primitive (`2.add(3)`) passes `karac check` but does not run: the interpreter stops with "call of unkn… | 5ae4458dbf |
 | B-2026-10-28-20 | typecheck | low | A type-qualified call of a trait method (`P.add(a, b)` for `impl Add for P`) is refused by `karac check` with "expected 1 argument(s), found 2", thou… | 5ae4458dbf |
+| B-2026-10-28-21 | typecheck | medium | A type with two `Index` impls that differ in the index type (`Index[String]` and `Index[i64]` for a `Frame`, so `f["a"]` and `f[0]`) only consults th… | 35bc726a82 |
+| B-2026-10-28-22 | typecheck | medium | A user operator impl is not found for an operand of explicit `ref T` type: `fn add_refs(x: ref Col, y: ref Col) -> Col { x + y }` is refused with "ty… | eba10af936 |
 | B-2026-10-28-23 | typecheck+mir | medium | A closure whose error type comes only from a `?` inside it passes `karac check` but does not build on MIR: `let get = \|s: Str\| { if s.len() > 0 { Ok(… | ed940b7730 |
 | B-2026-10-28-24 | typecheck+mir | medium | Calling a closure bound by `let` moves its non-Copy arguments, contrary to core-semantics §5.10 (a closure's parameters are ordinary bare, borrowed,… | da37ab3afe |
 | B-2026-10-28-25 | ownership+mir | medium | `let r = match rx { Some(ref r) => r, None => return . | 0d1ad90014 |
