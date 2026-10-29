@@ -10,4 +10,4 @@ backends = ["mir-interp", "mir-llvm", "mir-llvm-asan", "mir-build"]
 env = {}
 bucket = "check-refuses:E0251"
 classified_with = "9913c6855"
-extracted_src = "39077536"
+extracted_src = "39b83de4"

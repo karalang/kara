@@ -143,11 +143,11 @@ which left one warning: `struct Parser` shadows a prelude type, so it is
 
 ## Gaps found
 
-- **B-2026-10-29-16** (open): `for x in mut v` gets a keyword error with
+- **B-2026-10-29-16** (fixed in kara c602325768): `for x in mut v` gets a keyword error with
   no pointer to `v.iter_mut()`, and two cascade errors.
-- **B-2026-10-29-17** (open): an unclosed struct before the next item is
+- **B-2026-10-29-17** (fixed in kara c24082c6ee): an unclosed struct before the next item is
   reported at the next `struct`, with an `r#struct` suggestion.
-- **B-2026-10-29-1** (open), met once more.
+- **B-2026-10-29-1** (fixed in kara 38876d470b), met once more.
 
 ## What reading a spreadsheet would need (notes for M4c)
 

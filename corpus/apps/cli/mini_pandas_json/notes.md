@@ -128,11 +128,11 @@ as first written.
 
 ## Gaps found
 
-- **B-2026-10-28-31** (open): `if c { a = x } else { b = y }` as a statement gets a
+- **B-2026-10-28-31** (fixed in kara d9df626fe4): `if c { a = x } else { b = y }` as a statement gets a
   correct `;` fix-it for the first arm only, and `karac fix` refuses to
   apply it, because the parser does not recover as if the `;` were there
   and the fixed file reports more errors than the original.
-- **B-2026-10-28-32** (open): `prefix ?? name.to_string()` on a bare (borrowed)
+- **B-2026-10-28-32** (fixed in kara 03e92379b1): `prefix ?? name.to_string()` on a bare (borrowed)
   `Option[String]` parameter is refused as "'??' requires an `Option` or a
   `Result` on the left, found 'ref Option[String]'", with the help "drop
   the '?? ...'", which is wrong; on an `Option[i64]` it checks. The app

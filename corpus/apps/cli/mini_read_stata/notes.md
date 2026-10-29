@@ -127,7 +127,7 @@ Since the fix (46a1f3e2e3) the line is back as first written.
   `karac build` and the ASan lane read a half-written slot (1.5 prints
   as `5.28426686e-315`, -7 as `4294967289` or junk). The workaround was
   one `as f64` in `float_missing`.
-- **B-2026-10-29-23** (open): Rust-style `Result<(), E>`, `Vec<i64>` or
+- **B-2026-10-29-23** (fixed in kara 028b93b8ce): Rust-style `Result<(), E>`, `Vec<i64>` or
   `Option<i64>` in a type gets a bare token error with no pointer to
   Kāra's `[T]`, and no fix.
 

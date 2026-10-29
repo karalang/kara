@@ -142,12 +142,12 @@ the first run matched pandas on all 1,803 lines.
 
 ## Gaps found
 
-- **B-2026-10-29-13** (open): the fix for a keyword used as a binding
+- **B-2026-10-29-13** (fixed in kara 9d11090195): the fix for a keyword used as a binding
   name renames the binding and none of its uses.
 - **B-2026-10-29-14** (open): a `Vec` built from borrowed parameters
   passed where a `Vec` is expected has no help or fix.
 - **B-2026-10-28-28** (fixed in 80e76392cf; the app passes `p` itself
-  again) and **B-2026-10-29-10** (open), each met once more.
+  again) and **B-2026-10-29-10** (fixed in kara 03e92379b1), each met once more.
 
 ## What query and eval would need (notes for M4c)
 

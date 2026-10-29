@@ -2777,7 +2777,7 @@ fn formatted_index(l: Layout, cx: Ctx) -> Result[Vec[String], String] {
     let mut out: Vec[String] = Vec.new();
     if show_col_idx_names(l) {
         for n in l.frame.columns.names() {
-            // B-2026-10-29-10: without the clone `karac check` passes and MIR refuses.
+            // `??` on the borrowed item moves its String: the check asks for the clone (B-2026-10-29-10).
             out.push(n.clone() ?? String.new());
         }
     } else {

@@ -162,7 +162,7 @@ mistake.
   before the context reaches it, so `r + (255 << b)` is refused as well.
   `bit_op` named the mask as a `u64` until the fix; it is back to the
   literal.
-- **B-2026-10-29-29** (open): for `!x` on an integer, the message and
+- **B-2026-10-29-29** (fixed in kara 08ffa923e1): for `!x` on an integer, the message and
   the JSON replacement of `karac check` say `not`, which then fails
   typecheck; `karac fix` itself writes the right `~x`.
 

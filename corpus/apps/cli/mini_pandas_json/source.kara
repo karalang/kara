@@ -1875,7 +1875,7 @@ fn str_dummies(f: Frame, name: Str, sep: Str) -> Result[Frame, String] {
 // bool column per value, in sorted order, at the end of the frame.
 fn get_dummies(f: Frame, name: Str, prefix: Option[String]) -> Result[Frame, String] {
     let c = f.col(name)?;
-    // B-2026-10-28-32: `prefix ?? ..` on the borrowed Option is refused with a wrong hint.
+    // `??` on the borrowed Option would move its String; the check asks for the clone (B-2026-10-28-32).
     let p = prefix.clone() ?? name.to_string();
     let texts: Vec[Option[String]] = range_idx(c.len()).iter().map(|i| if c.is_na(*i) { None } else { Some(cell_text(c, *i)) }).collect();
     let values: Vec[String] = match c {

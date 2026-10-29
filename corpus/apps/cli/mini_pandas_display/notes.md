@@ -150,13 +150,13 @@ those written as `let none: Option[String] = None; [none].to_vec()` and
   is refused; the fold takes `Val` as its accumulator.
 - **B-2026-10-29-6** (open): an `if` or `match` with a known type does not pass it
   into its branches, so a nested `collect` there cannot infer.
-- **B-2026-10-29-7** (open): the closure return-type fix deletes the type the body
+- **B-2026-10-29-7** (fixed in kara 0a5d255d8a): the closure return-type fix deletes the type the body
   needed; it could move it onto the binding as an `Fn` type.
-- **B-2026-10-29-8** (open): the turbofish fix mid-chain deletes the type and
+- **B-2026-10-29-8** (fixed in kara 0a5d255d8a): the turbofish fix mid-chain deletes the type and
   leaves an error at the next method.
 - **B-2026-10-29-9** (fixed in af7bbf1e39): `[None].to_vec()` checked but did not
   build on MIR; the app now writes it that way.
-- **B-2026-10-29-10** (open): `??` on a `ref Option[String]` loop item passes
+- **B-2026-10-29-10** (fixed in kara 03e92379b1): `??` on a `ref Option[String]` loop item passes
   check and is refused by the build.
 
 ## What printing would need (notes for M4c)
