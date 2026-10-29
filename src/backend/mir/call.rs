@@ -1175,14 +1175,19 @@ impl<'ctx> Cx<'ctx, '_> {
                     self.store(d, s.into())?;
                     return self.store(self.offset(d, 8)?, n.into());
                 }
-                // A literal into a local nothing but shared borrows and its
-                // drop ever reads borrows the literal's bytes, capacity 0,
-                // instead of copying them out (`KARAC_MIR_BORROW_LITERALS=0`
-                // copies every one).
+                // A literal borrows its static bytes, capacity 0, instead of
+                // copying them out, wherever the `String` goes: returned,
+                // moved, stored or mutated (B-2026-10-28-42; kata 273's
+                // `return "One"` paid a malloc and a copy per call, legacy
+                // none). The bytes live for the whole program, and nothing
+                // writes them: every `String` mutator either only shortens
+                // it (`clear`, `pop`, `truncate`) or grows it through
+                // `grow_by_one` / `karac_mir_vec_reserve`, which copy a
+                // capacity-0 buffer out before writing; drop skips it; and
+                // a `String` exposes no capacity to observe.
+                // `KARAC_MIR_BORROW_LITERALS=0` copies every one.
                 if std::env::var("KARAC_MIR_BORROW_LITERALS").as_deref() != Ok("0")
                     && matches!(args, [Operand::Const(c)] if matches!(c.kind, ConstKind::Str(_)))
-                    && dest.projection.is_empty()
-                    && self.body.is_some_and(|b| only_borrowed(b, dest.local))
                 {
                     self.store(d, s.into())?;
                     self.store(self.offset(d, 8)?, n.into())?;
