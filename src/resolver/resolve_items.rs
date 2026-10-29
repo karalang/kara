@@ -135,10 +135,27 @@ impl<'a> super::Resolver<'a> {
                 Item::EnumDef(e) => (&e.name, &e.generic_params),
                 _ => continue,
             };
-            if generics
-                .as_ref()
-                .is_some_and(|g| !g.effect_params.is_empty())
-            {
+            let effect_params = generics.as_ref().map_or(&[][..], |g| &g.effect_params[..]);
+            // A type's solved set is written as one `with` argument
+            // (`EventBus[with writes(Db)]`), so in v1 a struct or enum
+            // declares at most one effect variable (design.md § Effect
+            // variables). A function may declare several.
+            for extra in effect_params.iter().skip(1) {
+                self.errors.push(ResolveError {
+                    message: format!(
+                        "`{name}` declares a second effect variable `{}`; a struct or enum \
+                         declares at most one in v1, since its effect set is written as one \
+                         `with` argument (`{name}[with ...]`)",
+                        extra.name
+                    ),
+                    span: extra.span,
+                    kind: ResolveErrorKind::EffectVarKindMismatch,
+                    suggestion: None,
+                    replacement: None,
+                    stub_hint: None,
+                });
+            }
+            if !effect_params.is_empty() {
                 with_vars.insert(name);
             } else {
                 without.push(name);

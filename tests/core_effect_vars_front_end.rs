@@ -219,3 +219,26 @@ fn an_effect_argument_outside_a_type_is_a_parse_error() {
         ],
     );
 }
+
+#[test]
+fn a_struct_declares_at_most_one_effect_variable_and_a_function_several() {
+    // design.md § Effect variables (ruled 85d53d9b6): a type's set is one
+    // `with` argument, so a struct or enum declares one variable.
+    let err = only_error(
+        "struct Two[with E, F] { a: Vec[Fn(i64) with E], b: Vec[Fn(i64) with F] }
+fn main() { println(1); }
+",
+        ResolveErrorKind::EffectVarKindMismatch,
+    );
+    assert_eq!(
+        err.message,
+        "`Two` declares a second effect variable `F`; a struct or enum declares at most one \
+         in v1, since its effect set is written as one `with` argument (`Two[with ...]`)"
+    );
+    let errs = resolve_errors(
+        "fn both[with E, F](f: Fn(i64) with E, g: Fn(i64) with F) with E F { f(1); g(2); }
+fn main() { println(1); }
+",
+    );
+    assert!(errs.is_empty(), "{errs:?}");
+}
