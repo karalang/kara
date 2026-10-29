@@ -51,6 +51,63 @@ pub fn elide_counter_checks(body: &mut Body, tys: &TyInterner) {
     }
 }
 
+/// The blocks of `body` whose switch tests a checked operation's overflow
+/// flag, each with the target taken when it is set: codegen weighs those
+/// edges as rare. An overflow that aborts is rare to LLVM already, as a
+/// path to a `noreturn` call; one a body recovers from is not, and its
+/// recovery's values then take registers on the path that never runs
+/// (an auto-par wide sum's fold, B-2026-10-28-35).
+pub fn overflow_tests(body: &Body) -> Vec<(usize, BasicBlock)> {
+    let mut pairs = std::collections::HashSet::new();
+    let mut flags = std::collections::HashSet::new();
+    for block in &body.blocks {
+        for s in &block.statements {
+            let StatementKind::Assign(p, rv) = &s.kind else {
+                continue;
+            };
+            if !p.projection.is_empty() {
+                continue;
+            }
+            match rv {
+                Rvalue::CheckedBinaryOp(..) => {
+                    pairs.insert(p.local);
+                }
+                Rvalue::Use(Operand::Copy(q) | Operand::Move(q))
+                    if pairs.contains(&q.local)
+                        && matches!(q.projection.as_slice(), [ProjElem::Field(FieldIdx(1), _)]) =>
+                {
+                    flags.insert(p.local);
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for (i, block) in body.blocks.iter().enumerate() {
+        let TerminatorKind::SwitchInt {
+            discr: Operand::Copy(d) | Operand::Move(d),
+            targets,
+        } = &block.terminator.kind
+        else {
+            continue;
+        };
+        let flag = match d.projection.as_slice() {
+            [] => flags.contains(&d.local),
+            [ProjElem::Field(FieldIdx(1), _)] => pairs.contains(&d.local),
+            _ => false,
+        };
+        let set = match targets.values.as_slice() {
+            [(0, _)] => targets.otherwise,
+            [(1, bb)] => *bb,
+            _ => continue,
+        };
+        if flag {
+            out.push((i, set));
+        }
+    }
+    out
+}
+
 /// The largest bound a loop hinted by [`unroll_full_latches`] may count
 /// to, and the most statements its blocks may hold: the legacy backend's
 /// gates for the same hint (`codegen/control_flow_bce.rs`,

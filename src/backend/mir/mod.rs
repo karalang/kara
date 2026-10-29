@@ -786,6 +786,30 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
         Ok(())
     }
 
+    /// Weighs the edges of `sw`, the switch lowered from `targets`, so the
+    /// one to `rare` is taken about once in 2000 ([`crate::mir::counters::overflow_tests`]).
+    fn rare_edge(
+        &self,
+        sw: inkwell::values::InstructionValue<'ctx>,
+        targets: &crate::mir::SwitchTargets,
+        rare: crate::mir::BasicBlock,
+    ) -> R<()> {
+        if sw.get_opcode() != inkwell::values::InstructionOpcode::Switch {
+            return Ok(());
+        }
+        let i32t = self.llcx.i32_type();
+        let weight = |bb| {
+            i32t.const_int(if bb == rare { 1 } else { 2000 }, false)
+                .into()
+        };
+        let mut ops = vec![self.llcx.metadata_string("branch_weights").into()];
+        ops.push(weight(targets.otherwise));
+        ops.extend(targets.values.iter().map(|&(_, bb)| weight(bb)));
+        let node = self.llcx.metadata_node(&ops);
+        sw.set_metadata(node, self.llcx.get_kind_id("prof"))
+            .map_err(|_| "branch weights".to_string())
+    }
+
     /// Marks the back edge `br` `!llvm.loop !{!self,
     /// !{!"llvm.loop.unroll.full"}}`, or with `count`,
     /// `!{!"llvm.loop.unroll.count", i32 count}`: the self-referential loop
@@ -1010,6 +1034,12 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
                 crate::mir::counters::unroll_partial_latches(body, self.tys),
             )
         };
+        // `KARAC_MIR_COLD_OVERFLOW=0` leaves overflow tests unweighted.
+        let overflows = if std::env::var("KARAC_MIR_COLD_OVERFLOW").as_deref() == Ok("0") {
+            Vec::new()
+        } else {
+            crate::mir::counters::overflow_tests(body)
+        };
         for (i, block) in body.blocks.iter().enumerate() {
             self.builder.position_at_end(self.blocks[i]);
             for s in &block.statements {
@@ -1040,6 +1070,16 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
                     {
                         self.unroll_hint(br, count);
                     }
+                }
+            }
+            if let Some(&(_, set)) = overflows.iter().find(|(b, _)| *b == i) {
+                if let (TerminatorKind::SwitchInt { targets, .. }, Some(sw)) = (
+                    &block.terminator.kind,
+                    self.builder
+                        .get_insert_block()
+                        .and_then(|b| b.get_terminator()),
+                ) {
+                    self.rare_edge(sw, targets, set)?;
                 }
             }
         }

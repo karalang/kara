@@ -3183,16 +3183,25 @@ struct WideSum<'a> {
     term: &'a Expr,
     chain: bool,
     acc: SymbolId,
+    /// `acc`'s type.
+    ty: Ty,
 }
 
-/// An auto-par task's wide sum while its run is lowered: the `i128`
-/// locals the reduction's statement adds its term to in place of `acc`.
+/// An auto-par task's wide sum while its run is lowered, the locals the
+/// reduction's statement adds its term to in place of `acc`. The run's
+/// sum is `base + run`: `run` and its least and greatest prefix are in
+/// `acc`'s type, so a term costs a checked add and two compares, and only
+/// when `run` would overflow does it fold into the `i128` `base`, `least`
+/// and `most` and start again at 0 (B-2026-10-28-35).
 #[derive(Clone, Copy)]
 struct WideAcc<'a> {
     sums: &'a [WideSum<'a>],
-    total: Local,
+    base: Local,
     least: Local,
     most: Local,
+    run: Local,
+    run_least: Local,
+    run_most: Local,
 }
 
 /// How to run one run of an auto-par loop's iterations again, in order:
@@ -5549,8 +5558,9 @@ impl<'l, 'a> Bx<'l, 'a> {
         }
     }
 
-    /// `e`, one term of a wide sum, added to the task's total, the least
-    /// and greatest prefix kept.
+    /// `e`, one term of a wide sum, added to the task's run, the least
+    /// and greatest prefix kept; a run that would overflow `acc`'s type
+    /// folds into the `i128` base first.
     fn wide_term(&mut self, w: WideAcc<'a>, e: &'a Expr) -> R<()> {
         let t = self.expr_ty(e)?;
         let x = self.temp(t);
@@ -5563,34 +5573,114 @@ impl<'l, 'a> Bx<'l, 'a> {
             p = p.project(ProjElem::Deref);
             pt = inner;
         }
-        let wt = self.b.local_ty(w.total);
-        let xw = self.temp(wt);
-        self.assign(xw, Rvalue::Cast(CastKind::IntToInt, Operand::Copy(p), wt));
-        // No run is long enough to overflow an `i128` total of 64-bit terms.
+        let nt = self.b.local_ty(w.run);
+        let xn = self.temp(nt);
+        self.assign(xn, Rvalue::Cast(CastKind::IntToInt, Operand::Copy(p), nt));
+        let bool_t = self.tys().bool();
+        let pair_t = self.tys().tcx().tuple(&[nt, bool_t]);
+        let pair = self.temp(pair_t);
         self.assign(
-            w.total,
-            Rvalue::BinaryOp(
+            pair,
+            Rvalue::CheckedBinaryOp(
                 BinOp::Add,
-                Operand::Copy(Place::local(w.total)),
-                Operand::Move(Place::local(xw)),
+                Operand::Copy(Place::local(w.run)),
+                Operand::Copy(Place::local(xn)),
             ),
         );
-        let bool_t = self.tys().bool();
-        for (bound, op) in [(w.least, BinOp::Lt), (w.most, BinOp::Gt)] {
+        let next = self.temp(nt);
+        self.assign(
+            next,
+            Rvalue::Use(Operand::Copy(Place::local(pair).field(0, nt))),
+        );
+        let over = self.temp(bool_t);
+        self.assign(
+            over,
+            Rvalue::Use(Operand::Copy(Place::local(pair).field(1, bool_t))),
+        );
+        // The run starts again at 0 on the base it folded into, where the
+        // term cannot overflow it.
+        self.when(over, |b| {
+            b.wide_rebase(w);
+            b.assign(next, Rvalue::Use(Operand::Copy(Place::local(xn))));
+        });
+        self.assign(w.run, Rvalue::Use(Operand::Copy(Place::local(next))));
+        for (bound, op) in [(w.run_least, BinOp::Lt), (w.run_most, BinOp::Gt)] {
             let past = self.temp(bool_t);
             self.assign(
                 past,
                 Rvalue::BinaryOp(
                     op,
-                    Operand::Copy(Place::local(w.total)),
+                    Operand::Copy(Place::local(w.run)),
                     Operand::Copy(Place::local(bound)),
                 ),
             );
             self.when(past, |b| {
-                b.assign(bound, Rvalue::Use(Operand::Copy(Place::local(w.total))));
+                b.assign(bound, Rvalue::Use(Operand::Copy(Place::local(w.run))));
             });
         }
         Ok(())
+    }
+
+    /// Folds a wide sum's run into its `i128` base, least and greatest
+    /// prefix, and starts the run again at 0.
+    fn wide_rebase(&mut self, w: WideAcc<'a>) {
+        let wt = self.b.local_ty(w.base);
+        let nt = self.b.local_ty(w.run);
+        let bool_t = self.tys().bool();
+        for (acc, bound, op) in [
+            (w.least, w.run_least, BinOp::Lt),
+            (w.most, w.run_most, BinOp::Gt),
+        ] {
+            let bw = self.temp(wt);
+            self.assign(
+                bw,
+                Rvalue::Cast(CastKind::IntToInt, Operand::Copy(Place::local(bound)), wt),
+            );
+            let at = self.temp(wt);
+            self.assign(
+                at,
+                Rvalue::BinaryOp(
+                    BinOp::Add,
+                    Operand::Copy(Place::local(w.base)),
+                    Operand::Move(Place::local(bw)),
+                ),
+            );
+            let past = self.temp(bool_t);
+            self.assign(
+                past,
+                Rvalue::BinaryOp(
+                    op,
+                    Operand::Copy(Place::local(at)),
+                    Operand::Copy(Place::local(acc)),
+                ),
+            );
+            self.when(past, |b| {
+                b.assign(acc, Rvalue::Use(Operand::Copy(Place::local(at))));
+            });
+        }
+        let rw = self.temp(wt);
+        self.assign(
+            rw,
+            Rvalue::Cast(CastKind::IntToInt, Operand::Copy(Place::local(w.run)), wt),
+        );
+        // No run is long enough to overflow an `i128` base of 64-bit terms.
+        self.assign(
+            w.base,
+            Rvalue::BinaryOp(
+                BinOp::Add,
+                Operand::Copy(Place::local(w.base)),
+                Operand::Move(Place::local(rw)),
+            ),
+        );
+        for x in [w.run, w.run_least, w.run_most] {
+            self.assign(
+                x,
+                Rvalue::Use(Operand::Const(Const {
+                    ty: nt,
+                    kind: ConstKind::Scalar(0),
+                })),
+            );
+        }
     }
 
     /// Records `l`, bound by a `let` of `value`, when the ownership check
@@ -11831,6 +11921,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                                 term: x.term,
                                 chain: x.chain,
                                 acc: sym,
+                                ty,
                             })
                             .collect::<Vec<_>>()
                             .into_boxed_slice(),
@@ -21180,22 +21271,27 @@ impl<'l, 'a> Bx<'l, 'a> {
             let l = self.temp(u);
             let wide = ch.wide.map(|sums| {
                 let wt = self.tys().tcx().intern(HK::Int(IntSize::I128));
-                let [total, least, most] = [(); 3].map(|_| {
-                    let x = self.temp(wt);
-                    self.assign(
-                        x,
-                        Rvalue::Use(Operand::Const(Const {
-                            ty: wt,
-                            kind: ConstKind::Scalar(0),
-                        })),
-                    );
-                    x
-                });
+                let nt = sums[0].ty;
+                let [base, least, most, run, run_least, run_most] =
+                    [wt, wt, wt, nt, nt, nt].map(|ty| {
+                        let x = self.temp(ty);
+                        self.assign(
+                            x,
+                            Rvalue::Use(Operand::Const(Const {
+                                ty,
+                                kind: ConstKind::Scalar(0),
+                            })),
+                        );
+                        x
+                    });
                 WideAcc {
                     sums,
-                    total,
+                    base,
                     least,
                     most,
+                    run,
+                    run_least,
+                    run_most,
                 }
             });
             self.wide_acc = wide;
@@ -21211,6 +21307,9 @@ impl<'l, 'a> Bx<'l, 'a> {
             )?;
             self.pop_scope()?;
             self.wide_acc = None;
+            if let Some(w) = wide {
+                self.wide_rebase(w);
+            }
             self.assign(l, Rvalue::Use(unit_const(u)));
             let value = match (
                 wide,
@@ -21218,7 +21317,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             ) {
                 (Some(w), _) => Rvalue::Aggregate(
                     AggregateKind::Tuple,
-                    [w.total, w.least, w.most]
+                    [w.base, w.least, w.most]
                         .map(|x| Operand::Copy(Place::local(x)))
                         .to_vec(),
                 ),
