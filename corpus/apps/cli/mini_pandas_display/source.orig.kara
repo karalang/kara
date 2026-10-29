@@ -1,0 +1,3775 @@
+// mini_pandas_display: a Kāra port of the part of pandas 3.0.5
+// (BSD-3-Clause, the pandas development team) that turns a frame into
+// the text a person reads: DataFrame.__repr__ and to_string, with their
+// truncation, wrapping and float rules, Series.__repr__, and the shapes
+// worth printing (grouped results, MultiIndex rows and columns,
+// pivot_table with margins, unstack, stack, transpose, describe and
+// value_counts).
+//
+// It reads data/jobs.txt, one pipeline per line (`read budget.csv |
+// pivot index=dept columns=year values=planned agg=sum | show
+// width=60`), runs each in a task of its own, and prints, in job order,
+// `$ <job>` and what pandas prints for the result, or the error pandas
+// raises after `! `.
+
+import std.sync.{TaskGroup};
+
+// ============================================================ values
+
+// One cell, for object columns, index labels, keys and literals. `Na` is
+// NaN, which pandas' str and object arrays hold for a missing value.
+#[derive(Clone)]
+enum Val {
+    I(i64),
+    F(f64),
+    B(bool),
+    S(String),
+    Na,
+}
+
+// A column of one dtype. A missing float is NaN, a missing string None.
+// `Obj` is the object dtype a transpose or a mixed stack produces.
+#[derive(Clone)]
+enum Col {
+    Int(Vec[i64]),
+    Float(Vec[f64]),
+    Bool(Vec[bool]),
+    Str(Vec[Option[String]]),
+    Obj(Vec[Val]),
+}
+
+fn nan() -> f64 {
+    0.0 / 0.0
+}
+
+fn inf() -> f64 {
+    1.0 / 0.0
+}
+
+fn is_nan(x: f64) -> bool {
+    x != x
+}
+
+fn signbit(x: f64) -> bool {
+    1.0.copysign(x) < 0.0
+}
+
+fn bool_text(b: bool) -> String {
+    if b { "True".to_string() } else { "False".to_string() }
+}
+
+fn is_na_val(v: Val) -> bool {
+    match v {
+        Val.Na => true,
+        _ => false,
+    }
+}
+
+impl Col {
+    fn len(self) -> i64 {
+        match self {
+            Col.Int(v) => v.len(),
+            Col.Float(v) => v.len(),
+            Col.Bool(v) => v.len(),
+            Col.Str(v) => v.len(),
+            Col.Obj(v) => v.len(),
+        }
+    }
+
+    fn dtype(self) -> String {
+        match self {
+            Col.Int(_) => "int64".to_string(),
+            Col.Float(_) => "float64".to_string(),
+            Col.Bool(_) => "bool".to_string(),
+            Col.Str(_) => "str".to_string(),
+            Col.Obj(_) => "object".to_string(),
+        }
+    }
+
+    fn is_numeric(self) -> bool {
+        match self {
+            Col.Int(_) | Col.Float(_) => true,
+            _ => false,
+        }
+    }
+
+    fn get(self, i: i64) -> Val {
+        match self {
+            Col.Int(v) => Val.I(v[i]),
+            Col.Float(v) => if is_nan(v[i]) { Val.Na } else { Val.F(v[i]) },
+            Col.Bool(v) => Val.B(v[i]),
+            Col.Str(v) => match v[i] {
+                Some(s) => Val.S(s.clone()),
+                None => Val.Na,
+            },
+            Col.Obj(v) => v[i].clone(),
+        }
+    }
+
+    fn is_na(self, i: i64) -> bool {
+        is_na_val(self.get(i))
+    }
+
+    // The rows at `idx`, in that order; -1 is a missing row, which turns
+    // an int column into floats and a bool column into objects.
+    fn take(self, idx: Vec[i64]) -> Col {
+        let missing = idx.iter().any(|i| *i < 0);
+        match self {
+            Col.Int(v) => {
+                if missing {
+                    Col.Float(idx.iter().map(|i| if *i < 0 { nan() } else { v[*i] as f64 }).collect())
+                } else {
+                    Col.Int(idx.iter().map(|i| v[*i]).collect())
+                }
+            }
+            Col.Float(v) => Col.Float(idx.iter().map(|i| if *i < 0 { nan() } else { v[*i] }).collect()),
+            Col.Bool(v) => {
+                if missing {
+                    Col.Obj(idx.iter().map(|i| if *i < 0 { Val.Na } else { Val.B(v[*i]) }).collect())
+                } else {
+                    Col.Bool(idx.iter().map(|i| v[*i]).collect())
+                }
+            }
+            Col.Str(v) => Col.Str(idx.iter().map(|i| if *i < 0 { None } else { v[*i].clone() }).collect()),
+            Col.Obj(v) => Col.Obj(idx.iter().map(|i| if *i < 0 { Val.Na } else { v[*i].clone() }).collect()),
+        }
+    }
+
+    // The column as floats, as pandas casts it for a numeric kernel.
+    fn floats(self) -> Vec[f64] {
+        match self {
+            Col.Int(v) => v.iter().map(|x| *x as f64).collect(),
+            Col.Float(v) => v.clone(),
+            Col.Bool(v) => v.iter().map(|b| if *b { 1.0 } else { 0.0 }).collect(),
+            _ => Vec.new(),
+        }
+    }
+
+    fn vals(self) -> Vec[Val] {
+        let mut out: Vec[Val] = Vec.new();
+        for i in 0..self.len() {
+            out.push(self.get(i));
+        }
+        out
+    }
+}
+
+// The kind of a column, for the common type of several.
+fn kind_of(c: Col) -> i64 {
+    match c {
+        Col.Int(_) => 0,
+        Col.Float(_) => 1,
+        Col.Bool(_) => 2,
+        Col.Str(_) => 3,
+        Col.Obj(_) => 4,
+    }
+}
+
+// find_common_type over several columns: one dtype stays itself, ints
+// and floats meet as float64, anything else as object.
+fn common_kind(cols: Vec[Col]) -> i64 {
+    if cols.len() == 0 {
+        return 4;
+    }
+    let first = kind_of(cols[0]);
+    if cols.iter().all(|c| kind_of(c) == first) {
+        return first;
+    }
+    if cols.iter().all(|c| kind_of(c) <= 1) {
+        return 1;
+    }
+    4
+}
+
+// Values of the given kind as one column.
+fn col_of_kind(kind: i64, vals: Vec[Val]) -> Col {
+    match kind {
+        0 => Col.Int(vals.iter().map(|v| match v {
+            Val.I(n) => *n,
+            _ => 0,
+        }).collect()),
+        1 => Col.Float(vals.iter().map(|v| num_of(v)).collect()),
+        2 => Col.Bool(vals.iter().map(|v| match v {
+            Val.B(b) => *b,
+            _ => false,
+        }).collect()),
+        3 => Col.Str(vals.iter().map(|v| match v {
+            Val.S(s) => Some(s.clone()),
+            _ => None,
+        }).collect()),
+        _ => Col.Obj(vals.clone()),
+    }
+}
+
+// Several columns' values end to end, as the common type of them all.
+fn concat_cols(cols: Vec[Col]) -> Col {
+    let kind = common_kind(cols);
+    let mut all: Vec[Val] = Vec.new();
+    for c in cols {
+        for v in c.vals() {
+            all.push(v);
+        }
+    }
+    col_of_kind(kind, all)
+}
+
+fn num_of(v: Val) -> f64 {
+    match v {
+        Val.I(n) => n as f64,
+        Val.F(x) => x,
+        Val.B(b) => if b { 1.0 } else { 0.0 },
+        _ => nan(),
+    }
+}
+
+// The order pandas sorts keys in: numbers by value, strings by code
+// point, NaN after everything.
+fn val_cmp(a: Val, b: Val) -> Ordering {
+    match (a, b) {
+        (Val.Na, Val.Na) => Ordering.Equal,
+        (Val.Na, _) => Ordering.Greater,
+        (_, Val.Na) => Ordering.Less,
+        (Val.S(x), Val.S(y)) => x.cmp(y),
+        (Val.S(_), _) => Ordering.Greater,
+        (_, Val.S(_)) => Ordering.Less,
+        (Val.I(x), Val.I(y)) => x.cmp(y),
+        (x, y) => {
+            let p = num_of(x);
+            let q = num_of(y);
+            if p < q {
+                Ordering.Less
+            } else if p > q {
+                Ordering.Greater
+            } else {
+                Ordering.Equal
+            }
+        }
+    }
+}
+
+fn flip(o: Ordering) -> Ordering {
+    match o {
+        Ordering.Less => Ordering.Greater,
+        Ordering.Greater => Ordering.Less,
+        Ordering.Equal => Ordering.Equal,
+    }
+}
+
+fn val_eq(a: Val, b: Val) -> bool {
+    val_cmp(a, b) == Ordering.Equal
+}
+
+// A key made of several cells, as one string for a Map.
+fn key_text(vals: Vec[Val]) -> String {
+    let mut t = String.new();
+    for v in vals {
+        match v {
+            Val.I(n) => t.push_str(f"i{n}"),
+            Val.F(x) => {
+                // 1 and 1.0 are one key, as in a pandas hash table.
+                if x == x.trunc() and x.abs() < 9.0e15 {
+                    t.push_str(f"i{x as i64}");
+                } else {
+                    t.push_str(f"f{x.to_bits()}");
+                }
+            }
+            Val.B(b) => t.push_str(if b { "b1" } else { "b0" }),
+            Val.S(s) => {
+                t.push_str("s");
+                t.push_str(s.replace("\\", "\\\\").replace("\u{1f}", "\\u"));
+            }
+            Val.Na => t.push_str("n"),
+        }
+        t.push('\u{1f}');
+    }
+    t
+}
+
+fn range_idx(n: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for i in 0..n {
+        v.push(i);
+    }
+    v
+}
+
+// ============================================================ indexes
+
+// An axis' labels. `Range` is a RangeIndex from `start`, `Flat` an Index
+// of one dtype with its name, `Multi` a MultiIndex as the value of each
+// level at each position, with the level names.
+#[derive(Clone)]
+enum Index {
+    Range(i64, i64),
+    Flat(Col, Option[String]),
+    Multi(Vec[Col], Vec[Option[String]]),
+}
+
+fn str_index(names: Vec[String]) -> Index {
+    Index.Flat(Col.Str(names.iter().map(|n| Some(n.clone())).collect()), None)
+}
+
+impl Index {
+    fn len(self) -> i64 {
+        match self {
+            Index.Range(_, n) => n,
+            Index.Flat(c, _) => c.len(),
+            Index.Multi(levels, _) => if levels.len() == 0 { 0 } else { levels[0].len() },
+        }
+    }
+
+    fn nlevels(self) -> i64 {
+        match self {
+            Index.Multi(levels, _) => levels.len(),
+            _ => 1,
+        }
+    }
+
+    fn names(self) -> Vec[Option[String]] {
+        match self {
+            Index.Range(_, _) => [None].to_vec(),
+            Index.Flat(_, n) => [n.clone()].to_vec(),
+            Index.Multi(_, ns) => ns.clone(),
+        }
+    }
+
+    fn has_names(self) -> bool {
+        self.names().iter().any(|n| n.is_some())
+    }
+
+    // Each level as a column.
+    fn levels(self) -> Vec[Col] {
+        match self {
+            Index.Range(s, n) => [Col.Int(range_idx(n).iter().map(|i| *i + s).collect())].to_vec(),
+            Index.Flat(c, _) => [c.clone()].to_vec(),
+            Index.Multi(levels, _) => levels.clone(),
+        }
+    }
+
+    fn label(self, i: i64) -> Vec[Val] {
+        self.levels().iter().map(|c| c.get(i)).collect()
+    }
+
+    fn take(self, idx: Vec[i64]) -> Index {
+        match self {
+            Index.Range(s, _) => Index.Flat(Col.Int(idx.iter().map(|i| *i + s).collect()), None),
+            Index.Flat(c, n) => Index.Flat(c.take(idx), n.clone()),
+            Index.Multi(levels, ns) => Index.Multi(levels.iter().map(|c| c.take(idx)).collect(), ns.clone()),
+        }
+    }
+
+    // Positions lo..hi; a RangeIndex stays one.
+    fn slice(self, lo: i64, hi: i64) -> Index {
+        match self {
+            Index.Range(s, _) => Index.Range(s + lo, hi - lo),
+            _ => self.take(range_idx(hi - lo).iter().map(|i| *i + lo).collect()),
+        }
+    }
+
+    // Labels built from a list of tuples, one Index or MultiIndex.
+    fn from_labels(labels: Vec[Vec[Val]], names: Vec[Option[String]]) -> Index {
+        let k = names.len();
+        let mut levels: Vec[Col] = Vec.new();
+        for j in 0..k {
+            let vals: Vec[Val] = labels.iter().map(|l| l[j].clone()).collect();
+            levels.push(infer_vals(vals));
+        }
+        if k == 1 {
+            Index.Flat(levels[0].clone(), names[0].clone())
+        } else {
+            Index.Multi(levels, names.clone())
+        }
+    }
+
+    // The position of a flat label, for a column lookup.
+    fn find(self, name: Str) -> Option[i64] {
+        match self {
+            Index.Flat(c, _) => {
+                for i in 0..c.len() {
+                    if let Val.S(s) = c.get(i) {
+                        if s == name {
+                            return Some(i);
+                        }
+                    }
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+}
+
+// The dtype pandas infers for a list of labels.
+fn infer_vals(vals: Vec[Val]) -> Col {
+    let all_int = vals.iter().all(|v| match v {
+        Val.I(_) => true,
+        _ => false,
+    });
+    if all_int and vals.len() > 0 {
+        return col_of_kind(0, vals);
+    }
+    let all_num = vals.iter().all(|v| match v {
+        Val.I(_) | Val.F(_) | Val.Na => true,
+        _ => false,
+    });
+    if all_num and vals.len() > 0 and vals.iter().any(|v| match v {
+        Val.F(_) => true,
+        _ => false,
+    }) {
+        return col_of_kind(1, vals);
+    }
+    let all_bool = vals.iter().all(|v| match v {
+        Val.B(_) => true,
+        _ => false,
+    });
+    if all_bool and vals.len() > 0 {
+        return col_of_kind(2, vals);
+    }
+    let all_str = vals.iter().all(|v| match v {
+        Val.S(_) | Val.Na => true,
+        _ => false,
+    });
+    if all_str {
+        return col_of_kind(3, vals);
+    }
+    Col.Obj(vals.clone())
+}
+
+// ============================================================ frames and series
+
+#[derive(Clone)]
+struct Frame {
+    index: Index,
+    columns: Index,
+    cols: Vec[Col],
+}
+
+#[derive(Clone)]
+struct Series {
+    index: Index,
+    name: Option[String],
+    values: Col,
+}
+
+// What a step hands the next one.
+#[derive(Clone)]
+enum Obj {
+    F(Frame),
+    S(Series),
+}
+
+impl Frame {
+    fn height(self) -> i64 {
+        self.index.len()
+    }
+
+    fn width(self) -> i64 {
+        self.cols.len()
+    }
+
+    fn col(self, name: Str) -> Result[Col, String] {
+        match self.columns.find(name) {
+            Some(i) => Ok(self.cols[i].clone()),
+            None => Err(key_error(name)),
+        }
+    }
+
+    fn take(self, idx: Vec[i64]) -> Frame {
+        Frame { index: self.index.take(idx), columns: self.columns.clone(), cols: self.cols.iter().map(|c| c.take(idx)).collect() }
+    }
+
+    fn slice(self, lo: i64, hi: i64) -> Frame {
+        let idx: Vec[i64] = range_idx(hi - lo).iter().map(|i| *i + lo).collect();
+        Frame { index: self.index.slice(lo, hi), columns: self.columns.clone(), cols: self.cols.iter().map(|c| c.take(idx)).collect() }
+    }
+
+    fn column_names(self) -> Vec[String] {
+        match self.columns {
+            Index.Flat(c, _) => range_idx(c.len()).iter().map(|i| label_text(c.get(*i))).collect(),
+            _ => Vec.new(),
+        }
+    }
+
+    // Sets a column, replacing one of that name or appending it.
+    fn put(mut ref self, name: Str, c: own Col) {
+        match self.columns.find(name) {
+            Some(i) => self.cols[i] = c,
+            None => {
+                let mut names = self.column_names();
+                names.push(name.to_string());
+                self.columns = str_index(names);
+                self.cols.push(c);
+            }
+        }
+    }
+}
+
+impl Series {
+    fn take(self, idx: Vec[i64]) -> Series {
+        Series { index: self.index.take(idx), name: self.name.clone(), values: self.values.take(idx) }
+    }
+
+    fn slice(self, lo: i64, hi: i64) -> Series {
+        let idx: Vec[i64] = range_idx(hi - lo).iter().map(|i| *i + lo).collect();
+        Series { index: self.index.slice(lo, hi), name: self.name.clone(), values: self.values.take(idx) }
+    }
+}
+
+fn key_error(name: Str) -> String {
+    f"KeyError: '{name}'"
+}
+
+// str() of a label.
+fn label_text(v: Val) -> String {
+    match v {
+        Val.I(n) => n.to_string(),
+        Val.F(x) => x.to_string(),
+        Val.B(b) => bool_text(b),
+        Val.S(s) => s.clone(),
+        Val.Na => "nan".to_string(),
+    }
+}
+
+// ============================================================ float kernels
+
+// numpy's add.reduce over float64: a pairwise sum, eight accumulators
+// at a time, from 0.0. pandas reaches it from Series.mean and describe.
+fn pairwise_sum(a: Vec[f64], lo: i64, n: i64) -> f64 {
+    if n < 8 {
+        let mut res = 0.0;
+        for i in lo..lo + n {
+            res = res + a[i];
+        }
+        return res;
+    }
+    if n <= 128 {
+        let mut r: Vec[f64] = Vec.new();
+        for j in 0..8 {
+            r.push(a[lo + j]);
+        }
+        let mut i = 8;
+        while i < n - n % 8 {
+            for j in 0..8 {
+                r[j] = r[j] + a[lo + i + j];
+            }
+            i += 8;
+        }
+        let mut res = ((r[0] + r[1]) + (r[2] + r[3])) + ((r[4] + r[5]) + (r[6] + r[7]));
+        while i < n {
+            res = res + a[lo + i];
+            i += 1;
+        }
+        return res;
+    }
+    let mut n2 = n / 2;
+    n2 -= n2 % 8;
+    pairwise_sum(a, lo, n2) + pairwise_sum(a, lo + n2, n - n2)
+}
+
+fn np_sum(a: Vec[f64]) -> f64 {
+    pairwise_sum(a, 0, a.len())
+}
+
+// Kahan summation as pandas' groupby kernels run it.
+struct Kahan {
+    sum: f64,
+    comp: f64,
+    n: i64,
+}
+
+fn kahan() -> Kahan {
+    Kahan { sum: 0.0, comp: 0.0, n: 0 }
+}
+
+impl Kahan {
+    fn add(mut ref self, val: f64) {
+        self.n += 1;
+        let y = val - self.comp;
+        let t = self.sum + y;
+        self.comp = t - self.sum - y;
+        if is_nan(self.comp) or self.comp.abs() == 1.0 / 0.0 {
+            self.comp = 0.0;
+        }
+        self.sum = t;
+    }
+}
+
+// Series.mean: numpy's sum with NaN as 0, over the non-NaN count.
+fn series_mean(a: Vec[f64]) -> f64 {
+    let mut filled: Vec[f64] = Vec.new();
+    let mut count = 0;
+    for x in a {
+        if is_nan(x) {
+            filled.push(0.0);
+        } else {
+            filled.push(x);
+            count += 1;
+        }
+    }
+    if count == 0 {
+        return nan();
+    }
+    np_sum(filled) / (count as f64)
+}
+
+// nanops.nanvar with ddof 1: two passes of numpy's sum.
+fn series_var(a: Vec[f64]) -> f64 {
+    let mut filled: Vec[f64] = Vec.new();
+    let mut count = 0;
+    for x in a {
+        if is_nan(x) {
+            filled.push(0.0);
+        } else {
+            filled.push(x);
+            count += 1;
+        }
+    }
+    let d = count as f64 - 1.0;
+    let avg = np_sum(filled) / (count as f64);
+    let mut sqr: Vec[f64] = Vec.new();
+    for x in a {
+        if is_nan(x) {
+            sqr.push(0.0);
+        } else {
+            let e = avg - x;
+            sqr.push(e * e);
+        }
+    }
+    if d <= 0.0 {
+        return nan();
+    }
+    np_sum(sqr) / d
+}
+
+// numpy's quantile, method "linear", over values with NaN removed.
+fn np_quantile(sorted: Vec[f64], q: f64) -> f64 {
+    let n = sorted.len();
+    if n == 0 {
+        return nan();
+    }
+    let virt = ((n - 1) as f64) * q;
+    if virt >= ((n - 1) as f64) {
+        return sorted[n - 1];
+    }
+    if virt < 0.0 {
+        return sorted[0];
+    }
+    let prev = virt.floor();
+    let i = prev as i64;
+    let a = sorted[i];
+    let b = sorted[i + 1];
+    let gamma = virt - prev;
+    let diff = b - a;
+    if gamma >= 0.5 {
+        b - diff * (1.0 - gamma)
+    } else {
+        a + diff * gamma
+    }
+}
+
+fn sorted_valid(a: Vec[f64]) -> Vec[f64] {
+    let mut v: Vec[f64] = a.iter().filter(|x| not is_nan(*x)).map(|x| *x).collect();
+    v.sort_by(f64.total_cmp);
+    v
+}
+
+// numpy's rint: round half to even, keeping the sign of zero.
+fn rint(x: f64) -> f64 {
+    if is_nan(x) or x.abs() >= 4503599627370496.0 {
+        return x;
+    }
+    let f = x.floor();
+    let d = x - f;
+    let mut r = if d < 0.5 {
+        f
+    } else if d > 0.5 {
+        f + 1.0
+    } else if (f / 2.0).floor() * 2.0 == f {
+        f
+    } else {
+        f + 1.0
+    };
+    if r == 0.0 {
+        r = 0.0.copysign(x);
+    }
+    r
+}
+
+// numpy's round(x, decimals) for decimals >= 0.
+fn np_round(x: f64, decimals: i64) -> f64 {
+    if decimals == 0 {
+        return rint(x);
+    }
+    let mut f = 1.0;
+    for _ in 0..decimals {
+        f = f * 10.0;
+    }
+    rint(x * f) / f
+}
+
+fn welford(vals: Vec[f64], ddof: i64, sqrt: bool) -> f64 {
+    let mut nobs = 0;
+    let mut mean = 0.0;
+    let mut ssq = 0.0;
+    for v in vals {
+        if is_nan(v) {
+            continue;
+        }
+        nobs += 1;
+        let old = mean;
+        mean = mean + (v - old) / (nobs as f64);
+        ssq = ssq + (v - mean) * (v - old);
+    }
+    if nobs <= ddof {
+        return nan();
+    }
+    let var = ssq / ((nobs - ddof) as f64);
+    if sqrt { var.sqrt() } else { var }
+}
+
+fn median_of(vals: Vec[f64]) -> f64 {
+    let s = sorted_valid(vals);
+    let n = s.len();
+    if n == 0 {
+        return nan();
+    }
+    if n % 2 == 1 {
+        s[n / 2]
+    } else {
+        (s[n / 2] + s[n / 2 - 1]) / 2.0
+    }
+}
+
+// ============================================================ read_csv
+
+// The strings read_csv reads as missing unless keep_default_na=False.
+fn default_na(s: Str) -> bool {
+    match s {
+        "" | "#N/A" | "#N/A N/A" | "#NA" | "-1.#IND" | "-1.#QNAN" | "-NaN" | "-nan" | "1.#IND"
+        | "1.#QNAN" | "<NA>" | "N/A" | "NA" | "NULL" | "NaN" | "None" | "n/a" | "nan" | "null" => true,
+        _ => false,
+    }
+}
+
+struct ReadOpts {
+    sep: String,
+    na: Vec[String],
+    keep_default_na: bool,
+    index: Option[Vec[String]],
+    dtype: Vec[(String, String)],
+}
+
+fn read_opts() -> ReadOpts {
+    ReadOpts { sep: ",".to_string(), na: Vec.new(), keep_default_na: true, index: None, dtype: Vec.new() }
+}
+
+// The C tokenizer: rows of fields, quotes doubled inside quotes, blank
+// lines skipped.
+fn tokenize(text: Str, sep: char) -> Vec[Vec[String]] {
+    let mut rows: Vec[Vec[String]] = Vec.new();
+    let mut row: Vec[String] = Vec.new();
+    let mut field = String.new();
+    let mut in_quotes = false;
+    let mut row_started = false;
+    let chars: Vec[char] = text.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if in_quotes {
+            if c == '"' {
+                if i + 1 < chars.len() and chars[i + 1] == '"' {
+                    field.push('"');
+                    i += 1;
+                } else {
+                    in_quotes = false;
+                }
+            } else {
+                field.push(c);
+            }
+        } else if c == '"' {
+            in_quotes = true;
+            row_started = true;
+        } else if c == sep {
+            row.push(field.clone());
+            field = String.new();
+            row_started = true;
+        } else if c == '\n' or c == '\r' {
+            if c == '\r' and i + 1 < chars.len() and chars[i + 1] == '\n' {
+                i += 1;
+            }
+            if row_started or field.len() > 0 {
+                row.push(field.clone());
+                rows.push(row.clone());
+            }
+            row = Vec.new();
+            field = String.new();
+            row_started = false;
+        } else {
+            field.push(c);
+            row_started = true;
+        }
+        i += 1;
+    }
+    if row_started or field.len() > 0 {
+        row.push(field.clone());
+        rows.push(row);
+    }
+    rows
+}
+
+fn is_na_text(s: Str, o: ReadOpts) -> bool {
+    if o.keep_default_na and default_na(s) {
+        return true;
+    }
+    o.na.iter().any(|n| n == s)
+}
+
+fn parse_bool(s: Str) -> Option[bool] {
+    match s {
+        "True" | "TRUE" | "true" => Some(true),
+        "False" | "FALSE" | "false" => Some(false),
+        _ => None,
+    }
+}
+
+fn parse_float(s: Str) -> Option[f64] {
+    let t = s.trim();
+    // Rust-style spellings pandas' xstrtod refuses.
+    if t.len() == 0 or t.contains("_") {
+        return None;
+    }
+    match t.to_lowercase().as_str() {
+        "nan" | "+nan" | "-nan" => return None,
+        _ => {}
+    }
+    f64.parse(t).ok()
+}
+
+// One column's cells, typed the way the C parser infers them.
+fn infer(cells: Vec[Option[String]]) -> Col {
+    if cells.len() == 0 {
+        return Col.Obj(Vec.new());
+    }
+    let na_count = cells.iter().filter(|c| c.is_none()).count();
+    let mut ints: Vec[i64] = Vec.new();
+    let mut all_int = true;
+    for c in cells {
+        if let Some(s) = c {
+            match i64.parse(s) {
+                Ok(n) => ints.push(n),
+                Err(_) => {
+                    all_int = false;
+                    break;
+                }
+            }
+        }
+    }
+    if all_int and na_count == 0 {
+        return Col.Int(ints);
+    }
+    let mut floats: Vec[f64] = Vec.new();
+    let mut all_float = true;
+    for c in cells {
+        match c {
+            None => floats.push(nan()),
+            Some(s) => match parse_float(s) {
+                Some(x) => floats.push(x),
+                None => {
+                    all_float = false;
+                    break;
+                }
+            },
+        }
+    }
+    if all_float {
+        return Col.Float(floats);
+    }
+    if na_count == 0 {
+        let mut bools: Vec[bool] = Vec.new();
+        let mut all_bool = true;
+        for c in cells {
+            match parse_bool(c.clone() ?? String.new()) {
+                Some(b) => bools.push(b),
+                None => {
+                    all_bool = false;
+                    break;
+                }
+            }
+        }
+        if all_bool {
+            return Col.Bool(bools);
+        }
+    }
+    Col.Str(cells.clone())
+}
+
+fn convert(cells: Vec[Option[String]], dtype: Str) -> Result[Col, String] {
+    match dtype {
+        "str" => Ok(Col.Str(cells.clone())),
+        "float" => {
+            let mut v: Vec[f64] = Vec.new();
+            for c in cells {
+                match c {
+                    None => v.push(nan()),
+                    Some(s) => match parse_float(s) {
+                        Some(x) => v.push(x),
+                        None => return Err(f"ValueError: could not convert string to float: '{s}'"),
+                    },
+                }
+            }
+            Ok(Col.Float(v))
+        }
+        _ => Ok(infer(cells)),
+    }
+}
+
+fn read_csv(path: Str, o: ReadOpts) -> Result[Frame, String] {
+    let full = f"data/{path}";
+    let text = match fs.read_to_string(full.clone()) {
+        Ok(t) => t,
+        Err(_) => return Err(f"FileNotFoundError: [Errno 2] No such file or directory: '{full}'"),
+    };
+    let sep = o.sep.chars().next() ?? ',';
+    let rows = tokenize(text, sep);
+    let names: Vec[String] = if rows.len() > 0 { rows[0].clone() } else { Vec.new() };
+    let mut cols: Vec[Col] = Vec.new();
+    for j in 0..names.len() {
+        let name = names[j].clone();
+        let mut cells: Vec[Option[String]] = Vec.new();
+        for r in 1..rows.len() {
+            let raw = if j < rows[r].len() { rows[r][j].clone() } else { String.new() };
+            if is_na_text(raw, o) {
+                cells.push(None);
+            } else {
+                cells.push(Some(raw));
+            }
+        }
+        let mut dtype = String.new();
+        for (n, t) in o.dtype {
+            if *n == name {
+                dtype = t.clone();
+            }
+        }
+        cols.push(convert(cells, dtype)?);
+    }
+    let n = if rows.len() > 0 { rows.len() - 1 } else { 0 };
+    let f = Frame { index: Index.Range(0, n), columns: str_index(names), cols: cols };
+    match o.index {
+        Some(ref keys) => set_index(f, keys.clone()),
+        None => Ok(f),
+    }
+}
+
+// ============================================================ float_format: printf on the exact value
+
+// A big natural number in base 10^9, least significant limb first.
+fn big_mul(limbs: mut ref Vec[i64], by: i64) {
+    let mut carry = 0;
+    for i in 0..limbs.len() {
+        let v = limbs[i] * by + carry;
+        limbs[i] = v % 1000000000;
+        carry = v / 1000000000;
+    }
+    while carry > 0 {
+        limbs.push(carry % 1000000000);
+        carry /= 1000000000;
+    }
+}
+
+fn big_text(limbs: Vec[i64]) -> String {
+    let mut t = String.new();
+    let mut i = limbs.len() - 1;
+    while i > 0 and limbs[i] == 0 {
+        i -= 1;
+    }
+    t.push_str(limbs[i].to_string());
+    while i > 0 {
+        i -= 1;
+        t.push_str(f"{limbs[i]:09}");
+    }
+    t
+}
+
+// The exact decimal value of a finite double's magnitude: digits D and a
+// power of ten s with |x| = D * 10^s. A double is m * 2^e; for e < 0 that
+// is m * 5^-e / 10^-e.
+fn exact_decimal(x: f64) -> (Vec[u8], i64) {
+    let bits = x.to_bits();
+    let exp_bits = ((bits >> 52) & 2047) as i64;
+    let frac = (bits & 4503599627370495) as i64;
+    if exp_bits == 0 and frac == 0 {
+        return ([b'0'].to_vec(), 0);
+    }
+    let (m, e) = if exp_bits == 0 { (frac, -1074) } else { (frac + 4503599627370496, exp_bits - 1075) };
+    let mut limbs: Vec[i64] = [m % 1000000000, m / 1000000000 % 1000000000, m / 1000000000000000000].to_vec();
+    let mut shift = 0;
+    if e >= 0 {
+        let mut k = e;
+        while k >= 30 {
+            big_mul(mut limbs, 1073741824);
+            k -= 30;
+        }
+        big_mul(mut limbs, 1 << k);
+    } else {
+        let mut k = -e;
+        while k >= 13 {
+            big_mul(mut limbs, 1220703125);
+            k -= 13;
+        }
+        let mut f = 1;
+        for _ in 0..k {
+            f *= 5;
+        }
+        big_mul(mut limbs, f);
+        shift = e;
+    }
+    (big_text(limbs).bytes().iter().collect(), shift)
+}
+
+// The first `keep` digits of d, rounded half to even on the digits
+// after them (keep may be 0 or less, or past the end, which pads with
+// zeros). A carry can make the result one digit longer.
+fn round_digits(d: Vec[u8], keep: i64) -> Vec[u8] {
+    if keep < 0 {
+        return [b'0'].to_vec();
+    }
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..keep {
+        out.push(if i < d.len() { d[i] } else { b'0' });
+    }
+    if keep >= d.len() {
+        return out;
+    }
+    let next = d[keep];
+    let rest_zero = d[keep + 1..].iter().all(|x| *x == b'0');
+    let odd = if keep == 0 { false } else { (out[keep - 1] - b'0') % 2 == 1 };
+    if next > b'5' or (next == b'5' and (not rest_zero or odd)) {
+        let mut i = keep - 1;
+        loop {
+            if i < 0 {
+                out.insert(0, b'1');
+                break;
+            }
+            if out[i] == b'9' {
+                out[i] = b'0';
+                i -= 1;
+            } else {
+                out[i] += 1;
+                break;
+            }
+        }
+    }
+    if out.len() == 0 {
+        out.push(b'0');
+    }
+    out
+}
+
+fn digits_text(d: Vec[u8]) -> String {
+    let mut t = String.new();
+    for b in d {
+        t.push(b as char);
+    }
+    t
+}
+
+// The magnitude rounded to `prec` decimals, as digits with the point
+// before the last `prec` of them (at least prec + 1 digits).
+fn fixed_digits(x: f64, prec: i64) -> Vec[u8] {
+    let (d, s) = exact_decimal(x);
+    let mut r = round_digits(d, d.len() + s + prec);
+    while r.len() > 1 and r[0] == b'0' {
+        r.remove(0);
+    }
+    while r.len() < prec + 1 {
+        r.insert(0, b'0');
+    }
+    r
+}
+
+fn with_point(r: Vec[u8], prec: i64) -> String {
+    let whole = digits_text(r[..r.len() - prec].to_vec());
+    if prec == 0 {
+        whole
+    } else {
+        whole + "." + digits_text(r[r.len() - prec..].to_vec())
+    }
+}
+
+// The magnitude rounded to prec + 1 significant digits, and the power of
+// ten of the first one.
+fn sci_digits(x: f64, prec: i64) -> (Vec[u8], i64) {
+    let (d, s) = exact_decimal(x);
+    if d.len() == 1 and d[0] == b'0' {
+        return (round_digits(d, prec + 1), 0);
+    }
+    let mut exp10 = d.len() - 1 + s;
+    let mut r = round_digits(d, prec + 1);
+    if r.len() > prec + 1 {
+        r.pop();
+        exp10 += 1;
+    }
+    (r, exp10)
+}
+
+fn exp_text(e: i64) -> String {
+    let sign = if e < 0 { "-" } else { "+" };
+    f"e{sign}{e.abs():02}"
+}
+
+// %g's trailing zeros, and a point left with nothing after it.
+fn strip_zeros(s: Str) -> String {
+    let mut m = s.to_string();
+    if m.contains(".") {
+        while m.ends_with("0") {
+            m.pop();
+        }
+        if m.ends_with(".") {
+            m.pop();
+        }
+    }
+    m
+}
+
+// One float through Python's `%` operator or a format spec: `sign` is
+// ' ', '+' or '-' (the default), `zero` pads with zeros after the sign,
+// `left` pads on the right, and `kind` is f, e or g.
+fn py_float(x: f64, sign: char, zero: bool, left: bool, width: i64, prec: i64, kind: char) -> String {
+    let neg = signbit(x) and not is_nan(x);
+    let lead = if neg { "-" } else if sign == '+' { "+" } else if sign == ' ' { " " } else { "" };
+    let v = x.abs();
+    let body = if is_nan(x) {
+        "nan".to_string()
+    } else if v == inf() {
+        "inf".to_string()
+    } else {
+        match kind {
+            'f' | 'F' => with_point(fixed_digits(v, prec), prec),
+            'e' | 'E' => {
+                let (r, e) = sci_digits(v, prec);
+                with_point(r, prec) + exp_text(e)
+            }
+            _ => {
+                // %g: the exponent after rounding to P significant digits
+                // picks fixed or exponent form; trailing zeros go.
+                let p = if prec == 0 { 1 } else { prec };
+                let (r, e) = sci_digits(v, p - 1);
+                if e >= -4 and e < p {
+                    strip_zeros(with_point(fixed_digits(v, p - 1 - e), p - 1 - e))
+                } else {
+                    strip_zeros(with_point(r, p - 1)) + exp_text(e)
+                }
+            }
+        }
+    };
+    let n = lead.chars().count() + body.chars().count();
+    if n >= width {
+        return lead.to_string() + body;
+    }
+    let pad = width - n;
+    if left {
+        lead.to_string() + body + " ".repeat(pad)
+    } else if zero and not is_nan(x) and v != inf() {
+        lead.to_string() + "0".repeat(pad) + body
+    } else {
+        " ".repeat(pad) + lead + body
+    }
+}
+
+// `fmt % x` for a float format such as %.2f, %08.2f, %.3e or %.4g.
+fn percent_format(fmt: Str, x: f64) -> Result[String, String] {
+    let chars: Vec[char] = fmt.chars().collect();
+    let mut out = String.new();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] != '%' {
+            out.push(chars[i]);
+            i += 1;
+            continue;
+        }
+        i += 1;
+        if i < chars.len() and chars[i] == '%' {
+            out.push('%');
+            i += 1;
+            continue;
+        }
+        let mut sign = '-';
+        let mut zero = false;
+        let mut left = false;
+        while i < chars.len() and (chars[i] == '-' or chars[i] == '+' or chars[i] == ' ' or chars[i] == '0' or chars[i] == '#') {
+            match chars[i] {
+                '-' => left = true,
+                '+' => sign = '+',
+                ' ' => {
+                    if sign != '+' {
+                        sign = ' ';
+                    }
+                }
+                '0' => zero = true,
+                _ => {}
+            }
+            i += 1;
+        }
+        let mut width = 0;
+        while i < chars.len() and chars[i].is_ascii_digit() {
+            width = width * 10 + (chars[i] as i64 - '0' as i64);
+            i += 1;
+        }
+        let mut prec = 6;
+        if i < chars.len() and chars[i] == '.' {
+            i += 1;
+            prec = 0;
+            while i < chars.len() and chars[i].is_ascii_digit() {
+                prec = prec * 10 + (chars[i] as i64 - '0' as i64);
+                i += 1;
+            }
+        }
+        if i >= chars.len() {
+            return Err("ValueError: incomplete format".to_string());
+        }
+        let kind = chars[i];
+        match kind {
+            'f' | 'F' | 'e' | 'E' | 'g' | 'G' => out.push_str(py_float(x, sign, zero, left, width, prec, kind)),
+            _ => return Err(f"ValueError: unsupported format character '{kind}'"),
+        }
+        i += 1;
+    }
+    Ok(out)
+}
+
+// ============================================================ selecting
+
+fn select(f: Frame, want: Vec[String]) -> Result[Frame, String] {
+    let mut missing: Vec[String] = Vec.new();
+    let mut idx: Vec[i64] = Vec.new();
+    for w in want {
+        match f.columns.find(w) {
+            Some(i) => idx.push(i),
+            None => missing.push(f"'{w}'"),
+        }
+    }
+    if missing.len() > 0 {
+        return Err(f"KeyError: \"[{missing.join(", ")}] not in index\"");
+    }
+    Ok(Frame { index: f.index.clone(), columns: str_index(want), cols: idx.iter().map(|i| f.cols[*i].clone()).collect() })
+}
+
+fn column(f: Frame, name: Str) -> Result[Series, String] {
+    Ok(Series { index: f.index.clone(), name: Some(name.to_string()), values: f.col(name)? })
+}
+
+fn head_of(o: Obj, n: i64) -> Obj {
+    match o {
+        Obj.F(f) => {
+            let k = if n < f.height() { n } else { f.height() };
+            Obj.F(f.slice(0, k))
+        }
+        Obj.S(s) => {
+            let len = s.values.len();
+            let k = if n < len { n } else { len };
+            Obj.S(s.slice(0, k))
+        }
+    }
+}
+
+fn tail_of(o: Obj, n: i64) -> Obj {
+    match o {
+        Obj.F(f) => {
+            let len = f.height();
+            let k = if n < len { n } else { len };
+            Obj.F(f.slice(len - k, len))
+        }
+        Obj.S(s) => {
+            let len = s.values.len();
+            let k = if n < len { n } else { len };
+            Obj.S(s.slice(len - k, len))
+        }
+    }
+}
+
+// A comparison of one cell with a job's literal; NaN compares false
+// except under !=.
+fn compare(a: Val, rel: Str, b: Val) -> bool {
+    if is_na_val(a) {
+        return rel == "!=";
+    }
+    let o = match (a, b) {
+        (Val.S(x), Val.S(y)) => x.cmp(y),
+        (x, y) => val_cmp(x, y),
+    };
+    match rel {
+        "==" => o == Ordering.Equal,
+        "!=" => o != Ordering.Equal,
+        "<" => o == Ordering.Less,
+        "<=" => o != Ordering.Greater,
+        ">" => o == Ordering.Greater,
+        _ => o != Ordering.Less,
+    }
+}
+
+fn where_rows(f: Frame, name: Str, rel: Str, rhs: Str) -> Result[Frame, String] {
+    let c = f.col(name)?;
+    let lit = literal(rhs);
+    let mut keep: Vec[i64] = Vec.new();
+    for i in 0..c.len() {
+        if compare(c.get(i), rel, lit) {
+            keep.push(i);
+        }
+    }
+    Ok(f.take(keep))
+}
+
+// ============================================================ sorting
+
+// A stable sort of the positions by the given keys; NaN goes last
+// whichever way a key sorts.
+fn sort_positions(keys: Vec[Col], asc: Vec[bool]) -> Vec[i64] {
+    let n = if keys.len() == 0 { 0 } else { keys[0].len() };
+    let mut idx = range_idx(n);
+    idx.sort_by(|a, b| {
+        for k in 0..keys.len() {
+            let x = keys[k].get(a);
+            let y = keys[k].get(b);
+            let o = match (x, y) {
+                (Val.Na, Val.Na) => Ordering.Equal,
+                (Val.Na, _) => Ordering.Greater,
+                (_, Val.Na) => Ordering.Less,
+                (p, q) => {
+                    let o = val_cmp(p, q);
+                    if asc[k] { o } else { flip(o) }
+                }
+            };
+            if o != Ordering.Equal {
+                return o;
+            }
+        }
+        Ordering.Equal
+    });
+    idx
+}
+
+fn sort_values(o: Obj, by: Vec[String], asc: Vec[bool]) -> Result[Obj, String] {
+    match o {
+        Obj.S(s) => {
+            let idx = sort_positions([s.values.clone()].to_vec(), [asc[0]].to_vec());
+            Ok(Obj.S(s.take(idx)))
+        }
+        Obj.F(f) => {
+            let mut keys: Vec[Col] = Vec.new();
+            for b in by {
+                keys.push(f.col(b)?);
+            }
+            let dirs: Vec[bool] = range_idx(by.len()).iter().map(|k| if *k < asc.len() { asc[*k] } else { asc[0] }).collect();
+            Ok(Obj.F(f.take(sort_positions(keys, dirs))))
+        }
+    }
+}
+
+fn sort_index(o: Obj, asc: bool) -> Obj {
+    match o {
+        Obj.F(f) => {
+            let levels = f.index.levels();
+            let dirs: Vec[bool] = levels.iter().map(|_| asc).collect();
+            Obj.F(f.take(sort_positions(levels, dirs)))
+        }
+        Obj.S(s) => {
+            let levels = s.index.levels();
+            let dirs: Vec[bool] = levels.iter().map(|_| asc).collect();
+            Obj.S(s.take(sort_positions(levels, dirs)))
+        }
+    }
+}
+
+// ============================================================ the index as columns and back
+
+fn set_index(f: Frame, keys: Vec[String]) -> Result[Frame, String] {
+    let mut levels: Vec[Col] = Vec.new();
+    for k in keys {
+        levels.push(f.col(k)?);
+    }
+    let mut names: Vec[String] = Vec.new();
+    let mut cols: Vec[Col] = Vec.new();
+    let all = f.column_names();
+    for j in 0..all.len() {
+        if not keys.iter().any(|k| *k == all[j]) {
+            names.push(all[j].clone());
+            cols.push(f.cols[j].clone());
+        }
+    }
+    let index = if keys.len() == 1 {
+        Index.Flat(levels[0].clone(), Some(keys[0].clone()))
+    } else {
+        Index.Multi(levels, keys.iter().map(|k| Some(k.clone())).collect())
+    };
+    Ok(Frame { index: index, columns: str_index(names), cols: cols })
+}
+
+// reset_index: the index levels become the first columns, named after
+// the levels ("index" or level_N when a level has no name).
+fn reset_index(f: Frame) -> Frame {
+    let levels = f.index.levels();
+    let names = f.index.names();
+    let mut labels: Vec[String] = Vec.new();
+    for j in 0..levels.len() {
+        labels.push(match names[j] {
+            Some(ref n) => n.clone(),
+            None => if levels.len() == 1 { "index".to_string() } else { f"level_{j}" },
+        });
+    }
+    let mut cols = levels.clone();
+    for c in f.cols {
+        cols.push(c.clone());
+    }
+    let columns = match f.columns {
+        Index.Multi(ref lv, ref ns) => {
+            // The new labels take the first level; the others get "".
+            let mut out: Vec[Col] = Vec.new();
+            for k in 0..lv.len() {
+                let mut vals: Vec[Val] = Vec.new();
+                for l in labels {
+                    vals.push(if k == 0 { Val.S(l.clone()) } else { Val.S(String.new()) });
+                }
+                for v in lv[k].vals() {
+                    vals.push(v);
+                }
+                out.push(infer_vals(vals));
+            }
+            Index.Multi(out, ns.clone())
+        }
+        _ => {
+            let mut all = labels.clone();
+            for n in f.column_names() {
+                all.push(n);
+            }
+            str_index(all)
+        }
+    };
+    Frame { index: Index.Range(0, f.height()), columns: columns, cols: cols }
+}
+
+// ============================================================ groupby
+
+// The groups of rows by key columns: the observed keys in sorted order
+// and the rows of each in frame order. A row with a missing key is
+// dropped, as dropna=True drops it.
+#[derive(Clone)]
+struct Groups {
+    keys: Vec[Vec[Val]],
+    rows: Vec[Vec[i64]],
+}
+
+fn group_by(keys: Vec[Col]) -> Groups {
+    let n = if keys.len() == 0 { 0 } else { keys[0].len() };
+    let mut ids: Map[String, i64] = Map.new();
+    let mut found: Vec[Vec[Val]] = Vec.new();
+    let mut members: Vec[Vec[i64]] = Vec.new();
+    for i in 0..n {
+        let k: Vec[Val] = keys.iter().map(|c| c.get(i)).collect();
+        if k.iter().any(|v| is_na_val(v)) {
+            continue;
+        }
+        let t = key_text(k);
+        let id = match ids.get(t) {
+            Some(g) => *g,
+            None => {
+                ids[t.clone()] = found.len();
+                found.push(k.clone());
+                members.push(Vec.new());
+                found.len() - 1
+            }
+        };
+        members[id].push(i);
+    }
+    let mut order = range_idx(found.len());
+    order.sort_by(|a, b| {
+        for j in 0..keys.len() {
+            let o = val_cmp(found[a][j], found[b][j]);
+            if o != Ordering.Equal {
+                return o;
+            }
+        }
+        Ordering.Equal
+    });
+    Groups { keys: order.iter().map(|g| found[*g].clone()).collect(), rows: order.iter().map(|g| members[*g].clone()).collect() }
+}
+
+fn key_cols(f: Frame, by: Vec[String]) -> Result[Vec[Col], String] {
+    let mut out: Vec[Col] = Vec.new();
+    for b in by {
+        out.push(f.col(b)?);
+    }
+    Ok(out)
+}
+
+// The index of a grouped result: the key columns' values at each group's
+// first row, so each level keeps its column's dtype.
+fn group_index(keys: Vec[Col], by: Vec[String], g: Groups) -> Index {
+    let firsts: Vec[i64] = g.rows.iter().map(|r| r[0]).collect();
+    if by.len() == 1 {
+        Index.Flat(keys[0].take(firsts), Some(by[0].clone()))
+    } else {
+        Index.Multi(keys.iter().map(|c| c.take(firsts)).collect(), by.iter().map(|b| Some(b.clone())).collect())
+    }
+}
+
+// One aggregate of one column over each group, as pandas' cython kernel
+// for it computes it.
+fn agg_one(c: Col, g: Groups, func: Str) -> Result[Col, String] {
+    match func {
+        "size" => return Ok(Col.Int(g.rows.iter().map(|r| r.len()).collect())),
+        "count" => return Ok(Col.Int(g.rows.iter().map(|r| r.iter().filter(|i| not c.is_na(*i)).count()).collect())),
+        "sum" | "mean" | "min" | "max" | "median" | "std" | "var" => {}
+        _ => return Err(f"AttributeError: 'SeriesGroupBy' object has no attribute '{func}'"),
+    }
+    match c {
+        Col.Int(v) => match func {
+            "sum" => Ok(Col.Int(g.rows.iter().map(|r| {
+                let mut s: i64 = 0;
+                for i in r {
+                    s = s.wrapping_add(v[*i]);
+                }
+                s
+            }).collect())),
+            "min" => Ok(Col.Int(g.rows.iter().map(|r| r.iter().map(|i| v[*i]).min() ?? 0).collect())),
+            "max" => Ok(Col.Int(g.rows.iter().map(|r| r.iter().map(|i| v[*i]).max() ?? 0).collect())),
+            _ => agg_float(Col.Float(c.floats()), g, func),
+        },
+        Col.Bool(v) => match func {
+            // A bool column sums to a count, as an int.
+            "sum" => Ok(Col.Int(g.rows.iter().map(|r| r.iter().filter(|i| v[*i]).count()).collect())),
+            _ => agg_float(Col.Float(c.floats()), g, func),
+        },
+        Col.Float(_) => agg_float(c, g, func),
+        _ => match func {
+            "min" | "max" => {
+                let mut out: Vec[Option[String]] = Vec.new();
+                for r in g.rows {
+                    let mut best: Option[String] = None;
+                    for i in r {
+                        if let Val.S(s) = c.get(i) {
+                            let better = match best {
+                                None => true,
+                                Some(ref b) => if func == "min" { s < b } else { s > b },
+                            };
+                            if better {
+                                best = Some(s.clone());
+                            }
+                        }
+                    }
+                    out.push(best);
+                }
+                Ok(Col.Str(out))
+            }
+            _ => Err(f"TypeError: agg function failed [how->{func},dtype->str]"),
+        },
+    }
+}
+
+fn agg_float(c: Col, g: Groups, func: Str) -> Result[Col, String] {
+    let v = c.floats();
+    let mut out: Vec[f64] = Vec.new();
+    for r in g.rows {
+        let vals: Vec[f64] = r.iter().map(|i| v[*i]).collect();
+        out.push(match func {
+            "sum" => {
+                let mut k = kahan();
+                for x in vals {
+                    if not is_nan(x) {
+                        k.add(x);
+                    }
+                }
+                k.sum
+            }
+            "mean" => {
+                let mut k = kahan();
+                for x in vals {
+                    if not is_nan(x) {
+                        k.add(x);
+                    }
+                }
+                if k.n == 0 { nan() } else { k.sum / (k.n as f64) }
+            }
+            "min" | "max" => {
+                let mut best = nan();
+                for x in vals {
+                    if is_nan(x) {
+                        continue;
+                    }
+                    if is_nan(best) or (func == "min" and x < best) or (func == "max" and x > best) {
+                        best = x;
+                    }
+                }
+                best
+            }
+            "median" => median_of(vals),
+            "std" => welford(vals, 1, true),
+            _ => welford(vals, 1, false),
+        });
+    }
+    Ok(Col.Float(out))
+}
+
+// Series.sum, .mean, .count, .min and .max over a whole column, the
+// nanops way: numpy's pairwise sum for floats.
+fn series_agg(c: Col, func: Str) -> Val {
+    match func {
+        "count" => Val.I(range_idx(c.len()).iter().filter(|i| not c.is_na(*i)).count()),
+        "sum" => match c {
+            Col.Int(v) => Val.I(v.iter().fold(0, |a, x| a.wrapping_add(*x))),
+            _ => Val.F(np_sum(c.floats().iter().map(|x| if is_nan(*x) { 0.0 } else { *x }).collect())),
+        },
+        "mean" => Val.F(series_mean(c.floats())),
+        "min" | "max" => match c {
+            Col.Int(v) => Val.I(if func == "min" { v.iter().map(|x| *x).min() ?? 0 } else { v.iter().map(|x| *x).max() ?? 0 }),
+            _ => {
+                let s = sorted_valid(c.floats());
+                if s.len() == 0 {
+                    Val.F(nan())
+                } else {
+                    Val.F(if func == "min" { s[0] } else { s[s.len() - 1] })
+                }
+            }
+        },
+        _ => Val.Na,
+    }
+}
+
+struct AggSpec {
+    out: String,
+    col: String,
+    func: String,
+}
+
+// `out=col:func,...`, as groupby(...).agg(out=(col, func), ...) names them.
+fn parse_specs(s: Str) -> Result[Vec[AggSpec], String] {
+    let mut out: Vec[AggSpec] = Vec.new();
+    for p in names_of(s) {
+        let (name, rest) = match p.split_once("=") {
+            Some((a, b)) => (a.to_string(), b.to_string()),
+            None => return Err(f"ValueError: bad aggregate {p}"),
+        };
+        match rest.split_once(":") {
+            Some((c, f)) => out.push(AggSpec { out: name, col: c.to_string(), func: f.to_string() }),
+            None => return Err(f"ValueError: bad aggregate {p}"),
+        }
+    }
+    Ok(out)
+}
+
+// groupby(keys).agg(**named). Each aggregate runs in a task of its own;
+// the columns join in order.
+fn agg(f: Frame, by: Vec[String], specs: Vec[AggSpec]) -> Result[Frame, String] {
+    let keys = key_cols(f, by)?;
+    let g = group_by(keys);
+    let group = TaskGroup.new();
+    let mut handles = Vec.new();
+    for s in specs {
+        let c = f.col(s.col)?;
+        let gg = g.clone();
+        let func = s.func.clone();
+        handles.push(group.spawn(|| agg_one(c, gg, func)));
+    }
+    let mut cols: Vec[Col] = Vec.new();
+    for h in handles.into_iter() {
+        cols.push(h.join()?);
+    }
+    let names: Vec[String] = specs.iter().map(|s| s.out.clone()).collect();
+    Ok(Frame { index: group_index(keys, by, g), columns: str_index(names), cols: cols })
+}
+
+fn size(f: Frame, by: Vec[String]) -> Result[Series, String] {
+    let keys = key_cols(f, by)?;
+    let g = group_by(keys);
+    Ok(Series { index: group_index(keys, by, g), name: None, values: Col.Int(g.rows.iter().map(|r| r.len()).collect()) })
+}
+
+// ============================================================ unstack and stack
+
+// Unstacks the last index level: the remaining levels' combinations in
+// sorted order become the rows, and each column becomes one column per
+// value of the unstacked level. A missing cell is fill (if given) or NaN.
+struct Unstacked {
+    rows: Index,
+    level: Col,
+    level_name: Option[String],
+    picks: Vec[Vec[i64]],
+    missing: bool,
+}
+
+fn unstack_plan(index: Index) -> Result[Unstacked, String] {
+    let (levels, names) = match index {
+        Index.Multi(lv, ns) => (lv.clone(), ns.clone()),
+        _ => return Err("ValueError: index must be a MultiIndex to unstack".to_string()),
+    };
+    let k = levels.len();
+    let rest: Vec[Col] = levels[..k - 1].to_vec();
+    let rg = group_by(rest);
+    let lg = group_by([levels[k - 1].clone()].to_vec());
+    let n = levels[0].len();
+    let mut row_of: Vec[i64] = Vec.filled(n, -1);
+    for r in 0..rg.rows.len() {
+        for i in rg.rows[r] {
+            row_of[i] = r;
+        }
+    }
+    let mut col_of: Vec[i64] = Vec.filled(n, -1);
+    for c in 0..lg.rows.len() {
+        for i in lg.rows[c] {
+            col_of[i] = c;
+        }
+    }
+    // picks[c][r]: the source position for row r of new column c.
+    let mut picks: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..lg.rows.len() {
+        picks.push(Vec.filled(rg.rows.len(), -1));
+    }
+    for i in 0..n {
+        if row_of[i] >= 0 and col_of[i] >= 0 {
+            picks[col_of[i]][row_of[i]] = i;
+        }
+    }
+    let missing = picks.iter().any(|p| p.iter().any(|x| *x < 0));
+    let firsts: Vec[i64] = rg.rows.iter().map(|r| r[0]).collect();
+    let rows = if k == 2 {
+        Index.Flat(levels[0].take(firsts), names[0].clone())
+    } else {
+        Index.Multi(rest.iter().map(|c| c.take(firsts)).collect(), names[..k - 1].to_vec())
+    };
+    let lfirsts: Vec[i64] = lg.rows.iter().map(|r| r[0]).collect();
+    Ok(Unstacked { rows: rows, level: levels[k - 1].take(lfirsts), level_name: names[k - 1].clone(), picks: picks, missing: missing })
+}
+
+fn unstack(o: Obj) -> Result[Obj, String] {
+    match o {
+        Obj.S(s) => {
+            let p = unstack_plan(s.index)?;
+            let cols: Vec[Col] = p.picks.iter().map(|pk| s.values.take(pk.clone())).collect();
+            Ok(Obj.F(Frame { index: p.rows, columns: Index.Flat(p.level, p.level_name), cols: cols }))
+        }
+        Obj.F(f) => {
+            let p = unstack_plan(f.index)?;
+            let mut cols: Vec[Col] = Vec.new();
+            let mut top: Vec[Val] = Vec.new();
+            let mut low: Vec[Val] = Vec.new();
+            let names = f.columns.names();
+            let src_levels = f.columns.levels();
+            for j in 0..f.cols.len() {
+                for c in 0..p.picks.len() {
+                    cols.push(f.cols[j].take(p.picks[c].clone()));
+                    top.push(src_levels[0].get(j));
+                    low.push(p.level.get(c));
+                }
+            }
+            let columns = Index.Multi([infer_vals(top), infer_vals(low)].to_vec(), [names[0].clone(), p.level_name.clone()].to_vec());
+            Ok(Obj.F(Frame { index: p.rows, columns: columns, cols: cols }))
+        }
+    }
+}
+
+// stack (pandas 3's implementation): the last column level moves into
+// the index, row by row, in the order its values first appear.
+fn stack(f: Frame) -> Result[Obj, String] {
+    let n = f.height();
+    match f.columns {
+        Index.Multi(ref lv, ref ns) => {
+            let k = lv.len();
+            // The remaining column labels and the stacked values, each in
+            // the order they first appear.
+            let mut tops: Vec[Val] = Vec.new();
+            let mut lows: Vec[Val] = Vec.new();
+            for j in 0..f.cols.len() {
+                let t = lv[0].get(j);
+                let l = lv[k - 1].get(j);
+                if not tops.iter().any(|x| val_eq(x, t)) {
+                    tops.push(t);
+                }
+                if not lows.iter().any(|x| val_eq(x, l)) {
+                    lows.push(l);
+                }
+            }
+            let mut labels: Vec[Vec[Val]] = Vec.new();
+            let mut cells: Vec[Vec[Val]] = tops.iter().map(|_| Vec.new()).collect();
+            let mut kinds: Vec[Vec[Col]] = tops.iter().map(|_| Vec.new()).collect();
+            for t in 0..tops.len() {
+                for j in 0..f.cols.len() {
+                    if val_eq(lv[0].get(j), tops[t]) {
+                        kinds[t].push(f.cols[j].clone());
+                    }
+                }
+            }
+            for i in 0..n {
+                for l in lows {
+                    let mut lab = f.index.label(i);
+                    lab.push(l.clone());
+                    labels.push(lab);
+                    for t in 0..tops.len() {
+                        let mut v = Val.Na;
+                        for j in 0..f.cols.len() {
+                            if val_eq(lv[0].get(j), tops[t]) and val_eq(lv[k - 1].get(j), l) {
+                                v = f.cols[j].get(i);
+                            }
+                        }
+                        cells[t].push(v);
+                    }
+                }
+            }
+            let mut names = f.index.names();
+            names.push(ns[k - 1].clone());
+            let cols: Vec[Col] = range_idx(tops.len()).iter().map(|t| col_of_kind(common_kind(kinds[*t].clone()), cells[*t].clone())).collect();
+            Ok(Obj.F(Frame { index: Index.from_labels(labels, names), columns: Index.Flat(infer_vals(tops), ns[0].clone()), cols: cols }))
+        }
+        _ => {
+            let cl = f.columns.levels()[0].clone();
+            let mut labels: Vec[Vec[Val]] = Vec.new();
+            let mut vals: Vec[Val] = Vec.new();
+            for i in 0..n {
+                for j in 0..f.cols.len() {
+                    let mut lab = f.index.label(i);
+                    lab.push(cl.get(j));
+                    labels.push(lab);
+                    vals.push(f.cols[j].get(i));
+                }
+            }
+            let mut names = f.index.names();
+            names.push(f.columns.names()[0].clone());
+            Ok(Obj.S(Series { index: Index.from_labels(labels, names), name: None, values: col_of_kind(common_kind(f.cols.clone()), vals) }))
+        }
+    }
+}
+
+// ============================================================ transpose
+
+fn transpose(f: Frame) -> Frame {
+    let kind = common_kind(f.cols.clone());
+    let mut cols: Vec[Col] = Vec.new();
+    for i in 0..f.height() {
+        cols.push(col_of_kind(kind, f.cols.iter().map(|c| c.get(i)).collect()));
+    }
+    let columns = match f.index {
+        Index.Range(s, n) => Index.Range(s, n),
+        _ => f.index.clone(),
+    };
+    Frame { index: f.columns.clone(), columns: columns, cols: cols }
+}
+
+// ============================================================ pivot_table
+
+struct PivotOpts {
+    index: Vec[String],
+    columns: Vec[String],
+    values: Vec[String],
+    aggs: Vec[String],
+    fill: Option[Val],
+    margins: bool,
+}
+
+// A cell value for a missing combination: the fill value, as the
+// column's own dtype when it fits.
+fn fill_col(c: Col, fill: Option[Val]) -> Col {
+    match fill {
+        None => c,
+        Some(v) => match c {
+            Col.Float(x) => {
+                let filled: Vec[f64] = x.iter().map(|y| if is_nan(*y) { num_of(v) } else { *y }).collect();
+                match v {
+                    Val.I(_) => {
+                        // fillna on a float column keeps it float.
+                        Col.Float(filled)
+                    }
+                    _ => Col.Float(filled),
+                }
+            }
+            other => other,
+        },
+    }
+}
+
+// The unstacked table for one aggregate, before margins: columns
+// (value, column key) sorted, rows the observed index keys.
+fn pivot_one(f: Frame, o: PivotOpts, func: Str) -> Result[Frame, String] {
+    let mut by = o.index.clone();
+    for c in o.columns {
+        by.push(c.clone());
+    }
+    let keys = key_cols(f, by)?;
+    let g = group_by(keys);
+    let mut vals_sorted = o.values.clone();
+    vals_sorted.sort();
+    let gi = group_index(keys, by, g);
+    let mut aggs: Vec[Col] = Vec.new();
+    for v in vals_sorted {
+        aggs.push(agg_one(f.col(v)?, g, func)?);
+    }
+    let p = unstack_plan(gi)?;
+    let mut cols: Vec[Col] = Vec.new();
+    let mut top: Vec[Val] = Vec.new();
+    let mut low: Vec[Val] = Vec.new();
+    for j in 0..aggs.len() {
+        for c in 0..p.picks.len() {
+            let taken = match (aggs[j], o.fill) {
+                (Col.Int(ref v), Some(Val.I(d))) => Col.Int(p.picks[c].iter().map(|i| if *i < 0 { d } else { v[*i] }).collect()),
+                _ => fill_col(aggs[j].take(p.picks[c].clone()), o.fill),
+            };
+            cols.push(taken);
+            top.push(Val.S(vals_sorted[j].clone()));
+            low.push(p.level.get(c));
+        }
+    }
+    let columns = Index.Multi([infer_vals(top), infer_vals(low)].to_vec(), [None, p.level_name.clone()].to_vec());
+    Ok(Frame { index: p.rows, columns: columns, cols: cols })
+}
+
+// A value from a margin row, cast down to the column's dtype the way
+// maybe_downcast_to_dtype casts it.
+fn margin_cell(target: Col, v: Val) -> Val {
+    match (target, v) {
+        (Col.Int(_), Val.F(x)) => if x == x.trunc() { Val.I(x as i64) } else { Val.F(x) },
+        (Col.Float(_), Val.I(n)) => Val.F(n as f64),
+        (_, other) => other,
+    }
+}
+
+// The "All" column for each value and the "All" row, as _add_margins
+// builds them.
+fn add_margins(table: Frame, f: Frame, o: PivotOpts, func: Str) -> Result[Frame, String] {
+    let mut vals_sorted = o.values.clone();
+    vals_sorted.sort();
+    let lv = table.columns.levels();
+    let row_keys = key_cols(f, o.index)?;
+    let rg = group_by(row_keys);
+    let col_keys = key_cols(f, o.columns)?;
+    let cg = group_by(col_keys);
+    let mut cols: Vec[Col] = Vec.new();
+    let mut top: Vec[Val] = Vec.new();
+    let mut low: Vec[Val] = Vec.new();
+    let mut margin_row: Vec[Val] = Vec.new();
+    for v in vals_sorted {
+        let src = f.col(v)?;
+        // The rows of the table are the observed index keys, in the same
+        // sorted order as groupby(index) gives them.
+        let by_row = agg_one(src, rg, func)?;
+        let by_col = agg_one(src, cg, func)?;
+        for j in 0..table.cols.len() {
+            if let Val.S(t) = lv[0].get(j) {
+                if t == v {
+                    cols.push(table.cols[j].clone());
+                    top.push(Val.S(v.clone()));
+                    low.push(lv[1].get(j));
+                    // The column key's margin: groupby(columns) of the data.
+                    let mut cell = Val.Na;
+                    for c in 0..cg.keys.len() {
+                        if val_eq(cg.keys[c][0], lv[1].get(j)) {
+                            cell = by_col.get(c);
+                        }
+                    }
+                    margin_row.push(cell);
+                }
+            }
+        }
+        cols.push(by_row);
+        top.push(Val.S(v.clone()));
+        low.push(Val.S("All".to_string()));
+        margin_row.push(series_agg(src, func));
+    }
+    // The margin row joins each column with its dtype.
+    let mut out_cols: Vec[Col] = Vec.new();
+    for j in 0..cols.len() {
+        let cell = margin_cell(cols[j], margin_row[j].clone());
+        out_cols.push(concat_cols([cols[j].clone(), col_of_kind(match cell {
+            Val.I(_) => 0,
+            Val.F(_) => 1,
+            Val.Na => 1,
+            _ => 4,
+        }, [cell].to_vec())].to_vec()));
+    }
+    let k = o.index.len();
+    let mut labels: Vec[Vec[Val]] = range_idx(table.height()).iter().map(|i| table.index.label(*i)).collect();
+    let mut all: Vec[Val] = [Val.S("All".to_string())].to_vec();
+    for _ in 1..k {
+        all.push(Val.S(String.new()));
+    }
+    labels.push(all);
+    let index = Index.from_labels(labels, table.index.names());
+    let columns = Index.Multi([infer_vals(top), infer_vals(low)].to_vec(), table.columns.names());
+    Ok(Frame { index: index, columns: columns, cols: out_cols })
+}
+
+fn pivot_table(f: Frame, o: PivotOpts) -> Result[Frame, String] {
+    for v in o.values {
+        if f.columns.find(v).is_none() {
+            return Err(f"KeyError: '{v}'");
+        }
+    }
+    let mut tables: Vec[Frame] = Vec.new();
+    for func in o.aggs {
+        let t = pivot_one(f, o, func)?;
+        tables.push(if o.margins { add_margins(t, f, o, func)? } else { t });
+    }
+    if tables.len() == 1 {
+        return Ok(tables[0].clone());
+    }
+    // A list of aggregates: concat(keys=aggs, axis=1).
+    let mut cols: Vec[Col] = Vec.new();
+    let mut lv: Vec[Vec[Val]] = [Vec.new(), Vec.new(), Vec.new()].to_vec();
+    for t in 0..tables.len() {
+        let tl = tables[t].columns.levels();
+        for j in 0..tables[t].cols.len() {
+            cols.push(tables[t].cols[j].clone());
+            lv[0].push(Val.S(o.aggs[t].clone()));
+            lv[1].push(tl[0].get(j));
+            lv[2].push(tl[1].get(j));
+        }
+    }
+    let mut names: Vec[Option[String]] = [None].to_vec();
+    for n in tables[0].columns.names() {
+        names.push(n);
+    }
+    let columns = Index.Multi(lv.iter().map(|l| infer_vals(l.clone())).collect(), names);
+    Ok(Frame { index: tables[0].index.clone(), columns: columns, cols: cols })
+}
+
+// ============================================================ describe and value_counts
+
+// One numeric column's describe(): count, mean, std, min, the quartiles
+// and max.
+fn describe_col(c: Col) -> Vec[f64] {
+    let v = c.floats();
+    let s = sorted_valid(v);
+    let count = s.len();
+    let mean = series_mean(v);
+    let std = if count > 1 { series_var(v).sqrt() } else { nan() };
+    let lo = if count > 0 { s[0] } else { nan() };
+    let hi = if count > 0 { s[count - 1] } else { nan() };
+    [count as f64, mean, std, lo, np_quantile(s, 0.25), np_quantile(s, 0.5), np_quantile(s, 0.75), hi].to_vec()
+}
+
+// describe() of the numeric columns, each in a task of its own.
+fn describe(f: Frame) -> Frame {
+    let group = TaskGroup.new();
+    let mut handles = Vec.new();
+    let mut names: Vec[String] = Vec.new();
+    let all = f.column_names();
+    for i in 0..f.cols.len() {
+        if f.cols[i].is_numeric() {
+            let c = f.cols[i].clone();
+            names.push(all[i].clone());
+            handles.push(group.spawn(|| describe_col(c)));
+        }
+    }
+    let mut cols: Vec[Col] = Vec.new();
+    for h in handles.into_iter() {
+        cols.push(Col.Float(h.join()));
+    }
+    let labels: Vec[String] = ["count", "mean", "std", "min", "25%", "50%", "75%", "max"].iter().map(|s| s.to_string()).collect();
+    Frame { index: str_index(labels), columns: str_index(names), cols: cols }
+}
+
+// value_counts: each value's count, most frequent first, ties in the
+// order the values first appear; NaN is left out.
+fn value_counts(f: Frame, name: Str, normalize: bool) -> Result[Series, String] {
+    let c = f.col(name)?;
+    let mut ids: Map[String, i64] = Map.new();
+    let mut firsts: Vec[i64] = Vec.new();
+    let mut counts: Vec[i64] = Vec.new();
+    for i in 0..c.len() {
+        let v = c.get(i);
+        if is_na_val(v) {
+            continue;
+        }
+        let k = key_text([v].to_vec());
+        match ids.get(k) {
+            Some(g) => counts[*g] += 1,
+            None => {
+                ids[k.clone()] = firsts.len();
+                firsts.push(i);
+                counts.push(1);
+            }
+        }
+    }
+    let mut order = range_idx(firsts.len());
+    order.sort_by(|a, b| counts[b].cmp(counts[a]));
+    let index = Index.Flat(c.take(order.iter().map(|g| firsts[*g]).collect()), Some(name.to_string()));
+    if normalize {
+        let total: i64 = counts.iter().sum();
+        Ok(Series { index: index, name: Some("proportion".to_string()), values: Col.Float(order.iter().map(|g| (counts[*g] as f64) / (total as f64)).collect()) })
+    } else {
+        Ok(Series { index: index, name: Some("count".to_string()), values: Col.Int(order.iter().map(|g| counts[*g]).collect()) })
+    }
+}
+
+// ============================================================ arithmetic
+
+fn round_col(c: Col, decimals: i64) -> Col {
+    match c {
+        Col.Float(v) => Col.Float(v.iter().map(|x| np_round(*x, decimals)).collect()),
+        other => other,
+    }
+}
+
+fn round_obj(o: Obj, decimals: i64) -> Obj {
+    match o {
+        Obj.F(f) => Obj.F(Frame { index: f.index.clone(), columns: f.columns.clone(), cols: f.cols.iter().map(|c| round_col(c.clone(), decimals)).collect() }),
+        Obj.S(s) => Obj.S(Series { index: s.index.clone(), name: s.name.clone(), values: round_col(s.values.clone(), decimals) }),
+    }
+}
+
+fn mul_col(c: Col, k: Val) -> Col {
+    match (c, k) {
+        (Col.Int(v), Val.I(n)) => Col.Int(v.iter().map(|x| x.wrapping_mul(n)).collect()),
+        (other, kk) => {
+            let m = num_of(kk);
+            Col.Float(other.floats().iter().map(|x| *x * m).collect())
+        }
+    }
+}
+
+fn div_cols(a: Col, b: Col) -> Col {
+    let x = a.floats();
+    let y = b.floats();
+    Col.Float(range_idx(x.len()).iter().map(|i| x[*i] / y[*i]).collect())
+}
+
+// ============================================================ text width
+
+// pandas measures and pads text by code points (display.unicode.
+// east_asian_width is off), so a wide character counts as one.
+fn clen(s: Str) -> i64 {
+    s.chars().count()
+}
+
+fn ljust(s: Str, w: i64) -> String {
+    let n = clen(s);
+    if n >= w { s.to_string() } else { s.to_string() + " ".repeat(w - n) }
+}
+
+fn rjust(s: Str, w: i64) -> String {
+    let n = clen(s);
+    if n >= w { s.to_string() } else { " ".repeat(w - n) + s }
+}
+
+// str.center: the odd space goes left when the width is odd.
+fn center(s: Str, w: i64) -> String {
+    let n = clen(s);
+    if n >= w {
+        return s.to_string();
+    }
+    let marg = w - n;
+    let left = marg / 2 + (marg & w & 1);
+    " ".repeat(left) + s + " ".repeat(marg - left)
+}
+
+fn justify_one(s: Str, w: i64, mode: Str) -> String {
+    match mode {
+        "left" => ljust(s, w),
+        "center" => center(s, w),
+        _ => rjust(s, w),
+    }
+}
+
+fn justify_all(texts: Vec[String], w: i64, mode: Str) -> Vec[String] {
+    texts.iter().map(|t| justify_one(t, w, mode)).collect()
+}
+
+fn max_len(texts: Vec[String]) -> i64 {
+    texts.iter().map(|t| clen(t)).max() ?? 0
+}
+
+fn first_chars(s: Str, n: i64) -> String {
+    s.chars().take(n).collect()
+}
+
+// printing.adjoin: the lists side by side, each padded to its widest
+// entry plus `space` (the last one to its widest), shorter lists padded
+// at the top.
+fn adjoin(space: i64, lists: Vec[Vec[String]]) -> Vec[String] {
+    let k = lists.len();
+    let mut lengths: Vec[i64] = Vec.new();
+    for i in 0..k {
+        lengths.push(if i + 1 < k { max_len(lists[i]) + space } else { max_len(lists[i]) });
+    }
+    let rows = lists.iter().map(|l| l.len()).max() ?? 0;
+    let mut padded: Vec[Vec[String]] = Vec.new();
+    for i in 0..k {
+        let mut col: Vec[String] = Vec.new();
+        for _ in 0..rows - lists[i].len() {
+            col.push(" ".repeat(lengths[i]));
+        }
+        for t in lists[i] {
+            col.push(ljust(t, lengths[i]));
+        }
+        padded.push(col);
+    }
+    let mut out: Vec[String] = Vec.new();
+    for r in 0..rows {
+        let mut line = String.new();
+        for i in 0..k {
+            line.push_str(padded[i][r]);
+        }
+        out.push(line);
+    }
+    out
+}
+
+// _make_fixed_width: every string padded to the widest, which
+// display.max_colwidth caps; a longer string is cut to the cap with
+// "..." when the cap is over 3.
+fn fixed_width(strings: Vec[String], justify: Str, minimum: i64, conf_max: Option[i64]) -> Vec[String] {
+    if strings.len() == 0 or justify == "all" {
+        return strings;
+    }
+    let mut w = max_len(strings);
+    if minimum > w {
+        w = minimum;
+    }
+    if let Some(m) = conf_max {
+        if w > m {
+            w = m;
+        }
+    }
+    let cut: Vec[String] = strings.iter().map(|x| {
+        match conf_max {
+            Some(m) => if m > 3 and clen(x) > w { first_chars(x, w - 3) + "..." } else { x.clone() },
+            None => x.clone(),
+        }
+    }).collect();
+    justify_all(cut, w, justify)
+}
+
+// ============================================================ format_array
+
+// The options in force while a frame or series is formatted.
+#[derive(Clone)]
+struct Ctx {
+    precision: i64,
+    max_colwidth: Option[i64],
+}
+
+// pprint_thing with escape_chars ("\t", "\r", "\n").
+fn escaped(s: Str) -> String {
+    s.replace("\t", "\\t").replace("\r", "\\r").replace("\n", "\\n")
+}
+
+fn val_str(v: Val) -> String {
+    match v {
+        Val.S(s) => escaped(s),
+        other => label_text(other),
+    }
+}
+
+// _trim_zeros_single_float.
+fn trim_zeros_single(s: Str) -> String {
+    let mut t = s.to_string();
+    while t.ends_with("0") {
+        t.pop();
+    }
+    if t.ends_with(".") {
+        t.push('0');
+    }
+    t
+}
+
+// The regex `^\s*[\+-]?[0-9]+\{decimal}[0-9]*$`.
+fn is_number_with_decimal(x: Str, decimal: Str) -> bool {
+    let chars: Vec[char] = x.chars().collect();
+    let dec: Vec[char] = decimal.chars().collect();
+    let mut i = 0;
+    while i < chars.len() and chars[i].is_whitespace() {
+        i += 1;
+    }
+    if i < chars.len() and (chars[i] == '+' or chars[i] == '-') {
+        i += 1;
+    }
+    let start = i;
+    while i < chars.len() and chars[i].is_ascii_digit() {
+        i += 1;
+    }
+    if i == start {
+        return false;
+    }
+    for d in dec {
+        if i >= chars.len() or chars[i] != d {
+            return false;
+        }
+        i += 1;
+    }
+    while i < chars.len() and chars[i].is_ascii_digit() {
+        i += 1;
+    }
+    i == chars.len()
+}
+
+// _trim_zeros_float: trailing zeros come off every number with a
+// decimal point together, while all of them end in one, leaving one
+// digit after the point.
+fn trim_zeros_float(strs: Vec[String], decimal: Str) -> Vec[String] {
+    let mut t = strs.clone();
+    loop {
+        let nums: Vec[String] = t.iter().filter(|x| is_number_with_decimal(x, decimal)).map(|x| x.clone()).collect();
+        if nums.len() == 0 or not nums.iter().all(|x| x.ends_with("0")) {
+            break;
+        }
+        t = t.iter().map(|x| if is_number_with_decimal(x, decimal) { first_chars(x, clen(x) - 1) } else { x.clone() }).collect();
+    }
+    t.iter().map(|x| if is_number_with_decimal(x, decimal) and x.ends_with(decimal) { x.clone() + "0" } else { x.clone() }).collect()
+}
+
+// How to format the values of one array.
+#[derive(Clone)]
+struct ArrayFmt {
+    float_format: Option[String],
+    na_rep: String,
+    justify: String,
+    decimal: String,
+    leading_space: bool,
+}
+
+fn array_fmt(leading_space: bool) -> ArrayFmt {
+    ArrayFmt { float_format: None, na_rep: "NaN".to_string(), justify: "right".to_string(), decimal: ".".to_string(), leading_space: leading_space }
+}
+
+fn pow10(d: i64) -> f64 {
+    let mut f = 1.0;
+    for _ in 0..d {
+        f = f * 10.0;
+    }
+    f
+}
+
+// FloatArrayFormatter.
+fn format_floats(v: Vec[f64], a: ArrayFmt, cx: Ctx) -> Result[Vec[String], String] {
+    let digits = cx.precision;
+    let na = if a.justify == "left" { " ".to_string() + a.na_rep } else { a.na_rep.clone() };
+    let sign = if a.leading_space { ' ' } else { '-' };
+    let dec = |s: String| -> String { if a.decimal != "." { s.replacen(".", a.decimal.as_str(), 1) } else { s } };
+    if let Some(ref ff) = a.float_format {
+        // A float_format string: `fmt % value`, no fixed width, no trim.
+        let mut out: Vec[String] = Vec.new();
+        for x in v {
+            if is_nan(x) {
+                out.push(na.clone());
+            } else {
+                out.push(dec(percent_format(ff, x)?));
+            }
+        }
+        return Ok(out);
+    }
+    let with_kind = |kind: char| -> Vec[String] {
+        let vals: Vec[String] = v.iter().map(|x| if is_nan(*x) { na.clone() } else { dec(py_float(*x, sign, false, false, 0, digits, kind)) }).collect();
+        trim_zeros_float(vals, a.decimal)
+    };
+    let fixed = with_kind('f');
+    let too_long = fixed.len() > 0 and max_len(fixed) > digits + 6;
+    let has_large = v.iter().any(|x| x.abs() > 1.0e6);
+    let small = 1.0 / pow10(digits);
+    let has_small = v.iter().any(|x| x.abs() < small and x.abs() > 0.0);
+    if has_small or (too_long and has_large) {
+        return Ok(with_kind('e'));
+    }
+    Ok(fixed)
+}
+
+// _GenericArrayFormatter over objects: str() of each value, a float
+// through display.precision with its zeros trimmed.
+fn format_objects(v: Vec[Val], a: ArrayFmt, cx: Ctx) -> Result[Vec[String], String] {
+    let mut out: Vec[String] = Vec.new();
+    for x in v {
+        match x {
+            Val.F(f) => {
+                out.push(match a.float_format {
+                    Some(ref ff) => percent_format(ff, f)?,
+                    None => trim_zeros_single(py_float(f, ' ', false, false, 0, cx.precision, 'f')),
+                });
+            }
+            Val.Na => out.push(if a.leading_space { " ".to_string() + a.na_rep } else { a.na_rep.clone() }),
+            other => out.push(if a.leading_space { " ".to_string() + val_str(other) } else { val_str(other) }),
+        }
+    }
+    Ok(out)
+}
+
+// format_array: each value as text, then all padded to one width.
+fn format_array(c: Col, a: ArrayFmt, cx: Ctx) -> Result[Vec[String], String] {
+    let raw = match c {
+        Col.Float(v) => format_floats(v, a, cx)?,
+        Col.Int(v) => v.iter().map(|x| if a.leading_space and *x >= 0 { f" {x}" } else { x.to_string() }).collect(),
+        Col.Bool(v) => v.iter().map(|b| if a.leading_space { " ".to_string() + bool_text(*b) } else { bool_text(*b) }).collect(),
+        Col.Str(v) => format_objects(v.iter().map(|s| match s {
+            Some(t) => Val.S(t.clone()),
+            None => Val.Na,
+        }).collect(), a, cx)?,
+        Col.Obj(v) => format_objects(v, a, cx)?,
+    };
+    Ok(fixed_width(raw, a.justify, 0, cx.max_colwidth))
+}
+
+// Index.trim_front: the leading spaces all the strings share.
+fn trim_front(strs: Vec[String]) -> Vec[String] {
+    if strs.len() == 0 {
+        return strs;
+    }
+    let lead = strs.iter().map(|s| clen(s) - clen(s.trim_start())).min() ?? 0;
+    if lead > 0 {
+        strs.iter().map(|s| s.chars().skip(lead).collect()).collect()
+    } else {
+        strs
+    }
+}
+
+// Index._format_flat for one level's values: text and object labels as
+// they are, numbers padded on the right, then the shared leading space
+// trimmed.
+fn format_level(c: Col, cx: Ctx) -> Result[Vec[String], String] {
+    let justify = match c {
+        Col.Str(_) | Col.Obj(_) => "all",
+        _ => "left",
+    };
+    let mut a = array_fmt(true);
+    a.justify = justify.to_string();
+    Ok(trim_front(format_array(c, a, cx)?))
+}
+
+fn format_flat(ix: Index, include_name: bool, cx: Ctx) -> Result[Vec[String], String] {
+    let mut out: Vec[String] = Vec.new();
+    if include_name {
+        out.push(match ix.names()[0] {
+            Some(ref n) => escaped(n),
+            None => String.new(),
+        });
+    }
+    match ix {
+        Index.Range(s, n) => {
+            let w = if n == 0 { 0 } else { clen((s).to_string()).max(clen((s + n - 1).to_string())) };
+            for i in 0..n {
+                out.push(ljust((s + i).to_string(), w));
+            }
+        }
+        Index.Flat(c, _) => {
+            for t in format_level(c, cx)? {
+                out.push(t);
+            }
+        }
+        Index.Multi(_, _) => {}
+    }
+    Ok(out)
+}
+
+// sparsify_labels: a label equal to the one above it at every level up
+// to its own is blanked.
+fn sparsify(levels: Vec[Vec[String]], start: i64) -> Vec[Vec[String]] {
+    let k = levels.len();
+    if k == 0 or levels[0].len() == 0 {
+        return levels;
+    }
+    let n = levels[0].len();
+    let row = |r: i64| -> Vec[String] { levels.iter().map(|l| l[r].clone()).collect() };
+    let mut result: Vec[Vec[String]] = Vec.new();
+    for r in 0..start + 1 {
+        result.push(row(r));
+    }
+    let mut prev = row(start);
+    for r in start + 1..n {
+        let cur = row(r);
+        let mut sparse: Vec[String] = Vec.new();
+        for i in 0..k {
+            if i == k - 1 {
+                sparse.push(cur[i].clone());
+                break;
+            }
+            if prev[i] == cur[i] {
+                sparse.push(String.new());
+            } else {
+                for j in i..k {
+                    sparse.push(cur[j].clone());
+                }
+                break;
+            }
+        }
+        result.push(sparse);
+        prev = cur;
+    }
+    range_idx(k).iter().map(|j| result.iter().map(|r| r[*j].clone()).collect()).collect()
+}
+
+// MultiIndex._format_multi: each level's labels (with the level's name
+// first), sparsified below the names.
+fn format_multi(ix: Index, include_names: bool, sparse: bool, cx: Ctx) -> Result[Vec[Vec[String]], String] {
+    let levels = ix.levels();
+    let names = ix.names();
+    let mut out: Vec[Vec[String]] = Vec.new();
+    for j in 0..levels.len() {
+        let mut level: Vec[String] = Vec.new();
+        if include_names {
+            level.push(match names[j] {
+                Some(ref n) => escaped(n),
+                None => String.new(),
+            });
+        }
+        for t in format_level(levels[j], cx)? {
+            level.push(t);
+        }
+        out.push(level);
+    }
+    if sparse {
+        return Ok(sparsify(out, if include_names { 1 } else { 0 }));
+    }
+    Ok(out)
+}
+
+// pprint_thing of an Index: its labels in brackets.
+fn index_repr(ix: Index) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for i in 0..ix.len() {
+        let lab = ix.label(i);
+        if lab.len() == 1 {
+            parts.push(val_str(lab[0]));
+        } else {
+            parts.push("(" + lab.iter().map(|v| val_str(v)).collect::[Vec[String]]().join(", ") + ")");
+        }
+    }
+    "[" + parts.join(", ") + "]"
+}
+
+// ============================================================ options
+
+// The display.* options a job's `show` step sets.
+#[derive(Clone)]
+struct Display {
+    max_rows: Option[i64],
+    min_rows: Option[i64],
+    max_columns: Option[i64],
+    width: i64,
+    precision: i64,
+    max_colwidth: Option[i64],
+    show_dimensions: i64,
+    colheader_justify: String,
+    multi_sparse: bool,
+    expand_frame_repr: bool,
+}
+
+// pandas' defaults, with max_columns at 20 as outside a terminal.
+fn display_defaults() -> Display {
+    Display {
+        max_rows: Some(60),
+        min_rows: Some(10),
+        max_columns: Some(20),
+        width: 80,
+        precision: 6,
+        max_colwidth: Some(50),
+        show_dimensions: 2,
+        colheader_justify: "right".to_string(),
+        multi_sparse: true,
+        expand_frame_repr: true,
+    }
+}
+
+// The arguments of DataFrame.to_string and Series.to_string, which
+// repr fills in from the display options. show_dimensions and length are
+// 0 for False, 1 for True and 2 for "truncate".
+#[derive(Clone)]
+struct Fmt {
+    max_rows: Option[i64],
+    min_rows: Option[i64],
+    max_cols: Option[i64],
+    max_colwidth: Option[i64],
+    show_dimensions: i64,
+    line_width: Option[i64],
+    precision: i64,
+    justify: String,
+    sparsify: bool,
+    header: bool,
+    index: bool,
+    na_rep: String,
+    float_format: Option[String],
+    col_space: i64,
+    index_names: bool,
+    decimal: String,
+    length: i64,
+    dtype: bool,
+    name: bool,
+}
+
+// to_string's own defaults; the options it reads come from `d`.
+fn string_fmt(d: Display) -> Fmt {
+    Fmt {
+        max_rows: None,
+        min_rows: None,
+        max_cols: None,
+        max_colwidth: None,
+        show_dimensions: 0,
+        line_width: None,
+        precision: d.precision,
+        justify: d.colheader_justify.clone(),
+        sparsify: d.multi_sparse,
+        header: true,
+        index: true,
+        na_rep: "NaN".to_string(),
+        float_format: None,
+        col_space: 0,
+        index_names: true,
+        decimal: ".".to_string(),
+        length: 0,
+        dtype: false,
+        name: false,
+    }
+}
+
+// What repr passes to to_string (get_dataframe_repr_params and
+// get_series_repr_params).
+fn repr_fmt(d: Display) -> Fmt {
+    let mut f = string_fmt(d);
+    f.max_rows = d.max_rows;
+    f.min_rows = d.min_rows;
+    f.max_cols = d.max_columns;
+    f.max_colwidth = d.max_colwidth;
+    f.show_dimensions = d.show_dimensions;
+    f.line_width = if d.expand_frame_repr { Some(d.width) } else { None };
+    f.length = d.show_dimensions;
+    f.dtype = true;
+    f.name = true;
+    f
+}
+
+fn ctx_of(o: Fmt) -> Ctx {
+    Ctx { precision: o.precision, max_colwidth: o.max_colwidth }
+}
+
+fn nonzero(o: Option[i64]) -> bool {
+    match o {
+        Some(n) => n != 0,
+        None => false,
+    }
+}
+
+// ============================================================ DataFrameFormatter
+
+// A frame cut down to what is shown: the first and last columns when
+// there are more than max_cols, the first and last rows when there are
+// more than max_rows (min_rows of them when min_rows is set).
+#[derive(Clone)]
+struct Layout {
+    frame: Frame,
+    tr: Frame,
+    o: Fmt,
+    trunc_h: bool,
+    trunc_v: bool,
+    col_num: i64,
+    row_num: i64,
+}
+
+fn take_cols(f: Frame, idx: Vec[i64]) -> Frame {
+    Frame { index: f.index.clone(), columns: f.columns.take(idx), cols: idx.iter().map(|i| f.cols[*i].clone()).collect() }
+}
+
+fn ends(n: i64, k: i64) -> Vec[i64] {
+    let mut idx = range_idx(k);
+    for i in n - k..n {
+        idx.push(i);
+    }
+    idx
+}
+
+// _adjust_max_rows.
+fn adjust_max_rows(len: i64, max_rows: Option[i64], min_rows: Option[i64]) -> Option[i64] {
+    if let Some(m) = max_rows {
+        if m != 0 and len > m and nonzero(min_rows) {
+            let mn = min_rows ?? 0;
+            return Some(if mn < m { mn } else { m });
+        }
+    }
+    max_rows
+}
+
+fn layout(f: Frame, o: Fmt) -> Layout {
+    let mut tr = f.clone();
+    let trunc_h = nonzero(o.max_cols) and f.width() > (o.max_cols ?? 0);
+    let mut col_num = 0;
+    if trunc_h {
+        let m = o.max_cols ?? 0;
+        col_num = m / 2;
+        if col_num >= 1 {
+            tr = take_cols(tr, ends(f.width(), col_num));
+        } else {
+            col_num = m;
+            tr = take_cols(tr, range_idx(m));
+        }
+    }
+    let fitted = adjust_max_rows(f.height(), o.max_rows, o.min_rows);
+    let trunc_v = nonzero(fitted) and f.height() > (fitted ?? 0);
+    let mut row_num = 0;
+    if trunc_v {
+        row_num = (fitted ?? 0) / 2;
+        if row_num >= 1 {
+            tr = tr.take(ends(f.height(), row_num));
+        } else {
+            // A quirk kept from pandas: with room for one row, the first
+            // max_rows rows are shown, not one.
+            row_num = o.max_rows ?? 0;
+            let k = if row_num < tr.height() { row_num } else { tr.height() };
+            tr = tr.slice(0, k);
+        }
+    }
+    Layout { frame: f, tr: tr, o: o, trunc_h: trunc_h, trunc_v: trunc_v, col_num: col_num, row_num: row_num }
+}
+
+// is_numeric_dtype: bools count.
+fn label_numeric(c: Col) -> bool {
+    match c {
+        Col.Int(_) | Col.Float(_) | Col.Bool(_) => true,
+        _ => false,
+    }
+}
+
+fn show_row_idx_names(l: Layout) -> bool {
+    l.frame.index.has_names() and l.o.index and l.o.index_names
+}
+
+fn show_col_idx_names(l: Layout) -> bool {
+    l.frame.columns.has_names() and l.o.index_names and l.o.header
+}
+
+// _get_formatted_column_labels: one list of header lines per column. A
+// flat label gets a space in front when the column at that position of
+// the WHOLE frame is numeric, as pandas zips the shown labels with all
+// the dtypes.
+fn column_labels(l: Layout, cx: Ctx) -> Result[Vec[Vec[String]], String] {
+    let columns = l.tr.columns.clone();
+    let mut out: Vec[Vec[String]] = Vec.new();
+    match columns {
+        Index.Multi(_, _) => {
+            let levels = format_multi(columns, false, l.o.sparsify, cx)?;
+            for i in 0..columns.len() {
+                out.push(levels.iter().map(|lv| lv[i].clone()).collect());
+            }
+        }
+        _ => {
+            let labels = format_flat(columns, false, cx)?;
+            for i in 0..labels.len() {
+                let numeric = i < l.frame.cols.len() and label_numeric(l.frame.cols[i]);
+                out.push([if numeric { " ".to_string() + labels[i] } else { labels[i].clone() }].to_vec());
+            }
+        }
+    }
+    Ok(out)
+}
+
+// _get_formatted_index: the index levels side by side, under a line per
+// column level that holds the column index names when they are shown.
+fn formatted_index(l: Layout, cx: Ctx) -> Result[Vec[String], String] {
+    let names = show_row_idx_names(l);
+    let ix = l.tr.index.clone();
+    let levels = match ix {
+        Index.Multi(_, _) => format_multi(ix, names, l.o.sparsify, cx)?,
+        _ => [format_flat(ix, names, cx)?].to_vec(),
+    };
+    let fixed: Vec[Vec[String]] = levels.iter().map(|lv| fixed_width(lv.clone(), "left", l.o.col_space, cx.max_colwidth)).collect();
+    let adjoined = adjoin(1, fixed);
+    if not l.o.header {
+        return Ok(adjoined);
+    }
+    let mut out: Vec[String] = Vec.new();
+    if show_col_idx_names(l) {
+        for n in l.frame.columns.names() {
+            out.push(n ?? String.new());
+        }
+    } else {
+        for _ in 0..l.frame.columns.nlevels() {
+            out.push(String.new());
+        }
+    }
+    for a in adjoined {
+        out.push(a);
+    }
+    Ok(out)
+}
+
+fn column_fmt(o: Fmt) -> ArrayFmt {
+    ArrayFmt { float_format: o.float_format.clone(), na_rep: o.na_rep.clone(), justify: "right".to_string(), decimal: o.decimal.clone(), leading_space: o.index }
+}
+
+// _get_strcols_without_index: each column's header lines and values,
+// padded to one width and justified by `justify`.
+fn value_strcols(l: Layout, cx: Ctx) -> Result[Vec[Vec[String]], String] {
+    let a = column_fmt(l.o);
+    let mut out: Vec[Vec[String]] = Vec.new();
+    if not l.o.header {
+        for c in l.tr.cols {
+            out.push(fixed_width(format_array(c, a, cx)?, l.o.justify, l.o.col_space, cx.max_colwidth));
+        }
+        return Ok(out);
+    }
+    let mut labels = column_labels(l, cx)?;
+    if show_row_idx_names(l) {
+        for i in 0..labels.len() {
+            labels[i].push(String.new());
+        }
+    }
+    for i in 0..l.tr.cols.len() {
+        let cheader = labels[i].clone();
+        let mut header_w = max_len(cheader);
+        if l.o.col_space > header_w {
+            header_w = l.o.col_space;
+        }
+        let vals = fixed_width(format_array(l.tr.cols[i], a, cx)?, l.o.justify, header_w, cx.max_colwidth);
+        let mut w = max_len(vals);
+        if header_w > w {
+            w = header_w;
+        }
+        let mut col = justify_all(cheader, w, l.o.justify);
+        for v in vals {
+            col.push(v);
+        }
+        out.push(col);
+    }
+    Ok(out)
+}
+
+// StringFormatter._insert_dot_separators: a column of " ..." where
+// columns were cut, a row of dots where rows were. A row's dots take the
+// width of the line at row_num in each column, header lines included, as
+// pandas measures it.
+fn insert_dots(l: Layout, cols: own Vec[Vec[String]], cx: Ctx) -> Result[Vec[Vec[String]], String] {
+    let mut cols = cols;
+    let index_length = formatted_index(l, cx)?.len();
+    let dot_col = if l.o.index { l.col_num + 1 } else { l.col_num };
+    if l.trunc_h {
+        let mut dots: Vec[String] = Vec.new();
+        for _ in 0..index_length {
+            dots.push(" ...".to_string());
+        }
+        cols.insert(dot_col, dots);
+    }
+    if l.trunc_v {
+        let n_header = index_length - l.tr.height();
+        let r = l.row_num;
+        for ix in 0..cols.len() {
+            if r >= cols[ix].len() {
+                return Err("IndexError: list index out of range".to_string());
+            }
+            let mut cwidth = clen(cols[ix][r]);
+            let is_dot = l.trunc_h and ix == dot_col;
+            let dots = if cwidth > 3 or is_dot { "..." } else { ".." };
+            let mode = if ix == 0 and l.o.index { "left" } else { "right" };
+            if is_dot {
+                cwidth = 4;
+            }
+            cols[ix].insert(r + n_header, justify_one(dots, cwidth, mode));
+        }
+    }
+    Ok(cols)
+}
+
+// _binify: where each printed block of columns ends.
+fn binify(widths: Vec[i64], line_width: i64) -> Vec[i64] {
+    let mut bins: Vec[i64] = Vec.new();
+    let mut curr = 0;
+    let last = widths.len() - 1;
+    for i in 0..widths.len() {
+        let w = widths[i] + 1;
+        curr += w;
+        let wrap = if i == last { curr + 1 > line_width and i > 0 } else { curr + 2 > line_width and i > 0 };
+        if wrap {
+            bins.push(i);
+            curr = w;
+        }
+    }
+    bins.push(widths.len());
+    bins
+}
+
+// _join_multiline: the columns in blocks that fit line_width, each block
+// led by the index, every block but the last ending in " \".
+fn join_multiline(cols: Vec[Vec[String]], line_width: i64, has_index: bool) -> String {
+    let mut lwidth = line_width;
+    let mut rest: Vec[Vec[String]] = Vec.new();
+    let start_at = if has_index { 1 } else { 0 };
+    for i in start_at..cols.len() {
+        rest.push(cols[i].clone());
+    }
+    if has_index {
+        lwidth -= max_len(cols[0]) + 1;
+    }
+    let widths: Vec[i64] = rest.iter().map(|c| max_len(c)).collect();
+    let bins = binify(widths, lwidth);
+    let nbins = bins.len();
+    let mut blocks: Vec[String] = Vec.new();
+    let mut start = 0;
+    for i in 0..nbins {
+        let end = bins[i];
+        let mut row: Vec[Vec[String]] = Vec.new();
+        if has_index {
+            row.push(cols[0].clone());
+        }
+        for j in start..end {
+            row.push(rest[j].clone());
+        }
+        if nbins > 1 {
+            let nrows = row[row.len() - 1].len();
+            let mut tail: Vec[String] = Vec.new();
+            if end <= rest.len() and i < nbins - 1 {
+                tail.push(" \\".to_string());
+                for _ in 1..nrows {
+                    tail.push("  ".to_string());
+                }
+            } else {
+                for _ in 0..nrows {
+                    tail.push(" ".to_string());
+                }
+            }
+            row.push(tail);
+        }
+        blocks.push(adjoin(1, row).join("\n"));
+        start = end;
+    }
+    blocks.join("\n\n")
+}
+
+fn dimensions(f: Frame) -> String {
+    f"\n\n[{f.height()} rows x {f.width()} columns]"
+}
+
+// DataFrame.to_string.
+fn frame_text(f: Frame, o: Fmt) -> Result[String, String] {
+    let cx = ctx_of(o);
+    let l = layout(f, o);
+    let show_dims = o.show_dimensions == 1 or (o.show_dimensions == 2 and (l.trunc_h or l.trunc_v));
+    let mut text = String.new();
+    if f.height() == 0 or f.width() == 0 {
+        text = "Empty DataFrame\nColumns: " + index_repr(f.columns) + "\nIndex: " + index_repr(f.index);
+    } else {
+        let mut cols = value_strcols(l, cx)?;
+        if o.index {
+            cols.insert(0, formatted_index(l, cx)?);
+        }
+        if l.trunc_h or l.trunc_v {
+            cols = insert_dots(l, cols, cx)?;
+        }
+        text = match o.line_width {
+            Some(w) => join_multiline(cols, w, o.index),
+            None => adjoin(1, cols).join("\n"),
+        };
+    }
+    if show_dims {
+        text.push_str(dimensions(f));
+    }
+    Ok(text)
+}
+
+// ============================================================ SeriesFormatter
+
+// Series.to_string: the index and the values three spaces apart, a
+// centred row of dots where rows were cut, the index names above and the
+// footer below.
+fn series_text(s: Series, o: Fmt) -> Result[String, String] {
+    let cx = ctx_of(o);
+    let n = s.values.len();
+    let trunc = nonzero(o.max_rows) and n > (o.max_rows ?? 0);
+    let mut tr = s.clone();
+    let mut row_num = 0;
+    if trunc {
+        let mut m = o.max_rows ?? 0;
+        if nonzero(o.min_rows) {
+            let mn = o.min_rows ?? 0;
+            if mn < m {
+                m = mn;
+            }
+        }
+        if m == 1 {
+            row_num = 1;
+            tr = s.slice(0, 1);
+        } else {
+            row_num = m / 2;
+            tr = s.take(ends(n, row_num));
+        }
+    }
+    let mut parts: Vec[String] = Vec.new();
+    if o.name {
+        if let Some(ref nm) = s.name {
+            parts.push("Name: " + escaped(nm));
+        }
+    }
+    if o.length == 1 or (o.length == 2 and trunc) {
+        parts.push(f"Length: {n}");
+    }
+    if o.dtype {
+        parts.push("dtype: " + tr.values.dtype());
+    }
+    let footer = parts.join(", ");
+    if tr.values.len() == 0 {
+        return Ok("Series([], " + footer + ")");
+    }
+    let have_header = tr.index.has_names();
+    let mut fmt_index = match tr.index {
+        Index.Multi(_, _) => adjoin(2, format_multi(tr.index, true, o.sparsify, cx)?),
+        _ => format_flat(tr.index, true, cx)?,
+    };
+    let mut a = array_fmt(o.index);
+    a.float_format = o.float_format.clone();
+    a.na_rep = o.na_rep.clone();
+    let mut vals = format_array(tr.values, a, cx)?;
+    if trunc {
+        let width = clen(vals[row_num - 1]);
+        let dots = if width > 3 { "..." } else { ".." };
+        vals.insert(row_num, center(dots, width));
+        fmt_index.insert(row_num + 1, String.new());
+    }
+    let body = if o.index {
+        let mut labels: Vec[String] = Vec.new();
+        for i in 1..fmt_index.len() {
+            labels.push(fmt_index[i].clone());
+        }
+        adjoin(3, [labels, vals].to_vec())
+    } else {
+        adjoin(3, [vals].to_vec())
+    };
+    let mut result = body.join("\n");
+    if o.header and have_header {
+        result = fmt_index[0].clone() + "\n" + result;
+    }
+    if footer.len() > 0 {
+        result = result + "\n" + footer;
+    }
+    Ok(result)
+}
+
+fn obj_text(obj: Obj, o: Fmt) -> Result[String, String] {
+    match obj {
+        Obj.F(f) => frame_text(f, o),
+        Obj.S(s) => series_text(s, o),
+    }
+}
+
+// ============================================================ jobs
+
+fn literal(tok: Str) -> Val {
+    if tok.len() >= 2 and tok.starts_with("'") and tok.ends_with("'") {
+        return Val.S(tok[1..tok.len() - 1].to_string());
+    }
+    if tok == "True" or tok == "False" {
+        return Val.B(tok == "True");
+    }
+    if let Ok(n) = i64.parse(tok) {
+        return Val.I(n);
+    }
+    if let Ok(x) = f64.parse(tok) {
+        return Val.F(x);
+    }
+    Val.S(tok.to_string())
+}
+
+// A text argument: \s is a space and \e the empty string.
+fn text_arg(tok: Str) -> String {
+    if tok == "\\e" { String.new() } else { tok.replace("\\s", " ") }
+}
+
+fn is_rel(t: Str) -> bool {
+    t == "==" or t == "!=" or t == "<=" or t == ">=" or t == "<" or t == ">"
+}
+
+fn names_of(s: Str) -> Vec[String] {
+    if s.len() == 0 {
+        return Vec.new();
+    }
+    s.split(",").map(|p| p.to_string()).collect()
+}
+
+fn flag(v: Str) -> bool {
+    v != "0" and v != "False"
+}
+
+fn int_arg(s: Str) -> Result[i64, String] {
+    match i64.parse(s) {
+        Ok(n) => Ok(n),
+        Err(_) => Err(f"ValueError: invalid literal for int() with base 10: '{s}'"),
+    }
+}
+
+fn opt_int(s: Str) -> Result[Option[i64], String] {
+    if s == "None" { Ok(None) } else { Ok(Some(int_arg(s)?)) }
+}
+
+// show_dimensions: "truncate", or a flag.
+fn dims_arg(s: Str) -> i64 {
+    if s == "truncate" {
+        2
+    } else if flag(s) {
+        1
+    } else {
+        0
+    }
+}
+
+struct StepArgs {
+    pos: Vec[String],
+    kw: Vec[(String, String)],
+}
+
+impl StepArgs {
+    fn get(self, k: Str) -> Option[String] {
+        for (key, v) in self.kw {
+            if *key == k {
+                return Some(v.clone());
+            }
+        }
+        None
+    }
+
+    fn arg(self, i: i64) -> Result[String, String] {
+        if i < self.pos.len() {
+            Ok(self.pos[i].clone())
+        } else {
+            Err("IndexError: list index out of range".to_string())
+        }
+    }
+}
+
+fn split_args(toks: Vec[String]) -> StepArgs {
+    let mut a = StepArgs { pos: Vec.new(), kw: Vec.new() };
+    for t in toks {
+        match t.split_once("=") {
+            Some((k, v)) => {
+                if k.len() > 0 and not is_rel(t) {
+                    a.kw.push((k.to_string(), v.to_string()));
+                } else {
+                    a.pos.push(t.clone());
+                }
+            }
+            None => a.pos.push(t.clone()),
+        }
+    }
+    a
+}
+
+fn read_step(toks: Vec[String]) -> Result[Frame, String] {
+    let a = split_args(toks);
+    let mut o = read_opts();
+    if let Some(s) = a.get("sep") {
+        o.sep = text_arg(s);
+    }
+    if let Some(s) = a.get("index") {
+        o.index = Some(names_of(s));
+    }
+    if let Some(s) = a.get("dtype") {
+        for p in names_of(s) {
+            match p.split_once(":") {
+                Some((c, t)) => o.dtype.push((c.to_string(), t.to_string())),
+                None => return Err("ValueError: dictionary update sequence element #0 has length 1; 2 is required".to_string()),
+            }
+        }
+    }
+    read_csv(a.arg(0)?, o)
+}
+
+fn frame_of(o: Obj, op: Str) -> Result[Frame, String] {
+    match o {
+        Obj.F(f) => Ok(f.clone()),
+        Obj.S(_) => Err(f"AttributeError: 'Series' object has no attribute '{op}'"),
+    }
+}
+
+fn step(obj: Obj, op: Str, toks: Vec[String]) -> Result[Obj, String] {
+    let a = split_args(toks);
+    match op {
+        "select" => Ok(Obj.F(select(frame_of(obj, op)?, names_of(a.arg(0)?))?)),
+        "where" => Ok(Obj.F(where_rows(frame_of(obj, op)?, a.arg(0)?, a.arg(1)?, a.arg(2)?)?)),
+        "head" => Ok(head_of(obj, int_arg(a.arg(0)?)?)),
+        "tail" => Ok(tail_of(obj, int_arg(a.arg(0)?)?)),
+        "sort" => {
+            let asc: Vec[bool] = names_of(a.get("asc") ?? "1".to_string()).iter().map(|x| flag(x)).collect();
+            let by = names_of(a.get("by") ?? String.new());
+            sort_values(obj, by, asc)
+        }
+        "sortidx" => Ok(sort_index(obj, flag(a.get("asc") ?? "1".to_string()))),
+        "setidx" => Ok(Obj.F(set_index(frame_of(obj, op)?, names_of(a.arg(0)?))?)),
+        "reset" => Ok(Obj.F(reset_index(frame_of(obj, op)?))),
+        "agg" => {
+            if toks.len() < 2 {
+                return Err("IndexError: list index out of range".to_string());
+            }
+            Ok(Obj.F(agg(frame_of(obj, op)?, names_of(toks[0]), parse_specs(toks[1])?)?))
+        }
+        "size" => Ok(Obj.S(size(frame_of(obj, op)?, names_of(a.arg(0)?))?)),
+        "pivot" => {
+            let o = PivotOpts {
+                index: names_of(a.get("index") ?? String.new()),
+                columns: names_of(a.get("columns") ?? String.new()),
+                values: names_of(a.get("values") ?? String.new()),
+                aggs: names_of(a.get("agg") ?? "mean".to_string()),
+                fill: a.get("fill").map(|v| literal(v)),
+                margins: flag(a.get("margins") ?? "0".to_string()),
+            };
+            Ok(Obj.F(pivot_table(frame_of(obj, op)?, o)?))
+        }
+        "unstack" => unstack(obj),
+        "stack" => stack(frame_of(obj, op)?),
+        "T" => Ok(Obj.F(transpose(frame_of(obj, op)?))),
+        "describe" => Ok(Obj.F(describe(frame_of(obj, op)?))),
+        "counts" => Ok(Obj.S(value_counts(frame_of(obj, op)?, a.arg(0)?, false)?)),
+        "share" => Ok(Obj.S(value_counts(frame_of(obj, op)?, a.arg(0)?, true)?)),
+        "col" => Ok(Obj.S(column(frame_of(obj, op)?, a.arg(0)?)?)),
+        "round" => Ok(round_obj(obj, int_arg(a.arg(0)?)?)),
+        "mul" => {
+            let mut f = frame_of(obj, op)?;
+            let name = a.arg(0)?;
+            let c = mul_col(f.col(name)?, literal(a.arg(1)?));
+            f.put(name, c);
+            Ok(Obj.F(f))
+        }
+        "div" => {
+            let mut f = frame_of(obj, op)?;
+            let c = div_cols(f.col(a.arg(1)?)?, f.col(a.arg(2)?)?);
+            f.put(a.arg(0)?, c);
+            Ok(Obj.F(f))
+        }
+        _ => Err(f"ValueError: unknown step {op}"),
+    }
+}
+
+// `show k=v ...`: repr under option_context with those display options.
+fn show_step(obj: Obj, kw: Vec[(String, String)]) -> Result[String, String] {
+    let mut d = display_defaults();
+    for (k, v) in kw {
+        match k.as_str() {
+            "max_rows" => d.max_rows = opt_int(v)?,
+            "min_rows" => d.min_rows = opt_int(v)?,
+            "max_columns" => d.max_columns = opt_int(v)?,
+            "width" => d.width = int_arg(v)?,
+            "precision" => d.precision = int_arg(v)?,
+            "max_colwidth" => d.max_colwidth = opt_int(v)?,
+            "show_dimensions" => d.show_dimensions = dims_arg(v),
+            "colheader_justify" => d.colheader_justify = v.clone(),
+            "multi_sparse" => d.multi_sparse = flag(v),
+            "expand_frame_repr" => d.expand_frame_repr = flag(v),
+            _ => return Err(key_error(k)),
+        }
+    }
+    obj_text(obj, repr_fmt(d))
+}
+
+// `string k=v ...`: to_string with those arguments.
+fn string_step(obj: Obj, kw: Vec[(String, String)]) -> Result[String, String] {
+    let d = display_defaults();
+    let mut f = string_fmt(d);
+    if let Obj.S(_) = obj {
+        // Series.to_string has no max_colwidth; the option applies.
+        f.max_colwidth = d.max_colwidth;
+    }
+    for (k, v) in kw {
+        match k.as_str() {
+            "index" => f.index = flag(v),
+            "header" => f.header = flag(v),
+            "na_rep" => f.na_rep = text_arg(v),
+            "float_format" => f.float_format = Some(text_arg(v)),
+            "col_space" => f.col_space = int_arg(v)?,
+            "justify" => f.justify = v.clone(),
+            "sparsify" => f.sparsify = flag(v),
+            "index_names" => f.index_names = flag(v),
+            "max_rows" => f.max_rows = opt_int(v)?,
+            "min_rows" => f.min_rows = opt_int(v)?,
+            "max_cols" => f.max_cols = opt_int(v)?,
+            "show_dimensions" => f.show_dimensions = dims_arg(v),
+            "decimal" => f.decimal = text_arg(v),
+            "line_width" => f.line_width = opt_int(v)?,
+            "max_colwidth" => f.max_colwidth = opt_int(v)?,
+            "length" => f.length = if flag(v) { 1 } else { 0 },
+            "dtype" => f.dtype = flag(v),
+            "name" => f.name = flag(v),
+            _ => return Err(key_error(k)),
+        }
+    }
+    obj_text(obj, f)
+}
+
+fn run(line: Str) -> Result[String, String] {
+    let steps: Vec[String] = line.split(" | ").map(|s| s.to_string()).collect();
+    let first: Vec[String] = steps[0].split(" ").map(|s| s.to_string()).collect();
+    let mut cur = Obj.F(read_step(first[1..].to_vec())?);
+    for k in 1..steps.len() {
+        let toks: Vec[String] = steps[k].split(" ").map(|s| s.to_string()).collect();
+        let rest = toks[1..].to_vec();
+        if toks[0] == "show" {
+            return show_step(cur, split_args(rest).kw);
+        }
+        if toks[0] == "string" {
+            return string_step(cur, split_args(rest).kw);
+        }
+        cur = step(cur, toks[0], rest)?;
+    }
+    show_step(cur, Vec.new())
+}
+
+fn transcript(line: Str) -> String {
+    let mut t = f"$ {line}\n";
+    match run(line) {
+        Ok(text) => {
+            t.push_str(text);
+            t.push('\n');
+        }
+        Err(e) => t.push_str(f"! {e}\n"),
+    }
+    t
+}
+
+struct DataFile {
+    path: String,
+    body: String,
+}
+
+fn write_data() -> Result[(), String] {
+    if let Err(e) = fs.create_dir_all("data".to_string()) {
+        return Err(f"cannot create data: {e}");
+    }
+    for file in data_files() {
+        if let Err(e) = fs.write(f"data/{file.path}", file.body.clone()) {
+            return Err(f"cannot write {file.path}: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = write_data() {
+        eprintln(e);
+        return;
+    }
+    let jobs = match fs.read_to_string("data/jobs.txt".to_string()) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln(f"cannot read jobs.txt: {e}");
+            return;
+        }
+    };
+    let lines: Vec[String] = jobs.lines().filter(|l| l.trim().len() > 0).map(|l| l.to_string()).collect();
+    // Every job in a task of its own; the transcript prints in job order.
+    let group = TaskGroup.new();
+    let mut handles = Vec.new();
+    for line in lines {
+        handles.push(group.spawn(|| transcript(line)));
+    }
+    for h in handles.into_iter() {
+        print(h.join());
+    }
+}
+
+// ============================================================ data
+
+// The files under data/, in path order.
+fn data_files() -> Vec[DataFile] {
+    let mut v: Vec[DataFile] = Vec.new();
+    data_part_0(mut v);
+    data_part_1(mut v);
+    data_part_2(mut v);
+    v
+}
+
+fn data_part_0(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("sample,analyte,value,unit,flag\n");
+    t.push_str("S-001,lead,0.0000000124,g/L,\n");
+    t.push_str("S-001,nitrate,4.75,mg/L,\n");
+    t.push_str("S-001,coliform,1250000,CFU/100mL,high\n");
+    t.push_str("S-002,lead,0.00000035,g/L,\n");
+    t.push_str("S-002,nitrate,,mg/L,missing\n");
+    t.push_str("S-002,coliform,0,CFU/100mL,\n");
+    t.push_str("S-003,lead,-0.0000000008,g/L,blank\n");
+    t.push_str("S-003,nitrate,12.5,mg/L,\n");
+    t.push_str("S-003,coliform,38,CFU/100mL,\n");
+    t.push_str("S-004,lead,0.00000002,g/L,\n");
+    t.push_str("S-004,nitrate,0.125,mg/L,low\n");
+    t.push_str("S-004,coliform,3200000000,CFU/100mL,high\n");
+    v.push(DataFile { path: "assay.csv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("dept,year,quarter,category,planned,actual\n");
+    t.push_str("Ops,2024,Q1,staff,53000,61308.28\n");
+    t.push_str("Ops,2024,Q1,travel,1000,1082.77\n");
+    t.push_str("Ops,2024,Q2,staff,84000,89273.52\n");
+    t.push_str("Ops,2024,Q2,travel,3500,3906.0\n");
+    t.push_str("Ops,2024,Q3,staff,92000,74943.2\n");
+    t.push_str("Ops,2024,Q3,travel,4000,3686.24\n");
+    t.push_str("Ops,2024,Q4,staff,74000,79742.4\n");
+    t.push_str("Ops,2024,Q4,travel,3500,3754.31\n");
+    t.push_str("Ops,2025,Q1,staff,52000,54873.0\n");
+    t.push_str("Ops,2025,Q1,travel,2500,2209.32\n");
+    t.push_str("Ops,2025,Q2,staff,61000,73035.91\n");
+    t.push_str("Ops,2025,Q2,travel,1500,1332.64\n");
+    t.push_str("Ops,2025,Q3,staff,84000,82816.44\n");
+    t.push_str("Ops,2025,Q3,travel,4000,3264.16\n");
+    t.push_str("Ops,2025,Q4,staff,88000,74654.8\n");
+    t.push_str("Ops,2025,Q4,travel,1000,846.25\n");
+    t.push_str("Ops,2026,Q1,staff,92000,88889.48\n");
+    t.push_str("Ops,2026,Q1,travel,1500,1556.68\n");
+    t.push_str("Ops,2026,Q2,staff,42000,43827.84\n");
+    t.push_str("Ops,2026,Q2,travel,4500,5301.72\n");
+    t.push_str("Ops,2026,Q3,staff,72000,75785.76\n");
+    t.push_str("Ops,2026,Q3,travel,1500,1304.25\n");
+    t.push_str("R&D,2024,Q1,staff,90000,90905.4\n");
+    t.push_str("R&D,2024,Q1,travel,2000,1878.72\n");
+    t.push_str("R&D,2024,Q2,staff,93000,91507.35\n");
+    t.push_str("R&D,2024,Q2,travel,3000,3391.32\n");
+    t.push_str("R&D,2024,Q3,staff,96000,83631.36\n");
+    t.push_str("R&D,2024,Q3,travel,4000,4789.76\n");
+    t.push_str("R&D,2024,Q4,staff,68000,74128.16\n");
+    t.push_str("R&D,2024,Q4,travel,3000,3229.74\n");
+    t.push_str("R&D,2025,Q1,staff,69000,61065.69\n");
+    t.push_str("R&D,2025,Q1,travel,4000,4127.76\n");
+    t.push_str("R&D,2025,Q2,staff,45000,44626.05\n");
+    t.push_str("R&D,2025,Q2,travel,4500,3828.28\n");
+    t.push_str("R&D,2025,Q3,staff,99000,87664.5\n");
+    t.push_str("R&D,2025,Q3,travel,4500,5115.91\n");
+    t.push_str("R&D,2025,Q4,staff,68000,56675.28\n");
+    t.push_str("R&D,2025,Q4,travel,4500,4650.03\n");
+    t.push_str("R&D,2026,Q1,staff,90000,106619.4\n");
+    t.push_str("R&D,2026,Q1,travel,3500,3153.43\n");
+    t.push_str("R&D,2026,Q2,staff,73000,85983.05\n");
+    t.push_str("R&D,2026,Q2,travel,2500,2549.38\n");
+    t.push_str("R&D,2026,Q3,staff,54000,46061.46\n");
+    t.push_str("R&D,2026,Q3,travel,4000,3921.4\n");
+    t.push_str("Sales,2024,Q1,staff,95000,80032.75\n");
+    t.push_str("Sales,2024,Q1,travel,4000,3849.48\n");
+    t.push_str("Sales,2024,Q2,staff,67000,57986.49\n");
+    t.push_str("Sales,2024,Q2,travel,2500,2720.58\n");
+    t.push_str("Sales,2024,Q3,staff,83000,71829.86\n");
+    t.push_str("Sales,2024,Q3,travel,2000,2314.56\n");
+    t.push_str("Sales,2024,Q4,staff,51000,60195.3\n");
+    t.push_str("Sales,2024,Q4,travel,1000,1017.42\n");
+    t.push_str("Sales,2025,Q1,staff,60000,62887.8\n");
+    t.push_str("Sales,2025,Q1,travel,1500,1712.24\n");
+    t.push_str("Sales,2025,Q2,staff,73000,73316.82\n");
+    t.push_str("Sales,2025,Q2,travel,2500,2748.6\n");
+    t.push_str("Sales,2025,Q3,staff,92000,77832.92\n");
+    t.push_str("Sales,2025,Q3,travel,3000,3457.62\n");
+    t.push_str("Sales,2025,Q4,staff,55000,64760.3\n");
+    t.push_str("Sales,2025,Q4,travel,1500,1582.95\n");
+    t.push_str("Sales,2026,Q1,staff,75000,81090.0\n");
+    t.push_str("Sales,2026,Q1,travel,3000,3060.42\n");
+    t.push_str("Sales,2026,Q2,staff,83000,76925.23\n");
+    t.push_str("Sales,2026,Q2,travel,3500,3006.54\n");
+    t.push_str("Sales,2026,Q3,staff,72000,58188.96\n");
+    t.push_str("Sales,2026,Q3,travel,1500,1427.17\n");
+    v.push(DataFile { path: "budget.csv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("name,count,ratio,big,mixed\n");
+    t.push_str("a,0,0.1,9007199254740993,1.5\n");
+    t.push_str("b,-3,0.25,123456789012,-0.0\n");
+    t.push_str("c,12,100.0,-42,0.333333333\n");
+    t.push_str("d,7,0.1234565,0,12345678.9\n");
+    v.push(DataFile { path: "edges.csv".to_string(), body: t });
+}
+
+fn data_part_1(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("read edges.csv\n");
+    t.push_str("read assay.csv\n");
+    t.push_str("read staff.csv\n");
+    t.push_str("read orders.csv\n");
+    t.push_str("read sensors.csv\n");
+    t.push_str("read budget.csv\n");
+    t.push_str("read orders.csv | head 8\n");
+    t.push_str("read orders.csv | tail 3\n");
+    t.push_str("read orders.csv | select order_id,units,gift\n");
+    t.push_str("read orders.csv | select region,product | head 4\n");
+    t.push_str("read orders.csv | where units > 100\n");
+    t.push_str("read orders.csv | where units > 100 | col units\n");
+    t.push_str("read orders.csv | where units > 8 | select order_id,region,revenue\n");
+    t.push_str("read orders.csv | where region == 'South' | where channel == 'store'\n");
+    t.push_str("read orders.csv | col nope\n");
+    t.push_str("read orders.csv | select units,nope\n");
+    t.push_str("read orders.csv | show max_rows=20\n");
+    t.push_str("read orders.csv | show max_rows=20 min_rows=4\n");
+    t.push_str("read orders.csv | show max_rows=20 min_rows=1\n");
+    t.push_str("read orders.csv | show max_rows=20 min_rows=0\n");
+    t.push_str("read orders.csv | show max_rows=None\n");
+    t.push_str("read orders.csv | select order_id,revenue | show max_rows=3\n");
+    t.push_str("read orders.csv | select order_id,revenue | show max_rows=1\n");
+    t.push_str("read orders.csv | select order_id,revenue | show max_rows=95\n");
+    t.push_str("read orders.csv | select order_id,revenue | show max_rows=96\n");
+    t.push_str("read orders.csv | head 5 | show max_colwidth=20\n");
+    t.push_str("read orders.csv | head 5 | show max_colwidth=3\n");
+    t.push_str("read orders.csv | head 5 | show max_colwidth=None\n");
+    t.push_str("read orders.csv | head 5 | show width=60\n");
+    t.push_str("read orders.csv | head 5 | show width=20\n");
+    t.push_str("read orders.csv | head 5 | show expand_frame_repr=0\n");
+    t.push_str("read orders.csv | head 5 | show precision=2\n");
+    t.push_str("read orders.csv | head 5 | show colheader_justify=left\n");
+    t.push_str("read orders.csv | head 5 | show show_dimensions=1\n");
+    t.push_str("read orders.csv | show show_dimensions=0\n");
+    t.push_str("read sensors.csv | show max_columns=6\n");
+    t.push_str("read sensors.csv | show max_columns=7\n");
+    t.push_str("read sensors.csv | show max_columns=2\n");
+    t.push_str("read sensors.csv | show max_columns=1\n");
+    t.push_str("read sensors.csv | show max_columns=None width=100\n");
+    t.push_str("read sensors.csv | show max_columns=None width=200\n");
+    t.push_str("read sensors.csv | show max_columns=8 max_rows=6\n");
+    t.push_str("read edges.csv | show colheader_justify=left\n");
+    t.push_str("read edges.csv | show colheader_justify=center\n");
+    t.push_str("read edges.csv | show show_dimensions=1\n");
+    t.push_str("read edges.csv | show precision=2\n");
+    t.push_str("read edges.csv | show precision=0\n");
+    t.push_str("read edges.csv | show precision=10\n");
+    t.push_str("read assay.csv | show precision=3\n");
+    t.push_str("read assay.csv | where analyte == 'nitrate'\n");
+    t.push_str("read assay.csv | where analyte == 'coliform'\n");
+    t.push_str("read assay.csv | where analyte == 'lead'\n");
+    t.push_str("read assay.csv | where analyte == 'lead' | mul value 1000000\n");
+    t.push_str("read assay.csv | where analyte == 'lead' | mul value 1000000000\n");
+    t.push_str("read assay.csv | where analyte == 'coliform' | mul value 0.001\n");
+    t.push_str("read assay.csv | where analyte == 'coliform' | where value < 10000000\n");
+    t.push_str("read assay.csv | where analyte == 'nitrate' | show precision=1\n");
+    t.push_str("read assay.csv | where analyte == 'nitrate' | mul value 100000\n");
+    t.push_str("read assay.csv | where analyte == 'nitrate' | mul value 1000000\n");
+    t.push_str("read assay.csv | where analyte == 'nitrate' | mul value 0.00001\n");
+    t.push_str("read orders.csv | head 6 | div per_unit revenue units\n");
+    t.push_str("read orders.csv | head 6 | div per_unit revenue units | round 3\n");
+    t.push_str("read edges.csv | div r ratio count\n");
+    t.push_str("read edges.csv | div r count count\n");
+    t.push_str("read edges.csv | round 1\n");
+    t.push_str("read edges.csv | round 0\n");
+    t.push_str("read edges.csv | mul ratio 3\n");
+    t.push_str("read orders.csv | col revenue\n");
+    t.push_str("read orders.csv | col note\n");
+    t.push_str("read orders.csv | col gift | head 4\n");
+    t.push_str("read orders.csv | col units | head 4\n");
+    t.push_str("read orders.csv | col discount | head 7\n");
+    t.push_str("read orders.csv | col region | tail 3\n");
+    t.push_str("read orders.csv | col revenue | show max_rows=4\n");
+    t.push_str("read orders.csv | col revenue | show max_rows=4 min_rows=2\n");
+    t.push_str("read orders.csv | col revenue | show max_rows=1\n");
+    t.push_str("read orders.csv | col revenue | sort asc=0 | head 5\n");
+    t.push_str("read orders.csv | counts region\n");
+    t.push_str("read orders.csv | counts discount\n");
+    t.push_str("read orders.csv | counts product\n");
+    t.push_str("read orders.csv | share channel\n");
+    t.push_str("read orders.csv | share discount\n");
+    t.push_str("read staff.csv | col name\n");
+    t.push_str("read staff.csv | col bio | show max_colwidth=12\n");
+    t.push_str("read staff.csv | setidx name | col salary\n");
+    t.push_str("read staff.csv | setidx name\n");
+    t.push_str("read staff.csv | setidx id | select name,salary\n");
+    t.push_str("read edges.csv | setidx ratio\n");
+    t.push_str("read edges.csv | setidx big | select name,mixed\n");
+    t.push_str("read budget.csv | select dept,year,planned | setidx dept,year | head 6\n");
+    t.push_str("read budget.csv | setidx dept,year,quarter,category | head 10\n");
+    t.push_str("read budget.csv | setidx dept,year,quarter,category | head 10 | show multi_sparse=0\n");
+    t.push_str("read budget.csv | setidx dept,year,quarter,category | tail 5\n");
+    t.push_str("read budget.csv | setidx year,dept | sortidx | head 9\n");
+    t.push_str("read budget.csv | setidx dept,year | sortidx asc=0 | select planned | head 7\n");
+    t.push_str("read budget.csv | setidx dept,year,quarter,category\n");
+    t.push_str("read budget.csv | setidx dept,year,quarter,category | show max_rows=8\n");
+    t.push_str("read budget.csv | setidx dept,year | select planned | reset | head 3\n");
+    t.push_str("read orders.csv | sort by=revenue asc=0 | head 5 | select order_id,revenue\n");
+    t.push_str("read orders.csv | sort by=region,revenue asc=1,0 | head 6 | select region,revenue\n");
+    t.push_str("read orders.csv | sort by=region,units | select region,units | show max_rows=10\n");
+    t.push_str("read orders.csv | agg region n=units:count,mean=revenue:mean\n");
+    t.push_str("read orders.csv | agg region,channel n=units:count,units=units:sum,revenue=revenue:sum\n");
+    t.push_str("read orders.csv | agg region,channel n=units:count | reset\n");
+    t.push_str("read orders.csv | agg product top=revenue:max,low=revenue:min,gifts=gift:sum\n");
+    t.push_str("read orders.csv | agg channel d=discount:mean,dmax=discount:max\n");
+    t.push_str("read orders.csv | size region,channel\n");
+    t.push_str("read orders.csv | size region\n");
+    t.push_str("read orders.csv | size region,channel | show max_rows=6\n");
+    t.push_str("read orders.csv | size region,channel | show multi_sparse=0\n");
+    t.push_str("read orders.csv | size region,channel | unstack\n");
+    t.push_str("read orders.csv | where units > 7 | size region,product | unstack\n");
+    t.push_str("read orders.csv | agg region,channel units=units:sum | unstack\n");
+    t.push_str("read orders.csv | agg region,channel units=units:sum,rev=revenue:sum | unstack\n");
+    t.push_str("read orders.csv | where units > 7 | agg region,product units=units:sum | unstack\n");
+    t.push_str("read orders.csv | size region,channel | unstack | stack\n");
+    t.push_str("read orders.csv | agg region,channel units=units:sum,rev=revenue:sum | unstack | stack\n");
+    t.push_str("read orders.csv | agg region n=units:count,rev=revenue:sum | stack\n");
+    t.push_str("read orders.csv | agg region n=units:count,rev=revenue:sum | T\n");
+    t.push_str("read edges.csv | select name,ratio | setidx name | stack\n");
+    t.push_str("read budget.csv | pivot index=dept columns=year values=actual agg=sum\n");
+    t.push_str("read budget.csv | pivot index=dept columns=year values=planned agg=sum\n");
+    t.push_str("read budget.csv | pivot index=dept columns=year values=planned agg=mean\n");
+    t.push_str("read budget.csv | pivot index=dept columns=year values=planned agg=count\n");
+    t.push_str("read budget.csv | pivot index=dept columns=year values=actual agg=max\n");
+    t.push_str("read budget.csv | pivot index=dept,category columns=year values=planned agg=sum margins=1\n");
+    t.push_str("read budget.csv | pivot index=dept columns=year values=actual agg=mean margins=1\n");
+    t.push_str("read budget.csv | pivot index=dept columns=quarter values=planned,actual agg=sum\n");
+    t.push_str("read budget.csv | pivot index=dept columns=category values=actual agg=sum,mean\n");
+    t.push_str("read budget.csv | pivot index=year columns=dept values=actual agg=mean | round 1\n");
+    t.push_str("read budget.csv | pivot index=year,quarter columns=dept values=planned agg=sum\n");
+    t.push_str("read budget.csv | pivot index=year,quarter columns=dept values=planned agg=sum fill=0\n");
+    t.push_str("read budget.csv | where year == 2026 | pivot index=quarter columns=dept values=actual agg=sum\n");
+    t.push_str("read budget.csv | pivot index=dept columns=year values=planned agg=sum | stack\n");
+    t.push_str("read budget.csv | pivot index=dept columns=year values=planned agg=sum | T\n");
+    t.push_str("read budget.csv | pivot index=dept columns=year values=planned agg=sum | reset\n");
+    t.push_str("read orders.csv | pivot index=region columns=channel values=revenue agg=sum | round 0\n");
+    t.push_str("read orders.csv | pivot index=product columns=region values=units agg=sum margins=1\n");
+    t.push_str("read edges.csv | T\n");
+    t.push_str("read staff.csv | T\n");
+    t.push_str("read edges.csv | describe\n");
+    t.push_str("read orders.csv | describe\n");
+    t.push_str("read orders.csv | describe | T\n");
+    t.push_str("read budget.csv | describe\n");
+    t.push_str("read assay.csv | describe\n");
+    t.push_str("read staff.csv | describe\n");
+    t.push_str("read staff.csv | select salary,remote | T\n");
+    t.push_str("read orders.csv | head 5 | string\n");
+    t.push_str("read orders.csv | head 5 | string index=0\n");
+    t.push_str("read orders.csv | head 5 | string header=0\n");
+    t.push_str("read orders.csv | head 5 | string header=0 index=0\n");
+    t.push_str("read orders.csv | head 5 | string float_format=%.1f na_rep=-\n");
+    t.push_str("read orders.csv | head 5 | string float_format=%.3e\n");
+    t.push_str("read orders.csv | head 5 | string float_format=%08.2f\n");
+    t.push_str("read orders.csv | head 5 | string na_rep=\\e\n");
+    t.push_str("read orders.csv | head 5 | string col_space=12 justify=left\n");
+    t.push_str("read orders.csv | head 5 | string col_space=12 justify=center\n");
+    t.push_str("read orders.csv | head 5 | string justify=right\n");
+    t.push_str("read orders.csv | head 5 | string line_width=70\n");
+    t.push_str("read orders.csv | head 5 | string line_width=0\n");
+    t.push_str("read orders.csv | string max_rows=6 show_dimensions=1\n");
+    t.push_str("read orders.csv | string max_rows=6 min_rows=2\n");
+    t.push_str("read orders.csv | head 5 | string max_cols=4\n");
+    t.push_str("read orders.csv | head 5 | string max_cols=4 show_dimensions=truncate\n");
+    t.push_str("read orders.csv | head 5 | string decimal=,\n");
+    t.push_str("read orders.csv | head 5 | string max_colwidth=10\n");
+    t.push_str("read assay.csv | string float_format=%.4g\n");
+    t.push_str("read assay.csv | string decimal=,\n");
+    t.push_str("read budget.csv | setidx dept,year | head 5 | string sparsify=0\n");
+    t.push_str("read budget.csv | setidx dept,year | head 5 | string index_names=0\n");
+    t.push_str("read budget.csv | pivot index=dept columns=year values=planned agg=sum | string index_names=0\n");
+    t.push_str("read budget.csv | pivot index=dept columns=quarter values=planned,actual agg=sum | string sparsify=0\n");
+    t.push_str("read budget.csv | pivot index=dept columns=quarter values=planned,actual agg=sum | string line_width=60\n");
+    t.push_str("read orders.csv | col revenue | string max_rows=6\n");
+    t.push_str("read orders.csv | col revenue | head 4 | string name=1 dtype=1\n");
+    t.push_str("read orders.csv | col revenue | head 4 | string index=0\n");
+    t.push_str("read orders.csv | col revenue | head 4 | string header=0 length=1\n");
+    t.push_str("read orders.csv | col discount | head 6 | string na_rep=n/a float_format=%.2f\n");
+    t.push_str("read orders.csv | size region,channel | string\n");
+    v.push(DataFile { path: "jobs.txt".to_string(), body: t });
+}
+
+fn data_part_2(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("order_id,date,region,channel,product,units,unit_price,discount,revenue,gift,note\n");
+    t.push_str("10001,2026-09-01,West,store,Toaster,5,54.5,0.05,258.88,True,\n");
+    t.push_str("10002,2026-09-01,North,store,Kettle,6,39.99,,239.94,False,leave at the back door\n");
+    t.push_str("10003,2026-09-01,West,web,Scale,9,24.0,0.1,194.4,False,\n");
+    t.push_str("10004,2026-09-01,North,store,Grinder,2,129.95,0.1,233.91,False,\"call before\n");
+    t.push_str("delivery\"\n");
+    t.push_str("10005,2026-09-02,West,phone,Toaster,1,54.5,0.1,49.05,False,gift wrap\tred paper\n");
+    t.push_str("10006,2026-09-02,North,store,Kettle,7,39.99,0.05,265.93,False,\n");
+    t.push_str("10007,2026-09-02,East,web,Grinder,7,129.95,,909.65,False,leave at the back door\n");
+    t.push_str("10008,2026-09-03,North,web,Blender,3,89.0,,267.0,False,gift wrap\tred paper\n");
+    t.push_str("10009,2026-09-03,East,phone,Kettle,3,39.99,0.0,119.97,True,\n");
+    t.push_str("10010,2026-09-03,South,phone,Grinder,9,129.95,,1169.55,False,\n");
+    t.push_str("10011,2026-09-04,West,web,Blender,4,89.0,0.0,356.0,True,\n");
+    t.push_str("10012,2026-09-04,North,phone,Blender,3,89.0,0.05,253.65,False,\n");
+    t.push_str("10013,2026-09-04,West,phone,Toaster,7,54.5,0.1,343.35,True,\n");
+    t.push_str("10014,2026-09-05,South,web,Kettle,7,39.99,0.0,279.93,False,\n");
+    t.push_str("10015,2026-09-05,South,web,Blender,3,89.0,0.0,267.0,False,\n");
+    t.push_str("10016,2026-09-05,South,store,Blender,9,89.0,0.1,720.9,False,gift wrap\tred paper\n");
+    t.push_str("10017,2026-09-06,South,web,Kettle,7,39.99,0.1,251.94,False,leave at the back door\n");
+    t.push_str("10018,2026-09-06,South,web,Toaster,2,54.5,0.0,109.0,False,\"call before\n");
+    t.push_str("delivery\"\n");
+    t.push_str("10019,2026-09-06,South,phone,Toaster,9,54.5,,490.5,False,\n");
+    t.push_str("10020,2026-09-06,South,store,Scale,4,24.0,0.15,81.6,True,\"call before\n");
+    t.push_str("delivery\"\n");
+    t.push_str("10021,2026-09-07,East,web,Toaster,8,54.5,0.0,436.0,False,repeat customer\n");
+    t.push_str("10022,2026-09-07,South,web,Grinder,3,129.95,,389.85,True,\n");
+    t.push_str("10023,2026-09-07,East,store,Blender,3,89.0,0.0,267.0,True,\n");
+    t.push_str("10024,2026-09-08,South,phone,Kettle,1,39.99,0.1,35.99,True,\n");
+    t.push_str("10025,2026-09-08,North,phone,Toaster,2,54.5,0.1,98.1,False,\n");
+    t.push_str("10026,2026-09-08,North,phone,Mug set,2,18.25,,36.5,False,\n");
+    t.push_str("10027,2026-09-09,West,web,Blender,4,89.0,,356.0,False,repeat customer\n");
+    t.push_str("10028,2026-09-09,North,web,Blender,5,89.0,0.1,400.5,False,customer asked for the invoice to be sent to the accounts payable mailbox instead\n");
+    t.push_str("10029,2026-09-09,East,web,Toaster,1,54.5,,54.5,False,\"call before\n");
+    t.push_str("delivery\"\n");
+    t.push_str("10030,2026-09-10,West,web,Blender,8,89.0,0.0,712.0,False,\n");
+    t.push_str("10031,2026-09-10,West,store,Toaster,4,54.5,0.05,207.1,False,\n");
+    t.push_str("10032,2026-09-10,South,web,Mug set,5,18.25,0.0,91.25,True,\"call before\n");
+    t.push_str("delivery\"\n");
+    t.push_str("10033,2026-09-11,West,phone,Kettle,5,39.99,0.0,199.95,False,leave at the back door\n");
+    t.push_str("10034,2026-09-11,East,phone,Toaster,1,54.5,0.15,46.32,False,\n");
+    t.push_str("10035,2026-09-11,North,phone,Scale,2,24.0,,48.0,False,\n");
+    t.push_str("10036,2026-09-11,East,web,Toaster,7,54.5,0.05,362.43,True,\n");
+    t.push_str("10037,2026-09-12,West,phone,Mug set,5,18.25,0.0,91.25,False,\n");
+    t.push_str("10038,2026-09-12,North,web,Grinder,3,129.95,0.0,389.85,False,gift wrap\tred paper\n");
+    t.push_str("10039,2026-09-12,North,phone,Kettle,5,39.99,0.1,179.96,True,\n");
+    t.push_str("10040,2026-09-13,West,web,Blender,1,89.0,0.15,75.65,False,leave at the back door\n");
+    t.push_str("10041,2026-09-13,North,store,Mug set,1,18.25,0.0,18.25,False,\n");
+    t.push_str("10042,2026-09-13,West,store,Grinder,3,129.95,0.0,389.85,False,\n");
+    t.push_str("10043,2026-09-14,East,web,Grinder,9,129.95,0.15,994.12,False,\n");
+    t.push_str("10044,2026-09-14,West,web,Kettle,4,39.99,0.1,143.96,False,leave at the back door\n");
+    t.push_str("10045,2026-09-14,East,store,Mug set,2,18.25,0.1,32.85,False,repeat customer\n");
+    t.push_str("10046,2026-09-15,North,store,Kettle,4,39.99,0.05,151.96,False,repeat customer\n");
+    t.push_str("10047,2026-09-15,North,web,Grinder,5,129.95,0.1,584.77,False,\n");
+    t.push_str("10048,2026-09-15,South,web,Scale,6,24.0,0.0,144.0,False,\n");
+    t.push_str("10049,2026-09-16,East,web,Kettle,1,39.99,0.05,37.99,True,leave at the back door\n");
+    t.push_str("10050,2026-09-16,North,web,Grinder,7,129.95,0.1,818.68,False,gift wrap\tred paper\n");
+    t.push_str("10051,2026-09-16,West,web,Scale,7,24.0,0.0,168.0,False,\n");
+    t.push_str("10052,2026-09-16,North,web,Grinder,1,129.95,0.0,129.95,False,\"call before\n");
+    t.push_str("delivery\"\n");
+    t.push_str("10053,2026-09-17,North,store,Blender,4,89.0,0.0,356.0,False,\"call before\n");
+    t.push_str("delivery\"\n");
+    t.push_str("10054,2026-09-17,South,store,Scale,7,24.0,0.15,142.8,False,\n");
+    t.push_str("10055,2026-09-17,East,phone,Scale,6,24.0,0.1,129.6,False,\n");
+    t.push_str("10056,2026-09-18,West,phone,Grinder,2,129.95,0.0,259.9,False,\n");
+    t.push_str("10057,2026-09-18,South,phone,Scale,7,24.0,0.1,151.2,False,\n");
+    t.push_str("10058,2026-09-18,North,phone,Kettle,8,39.99,,319.92,False,gift wrap\tred paper\n");
+    t.push_str("10059,2026-09-19,South,phone,Scale,6,24.0,0.15,122.4,True,\n");
+    t.push_str("10060,2026-09-19,West,web,Blender,1,89.0,0.05,84.55,True,repeat customer\n");
+    t.push_str("10061,2026-09-19,West,store,Blender,1,89.0,0.0,89.0,False,repeat customer\n");
+    t.push_str("10062,2026-09-20,North,phone,Kettle,1,39.99,,39.99,True,customer asked for the invoice to be sent to the accounts payable mailbox instead\n");
+    t.push_str("10063,2026-09-20,North,store,Kettle,7,39.99,0.05,265.93,False,\n");
+    t.push_str("10064,2026-09-20,East,web,Kettle,3,39.99,,119.97,False,gift wrap\tred paper\n");
+    t.push_str("10065,2026-09-21,East,store,Scale,6,24.0,0.1,129.6,False,\n");
+    t.push_str("10066,2026-09-21,West,phone,Grinder,3,129.95,0.1,350.86,True,repeat customer\n");
+    t.push_str("10067,2026-09-21,East,store,Grinder,4,129.95,0.15,441.83,False,\n");
+    t.push_str("10068,2026-09-21,South,store,Toaster,3,54.5,,163.5,False,repeat customer\n");
+    t.push_str("10069,2026-09-22,East,store,Kettle,6,39.99,0.0,239.94,False,\n");
+    t.push_str("10070,2026-09-22,North,web,Toaster,4,54.5,0.15,185.3,True,\n");
+    t.push_str("10071,2026-09-22,East,web,Blender,2,89.0,0.15,151.3,False,\n");
+    t.push_str("10072,2026-09-23,East,phone,Grinder,6,129.95,0.05,740.71,False,\n");
+    t.push_str("10073,2026-09-23,South,store,Scale,1,24.0,0.05,22.8,False,gift wrap\tred paper\n");
+    t.push_str("10074,2026-09-23,East,web,Grinder,1,129.95,0.0,129.95,False,\n");
+    t.push_str("10075,2026-09-24,North,web,Mug set,5,18.25,,91.25,False,\n");
+    t.push_str("10076,2026-09-24,East,store,Toaster,3,54.5,0.0,163.5,False,\n");
+    t.push_str("10077,2026-09-24,North,store,Mug set,8,18.25,,146.0,False,\n");
+    t.push_str("10078,2026-09-25,West,web,Blender,2,89.0,,178.0,False,\n");
+    t.push_str("10079,2026-09-25,North,store,Mug set,8,18.25,0.1,131.4,False,\n");
+    t.push_str("10080,2026-09-25,South,web,Toaster,3,54.5,0.15,138.97,False,leave at the back door\n");
+    t.push_str("10081,2026-09-26,South,store,Blender,7,89.0,0.1,560.7,True,repeat customer\n");
+    t.push_str("10082,2026-09-26,West,phone,Kettle,2,39.99,0.1,71.98,False,repeat customer\n");
+    t.push_str("10083,2026-09-26,North,store,Grinder,8,129.95,0.15,883.66,False,\n");
+    t.push_str("10084,2026-09-26,South,phone,Kettle,1,39.99,0.15,33.99,False,\n");
+    t.push_str("10085,2026-09-27,North,web,Blender,9,89.0,0.1,720.9,False,repeat customer\n");
+    t.push_str("10086,2026-09-27,East,phone,Scale,1,24.0,0.1,21.6,True,\n");
+    t.push_str("10087,2026-09-27,East,store,Grinder,2,129.95,,259.9,False,\n");
+    t.push_str("10088,2026-09-28,South,web,Blender,7,89.0,0.15,529.55,True,\n");
+    t.push_str("10089,2026-09-28,West,web,Toaster,5,54.5,0.0,272.5,False,customer asked for the invoice to be sent to the accounts payable mailbox instead\n");
+    t.push_str("10090,2026-09-28,South,store,Scale,5,24.0,,120.0,True,\n");
+    t.push_str("10091,2026-09-29,West,phone,Toaster,5,54.5,0.0,272.5,False,\n");
+    t.push_str("10092,2026-09-29,East,phone,Toaster,2,54.5,,109.0,True,\n");
+    t.push_str("10093,2026-09-29,East,phone,Mug set,8,18.25,0.05,138.7,True,repeat customer\n");
+    t.push_str("10094,2026-09-30,East,phone,Grinder,3,129.95,0.15,331.37,False,customer asked for the invoice to be sent to the accounts payable mailbox instead\n");
+    t.push_str("10095,2026-09-30,West,web,Scale,3,24.0,,72.0,False,\"call before\n");
+    t.push_str("delivery\"\n");
+    t.push_str("10096,2026-09-30,South,store,Scale,9,24.0,0.1,194.4,False,\"call before\n");
+    t.push_str("delivery\"\n");
+    v.push(DataFile { path: "orders.csv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("ts,s01,s02,s03,s04,s05,s06,s07,s08,s09,s10,s11,s12,s13,s14,s15,s16,s17,s18,s19,s20,s21,s22,s23,s24,s25\n");
+    t.push_str("2026-10-29T00:00,18.278,21.753,23.545,19.864,21.739,25.195,,20.949,18.405,20.796,25.936,19.654,24.653,22.040,22.893,20.752,18.350,24.173,22.209,19.972,18.445,19.288,20.780,22.704,26.546\n");
+    t.push_str("2026-10-29T01:00,26.972,26.357,21.074,24.808,26.706,23.359,23.363,22.355,24.300,24.152,18.921,19.910,24.808,23.718,22.250,26.832,26.576,21.577,22.178,24.239,19.725,26.317,26.848,21.515,25.125\n");
+    t.push_str("2026-10-29T02:00,25.616,25.485,20.131,24.555,21.494,24.881,,18.205,18.482,18.110,19.727,18.898,21.170,20.912,21.185,22.210,23.743,20.945,24.233,19.609,23.360,25.584,19.282,22.353,24.457\n");
+    t.push_str("2026-10-29T03:00,25.561,20.195,22.705,24.939,26.997,26.527,26.000,19.781,20.991,24.631,25.583,20.178,19.548,23.606,23.449,20.224,24.011,20.838,26.686,20.629,23.507,,23.638,18.786,20.246\n");
+    t.push_str("2026-10-29T04:00,22.348,,26.481,18.111,18.430,23.150,23.820,23.867,24.853,25.661,22.813,23.655,18.212,21.334,20.422,20.413,18.560,26.442,26.054,,24.131,22.264,22.590,22.940,26.812\n");
+    t.push_str("2026-10-29T05:00,25.187,26.496,18.084,19.110,26.771,18.157,21.395,19.384,19.698,25.980,23.303,23.834,26.617,25.829,20.505,22.998,26.836,20.036,24.401,19.320,21.522,25.488,24.691,19.421,23.954\n");
+    t.push_str("2026-10-29T06:00,23.874,25.355,20.930,,24.009,24.679,21.511,22.166,20.939,24.103,25.904,20.450,20.926,24.217,26.018,18.527,22.691,21.921,18.277,26.866,18.602,26.297,20.889,22.501,19.616\n");
+    t.push_str("2026-10-29T07:00,25.684,18.163,26.658,19.075,22.462,18.957,24.679,24.484,20.211,23.790,26.778,18.617,24.464,23.810,25.278,20.239,25.920,22.913,25.808,19.151,22.751,21.823,25.914,25.140,19.250\n");
+    t.push_str("2026-10-29T08:00,21.548,21.555,18.392,25.974,18.356,19.867,21.115,26.952,18.280,26.959,25.766,26.776,20.555,23.853,25.774,20.094,26.954,25.081,25.910,23.945,20.970,,18.421,24.133,23.679\n");
+    t.push_str("2026-10-29T09:00,19.221,26.682,20.434,18.604,18.377,18.611,24.983,20.915,26.080,19.934,18.536,26.549,,23.111,23.569,20.828,19.753,24.595,25.568,19.466,22.282,24.057,23.558,21.974,21.116\n");
+    t.push_str("2026-10-29T10:00,18.591,25.379,24.414,21.138,19.728,25.557,25.862,26.587,22.962,25.916,25.234,20.079,24.405,18.383,26.075,22.725,22.616,23.814,21.698,25.701,22.933,25.193,23.791,18.960,22.337\n");
+    t.push_str("2026-10-29T11:00,26.699,25.804,25.035,19.261,22.960,20.578,25.686,23.352,25.706,18.016,19.376,22.250,20.450,21.803,26.459,18.241,26.491,23.370,25.195,21.521,24.587,21.206,23.773,19.049,21.972\n");
+    v.push(DataFile { path: "sensors.csv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("id,name,dept,salary,start,remote,bio\n");
+    t.push_str("7,Zo\u{eb} Mart\u{ed}n,Engineering,98000,2019-04-01,True,Backend lead; owns the billing service and on-call rota\n");
+    t.push_str("12,\u{738b}\u{82b3},Engineering,105500,2021-09-15,False,Data platform\n");
+    t.push_str("15,\u{41e}\u{43b}\u{44c}\u{433}\u{430} \u{41f}\u{435}\u{442}\u{440}\u{43e}\u{432}\u{430},Sales,72000,2018-01-08,True,EMEA accounts\n");
+    t.push_str("21,Jos\u{e9} \u{d1}\u{fa}\u{f1}ez,Support,51000,2023-06-19,False,\n");
+    t.push_str("30,Ana,Sales,68000,2024-02-01,True,New hire; shadowing the West region team until the end of the quarter\n");
+    t.push_str("31,Mohammed Al-Farsi,Support,53500,2022-11-30,True,Night shift\n");
+    v.push(DataFile { path: "staff.csv".to_string(), body: t });
+}
