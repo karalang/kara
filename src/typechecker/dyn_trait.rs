@@ -241,19 +241,18 @@ impl<'a> super::TypeChecker<'a> {
         assoc: &[(String, Type)],
     ) -> Option<String> {
         let shown = type_display(concrete);
+        // The method table is built from the impls of a concrete type: a
+        // number's, a `String`'s or a struct's. A type parameter's is not
+        // built yet.
+        if self.type_param_name(concrete).is_some() {
+            return Some(format!(
+                "error[E_DYN_TRAIT_NOT_IMPLEMENTED_YET]: a `dyn` value of the type parameter \
+                 `{shown}` is not built yet; coerce the concrete value where it is known, or \
+                 keep the parameter `[{shown}: {trait_name}]`"
+            ));
+        }
         if !self.type_satisfies_bound(concrete, trait_name) {
             return Some(format!("`{shown}` does not implement `{trait_name}`"));
-        }
-        // The method table is built from the impls of a struct or enum; a
-        // primitive's, or a type parameter's, is not built yet.
-        let nominal = matches!(concrete, Type::Named { name, .. }
-            if self.env.structs.contains_key(name) || self.env.enums.contains_key(name));
-        if !nominal {
-            return Some(format!(
-                "error[E_DYN_TRAIT_NOT_IMPLEMENTED_YET]: a `dyn` value of `{shown}` is not \
-                 built yet, only of a struct or enum; wrap it in a struct, or use a generic \
-                 parameter `[T: {trait_name}]`"
-            ));
         }
         if !args.is_empty() {
             if let Some(have) = self.env.impl_concrete_trait_args(concrete, trait_name) {

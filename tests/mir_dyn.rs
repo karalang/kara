@@ -269,8 +269,8 @@ fn main() {
 /// A value of a type that does not implement the trait, or implements it
 /// with another associated type, a borrow into an owned `dyn`, a `dyn` type
 /// leaving an associated type unbound, and a method the trait does not
-/// have are errors. A `dyn` of a primitive is refused until the builder
-/// builds it.
+/// have are errors. A `dyn` of a type parameter is refused until the
+/// builder builds it.
 #[test]
 fn mir_dyn_refuses_what_it_cannot_coerce_or_call() {
     let cases = [
@@ -295,8 +295,8 @@ fn mir_dyn_refuses_what_it_cannot_coerce_or_call() {
             "no method 'perimeter' on `dyn Shape`",
         ),
         (
-            "impl Shape for i64 { fn area(self) -> f64 { 1.0 } }\nfn main() { let a: dyn Shape = 5; }",
-            "E_DYN_TRAIT_NOT_IMPLEMENTED_YET]: a `dyn` value of `i64` is not built yet",
+            "fn wrap[T: Shape](t: own T) -> dyn Shape { t }\nfn main() { let a = wrap(Circle { r: 1.0 }); }",
+            "E_DYN_TRAIT_NOT_IMPLEMENTED_YET]: a `dyn` value of the type parameter `T` is not built yet",
         ),
     ];
     for (main, want) in cases {
@@ -487,4 +487,145 @@ fn main() {
 }
 "#;
     runs(src, "100 x 109 true\n104 w\n7 w\n");
+}
+
+/// A number, a `bool`, a `char`, a `String` and a `Vec` become `dyn`
+/// values as a struct does, through their impls of a user trait: in a
+/// `let`, an argument, a return, a collection's element, a map's value and
+/// an `Option`, owned and borrowed, with default and `own self` methods.
+/// The string's and the vector's blocks are dropped with the `dyn` value.
+#[test]
+fn mir_dyn_holds_numbers_strings_and_vectors() {
+    runs(
+        r#"trait Shape {
+    fn area(ref self) -> i64;
+
+    fn twice(ref self) -> i64 {
+        self.area() * 2
+    }
+}
+
+struct Sq {
+    s: i64,
+}
+
+impl Shape for Sq {
+    fn area(ref self) -> i64 {
+        self.s * self.s
+    }
+}
+
+impl Shape for i64 {
+    fn area(ref self) -> i64 {
+        *self + 1
+    }
+}
+
+impl Shape for String {
+    fn area(ref self) -> i64 {
+        self.len()
+    }
+}
+
+impl Shape for f64 {
+    fn area(ref self) -> i64 {
+        *self as i64
+    }
+}
+
+fn total(v: ref Vec[dyn Shape]) -> i64 {
+    let mut t = 0;
+    for s in v.iter() {
+        t += s.area() + s.twice();
+    }
+    t
+}
+
+fn main() {
+    let mut v: Vec[dyn Shape] = Vec.new();
+    v.push(Sq { s: 3 });
+    v.push(4);
+    v.push("hello");
+    v.push(2.5);
+    v.push(String.from("ab"));
+    println(f"{total(v)}");
+    let b: dyn Shape = 9;
+    println(f"{b.area()}");
+}
+"#,
+        "69\n10\n",
+    );
+    runs(
+        r#"trait Show {
+    fn show(ref self) -> String;
+
+    fn eat(own self) -> i64 {
+        self.show().len()
+    }
+}
+
+impl Show for i64 {
+    fn show(ref self) -> String {
+        f"int {self}"
+    }
+}
+
+impl Show for bool {
+    fn show(ref self) -> String {
+        (if *self { "yes" } else { "no" }).to_string()
+    }
+}
+
+impl Show for Vec[i64] {
+    fn show(ref self) -> String {
+        f"vec of {self.len()}"
+    }
+}
+
+impl Show for char {
+    fn show(ref self) -> String {
+        f"char {self}"
+    }
+}
+
+fn wrap(s: own String) -> dyn Show {
+    s
+}
+
+impl Show for String {
+    fn show(ref self) -> String {
+        f"string {self}"
+    }
+}
+
+fn view(s: ref dyn Show) -> String {
+    s.show()
+}
+
+fn main() {
+    let x = 41;
+    let v = vec![1, 2, 3];
+    println(view(x));
+    println(view(v));
+    let items: Vec[dyn Show] = vec![7, true, vec![5, 6], 'q'];
+    for it in items.iter() {
+        println(it.show());
+    }
+    let w = wrap("hi".to_string());
+    println(w.show());
+    let u: dyn Show = vec![9];
+    println(f"{u.eat()}");
+    let m: Map[String, dyn Show] = Map.new();
+    let mut m = m;
+    m.insert("a", 3);
+    m.insert("b", false);
+    println(m.get("a").unwrap().show());
+    let o: Option[dyn Show] = Some(5);
+    if let Some(s) = o {
+        println(f"{s.eat()}");
+    }
+}
+"#,
+        "int 41\nvec of 3\nint 7\nyes\nvec of 2\nchar q\nstring hi\n8\nint 3\n5\n",
+    );
 }

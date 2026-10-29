@@ -9795,9 +9795,30 @@ impl<'l, 'a> Bx<'l, 'a> {
                 .then(|| self.dyn_impl_method(t, tr, method))
                 .flatten();
         }
-        let (adt, args) = self.tys().tcx().adt_of(t)?;
-        let mut path = self.lcx.defs.table.get(adt.def).path.segments.clone();
-        path.push(format!("impl {tr}#{n}"));
+        let label = format!("impl {tr}#{n}");
+        let (def, args) = match self.tys().tcx().adt_of(t) {
+            Some((adt, args)) => (adt.def, args),
+            None => match self.tys().tcx().kind(t) {
+                HK::Intrinsic { kind, args } => (
+                    self.lcx.defs.lookup(0, kind.name())?,
+                    crate::mir::ty::table_args(kind, self.tys().tcx().list(args)),
+                ),
+                // A primitive's impl (`impl Shape for i64`) has no target
+                // definition: the method whose `self` was checked at `t`.
+                _ => {
+                    return self.lcx.fns.iter().find_map(|(&d, i)| {
+                        let path = &self.lcx.defs.table.get(d).path.segments;
+                        (i.impl_prim == Some(t)
+                            && i.f.name == method
+                            && path.len() >= 2
+                            && path[path.len() - 2] == label)
+                            .then(|| (d, Vec::new()))
+                    });
+                }
+            },
+        };
+        let mut path = self.lcx.defs.table.get(def).path.segments.clone();
+        path.push(label);
         path.push(method.to_string());
         let d = self.lcx.defs.table.lookup(&DefPath::new(path))?;
         let d = self.lcx.lowered_def(d)?;
