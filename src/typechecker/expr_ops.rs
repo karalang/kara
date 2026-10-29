@@ -2841,7 +2841,12 @@ impl<'a> super::TypeChecker<'a> {
             return None;
         }
         let (tr, method) = Self::user_operator_trait(op)?;
-        let left = resolve_type_var_top(left_ty, &self.env.substitutions);
+        // B-2026-10-28-22 — an operand of `ref T` type (a `ref` parameter)
+        // reaches `T`'s impl through the reference.
+        let mut left = resolve_type_var_top(left_ty, &self.env.substitutions);
+        while let Type::Ref(inner) | Type::MutRef(inner) = left {
+            left = resolve_type_var_top(&inner, &self.env.substitutions);
+        }
         let (name, args) = match &left {
             Type::Named { name, args }
                 if self.env.structs.contains_key(name) || self.env.enums.contains_key(name) =>
@@ -2860,6 +2865,17 @@ impl<'a> super::TypeChecker<'a> {
             self.check_assignable(&rhs, right_ty, right.span);
         }
         Some(ret)
+    }
+
+    /// B-2026-10-28-22 — a user operator's receiver that is a borrowed
+    /// place (`x + y` with `x: ref Col`): an impl taking `own self` would
+    /// move out of the borrow, which the ownership pass reports as it does
+    /// for a method call's receiver (core-semantics §3.7).
+    fn note_borrowed_operator_receiver(&mut self, operand: &Expr) {
+        if self.cli_lint_overrides.strict_core && self.core_receiver_is_borrowed(operand) {
+            self.core_borrowed_receivers
+                .insert(SpanKey::from_span(&operand.span));
+        }
     }
 
     /// B-2026-10-28-16 — `2.0 * col` with the program's `impl Mul[Col] for
@@ -3020,7 +3036,10 @@ impl<'a> super::TypeChecker<'a> {
             UnaryOp::BitNot => ("Not", "not"),
             _ => return None,
         };
-        let operand = resolve_type_var_top(ty, &self.env.substitutions);
+        let mut operand = resolve_type_var_top(ty, &self.env.substitutions);
+        while let Type::Ref(inner) | Type::MutRef(inner) = operand {
+            operand = resolve_type_var_top(&inner, &self.env.substitutions);
+        }
         let (name, args) = match &operand {
             Type::Named { name, args }
                 if self.env.structs.contains_key(name) || self.env.enums.contains_key(name) =>
@@ -3542,6 +3561,7 @@ impl<'a> super::TypeChecker<'a> {
         }
 
         if let Some(ty) = self.user_operator_impl(op, &left_ty, &right_ty, right, span) {
+            self.note_borrowed_operator_receiver(left);
             return ty;
         }
 
@@ -4485,6 +4505,7 @@ impl<'a> super::TypeChecker<'a> {
             return Type::Error;
         }
         if let Some(ty) = self.user_unary_operator_impl(op, &ty, span) {
+            self.note_borrowed_operator_receiver(operand);
             return ty;
         }
         // A borrowed scalar reads as its value under the value operators

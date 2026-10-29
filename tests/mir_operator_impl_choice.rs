@@ -4,8 +4,9 @@
 //! primitive's own `Mul for f64` and refused the right operand. The method
 //! form of such a call, `col.mul(2.0)` with several `Mul` impls, was refused
 //! as ambiguous (B-2026-10-28-18), and of a type's two `Index` impls only
-//! the first was consulted (B-2026-10-28-21). Outputs are worked out by
-//! hand.
+//! the first was consulted (B-2026-10-28-21). An operand of `ref T` type
+//! did not reach `T`'s impl at all (B-2026-10-28-22). Outputs are worked
+//! out by hand.
 //!
 //! With `--features llvm` each program is also compiled, at -O0 and -O2,
 //! and must print the same.
@@ -347,5 +348,105 @@ fn main() {
 }
 "#,
         "1.5 7.0 8.0 8.0 8.0 b\n",
+    );
+}
+
+/// `karac check` on `src` fails, and its errors contain each of `want`.
+fn check_refuses(tag: &str, src: &str, want: &[&str]) {
+    let path =
+        std::env::temp_dir().join(format!("karac-op-choice-{tag}-{}.kara", std::process::id()));
+    std::fs::write(&path, src).expect("write");
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_karac"))
+        .arg("check")
+        .arg(&path)
+        .output()
+        .expect("karac");
+    let _ = std::fs::remove_file(&path);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{tag}: checked");
+    for w in want {
+        assert!(err.contains(w), "{tag}: {err}");
+    }
+}
+
+/// An operand of `ref Col` type (a `ref` or `mut ref` parameter) reaches
+/// `Col`'s borrowing `Add`, `Mul[f64]` and `Neg` impls, and both operands
+/// stay usable (B-2026-10-28-22).
+#[test]
+fn operator_reaches_the_impl_through_a_ref_operand() {
+    runs(
+        r#"struct Col { v: Vec[f64] }
+
+impl Add for Col {
+    type Output = Col;
+    fn add(self, rhs: Col) -> Col {
+        let mut out: Vec[f64] = Vec.new();
+        for i in 0..self.v.len() { out.push(self.v[i] + rhs.v[i]); }
+        Col { v: out }
+    }
+}
+impl Mul[f64] for Col {
+    type Output = Col;
+    fn mul(self, rhs: f64) -> Col {
+        let mut out: Vec[f64] = Vec.new();
+        for x in self.v { out.push(*x * rhs); }
+        Col { v: out }
+    }
+}
+impl Neg for Col {
+    type Output = Col;
+    fn neg(self) -> Col { self * -1.0 }
+}
+
+fn add_refs(x: ref Col, y: ref Col) -> Col { x + y }
+fn scale(x: ref Col) -> Col { x * 2.0 }
+fn negate(x: ref Col) -> Col { -x }
+fn mixed(x: ref Col, y: Col) -> Col { (x + y) * 3.0 + -x }
+fn bump(x: mut ref Col) { let y = x + x; x.v[0] = y.v[0]; }
+
+fn main() {
+    let a = Col { v: vec![1.0, 2.0] };
+    let b = Col { v: vec![10.0, 20.0] };
+    let c = add_refs(a, b);
+    let d = scale(a);
+    let e = negate(b);
+    let f = mixed(a, b);
+    let mut g = Col { v: vec![4.0, 5.0] };
+    bump(mut g);
+    println(f"{c.v[1]} {d.v[1]} {e.v[0]} {f.v[0]} {g.v[0]} {a.v[0]} {b.v[1]}");
+}
+"#,
+        "22.0 4.0 -10.0 32.0 8.0 1.0 20.0\n",
+    );
+}
+
+/// Through an impl taking `own self`, the same operands would move out of
+/// their borrow: the check refuses them, as it does a method call's
+/// receiver, rather than leaving it to the build.
+#[test]
+fn operator_with_own_self_refuses_a_ref_operand() {
+    check_refuses(
+        "own-self",
+        r#"struct Col { v: Vec[f64] }
+impl Add for Col {
+    type Output = Col;
+    fn add(own self, rhs: own Col) -> Col { Col { v: vec![self.v[0] + rhs.v[0]] } }
+}
+impl Neg for Col {
+    type Output = Col;
+    fn neg(own self) -> Col { Col { v: vec![-self.v[0]] } }
+}
+fn add_left(x: ref Col, y: own Col) -> Col { x + y }
+fn negate(x: ref Col) -> Col { -x }
+fn main() {
+    let a = Col { v: vec![1.0] };
+    let b = Col { v: vec![2.0] };
+    println(f"{add_left(a, b).v[0]} {negate(a).v[0]}");
+}
+"#,
+        &[
+            ":10:46: cannot move a non-`Copy` value out of a borrowed place",
+            ":11:33: cannot move a non-`Copy` value out of a borrowed place",
+        ],
     );
 }

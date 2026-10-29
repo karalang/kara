@@ -1001,6 +1001,9 @@ impl<'a> UseClassifier<'a> {
                     self.method_param_modes.get(key).and_then(|m| m.first()),
                     Some(OwnershipMode::Own)
                 );
+                if owned_self {
+                    self.core_operator_moves_out_of_borrow(left);
+                }
                 let mode = |owned: bool| {
                     if owned {
                         Mode::Consuming
@@ -1027,6 +1030,9 @@ impl<'a> UseClassifier<'a> {
             {
                 let key = &self.tc.user_operator_calls[&SpanKey::from_span(&expr.span)];
                 let owned = matches!(self.method_self_modes.get(key), Some(SelfParam::Owned));
+                if owned {
+                    self.core_operator_moves_out_of_borrow(operand);
+                }
                 self.walk_expr(
                     operand,
                     if owned {
@@ -2230,6 +2236,32 @@ impl<'a> UseClassifier<'a> {
             ty = inner;
         }
         !matches!(ty, Type::Weak(_) | Type::Error | Type::Never) && !self.is_copy_type(ty)
+    }
+
+    /// v2 core C3 for a user operator whose impl takes `own self`
+    /// (B-2026-10-28-22): an operand that is a borrowed place (`x + y` with
+    /// `x: ref Col`) would be moved out of the borrow, unless it is `Copy`
+    /// or counted, as a method call's receiver would.
+    fn core_operator_moves_out_of_borrow(&mut self, operand: &Expr) {
+        if !crate::ownership::core_rules()
+            || !self
+                .tc
+                .core_borrowed_receivers
+                .contains(&SpanKey::from_span(&operand.span))
+            || !self.core_receiver_moves(operand)
+        {
+            return;
+        }
+        let counts = self.tc.node_types.get(&operand.id).is_some_and(|(t, _)| {
+            let mut t: &Type = t;
+            while let Type::Ref(inner) | Type::MutRef(inner) = t {
+                t = inner;
+            }
+            type_counts_or_copies(t, self.tc, &|t| self.is_copy_type(t), true)
+        });
+        if !counts {
+            self.classification.core_borrow_moves.push(operand.span);
+        }
     }
 
     /// v2 core: when a consumed place is a field projection of a named root
