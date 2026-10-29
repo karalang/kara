@@ -1,0 +1,65 @@
+// LeetCode #1009: Complement of Base 10 Integer -- bit by bit
+//
+// Walk n's bits from the lowest, shifting n right each step, and set the
+// matching bit of the answer wherever n has a 0. The walk ends when no
+// bits are left, so the zeros above the highest 1 are never flipped. 0
+// has one bit, a 0, so its complement is 1. O(log n).
+
+fn bitwise_complement(n: i64) -> i64 {
+    if n == 0 {
+        return 1;
+    }
+    let mut rest = n;
+    let mut place = 1;
+    let mut out = 0;
+    while rest > 0 {
+        if rest % 2 == 0 {
+            out += place;
+        }
+        rest /= 2;
+        place *= 2;
+    }
+    out
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // LeetCode's three examples, then the edges
+    let examples: Vec[i64] = vec![5, 7, 10, 0, 1, 2, 536870912, 536870911, 999999999];
+    for n in examples.iter() {
+        println(f"n = {n} -> {bitwise_complement(n)}");
+    }
+    // every n up to 32, one line
+    let mut parts: Vec[String] = Vec.new();
+    for n in 0..33 {
+        parts.push(bitwise_complement(n).to_string());
+    }
+    println(f"0..32 -> {parts.join(" ")}");
+    // every n up to 100000
+    let mut total = 0;
+    let mut check = 0;
+    for n in 0..100001 {
+        let c = bitwise_complement(n);
+        total += c;
+        check = (check * 31 + c) % 1000000007;
+    }
+    println(f"every n up to 100000: complements sum to {total}, checksum {check}");
+    // random n below LeetCode's bound, 10^9, with random lengths
+    let mut seed = 1009;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..20000 {
+        let bits = 1 + next_random(mut seed) % 30;
+        let n = ((next_random(mut seed) * 32768 + next_random(mut seed)) % (1 << bits)) % 1000000000;
+        let c = bitwise_complement(n);
+        total += c;
+        check = (check * 31 + c) % 1000000007;
+    }
+    println(f"20000 random n: complements sum to {total}, checksum {check}");
+}

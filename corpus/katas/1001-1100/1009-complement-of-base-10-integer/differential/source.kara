@@ -1,0 +1,222 @@
+// LeetCode #1009: Complement of Base 10 Integer -- differential
+//
+// The five arms, copied, against the statement read literally and five
+// more properties. See README.md § Differential.
+
+fn comp_star(n: i64) -> i64 {
+    let mut mask = 1;
+    while mask < n {
+        mask = mask * 2 + 1;
+    }
+    mask ^ n
+}
+
+fn comp_bits(n: i64) -> i64 {
+    if n == 0 {
+        return 1;
+    }
+    let mut rest = n;
+    let mut place = 1;
+    let mut out = 0;
+    while rest > 0 {
+        if rest % 2 == 0 {
+            out += place;
+        }
+        rest /= 2;
+        place *= 2;
+    }
+    out
+}
+
+fn comp_text(n: i64) -> i64 {
+    let mut digits: Vec[char] = Vec.new();
+    let mut rest = n;
+    loop {
+        digits.push(if rest % 2 == 1 { '1' } else { '0' });
+        rest /= 2;
+        if rest == 0 {
+            break;
+        }
+    }
+    digits.reverse();
+    let mut flipped = String.new();
+    for d in digits.iter() {
+        flipped.push(if d == '1' { '0' } else { '1' });
+    }
+    let mut out = 0;
+    for c in flipped.chars() {
+        out = out * 2 + (if c == '1' { 1 } else { 0 });
+    }
+    out
+}
+
+fn comp_smear(n: i64) -> i64 {
+    if n == 0 {
+        return 1;
+    }
+    let mut mask = n;
+    mask = mask | (mask >> 1);
+    mask = mask | (mask >> 2);
+    mask = mask | (mask >> 4);
+    mask = mask | (mask >> 8);
+    mask = mask | (mask >> 16);
+    mask ^ n
+}
+
+fn comp_recursive(n: i64) -> i64 {
+    if n < 2 {
+        return 1 - n;
+    }
+    2 * comp_recursive(n / 2) + (1 - n % 2)
+}
+
+fn arms(n: i64) -> Vec[i64] {
+    vec![comp_star(n), comp_bits(n), comp_text(n), comp_smear(n), comp_recursive(n)]
+}
+
+// The statement read literally: n's binary representation is the digits
+// d_k ... d_0, with d_k = 1, for which n is the sum of d_i * 2^i (or the
+// single digit 0 for 0); flip every digit and add the powers back up.
+fn statement(n: i64) -> i64 {
+    if n == 0 {
+        return 1;
+    }
+    let mut top = 1;
+    while top * 2 <= n {
+        top *= 2;
+    }
+    let mut digits: Vec[i64] = Vec.new();
+    let mut rest = n;
+    let mut p = top;
+    while p > 0 {
+        if rest >= p {
+            digits.push(1);
+            rest -= p;
+        } else {
+            digits.push(0);
+        }
+        p /= 2;
+    }
+    let mut out = 0;
+    let mut p = top;
+    for d in digits.iter() {
+        if d == 0 {
+            out += p;
+        }
+        p /= 2;
+    }
+    out
+}
+
+// the largest power of two at most n, for n >= 1
+fn top_power(n: i64) -> i64 {
+    let mut p = 1;
+    while p * 2 <= n {
+        p *= 2;
+    }
+    p
+}
+
+// n with its leading run of ones taken off
+fn strip_leading_ones(n: i64) -> i64 {
+    let mut rest = n;
+    let mut p = top_power(n);
+    while p > 0 and rest >= p {
+        rest -= p;
+        p /= 2;
+    }
+    rest
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let names = ["star", "bits", "text", "smear", "recursive"];
+    let mut failures: Vec[i64] = vec![0; 6];
+    let mut checks = 0;
+    let mut values = 0;
+    let mut check = 0;
+    let mut seed = 10091;
+    // every n up to 6000; each power of two below 2^30, with its neighbours
+    // on either side; then 3000 random n below 10^9 of random length
+    let mut inputs: Vec[i64] = Vec.new();
+    for n in 0..6001 {
+        inputs.push(n);
+    }
+    for k in 0..30 {
+        inputs.push((1 << k) - 1);
+        inputs.push(1 << k);
+        inputs.push((1 << k) + 1);
+    }
+    for _ in 0..3000 {
+        let bits = 1 + next_random(mut seed) % 30;
+        inputs.push(((next_random(mut seed) * 32768 + next_random(mut seed)) % (1 << bits)) % 1000000000);
+    }
+    for n in inputs.iter() {
+        let got = arms(n);
+        values += 1;
+        check = (check * 31 + got[0]) % 1000000007;
+        let brute = statement(n);
+        let doubled = arms(2 * n);
+        let doubled_one = arms(2 * n + 1);
+        for a in 0..5 {
+            let c = got[a];
+            // P1: the statement
+            checks += 1;
+            if c != brute {
+                failures[0] += 1;
+            }
+            // P2: for n >= 1, n + c + 1 is a power of two p with p / 2 <= n < p
+            if n >= 1 {
+                checks += 1;
+                let p = n + c + 1;
+                if c < 0 or (p & (p - 1)) != 0 or not (p / 2 <= n and n < p) {
+                    failures[1] += 1;
+                }
+            }
+            // P3: no bit is set in both n and its complement
+            checks += 1;
+            if (n & c) != 0 {
+                failures[2] += 1;
+            }
+            // P4: for n >= 1, appending a 0 to n appends a 1 to the
+            // complement, and appending a 1 appends a 0
+            if n >= 1 {
+                checks += 1;
+                if doubled[a] != 2 * c + 1 or doubled_one[a] != 2 * c {
+                    failures[3] += 1;
+                }
+            }
+            // P5: where the complement is not 0, complementing it again
+            // gives n with its leading ones taken off
+            if c > 0 {
+                checks += 1;
+                if arms(c)[a] != strip_leading_ones(n) {
+                    failures[4] += 1;
+                }
+            }
+            // P6: each arm agrees with at least two of the other four
+            checks += 1;
+            let mut agree = 0;
+            for b in 0..5 {
+                if b != a and got[b] == c {
+                    agree += 1;
+                }
+            }
+            if agree < 2 {
+                failures[5] += 1;
+            }
+        }
+    }
+    let mut total = 0;
+    for p in 0..6 {
+        total += failures[p];
+        if failures[p] > 0 {
+            println(f"P{p + 1}: {failures[p]} failures");
+        }
+    }
+    println(f"{values} values of n: checksum {check}, {checks} checks over {names.len()} arms: {total} failures");
+}

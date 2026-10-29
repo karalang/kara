@@ -1,0 +1,69 @@
+// LeetCode #1009: Complement of Base 10 Integer -- through the text
+//
+// Write n in binary as text, flip every digit, and read the text back as
+// a number. The text has no leading zeros, as the statement says, and 0
+// is the text "0". O(log n).
+
+fn bitwise_complement(n: i64) -> i64 {
+    let mut digits: Vec[char] = Vec.new();
+    let mut rest = n;
+    loop {
+        digits.push(if rest % 2 == 1 { '1' } else { '0' });
+        rest /= 2;
+        if rest == 0 {
+            break;
+        }
+    }
+    digits.reverse();
+    let mut flipped = String.new();
+    for d in digits.iter() {
+        flipped.push(if d == '1' { '0' } else { '1' });
+    }
+    let mut out = 0;
+    for c in flipped.chars() {
+        out = out * 2 + (if c == '1' { 1 } else { 0 });
+    }
+    out
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // LeetCode's three examples, then the edges
+    let examples: Vec[i64] = vec![5, 7, 10, 0, 1, 2, 536870912, 536870911, 999999999];
+    for n in examples.iter() {
+        println(f"n = {n} -> {bitwise_complement(n)}");
+    }
+    // every n up to 32, one line
+    let mut parts: Vec[String] = Vec.new();
+    for n in 0..33 {
+        parts.push(bitwise_complement(n).to_string());
+    }
+    println(f"0..32 -> {parts.join(" ")}");
+    // every n up to 100000
+    let mut total = 0;
+    let mut check = 0;
+    for n in 0..100001 {
+        let c = bitwise_complement(n);
+        total += c;
+        check = (check * 31 + c) % 1000000007;
+    }
+    println(f"every n up to 100000: complements sum to {total}, checksum {check}");
+    // random n below LeetCode's bound, 10^9, with random lengths
+    let mut seed = 1009;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..20000 {
+        let bits = 1 + next_random(mut seed) % 30;
+        let n = ((next_random(mut seed) * 32768 + next_random(mut seed)) % (1 << bits)) % 1000000000;
+        let c = bitwise_complement(n);
+        total += c;
+        check = (check * 31 + c) % 1000000007;
+    }
+    println(f"20000 random n: complements sum to {total}, checksum {check}");
+}

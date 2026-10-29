@@ -1,0 +1,11 @@
+source = "kara-katas/leetcode/1001-1100/1009-complement-of-base-10-integer/bench/bitwise_complement.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["bench"]
+class = "e"
+expected_from = "mirror"
+note = "mirror: the C, Rust, Go and Python bench programs print this line (kara-katas 1009 bench/); there is no legacy record (the legacy compiler went at M3)"
+bucket = "timeout"
+classified_with = "c632bfbeb"
+extracted_src = "85765275"
