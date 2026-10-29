@@ -34,6 +34,7 @@ mod clone;
 mod debug;
 mod deque;
 mod drop;
+mod dyn_trait;
 mod flag;
 mod fmt;
 mod foreign;

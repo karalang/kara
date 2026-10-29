@@ -15,7 +15,8 @@
 //!   pointer to a malloc'd value ([`boxed_field`]).
 //! - An `Option` of a thin pointer that is never null (a `shared` handle,
 //!   or a reference to a sized, non-empty type) is that pointer alone, with
-//!   null for `None` ([`null_niche`]).
+//!   null for `None` ([`null_niche`]). So is an `Option` of a `dyn` value or
+//!   view, whose pair starts with a data word that is never null.
 //! - A `shared` handle points at a box: two `u64` counts (strong, then
 //!   weak) and then the type's body, laid out as the plain struct or enum.
 //! - `String` and `Vec` are `{ptr, len, cap}`; `VecDeque` is a ring,
@@ -158,8 +159,9 @@ pub fn library_cell(tys: &TyInterner, t: Ty) -> Option<Cell> {
 /// or a `shared` one (whose handle points at a box holding this body).
 fn adt_body(tys: &TyInterner, t: Ty, depth: u32) -> Option<Layout> {
     let of = |t: Ty| layout_at(tys, t, depth + 1);
-    if null_niche(tys, t).is_some() {
-        return Some(WORD);
+    if let Some((_, some)) = null_niche(tys, t) {
+        // The payload itself: a pointer, or a `dyn` pair led by one.
+        return of(tys.field_ty(t, Some(some), 0)?);
     }
     let (adt, _) = tys.tcx().adt_of(t)?;
     let variant = |v: usize| -> Option<Vec<Layout>> {
@@ -266,10 +268,10 @@ pub fn field_offset(tys: &TyInterner, t: Ty, variant: Option<u32>, f: u32) -> Op
     Some(at)
 }
 
-/// For an `Option` stored as a bare pointer, the variant indices of its
-/// `None` and `Some`: the payload is a `shared` handle or a reference to a
-/// sized type that is not empty, so it is never null, and a null pointer
-/// is `None`. The logical tag is still [`enum_tag`]'s byte; readers and
+/// For an `Option` stored as its payload alone, the variant indices of its
+/// `None` and `Some`: the payload is a `shared` handle, a reference to a
+/// sized type that is not empty, or a `dyn` value or view (whose first
+/// word is its data), so its first word is never null, and null is `None`. The logical tag is still [`enum_tag`]'s byte; readers and
 /// writers of the tag compare and store the pointer instead.
 pub fn null_niche(tys: &TyInterner, t: Ty) -> Option<(u32, u32)> {
     let TyKind::Adt(a) = tys.kind(t) else {
@@ -288,7 +290,9 @@ pub fn null_niche(tys: &TyInterner, t: Ty) -> Option<(u32, u32)> {
     }
     let payload = tys.field_ty(t, Some(some), 0)?;
     let ok = match tys.kind(payload) {
-        TyKind::Shared(_) => true,
+        // A `dyn` value's data word is never null, nor is a view's.
+        TyKind::Shared(_) | TyKind::Dyn { .. } => true,
+        TyKind::Ref(p) | TyKind::MutRef(p) if matches!(tys.kind(p), TyKind::Dyn { .. }) => true,
         TyKind::Ref(p) | TyKind::MutRef(p) => {
             !matches!(tys.kind(p), TyKind::Str | TyKind::Slice(_))
                 && !may_be_empty(tys, p, &mut Vec::new())

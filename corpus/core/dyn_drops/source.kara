@@ -1,0 +1,37 @@
+trait Job {
+    fn peek(self) -> i64;
+    fn run(own self) -> String;
+}
+struct Loud { n: i64 }
+impl Drop for Loud {
+    fn drop(mut ref self) { println(f"drop {self.n}"); }
+}
+impl Job for Loud {
+    fn peek(self) -> i64 { self.n }
+    fn run(own self) -> String { f"ran {self.n}" }
+}
+struct Nothing {}
+impl Job for Nothing {
+    fn peek(self) -> i64 { 0 }
+    fn run(own self) -> String { "ran nothing" }
+}
+fn main() {
+    let a: dyn Job = Loud { n: 1 };
+    println(a.run());
+    let z: dyn Job = Nothing {};
+    println(z.run());
+    {
+        let b: dyn Job = Loud { n: 2 };
+        let c: dyn Job = Loud { n: 3 };
+        println(f"{b.peek()} {c.peek()}");
+    }
+    let mut v: Vec[dyn Job] = Vec.new();
+    v.push(Loud { n: 4 });
+    v.push(Nothing {});
+    v.push(Loud { n: 5 });
+    let mut d: dyn Job = Loud { n: 6 };
+    println(f"{d.peek()}");
+    d = Loud { n: 7 };
+    println(f"{v.len()} {d.peek()}");
+    println("end");
+}

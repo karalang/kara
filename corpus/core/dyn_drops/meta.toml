@@ -1,0 +1,11 @@
+source = "design.md § dyn Trait"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["dyn", "drop"]
+class = "a"
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md § dyn Trait, Calls and moves, with core-semantics.md §7: an `own self` call consumes the owned `dyn` (the method drops the concrete value at its end, and nothing drops it again); a zero-sized value has no block; `dyn` locals drop in reverse order of declaration; assigning an owned `dyn` drops the old value; a `Vec[dyn Job]` drops its elements in order."
+bucket = "a"

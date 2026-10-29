@@ -297,9 +297,13 @@ impl<'ctx> Cx<'ctx, '_> {
     /// The place `*p` for a `p` of type `ty` stored at `ptr`, and its type.
     fn deref(&mut self, ptr: PointerValue<'ctx>, ty: Ty) -> R<(PointerValue<'ctx>, Ty)> {
         Ok(match self.tys.kind(ty) {
-            // A reference to a `str` or slice is the two words themselves.
+            // A reference to a `str`, a slice or a `dyn` value is the two
+            // words themselves.
             TyKind::Ref(p) | TyKind::MutRef(p)
-                if matches!(self.tys.kind(p), TyKind::Str | TyKind::Slice(_)) =>
+                if matches!(
+                    self.tys.kind(p),
+                    TyKind::Str | TyKind::Slice(_) | TyKind::Dyn { .. }
+                ) =>
             {
                 (ptr, p)
             }
@@ -533,8 +537,12 @@ impl<'ctx> Cx<'ctx, '_> {
             Rvalue::Ref(_, place) => {
                 let pty = self.place_type(place)?;
                 let p = self.place_ptr(place)?;
-                if matches!(self.tys.kind(pty), TyKind::Str | TyKind::Slice(_)) {
-                    // A reference to a `str` or slice is its two words.
+                if matches!(
+                    self.tys.kind(pty),
+                    TyKind::Str | TyKind::Slice(_) | TyKind::Dyn { .. }
+                ) {
+                    // A reference to a `str`, a slice or a `dyn` value is
+                    // its two words.
                     self.copy(dst, p, pty)
                 } else {
                     self.store(dst, p.into())
@@ -1278,9 +1286,7 @@ impl<'ctx> Cx<'ctx, '_> {
             }
             CastKind::Upgrade => return self.upgrade(dst, a, to),
             CastKind::Erase => return self.erase(dst, a, from, to),
-            CastKind::ToDyn(_) => {
-                return Err("MIR to LLVM: a coercion to `dyn` is not lowered yet".into())
-            }
+            CastKind::ToDyn(vt) => return self.coerce_dyn(dst, a, vt, to),
             _ => {}
         }
         let x = self.operand_scalar(a)?;

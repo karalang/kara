@@ -1,0 +1,35 @@
+trait Shape { fn area(self) -> f64; }
+struct Circle { r: f64 }
+struct Point {}
+impl Shape for Circle { fn area(self) -> f64 { 3.0 * self.r * self.r } }
+impl Shape for Point { fn area(self) -> f64 { 0.0 } }
+fn biggest(v: ref Vec[dyn Shape]) -> Option[ref dyn Shape] {
+    let mut best: Option[ref dyn Shape] = None;
+    for s in v.iter() {
+        match best {
+            Some(b) if b.area() >= s.area() => {}
+            _ => { best = Some(s); }
+        }
+    }
+    best
+}
+fn size[T](x: T) -> i64 { T.size_of() }
+fn view_of(s: ref dyn Shape) -> Option[ref dyn Shape] { Some(s) }
+fn main() {
+    let c: dyn Shape = Circle { r: 1.0 };
+    let none: Option[dyn Shape] = None;
+    let view = view_of(c);
+    println(f"{size(c)} {size(none)} {size(view)}");
+    let v: Vec[dyn Shape] = [Point {}, Circle { r: 2.0 }, Circle { r: 1.0 }];
+    match biggest(v) {
+        Some(s) => println(f"{s.area()}"),
+        None => println("none"),
+    }
+    let empty: Vec[dyn Shape] = Vec.new();
+    match biggest(empty) {
+        Some(s) => println(f"{s.area()}"),
+        None => println("none"),
+    }
+    let p: Option[dyn Shape] = Some(Point {});
+    if let Some(q) = p { println(f"{q.area()}"); }
+}

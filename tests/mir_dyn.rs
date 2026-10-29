@@ -6,10 +6,17 @@
 //! (the concrete value's drop, then the block). The check refuses what the
 //! MIR builder does not build yet. Each program's output is worked out by
 //! hand; the interpreter also reports any block left at exit.
+//!
+//! With `--features llvm` each program is also compiled, at -O0 and -O2,
+//! and must print the same.
+
+#[cfg(feature = "llvm")]
+mod common;
 
 use karac::mir::interp::Outcome;
 
-/// The interpreter prints `want` and finishes with nothing leaked.
+/// The interpreter prints `want` and finishes with nothing leaked, and so
+/// does the program compiled.
 fn runs(src: &str, want: &str) {
     let run = karac::mir::lower::run_source(src).expect("MIR");
     assert!(
@@ -19,6 +26,44 @@ fn runs(src: &str, want: &str) {
         run.output
     );
     assert_eq!(run.output, want);
+    #[cfg(feature = "llvm")]
+    for opt in [0, 2] {
+        if let Some((ok, out)) = compiled::build_and_run(src, opt) {
+            assert!(ok, "at -O{opt}: {out}");
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
+
+#[cfg(feature = "llvm")]
+mod compiled {
+    use std::process::Command;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// What the program prints compiled at `opt`, and whether it exited
+    /// cleanly; `None` when there is no runtime archive to link.
+    pub fn build_and_run(src: &str, opt: u8) -> Option<(bool, String)> {
+        static N: AtomicUsize = AtomicUsize::new(0);
+        let lowered = karac::mir::lower::build_source(src).expect("MIR");
+        karac::mir::lower::compiled_check(&lowered).expect("checks");
+        let ir = karac::backend::mir::compile_mir_ir(&lowered.program, &lowered.tys).expect("IR");
+        let n = N.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("karac-dyn-{}-{n}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        let (obj, exe) = (dir.join("main.o"), dir.join("main"));
+        karac::backend::mir_aot::compile_object(&ir, &obj, opt).expect("object");
+        let linked = super::common::link_or_skip(karac::backend::driver::link_executable(
+            &obj.to_string_lossy(),
+            &exe.to_string_lossy(),
+        ));
+        let out = linked.map(|()| Command::new(&exe).output().expect("run"));
+        let _ = std::fs::remove_dir_all(&dir);
+        let out = out?;
+        Some((
+            out.status.success(),
+            String::from_utf8(out.stdout).expect("utf-8"),
+        ))
+    }
 }
 
 /// The check refuses the program with a message containing `want`.

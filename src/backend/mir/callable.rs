@@ -75,6 +75,9 @@ pub(super) enum Shim {
     /// `i8 (ptr a, ptr b)`: the poll function of a task whose root is the
     /// resume body `resume` (`task.rs`).
     TaskPoll { resume: String, spawned: bool },
+    /// `void (ptr ret, ptr data, ptr arg...)`: the method at `slot` of the
+    /// program's vtable `vtable`, on the value at `data` (`dyn_trait.rs`).
+    DynSlot { vtable: u32, slot: u32 },
     /// `void (ptr out, i64 v)`: `f"{v}"` of a (`signed`) integer, written
     /// into a `String` from a `malloc` LLVM can see (`call.rs`).
     StringOfInt { signed: bool },
@@ -211,6 +214,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 format!("poll.{}{resume}", if *spawned { "" } else { "root." }),
                 self.llcx.i8_type().fn_type(&[p.into(), p.into()], false),
             ),
+            Shim::DynSlot { vtable, slot } => self.dyn_slot_sig(*vtable, *slot),
             Shim::StringOfInt { signed } => (
                 format!("string_of.{}64", if *signed { "i" } else { "u" }),
                 self.llcx
@@ -255,6 +259,7 @@ impl<'ctx> Cx<'ctx, '_> {
                     }
                     self.builder.build_return(None).map_err(e)?;
                 }
+                Shim::DynSlot { vtable, slot } => self.build_dyn_slot(f, vtable, slot)?,
                 Shim::SortBy { f: fty, by_key, el } => {
                     let (ctx, a, b) = (param(0)?, param(1)?, param(2)?);
                     let o = self.sort_by_order(fty, by_key, el, ctx, a, b)?;

@@ -33,6 +33,10 @@ impl<'ctx> Cx<'ctx, '_> {
     ) -> R<()> {
         let program = self.program;
         match func {
+            Operand::Const(Const {
+                kind: ConstKind::DynSlot { slot, .. },
+                ..
+            }) => self.call_dyn(*slot, args, dest)?,
             Operand::Const(c) => {
                 let ConstKind::FnDef(inst) = &c.kind else {
                     return Err("MIR to LLVM: a call to a constant that is not a function".into());
@@ -296,10 +300,15 @@ impl<'ctx> Cx<'ctx, '_> {
         el: Ty,
     ) -> R<()> {
         // An element that is itself a reference is the result (a borrow of
-        // a borrow is the borrow), as is a view, which is its own header.
+        // a borrow is the borrow), as is a view, which is its own header,
+        // and a `dyn` value, whose view is its pair.
         if matches!(
             self.tys.kind(el),
-            TyKind::Str | TyKind::Slice(_) | TyKind::Ref(_) | TyKind::MutRef(_)
+            TyKind::Str
+                | TyKind::Slice(_)
+                | TyKind::Ref(_)
+                | TyKind::MutRef(_)
+                | TyKind::Dyn { .. }
         ) {
             self.copy(d, at, el)
         } else {

@@ -1,0 +1,11 @@
+source = "design.md § dyn Trait"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["dyn", "layout"]
+class = "a"
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md § dyn Trait, Representation: an owned `dyn Trait` and a `ref dyn Trait` are two words, and neither word is ever null, so `Option[dyn Trait]` and `Option[ref dyn Trait]` are two words too (null data is `None`). An `Option[ref dyn Shape]` built from a `Vec[dyn Shape]`'s elements, `None` from an empty one, and an `Option[dyn Shape]` of a zero-sized value read back as their values."
+bucket = "a"

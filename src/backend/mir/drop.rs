@@ -318,6 +318,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 | IntrinsicTy::SortedSet(_),
             ) => self.drop_table(p, ty),
             TyKind::Fn { .. } => self.drop_erased_fn(p),
+            TyKind::Dyn { .. } => self.drop_dyn(p),
             _ => err(format!(
                 "MIR to LLVM: dropping a `{}` is not lowered yet",
                 self.tys.display(ty)
