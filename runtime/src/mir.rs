@@ -8,9 +8,8 @@
 //! reference semantics for each entry point here.
 
 use std::cell::RefCell;
-use std::io::Write;
 
-use crate::alloc::karac_realloc_or_panic;
+use crate::alloc::{karac_free, karac_realloc_or_panic};
 
 /// A `String` or `Vec[T]` as compiled code holds it.
 #[repr(C)]
@@ -51,47 +50,251 @@ thread_local! {
     /// its text starts, appends its parts, and pops it off the end, so
     /// nested formats share one buffer and a format allocates nothing but
     /// its result.
-    static FMT: RefCell<FmtBuf> = const {
-        RefCell::new(FmtBuf {
-            buf: Vec::new(),
-            starts: Vec::new(),
-        })
+    static FMT: RefCell<ThreadOwned<FmtBuf>> = const {
+        RefCell::new(thread_owned(FmtBuf {
+            buf: Buf::new(),
+            starts: Buf::new(),
+        }))
+    };
+    /// Standard output off the pool ([`OUT_SHARED`] on it).
+    static OUT_LOCAL: RefCell<ThreadOwned<Buf<u8>>> = const {
+        RefCell::new(thread_owned(Buf::new()))
     };
     /// The message `panic(msg)` set for the abort that follows it.
     static PANIC: RefCell<Option<String>> = const { RefCell::new(None) };
 }
 
-crate::mir_task::program_state! {
-    /// Standard output, flushed at exit, at an abort, and before anything
-    /// is written to standard error so the two stay in order on a terminal.
-    /// One buffer for the program, so the pool's workers write in order.
-    static OUT: Vec<u8> = Vec::new();
+/// Standard output under the pool: one buffer for the program, so the
+/// pool's workers write in order. Standard output is flushed at exit, at an
+/// abort, and before anything is written to standard error so the two stay
+/// in order on a terminal.
+static OUT_SHARED: std::sync::Mutex<Buf<u8>> = std::sync::Mutex::new(Buf::new());
+
+/// `f` of the program's standard output buffer, as `program_state!`
+/// shares one, but panic-free ([`Buf`]).
+fn with_out<R>(f: impl FnOnce(&mut Buf<u8>) -> R) -> R {
+    if crate::mir_task::pooled() {
+        return f(&mut OUT_SHARED.lock().unwrap_or_else(|p| p.into_inner()));
+    }
+    match OUT_LOCAL.try_with(|o| o.try_borrow_mut().map(|mut o| f(&mut o))) {
+        Ok(Ok(r)) => {
+            thread_bufs::release_at_exit();
+            r
+        }
+        _ => buffer_in_use(),
+    }
+}
+
+/// A print buffer asked for while it is in use, which only a runtime
+/// defect could do: the process ends, as a panic here would not let it
+/// stay panic-free ([`Buf`]).
+#[cold]
+fn buffer_in_use() -> ! {
+    crate::fatal::write_stderr(b"fatal runtime error: a print buffer is in use\n");
+    std::process::abort()
+}
+
+/// A thread-local print buffer: one std's thread-local storage does not
+/// drop, since registering its destructor reaches a panic; the thread's
+/// buffers are freed by [`thread_bufs`] instead.
+#[cfg(all(unix, feature = "net"))]
+type ThreadOwned<T> = std::mem::ManuallyDrop<T>;
+#[cfg(not(all(unix, feature = "net")))]
+type ThreadOwned<T> = T;
+
+#[cfg(all(unix, feature = "net"))]
+const fn thread_owned<T>(v: T) -> ThreadOwned<T> {
+    std::mem::ManuallyDrop::new(v)
+}
+#[cfg(not(all(unix, feature = "net")))]
+const fn thread_owned<T>(v: T) -> ThreadOwned<T> {
+    v
+}
+
+/// Frees a thread's print buffers when it exits, through a pthread key's
+/// destructor in place of std's thread-local one (B-2026-10-28-36).
+#[cfg(all(unix, feature = "net"))]
+mod thread_bufs {
+    use std::cell::Cell;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::{Buf, FMT, OUT_LOCAL};
+
+    /// The key, plus one; 0 before it is made.
+    static KEY: AtomicUsize = AtomicUsize::new(0);
+
+    thread_local! {
+        static SET: Cell<bool> = const { Cell::new(false) };
+    }
+
+    /// Has this thread's buffers freed when it exits.
+    #[inline]
+    pub(super) fn release_at_exit() {
+        if SET.try_with(Cell::get).unwrap_or(true) {
+            return;
+        }
+        let Some(key) = key() else { return };
+        SET.with(|s| s.set(true));
+        // SAFETY: a key made by `key`; the value only marks the thread.
+        unsafe { libc::pthread_setspecific(key, std::ptr::dangling::<u8>().cast()) };
+    }
+
+    fn key() -> Option<libc::pthread_key_t> {
+        match KEY.load(Ordering::Acquire) {
+            0 => {}
+            k => return Some((k - 1) as libc::pthread_key_t),
+        }
+        // SAFETY: `release` is a destructor of the type pthreads expects.
+        let mut key: libc::pthread_key_t = 0;
+        if unsafe { libc::pthread_key_create(&mut key, Some(release)) } != 0 {
+            return None;
+        }
+        match KEY.compare_exchange(0, key as usize + 1, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) => Some(key),
+            Err(k) => {
+                // Another thread made one first.
+                // SAFETY: the key just made, which nothing has used.
+                unsafe { libc::pthread_key_delete(key) };
+                Some((k - 1) as libc::pthread_key_t)
+            }
+        }
+    }
+
+    /// Frees the exiting thread's buffers, leaving empty ones that a
+    /// later use (another destructor's print) would grow again.
+    extern "C" fn release(_: *mut libc::c_void) {
+        let _ = SET.try_with(|s| s.set(false));
+        let _ = FMT.try_with(|f| {
+            if let Ok(mut f) = f.try_borrow_mut() {
+                drop(std::mem::replace(&mut f.buf, Buf::new()));
+                drop(std::mem::replace(&mut f.starts, Buf::new()));
+            }
+        });
+        let _ = OUT_LOCAL.try_with(|o| {
+            if let Ok(mut o) = o.try_borrow_mut() {
+                drop(std::mem::replace(&mut **o, Buf::new()));
+            }
+        });
+    }
+}
+
+#[cfg(not(all(unix, feature = "net")))]
+mod thread_bufs {
+    /// Std's thread-local destructors free the buffers here.
+    #[inline]
+    pub(super) fn release_at_exit() {}
 }
 
 const OUT_LIMIT: usize = 1 << 16;
 
 struct FmtBuf {
-    buf: Vec<u8>,
-    starts: Vec<usize>,
+    buf: Buf<u8>,
+    starts: Buf<usize>,
+}
+
+/// A growable buffer of `Copy` values for the print path, which nothing in
+/// it can make panic: growth that cannot be had aborts the way an
+/// allocation does. `Vec`'s capacity-overflow panic, like any panic the
+/// print path can reach, keeps std's panic hook and its backtrace
+/// symbolizer (~250 KB) in every binary that prints (B-2026-10-28-36).
+struct Buf<T: Copy> {
+    ptr: *mut T,
+    len: usize,
+    cap: usize,
+}
+
+// SAFETY: a `Buf` owns its buffer, as a `Vec` does.
+unsafe impl<T: Copy + Send> Send for Buf<T> {}
+
+impl<T: Copy> Buf<T> {
+    const fn new() -> Self {
+        Buf {
+            ptr: std::ptr::null_mut(),
+            len: 0,
+            cap: 0,
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.len
+    }
+
+    fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    fn as_slice(&self) -> &[T] {
+        if self.len == 0 {
+            &[]
+        } else {
+            // SAFETY: the first `len` slots are written.
+            unsafe { std::slice::from_raw_parts(self.ptr, self.len) }
+        }
+    }
+
+    fn extend_from_slice(&mut self, s: &[T]) {
+        let want = self.len.saturating_add(s.len());
+        if want > self.cap {
+            let cap = want.max(self.cap.saturating_mul(2)).max(64);
+            let bytes = cap.saturating_mul(std::mem::size_of::<T>());
+            self.ptr = karac_realloc_or_panic(self.ptr.cast(), bytes).cast();
+            self.cap = cap;
+        }
+        // SAFETY: the buffer has room for `want` values.
+        unsafe { std::ptr::copy_nonoverlapping(s.as_ptr(), self.ptr.add(self.len), s.len()) };
+        self.len = want;
+    }
+
+    fn push(&mut self, v: T) {
+        self.extend_from_slice(std::slice::from_ref(&v));
+    }
+
+    fn pop(&mut self) -> Option<T> {
+        self.len = self.len.checked_sub(1)?;
+        // SAFETY: the slot was written.
+        Some(unsafe { self.ptr.add(self.len).read() })
+    }
+
+    fn truncate(&mut self, len: usize) {
+        self.len = self.len.min(len);
+    }
+
+    fn clear(&mut self) {
+        self.len = 0;
+    }
+}
+
+impl<T: Copy> Drop for Buf<T> {
+    fn drop(&mut self) {
+        karac_free(self.ptr.cast());
+    }
+}
+
+/// `f` of this thread's format buffer.
+fn with_fmt<R>(f: impl FnOnce(&mut FmtBuf) -> R) -> R {
+    match FMT.try_with(|b| b.try_borrow_mut().map(|mut b| f(&mut b))) {
+        Ok(Ok(r)) => {
+            thread_bufs::release_at_exit();
+            r
+        }
+        _ => buffer_in_use(),
+    }
 }
 
 /// Pops the innermost format's text, handing it to `f`.
 fn fmt_pop<T>(f: impl FnOnce(&[u8]) -> T) -> T {
-    FMT.with(|b| {
-        let mut b = b.borrow_mut();
+    with_fmt(|b| {
         let start = b.starts.pop().unwrap_or(b.buf.len());
-        let out = f(&b.buf[start..]);
+        let out = f(b.buf.as_slice().get(start..).unwrap_or_default());
         b.buf.truncate(start);
         out
     })
 }
 
 pub(crate) fn out_flush() {
-    OUT.with(|o| {
+    with_out(|o| {
         if !o.is_empty() {
-            let mut so = std::io::stdout().lock();
-            let _ = so.write_all(o);
-            let _ = so.flush();
+            crate::fatal::write_all(1, o.as_slice());
             o.clear();
         }
     });
@@ -100,9 +303,9 @@ pub(crate) fn out_flush() {
 fn write(stderr: bool, bytes: &[u8]) {
     if stderr {
         out_flush();
-        let _ = std::io::stderr().write_all(bytes);
+        crate::fatal::write_all(2, bytes);
     } else {
-        let full = OUT.with(|o| {
+        let full = with_out(|o| {
             o.extend_from_slice(bytes);
             // A terminal sees each line as it ends (docs/library/io.md §
             // Buffering); a pipe or file gets the block.
@@ -116,9 +319,37 @@ fn write(stderr: bool, bytes: &[u8]) {
 
 /// Whether standard output is a terminal, asked once.
 fn stdout_is_terminal() -> bool {
+    use std::sync::atomic::{AtomicU8, Ordering};
+    static TERMINAL: AtomicU8 = AtomicU8::new(0);
+    match TERMINAL.load(Ordering::Relaxed) {
+        1 => false,
+        2 => true,
+        _ => {
+            let t = is_terminal(1);
+            TERMINAL.store(1 + u8::from(t), Ordering::Relaxed);
+            t
+        }
+    }
+}
+
+/// Whether the file descriptor `fd` is a terminal.
+#[cfg(unix)]
+fn is_terminal(fd: i32) -> bool {
+    extern "C" {
+        fn isatty(fd: i32) -> i32;
+    }
+    // SAFETY: a query of a descriptor number.
+    unsafe { isatty(fd) == 1 }
+}
+
+#[cfg(not(unix))]
+fn is_terminal(fd: i32) -> bool {
     use std::io::IsTerminal;
-    static TERMINAL: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *TERMINAL.get_or_init(|| std::io::stdout().is_terminal())
+    if fd == 2 {
+        std::io::stderr().is_terminal()
+    } else {
+        std::io::stdout().is_terminal()
+    }
 }
 
 /// # Safety
@@ -137,15 +368,16 @@ fn append(s: &str) {
 }
 
 fn append_bytes(s: &[u8]) {
-    FMT.with(|f| {
-        let mut f = f.borrow_mut();
+    let direct = with_fmt(|f| {
         if f.starts.is_empty() {
-            drop(f);
-            write(false, s);
-        } else {
-            f.buf.extend_from_slice(s);
+            return true;
         }
+        f.buf.extend_from_slice(s);
+        false
     });
+    if direct {
+        write(false, s);
+    }
 }
 
 /// The decimal digits of `v`, at the end of `out`.
@@ -170,8 +402,7 @@ pub extern "C" fn karac_mir_flush() {
 /// Starts formatting a `println` / `print` / `format`.
 #[no_mangle]
 pub extern "C" fn karac_mir_fmt_begin() {
-    FMT.with(|f| {
-        let mut f = f.borrow_mut();
+    with_fmt(|f| {
         let at = f.buf.len();
         f.starts.push(at);
     });
@@ -241,8 +472,7 @@ pub extern "C" fn karac_mir_fmt_char(c: u32) {
 #[no_mangle]
 pub extern "C" fn karac_mir_print_end(flags: u32) {
     if flags & 1 != 0 {
-        FMT.with(|f| {
-            let mut f = f.borrow_mut();
+        with_fmt(|f| {
             if f.starts.is_empty() {
                 let at = f.buf.len();
                 f.starts.push(at);
@@ -473,7 +703,12 @@ pub unsafe extern "C" fn karac_mir_vec_reserve(v: *mut RawVec, more: u64, size: 
     let size = size as usize;
     // SAFETY: the caller's contract.
     let v = unsafe { &mut *v };
-    let want = v.len.checked_add(more).expect("capacity overflow");
+    let Some(want) = v.len.checked_add(more) else {
+        // Not `expect`: a panic here keeps std's panic hook and backtrace
+        // symbolizer in every binary that grows a vector (B-2026-10-28-36).
+        crate::fatal::write_stderr(b"panic: capacity overflow\n");
+        std::process::abort()
+    };
     if want <= v.cap || size == 0 {
         if size == 0 {
             v.cap = usize::MAX;
@@ -835,7 +1070,7 @@ fn str_range_panic(s: &str, lo: i64, hi: i64, mode: i32) {
              UTF-8 char boundaries of {s:?}"
         )
     };
-    PANIC.with(|p| *p.borrow_mut() = Some(msg));
+    set_panic_message(msg);
 }
 
 fn str_range(s: &str, lo: i64, hi: i64, mode: i32) -> Option<std::borrow::Cow<'_, str>> {
@@ -1145,14 +1380,68 @@ pub extern "C" fn karac_mir_run_main(body: extern "C" fn() -> i32) -> i32 {
             return code;
         }
     }
-    match std::thread::Builder::new()
+    #[cfg(all(unix, feature = "net"))]
+    if let Some(code) = main_thread::run(body) {
+        return code;
+    }
+    #[cfg(not(all(unix, feature = "net")))]
+    if let Ok(h) = std::thread::Builder::new()
         .name("main".into())
         .stack_size(1 << 30)
         .spawn(move || body())
     {
-        Ok(h) => h.join().unwrap_or(101),
-        // No thread to be had: run it here, on the process's own stack.
-        Err(_) => body(),
+        return h.join().unwrap_or(101);
+    }
+    // No thread to be had: run it here, on the process's own stack.
+    body()
+}
+
+/// The thread `main` runs on when it cannot run on the process's own
+/// thread. Started through pthreads rather than `std::thread`, whose spawn
+/// and join reach panics that keep std's panic hook and backtrace
+/// symbolizer in every binary (B-2026-10-28-36).
+#[cfg(all(unix, feature = "net"))]
+mod main_thread {
+    type Slot = (extern "C" fn() -> i32, i32);
+
+    extern "C" fn start(arg: *mut libc::c_void) -> *mut libc::c_void {
+        // SAFETY: `run` passes its slot, which outlives the thread.
+        let slot = unsafe { &mut *arg.cast::<Slot>() };
+        // SAFETY: names the calling thread with a NUL-terminated name.
+        #[cfg(target_os = "linux")]
+        unsafe {
+            libc::pthread_setname_np(libc::pthread_self(), c"main".as_ptr())
+        };
+        #[cfg(target_os = "macos")]
+        unsafe {
+            libc::pthread_setname_np(c"main".as_ptr())
+        };
+        slot.1 = (slot.0)();
+        std::ptr::null_mut()
+    }
+
+    /// Runs `body` on a thread with a 1 GiB stack and answers its exit
+    /// code; `None` when no thread could be started.
+    pub(super) fn run(body: extern "C" fn() -> i32) -> Option<i32> {
+        let mut slot: Slot = (body, 101);
+        // SAFETY: the attributes are initialized before use and destroyed
+        // after; the thread is joined before `slot` goes out of scope.
+        unsafe {
+            let mut attr: libc::pthread_attr_t = std::mem::zeroed();
+            if libc::pthread_attr_init(&mut attr) != 0 {
+                return None;
+            }
+            libc::pthread_attr_setstacksize(&mut attr, 1 << 30);
+            let mut thread: libc::pthread_t = std::mem::zeroed();
+            let started =
+                libc::pthread_create(&mut thread, &attr, start, (&raw mut slot).cast()) == 0;
+            libc::pthread_attr_destroy(&mut attr);
+            if !started {
+                return None;
+            }
+            libc::pthread_join(thread, std::ptr::null_mut());
+        }
+        Some(slot.1)
     }
 }
 
@@ -2409,7 +2698,7 @@ pub unsafe extern "C" fn karac_mir_forget(p: *const u8, n: u64) {
 #[no_mangle]
 pub extern "C" fn karac_mir_panic_set() {
     let text = fmt_pop(|t| String::from_utf8_lossy(t).into_owned());
-    PANIC.with(|p| *p.borrow_mut() = Some(text));
+    set_panic_message(text);
 }
 
 /// Ends the process with `code`, after writing what is buffered.
@@ -2421,11 +2710,18 @@ pub extern "C" fn karac_mir_exit(code: i32) -> ! {
         // A panic runs no Drop (core semantics §10.2), so what it leaves
         // allocated is not a leak; under `__mir-llvm-asan` leave without
         // LeakSanitizer's exit check, which would report it (B-2026-10-20-38).
-        let _ = std::io::stdout().flush();
         // SAFETY: ends the process; nothing runs after it.
         unsafe { libc::_exit(code) }
     }
-    std::process::exit(code)
+    // libc's `exit`, not `std::process::exit`, whose flush of std's stdout
+    // (which every writer in the runtime flushes as it writes) reaches a
+    // panic, and with it std's panic hook and backtrace symbolizer
+    // (B-2026-10-28-36).
+    extern "C" {
+        fn exit(code: i32) -> !;
+    }
+    // SAFETY: ends the process.
+    unsafe { exit(code) }
 }
 
 /// Whether AddressSanitizer is linked in, which `__mir-llvm-asan` does.
@@ -2452,6 +2748,7 @@ static PANIC_INFO: std::sync::Mutex<(String, String)> =
 /// Registers the program's panic-handler thunk (core semantics §10.2).
 #[no_mangle]
 pub extern "C" fn karac_mir_set_panic_handler(thunk: *mut u8) {
+    rich_abort_used();
     PANIC_HANDLER.store(thunk, std::sync::atomic::Ordering::SeqCst);
 }
 
@@ -2511,11 +2808,13 @@ pub(crate) fn deadlock(what: &str) -> ! {
 /// (design.md § Contracts rule 2, B-2026-10-25-23).
 fn abort_message(msg: String) -> String {
     if crate::in_contract_predicate() {
-        format!("contract predicate panicked: {msg}")
+        format!("{CONTRACT_PREDICATE_PANICKED}{msg}")
     } else {
         msg
     }
 }
+
+const CONTRACT_PREDICATE_PANICKED: &str = "contract predicate panicked: ";
 
 /// How many frames the error return trace keeps, the most recent ones
 /// (design.md § Error return traces).
@@ -2593,6 +2892,7 @@ unsafe fn error_trace_push(
     live: *const std::sync::atomic::AtomicU64,
     context: Option<Box<str>>,
 ) {
+    rich_abort_used();
     let task = crate::mir_task::current_task();
     ERROR_TRACE.with(|t| {
         if t.frames.is_empty() {
@@ -2723,11 +3023,72 @@ pub unsafe extern "C" fn karac_mir_abort_at(
     at: *const u8,
     at_len: u64,
 ) -> ! {
-    let len = len as usize;
-    let at_len = at_len as usize;
     if !panic_begins() {
         karac_mir_exit(101)
     }
+    let rich = RICH_ABORT.load(std::sync::atomic::Ordering::Acquire);
+    if !rich.is_null() {
+        // SAFETY: `rich_abort_used` stores `rich_abort`, an `AbortAt`.
+        let rich: AbortAt = unsafe { std::mem::transmute(rich) };
+        // SAFETY: the caller's contract.
+        unsafe { rich(ptr, len, at, at_len) }
+    }
+    // None of the parts `rich_abort` adds was set: the message and the
+    // place, and the error return trace that is the place alone.
+    // SAFETY: the caller's contract.
+    let (msg, at) = unsafe { (bytes(ptr, len as usize), bytes(at, at_len as usize)) };
+    let mut report = Buf::<u8>::new();
+    report.extend_from_slice(b"runtime error: ");
+    if crate::in_contract_predicate() {
+        report.extend_from_slice(CONTRACT_PREDICATE_PANICKED.as_bytes());
+    }
+    report.extend_from_slice(msg);
+    report.push(b'\n');
+    if !at.is_empty() {
+        for part in [&b"  at "[..], at, b"\nError return trace:\n  ", at, b"\n"] {
+            report.extend_from_slice(part);
+        }
+    }
+    write(true, report.as_slice());
+    karac_mir_exit(101)
+}
+
+/// The abort report's parts that only some programs need: a `panic(msg)`
+/// text, the error return trace, held log records, and the program's
+/// panic handler. [`karac_mir_abort_at`] reaches them through this
+/// pointer, which the natives that set any of them store
+/// ([`rich_abort_used`]), so a program that sets none links none of them,
+/// nor the panics their `String`s and maps reach, which keep std's panic
+/// hook and backtrace symbolizer in a binary (B-2026-10-28-36).
+static RICH_ABORT: std::sync::atomic::AtomicPtr<()> =
+    std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+
+type AbortAt = unsafe fn(*const u8, u64, *const u8, u64) -> !;
+
+/// The program set a part of the abort report [`rich_abort`] writes.
+#[inline]
+pub(crate) fn rich_abort_used() {
+    // `black_box`: LTO sees every store to the pointer, and would
+    // otherwise call `rich_abort` directly from `karac_mir_abort_at`.
+    RICH_ABORT.store(
+        std::hint::black_box(rich_abort as AbortAt as *mut ()),
+        std::sync::atomic::Ordering::Release,
+    );
+}
+
+/// The message a `panic(msg)` or a native set for the abort that follows.
+fn set_panic_message(msg: String) {
+    rich_abort_used();
+    PANIC.with(|p| *p.borrow_mut() = Some(msg));
+}
+
+/// [`karac_mir_abort_at`]'s report once a part of it was set.
+///
+/// # Safety
+/// As [`karac_mir_abort_at`].
+unsafe fn rich_abort(ptr: *const u8, len: u64, at: *const u8, at_len: u64) -> ! {
+    let len = len as usize;
+    let at_len = at_len as usize;
     crate::mir_task::drain_logs();
     let msg = abort_message(PANIC.with(|p| p.borrow_mut().take()).unwrap_or_else(|| {
         // SAFETY: the caller's contract.
@@ -2823,7 +3184,7 @@ pub extern "C" fn karac_mir_char(op: u32, c: i64, radix: i64) -> i64 {
     // `i64::MIN` tells the caller to abort (B-2026-10-22-38).
     if matches!(name, "is_digit" | "to_digit") && !(2..=36).contains(&radix) {
         let msg = format!("char.{name}: radix {radix} is not in 2..=36");
-        PANIC.with(|p| *p.borrow_mut() = Some(msg));
+        set_panic_message(msg);
         return i64::MIN;
     }
     let ch = if op & 0x100 != 0 {

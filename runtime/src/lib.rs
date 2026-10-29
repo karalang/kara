@@ -83,6 +83,12 @@ mod cpu;
 /// `dbg()` runtime support — quoting, task ids, and the direct stderr write
 /// the compiled backends' `dbg` lowering uses (B-2026-08-23-18).
 pub mod dbg;
+// Apple only: elsewhere the JIT finds libgcc's, and an executable that
+// links libgcc_s exports a definition of its own (it would interpose
+// libgcc's), which keeps it and the panics its `HashMap` reaches, and
+// with them std's panic hook and backtrace symbolizer, in every binary
+// (B-2026-10-28-36).
+#[cfg(target_vendor = "apple")]
 pub mod emutls;
 #[cfg(feature = "net")]
 pub mod event_loop;
@@ -900,6 +906,7 @@ pub fn __preserve_no_mangle_symbols() -> usize {
     // `__emutls_get_address`, which compiler-rt provides on platforms
     // that need it but isn't in the karac process. The custom impl
     // here is a `dlsym`-resolvable shim.
+    #[cfg(target_vendor = "apple")]
     keep!(emutls::__emutls_get_address);
     // Debugger Contract.
     keep!(
@@ -1277,7 +1284,11 @@ pub(crate) fn leave_predicates() {
 /// Whether this thread is evaluating a contract predicate, for the MIR
 /// backend's abort report (B-2026-10-25-23).
 pub(crate) fn in_contract_predicate() -> bool {
-    CONTRACT_PREDICATE_DEPTH.with(|d| d.get() > 0)
+    // `try_with`: panic-free, as the abort report it serves must be
+    // (B-2026-10-28-36).
+    CONTRACT_PREDICATE_DEPTH
+        .try_with(|d| d.get() > 0)
+        .unwrap_or(false)
 }
 
 /// Leave a contract-predicate evaluation context (decrement the depth).

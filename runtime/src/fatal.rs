@@ -42,6 +42,71 @@ pub fn write_stderr(msg: &[u8]) {
     }
 }
 
+/// Writes all of `bytes` to the file descriptor `fd` (1 or 2), retrying a
+/// short or interrupted write and giving up on any other error. The MIR
+/// backend's `println` writes through this rather than `std::io::stdout()`,
+/// whose reachable panics keep std's panic hook and its backtrace
+/// symbolizer in every binary (B-2026-10-28-36).
+pub fn write_all(fd: i32, mut bytes: &[u8]) {
+    while !bytes.is_empty() {
+        // SAFETY: `bytes` is readable for its length.
+        #[cfg(not(windows))]
+        let n = unsafe { write(fd, bytes.as_ptr(), bytes.len()) };
+        #[cfg(windows)]
+        let n = unsafe { _write(fd, bytes.as_ptr(), bytes.len().min(1 << 30) as u32) } as isize;
+        if n > 0 {
+            bytes = bytes.get(n as usize..).unwrap_or_default();
+        } else if n == 0 || !interrupted() {
+            return;
+        }
+    }
+}
+
+/// Whether the call that just failed was interrupted (`EINTR`). Read
+/// straight from `errno`: `std::io::Error`'s table of OS functions reaches
+/// its message formatting, and with it a panic.
+fn interrupted() -> bool {
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    extern "C" {
+        #[link_name = "__errno_location"]
+        fn errno_location() -> *mut i32;
+    }
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    extern "C" {
+        #[link_name = "__error"]
+        fn errno_location() -> *mut i32;
+    }
+    // SAFETY: the calling thread's `errno`.
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos",
+        target_os = "ios"
+    ))]
+    return unsafe { *errno_location() } == 4;
+    #[allow(unreachable_code)]
+    false
+}
+
+/// The value of the environment variable `name`, read through libc's
+/// `getenv`: `std::env::var` reaches a panic, which the print path must not
+/// (B-2026-10-28-36). The bytes are the environment's own; nothing here
+/// writes the environment.
+pub fn env(name: &std::ffi::CStr) -> Option<&'static [u8]> {
+    extern "C" {
+        // `u8`, as `alloc.rs` declares it (`clashing_extern_declarations`).
+        fn getenv(name: *const u8) -> *const u8;
+    }
+    // SAFETY: `name` is NUL-terminated.
+    let v = unsafe { getenv(name.as_ptr().cast()) };
+    if v.is_null() {
+        None
+    } else {
+        // SAFETY: `getenv` answers a NUL-terminated string.
+        Some(unsafe { std::ffi::CStr::from_ptr(v.cast()) }.to_bytes())
+    }
+}
+
 /// A fixed-capacity stack buffer implementing [`core::fmt::Write`], so a fatal
 /// path can `write!(buf, "...")` a formatted diagnostic with no heap and no
 /// std-IO. Overflow truncates silently — this is a best-effort diagnostic, not

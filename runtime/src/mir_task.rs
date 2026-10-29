@@ -640,8 +640,8 @@ pub(crate) fn pooled() -> bool {
 #[cold]
 #[inline(never)]
 fn pooled_first(mode: &AtomicU8) -> bool {
-    let n = std::env::var("KARAC_THREADS")
-        .ok()
+    let n = crate::fatal::env(c"KARAC_THREADS")
+        .and_then(|v| std::str::from_utf8(v).ok())
         .and_then(|v| v.trim().parse::<usize>().ok())
         .unwrap_or_else(default_threads);
     let pooled = n > 1;
@@ -741,7 +741,9 @@ fn cgroup_file<'a>(path: &std::ffi::CStr, buf: &'a mut [u8; 64]) -> &'a [u8] {
     let got = unsafe { read(fd, buf.as_mut_ptr(), buf.len()) };
     // SAFETY: as above.
     unsafe { close(fd) };
-    let got = &buf[..got.max(0) as usize];
+    // `get`, not an index: an index's bounds panic would keep std's panic
+    // hook and backtrace symbolizer in every binary (B-2026-10-28-36).
+    let got = buf.get(..got.max(0) as usize).unwrap_or_default();
     got.strip_suffix(b"\n").unwrap_or(got)
 }
 
@@ -1539,6 +1541,8 @@ pub unsafe extern "C" fn karac_mir_task_spawn(
     a: *mut u8,
     b: *mut u8,
 ) {
+    // A task may hold log records, which an abort drains.
+    crate::mir::rich_abort_used();
     let group = group as *mut Group;
     let id = EXEC.with(|e| {
         let mut e = e.borrow_mut();
