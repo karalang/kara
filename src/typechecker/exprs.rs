@@ -1133,10 +1133,42 @@ impl<'a> super::TypeChecker<'a> {
                     .unwrap_or_default();
                 let mut bound = std::collections::HashMap::new();
                 super::bind_params(&ty, expected, &scope, &mut bound);
-                let frame = self.node_call_subs.entry(expr.id).or_default();
-                for (n, t) in bound {
-                    frame.entry(n).or_insert(t);
+                // The receiver's own nodes that still name the parameter
+                // take what the context bound it to: `[None].to_vec()` into
+                // a `Vec[Option[String]]` builds a `[None]` of
+                // `Option[String]` (B-2026-10-29-9).
+                // So do the call's own arguments recorded off that receiver
+                // (`to_vec`'s `T`, `Option[T]` until here). A parameter the
+                // receiver named is the receiver's, not the method's.
+                let mut receivers = FxHashSet::default();
+                if let ExprKind::MethodCall { object, .. } = &expr.kind {
+                    if let Some((rt, _)) = self.node_types.get(&object.id) {
+                        for n in bound.keys() {
+                            let probe: HashMap<String, SubstValue> =
+                                [(n.clone(), SubstValue::Type(Type::Unit))].into();
+                            if substitute_type_params(rt, &probe) != *rt {
+                                receivers.insert(n.clone());
+                            }
+                        }
+                    }
+                    self.refine_foreign_params_under(object, &bound);
                 }
+                let subs: HashMap<String, SubstValue> = bound
+                    .iter()
+                    .map(|(n, t)| (n.clone(), SubstValue::Type(t.clone())))
+                    .collect();
+                let mut frame = self.node_call_subs.remove(&expr.id).unwrap_or_default();
+                for t in frame.values_mut() {
+                    if self.mentions_foreign_param(t) {
+                        *t = substitute_type_params(t, &subs);
+                    }
+                }
+                for (n, t) in bound {
+                    if !receivers.contains(&n) {
+                        frame.entry(n).or_insert(t);
+                    }
+                }
+                self.node_call_subs.insert(expr.id, frame);
             }
         }
         // The checking-position constructor paths (`Ok(1)` against a
@@ -1172,6 +1204,32 @@ impl<'a> super::TypeChecker<'a> {
         self.link_part_node_types(expr);
         self.deny_for_element_drop_copy_in_literal_into(expr, Some(expected));
         ty
+    }
+
+    /// Each node in `e` whose recorded type names a parameter of no
+    /// signature in scope, with `bound`'s types put in for those
+    /// parameters.
+    fn refine_foreign_params_under(
+        &mut self,
+        e: &Expr,
+        bound: &std::collections::HashMap<String, Type>,
+    ) {
+        if bound.is_empty() {
+            return;
+        }
+        let subs: HashMap<String, SubstValue> = bound
+            .iter()
+            .map(|(n, t)| (n.clone(), SubstValue::Type(t.clone())))
+            .collect();
+        for id in crate::span_visitor::expr_node_ids(e) {
+            let Some((t, frame)) = self.node_types.get(&id) else {
+                continue;
+            };
+            if self.mentions_foreign_param(t) {
+                let refined = (substitute_type_params(t, &subs), *frame);
+                self.node_types.insert(id, refined);
+            }
+        }
     }
 
     /// B-2026-10-14-28 — a view (a bare `for` element, a `ref` binding) lent
