@@ -190,6 +190,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 })
             }
             TyKind::Adt(_) => self.clone_adt(dst, src, ty),
+            TyKind::Dyn { .. } => self.clone_dyn(dst, src),
             TyKind::Intrinsic(
                 IntrinsicTy::Map(..)
                 | IntrinsicTy::SortedMap(..)

@@ -794,8 +794,7 @@ fn main() {
 /// (design.md § Which traits can be used as `dyn`): `clone` copies the
 /// concrete value into a new block, through the table, for a struct, a
 /// number and a `String`, and a `Vec` of them clones each element. The
-/// copy is independent of the original. The compiled backends' half is the
-/// drop schedule's, so this runs on the interpreter only for now.
+/// copy is independent of the original.
 #[test]
 fn mir_dyn_clones_through_its_table() {
     let src = r#"
@@ -861,14 +860,7 @@ fn main() {
     println(f"{tv} {tw}");
 }
 "#;
-    let run = karac::mir::lower::run_source(src).expect("MIR");
-    assert!(
-        matches!(run.outcome, Outcome::Returned(_)),
-        "{:?}\n{}",
-        run.outcome,
-        run.output
-    );
-    assert_eq!(run.output, "16 9\n4 3\n72 90\n");
+    runs(src, "16 9\n4 3\n72 90\n");
 }
 
 /// `clone` on a `dyn` value of a trait without `Clone` among its

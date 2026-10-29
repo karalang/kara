@@ -76,7 +76,8 @@ pub(super) enum Shim {
     /// resume body `resume` (`task.rs`).
     TaskPoll { resume: String, spawned: bool },
     /// `void (ptr ret, ptr data, ptr arg...)`: the method at `slot` of the
-    /// program's vtable `vtable`, on the value at `data` (`dyn_trait.rs`).
+    /// program's vtable `vtable`, or its `clone` at `CLONE_SLOT`, on the
+    /// value at `data` (`dyn_trait.rs`).
     DynSlot { vtable: u32, slot: u32 },
     /// `void (ptr out, i64 v)`: `f"{v}"` of a (`signed`) integer, written
     /// into a `String` from a `malloc` LLVM can see (`call.rs`).

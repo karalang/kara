@@ -8,17 +8,21 @@
 //! never freed, so the first word is never null. The table is a constant:
 //!
 //! ```text
-//! { ptr drop, i64 size, i64 align, ptr slot_0, ..., ptr slot_n }
+//! { ptr drop, i64 size, i64 align, ptr clone, ptr slot_0, ..., ptr slot_n }
 //! ```
 //!
-//! `drop` is the concrete type's glue, or null when it owns nothing. Each
-//! slot is a [`Shim::DynSlot`] taking `(ptr ret, ptr data, ptr arg...)`,
+//! `drop` is the concrete type's glue, or null when it owns nothing.
+//! `clone`, for a trait with `Clone` among its supertraits, writes a clone
+//! of the value at `data` to `ret` (`void (ptr ret, ptr data)`), and is
+//! null otherwise. It and each
+//! slot are a [`Shim::DynSlot`] taking `(ptr ret, ptr data, ptr arg...)`,
 //! which hands the method its receiver the way its body takes it: the
 //! address for a `ref self` or `mut ref self` body, a copy of the value
 //! for one taking it by value (a Copy type, or `own self`). A call that
 //! consumes the owned value frees its block after the slot returns; the
 //! value itself went to the method. Reference semantics: the interpreter's
-//! `call_dyn` and the `Dyn` arm of its drop (`src/mir/interp.rs`).
+//! `call_dyn` and the `Dyn` arms of its drop and `clone_value`
+//! (`src/mir/interp.rs`).
 
 use inkwell::module::Linkage;
 use inkwell::types::BasicMetadataTypeEnum;
@@ -26,14 +30,30 @@ use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, FunctionValue, Poi
 
 use super::callable::{Arg, Callee, Shim};
 use super::{Cx, R};
-use crate::mir::{Operand, Place, Ty, TyKind};
+use crate::mir::{Operand, Place, Ty, TyKind, Vtable};
 
 fn e<T: ToString>(x: T) -> String {
     x.to_string()
 }
 
-/// Where the first slot is in a table: after `drop`, `size` and `align`.
-const FIRST_SLOT: u64 = 24;
+/// Where `clone` is in a table: after `drop`, `size` and `align`.
+const CLONE: u64 = 24;
+
+/// Where the first slot is in a table: after `clone`.
+const FIRST_SLOT: u64 = 32;
+
+/// The [`Shim::DynSlot`] slot that is a table's `clone`.
+pub(super) const CLONE_SLOT: u32 = u32::MAX;
+
+/// The instance a table's slot calls: `slots[slot]`, or the table's
+/// `clone` for [`CLONE_SLOT`].
+fn slot_method(table: &Vtable, slot: u32) -> Option<&String> {
+    if slot == CLONE_SLOT {
+        table.clone.as_ref()
+    } else {
+        table.slots.get(slot as usize)
+    }
+}
 
 impl<'ctx> Cx<'ctx, '_> {
     /// The table of the program's vtable `vt`, made on first use.
@@ -56,10 +76,21 @@ impl<'ctx> Cx<'ctx, '_> {
         } else {
             null
         };
+        let clone = match table.clone {
+            Some(_) => self
+                .shim_fn(Shim::DynSlot {
+                    vtable: vt,
+                    slot: CLONE_SLOT,
+                })
+                .as_global_value()
+                .as_pointer_value(),
+            None => null,
+        };
         let mut parts: Vec<BasicValueEnum> = vec![
             drop.into(),
             self.i64(l.size).into(),
             self.i64(l.align).into(),
+            clone.into(),
         ];
         for slot in 0..table.slots.len() as u32 {
             let f = self.shim_fn(Shim::DynSlot { vtable: vt, slot });
@@ -196,6 +227,46 @@ impl<'ctx> Cx<'ctx, '_> {
         self.free_dyn_block(data, table)
     }
 
+    /// The clone of the owned `dyn` value at `src` into `dst`: the table's
+    /// `clone` writes the concrete value's clone into a block of its own
+    /// (none for a type with no size, as [`Self::coerce_dyn`] makes), which
+    /// is paired with the same table.
+    pub(super) fn clone_dyn(&mut self, dst: PointerValue<'ctx>, src: PointerValue<'ctx>) -> R<()> {
+        let data = self.load_ptr(src)?;
+        let table = self.load_ptr(self.offset(src, 8)?)?;
+        let size = self.load_i64(self.offset(table, 8)?)?;
+        let code = self.load_ptr(self.offset(table, CLONE)?)?;
+        let block = self.entry_slot(8, "block")?;
+        self.store(block, data.into())?;
+        let sized = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::NE,
+                size,
+                size.get_type().const_zero(),
+                "",
+            )
+            .map_err(e)?;
+        self.if_then(sized, |cx| {
+            let malloc = cx.libc_fn("malloc");
+            let b = cx
+                .builder
+                .build_call(malloc, &[size.into()], "dyn")
+                .map_err(e)?
+                .try_as_basic_value()
+                .unwrap_basic();
+            cx.store(block, b)
+        })?;
+        let block = self.load_ptr(block)?;
+        let p = self.ptr_ty();
+        let fn_ty = self.llcx.void_type().fn_type(&[p.into(), p.into()], false);
+        self.builder
+            .build_indirect_call(fn_ty, code, &[block.into(), data.into()], "")
+            .map_err(e)?;
+        self.store(dst, block.into())?;
+        self.store(self.offset(dst, 8)?, table.into())
+    }
+
     /// The type of [`Shim::DynSlot`] `slot` of table `vt`: `void (ptr ret,
     /// ptr data, ptr arg...)`, one `arg` for each parameter after the
     /// receiver. Its name, too.
@@ -208,13 +279,18 @@ impl<'ctx> Cx<'ctx, '_> {
         let n = program
             .vtables
             .get(vt as usize)
-            .and_then(|t| t.slots.get(slot as usize))
+            .and_then(|t| slot_method(t, slot))
             .and_then(|name| program.bodies.get(name))
             .map_or(0, |b| b.arg_count.saturating_sub(1));
         let p = self.ptr_ty();
         let ps: Vec<BasicMetadataTypeEnum> = (0..n + 2).map(|_| p.into()).collect();
+        let tag = if slot == CLONE_SLOT {
+            "clone".to_string()
+        } else {
+            slot.to_string()
+        };
         (
-            format!("dyn_slot.{vt}.{slot}"),
+            format!("dyn_slot.{vt}.{tag}"),
             self.llcx.void_type().fn_type(&ps, false),
         )
     }
@@ -227,9 +303,7 @@ impl<'ctx> Cx<'ctx, '_> {
             .vtables
             .get(vt as usize)
             .ok_or_else(|| format!("no vtable {vt}"))?;
-        let name = table
-            .slots
-            .get(slot as usize)
+        let name = slot_method(table, slot)
             .ok_or_else(|| format!("no slot {slot} in vtable {vt}"))?
             .clone();
         let body = program

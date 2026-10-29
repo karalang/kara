@@ -1707,7 +1707,13 @@ impl<'ctx> Cx<'ctx, '_> {
                         return self.rt("string_from", &[d.into(), p.into(), n.into()]);
                     }
                 }
+                // A view of a `dyn` is the value's two words, too.
                 let (src, t) = match self.tys.kind(t) {
+                    TyKind::Ref(i) | TyKind::MutRef(i)
+                        if matches!(self.tys.kind(i), TyKind::Dyn { .. }) =>
+                    {
+                        (self.operand_ptr(&args[0])?, i)
+                    }
                     TyKind::Ref(i) | TyKind::MutRef(i) => (self.ref_arg(&args[0])?, i),
                     _ => (self.operand_ptr(&args[0])?, t),
                 };
