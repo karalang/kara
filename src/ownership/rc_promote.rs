@@ -381,7 +381,45 @@ impl<'a> super::OwnershipChecker<'a> {
                 });
                 continue;
             }
+            // A bare parameter itself borrows only because it is bare, so
+            // when it has no `.clone()` to call the method on a copy of,
+            // taking it `own` is the fix, not a `#[derive(Copy)]` on its
+            // type (B-2026-10-29-45).
             let supports_clone = self.moved_type_supports_clone(span);
+            if let Some((name, at, closure)) = self
+                .typecheck_result
+                .core_own_param_receivers
+                .get(&SpanKey::from_span(span))
+                .filter(|_| !supports_clone)
+            {
+                let (what, spelling) = if *closure {
+                    (
+                        "an annotated bare closure parameter",
+                        format!("`|{name}: own ...|`"),
+                    )
+                } else {
+                    ("a bare parameter", format!("`{name}: own ...`"))
+                };
+                out.push(OwnershipError {
+                    message: format!(
+                        "cannot move a non-`Copy` value out of a borrowed place: this method \
+                         takes `self` by value, and `{name}` is {what}, which borrows \
+                         (design.md § Parameter modes)"
+                    ),
+                    span: *span,
+                    kind: OwnershipErrorKind::MoveOutOfPlace,
+                    suggestion: Some(format!(
+                        "take `{name}` by value with {spelling}, or use a method that borrows"
+                    )),
+                    replacement: Some(Box::new(crate::resolver::TextEdit {
+                        offset: at.offset,
+                        length: 0,
+                        replacement: "own ".to_string(),
+                    })),
+                    consume_span: None,
+                });
+                continue;
+            }
             let derive_copy = if supports_clone {
                 None
             } else {

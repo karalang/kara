@@ -1620,6 +1620,24 @@ impl<'a> super::TypeChecker<'a> {
         )
     }
 
+    /// A borrowed receiver that is a bare parameter itself, for
+    /// [`TypeCheckResult::core_own_param_receivers`].
+    pub(super) fn note_own_param_receiver(&mut self, object: &Expr) {
+        let ExprKind::Identifier(n) = &object.kind else {
+            return;
+        };
+        let Some(at) = self.current_fn_d5_params.get(n).copied() else {
+            return;
+        };
+        // A binding of its own shadows the parameter.
+        if !matches!(self.local_scope.lookup(n), Some(Type::Ref(_))) {
+            return;
+        }
+        let closure = self.closure_d5_params.contains(n);
+        self.core_own_param_receivers
+            .insert(SpanKey::from_span(&object.span), (n.clone(), at, closure));
+    }
+
     pub(super) fn leave_closure_d5_params(
         &mut self,
         saved: (FxHashMap<String, Span>, FxHashSet<String>),
@@ -1646,12 +1664,25 @@ impl<'a> super::TypeChecker<'a> {
         if ours.is_empty() {
             return;
         }
-        fn walk<'e>(e: &'e Expr, shadowed: &FxHashSet<String>, out: &mut Vec<(&'e Expr, String)>) {
+        // A tail hands back what it names; a `let y = x;` in a block makes a
+        // later tail `y` hand back `x` (reported at the `x`), and a closure
+        // in the tail keeps every parameter its body names (B-2026-10-29-45).
+        type Aliases<'e> = FxHashMap<String, (&'e Expr, String)>;
+        fn walk<'e>(
+            e: &'e Expr,
+            shadowed: &FxHashSet<String>,
+            aliases: &Aliases<'e>,
+            out: &mut Vec<(&'e Expr, String)>,
+        ) {
             match &e.kind {
+                ExprKind::Identifier(n) if aliases.contains_key(n) => {
+                    let (v, x) = &aliases[n];
+                    out.push((v, x.clone()));
+                }
                 ExprKind::Identifier(n) if !shadowed.contains(n) => out.push((e, n.clone())),
                 ExprKind::Tuple(items) | ExprKind::ArrayLiteral(items) => {
                     for i in items {
-                        walk(i, shadowed, out);
+                        walk(i, shadowed, aliases, out);
                     }
                 }
                 ExprKind::Call { callee, args } => {
@@ -1664,45 +1695,140 @@ impl<'a> super::TypeChecker<'a> {
                     };
                     if ctor {
                         for a in args {
-                            walk(&a.value, shadowed, out);
+                            walk(&a.value, shadowed, aliases, out);
                         }
                     }
                 }
-                ExprKind::Block(b) => {
+                ExprKind::Closure { params, body, .. } => {
                     let mut inner = shadowed.clone();
-                    for st in &b.stmts {
-                        if let StmtKind::Let { pattern, .. } = &st.kind {
-                            inner.extend(pattern.binding_names());
-                        }
-                    }
-                    if let Some(t) = &b.final_expr {
-                        walk(t, &inner, out);
-                    }
+                    inner.extend(params.iter().flat_map(|p| p.pattern.binding_names()));
+                    captured(body, &inner, out);
                 }
+                ExprKind::Block(b) => block_tail(b, shadowed, aliases, out),
                 ExprKind::If {
                     then_block,
                     else_branch,
                     ..
                 } => {
-                    let mut inner = shadowed.clone();
-                    for st in &then_block.stmts {
-                        if let StmtKind::Let { pattern, .. } = &st.kind {
-                            inner.extend(pattern.binding_names());
-                        }
-                    }
-                    if let Some(t) = &then_block.final_expr {
-                        walk(t, &inner, out);
-                    }
+                    block_tail(then_block, shadowed, aliases, out);
                     if let Some(e) = else_branch {
-                        walk(e, shadowed, out);
+                        walk(e, shadowed, aliases, out);
                     }
                 }
                 _ => {}
             }
         }
+        fn block_tail<'e>(
+            b: &'e Block,
+            shadowed: &FxHashSet<String>,
+            aliases: &Aliases<'e>,
+            out: &mut Vec<(&'e Expr, String)>,
+        ) {
+            let mut inner = shadowed.clone();
+            let mut aliases = aliases.clone();
+            for st in &b.stmts {
+                if let StmtKind::Let { pattern, value, .. } = &st.kind {
+                    let alias = match (&pattern.kind, &value.kind) {
+                        (PatternKind::Binding(y), ExprKind::Identifier(x)) => {
+                            match aliases.get(x) {
+                                Some(a) => Some((y.clone(), a.clone())),
+                                None if !inner.contains(x) => Some((y.clone(), (value, x.clone()))),
+                                None => None,
+                            }
+                        }
+                        _ => None,
+                    };
+                    for n in pattern.binding_names() {
+                        aliases.remove(&n);
+                        inner.insert(n);
+                    }
+                    if let Some((y, a)) = alias {
+                        aliases.insert(y, a);
+                    }
+                }
+            }
+            if let Some(t) = &b.final_expr {
+                walk(t, &inner, &aliases, out);
+            }
+        }
+        // Every name a returned closure's body reads that no binding of its
+        // own shadows.
+        fn captured<'e>(
+            e: &'e Expr,
+            shadowed: &FxHashSet<String>,
+            out: &mut Vec<(&'e Expr, String)>,
+        ) {
+            match &e.kind {
+                ExprKind::Identifier(n) if !shadowed.contains(n) => out.push((e, n.clone())),
+                ExprKind::Closure { params, body, .. } => {
+                    let mut inner = shadowed.clone();
+                    inner.extend(params.iter().flat_map(|p| p.pattern.binding_names()));
+                    captured(body, &inner, out);
+                }
+                _ => crate::index_disjoint::for_each_child_public(e, &mut |c| match c {
+                    crate::index_disjoint::Child::Expr(x) => captured(x, shadowed, out),
+                    crate::index_disjoint::Child::Block(b) => captured_block(b, shadowed, out),
+                }),
+            }
+        }
+        fn captured_block<'e>(
+            b: &'e Block,
+            shadowed: &FxHashSet<String>,
+            out: &mut Vec<(&'e Expr, String)>,
+        ) {
+            // A `let` shadows from its own statement on; reading the names
+            // a block declares as shadowed throughout only drops a report.
+            let mut inner = shadowed.clone();
+            for st in &b.stmts {
+                if let StmtKind::Let { pattern, .. } = &st.kind {
+                    inner.extend(pattern.binding_names());
+                }
+            }
+            crate::index_disjoint::for_each_block_child(b, &mut |c| match c {
+                crate::index_disjoint::Child::Expr(x) => captured(x, &inner, out),
+                crate::index_disjoint::Child::Block(b) => captured_block(b, &inner, out),
+            });
+        }
+        // A `return v` anywhere in the body, outside a nested closure.
+        fn returns<'e>(e: &'e Expr, out: &mut Vec<&'e Expr>) {
+            match &e.kind {
+                ExprKind::Return(Some(v)) => {
+                    out.push(v);
+                    returns(v, out);
+                }
+                ExprKind::Closure { .. } => {}
+                _ => crate::index_disjoint::for_each_child_public(e, &mut |c| match c {
+                    crate::index_disjoint::Child::Expr(x) => returns(x, out),
+                    crate::index_disjoint::Child::Block(b) => {
+                        crate::index_disjoint::for_each_block_child(b, &mut |c| match c {
+                            crate::index_disjoint::Child::Expr(x) => returns(x, out),
+                            crate::index_disjoint::Child::Block(b) => {
+                                returns_block(b, out);
+                            }
+                        })
+                    }
+                }),
+            }
+        }
+        fn returns_block<'e>(b: &'e Block, out: &mut Vec<&'e Expr>) {
+            crate::index_disjoint::for_each_block_child(b, &mut |c| match c {
+                crate::index_disjoint::Child::Expr(x) => returns(x, out),
+                crate::index_disjoint::Child::Block(b) => returns_block(b, out),
+            });
+        }
         let mut found = Vec::new();
-        walk(body, &FxHashSet::default(), &mut found);
+        let none = FxHashSet::default();
+        walk(body, &none, &Aliases::default(), &mut found);
+        let mut returned = Vec::new();
+        returns(body, &mut returned);
+        for v in returned {
+            walk(v, &none, &Aliases::default(), &mut found);
+        }
+        let mut seen = FxHashSet::default();
         for (e, n) in found {
+            if !seen.insert(e.span.offset) {
+                continue;
+            }
             if !ours.contains(&n) {
                 continue;
             }
@@ -9177,6 +9303,7 @@ impl<'a> super::TypeChecker<'a> {
                         self.core_for_into_iter_receivers
                             .insert(SpanKey::from_span(&object.span), at);
                     }
+                    self.note_own_param_receiver(object);
                 }
                 // v2 core §3.7: storing into a builtin collection moves the
                 // value, so a borrow cannot be stored. `push` has its own

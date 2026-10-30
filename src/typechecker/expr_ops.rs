@@ -2874,6 +2874,7 @@ impl<'a> super::TypeChecker<'a> {
         if self.cli_lint_overrides.strict_core && self.core_receiver_is_borrowed(operand) {
             self.core_borrowed_receivers
                 .insert(SpanKey::from_span(&operand.span));
+            self.note_own_param_receiver(operand);
         }
     }
 

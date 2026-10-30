@@ -224,6 +224,10 @@ enum Origin {
     MutRefPattern,
     /// `let b = self;` over a borrowed receiver: `b` is a `ref Self` (§4.6).
     SelfCopy,
+    /// An annotated bare closure parameter (`|v: Vec[i64]|`), which D5
+    /// reads as a `ref` where the closure's slot lends it; its fix is
+    /// `own` (B-2026-10-29-45). Its type decides, as `Owned`'s does.
+    ClosureParam,
 }
 
 /// The read-only step of a place: the expression, where its binding came
@@ -1328,7 +1332,26 @@ impl Walk<'_, '_> {
                 self.closures.push((self.scopes.len(), None));
                 self.scopes.push(Vec::new());
                 for p in params {
-                    self.bind(&p.pattern, Origin::Owned, None);
+                    let own_fix = match (&p.ty, &p.pattern.kind) {
+                        (Some(t), PatternKind::Binding(_)) if crate::d5_params::on() => {
+                            match &t.kind {
+                                // The D5 rewrite reuses the written type's span.
+                                TypeKind::Ref(inner) if inner.span == t.span => Some(FixIt {
+                                    span: Span {
+                                        length: 0,
+                                        ..t.span
+                                    },
+                                    replacement: "own ".to_string(),
+                                }),
+                                _ => None,
+                            }
+                        }
+                        _ => None,
+                    };
+                    match own_fix {
+                        Some(fix) => self.bind(&p.pattern, Origin::ClosureParam, Some(fix)),
+                        None => self.bind(&p.pattern, Origin::Owned, None),
+                    }
                 }
                 self.expr(body);
                 self.scopes.pop();
@@ -2067,6 +2090,12 @@ impl Walk<'_, '_> {
                  (core-semantics.md §5.9). Bind it as `mut ref {name}` from a mutable \
                  owned scrutinee"
             ),
+            Origin::ClosureParam => format!(
+                "`{name}` is an annotated bare closure parameter, which borrows (design.md \
+                 § Parameter modes), so {action} cannot modify it (core-semantics.md §5.9). \
+                 Take it by value with `|{name}: own ...|`, or `.clone()` it into a binding \
+                 of its own"
+            ),
             Origin::Owned | Origin::OwnedPattern(_) | Origin::MutRefPattern => format!(
                 "`{name}` is a shared `ref`, so {action} cannot modify it \
                  (core-semantics.md §5.9). Borrow it as `mut ref` to write through it"
@@ -2079,7 +2108,7 @@ impl Walk<'_, '_> {
             ExprKind::SelfValue => self.self_read_only,
             ExprKind::Identifier(n) if n == "self" => self.self_read_only,
             ExprKind::Identifier(n) => match self.origin_of(n) {
-                Origin::Owned | Origin::OwnedPattern(_) => false,
+                Origin::Owned | Origin::OwnedPattern(_) | Origin::ClosureParam => false,
                 Origin::MutRefPattern => return Step::Writable,
                 _ => true,
             },
