@@ -613,6 +613,14 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
         ty("PreludeShadow", Some(DiagnosticClass::LintWarning)),
     ),
     (
+        "W0290",
+        ty("ReturnClauseOnFn", Some(DiagnosticClass::LintWarning)),
+    ),
+    (
+        "E0290",
+        ty("ReturnClauseOnFn", Some(DiagnosticClass::LintWarning)),
+    ),
+    (
         "E0282",
         ty("PreludeShadow", Some(DiagnosticClass::LintWarning)),
     ),

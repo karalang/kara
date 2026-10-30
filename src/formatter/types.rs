@@ -5,7 +5,7 @@ use crate::ast::*;
 impl super::Formatter {
     /// A function's return type. A tail `Fn(..)` / `impl Trait` that carries
     /// its own `with` is parenthesized, since a bare trailing `with` there is
-    /// the function's clause.
+    /// the function's clause, and so is one written in parentheses.
     pub(super) fn format_return_type(&mut self, t: &TypeExpr) {
         fn tail_has_with(t: &TypeExpr) -> bool {
             match &t.kind {
@@ -19,7 +19,10 @@ impl super::Formatter {
                 _ => false,
             }
         }
-        if tail_has_with(t) {
+        let written = self
+            .paren_return_types
+            .contains(&crate::resolver::SpanKey::from_span(&t.span));
+        if tail_has_with(t) || (written && !matches!(t.kind, TypeKind::Tuple(_) | TypeKind::Unit)) {
             self.write_str("(");
             self.format_type_expr(t);
             self.write_str(")");

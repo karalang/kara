@@ -1701,6 +1701,9 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 // the warning twin is `W0281` in the loop below
                 // (B-2026-08-21-2).
                 crate::typechecker::TypeErrorKind::ModuleMutBinding => "E0281",
+                // `return_clause_on_fn` escalated by `-D`/`#[deny]`; the
+                // warning twin is `W0290` (B-2026-10-30-9).
+                crate::typechecker::TypeErrorKind::ReturnClauseOnFn => "E0290",
                 crate::typechecker::TypeErrorKind::ConflictingImpl => "E0240",
                 crate::typechecker::TypeErrorKind::NonExhaustiveCrossPackageLiteral => "E0241",
                 crate::typechecker::TypeErrorKind::NonExhaustiveCrossPackageMatch => "E0242",
@@ -1920,6 +1923,7 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 crate::typechecker::TypeErrorKind::RedundantSuffix => "W0280",
                 crate::typechecker::TypeErrorKind::PreludeShadow => "W0282",
                 crate::typechecker::TypeErrorKind::ModuleMutBinding => "W0281",
+                crate::typechecker::TypeErrorKind::ReturnClauseOnFn => "W0290",
                 // Other kinds aren't expected to appear as warnings today.
                 _ => "W0299",
             };

@@ -21,6 +21,7 @@ pub fn format_program(program: &Program) -> String {
     f.mut_ref_binding_spans = program.mut_ref_binding_spans.clone();
     f.escaping_fn_types = program.escaping_fn_types.clone();
     f.mut_fn_types = program.mut_fn_types.clone();
+    f.paren_return_types = program.paren_return_types.clone();
     f.format_program(program);
     f.output
 }
@@ -106,6 +107,10 @@ pub(super) struct Formatter {
     pub(super) escaping_fn_types: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
     /// `MutFn(...)` types, copied from `Program::mut_fn_types`.
     pub(super) mut_fn_types: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
+    /// Parenthesized return types, copied from `Program::paren_return_types`:
+    /// `-> (dyn T) with X` keeps its parentheses, which silence
+    /// `return_clause_on_fn`.
+    pub(super) paren_return_types: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
 }
 
 impl Formatter {
@@ -118,6 +123,7 @@ impl Formatter {
             mut_ref_binding_spans: rustc_hash::FxHashSet::default(),
             escaping_fn_types: rustc_hash::FxHashSet::default(),
             mut_fn_types: rustc_hash::FxHashSet::default(),
+            paren_return_types: rustc_hash::FxHashSet::default(),
         }
     }
 

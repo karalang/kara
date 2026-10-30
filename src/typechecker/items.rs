@@ -104,6 +104,66 @@ impl<'a> super::TypeChecker<'a> {
         self.lint_override_stack.pop();
     }
 
+    /// `return_clause_on_fn` (design.md § `dyn Trait`, B-2026-10-30-9): a
+    /// bare `dyn` or function return type with no clause of its own,
+    /// followed by the function's own clause. The clause is the function's,
+    /// as after any return type, which leaves the returned value with every
+    /// effect; the author more likely meant it for the value. Written in
+    /// parentheses, `-> (dyn T) with X`, the function reading is on purpose
+    /// and nothing is said. Pushes the declaration's lint overrides as
+    /// `warn_prelude_shadow` does.
+    pub(super) fn warn_return_clause_on_fn(
+        &mut self,
+        return_type: Option<&TypeExpr>,
+        effects: Option<&EffectList>,
+        stdlib_origin: bool,
+        lint_overrides: &[crate::lints::LintLevelOverride],
+    ) {
+        let (Some(rt), Some(clause)) = (return_type, effects) else {
+            return;
+        };
+        if stdlib_origin
+            || self.compiling_stdlib
+            || self
+                .program
+                .paren_return_types
+                .contains(&SpanKey::from_span(&rt.span))
+        {
+            return;
+        }
+        fn bare_tail(t: &TypeExpr) -> Option<&'static str> {
+            match &t.kind {
+                TypeKind::Dyn { effects: None, .. } => Some("dyn"),
+                TypeKind::FnType {
+                    effect_spec: None,
+                    return_type,
+                    ..
+                } => return_type
+                    .as_deref()
+                    .and_then(bare_tail)
+                    .or(Some("function")),
+                _ => None,
+            }
+        }
+        let Some(what) = bare_tail(rt) else {
+            return;
+        };
+        let ty = crate::formatter::render_type_expr(rt);
+        let with = format!("with {}", crate::formatter::render_effect_list(clause));
+        self.lint_override_stack.push(lint_overrides.to_vec());
+        self.type_lint_warning(
+            format!(
+                "`-> {ty} {with}` gives the clause to the function, not to the returned {what} \
+                 value, which keeps every effect; write `-> ({ty} {with})` to give it to the \
+                 value, or `-> ({ty}) {with}` to keep it the function's"
+            ),
+            rt.span,
+            TypeErrorKind::ReturnClauseOnFn,
+            "return_clause_on_fn",
+        );
+        self.lint_override_stack.pop();
+    }
+
     /// Registers every impl block's non-generic associated type bindings
     /// (`type Item = I.Item;`) before any body is checked.
     ///
@@ -535,6 +595,12 @@ impl<'a> super::TypeChecker<'a> {
         let self_type = Type::TypeParam("Self".to_string());
         for item in &t.items {
             if let TraitItem::Method(method) = item {
+                self.warn_return_clause_on_fn(
+                    method.return_type.as_ref(),
+                    method.effects.as_ref(),
+                    t.stdlib_origin,
+                    &[],
+                );
                 if let Some(ref body) = method.body {
                     let synthesized = Function {
                         span: method.span,
@@ -2152,6 +2218,12 @@ impl<'a> super::TypeChecker<'a> {
         enclosing_generics: &[String],
     ) {
         self.local_scope = LocalTypeScope::new();
+        self.warn_return_clause_on_fn(
+            f.return_type.as_ref(),
+            f.effects.as_ref(),
+            f.stdlib_origin,
+            &f.lint_overrides,
+        );
 
         // Variance markers are a property of (stdlib) nominal type
         // declarations — never legal on function generic params

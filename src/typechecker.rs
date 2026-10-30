@@ -1270,6 +1270,11 @@ pub enum TypeErrorKind {
     /// `CompileProfile` yet — inventing one would fire beyond the documented
     /// trigger.
     ModuleMutBinding,
+    /// `return_clause_on_fn` lint (B-2026-10-30-9) — a bare `dyn` or
+    /// function return type with no clause of its own, followed by the
+    /// function's clause, which leaves the returned value with every effect
+    /// (design.md § `dyn Trait`).
+    ReturnClauseOnFn,
     /// Bare `method(args)` call appears in a synthesis position (no expected
     /// type) where the only candidate resolutions are trait associated
     /// functions. The typechecker cannot infer the target type — programmer
@@ -1648,7 +1653,8 @@ pub(crate) fn class_for_type_error_kind(
         | TypeErrorKind::UnfulfilledLintExpectation
         | TypeErrorKind::RedundantSuffix
         | TypeErrorKind::PreludeShadow
-        | TypeErrorKind::ModuleMutBinding => Some(DC::LintWarning),
+        | TypeErrorKind::ModuleMutBinding
+        | TypeErrorKind::ReturnClauseOnFn => Some(DC::LintWarning),
 
         // Kinds not yet individually classified — `Other` at the JSON
         // emit site. Backfill is incremental; each one is a small

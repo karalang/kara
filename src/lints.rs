@@ -369,6 +369,14 @@ pub const STARTER_LINTS: &[LintInfo] = &[
             "An `extern \"C\"` function returning a float is directly compared with `==` or `!=`; \
              FFI floats may not round-trip exactly, so prefer an epsilon comparison.",
     },
+    LintInfo {
+        name: "return_clause_on_fn",
+        default_level: LintLevel::Warn,
+        description: "A function returning a bare `dyn` or function type with no clause of its own \
+             is followed by its own `with` clause, which leaves the returned value with every \
+             effect. Write `-> (dyn T with X)` to give the value the clause, or `-> (dyn T) with \
+             X` to keep it the function's (design.md § `dyn Trait`, B-2026-10-30-9).",
+    },
 ];
 
 /// Look up a lint by its registered name. Returns `None` for

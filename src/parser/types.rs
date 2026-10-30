@@ -36,9 +36,14 @@ impl super::Parser {
     /// A function's return type: a trailing `with` after it is the
     /// function's clause, not the type's (see `Parser::return_tail`).
     pub(crate) fn parse_return_type(&mut self) -> Option<TypeExpr> {
+        let paren = self.check(&Token::LeftParen);
         self.return_tail = true;
         let t = self.parse_type();
         self.return_tail = false;
+        if let (true, Some(t)) = (paren, &t) {
+            self.paren_return_types
+                .insert(crate::resolver::SpanKey::from_span(&t.span));
+        }
         t
     }
 

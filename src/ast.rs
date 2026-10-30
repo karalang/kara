@@ -846,6 +846,12 @@ pub struct Program {
     /// A function-typed parameter without the mark is non-escaping: the
     /// callee may call it or pass it to another non-escaping parameter.
     pub escaping_fn_types: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
+    /// Function return types written in parentheses, `-> (dyn Shape)`, keyed
+    /// by the type's span. The parentheses leave no node of their own; a
+    /// trailing `with` after them is the function's clause either way, and
+    /// they are how an author says so on purpose (`return_clause_on_fn`,
+    /// design.md § `dyn Trait`, B-2026-10-30-9).
+    pub paren_return_types: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
     /// `MutFn(...)` types (`docs/core-semantics.md` §9.6), keyed by the
     /// function type's span. Kept beside the tree like
     /// [`Self::escaping_fn_types`]: the type is an ordinary non-once `FnType`
