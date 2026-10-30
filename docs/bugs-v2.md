@@ -115,7 +115,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-29-32 | 2026-10-29 | mir-llvm | medium | On the MIR compiled backend, `String.contains` with a needle of at most 16 bytes calls `memchr` and then `memcmp` at every place the needle's first byte occurs, so on a two-letter haystack (a binary string, where that byte is every other one) it costs 3.2 ns per haystack byte: 9.4x C `strstr` and 7.2x Rust `str::contains`; kata 1016's bench is 8.5x C | — |
 | B-2026-10-29-45 | 2026-10-29 | typecheck | low | `karac fix` has no `own` fix for a closure's bare parameter given away by an `own self` method (it offers `#[derive(Copy)]`), by a writing method (it says `mut ref`), by `return x` / `let y = x; y` (the caller gets E0516 instead), or by a returned closure that captures it (E0509 at the store) | — |
 | B-2026-10-29-50 | 2026-10-29 | autopar | low | An auto-par task's loop takes its run's bounds as plain captures, so LLVM knows nothing of the counter's range: kata 4's `k % R` becomes a signed 64-bit magic division in the task (about 10 instructions) where the in-order loop, knowing 0 <= k < 10M, uses a 32-bit unsigned one (about 5) | — |
-| B-2026-10-30-10 | 2026-10-30 | effect | low | `karac check` passes two `TaskGroup` tasks that both write an override of a program-rooted resource (`with_provider[Stdout](cap, ..)` with each task printing), which the run refuses with a MIR borrow-check E0516 naming internal places (`main.c0{Stdout=Cap}: bb7[3]: mutable borrow of (*_2)`) | — |
 
 ### Relocated
 
@@ -415,6 +414,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-30-7 | effect | medium | `karac check` misses §14.5 when the provider is bound out of sight: a callback that reaches a resource stored through an `escaping` parameter in a fu… | e104887c31 |
 | B-2026-10-30-8 | cli | low | `karac test` reports a MIR build error at a line of the combined package source (`borrow check __test__root__103_..: 292:5: ..`), not at the file and… | 71d1ac24b9 |
 | B-2026-10-30-9 | parser | low | `fn make() -> dyn Shape with reads(Clock) { . | 9421ed2be2 |
+| B-2026-10-30-10 | effect | low | `karac check` passes two `TaskGroup` tasks that both write an override of a program-rooted resource (`with_provider[Stdout](cap, ..)` with each task… | 8f3182f638 |
 
 </details>
 
