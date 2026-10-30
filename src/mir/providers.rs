@@ -1463,8 +1463,10 @@ impl Spec<'_> {
         // keeps a `mut ref` to it, which its body writes through although
         // it borrows its environment shared: the borrow checker allows that
         // for a carried closure ([`is_carried`]) and keeps the loan, so the
-        // value is neither stored nor outlives the provider (§14.5). A task
-        // writing a provider is refused ([`Self::task_writes`]).
+        // value is neither stored nor outlives the provider (§14.5). Two
+        // tasks, or a task and its spawner, using one provider while one of
+        // them writes it are refused by the effect pass
+        // (`effects::TaskConflict`, §14.9).
         let mut caps = self.tys.tcx().list(captures);
         let mut fields = Vec::new();
         for (r, mutable) in bound {
@@ -1546,7 +1548,6 @@ impl Spec<'_> {
         if self.sigs.contains_key(&inst.name) || own(&inst.name) || self.sigs[template].library {
             return Ok(());
         }
-        let tasks = inst.name.starts_with("TaskGroup.spawn");
         let (args, info) = (
             args.clone(),
             fx.body.blocks[bb.index()].terminator.source_info,
@@ -1557,9 +1558,6 @@ impl Spec<'_> {
             let carried = match &a {
                 Operand::Move(src) | Operand::Copy(src) => {
                     let copy = matches!(a, Operand::Copy(_));
-                    if tasks {
-                        self.task_writes(fx, src)?;
-                    }
                     self.carried_value(fx, &mut out, src, copy, info)?
                 }
                 Operand::Const(_) => None,
@@ -1571,28 +1569,6 @@ impl Spec<'_> {
             *args = new_args;
         }
         Ok(())
-    }
-
-    /// A task that writes the bound provider of a provider-rooted resource:
-    /// refused, since `karac check` does not yet keep two tasks, or a task
-    /// and its spawner, from using it at once (core semantics §14.9,
-    /// B-2026-10-30-6). A task that only reads one shares it. A task that
-    /// writes an override of a program-rooted resource ran before tasks
-    /// carried their providers, and still does.
-    fn task_writes(&self, fx: &Fx, src: &Place) -> Result<(), String> {
-        let from = place_ty(fx.body, self.tys, src)?.ty;
-        let Some((template, bound)) = self.carrying(fx, from) else {
-            return Ok(());
-        };
-        let rooted = |r: &str| self.resources.get(r).is_some_and(|d| d.default.is_some());
-        match bound.iter().find(|(r, writes)| *writes && !rooted(r)) {
-            Some((r, _)) => Err(format!(
-                "a task that writes `{r}`'s provider is not run yet: tasks writing a provider \
-                 bound by `with_provider` or `providers` could race on it (core semantics \
-                 §14.9); write `{r}` before the tasks start or after they join (`{template}`)"
-            )),
-            None => Ok(()),
-        }
     }
 
     /// When `src` is a closure that reaches a bound resource: its copy

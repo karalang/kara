@@ -1,0 +1,13 @@
+source = "corpus/core/ok_provider_task_writes"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["providers", "tasks", "post-m1:par", "post-m1:provider"]
+class = "e"
+expected_from = "spec"
+rules = ["14.9", "9.5"]
+backends = []
+env = {}
+note = "core-semantics §14.9: one task may write the provider while no other task of its group and not the spawner uses it; the spawner writes it before the spawn and reads it after the group drops. e-spec: legacy differs from the drop model; v2 matches it"
+bucket = "e-spec"
+classified_with = "d6d34eddd"

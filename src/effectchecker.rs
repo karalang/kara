@@ -468,6 +468,12 @@ pub enum EffectErrorKind {
     /// (`E_DYN_PROVIDER`, design.md §9): the value has no room to carry
     /// the provider. Found as `ProviderUnsupported` is.
     DynProvider,
+    /// A `TaskGroup` task holds a provider-rooted resource's provider
+    /// while another task of the group, a second run of its spawn or the
+    /// spawner uses it, one of them writing (core semantics §14.9): a task
+    /// borrows the provider like a captured place until its group drops.
+    /// Found by the MIR effect pass, as `NoProvider` is (B-2026-10-30-6).
+    TaskProviderConflict,
     /// Phase-10 target gate: a function reachable from the build's
     /// entry point requires a HOST resource the current compilation
     /// target does not provide (and no provider is bound on the call
@@ -582,9 +588,9 @@ pub(crate) fn class_for_effect_error_kind(
         // "Effect-set conflict between concurrent / interleaved
         // computations": a `writes` to module state from inside `par {}` is
         // the canonical instance.
-        EffectErrorKind::ModuleBindingWriteInPar | EffectErrorKind::ParBranchConflict => {
-            Some(DC::EffectConflict)
-        }
+        EffectErrorKind::ModuleBindingWriteInPar
+        | EffectErrorKind::ParBranchConflict
+        | EffectErrorKind::TaskProviderConflict => Some(DC::EffectConflict),
 
         // `TargetIncompatible`'s doc names "cross-target effect violations"
         // among its members, and the GPU gate is the other half of the same

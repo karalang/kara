@@ -1,0 +1,1 @@
+ERROR at line 22: this task uses `Clk` while the task spawned at line 21, which writes `Clk`, may still run (E0424)

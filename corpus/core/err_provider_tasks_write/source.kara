@@ -1,0 +1,26 @@
+// Tasks borrow the provider like a captured place until their group drops
+// (core semantics §14.9, §9.5): a task that bumps the clock holds it
+// `mut ref`, so a second task of the group that uses the clock is refused.
+effect resource Clk: ClkP;
+
+trait ClkP {
+    fn now(ref self) -> i64;
+    fn bump(mut ref self) {}
+}
+
+struct F { t: i64 }
+
+impl ClkP for F {
+    fn now(ref self) -> i64 { self.t }
+    fn bump(mut ref self) { self.t = self.t + 1; }
+}
+
+fn main() {
+    let r = with_provider[Clk](F { t: 0 }, || {
+        let tg = TaskGroup.new();
+        let a = tg.spawn(|| { Clk.bump(); Clk.now() });
+        let b = tg.spawn(|| { Clk.bump(); Clk.now() });
+        a.join() + b.join()
+    });
+    println(f"{r}");
+}

@@ -22977,6 +22977,14 @@ pub fn par_check(lowered: &Lowered) -> Result<(), String> {
                 par_conflict_text(c)
             ));
         }
+        if let Some(c) = report.task_conflicts.values().flatten().next() {
+            return Err(format!(
+                "effects: in `{}` at line {}, {}",
+                c.instance,
+                c.span.line,
+                c.text()
+            ));
+        }
         if let Some(n) = report.no_provider.first() {
             return Err(format!(
                 "effects: in `{}` at line {}, {}",
@@ -23086,6 +23094,8 @@ pub enum SourceEffectError {
     HandleUsesOverride,
     /// A coercion to `dyn` whose methods need a provider (design.md §9).
     DynProvider,
+    /// A use of a provider while a `TaskGroup` task holds it (§14.9).
+    TaskConflict,
 }
 
 /// `karac check`'s run of [`par_check`] (B-2026-10-19-39, B-2026-10-20-7):
@@ -23132,6 +23142,9 @@ pub fn source_effect_errors(src: &str) -> Vec<((usize, usize), SourceEffectError
                 par_conflict_text(c),
             );
         }
+    }
+    for c in report.task_conflicts.values().flatten() {
+        add(c.span, SourceEffectError::TaskConflict, c.text());
     }
     for n in &report.no_provider {
         add(
@@ -25059,6 +25072,7 @@ fn finish_build(mut lowered: Lowered) -> Result<Lowered, String> {
         if report.no_provider.is_empty()
             && report.stateful_default.is_empty()
             && par_conflict(&report).is_none()
+            && report.task_conflicts.is_empty()
         {
             report.refused = crate::mir::providers::specialise(
                 &mut lowered.program,

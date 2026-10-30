@@ -2510,6 +2510,9 @@ fn main() -> () {
             "err_effect_dyn_par_shared",
             "err_effect_dyn_clause_par_shared",
             "err_effect_dyn_clause_exceeded",
+            // Tasks sharing a written provider (§14.9), refused by the
+            // effect pass.
+            "err_provider_tasks_write",
         ];
         // Pins that call Kāra library functions, which `check_built` does
         // not append (a `select` desugars to calls into sync.kara;

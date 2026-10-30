@@ -2176,6 +2176,10 @@ impl Pipeline {
                 crate::mir::lower::SourceEffectError::DynProvider => {
                     (text, crate::effectchecker::EffectErrorKind::DynProvider)
                 }
+                crate::mir::lower::SourceEffectError::TaskConflict => (
+                    text,
+                    crate::effectchecker::EffectErrorKind::TaskProviderConflict,
+                ),
             };
             effects.errors.push(crate::effectchecker::EffectError {
                 message,

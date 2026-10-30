@@ -2,9 +2,10 @@
 //! maker, under `with_provider` (core semantics §14.3, §14.5, §14.9): a
 //! `Fn` value that writes the provider (B-2026-10-30-3); a task, a sort's
 //! comparison, a `retain` predicate and a `par` branch, which the runtime
-//! runs (B-2026-10-30-5); a task that writes the provider, refused until
-//! the check keeps tasks from racing on it (B-2026-10-30-6); and a stored
-//! callback, which would keep a view of the provider (§14.5).
+//! runs (B-2026-10-30-5); tasks that write the provider, which the check
+//! refuses when another task or the spawner uses it meanwhile
+//! (B-2026-10-30-6); and a stored callback, which would keep a view of the
+//! provider (§14.5).
 
 use std::process::{Command, Output, Stdio};
 
@@ -57,6 +58,22 @@ fn runs(tag: &str, src: &str, want: &str) {
             (out.status.code(), stdout.as_ref()),
             (Some(0), want),
             "{tag} on {b}: {stderr}"
+        );
+    }
+}
+
+/// Every backend, `karac check` included, refuses `src` naming `why`.
+fn check_refuses(tag: &str, src: &str, why: &str) {
+    for b in backends() {
+        let out = karac(tag, b, src);
+        let (stdout, stderr) = (
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr),
+        );
+        assert!(!out.status.success(), "{tag} on {b}: ran: {stdout}");
+        assert!(
+            stderr.contains(why) || stdout.contains(why),
+            "{tag} on {b}: {stdout}{stderr}"
         );
     }
 }
@@ -149,11 +166,13 @@ fn provider_reached_from_natives_and_par() {
     );
 }
 
-/// Two tasks bumping the clock would race on the provider; the check does
-/// not refuse them yet (PREDICTS B-2026-10-30-6), so every backend does.
+/// A task that writes the provider holds it `mut ref` until its group
+/// drops (§14.9, §9.5), so the spawner's own use meanwhile is refused by
+/// the check, here the making of a closure that bumps the clock, and so
+/// are `both`'s two tasks, which run that closure.
 #[test]
 fn provider_tasks_writing_the_provider_are_refused() {
-    refused(
+    check_refuses(
         "tasks-write",
         "fn both(g: Fn() -> i64) -> i64 {
     let tg = TaskGroup.new();
@@ -170,8 +189,107 @@ fn main() {
     println(f\"{r}\");
 }
 ",
-        "a task that writes `Clk`'s provider is not run yet",
+        "which writes `Clk`, may still run",
     );
+}
+
+/// One task may write the provider when nothing else uses it while the
+/// group lives; the spawner writes it before the spawn and reads it after
+/// the group drops.
+#[test]
+fn provider_one_task_writes_the_provider() {
+    runs(
+        "task-writes",
+        "fn main() {
+    let r = with_provider[Clk](F { t: 0 }, || {
+        Clk.bump();
+        let a = {
+            let tg = TaskGroup.new();
+            let h = tg.spawn(|| { Clk.bump(); Clk.now() });
+            h.join()
+        };
+        a * 10 + Clk.now()
+    });
+    println(f\"{r}\");
+}
+",
+        "22\n",
+    );
+}
+
+/// Two tasks of one group that write the provider, a looped spawn of one,
+/// a task beside a spawner that writes, and a helper that leaves a writing
+/// task in the group it is lent: each refused by the check (§14.9).
+#[test]
+fn provider_tasks_sharing_a_written_provider_are_refused() {
+    let cases = [
+        (
+            "two-tasks",
+            "fn main() {
+    let r = with_provider[Clk](F { t: 0 }, || {
+        let tg = TaskGroup.new();
+        let a = tg.spawn(|| { Clk.bump(); Clk.now() });
+        let b = tg.spawn(|| { Clk.bump(); Clk.now() });
+        a.join() + b.join()
+    });
+    println(f\"{r}\");
+}
+",
+            "this task uses `Clk` while the task spawned at line 11",
+        ),
+        (
+            "looped",
+            "fn main() {
+    let r = with_provider[Clk](F { t: 0 }, || {
+        let tg = TaskGroup.new();
+        let mut hs = Vec.new();
+        for _ in 0..3 {
+            hs.push(tg.spawn(|| { Clk.bump(); Clk.now() }));
+        }
+        let mut s = 0;
+        while let Some(h) = hs.pop() { s = s + h.join(); }
+        s
+    });
+    println(f\"{r}\");
+}
+",
+            "each time it runs",
+        ),
+        (
+            "spawner-writes",
+            "fn main() {
+    let r = with_provider[Clk](F { t: 0 }, || {
+        let tg = TaskGroup.new();
+        let a = tg.spawn(|| Clk.now());
+        Clk.bump();
+        a.join()
+    });
+    println(f\"{r}\");
+}
+",
+            "`Clk` is written here while the task spawned at line 11",
+        ),
+        (
+            "lent-group",
+            "fn start(tg: ref TaskGroup) -> TaskHandle[i64] {
+    tg.spawn(|| { Clk.bump(); Clk.now() })
+}
+fn main() {
+    let r = with_provider[Clk](F { t: 0 }, || {
+        let tg = TaskGroup.new();
+        let a = start(tg);
+        let b = start(tg);
+        a.join() + b.join()
+    });
+    println(f\"{r}\");
+}
+",
+            "this task uses `Clk` while the task spawned at line 14",
+        ),
+    ];
+    for (tag, src, why) in cases {
+        check_refuses(tag, src, why);
+    }
 }
 
 /// A callback stored on a bus, made where `Clk` is bound by the caller's

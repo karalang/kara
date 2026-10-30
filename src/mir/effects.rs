@@ -66,6 +66,8 @@ use crate::ids::DefId;
 use crate::ty::TyKind as SK;
 
 pub mod auto_par;
+mod task_providers;
+pub use task_providers::TaskConflict;
 
 /// The effect verbs MIR can produce.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -299,6 +301,9 @@ pub struct EffectReport {
     pub sites: BTreeMap<String, Vec<Site>>,
     /// Per instance name: the `par` regions whose branches conflict.
     pub par_conflicts: BTreeMap<String, Vec<ParConflict>>,
+    /// Per instance name: the uses of a provider while a `TaskGroup` task
+    /// holds it (core semantics §14.9).
+    pub task_conflicts: BTreeMap<String, Vec<TaskConflict>>,
     /// The verdict on every auto-par candidate, by instance name and then
     /// in the body's order ([`auto_par`]).
     pub auto_par: Vec<auto_par::AutoParVerdict>,
@@ -504,6 +509,15 @@ pub(crate) fn analyze_with(program: &Program, tys: &TyInterner, size_gate: bool)
         let found = par_conflicts(body, &report.sites[*name], &origins[i]);
         if !found.is_empty() {
             report.par_conflicts.insert((*name).clone(), found);
+        }
+    }
+    if program.resources.values().any(|d| d.default.is_none()) {
+        let escapes = a.escaping_tasks(&report.providers);
+        for name in &names {
+            let found = a.task_conflicts(&program.bodies[*name], &report.providers, &escapes);
+            if !found.is_empty() {
+                report.task_conflicts.insert((*name).clone(), found);
+            }
         }
     }
     if program
@@ -1902,6 +1916,19 @@ impl<'p> Analysis<'p> {
         body: &Body,
         needs: &BTreeMap<String, Needs>,
     ) -> Vec<(BasicBlock, crate::token::Span, Needs)> {
+        self.needs_sites_made(body, needs)
+            .into_iter()
+            .map(|(block, span, n, _)| (block, span, n))
+            .collect()
+    }
+
+    /// [`Self::needs_sites`], each with the local a statement's needs come
+    /// from making (its destination), `None` for a terminator's.
+    fn needs_sites_made(
+        &self,
+        body: &Body,
+        needs: &BTreeMap<String, Needs>,
+    ) -> Vec<(BasicBlock, crate::token::Span, Needs, Option<u32>)> {
         let supplied = self.supplied(body);
         let of = |names: Vec<String>, n: &mut Needs, minus: Option<&String>| {
             for b in names {
@@ -1931,7 +1958,7 @@ impl<'p> Analysis<'p> {
                     of(self.made_fn_values(rv), &mut n, minus);
                     provided(&mut n);
                     if !n.is_empty() {
-                        out.push((block, st.source_info.span, n));
+                        out.push((block, st.source_info.span, n, Some(dst.local.0)));
                     }
                 }
             }
@@ -2029,7 +2056,7 @@ impl<'p> Analysis<'p> {
                 need(&mut n, r, *a);
             }
             if !n.is_empty() {
-                out.push((block, bb.terminator.source_info.span, n));
+                out.push((block, bb.terminator.source_info.span, n, None));
             }
         }
         out

@@ -1,0 +1,29 @@
+// One task may write the provider while nothing else uses it (core
+// semantics §14.9): the spawner bumps the clock before the spawn and reads
+// it once the group, in its own block, has dropped (§9.5).
+effect resource Clk: ClkP;
+
+trait ClkP {
+    fn now(ref self) -> i64;
+    fn bump(mut ref self) {}
+}
+
+struct F { t: i64 }
+
+impl ClkP for F {
+    fn now(ref self) -> i64 { self.t }
+    fn bump(mut ref self) { self.t = self.t + 1; }
+}
+
+fn main() {
+    let r = with_provider[Clk](F { t: 0 }, || {
+        Clk.bump();
+        let a = {
+            let tg = TaskGroup.new();
+            let h = tg.spawn(|| { Clk.bump(); Clk.now() });
+            h.join()
+        };
+        a * 10 + Clk.now()
+    });
+    println(f"{r}");
+}

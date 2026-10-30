@@ -1,0 +1,13 @@
+source = "corpus/core/err_provider_tasks_write"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["providers", "tasks", "post-m1:par", "post-m1:provider"]
+class = "a"
+expected_from = "spec"
+rules = ["14.9", "9.5"]
+backends = []
+env = {}
+note = "core-semantics §14.9: tasks borrow the provider like a captured place until their group drops, so a task writing the provider conflicts with a second task using it (E0424, B-2026-10-30-6). The expected.out wording of an error pin is guidance, not a byte oracle."
+bucket = "a:refused"
+classified_with = "d6d34eddd"
