@@ -225,6 +225,44 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// The `.iter()` the hint asks for, inserted after the receiver, so
+    /// `karac fix` makes the edit the message names (B-2026-10-29-3).
+    /// Offered on a receiver that ends where its span ends: a place, a call
+    /// or a method call (whose end is its closing paren).
+    pub(super) fn iter_hint_fix(object: &Expr) -> Option<FixIt> {
+        let end = match &object.kind {
+            ExprKind::MethodCall {
+                args_close_span, ..
+            } => args_close_span.offset + args_close_span.length,
+            ExprKind::Identifier(_)
+            | ExprKind::SelfValue
+            | ExprKind::FieldAccess { .. }
+            | ExprKind::TupleIndex { .. }
+            | ExprKind::Call { .. }
+            | ExprKind::Index { .. } => object.span.offset + object.span.length,
+            _ => return None,
+        };
+        (object.span.length > 0 && end > object.span.offset).then(|| FixIt {
+            span: Span {
+                offset: end,
+                length: 0,
+                line: object.span.line,
+                column: object.span.column,
+            },
+            replacement: ".iter()".to_string(),
+        })
+    }
+
+    /// `type_error` carrying [`Self::iter_hint_fix`] when there is one.
+    pub(super) fn iter_hint_error(&mut self, object: &Expr, message: String, span: Span) {
+        match Self::iter_hint_fix(object) {
+            Some(fix) => {
+                self.type_error_with_fix_it(message, span, TypeErrorKind::NoMethodFound, fix)
+            }
+            None => self.type_error(message, span, TypeErrorKind::NoMethodFound),
+        }
+    }
+
     pub(super) fn dispatch_user_impl_method(
         &mut self,
         object: &Expr,
@@ -661,8 +699,10 @@ impl<'a> super::TypeChecker<'a> {
                             ": iterator adaptors/terminals require an explicit `.iter()` — write `{}.iter().{}(...)`",
                             recv, method
                         ));
+                        self.iter_hint_error(object, msg, *span);
+                    } else {
+                        self.type_error(msg, *span, TypeErrorKind::NoMethodFound);
                     }
-                    self.type_error(msg, *span, TypeErrorKind::NoMethodFound);
                     return Type::Error;
                 } else {
                     // For other non-named types (chiefly a bare `Type::Str`
@@ -1660,6 +1700,8 @@ impl<'a> super::TypeChecker<'a> {
                             ": iterator adaptors/terminals require an explicit `.iter()` — write `{}.iter().{}(...)`",
                             recv, method
                         ));
+                        self.iter_hint_error(object, msg, *span);
+                        return Type::Error;
                     } else {
                         let candidates = self.env.collect_method_names(&type_name, &[]);
                         let mut candidate_refs: Vec<&str> =

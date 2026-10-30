@@ -1551,14 +1551,14 @@ impl<'a> super::TypeChecker<'a> {
             // `chunks` keeps its own meaning.
             _ if Self::is_iterator_surface_method(method) => {
                 let recv = Self::iter_hint_receiver(object);
-                self.type_error(
+                self.iter_hint_error(
+                    object,
                     format!(
                         "no method '{}' on type 'Slice': iterator adaptors/terminals \
                          require an explicit `.iter()` — write `{}.iter().{}(...)`",
                         method, recv, method
                     ),
                     *span,
-                    TypeErrorKind::NoMethodFound,
                 );
                 for arg in args {
                     self.infer_expr(&arg.value);
