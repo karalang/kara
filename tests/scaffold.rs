@@ -500,6 +500,29 @@ fn backend_main_test_kara_parses_and_typechecks() {
     );
 }
 
+/// `karac test` on a fresh backend project runs its handler tests, which
+/// call `handle` with a `Request` they build, and both pass.
+#[test]
+fn backend_scaffold_tests_call_the_handler_and_pass() {
+    let scratch = ScratchDir::new("backend-test-runs");
+    scaffold_project(scratch.root(), "my_api", backend_opts()).unwrap();
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_karac"))
+        .arg("test")
+        .current_dir(scratch.root())
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "{stdout}{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        stdout.contains("\"total\":2,\"passed\":2,\"failed\":0"),
+        "{stdout}"
+    );
+}
+
 /// End-to-end build pin — `karac build` the scaffolded backend. Soft-
 /// skips when the runtime archive isn't built; otherwise builds
 /// `src/main.kara` to a binary and asserts the binary exists and is a

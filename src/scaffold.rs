@@ -627,16 +627,18 @@ fn backend_main_body() -> String {
     .to_string()
 }
 
-/// Phase-8 line 63 backend scaffold — `src/main_test.kara`
-/// placeholder. The generated test is a no-op `assert_eq(1 + 1, 2)`
-/// because the interpreter currently has no way to construct a
-/// synthetic `Request` value for unit-testing handler bodies (the
-/// runtime's `KaracHttpRequest` is hyper-owned and only exists
-/// during real request dispatch). Joins a proper handler-test
-/// surface once `Request.new_for_testing` or equivalent lands.
+/// The backend scaffold's `src/main_test.kara`: the handler is a plain
+/// function, so a test calls it with a `Request` it builds
+/// (`Request.new(method, url)`, docs/library/io.md § HTTP server).
 fn backend_main_test_body() -> String {
-    "test \"placeholder — handler tests await a Request mock\" {\n    \
-     assert_eq(1 + 1, 2);\n\
+    "test \"/health answers ok\" {\n    \
+     let r = handle(Request.new(\"GET\", \"/health\"));\n    \
+     assert_eq(r.status, 200);\n    \
+     assert_eq(r.body, \"ok\");\n\
+     }\n\
+     \n\
+     test \"an unknown path is 404\" {\n    \
+     assert_eq(handle(Request.new(\"GET\", \"/nope\")).status, 404);\n\
      }\n"
     .to_string()
 }
@@ -782,18 +784,17 @@ mod tests {
         );
     }
 
-    /// Backend `src/main_test.kara` is a placeholder until a `Request`
-    /// mock for unit-testing handlers lands. Pin the placeholder shape
-    /// so the surface stays "valid test syntax that always passes" —
-    /// `karac test` on a fresh project must succeed out of the box.
+    /// Backend `src/main_test.kara` calls the handler with a `Request` it
+    /// builds, as io.md § HTTP server says a test does.
     #[test]
-    fn backend_test_body_is_a_passing_placeholder() {
+    fn backend_test_body_calls_the_handler() {
         let body = backend_main_test_body();
         assert!(
             body.starts_with("test \""),
             "expected `test \"...\" {{ ... }}` shape"
         );
-        assert!(body.contains("assert_eq(1 + 1, 2)"));
+        assert!(body.contains("handle(Request.new(\"GET\", \"/health\"))"));
+        assert!(!body.contains("assert_eq(1 + 1, 2)"));
     }
 
     /// `scaffold_project(target, name, Backend)` writes the expected
