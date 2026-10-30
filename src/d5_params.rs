@@ -10,6 +10,7 @@
 //! only borrows it.
 
 use crate::ast::*;
+use crate::resolver::SpanKey;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 /// The D5 switch, shared by the strict check and the MIR builder: on, with
@@ -44,8 +45,9 @@ const COPY_BOUNDS: &[&str] = &["Copy", "Numeric", "Integer", "Float"];
 /// `mut ref T`, `Slice[T]`, `mut Slice[T]`, `Str`), parameters whose type is
 /// copied or is a counted handle (a scalar, a `Copy` type or type parameter,
 /// a `shared` or `sync` type, an `Option` or tuple of those: [`copy_like`]),
-/// function-typed and `impl Trait` parameters, functions exported to a
-/// wasm host (`#[target(...)]`), and the standard library's own bodies.
+/// function-typed and `impl Trait` parameters, `escaping dyn Trait`
+/// parameters, functions exported to a wasm host (`#[target(...)]`), and the
+/// standard library's own bodies.
 /// The parameters of function types are rewritten the same way
 /// ([`borrow_fn_type_params`]).
 ///
@@ -54,6 +56,9 @@ const COPY_BOUNDS: &[&str] = &["Copy", "Numeric", "Integer", "Float"];
 /// trait (`From`, `Add`, ...), also borrows at its own bare `self` and
 /// parameters, since an impl may be weaker than its trait (§4.7).
 pub fn borrow_bare_params(program: &mut Program) {
+    // An `escaping` parameter is owned (design.md § Escaping function
+    // values): `escaping dyn Trait` stays by value.
+    let esc = program.escaping_fn_types.clone();
     let mut copy: FxHashSet<String> = COPY_SCALARS.iter().map(|s| s.to_string()).collect();
     for item in &program.items {
         let (name, attrs, shared) = match item {
@@ -87,7 +92,7 @@ pub fn borrow_bare_params(program: &mut Program) {
                 let modes: Vec<bool> = m
                     .params
                     .iter()
-                    .map(|p| !p.is_own && borrows(&p.ty, &copy))
+                    .map(|p| param_borrows(p, &copy, &esc))
                     .collect();
                 if self_borrows {
                     m.self_param = Some(SelfParam::Ref);
@@ -105,7 +110,7 @@ pub fn borrow_bare_params(program: &mut Program) {
                     &[f.generic_params.as_ref()],
                     &[f.where_clause.as_ref()],
                 );
-                borrow_fn(f, &copy);
+                borrow_fn(f, &copy, &esc);
             }
             Item::ImplBlock(imp) => {
                 let trait_name = imp
@@ -143,7 +148,7 @@ pub fn borrow_bare_params(program: &mut Program) {
                         &[gp.as_ref(), m.generic_params.as_ref()],
                         &[wc.as_ref(), m.where_clause.as_ref()],
                     );
-                    borrow_fn(m, &copy);
+                    borrow_fn(m, &copy, &esc);
                 }
             }
             _ => {}
@@ -272,16 +277,22 @@ fn item_copy_bounded(item: &Item) -> Vec<String> {
     out
 }
 
-fn borrow_fn(f: &mut Function, copy: &FxHashSet<String>) {
+fn borrow_fn(f: &mut Function, copy: &FxHashSet<String>, esc: &FxHashSet<SpanKey>) {
     if matches!(f.self_param, Some(SelfParam::Owned)) && !f.self_is_own {
         f.self_param = Some(SelfParam::Ref);
     }
     let modes: Vec<bool> = f
         .params
         .iter()
-        .map(|p| !p.is_own && borrows(&p.ty, copy))
+        .map(|p| param_borrows(p, copy, esc))
         .collect();
     apply(&mut f.params, &modes);
+}
+
+/// Whether an item's parameter borrows: a bare one of a type that
+/// [`borrows`], unless it is `escaping`.
+fn param_borrows(p: &Param, copy: &FxHashSet<String>, esc: &FxHashSet<SpanKey>) -> bool {
+    !p.is_own && borrows(&p.ty, copy) && !esc.contains(&SpanKey::from_span(&p.ty.span))
 }
 
 /// A function handed to a wasm host, or run as a GPU kernel, takes its
@@ -367,6 +378,9 @@ fn borrows(ty: &TypeExpr, copy: &FxHashSet<String>) -> bool {
         }
         TypeKind::Tuple(elems) => !elems.is_empty() && !copy_like(ty, copy),
         TypeKind::Array { .. } => !copy_like(ty, copy),
+        // A `dyn` value owns its concrete value, so a bare one borrows as
+        // any owned type does (B-2026-10-30-1).
+        TypeKind::Dyn { .. } => true,
         _ => false,
     }
 }
