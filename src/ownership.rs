@@ -993,6 +993,11 @@ impl std::fmt::Display for OwnershipError {
 pub struct OwnershipCheckResult {
     /// Inferred parameter modes: function name → [(param_name, mode)].
     pub param_modes: HashMap<String, Vec<(String, OwnershipMode)>>,
+    /// Declared parameter modes, the calling convention (D5, core-semantics
+    /// §4.1): `own T` owns, `mut ref T` writes, and a bare `T` or `ref T`
+    /// borrows. Same keys and order as `param_modes`, which holds what the
+    /// body does with each parameter instead (B-2026-10-30-35).
+    pub declared_param_modes: HashMap<String, Vec<(String, OwnershipMode)>>,
     /// B-2026-08-10-21 — span keys (`(offset, length)`) of every CONSUME site
     /// that a `UseAfterMove` diagnostic reported, i.e. every move whose source
     /// is read again afterwards.
@@ -1581,6 +1586,8 @@ pub struct OwnershipChecker<'a> {
     pub(crate) program: &'a Program,
     pub(crate) typecheck_result: &'a TypeCheckResult,
     pub(crate) param_modes: HashMap<String, Vec<(String, OwnershipMode)>>,
+    /// See `OwnershipCheckResult::declared_param_modes`.
+    pub(crate) declared_param_modes: HashMap<String, Vec<(String, OwnershipMode)>>,
     /// B-2026-08-16-7 — the consume span of EVERY (C, U) use-after-move
     /// witness, across all functions, not merely the first per binding
     /// that the diagnostic reports. Unioned into
@@ -2114,6 +2121,7 @@ impl<'a> OwnershipChecker<'a> {
             program,
             typecheck_result,
             param_modes: HashMap::new(),
+            declared_param_modes: HashMap::new(),
             all_uam_consume_sites: std::collections::HashSet::new(),
             uam_bindings: std::collections::HashSet::new(),
             closure_param_modes: FxHashMap::default(),
@@ -2228,9 +2236,11 @@ impl<'a> OwnershipChecker<'a> {
         self.compute_elision();
 
         // Build representations: parameter modes first, then overlay RC/Arc
-        // for any binding (parameter or local) flagged by Phase 1/2.
+        // for any binding (parameter or local) flagged by Phase 1/2. A
+        // parameter's is its declared mode, how it is passed, not what its
+        // body does with it (B-2026-10-30-35).
         let mut representations = HashMap::new();
-        for (func_name, modes) in &self.param_modes {
+        for (func_name, modes) in &self.declared_param_modes {
             for (param_name, mode) in modes {
                 let key = format!("{}.{}", func_name, param_name);
                 let repr = if Self::contains_in(&self.arc_values, func_name, param_name) {
@@ -2396,6 +2406,7 @@ impl<'a> OwnershipChecker<'a> {
         let core_errors = self.core_move_errors();
         OwnershipCheckResult {
             param_modes: self.param_modes,
+            declared_param_modes: self.declared_param_modes,
             use_after_move_consume_sites,
             elidable_ref_params,
             closure_param_modes: self.closure_param_modes,
@@ -3249,8 +3260,17 @@ impl<'a> OwnershipChecker<'a> {
 
         // Infer parameter modes
         let mut modes: Vec<(String, OwnershipMode)> = Vec::new();
+        let mut declared: Vec<(String, OwnershipMode)> = Vec::new();
         for param in &f.params {
+            let declared_mode = match &param.ty.kind {
+                _ if param.is_own => OwnershipMode::Own,
+                TypeKind::MutRef(_) | TypeKind::MutSlice(_) => OwnershipMode::MutRef,
+                TypeKind::Ref(_) => OwnershipMode::Ref,
+                _ if crate::d5_params::on() => OwnershipMode::Ref,
+                _ => OwnershipMode::Own,
+            };
             for name in param.pattern.binding_names() {
+                declared.push((name.clone(), declared_mode.clone()));
                 // Slice 2 (B-2026-06-22-2): a param whose read-only heap capture
                 // was PROMOTED to an `Own` move-into-a-returned-closure's-env is
                 // forced `Own` here, OVERRIDING the `param_usage`-driven inference
@@ -3277,6 +3297,7 @@ impl<'a> OwnershipChecker<'a> {
             }
         }
         self.drop_copy_non_move_errors(f, &fn_key, errors_before, copy_index_moves);
+        self.declared_param_modes.insert(fn_key.clone(), declared);
         self.param_modes.insert(fn_key, modes);
     }
 

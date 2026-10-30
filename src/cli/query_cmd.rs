@@ -716,9 +716,14 @@ fn ownership_function_json(
 ) -> Option<String> {
     match ownership.param_modes.get(function) {
         Some(params) => {
+            // `mode` is the declared one, how a caller passes the argument,
+            // not what the body does with it (B-2026-10-30-35).
+            let declared = ownership.declared_param_modes.get(function);
             let param_entries: Vec<String> = params
                 .iter()
-                .map(|(name, mode)| {
+                .enumerate()
+                .map(|(i, (name, inferred))| {
+                    let mode = declared.and_then(|d| d.get(i)).map_or(inferred, |(_, m)| m);
                     let repr = ownership
                         .representations
                         .get(&format!("{}.{}", function, name))
