@@ -2542,12 +2542,15 @@ impl<'a> super::TypeChecker<'a> {
                         // B-2026-10-28-29: and, on the MIR pipeline, a tuple
                         // holding a bare `collect()`, whose target only the
                         // slot names: `Ok((n, it.collect()))`.
-                        let payload_needs_slot =
-                            Self::literal_needs_array_slot(&args[0].value, &slot)
+                        let payload_needs_slot = Self::literal_needs_array_slot(&args[0].value, &slot)
                                 || ctor_with_literal_args(&args[0].value)
                                 || tuple_literal_has_str_slot(&args[0].value, &slot)
                                 || (self.library_methods_from_source
-                                    && tuple_literal_has_bare_collect(&args[0].value));
+                                    && tuple_literal_has_bare_collect(&args[0].value))
+                                // and a tuple with a `dyn` slot, whose
+                                // elements coerce into it: `Some((1, Hello {}))`.
+                                || (matches!(args[0].value.kind, ExprKind::Tuple(_))
+                                    && tuple_has_dyn_slot(&slot));
                         if payload_is_inferred_ctor
                             || payload_is_unsuffixed_int
                             || payload_needs_slot
@@ -2673,6 +2676,8 @@ impl<'a> super::TypeChecker<'a> {
                         || (is_collection_literal(e)
                             && matches!(slot, Type::Named { .. })
                             && expectation_is_concrete(slot))
+                        || is_dyn_slot(slot)
+                        || (matches!(e.kind, ExprKind::Tuple(_)) && tuple_has_dyn_slot(slot))
                 };
                 if elems
                     .iter()
@@ -2683,7 +2688,17 @@ impl<'a> super::TypeChecker<'a> {
                         .iter()
                         .zip(exp_elems.iter())
                         .map(|(e, slot)| {
-                            if elem_needs_expected(e, slot) {
+                            if is_dyn_slot(slot) {
+                                // design.md § `dyn Trait`: an element of a
+                                // tuple literal coerces into its `dyn` slot,
+                                // as an enum payload or a struct field does.
+                                let found = self.check_expr(e, slot);
+                                if self.check_assignable(slot, &found, e.span) {
+                                    slot.clone()
+                                } else {
+                                    Type::Error
+                                }
+                            } else if elem_needs_expected(e, slot) {
                                 self.check_expr(e, slot)
                             } else {
                                 self.infer_expr(e)
@@ -11982,6 +11997,20 @@ fn tuple_literal_has_bare_collect(e: &Expr) -> bool {
             .any(|e| is_bare_collect(e) || tuple_literal_has_bare_collect(e)),
         _ => false,
     }
+}
+
+/// A `dyn` slot: `dyn Trait`, or a view of one (design.md § `dyn Trait`).
+pub(super) fn is_dyn_slot(t: &Type) -> bool {
+    match t {
+        Type::Dyn { .. } => true,
+        Type::Ref(inner) | Type::MutRef(inner) => matches!(**inner, Type::Dyn { .. }),
+        _ => false,
+    }
+}
+
+/// A tuple type with a `dyn` slot among its elements.
+pub(super) fn tuple_has_dyn_slot(t: &Type) -> bool {
+    matches!(t, Type::Tuple(slots) if slots.iter().any(|s| is_dyn_slot(s) || tuple_has_dyn_slot(s)))
 }
 
 pub(super) fn is_str_view(ty: &Type) -> bool {

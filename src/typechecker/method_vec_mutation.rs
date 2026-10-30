@@ -150,9 +150,16 @@ impl<'a> super::TypeChecker<'a> {
                     }
                     // B-2026-10-14-19 — and a tuple literal holding one.
                     ExprKind::Tuple(es) => {
-                        self.library_methods_from_source
+                        (self.library_methods_from_source
                             && matches!(&elem, Type::Tuple(_))
-                            && es.iter().any(super::exprs::is_bare_collect)
+                            && es.iter().any(super::exprs::is_bare_collect))
+                            // design.md § `dyn Trait`: an element coerces
+                            // into its `dyn` slot (`(path, Hello {})` into a
+                            // `Vec[(String, dyn Handler)]`).
+                            || super::exprs::tuple_has_dyn_slot(&resolve_type_var_top(
+                                &elem,
+                                &self.env.substitutions,
+                            ))
                     }
                     _ => false,
                 };
