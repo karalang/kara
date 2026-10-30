@@ -214,3 +214,37 @@ test \"a router of dyn handlers under the fake\" {
         assert!(!stdout.contains("test_pass"), "{lane:?}: {stdout}");
     }
 }
+
+/// A callback that uses the fake cannot be stored on the bus: it would
+/// keep a view of the provider (core semantics §14.5, §14.7). The refusal
+/// names the test file and its line, not the package's combined source
+/// (B-2026-10-30-8).
+#[test]
+fn v1_service_stored_callback_under_a_fake_names_its_file() {
+    let pkg = Package::new("stored");
+    let test = pkg.0.join("src/main_test.kara");
+    let mut text = std::fs::read_to_string(&test).unwrap();
+    let line = text.lines().count() + 5;
+    text.push_str(
+        "\n#[with_provider(FileSystem, MemFs.with_catalog)]
+test \"a stored callback that uses the fake\" {
+    let mut bus = EventBus { handlers: Vec.new() };
+    bus.register(|e| {
+        let _ = fs.write(f\"event-{e.route}\", f\"{e.status}\");
+    });
+    bus.emit(Event { route: 3, status: 404 });
+}
+",
+    );
+    std::fs::write(&test, text).unwrap();
+    for lane in [&["test"][..], &["test", "--interp"][..]] {
+        let out = karac(&pkg.0, "1", lane);
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert_ne!(out.status.code(), Some(0), "{lane:?}: {stdout}");
+        assert!(
+            stdout.contains(&format!("src/main_test.kara:{line}:")),
+            "{lane:?}: {stdout}"
+        );
+        assert!(!stdout.contains("test_pass"), "{lane:?}: {stdout}");
+    }
+}

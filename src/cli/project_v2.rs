@@ -249,36 +249,47 @@ impl Amalgam {
     }
 }
 
-/// A MIR build error's places (`L:C in `f``) named by file, when the program
-/// is a package's combined source; unchanged otherwise.
+/// A MIR build error's places named by file, when the program is a
+/// package's combined source; unchanged otherwise. A place is an `L:C`
+/// after a space or at the start, followed by `:`, `)`, a space or the
+/// end: `12:5 in `f``, `borrow check f: 12:5: ..`, `(borrow at bb5[1] at
+/// 12:18)` (B-2026-10-30-8).
 pub(super) fn remap_build_error(e: &str) -> String {
     if !crate::mir::interp::has_source_map() {
         return e.to_string();
     }
+    remap_places(e, crate::mir::interp::source_at)
+}
+
+fn remap_places(e: &str, at: impl Fn(usize) -> (&'static str, usize)) -> String {
+    let b = e.as_bytes();
+    let digits = |i: usize| b[i..].iter().take_while(|c| c.is_ascii_digit()).count();
     let mut out = String::with_capacity(e.len());
-    let mut rest = e;
-    while let Some(at) = rest.find(" in `") {
-        let head = &rest[..at];
-        // The `L:C` just before ` in `.
-        let start = head
-            .rfind(|c: char| !(c.is_ascii_digit() || c == ':'))
-            .map_or(0, |i| i + 1);
-        let place = &head[start..];
-        match place
-            .split_once(':')
-            .and_then(|(l, c)| Some((l.parse::<usize>().ok()?, c.parse::<usize>().ok()?)))
-        {
-            Some((line, col)) => {
-                let (file, l) = crate::mir::interp::source_at(line);
-                out.push_str(&head[..start]);
-                out.push_str(&format!("{file}:{l}:{col}"));
-            }
-            None => out.push_str(head),
+    let (mut i, mut copied) = (0, 0);
+    while i < b.len() {
+        let starts = (i == 0 || b[i - 1] == b' ') && b[i].is_ascii_digit();
+        let l = if starts { digits(i) } else { 0 };
+        let c = if l > 0 && b.get(i + l) == Some(&b':') {
+            digits(i + l + 1)
+        } else {
+            0
+        };
+        let end = i + l + 1 + c;
+        if c == 0 || !matches!(b.get(end), None | Some(b':' | b')' | b' ')) {
+            i += 1;
+            continue;
         }
-        out.push_str(" in `");
-        rest = &rest[at + 5..];
+        let (line, col) = (&e[i..i + l], &e[i + l + 1..end]);
+        let Ok(line) = line.parse::<usize>() else {
+            i = end;
+            continue;
+        };
+        let (file, fl) = at(line);
+        out.push_str(&e[copied..i]);
+        out.push_str(&format!("{file}:{fl}:{col}"));
+        (i, copied) = (end, end);
     }
-    out.push_str(rest);
+    out.push_str(&e[copied..]);
     out
 }
 
@@ -1041,4 +1052,35 @@ pub(super) fn package_tree(
             .unwrap_or(false)
     });
     in_tree.then_some((root, tree))
+}
+
+#[cfg(test)]
+mod remap_tests {
+    use super::remap_places;
+
+    fn at(line: usize) -> (&'static str, usize) {
+        if line > 100 {
+            ("src/main_test.kara", line - 100)
+        } else {
+            ("src/main.kara", line)
+        }
+    }
+
+    #[test]
+    fn remap_build_error_names_every_place_by_file() {
+        assert_eq!(
+            remap_places("in main at bb7[term]: 12:5 in `f`", at),
+            "in main at bb7[term]: src/main.kara:12:5 in `f`"
+        );
+        assert_eq!(
+            remap_places(
+                "borrow check t{FileSystem=MemFs}: 292:5: bb5[term]: a view (borrow at bb5[1] at 292:18); x",
+                at
+            ),
+            "borrow check t{FileSystem=MemFs}: src/main_test.kara:192:5: bb5[term]: a view \
+             (borrow at bb5[1] at src/main_test.kara:192:18); x"
+        );
+        // Not a place: a time-like token inside a word, or a bare count.
+        assert_eq!(remap_places("a1:2 b 3 c 4:x", at), "a1:2 b 3 c 4:x");
+    }
 }
