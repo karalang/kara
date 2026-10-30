@@ -1261,7 +1261,20 @@ impl<'a> super::TypeChecker<'a> {
                 Some(self_ty),
                 b.trait_name == "Iterator",
             ),
-            _ => (String::new(), Vec::new(), None, false),
+            // A generic method on `Self` or a type parameter instantiates
+            // its own parameters from the arguments too: a supertrait's
+            // `tag[T](self, t: own T)` called from a subtrait's default
+            // (B-2026-10-29-27).
+            _ => (
+                String::new(),
+                Vec::new(),
+                method
+                    .generic_params
+                    .as_ref()
+                    .is_some_and(|gp| !gp.params.is_empty())
+                    .then(|| self_ty.clone()),
+                false,
+            ),
         };
         let bind = |t: Type| substitute_existential_assoc_bindings(&t, &ex_trait, &ex_bindings);
         let mut param_types: Vec<Type> = method
