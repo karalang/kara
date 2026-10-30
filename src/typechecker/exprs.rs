@@ -1102,6 +1102,9 @@ impl<'a> super::TypeChecker<'a> {
         if let Some(ty) = self.d5_give_away(expr, expected) {
             return ty;
         }
+        if let Some(ty) = self.d5_give_away_to_vec(expr, expected) {
+            return ty;
+        }
         if self.char_literal_for_str(expr, expected) {
             return expected.clone();
         }
@@ -1422,6 +1425,60 @@ impl<'a> super::TypeChecker<'a> {
             expected: Some(type_display(expected)),
             got: Some(format!("ref {shown}")),
         });
+        Some(expected.clone())
+    }
+
+    /// `[a, b].to_vec()` where a `Vec[E]` is wanted checks each element
+    /// against `E` when one names a bare parameter, so that element is
+    /// reported as given away, with its `own` fix, as `vec![a, b]` and
+    /// `v.push(a)` report it, rather than as a `Vec[ref E]` that mismatches
+    /// the whole literal (B-2026-10-29-14, B-2026-10-29-4).
+    fn d5_give_away_to_vec(&mut self, expr: &Expr, expected: &Type) -> Option<Type> {
+        let ExprKind::MethodCall {
+            object,
+            method,
+            args,
+            ..
+        } = &expr.kind
+        else {
+            return None;
+        };
+        let ExprKind::ArrayLiteral(items) = &object.kind else {
+            return None;
+        };
+        if method != "to_vec"
+            || !args.is_empty()
+            || !items.iter().any(|e| self.names_a_d5_borrow(e))
+        {
+            return None;
+        }
+        let wanted = match expected {
+            Type::Ref(t) | Type::MutRef(t) => t.as_ref(),
+            t => t,
+        };
+        let Type::Named { name, args: targs } = wanted else {
+            return None;
+        };
+        let [elem] = targs.as_slice() else {
+            return None;
+        };
+        if name != "Vec" || contains_type_var(elem) {
+            return None;
+        }
+        let given: Vec<bool> = items
+            .iter()
+            .map(|e| self.names_a_d5_borrow(e) && self.d5_give_away(e, elem).is_some())
+            .collect();
+        if !given.contains(&true) {
+            return None;
+        }
+        for (e, given) in items.iter().zip(given) {
+            if !given {
+                self.check_expr(e, elem);
+            }
+        }
+        self.record_expr_type(&expr.span, wanted);
+        self.record_node_type(expr.id, wanted);
         Some(expected.clone())
     }
 
