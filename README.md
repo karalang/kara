@@ -49,7 +49,7 @@ fn fetch_orders() -> Vec[i64] { OrderDB.load() }
 
 // Parameters borrow by default: no copy, and no lifetime annotation.
 fn total(users: Vec[i64], orders: Vec[i64]) -> i64 {
-    users.len() as i64 + orders.len() as i64
+    users.len() + orders.len()
 }
 
 fn report() {
@@ -90,7 +90,7 @@ There is no `par`, no `async` and no thread code in the source.
 
 ```kara
 fn archive(log: own Vec[String]) -> i64 {
-    log.len() as i64
+    log.len()
 }
 
 fn main() {
@@ -101,11 +101,11 @@ fn main() {
 ```
 
 ```bash
-$ karac check archive.kara --output=json
+$ karac check archive.kara --output=json      # trimmed to the diagnostic
 {"diagnostics":[{"severity":"error","phase":"ownership","code":"E0500",
   "class":"OWNERSHIP_MOVE_AFTER_USE","line":8,"column":39,
   "message":"value 'log' moved here, used again here (moved at line 7:21)",
-  "replacement":{"offset":158,"length":0,"text":".clone()"}}]}
+  "replacement":{"offset":151,"length":0,"text":".clone()"}}]}
 
 $ karac fix archive.kara
 applied 1 fix(es) to archive.kara
