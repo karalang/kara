@@ -343,6 +343,7 @@ impl super::Formatter {
                 self.write_str("select {\n");
                 self.push_indent();
                 for arm in arms {
+                    self.flush_comments_before(arm.span.offset);
                     self.write_indent();
                     match &arm.guard {
                         Some(op) => {
@@ -356,6 +357,7 @@ impl super::Formatter {
                     self.format_expr(&arm.body);
                     self.write_str(",\n");
                 }
+                self.flush_comments_before(expr.span.offset + expr.span.length);
                 self.pop_indent();
                 self.write_indent();
                 self.write_str("}");
@@ -366,6 +368,7 @@ impl super::Formatter {
                 self.write_str(" {\n");
                 self.push_indent();
                 for arm in arms {
+                    self.flush_comments_before(arm.span.offset);
                     self.write_indent();
                     self.format_pattern(&arm.pattern);
                     if let Some(ref guard) = arm.guard {
@@ -376,6 +379,7 @@ impl super::Formatter {
                     self.format_expr(&arm.body);
                     self.write_str(",\n");
                 }
+                self.flush_comments_before(expr.span.offset + expr.span.length);
                 self.pop_indent();
                 self.write_indent();
                 self.write_str("}");

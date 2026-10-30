@@ -165,6 +165,38 @@ pub enum Item {
     TestCase(TestCase),
 }
 
+impl Item {
+    /// The parser-recorded span of any item kind. It starts after the item's
+    /// doc comments, attributes and visibility keyword (the parser eats those
+    /// before recording its start).
+    pub fn span(&self) -> &Span {
+        match self {
+            Item::Function(f) => &f.span,
+            Item::StructDef(s) => &s.span,
+            Item::UnionDef(u) => &u.span,
+            Item::EnumDef(e) => &e.span,
+            Item::TraitDef(t) => &t.span,
+            Item::TraitAlias(t) => &t.span,
+            Item::MarkerTrait(t) => &t.span,
+            Item::ConstDecl(c) => &c.span,
+            Item::ModuleBinding(b) => &b.span,
+            Item::ExternFunction(f) => &f.span,
+            Item::TypeAlias(t) => &t.span,
+            Item::DistinctType(d) => &d.span,
+            Item::LayoutDef(l) => &l.span,
+            Item::EffectResource(r) => &r.span,
+            Item::EffectGroup(g) => &g.span,
+            Item::EffectVerbDecl(v) => &v.span,
+            Item::AliasDecl(a) => &a.span,
+            Item::ImplBlock(b) => &b.span,
+            Item::Import(i) => &i.span,
+            Item::IndependentDecl(d) => &d.span,
+            Item::ExternBlock(b) => &b.span,
+            Item::TestCase(t) => &t.span,
+        }
+    }
+}
+
 // ── Functions ────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]

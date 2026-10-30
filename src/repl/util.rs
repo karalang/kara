@@ -592,31 +592,7 @@ pub(super) fn item_name(item: &crate::ast::Item) -> Option<&str> {
 /// those before recording `start = current_span()`); the prune loop
 /// recovers the leading bytes by attaching them to the *next* item.
 pub(super) fn item_span(item: &crate::ast::Item) -> &crate::token::Span {
-    use crate::ast::Item;
-    match item {
-        Item::Function(f) => &f.span,
-        Item::StructDef(s) => &s.span,
-        Item::UnionDef(u) => &u.span,
-        Item::EnumDef(e) => &e.span,
-        Item::TraitDef(t) => &t.span,
-        Item::TraitAlias(t) => &t.span,
-        Item::MarkerTrait(t) => &t.span,
-        Item::ConstDecl(c) => &c.span,
-        Item::ModuleBinding(b) => &b.span,
-        Item::ExternFunction(f) => &f.span,
-        Item::TypeAlias(t) => &t.span,
-        Item::DistinctType(d) => &d.span,
-        Item::LayoutDef(l) => &l.span,
-        Item::EffectResource(r) => &r.span,
-        Item::EffectGroup(g) => &g.span,
-        Item::EffectVerbDecl(v) => &v.span,
-        Item::AliasDecl(a) => &a.span,
-        Item::ImplBlock(b) => &b.span,
-        Item::Import(i) => &i.span,
-        Item::IndependentDecl(d) => &d.span,
-        Item::ExternBlock(b) => &b.span,
-        Item::TestCase(t) => &t.span,
-    }
+    item.span()
 }
 
 /// Parse a snippet of top-level item source and return the set of names

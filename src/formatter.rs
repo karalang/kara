@@ -8,14 +8,30 @@ use crate::token::{FloatSuffix, IntSuffix};
 
 const INDENT: &str = "    ";
 
+mod comments;
 mod exprs;
 mod items;
 mod patterns;
 mod stmts;
 mod types;
 
+/// Format a program parsed from `source`, keeping the source's comments,
+/// which the AST does not carry (B-2026-10-30-16). The `karac fmt` and
+/// [`crate::format_source`] entry point.
+pub fn format_program_with_comments(program: &Program, source: &str) -> String {
+    format_program_inner(program, comments::collect_comments(source))
+}
+
+/// Format a program from its AST alone. Comments are not in the tree, so a
+/// program parsed from source loses them here: use
+/// [`format_program_with_comments`] for that.
 pub fn format_program(program: &Program) -> String {
+    format_program_inner(program, Vec::new())
+}
+
+fn format_program_inner(program: &Program, comments: Vec<comments::Comment>) -> String {
     let mut f = Formatter::new();
+    f.comments = comments;
     f.freeze_spans = program.freeze_spans.clone();
     f.ref_binding_spans = program.ref_binding_spans.clone();
     f.mut_ref_binding_spans = program.mut_ref_binding_spans.clone();
@@ -111,6 +127,12 @@ pub(super) struct Formatter {
     /// `-> (dyn T) with X` keeps its parentheses, which silence
     /// `return_clause_on_fn`.
     pub(super) paren_return_types: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
+    /// The source's comments, in source order, and the index of the first
+    /// one not yet written (`comments.rs`). Empty for a fragment.
+    pub(super) comments: Vec<comments::Comment>,
+    pub(super) next_comment: usize,
+    /// `output.len()` just after a `//` comment ended a line.
+    pub(super) line_comment_end: usize,
 }
 
 impl Formatter {
@@ -124,6 +146,9 @@ impl Formatter {
             escaping_fn_types: rustc_hash::FxHashSet::default(),
             mut_fn_types: rustc_hash::FxHashSet::default(),
             paren_return_types: rustc_hash::FxHashSet::default(),
+            comments: Vec::new(),
+            next_comment: 0,
+            line_comment_end: usize::MAX,
         }
     }
 
@@ -207,45 +232,63 @@ impl Formatter {
             }
         }
 
-        // Sort import decls alphabetically by path.
-        uses.sort_by(|a, b| {
-            let path_a = match a {
-                Item::Import(i) => {
-                    let mut p = i.path.clone();
-                    if let Some(first) = i.items.first() {
-                        p.push(first.name.clone());
+        // Sort import decls alphabetically by path, unless a comment sits
+        // among them: it would stay where it is while the imports moved.
+        let import_lo = uses.iter().map(|i| i.span().offset).min().unwrap_or(0);
+        let import_hi = uses
+            .iter()
+            .map(|i| i.span().offset + i.span().length)
+            .max()
+            .unwrap_or(0);
+        let keep_order = self.has_comment_in(import_lo, import_hi);
+        if !keep_order {
+            uses.sort_by(|a, b| {
+                let path_a = match a {
+                    Item::Import(i) => {
+                        let mut p = i.path.clone();
+                        if let Some(first) = i.items.first() {
+                            p.push(first.name.clone());
+                        }
+                        p
                     }
-                    p
-                }
-                _ => unreachable!(),
-            };
-            let path_b = match b {
-                Item::Import(i) => {
-                    let mut p = i.path.clone();
-                    if let Some(first) = i.items.first() {
-                        p.push(first.name.clone());
+                    _ => unreachable!(),
+                };
+                let path_b = match b {
+                    Item::Import(i) => {
+                        let mut p = i.path.clone();
+                        if let Some(first) = i.items.first() {
+                            p.push(first.name.clone());
+                        }
+                        p
                     }
-                    p
-                }
-                _ => unreachable!(),
-            };
-            path_a.cmp(&path_b)
-        });
+                    _ => unreachable!(),
+                };
+                path_a.cmp(&path_b)
+            });
+        }
 
         for item in &uses {
+            self.flush_comments_before(item.span().offset);
             self.format_item(item);
         }
         if !uses.is_empty() && !rest.is_empty() {
+            self.flush_trailing_comments(rest[0].span().offset);
             self.output.push('\n');
         }
 
         let mut first = true;
         for item in &rest {
             if !first {
+                self.flush_trailing_comments(item.span().offset);
                 self.output.push('\n');
             }
             first = false;
+            self.flush_comments_before(item.span().offset);
             self.format_item(item);
+        }
+        self.flush_comments_before(usize::MAX);
+        while self.output.ends_with("\n\n") {
+            self.output.pop();
         }
     }
 }

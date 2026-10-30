@@ -442,6 +442,7 @@ impl super::Formatter {
         self.write_str(" {\n");
         self.push_indent();
         for field in &s.fields {
+            self.flush_comments_before(field.span.offset);
             self.write_indent();
             if field.is_pub {
                 self.write_str("pub ");
@@ -466,6 +467,7 @@ impl super::Formatter {
             self.format_expr(inv);
             self.write_str("\n");
         }
+        self.flush_comments_before(s.span.offset + s.span.length);
         self.pop_indent();
         self.writeln("}");
     }
@@ -481,6 +483,7 @@ impl super::Formatter {
         self.write_str(" {\n");
         self.push_indent();
         for field in &u.fields {
+            self.flush_comments_before(field.span.offset);
             self.write_indent();
             if field.is_pub {
                 self.write_str("pub ");
@@ -490,6 +493,7 @@ impl super::Formatter {
             self.format_type_expr(&field.ty);
             self.write_str(",\n");
         }
+        self.flush_comments_before(u.span.offset + u.span.length);
         self.pop_indent();
         self.writeln("}");
     }
@@ -512,6 +516,7 @@ impl super::Formatter {
         self.write_str(" {\n");
         self.push_indent();
         for variant in &e.variants {
+            self.flush_comments_before(variant.span.offset);
             self.write_indent();
             self.write_ident(&variant.name);
             match &variant.kind {
@@ -530,12 +535,14 @@ impl super::Formatter {
                     self.write_str(" {\n");
                     self.push_indent();
                     for field in fields {
+                        self.flush_comments_before(field.span.offset);
                         self.write_indent();
                         self.write_ident(&field.name);
                         self.write_str(": ");
                         self.format_type_expr(&field.ty);
                         self.write_str(",\n");
                     }
+                    self.flush_comments_before(variant.span.offset + variant.span.length);
                     self.pop_indent();
                     self.write_indent();
                     self.write_str("}");
@@ -550,6 +557,7 @@ impl super::Formatter {
             }
             self.write_str(",\n");
         }
+        self.flush_comments_before(e.span.offset + e.span.length);
         self.pop_indent();
         self.writeln("}");
     }
@@ -627,6 +635,10 @@ impl super::Formatter {
         self.write_str(" {\n");
         self.push_indent();
         for item in &t.items {
+            self.flush_comments_before(match item {
+                TraitItem::Method(m) => m.span.offset,
+                TraitItem::AssocType(a) => a.span.offset,
+            });
             match item {
                 TraitItem::Method(m) => self.format_trait_method(m),
                 TraitItem::AssocType(a) => {
@@ -646,6 +658,7 @@ impl super::Formatter {
                 }
             }
         }
+        self.flush_comments_before(t.span.offset + t.span.length);
         self.pop_indent();
         self.writeln("}");
     }
@@ -696,20 +709,30 @@ impl super::Formatter {
         self.write_str(" {\n");
         self.push_indent();
 
-        // Sort methods alphabetically for canonical output
+        // Sort methods alphabetically for canonical output, unless the impl
+        // holds a comment: it would stay where it is while the methods moved.
+        let end = imp.span.offset + imp.span.length;
         let mut methods: Vec<&ImplItem> = imp.items.iter().collect();
-        methods.sort_by(|a, b| {
-            let name_a = impl_item_name(a);
-            let name_b = impl_item_name(b);
-            name_a.cmp(name_b)
-        });
+        if !self.has_comment_in(imp.span.offset, end) {
+            methods.sort_by(|a, b| {
+                let name_a = impl_item_name(a);
+                let name_b = impl_item_name(b);
+                name_a.cmp(name_b)
+            });
+        }
 
         let mut first = true;
         for item in &methods {
+            let start = match item {
+                ImplItem::Method(m) => m.span.offset,
+                ImplItem::AssocType(a) => a.span.offset,
+            };
             if !first {
+                self.flush_trailing_comments(start);
                 self.output.push('\n');
             }
             first = false;
+            self.flush_comments_before(start);
             match item {
                 ImplItem::Method(m) => self.format_function_as(m, true),
                 ImplItem::AssocType(a) => {
@@ -722,6 +745,7 @@ impl super::Formatter {
                 }
             }
         }
+        self.flush_comments_before(end);
         self.pop_indent();
         self.writeln("}");
     }
@@ -885,9 +909,9 @@ impl super::Formatter {
     pub(super) fn format_test_case(&mut self, t: &TestCase) {
         self.format_attributes(&t.attributes);
         self.write_indent();
-        self.write_str("test ");
+        self.write_str("test \"");
         self.write_str(&super::escape_string(&t.name));
-        self.write_str(" ");
+        self.write_str("\" ");
         self.format_block(&t.body);
         self.output.push('\n');
     }

@@ -17,7 +17,7 @@ pub(super) fn cmd_fmt(filename: &str) {
         }
         process::exit(1);
     }
-    let formatted = crate::formatter::format_program(&parsed.program);
+    let formatted = crate::formatter::format_program_with_comments(&parsed.program, &source);
     print!("{formatted}");
 }
 

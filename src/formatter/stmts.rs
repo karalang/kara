@@ -4,20 +4,35 @@ use crate::ast::*;
 
 impl super::Formatter {
     pub(super) fn format_block(&mut self, block: &Block) {
-        if block.stmts.is_empty() && block.final_expr.is_none() {
+        let end = block.span.offset + block.span.length;
+        if block.stmts.is_empty()
+            && block.final_expr.is_none()
+            && !self.has_comment_in(block.span.offset, end)
+        {
             self.write_str("{}");
             return;
         }
         self.write_str("{\n");
         self.push_indent();
-        for stmt in &block.stmts {
-            self.format_stmt(stmt);
+        for (i, stmt) in block.stmts.iter().enumerate() {
+            self.flush_comments_before(stmt.span.offset);
+            let last = i + 1 == block.stmts.len() && block.final_expr.is_none();
+            match &stmt.kind {
+                StmtKind::Expr(expr) if !block_stmt_needs_semicolon(expr, last) => {
+                    self.write_indent();
+                    self.format_expr(expr);
+                    self.output.push('\n');
+                }
+                _ => self.format_stmt(stmt),
+            }
         }
         if let Some(ref expr) = block.final_expr {
+            self.flush_comments_before(expr.span.offset);
             self.write_indent();
             self.format_expr(expr);
             self.output.push('\n');
         }
+        self.flush_comments_before(end);
         self.pop_indent();
         self.write_indent();
         self.write_str("}");
@@ -157,4 +172,19 @@ impl super::Formatter {
             }
         }
     }
+}
+
+/// Whether an expression statement is printed with its `;`. A block-like
+/// expression (`if`, `match`, `for`, ...) ends its statement at its `}`, so
+/// the parser takes it with or without one and builds the same tree. The
+/// exception is a block's last statement: without the `;`, anything but
+/// `while` / `for` would become the block's value.
+fn block_stmt_needs_semicolon(expr: &Expr, last: bool) -> bool {
+    if matches!(
+        expr.kind,
+        ExprKind::While { .. } | ExprKind::WhileLet { .. } | ExprKind::For { .. }
+    ) {
+        return false;
+    }
+    last || !crate::parser::Parser::is_block_like_prefix(expr)
 }

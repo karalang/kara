@@ -1501,7 +1501,10 @@ pub fn format_source(source: &str) -> Option<String> {
     if !parsed.errors.is_empty() {
         return None;
     }
-    Some(crate::formatter::format_program(&parsed.program))
+    Some(crate::formatter::format_program_with_comments(
+        &parsed.program,
+        source,
+    ))
 }
 
 #[cfg(test)]
