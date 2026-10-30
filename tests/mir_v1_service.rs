@@ -241,8 +241,15 @@ test \"a stored callback that uses the fake\" {
         let out = karac(&pkg.0, "1", lane);
         let stdout = String::from_utf8_lossy(&out.stdout);
         assert_ne!(out.status.code(), Some(0), "{lane:?}: {stdout}");
+        // `karac check`'s §14.5 pass refuses it before MIR (B-2026-10-30-7),
+        // as a JSON diagnostic; either form must name the test file's line.
         assert!(
-            stdout.contains(&format!("src/main_test.kara:{line}:")),
+            stdout.contains(&format!("src/main_test.kara:{line}:"))
+                || stdout.contains(&format!("\"file\":\"src/main_test.kara\",\"line\":{line},")),
+            "{lane:?}: {stdout}"
+        );
+        assert!(
+            stdout.contains("this test's `#[with_provider]` binds"),
             "{lane:?}: {stdout}"
         );
         assert!(!stdout.contains("test_pass"), "{lane:?}: {stdout}");

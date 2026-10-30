@@ -92,7 +92,15 @@ pub enum EscapeKind {
     /// value that uses the provider, directly or through a callee, in a
     /// position core §9.3 calls escaping. `what` names the value, `why` the
     /// position ("returned", "stored in a collection", ...).
-    Core { what: String, why: &'static str },
+    ///
+    /// `via` names the function the value is made in when the binding is a
+    /// caller's, out of sight: there the binding site may be in another
+    /// file, or in the code `karac test` generates for `#[with_provider]`.
+    Core {
+        what: String,
+        why: &'static str,
+        via: Option<String>,
+    },
 }
 
 impl EscapeError {
@@ -108,7 +116,30 @@ impl EscapeError {
             }
             EscapeKind::ChannelSend => "value sent via channel".to_string(),
             EscapeKind::Spawn => "value spawned as a task".to_string(),
-            EscapeKind::Core { what, why } => {
+            EscapeKind::Core {
+                what,
+                why,
+                via: Some(f),
+            } => {
+                // A test case is lowered to a `__test_…` function its runner
+                // calls; name the test's attribute, not the mangled caller.
+                let binder = if f.starts_with("__test_") {
+                    "this test's `#[with_provider]` binds".to_string()
+                } else {
+                    format!(
+                        "a caller of `{f}` binds (a `with_provider[{}]`, or a test's \
+                         `#[with_provider]`)",
+                        self.resource
+                    )
+                };
+                return format!(
+                    "{what} uses provider-rooted resource `{}`, whose provider {binder}, so it \
+                     cannot be {why}: a provider cannot leave its scope (core-semantics \
+                     §14.5). Return plain data computed from `{}` instead",
+                    self.resource, self.resource
+                );
+            }
+            EscapeKind::Core { what, why, .. } => {
                 return format!(
                     "{what} uses provider-rooted resource `{}`, whose provider is bound by the \
                      `with_provider` at {}:{}, so it cannot be {why}: a provider cannot leave \
@@ -209,26 +240,40 @@ pub fn check_core_provider_escape(
         out
     };
     let mut errors = Vec::new();
+    // Every function with its key: a bare name, or `Type.method`.
     let mut fns: Vec<&Function> = Vec::new();
+    let mut keys: Vec<String> = Vec::new();
     for item in &program.items {
         match item {
-            Item::Function(f) => fns.push(f),
+            Item::Function(f) => {
+                fns.push(f);
+                keys.push(f.name.clone());
+            }
             Item::ImplBlock(imp) => {
+                let head = match &imp.target_type.kind {
+                    TypeKind::Path(p) => p.segments.last().cloned(),
+                    _ => None,
+                };
                 for i in &imp.items {
                     if let ImplItem::Method(m) = i {
                         fns.push(m.as_ref());
+                        keys.push(match &head {
+                            Some(h) => format!("{h}.{}", m.name),
+                            None => m.name.clone(),
+                        });
                     }
                 }
             }
             _ => {}
         }
     }
+    let inherited = scopes_bound_by_callers(&fns, &keys);
     let escaping_fns: HashMap<SpanKey, (&String, &'static str)> = esc
         .escaping_fn_values
         .iter()
         .map(|(sp, n, why)| (SpanKey::from_span(sp), (n, *why)))
         .collect();
-    for f in fns.into_iter().filter(|f| !f.stdlib_origin) {
+    for (fi, f) in fns.iter().enumerate().filter(|(_, f)| !f.stdlib_origin) {
         // (resource, binding site, extent of the scope it is bound in).
         let mut scopes: Vec<(String, Span, Span)> = Vec::new();
         // (value, what, why): every closure or function value that escapes.
@@ -290,8 +335,20 @@ pub fn check_core_provider_escape(
             inner.offset >= outer.offset
                 && inner.offset + inner.length <= outer.offset + outer.length
         };
+        // A resource that a caller's `with_provider` binds, out of sight
+        // (B-2026-10-30-7), is bound over the whole body; one bound in sight
+        // is named first.
+        let scopes = scopes
+            .into_iter()
+            .map(|(r, site, extent)| (r, site, extent, None))
+            .chain(
+                inherited[fi]
+                    .iter()
+                    .map(|(r, site)| (r.clone(), *site, f.body.span, Some(f.name.clone()))),
+            );
+        let scopes: Vec<(String, Span, Span, Option<String>)> = scopes.collect();
         for (span, what, used, why) in cands {
-            for (r, site, extent) in &scopes {
+            for (r, site, extent, via) in &scopes {
                 if used.contains(r) && within(&span, extent) {
                     errors.push(EscapeError {
                         resource: r.clone(),
@@ -301,6 +358,7 @@ pub fn check_core_provider_escape(
                         kind: EscapeKind::Core {
                             what: what.clone(),
                             why,
+                            via: via.clone(),
                         },
                     });
                     break;
@@ -309,6 +367,84 @@ pub fn check_core_provider_escape(
         }
     }
     errors
+}
+
+/// For each function in `fns`, the resources that a `with_provider[R]` or
+/// `providers { }` in some other function binds around a call that reaches
+/// it, with that binding site: the function runs with the caller's
+/// provider, so a closure it makes that uses `R` captures it as well
+/// (core-semantics §14.5). Calls are followed by callee name, a method call
+/// by its method name alone (any impl's), so the set over-approximates.
+fn scopes_bound_by_callers(fns: &[&Function], keys: &[String]) -> Vec<Vec<(String, Span)>> {
+    // The functions one expression calls (not its subexpressions).
+    let callee_of = |x: &Expr, out: &mut Vec<usize>| {
+        let found: Vec<usize> = match &x.kind {
+            ExprKind::Call { callee, .. } => {
+                let k = match &callee.kind {
+                    ExprKind::Identifier(n) => n.clone(),
+                    ExprKind::Path { segments, .. } => segments.join("."),
+                    _ => return,
+                };
+                (0..keys.len()).filter(|&i| keys[i] == k).collect()
+            }
+            ExprKind::MethodCall { method, .. } => (0..keys.len())
+                .filter(|&i| keys[i].rsplit_once('.').is_some_and(|(_, m)| m == method))
+                .collect(),
+            _ => return,
+        };
+        for i in found {
+            if !out.contains(&i) {
+                out.push(i);
+            }
+        }
+    };
+    let mut body_callees: Vec<Option<Vec<usize>>> = vec![None; fns.len()];
+    let mut out: Vec<Vec<(String, Span)>> = vec![Vec::new(); fns.len()];
+    for f in fns.iter().filter(|f| !f.stdlib_origin) {
+        // (resource, site, the functions called where the binding holds).
+        let mut bound: Vec<(String, Span, Vec<usize>)> = Vec::new();
+        crate::span_visitor::for_each_expr_in_block(&f.body, &mut |e| {
+            let calls = |x: &Expr| {
+                let mut v = Vec::new();
+                crate::span_visitor::for_each_expr(x, &mut |y| callee_of(y, &mut v));
+                v
+            };
+            match &e.kind {
+                ExprKind::Call { callee, args } => {
+                    if let Some((r, _, body)) = match_with_provider(callee, args) {
+                        bound.push((r, e.span, calls(body)));
+                    }
+                }
+                ExprKind::Providers { bindings, .. } => {
+                    for b in bindings {
+                        bound.push((b.resource.clone(), b.resource_span, calls(e)));
+                    }
+                }
+                _ => {}
+            }
+        });
+        for (r, site, mut work) in bound {
+            let mut seen: Vec<usize> = Vec::new();
+            while let Some(i) = work.pop() {
+                if seen.contains(&i) || fns[i].stdlib_origin {
+                    continue;
+                }
+                seen.push(i);
+                if !out[i].iter().any(|(o, _)| *o == r) {
+                    out[i].push((r.clone(), site));
+                }
+                let next = body_callees[i].get_or_insert_with(|| {
+                    let mut v = Vec::new();
+                    crate::span_visitor::for_each_expr_in_block(&fns[i].body, &mut |x| {
+                        callee_of(x, &mut v)
+                    });
+                    v
+                });
+                work.extend(next.iter().copied());
+            }
+        }
+    }
+    out
 }
 
 /// Pre-pass: for each top-level function and impl method, compute the set

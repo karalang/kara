@@ -294,11 +294,11 @@ fn main() {
 
 /// A callback stored on a bus, made where `Clk` is bound by the caller's
 /// `with_provider`, would keep a view of the provider (§14.5). The check
-/// misses it, since the binding is not in sight (PREDICTS
-/// B-2026-10-30-7); the borrow checker refuses the store.
+/// refuses it though the binding is out of sight (B-2026-10-30-7), naming
+/// the function it is made in; the borrow checker refuses the store too.
 #[test]
 fn provider_stored_callback_is_refused() {
-    refused(
+    let (tag, src) = (
         "stored",
         "struct Bus[with E] { hs: Vec[Fn() -> i64 with E] }
 impl[with E] Bus[with E] {
@@ -314,6 +314,16 @@ fn main() {
     println(f\"{with_provider[Clk](F { t: 4 }, || audit())}\");
 }
 ",
-        "is stored in an escaping closure",
     );
+    for b in backends() {
+        let out = karac(tag, b, src);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(!out.status.success(), "{tag} on {b}: ran");
+        let why = if *b == "check" {
+            "a caller of `audit` binds"
+        } else {
+            "is stored in an escaping closure"
+        };
+        assert!(stderr.contains(why), "{tag} on {b}: {stderr}");
+    }
 }
