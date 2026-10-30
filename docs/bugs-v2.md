@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 73 |
+| diagnostics | 74 |
 | false-positive | 73 |
 | missing-feature | 53 |
 | perf | 41 |
@@ -78,7 +78,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | mir | 67 |
 | mir-llvm | 49 |
 | cli | 39 |
-| ownership | 35 |
+| ownership | 36 |
 | interp | 25 |
 | codegen | 22 |
 | parser | 20 |
@@ -108,11 +108,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-28-44 | 2026-10-28 | mir-llvm+runtime | low | On macOS, `karac run` of a program with several pool workers can report ANOTHER task's source location for a panic: the JIT keeps `@karac.site` / `@karac.site.len` process-wide because RuntimeDyldMachO cannot link thread-locals, and B-2026-10-26-7's comment says that sharing 'costs speed only' — it also makes the reported place a race, and tests/mir_site_thread_local.rs's `karac run` assertion passes by chance on a Mac | — |
 | B-2026-10-29-32 | 2026-10-29 | mir-llvm | medium | On the MIR compiled backend, `String.contains` with a needle of at most 16 bytes calls `memchr` and then `memcmp` at every place the needle's first byte occurs, so on a two-letter haystack (a binary string, where that byte is every other one) it costs 3.2 ns per haystack byte: 9.4x C `strstr` and 7.2x Rust `str::contains`; kata 1016's bench is 8.5x C | — |
 | B-2026-10-29-50 | 2026-10-29 | autopar | low | An auto-par task's loop takes its run's bounds as plain captures, so LLVM knows nothing of the counter's range: kata 4's `k % R` becomes a signed 64-bit magic division in the task (about 10 instructions) where the in-order loop, knowing 0 <= k < 10M, uses a 32-bit unsigned one (about 5) | — |
-| B-2026-10-30-16 | 2026-10-30 | cli | high | `karac fmt` drops every comment: `// top`, a comment line inside a body and a trailing `// note` all vanish from its output, so formatting any real file loses its comments | — |
-| B-2026-10-30-17 | 2026-10-30 | cli | low | `karac query ownership app.kara` (a bare file, as the other kinds accept) fails with `error: cannot read 'app': No such file or directory`, splitting the file name at its dot | — |
-| B-2026-10-30-18 | 2026-10-30 | cli | low | `karac run` with no file inside a project fails with `error: missing file argument`, while `karac check`, `karac build` and `karac test` with no file all work on the project | — |
-| B-2026-10-30-19 | 2026-10-30 | cli | low | `karac run main.kara in.txt` is refused with `error: unexpected argument 'in.txt'`, without saying that program arguments go after `--` | — |
-| B-2026-10-30-20 | 2026-10-30 | cli | low | `karac new <name> --cli` scaffolds the same hello-world `src/main.kara` and placeholder test as a plain `karac new`, though `karac help` describes `--cli` as the command-line tool skeleton | — |
 | B-2026-10-30-22 | 2026-10-30 | cli | low | `karac lint --list`, which design.md § Built-in lints and src/lints.rs name as the way to list the lint registry, is an unknown command; design.md's v1 set also names `unused_effect`, which is not in the registry | — |
 | B-2026-10-30-23 | 2026-10-30 | mir | medium | A `dyn Handler with E` stored inside `Option` (`Vec[Option[dyn Handler with E]]`) loses its declared `with E` clause: a call through `if let Some(h) = s` is charged "unknown (a call through a `dyn` value a call hands back)", so `par { r.total(1), r.total(2) }` over effect-free handlers is refused; `Vec[dyn Handler with E]` is accepted | — |
 | B-2026-10-30-24 | 2026-10-30 | mir | low | E_STATEFUL_DEFAULT reached through a `dyn` method or a closure names the resource as its own caller ("`Ids` calls a `mut ref self` method of `Ids`") instead of the method or function that makes the call (`Minter.handle`) | — |
@@ -125,6 +120,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-30-32 | 2026-10-30 | cli | medium | `karac check --output=json` in a package names a file two ways: resolver diagnostics (E0111, E0112, E0113) carry an absolute path, typecheck ones `src/<module>.kara`; and E0223 (circular module dependency) carries no file or line at all | — |
 | B-2026-10-30-33 | 2026-10-30 | mir | low | A failed `assert` / `assert_eq` in `karac test` reports "assertion failed" / "assertion failed: left != right" without the assertion's source text, and its `test_fail` event has no `assertion` field (design.md § Assertions, Runner output) | — |
 | B-2026-10-30-34 | 2026-10-30 | typecheck | low | `prelude_shadow` warns that a user `struct Stats` shadows a prelude type, though `Stats` is the post-v1 `kara-data` type and not in the prelude (library/README.md), so a package's own `Stats` warns on every check, build and run | — |
+| B-2026-10-30-35 | 2026-10-30 | ownership | medium | `karac query ownership` reports a parameter declared `s: own String` as mode "ref": the mode it prints is inferred from the body's use of the parameter, not the declared D5 mode that decides how callers pass it | — |
 
 ### Relocated
 
@@ -436,6 +432,11 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-30-13 | typecheck+ownership | high | A plain `dyn Trait` MOVED into a `TaskGroup.spawn` closure passes `karac check` and runs, so a concrete value holding a `shared` handle (non-atomic c… | 15479807f6 |
 | B-2026-10-30-14 | typecheck | medium | design.md § `as` casts promises `redundant_cast` (an identity cast) and `lossless_cast` (an `as` whose widening is implicit where it stands, its fix… | 8bd1a4d307 |
 | B-2026-10-30-15 | effect | medium | A resource method with a bare `self` is charged `writes(R)`, not `reads(R)` as core-semantics §14.2 says: `karac query effects` reports `writes(UserD… | 1a5e7ccb08 |
+| B-2026-10-30-16 | cli | high | `karac fmt` drops every comment: `// top`, a comment line inside a body and a trailing `// note` all vanish from its output, so formatting any real f… | 99e4590cf5 |
+| B-2026-10-30-17 | cli | low | `karac query ownership app.kara` (a bare file, as the other kinds accept) fails with `error: cannot read 'app': No such file or directory`, splitting… | 76b022a676 |
+| B-2026-10-30-18 | cli | low | `karac run` with no file inside a project fails with `error: missing file argument`, while `karac check`, `karac build` and `karac test` with no file… | 76b022a676 |
+| B-2026-10-30-19 | cli | low | `karac run main.kara in.txt` is refused with `error: unexpected argument 'in.txt'`, without saying that program arguments go after `--` | 76b022a676 |
+| B-2026-10-30-20 | cli | low | `karac new <name> --cli` scaffolds the same hello-world `src/main.kara` and placeholder test as a plain `karac new`, though `karac help` describes `-… | 76b022a676 |
 | B-2026-10-30-21 | ownership | low | Moving a value while a returned reference into it is live (README's `name_of` example) says `help: drop the slice borrow before moving the source`, t… | 5a2a4a0b48 |
 | B-2026-10-30-26 | typecheck | medium | An element of a tuple literal did not coerce into its `dyn` slot: `routes.push((path, Hello {}))` into a `Vec[(String, dyn Handler)]`, `let t: (Strin… | 6c744eaf84 |
 
