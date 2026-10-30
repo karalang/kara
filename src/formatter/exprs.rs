@@ -3,7 +3,7 @@
 use crate::ast::*;
 use std::fmt::Write;
 
-use super::{escape_string, float_suffix_str, int_suffix_str};
+use super::{escape_string, float_suffix_str};
 
 /// Binding powers, as the parser's Pratt loop assigns them
 /// (`src/parser/exprs.rs`): an operand is written in parentheses when its
@@ -56,7 +56,11 @@ impl super::Formatter {
     /// `e` in a slot that needs binding power `min`, parenthesized when its
     /// own operator binds more loosely.
     fn format_operand(&mut self, e: &Expr, min: u8) {
+        if self.paren_block_like_at_stmt_start(e) {
+            return;
+        }
         if expr_power(e) < min {
+            self.stmt_start = false;
             self.write_str("(");
             self.format_expr(e);
             self.write_str(")");
@@ -65,21 +69,89 @@ impl super::Formatter {
         }
     }
 
-    pub(super) fn format_expr(&mut self, expr: &Expr) {
-        match &expr.kind {
-            ExprKind::Integer(n, sfx) => {
-                write!(self.output, "{n}").unwrap();
-                if let Some(s) = sfx {
-                    self.write_str(int_suffix_str(*s));
+    /// The object of a `.method()`, `.field`, `.0` or `[i]`. A collection
+    /// literal there reads back as a type application (`Vec[Vec["a"]].len()`
+    /// parses as `Vec[T].len` with `T = Vec["a"]`), so a `Vec` one is written
+    /// in its `vec![..]` spelling and any other is parenthesized.
+    fn format_receiver(&mut self, object: &Expr) {
+        if self.paren_block_like_at_stmt_start(object) {
+            return;
+        }
+        if let ExprKind::PrefixCollectionLiteral { type_name, items } = &object.kind {
+            if type_name == "Vec" {
+                self.write_str("vec![");
+                for (i, e) in items.iter().enumerate() {
+                    if i > 0 {
+                        self.write_str(", ");
+                    }
+                    self.format_expr(e);
                 }
+                self.write_str("]");
+            } else {
+                self.write_str("(");
+                self.format_expr(object);
+                self.write_str(")");
             }
+            return;
+        }
+        self.format_operand(object, u8::MAX);
+    }
+
+    /// A value path with its explicit generic arguments. They follow the
+    /// type they belong to: the last segment of a call (`make[i64, 4](..)`,
+    /// `Vector[f32, 4](..)`), but the first of a qualified variant
+    /// (`Opt[i64].None`, `Sh[i64].Pt { .. }`).
+    fn write_path_with_args(
+        &mut self,
+        segments: &[String],
+        generic_args: &Option<Vec<GenericArg>>,
+        span: &crate::token::Span,
+    ) {
+        let variant = segments.len() == 2 && segments[1].starts_with(|c: char| c.is_uppercase());
+        if generic_args.is_none() || !variant {
+            self.write_path(segments);
+            self.format_generic_args_with_hasher(generic_args, span);
+        } else {
+            self.write_path(&segments[..1]);
+            self.format_generic_args_opt(generic_args);
+            self.write_str(".");
+            self.write_path(&segments[1..]);
+        }
+    }
+
+    /// The leftmost operand of an expression statement, when it is block-like
+    /// (`match x { .. }.to_string()`, `if c { a } else { b } + 1`): the parser
+    /// ends the statement at that `}`, so the parentheses the source needed
+    /// are written back. True when it wrote the operand.
+    fn paren_block_like_at_stmt_start(&mut self, e: &Expr) -> bool {
+        // A non-block-like operand keeps the flag: its own leftmost operand
+        // (`if ..` in `if .. >> a << b`) is the one at statement start.
+        if !self.stmt_start || !crate::parser::Parser::is_block_like_prefix(e) {
+            return false;
+        }
+        self.stmt_start = false;
+        self.write_str("(");
+        self.format_expr(e);
+        self.write_str(")");
+        true
+    }
+
+    pub(super) fn format_expr(&mut self, expr: &Expr) {
+        // Set by the statement printer; handed on only to the operand printed
+        // first, see `paren_block_like_at_stmt_start`.
+        let stmt_start = std::mem::take(&mut self.stmt_start);
+        match &expr.kind {
+            ExprKind::Integer(n, sfx) => self.write_str(&super::int_literal(*n, *sfx)),
             ExprKind::Float(f, sfx) => {
-                write!(self.output, "{f}").unwrap();
+                // `{:?}` keeps the `.0` (`1.0`, not `1`, which reads back as
+                // an integer) and writes a large or tiny value with an
+                // exponent rather than hundreds of digits.
+                write!(self.output, "{f:?}").unwrap();
                 if let Some(s) = sfx {
                     self.write_str(float_suffix_str(*s));
                 }
             }
-            ExprKind::CharLit(c) => write!(self.output, "'{c}'").unwrap(),
+            ExprKind::CharLit(c) => write!(self.output, "'{}'", super::escape_char(*c)).unwrap(),
             // `b"..."` — re-emit the quoted form, escaping exactly what the
             // lexer accepts so the output round-trips (B-2026-08-20-37).
             ExprKind::ByteStringLit(bytes) => {
@@ -143,11 +215,19 @@ impl super::Formatter {
                 for part in parts {
                     match part {
                         crate::ast::ParsedInterpolationPart::Text(s) => {
-                            self.write_str(&escape_string(s))
+                            // A literal brace in an f-string is doubled.
+                            let text = s.replace('{', "{{").replace('}', "}}");
+                            self.write_str(&escape_string(&text))
                         }
                         crate::ast::ParsedInterpolationPart::Expr(e, spec) => {
-                            self.write_str("{");
+                            // `{ {` keeps a block's own brace from reading as
+                            // the doubled `{{` of a literal brace.
+                            let pad = matches!(e.kind, ExprKind::Block(_));
+                            self.write_str(if pad { "{ " } else { "{" });
                             self.format_expr(e);
+                            if pad {
+                                self.write_str(" ");
+                            }
                             if let Some(spec) = spec {
                                 self.write_str(":");
                                 self.write_str(spec);
@@ -160,12 +240,16 @@ impl super::Formatter {
             }
             ExprKind::Bool(b) => self.write_str(if *b { "true" } else { "false" }),
             ExprKind::Identifier(name) => self.write_ident(name),
-            ExprKind::Path { segments, .. } => self.write_path(segments),
+            ExprKind::Path {
+                segments,
+                generic_args,
+            } => self.write_path_with_args(segments, generic_args, &expr.span),
             ExprKind::SelfValue => self.write_str("self"),
             ExprKind::SelfType => self.write_str("Self"),
 
             ExprKind::Binary { op, left, right } => {
                 let (l_bp, r_bp) = binop_power(op);
+                self.stmt_start = stmt_start;
                 self.format_operand(left, l_bp);
                 self.write_str(match op {
                     BinOp::Add => " + ",
@@ -203,6 +287,7 @@ impl super::Formatter {
                 self.format_operand(operand, UNARY_POWER);
             }
             ExprKind::Question(inner) => {
+                self.stmt_start = stmt_start;
                 self.format_operand(inner, u8::MAX);
                 self.write_str("?");
             }
@@ -211,7 +296,8 @@ impl super::Formatter {
                 field_or_method,
                 args,
             } => {
-                self.format_operand(object, u8::MAX);
+                self.stmt_start = stmt_start;
+                self.format_receiver(object);
                 self.write_str("?.");
                 self.write_ident(field_or_method);
                 if let Some(ref a) = args {
@@ -259,7 +345,8 @@ impl super::Formatter {
                 args,
                 ..
             } => {
-                self.format_operand(object, u8::MAX);
+                self.stmt_start = stmt_start;
+                self.format_receiver(object);
                 self.write_str(".");
                 // Any keyword is a member name after `.`; no `r#` needed.
                 self.write_str(method);
@@ -278,16 +365,19 @@ impl super::Formatter {
                 self.write_str(")");
             }
             ExprKind::FieldAccess { object, field } => {
-                self.format_operand(object, u8::MAX);
+                self.stmt_start = stmt_start;
+                self.format_receiver(object);
                 self.write_str(".");
                 self.write_str(field);
             }
             ExprKind::TupleIndex { object, index } => {
-                self.format_operand(object, u8::MAX);
+                self.stmt_start = stmt_start;
+                self.format_receiver(object);
                 write!(self.output, ".{index}").unwrap();
             }
             ExprKind::Index { object, index } => {
-                self.format_operand(object, u8::MAX);
+                self.stmt_start = stmt_start;
+                self.format_receiver(object);
                 self.write_str("[");
                 self.format_expr(index);
                 self.write_str("]");
@@ -586,9 +676,9 @@ impl super::Formatter {
                 path,
                 fields,
                 spread,
-                ..
+                generic_args,
             } => {
-                self.write_path(path);
+                self.write_path_with_args(path, generic_args, &expr.span);
                 self.write_str(" {\n");
                 self.push_indent();
                 for fi in fields {
@@ -613,12 +703,23 @@ impl super::Formatter {
                 self.write_str("}");
             }
             ExprKind::Pipe { left, right } => {
+                self.stmt_start = stmt_start;
                 self.format_operand(left, 2);
                 self.write_str(" |> ");
                 self.format_operand(right, 3);
             }
             ExprKind::PipePlaceholder => self.write_str("_"),
+            ExprKind::Cast { expr, .. } if layout_query_type(expr).is_some() => {
+                // `T.size_of()` reaches the tree as `size_of[T]() as i64`,
+                // whose one-argument brackets read back as an index.
+                let (name, t) = layout_query_type(expr).unwrap();
+                self.format_type_expr(t);
+                self.write_str(".");
+                self.write_str(name);
+                self.write_str("()");
+            }
             ExprKind::Cast { expr, ty } => {
+                self.stmt_start = stmt_start;
                 self.format_operand(expr, CAST_POWER);
                 self.write_str(" as ");
                 self.format_type_expr(ty);
@@ -733,5 +834,28 @@ impl super::Formatter {
             }
             self.format_expr(&arg.value);
         }
+    }
+}
+
+/// The type and query name of the call the parser builds for `T.size_of()` /
+/// `T.align_of()`.
+fn layout_query_type(e: &Expr) -> Option<(&str, &TypeExpr)> {
+    let ExprKind::Call { callee, args } = &e.kind else {
+        return None;
+    };
+    let ExprKind::Path {
+        segments,
+        generic_args: Some(ga),
+    } = &callee.kind
+    else {
+        return None;
+    };
+    match (segments.as_slice(), ga.as_slice()) {
+        ([name], [GenericArg::Type(t)])
+            if args.is_empty() && matches!(name.as_str(), "size_of" | "align_of") =>
+        {
+            Some((name.as_str(), t))
+        }
+        _ => None,
     }
 }

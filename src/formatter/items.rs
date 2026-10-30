@@ -95,6 +95,14 @@ impl super::Formatter {
 
     pub(super) fn format_attributes(&mut self, attrs: &[Attribute]) {
         for attr in attrs {
+            self.format_attribute(attr, false);
+        }
+    }
+
+    /// One attribute on its own line; `inner` writes the module-level
+    /// `#![..]` form.
+    pub(super) fn format_attribute(&mut self, attr: &Attribute, inner: bool) {
+        {
             self.write_indent();
             // Linker attributes that carry trust-boundary obligations
             // re-emit with their `#[unsafe(...)]` wrap (per design.md
@@ -115,10 +123,10 @@ impl super::Formatter {
                     self.write_str("\")");
                 }
                 self.write_str(")]\n");
-                continue;
+                return;
             }
 
-            self.write_str("#[");
+            self.write_str(if inner { "#![" } else { "#[" });
             // Multi-segment paths (`#[diagnostic::on_unimplemented]`,
             // `#[karafmt::skip]`) round-trip with `::` between segments
             // per syntax.md §8. Single-segment paths emit unchanged.
@@ -137,7 +145,7 @@ impl super::Formatter {
                     match (&arg.name, &arg.value) {
                         (Some(n), Some(v)) => {
                             self.write_ident(n);
-                            self.write_str(" = ");
+                            self.write_str(": ");
                             self.format_expr(v);
                         }
                         (Some(n), None) => self.write_ident(n),
@@ -164,17 +172,7 @@ impl super::Formatter {
                     if i > 0 {
                         self.write_str(", ");
                     }
-                    self.write_str(&crate::formatter::format_effect_verb_kind(&verb.kind));
-                    if !verb.resources.is_empty() {
-                        self.write_str("(");
-                        for (j, r) in verb.resources.iter().enumerate() {
-                            if j > 0 {
-                                self.write_str(", ");
-                            }
-                            self.write_path(&r.path);
-                        }
-                        self.write_str(")");
-                    }
+                    self.format_effect_verb(verb);
                 }
                 self.write_str(")");
             }
@@ -186,7 +184,7 @@ impl super::Formatter {
                 } else {
                     self.write_str("(\"");
                 }
-                self.write_str(s);
+                self.write_str(&super::escape_string(s));
                 self.write_str("\")");
             }
             self.write_str("]\n");
@@ -235,9 +233,11 @@ impl super::Formatter {
             self.format_return_type(rt);
         }
         self.format_effects(&f.effects);
-        self.format_where_clause(&f.where_clause);
+        // Contracts come before the `where` clause, which is what the
+        // parser reads.
         self.format_requires(&f.requires);
         self.format_ensures(&f.ensures);
+        self.format_where_clause(&f.where_clause);
         self.write_str(" ");
         self.format_block(&f.body);
         self.output.push('\n');
@@ -328,22 +328,29 @@ impl super::Formatter {
                 self.write_str(" ");
             }
             match item {
-                EffectItem::Verb(v) => {
-                    self.write_str(&format_effect_verb_kind(&v.kind));
-                    self.write_str("(");
-                    for (j, r) in v.resources.iter().enumerate() {
-                        if j > 0 {
-                            self.write_str(", ");
-                        }
-                        self.write_path(&r.path);
-                    }
-                    self.write_str(")");
-                }
+                EffectItem::Verb(v) => self.format_effect_verb(v),
                 EffectItem::Group(g) => self.write_ident(g),
                 EffectItem::Polymorphic => self.write_str("_"),
                 EffectItem::Variable(v) => self.write_ident(v),
             }
         }
+    }
+
+    /// `reads(Db)`, or a bare `suspends` / `panics` for a verb that names no
+    /// resource: `suspends()` does not parse.
+    pub(super) fn format_effect_verb(&mut self, v: &EffectVerb) {
+        self.write_str(&format_effect_verb_kind(&v.kind));
+        if v.resources.is_empty() {
+            return;
+        }
+        self.write_str("(");
+        for (j, r) in v.resources.iter().enumerate() {
+            if j > 0 {
+                self.write_str(", ");
+            }
+            self.write_path(&r.path);
+        }
+        self.write_str(")");
     }
 
     pub(super) fn format_requires(&mut self, requires: &[Expr]) {
@@ -361,8 +368,9 @@ impl super::Formatter {
             self.write_indent();
             self.write_str("    ensures ");
             if let Some(ref p) = e.param {
+                self.write_str("(");
                 self.write_ident(p);
-                self.write_str(" ");
+                self.write_str(") ");
             }
             self.format_expr(&e.body);
         }
@@ -443,6 +451,7 @@ impl super::Formatter {
         self.push_indent();
         for field in &s.fields {
             self.flush_comments_before(field.span.offset);
+            self.format_attributes(&field.attributes);
             self.write_indent();
             if field.is_pub {
                 self.write_str("pub ");
@@ -484,6 +493,7 @@ impl super::Formatter {
         self.push_indent();
         for field in &u.fields {
             self.flush_comments_before(field.span.offset);
+            self.format_attributes(&field.attributes);
             self.write_indent();
             if field.is_pub {
                 self.write_str("pub ");
@@ -517,6 +527,7 @@ impl super::Formatter {
         self.push_indent();
         for variant in &e.variants {
             self.flush_comments_before(variant.span.offset);
+            self.format_attributes(&variant.attributes);
             self.write_indent();
             self.write_ident(&variant.name);
             match &variant.kind {
@@ -536,6 +547,7 @@ impl super::Formatter {
                     self.push_indent();
                     for field in fields {
                         self.flush_comments_before(field.span.offset);
+                        self.format_attributes(&field.attributes);
                         self.write_indent();
                         self.write_ident(&field.name);
                         self.write_str(": ");
@@ -645,6 +657,7 @@ impl super::Formatter {
                     self.write_indent();
                     self.write_str("type ");
                     self.write_ident(&a.name);
+                    self.format_generic_params(&a.generic_params);
                     if !a.bounds.is_empty() {
                         self.write_str(": ");
                         for (i, b) in a.bounds.iter().enumerate() {
@@ -654,6 +667,7 @@ impl super::Formatter {
                             self.format_trait_bound(b);
                         }
                     }
+                    self.format_where_clause(&a.where_clause);
                     self.write_str(";\n");
                 }
             }
@@ -664,6 +678,7 @@ impl super::Formatter {
     }
 
     pub(super) fn format_trait_method(&mut self, m: &TraitMethod) {
+        self.format_attributes(&m.attributes);
         self.write_indent();
         if m.is_unsafe {
             self.write_str("unsafe ");
@@ -739,8 +754,10 @@ impl super::Formatter {
                     self.write_indent();
                     self.write_str("type ");
                     self.write_ident(&a.name);
+                    self.format_generic_params(&a.generic_params);
                     self.write_str(" = ");
                     self.format_type_expr(&a.ty);
+                    self.format_where_clause(&a.where_clause);
                     self.write_str(";\n");
                 }
             }
@@ -800,17 +817,7 @@ impl super::Formatter {
                 self.write_str(" ");
             }
             match term {
-                EffectGroupTerm::Verb(v) => {
-                    self.write_str(&format_effect_verb_kind(&v.kind));
-                    self.write_str("(");
-                    for (j, r) in v.resources.iter().enumerate() {
-                        if j > 0 {
-                            self.write_str(", ");
-                        }
-                        self.write_path(&r.path);
-                    }
-                    self.write_str(")");
-                }
+                EffectGroupTerm::Verb(v) => self.format_effect_verb(v),
                 EffectGroupTerm::GroupRef(g) => self.write_ident(g),
             }
         }
@@ -833,10 +840,14 @@ impl super::Formatter {
     // ── Layout ──────────────────────────────────────────────────
 
     pub(super) fn format_layout(&mut self, l: &LayoutDef) {
+        self.format_attributes(&l.attributes);
         self.write_indent();
+        if l.is_pub {
+            self.write_str("pub ");
+        }
         self.write_str("layout ");
         self.write_ident(&l.name);
-        self.write_str(" for ");
+        self.write_str(": ");
         self.format_type_expr(&l.collection_type);
         self.write_str(" {\n");
         self.push_indent();
@@ -866,7 +877,7 @@ impl super::Formatter {
                     self.write_str(" }\n");
                 }
                 LayoutItem::SplitByVariant(_) => {
-                    self.writeln("split_by_variant;");
+                    self.writeln("split_by_variant");
                 }
             }
         }
@@ -877,6 +888,7 @@ impl super::Formatter {
     // ── Const ───────────────────────────────────────────────────
 
     pub(super) fn format_const(&mut self, c: &ConstDecl) {
+        self.format_attributes(&c.attributes);
         self.write_indent();
         self.write_visibility(c.visibility());
         self.write_str("const ");
@@ -891,6 +903,7 @@ impl super::Formatter {
     // ── Module-Level Bindings ───────────────────────────────────
 
     pub(super) fn format_module_binding(&mut self, b: &ModuleBinding) {
+        self.format_attributes(&b.attributes);
         self.write_indent();
         self.write_visibility(b.visibility());
         self.write_str(if b.is_mut { "let mut " } else { "let " });
@@ -919,9 +932,17 @@ impl super::Formatter {
     // ── Extern ──────────────────────────────────────────────────
 
     pub(super) fn format_extern_fn(&mut self, e: &ExternFunction) {
+        self.format_attributes(&e.attributes);
         self.write_indent();
         self.write_visibility(e.visibility());
-        write!(self.output, "extern \"{}\" fn ", e.abi).unwrap();
+        // A top-level foreign function is a `host fn` (the wasm host
+        // import); a bare `extern "C" fn` is refused at module scope, so
+        // C imports only reach the printer inside their block.
+        if e.abi == "host" {
+            self.write_str("host fn ");
+        } else {
+            write!(self.output, "extern \"{}\" fn ", e.abi).unwrap();
+        }
         self.write_ident(&e.name);
         self.write_str("(");
         for (i, p) in e.params.iter().enumerate() {
@@ -1000,6 +1021,7 @@ impl super::Formatter {
     // ── Type Alias / Distinct ───────────────────────────────────
 
     pub(super) fn format_type_alias(&mut self, t: &TypeAliasDef) {
+        self.format_attributes(&t.attributes);
         self.write_indent();
         self.write_visibility(t.visibility());
         self.write_str("type ");
@@ -1007,6 +1029,7 @@ impl super::Formatter {
         self.format_generic_params(&t.generic_params);
         self.write_str(" = ");
         self.format_type_expr(&t.ty);
+        self.format_refinement(&t.refinement);
         self.write_str(";\n");
     }
 
@@ -1019,6 +1042,16 @@ impl super::Formatter {
         self.format_generic_params(&d.generic_params);
         self.write_str(" = ");
         self.format_type_expr(&d.base_type);
+        self.format_refinement(&d.refinement);
         self.write_str(";\n");
+    }
+
+    /// The `where <predicate>` of a refinement type (design.md § Refinement
+    /// Types).
+    fn format_refinement(&mut self, refinement: &Option<Expr>) {
+        if let Some(pred) = refinement {
+            self.write_str(" where ");
+            self.format_expr(pred);
+        }
     }
 }

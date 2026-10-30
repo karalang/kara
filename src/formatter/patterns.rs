@@ -3,7 +3,7 @@
 use crate::ast::*;
 use std::fmt::Write;
 
-use super::{escape_string, float_suffix_str, int_suffix_str};
+use super::{escape_string, float_suffix_str};
 
 impl super::Formatter {
     pub(super) fn format_pattern(&mut self, pat: &Pattern) {
@@ -143,19 +143,14 @@ impl super::Formatter {
 
     pub(super) fn format_literal_pattern(&mut self, lit: &LiteralPattern) {
         match lit {
-            LiteralPattern::Integer(n, sfx) => {
-                write!(self.output, "{n}").unwrap();
-                if let Some(s) = sfx {
-                    self.write_str(int_suffix_str(*s));
-                }
-            }
+            LiteralPattern::Integer(n, sfx) => self.write_str(&super::int_literal(*n, *sfx)),
             LiteralPattern::Float(f, sfx) => {
-                write!(self.output, "{f}").unwrap();
+                write!(self.output, "{f:?}").unwrap();
                 if let Some(s) = sfx {
                     self.write_str(float_suffix_str(*s));
                 }
             }
-            LiteralPattern::Char(c) => write!(self.output, "'{c}'").unwrap(),
+            LiteralPattern::Char(c) => write!(self.output, "'{}'", super::escape_char(*c)).unwrap(),
             LiteralPattern::String(s) => {
                 self.write_str("\"");
                 self.write_str(&escape_string(s));

@@ -38,6 +38,8 @@ fn format_program_inner(program: &Program, comments: Vec<comments::Comment>) -> 
     f.escaping_fn_types = program.escaping_fn_types.clone();
     f.mut_fn_types = program.mut_fn_types.clone();
     f.paren_return_types = program.paren_return_types.clone();
+    f.container_hashers = program.container_hashers.clone();
+    f.stmt_lint_overrides = program.stmt_lint_overrides.clone();
     f.format_program(program);
     f.output
 }
@@ -64,17 +66,7 @@ pub fn render_effect_list(effects: &EffectList) -> String {
         }
         first = false;
         match item {
-            EffectItem::Verb(v) => {
-                f.write_str(&format_effect_verb_kind(&v.kind));
-                f.write_str("(");
-                for (j, r) in v.resources.iter().enumerate() {
-                    if j > 0 {
-                        f.write_str(", ");
-                    }
-                    f.write_path(&r.path);
-                }
-                f.write_str(")");
-            }
+            EffectItem::Verb(v) => f.format_effect_verb(v),
             EffectItem::Group(g) => f.write_ident(g),
             EffectItem::Polymorphic => f.write_str("_"),
             EffectItem::Variable(v) => f.write_ident(v),
@@ -127,12 +119,22 @@ pub(super) struct Formatter {
     /// `-> (dyn T) with X` keeps its parentheses, which silence
     /// `return_clause_on_fn`.
     pub(super) paren_return_types: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
+    /// The hasher argument of `Map[K, V, H]` / `Set[T, H]`, which the parser
+    /// moves out of the tree (`Program::container_hashers`).
+    pub(super) container_hashers:
+        rustc_hash::FxHashMap<crate::resolver::SpanKey, crate::hasher_kind::HasherKind>,
+    /// `#[allow(lint)]` and the other lint levels written on a statement,
+    /// which the parser keeps beside the tree (`Program::stmt_lint_overrides`).
+    pub(super) stmt_lint_overrides:
+        rustc_hash::FxHashMap<crate::resolver::SpanKey, Vec<crate::lints::LintLevelOverride>>,
     /// The source's comments, in source order, and the index of the first
     /// one not yet written (`comments.rs`). Empty for a fragment.
     pub(super) comments: Vec<comments::Comment>,
     pub(super) next_comment: usize,
     /// `output.len()` just after a `//` comment ended a line.
     pub(super) line_comment_end: usize,
+    /// The expression being printed begins a statement (`exprs.rs`).
+    pub(super) stmt_start: bool,
 }
 
 impl Formatter {
@@ -146,9 +148,12 @@ impl Formatter {
             escaping_fn_types: rustc_hash::FxHashSet::default(),
             mut_fn_types: rustc_hash::FxHashSet::default(),
             paren_return_types: rustc_hash::FxHashSet::default(),
+            container_hashers: rustc_hash::FxHashMap::default(),
+            stmt_lint_overrides: rustc_hash::FxHashMap::default(),
             comments: Vec::new(),
             next_comment: 0,
             line_comment_end: usize::MAX,
+            stmt_start: false,
         }
     }
 
@@ -221,6 +226,13 @@ impl Formatter {
     // ── Program ─────────────────────────────────────────────────
 
     pub(super) fn format_program(&mut self, program: &Program) {
+        for attr in &program.inner_attrs {
+            self.flush_comments_before(attr.span.offset);
+            self.format_attribute(attr, true);
+        }
+        if !program.inner_attrs.is_empty() && !program.items.is_empty() {
+            self.output.push('\n');
+        }
         // Sort: use / import decls, then rest (preserving relative order within categories)
         let mut uses = Vec::new();
         let mut rest = Vec::new();
@@ -321,10 +333,13 @@ pub(super) fn path_str(segments: &[String]) -> String {
 /// cannot reach the formatter as a plain `name` — the lexer rejects raw
 /// escapes for them.
 pub(super) fn needs_raw_escape(name: &str) -> bool {
-    matches!(
-        name,
-        // Declarations
-        "fn" | "struct" | "enum" | "trait" | "impl" | "mod" | "use" | "import"
+    // A structural marker (`own`, ...) cannot take `r#`; where one appears
+    // as a name the parser reads it bare.
+    crate::token::is_raw_escapable(name)
+        && matches!(
+            name,
+            // Declarations
+            "fn" | "struct" | "enum" | "trait" | "impl" | "mod" | "use" | "import"
         | "const" | "type" | "distinct"
         // Visibility
         | "pub" | "private"
@@ -362,7 +377,7 @@ pub(super) fn needs_raw_escape(name: &str) -> bool {
         // Reserved-for-future-use keywords
         | "gen" | "become" | "do" | "final" | "override" | "priv" | "try"
         | "typeof" | "virtual" | "async" | "await" | "pure" | "box"
-    )
+        )
 }
 
 pub(super) fn format_effect_verb_kind(v: &EffectVerbKind) -> String {
@@ -375,6 +390,19 @@ pub(super) fn impl_item_name(item: &ImplItem) -> &str {
         ImplItem::Method(m) => &m.name,
         ImplItem::AssocType(a) => &a.name,
     }
+}
+
+/// An integer literal as the source wrote it. An unsigned one past the
+/// signed carrier's top rides it as the wrapped bit pattern (`u128::MAX` is
+/// `-1`), so it is printed as the unsigned value, not the carrier.
+pub(super) fn int_literal(n: i128, sfx: Option<IntSuffix>) -> String {
+    use IntSuffix::*;
+    let digits = match sfx {
+        Some(U128) if n < 0 => (n as u128).to_string(),
+        Some(U8 | U16 | U32 | U64 | Usize) if n < 0 => (n as i64 as u64).to_string(),
+        _ => n.to_string(),
+    };
+    digits + sfx.map_or("", int_suffix_str)
 }
 
 pub(super) fn int_suffix_str(s: IntSuffix) -> &'static str {
@@ -408,14 +436,38 @@ pub(super) fn escape_string(s: &str) -> String {
     for ch in s.chars() {
         match ch {
             '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c => out.push(c),
+            c => push_escaped(&mut out, c),
         }
     }
     out
+}
+
+/// A char literal's body: `'` is the character escaped, not `"`.
+pub(super) fn escape_char(c: char) -> String {
+    let mut out = String::new();
+    match c {
+        '\'' => out.push_str("\\'"),
+        c => push_escaped(&mut out, c),
+    }
+    out
+}
+
+/// One character of a string or char literal body, in a form the lexer reads
+/// back as that character: the named escapes, `\u{..}` for any other control
+/// character, and the character itself otherwise.
+fn push_escaped(out: &mut String, c: char) {
+    match c {
+        '\\' => out.push_str("\\\\"),
+        '\n' => out.push_str("\\n"),
+        '\r' => out.push_str("\\r"),
+        '\t' => out.push_str("\\t"),
+        '\0' => out.push_str("\\0"),
+        c if c.is_control() => {
+            use std::fmt::Write as _;
+            let _ = write!(out, "\\u{{{:X}}}", c as u32);
+        }
+        c => out.push(c),
+    }
 }
 
 #[cfg(test)]

@@ -85,11 +85,11 @@ impl super::Formatter {
             first = false;
             // Slice 8ac: effect-params declared via `E: Effect` carry
             // their bound list; positional `with E` has empty bounds.
-            // The formatter emits the canonical `effect E` form for
-            // the legacy spelling and `E: <bounds>` for the bounded
+            // The formatter emits `with E` (design.md's spelling; `effect
+            // E` no longer parses) and `E: <bounds>` for the bounded
             // spelling.
             if ep.bounds.is_empty() {
-                self.write_str("effect ");
+                self.write_str("with ");
                 self.write_ident(&ep.name);
             } else {
                 self.write_ident(&ep.name);
@@ -154,6 +154,33 @@ impl super::Formatter {
         self.write_str("]");
     }
 
+    /// Generic arguments, with the container hasher the parser took out of
+    /// them (`Map[K, V, FxBuildHasher]`) put back at the end.
+    pub(super) fn format_generic_args_with_hasher(
+        &mut self,
+        args: &Option<Vec<GenericArg>>,
+        span: &crate::token::Span,
+    ) {
+        let key = crate::resolver::SpanKey::from_span(span);
+        let Some(hasher) = self.container_hashers.get(&key).cloned() else {
+            return self.format_generic_args_opt(args);
+        };
+        self.format_generic_args_opt(args);
+        if self.output.ends_with(']') {
+            self.output.pop();
+            self.write_str(", ");
+        } else {
+            self.write_str("[");
+        }
+        use crate::hasher_kind::HasherKind;
+        self.write_str(match &hasher {
+            HasherKind::SipHash13 => "SipHash13BuildHasher",
+            HasherKind::Fx => "FxBuildHasher",
+            HasherKind::User(name) => name,
+        });
+        self.write_str("]");
+    }
+
     pub(super) fn format_generic_args_opt(&mut self, args: &Option<Vec<GenericArg>>) {
         let args = match args {
             Some(a) => a,
@@ -207,7 +234,7 @@ impl super::Formatter {
         match &ty.kind {
             TypeKind::Path(p) => {
                 self.write_path(&p.segments);
-                self.format_generic_args_opt(&p.generic_args);
+                self.format_generic_args_with_hasher(&p.generic_args, &ty.span);
             }
             TypeKind::Tuple(types) => {
                 self.write_str("(");
@@ -230,7 +257,7 @@ impl super::Formatter {
                 if *is_mut {
                     self.write_str("*mut ");
                 } else {
-                    self.write_str("*");
+                    self.write_str("*const ");
                 }
                 self.format_type_expr(inner);
             }

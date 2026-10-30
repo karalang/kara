@@ -20,6 +20,7 @@ impl super::Formatter {
             match &stmt.kind {
                 StmtKind::Expr(expr) if !block_stmt_needs_semicolon(expr, last) => {
                     self.write_indent();
+                    self.stmt_start = true;
                     self.format_expr(expr);
                     self.output.push('\n');
                 }
@@ -29,6 +30,7 @@ impl super::Formatter {
         if let Some(ref expr) = block.final_expr {
             self.flush_comments_before(expr.span.offset);
             self.write_indent();
+            self.stmt_start = true;
             self.format_expr(expr);
             self.output.push('\n');
         }
@@ -41,6 +43,17 @@ impl super::Formatter {
     // ── Statements ──────────────────────────────────────────────
 
     pub(super) fn format_stmt(&mut self, stmt: &Stmt) {
+        let key = crate::resolver::SpanKey::from_span(&stmt.span);
+        if let Some(overrides) = self.stmt_lint_overrides.get(&key).cloned() {
+            for o in overrides {
+                self.write_indent();
+                self.write_str("#[");
+                self.write_str(o.level.as_attr_name());
+                self.write_str("(");
+                self.write_str(&o.lint);
+                self.write_str(")]\n");
+            }
+        }
         match &stmt.kind {
             StmtKind::Let {
                 is_mut,
@@ -167,6 +180,7 @@ impl super::Formatter {
             }
             StmtKind::Expr(expr) => {
                 self.write_indent();
+                self.stmt_start = true;
                 self.format_expr(expr);
                 self.write_str(";\n");
             }
