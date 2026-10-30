@@ -123,7 +123,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-29-46 | 2026-10-29 | ownership | medium | `method_param_modes` is keyed by `"Type.method"`, so a type with two impls of one operator trait (`impl Add for Col` with a borrowing `rhs: Col` and `impl Add[Flags] for Col` with `rhs: own Flags`) gives every `col + x` the LAST impl's parameter modes: `a + b` then `a + b` is refused as a use of moved `b`, though the impl `a + b` calls borrows it and the MIR build runs it | — |
 | B-2026-10-29-47 | 2026-10-29 | ownership | medium | A program's own `struct Mask` is read as the SIMD scalar `Mask` by D5 (`COPY_SCALARS` in src/d5_params.rs lists "Mask" by name), so a bare `m: Mask` parameter is not rewritten to `ref Mask` and every call moves its argument: `count(m)` twice is refused as a use of moved `m`, and the same struct renamed `Bits` checks and runs | — |
 | B-2026-10-29-50 | 2026-10-29 | autopar | low | An auto-par task's loop takes its run's bounds as plain captures, so LLVM knows nothing of the counter's range: kata 4's `k % R` becomes a signed 64-bit magic division in the task (about 10 instructions) where the in-order loop, knowing 0 <= k < 10M, uses a 32-bit unsigned one (about 5) | — |
-| B-2026-10-30-1 | 2026-10-30 | ownership+mir | medium | Check reads a bare `dyn Trait` parameter as owned (d5_params skips `dyn`) while the MIR builder borrows it, so `fn keep(v: mut ref Vec[dyn Shape], s: dyn Shape) { v.push(s) }` passes check and MIR refuses it | — |
 | B-2026-10-30-2 | 2026-10-30 | ownership+mir | medium | A call through a `let` closure never moves an owned argument in check: `let take = |n: own String| n.len(); take(n); take(n)` passes check, and `__mir-run` refuses it ("use of _3, which may have been moved") | — |
 
 ### Relocated
@@ -406,6 +405,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-29-48 | effect | low | With a program `impl Mul[Col] for f64`, every `f64 * f64` in the program is attributed to that impl's `f64.mul` by the effect checker: a helper doing… | 1b299d7160 |
 | B-2026-10-29-49 | ownership | medium | A `let` closure whose parameter is typed `Str` still moves a `String` argument in `karac check` (`let skip = \|n: Str\| ..; skip(n); n.len()` is "moved… | fb03e6df09 |
 | B-2026-10-29-51 | effect | medium | An operator whose operands differ in type (`v * 2.0` on `impl Mul[f64] for V`, `2.0 * c` on `impl Mul[Col] for f64`) is never charged its impl's effe… | 1b299d7160 |
+| B-2026-10-30-1 | ownership+mir | medium | Check reads a bare `dyn Trait` parameter as owned (d5_params skips `dyn`) while the MIR builder borrows it, so `fn keep(v: mut ref Vec[dyn Shape], s:… | d423e29660 |
 
 </details>
 
