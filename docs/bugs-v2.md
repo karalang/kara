@@ -117,7 +117,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-30-23 | 2026-10-30 | mir | medium | A `dyn Handler with E` stored inside `Option` (`Vec[Option[dyn Handler with E]]`) loses its declared `with E` clause: a call through `if let Some(h) = s` is charged "unknown (a call through a `dyn` value a call hands back)", so `par { r.total(1), r.total(2) }` over effect-free handlers is refused; `Vec[dyn Handler with E]` is accepted | — |
 | B-2026-10-30-24 | 2026-10-30 | mir | low | E_STATEFUL_DEFAULT reached through a `dyn` method or a closure names the resource as its own caller ("`Ids` calls a `mut ref self` method of `Ids`") instead of the method or function that makes the call (`Minter.handle`) | — |
 | B-2026-10-30-25 | 2026-10-30 | typecheck | medium | A struct's effect variable is fixed by the FIRST value bound into it, so `router.add("/hello", Hello {}); router.add("/count", Counter { .. })` (a pure handler, then one that `blocks`) is refused while the same two calls in the other order check; design.md § Effect variables says a type's instance is fixed by its construction and later bindings within the same function | — |
-| B-2026-10-30-26 | 2026-10-30 | typecheck | medium | An element of a tuple literal did not coerce into its `dyn` slot: `routes.push((path, Hello {}))` into a `Vec[(String, dyn Handler)]`, `let t: (String, dyn Handler) = (.., Hello {})`, `Some((1, Hello {}))` and a nested tuple were refused as `found '(String, Hello)'`, while `Some(Hello {})` and a struct field coerced | — |
 
 ### Relocated
 
@@ -430,6 +429,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-30-14 | typecheck | medium | design.md § `as` casts promises `redundant_cast` (an identity cast) and `lossless_cast` (an `as` whose widening is implicit where it stands, its fix… | 8bd1a4d307 |
 | B-2026-10-30-15 | effect | medium | A resource method with a bare `self` is charged `writes(R)`, not `reads(R)` as core-semantics §14.2 says: `karac query effects` reports `writes(UserD… | 1a5e7ccb08 |
 | B-2026-10-30-21 | ownership | low | Moving a value while a returned reference into it is live (README's `name_of` example) says `help: drop the slice borrow before moving the source`, t… | 5a2a4a0b48 |
+| B-2026-10-30-26 | typecheck | medium | An element of a tuple literal did not coerce into its `dyn` slot: `routes.push((path, Hello {}))` into a `Vec[(String, dyn Handler)]`, `let t: (Strin… | 6c744eaf84 |
 
 </details>
 
