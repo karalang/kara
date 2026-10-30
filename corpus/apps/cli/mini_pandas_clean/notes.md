@@ -123,8 +123,8 @@ copied over from mini_pandas, which I added. Then there were 24 errors:
 `karac fix` applied 18 (seven `.copied()` on an `Option` to `.cloned()`,
 five `+` with a `Str` right operand, four `mut` markers on arguments, and
 two `.clone()`s on the arguments of a `let`-bound closure,
-B-2026-10-28-24, fixed in kara da37ab3afe; the clones stay because a
-`Str` parameter still moves a `String` argument, B-2026-10-29-49). Three were edited by hand: a closure passing a captured
+B-2026-10-28-24, fixed in kara da37ab3afe; with its remainder
+B-2026-10-29-49 fixed too, the clones are gone). Three were edited by hand: a closure passing a captured
 `String` to `replace` was refused as once-callable (B-2026-10-29-2), so
 the app passes `old.as_str()`, and two `.bytes().collect()` calls got
 the `.iter()` the message asked for, which `karac fix` did not apply
@@ -137,11 +137,11 @@ job. `mini_pandas_clean.orig.kara` is the program as first written.
   `fn(i64) -> i64`, Rust's two spellings, gets only `Expected
   RightParen, found LeftParen` (or `Expected type, found Fn`), with no
   hint that Kāra writes `Fn(i64) -> i64` and no fix-it.
-- **B-2026-10-29-49** (Thread A, open; a remainder of B-2026-10-28-24):
-  a `let` closure whose parameter is typed `Str` moves a `String`
-  argument, so `skip(n)` then `right.find(n)` is refused; `|n: String|`
-  and a `fn` with a `Str` parameter check. `merge_asof` calls
-  `skip(n.clone())` until it is fixed.
+- **B-2026-10-29-49** (fixed in kara fb03e6df09; a remainder of
+  B-2026-10-28-24): a `let` closure whose parameter is typed `Str` moved
+  a `String` argument, so `skip(n)` then `right.find(n)` was refused.
+  `merge_asof` called `skip(n.clone())` until the fix and is back to
+  `skip(n)`.
 - **B-2026-10-29-2** (fixed in 80e76392cf): `|s| s.replace(old, new)`
   with `old` a captured `String` was typed as consuming `old`, so
   `.map(...)` and any `Fn` slot refused it. `replacen`, `split`, `find`

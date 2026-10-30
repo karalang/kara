@@ -1951,8 +1951,6 @@ fn merge_asof(left: Frame, right: Frame, o: AsofOpts) -> Result[Frame, String] {
         }
         _ => asof_backward(l, r, lby, rby, use_by, o.exact, tol),
     };
-    // `skip(n.clone())` below works around B-2026-10-29-49 (a `Str`
-    // closure parameter moves a `String` argument); `skip(n)` is natural.
     let skip = |n: Str| {
         n == o.on or match o.by {
             Some(ref b) => n == b,
@@ -1962,13 +1960,13 @@ fn merge_asof(left: Frame, right: Frame, o: AsofOpts) -> Result[Frame, String] {
     let mut out = Frame.new();
     for j in 0..left.names.len() {
         let n = left.names[j].clone();
-        let clash = not skip(n.clone()) and right.find(n).is_some();
+        let clash = not skip(n) and right.find(n).is_some();
         out.names.push(if clash { f"{n}_x" } else { n });
         out.cols.push(left.cols[j].clone());
     }
     for j in 0..right.names.len() {
         let n = right.names[j].clone();
-        if skip(n.clone()) {
+        if skip(n) {
             continue;
         }
         let clash = left.find(n).is_some();
