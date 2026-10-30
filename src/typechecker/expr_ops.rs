@@ -3541,6 +3541,78 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// Whether comparison operand `side`, a constructor or tuple literal of
+    /// places and literals typed `side_ty`, is `other` but for `ref`s to
+    /// `Copy` values inside it, so it can be checked against `other`.
+    fn compare_reads_as_other(&mut self, side: &Expr, side_ty: &Type, other: &Type) -> bool {
+        fn plain(e: &Expr) -> bool {
+            match &e.kind {
+                ExprKind::Identifier(_)
+                | ExprKind::FieldAccess { .. }
+                | ExprKind::Integer(..)
+                | ExprKind::Float(..)
+                | ExprKind::Bool(_)
+                | ExprKind::CharLit(_)
+                | ExprKind::StringLit(_) => true,
+                _ => built(e),
+            }
+        }
+        fn built(e: &Expr) -> bool {
+            match &e.kind {
+                ExprKind::Tuple(es) => !es.is_empty() && es.iter().all(plain),
+                ExprKind::Call { callee, args } => {
+                    let ctor = match &callee.kind {
+                        ExprKind::Identifier(n) => n.as_str(),
+                        ExprKind::Path { segments, .. } => {
+                            segments.last().map(String::as_str).unwrap_or("")
+                        }
+                        _ => "",
+                    };
+                    matches!(ctor, "Some" | "Ok" | "Err") && args.iter().all(|a| plain(&a.value))
+                }
+                _ => false,
+            }
+        }
+        if !built(side)
+            || side_ty == other
+            || super::exprs::contains_type_var(other)
+            || self.mentions_foreign_param(other)
+        {
+            return false;
+        }
+        self.reads_as(other, side_ty)
+    }
+
+    /// `have` is `want` but for `ref`s to `Copy` values it holds, at the top
+    /// or inside an `Option` / `Result` / tuple, and for a variant's
+    /// parameters nothing decided.
+    fn reads_as(&self, want: &Type, have: &Type) -> bool {
+        match (want, have) {
+            (w, Type::Ref(inner)) if !matches!(w, Type::Ref(_) | Type::MutRef(_)) => {
+                **inner == *w && self.is_copy_type_during_check(inner)
+            }
+            (Type::Tuple(ws), Type::Tuple(hs)) if ws.len() == hs.len() => ws
+                .iter()
+                .zip(hs)
+                .all(|(w, h)| w == h || self.reads_as(w, h)),
+            (Type::Named { name: wn, args: wa }, Type::Named { name: hn, args: ha })
+                if wn == hn
+                    && wa.len() == ha.len()
+                    && matches!(wn.as_str(), "Option" | "Result") =>
+            {
+                // A parameter nothing decided (`Ok(n)`'s error type) is
+                // the other side's.
+                wa.iter().zip(ha).all(|(w, h)| {
+                    w == h
+                        || self.reads_as(w, h)
+                        || matches!(h, Type::TypeVar(_))
+                        || (matches!(h, Type::TypeParam(_)) && self.mentions_foreign_param(h))
+                })
+            }
+            _ => false,
+        }
+    }
+
     pub(super) fn infer_binary(
         &mut self,
         op: &BinOp,
@@ -3575,10 +3647,28 @@ impl<'a> super::TypeChecker<'a> {
                 }
             }
         }
-        let left_ty = strip_refinement(&self.infer_expr(left)).clone();
-        let right_ty = strip_refinement(&self.infer_expr(right)).clone();
+        let mut left_ty = strip_refinement(&self.infer_expr(left)).clone();
+        let mut right_ty = strip_refinement(&self.infer_expr(right)).clone();
         for key in borrowed {
             self.borrowed_deref_operands.remove(&key);
+        }
+        // B-2026-10-29-35 — a constructor or tuple operand of a comparison is
+        // checked against the other operand's type where it differs from it
+        // only by `ref`s to `Copy` values: `value == Some(n)` with `n` an
+        // item of `v.iter()` reads `n` as the `i64` it is (core-semantics
+        // §5.10), as `let w: Option[i64] = Some(n)` does.
+        if compares {
+            if self.compare_reads_as_other(right, &right_ty, &left_ty) {
+                self.check_expr(right, &left_ty);
+                self.record_expr_type(&right.span, &left_ty);
+                self.record_node_type(right.id, &left_ty);
+                right_ty = left_ty.clone();
+            } else if self.compare_reads_as_other(left, &left_ty, &right_ty) {
+                self.check_expr(left, &right_ty);
+                self.record_expr_type(&left.span, &right_ty);
+                self.record_node_type(left.id, &right_ty);
+                left_ty = right_ty.clone();
+            }
         }
 
         if left_ty == Type::Error || right_ty == Type::Error {

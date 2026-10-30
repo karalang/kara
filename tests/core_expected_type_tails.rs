@@ -4,7 +4,9 @@
 //! A constructor that does not seed keeps the expectation from a generic
 //! call inside its payload (B-2026-10-29-5), and a constructor's literal
 //! arguments take their type from any slot that names it (B-2026-10-29-24).
-//! `karac check` accepts each program and every backend prints its oracle.
+//! A comparison's constructor or tuple operand takes the other operand's
+//! type (B-2026-10-29-35). `karac check` accepts each program and every
+//! backend prints its oracle.
 
 use std::process::{Command, Output, Stdio};
 
@@ -201,6 +203,50 @@ fn main() {
         !out.status.success()
             && err.contains("integer literal 300 out of range for 'u8'")
             && err.contains("integer literal 256 out of range for 'u8'"),
+        "{err}"
+    );
+}
+
+/// A comparison checks a constructor or tuple operand against the other
+/// operand's type, so a `ref` to a `Copy` item inside it reads as the value
+/// (core-semantics §5.10; B-2026-10-29-35), on either side and under `!=`.
+/// A `ref String` is not `Copy` and stays refused.
+#[test]
+fn comparison_reads_a_copy_ref_in_a_constructor_operand() {
+    runs(
+        "compare",
+        "fn main() {
+    let ns = vec![1, 2, 3];
+    let value: Option[i64] = Some(2);
+    let pair = (2, 5);
+    let r: Result[i64, String] = Ok(3);
+    for n in ns.iter() {
+        if value == Some(n) { println(f\"a {n}\"); }
+        if Some(n) == value { println(f\"b {n}\"); }
+        if value != Some(n) { println(f\"c {n}\"); }
+        if pair == (n, 5) { println(f\"d {n}\"); }
+        if r == Ok(n) { println(f\"e {n}\"); }
+    }
+}
+",
+        "c 1\na 2\nb 2\nd 2\nc 3\ne 3\n",
+    );
+    let out = karac(
+        "compare-string",
+        "check",
+        "fn main() {
+    let names = vec![\"x\".to_string()];
+    for w in names.iter() {
+        let o: Option[String] = Some(\"x\".to_string());
+        if o == Some(w) { println(\"w\"); }
+    }
+}
+",
+    );
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success()
+            && err.contains("cannot compare 'Option[String]' and 'Option[ref String]'"),
         "{err}"
     );
 }
