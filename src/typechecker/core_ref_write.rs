@@ -1397,10 +1397,7 @@ impl Walk<'_, '_> {
         if ty == "Server" && method.starts_with("serve") && method != "serve_static" {
             self.check_handler_response(call, method);
         }
-        if !matches!(
-            ty,
-            "Base64" | "Hex" | "Url" | "Stats" | "Column" | "DataFrame" | "LazyExpr" | "Tensor"
-        ) {
+        if !crate::prelude::REMOVED_LIBRARY_TYPES.contains(&ty) {
             return false;
         }
         // A local of that name, or a program's own type, is not the library's.

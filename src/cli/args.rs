@@ -1891,10 +1891,7 @@ fn parse_fix_command(args: &[String]) -> Command {
             }
         }
     }
-    let Some(file) = file else {
-        eprintln!("error: missing file argument for `karac fix`");
-        process::exit(1);
-    };
+    // No file: the package around the working directory (B-2026-10-30-28).
     Command::Fix { file, dry_run }
 }
 

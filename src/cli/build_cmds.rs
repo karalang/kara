@@ -562,7 +562,7 @@ pub(super) fn print_parse_errors_text(parse_errors: &[ModuleParseErrors]) {
         for err in &pe.errors {
             eprintln!(
                 "error[parse]: {}:{}:{}: {}",
-                pe.file.display(),
+                super::project_v2::shown(&pe.file),
                 err.span.line,
                 err.span.column,
                 err.message,
@@ -830,18 +830,24 @@ pub(super) fn resolve_error_code(kind: &ResolveErrorKind) -> &'static str {
 
 pub(super) fn print_resolve_errors_text(per_module: &[ModuleResolveErrors]) {
     for re in per_module {
-        let file = re.file.display().to_string();
+        let file = super::project_v2::shown(&re.file);
         for err in &re.errors {
             let code = resolve_error_code(&err.kind);
             eprintln!(
                 "error[{code}]: {}:{}:{}: {}",
-                re.file.display(),
+                super::project_v2::shown(&re.file),
                 err.span.line,
                 err.span.column,
                 err.message,
             );
             if let Some(ref s) = err.suggestion {
-                eprintln!("  help: did you mean `{s}`?");
+                // A name to put in place reads as a correction; any other
+                // suggestion (E0111's "mark `x` as `pub` ...") is the help.
+                if err.replacement.is_some() {
+                    eprintln!("  help: did you mean `{s}`?");
+                } else {
+                    eprintln!("  help: {s}");
+                }
             }
             if let Some(ref stub) = err.stub_hint {
                 let target_file = sibling_production_file(&file);
@@ -950,7 +956,7 @@ pub(super) fn print_late_failure_text(f: &MultiFileLateFailure) {
 pub(super) fn resolve_errors_json(per_module: &[ModuleResolveErrors]) -> Vec<String> {
     let mut out = Vec::new();
     for re in per_module {
-        let file = re.file.display().to_string();
+        let file = super::project_v2::shown(&re.file);
         for err in &re.errors {
             let code = resolve_error_code(&err.kind);
             let suggestion = match err.suggestion.as_deref() {
@@ -980,7 +986,7 @@ pub(super) fn resolve_errors_json(per_module: &[ModuleResolveErrors]) -> Vec<Str
 pub(super) fn resolve_errors_jsonl(per_module: &[ModuleResolveErrors]) -> Vec<String> {
     let mut out = Vec::new();
     for re in per_module {
-        let file = re.file.display().to_string();
+        let file = super::project_v2::shown(&re.file);
         for err in &re.errors {
             let code = resolve_error_code(&err.kind);
             let suggestion = match err.suggestion.as_deref() {
@@ -1131,7 +1137,7 @@ pub(super) fn print_type_warnings_text(per_module: &[ModuleTypeErrors]) {
             let label = warn.lint_name.as_deref().unwrap_or("typecheck");
             eprintln!(
                 "warning[{label}]: {}:{}:{}: {}",
-                te.file.display(),
+                super::project_v2::shown(&te.file),
                 warn.span.line,
                 warn.span.column,
                 warn.message,
@@ -1153,7 +1159,7 @@ pub(super) fn print_type_errors_text(per_module: &[ModuleTypeErrors]) {
                 .unwrap_or_else(|| type_error_code(&err.kind).to_string());
             eprintln!(
                 "error[{code}]: {}:{}:{}: {}",
-                te.file.display(),
+                super::project_v2::shown(&te.file),
                 err.span.line,
                 err.span.column,
                 err.message,
@@ -1168,7 +1174,7 @@ pub(super) fn print_type_errors_text(per_module: &[ModuleTypeErrors]) {
 pub(super) fn type_warnings_json(per_module: &[ModuleTypeErrors]) -> Vec<String> {
     let mut out = Vec::new();
     for te in per_module {
-        let file = te.file.display().to_string();
+        let file = super::project_v2::shown(&te.file);
         for warn in &te.errors {
             let mut record = format!(
                 "{{\"severity\":\"warning\",\"phase\":\"typecheck\",\"file\":{},\"line\":{},\"column\":{},\"message\":{}",
@@ -1190,7 +1196,7 @@ pub(super) fn type_warnings_json(per_module: &[ModuleTypeErrors]) -> Vec<String>
 pub(super) fn type_errors_json(per_module: &[ModuleTypeErrors]) -> Vec<String> {
     let mut out = Vec::new();
     for te in per_module {
-        let file = te.file.display().to_string();
+        let file = super::project_v2::shown(&te.file);
         for err in &te.errors {
             let code = type_error_code(&err.kind);
             let mut record = format!(
@@ -1218,7 +1224,7 @@ pub(super) fn type_errors_json(per_module: &[ModuleTypeErrors]) -> Vec<String> {
 pub(super) fn type_errors_jsonl(per_module: &[ModuleTypeErrors]) -> Vec<String> {
     let mut out = Vec::new();
     for te in per_module {
-        let file = te.file.display().to_string();
+        let file = super::project_v2::shown(&te.file);
         for err in &te.errors {
             let code = type_error_code(&err.kind);
             let mut record = format!(
@@ -1590,7 +1596,15 @@ pub(super) fn package_check_on(
 
 pub(super) fn print_cycles_text(cycles: &[Cycle], tree: &ProgramTree) {
     for c in cycles {
-        eprintln!("error[E0223]: circular module dependency");
+        match c.closing_import(tree) {
+            Some((file, span)) => eprintln!(
+                "error[E0223]: {}:{}:{}: circular module dependency",
+                super::project_v2::shown(file),
+                span.line,
+                span.column
+            ),
+            None => eprintln!("error[E0223]: circular module dependency"),
+        }
         eprintln!("  cycle: {}", c.format(tree));
         // Name the FILE behind each module on the cycle (B-2026-08-20-19). A
         // cycle is the one module diagnostic with no single span to point at —
@@ -1605,7 +1619,7 @@ pub(super) fn print_cycles_text(cycles: &[Cycle], tree: &ProgramTree) {
             } else {
                 m.path.join(".")
             };
-            eprintln!("    {label}  {}", m.file.display());
+            eprintln!("    {label}  {}", super::project_v2::shown(&m.file));
         }
         eprintln!(
             "  suggestion: extract the shared items into a lower-layer module that both ends of the cycle can depend on."
@@ -1616,7 +1630,7 @@ pub(super) fn print_cycles_text(cycles: &[Cycle], tree: &ProgramTree) {
 pub(super) fn parse_errors_json(parse_errors: &[ModuleParseErrors]) -> Vec<String> {
     let mut out = Vec::new();
     for pe in parse_errors {
-        let file = pe.file.display().to_string();
+        let file = super::project_v2::shown(&pe.file);
         for err in &pe.errors {
             out.push(format!(
                 "{{\"severity\":\"error\",\"phase\":\"parse\",\"code\":\"E0001\",\"file\":{},\"line\":{},\"column\":{},\"message\":{}}}",
@@ -1650,10 +1664,22 @@ pub(super) fn cycles_json(cycles: &[Cycle], tree: &ProgramTree) -> Vec<String> {
             let files: Vec<String> = c
                 .nodes
                 .iter()
-                .map(|id| json_string(&tree.modules[*id].file.display().to_string()))
+                .map(|id| json_string(&super::project_v2::shown(&tree.modules[*id].file)))
                 .collect();
+            // Located at the import that closes the cycle (B-2026-10-30-32).
+            let at = c
+                .closing_import(tree)
+                .map(|(file, span)| {
+                    format!(
+                        ",\"file\":{},\"line\":{},\"column\":{}",
+                        json_string(&super::project_v2::shown(file)),
+                        span.line,
+                        span.column
+                    )
+                })
+                .unwrap_or_default();
             format!(
-                "{{\"severity\":\"error\",\"phase\":\"module_graph\",\"code\":\"E0223\",\"message\":{},\"cycle_paths\":[{}],\"cycle_files\":[{}]}}",
+                "{{\"severity\":\"error\",\"phase\":\"module_graph\",\"code\":\"E0223\"{at},\"message\":{},\"cycle_paths\":[{}],\"cycle_files\":[{}]}}",
                 json_string(&c.format(tree)),
                 paths_json.join(","),
                 files.join(","),
@@ -1665,7 +1691,7 @@ pub(super) fn cycles_json(cycles: &[Cycle], tree: &ProgramTree) -> Vec<String> {
 pub(super) fn parse_errors_jsonl(parse_errors: &[ModuleParseErrors]) -> Vec<String> {
     let mut out = Vec::new();
     for pe in parse_errors {
-        let file = pe.file.display().to_string();
+        let file = super::project_v2::shown(&pe.file);
         for err in &pe.errors {
             out.push(format!(
                 "{{\"type\":\"parse_error\",\"file\":{},\"line\":{},\"column\":{},\"message\":{}}}",

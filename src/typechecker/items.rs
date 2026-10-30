@@ -87,6 +87,8 @@ impl<'a> super::TypeChecker<'a> {
             || self.compiling_stdlib
             || !crate::prelude::PRELUDE_TYPES.contains(&name)
             || crate::library_imports::is_import_required(name)
+            // A name v1's library does not have (B-2026-10-30-34).
+            || crate::prelude::REMOVED_LIBRARY_TYPES.contains(&name)
         {
             return;
         }

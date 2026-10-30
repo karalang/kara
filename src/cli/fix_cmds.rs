@@ -104,6 +104,55 @@ pub(super) fn cmd_debug(input: &str, output: OutputMode) {
 /// Other diagnostic kinds carry descriptive (multi-step) suggestions
 /// that are not mechanically applicable; they remain visible through
 /// `karac check` and must be acted on by hand.
+/// `karac fix` with no file: every `.kara` file under the package's `src/`,
+/// tests included, in path order, each fixed from the package's view of it
+/// as `karac fix <file>` does (B-2026-10-30-28). A fix in one module is on
+/// disk before the next module is checked.
+/// Set while `karac fix` with no file walks the package.
+static FIXING_PACKAGE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub(super) fn cmd_fix_project(dry_run: bool) {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let Some(root) = crate::manifest::discover_project_root(&cwd) else {
+        eprintln!(
+            "error[E0227]: `karac fix` with no file fixes the package around the working \
+             directory, and there is no `kara.toml` here or above it; name a file: \
+             `karac fix <file.kara>`"
+        );
+        process::exit(1);
+    };
+    let mut files = Vec::new();
+    let mut dirs = vec![root.join("src")];
+    while let Some(dir) = dirs.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                dirs.push(path);
+            } else if path.extension().is_some_and(|e| e == "kara") {
+                files.push(path);
+            }
+        }
+    }
+    files.sort();
+    if files.is_empty() {
+        eprintln!(
+            "error: no `.kara` files under {}",
+            root.join("src").display()
+        );
+        process::exit(1);
+    }
+    FIXING_PACKAGE.store(true, std::sync::atomic::Ordering::Relaxed);
+    for path in files {
+        // Shown as the user would name it: relative to the working
+        // directory when the package is under it.
+        let shown = path.strip_prefix(&cwd).unwrap_or(&path);
+        cmd_fix(&shown.to_string_lossy(), dry_run);
+    }
+}
+
 pub(super) fn cmd_fix(filename: &str, dry_run: bool) {
     let source = read_source(filename);
     let mut pipeline = Pipeline::new(filename, &source)
@@ -491,7 +540,8 @@ fn package_member_fixes(filename: &str, source: &str) -> Option<FixSet> {
             }
         }
     }
-    if !elsewhere.is_empty() {
+    // A package-wide `karac fix` visits the file each names anyway.
+    if !elsewhere.is_empty() && !FIXING_PACKAGE.load(std::sync::atomic::Ordering::Relaxed) {
         eprintln!(
             "note: {} fix(es) of the package at `{}` lie outside {filename}; run `karac fix` \
              on the file each names",

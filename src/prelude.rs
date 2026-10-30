@@ -66,6 +66,22 @@ pub const PRELUDE_PRIMITIVES: &[&str] = &[
     "bf16", "f32", "f64", "bool", "char", "String",
 ];
 
+/// Names the legacy library baked in that v1 does not have: the
+/// `Base64` / `Hex` / `Url` namespaces are `std.encoding`'s free functions,
+/// and `Stats`, `Column`, `DataFrame`, `LazyExpr` and `Tensor` come with the
+/// post-v1 `kara-data` package (docs/library/README.md, data.md). A
+/// program's own type of one of these names shadows nothing it could use.
+pub const REMOVED_LIBRARY_TYPES: &[&str] = &[
+    "Base64",
+    "Hex",
+    "Url",
+    "Stats",
+    "Column",
+    "DataFrame",
+    "LazyExpr",
+    "Tensor",
+];
+
 /// Stdlib type names visible without import. These are the placeholder
 /// targets that `register_builtin_types` (typechecker.rs) backs with real
 /// type-environment entries today; the follow-up stdlib-materialisation CR

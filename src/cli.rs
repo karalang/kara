@@ -444,7 +444,8 @@ pub enum Command {
     /// emitted by the resolver. With `--dry-run`, prints the would-be
     /// rewrites without touching disk.
     Fix {
-        file: String,
+        /// `None`: every module of the package around the working directory.
+        file: Option<String>,
         dry_run: bool,
     },
     /// Scaffold a new Kāra project. Bare `karac init` scaffolds into the
@@ -977,7 +978,14 @@ pub fn execute(cmd: Command) {
         } => cmd_query(kind, &file, &function),
         Command::Fmt { file } => cmd_fmt(&file),
         Command::Debug { input, output } => cmd_debug(&input, output),
-        Command::Fix { file, dry_run } => cmd_fix(&file, dry_run),
+        Command::Fix {
+            file: Some(file),
+            dry_run,
+        } => cmd_fix(&file, dry_run),
+        Command::Fix {
+            file: None,
+            dry_run,
+        } => cmd_fix_project(dry_run),
         Command::Init {
             directory,
             template,

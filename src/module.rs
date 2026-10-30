@@ -24,6 +24,7 @@
 use crate::ast::{ExternItem, ImportDecl, ImportItem, Item, Program, Visibility};
 use crate::parser::ParseError;
 use crate::prelude;
+use crate::token::Span;
 use crate::walker::{self, WalkResult};
 use std::collections::HashMap;
 use std::fs;
@@ -1373,6 +1374,26 @@ pub struct Cycle {
 }
 
 impl Cycle {
+    /// The import that closes the cycle: the last module's import of the
+    /// first, as a file and the import's span (B-2026-10-30-32). Any edge
+    /// of a cycle is one place to break it; this one is where the
+    /// rendering's loop closes.
+    pub fn closing_import<'t>(&self, tree: &'t ProgramTree) -> Option<(&'t PathBuf, Span)> {
+        let first = &tree.modules[*self.nodes.first()?].path;
+        let last = &tree.modules[*self.nodes.last()?];
+        last.imports
+            .iter()
+            .find(|imp| {
+                &imp.path == first
+                    || imp.items.iter().any(|it| {
+                        imp.path.len() + 1 == first.len()
+                            && first.starts_with(&imp.path)
+                            && first.last() == Some(&it.name)
+                    })
+            })
+            .map(|imp| (&last.file, imp.span))
+    }
+
     /// Canonical dotted-path rendering: `a → a.b → a.b.c → a`. The closing
     /// edge is shown explicitly so the cycle reads as a loop, not a path.
     pub fn format(&self, tree: &ProgramTree) -> String {

@@ -2144,6 +2144,12 @@ impl<'a> super::Resolver<'a> {
                         replacement: s.clone(),
                     })
                 });
+                // B-2026-10-30-27: the fix renames the item; with no alias
+                // it binds the corrected name, which a use may already say.
+                if let (Some(_), Some(s), None) = (&replacement, &suggestion, &item.alias) {
+                    self.failed_import_fixes
+                        .insert((self.current_module, s.clone()), item.name.clone());
+                }
                 self.errors.push(ResolveError {
                     message,
                     span: item.span,

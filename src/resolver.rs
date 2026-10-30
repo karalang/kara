@@ -1288,6 +1288,12 @@ pub struct Resolver<'a> {
     /// via [`Resolver::with_target_tombstones`]; project mode adopts it
     /// off the `ProgramTree` in [`Resolver::with_tree`].
     pub(crate) target_tombstones: FxHashMap<String, String>,
+    /// B-2026-10-30-27: an import of an unknown item whose E0113 offers a
+    /// replacement, by the module it is in and the name the replacement
+    /// binds, mapped to the name the import binds as written. A use of the
+    /// replacement's name is the same mistake, which the import's fix
+    /// mends, and the misspelled name is never offered as a correction.
+    pub(crate) failed_import_fixes: FxHashMap<(Option<ModuleId>, String), String>,
     /// Names this module cannot bind because two wildcard imports both offer
     /// them, mapped to the offering module paths — adopted from
     /// [`ProgramTree::wildcard_ambiguities`] by [`Resolver::with_tree`]. A
@@ -1388,6 +1394,7 @@ impl<'a> Resolver<'a> {
             lone_file: false,
             call_callee_span: None,
             target_tombstones: FxHashMap::default(),
+            failed_import_fixes: FxHashMap::default(),
             wildcard_ambiguities: FxHashMap::default(),
             unexpanded_wildcard_import: false,
             error_fix_diffs: FxHashMap::default(),
@@ -1851,8 +1858,32 @@ impl<'a> Resolver<'a> {
         true
     }
 
+    /// B-2026-10-30-27: `name` is what a failed import's fix binds in this
+    /// module, so the import's E0113 already reports this use's mistake.
+    fn named_by_failed_import_fix(&self, name: &str) -> bool {
+        self.failed_import_fixes
+            .contains_key(&(self.current_module, name.to_string()))
+    }
+
+    /// The names in scope a correction may offer: not a name bound only by
+    /// an import that failed to resolve.
+    fn suggestable_names(&self) -> Vec<&str> {
+        let failed: Vec<&str> = self
+            .failed_import_fixes
+            .iter()
+            .filter(|((m, _), _)| *m == self.current_module)
+            .map(|(_, bound)| bound.as_str())
+            .collect();
+        let mut names = self.table.visible_names();
+        names.retain(|n| !failed.contains(n));
+        names
+    }
+
     fn error_undefined_name(&mut self, name: &str, span: Span) {
         if self.report_ambiguous_wildcard(name, span) {
+            return;
+        }
+        if self.named_by_failed_import_fix(name) {
             return;
         }
         if self.wildcard_hides_unresolved_names() {
@@ -1898,7 +1929,7 @@ impl<'a> Resolver<'a> {
             });
             return;
         }
-        let visible = self.table.visible_names();
+        let visible = self.suggestable_names();
         // Same known-rename preference as `error_undefined_type` — the
         // constructor half (`TreeMap.new()`) resolves as a NAME.
         let suggestion = Self::renamed_stdlib_type(name)
@@ -2005,7 +2036,10 @@ impl<'a> Resolver<'a> {
         span: Span,
         args: &[CallArg],
     ) {
-        let visible = self.table.visible_names();
+        if self.named_by_failed_import_fix(name) {
+            return;
+        }
+        let visible = self.suggestable_names();
         // Same known-rename preference as `error_undefined_type` — the
         // constructor half (`TreeMap.new()`) resolves as a NAME.
         let suggestion = Self::renamed_stdlib_type(name)
@@ -2095,6 +2129,9 @@ impl<'a> Resolver<'a> {
         if self.report_ambiguous_wildcard(name, span) {
             return;
         }
+        if self.named_by_failed_import_fix(name) {
+            return;
+        }
         if self.effect_vars_in_scope.iter().any(|v| v == name) {
             self.errors.push(ResolveError {
                 message: format!(
@@ -2112,7 +2149,7 @@ impl<'a> Resolver<'a> {
         if self.wildcard_hides_unresolved_names() {
             return;
         }
-        let visible = self.table.visible_names();
+        let visible = self.suggestable_names();
         // A known rename wins over edit distance — `TreeMap` is nowhere near
         // `SortedMap` by distance, so the generic suggester cannot find it.
         let suggestion = Self::renamed_stdlib_type(name)

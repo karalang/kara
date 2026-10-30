@@ -80,8 +80,9 @@ COMMANDS:
     debug <crash>     Render a std.panic crash report (JSON file, or `-` for
                       stdin) as a human-readable report; --output=json
                       re-emits the structured form.
-    fix <file>        Apply machine-applicable suggestions (e.g. resolver
-                      `did you mean` corrections) to a .kara file. Use
+    fix [<file>]      Apply machine-applicable suggestions (e.g. resolver
+                      `did you mean` corrections) to a .kara file, or with
+                      no file to every file of the package. Use
                       --dry-run to preview without writing.
     migrate shared-to-par <Type> [<file>]
                       Preemptively migrate a `shared struct` to `sync struct`.

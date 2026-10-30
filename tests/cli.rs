@@ -11278,10 +11278,18 @@ fn test_fix_unknown_flag_rejected() {
 
 #[test]
 fn test_fix_missing_file_arg_rejected() {
-    let out = karac_bin().arg("fix").output().unwrap();
+    // With no file, `karac fix` fixes the package around the working
+    // directory (B-2026-10-30-28); outside a package it asks for a file.
+    let dir = std::env::temp_dir().join(format!("karac-fix-nofile-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let out = karac_bin().arg("fix").current_dir(&dir).output().unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("missing file argument"));
+    assert!(
+        stderr.contains("name a file: `karac fix <file.kara>`"),
+        "{stderr}"
+    );
 }
 
 #[test]
@@ -11411,7 +11419,7 @@ fn test_main_help_lists_fix_command() {
     let out = karac_bin().arg("help").output().unwrap();
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.contains("fix <file>"));
+    assert!(stdout.contains("fix [<file>]"));
 }
 
 #[test]
