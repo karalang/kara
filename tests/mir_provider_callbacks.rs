@@ -78,24 +78,6 @@ fn check_refuses(tag: &str, src: &str, why: &str) {
     }
 }
 
-/// `src` checks, and every backend refuses it naming `why`.
-fn refused(tag: &str, src: &str, why: &str) {
-    for b in backends() {
-        let out = karac(tag, b, src);
-        let (stdout, stderr) = (
-            String::from_utf8_lossy(&out.stdout),
-            String::from_utf8_lossy(&out.stderr),
-        );
-        if *b == "check" {
-            assert!(out.status.success(), "{tag}: {stdout}{stderr}");
-            continue;
-        }
-        assert!(!out.status.success(), "{tag} on {b}: ran: {stdout}");
-        assert!(stdout.is_empty(), "{tag} on {b}: printed {stdout}");
-        assert!(stderr.contains(why), "{tag} on {b}: {stderr}");
-    }
-}
-
 /// A `Fn` value lends its environment shared, and one that bumps the clock
 /// still writes the provider it carries, between direct uses of it.
 #[test]
