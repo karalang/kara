@@ -1,0 +1,30 @@
+// A call through a `dyn` value in a field has the effects its type's `with`
+// clause declares (design.md § `dyn Trait`): `reads(Clock)` here, so two
+// such calls, directly and through a function's parameter, may run at once.
+trait Meter {
+    fn level(self) -> i64;
+}
+
+struct Fixed { n: i64 }
+struct Doubled { n: i64 }
+
+impl Meter for Fixed {
+    fn level(self) -> i64 { self.n }
+}
+
+impl Meter for Doubled {
+    fn level(self) -> i64 { self.n * 2 }
+}
+
+struct Panel { m: dyn Meter with reads(Clock) }
+
+fn read(p: ref Panel) -> i64 { p.m.level() }
+
+fn main() {
+    let a = Panel { m: Fixed { n: 3 } };
+    let b = Panel { m: Doubled { n: 4 } };
+    let (x, y) = par { a.m.level(), b.m.level() };
+    println(f"{x} {y}");
+    let (u, v) = par { read(a), read(a) };
+    println(f"{u} {v}");
+}

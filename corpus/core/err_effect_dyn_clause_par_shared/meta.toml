@@ -1,0 +1,11 @@
+source = "design.md § `dyn Trait`"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["dyn", "par", "post-m1:par", "post-m1:dyn"]
+class = "a"
+expected_from = "pin"
+rules = []
+backends = []
+env = {}
+note = "A call through a `dyn` value in a field has its type's clause, `writes(Stdout)`, whatever the value's own method does, so two such calls conflict in a `par`. The expected.out wording of an error pin is guidance, not a byte oracle."

@@ -1,0 +1,30 @@
+// A value whose method writes standard output cannot be coerced into a
+// `dyn` type whose clause allows only `reads(Clock)` (design.md § `dyn
+// Trait`): refused at the coercion, at the field's initializer and at the
+// later assignment alike.
+trait Meter {
+    fn level(self) -> i64;
+}
+
+struct Fixed { n: i64 }
+struct Noisy { n: i64 }
+
+impl Meter for Fixed {
+    fn level(self) -> i64 { self.n }
+}
+
+impl Meter for Noisy {
+    fn level(self) -> i64 {
+        println("reading");
+        self.n
+    }
+}
+
+struct Panel { m: dyn Meter with reads(Clock) }
+
+fn main() {
+    let mut p = Panel { m: Noisy { n: 1 } };
+    p.m = Fixed { n: 2 };
+    p.m = Noisy { n: 3 };
+    println(f"{p.m.level()}");
+}

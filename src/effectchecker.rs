@@ -1006,6 +1006,9 @@ pub struct EffectChecker<'a> {
     /// The seeded key a call through a `dyn` value with a clause is charged:
     /// by the clause as written and the trait method's key.
     pub(crate) dyn_clause_keys: FxHashMap<(String, Symbol), Symbol>,
+    /// The coercions to a `dyn` type with a clause already checked against
+    /// it, so each is reported once.
+    pub(crate) dyn_clause_checked: FxHashSet<crate::ids::NodeId>,
     /// The non-escaping `dyn` parameters of each function, method and trait
     /// method (`dyn_effects.rs`).
     pub(crate) dyn_params: FxHashMap<Symbol, Vec<dyn_effects::DynParam>>,
@@ -1228,6 +1231,7 @@ impl<'a> EffectChecker<'a> {
             dyn_coercions: FxHashMap::default(),
             dyn_clauses: FxHashMap::default(),
             dyn_clause_keys: FxHashMap::default(),
+            dyn_clause_checked: FxHashSet::default(),
             dyn_params: FxHashMap::default(),
             dyn_param_uses: FxHashSet::default(),
             dyn_impl_methods: FxHashMap::default(),
@@ -2237,6 +2241,7 @@ impl<'a> EffectChecker<'a> {
         self.verify_drop_bodies_are_panics_free();
         self.verify_trait_default_bodies();
         self.check_call_site_subtyping();
+        self.check_remaining_dyn_coercions();
         self.check_with_e_unification();
         self.check_profile_compat();
         self.check_no_effect();

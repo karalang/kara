@@ -23626,6 +23626,12 @@ fn declared_effects(te: &ast::TypeExpr) -> Option<Vec<DeclaredEffect>> {
     else {
         return None;
     };
+    declared_effect_list(list)
+}
+
+/// The effects a written clause declares, or `None` when it names something
+/// other than plain verbs on plain resources ([`declared_effects`]).
+pub(super) fn declared_effect_list(list: &ast::EffectList) -> Option<Vec<DeclaredEffect>> {
     let mut out = Vec::new();
     for item in &list.items {
         let ast::EffectItem::Verb(v) = item else {

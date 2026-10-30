@@ -29,8 +29,6 @@
 //! (`charge_var_clause_coercion`). A call through the value is then charged
 //! only what the clause writes besides the variable.
 
-use std::collections::HashSet;
-
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::ast::*;
@@ -41,8 +39,8 @@ use crate::span_visitor::MutVisitor;
 use crate::token::Span;
 
 use super::{
-    declared_admits, verb_name, DeclaredEffects, Effect, EffectError, EffectErrorKind,
-    EffectOrigin, EffectSet,
+    declared_admits, verb_name, DeclaredEffects, EffectError, EffectErrorKind, EffectOrigin,
+    EffectSet,
 };
 
 /// A clause as written, for keys and messages: its items in order.
@@ -338,7 +336,7 @@ impl<'a> super::EffectChecker<'a> {
     /// The methods a value coerced to `dyn` at `value` (or at the place a
     /// `ref` / `mut ref` there borrows) may run.
     pub(crate) fn coerced_methods(&self, value: &Expr) -> Option<Vec<Symbol>> {
-        let c = self.coercion_at(value)?;
+        let (_, c) = self.coercion_at(value)?;
         Some(self.dyn_methods(&c.trait_name, c.concrete.as_deref()))
     }
 
@@ -454,11 +452,11 @@ impl<'a> super::EffectChecker<'a> {
 
     /// The coercion to `dyn` at `value`, or at the place a `ref` / `mut ref`
     /// there borrows.
-    fn coercion_at(&self, value: &Expr) -> Option<&super::DynCoercion> {
+    fn coercion_at(&self, value: &Expr) -> Option<(NodeId, &super::DynCoercion)> {
         let mut e = value;
         loop {
             if let Some(c) = self.dyn_coercions.get(&e.id) {
-                return Some(c);
+                return Some((e.id, c));
             }
             match &e.kind {
                 ExprKind::Unary {
@@ -470,46 +468,86 @@ impl<'a> super::EffectChecker<'a> {
         }
     }
 
-    /// The trait and the effects a `dyn` slot's `with` clause admits, when
-    /// `ty` is a `dyn` type (or a view of one) with a clause that names no
-    /// effect variable.
-    fn dyn_clause(&self, ty: &TypeExpr) -> Option<(String, String, HashSet<Effect>)> {
-        let mut t = ty;
-        while let TypeKind::Ref(inner) | TypeKind::MutRef(inner) = &t.kind {
-            t = inner;
+    /// Refuse a value coerced into a `dyn` slot whose `with` clause its
+    /// concrete type's methods exceed (design.md § `dyn Trait`, Effects),
+    /// naming the slot as `subject`: one error per method and effect, at the
+    /// coercion. A clause naming an effect variable is solved instead
+    /// (`effect_vars.rs`).
+    pub(crate) fn check_dyn_clause_slot(&mut self, subject: &str, value: &Expr) {
+        if let Some((id, _)) = self.coercion_at(value) {
+            self.check_coercion_clause(id, subject, value.span);
         }
-        let TypeKind::Dyn {
-            trait_path,
-            effects: Some(list),
-            ..
-        } = &t.kind
-        else {
-            return None;
-        };
-        if clause_has_var(list) {
-            return None;
-        }
-        let trait_name = trait_path.segments.last()?.clone();
-        let set = self.resolve_effect_list_to_set(list, None);
-        let mut shown: Vec<String> = set
-            .iter()
-            .map(|e| format!("{}({})", verb_name(&e.verb), e.resource))
-            .collect();
-        shown.sort();
-        let written = format!("dyn {} with {}", trait_name, shown.join(", "));
-        Some((trait_name, written, set))
     }
 
-    /// Refuse a value coerced into a `dyn` slot whose `with` clause its
-    /// concrete type's methods exceed (design.md § `dyn Trait`, Effects):
-    /// one error per method and effect, at the coercion.
-    pub(crate) fn check_dyn_clause_slot(&mut self, ty: &TypeExpr, subject: &str, value: &Expr) {
-        let Some((trait_name, written, clause)) = self.dyn_clause(ty) else {
+    /// [`Self::check_dyn_clause_slot`] for every coercion the slot positions
+    /// did not reach (an assignment to a field, a `push`, a `Some(..)`): the
+    /// MIR effect analysis trusts the clause of a `dyn` value it cannot
+    /// trace, so every value coerced into one must fit it.
+    pub(crate) fn check_remaining_dyn_coercions(&mut self) {
+        let mut wanted: FxHashSet<NodeId> = self
+            .dyn_coercions
+            .iter()
+            .filter(|(id, c)| {
+                !self.dyn_clause_checked.contains(id)
+                    && c.clause.as_ref().is_some_and(|l| !clause_has_var(l))
+            })
+            .map(|(&id, _)| id)
+            .collect();
+        if wanted.is_empty() {
+            return;
+        }
+        struct Spans<'w> {
+            wanted: &'w mut FxHashSet<NodeId>,
+            found: Vec<(NodeId, Span)>,
+        }
+        impl MutVisitor for Spans<'_> {
+            fn span(&mut self, _span: &mut Span) {}
+            fn expr(&mut self, e: &mut Expr) {
+                if self.wanted.remove(&e.id) {
+                    self.found.push((e.id, e.span));
+                }
+            }
+        }
+        let mut w = Spans {
+            wanted: &mut wanted,
+            found: Vec::new(),
+        };
+        let bodies: Vec<super::FnHandle<'a>> = self
+            .function_bodies
+            .values()
+            .chain(self.method_bodies.values())
+            .cloned()
+            .collect();
+        for f in bodies {
+            if w.wanted.is_empty() {
+                break;
+            }
+            let mut copy: Function = (*f).clone();
+            crate::span_visitor::walk_function_mut_with(&mut copy, &mut w);
+        }
+        let mut found = w.found;
+        found.sort_by_key(|(_, sp)| (sp.line, sp.column));
+        for (id, span) in found {
+            self.check_coercion_clause(id, "value", span);
+        }
+    }
+
+    fn check_coercion_clause(&mut self, id: NodeId, subject: &str, span: Span) {
+        if !self.dyn_clause_checked.insert(id) {
+            return;
+        }
+        let Some(c) = self.dyn_coercions.get(&id) else {
             return;
         };
-        let Some(concrete) = self.coercion_at(value).and_then(|c| c.concrete.clone()) else {
+        let (Some(list), Some(concrete)) = (c.clause.as_ref(), c.concrete.clone()) else {
             return;
         };
+        if clause_has_var(list) {
+            return;
+        }
+        let trait_name = c.trait_name.clone();
+        let clause = self.resolve_effect_list_to_set(list, None);
+        let written = format!("dyn {trait_name} with {}", clause_text(list));
         let traits = self.trait_closure(&trait_name);
         let mut methods: Vec<Symbol> = self
             .dyn_impl_methods
@@ -536,7 +574,7 @@ impl<'a> super::EffectChecker<'a> {
                         verb_name(&te.effect.verb),
                         te.effect.resource,
                     ),
-                    span: value.span,
+                    span,
                     kind: EffectErrorKind::EffectSubtypeViolation,
                     subtype_trace: None,
                     replacement: None,

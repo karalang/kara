@@ -305,6 +305,14 @@ impl<'l, 'a> Bx<'l, 'a> {
         let mut rest = self.finish_args(rest)?;
         let mut ops = vec![self.recv_borrow_after(recv, &mut rest)?];
         ops.extend(rest);
+        // A receiver whose type writes a `with` clause: the call has the
+        // clause's effects, narrowed to the method's own (design.md § `dyn
+        // Trait`), kept like a function-typed field's clause.
+        if let (Some(declared), Some(p)) = (self.dyn_clause_effects(object, m), ops[0].place()) {
+            if p.projection.is_empty() {
+                self.b.fn_value_effects.push((p.local, declared));
+            }
+        }
         let unit = self.unit();
         let func = Operand::Const(Const {
             ty: unit,
@@ -325,6 +333,34 @@ impl<'l, 'a> Bx<'l, 'a> {
             next,
         );
         Ok(true)
+    }
+
+    /// The effects a call of `m` through `object` declares when the
+    /// receiver's type writes a `with` clause of plain verbs: the clause's,
+    /// less any outside the method's own `with`. `None` with no clause, or
+    /// one naming an effect variable, which keeps every effect.
+    fn dyn_clause_effects(
+        &self,
+        object: &Expr,
+        m: &ast::TraitMethod,
+    ) -> Option<Vec<crate::mir::syntax::DeclaredEffect>> {
+        let (ty, _) = self.lcx.tc.node_types.get(&object.id)?;
+        let mut ty = ty;
+        while let crate::typechecker::Type::Ref(i) | crate::typechecker::Type::MutRef(i) = ty {
+            ty = i;
+        }
+        let crate::typechecker::Type::Dyn {
+            clause: crate::typechecker::types::DynClause(Some(list)),
+            ..
+        } = ty
+        else {
+            return None;
+        };
+        let mut declared = super::declared_effect_list(list)?;
+        if let Some(ceiling) = m.effects.as_ref().and_then(super::declared_effect_list) {
+            declared.retain(|d| ceiling.contains(d));
+        }
+        Some(declared)
     }
 
     /// The default `method` of the trait `tr` (the `dyn` type's own or a

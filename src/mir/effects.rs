@@ -2494,9 +2494,10 @@ impl<'p> Analysis<'p> {
 
     /// The effects of calling the method at `slot` of `dyn_ty` on `recv`
     /// (design.md § `dyn Trait`): the coerced type's method when the
-    /// receiver is coerced right here, a [`Slot`] for the receiver's value
-    /// when it is a parameter's or a local's (resolved by
-    /// [`Analysis::resolve_stored`]), and every effect otherwise.
+    /// receiver is coerced right here, the clause its type writes when it is
+    /// a field's or untraced, a [`Slot`] for the receiver's value when it is
+    /// a parameter's or a local's (resolved by [`Analysis::resolve_stored`]),
+    /// and every effect otherwise.
     #[allow(clippy::too_many_arguments)]
     fn slot_call_effects(
         &self,
@@ -2522,7 +2523,17 @@ impl<'p> Analysis<'p> {
             eff.union(self.slot_effects(idx, Some(dyn_ty), slot, k, summaries));
             return;
         }
+        // A receiver whose type writes a `with` clause (recorded by the
+        // builder like a function-typed field's): where nothing traces the
+        // values that reach it, a field's here or in a caller, the call has
+        // the clause's effects.
+        let declared = declared_fn_value_effects(body, p);
         match place_key(body, defs, p) {
+            Key::Param(_, ref path) | Key::Local(_, ref path)
+                if !path.is_empty() && declared.is_some() =>
+            {
+                eff.union(declared.unwrap_or_default());
+            }
             key @ (Key::Param(..) | Key::Local(..)) => {
                 eff.slots.insert(Slot {
                     key,
@@ -2531,7 +2542,7 @@ impl<'p> Analysis<'p> {
                     name: self.slot_name(dyn_ty, slot),
                 });
             }
-            _ => eff.union(untraced()),
+            _ => eff.union(declared.unwrap_or_else(untraced)),
         }
     }
 

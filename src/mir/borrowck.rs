@@ -2508,6 +2508,8 @@ fn main() -> () {
             "err_stateful_default",
             // Calls through `dyn` values (design.md § `dyn Trait`).
             "err_effect_dyn_par_shared",
+            "err_effect_dyn_clause_par_shared",
+            "err_effect_dyn_clause_exceeded",
         ];
         // Pins that call Kāra library functions, which `check_built` does
         // not append (a `select` desugars to calls into sync.kara;

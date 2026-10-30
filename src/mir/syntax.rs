@@ -158,7 +158,9 @@ pub struct Body {
     /// names, and each annotated `let` binding. A call through a value with
     /// no entry has every effect, as one with no clause does: a clause the
     /// builder cannot carry (a keyed resource, a user-defined verb) leaves
-    /// none (B-2026-10-27-2).
+    /// none (B-2026-10-27-2). Also the receiver of each call through a
+    /// `dyn` value whose type writes a clause, narrowed to the method's own
+    /// (design.md § `dyn Trait`).
     pub fn_value_effects: Vec<(Local, Vec<DeclaredEffect>)>,
     /// The body's declared clause names an effect variable (`fn emit(self,
     /// e: Event) with E`, design.md § Effect variables): a call through a

@@ -1,0 +1,2 @@
+ERROR at line 26: field `m` coerces `Noisy` to `dyn Meter with reads(Clock)`, but `Noisy.level` has effect writes(Stdout), which the clause does not allow
+ERROR at line 28: value coerces `Noisy` to `dyn Meter with reads(Clock)`, but `Noisy.level` has effect writes(Stdout), which the clause does not allow

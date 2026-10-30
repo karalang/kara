@@ -1,0 +1,20 @@
+// The field's clause says a call may write standard output, so two calls
+// through it conflict in a `par` (design.md § `dyn Trait`), though this
+// value's method writes nothing.
+trait Meter {
+    fn level(self) -> i64;
+}
+
+struct Fixed { n: i64 }
+
+impl Meter for Fixed {
+    fn level(self) -> i64 { self.n }
+}
+
+struct Panel { m: dyn Meter with writes(Stdout) }
+
+fn main() {
+    let a = Panel { m: Fixed { n: 3 } };
+    let (x, y) = par { a.m.level(), a.m.level() };
+    println(f"{x} {y}");
+}

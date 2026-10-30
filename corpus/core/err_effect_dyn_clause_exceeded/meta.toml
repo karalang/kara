@@ -1,0 +1,11 @@
+source = "design.md § `dyn Trait`"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["dyn", "effects", "post-m1:dyn"]
+class = "a"
+expected_from = "pin"
+rules = []
+backends = []
+env = {}
+note = "A coercion into a `dyn` type whose clause the concrete type's method exceeds is refused at the coercion, naming the method and the effect: at a field initializer and at an assignment to the field. The expected.out wording of an error pin is guidance, not a byte oracle."
