@@ -1078,10 +1078,21 @@ impl<'a> UseClassifier<'a> {
                 // to reading them off the type so a `Fn(ref T)` call borrows
                 // rather than consuming. Strictly a fallback: a real entry
                 // always wins, so no declared function's modes change.
-                let modes = self
-                    .callee_modes_for_call(callee)
-                    .cloned()
-                    .or_else(|| self.fn_typed_callee_modes(callee, args));
+                //
+                // A LOCAL binding or parameter shadows a function of the same
+                // name, so its own type decides: `let take = |n: own String|
+                // ..` called as `take(n)` must not borrow `n` because the
+                // stdlib declares a `fn take` that does (B-2026-10-30-2).
+                let local_value = matches!(&callee.kind, ExprKind::Identifier(n)
+                    if self.param_types.contains_key(n.as_str())
+                        || self.local_types.contains_key(n.as_str()));
+                let modes = if local_value {
+                    self.fn_typed_callee_modes(callee, args)
+                } else {
+                    self.callee_modes_for_call(callee)
+                        .cloned()
+                        .or_else(|| self.fn_typed_callee_modes(callee, args))
+                };
                 // B-2026-07-02-23: a comparison operator (`==` `!=` `<` `<=`
                 // `>` `>=`) lowers to `Call(Path([Type, "eq"/…]), [lhs, rhs])`
                 // — a free-call to an *instance* trait method, so it never
@@ -1136,7 +1147,7 @@ impl<'a> UseClassifier<'a> {
                 // from the table, and only because its definition lives in
                 // another module.
                 let callee_signature_unknown = match &callee.kind {
-                    ExprKind::Identifier(n) => {
+                    ExprKind::Identifier(n) if !local_value => {
                         self.imported_names.contains(n) && !self.callee_param_modes.contains_key(n)
                     }
                     _ => false,

@@ -407,6 +407,12 @@ impl<'a> super::OwnershipChecker<'a> {
                 // Exclusive-borrow rule across the call's arguments (B-2026-06-17-6):
                 // reject two overlapping arg places where one is `mut ref`/`mut Slice`.
                 self.check_exclusive_borrow_arg_aliasing(callee, args);
+                // A local binding or parameter shadows a function of the
+                // same name: `let take = |n: own String| ..` is not
+                // `mem.take` (B-2026-10-30-2), so it takes the
+                // function-value default below.
+                let local_callee = matches!(&callee.kind, ExprKind::Identifier(n)
+                    if states.contains_key(n) || param_types.contains_key(n));
                 for (i, arg) in args.iter().enumerate() {
                     // Step 2 (consume-predicate): the arg's classification
                     // is driven by the callee's declared parameter mode.
@@ -418,7 +424,8 @@ impl<'a> super::OwnershipChecker<'a> {
                     // Bare-T slots consume per the existing rule. Unknown
                     // callees (function-typed values, etc.) fall back to
                     // the prior consume-on-no-marker default.
-                    let is_borrow = arg.mut_marker || self.arg_is_borrow_position(callee, i);
+                    let is_borrow =
+                        arg.mut_marker || (!local_callee && self.arg_is_borrow_position(callee, i));
                     if is_borrow {
                         self.check_expr_reading(&arg.value, states, param_types, param_usage);
                     } else {
@@ -677,10 +684,13 @@ impl<'a> super::OwnershipChecker<'a> {
                 // Exclusive-borrow rule across the call's arguments (B-2026-06-17-6):
                 // reject two overlapping arg places where one is `mut ref`/`mut Slice`.
                 self.check_exclusive_borrow_arg_aliasing(callee, args);
+                let local_callee = matches!(&callee.kind, ExprKind::Identifier(n)
+                    if states.contains_key(n) || param_types.contains_key(n));
                 for (i, arg) in args.iter().enumerate() {
                     // Step 2 (consume-predicate): see the analogous arm in
                     // `check_expr_consuming` for the rationale.
-                    let is_borrow = arg.mut_marker || self.arg_is_borrow_position(callee, i);
+                    let is_borrow =
+                        arg.mut_marker || (!local_callee && self.arg_is_borrow_position(callee, i));
                     if is_borrow {
                         self.check_expr_reading(&arg.value, states, param_types, param_usage);
                     } else {
