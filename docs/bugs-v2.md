@@ -58,15 +58,15 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| false-positive | 72 |
-| diagnostics | 70 |
-| missing-feature | 51 |
+| diagnostics | 73 |
+| false-positive | 73 |
+| missing-feature | 53 |
 | perf | 41 |
 | soundness | 30 |
 | miscompile | 18 |
 | run-vs-build | 15 |
+| other | 11 |
 | codegen-gap | 10 |
-| other | 9 |
 | crash | 2 |
 | leak | 1 |
 
@@ -74,11 +74,11 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 124 |
-| mir | 66 |
+| typecheck | 125 |
+| mir | 67 |
 | mir-llvm | 49 |
+| cli | 39 |
 | ownership | 35 |
-| cli | 33 |
 | interp | 25 |
 | codegen | 22 |
 | parser | 20 |
@@ -117,6 +117,14 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-30-23 | 2026-10-30 | mir | medium | A `dyn Handler with E` stored inside `Option` (`Vec[Option[dyn Handler with E]]`) loses its declared `with E` clause: a call through `if let Some(h) = s` is charged "unknown (a call through a `dyn` value a call hands back)", so `par { r.total(1), r.total(2) }` over effect-free handlers is refused; `Vec[dyn Handler with E]` is accepted | — |
 | B-2026-10-30-24 | 2026-10-30 | mir | low | E_STATEFUL_DEFAULT reached through a `dyn` method or a closure names the resource as its own caller ("`Ids` calls a `mut ref self` method of `Ids`") instead of the method or function that makes the call (`Minter.handle`) | — |
 | B-2026-10-30-25 | 2026-10-30 | typecheck | medium | A struct's effect variable is fixed by the FIRST value bound into it, so `router.add("/hello", Hello {}); router.add("/count", Counter { .. })` (a pure handler, then one that `blocks`) is refused while the same two calls in the other order check; design.md § Effect variables says a type's instance is fixed by its construction and later bindings within the same function | — |
+| B-2026-10-30-27 | 2026-10-30 | cli | medium | `karac fix` applies a cascaded suggestion from a mistyped import: with `import text.stats.analyse;` (the item is `analyze`) the import's E0113 suggests `analyze` and the use's E0100 suggests `analyse`, the broken import's name, and `karac fix` applies both, leaving the program broken the other way round | — |
+| B-2026-10-30-28 | 2026-10-30 | cli | low | `karac fix` with no file inside a package fails with `error: missing file argument`, so the Mend loop's fix step runs one file at a time while `karac check --output=json` reports the whole package | — |
+| B-2026-10-30-29 | 2026-10-30 | cli | high | `karac fmt` prints source that does not mean the same or does not parse: a test's name loses its quotes (`test analyze counts {`), `{{` in an f-string becomes `{`, a char literal `'\n'` is printed as a raw newline and `'\''` as `'''`, and `///` doc comments are dropped | — |
+| B-2026-10-30-30 | 2026-10-30 | cli | medium | `karac fmt` has no package mode and no check mode: with no file it fails (`karac fmt requires a file argument`), `--check` is read as a file name, and it only prints to stdout, so a package cannot be formatted or checked for formatting in CI | — |
+| B-2026-10-30-31 | 2026-10-30 | cli | low | `karac build` in a package writes the binary to the package root (`./wordstat`), not to `dist/` as design.md § Build cache says, so the scaffolded `.gitignore` (`/dist/`) does not ignore it | — |
+| B-2026-10-30-32 | 2026-10-30 | cli | medium | `karac check --output=json` in a package names a file two ways: resolver diagnostics (E0111, E0112, E0113) carry an absolute path, typecheck ones `src/<module>.kara`; and E0223 (circular module dependency) carries no file or line at all | — |
+| B-2026-10-30-33 | 2026-10-30 | mir | low | A failed `assert` / `assert_eq` in `karac test` reports "assertion failed" / "assertion failed: left != right" without the assertion's source text, and its `test_fail` event has no `assertion` field (design.md § Assertions, Runner output) | — |
+| B-2026-10-30-34 | 2026-10-30 | typecheck | low | `prelude_shadow` warns that a user `struct Stats` shadows a prelude type, though `Stats` is the post-v1 `kara-data` type and not in the prelude (library/README.md), so a package's own `Stats` warns on every check, build and run | — |
 
 ### Relocated
 
