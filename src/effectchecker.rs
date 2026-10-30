@@ -27,8 +27,11 @@ mod profile_compat;
 mod pure_loop;
 mod subtyping;
 mod target_gate;
+pub mod unused_effect;
 mod verify;
 mod with_e;
+
+pub use unused_effect::UnusedEffect;
 
 use modbind_synth::ModBindingInfo;
 
@@ -775,6 +778,10 @@ pub struct EffectCheckResult {
     /// table entry); consumers default to "no constraints" when the
     /// lookup misses.
     pub call_effect_subs: FxHashMap<SpanKey, HashMap<String, HashSet<Effect>>>,
+    /// The functions whose declarations name effects their bodies never
+    /// perform: the `unused_effect` lint's candidates, which the CLI reports
+    /// at the level the attributes and lint flags give it.
+    pub unused_effects: Vec<UnusedEffect>,
 }
 
 // ── Effect Checker ──────────────────────────────────────────────
@@ -2270,6 +2277,7 @@ impl<'a> EffectChecker<'a> {
         // unknown counts as a boundary, so the lint would go quiet exactly on
         // the programs it exists for.
         self.emit_pure_loop_in_par_warnings();
+        let unused_effects = self.find_unused_effects();
 
         // Internal working tables are Symbol-keyed (name-interning spike
         // stage 3); the public result stays String-keyed std HashMap, so
@@ -2307,6 +2315,7 @@ impl<'a> EffectChecker<'a> {
             errors,
             queries: Vec::new(),
             call_effect_subs,
+            unused_effects,
         }
     }
 

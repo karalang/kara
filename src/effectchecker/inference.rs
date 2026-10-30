@@ -565,19 +565,10 @@ impl<'a> super::EffectChecker<'a> {
         names
     }
 
-    /// Walk a function body, find all calls, and add callee effects.
-    /// Returns true if any new effects were added.
-    ///
-    /// Callees are deduplicated per pass (first call site wins): repeated
-    /// calls to the same callee could only re-contribute the same effects,
-    /// and `EffectSet::add` keeps the first origin anyway, so skipping the
-    /// duplicates is behavior-identical and drops the per-call-site
-    /// effect-clone traffic. `fn_name`'s own entry is temporarily taken out
-    /// of `inferred_effects` while its callees are consulted — a
-    /// self-recursive lookup then sees an empty set instead of the pre-pass
-    /// set, which is equivalent: everything the pre-pass set contains is
-    /// already in `current`, so those adds were no-ops either way.
-    pub(crate) fn infer_function_effects(&mut self, fn_name: Symbol, body: &Block) -> bool {
+    /// The callees `fn_name`'s body reaches, each once with the first call
+    /// site: its calls, its reads and writes of module-level bindings, and
+    /// the functions it names as values (B-2026-08-23-7).
+    pub(crate) fn body_calls(&self, fn_name: Symbol, body: &Block) -> Vec<(Symbol, Span)> {
         let mut calls = {
             // Borrow the bounds map instead of cloning it per call — the
             // collection walk only needs `&self` (the old clone predates
@@ -620,6 +611,23 @@ impl<'a> super::EffectChecker<'a> {
         // `EffectSet::add`'s first-origin-wins semantics).
         let mut seen_callees: FxHashSet<Symbol> = FxHashSet::default();
         calls.retain(|&(callee, _)| seen_callees.insert(callee));
+        calls
+    }
+
+    /// Walk a function body, find all calls, and add callee effects.
+    /// Returns true if any new effects were added.
+    ///
+    /// Callees are deduplicated per pass (first call site wins): repeated
+    /// calls to the same callee could only re-contribute the same effects,
+    /// and `EffectSet::add` keeps the first origin anyway, so skipping the
+    /// duplicates is behavior-identical and drops the per-call-site
+    /// effect-clone traffic. `fn_name`'s own entry is temporarily taken out
+    /// of `inferred_effects` while its callees are consulted — a
+    /// self-recursive lookup then sees an empty set instead of the pre-pass
+    /// set, which is equivalent: everything the pre-pass set contains is
+    /// already in `current`, so those adds were no-ops either way.
+    pub(crate) fn infer_function_effects(&mut self, fn_name: Symbol, body: &Block) -> bool {
+        let calls = self.body_calls(fn_name, body);
 
         // Propagate the polymorphic marker only for callees that use
         // `with _` (anonymous polymorphism). A callee that declares

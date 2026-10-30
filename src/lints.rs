@@ -387,6 +387,13 @@ pub const STARTER_LINTS: &[LintInfo] = &[
              effect. Write `-> (dyn T with X)` to give the value the clause, or `-> (dyn T) with \
              X` to keep it the function's (design.md § `dyn Trait`, B-2026-10-30-9).",
     },
+    LintInfo {
+        name: "unused_effect",
+        default_level: LintLevel::Allow,
+        description: "A function's `with` clause names an effect its body never performs. A \
+             declaration may reserve one, so a library can add it later without breaking callers; \
+             turn this on to find the ones that are not meant (design.md § Effects).",
+    },
 ];
 
 /// Look up a lint by its registered name. Returns `None` for
@@ -755,6 +762,7 @@ mod tests {
             "unfulfilled_lint_expectation",
             "unknown_lint",
             "missing_non_exhaustive",
+            "unused_effect",
         ];
         for name in required {
             assert!(

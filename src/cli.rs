@@ -1622,6 +1622,67 @@ impl Pipeline {
         self.widen_redundant_suffix_fixes();
     }
 
+    /// `unused_effect` (B-2026-10-30-22): report each candidate the effect
+    /// checker found at the level the function's or its `impl` block's
+    /// attribute gives the lint, else the command line's and the manifest's,
+    /// else allowed. The fix writes the clause without the unused effects,
+    /// and takes the space before a clause it removes whole.
+    fn report_unused_effects(&mut self) {
+        use crate::lints::LintLevel;
+        let (Some(effects), Some(typed)) = (self.effects.as_ref(), self.typed.as_mut()) else {
+            return;
+        };
+        let name = crate::effectchecker::unused_effect::LINT_NAME;
+        for u in &effects.unused_effects {
+            let level = u.source_level.unwrap_or_else(|| {
+                self.lint_overrides
+                    .level_for(name, LintLevel::Allow)
+                    .unwrap_or(LintLevel::Allow)
+            });
+            if matches!(level, LintLevel::Allow | LintLevel::Expect) {
+                continue;
+            }
+            let fix_it = u.replacement.as_ref().map(|replacement| {
+                let mut span = u.clause;
+                if replacement.is_empty() {
+                    let gap = self
+                        .source
+                        .as_deref()
+                        .and_then(|src| src.get(..span.offset))
+                        .map_or(0, |before| before.len() - before.trim_end().len());
+                    span.offset -= gap;
+                    span.length += gap;
+                }
+                crate::typechecker::FixIt {
+                    span,
+                    replacement: replacement.clone(),
+                }
+            });
+            let names: Vec<String> = u.unused.iter().map(|e| format!("`{e}`")).collect();
+            let entry = crate::typechecker::TypeError {
+                message: format!(
+                    "`{}` declares {} but never performs {}; remove {} from its `with` clause",
+                    u.function,
+                    names.join(", "),
+                    if names.len() == 1 { "it" } else { "them" },
+                    if names.len() == 1 { "it" } else { "them" },
+                ),
+                span: u.clause,
+                kind: crate::typechecker::TypeErrorKind::TypeMismatch,
+                lint_name: Some(name.to_string()),
+                fix_it,
+                class: Some(crate::diagnostic_class::DiagnosticClass::LintWarning),
+                expected: None,
+                got: None,
+            };
+            if level == LintLevel::Deny {
+                typed.errors.push(entry);
+            } else {
+                typed.warnings.push(entry);
+            }
+        }
+    }
+
     /// B-2026-10-21-56 — `std.regex` and `std.json` items are used through an
     /// import; a bare use is an error whose fix-it adds it. Read from the
     /// program's own text, ahead of the appended library.
@@ -1959,6 +2020,7 @@ impl Pipeline {
             self.parsed.program.callee_purely_polymorphic_effects =
                 build_callee_purely_polymorphic_effects_set(effects);
         }
+        self.report_unused_effects();
         // Now that `callee_network_yield_effect` is populated, walk each
         // network-boundary function body and enumerate its yield points.
         // Resolves `MethodCall` sites through the typechecker's
