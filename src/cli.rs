@@ -1850,6 +1850,10 @@ impl Pipeline {
                 .as_ref()
                 .map(|t| t.user_operator_calls.clone())
                 .unwrap_or_default(),
+            self.typed
+                .as_ref()
+                .map(crate::dyn_coercion_types)
+                .unwrap_or_default(),
         ));
         // B-2026-10-19-41: core semantics §7.11 lets a `Drop` body panic (a
         // panic ends the process; there is no unwinding to panic during), so

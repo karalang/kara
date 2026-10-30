@@ -16,6 +16,7 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 mod bounds;
+mod dyn_effects;
 mod effect_vars;
 mod extern_ffi;
 mod gpu_effect_gate;
@@ -968,6 +969,22 @@ pub struct EffectChecker<'a> {
     /// the impl's effects (B-2026-10-29-51). Empty when constructed via the
     /// unparameterised `new` family.
     pub(crate) user_operator_calls: FxHashMap<SpanKey, Symbol>,
+    /// Each coercion to a `dyn` type, by the coerced expression's node, with
+    /// the concrete type's name (`TypeCheckResult.node_dyn_coercions`, via
+    /// [`crate::dyn_coercion_types`]). Empty when constructed via the
+    /// unparameterised `new` family.
+    pub(crate) dyn_coercions: FxHashMap<crate::ids::NodeId, String>,
+    /// The non-escaping `dyn` parameters of each function, method and trait
+    /// method (`dyn_effects.rs`).
+    pub(crate) dyn_params: FxHashMap<Symbol, Vec<dyn_effects::DynParam>>,
+    /// The identifiers that name a non-escaping `dyn` parameter: a call
+    /// through one is charged to the callers (`dyn_effects.rs`).
+    pub(crate) dyn_param_uses: FxHashSet<crate::ids::NodeId>,
+    /// `(trait, type)` → the methods a `dyn` value of that type runs: the
+    /// impl's own, and the defaults it does not override.
+    pub(crate) dyn_impl_methods: FxHashMap<(String, String), Vec<Symbol>>,
+    /// Each trait's direct supertraits.
+    pub(crate) dyn_supertraits: FxHashMap<String, Vec<String>>,
     /// Per-call-site type-parameter substitutions, populated by the
     /// typechecker (`TypeCheckResult.call_type_subs`). Maps a call-expression
     /// span to a `param_name → resolved_type_name` table — concrete entries
@@ -1176,6 +1193,11 @@ impl<'a> EffectChecker<'a> {
             impl_effect_var_positions: FxHashMap::default(),
             method_callee_types: FxHashMap::default(),
             user_operator_calls: FxHashMap::default(),
+            dyn_coercions: FxHashMap::default(),
+            dyn_params: FxHashMap::default(),
+            dyn_param_uses: FxHashSet::default(),
+            dyn_impl_methods: FxHashMap::default(),
+            dyn_supertraits: FxHashMap::default(),
             call_type_subs: FxHashMap::default(),
             node_call_subs: FxHashMap::default(),
             typeparam_nodes: FxHashMap::default(),
@@ -1255,6 +1277,12 @@ impl<'a> EffectChecker<'a> {
             .into_iter()
             .map(|(k, v)| (k, self.interner.intern(&v)))
             .collect();
+        self
+    }
+
+    /// Install the coercions to `dyn` ([`crate::dyn_coercion_types`]).
+    pub fn with_dyn_coercions(mut self, coercions: FxHashMap<crate::ids::NodeId, String>) -> Self {
+        self.dyn_coercions = coercions;
         self
     }
 
@@ -2158,6 +2186,7 @@ impl<'a> EffectChecker<'a> {
         self.fn_effect_var_positions = self.build_fn_effect_var_positions();
         self.impl_effect_var_positions = self.build_impl_effect_var_positions();
         self.compute_bound_calls();
+        self.compute_dyn_tables();
 
         // Phase B: Infer and verify
         self.infer_effects();

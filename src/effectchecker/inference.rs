@@ -1003,13 +1003,15 @@ impl<'a> super::EffectChecker<'a> {
     }
 
     /// A function mentioned as a VALUE is instantiated where no call site
-    /// says at what, so its calls through bounds are charged every impl.
+    /// says at what, so its calls through bounds are charged every impl, as
+    /// are its non-escaping `dyn` parameters.
     pub(crate) fn charge_bound_calls_unresolved(
         &self,
         callee: Symbol,
         span: Span,
         calls: &mut Vec<(Symbol, Span)>,
     ) {
+        self.charge_dyn_params_unresolved(callee, span, calls);
         let Some(pairs) = self.bound_calls.get(&callee) else {
             return;
         };
@@ -1137,6 +1139,17 @@ impl<'a> super::EffectChecker<'a> {
                         }
                         n
                     };
+                // What the arguments passed to non-escaping `dyn` parameters
+                // run is charged here, not in the callee. `Type.method(x, ..)`
+                // passes the receiver first.
+                if let Some(cname) = callee_name {
+                    let offset = usize::from(
+                        self.method_bodies
+                            .get(&cname)
+                            .is_some_and(|f| f.self_param.is_some()),
+                    );
+                    self.charge_dyn_args(&[cname], args, offset, calls);
+                }
                 // Combined distinct-type constructor `T(value)` where
                 // `distinct type T = Base where pred`: the constructor runs a
                 // runtime predicate assertion → propagates `panics`,
@@ -1212,7 +1225,13 @@ impl<'a> super::EffectChecker<'a> {
                 // safely map `get`/`post`/`send`). Precise and additive: it can
                 // only contribute effects that genuinely belong to the resolved
                 // method, so it never taints `map.get()` / `sender.send()`.
-                let precise = self.resolve_method_callee_key(&expr.span);
+                // A call through a non-escaping `dyn` parameter is charged to
+                // each caller with the value it passes (design.md § `dyn
+                // Trait`): nothing here.
+                let through_dyn_param = self.is_dyn_param_receiver(object);
+                let precise = self
+                    .resolve_method_callee_key(&expr.span)
+                    .filter(|_| !through_dyn_param);
                 if let Some(precise_key) = precise {
                     calls.push((precise_key, expr.span));
                     if self.method_bodies.contains_key(&precise_key) {
@@ -1298,14 +1317,26 @@ impl<'a> super::EffectChecker<'a> {
                 // one store's method was an edge to every `remove` in the
                 // program, which also made unrelated impls a "mutual
                 // recursion group".
-                let deferred =
-                    method_sym.is_some_and(|m| self.defer_bound_method_call(object, m, bounds));
+                let deferred = through_dyn_param
+                    || method_sym.is_some_and(|m| self.defer_bound_method_call(object, m, bounds));
                 if !deferred {
                     if let Some(keys) = method_sym.and_then(|m| self.method_name_index.get(&m)) {
                         for &key in keys {
                             if self.fallback_can_reach(precise, key) {
                                 calls.push((key, expr.span));
                             }
+                        }
+                    }
+                }
+                // The arguments passed to the callee's non-escaping `dyn`
+                // parameters: the resolved method's, else those of every
+                // method of the name.
+                match self.resolve_method_callee_key(&expr.span) {
+                    Some(key) => self.charge_dyn_args(&[key], args, 0, calls),
+                    None => {
+                        if let Some(keys) = method_sym.and_then(|m| self.method_name_index.get(&m))
+                        {
+                            self.charge_dyn_args(keys, args, 0, calls);
                         }
                     }
                 }
@@ -1378,7 +1409,7 @@ impl<'a> super::EffectChecker<'a> {
                 // matching it by name gave it the channel's effects (B-2026-10-21-81).
                 let resolved_to_body = precise.is_some_and(|k| self.method_bodies.contains_key(&k));
                 if let Some(quals) = method_sym
-                    .filter(|_| !resolved_to_body)
+                    .filter(|_| !resolved_to_body && !through_dyn_param)
                     .and_then(|m| self.stdlib_method_seeds.get(&m))
                 {
                     for &qualified in quals {

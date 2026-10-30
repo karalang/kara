@@ -593,13 +593,42 @@ pub fn effectcheck_with_typecheck_tables(
     >,
     typeparam_nodes: rustc_hash::FxHashMap<crate::ids::NodeId, String>,
     user_operator_calls: rustc_hash::FxHashMap<crate::resolver::SpanKey, String>,
+    dyn_coercions: rustc_hash::FxHashMap<crate::ids::NodeId, String>,
 ) -> EffectCheckResult {
     let checker = EffectChecker::new_with_policy_and_config(program, policy, profile_config.into())
         .with_method_callee_types(method_callee_types)
         .with_call_type_subs(call_type_subs)
         .with_bound_dispatch_tables(node_call_subs, typeparam_nodes)
-        .with_user_operator_calls(user_operator_calls);
+        .with_user_operator_calls(user_operator_calls)
+        .with_dyn_coercions(dyn_coercions);
     checker.check()
+}
+
+/// Each coercion to a `dyn` type, by the coerced expression's node, with the
+/// name of the concrete type (`Circle` for a `Circle` or a `ref Circle`), for
+/// the effect checker's charging of non-escaping `dyn` parameters. A
+/// concrete type with no plain name is left out: the checker then charges
+/// every impl of the trait.
+pub fn dyn_coercion_types(
+    typed: &crate::typechecker::TypeCheckResult,
+) -> rustc_hash::FxHashMap<crate::ids::NodeId, String> {
+    use crate::typechecker::Type;
+    typed
+        .node_dyn_coercions
+        .iter()
+        .filter_map(|(&node, (concrete, _))| {
+            let mut ty = concrete;
+            while let Type::Ref(inner) | Type::MutRef(inner) = ty {
+                ty = inner;
+            }
+            match ty {
+                Type::Named { name, .. } | Type::Shared(name) => {
+                    Some((node, name.rsplit('.').next().unwrap_or(name).to_string()))
+                }
+                _ => None,
+            }
+        })
+        .collect()
 }
 
 /// The expressions the typechecker typed by a type parameter, or by a `ref` /

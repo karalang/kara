@@ -458,6 +458,7 @@ impl<'a> super::EffectChecker<'a> {
             if solved.contains(&i) {
                 continue;
             }
+            self.check_dyn_clause_slot(&param.ty, &format!("argument {}", i + 1), &call_arg.value);
             let slot_effects = match &param.ty.kind {
                 TypeKind::FnType {
                     effect_spec: Some(EffectSpec::Polymorphic),
@@ -1048,6 +1049,7 @@ impl<'a> super::EffectChecker<'a> {
     }
 
     fn check_binding_annotation_subtyping(&mut self, ty: &TypeExpr, subject: &str, value: &Expr) {
+        self.check_dyn_clause_slot(ty, subject, value);
         let Some(slot_effects) = self.fn_annotation_slot_effects(ty) else {
             return;
         };
