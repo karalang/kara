@@ -125,7 +125,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-30-2 | 2026-10-30 | ownership+mir | medium | A call through a `let` closure never moves an owned argument in check: `let take = |n: own String| n.len(); take(n); take(n)` passes check, and `__mir-run` refuses it ("use of _3, which may have been moved") | — |
 | B-2026-10-30-6 | 2026-10-30 | effect | medium | `karac check` lets two tasks inside a `with_provider` write the provider at once (core semantics §14.9): `tg.spawn(|| { Clk.bump(); .. })` twice, or one task beside the spawner's own `Clk.bump()`; MIR refuses a task that writes a provider-rooted resource's provider meanwhile | — |
 | B-2026-10-30-7 | 2026-10-30 | effect | medium | `karac check` misses §14.5 when the provider is bound out of sight: a callback that reaches a resource stored through an `escaping` parameter in a function called under `with_provider`, or in a test under `#[with_provider(..)]`, passes the check and is refused by the MIR borrow checker as E0509 "a view of (*_1) is stored in an escaping closure" | — |
-| B-2026-10-30-9 | 2026-10-30 | parser | low | `fn make() -> dyn Shape with reads(Clock) { .. }` gives the function the clause and the `dyn` return type none, silently; the clause reaches a `dyn` return only through an alias or a wrapper (`-> Option[dyn Shape with reads(Clock)]`) | — |
 
 ### Relocated
 
@@ -414,6 +413,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-30-4 | cli | medium | `karac test` refuses a package `karac check` and `karac build` accept: its per-module typecheck reports type errors (`map` on a `Vec` from `split`, a… | d0e0acb943 |
 | B-2026-10-30-5 | mir | high | A closure that reaches a provider and is run by the runtime under `with_provider` (`tg.spawn(\|\| Clk.now())`, a `sort_by` comparison, a `retain` predi… | d0e0acb943 |
 | B-2026-10-30-8 | cli | low | `karac test` reports a MIR build error at a line of the combined package source (`borrow check __test__root__103_..: 292:5: ..`), not at the file and… | 71d1ac24b9 |
+| B-2026-10-30-9 | parser | low | `fn make() -> dyn Shape with reads(Clock) { . | 9421ed2be2 |
 
 </details>
 
