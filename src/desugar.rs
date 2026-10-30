@@ -3120,7 +3120,46 @@ pub fn with_collect_through_from_iterator<R>(f: impl FnOnce() -> R) -> R {
 /// A `Vec` element needs nothing (`collect()` builds a `Vec` already), and
 /// any other element type is left to [`desugar_collect_target_at`], which
 /// declines what it cannot build.
+///
+/// B-2026-10-29-6 — the annotation reaches every value tail of `value`: a
+/// block's tail, both branches of an `if` / `if let`, every `match` arm. An
+/// `if` in a function's tail position yields its branches' values, so the
+/// return type aims a closure's inner `collect()` there as it does when the
+/// chain is the tail itself.
 fn desugar_mapped_collect_target(ty: &TypeExpr, value: &mut Expr) {
+    match &mut value.kind {
+        ExprKind::Block(b) => {
+            if let Some(tail) = b.final_expr.as_deref_mut() {
+                desugar_mapped_collect_target(ty, tail);
+            }
+            return;
+        }
+        ExprKind::If {
+            then_block,
+            else_branch,
+            ..
+        }
+        | ExprKind::IfLet {
+            then_block,
+            else_branch,
+            ..
+        } => {
+            if let Some(tail) = then_block.final_expr.as_deref_mut() {
+                desugar_mapped_collect_target(ty, tail);
+            }
+            if let Some(e) = else_branch.as_deref_mut() {
+                desugar_mapped_collect_target(ty, e);
+            }
+            return;
+        }
+        ExprKind::Match { arms, .. } => {
+            for arm in arms {
+                desugar_mapped_collect_target(ty, &mut arm.body);
+            }
+            return;
+        }
+        _ => {}
+    }
     let TypeKind::Path(p) = &ty.kind else {
         return;
     };
