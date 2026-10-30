@@ -1981,6 +1981,12 @@ pub struct TypeCheckResult {
     /// to a user operator impl, by span, with its `Type.method` key, so the
     /// ownership pass reads the operands' modes off the method.
     pub user_operator_calls: FxHashMap<SpanKey, String>,
+    /// B-2026-10-29-46 — of those, each whose type has more than one impl
+    /// of the operator's trait with that method (`impl Add for Col` and
+    /// `impl Add[Flags] for Col`), the chosen impl's own key,
+    /// `Type.method#k` with `k` its place among them in source order, which
+    /// the ownership pass keys the impl's modes by as well.
+    pub user_operator_impls: FxHashMap<SpanKey, String>,
     /// B-2026-08-13-8. For a method call whose `(type-head, method)` pair has
     /// more than one non-generic impl, the RESOLVED impl's qualified dispatch
     /// segment. Both backends key their `Type.method` lookup off this instead of
@@ -3165,6 +3171,8 @@ pub struct TypeChecker<'a> {
     pub(super) method_callee_types: FxHashMap<SpanKey, String>,
     /// See [`TypeCheckResult::user_operator_calls`].
     pub(super) user_operator_calls: FxHashMap<SpanKey, String>,
+    /// See [`TypeCheckResult::user_operator_impls`].
+    pub(super) user_operator_impls: FxHashMap<SpanKey, String>,
     /// Working half of `TypeCheckResult::method_impl_dispatch`.
     pub(super) method_impl_dispatch: FxHashMap<(SpanKey, String), String>,
     /// Working half of `TypeCheckResult::ufcs_calls`.
@@ -3842,6 +3850,7 @@ impl<'a> TypeChecker<'a> {
             display_snake_case_enums: FxHashSet::default(),
             method_callee_types: FxHashMap::default(),
             user_operator_calls: FxHashMap::default(),
+            user_operator_impls: FxHashMap::default(),
             method_impl_dispatch: FxHashMap::default(),
             ufcs_calls: FxHashMap::default(),
             dyn_coercion_spans: FxHashMap::default(),
@@ -4372,6 +4381,7 @@ impl<'a> TypeChecker<'a> {
             display_snake_case_enums: self.display_snake_case_enums,
             method_callee_types: self.method_callee_types,
             user_operator_calls: self.user_operator_calls,
+            user_operator_impls: self.user_operator_impls,
             method_impl_dispatch: self.method_impl_dispatch,
             ufcs_calls: self.ufcs_calls,
             node_dyn_coercions,

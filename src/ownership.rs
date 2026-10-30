@@ -3808,6 +3808,7 @@ pub(crate) enum ParamUsage {
 /// design.md § Consume Predicate step 1.
 pub(crate) fn collect_method_self_modes(program: &Program) -> FxHashMap<String, SelfParam> {
     let mut map = FxHashMap::default();
+    let mut ordinals = TraitImplOrdinals::default();
     for item in &program.items {
         match item {
             Item::ImplBlock(impl_block) => {
@@ -3821,6 +3822,12 @@ pub(crate) fn collect_method_self_modes(program: &Program) -> FxHashMap<String, 
                                 format!("{target_name}.{}", method.name),
                                 self_param.clone(),
                             );
+                            if let Some(k) = ordinals.next(impl_block, &target_name, &method.name) {
+                                map.insert(
+                                    format!("{target_name}.{}#{k}", method.name),
+                                    self_param.clone(),
+                                );
+                            }
                         }
                     }
                 }
@@ -3841,6 +3848,26 @@ pub(crate) fn collect_method_self_modes(program: &Program) -> FxHashMap<String, 
         }
     }
     map
+}
+
+/// The place of a trait impl's method among the impls of that trait with
+/// that method for one type, in source order: `k` of the typechecker's
+/// `Type.method#k` key for a user operator (`TypeCheckResult::
+/// user_operator_impls`), so two impls of `Add` for one type keep their own
+/// parameter modes (B-2026-10-29-46).
+#[derive(Default)]
+struct TraitImplOrdinals(FxHashMap<(String, String, String), usize>);
+
+impl TraitImplOrdinals {
+    fn next(&mut self, imp: &ImplBlock, target: &str, method: &str) -> Option<usize> {
+        let tr = imp.trait_name.as_ref()?.segments.last()?;
+        let k = self
+            .0
+            .entry((target.to_string(), tr.clone(), method.to_string()))
+            .or_default();
+        *k += 1;
+        Some(*k - 1)
+    }
 }
 
 /// Extract the canonical type-name component from an impl-block's target.
@@ -4156,6 +4183,7 @@ fn collect_method_param_modes_into(
     program: &Program,
     map: &mut FxHashMap<String, Vec<OwnershipMode>>,
 ) {
+    let mut ordinals = TraitImplOrdinals::default();
     for item in &program.items {
         match item {
             Item::ImplBlock(impl_block) => {
@@ -4169,10 +4197,14 @@ fn collect_method_param_modes_into(
                 for impl_item in &impl_block.items {
                     if let ImplItem::Method(method) = impl_item {
                         if method.self_param.is_some() || ambient {
-                            map.insert(
-                                format!("{target_name}.{}", method.name),
-                                call_param_modes(method, program),
-                            );
+                            let modes = call_param_modes(method, program);
+                            if let Some(k) = ordinals.next(impl_block, &target_name, &method.name) {
+                                map.insert(
+                                    format!("{target_name}.{}#{k}", method.name),
+                                    modes.clone(),
+                                );
+                            }
+                            map.insert(format!("{target_name}.{}", method.name), modes);
                         }
                     }
                 }

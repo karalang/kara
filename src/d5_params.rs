@@ -69,6 +69,11 @@ pub fn borrow_bare_params(program: &mut Program) {
         };
         if shared || crate::typechecker::extract_derived_traits(attrs).contains("Copy") {
             copy.insert(name.clone());
+        } else {
+            // A program's own type named like a built-in scalar (`struct
+            // Mask`) shadows it: the name means the program's type, which
+            // is owned (B-2026-10-29-47).
+            copy.remove(name);
         }
     }
     // Per user trait method: whether `self` and each parameter borrow.

@@ -2857,8 +2857,7 @@ impl<'a> super::TypeChecker<'a> {
             _ => return self.primitive_operator_impl(tr, method, &left, right_ty, right, span),
         };
         let (sig, at) = self.operator_impl_for_rhs(tr, method, &name, &args, &left, right_ty)?;
-        self.user_operator_calls
-            .insert(SpanKey::from_span(span), format!("{name}.{method}"));
+        self.record_user_operator(tr, method, &name, at, span);
         let ret = self.operator_sig_at(&sig.return_type, &left, &name, &args, at);
         if let Some(rhs) = sig.params.first() {
             let rhs = self.operator_sig_at(rhs, &left, &name, &args, at);
@@ -2931,8 +2930,7 @@ impl<'a> super::TypeChecker<'a> {
                 })
             })
             .map(|(s, i)| (s.clone(), i))?;
-        self.user_operator_calls
-            .insert(SpanKey::from_span(span), format!("{name}.{method}"));
+        self.record_user_operator(tr, method, &name, at, span);
         let ret = self.operator_sig_at(&sig.return_type, left, &name, &[], at);
         if let Some(rhs) = sig.params.first() {
             let rhs = self.operator_sig_at(rhs, left, &name, &[], at);
@@ -3023,6 +3021,34 @@ impl<'a> super::TypeChecker<'a> {
         sigs.first().map(|(s, i)| ((*s).clone(), *i))
     }
 
+    /// Records the user operator impl `at` (an index into `env.impls`) a
+    /// span calls: its `Type.method` key, and, when `name` has more than
+    /// one impl of `tr` with `method`, that impl's own `Type.method#k`
+    /// (B-2026-10-29-46).
+    fn record_user_operator(&mut self, tr: &str, method: &str, name: &str, at: usize, span: &Span) {
+        let key = SpanKey::from_span(span);
+        self.user_operator_calls
+            .insert(key, format!("{name}.{method}"));
+        let same: Vec<usize> = self
+            .env
+            .impls_by_trait
+            .get(tr)
+            .into_iter()
+            .flatten()
+            .copied()
+            .filter(|&i| {
+                let imp = &self.env.impls[i];
+                imp.target_type == name && imp.methods.contains_key(method)
+            })
+            .collect();
+        if same.len() > 1 {
+            if let Some(k) = same.iter().position(|&i| i == at) {
+                self.user_operator_impls
+                    .insert(key, format!("{name}.{method}#{k}"));
+            }
+        }
+    }
+
     /// B-2026-10-14-33 — `-a` / `~a` on a user type with an `impl Neg` /
     /// `impl Not` calls its `neg` / `not`, as a binary operator calls its
     /// impl ([`Self::user_operator_impl`]). `not a` stays logical negation on
@@ -3050,8 +3076,7 @@ impl<'a> super::TypeChecker<'a> {
             _ => return None,
         };
         let (sig, at) = self.operator_impl_for_rhs(tr, method, &name, &args, &operand, &operand)?;
-        self.user_operator_calls
-            .insert(SpanKey::from_span(span), format!("{name}.{method}"));
+        self.record_user_operator(tr, method, &name, at, span);
         Some(self.operator_sig_at(&sig.return_type, &operand, &name, &args, at))
     }
 

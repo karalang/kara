@@ -365,6 +365,18 @@ struct UseClassifier<'a> {
 }
 
 impl<'a> UseClassifier<'a> {
+    /// The key of the user operator impl the expression at `span` calls:
+    /// the impl's own `Type.method#k` when its type has two impls of the
+    /// trait (B-2026-10-29-46), else `Type.method`.
+    fn operator_key(&self, span: &crate::token::Span) -> Option<&'a str> {
+        let at = SpanKey::from_span(span);
+        self.tc
+            .user_operator_impls
+            .get(&at)
+            .or_else(|| self.tc.user_operator_calls.get(&at))
+            .map(String::as_str)
+    }
+
     /// Match-ergonomics gate: `true` iff `expr`'s static type is
     /// `ref T` / `mut ref T`. The match scrutinee classifier consults
     /// this to demote `Consuming` to `Reading` when the scrutinee is
@@ -816,16 +828,12 @@ impl<'a> UseClassifier<'a> {
             StmtKind::CompoundAssign { target, value, .. } => {
                 // B-2026-10-14-30 — `a += b` on a user type is `a = a + b`:
                 // an `own` `rhs` consumes `b`, and `a` is stored back.
-                let owned_rhs = self
-                    .tc
-                    .user_operator_calls
-                    .get(&SpanKey::from_span(&stmt.span))
-                    .is_some_and(|key| {
-                        matches!(
-                            self.method_param_modes.get(key).and_then(|m| m.first()),
-                            Some(OwnershipMode::Own)
-                        )
-                    });
+                let owned_rhs = self.operator_key(&stmt.span).is_some_and(|key| {
+                    matches!(
+                        self.method_param_modes.get(key).and_then(|m| m.first()),
+                        Some(OwnershipMode::Own)
+                    )
+                });
                 let mode = if owned_rhs {
                     Mode::Consuming
                 } else {
@@ -995,7 +1003,7 @@ impl<'a> UseClassifier<'a> {
                     .user_operator_calls
                     .contains_key(&SpanKey::from_span(&expr.span)) =>
             {
-                let key = &self.tc.user_operator_calls[&SpanKey::from_span(&expr.span)];
+                let key = self.operator_key(&expr.span).unwrap_or_default();
                 let owned_self = matches!(self.method_self_modes.get(key), Some(SelfParam::Owned));
                 let owned_rhs = matches!(
                     self.method_param_modes.get(key).and_then(|m| m.first()),
@@ -1028,7 +1036,7 @@ impl<'a> UseClassifier<'a> {
                     .user_operator_calls
                     .contains_key(&SpanKey::from_span(&expr.span)) =>
             {
-                let key = &self.tc.user_operator_calls[&SpanKey::from_span(&expr.span)];
+                let key = self.operator_key(&expr.span).unwrap_or_default();
                 let owned = matches!(self.method_self_modes.get(key), Some(SelfParam::Owned));
                 if owned {
                     self.core_operator_moves_out_of_borrow(operand);
