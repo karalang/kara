@@ -27,7 +27,7 @@ fn count_corner_rectangles(grid: Vec[Vec[i64]]) -> i64 {
         for b in a + 1..m {
             let mut k = 0;
             for w in 0..words {
-                k += (rows[a][w] & rows[b][w]).count_ones() as i64;
+                k += (rows[a][w] & rows[b][w]).count_ones();
             }
             total += k * (k - 1) / 2;
         }

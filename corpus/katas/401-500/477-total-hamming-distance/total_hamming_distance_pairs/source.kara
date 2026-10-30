@@ -7,7 +7,7 @@ fn total_hamming_distance(nums: Vec[i64]) -> i64 {
     let mut total = 0;
     for i in 0..nums.len() {
         for j in i + 1..nums.len() {
-            total += (nums[i] ^ nums[j]).count_ones() as i64;
+            total += (nums[i] ^ nums[j]).count_ones();
         }
     }
     total

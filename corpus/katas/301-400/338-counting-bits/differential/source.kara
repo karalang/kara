@@ -42,7 +42,7 @@ fn count_bits_lowbit(n: i64) -> Vec[i64] {
 fn count_bits_builtin(n: i64) -> Vec[i64] {
     let mut ans: Vec[i64] = Vec.with_capacity(n + 1);
     for i in 0..=n {
-        ans.push(i.count_ones() as i64);
+        ans.push(i.count_ones());
     }
     return ans;
 }

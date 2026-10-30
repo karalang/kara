@@ -4,7 +4,7 @@
 // that many ones keeps only those bits of the bitwise not `~num`. O(1).
 
 fn find_complement(num: i64) -> i64 {
-    let width = 64 - num.leading_zeros() as i64;
+    let width = 64 - num.leading_zeros();
     let mask = (1 << width) - 1;
     ~num & mask
 }

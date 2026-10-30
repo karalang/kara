@@ -863,12 +863,13 @@ impl<'a> super::TypeChecker<'a> {
             self.record_expr_type(args_close_span, receiver_for_lookup);
             return Some(receiver_for_lookup.clone());
         }
-        // Bit intrinsics on integer scalars — `count_ones` / `leading_zeros` /
-        // `trailing_zeros` -> u32 (Rust's `iN::{count_ones,leading_zeros,
-        // trailing_zeros}`). All width-dependent: `leading_zeros` / `trailing_zeros`
+        // Bit intrinsics on integer scalars — `count_ones` / `count_zeros` /
+        // `leading_zeros` / `trailing_zeros` -> i64, as every count is in Kāra
+        // (docs/library/core-types.md "Bit counts", B-2026-10-29-19; Rust's
+        // are `u32`). All width-dependent: `leading_zeros` / `trailing_zeros`
         // count within the receiver's bit width, and `count_ones` over its `bits`
         // low bits (a signed `iN`'s sign-extended interpreter representation is
-        // masked to width first). The `u32` result differs from the receiver, so
+        // masked to width first). The `i64` result differs from the receiver, so
         // the generic `infer_expr` post-record clobbers `expr_types[receiver.span]`
         // — the interpreter reads the receiver type stashed at the non-aliased
         // `args_close_span` leaf instead. Effect-free; codegen lowers to the
@@ -881,7 +882,7 @@ impl<'a> super::TypeChecker<'a> {
             )
         {
             self.record_expr_type(args_close_span, receiver_for_lookup);
-            return Some(Type::UInt(UIntSize::U32));
+            return Some(Type::Int(IntSize::I64));
         }
         // `to_ne_bytes()` on integer scalars -> `Array[u8, N]`, N = the
         // receiver's byte width (B-2026-08-21-10). design.md § `Hash` and

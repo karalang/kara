@@ -89,7 +89,7 @@ fn shortest_memo(t: i64, memo: mut ref Vec[i64]) -> i64 {
 
 fn racecar_iter(target: i64) -> i64 {
     let best = (1..target + 1).fold([0], |best, t| {
-        let n = 64 - t.leading_zeros() as i64;
+        let n = 64 - t.leading_zeros();
         let full = (1 << n) - 1;
         let answer = if t == full {
             n

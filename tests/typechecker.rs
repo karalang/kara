@@ -39003,16 +39003,23 @@ fn int_pow_rejects_non_u32_exponent() {
 }
 
 #[test]
-fn bit_intrinsics_return_u32_on_every_width() {
-    // count_ones / leading_zeros / trailing_zeros are defined on every integer
-    // width and return `u32` (the result binds to a `u32` annotation).
+fn bit_intrinsics_return_i64_on_every_width() {
+    // count_ones / count_zeros / leading_zeros / trailing_zeros are defined on
+    // every integer width and return `i64`, as every count does
+    // (docs/library/core-types.md "Bit counts", B-2026-10-29-19).
     typecheck_ok(
         "fn main() {\n\
-         let a: u8 = 200; let _x: u32 = a.count_ones();\n\
-         let b: i32 = 1; let _y: u32 = b.leading_zeros();\n\
-         let c: u64 = 1024; let _z: u32 = c.trailing_zeros();\n\
-         let d: i64 = -1; let _w: u32 = d.count_ones();\n\
+         let a: u8 = 200; let _x: i64 = a.count_ones();\n\
+         let b: i32 = 1; let _y: i64 = b.leading_zeros();\n\
+         let c: u64 = 1024; let _z: i64 = c.trailing_zeros();\n\
+         let d: i64 = -1; let _w: i64 = d.count_ones() + d.count_zeros();\n\
          }",
+    );
+    let errs = typecheck_errors("fn main() { let a: u8 = 200; let _x: u32 = a.count_ones(); }");
+    assert!(
+        errs.iter().any(|e| e.to_string().contains("u32")),
+        "a bit count is an i64, not a u32: {:?}",
+        errs.iter().map(|e| e.to_string()).collect::<Vec<_>>()
     );
 }
 

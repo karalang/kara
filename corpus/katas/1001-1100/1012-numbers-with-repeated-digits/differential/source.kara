@@ -115,7 +115,7 @@ fn dup_sets(n: i64) -> i64 {
     }
     let mut distinct = 0;
     for set in 1..1024 {
-        let k = set.count_ones() as i64;
+        let k = set.count_ones();
         if k < len {
             distinct += factorial[k];
             if set & 1 != 0 {

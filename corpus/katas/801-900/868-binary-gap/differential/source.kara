@@ -60,11 +60,11 @@ fn positions_binary_gap(n: i64) -> i64 {
 // ---- the lowbit arm: from one lowest set bit to the next ------------------
 fn lowbit_binary_gap(n: i64) -> i64 {
     let mut rest = n;
-    let mut low = rest.trailing_zeros() as i64;
+    let mut low = rest.trailing_zeros();
     rest = rest & (rest - 1);
     let mut best = 0;
     while rest > 0 {
-        let next = rest.trailing_zeros() as i64;
+        let next = rest.trailing_zeros();
         best = best.max(next - low);
         low = next;
         rest = rest & (rest - 1);

@@ -142,10 +142,10 @@ fn masks_projection_area(grid: Vec[Vec[i64]]) -> i64 {
                 seen = seen | (1 << j);
             }
         }
-        area += row.count_ones() as i64 + seen.count_ones() as i64;
+        area += row.count_ones() + seen.count_ones();
     }
     for j in 0..n {
-        area += columns[j].count_ones() as i64;
+        area += columns[j].count_ones();
     }
     area
 }

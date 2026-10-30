@@ -27,7 +27,7 @@ fn count_prime_set_bits_mask(left: i64, right: i64) -> i64 {
     let primes = 665772;
     let mut count = 0;
     for n in left..right + 1 {
-        count += (primes >> n.count_ones() as i64) & 1;
+        count += (primes >> n.count_ones()) & 1;
     }
     count
 }

@@ -151,7 +151,7 @@ fn main() {
         }
         let m = pairs.len();
         for mask in 0..(1 << m) {
-            if mask.count_ones() as i64 == n {
+            if mask.count_ones() == n {
                 let mut edges: Vec[(i64, i64)] = Vec.new();
                 for k in 0..m {
                     if (mask >> k) & 1 == 1 {

@@ -1643,7 +1643,7 @@ impl<'a> super::TypeChecker<'a> {
         // (and any outer chained `MethodCall`) clobbers `expr_types[span]` with
         // the call's RESULT type. Receiver-width-dependent methods whose result
         // type differs from the receiver (`count_ones`/`leading_zeros`/
-        // `trailing_zeros` → u32) stash the receiver type here so the
+        // `trailing_zeros` → i64) stash the receiver type here so the
         // interpreter can recover the exact width. See `pow` / the bit-intrinsic
         // arms below.
         args_close_span: &Span,

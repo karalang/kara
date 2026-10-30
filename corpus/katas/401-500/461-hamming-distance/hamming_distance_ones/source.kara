@@ -4,7 +4,7 @@
 // `count_ones` counts them (one instruction on most machines). O(1).
 
 fn hamming_distance(x: i64, y: i64) -> i64 {
-    (x ^ y).count_ones() as i64
+    (x ^ y).count_ones()
 }
 
 // ---- test harness ---------------------------------------------------------

@@ -60,8 +60,8 @@ fn valid_tic_tac_toe_masks(board: Vec[String]) -> bool {
             }
         }
     }
-    let x = xs.count_ones() as i64;
-    let o = os.count_ones() as i64;
+    let x = xs.count_ones();
+    let o = os.count_ones();
     let x_won = has_line_masks(xs);
     let o_won = has_line_masks(os);
     if x == o + 1 {

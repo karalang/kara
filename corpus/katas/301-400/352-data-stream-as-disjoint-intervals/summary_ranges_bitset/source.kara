@@ -45,7 +45,7 @@ impl SummaryRanges {
                 word = ~word;
             }
         }
-        return w * 64 + word.trailing_zeros() as i64;
+        return w * 64 + word.trailing_zeros();
     }
 
     fn get_intervals(ref self) -> Vec[(i64, i64)] {

@@ -81,7 +81,7 @@ fn factorial(k: i64) -> i64 {
 fn by_subsets(n: i64, base: i64) -> i64 {
     let mut total = 1;
     for mask in 1..(1 << base) {
-        let k = mask.count_ones() as i64;
+        let k = mask.count_ones();
         if k > n {
             continue;
         }

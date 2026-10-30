@@ -33,7 +33,7 @@ fn largest_overlap(img1: Vec[Vec[i64]], img2: Vec[Vec[i64]]) -> i64 {
                 let r2 = r + dr;
                 if r2 >= 0 and r2 < n {
                     let moved = if dc >= 0 { (a[r] << dc) & full } else { a[r] >> -dc };
-                    overlap += (moved & b[r2]).count_ones() as i64;
+                    overlap += (moved & b[r2]).count_ones();
                 }
             }
             if overlap > best {

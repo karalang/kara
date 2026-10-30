@@ -24,7 +24,7 @@ fn hamming_clear(x: i64, y: i64) -> i64 {
 // ---- ones: hamming_distance_ones.kara
 
 fn hamming_ones(x: i64, y: i64) -> i64 {
-    (x ^ y).count_ones() as i64
+    (x ^ y).count_ones()
 }
 
 // ---- table: hamming_distance_table.kara

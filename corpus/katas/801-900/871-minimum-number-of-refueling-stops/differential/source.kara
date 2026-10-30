@@ -166,7 +166,7 @@ fn literal_min_stops(target: i64, start_fuel: i64, stations: Vec[(i64, i64)]) ->
     let mut best = -1;
     for stops in 0..(1 << stations.len()) {
         if literal_reaches(target, start_fuel, stations, stops) {
-            let count = stops.count_ones() as i64;
+            let count = stops.count_ones();
             if best < 0 or count < best {
                 best = count;
             }
