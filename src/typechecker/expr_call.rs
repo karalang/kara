@@ -3270,7 +3270,8 @@ impl<'a> super::TypeChecker<'a> {
         let expected_elem = self
             .pending_expected_call_return
             .as_ref()
-            .map(|t| match t {
+            .filter(|(key, _)| *key == SpanKey::from_span(span))
+            .map(|(_, t)| match t {
                 Type::Ref(inner) | Type::MutRef(inner) => inner.as_ref(),
                 other => other,
             })

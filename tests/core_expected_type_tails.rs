@@ -1,7 +1,9 @@
 //! The type a value position is checked against reaches the expressions
 //! that produce its value: an `if` or `match` in a function's tail, or under
 //! an annotated `let`, hands the type to each branch (B-2026-10-29-6).
-//! `karac check` accepts each program and every backend prints its oracle.
+//! A constructor that does not seed keeps the expectation from a generic
+//! call inside its payload (B-2026-10-29-5). `karac check` accepts each
+//! program and every backend prints its oracle.
 
 use std::process::{Command, Output, Stdio};
 
@@ -108,5 +110,46 @@ fn main() {
 }
 ",
         "bc,efg\nabc,defg\nc,fg\nabc,defg\nbc,efg\n,g\nba,fed\nabc,defg\nx\n",
+    );
+}
+
+/// A non-generic enum's constructor keeps the expected type to itself: the
+/// `fold` in its payload takes its accumulator from the `0`, not from the
+/// function's return type `Val` (B-2026-10-29-5). A generic call still
+/// takes the expectation where it is the checked call itself.
+#[test]
+fn expected_type_stays_with_a_variant_constructor() {
+    runs(
+        "variant-payload",
+        "enum Val {
+    I(i64),
+    S(String),
+}
+struct Box[T] { v: T }
+fn id[T](x: own T) -> T { x }
+fn total(v: Vec[i64]) -> Val {
+    Val.I(v.iter().fold(0, |a, x| a.wrapping_add(*x)))
+}
+fn wrapped(v: Vec[i64]) -> Option[Val] {
+    Some(Val.I(v.iter().fold(0, |a, x| a + *x)))
+}
+fn boxed() -> Box[u8] {
+    Box { v: id(7) }
+}
+fn show(v: Val) -> String {
+    match v {
+        Val.I(n) => f\"{n}\",
+        Val.S(s) => s.clone(),
+    }
+}
+fn main() {
+    let b: Box[i32] = Box { v: 5 };
+    let u: u8 = id(200);
+    let s = Val.S(id(\"x\".to_string()));
+    println(f\"{show(total([1, 2, 3].to_vec()))} {show(wrapped([4, 5].to_vec()).unwrap())} {show(s)}\");
+    println(f\"{b.v} {u} {boxed().v}\");
+}
+",
+        "6 9 x\n5 200 7\n",
     );
 }

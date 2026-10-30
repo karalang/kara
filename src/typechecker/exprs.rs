@@ -2111,10 +2111,13 @@ impl<'a> super::TypeChecker<'a> {
                 } else {
                     vec![expected.clone()]
                 };
-                self.pending_expected_call_return = Some(Type::Named {
-                    name: wrapper,
-                    args,
-                });
+                self.pending_expected_call_return = Some((
+                    SpanKey::from_span(&inner.span),
+                    Type::Named {
+                        name: wrapper,
+                        args,
+                    },
+                ));
                 let actual = self.infer_expr(expr);
                 self.pending_expected_call_return = None;
                 self.check_assignable(expected, &actual, expr.span);
@@ -3395,7 +3398,8 @@ impl<'a> super::TypeChecker<'a> {
             && *expected != Type::Error
             && (expectation_is_concrete(expected) || rigid(expected))
         {
-            self.pending_expected_call_return = Some(expected.clone());
+            self.pending_expected_call_return =
+                Some((SpanKey::from_span(&expr.span), expected.clone()));
         }
         // The receiver call of an `.unwrap()` / `.expect(..)` learns its
         // payload type the same way, on the MIR pipeline, where a generic
@@ -4131,7 +4135,10 @@ impl<'a> super::TypeChecker<'a> {
         // infer) an argument whose slot this seeding just made concrete. See
         // the comment there for why the two halves have to move together.
         let mut seeded_from_expectation = false;
-        if let Some(expected_ret) = self.pending_expected_call_return.take() {
+        if let Some((_, expected_ret)) = self
+            .pending_expected_call_return
+            .take_if(|(key, _)| *key == SpanKey::from_span(record_subs_for_span))
+        {
             // Gate on the instantiated RETURN carrying an unsolved metavar, not
             // on `formal_generic_params`. An `impl[T] Box[T] { fn new(..) }`
             // declares no generics ON THE FN — `T` belongs to the impl — so the

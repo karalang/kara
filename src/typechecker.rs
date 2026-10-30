@@ -3273,8 +3273,11 @@ pub struct TypeChecker<'a> {
     /// `let b: Box[i32] = Box.new(5)` otherwise infers `T = i64` from the literal
     /// and never consults the annotation. Set immediately before the call's
     /// `infer_expr` and TAKEN by the first generic call that runs, so it cannot
-    /// leak into a nested call inside an argument.
-    pub(super) pending_expected_call_return: Option<Type>,
+    /// leak into a nested call inside an argument. Keyed by the call's span,
+    /// so a call that does not seed (a non-generic enum's constructor) leaves
+    /// it to no one rather than to the first generic call inside its
+    /// arguments (B-2026-10-29-5).
+    pub(super) pending_expected_call_return: Option<(SpanKey, Type)>,
     /// B-2026-08-08-7 — the `Result`-wrapped expected type for the RECEIVER of a
     /// `Coll.try_with_capacity(n).unwrap()`. Set by `check_expr` immediately
     /// before that method call's `infer_expr` and TAKEN by `infer_method_call`
