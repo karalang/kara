@@ -584,8 +584,8 @@ fn backend_main_body() -> String {
      //   - anything else -> 404\n\
      // Replace `handle` / `on_ws` with your own logic as the project grows.\n\
      //\n\
-     // To run: `karac build` then execute the produced binary. The server\n\
-     // listens until the process is killed.\n\
+     // To run: `karac run` in the project directory. The server listens\n\
+     // until the process is killed.\n\
      \n\
      fn handle(req: Request) -> Response {\n    \
      match req.path().as_str() {\n        \
