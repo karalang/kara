@@ -183,6 +183,10 @@ pub enum Refusal {
     /// A provider's handle method uses a resource overridden where the
     /// provider is bound (§14.11, §14.12): the message.
     HandleUsesOverride { text: String },
+    /// A coercion to `dyn` of a type whose methods reach a provider-rooted
+    /// resource, or one overridden at the coercion (`E_DYN_PROVIDER`,
+    /// design.md §9): the message.
+    DynProvider { text: String },
 }
 
 /// A [`Refusal`] and where it is: the call, or the `with_provider` call or
@@ -396,9 +400,11 @@ pub fn specialise(
         );
     }
     let resources = program.resources.clone();
+    let vtables = program.vtables.clone();
     let mut s = Spec {
         tys,
         resources: &resources,
+        vtables: &vtables,
         needs,
         sigs: &sigs,
         queued: BTreeMap::new(),
@@ -455,6 +461,7 @@ pub fn specialise(
 struct Spec<'p> {
     tys: &'p TyInterner,
     resources: &'p BTreeMap<String, ResourceDecl>,
+    vtables: &'p [Vtable],
     needs: &'p BTreeMap<String, Needs>,
     sigs: &'p BTreeMap<String, Sig>,
     /// The name of every body made or kept.
@@ -576,6 +583,7 @@ impl Spec<'_> {
             }
             self.carry_erased(&mut fx, bb)?;
             self.check_values(&fx, bb)?;
+            self.refuse_dyn(&fx, bb);
             let TerminatorKind::Call {
                 func:
                     Operand::Const(Const {
@@ -1226,10 +1234,23 @@ impl Spec<'_> {
 
     /// Records `why` at the terminator of `bb`, once per place.
     fn refuse(&mut self, fx: &Fx, bb: BasicBlock, resource: &str, why: Refusal) {
+        let span = fx.body.blocks[bb.index()].terminator.source_info.span;
+        self.refuse_at(fx, bb, span, resource, why);
+    }
+
+    /// Records `why` at `span` in `bb`, once per place.
+    fn refuse_at(
+        &mut self,
+        fx: &Fx,
+        bb: BasicBlock,
+        span: crate::token::Span,
+        resource: &str,
+        why: Refusal,
+    ) {
         let site = super::effects::NoProvider {
             instance: fx.body.instance.name.clone(),
             block: bb,
-            span: fx.body.blocks[bb.index()].terminator.source_info.span,
+            span,
             resource: resource.to_string(),
         };
         let seen = self
@@ -1238,6 +1259,53 @@ impl Spec<'_> {
             .any(|(s, w)| s.span == site.span && *w == why);
         if !seen {
             self.refused.push((site, why));
+        }
+    }
+
+    /// Each coercion to `dyn` in `bb` whose type's methods reach a
+    /// resource without a default, or one bound here: a `dyn` value has
+    /// no room to carry a provider, so it runs with the defaults where it
+    /// was made (design.md §9, `E_DYN_PROVIDER`).
+    fn refuse_dyn(&mut self, fx: &Fx, bb: BasicBlock) {
+        let mut found = Vec::new();
+        for st in &fx.body.blocks[bb.index()].statements {
+            let StatementKind::Assign(_, Rvalue::Cast(CastKind::ToDyn(idx), _, _)) = &st.kind
+            else {
+                continue;
+            };
+            let Some(vt) = self.vtables.get(*idx as usize) else {
+                continue;
+            };
+            let methods = vt
+                .slots
+                .iter()
+                .chain(&vt.clone)
+                .chain(vt.starts.iter().flatten());
+            for m in methods {
+                for r in self.needs.get(m).into_iter().flat_map(|n| n.keys()) {
+                    let rooted = self.resources.get(r).is_some_and(|d| d.default.is_some());
+                    let why = match fx.env.get(r) {
+                        Some(Binding::Bound(_)) if rooted => format!(
+                            "overridden where it is made, by a `with_provider[{r}]` or `providers` block"
+                        ),
+                        _ if rooted => continue,
+                        _ => "which has no default, so only a provider supplies it".to_string(),
+                    };
+                    let dyn_ty = &vt.name;
+                    let bound = dyn_ty.strip_prefix("dyn ").unwrap_or(dyn_ty);
+                    let bound = bound.strip_suffix(" + CrossTask").unwrap_or(bound);
+                    let text = format!(
+                        "`{}` as a `{dyn_ty}` cannot carry a provider, and its `{m}` uses \
+                         `{r}`, {why} (design.md §9, E_DYN_PROVIDER): take a generic \
+                         parameter (`[T: {bound}]`) instead",
+                        self.tys.display(vt.concrete)
+                    );
+                    found.push((st.source_info.span, r.clone(), text));
+                }
+            }
+        }
+        for (span, r, text) in found {
+            self.refuse_at(fx, bb, span, &r, Refusal::DynProvider { text });
         }
     }
 

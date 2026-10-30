@@ -3,7 +3,10 @@
 //! `Network`, a call of UDP, TLS, WebSocket or a server, which no provider
 //! serves (`E_PROVIDER_UNSUPPORTED`, E0421, B-2026-10-29-20), and a
 //! `FileSystem` or `Network` provider's handle method that uses a resource
-//! overridden where the provider is bound (E0422, B-2026-10-29-15).
+//! overridden where the provider is bound (E0422, B-2026-10-29-15). And
+//! a coercion to `dyn` of a type whose methods reach a provider-rooted
+//! resource, or one overridden where it is made (`E_DYN_PROVIDER`, E0423,
+//! design.md §9): a `dyn` value has no room to carry a provider.
 
 use std::process::{Command, Output, Stdio};
 
@@ -276,4 +279,142 @@ fn provider_unsupported_call_refuses_the_build() {
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(!out.status.success(), "built");
     assert!(err.contains("`Server.serve` is not served"), "{err}");
+}
+
+const DYN_OVERRIDDEN: &str = r#"trait Speak {
+    fn speak(ref self);
+}
+struct Dog { }
+impl Speak for Dog {
+    fn speak(ref self) { println("woof"); }
+}
+struct Cap { }
+impl StdoutProvider for Cap { fn write(mut ref self, s: Str) { } }
+
+fn make() -> dyn Speak { Dog { } }
+
+fn main() {
+    with_provider[Stdout](Cap { }, || {
+        let d: dyn Speak = Dog { };
+        d.speak();
+        let m = make();
+        m.speak();
+        let dog = Dog { };
+        let r: ref dyn Speak = ref dog;
+        r.speak();
+    });
+}
+"#;
+
+/// A `dyn` value made where `Stdout` is overridden would print through
+/// the default, so the coercion is refused: owned, borrowed, and in a
+/// callee the override reaches (`E_DYN_PROVIDER`, design.md §9).
+#[test]
+fn provider_refuses_a_dyn_made_under_an_override_it_would_use() {
+    let found = check("dyn-overridden", DYN_OVERRIDDEN);
+    let at: Vec<(&str, u64, u64)> = found
+        .iter()
+        .map(|(c, l, k, _)| (c.as_str(), *l, *k))
+        .collect();
+    assert_eq!(
+        at,
+        [("E0423", 11, 26), ("E0423", 15, 28), ("E0423", 20, 32)],
+        "{found:?}"
+    );
+    for (_, _, _, msg) in &found {
+        assert!(
+            msg.contains(
+                "`Dog` as a `dyn Speak` cannot carry a provider, and its `Dog.speak` uses \
+                 `Stdout`, overridden where it is made, by a `with_provider[Stdout]`"
+            ),
+            "{msg}"
+        );
+        assert!(
+            msg.contains("take a generic parameter (`[T: Speak]`)"),
+            "{msg}"
+        );
+    }
+    run_refuses("dyn-overridden", DYN_OVERRIDDEN, "E_DYN_PROVIDER");
+}
+
+const DYN_PROVIDER_ROOTED: &str = r#"effect resource Db: DbProvider;
+trait DbProvider {
+    fn get(ref self, k: i64) -> i64;
+}
+struct Mem { }
+impl DbProvider for Mem {
+    fn get(ref self, k: i64) -> i64 { k * 2 }
+}
+trait Look {
+    fn look(ref self) -> i64;
+}
+struct L { k: i64 }
+impl Look for L {
+    fn look(ref self) -> i64 with reads(Db) { Db.get(self.k) }
+}
+fn main() {
+    with_provider[Db](Mem { }, || {
+        let l: dyn Look = L { k: 4 };
+        println(l.look());
+    });
+}
+"#;
+
+/// A resource with no default has no provider a `dyn` value could use, so
+/// the coercion is refused even inside its `with_provider`.
+#[test]
+fn provider_refuses_a_dyn_reaching_a_provider_rooted_resource() {
+    let found = check("dyn-rooted", DYN_PROVIDER_ROOTED);
+    assert_eq!(found.len(), 1, "{found:?}");
+    let (code, line, col, msg) = &found[0];
+    assert_eq!((code.as_str(), *line, *col), ("E0423", 18, 27), "{msg}");
+    assert!(
+        msg.contains("its `L.look` uses `Db`, which has no default"),
+        "{msg}"
+    );
+    run_refuses("dyn-rooted", DYN_PROVIDER_ROOTED, "E_DYN_PROVIDER");
+}
+
+const DYN_DEFAULTS: &str = r#"trait Speak {
+    fn speak(ref self);
+}
+struct Dog { }
+impl Speak for Dog {
+    fn speak(ref self) { println("woof"); }
+}
+struct Quiet { }
+impl Speak for Quiet {
+    fn speak(ref self) { }
+}
+struct Cap { }
+impl StdoutProvider for Cap { fn write(mut ref self, s: Str) { } }
+
+fn twice[T: Speak](t: ref T) { t.speak(); t.speak(); }
+
+fn main() {
+    let d: dyn Speak = Dog { };
+    with_provider[Stdout](Cap { }, || {
+        d.speak();
+        let q: dyn Speak = Quiet { };
+        q.speak();
+        twice(Dog { });
+    });
+    println("after");
+}
+"#;
+
+/// A `dyn` value made outside every override runs with the defaults
+/// wherever it is called, one whose methods use no provider may be made
+/// anywhere, and a generic parameter takes the override.
+#[test]
+fn provider_dyn_made_at_the_defaults_keeps_them() {
+    let found = check("dyn-defaults", DYN_DEFAULTS);
+    assert!(found.is_empty(), "{found:?}");
+    let out = karac("dyn-defaults", &["__mir-run"], DYN_DEFAULTS);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "woof\nafter\n");
 }

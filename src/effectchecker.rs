@@ -462,6 +462,11 @@ pub enum EffectErrorKind {
     /// with every other resource at its default (core semantics §14.11,
     /// §14.12). Found as `ProviderUnsupported` is (B-2026-10-29-15).
     HandleUsesOverride,
+    /// A coercion to `dyn` of a type whose methods reach a provider-rooted
+    /// resource, or a program-rooted one overridden at the coercion
+    /// (`E_DYN_PROVIDER`, design.md §9): the value has no room to carry
+    /// the provider. Found as `ProviderUnsupported` is.
+    DynProvider,
     /// Phase-10 target gate: a function reachable from the build's
     /// entry point requires a HOST resource the current compilation
     /// target does not provide (and no provider is bound on the call
@@ -620,6 +625,7 @@ pub(crate) fn class_for_effect_error_kind(
         | EffectErrorKind::StatefulDefault
         | EffectErrorKind::ProviderUnsupported
         | EffectErrorKind::HandleUsesOverride
+        | EffectErrorKind::DynProvider
         | EffectErrorKind::TraitDefaultExceedsCeiling
         | EffectErrorKind::EffectVariableConflict
         | EffectErrorKind::ProfileIncompatibleEffect

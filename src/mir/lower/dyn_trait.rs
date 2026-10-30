@@ -175,8 +175,10 @@ impl<'l, 'a> Bx<'l, 'a> {
             _ => None,
         };
         let starts = vec![None; slots.len()];
+        let name = self.tys().tcx().display(dyn_ty, &|d| self.lcx.def_name(d));
         self.lcx.program.vtables.push(Vtable {
             dyn_ty,
+            name,
             concrete,
             slots,
             clone,

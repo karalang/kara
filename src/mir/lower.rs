@@ -23015,7 +23015,8 @@ pub fn refusal_text(why: &crate::mir::providers::Refusal) -> String {
              E_PROVIDER_UNSUPPORTED): UDP, TLS, WebSocket and the servers run outside every \
              override; test a handler by calling it with a `Request`"
         ),
-        crate::mir::providers::Refusal::HandleUsesOverride { text } => text.clone(),
+        crate::mir::providers::Refusal::HandleUsesOverride { text }
+        | crate::mir::providers::Refusal::DynProvider { text } => text.clone(),
     }
 }
 
@@ -23083,6 +23084,8 @@ pub enum SourceEffectError {
     /// A provider's handle method uses a resource overridden where the
     /// provider is bound (§14.11, §14.12).
     HandleUsesOverride,
+    /// A coercion to `dyn` whose methods need a provider (design.md §9).
+    DynProvider,
 }
 
 /// `karac check`'s run of [`par_check`] (B-2026-10-19-39, B-2026-10-20-7):
@@ -23152,6 +23155,7 @@ pub fn source_effect_errors(src: &str) -> Vec<((usize, usize), SourceEffectError
             crate::mir::providers::Refusal::HandleUsesOverride { .. } => {
                 SourceEffectError::HandleUsesOverride
             }
+            crate::mir::providers::Refusal::DynProvider { .. } => SourceEffectError::DynProvider,
         };
         add(n.span, kind, refusal_text(why));
     }

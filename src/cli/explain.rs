@@ -749,6 +749,8 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
     // using an overridden resource (§14.11), unclassified like `NoProvider`.
     ("E0421", eff("ProviderUnsupported", None)),
     ("E0422", eff("HandleUsesOverride", None)),
+    // `E_DYN_PROVIDER` (design.md §9), unclassified like `NoProvider`.
+    ("E0423", eff("DynProvider", None)),
     (
         "L0001",
         eff("FfiLintHint", Some(DiagnosticClass::LintWarning)),
@@ -2330,6 +2332,7 @@ mod tests {
             ("E0420", E::StatefulDefault),
             ("E0421", E::ProviderUnsupported),
             ("E0422", E::HandleUsesOverride),
+            ("E0423", E::DynProvider),
             ("L0001", E::FfiLintHint),
             ("L0002", E::MutualRecursionNote),
             ("L0003", E::PureLoopInPar),

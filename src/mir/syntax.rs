@@ -347,6 +347,8 @@ pub enum ConstKind {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Vtable {
     pub dyn_ty: Ty,
+    /// `dyn_ty` as the program writes it, for diagnostics.
+    pub name: String,
     pub concrete: Ty,
     pub slots: Vec<String>,
     pub clone: Option<String>,

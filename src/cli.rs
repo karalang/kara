@@ -2169,6 +2169,9 @@ impl Pipeline {
                     text,
                     crate::effectchecker::EffectErrorKind::HandleUsesOverride,
                 ),
+                crate::mir::lower::SourceEffectError::DynProvider => {
+                    (text, crate::effectchecker::EffectErrorKind::DynProvider)
+                }
             };
             effects.errors.push(crate::effectchecker::EffectError {
                 message,
