@@ -60,7 +60,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | false-positive | 69 |
 | diagnostics | 66 |
-| missing-feature | 49 |
+| missing-feature | 50 |
 | perf | 40 |
 | soundness | 30 |
 | miscompile | 18 |
@@ -74,7 +74,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 121 |
+| typecheck | 122 |
 | mir | 64 |
 | mir-llvm | 49 |
 | ownership | 34 |
@@ -109,6 +109,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-29-32 | 2026-10-29 | mir-llvm | medium | On the MIR compiled backend, `String.contains` with a needle of at most 16 bytes calls `memchr` and then `memcmp` at every place the needle's first byte occurs, so on a two-letter haystack (a binary string, where that byte is every other one) it costs 3.2 ns per haystack byte: 9.4x C `strstr` and 7.2x Rust `str::contains`; kata 1016's bench is 8.5x C | — |
 | B-2026-10-29-50 | 2026-10-29 | autopar | low | An auto-par task's loop takes its run's bounds as plain captures, so LLVM knows nothing of the counter's range: kata 4's `k % R` becomes a signed 64-bit magic division in the task (about 10 instructions) where the in-order loop, knowing 0 <= k < 10M, uses a 32-bit unsigned one (about 5) | — |
 | B-2026-10-30-13 | 2026-10-30 | typecheck+ownership | high | A plain `dyn Trait` MOVED into a `TaskGroup.spawn` closure passes `karac check` and runs, so a concrete value holding a `shared` handle (non-atomic count) crosses a task boundary | — |
+| B-2026-10-30-14 | 2026-10-30 | typecheck | medium | design.md § `as` casts promises `redundant_cast` (an identity cast) and `lossless_cast` (an `as` whose widening is implicit where it stands, its fix removing the `as`), but neither lint exists, so `x as i64` with `x: i64` passes silently and `karac fix` cannot drop it; and `true as bool`, which the same table calls the identity, is refused with E0210 | — |
 
 ### Relocated
 
