@@ -58,8 +58,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 69 |
-| false-positive | 69 |
+| false-positive | 72 |
+| diagnostics | 70 |
 | missing-feature | 51 |
 | perf | 41 |
 | soundness | 30 |
@@ -74,8 +74,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 122 |
-| mir | 64 |
+| typecheck | 124 |
+| mir | 66 |
 | mir-llvm | 49 |
 | ownership | 35 |
 | cli | 33 |
@@ -114,6 +114,10 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-30-19 | 2026-10-30 | cli | low | `karac run main.kara in.txt` is refused with `error: unexpected argument 'in.txt'`, without saying that program arguments go after `--` | — |
 | B-2026-10-30-20 | 2026-10-30 | cli | low | `karac new <name> --cli` scaffolds the same hello-world `src/main.kara` and placeholder test as a plain `karac new`, though `karac help` describes `--cli` as the command-line tool skeleton | — |
 | B-2026-10-30-22 | 2026-10-30 | cli | low | `karac lint --list`, which design.md § Built-in lints and src/lints.rs name as the way to list the lint registry, is an unknown command; design.md's v1 set also names `unused_effect`, which is not in the registry | — |
+| B-2026-10-30-23 | 2026-10-30 | mir | medium | A `dyn Handler with E` stored inside `Option` (`Vec[Option[dyn Handler with E]]`) loses its declared `with E` clause: a call through `if let Some(h) = s` is charged "unknown (a call through a `dyn` value a call hands back)", so `par { r.total(1), r.total(2) }` over effect-free handlers is refused; `Vec[dyn Handler with E]` is accepted | — |
+| B-2026-10-30-24 | 2026-10-30 | mir | low | E_STATEFUL_DEFAULT reached through a `dyn` method or a closure names the resource as its own caller ("`Ids` calls a `mut ref self` method of `Ids`") instead of the method or function that makes the call (`Minter.handle`) | — |
+| B-2026-10-30-25 | 2026-10-30 | typecheck | medium | A struct's effect variable is fixed by the FIRST value bound into it, so `router.add("/hello", Hello {}); router.add("/count", Counter { .. })` (a pure handler, then one that `blocks`) is refused while the same two calls in the other order check; design.md § Effect variables says a type's instance is fixed by its construction and later bindings within the same function | — |
+| B-2026-10-30-26 | 2026-10-30 | typecheck | medium | An element of a tuple literal did not coerce into its `dyn` slot: `routes.push((path, Hello {}))` into a `Vec[(String, dyn Handler)]`, `let t: (String, dyn Handler) = (.., Hello {})`, `Some((1, Hello {}))` and a nested tuple were refused as `found '(String, Hello)'`, while `Some(Hello {})` and a struct field coerced | — |
 
 ### Relocated
 
