@@ -8061,48 +8061,35 @@ fn test_resource_dispatch_polymorphic_clause_contributes_only_receiver_verb() {
 // ── E0412: resource-receiver contradiction ────────────────────────
 //
 // An `effect resource R: Trait` method whose declared `with` clause
-// mentions R without writes(R), while its receiver mode (bare `self`
-// or `mut ref self`) seeds writes(R) on every `R.method(...)` call
+// mentions R without writes(R), while its receiver mode (`mut ref self`,
+// or a bare `self` with D5 off) seeds writes(R) on every `R.method(...)` call
 // site. The declaration is unsatisfiable as written — the diagnostic
 // fires at the trait method definition (the root cause, not the
 // N call sites that would otherwise each trip E0400) and carries a
 // machine-applicable `ref self` receiver rewrite for `karac fix`.
 
+/// A bare `self` borrows under D5, so it reads `Cfg` (core semantics
+/// §14.2) and a `reads(Cfg)` clause agrees with it: no E0412, also on a
+/// path that has not rewritten bare parameters as borrows, as this one has
+/// not (B-2026-10-30-15). With `KARAC_D5=0` a bare `self` is owned and
+/// E0412 still fires (`test_fix_applies_e0412_receiver_rewrite` in
+/// tests/cli.rs).
 #[test]
 fn test_resource_receiver_contradiction_owned_self_reads_only() {
     let source = "pub effect resource Cfg: Config;\n\
                   pub trait Config { fn get(self, k: i64) -> i64 with reads(Cfg); }";
-    let errors = effectcheck_errors(source);
-    let err = errors
-        .iter()
-        .find(|e| e.kind == EffectErrorKind::ResourceReceiverContradiction)
-        .unwrap_or_else(|| {
-            panic!(
-                "expected ResourceReceiverContradiction; got: {:?}",
-                errors
-                    .iter()
-                    .map(|e| (&e.kind, &e.message))
-                    .collect::<Vec<_>>()
-            )
-        });
+    let result = effectcheck_all(source);
     assert!(
-        err.message.contains("Config.get")
-            && err.message.contains("reads(Cfg)")
-            && err.message.contains("`self` receiver")
-            && err.message.contains("ref self"),
-        "message should name the method, the declared verb, the receiver, \
-         and the fix; got: {}",
-        err.message
-    );
-    let edit = err
-        .replacement
-        .as_deref()
-        .expect("E0412 must carry a machine-applicable receiver rewrite");
-    assert_eq!(edit.replacement, "ref self");
-    assert_eq!(
-        &source[edit.offset..edit.offset + edit.length],
-        "self",
-        "edit span must cover exactly the receiver text"
+        result
+            .errors
+            .iter()
+            .all(|e| e.kind != EffectErrorKind::ResourceReceiverContradiction),
+        "a bare `self` reads `Cfg`: {:?}",
+        result
+            .errors
+            .iter()
+            .map(|e| (&e.kind, &e.message))
+            .collect::<Vec<_>>()
     );
 }
 

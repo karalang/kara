@@ -172,6 +172,7 @@ impl<'a> super::EffectChecker<'a> {
             trait_name: String,
             name: String,
             self_param: SelfParam,
+            self_is_own: bool,
             self_span: Option<Span>,
             span: Span,
             effects: Option<EffectList>,
@@ -198,6 +199,7 @@ impl<'a> super::EffectChecker<'a> {
                             trait_name: t.name.clone(),
                             name: m.name.clone(),
                             self_param: sp.clone(),
+                            self_is_own: m.self_is_own,
                             self_span: m.self_span,
                             span: m.span,
                             effects: m.effects.clone(),
@@ -222,8 +224,17 @@ impl<'a> super::EffectChecker<'a> {
                 .filter_map(|b| trait_methods.get(&b.name))
                 .flatten()
             {
+                // Core semantics §14.2: a bare `self` borrows the provider
+                // shared (D5), so it reads `R`, also on a path that has not
+                // rewritten bare parameters as borrows (`karac query`,
+                // B-2026-10-30-15); `mut ref self` writes it. An `own self`
+                // method cannot be called through a resource, and is
+                // charged `writes(R)`, the stronger verb.
                 let verb = match m.self_param {
                     SelfParam::Ref => EffectVerbKind::Reads,
+                    SelfParam::Owned if !m.self_is_own && crate::d5_params::on() => {
+                        EffectVerbKind::Reads
+                    }
                     SelfParam::MutRef | SelfParam::Owned => EffectVerbKind::Writes,
                 };
                 // E0412: the receiver seeds `writes(R)` on every
@@ -237,7 +248,7 @@ impl<'a> super::EffectChecker<'a> {
                         clause_verbs_on_resource_without_writes(m.effects.as_ref(), &r.name)
                     {
                         let receiver = match m.self_param {
-                            SelfParam::Owned => "self",
+                            SelfParam::Owned => "own self",
                             SelfParam::MutRef => "mut ref self",
                             SelfParam::Ref => unreachable!("ref self seeds reads"),
                         };
