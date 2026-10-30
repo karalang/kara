@@ -153,6 +153,30 @@ pub fn via_bound[T: Act](t: T) with writes(Db) { t.act(); }",
     );
 }
 
+/// An effect variable in a method's clause that reaches a STORED value is
+/// the only way the stored handlers' effects are charged, so it is never
+/// reported, nor is anything else in a clause that names one.
+#[test]
+fn unused_effect_keeps_an_effect_variable_reaching_stored_values() {
+    let (ok, out) = check(
+        "effect_var",
+        &["-D", "unused_effect"],
+        "pub trait Handler { fn handle(self, n: i64) -> i64; }
+pub struct Router[with E] { routes: Vec[dyn Handler with E] }
+#[deny(unused_effect)]
+impl[with E] Router[with E] {
+    pub fn dispatch(self, n: i64) -> i64 with E {
+        let mut t = 0;
+        for h in self.routes.iter() { t += h.handle(n); }
+        t
+    }
+    pub fn mixed(self, n: i64) -> i64 with E writes(Log) { self.dispatch(n) }
+}",
+    );
+    assert!(ok, "{out}");
+    assert!(lint_lines(&out).is_empty(), "{out}");
+}
+
 #[test]
 fn unused_effect_command_line_and_attributes() {
     let body = "pub fn reserve(a: i64) -> i64 with writes(Db) { a }
