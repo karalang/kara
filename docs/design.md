@@ -578,7 +578,7 @@ A `///` before `self` in a method signature is ignored: `self` is not a document
 
 **No circular module dependencies.** The compiler builds a module graph from each file's `import` statements (including `pub import` edges) and rejects any cycle before name resolution: `E0223 CircularModuleDependency`, listing the cycle and suggesting that shared items move to a lower module.
 
-**Colocated tests.** A test file has the `_test.kara` suffix and sits beside the code it tests. `src/db/connection_test.kara` tests `db.connection` and can see its `private` items. `karac build` skips `_test.kara` files; `karac test` includes them and adds the test prelude ([§14](#14-testing)). There is no separate `tests/` root.
+**Colocated tests.** A test file has the `_test.kara` suffix and sits beside the code it tests. `src/db/connection_test.kara` tests `db.connection` and can see its `private` items. `karac build` skips `_test.kara` files; `karac test` includes them and adds the test prelude ([§14](#14-testing)). `karac check` checks them too, with the test prelude, so a package whose tests do not compile is not reported clean (ruling 2026-10-30). There is no separate `tests/` root.
 
 ### Imports
 
@@ -777,11 +777,13 @@ Each `karac build --target X` produces one artifact. Building a matrix of target
 - It refuses if `kara.toml`, `src/main.kara` or `src/lib.kara` exists, unless `--force`. It never overwrites `README.md`, the test file or `.gitignore`, even with `--force`. It does not run `git init`.
 - It writes five files: `kara.toml` (`name`, `version = "0.1.0"`, `authors = []`, `edition = "2026"`, an empty `[dependencies]`), `src/main.kara` with `fn main() { println("Hello, world!"); }` or `src/lib.kara` with a documented `pub fn add(a: i64, b: i64) -> i64 { a + b }`, a matching `_test.kara` with one test, a `README.md` holding the title, and a `.gitignore` holding `/dist/`.
 
+**`karac new`.** `karac new <name> [--backend | --cli | --lib]` creates `./<name>/` and scaffolds into it, with `karac init`'s name rules and files. Its default is `--backend`: `src/main.kara` serves HTTP on `127.0.0.1:8080` with `Server.serve`, dispatching on `req.path()` with a `/health` endpoint, and its test calls the handler directly with a `Request.new(..)` ([library/io.md](library/io.md)). `--cli` is `karac init --bin`'s hello-world and `--lib` is `karac init --lib`'s. `--data` is reserved and reports that its scaffold is deferred.
+
 **Command phasing.**
 
 | Phase | Commands | Gate |
 |---|---|---|
-| First | `build`, `run`, `check`, `fmt`, `query`, `test`, `init`, `doc` | Current scope |
+| First | `build`, `run`, `check`, `fmt`, `query`, `test`, `init`, `new`, `doc` | Current scope |
 | With dependency resolution | `update`, `clean`, `install`, `vendor` | The resolver and lockfile |
 | Later | `bench`, `publish`, `audit` | A bench harness, a publish protocol, a vulnerability database |
 
