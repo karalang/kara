@@ -58,15 +58,15 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
+| diagnostics | 69 |
 | false-positive | 69 |
-| diagnostics | 66 |
-| missing-feature | 50 |
-| perf | 40 |
+| missing-feature | 51 |
+| perf | 41 |
 | soundness | 30 |
 | miscompile | 18 |
 | run-vs-build | 15 |
 | codegen-gap | 10 |
-| other | 6 |
+| other | 9 |
 | crash | 2 |
 | leak | 1 |
 
@@ -77,13 +77,13 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | typecheck | 122 |
 | mir | 64 |
 | mir-llvm | 49 |
-| ownership | 34 |
-| cli | 27 |
+| ownership | 35 |
+| cli | 33 |
 | interp | 25 |
 | codegen | 22 |
 | parser | 20 |
 | runtime | 19 |
-| effect | 9 |
+| effect | 10 |
 | other | 3 |
 | resolver | 3 |
 | autopar | 3 |
@@ -109,6 +109,14 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-29-32 | 2026-10-29 | mir-llvm | medium | On the MIR compiled backend, `String.contains` with a needle of at most 16 bytes calls `memchr` and then `memcmp` at every place the needle's first byte occurs, so on a two-letter haystack (a binary string, where that byte is every other one) it costs 3.2 ns per haystack byte: 9.4x C `strstr` and 7.2x Rust `str::contains`; kata 1016's bench is 8.5x C | — |
 | B-2026-10-29-50 | 2026-10-29 | autopar | low | An auto-par task's loop takes its run's bounds as plain captures, so LLVM knows nothing of the counter's range: kata 4's `k % R` becomes a signed 64-bit magic division in the task (about 10 instructions) where the in-order loop, knowing 0 <= k < 10M, uses a 32-bit unsigned one (about 5) | — |
 | B-2026-10-30-13 | 2026-10-30 | typecheck+ownership | high | A plain `dyn Trait` MOVED into a `TaskGroup.spawn` closure passes `karac check` and runs, so a concrete value holding a `shared` handle (non-atomic count) crosses a task boundary | — |
+| B-2026-10-30-15 | 2026-10-30 | effect | medium | A resource method with a bare `self` is charged `writes(R)`, not `reads(R)` as core-semantics §14.2 says: `karac query effects` reports `writes(UserDB)` for the README's own `fetch_users`, whose comment says `reads(UserDB)`, and the automatic-parallelism analysis serialises two reads of one resource as a write conflict, while the `par` check accepts the same pair | — |
+| B-2026-10-30-16 | 2026-10-30 | cli | high | `karac fmt` drops every comment: `// top`, a comment line inside a body and a trailing `// note` all vanish from its output, so formatting any real file loses its comments | — |
+| B-2026-10-30-17 | 2026-10-30 | cli | low | `karac query ownership app.kara` (a bare file, as the other kinds accept) fails with `error: cannot read 'app': No such file or directory`, splitting the file name at its dot | — |
+| B-2026-10-30-18 | 2026-10-30 | cli | low | `karac run` with no file inside a project fails with `error: missing file argument`, while `karac check`, `karac build` and `karac test` with no file all work on the project | — |
+| B-2026-10-30-19 | 2026-10-30 | cli | low | `karac run main.kara in.txt` is refused with `error: unexpected argument 'in.txt'`, without saying that program arguments go after `--` | — |
+| B-2026-10-30-20 | 2026-10-30 | cli | low | `karac new <name> --cli` scaffolds the same hello-world `src/main.kara` and placeholder test as a plain `karac new`, though `karac help` describes `--cli` as the command-line tool skeleton | — |
+| B-2026-10-30-21 | 2026-10-30 | ownership | low | Moving a value while a returned reference into it is live (README's `name_of` example) says `help: drop the slice borrow before moving the source`, though the borrow is a returned `ref String`, not a slice | — |
+| B-2026-10-30-22 | 2026-10-30 | cli | low | `karac lint --list`, which design.md § Built-in lints and src/lints.rs name as the way to list the lint registry, is an unknown command; design.md's v1 set also names `unused_effect`, which is not in the registry | — |
 
 ### Relocated
 
