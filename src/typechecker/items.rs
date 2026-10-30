@@ -9867,6 +9867,23 @@ impl<'a> super::TypeChecker<'a> {
                             target.span,
                             TypeErrorKind::InvalidUnaryOp,
                         );
+                    } else if let Type::MutRef(inner) = &ref_ty {
+                        // design.md § dyn Trait: the new value may have
+                        // another type and size than the one viewed.
+                        if let Type::Dyn { trait_name, .. } = inner.as_ref() {
+                            self.type_error(
+                                format!(
+                                    "error[E_DYN_REPLACE_THROUGH_VIEW]: a `mut ref dyn \
+                                     {trait_name}` cannot replace the value it views, because \
+                                     the new value may have another type and size (design.md \
+                                     § dyn Trait). Assign the owned `dyn {trait_name}` itself, \
+                                     which drops the old value first, or call a `mut ref self` \
+                                     method through the view"
+                                ),
+                                target.span,
+                                TypeErrorKind::InvalidUnaryOp,
+                            );
+                        }
                     }
                 }
                 // Slice 5 of design.md § Module-Level Bindings — reject

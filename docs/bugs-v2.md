@@ -62,7 +62,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | diagnostics | 66 |
 | missing-feature | 49 |
 | perf | 40 |
-| soundness | 27 |
+| soundness | 30 |
 | miscompile | 18 |
 | run-vs-build | 15 |
 | codegen-gap | 10 |
@@ -74,10 +74,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 118 |
-| mir | 63 |
+| typecheck | 121 |
+| mir | 64 |
 | mir-llvm | 49 |
-| ownership | 33 |
+| ownership | 34 |
 | cli | 27 |
 | interp | 25 |
 | codegen | 22 |
@@ -108,6 +108,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-28-44 | 2026-10-28 | mir-llvm+runtime | low | On macOS, `karac run` of a program with several pool workers can report ANOTHER task's source location for a panic: the JIT keeps `@karac.site` / `@karac.site.len` process-wide because RuntimeDyldMachO cannot link thread-locals, and B-2026-10-26-7's comment says that sharing 'costs speed only' — it also makes the reported place a race, and tests/mir_site_thread_local.rs's `karac run` assertion passes by chance on a Mac | — |
 | B-2026-10-29-32 | 2026-10-29 | mir-llvm | medium | On the MIR compiled backend, `String.contains` with a needle of at most 16 bytes calls `memchr` and then `memcmp` at every place the needle's first byte occurs, so on a two-letter haystack (a binary string, where that byte is every other one) it costs 3.2 ns per haystack byte: 9.4x C `strstr` and 7.2x Rust `str::contains`; kata 1016's bench is 8.5x C | — |
 | B-2026-10-29-50 | 2026-10-29 | autopar | low | An auto-par task's loop takes its run's bounds as plain captures, so LLVM knows nothing of the counter's range: kata 4's `k % R` becomes a signed 64-bit magic division in the task (about 10 instructions) where the in-order loop, knowing 0 <= k < 10M, uses a 32-bit unsigned one (about 5) | — |
+| B-2026-10-30-11 | 2026-10-30 | typecheck+mir | medium | `karac check` accepts `*r = other` through a `mut ref dyn Trait`, which design.md § dyn Trait makes an error (the new value may have another type and size); MIR runs it | — |
+| B-2026-10-30-12 | 2026-10-30 | typecheck | low | `E_DYN_NOT_DISPATCHABLE` never judges a standard-library supertrait: `trait T: PartialEq` makes `dyn T` legal although `PartialEq.eq` names `Self` outside the receiver | — |
+| B-2026-10-30-13 | 2026-10-30 | typecheck+ownership | high | A plain `dyn Trait` MOVED into a `TaskGroup.spawn` closure passes `karac check` and runs, so a concrete value holding a `shared` handle (non-atomic count) crosses a task boundary | — |
 
 ### Relocated
 

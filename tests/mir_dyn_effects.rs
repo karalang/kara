@@ -36,7 +36,7 @@ fn show(s: ref dyn Shape) -> f64 { s.area() }
 fn paint(s: ref dyn Shape) { s.draw(); }
 fn twice(s: ref dyn Shape) { paint(s); paint(s); }
 fn make(k: i64) -> dyn Shape { if k == 0 { Circle { r: 1.0 } } else { Loud { n: k } } }
-fn swap_in(s: mut ref dyn Shape) { *s = Loud { n: 9 }; }
+fn swap_in(s: mut ref dyn Shape) { s.draw(); }
 ";
 
 fn fixture(tag: &str, main: &str) -> (PathBuf, PathBuf) {
@@ -139,12 +139,15 @@ fn dyn_local_has_the_values_coerced_into_it() {
     par { o.draw(), println(\"x\") };",
         STDOUT,
     );
-    refused(
-        "local_written_by_callee",
+    // A `mut ref dyn` cannot replace the value it views (design.md §
+    // `dyn Trait`, E_DYN_REPLACE_THROUGH_VIEW, B-2026-10-30-11), so a
+    // callee lent the local leaves its concrete type, and its effects, as
+    // they were.
+    accepted(
+        "local_lent_to_a_callee",
         "    let mut o: dyn Shape = Circle { r: 1.0 };
     swap_in(mut o);
     par { o.area(), println(\"x\") };",
-        STDOUT,
     );
 }
 

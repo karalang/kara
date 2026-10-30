@@ -111,13 +111,24 @@ impl<'a> super::TypeChecker<'a> {
             } else {
                 format!(" (from its supertrait `{owner}`)")
             };
+            // A standard-library method's declaration is not the program's
+            // to change, so the help names the supertrait instead.
+            let declared_here = self
+                .program
+                .items
+                .iter()
+                .any(|i| matches!(i, Item::TraitDef(d) if d.name == owner));
+            let change = if declared_here {
+                format!("Give `{method}` a default body")
+            } else {
+                format!("Drop the supertrait `{owner}`")
+            };
             self.type_error(
                 format!(
                     "error[E_DYN_NOT_DISPATCHABLE]: `{trait_name}` cannot be used as `dyn`: \
                      its required method `{method}`{at} cannot be called through a method \
-                     table, because {why}. Give `{method}` a default body, or take the \
-                     value through a generic parameter `[T: {trait_name}]` (design.md § \
-                     `dyn Trait`)"
+                     table, because {why}. {change}, or take the value through a generic \
+                     parameter `[T: {trait_name}]` (design.md § `dyn Trait`)"
                 ),
                 span,
                 TypeErrorKind::TypeMismatch,

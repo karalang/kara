@@ -14,8 +14,8 @@ impl<'a> super::TypeChecker<'a> {
     /// The first required method of `trait_name` or a supertrait that a
     /// `dyn` value cannot dispatch, as `(trait, method, why)`, in
     /// declaration order, the trait's own first, then each supertrait's
-    /// breadth-first. A trait with no declaration in this program (a baked
-    /// standard-library one) is not judged.
+    /// breadth-first. A baked standard-library trait is judged by its
+    /// declaration in the library's source; one with none is not judged.
     pub(super) fn dyn_first_undispatchable(
         &self,
         trait_name: &str,
@@ -24,9 +24,18 @@ impl<'a> super::TypeChecker<'a> {
             if t == "Clone" {
                 continue;
             }
-            let Some(def) = self.program.items.iter().find_map(|item| match item {
-                Item::TraitDef(d) if d.name == t => Some(d),
-                _ => None,
+            // A baked stdlib trait (`PartialEq`, `Iterator`) is declared in
+            // the library's own source, not the program's.
+            let find = |items: &'a [Item]| {
+                items.iter().find_map(|item| match item {
+                    Item::TraitDef(d) if d.name == t => Some(d),
+                    _ => None,
+                })
+            };
+            let Some(def) = find(&self.program.items).or_else(|| {
+                crate::prelude::STDLIB_PROGRAMS
+                    .iter()
+                    .find_map(|(_, p)| find(&p.items))
             }) else {
                 continue;
             };
