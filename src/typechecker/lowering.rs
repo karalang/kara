@@ -16,7 +16,7 @@ use super::inference::substitute_type_params;
 use super::types::{
     is_numeric, type_display, ConstArg, DimArg, FloatSize, IntSize, SubstValue, Type, UIntSize,
 };
-use super::TypeErrorKind;
+use super::{FixIt, TypeErrorKind};
 use crate::ast::narrow_literal_to_i64;
 use crate::token::Span;
 
@@ -45,6 +45,42 @@ impl<'a> super::TypeChecker<'a> {
     ) -> Type {
         match &ty.kind {
             TypeKind::Path(path) => {
+                // A trait in a type position is written `dyn Trait`
+                // (design.md § `dyn Trait`): a bare trait name is an error,
+                // with the `dyn` as its machine fix.
+                if let [name] = path.segments.as_slice() {
+                    if self.env.traits.contains_key(name)
+                        && !generic_scope.iter().any(|g| g == name)
+                        && !self.env.structs.contains_key(name)
+                        && !self.env.enums.contains_key(name)
+                        && !self.env.type_aliases.contains_key(name)
+                    {
+                        // A signature's types are lowered more than once.
+                        if self.errors.iter().any(|e| {
+                            e.span == ty.span && e.message.starts_with("error[E_BARE_TRAIT_TYPE]")
+                        }) {
+                            return Type::Error;
+                        }
+                        self.type_error_with_fix_it(
+                            format!(
+                                "error[E_BARE_TRAIT_TYPE]: `{name}` is a trait, not a type; a \
+                                 value of any type that implements it is written `dyn {name}` \
+                                 (design.md § `dyn Trait`), and a parameter can also take \
+                                 `impl {name}` or a generic `[T: {name}]`"
+                            ),
+                            ty.span,
+                            TypeErrorKind::TypeMismatch,
+                            FixIt {
+                                span: Span {
+                                    length: 0,
+                                    ..ty.span
+                                },
+                                replacement: "dyn ".to_string(),
+                            },
+                        );
+                        return Type::Error;
+                    }
+                }
                 let lowered = self.lower_path_type(path, generic_scope);
                 // Slice 1b: opaque foreign types declared via `unsafe extern
                 // "ABI" { type Foo; }` have no known size and cannot appear

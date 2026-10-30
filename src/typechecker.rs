@@ -62,6 +62,7 @@ mod fn_env_cross_task;
 mod provider_share;
 pub(crate) use expr_method_call::STRING_BUILTIN_METHODS;
 mod cross_task_params;
+mod dyn_dispatchable;
 mod dyn_trait;
 mod expr_method_tensor;
 mod expr_ops;

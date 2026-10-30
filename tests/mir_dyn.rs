@@ -355,8 +355,9 @@ fn mir_dyn_records_each_default_copys_own_coercion() {
 }
 
 /// A fresh binding lent into a `mut ref dyn` parameter takes the `mut`
-/// marker, as into any `mut ref` parameter; a method naming `Self` inside
-/// another type has no slot.
+/// marker, as into any `mut ref` parameter; a required method naming `Self`
+/// inside another type has no slot, so the `dyn` type itself is refused
+/// (`E_DYN_NOT_DISPATCHABLE`, naming the method).
 #[test]
 fn mir_dyn_takes_the_mut_marker_and_leaves_nested_self_out() {
     let counter = r#"trait Counter { fn bump(mut ref self); fn get(self) -> i64; }
@@ -378,7 +379,7 @@ struct P { n: i64 }
 impl Pair for P { fn pair(self) -> Vec[P] { vec![P { n: self.n }] } fn one(self) -> i64 { self.n } }
 fn main() { let d: dyn Pair = P { n: 1 }; let x = d.one(); let v = d.pair(); }
 "#,
-        "`pair` cannot be called through `dyn Pair`",
+        "its required method `pair` cannot be called through a method table",
     );
 }
 

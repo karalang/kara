@@ -97,6 +97,33 @@ impl<'a> super::TypeChecker<'a> {
                 return Type::Error;
             }
         }
+        if let Some((owner, method, why)) = self.dyn_first_undispatchable(&trait_name) {
+            // A signature's types are lowered more than once.
+            if self
+                .errors
+                .iter()
+                .any(|e| e.span == span && e.message.starts_with("error[E_DYN_NOT_DISPATCHABLE]"))
+            {
+                return Type::Error;
+            }
+            let at = if owner == trait_name {
+                String::new()
+            } else {
+                format!(" (from its supertrait `{owner}`)")
+            };
+            self.type_error(
+                format!(
+                    "error[E_DYN_NOT_DISPATCHABLE]: `{trait_name}` cannot be used as `dyn`: \
+                     its required method `{method}`{at} cannot be called through a method \
+                     table, because {why}. Give `{method}` a default body, or take the \
+                     value through a generic parameter `[T: {trait_name}]` (design.md § \
+                     `dyn Trait`)"
+                ),
+                span,
+                TypeErrorKind::TypeMismatch,
+            );
+            return Type::Error;
+        }
         let mut assoc = Vec::new();
         for name in names {
             let Some((_, ty, _)) = bound.iter().find(|(n, _, _)| *n == name) else {
