@@ -117,6 +117,33 @@ fn main() {{
     );
 }
 
+/// B-2026-10-30-23's program: the payload bound while iterating.
+#[test]
+fn dyn_element_option_payload_while_iterating_runs_in_par() {
+    runs(
+        "option_iter",
+        "struct Add { k: i64 }
+impl Handler for Add { fn handle(self, n: i64) -> i64 { n + self.k } }
+struct Router[with E] { slots: Vec[Option[dyn Handler with E]] }
+impl[with E] Router[with E] {
+    fn add(mut ref self, h: escaping dyn Handler with E) { self.slots.push(Some(h)); }
+    fn total(ref self, n: i64) -> i64 with E {
+        let mut t = 0;
+        for s in self.slots.iter() { if let Some(h) = s { t += h.handle(n); } }
+        t
+    }
+}
+fn main() {
+    let mut r = Router { slots: Vec.new() };
+    r.add(Add { k: 1 });
+    r.add(Add { k: 2 });
+    let (a, b) = par { r.total(1), r.total(2) };
+    println(f\"{a} {b}\");
+}",
+        "5 7\n",
+    );
+}
+
 #[test]
 fn dyn_element_indexed_and_iterated_through_quiet_handlers_run_in_par() {
     runs(
