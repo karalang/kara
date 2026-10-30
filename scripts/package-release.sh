@@ -14,11 +14,15 @@
 #     lib/libkarac_runtime.a      # full runtime (TLS on)
 #     lib/libkarac_runtime_min.a  # lean runtime (auto-selected for
 #                                 #  programs with no TLS-only symbols)
+#     bin/kara-lsp                # the language server editors launch
 #     README.md
 #
 # Output: dist/karac-<version>-<target>.tar.gz + .sha256, where
 # <version> is the stamped `karac --version` (with `+` sanitized to `-`
-# for filename/URL friendliness).
+# for filename/URL friendliness), and the VS Code extension for the same
+# platform, dist/kara-vscode-<version>-<vscode-target>.vsix + .sha256,
+# with `kara-lsp` bundled in its `server/` (editors/vscode: the client
+# launches the bundled server before one on PATH).
 #
 # Usage: scripts/package-release.sh <target-label>
 #   e.g. scripts/package-release.sh x86_64-linux
@@ -26,14 +30,27 @@
 #        scripts/package-release.sh aarch64-macos
 #
 # Requirements: LLVM 18 with static archives (apt llvm-18-dev / brew
-# llvm@18) reachable by llvm-sys (LLVM_SYS_181_PREFIX), and a full-depth
+# llvm@18) reachable by llvm-sys (LLVM_SYS_181_PREFIX), a full-depth
 # git checkout — a shallow clone stamps `dev.shallow`, which the check
-# below rejects for release artifacts (fetch-depth: 0 in CI).
+# below rejects for release artifacts (fetch-depth: 0 in CI) — and
+# Node 18+ with npm for the extension (`npm ci` fetches `vsce`).
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 TARGET_LABEL="${1:?usage: package-release.sh <target-label>}"
+
+# The VS Code platform the label's .vsix is for; checked before any build.
+case "$TARGET_LABEL" in
+    x86_64-linux) VSCODE_TARGET=linux-x64 ;;
+    aarch64-linux) VSCODE_TARGET=linux-arm64 ;;
+    x86_64-macos) VSCODE_TARGET=darwin-x64 ;;
+    aarch64-macos) VSCODE_TARGET=darwin-arm64 ;;
+    *)
+        echo "ERROR: no VS Code target for '$TARGET_LABEL'" >&2
+        exit 1 ;;
+esac
+command -v npm > /dev/null || { echo "ERROR: npm is required to package the VS Code extension" >&2; exit 1; }
 
 echo "==> building runtime archives (lean → full)"
 cargo rustc -p karac-runtime --release --no-default-features --features net --crate-type staticlib
@@ -42,6 +59,10 @@ cargo rustc -p karac-runtime --release --crate-type staticlib
 
 echo "==> building karac + karac_jit_runner (release, static LLVM)"
 cargo build --release --no-default-features --features llvm,llvm-static --bin karac --bin karac_jit_runner
+
+# Its own build: the server analyses source and links no LLVM at all.
+echo "==> building kara-lsp (release)"
+cargo build --release -p kara-lsp --bin kara-lsp
 
 VERSION_RAW="$(target/release/karac --version | awk '{print $2}')"
 if [[ "$VERSION_RAW" == *"dev.shallow"* || "$VERSION_RAW" == *"dev.unknown"* ]]; then
@@ -64,7 +85,7 @@ VERSION="${VERSION_RAW//+/-}"
 # dry-run — so that leg relocates them into lib/ and then rejects ANY
 # surviving brew/local reference, not just libLLVM.)
 if [[ "$(uname -s)" == Linux ]]; then
-    for bin in karac karac_jit_runner; do
+    for bin in karac karac_jit_runner kara-lsp; do
         if ldd "target/release/$bin" | grep -q 'libLLVM'; then
             echo "ERROR: target/release/$bin still links libLLVM dynamically:" >&2
             ldd "target/release/$bin" | grep libLLVM >&2
@@ -80,6 +101,7 @@ rm -rf "$STAGE"
 mkdir -p "$STAGE/bin" "$STAGE/lib"
 cp target/release/karac "$STAGE/bin/"
 cp target/release/karac_jit_runner "$STAGE/bin/"
+cp target/release/kara-lsp "$STAGE/bin/"
 cp target/release/libkarac_runtime.a "$STAGE/lib/"
 cp target/release/libkarac_runtime_min.a "$STAGE/lib/"
 
@@ -112,6 +134,7 @@ if [[ "$(uname -s)" == Darwin ]]; then
     }
     relocate "$STAGE/bin/karac" "@executable_path/../lib"
     relocate "$STAGE/bin/karac_jit_runner" "@executable_path/../lib"
+    relocate "$STAGE/bin/kara-lsp" "@executable_path/../lib"
 
     # The staged verification: NOTHING in the bundle may reference a
     # brew or /usr/local path — catch-all, not just libLLVM.
@@ -157,6 +180,14 @@ macOS: Gatekeeper quarantines unsigned downloads. Clear it once:
     karac build hello.kara   # native binary (needs a C linker: cc/clang)
     ./hello
 
+## Editor
+
+\`bin/kara-lsp\` is the language server. For VS Code, install the
+release's \`kara-vscode-${VERSION}-${VSCODE_TARGET}.vsix\`, which bundles
+it (Extensions view, "Install from VSIX...", or
+\`code --install-extension <file>.vsix\`). Other editors can launch
+\`kara-lsp\` over stdio.
+
 ## Requirements
 
 - A C toolchain for AOT linking (\`cc\`/\`clang\` — build-essential on
@@ -177,3 +208,31 @@ else
     (cd dist && shasum -a 256 "${BUNDLE}.tar.gz" > "${BUNDLE}.tar.gz.sha256")
 fi
 echo "==> $(du -h "dist/${BUNDLE}.tar.gz" | cut -f1) dist/${BUNDLE}.tar.gz"
+
+# The VS Code extension, with the staged (on macOS, relocated and
+# re-signed) kara-lsp in `server/`. `server/` is gitignored and removed
+# again, so the checkout stays clean for the next label.
+VSIX="kara-vscode-${VERSION}-${VSCODE_TARGET}.vsix"
+EXT=editors/vscode
+echo "==> packaging ${VSIX}"
+rm -rf "$EXT/server"
+mkdir -p "$EXT/server"
+cp "$STAGE/bin/kara-lsp" "$EXT/server/"
+(
+    cd "$EXT"
+    npm ci --no-audit --no-fund
+    npx vsce package --target "$VSCODE_TARGET" --out "../../dist/${VSIX}"
+)
+rm -rf "$EXT/server"
+# The extension must carry the server, executable.
+if ! unzip -Z "dist/${VSIX}" | grep -Eq '^-rwx.* extension/server/kara-lsp$'; then
+    echo "ERROR: dist/${VSIX} has no executable extension/server/kara-lsp:" >&2
+    unzip -l "dist/${VSIX}" >&2
+    exit 1
+fi
+if command -v sha256sum > /dev/null; then
+    (cd dist && sha256sum "${VSIX}" > "${VSIX}.sha256")
+else
+    (cd dist && shasum -a 256 "${VSIX}" > "${VSIX}.sha256")
+fi
+echo "==> $(du -h "dist/${VSIX}" | cut -f1) dist/${VSIX}"
