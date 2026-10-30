@@ -64,7 +64,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | perf | 40 |
 | soundness | 26 |
 | miscompile | 17 |
-| run-vs-build | 11 |
+| run-vs-build | 13 |
 | codegen-gap | 8 |
 | other | 6 |
 | crash | 2 |
@@ -75,9 +75,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 118 |
-| mir | 58 |
+| mir | 60 |
 | mir-llvm | 49 |
-| ownership | 31 |
+| ownership | 33 |
 | interp | 25 |
 | cli | 25 |
 | codegen | 22 |
@@ -90,7 +90,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | lexer | 1 |
 ## Current state
 
-_Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-10-29). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-10-30). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open
 
@@ -122,8 +122,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-29-45 | 2026-10-29 | typecheck | low | `karac fix` has no `own` fix for a closure's bare parameter given away by an `own self` method (it offers `#[derive(Copy)]`), by a writing method (it says `mut ref`), by `return x` / `let y = x; y` (the caller gets E0516 instead), or by a returned closure that captures it (E0509 at the store) | — |
 | B-2026-10-29-46 | 2026-10-29 | ownership | medium | `method_param_modes` is keyed by `"Type.method"`, so a type with two impls of one operator trait (`impl Add for Col` with a borrowing `rhs: Col` and `impl Add[Flags] for Col` with `rhs: own Flags`) gives every `col + x` the LAST impl's parameter modes: `a + b` then `a + b` is refused as a use of moved `b`, though the impl `a + b` calls borrows it and the MIR build runs it | — |
 | B-2026-10-29-47 | 2026-10-29 | ownership | medium | A program's own `struct Mask` is read as the SIMD scalar `Mask` by D5 (`COPY_SCALARS` in src/d5_params.rs lists "Mask" by name), so a bare `m: Mask` parameter is not rewritten to `ref Mask` and every call moves its argument: `count(m)` twice is refused as a use of moved `m`, and the same struct renamed `Bits` checks and runs | — |
-| B-2026-10-29-49 | 2026-10-29 | ownership | medium | A `let` closure whose parameter is typed `Str` still moves a `String` argument in `karac check` (`let skip = |n: Str| ..; skip(n); n.len()` is "moved here, used again here"); `|n: String|` and `fn skip(n: Str)` check, and `__mir-run` runs all three | — |
 | B-2026-10-29-50 | 2026-10-29 | autopar | low | An auto-par task's loop takes its run's bounds as plain captures, so LLVM knows nothing of the counter's range: kata 4's `k % R` becomes a signed 64-bit magic division in the task (about 10 instructions) where the in-order loop, knowing 0 <= k < 10M, uses a 32-bit unsigned one (about 5) | — |
+| B-2026-10-30-1 | 2026-10-30 | ownership+mir | medium | Check reads a bare `dyn Trait` parameter as owned (d5_params skips `dyn`) while the MIR builder borrows it, so `fn keep(v: mut ref Vec[dyn Shape], s: dyn Shape) { v.push(s) }` passes check and MIR refuses it | — |
+| B-2026-10-30-2 | 2026-10-30 | ownership+mir | medium | A call through a `let` closure never moves an owned argument in check: `let take = |n: own String| n.len(); take(n); take(n)` passes check, and `__mir-run` refuses it ("use of _3, which may have been moved") | — |
 
 ### Relocated
 
@@ -403,6 +404,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-29-43 | ownership | medium | `karac check` still refuses moving a binding after an iterator adapter's closure that only reads it (`h.iter().filter(\|u\| mask[*u % 2]).count(); let… | faedb308f5 |
 | B-2026-10-29-44 | typecheck | medium | A closure whose annotated parameter borrows (`\|x: ref String\|`), passed to an owning slot (`OnceFn(own T) -> U`: `Option.map`, `Result.map`, `into_it… | 3bf606519c |
 | B-2026-10-29-48 | effect | low | With a program `impl Mul[Col] for f64`, every `f64 * f64` in the program is attributed to that impl's `f64.mul` by the effect checker: a helper doing… | 1b299d7160 |
+| B-2026-10-29-49 | ownership | medium | A `let` closure whose parameter is typed `Str` still moves a `String` argument in `karac check` (`let skip = \|n: Str\| ..; skip(n); n.len()` is "moved… | fb03e6df09 |
 | B-2026-10-29-51 | effect | medium | An operator whose operands differ in type (`v * 2.0` on `impl Mul[f64] for V`, `2.0 * c` on `impl Mul[Col] for f64`) is never charged its impl's effe… | 1b299d7160 |
 
 </details>
