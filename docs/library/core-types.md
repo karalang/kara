@@ -69,6 +69,8 @@ Methods that can panic (`unwrap`, `expect`, `unwrap_err`) report the caller's so
 | `saturating_add(y)`, ... | `Self` | Clamps to the type's minimum or maximum |
 | `overflowing_add(y)`, ... | `(Self, bool)` | The wrapped result and whether it overflowed; a shift overflows when its amount is at least the bit width |
 
+**Bit counts.** `count_ones()`, `count_zeros()`, `leading_zeros()` and `trailing_zeros()` exist on every integer type and return `i64`, as every count does in Kāra ([design.md §5](../design.md#5-types)), not Rust's `u32`. So `x.count_ones() == k` and `total += x.count_ones()` need no cast with `k` and `total` of type `i64`. A shift amount or a `pow` exponent stays `u32` (above). (Review-thread ruling 2026-10-30, B-2026-10-29-19.)
+
 What the plain operators do on overflow, and the other numeric rules, are in [design.md §5](../design.md#numeric-semantics).
 
 **Float methods.** `f32` and `f64` have these methods, each returning `Self` unless noted. Kāra's power method is `pow`, not Rust's `powf`.
