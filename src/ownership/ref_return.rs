@@ -477,7 +477,7 @@ impl<'a> super::OwnershipChecker<'a> {
     /// walked: call-argument borrows are snapshot-restored when the call
     /// returns, so a borrow pushed here (outside that snapshot) is the one
     /// that persists for the binding's scope and drains at scope exit.
-    pub(crate) fn register_ref_return_borrows(&mut self, value: &Expr) {
+    pub(crate) fn register_ref_return_borrows(&mut self, value: &Expr, holder: Option<&str>) {
         match &value.kind {
             ExprKind::Call { callee, args } => {
                 let ExprKind::Identifier(fname) = &callee.kind else {
@@ -490,6 +490,12 @@ impl<'a> super::OwnershipChecker<'a> {
                     if self.arg_is_borrow_position(callee, i) {
                         if let Some(place) = self.place_expr_root(&arg.value) {
                             self.push_active_borrow(BorrowKind::ImmRef, place, arg.value.span);
+                            if let Some(h) = holder {
+                                self.returned_borrow_holders.insert(
+                                    SpanKey::from_span(&arg.value.span),
+                                    (h.to_string(), fname.clone()),
+                                );
+                            }
                         }
                     }
                 }
@@ -499,7 +505,7 @@ impl<'a> super::OwnershipChecker<'a> {
             // the typechecker (the call result type sits at the receiver-span
             // key). Register a borrow on the receiver's root so moving it
             // while `n` is live is rejected.
-            ExprKind::MethodCall { object, .. } => {
+            ExprKind::MethodCall { object, method, .. } => {
                 let is_ref = matches!(
                     self.typecheck_result.expr_type(value),
                     Some(Type::Ref(_) | Type::MutRef(_))
@@ -507,6 +513,12 @@ impl<'a> super::OwnershipChecker<'a> {
                 if is_ref {
                     if let Some(place) = self.place_expr_root(object) {
                         self.push_active_borrow(BorrowKind::ImmRef, place, value.span);
+                        if let Some(h) = holder {
+                            self.returned_borrow_holders.insert(
+                                SpanKey::from_span(&value.span),
+                                (h.to_string(), format!(".{method}()")),
+                            );
+                        }
                     }
                 }
             }

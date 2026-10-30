@@ -1846,6 +1846,11 @@ pub struct OwnershipChecker<'a> {
     /// scans this list at every push to find slice-vs-slice and
     /// slice-vs-ref overlaps against the same root.
     pub(crate) active_borrows: HashMap<String, Vec<ActiveBorrow>>,
+    /// The binding that holds each returned borrow `register_ref_return_borrows`
+    /// pushed, and the function or method that returned it, keyed by the
+    /// borrow's span, so a move of its source can name them
+    /// (B-2026-10-30-21).
+    pub(crate) returned_borrow_holders: HashMap<SpanKey, (String, String)>,
     /// The field path a consume is moving out of (`p.b` in `take(p.a, p.b)`),
     /// so a live borrow of a disjoint field does not block it
     /// (B-2026-10-21-39).
@@ -2165,6 +2170,7 @@ impl<'a> OwnershipChecker<'a> {
             slice_borrow_sources: FxHashMap::default(),
             slice_binding_sources: HashMap::new(),
             active_borrows: HashMap::new(),
+            returned_borrow_holders: HashMap::new(),
             moving_place: None,
             loop_da_stack: Vec::new(),
             closure_capture_borrows: HashMap::new(),

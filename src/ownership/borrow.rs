@@ -717,10 +717,25 @@ impl<'a> super::OwnershipChecker<'a> {
             kind: OwnershipErrorKind::SliceBorrowConflict {
                 shape: SliceConflictShape::MoveOfBorrowed,
             },
-            suggestion: Some(
+            suggestion: Some(if prior.kind.is_slice() {
                 "drop the slice borrow before moving the source, or restructure so they don't overlap"
-                    .to_string(),
-            ),
+                    .to_string()
+            } else {
+                match self
+                    .returned_borrow_holders
+                    .get(&SpanKey::from_span(&prior.span))
+                {
+                    Some((holder, from)) => format!(
+                        "`{holder}`, the reference `{from}` returned, still points into \
+                         `{name}`: finish using `{holder}` before moving `{name}`, or \
+                         restructure so they don't overlap"
+                    ),
+                    None => format!(
+                        "the returned reference still points into `{name}`: finish using it \
+                         before moving `{name}`, or restructure so they don't overlap"
+                    ),
+                }
+            }),
             replacement: None,
             consume_span: Some(prior.span),
         });

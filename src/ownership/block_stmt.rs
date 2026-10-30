@@ -237,7 +237,11 @@ impl<'a> super::OwnershipChecker<'a> {
                 // source while this binding is live is rejected. Runs after
                 // the RHS walk so it sits outside the call's snapshot
                 // restore. B-2026-06-07-5.
-                self.register_ref_return_borrows(value);
+                let holder = match &pattern.kind {
+                    PatternKind::Binding(n) => Some(n.as_str()),
+                    _ => None,
+                };
+                self.register_ref_return_borrows(value, holder);
             }
             StmtKind::LetUninit {
                 is_mut,
