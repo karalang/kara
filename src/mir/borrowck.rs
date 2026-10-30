@@ -606,6 +606,27 @@ fn through_shared_ref(body: &Body, tys: &TyInterner, place: &Place) -> bool {
         match tys.kind(pt.ty) {
             TyKind::Ref(_) if place.projection[i] == ProjElem::Deref => read_only = true,
             TyKind::Shared(_) => read_only = false,
+            // The `mut ref` provider a `Fn` value that writes it carries is
+            // written through its environment lent shared (B-2026-10-30-3).
+            TyKind::MutRef(_)
+                if place.projection[i] == ProjElem::Deref
+                    && i > 0
+                    && matches!(place.projection[i - 1], ProjElem::Field(..))
+                    && place_ty(
+                        body,
+                        tys,
+                        &Place {
+                            local: place.local,
+                            projection: place.projection[..i - 1].to_vec(),
+                        },
+                    )
+                    .is_ok_and(|t| {
+                        matches!(tys.kind(t.ty), TyKind::Closure(def, _)
+                            if super::providers::is_carried(def))
+                    }) =>
+            {
+                read_only = false
+            }
             _ => {}
         }
     }

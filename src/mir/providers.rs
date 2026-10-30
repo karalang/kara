@@ -365,6 +365,12 @@ pub fn route_network(program: &mut Program, tys: &TyInterner) {
 /// ids the resolver hands out.
 const CARRIED_DEFS: u32 = u32::MAX - 1;
 
+/// Whether `def` is a closure type made to carry its providers
+/// ([`Spec::carry_request`]).
+pub(super) fn is_carried(def: DefId) -> bool {
+    def.0 > CARRIED_DEFS - (1 << 20) && def.0 <= CARRIED_DEFS
+}
+
 /// Rewrites `program`, built with resource placeholders, so that every
 /// provider is passed explicitly. `needs` is effect inference's
 /// [`super::effects::EffectReport::providers`] for the program as built.
@@ -582,6 +588,7 @@ impl Spec<'_> {
                 fx.src.insert(p.resource.clone(), Place::local(p.local));
             }
             self.carry_erased(&mut fx, bb)?;
+            self.carry_native(&mut fx, bb, template)?;
             self.check_values(&fx, bb)?;
             self.refuse_dyn(&fx, bb);
             let TerminatorKind::Call {
@@ -1452,17 +1459,12 @@ impl Spec<'_> {
         let SK::Closure { captures, .. } = self.tys.tcx().kind(from) else {
             return Err(format!("providers: `{template}` is not a closure body"));
         };
-        // A body that borrows its environment shared cannot write through
-        // a borrow kept there.
-        let shared_env = self.sigs[template]
-            .first
-            .is_some_and(|t| matches!(self.tys.tcx().kind(t), SK::Ref(_)));
-        if let Some((r, _)) = bound.iter().find(|(_, m)| *m).filter(|_| shared_env) {
-            return Err(format!(
-                "a closure that writes `{r}`'s provider, made into a `Fn` value, is not \
-                 lowered yet (`{template}`)"
-            ));
-        }
+        // A `Fn` value that writes a provider (`twice(|| { Clk.bump(); .. })`)
+        // keeps a `mut ref` to it, which its body writes through although
+        // it borrows its environment shared: the borrow checker allows that
+        // for a carried closure ([`is_carried`]) and keeps the loan, so the
+        // value is neither stored nor outlives the provider (§14.5). A task
+        // writing a provider is refused ([`Self::task_writes`]).
         let mut caps = self.tys.tcx().list(captures);
         let mut fields = Vec::new();
         for (r, mutable) in bound {
@@ -1496,56 +1498,12 @@ impl Spec<'_> {
                 out.push(st);
                 continue;
             };
-            let from = place_ty(fx.body, self.tys, src)?.ty;
-            let Some((template, bound)) = self.carrying(fx, from) else {
+            let copy = matches!(op, Operand::Copy(_));
+            let info = st.source_info;
+            let Some(v) = self.carried_value(fx, &mut out, src, copy, info)? else {
                 out.push(st);
                 continue;
             };
-            let env = fx.env.clone();
-            let (ty, _) = self.carry_request(&template, from, &env, &bound)?;
-            let SK::Closure { captures, .. } = self.tys.tcx().kind(from) else {
-                unreachable!()
-            };
-            let copy = matches!(op, Operand::Copy(_));
-            let mut ops: Vec<Operand> = self
-                .tys
-                .tcx()
-                .list(captures)
-                .into_iter()
-                .enumerate()
-                .map(|(i, t)| {
-                    let p = src.field(i as u32, t);
-                    if copy {
-                        Operand::Copy(p)
-                    } else {
-                        Operand::Move(p)
-                    }
-                })
-                .collect();
-            let info = st.source_info;
-            for (r, mutable) in &bound {
-                let p = fx.src[r].clone();
-                let pt = place_ty(fx.body, self.tys, &p)?.ty;
-                let l = fx.temp(self.tys.tcx().reference(pt, *mutable));
-                let kind = if *mutable {
-                    BorrowKind::Mut
-                } else {
-                    BorrowKind::Shared
-                };
-                out.push(Statement {
-                    kind: StatementKind::Assign(Place::local(l), Rvalue::Ref(kind, p)),
-                    source_info: info,
-                });
-                ops.push(Operand::Move(Place::local(l)));
-            }
-            let v = fx.temp(ty);
-            out.push(Statement {
-                kind: StatementKind::Assign(
-                    Place::local(v),
-                    Rvalue::Aggregate(AggregateKind::Closure { ty }, ops),
-                ),
-                source_info: info,
-            });
             out.push(Statement {
                 kind: StatementKind::Assign(
                     dst.clone(),
@@ -1556,6 +1514,146 @@ impl Spec<'_> {
         }
         fx.body.blocks[bb.index()].statements = out;
         Ok(())
+    }
+
+    /// Each closure that reaches a bound resource and is passed to a
+    /// native the runtime runs it from (`TaskGroup.spawn`, a sort's
+    /// comparison, `get_or_init`): passed instead as its copy carrying the
+    /// providers, since no call of its body is left to add them to
+    /// (core semantics §14.9, B-2026-10-30-5).
+    fn carry_native(&mut self, fx: &mut Fx, bb: BasicBlock, template: &str) -> Result<(), String> {
+        let TerminatorKind::Call {
+            func:
+                Operand::Const(Const {
+                    kind: ConstKind::FnDef(inst),
+                    ..
+                }),
+            args,
+            ..
+        } = &fx.body.blocks[bb.index()].terminator.kind
+        else {
+            return Ok(());
+        };
+        // `with_provider` and a resource's own methods are rewritten below.
+        let own = |n: &str| {
+            n.starts_with("with_provider[")
+                || n.split_once('.')
+                    .is_some_and(|(r, _)| self.resources.contains_key(r))
+        };
+        // The library's own closures (a server's tasks) are left as they
+        // are: an override that cannot serve them refuses the call whole
+        // ([`Self::refuse_unsupported`]).
+        if self.sigs.contains_key(&inst.name) || own(&inst.name) || self.sigs[template].library {
+            return Ok(());
+        }
+        let tasks = inst.name.starts_with("TaskGroup.spawn");
+        let (args, info) = (
+            args.clone(),
+            fx.body.blocks[bb.index()].terminator.source_info,
+        );
+        let mut out = std::mem::take(&mut fx.body.blocks[bb.index()].statements);
+        let mut new_args = Vec::with_capacity(args.len());
+        for a in args {
+            let carried = match &a {
+                Operand::Move(src) | Operand::Copy(src) => {
+                    let copy = matches!(a, Operand::Copy(_));
+                    if tasks {
+                        self.task_writes(fx, src)?;
+                    }
+                    self.carried_value(fx, &mut out, src, copy, info)?
+                }
+                Operand::Const(_) => None,
+            };
+            new_args.push(carried.map_or(a, |v| Operand::Move(Place::local(v))));
+        }
+        fx.body.blocks[bb.index()].statements = out;
+        if let TerminatorKind::Call { args, .. } = &mut fx.body.blocks[bb.index()].terminator.kind {
+            *args = new_args;
+        }
+        Ok(())
+    }
+
+    /// A task that writes the bound provider of a provider-rooted resource:
+    /// refused, since `karac check` does not yet keep two tasks, or a task
+    /// and its spawner, from using it at once (core semantics §14.9,
+    /// B-2026-10-30-6). A task that only reads one shares it. A task that
+    /// writes an override of a program-rooted resource ran before tasks
+    /// carried their providers, and still does.
+    fn task_writes(&self, fx: &Fx, src: &Place) -> Result<(), String> {
+        let from = place_ty(fx.body, self.tys, src)?.ty;
+        let Some((template, bound)) = self.carrying(fx, from) else {
+            return Ok(());
+        };
+        let rooted = |r: &str| self.resources.get(r).is_some_and(|d| d.default.is_some());
+        match bound.iter().find(|(r, writes)| *writes && !rooted(r)) {
+            Some((r, _)) => Err(format!(
+                "a task that writes `{r}`'s provider is not run yet: tasks writing a provider \
+                 bound by `with_provider` or `providers` could race on it (core semantics \
+                 §14.9); write `{r}` before the tasks start or after they join (`{template}`)"
+            )),
+            None => Ok(()),
+        }
+    }
+
+    /// When `src` is a closure that reaches a bound resource: its copy
+    /// carrying the providers, built into a new local by statements pushed
+    /// to `out`, its captures moved (or copied) from `src`.
+    fn carried_value(
+        &mut self,
+        fx: &mut Fx,
+        out: &mut Vec<Statement>,
+        src: &Place,
+        copy: bool,
+        info: SourceInfo,
+    ) -> Result<Option<Local>, String> {
+        let from = place_ty(fx.body, self.tys, src)?.ty;
+        let Some((template, bound)) = self.carrying(fx, from) else {
+            return Ok(None);
+        };
+        let env = fx.env.clone();
+        let (ty, _) = self.carry_request(&template, from, &env, &bound)?;
+        let SK::Closure { captures, .. } = self.tys.tcx().kind(from) else {
+            unreachable!()
+        };
+        let mut ops: Vec<Operand> = self
+            .tys
+            .tcx()
+            .list(captures)
+            .into_iter()
+            .enumerate()
+            .map(|(i, t)| {
+                let p = src.field(i as u32, t);
+                if copy {
+                    Operand::Copy(p)
+                } else {
+                    Operand::Move(p)
+                }
+            })
+            .collect();
+        for (r, mutable) in &bound {
+            let p = fx.src[r].clone();
+            let pt = place_ty(fx.body, self.tys, &p)?.ty;
+            let l = fx.temp(self.tys.tcx().reference(pt, *mutable));
+            let kind = if *mutable {
+                BorrowKind::Mut
+            } else {
+                BorrowKind::Shared
+            };
+            out.push(Statement {
+                kind: StatementKind::Assign(Place::local(l), Rvalue::Ref(kind, p)),
+                source_info: info,
+            });
+            ops.push(Operand::Move(Place::local(l)));
+        }
+        let v = fx.temp(ty);
+        out.push(Statement {
+            kind: StatementKind::Assign(
+                Place::local(v),
+                Rvalue::Aggregate(AggregateKind::Closure { ty }, ops),
+            ),
+            source_info: info,
+        });
+        Ok(Some(v))
     }
 
     /// A function item made as a value that reaches a bound resource would

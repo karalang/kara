@@ -1,0 +1,129 @@
+struct MemFs {
+    files: Map[String, String],
+}
+
+impl MemFs {
+    fn with_catalog() -> MemFs {
+        let mut files: Map[String, String] = Map.new();
+        files.insert("catalog.txt".to_string(), "apple=7\npear=9\n".to_string());
+        MemFs { files: files }
+    }
+}
+
+impl FileSystemProvider for MemFs {
+    fn read_to_string(ref self, path: Str) -> Result[String, IoError] {
+        match self.files.get(path) {
+            Some(s) => Ok(s.clone()),
+            None => Err(IoError.NotFound),
+        }
+    }
+
+    fn write(mut ref self, path: Str, contents: Str) -> Result[(), IoError] {
+        self.files.insert(path.to_string(), contents.to_string());
+        Ok(())
+    }
+}
+
+struct FakeStock {
+    asked: Vec[u8],
+    answered: bool,
+}
+
+impl FakeStock {
+    fn new() -> FakeStock {
+        FakeStock { asked: Vec.new(), answered: false }
+    }
+}
+
+impl NetworkProvider for FakeStock {
+    fn connect(mut ref self, addr: Str) -> Result[i64, NetError] {
+        if addr == "down" {
+            return Err(NetError.ConnectionRefused);
+        }
+        Ok(1)
+    }
+
+    fn write_stream(mut ref self, h: i64, buf: Slice[u8]) -> Result[i64, NetError] {
+        for b in buf {
+            self.asked.push(*b);
+        }
+        Ok(buf.len())
+    }
+
+    fn read_stream(mut ref self, h: i64, buf: mut Slice[u8]) -> Result[i64, NetError] {
+        if self.answered {
+            return Ok(0);
+        }
+        self.answered = true;
+        let answer = if self.asked.len() == 5 { "41" } else { "0" };
+        let bytes = answer.bytes();
+        let mut k = 0;
+        while k < bytes.len() {
+            buf[k] = bytes[k];
+            k += 1;
+        }
+        Ok(k)
+    }
+
+    fn shutdown(mut ref self, h: i64) -> Result[(), NetError] {
+        Ok(())
+    }
+
+    fn close(mut ref self, h: i64) {}
+}
+
+// A handler under a fake is called through a generic parameter: a `dyn`
+// value cannot carry the fake (design.md § dyn Trait, E_DYN_PROVIDER).
+fn handle_with[H: Handler](h: ref H, req: ref Req) -> Resp {
+    h.handle(req)
+}
+
+#[with_provider(FileSystem, MemFs.with_catalog)]
+test "catalog reads the fake file system" {
+    let c = Catalog { path: "catalog.txt".to_string() };
+    let r = handle_with(c, Req { route: 1, body: "pear".to_string() });
+    assert_eq(r.status, 200);
+    assert_eq(r.body, "9");
+    let missing = handle_with(c, Req { route: 1, body: "plum".to_string() });
+    assert_eq(missing.status, 404);
+}
+
+#[with_provider(Network, FakeStock.new)]
+test "stock asks the fake network" {
+    let s = Stock { addr: "stock:1".to_string() };
+    let r = handle_with(s, Req { route: 2, body: "apple".to_string() });
+    assert_eq(r.status, 200);
+    assert_eq(r.body, "41");
+    let down = Stock { addr: "down".to_string() };
+    let d = handle_with(down, Req { route: 2, body: "apple".to_string() });
+    assert_eq(d.status, 502);
+}
+
+// The server under the fake: a router of `dyn Handler`s that reach no
+// overridden resource, and a bus whose callback writes `Stdout`, charged
+// where `serve` emits. A callback that used the fake could not be stored:
+// it would keep a view of it (core semantics §14.5, §14.7).
+#[with_provider(FileSystem, MemFs.with_catalog)]
+test "serve runs under the fake, its bus charged where it emits" {
+    let mut routes: Vec[dyn Handler] = Vec.new();
+    routes.push(Health {});
+    let router = Router { routes: routes };
+    let mut bus = EventBus { handlers: Vec.new() };
+    bus.register(|e| log_event(e));
+    let mut reqs: Vec[Req] = Vec.new();
+    reqs.push(Req { route: 0, body: "".to_string() });
+    reqs.push(Req { route: 5, body: "".to_string() });
+    let ok = serve(router, bus, reqs);
+    let _ = fs.write("served", f"{ok}");
+    assert_eq(fs.read_to_string("served").unwrap(), "1");
+}
+
+test "a router at the defaults serves plain routes" {
+    let mut routes: Vec[dyn Handler] = Vec.new();
+    routes.push(Health {});
+    let router = Router { routes: routes };
+    let r = router.dispatch(Req { route: 0, body: "".to_string() });
+    assert_eq(r.body, "ok");
+    let none = router.dispatch(Req { route: 4, body: "".to_string() });
+    assert_eq(none.status, 400);
+}

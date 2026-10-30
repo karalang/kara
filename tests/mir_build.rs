@@ -7772,19 +7772,23 @@ fn main() {
         let run = Command::new(&exe).output().unwrap();
         assert_eq!(String::from_utf8_lossy(&run.stdout), want, "compiled");
     }
-    // A `Fn` value borrows its environment shared, so it cannot write
-    // through a provider kept there: refused by name rather than lowered.
+    // A `Fn` value borrows its environment shared, and a closure writing
+    // the provider through one still writes it (B-2026-10-30-3): the bump
+    // runs, once before the call and once inside it.
     let writes = src.replace(
         "apply(|| tick() + 1) });",
         "apply(|| { Clk.bump(); tick() }) });",
     );
-    let Err(err) = karac::mir::lower::run_source(&writes) else {
-        panic!("a closure writing the provider through a `Fn` value must be refused");
-    };
-    assert!(
-        err.contains("writes `Clk`'s provider, made into a `Fn` value"),
-        "{err}"
-    );
+    let interp = karac::mir::lower::run_source(&writes).expect("MIR interpreter, writes");
+    assert_eq!(interp.output, want, "__mir-run, writes");
+    if let Some(exe) = cli_build(&dir, &writes, &[]) {
+        let run = Command::new(&exe).output().unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            want,
+            "compiled, writes"
+        );
+    }
 }
 
 /// A closure held in a local and passed for a borrowed function parameter

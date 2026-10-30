@@ -1,0 +1,188 @@
+// The v1 integration pin (tests/mir_v1_service.rs). An order service: a
+// router of `dyn Handler`s, one of which waits on an upstream over TCP, and
+// an event bus of stored callbacks whose effects are charged where the bus
+// emits.
+
+struct Req {
+    route: i64,
+    body: String,
+}
+
+struct Resp {
+    status: i64,
+    body: String,
+}
+
+trait Handler {
+    fn handle(ref self, req: ref Req) -> Resp;
+}
+
+struct Health {}
+
+impl Handler for Health {
+    fn handle(ref self, req: ref Req) -> Resp {
+        Resp { status: 200, body: "ok".to_string() }
+    }
+}
+
+// Looks an item up in a price list kept in a file.
+struct Catalog {
+    path: String,
+}
+
+impl Handler for Catalog {
+    fn handle(ref self, req: ref Req) -> Resp {
+        match fs.read_to_string(self.path) {
+            Ok(text) => {
+                for line in text.lines() {
+                    let parts: Vec[String] = line.split("=").map(|p| p.to_string()).collect();
+                    if parts.len() == 2 and parts[0] == req.body {
+                        return Resp { status: 200, body: parts[1].clone() };
+                    }
+                }
+                Resp { status: 404, body: f"no {req.body}" }
+            }
+            Err(_) => Resp { status: 500, body: "no catalog".to_string() },
+        }
+    }
+}
+
+// Asks the stock service over TCP; the read waits on the network.
+struct Stock {
+    addr: String,
+}
+
+impl Handler for Stock {
+    fn handle(ref self, req: ref Req) -> Resp {
+        match ask(self.addr, req.body) {
+            Ok(answer) => Resp { status: 200, body: answer },
+            Err(_) => Resp { status: 502, body: "stock down".to_string() },
+        }
+    }
+}
+
+fn ask(addr: Str, item: Str) -> Result[String, NetError] {
+    let s = TcpStream.connect(addr)?;
+    let _ = s.write_all(item.bytes())?;
+    let _ = s.shutdown_write()?;
+    let mut out = String.new();
+    let mut buf = [0u8; 16];
+    loop {
+        let n = s.read(mut buf)?;
+        if n == 0 {
+            break;
+        }
+        for i in 0..n {
+            out.push(buf[i] as char);
+        }
+    }
+    Ok(out)
+}
+
+struct Router {
+    routes: Vec[dyn Handler],
+}
+
+impl Router {
+    fn dispatch(ref self, req: ref Req) -> Resp {
+        if req.route < 0 or req.route >= self.routes.len() as i64 {
+            return Resp { status: 400, body: "no route".to_string() };
+        }
+        self.routes[req.route].handle(req)
+    }
+}
+
+struct Event {
+    route: i64,
+    status: i64,
+}
+
+struct EventBus[with E] {
+    handlers: Vec[Fn(ref Event) with E],
+}
+
+impl[with E] EventBus[with E] {
+    fn register(mut ref self, h: escaping Fn(ref Event) with E) {
+        self.handlers.push(h);
+    }
+
+    fn emit(ref self, e: ref Event) with E {
+        for h in self.handlers.iter() {
+            h(e);
+        }
+    }
+}
+
+fn log_event(e: ref Event) {
+    println(f"event route={e.route} status={e.status}");
+}
+
+// Serves `reqs` through `r`, emitting one event per request.
+fn serve[with E](r: ref Router, bus: ref EventBus[with E], reqs: ref Vec[Req]) -> i64 with E {
+    let mut ok = 0;
+    for req in reqs.iter() {
+        let resp = r.dispatch(req);
+        println(f"{req.route} {req.body} -> {resp.status} {resp.body}");
+        bus.emit(Event { route: req.route, status: resp.status });
+        if resp.status == 200 {
+            ok += 1;
+        }
+    }
+    ok
+}
+
+// The stock service: answers each connection with the item's count.
+fn stock_server(l: own TcpListener, conns: i64) -> i64 {
+    let mut served = 0;
+    while served < conns {
+        let s = match l.accept() {
+            Ok(s) => s,
+            Err(_) => return served,
+        };
+        let mut item = String.new();
+        let mut buf = [0u8; 16];
+        loop {
+            let n = match s.read(mut buf) {
+                Ok(n) => n,
+                Err(_) => 0,
+            };
+            if n == 0 {
+                break;
+            }
+            for i in 0..n {
+                item.push(buf[i] as char);
+            }
+        }
+        let answer = if item == "apple" { "12" } else { "0" };
+        let _ = s.write_all(answer.bytes());
+        let _ = s.shutdown_write();
+        served += 1;
+    }
+    served
+}
+
+fn main() {
+    let path = "kara-v1-orders-catalog.txt";
+    let _ = fs.write(path, "apple=3\npear=5\n");
+    let l = TcpListener.bind("127.0.0.1:0").unwrap();
+    let addr = l.local_addr().unwrap();
+    let mut routes: Vec[dyn Handler] = Vec.new();
+    routes.push(Health {});
+    routes.push(Catalog { path: path.to_string() });
+    routes.push(Stock { addr: addr });
+    let router = Router { routes: routes };
+    let mut bus = EventBus { handlers: Vec.new() };
+    bus.register(|e| log_event(e));
+    let mut reqs: Vec[Req] = Vec.new();
+    reqs.push(Req { route: 0, body: "".to_string() });
+    reqs.push(Req { route: 1, body: "pear".to_string() });
+    reqs.push(Req { route: 2, body: "apple".to_string() });
+    reqs.push(Req { route: 1, body: "plum".to_string() });
+    reqs.push(Req { route: 7, body: "x".to_string() });
+    let group = TaskGroup.new();
+    let upstream = group.spawn(|| stock_server(l, 1));
+    let server = group.spawn(|| serve(router, bus, reqs));
+    println(f"ok {server.join()}");
+    println(f"stock served {upstream.join()}");
+    let _ = fs.remove_file(path);
+}

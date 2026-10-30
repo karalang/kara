@@ -572,10 +572,14 @@ pub(super) fn test_front(filter: Option<&str>, core_places: bool) -> TestFront {
             Vec::new()
         };
 
+    // The v2 runner (`core_places`) leaves a type refusal to the v2 check
+    // of the combined source, which `karac check` and the build trust over
+    // the per-module pass, so the three agree on what a package is
+    // (B-2026-10-25-5, B-2026-10-30-4).
     let compile_failed = !parse_errors.is_empty()
         || !cycles.is_empty()
         || !resolve_errors.is_empty()
-        || !type_errors.is_empty();
+        || (!type_errors.is_empty() && !core_places);
 
     if compile_failed {
         for entry in parse_errors_jsonl(&parse_errors) {

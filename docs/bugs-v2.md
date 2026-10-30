@@ -59,13 +59,13 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | false-positive | 69 |
-| diagnostics | 63 |
+| diagnostics | 65 |
 | missing-feature | 49 |
 | perf | 40 |
-| soundness | 26 |
+| soundness | 27 |
 | miscompile | 18 |
-| run-vs-build | 13 |
-| codegen-gap | 8 |
+| run-vs-build | 14 |
+| codegen-gap | 10 |
 | other | 6 |
 | crash | 2 |
 | leak | 1 |
@@ -75,15 +75,15 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 118 |
-| mir | 61 |
+| mir | 63 |
 | mir-llvm | 49 |
 | ownership | 33 |
+| cli | 27 |
 | interp | 25 |
-| cli | 25 |
 | codegen | 22 |
 | runtime | 19 |
 | parser | 19 |
-| effect | 6 |
+| effect | 8 |
 | other | 3 |
 | resolver | 3 |
 | autopar | 3 |
@@ -123,6 +123,12 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-29-47 | 2026-10-29 | ownership | medium | A program's own `struct Mask` is read as the SIMD scalar `Mask` by D5 (`COPY_SCALARS` in src/d5_params.rs lists "Mask" by name), so a bare `m: Mask` parameter is not rewritten to `ref Mask` and every call moves its argument: `count(m)` twice is refused as a use of moved `m`, and the same struct renamed `Bits` checks and runs | — |
 | B-2026-10-29-50 | 2026-10-29 | autopar | low | An auto-par task's loop takes its run's bounds as plain captures, so LLVM knows nothing of the counter's range: kata 4's `k % R` becomes a signed 64-bit magic division in the task (about 10 instructions) where the in-order loop, knowing 0 <= k < 10M, uses a 32-bit unsigned one (about 5) | — |
 | B-2026-10-30-2 | 2026-10-30 | ownership+mir | medium | A call through a `let` closure never moves an owned argument in check: `let take = |n: own String| n.len(); take(n); take(n)` passes check, and `__mir-run` refuses it ("use of _3, which may have been moved") | — |
+| B-2026-10-30-3 | 2026-10-30 | mir | high | A closure that writes a provider, made into a `Fn` value (`twice(|| { Clk.bump(); Clk.now() })` under `with_provider`), is refused by MIR: "a closure that writes `R`'s provider, made into a `Fn` value, is not lowered yet" | — |
+| B-2026-10-30-4 | 2026-10-30 | cli | medium | `karac test` refuses a package `karac check` and `karac build` accept: its per-module typecheck reports type errors (`map` on a `Vec` from `split`, an `escaping Fn` push, `Map.get(Str)`) that the v2 check of the combined source does not | — |
+| B-2026-10-30-5 | 2026-10-30 | mir | high | A closure that reaches a provider and is run by the runtime under `with_provider` (`tg.spawn(|| Clk.now())`, a `sort_by` comparison, a `retain` predicate) fails on every MIR backend: "TaskGroup.spawn: no body for closure DefId(..)" | — |
+| B-2026-10-30-6 | 2026-10-30 | effect | medium | `karac check` lets two tasks inside a `with_provider` write the provider at once (core semantics §14.9): `tg.spawn(|| { Clk.bump(); .. })` twice, or one task beside the spawner's own `Clk.bump()`; MIR refuses a task that writes a provider-rooted resource's provider meanwhile | — |
+| B-2026-10-30-7 | 2026-10-30 | effect | medium | `karac check` misses §14.5 when the provider is bound out of sight: a callback that reaches a resource stored through an `escaping` parameter in a function called under `with_provider`, or in a test under `#[with_provider(..)]`, passes the check and is refused by the MIR borrow checker as E0509 "a view of (*_1) is stored in an escaping closure" | — |
+| B-2026-10-30-8 | 2026-10-30 | cli | low | `karac test` reports a MIR build error at a line of the combined package source (`borrow check __test__root__103_..: 292:5: ..`), not at the file and line it came from | — |
 
 ### Relocated
 
