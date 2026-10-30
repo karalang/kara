@@ -253,6 +253,12 @@ pub struct Slot {
     pub dyn_ty: Ty,
     pub slot: u32,
     pub name: String,
+    /// Made in a body whose clause names an effect variable, where a `dyn`
+    /// value read out of `self` is one `self`'s caller put there (design.md
+    /// § Effect variables): one a call hands back or a parameter holds is
+    /// traced, as a stored function value is, rather than having every
+    /// effect.
+    pub traced: bool,
 }
 
 impl Slot {
@@ -2573,6 +2579,7 @@ impl<'p> Analysis<'p> {
                     dyn_ty,
                     slot,
                     name: self.slot_name(dyn_ty, slot),
+                    traced: body.clause_names_var,
                 });
             }
             _ => eff.union(declared.unwrap_or_else(untraced)),
@@ -2683,7 +2690,12 @@ impl<'p> Analysis<'p> {
     /// ([`Origins`]), here or by a call it is lent to, and for a `dyn`
     /// parameter's, the caller's to resolve. A value a call hands back (a
     /// return, a collection's element) or one moved out of a parameter's
-    /// field has the effects its type declares (design.md § `dyn Trait`).
+    /// field has the effects its type declares (design.md § `dyn Trait`),
+    /// except under a clause naming an effect variable ([`Slot::traced`]):
+    /// there it has those of the values that can flow into it, as
+    /// [`Analysis::stored_in`] finds a stored function value's, so a
+    /// `Vec[Option[dyn Handler with E]]` in `self` is resolved against the
+    /// handlers its caller adds.
     #[allow(clippy::too_many_arguments)]
     fn slot_in(
         &self,
@@ -2713,7 +2725,7 @@ impl<'p> Analysis<'p> {
             while let SK::Ref(i) | SK::MutRef(i) = tcx.kind(t) {
                 t = i;
             }
-            if matches!(tcx.kind(t), SK::Dyn { .. }) {
+            if s.traced || matches!(tcx.kind(t), SK::Dyn { .. }) {
                 out.slots.insert(Slot {
                     key: Key::Param(a.0, Vec::new()),
                     ..s.clone()
@@ -2750,9 +2762,9 @@ impl<'p> Analysis<'p> {
                                 if refers(tcx, t.ty, 0))
                     })
                 };
-                if os.contains(&destination.local.0) {
+                if os.contains(&destination.local.0) && !s.traced {
                     out.union(declared("a call hands back"));
-                } else if args.iter().any(through) {
+                } else if os.contains(&destination.local.0) || args.iter().any(through) {
                     out.union(self.call_made(body, defs, func, args, destination, summaries, made));
                 }
             }

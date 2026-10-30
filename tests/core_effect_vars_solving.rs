@@ -1,7 +1,8 @@
-//! Solving effect variables per value (design.md § Effect variables): the
-//! first function value bound into a value's variable fixes its set, a
-//! later one must fit it, a written type argument fixes it instead, and the
-//! function where the set is solved is charged it. The front end (parse,
+//! Solving effect variables per value (design.md § Effect variables): within
+//! one function a value's set is the union of every function value bound into
+//! it, in any order; a written type argument, on a `let` or on the parameter
+//! another function sees the value through, fixes it, and a value outside it
+//! is refused; the function where the set is solved is charged it. The front end (parse,
 //! resolve) is pinned in tests/core_effect_vars_front_end.rs.
 
 use std::path::PathBuf;
@@ -96,17 +97,52 @@ fn a_public_function_must_declare_the_solved_set() {
     );
 }
 
+/// Within one function the instance is the union of every binding, so the
+/// order of the `register` calls does not matter (design.md § Effect
+/// variables, review-thread ruling 2026-10-30).
 #[test]
-fn a_value_bound_later_must_fit_the_first() {
-    refused(
+fn bindings_in_one_function_union_in_either_order() {
+    accepted(
         "later",
         "fn audit() {
     let mut bus = EventBus { handlers: Vec.new() };
     bus.register(record);
     bus.register(note);
 }",
-        "function value has `writes(Log)`, outside the effect set of `E` \
-         (`{writes(OrderDb)}`), which was fixed at 25:18 by the first value bound to it",
+    );
+    accepted(
+        "pure_first",
+        "fn quiet(e: Event) { }
+fn audit() {
+    let mut bus = EventBus { handlers: Vec.new() };
+    bus.register(quiet);
+    bus.register(note);
+}",
+    );
+}
+
+/// The union is charged to the function that built it, so a public one
+/// names every handler's effect.
+#[test]
+fn the_union_is_charged_to_the_function() {
+    refused(
+        "union_charged",
+        "pub fn audit() with writes(OrderDb) {
+    let mut bus = EventBus { handlers: Vec.new() };
+    bus.register(record);
+    bus.register(note);
+    bus.emit(Event { n: 1 });
+}",
+        "writes(Log)",
+    );
+    accepted(
+        "union_declared",
+        "pub fn audit() with writes(OrderDb) writes(Log) {
+    let mut bus = EventBus { handlers: Vec.new() };
+    bus.register(record);
+    bus.register(note);
+    bus.emit(Event { n: 1 });
+}",
     );
 }
 
@@ -123,7 +159,7 @@ fn a_later_value_within_the_set_fits() {
 }
 
 #[test]
-fn the_construction_fixes_the_set_with_the_union_of_its_values() {
+fn the_construction_joins_the_union_of_its_values() {
     accepted(
         "union",
         "fn audit() {
@@ -132,13 +168,20 @@ fn the_construction_fixes_the_set_with_the_union_of_its_values() {
     bus.register(record);
 }",
     );
-    refused(
+    accepted(
         "construction",
         "fn audit() {
     let mut bus = EventBus { handlers: vec![record] };
     bus.register(|e| note(e));
 }",
-        "which was fixed at 24:45 by the first value bound to it",
+    );
+    refused(
+        "construction_written",
+        "fn audit() {
+    let bus: EventBus[with writes(OrderDb)] = EventBus { handlers: vec![record, note] };
+}",
+        "function value has `writes(Log)`, outside the effect set of `E` \
+         (`{writes(OrderDb)}`), which was fixed at 24:23 by its type argument",
     );
 }
 

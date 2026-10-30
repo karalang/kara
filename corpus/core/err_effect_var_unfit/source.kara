@@ -23,13 +23,19 @@ impl[with E] EventBus[with E] {
 fn record(e: Event) with writes(OrderDb) { }
 fn note(e: Event) with writes(Log) { }
 
-// The first handler fixes `E` = {writes(OrderDb)}; the second brings
-// `writes(Log)`, outside it, and is refused, naming where the set was
-// fixed.
+// Within one function `E` is the union of every handler bound, in any
+// order. `add_note` sees the bus through a parameter whose type argument
+// fixes `E` = {writes(OrderDb)}, so the handler it binds must fit that set;
+// `note` brings `writes(Log)`, outside it, and is refused, naming where the
+// set was fixed.
+fn add_note(bus: mut ref EventBus[with writes(OrderDb)]) {
+    bus.register(note);
+}
+
 fn audit() {
     let mut bus = EventBus { handlers: Vec.new() };
     bus.register(record);
-    bus.register(note);
+    add_note(mut bus);
     bus.emit(Event { n: 7 });
 }
 

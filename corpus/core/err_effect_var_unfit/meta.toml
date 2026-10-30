@@ -8,5 +8,5 @@ expected_from = "pin"
 rules = []
 backends = []
 env = {}
-note = "A value bound later must fit the set the first one fixed; the error names the extra effect and where the set was fixed. The expected.out wording of an error pin is guidance, not a byte oracle."
+note = "A value bound in another function, through a parameter whose type argument fixes the set, must fit it; the error names the extra effect and the type argument. The expected.out wording of an error pin is guidance, not a byte oracle."
 bucket = "a:refused"

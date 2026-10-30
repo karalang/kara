@@ -2,17 +2,17 @@
 //!
 //! A variable an `impl[with E]` block or a `struct S[with E]` declares
 //! belongs to each value of the type, not to a call: `bus.register(h)` binds
-//! `h`'s effects into `bus`'s instance of `E`, and every later binding into
-//! the same value must fit it. The variables of a function's own
-//! `[with E]` are solved per call by `compute_call_var_bindings`.
+//! `h`'s effects into `bus`'s instance of `E`. The variables of a function's
+//! own `[with E]` are solved per call by `compute_call_var_bindings`.
 //!
-//! The first value bound fixes the set: the function values in the fields
-//! of the value's construction, unioned as a collection literal of them is,
-//! or else the first argument a method binds into it. A type argument
-//! written on the value's declaration (`EventBus[with writes(OrderDb)]`)
-//! fixes it instead. A later value with an effect outside the set is
-//! refused, naming the effect and where the set was fixed. A value nothing
-//! fills has the empty set, which needs no entry.
+//! Within one function the instance is the union of the value's construction
+//! and every later binding, so the order of `bus.register(..)` calls does not
+//! matter, and nothing here can refuse one (review-thread ruling 2026-10-30).
+//! What a written type argument fixes is checked instead: a value declared
+//! `EventBus[with writes(OrderDb)]`, by a `let` or by the parameter another
+//! function sees it through, takes only function values whose effects fit
+//! that set, and one with an effect outside it is refused, naming the effect
+//! and the type argument.
 //!
 //! What a call through the value is charged needs nothing here: naming a
 //! function value charges its effects to the function that names it
@@ -33,23 +33,26 @@ use super::{
     EffectSubtypeTrace,
 };
 
-/// One value's solution for its type's effect variable.
+/// The set a written type argument fixes for one value's effect variable.
 #[derive(Debug, Clone)]
 pub(super) struct VarInstance {
     var: String,
     set: HashSet<Effect>,
-    /// Where the set was fixed: the first function value bound, or the
-    /// written type argument.
+    /// The written type argument.
     fixed_at: Span,
-    by_type: bool,
 }
 
-/// Each value's instances, by the place that holds the value (`bus`,
-/// `self.bus`), for one body.
+/// The values whose type argument is written, by the place that holds the
+/// value (`bus`, `self.bus`), for one body.
 pub(super) type Instances = Vec<(String, VarInstance)>;
 
+/// `writes(Log)`, or a bare `blocks` for a verb that names no resource.
 fn effect_text(e: &Effect) -> String {
-    format!("{}({})", verb_name(&e.verb), e.resource)
+    if e.resource.is_empty() {
+        verb_name(&e.verb)
+    } else {
+        format!("{}({})", verb_name(&e.verb), e.resource)
+    }
 }
 
 fn set_text(set: &HashSet<Effect>) -> Vec<String> {
@@ -165,7 +168,6 @@ impl<'a> super::EffectChecker<'a> {
             var,
             set: self.resolve_effect_list_to_set(list, None),
             fixed_at: list.span,
-            by_type: true,
         })
     }
 
@@ -182,7 +184,7 @@ impl<'a> super::EffectChecker<'a> {
     }
 
     /// Bind `value` into `inst`: refused when it brings an effect outside the
-    /// set, with the set and where it was fixed.
+    /// set, with the set and the type argument that fixed it.
     fn fit_bound_value(&mut self, inst: &VarInstance, value: &Expr) {
         let effects = self.bound_effects(value);
         let mut extra: Vec<String> = effects
@@ -202,17 +204,12 @@ impl<'a> super::EffectChecker<'a> {
         };
         let message = format!(
             "{what} has {}, outside the effect set of `{}` (`{{{}}}`), which was \
-             fixed at {}:{} by {}",
+             fixed at {}:{} by its type argument",
             extra_text.join(", "),
             inst.var,
             set.join(", "),
             inst.fixed_at.line,
             inst.fixed_at.column,
-            if inst.by_type {
-                "its type argument"
-            } else {
-                "the first value bound to it"
-            },
         );
         self.errors.push(EffectError {
             message,
@@ -228,9 +225,10 @@ impl<'a> super::EffectChecker<'a> {
         });
     }
 
-    /// `let name[: ty] = value;`: a fresh value under `name`. Its instance is
-    /// fixed by a written type argument, or by the function values its
-    /// construction binds.
+    /// `let name[: ty] = value;`: a fresh value under `name`. A written type
+    /// argument fixes its set, and the function values its construction
+    /// binds must fit it; without one, the construction is part of the union
+    /// and refuses nothing.
     pub(super) fn bind_construction(
         &mut self,
         name: &str,
@@ -240,11 +238,12 @@ impl<'a> super::EffectChecker<'a> {
     ) {
         let prefix = format!("{name}.");
         instances.retain(|(place, _)| place != name && !place.starts_with(&prefix));
-        let mut inst = ty.and_then(|t| self.written_instance(t));
+        let Some(inst) = ty.and_then(|t| self.written_instance(t)) else {
+            return;
+        };
         if let ExprKind::StructLiteral { path, fields, .. } = &value.kind {
             if let Some(var) = path.last().and_then(|s| self.type_effect_var(s)) {
                 let sname = path.last().cloned().unwrap_or_default();
-                let mut fixed: Option<VarInstance> = None;
                 for f in fields {
                     let Some(field_ty) = self.struct_field_type(&sname, &f.name) else {
                         continue;
@@ -253,38 +252,19 @@ impl<'a> super::EffectChecker<'a> {
                         continue;
                     }
                     for v in self.bound_values(&f.value) {
-                        match &inst {
-                            Some(written) => {
-                                let written = written.clone();
-                                self.fit_bound_value(&written, v);
-                            }
-                            None => {
-                                let effects = self.bound_effects(v);
-                                let entry = fixed.get_or_insert_with(|| VarInstance {
-                                    var: var.clone(),
-                                    set: HashSet::new(),
-                                    fixed_at: v.span,
-                                    by_type: false,
-                                });
-                                entry.set.extend(effects);
-                            }
-                        }
+                        self.fit_bound_value(&inst, v);
                     }
-                }
-                if inst.is_none() {
-                    inst = fixed;
                 }
             }
         }
-        if let Some(inst) = inst {
-            instances.push((name.to_string(), inst));
-        }
+        instances.push((name.to_string(), inst));
     }
 
     /// `recv.m(args)` where `m` binds an argument into a variable its
-    /// `impl` declares: the first binding into the receiver's value fixes its
-    /// instance, and each later one must fit. Returns the argument positions
-    /// handled here, which the per-call slot check skips.
+    /// `impl` declares: when the receiver's type argument is written (on its
+    /// `let`, or on the parameter or field it is reached through), each
+    /// binding must fit that set. Returns the argument positions handled
+    /// here, which the per-call slot check skips.
     ///
     /// Inside the type's own methods (`self.register(h)`) the variable is
     /// the method's own, unsolved, so the positions are skipped unbound.
@@ -297,7 +277,7 @@ impl<'a> super::EffectChecker<'a> {
         args: &[CallArg],
         instances: &mut Instances,
     ) -> Vec<usize> {
-        let Some(by_var) = self.impl_effect_var_positions.get(&callee_key).cloned() else {
+        let Some(by_var) = self.impl_effect_var_positions.get(&callee_key) else {
             return Vec::new();
         };
         let mut handled: Vec<usize> = by_var.values().flatten().copied().collect();
@@ -309,45 +289,22 @@ impl<'a> super::EffectChecker<'a> {
         let Some(place) = place else {
             return handled;
         };
-        let head = self
-            .interner
-            .resolve(callee_key)
-            .split('.')
-            .next()
-            .unwrap_or_default()
-            .to_string();
-        let var = self
-            .type_effect_var(&head)
-            .or_else(|| by_var.keys().next().cloned())
-            .unwrap_or_default();
         if !instances.iter().any(|(p, _)| *p == place) {
             if let Some(inst) = written.as_ref().and_then(|t| self.written_instance(t)) {
                 instances.push((place.clone(), inst));
             }
         }
+        let Some(inst) = instances
+            .iter()
+            .rev()
+            .find(|(p, _)| *p == place)
+            .map(|(_, i)| i.clone())
+        else {
+            return handled;
+        };
         for &idx in &handled {
-            let Some(arg) = args.get(idx) else {
-                continue;
-            };
-            let existing = instances
-                .iter()
-                .rev()
-                .find(|(p, _)| *p == place)
-                .map(|(_, i)| i.clone());
-            match existing {
-                Some(inst) => self.fit_bound_value(&inst, &arg.value),
-                None => {
-                    let set = self.bound_effects(&arg.value);
-                    instances.push((
-                        place.clone(),
-                        VarInstance {
-                            var: var.clone(),
-                            set,
-                            fixed_at: arg.value.span,
-                            by_type: false,
-                        },
-                    ));
-                }
+            if let Some(arg) = args.get(idx) {
+                self.fit_bound_value(&inst, &arg.value);
             }
         }
         handled

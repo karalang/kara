@@ -346,16 +346,36 @@ fn dyn_effect_variable_is_solved_from_the_values_coerced_into_it() {
     );
 }
 
+/// Within one function the router's set is the union of what is added, so a
+/// pure handler added before a printing one checks (review-thread ruling
+/// 2026-10-30); another function that sees the router through a parameter
+/// typed with the set may add only what fits it.
 #[test]
 fn dyn_value_outside_its_receivers_effect_set_is_refused() {
     let (ok, text) = check(
-        "router-mixed",
+        "router-mixed-one-fn",
         &format!(
             "{ROUTER}
              fn main() {{
                  let mut r = Router {{ routes: Vec.new() }};
                  r.add(\"/d\", Double {{}});
                  r.add(\"/l\", Logged {{ n: 1 }});
+                 println(f\"{{r.dispatch(\"/l\", 4)}}\");
+             }}"
+        ),
+    );
+    assert!(ok, "{text}");
+    let (ok, text) = check(
+        "router-mixed",
+        &format!(
+            "{ROUTER}
+             fn add_logged(r: mut ref Router[with reads(Stdout)]) {{
+                 r.add(\"/l\", Logged {{ n: 1 }});
+             }}
+             fn main() {{
+                 let mut r = Router {{ routes: Vec.new() }};
+                 r.add(\"/d\", Double {{}});
+                 add_logged(mut r);
                  println(f\"{{r.dispatch(\"/l\", 4)}}\");
              }}"
         ),
