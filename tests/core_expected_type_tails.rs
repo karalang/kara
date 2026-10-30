@@ -2,8 +2,9 @@
 //! that produce its value: an `if` or `match` in a function's tail, or under
 //! an annotated `let`, hands the type to each branch (B-2026-10-29-6).
 //! A constructor that does not seed keeps the expectation from a generic
-//! call inside its payload (B-2026-10-29-5). `karac check` accepts each
-//! program and every backend prints its oracle.
+//! call inside its payload (B-2026-10-29-5), and a constructor's literal
+//! arguments take their type from any slot that names it (B-2026-10-29-24).
+//! `karac check` accepts each program and every backend prints its oracle.
 
 use std::process::{Command, Output, Stdio};
 
@@ -151,5 +152,55 @@ fn main() {
 }
 ",
         "6 9 x\n5 200 7\n",
+    );
+}
+
+/// `Vec.filled(n, 0)` builds the `Vec` its slot names wherever the slot is
+/// known, not only under a `let` annotation: a method's argument, a tuple
+/// element under an annotation and an `Option` payload (B-2026-10-29-24).
+/// The literal is range-checked against that element type.
+#[test]
+fn expected_type_reaches_a_constructors_literal_arguments() {
+    runs(
+        "filled",
+        "struct Chunk {
+    d: Vec[Vec[u64]],
+}
+fn takes(v: Vec[u64]) -> i64 {
+    v.len()
+}
+fn main() {
+    let a = takes(Vec.filled(3, 0));
+    let t: (Vec[u64], i64) = (Vec.filled(2, 0), 1);
+    let mut d: Vec[Vec[u64]] = Vec.new();
+    d.push(Vec.filled(2, 0));
+    let o: Option[Vec[u64]] = Some(Vec.filled(2, 7));
+    let mut m: Vec[Vec[u8]] = Vec.new();
+    m.push(Vec.filled(2, 255));
+    m[0][1] = m[0][1].wrapping_add(3);
+    let mut c = Chunk { d: Vec.new() };
+    c.d.push(Vec.filled(2, 0));
+    println(f\"{a} {t.0.len()} {d.len()} {o.unwrap()[1]} {m[0]} {c.d.len()}\");
+}
+",
+        "3 2 1 7 [255, 2] 1\n",
+    );
+    let out = karac(
+        "filled-range",
+        "check",
+        "fn main() {
+    let mut m: Vec[Vec[u8]] = Vec.new();
+    m.push(Vec.filled(2, 300));
+    let o: Option[Vec[u8]] = Some(Vec.filled(2, 256));
+    println(f\"{m.len()} {o.is_some()}\");
+}
+",
+    );
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success()
+            && err.contains("integer literal 300 out of range for 'u8'")
+            && err.contains("integer literal 256 out of range for 'u8'"),
+        "{err}"
     );
 }

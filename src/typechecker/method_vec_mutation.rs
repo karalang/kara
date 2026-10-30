@@ -132,9 +132,15 @@ impl<'a> super::TypeChecker<'a> {
                         &elem,
                         &self.env.substitutions,
                     )),
+                    // A constructor whose literal arguments the slot types,
+                    // `Vec.filled(n, 0)` into a `Vec[Vec[u64]]`
+                    // (B-2026-10-29-24).
                     ExprKind::Call { callee, .. } => match &callee.kind {
                         ExprKind::Identifier(n) => ctor(n),
-                        ExprKind::Path { segments, .. } => segments.last().is_some_and(|n| ctor(n)),
+                        ExprKind::Path { segments, .. } => {
+                            segments.last().is_some_and(|n| ctor(n))
+                                || super::exprs::ctor_with_literal_args(arg)
+                        }
                         _ => false,
                     },
                     // The library's `collect` (on the MIR pipeline) is

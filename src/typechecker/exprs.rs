@@ -123,6 +123,22 @@ pub(super) fn is_collection_literal(e: &Expr) -> bool {
     )
 }
 
+/// An associated-function call with a bare numeric or list literal among
+/// its arguments: `Vec.filled(n, 0)` builds the `Vec[T]` its slot names, as
+/// it does under a `let` annotation, where otherwise the literal mints its
+/// default (B-2026-10-29-24).
+pub(super) fn ctor_with_literal_args(e: &Expr) -> bool {
+    let ExprKind::Call { callee, args } = &e.kind else {
+        return false;
+    };
+    matches!(&callee.kind, ExprKind::Path { segments, .. } if segments.len() == 2)
+        && args.iter().any(|a| {
+            super::TypeChecker::unsuffixed_int_literal_value(&a.value).is_some()
+                || matches!(a.value.kind, ExprKind::Float(_, None))
+                || is_collection_literal(&a.value)
+        })
+}
+
 /// A zero-argument `.collect()`: its target is whatever the context names.
 pub(super) fn is_bare_collect(e: &Expr) -> bool {
     matches!(&e.kind, ExprKind::MethodCall { method, args, .. } if method == "collect" && args.is_empty())
@@ -2342,6 +2358,7 @@ impl<'a> super::TypeChecker<'a> {
                         // slot names: `Ok((n, it.collect()))`.
                         let payload_needs_slot =
                             Self::literal_needs_array_slot(&args[0].value, &slot)
+                                || ctor_with_literal_args(&args[0].value)
                                 || tuple_literal_has_str_slot(&args[0].value, &slot)
                                 || (self.library_methods_from_source
                                     && tuple_literal_has_bare_collect(&args[0].value));
@@ -2443,6 +2460,7 @@ impl<'a> super::TypeChecker<'a> {
                 let strict = self.cli_lint_overrides.strict_core;
                 let elem_needs_expected = |e: &Expr, slot: &Type| {
                     elem_is_inferred_ctor(e)
+                        || ctor_with_literal_args(e)
                         || Self::literal_needs_array_slot(e, slot)
                         || (matches!(e.kind, ExprKind::StringLit(_)) && is_str_view(slot))
                         || tuple_literal_has_str_slot(e, slot)
@@ -4314,7 +4332,8 @@ impl<'a> super::TypeChecker<'a> {
                             type_name: None,
                             ..
                         }
-                ) {
+                ) || ctor_with_literal_args(&arg.value)
+                {
                     // B-2026-09-25-8 — an EARLIER argument may already have
                     // solved this slot to a fixed array: `pick(a, [x, y])` over
                     // `fn pick[T](a: Option[T], d: T)` with `a:
