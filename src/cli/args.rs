@@ -44,12 +44,22 @@ pub fn parse_args(args: &[String]) -> Command {
         "build" => parse_build_command(args),
         "query" => parse_query_command(args),
         "fmt" => {
-            if args.len() < 3 {
-                eprintln!("error: karac fmt requires a file argument");
-                process::exit(1);
+            let (mut paths, mut check, mut write) = (Vec::new(), false, false);
+            for arg in &args[2..] {
+                match arg.as_str() {
+                    "--check" => check = true,
+                    "--write" => write = true,
+                    a if a.starts_with("--") => {
+                        eprintln!("error: unknown flag '{a}' for `karac fmt`");
+                        process::exit(1);
+                    }
+                    _ => paths.push(arg.clone()),
+                }
             }
             Command::Fmt {
-                file: args[2].clone(),
+                paths,
+                check,
+                write,
             }
         }
         "debug" => parse_debug_command(args),

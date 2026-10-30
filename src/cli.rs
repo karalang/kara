@@ -428,8 +428,11 @@ pub enum Command {
         file: String,
         function: String,
     },
+    /// `karac fmt`: no path formats the package (B-2026-10-30-30).
     Fmt {
-        file: String,
+        paths: Vec<String>,
+        check: bool,
+        write: bool,
     },
     /// Render a `std.panic` crash report (`docs/design.md § 4. Crash Report
     /// Format`). `input` is a JSON file path or `-` for stdin; the default
@@ -976,7 +979,11 @@ pub fn execute(cmd: Command) {
             file,
             function,
         } => cmd_query(kind, &file, &function),
-        Command::Fmt { file } => cmd_fmt(&file),
+        Command::Fmt {
+            paths,
+            check,
+            write,
+        } => cmd_fmt(&paths, check, write),
         Command::Debug { input, output } => cmd_debug(&input, output),
         Command::Fix {
             file: Some(file),

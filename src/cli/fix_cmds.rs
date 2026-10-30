@@ -5,8 +5,86 @@
 
 use super::*;
 
-pub(super) fn cmd_fmt(filename: &str) {
-    let source = read_source(filename);
+/// `karac fmt [--check] [--write] [<path>...]`. With no path, every `.kara`
+/// file under the package's `src/` (the package around the working
+/// directory) is formatted in place; a directory is walked the same way. A
+/// lone file prints its formatted text to stdout unless `--write` is given.
+/// `--check` writes nothing, lists each file that would change and exits 1
+/// if any would. A file that does not parse is reported and the rest are
+/// still formatted; the exit is then 1 (B-2026-10-30-30).
+pub(super) fn cmd_fmt(paths: &[String], check: bool, write: bool) {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    if let [file] = paths {
+        if !check && !write && !std::path::Path::new(file).is_dir() {
+            match format_file(file) {
+                Some((_, formatted)) => print!("{formatted}"),
+                None => process::exit(1),
+            }
+            return;
+        }
+    }
+    let mut files = Vec::new();
+    if paths.is_empty() {
+        let Some(root) = crate::manifest::discover_project_root(&cwd) else {
+            eprintln!(
+                "error[E0227]: `karac fmt` with no path formats the package around the working \
+                 directory, and there is no `kara.toml` here or above it; name a file or \
+                 directory: `karac fmt <path>`"
+            );
+            process::exit(1);
+        };
+        files = kara_files_under(&root.join("src"));
+        if files.is_empty() {
+            eprintln!(
+                "error: no `.kara` files under {}",
+                root.join("src").display()
+            );
+            process::exit(1);
+        }
+    } else {
+        for path in paths {
+            let p = std::path::Path::new(path);
+            if p.is_dir() {
+                files.extend(kara_files_under(p));
+            } else {
+                files.push(p.to_path_buf());
+            }
+        }
+    }
+    let mut failed = false;
+    let mut changed = false;
+    for path in files {
+        let shown = path.strip_prefix(&cwd).unwrap_or(&path).to_string_lossy();
+        let Some((source, formatted)) = format_file(&shown) else {
+            failed = true;
+            continue;
+        };
+        if formatted == source {
+            continue;
+        }
+        changed = true;
+        if check {
+            println!("{shown}");
+        } else if let Err(e) = std::fs::write(&path, &formatted) {
+            eprintln!("error: cannot write '{shown}': {e}");
+            failed = true;
+        }
+    }
+    if failed || (check && changed) {
+        process::exit(1);
+    }
+}
+
+/// The file's source and its formatted text, or `None` after reporting
+/// why it could not be read or parsed.
+fn format_file(filename: &str) -> Option<(String, String)> {
+    let source = match std::fs::read_to_string(filename) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("error: cannot read '{filename}': {e}");
+            return None;
+        }
+    };
     let parsed = crate::parse(&source);
     if !parsed.errors.is_empty() {
         for err in &parsed.errors {
@@ -15,10 +93,31 @@ pub(super) fn cmd_fmt(filename: &str) {
                 filename, err.span.line, err.span.column, err.message
             );
         }
-        process::exit(1);
+        return None;
     }
     let formatted = crate::formatter::format_program_with_comments(&parsed.program, &source);
-    print!("{formatted}");
+    Some((source, formatted))
+}
+
+/// Every `.kara` file under `dir`, in path order.
+fn kara_files_under(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut files = Vec::new();
+    let mut dirs = vec![dir.to_path_buf()];
+    while let Some(dir) = dirs.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                dirs.push(path);
+            } else if path.extension().is_some_and(|e| e == "kara") {
+                files.push(path);
+            }
+        }
+    }
+    files.sort();
+    files
 }
 
 /// `karac debug <crash.json>` — render a `std.panic` crash report
@@ -121,22 +220,7 @@ pub(super) fn cmd_fix_project(dry_run: bool) {
         );
         process::exit(1);
     };
-    let mut files = Vec::new();
-    let mut dirs = vec![root.join("src")];
-    while let Some(dir) = dirs.pop() {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                dirs.push(path);
-            } else if path.extension().is_some_and(|e| e == "kara") {
-                files.push(path);
-            }
-        }
-    }
-    files.sort();
+    let files = kara_files_under(&root.join("src"));
     if files.is_empty() {
         eprintln!(
             "error: no `.kara` files under {}",

@@ -76,7 +76,7 @@ COMMANDS:
                       catalogue's coverage.
     lint --list       List every lint with its default level and what it
                       reports; --output=json for the registry as JSON.
-    fmt <file>        Format a .kara file
+    fmt [<path>]      Format a .kara file, or with no path the package
     debug <crash>     Render a std.panic crash report (JSON file, or `-` for
                       stdin) as a human-readable report; --output=json
                       re-emits the structured form.
@@ -530,12 +530,17 @@ OPTIONS:
         }
         "fmt" => {
             "\
-karac fmt - Format a .kara file and print the result to stdout
+karac fmt - Format Kara source in canonical form
 
 USAGE:
-    karac fmt <file.kara>
+    karac fmt                  Format every .kara file under the package's src/ in place
+    karac fmt <dir>            Format every .kara file under <dir> in place
+    karac fmt <file.kara>      Print the formatted file to stdout
 
 OPTIONS:
+    --check            Write nothing; list each file that would change and
+                       exit 1 if any would
+    --write            Format a named file in place instead of printing it
     -h, --help         Print this message"
         }
         "debug" => {

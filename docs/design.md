@@ -7354,6 +7354,8 @@ Under `karac run` and `karac test`, the runner asks the program for the same rec
 
 `a + b` and `b + a` stay as written: the formatter normalizes structure and layout, not expressions. The syntax tree is designed to be normalizable.
 
+In a package, `karac fmt` with no path formats every `.kara` file under `src/` in place, and `karac fmt --check` writes nothing, lists the files that would change and exits 1 if any would, for CI. A directory argument is formatted in place the same way. A single file is printed to stdout unless `--write` is given.
+
 ### Lint levels
 
 Lints are warnings the user can suppress, escalate or expect. Every lint has a stable name (`deprecated`, `undocumented_unsafe`, `redundant_suffix`, ...). Four attributes set a lint's level over a syntactic scope:
