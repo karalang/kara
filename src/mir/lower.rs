@@ -23038,12 +23038,21 @@ fn par_conflict(
         .find_map(|(n, v)| v.first().map(|c| (n, c)))
 }
 
-/// The message for a call of `callee` that writes `resource`, whose default
-/// has state, outside every override (core semantics §14.14).
-pub fn stateful_default_text(resource: &str, callee: &str) -> String {
-    let what = match callee.strip_prefix(&format!("{resource}.")) {
-        Some(m) => format!("`{resource}.{m}` takes `mut ref self`"),
-        None => format!("`{callee}` calls a `mut ref self` method of `{resource}`"),
+/// The message for a write of `resource`, whose default has state, that
+/// `caller` makes outside every override (core semantics §14.14).
+pub fn stateful_default_text(
+    resource: &str,
+    caller: &crate::mir::effects::StatefulCaller,
+) -> String {
+    use crate::mir::effects::StatefulCaller;
+    let what = match caller {
+        StatefulCaller::Fn(callee) => match callee.strip_prefix(&format!("{resource}.")) {
+            Some(m) => format!("`{resource}.{m}` takes `mut ref self`"),
+            None => format!("`{callee}` calls a `mut ref self` method of `{resource}`"),
+        },
+        StatefulCaller::Closure(f) => {
+            format!("a closure in `{f}` calls a `mut ref self` method of `{resource}`")
+        }
     };
     format!(
         "{what}, but `{resource}`'s default has fields, so outside an override the call \

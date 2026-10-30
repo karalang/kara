@@ -10452,6 +10452,49 @@ fn a_resource_is_called_through_its_bounds() {
     );
 }
 
+/// B-2026-10-30-24: E_STATEFUL_DEFAULT names what makes the write when
+/// `main` reaches it through a value it makes (a `dyn` method, a closure, a
+/// function value), not the resource itself.
+#[test]
+fn a_stateful_default_write_names_the_value_that_makes_it() {
+    const IDS: &str = "trait Counter { fn next(mut ref self) -> i64; }\n\
+         struct Seq { n: i64 }\n\
+         impl Counter for Seq { fn next(mut ref self) -> i64 { self.n = self.n + 1; self.n } }\n\
+         effect resource Ids: Counter = Seq { n: 0 };\n";
+    rejected(
+        "stateful-default-through-dyn",
+        &format!(
+            "{IDS}trait Handler {{ fn handle(ref self) -> i64; }}\n\
+             struct Minter {{ tag: i64 }}\n\
+             impl Handler for Minter {{ fn handle(ref self) -> i64 {{ Ids.next() + self.tag }} }}\n\
+             fn run(h: ref dyn Handler) -> i64 {{ h.handle() }}\n\
+             fn main() {{ let h: dyn Handler = Minter {{ tag: 100 }}; println(run(h)); }}\n"
+        ),
+        "`Minter.handle` calls a `mut ref self` method of `Ids`",
+    );
+    rejected(
+        "stateful-default-through-closure",
+        &format!(
+            "{IDS}fn main() {{\n\
+                 let f: Fn() -> i64 with writes(Ids) = || Ids.next();\n\
+                 println(f());\n\
+             }}\n"
+        ),
+        "a closure in `main` calls a `mut ref self` method of `Ids`",
+    );
+    rejected(
+        "stateful-default-through-fn-value",
+        &format!(
+            "{IDS}fn bump() -> i64 with writes(Ids) {{ Ids.next() }}\n\
+             fn main() {{\n\
+                 let f: Fn() -> i64 with writes(Ids) = bump;\n\
+                 println(f());\n\
+             }}\n"
+        ),
+        "`bump` calls a `mut ref self` method of `Ids`",
+    );
+}
+
 /// B-2026-10-20-18: a `Vec.new()` passed as `fold`'s init takes its element
 /// type from the closure's annotated accumulator, or from what it returns.
 #[test]

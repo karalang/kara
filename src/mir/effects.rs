@@ -323,12 +323,22 @@ pub struct EffectReport {
     pub no_provider: Vec<NoProvider>,
     /// The calls in `main` that write a resource whose default has state,
     /// outside every override (`E_STATEFUL_DEFAULT`, core semantics
-    /// §14.14): `callee` is the function the call names.
-    pub stateful_default: Vec<(NoProvider, String)>,
+    /// §14.14), each with what makes the write.
+    pub stateful_default: Vec<(NoProvider, StatefulCaller)>,
     /// What the program's overrides cannot do, which provider
     /// specialisation finds (`E_PROVIDER_UNSUPPORTED` and a handle method
     /// using an overridden resource, §14.11, §14.12).
     pub refused: Vec<super::providers::Refused>,
+}
+
+/// What makes an `E_STATEFUL_DEFAULT` write, as its message names it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StatefulCaller {
+    /// The function or method `main` calls, or the one a value `main`
+    /// makes runs (a `dyn` method, a function value): its instance name.
+    Fn(String),
+    /// A closure made in the function named.
+    Closure(String),
 }
 
 /// A resource a program can bind with `with_provider[R](p, f)` (core
@@ -559,7 +569,7 @@ pub(crate) fn analyze_with(program: &Program, tys: &TyInterner, size_gate: bool)
     // A default with state is read-only (§14.14): `main` may not write
     // its resource outside an override.
     if let Some(main) = program.bodies.get("main") {
-        for (block, span, n) in a.needs_sites(main, &report.providers) {
+        for (block, span, n, made) in a.needs_sites_made(main, &report.providers) {
             for (r, access) in &n {
                 let Some(d) = program.resources.get(r) else {
                     continue;
@@ -573,18 +583,24 @@ pub(crate) fn analyze_with(program: &Program, tys: &TyInterner, size_gate: bool)
                 if d.default.is_none() {
                     report.no_provider.push(site);
                 } else if d.default_stateful && *access == Access::Writes {
-                    let callee = match &main.blocks[block.index()].terminator.kind {
-                        TerminatorKind::Call {
-                            func:
-                                Operand::Const(Const {
-                                    kind: ConstKind::FnDef(i),
-                                    ..
-                                }),
-                            ..
-                        } => i.name.clone(),
-                        _ => r.clone(),
+                    let caller = match made {
+                        // A value `main` makes: the closure, `dyn` method or
+                        // function it can run that writes `r`.
+                        Some(dst) => a.stateful_maker(main, block, span, dst, r, &report.providers),
+                        None => match &main.blocks[block.index()].terminator.kind {
+                            TerminatorKind::Call {
+                                func:
+                                    Operand::Const(Const {
+                                        kind: ConstKind::FnDef(i),
+                                        ..
+                                    }),
+                                ..
+                            } => Some(StatefulCaller::Fn(i.name.clone())),
+                            _ => None,
+                        },
                     };
-                    report.stateful_default.push((site, callee));
+                    let caller = caller.unwrap_or_else(|| StatefulCaller::Fn(r.clone()));
+                    report.stateful_default.push((site, caller));
                 }
             }
         }
@@ -1866,6 +1882,48 @@ impl<'p> Analysis<'p> {
             }
         }
         out
+    }
+
+    /// What the value `body` makes into local `dst` at `span` in `block`
+    /// runs that writes `resource`: the closure, or else the function or
+    /// `dyn` method.
+    fn stateful_maker(
+        &self,
+        body: &Body,
+        block: BasicBlock,
+        span: crate::token::Span,
+        dst: u32,
+        resource: &str,
+        needs: &BTreeMap<String, Needs>,
+    ) -> Option<StatefulCaller> {
+        let rv = body.blocks[block.index()]
+            .statements
+            .iter()
+            .find_map(|st| match &st.kind {
+                StatementKind::Assign(p, rv) if p.local.0 == dst && st.source_info.span == span => {
+                    Some(rv)
+                }
+                _ => None,
+            })?;
+        let writes = |f: &String| {
+            needs
+                .get(f)
+                .and_then(|n| n.get(resource))
+                .is_some_and(|a| *a == Access::Writes)
+        };
+        let f = self.made_fn_values(rv).into_iter().find(writes)?;
+        let closure = match rv {
+            Rvalue::Aggregate(AggregateKind::Closure { ty }, _) => match self.tys.tcx().kind(*ty) {
+                SK::Closure { def, .. } => self.bodies_of(def).contains(&f),
+                _ => false,
+            },
+            _ => false,
+        };
+        Some(if closure {
+            StatefulCaller::Closure(body.instance.name.clone())
+        } else {
+            StatefulCaller::Fn(f)
+        })
     }
 
     /// The instances of the body `def` names.
