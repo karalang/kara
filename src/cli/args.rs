@@ -67,6 +67,7 @@ pub fn parse_args(args: &[String]) -> Command {
         "update" => parse_update_command(args),
         "resolve" => parse_resolve_command(args),
         "explain" => parse_explain_command(args),
+        "lint" => parse_lint_command(args),
         "catalog" => parse_catalog_command(args),
         // Hidden plumbing for `--target-cpu` validation (phase-10;
         // design.md § CPU Baseline Targeting). Prints LLVM's
@@ -386,11 +387,22 @@ fn parse_run_command_from(args: &[String], file_idx: usize) -> Command {
         } else if arg.starts_with('-') {
             eprintln!("error: unknown flag '{arg}'");
             process::exit(1);
-        } else if file.is_none() {
-            file = Some(arg.clone());
-        } else {
+        } else if let Some(f) = &file {
+            // A second positional is most likely meant for the program, which
+            // takes its arguments after `--` (B-2026-10-30-19).
+            let rest: Vec<&str> = args[i..]
+                .iter()
+                .take_while(|a| *a != "--")
+                .map(String::as_str)
+                .collect();
             eprintln!("error: unexpected argument '{arg}'");
+            eprintln!(
+                "  help: arguments for the program go after `--`: karac run {f} -- {}",
+                rest.join(" ")
+            );
             process::exit(1);
+        } else {
+            file = Some(arg.clone());
         }
         i += 1;
     }
@@ -398,8 +410,26 @@ fn parse_run_command_from(args: &[String], file_idx: usize) -> Command {
         eprintln!("error: --manifest and --no-manifest are mutually exclusive");
         process::exit(1);
     }
+    // No file inside a project runs the project's entry, as `karac build`
+    // builds it (B-2026-10-30-18).
+    let file = file.or_else(|| {
+        if no_manifest {
+            return None;
+        }
+        let cwd = std::env::current_dir().ok()?;
+        let root = crate::manifest::discover_project_root(&cwd)?;
+        let entry = root.join("src").join("main.kara");
+        if !entry.is_file() {
+            return None;
+        }
+        let shown = entry.strip_prefix(&cwd).unwrap_or(&entry);
+        Some(shown.to_string_lossy().into_owned())
+    });
     let Some(f) = file else {
         eprintln!("error: missing file argument");
+        eprintln!(
+            "  help: `karac run <file.kara>`, or `karac run` inside a project to run its src/main.kara"
+        );
         process::exit(1);
     };
     Command::Run {
@@ -1686,10 +1716,8 @@ fn parse_new_command(args: &[String]) -> Command {
         match arg.as_str() {
             "--backend" => backend = true,
             "--lib" => lib = true,
-            // `--cli` is the discoverable name in `karac new` for the
-            // existing `Template::Bin` shape — the source on disk is
-            // unchanged, only the user-facing flag name differs from
-            // `karac init --bin`.
+            // `--cli`: a command-line tool that reads a file, with a
+            // provider fake in its tests (`Template::Cli`).
             "--cli" => cli = true,
             "--data" => {
                 // Reserved for the Kafka consumer + processor + sink
@@ -1737,7 +1765,7 @@ fn parse_new_command(args: &[String]) -> Command {
     let template = if lib {
         Template::Lib
     } else if cli {
-        Template::Bin
+        Template::Cli
     } else {
         Template::Backend
     };
@@ -1746,6 +1774,29 @@ fn parse_new_command(args: &[String]) -> Command {
         template,
         force,
     }
+}
+
+/// Parser for `karac lint --list [--output=json]` (B-2026-10-30-22).
+fn parse_lint_command(args: &[String]) -> Command {
+    let mut list = false;
+    let mut output = OutputMode::Text;
+    for arg in args.iter().skip(2) {
+        match arg.as_str() {
+            "--list" => list = true,
+            "--output=json" => output = OutputMode::Json,
+            other => {
+                eprintln!("error: unexpected argument '{other}' for `karac lint`");
+                eprintln!("  help: `karac lint --list` lists every lint and its default level");
+                process::exit(1);
+            }
+        }
+    }
+    if !list {
+        eprintln!("error: `karac lint` needs `--list`");
+        eprintln!("  help: `karac lint --list` lists every lint and its default level");
+        process::exit(1);
+    }
+    Command::LintList { output }
 }
 
 /// Parser for `karac migrate shared-to-par <Type> [<file>] [--apply] [--force] [--no-atomic]`.
@@ -2199,8 +2250,11 @@ fn parse_query_command(args: &[String]) -> Command {
         // empty function key — emits every function's effects/parallel
         // bands plus the call graph, the Cartographer effect-graph
         // artifact. A target with a trailing function still splits as
-        // before. Ownership remains per-function only.
-        QueryKind::Effects | QueryKind::Concurrency if target.ends_with(".kara") => {
+        // before. Ownership takes a bare file the same way, listing every
+        // function (B-2026-10-30-17).
+        QueryKind::Effects | QueryKind::Concurrency | QueryKind::Ownership
+            if target.ends_with(".kara") =>
+        {
             (target.clone(), String::new())
         }
         _ => split_query_function_target(target),

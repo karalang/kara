@@ -28,9 +28,12 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Template {
     /// `src/main.kara` + `src/main_test.kara` with a hello-world entry point.
-    /// Aliased as the `--cli` flavor in `karac new`'s CLI surface — the
-    /// existing scaffold is exactly a CLI tool skeleton.
     Bin,
+    /// `karac new --cli`: a command-line tool that reads the file its first
+    /// argument names and counts its lines, words and bytes, with tests that
+    /// run it against an in-memory `FileSystem` provider instead of the disk
+    /// (B-2026-10-30-20: `--cli` used to be the hello-world `Bin`).
+    Cli,
     /// `src/lib.kara` + `src/lib_test.kara` with a starter `pub fn add`.
     Lib,
     /// Phase-8 line 63 — backend HTTP server skeleton. `src/main.kara`
@@ -348,6 +351,12 @@ pub fn scaffold_project(
                 "src/main_test.kara",
                 bin_main_test_body(),
             ),
+            Template::Cli => (
+                "src/main.kara",
+                cli_main_body(package_name),
+                "src/main_test.kara",
+                cli_main_test_body(),
+            ),
             Template::Lib => (
                 "src/lib.kara",
                 lib_body(),
@@ -377,7 +386,7 @@ pub fn scaffold_project(
         // collision the user should know about. Backend mirrors Bin (also
         // owns `src/main.kara`) so the "other" file is `src/lib.kara`.
         let other_entry = match opts.template {
-            Template::Bin | Template::Backend => target_dir.join("src/lib.kara"),
+            Template::Bin | Template::Cli | Template::Backend => target_dir.join("src/lib.kara"),
             Template::Lib => target_dir.join("src/main.kara"),
         };
         check_no_collision(&other_entry, "entry file")?;
@@ -447,6 +456,93 @@ fn bin_main_body() -> String {
 
 fn bin_main_test_body() -> String {
     "test \"placeholder\" {\n    assert_eq(1 + 1, 2);\n}\n".to_string()
+}
+
+fn cli_main_body(package_name: &str) -> String {
+    r#"// __NAME__: count the lines, words and bytes of a file.
+
+struct Counts {
+    lines: i64,
+    words: i64,
+    bytes: i64,
+}
+
+fn count(text: Str) -> Counts {
+    let mut words = 0;
+    for line in text.lines() {
+        words += line.split_whitespace().count();
+    }
+    Counts {
+        lines: text.lines().count(),
+        words: words,
+        bytes: text.len(),
+    }
+}
+
+fn count_file(path: Str) -> Result[Counts, IoError] {
+    let text = fs.read_to_string(path)?;
+    Ok(count(text))
+}
+
+fn main() {
+    let args = env.args();
+    if args.len() < 2 {
+        eprintln("usage: __NAME__ <file>");
+        return;
+    }
+    match count_file(args[1]) {
+        Ok(c) => println(f"{c.lines} {c.words} {c.bytes} {args[1]}"),
+        Err(e) => eprintln(f"__NAME__: {args[1]}: {e}"),
+    }
+}
+"#
+    .replace("__NAME__", package_name)
+}
+
+fn cli_main_test_body() -> String {
+    r#"// The tests run `count_file` against files held in memory: the
+// `FileSystem` provider is swapped for `MemFs` inside `with_provider`.
+
+struct MemFs {
+    files: Map[String, String],
+}
+
+impl FileSystemProvider for MemFs {
+    fn read_to_string(ref self, path: Str) -> Result[String, IoError] {
+        match self.files.get(path) {
+            Some(s) => Ok(s.clone()),
+            None => Err(IoError.NotFound),
+        }
+    }
+}
+
+fn mem() -> MemFs {
+    let mut files: Map[String, String] = Map.new();
+    files.insert("a.txt".to_string(), "one two\nthree\n".to_string());
+    MemFs {
+        files: files,
+    }
+}
+
+test "counts a file" {
+    with_provider[FileSystem](mem(), || {
+        let c = count_file("a.txt").unwrap();
+        assert_eq(c.lines, 2);
+        assert_eq(c.words, 3);
+        assert_eq(c.bytes, 14);
+    });
+}
+
+test "a missing file is NotFound" {
+    with_provider[FileSystem](mem(), || {
+        match count_file("b.txt") {
+            Err(IoError.NotFound) => {},
+            _ => assert(false),
+        }
+    });
+}
+"#
+    .to_string()
 }
 
 fn lib_body() -> String {

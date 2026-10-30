@@ -54,6 +54,7 @@ pub(super) fn cmd_init(directory: Option<String>, template: Template, force: boo
         Ok(()) => {
             let kind = match template {
                 Template::Bin => "binary",
+                Template::Cli => "command-line",
                 Template::Lib => "library",
                 Template::Backend => "backend",
             };

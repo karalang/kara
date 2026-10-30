@@ -49,7 +49,9 @@ COMMANDS:
                       string.
     query <kind> <target>
                       Query compiler analysis. Per-function kinds take
-                      `<file>.<function>` as target; `cost-summary` takes
+                      `<file>.<function>` as target; `effects`,
+                      `ownership` and `concurrency` also take a bare
+                      `<file>`, for every function; `cost-summary` takes
                       a bare `<file>` (whole-file aggregate).
                         effects          - inferred and declared effects
                         ownership        - parameter modes
@@ -72,6 +74,8 @@ COMMANDS:
                       directly. Explicit forms: --code= / --class= /
                       --concept=. Run `karac explain --help` for the
                       catalogue's coverage.
+    lint --list       List every lint with its default level and what it
+                      reports; --output=json for the registry as JSON.
     fmt <file>        Format a .kara file
     debug <crash>     Render a std.panic crash report (JSON file, or `-` for
                       stdin) as a human-readable report; --output=json
@@ -705,9 +709,10 @@ FLAGS:
                        \"default-being-backend\" positioning.
     --lib              Library project: `src/lib.kara` with a sample
                        `pub fn add`.
-    --cli              Command-line tool: `src/main.kara` with a
-                       `Hello, world!` entry point (same shape as
-                       `karac init --bin`).
+    --cli              Command-line tool: `src/main.kara` reads the file
+                       its first argument names and counts its lines,
+                       words and bytes; `src/main_test.kara` tests it
+                       against an in-memory `FileSystem` provider.
     --data             Reserved for the Kafka pipeline scaffold (consumer +
                        processor + sink). Currently surfaces a structured
                        \"deferred\" diagnostic — the underlying Kafka client

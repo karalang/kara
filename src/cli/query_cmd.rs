@@ -684,6 +684,36 @@ pub(super) fn query_effects_whole_program(
 pub(super) fn query_ownership(pipeline: &Pipeline, function: &str) {
     let ownership = pipeline.ownership.as_ref().unwrap();
 
+    // Whole-program mode: an empty `function` (a bare `<file>.kara` target)
+    // emits every function's entry, in name order, as the effects and
+    // concurrency kinds do (B-2026-10-30-17).
+    if function.is_empty() {
+        let mut names: Vec<&String> = ownership.param_modes.keys().collect();
+        names.sort();
+        let entries: Vec<String> = names
+            .into_iter()
+            .filter_map(|name| ownership_function_json(ownership, name))
+            .collect();
+        println!("{{\"functions\":[{}]}}", entries.join(","));
+        return;
+    }
+
+    match ownership_function_json(ownership, function) {
+        Some(json) => println!("{json}"),
+        None => {
+            eprintln!("error: function '{function}' not found");
+            process::exit(1);
+        }
+    }
+}
+
+/// One function's `query ownership` object: its parameters' modes, its
+/// reference-counted bindings and its closures. `None` when the ownership
+/// pass recorded no such function.
+fn ownership_function_json(
+    ownership: &crate::ownership::OwnershipCheckResult,
+    function: &str,
+) -> Option<String> {
     match ownership.param_modes.get(function) {
         Some(params) => {
             let param_entries: Vec<String> = params
@@ -787,18 +817,15 @@ pub(super) fn query_ownership(pipeline: &Pipeline, function: &str) {
                     )
                 })
                 .collect();
-            println!(
+            Some(format!(
                 "{{\"function\":{},\"parameters\":[{}],\"rc_values\":[{}],\"closures\":[{}]}}",
                 json_string(function),
                 param_entries.join(","),
                 rc_entries.join(","),
                 closure_entries.join(","),
-            );
+            ))
         }
-        None => {
-            eprintln!("error: function '{function}' not found");
-            process::exit(1);
-        }
+        None => None,
     }
 }
 

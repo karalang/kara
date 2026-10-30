@@ -643,6 +643,11 @@ pub enum Command {
         target: ExplainTarget,
         format: ExplainFormat,
     },
+    /// `karac lint --list`: the lint registry, one lint per line with its
+    /// default level and what it reports (design.md § Built-in lints).
+    LintList {
+        output: OutputMode,
+    },
     Help,
     Version,
 }
@@ -767,6 +772,62 @@ pub enum AffectedByDirection {
     Callers,
     Callees,
     All,
+}
+
+/// `karac lint --list` (B-2026-10-30-22): every lint the registry knows,
+/// with its default level, then the core rules, which take no level.
+fn print_lint_list(output: OutputMode) {
+    let lints = crate::lints::STARTER_LINTS;
+    if output != OutputMode::Text {
+        let entries: Vec<String> = lints
+            .iter()
+            .map(|l| {
+                format!(
+                    "{{\"name\":{},\"default_level\":{},\"description\":{}}}",
+                    json_string(l.name),
+                    json_string(l.default_level.as_attr_name()),
+                    json_string(l.description),
+                )
+            })
+            .collect();
+        let rules: Vec<String> = crate::lints::CORE_RULE_LINTS
+            .iter()
+            .map(|r| json_string(r))
+            .collect();
+        println!(
+            "{{\"lints\":[{}],\"core_rules\":[{}]}}",
+            entries.join(","),
+            rules.join(",")
+        );
+        return;
+    }
+    // Written through one lock with write errors ignored, so `karac lint
+    // --list | head` stops quietly instead of panicking on the closed pipe.
+    use std::io::Write as _;
+    let mut out = std::io::stdout().lock();
+    let width = lints.iter().map(|l| l.name.len()).max().unwrap_or(0);
+    let _ = writeln!(out, "{:width$}  DEFAULT  DESCRIPTION", "LINT");
+    for l in lints {
+        let description = l
+            .description
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        let _ = writeln!(
+            out,
+            "{:width$}  {:7}  {}",
+            l.name,
+            l.default_level.as_attr_name(),
+            description
+        );
+    }
+    let _ = writeln!(
+        out,
+        "\nSet a level with `#[allow(name)]`, `#[warn(name)]`, `#[deny(name)]` or `#[expect(name)]` on an item,\n\
+         `-A name` / `-W name` / `-D name` on the command line, or `[lints]` in kara.toml.\n\
+         Core rules, errors under `karac check` that no level lowers: {}.",
+        crate::lints::CORE_RULE_LINTS.join(", ")
+    );
 }
 
 // ── Command Execution ───────────────────────────────────────────
@@ -948,6 +1009,7 @@ pub fn execute(cmd: Command) {
             no_proxy,
         } => cmd_resolve(output, offline, no_proxy),
         Command::Explain { target, format } => explain::render(&target, format),
+        Command::LintList { output } => print_lint_list(output),
         Command::Catalog { file } => cmd_catalog(&file),
         Command::Migrate {
             type_name,
