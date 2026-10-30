@@ -3833,6 +3833,8 @@ impl Option[Ordering] {
 }
 ```
 
+`Ordering` also has `reverse`, `then` and `then_with`, for descending and multi-key comparisons ([library/core-types.md](library/core-types.md#ordering)).
+
 **Comparisons go through `PartialOrd`.** `a < b` is `PartialOrd.partial_cmp(a, b).is_lt()`, with both operands borrowed; `<=`, `>` and `>=` use `is_le`, `is_gt` and `is_ge`. No operator calls `Ord` directly. Generic code that needs a total order adds the `Ord` bound, but the desugaring stays the same. `==` and `!=` call `PartialEq.eq`. The desugaring never names `Eq`; it appears only as a bound in code that relies on reflexive equality (hash tables, set membership, deduplication).
 
 **Why four traits, not two.** Floating-point values break two laws: `NaN != NaN` breaks reflexive equality, and `NaN` is incomparable with every number, which breaks total order. With only `Eq` and `Ord`, either floats cannot use `==` and `<`, or `Eq` and `Ord` lie about their contracts and generic algorithms that rely on them break. With the split, floats use `==` and `<` through `PartialEq` and `PartialOrd`, and generic code that needs totality states `Ord` and excludes floats for a reason the compiler can explain.

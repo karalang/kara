@@ -50,6 +50,33 @@ impl Ordering {
             _ => false,
         }
     }
+
+    // `Less` and `Greater` swapped: sorting by `a.cmp(b).reverse()` sorts
+    // descending.
+    fn reverse(self) -> Ordering {
+        match self {
+            Ordering.Less => Ordering.Greater,
+            Ordering.Equal => Ordering.Equal,
+            Ordering.Greater => Ordering.Less,
+        }
+    }
+
+    // `self`, unless it is `Equal`, in which case `other`: the second key
+    // of a two-key comparison.
+    fn then(self, other: Ordering) -> Ordering {
+        match self {
+            Ordering.Equal => other,
+            _ => self,
+        }
+    }
+
+    // `then` with a second key computed only when the first ties.
+    fn then_with(self, f: Fn() -> Ordering) -> Ordering {
+        match self {
+            Ordering.Equal => f(),
+            _ => self,
+        }
+    }
 }
 
 impl Option[Ordering] {

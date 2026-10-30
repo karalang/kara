@@ -1,4 +1,4 @@
-# Core types: `Option`, `Result` and numbers
+# Core types: `Option`, `Result`, `Ordering` and numbers
 
 The types themselves are in [design.md §5](../design.md#5-types): what `Option[T]` and `Result[T, E]` are, the numeric types and their arithmetic. The operators `?` and `??` are in [design.md §6](../design.md#6-expressions-and-statements) and [design.md §10](../design.md#10-errors-and-panics), which also covers `Error` and `AnyError`. This file lists the methods.
 
@@ -57,6 +57,32 @@ Methods that can panic (`unwrap`, `expect`, `unwrap_err`) report the caller's so
 | `unwrap_or_else` | `fn unwrap_or_else(own self, f: own OnceFn(own E) -> T) -> T` | |
 
 `.context(msg)`, which turns an error into an `AnyError` with a context message, is in [design.md §10](../design.md#error-and-anyerror).
+
+## `Ordering`
+
+`Ord.cmp` returns an `Ordering`: `Less`, `Equal` or `Greater` ([design.md §5](../design.md#5-types)). Besides the predicates `is_lt`, `is_le`, `is_gt`, `is_ge` and `is_eq`, it has three methods for building comparisons:
+
+| Method | Signature | Notes |
+|---|---|---|
+| `reverse` | `fn reverse(self) -> Ordering` | Swaps `Less` and `Greater`, so a comparator ending in `.reverse()` sorts descending |
+| `then` | `fn then(self, other: Ordering) -> Ordering` | `self` unless it is `Equal`, otherwise `other` |
+| `then_with` | `fn then_with(self, f: Fn() -> Ordering) -> Ordering` | Like `then`, but calls `f` only when `self` is `Equal` |
+
+To sort by two keys, compare by the first and chain the second with `then`. This sorts by score, highest first, and breaks ties by name:
+
+```kara
+struct Player { name: String, score: i64 }
+
+let mut ps: Vec[Player] = [
+    Player { name: "cleo", score: 7 },
+    Player { name: "ana", score: 9 },
+    Player { name: "bo", score: 7 },
+];
+ps.sort_by(|a, b| a.score.cmp(b.score).reverse().then(a.name.cmp(b.name)));
+// ana 9, bo 7, cleo 7
+```
+
+Use `then_with` when the second key is costly to compute: `a.len().cmp(b.len()).then_with(|| expensive(a).cmp(expensive(b)))`.
 
 ## Numbers
 

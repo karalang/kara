@@ -70,6 +70,9 @@ const ALWAYS_KEPT: &[&str] = &[
     "RangeInclusive",
     "RangeFrom",
     "Ordering",
+    // `Ordering.then`: the backend's `"then"` basic-block label reads as
+    // a reference to it, so the guard below asks for it to be kept.
+    "then",
     // `for`, `?`, conversions and collecting.
     "iter",
     "iter_mut",
