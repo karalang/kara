@@ -200,7 +200,7 @@ The v1 compiler is held to measured bars before release: run time and build time
 
 ## Project status
 
-Pre-1.0, with v1 in its final stretch. The compiler lowers every program to a mid-level IR (MIR), which both the interpreter and the LLVM backend run, and its corpus of thousands of programs with expected outputs is the release gate. Remaining for v1: `dyn Trait`, effect variables for stored callbacks, provider overrides for the file system, network and standard streams, and the release itself.
+Pre-1.0, with v1 in its final stretch. The compiler lowers every program to a mid-level IR (MIR), which both the interpreter and the LLVM backend run, and its corpus of thousands of programs with expected outputs is the release gate. `dyn Trait`, effect variables for stored callbacks, and provider overrides for the file system, network and standard streams are in; what remains is release packaging and dogfooding.
 
 ## Prior art
 

@@ -516,6 +516,10 @@ Task spawn where the task's live range outlasts the spawning function. Kāra's v
 
 **Cross-reference:** [design.md §13 `TaskGroup`](design.md#taskgroup).
 
+### Provider-scoped stored callbacks
+
+A callback stored in a field is escaping, so it cannot capture a provider (core-semantics §14.5). Under an override in a test, an event bus or router whose handlers use the overridden resource cannot be built, though the same program runs against the default. A later design would let a struct that never leaves the `with_provider` call hold provider-scoped callbacks, as a local view (design.md §5), with the struct's type carrying the scope. Found by the v1 integration pin (`tests/fixtures/v1_service`, 2026-10-30). No committed design.
+
 ### Provider-Rooted Resources (trait-based injection)
 
 > **Superseded for v1 (2026-10-20).** Providers were brought forward to v1 and their rules are now [core-semantics.md §14](core-semantics.md): the provider is a hidden borrowed parameter, specialised per provider type, so there is no shared handle, no vtable and no per-task provider stack, and a missing provider is a compile error rather than the runtime panic below. Trait-less provider use is not v1: a resource needs a trait bound to be bound. This section stays as the record of the earlier design and of the parts still on this track (`#[test(requires: ..)]`, deterministic-replay tooling, overriding `FileSystem`, `Network` and the standard streams).
