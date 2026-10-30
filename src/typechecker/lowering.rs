@@ -238,6 +238,7 @@ impl<'a> super::TypeChecker<'a> {
                 trait_path,
                 args,
                 assoc_bindings,
+                effects,
                 cross_task,
                 ..
             } => {
@@ -267,6 +268,7 @@ impl<'a> super::TypeChecker<'a> {
                     trait_path,
                     args,
                     assoc_bindings,
+                    effects.as_ref(),
                     *cross_task,
                     ty.span,
                     generic_scope,

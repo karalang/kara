@@ -177,7 +177,7 @@ fn effectcheck_full_pipeline(source: &str) -> EffectCheckResult {
     let node_call_subs = typed.node_call_subs.clone();
     let typeparam_receivers = karac::typeparam_value_nodes(&typed);
     let user_operator_calls = typed.user_operator_calls.clone();
-    let dyn_coercions = karac::dyn_coercion_types(&typed);
+    let dyn_tables = karac::dyn_tables(&typed);
     lower(&mut parsed.program, &typed);
     karac::effectcheck_with_typecheck_tables(
         &parsed.program,
@@ -188,7 +188,7 @@ fn effectcheck_full_pipeline(source: &str) -> EffectCheckResult {
         node_call_subs,
         typeparam_receivers,
         user_operator_calls,
-        dyn_coercions,
+        dyn_tables,
     )
 }
 

@@ -28,11 +28,13 @@ impl<'a> super::TypeChecker<'a> {
     /// Lower `dyn Trait[A.., Name = T..]`. The trait's own arguments are
     /// positional; every associated type of the trait and its supertraits
     /// must be bound, and the bindings are kept in `dyn_assoc_names` order.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn lower_dyn_type(
         &mut self,
         trait_path: &PathExpr,
         args: &[GenericArg],
         assoc_bindings: &[AssocBinding],
+        effects: Option<&EffectList>,
         cross_task: bool,
         span: Span,
         generic_scope: &[String],
@@ -123,6 +125,7 @@ impl<'a> super::TypeChecker<'a> {
             args: lowered_args,
             assoc,
             cross_task,
+            clause: super::types::DynClause(effects.cloned()),
         }
     }
 
@@ -196,6 +199,7 @@ impl<'a> super::TypeChecker<'a> {
             args,
             assoc,
             cross_task,
+            ..
         } = target
         else {
             return None;

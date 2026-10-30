@@ -70,11 +70,13 @@ pub(super) fn map_existential(ty: &Type, f: impl Fn(&Type) -> Type) -> Type {
             args,
             assoc,
             cross_task,
+            clause,
         } => Type::Dyn {
             trait_name: trait_name.clone(),
             args: args.iter().map(&f).collect(),
             assoc: assoc.iter().map(|(n, t)| (n.clone(), f(t))).collect(),
             cross_task: *cross_task,
+            clause: clause.clone(),
         },
         _ => ty.clone(),
     }
@@ -926,12 +928,14 @@ pub(super) fn unify_types(
                 args: aa,
                 assoc: ab,
                 cross_task: ac,
+                ..
             },
             Type::Dyn {
                 trait_name: bt,
                 args: ba,
                 assoc: bb,
                 cross_task: bc,
+                ..
             },
         ) if at == bt && ac == bc && aa.len() == ba.len() && ab.len() == bb.len() => aa
             .iter()

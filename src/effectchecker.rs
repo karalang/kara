@@ -773,6 +773,33 @@ pub struct EffectCheckResult {
 
 // ── Effect Checker ──────────────────────────────────────────────
 
+/// What the effect checker reads from the typechecker about `dyn` values
+/// (design.md § `dyn Trait`, Effects), built by [`crate::dyn_tables`].
+#[derive(Debug, Clone, Default)]
+pub struct DynTables {
+    /// Each coercion to a `dyn` type, by the coerced expression's node.
+    pub coercions: FxHashMap<crate::ids::NodeId, DynCoercion>,
+    /// Each expression typed as a `dyn` value, or a view of one, whose type
+    /// writes a `with` clause, by node.
+    pub clauses: FxHashMap<crate::ids::NodeId, DynValue>,
+}
+
+/// A coercion to `dyn`: the trait, the concrete type's name when it has a
+/// plain one, and the target type's `with` clause.
+#[derive(Debug, Clone)]
+pub struct DynCoercion {
+    pub trait_name: String,
+    pub concrete: Option<String>,
+    pub clause: Option<EffectList>,
+}
+
+/// A `dyn` value whose type writes a `with` clause.
+#[derive(Debug, Clone)]
+pub struct DynValue {
+    pub trait_name: String,
+    pub clause: EffectList,
+}
+
 /// Pre-minted symbols for the fixed names the body walkers push on hot
 /// paths (name-interning spike stage 3). Everything here is interned
 /// once at construction so `collect_calls_in_expr` and friends compare
@@ -969,11 +996,16 @@ pub struct EffectChecker<'a> {
     /// the impl's effects (B-2026-10-29-51). Empty when constructed via the
     /// unparameterised `new` family.
     pub(crate) user_operator_calls: FxHashMap<SpanKey, Symbol>,
-    /// Each coercion to a `dyn` type, by the coerced expression's node, with
-    /// the concrete type's name (`TypeCheckResult.node_dyn_coercions`, via
-    /// [`crate::dyn_coercion_types`]). Empty when constructed via the
+    /// Each coercion to a `dyn` type, by the coerced expression's node
+    /// ([`DynTables::coercions`]). Empty when constructed via the
     /// unparameterised `new` family.
-    pub(crate) dyn_coercions: FxHashMap<crate::ids::NodeId, String>,
+    pub(crate) dyn_coercions: FxHashMap<crate::ids::NodeId, DynCoercion>,
+    /// Each expression typed as a `dyn` value whose type writes a `with`
+    /// clause, by node ([`DynTables::clauses`]).
+    pub(crate) dyn_clauses: FxHashMap<crate::ids::NodeId, DynValue>,
+    /// The seeded key a call through a `dyn` value with a clause is charged:
+    /// by the clause as written and the trait method's key.
+    pub(crate) dyn_clause_keys: FxHashMap<(String, Symbol), Symbol>,
     /// The non-escaping `dyn` parameters of each function, method and trait
     /// method (`dyn_effects.rs`).
     pub(crate) dyn_params: FxHashMap<Symbol, Vec<dyn_effects::DynParam>>,
@@ -1194,6 +1226,8 @@ impl<'a> EffectChecker<'a> {
             method_callee_types: FxHashMap::default(),
             user_operator_calls: FxHashMap::default(),
             dyn_coercions: FxHashMap::default(),
+            dyn_clauses: FxHashMap::default(),
+            dyn_clause_keys: FxHashMap::default(),
             dyn_params: FxHashMap::default(),
             dyn_param_uses: FxHashSet::default(),
             dyn_impl_methods: FxHashMap::default(),
@@ -1280,9 +1314,11 @@ impl<'a> EffectChecker<'a> {
         self
     }
 
-    /// Install the coercions to `dyn` ([`crate::dyn_coercion_types`]).
-    pub fn with_dyn_coercions(mut self, coercions: FxHashMap<crate::ids::NodeId, String>) -> Self {
-        self.dyn_coercions = coercions;
+    /// Install what the typechecker found about `dyn` values
+    /// ([`crate::dyn_tables`]).
+    pub fn with_dyn_tables(mut self, tables: DynTables) -> Self {
+        self.dyn_coercions = tables.coercions;
+        self.dyn_clauses = tables.clauses;
         self
     }
 
@@ -2919,6 +2955,23 @@ impl<'a> EffectChecker<'a> {
     /// - Closure literal: collects calls in the closure body and unions their effects.
     /// - Anything else (literals, field accesses, etc.): treated as pure.
     fn get_arg_effects(&self, arg: &Expr) -> EffectSet {
+        // A value coerced to `dyn` here brings its methods' effects, as a
+        // function value brings its own (design.md § `dyn Trait`).
+        if let Some(keys) = self.coerced_methods(arg) {
+            let mut result = EffectSet::new();
+            for key in keys {
+                for e in self.callee_effect_sets(key).iter() {
+                    result.add(
+                        e.clone(),
+                        EffectOrigin::Callee {
+                            fn_name: self.interner.resolve(key).to_string(),
+                            span: arg.span,
+                        },
+                    );
+                }
+            }
+            return result;
+        }
         match &arg.kind {
             ExprKind::Identifier(name) => {
                 let mut result = EffectSet::new();
@@ -3120,6 +3173,20 @@ fn collect_effect_var_names_in_type(ty: &TypeExpr, out: &mut Vec<String>) {
         }
         TypeKind::Array { element, .. } => {
             collect_effect_var_names_in_type(element, out);
+        }
+        // `dyn Trait with E` (design.md § `dyn Trait`): solved from the
+        // values coerced into it, as a function type's variable is.
+        TypeKind::Dyn {
+            effects: Some(list),
+            ..
+        } => {
+            for item in &list.items {
+                if let EffectItem::Variable(name) = item {
+                    if !out.contains(name) {
+                        out.push(name.clone());
+                    }
+                }
+            }
         }
         TypeKind::Pointer { inner, .. }
         | TypeKind::Ref(inner)

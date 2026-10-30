@@ -218,3 +218,153 @@ fn dyn_coercion_within_the_clause_passes() {
     );
     assert!(ok, "check must pass: {text}");
 }
+
+const STORED: &str = "
+pub trait Shape {
+    fn area(self) -> i64;
+}
+pub struct Loud { s: i64 }
+impl Shape for Loud {
+    fn area(self) -> i64 {
+        println(\"loud\");
+        self.s
+    }
+}
+pub struct Quiet { s: i64 }
+impl Shape for Quiet {
+    fn area(self) -> i64 { self.s }
+}
+";
+
+#[test]
+fn call_through_a_stored_dyn_value_has_its_types_clause() {
+    // The clause, not the program's printing impl: `held` reads the clock.
+    let (ok, text) = check(
+        "stored-clause",
+        &format!(
+            "{STORED}
+             pub struct Holder {{ s: dyn Shape with reads(Clock) }}
+             pub fn held(h: ref Holder) -> i64 {{ h.s.area() }}
+             pub fn elems(v: ref Vec[dyn Shape with reads(Clock)]) -> i64 {{
+                 let mut t = 0;
+                 for s in v {{ t = t + s.area(); }}
+                 t
+             }}
+             fn main() {{ let h = Holder {{ s: Quiet {{ s: 2 }} }}; println(f\"{{held(h)}}\"); }}"
+        ),
+    );
+    assert!(!ok, "{text}");
+    assert!(
+        text.contains("'held' performs effects [reads(Clock)]")
+            && text.contains("'elems' performs effects [reads(Clock)]"),
+        "a call through the value has the clause's effects: {text}"
+    );
+    assert!(!text.contains("writes(Stdout)"), "not every impl's: {text}");
+}
+
+#[test]
+fn stored_dyn_clause_is_narrowed_to_the_trait_methods_ceiling() {
+    let (ok, text) = check(
+        "stored-ceiling",
+        "pub trait Shape {
+             fn area(self) -> i64 with reads(Clock);
+         }
+         pub struct Quiet { s: i64 }
+         impl Shape for Quiet {
+             fn area(self) -> i64 { self.s }
+         }
+         pub struct Holder { s: dyn Shape with reads(Clock) writes(Stdout) }
+         pub fn held(h: ref Holder) -> i64 { h.s.area() }
+         fn main() { let h = Holder { s: Quiet { s: 2 } }; println(f\"{held(h)}\"); }",
+    );
+    assert!(!ok, "{text}");
+    assert!(
+        text.contains("'held' performs effects [reads(Clock)]"),
+        "the ceiling leaves `reads(Clock)`: {text}"
+    );
+    assert!(!text.contains("writes(Stdout)"), "{text}");
+}
+
+const ROUTER: &str = "
+pub trait Handler {
+    fn handle(self, req: i64) -> i64;
+}
+struct Double {}
+impl Handler for Double {
+    fn handle(self, req: i64) -> i64 { req * 2 }
+}
+struct Logged { n: i64 }
+impl Handler for Logged {
+    fn handle(self, req: i64) -> i64 {
+        println(f\"req {req}\");
+        req + self.n
+    }
+}
+struct Router[with E] {
+    routes: Vec[(String, dyn Handler with E)],
+}
+impl[with E] Router[with E] {
+    fn add(mut ref self, path: Str, h: escaping dyn Handler with E) {
+        self.routes.push((path.to_string(), h));
+    }
+    fn dispatch(self, path: Str, req: i64) -> i64 with E {
+        for (p, h) in self.routes.iter() {
+            if p == path { return h.handle(req); }
+        }
+        -1
+    }
+}
+";
+
+#[test]
+fn dyn_effect_variable_is_solved_from_the_values_coerced_into_it() {
+    let (ok, text) = check(
+        "router",
+        &format!(
+            "{ROUTER}
+             pub fn quiet() -> i64 {{
+                 let mut r = Router {{ routes: Vec.new() }};
+                 r.add(\"/d\", Double {{}});
+                 r.dispatch(\"/d\", 4)
+             }}
+             pub fn noisy() -> i64 {{
+                 let mut r = Router {{ routes: Vec.new() }};
+                 r.add(\"/l\", Logged {{ n: 1 }});
+                 r.dispatch(\"/l\", 4)
+             }}
+             fn main() {{ println(f\"{{quiet()}} {{noisy()}}\"); }}"
+        ),
+    );
+    assert!(!ok, "{text}");
+    assert!(
+        text.contains("'noisy'"),
+        "the router holding `Logged` prints: {text}"
+    );
+    assert!(
+        !text.contains("'quiet'"),
+        "the one holding `Double` does not: {text}"
+    );
+}
+
+#[test]
+fn dyn_value_outside_its_receivers_effect_set_is_refused() {
+    let (ok, text) = check(
+        "router-mixed",
+        &format!(
+            "{ROUTER}
+             fn main() {{
+                 let mut r = Router {{ routes: Vec.new() }};
+                 r.add(\"/d\", Double {{}});
+                 r.add(\"/l\", Logged {{ n: 1 }});
+                 println(f\"{{r.dispatch(\"/l\", 4)}}\");
+             }}"
+        ),
+    );
+    assert!(!ok, "{text}");
+    assert!(
+        text.contains(
+            "value coerced to `dyn Handler` has `writes(Stdout)`, outside the effect set of `E`"
+        ),
+        "{text}"
+    );
+}

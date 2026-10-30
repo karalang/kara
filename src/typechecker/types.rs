@@ -12,6 +12,21 @@
 
 // ── Internal Type Representation ────────────────────────────────
 
+/// The `with` clause written on a `dyn` type (design.md § `dyn Trait`,
+/// Effects): it bounds the effects of every call through a stored value.
+/// It is not part of the type's identity, so two `dyn` types that differ
+/// only in their clause compare equal; whether a value fits a clause is the
+/// effect checker's question, asked at the coercion. `None` when no clause
+/// is written.
+#[derive(Debug, Clone, Default)]
+pub struct DynClause(pub Option<crate::ast::EffectList>);
+
+impl PartialEq for DynClause {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Type {
     Int(IntSize),
@@ -213,12 +228,14 @@ pub enum Type {
     /// implements `trait_name`, chosen at run time. `ref dyn T` and `mut ref
     /// dyn T` are `Ref(Dyn)` / `MutRef(Dyn)`. `args` are the trait's own
     /// generic arguments; `assoc` binds every associated type of the trait
-    /// and its supertraits, in `dyn_assoc_names` order.
+    /// and its supertraits, in `dyn_assoc_names` order. `clause` is the
+    /// `with` clause as written, which equality ignores ([`DynClause`]).
     Dyn {
         trait_name: String,
         args: Vec<Type>,
         assoc: Vec<(String, Type)>,
         cross_task: bool,
+        clause: DynClause,
     },
 
     /// A refinement type `type Name = Base where <pred>` — a base type
@@ -959,6 +976,7 @@ pub fn type_display(ty: &Type) -> String {
             args,
             assoc,
             cross_task,
+            ..
         } => {
             let mut inner: Vec<String> = args.iter().map(type_display).collect();
             inner.extend(
@@ -1702,12 +1720,14 @@ pub(super) fn types_compatible(a: &Type, b: &Type) -> bool {
                 args: aa,
                 assoc: ab,
                 cross_task: ac,
+                ..
             },
             Type::Dyn {
                 trait_name: bt,
                 args: ba,
                 assoc: bb,
                 cross_task: bc,
+                ..
             },
         ) => {
             at == bt

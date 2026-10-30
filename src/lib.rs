@@ -593,42 +593,77 @@ pub fn effectcheck_with_typecheck_tables(
     >,
     typeparam_nodes: rustc_hash::FxHashMap<crate::ids::NodeId, String>,
     user_operator_calls: rustc_hash::FxHashMap<crate::resolver::SpanKey, String>,
-    dyn_coercions: rustc_hash::FxHashMap<crate::ids::NodeId, String>,
+    dyn_tables: effectchecker::DynTables,
 ) -> EffectCheckResult {
     let checker = EffectChecker::new_with_policy_and_config(program, policy, profile_config.into())
         .with_method_callee_types(method_callee_types)
         .with_call_type_subs(call_type_subs)
         .with_bound_dispatch_tables(node_call_subs, typeparam_nodes)
         .with_user_operator_calls(user_operator_calls)
-        .with_dyn_coercions(dyn_coercions);
+        .with_dyn_tables(dyn_tables);
     checker.check()
 }
 
-/// Each coercion to a `dyn` type, by the coerced expression's node, with the
-/// name of the concrete type (`Circle` for a `Circle` or a `ref Circle`), for
-/// the effect checker's charging of non-escaping `dyn` parameters. A
-/// concrete type with no plain name is left out: the checker then charges
-/// every impl of the trait.
-pub fn dyn_coercion_types(
-    typed: &crate::typechecker::TypeCheckResult,
-) -> rustc_hash::FxHashMap<crate::ids::NodeId, String> {
+/// What the effect checker reads from the typechecker about `dyn` values
+/// (design.md § `dyn Trait`, Effects): each coercion, with the concrete
+/// type's name (`Circle` for a `Circle` or a `ref Circle`; none for a type
+/// with no plain name, which the checker reads as any impl) and the target's
+/// `with` clause; and each expression typed as a `dyn` value, or a view of
+/// one, whose type writes a clause.
+pub fn dyn_tables(typed: &crate::typechecker::TypeCheckResult) -> effectchecker::DynTables {
     use crate::typechecker::Type;
-    typed
+    fn peel(mut ty: &Type) -> &Type {
+        while let Type::Ref(inner) | Type::MutRef(inner) = ty {
+            ty = inner;
+        }
+        ty
+    }
+    fn last(name: &str) -> String {
+        name.rsplit('.').next().unwrap_or(name).to_string()
+    }
+    let coercions = typed
         .node_dyn_coercions
         .iter()
-        .filter_map(|(&node, (concrete, _))| {
-            let mut ty = concrete;
-            while let Type::Ref(inner) | Type::MutRef(inner) = ty {
-                ty = inner;
-            }
-            match ty {
-                Type::Named { name, .. } | Type::Shared(name) => {
-                    Some((node, name.rsplit('.').next().unwrap_or(name).to_string()))
-                }
+        .filter_map(|(&node, (concrete, target))| {
+            let Type::Dyn {
+                trait_name, clause, ..
+            } = peel(target)
+            else {
+                return None;
+            };
+            let concrete = match peel(concrete) {
+                Type::Named { name, .. } | Type::Shared(name) => Some(last(name)),
                 _ => None,
-            }
+            };
+            Some((
+                node,
+                effectchecker::DynCoercion {
+                    trait_name: last(trait_name),
+                    concrete,
+                    clause: clause.0.clone(),
+                },
+            ))
         })
-        .collect()
+        .collect();
+    let clauses = typed
+        .node_types
+        .iter()
+        .filter_map(|(&node, (ty, _))| match peel(ty) {
+            Type::Dyn {
+                trait_name,
+                clause: crate::typechecker::types::DynClause(Some(list)),
+                ..
+            } => Some((
+                node,
+                effectchecker::DynValue {
+                    trait_name: last(trait_name),
+                    clause: list.clone(),
+                },
+            )),
+            _ => None,
+        })
+        .collect();
+    effectchecker::DynTables { coercions, clauses }
 }
 
 /// The expressions the typechecker typed by a type parameter, or by a `ref` /

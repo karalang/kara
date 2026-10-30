@@ -1852,7 +1852,7 @@ impl Pipeline {
                 .unwrap_or_default(),
             self.typed
                 .as_ref()
-                .map(crate::dyn_coercion_types)
+                .map(crate::dyn_tables)
                 .unwrap_or_default(),
         ));
         // B-2026-10-19-41: core semantics §7.11 lets a `Drop` body panic (a

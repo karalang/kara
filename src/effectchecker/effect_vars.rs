@@ -17,6 +17,8 @@
 //! What a call through the value is charged needs nothing here: naming a
 //! function value charges its effects to the function that names it
 //! (B-2026-08-23-7), and that is the function where the variable is solved.
+//! A value coerced to `dyn Trait with E` is bound the same way, with its
+//! concrete type's methods' effects (`dyn_effects.rs`).
 
 use std::collections::HashSet;
 
@@ -74,19 +76,23 @@ fn mentions_var(ty: &TypeExpr, var: &str) -> bool {
     }
 }
 
-/// The function values a field initializer binds: the value itself, or the
-/// elements of a collection literal of them.
-fn bound_values(e: &Expr) -> Vec<&Expr> {
-    match &e.kind {
-        ExprKind::Closure { .. } | ExprKind::Identifier(_) => vec![e],
-        ExprKind::ArrayLiteral(items) | ExprKind::PrefixCollectionLiteral { items, .. } => {
-            items.iter().flat_map(bound_values).collect()
-        }
-        _ => Vec::new(),
-    }
-}
-
 impl<'a> super::EffectChecker<'a> {
+    /// The values a field initializer binds: a function value or a value
+    /// coerced to `dyn` there, or those inside a collection literal or a
+    /// tuple of them.
+    fn bound_values<'e>(&self, e: &'e Expr) -> Vec<&'e Expr> {
+        if self.coerced_methods(e).is_some() {
+            return vec![e];
+        }
+        match &e.kind {
+            ExprKind::Closure { .. } | ExprKind::Identifier(_) => vec![e],
+            ExprKind::ArrayLiteral(items)
+            | ExprKind::PrefixCollectionLiteral { items, .. }
+            | ExprKind::Tuple(items) => items.iter().flat_map(|i| self.bound_values(i)).collect(),
+            _ => Vec::new(),
+        }
+    }
+
     /// For each method of an `impl[with E]` block, the parameter positions
     /// whose function type names a variable the block declares (and the
     /// method does not redeclare), keyed like `fn_effect_var_positions`.
@@ -190,8 +196,12 @@ impl<'a> super::EffectChecker<'a> {
         extra.sort();
         let set = set_text(&inst.set);
         let extra_text: Vec<String> = extra.iter().map(|e| format!("`{e}`")).collect();
+        let what = match self.dyn_coercions.get(&value.id) {
+            Some(c) => format!("value coerced to `dyn {}`", c.trait_name),
+            None => "function value".to_string(),
+        };
         let message = format!(
-            "function value has {}, outside the effect set of `{}` (`{{{}}}`), which was \
+            "{what} has {}, outside the effect set of `{}` (`{{{}}}`), which was \
              fixed at {}:{} by {}",
             extra_text.join(", "),
             inst.var,
@@ -242,7 +252,7 @@ impl<'a> super::EffectChecker<'a> {
                     if !mentions_var(&field_ty, &var) {
                         continue;
                     }
-                    for v in bound_values(&f.value) {
+                    for v in self.bound_values(&f.value) {
                         match &inst {
                             Some(written) => {
                                 let written = written.clone();

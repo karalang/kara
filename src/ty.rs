@@ -1168,6 +1168,7 @@ impl TyCtxt {
                 args,
                 assoc,
                 cross_task,
+                ..
             } => match lookup(trait_name) {
                 Some(TypeName::Trait(trait_)) => {
                     let mut all = args.clone();

@@ -13,12 +13,21 @@
 //! have an effect outside it (`check_dyn_clause_slot`), at each position the
 //! `Fn(..)` slot check reads a slot.
 //!
-//! What a value passed there that was NOT coerced at the call contributes
-//! (a local, a field, an element, a return) is what a call through it would
-//! be: every impl of the trait in the program, until the `with` clause is
-//! recorded on the type. A value forwarded from the caller's own
-//! non-escaping `dyn` parameter contributes nothing: the caller's callers
-//! pay for it.
+//! Anywhere else (a field, an element, an `escaping` parameter, a return, a
+//! local) a call through a `dyn` value has the effects its type declares:
+//! the `with` clause, narrowed to the trait method's ceiling
+//! (`stored_dyn_clause_key`). A type with no clause has every effect, which
+//! here is every impl of the trait in the program. A value passed to a
+//! non-escaping parameter that was NOT coerced at the call contributes the
+//! same, and one forwarded from the caller's own non-escaping `dyn`
+//! parameter contributes nothing: the caller's callers pay for it.
+//!
+//! An effect variable in the clause (`dyn Handler with E`) is solved from
+//! the values coerced into it, as a function type's is (`effect_vars.rs`),
+//! and like naming a function value, the coercion charges the concrete
+//! type's methods to the function that makes it
+//! (`charge_var_clause_coercion`). A call through the value is then charged
+//! only what the clause writes besides the variable.
 
 use std::collections::HashSet;
 
@@ -31,7 +40,36 @@ use crate::resolver::SpanKey;
 use crate::span_visitor::MutVisitor;
 use crate::token::Span;
 
-use super::{declared_admits, verb_name, Effect, EffectError, EffectErrorKind};
+use super::{
+    declared_admits, verb_name, DeclaredEffects, Effect, EffectError, EffectErrorKind,
+    EffectOrigin, EffectSet,
+};
+
+/// A clause as written, for keys and messages: its items in order.
+fn clause_text(list: &EffectList) -> String {
+    list.items
+        .iter()
+        .map(|i| match i {
+            EffectItem::Verb(v) => {
+                let resources: Vec<String> = v.resources.iter().map(|r| r.path.join(".")).collect();
+                if resources.is_empty() {
+                    verb_name(&v.kind)
+                } else {
+                    format!("{}({})", verb_name(&v.kind), resources.join(", "))
+                }
+            }
+            EffectItem::Group(n) | EffectItem::Variable(n) => n.clone(),
+            EffectItem::Polymorphic => "_".to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn clause_has_var(list: &EffectList) -> bool {
+    list.items
+        .iter()
+        .any(|i| matches!(i, EffectItem::Variable(_) | EffectItem::Polymorphic))
+}
 
 /// A non-escaping `dyn` parameter of a callee: its position among the
 /// non-receiver parameters, its name when it is a plain binding, and the
@@ -201,6 +239,107 @@ impl<'a> super::EffectChecker<'a> {
         self.dyn_param_uses = uses;
         self.dyn_impl_methods = impl_methods;
         self.dyn_supertraits = supertraits;
+        self.seed_dyn_clause_keys();
+    }
+
+    /// One seeded key per clause written on a `dyn` value's type and method
+    /// of its trait: the clause's effects, narrowed to the method's ceiling
+    /// when the trait declares one.
+    fn seed_dyn_clause_keys(&mut self) {
+        let mut pairs: Vec<(String, EffectList)> = self
+            .dyn_clauses
+            .values()
+            .map(|v| (v.trait_name.clone(), v.clause.clone()))
+            .collect();
+        pairs.sort_by_key(|(t, c)| (t.clone(), clause_text(c)));
+        pairs.dedup_by_key(|(t, c)| (t.clone(), clause_text(c)));
+        let methods: FxHashMap<String, Vec<String>> = self
+            .program
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Item::TraitDef(t) => Some((
+                    t.name.clone(),
+                    t.items
+                        .iter()
+                        .filter_map(|it| match it {
+                            TraitItem::Method(m) => Some(m.name.clone()),
+                            TraitItem::AssocType(_) => None,
+                        })
+                        .collect(),
+                )),
+                _ => None,
+            })
+            .collect();
+        for (trait_name, clause) in pairs {
+            let text = clause_text(&clause);
+            let written = self.resolve_effect_list_to_set(&clause, None);
+            for t in self.trait_closure(&trait_name) {
+                for m in methods.get(&t).into_iter().flatten() {
+                    let method_key = self.interner.dotted_str(&t, m);
+                    let ceiling = match self.declared_effects.get(&method_key) {
+                        Some(DeclaredEffects::Explicit(set)) => Some(set.effect_set()),
+                        _ => None,
+                    };
+                    let mut set = EffectSet::new();
+                    for e in &written {
+                        if ceiling.as_ref().is_none_or(|c| declared_admits(c, e)) {
+                            set.add(e.clone(), EffectOrigin::Direct(clause.span));
+                        }
+                    }
+                    let key = self
+                        .interner
+                        .intern(&format!("__dyn_clause[{text}].{t}.{m}"));
+                    self.inferred_effects.insert(key, set);
+                    self.dyn_clause_keys.insert((text.clone(), method_key), key);
+                }
+            }
+        }
+    }
+
+    /// The seeded key a call of `method` through `object` is charged, when
+    /// `object` is a `dyn` value whose type writes a clause (design.md §
+    /// `dyn Trait`: the type's clause, narrowed to the method's ceiling).
+    pub(crate) fn stored_dyn_clause_key(&self, object: &Expr, method: &str) -> Option<Symbol> {
+        let mut e = object;
+        while let ExprKind::Unary {
+            op: UnaryOp::Deref,
+            operand,
+        } = &e.kind
+        {
+            e = operand;
+        }
+        let v = self.dyn_clauses.get(&e.id)?;
+        let text = clause_text(&v.clause);
+        self.trait_closure(&v.trait_name).iter().find_map(|t| {
+            let method_key = self.interner.get(&format!("{t}.{method}"))?;
+            self.dyn_clause_keys
+                .get(&(text.clone(), method_key))
+                .copied()
+        })
+    }
+
+    /// A coercion into a `dyn` type whose clause names an effect variable
+    /// charges the concrete type's methods to the function making it, as
+    /// naming a function value does: calls through the stored value are not
+    /// charged them.
+    pub(crate) fn charge_var_clause_coercion(&self, expr: &Expr, calls: &mut Vec<(Symbol, Span)>) {
+        let Some(c) = self.dyn_coercions.get(&expr.id) else {
+            return;
+        };
+        if !c.clause.as_ref().is_some_and(clause_has_var) {
+            return;
+        }
+        for key in self.dyn_methods(&c.trait_name, c.concrete.as_deref()) {
+            calls.push((key, expr.span));
+        }
+    }
+
+    /// The methods a value coerced to `dyn` at `value` (or at the place a
+    /// `ref` / `mut ref` there borrows) may run.
+    pub(crate) fn coerced_methods(&self, value: &Expr) -> Option<Vec<Symbol>> {
+        let c = self.coercion_at(value)?;
+        Some(self.dyn_methods(&c.trait_name, c.concrete.as_deref()))
     }
 
     /// Is `object`, the receiver of a method call, a non-escaping `dyn`
@@ -281,8 +420,8 @@ impl<'a> super::EffectChecker<'a> {
     fn dyn_arg_methods(&self, trait_name: &str, value: &Expr) -> Vec<Symbol> {
         let mut e = value;
         loop {
-            if let Some(concrete) = self.dyn_coercions.get(&e.id) {
-                return self.dyn_methods(trait_name, Some(concrete));
+            if let Some(c) = self.dyn_coercions.get(&e.id) {
+                return self.dyn_methods(trait_name, c.concrete.as_deref());
             }
             if self.dyn_param_uses.contains(&e.id) {
                 return Vec::new();
@@ -313,13 +452,13 @@ impl<'a> super::EffectChecker<'a> {
         }
     }
 
-    /// The concrete type a coercion to `dyn` at `value` (or at the place a
-    /// `ref` / `mut ref` there borrows) makes the value of.
-    fn coerced_type(&self, value: &Expr) -> Option<&str> {
+    /// The coercion to `dyn` at `value`, or at the place a `ref` / `mut ref`
+    /// there borrows.
+    fn coercion_at(&self, value: &Expr) -> Option<&super::DynCoercion> {
         let mut e = value;
         loop {
-            if let Some(concrete) = self.dyn_coercions.get(&e.id) {
-                return Some(concrete);
+            if let Some(c) = self.dyn_coercions.get(&e.id) {
+                return Some(c);
             }
             match &e.kind {
                 ExprKind::Unary {
@@ -347,11 +486,7 @@ impl<'a> super::EffectChecker<'a> {
         else {
             return None;
         };
-        if list
-            .items
-            .iter()
-            .any(|i| matches!(i, EffectItem::Variable(_) | EffectItem::Polymorphic))
-        {
+        if clause_has_var(list) {
             return None;
         }
         let trait_name = trait_path.segments.last()?.clone();
@@ -372,7 +507,7 @@ impl<'a> super::EffectChecker<'a> {
         let Some((trait_name, written, clause)) = self.dyn_clause(ty) else {
             return;
         };
-        let Some(concrete) = self.coerced_type(value).map(str::to_string) else {
+        let Some(concrete) = self.coercion_at(value).and_then(|c| c.concrete.clone()) else {
             return;
         };
         let traits = self.trait_closure(&trait_name);

@@ -1113,6 +1113,7 @@ impl<'a> super::EffectChecker<'a> {
         calls: &mut Vec<(Symbol, Span)>,
         bounds: &FxHashMap<String, Vec<TraitBound>>,
     ) {
+        self.charge_var_clause_coercion(expr, calls);
         match &expr.kind {
             ExprKind::Call { callee, args } => {
                 // Trait-assoc-fn redirect: when the callee dispatches through
@@ -1227,11 +1228,19 @@ impl<'a> super::EffectChecker<'a> {
                 // method, so it never taints `map.get()` / `sender.send()`.
                 // A call through a non-escaping `dyn` parameter is charged to
                 // each caller with the value it passes (design.md § `dyn
-                // Trait`): nothing here.
+                // Trait`): nothing here. One through a `dyn` value whose type
+                // writes a clause is charged the clause, not the impls.
                 let through_dyn_param = self.is_dyn_param_receiver(object);
+                let clause_key = (!through_dyn_param)
+                    .then(|| self.stored_dyn_clause_key(object, method))
+                    .flatten();
+                if let Some(key) = clause_key {
+                    calls.push((key, expr.span));
+                }
+                let through_dyn = through_dyn_param || clause_key.is_some();
                 let precise = self
                     .resolve_method_callee_key(&expr.span)
-                    .filter(|_| !through_dyn_param);
+                    .filter(|_| !through_dyn);
                 if let Some(precise_key) = precise {
                     calls.push((precise_key, expr.span));
                     if self.method_bodies.contains_key(&precise_key) {
@@ -1317,7 +1326,7 @@ impl<'a> super::EffectChecker<'a> {
                 // one store's method was an edge to every `remove` in the
                 // program, which also made unrelated impls a "mutual
                 // recursion group".
-                let deferred = through_dyn_param
+                let deferred = through_dyn
                     || method_sym.is_some_and(|m| self.defer_bound_method_call(object, m, bounds));
                 if !deferred {
                     if let Some(keys) = method_sym.and_then(|m| self.method_name_index.get(&m)) {
@@ -1409,7 +1418,7 @@ impl<'a> super::EffectChecker<'a> {
                 // matching it by name gave it the channel's effects (B-2026-10-21-81).
                 let resolved_to_body = precise.is_some_and(|k| self.method_bodies.contains_key(&k));
                 if let Some(quals) = method_sym
-                    .filter(|_| !resolved_to_body && !through_dyn_param)
+                    .filter(|_| !resolved_to_body && !through_dyn)
                     .and_then(|m| self.stdlib_method_seeds.get(&m))
                 {
                     for &qualified in quals {

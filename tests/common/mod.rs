@@ -615,7 +615,7 @@ pub fn effectcheck_as_build_does(
         typed.node_call_subs.clone(),
         karac::typeparam_value_nodes(typed),
         typed.user_operator_calls.clone(),
-        karac::dyn_coercion_types(typed),
+        karac::dyn_tables(typed),
     )
 }
 
