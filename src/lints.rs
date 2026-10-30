@@ -146,6 +146,16 @@ pub const STARTER_LINTS: &[LintInfo] = &[
         description: "A numeric literal's explicit suffix matches the context's inferred type.",
     },
     LintInfo {
+        name: "redundant_cast",
+        default_level: LintLevel::Warn,
+        description: "An `as` cast to the type its operand already has.",
+    },
+    LintInfo {
+        name: "lossless_cast",
+        default_level: LintLevel::Warn,
+        description: "An `as` cast whose lossless widening happens implicitly where it stands (a binding, argument or return of the target type).",
+    },
+    LintInfo {
         name: "float_in_serialized_type",
         default_level: LintLevel::Warn,
         description: "A `f32`/`f64` field appears in a `#[derive(Serialize)]` type — IEEE NaN equality may break round-trip.",
@@ -733,6 +743,8 @@ mod tests {
             "mutual_recursion_note",
             "module_mut_binding",
             "redundant_suffix",
+            "redundant_cast",
+            "lossless_cast",
             "float_in_serialized_type",
             "f16_software_emulated",
             "pure_loop_in_par",

@@ -1696,6 +1696,7 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 // the warning twin is `W0280` in the loop below
                 // (B-2026-08-20-36).
                 crate::typechecker::TypeErrorKind::RedundantSuffix => "E0280",
+                crate::typechecker::TypeErrorKind::RedundantCast => "E0291",
                 crate::typechecker::TypeErrorKind::PreludeShadow => "E0282",
                 // `module_mut_binding` escalated to an error by `-D`/`#[deny]`;
                 // the warning twin is `W0281` in the loop below
@@ -1921,6 +1922,7 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 crate::typechecker::TypeErrorKind::UnfulfilledLintExpectation => "W0249",
                 crate::typechecker::TypeErrorKind::UnstableApi => "W0255",
                 crate::typechecker::TypeErrorKind::RedundantSuffix => "W0280",
+                crate::typechecker::TypeErrorKind::RedundantCast => "W0291",
                 crate::typechecker::TypeErrorKind::PreludeShadow => "W0282",
                 crate::typechecker::TypeErrorKind::ModuleMutBinding => "W0281",
                 crate::typechecker::TypeErrorKind::ReturnClauseOnFn => "W0290",

@@ -1248,6 +1248,10 @@ pub enum TypeErrorKind {
     /// and never wired, so the spec sentence described behaviour that did not
     /// exist.
     RedundantSuffix,
+    /// `redundant_cast` / `lossless_cast` lints (design.md § `as` casts): an
+    /// `as` the program does not need, to the type its operand already has,
+    /// or a lossless widening that happens implicitly where the cast stands.
+    RedundantCast,
     /// `prelude_shadow` lint (B-2026-08-27-15) — a user `struct`/`enum`
     /// declaration takes a prelude type's name. design.md § Module System
     /// states the warning as shipped behaviour: prelude names are NOT
@@ -1652,6 +1656,7 @@ pub(crate) fn class_for_type_error_kind(
         | TypeErrorKind::ExpectOnUnfulfilled
         | TypeErrorKind::UnfulfilledLintExpectation
         | TypeErrorKind::RedundantSuffix
+        | TypeErrorKind::RedundantCast
         | TypeErrorKind::PreludeShadow
         | TypeErrorKind::ModuleMutBinding
         | TypeErrorKind::ReturnClauseOnFn => Some(DC::LintWarning),
@@ -3141,6 +3146,12 @@ pub struct TypeChecker<'a> {
     /// `42i64` warns once per visit. Keyed on `(offset, length)` like the
     /// other span-keyed state above.
     pub(super) redundant_suffix_reported: rustc_hash::FxHashSet<(usize, usize)>,
+    /// Casts `redundant_cast` / `lossless_cast` already reported, for the
+    /// same reason.
+    pub(super) cast_lints_reported: FxHashSet<SpanKey>,
+    /// The type `check_expr` wants of the `as` cast at this span, so the cast
+    /// can tell a lossless widening that happens implicitly there.
+    pub(super) pending_cast_expected: Option<(SpanKey, Type)>,
     /// Spans of inline associated-type bindings that already reported
     /// `E_UNKNOWN_ASSOC_TYPE_BINDING` (B-2026-08-22-4). A signature's return
     /// type is lowered more than once — once when the function's type is
@@ -3851,6 +3862,8 @@ impl<'a> TypeChecker<'a> {
             wide_int_literals: Vec::new(),
             wide_int_literals_judged: FxHashSet::default(),
             redundant_suffix_reported: rustc_hash::FxHashSet::default(),
+            cast_lints_reported: FxHashSet::default(),
+            pending_cast_expected: None,
             assoc_binding_typos_reported: rustc_hash::FxHashSet::default(),
             question_conversions: FxHashMap::default(),
             assoc_conversion_dispatch: FxHashMap::default(),
@@ -5552,8 +5565,9 @@ impl<'a> TypeChecker<'a> {
             return;
         }
 
-        // Bool → integer: produces 0/1.
-        if matches!(from_ty, Type::Bool) && is_integer(to_ty) {
+        // Bool → integer: produces 0/1. Bool → bool is the identity
+        // (design.md § `as` casts), which `redundant_cast` flags.
+        if matches!(from_ty, Type::Bool) && (is_integer(to_ty) || matches!(to_ty, Type::Bool)) {
             return;
         }
 

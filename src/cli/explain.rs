@@ -617,6 +617,14 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
         ty("ReturnClauseOnFn", Some(DiagnosticClass::LintWarning)),
     ),
     (
+        "W0291",
+        ty("RedundantCast", Some(DiagnosticClass::LintWarning)),
+    ),
+    (
+        "E0291",
+        ty("RedundantCast", Some(DiagnosticClass::LintWarning)),
+    ),
+    (
         "E0290",
         ty("ReturnClauseOnFn", Some(DiagnosticClass::LintWarning)),
     ),

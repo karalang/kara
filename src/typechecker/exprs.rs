@@ -1095,6 +1095,9 @@ impl<'a> super::TypeChecker<'a> {
     }
 
     pub(super) fn check_expr(&mut self, expr: &Expr, expected: &Type) -> Type {
+        if matches!(expr.kind, ExprKind::Cast { .. }) {
+            self.pending_cast_expected = Some((SpanKey::from_span(&expr.span), expected.clone()));
+        }
         self.note_view_lent_into_ref(expr, expected, false);
         if let Some(ty) = self.lend_borrowed_receiver(expr, expected) {
             return ty;
@@ -8055,6 +8058,100 @@ impl<'a> super::TypeChecker<'a> {
         );
     }
 
+    /// `redundant_cast` and `lossless_cast` (design.md § `as` casts): an `as`
+    /// to the type its operand already has, or a lossless widening where
+    /// `check_expr` wants the target type (a binding, argument or return),
+    /// where the conversion happens implicitly. Either way the fix deletes
+    /// the `as` and its type. Only integer and float widenings are flagged:
+    /// an integer to `f64` needs its `as` as an operator's operand, and a
+    /// literal takes its type from the cast.
+    fn lint_unneeded_cast(
+        &mut self,
+        expr: &Expr,
+        inner: &Expr,
+        ty: &TypeExpr,
+        from_ty: &Type,
+        to_ty: &Type,
+        expected: Option<&Type>,
+    ) {
+        if Self::unsuffixed_int_literal_value(inner).is_some()
+            || matches!(inner.kind, ExprKind::Float(..))
+        {
+            return;
+        }
+        let peel = |t: &Type| match resolve_type_var_top(t, &self.env.substitutions) {
+            Type::Ref(inner) => *inner,
+            t => t,
+        };
+        let from = peel(from_ty);
+        let to = peel(to_ty);
+        let identity =
+            from == to && (super::is_numeric(&to) || matches!(to, Type::Bool | Type::Char));
+        let widens = || {
+            (is_integer(&from) && is_integer(&to) && int_coercion_is_widening(&from, &to))
+                || matches!(
+                    (float_width_rank(&from), float_width_rank(&to)),
+                    (Some(f), Some(t)) if f < t
+                )
+        };
+        let (lint, message) = if identity {
+            (
+                "redundant_cast",
+                format!(
+                    "redundant cast: the value is already '{}'",
+                    type_display(&to)
+                ),
+            )
+        } else if expected.is_some_and(|e| peel(e) == to) && widens() {
+            (
+                "lossless_cast",
+                format!(
+                    "unnecessary cast: '{}' widens to '{}' implicitly here",
+                    type_display(&from),
+                    type_display(&to)
+                ),
+            )
+        } else {
+            return;
+        };
+        if !self
+            .cast_lints_reported
+            .insert(SpanKey::from_span(&expr.span))
+        {
+            return;
+        }
+        // Deleting from the end of the operand to the end of the type keeps
+        // the operand; offered where the operand cannot be parenthesized
+        // away from its own span.
+        let start = inner.span.offset + inner.span.length;
+        let end = ty.span.offset + ty.span.length;
+        let fix = (matches!(
+            inner.kind,
+            ExprKind::Identifier(_)
+                | ExprKind::SelfValue
+                | ExprKind::FieldAccess { .. }
+                | ExprKind::TupleIndex { .. }
+                | ExprKind::MethodCall { .. }
+                | ExprKind::Call { .. }
+                | ExprKind::Index { .. }
+        ) && end > start)
+            .then(|| FixIt {
+                span: Span {
+                    offset: start,
+                    length: end - start,
+                    ..ty.span
+                },
+                replacement: String::new(),
+            });
+        self.type_lint_warning_with_fix(
+            message,
+            expr.span,
+            TypeErrorKind::RedundantCast,
+            lint,
+            fix,
+        );
+    }
+
     pub(super) fn infer_expr(&mut self, expr: &Expr) -> Type {
         // B-2026-09-14-3: hand `infer_call`'s callee-position marker on to a
         // `Path` node and to nothing else. The marker says "a tuple-shaped
@@ -11150,6 +11247,11 @@ impl<'a> super::TypeChecker<'a> {
                     }
                     _ => self.check_cast_pair(&from_ty, &to_ty, &inner.span),
                 }
+                let expected = self
+                    .pending_cast_expected
+                    .take_if(|(key, _)| *key == SpanKey::from_span(&expr.span))
+                    .map(|(_, t)| t);
+                self.lint_unneeded_cast(expr, inner, ty, &from_ty, &to_ty, expected.as_ref());
                 // B-2026-08-14-3 — record whether the SOURCE is unsigned, so
                 // codegen can pick zext over sext on the widening lane. It
                 // cannot read that off `expr_types`: the parser gives a `Cast`
