@@ -718,6 +718,11 @@ pub enum OwnershipErrorKind {
     /// stored never runs its own. See `crate::moved_field_refill` for the
     /// mechanism and for why the fix is a rejection rather than a repair.
     MovedFieldRefilledAcrossCall,
+    /// B-2026-10-30-13 — a task takes a plain `dyn Trait` by move. `dyn
+    /// Trait` is not `CrossTask` (design.md § `dyn Trait`): the concrete
+    /// value may hold a `shared` handle, whose count is not atomic. A task
+    /// may still view one. Code `E_NOT_CROSS_TASK`.
+    DynMovedIntoTask,
     /// B-2026-09-27-15 — a value whose type runs a user `Drop` body (its own,
     /// or one reachable inside it by value) would need RC fallback: it is
     /// moved and then used again on a path the move does not dominate (a move
@@ -952,7 +957,8 @@ pub(crate) fn class_for_ownership_error_kind(
         | OwnershipErrorKind::ConcurrentSharedStruct { .. }
         | OwnershipErrorKind::ConcurrentPlainStruct { .. }
         | OwnershipErrorKind::BorrowReturnNotSourcePinned { .. }
-        | OwnershipErrorKind::RcFallbackAllocatesUnderFallibleProfile => None,
+        | OwnershipErrorKind::RcFallbackAllocatesUnderFallibleProfile
+        | OwnershipErrorKind::DynMovedIntoTask => None,
     }
 }
 

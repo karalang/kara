@@ -2202,6 +2202,7 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 crate::ownership::OwnershipErrorKind::ExclusiveBorrowAliasedArgs => {
                     "E_EXCLUSIVE_BORROW_ALIASED_ARGS"
                 }
+                crate::ownership::OwnershipErrorKind::DynMovedIntoTask => "E_NOT_CROSS_TASK",
             };
             let replacement_json = err.replacement.as_ref().map(|r| {
                 format!(

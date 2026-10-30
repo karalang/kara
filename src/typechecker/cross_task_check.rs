@@ -49,6 +49,7 @@
 
 use crate::ast::*;
 use crate::cross_task_safe::{is_cross_task_safe_with, CrossTaskUnsafeFixIt, CrossTaskUnsafePath};
+use crate::resolver::SpanKey;
 use crate::token::Span;
 use std::collections::{HashMap, HashSet};
 
@@ -108,7 +109,12 @@ impl<'a> super::TypeChecker<'a> {
                 if path.fix_it == CrossTaskUnsafeFixIt::DynCrossTask {
                     // A task may view a `dyn` value under the view rules
                     // (design.md § `dyn Trait`: "a view follows the view
-                    // rules"), and this pass sees no capture modes.
+                    // rules"), and this pass sees no capture modes. The
+                    // ownership pass refuses a capture the task moves.
+                    self.core_dyn_task_captures
+                        .entry(SpanKey::from_span(&closure_expr.span))
+                        .or_default()
+                        .push((name.clone(), anchor_span, type_display(ty)));
                     continue;
                 }
                 self.emit_cross_task_unsafe(

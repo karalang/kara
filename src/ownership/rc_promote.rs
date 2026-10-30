@@ -536,6 +536,44 @@ impl<'a> super::OwnershipChecker<'a> {
                 consume_span: None,
             });
         }
+        // design.md § `dyn Trait`: a plain `dyn Trait` is not `CrossTask`,
+        // and a task may only view one. The typechecker deferred each such
+        // capture here, where the closure's capture modes are known
+        // (B-2026-10-30-13).
+        let mut deferred: Vec<_> = self
+            .typecheck_result
+            .core_dyn_task_captures
+            .iter()
+            .collect();
+        deferred.sort_by_key(|(k, _)| (k.0, k.1));
+        for (closure, caps) in deferred {
+            let Some(modes) = self.closure_captures.get(closure) else {
+                continue;
+            };
+            for (name, at, ty) in caps {
+                let moved = modes
+                    .iter()
+                    .any(|(n, m)| n == name && matches!(m, super::OwnershipMode::Own));
+                if !moved {
+                    continue;
+                }
+                out.push(OwnershipError {
+                    message: format!(
+                        "`{name}` is a `{ty}`, which is not `CrossTask`, and this task takes \
+                         it by move: the value behind it may hold a `shared` handle \
+                         (design.md § `dyn Trait`, core-semantics §6.3)"
+                    ),
+                    span: *at,
+                    kind: OwnershipErrorKind::DynMovedIntoTask,
+                    suggestion: Some(format!(
+                        "write `{ty} + CrossTask`, so each coercion into it checks the \
+                         concrete type, or let the task borrow `{name}`"
+                    )),
+                    replacement: None,
+                    consume_span: None,
+                });
+            }
+        }
         out.sort_by_key(|e| e.span.offset);
         out
     }

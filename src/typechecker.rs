@@ -1834,6 +1834,13 @@ pub struct TypeCheckResult {
     /// it `own` is the fix for a method that takes `self` by value
     /// (B-2026-10-29-45).
     pub core_own_param_receivers: FxHashMap<SpanKey, (String, Span, bool)>,
+    /// The plain `dyn Trait` captures of each `spawn` / `TaskGroup.spawn`
+    /// closure, keyed by the closure's span: the name, where it is used,
+    /// and its type as written. A task may view one (design.md § `dyn
+    /// Trait`), so the capture check defers to the ownership pass, which
+    /// refuses the capture when the closure takes it by move
+    /// (B-2026-10-30-13).
+    pub core_dyn_task_captures: FxHashMap<SpanKey, Vec<(String, Span, String)>>,
     /// Index reads that produce a fresh value rather than naming an element
     /// the container keeps (`Column[i]`, a `Map` index). Nothing is moved out
     /// of the container by taking them by value.
@@ -2816,6 +2823,8 @@ pub struct TypeChecker<'a> {
     pub(super) core_for_into_iter_receivers: FxHashMap<SpanKey, Span>,
     /// See [`TypeCheckResult::core_own_param_receivers`].
     pub(super) core_own_param_receivers: FxHashMap<SpanKey, (String, Span, bool)>,
+    /// See [`TypeCheckResult::core_dyn_task_captures`].
+    pub(super) core_dyn_task_captures: FxHashMap<SpanKey, Vec<(String, Span, String)>>,
     /// v2 core §3.7, checked per instantiation: inside a generic body, each
     /// move of a bare type parameter's value out of a borrowed place, keyed
     /// by the body's callee key (`f` or `Type.method`). Whether it is a move
@@ -3811,6 +3820,7 @@ impl<'a> TypeChecker<'a> {
             core_try_companion: false,
             core_for_into_iter_receivers: FxHashMap::default(),
             core_own_param_receivers: FxHashMap::default(),
+            core_dyn_task_captures: FxHashMap::default(),
             core_generic_moves: FxHashMap::default(),
             current_fn_core_key: None,
             core_let_ref_fix: false,
@@ -4375,6 +4385,7 @@ impl<'a> TypeChecker<'a> {
             core_borrowed_receivers: self.core_borrowed_receivers,
             core_for_into_iter_receivers: self.core_for_into_iter_receivers,
             core_own_param_receivers: self.core_own_param_receivers,
+            core_dyn_task_captures: self.core_dyn_task_captures,
             core_fresh_index_reads: self.index_read_is_fresh_value.clone(),
             core_escaping_closures,
             core_closure_result_only,
