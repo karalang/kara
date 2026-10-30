@@ -1,0 +1,22 @@
+// Under `with_provider[Stdout]` every print writes the fake (core semantics
+// §14.10), so two tasks that print while their group lives would both write
+// it at once (§14.9). The same function's tasks may print at the default,
+// where they share the process's standard output.
+struct Cap { n: i64 }
+
+impl StdoutProvider for Cap {
+    fn write(mut ref self, s: Str) { self.n = self.n + 1; }
+    fn flush(mut ref self) {}
+}
+
+fn work() -> i64 {
+    let tg = TaskGroup.new();
+    let a = tg.spawn(|| { println("a"); 1 });
+    let b = tg.spawn(|| { println("b"); 2 });
+    a.join() + b.join()
+}
+
+fn main() {
+    let r = with_provider[Stdout](Cap { n: 0 }, || work());
+    println(f"{r}");
+}

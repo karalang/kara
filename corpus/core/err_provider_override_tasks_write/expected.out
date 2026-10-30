@@ -1,0 +1,1 @@
+ERROR at line 15: this task uses `Stdout` while the task spawned at line 14, which writes `Stdout`, may still run (E0424)

@@ -1,0 +1,13 @@
+source = "corpus/core/err_provider_override_tasks_write"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["providers", "tasks", "post-m1:par", "post-m1:provider"]
+class = "a"
+expected_from = "spec"
+rules = ["14.9", "14.10"]
+backends = []
+env = {}
+note = "core-semantics §14.9 with §14.10: under an override of `Stdout`, two tasks of a group that print both write the fake, so the second is refused (E0424, B-2026-10-30-10). The expected.out wording of an error pin is guidance, not a byte oracle."
+bucket = "a:refused"
+classified_with = "0a350a4e3"

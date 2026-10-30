@@ -2513,6 +2513,7 @@ fn main() -> () {
             // Tasks sharing a written provider (§14.9), refused by the
             // effect pass.
             "err_provider_tasks_write",
+            "err_provider_override_tasks_write",
         ];
         // Pins that call Kāra library functions, which `check_built` does
         // not append (a `select` desugars to calls into sync.kara;

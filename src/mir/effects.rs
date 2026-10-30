@@ -511,10 +511,16 @@ pub(crate) fn analyze_with(program: &Program, tys: &TyInterner, size_gate: bool)
             report.par_conflicts.insert((*name).clone(), found);
         }
     }
-    if program.resources.values().any(|d| d.default.is_none()) {
-        let escapes = a.escaping_tasks(&report.providers);
+    if !program.resources.is_empty() {
+        let overridden = a.overridden();
+        let escapes = a.escaping_tasks(&report.providers, &overridden);
         for name in &names {
-            let found = a.task_conflicts(&program.bodies[*name], &report.providers, &escapes);
+            let found = a.task_conflicts(
+                &program.bodies[*name],
+                &report.providers,
+                &escapes,
+                &overridden,
+            );
             if !found.is_empty() {
                 report.task_conflicts.insert((*name).clone(), found);
             }

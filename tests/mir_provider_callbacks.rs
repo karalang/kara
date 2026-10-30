@@ -4,7 +4,8 @@
 //! comparison, a `retain` predicate and a `par` branch, which the runtime
 //! runs (B-2026-10-30-5); tasks that write the provider, which the check
 //! refuses when another task or the spawner uses it meanwhile
-//! (B-2026-10-30-6); and a stored callback, which would keep a view of the
+//! (B-2026-10-30-6), a program-rooted resource only where it can be
+//! overridden (B-2026-10-30-10); and a stored callback, which would keep a view of the
 //! provider (§14.5).
 
 use std::process::{Command, Output, Stdio};
@@ -272,6 +273,56 @@ fn main() {
     for (tag, src, why) in cases {
         check_refuses(tag, src, why);
     }
+}
+
+const CAP: &str = "struct Cap { n: i64 }
+impl StdoutProvider for Cap {
+    fn write(mut ref self, s: Str) { self.n = self.n + 1; }
+    fn flush(mut ref self) {}
+}
+fn work() -> i64 {
+    let tg = TaskGroup.new();
+    let a = tg.spawn(|| { println(\"t\"); 1 });
+    let b = tg.spawn(|| { println(\"t\"); 2 });
+    a.join() + b.join()
+}
+";
+
+/// A program-rooted resource is checked where it can be overridden
+/// (B-2026-10-30-10): two tasks printing share the process's standard
+/// output, but under `with_provider[Stdout]` they would both write the
+/// fake, here through a function the override's closure calls.
+#[test]
+fn provider_tasks_writing_an_override_are_refused() {
+    check_refuses(
+        "stdout-override",
+        &format!(
+            "{CAP}fn main() {{
+    let r = with_provider[Stdout](Cap {{ n: 0 }}, || work());
+    println(f\"{{r}}\");
+}}
+"
+        ),
+        "this task uses `Stdout` while the task spawned at line 15",
+    );
+}
+
+/// The same tasks run at the default, and one print under the override
+/// goes to the fake.
+#[test]
+fn provider_tasks_printing_at_the_default_run() {
+    runs(
+        "stdout-default",
+        &format!(
+            "{CAP}fn main() {{
+    let s = work();
+    let r = with_provider[Stdout](Cap {{ n: 0 }}, || {{ println(\"hidden\"); 7 }});
+    println(f\"{{s}} {{r}}\");
+}}
+"
+        ),
+        "t\nt\n3 7\n",
+    );
 }
 
 /// A callback stored on a bus, made where `Clk` is bound by the caller's

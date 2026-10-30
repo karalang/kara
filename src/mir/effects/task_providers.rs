@@ -10,10 +10,14 @@
 //! outlives the body's call, so its needs ride on the call: the caller
 //! counts the call as a spawn into the group it passes.
 //!
-//! Only a provider-rooted resource is checked here: its provider is always
-//! one a caller borrowed. A program-rooted resource may be at its default
-//! in the body, which tasks share freely (two tasks may both print), and
-//! which it is is known only once providers are specialised.
+//! A provider-rooted resource's provider is always one a caller borrowed.
+//! A program-rooted resource may be at its default, which tasks share
+//! freely (two tasks may both print), so it is checked only in a body that
+//! can run under an override of it: the closure a `with_provider[R]` call
+//! is given, a body with a `providers` block binding `R`, and everything
+//! those call or make (B-2026-10-30-10). A body that also runs at the
+//! default is checked all the same, since its tasks race under the
+//! override. The library's own bodies are not checked for an override.
 
 use super::*;
 
@@ -114,18 +118,71 @@ fn chain(defs: &BTreeMap<u32, Place>, p: &Place) -> Vec<u32> {
 }
 
 impl Analysis<'_> {
+    /// Per instance: the program-rooted resources it can run under an
+    /// override of.
+    pub(super) fn overridden(&self) -> BTreeMap<String, BTreeSet<String>> {
+        let rooted = |r: &str| {
+            self.program
+                .resources
+                .get(r)
+                .is_some_and(|d| d.default.is_some())
+        };
+        let mut out: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        let mut work: Vec<(String, String)> = Vec::new();
+        let mut add = |b: String, r: &str, work: &mut Vec<(String, String)>| {
+            if out.entry(b.clone()).or_default().insert(r.to_string()) {
+                work.push((b, r.to_string()));
+            }
+        };
+        for (name, body) in &self.program.bodies {
+            for bb in &body.blocks {
+                if let TerminatorKind::Call {
+                    func:
+                        Operand::Const(Const {
+                            kind: ConstKind::FnDef(inst),
+                            ..
+                        }),
+                    args,
+                    ..
+                } = &bb.terminator.kind
+                {
+                    if let (Some(r), Some(f)) = (self.with_provider(&inst.name), args.get(1)) {
+                        if rooted(r) {
+                            for b in self.fn_value_bodies(body, f) {
+                                add(b, r, &mut work);
+                            }
+                        }
+                    }
+                }
+            }
+            for p in body.provided.iter().filter(|p| rooted(&p.resource)) {
+                add(name.clone(), &p.resource, &mut work);
+            }
+        }
+        while let Some((b, r)) = work.pop() {
+            let Some(body) = self.program.bodies.get(&b) else {
+                continue;
+            };
+            for c in self.callees(body) {
+                add(c, &r, &mut work);
+            }
+        }
+        out
+    }
+
     /// Per instance: the needs of the tasks its calls leave running in a
     /// group it was lent, given every body's provider needs.
     pub(super) fn escaping_tasks(
         &self,
         providers: &BTreeMap<String, Needs>,
+        overridden: &BTreeMap<String, BTreeSet<String>>,
     ) -> BTreeMap<String, Needs> {
         let mut escapes: BTreeMap<String, Needs> = BTreeMap::new();
         loop {
             let mut changed = false;
             for (name, body) in &self.program.bodies {
                 let mut e = Needs::new();
-                for s in self.spawns(body, providers, &escapes) {
+                for s in self.spawns(body, providers, &escapes, overridden) {
                     if s.group.is_none() {
                         need_all(&mut e, &s.needs);
                     }
@@ -149,6 +206,7 @@ impl Analysis<'_> {
         body: &Body,
         providers: &BTreeMap<String, Needs>,
         escapes: &BTreeMap<String, Needs>,
+        overridden: &BTreeMap<String, BTreeSet<String>>,
     ) -> Vec<Spawn> {
         // `par` branches are tasks too, checked as branches (§11.2).
         let in_par: BTreeSet<BasicBlock> = body
@@ -156,11 +214,14 @@ impl Analysis<'_> {
             .iter()
             .flat_map(|r| r.branches.iter().flatten().copied())
             .collect();
-        let rooted_by_provider = |r: &String| {
+        let library = super::super::providers::is_library(body, self.program.user_source_len);
+        let here = overridden.get(&body.instance.name).filter(|_| !library);
+        let checked = |r: &String| {
             self.program
                 .resources
                 .get(r)
                 .is_some_and(|d| d.default.is_none())
+                || here.is_some_and(|o| o.contains(r))
         };
         let defs = single_defs(body);
         let owned = |p: &Place| {
@@ -206,7 +267,7 @@ impl Analysis<'_> {
                 };
                 for b in self.fn_value_bodies(body, f) {
                     for (r, a) in providers.get(&b).into_iter().flatten() {
-                        if rooted_by_provider(r) {
+                        if checked(r) {
                             need(&mut needs, r, *a);
                         }
                     }
@@ -244,8 +305,9 @@ impl Analysis<'_> {
         body: &Body,
         providers: &BTreeMap<String, Needs>,
         escapes: &BTreeMap<String, Needs>,
+        overridden: &BTreeMap<String, BTreeSet<String>>,
     ) -> Vec<TaskConflict> {
-        let spawns = self.spawns(body, providers, escapes);
+        let spawns = self.spawns(body, providers, escapes, overridden);
         if spawns.is_empty() {
             return Vec::new();
         }
