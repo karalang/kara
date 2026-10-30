@@ -73,9 +73,9 @@ fn main() {
 Don't take the concurrency on faith. Ask the compiler what it did:
 
 ```bash
-$ karac query concurrency app.kara.report
+$ karac query concurrency app.kara.report      # trimmed
 {"function":"report","total_statements":3,
- "parallel_groups":[{"statements":[0,1],"reason":"independent effects on different resources"}], ...}
+ "parallel_groups":[{"statements":[0,1],"reason":"independent reads on different resources"}], ...}
 ```
 
 There is no `par`, no `async` and no thread code in the source.
