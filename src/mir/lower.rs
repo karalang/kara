@@ -20909,8 +20909,11 @@ impl<'l, 'a> Bx<'l, 'a> {
                 go(value, false, out);
                 self.mv_block(body, false, caps, out);
             }
+            // `for x in e` consumes `e` when it is an `Iterator`, and
+            // borrows it through `Iterable` otherwise (core semantics §2,
+            // B-2026-10-31-15).
             ExprKind::For { iterable, body, .. } => {
-                go(iterable, false, out);
+                go(iterable, self.iterates_by_move(iterable), out);
                 self.mv_block(body, false, caps, out);
             }
             ExprKind::Loop { body, .. } => self.mv_block(body, false, caps, out),
@@ -22316,6 +22319,22 @@ impl<'l, 'a> Bx<'l, 'a> {
             next,
         );
         Ok(true)
+    }
+
+    /// Whether `for x in iterable` moves `iterable`: its type is an ADT that
+    /// implements `Iterator`, so the loop consumes it.
+    fn iterates_by_move(&self, iterable: &Expr) -> bool {
+        let Some(&t) = self.lcx.node_types.get(&iterable.id) else {
+            return false;
+        };
+        let HK::Adt { def, .. } = self.tys().tcx().kind(t) else {
+            return false;
+        };
+        self.lcx.tc.impl_trait_assoc_types.contains_key(&(
+            self.lcx.def_name(def),
+            "Iterator".to_string(),
+            "Item".to_string(),
+        ))
     }
 
     /// Whether the ADT `def` implements `IntoIterator` and not `Iterator`.

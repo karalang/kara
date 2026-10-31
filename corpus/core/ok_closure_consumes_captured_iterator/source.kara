@@ -1,0 +1,27 @@
+// Core semantics §4.6: `for x in e` consumes `e` when its type is an
+// `Iterator`, and borrows it through `Iterable` otherwise. §9.1: a closure
+// captures a place by move when its body moves it. So a closure that loops
+// over a captured iterator moves the iterator in and is an `OnceFn`, and one
+// that loops over a captured `Vec` borrows it and can be called again.
+fn main() {
+    let lines = "a\nbb\nccc".split("\n");
+    let mut total = 0;
+    let mut count = || {
+        for line in lines {
+            total = total + line.len();
+        }
+    };
+    count();
+    println(f"{total}");
+
+    let words = Vec["x", "yy"];
+    let mut seen = 0;
+    let mut tally = || {
+        for w in words {
+            seen = seen + w.len();
+        }
+    };
+    tally();
+    tally();
+    println(f"{seen} {words.len()}");
+}

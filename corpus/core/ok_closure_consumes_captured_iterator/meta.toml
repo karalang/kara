@@ -1,0 +1,10 @@
+source = "B-2026-10-31-15"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure", "loop"]
+expected_from = "spec"
+rules = ["4.6", "9.1"]
+backends = []
+env = {}
+note = "B-2026-10-31-15: a closure whose body runs `for x in it` over a captured `Iterator` moves the iterator in (§4.6, §9.1), so `karac check` accepts it and every backend runs it; a `for` over a captured `Vec` borrows it, so that closure is called twice and the Vec stays usable."
