@@ -85,6 +85,8 @@ later in [docs/deferred.md](docs/deferred.md).
   refused at check (§14.12).
 - An HTTP response with no headers is sent with a JSON `content-type`, and
   standard output to a pipe is block-buffered.
+- A struct `invariant` clause is part of the later verification track and
+  is refused at check; enforce the property in the type's constructor.
 
 ---
 
