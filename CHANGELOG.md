@@ -3,7 +3,7 @@
 All notable changes to the Kāra language and compiler will be documented in this file.
 
 > **Maintenance note (2026-10-28).** This file is a coarse milestone record.
-> The v1 entry is written at the release candidate. Until then, progress is in
+> The v1 entry below is a draft until the release candidate. Progress is in
 > [`docs/roadmap.md`](docs/roadmap.md), the bug ledger
 > [`docs/bugs-v2.jsonl`](docs/bugs-v2.jsonl) (rollup in
 > [`docs/bugs-v2.md`](docs/bugs-v2.md); the pre-M3 ledger is archived in
@@ -11,6 +11,80 @@ All notable changes to the Kāra language and compiler will be documented in thi
 > describes the legacy compiler, deleted at M3 on 2026-10-24: its tree-walk
 > interpreter, layout blocks, contracts, GPU and self-hosting claims do not
 > describe v1.
+
+---
+
+## v1 — draft (the version number is set at the release candidate)
+
+The first release of the v2 compiler. Every program lowers to MIR, which the
+interpreter (`karac __mir-run`) and the LLVM backend (`karac build`, `karac
+run`) both execute; the legacy pipeline was deleted at M3 (2026-10-24).
+Normative rules are in [docs/core-semantics.md](docs/core-semantics.md), the
+rest of the language in [docs/design.md](docs/design.md), and what waits for
+later in [docs/deferred.md](docs/deferred.md).
+
+### Language
+
+- **Ownership without lifetimes.** Parameters borrow by default; `own T`
+  takes ownership and `mut ref T` writes. A returned view's source is inferred
+  from the signature. `shared struct` / `shared enum` are reference-counted.
+- **Effects.** Declared on public functions, inferred for private ones, and
+  checked against `par { }`, `par for` and `TaskGroup`. Independent
+  statements and loops are parallelised automatically where the effects prove
+  it safe (`KARAC_AUTO_PAR=0` opts out).
+- **Effect variables** (`[with E]`) for stored callbacks: a struct or enum
+  declares one, solved from what is bound to it within a function.
+- **`dyn Trait`**: a two-word, never-null owned handle with no `Box`, coerced
+  only where a `dyn` type is expected; effects through its `with` clause;
+  `dyn T + CrossTask` to cross tasks. No upcasts or downcasts in v1.
+- **Providers.** `effect resource R: Trait`, `with_provider`, `providers { }
+  in { }` and `#[with_provider]` on tests swap a resource's implementation with
+  no mocking framework. A missing provider is a compile error. The file system,
+  network (HTTP client and TCP), standard streams, clock, environment and
+  random source can all be overridden; a program may declare its own
+  program-rooted resources with defaults.
+- **Concurrency.** Stackless coroutines on a multi-threaded work-stealing
+  scheduler; `TaskGroup` with panic isolation, deadlines, channel `select` and cooperative
+  cancellation; blocking-style I/O with no `async`/`await`.
+
+### Standard library
+
+- HTTP/1.1, TLS and WebSocket servers and an HTTPS client; files, processes
+  and environment; `String`, `Vec`, `Map`, `Set` and their sorted forms;
+  iterators; JSON via `Serialize`.
+
+### Tooling
+
+- `karac check --output=json` with machine-applicable fixes, applied by
+  `karac fix` (also over a whole package); `karac query` for effects,
+  ownership, concurrency, costs and monomorphisation; `karac explain`.
+- `karac fmt` (one canonical format, `--check`, package mode), `karac test`
+  (colocated `_test.kara` files), `karac new` (`--backend`, `--cli`, `--lib`)
+  and `karac init`, `karac lint --list`.
+- A VS Code extension with the language server bundled, one `.vsix` per
+  platform.
+
+### Targets
+
+- Linux x86_64, Linux aarch64 and Apple-silicon macOS. Windows follows in
+  v1.1. Plain `wasm32` (`--target=wasm_wasi`) for compute programs.
+
+### Measured before release
+
+- The corpus of runnable programs with expected outputs is the gate, on the
+  interpreter, the compiled backend and an AddressSanitizer lane.
+- Run time and build time against the earlier compiler, binary size, an
+  automatic-parallelism speedup floor, and a load test of 100,000 idle
+  connections with tail-latency limits.
+
+### Known limits
+
+- A callback stored in a field cannot use an overridden provider
+  (core-semantics §14.5); test it by calling it directly.
+- Under a `Network` override, TLS, WebSocket, UDP and `Server.serve` are
+  refused at check (§14.12).
+- An HTTP response with no headers is sent with a JSON `content-type`, and
+  standard output to a pipe is block-buffered.
 
 ---
 
