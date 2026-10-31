@@ -1036,7 +1036,8 @@ fn build_and_emit_all() -> Option<String> {
         .output()
         .expect("spawn karac build");
     let berr = String::from_utf8_lossy(&build.stderr);
-    let bin = tmp.join("cg");
+    // A package builds into `dist/` (710e7be317).
+    let bin = tmp.join("dist").join("cg");
     if !bin.exists() {
         let crashed = berr.contains("panicked at") || build.status.code().is_none();
         let compile_err = crashed
