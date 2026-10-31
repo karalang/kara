@@ -368,6 +368,16 @@ fn run_passes(module: &Module<'_>, opt: u8, tm: &TargetMachine) -> Result<(), St
                 );
             }
         }
+        // A binary search's midpoint facts (`mir::midpoint`) meet its
+        // `nums[mid]` check only once the search is inlined, after the
+        // pipeline's own range passes: a second run folds it (kata 153).
+        // Only a module that stated one pays for it.
+        // `KARAC_MIR_MIDPOINT_REOPT=0` runs the pipeline once.
+        if module.get_global_metadata_size(super::mir::MIDPOINT_MARK) > 0
+            && std::env::var("KARAC_MIR_MIDPOINT_REOPT").as_deref() != Ok("0")
+        {
+            passes = format!("{passes},default<O{}>", opt.min(3));
+        }
         module
             .run_passes(&passes, tm, PassBuilderOptions::create())
             .map_err(|e| format!("{passes}: {}", e.to_string()))?;

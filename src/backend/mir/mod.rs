@@ -66,7 +66,7 @@ use crate::mir::coroutine;
 use crate::mir::interp::{self, Program};
 use crate::mir::layout::{self, Layout};
 use crate::mir::ty::{FloatTy, TyKind};
-use crate::mir::{Body, Place, TerminatorKind, Ty, TyInterner};
+use crate::mir::{Body, Operand, Place, TerminatorKind, Ty, TyInterner};
 
 /// The largest body, in blocks and in statements, that is hinted for
 /// inlining ([`Cx::lower_body`]).
@@ -126,6 +126,10 @@ pub fn compile_mir_with<'ctx>(
     cx.module.verify().map_err(|e| e.to_string())?;
     Ok(cx.module)
 }
+
+/// The named metadata marking a module with a binary-search midpoint
+/// stated (`Cx::assume_midpoint`), whose passes then run twice.
+pub const MIDPOINT_MARK: &str = "karac.midpoint";
 
 /// Whether direct-call parameters are marked `noalias` and promoted
 /// (`Cx::mark_noalias`); `KARAC_MIR_NOALIAS=0` turns it off.
@@ -786,6 +790,55 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
         Ok(())
     }
 
+    /// States `lo <= mid < hi` for a binary search's midpoint
+    /// ([`crate::mir::midpoint`]), which lets LLVM fold `nums[mid]`'s
+    /// bounds check against a length `hi` is below. Marks the module so
+    /// its passes run a second time (`mir_aot::run_passes`): the fact
+    /// meets the check only once the search is inlined into its caller.
+    fn assume_midpoint(&mut self, m: &crate::mir::midpoint::Midpoint) -> R<()> {
+        let e = |x: inkwell::builder::BuilderError| x.to_string();
+        let mid = self
+            .operand_scalar(&Operand::Copy(Place::local(m.mid)))?
+            .into_int_value();
+        let lo = self
+            .operand_scalar(&Operand::Copy(Place::local(m.lo)))?
+            .into_int_value();
+        let hi = self
+            .operand_scalar(&Operand::Copy(Place::local(m.hi)))?
+            .into_int_value();
+        let (ge, lt) = if m.signed {
+            (IntPredicate::SGE, IntPredicate::SLT)
+        } else {
+            (IntPredicate::UGE, IntPredicate::ULT)
+        };
+        let above = self
+            .builder
+            .build_int_compare(ge, mid, lo, "mid.ge.lo")
+            .map_err(e)?;
+        let below = self
+            .builder
+            .build_int_compare(lt, mid, hi, "mid.lt.hi")
+            .map_err(e)?;
+        let assume = self.module.get_function("llvm.assume").unwrap_or_else(|| {
+            let ty = self
+                .llcx
+                .void_type()
+                .fn_type(&[self.llcx.bool_type().into()], false);
+            self.module.add_function("llvm.assume", ty, None)
+        });
+        for fact in [above, below] {
+            self.builder
+                .build_call(assume, &[fact.into()], "")
+                .map_err(e)?;
+        }
+        if self.module.get_global_metadata_size(MIDPOINT_MARK) == 0 {
+            let _ = self
+                .module
+                .add_global_metadata(MIDPOINT_MARK, &self.llcx.metadata_node(&[]));
+        }
+        Ok(())
+    }
+
     /// Weighs the edges of `sw`, the switch lowered from `targets`, so the
     /// one to `rare` is taken about once in 2000 ([`crate::mir::counters::overflow_tests`]).
     fn rare_edge(
@@ -1040,11 +1093,20 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
         } else {
             crate::mir::counters::overflow_tests(body)
         };
+        // `KARAC_MIR_MIDPOINT=0` leaves binary-search midpoints unstated.
+        let midpoints = if std::env::var("KARAC_MIR_MIDPOINT").as_deref() == Ok("0") {
+            Vec::new()
+        } else {
+            crate::mir::midpoint::midpoints(body, self.tys)
+        };
         for (i, block) in body.blocks.iter().enumerate() {
             self.builder.position_at_end(self.blocks[i]);
-            for s in &block.statements {
+            for (si, s) in block.statements.iter().enumerate() {
                 self.locate(s.source_info.span);
                 self.statement(s)?;
+                if let Some(m) = midpoints.iter().find(|m| m.block == i && m.statement == si) {
+                    self.assume_midpoint(m)?;
+                }
             }
             self.locate(block.terminator.source_info.span);
             self.note_call_site(&block.terminator.kind)?;
