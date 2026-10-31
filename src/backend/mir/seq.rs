@@ -1456,10 +1456,16 @@ impl<'ctx> Cx<'ctx, '_> {
         i: IntValue<'ctx>,
         size: u64,
     ) -> R<PointerValue<'ctx>> {
-        let ok = self
-            .builder
-            .build_int_compare(IntPredicate::ULT, i, n, "")
-            .map_err(e)?;
+        // A guard proved `i <s len` ([`crate::mir::guard_bounds`]).
+        let ok = if self.upper_proven {
+            self.builder
+                .build_int_compare(IntPredicate::SGE, i, self.i64(0), "")
+                .map_err(e)?
+        } else {
+            self.builder
+                .build_int_compare(IntPredicate::ULT, i, n, "")
+                .map_err(e)?
+        };
         self.abort_unless(ok, "index out of bounds")?;
         self.elem_ptr(p, i, size)
     }

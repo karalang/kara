@@ -275,6 +275,9 @@ pub struct Cx<'ctx, 'p> {
     /// whose attributes and calling convention the call takes once they
     /// are final ([`Cx::hot_swap_finish`]).
     hot_swap_calls: Vec<(inkwell::values::CallSiteValue<'ctx>, FunctionValue<'ctx>)>,
+    /// While an index call whose upper bound a guard proved is lowered
+    /// ([`crate::mir::guard_bounds`]): its check is `i >= 0` alone.
+    upper_proven: bool,
 }
 
 impl<'ctx, 'p> Cx<'ctx, 'p> {
@@ -312,6 +315,7 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
             aborts: HashMap::new(),
             hot_swap: HashMap::new(),
             hot_swap_table: None,
+            upper_proven: false,
             hot_swap_calls: Vec::new(),
         }
     }
@@ -1087,6 +1091,12 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
                 crate::mir::counters::unroll_partial_latches(body, self.tys),
             )
         };
+        // `KARAC_MIR_GUARD_BOUNDS=0` checks every index in full.
+        let proven = if std::env::var("KARAC_MIR_GUARD_BOUNDS").as_deref() == Ok("0") {
+            Vec::new()
+        } else {
+            crate::mir::guard_bounds::upper_proven_indexes(body, self.tys)
+        };
         // `KARAC_MIR_COLD_OVERFLOW=0` leaves overflow tests unweighted.
         let overflows = if std::env::var("KARAC_MIR_COLD_OVERFLOW").as_deref() == Ok("0") {
             Vec::new()
@@ -1110,12 +1120,13 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
             }
             self.locate(block.terminator.source_info.span);
             self.note_call_site(&block.terminator.kind)?;
-            match &block.terminator.kind {
-                TerminatorKind::Drop { place, target, .. } => {
-                    self.drop_terminator(place, *target)?
-                }
-                kind => self.terminator(kind)?,
-            }
+            self.upper_proven = proven.contains(&i);
+            let lowered = match &block.terminator.kind {
+                TerminatorKind::Drop { place, target, .. } => self.drop_terminator(place, *target),
+                kind => self.terminator(kind),
+            };
+            self.upper_proven = false;
+            lowered?;
             let hint = if unroll.contains(&i) {
                 Some(None)
             } else if partial.contains(&i) {

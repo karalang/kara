@@ -20,6 +20,7 @@ pub mod flags;
 pub mod foreign;
 pub mod frozen;
 pub mod fs;
+pub mod guard_bounds;
 pub mod interp;
 pub mod layout;
 pub mod library_prune;
