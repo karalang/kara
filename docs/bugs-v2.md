@@ -61,7 +61,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | diagnostics | 75 |
 | false-positive | 73 |
 | missing-feature | 53 |
-| perf | 43 |
+| perf | 44 |
 | soundness | 30 |
 | miscompile | 18 |
 | run-vs-build | 15 |
@@ -84,9 +84,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | runtime | 20 |
 | parser | 20 |
 | effect | 10 |
+| autopar | 4 |
 | other | 3 |
 | resolver | 3 |
-| autopar | 3 |
 | lexer | 1 |
 ## Current state
 
@@ -104,10 +104,10 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-28-40 | 2026-10-28 | mir-llvm | medium | MIR checks the full upper bound on indexes legacy proved in range from the loop guard, and the extra checks push kata 139's 4-trip inner loop over LLVM's peel budget: 2.03x legacy's instructions, 97.8% of it recovered by removing two bounds checks | — |
 | B-2026-10-28-44 | 2026-10-28 | mir-llvm+runtime | low | On macOS, `karac run` of a program with several pool workers can report ANOTHER task's source location for a panic: the JIT keeps `@karac.site` / `@karac.site.len` process-wide because RuntimeDyldMachO cannot link thread-locals, and B-2026-10-26-7's comment says that sharing 'costs speed only' — it also makes the reported place a race, and tests/mir_site_thread_local.rs's `karac run` assertion passes by chance on a Mac | — |
 | B-2026-10-29-32 | 2026-10-29 | mir-llvm | medium | On the MIR compiled backend, `String.contains` with a needle of at most 16 bytes calls `memchr` and then `memcmp` at every place the needle's first byte occurs, so on a two-letter haystack (a binary string, where that byte is every other one) it costs 3.2 ns per haystack byte: 9.4x C `strstr` and 7.2x Rust `str::contains`; kata 1016's bench is 8.5x C | — |
-| B-2026-10-29-50 | 2026-10-29 | autopar | low | An auto-par task's loop takes its run's bounds as plain captures, so LLVM knows nothing of the counter's range: kata 4's `k % R` becomes a signed 64-bit magic division in the task (about 10 instructions) where the in-order loop, knowing 0 <= k < 10M, uses a 32-bit unsigned one (about 5) | — |
 | B-2026-10-30-36 | 2026-10-30 | mir-llvm | medium | kata 74's closed binary search over a flattened matrix (`while lo <= hi`, `m[mid / cols][mid % cols]`) runs 1.32x legacy's instructions on the MIR backend, and it is not B-2026-10-28-41's midpoint mechanism | — |
 | B-2026-10-30-37 | 2026-10-30 | runtime | low | tests/mir_panic_free_floor.rs fails 3 of 4 on macOS arm64: a print/Vec, an overflow-abort and a Map/Set program's binaries still contain std's panic-hook marker `RUST_BACKTRACE`, so the floor B-2026-10-28-36 / B-2026-10-29-41 measured on Linux does not hold on Apple | — |
 | B-2026-10-31-2 | 2026-10-31 | mir-llvm | low | MIR still stores the call site into `karac.site` / `karac.site.len` before every library call that can abort, two stores a loop trip where legacy passed the site statically to a cold per-site abort path: kata 38 runs 1.18x legacy's instructions on that alone | — |
+| B-2026-10-31-3 | 2026-10-31 | autopar | low | An auto-par task's counter is known to lie in the loop's constant range (30e4af977d) but LLVM 18 still divides in 64 bits: kata 4's `k % R` in the task is an unsigned 64-bit magic division where the in-order loop, exiting at the constant `k < 10M`, uses a 32-bit one | — |
 
 ### Relocated
 
@@ -405,6 +405,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-29-47 | ownership | medium | A program's own `struct Mask` is read as the SIMD scalar `Mask` by D5 (`COPY_SCALARS` in src/d5_params.rs lists "Mask" by name), so a bare `m: Mask`… | d07ed81b82 |
 | B-2026-10-29-48 | effect | low | With a program `impl Mul[Col] for f64`, every `f64 * f64` in the program is attributed to that impl's `f64.mul` by the effect checker: a helper doing… | 1b299d7160 |
 | B-2026-10-29-49 | ownership | medium | A `let` closure whose parameter is typed `Str` still moves a `String` argument in `karac check` (`let skip = \|n: Str\| ..; skip(n); n.len()` is "moved… | fb03e6df09 |
+| B-2026-10-29-50 | autopar | low | An auto-par task's loop takes its run's bounds as plain captures, so LLVM knows nothing of the counter's range: kata 4's `k % R` becomes a signed 64-… | 30e4af977d |
 | B-2026-10-29-51 | effect | medium | An operator whose operands differ in type (`v * 2.0` on `impl Mul[f64] for V`, `2.0 * c` on `impl Mul[Col] for f64`) is never charged its impl's effe… | 1b299d7160 |
 | B-2026-10-29-52 | mir | high | `mir::concat` moved the left side of `a + b` into the add while a closure still borrowed it: `let f = \|\| println(a); let b = a + "y"; f()` printed fr… | de113d6d66 |
 | B-2026-10-30-1 | ownership+mir | medium | Check reads a bare `dyn Trait` parameter as owned (d5_params skips `dyn`) while the MIR builder borrows it, so `fn keep(v: mut ref Vec[dyn Shape], s:… | d423e29660 |
