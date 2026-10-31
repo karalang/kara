@@ -227,8 +227,8 @@ mod lean {
     extern "C" {
         #[link_name = "getenv"]
         fn c_getenv(name: *const u8) -> *const u8;
-        fn malloc(size: usize) -> *mut u8;
-        fn free(ptr: *mut u8);
+        fn malloc(size: usize) -> *mut core::ffi::c_void;
+        fn free(ptr: *mut core::ffi::c_void);
         fn time(t: *mut i64) -> i64;
     }
 
