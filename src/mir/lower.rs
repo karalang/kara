@@ -3358,6 +3358,10 @@ struct Bx<'l, 'a> {
     /// A counting `while`'s counter's value on the way in, when it is a
     /// constant ([`Self::counter_start`]), for [`Self::auto_par_for`].
     auto_par_start: Option<Const>,
+    /// The constant end the next [`Self::range_loop`] also tests an
+    /// auto-par task's `i64` counter against, as unsigned (see
+    /// `ClosureJob::chunk`'s lowering).
+    range_cap: Option<u128>,
     /// An auto-par task's signed sum, while its run is lowered.
     wide_acc: Option<WideAcc<'a>>,
     /// The source lines of the reduction sites [`Self::auto_par_plan`] last
@@ -3443,6 +3447,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             closure_chunk: None,
             stmt_at: None,
             auto_par_start: None,
+            range_cap: None,
             wide_acc: None,
             red_lines: Vec::new(),
             closure_extra_caps: Vec::new(),
@@ -12548,6 +12553,8 @@ impl<'l, 'a> Bx<'l, 'a> {
             PatternKind::Wildcard => None,
             _ => return self.unsupported(pattern.span, "this loop pattern"),
         };
+        // Taken first, so a loop in the body never sees it.
+        let cap = self.range_cap.take().filter(|_| !inclusive);
         let end_t = end.map(|end| {
             let l = self.temp(t);
             self.assign(l, Rvalue::Use(end));
@@ -12575,13 +12582,44 @@ impl<'l, 'a> Bx<'l, 'a> {
                         Operand::Copy(Place::local(end_t)),
                     ),
                 );
+                let pass = match cap {
+                    Some(_) => self.b.new_block(),
+                    None => body_bb,
+                };
                 self.goto_with(
                     TerminatorKind::SwitchInt {
                         discr: Operand::Copy(Place::local(c)),
-                        targets: SwitchTargets::if_else(body_bb, exit),
+                        targets: SwitchTargets::if_else(pass, exit),
                     },
-                    body_bb,
+                    pass,
                 );
+                if let Some(m) = cap {
+                    let ut = self.tys().tcx().intern(HK::UInt(UIntSize::U64));
+                    let u = self.temp(ut);
+                    self.assign(
+                        u,
+                        Rvalue::Cast(CastKind::IntToInt, Operand::Copy(Place::local(i)), ut),
+                    );
+                    let under = self.temp(bool_t);
+                    self.assign(
+                        under,
+                        Rvalue::BinaryOp(
+                            BinOp::Lt,
+                            Operand::Copy(Place::local(u)),
+                            Operand::Const(Const {
+                                ty: ut,
+                                kind: ConstKind::Scalar(m),
+                            }),
+                        ),
+                    );
+                    self.goto_with(
+                        TerminatorKind::SwitchInt {
+                            discr: Operand::Copy(Place::local(under)),
+                            targets: SwitchTargets::if_else(body_bb, exit),
+                        },
+                        body_bb,
+                    );
+                }
             }
             None => {
                 self.goto(body_bb);
@@ -21428,9 +21466,35 @@ impl<'l, 'a> Bx<'l, 'a> {
                 me.when(out, |b| b.assign(v, Rvalue::Use(Operand::Const(c))));
                 Operand::Copy(Place::local(v))
             };
+            // An `i64` counter between a non-negative start and a constant
+            // end is also tested against that end as unsigned: a no-op
+            // beside `k < hi`, but a constant on the loop's back edge, from
+            // which LLVM narrows `k % R` to 32 bits as it does in order
+            // (B-2026-10-31-3).
+            let half = 1u128 << 63;
+            self.range_cap = match (&least, &most) {
+                (
+                    Some(Const {
+                        kind: ConstKind::Scalar(l),
+                        ..
+                    }),
+                    Some(Const {
+                        kind: ConstKind::Scalar(m),
+                        ..
+                    }),
+                ) if *l < half
+                    && *m < half
+                    && matches!(self.tys().tcx().kind(ty), HK::Int(IntSize::I64)) =>
+                {
+                    Some(*m)
+                }
+                _ => None,
+            };
             let lo = clamp(self, lo, least, BinOp::Lt);
             let hi = clamp(self, hi, most, BinOp::Gt);
-            self.range_loop(&None, ch.pattern, ch.body, lo, Some(hi), false, ch.ty)?;
+            let ran = self.range_loop(&None, ch.pattern, ch.body, lo, Some(hi), false, ch.ty);
+            self.range_cap = None;
+            ran?;
             self.pop_scope()?;
             self.wide_acc = None;
             if let Some(w) = wide {

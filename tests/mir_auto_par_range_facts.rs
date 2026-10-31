@@ -6,8 +6,12 @@
 //! between names the counter. The clamp is a no-op that tells LLVM the
 //! counter's range: kata 4's `k % R` in the task went from a signed 64-bit
 //! magic division to an unsigned one (865.6M to 855.6M instructions at two
-//! workers on Linux, against 599.7M in order). A clamp can only shorten a
-//! run, and the output is the in-order program's.
+//! workers on Linux, against 599.7M in order). An `i64` counter from a
+//! non-negative start to a constant end is also tested against the end as
+//! unsigned, a constant on the back edge from which LLVM narrows the
+//! remainder to 32 bits as it does in order (855.6M to 795.6M,
+//! B-2026-10-31-3). A clamp can only shorten a run, and the output is the
+//! in-order program's.
 #![cfg(feature = "llvm")]
 
 mod common;
@@ -59,7 +63,9 @@ fn karac(auto: bool) -> Command {
 }
 
 /// The bounds each task `@kara.main.apN` clamps its run to, in order: the
-/// constants of its `icmp slt` (start) and `icmp sgt` (end) on a capture.
+/// constants of its `icmp slt` (start) and `icmp sgt` (end) on a capture,
+/// and of the unsigned test of the counter against a constant end that a
+/// non-negative start allows (`cap`, B-2026-10-31-3).
 fn clamps(ll: &str) -> Vec<Vec<String>> {
     let ir = std::fs::read_to_string(ll).unwrap();
     let mut out: Vec<Vec<String>> = Vec::new();
@@ -71,7 +77,11 @@ fn clamps(ll: &str) -> Vec<Vec<String>> {
         } else if l == "}" {
             inside = false;
         } else if inside {
-            for (op, side) in [("icmp slt i64 %", "start"), ("icmp sgt i64 %", "end")] {
+            for (op, side) in [
+                ("icmp slt i64 %", "start"),
+                ("icmp sgt i64 %", "end"),
+                ("icmp ult i64 %", "cap"),
+            ] {
                 let Some(rest) = l.split_once(op).map(|(_, r)| r) else {
                     continue;
                 };
@@ -113,7 +123,11 @@ fn mir_auto_par_task_clamps_its_run_to_the_loops_constant_bounds() {
     // The `while` from `let mut k = 5` to the constant `n`; the `for` from
     // 3 to a computed end; the `while` whose counter is written after its
     // `let`, so only its end is known.
-    let stated: &[&[&str]] = &[&["start 5", "end 100003"], &["start 3"], &["end 100003"]];
+    let stated: &[&[&str]] = &[
+        &["start 5", "end 100003", "cap 100003"],
+        &["start 3"],
+        &["end 100003"],
+    ];
     for (range, want) in [(None, stated), (Some("0"), &[&[][..], &[], &[]][..])] {
         let exe = dir.join("main");
         let ll = dir.join("main.ll");
