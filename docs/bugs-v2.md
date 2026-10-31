@@ -63,20 +63,20 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | missing-feature | 60 |
 | perf | 47 |
 | soundness | 31 |
-| miscompile | 19 |
+| miscompile | 20 |
 | run-vs-build | 16 |
 | other | 15 |
 | codegen-gap | 12 |
+| leak | 3 |
 | crash | 2 |
-| leak | 1 |
 
 ### By surface
 
 | surface | total |
 |---|---|
 | typecheck | 131 |
-| mir | 75 |
-| mir-llvm | 53 |
+| mir | 76 |
+| mir-llvm | 55 |
 | cli | 43 |
 | ownership | 37 |
 | interp | 26 |
@@ -108,6 +108,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-31-22 | 2026-10-31 | cli | medium | `karac build` refuses the project `karac new --lib` just made ("the v2 build makes an executable from src/main.kara … v2 does not build a library package yet"), and on a binary project it prints a slice-2 manifest dump (project/edition/root/target/entry/modules) before `Built:` | — |
 | B-2026-10-31-23 | 2026-10-31 | mir | medium | The MIR builder refuses every program with a struct `invariant` ("a type invariant is not lowered yet"), so examples/weave, which checks since B-2026-10-31-13/-14, still does not run, build or test on v2 | — |
 | B-2026-10-31-25 | 2026-10-31 | typecheck | medium | `x.hash(mut h)` with a user `Hasher` is `no method 'hash'` on a type that derives `Hash` and on the primitives (`7.hash(mut h)`), though design.md § Hashing declares `trait Hash { fn hash[H: Hasher](self, hasher: mut ref H); }` and says the derive generates ordinary `self.a.hash(mut hasher)` code | — |
+| B-2026-10-31-26 | 2026-10-31 | mir-llvm | medium | `Child.wait_with_output()` leaks the child's 32-byte handle on the compiled backend: the call takes `own self`, and nothing frees the `Kid` box `karac_mir_command` allocated (corpus fixtures/mir_io/PROCESSES and PROCESS_SURFACE fail the ASan lane) | — |
+| B-2026-10-31-27 | 2026-10-31 | mir | medium | A provider through a generic trait (`trait Channel[T] { fn send(ref self, v: T) -> T; }`, `impl Channel[i64] for Echo`) passes `v` by value where the impl body reads it as a reference: `__mir-run` stops with `deref of non-reference Int(41)`, and the built program SEGVs in `Echo.send` (corpus fixtures/codegen/generics/e2e_generic_provider_trait_bound) | — |
+| B-2026-10-31-28 | 2026-10-31 | mir-llvm | low | A rare LeakSanitizer report on corpus programs that spawn tasks or run `par` under load (fixtures/coro_e2e/SPAWN_NONBLOCK_SRC, SPAWN_MULTI_CAPTURE_SRC, interpreter/concurrency/test_dbg_json_in_par_emits_numeric_task_id, par_codegen/test_e2e_par_join_branch_float_method) | — |
 
 ### Relocated
 
