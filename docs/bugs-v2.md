@@ -59,12 +59,12 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 75 |
-| false-positive | 73 |
+| false-positive | 75 |
 | missing-feature | 56 |
 | perf | 46 |
 | soundness | 30 |
 | miscompile | 19 |
-| run-vs-build | 15 |
+| run-vs-build | 16 |
 | other | 14 |
 | codegen-gap | 11 |
 | crash | 2 |
@@ -74,11 +74,11 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 126 |
-| mir | 70 |
+| typecheck | 127 |
+| mir | 71 |
 | mir-llvm | 53 |
 | cli | 41 |
-| ownership | 36 |
+| ownership | 37 |
 | interp | 26 |
 | codegen | 22 |
 | parser | 21 |
@@ -103,6 +103,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-31-7 | 2026-10-31 | mir | low | `karac build` (and `karac run`) runs the whole front end twice: `check_v2`'s pipeline, then `build_source_in_order_later` parses, resolves, typechecks and ownership-checks the program and its library again from source | — |
 | B-2026-10-31-8 | 2026-10-31 | mir-llvm | low | Every `karac` process starts at 15-20 ms and 46.6 MB peak RSS before doing anything (`karac --version`), and the link step of a small kata's `karac build` is its largest phase at 72-102 ms | — |
 | B-2026-10-31-12 | 2026-10-31 | interp+mir-llvm | low | `dbg(x)` and a failed `assert_eq` ignore a hand-written `impl Debug`: `dbg(p)` with `impl Debug for Pt { fn fmt_debug(self) -> String { f"Pt<{self.x}>" } }` prints `p = Pt { x: 4 }`, the derived field form, though `p.fmt_debug()` gives `Pt<4>` | — |
+| B-2026-10-31-13 | 2026-10-31 | ownership | medium | `karac check` refuses moving a binding after a closure literal passed as a call argument (an `own MutFn` parameter, `with_provider`) that writes it: "moved inside a loop" with no loop around the move; both MIR backends accept the program and print the right answer | — |
+| B-2026-10-31-14 | 2026-10-31 | typecheck | medium | A bare (borrowing) parameter of a refinement type does not take its argument the way a parameter of the base type does: an owned `NonEmpty[T]` (`type NonEmpty[T] = Vec[T] where self.len() > 0`) is refused ("expected 'ref NonEmpty', found 'NonEmpty'"), `p * 2` on a `p: Pos` (`i64 where self > 0`) is refused ("type 'ref Pos' does not implement trait Mul"), and a non-generic Vec refinement passes `karac check` but MIR refuses it ("a type that failed to check is not lowered yet") | — |
+| B-2026-10-31-15 | 2026-10-31 | mir | medium | A closure that consumes a captured iterator (`for line in lines` over a `split` captured from outside) and is called once passes `karac check`, but the MIR builder refuses it ("cannot move a non-`Copy` value out of a borrowed place"), so check accepts what neither backend can run | — |
 
 ### Relocated
 
