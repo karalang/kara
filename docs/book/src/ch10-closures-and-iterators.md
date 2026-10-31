@@ -66,7 +66,7 @@ Iterators let you process sequences lazily:
 ```kara
 let numbers = [1, 2, 3, 4, 5];
 
-let doubled = numbers
+let doubled: Vec[i64] = numbers
     .iter()
     .map(|n| n * 2)
     .filter(|n| n > 4)

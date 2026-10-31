@@ -16,14 +16,14 @@ You write the tier at the signature. The compiler infers *nothing* about the pub
 
 ## Parameter modes
 
-Every parameter names its mode in the signature. Default (owned) is bare; borrows are written:
+Every parameter has one mode, written in the signature. A bare parameter borrows (a `Copy` value such as an `i64` is simply copied); `own` takes ownership; `mut ref` borrows exclusively to write:
 
 ```kara
-fn greet(name: ref String) {
-    println(f"Hello, {name}!");
+fn greet(name: String) {
+    println(f"Hello, {name}!");    // borrowed: read, not consumed
 }
 
-fn take_name(name: String) -> String {
+fn take_name(name: own String) -> String {
     name    // consumed — owned parameter, moves out
 }
 
@@ -32,21 +32,21 @@ fn add_suffix(name: mut ref String) {
 }
 ```
 
-Three rules, one per mode. The body must match: consuming an owned parameter is fine; consuming a `ref` parameter is a compile error; writing through a `mut ref` is fine, consuming it is not.
+Three rules, one per mode. The body must match: consuming an `own` parameter is fine; consuming a bare (borrowed) parameter is a compile error; writing through a `mut ref` is fine, consuming it is not.
 
 ### Receivers
 
-Methods follow the same rule. Bare `self` is the owned/consuming receiver, `ref self` is a shared borrow, `mut ref self` is an exclusive borrow:
+Methods follow the same rule. Bare `self` is a shared borrow, `own self` is the consuming receiver, `mut ref self` is an exclusive borrow:
 
 ```kara,ignore
 impl Builder {
-    fn build(self) -> Widget { ... }              // consumes self
-    fn peek(ref self) -> i64 { self.count }       // reads self
+    fn build(own self) -> Widget { ... }          // consumes self
+    fn peek(self) -> i64 { self.count }           // reads self
     fn bump(mut ref self) { self.count = self.count + 1 }   // mutates self
 }
 ```
 
-No `own self` — the keyword `own` isn't written anywhere in a signature. Owned is always the bare form.
+A `ref self` or `x: ref T` still parses as a redundant spelling of the bare form, and `karac fix` removes the `ref`.
 
 ### `karac explain`
 

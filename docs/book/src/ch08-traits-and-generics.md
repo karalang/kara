@@ -83,7 +83,7 @@ fn largest[T: Ord + Clone](items: Vec[T]) -> T {
     let mut best = items[0].clone();
     for item in items {
         if item > best {
-            best = item;
+            best = item.clone();
         }
     }
     best
@@ -97,7 +97,7 @@ a non-`Copy` element has to be cloned (or borrowed) rather than moved out.
 As shown here, multiple bounds use `+`:
 
 ```kara
-fn print_sorted[T: Ord + Display](items: Vec[T]) {
+fn print_sorted[T: Ord + Display](items: own Vec[T]) {
     let mut sorted = items;
     sorted.sort();
     for item in sorted {

@@ -26,11 +26,12 @@ These six are the **resource verbs**: `reads`, `writes`, `sends`, `receives`, `a
 Resources are user-defined. You declare what exists in your domain:
 
 ```kara
-effect resource FileSystem;
 effect resource Database;
 effect resource Cache;
 effect resource Net;
 ```
+
+The ones every program needs, such as `FileSystem`, `Stdout` and `Network`, are declared by the standard library already.
 
 One verb can name several resources at once — `writes(Display, Audio)` is shorter than writing `writes` twice.
 

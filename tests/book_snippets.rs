@@ -197,16 +197,26 @@ fn wrapped(code: &str) -> String {
     format!("fn main() {{\n{code}\n}}")
 }
 
+/// `karac check`'s errors for `code`. A warning (a redundant `i64` suffix, a
+/// deliberate prelude shadow in an illustration) does not stop a reader's
+/// copy from compiling, so it does not fail the snippet.
+fn errors(code: &str) -> Vec<karac::PlaygroundDiagnostic> {
+    check_source(code)
+        .into_iter()
+        .filter(|d| d.severity == "error")
+        .collect()
+}
+
 /// Run the static gate with the auto-wrap fallback. Returns the diagnostics of
 /// the block *as written* on failure (the form the reader sees), or an empty
 /// vec if either the bare or the wrapped form is clean.
 fn static_check(code: &str) -> Vec<karac::PlaygroundDiagnostic> {
-    let bare = check_source(code);
+    let bare = errors(code);
     if bare.is_empty() {
         return bare;
     }
     if !declares_main(code) {
-        let wrapped_diags = check_source(&wrapped(code));
+        let wrapped_diags = errors(&wrapped(code));
         if wrapped_diags.is_empty() {
             return Vec::new();
         }

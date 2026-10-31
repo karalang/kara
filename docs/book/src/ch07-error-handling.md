@@ -31,7 +31,7 @@ Without `?`, you'd need a `match` at every step. `?` keeps the happy path clean.
 `?` also works with `Option`:
 
 ```kara
-fn first_letter(text: Option[String]) -> Option[String] {
+fn first_letter(text: own Option[String]) -> Option[String] {
     let t = text?;                     // if None, return None early
     if t.len() == 0 { return None; }
     Some(t.substring(0, 1))

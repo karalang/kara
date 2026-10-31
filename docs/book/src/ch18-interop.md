@@ -42,7 +42,9 @@ That's the import direction. The rest of this chapter is the export direction �
 
 A library has no `main`. It has an **exported surface**: the functions a caller is allowed to reach. In Kāra that surface is every `pub extern "C" fn`. Save this as `kernel.kara`:
 
-```kara
+> **Not in 0.9.** The exported C ABI is not available in this release: `karac check` refuses a `pub extern "C" fn`, and it returns in a later release ([deferred.md § Exported C ABI](https://github.com/karalang/kara/blob/main/docs/deferred.md#exported-c-abi)). The rest of this chapter describes that design.
+
+```kara,ignore
 #[repr(C)]
 pub struct Stats { sum: f64, count: i64 }
 
