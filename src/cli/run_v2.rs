@@ -67,14 +67,16 @@ fn cmd_run_v2(
         Some(a) => a.text.clone(),
         None => read_source(filename),
     };
-    check_v2(
-        filename,
-        &source,
-        project.as_ref(),
-        manifest.as_ref(),
-        lint_overrides,
-        output,
-    );
+    let check = || {
+        check_v2(
+            filename,
+            &source,
+            project.as_ref(),
+            manifest.as_ref(),
+            lint_overrides,
+            output,
+        );
+    };
 
     crate::mir::interp::set_source_name(filename);
     if let Some(a) = &project {
@@ -85,10 +87,14 @@ fn cmd_run_v2(
     argv.extend_from_slice(program_args);
     #[cfg(feature = "llvm")]
     if !interp {
-        run_on_jit(&source, output, timeout, &argv);
+        // The MIR builder runs a front end of its own, so it lowers the
+        // program while the check runs (B-2026-10-31-7).
+        let ((), built) = checked_alongside(check, || crate::mir::lower::build_source(&source));
+        run_on_jit(built, output, timeout, &argv);
     }
     // Without the llvm feature the MIR interpreter is the only executor.
     let _ = interp;
+    check();
     run_on_interpreter(source, output, timeout, argv);
 }
 
@@ -258,6 +264,33 @@ pub(super) fn refused_project(e: &str, output: OutputMode, cmd: &str) -> ! {
     process::exit(1);
 }
 
+/// Runs `check`, the program's `karac check`, on a thread of its own while
+/// `build` lowers the same source on this one (B-2026-10-31-7). The MIR
+/// builder runs a front end of its own, and neither reads the other's
+/// output. The check is joined before `build`'s result is returned, so a
+/// check error still ends the command with the check's diagnostics, never
+/// the builder's. `build` must not reach LLVM: a check error exits the
+/// process from the check's thread, and LLVM's static destructors would run
+/// under it. Only the llvm feature has a builder to run alongside.
+#[cfg(feature = "llvm")]
+pub(super) fn checked_alongside<C: Send, B>(
+    check: impl FnOnce() -> C + Send,
+    build: impl FnOnce() -> B,
+) -> (C, B) {
+    std::thread::scope(|s| {
+        // The stack `main` gives the CLI thread the check ran on before.
+        let checking = std::thread::Builder::new()
+            .stack_size(16 * 1024 * 1024)
+            .spawn_scoped(s, check)
+            .expect("failed to spawn the check thread");
+        let built = build();
+        let checked = checking
+            .join()
+            .unwrap_or_else(|p| std::panic::resume_unwind(p));
+        (checked, built)
+    })
+}
+
 /// The MIR builder refused the program: a compile error, exit 1.
 pub(super) fn refused(e: &str, output: OutputMode) -> ! {
     let e = super::project_v2::remap_build_error(e);
@@ -270,12 +303,12 @@ pub(super) fn refused(e: &str, output: OutputMode) -> ! {
 
 #[cfg(feature = "llvm")]
 fn run_on_jit(
-    source: &str,
+    built: Result<crate::mir::lower::Lowered, String>,
     output: OutputMode,
     timeout: Option<std::time::Duration>,
     argv: &[String],
 ) -> ! {
-    let ir = crate::mir::lower::build_source(source)
+    let ir = built
         .map(crate::mir::lower::Lowered::for_this_pool)
         .and_then(|l| {
             crate::mir::lower::compiled_check(&l)?;

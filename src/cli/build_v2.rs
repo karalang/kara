@@ -567,35 +567,51 @@ fn build(
             process::exit(1);
         }),
     };
-    let checked = super::run_v2::check_v2(
-        filename,
-        &source,
-        project.as_ref(),
-        manifest,
-        a.lint_overrides.clone(),
-        output,
-    );
-    if a.monomorphization_budget.is_enabled() {
-        enforce_monomorphization_budget(
-            &checked,
+    let check = || {
+        let checked = super::run_v2::check_v2(
+            filename,
+            &source,
             project.as_ref(),
-            &a.monomorphization_budget,
+            manifest,
+            a.lint_overrides.clone(),
             output,
         );
-    }
-    // The check's warnings ride the JSON success object under `diagnostics`,
-    // only when there are some; a package's summary already has the key.
-    let warnings: Vec<String> = match output {
-        OutputMode::Text => Vec::new(),
-        _ => collect_diagnostics(&checked)
-            .entries
-            .iter()
-            .map(|d| match &project {
-                Some(p) => p.remap_json_text(filename, d),
-                None => d.clone(),
-            })
-            .collect(),
+        if a.monomorphization_budget.is_enabled() {
+            enforce_monomorphization_budget(
+                &checked,
+                project.as_ref(),
+                &a.monomorphization_budget,
+                output,
+            );
+        }
+        // The check's warnings ride the JSON success object under
+        // `diagnostics`, only when there are some; a package's summary
+        // already has the key.
+        let warnings: Vec<String> = match output {
+            OutputMode::Text => Vec::new(),
+            _ => collect_diagnostics(&checked)
+                .entries
+                .iter()
+                .map(|d| match &project {
+                    Some(p) => p.remap_json_text(filename, d),
+                    None => d.clone(),
+                })
+                .collect(),
+        };
+        warnings
     };
+    crate::mir::interp::set_source_name(filename);
+    if let Some(p) = &project {
+        p.install();
+    }
+    // The MIR builder runs a front end of its own, so it lowers the program
+    // while the check runs (B-2026-10-31-7).
+    #[cfg(feature = "llvm")]
+    let (warnings, built_mir) = super::run_v2::checked_alongside(check, || {
+        crate::mir::lower::build_source_in_order_later(&source)
+    });
+    #[cfg(not(feature = "llvm"))]
+    let warnings = check();
     let fields: Option<String> = match fields {
         Some(f) => Some(f.replace(
             "\"diagnostics\":[],",
@@ -605,10 +621,6 @@ fn build(
         None => None,
     };
     let fields = fields.as_deref();
-    crate::mir::interp::set_source_name(filename);
-    if let Some(p) = &project {
-        p.install();
-    }
     #[cfg(feature = "llvm")]
     {
         let fail = |msg: String| -> ! {
@@ -639,7 +651,7 @@ fn build(
             crate::mir::lower::compiled_check(&l)?;
             Ok(l)
         };
-        let (lowered, in_order) = crate::mir::lower::build_source_in_order_later(&source)
+        let (lowered, in_order) = built_mir
             .and_then(|(l, seq)| Ok((checked(l)?, seq)))
             .unwrap_or_else(|e| super::run_v2::refused(&e, output));
         let hot_swap = if a.enable_hot_swap {
