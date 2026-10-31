@@ -17,8 +17,8 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 | bucket | programs |
 |---|---|
 | a | 5913 |
-| e-spec | 3768 |
-| a:refused | 374 |
+| e-spec | 3769 |
+| a:refused | 373 |
 | b->a | 238 |
 | b->e-spec | 63 |
 | check-refuses | 60 |
@@ -64,7 +64,7 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 | post-m1:url | 4 |
 | post-m1:dyn | 2 |
 
-## Auto-resolved e-spec (4651): MIR matches the spec's model or pin, legacy does not
+## Auto-resolved e-spec (4652): MIR matches the spec's model or pin, legacy does not
 
 - `apps/cli/archive`
 - `apps/cli/btree_kv`
@@ -647,6 +647,7 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 - `examples/leetcode/course_schedule`
 - `examples/mend/examples/link_registry/solution`
 - `examples/phase0/dashboard`
+- `examples/word_count`
 - `fixtures/cli/a_pinned_fx_hasher_stops_the_order_moving_while_the_default_keeps_moving`
 - `fixtures/cli/map_iteration_order_varies_per_process_and_a_pinned_seed_reproduces`
 - `fixtures/cli/ref_binding_codegen_gap_explains_itself`
