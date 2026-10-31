@@ -102,7 +102,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-31-8 | 2026-10-31 | mir-llvm | low | Every `karac` process starts at 15-20 ms and 46.6 MB peak RSS before doing anything (`karac --version`), and the link step of a small kata's `karac build` is its largest phase at 72-102 ms | — |
 | B-2026-10-31-16 | 2026-10-31 | mir | low | `karac build` and `karac run` still do the front end's work twice in CPU: `check_v2` and the MIR builder's `frontend()` now run on two threads at once (6777e6ea51), but each parses, resolves, typechecks and ownership-checks the program and its library | — |
 | B-2026-10-31-28 | 2026-10-31 | mir-llvm | low | A rare LeakSanitizer report on corpus programs that spawn tasks or run `par` under load (fixtures/coro_e2e/SPAWN_NONBLOCK_SRC, SPAWN_MULTI_CAPTURE_SRC, interpreter/concurrency/test_dbg_json_in_par_emits_numeric_task_id, par_codegen/test_e2e_par_join_branch_float_method) | — |
-| B-2026-10-31-32 | 2026-10-31 | mir | medium | An `unsafe extern "C"` import with an `f64` (or any float) parameter or return passes `karac check` but `karac run`, `karac build` and `__mir-run` refuse it: `a parameter or return type of the extern "C" function `sqrt` other than an integer, `bool` or raw pointer is not lowered yet` (src/mir/lower.rs:277) | — |
 
 ### Relocated
 
@@ -473,6 +472,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-31-29 | mir | high | An `ensures(result)` clause that matches on a non-Copy returned value (`match result { Ok(row) => row.n > 0, Err(_) => true }`) moves the value out o… | 76062d0e3a |
 | B-2026-10-31-30 | mir | low | A method whose `ensures` reads `old(self.field)` is refused by the MIR builder ("a type that failed to check is not lowered yet" at the body's tail)… | f06ae29b62 |
 | B-2026-10-31-31 | other | medium | `karac fmt` drops a type's effect argument: `EventBus[with E]` and `EventBus[with writes(OrderDb)]` come back as a bare `EventBus`, so a program `kar… | aba8cf09d2 |
+| B-2026-10-31-32 | mir | medium | An `unsafe extern "C"` import with an `f64` (or any float) parameter or return passes `karac check` but `karac run`, `karac build` and `__mir-run` re… | 189722227c |
 | B-2026-10-31-33 | typecheck+cli | medium | User-facing diagnostics, CLI errors and help text name internal plan jargon ("goes to the archive with the legacy backend at M3 and returns on v2 on… | 4da5433a9d |
 
 </details>
