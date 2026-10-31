@@ -75,25 +75,48 @@ fn candidate(
     {
         return None;
     }
-    // The rest of the retain's block, then the blocks after it.
-    if body.blocks[bi].statements[si + 1..]
-        .iter()
-        .any(|s| statement_mentions(&s.kind, l) || statement_releases(&s.kind, d))
-    {
-        return None;
-    }
+    // The rest of the retain's block, then the blocks after it, each with
+    // the locals that hold the retain's count on the way in: `d`, or a
+    // whole local `d` was moved into (`tail = node` moves the copy on), so
+    // that local is then held to `d`'s rule.
     let mut region = vec![bi];
+    let mut held_in: Vec<Vec<Local>> = vec![Vec::new(); body.blocks.len()];
     let mut drops = Vec::new();
-    let mut work = vec![bi];
-    while let Some(b) = work.pop() {
+    let mut work = vec![(bi, si + 1, vec![d])];
+    while let Some((b, from, mut held)) = work.pop() {
+        for st in &body.blocks[b].statements[from..] {
+            if statement_mentions(&st.kind, l) {
+                return None;
+            }
+            if let StatementKind::Assign(x, Rvalue::Use(Operand::Move(h))) = &st.kind {
+                if x.projection.is_empty()
+                    && h.projection.is_empty()
+                    && held.contains(&h.local)
+                    && x.local != Local::RETURN_PLACE
+                    && !mut_borrowed[x.local.index()]
+                    && !held.contains(&x.local)
+                {
+                    held.retain(|&k| k != h.local);
+                    held.push(x.local);
+                    continue;
+                }
+            }
+            if held.iter().any(|&k| statement_releases(&st.kind, k)) {
+                return None;
+            }
+        }
         let t = &body.blocks[b].terminator.kind;
         match t {
             TerminatorKind::Drop { place, .. } if *place == Place::local(l) => {
-                drops.push(BasicBlock(b as u32));
+                if !drops.contains(&BasicBlock(b as u32)) {
+                    drops.push(BasicBlock(b as u32));
+                }
                 continue;
             }
             TerminatorKind::Return => return None,
-            _ if terminator_mentions(t, l) || terminator_releases(t, d) => return None,
+            _ if terminator_mentions(t, l) || held.iter().any(|&k| terminator_releases(t, k)) => {
+                return None
+            }
             _ => {}
         }
         for s in t.successors() {
@@ -101,19 +124,21 @@ fn candidate(
             if s == bi {
                 return None;
             }
-            if region.contains(&s) {
+            if !region.contains(&s) {
+                if region.len() >= 64 {
+                    return None;
+                }
+                region.push(s);
+            } else if held.iter().all(|k| held_in[s].contains(k)) {
                 continue;
             }
-            if region.len() >= 64
-                || body.blocks[s]
-                    .statements
-                    .iter()
-                    .any(|st| statement_mentions(&st.kind, l) || statement_releases(&st.kind, d))
-            {
-                return None;
+            // A join holds the count in any local a path into it does.
+            for &k in &held {
+                if !held_in[s].contains(&k) {
+                    held_in[s].push(k);
+                }
             }
-            region.push(s);
-            work.push(s);
+            work.push((s, 0, held_in[s].clone()));
         }
     }
     // Every block after the retain is reached only through it.
@@ -339,6 +364,35 @@ let a = H { id: 1 };\n    match keep(a) {\n        Some(h) => println(f\"k{h.id}
             run_source(src).unwrap(),
             ("3 4\nk2\nd2\nend\nd1\n".into(), Some(0))
         );
+    }
+
+    /// A list built at its tail moves each new node into `tail` as the
+    /// node's last use (kata 2's `tail = node`): the copy is moved on to a
+    /// local that outlives the node's drop, so that pair goes too.
+    #[test]
+    fn mir_rc_pairs_follows_the_copy_into_another_local() {
+        let src = "shared struct N { v: i64, mut next: Option[N] }\n\
+fn build(k: i64) -> Option[N] {\n    let head = N { v: 0, next: None };\n    let mut tail = head;\n    \
+let mut i = 1;\n    while i < k {\n        let node = N { v: i, next: None };\n        tail.next = Some(node);\n        \
+tail = node;\n        i = i + 1;\n    }\n    Some(head)\n}\n\
+fn main() {\n    let mut c = build(4);\n    let mut s = 0;\n    loop {\n        match c {\n            \
+Some(n) => {\n                s = s * 10 + n.v;\n                c = n.next;\n            }\n            None => break,\n        }\n    }\n    println(s);\n}\n";
+        // `tail = head` and `Some(node)` keep theirs: `head` and `node`
+        // are read again after them.
+        assert_eq!(retains(src, "build"), 2);
+        assert_eq!(run_source(src).unwrap(), ("123\n".into(), Some(0)));
+    }
+
+    /// The copy, moved on, dies before its source would have: the retain
+    /// stays, and the `Drop` bodies run in the source's order.
+    #[test]
+    fn mir_rc_pairs_keeps_a_retain_whose_moved_copy_dies_first() {
+        let src = "shared struct H { id: i64 }\n\
+impl Drop for H { fn drop(mut ref self) { println(f\"d{self.id}\") } }\n\
+fn main() {\n    let a = H { id: 1 };\n    let c = a;\n    let mut e = c;\n    e = H { id: 2 };\n    println(f\"e{e.id}\");\n}\n";
+        // `c = a` and `e = c` both stay.
+        assert_eq!(retains(src, "main"), 2);
+        assert_eq!(run_source(src).unwrap(), ("e2\nd2\nd1\n".into(), Some(0)));
     }
 
     /// A source used after the retain keeps it.
