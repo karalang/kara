@@ -1023,7 +1023,11 @@ impl Parser {
             }
             self.error_kind(
                 ParseErrorKind::UnexpectedToken,
-                &format!("Expected {:?}, found {:?}", expected, self.peek_token()),
+                &format!(
+                    "Expected {}, found {}",
+                    expected.describe(),
+                    self.peek_token_ref().describe()
+                ),
             );
             if matches!(expected, Token::Semicolon) {
                 self.record_missing_semicolon_insertion(&found_span);
@@ -1485,8 +1489,8 @@ impl Parser {
             }
             _ => {
                 self.error(&format!(
-                    "Expected method name, found {:?}",
-                    self.peek_token()
+                    "Expected method name, found {}",
+                    self.peek_token_ref().describe()
                 ));
                 None
             }
@@ -1510,8 +1514,8 @@ impl Parser {
             }
             _ => {
                 self.error(&format!(
-                    "Expected attribute argument name, found {:?}",
-                    self.peek_token()
+                    "Expected attribute argument name, found {}",
+                    self.peek_token_ref().describe()
                 ));
                 None
             }
@@ -1807,7 +1811,7 @@ impl Parser {
                 }
                 msg
             }
-            None => format!("Expected {expected}, found {tok:?}"),
+            None => format!("Expected {expected}, found {}", tok.describe()),
         }
     }
 

@@ -13356,7 +13356,7 @@ fn missing_semicolon_carries_a_machine_applicable_insertion() {
         result
             .errors
             .iter()
-            .any(|e| e.message.contains("Semicolon")),
+            .any(|e| e.message.contains("Expected `;`")),
         "expected a missing-semicolon diagnostic; got: {:?}",
         result.errors
     );
@@ -13400,7 +13400,7 @@ fn mid_expression_semicolon_error_carries_no_insertion() {
         result
             .errors
             .iter()
-            .any(|e| e.message.contains("Semicolon")),
+            .any(|e| e.message.contains("Expected `;`")),
         "expected a missing-semicolon diagnostic; got: {:?}",
         result.errors
     );
@@ -15784,6 +15784,38 @@ fn a_reserved_keyword_yields_one_diagnostic_per_occurrence() {
 
 // ── Block-keyword diagnostics (B-2026-09-02-33) ─────────────────────
 
+/// A parse error names tokens as source text, never as the token's Rust
+/// `Debug` form: `karac run README.md` on a `# tool` heading said
+/// `Expected LeftBracket, found Identifier { name: "tool", raw: false }`
+/// (B-2026-10-31-21).
+#[test]
+fn parse_errors_name_tokens_as_source_text() {
+    for (src, want) in [
+        ("# tool\n", "Expected `[`, found `tool`"),
+        ("fn f(x: ) {}", "Expected type, found `)`"),
+        (
+            "fn main() { let x = 1 let y = 2; }",
+            "Expected `;`, found `let`",
+        ),
+        ("fn main() { foo(\"a\" 1); }", "found `1`"),
+    ] {
+        let (_p, errors) = parse_with_errors(src);
+        let all: Vec<&str> = errors.iter().map(|e| e.message.as_str()).collect();
+        assert!(
+            all.iter().any(|m| m.contains(want)),
+            "{src:?}: wanted {want:?} in {all:?}"
+        );
+        for m in &all {
+            assert!(
+                !m.contains("Identifier {")
+                    && !m.contains("LeftBracket")
+                    && !m.contains("RightParen"),
+                "{src:?}: a token's Debug form leaked: {m:?}"
+            );
+        }
+    }
+}
+
 /// A keyword whose construct the parser COMMITS to before it can fail must
 /// still say something useful. `let x = try;` used to report `Expected
 /// LeftBrace, found Semicolon` --- a bare Rust `Debug` token name naming the
@@ -15801,7 +15833,7 @@ fn a_block_keyword_without_its_block_names_the_construct_not_the_punctuation() {
         assert!(!errors.is_empty(), "expected a parse error for `{kw}`");
         let msg = &errors[0].message;
         assert!(
-            !msg.contains("found Semicolon") && !msg.contains("LeftBrace"),
+            !msg.contains("found `;`") && !msg.contains("Expected `{`"),
             "`{kw}` still blames the punctuation with an internal token name: {msg}",
         );
         assert!(
@@ -15857,7 +15889,7 @@ fn comptime_in_parameter_position_reports_the_keyword_not_the_punctuation() {
         );
         for e in &errors {
             assert!(
-                !e.message.contains("found Colon"),
+                !e.message.contains("found `:`"),
                 "still blames the punctuation: {:?} (src: {src})",
                 e.message,
             );

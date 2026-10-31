@@ -398,7 +398,7 @@ fn design_md_statements_carry_their_terminating_semicolon() {
     let mut offenders: Vec<String> = Vec::new();
     for (start_line, body) in kara_blocks(DESIGN_MD) {
         for err in karac::parse(body).errors {
-            if !err.message.contains("Expected Semicolon") {
+            if !err.message.contains("Expected `;`") {
                 continue;
             }
             // The parser reports at the token AFTER the missing `;`, so the
@@ -517,7 +517,7 @@ fn non_terminator_allow_list_entries_all_still_fire() {
                 && karac::parse(body)
                     .errors
                     .iter()
-                    .any(|e| e.message.contains("Expected Semicolon"))
+                    .any(|e| e.message.contains("Expected `;`"))
         });
         assert!(
             fires,

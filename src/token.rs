@@ -360,6 +360,106 @@ pub fn unescapable_marker_spelling(name: &str) -> Option<&'static str> {
 }
 
 impl Token {
+    /// The token as a diagnostic names it: its source text in backticks
+    /// (`` `[` ``, `` `tool` ``, `` `fn` ``), or what it is when its text
+    /// is not the point (a string literal, the end of the file). A parse
+    /// error reads "Expected `[`, found `tool`", never the token's Rust
+    /// `Debug` form (B-2026-10-31-21).
+    pub fn describe(&self) -> String {
+        if let Some(kw) = self.keyword_spelling() {
+            return format!("`{kw}`");
+        }
+        let punct = match self {
+            Token::LeftParen => "(",
+            Token::RightParen => ")",
+            Token::LeftBrace => "{",
+            Token::RightBrace => "}",
+            Token::LeftBracket => "[",
+            Token::RightBracket => "]",
+            Token::Colon => ":",
+            Token::ColonColon => "::",
+            Token::Comma => ",",
+            Token::Semicolon => ";",
+            Token::Dot => ".",
+            Token::DotDot => "..",
+            Token::DotDotEq => "..=",
+            Token::DotDotDot => "...",
+            Token::QuestionDot => "?.",
+            Token::QuestionQuestion => "??",
+            Token::Arrow => "->",
+            Token::FatArrow => "=>",
+            Token::Question => "?",
+            Token::Pound => "#",
+            Token::Underscore => "_",
+            Token::At => "@",
+            Token::Plus => "+",
+            Token::Minus => "-",
+            Token::Star => "*",
+            Token::Slash => "/",
+            Token::Percent => "%",
+            Token::EqualEqual => "==",
+            Token::BangEqual => "!=",
+            Token::LessThan => "<",
+            Token::LessThanOrEqual => "<=",
+            Token::GreaterThan => ">",
+            Token::GreaterThanOrEqual => ">=",
+            Token::AmpAmp => "&&",
+            Token::PipePipe => "||",
+            Token::Bang => "!",
+            Token::Amp => "&",
+            Token::Pipe => "|",
+            Token::PipeArrow => "|>",
+            Token::Caret => "^",
+            Token::Tilde => "~",
+            Token::LessLess => "<<",
+            Token::GreaterGreater => ">>",
+            Token::Equal => "=",
+            Token::PlusEqual => "+=",
+            Token::MinusEqual => "-=",
+            Token::StarEqual => "*=",
+            Token::SlashEqual => "/=",
+            Token::PercentEqual => "%=",
+            Token::AmpEqual => "&=",
+            Token::PipeEqual => "|=",
+            Token::CaretEqual => "^=",
+            Token::LessLessEqual => "<<=",
+            Token::GreaterGreaterEqual => ">>=",
+            _ => "",
+        };
+        if !punct.is_empty() {
+            return format!("`{punct}`");
+        }
+        let suffix = |s: String| s.to_lowercase();
+        match self {
+            Token::Identifier { name, raw: true } => format!("`r#{name}`"),
+            Token::Identifier { name, .. } => format!("`{name}`"),
+            Token::Integer(n, sfx) => match sfx {
+                Some(x) => format!("`{n}{}`", suffix(format!("{x:?}"))),
+                None => format!("`{n}`"),
+            },
+            Token::IntegerOutOfRange(n, sfx) => match sfx {
+                Some(x) => format!("`{n}{}`", suffix(format!("{x:?}"))),
+                None => format!("`{n}`"),
+            },
+            Token::Float(f, sfx) => match sfx {
+                Some(x) => format!("`{f:?}{}`", suffix(format!("{x:?}"))),
+                None => format!("`{f:?}`"),
+            },
+            Token::CharLiteral(c) => format!("`{c:?}`"),
+            Token::ByteLiteral(b) => format!("`b{:?}`", *b as char),
+            Token::Label(l) => format!("`'{l}`"),
+            Token::ReservedFuture(w) | Token::RawIdentNotAllowed(w) => format!("`{w}`"),
+            Token::StringLiteral(_) => "a string literal".to_string(),
+            Token::InterpolatedStringLiteral(_) => "an f-string".to_string(),
+            Token::ByteStringLiteral(_) => "a byte string literal".to_string(),
+            Token::CStringLiteral { .. } => "a C string literal".to_string(),
+            Token::DocComment(_) | Token::ModuleDocComment(_) => "a doc comment".to_string(),
+            Token::Error(m) | Token::ErrorWithFix { message: m, .. } => m.clone(),
+            Token::EOF => "the end of the file".to_string(),
+            _ => format!("{self:?}"),
+        }
+    }
+
     /// The source spelling of a reserved-keyword token, or `None` for any
     /// non-keyword token (identifiers, literals, punctuation, `Error`, `EOF`).
     ///

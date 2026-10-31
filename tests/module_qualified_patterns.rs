@@ -89,7 +89,7 @@ fn a_pattern_through_a_module_binding_names_a_missing_variant() {
     let all = format!("{stdout}{stderr}");
     assert!(!ok, "check must refuse it: {all}");
     assert!(
-        all.contains("Square") && !all.contains("Expected FatArrow"),
+        all.contains("Square") && !all.contains("Expected `=>`"),
         "expected a diagnostic naming `Square`: {all}"
     );
 }

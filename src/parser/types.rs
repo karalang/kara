@@ -724,7 +724,10 @@ impl super::Parser {
                 })
             }
             _ => {
-                self.error(&format!("Expected type, found {:?}", self.peek_token()));
+                self.error(&format!(
+                    "Expected type, found {}",
+                    self.peek_token_ref().describe()
+                ));
                 None
             }
         }
