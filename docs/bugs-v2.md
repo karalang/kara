@@ -58,14 +58,14 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 75 |
-| false-positive | 75 |
-| missing-feature | 56 |
+| diagnostics | 76 |
+| false-positive | 76 |
+| missing-feature | 57 |
 | perf | 47 |
-| soundness | 30 |
+| soundness | 31 |
 | miscompile | 19 |
 | run-vs-build | 16 |
-| other | 14 |
+| other | 15 |
 | codegen-gap | 12 |
 | crash | 2 |
 | leak | 1 |
@@ -74,15 +74,15 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 127 |
+| typecheck | 129 |
 | mir | 73 |
 | mir-llvm | 53 |
-| cli | 41 |
+| cli | 43 |
 | ownership | 37 |
 | interp | 26 |
 | codegen | 22 |
-| parser | 21 |
-| runtime | 20 |
+| parser | 22 |
+| runtime | 21 |
 | effect | 10 |
 | resolver | 4 |
 | autopar | 4 |
@@ -101,6 +101,11 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-30-37 | 2026-10-30 | runtime | low | tests/mir_panic_free_floor.rs fails 3 of 4 on macOS arm64: a print/Vec, an overflow-abort and a Map/Set program's binaries still contain std's panic-hook marker `RUST_BACKTRACE`, so the floor B-2026-10-28-36 / B-2026-10-29-41 measured on Linux does not hold on Apple | — |
 | B-2026-10-31-8 | 2026-10-31 | mir-llvm | low | Every `karac` process starts at 15-20 ms and 46.6 MB peak RSS before doing anything (`karac --version`), and the link step of a small kata's `karac build` is its largest phase at 72-102 ms | — |
 | B-2026-10-31-16 | 2026-10-31 | mir | low | `karac build` and `karac run` still do the front end's work twice in CPU: `check_v2` and the MIR builder's `frontend()` now run on two threads at once (6777e6ea51), but each parses, resolves, typechecks and ownership-checks the program and its library | — |
+| B-2026-10-31-18 | 2026-10-31 | typecheck | medium | `karac check` accepts a field access on an enum value (`e.message` on an `IoError`, `e.x` on a user enum), then `karac run`/`build` refuse it as "a type that failed to check is not lowered yet"; a missing struct field is caught | — |
+| B-2026-10-31-19 | 2026-10-31 | typecheck+cli | medium | kara-lsp checks a different language from `karac check`: `karac check` passes on the `karac new --cli` scaffold, but the editor shows 3 errors (no `count` on Vec, twice, and E_INDEX_MOVE_NON_COPY on `args[1]`), because `karac::check_source` runs neither `strict_core` nor the Kāra library | — |
+| B-2026-10-31-20 | 2026-10-31 | runtime | medium | Every HTTP server program prints `BOUND_PORT=8080` on its standard output (`Server.serve`/`serve_ws`, run and build alike): the test-harness line B-2026-10-15-69 removed from `TcpListener.bind` is still unconditional in the HTTP server | — |
+| B-2026-10-31-21 | 2026-10-31 | parser | low | Parse errors show the Rust `Debug` form of the token: `Expected LeftBracket, found Identifier { name: "tool", raw: false }` | — |
+| B-2026-10-31-22 | 2026-10-31 | cli | medium | `karac build` refuses the project `karac new --lib` just made ("the v2 build makes an executable from src/main.kara … v2 does not build a library package yet"), and on a binary project it prints a slice-2 manifest dump (project/edition/root/target/entry/modules) before `Built:` | — |
 
 ### Relocated
 
