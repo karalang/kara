@@ -56,13 +56,6 @@
       "outcome": "UNDECLARED-NAME",
       "reason": "fragment: `Duration` is imported from std.time in the next block",
       "first_diagnostic": "undefined type 'Duration'"
-    },
-    "package:weave": {
-      "where": "examples/weave/kara.toml",
-      "heading": "example package",
-      "outcome": "REJECTED",
-      "reason": "compiler: a closure passed to `with_provider` that pushes to `enriched` makes the later `NonEmpty.try_from(enriched)` read as moved inside a loop (B-2026-10-31-13), and `aggregate(rows)` refuses an owned `NonEmpty[T]` for its borrowing parameter (B-2026-10-31-14)",
-      "first_diagnostic": "expected 'ref NonEmpty', found 'NonEmpty'"
     }
   }
 }

@@ -102,14 +102,8 @@ const EXCLUDED_DIRS: &[&str] = &[
 /// refuse. db_pipeline (which now also runs: its five tests pass and `karac
 /// run` prints the rows) and slipstream were pinned here until 2026-10-31,
 /// when they were migrated to borrow-by-default; weave was migrated too, and
-/// what still refuses it is compiler gaps.
-const KNOWN_BROKEN_PACKAGES: &[(&str, &str)] = &[(
-    "weave",
-    "typecheck: `aggregate(rows)` refuses an owned `NonEmpty[T]` for its \
-         borrowing parameter (B-2026-10-31-14), and ownership: the closure \
-         passed to `with_provider` that pushes to `enriched` makes the later \
-         move read as one inside a loop (B-2026-10-31-13).",
-)];
+/// checks since its two compiler gaps were fixed (B-2026-10-31-13, -14).
+const KNOWN_BROKEN_PACKAGES: &[(&str, &str)] = &[];
 
 /// Single files that do not currently check, with the first reported error.
 const KNOWN_BROKEN_FILES: &[(&str, &str)] = &[
