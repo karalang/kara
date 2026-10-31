@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 76 |
+| diagnostics | 77 |
 | false-positive | 76 |
 | missing-feature | 60 |
 | perf | 47 |
@@ -74,10 +74,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 131 |
+| typecheck | 132 |
 | mir | 79 |
 | mir-llvm | 55 |
-| cli | 43 |
+| cli | 44 |
 | ownership | 37 |
 | interp | 26 |
 | codegen | 22 |
@@ -473,6 +473,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-31-29 | mir | high | An `ensures(result)` clause that matches on a non-Copy returned value (`match result { Ok(row) => row.n > 0, Err(_) => true }`) moves the value out o… | 76062d0e3a |
 | B-2026-10-31-30 | mir | low | A method whose `ensures` reads `old(self.field)` is refused by the MIR builder ("a type that failed to check is not lowered yet" at the body's tail)… | f06ae29b62 |
 | B-2026-10-31-31 | other | medium | `karac fmt` drops a type's effect argument: `EventBus[with E]` and `EventBus[with writes(OrderDb)]` come back as a bare `EventBus`, so a program `kar… | aba8cf09d2 |
+| B-2026-10-31-33 | typecheck+cli | medium | User-facing diagnostics, CLI errors and help text name internal plan jargon ("goes to the archive with the legacy backend at M3 and returns on v2 on… | 4da5433a9d |
 
 </details>
 
