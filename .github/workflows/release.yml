@@ -20,6 +20,9 @@
 #     deletion), so tag-first is a local-machine-only flow.
 #   - tag push `v*` (from a machine that can push tags): same pipeline,
 #     then a DRAFT release on the existing tag.
+#   RELEASE TAGS (0.9.0 on): `v<version in Cargo.toml>`, e.g. v0.9.0,
+#     builds binaries stamped `0.9.0+g<sha>` with no `-dev` part and
+#     bundles named karac-0.9.0-<target>; the draft is titled "(beta)".
 #   Draft on purpose, in every mode: nothing publishes without a human
 #   clicking the button (unannounced-dev-preview posture; the launch
 #   decides when releases go loud).
@@ -101,7 +104,13 @@ jobs:
         with:
           key: release-${{ matrix.label }}
 
+      # A tag equal to v<Cargo.toml version> (no `-dev`) builds the
+      # release stamp, `karac 0.9.0+g<sha>` (build.rs); any other tag or
+      # a dry run builds the dev stamp, and package-release.sh refuses a
+      # release tag that does not match Cargo.toml.
       - name: Package release bundle
+        env:
+          KARAC_RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
         run: bash scripts/package-release.sh ${{ matrix.label }}
 
       - name: Upload bundle artifact
@@ -252,9 +261,9 @@ jobs:
           # the existing tag wins and target_commitish is ignored.
           tag_name: ${{ steps.tag.outputs.tag }}
           target_commitish: ${{ github.sha }}
-          name: ${{ steps.tag.outputs.tag }} (dev preview)
+          name: ${{ steps.tag.outputs.tag }} (${{ contains(steps.tag.outputs.tag, '-dev') && 'dev preview' || 'beta' }})
           body: |
-            Pre-v1 development preview of the Kāra compiler. Expect
+            Pre-v1 ${{ contains(steps.tag.outputs.tag, '-dev') && 'development preview' || 'beta release' }} of the Kāra compiler. Expect
             breakage; report issues with the exact `karac --version`
             string (its `+g<sha>` suffix identifies the build's commit).
 

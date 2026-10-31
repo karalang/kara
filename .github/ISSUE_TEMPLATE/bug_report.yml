@@ -15,7 +15,7 @@ body:
     attributes:
       label: karac --version
       description: Paste the exact string, including the build hash if present.
-      placeholder: karac 0.1.0 (abc1234)
+      placeholder: karac 0.9.0+g1a2b3c4d5
     validations:
       required: true
 

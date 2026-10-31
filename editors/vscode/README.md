@@ -56,8 +56,8 @@ npm install
 npm test             # grammar scope assertions
 npm run test:corpus  # grammar balance over every corpus/example program (a few minutes)
 cargo build -p kara-lsp && npm run test:lsp   # the server over stdio, as the extension runs it
-npm run package      # builds kara-0.1.0.vsix
+npm run package      # builds kara-0.9.0.vsix
 ```
 
 Press F5 in VS Code with this folder open to launch an Extension Development
-Host. `code --install-extension kara-0.1.0.vsix` installs a packaged build.
+Host. `code --install-extension kara-0.9.0.vsix` installs a packaged build.

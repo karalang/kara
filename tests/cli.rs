@@ -89,15 +89,18 @@ fn test_help_output() {
 #[test]
 fn test_version_output() {
     // Stamped version identity (release-pipeline prep): the base crate
-    // version plus the build.rs git stamp — `dev.<count>+g<sha>` from a
-    // git checkout, `dev.unknown` from a source tarball. Either way the
-    // string self-identifies the build; a bare un-suffixed `0.1.0`
-    // would mean the stamp machinery silently stopped running.
+    // version plus the build.rs git stamp — `-dev.<count>+g<sha>` from a
+    // git checkout, `-dev.unknown` from a source tarball, `+g<sha>` on a
+    // release build (KARAC_RELEASE_TAG). Either way the string
+    // self-identifies the build; a bare un-suffixed version would mean
+    // the stamp machinery silently stopped running.
     let out = karac_bin().arg("version").output().unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
+    let base = env!("CARGO_PKG_VERSION");
     assert!(
-        stdout.contains("karac 0.1.0-dev."),
-        "version must carry the -dev build stamp, got: {stdout:?}"
+        stdout.contains(&format!("karac {base}-dev."))
+            || stdout.contains(&format!("karac {base}+g")),
+        "version must carry the build stamp, got: {stdout:?}"
     );
     assert!(
         stdout.contains("+g") || stdout.contains("dev.unknown"),

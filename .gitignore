@@ -84,3 +84,6 @@ __pycache__/
 # runs. These were swept onto `main` nine times by `git add -A` before this
 # entry existed; keep them untracked so a fix commit cannot carry one again.
 /*.log
+
+# scripts/package-release.sh output
+/dist/

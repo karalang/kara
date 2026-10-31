@@ -27,9 +27,12 @@
 
 use std::env;
 
-/// Emit the git-derived version stamp (`dev.<commit-count>+g<short-sha>`
-/// with a `.dirty` suffix on uncommitted trees) as `KARAC_VERSION_STAMP`.
-/// `karac --version` renders `<CARGO_PKG_VERSION>-<stamp>` — Zig-style
+/// Emit the git-derived version suffix as `KARAC_VERSION_SUFFIX`:
+/// `-dev.<commit-count>+g<short-sha>` on a development build, and
+/// `+g<short-sha>` on a release build (`KARAC_RELEASE_TAG` equal to
+/// `v<CARGO_PKG_VERSION>`, which `release.yml` sets from the tag it
+/// builds), each with a `.dirty` suffix on uncommitted trees.
+/// `karac --version` renders `<CARGO_PKG_VERSION><suffix>` — Zig-style
 /// derived build identity: the base version is a human decision that
 /// moves on citable milestones only; the suffix identifies the exact
 /// build with zero bookkeeping, and the short SHA maps a user's version
@@ -73,14 +76,26 @@ fn emit_version_stamp() {
     };
     let sha = git(&["rev-parse", "--short=9", "HEAD"]);
     let dirty = git(&["status", "--porcelain", "--untracked-files=no"]).map(|s| !s.is_empty());
-    let stamp = match (count, sha) {
+    // A release build drops the `-dev.<count>` prerelease part and keeps
+    // the SHA as build metadata, so `0.9.0+g<sha>` still names its commit.
+    // The tag is checked against the crate version rather than trusted:
+    // a stale or mistyped tag builds a dev stamp, which
+    // scripts/package-release.sh then refuses to ship under a release tag.
+    println!("cargo:rerun-if-env-changed=KARAC_RELEASE_TAG");
+    let release = env::var("KARAC_RELEASE_TAG").ok()
+        == env::var("CARGO_PKG_VERSION").ok().map(|v| format!("v{v}"));
+    let suffix = match (count, sha) {
         (Some(count), Some(sha)) => {
             let dirty_suffix = if dirty == Some(true) { ".dirty" } else { "" };
-            format!("dev.{count}+g{sha}{dirty_suffix}")
+            if release && count != "shallow" {
+                format!("+g{sha}{dirty_suffix}")
+            } else {
+                format!("-dev.{count}+g{sha}{dirty_suffix}")
+            }
         }
-        _ => "dev.unknown".to_string(),
+        _ => "-dev.unknown".to_string(),
     };
-    println!("cargo:rustc-env=KARAC_VERSION_STAMP={stamp}");
+    println!("cargo:rustc-env=KARAC_VERSION_SUFFIX={suffix}");
 }
 
 fn main() {

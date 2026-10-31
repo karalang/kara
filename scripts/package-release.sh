@@ -19,7 +19,8 @@
 #
 # Output: dist/karac-<version>-<target>.tar.gz + .sha256, where
 # <version> is the stamped `karac --version` (with `+` sanitized to `-`
-# for filename/URL friendliness), and the VS Code extension for the same
+# for filename/URL friendliness; on a release build, KARAC_RELEASE_TAG=
+# v<crate version>, the bare version), and the VS Code extension for the same
 # platform, dist/kara-vscode-<version>-<vscode-target>.vsix + .sha256,
 # with `kara-lsp` bundled in its `server/` (editors/vscode: the client
 # launches the bundled server before one on PATH).
@@ -75,7 +76,24 @@ if [[ "$VERSION_RAW" == *".dirty"* ]]; then
     echo "uncommitted tree as a release artifact." >&2
     exit 1
 fi
-VERSION="${VERSION_RAW//+/-}"
+# A release tag (`v<base>`, no `-dev`) must have built a release stamp:
+# build.rs only drops `-dev` when KARAC_RELEASE_TAG equals v<crate
+# version>, so a dev stamp here means the tag and Cargo.toml disagree.
+RELEASE_TAG="${KARAC_RELEASE_TAG:-}"
+if [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+ && "$RELEASE_TAG" != *-dev* ]]; then
+    if [[ "$VERSION_RAW" == *-dev.* || "v${VERSION_RAW%%+*}" != "$RELEASE_TAG" ]]; then
+        echo "ERROR: release tag '$RELEASE_TAG' but karac --version is '$VERSION_RAW';" >&2
+        echo "the tag must be v<version in Cargo.toml>." >&2
+        exit 1
+    fi
+fi
+# File names: a release names its version alone (`karac-0.9.0-<target>`);
+# a dev build keeps its whole stamp, `+` sanitized to `-`.
+if [[ "$VERSION_RAW" == *-dev.* ]]; then
+    VERSION="${VERSION_RAW//+/-}"
+else
+    VERSION="${VERSION_RAW%%+*}"
+fi
 
 # Linux leg: verify the static-LLVM promise before packaging — a bundle
 # that still links libLLVM.so would fail on every user machine without
@@ -147,10 +165,17 @@ if [[ "$(uname -s)" == Darwin ]]; then
     done
 fi
 
+if [[ "$VERSION_RAW" == *-dev.* ]]; then
+    KIND="development preview"
+    KIND_LINE="Pre-v1 development build of the Kāra compiler."
+else
+    KIND="beta"
+    KIND_LINE="Pre-v1 beta release of the Kāra compiler."
+fi
 cat > "$STAGE/README.md" <<EOF
-# karac ${VERSION_RAW} — development preview (${TARGET_LABEL})
+# karac ${VERSION_RAW} — ${KIND} (${TARGET_LABEL})
 
-Pre-v1 development build of the Kāra compiler. Expect breakage; the
+${KIND_LINE} Expect breakage; the
 compiler's own defect record is public at
 https://github.com/karalang/kara/blob/main/docs/bugs-v2.md — please
 report issues with the exact version string from \`karac --version\`
