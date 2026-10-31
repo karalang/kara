@@ -8993,7 +8993,7 @@ fn main() {
 }
 "#;
     let out = "noisy 3\nword a\npt 1\nopt 2\nopt 0\nnoisy 5\npt 1\npassed\npt 2\n";
-    let err = "runtime error: assertion failed: left != right\n  left:  P { x: 2, name: \"p\" }\n  right: P { x: 3, name: \"q\" }\n  at {f}:21:9\nError return trace:\n  {f}:21:9\n";
+    let err = "runtime error: assertion failed: pt(2) == P { x: 3, name: \"q\".to_string() }\n  left:  P { x: 2, name: \"p\" }\n  right: P { x: 3, name: \"q\" }\n  at {f}:21:9\nError return trace:\n  {f}:21:9\n";
     let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
     assert_eq!(interp.output, out, "__mir-run");
     assert_eq!(interp.stderr, err.replace("{f}", "<unknown>"), "__mir-run");
@@ -9001,7 +9001,7 @@ fn main() {
     let r = karac::mir::lower::run_source(ne).expect("MIR interpreter");
     assert!(
         r.stderr
-            .starts_with("runtime error: assertion failed: left == right\n  value: 3\n  at "),
+            .starts_with("runtime error: assertion failed: v.len() != 3\n  value: 3\n  at "),
         "{}",
         r.stderr
     );
@@ -9035,7 +9035,7 @@ fn main() {
     assert!(
         interp
             .stderr
-            .starts_with("runtime error: assertion failed: left != right\n  left:  \"mine 5\"\n  right: \"theirs\"\n"),
+            .starts_with("runtime error: assertion failed: debug_string(5) == \"theirs\"\n  left:  \"mine 5\"\n  right: \"theirs\"\n"),
         "{}",
         interp.stderr
     );

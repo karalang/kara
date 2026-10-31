@@ -18153,16 +18153,24 @@ impl<'l, 'a> Bx<'l, 'a> {
                     },
                     fail,
                 );
-                // Legacy's message: `assert`'s literal one if it has one.
+                // `assert`'s literal message if it has one, else the
+                // assertion's source text, which the compiler captures:
+                // `assertion failed: x > 0`, `assertion failed: a == b`.
                 // `assert_eq` adds both operands' `Debug` text and
                 // `assert_ne` the one value (design.md § Assertions).
-                let msg = match (name, args.get(1).map(|a| &a.value.kind)) {
-                    ("assert", Some(ExprKind::StringLit(m))) => m.as_str(),
-                    ("assert", _) => "assertion failed",
-                    ("assert_eq", _) => "assertion failed: left != right",
-                    _ => "assertion failed: left == right",
+                let text = |i: usize| {
+                    // On one line: a struct literal prints a field per line.
+                    let s = crate::formatter::render_expr(&args[i].value);
+                    let s = s.lines().map(str::trim).collect::<Vec<_>>().join(" ");
+                    s.replace(", }", " }")
                 };
-                let mut ops = vec![self.static_str(msg)];
+                let msg = match (name, args.get(1).map(|a| &a.value.kind)) {
+                    ("assert", Some(ExprKind::StringLit(m))) => m.clone(),
+                    ("assert", _) => format!("assertion failed: {}", text(0)),
+                    ("assert_eq", _) => format!("assertion failed: {} == {}", text(0), text(1)),
+                    _ => format!("assertion failed: {} != {}", text(0), text(1)),
+                };
+                let mut ops = vec![self.static_str(&msg)];
                 let labels: &[&str] = match name {
                     "assert_eq" => &["\n  left:  ", "\n  right: "],
                     _ => &["\n  value: "],
@@ -25830,7 +25838,12 @@ fn main() {
             ),
             (
                 "fn main() {\n    let x = 3;\n    assert_eq(x, 4);\n}\n",
-                "assertion failed: left != right\n  left:  3\n  right: 4",
+                "assertion failed: x == 4\n  left:  3\n  right: 4",
+                "3:5",
+            ),
+            (
+                "fn main() {\n    let x = 3;\n    assert(x > 3 and x < 9);\n}\n",
+                "assertion failed: x > 3 and x < 9",
                 "3:5",
             ),
         ];

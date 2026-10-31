@@ -6785,7 +6785,7 @@ fn test_build_project_codegen_two_files_runs() {
         "expected `Built: ...` line; stdout={stdout}",
     );
 
-    let exe_path = tmp.join("two_file_demo");
+    let exe_path = tmp.join("dist/two_file_demo");
     let run = common::output_with_hang_watchdog(
         std::process::Command::new(&exe_path),
         std::time::Duration::from_secs(15),
@@ -6857,7 +6857,7 @@ fn test_build_generic_struct_reconstruct_heap_field_no_double_free_at_o0() {
         String::from_utf8_lossy(&out.stdout),
     );
 
-    let exe_path = tmp.join("swap_demo");
+    let exe_path = tmp.join("dist/swap_demo");
     let run = common::output_with_hang_watchdog(
         std::process::Command::new(&exe_path),
         std::time::Duration::from_secs(15),
@@ -6917,7 +6917,7 @@ fn test_build_fn_align_lever_is_behaviour_neutral() {
         String::from_utf8_lossy(&out.stdout),
     );
 
-    let exe_path = tmp.join("align_demo");
+    let exe_path = tmp.join("dist/align_demo");
     let run = common::output_with_hang_watchdog(
         std::process::Command::new(&exe_path),
         std::time::Duration::from_secs(15),
@@ -6974,7 +6974,7 @@ fn test_build_llvm_args_lever_reaches_the_backend() {
         String::from_utf8_lossy(&out.stderr),
     );
 
-    let exe_path = tmp.join("llvmargs_demo");
+    let exe_path = tmp.join("dist/llvmargs_demo");
     let run = common::output_with_hang_watchdog(
         std::process::Command::new(&exe_path),
         std::time::Duration::from_secs(15),
@@ -7046,7 +7046,7 @@ fn test_build_project_codegen_three_module_chain_runs() {
         String::from_utf8_lossy(&out.stderr),
     );
 
-    let exe_path = tmp.join("chain_demo");
+    let exe_path = tmp.join("dist/chain_demo");
     let run = common::output_with_hang_watchdog(
         std::process::Command::new(&exe_path),
         std::time::Duration::from_secs(15),
@@ -7101,7 +7101,7 @@ fn test_build_project_codegen_cross_module_collision_resolves_to_both_items() {
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr),
     );
-    let exe = tmp.join("collide_demo");
+    let exe = tmp.join("dist/collide_demo");
     let ran = exe.exists().then(|| Command::new(&exe).output().unwrap());
     let _ = std::fs::remove_dir_all(&tmp);
     let Some(run) = ran else {
@@ -7209,7 +7209,7 @@ fn test_build_project_codegen_providers_as_module_name() {
         String::from_utf8_lossy(&out.stderr),
     );
 
-    let exe_path = tmp.join("providers_module");
+    let exe_path = tmp.join("dist/providers_module");
     let run = common::output_with_hang_watchdog(
         std::process::Command::new(&exe_path),
         std::time::Duration::from_secs(15),
@@ -7241,7 +7241,7 @@ fn test_build_project_codegen_manifest_name_becomes_binary_name() {
         String::from_utf8_lossy(&out.stderr),
     );
 
-    let exe_path = tmp.join("my_renamed_app");
+    let exe_path = tmp.join("dist/my_renamed_app");
     let exe_exists = exe_path.exists();
     let run = common::output_with_hang_watchdog(
         std::process::Command::new(&exe_path),
@@ -7648,7 +7648,7 @@ fn test_test_jit_bare_assert_false_emits_null_left_right() {
         .iter()
         .find(|l| event_kind(l) == Some("test_fail"))
         .unwrap_or_else(|| panic!("expected a test_fail event in:\n{lines:?}"));
-    assert!(fail_line.contains("\"message\":\"assertion failed\""));
+    assert!(fail_line.contains("\"message\":\"assertion failed: false\",\"assertion\":\"false\""));
     // No left / right fields on bare assert(cond) — the emitter
     // suppresses them when None.
     assert!(
@@ -23242,7 +23242,7 @@ fn test_xpkg_import_typechecks_and_builds() {
     // identical output (A/B surface).
     #[cfg(feature = "llvm")]
     {
-        let exe = tmp.join("app/app");
+        let exe = tmp.join("app/dist/app");
         assert!(exe.is_file(), "executable produced at {}", exe.display());
         let run = std::process::Command::new(&exe).output().unwrap();
         assert_eq!(
@@ -23423,7 +23423,7 @@ fn test_xpkg_transitive_path_dep_resolves() {
     );
     #[cfg(feature = "llvm")]
     {
-        let exe = tmp.join("app/app");
+        let exe = tmp.join("app/dist/app");
         let run = std::process::Command::new(&exe).output().unwrap();
         assert_eq!(String::from_utf8_lossy(&run.stdout), "112\n");
     }

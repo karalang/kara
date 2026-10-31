@@ -103,7 +103,7 @@ fn build_v2_builds_a_file() {
     }
 }
 
-/// A package builds from its directory into `<root>/<name>`, and from one of
+/// A package builds from its directory into `<root>/dist/<name>` (B-2026-10-30-31), and from one of
 /// its files into that file's stem; an error names the file it is in.
 #[test]
 fn build_v2_builds_a_package() {
@@ -120,7 +120,8 @@ fn build_v2_builds_a_package() {
     let member = karac(&dir, &["build", "src/main.kara", "-o", "m"]);
     built(&member);
     if LLVM {
-        assert_eq!(ran(&dir.join("pkg")), "42\n");
+        assert_eq!(ran(&dir.join("dist/pkg")), "42\n");
+        assert!(!dir.join("pkg").exists());
         assert_eq!(ran(&dir.join("m")), "42\n");
     }
     let bad = package(
@@ -273,7 +274,7 @@ fn build_v2_builds_a_package_with_a_path_dependency() {
     built(&out);
     assert!(app.join("kara.lock").is_file());
     if LLVM {
-        assert_eq!(ran(&app.join("app")), "42\n");
+        assert_eq!(ran(&app.join("dist/app")), "42\n");
     }
 }
 

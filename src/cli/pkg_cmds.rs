@@ -126,7 +126,7 @@ pub(super) fn install_from_path(path: &std::path::Path) {
     }
 
     // 2. Load the manifest to discover the binary name (the build
-    // pipeline writes the executable to `<root>/<mf.name>`; the
+    // pipeline writes the executable to `<root>/dist/<mf.name>`; the
     // install copies it to `<install-root>/<mf.name>`). Surfacing
     // manifest errors here — before invoking the build subprocess —
     // gives the operator a focused diagnostic instead of letting the
@@ -195,13 +195,13 @@ pub(super) fn install_from_path(path: &std::path::Path) {
         process::exit(code);
     }
 
-    // 5. The build wrote the executable to `<root>/<mf.name>`. If it
+    // 5. The build wrote the executable to `<root>/dist/<mf.name>`. If it
     // isn't there, the most likely cause is karac was built without
     // the `llvm` feature — the build "succeeds" in that mode but
     // emits a note rather than an executable. Surface that case
     // explicitly so the operator isn't left wondering why a clean
     // build produced nothing to install.
-    let built_exe = canonical.join(&binary_name);
+    let built_exe = canonical.join("dist").join(&binary_name);
     if !built_exe.exists() {
         eprintln!(
             "error[E_INSTALL_NO_EXECUTABLE]: build succeeded but no executable was produced at `{}`",

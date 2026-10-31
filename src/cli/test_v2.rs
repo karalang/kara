@@ -183,6 +183,7 @@ pub(super) fn cmd_test_v2(filter: Option<String>, all: bool, interp: bool) {
                 (left, right) = (Some(v.to_string()), Some(v.to_string()));
             }
         }
+        let assertion = head.strip_prefix("assertion failed: ").map(str::to_string);
         let message = match left {
             Some(_) => head,
             None => message,
@@ -197,6 +198,7 @@ pub(super) fn cmd_test_v2(filter: Option<String>, all: bool, interp: bool) {
             }),
             left,
             right,
+            assertion,
         };
         let file = at.map(|(file, _, _)| file).unwrap_or_default();
         let providers: Vec<String> = t
@@ -546,4 +548,109 @@ impl Runner {
             }
         }
     }
+}
+
+/// `karac check` in a package checks its `_test.kara` files too, as `karac
+/// test` builds them: the cases and the test prelude, beside the package
+/// (design.md § Colocated tests, ruling 2026-10-30). Reports what it finds
+/// in `output`'s form, text and JSONL as it goes and JSON into `json`, and
+/// returns the number of errors.
+pub(super) fn check_package_tests(
+    root: &std::path::Path,
+    lints: &crate::lints::CliLintOverrides,
+    output: OutputMode,
+    json: &mut Vec<String>,
+) -> usize {
+    if !has_test_file(&root.join("src")) {
+        return 0;
+    }
+    let TestFront { mf, tree, tests } = match test_front_checked(None, true) {
+        Ok(front) => front,
+        Err(f) => {
+            match output {
+                OutputMode::Text => {
+                    super::build_cmds::print_parse_errors_text(&f.parse_errors);
+                    super::build_cmds::print_cycles_text(&f.cycles, &f.tree);
+                    super::build_cmds::print_resolve_errors_text(&f.resolve_errors);
+                }
+                OutputMode::Json => {
+                    json.extend(parse_errors_json(&f.parse_errors));
+                    json.extend(cycles_json(&f.cycles, &f.tree));
+                    json.extend(resolve_errors_json(&f.resolve_errors));
+                }
+                OutputMode::Jsonl => {
+                    for e in parse_errors_jsonl(&f.parse_errors)
+                        .into_iter()
+                        .chain(cycles_jsonl(&f.cycles, &f.tree))
+                        .chain(resolve_errors_jsonl(&f.resolve_errors))
+                    {
+                        println!("{e}");
+                    }
+                }
+            }
+            return f.parse_errors.iter().map(|m| m.errors.len()).sum::<usize>()
+                + f.cycles.len()
+                + f.resolve_errors
+                    .iter()
+                    .map(|m| m.errors.len())
+                    .sum::<usize>();
+        }
+    };
+    let amalgam = match combine(&tree, &tests) {
+        Ok(a) => a,
+        Err(e) => {
+            let msg = format!("error[project]: {e}");
+            match output {
+                OutputMode::Json => json.push(format!(
+                    "{{\"severity\":\"error\",\"message\":{}}}",
+                    json_string(&msg)
+                )),
+                _ => eprintln!("{msg}"),
+            }
+            return 1;
+        }
+    };
+    let mut lints = lints.clone();
+    lints.apply_manifest_lints(&mf.lints);
+    let mut pipeline = Pipeline::new(PACKAGE, &amalgam.text)
+        .with_lint_overrides(lints)
+        .strict_core()
+        .with_library();
+    pipeline.profile = mf.profile;
+    pipeline.profile_config = mf.profile_config.clone();
+    pipeline.run_all_checks();
+    let errors = pipeline.total_errors();
+    if errors == 0 {
+        return 0;
+    }
+    match output {
+        OutputMode::Text => super::run_v2::print_diagnostics(&pipeline, Some(&amalgam)),
+        OutputMode::Json => json.extend(
+            collect_diagnostics(&pipeline)
+                .entries
+                .iter()
+                .map(|d| amalgam.remap_json_text(PACKAGE, d)),
+        ),
+        OutputMode::Jsonl => {
+            for d in &collect_diagnostics(&pipeline).entries {
+                println!("{}", amalgam.remap_json_text(PACKAGE, d));
+            }
+        }
+    }
+    errors
+}
+
+fn has_test_file(dir: &std::path::Path) -> bool {
+    std::fs::read_dir(dir).is_ok_and(|entries| {
+        entries.flatten().any(|e| {
+            let p = e.path();
+            if p.is_dir() {
+                has_test_file(&p)
+            } else {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.ends_with("_test.kara"))
+            }
+        })
+    })
 }

@@ -90,7 +90,14 @@ fn test_v2_reports_each_case() {
             wrong.contains("\"location\":{\"file\":\"src/util_test.kara\",\"line\":8,\"col\":5}"),
             "{lane:?}: {wrong}"
         );
-        assert!(wrong.contains("\"message\":\"assertion failed: left != right\""));
+        // The assertion's source text, in the message and on its own
+        // (B-2026-10-30-33).
+        assert!(
+            wrong.contains(
+                "\"message\":\"assertion failed: double(2) == 5\",\"assertion\":\"double(2) == 5\""
+            ),
+            "{lane:?}: {wrong}"
+        );
         // The operands' `Debug` text rides on the event (B-2026-10-22-44).
         assert!(
             wrong.contains("\"left\":\"4\",\"right\":\"5\""),

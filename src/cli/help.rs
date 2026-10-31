@@ -244,7 +244,7 @@ USAGE:
 With a file, compiles that file into `<stem>` (`-o` names another path); a
 file of a package with other modules builds the whole package. Without a
 file, builds the package in the current directory from `src/main.kara` into
-`<root>/<package name>`. The program is checked as `karac check` checks it,
+`<root>/dist/<package name>`. The program is checked as `karac check` checks it,
 built to MIR and compiled to native code (KARAC_MIR_OPT=0..3 sets the IR
 optimisation level, -O2 by default). The flags marked Not on v2 below are
 refused by name: v2 does not honour them yet, or their feature went to the

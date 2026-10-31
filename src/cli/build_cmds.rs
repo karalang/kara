@@ -575,7 +575,7 @@ pub(super) fn print_parse_errors_text(parse_errors: &[ModuleParseErrors]) {
 /// retained so diagnostics can be printed with their original location.
 pub(super) struct ModuleResolveErrors {
     file: PathBuf,
-    errors: Vec<ResolveError>,
+    pub(super) errors: Vec<ResolveError>,
     /// Multi-edit fix envelopes for this module's diagnostics, keyed by the
     /// owning diagnostic's span. Carried alongside `errors` so the
     /// project-mode JSON path advertises the same fixes the single-file path

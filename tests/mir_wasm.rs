@@ -266,7 +266,7 @@ fn wasm_package_build() {
         "build failed: {}",
         String::from_utf8_lossy(&built.stderr)
     );
-    let wasm = root.join("geo_app.wasm");
+    let wasm = root.join("dist/geo_app.wasm");
     assert!(wasm.exists(), "no {}", wasm.display());
     let runner = root.join("run.mjs");
     std::fs::write(&runner, RUNNER).unwrap();

@@ -15,6 +15,8 @@ pub(super) struct TestOutcome {
     pub span: Option<crate::token::Span>,
     pub left: Option<String>,
     pub right: Option<String>,
+    /// A failed assertion's source text (`x > 0`, `a == b`).
+    pub assertion: Option<String>,
 }
 
 /// Emit one JSONL test-runner event on stdout. Schema documented in
@@ -412,6 +414,41 @@ pub(super) struct TestFront {
 /// `core_places`: the tests run on v2, so the tree check takes `ref` on any
 /// named place ([`crate::lints::CliLintOverrides::core_places`]).
 pub(super) fn test_front(filter: Option<&str>, core_places: bool) -> TestFront {
+    match test_front_checked(filter, core_places) {
+        Ok(front) => front,
+        Err(f) => {
+            for entry in parse_errors_jsonl(&f.parse_errors) {
+                println!("{entry}");
+            }
+            for entry in cycles_jsonl(&f.cycles, &f.tree) {
+                println!("{entry}");
+            }
+            for entry in resolve_errors_jsonl(&f.resolve_errors) {
+                println!("{entry}");
+            }
+            for entry in type_errors_jsonl(&f.type_errors) {
+                println!("{entry}");
+            }
+            process::exit(1);
+        }
+    }
+}
+
+/// The package's test files that failed to parse, resolve or check, which
+/// `karac test` reports as JSONL and `karac check` in its own output mode.
+pub(super) struct TestFrontErrors {
+    pub tree: ProgramTree,
+    pub parse_errors: Vec<ModuleParseErrors>,
+    pub cycles: Vec<crate::module::Cycle>,
+    pub resolve_errors: Vec<ModuleResolveErrors>,
+    pub type_errors: Vec<ModuleTypeErrors>,
+}
+
+/// [`test_front`], returning the compile failure instead of reporting it.
+pub(super) fn test_front_checked(
+    filter: Option<&str>,
+    core_places: bool,
+) -> Result<TestFront, Box<TestFrontErrors>> {
     let cwd = match std::env::current_dir() {
         Ok(d) => d,
         Err(e) => {
@@ -582,19 +619,13 @@ pub(super) fn test_front(filter: Option<&str>, core_places: bool) -> TestFront {
         || (!type_errors.is_empty() && !core_places);
 
     if compile_failed {
-        for entry in parse_errors_jsonl(&parse_errors) {
-            println!("{entry}");
-        }
-        for entry in cycles_jsonl(&cycles, &tree) {
-            println!("{entry}");
-        }
-        for entry in resolve_errors_jsonl(&resolve_errors) {
-            println!("{entry}");
-        }
-        for entry in type_errors_jsonl(&type_errors) {
-            println!("{entry}");
-        }
-        process::exit(1);
+        return Err(Box::new(TestFrontErrors {
+            tree,
+            parse_errors,
+            cycles,
+            resolve_errors,
+            type_errors,
+        }));
     }
 
     // Apply filter to the discovery list built before resolve. Sort
@@ -612,7 +643,7 @@ pub(super) fn test_front(filter: Option<&str>, core_places: bool) -> TestFront {
             .cmp(&b.module_id)
             .then_with(|| a.fn_name.cmp(&b.fn_name))
     });
-    TestFront { mf, tree, tests }
+    Ok(TestFront { mf, tree, tests })
 }
 
 /// Subset of `requires` whose resources are NOT currently available.
@@ -706,6 +737,9 @@ pub(super) fn test_fail_fields(
     // `category`, same conditional-presence convention as `left`/`right`.
     if let Some(category) = contract_fault_category(message) {
         s.push_str(&format!(",\"category\":{}", json_string(category)));
+    }
+    if let Some(assertion) = &outcome.assertion {
+        s.push_str(&format!(",\"assertion\":{}", json_string(assertion)));
     }
     if let Some(left) = &outcome.left {
         s.push_str(&format!(",\"left\":{}", json_string(left)));

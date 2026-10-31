@@ -176,7 +176,7 @@ pub(super) fn check_v2_or_exit(
 
 /// The text diagnostics, their places mapped back to the package's files
 /// when the program is a package's combined source.
-fn print_diagnostics(pipeline: &Pipeline, project: Option<&super::project_v2::Amalgam>) {
+pub(super) fn print_diagnostics(pipeline: &Pipeline, project: Option<&super::project_v2::Amalgam>) {
     for block in render_text_diagnostics(pipeline) {
         match project {
             Some(a) => eprintln!("{}", a.remap_text(&pipeline.filename, &block)),

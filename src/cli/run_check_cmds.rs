@@ -726,6 +726,17 @@ pub(super) fn cmd_check_project(
         }
     };
     if let Some(entry) = pc.lone_entry(&root) {
+        // The test files first: the lone file's check ends with its verdict.
+        let mut json = Vec::new();
+        let test_errors = super::test_v2::check_package_tests(&root, &lints, output, &mut json);
+        if test_errors > 0 {
+            match output {
+                OutputMode::Text => println!("\n{test_errors} error(s) found."),
+                OutputMode::Json => println!("{{\"diagnostics\":[{}]}}", json.join(",")),
+                OutputMode::Jsonl => {}
+            }
+            process::exit(1);
+        }
         cmd_check(
             &entry.display().to_string(),
             output,
@@ -766,10 +777,18 @@ pub(super) fn cmd_check_project(
             Err(_) => {}
         }
     }
-    let errors = pc.error_count();
+    let mut test_json = Vec::new();
+    // A package whose own files do not check has nothing for its tests to
+    // build on.
+    let test_errors = match pc.error_count() {
+        0 => super::test_v2::check_package_tests(&root, &lints, output, &mut test_json),
+        _ => 0,
+    };
+    let errors = pc.error_count() + test_errors;
     match output {
         OutputMode::Json => {
             let mut diags: Vec<String> = Vec::new();
+            diags.extend(test_json);
             diags.extend(super::build_cmds::parse_errors_json(&pc.parse_errors));
             diags.extend(super::build_cmds::type_warnings_json(&pc.type_warnings));
             diags.extend(super::build_cmds::cycles_json(&pc.cycles, &pc.tree));

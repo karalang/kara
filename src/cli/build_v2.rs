@@ -60,7 +60,7 @@ pub(super) fn cmd_build_v2_file(filename: &str, a: BuildArgs) {
 }
 
 /// `karac build` with no file on v2: the package in the current directory,
-/// from its `src/main.kara`, into `<root>/<package name>` (or `-o`).
+/// from its `src/main.kara`, into `<root>/dist/<package name>` (or `-o`).
 pub(super) fn cmd_build_v2_project(a: BuildArgs) {
     refuse_unsupported(&a);
     // The CPU listing needs no package.
@@ -192,10 +192,21 @@ pub(super) fn cmd_build_v2_project(a: BuildArgs) {
     if project.is_none() {
         super::run_v2::refuse_lone_package_imports(&root, output);
     }
+    // The package's own output goes in `dist/`, which the scaffold's
+    // `.gitignore` ignores and `karac clean` removes (design.md § Build
+    // cache).
     let exe = a.out_path.map_or_else(
         || {
+            let dist = root.join("dist");
+            if let Err(e) = std::fs::create_dir_all(&dist) {
+                fail_with(
+                    &format!("error: cannot create {}: {e}", dist.display()),
+                    output,
+                );
+                process::exit(1);
+            }
             let name = format!("{}{}", mf.name, exe_suffix(&a));
-            root.join(name).display().to_string()
+            dist.join(name).display().to_string()
         },
         str::to_string,
     );

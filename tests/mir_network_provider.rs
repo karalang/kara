@@ -431,7 +431,7 @@ test "refused names NetError" {
         return;
     }
     let printed = stdout_of(
-        Command::new(root.join("pkg")).output().unwrap(),
+        Command::new(root.join("dist/pkg")).output().unwrap(),
         "package binary",
     );
     assert_eq!(printed, "2 2\n");
