@@ -679,6 +679,10 @@ impl super::Formatter {
                 generic_args,
             } => {
                 self.write_path_with_args(path, generic_args, &expr.span);
+                if fields.is_empty() && spread.is_none() {
+                    self.write_str(" {}");
+                    return;
+                }
                 self.write_str(" {\n");
                 self.push_indent();
                 for fi in fields {

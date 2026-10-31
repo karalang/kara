@@ -231,3 +231,13 @@ fn fmt_keeps_a_literals_escapes() {
     let once = karac::format_source(src).unwrap();
     assert_eq!(once, src);
 }
+
+#[test]
+fn fmt_writes_an_empty_struct_on_one_line() {
+    let src = "struct Unit;\n\nstruct Empty {}\n\nfn main() {\n    let u = Unit {};\n}\n";
+    let once = karac::format_source(src).unwrap();
+    assert_eq!(
+        once,
+        "struct Unit {}\n\nstruct Empty {}\n\nfn main() {\n    let u = Unit {};\n}\n"
+    );
+}

@@ -447,6 +447,14 @@ impl super::Formatter {
         self.write_ident(&s.name);
         self.format_generic_params(&s.generic_params);
         self.format_where_clause(&s.where_clause);
+        if s.fields.is_empty()
+            && s.invariants.is_empty()
+            && s.impl_invariants.is_empty()
+            && !self.has_comment_in(s.span.offset, s.span.offset + s.span.length)
+        {
+            self.write_str(" {}\n");
+            return;
+        }
         self.write_str(" {\n");
         self.push_indent();
         for field in &s.fields {
