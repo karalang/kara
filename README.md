@@ -20,13 +20,13 @@ karac run hello.kara        # Hello, world!
 
 Three things Kāra does that other languages leave to you:
 
-- **Effects drive concurrency.** Functions say what they touch. The compiler checks `par` blocks against those effects, and runs independent work in parallel by itself where it can prove it safe. There is no `async`/`await` and no function colouring.
+- **Effects drive concurrency.** Functions say what they touch. The compiler checks `par` blocks against those effects, and runs independent work in parallel by itself where it can prove it safe and the work is big enough to pay for a task. There is no `async`/`await` and no function colouring.
 - **Ownership without lifetime annotations.** Parameters borrow by default, `own T` takes ownership, and `mut ref T` writes. A returned view's source is inferred from the signature, so there is no `'a` syntax.
 - **Every compiler decision as JSON.** Effects, ownership, concurrency and fixes are queryable, so agents (and you) read exactly what the compiler decided.
 
 ### The whole idea in one program
 
-Two reads from two data sources, written as plain sequential code. The compiler proves the reads independent and runs them concurrently, and the providers that back them are chosen at run time, so a test can swap in fakes:
+Two reads from two data sources, written as plain sequential code. The compiler proves the reads independent, which lets it run them concurrently, and the providers that back them are chosen at run time, so a test can swap in fakes:
 
 ```kara
 // Two data sources behind one trait. A provider supplies each at run time.
@@ -54,7 +54,7 @@ fn total(users: Vec[i64], orders: Vec[i64]) -> i64 {
 
 fn report() {
     // Two reads of two different resources: nothing shared, no conflict.
-    // The compiler proves them independent and runs them concurrently.
+    // The compiler proves them independent, so it may run them at once.
     let users = fetch_users();            // statement 0
     let orders = fetch_orders();          // statement 1
     println(f"{total(users, orders)}");   // statement 2: waits on 0 and 1
@@ -75,10 +75,12 @@ Don't take the concurrency on faith. Ask the compiler what it did:
 ```bash
 $ karac query concurrency app.kara.report      # trimmed
 {"function":"report","total_statements":3,
- "parallel_groups":[{"statements":[0,1],"reason":"independent reads on different resources"}], ...}
+ "parallel_groups":[{"statements":[0,1],"reason":"independent reads on different resources"}], ...,
+ "auto_par":[{"function":"report{OrderDB=Fixed, UserDB=Fixed}","kind":"statements","tasks":false,
+   "reason":"0 of its 2 statements nest loops or recurse"}]}
 ```
 
-There is no `par`, no `async` and no thread code in the source.
+`parallel_groups` is the proof: the two reads may run at once. `auto_par` is the cost call for this build, made per provider: reads this small cost less than a task, so they run in order. Give `load` real work (nested loops, or recursion) and the same source runs the two reads as concurrent tasks. Either way there is no `par`, no `async` and no thread code in the source.
 
 ---
 
