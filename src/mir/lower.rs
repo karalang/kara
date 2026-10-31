@@ -24979,7 +24979,7 @@ fn frontend(src: &str, check_only: bool) -> Result<Frontend, String> {
         .iter()
         .find(|e| !crate::resolver::resolve_kind_is_note(&e.kind))
     {
-        return Err(format!("resolve: {err:?}"));
+        return Err(resolve_failure(err));
     }
     let mut r = r;
     let mut tc = crate::typecheck_with_pruned_library_source(&program, &r, pruned.clone());
@@ -24995,7 +24995,10 @@ fn frontend(src: &str, check_only: bool) -> Result<Frontend, String> {
             crate::typecheck_with_pruned_library_source(p, r, pruned.clone())
         });
         if let Some(e) = errs.first() {
-            return Err(format!("comptime: {e:?}"));
+            return Err(format!(
+                "comptime: {}:{}: {}",
+                e.span.line, e.span.column, e.message
+            ));
         }
         crate::node_ids::assign_node_ids(&mut program);
         r = crate::resolve_v2(&program);
@@ -25004,7 +25007,7 @@ fn frontend(src: &str, check_only: bool) -> Result<Frontend, String> {
             .iter()
             .find(|e| !crate::resolver::resolve_kind_is_note(&e.kind))
         {
-            return Err(format!("resolve: {err:?}"));
+            return Err(resolve_failure(err));
         }
         tc = crate::typecheck_with_pruned_library_source(&program, &r, pruned.clone());
         if let Some(e) = first_error(&tc.errors) {
@@ -25031,6 +25034,26 @@ fn frontend(src: &str, check_only: bool) -> Result<Frontend, String> {
         frozen,
         check_only,
     })
+}
+
+/// A resolve error that stops the MIR front end, as `line:column: message`
+/// with its suggestion; one in an item a derive or a schema generated says
+/// so, since its place is the item's site (B-2026-10-31-5).
+fn resolve_failure(err: &crate::resolver::ResolveError) -> String {
+    let generated = if crate::comptime::is_spliced(&err.span) {
+        "in the code generated here: "
+    } else {
+        ""
+    };
+    let mut out = format!(
+        "resolve: {}:{}: {generated}{}",
+        err.span.line, err.span.column, err.message
+    );
+    // A rename it suggests is of text no file holds.
+    if let Some(s) = err.suggestion.as_ref().filter(|_| generated.is_empty()) {
+        out.push_str(&format!(" (help: {s})"));
+    }
+    out
 }
 
 /// A program lowered from `roots` rather than from `main`: the functions a

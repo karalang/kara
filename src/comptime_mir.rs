@@ -38,6 +38,12 @@ pub const STEP_LIMIT: u64 = 1 << 26;
 /// evaluator's rule, B-2026-07-08-15).
 const SPLICE_BASE: usize = 1_000_000_000;
 
+/// Whether `span` is in an item a derive or a schema generated: in a splice
+/// window, below the library's own spans.
+pub fn is_spliced(span: &Span) -> bool {
+    (SPLICE_BASE..crate::prelude::gated_span_base(0)).contains(&span.offset)
+}
+
 enum JobKind {
     /// A `comptime { .. }` block, by its span, with its type.
     Block { ty: Option<Type> },

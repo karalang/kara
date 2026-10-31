@@ -495,9 +495,11 @@ comptime fn proto_encode_repeated(
     evnames: ref Vec[String],
 ) -> String {
     let tag = f"{idx}";
-    let elem = "self." + fname + "[i" + tag + "]";
-    let hdr = "let mut i" + tag + " = 0; while i" + tag + " < self." + fname + ".len() { ";
-    let step = " i" + tag + " = i" + tag + " + 1; }";
+    // `ix`, not `i`: `i` + a field number of 8, 16, 32, 64 or 128 spells a
+    // primitive type, which cannot be bound (B-2026-10-31-5).
+    let elem = "self." + fname + "[ix" + tag + "]";
+    let hdr = "let mut ix" + tag + " = 0; while ix" + tag + " < self." + fname + ".len() { ";
+    let step = " ix" + tag + " = ix" + tag + " + 1; }";
     if is_enum {
         // Packed enums: each element's variant index as a concatenated varint.
         "if not self." + fname + ".is_empty() { let mut p" + tag + " = Vec.new(); " + hdr

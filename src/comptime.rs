@@ -15,7 +15,7 @@ use crate::token::Span;
 
 #[path = "comptime_mir.rs"]
 mod on_mir;
-pub use on_mir::{evaluate_on_mir, STEP_LIMIT};
+pub use on_mir::{evaluate_on_mir, is_spliced, STEP_LIMIT};
 
 /// Parses `s` as one Kāra expression: an `ast.expr(s)` quote.
 pub(crate) fn parse_quoted_expr(s: &str) -> Result<Expr, String> {

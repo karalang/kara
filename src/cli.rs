@@ -1322,12 +1322,31 @@ impl Pipeline {
             .library_len
             .unwrap_or_else(|| crate::prelude::gated_span_base(0));
         let user = |s: &crate::token::Span| s.offset < n;
+        // A resolve error in an item a derive or a schema generated stops the
+        // build, so it is kept too, at the place that asked for the item,
+        // which its spans carry; its notes are not the user's (B-2026-10-31-5).
+        let generated = crate::comptime::is_spliced;
+        let here = "in the code generated here: ";
         // A parse error in the library is kept: the library is fixed text,
         // so one means the library is broken, and the check of the user's
         // program against what did parse would be wrong.
         if let Some(r) = self.resolved.as_mut() {
-            r.errors.retain(|e| user(&e.span));
+            r.errors.retain(|e| {
+                user(&e.span)
+                    || (generated(&e.span) && !crate::resolver::resolve_kind_is_note(&e.kind))
+            });
+            // Its edits would land in text no file holds.
+            for e in r.errors.iter_mut().filter(|e| generated(&e.span)) {
+                if !e.message.starts_with(here) {
+                    e.message = format!("{here}{}", e.message);
+                }
+                e.suggestion = None;
+                e.replacement = None;
+            }
         }
+        // A type error there is not kept: check's strict typing asks of a
+        // derive's code what the build does not (serde's generated calls
+        // carry no `mut` markers), so it would refuse programs that run.
         if let Some(t) = self.typed.as_mut() {
             t.errors.retain(|e| user(&e.span));
             t.warnings.retain(|e| user(&e.span));

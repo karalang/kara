@@ -57,13 +57,6 @@
       "reason": "fragment: `Duration` is imported from std.time in the next block",
       "first_diagnostic": "undefined type 'Duration'"
     },
-    "example:protobuf_schema.kara": {
-      "where": "examples/protobuf_schema.kara",
-      "heading": "example program",
-      "outcome": "RUN-FAILED",
-      "reason": "compiler: check passes, every executing surface fails resolving `i8` (B-2026-10-31-5)",
-      "first_diagnostic": null
-    },
     "package:weave": {
       "where": "examples/weave/kara.toml",
       "heading": "example package",
