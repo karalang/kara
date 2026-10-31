@@ -422,7 +422,7 @@ impl<'a> super::TypeChecker<'a> {
                                 format!(
                                     "const generic argument on user-defined type '{}' is \
                                      not yet supported in this slice; only the built-in \
-                                     `Array[T, N]` accepts const-args at v1",
+                                     `Array[T, N]` accepts const-args in 0.9",
                                     target
                                 ),
                                 expr.span,
@@ -966,8 +966,8 @@ impl<'a> super::TypeChecker<'a> {
                     }
                     _ if mentions_scope_param(expr, generic_scope) => {
                         self.type_error(
-                            "shape-param arithmetic (`[A + B]`, `[N * 2]`) is deferred to \
-                             v1.5 — it requires the type-level const-evaluator (design.md \
+                            "shape-param arithmetic (`[A + B]`, `[N * 2]`) is not in 0.9: \
+                             it requires the type-level const-evaluator (design.md \
                              § Shape-param arithmetic)"
                                 .to_string(),
                             expr.span,

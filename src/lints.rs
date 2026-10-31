@@ -109,7 +109,7 @@ pub const STARTER_LINTS: &[LintInfo] = &[
         default_level: LintLevel::Warn,
         description:
             "Use of an item annotated with `#[unstable]` — the API surface may change \
-             before v1 lock. Opt in with `#[allow(unstable_api)]` on the enclosing item \
+             before 1.0. Opt in with `#[allow(unstable_api)]` on the enclosing item \
              or globally via `[lints].allow_unstable_api = true` in `kara.toml`.",
     },
     LintInfo {

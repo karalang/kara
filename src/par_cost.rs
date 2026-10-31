@@ -133,7 +133,7 @@ impl FanoutVerdict {
             ),
             FanoutVerdict::DeclinedNonIntegerAccumulator => concat!(
                 "accumulator is not a supported integer type: float reductions need an ",
-                "#[fp_reassoc] reassociation opt-in that does not exist in v1, so the loop ",
+                "#[fp_reassoc] reassociation opt-in that does not exist in 0.9, so the loop ",
                 "lowers sequentially"
             ),
         }

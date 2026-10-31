@@ -1438,7 +1438,7 @@ impl Walk<'_, '_> {
                     call.span,
                     format!(
                         "`Stats.{method}` is not in the standard library: statistics come \
-                         with the `kara-data` package after v1 (docs/deferred.md § \
+                         with the `kara-data` package, which is not in 0.9 (docs/deferred.md § \
                          Numerical types)"
                     ),
                 ));
@@ -1454,7 +1454,7 @@ impl Walk<'_, '_> {
                     call.span,
                     format!(
                         "`{ty}.{method}` is not in the standard library: `{ty}` comes \
-                         with the `kara-data` package after v1 ({doc})"
+                         with the `kara-data` package, which is not in 0.9 ({doc})"
                     ),
                 ));
                 return;

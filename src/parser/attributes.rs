@@ -388,7 +388,7 @@ impl super::Parser {
                                 kind: crate::parser::ParseErrorKind::Syntax,
                                 message: format!(
                                     "unknown target `{target_name}` in `#[target(...)]` — \
-                                     the v1 target set is closed: {}",
+                                     the target set is closed: {}",
                                     crate::target::V1_TARGETS.join(", "),
                                 ),
                                 span: arg.span,

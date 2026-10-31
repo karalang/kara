@@ -210,7 +210,7 @@ impl super::Parser {
                         kind: crate::parser::ParseErrorKind::Syntax,
                         message: "error[E_ATTR_ON_ASSOC_TYPE_DECL]: \
                                   attributes are not supported on \
-                                  associated-type declarations at v1; \
+                                  associated-type declarations in 0.9; \
                                   remove the attribute"
                             .to_string(),
                         span: item_attributes[0].span,
@@ -529,7 +529,7 @@ impl super::Parser {
         };
         self.error_at_kind(
             ParseErrorKind::ReservedSyntax,
-            &format!("an effect clause on an impl header is not valid v1 syntax — {remedy}"),
+            &format!("an effect clause on an impl header is not valid syntax — {remedy}"),
             span,
         );
     }

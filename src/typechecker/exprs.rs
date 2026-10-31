@@ -9689,7 +9689,7 @@ impl<'a> super::TypeChecker<'a> {
                                         format!(
                                             "rank-{} tensor requires {} index component(s), \
                                              found {} — index every dim explicitly \
-                                             (`t[i, :, :]` slicing is v1.5)",
+                                             (`t[i, :, :]` slicing is not in 0.9)",
                                             dims.len(),
                                             dims.len(),
                                             arity

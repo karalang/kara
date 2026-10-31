@@ -100,8 +100,8 @@ Cell semantics:
   - Each statement-style cell runs as the body of an implicit `fn main()`,
     so `?` is legal.
   - `let` / `let mut` bindings persist across statement cells: cell N's
-    `let x = 5;` is in scope when cell N+1 evaluates `println(x);`. v1
-    uses source-replay — the RHS re-runs each cell — so side-effecting
+    `let x = 5;` is in scope when cell N+1 evaluates `println(x);`. The
+    REPL uses source-replay — the RHS re-runs each cell — so side-effecting
     bindings (`let log = read_file(...)`) recompute every time. Use
     `:reset` to drop the replay buffer if it gets expensive.
   - Mutation in a statement cell (`x += 1;`) does NOT survive to the

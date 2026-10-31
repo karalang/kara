@@ -5405,7 +5405,7 @@ impl<'a> TypeChecker<'a> {
         // `lint_name`. B-2026-08-18-25.
         let mut message = format!(
             "use of `#[unstable]` item `{display_name}` — the API \
-             surface may change before v1 lock",
+             surface may change before 1.0",
         );
         if let Some(note) = note {
             message.push_str(&format!(": {note}"));

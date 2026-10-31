@@ -5392,7 +5392,7 @@ impl<'a> super::TypeChecker<'a> {
                 format!(
                     concat!(
                         "error[E_GPU_REDUCE_BUFFER]: `gpu.matmul` requires a rank-2 left ",
-                        "operand, found rank {} — batched matmul is v1.5, on both surfaces"
+                        "operand, found rank {} — batched matmul is not in 0.9, on both surfaces"
                     ),
                     a_shape.len()
                 ),

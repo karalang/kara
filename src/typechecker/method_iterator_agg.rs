@@ -351,7 +351,7 @@ impl<'a> super::TypeChecker<'a> {
                 self.type_error(
                     format!(
                         "`.{method}()` is not available on `{name}` — line iterators support no \
-                         adaptors/terminals at v1; iterate directly with `for line in <iter>` and \
+                         adaptors/terminals in 0.9; iterate directly with `for line in <iter>` and \
                          filter/map inside the loop body (each item is `Result[String, IoError]`)"
                     ),
                     *span,

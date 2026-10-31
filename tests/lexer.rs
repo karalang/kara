@@ -1547,7 +1547,7 @@ fn test_v60_reserved_hash_guarded_string() {
     assert_eq!(
         tokens[0],
         Token::Error(
-            r##"`#`-guarded string syntax (`#"..."#`) is reserved for future use; not available in v1"##.to_string()
+            r##"`#`-guarded string syntax (`#"..."#`) is reserved for future use; not available in 0.9"##.to_string()
         ),
         "expected reserved-hash-string error, got {:?}", tokens[0]
     );
@@ -1556,7 +1556,7 @@ fn test_v60_reserved_hash_guarded_string() {
     assert_eq!(
         tokens[0],
         Token::Error(
-            r###"`#`-guarded string syntax (`##"..."##`) is reserved for future use; not available in v1"###.to_string()
+            r###"`#`-guarded string syntax (`##"..."##`) is reserved for future use; not available in 0.9"###.to_string()
         ),
         "expected reserved-double-hash-string error, got {:?}", tokens[0]
     );
@@ -1565,7 +1565,7 @@ fn test_v60_reserved_hash_guarded_string() {
     assert_eq!(
         tokens[0],
         Token::Error(
-            "`##` (multi-`#` cluster) is reserved for future use; only `#[...]` attribute syntax is recognized in v1".to_string()
+            "`##` (multi-`#` cluster) is reserved for future use; only `#[...]` attribute syntax is recognized in 0.9".to_string()
         ),
         "expected reserved-multi-hash error, got {:?}", tokens[0]
     );

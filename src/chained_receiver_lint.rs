@@ -157,7 +157,7 @@ fn diagnostic(receiver: &Expr, ctx: &str) -> TypeError {
     };
     TypeError {
         message: format!(
-            "chained field receivers (`a.b.c…`) are deferred to v1.x in codegen, so `{chain}` \
+            "chained field receivers (`a.b.c…`) are not built by the compiled backend this check answers for, so `{chain}` \
              as the receiver of {ctx} checks clean but fails `karac build`; {remedy}. \
              (The tree-walk interpreter accepts this shape — `-A {LINT_NAME}` if the program \
              is only ever run with `--interp`.)"

@@ -588,10 +588,10 @@ impl super::Parser {
                     let msg = match reason {
                         ImplTraitBlockReason::NestedGenericArg => {
                             "error[E_IMPL_TRAIT_IN_NESTED_POSITION]: `impl Trait` is not \
-                             permitted inside a nested generic-argument position at v1; \
+                             permitted inside a nested generic-argument position in 0.9; \
                              introduce an explicit generic parameter on the enclosing \
                              function (e.g. `fn f[T: Trait](x: Vec[T])`) instead. \
-                             Deep-position `impl Trait` is post-v1 — see design.md \
+                             Deep-position `impl Trait` is not in 0.9 — see design.md \
                              § `impl Trait` (Existential Types)."
                                 .to_string()
                         }

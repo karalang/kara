@@ -865,9 +865,9 @@ fn group_key_name(k: &ExprNode) -> Result<String, String> {
         ExprNode::Col(n) => Ok(n.clone()),
         ExprNode::Alias { name, expr } => match &**expr {
             ExprNode::Col(_) => Ok(name.clone()),
-            _ => Err("LazyFrame.group_by: each key must be a bare col(..) in v1".to_string()),
+            _ => Err("LazyFrame.group_by: each key must be a bare col(..) in 0.9".to_string()),
         },
-        _ => Err("LazyFrame.group_by: each key must be a bare col(..) in v1".to_string()),
+        _ => Err("LazyFrame.group_by: each key must be a bare col(..) in 0.9".to_string()),
     }
 }
 
@@ -898,7 +898,7 @@ fn agg_output_name(a: &ExprNode) -> Result<String, String> {
         ExprNode::Agg { op, arg } => match &**arg {
             ExprNode::Col(c) => Ok(format!("{c}_{}", AGG_NAMES[*op as usize])),
             _ => Err(
-                "LazyGroupBy.agg: the aggregate argument must be a bare col(..) in v1".to_string(),
+                "LazyGroupBy.agg: the aggregate argument must be a bare col(..) in 0.9".to_string(),
             ),
         },
         _ => Err(
@@ -2128,7 +2128,7 @@ pub unsafe extern "C" fn karac_lazy_new(df_ctrl: *const u8) -> *const LazyPlan {
                                 if u > i64::MAX as u64 {
                                     lazy_abort(
                                         "LazyFrame: u64 column value exceeds the i64 evaluation \
-                                     range supported by the v1 lazy engine",
+                                     range supported by the lazy engine",
                                     );
                                 }
                                 u as i64
@@ -2167,7 +2167,7 @@ pub unsafe extern "C" fn karac_lazy_new(df_ctrl: *const u8) -> *const LazyPlan {
                     ColData::Str(v)
                 }
                 _ => lazy_abort(
-                    "LazyFrame: unsupported column dtype for the v1 lazy engine \
+                    "LazyFrame: unsupported column dtype for the lazy engine \
                  (supported: bool / signed / unsigned ints, f32/f64, String)",
                 ),
             };

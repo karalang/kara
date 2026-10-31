@@ -2151,7 +2151,7 @@ impl<'a> super::TypeChecker<'a> {
                         format!(
                             "shape rank mismatch in element-wise tensor op: '{}' vs '{}' — \
                              tensor-tensor arithmetic requires the same rank (broadcasting is \
-                             v1.5; see broadcast_add / broadcast_mul)",
+                             not in 0.9; see broadcast_add / broadcast_mul)",
                             type_display(left_ty),
                             type_display(right_ty)
                         ),
@@ -2169,7 +2169,7 @@ impl<'a> super::TypeChecker<'a> {
                                 format!(
                                     "shape dim {} mismatch in element-wise tensor op: '{}' vs \
                                      '{}' — operands must have an identical shape (broadcasting \
-                                     is v1.5; see broadcast_add / broadcast_mul)",
+                                     is not in 0.9; see broadcast_add / broadcast_mul)",
                                     i,
                                     type_display(left_ty),
                                     type_display(right_ty)
@@ -2242,7 +2242,7 @@ impl<'a> super::TypeChecker<'a> {
                     format!(
                         "{} requires the tensor's rank to be statically known; \
                          a bare-`S` or splice-bearing shape isn't supported here \
-                         (rank-polymorphic tensor arithmetic is v1.5 shape arithmetic)",
+                         (rank-polymorphic tensor arithmetic is not in 0.9)",
                         what
                     ),
                     *span,
@@ -4671,7 +4671,7 @@ impl<'a> super::TypeChecker<'a> {
                 if !matches!(operand.kind, ExprKind::Index { .. }) && !core_place {
                     self.type_error(
                         "error[E_REF_OPERAND_UNSUPPORTED]: only `ref <sequence>[i]` is \
-                         supported in v1; borrowing this expression is not yet \
+                         supported in 0.9; borrowing this expression is not yet \
                          implemented"
                             .to_string(),
                         *span,

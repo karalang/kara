@@ -726,10 +726,8 @@ impl<'a> super::Resolver<'a> {
                 self.errors.push(ResolveError {
                     message: "error[E_DEPRECATED_ON_FIELD]: \
                               `#[deprecated]` on individual struct fields \
-                              is post-v1; only item-level deprecation is \
-                              supported. Use-site detection for field \
-                              reads/writes is bundled with the post-v1 \
-                              lint expansion."
+                              is not in 0.9; only item-level deprecation is \
+                              supported."
                         .to_string(),
                     span: attr.span,
                     kind: ResolveErrorKind::DeprecatedOnField,
@@ -839,7 +837,7 @@ impl<'a> super::Resolver<'a> {
                          trait-impl method, a trait method declaration, an \
                          `extern \"C\" fn` definition, or a `Drop` destructor. To \
                          hint every method of an `impl` block, annotate each method \
-                         (block-level shorthand is post-v1).",
+                         (block-level shorthand is not in 0.9).",
                     ),
                     span: attr.span,
                     kind: ResolveErrorKind::CodegenHintInvalidTarget,
@@ -946,7 +944,7 @@ impl<'a> super::Resolver<'a> {
                     message: format!(
                         "error[E_UNKNOWN_PROFILE]: \
                          unknown profile `{name}` in `#[profile(...)]` on \
-                         `fn {fn_name}` — the v1 profiles are {known}",
+                         `fn {fn_name}` — the profiles are {known}",
                         fn_name = f.name,
                         known = KNOWN.join(", "),
                     ),

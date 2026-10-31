@@ -15371,7 +15371,7 @@ fn impl_header_effect_clause_is_rejected_as_reserved_syntax() {
         karac::parser::ParseErrorKind::ReservedSyntax
     );
     assert!(
-        errors[0].message.contains("not valid v1 syntax"),
+        errors[0].message.contains("not valid syntax"),
         "message was: {}",
         errors[0].message
     );

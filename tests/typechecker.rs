@@ -34508,9 +34508,9 @@ fn test_shape_param_arithmetic_deferred() {
          fn main() {}\n",
     );
     assert!(
-        errors
-            .iter()
-            .any(|e| e.message.contains("deferred to v1.5")),
+        errors.iter().any(|e| e
+            .message
+            .contains("shape-param arithmetic (`[A + B]`, `[N * 2]`) is not in 0.9")),
         "{errors:?}",
     );
 }

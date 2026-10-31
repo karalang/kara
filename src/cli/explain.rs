@@ -1585,7 +1585,7 @@ only when all four are present.
 They have no trait and cannot be implemented.
 
 Compound assignment desugars through the binary operator: `a += b` means
-`a = a + b`, checked under `Add`. There is no `AddAssign` trait in v1.
+`a = a + b`, checked under `Add`. There is no `AddAssign` trait in 0.9.
 When `a` is a `mut ref T` lvalue the desugar is assign-through —
 `*a = *a + b` — so the caller's value is updated rather than the local
 name being rebound.
@@ -1646,7 +1646,7 @@ will actually see, followed by the fix.
     does take the other operand's type, so `(x: i32) + 2` is fine; it is
     only two typed expressions that never silently widen.
 
-4.  user-defined `impl Index for T` is not supported in v1;
+4.  user-defined `impl Index for T` is not supported in 0.9;
     operator traits are stdlib-only
 
     Every command dispatches the arithmetic and bitwise

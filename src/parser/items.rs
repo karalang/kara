@@ -2213,7 +2213,7 @@ impl super::Parser {
             self.error(&format!(
                 "error[E_UNION_GENERICS_FORBIDDEN]: generic parameters are not \
                  allowed on union declarations; `union {name}[…]` is rejected — \
-                 v1 FFI unions are non-generic per design.md § FFI Unions",
+                 FFI unions are non-generic per design.md § FFI Unions",
             ));
             // Best-effort recovery: skip until we see `{` or run out.
             while !self.check(&Token::LeftBrace) && !self.is_at_end() {
@@ -2233,7 +2233,7 @@ impl super::Parser {
         if self.at_kw("where") {
             self.error(
                 "error[E_UNION_WHERE_FORBIDDEN]: where-clauses are not allowed \
-                 on union declarations; v1 FFI unions are non-generic so there \
+                 on union declarations; FFI unions are non-generic so there \
                  is nothing to bound",
             );
             self.advance();

@@ -2306,7 +2306,7 @@ pub(super) fn emit_toolchain_mismatch(
     match output {
         OutputMode::Text => {
             eprintln!("error[{code}]: {primary}");
-            eprintln!("   = note: install a matching toolchain via `karaup install {}` (karaup ships post-v1)", mismatch.required);
+            eprintln!("   = note: install a matching toolchain via `karaup install {}` (karaup is not in 0.9)", mismatch.required);
             eprintln!("   = help: or relax the `version` constraint in `karac-toolchain.toml` to admit the active toolchain");
         }
         OutputMode::Json => {

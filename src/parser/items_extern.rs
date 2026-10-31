@@ -278,7 +278,7 @@ impl super::Parser {
 
         if self.check(&Token::LeftBracket) {
             self.error(
-                "generic `host fn` declarations are not permitted in v1 — \
+                "generic `host fn` declarations are not permitted in 0.9 — \
                  monomorphizing across the host boundary requires host-side \
                  binding-layer cooperation (design.md § Host Functions > \
                  Parameter and return types)",

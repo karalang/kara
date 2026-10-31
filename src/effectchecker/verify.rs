@@ -518,7 +518,7 @@ impl<'a> super::EffectChecker<'a> {
                     "{subject} requires a build with `panic = \"unwind\"`, but this build is \
                      abort-only. The \"C-unwind\" ABI propagates an unwinding panic across the \
                      FFI boundary, which needs a stack unwinder the abort strategy does not \
-                     provide (v1 is abort-only; the unwind backend is a v1.x feature). Use \
+                     provide (0.9 is abort-only). Use \
                      `extern \"C\"` instead — a body panic auto-aborts at the boundary — or, for \
                      a C-shaped error, return a status/`Result`. See design.md § Panic Semantics \
                      at the FFI Boundary."
@@ -564,7 +564,7 @@ impl<'a> super::EffectChecker<'a> {
         for (name, span) in offenders {
             self.errors.push(EffectError {
                 message: format!(
-                    "exported `extern \"C\" fn '{name}'` suspends, but the v1 C-export boundary \
+                    "exported `extern \"C\" fn '{name}'` suspends, but the C-export boundary \
                      is synchronous-only: a C caller drives no Kāra scheduler, so a suspending \
                      export cannot yield on a bare foreign thread. Expose a *blocking* wrapper \
                      that owns a runtime-scoped task internally, or keep the suspending work \

@@ -743,13 +743,13 @@ impl<'a> Lexer<'a> {
         }
         let msg = if consumed_string {
             format!(
-                "`#`-guarded string syntax (`{}\"...\"{}`) is reserved for future use; not available in v1",
+                "`#`-guarded string syntax (`{}\"...\"{}`) is reserved for future use; not available in 0.9",
                 "#".repeat(leading_hashes),
                 "#".repeat(leading_hashes)
             )
         } else {
             format!(
-                "`{}` (multi-`#` cluster) is reserved for future use; only `#[...]` attribute syntax is recognized in v1",
+                "`{}` (multi-`#` cluster) is reserved for future use; only `#[...]` attribute syntax is recognized in 0.9",
                 "#".repeat(leading_hashes)
             )
         };
@@ -1747,7 +1747,7 @@ impl<'a> Lexer<'a> {
 
         if let Some(nc) = non_ascii_seen {
             return self.make_spanned(Token::Error(format!(
-                "non-ASCII identifier (containing '{nc}') is deferred to a future edition; identifiers must be ASCII in v1"
+                "non-ASCII identifier (containing '{nc}') is deferred to a future edition; identifiers must be ASCII in 0.9"
             )));
         }
 
@@ -1948,7 +1948,7 @@ impl<'a> Lexer<'a> {
                 break;
             }
             self.make_spanned(Token::Error(format!(
-                "non-ASCII identifier (containing '{cp}') is deferred to a future edition; identifiers must be ASCII in v1"
+                "non-ASCII identifier (containing '{cp}') is deferred to a future edition; identifiers must be ASCII in 0.9"
             )))
         } else {
             self.make_spanned(Token::Error(format!("Unexpected character: '{cp}'")))

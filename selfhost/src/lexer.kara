@@ -1829,11 +1829,11 @@ impl Lexer {
             m.push_str(repeat_hash(leading_hashes));
             m.push_str("\"...\"");
             m.push_str(repeat_hash(leading_hashes));
-            m.push_str("`) is reserved for future use; not available in v1");
+            m.push_str("`) is reserved for future use; not available in 0.9");
         } else {
             m.push_str("`");
             m.push_str(repeat_hash(leading_hashes));
-            m.push_str("` (multi-`#` cluster) is reserved for future use; only `#[...]` attribute syntax is recognized in v1");
+            m.push_str("` (multi-`#` cluster) is reserved for future use; only `#[...]` attribute syntax is recognized in 0.9");
         }
         self.make_spanned(Token.Error(m))
     }
@@ -2312,7 +2312,7 @@ fn out_of_range_int(text: String, radix: i64, sfx: own String) -> Token {
 fn non_ascii_ident_msg(c: char) -> String {
     let mut m = "non-ASCII identifier (containing '".to_string();
     m.push(c);
-    m.push_str("') is deferred to a future edition; identifiers must be ASCII in v1");
+    m.push_str("') is deferred to a future edition; identifiers must be ASCII in 0.9");
     m
 }
 

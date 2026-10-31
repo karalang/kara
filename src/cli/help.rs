@@ -20,7 +20,7 @@ COMMANDS:
                       `--platform=all` sweeps every one, which is how a
                       platform split is verified to cover every OS from a
                       single machine. `--targets=<a,b>` / `--targets=all`
-                      sweeps v1 compilation targets, as does a manifest
+                      sweeps the named compilation targets, as does a manifest
                       `[build] targets` list.
     build [file]      Compile (check + effects + ownership).
                       With no <file>, builds the current project: walks up
@@ -210,7 +210,7 @@ OPTIONS:
                             Useful for CI matrices that advertise
                             multi-profile compatibility. Exits non-zero
                             if any profile fails.
-    --targets=<list|all>    Run the full pipeline once per v1 compilation
+    --targets=<list|all>    Run the full pipeline once per named compilation
                             target (native, wasm_browser, wasm_wasi, gpu),
                             parameterizing the target-provided resource
                             set each time. Diagnostics are tagged with
@@ -272,7 +272,7 @@ OPTIONS:
                             scripts that ask for it keep working).
     --enable-hot-swap       Emit PLT-style indirection for extern-public
                             module symbols so the AOT artifact format stays
-                            forward-compatible with the post-v1 continuous-
+                            forward-compatible with a later continuous-
                             PGO + shared-object reload story. Off by default.
                             Incompatible with embedded / kernel profiles.
     --no-proxy              Opt out of the registry proxy at
@@ -289,7 +289,7 @@ OPTIONS:
                             `./vendor/` from the current resolution.
                             Implies --no-proxy (the redundant note is
                             suppressed). See the OFFLINE section below.
-    --target=<name|triple>  Compilation target. A v1 target NAME
+    --target=<name|triple>  Compilation target. A target NAME
                             (native, wasm_wasi, wasm_browser; gpu is
                             recognized but not standalone-buildable)
                             selects the cross-compile target:
@@ -396,13 +396,13 @@ OPTIONS:
                             times emits warning[monomorphization-budget];
                             >= M fails the build. Either threshold may be
                             given alone; warn must be <= error. Off by
-                            default (opt-in; default thresholds are a v1.x
-                            follow-up). Single-file build only. Inspect the
+                            default (opt-in; there are no default thresholds
+                            in 0.9). Single-file build only. Inspect the
                             same counts with `karac query monomorphization`.
     -h, --help              Print this message
 
 TARGETS:
-    v1 target names (`native`, `wasm_browser`, `wasm_wasi`, `gpu`)
+    Target names (`native`, `wasm_browser`, `wasm_wasi`, `gpu`)
     select the COMPILATION target: `#[target(...)]`-gated items,
     the per-target provided-resource effect gate (E0411), codegen,
     and the link step all key on it. `--target=wasm_wasi` builds a
@@ -483,8 +483,8 @@ KINDS:
                        (Rc/Arc), Arc-provider wraps, borrow-flag
                        fields, partition-guard sites, auto-clone
                        insertions. Per design.md § Compiler Query
-                       API. v1 reports static counts only —
-                       runtime attribution is post-v1.
+                       API. 0.9 reports static counts only —
+                       runtime attribution is not in 0.9.
     attributes         JSON list of every multi-segment attribute
                        (`#[diagnostic::*]`, `#[karafmt::*]`, etc.).
                        Tool-facing read surface for the
@@ -494,7 +494,7 @@ KINDS:
                        `#[karafmt::*]` occurrence).
     queries            Compiler queries channel — JSON envelope
                        collating every pipeline-phase-emitted
-                       `CompilerQuery`. v1 ships an empty array
+                       `CompilerQuery`. 0.9 ships an empty array
                        while the catalogue is being populated; the
                        command surface is stable so external
                        tooling can integrate now. See design.md
@@ -504,9 +504,9 @@ KINDS:
                        `(T1..Tk)` tuples plus the first call site
                        that produced each. Surfaces the cost named
                        in design.md § Effect Polymorphism > Cost
-                       Properties. v1 reports type tuples; the
+                       Properties. 0.9 reports type tuples; the
                        per-instance `effects` slot is reserved and
-                       always empty in v1.
+                       always empty in 0.9.
     affected-by        Call-graph reach query. Target forms:
                          <file.kara>                whole-file seed
                          <file.kara>:<line>         single line seed
@@ -709,8 +709,7 @@ FLAGS:
     --backend          Backend HTTP server skeleton (default): `src/main.kara`
                        binds `std.http`'s `Server.serve` on 127.0.0.1:8080,
                        dispatches manually on `req.path()`, ships a
-                       `/health` endpoint. Reinforces the v1
-                       \"default-being-backend\" positioning.
+                       `/health` endpoint.
     --lib              Library project: `src/lib.kara` with a sample
                        `pub fn add`.
     --cli              Command-line tool: `src/main.kara` reads the file
