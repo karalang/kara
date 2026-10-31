@@ -273,12 +273,12 @@ pub struct FrozenHints {
 }
 
 /// What an `extern "C"` signature with a type no backend passes to C yet
-/// reads as, in a "... is not lowered yet" error: only integers, `bool` and
-/// raw pointers cross so far.
+/// reads as, in a "... is not lowered yet" error: integers, `bool`, `f32`,
+/// `f64` and raw pointers cross so far (B-2026-10-31-32).
 fn crossing(name: &str) -> String {
     format!(
         "a parameter or return type of the `extern \"C\"` function `{name}` other than an \
-         integer, `bool` or raw pointer"
+         integer, `bool`, `f32`, `f64` or raw pointer"
     )
 }
 
@@ -1708,7 +1708,13 @@ impl<'a> Lcx<'a> {
                     return None;
                 };
                 self.primitive(name).filter(|&t| {
-                    matches!(self.tys.tcx().kind(t), HK::Int(_) | HK::UInt(_) | HK::Bool)
+                    matches!(
+                        self.tys.tcx().kind(t),
+                        HK::Int(_)
+                            | HK::UInt(_)
+                            | HK::Bool
+                            | HK::Float(FloatSize::F32 | FloatSize::F64)
+                    )
                 })
             }
             ast::TypeKind::Tuple(ts) if ts.is_empty() => Some(self.tys.tcx().intern(HK::Unit)),

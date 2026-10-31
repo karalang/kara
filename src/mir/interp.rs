@@ -15453,10 +15453,19 @@ impl<'a> Interp<'a> {
             Err(e) => return err(e),
         };
         let mut words = Vec::with_capacity(args.len());
+        // The `f32` / `f64` arguments, in their own registers.
+        let mut floats = Vec::new();
         // Each native copy, and where a `*mut` one is read back to.
         let mut copies: Vec<(Vec<u8>, Option<NativeCopy>)> = Vec::new();
         for (v, &t) in args.iter().zip(&sig.params) {
             let word = match (self.tys.kind(t), v) {
+                (TyKind::Float(ft), Value::Float(x)) => {
+                    floats.push(match ft {
+                        crate::mir::ty::FloatTy::F32 => super::foreign::f32_slot(*x as f32),
+                        _ => *x,
+                    });
+                    continue;
+                }
                 (TyKind::RawPtr { mutable, pointee }, Value::Ref(at)) => {
                     let (bytes, copy) = self.native_copy(name, at, pointee)?;
                     copies.push((bytes, mutable.then_some(copy)));
@@ -15472,10 +15481,17 @@ impl<'a> Interp<'a> {
             };
             words.push(word);
         }
-        // SAFETY: the lowering admits only integer, `bool` and pointer
-        // parameters, each passed in an integer register; what C does
-        // through a pointer is the program's `unsafe` contract.
-        let r = match unsafe { super::foreign::call(f, &words) } {
+        let float_ret = matches!(self.tys.kind(sig.ret), TyKind::Float(_));
+        // SAFETY: the lowering admits only integer, `bool`, pointer, `f32`
+        // and `f64` parameters, the first three in integer registers and
+        // the floats in float ones; what C does through a pointer is the
+        // program's `unsafe` contract.
+        let r = if floats.is_empty() && !float_ret {
+            unsafe { super::foreign::call(f, &words) }.map(super::foreign::Ret::Int)
+        } else {
+            unsafe { super::foreign::call_mixed(f, &words, &floats, float_ret) }
+        };
+        let r = match r {
             Ok(r) => r,
             Err(e) => return err(format!("`{name}`: {e}")),
         };
@@ -15484,6 +15500,17 @@ impl<'a> Interp<'a> {
                 self.read_back(&bytes, &c)?;
             }
         }
+        let r = match r {
+            super::foreign::Ret::Float(x) => {
+                return Ok(Value::Float(match self.tys.kind(sig.ret) {
+                    TyKind::Float(crate::mir::ty::FloatTy::F32) => {
+                        f64::from(super::foreign::f32_of(x))
+                    }
+                    _ => x,
+                }))
+            }
+            super::foreign::Ret::Int(r) => r,
+        };
         match self.tys.kind(sig.ret) {
             TyKind::Unit => Ok(Value::Unit),
             TyKind::Bool => Ok(Value::Bool(r as u8 != 0)),

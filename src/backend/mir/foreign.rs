@@ -3,10 +3,10 @@
 //! the `kara_host` module (B-2026-10-23-17): a direct call to the external symbol by the C calling
 //! convention, which the linker resolves against the libraries `kara.toml`'s
 //! `[link]` table names (and the C library). The lowering already refuses a
-//! signature with anything but integers, `bool` and raw pointers
-//! (`src/mir/lower.rs`), so those are all this has to pass: each in its own
-//! register type, an `i1` for a `bool`, and the integers narrower than 32
-//! bits extended by their signedness, as C compilers expect.
+//! signature with anything but integers, `bool`, `f32`, `f64` and raw
+//! pointers (`src/mir/lower.rs`), so those are all this has to pass: each in
+//! its own register type, an `i1` for a `bool`, and the integers narrower
+//! than 32 bits extended by their signedness, as C compilers expect.
 
 use inkwell::attributes::{Attribute, AttributeLoc};
 use inkwell::module::Linkage;
@@ -15,6 +15,7 @@ use inkwell::values::{BasicMetadataValueEnum, FunctionValue};
 
 use super::{Cx, R};
 use crate::mir::interp::ExternSig;
+use crate::mir::ty::FloatTy;
 use crate::mir::{Operand, Place, Ty, TyKind};
 
 fn e<T: ToString>(x: T) -> String {
@@ -32,6 +33,10 @@ impl<'ctx> Cx<'ctx, '_> {
                 (self.int_ty(i.bits()).into(), ext)
             }
             TyKind::RawPtr { .. } => (self.ptr_ty().into(), None),
+            // A float travels in a float register, with no extension
+            // (B-2026-10-31-32).
+            TyKind::Float(FloatTy::F32) => (self.llcx.f32_type().into(), None),
+            TyKind::Float(FloatTy::F64) => (self.llcx.f64_type().into(), None),
             _ => {
                 return Err(format!(
                     "MIR to LLVM: the `extern \"C\"` function `{name}` takes or returns a `{}`",

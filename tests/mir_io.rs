@@ -2512,21 +2512,51 @@ fn main() {
 }
 "#;
 
+/// `f32` and `f64` cross an import (B-2026-10-31-32): libm's and libc's
+/// functions of floats alone, of a float and an integer in either register
+/// file, of a float to an integer, and of a pointer to a float.
 const EXTERN_FLOAT: &str = r#"
+/// # Safety
+/// Pure libm math, and `atof` reading a NUL-terminated literal.
 unsafe extern "C" {
     fn sqrt(x: f64) -> f64;
+    fn sqrtf(x: f32) -> f32;
+    fn ldexp(x: f64, e: i32) -> f64;
+    fn lrint(x: f64) -> i64;
+    fn fma(a: f64, b: f64, c: f64) -> f64;
+    fn atof(s: *const u8) -> f64;
 }
 
 fn main() {
-    println(sqrt(2.0));
+    // Safety: plain values.
+    let a = unsafe { sqrt(2.0) };
+    // Safety: plain values.
+    let b: f32 = unsafe { sqrtf(2.0) };
+    // Safety: plain values.
+    let c = unsafe { ldexp(1.5, 4) };
+    // Safety: plain values.
+    let d = unsafe { lrint(2.6) };
+    // Safety: plain values.
+    let e = unsafe { fma(2.0, 3.0, 0.5) };
+    let s = c"2.25";
+    // Safety: a static NUL-terminated literal.
+    let f = unsafe { atof(s.as_ptr()) };
+    println(a);
+    println(b);
+    println(c);
+    println(d);
+    println(e);
+    println(f);
 }
 "#;
+
+const EXTERN_FLOAT_OUT: &str = "1.4142135623730951\n1.4142135\n24.0\n3\n6.5\n2.25\n";
 
 /// A call of an `extern "C"` function runs on the MIR interpreter
 /// (B-2026-10-22-10): the C library's own functions, and examples/interop-zlib,
 /// which links zlib through its kara.toml and passes a `CString`'s bytes and
 /// `ptr.mut` of a local for zlib to write through, printing its README's
-/// output. A float parameter is refused when the program is built.
+/// output. Float parameters and results cross too (B-2026-10-31-32).
 #[test]
 fn extern_c_calls_run_on_the_mir_interpreter() {
     let karac = env!("CARGO_BIN_EXE_karac");
@@ -2563,19 +2593,17 @@ fn extern_c_calls_run_on_the_mir_interpreter() {
     let float = dir.path().join("float.kara");
     std::fs::write(&float, EXTERN_FLOAT).unwrap();
     let out = run(&float);
-    assert_eq!(out.status.code(), Some(3));
-    let err = String::from_utf8_lossy(&out.stderr);
     assert!(
-        err.contains(
-            "the `extern \"C\"` function `sqrt` other than an integer, `bool` or raw pointer"
-        ),
-        "{err}"
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
     );
+    assert_eq!(String::from_utf8_lossy(&out.stdout), EXTERN_FLOAT_OUT);
 }
 
 /// The same calls compiled (B-2026-10-22-10): on the MIR→LLVM JIT, which
 /// loads the `[link]` table's libraries into its runner, and built by
-/// `build --mir`, which links them; the float signature is refused on both.
+/// `build --mir`, which links them; the float signatures too.
 #[cfg(feature = "llvm")]
 #[test]
 fn extern_c_calls_run_compiled() {
@@ -2589,7 +2617,11 @@ fn extern_c_calls_run_compiled() {
     let zlib_out =
         "original: 1440 bytes\ncompressed: smaller than original\nround-trip length: OK\n\
                     crc32 in:  1141850752\ncrc32 out: 1141850752\nround-trip: OK\n";
-    for (file, want) in [(&libc, "7\n9000000000\n5\n"), (&zlib, zlib_out)] {
+    for (file, want) in [
+        (&libc, "7\n9000000000\n5\n"),
+        (&zlib, zlib_out),
+        (&float, EXTERN_FLOAT_OUT),
+    ] {
         let jit = Command::new(karac)
             .args(["__mir-llvm-run", file.to_str().unwrap()])
             .output()
@@ -2630,13 +2662,6 @@ fn extern_c_calls_run_compiled() {
             assert_eq!(String::from_utf8_lossy(&run.stdout), want);
         }
     }
-    let out = Command::new(karac)
-        .args(["__mir-llvm-run", float.to_str().unwrap()])
-        .output()
-        .unwrap();
-    assert_eq!(out.status.code(), Some(3));
-    let err = String::from_utf8_lossy(&out.stderr);
-    assert!(err.contains("the `extern \"C\"` function `sqrt`"), "{err}");
 }
 
 /// A call on a program-rooted resource outside any `with_provider` goes to
