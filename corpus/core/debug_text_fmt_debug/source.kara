@@ -1,0 +1,57 @@
+import std.secret.Secret;
+
+#[derive(Debug, Display)]
+struct User {
+    name: String,
+    age: i64,
+}
+
+#[derive(Debug)]
+struct Login {
+    name: String,
+    token: Secret[String],
+}
+
+#[derive(Debug)]
+enum Shape {
+    Circle(f64),
+    Point,
+}
+
+struct Pt {
+    x: i64,
+}
+
+impl Debug for Pt {
+    fn fmt_debug(self) -> String {
+        f"Pt<{self.x}>"
+    }
+}
+
+fn dshow[T: Debug](t: T) -> String {
+    t.fmt_debug()
+}
+
+fn show[T: Display](t: T) -> String {
+    t.to_string()
+}
+
+fn main() {
+    let u = User { name: "alice".to_string(), age: 3 };
+    println(u.fmt_debug());
+    println(dshow(u));
+    println(show(u));
+    let l = Login { name: "bob".to_string(), token: Secret.new("hunter2".to_string()) };
+    println(l.fmt_debug());
+    println(Shape.Circle(1.5).fmt_debug());
+    println(dshow(Shape.Point));
+    println(Pt { x: 4 }.fmt_debug());
+    println(dshow(Pt { x: 5 }));
+    println("hi".fmt_debug());
+    println(7.fmt_debug());
+    let v = [Some(1), None];
+    println(v.fmt_debug());
+    println(dshow(v));
+    let s: Option[String] = Some("x".to_string());
+    println(s.fmt_debug());
+}

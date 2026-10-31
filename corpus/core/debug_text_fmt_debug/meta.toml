@@ -1,0 +1,9 @@
+source = "B-2026-10-31-6"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["debug", "display", "derive", "library"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md § Display and Debug: `trait Debug { fn fmt_debug(self) -> String; }`. A derived Debug, a library type's and a primitive's `fmt_debug` give the text `dbg` shows (strings quoted, fields named, Secret redacted per docs/library/secret.md), directly and under `T: Debug`; a hand-written impl is called as written. A derived Display reached under `T: Display` renders as on the type."

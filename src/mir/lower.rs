@@ -19025,10 +19025,13 @@ impl<'l, 'a> Bx<'l, 'a> {
                 .is_some_and(|k| k == "Display.to_string");
             if display_bound && method == "to_string" && args.is_empty() {
                 let (_, base) = self.strip_ty_full(rt);
-                if self.tys().tcx().adt_of(base).is_none() {
-                    let key = format!("{}.to_string", self.tys().display(base));
-                    return self.builtin_method(e, &key, object, method, args, dest);
-                }
+                let key = format!("{}.to_string", self.tys().display(base));
+                return self.builtin_method(e, &key, object, method, args, dest);
+            }
+            // `x.fmt_debug()` under `T: Debug` at a type with no `fmt_debug`
+            // of its own (B-2026-10-31-6).
+            if method == "fmt_debug" && args.is_empty() {
+                return self.debug_text(object, dest);
             }
             return self.unsupported(
                 e.span,
@@ -22415,6 +22418,20 @@ impl<'l, 'a> Bx<'l, 'a> {
             ))
     }
 
+    /// `x.fmt_debug()` on a type with no `fmt_debug` of its own: the
+    /// `Debug` text `dbg` shows, in a new `String` (design.md § Display and
+    /// Debug, B-2026-10-31-6).
+    fn debug_text(&mut self, x: &'a Expr, dest: Place) -> R<()> {
+        let t = self.expr_ty(x)?;
+        let p = match self.is_place(x) {
+            true => self.expr_place(x, false)?,
+            false => Place::local(self.temp_of(x, t)?),
+        };
+        let value = self.ref_to(p, t);
+        self.call_native("debug_string", vec![value], dest);
+        Ok(())
+    }
+
     fn builtin_method(
         &mut self,
         e: &'a Expr,
@@ -22490,6 +22507,9 @@ impl<'l, 'a> Bx<'l, 'a> {
         }
         if args.is_empty() && self.unary_operator_call(method, object, dest.clone())? {
             return Ok(());
+        }
+        if method == "fmt_debug" && args.is_empty() {
+            return self.debug_text(object, dest);
         }
         match (key, method) {
             (_, "as_slice" | "as_mut_slice")

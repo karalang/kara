@@ -1,0 +1,13 @@
+User { name: "alice", age: 3 }
+User { name: "alice", age: 3 }
+User { name: alice, age: 3 }
+Login { name: "bob", token: <redacted> }
+Circle(1.5)
+Point
+Pt<4>
+Pt<5>
+"hi"
+7
+[Some(1), None]
+[Some(1), None]
+Some("x")

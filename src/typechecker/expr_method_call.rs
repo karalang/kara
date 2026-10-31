@@ -2379,6 +2379,18 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
+        // `x.fmt_debug()`: the `Debug` text `dbg` shows, on a type that is
+        // `Debug` without a `fmt_debug` of its own: a derived one, a number,
+        // a collection (design.md § Display and Debug, B-2026-10-31-6). A
+        // program's own `fmt_debug` wins, and a type parameter's comes from
+        // its bound.
+        if method == "fmt_debug"
+            && args.is_empty()
+            && self.env.debug_text_is_builtin(&obj_ty_for_named)
+        {
+            return Type::Str;
+        }
+
         // String method dispatch keeps the un-derefed `obj_ty` check
         // intentionally: `ref String` / `mut ref String` are intended
         // to flow through the impl-block-method path (which calls

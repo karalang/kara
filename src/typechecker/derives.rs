@@ -2500,6 +2500,39 @@ impl super::env::TypeEnv {
         }
     }
 
+    /// Whether `x.fmt_debug()` on a `ty` is the builtin `Debug` text: `ty`
+    /// is a concrete `Debug` type with no `fmt_debug` method of its own.
+    pub(super) fn debug_text_is_builtin(&self, ty: &Type) -> bool {
+        match ty {
+            Type::TypeParam(_)
+            | Type::TypeVar(_)
+            | Type::AssocProjection { .. }
+            | Type::Error
+            | Type::Never => false,
+            Type::Named { name, .. } | Type::Shared(name) => {
+                (self.structs.contains_key(name)
+                    || self.enums.contains_key(name)
+                    || matches!(
+                        name.as_str(),
+                        "Option"
+                            | "Result"
+                            | "String"
+                            | "Vec"
+                            | "VecDeque"
+                            | "Map"
+                            | "SortedMap"
+                            | "Set"
+                            | "SortedSet"
+                    ))
+                    && self
+                        .find_methods_with_args(name, &[], "fmt_debug")
+                        .is_empty()
+                    && self.type_supports_debug(ty)
+            }
+            _ => self.type_supports_debug(ty),
+        }
+    }
+
     /// Check whether a type supports `Debug`. GAT slice 8b
     /// carry-forward (a). Mirrors `type_supports_display` (Debug is
     /// the developer-facing dump trait — same surface coverage as

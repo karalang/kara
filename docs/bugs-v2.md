@@ -63,10 +63,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | missing-feature | 56 |
 | perf | 46 |
 | soundness | 30 |
-| miscompile | 18 |
+| miscompile | 19 |
 | run-vs-build | 15 |
 | other | 14 |
-| codegen-gap | 10 |
+| codegen-gap | 11 |
 | crash | 2 |
 | leak | 1 |
 
@@ -75,11 +75,11 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 126 |
-| mir | 69 |
-| mir-llvm | 52 |
+| mir | 70 |
+| mir-llvm | 53 |
 | cli | 41 |
 | ownership | 36 |
-| interp | 25 |
+| interp | 26 |
 | codegen | 22 |
 | parser | 21 |
 | runtime | 20 |
@@ -103,6 +103,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-31-6 | 2026-10-31 | typecheck | low | A `#[derive(Debug)]` type has no callable `fmt_debug`: `u.fmt_debug()` is `no method 'fmt_debug' on type 'User'`, though design.md § Display and Debug declares `trait Debug { fn fmt_debug(self) -> String; }`; `dbg(u)` prints the derived form, so only the trait method is missing | — |
 | B-2026-10-31-7 | 2026-10-31 | mir | low | `karac build` (and `karac run`) runs the whole front end twice: `check_v2`'s pipeline, then `build_source_in_order_later` parses, resolves, typechecks and ownership-checks the program and its library again from source | — |
 | B-2026-10-31-8 | 2026-10-31 | mir-llvm | low | Every `karac` process starts at 15-20 ms and 46.6 MB peak RSS before doing anything (`karac --version`), and the link step of a small kata's `karac build` is its largest phase at 72-102 ms | — |
+| B-2026-10-31-11 | 2026-10-31 | mir | medium | `t.to_string()` under `T: Display` at a `#[derive(Display)]` type does not build: `the method call .to_string with no resolved callee is not lowered yet`; the same call on the type itself works | — |
+| B-2026-10-31-12 | 2026-10-31 | interp+mir-llvm | low | `dbg(x)` and a failed `assert_eq` ignore a hand-written `impl Debug`: `dbg(p)` with `impl Debug for Pt { fn fmt_debug(self) -> String { f"Pt<{self.x}>" } }` prints `p = Pt { x: 4 }`, the derived field form, though `p.fmt_debug()` gives `Pt<4>` | — |
 
 ### Relocated
 
