@@ -857,7 +857,7 @@ pub(super) fn query_concurrency(pipeline: &Pipeline, function: &str, filename: &
 
     match analysis.function_decisions.get(function) {
         Some(fc) => {
-            println!(
+            let json = format!(
                 "{{\"function\":{},\"total_statements\":{},\"statement_spans\":{},\"parallel_groups\":{},\"loop_reductions\":{},\"declined_par_loops\":{},\"disjoint_write_loops\":{},\"serialization_points\":{},\"reorder_opportunities\":{}}}",
                 json_string(function),
                 fc.total_statements,
@@ -885,6 +885,7 @@ pub(super) fn query_concurrency(pipeline: &Pipeline, function: &str, filename: &
                 crate::effect_graph::serialization_points_json(fc),
                 crate::effect_graph::reorder_opportunities_json(fc),
             );
+            println!("{}", with_auto_par(&json, filename, Some(function)));
         }
         None => {
             eprintln!("error: function '{function}' not found");
@@ -905,13 +906,58 @@ pub(super) fn query_concurrency_whole_program(
 ) {
     let is_test_file = filename.ends_with("_test.kara");
     let graph = crate::call_graph::build(&pipeline.parsed.program, filename, is_test_file);
-    println!(
-        "{}",
-        crate::effect_graph::build_concurrency_graph_json(
-            analysis,
-            &graph,
-            filename,
-            Some(&pipeline.parsed.program),
-        )
+    let json = crate::effect_graph::build_concurrency_graph_json(
+        analysis,
+        &graph,
+        filename,
+        Some(&pipeline.parsed.program),
     );
+    println!("{}", with_auto_par(&json, filename, None));
+}
+
+/// `json` (an object) with the MIR auto-par verdicts on `filename`'s
+/// candidates as its `auto_par` member, those of `function` alone when
+/// given: each loop or run of statements, whether a build runs it as
+/// tasks, and why not. A program the MIR cannot lower gets an empty list
+/// and an `auto_par_error`.
+fn with_auto_par(json: &str, filename: &str, function: Option<&str>) -> String {
+    let Some(head) = json.strip_suffix('}') else {
+        return json.to_string();
+    };
+    let source = read_source(filename);
+    let off = !crate::par_cost::auto_par_enabled();
+    let (entries, err) = match crate::mir::lower::auto_par_verdicts(&source) {
+        Ok(vs) => {
+            let entries: Vec<String> = vs
+                .iter()
+                .filter(|v| function.is_none_or(|f| v.instance == f))
+                .map(|v| {
+                    let kind = match v.kind {
+                        crate::mir::effects::auto_par::VerdictKind::Loop => "loop",
+                        _ => "statements",
+                    };
+                    let reason = match &v.verdict {
+                        _ if off => json_string("auto-par disabled by KARAC_AUTO_PAR=0"),
+                        Ok(_) => "null".to_string(),
+                        Err(r) => json_string(&r.text()),
+                    };
+                    format!(
+                        "{{\"function\":{},\"line\":{},\"kind\":\"{kind}\",\"tasks\":{},\"reason\":{reason}}}",
+                        json_string(&v.instance),
+                        v.span.line,
+                        !off && v.verdict.is_ok(),
+                    )
+                })
+                .collect();
+            (entries, None)
+        }
+        Err(e) => (Vec::new(), Some(e)),
+    };
+    let err = err.map_or(String::new(), |e| {
+        format!(
+            ",\"auto_par_error\":{}",
+            json_string(e.lines().next().unwrap_or(""))
+        )
+    });
+    format!("{head},\"auto_par\":[{}]{err}}}", entries.join(","))
 }

@@ -107,6 +107,36 @@ pub enum VerdictKind {
 /// (B-2026-10-28-10); a few tasks keep the work apart on a small pool.
 pub(crate) const STMT_TASKS: usize = 4;
 
+/// The longest body, in MIR statements and terminators, that a statement
+/// group may make a coroutine (B-2026-10-28-10). The group's join
+/// suspends, so the whole body becomes one state machine whose frame holds
+/// every local, and optimizing that costs with the body, not the group:
+/// `mini_inflect`'s `new_tab` (28,271) was its build's long pole, 10.9 s
+/// against 6.1 s with its groups in order. The limit sits above every body
+/// whose group wins at run time in the corpus: measured 2026-10-31 over
+/// the 4,189 programs with a long function, the frozen speed set and the
+/// apps, the next largest are `blood_bank`'s `run` (20,852, no win) and
+/// `grain_intake`'s (15,060, 5% faster as tasks), and at 8,000 four
+/// pipeline apps lost 5 to 9%. A loop's tasks are not held to it.
+/// `KARAC_AUTO_PAR_BODY_MAX=<n>` sets it, `0` for no limit.
+const STMT_BODY_MAX: usize = 25_000;
+
+fn stmt_body_max() -> Option<usize> {
+    match std::env::var("KARAC_AUTO_PAR_BODY_MAX")
+        .ok()
+        .and_then(|v| v.parse().ok())
+    {
+        Some(0) => None,
+        Some(n) => Some(n),
+        None => Some(STMT_BODY_MAX),
+    }
+}
+
+/// A body's size as [`STMT_BODY_MAX`] counts it.
+fn body_size(body: &Body) -> usize {
+    body.blocks.iter().map(|b| b.statements.len() + 1).sum()
+}
+
 /// Where the tasks of group `g` start: the statements, of `g`, that begin
 /// each run of consecutive statements one task runs in order. `heavy`
 /// says which statements of `g` passed the cost gate's weight; they are
@@ -191,6 +221,38 @@ pub enum Refusal {
     Exit,
     /// Safe, but not worth a spawn; the reason says which rule.
     Cost(String),
+}
+
+impl Refusal {
+    /// The refusal as a sentence, for `karac query concurrency`.
+    pub fn text(&self) -> String {
+        match self {
+            Refusal::Unknown(why) => format!("an effect the analysis cannot see: {why}"),
+            Refusal::Crossing(why) | Refusal::Cost(why) => why.clone(),
+            Refusal::Conflict(c) => {
+                format!("`{}` and `{}` must keep their order", c.first.1, c.second.1)
+            }
+            Refusal::Dependence {
+                first,
+                second,
+                local,
+            } => format!(
+                "statement {} uses `{local}`, which statement {} binds",
+                second + 1,
+                first + 1
+            ),
+            Refusal::Stops {
+                stops,
+                visible,
+                effect,
+            } => format!(
+                "statement {} may stop before statement {} does `{effect}`",
+                stops + 1,
+                visible + 1
+            ),
+            Refusal::Exit => "the body can leave the loop early".to_string(),
+        }
+    }
 }
 
 /// The verdict on one candidate, keyed by its instance and span.
@@ -804,6 +866,7 @@ pub(super) fn verdict(
                 safe.push(cur);
             }
             // The cost gate.
+            let size = body_size(body);
             let mut groups = Vec::new();
             let mut tasks = Vec::new();
             for g in safe {
@@ -812,6 +875,12 @@ pub(super) fn verdict(
                 let mut heavy = Vec::new();
                 let refused = match cost.hot_reason(name, &blocks) {
                     Some(why) => Some(why),
+                    None if cost.size && stmt_body_max().is_some_and(|max| size > max) => {
+                        Some(format!(
+                            "{name} is {size} MIR statements, more than a statement group may make a coroutine of ({})",
+                            stmt_body_max().unwrap_or_default()
+                        ))
+                    }
                     None => {
                         // Off, the size half asks only that the work loop.
                         let (need, what) = if cost.size {

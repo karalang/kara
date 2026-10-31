@@ -24463,6 +24463,16 @@ pub fn build_source_recording(src: &str) -> Result<Lowered, String> {
     finish_build(lower_source_for_checks(src, false, AutoPar::Record)?)
 }
 
+/// The auto-par verdicts on `src`'s candidates, as the first of a build's
+/// two lowerings records them (`karac query concurrency`). The parallel
+/// build can still keep a function in order that its checks refuse.
+pub fn auto_par_verdicts(
+    src: &str,
+) -> Result<Vec<crate::mir::effects::auto_par::AutoParVerdict>, String> {
+    let l = build_source_recording(src)?;
+    Ok(crate::mir::effects::analyze(&l.program, &l.tys).auto_par)
+}
+
 /// What a build does about automatic parallelism (M4 item 14).
 #[derive(Clone)]
 pub(crate) enum AutoPar {
