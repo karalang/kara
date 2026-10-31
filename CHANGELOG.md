@@ -3,7 +3,7 @@
 All notable changes to the Kāra language and compiler will be documented in this file.
 
 > **Maintenance note (2026-10-28).** This file is a coarse milestone record.
-> The v1 entry below is a draft until the release candidate. Progress is in
+> The 0.9.0 entry below is a draft until the release. Progress is in
 > [`docs/roadmap.md`](docs/roadmap.md), the bug ledger
 > [`docs/bugs-v2.jsonl`](docs/bugs-v2.jsonl) (rollup in
 > [`docs/bugs-v2.md`](docs/bugs-v2.md); the pre-M3 ledger is archived in
@@ -14,9 +14,9 @@ All notable changes to the Kāra language and compiler will be documented in thi
 
 ---
 
-## v1 — draft (the version number is set at the release candidate)
+## 0.9.0 (beta) — draft
 
-The first release of the v2 compiler. Every program lowers to MIR, which the
+The first release, and a beta: 1.0 follows outside feedback (decided 2026-10-31). It is the first release of the v2 compiler. Every program lowers to MIR, which the
 interpreter (`karac __mir-run`) and the LLVM backend (`karac build`, `karac
 run`) both execute; the legacy pipeline was deleted at M3 (2026-10-24).
 Normative rules are in [docs/core-semantics.md](docs/core-semantics.md), the
@@ -36,7 +36,7 @@ later in [docs/deferred.md](docs/deferred.md).
   declares one, solved from what is bound to it within a function.
 - **`dyn Trait`**: a two-word, never-null owned handle with no `Box`, coerced
   only where a `dyn` type is expected; effects through its `with` clause;
-  `dyn T + CrossTask` to cross tasks. No upcasts or downcasts in v1.
+  `dyn T + CrossTask` to cross tasks. No upcasts or downcasts yet.
 - **Providers.** `effect resource R: Trait`, `with_provider`, `providers { }
   in { }` and `#[with_provider]` on tests swap a resource's implementation with
   no mocking framework. A missing provider is a compile error. The file system,
@@ -66,8 +66,8 @@ later in [docs/deferred.md](docs/deferred.md).
 
 ### Targets
 
-- Linux x86_64, Linux aarch64 and Apple-silicon macOS. Windows follows in
-  v1.1. Plain `wasm32` (`--target=wasm_wasi`) for compute programs.
+- Linux x86_64, Linux aarch64 and Apple-silicon macOS. Windows follows in a
+  later release. Plain `wasm32` (`--target=wasm_wasi`) for compute programs.
 
 ### Measured before release
 
@@ -77,7 +77,7 @@ later in [docs/deferred.md](docs/deferred.md).
   automatic-parallelism speedup floor, and a load test of 100,000 idle
   connections with tail-latency limits.
 
-### Known limits
+### Known limits in 0.9
 
 - A callback stored in a field cannot use an overridden provider
   (core-semantics §14.5); test it by calling it directly.

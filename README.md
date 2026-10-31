@@ -182,11 +182,11 @@ More in [`examples/std_net`](examples/std_net).
 
 ## Performance
 
-The v1 compiler is held to measured bars before release: run time and build time against the earlier compiler, binary size, an automatic-parallelism speedup floor, and a load test of 100,000 idle connections with tail-latency limits. Cross-language benchmarks against Rust, C and Go live in **[kara-katas](https://github.com/karalang/kara-katas)**, with the data and chart generator versioned beside the code. Figures for this README are being re-measured on the v1 compiler.
+The compiler is held to measured bars before each release: run time and build time against the earlier compiler, binary size, an automatic-parallelism speedup floor, and a load test of 100,000 idle connections with tail-latency limits. Cross-language benchmarks against Rust, C and Go live in **[kara-katas](https://github.com/karalang/kara-katas)**, with the data and chart generator versioned beside the code. Figures for this README are being re-measured on the current compiler.
 
 ## Targets
 
-- **Native**: Linux x86_64, Linux aarch64 and Apple-silicon macOS in v1. Windows follows in v1.1.
+- **Native**: Linux x86_64, Linux aarch64 and Apple-silicon macOS in 0.9. Windows follows in a later release.
 - **WebAssembly**: plain `wasm32` (`karac build --target=wasm_wasi`) for compute programs.
 
 ## Docs
@@ -195,12 +195,12 @@ The v1 compiler is held to measured bars before release: run time and build time
 - **[docs/core-semantics.md](docs/core-semantics.md)**: the normative core (moves, borrows, drops, patterns, providers), each rule pinned by a program in `corpus/core/`.
 - **[docs/library/](docs/library/)**: the standard library.
 - **[docs/syntax.md](docs/syntax.md)** and **[docs/glossary.md](docs/glossary.md)**: quick reference and terminology.
-- **[docs/deferred.md](docs/deferred.md)**: designs for features scheduled after v1.
+- **[docs/deferred.md](docs/deferred.md)**: designs for features scheduled after this release.
 - **[docs/roadmap.md](docs/roadmap.md)**: what is done and what comes next.
 
 ## Project status
 
-Pre-1.0, with v1 in its final stretch. The compiler lowers every program to a mid-level IR (MIR), which both the interpreter and the LLVM backend run, and its corpus of thousands of programs with expected outputs is the release gate. `dyn Trait`, effect variables for stored callbacks, and provider overrides for the file system, network and standard streams are in; what remains is release packaging and dogfooding.
+Pre-1.0. The first release, 0.9.0, is a beta: the language and tools are complete enough to build real programs, and 1.0 follows outside feedback. The compiler lowers every program to a mid-level IR (MIR), which both the interpreter and the LLVM backend run, and its corpus of thousands of programs with expected outputs is the release gate. `dyn Trait`, effect variables for stored callbacks, and provider overrides for the file system, network and standard streams are in; what remains is release packaging and dogfooding.
 
 ## Prior art
 
@@ -215,7 +215,7 @@ Pre-1.0, with v1 in its final stretch. The compiler lowers every program to a mi
 
 ### Install
 
-Prebuilt binaries for Linux x86_64, Linux aarch64 and Apple-silicon macOS arrive with the v1 release. Until then, build from source.
+Prebuilt binaries for Linux x86_64, Linux aarch64 and Apple-silicon macOS arrive with the 0.9.0 beta. Until then, build from source.
 
 ### Build from source
 
