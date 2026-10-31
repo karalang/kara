@@ -88,6 +88,9 @@ later in [docs/deferred.md](docs/deferred.md).
 - Struct `invariant` clauses belong to the later verification track and are
   refused at check (`E_DEFERRED_TRACK`); enforce the property in the type's
   constructor. `requires` and `ensures` (with `old(...)`) work.
+- A C import (`unsafe extern "C"`) passes integers, `bool`, floats and raw
+  pointers; `#[repr(C)]` structs do not cross yet, and exporting a C ABI
+  (`pub extern "C" fn`, `--crate-type`) comes in a later release.
 
 ---
 
