@@ -1837,6 +1837,8 @@ fn build_tree_rebases_module_spans_globally_unique() {
 fn dep_walk(d: &ScratchDir, rel: &str, name: &str) -> karac::module::DepPackageWalk {
     karac::module::DepPackageWalk {
         name: name.to_string(),
+        import_name: name.to_string(),
+        renames: Vec::new(),
         walked: walk_project(&d.root().join(rel), WalkerOpts::default())
             .expect("dep walker succeeds"),
     }
@@ -2076,6 +2078,8 @@ fn dep_test_companions_are_skipped() {
     // builder (the CLI walks deps without tests; both layers must hold).
     let dep = karac::module::DepPackageWalk {
         name: "geo_pkg".to_string(),
+        import_name: "geo_pkg".to_string(),
+        renames: Vec::new(),
         walked: walk_project(
             &d.root().join("dep"),
             WalkerOpts {

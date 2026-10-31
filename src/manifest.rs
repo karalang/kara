@@ -53,6 +53,7 @@ const KNOWN_PACKAGE_KEYS: &[&str] = &[
     "authors",
     "profile",
     "kara-version",
+    "import",
 ];
 
 /// Target execution environment — constrains which effects are legal at
@@ -358,6 +359,18 @@ pub struct Manifest {
     /// resolver can intersect it against the active toolchain version
     /// in a uniform way. `None` when the field is absent.
     pub kara_version: Option<semver::VersionReq>,
+    /// `[package].import` — the import name dependents write as a path's
+    /// first segment instead of the package name (design.md § Packages and
+    /// manifests). Validated as an identifier. `None` when absent, and the
+    /// import name is then `name` with each `-` mapped to `_`
+    /// ([`Manifest::import_name`]).
+    pub import: Option<String>,
+    /// `alias = "..."` on a `[dependencies]` entry, keyed by the entry's
+    /// name: the import name THIS package uses for that dependency,
+    /// overriding the dependency's own `[package].import` and its name.
+    pub dependency_aliases: BTreeMap<String, String>,
+    /// `alias` on a `[dev-dependencies]` entry, as for `dependency_aliases`.
+    pub dev_dependency_aliases: BTreeMap<String, String>,
     /// `[dependencies]` table — structured capture of every entry. v1
     /// parses but does not resolve; the resolver (PubGrub) attaches as
     /// a future slice and consumes this map. `BTreeMap` keeps iteration
@@ -627,6 +640,7 @@ const KNOWN_DEPENDENCY_KEYS: &[&str] = &[
     "tag",
     "rev",
     "workspace",
+    "alias",
 ];
 
 /// A soft, non-fatal manifest observation — e.g. an unknown `[package]` key.
@@ -984,11 +998,32 @@ pub fn parse_manifest(path: &Path, source: &str) -> Result<Manifest, ManifestErr
         None => None,
     };
 
+    let import = match package.get("import") {
+        Some(toml::Value::String(s)) if is_import_identifier(s) => Some(s.clone()),
+        Some(_) => {
+            return Err(ManifestError::InvalidFieldType {
+                path: path.to_path_buf(),
+                key: "import".to_string(),
+                expected: "an identifier string (e.g. \"data\")",
+            });
+        }
+        None => None,
+    };
+
     let test_resources = parse_test_resources(path, &table)?;
     let test_timeout_seconds = parse_test_timeout_seconds(path, &table)?;
     let dependencies = parse_dependencies_table(path, &table, "dependencies", &mut warnings)?;
     let dev_dependencies =
         parse_dependencies_table(path, &table, "dev-dependencies", &mut warnings)?;
+    let dependency_aliases = parse_dependency_aliases(path, &table, "dependencies")?;
+    let dev_dependency_aliases = parse_dependency_aliases(path, &table, "dev-dependencies")?;
+    check_import_name_collisions(
+        path,
+        &dependencies,
+        &dependency_aliases,
+        &dev_dependencies,
+        &dev_dependency_aliases,
+    )?;
     let workspace_dependencies = parse_workspace_dependencies(path, &table, &mut warnings)?;
     // A `[workspace]` table (validated as a table by `parse_workspace_dependencies`
     // above if present) marks this manifest as a workspace root — even when it
@@ -1023,6 +1058,9 @@ pub fn parse_manifest(path: &Path, source: &str) -> Result<Manifest, ManifestErr
         test_resources,
         test_timeout_seconds,
         kara_version,
+        import,
+        dependency_aliases,
+        dev_dependency_aliases,
         dependencies,
         dev_dependencies,
         workspace_dependencies,
@@ -2059,6 +2097,124 @@ fn parse_dependencies_table(
         out.insert(name.clone(), spec);
     }
     Ok(out)
+}
+
+/// The import name a package name maps to when nothing renames it: each `-`
+/// becomes `_`, since a path segment may not contain `-` (design.md §
+/// Packages and manifests). `kara-data` is imported from `kara_data`.
+pub fn default_import_name(package_name: &str) -> String {
+    package_name.replace('-', "_")
+}
+
+impl Manifest {
+    /// The import name dependents use for this package when they declare no
+    /// `alias`: `[package].import`, else the name with `-` mapped to `_`.
+    pub fn import_name(&self) -> String {
+        self.import
+            .clone()
+            .unwrap_or_else(|| default_import_name(&self.name))
+    }
+
+    /// The import name this package writes for its dependency `dep`: its
+    /// `alias`, else `declared` (the dependency's own `[package].import`),
+    /// else `dep` with `-` mapped to `_`. Dev-dependencies' aliases count.
+    pub fn import_name_for_dependency(&self, dep: &str, declared: Option<&str>) -> String {
+        self.dependency_aliases
+            .get(dep)
+            .or_else(|| self.dev_dependency_aliases.get(dep))
+            .cloned()
+            .or_else(|| declared.map(str::to_string))
+            .unwrap_or_else(|| default_import_name(dep))
+    }
+}
+
+/// `true` when `s` lexes as exactly one plain identifier: no keyword, no
+/// `-`, no `r#` escape. An import name is a path segment, so it must be one.
+fn is_import_identifier(s: &str) -> bool {
+    let tokens = crate::tokenize(s);
+    matches!(
+        tokens.as_slice(),
+        [first, last]
+            if matches!(&first.token, crate::token::Token::Identifier { raw: false, .. })
+                && matches!(last.token, crate::token::Token::EOF)
+                && first.span.offset == 0
+                && first.span.length == s.len()
+    )
+}
+
+/// Collect `alias = "..."` from the inline-table entries of `[table_name]`.
+/// Shape errors in the rest of each entry are `parse_dependencies_table`'s.
+fn parse_dependency_aliases(
+    path: &Path,
+    table: &toml::Table,
+    table_name: &'static str,
+) -> Result<BTreeMap<String, String>, ManifestError> {
+    let mut out = BTreeMap::new();
+    let Some(deps) = table.get(table_name).and_then(|v| v.as_table()) else {
+        return Ok(out);
+    };
+    for (name, raw) in deps {
+        let Some(alias) = raw.as_table().and_then(|t| t.get("alias")) else {
+            continue;
+        };
+        match alias {
+            toml::Value::String(a) if is_import_identifier(a) => {
+                out.insert(name.clone(), a.clone());
+            }
+            _ => {
+                return Err(ManifestError::InvalidDependencySpec {
+                    path: path.to_path_buf(),
+                    table: table_name,
+                    name: name.clone(),
+                    message: "`alias` must be an identifier string (e.g. `alias = \"db_ext\"`)"
+                        .to_string(),
+                });
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Two dependencies may not claim one import name: `kara-data` and
+/// `kara_data` both map to `kara_data` unless an `alias` separates them.
+/// Checked over `[dependencies]` and `[dev-dependencies]` together, since a
+/// test build sees both. (A dependency's own `[package].import` is not known
+/// until its manifest is read; the module loader checks that case.)
+fn check_import_name_collisions(
+    path: &Path,
+    deps: &BTreeMap<String, DependencySpec>,
+    aliases: &BTreeMap<String, String>,
+    dev_deps: &BTreeMap<String, DependencySpec>,
+    dev_aliases: &BTreeMap<String, String>,
+) -> Result<(), ManifestError> {
+    let mut claimed: BTreeMap<String, &str> = BTreeMap::new();
+    let tables = [
+        ("dependencies", deps, aliases),
+        ("dev-dependencies", dev_deps, dev_aliases),
+    ];
+    for (table, entries, table_aliases) in tables {
+        for name in entries.keys() {
+            let import = table_aliases
+                .get(name)
+                .cloned()
+                .unwrap_or_else(|| default_import_name(name));
+            if let Some(other) = claimed.get(&import) {
+                if *other == name.as_str() {
+                    continue; // the same package in both tables
+                }
+                return Err(ManifestError::InvalidDependencySpec {
+                    path: path.to_path_buf(),
+                    table,
+                    name: name.clone(),
+                    message: format!(
+                        "`{other}` and `{name}` both claim the import name `{import}`; give one of them an `alias`"
+                    ),
+                });
+            }
+            claimed.insert(import, name.as_str());
+        }
+    }
+    Ok(())
 }
 
 fn parse_dependency_value(

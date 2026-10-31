@@ -348,7 +348,14 @@ pub(super) fn source_files(
         for path in paths {
             let text = std::fs::read_to_string(path)
                 .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-            let parsed = crate::parse(&text);
+            let mut parsed = crate::parse(&text);
+            // A dependency's imports name its own dependencies as its
+            // source writes them; the tree registers them by import name.
+            for item in &mut parsed.program.items {
+                if let Item::Import(imp) = item {
+                    tree.rename_dependency_import(m, &mut imp.path);
+                }
+            }
             if let Some(e) = parsed.errors.first() {
                 return Err(format!(
                     "{}:{}:{}: {}",

@@ -146,11 +146,40 @@ pub struct ProgramTree {
     /// `E0100 undefined name`. Empty for every module without a collision.
     pub wildcard_ambiguities:
         std::collections::HashMap<ModuleId, std::collections::HashMap<String, Vec<String>>>,
+    /// Per dependency (by its registered import name), the renames its own
+    /// imports took ([`DepPackageWalk::renames`]). The tree's modules carry
+    /// the renamed paths already; a pass that re-parses a dependency's file
+    /// applies them with [`ProgramTree::rename_dependency_import`].
+    pub import_renames: std::collections::HashMap<String, Vec<(String, String)>>,
 }
 
 impl ProgramTree {
     pub fn module(&self, id: ModuleId) -> &Module {
         &self.modules[id]
+    }
+
+    /// Rename the first segment of an import `path` written in dependency
+    /// module `m`'s source to the import name that dependency is registered
+    /// under, as the tree builder did. A path into `m`'s own package is left
+    /// alone.
+    pub fn rename_dependency_import(&self, m: &Module, path: &mut [String]) {
+        let (Some(pkg), Some(first)) = (m.package.as_ref(), path.first()) else {
+            return;
+        };
+        let intra = self
+            .modules
+            .iter()
+            .any(|o| o.path.len() > 1 && o.path[0] == *pkg && o.path[1] == *first);
+        if intra {
+            return;
+        }
+        if let Some((_, registered)) = self
+            .import_renames
+            .get(pkg)
+            .and_then(|r| r.iter().find(|(written, _)| written == first))
+        {
+            path[0] = registered.clone();
+        }
     }
 }
 
@@ -184,6 +213,15 @@ pub struct BuildTreeOk {
 #[derive(Debug, Clone)]
 pub struct DepPackageWalk {
     pub name: String,
+    /// The path segment the package's modules are registered under: the
+    /// root package's `alias` for it, else its `[package].import`, else its
+    /// name with `-` mapped to `_` (design.md § Packages and manifests).
+    pub import_name: String,
+    /// `(written, registered)`: an import name this package's own source
+    /// uses for one of ITS dependencies that differs from the name that
+    /// dependency is registered under (its own `alias` for it, say). Each
+    /// import whose first segment is `written` is rewritten to `registered`.
+    pub renames: Vec<(String, String)>,
     pub walked: WalkResult,
 }
 
@@ -277,10 +315,9 @@ pub fn build_program_tree_with(
 /// own module tree, so intra-dep imports keep working unmodified in source.
 ///
 /// Shadowing follows design.md § Resolution order: if the root package has
-/// any module whose first path segment equals a dependency's name, that
-/// dependency is skipped entirely — the local module wins and the external
-/// package is inaccessible (un-shadowing via a manifest `alias` key is a
-/// tracked follow-up).
+/// any module whose first path segment equals a dependency's import name,
+/// that dependency is skipped entirely — the local module wins and the
+/// external package is reachable only through an `alias` in `kara.toml`.
 pub fn build_program_tree_with_deps(
     walked: &WalkResult,
     deps: &[DepPackageWalk],
@@ -559,14 +596,19 @@ pub fn build_program_tree_with_deps(
     // top of that, a dependency whose name collides with any root top-level
     // module segment is skipped wholesale (design.md § Resolution order —
     // the local module wins and the external package is shadowed).
+    let mut import_renames = std::collections::HashMap::new();
     if !deps.is_empty() {
         let root_first_segments: std::collections::HashSet<String> = modules
             .iter()
             .filter_map(|m| m.path.first().cloned())
             .collect();
         for dep in deps {
-            if root_first_segments.contains(&dep.name) {
+            let prefix = &dep.import_name;
+            if root_first_segments.contains(prefix) {
                 continue; // shadowed by a local module — spec'd behavior
+            }
+            if !dep.renames.is_empty() {
+                import_renames.insert(prefix.clone(), dep.renames.clone());
             }
             // First segments of the dep's own module tree, for the
             // intra-package import rewrite below. The entry file's empty
@@ -602,18 +644,24 @@ pub fn build_program_tree_with_deps(
                 // prefix: `import util.helper` inside dep `http` becomes
                 // `import http.util.helper` so it resolves against this
                 // tree's flat namespace. Imports whose first segment is
-                // not one of the dep's own modules are left untouched —
-                // they reference either the stdlib (`std.…`) or one of
-                // the dep's own dependencies, both of which live at
-                // unprefixed paths in the merged tree.
+                // not one of the dep's own modules reference either the
+                // stdlib (`std.…`) or one of the dep's own dependencies,
+                // which live at their registered import names: one this
+                // dep writes differently (its `alias`) is renamed to it.
                 for item in &mut items {
                     if let Item::Import(imp) = item {
                         let intra =
                             imp.path.is_empty() || own_first_segments.contains(&imp.path[0]);
                         if intra {
                             let first_span = imp.path_spans.first().cloned().unwrap_or(imp.span);
-                            imp.path.insert(0, dep.name.clone());
+                            imp.path.insert(0, prefix.clone());
                             imp.path_spans.insert(0, first_span);
+                        } else if let Some((_, registered)) = dep
+                            .renames
+                            .iter()
+                            .find(|(written, _)| *written == imp.path[0])
+                        {
+                            imp.path[0] = registered.clone();
                         }
                     }
                 }
@@ -622,7 +670,7 @@ pub fn build_program_tree_with_deps(
                     ..Program::default()
                 };
                 let imports = extract_imports(&program);
-                let mut path = vec![dep.name.clone()];
+                let mut path = vec![prefix.clone()];
                 path.extend(w.path.iter().cloned());
                 let id = modules.len();
                 let module = Module {
@@ -636,7 +684,7 @@ pub fn build_program_tree_with_deps(
                     is_synthetic: false,
                     test_items_start: None,
                     test_file: None,
-                    package: Some(dep.name.clone()),
+                    package: Some(prefix.clone()),
                     span_base: 0,
                     test_span_base: 0,
                 };
@@ -782,6 +830,7 @@ pub fn build_program_tree_with_deps(
         graph,
         target_tombstones,
         wildcard_ambiguities: std::collections::HashMap::new(),
+        import_renames,
     };
 
     // design.md § Module System > Wildcard imports. Rewrite every
@@ -1877,6 +1926,7 @@ mod tests {
             },
             target_tombstones: HashMap::new(),
             wildcard_ambiguities: HashMap::new(),
+            import_renames: HashMap::new(),
         }
     }
 

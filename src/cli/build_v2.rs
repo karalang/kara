@@ -148,7 +148,7 @@ pub(super) fn cmd_build_v2_project(a: BuildArgs) {
         emit_walker_error(&e, output);
         process::exit(1);
     });
-    let deps = dep_package_walks(resolution.as_ref(), walk.target, output)
+    let deps = dep_package_walks(&root, resolution.as_ref(), walk.target, output)
         .unwrap_or_else(|()| process::exit(1));
     // The package-wide check walks these too, the fetched ones included.
     install_resolved_dep_walks(deps.clone());

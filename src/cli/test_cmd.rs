@@ -543,11 +543,15 @@ pub(super) fn test_front_checked(
     // `dep_package_walks` walks deps with `include_tests: false`, so
     // `merge_test_companions` below only ever folds the *root*
     // package's `_test.kara` files; only the root package's tests run.
-    let dep_walks =
-        match dep_package_walks(dep_resolution.as_ref(), walk_opts.target, OutputMode::Jsonl) {
-            Ok(v) => v,
-            Err(()) => process::exit(1),
-        };
+    let dep_walks = match dep_package_walks(
+        &root,
+        dep_resolution.as_ref(),
+        walk_opts.target,
+        OutputMode::Jsonl,
+    ) {
+        Ok(v) => v,
+        Err(()) => process::exit(1),
+    };
 
     let built = match module::build_program_tree_with_deps(
         &walked,

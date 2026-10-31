@@ -110,6 +110,9 @@ pub(super) fn quiet_dep_package_walks(root: &std::path::Path) -> Vec<module::Dep
     let Ok(resolution) = crate::dep_resolver::resolve(&graph, &active) else {
         return Vec::new();
     };
+    let Ok(names) = super::build_cmds::dep_import_names(root, &resolution) else {
+        return Vec::new();
+    };
     let mut out = Vec::new();
     for pkg in resolution.packages.values() {
         let crate::dep_resolver::ResolvedSource::Path(dep_root) = &pkg.source else {
@@ -121,8 +124,14 @@ pub(super) fn quiet_dep_package_walks(root: &std::path::Path) -> Vec<module::Dep
         if walked.entry != walker::EntryKind::Lib {
             return Vec::new();
         }
+        let (import_name, renames) = names
+            .get(&pkg.name)
+            .cloned()
+            .unwrap_or_else(|| (manifest::default_import_name(&pkg.name), Vec::new()));
         out.push(module::DepPackageWalk {
             name: pkg.name.clone(),
+            import_name,
+            renames,
             walked,
         });
     }

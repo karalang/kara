@@ -2065,12 +2065,20 @@ pub(super) fn run_dep_resolution(
 /// Dependency test companions are excluded (`include_tests: false`) — a
 /// consumer never compiles its deps' tests.
 pub(super) fn dep_package_walks(
+    root: &std::path::Path,
     resolution: Option<&crate::dep_resolver::Resolution>,
     target: walker::Platform,
     output: OutputMode,
 ) -> Result<Vec<module::DepPackageWalk>, ()> {
     let Some(resolution) = resolution else {
         return Ok(Vec::new());
+    };
+    let names = match dep_import_names(root, resolution) {
+        Ok(names) => names,
+        Err((pkg, message)) => {
+            emit_dep_walk_error(&pkg, &message, output);
+            return Err(());
+        }
     };
     let mut out = Vec::new();
     for pkg in resolution.packages.values() {
@@ -2112,10 +2120,86 @@ pub(super) fn dep_package_walks(
             );
             return Err(());
         }
+        let (import_name, renames) = names
+            .get(&pkg.name)
+            .cloned()
+            .unwrap_or_else(|| (manifest::default_import_name(&pkg.name), Vec::new()));
         out.push(module::DepPackageWalk {
             name: pkg.name.clone(),
+            import_name,
+            renames,
             walked,
         });
+    }
+    Ok(out)
+}
+
+/// A resolved package's on-disk source root; `None` for the root package.
+pub(super) fn resolved_dep_dir(
+    pkg: &crate::dep_resolver::ResolvedPackage,
+) -> Option<&std::path::Path> {
+    match &pkg.source {
+        crate::dep_resolver::ResolvedSource::Path(dir) => Some(dir),
+        crate::dep_resolver::ResolvedSource::Registry { dir, .. } => Some(dir),
+        crate::dep_resolver::ResolvedSource::Git { dir, .. } => Some(dir),
+        _ => None,
+    }
+}
+
+/// Each resolved dependency's registered import name, and the renames its
+/// own imports need (design.md § Packages and manifests). A package is
+/// registered under the name the root package writes for it: the root's
+/// `alias`, else the package's `[package].import`, else its name with `-`
+/// mapped to `_`. A dependency that writes another name for one of its own
+/// dependencies (its own `alias`, or a package the root aliased) gets a
+/// rename from that name to the registered one. Two packages registered
+/// under one name are an error, `(package, message)`.
+pub(super) type DepImportNames =
+    std::collections::BTreeMap<String, (String, Vec<(String, String)>)>;
+
+pub(super) fn dep_import_names(
+    root: &std::path::Path,
+    resolution: &crate::dep_resolver::Resolution,
+) -> Result<DepImportNames, (String, String)> {
+    let root_mf = manifest::load_from_root(root).ok();
+    let mut manifests = std::collections::BTreeMap::new();
+    for pkg in resolution.packages.values() {
+        if let Some(mf) = resolved_dep_dir(pkg).and_then(|d| manifest::load_from_root(d).ok()) {
+            manifests.insert(pkg.name.clone(), mf);
+        }
+    }
+    let declared = |name: &str| manifests.get(name).and_then(|m| m.import.as_deref());
+    let registered = |name: &str| -> String {
+        match &root_mf {
+            Some(r) => r.import_name_for_dependency(name, declared(name)),
+            None => declared(name)
+                .map(str::to_string)
+                .unwrap_or_else(|| manifest::default_import_name(name)),
+        }
+    };
+    let mut out = DepImportNames::new();
+    let mut claimed: std::collections::BTreeMap<String, String> = Default::default();
+    for (name, mf) in &manifests {
+        let import_name = registered(name);
+        if let Some(other) = claimed.get(&import_name) {
+            return Err((
+                name.clone(),
+                format!(
+                    "dependencies `{other}` and `{name}` are both imported as `{import_name}`; give one of them an `alias` in kara.toml"
+                ),
+            ));
+        }
+        claimed.insert(import_name.clone(), name.clone());
+        let renames = mf
+            .dependencies
+            .keys()
+            .filter_map(|dep| {
+                let written = mf.import_name_for_dependency(dep, declared(dep));
+                let target = registered(dep);
+                (written != target).then_some((written, target))
+            })
+            .collect();
+        out.insert(name.clone(), (import_name, renames));
     }
     Ok(out)
 }
