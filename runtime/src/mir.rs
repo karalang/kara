@@ -900,32 +900,107 @@ extern "C" {
 /// B-2026-10-19-26).
 fn contains(hay: &str, needle: &str) -> bool {
     let (h, n) = (hay.as_bytes(), needle.as_bytes());
-    let Some((&first, rest)) = n.split_first() else {
+    let Some(&first) = n.first() else {
         return true;
     };
-    if n.len() > h.len() {
+    let m = n.len();
+    if m > h.len() {
         return false;
     }
-    let last = h.len() - n.len();
+    // A needle of up to 256 bytes whose first byte keeps turning up goes to
+    // the shift-table search, which calls nothing per window
+    // (B-2026-10-29-32); `memchr` stays faster where that byte is rare.
+    let short = m <= 256;
+    let (hp, np) = (h.as_ptr(), n.as_ptr());
+    // The places the needle can start.
+    let starts = h.len() - m + 1;
     let budget = 2 * h.len() + 64;
-    let (mut i, mut spent) = (0, 0);
-    while i <= last {
-        let window = &h[i..=last];
-        // SAFETY: `window` is readable for its length.
-        let p = unsafe { memchr(window.as_ptr().cast(), first.into(), window.len()) };
+    let (mut i, mut spent, mut hits) = (0, 0, 0usize);
+    while i < starts {
+        // SAFETY: `hp + i` is readable for `starts - i` bytes.
+        let p = unsafe { memchr(hp.add(i).cast(), first.into(), starts - i) };
         if p.is_null() {
             return false;
         }
-        let at = i + (p as usize - window.as_ptr() as usize);
-        let tail = &h[at + 1..at + n.len()];
-        match tail.iter().zip(rest).position(|(x, y)| x != y) {
-            None => return true,
-            Some(k) => spent += k + 1,
+        let at = p as usize - hp as usize;
+        // SAFETY: `at < starts`, so `at + k < h.len()` for every `k < m`.
+        let k = (1..m)
+            .find(|&k| unsafe { *hp.add(at + k) != *np.add(k) })
+            .unwrap_or(m);
+        if k == m {
+            return true;
+        }
+        spent += k;
+        hits += 1;
+        if short && hits * 16 > at + 64 {
+            return find_short(h.get(at + 1..).unwrap_or_default(), n);
         }
         if spent > budget {
             return hay.contains(needle);
         }
         i = at + 1;
+    }
+    false
+}
+
+/// The hash of the byte pair that ends at `p`, which [`find_short`]'s shift
+/// table is indexed by.
+///
+/// # Safety
+/// `p - 1` and `p` are readable.
+#[inline(always)]
+unsafe fn pair_hash(p: *const u8) -> usize {
+    // SAFETY: the caller's contract.
+    let (a, b) = unsafe { (usize::from(*p.sub(1)), usize::from(*p)) };
+    b.wrapping_sub(a << 3) & 255
+}
+
+/// Whether `n`, of 2 to 256 bytes and no longer than `h`, is in `h`: a
+/// Horspool search keyed on the byte pair at the window's end, the
+/// short-needle path of glibc's `memmem`. A window whose end pair is
+/// nowhere in the needle moves on by the whole needle, one whose pair is
+/// moves to line the two up, and only a window whose end pair hashes like
+/// the needle's own is compared. Nothing is called per window, where a
+/// `memchr` for the first byte made two calls per two bytes of a binary
+/// string (B-2026-10-29-32). The worst case is the needle's length times
+/// the haystack's, at most 256 times.
+fn find_short(h: &[u8], n: &[u8]) -> bool {
+    let m = n.len();
+    if !(2..=256).contains(&m) || m > h.len() {
+        return false;
+    }
+    let m1 = m - 1;
+    let (hp, np) = (h.as_ptr(), n.as_ptr());
+    // `shift[x]` is the last place below `m1` that a pair of hash `x` ends
+    // at in the needle, 0 for none, and `m1` for the needle's end pair.
+    let mut shift = [0u8; 256];
+    for j in 1..m1 {
+        // SAFETY: `1 <= j < m`.
+        shift[unsafe { pair_hash(np.add(j)) }] = j as u8;
+    }
+    // SAFETY: `1 <= m1 < m`.
+    let end = unsafe { pair_hash(np.add(m1)) };
+    // How far a window moves once its end pair matched and the rest did not.
+    let shift1 = m1 - usize::from(shift[end]);
+    shift[end] = m1 as u8;
+    // `p` is where in `h` the window's last byte is.
+    let last = h.len() - 1;
+    let mut p = m1;
+    while p <= last {
+        // SAFETY: `1 <= m1 <= p <= last`.
+        let at = usize::from(shift[unsafe { pair_hash(hp.add(p)) }]);
+        if at == 0 {
+            p += m1;
+        } else if at < m1 {
+            p += m1 - at;
+        } else {
+            // SAFETY: the window `p - m1 ..= p` is in `h`, and `n` is `m`
+            // bytes.
+            if (0..m).all(|k| unsafe { *hp.add(p - m1 + k) == *np.add(k) }) {
+                return true;
+            }
+            p += shift1;
+        }
     }
     false
 }
@@ -4296,6 +4371,38 @@ mod tests {
                 super::padded_int(spec.as_bytes(), 1, true).is_none(),
                 "{spec}"
             );
+        }
+    }
+
+    /// `find_short` (B-2026-10-29-32) agrees with a naive search, on
+    /// small alphabets, on all 256 bytes (where the pair hashes collide)
+    /// and across the 256-byte end of its range.
+    #[test]
+    fn find_short_agrees_with_a_naive_search() {
+        let mut seed = 1016u64;
+        let mut next = |k: u64| {
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (seed >> 33) % k
+        };
+        for round in 0..20000 {
+            // Small alphabets make every pair occur; all 256 bytes make
+            // hashes collide.
+            let letters = [1, 2, 3, 4, 256][round % 5];
+            let nn = 2 + next(if round % 7 == 0 { 300 } else { 18 }) as usize;
+            let hn = next(nn as u64 * 4 + 40) as usize;
+            let mut word =
+                |len: usize| -> Vec<u8> { (0..len).map(|_| next(letters) as u8).collect() };
+            let h = word(hn);
+            let mut n = word(nn);
+            if hn >= nn && next(2) == 0 {
+                let at = next((hn - nn + 1) as u64) as usize;
+                n = h[at..at + nn].to_vec();
+            }
+            let naive = hn >= nn && h.windows(nn).any(|w| w == &n[..]);
+            let want = naive && nn <= 256;
+            assert_eq!(super::find_short(&h, &n), want, "{h:?} {n:?}");
         }
     }
 

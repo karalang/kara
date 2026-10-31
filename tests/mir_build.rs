@@ -706,6 +706,56 @@ fn mir_string_tests_agree_on_both_backends() {
     }
 }
 
+/// `contains` over a haystack longer than 64 bytes calls the runtime's
+/// search, which hands a needle whose first byte keeps turning up to a
+/// shift-table search (B-2026-10-29-32): on binary strings, a two-letter
+/// text and ordinary text, at both ends of the needle range, every answer
+/// agrees with the interpreter, which uses Rust's `str`.
+#[test]
+fn mir_long_haystack_contains_agrees_with_the_interpreter() {
+    const SRC: &str = r#"fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+fn main() {
+    let mut seed = 29;
+    let mut hays: Vec[String] = Vec.new();
+    for len in [65, 100, 300, 1000] {
+        for alphabet in [2, 3] {
+            let mut s = String.new();
+            for _ in 0..len {
+                s.push(match next_random(mut seed) % alphabet { 0 => '0', 1 => '1', _ => 'x' });
+            }
+            hays.push(s);
+        }
+    }
+    hays.push("the quick brown fox jumps over the lazy dog, and the lazy dog sleeps on in the sun".to_string());
+    let mut total = 0;
+    let mut check = 0;
+    for h in hays.iter() {
+        for x in 1..600 {
+            let n = f"{x:b}";
+            let hit = h.contains(n);
+            let hit_x = h.contains(n + "x");
+            if hit { total += 1; }
+            check = (check * 3 + if hit { 1 } else { 0 } + if hit_x { 2 } else { 0 }) % 1000000007;
+        }
+        let tail = h.substring(h.len() - 20, h.len());
+        let head = h.substring(0, 17);
+        println(f"{h.len()} {h.contains(tail)} {h.contains(head)} {h.contains("lazy dog,")} {h.contains("lazy cat")}");
+    }
+    println(f"{total} {check}");
+}
+"#;
+    let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
+    assert!(interp.output.lines().count() == 10, "{}", interp.output);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(SRC, opt) {
+            assert_eq!(out, interp.output, "at -O{opt}");
+        }
+    }
+}
+
 /// A pushed Vec grows in line (B-2026-10-15-56): an empty one takes a
 /// first block of 8 elements up to 256 bytes each, 4 up to 1 KiB and 1
 /// beyond (B-2026-10-14-69), a full one doubles, and a heap literal grows

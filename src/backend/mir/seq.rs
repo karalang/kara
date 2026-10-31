@@ -13,6 +13,10 @@ use super::{Cx, R};
 use crate::mir::ty::{IntTy, IntrinsicTy};
 use crate::mir::{Operand, Place, Ty, TyKind};
 
+/// The longest haystack whose `contains` of a needle of 2 to 16 bytes is
+/// scanned inline; a longer one calls the runtime (B-2026-10-29-32).
+const STR_CONTAINS_INLINE_HAY: u64 = 64;
+
 fn e<T: ToString>(x: T) -> String {
     x.to_string()
 }
@@ -585,10 +589,11 @@ impl<'ctx> Cx<'ctx, '_> {
         let i8t = self.llcx.i8_type();
         let f = self.cur_fn()?;
         let block = |n: &str| self.llcx.append_basic_block(f, n);
-        let (long, short, fits, pre, head, check, next, yes, done) = (
+        let (long, short, fits, pick, pre, head, check, next, yes, done) = (
             block("contains.long"),
             block("contains.short"),
             block("contains.fits"),
+            block("contains.pick"),
             block("contains.pre"),
             block("contains.head"),
             block("contains.check"),
@@ -625,7 +630,25 @@ impl<'ctx> Cx<'ctx, '_> {
             .build_int_compare(IntPredicate::ULE, bn, an, "")
             .map_err(e)?;
         self.builder
-            .build_conditional_branch(ok, pre, done)
+            .build_conditional_branch(ok, pick, done)
+            .map_err(e)?;
+        // A needle of two bytes or more in a long haystack goes to the
+        // runtime's shift-table search: here each place the first byte
+        // occurs costs a `memchr` and a `memcmp`, two calls per two bytes
+        // of a binary string (B-2026-10-29-32). A short haystack stays
+        // inline, where a call would cost more than the scan.
+        self.builder.position_at_end(pick);
+        let multi = self
+            .builder
+            .build_int_compare(IntPredicate::UGT, bn, self.i64(1), "")
+            .map_err(e)?;
+        let far = self
+            .builder
+            .build_int_compare(IntPredicate::UGT, an, self.i64(STR_CONTAINS_INLINE_HAY), "")
+            .map_err(e)?;
+        let to_rt = self.builder.build_and(multi, far, "").map_err(e)?;
+        self.builder
+            .build_conditional_branch(to_rt, long, pre)
             .map_err(e)?;
         // `end` is one past the last place the needle can start.
         self.builder.position_at_end(pre);
