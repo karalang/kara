@@ -785,6 +785,11 @@ impl<'ctx> Cx<'ctx, '_> {
             vec![i32t.const_int(op, false).into(), handle.into()];
         if op <= 3 {
             self.bytes_call("child", &call, dest, op == 0)?;
+            // `wait_with_output` takes `own self`, so the call is the
+            // handle's last use and nothing drops it after (B-2026-10-31-26).
+            if op == 3 {
+                self.rt("child_free", &[handle.into()])?;
+            }
             return Ok(Some(()));
         }
         // `id` cannot fail; a pipe is `Some` of its handle, or `None` (0).
