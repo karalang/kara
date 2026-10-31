@@ -607,7 +607,9 @@ impl<'a> UseClassifier<'a> {
 
     /// B-2026-10-29-43: record the closure literals handed to a method of a
     /// function-level statement's receiver chain
-    /// (`let n = h.iter().filter(|u| ..).count();`), when nothing the
+    /// (`let n = h.iter().filter(|u| ..).count();`), or as a non-escaping
+    /// argument of the named function at its root (`run(|| ..)`,
+    /// B-2026-10-31-13), when nothing the
     /// statement leaves behind can hold them: its value (a `let`'s; an
     /// expression statement's drops at the `;`) and the chain's root receiver
     /// have types that hold no closure. The methods take the closure as a
@@ -636,6 +638,21 @@ impl<'a> UseClassifier<'a> {
                 }
             }
             e = object;
+        }
+        // A named function's call (`run(|| ..)`, `with_provider[R](p, || ..)`)
+        // calls a closure literal it takes as a non-escaping parameter, if at
+        // all, before it returns (core semantics §9.3, B-2026-10-31-13).
+        if let ExprKind::Call { callee, args } = &e.kind {
+            if crate::ownership::callee_param_modes_key(callee).is_some() {
+                for a in args {
+                    let k = SpanKey::from_span(&a.value.span);
+                    if matches!(a.value.kind, ExprKind::Closure { .. })
+                        && !self.tc.core_escaping_closures.contains(&k)
+                    {
+                        found.push(k);
+                    }
+                }
+            }
         }
         if found.is_empty()
             || matches!(e.kind, ExprKind::MethodCall { .. })
