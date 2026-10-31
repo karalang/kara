@@ -375,11 +375,11 @@ A failed connection fails with `NetError.Tls`, and every later call on it fails 
 impl WebSocket {
     fn accept(listener: TcpListener) -> Result[WebSocket, NetError] with receives(listener) blocks suspends
     fn accept_tls(listener: TlsListener) -> Result[WebSocket, NetError] with receives(listener) blocks suspends
-    fn recv(mut self) -> Result[WsMessage, NetError] with receives(self) sends(self) blocks suspends
-    fn send_text(mut self, text: Str) -> Result[(), NetError] with sends(self) blocks suspends
-    fn send_binary(mut self, data: Slice[u8]) -> Result[(), NetError] with sends(self) blocks suspends
-    fn send_ping(mut self, data: Slice[u8]) -> Result[(), NetError] with sends(self) blocks suspends
-    fn close(mut self, code: u16) -> Result[(), NetError] with sends(self) receives(self) blocks suspends
+    fn recv(mut ref self) -> Result[WsMessage, NetError] with receives(self) sends(self) blocks suspends
+    fn send_text(mut ref self, text: Str) -> Result[(), NetError] with sends(self) blocks suspends
+    fn send_binary(mut ref self, data: Slice[u8]) -> Result[(), NetError] with sends(self) blocks suspends
+    fn send_ping(mut ref self, data: Slice[u8]) -> Result[(), NetError] with sends(self) blocks suspends
+    fn close(mut ref self, code: u16) -> Result[(), NetError] with sends(self) receives(self) blocks suspends
     fn set_read_timeout(self, ms: Option[i64]) -> Result[(), NetError]
 }
 
