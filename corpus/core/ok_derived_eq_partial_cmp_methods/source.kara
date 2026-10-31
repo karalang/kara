@@ -1,0 +1,78 @@
+// design.md § Operator traits declares `fn eq(self, other: Rhs) -> bool` on
+// `PartialEq` and `fn partial_cmp(self, other: Rhs) -> Option[Ordering]` on
+// `PartialOrd`. On a type that derives them, the methods compare as `==`
+// and `<` do: field by field in declaration order, an enum by variant and
+// then payload, and a pair of floats that is unordered (a NaN) makes the
+// whole comparison `None` when it is the pair that decides.
+#[derive(PartialEq, PartialOrd, Clone)]
+struct Inner {
+    w: f64,
+}
+
+#[derive(PartialEq, PartialOrd, Clone)]
+struct Outer {
+    a: i64,
+    i: Inner,
+    b: i64,
+}
+
+#[derive(PartialEq, PartialOrd)]
+enum Shape {
+    Dot,
+    Len(f64),
+}
+
+struct Mod {
+    v: i64,
+}
+
+impl PartialEq for Mod {
+    fn eq(self, other: Mod) -> bool {
+        self.v % 10 == other.v % 10
+    }
+}
+
+fn same[T: PartialEq](a: T, b: T) -> bool {
+    a.eq(b)
+}
+
+fn order[T: PartialOrd](a: T, b: T) -> Option[Ordering] {
+    a.partial_cmp(b)
+}
+
+fn show(o: Option[Ordering]) -> String {
+    match o {
+        Some(Ordering.Less) => "Less".to_string(),
+        Some(Ordering.Equal) => "Equal".to_string(),
+        Some(Ordering.Greater) => "Greater".to_string(),
+        None => "None".to_string(),
+    }
+}
+
+fn main() {
+    let nan = 0.0 / 0.0;
+    let x = Outer { a: 1, i: Inner { w: nan }, b: 5 };
+    let y = Outer { a: 2, i: Inner { w: 1.0 }, b: 0 };
+    let z = Outer { a: 1, i: Inner { w: 1.0 }, b: 0 };
+    // `a` decides before the NaN is reached; then the NaN decides.
+    println(show(x.partial_cmp(y)));
+    println(show(x.partial_cmp(z)));
+    println(show(z.partial_cmp(z.clone())));
+    println(show(y.partial_cmp(z)));
+    println(show(Shape.Dot.partial_cmp(Shape.Len(nan))));
+    println(show(Shape.Len(nan).partial_cmp(Shape.Len(nan))));
+    println(show(Shape.Len(2.0).partial_cmp(Shape.Len(1.0))));
+    println(z.eq(z.clone()));
+    println(z.eq(y));
+    println(x.eq(x.clone()));
+    println(z.eq(y) == (z == y));
+    println(Shape.Dot.eq(Shape.Dot));
+    // A hand-written `PartialEq` is the method itself.
+    println(Mod { v: 13 }.eq(Mod { v: 3 }));
+    // Under a bound, at a derived type and at a number.
+    println(same(z.clone(), z.clone()));
+    println(same(3, 4));
+    println(show(order(y.clone(), z.clone())));
+    println(show(order(x.clone(), z.clone())));
+    println(show(order(1.0, nan)));
+}

@@ -1,0 +1,9 @@
+source = "B-2026-10-31-24"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["derive", "trait", "ordering", "float"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-10-31-24: design.md § Operator traits declares `PartialEq.eq` and `PartialOrd.partial_cmp`; on a derived type they compare as `==` and `<` do (field order, enum variant then payload), and a deciding float pair that is unordered gives `None`. Directly, on a unit-variant path, and under `T: PartialEq` / `T: PartialOrd`; a hand-written `eq` is called as written."

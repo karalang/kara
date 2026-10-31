@@ -60,7 +60,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | diagnostics | 76 |
 | false-positive | 76 |
-| missing-feature | 58 |
+| missing-feature | 60 |
 | perf | 47 |
 | soundness | 31 |
 | miscompile | 19 |
@@ -74,8 +74,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 129 |
-| mir | 74 |
+| typecheck | 131 |
+| mir | 75 |
 | mir-llvm | 53 |
 | cli | 43 |
 | ownership | 37 |
@@ -107,6 +107,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-31-21 | 2026-10-31 | parser | low | Parse errors show the Rust `Debug` form of the token: `Expected LeftBracket, found Identifier { name: "tool", raw: false }` | — |
 | B-2026-10-31-22 | 2026-10-31 | cli | medium | `karac build` refuses the project `karac new --lib` just made ("the v2 build makes an executable from src/main.kara … v2 does not build a library package yet"), and on a binary project it prints a slice-2 manifest dump (project/edition/root/target/entry/modules) before `Built:` | — |
 | B-2026-10-31-23 | 2026-10-31 | mir | medium | The MIR builder refuses every program with a struct `invariant` ("a type invariant is not lowered yet"), so examples/weave, which checks since B-2026-10-31-13/-14, still does not run, build or test on v2 | — |
+| B-2026-10-31-24 | 2026-10-31 | typecheck+mir | medium | `x.eq(y)` and `x.partial_cmp(y)` on a type that derives `PartialEq` / `PartialOrd` are `no method 'eq'` / `no method 'partial_cmp'` at check, though design.md § Operator traits declares both methods and `==` / `<` already compare such a type; `cmp` on a derived `Ord` resolves | — |
+| B-2026-10-31-25 | 2026-10-31 | typecheck | medium | `x.hash(mut h)` with a user `Hasher` is `no method 'hash'` on a type that derives `Hash` and on the primitives (`7.hash(mut h)`), though design.md § Hashing declares `trait Hash { fn hash[H: Hasher](self, hasher: mut ref H); }` and says the derive generates ordinary `self.a.hash(mut hasher)` code | — |
 
 ### Relocated
 

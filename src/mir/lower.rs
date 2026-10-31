@@ -3339,6 +3339,9 @@ struct Bx<'l, 'a> {
     /// Types for expressions the checker left untyped, taken from where
     /// they are used (`v.push(None)` gives `None` the element type).
     ty_hints: FxHashMap<NodeId, Ty>,
+    /// While a derived `partial_cmp` is lowered ([`Builder::partial_cmp_places`]):
+    /// the `bool` a float comparison sets when its two sides are unordered.
+    unordered: Option<Local>,
     /// The `par for` whose body is lowered next: its body, the `Vec` local
     /// that collects the bodies' values, and that `Vec`'s type.
     par_acc: Option<(*const Block, Local, Ty, usize)>,
@@ -3442,6 +3445,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             task_moves: false,
             outer_fn: None,
             ty_hints: FxHashMap::default(),
+            unordered: None,
             par_acc: None,
             par_for_tasks: None,
             closure_by_value: FxHashSet::default(),
@@ -9175,6 +9179,27 @@ impl<'l, 'a> Bx<'l, 'a> {
                     self.goto(join);
                     self.cur = no;
                 }
+                // Neither side orders before the other: under a derived
+                // `partial_cmp`, two floats that are not equal either are
+                // unordered (a NaN), which makes the whole comparison `None`.
+                if let (Some(flag), HK::Float(_)) = (self.unordered, self.tys().tcx().kind(t)) {
+                    let ne = self.temp(bool_t);
+                    self.assign(
+                        ne,
+                        Rvalue::BinaryOp(BinOp::Ne, Operand::Copy(l), Operand::Copy(r)),
+                    );
+                    let (set, rest) = (self.b.new_block(), self.b.new_block());
+                    self.goto_with(
+                        TerminatorKind::SwitchInt {
+                            discr: Operand::Copy(Place::local(ne)),
+                            targets: SwitchTargets::if_else(set, rest),
+                        },
+                        set,
+                    );
+                    self.assign(flag, Rvalue::Use(bool_const(bool_t, true)));
+                    self.goto(rest);
+                    self.cur = rest;
+                }
                 let kind = self.adt_aggregate(ot, equal);
                 self.assign(dest, Rvalue::Aggregate(kind, Vec::new()));
                 self.goto(join);
@@ -9273,6 +9298,56 @@ impl<'l, 'a> Bx<'l, 'a> {
             }
             _ => self.unsupported(span, "ordering this type"),
         }
+    }
+
+    /// `dest = l.partial_cmp(r)` for two places of a type whose `PartialOrd`
+    /// is derived (design.md § Operator traits, B-2026-10-31-24): `Some` of
+    /// the order [`Self::cmp_places`] gives, or `None` when the pair that
+    /// decides it is unordered. The comparison stops at the first pair that
+    /// differs, so a float pair is reached only when every pair before it
+    /// is equal, and an unordered one is then the deciding pair.
+    fn partial_cmp_places(&mut self, span: Span, l: Place, r: Place, t: Ty, dest: Place) -> R<()> {
+        let (ot, _) = self.ordering_ty(span)?;
+        let Some(opt_t) = self.option_of(ot) else {
+            return self.unsupported(span, "a `partial_cmp` with no `Option`");
+        };
+        let variant = |s: &Self, name: &str| {
+            s.tys()
+                .tcx()
+                .adt_of(opt_t)
+                .and_then(|(a, _)| a.variants.iter().position(|v| v.name == name))
+        };
+        let (Some(some), Some(none)) = (variant(self, "Some"), variant(self, "None")) else {
+            return self.unsupported(span, "a `partial_cmp` with no `Option`");
+        };
+        let bool_t = self.tys().bool();
+        let flag = self.temp(bool_t);
+        self.assign(flag, Rvalue::Use(bool_const(bool_t, false)));
+        let o = self.temp(ot);
+        let outer = self.unordered.replace(flag);
+        let r_ = self.cmp_places(span, l, r, t, Place::local(o));
+        self.unordered = outer;
+        r_?;
+        let (yes, no, join) = (self.b.new_block(), self.b.new_block(), self.b.new_block());
+        self.goto_with(
+            TerminatorKind::SwitchInt {
+                discr: Operand::Copy(Place::local(flag)),
+                targets: SwitchTargets::if_else(yes, no),
+            },
+            no,
+        );
+        let kind = self.adt_aggregate(opt_t, some as u32);
+        self.assign(
+            dest.clone(),
+            Rvalue::Aggregate(kind, vec![Operand::Move(Place::local(o))]),
+        );
+        self.goto(join);
+        self.cur = yes;
+        let kind = self.adt_aggregate(opt_t, none as u32);
+        self.assign(dest, Rvalue::Aggregate(kind, Vec::new()));
+        self.goto(join);
+        self.cur = join;
+        Ok(())
     }
 
     /// The library's total-order float wrapper `t` is (`F64`, `F32`): the
@@ -19166,6 +19241,15 @@ impl<'l, 'a> Bx<'l, 'a> {
             if method == "fmt_debug" && args.is_empty() {
                 return self.debug_text(object, dest);
             }
+            // `a.eq(b)` under `T: PartialEq` and `a.partial_cmp(b)` under
+            // `T: PartialOrd` at a type that derives them: what `==` and `<`
+            // compare by, as on the type itself (B-2026-10-31-24). A
+            // hand-written impl was found through the bound above.
+            if let ("eq" | "partial_cmp", [_]) = (method, args) {
+                let (_, base) = self.strip_ty_full(rt);
+                let key = format!("{}.{method}", self.tys().display(base));
+                return self.builtin_method(e, &key, object, method, args, dest);
+            }
             return self.unsupported(
                 e.span,
                 &format!("the method call `.{method}` with no resolved callee"),
@@ -22614,6 +22698,31 @@ impl<'l, 'a> Bx<'l, 'a> {
             let (p, t) = self.strip_refs(p);
             if self.discriminant_into(e, p, t, dest.clone())? {
                 return Ok(());
+            }
+        }
+        // `a.eq(b)` and `a.partial_cmp(b)` on a type whose `PartialEq` /
+        // `PartialOrd` is derived: what `==` and `<` compare by
+        // (B-2026-10-31-24).
+        if let ("eq" | "partial_cmp", [other]) = (method, args) {
+            if matches!(
+                self.tys().tcx().kind(base),
+                HK::Adt { .. }
+                    | HK::Shared { .. }
+                    | HK::Tuple(_)
+                    | HK::Array { .. }
+                    | HK::Intrinsic {
+                        kind: IntrinsicKind::Vec | IntrinsicKind::VecDeque,
+                        ..
+                    }
+            ) {
+                let lp = self.expr_place(object, false)?;
+                let rp = self.expr_place(&other.value, false)?;
+                let (lp, lt) = self.strip_refs(lp);
+                let (rp, _) = self.strip_refs(rp);
+                return match method {
+                    "eq" => self.eq_places(e.span, lp, rp, lt, dest),
+                    _ => self.partial_cmp_places(e.span, lp, rp, lt, dest),
+                };
             }
         }
         if let ("cmp", [other]) = (method, args) {

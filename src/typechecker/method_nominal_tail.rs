@@ -127,6 +127,41 @@ impl<'a> super::TypeChecker<'a> {
                 });
             }
         }
+        // `a.eq(b)` and `a.partial_cmp(b)` on a type whose `PartialEq` /
+        // `PartialOrd` is derived: the methods design.md § Operator traits
+        // declares (`fn eq(self, other: Rhs) -> bool`, `fn partial_cmp(self,
+        // other: Rhs) -> Option[Ordering]`), which `==` and `<` already are
+        // (B-2026-10-31-24). A hand-written impl owns its method through the
+        // impl table, so only a type with no such method of its own is
+        // claimed here, on the terms `cmp` is above.
+        if let ("eq" | "partial_cmp", [other]) = (method, args) {
+            let claims = match receiver_for_lookup {
+                Type::Named { name, .. } => {
+                    self.env
+                        .find_methods_with_args(name, &[], method)
+                        .is_empty()
+                        && match method {
+                            "eq" => self.type_supports_partial_eq(receiver_for_lookup),
+                            _ => self.type_supports_partial_ord(receiver_for_lookup),
+                        }
+                }
+                _ => false,
+            };
+            if claims {
+                let arg_ty = self.infer_expr(&other.value);
+                self.check_assignable(receiver_for_lookup, &arg_ty, other.value.span);
+                return Some(match method {
+                    "eq" => Type::Bool,
+                    _ => Type::Named {
+                        name: "Option".to_string(),
+                        args: vec![Type::Named {
+                            name: "Ordering".to_string(),
+                            args: Vec::new(),
+                        }],
+                    },
+                });
+            }
+        }
         // Opaque foreign types have no methods by definition — impl blocks
         // on them are rejected at `E_OPAQUE_TYPE_NO_INHERENT_OR_TRAIT_IMPLS`,
         // so the generic "method not found" diagnostic that would otherwise
