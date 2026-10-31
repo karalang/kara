@@ -672,10 +672,28 @@ fn default_threads() -> usize {
     {
         linux_cores()
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_vendor = "apple")]
+    {
+        apple_cores()
+    }
+    #[cfg(not(any(target_os = "linux", target_vendor = "apple")))]
     {
         std::thread::available_parallelism().map_or(1, |n| n.get())
     }
+}
+
+/// The online cores on macOS, which is all `available_parallelism` counts
+/// there. Its `io::Result` brings the error's formatting, and through it
+/// `String::from_utf8_lossy`'s capacity panic and std's panic hook, into
+/// every program, since every program that prints asks (ld64 `-why_live`
+/// in CI, B-2026-10-30-37).
+#[cfg(target_vendor = "apple")]
+fn apple_cores() -> usize {
+    extern "C" {
+        fn sysconf(name: i32) -> i64;
+    }
+    // SAFETY: plain call; _SC_NPROCESSORS_ONLN is 58 on Apple platforms.
+    unsafe { sysconf(58) }.max(1) as usize
 }
 
 /// The cores this process may use on Linux: those in its affinity mask,
