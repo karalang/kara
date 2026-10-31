@@ -1,0 +1,6 @@
+Holder { p: Pt<5 b>, n: 1 }
+[Pt<6 c>]
+Full(Pt<7 d>)
+Empty
+[Some(Pt<8 e>), None]
+(Pt<9 f>, "g")

@@ -1,0 +1,9 @@
+source = "B-2026-10-31-12"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["debug", "derive", "library"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md § Display and Debug: a hand-written `impl Debug` is the type's Debug text wherever a Debug text is rendered, so a derived Debug of a struct, an enum payload, a Vec, an Option and a tuple holding one shows it as its `fmt_debug` returns it. Its body renders by Display, so the String it interpolates is not quoted; the tuple's own String is."

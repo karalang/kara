@@ -11991,6 +11991,18 @@ impl<'a> Interp<'a> {
                 "<redacted>".to_string()
             }
             (TyKind::Adt(_) | TyKind::Shared(_), _)
+                if self.debug_render && self.user_debug(ty).is_some() =>
+            {
+                // A user `Debug` wins at every depth, as a user `Display`
+                // does below (B-2026-10-31-12); its body renders by
+                // `Display`, so its own f-strings do not quote.
+                let name = self.user_debug(ty).unwrap();
+                self.debug_render = false;
+                let shown = self.call_display(&name, v);
+                self.debug_render = true;
+                shown?
+            }
+            (TyKind::Adt(_) | TyKind::Shared(_), _)
                 if !self.debug_render && self.user_display(ty).is_some() =>
             {
                 // A user `Display` wins at every depth (legacy B-2026-08-26-29).
@@ -12059,6 +12071,13 @@ impl<'a> Interp<'a> {
     /// queues it for every type a printed value contains.
     fn user_display(&self, ty: Ty) -> Option<String> {
         let name = format!("{}.to_string", self.tys.adt_name(ty));
+        self.program.bodies.contains_key(&name).then_some(name)
+    }
+
+    /// The lowered body of `ty`'s user `fmt_debug`, if it has one, which
+    /// lowering queues for every type a `dbg`'d value contains.
+    fn user_debug(&self, ty: Ty) -> Option<String> {
+        let name = format!("{}.fmt_debug", self.tys.adt_name(ty));
         self.program.bodies.contains_key(&name).then_some(name)
     }
 

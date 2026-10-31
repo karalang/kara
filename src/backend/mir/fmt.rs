@@ -467,6 +467,11 @@ impl<'ctx> Cx<'ctx, '_> {
         if !self.fmt.debug && program.bodies.contains_key(&user) {
             return self.fmt_user(p, ty, &user);
         }
+        // A user `Debug` wins at every depth too (B-2026-10-31-12).
+        let user = format!("{}.fmt_debug", self.tys.adt_name(ty));
+        if self.fmt.debug && program.bodies.contains_key(&user) {
+            return self.fmt_user(p, ty, &user);
+        }
         // The body behind a `shared` handle.
         let (p, ty) = match self.tys.kind(ty) {
             TyKind::Shared(_) => {
@@ -573,7 +578,11 @@ impl<'ctx> Cx<'ctx, '_> {
             .build_call(f, &[ret.into(), arg.into()], "")
             .map_err(e)?;
         let _ = ty;
-        self.fmt_value(ret, string)?;
+        // The text is shown as the body wrote it, unquoted under `Debug`.
+        let debug = std::mem::replace(&mut self.fmt.debug, false);
+        let shown = self.fmt_value(ret, string);
+        self.fmt.debug = debug;
+        shown?;
         self.call_glue(ret, string)
     }
 }

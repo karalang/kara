@@ -1,0 +1,36 @@
+struct Pt {
+    x: i64,
+    tag: String,
+}
+
+impl Debug for Pt {
+    fn fmt_debug(self) -> String {
+        f"Pt<{self.x} {self.tag}>"
+    }
+}
+
+#[derive(Debug)]
+struct Holder {
+    p: Pt,
+    n: i64,
+}
+
+#[derive(Debug)]
+enum Slot {
+    Full(Pt),
+    Empty,
+}
+
+fn main() {
+    let h = Holder { p: Pt { x: 5, tag: "b".to_string() }, n: 1 };
+    println(h.fmt_debug());
+    let v = [Pt { x: 6, tag: "c".to_string() }];
+    println(v.fmt_debug());
+    println(Slot.Full(Pt { x: 7, tag: "d".to_string() }).fmt_debug());
+    let empty = Slot.Empty;
+    println(empty.fmt_debug());
+    let os: Vec[Option[Pt]] = [Some(Pt { x: 8, tag: "e".to_string() }), None];
+    println(os.fmt_debug());
+    let t = (Pt { x: 9, tag: "f".to_string() }, "g".to_string());
+    println(t.fmt_debug());
+}

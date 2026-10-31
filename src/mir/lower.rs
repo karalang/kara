@@ -9953,6 +9953,16 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// `Option[P]`, a field of type `P`). A type with its own `Display`
     /// is shown by that body alone, so its parts are not visited.
     fn queue_nested_displays(&mut self, t: Ty) {
+        self.queue_nested_shows(t, "Display", "to_string");
+    }
+
+    /// [`Self::queue_nested_displays`] for `Debug`: the user `fmt_debug`
+    /// body of every type a `dbg`'d value contains (B-2026-10-31-12).
+    fn queue_nested_debugs(&mut self, t: Ty) {
+        self.queue_nested_shows(t, "Debug", "fmt_debug");
+    }
+
+    fn queue_nested_shows(&mut self, t: Ty, tr: &str, method: &str) {
         let mut seen = FxHashSet::default();
         let mut work = vec![t];
         while let Some(t) = work.pop() {
@@ -9966,7 +9976,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 HK::Array { elem, .. } | HK::Slice { elem, .. } => work.push(elem),
                 HK::Intrinsic { args, .. } => work.extend(tcx.list(args)),
                 HK::Adt { args, .. } | HK::Shared { args, .. } => {
-                    if let Some((d, args)) = self.user_impl_method(t, "Display", "to_string") {
+                    if let Some((d, args)) = self.user_impl_method(t, tr, method) {
                         self.lcx.instance(d, args);
                         continue;
                     }
@@ -10325,6 +10335,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 (p, t)
             }
         };
+        self.queue_nested_debugs(t);
         let value = self.ref_to(p, t);
         let st = self.tys().tcx().intern(HK::Str);
         let s = self.temp(st);
@@ -10335,6 +10346,9 @@ impl<'l, 'a> Bx<'l, 'a> {
     fn dbg_print(&mut self, e: &Expr, a: &Expr, value: Operand) {
         if release_strips("KARAC_STRIP_DBG") {
             return;
+        }
+        if let Ok(t) = self.expr_ty(a) {
+            self.queue_nested_debugs(t);
         }
         let (off, len) = (a.span.offset, a.span.length);
         let text = self
@@ -22427,6 +22441,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             true => self.expr_place(x, false)?,
             false => Place::local(self.temp_of(x, t)?),
         };
+        self.queue_nested_debugs(t);
         let value = self.ref_to(p, t);
         self.call_native("debug_string", vec![value], dest);
         Ok(())
