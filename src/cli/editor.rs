@@ -88,7 +88,9 @@ fn severity_of(severity: &str) -> &'static str {
 }
 
 /// The record's edits: a single `replacement`, a `fix_diff` envelope, or a
-/// typechecker `fix_it`, in the shapes `karac fix` applies.
+/// typechecker `fix_it`, in the shapes `karac fix` applies. A typecheck record
+/// carries its edit twice, as `fix_it` and as `replacement`, so `fix_it` is
+/// read only when neither of the others is there.
 fn fixes_of(v: &serde_json::Value) -> Vec<SourceFix> {
     let edit = |e: &serde_json::Value, text: &str| -> Option<SourceFix> {
         Some(SourceFix {
@@ -100,6 +102,9 @@ fn fixes_of(v: &serde_json::Value) -> Vec<SourceFix> {
     let mut fixes: Vec<SourceFix> = edit(&v["replacement"], "text").into_iter().collect();
     if let Some(diff) = v["fix_diff"].as_array() {
         fixes.extend(diff.iter().filter_map(|e| edit(e, "text")));
+    }
+    if !fixes.is_empty() {
+        return fixes;
     }
     if let Some(span) = v["fix_it"].get("span") {
         fixes.extend(v["fix_it"]["replacement"].as_str().and_then(|r| {
