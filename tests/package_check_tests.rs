@@ -100,3 +100,37 @@ fn karac_check_reports_a_type_error_in_a_modules_test() {
     let ok = karac_in(&proj, &["check"]);
     assert!(ok.status.success(), "{}", text(&ok));
 }
+
+#[test]
+fn a_resolve_error_in_a_test_file_names_the_test_file() {
+    // A `_test.kara` is merged into its sibling's module, and its spans used
+    // to overlap the sibling's: the error carried the test file's line and
+    // the production file's name (B-2026-10-31-1).
+    let proj = new_package("resolve", "--cli");
+    let path = proj.join("src/main_test.kara");
+    let mut src = std::fs::read_to_string(&path).unwrap();
+    let line = src.lines().count() + 2;
+    src.push_str("\ntest \"misspelled\" {\n    assert(undefined_fn(1));\n}\n");
+    std::fs::write(&path, src).unwrap();
+    let check = karac_in(&proj, &["check"]);
+    assert_eq!(check.status.code(), Some(1), "{}", text(&check));
+    let want = format!(
+        "src/main_test.kara:{}:12: undefined name 'undefined_fn'",
+        line + 1
+    );
+    assert!(
+        text(&check).contains(&want),
+        "want {want:?} in {}",
+        text(&check)
+    );
+    let test = karac_in(&proj, &["test"]);
+    let want = format!(
+        "\"file\":\"src/main_test.kara\",\"line\":{},\"column\":12",
+        line + 1
+    );
+    assert!(
+        text(&test).contains(&want),
+        "want {want:?} in {}",
+        text(&test)
+    );
+}

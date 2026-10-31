@@ -768,11 +768,38 @@ pub(super) fn resolve_modules(
         for edits in result.error_fix_diffs.values_mut() {
             edits.iter_mut().for_each(to_file);
         }
-        if !result.errors.is_empty() {
+        // A merged test companion's spans sit past its sibling's
+        // (`Module::test_span_base`): its errors name its own file, and
+        // their edits are offsets into it.
+        let test_base = m.span_base + m.test_span_base;
+        let (test_errors, errors): (Vec<_>, Vec<_>) = result
+            .errors
+            .into_iter()
+            .partition(|e| m.test_span_base > 0 && e.span.offset >= test_base);
+        for (file, mut errors) in [(Some(&m.file), errors), (m.test_file.as_ref(), test_errors)] {
+            let Some(file) = file.filter(|_| !errors.is_empty()) else {
+                continue;
+            };
+            let is_test = *file != m.file;
+            let mut fix_diffs = result.error_fix_diffs.clone();
+            fix_diffs.retain(|k, _| (k.0 >= test_base && m.test_span_base > 0) == is_test);
+            if is_test {
+                let to_test_file = |e: &mut crate::resolver::TextEdit| {
+                    e.offset = e.offset.saturating_sub(m.test_span_base);
+                };
+                for e in &mut errors {
+                    if let Some(r) = e.replacement.as_deref_mut() {
+                        to_test_file(r);
+                    }
+                }
+                for edits in fix_diffs.values_mut() {
+                    edits.iter_mut().for_each(to_test_file);
+                }
+            }
             out.push(ModuleResolveErrors {
-                file: m.file.clone(),
-                errors: result.errors,
-                fix_diffs: result.error_fix_diffs,
+                file: file.clone(),
+                errors,
+                fix_diffs,
             });
         }
     }

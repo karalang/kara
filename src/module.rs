@@ -87,6 +87,12 @@ pub struct Module {
     /// an edit a diagnostic carries is an offset into the file only after
     /// this is taken off. `0` for the first module and synthetic ones.
     pub span_base: usize,
+    /// Where a merged test companion's spans start, past the production
+    /// file's, before `span_base` is added: the two files' offsets would
+    /// otherwise overlap, and nothing could tell which file a diagnostic's
+    /// span is in (B-2026-10-31-1). `0` when no companion was merged into a
+    /// production sibling.
+    pub test_span_base: usize,
 }
 
 /// Directed importer → importee edges plus a path-to-id index.
@@ -358,6 +364,7 @@ pub fn build_program_tree_with_deps(
             let prod = production_idx.get(&pf.path).map(|&i| &parsed_files[i]);
             let test = test_idx.get(&pf.path).map(|&i| &parsed_files[i]);
 
+            let mut test_span_base = 0;
             let (
                 file,
                 mut items,
@@ -366,113 +373,134 @@ pub fn build_program_tree_with_deps(
                 is_entry,
                 test_items_start,
                 test_file,
-            ) = match (prod, test) {
-                (Some(p), Some(t)) => {
-                    let mut items = p.items.clone();
-                    let prod_count = items.len();
-                    // A test companion legitimately re-declares imports its
-                    // production sibling already has — each file states its
-                    // own imports, and the natural companion imports the
-                    // same helpers the code under test uses. Exact
-                    // re-imports (same module path, same source name, same
-                    // binding) are deduped here so the merged module does
-                    // not trip E0101 duplicate-definition; a same-binding
-                    // import from a *different* path or source name is kept
-                    // and surfaces as the genuine conflict it is.
-                    let prod_bound: std::collections::HashSet<(&[String], &str, Option<&str>)> = p
-                        .imports
-                        .iter()
-                        .flat_map(|d| {
-                            d.items.iter().map(|ii| {
-                                (d.path.as_slice(), ii.name.as_str(), ii.alias.as_deref())
-                            })
-                        })
-                        .collect();
-                    // A companion shares its sibling's module path, so an
-                    // import naming *that same module* is a no-op once the two
-                    // files are merged — those items are already in scope.
-                    // Left in, the import resolves back to the merged module
-                    // itself, `collect_import_edges` records a self-edge, and
-                    // Tarjan reports a bogus size-1-SCC-with-self-loop cycle
-                    // (`thing → thing`, E0223). That is what made the
-                    // idiomatic `foo.kara` / `foo_test.kara` layout unusable
-                    // under `karac test` while `karac build` — which skips
-                    // companions entirely — accepted the same package.
-                    // Dropped rather than diagnosed: the identical import is
-                    // meaningful when the companion is checked as a standalone
-                    // file, so it is the merge that makes it redundant, not
-                    // the source.
-                    let own_path = pf.path.as_slice();
-                    let is_self_import = |path: &[String], name: &str| -> bool {
-                        // `import thing.double;` from module `thing`, and
-                        // `import db.connection;` from module `db.connection`.
-                        path == own_path
-                            || (path.len() + 1 == own_path.len()
-                                && own_path.starts_with(path)
-                                && own_path[path.len()].as_str() == name)
-                    };
-                    let dedup_import = |d: &ImportDecl| -> Option<ImportDecl> {
-                        let kept: Vec<ImportItem> = d
-                            .items
-                            .iter()
-                            .filter(|ii| {
-                                !is_self_import(d.path.as_slice(), ii.name.as_str())
-                                    && !prod_bound.contains(&(
-                                        d.path.as_slice(),
-                                        ii.name.as_str(),
-                                        ii.alias.as_deref(),
-                                    ))
-                            })
-                            .cloned()
-                            .collect();
-                        if kept.is_empty() && !d.is_wildcard {
-                            None
-                        } else {
-                            // A wildcard is still unexpanded here (the tree is
-                            // mid-build), so its empty `items` means "not yet
-                            // filled in", not "everything was deduped away".
-                            Some(ImportDecl {
-                                items: kept,
-                                ..d.clone()
-                            })
+            ) =
+                match (prod, test) {
+                    (Some(p), Some(t)) => {
+                        let mut items = p.items.clone();
+                        let prod_count = items.len();
+                        // A test companion legitimately re-declares imports its
+                        // production sibling already has — each file states its
+                        // own imports, and the natural companion imports the
+                        // same helpers the code under test uses. Exact
+                        // re-imports (same module path, same source name, same
+                        // binding) are deduped here so the merged module does
+                        // not trip E0101 duplicate-definition; a same-binding
+                        // import from a *different* path or source name is kept
+                        // and surfaces as the genuine conflict it is.
+                        let prod_bound: std::collections::HashSet<(&[String], &str, Option<&str>)> =
+                            p.imports
+                                .iter()
+                                .flat_map(|d| {
+                                    d.items.iter().map(|ii| {
+                                        (d.path.as_slice(), ii.name.as_str(), ii.alias.as_deref())
+                                    })
+                                })
+                                .collect();
+                        // A companion shares its sibling's module path, so an
+                        // import naming *that same module* is a no-op once the two
+                        // files are merged — those items are already in scope.
+                        // Left in, the import resolves back to the merged module
+                        // itself, `collect_import_edges` records a self-edge, and
+                        // Tarjan reports a bogus size-1-SCC-with-self-loop cycle
+                        // (`thing → thing`, E0223). That is what made the
+                        // idiomatic `foo.kara` / `foo_test.kara` layout unusable
+                        // under `karac test` while `karac build` — which skips
+                        // companions entirely — accepted the same package.
+                        // Dropped rather than diagnosed: the identical import is
+                        // meaningful when the companion is checked as a standalone
+                        // file, so it is the merge that makes it redundant, not
+                        // the source.
+                        let own_path = pf.path.as_slice();
+                        let is_self_import = |path: &[String], name: &str| -> bool {
+                            // `import thing.double;` from module `thing`, and
+                            // `import db.connection;` from module `db.connection`.
+                            path == own_path
+                                || (path.len() + 1 == own_path.len()
+                                    && own_path.starts_with(path)
+                                    && own_path[path.len()].as_str() == name)
+                        };
+                        let dedup_import = |d: &ImportDecl| -> Option<ImportDecl> {
+                            let kept: Vec<ImportItem> = d
+                                .items
+                                .iter()
+                                .filter(|ii| {
+                                    !is_self_import(d.path.as_slice(), ii.name.as_str())
+                                        && !prod_bound.contains(&(
+                                            d.path.as_slice(),
+                                            ii.name.as_str(),
+                                            ii.alias.as_deref(),
+                                        ))
+                                })
+                                .cloned()
+                                .collect();
+                            if kept.is_empty() && !d.is_wildcard {
+                                None
+                            } else {
+                                // A wildcard is still unexpanded here (the tree is
+                                // mid-build), so its empty `items` means "not yet
+                                // filled in", not "everything was deduped away".
+                                Some(ImportDecl {
+                                    items: kept,
+                                    ..d.clone()
+                                })
+                            }
+                        };
+                        // The companion's spans move past the sibling's, so the
+                        // two files' offsets stay apart in the merged module.
+                        let mut prod_end = 0;
+                        for it in &mut items {
+                            crate::span_visitor::visit_item_spans_mut(it, &mut |sp| {
+                                prod_end = prod_end.max(sp.offset + sp.length);
+                            });
                         }
-                    };
-                    items.extend(t.items.iter().filter_map(|it| match it {
-                        Item::Import(d) => dedup_import(d).map(Item::Import),
-                        other => Some(other.clone()),
-                    }));
-                    let mut imports = p.imports.clone();
-                    imports.extend(t.imports.iter().filter_map(dedup_import));
-                    (
+                        test_span_base = prod_end + 1;
+                        let shift = |mut it: Item| {
+                            crate::span_visitor::visit_item_spans_mut(&mut it, &mut |sp| {
+                                sp.offset += test_span_base;
+                            });
+                            it
+                        };
+                        items.extend(t.items.iter().filter_map(|it| match it {
+                            Item::Import(d) => dedup_import(d).map(|d| shift(Item::Import(d))),
+                            other => Some(shift(other.clone())),
+                        }));
+                        let mut imports = p.imports.clone();
+                        imports.extend(t.imports.iter().filter_map(dedup_import).map(
+                            |d| match shift(Item::Import(d)) {
+                                Item::Import(d) => d,
+                                _ => unreachable!(),
+                            },
+                        ));
+                        (
+                            p.file.clone(),
+                            items,
+                            imports,
+                            p.module_doc_comment.clone(),
+                            p.role == walker::ModuleRole::Entry,
+                            Some(prod_count),
+                            Some(t.file.clone()),
+                        )
+                    }
+                    (Some(p), None) => (
                         p.file.clone(),
-                        items,
-                        imports,
+                        p.items.clone(),
+                        p.imports.clone(),
                         p.module_doc_comment.clone(),
                         p.role == walker::ModuleRole::Entry,
-                        Some(prod_count),
+                        None,
+                        None,
+                    ),
+                    (None, Some(t)) => (
+                        t.file.clone(),
+                        t.items.clone(),
+                        t.imports.clone(),
+                        t.module_doc_comment.clone(),
+                        false,
+                        Some(0),
                         Some(t.file.clone()),
-                    )
-                }
-                (Some(p), None) => (
-                    p.file.clone(),
-                    p.items.clone(),
-                    p.imports.clone(),
-                    p.module_doc_comment.clone(),
-                    p.role == walker::ModuleRole::Entry,
-                    None,
-                    None,
-                ),
-                (None, Some(t)) => (
-                    t.file.clone(),
-                    t.items.clone(),
-                    t.imports.clone(),
-                    t.module_doc_comment.clone(),
-                    false,
-                    Some(0),
-                    Some(t.file.clone()),
-                ),
-                (None, None) => unreachable!("path emitted with no parsed file"),
-            };
+                    ),
+                    (None, None) => unreachable!("path emitted with no parsed file"),
+                };
             // Drop unused `mut` warnings.
             let _ = (&mut items, &mut imports);
 
@@ -489,6 +517,7 @@ pub fn build_program_tree_with_deps(
                 test_file,
                 package: None,
                 span_base: 0,
+                test_span_base,
             };
             if is_entry && module.path.is_empty() {
                 root = Some(id);
@@ -513,6 +542,7 @@ pub fn build_program_tree_with_deps(
                 test_file: None,
                 package: None,
                 span_base: 0,
+                test_span_base: 0,
             };
             if is_entry && module.path.is_empty() {
                 root = Some(id);
@@ -608,6 +638,7 @@ pub fn build_program_tree_with_deps(
                     test_file: None,
                     package: Some(dep.name.clone()),
                     span_base: 0,
+                    test_span_base: 0,
                 };
                 by_path.entry(module.path.clone()).or_insert(id);
                 modules.push(module);
@@ -633,6 +664,7 @@ pub fn build_program_tree_with_deps(
         test_file: None,
         package: None,
         span_base: 0,
+        test_span_base: 0,
     };
     by_path
         .entry(prelude_module.path.clone())
@@ -660,6 +692,7 @@ pub fn build_program_tree_with_deps(
             test_file: None,
             package: None,
             span_base: 0,
+            test_span_base: 0,
         };
         by_path.entry(module.path.clone()).or_insert(id);
         modules.push(module);
@@ -1826,6 +1859,7 @@ mod tests {
             test_file: None,
             package: None,
             span_base: 0,
+            test_span_base: 0,
         }
     }
 
