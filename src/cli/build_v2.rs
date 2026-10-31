@@ -159,18 +159,30 @@ pub(super) fn cmd_build_v2_project(a: BuildArgs) {
                 process::exit(1);
             });
     // A missing `src/`, an empty one, or one with no entry file was refused
-    // by the walk and the tree; a library package is the gap left.
+    // by the walk and the tree. A library package (`src/lib.kara`, as
+    // `karac new --lib` makes it) has no `main`, and 0.9 has no library
+    // artifact (`--crate-type` is the exported C ABI, deferred.md), so its
+    // build is its check: the packages that depend on it compile it into
+    // themselves (B-2026-10-31-22).
     let entry = root.join("src").join("main.kara");
     if walked.entry != walker::EntryKind::Bin {
-        fail_with(
-            &format!(
-                "error: the v2 build makes an executable from src/main.kara, and {} has none; \
-                 v2 does not build a library package yet",
-                root.display()
-            ),
+        super::run_check_cmds::cmd_check_project(
             output,
+            false,
+            false,
+            a.lint_overrides.clone(),
+            a.target,
+            None,
+            None,
         );
-        process::exit(1);
+        if output == OutputMode::Text {
+            println!(
+                "library package `{}`: checked, nothing to link (a library has no `main`; \
+                 the packages that depend on it build it)",
+                mf.name
+            );
+        }
+        return;
     }
     let summary = ProjectSummary {
         name: &mf.name,
@@ -180,9 +192,6 @@ pub(super) fn cmd_build_v2_project(a: BuildArgs) {
         platform: walk.target,
         deps: &deps,
     };
-    if output == OutputMode::Text {
-        summary.print();
-    }
     let filename = super::project_v2::shown(&entry);
     // One module is a lone file; anything else (a parse error included,
     // which the package check reports) is the package.
@@ -312,7 +321,7 @@ fn hot_swap_names(source: &str) -> Vec<String> {
         .collect()
 }
 
-/// A flag the v2 build does not honour yet: refused by name, exit 1.
+/// A flag `karac build` does not honour in 0.9: refused by name, exit 1.
 fn refuse_unsupported(a: &BuildArgs) {
     // A triple is built for (a cross one included); of the v1 names,
     // `native` and `wasm_wasi` are.
@@ -368,14 +377,13 @@ fn refuse_unsupported(a: &BuildArgs) {
     let mut lines = Vec::new();
     if !refused.is_empty() {
         lines.push(format!(
-            "error: the v2 build does not honour {} yet",
+            "error: `karac build` does not support {} in 0.9",
             refused.join(", ")
         ));
     }
     for (flag, feature) in archived {
         lines.push(format!(
-            "error: {flag} builds {feature}, which goes to the archive with the legacy \
-             backend at M3 and returns on v2 on demand"
+            "error: {flag} builds {feature}, which is not in 0.9"
         ));
     }
     if !lines.is_empty() {
@@ -438,9 +446,9 @@ fn apply_cpu(
     );
 }
 
-/// What a package build reports before it builds: the package, its entry,
-/// the modules the walk found (with each one's platform) and the
-/// dependencies' packages.
+/// What a package build's `--output=json` document reports: the package,
+/// its entry, the modules the walk found (with each one's platform) and the
+/// dependencies' packages. Text mode prints only `Built:` (B-2026-10-31-22).
 struct ProjectSummary<'a> {
     name: &'a str,
     edition: &'a str,
@@ -460,35 +468,6 @@ impl ProjectSummary<'_> {
             walker::EntryKind::Bin => "bin",
             walker::EntryKind::Lib => "lib",
             walker::EntryKind::None => "none",
-        }
-    }
-
-    fn print(&self) {
-        println!("project: {}", self.name);
-        println!("edition: {}", self.edition);
-        println!("root:    {}", self.root.display());
-        println!("target:  {}", self.platform.as_suffix());
-        println!("entry:   {}", self.entry());
-        println!("modules: {}", self.walked.modules.len());
-        for m in &self.walked.modules {
-            let path = match Self::module_path(m) {
-                p if p.is_empty() => "<crate root>".to_string(),
-                p => p,
-            };
-            let plat = m
-                .platform
-                .map_or(String::new(), |p| format!(" [{}]", p.as_suffix()));
-            println!("  {path}{plat}  {}", m.file.display());
-        }
-        if !self.deps.is_empty() {
-            let modules: usize = self.deps.iter().map(|d| d.walked.modules.len()).sum();
-            println!(
-                "deps:    {} package(s), {modules} module(s)",
-                self.deps.len()
-            );
-            for d in self.deps {
-                println!("  {}  {}", d.name, d.walked.src_dir.display());
-            }
         }
     }
 
@@ -516,8 +495,21 @@ impl ProjectSummary<'_> {
             })
             .collect::<Vec<_>>()
             .join(",");
+        let deps = self
+            .deps
+            .iter()
+            .map(|d| {
+                format!(
+                    "{{\"name\":{},\"modules\":{},\"src\":{}}}",
+                    json_string(&d.name),
+                    d.walked.modules.len(),
+                    json_string(&d.walked.src_dir.display().to_string()),
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(",");
         format!(
-            "\"project\":{},\"edition\":{},\"root\":{},\"target\":{},\"entry\":{},\"modules\":[{modules}],\"diagnostics\":[],",
+            "\"project\":{},\"edition\":{},\"root\":{},\"target\":{},\"entry\":{},\"modules\":[{modules}],\"deps\":[{deps}],\"diagnostics\":[],",
             json_string(self.name),
             json_string(self.edition),
             json_string(&self.root.display().to_string()),

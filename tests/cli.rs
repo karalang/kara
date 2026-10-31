@@ -3665,7 +3665,13 @@ fn test_build_project_lists_discovered_modules() {
     write(&tmp.join("src/greet.kara"), "pub fn greet() {}\n");
     write(&tmp.join("src/db/connection.kara"), "pub fn open() {}\n");
 
-    let out = karac_bin().current_dir(&tmp).arg("build").output().unwrap();
+    // The modules are listed in the `--output=json` document; text mode
+    // prints only `Built:` (B-2026-10-31-22).
+    let out = karac_bin()
+        .current_dir(&tmp)
+        .args(["build", "--output=json"])
+        .output()
+        .unwrap();
     let _ = std::fs::remove_dir_all(&tmp);
     assert!(
         out.status.success(),
@@ -3673,12 +3679,12 @@ fn test_build_project_lists_discovered_modules() {
         String::from_utf8_lossy(&out.stderr),
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.contains("project: demo"));
-    assert!(stdout.contains("entry:   bin"));
-    assert!(stdout.contains("modules: 3"));
-    assert!(stdout.contains("greet"));
-    assert!(stdout.contains("db.connection"));
-    assert!(stdout.contains("<crate root>"));
+    assert!(stdout.contains("\"project\":\"demo\""), "{stdout}");
+    assert!(stdout.contains("\"entry\":\"bin\""), "{stdout}");
+    assert_eq!(stdout.matches("\"role\":").count(), 3, "{stdout}");
+    assert!(stdout.contains("\"path\":\"greet\""), "{stdout}");
+    assert!(stdout.contains("\"path\":\"db.connection\""), "{stdout}");
+    assert!(stdout.contains("\"path\":\"\""), "{stdout}");
 }
 
 // NOTE: `test_fs_read_lines_build_rejected_loudly` was removed 2026-07-12.
@@ -5841,25 +5847,38 @@ fn project_build_wasm_target_selects_wasm_platform_module() {
         "import host.{run};\nfn main() { run(); }\n",
     );
     write(&tmp.join("src/host_wasm.kara"), "pub fn run() {}\n");
-    write(&tmp.join("src/host_macos.kara"), "pub fn run() {}\n");
-    write(&tmp.join("src/host_linux.kara"), "pub fn run() {}\n");
+    // The native siblings do not check, so a build that took either fails
+    // on it.
+    let native = "pub fn run() {\n    let x: i64 = \"native\";\n}\n";
+    write(&tmp.join("src/host_macos.kara"), native);
+    write(&tmp.join("src/host_linux.kara"), native);
 
     let out = karac_bin()
         .current_dir(&tmp)
-        .args(["build", "--target=wasm_wasi"])
+        .args(["build", "--target=wasm_wasi", "--output=json"])
         .output()
         .unwrap();
     let _ = std::fs::remove_dir_all(&tmp);
     let stdout = String::from_utf8_lossy(&out.stdout);
-    // The wasm host is selected; the native siblings are filtered out.
+    // The wasm host is selected and the native siblings are filtered out:
+    // nothing reports their error. The modules are listed in the JSON
+    // document of a build that links (B-2026-10-31-22); without the wasm
+    // runtime archive or sysroot the build stops past the check.
     assert!(
-        stdout.contains("host [wasm]"),
-        "wasm build should select host_wasm; stdout=\n{stdout}",
-    );
-    assert!(
-        !stdout.contains("host [macos]") && !stdout.contains("host [linux]"),
+        !stdout.contains("host_macos") && !stdout.contains("host_linux"),
         "wasm build must not select native host modules; stdout=\n{stdout}",
     );
+    if out.status.success() {
+        assert!(
+            stdout.contains("\"path\":\"host\",\"role\":\"ordinary\",\"platform\":\"wasm\""),
+            "wasm build should select host_wasm; stdout=\n{stdout}",
+        );
+    } else {
+        assert!(
+            stdout.contains("\"phase\":\"build\"") && !stdout.contains("typecheck"),
+            "the only failure is past the check (the wasm toolchain); stdout=\n{stdout}",
+        );
+    }
 }
 
 #[test]
@@ -20426,7 +20445,7 @@ fn target_flag_gpu_rejected() {
     assert!(!out.status.success());
     assert!(
         stderr.contains("`--target=gpu` builds GPU compute")
-            && stderr.contains("goes to the archive with the legacy backend at M3"),
+            && stderr.contains("which is not in 0.9"),
         "expected the gpu rejection, got: {stderr}",
     );
     let _ = std::fs::remove_dir_all(&tmp);
@@ -23224,7 +23243,7 @@ mathx = { path = "../mathx" }
 fn test_xpkg_import_typechecks_and_builds() {
     let tmp = xpkg_fixture("xpkg-build");
     let out = karac_bin()
-        .arg("build")
+        .args(["build", "--output=json"])
         .current_dir(tmp.join("app"))
         .output()
         .unwrap();
@@ -23234,12 +23253,12 @@ fn test_xpkg_import_typechecks_and_builds() {
         out.status.success(),
         "cross-package build should succeed; stdout={stdout} stderr={stderr}",
     );
-    // The summary names the dependency and its module count.
+    // The JSON document names the dependency and its module count
+    // (text mode prints no summary, B-2026-10-31-22).
     assert!(
-        stdout.contains("deps:    1 package(s), 2 module(s)"),
+        stdout.contains("\"deps\":[{\"name\":\"mathx\",\"modules\":2,"),
         "dep summary expected; stdout={stdout}",
     );
-    assert!(stdout.contains("mathx"), "dep name listed; stdout={stdout}");
 
     // Under llvm the produced binary must run with the interpreter-
     // identical output (A/B surface).
@@ -23410,7 +23429,7 @@ fn test_xpkg_transitive_path_dep_resolves() {
     assert_eq!(stdout, "112\n", "12 + 100 through two package hops");
 
     let out = karac_bin()
-        .arg("build")
+        .args(["build", "--output=json"])
         .current_dir(tmp.join("app"))
         .output()
         .unwrap();
@@ -23420,8 +23439,9 @@ fn test_xpkg_transitive_path_dep_resolves() {
         out.status.success(),
         "transitive dep build; stdout={stdout} stderr={stderr}",
     );
-    assert!(
-        stdout.contains("deps:    2 package(s)"),
+    assert_eq!(
+        stdout.matches("{\"name\":").count(),
+        2,
         "both packages in summary; stdout={stdout}",
     );
     #[cfg(feature = "llvm")]

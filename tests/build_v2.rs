@@ -110,10 +110,10 @@ fn build_v2_builds_a_package() {
     let dir = package("pkg", UTIL);
     let out = karac(&dir, &["build"]);
     built(&out);
-    // The package's summary, as the legacy build printed it (B-2026-10-25-18).
+    // Text mode prints no package summary, which `--output=json` carries
+    // (B-2026-10-31-22).
     assert!(
-        text(&out.stdout).starts_with("project: pkg\n")
-            && text(&out.stdout).contains("modules: 2\n"),
+        !text(&out.stdout).contains("project:") && !text(&out.stdout).contains("modules:"),
         "{}",
         text(&out.stdout)
     );
@@ -166,8 +166,8 @@ fn build_v2_install_builds_on_v2() {
     }
 }
 
-/// A flag v2 does not honour yet is refused by name, and so is one whose
-/// feature went to the archive with the legacy backend.
+/// A flag `karac build` does not support in 0.9 is refused by name, in
+/// words that name no internal milestone (B-2026-10-31-22).
 #[test]
 fn build_v2_refuses_legacy_only_flags_by_name() {
     let dir = scratch("flags");
@@ -179,9 +179,8 @@ fn build_v2_refuses_legacy_only_flags_by_name() {
     assert_eq!(out.status.code(), Some(1));
     assert_eq!(
         text(&out.stderr),
-        "error: the v2 build does not honour `--simd-report` yet\n\
-         error: `--target=wasm_browser` builds the browser wasm bindings, which goes to the \
-         archive with the legacy backend at M3 and returns on v2 on demand\n"
+        "error: `karac build` does not support `--simd-report` in 0.9\n\
+         error: `--target=wasm_browser` builds the browser wasm bindings, which is not in 0.9\n"
     );
     let json = karac(
         &dir,
@@ -189,7 +188,7 @@ fn build_v2_refuses_legacy_only_flags_by_name() {
     );
     assert_eq!(json.status.code(), Some(1));
     assert!(
-        text(&json.stdout).starts_with("{\"severity\":\"error\",\"phase\":\"build\",\"message\":\"error: `--crate-type` builds the exported C ABI, which goes to the archive"),
+        text(&json.stdout).starts_with("{\"severity\":\"error\",\"phase\":\"build\",\"message\":\"error: `--crate-type` builds the exported C ABI, which is not in 0.9"),
         "{}",
         text(&json.stdout)
     );
