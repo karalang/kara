@@ -20756,7 +20756,23 @@ impl<'l, 'a> Bx<'l, 'a> {
                     Ok(t) => t,
                     Err(err) => return self.unsupported(p.span, &err),
                 },
-                None => self.expr_ty(&a.value)?,
+                // A bodiless trait method's parameter has no typed-HIR
+                // type, and the bound's arguments (`Channel[i64]`) are not
+                // kept, so the argument's type stands in. Its written mode
+                // still decides: a `ref` (D5's rewrite of a bare `v: T`)
+                // is lent even for a `Copy` argument, since each provider's
+                // impl takes the trait's borrow position by position
+                // (B-2026-10-31-27).
+                None => {
+                    let at = self.expr_ty(&a.value)?;
+                    let tcx = self.tys().tcx();
+                    match (&p.ty.kind, tcx.kind(at)) {
+                        (_, HK::Ref(_) | HK::MutRef(_)) => at,
+                        (ast::TypeKind::Ref(_), _) => tcx.reference(at, false),
+                        (ast::TypeKind::MutRef(_), _) => tcx.reference(at, true),
+                        _ => at,
+                    }
+                }
             };
             let pt = self.param_mode_ty(p, t);
             ops.push(self.arg_pending(&a.value, pt)?);
