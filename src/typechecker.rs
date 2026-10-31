@@ -975,6 +975,10 @@ pub enum TypeErrorKind {
     /// exported C ABI (`pub extern "C" fn`) and WASM exports (a `pub fn`
     /// tagged `#[target(wasm_browser)]` / `#[target(wasm_wasi)]`).
     ArchivedWithLegacy,
+    /// B-2026-10-31-23 — a feature of a later track (design.md § Tracks)
+    /// that the checker parses and the v2 backends do not run: a struct
+    /// `invariant` / `impl invariant` (the verification track's contracts).
+    DeferredToLaterTrack,
     /// B-2026-08-26-15 — a `LazyLock.new` closure captured a function local.
     LazyLockRuntimeCapture,
     /// `let t = v[i]` / `x = v[j]` where the element type is not `Copy`.
@@ -1620,7 +1624,8 @@ pub(crate) fn class_for_type_error_kind(
         | TypeErrorKind::CapturePrefixRemoved
         | TypeErrorKind::RemovedInCore
         | TypeErrorKind::DeferredToM4a
-        | TypeErrorKind::ArchivedWithLegacy => Some(DC::TypeMismatch),
+        | TypeErrorKind::ArchivedWithLegacy
+        | TypeErrorKind::DeferredToLaterTrack => Some(DC::TypeMismatch),
 
         TypeErrorKind::WrongNumberOfArgs | TypeErrorKind::AtomicMissingOrdering => {
             Some(DC::WrongNumberOfArgs)

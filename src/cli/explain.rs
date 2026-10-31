@@ -884,6 +884,11 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
         "E_ARCHIVED",
         ty("ArchivedWithLegacy", Some(DiagnosticClass::TypeMismatch)),
     ),
+    // B-2026-10-31-23: a later track's feature (struct `invariant`).
+    (
+        "E_DEFERRED_TRACK",
+        ty("DeferredToLaterTrack", Some(DiagnosticClass::TypeMismatch)),
+    ),
     // ── provider escape ─────────────────────────────────────────
     ("E0600", prov("ProviderEscape")),
     // ── lint (non-`TypeErrorKind`) ──────────────────────────────

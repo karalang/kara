@@ -3252,6 +3252,29 @@ impl<'a> super::TypeChecker<'a> {
             self.reject_old_calls(inv, "invariant");
         }
         self.current_self_type = saved_self;
+        // The v2 commands run what they check, and the v2 backends do not
+        // check an invariant: contracts' `invariant` is in the verification
+        // track, after 0.9 (design.md § Tracks; B-2026-10-31-23).
+        if self.cli_lint_overrides.strict_core && !s.stdlib_origin {
+            for (inv, form) in s
+                .invariants
+                .iter()
+                .map(|i| (i, "invariant"))
+                .chain(s.impl_invariants.iter().map(|i| (i, "impl invariant")))
+            {
+                self.type_error(
+                    format!(
+                        "`{form}` on `{}` is not available: struct invariants are contracts, \
+                         which are in the verification track (deferred.md § Contracts) and \
+                         not in 0.9. Check the property where the value is built, in a \
+                         constructor",
+                        s.name
+                    ),
+                    inv.span,
+                    TypeErrorKind::DeferredToLaterTrack,
+                );
+            }
+        }
     }
 
     /// `sync struct` / `sync enum` definition-site field-constraint check

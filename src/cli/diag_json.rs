@@ -1831,6 +1831,7 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 crate::typechecker::TypeErrorKind::BareVariantConstructor => "E0521",
                 crate::typechecker::TypeErrorKind::DeferredToM4a => "E_DEFERRED_M4A",
                 crate::typechecker::TypeErrorKind::ArchivedWithLegacy => "E_ARCHIVED",
+                crate::typechecker::TypeErrorKind::DeferredToLaterTrack => "E_DEFERRED_TRACK",
                 crate::typechecker::TypeErrorKind::LazyLockRuntimeCapture => "E0284",
                 // core-semantics.md §3.7 names this one (B-2026-10-19-61).
                 crate::typechecker::TypeErrorKind::IndexMoveNonCopy => "E_INDEX_MOVE_NON_COPY",

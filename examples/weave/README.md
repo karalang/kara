@@ -16,7 +16,7 @@ stages never re-validate:
 | `parse_row`  | `String -> Result[ValidatedRow, ParseError]` `with panics` `ensures …` | refinement `try_from` narrowing; `ensures` postcondition; inferred-effect declaration |
 | `enrich_row` | `ValidatedRow -> EnrichedRow` `with reads(CurrencyDB)` `ensures result.qty == old(row.qty)` | effect resource + `with_provider` injection; `old(...)` pre-state capture on a consumed receiver |
 | `aggregate`  | `NonEmpty[EnrichedRow] -> Summary` `requires …` `ensures …` | generic refinement as a precondition *type*; `requires`/`ensures` |
-| `Summary`    | struct with `invariant self.row_count >= 0` | struct invariant checked at construction / pub-method exit |
+| `Summary`    | struct built by `Summary.new`, which `requires row_count >= 0` | the property a struct `invariant` would state (contracts' `invariant` is in the verification track, not 0.9), held by the constructor |
 
 Refinement types in play: `BoundedText` (length-bounded String), `PositivePrice`
 (`f64 where self > 0.0`), `PositiveQty` (`i64 where self > 0`), and the generic
@@ -37,7 +37,7 @@ failure class):
   ok    carol@example.com  usd=10.789200000000001  x1
   skip  email is empty
   skip  email 'bad-no-at' has no '@'
-  skip  price -2 is not > 0
+  skip  price -2.0 is not > 0
 summary: 3 rows, usd_total=94.48920000000001
 ```
 

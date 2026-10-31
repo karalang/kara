@@ -3397,6 +3397,8 @@ struct Bx<'l, 'a> {
     old_vals: FxHashMap<NodeId, Local>,
     /// This function's `ensures` clauses, checked at every return.
     ensures: &'a [EnsuresClause],
+    /// The names `ensures(result)` clauses give the function's value.
+    ensures_results: Vec<SymbolId>,
     /// The impl this function belongs to and its generic parameter count.
     impl_target: Option<(DefId, usize)>,
     /// Subscripts of an assignment's target, evaluated before its value.
@@ -3465,6 +3467,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             par_try: Vec::new(),
             old_vals: FxHashMap::default(),
             ensures: &[],
+            ensures_results: Vec::new(),
             impl_target: None,
             pre_indices: FxHashMap::default(),
             eq_stack: Vec::new(),
@@ -5092,6 +5095,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 let key = (name.clone(), clause.span.offset, clause.span.length);
                 if let Some(&sym) = self.lcx.unbound_vars.get(&key) {
                     self.locals.insert(sym, Local::RETURN_PLACE);
+                    self.ensures_results.push(sym);
                 }
             }
         }
@@ -13656,8 +13660,31 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// the function's error; a branch that ends with its own value runs
     /// none (core semantics §11.7).
     fn return_exit(&mut self) -> R<()> {
+        // A postcondition reads the value it is about to return: a value
+        // not `Copy` is lent to it, or a `match result` in it would move the
+        // value out of the return place (B-2026-10-31-29).
+        let (value, ret_ty) = self.fn_value_place();
+        let lent = if self.ensures.is_empty() || self.is_copy(ret_ty) {
+            None
+        } else {
+            let rt = self.tys().tcx().reference(ret_ty, false);
+            let r = self.temp(rt);
+            self.assign(r, Rvalue::Ref(BorrowKind::Shared, value));
+            Some(r)
+        };
+        let results = self.ensures_results.clone();
+        if let Some(r) = lent {
+            for &sym in &results {
+                self.locals.insert(sym, r);
+            }
+        }
         for clause in self.ensures {
             self.contract_check(&clause.body, "ensures")?;
+        }
+        if lent.is_some() {
+            for &sym in &results {
+                self.locals.insert(sym, Local::RETURN_PLACE);
+            }
         }
         let has_errdefer = self
             .scopes

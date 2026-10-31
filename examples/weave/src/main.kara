@@ -101,14 +101,20 @@ pub struct EnrichedRow {
     qty: PositiveQty,
 }
 
-// The struct invariant fires at every pub-method exit and at construction
-// (design.md § Contracts, Rule 3), so a Summary is never observable with a
-// negative row count.
+// A Summary is never built with a negative row count: its one constructor
+// requires it. (A struct `invariant` would say this once for the type, but
+// contracts' `invariant` is in the verification track, not in 0.9.)
 pub struct Summary {
     row_count: i64,
     total_usd: f64,
+}
 
-    invariant self.row_count >= 0
+impl Summary {
+    pub fn new(row_count: i64, total_usd: f64) -> Summary
+        requires row_count >= 0
+    {
+        Summary { row_count: row_count, total_usd: total_usd }
+    }
 }
 
 // ── Stage 2's effectful seam: a provider-injected currency resource ──────────
@@ -263,7 +269,7 @@ pub fn aggregate(rows: NonEmpty[EnrichedRow]) -> Summary
         total = total + r.usd_price * (r.qty as f64);
         n = n + 1;
     }
-    Summary { row_count: n, total_usd: total }
+    Summary.new(n, total)
 }
 
 // ── Driver ───────────────────────────────────────────────────────────────
