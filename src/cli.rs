@@ -29,6 +29,7 @@ mod args;
 mod build_cmds;
 mod build_v2;
 mod diag_json;
+pub(crate) mod editor;
 pub mod explain;
 mod fix_cmds;
 mod help;

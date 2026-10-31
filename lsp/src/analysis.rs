@@ -302,7 +302,11 @@ fn analyze(source: &str) -> Vec<(Diagnostic, Vec<karac::SourceFix>)> {
         .map(|d| {
             let diag = Diagnostic {
                 range: index.range(d.offset, d.length),
-                severity: Some(DiagnosticSeverity::ERROR),
+                severity: Some(match d.severity {
+                    "warning" => DiagnosticSeverity::WARNING,
+                    "note" => DiagnosticSeverity::INFORMATION,
+                    _ => DiagnosticSeverity::ERROR,
+                }),
                 // Carry the producing phase (parse/resolve/typecheck/effect/
                 // ownership) as the diagnostic code so an editor can
                 // group/filter by it; `source` names the producer for the

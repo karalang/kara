@@ -803,6 +803,8 @@ pub fn provider_escape_check(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlaygroundDiagnostic {
     pub phase: &'static str,
+    /// `error`, `warning` or `note`, as `karac check --output=json` labels it.
+    pub severity: &'static str,
     pub message: String,
     pub line: usize,
     pub column: usize,
@@ -871,6 +873,7 @@ fn push_diag_fixed(
 ) {
     out.push(PlaygroundDiagnostic {
         phase,
+        severity: "error",
         message,
         line: span.line,
         column: span.column,
@@ -1106,8 +1109,20 @@ fn run_static_checks(
 /// no side effects. This is the entry point editor tooling — the `kara-lsp`
 /// language server — drives on every edit: static feedback only, never running
 /// user code.
+///
+/// Natively it runs exactly what `karac check <file>` runs, the v2 core rules
+/// and the Kāra library included, so an editor shows what the command line
+/// shows (B-2026-10-31-19). The wasm build, which has no CLI, keeps the
+/// in-process sequence above.
 pub fn check_source(source: &str) -> Vec<PlaygroundDiagnostic> {
-    run_static_checks(source).0
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        cli::editor::check_source(source)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        run_static_checks(source).0
+    }
 }
 
 /// A resolved editor-hover result: the display form of the inferred type of the
@@ -1187,18 +1202,28 @@ pub fn hover_at(source: &str, byte_offset: usize) -> Option<HoverInfo> {
 /// `None` on parse errors; resolve/typecheck errors are kept going through so a
 /// half-typed buffer still hovers its checked parts.
 fn analyze_for_hover(source: &str) -> Option<(ResolveResult, TypeCheckResult, EffectCheckResult)> {
-    let mut parsed = parse(source);
-    if !parsed.errors.is_empty() {
-        return None;
+    // Natively, the types `karac check` infers, as `check_source` reports its
+    // diagnostics (B-2026-10-31-19).
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        cli::editor::analyze(source)
     }
-    desugar_program(&mut parsed.program);
-    let resolved = resolve(&parsed.program);
-    let typed = typecheck(&parsed.program, &resolved);
-    // Match `run_static_checks`' phase order (lower before effectcheck); lowering
-    // does not rebuild `expr_types`, so the type lookup is unaffected.
-    lower(&mut parsed.program, &typed);
-    let effects = effectcheck(&parsed.program);
-    Some((resolved, typed, effects))
+    #[cfg(target_arch = "wasm32")]
+    {
+        let mut parsed = parse(source);
+        if !parsed.errors.is_empty() {
+            return None;
+        }
+        desugar_program(&mut parsed.program);
+        let resolved = resolve(&parsed.program);
+        let typed = typecheck(&parsed.program, &resolved);
+        // Match `run_static_checks`' phase order (lower before effectcheck);
+        // lowering does not rebuild `expr_types`, so the type lookup is
+        // unaffected.
+        lower(&mut parsed.program, &typed);
+        let effects = effectcheck(&parsed.program);
+        Some((resolved, typed, effects))
+    }
 }
 
 /// If the innermost name reference at `byte_offset` resolves to a **function**,

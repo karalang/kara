@@ -1283,12 +1283,17 @@ struct DiagEntry<'a> {
 
 pub(super) struct DiagnosticJson {
     pub(super) entries: Vec<String>,
+    /// Each entry's whole span, in step with `entries`: the JSON carries only
+    /// its line and column, and the language server needs the byte range
+    /// ([`super::check_source`]).
+    pub(super) spans: Vec<Span>,
 }
 
 impl DiagnosticJson {
     fn new() -> Self {
         DiagnosticJson {
             entries: Vec::new(),
+            spans: Vec::new(),
         }
     }
 
@@ -1374,6 +1379,7 @@ impl DiagnosticJson {
         }
         entry.push('}');
         self.entries.push(entry);
+        self.spans.push(*d.span);
     }
 
     pub(super) fn to_json_array(&self) -> String {
