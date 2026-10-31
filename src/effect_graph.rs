@@ -929,6 +929,53 @@ pub(crate) fn build_concurrency_graph_json(
     )
 }
 
+/// `json` (an object) with the MIR auto-par verdicts on `src`'s
+/// candidates as its `auto_par` member, those of `function` alone when
+/// given: each loop or run of statements, whether a build runs it as
+/// tasks, and why not. A program the MIR cannot lower gets an empty list
+/// and an `auto_par_error`. `karac query concurrency` and
+/// [`cartograph_json`] both write it, so the two stay byte-identical.
+pub(crate) fn with_auto_par(json: &str, src: &str, function: Option<&str>) -> String {
+    let Some(head) = json.strip_suffix('}') else {
+        return json.to_string();
+    };
+    let off = !crate::par_cost::auto_par_enabled();
+    let (entries, err) = match crate::mir::lower::auto_par_verdicts(src) {
+        Ok(vs) => {
+            let entries: Vec<String> = vs
+                .iter()
+                .filter(|v| function.is_none_or(|f| v.instance == f))
+                .map(|v| {
+                    let kind = match v.kind {
+                        crate::mir::effects::auto_par::VerdictKind::Loop => "loop",
+                        _ => "statements",
+                    };
+                    let reason = match &v.verdict {
+                        _ if off => json_string("auto-par disabled by KARAC_AUTO_PAR=0"),
+                        Ok(_) => "null".to_string(),
+                        Err(r) => json_string(&r.text()),
+                    };
+                    format!(
+                        "{{\"function\":{},\"line\":{},\"kind\":\"{kind}\",\"tasks\":{},\"reason\":{reason}}}",
+                        json_string(&v.instance),
+                        v.span.line,
+                        !off && v.verdict.is_ok(),
+                    )
+                })
+                .collect();
+            (entries, None)
+        }
+        Err(e) => (Vec::new(), Some(e)),
+    };
+    let err = err.map_or(String::new(), |e| {
+        format!(
+            ",\"auto_par_error\":{}",
+            json_string(e.lines().next().unwrap_or(""))
+        )
+    });
+    format!("{head},\"auto_par\":[{}]{err}}}", entries.join(","))
+}
+
 // ── Library / WASM entry point ────────────────────────────────────────────────
 
 /// One diagnostic for the Cartographer live editor — same shape as
@@ -1051,11 +1098,10 @@ pub fn cartograph_json(source: &str, scope: &str) -> CartographResult {
     CartographResult {
         ok: true,
         effects_json: build_effect_graph_json(&effects, &graph, scope),
-        concurrency_json: build_concurrency_graph_json(
-            &analysis,
-            &graph,
-            scope,
-            Some(&parsed.program),
+        concurrency_json: with_auto_par(
+            &build_concurrency_graph_json(&analysis, &graph, scope, Some(&parsed.program)),
+            source,
+            None,
         ),
         diagnostics,
     }
