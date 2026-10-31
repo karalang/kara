@@ -848,19 +848,85 @@ impl ExecCell {
 
 static EXEC: ExecCell = ExecCell;
 
+/// A value the pool's workers share, behind a lock. A `std::sync::Mutex`
+/// everywhere but on Apple platforms, where that is a lazily boxed pthread
+/// mutex whose initialisation and locking assert, which kept std's panic
+/// hook and backtrace symbolizer in every program that prints (ld64
+/// `-why_live` in CI, B-2026-10-30-37); there it is an `os_unfair_lock`,
+/// which cannot fail and parks a waiter as the futex-based `Mutex` does
+/// elsewhere (a spinning flag cost a print-heavy eight-task program about
+/// 25% on Linux). A nested `with` of the same lock waits for ever, so none
+/// nests one.
+pub(crate) struct PoolLock<T> {
+    #[cfg(not(target_vendor = "apple"))]
+    inner: std::sync::Mutex<T>,
+    #[cfg(target_vendor = "apple")]
+    lock: UnsafeCell<u32>,
+    #[cfg(target_vendor = "apple")]
+    value: UnsafeCell<T>,
+}
+
+// SAFETY: the value is reached only inside `with`, which holds the lock,
+// so one thread at a time touches it; `T: Send` lets it move between them.
+unsafe impl<T: Send> Sync for PoolLock<T> {}
+
+#[cfg(target_vendor = "apple")]
+extern "C" {
+    fn os_unfair_lock_lock(lock: *mut u32);
+    fn os_unfair_lock_unlock(lock: *mut u32);
+}
+
+impl<T> PoolLock<T> {
+    pub(crate) const fn new(value: T) -> PoolLock<T> {
+        PoolLock {
+            #[cfg(not(target_vendor = "apple"))]
+            inner: std::sync::Mutex::new(value),
+            // `OS_UNFAIR_LOCK_INIT`.
+            #[cfg(target_vendor = "apple")]
+            lock: UnsafeCell::new(0),
+            #[cfg(target_vendor = "apple")]
+            value: UnsafeCell::new(value),
+        }
+    }
+
+    /// `f` of the value, holding the lock.
+    #[inline]
+    pub(crate) fn with<R>(&self, f: impl FnOnce(&mut T) -> R) -> R {
+        #[cfg(not(target_vendor = "apple"))]
+        {
+            f(&mut self.inner.lock().unwrap_or_else(|p| p.into_inner()))
+        }
+        #[cfg(target_vendor = "apple")]
+        {
+            struct Unlock(*mut u32);
+            impl Drop for Unlock {
+                fn drop(&mut self) {
+                    // SAFETY: this thread took the lock in `with`.
+                    unsafe { os_unfair_lock_unlock(self.0) };
+                }
+            }
+            // SAFETY: a lock in a static, which never moves.
+            unsafe { os_unfair_lock_lock(self.lock.get()) };
+            let _held = Unlock(self.lock.get());
+            // SAFETY: the lock is held until `_held` drops, after `f`.
+            f(unsafe { &mut *self.value.get() })
+        }
+    }
+}
+
 /// State a native keeps for the whole program, as the executor's is: this
 /// thread's own on one worker, and one copy behind a lock under the pool,
 /// where a task can suspend on one worker and resume on another. Declared
 /// with [`program_state!`].
 pub(crate) struct ProgramState<T: 'static> {
     local: &'static std::thread::LocalKey<RefCell<T>>,
-    shared: &'static std::sync::Mutex<T>,
+    shared: &'static PoolLock<T>,
 }
 
 impl<T> ProgramState<T> {
     pub(crate) const fn new(
         local: &'static std::thread::LocalKey<RefCell<T>>,
-        shared: &'static std::sync::Mutex<T>,
+        shared: &'static PoolLock<T>,
     ) -> ProgramState<T> {
         ProgramState { local, shared }
     }
@@ -870,7 +936,7 @@ impl<T> ProgramState<T> {
     #[inline]
     pub(crate) fn with<R>(&self, f: impl FnOnce(&mut T) -> R) -> R {
         if pooled() {
-            f(&mut self.shared.lock().unwrap_or_else(|p| p.into_inner()))
+            self.shared.with(f)
         } else {
             self.local.with(|c| f(&mut c.borrow_mut()))
         }
@@ -885,7 +951,7 @@ macro_rules! program_state {
             thread_local! {
                 static LOCAL: std::cell::RefCell<$t> = const { std::cell::RefCell::new($init) };
             }
-            static SHARED: std::sync::Mutex<$t> = std::sync::Mutex::new($init);
+            static SHARED: $crate::mir_task::PoolLock<$t> = $crate::mir_task::PoolLock::new($init);
             $crate::mir_task::ProgramState::new(&LOCAL, &SHARED)
         };
     };

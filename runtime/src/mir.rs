@@ -69,13 +69,14 @@ thread_local! {
 /// pool's workers write in order. Standard output is flushed at exit, at an
 /// abort, and before anything is written to standard error so the two stay
 /// in order on a terminal.
-static OUT_SHARED: std::sync::Mutex<LeanVec<u8>> = std::sync::Mutex::new(LeanVec::new());
+static OUT_SHARED: crate::mir_task::PoolLock<LeanVec<u8>> =
+    crate::mir_task::PoolLock::new(LeanVec::new());
 
 /// `f` of the program's standard output buffer, as `program_state!`
 /// shares one, but panic-free ([`LeanVec`]).
 fn with_out<R>(f: impl FnOnce(&mut LeanVec<u8>) -> R) -> R {
     if crate::mir_task::pooled() {
-        return f(&mut OUT_SHARED.lock().unwrap_or_else(|p| p.into_inner()));
+        return OUT_SHARED.with(f);
     }
     match OUT_LOCAL.try_with(|o| o.try_borrow_mut().map(|mut o| f(&mut o))) {
         Ok(Ok(r)) => {
