@@ -1510,6 +1510,8 @@ mod tests {
     fn temp_cache_root() -> std::path::PathBuf {
         let n = CACHE_COUNTER.fetch_add(1, AtomicOrdering::Relaxed);
         let dir = std::env::temp_dir().join(format!("kara-regcache-{}-{n}", std::process::id()));
+        // A pid is reused, and an earlier run's cache would serve a miss.
+        let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }

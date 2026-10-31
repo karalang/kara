@@ -262,6 +262,9 @@ mod tests {
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
         let dir =
             std::env::temp_dir().join(format!("kara-gitfetch-{tag}-{}-{n}", std::process::id()));
+        // A pid is reused, so an earlier run's directory can be here, and
+        // `git commit` over its identical tree has nothing to commit.
+        let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -282,8 +285,9 @@ mod tests {
             .unwrap();
         assert!(
             out.status.success(),
-            "git {args:?} failed: {}",
-            String::from_utf8_lossy(&out.stderr)
+            "git {args:?} failed: {}{}",
+            String::from_utf8_lossy(&out.stderr),
+            String::from_utf8_lossy(&out.stdout)
         );
     }
 
