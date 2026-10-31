@@ -7,15 +7,16 @@
 // - Pattern matching
 
 struct WordCount {
-    total: u64,
-    unique: u64,
+    total: i64,
+    unique: i64,
 }
 
 fn count_words(content: ref String) -> WordCount {
-    let words = content.split(' ');
+    let words: Vec[Str] = content.split_whitespace().collect();
+    let total = words.len();
     let unique_words = Set.from(words);
     WordCount {
-        total: words.len(),
+        total,
         unique: unique_words.len(),
     }
 }
@@ -35,7 +36,7 @@ fn main() -> Result[(), IoError] {
         }
     };
 
-    let content = read_file(filename)?;
+    let content = fs.read_to_string(filename)?;
     let count = count_words(content);
     let report = format_report(filename, count);
     println(report);

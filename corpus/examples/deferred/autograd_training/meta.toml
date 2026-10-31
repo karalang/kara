@@ -1,4 +1,4 @@
-source = "examples/autograd_training.kara"
+source = "examples/deferred/autograd_training.kara"
 dedup_of = []
 expect = "skip"
 exit = 0

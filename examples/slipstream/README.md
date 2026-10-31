@@ -104,7 +104,7 @@ the compiler — the demo uses the natural shared-read fan-out, not a workaround
 
 ## How it's verified
 
-- **Native oracle (kernel correctness).** `./slipstream` prints framebuffer
+- **Native oracle (kernel correctness).** `./dist/slipstream` prints framebuffer
   checksums at frames 30 / 60 / 120 plus peak speed. The checksums **differ**
   across milestones (the carried grid genuinely evolves), are **bit-identical
   run-to-run** (deterministic), and the peak speed holds ~0.17 — far below the

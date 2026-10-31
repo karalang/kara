@@ -192,7 +192,7 @@ pub fn parse_row(raw: String) -> Result[ValidatedRow, ParseError]
         Err(_)  => true,
     }
 {
-    let fields = raw.split(',');
+    let fields: Vec[Str] = raw.split(",").collect();
     if fields.len() != 3 {
         return Err(ParseError.WrongFieldCount { got: fields.len() });
     }
@@ -212,7 +212,7 @@ pub fn parse_row(raw: String) -> Result[ValidatedRow, ParseError]
     };
 
     // price: parse to f64, then narrow to PositivePrice.
-    let price = match f64.parse(fields[1]) {
+    let price = match f64.parse(fields[1]).ok() {
         None    => return Err(ParseError.BadPrice { value: fields[1].clone() }),
         Some(p) => match PositivePrice.try_from(p) {
             Ok(pp) => pp,
@@ -221,7 +221,7 @@ pub fn parse_row(raw: String) -> Result[ValidatedRow, ParseError]
     };
 
     // qty: parse to i64, then narrow to PositiveQty.
-    let qty = match i64.parse(fields[2]) {
+    let qty = match i64.parse(fields[2]).ok() {
         None    => return Err(ParseError.BadQty { value: fields[2].clone() }),
         Some(q) => match PositiveQty.try_from(q) {
             Ok(pq) => pq,
@@ -278,13 +278,13 @@ carol@example.com,9.99,1
 bad-no-at,1.0,1
 dave@example.com,-2.0,4";
 
-    let lines = csv.split('\n');
+    let lines = csv.split("\n");
     let mut enriched: Vec[EnrichedRow] = Vec.new();
 
     // Inject the FX provider for the whole enrichment pass (1 EUR = 1.08 USD).
     with_provider[CurrencyDB](FixedRates.new(1.08), || {
         for line in lines {
-            match parse_row(line) {
+            match parse_row(line.to_string()) {
                 Ok(row) => {
                     let e = enrich_row(row);
                     println(f"  ok    {e.email}  usd={e.usd_price}  x{e.qty}");

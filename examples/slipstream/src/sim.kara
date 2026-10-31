@@ -38,6 +38,7 @@ pub fn steps_per_frame() -> i64 { 6 }
 // One lattice cell: the nine D2Q9 distribution functions. Public because it
 // rides the kernel's public API (`init_grid`/`substep`/`render_fb`) as an opaque
 // state token — host code passes grids through, never reads the fields.
+#[derive(Copy, Clone)]
 pub struct LbmNode {
     f0: f64, f1: f64, f2: f64, f3: f64, f4: f64,
     f5: f64, f6: f64, f7: f64, f8: f64,
@@ -370,7 +371,7 @@ fn fan_collide(grid: ref Vec[LbmNode], workers: i64) -> Vec[LbmNode] {
         k = k + 1;
     }
     let mut coll: Vec[LbmNode] = Vec.new();
-    for handle in handles {
+    for handle in handles.into_iter() {
         let chunk: Vec[LbmNode] = handle.join();
         for cell in chunk {
             coll.push(cell);
@@ -398,7 +399,7 @@ fn fan_stream(coll: ref Vec[LbmNode], workers: i64, u0: f64, s: f64) -> Vec[LbmN
         k = k + 1;
     }
     let mut next: Vec[LbmNode] = Vec.new();
-    for handle in handles {
+    for handle in handles.into_iter() {
         let chunk: Vec[LbmNode] = handle.join();
         for cell in chunk {
             next.push(cell);

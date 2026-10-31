@@ -57,20 +57,6 @@
       "reason": "fragment: `Duration` is imported from std.time in the next block",
       "first_diagnostic": "undefined type 'Duration'"
     },
-    "example:autograd_training.kara": {
-      "where": "examples/autograd_training.kara",
-      "heading": "example program",
-      "outcome": "REJECTED",
-      "reason": "doc: uses `Tensor`, which comes with kara-data after v1 (docs/deferred.md)",
-      "first_diagnostic": "`Tensor.from` is not in the standard library: `Tensor` comes with the `kara-data` package after v1 (docs/deferred.md § Numerical types)"
-    },
-    "package:db_pipeline": {
-      "where": "examples/db_pipeline/kara.toml",
-      "heading": "example package",
-      "outcome": "REJECTED",
-      "reason": "doc: predates borrow-by-default (moves out of bare params and `for` elements) and writes `par` branches as statements",
-      "first_diagnostic": "cannot move 'row': it borrows its value (a bare `for` element, a `ref` binding, or a binding into a borrowed place). For a `for` element, iterate with `.into_iter()` to move the elements out of the collection. Write `.clone()` to take a copy, or keep using it in place"
-    },
     "example:protobuf_schema.kara": {
       "where": "examples/protobuf_schema.kara",
       "heading": "example program",
@@ -78,33 +64,12 @@
       "reason": "compiler: check passes, every executing surface fails resolving `i8` (B-2026-10-31-5)",
       "first_diagnostic": null
     },
-    "example:semantic_search.kara": {
-      "where": "examples/semantic_search.kara",
-      "heading": "example program",
-      "outcome": "REJECTED",
-      "reason": "doc: uses `Tensor`, which comes with kara-data after v1 (docs/deferred.md)",
-      "first_diagnostic": "`Tensor.from` is not in the standard library: `Tensor` comes with the `kara-data` package after v1 (docs/deferred.md § Numerical types)"
-    },
-    "package:slipstream": {
-      "where": "examples/slipstream/kara.toml",
-      "heading": "example package",
-      "outcome": "REJECTED",
-      "reason": "doc: predates borrow-by-default (moves out of `for` elements and collection slots)",
-      "first_diagnostic": "cannot move 'cell': it borrows its value (a bare `for` element, a `ref` binding, or a binding into a borrowed place). For a `for` element, iterate with `.into_iter()` to move the elements out of the collection. This type has no `.clone()`: use it in place, or take it with `mem.replace` / `mem.swap` / `Option.take()`"
-    },
     "package:weave": {
       "where": "examples/weave/kara.toml",
       "heading": "example package",
       "outcome": "REJECTED",
-      "reason": "doc: `split(',')` with a char, a split iterator used as a Vec, and a value moved inside a loop",
-      "first_diagnostic": "expected 'Str', found 'char': write it as the string literal \",\""
-    },
-    "example:word_count.kara": {
-      "where": "examples/word_count.kara",
-      "heading": "example program",
-      "outcome": "REJECTED",
-      "reason": "doc: `read_file` does not exist (`fs.read_to_string`)",
-      "first_diagnostic": "undefined name 'read_file'"
+      "reason": "compiler: a closure passed to `with_provider` that pushes to `enriched` makes the later `NonEmpty.try_from(enriched)` read as moved inside a loop (B-2026-10-31-13), and `aggregate(rows)` refuses an owned `NonEmpty[T]` for its borrowing parameter (B-2026-10-31-14), and its `for line in lines` inside that closure consumes a captured iterator, which check accepts and MIR refuses (B-2026-10-31-15)",
+      "first_diagnostic": "expected 'ref NonEmpty', found 'NonEmpty'"
     }
   }
 }

@@ -1,4 +1,4 @@
-source = "examples/semantic_search.kara"
+source = "examples/deferred/semantic_search.kara"
 dedup_of = []
 expect = "skip"
 exit = 0

@@ -72,6 +72,9 @@ const EXCLUDED_DIRS: &[&str] = &[
     // machine-fix harness (`examples/mend/harness/mend_batch.py`). A Mend
     // fixture that compiles is a broken fixture.
     "mend",
+    // Programs on a library that arrives after 0.9 (`Tensor`, with
+    // `kara-data`): examples/deferred/README.md.
+    "deferred",
 ];
 
 /// Entry packages (`kara.toml` + an entry file) that do not currently
@@ -94,28 +97,19 @@ const EXCLUDED_DIRS: &[&str] = &[
 /// the structural `==` on its reference-typed `Value` enum, a gap its own
 /// diagnostic documents. Neither is a reason to re-pin it here.
 ///
-/// Since M3 this gate type-checks on v2, the only front end left, so the three
-/// entries below are packages the legacy `karac build` accepted and the v2
-/// rules refuse. Each is example rot against the v2 core rules (or an M4a
-/// feature), not a regression: none of them built on v2 before the deletion.
-const KNOWN_BROKEN_PACKAGES: &[(&str, &str)] = &[
-    (
-        "db_pipeline",
-        "typecheck (v2 core rules): moves out of borrowed places, e.g. \
-         `new_rows.push(row)` on a bare `for` element (borrow_projection_copy) \
-         and `table: table` from a `ref` binding in src/planner.kara.",
-    ),
-    (
-        "slipstream",
-        "ownership (v2 core rules): moves a non-`Copy` value out of a \
-         collection element, src/sim.kara:249 and four more sites.",
-    ),
-    (
-        "weave",
-        "typecheck (v2 core rules): `Str` expected where a `char` literal is \
-         written, src/main.kara:195, and 17 more errors.",
-    ),
-];
+/// Since M3 this gate type-checks on v2, the only front end left, so an entry
+/// below is a package the legacy `karac build` accepted and the v2 rules
+/// refuse. db_pipeline (which now also runs: its five tests pass and `karac
+/// run` prints the rows) and slipstream were pinned here until 2026-10-31,
+/// when they were migrated to borrow-by-default; weave was migrated too, and
+/// what still refuses it is compiler gaps.
+const KNOWN_BROKEN_PACKAGES: &[(&str, &str)] = &[(
+    "weave",
+    "typecheck: `aggregate(rows)` refuses an owned `NonEmpty[T]` for its \
+         borrowing parameter (B-2026-10-31-14), and ownership: the closure \
+         passed to `with_provider` that pushes to `enriched` makes the later \
+         move read as one inside a loop (B-2026-10-31-13).",
+)];
 
 /// Single files that do not currently check, with the first reported error.
 const KNOWN_BROKEN_FILES: &[(&str, &str)] = &[
@@ -129,12 +123,6 @@ const KNOWN_BROKEN_FILES: &[(&str, &str)] = &[
         "interop/kernel.kara",
         "typecheck: `pub extern \"C\" fn` is the exported C ABI, which went to \
          the archive with the legacy backend at M3 and `karac check` refuses by name.",
-    ),
-    (
-        "word_count.kara",
-        "resolve: undefined name 'read_file' — the spec spells this \
-         `fs.read_to_string` (design.md § I/O surface); the example predates \
-         the rename.",
     ),
     (
         "fathom/mandelbrot.kara",
@@ -164,17 +152,6 @@ const KNOWN_BROKEN_FILES: &[(&str, &str)] = &[
          legacy probe for the free-spawn coroutine leak \
          (docs/spikes/windows-iocp-scale-investigation.md), and \
          ws_echo_spawn.kara is the TaskGroup form.",
-    ),
-    (
-        "autograd_training.kara",
-        "typecheck: `Tensor.from` is refused at check; `Tensor` comes with the \
-         `kara-data` package after v1, and no v2 backend lowers the legacy \
-         library's baked surface for it (B-2026-10-28-26).",
-    ),
-    (
-        "semantic_search.kara",
-        "typecheck: `Tensor.from` is refused at check (same cause as \
-         autograd_training.kara).",
     ),
 ];
 

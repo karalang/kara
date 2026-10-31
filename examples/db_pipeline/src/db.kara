@@ -99,7 +99,7 @@ impl DatabaseProvider for InMemoryDb {
                 // Must rebuild the filtered list manually.
                 let old_rows = self.tables[table].clone();
                 let mut new_rows: Vec[Row] = Vec.new();
-                for row in old_rows {
+                for row in old_rows.into_iter() {
                     match row.get(column) {
                         Some(v) if v == value => {},   // skip matching rows
                         _                     => new_rows.push(row),

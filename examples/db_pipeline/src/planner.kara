@@ -11,7 +11,7 @@ pub enum QueryPlan {
 }
 
 // Plan a query.  Pure: no database reads, no side effects.
-pub fn plan(query: Query) -> QueryPlan {
+pub fn plan(query: own Query) -> QueryPlan {
     match query {
         Select { table, columns } =>
             QueryPlan.FullScan { table: table, columns: columns },
@@ -29,7 +29,7 @@ pub fn plan(query: Query) -> QueryPlan {
             // Collecting keys and values into parallel Vecs requires a manual loop.
             let mut keys:   Vec[String] = Vec.new();
             let mut vals:   Vec[Value]  = Vec.new();
-            for (k, v) in row {
+            for (k, v) in row.into_iter() {
                 keys.push(k);
                 vals.push(v);
             }

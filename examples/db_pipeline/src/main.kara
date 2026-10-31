@@ -41,7 +41,7 @@ fn main() {
     ];
 
     with_provider[Db](db, || {
-        for q in seed_queries {
+        for q in seed_queries.into_iter() {
             execute(plan(q)).unwrap();
         }
 

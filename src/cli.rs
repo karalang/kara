@@ -2883,7 +2883,7 @@ fn render_text_diagnostics(pipeline: &Pipeline) -> Vec<String> {
     // The other two — `missing_must_use` and `missing_track_caller` — are NOT
     // here, and deliberately: they produced 68 of the 70, every one of them
     // rendered against the USER's filename with the baked stdlib item's own
-    // span. `examples/autograd_training.kara` is 88 lines and drew diagnostics
+    // span. `examples/deferred/autograd_training.kara` is 88 lines and drew diagnostics
     // at lines 378 and 387. Those are stdlib-hygiene findings pointing at
     // coordinates that do not exist in the file named, so putting them on the
     // JSON feed would feed the Mend loop 68 unresolvable locations — the exact

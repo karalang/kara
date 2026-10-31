@@ -72,15 +72,12 @@ pub fn execute_pair(plan_a: QueryPlan, plan_b: QueryPlan)
     // The type system has no way to express "this function only accepts
     // FullScan / FilterScan variants of QueryPlan."  A separate
     // `ReadPlan` enum type would fix this.
-    par {
-        let result_a = execute(plan_a);
-        let result_b = execute(plan_b);
-    }
+    let (result_a, result_b) = par { execute(plan_a), execute(plan_b) };
     (result_a, result_b)
 }
 
 // Project rows to the requested columns.  Pure helper.
-fn project(rows: Vec[Row], columns: ref Vec[String]) -> Vec[Row] {
+fn project(rows: own Vec[Row], columns: ref Vec[String]) -> Vec[Row] {
     if columns.is_empty() {
         return rows;   // SELECT * — no projection
     }
@@ -99,9 +96,9 @@ fn project(rows: Vec[Row], columns: ref Vec[String]) -> Vec[Row] {
 }
 
 // Filter rows where column == value.  Pure helper.
-fn filter_rows(rows: Vec[Row], column: ref String, value: ref Value) -> Vec[Row] {
+fn filter_rows(rows: own Vec[Row], column: ref String, value: ref Value) -> Vec[Row] {
     let mut out: Vec[Row] = Vec.new();
-    for row in rows {
+    for row in rows.into_iter() {
         match row.get(column) {
             Some(v) if v == value => out.push(row),
             _                     => {},
