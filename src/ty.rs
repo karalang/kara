@@ -636,6 +636,51 @@ impl TyCtxt {
         self.intern(new)
     }
 
+    /// Bind each `Param` of `pat` to the type at the same position in `ty`,
+    /// the first binding of an index winning: what `subst` would need to
+    /// make `pat` into `ty`. Positions the two do not share bind nothing.
+    pub fn match_params(&self, pat: Ty, ty: Ty, out: &mut Vec<Option<Ty>>) {
+        let lists = |s: &Self, a: TyList, b: TyList, out: &mut Vec<Option<Ty>>| {
+            for (x, y) in s.list(a).into_iter().zip(s.list(b)) {
+                s.match_params(x, y, out);
+            }
+        };
+        match (self.kind(pat), self.kind(ty)) {
+            (TyKind::Param(p), _) => {
+                let i = p.index as usize;
+                if out.len() <= i {
+                    out.resize(i + 1, None);
+                }
+                out[i].get_or_insert(ty);
+            }
+            (TyKind::Adt { def: a, args: x }, TyKind::Adt { def: b, args: y })
+            | (TyKind::Shared { def: a, args: x }, TyKind::Shared { def: b, args: y })
+                if a == b =>
+            {
+                lists(self, x, y, out)
+            }
+            (TyKind::Tuple(x), TyKind::Tuple(y)) => lists(self, x, y, out),
+            (TyKind::Array { elem: a, .. }, TyKind::Array { elem: b, .. })
+            | (TyKind::Vector { elem: a, .. }, TyKind::Vector { elem: b, .. })
+            | (TyKind::Slice { elem: a, .. }, TyKind::Slice { elem: b, .. })
+            | (TyKind::Ref(a), TyKind::Ref(b))
+            | (TyKind::MutRef(a), TyKind::MutRef(b))
+            | (TyKind::Weak(a), TyKind::Weak(b)) => self.match_params(a, b, out),
+            (
+                TyKind::Fn {
+                    params: x, ret: a, ..
+                },
+                TyKind::Fn {
+                    params: y, ret: b, ..
+                },
+            ) => {
+                lists(self, x, y, out);
+                self.match_params(a, b, out);
+            }
+            _ => {}
+        }
+    }
+
     fn subst_list(&self, list: TyList, args: &[Ty], const_args: &[ArrayLen]) -> TyList {
         let tys: Vec<Ty> = self
             .list(list)

@@ -347,17 +347,22 @@ impl<'a> super::TypeChecker<'a> {
                 // phase-8 "type alias bounds" entry) live elsewhere.
                 Item::TypeAlias(t) => {
                     self.reject_user_variance_markers(&t.generic_params, false);
-                    if let (Some(pred), true) = (
-                        &t.refinement,
-                        t.generic_params
-                            .as_ref()
-                            .is_none_or(|g| g.params.is_empty()),
-                    ) {
+                    if let Some(pred) = &t.refinement {
                         let base = match self.env.type_aliases.get(&t.name) {
                             Some(Type::Refinement { base, .. }) => Some((**base).clone()),
                             _ => None,
                         };
+                        // A generic refinement's predicate is typed in its
+                        // own parameters, which each construction instantiates
+                        // (B-2026-10-31-14).
+                        let gp = Self::generic_param_names(&t.generic_params);
+                        let saved_frame = self.current_generic_frame;
+                        if !gp.is_empty() {
+                            self.current_generic_frame = self.node_generic_frames.len() as u32;
+                            self.node_generic_frames.push(gp);
+                        }
                         self.type_refinement_predicate(pred, base);
+                        self.current_generic_frame = saved_frame;
                     }
                 }
                 // `host fn` boundary-type restrictions (phase-10,

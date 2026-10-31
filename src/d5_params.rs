@@ -76,6 +76,27 @@ pub fn borrow_bare_params(program: &mut Program) {
             copy.remove(name);
         }
     }
+    // A type alias, a refinement type among them (`type Pos = i64 where
+    // self > 0`), takes its base's parameter rule: one over a copied type is
+    // copied (B-2026-10-31-14). Repeated for an alias of an alias. Like a
+    // struct, an alias named like a built-in scalar shadows it.
+    for item in &program.items {
+        if let Item::TypeAlias(t) = item {
+            copy.remove(&t.name);
+        }
+    }
+    loop {
+        let before = copy.len();
+        for item in &program.items {
+            let Item::TypeAlias(t) = item else { continue };
+            if t.generic_params.is_none() && copy_like(&t.ty, &copy) {
+                copy.insert(t.name.clone());
+            }
+        }
+        if copy.len() == before {
+            break;
+        }
+    }
     // Per user trait method: whether `self` and each parameter borrow.
     let mut traits: FxHashMap<(String, String), (bool, Vec<bool>)> = FxHashMap::default();
     for item in &mut program.items {

@@ -9528,7 +9528,7 @@ impl<'a> super::TypeChecker<'a> {
                 // gate, and the bounds must not see it at all (`v[s.a..s.b]`
                 // is a read of `s.a`, not a write through it).
                 let range_mut_through = self.mut_through_param_arg;
-                let obj_ty = self.infer_expr(object);
+                let obj_ty = super::types::strip_refinement_through_ref(&self.infer_expr(object));
                 self.mut_through_param_arg = false;
                 // The index is read, never the target of the write: `v[n.val]
                 // = x` writes `v`, so `n.val` is not checked as an assignment

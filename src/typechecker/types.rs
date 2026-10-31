@@ -278,6 +278,21 @@ pub(super) fn strip_refinement(ty: &Type) -> &Type {
     cur
 }
 
+/// `strip_refinement`, also through one borrow: a bare parameter of a
+/// refinement is a `ref` of it, and is indexed, iterated and called on as
+/// a `ref` of its base (B-2026-10-31-14).
+pub(super) fn strip_refinement_through_ref(ty: &Type) -> Type {
+    match ty {
+        Type::Ref(inner) if matches!(**inner, Type::Refinement { .. }) => {
+            Type::Ref(Box::new(strip_refinement(inner).clone()))
+        }
+        Type::MutRef(inner) if matches!(**inner, Type::Refinement { .. }) => {
+            Type::MutRef(Box::new(strip_refinement(inner).clone()))
+        }
+        _ => strip_refinement(ty).clone(),
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IntSize {
     I8,
@@ -1382,6 +1397,7 @@ pub(super) fn contains_type_param(ty: &Type) -> bool {
         }),
         Type::Ref(inner) | Type::MutRef(inner) | Type::Weak(inner) => contains_type_param(inner),
         Type::Pointer { inner, .. } => contains_type_param(inner),
+        Type::Refinement { base, .. } => contains_type_param(base),
         Type::Named { args, .. } => args.iter().any(contains_type_param),
         Type::Function {
             params,
@@ -1469,6 +1485,12 @@ pub(super) fn is_subtype(super_ty: &Type, sub_ty: &Type) -> bool {
         // refinement-base widening is rejected in both directions, so
         // the MutRef arm demands mutual subtyping.
         (Type::Ref(s), Type::Ref(b)) => is_subtype(s, b),
+        // One refinement on both sides, as in `types_compatible`.
+        (Type::Refinement { name: sn, base: sb }, Type::Refinement { name: bn, base: bb })
+            if sn == bn =>
+        {
+            is_subtype(sb, bb)
+        }
         // A `mut ref T` reborrows down to a read-only `ref U` view: sound and
         // covariant in the pointee *exactly like* the `Ref → Ref` arm above,
         // because the destination `ref` cannot write through the borrow — so
@@ -2123,6 +2145,15 @@ pub(super) fn types_compatible(a: &Type, b: &Type) -> bool {
         // over the same base — must narrow explicitly through
         // `try_from` / `as`, so it falls through to `false` here (no
         // implicit narrowing into a refined slot).
+        // The same refinement on both sides: its bases agree part by part. A
+        // generic refinement's `try_from` hands back the refinement over the
+        // declared base (`NonEmpty` over `Vec[T]`), which a `NonEmpty[i64]`
+        // slot accepts as it accepts the `Vec[T]` (B-2026-10-31-14).
+        (Type::Refinement { name: an, base: ab }, Type::Refinement { name: bn, base: bb })
+            if an == bn =>
+        {
+            types_compatible(ab, bb)
+        }
         (Type::Refinement { .. }, _) => false,
         // Source is a refinement (`b`) against a non-refinement target:
         // widen by stripping to the base and re-checking. This is the

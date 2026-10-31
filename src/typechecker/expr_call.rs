@@ -2583,6 +2583,13 @@ impl<'a> super::TypeChecker<'a> {
                 .functions
                 .get(name)
                 .map(|sig| sig.generic_params.clone()),
+            // An associated fn's own parameters: a generic refinement's
+            // synthetic `try_from` is generic in the alias's (B-2026-10-31-14).
+            ExprKind::Path { segments, .. } if segments.len() == 2 => self
+                .env
+                .find_method(&segments[0], &[], &segments[1])
+                .map(|sig| sig.generic_params.clone())
+                .filter(|gp| !gp.is_empty()),
             _ => None,
         };
         let callee_where_clause: Option<WhereClause> = match &callee.kind {

@@ -401,13 +401,7 @@ fn lower_program_inner<'a>(
                 {
                     Some((d.name.clone(), d.refinement.as_ref()?))
                 }
-                Item::TypeAlias(t)
-                    if t.generic_params
-                        .as_ref()
-                        .is_none_or(|g| g.params.is_empty()) =>
-                {
-                    Some((t.name.clone(), t.refinement.as_ref()?))
-                }
+                Item::TypeAlias(t) => Some((t.name.clone(), t.refinement.as_ref()?)),
                 _ => None,
             })
             .collect(),
@@ -4535,8 +4529,8 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// Panics unless the value in `v` satisfies the `where` predicate of
     /// the refinement or distinct type `name`, when it has one: the
     /// predicate, with `self` the value.
-    fn require_refinement(&mut self, name: &str, v: Local) -> R<()> {
-        let Some(ok) = self.refinement_holds(name, v)? else {
+    fn require_refinement(&mut self, name: &str, v: Local, at: Option<NodeId>) -> R<()> {
+        let Some(ok) = self.refinement_holds(name, v, at)? else {
             return Ok(());
         };
         let pass = self.b.new_block();
@@ -4556,19 +4550,59 @@ impl<'l, 'a> Bx<'l, 'a> {
     }
 
     /// Whether the value in `v` satisfies the `where` predicate of `name`,
-    /// as a `bool` local; `None` when `name` has no predicate.
-    fn refinement_holds(&mut self, name: &str, v: Local) -> R<Option<Local>> {
+    /// as a `bool` local; `None` when `name` has no predicate. `at` is a
+    /// node typed as the value, which instantiates a generic refinement.
+    fn refinement_holds(&mut self, name: &str, v: Local, at: Option<NodeId>) -> R<Option<Local>> {
         let Some(&pred) = self.lcx.refined.get(name) else {
             return Ok(None);
         };
+        let args = self.refinement_args(pred, at);
         let bool_t = self.tys().bool();
         let ok = self.temp(bool_t);
         let saved = self.self_local.replace(v);
+        let saved_args = args.map(|a| std::mem::replace(&mut self.args, a));
         let c = self.operand_at(pred, bool_t);
+        if let Some(a) = saved_args {
+            self.args = a;
+        }
         self.self_local = saved;
         let c = c?;
         self.assign(Place::local(ok), Rvalue::Use(c));
         Ok(Some(ok))
+    }
+
+    /// The arguments of a generic refinement (`T` of `type NonEmpty[T] =
+    /// Vec[T] where ..`) at a value typed as the node `at`: the checker types
+    /// the predicate in the refinement's own parameters, so its `self` is
+    /// `Vec[T]`, matched here against the value's `Vec[i64]`
+    /// (B-2026-10-31-14). `None` for a refinement with no parameters.
+    fn refinement_args(&self, pred: &Expr, at: Option<NodeId>) -> Option<Vec<Ty>> {
+        fn self_node(e: &Expr) -> Option<NodeId> {
+            match &e.kind {
+                ExprKind::SelfValue => Some(e.id),
+                ExprKind::Binary { left, right, .. } => {
+                    self_node(left).or_else(|| self_node(right))
+                }
+                ExprKind::Unary { operand, .. } => self_node(operand),
+                ExprKind::FieldAccess { object, .. } | ExprKind::MethodCall { object, .. } => {
+                    self_node(object)
+                }
+                _ => None,
+            }
+        }
+        let pat = *self.lcx.node_types.get(&self_node(pred)?)?;
+        let tcx = self.tys().tcx();
+        let val = tcx.subst(*self.lcx.node_types.get(&at?)?, &self.args, &[]);
+        let strip = |t: Ty| match tcx.kind(t) {
+            HK::Ref(i) | HK::MutRef(i) => i,
+            _ => t,
+        };
+        let mut out = Vec::new();
+        tcx.match_params(strip(pat), strip(val), &mut out);
+        if out.is_empty() {
+            return None;
+        }
+        out.into_iter().collect()
     }
 
     /// `T.try_from(x)` of a refinement `T`: `Ok(x)` when `x` satisfies
@@ -4607,7 +4641,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             s.wrap_distinct(pt, v, Place::local(w));
             Operand::Move(Place::local(w))
         };
-        let Some(ok) = self.refinement_holds(name, v)? else {
+        let Some(ok) = self.refinement_holds(name, v, Some(arg.id))? else {
             let op = payload(self);
             self.build_variant(rt, ok_idx, vec![op], dest);
             return Ok(());
@@ -8166,7 +8200,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 let to = self.expr_ty(e)?;
                 let v = self.temp(to);
                 self.cast_into(e, inner, Place::local(v))?;
-                self.require_refinement(name, v)?;
+                self.require_refinement(name, v, Some(e.id))?;
                 self.assign(dest, Rvalue::Use(Operand::Move(Place::local(v))));
                 Ok(())
             }
@@ -15718,7 +15752,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                     let v = self.temp(bt);
                     let op = self.operand_at(&a.value, bt)?;
                     self.assign(Place::local(v), Rvalue::Use(op));
-                    self.require_refinement(name, v)?;
+                    self.require_refinement(name, v, None)?;
                     self.wrap_distinct(t, v, dest);
                     return Ok(());
                 }

@@ -2083,7 +2083,20 @@ impl<'a> super::TypeChecker<'a> {
         // refined receiver; the generic search keys impls by the
         // refinement's nominal name (`impl_table_key` / the
         // `Type::Refinement` arm of the receiver-name match below).
-        if let Type::Refinement { base, name } = &obj_ty {
+        // A borrowed refinement (`v: ref Big`, the bare parameter of one
+        // under borrow-by-default) strips to a borrow of its base the same
+        // way (B-2026-10-31-14).
+        let refined = match &obj_ty {
+            Type::Refinement { base, name } => Some((name, base, None)),
+            Type::Ref(inner) | Type::MutRef(inner) => match inner.as_ref() {
+                Type::Refinement { base, name } => {
+                    Some((name, base, Some(matches!(obj_ty, Type::MutRef(_)))))
+                }
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some((name, base, borrow)) = refined {
             let has_own_method = self
                 .env
                 .impls
@@ -2091,7 +2104,11 @@ impl<'a> super::TypeChecker<'a> {
                 .any(|imp| imp.target_type == *name && imp.methods.contains_key(method));
             if !has_own_method {
                 let base = (**base).clone();
-                obj_ty = base;
+                obj_ty = match borrow {
+                    None => base,
+                    Some(false) => Type::Ref(Box::new(base)),
+                    Some(true) => Type::MutRef(Box::new(base)),
+                };
             }
         }
 

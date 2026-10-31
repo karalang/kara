@@ -3443,7 +3443,21 @@ impl<'a> super::TypeChecker<'a> {
                     methods.insert(
                         "try_from".to_string(),
                         FunctionSig {
-                            generic_params: Vec::new(),
+                            // A generic refinement's `try_from` is generic in
+                            // the alias's parameters, so `NonEmpty.try_from(v)`
+                            // of a `Vec[i64]` makes a `NonEmpty` over
+                            // `Vec[i64]`, not over `Vec[T]` (B-2026-10-31-14).
+                            generic_params: t
+                                .generic_params
+                                .as_ref()
+                                .map(|gp| {
+                                    gp.params
+                                        .iter()
+                                        .filter(|p| !p.is_const)
+                                        .map(|p| p.name.clone())
+                                        .collect()
+                                })
+                                .unwrap_or_default(),
                             param_names: vec![Some("value".to_string())],
                             params: vec![base_ty],
                             return_type: Type::Named {

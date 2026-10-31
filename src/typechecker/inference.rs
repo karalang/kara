@@ -317,6 +317,9 @@ pub(super) fn instantiate_signature_with_fresh_vars(
                 collect(i, names, seen, const_names, const_seen)
             }
             Type::Pointer { inner, .. } => collect(inner, names, seen, const_names, const_seen),
+            // A generic refinement (`NonEmpty[T]` over `Vec[T]`): its
+            // parameters are its base's (B-2026-10-31-14).
+            Type::Refinement { base, .. } => collect(base, names, seen, const_names, const_seen),
             Type::Named { args, .. } => {
                 for a in args {
                     collect(a, names, seen, const_names, const_seen);
@@ -469,6 +472,10 @@ pub(super) fn instantiate_signature_with_fresh_vars(
             Type::Pointer { is_mut, inner } => Type::Pointer {
                 is_mut: *is_mut,
                 inner: Box::new(substitute(inner, name_to_id, name_to_const_id)),
+            },
+            Type::Refinement { name, base } => Type::Refinement {
+                name: name.clone(),
+                base: Box::new(substitute(base, name_to_id, name_to_const_id)),
             },
             Type::Named { name, args } => Type::Named {
                 name: name.clone(),
@@ -786,6 +793,10 @@ pub(super) fn resolve_type_vars(
             is_mut: *is_mut,
             inner: Box::new(recur(inner)),
         },
+        Type::Refinement { name, base } => Type::Refinement {
+            name: name.clone(),
+            base: Box::new(recur(base)),
+        },
         Type::Named { name, args } => Type::Named {
             name: name.clone(),
             args: args.iter().map(&recur).collect(),
@@ -905,6 +916,11 @@ pub(super) fn unify_types(
             .iter()
             .zip(bs.iter())
             .all(|(x, y)| unify_types(x, y, substitutions, const_substitutions)),
+        (Type::Refinement { name: an, base: ab }, Type::Refinement { name: bn, base: bb })
+            if an == bn =>
+        {
+            unify_types(ab, bb, substitutions, const_substitutions)
+        }
         (Type::Named { name: an, args: aa }, Type::Named { name: bn, args: bb })
             if an == bn && aa.len() == bb.len() =>
         {
