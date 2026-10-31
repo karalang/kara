@@ -32,7 +32,7 @@
 - [Data Layout](./ch15-data-layout.md)
 - [Testing](./ch16-testing.md)
 - [Server-Side Rendering](./ch17-ssr.md)
-- [FFI and Interop: Kāra as a Library](./ch18-interop.md)
+- [FFI and Interop](./ch18-interop.md)
 - [Handling Secrets](./ch19-secrets.md)
 
 # Operating in Production
