@@ -34,6 +34,7 @@ pub mod popcount;
 pub mod presize;
 pub mod pretty;
 pub mod providers;
+pub mod range_bounds;
 pub mod rc_borrow;
 pub mod rc_pairs;
 pub mod syntax;

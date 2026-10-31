@@ -32,6 +32,8 @@ const JOIN_DEPTH: usize = 4;
 
 /// The blocks of `body` whose terminator is an index call whose upper
 /// bound is proved; codegen checks only the lower one there.
+/// [`super::range_bounds`]' proofs join these unless
+/// `KARAC_MIR_RANGE_BOUNDS=0`.
 pub fn upper_proven_indexes(body: &Body, tys: &TyInterner) -> Vec<usize> {
     let preds = super::counters::predecessors(body);
     let mut out = Vec::new();
@@ -39,6 +41,14 @@ pub fn upper_proven_indexes(body: &Body, tys: &TyInterner) -> Vec<usize> {
         if proven(body, tys, &preds, bi, b).is_some() {
             out.push(bi);
         }
+    }
+    if std::env::var("KARAC_MIR_RANGE_BOUNDS").as_deref() != Ok("0") {
+        for bi in super::range_bounds::upper_proven_indexes(body, tys) {
+            if !out.contains(&bi) {
+                out.push(bi);
+            }
+        }
+        out.sort_unstable();
     }
     out
 }

@@ -216,3 +216,151 @@ fn mir_guard_bounds_uncovered_indexes_still_panic() {
         let _ = std::fs::remove_dir_all(&d);
     }
 }
+
+/// Kata 139's prefix DP (B-2026-10-28-40): `s` and `dp` are filled by
+/// counting loops to 40 and 7 and never resized, and every index is
+/// bounded by the loops around it (`off + j <= 33 + 5`, `j <= 5`).
+const WAYS: &str = r#"fn ways(seed: i64) -> i64 {
+    let n = 40;
+    let win = 6;
+    let mut s: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        s.push((seed + i * 7) % 3);
+        i = i + 1;
+    }
+    let mut dp: Vec[bool] = Vec.new();
+    let mut d = 0;
+    while d <= win {
+        dp.push(false);
+        d = d + 1;
+    }
+    let mut total = 0;
+    let mut off = 0;
+    while off < n - win {
+        let mut z = 0;
+        while z <= win {
+            dp[z] = false;
+            z = z + 1;
+        }
+        dp[0] = true;
+        let mut ii = 1;
+        while ii <= win {
+            let mut j = ii - 1;
+            while j >= 0 {
+                if dp[j] and s[off + j] != 1 {
+                    dp[ii] = true;
+                    break;
+                }
+                j = j - 1;
+            }
+            ii = ii + 1;
+        }
+        if dp[win] {
+            total = total + off + 1;
+        }
+        off = off + 1;
+    }
+    total
+}
+fn main() {
+    println(f"{ways(0)} {ways(1)} {ways(2)}");
+}
+"#;
+
+/// A fill one short of the index it reads.
+const SHORT_FILL: &str = r#"fn last() -> bool {
+    let win = 4;
+    let mut dp: Vec[bool] = Vec.new();
+    let mut d = 0;
+    while d < win {
+        dp.push(true);
+        d = d + 1;
+    }
+    dp[win]
+}
+fn main() {
+    println("start");
+    println(f"{last()}");
+}
+"#;
+
+/// A callee that truncates the filled vector through `mut ref`.
+const SHRUNK: &str = r#"fn shrink(v: mut ref Vec[i64]) {
+    v.truncate(1);
+}
+fn shrunk() -> i64 {
+    let mut v: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < 5 {
+        v.push(i);
+        i = i + 1;
+    }
+    shrink(mut v);
+    v[3]
+}
+fn main() {
+    println("start");
+    println(f"{shrunk()}");
+}
+"#;
+
+/// With the range proof every one of `ways`' six indexes checks only its
+/// sign (the constant `dp[0]` folds away); `KARAC_MIR_RANGE_BOUNDS=0` puts
+/// the six `<u len` checks back, and the answer is the same either way.
+#[test]
+fn mir_range_bounds_dp_indexes_check_only_their_sign() {
+    for (env, proved) in [
+        (&[][..], true),
+        (&[("KARAC_MIR_RANGE_BOUNDS", "0")][..], false),
+    ] {
+        let d = dir(if proved { "ways" } else { "ways-off" });
+        let (interp, built) = both(&d, WAYS, env);
+        assert_eq!(out(&interp), "408 385 397\n");
+        let Some(built) = built else { return };
+        assert_eq!(out(&built), "408 385 397\n");
+        let f = function(&d.join("main.ll"), "ways");
+        assert!(!f.is_empty(), "no ways in the IR");
+        let sign = f.iter().filter(|l| l.contains("icmp sge i64")).count();
+        let full = f.iter().filter(|l| l.contains("icmp ult i64")).count();
+        // `j >= 0` is one `sge`.
+        if proved {
+            assert_eq!((sign, full), (6, 0), "{}", f.join("\n"));
+        } else {
+            assert_eq!((sign, full), (1, 6), "{}", f.join("\n"));
+        }
+        let _ = std::fs::remove_dir_all(&d);
+    }
+}
+
+/// What the range proof cannot follow keeps its full check and panics.
+#[test]
+fn mir_range_bounds_unfollowed_indexes_still_panic() {
+    for (name, src, f) in [
+        ("short-fill", SHORT_FILL, "last"),
+        ("shrunk", SHRUNK, "shrunk"),
+    ] {
+        let d = dir(name);
+        let (interp, built) = both(&d, src, &[]);
+        if built.is_some() {
+            let body = function(&d.join("main.ll"), f);
+            let checks: Vec<&String> = body
+                .iter()
+                .filter(|l| l.contains("icmp sge i64") || l.contains("icmp ult i64"))
+                .collect();
+            assert!(
+                checks.len() == 1 && checks[0].contains("icmp ult i64"),
+                "{name}: {}",
+                body.join("\n")
+            );
+        }
+        let runs = std::iter::once(("interp", interp)).chain(built.map(|b| ("built", b)));
+        for (how, o) in runs {
+            let err = String::from_utf8_lossy(&o.stderr);
+            assert_eq!(out(&o), "start\n", "{name} {how}: {err}");
+            assert_eq!(o.status.code(), Some(101), "{name} {how}: {err}");
+            assert!(err.contains("index out of bounds"), "{name} {how}: {err}");
+        }
+        let _ = std::fs::remove_dir_all(&d);
+    }
+}
