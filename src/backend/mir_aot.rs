@@ -331,6 +331,103 @@ fn optimize_and_emit(
     emit(module, obj, tm)
 }
 
+/// Takes the address of the thread-local call-site globals (`karac.site`,
+/// `karac.site.len`: `Cx::site_globals`) once per block that uses them,
+/// through `llvm.threadlocal.address`, and points the block's uses at it.
+/// A thread-local named directly is addressed again at every use, and on
+/// Apple that is a call of `_tlv_get_addr`: the program stores its site
+/// before each library call that can abort, so a loop making one paid a
+/// call per iteration (kata 38: 1.75x legacy's instructions, three
+/// quarters of it the lookups, B-2026-10-28-43). As a value, the address
+/// is merged where one dominates another and hoisted out of a loop that
+/// takes it every trip. It runs after the pipeline (`run_passes`): before
+/// it, the inliner costs each lookup as a call and keeps small functions
+/// that store a site out of line (kata 131's recursive search ran 12% more
+/// instructions). The JIT never runs this: on Apple it keeps the globals
+/// plain (`compile_mir_ir_for_jit`). Returns whether it rewrote a use.
+fn address_site_globals_once(module: &Module<'_>) -> bool {
+    use inkwell::types::AsTypeRef;
+    use inkwell::values::AsValueRef;
+    use llvm_sys::core::{
+        LLVMBuildCall2, LLVMCreateBuilderInContext, LLVMDisposeBuilder, LLVMGetFirstInstruction,
+        LLVMGetFirstUse, LLVMGetInstructionParent, LLVMGetModuleContext, LLVMGetNextInstruction,
+        LLVMGetNextUse, LLVMGetNumOperands, LLVMGetOperand, LLVMGetUser, LLVMIsAInstruction,
+        LLVMIsAPHINode, LLVMIsThreadLocal, LLVMPositionBuilderBefore, LLVMSetOperand,
+    };
+    use llvm_sys::prelude::{LLVMBasicBlockRef, LLVMValueRef};
+    let mut rewrote = false;
+    for name in ["karac.site", "karac.site.len"] {
+        let Some(g) = module.get_global(name) else {
+            continue;
+        };
+        let gv = g.as_value_ref();
+        // SAFETY: `gv` is a live global of `module`.
+        if unsafe { LLVMIsThreadLocal(gv) } == 0 {
+            continue;
+        }
+        let ptr = module.get_context().ptr_type(AddressSpace::default());
+        let Some(intr) = inkwell::intrinsics::Intrinsic::find("llvm.threadlocal.address") else {
+            return rewrote;
+        };
+        let Some(decl) = intr.get_declaration(module, &[ptr.into()]) else {
+            return rewrote;
+        };
+        // The instructions using `g`, and their blocks, collected before any
+        // is rewritten (a rewrite unlinks the use being walked). A `phi`
+        // takes its value on an edge, so it keeps the global.
+        let mut users = Vec::new();
+        // SAFETY: walking the use list of a live value; nothing is changed.
+        unsafe {
+            let mut u = LLVMGetFirstUse(gv);
+            while !u.is_null() {
+                let user = LLVMGetUser(u);
+                if !LLVMIsAInstruction(user).is_null() && LLVMIsAPHINode(user).is_null() {
+                    users.push((user, LLVMGetInstructionParent(user)));
+                }
+                u = LLVMGetNextUse(u);
+            }
+        }
+        let mut addr: Vec<(LLVMBasicBlockRef, LLVMValueRef)> = Vec::new();
+        // SAFETY: every value is of this module; the builder is disposed.
+        unsafe {
+            let b = LLVMCreateBuilderInContext(LLVMGetModuleContext(module.as_mut_ptr()));
+            for (user, block) in users {
+                let a = match addr.iter().find(|(bb, _)| *bb == block) {
+                    Some((_, a)) => *a,
+                    None => {
+                        // Before the block's first instruction past its `phi`s,
+                        // so it is ahead of every use in the block.
+                        let mut at = LLVMGetFirstInstruction(block);
+                        while !LLVMIsAPHINode(at).is_null() {
+                            at = LLVMGetNextInstruction(at);
+                        }
+                        LLVMPositionBuilderBefore(b, at);
+                        let mut args = [gv];
+                        let a = LLVMBuildCall2(
+                            b,
+                            decl.get_type().as_type_ref(),
+                            decl.as_value_ref(),
+                            args.as_mut_ptr(),
+                            1,
+                            c"site.addr".as_ptr(),
+                        );
+                        addr.push((block, a));
+                        rewrote = true;
+                        a
+                    }
+                };
+                for i in 0..LLVMGetNumOperands(user) {
+                    if LLVMGetOperand(user, i as u32) == gv {
+                        LLVMSetOperand(user, i as u32, a);
+                    }
+                }
+            }
+            LLVMDisposeBuilder(b);
+        }
+    }
+    rewrote
+}
+
 /// Points the module's calls of `malloc` and `free` at the runtime's
 /// `karac_malloc` and `karac_free`, which keep small chunks on per-thread
 /// lists once the pool runs more than one thread: past glibc's own short
@@ -381,6 +478,18 @@ fn run_passes(module: &Module<'_>, opt: u8, tm: &TargetMachine) -> Result<(), St
         module
             .run_passes(&passes, tm, PassBuilderOptions::create())
             .map_err(|e| format!("{passes}: {}", e.to_string()))?;
+        // After the pipeline, whose inliner would cost each lookup as a
+        // call: the addresses are then merged and hoisted by a short pass of
+        // their own. `KARAC_MIR_SITE_TLS_ONCE=0` addresses the call-site
+        // globals at each use.
+        if std::env::var("KARAC_MIR_SITE_TLS_ONCE").as_deref() != Ok("0")
+            && address_site_globals_once(module)
+        {
+            let cleanup = "function(early-cse<memssa>,loop-mssa(licm),gvn,simplifycfg)";
+            module
+                .run_passes(cleanup, tm, PassBuilderOptions::create())
+                .map_err(|e| format!("{cleanup}: {}", e.to_string()))?;
+        }
         // SAFETY: the module is live for the call.
         unsafe { select_branch::mark_index_steps(module.as_mut_ptr()) };
     }
@@ -398,5 +507,77 @@ fn empty_global<'ctx>(module: &Module<'ctx>, name: &str, ty: BasicTypeEnum<'ctx>
         let g = module.add_global(ty, Some(AddressSpace::default()), name);
         g.set_initializer(&ty.const_zero());
         g.set_constant(true);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use inkwell::context::Context;
+    use inkwell::memory_buffer::MemoryBuffer;
+
+    /// Each block addresses each thread-local site global once, and every
+    /// use goes through that address; a plain global is left alone
+    /// (B-2026-10-28-43).
+    #[test]
+    fn site_globals_are_addressed_once_per_function() {
+        let ir = concat!(
+            "@karac.site = internal thread_local global ptr null\n",
+            "@karac.site.len = internal thread_local global i64 0\n",
+            "@plain = internal global i64 0\n",
+            "@s = private constant [3 x i8] c\"a:1\"\n",
+            "define void @f(i64 %n) {\n",
+            "entry:\n",
+            "  br label %loop\n",
+            "loop:\n",
+            "  %i = phi i64 [ 0, %entry ], [ %j, %loop ]\n",
+            "  store ptr @s, ptr @karac.site\n",
+            "  store i64 3, ptr @karac.site.len\n",
+            "  store ptr @s, ptr @karac.site\n",
+            "  store i64 %i, ptr @plain\n",
+            "  %j = add i64 %i, 1\n",
+            "  %c = icmp slt i64 %j, %n\n",
+            "  br i1 %c, label %loop, label %out\n",
+            "out:\n",
+            "  ret void\n",
+            "}\n",
+            "define i64 @g() {\n",
+            "entry:\n",
+            "  %n = load i64, ptr @karac.site.len\n",
+            "  ret i64 %n\n",
+            "}\n",
+        );
+        let llcx = Context::create();
+        let ir = format!("{ir}\0");
+        let buf = MemoryBuffer::create_from_memory_range_copy(ir.as_bytes(), "t");
+        let module = llcx.create_module_from_ir(buf).expect("IR");
+        assert!(super::address_site_globals_once(&module));
+        module.verify().expect("verifies");
+        let text = module.print_to_string().to_string();
+        let body = |name: &str| {
+            let at = text.find(&format!("@{name}(")).expect("function");
+            let end = text[at..].find("\n}\n").expect("end") + at;
+            text[at..end].to_string()
+        };
+        let f = body("f");
+        assert_eq!(
+            f.matches("@llvm.threadlocal.address.p0(ptr @karac.site)")
+                .count(),
+            1,
+            "{f}"
+        );
+        assert_eq!(
+            f.matches("@llvm.threadlocal.address.p0(ptr @karac.site.len)")
+                .count(),
+            1,
+            "{f}"
+        );
+        assert!(!f.contains("store ptr @s, ptr @karac.site"), "{f}");
+        assert!(f.contains("store i64 %i, ptr @plain"), "{f}");
+        let g = body("g");
+        assert!(
+            g.contains("@llvm.threadlocal.address.p0(ptr @karac.site.len)"),
+            "{g}"
+        );
+        assert!(!g.contains("load i64, ptr @karac.site.len"), "{g}");
     }
 }
