@@ -923,11 +923,13 @@ fn first_stderr_line(
 }
 
 /// Starts a server program, sends it `requests(port)` once it prints its
-/// `BOUND_PORT` on stderr (B-2026-10-15-69), and stops it: the transcript
-/// of what came back.
+/// `BOUND_PORT` on stderr (B-2026-10-15-69), which it does when
+/// `KARAC_ANNOUNCE_PORT` asks (B-2026-10-31-20), and stops it: the
+/// transcript of what came back.
 fn exchange(mut cmd: Command, requests: fn(u16) -> String) -> String {
     use std::io::Read;
     let mut child = cmd
+        .env("KARAC_ANNOUNCE_PORT", "1")
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
@@ -1260,6 +1262,101 @@ fn announce_port_hook_reports_a_bound_listener_on_both_backends() {
     });
     if linked.is_some() {
         assert_eq!(serve(Command::new(&exe)), "5\n", "built");
+    }
+}
+
+/// A server prints nothing of its own (io.md § servers, B-2026-10-31-20):
+/// with `KARAC_ANNOUNCE_PORT` unset, `Server.serve` answers a request and no
+/// `BOUND_PORT` line reaches stdout or stderr, on both backends. The
+/// announce itself is the listener's, which the test above pins.
+const QUIET_SERVER: &str = r#"fn handle(r: Request) -> Response {
+    Response { status: 200, body: "ok".to_string() }
+}
+
+fn main() {
+    let addr = env.var("ADDR").unwrap();
+    match Server.serve(addr, handle) {
+        Ok(_) => {}
+        Err(e) => println(e.message),
+    }
+}
+"#;
+
+#[test]
+fn server_prints_no_bound_port_unless_asked_on_both_backends() {
+    use std::io::{Read, Write};
+    let dir = Scratch::new("quiet_server");
+    let karac = env!("CARGO_BIN_EXE_karac");
+    let file = dir.path().join("quiet.kara");
+    std::fs::write(&file, QUIET_SERVER).unwrap();
+    let serve = |mut cmd: Command| -> (String, String) {
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .and_then(|l| l.local_addr())
+            .expect("a free port")
+            .port();
+        let mut child = cmd
+            .env("ADDR", format!("127.0.0.1:{port}"))
+            .env_remove("KARAC_ANNOUNCE_PORT")
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn the server");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        let mut s = loop {
+            match std::net::TcpStream::connect(("127.0.0.1", port)) {
+                Ok(s) => break s,
+                Err(_) if std::time::Instant::now() < deadline => {
+                    std::thread::sleep(std::time::Duration::from_millis(50))
+                }
+                Err(e) => {
+                    let _ = child.kill();
+                    panic!("the server never listened: {e}");
+                }
+            }
+        };
+        s.set_read_timeout(Some(std::time::Duration::from_secs(20)))
+            .expect("timeout");
+        s.write_all(b"GET / HTTP/1.1\r\nHost: h\r\nConnection: close\r\n\r\n")
+            .expect("send");
+        let mut reply = String::new();
+        let _ = s.read_to_string(&mut reply);
+        let _ = child.kill();
+        let out = child.wait_with_output().expect("wait");
+        assert!(reply.starts_with("HTTP/1.1 200"), "reply: {reply:?}");
+        (
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    };
+    let mut interp = Command::new(karac);
+    interp.args(["__mir-run", file.to_str().unwrap()]);
+    let (out, err) = serve(interp);
+    assert!(
+        !out.contains("BOUND_PORT") && !err.contains("BOUND_PORT"),
+        "interp: {out:?} {err:?}"
+    );
+    let exe = dir.path().join("quiet");
+    let built = Command::new(karac)
+        .args([
+            "build",
+            "--mir",
+            file.to_str().unwrap(),
+            "-o",
+            exe.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    let linked = common::link_or_skip(if built.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&built.stderr).to_string())
+    });
+    if linked.is_some() {
+        let (out, err) = serve(Command::new(&exe));
+        assert!(
+            !out.contains("BOUND_PORT") && !err.contains("BOUND_PORT"),
+            "built: {out:?} {err:?}"
+        );
     }
 }
 

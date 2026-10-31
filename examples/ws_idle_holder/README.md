@@ -148,9 +148,9 @@ cd examples/ws_idle_holder/
 ./ws_idle_holder &
 ```
 
-The binary prints `BOUND_PORT=<n>\n` to stdout (the
-`runtime/stdlib/tcp.kara` BOUND_PORT convention for the `:0` ephemeral
-case) so smoke-test scripts can read back the assigned port. To pin a
+Run with `KARAC_ANNOUNCE_PORT=1`, the binary prints `BOUND_PORT=<n>` on
+stderr for the `:0` ephemeral bind, so smoke-test scripts can read back the
+assigned port (the scripts in `bench/scripts/` set it). To pin a
 fixed port, edit `src/main.kara`'s
 `TlsListener.bind_tls("127.0.0.1:0", ...)` to the desired port literal.
 

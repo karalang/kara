@@ -51,7 +51,6 @@ impl Server {
         match TcpListener.bind(addr) {
             Ok(l) => {
                 let l = HttpListener.Plain(l);
-                Server.__announce(l);
                 let group = TaskGroup.new();
                 let accepting = group.spawn(|| Server.__fixed_connections(l, body));
                 accepting.join()
@@ -104,7 +103,6 @@ impl Server {
     // Serves the connections `l` accepts. The accept loop is a task of its
     // own, so the connections' tasks run while it waits.
     fn __serve(l: own HttpListener, handler: own Fn(ref Request) -> Response, ws_handler: own Fn(own WebSocket), upgrades: bool) -> Result[(), HttpError] with sends(Network) receives(Network) blocks suspends {
-        Server.__announce(l);
         let group = TaskGroup.new();
         let accepting = group.spawn(|| Server.__connections(l, handler, ws_handler, upgrades));
         accepting.join()
@@ -242,16 +240,6 @@ impl Server {
     }
 
     // `BOUND_PORT=<n>` on stderr, as `serve` prints it for a test harness.
-    fn __announce(l: HttpListener) {
-        match l.local_addr() {
-            Ok(a) => match a.rsplit_once(":") {
-                Some((_, port)) => eprintln(f"BOUND_PORT={port}"),
-                None => {}
-            },
-            Err(_) => {}
-        }
-    }
-
     fn __failed(what: Str, e: NetError) -> HttpError {
         let why = match e {
             NetError.Interrupted => "interrupted".to_string(),

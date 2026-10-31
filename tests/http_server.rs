@@ -2544,7 +2544,8 @@ fn main() with sends(Network) receives(Network) {{
     }
 
     /// [`spawn_kara_server`] on v2: `karac check`, then `karac build --mir`,
-    /// then spawn. The v2 server prints `BOUND_PORT=` on stderr. A program
+    /// then spawn. The v2 server prints `BOUND_PORT=` on stderr when
+    /// `KARAC_ANNOUNCE_PORT` is set (B-2026-10-31-20). A program
     /// `check` refuses fails the test rather than soft-skipping as a link
     /// problem would.
     fn spawn_kara_server_v2(
@@ -2585,6 +2586,7 @@ fn main() with sends(Network) receives(Network) {{
             Err(String::from_utf8_lossy(&built.stderr).to_string())
         })?;
         let mut child = Command::new(&exe_path)
+            .env("KARAC_ANNOUNCE_PORT", "1")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())

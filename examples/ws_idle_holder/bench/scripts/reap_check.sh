@@ -70,7 +70,7 @@ close_wait() { ss -H -tan state close-wait 2>/dev/null | wc -l | tr -d ' '; }
 
 # ── Launch the server, capture pid + ephemeral BOUND_PORT ──────────────
 SRV_OUT="$(mktemp)"
-"$SERVER_BIN" >"$SRV_OUT" 2>&1 &
+KARAC_ANNOUNCE_PORT=1 "$SERVER_BIN" >"$SRV_OUT" 2>&1 &
 SRV_PID=$!
 
 cleanup() {

@@ -426,7 +426,7 @@ impl Request {
 struct Response { status: i64, body: String }
 ```
 
-Each server binds `addr` and answers every request with what `handler` returns for it; it returns only when binding or accepting fails, with that `HttpError`. It prints `BOUND_PORT=<n>` on standard error once it is bound, so a test harness that bound port 0 can find it. A program may declare its own `Response` as `struct Response { status: i64, body: String, headers: Vec[(String, String)] }` to send headers.
+Each server binds `addr` and answers every request with what `handler` returns for it; it returns only when binding or accepting fails, with that `HttpError`. It prints nothing of its own: a program learns its port with `local_addr`. A test harness that binds port 0 and cannot ask sets `KARAC_ANNOUNCE_PORT`, and the listener then prints `BOUND_PORT=<n>` on standard error, as `TcpListener.bind` and `TlsListener.bind_tls` do. A program may declare its own `Response` as `struct Response { status: i64, body: String, headers: Vec[(String, String)] }` to send headers.
 
 A `Request` is also a value a program builds, so a test calls a handler directly: `handle(Request.new("GET", "/items?id=3").with_header("Accept", "text/plain"))`. `url` is the URL the request was built with, or for a request a server is answering its target, the path and query. `path` and `query` read the target, which for an absolute URL (`http://host/items?id=3`) is its path and query, `/` when it has neither. `with_header` adds a header after the others, and `with_body` sets the body. A response gets a JSON `content-type` when its headers give none, and its body's `content-length` in place of any they give. `header` compares names without case.
 
