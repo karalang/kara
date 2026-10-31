@@ -60,12 +60,12 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | diagnostics | 75 |
 | false-positive | 73 |
-| missing-feature | 53 |
+| missing-feature | 55 |
 | perf | 44 |
 | soundness | 30 |
 | miscompile | 18 |
 | run-vs-build | 15 |
-| other | 12 |
+| other | 13 |
 | codegen-gap | 10 |
 | crash | 2 |
 | leak | 1 |
@@ -74,15 +74,15 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 125 |
-| mir | 67 |
+| typecheck | 126 |
+| mir | 68 |
 | mir-llvm | 51 |
 | cli | 40 |
 | ownership | 36 |
 | interp | 25 |
 | codegen | 22 |
+| parser | 21 |
 | runtime | 20 |
-| parser | 20 |
 | effect | 10 |
 | autopar | 4 |
 | other | 3 |
@@ -106,6 +106,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-30-37 | 2026-10-30 | runtime | low | tests/mir_panic_free_floor.rs fails 3 of 4 on macOS arm64: a print/Vec, an overflow-abort and a Map/Set program's binaries still contain std's panic-hook marker `RUST_BACKTRACE`, so the floor B-2026-10-28-36 / B-2026-10-29-41 measured on Linux does not hold on Apple | — |
 | B-2026-10-31-2 | 2026-10-31 | mir-llvm | low | MIR still stores the call site into `karac.site` / `karac.site.len` before every library call that can abort, two stores a loop trip where legacy passed the site statically to a cold per-site abort path: kata 38 runs 1.18x legacy's instructions on that alone | — |
 | B-2026-10-31-3 | 2026-10-31 | autopar | low | An auto-par task's counter is known to lie in the loop's constant range (30e4af977d) but LLVM 18 still divides in 64 bits: kata 4's `k % R` in the task is an unsigned 64-bit magic division where the in-order loop, exiting at the constant `k < 10M`, uses a 32-bit one | — |
+| B-2026-10-31-4 | 2026-10-31 | parser | medium | An effect clause cannot root a resource at `self`: `with sends(self)` and `with writes(self.n)` are parse errors (`Expected identifier`), though design.md § Value-rooted resources writes `writes(self.cache)` and docs/library/concurrency.md and io.md declare `Sender.send`, `Receiver.recv`, the socket, TLS, WebSocket and `Child` methods `with sends(self)` / `receives(self)` | — |
+| B-2026-10-31-5 | 2026-10-31 | mir | medium | examples/protobuf_schema.kara passes `karac check` but `karac run`, `karac build` and `karac __mir-run` all stop with `error[mir]: resolve: ... \`i8\` is a primitive type name and cannot be bound as a value` at 67:24 of a file that is not the example's (span offset 1002001831) | — |
+| B-2026-10-31-6 | 2026-10-31 | typecheck | low | A `#[derive(Debug)]` type has no callable `fmt_debug`: `u.fmt_debug()` is `no method 'fmt_debug' on type 'User'`, though design.md § Display and Debug declares `trait Debug { fn fmt_debug(self) -> String; }`; `dbg(u)` prints the derived form, so only the trait method is missing | — |
 
 ### Relocated
 

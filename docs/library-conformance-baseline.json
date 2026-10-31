@@ -1,0 +1,145 @@
+{
+  "note": "Non-conforming library-doc blocks and examples. Shrink me. `reason` says why each is here; UNTRIAGED means nobody has decided yet.",
+  "blocks": {
+    "f81e6a2e51be": {
+      "where": "README.md:92",
+      "heading": "What makes Kāra different > An AI-first compiler interface",
+      "outcome": "REJECTED",
+      "reason": "deliberate: the use-after-move the `karac fix` demo starts from",
+      "first_diagnostic": "value 'log' moved here, used again here (moved at line 7:21)"
+    },
+    "6e3b84b61afa": {
+      "where": "docs/library/collections.md:149",
+      "heading": "Collections > `Map[K, V, H]`",
+      "outcome": "REJECTED",
+      "reason": "fragment: one chained call over `self.table`, `key` and `row` from the surrounding prose",
+      "first_diagnostic": "'self' used outside of impl method"
+    },
+    "82c63792bcd7": {
+      "where": "docs/library/collections.md:332",
+      "heading": "Collections > Fallible allocation",
+      "outcome": "REJECTED",
+      "reason": "fragment: `?` needs an enclosing function returning Result; the ladder wraps in `fn main()`",
+      "first_diagnostic": "'?' requires the enclosing function to return `Result` or `Option`, found '()'"
+    },
+    "7c29ba2e31ff": {
+      "where": "docs/library/concurrency.md:24",
+      "heading": "Concurrency > Channels",
+      "outcome": "SIGNATURE-MISSING",
+      "reason": "compiler: `with sends(self)` does not parse (B-2026-10-31-4)",
+      "first_diagnostic": "Expected identifier"
+    },
+    "37aca5f38b06": {
+      "where": "docs/library/concurrency.md:80",
+      "heading": "Concurrency > Channels",
+      "outcome": "SIGNATURE-MISSING",
+      "reason": "compiler: `with receives(self)` does not parse (B-2026-10-31-4)",
+      "first_diagnostic": "Expected identifier"
+    },
+    "d9b75d1a1e81": {
+      "where": "docs/library/data.md:12",
+      "heading": "Data: the `kara-data` package > What it is for",
+      "outcome": "REJECTED",
+      "reason": "fragment: `kara-data` is a package (after v1), not the standard library",
+      "first_diagnostic": "unknown module `data`: this file belongs to no package, so the only modules it can import are the library's (`std.*`); a program of several files is a package, with a `kara.toml` beside its `src/`"
+    },
+    "c0cb7808cffa": {
+      "where": "docs/library/io.md:268",
+      "heading": "Input and output > Networking",
+      "outcome": "SIGNATURE-MISSING",
+      "reason": "compiler: `with sends(self)` / `receives(self)` does not parse (B-2026-10-31-4)",
+      "first_diagnostic": "Expected identifier"
+    },
+    "bcf2999336c6": {
+      "where": "docs/library/io.md:351",
+      "heading": "Networking > TLS server",
+      "outcome": "SIGNATURE-MISSING",
+      "reason": "compiler: `with sends(self)` / `receives(self)` does not parse (B-2026-10-31-4)",
+      "first_diagnostic": "Expected identifier"
+    },
+    "3b6de7029642": {
+      "where": "docs/library/io.md:375",
+      "heading": "Networking > WebSocket",
+      "outcome": "SIGNATURE-MISSING",
+      "reason": "doc: `mut self` is not a receiver form (`mut ref self`); also B-2026-10-31-4",
+      "first_diagnostic": "'mut' is a reserved keyword and cannot be used as an identifier"
+    },
+    "90e82c98e6de": {
+      "where": "docs/library/io.md:577",
+      "heading": "Processes > Running programs",
+      "outcome": "SIGNATURE-MISSING",
+      "reason": "compiler: `with sends(self)` / `receives(self)` does not parse (B-2026-10-31-4)",
+      "first_diagnostic": "Expected identifier"
+    },
+    "866d552a9220": {
+      "where": "docs/library/io.md:644",
+      "heading": "Input and output > Examples",
+      "outcome": "RUN-FAILED",
+      "reason": "as written: the tool skeleton exits 1 with its usage line when run without an argument",
+      "first_diagnostic": null
+    },
+    "524e6ce2d6bd": {
+      "where": "docs/library/json.md:6",
+      "heading": "JSON values (`Json`)",
+      "outcome": "REJECTED",
+      "reason": "fragment: `?` needs an enclosing function returning Result",
+      "first_diagnostic": "'?' requires the enclosing function to return `Result` or `Option`, found '()'"
+    },
+    "617e79034685": {
+      "where": "docs/library/time-random-env.md:35",
+      "heading": "Time, randomness and the environment > `Clock`",
+      "outcome": "UNDECLARED-NAME",
+      "reason": "fragment: `Duration` is imported from std.time in the next block",
+      "first_diagnostic": "undefined type 'Duration'"
+    },
+    "example:autograd_training.kara": {
+      "where": "examples/autograd_training.kara",
+      "heading": "example program",
+      "outcome": "REJECTED",
+      "reason": "doc: uses `Tensor`, which comes with kara-data after v1 (docs/deferred.md)",
+      "first_diagnostic": "`Tensor.from` is not in the standard library: `Tensor` comes with the `kara-data` package after v1 (docs/deferred.md § Numerical types)"
+    },
+    "package:db_pipeline": {
+      "where": "examples/db_pipeline/kara.toml",
+      "heading": "example package",
+      "outcome": "REJECTED",
+      "reason": "doc: predates borrow-by-default (moves out of bare params and `for` elements) and writes `par` branches as statements",
+      "first_diagnostic": "cannot move 'row': it borrows its value (a bare `for` element, a `ref` binding, or a binding into a borrowed place). For a `for` element, iterate with `.into_iter()` to move the elements out of the collection. Write `.clone()` to take a copy, or keep using it in place"
+    },
+    "example:protobuf_schema.kara": {
+      "where": "examples/protobuf_schema.kara",
+      "heading": "example program",
+      "outcome": "RUN-FAILED",
+      "reason": "compiler: check passes, every executing surface fails resolving `i8` (B-2026-10-31-5)",
+      "first_diagnostic": null
+    },
+    "example:semantic_search.kara": {
+      "where": "examples/semantic_search.kara",
+      "heading": "example program",
+      "outcome": "REJECTED",
+      "reason": "doc: uses `Tensor`, which comes with kara-data after v1 (docs/deferred.md)",
+      "first_diagnostic": "`Tensor.from` is not in the standard library: `Tensor` comes with the `kara-data` package after v1 (docs/deferred.md § Numerical types)"
+    },
+    "package:slipstream": {
+      "where": "examples/slipstream/kara.toml",
+      "heading": "example package",
+      "outcome": "REJECTED",
+      "reason": "doc: predates borrow-by-default (moves out of `for` elements and collection slots)",
+      "first_diagnostic": "cannot move 'cell': it borrows its value (a bare `for` element, a `ref` binding, or a binding into a borrowed place). For a `for` element, iterate with `.into_iter()` to move the elements out of the collection. This type has no `.clone()`: use it in place, or take it with `mem.replace` / `mem.swap` / `Option.take()`"
+    },
+    "package:weave": {
+      "where": "examples/weave/kara.toml",
+      "heading": "example package",
+      "outcome": "REJECTED",
+      "reason": "doc: `split(',')` with a char, a split iterator used as a Vec, and a value moved inside a loop",
+      "first_diagnostic": "expected 'Str', found 'char': write it as the string literal \",\""
+    },
+    "example:word_count.kara": {
+      "where": "examples/word_count.kara",
+      "heading": "example program",
+      "outcome": "REJECTED",
+      "reason": "doc: `read_file` does not exist (`fs.read_to_string`)",
+      "first_diagnostic": "undefined name 'read_file'"
+    }
+  }
+}
