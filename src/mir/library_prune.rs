@@ -9,9 +9,9 @@
 //! it never names.
 //!
 //! Reachability is by word, not by resolved name, so it over-keeps: a
-//! program that says `len` anywhere (a comment included) keeps every
-//! library method called `len`. What it must never do is drop something
-//! reached without its name being written, so these are always kept:
+//! program that says `len` anywhere outside a comment keeps every library
+//! method called `len`. What it must never do is drop something reached
+//! without its name being written, so these are always kept:
 //!
 //! - every name in [`ALWAYS_KEPT`], the methods the compiler calls for an
 //!   operator, a `for` loop, `?`, an f-string, a derive or a drop;
@@ -19,10 +19,14 @@
 //!   it (dropping one would leave an impl incomplete);
 //! - a method of an impl of a trait the library does not define, since
 //!   whether that trait requires it is not known here;
-//! - every free function (the compiler calls some by name: `parse_result_int`
-//!   decides what `i64.parse` returns) and every item that is not an impl
-//!   or a trait (types, consts), which cost little to check;
-//! - an impl whose target is not a type the library defines.
+//! - every free function that takes no value of a library type, and one
+//!   that does once each of those types is reached (the compiler calls some
+//!   by name: `parse_result_int` decides what `i64.parse` returns,
+//!   `vec_extend_deque` extends a `Vec` by a `VecDeque`);
+//! - every item that is not an impl, a trait or a function (types, consts),
+//!   which cost little to check;
+//! - an impl whose target is not a type the library defines, other than
+//!   the built-in collections in [`NAMED_ONLY`].
 //!
 //! Spans are left as they are: only whole items and methods are removed.
 //! `KARAC_MIR_PRUNE_LIBRARY=0` keeps the whole library.
@@ -158,6 +162,12 @@ const ALWAYS_KEPT: &[&str] = &[
     "context",
 ];
 
+/// Built-in collections a program has a value of only by naming one, since
+/// no literal builds one unless an annotation or signature names it: their
+/// library impls go with the name, as a library type's do (`Vec`, `Map`
+/// and `String` have literals).
+const NAMED_ONLY: &[&str] = &["VecDeque", "Set", "SortedSet", "SortedMap"];
+
 pub fn enabled() -> bool {
     std::env::var("KARAC_MIR_PRUNE_LIBRARY").as_deref() != Ok("0")
 }
@@ -184,6 +194,43 @@ fn words(text: &str, out: &mut FxHashSet<String>) {
             i += 1;
         }
     }
+}
+
+/// `text` with its comments, doc comments included, overwritten with
+/// spaces, so offsets into it are offsets into `text`. Every other token
+/// keeps its text, a string's included (an f-string's holes are code).
+/// `text` as it is when it does not lex cleanly.
+fn without_comments(text: &str) -> String {
+    use crate::token::Token;
+    let mut out = vec![b' '; text.len()];
+    let mut lexer = crate::lexer::Lexer::new(text);
+    loop {
+        let t = lexer.next_token();
+        match t.token {
+            Token::EOF => break,
+            Token::DocComment(_) | Token::ModuleDocComment(_) => continue,
+            Token::Error(_) | Token::ErrorWithFix { .. } => return text.to_string(),
+            _ => {}
+        }
+        let (a, b) = (t.span.offset, t.span.offset + t.span.length);
+        if b > text.len() || a > b {
+            return text.to_string();
+        }
+        out[a..b].copy_from_slice(&text.as_bytes()[a..b]);
+    }
+    String::from_utf8(out).unwrap_or_else(|_| text.to_string())
+}
+
+/// Whether the library item `name` is reached. One the program clashes with
+/// is renamed out of its way (`Json` to `Json__lib`, `lower`'s
+/// `rename_clashing_library_items`), and an import or a gated module still
+/// reaches it by its own name.
+fn is_reached(reached: &FxHashSet<String>, name: &str) -> bool {
+    reached.contains(name)
+        || name
+            .trim_end_matches('_')
+            .strip_suffix("__lib")
+            .is_some_and(|base| reached.contains(base))
 }
 
 fn last_segment(ty: &crate::ast::TypeExpr) -> Option<&str> {
@@ -217,6 +264,9 @@ enum Kind {
     /// A type the library defines: always left in, but what it names counts
     /// only once the type itself is reached.
     Type(String),
+    /// A free function taking a value of each of these library types: kept
+    /// when its name is reached or all of them are.
+    Fn { name: String, over: Vec<String> },
     /// Kept as a frame; its methods are judged one by one.
     Always,
 }
@@ -250,6 +300,7 @@ pub fn prune(program: &mut Program, src: &str, user_len: usize) -> Pruned {
             Item::EnumDef(e) => Some(e.name.as_str()),
             _ => None,
         })
+        .chain(NAMED_ONLY.iter().copied())
         .collect();
     // For each library trait, its methods with a default body: an impl's
     // definition of one of those may go when the name is not reached.
@@ -274,8 +325,28 @@ pub fn prune(program: &mut Program, src: &str, user_len: usize) -> Pruned {
         let mut method_spans: Vec<(String, usize, bool)> = Vec::new();
         let kind = match it {
             // The compiler calls several by name (`parse_result_int` decides
-            // what `i64.parse` returns), and they are few.
-            Item::Function(_) => Kind::Always,
+            // what `i64.parse` returns), so one is kept without its name
+            // being reached once a value of each library type it takes can
+            // exist (`vec_extend_deque` once `VecDeque` is reached).
+            Item::Function(f) => {
+                let mut named = FxHashSet::default();
+                for p in &f.params {
+                    words(&crate::formatter::render_type_expr(&p.ty), &mut named);
+                }
+                let mut over: Vec<String> = named
+                    .into_iter()
+                    .filter(|n| library_types.contains(n.as_str()))
+                    .collect();
+                over.sort();
+                if over.is_empty() {
+                    Kind::Always
+                } else {
+                    Kind::Fn {
+                        name: f.name.clone(),
+                        over,
+                    }
+                }
+            }
             Item::ImplBlock(imp) => {
                 let trait_defaults = imp
                     .trait_name
@@ -343,8 +414,32 @@ pub fn prune(program: &mut Program, src: &str, user_len: usize) -> Pruned {
         });
     }
 
+    // A word in a comment reaches nothing. A file's header comment is the
+    // tail of the item before it, so counting comments kept whole impls
+    // only a comment names (B-2026-10-28-37).
+    let blanked = without_comments(src);
+    let src = blanked.as_str();
     let mut reached: FxHashSet<String> = ALWAYS_KEPT.iter().map(|s| s.to_string()).collect();
     words(&src[..user_len.min(src.len())], &mut reached);
+    // A gated module the program imports (`std.log`, `std.path`) is checked
+    // with it but is not in `src`, so what the module names is reached as
+    // the program's own words are: each module whose path the words spell,
+    // and each one that module imports in turn.
+    let gated = crate::prelude::GATED_STDLIB_SOURCES;
+    let mut seeded = vec![false; gated.len()];
+    loop {
+        let mut more = false;
+        for (i, (path, text)) in gated.iter().enumerate() {
+            if !seeded[i] && path.iter().all(|s| reached.contains(*s)) {
+                seeded[i] = true;
+                more = true;
+                words(&without_comments(text), &mut reached);
+            }
+        }
+        if !more {
+            break;
+        }
+    }
     // A provider's handle methods, which the compiler registers by name
     // for a `with_provider` or `providers` block of `FileSystem` or
     // `Network` (core semantics §14.11, §14.12), and the library's `bind`
@@ -370,7 +465,10 @@ pub fn prune(program: &mut Program, src: &str, user_len: usize) -> Pruned {
         for p in pieces.iter_mut() {
             if !p.kept {
                 p.kept = match &p.kind {
-                    Kind::ImplOf(n) | Kind::Type(n) => reached.contains(n),
+                    Kind::ImplOf(n) | Kind::Type(n) => is_reached(&reached, n),
+                    Kind::Fn { name, over } => {
+                        is_reached(&reached, name) || over.iter().all(|t| is_reached(&reached, t))
+                    }
                     Kind::Always => true,
                 };
                 if p.kept {
@@ -487,6 +585,57 @@ mod tests {
                 out.push(p);
             }
         }
+    }
+
+    /// The library item and method names left after pruning `lib` behind
+    /// the program `user`.
+    fn left(user: &str, lib: &str) -> Vec<String> {
+        let src = format!("{user}{lib}");
+        let mut program = crate::parse(&src).program;
+        prune(&mut program, &src, user.len());
+        let mut out = Vec::new();
+        for it in &program.items {
+            match it {
+                Item::Function(f) if f.span.offset >= user.len() => out.push(f.name.clone()),
+                Item::ImplBlock(imp) => out.extend(imp.items.iter().filter_map(|ii| match ii {
+                    ImplItem::Method(m) => Some(m.name.clone()),
+                    _ => None,
+                })),
+                _ => {}
+            }
+        }
+        out
+    }
+
+    const HEAP: &str = "// A Heap of one.\n\
+        struct Heap {\n    x: i64,\n}\n\
+        impl Heap {\n    fn crest(self) -> i64 {\n        self.x\n    }\n}\n\
+        // Deque helpers: a deque_size call needs a Deque.\n\
+        struct Deque {\n    x: i64,\n}\n\
+        impl Deque {\n    fn size(self) -> i64 {\n        self.x\n    }\n}\n\
+        fn deque_size(d: Deque) -> i64 {\n    d.size()\n}\n\
+        fn plain(x: i64) -> i64 {\n    x\n}\n";
+
+    /// A word in a comment, the program's or the library's, reaches nothing
+    /// (B-2026-10-28-37).
+    #[test]
+    fn prune_ignores_words_in_comments() {
+        assert_eq!(
+            left("// the crest of the Heap\nfn main() {}\n", HEAP),
+            ["plain"]
+        );
+        let user = "fn main() {\n    let h = Heap { x: 1 };\n    println(f\"{h.crest()}\");\n}\n";
+        assert_eq!(left(user, HEAP), ["crest", "plain"]);
+    }
+
+    /// A free function taking a library type goes with that type, and stays
+    /// when the program calls it by name.
+    #[test]
+    fn prune_drops_a_helper_over_an_unreached_type() {
+        let deque = "fn main() {\n    let d = Deque { x: 1 };\n}\n";
+        assert_eq!(left(deque, HEAP), ["size", "deque_size", "plain"]);
+        let by_name = "fn main() {\n    deque_size(make());\n}\n";
+        assert_eq!(left(by_name, HEAP), ["size", "deque_size", "plain"]);
     }
 
     /// A library method the MIR builder or backend names in a string literal
