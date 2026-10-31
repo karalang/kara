@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 77 |
+| diagnostics | 78 |
 | false-positive | 76 |
 | missing-feature | 60 |
 | perf | 47 |
@@ -74,10 +74,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 132 |
+| typecheck | 133 |
 | mir | 79 |
 | mir-llvm | 56 |
-| cli | 44 |
+| cli | 45 |
 | ownership | 37 |
 | interp | 26 |
 | codegen | 22 |
@@ -475,6 +475,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-31-31 | other | medium | `karac fmt` drops a type's effect argument: `EventBus[with E]` and `EventBus[with writes(OrderDb)]` come back as a bare `EventBus`, so a program `kar… | aba8cf09d2 |
 | B-2026-10-31-32 | mir | medium | An `unsafe extern "C"` import with an `f64` (or any float) parameter or return passes `karac check` but `karac run`, `karac build` and `__mir-run` re… | 189722227c |
 | B-2026-10-31-33 | typecheck+cli | medium | User-facing diagnostics, CLI errors and help text name internal plan jargon ("goes to the archive with the legacy backend at M3 and returns on v2 on… | 4da5433a9d |
+| B-2026-10-31-35 | typecheck+cli | medium | User-facing diagnostics and help say "in v1", "v1.5", "post-v1", "v1.x" for what 0.9 does not support ("identifiers must be ASCII in v1", "batched ma… | 4f8cb2f424 |
 
 </details>
 
