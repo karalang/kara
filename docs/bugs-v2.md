@@ -61,7 +61,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | diagnostics | 75 |
 | false-positive | 73 |
 | missing-feature | 53 |
-| perf | 42 |
+| perf | 43 |
 | soundness | 30 |
 | miscompile | 18 |
 | run-vs-build | 15 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | typecheck | 125 |
 | mir | 67 |
-| mir-llvm | 50 |
+| mir-llvm | 51 |
 | cli | 40 |
 | ownership | 36 |
 | interp | 25 |
@@ -103,12 +103,12 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-28-34 | 2026-10-28 | mir-llvm | medium | The MIR compiled backend runs kata 2's add-two-numbers seq bench 1.15x legacy's instructions and 1.17x its cycles, so kara drops from clang -O3 parity (1.01x) to 1.23x C | — |
 | B-2026-10-28-37 | 2026-10-28 | other | low | Compiling a 40-line kata now takes about 158 ms and 68 MB peak against 92 ms and 24 MB in July, slower and larger than rustc -O on the same program (102 ms, 32 MB), and `karac run` of kata 1's 1.8 ms hash_map program takes 106 ms | — |
 | B-2026-10-28-40 | 2026-10-28 | mir-llvm | medium | MIR checks the full upper bound on indexes legacy proved in range from the loop guard, and the extra checks push kata 139's 4-trip inner loop over LLVM's peel budget: 2.03x legacy's instructions, 97.8% of it recovered by removing two bounds checks | — |
-| B-2026-10-28-43 | 2026-10-28 | mir-llvm | medium | MIR stores the panic location into `@karac.site` / `@karac.site.len` on every loop latch and before every unwrap, and since da5bdc59fc (B-2026-10-26-7) those globals are thread_local, a TLV-getter call per access on Mach-O: kata 38 went 1.17x -> 1.67x legacy's instructions | — |
 | B-2026-10-28-44 | 2026-10-28 | mir-llvm+runtime | low | On macOS, `karac run` of a program with several pool workers can report ANOTHER task's source location for a panic: the JIT keeps `@karac.site` / `@karac.site.len` process-wide because RuntimeDyldMachO cannot link thread-locals, and B-2026-10-26-7's comment says that sharing 'costs speed only' — it also makes the reported place a race, and tests/mir_site_thread_local.rs's `karac run` assertion passes by chance on a Mac | — |
 | B-2026-10-29-32 | 2026-10-29 | mir-llvm | medium | On the MIR compiled backend, `String.contains` with a needle of at most 16 bytes calls `memchr` and then `memcmp` at every place the needle's first byte occurs, so on a two-letter haystack (a binary string, where that byte is every other one) it costs 3.2 ns per haystack byte: 9.4x C `strstr` and 7.2x Rust `str::contains`; kata 1016's bench is 8.5x C | — |
 | B-2026-10-29-50 | 2026-10-29 | autopar | low | An auto-par task's loop takes its run's bounds as plain captures, so LLVM knows nothing of the counter's range: kata 4's `k % R` becomes a signed 64-bit magic division in the task (about 10 instructions) where the in-order loop, knowing 0 <= k < 10M, uses a 32-bit unsigned one (about 5) | — |
 | B-2026-10-30-36 | 2026-10-30 | mir-llvm | medium | kata 74's closed binary search over a flattened matrix (`while lo <= hi`, `m[mid / cols][mid % cols]`) runs 1.32x legacy's instructions on the MIR backend, and it is not B-2026-10-28-41's midpoint mechanism | — |
 | B-2026-10-30-37 | 2026-10-30 | runtime | low | tests/mir_panic_free_floor.rs fails 3 of 4 on macOS arm64: a print/Vec, an overflow-abort and a Map/Set program's binaries still contain std's panic-hook marker `RUST_BACKTRACE`, so the floor B-2026-10-28-36 / B-2026-10-29-41 measured on Linux does not hold on Apple | — |
+| B-2026-10-31-2 | 2026-10-31 | mir-llvm | low | MIR still stores the call site into `karac.site` / `karac.site.len` before every library call that can abort, two stores a loop trip where legacy passed the site statically to a cold per-site abort path: kata 38 runs 1.18x legacy's instructions on that alone | — |
 
 ### Relocated
 
@@ -356,6 +356,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-28-39 | mir-llvm | medium | The MIR backend never ported legacy's partial-unroll hint (`llvm.loop.unroll.count 4` on pure-scalar counted `while` loops, B-2026-07-08-24), so kata… | 721602d810 |
 | B-2026-10-28-41 | mir-llvm | medium | MIR never ported legacy's binary-search midpoint assume (B-2026-06-16-1) and passes a Slice through memory, so `len` reaches IPSCCP only after inlini… | b8ad892458 |
 | B-2026-10-28-42 | mir-llvm+runtime | high | MIR heap-copies every string literal a function returns and builds `a + " " + b` one realloc per operand (copying a dead left operand), where legacy… | de113d6d66 |
+| B-2026-10-28-43 | mir-llvm | medium | MIR stores the panic location into `@karac.site` / `@karac.site.len` on every loop latch and before every unwrap, and since da5bdc59fc (B-2026-10-26-… | e1bd415c72 |
 | B-2026-10-29-1 | parser | medium | A function-typed parameter in Rust's spelling, `f: impl Fn(i64) -> i64` or `f: fn(i64) -> i64`, gets only a bare parse error (`Expected RightParen, f… | 38876d470b |
 | B-2026-10-29-2 | typecheck | high | A closure that passes a captured `String` to `replace`, `replacen`, `split`, `find` or `strip_prefix` on its parameter (`\|s\| s.replace(old, new)`) is… | 80e76392cf |
 | B-2026-10-29-3 | typecheck+cli | low | `s.bytes().collect()` is refused with a message that spells out the rewrite ("iterator adaptors/terminals require an explicit `.iter()` — write `s.by… | 803f7ede31 |
