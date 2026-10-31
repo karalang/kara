@@ -57,9 +57,11 @@ impl<'a> super::TypeChecker<'a> {
     /// receiver leaked through. Numeric tuple indexing (`t.0`) is a distinct AST
     /// node (`TupleIndex`) and never reaches here.
     fn field_access_on_fieldless_type(&mut self, field: &str, obj_ty: &Type, span: &Span) -> Type {
+        // A tuple, closure or function type has no table key; it is named by
+        // its type as written, never by a placeholder.
         let ty_name = super::types::impl_table_key(obj_ty)
             .map(|(n, _)| n)
-            .unwrap_or_else(|| "this type".to_string());
+            .unwrap_or_else(|| super::types::type_display(obj_ty));
         self.type_error(
             format!("no field '{field}' on type '{ty_name}'"),
             *span,
@@ -434,17 +436,26 @@ impl<'a> super::TypeChecker<'a> {
                     return resolved;
                 }
             }
+            // A `__`-prefixed field is the compiler's own (a runtime handle),
+            // not one the program can name, so it is never offered. A library
+            // type such as `Vec` declares no fields at all, and a list that
+            // came out empty is left off rather than printed as nothing.
             let available: Vec<&str> = struct_info
                 .fields
                 .iter()
                 .map(|(n, _, _)| n.as_str())
+                .filter(|n| !n.starts_with("__"))
                 .collect();
-            let message = format!(
-                "no field '{}' on struct '{}', available fields: {}",
-                field,
-                type_name,
-                available.join(", ")
-            );
+            let message = if available.is_empty() {
+                format!("no field '{field}' on type '{type_name}', which has no fields")
+            } else {
+                format!(
+                    "no field '{}' on struct '{}', available fields: {}",
+                    field,
+                    type_name,
+                    available.join(", ")
+                )
+            };
             // The v2 `ExitStatus` has methods where the legacy one had
             // fields (B-2026-10-15-6): `success` keeps its meaning as a
             // call; `code` became an `Option[i32]`.
@@ -474,6 +485,21 @@ impl<'a> super::TypeChecker<'a> {
                 ),
                 _ => self.type_error(message, *span, TypeErrorKind::UndefinedField),
             }
+            Type::Error
+        } else if self.env.enums.contains_key(&type_name) {
+            // An enum has no fields: a variant's payload is reached by a
+            // pattern. Without this arm the access fell to the imported-struct
+            // probe below, which finds no struct and returns `Type::Error`
+            // without a diagnostic, so `e.message` on an `IoError` checked
+            // clean and only the MIR builder refused it (B-2026-10-31-18).
+            self.type_error(
+                format!(
+                    "no field '{field}' on enum '{type_name}': an enum has no fields; \
+                     `match` on its variants to reach a payload"
+                ),
+                *span,
+                TypeErrorKind::UndefinedField,
+            );
             Type::Error
         } else {
             // Not in the local env, but may be an imported struct — probe the
