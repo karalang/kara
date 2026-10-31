@@ -107,7 +107,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-31-21 | 2026-10-31 | parser | low | Parse errors show the Rust `Debug` form of the token: `Expected LeftBracket, found Identifier { name: "tool", raw: false }` | — |
 | B-2026-10-31-22 | 2026-10-31 | cli | medium | `karac build` refuses the project `karac new --lib` just made ("the v2 build makes an executable from src/main.kara … v2 does not build a library package yet"), and on a binary project it prints a slice-2 manifest dump (project/edition/root/target/entry/modules) before `Built:` | — |
 | B-2026-10-31-23 | 2026-10-31 | mir | medium | The MIR builder refuses every program with a struct `invariant` ("a type invariant is not lowered yet"), so examples/weave, which checks since B-2026-10-31-13/-14, still does not run, build or test on v2 | — |
-| B-2026-10-31-24 | 2026-10-31 | typecheck+mir | medium | `x.eq(y)` and `x.partial_cmp(y)` on a type that derives `PartialEq` / `PartialOrd` are `no method 'eq'` / `no method 'partial_cmp'` at check, though design.md § Operator traits declares both methods and `==` / `<` already compare such a type; `cmp` on a derived `Ord` resolves | — |
 | B-2026-10-31-25 | 2026-10-31 | typecheck | medium | `x.hash(mut h)` with a user `Hasher` is `no method 'hash'` on a type that derives `Hash` and on the primitives (`7.hash(mut h)`), though design.md § Hashing declares `trait Hash { fn hash[H: Hasher](self, hasher: mut ref H); }` and says the derive generates ordinary `self.a.hash(mut hasher)` code | — |
 
 ### Relocated
@@ -466,6 +465,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-31-14 | typecheck | medium | A bare (borrowing) parameter of a refinement type does not take its argument the way a parameter of the base type does: an owned `NonEmpty[T]` (`type… | a4cbb4119a |
 | B-2026-10-31-15 | mir | medium | A closure that consumes a captured iterator (`for line in lines` over a `split` captured from outside) and is called once passes `karac check`, but t… | 6b6b058afa |
 | B-2026-10-31-17 | mir | low | A builtin method called straight on a unit-variant path does not build: `Slot.Empty.to_string()` (derived Display) and `Slot.Empty.fmt_debug()` are `… | 50b9950071 |
+| B-2026-10-31-24 | typecheck+mir | medium | `x.eq(y)` and `x.partial_cmp(y)` on a type that derives `PartialEq` / `PartialOrd` are `no method 'eq'` / `no method 'partial_cmp'` at check, though… | b468c6c249 |
 
 </details>
 
