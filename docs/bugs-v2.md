@@ -61,7 +61,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | diagnostics | 75 |
 | false-positive | 73 |
 | missing-feature | 55 |
-| perf | 44 |
+| perf | 46 |
 | soundness | 30 |
 | miscompile | 18 |
 | run-vs-build | 15 |
@@ -75,8 +75,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 126 |
-| mir | 68 |
-| mir-llvm | 51 |
+| mir | 69 |
+| mir-llvm | 52 |
 | cli | 40 |
 | ownership | 36 |
 | interp | 25 |
@@ -98,12 +98,13 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 |---|---|---|---|---|---|
 | B-2026-10-28-3 | 2026-10-28 | mir-llvm | low | A compiled program's run time moves 10-20% with where its hot function lands, and the runtime archive is one of the things that moves it: kata 125 runs about 10% slower whenever karac.main sits at 16 mod 64 (the full archive's larger headers shift user code by 0x3130 bytes), kata 28 KMP 0.41 vs 0.52 s between layouts; no alignment setting tried removes the swing without slowing another program 7-20% | — |
 | B-2026-10-28-34 | 2026-10-28 | mir-llvm | medium | The MIR compiled backend runs kata 2's add-two-numbers seq bench 1.15x legacy's instructions and 1.17x its cycles, so kara drops from clang -O3 parity (1.01x) to 1.23x C; CORRECTED 2026-10-31: the cost is refcounting the `shared struct ListNode` on each traversal step, not Vec access | — |
-| B-2026-10-28-37 | 2026-10-28 | other | low | Compiling a 40-line kata now takes about 158 ms and 68 MB peak against 92 ms and 24 MB in July, slower and larger than rustc -O on the same program (102 ms, 32 MB), and `karac run` of kata 1's 1.8 ms hash_map program takes 106 ms | — |
 | B-2026-10-28-40 | 2026-10-28 | mir-llvm | medium | MIR checks the full upper bound on indexes legacy proved in range from the loop guard, and the extra checks push kata 139's 4-trip inner loop over LLVM's peel budget: 2.03x legacy's instructions, 97.8% of it recovered by removing two bounds checks | — |
 | B-2026-10-30-37 | 2026-10-30 | runtime | low | tests/mir_panic_free_floor.rs fails 3 of 4 on macOS arm64: a print/Vec, an overflow-abort and a Map/Set program's binaries still contain std's panic-hook marker `RUST_BACKTRACE`, so the floor B-2026-10-28-36 / B-2026-10-29-41 measured on Linux does not hold on Apple | — |
 | B-2026-10-31-4 | 2026-10-31 | parser | medium | An effect clause cannot root a resource at `self`: `with sends(self)` and `with writes(self.n)` are parse errors (`Expected identifier`), though design.md § Value-rooted resources writes `writes(self.cache)` and docs/library/concurrency.md and io.md declare `Sender.send`, `Receiver.recv`, the socket, TLS, WebSocket and `Child` methods `with sends(self)` / `receives(self)` | — |
 | B-2026-10-31-5 | 2026-10-31 | mir | medium | examples/protobuf_schema.kara passes `karac check` but `karac run`, `karac build` and `karac __mir-run` all stop with `error[mir]: resolve: ... \`i8\` is a primitive type name and cannot be bound as a value` at 67:24 of a file that is not the example's (span offset 1002001831) | — |
 | B-2026-10-31-6 | 2026-10-31 | typecheck | low | A `#[derive(Debug)]` type has no callable `fmt_debug`: `u.fmt_debug()` is `no method 'fmt_debug' on type 'User'`, though design.md § Display and Debug declares `trait Debug { fn fmt_debug(self) -> String; }`; `dbg(u)` prints the derived form, so only the trait method is missing | — |
+| B-2026-10-31-7 | 2026-10-31 | mir | low | `karac build` (and `karac run`) runs the whole front end twice: `check_v2`'s pipeline, then `build_source_in_order_later` parses, resolves, typechecks and ownership-checks the program and its library again from source | — |
+| B-2026-10-31-8 | 2026-10-31 | mir-llvm | low | Every `karac` process starts at 15-20 ms and 46.6 MB peak RSS before doing anything (`karac --version`), and the link step of a small kata's `karac build` is its largest phase at 72-102 ms | — |
 
 ### Relocated
 
@@ -351,6 +352,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-28-33 | mir-llvm | medium | The MIR compiled backend runs kata 5's expand-around-center seq bench 1.22x legacy's instructions and 1.45x its cycles, turning a kata that beat Rust… | 3344983712 |
 | B-2026-10-28-35 | autopar+runtime | medium | Kata 4's auto-par binary executes a constant +207M instructions (+37%) whenever it has two or more workers, and two workers buy no speedup at twice t… | 5b6aab2a3c |
 | B-2026-10-28-36 | mir-llvm+runtime | medium | Every compute-only binary is about 250 KB larger on the MIR backend: a seq kata binary is 337 KB at g04628b0eb against 85 KB from legacy, and the aut… | 1f4c30c7de |
+| B-2026-10-28-37 | other | low | Compiling a 40-line kata now takes about 158 ms and 68 MB peak against 92 ms and 24 MB in July, slower and larger than rustc -O on the same program (… | 6bae6aa8d2 |
 | B-2026-10-28-39 | mir-llvm | medium | The MIR backend never ported legacy's partial-unroll hint (`llvm.loop.unroll.count 4` on pure-scalar counted `while` loops, B-2026-07-08-24), so kata… | 721602d810 |
 | B-2026-10-28-41 | mir-llvm | medium | MIR never ported legacy's binary-search midpoint assume (B-2026-06-16-1) and passes a Slice through memory, so `len` reaches IPSCCP only after inlini… | b8ad892458 |
 | B-2026-10-28-42 | mir-llvm+runtime | high | MIR heap-copies every string literal a function returns and builds `a + " " + b` one realloc per operand (copying a dead left operand), where legacy… | de113d6d66 |
