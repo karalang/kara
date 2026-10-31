@@ -929,6 +929,15 @@ pub(crate) fn build_concurrency_graph_json(
     )
 }
 
+/// Whether MIR instance `instance` is a copy of source function `f`: `f`
+/// itself, or `f` specialised to type arguments (`f[i64]`) or to providers
+/// (`report{UserDB=Fixed}`).
+fn instance_of(instance: &str, f: &str) -> bool {
+    instance
+        .strip_prefix(f)
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with(['[', '{']))
+}
+
 /// `json` (an object) with the MIR auto-par verdicts on `src`'s
 /// candidates as its `auto_par` member, those of `function` alone when
 /// given: each loop or run of statements, whether a build runs it as
@@ -944,7 +953,7 @@ pub(crate) fn with_auto_par(json: &str, src: &str, function: Option<&str>) -> St
         Ok(vs) => {
             let entries: Vec<String> = vs
                 .iter()
-                .filter(|v| function.is_none_or(|f| v.instance == f))
+                .filter(|v| function.is_none_or(|f| instance_of(&v.instance, f)))
                 .map(|v| {
                     let kind = match v.kind {
                         crate::mir::effects::auto_par::VerdictKind::Loop => "loop",
