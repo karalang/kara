@@ -61,7 +61,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | diagnostics | 75 |
 | false-positive | 75 |
 | missing-feature | 56 |
-| perf | 46 |
+| perf | 47 |
 | soundness | 30 |
 | miscompile | 19 |
 | run-vs-build | 16 |
@@ -75,7 +75,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 127 |
-| mir | 71 |
+| mir | 72 |
 | mir-llvm | 53 |
 | cli | 41 |
 | ownership | 37 |
@@ -100,12 +100,12 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-28-34 | 2026-10-28 | mir-llvm | medium | The MIR compiled backend runs kata 2's add-two-numbers seq bench 1.15x legacy's instructions and 1.17x its cycles, so kara drops from clang -O3 parity (1.01x) to 1.23x C; CORRECTED 2026-10-31: the cost is refcounting the `shared struct ListNode` on each traversal step, not Vec access | — |
 | B-2026-10-30-37 | 2026-10-30 | runtime | low | tests/mir_panic_free_floor.rs fails 3 of 4 on macOS arm64: a print/Vec, an overflow-abort and a Map/Set program's binaries still contain std's panic-hook marker `RUST_BACKTRACE`, so the floor B-2026-10-28-36 / B-2026-10-29-41 measured on Linux does not hold on Apple | — |
 | B-2026-10-31-5 | 2026-10-31 | mir | medium | examples/protobuf_schema.kara passes `karac check` but `karac run`, `karac build` and `karac __mir-run` all stop with `error[mir]: resolve: ... \`i8\` is a primitive type name and cannot be bound as a value` at 67:24 of a file that is not the example's (span offset 1002001831) | — |
-| B-2026-10-31-7 | 2026-10-31 | mir | low | `karac build` (and `karac run`) runs the whole front end twice: `check_v2`'s pipeline, then `build_source_in_order_later` parses, resolves, typechecks and ownership-checks the program and its library again from source | — |
 | B-2026-10-31-8 | 2026-10-31 | mir-llvm | low | Every `karac` process starts at 15-20 ms and 46.6 MB peak RSS before doing anything (`karac --version`), and the link step of a small kata's `karac build` is its largest phase at 72-102 ms | — |
 | B-2026-10-31-12 | 2026-10-31 | interp+mir-llvm | low | `dbg(x)` and a failed `assert_eq` ignore a hand-written `impl Debug`: `dbg(p)` with `impl Debug for Pt { fn fmt_debug(self) -> String { f"Pt<{self.x}>" } }` prints `p = Pt { x: 4 }`, the derived field form, though `p.fmt_debug()` gives `Pt<4>` | — |
 | B-2026-10-31-13 | 2026-10-31 | ownership | medium | `karac check` refuses moving a binding after a closure literal passed as a call argument (an `own MutFn` parameter, `with_provider`) that writes it: "moved inside a loop" with no loop around the move; both MIR backends accept the program and print the right answer | — |
 | B-2026-10-31-14 | 2026-10-31 | typecheck | medium | A bare (borrowing) parameter of a refinement type does not take its argument the way a parameter of the base type does: an owned `NonEmpty[T]` (`type NonEmpty[T] = Vec[T] where self.len() > 0`) is refused ("expected 'ref NonEmpty', found 'NonEmpty'"), `p * 2` on a `p: Pos` (`i64 where self > 0`) is refused ("type 'ref Pos' does not implement trait Mul"), and a non-generic Vec refinement passes `karac check` but MIR refuses it ("a type that failed to check is not lowered yet") | — |
 | B-2026-10-31-15 | 2026-10-31 | mir | medium | A closure that consumes a captured iterator (`for line in lines` over a `split` captured from outside) and is called once passes `karac check`, but the MIR builder refuses it ("cannot move a non-`Copy` value out of a borrowed place"), so check accepts what neither backend can run | — |
+| B-2026-10-31-16 | 2026-10-31 | mir | low | `karac build` and `karac run` still do the front end's work twice in CPU: `check_v2` and the MIR builder's `frontend()` now run on two threads at once (6777e6ea51), but each parses, resolves, typechecks and ownership-checks the program and its library | — |
 
 ### Relocated
 
@@ -453,6 +453,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-31-3 | autopar | low | An auto-par task's counter is known to lie in the loop's constant range (30e4af977d) but LLVM 18 still divides in 64 bits: kata 4's `k % R` in the ta… | 287a18e111 |
 | B-2026-10-31-4 | parser | medium | An effect clause cannot root a resource at `self`: `with sends(self)` and `with writes(self.n)` are parse errors (`Expected identifier`), though desi… | 181b03c625 |
 | B-2026-10-31-6 | typecheck | low | A `#[derive(Debug)]` type has no callable `fmt_debug`: `u.fmt_debug()` is `no method 'fmt_debug' on type 'User'`, though design.md § Display and Debu… | 103da49c5f |
+| B-2026-10-31-7 | mir | low | `karac build` (and `karac run`) runs the whole front end twice: `check_v2`'s pipeline, then `build_source_in_order_later` parses, resolves, typecheck… | 6777e6ea51 |
 | B-2026-10-31-9 | resolver | medium | An effect clause cannot root a resource at a parameter that is not a channel endpoint: `with receives(listener)` on a `listener: TcpListener` and `wi… | 181b03c625 |
 | B-2026-10-31-10 | cli | low | git_fetch and registry_proxy lib tests fail on a second run that reuses a pid: their temp dirs are named by pid and a counter and never removed, so a… | e9c07ff635 |
 | B-2026-10-31-11 | mir | medium | `t.to_string()` under `T: Display` at a `#[derive(Display)]` type does not build: `the method call .to_string with no resolved callee is not lowered… | 103da49c5f |
