@@ -3124,6 +3124,11 @@ struct ChunkJob<'a> {
     /// The loop's reduction is a signed sum, which the task keeps wide
     /// (see [`AutoRed::wide`]).
     wide: Option<&'a [WideSum<'a>]>,
+    /// The loop's start and end, when they are constants: every run lies
+    /// between them, which the task states so its code knows the counter's
+    /// range as the in-order loop's does (B-2026-10-29-50).
+    least: Option<Const>,
+    most: Option<Const>,
 }
 
 /// `while k < n { ..; k += 1 }` (or `k = k + 1`), with `k` an integer
@@ -3347,6 +3352,12 @@ struct Bx<'l, 'a> {
     /// The next closure lowered is an auto-par loop's task running a run
     /// of its iterations (see `ClosureJob::chunk`).
     closure_chunk: Option<ChunkJob<'a>>,
+    /// The block whose statement (or, at its length, final expression) is
+    /// being lowered, for [`Self::counter_start`].
+    stmt_at: Option<(&'a Block, usize)>,
+    /// A counting `while`'s counter's value on the way in, when it is a
+    /// constant ([`Self::counter_start`]), for [`Self::auto_par_for`].
+    auto_par_start: Option<Const>,
     /// An auto-par task's signed sum, while its run is lowered.
     wide_acc: Option<WideAcc<'a>>,
     /// The source lines of the reduction sites [`Self::auto_par_plan`] last
@@ -3430,6 +3441,8 @@ impl<'l, 'a> Bx<'l, 'a> {
             closure_by_value: FxHashSet::default(),
             auto_par_candidate: None,
             closure_chunk: None,
+            stmt_at: None,
+            auto_par_start: None,
             wide_acc: None,
             red_lines: Vec::new(),
             closure_extra_caps: Vec::new(),
@@ -5120,6 +5133,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             }
             Some(e) => {
                 self.push_scope();
+                self.stmt_at = Some((block, block.stmts.len()));
                 self.expr_into(e, dest)?;
                 self.pop_scope()?;
             }
@@ -5165,13 +5179,15 @@ impl<'l, 'a> Bx<'l, 'a> {
                             continue;
                         }
                     }
+                    self.stmt_at = Some((block, k));
                     self.stmt(&block.stmts[k])?;
                     k += 1;
                 }
                 return Ok(());
             }
         }
-        for s in &block.stmts {
+        for (k, s) in block.stmts.iter().enumerate() {
+            self.stmt_at = Some((block, k));
             self.stmt(s)?;
         }
         Ok(())
@@ -11795,7 +11811,10 @@ impl<'l, 'a> Bx<'l, 'a> {
     ) -> R<()> {
         let t = self.expr_ty(cw.counter)?;
         let k = self.expr_place(cw.counter, false)?;
-        self.auto_par_for(e, label, cw.pattern, cw.range, cw.inner, red, dest)?;
+        self.auto_par_start = self.counter_start(e, cw.counter, t)?;
+        let ran = self.auto_par_for(e, label, cw.pattern, cw.range, cw.inner, red, dest);
+        self.auto_par_start = None;
+        ran?;
         self.push_scope();
         let n = self.temp(t);
         self.expr_into(cw.bound, Place::local(n))?;
@@ -11813,6 +11832,69 @@ impl<'l, 'a> Bx<'l, 'a> {
             b.assign(k, Rvalue::Use(Operand::Copy(Place::local(n))));
         });
         self.pop_scope()
+    }
+
+    /// The value a counting `while`'s counter `k` holds on the way into the
+    /// loop `e`, when that is a constant: `e` is a statement (or the final
+    /// expression) of a block whose last earlier statement naming `k` is
+    /// `let mut k = <literal>`. Nothing between can write `k`, since nothing
+    /// between names it, and that `let` runs on every way in.
+    fn counter_start(&mut self, e: &'a Expr, counter: &'a Expr, t: Ty) -> R<Option<Const>> {
+        let (ExprKind::Identifier(name), Some((block, at))) = (&counter.kind, self.stmt_at) else {
+            return Ok(None);
+        };
+        let here = match block.stmts.get(at) {
+            Some(Stmt {
+                kind: StmtKind::Expr(x),
+                ..
+            }) => std::ptr::eq(x, e),
+            Some(_) => false,
+            None => block
+                .final_expr
+                .as_ref()
+                .is_some_and(|x| std::ptr::eq(&**x, e)),
+        };
+        if !here {
+            return Ok(None);
+        }
+        let counter_sym = match self.lcx.res.get(&counter.id) {
+            Some(Res::Local(sym)) => *sym,
+            _ => return Ok(None),
+        };
+        let mentions = |x: &Expr| crate::deque_head::expr_mentions_name_deep(x, name);
+        for s in block.stmts[..at].iter().rev() {
+            match &s.kind {
+                StmtKind::Let { pattern, value, .. } if matches!(&pattern.kind, PatternKind::Binding(n) if n == name) =>
+                {
+                    if self.lcx.binding_syms.get(&(pattern.id, name.clone())) != Some(&counter_sym)
+                        || !matches!(value.kind, ExprKind::Integer(..))
+                    {
+                        return Ok(None);
+                    }
+                    return Ok(self.constant(value)?.map(|c| Const { ty: t, ..c }));
+                }
+                StmtKind::Let { value, .. } if !mentions(value) => {}
+                StmtKind::Assign { target, value }
+                | StmtKind::CompoundAssign { target, value, .. }
+                    if !mentions(target) && !mentions(value) => {}
+                StmtKind::Expr(x) if !mentions(x) => {}
+                _ => return Ok(None),
+            }
+        }
+        Ok(None)
+    }
+
+    /// A range bound that is a constant: a literal, or a `let` of one.
+    fn bound_const(&mut self, b: &'a Expr, t: Ty) -> R<Option<Const>> {
+        let c = match (&b.kind, self.lcx.res.get(&b.id)) {
+            (ExprKind::Integer(..), _) => self.constant(b)?,
+            (ExprKind::Identifier(_), Some(Res::Local(sym))) => {
+                self.lcx.const_lets.get(sym).cloned()
+            }
+            _ => None,
+        };
+        Ok(c.filter(|c| matches!(c.kind, ConstKind::Scalar(_)))
+            .map(|c| Const { ty: t, ..c }))
     }
 
     /// A sequential `for`'s body, recorded as an auto-par candidate of one
@@ -12089,6 +12171,8 @@ impl<'l, 'a> Bx<'l, 'a> {
         red: Option<AutoRed<'a>>,
         dest: Place,
     ) -> R<()> {
+        // Taken first, so a loop inside this one's body never sees it.
+        let start_const = self.auto_par_start.take();
         let (left, right) = match &iterable.kind {
             ExprKind::Binary {
                 op: AstBinOp::Range,
@@ -12149,6 +12233,11 @@ impl<'l, 'a> Bx<'l, 'a> {
         let Some(end) = end else {
             return self.unsupported(iterable.span, "this loop's range");
         };
+        let least = match start_const {
+            Some(c) => Some(c),
+            None => self.bound_const(left, t)?,
+        };
+        let most = self.bound_const(right, t)?;
         let int = |v: u128| {
             Operand::Const(Const {
                 ty: t,
@@ -12271,6 +12360,8 @@ impl<'l, 'a> Bx<'l, 'a> {
             hi: hi_sym,
             ty: t,
             wide: red.and_then(|r| r.wide),
+            least,
+            most,
         });
         self.closure_task = true;
         self.closure_ret = Some((et, None));
@@ -21306,15 +21397,40 @@ impl<'l, 'a> Bx<'l, 'a> {
             });
             self.wide_acc = wide;
             self.push_scope();
-            self.range_loop(
-                &None,
-                ch.pattern,
-                ch.body,
-                Operand::Copy(lo),
-                Some(Operand::Copy(hi)),
-                false,
+            // The run lies inside the loop's range, which the capture loads
+            // do not show: a constant bound is stated by clamping to it (a
+            // no-op here, which LLVM reads as the range), so `k % R` on a
+            // counter known to be in `0..10M` is an unsigned remainder
+            // (B-2026-10-29-50).
+            // `KARAC_AUTO_PAR_RANGE=0` leaves the bounds unstated.
+            let bool_t = self.tys().bool();
+            let stated = std::env::var("KARAC_AUTO_PAR_RANGE").as_deref() != Ok("0");
+            let (ty, least, most) = (
                 ch.ty,
-            )?;
+                ch.least.clone().filter(|_| stated),
+                ch.most.clone().filter(|_| stated),
+            );
+            let clamp = |me: &mut Self, p: Place, bound: Option<Const>, op: BinOp| -> Operand {
+                let Some(c) = bound else {
+                    return Operand::Copy(p);
+                };
+                let v = me.temp(ty);
+                me.assign(v, Rvalue::Use(Operand::Copy(p)));
+                let out = me.temp(bool_t);
+                me.assign(
+                    out,
+                    Rvalue::BinaryOp(
+                        op,
+                        Operand::Copy(Place::local(v)),
+                        Operand::Const(c.clone()),
+                    ),
+                );
+                me.when(out, |b| b.assign(v, Rvalue::Use(Operand::Const(c))));
+                Operand::Copy(Place::local(v))
+            };
+            let lo = clamp(self, lo, least, BinOp::Lt);
+            let hi = clamp(self, hi, most, BinOp::Gt);
+            self.range_loop(&None, ch.pattern, ch.body, lo, Some(hi), false, ch.ty)?;
             self.pop_scope()?;
             self.wide_acc = None;
             if let Some(w) = wide {
