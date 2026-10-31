@@ -109,7 +109,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-29-50 | 2026-10-29 | autopar | low | An auto-par task's loop takes its run's bounds as plain captures, so LLVM knows nothing of the counter's range: kata 4's `k % R` becomes a signed 64-bit magic division in the task (about 10 instructions) where the in-order loop, knowing 0 <= k < 10M, uses a 32-bit unsigned one (about 5) | — |
 | B-2026-10-30-36 | 2026-10-30 | mir-llvm | medium | kata 74's closed binary search over a flattened matrix (`while lo <= hi`, `m[mid / cols][mid % cols]`) runs 1.32x legacy's instructions on the MIR backend, and it is not B-2026-10-28-41's midpoint mechanism | — |
 | B-2026-10-30-37 | 2026-10-30 | runtime | low | tests/mir_panic_free_floor.rs fails 3 of 4 on macOS arm64: a print/Vec, an overflow-abort and a Map/Set program's binaries still contain std's panic-hook marker `RUST_BACKTRACE`, so the floor B-2026-10-28-36 / B-2026-10-29-41 measured on Linux does not hold on Apple | — |
-| B-2026-10-31-1 | 2026-10-31 | cli | low | A resolve error inside a `_test.kara` file is reported against its production sibling (`src/main.kara:42:43` for a line of `src/main_test.kara`), by `karac test` and now by `karac check` | — |
 
 ### Relocated
 
@@ -442,6 +441,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-30-33 | mir | low | A failed `assert` / `assert_eq` in `karac test` reports "assertion failed" / "assertion failed: left != right" without the assertion's source text, a… | 710e7be317 |
 | B-2026-10-30-34 | typecheck | low | `prelude_shadow` warns that a user `struct Stats` shadows a prelude type, though `Stats` is the post-v1 `kara-data` type and not in the prelude (libr… | e11ef9ce09 |
 | B-2026-10-30-35 | ownership | medium | `karac query ownership` reports a parameter declared `s: own String` as mode "ref": the mode it prints is inferred from the body's use of the paramet… | d21c0ecf97 |
+| B-2026-10-31-1 | cli | low | A resolve error inside a `_test.kara` file is reported against its production sibling (`src/main.kara:42:43` for a line of `src/main_test.kara`), by… | 1bc60ed3f0 |
 
 </details>
 
