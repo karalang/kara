@@ -25,8 +25,7 @@ COMMANDS:
     build [file]      Compile (check + effects + ownership).
                       With no <file>, builds the current project: walks up
                       from CWD to find `kara.toml` and compiles every
-                      `.kara` under `src/`. (Project-mode file walker lands
-                      in CR-24 slice 3; slice 2 only verifies the manifest.)
+                      `.kara` under `src/`.
     init [<name>]     Scaffold a new Kāra project. Bare `karac init`
                       scaffolds into the current directory; `karac init
                       <name>` creates `./<name>/` and scaffolds there.
@@ -38,12 +37,12 @@ COMMANDS:
                       `cargo new` vs `cargo init`: positional name
                       required; --backend (default) for HTTP server
                       skeleton, --lib for library, --cli for command-
-                      line tool. --data reserved for the Kafka pipeline
-                      scaffold (deferred — phase-8 line 63 sub-entry).
+                      line tool. --data is reserved for a data-pipeline
+                      scaffold that is not in this release.
     test [<filter>]   Run the project's tests. Walks the project root,
                       discovers `_test.kara` files, and runs every
-                      `test \"case name\" {{ body }}` declaration via the
-                      interpreter. Output is JSONL on stdout (see
+                      `test \"case name\" {{ body }}` declaration, each as
+                      its own run. Output is JSONL on stdout (see
                       `docs/design.md § Testing`). Optional positional
                       substring filter matches against each case's name
                       string.
@@ -719,11 +718,9 @@ FLAGS:
                        its first argument names and counts its lines,
                        words and bytes; `src/main_test.kara` tests it
                        against an in-memory `FileSystem` provider.
-    --data             Reserved for the Kafka pipeline scaffold (consumer +
-                       processor + sink). Currently surfaces a structured
-                       \"deferred\" diagnostic — the underlying Kafka client
-                       surface is not yet shipped. Tracked at phase-8 line 63
-                       sub-entry.
+    --data             Reserved for a data-pipeline scaffold (consumer,
+                       processor, sink). Not in this release: it reports
+                       so and exits 1.
     --force            No effect for `karac new` — the positional `<name>`
                        form always targets a fresh directory. Flag accepted
                        for shape compatibility with `karac init`.
@@ -763,10 +760,9 @@ karac test - Run the project's tests
 USAGE:
     karac test [<filter>] [--all] [--interp]
 
-Each case runs on v2: the package is checked as `karac check` checks it,
-built to MIR, and every case is a run of its own on the JIT (or the MIR
-interpreter under `--interp`), with a fresh provider for each
-`#[with_provider]` fixture.
+The package is checked as `karac check` checks it, built to MIR, and
+every case is a run of its own on the JIT (or the MIR interpreter under
+`--interp`), with a fresh provider for each `#[with_provider]` fixture.
 
 ARGS:
     <filter>   Optional substring matched against each test case's

@@ -6061,7 +6061,7 @@ Discovery by a name prefix (`test_`) fails silently in two ways: a test is skipp
 
 ### Isolation
 
-**Each test runs in its own process** ([core-semantics.md §10.4](core-semantics.md#10-panics-and-errors-c8)). A panic ends the process ([core-semantics.md §10.2](core-semantics.md#10-panics-and-errors-c8)), so a panicking test, including one whose assertion failed, fails alone, and the other tests still run. No state carries from one test to the next. This is not yet implemented: `karac test` currently runs all of a run's tests in one process.
+**Each test runs in its own process** ([core-semantics.md §10.4](core-semantics.md#10-panics-and-errors-c8)). A panic ends the process ([core-semantics.md §10.2](core-semantics.md#10-panics-and-errors-c8)), so a panicking test, including one whose assertion failed, fails alone, and the other tests still run. No state carries from one test to the next. On the JIT, `karac test`'s default, each case is a `karac_jit_runner` process of its own. Under `--interp` each case is a fresh run of the MIR interpreter inside `karac`, with the same outcome: a panic fails that case alone.
 
 ### Runner output
 

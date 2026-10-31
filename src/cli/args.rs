@@ -1736,10 +1736,9 @@ fn parse_new_command(args: &[String]) -> Command {
                 // diagnostic instead of "unknown flag" so future users
                 // get a "this is planned, just not yet" signal.
                 eprintln!(
-                    "error: `karac new --data` is reserved for the Kafka pipeline scaffold \
-                     (phase-8 line 63 sub-entry); the underlying `std.process` / Kafka client \
-                     surface is not yet shipped. Use `--backend` for the HTTP server skeleton \
-                     today."
+                    "error: `karac new --data` is reserved for a data-pipeline scaffold that \
+                     is not in this release. Use `--backend` for the HTTP server skeleton \
+                     or `--cli` for a command-line tool."
                 );
                 process::exit(1);
             }

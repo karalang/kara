@@ -235,7 +235,11 @@ export PATH="$PWD/target/release:$PATH"
 karac --version
 ```
 
-`karac build` needs a C linker (`build-essential` or the Xcode command-line tools). The WebAssembly and optional archives, and the full test gate, are in [CLAUDE.md](CLAUDE.md) and [CONTRIBUTING.md](CONTRIBUTING.md).
+`karac build` needs a C linker (`build-essential` or the Xcode command-line tools).
+
+### Editor support
+
+The language server is `kara-lsp`, a separate binary: build it with `cargo build --release -p kara-lsp` (it lands beside `karac` in `target/release/`) and point your editor's LSP client at it. It gives diagnostics, hover with types and effects, and go-to-definition. Each 0.9.0 release also ships a VS Code extension (`kara-vscode-*-<platform>.vsix`) with `kara-lsp` bundled; install it with `code --install-extension <file>.vsix`. The extension's source is in [editors/vscode](editors/vscode). The WebAssembly and optional archives, and the full test gate, are in [CLAUDE.md](CLAUDE.md) and [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
