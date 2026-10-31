@@ -481,6 +481,8 @@ fn lower_program_inner<'a>(
         isolating_task_exprs: FxHashMap::default(),
         par_for_task_exprs: FxHashMap::default(),
         stmt_chunk_exprs: FxHashMap::default(),
+        variant_method_exprs: FxHashMap::default(),
+        variant_paths: FxHashMap::default(),
         counted_whiles: FxHashMap::default(),
         auto_par_wides: FxHashMap::default(),
         const_lets: FxHashMap::default(),
@@ -1170,6 +1172,12 @@ struct Lcx<'a> {
     /// The tuples a statement-run task evaluates ([`Builder::stmt_chunk`]),
     /// by the run's first statement and its length.
     stmt_chunk_exprs: FxHashMap<(*const Stmt, usize), &'a Expr>,
+    /// `Slot.Empty.to_string()` as the method call `(Slot.Empty).to_string()`
+    /// ([`Builder::variant_method`]), by the call's node.
+    variant_method_exprs: FxHashMap<NodeId, Option<&'a Expr>>,
+    /// The unit variant each receiver path of a `variant_method_exprs` call
+    /// names: its enum's type and the variant's index.
+    variant_paths: FxHashMap<NodeId, (Ty, u32)>,
     /// Each `while`'s counting shape, by the loop's node, or `None` when
     /// it has none (see [`CountedWhile`]).
     counted_whiles: FxHashMap<NodeId, Option<CountedWhile<'a>>>,
@@ -8439,6 +8447,11 @@ impl<'l, 'a> Bx<'l, 'a> {
                 self.assign(dest, Rvalue::Use(op));
                 return Ok(());
             }
+        }
+        // The receiver of `Slot.Empty.to_string()` ([`Self::variant_method`]).
+        if let Some(&(t, idx)) = self.lcx.variant_paths.get(&e.id) {
+            self.build_variant(t, idx, Vec::new(), dest);
+            return Ok(());
         }
         match self.lcx.res.get(&e.id) {
             Some(Res::Def(d)) => {
@@ -15918,6 +15931,12 @@ impl<'l, 'a> Bx<'l, 'a> {
             if self.variant_builtin(e, callee, args, dest.clone())? {
                 return Ok(());
             }
+            if let Some(mc) = self.variant_method(e, callee) {
+                let ExprKind::MethodCall { object, method, .. } = &mc.kind else {
+                    unreachable!("variant_method builds a method call");
+                };
+                return self.method_call(mc, object, method, args, dest);
+            }
         }
         match callee_kind {
             Callee::Builtin(name) => self.builtin_call(e, &name, args, dest),
@@ -16527,6 +16546,72 @@ impl<'l, 'a> Bx<'l, 'a> {
         }
         self.cur = join;
         Ok(true)
+    }
+
+    /// `Slot.Empty.to_string()` parses as a call of the path
+    /// `Slot.Empty.to_string`, which the checker resolves as the library
+    /// method on the unit variant the first two segments name. A unit
+    /// variant is a value, so the call is the method call on that value, as
+    /// `let s = Slot.Empty; s.to_string()` is (B-2026-10-31-17): the same
+    /// call with the variant's path as its receiver, the call's own node
+    /// keeping its type and callee.
+    fn variant_method(&mut self, e: &'a Expr, callee: &'a Expr) -> Option<&'a Expr> {
+        if let Some(&x) = self.lcx.variant_method_exprs.get(&e.id) {
+            return x;
+        }
+        let x = self.variant_method_expr(e, callee);
+        self.lcx.variant_method_exprs.insert(e.id, x);
+        x
+    }
+
+    fn variant_method_expr(&mut self, e: &'a Expr, callee: &'a Expr) -> Option<&'a Expr> {
+        let ExprKind::Call { args, .. } = &e.kind else {
+            return None;
+        };
+        let ExprKind::Path {
+            segments,
+            generic_args: None,
+        } = &callee.kind
+        else {
+            return None;
+        };
+        let [ty, var, m] = segments.as_slice() else {
+            return None;
+        };
+        let def = self.lcx.defs.lookup(0, ty)?;
+        if self.lcx.defs.table.get(def).kind != DefKind::Enum {
+            return None;
+        }
+        let hir_t = self.tys().tcx().adt(def, &[]);
+        let t = self.lcx.mir_ty(hir_t, &[]).ok()?;
+        let (adt, _) = self.tys().tcx().adt_of(t)?;
+        let idx = adt
+            .variants
+            .iter()
+            .position(|v| v.name == *var && v.fields.is_empty())?;
+        let oid = NodeId(self.lcx.next_synthetic_node);
+        self.lcx.next_synthetic_node -= 1;
+        self.lcx.node_types.insert(oid, hir_t);
+        self.lcx.variant_paths.insert(oid, (t, idx as u32));
+        let object = Expr {
+            kind: ExprKind::Path {
+                segments: vec![ty.clone(), var.clone()],
+                generic_args: None,
+            },
+            span: callee.span,
+            id: oid,
+        };
+        Some(Box::leak(Box::new(Expr {
+            kind: ExprKind::MethodCall {
+                object: Box::new(object),
+                method: m.clone(),
+                turbofish: None,
+                args: args.clone(),
+                args_close_span: e.span,
+            },
+            span: e.span,
+            id: e.id,
+        })))
     }
 
     /// `A.Y.into()` parses as a call of the path `A.Y.into`, which the

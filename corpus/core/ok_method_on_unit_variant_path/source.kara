@@ -1,0 +1,33 @@
+// A unit variant is a value, so a method called straight on its path is the
+// method called on that value, as on a binding that holds it. design.md
+// § Display and Debug: a unit variant renders as its name.
+#[derive(Display, Debug, Clone)]
+enum Slot {
+    Full(i64),
+    Empty,
+}
+
+enum Plain {
+    A,
+    B,
+}
+
+impl Slot {
+    fn size(self) -> i64 {
+        match self {
+            Slot.Full(n) => n,
+            Slot.Empty => 0,
+        }
+    }
+}
+
+fn main() {
+    println(Slot.Empty.to_string());
+    println(Slot.Empty.fmt_debug());
+    println(Slot.Empty.to_string().len());
+    println(Slot.Empty.clone().size());
+    println(Slot.Empty.size());
+    println(Plain.B.discriminant());
+    let e = Slot.Empty;
+    println(e.to_string() == Slot.Empty.to_string());
+}

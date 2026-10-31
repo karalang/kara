@@ -1,0 +1,9 @@
+source = "B-2026-10-31-17"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["enum", "display", "debug", "library"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-10-31-17: a unit-variant path is a value expression, so a library method called straight on it (`Slot.Empty.to_string()`, `.fmt_debug()`, `.clone()`) is the method on that value, as on `let s = Slot.Empty; s.to_string()`. design.md § Display and Debug: a unit variant renders as its name."
