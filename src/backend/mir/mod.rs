@@ -154,16 +154,6 @@ pub fn compile_mir_ir(program: &Program, tys: &TyInterner) -> R<String> {
 pub fn compile_mir_ir_for_jit(program: &Program, tys: &TyInterner) -> R<String> {
     let llcx = Context::create();
     let module = compile_mir(&llcx, "main", program, tys)?;
-    // RuntimeDyldMachO is not known to link a thread-local, so on Apple
-    // the JIT keeps the call-site globals plain: the pool's workers then
-    // share them, which costs speed only (B-2026-10-26-7).
-    if cfg!(target_vendor = "apple") {
-        for name in ["karac.site", "karac.site.len"] {
-            if let Some(g) = module.get_global(name) {
-                g.set_thread_local(false);
-            }
-        }
-    }
     if std::env::var("KARAC_MIR_JIT_SROA").as_deref() != Ok("0") {
         let tm = super::driver::create_target_machine()?;
         // Inlining as well: every argument is passed by pointer, and a
@@ -265,6 +255,19 @@ pub struct Cx<'ctx, 'p> {
     site: crate::token::Span,
     /// Whether each body can abort, as found so far (`debug.rs`).
     aborts: HashMap<String, bool>,
+    /// Whether each body is located, once asked ([`Cx::located`]).
+    located: HashMap<String, bool>,
+    /// The function of each located body: its by-value or pointer
+    /// convention, then the place of the call into it as two trailing
+    /// parameters (`debug.rs`). Its `fns` and `vfns` functions, when
+    /// something asks for one, wrap it.
+    lfns: HashMap<String, FunctionValue<'ctx>>,
+    /// Wrappers of `lfns` declared and not built yet, `true` for a
+    /// by-value one.
+    site_todo: Vec<(String, bool)>,
+    /// The function being lowered with its place parameters, when it is
+    /// one of `lfns`.
+    site_params: Option<(FunctionValue<'ctx>, PointerValue<'ctx>, IntValue<'ctx>)>,
     /// `--enable-hot-swap`: the slot of each registered body in
     /// `karac_hotswap_table`, with the function the slot holds
     /// ([`compile_mir_with`]).
@@ -316,6 +319,10 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
             debug: None,
             site: crate::token::Span::default(),
             aborts: HashMap::new(),
+            located: HashMap::new(),
+            lfns: HashMap::new(),
+            site_todo: Vec::new(),
+            site_params: None,
             hot_swap: HashMap::new(),
             hot_swap_table: None,
             upper_proven: false,
@@ -631,7 +638,12 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
             .module
             .add_function(&fn_symbol(name), ty, Some(Linkage::Internal));
         self.vfns.insert(name.to_string(), f);
-        self.schedule(body);
+        if self.located(name) {
+            self.site_todo.push((name.to_string(), true));
+            self.located_function(name)?;
+        } else {
+            self.schedule(body);
+        }
         Ok(Some(f))
     }
 
@@ -645,15 +657,26 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
     /// call of its by-value function: the arguments loaded from their
     /// slots, the result stored to its own.
     fn build_wrapper(&mut self, name: &str) -> R<()> {
+        let v = self
+            .value_function(name)?
+            .ok_or("a wrapper of a body passed in memory")?;
+        self.build_wrapper_to(name, self.fns[name], v, &[])
+    }
+
+    /// [`Self::build_wrapper`] of `f` around `v`, which takes `extra`
+    /// after the body's own arguments.
+    fn build_wrapper_to(
+        &mut self,
+        name: &str,
+        f: FunctionValue<'ctx>,
+        v: FunctionValue<'ctx>,
+        extra: &[BasicMetadataValueEnum<'ctx>],
+    ) -> R<()> {
         let program = self.program;
         let body = &program.bodies[name];
         let (params, ret) = self
             .value_sig(body)
             .ok_or("a wrapper of a body passed in memory")?;
-        let v = self
-            .value_function(name)?
-            .ok_or("a wrapper of a body passed in memory")?;
-        let f = self.fns[name];
         let always = self
             .llcx
             .create_enum_attribute(Attribute::get_named_enum_kind_id("alwaysinline"), 0);
@@ -678,6 +701,7 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
                 args.push(x.into());
             }
         }
+        args.extend_from_slice(extra);
         let r = self
             .builder
             .build_call(v, &args, "")
@@ -698,6 +722,49 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
         Ok(())
     }
 
+    /// Builds the `fns` function (`vfns`, when `by_value`) of the located
+    /// body `name` as a call of its `lfns` one with no place: a call
+    /// through a function value, or from the runtime, does not know the
+    /// program's (B-2026-10-31-2).
+    fn build_site_wrapper(&mut self, name: &str, by_value: bool) -> R<()> {
+        let l = self.lfns[name];
+        let none = [
+            self.ptr_ty().const_null().into(),
+            self.llcx.i64_type().const_zero().into(),
+        ];
+        let program = self.program;
+        if !by_value && self.value_sig(&program.bodies[name]).is_some() {
+            return self.build_wrapper_to(name, self.fns[name], l, &none);
+        }
+        let f = if by_value {
+            self.vfns[name]
+        } else {
+            self.fns[name]
+        };
+        let always = self
+            .llcx
+            .create_enum_attribute(Attribute::get_named_enum_kind_id("alwaysinline"), 0);
+        f.add_attribute(AttributeLoc::Function, always);
+        let entry = self.llcx.append_basic_block(f, "entry");
+        self.builder.position_at_end(entry);
+        self.builder.unset_current_debug_location();
+        let mut args: Vec<BasicMetadataValueEnum> = f.get_param_iter().map(|p| p.into()).collect();
+        args.extend(none);
+        let r = self
+            .builder
+            .build_call(l, &args, "")
+            .map_err(|e| e.to_string())?;
+        if f.get_type().get_return_type().is_some() {
+            let x = r.try_as_basic_value().unwrap_basic();
+            self.builder
+                .build_return(Some(&x))
+                .map_err(|e| e.to_string())?;
+        } else {
+            self.builder.build_return(None).map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+
     /// Marks every pointer parameter `noalias` on the bodies only direct
     /// calls reach: each such call passes slots of its own (`call_body`),
     /// so nothing else in the callee reaches them, which lets LLVM pass a
@@ -714,6 +781,19 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
                 continue;
             }
             for i in 0..f.count_params() {
+                f.add_attribute(AttributeLoc::Param(i), noalias);
+            }
+        }
+        let program = self.program;
+        for (name, f) in &self.lfns {
+            let by_value = program
+                .bodies
+                .get(name)
+                .is_none_or(|b| self.value_sig(b).is_some());
+            if by_value || self.shared_fns.contains(name) {
+                continue;
+            }
+            for i in 0..f.count_params().saturating_sub(2) {
                 f.add_attribute(AttributeLoc::Param(i), noalias);
             }
         }
@@ -948,6 +1028,11 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
             .get(name)
             .ok_or_else(|| format!("no body named `{name}`"))?;
         let f = self.declare(name, body);
+        if self.located(name) {
+            self.site_todo.push((name.to_string(), false));
+            self.located_function(name)?;
+            return Ok(f);
+        }
         if self.value_sig(body).is_some() {
             self.wrap_todo.push(name.to_string());
         }
@@ -963,6 +1048,8 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
                 self.lower_body(body)?;
             } else if let Some(name) = self.wrap_todo.pop() {
                 self.build_wrapper(&name)?;
+            } else if let Some((name, by_value)) = self.site_todo.pop() {
+                self.build_site_wrapper(&name, by_value)?;
             } else if self.glue_pending() {
                 self.finish_glue()?;
             } else if self.fmt_pending() {
@@ -984,9 +1071,13 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
     /// block, then each block's statements and terminator.
     fn lower_body(&mut self, body: &'p Body) -> R<()> {
         let sig = self.value_sig(body);
-        let f = match self.value_function(&body.instance.name)? {
-            Some(v) => v,
-            None => self.direct_function(&body.instance.name)?,
+        let f = if self.located(&body.instance.name) {
+            self.located_function(&body.instance.name)?
+        } else {
+            match self.value_function(&body.instance.name)? {
+                Some(v) => v,
+                None => self.direct_function(&body.instance.name)?,
+            }
         };
         self.ret_by_value = sig.as_ref().map(|(_, r)| *r);
         // A small body (an iterator's `next`, an accessor) is hinted for
@@ -1035,6 +1126,13 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
         let start = self.body_start(body);
         self.debug_enter(name, &fn_symbol(name), start, f);
         self.body = Some(body);
+        self.site_params = None;
+        if self.lfns.get(name) == Some(&f) {
+            let n = f.count_params();
+            let p = f.get_nth_param(n - 2).ok_or("the place is missing")?;
+            let l = f.get_nth_param(n - 1).ok_or("the place is missing")?;
+            self.site_params = Some((f, p.into_pointer_value(), l.into_int_value()));
+        }
         self.locals.clear();
         self.abort_blocks.clear();
         // A by-value body's parameters, in order, skipping those passed as
@@ -1130,7 +1228,6 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
                 }
             }
             self.locate(block.terminator.source_info.span);
-            self.note_call_site(&block.terminator.kind)?;
             self.upper_proven = proven.contains(&i);
             let lowered = match &block.terminator.kind {
                 TerminatorKind::Drop { place, target, .. } => self.drop_terminator(place, *target),
@@ -1169,6 +1266,7 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
         }
         self.debug_leave();
         self.body = None;
+        self.site_params = None;
         self.lengths.clear();
         Ok(())
     }

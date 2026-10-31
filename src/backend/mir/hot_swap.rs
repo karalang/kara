@@ -41,6 +41,9 @@ impl<'ctx> Cx<'ctx, '_> {
         table.set_initializer(&ty.const_zero());
         self.hot_swap_table = Some(table);
         for (slot, name) in names.into_iter().enumerate() {
+            // A slot holds a function of the plain convention, so a
+            // registered body takes no place (`debug.rs`).
+            self.located.insert(name.clone(), false);
             // The function a direct call would take (`call_body`).
             let f = match self.value_function(name)? {
                 Some(v) => v,

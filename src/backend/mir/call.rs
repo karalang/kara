@@ -104,14 +104,24 @@ impl<'ctx> Cx<'ctx, '_> {
     }
 
     fn call_body(&mut self, name: &str, args: &[Operand], dest: &Place) -> R<()> {
-        if let Some(v) = self.value_function(name)? {
-            return self.call_by_value(name, v, args, dest);
+        let program = self.program;
+        // A located body takes the place of this call (`debug.rs`).
+        let (f, by_value, extra) = if self.located(name) {
+            let f = self.located_function(name)?;
+            let (p, n) = self.site_args()?;
+            let by_value = self.value_sig(&program.bodies[name]).is_some();
+            (f, by_value, vec![p.into(), n.into()])
+        } else if let Some(v) = self.value_function(name)? {
+            (v, true, Vec::new())
+        } else {
+            (self.direct_function(name)?, false, Vec::new())
+        };
+        if by_value {
+            return self.call_by_value(name, f, args, dest, &extra);
         }
-        let f = self.direct_function(name)?;
         let dty = self.place_type(dest)?;
         let ret = self.temp(dty, "ret")?;
         let mut vals = vec![ret.into()];
-        let program = self.program;
         let params = program.bodies.get(name).map(|b| &b.locals);
         for (i, a) in args.iter().enumerate() {
             let t = self.operand_type(a)?;
@@ -133,6 +143,7 @@ impl<'ctx> Cx<'ctx, '_> {
             };
             vals.push(slot.into());
         }
+        vals.extend(extra);
         self.call_function(name, f, &vals)?;
         let d = self.place_ptr(dest)?;
         self.copy(d, ret, dty)
@@ -140,13 +151,15 @@ impl<'ctx> Cx<'ctx, '_> {
 
     /// [`Self::call_body`] for a body with a by-value function: each
     /// argument is built in its slot as for the pointer convention, then
-    /// passed loaded, and the result is stored from the register.
+    /// passed loaded, and the result is stored from the register; `extra`
+    /// follows the arguments.
     fn call_by_value(
         &mut self,
         name: &str,
         v: inkwell::values::FunctionValue<'ctx>,
         args: &[Operand],
         dest: &Place,
+        extra: &[BasicMetadataValueEnum<'ctx>],
     ) -> R<()> {
         let program = self.program;
         let body = &program.bodies[name];
@@ -176,6 +189,7 @@ impl<'ctx> Cx<'ctx, '_> {
             }
             vals.push(x.into());
         }
+        vals.extend_from_slice(extra);
         let r = self.call_function(name, v, &vals)?;
         if ret.is_some() {
             let x = r.try_as_basic_value().unwrap_basic();

@@ -32,6 +32,7 @@ use inkwell::debug_info::{
     DWARFSourceLanguage, DebugInfoBuilder,
 };
 use inkwell::module::{FlagBehavior, Linkage};
+use inkwell::types::{BasicMetadataTypeEnum, BasicType};
 use inkwell::values::{FunctionValue, IntValue, PointerValue};
 
 use super::{Cx, R};
@@ -236,61 +237,98 @@ impl<'ctx> Cx<'ctx, '_> {
         g.as_pointer_value()
     }
 
-    /// The globals holding the program's latest call into the library:
-    /// the text of its place, and that text's length.
-    fn site_globals(&self) -> (PointerValue<'ctx>, PointerValue<'ctx>) {
-        let global = |name: &str, ty: inkwell::types::BasicTypeEnum<'ctx>| {
-            self.module.get_global(name).unwrap_or_else(|| {
-                let g = self.module.add_global(ty, None, name);
-                g.set_initializer(&ty.const_zero());
-                g.set_linkage(Linkage::Internal);
-                // One pair per thread: every task writes it before its
-                // library calls, and one pair for the whole pool is one
-                // cache line all its workers write, and lets an abort on
-                // one worker report another's call (B-2026-10-26-7).
-                g.set_thread_local(true);
-                g
-            })
+    /// Whether the body `name` is located: a library body that can
+    /// abort, which takes the place of the program's call into it as two
+    /// trailing parameters, forwarded from library body to library body,
+    /// so that its abort reports the program's line. A place in a global
+    /// cost two stores before each such call, on every trip of a loop
+    /// making one (kata 38: 1.18x legacy's instructions, B-2026-10-31-2),
+    /// and the JIT on Apple, which cannot link a thread-local, shared it
+    /// between the pool's workers, so an abort on one could report
+    /// another's call (B-2026-10-28-44).
+    pub(super) fn located(&mut self, name: &str) -> bool {
+        if let Some(&l) = self.located.get(name) {
+            return l;
+        }
+        let program = self.program;
+        let l = match program.bodies.get(name) {
+            Some(body) => !self.in_user_source(self.body_start(body)) && self.may_abort(name),
+            None => false,
         };
-        let p = global("karac.site", self.ptr_ty().into());
-        let n = global("karac.site.len", self.llcx.i64_type().into());
-        (p.as_pointer_value(), n.as_pointer_value())
+        self.located.insert(name.to_string(), l);
+        l
     }
 
-    /// Before a call from the program's own source into a library body:
-    /// records the call's place, which an abort in the library reports.
-    pub(super) fn note_call_site(&mut self, kind: &TerminatorKind) -> R<()> {
-        let TerminatorKind::Call {
-            func: Operand::Const(c),
-            ..
-        } = kind
-        else {
-            return Ok(());
-        };
-        let ConstKind::FnDef(inst) = &c.kind else {
-            return Ok(());
-        };
+    /// The function of the located body `name`, declared now (and the body
+    /// scheduled): its by-value or pointer convention, then the place.
+    pub(super) fn located_function(&mut self, name: &str) -> R<FunctionValue<'ctx>> {
+        if let Some(&f) = self.lfns.get(name) {
+            return Ok(f);
+        }
         let program = self.program;
-        let Some(callee) = program.bodies.get(&inst.name) else {
-            return Ok(());
+        let body = program
+            .bodies
+            .get(name)
+            .ok_or_else(|| format!("no body named `{name}`"))?;
+        let place: [BasicMetadataTypeEnum<'ctx>; 2] =
+            [self.ptr_ty().into(), self.llcx.i64_type().into()];
+        let ty = match self.value_sig(body) {
+            Some((params, ret)) => {
+                let mut ps: Vec<BasicMetadataTypeEnum> =
+                    params.iter().flatten().map(|t| (*t).into()).collect();
+                ps.extend(place);
+                match ret {
+                    Some(r) => r.fn_type(&ps, false),
+                    None => self.llcx.void_type().fn_type(&ps, false),
+                }
+            }
+            None => {
+                let mut ps: Vec<BasicMetadataTypeEnum> =
+                    (0..=body.arg_count).map(|_| self.ptr_ty().into()).collect();
+                ps.extend(place);
+                self.llcx.void_type().fn_type(&ps, false)
+            }
         };
-        if !self.may_abort(&inst.name) {
-            return Ok(());
+        let f = self.module.add_function(
+            &format!("{}.at", super::fn_symbol(name)),
+            ty,
+            Some(Linkage::Internal),
+        );
+        self.lfns.insert(name.to_string(), f);
+        self.schedule(body);
+        Ok(f)
+    }
+
+    /// The place a call into a located body passes: the call's own, in a
+    /// body of the program's source; in a located body, the place it was
+    /// given; otherwise none.
+    pub(super) fn site_args(&mut self) -> R<(PointerValue<'ctx>, IntValue<'ctx>)> {
+        let own = match self.body {
+            Some(b) => self.in_user_source(self.body_start(b)),
+            None => false,
+        };
+        if own {
+            if self.in_user_source(self.site) && self.site.line > 0 {
+                return self.str_const(&Self::site_text(self.site));
+            }
+            return Ok(self.no_site());
         }
-        let here = self.cur()?;
-        if !self.in_user_source(self.body_start(here))
-            || !self.in_user_source(self.site)
-            || self.site.line == 0
-            || self.in_user_source(self.body_start(callee))
-        {
-            return Ok(());
-        }
-        let (text, len) = self.str_const(&Self::site_text(self.site))?;
-        let (gp, gn) = self.site_globals();
-        let e = |e: inkwell::builder::BuilderError| e.to_string();
-        self.builder.build_store(gp, text).map_err(e)?;
-        self.builder.build_store(gn, len).map_err(e)?;
-        Ok(())
+        Ok(self.given_site().unwrap_or_else(|| self.no_site()))
+    }
+
+    /// The place parameters of the function being built, when it is the
+    /// located function being lowered (a shim built meanwhile is not).
+    fn given_site(&self) -> Option<(PointerValue<'ctx>, IntValue<'ctx>)> {
+        let (f, p, n) = self.site_params?;
+        let here = self.builder.get_insert_block()?.get_parent()?;
+        (here == f).then_some((p, n))
+    }
+
+    fn no_site(&self) -> (PointerValue<'ctx>, IntValue<'ctx>) {
+        (
+            self.ptr_ty().const_null(),
+            self.llcx.i64_type().const_zero(),
+        )
     }
 
     /// Whether the body `name` can reach an `Abort`: its own, or one in a
@@ -330,8 +368,8 @@ impl<'ctx> Cx<'ctx, '_> {
     }
 
     /// The place an abort built now reports: the statement being lowered,
-    /// in a body of the program's own source; otherwise the program's
-    /// latest call into the library.
+    /// in a body of the program's own source; in a located body, the place
+    /// of the program's call into it; otherwise none.
     pub(super) fn abort_site(&mut self) -> R<(PointerValue<'ctx>, IntValue<'ctx>)> {
         let own = match self.body {
             Some(b) => self.in_user_source(self.body_start(b)),
@@ -340,18 +378,6 @@ impl<'ctx> Cx<'ctx, '_> {
         if own && self.in_user_source(self.site) && self.site.line > 0 {
             return self.str_const(&Self::site_text(self.site));
         }
-        let (gp, gn) = self.site_globals();
-        let e = |e: inkwell::builder::BuilderError| e.to_string();
-        let p = self
-            .builder
-            .build_load(self.ptr_ty(), gp, "site")
-            .map_err(e)?
-            .into_pointer_value();
-        let n = self
-            .builder
-            .build_load(self.llcx.i64_type(), gn, "site.len")
-            .map_err(e)?
-            .into_int_value();
-        Ok((p, n))
+        Ok(self.given_site().unwrap_or_else(|| self.no_site()))
     }
 }
