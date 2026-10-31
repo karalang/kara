@@ -9,6 +9,7 @@ legacy_backend = "legacy-build"
 legacy_exit = 0
 rules = []
 backends = []
+leaks = "shared-cycle"
 env = {}
 note = "source changed with the kata (kara-katas 39cc7002): `karac fix` made the held `visited.get(..).unwrap()` an `.unwrap().clone()` (B-2026-10-22-5, dd13906b92). Legacy cannot build `.clone()` there, so legacy.out from the source before the change stays the oracle. (kata thread, 2026-10-22)"
 bucket = "a"
