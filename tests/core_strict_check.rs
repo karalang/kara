@@ -11679,7 +11679,7 @@ fn a_const_of_a_cell_type_gets_the_module_cell_refusal() {
         let err = String::from_utf8_lossy(&out.stderr);
         assert!(!out.status.success(), "{tag}: check must reject: {err}");
         assert!(err.contains("E_MODULE_LET"), "{tag}: {err}");
-        assert!(err.contains("module cells are deferred"), "{tag}: {err}");
+        assert!(err.contains("module cells are not in 0.9"), "{tag}: {err}");
         assert!(err.contains("create the value in `main`"), "{tag}: {err}");
         assert!(!err.contains("compile-time constant"), "{tag}: {err}");
         karac().arg("fix").arg(&path).output().unwrap();
@@ -11986,7 +11986,7 @@ fn gpu_compute_is_refused_as_archived() {
     rejected(
         "gpu-sum-archived",
         "fn main() {\n    let xs: Vec[f32] = [1.0, 2.0];\n    println(f\"{gpu.sum(xs)}\")\n}\n",
-        "`gpu.sum` is not available: GPU compute (`gpu.*` and `#[gpu]` kernels) goes to the archive",
+        "`gpu.sum` is not available: GPU compute (`gpu.*` and `#[gpu]` kernels) is not in 0.9",
     );
 }
 

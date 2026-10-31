@@ -252,8 +252,8 @@ fn test_iterator_return_no_self_fires() {
         .as_ref()
         .expect("iterator diagnostic should carry note");
     assert!(
-        note.contains("stdlib hygiene") && note.contains("slice 4"),
-        "iterator note should cross-reference stdlib hygiene + slice 4, got: {note}"
+        note.contains("stdlib hygiene") && note.contains("discard site"),
+        "iterator note should cross-reference stdlib hygiene and the discard site, got: {note}"
     );
 }
 

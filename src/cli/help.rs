@@ -113,10 +113,10 @@ COMMANDS:
     install <spec>    Build a binary package and install it into
                       ~/.kara/bin/. Spec accepts `path = ...`,
                       `git = ...`, or a registry-proxy reference.
-                      (v1 surface — resolver wiring pending.)
+                      (Path sources only in 0.9.)
     vendor            Copy resolved dependencies into ./vendor/.
-                      Pairs with `karac build --offline`. (v1 surface
-                      — resolver wiring pending.)
+                      Pairs with `karac build --offline`. (Path
+                      dependencies only in 0.9.)
     resolve           Print the resolved dependency graph (read-only;
                       does not rewrite kara.lock).
     help              Show this help
@@ -278,10 +278,10 @@ OPTIONS:
     --no-proxy              Opt out of the registry proxy at
                             proxy.kara-lang.org (override the URL with the
                             KARAC_REGISTRY_PROXY env var). Registry / git
-                            deps would then have to be fetched
-                            direct-from-source — a v1.1.x carve-out; today
-                            the flag is honored at the parse layer and
-                            surfaces a confirmation note.
+                            deps would then be fetched direct from their
+                            source. Registry and git dependencies are not
+                            in 0.9, so today the flag only prints a
+                            confirmation note.
     --offline               Read every transitive path dependency from
                             `./vendor/<name>/` instead of the manifest-
                             declared path, and refuse any network access.
@@ -446,13 +446,12 @@ OFFLINE:
     surfaces `error[E_OFFLINE_VENDOR_ENTRY_MISSING]` naming the
     offending dependency.
 
-    v1 status:
+    0.9 status:
         Path-source deps are fully wired through `--offline`. Registry
         and git deps in offline mode still surface
         `E_REGISTRY_DEP_UNSUPPORTED` / `E_GIT_DEP_UNSUPPORTED`
         (promoted to a hard error in offline mode rather than the
-        default warning) — registry / git vendoring lands alongside
-        the package-fetch surface (tracker line 845)."
+        default warning); registry and git vendoring are not in 0.9."
         }
         "query" => {
             "\
@@ -843,11 +842,10 @@ CACHE ROOT:
     targets the umbrella ~/.kara/cache/ root). This subcommand never
     mutates the cache.
 
-V1.1 NOTE:
+NOTE:
     Today's compiler does whole-program codegen — no per-dep artifacts
     are written to this cache yet. The subcommand surfaces the typed
-    cache protocol so tooling can integrate against it from day one.
-    See `docs/implementation_checklist/phase-5-diagnostics.md`."
+    cache protocol so tooling can integrate against it from day one."
         }
         "clean" => {
             "\
@@ -896,15 +894,13 @@ INSTALL ROOT:
     cache uses for `KARAC_BUILD_CACHE_ROOT`). The directory is created
     on first install.
 
-v1 status:
+0.9 status:
     Path sources (`path=...`) are fully wired — the project is built
     through the existing pipeline (dep resolution, MSRV check, codegen,
     link) and the produced executable is copied into the install root.
     Git / registry sources surface a forward-compat
     `E_INSTALL_GIT_UNSUPPORTED` / `E_INSTALL_REGISTRY_UNSUPPORTED`
-    diagnostic — they activate without spec changes once the
-    package-fetch slice lands (tracker line 845). See
-    `docs/implementation_checklist/phase-5-diagnostics.md`."
+    diagnostic; they are not in 0.9."
         }
         "explain" => {
             "\
@@ -1015,13 +1011,12 @@ and refuses any network access.
 
 OPTIONS:
     --no-proxy        Opt out of the registry proxy at
-                      proxy.kara-lang.org. v1.1.x carve-out; the flag
-                      is plumbed today and the path-dep copy is
-                      unaffected.
+                      proxy.kara-lang.org. The path-dependency copy
+                      does not use the proxy.
     -h, --help        Print this message
 
-Path-deps are copied verbatim today; registry / git vendoring lands
-alongside the registry-proxy fetch surface (tracker line 851)."
+Path dependencies are copied verbatim; registry and git vendoring are
+not in 0.9."
         }
         "update" => {
             "\
@@ -1034,16 +1029,16 @@ OPTIONS:
     --output=json     Structured JSON output on stdout
     --output=jsonl    Streaming JSONL output on stdout
     --no-proxy        Opt out of the registry proxy at
-                      proxy.kara-lang.org. v1.1.x carve-out; the flag
-                      is plumbed today.
+                      proxy.kara-lang.org. Accepted; it has nothing to
+                      change while dependencies are path-only.
     -h, --help        Print this message
 
 Bare form refreshes every locked package; surgical form targets one
-package by name (validation lands in a follow-up slice).
+package by name (the name is not validated in 0.9).
 
-v1.1 status: path-deps are manifest-pinned, so bumping isn't meaningful
-today — both forms re-derive the lockfile from the current manifest.
-Real version-bumping ships alongside the registry-proxy fetch surface."
+0.9 status: path-deps are manifest-pinned, so bumping isn't meaningful;
+both forms re-derive the lockfile from the current manifest. Version
+bumping needs registry dependencies, which are not in 0.9."
         }
         "resolve" => {
             "\

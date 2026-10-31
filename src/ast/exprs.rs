@@ -53,7 +53,7 @@ pub fn narrow_literal_to_i64(n: i128) -> i64 {
         Err(_) => panic!(
             "internal error: 128-bit integer literal {n} reached an i64-only \
              consumer. The AST literal node is i128 but this consumer is not \
-             128-bit ready yet (B-2026-08-19-8 stage 5)."
+             128-bit ready yet."
         ),
     }
 }

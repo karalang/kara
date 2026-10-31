@@ -445,8 +445,7 @@ fn diagnostic_carries_lint_name_and_advisory() {
         d.message
     );
     assert!(
-        d.message
-            .contains("heap-closure-environment epic B-2026-06-22-2"),
+        d.message.contains("Workaround: bind the"),
         "must carry codegen's own boundary prose: {}",
         d.message
     );

@@ -367,8 +367,8 @@ pub(super) fn source_files(
             }
             if !parsed.program.inner_attrs.is_empty() && !out.is_empty() {
                 return Err(format!(
-                    "{} has a module-level inner attribute (`#![..]`), which v2 project \
-                     mode keeps only in the package's first file",
+                    "{} has a module-level inner attribute (`#![..]`), which a \
+                     package takes only in its first file",
                     path.display()
                 ));
             }

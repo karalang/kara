@@ -1703,8 +1703,7 @@ impl<'a> super::TypeChecker<'a> {
                 self.type_error(
                     format!(
                         "`gpu.{method}` is not available: GPU compute (`gpu.*` and `#[gpu]` \
-                         kernels) goes to the archive with the legacy backend at M3 and \
-                         returns on v2 on demand"
+                         kernels) is not in 0.9"
                     ),
                     *span,
                     TypeErrorKind::ArchivedWithLegacy,
@@ -5549,7 +5548,7 @@ impl<'a> super::TypeChecker<'a> {
                     self.type_error(
                         format!(
                             "error[E_GPU_DISPATCH_BUFFER]: `gpu.dispatch` buffer must be \
-                             `Vec[f32]`, `Vec[i32]`, or `Vec[u32]` in slice-0, found `{}`",
+                             `Vec[f32]`, `Vec[i32]`, or `Vec[u32]`, found `{}`",
                             type_display(&buf_ty)
                         ),
                         args[1].value.span,
@@ -5567,7 +5566,7 @@ impl<'a> super::TypeChecker<'a> {
         let ExprKind::Identifier(kernel_name) = &args[0].value.kind else {
             self.type_error(
                 "error[E_GPU_DISPATCH_KERNEL]: the `gpu.dispatch` kernel must be a bare \
-                 `#[gpu]` function name in slice-0"
+                 `#[gpu]` function name"
                     .to_string(),
                 args[0].value.span,
                 TypeErrorKind::TypeMismatch,

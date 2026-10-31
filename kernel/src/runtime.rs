@@ -279,7 +279,7 @@ impl<T: Transport + 'static> Kernel<T> {
                 // but don't crash the pump.
                 eprintln!(
                     "karac-kernel: unhandled msg_type {other:?} on {channel:?} \
-                     (slice 5 closed the MVP request surface)"
+                     (not a request this kernel answers)"
                 );
             }
         }

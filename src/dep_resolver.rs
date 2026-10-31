@@ -187,7 +187,7 @@ impl std::fmt::Display for ResolverError {
                 declared_in,
             } => write!(
                 f,
-                "registry dependency `{}` (declared in `{}/kara.toml`) cannot be resolved — the registry-proxy fetch surface is a v1.1 follow-up",
+                "registry dependency `{}` (declared in `{}/kara.toml`) cannot be resolved: registry dependencies are not in 0.9",
                 package,
                 declared_in.display(),
             ),
@@ -196,7 +196,7 @@ impl std::fmt::Display for ResolverError {
                 declared_in,
             } => write!(
                 f,
-                "git dependency `{}` (declared in `{}/kara.toml`) cannot be resolved — git fetch is a v1.1 follow-up",
+                "git dependency `{}` (declared in `{}/kara.toml`) cannot be resolved: git dependencies are not in 0.9",
                 package,
                 declared_in.display(),
             ),
@@ -472,7 +472,7 @@ pub fn resolve_with_pins(
                     // future change leaks one through — the input
                     // invariant is load-bearing.
                     unreachable!(
-                        "DependencySpec::Workspace must be dereferenced by slice 3 before resolution"
+                        "DependencySpec::Workspace must be dereferenced to its workspace entry before resolution"
                     );
                 }
             }

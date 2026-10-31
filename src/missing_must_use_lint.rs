@@ -281,11 +281,11 @@ fn make_diagnostic(f: &Function, reason: FireReason, level: LintLevel) -> LintDi
                 f.name
             ),
             Some(
-                "annotate with `#[must_use = \"discarding the iterator drops every adapter without running it — chain a terminal method or bind the result\"]` (the slice 2 spec-mandated message for iterator-adapter return types)."
+                "annotate with `#[must_use = \"discarding the iterator drops every adapter without running it — chain a terminal method or bind the result\"]` (the message design.md gives iterator-adapter return types)."
                     .to_string(),
             ),
             Some(
-                "iterator-shaped returns are a stdlib hygiene concern: discarding the value silently loses every adapter the user chained onto it. The `missing_must_use` lint catches the case where the stdlib forgot to annotate; slice 4 of the `#[must_use]` mandate wires the discard-site enforcement that reads the attribute."
+                "iterator-shaped returns are a stdlib hygiene concern: discarding the value silently loses every adapter the user chained onto it. The `missing_must_use` lint catches the case where the stdlib forgot to annotate; the attribute is what a discard site is warned by."
                     .to_string(),
             ),
         ),

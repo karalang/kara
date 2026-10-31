@@ -3702,8 +3702,8 @@ impl<'a> super::TypeChecker<'a> {
             if matches!(f.abi.as_deref(), Some("C") | Some("C-unwind")) {
                 refusals.push((
                     format!(
-                        "`pub extern \"C\" fn {}` is not available: the exported C ABI goes to \
-                         the archive with the legacy backend at M3 and returns on v2 on demand",
+                        "`pub extern \"C\" fn {}` is not available: exporting functions to C \
+                         is not in 0.9 (calling C through an `extern \"C\"` import is)",
                         f.name
                     ),
                     f.span,
@@ -3723,9 +3723,8 @@ impl<'a> super::TypeChecker<'a> {
                 refusals.push((
                     format!(
                         "`pub fn {}` is a WASM export, which is not available: WASM component \
-                         and browser bindings go to the archive with the legacy backend at M3 \
-                         and return on v2 on demand. Drop `pub` to keep it a target-gated \
-                         function",
+                         and browser bindings are not in 0.9. Drop `pub` to keep it a \
+                         target-gated function",
                         f.name
                     ),
                     f.span,
@@ -5030,7 +5029,7 @@ impl<'a> super::TypeChecker<'a> {
                     format!(
                         "error[E_MODULE_LET]: module-level `const {}` (a `{ty_text}`) is a \
                          cell, which is mutable global state, and Kāra has no mutable \
-                         globals; module cells are deferred to the systems track \
+                         globals; module cells are not in 0.9 \
                          (design.md § Constants, \"No mutable globals\"), and a `const` \
                          would build a fresh one at every use\nhelp: create the value \
                          in `main` and pass it down to the functions that use it, \

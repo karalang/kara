@@ -1406,9 +1406,9 @@ impl<'a> super::TypeChecker<'a> {
                 {
                     self.type_error(
                         format!(
-                            "`mut ref {name}` pattern bindings are not supported by the legacy \
-                             `build` / `run` backends, which would bind a copy; `karac check` \
-                             accepts them for the v2 backend (core-semantics.md §4.6)"
+                            "`mut ref {name}` pattern bindings need the core ownership rules \
+                             (core-semantics.md §4.6), which this check does not apply; without \
+                             them the binding would be a copy"
                         ),
                         pattern.span,
                         TypeErrorKind::TypeMismatch,

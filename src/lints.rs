@@ -118,7 +118,7 @@ pub const STARTER_LINTS: &[LintInfo] = &[
         description: "A map's container VALUE is extended by clone-modify-reinsert, which \
              copies the whole value on every append and makes building the map O(k\u{b2}) in \
              occurrences per key. `entry(k).or_insert(..)` returns a `mut ref` into the \
-             map's own slot and appends in place. B-2026-08-03-9.",
+             map's own slot and appends in place.",
     },
     LintInfo {
         name: "rc_fallback",
@@ -281,7 +281,7 @@ pub const STARTER_LINTS: &[LintInfo] = &[
              read. `.clone()` says the same thing out loud where the type has one. \
              design.md's dereference rule makes this an error in principle, and the \
              sibling `E_INDEX_MOVE_NON_COPY` already enforces it for `v[i]`; it stays a \
-             warning here until `ref <place>` gives it a zero-cost fix-it. B-2026-09-01-4.",
+             warning here until `ref <place>` gives it a zero-cost fix-it.",
     },
     LintInfo {
         name: "for_element_drop_copy",
@@ -294,7 +294,7 @@ pub const STARTER_LINTS: &[LintInfo] = &[
              the collection. A by-value call argument is not covered: a discarding callee \
              receives it without a copy. Write `.clone()` where the type has one, or \
              use the element in place. `String` and plain-struct elements are left to \
-             `borrow_projection_copy`, which only warns. B-2026-09-27-69.",
+             `borrow_projection_copy`, which only warns.",
     },
     LintInfo {
         name: "partial_move_of_drop_enum",
@@ -302,75 +302,46 @@ pub const STARTER_LINTS: &[LintInfo] = &[
         description:
             "A payload is moved out of an ENUM VARIANT whose enum has its own `impl Drop` \
              (`match x { Option.Some(K.A(r)) => acc.push(r) }`, `let Option.Some(K.A(r)) = x \
-             else { .. }`). The enum sibling of `partial_move_of_drop_struct`, and the \
-             extension design.md § Part 8 `Drop` pre-authorized: that section excluded enum \
-             variant payloads from the struct rule in v1 because all four surfaces AGREED on \
-             the spelling when it was measured, and said `if a divergence is ever measured \
-             there, extend the rule then — with the measurement`. B-2026-09-13-12 is that \
-             divergence: the let-else spelling prints the enum's drop body on `--interp` and \
-             on NO compiled backend. B-2026-09-13-11 is why a body count cannot simply be \
-             chosen instead — the same enum's drop body fires or not depending on what the \
-             ARM BODY does with the leaf, making a type's observable `Drop` count depend on \
-             its consumer. \
-             Gated on CONSUMPTION rather than on the binding's type, which is the one place \
-             it departs from its struct sibling: there the read-only spelling was itself \
-             broken, so a type-only test removed a defect; here the read-only spelling is \
-             correct on all four surfaces and a type-only test rejects it too — measured at \
-             45 codegen fixtures against the struct rule's 8. \
-             `Deny` since B-2026-09-13-14, which is what actually removes the divergence: \
-             at `Warn` the program still compiled and still diverged. The promotion waited \
-             on triaging the `--features llvm` fixtures written in this shape — each pins \
-             drop behaviour for a bug fixed in it — and they now carry \
-             `#[allow(partial_move_of_drop_enum)]` on the enclosing declaration, the \
-             per-`fn` opt-out its struct sibling's eight use. That spelling is deliberate: \
-             it keeps the shape reachable, so the coverage still guards programs someone \
-             can write, and a fixture NEWLY written in this shape fails the check-gate and \
-             has to be annotated on purpose. B-2026-09-13-11, B-2026-09-13-12.",
+             else { .. }`): the enum sibling of `partial_move_of_drop_struct`. The enum stays \
+             bound and still reaches its destructor, so whether its drop body runs would \
+             depend on what the arm does with the payload. It fires only where the payload \
+             is consumed; reading it in place is fine. Clone the payload, or match on a \
+             reference and use it in place; `#[allow(partial_move_of_drop_enum)]` on the \
+             enclosing item opts out.",
     },
     LintInfo {
         name: "partial_move_of_drop_struct",
         default_level: LintLevel::Deny,
         description:
             "A field is moved out of a struct that has its own `impl Drop` (`let m = h.r;`, \
-             `match h { H { r, .. } }`). design.md § Part 8 `Drop` rejects the shape outright: \
-             the struct stays bound and still reaches its destructor, so the drop body and the \
-             field walk after it run over a half-populated value — measured as a second `Drop` \
-             body over a ZEROED field on both compiled backends. `Deny`, the level that \
-             wording implies. It landed at `Warn` only because eight `--features llvm` \
-             fixtures were written in the shape and each is the regression test for a bug \
-             FIXED in it (B-2026-08-28-21's family among them); B-2026-09-01-43 resolved \
-             them — one was a TRUE POSITIVE and was rewritten, the other seven now carry \
-             `#[allow(partial_move_of_drop_struct)]`, which keeps the drop behaviour they \
-             pin under test because the opt-out leaves it reachable. B-2026-09-01-38. \
-             The rule fires at every position that CONSUMES the projection — `let` and \
-             assignment RHS, `return`, a block/`if`/`match` tail, a bare match-arm body, \
-             a call or method argument, a struct-literal field, a tuple/array-literal \
-             element, `Vec.push`, and the `Some`/`Ok`/`Err` payload in all four \
-             spellings. It deliberately does NOT walk every expression: the `w.r` inside \
-             `println(w.r.s)` is the base of a further projection and moves nothing, and \
-             on a `Deny` rule a missed exemption breaks working programs where a missed \
-             site merely under-reports. B-2026-09-03-20.",
+             `match h { H { r, .. } }`). design.md § Part 8 `Drop` rejects the shape: the \
+             struct stays bound and still reaches its destructor, so the drop body would run \
+             over a half-moved value. The rule fires at every position that CONSUMES the \
+             projection (`let` and assignment right-hand sides, `return`, a block, `if` or \
+             `match` tail, a call or method argument, a struct, tuple or array literal \
+             element, `Vec.push`, and a `Some` / `Ok` / `Err` payload); the `w.r` in \
+             `println(w.r.s)` moves nothing and is not reported. Clone the field, or borrow \
+             it; `#[allow(partial_move_of_drop_struct)]` on the enclosing item opts out.",
     },
     LintInfo {
         name: "chained_field_receiver",
         default_level: LintLevel::Deny,
         description:
             "A method call or index whose receiver is a field chain of depth >= 2 \
-             (`e.doc.lines.len()`) — codegen defers this shape (FR4), so the program \
-             checks clean and fails `karac build`; bind the inner field to a temporary. \
+             (`e.doc.lines.len()`), a shape the compiled backend does not build in the \
+             checks this lint runs in; bind the inner field to a temporary. \
              Deny by default because the program cannot compile; `-A` it for interp-only code.",
     },
     LintInfo {
         name: "escaping_closure",
         default_level: LintLevel::Deny,
         description:
-            "A capturing closure escapes in a shape codegen's heap-closure-environment epic \
-             (B-2026-06-22-2) has not yet lowered (stored into an escaping struct/collection, \
-             an unbound `make(..)` use, a branch return, …) — the program checks clean and \
-             fails `karac build` with E_ESCAPING_CLOSURE_NOT_YET. The predicate is codegen's \
-             own escape analysis (`crate::closure_escape`), so check and build can never \
-             disagree. Deny by default because the program cannot compile; `-A` it for \
-             interp-only code.",
+            "A capturing closure escapes in a shape the compiled backend does not build in \
+             the checks this lint runs in (stored into an escaping struct or collection, an \
+             unbound `make(..)` use, a branch return, …): the build would fail with \
+             E_ESCAPING_CLOSURE_NOT_YET. The lint uses the build's own escape analysis, so \
+             check and build agree. Deny by default because the program cannot compile; `-A` \
+             it for interpreter-only code.",
     },
     LintInfo {
         name: "ffi_float_eq",
@@ -385,7 +356,7 @@ pub const STARTER_LINTS: &[LintInfo] = &[
         description: "A function returning a bare `dyn` or function type with no clause of its own \
              is followed by its own `with` clause, which leaves the returned value with every \
              effect. Write `-> (dyn T with X)` to give the value the clause, or `-> (dyn T) with \
-             X` to keep it the function's (design.md § `dyn Trait`, B-2026-10-30-9).",
+             X` to keep it the function's (design.md § `dyn Trait`).",
     },
     LintInfo {
         name: "unused_effect",

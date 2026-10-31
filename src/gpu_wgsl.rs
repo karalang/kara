@@ -124,14 +124,14 @@ pub fn emit_kernel(func: &Function, helpers: &[&Function]) -> Result<String, Wgs
         Some(ty) => wgsl_scalar(ty, "return type")?,
         None => {
             return Err(WgslError::UnsupportedSignature(
-                "a GPU kernel must return a scalar (f32 / i32 / u32) — slice-0 element-wise map"
+                "a GPU kernel must return a scalar (f32 / i32 / u32): it is an element-wise map"
                     .to_string(),
             ));
         }
     };
     if param_scalar != return_scalar {
         return Err(WgslError::UnsupportedSignature(format!(
-            "a slice-0 GPU kernel must map `T -> T` (found `{param_scalar} -> {return_scalar}`)"
+            "a GPU kernel must map `T -> T` (found `{param_scalar} -> {return_scalar}`)"
         )));
     }
     let scalar = param_scalar;
@@ -804,10 +804,10 @@ fn kernel_param(func: &Function) -> Result<&Param, WgslError> {
     match func.params.as_slice() {
         [p] => Ok(p),
         [] => Err(WgslError::UnsupportedSignature(
-            "a GPU kernel must take exactly one f32 parameter (slice-0)".to_string(),
+            "a GPU kernel must take exactly one f32 parameter".to_string(),
         )),
         _ => Err(WgslError::UnsupportedSignature(format!(
-            "a GPU kernel takes exactly one parameter in slice-0, found {}",
+            "a GPU kernel takes exactly one parameter, found {}",
             func.params.len()
         ))),
     }
@@ -823,7 +823,7 @@ fn wgsl_scalar(ty: &TypeExpr, position: &str) -> Result<&'static str, WgslError>
         Some("i32") => Ok("i32"),
         Some("u32") => Ok("u32"),
         _ => Err(WgslError::UnsupportedSignature(format!(
-            "the GPU kernel {position} must be f32, i32, or u32 in slice-0"
+            "the GPU kernel {position} must be f32, i32, or u32"
         ))),
     }
 }
@@ -3676,8 +3676,8 @@ fn kernel_body_parts<'a>(func: &'a Function, tail_desc: &str) -> Result<KernelBo
             }
             StmtKind::Let { is_mut: true, .. } => {
                 return Err(WgslError::UnsupportedBody(
-                    "a GPU kernel `let mut` is not supported yet — mutable locals arrive with \
-                     loop support (B-2026-08-18-40); use an immutable `let`"
+                    "a GPU kernel `let mut` is not supported: a kernel has no loops, so \
+                     use an immutable `let`"
                         .to_string(),
                 ));
             }

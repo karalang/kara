@@ -1397,8 +1397,7 @@ Granularity is per-capture-name today: field projections under the
 same root binding (e.g. `o.x` and `o.y`) collapse to one entry for
 the root `o`. The disjoint-capture extension (Rule 2¼) will refine
 this to per-path so two closures over different fields of the same
-struct can each take their own mode — see
-phase-5-diagnostics.md § \"Disjoint closure capture\".
+struct can each take their own mode; it is not in 0.9.
 
 ────────────────────────────────────────────────────────────────────
 Outer-scope routing for `own`-captured roots
@@ -1460,8 +1459,7 @@ use's line.
 The bare form has no row in this table — its body-usage row *is*
 the inference rule and there is nothing to conflict against.
 
-Diagnostic wording the ownership checker emits (pinned by
-slice 1 of phase-5-diagnostics.md § Closure default capture mode):
+Diagnostic wording the ownership checker emits:
 
   [K2-ref-consume]
     capture `x` declared `ref` but consumed in closure body at
@@ -1651,14 +1649,12 @@ will actually see, followed by the fix.
 4.  user-defined `impl Index for T` is not supported in v1;
     operator traits are stdlib-only
 
-    `karac check` and the v2 backends dispatch the arithmetic and bitwise
+    Every command dispatches the arithmetic and bitwise
     operators to a user impl: `a + b` on a type with `impl Add` calls its
     `add`, `a += b` means `a = a + b`, and the same holds for `Sub Mul Div
     Rem BitAnd BitOr BitXor Shl Shr`, and for the unary `-a` (`Neg`) and
     `~a` (`Not`), and `c[k]` on a type with `impl Index` / `impl IndexMut`
-    is the place their `index` / `index_mut` returns. Only the legacy
-    `run --interp` / `build` pipeline still refuses a user operator impl;
-    there, write a named method.
+    is the place their `index` / `index_mut` returns.
     The comparison operators `== != < <= > >=` dispatch to a user impl
     everywhere (see rejections 2 and 6).
 
@@ -1839,8 +1835,7 @@ and `Hasher` agrees with this page on both.
     an adversary, or for anything where a chosen collision is a
     problem. This is scheduled rather than undesigned —
     `deferred.md § std.crypto` commits BLAKE3 as the general-hashing
-    algorithm and roadmap.md places the module at Phase 11+ (P1),
-    blocked on FFI stabilisation. Until then the honest answer is an
+    algorithm; it is not in 0.9. Until then the honest answer is an
     external library.
 
     A FASTER UNKEYED DIGEST.  `xxh3` was named in an earlier draft of
@@ -1859,14 +1854,14 @@ the two disagree.
 
 This is the page the `module_mut_binding` warning points at.
 
-`karac check` applies the v2 core rules (design.md § Constants), and
+Every command applies the core rules (design.md § Constants), and
 there a module-level `let` or `let mut` is refused with E_MODULE_LET:
 `const NAME: T = e;` is the only value declared at module scope, which
 `karac fix` writes for a `let` that is already constant, and mutable
 state is built in `main` and passed down. Module cells (`LazyLock`,
-`OnceLock`, `OnceCell`) and `#[thread_local]` are deferred to the
-systems track. The rest of this page describes the legacy pipeline
-that `karac run` still uses.
+`OnceLock`, `OnceCell`) and `#[thread_local]` are not in 0.9. The rest
+of this page describes the module-level bindings design.md specifies
+beyond that, which 0.9 refuses.
 
 ────────────────────────────────────────────────────────────────────
 The compile-time initializer rule
@@ -1975,8 +1970,7 @@ each one is actually for:
                      NOT yet enforced: the closure's captures are
                      meant to be restricted to module-level
                      bindings, and first-access effects are meant to
-                     be attributed to the calling function
-                     (B-2026-08-26-15, B-2026-08-26-16).
+                     be attributed to the calling function.
 
   OnceLock[T]        Write-once, thread-safe, set explicitly at
                      runtime. For values depending on input the

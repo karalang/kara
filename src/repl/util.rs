@@ -90,10 +90,10 @@ pub(super) fn print_help() {
   :dep <name> = ...  register a dependency for the current session
                      (RHS is the same shape as `[dependencies]` in
                      `kara.toml`: a quoted version string or an inline
-                     table). Resolution lands in v1.1; v1 records the
-                     entry but the package's symbols are NOT yet in scope.
+                     table). Resolution is not in 0.9: the REPL records
+                     the entry but the package's symbols are NOT in scope.
 
-Cell semantics (v1 MVP):
+Cell semantics:
   - Top-level items (fn, struct, enum, trait, impl, const, type, distinct)
     accumulate across cells. A later definition shadows an earlier one with
     the same name.

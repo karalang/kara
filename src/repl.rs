@@ -2397,7 +2397,7 @@ impl Session {
         };
         println!("(:dep {verb}: {name} = {normalized})");
         println!(
-            "  note: package resolution / download lands in v1.1 — the entry is recorded but `{name}`'s symbols are not yet in scope."
+            "  note: package resolution is not in 0.9: the entry is recorded but `{name}`'s symbols are not in scope."
         );
     }
 

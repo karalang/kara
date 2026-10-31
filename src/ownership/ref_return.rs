@@ -214,7 +214,7 @@ impl<'a> super::OwnershipChecker<'a> {
                          field reached through one, an `if`/scalar-`match` selecting among such \
                          borrows, a chained borrow-returning free-fn call, or a borrowed-struct \
                          construction whose `ref` fields trace to parameters. Method-call chains \
-                         and destructuring-`match` arms are tracked follow-ons (B-2026-06-07-5)."
+                         and destructuring-`match` arms are not supported in 0.9."
                             .to_string(),
                     ),
                 ),

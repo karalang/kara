@@ -1687,9 +1687,7 @@ impl super::Parser {
                             kind: crate::parser::ParseErrorKind::Syntax,
                             message: format!(
                                 "attribute `#[{name}]` is not valid on a loop expression; \
-                                 only `#[par_order_free]` is recognised here at Phase 1. \
-                                 See `docs/implementation_checklist/phase-7-codegen.md` \
-                                 collect-style reduction follow-on for the surface plan."
+                                 only `#[par_order_free]` is recognised here"
                             ),
                             span: attr.span,
                         });
@@ -1721,9 +1719,9 @@ impl super::Parser {
                             kind: crate::parser::ParseErrorKind::Syntax,
                             message: "expected `while`, `for`, or `loop` after attribute \
                                       block; loop attributes do not apply to other \
-                                      expression kinds at Phase 1. Labeled-loop targets \
-                                      (`#[par_order_free] label: while ...`) are deferred \
-                                      to a follow-up slice."
+                                      expression kinds, and a labeled loop \
+                                      (`#[par_order_free] label: while ...`) does not take \
+                                      them in 0.9"
                                 .to_string(),
                             span: self.span_from(&attr_start),
                         });

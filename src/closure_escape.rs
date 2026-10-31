@@ -360,8 +360,7 @@ impl EscapeAnalysis {
                 "error[E_ESCAPING_CLOSURE_NOT_YET]: returning a closure that captures a \
                  local variable is not yet supported — the closure's captured environment lives \
                  on the returning function's stack frame, which is freed when it returns (it \
-                 would read garbage). Tracked as the heap-closure-environment epic \
-                 (B-2026-06-22-2). Workaround: return a non-capturing closure or a named `fn`, or \
+                 would read garbage). Workaround: return a non-capturing closure or a named `fn`, or \
                  pass the closure down by a `Fn(..)` parameter instead of returning it.",
             ));
         }
@@ -695,7 +694,7 @@ impl EscapeAnalysis {
                  leaving a `make(..)` result unbound (any non-`let` use of the call — \
                  `make(..);`, `make(..)(x)`, `use_it(make(..))`) is not yet supported — the \
                  reference-counted closure environment would outlive or be double-freed by its \
-                 owner set (heap-closure-environment epic B-2026-06-22-2). Workaround: bind the \
+                 owner set. Workaround: bind the \
                  closure with a `let` first, or store the closure's data and dispatch with a \
                  plain fn.",
             ));

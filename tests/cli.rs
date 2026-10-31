@@ -11713,8 +11713,8 @@ fn test_install_git_spec_surfaces_unsupported_error() {
         "diagnostic must echo the spec, got: {stderr}"
     );
     assert!(
-        stderr.contains("line 845"),
-        "diagnostic must point at the fetch tracker entry, got: {stderr}"
+        stderr.contains("git sources are not in 0.9"),
+        "diagnostic must say what 0.9 installs from, got: {stderr}"
     );
 }
 
@@ -13253,7 +13253,7 @@ fn test_explain_concept_closures_cross_references_disjoint_capture() {
         .unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("Rule 2¼"));
-    assert!(stdout.contains("Disjoint closure capture"));
+    assert!(stdout.contains("it is not in 0.9"));
 }
 
 #[test]
@@ -18729,7 +18729,7 @@ fn main() {
         "std.web single-file run should succeed; stdout={stdout} stderr={stderr}",
     );
     assert!(
-        stdout.contains("stub: std.web.net.fetch: host-call lowering not wired yet"),
+        stdout.contains("stub: std.web.net.fetch: not available in 0.9"),
         "fetch stub body should execute and surface its message: {stdout}",
     );
     assert!(

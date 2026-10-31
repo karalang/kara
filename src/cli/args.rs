@@ -1000,7 +1000,7 @@ fn parse_build_command(args: &[String]) -> Command {
             // budget the user expected to be enforced.
             if monomorphization_budget.is_enabled() {
                 eprintln!(
-                    "error: --monomorphization-budget is only supported in single-file build (v1.x); project-mode support is a follow-up"
+                    "error: --monomorphization-budget is not supported in a package build in 0.9; point it at a single file"
                 );
                 process::exit(1);
             }

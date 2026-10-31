@@ -50,8 +50,7 @@ pub(super) fn cmd_install(spec: &str) {
             );
             eprintln!("       received: git={url}");
             eprintln!(
-                "       note: git fetch lands alongside the package-fetch slice (tracker line 845);\n             \
-                          once it ships, this install path activates without spec changes."
+                "       note: git sources are not in 0.9; install from a `path = ...` source"
             );
             process::exit(2);
         }
@@ -65,8 +64,7 @@ pub(super) fn cmd_install(spec: &str) {
             );
             eprintln!("       received: {rendered}");
             eprintln!(
-                "       note: registry fetch lands alongside the package-fetch slice (tracker line 845);\n             \
-                          once it ships, this install path activates without spec changes."
+                "       note: registry sources are not in 0.9; install from a `path = ...` source"
             );
             process::exit(2);
         }
@@ -326,8 +324,8 @@ pub(super) fn cmd_vendor(no_proxy: bool) {
 
     if skipped_non_path > 0 {
         eprintln!(
-            "note: {skipped_non_path} non-path dependency entr{} skipped — registry/git \
-             vendoring lands alongside the fetch surface (tracker line 845).",
+            "note: {skipped_non_path} non-path dependency entr{} skipped: registry and git \
+             vendoring are not in 0.9.",
             if skipped_non_path == 1 { "y" } else { "ies" }
         );
     }
@@ -503,8 +501,8 @@ pub(super) fn validate_update_target(
         if let OutputMode::Text = output {
             eprintln!(
                 "note: `{pkg}` is a path-dep; its version is pinned by the on-disk manifest. \
-                 `karac update {pkg}` re-derives the lockfile entry but cannot bump versions \
-                 until the registry-proxy fetch surface (tracker line 845) ships."
+                 `karac update {pkg}` re-derives the lockfile entry but cannot bump versions: \
+                 registry dependencies are not in 0.9."
             );
         }
     }
