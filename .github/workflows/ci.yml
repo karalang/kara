@@ -678,6 +678,12 @@ jobs:
       - name: Panic-free floor (arm64)
         run: cargo test --features llvm --test mir_panic_free_floor
 
+      # When the floor fails, say why: ld64's -why_live prints the chain of
+      # references that keeps std's default panic hook in the binary.
+      - name: Panic-free floor diagnosis (arm64)
+        if: failure()
+        run: bash scripts/why-live-macos.sh
+
   # 4-target matrix STAGE 2 — Linux AArch64 (native `ubuntu-*-arm` runner, GA +
   # free for public repos). The SECOND arm64 execution leg: it runs the same
   # real binaries as `codegen-e2e-macos` but under the Linux AAPCS64 (vs Apple's

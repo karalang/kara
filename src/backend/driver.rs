@@ -628,6 +628,12 @@ pub(crate) fn link_executable_impl(
                 cmd.args(["-Wl,--gc-sections"]);
             }
         }
+        // A link investigation's hook: `KARAC_LINK_ARGS` appends its
+        // whitespace-separated words to the line and prints the linker's
+        // stderr, so `-Wl,-why_live,<sym>` (ld64) or `-Wl,--print-gc-sections`
+        // can say why something survives dead-stripping (B-2026-10-30-37).
+        let link_args = std::env::var("KARAC_LINK_ARGS").unwrap_or_default();
+        cmd.args(link_args.split_whitespace());
         let output = cmd
             .output()
             .map_err(|e| format!("Failed to invoke linker: {}", e))?;
@@ -635,6 +641,9 @@ pub(crate) fn link_executable_impl(
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(format!("Linker failed: {}", stderr));
+        }
+        if !link_args.trim().is_empty() {
+            eprint!("{}", String::from_utf8_lossy(&output.stderr));
         }
 
         // Binary-size phase 1: strip non-global symbols from the linked
