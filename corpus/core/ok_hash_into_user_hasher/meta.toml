@@ -1,0 +1,9 @@
+source = "B-2026-10-31-25"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["derive", "trait", "hash"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-10-31-25: design.md § Hashing declares `Hash.hash[H: Hasher](self, hasher: mut ref H)`; with a hasher of the program's own, each type feeds the bytes collections.md § Hashing lists (integers native-endian little here, a string its UTF-8 then 0xff, a sequence its length as usize then its elements, a derived enum its variant index as u32 then its payload; Option's Some is variant 0). Directly, through a hand-written `Hash` inside a Vec, on a recursive type, and under `T: Hash`."

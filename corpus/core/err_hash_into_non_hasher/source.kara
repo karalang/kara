@@ -1,0 +1,7 @@
+// `x.hash(h)` takes a `Hasher` (design.md § Hashing), which an `i64` is
+// not (B-2026-10-31-25).
+
+fn main() {
+    let mut x = 3;
+    5.hash(mut x);
+}

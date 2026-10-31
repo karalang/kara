@@ -451,6 +451,8 @@ fn lower_program_inner<'a>(
         literal_queue: Vec::new(),
         eq_queue: Vec::new(),
         eq_queued: FxHashSet::default(),
+        hash_queue: Vec::new(),
+        hash_queued: FxHashSet::default(),
         hash_scanned: FxHashSet::default(),
         hash_noted: FxHashSet::default(),
         key_eq_noted: FxHashSet::default(),
@@ -593,6 +595,8 @@ fn lower_program_inner<'a>(
             lcx.lower_default_static(e, t, &name);
         } else if let Some((t, name)) = lcx.eq_queue.pop() {
             lcx.lower_derived_eq(t, &name);
+        } else if let Some((t, h, name)) = lcx.hash_queue.pop() {
+            lcx.lower_derived_hash(t, h, &name);
         } else if !lcx.note_table_hashes() {
             break;
         }
@@ -1115,6 +1119,10 @@ struct Lcx<'a> {
     /// itself (`shared struct Node { next: Option[Node] }`).
     eq_queue: Vec<(Ty, String)>,
     eq_queued: FxHashSet<Ty>,
+    /// Derived `hash` bodies to build, by value type and hasher, for
+    /// types whose hashing reaches itself (B-2026-10-31-25).
+    hash_queue: Vec<(Ty, Ty, String)>,
+    hash_queued: FxHashSet<(Ty, Ty)>,
     /// The bodies [`Lcx::note_table_hashes`] has looked at.
     hash_scanned: FxHashSet<String>,
     /// The tables, by key type and hasher, [`Lcx::note_table_hash`] has
@@ -1881,7 +1889,7 @@ impl<'a> Lcx<'a> {
                 self.note_table_hash(t);
             }
         }
-        self.queue.len() > before || !self.eq_queue.is_empty()
+        self.queue.len() > before || !self.eq_queue.is_empty() || !self.hash_queue.is_empty()
     }
 
     /// Record how a table of type `t` hashes its keys when that runs Kāra
@@ -2340,6 +2348,44 @@ impl<'a> Lcx<'a> {
             Place::local(Local::RETURN_PLACE),
         );
         if r.is_ok() {
+            let cur = bx.cur;
+            bx.b.terminate(cur, TerminatorKind::Return);
+        }
+        let (body, errors) = bx.finish();
+        self.errors.extend(errors);
+        if let Some(body) = body {
+            self.program.add(body);
+        }
+    }
+
+    /// `T.hash#derived[H](v: ref T, h: mut ref H)`: a derived `hash`
+    /// built as its own body, which hashing calls where it would otherwise
+    /// inline itself forever (B-2026-10-31-25).
+    fn lower_derived_hash(&mut self, t: Ty, h: Ty, name: &str) {
+        let unit = self.tys.unit();
+        let (rt, rh) = {
+            let tcx = self.tys.tcx();
+            (tcx.reference(t, false), tcx.reference(h, true))
+        };
+        let instance = InstanceId {
+            def: DefId(u32::MAX),
+            args: Vec::new(),
+            name: name.to_string(),
+        };
+        let mut bx = Bx::new(self, instance, unit, Vec::new());
+        let v = bx.b.arg("v", rt);
+        let hr = bx.b.arg("h", rh);
+        bx.hash_stack.push(t);
+        let r = bx.derived_hash(
+            Span::default(),
+            Place::local(v).project(ProjElem::Deref),
+            t,
+            Place::local(hr).project(ProjElem::Deref),
+            h,
+        );
+        if r.is_ok() {
+            let u = bx.unit();
+            bx.assign(Local::RETURN_PLACE, Rvalue::Use(unit_const(u)));
             let cur = bx.cur;
             bx.b.terminate(cur, TerminatorKind::Return);
         }
@@ -3405,6 +3451,8 @@ struct Bx<'l, 'a> {
     pre_indices: FxHashMap<NodeId, Operand>,
     /// The types whose derived `==` is being inlined, outermost first.
     eq_stack: Vec<Ty>,
+    /// The types whose derived `hash` is being inlined, outermost first.
+    hash_stack: Vec<Ty>,
     /// Building a cancel exit, whose calls get none of their own.
     in_cancel_exit: bool,
 }
@@ -3471,6 +3519,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             impl_target: None,
             pre_indices: FxHashMap::default(),
             eq_stack: Vec::new(),
+            hash_stack: Vec::new(),
             in_cancel_exit: false,
         }
     }
@@ -10068,6 +10117,305 @@ impl<'l, 'a> Bx<'l, 'a> {
 
     /// A user `impl PartialEq` method `eq` for `t`, with its instance
     /// arguments.
+    /// `v.hash(mut h)` for a place `p` of type `t` and a hasher place `hp`
+    /// of type `ht`: what collections.md § Hashing says each type feeds
+    /// the hasher, the bytes a hashed table's glue feeds it too
+    /// (B-2026-10-31-25).
+    fn hash_place(&mut self, span: Span, p: Place, t: Ty, hp: &Place, ht: Ty) -> R<()> {
+        let kind = self.tys().tcx().kind(t);
+        match kind {
+            HK::Ref(inner) | HK::MutRef(inner) => {
+                self.hash_place(span, p.project(ProjElem::Deref), inner, hp, ht)
+            }
+            HK::Int(w) if w != IntSize::I128 => {
+                let m = format!("write_{}", self.tys().display(t));
+                self.hasher_call(span, hp, ht, &m, Operand::Copy(p))
+            }
+            HK::UInt(w) if w != UIntSize::U128 => {
+                let m = format!("write_{}", self.tys().display(t));
+                self.hasher_call(span, hp, ht, &m, Operand::Copy(p))
+            }
+            HK::Bool | HK::Char => {
+                let (wide, cast, m) = match kind {
+                    HK::Bool => (UIntSize::U8, CastKind::BoolToInt, "write_u8"),
+                    _ => (UIntSize::U32, CastKind::CharToInt, "write_u32"),
+                };
+                let wt = self.tys().tcx().intern(HK::UInt(wide));
+                let n = self.temp(wt);
+                self.assign(n, Rvalue::Cast(cast, Operand::Copy(p), wt));
+                self.hasher_call(span, hp, ht, m, Operand::Move(Place::local(n)))
+            }
+            HK::Str | HK::StaticStr => {
+                let (u8_t, bytes_t) = {
+                    let tcx = self.tys().tcx();
+                    let u8_t = tcx.intern(HK::UInt(UIntSize::U8));
+                    (
+                        u8_t,
+                        tcx.intern(HK::Slice {
+                            elem: u8_t,
+                            mutable: false,
+                        }),
+                    )
+                };
+                let sref = self.ref_to(p, t);
+                let bytes = self.temp(bytes_t);
+                self.call_native("String.bytes", vec![sref], Place::local(bytes));
+                self.hasher_call(span, hp, ht, "write", Operand::Move(Place::local(bytes)))?;
+                let end = Operand::Const(Const {
+                    ty: u8_t,
+                    kind: ConstKind::Scalar(0xff),
+                });
+                self.hasher_call(span, hp, ht, "write_u8", end)
+            }
+            HK::Tuple(list) => {
+                let tys = self.tys().tcx().list(list).to_vec();
+                for (i, ft) in tys.into_iter().enumerate() {
+                    self.hash_place(span, p.clone().field(i as u32, ft), ft, hp, ht)?;
+                }
+                Ok(())
+            }
+            HK::Array {
+                elem,
+                len: crate::ty::ArrayLen::Known(n),
+            } => {
+                let usize_t = self.tys().tcx().intern(HK::UInt(UIntSize::Usize));
+                let len = Operand::Const(Const {
+                    ty: usize_t,
+                    kind: ConstKind::Scalar(n as u128),
+                });
+                self.hasher_call(span, hp, ht, "write_usize", len)?;
+                for i in 0..n {
+                    self.hash_place(
+                        span,
+                        p.clone().project(ProjElem::ConstIndex(i)),
+                        elem,
+                        hp,
+                        ht,
+                    )?;
+                }
+                Ok(())
+            }
+            HK::Intrinsic {
+                kind: IntrinsicKind::Vec | IntrinsicKind::VecDeque,
+                args,
+            } => {
+                let elem = self.tys().tcx().list(args)[0];
+                self.hash_seq(span, p, t, elem, hp, ht)
+            }
+            HK::Slice { elem, .. } => self.hash_seq(span, p, t, elem, hp, ht),
+            HK::Adt { .. } | HK::Shared { .. } => {
+                if let Some((d, mut args)) = self.user_impl_method(t, "Hash", "hash") {
+                    args.push(ht);
+                    let vo = self.ref_to(p, t);
+                    let ho = self.hasher_ref(hp, ht);
+                    let name = self.lcx.instance(d, args.clone());
+                    let func = self.fn_operand(&name, d, args);
+                    return self.unit_call(func, vec![vo, ho]);
+                }
+                if self.hash_stack.contains(&t) {
+                    // The hashing reaches its own type: call the derived
+                    // body, built once, rather than inline it again.
+                    let name = format!(
+                        "{}.hash#derived#{}",
+                        self.tys().display(t),
+                        self.tys().display(ht)
+                    );
+                    if self.lcx.hash_queued.insert((t, ht)) {
+                        self.lcx.hash_queue.push((t, ht, name.clone()));
+                    }
+                    let vo = self.ref_to(p, t);
+                    let ho = self.hasher_ref(hp, ht);
+                    let func = self.fn_operand(&name, DefId(u32::MAX), Vec::new());
+                    return self.unit_call(func, vec![vo, ho]);
+                }
+                self.hash_stack.push(t);
+                let res = self.derived_hash(span, p, t, hp.clone(), ht);
+                self.hash_stack.pop();
+                res
+            }
+            _ => self.unsupported(span, "hashing this type"),
+        }
+    }
+
+    /// A derived `Hash`: each field in order, or the variant's index as a
+    /// `u32` and then its payload.
+    fn derived_hash(&mut self, span: Span, p: Place, t: Ty, hp: Place, ht: Ty) -> R<()> {
+        let Some((adt, _)) = self.tys().tcx().adt_of(t) else {
+            return self.unsupported(span, "hashing this type");
+        };
+        if !adt.is_enum {
+            let n = adt.variants.first().map_or(0, |v| v.fields.len());
+            for i in 0..n as u32 {
+                let Some(ft) = self.tys().tcx().field_ty(t, None, i) else {
+                    return self.unsupported(span, "hashing this type");
+                };
+                self.hash_place(span, p.clone().field(i, ft), ft, &hp, ht)?;
+            }
+            return Ok(());
+        }
+        let (isize_t, u32_t) = {
+            let tcx = self.tys().tcx();
+            (
+                tcx.intern(HK::Int(IntSize::I64)),
+                tcx.intern(HK::UInt(UIntSize::U32)),
+            )
+        };
+        let d = self.temp(isize_t);
+        self.assign(d, Rvalue::Discriminant(p.clone()));
+        let arms: Vec<BasicBlock> = adt.variants.iter().map(|_| self.b.new_block()).collect();
+        let unreachable = self.b.new_block();
+        let join = self.b.new_block();
+        self.goto_with(
+            TerminatorKind::SwitchInt {
+                discr: Operand::Copy(Place::local(d)),
+                targets: SwitchTargets {
+                    values: arms
+                        .iter()
+                        .enumerate()
+                        .map(|(i, &b)| (i as u128, b))
+                        .collect(),
+                    otherwise: unreachable,
+                },
+            },
+            unreachable,
+        );
+        self.diverge(TerminatorKind::Unreachable);
+        for (vi, v) in adt.variants.iter().enumerate() {
+            self.cur = arms[vi];
+            let index = Operand::Const(Const {
+                ty: u32_t,
+                kind: ConstKind::Scalar(vi as u128),
+            });
+            self.hasher_call(span, &hp, ht, "write_u32", index)?;
+            let vi = vi as u32;
+            for fi in 0..v.fields.len() as u32 {
+                let Some(ft) = self.tys().tcx().field_ty(t, Some(vi), fi) else {
+                    return self.unsupported(span, "hashing this type");
+                };
+                let fp = p
+                    .clone()
+                    .project(ProjElem::Downcast(VariantIdx(vi)))
+                    .field(fi, ft);
+                self.hash_place(span, fp, ft, &hp, ht)?;
+            }
+            self.goto(join);
+        }
+        self.cur = join;
+        Ok(())
+    }
+
+    /// A `Vec`, `VecDeque` or slice of `elem`: `write_usize` of its length,
+    /// then each element in order.
+    fn hash_seq(&mut self, span: Span, p: Place, t: Ty, elem: Ty, hp: &Place, ht: Ty) -> R<()> {
+        let (bool_t, usize_t, rt, et) = {
+            let tcx = self.tys().tcx();
+            (
+                tcx.intern(HK::Bool),
+                tcx.intern(HK::UInt(UIntSize::Usize)),
+                tcx.reference(t, false),
+                tcx.reference(elem, false),
+            )
+        };
+        let ty_name = self.tys().display(t);
+        let rf = self.temp(rt);
+        self.assign(rf, Rvalue::Ref(BorrowKind::Shared, p));
+        let n = self.temp(usize_t);
+        self.call_native(
+            &format!("{ty_name}.len"),
+            vec![Operand::Copy(Place::local(rf))],
+            Place::local(n),
+        );
+        self.hasher_call(span, hp, ht, "write_usize", Operand::Copy(Place::local(n)))?;
+        let i = self.temp(usize_t);
+        let zero = Operand::Const(Const {
+            ty: usize_t,
+            kind: ConstKind::Scalar(0),
+        });
+        self.assign(i, Rvalue::Use(zero));
+        let (head, body, done) = (self.b.new_block(), self.b.new_block(), self.b.new_block());
+        self.goto(head);
+        self.cur = head;
+        let more = self.temp(bool_t);
+        self.assign(
+            more,
+            Rvalue::BinaryOp(
+                BinOp::Lt,
+                Operand::Copy(Place::local(i)),
+                Operand::Copy(Place::local(n)),
+            ),
+        );
+        self.goto_with(
+            TerminatorKind::SwitchInt {
+                discr: Operand::Copy(Place::local(more)),
+                targets: SwitchTargets::if_else(body, done),
+            },
+            body,
+        );
+        let e = self.temp(et);
+        self.call_native(
+            &format!("{ty_name}.index"),
+            vec![
+                Operand::Copy(Place::local(rf)),
+                Operand::Copy(Place::local(i)),
+            ],
+            Place::local(e),
+        );
+        self.hash_place(span, Place::local(e).project(ProjElem::Deref), elem, hp, ht)?;
+        let one = Operand::Const(Const {
+            ty: usize_t,
+            kind: ConstKind::Scalar(1),
+        });
+        self.assign(
+            i,
+            Rvalue::BinaryOp(BinOp::Add, Operand::Copy(Place::local(i)), one),
+        );
+        self.goto(head);
+        self.cur = done;
+        Ok(())
+    }
+
+    /// A fresh `mut ref` to the hasher at `hp`, for one call.
+    fn hasher_ref(&mut self, hp: &Place, ht: Ty) -> Operand {
+        let rh = self.tys().tcx().reference(ht, true);
+        let r = self.temp(rh);
+        self.assign(r, Rvalue::Ref(BorrowKind::Mut, hp.clone()));
+        Operand::Move(Place::local(r))
+    }
+
+    /// `hp.<m>(value)` on the hasher at `hp`: its impl's method, or the
+    /// trait's default the impl carries.
+    fn hasher_call(&mut self, span: Span, hp: &Place, ht: Ty, m: &str, value: Operand) -> R<()> {
+        let Some((d, args)) = self.user_impl_method(ht, "Hasher", m) else {
+            let what = format!(
+                "hashing into a `{}`, which has no `{m}`",
+                self.tys().display(ht)
+            );
+            return self.unsupported(span, &what);
+        };
+        let ho = self.hasher_ref(hp, ht);
+        let name = self.lcx.instance(d, args.clone());
+        let func = self.fn_operand(&name, d, args);
+        self.unit_call(func, vec![ho, value])
+    }
+
+    /// A call of `func` whose `()` result is dropped.
+    fn unit_call(&mut self, func: Operand, args: Vec<Operand>) -> R<()> {
+        let unit = self.unit();
+        let out = self.temp(unit);
+        let next = self.b.new_block();
+        self.goto_with(
+            TerminatorKind::Call {
+                func,
+                args,
+                destination: Place::local(out),
+                target: Some(next),
+                unwind: UnwindAction::Abort,
+            },
+            next,
+        );
+        Ok(())
+    }
+
     fn user_eq(&self, t: Ty) -> Option<(DefId, Vec<Ty>)> {
         self.user_impl_method(t, "PartialEq", "eq")
     }
@@ -19272,7 +19620,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             // `T: PartialOrd` at a type that derives them: what `==` and `<`
             // compare by, as on the type itself (B-2026-10-31-24). A
             // hand-written impl was found through the bound above.
-            if let ("eq" | "partial_cmp", [_]) = (method, args) {
+            if let ("eq" | "partial_cmp" | "hash", [_]) = (method, args) {
                 let (_, base) = self.strip_ty_full(rt);
                 let key = format!("{}.{method}", self.tys().display(base));
                 return self.builtin_method(e, &key, object, method, args, dest);
@@ -22726,6 +23074,18 @@ impl<'l, 'a> Bx<'l, 'a> {
             if self.discriminant_into(e, p, t, dest.clone())? {
                 return Ok(());
             }
+        }
+        // `x.hash(mut h)` on a type whose `Hash` is built in or derived:
+        // what it feeds `h` (B-2026-10-31-25).
+        if let ("hash", [h]) = (method, args) {
+            let p = self.expr_place(object, false)?;
+            let (p, t) = self.strip_refs(p);
+            let hp = self.expr_place(&h.value, true)?;
+            let (hp, ht) = self.strip_refs(hp);
+            self.hash_place(e.span, p, t, &hp, ht)?;
+            let u = self.unit();
+            self.assign(dest, Rvalue::Use(unit_const(u)));
+            return Ok(());
         }
         // `a.eq(b)` and `a.partial_cmp(b)` on a type whose `PartialEq` /
         // `PartialOrd` is derived: what `==` and `<` compare by

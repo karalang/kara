@@ -2514,6 +2514,8 @@ fn main() -> () {
             // effect pass.
             "err_provider_tasks_write",
             "err_provider_override_tasks_write",
+            // `hash` into a type that is no `Hasher` (B-2026-10-31-25).
+            "err_hash_into_non_hasher",
         ];
         // Pins that call Kāra library functions, which `check_built` does
         // not append (a `select` desugars to calls into sync.kara;

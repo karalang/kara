@@ -1,0 +1,138 @@
+// `x.hash(mut h)` with a hasher of the program's own, on built-in, derived
+// and hand-written `Hash` types: each feeds `h` what collections.md
+// § Hashing ("What the built-in types feed") lists (B-2026-10-31-25).
+// `Record` keeps every byte it is fed, in order.
+
+struct Record {
+    bytes: Vec[u8],
+}
+
+impl Hasher for Record {
+    fn write(mut ref self, bytes: Slice[u8]) {
+        for b in bytes {
+            self.bytes.push(b);
+        }
+    }
+
+    fn finish(self) -> u64 {
+        self.bytes.len() as u64
+    }
+}
+
+fn new_log() -> Record {
+    Record { bytes: Vec.new() }
+}
+
+fn show(name: Str, log: Record) {
+    let mut s = f"{name}:";
+    for b in log.bytes {
+        s = f"{s} {b}";
+    }
+    println(s);
+}
+
+// Through a `T: Hash` bound.
+fn fed[T: Hash](x: T) -> Record {
+    let mut h = new_log();
+    x.hash(mut h);
+    h
+}
+
+#[derive(Hash)]
+struct P {
+    x: i16,
+    y: u8,
+}
+
+#[derive(Hash)]
+enum Shape {
+    Dot,
+    Line(u8),
+}
+
+// Hashes only `n`.
+struct Id {
+    n: u8,
+    junk: u8,
+}
+
+impl Hash for Id {
+    fn hash[H: Hasher](self, hasher: mut ref H) {
+        hasher.write_u8(self.n);
+    }
+}
+
+#[derive(Hash)]
+enum Tree {
+    Leaf,
+    Node(Vec[Tree]),
+}
+
+fn main() {
+    let mut h = new_log();
+    258.hash(mut h);
+    show("i64", h);
+
+    let mut h = new_log();
+    let b: u8 = 7;
+    b.hash(mut h);
+    show("u8", h);
+
+    let mut h = new_log();
+    true.hash(mut h);
+    show("bool", h);
+
+    let mut h = new_log();
+    'A'.hash(mut h);
+    show("char", h);
+
+    let s = "ab".to_string();
+    let mut h = new_log();
+    s.hash(mut h);
+    show("String", h);
+
+    let v: Vec[i32] = Vec[1, 2];
+    let mut h = new_log();
+    v.hash(mut h);
+    show("Vec", h);
+
+    let a: Array[u8, 2] = [5, 6];
+    let mut h = new_log();
+    a.hash(mut h);
+    show("Array", h);
+
+    let mut h = new_log();
+    (true, 'B').hash(mut h);
+    show("tuple", h);
+
+    let p = P { x: 3, y: 4 };
+    let mut h = new_log();
+    p.hash(mut h);
+    show("struct", h);
+
+    let mut h = new_log();
+    Shape.Line(9).hash(mut h);
+    show("enum", h);
+
+    let mut h = new_log();
+    Shape.Dot.hash(mut h);
+    show("unit variant", h);
+
+    let o: Option[u8] = Some(5);
+    let mut h = new_log();
+    o.hash(mut h);
+    show("Some", h);
+
+    let ids = Vec[Id { n: 1, junk: 9 }, Id { n: 2, junk: 9 }];
+    let mut h = new_log();
+    ids.hash(mut h);
+    show("own impl", h);
+
+    let t = Tree.Node(Vec[Tree.Leaf, Tree.Node(Vec.new())]);
+    let mut h = new_log();
+    t.hash(mut h);
+    show("recursive", h);
+
+    show("bound", fed(P { x: -1, y: 0 }));
+    show("bound str", fed("z".to_string()));
+}

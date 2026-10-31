@@ -2396,6 +2396,32 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
+        // `x.hash(mut h)` with `h` a `Hasher`: design.md § Hashing's
+        // `fn hash[H: Hasher](self, hasher: mut ref H)`, on a type whose
+        // `Hash` is derived or built in, which the MIR builder feeds part by
+        // part (collections.md § Hashing, B-2026-10-31-25). A hand-written
+        // impl's `hash` resolves through the impl table instead.
+        if let ("hash", [h]) = (method, args) {
+            if self.env.hash_is_builtin(&obj_ty_for_named) {
+                let ht = self.infer_expr(&h.value);
+                let base = match &ht {
+                    Type::Ref(inner) | Type::MutRef(inner) => (**inner).clone(),
+                    other => other.clone(),
+                };
+                if !matches!(base, Type::Error) && !self.type_satisfies_bound(&base, "Hasher") {
+                    self.type_error(
+                        format!(
+                            "`hash` takes a `Hasher`, but `{}` is not one",
+                            type_display(&base)
+                        ),
+                        h.value.span,
+                        TypeErrorKind::TypeMismatch,
+                    );
+                }
+                return Type::Unit;
+            }
+        }
+
         // `x.fmt_debug()`: the `Debug` text `dbg` shows, on a type that is
         // `Debug` without a `fmt_debug` of its own: a derived one, a number,
         // a collection (design.md § Display and Debug, B-2026-10-31-6). A

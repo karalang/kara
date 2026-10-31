@@ -1,0 +1,11 @@
+source = "B-2026-10-31-25"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["derive", "trait", "hash"]
+class = "a"
+expected_from = "pin"
+rules = []
+backends = []
+env = {}
+note = "B-2026-10-31-25: `hash`'s argument is a `mut ref H` with `H: Hasher` (design.md § Hashing); an `i64` is refused at the argument. The expected.out wording of an error pin is guidance, not a byte oracle."

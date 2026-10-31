@@ -2500,6 +2500,45 @@ impl super::env::TypeEnv {
         }
     }
 
+    /// Whether `x.hash(mut h)` on a `ty` is the builtin feed collections.md
+    /// § Hashing gives ("What the built-in types feed"): `ty` is a concrete
+    /// `Hash` type the MIR builder feeds part by part, with no `hash` method
+    /// of its own (B-2026-10-31-25). A type parameter's `hash` comes from its
+    /// bound, and a hand-written impl from the impl table.
+    pub(super) fn hash_is_builtin(&self, ty: &Type) -> bool {
+        let fed = |t: &Type| self.hash_is_builtin(t) || self.hash_has_own(t);
+        match ty {
+            Type::Int(w) => !matches!(w, super::types::IntSize::I128),
+            Type::UInt(w) => !matches!(w, super::types::UIntSize::U128),
+            Type::Bool | Type::Char | Type::Str | Type::Unit => true,
+            Type::Tuple(elems) => elems.iter().all(fed),
+            Type::Array { element, .. } | Type::Slice { element, .. } => fed(element),
+            Type::Ref(inner) | Type::MutRef(inner) => fed(inner),
+            Type::Named { name, args } => {
+                let library = matches!(name.as_str(), "String" | "Vec" | "Option" | "Result");
+                let program = self
+                    .structs
+                    .get(name)
+                    .map(|i| &i.derived_traits)
+                    .or_else(|| self.enums.get(name).map(|i| &i.derived_traits));
+                (library || program.is_some_and(|d| d.contains("Hash")))
+                    && !self.has_user_impl_hash(name)
+                    && args.iter().all(fed)
+                    && self.type_supports_hash(ty)
+            }
+            _ => false,
+        }
+    }
+
+    /// Whether `ty` hashes through a `hash` method of its own (a hand-written
+    /// `impl Hash`).
+    fn hash_has_own(&self, ty: &Type) -> bool {
+        match ty {
+            Type::Named { name, .. } | Type::Shared(name) => self.has_user_impl_hash(name),
+            _ => false,
+        }
+    }
+
     /// Whether `x.fmt_debug()` on a `ty` is the builtin `Debug` text: `ty`
     /// is a concrete `Debug` type with no `fmt_debug` method of its own.
     pub(super) fn debug_text_is_builtin(&self, ty: &Type) -> bool {

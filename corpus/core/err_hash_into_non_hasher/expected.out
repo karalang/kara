@@ -1,0 +1,1 @@
+ERROR at line 6: `hash` takes a `Hasher`, but `i64` is not one

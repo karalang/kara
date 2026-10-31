@@ -1,0 +1,16 @@
+i64: 2 1 0 0 0 0 0 0
+u8: 7
+bool: 1
+char: 65 0 0 0
+String: 97 98 255
+Vec: 2 0 0 0 0 0 0 0 1 0 0 0 2 0 0 0
+Array: 2 0 0 0 0 0 0 0 5 6
+tuple: 1 66 0 0 0
+struct: 3 0 4
+enum: 1 0 0 0 9
+unit variant: 0 0 0 0
+Some: 0 0 0 0 5
+own impl: 2 0 0 0 0 0 0 0 1 2
+recursive: 1 0 0 0 2 0 0 0 0 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0
+bound: 255 255 0
+bound str: 122 255
