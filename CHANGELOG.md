@@ -85,10 +85,9 @@ later in [docs/deferred.md](docs/deferred.md).
   refused at check (§14.12).
 - An HTTP response with no headers is sent with a JSON `content-type`, and
   standard output to a pipe is block-buffered.
-- Struct `invariant` clauses and `old(...)` in an `ensures` clause belong to
-  the later verification track and are refused at check (`E_DEFERRED_TRACK`).
-  `requires` and plain `ensures` work; enforce a type's invariant in its
-  constructor.
+- Struct `invariant` clauses belong to the later verification track and are
+  refused at check (`E_DEFERRED_TRACK`); enforce the property in the type's
+  constructor. `requires` and `ensures` (with `old(...)`) work.
 
 ---
 
