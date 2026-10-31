@@ -672,6 +672,12 @@ jobs:
       - name: v2 E2E (arm64)
         run: cargo test --features llvm --test run_v2 --test build_v2 --test test_v2 --test mir_build --test mir_library
 
+      # The panic-free floor on Mach-O: ld64 roots dead-stripping at every
+      # exported symbol, so the floor measured on Linux holds there only
+      # with `main` as the executable's one export (B-2026-10-30-37).
+      - name: Panic-free floor (arm64)
+        run: cargo test --features llvm --test mir_panic_free_floor
+
   # 4-target matrix STAGE 2 — Linux AArch64 (native `ubuntu-*-arm` runner, GA +
   # free for public repos). The SECOND arm64 execution leg: it runs the same
   # real binaries as `codegen-e2e-macos` but under the Linux AAPCS64 (vs Apple's

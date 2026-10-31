@@ -612,9 +612,18 @@ pub(crate) fn link_executable_impl(
         // audit; the runtime declares no `#[used]` / `#[link_section]` /
         // `#[ctor]` / `#[dtor]` attributes, so every reachable runtime symbol
         // is anchored through a direct call from codegen-emitted IR.
+        //
+        // On Mach-O the export list matters too: ld64's `-dead_strip` keeps
+        // everything reachable from the entry point OR an exported symbol,
+        // and an executable exports every global by default, so each
+        // `#[no_mangle]` runtime entry in the pulled archive member was a
+        // root, and with them the panics behind them, std's panic hook and
+        // its backtrace symbolizer (B-2026-10-30-37). Exporting `main`
+        // alone gives ld64 the roots `--gc-sections` has on Linux, where an
+        // executable exports nothing it does not have to.
         if !is_sanitizer_link(extra_cc_args) {
             if cfg!(target_os = "macos") {
-                cmd.args(["-Wl,-dead_strip"]);
+                cmd.args(["-Wl,-dead_strip", MACHO_EXPORT_MAIN_ONLY]);
             } else if cfg!(target_os = "linux") {
                 cmd.args(["-Wl,--gc-sections"]);
             }
@@ -679,6 +688,10 @@ pub(crate) fn link_executable_impl(
     }
 }
 
+/// The ld64 flag that makes `main` a Mach-O executable's only export, so
+/// `-dead_strip` roots the image at its entry point alone (B-2026-10-30-37).
+const MACHO_EXPORT_MAIN_ONLY: &str = "-Wl,-exported_symbol,_main";
+
 /// A cross build's link (`--target=<triple>` naming a triple other than
 /// the host's, B-2026-10-27-4): the object, the runtime archive built for
 /// that triple, and that target's system libraries, through a linker for
@@ -725,7 +738,7 @@ fn link_executable_cross(
     }
     if !is_sanitizer_link(extra_cc_args) {
         if os.contains(&"darwin") {
-            cmd.arg("-Wl,-dead_strip");
+            cmd.args(["-Wl,-dead_strip", MACHO_EXPORT_MAIN_ONLY]);
         } else if os.contains(&"msvc") {
             cmd.arg("-Wl,/OPT:REF");
         } else {
