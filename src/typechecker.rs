@@ -3139,6 +3139,9 @@ pub struct TypeChecker<'a> {
     pub(super) frozen_param_use_spans: FxHashSet<SpanKey>,
     /// True when type-checking inside a defer/errdefer block.
     pub(super) in_defer: bool,
+    /// True while an `ensures` body is checked, where `old(e)` is `e`'s
+    /// value at entry and so has `e`'s type (B-2026-10-31-30).
+    pub(super) in_ensures: bool,
     /// B-2026-07-02-7: span of a suffixed integer literal that is the direct
     /// operand of a unary `-` (`-128i8`). The Unary arm validates the NEGATED
     /// value against the suffix's range; the Integer arm must then skip its
@@ -3873,6 +3876,7 @@ impl<'a> TypeChecker<'a> {
             current_impl_target: None,
             current_concrete_impl_target: None,
             in_defer: false,
+            in_ensures: false,
             neg_validated_suffixed_literal: None,
             wide_int_literals: Vec::new(),
             wide_int_literals_judged: FxHashSet::default(),

@@ -3515,7 +3515,9 @@ impl<'a> super::TypeChecker<'a> {
             if let Some(param) = &ens.param {
                 self.local_scope.insert(param.clone(), return_type.clone());
             }
+            let saved_ensures = std::mem::replace(&mut self.in_ensures, true);
             self.check_expr(&ens.body, &Type::Bool);
+            self.in_ensures = saved_ensures;
             // Validate `old(...)` occurrences: `old(result)` is rejected
             // (result does not exist at entry) and the captured expression
             // must be `Clone` (design.md § Contracts rule 4).

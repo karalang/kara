@@ -909,6 +909,13 @@ impl<'a> super::TypeChecker<'a> {
     }
 
     pub(super) fn infer_call(&mut self, callee: &Expr, args: &[CallArg], span: &Span) -> Type {
+        // `old(e)` in an `ensures` clause is `e` as it was at entry, of
+        // `e`'s type: `old(b) - amount` is an `i64` (B-2026-10-31-30).
+        if let (true, ExprKind::Identifier(n), [a]) = (self.in_ensures, &callee.kind, args) {
+            if n == "old" && a.label.is_none() {
+                return self.infer_expr(&a.value);
+            }
+        }
         if self.cli_lint_overrides.strict_core {
             self.reject_call_site_type_args(callee);
         }
