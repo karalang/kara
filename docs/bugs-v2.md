@@ -63,7 +63,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | missing-feature | 60 |
 | perf | 47 |
 | soundness | 31 |
-| miscompile | 21 |
+| miscompile | 22 |
 | run-vs-build | 16 |
 | other | 15 |
 | codegen-gap | 13 |
@@ -84,9 +84,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | parser | 22 |
 | runtime | 21 |
 | effect | 10 |
+| other | 4 |
 | resolver | 4 |
 | autopar | 4 |
-| other | 3 |
 | lexer | 1 |
 ## Current state
 
@@ -108,6 +108,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-31-26 | 2026-10-31 | mir-llvm | medium | `Child.wait_with_output()` leaks the child's 32-byte handle on the compiled backend: the call takes `own self`, and nothing frees the `Kid` box `karac_mir_command` allocated (corpus fixtures/mir_io/PROCESSES and PROCESS_SURFACE fail the ASan lane) | — |
 | B-2026-10-31-27 | 2026-10-31 | mir | medium | A provider through a generic trait (`trait Channel[T] { fn send(ref self, v: T) -> T; }`, `impl Channel[i64] for Echo`) passes `v` by value where the impl body reads it as a reference: `__mir-run` stops with `deref of non-reference Int(41)`, and the built program SEGVs in `Echo.send` (corpus fixtures/codegen/generics/e2e_generic_provider_trait_bound) | — |
 | B-2026-10-31-28 | 2026-10-31 | mir-llvm | low | A rare LeakSanitizer report on corpus programs that spawn tasks or run `par` under load (fixtures/coro_e2e/SPAWN_NONBLOCK_SRC, SPAWN_MULTI_CAPTURE_SRC, interpreter/concurrency/test_dbg_json_in_par_emits_numeric_task_id, par_codegen/test_e2e_par_join_branch_float_method) | — |
+| B-2026-10-31-31 | 2026-10-31 | other | medium | `karac fmt` drops a type's effect argument: `EventBus[with E]` and `EventBus[with writes(OrderDb)]` come back as a bare `EventBus`, so a program `karac check` refuses checks clean after formatting | — |
 
 ### Relocated
 

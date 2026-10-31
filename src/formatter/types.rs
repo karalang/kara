@@ -235,6 +235,23 @@ impl super::Formatter {
             TypeKind::Path(p) => {
                 self.write_path(&p.segments);
                 self.format_generic_args_with_hasher(&p.generic_args, &ty.span);
+                // A type's effect argument, last in its bracket list
+                // (`EventBus[with E]`, `S[T, with writes(R)]`). The parser
+                // keeps it apart from the type arguments, so printing those
+                // alone dropped it and changed the type (B-2026-10-31-31).
+                if let Some(effects) = &p.effect_args {
+                    let had_args = p.generic_args.as_ref().is_some_and(|a| !a.is_empty())
+                        && self.output.ends_with(']');
+                    if had_args {
+                        self.output.pop();
+                        self.write_str(", with ");
+                    } else {
+                        self.write_str("[with ");
+                    }
+                    let rendered = crate::formatter::render_effect_list(effects);
+                    self.write_str(&rendered);
+                    self.write_str("]");
+                }
             }
             TypeKind::Tuple(types) => {
                 self.write_str("(");
