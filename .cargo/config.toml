@@ -1,0 +1,17 @@
+# AArch64 code generation without LLVM's GlobalMerge pass (B-2026-10-30-37).
+#
+# On AArch64 at -O3, GlobalMerge packs a module's internal statics into one
+# `__MergedGlobals` object, and a linker strips objects, not the statics inside
+# them. In the runtime archive that put the stdout buffer behind `print` in one
+# object with `HTTP_RESPONSE_HEADERS`, whose initializer seeds a `RandomState`,
+# whose thread-local can panic: so on macOS arm64 every program that prints
+# kept std's panic machinery and default hook (`-Wl,-why_live` in CI, run
+# 41184274748). x86_64 has no such pass, which is why the Linux floor held.
+#
+# `RUSTFLAGS` in the environment replaces these (cargo takes one source), so a
+# recipe that sets it for an AArch64 runtime build must carry the flag itself.
+[target.aarch64-apple-darwin]
+rustflags = ["-C", "llvm-args=-aarch64-enable-global-merge=false"]
+
+[target.aarch64-unknown-linux-gnu]
+rustflags = ["-C", "llvm-args=-aarch64-enable-global-merge=false"]
