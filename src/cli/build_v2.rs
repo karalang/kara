@@ -37,8 +37,12 @@ pub(super) fn cmd_build_v2_file(filename: &str, a: BuildArgs) {
     let output = a.output;
     let manifest = run_manifest_preamble(filename, output, None, false);
     refuse_hot_swap(&a, manifest.as_ref().map(|m| m.profile));
+    // Every pass checks for the build's target, so it is set whether or
+    // not this binary has a backend (B-2026-10-31-36).
+    #[cfg_attr(not(feature = "llvm"), allow(unused_variables))]
+    let wasm = set_wasm_target(&a);
     #[cfg(feature = "llvm")]
-    if set_wasm_target(&a) {
+    if wasm {
         apply_wasm_cpu(&a);
     } else {
         apply_cpu(&a, |pick| {
@@ -63,12 +67,14 @@ pub(super) fn cmd_build_v2_file(filename: &str, a: BuildArgs) {
 /// from its `src/main.kara`, into `<root>/dist/<package name>` (or `-o`).
 pub(super) fn cmd_build_v2_project(a: BuildArgs) {
     refuse_unsupported(&a);
+    // Every pass, the package check included, checks for the build's
+    // target, so it is set whether or not this binary has a backend
+    // (B-2026-10-31-36).
+    #[cfg_attr(not(feature = "llvm"), allow(unused_variables))]
+    let wasm = set_wasm_target(&a);
     // The CPU listing needs no package.
     #[cfg(feature = "llvm")]
-    {
-        set_wasm_target(&a);
-        list_cpus_if_asked(&a);
-    }
+    list_cpus_if_asked(&a);
     let output = a.output;
     let cwd = std::env::current_dir().unwrap_or_else(|e| {
         fail_with(
@@ -102,7 +108,7 @@ pub(super) fn cmd_build_v2_project(a: BuildArgs) {
         }
     }
     #[cfg(feature = "llvm")]
-    if set_wasm_target(&a) {
+    if wasm {
         apply_wasm_cpu(&a);
     } else {
         apply_cpu(&a, |pick| pick(&mf));
@@ -260,7 +266,6 @@ fn host_triple() -> String {
 
 /// Makes wasm32-wasip1 the active target for `--target=wasm_wasi`; true
 /// when it did (the native CPU baseline then does not apply).
-#[cfg(feature = "llvm")]
 fn set_wasm_target(a: &BuildArgs) -> bool {
     if !is_wasm_wasi(a) {
         return false;

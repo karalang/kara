@@ -59,7 +59,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 78 |
-| false-positive | 76 |
+| false-positive | 77 |
 | missing-feature | 60 |
 | perf | 47 |
 | soundness | 31 |
@@ -77,7 +77,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | typecheck | 133 |
 | mir | 79 |
 | mir-llvm | 56 |
-| cli | 45 |
+| cli | 46 |
 | ownership | 37 |
 | interp | 26 |
 | codegen | 22 |
@@ -103,6 +103,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-31-16 | 2026-10-31 | mir | low | `karac build` and `karac run` still do the front end's work twice in CPU: `check_v2` and the MIR builder's `frontend()` now run on two threads at once (6777e6ea51), but each parses, resolves, typechecks and ownership-checks the program and its library | — |
 | B-2026-10-31-28 | 2026-10-31 | mir-llvm | low | A rare LeakSanitizer report on corpus programs that spawn tasks or run `par` under load (fixtures/coro_e2e/SPAWN_NONBLOCK_SRC, SPAWN_MULTI_CAPTURE_SRC, interpreter/concurrency/test_dbg_json_in_par_emits_numeric_task_id, par_codegen/test_e2e_par_join_branch_float_method) | — |
 | B-2026-10-31-34 | 2026-10-31 | mir-llvm | high | Under the multi-worker pool, `send` on a full bounded `channel(n)` from several producer tasks returns `Err` instead of waiting: compiled programs lose values and print a wrong sum, `__mir-run` and `KARAC_THREADS=1` are right | — |
+| B-2026-10-31-36 | 2026-10-31 | cli | high | `karac build --target=wasm_wasi` on a package, in a binary without the llvm feature, checks the package for the HOST platform: `import host` with only a `host_wasm` sibling fails E0112 "unknown module `host`" (Windows CI red at ac63469abb) | — |
 
 ### Relocated
 
