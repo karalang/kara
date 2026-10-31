@@ -278,6 +278,9 @@ pub struct Cx<'ctx, 'p> {
     /// While an index call whose upper bound a guard proved is lowered
     /// ([`crate::mir::guard_bounds`]): its check is `i >= 0` alone.
     upper_proven: bool,
+    /// The locals of the body being lowered that hold a length
+    /// ([`crate::mir::guard_bounds::length_locals`]).
+    lengths: Vec<bool>,
 }
 
 impl<'ctx, 'p> Cx<'ctx, 'p> {
@@ -316,6 +319,7 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
             hot_swap: HashMap::new(),
             hot_swap_table: None,
             upper_proven: false,
+            lengths: Vec::new(),
             hot_swap_calls: Vec::new(),
         }
     }
@@ -1091,6 +1095,13 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
                 crate::mir::counters::unroll_partial_latches(body, self.tys),
             )
         };
+        // `KARAC_MIR_LENGTH_DIVISORS=0` checks every division in full.
+        self.lengths = if std::env::var("KARAC_MIR_LENGTH_DIVISORS").as_deref() == Ok("0") {
+            Vec::new()
+        } else {
+            let program = self.program;
+            crate::mir::guard_bounds::length_locals(body, |n| !program.bodies.contains_key(n))
+        };
         // `KARAC_MIR_GUARD_BOUNDS=0` checks every index in full.
         let proven = if std::env::var("KARAC_MIR_GUARD_BOUNDS").as_deref() == Ok("0") {
             Vec::new()
@@ -1158,6 +1169,7 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
         }
         self.debug_leave();
         self.body = None;
+        self.lengths.clear();
         Ok(())
     }
 

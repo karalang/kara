@@ -205,6 +205,32 @@ fn implied(
     }
 }
 
+/// The locals of `body` that hold a length: assigned once, by a native
+/// `len` (`native` says which names are not bodies), so `>= 0`. A
+/// checked `/` or `%` by one cannot overflow (`MIN / -1` needs a
+/// negative divisor), so codegen leaves the check out, and `x / n` and
+/// `x % n` are then one division (B-2026-10-30-36).
+pub fn length_locals(body: &Body, native: impl Fn(&str) -> bool) -> Vec<bool> {
+    let mut out = vec![false; body.locals.len()];
+    for b in &body.blocks {
+        let TerminatorKind::Call {
+            func, destination, ..
+        } = &b.terminator.kind
+        else {
+            continue;
+        };
+        let Some(name) = fn_name(func) else { continue };
+        if destination.projection.is_empty()
+            && name.ends_with(".len")
+            && native(name)
+            && assigns(body, destination.local) == 1
+        {
+            out[destination.local.index()] = true;
+        }
+    }
+    out
+}
+
 /// The local `n` assigned once in the body, by `{base}.len(&x)`.
 fn length_of(body: &Body, base: &str, x: &Place) -> Option<Local> {
     let want = format!("{base}.len");

@@ -617,7 +617,18 @@ impl<'ctx> Cx<'ctx, '_> {
                 let at = self.operand_type(a)?;
                 let x = self.operand_scalar(a)?.into_int_value();
                 let y = self.operand_scalar(b)?.into_int_value();
-                let (v, o) = self.checked(*op, at, x, y)?;
+                let by_length = matches!(op, BinOp::Div | BinOp::Rem)
+                    && matches!(b, Operand::Copy(p) | Operand::Move(p)
+                        if p.projection.is_empty()
+                            && self.lengths.get(p.local.index()) == Some(&true));
+                let (v, o) = if by_length {
+                    // A length is `>= 0`, and the zero check is the MIR's
+                    // own, before this: nothing can overflow.
+                    let v = self.binop(*op, at, x.into(), y.into())?.into_int_value();
+                    (v, self.llcx.bool_type().const_zero())
+                } else {
+                    self.checked(*op, at, x, y)?
+                };
                 let off1 = layout::field_offset(self.tys, ty, None, 1)
                     .ok_or("a checked operation's result is not a pair")?;
                 self.store(dst, v.into())?;
