@@ -688,9 +688,11 @@ fn cancel_exit_of(body: &Body, target: BasicBlock) -> Option<(Vec<Statement>, Ba
     None
 }
 
-/// Whether the suspending native `name` waits on a descriptor, and may find
-/// it not ready after all when called.
-fn on_descriptor(name: &str) -> bool {
+/// Whether the suspending native `name` may find what it waits for not
+/// ready after all when called: a descriptor, or a channel another worker
+/// of the pool filled or drained between the `__ready` and the call
+/// (B-2026-10-31-34).
+fn may_be_not_ready(name: &str) -> bool {
     let Some((ty, method)) = name.rsplit_once('.') else {
         return false;
     };
@@ -700,6 +702,8 @@ fn on_descriptor(name: &str) -> bool {
             | ("TcpStream", "read" | "write" | "connect")
             | ("UdpSocket", "recv" | "recv_from")
             | ("Child", "wait")
+            | ("Sender" | "Channel", "send")
+            | ("Receiver" | "Channel", "recv" | "recv_blocking")
     )
 }
 
@@ -713,8 +717,8 @@ fn on_descriptor(name: &str) -> bool {
 /// call: dest = <native>(args..) -> next
 /// ```
 ///
-/// and, after a native on a descriptor, the retry of a call that found it
-/// not ready after all:
+/// and, after a native on a descriptor or a channel, the retry of a call
+/// that found it not ready after all:
 ///
 /// ```text
 /// call: dest = <native>(args..) -> ag
@@ -861,7 +865,7 @@ fn insert_ready_loops(body: &mut Body, tys: &TyInterner) -> Result<(), String> {
             _ => None,
         };
         let mut orig = orig;
-        if on_descriptor(&callee) {
+        if may_be_not_ready(&callee) {
             let TerminatorKind::Call { target, .. } = &mut orig.kind else {
                 unreachable!("matched a call above")
             };

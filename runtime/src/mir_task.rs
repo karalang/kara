@@ -2231,6 +2231,12 @@ pub(crate) fn set_again() {
     AGAIN.with(|a| a.set(true));
 }
 
+/// Whether a task runs on this thread, under the readiness loops the
+/// coroutine transform puts around its waits.
+pub(crate) fn in_task() -> bool {
+    EXEC.with(|e| e.borrow().cur().is_some())
+}
+
 /// `__io_again()`, after a call in a readiness loop: whether it answered
 /// `IO_NOT_READY` ([`set_again`]), clearing the bit.
 #[no_mangle]

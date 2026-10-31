@@ -3729,8 +3729,19 @@ pub extern "C" fn karac_mir_chan_new(
     }))
 }
 
+thread_local! {
+    /// Set by a ready answer of `karac_mir_chan_ready` in a task and taken
+    /// by the channel call it guards, which may then answer "not ready" (3
+    /// from a send, 2 from a recv) having done nothing: another worker of
+    /// the pool filled or drained the channel in between, and the
+    /// readiness loop goes back to its `__ready` (`mir_task.rs`, "Armed
+    /// calls"; B-2026-10-31-34).
+    static CHAN_ARMED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 /// Queues the `size` bytes at `v`: 0 when queued, 1 when the channel is
-/// full and 2 when no receiver is left (`v` is then left to the caller).
+/// full, 2 when no receiver is left and 3 when an armed send found it full
+/// (`v` is then left to the caller).
 ///
 /// # Safety
 /// `h` is a live channel; `v` is readable for its `size` bytes.
@@ -3738,11 +3749,16 @@ pub extern "C" fn karac_mir_chan_new(
 pub unsafe extern "C" fn karac_mir_chan_send(h: *mut MirChan, v: *const u8) -> i32 {
     // SAFETY: the caller's contract.
     let c = unsafe { &*h };
+    let armed = CHAN_ARMED.with(|a| a.replace(false));
     let mut s = c.queue.lock().unwrap_or_else(|p| p.into_inner());
     if !c.bounded && s.receivers == 0 {
         return 2;
     }
     if (c.bounded || c.cap > 0) && s.queue.len() >= c.cap {
+        if armed && !c.bounded {
+            crate::mir_task::set_again();
+            return 3;
+        }
         return 1;
     }
     // SAFETY: as above.
@@ -3763,14 +3779,21 @@ pub unsafe extern "C" fn karac_mir_chan_ready(h: *mut MirChan, send: u8) -> u8 {
     // SAFETY: the caller's contract.
     let c = unsafe { &*h };
     let s = c.queue.lock().unwrap_or_else(|p| p.into_inner());
-    u8::from(if send == 0 {
+    let ready = if send == 0 {
         !s.queue.is_empty() || s.senders == 0
     } else {
         c.bounded || c.cap == 0 || s.queue.len() < c.cap || s.receivers == 0
-    })
+    };
+    drop(s);
+    if ready && crate::mir_task::in_task() {
+        CHAN_ARMED.with(|a| a.set(true));
+    }
+    u8::from(ready)
 }
 
-/// Moves the oldest value to `out`: 1 when there was one, else 0.
+/// Moves the oldest value to `out`: 1 when there was one, else 0, or 2
+/// when an armed recv found the channel empty with a sender left (`out`
+/// is then untouched).
 ///
 /// # Safety
 /// `h` is a live channel; `out` is writable for its `size` bytes.
@@ -3778,6 +3801,7 @@ pub unsafe extern "C" fn karac_mir_chan_ready(h: *mut MirChan, send: u8) -> u8 {
 pub unsafe extern "C" fn karac_mir_chan_recv(h: *mut MirChan, out: *mut u8) -> u8 {
     // SAFETY: the caller's contract.
     let c = unsafe { &*h };
+    let armed = CHAN_ARMED.with(|a| a.replace(false));
     let mut s = c.queue.lock().unwrap_or_else(|p| p.into_inner());
     match s.queue.pop_front() {
         Some(b) => {
@@ -3785,6 +3809,10 @@ pub unsafe extern "C" fn karac_mir_chan_recv(h: *mut MirChan, out: *mut u8) -> u
             unsafe { std::ptr::copy_nonoverlapping(b.as_ptr(), out, c.size) };
             crate::mir_task::chan_changed();
             1
+        }
+        None if armed && s.senders > 0 => {
+            crate::mir_task::set_again();
+            2
         }
         None => 0,
     }

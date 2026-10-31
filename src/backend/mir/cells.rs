@@ -5,6 +5,7 @@
 //! `once_method` (`src/mir/interp.rs`). One task runs at a time on this
 //! backend, so an atomic's operations are plain loads and stores.
 
+use inkwell::basic_block::BasicBlock;
 use inkwell::values::{IntValue, PointerValue};
 use inkwell::{AtomicOrdering, AtomicRMWBinOp, IntPredicate};
 
@@ -1060,7 +1061,13 @@ impl<'ctx> Cx<'ctx, '_> {
                 } else {
                     method
                 };
+                // 3: an armed send found the channel full after all and
+                // did nothing; its readiness loop asks `__ready` again,
+                // the value still in place (B-2026-10-31-34).
+                let after = self.unless_not_ready(r, 3)?;
                 self.chan_send_result(base, method, dty, dest, r, vp, el)?;
+                self.builder.build_unconditional_branch(after).map_err(e)?;
+                self.builder.position_at_end(after);
             }
             // Whether every sender is gone, for a `select`'s receive arm.
             ("Receiver", "__closed", [recv]) => {
@@ -1073,11 +1080,19 @@ impl<'ctx> Cx<'ctx, '_> {
                 let d = self.place_ptr(dest)?;
                 // A `recv` typed `Option` is `None` once the channel is
                 // closed and drained (B-2026-10-15-11).
+                // 2: an armed recv found the channel empty after all, a
+                // sender left, and did nothing; its readiness loop asks
+                // `__ready` again, `dest` untouched (B-2026-10-31-34).
                 if base == "BoundedChannel" || method == "try_recv" || self.adt_named(dty, "Option")
                 {
                     let (some, none) = self.option_variants(dty)?;
                     let q = self.offset(d, self.field_offset(dty, Some(some), 0)?)?;
-                    let got = self.rt_flag("chan_recv", &[h.into(), q.into()])?;
+                    let code = self.rt_u8("chan_recv", &[h.into(), q.into()])?;
+                    let after = self.unless_not_ready(code, 2)?;
+                    let got = self
+                        .builder
+                        .build_int_compare(IntPredicate::NE, code, code.get_type().const_zero(), "")
+                        .map_err(e)?;
                     let i32t = self.llcx.i32_type();
                     let k = self
                         .builder
@@ -1090,14 +1105,44 @@ impl<'ctx> Cx<'ctx, '_> {
                         .map_err(e)?
                         .into_int_value();
                     self.store_tag_dyn(d, dty, k)?;
+                    self.builder.build_unconditional_branch(after).map_err(e)?;
+                    self.builder.position_at_end(after);
                 } else {
-                    let got = self.rt_flag("chan_recv", &[h.into(), d.into()])?;
+                    let code = self.rt_u8("chan_recv", &[h.into(), d.into()])?;
+                    let after = self.unless_not_ready(code, 2)?;
+                    let got = self
+                        .builder
+                        .build_int_compare(IntPredicate::NE, code, code.get_type().const_zero(), "")
+                        .map_err(e)?;
                     self.abort_unless(got, "explicit panic")?;
+                    self.builder.build_unconditional_branch(after).map_err(e)?;
+                    self.builder.position_at_end(after);
                 }
             }
             _ => return Ok(None),
         }
         Ok(Some(()))
+    }
+
+    /// Branches past what follows when the runtime's answer `r` is `code`,
+    /// a call that found its channel not ready and did nothing: the block
+    /// to continue at once the answer is handled. The builder is left at
+    /// the handling.
+    fn unless_not_ready(&mut self, r: IntValue<'ctx>, code: u64) -> R<BasicBlock<'ctx>> {
+        let f = self.cur_fn()?;
+        let (go, after) = (
+            self.llcx.append_basic_block(f, "chan.go"),
+            self.llcx.append_basic_block(f, "chan.again"),
+        );
+        let again = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, r, r.get_type().const_int(code, false), "")
+            .map_err(e)?;
+        self.builder
+            .build_conditional_branch(again, after, go)
+            .map_err(e)?;
+        self.builder.position_at_end(go);
+        Ok(after)
     }
 
     /// Whether `t` is an instance of the library type `name`.
