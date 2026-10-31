@@ -44,11 +44,17 @@ fn karac_new_cli_scaffolds_a_tool_that_runs_and_tests() {
     assert!(main.contains("env.args()") && main.contains("fs.read_to_string"));
     std::fs::write(proj.join("in.txt"), "a b c\nd e\n").unwrap();
 
-    // No file: the project's src/main.kara.
+    // No file: the project's src/main.kara. A usage error exits 2, and a
+    // file that cannot be read exits 1 saying why in words.
     let bare = karac_in(&proj, &["run"]);
     assert_eq!(
         (bare.status.code(), text(&bare.stderr)),
-        (Some(0), "usage: wc <file>\n".to_string())
+        (Some(2), "usage: wc <file>\n".to_string())
+    );
+    let missing = karac_in(&proj, &["run", "--", "nope.txt"]);
+    assert_eq!(
+        (missing.status.code(), text(&missing.stderr)),
+        (Some(1), "wc: nope.txt: file not found\n".to_string())
     );
     let run = karac_in(&proj, &["run", "--", "in.txt"]);
     assert_eq!(

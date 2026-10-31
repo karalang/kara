@@ -483,15 +483,29 @@ fn count_file(path: Str) -> Result[Counts, IoError] {
     Ok(count(text))
 }
 
+// What went wrong, in words.
+fn describe(e: IoError) -> String {
+    match e {
+        IoError.NotFound => "file not found".to_string(),
+        IoError.PermissionDenied => "permission denied".to_string(),
+        IoError.InvalidUtf8 => "not UTF-8 text".to_string(),
+        IoError.Other(message) => message.clone(),
+        other => f"{other}",
+    }
+}
+
 fn main() {
     let args = env.args();
     if args.len() < 2 {
         eprintln("usage: __NAME__ <file>");
-        return;
+        process.exit(2);
     }
     match count_file(args[1]) {
         Ok(c) => println(f"{c.lines} {c.words} {c.bytes} {args[1]}"),
-        Err(e) => eprintln(f"__NAME__: {args[1]}: {e}"),
+        Err(e) => {
+            eprintln(f"__NAME__: {args[1]}: {describe(e)}");
+            process.exit(1);
+        },
     }
 }
 "#
