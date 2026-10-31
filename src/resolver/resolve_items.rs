@@ -272,8 +272,10 @@ impl<'a> super::Resolver<'a> {
         // the parameter.
         if let Some(ref effects) = f.effects {
             self.channel_resource_params = crate::ast::channel_endpoint_param_names(&f.params);
+            self.value_resource_params = crate::ast::value_root_param_names(&f.params);
             self.resolve_effect_list(effects);
             self.channel_resource_params.clear();
+            self.value_resource_params.clear();
         }
 
         // Resolve body
@@ -420,8 +422,11 @@ impl<'a> super::Resolver<'a> {
                     if let Some(ref effects) = method.effects {
                         self.channel_resource_params =
                             crate::ast::channel_endpoint_param_names(&method.params);
+                        self.value_resource_params =
+                            crate::ast::value_root_param_names(&method.params);
                         self.resolve_effect_list(effects);
                         self.channel_resource_params.clear();
+                        self.value_resource_params.clear();
                     }
 
                     // Resolve default method body if present
@@ -747,8 +752,10 @@ impl<'a> super::Resolver<'a> {
         }
         if let Some(ref effects) = e.effects {
             self.channel_resource_params = crate::ast::channel_endpoint_param_names(&e.params);
+            self.value_resource_params = crate::ast::value_root_param_names(&e.params);
             self.resolve_effect_list(effects);
             self.channel_resource_params.clear();
+            self.value_resource_params.clear();
         }
         self.table.pop_scope();
     }

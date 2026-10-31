@@ -699,6 +699,35 @@ impl<'a> super::Resolver<'a> {
         for resource in &verb.resources {
             let name = resource.path.join(".");
             let first = resource.path.first().map(|s| s.as_str()).unwrap_or("");
+            // B-2026-10-31-4 — a resource rooted at the receiver (`sends(self)`,
+            // `writes(self.cache)`; design.md § Value-rooted resources). `self`
+            // is the receiver parameter, so it roots a resource exactly where
+            // the method has one.
+            if first == "self" {
+                if !self
+                    .table
+                    .lookup("self")
+                    .is_some_and(|s| matches!(s.kind, SymbolKind::SelfValue))
+                {
+                    self.errors.push(ResolveError {
+                        message: format!(
+                            "the resource `{name}` is rooted at `self`, and this function has no `self` receiver"
+                        ),
+                        span: resource.span,
+                        kind: ResolveErrorKind::UndefinedName,
+                        suggestion: None,
+                        replacement: None,
+                        stub_hint: None,
+                    });
+                }
+                continue;
+            }
+            // B-2026-10-31-9 — a resource rooted at a parameter of any type
+            // (`writes(f)` on a `File`, `receives(listener)`): substituted by
+            // the argument at each call (design.md § Value-rooted resources).
+            if self.value_resource_params.iter().any(|p| p == first) {
+                continue;
+            }
             if let Some(sym) = self.table.lookup(first) {
                 // Phase-10 (`std.web` gating): the symbol must actually be
                 // resource-shaped. Without this check any in-scope name

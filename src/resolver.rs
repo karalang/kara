@@ -1218,6 +1218,10 @@ pub struct Resolver<'a> {
     /// it, and leaking the set across signatures would let one function's
     /// `tx` satisfy another's verb clause.
     pub(crate) channel_resource_params: Vec<String>,
+    /// Every parameter of the signature whose effect list is being resolved,
+    /// set and cleared with `channel_resource_params`: any parameter roots a
+    /// resource (`writes(f)`, B-2026-10-31-9), a channel one or not.
+    pub(crate) value_resource_params: Vec<String>,
     /// The effect variables in scope: the enclosing impl's and the item's own
     /// `[with E]` (design.md § Effect variables). Read only to say that a
     /// name used as a type is an effect variable.
@@ -1383,6 +1387,7 @@ impl<'a> Resolver<'a> {
             binding_nodes: FxHashMap::default(),
             errors: Vec::new(),
             channel_resource_params: Vec::new(),
+            value_resource_params: Vec::new(),
             effect_vars_in_scope: Vec::new(),
             effectless_types: std::collections::HashSet::new(),
             current_impl_type: None,

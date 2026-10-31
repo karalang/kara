@@ -60,7 +60,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | diagnostics | 75 |
 | false-positive | 73 |
-| missing-feature | 55 |
+| missing-feature | 56 |
 | perf | 46 |
 | soundness | 30 |
 | miscompile | 18 |
@@ -84,9 +84,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | parser | 21 |
 | runtime | 20 |
 | effect | 10 |
+| resolver | 4 |
 | autopar | 4 |
 | other | 3 |
-| resolver | 3 |
 | lexer | 1 |
 ## Current state
 
@@ -104,6 +104,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-31-6 | 2026-10-31 | typecheck | low | A `#[derive(Debug)]` type has no callable `fmt_debug`: `u.fmt_debug()` is `no method 'fmt_debug' on type 'User'`, though design.md § Display and Debug declares `trait Debug { fn fmt_debug(self) -> String; }`; `dbg(u)` prints the derived form, so only the trait method is missing | — |
 | B-2026-10-31-7 | 2026-10-31 | mir | low | `karac build` (and `karac run`) runs the whole front end twice: `check_v2`'s pipeline, then `build_source_in_order_later` parses, resolves, typechecks and ownership-checks the program and its library again from source | — |
 | B-2026-10-31-8 | 2026-10-31 | mir-llvm | low | Every `karac` process starts at 15-20 ms and 46.6 MB peak RSS before doing anything (`karac --version`), and the link step of a small kata's `karac build` is its largest phase at 72-102 ms | — |
+| B-2026-10-31-9 | 2026-10-31 | resolver | medium | An effect clause cannot root a resource at a parameter that is not a channel endpoint: `with receives(listener)` on a `listener: TcpListener` and `with writes(f)` on a `File` are `'listener' is not an effect resource (it is a variable)`, though design.md § Value-rooted resources writes `writes(f)` and docs/library/io.md declares `WebSocket.accept(listener: TcpListener) … with receives(listener)` | — |
 
 ### Relocated
 

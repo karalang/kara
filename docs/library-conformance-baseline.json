@@ -22,19 +22,12 @@
       "reason": "fragment: `?` needs an enclosing function returning Result; the ladder wraps in `fn main()`",
       "first_diagnostic": "'?' requires the enclosing function to return `Result` or `Option`, found '()'"
     },
-    "7c29ba2e31ff": {
-      "where": "docs/library/concurrency.md:24",
-      "heading": "Concurrency > Channels",
-      "outcome": "SIGNATURE-MISSING",
-      "reason": "compiler: `with sends(self)` does not parse (B-2026-10-31-4)",
-      "first_diagnostic": "Expected identifier"
-    },
     "37aca5f38b06": {
       "where": "docs/library/concurrency.md:80",
       "heading": "Concurrency > Channels",
-      "outcome": "SIGNATURE-MISSING",
-      "reason": "compiler: `with receives(self)` does not parse (B-2026-10-31-4)",
-      "first_diagnostic": "Expected identifier"
+      "outcome": "UNDECLARED-NAME",
+      "reason": "fragment: `T` is bound by the `impl[T]` header and `Duration` imported from std.time elsewhere",
+      "first_diagnostic": "undefined type 'Duration'"
     },
     "d9b75d1a1e81": {
       "where": "docs/library/data.md:12",
@@ -42,34 +35,6 @@
       "outcome": "REJECTED",
       "reason": "fragment: `kara-data` is a package (after v1), not the standard library",
       "first_diagnostic": "unknown module `data`: this file belongs to no package, so the only modules it can import are the library's (`std.*`); a program of several files is a package, with a `kara.toml` beside its `src/`"
-    },
-    "c0cb7808cffa": {
-      "where": "docs/library/io.md:268",
-      "heading": "Input and output > Networking",
-      "outcome": "SIGNATURE-MISSING",
-      "reason": "compiler: `with sends(self)` / `receives(self)` does not parse (B-2026-10-31-4)",
-      "first_diagnostic": "Expected identifier"
-    },
-    "bcf2999336c6": {
-      "where": "docs/library/io.md:351",
-      "heading": "Networking > TLS server",
-      "outcome": "SIGNATURE-MISSING",
-      "reason": "compiler: `with sends(self)` / `receives(self)` does not parse (B-2026-10-31-4)",
-      "first_diagnostic": "Expected identifier"
-    },
-    "3b6de7029642": {
-      "where": "docs/library/io.md:375",
-      "heading": "Networking > WebSocket",
-      "outcome": "SIGNATURE-MISSING",
-      "reason": "doc: `mut self` is not a receiver form (`mut ref self`); also B-2026-10-31-4",
-      "first_diagnostic": "'mut' is a reserved keyword and cannot be used as an identifier"
-    },
-    "90e82c98e6de": {
-      "where": "docs/library/io.md:577",
-      "heading": "Processes > Running programs",
-      "outcome": "SIGNATURE-MISSING",
-      "reason": "compiler: `with sends(self)` / `receives(self)` does not parse (B-2026-10-31-4)",
-      "first_diagnostic": "Expected identifier"
     },
     "866d552a9220": {
       "where": "docs/library/io.md:644",

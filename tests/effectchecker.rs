@@ -10841,9 +10841,11 @@ fn channel_endpoint_param_is_a_valid_effect_resource() {
     );
 }
 
-/// The gate stays CLOSED for anything that is not a channel endpoint. This is
-/// the half that keeps the change from being "any variable is a resource":
-/// `sends(x)` on an `x: i64` is still the original error.
+/// The gate stays CLOSED for a scalar parameter, which has no identity to key
+/// a resource by, and for every name that is not a parameter. This is the
+/// half that keeps the change from being "any variable is a resource":
+/// `sends(x)` on an `x: i64` is still the original error. (Since
+/// B-2026-10-31-9 a parameter of any other type roots one: `writes(f)`.)
 #[test]
 fn a_non_channel_param_is_still_not_an_effect_resource() {
     let parsed = parse("fn f(x: i64) with sends(x) { }\n");

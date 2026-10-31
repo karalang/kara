@@ -933,6 +933,14 @@ pub struct EffectChecker<'a> {
     /// value-rooted". See `canonical_resource_name` for why the cheaper
     /// "not locally declared" test is unsound.
     pub(crate) channel_param_names: std::collections::HashSet<String>,
+    /// True while `parse_signature_effects` reads the clause of a method in
+    /// an `impl` of a channel endpoint (`impl Sender[T]`), where a resource
+    /// rooted at `self` is the channel (B-2026-10-31-4).
+    pub(crate) self_is_channel_endpoint: bool,
+    /// The parameters of that signature that root a resource this checker
+    /// does not charge: every one whose type is not a channel endpoint
+    /// (B-2026-10-31-9). See `parse_effect_list`.
+    pub(crate) uncharged_root_params: Vec<String>,
     /// Functions and their AST bodies (for inference). [`FnHandle`]
     /// borrows the AST directly (the SCC convergence loop and
     /// whole-program walks clone the HANDLE, never the body — review
@@ -1229,6 +1237,8 @@ impl<'a> EffectChecker<'a> {
             function_spans: FxHashMap::default(),
             mutual_recursion_allow: FxHashSet::default(),
             channel_param_names: std::collections::HashSet::new(),
+            self_is_channel_endpoint: false,
+            uncharged_root_params: Vec::new(),
             function_bodies: FxHashMap::default(),
             method_bodies: FxHashMap::default(),
             method_name_index: FxHashMap::default(),
@@ -2443,7 +2453,7 @@ impl<'a> EffectChecker<'a> {
         for item in items {
             match item {
                 Item::Function(f) => {
-                    let decl = self.parse_effect_list(&f.effects);
+                    let decl = self.parse_signature_effects(&f.effects, &f.params, None);
                     let sym = self.interner.intern(&f.name);
                     if effects_contain_with_underscore(&f.effects) {
                         self.fn_uses_with_underscore.insert(sym);
@@ -2484,7 +2494,11 @@ impl<'a> EffectChecker<'a> {
                             ImplItem::AssocType(_) => continue,
                         };
                         let key = self.interner.dotted_str(&type_name, &method.name);
-                        let decl = self.parse_effect_list(&method.effects);
+                        let decl = self.parse_signature_effects(
+                            &method.effects,
+                            &method.params,
+                            Some(&type_name),
+                        );
                         if effects_contain_with_underscore(&method.effects) {
                             self.fn_uses_with_underscore.insert(key);
                         }
@@ -2513,7 +2527,7 @@ impl<'a> EffectChecker<'a> {
                         };
                         // Method-level `with` fully overrides the trait-level default; no union.
                         let decl = if method.effects.is_some() {
-                            self.parse_effect_list(&method.effects)
+                            self.parse_signature_effects(&method.effects, &method.params, None)
                         } else {
                             trait_ceiling.clone()
                         };
@@ -2539,6 +2553,28 @@ impl<'a> EffectChecker<'a> {
                 _ => {}
             }
         }
+    }
+
+    /// `parse_effect_list` for a signature: `params` and the receiver's type
+    /// head (`self_type`, for an `impl` method) say which value-rooted
+    /// resources the clause names.
+    pub(crate) fn parse_signature_effects(
+        &mut self,
+        effects: &Option<EffectList>,
+        params: &[Param],
+        self_type: Option<&str>,
+    ) -> DeclaredEffects {
+        let channel = crate::ast::channel_endpoint_param_names(params);
+        self.uncharged_root_params = crate::ast::value_root_param_names(params)
+            .into_iter()
+            .filter(|p| !channel.contains(p))
+            .collect();
+        self.self_is_channel_endpoint =
+            self_type.is_some_and(|t| crate::ast::CHANNEL_ENDPOINT_TYPE_HEADS.contains(&t));
+        let decl = self.parse_effect_list(effects);
+        self.uncharged_root_params.clear();
+        self.self_is_channel_endpoint = false;
+        decl
     }
 
     fn parse_effect_list(&mut self, effects: &Option<EffectList>) -> DeclaredEffects {
@@ -2571,6 +2607,33 @@ impl<'a> EffectChecker<'a> {
                         );
                     }
                     for resource in &verb.resources {
+                        // A resource rooted at the receiver (B-2026-10-31-4) or
+                        // at a parameter (B-2026-10-31-9). On a channel
+                        // endpoint it is the channel, collapsed like a channel
+                        // parameter. On any other type it is a value this
+                        // checker has no key for: values are keyed by the MIR
+                        // effect pass, which infers them from the body
+                        // (`src/mir/effects.rs`), and this checker charges no
+                        // effect for acting on a value the caller passes, as it
+                        // charges none for writing through `mut ref self`. So
+                        // the clause states it and callers inherit nothing.
+                        let root = resource.path.first().map(String::as_str);
+                        if root.is_some_and(|r| self.uncharged_root_params.iter().any(|p| p == r)) {
+                            continue;
+                        }
+                        if root == Some("self") {
+                            if self.self_is_channel_endpoint {
+                                result.add(
+                                    Effect {
+                                        verb: verb.kind.clone(),
+                                        resource: crate::ast::CHANNEL_RESOURCE_CANONICAL
+                                            .to_string(),
+                                    },
+                                    EffectOrigin::Direct(verb.span),
+                                );
+                            }
+                            continue;
+                        }
                         let res_name = self.canonical_resource_name(&resource.path);
                         result.add(
                             Effect {

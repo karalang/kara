@@ -83,7 +83,7 @@ impl<'a> super::EffectChecker<'a> {
         }
 
         // Parse programmer-supplied annotations, then union with ABI defaults.
-        let programmer_decl = self.parse_effect_list(&e.effects);
+        let programmer_decl = self.parse_signature_effects(&e.effects, &e.params, None);
         let final_decl = match &programmer_decl {
             DeclaredEffects::Polymorphic | DeclaredEffects::PolymorphicWithFixed(_) => {
                 // Polymorphic extern: unusual but accepted; ABI defaults dropped.

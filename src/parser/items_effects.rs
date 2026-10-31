@@ -415,7 +415,18 @@ impl super::Parser {
 
     fn parse_resource(&mut self) -> Option<Resource> {
         let start = self.current_span();
-        let path = self.parse_path_segments()?;
+        // A resource rooted at the receiver, `sends(self)` or
+        // `writes(self.cache)` (design.md § Value-rooted resources,
+        // B-2026-10-31-4): `self` lexes as its own token, not an identifier.
+        let path = if self.eat(&Token::SelfValue) {
+            let mut path = vec!["self".to_string()];
+            while self.eat(&Token::Dot) {
+                path.push(self.expect_identifier()?);
+            }
+            path
+        } else {
+            self.parse_path_segments()?
+        };
 
         let param = if self.eat(&Token::LeftBracket) {
             let expr = self.parse_expression()?;

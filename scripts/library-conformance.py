@@ -30,7 +30,10 @@ Usage:
     scripts/library-conformance.py --json out.json    # machine-readable
     scripts/library-conformance.py --update-baseline  # rewrite the baseline
     scripts/library-conformance.py --check            # exit 1 on drift
-    scripts/library-conformance.py --only <hash|substr>
+    scripts/library-conformance.py --only <hash|path|substr>
+                                                      # narrow to matching
+                                                      # entries; --check then
+                                                      # judges only those
 """
 import argparse
 import importlib.util
@@ -185,13 +188,17 @@ def main():
 
     blocks = [b for f in markdown_files() for b in program_blocks(f)]
     declared = dc.collect_declared_names(blocks)
+    def selected(key, where, text=""):
+        # `--only` matches an entry's hash, its `path:line`, or its text.
+        return not args.only or any(args.only in s for s in (key, where, text))
+
     results = []
     for b in blocks:
-        if args.only and args.only not in b.hash and args.only not in b.text:
+        where = f"{rel(b.file)}:{b.line}"
+        if not selected(b.hash, where, b.text):
             continue
         r = classify_block(b, args.karac, declared)
-        r.update({"hash": b.hash, "where": f"{rel(b.file)}:{b.line}",
-                  "heading": b.heading})
+        r.update({"hash": b.hash, "where": where, "heading": b.heading})
         results.append(r)
         if args.only:
             print(f"# {r['where']} [{b.heading}] {r['outcome']} rung={r['rung']}")
@@ -201,44 +208,47 @@ def main():
             if "run" in r:
                 print("  run:", json.dumps(r["run"]))
 
-    if not args.only:
-        for src in sorted((ROOT / "examples").glob("*.kara")):
-            text = src.read_text(encoding="utf-8")
-            rc, diags = dc.run_karac(args.karac, text)
-            r = {"hash": "example:" + src.name, "where": rel(src),
-                 "heading": "example program", "rung": "file", "diagnostics": diags[:4]}
-            if rc != 0 or diags:
-                r["outcome"] = "REJECTED"
+    for src in sorted((ROOT / "examples").glob("*.kara")):
+        if not selected("example:" + src.name, rel(src)):
+            continue
+        text = src.read_text(encoding="utf-8")
+        rc, diags = dc.run_karac(args.karac, text)
+        r = {"hash": "example:" + src.name, "where": rel(src),
+             "heading": "example program", "rung": "file", "diagnostics": diags[:4]}
+        if rc != 0 or diags:
+            r["outcome"] = "REJECTED"
+        else:
+            rc, stdout, stderr = mir_run(args.karac, text)
+            r["run"] = {"exit": rc, "stdout": stdout[-2000:], "stderr": stderr[-1000:]}
+            exp = src.with_suffix(".expected")
+            if rc is None:
+                r["outcome"] = "ran-timeout"
+            elif exp.exists():
+                r["outcome"] = ("conforms" if stdout == exp.read_text(encoding="utf-8")
+                                else "OUTPUT-DIFFERS")
             else:
-                rc, stdout, stderr = mir_run(args.karac, text)
-                r["run"] = {"exit": rc, "stdout": stdout[-2000:], "stderr": stderr[-1000:]}
-                exp = src.with_suffix(".expected")
-                if rc is None:
-                    r["outcome"] = "ran-timeout"
-                elif exp.exists():
-                    r["outcome"] = ("conforms" if stdout == exp.read_text(encoding="utf-8")
-                                    else "OUTPUT-DIFFERS")
-                else:
-                    r["outcome"] = "conforms" if rc == 0 else "RUN-FAILED"
-            results.append(r)
-        for manifest in sorted((ROOT / "examples").glob("*/kara.toml")):
-            pkg = manifest.parent
-            if not any((pkg / "src" / e).exists() for e in ("main.kara", "lib.kara")):
-                # A directory of standalone programs under a manifest: each
-                # file is checked on its own.
-                for src in sorted((pkg / "src").glob("*.kara")):
-                    rc, diags = dc.run_karac(args.karac, src.read_text(encoding="utf-8"))
-                    results.append({"hash": f"file:{pkg.name}/{src.name}",
-                                    "where": rel(src), "heading": "example file",
-                                    "rung": "file",
-                                    "outcome": "conforms" if rc == 0 and not diags
-                                    else "REJECTED", "diagnostics": diags[:4]})
-                continue
-            rc, diags = check_package(args.karac, pkg)
-            results.append({"hash": "package:" + pkg.name, "where": rel(manifest),
-                            "heading": "example package", "rung": "package",
-                            "outcome": "conforms" if rc == 0 and not diags else "REJECTED",
-                            "diagnostics": diags[:4]})
+                r["outcome"] = "conforms" if rc == 0 else "RUN-FAILED"
+        results.append(r)
+    for manifest in sorted((ROOT / "examples").glob("*/kara.toml")):
+        pkg = manifest.parent
+        if not selected("package:" + pkg.name, rel(manifest)):
+            continue
+        if not any((pkg / "src" / e).exists() for e in ("main.kara", "lib.kara")):
+            # A directory of standalone programs under a manifest: each
+            # file is checked on its own.
+            for src in sorted((pkg / "src").glob("*.kara")):
+                rc, diags = dc.run_karac(args.karac, src.read_text(encoding="utf-8"))
+                results.append({"hash": f"file:{pkg.name}/{src.name}",
+                                "where": rel(src), "heading": "example file",
+                                "rung": "file",
+                                "outcome": "conforms" if rc == 0 and not diags
+                                else "REJECTED", "diagnostics": diags[:4]})
+            continue
+        rc, diags = check_package(args.karac, pkg)
+        results.append({"hash": "package:" + pkg.name, "where": rel(manifest),
+                        "heading": "example package", "rung": "package",
+                        "outcome": "conforms" if rc == 0 and not diags else "REJECTED",
+                        "diagnostics": diags[:4]})
 
     good = {"conforms", "confirmed-rejection", "skipped", "elided", "unresolved",
             "signatures-ok", "ran-timeout"}
@@ -247,8 +257,13 @@ def main():
     if BASELINE.exists():
         baseline = json.loads(BASELINE.read_text(encoding="utf-8")).get("blocks", {})
 
+    # The baseline entries this run judged: all of them, or under `--only`
+    # the ones it ran. An entry outside that is neither fixed nor dropped. (A
+    # full run judges an entry whose block is gone, since an edit rehashes it.)
+    judged = {r["hash"] for r in results} if args.only else set(baseline)
+
     if args.update_baseline:
-        entries = {}
+        entries = {h: e for h, e in baseline.items() if h not in judged}
         for r in bad:
             prev = baseline.get(r["hash"], {})
             entries[r["hash"]] = {
@@ -277,7 +292,8 @@ def main():
             print(f"        {d.get('phase')}: {d.get('message')}")
     if args.check:
         new = [r for r in bad if r["hash"] not in baseline]
-        fixed = [h for h in baseline if h not in {r["hash"] for r in bad}]
+        bad_hashes = {r["hash"] for r in bad}
+        fixed = [h for h in baseline if h in judged and h not in bad_hashes]
         for h in fixed:
             print(f"  FIXED {baseline[h]['where']} — remove it from the baseline")
         if new:

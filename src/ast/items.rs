@@ -14610,6 +14610,27 @@ pub fn channel_endpoint_param_names(params: &[Param]) -> Vec<String> {
     out
 }
 
+/// Names of the parameters that can root a resource in their signature's
+/// effect clause (`writes(f)`, `receives(listener)`; design.md § Value-rooted
+/// resources, B-2026-10-31-9): every one but a scalar's, which is a copy with
+/// no identity to key a resource by (`sends(x)` on an `x: i64` stays an error).
+pub fn value_root_param_names(params: &[Param]) -> Vec<String> {
+    const SCALARS: &[&str] = &[
+        "i8", "i16", "i32", "i64", "i128", "isize", "u8", "u16", "u32", "u64", "u128", "usize",
+        "f32", "f64", "bool", "char",
+    ];
+    params
+        .iter()
+        .filter(|p| match &p.ty.kind {
+            crate::ast::TypeKind::Path(path) => {
+                !(path.segments.len() == 1 && SCALARS.contains(&path.segments[0].as_str()))
+            }
+            _ => true,
+        })
+        .filter_map(|p| p.name().map(str::to_string))
+        .collect()
+}
+
 /// True when the type's root head (after stripping `ref` / `mut ref` / `weak`)
 /// is a channel endpoint.
 pub fn type_head_is_channel_endpoint(ty: &TypeExpr) -> bool {
