@@ -257,7 +257,7 @@ impl<'a> super::TypeChecker<'a> {
                     }
                 } else {
                     let arg_ty = self.infer_expr(&args[0].value);
-                    if !matches!(arg_ty, Type::Int(_) | Type::Error) {
+                    if !is_integer_argument(&arg_ty) {
                         self.type_error(
                             format!(
                                 "'char_at' expects an integer index, found '{}'",
@@ -512,7 +512,7 @@ impl<'a> super::TypeChecker<'a> {
                 } else {
                     for arg in args {
                         let arg_ty = self.infer_expr(&arg.value);
-                        if !matches!(arg_ty, Type::Int(_) | Type::Error) {
+                        if !is_integer_argument(&arg_ty) {
                             self.type_error(
                                 format!(
                                     "'substring' expects integer byte indices, found '{}'",
@@ -545,7 +545,7 @@ impl<'a> super::TypeChecker<'a> {
                     }
                 } else {
                     let arg_ty = self.infer_expr(&args[0].value);
-                    if !matches!(arg_ty, Type::Int(_) | Type::Error) {
+                    if !is_integer_argument(&arg_ty) {
                         self.type_error(
                             format!(
                                 "'repeat' expects an integer count, found '{}'",
@@ -793,7 +793,7 @@ impl<'a> super::TypeChecker<'a> {
                     }
                 } else {
                     let arg_ty = self.infer_expr(&args[0].value);
-                    if !matches!(arg_ty, Type::Int(_) | Type::Error) {
+                    if !is_integer_argument(&arg_ty) {
                         self.type_error(
                             format!(
                                 "'truncate' expects an integer length, found '{}'",
@@ -961,7 +961,7 @@ impl<'a> super::TypeChecker<'a> {
                 } else {
                     for arg in args {
                         let arg_ty = self.infer_expr(&arg.value);
-                        if !matches!(arg_ty, Type::Int(_) | Type::Error) {
+                        if !is_integer_argument(&arg_ty) {
                             self.type_error(
                                 format!(
                                     "'slice' expects integer byte indices, found '{}'",
@@ -2084,6 +2084,18 @@ fn is_char_arg(t: &Type) -> bool {
     match t {
         Type::Char | Type::Error => true,
         Type::Ref(inner) => matches!(**inner, Type::Char),
+        _ => false,
+    }
+}
+
+/// An integer argument to a string method's index, count or length: an
+/// integer, or a borrow of one, which is read as its value the way an `i64`
+/// parameter reads it (`for len in lens.iter() { s.substring(0, len) }`,
+/// B-2026-11-01-4).
+fn is_integer_argument(ty: &Type) -> bool {
+    match ty {
+        Type::Int(_) | Type::Error => true,
+        Type::Ref(inner) | Type::MutRef(inner) => matches!(inner.as_ref(), Type::Int(_)),
         _ => false,
     }
 }
