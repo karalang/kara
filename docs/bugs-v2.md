@@ -61,7 +61,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | diagnostics | 85 |
 | false-positive | 82 |
 | missing-feature | 60 |
-| perf | 56 |
+| perf | 58 |
 | soundness | 31 |
 | miscompile | 25 |
 | run-vs-build | 19 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | typecheck | 138 |
 | mir | 88 |
-| mir-llvm | 63 |
+| mir-llvm | 65 |
 | cli | 49 |
 | ownership | 38 |
 | interp | 26 |
@@ -114,6 +114,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-01-12 | 2026-11-01 | mir | high | A `mut` field of handle-aggregate type passed to a borrowed parameter (`g(h.left, h)` with `a: Option[N]`) is lent in place rather than counted (core-semantics §6.2), so a write to the field through another handle during the call changes what the parameter reads: `cut(h); match a { Some(x) => x.val, None => -1 }` prints -1, want 7 | — |
 | B-2026-11-01-16 | 2026-11-01 | mir | medium | An assignment whose place is a method-call chain evaluates the value before the place, against core-semantics 8.2 (place operands first): `m.entry(1).or_insert(Bag { n: 1 }).n = m[1].n * 2` on an empty map panics `key not found` (want: the place inserts the key, then the value reads it, which 8.2 makes a borrow error), and check accepts it | — |
 | B-2026-11-01-17 | 2026-11-01 | runtime | medium | Kata 71's auto-par binary runs 1.6-2.6x SLOWER with exactly two workers than with one (KARAC_THREADS=2: 0.24-0.39 s against 0.15 s) on the M5, on 5x the cycles for 7% more instructions; three or more workers run 0.04-0.06 s | — |
+| B-2026-11-01-18 | 2026-11-01 | mir-llvm | medium | Kata 87's scramble-string DP runs 1.67x legacy's instructions on the MIR backend (1.13x its cycles): the seq lane went from 0.95x to 1.09x rustc -O and the par lane from 1.03x to 1.39x rayon | — |
+| B-2026-11-01-19 | 2026-11-01 | mir-llvm | low | Kata 88's merge-sorted-array two-pointer loop runs 1.38x legacy's instructions and 1.23x its cycles on the MIR backend: 0.81x -> 1.00x rustc -O | — |
 
 ### Relocated
 
