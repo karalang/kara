@@ -81,10 +81,11 @@ same jobs, one task per job, and prints them in job order.
 Three rows, filed in the kara ledger for the MIR builder:
 
 - B-2026-11-01-1: `d ?? Node.Leaf(0)` on a bare `Option[Node]` parameter of a `shared
-  enum` passes `karac check` but the MIR build refuses it. The app takes
-  that parameter as `own` until the row is fixed.
-- B-2026-11-01-2: while any function's MIR lowering fails, `karac check` prints "All
-  checks passed" and reports none of the program's MIR borrow errors.
+  enum` passed `karac check` but the MIR build refused it. Fixed in kara
+  f667cd24ea, so the parameter is borrowed again.
+- B-2026-11-01-2: while any function's MIR lowering failed, `karac check` printed "All
+  checks passed" and reported none of the program's MIR borrow errors.
+  Fixed in kara 3e19124daa: check now refuses what the build refuses.
 - B-2026-11-01-3: `Some(k) => kind_name(k)` on a `ref Option[Node]` scrutinee is refused
   as E0516, though `k` is a `ref` into the scrutinee. The app copies the
   name to a `String` there, with a comment naming the row.

@@ -3311,9 +3311,7 @@ fn parse_parameter_declaration(p: mut ref P) -> Result[Node, String] {
     build_parameter_declaration(mut p, spec, decl, spec_coord)
 }
 
-// B-2026-11-01-1: `decl` is `own` because the MIR build refuses `decl ?? ...` on a bare
-// `Option[Node]` parameter; drop the `own` when the row is fixed.
-fn build_parameter_declaration(p: mut ref P, spec: ref DeclSpec, decl: own Option[Node], spec_coord: own Option[Coord]) -> Result[Node, String] {
+fn build_parameter_declaration(p: mut ref P, spec: ref DeclSpec, decl: Option[Node], spec_coord: own Option[Coord]) -> Result[Node, String] {
     if spec.ty.len() > 1 {
         let last = names_of(spec.ty[spec.ty.len() - 1])?;
         if last.len() == 1 and is_type_in_scope(p, last[0]) {
