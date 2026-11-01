@@ -58,13 +58,13 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
+| false-positive | 80 |
 | diagnostics | 78 |
-| false-positive | 77 |
 | missing-feature | 60 |
-| perf | 49 |
+| perf | 52 |
 | soundness | 31 |
 | miscompile | 22 |
-| run-vs-build | 18 |
+| run-vs-build | 19 |
 | other | 15 |
 | codegen-gap | 13 |
 | leak | 3 |
@@ -74,10 +74,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 133 |
-| mir | 79 |
-| mir-llvm | 58 |
-| cli | 46 |
+| typecheck | 134 |
+| mir | 83 |
+| mir-llvm | 60 |
+| cli | 47 |
 | ownership | 37 |
 | interp | 26 |
 | codegen | 22 |
@@ -90,7 +90,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | lexer | 1 |
 ## Current state
 
-_Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-10-31). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-11-01). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open
 
@@ -104,7 +104,14 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-31-28 | 2026-10-31 | mir-llvm | low | A rare LeakSanitizer report on corpus programs that spawn tasks or run `par` under load (fixtures/coro_e2e/SPAWN_NONBLOCK_SRC, SPAWN_MULTI_CAPTURE_SRC, interpreter/concurrency/test_dbg_json_in_par_emits_numeric_task_id, par_codegen/test_e2e_par_join_branch_float_method) | — |
 | B-2026-10-31-34 | 2026-10-31 | mir-llvm | high | Under the multi-worker pool, `send` on a full bounded `channel(n)` from several producer tasks returns `Err` instead of waiting: compiled programs lose values and print a wrong sum, `__mir-run` and `KARAC_THREADS=1` are right | — |
 | B-2026-10-31-37 | 2026-10-31 | mir-llvm | medium | kata 38 (count_and_say) runs legacy's instruction count but 1.22-1.28x its cycles on the MIR backend, 1.44x rustc -O on wall time where legacy was 1.10x; the cause is unattributed | — |
-| B-2026-10-31-38 | 2026-10-31 | mir-llvm | high | MIR reloads a value the previous loop iteration just stored (kata 64's `dp[c] = cost + min(dp[c], dp[c - 1])` loads dp[c-1] back through an `ldp` that overlaps the last `str`), where legacy carried it in a register: same 15-instruction loop, 1.77x legacy's cycles on the M5; katas 6 and 293 show the same instructions-vs-cycles signature | — |
+| B-2026-10-31-38 | 2026-10-31 | mir-llvm | high | MIR reloads a value the previous loop iteration just stored (kata 64's `dp[c] = cost + min(dp[c], dp[c - 1])` loads dp[c-1] back through an `ldp` that overlaps the last `str`), where legacy carried it in a register: same 15-instruction loop, 1.77x legacy's cycles on the M5; katas 6 and 293 show the same instructions-vs-cycles signature; on x86 it shows on wall time too: kata 1031's prefix-sum loop reloads prefix[i] and the input Vec's buffer pointer every trip, 2.7x rustc -O -C overflow-checks=on | — |
+| B-2026-10-31-39 | 2026-10-31 | mir-llvm | medium | Kata 9's auto-par binary executes a constant +1.85G instructions (+75%) whenever it has two or more workers, flat from 2 to 18: the par lane runs 2.10x rayon's time where it ran 1.21x, the B-2026-10-28-35 signature on a loop shape its fix (5b6aab2a3c) did not cover | — |
+| B-2026-10-31-40 | 2026-10-31 | mir-llvm | medium | Kata 10's regex DP runs 1.37x legacy's instructions and 1.50x its cycles on the MIR backend: the seq lane went from 1.11x to 1.60x rustc -O | — |
+| B-2026-10-31-41 | 2026-10-31 | mir | medium | karac still compiles a kata 1.54x slower than rustc -O at twice its peak memory on the M5 (median over 24 katas: 165 ms vs 103 ms, 59.8 MiB vs 28.3 MiB), after B-2026-10-28-37's library-prune fix | — |
+| B-2026-11-01-1 | 2026-11-01 | mir | medium | `d ?? Node.Leaf(0)` on a bare `d: Option[Node]` parameter, `Node` a `shared enum`, passes `karac check` and is refused by the MIR build as a move out of a borrowed place; `Option[Node]` is a handle aggregate (core-semantics §6.1), so the `??` should count the handle and run, as check already says | — |
+| B-2026-11-01-2 | 2026-11-01 | cli+mir | medium | `karac check` prints "All checks passed" for a program whose MIR lowering fails, and then reports none of the program's MIR borrow errors anywhere: `checked_borrow_errors` (src/mir/lower.rs) returns an empty list when `lower_typed` errs, so one refused function hides an E0516 in another and `karac run` is the first to fail | — |
+| B-2026-11-01-3 | 2026-11-01 | mir | medium | `match n { Some(k) => kind_name(k), None => "NoneType" }` with `n: ref Option[Node]`, `Node` a `shared enum` and `kind_name(n: ref Node) -> Str`, is refused as E0516 "cannot drop `k` while `cls` still holds a borrow of it" (E0509 when returned directly); core-semantics §4.6 makes `k` a `ref` into `n`, so the view lives as long as `n`, and the same match on a non-shared enum checks | — |
+| B-2026-11-01-4 | 2026-11-01 | typecheck | low | `s.substring(0, len)` with `len` a `ref i64` from `for len in lengths.iter()` is refused (E0200 "'substring' expects integer byte indices, found 'ref i64'"), with no fix-it, where a user function's `i64` parameter, `v[len]`, `v.truncate(len)` and `len.min(..)` all take the same `ref i64`; char_at, repeat, String.truncate and slice check the same way | — |
 
 ### Relocated
 
