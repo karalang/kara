@@ -3491,12 +3491,16 @@ fn mir_check_message(e: &crate::mir::BorrowError) -> String {
 fn mir_check_text(text: &str) -> String {
     let lead = regex::Regex::new(r"^\d+:\d+( in `[^`]*`)?: (bb\d+\[(\d+|term)\]: )?").unwrap();
     let block = regex::Regex::new(r"bb\d+\[(\d+|term)\]( at)? ?").unwrap();
-    let temp = regex::Regex::new(r"\(\*_\d+\)(\.\d+)*|\b_\d+(\.\d+)*\b").unwrap();
+    // An index is a temporary too: `a[_8]` reads `a[..]`, and a temporary
+    // indexed (`_7[_8]`) is one temporary value, not two (B-2026-11-01-38).
+    let index = regex::Regex::new(r"\[_\d+\]").unwrap();
+    let temp = regex::Regex::new(r"\(\*_\d+\)(\.\d+|\[\.\.\])*|\b_\d+(\.\d+|\[\.\.\])*").unwrap();
     let t = lead.replace(text, "");
     let t = block
         .replace_all(&t, "")
         .replace("(borrow at )", "")
         .replace("  ", " ");
+    let t = index.replace_all(&t, "[..]");
     temp.replace_all(&t, "a temporary value").into_owned()
 }
 
@@ -3518,6 +3522,14 @@ mod mir_message_tests {
         assert_eq!(
             mir_check_text("move of x_2 out of v"),
             "move of x_2 out of v"
+        );
+        assert_eq!(
+            mir_check_text("3:9: bb1[2]: write of _7[_8] while it is borrowed [E0516]"),
+            "write of a temporary value while it is borrowed [E0516]"
+        );
+        assert_eq!(
+            mir_check_text("write of a[_8] while it is borrowed"),
+            "write of a[..] while it is borrowed"
         );
     }
 

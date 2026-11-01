@@ -18036,6 +18036,20 @@ impl<'l, 'a> Bx<'l, 'a> {
                     self.assign(r, Rvalue::Ref(kind, Place::local(v)));
                     return Ok(Operand::Move(Place::local(r)));
                 }
+                // A `Copy` place a later argument writes, lent to a bare
+                // parameter (`ref T` at `T = i64`, `ref Array[i64, 2]`):
+                // the parameter is a copy at this instance (core semantics
+                // §4.1, §5.8), read at its own position (§8.1), so the
+                // callee is lent the value read then and the place is free
+                // for the later argument (B-2026-11-01-35, -38).
+                if kind == BorrowKind::Shared && self.is_copy(held) && self.read_now.contains(&a.id)
+                {
+                    let v = self.scoped_temp(held);
+                    self.assign(v, Rvalue::Use(Operand::Copy(p)));
+                    let r = self.temp(pt);
+                    self.assign(r, Rvalue::Ref(kind, Place::local(v)));
+                    return Ok(Operand::Move(Place::local(r)));
+                }
                 if self.erases(&Operand::Copy(p.clone()), fn_t) {
                     let op = if self.is_copy(held) {
                         Operand::Copy(p)
