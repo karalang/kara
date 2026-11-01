@@ -1,0 +1,32 @@
+shared struct Node { val: i64, mut next: Option[Node], mut count: i64 }
+
+fn cut(h: Node) {
+    h.next = None;
+    h.count = 99;
+}
+
+// `a` and `n` are borrowed parameters, but `h.next` and `h.count` are `mut`
+// fields of a `shared` value whose types are a handle aggregate and `Copy`,
+// so the call reads them as values: `cut` writing the fields through `h`
+// changes neither (core semantics §6.2).
+fn after_cut(a: Option[Node], h: Node) -> i64 {
+    cut(h);
+    match a {
+        Some(x) => x.val,
+        None => -1,
+    }
+}
+
+fn count_after_cut(n: i64, h: Node) -> i64 {
+    cut(h);
+    n
+}
+
+fn main() {
+    let h = Node { val: 1, next: Some(Node { val: 7, next: None, count: 0 }), count: 5 };
+    println(f"{after_cut(h.next, h)}");
+    println(f"{h.next.is_some()}");
+    h.count = 5;
+    println(f"{count_after_cut(h.count, h)}");
+    println(f"{h.count}");
+}

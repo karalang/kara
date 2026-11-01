@@ -1,0 +1,10 @@
+source = "B-2026-11-01-12"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["shared"]
+expected_from = "spec"
+rules = ["6.2"]
+backends = []
+env = {}
+note = "core-semantics §6.2: a `mut` field of `Copy` or handle-aggregate type is read as a value, so handing `h.next` (or `h.count`) to a borrowed parameter gives the callee a copy, and a write to the field through another handle while the call runs does not change what the parameter reads (7, 5). The writes themselves land (false, 99)."

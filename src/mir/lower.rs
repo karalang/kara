@@ -388,6 +388,21 @@ fn lower_program_inner<'a>(
                 })
             })
             .collect(),
+        mut_fields: program
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                Item::StructDef(s) => Some(s),
+                _ => None,
+            })
+            .flat_map(|s| {
+                s.fields
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, f)| f.is_mut)
+                    .map(|(i, _)| (s.name.clone(), i as u32))
+            })
+            .collect(),
         let_fn_effects: FxHashMap::default(),
         user_types,
         refined: program
@@ -1029,6 +1044,10 @@ struct Lcx<'a> {
     /// (struct, field): a call through one has those effects (core
     /// semantics §12, B-2026-10-27-2).
     fn_field_effects: FxHashMap<(String, String), Vec<DeclaredEffect>>,
+    /// The `mut` fields of the program's structs, as (struct, field index):
+    /// one of a `shared` value whose type is `Copy` or counted is read as a
+    /// value, never lent in place (core semantics §6.2, B-2026-11-01-12).
+    mut_fields: FxHashSet<(String, u32)>,
     /// The `let` bindings whose written function type declares an effect
     /// clause, by symbol, so a closure that captures one finds it too
     /// (B-2026-10-27-8).
@@ -4010,6 +4029,41 @@ impl<'l, 'a> Bx<'l, 'a> {
         self.b
             .assign(bb, Place::local(l), Rvalue::Cast(kind, op, t));
         Operand::Copy(Place::local(l))
+    }
+
+    /// Whether `p` ends at a `mut` field of a `shared` value's contents
+    /// (core semantics §6.2).
+    fn shared_mut_field(&self, p: &Place) -> bool {
+        let Some(k) = p
+            .projection
+            .iter()
+            .rposition(|el| matches!(el, ProjElem::Field(..)))
+        else {
+            return false;
+        };
+        if k + 1 != p.projection.len() {
+            return false;
+        }
+        let ProjElem::Field(FieldIdx(i), _) = p.projection[k] else {
+            return false;
+        };
+        let mut q = Place::local(p.local);
+        let mut shared = false;
+        for el in &p.projection[..k] {
+            shared |= matches!(
+                self.tys().tcx().kind(self.place_type(&q)),
+                HK::Shared { .. }
+            );
+            q = q.project(*el);
+        }
+        let base = self.place_type(&q);
+        shared |= matches!(self.tys().tcx().kind(base), HK::Shared { .. });
+        shared
+            && self
+                .tys()
+                .tcx()
+                .adt_of(base)
+                .is_some_and(|(adt, _)| self.lcx.mut_fields.contains(&(adt.name.clone(), i)))
     }
 
     /// Whether `p` is reached through a `shared` value, a reference or an
@@ -17876,6 +17930,27 @@ impl<'l, 'a> Bx<'l, 'a> {
                         self.assign(r, Rvalue::Ref(kind, Place::local(v)));
                         return Ok(Operand::Move(Place::local(r)));
                     }
+                }
+                // A `mut` field of a `shared` value that is `Copy` or
+                // counted is read as a value (core semantics §6.2): the
+                // callee is lent a copy, so a write to the field through
+                // another handle while it runs is not what it reads
+                // (B-2026-11-01-12).
+                if kind == BorrowKind::Shared
+                    && (self.is_copy(held)
+                        || self.is_handle(held)
+                        || self.is_handle_aggregate(held))
+                    && self.shared_mut_field(&p)
+                {
+                    let v = self.scoped_temp(held);
+                    if self.is_copy(held) {
+                        self.assign(v, Rvalue::Use(Operand::Copy(p)));
+                    } else {
+                        self.count_copy(p, held, Place::local(v));
+                    }
+                    let r = self.temp(pt);
+                    self.assign(r, Rvalue::Ref(kind, Place::local(v)));
+                    return Ok(Operand::Move(Place::local(r)));
                 }
                 if self.erases(&Operand::Copy(p.clone()), fn_t) {
                     let op = if self.is_copy(held) {
