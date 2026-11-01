@@ -59,7 +59,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 85 |
-| false-positive | 81 |
+| false-positive | 82 |
 | missing-feature | 60 |
 | perf | 55 |
 | soundness | 31 |
@@ -74,7 +74,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 137 |
+| typecheck | 138 |
 | mir | 87 |
 | mir-llvm | 63 |
 | cli | 49 |
@@ -110,13 +110,12 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-31-43 | 2026-10-31 | mir | medium | Implicit auto-par no longer fires on kata 23 (merge k sorted lists), which the legacy backend parallelized: its par lane now runs the sequential program, 1.49x -> 5.15x rayon | — |
 | B-2026-10-31-44 | 2026-10-31 | mir-llvm | high | MIR never full-unrolls a constant-trip loop that calls or exits early, where the June legacy fix (B-2026-06-17-7) did: kata 36 went from 0.55x to 1.66x rustc -O and kata 37 from 0.97x to 1.37x | — |
 | B-2026-10-31-45 | 2026-10-31 | mir-llvm | medium | `unsafe { xs.get_unchecked(i) }` is bounds-checked on the MIR backend: the escape hatch design.md documents does nothing, and kata 28's unchecked KMP no longer gains on the checked one (1.14x -> 1.01x) | — |
-| B-2026-11-01-1 | 2026-11-01 | mir | medium | `d ?? Node.Leaf(0)` on a bare `d: Option[Node]` parameter, `Node` a `shared enum`, passes `karac check` and is refused by the MIR build as a move out of a borrowed place; `Option[Node]` is a handle aggregate (core-semantics §6.1), so the `??` should count the handle and run, as check already says | — |
-| B-2026-11-01-2 | 2026-11-01 | cli+mir | medium | `karac check` prints "All checks passed" for a program whose MIR lowering fails, and then reports none of the program's MIR borrow errors anywhere: `checked_borrow_errors` (src/mir/lower.rs) returns an empty list when `lower_typed` errs, so one refused function hides an E0516 in another and `karac run` is the first to fail | — |
 | B-2026-11-01-3 | 2026-11-01 | mir | medium | `match n { Some(k) => kind_name(k), None => "NoneType" }` with `n: ref Option[Node]`, `Node` a `shared enum` and `kind_name(n: ref Node) -> Str`, is refused as E0516 "cannot drop `k` while `cls` still holds a borrow of it" (E0509 when returned directly); core-semantics §4.6 makes `k` a `ref` into `n`, so the view lives as long as `n`, and the same match on a non-shared enum checks | — |
 | B-2026-11-01-7 | 2026-11-01 | mir | high | A call, operator or array literal reads a place operand only after the later operands have run, against core-semantics 8.1 (left to right): `pair(c.n, bump(mut c))` prints `11 11` (want `1 11`), `c.n + bump(mut c)` is 22 (want 12) and `[y, { y = 7; y }]` is `[7, 7]` on mir-interp and mir-llvm alike; when the later operand MOVES the place, `wrap(b.n, vec![b])` is refused at run and build (`use of _1.0, which may have been moved or never initialized`) though `karac check` accepts it | — |
 | B-2026-11-01-12 | 2026-11-01 | mir | high | A `mut` field of handle-aggregate type passed to a borrowed parameter (`g(h.left, h)` with `a: Option[N]`) is lent in place rather than counted (core-semantics §6.2), so a write to the field through another handle during the call changes what the parameter reads: `cut(h); match a { Some(x) => x.val, None => -1 }` prints -1, want 7 | — |
 | B-2026-11-01-13 | 2026-11-01 | parser | low | `karac fix` gives `println!("{} {}", c.n, s.replace("a", "b"))` no edit, because format_macro_rewrite refuses any argument holding a `"`, though an f-string hole balances quotes (`f"{s.replace("a", "b")}"` parses); `println!("{} {}", c.n, s.trim())` is rewritten | — |
 | B-2026-11-01-14 | 2026-11-01 | cli | low | `karac run` with no file inside a `karac new --lib` project says "missing file argument" and suggests "`karac run` inside a project to run its src/main.kara", while the user is inside one; `karac build` there says the library has no `main` | — |
+| B-2026-11-01-15 | 2026-11-01 | typecheck | medium | `h.d ?? x` with `h` a borrowed struct whose field `d: Option[Node]` holds a `shared` handle is refused by check as a move out of a borrow; core-semantics §6.1 makes the read a count, as check already says for a bare `d: Option[Node]` parameter (B-2026-11-01-1) | — |
 
 ### Relocated
 
@@ -493,6 +492,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-31-34 | mir-llvm | high | Under the multi-worker pool, `send` on a full bounded `channel(n)` from several producer tasks returns `Err` instead of waiting: compiled programs lo… | 59a342fad1 |
 | B-2026-10-31-35 | typecheck+cli | medium | User-facing diagnostics and help say "in v1", "v1.5", "post-v1", "v1.x" for what 0.9 does not support ("identifiers must be ASCII in v1", "batched ma… | 4f8cb2f424 |
 | B-2026-10-31-36 | cli | high | `karac build --target=wasm_wasi` on a package, in a binary without the llvm feature, checks the package for the HOST platform: `import host` with onl… | b478379db3 |
+| B-2026-11-01-1 | mir | medium | `d ?? Node.Leaf(0)` on a bare `d: Option[Node]` parameter, `Node` a `shared enum`, passes `karac check` and is refused by the MIR build as a move out… | f667cd24ea |
+| B-2026-11-01-2 | cli+mir | medium | `karac check` prints "All checks passed" for a program whose MIR lowering fails, and then reports none of the program's MIR borrow errors anywhere: `… | 3e19124daa |
 | B-2026-11-01-4 | typecheck | low | `s.substring(0, len)` with `len` a `ref i64` from `for len in lengths.iter()` is refused (E0200 "'substring' expects integer byte indices, found 'ref… | b740a6831e |
 | B-2026-11-01-5 | parser | low | A Rust-spelled mutable receiver or parameter type (`fn find(mut self, ..)`, `&mut self`, `ref mut self`, `self: mut ref Self`, `v: &mut Vec[i64]`) ge… | 59f20988a7 |
 | B-2026-11-01-6 | typecheck+mir | medium | A struct variant named like a library type (`Stmt.Match { cases: Vec[i64] }`, also `Response`, `Client`, `Regex`, `Stats`) passes `karac check` but `… | d07a6cee24 |
