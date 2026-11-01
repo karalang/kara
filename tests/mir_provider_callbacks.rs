@@ -157,7 +157,7 @@ fn provider_reached_from_natives_and_par() {
 fn provider_tasks_writing_the_provider_are_refused() {
     check_refuses(
         "tasks-write",
-        "fn both(g: Fn() -> i64) -> i64 {
+        "fn both(g: Fn() -> i64 + CrossTask) -> i64 {
     let tg = TaskGroup.new();
     let a = tg.spawn(|| g());
     let b = tg.spawn(|| g());

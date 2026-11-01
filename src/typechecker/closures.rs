@@ -177,11 +177,13 @@ impl<'a> super::TypeChecker<'a> {
                 self.closure_once_reasons
                     .insert(SpanKey::from_span(closure_span), r);
                 Type::OnceFunction {
+                    cross_task: Default::default(),
                     params: param_types,
                     return_type,
                 }
             }
             None => Type::Function {
+                cross_task: Default::default(),
                 params: param_types,
                 return_type,
             },

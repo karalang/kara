@@ -5,6 +5,7 @@ mod once_function_carrier_tests {
 
     fn fn_i32_to_i32() -> Type {
         Type::Function {
+            cross_task: Default::default(),
             params: vec![Type::Int(IntSize::I32)],
             return_type: Box::new(Type::Int(IntSize::I32)),
         }
@@ -12,6 +13,7 @@ mod once_function_carrier_tests {
 
     fn once_fn_i32_to_i32() -> Type {
         Type::OnceFunction {
+            cross_task: Default::default(),
             params: vec![Type::Int(IntSize::I32)],
             return_type: Box::new(Type::Int(IntSize::I32)),
         }
@@ -26,6 +28,7 @@ mod once_function_carrier_tests {
     #[test]
     fn type_display_oncefn_unit_return_omits_arrow() {
         let no_arg_unit = Type::OnceFunction {
+            cross_task: Default::default(),
             params: vec![],
             return_type: Box::new(Type::Unit),
         };
@@ -35,6 +38,7 @@ mod once_function_carrier_tests {
     #[test]
     fn type_display_oncefn_multi_param() {
         let multi = Type::OnceFunction {
+            cross_task: Default::default(),
             params: vec![Type::Int(IntSize::I32), Type::Bool],
             return_type: Box::new(Type::Float(FloatSize::F64)),
         };
@@ -59,6 +63,7 @@ mod once_function_carrier_tests {
     fn types_compatible_oncefn_param_arity_mismatch() {
         let one = once_fn_i32_to_i32();
         let two = Type::OnceFunction {
+            cross_task: Default::default(),
             params: vec![Type::Int(IntSize::I32), Type::Int(IntSize::I32)],
             return_type: Box::new(Type::Int(IntSize::I32)),
         };
@@ -88,6 +93,7 @@ mod once_function_carrier_tests {
     #[test]
     fn substitute_type_params_preserves_once() {
         let t_to_t = Type::OnceFunction {
+            cross_task: Default::default(),
             params: vec![Type::TypeParam("T".to_string())],
             return_type: Box::new(Type::TypeParam("T".to_string())),
         };
@@ -97,6 +103,7 @@ mod once_function_carrier_tests {
         assert_eq!(
             resolved,
             Type::OnceFunction {
+                cross_task: Default::default(),
                 params: vec![Type::Bool],
                 return_type: Box::new(Type::Bool),
             }
@@ -106,6 +113,7 @@ mod once_function_carrier_tests {
     #[test]
     fn contains_type_param_handles_oncefn() {
         let with_param = Type::OnceFunction {
+            cross_task: Default::default(),
             params: vec![Type::TypeParam("T".to_string())],
             return_type: Box::new(Type::Int(IntSize::I32)),
         };

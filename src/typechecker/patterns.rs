@@ -2969,10 +2969,12 @@ impl<'a> super::TypeChecker<'a> {
             Type::Function {
                 params,
                 return_type,
+                ..
             }
             | Type::OnceFunction {
                 params,
                 return_type,
+                ..
             } => TypeExpr {
                 kind: TypeKind::FnType {
                     params: params.iter().map(Self::type_to_type_expr).collect(),
@@ -4060,10 +4062,12 @@ fn param_occurs_bare(ty: &Type, name: &str) -> bool {
         Type::Function {
             params,
             return_type,
+            ..
         }
         | Type::OnceFunction {
             params,
             return_type,
+            ..
         } => {
             params.iter().any(|t| param_occurs_bare(t, name))
                 || param_occurs_bare(return_type, name)

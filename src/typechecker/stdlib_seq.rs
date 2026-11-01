@@ -53,6 +53,7 @@ impl<'a> super::TypeChecker<'a> {
         span: &Span,
     ) {
         let expected = Type::Function {
+            cross_task: Default::default(),
             params: vec![elem.clone(), elem.clone()],
             return_type: Box::new(Type::Named {
                 name: "Ordering".to_string(),
@@ -87,6 +88,7 @@ impl<'a> super::TypeChecker<'a> {
         // Pattern lifted from `Iterator.map`'s pushdown at infer_iterator_method.
         let placeholder = Type::TypeParam("__sort_by_key_K".to_string());
         let expected = Type::Function {
+            cross_task: Default::default(),
             params: vec![elem.clone()],
             return_type: Box::new(placeholder),
         };

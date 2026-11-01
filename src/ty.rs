@@ -1229,6 +1229,7 @@ impl TyCtxt {
             Type::Function {
                 params,
                 return_type,
+                ..
             } => TyKind::Fn {
                 params: lower_all(params)?,
                 ret: lower(return_type)?,
@@ -1238,6 +1239,7 @@ impl TyCtxt {
             Type::OnceFunction {
                 params,
                 return_type,
+                ..
             } => TyKind::Fn {
                 params: lower_all(params)?,
                 ret: lower(return_type)?,
@@ -1421,6 +1423,7 @@ mod tests {
     fn legacy_types_lower_and_display() {
         let tcx = TyCtxt::new();
         let legacy = Type::Function {
+            cross_task: Default::default(),
             params: vec![
                 Type::Ref(Box::new(Type::Named {
                     name: "Vec".into(),

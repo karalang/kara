@@ -105,7 +105,9 @@ impl<'a> super::TypeChecker<'a> {
             let Some(ty) = outer_snapshot.get(&name) else {
                 continue;
             };
-            if let Err(path) = is_cross_task_safe_with(ty, &self.env.structs, &self.env.enums) {
+            if let Err(path) = is_cross_task_safe_with(ty, &self.env.structs, &self.env.enums)
+                .or_else(|p| self.fn_value_in_sight(&name, p))
+            {
                 if path.fix_it == CrossTaskUnsafeFixIt::DynCrossTask {
                     // A task may view a `dyn` value under the view rules
                     // (design.md § `dyn Trait`: "a view follows the view
@@ -205,7 +207,9 @@ impl<'a> super::TypeChecker<'a> {
             let Some(ty) = outer_snapshot.get(&name) else {
                 continue;
             };
-            if let Err(path) = is_cross_task_safe_with(ty, &self.env.structs, &self.env.enums) {
+            if let Err(path) = is_cross_task_safe_with(ty, &self.env.structs, &self.env.enums)
+                .or_else(|p| self.fn_value_in_sight(&name, p))
+            {
                 // A branch may view a `dyn` value, as a task may (above).
                 if path.fix_it == CrossTaskUnsafeFixIt::DynCrossTask {
                     continue;
@@ -253,6 +257,114 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// A function value bound from a closure literal in this body is not
+    /// erased: its environment is in sight, and `fn_env_cross_task.rs`
+    /// checks what it reaches (core semantics §6.3, B-2026-11-01-26). So the
+    /// erased-function refusal does not apply to the binding itself.
+    fn fn_value_in_sight(
+        &self,
+        name: &str,
+        path: CrossTaskUnsafePath,
+    ) -> Result<(), CrossTaskUnsafePath> {
+        if path.fix_it == CrossTaskUnsafeFixIt::FnCrossTask
+            && path.path.is_empty()
+            && self.current_fn_closure_lets.contains(name)
+        {
+            Ok(())
+        } else {
+            Err(path)
+        }
+    }
+
+    /// `tg.spawn(f)` with a function value rather than a closure literal:
+    /// the value itself crosses, so its type must be `CrossTask`, which an
+    /// erased function type is only when marked (core semantics §6.3). A
+    /// function item, and a closure bound in this body, are in sight.
+    pub(super) fn check_spawned_fn_value(
+        &mut self,
+        arg: &Expr,
+        call_span: &Span,
+        site_label: &str,
+    ) {
+        let name = match &arg.kind {
+            ExprKind::Identifier(n) => {
+                if !self.flatten_local_scope_snapshot().contains_key(n) {
+                    return;
+                }
+                Some(n.clone())
+            }
+            _ => None,
+        };
+        let ty = self.infer_expr(arg);
+        // A function item or constructor named by a path (`Job.start`) has no
+        // environment; `infer_expr` recorded it as one.
+        if self
+            .fn_item_spans
+            .contains(&crate::resolver::SpanKey::from_span(&arg.span))
+        {
+            return;
+        }
+        let checked = is_cross_task_safe_with(&ty, &self.env.structs, &self.env.enums);
+        let checked = match &name {
+            Some(n) => checked.or_else(|p| self.fn_value_in_sight(n, p)),
+            None => checked,
+        };
+        let Err(path) = checked else {
+            return;
+        };
+        if path.fix_it != CrossTaskUnsafeFixIt::FnCrossTask {
+            return;
+        }
+        let what = match &name {
+            Some(n) => format!("`{n}`"),
+            None => "the function value".to_string(),
+        };
+        let lead = format!(
+            "{what} (type `{ty}`) cannot cross a {site_label} task boundary",
+            ty = type_display(&ty),
+        );
+        let msg = format_cross_task_diagnostic(&lead, &ty, &path);
+        let fix = name.as_deref().and_then(|n| self.fn_marker_fix(n));
+        let span = if arg.span.line == 0 {
+            *call_span
+        } else {
+            arg.span
+        };
+        match fix {
+            Some(f) => {
+                self.type_error_with_fix_it(msg, span, TypeErrorKind::CrossTaskUnsafeCapture, f)
+            }
+            None => self.type_error(msg, span, TypeErrorKind::CrossTaskUnsafeCapture),
+        }
+    }
+
+    /// The `+ CrossTask` insertion for the function type `name` was declared
+    /// with in this body: a parameter's type, a `let`'s annotation, or the
+    /// return type of the function a `let` was bound from.
+    pub(super) fn fn_marker_fix(&self, name: &str) -> Option<super::FixIt> {
+        self.current_fn_fn_markers
+            .get(name)
+            .map(|span| super::FixIt {
+                span: *span,
+                replacement: " + CrossTask".to_string(),
+            })
+    }
+
+    /// Where `+ CrossTask` goes in the first unmarked function type inside
+    /// `t`, if there is one.
+    pub(super) fn fn_marker_point(&self, t: &TypeExpr) -> Option<Span> {
+        let mut found: Option<Span> = None;
+        crate::span_visitor::for_each_type_expr(t, &mut |x| {
+            if found.is_none() && matches!(x.kind, TypeKind::FnType { .. }) {
+                let key = SpanKey::from_span(&x.span);
+                if !crate::prelude::marks_cross_task_fn(self.program, &key) {
+                    found = self.program.fn_type_marker_points.get(&key).copied();
+                }
+            }
+        });
+        found
+    }
+
     fn emit_cross_task_unsafe(
         &mut self,
         capture_name: &str,
@@ -274,7 +386,15 @@ impl<'a> super::TypeChecker<'a> {
         } else {
             *anchor_span
         };
-        self.type_error(msg, span, TypeErrorKind::CrossTaskUnsafeCapture);
+        let fix = (path.fix_it == CrossTaskUnsafeFixIt::FnCrossTask && path.path.is_empty())
+            .then(|| self.fn_marker_fix(capture_name))
+            .flatten();
+        match fix {
+            Some(f) => {
+                self.type_error_with_fix_it(msg, span, TypeErrorKind::CrossTaskUnsafeCapture, f)
+            }
+            None => self.type_error(msg, span, TypeErrorKind::CrossTaskUnsafeCapture),
+        }
     }
 
     /// The result of a task crosses back to the joining task, so

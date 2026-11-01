@@ -1217,10 +1217,12 @@ fn collect_named_types(ty: &crate::typechecker::Type, out: &mut Vec<String>) {
         T::Function {
             params,
             return_type,
+            ..
         }
         | T::OnceFunction {
             params,
             return_type,
+            ..
         } => {
             for pth in params {
                 collect_named_types(pth, out);

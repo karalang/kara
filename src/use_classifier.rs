@@ -2620,11 +2620,13 @@ fn fn_type_from_annotation(te: &crate::ast::TypeExpr) -> Option<Type> {
     let return_type = Box::new(Type::Unit);
     Some(if *is_once {
         Type::OnceFunction {
+            cross_task: Default::default(),
             params,
             return_type,
         }
     } else {
         Type::Function {
+            cross_task: Default::default(),
             params,
             return_type,
         }

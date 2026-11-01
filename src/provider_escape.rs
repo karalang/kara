@@ -478,7 +478,7 @@ fn spawns_on_outer_groups<'a>(
 use crate::index_disjoint::{for_each_child_public, Child};
 
 /// Visit `e` and every expression under it, with the tree's lifetime.
-fn walk_expr_exprs<'a>(e: &'a Expr, f: &mut dyn FnMut(&'a Expr)) {
+pub(crate) fn walk_expr_exprs<'a>(e: &'a Expr, f: &mut dyn FnMut(&'a Expr)) {
     f(e);
     for_each_child_public(e, &mut |c| match c {
         Child::Expr(x) => walk_expr_exprs(x, f),
@@ -486,7 +486,7 @@ fn walk_expr_exprs<'a>(e: &'a Expr, f: &mut dyn FnMut(&'a Expr)) {
     });
 }
 
-fn walk_block_exprs<'a>(b: &'a Block, f: &mut dyn FnMut(&'a Expr)) {
+pub(crate) fn walk_block_exprs<'a>(b: &'a Block, f: &mut dyn FnMut(&'a Expr)) {
     for s in &b.stmts {
         match &s.kind {
             StmtKind::Let { value, .. } => walk_expr_exprs(value, f),

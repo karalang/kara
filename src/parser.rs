@@ -214,6 +214,11 @@ pub struct Parser {
     pub(crate) paren_return_types: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
     /// See [`crate::ast::Program::mut_fn_types`].
     pub(crate) mut_fn_types: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
+    /// See [`crate::ast::Program::cross_task_fn_types`].
+    pub(crate) cross_task_fn_types: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
+    /// See [`crate::ast::Program::fn_type_marker_points`].
+    pub(crate) fn_type_marker_points:
+        rustc_hash::FxHashMap<crate::resolver::SpanKey, crate::token::Span>,
     /// `true` only while parsing the bracket list of a TRAIT BOUND, which is
     /// the one position where `IDENT = TYPE` means an associated-type binding
     /// rather than a positional type argument (B-2026-08-21-9). Cleared while
@@ -483,6 +488,8 @@ impl Parser {
             escaping_fn_types: rustc_hash::FxHashSet::default(),
             paren_return_types: rustc_hash::FxHashSet::default(),
             mut_fn_types: rustc_hash::FxHashSet::default(),
+            cross_task_fn_types: rustc_hash::FxHashSet::default(),
+            fn_type_marker_points: rustc_hash::FxHashMap::default(),
             assoc_bindings_allowed: false,
             pending_assoc_bindings: Vec::new(),
             effect_args_allowed: false,
@@ -839,6 +846,8 @@ impl Parser {
             escaping_fn_types: std::mem::take(&mut self.escaping_fn_types),
             paren_return_types: std::mem::take(&mut self.paren_return_types),
             mut_fn_types: std::mem::take(&mut self.mut_fn_types),
+            cross_task_fn_types: std::mem::take(&mut self.cross_task_fn_types),
+            fn_type_marker_points: std::mem::take(&mut self.fn_type_marker_points),
             stmt_lint_overrides: std::mem::take(&mut self.stmt_lint_overrides),
             container_hashers: std::mem::take(&mut self.container_hashers),
             ..Program::default()

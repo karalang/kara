@@ -1,0 +1,18 @@
+// Core semantics §6.3: an erased function type hides its environment, so a
+// parameter of type `Fn(own String) -> i64` is not CrossTask, and a task
+// that captures it is refused. `+ CrossTask` on the parameter would let it
+// cross, with each argument's environment checked at the call.
+fn size(s: own String) -> i64 {
+    s.len()
+}
+
+fn spawned(f: own Fn(own String) -> i64) -> i64 {
+    let g = TaskGroup.new();
+    let s = f"v1x";
+    let h = g.spawn(|| f(s));
+    h.join()
+}
+
+fn main() {
+    println(spawned(size));
+}

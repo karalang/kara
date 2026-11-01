@@ -565,6 +565,7 @@ impl<'a> super::TypeChecker<'a> {
                     }
                 } else {
                     let f_ty = Type::Function {
+                        cross_task: Default::default(),
                         params: vec![],
                         return_type: Box::new(v.clone()),
                     };
@@ -591,6 +592,7 @@ impl<'a> super::TypeChecker<'a> {
                     }
                 } else {
                     let f_ty = Type::Function {
+                        cross_task: Default::default(),
                         params: vec![mut_ref_v.clone()],
                         return_type: Box::new(Type::Unit),
                     };

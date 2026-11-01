@@ -1,0 +1,11 @@
+source = "corpus/core/err_effect_vars_par_unmarked"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["closure", "par", "effects"]
+class = "a"
+expected_from = "spec"
+rules = ["6.3"]
+backends = []
+env = {}
+note = "B-2026-11-01-26: a `par` branch that moves a struct holding unmarked `Vec[Fn(Event) with E]` handlers is refused, since an erased function type is not CrossTask (core-semantics §6.3); `effect_vars_par_apart` is the marked form. The expected.out wording of an error pin is guidance, not a byte oracle."

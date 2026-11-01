@@ -39,7 +39,7 @@ fn show(name: String, r: Result[i64, TaskFailed]) {
     }
 }
 
-fn through(f: own OnceFn() -> i64) -> Result[i64, TaskFailed] {
+fn through(f: own OnceFn() -> i64 + CrossTask) -> Result[i64, TaskFailed] {
     let g = TaskGroup.isolating();
     let h = g.spawn(f);
     h.join()

@@ -46,7 +46,7 @@ fn refused(src: &str) -> String {
 }
 
 const RECEIVES: &str = r#"
-struct Job { run: Fn(ref Receiver[String]) -> String with writes(Stdout) receives(Channel) blocks }
+struct Job { run: Fn(ref Receiver[String]) -> String + CrossTask with writes(Stdout) receives(Channel) blocks }
 
 fn take(rx: ref Receiver[String]) -> String {
     println("taking");

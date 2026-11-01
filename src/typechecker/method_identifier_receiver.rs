@@ -1332,10 +1332,12 @@ fn ordered_free_type_vars(ty: &Type) -> Vec<Type> {
             Type::Function {
                 params,
                 return_type,
+                ..
             }
             | Type::OnceFunction {
                 params,
                 return_type,
+                ..
             } => {
                 params.iter().for_each(|p| walk(p, out));
                 walk(return_type, out);

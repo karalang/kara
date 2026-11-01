@@ -110,6 +110,7 @@ impl<'a> super::TypeChecker<'a> {
                     Type::Float(super::types::FloatSize::F32)
                 };
                 return Type::Function {
+                    cross_task: Default::default(),
                     params: vec![f.clone(), f],
                     return_type: Box::new(Type::Named {
                         name: "Ordering".to_string(),

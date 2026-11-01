@@ -404,10 +404,10 @@ The sends write one unfragmented frame each; a server's frames are not masked. A
 
 ```kara
 impl Server {
-    fn serve(addr: String, handler: Fn(Request) -> Response) -> Result[(), HttpError] with sends(Network) receives(Network) blocks suspends
-    fn serve_tls(addr: String, cert_pem: String, key_pem: String, handler: Fn(Request) -> Response) -> Result[(), HttpError] with sends(Network) receives(Network) blocks suspends
-    fn serve_ws(addr: String, handler: Fn(Request) -> Response, ws_handler: Fn(own WebSocket)) -> Result[(), HttpError] with sends(Network) receives(Network) blocks suspends
-    fn serve_ws_tls(addr: String, cert_pem: String, key_pem: String, handler: Fn(Request) -> Response, ws_handler: Fn(own WebSocket)) -> Result[(), HttpError] with sends(Network) receives(Network) blocks suspends
+    fn serve(addr: String, handler: Fn(Request) -> Response + CrossTask) -> Result[(), HttpError] with sends(Network) receives(Network) blocks suspends
+    fn serve_tls(addr: String, cert_pem: String, key_pem: String, handler: Fn(Request) -> Response + CrossTask) -> Result[(), HttpError] with sends(Network) receives(Network) blocks suspends
+    fn serve_ws(addr: String, handler: Fn(Request) -> Response + CrossTask, ws_handler: Fn(own WebSocket) + CrossTask) -> Result[(), HttpError] with sends(Network) receives(Network) blocks suspends
+    fn serve_ws_tls(addr: String, cert_pem: String, key_pem: String, handler: Fn(Request) -> Response + CrossTask, ws_handler: Fn(own WebSocket) + CrossTask) -> Result[(), HttpError] with sends(Network) receives(Network) blocks suspends
 }
 
 impl Request {

@@ -27,6 +27,21 @@ impl PartialEq for DynClause {
     }
 }
 
+/// Whether a function type is written `+ CrossTask` (core semantics §6.3).
+/// Like [`DynClause`], it takes no part in type equality: unification sees
+/// one function type, and the cross-task checks read the marker
+/// (`cross_task_safe.rs`), so a marked value is usable where an unmarked one
+/// is expected, and a value is checked where it is coerced into a marked
+/// slot (`fn_env_cross_task.rs`).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CrossTaskMark(pub bool);
+
+impl PartialEq for CrossTaskMark {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Type {
     Int(IntSize),
@@ -97,6 +112,8 @@ pub enum Type {
     Function {
         params: Vec<Type>,
         return_type: Box<Type>,
+        /// `Fn(..) -> R + CrossTask` (core semantics §6.3).
+        cross_task: CrossTaskMark,
     },
 
     /// A once-callable closure type: a closure that consumes a captured
@@ -110,6 +127,8 @@ pub enum Type {
     OnceFunction {
         params: Vec<Type>,
         return_type: Box<Type>,
+        /// `OnceFn(..) -> R + CrossTask` (core semantics §6.3).
+        cross_task: CrossTaskMark,
     },
 
     Ref(Box<Type>),
@@ -738,10 +757,12 @@ pub(super) fn type_is_fully_concrete(ty: &Type) -> bool {
         Type::Function {
             params,
             return_type,
+            ..
         }
         | Type::OnceFunction {
             params,
             return_type,
+            ..
         } => params.iter().all(type_is_fully_concrete) && type_is_fully_concrete(return_type),
         Type::Int(_)
         | Type::UInt(_)
@@ -910,23 +931,35 @@ pub fn type_display(ty: &Type) -> String {
         Type::Function {
             params,
             return_type,
+            cross_task,
         } => {
             let p: Vec<String> = params.iter().map(type_display).collect();
+            let mark = if cross_task.0 { " + CrossTask" } else { "" };
             if **return_type == Type::Unit {
-                format!("Fn({})", p.join(", "))
+                format!("Fn({}){mark}", p.join(", "))
             } else {
-                format!("Fn({}) -> {}", p.join(", "), type_display(return_type))
+                format!(
+                    "Fn({}) -> {}{mark}",
+                    p.join(", "),
+                    type_display(return_type)
+                )
             }
         }
         Type::OnceFunction {
             params,
             return_type,
+            cross_task,
         } => {
             let p: Vec<String> = params.iter().map(type_display).collect();
+            let mark = if cross_task.0 { " + CrossTask" } else { "" };
             if **return_type == Type::Unit {
-                format!("OnceFn({})", p.join(", "))
+                format!("OnceFn({}){mark}", p.join(", "))
             } else {
-                format!("OnceFn({}) -> {}", p.join(", "), type_display(return_type))
+                format!(
+                    "OnceFn({}) -> {}{mark}",
+                    p.join(", "),
+                    type_display(return_type)
+                )
             }
         }
         Type::Ref(inner) => format!("ref {}", type_display(inner)),
@@ -1109,14 +1142,18 @@ pub(super) fn substitute_assoc_bindings_of(
         Type::Function {
             params,
             return_type,
+            cross_task,
         } => Type::Function {
+            cross_task: crate::typechecker::types::CrossTaskMark(cross_task.0),
             params: params.iter().map(&go).collect(),
             return_type: Box::new(go(return_type)),
         },
         Type::OnceFunction {
             params,
             return_type,
+            cross_task,
         } => Type::OnceFunction {
+            cross_task: crate::typechecker::types::CrossTaskMark(cross_task.0),
             params: params.iter().map(&go).collect(),
             return_type: Box::new(go(return_type)),
         },
@@ -1402,10 +1439,12 @@ pub(super) fn contains_type_param(ty: &Type) -> bool {
         Type::Function {
             params,
             return_type,
+            ..
         }
         | Type::OnceFunction {
             params,
             return_type,
+            ..
         } => params.iter().any(contains_type_param) || contains_type_param(return_type),
         Type::Dyn { args, assoc, .. } => {
             args.iter().any(contains_type_param)
@@ -1450,30 +1489,36 @@ pub(super) fn is_subtype(super_ty: &Type, sub_ty: &Type) -> bool {
             Type::Function {
                 params: sp,
                 return_type: sr,
+                ..
             },
             Type::Function {
                 params: bp,
                 return_type: br,
+                ..
             },
         )
         | (
             Type::OnceFunction {
                 params: sp,
                 return_type: sr,
+                ..
             },
             Type::OnceFunction {
                 params: bp,
                 return_type: br,
+                ..
             },
         )
         | (
             Type::OnceFunction {
                 params: sp,
                 return_type: sr,
+                ..
             },
             Type::Function {
                 params: bp,
                 return_type: br,
+                ..
             },
         ) => {
             sp.len() == bp.len()
@@ -2104,20 +2149,24 @@ pub(super) fn types_compatible(a: &Type, b: &Type) -> bool {
             Type::Function {
                 params: a_p,
                 return_type: a_r,
+                ..
             },
             Type::Function {
                 params: b_p,
                 return_type: b_r,
+                ..
             },
         )
         | (
             Type::OnceFunction {
                 params: a_p,
                 return_type: a_r,
+                ..
             },
             Type::OnceFunction {
                 params: b_p,
                 return_type: b_r,
+                ..
             },
         ) => {
             // Position-based variance (design.md § Variance table):
@@ -2215,10 +2264,12 @@ pub(super) fn type_mentions_assoc_projection_on(ty: &Type, name: &str) -> bool {
         Type::Function {
             params,
             return_type,
+            ..
         }
         | Type::OnceFunction {
             params,
             return_type,
+            ..
         } => params.iter().any(&go) || go(return_type),
         Type::Refinement { base, .. } => go(base),
         // A NESTED existential owns its own trait surface; an outer trait's

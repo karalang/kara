@@ -857,6 +857,14 @@ pub struct Program {
     /// [`Self::escaping_fn_types`]: the type is an ordinary non-once `FnType`
     /// for every legacy phase, and only the v2 core's kind checks read it.
     pub mut_fn_types: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
+    /// Function types written `Fn(..) -> R + CrossTask` (core semantics
+    /// §6.3), keyed by the function type's span: the kind checks read the
+    /// marker off the lowered `Type`, and the formatter prints it back.
+    pub cross_task_fn_types: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
+    /// Where `+ CrossTask` goes in each function type, keyed by the type's
+    /// span: after its return type, or its parameter list, and before any
+    /// `with`. The `E_NOT_CROSS_TASK` fix-it inserts the marker there.
+    pub fn_type_marker_points: rustc_hash::FxHashMap<crate::resolver::SpanKey, crate::token::Span>,
     /// The hasher each `Map[K, V, H]` / `Set[T, H]` type expression named
     /// (design.md § `Hash` and `Hasher`; B-2026-08-21-6), keyed by the
     /// container path's own span. Set by the PARSER, which also REMOVES the

@@ -84,6 +84,22 @@ impl super::Parser {
             None
         };
 
+        // `Fn(A) -> R + CrossTask` (core semantics §6.3): the marker comes
+        // after the return type and before `with`, as after a `dyn` trait,
+        // and binds to the nearest function type.
+        let last = self.tokens[self.pos.saturating_sub(1)].span;
+        let marker_point = Span {
+            line: last.line,
+            column: last.column + last.length,
+            offset: last.offset + last.length,
+            length: 0,
+        };
+        let cross_task = self.peek_token_ref() == &Token::Plus && self.at_kw_at(1, "CrossTask");
+        if cross_task {
+            self.advance(); // `+`
+            self.advance(); // `CrossTask`
+        }
+
         let effect_spec = if !return_tail && self.at_kw("with") {
             // Peek-only: `parse_effect_list` consumes the `with`
             // keyword itself and then handles `_` / verbs / named
@@ -124,6 +140,12 @@ impl super::Parser {
             self.mut_fn_types
                 .insert(crate::resolver::SpanKey::from_span(&span));
         }
+        if cross_task {
+            self.cross_task_fn_types
+                .insert(crate::resolver::SpanKey::from_span(&span));
+        }
+        self.fn_type_marker_points
+            .insert(crate::resolver::SpanKey::from_span(&span), marker_point);
         Some(TypeExpr {
             kind: TypeKind::FnType {
                 params,

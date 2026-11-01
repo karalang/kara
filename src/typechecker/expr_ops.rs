@@ -778,6 +778,7 @@ impl<'a> super::TypeChecker<'a> {
             self.check_deprecated_use_at(span, name);
             self.check_unstable_use_at(span, name);
             return Type::Function {
+                cross_task: Default::default(),
                 params,
                 return_type: Box::new(return_type),
             };
@@ -914,6 +915,7 @@ impl<'a> super::TypeChecker<'a> {
                         VariantTypeInfo::Unit => return return_ty,
                         VariantTypeInfo::Tuple(fields) => {
                             return Type::Function {
+                                cross_task: Default::default(),
                                 params: fields.clone(),
                                 return_type: Box::new(return_ty),
                             };
@@ -934,6 +936,7 @@ impl<'a> super::TypeChecker<'a> {
             self.check_deprecated_use_at(span, name);
             self.check_unstable_use_at(span, name);
             return Type::Function {
+                cross_task: Default::default(),
                 params: vec![base],
                 return_type: Box::new(Type::Named {
                     name: name.to_string(),
@@ -1131,6 +1134,7 @@ impl<'a> super::TypeChecker<'a> {
         match variant_type {
             VariantTypeInfo::Unit => Some(return_ty),
             VariantTypeInfo::Tuple(fields) => Some(Type::Function {
+                cross_task: Default::default(),
                 params: fields.clone(),
                 return_type: Box::new(return_ty),
             }),
@@ -1315,6 +1319,7 @@ impl<'a> super::TypeChecker<'a> {
             {
                 return if member == "default" {
                     Type::Function {
+                        cross_task: Default::default(),
                         params: Vec::new(),
                         return_type: Box::new(Type::TypeParam(type_name.clone())),
                     }
@@ -1385,6 +1390,7 @@ impl<'a> super::TypeChecker<'a> {
                                     return Type::Error;
                                 }
                                 return Type::Function {
+                                    cross_task: Default::default(),
                                     params: fields.clone(),
                                     return_type: Box::new(return_ty),
                                 };
@@ -1427,6 +1433,7 @@ impl<'a> super::TypeChecker<'a> {
                     args: target_generic_args,
                 };
                 return Type::Function {
+                    cross_task: Default::default(),
                     params: sig
                         .params
                         .iter()
@@ -1449,6 +1456,7 @@ impl<'a> super::TypeChecker<'a> {
             let dotted = format!("{}.{}", type_name, member);
             if let Some(sig) = self.env.functions.get(&dotted) {
                 return Type::Function {
+                    cross_task: Default::default(),
                     params: sig.params.clone(),
                     return_type: Box::new(sig.return_type.clone()),
                 };
@@ -1478,6 +1486,7 @@ impl<'a> super::TypeChecker<'a> {
                     self.resource_dispatch_signature(type_name, &bounds, member)
                 {
                     return Type::Function {
+                        cross_task: Default::default(),
                         params,
                         return_type: Box::new(return_type),
                     };
@@ -1531,6 +1540,7 @@ impl<'a> super::TypeChecker<'a> {
             if member == "default" || empty_ctor {
                 if let Some(t) = self.builtin_default_type(type_name) {
                     return Type::Function {
+                        cross_task: Default::default(),
                         params: Vec::new(),
                         return_type: Box::new(t),
                     };

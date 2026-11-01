@@ -3296,10 +3296,12 @@ fn collect_named_types(ty: &Type, out: &mut rustc_hash::FxHashSet<String>) {
         Type::Function {
             params,
             return_type,
+            ..
         }
         | Type::OnceFunction {
             params,
             return_type,
+            ..
         } => {
             for p in params {
                 collect_named_types(p, out);

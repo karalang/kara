@@ -361,6 +361,7 @@ impl<'a> super::TypeChecker<'a> {
                 //    comparison — annotate `|x: T|` for those.
                 let check_closure = |s: &mut Self, arg: &CallArg, params: Vec<Type>, ret: Type| {
                     let f_ty = Type::Function {
+                        cross_task: Default::default(),
                         params,
                         return_type: Box::new(ret),
                     };
@@ -392,10 +393,12 @@ impl<'a> super::TypeChecker<'a> {
                             Type::Function {
                                 params: _,
                                 return_type,
+                                ..
                             }
                             | Type::OnceFunction {
                                 params: _,
                                 return_type,
+                                ..
                             } => resolve_type_var_top(return_type, &s.env.substitutions),
                             _ => Type::Error,
                         }

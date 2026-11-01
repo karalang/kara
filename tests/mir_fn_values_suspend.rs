@@ -114,7 +114,7 @@ fn stdout_on_both(name: &str, src: &str) -> String {
 fn mir_fn_value_item_suspends_its_task() {
     let src = r#"
 struct Handler {
-    f: Fn(i64) -> i64 with suspends,
+    f: Fn(i64) -> i64 + CrossTask with suspends,
 }
 
 fn slow(n: i64) -> i64 {
@@ -316,7 +316,7 @@ fn fine() -> i64 {
     7
 }
 
-fn pick(n: i64) -> Fn() -> i64 {
+fn pick(n: i64) -> Fn() -> i64 + CrossTask {
     if n == 1 {
         boom
     } else {

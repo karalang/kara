@@ -181,6 +181,7 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 let acc_ty = self.infer_expr(&args[0].value);
                 let f_ty = Type::Function {
+                    cross_task: Default::default(),
                     params: vec![acc_ty.clone(), elem],
                     return_type: Box::new(acc_ty.clone()),
                 };
@@ -267,10 +268,12 @@ impl<'a> super::TypeChecker<'a> {
                     Type::Function {
                         params,
                         return_type,
+                        ..
                     }
                     | Type::OnceFunction {
                         params,
                         return_type,
+                        ..
                     } => {
                         if let Some(p0) = params.first() {
                             unify_types(
@@ -335,6 +338,7 @@ impl<'a> super::TypeChecker<'a> {
                 // recorded type). Heap-payload map codegen (B-2026-07-12-11).
                 if matches!(&args[0].value.kind, ExprKind::Closure { .. }) {
                     let mapper_fn_ty = Type::Function {
+                        cross_task: Default::default(),
                         params: vec![t_resolved.clone()],
                         return_type: Box::new(r_resolved.clone()),
                     };
@@ -398,6 +402,7 @@ impl<'a> super::TypeChecker<'a> {
                     return Some(Type::Error);
                 }
                 let f_ty = Type::Function {
+                    cross_task: Default::default(),
                     params: vec![elem.clone()],
                     return_type: Box::new(elem),
                 };

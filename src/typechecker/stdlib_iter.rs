@@ -66,6 +66,7 @@ impl<'a> super::TypeChecker<'a> {
                     };
                 }
                 let f_ty = Type::Function {
+                    cross_task: Default::default(),
                     params: vec![item.clone()],
                     return_type: Box::new(Type::TypeParam("__iter_map_U".to_string())),
                 };
@@ -98,6 +99,7 @@ impl<'a> super::TypeChecker<'a> {
                     };
                 }
                 let pred_ty = Type::Function {
+                    cross_task: Default::default(),
                     params: vec![item.clone()],
                     return_type: Box::new(Type::Bool),
                 };
@@ -133,6 +135,7 @@ impl<'a> super::TypeChecker<'a> {
                     };
                 }
                 let f_ty = Type::Function {
+                    cross_task: Default::default(),
                     params: vec![item.clone()],
                     return_type: Box::new(Type::TypeParam("__iter_filtermap_U".to_string())),
                 };
@@ -262,6 +265,7 @@ impl<'a> super::TypeChecker<'a> {
                     return result_ty();
                 }
                 let pred_ty = Type::Function {
+                    cross_task: Default::default(),
                     params: vec![item.clone()],
                     return_type: Box::new(Type::Bool),
                 };
@@ -288,6 +292,7 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 let acc_ty = self.infer_expr(&args[0].value);
                 let f_ty = Type::Function {
+                    cross_task: Default::default(),
                     params: vec![acc_ty.clone(), item.clone()],
                     return_type: Box::new(acc_ty.clone()),
                 };
@@ -359,6 +364,7 @@ impl<'a> super::TypeChecker<'a> {
                     };
                 }
                 let f_ty = Type::Function {
+                    cross_task: Default::default(),
                     params: vec![item.clone(), item.clone()],
                     return_type: Box::new(item.clone()),
                 };
@@ -480,6 +486,7 @@ impl<'a> super::TypeChecker<'a> {
                     return Type::Unit;
                 }
                 let f_ty = Type::Function {
+                    cross_task: Default::default(),
                     params: vec![item.clone()],
                     return_type: Box::new(Type::TypeParam("__for_each_ret".to_string())),
                 };
@@ -507,6 +514,7 @@ impl<'a> super::TypeChecker<'a> {
                     return Type::Bool;
                 }
                 let pred_ty = Type::Function {
+                    cross_task: Default::default(),
                     params: vec![item.clone()],
                     return_type: Box::new(Type::Bool),
                 };
@@ -536,6 +544,7 @@ impl<'a> super::TypeChecker<'a> {
                     };
                 }
                 let pred_ty = Type::Function {
+                    cross_task: Default::default(),
                     params: vec![item.clone()],
                     return_type: Box::new(Type::Bool),
                 };
@@ -566,6 +575,7 @@ impl<'a> super::TypeChecker<'a> {
                     };
                 }
                 let pred_ty = Type::Function {
+                    cross_task: Default::default(),
                     params: vec![item.clone()],
                     return_type: Box::new(Type::Bool),
                 };
@@ -606,6 +616,7 @@ impl<'a> super::TypeChecker<'a> {
                     };
                 }
                 let f_ty = Type::Function {
+                    cross_task: Default::default(),
                     params: vec![item.clone()],
                     return_type: Box::new(Type::TypeParam("__iter_findmap_U".to_string())),
                 };
@@ -791,6 +802,7 @@ impl<'a> super::TypeChecker<'a> {
                     };
                 }
                 let pred_ty = Type::Function {
+                    cross_task: Default::default(),
                     params: vec![item.clone()],
                     return_type: Box::new(Type::Bool),
                 };
@@ -826,6 +838,7 @@ impl<'a> super::TypeChecker<'a> {
                     };
                 }
                 let f_ty = Type::Function {
+                    cross_task: Default::default(),
                     params: vec![item.clone()],
                     return_type: Box::new(Type::TypeParam("__iter_flatmap_U".to_string())),
                 };
@@ -999,6 +1012,7 @@ impl<'a> super::TypeChecker<'a> {
                     };
                 }
                 let f_ty = Type::Function {
+                    cross_task: Default::default(),
                     params: vec![item.clone()],
                     return_type: Box::new(Type::TypeParam("__iter_inspect_R".to_string())),
                 };
@@ -1029,6 +1043,7 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 let acc_ty = self.infer_expr(&args[0].value);
                 let f_ty = Type::Function {
+                    cross_task: Default::default(),
                     params: vec![acc_ty.clone(), item.clone()],
                     return_type: Box::new(Type::TypeParam("__iter_scan_R".to_string())),
                 };
@@ -1149,6 +1164,7 @@ impl<'a> super::TypeChecker<'a> {
                     };
                 }
                 let key_fn_ty = Type::Function {
+                    cross_task: Default::default(),
                     params: vec![item.clone()],
                     return_type: Box::new(Type::TypeParam("__iter_chunk_by_K".to_string())),
                 };

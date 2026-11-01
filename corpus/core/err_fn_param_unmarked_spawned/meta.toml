@@ -1,0 +1,11 @@
+source = "corpus/core/err_fn_param_unmarked_spawned"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["closure", "concurrency"]
+class = "a"
+expected_from = "spec"
+rules = ["6.3"]
+backends = []
+env = {}
+note = "B-2026-11-01-26: an erased function parameter, unmarked, captured by a TaskGroup.spawn closure, is not CrossTask (core-semantics §6.3); `ok_closure_moves_into_fn_value_call` is the marked form. The expected.out wording of an error pin is guidance, not a byte oracle."

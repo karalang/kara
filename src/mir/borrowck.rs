@@ -2489,6 +2489,8 @@ fn main() -> () {
             "err_partial_move_drop_type",
             "err_enum_payload_drop_type_into_constructor",
             "err_fn_value_shared_crosses_task",
+            "err_fn_param_unmarked_spawned",
+            "err_effect_vars_par_unmarked",
             "err_fn_kind_mismatch",
             // `std.log`'s fields and its attribute (B-2026-10-27-20).
             "err_log_reserved_label",

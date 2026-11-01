@@ -1054,12 +1054,29 @@ iterations would reorder",
         };
         let lo = body.span.offset;
         let hi = body.span.offset + body.span.length;
+        // B-2026-11-01-26: an unmarked function type is not `CrossTask`, but
+        // two values of one carry no environment of their own here: a
+        // top-level function item, and a closure literal written in this
+        // body (whose captures are typed expressions inside it, so the sweep
+        // sees them). Every other value of an unmarked function type (a
+        // parameter, a field, a `let` from outside the loop) still declines.
+        let mut env_free: rustc_hash::FxHashSet<SpanKey> = Default::default();
+        crate::provider_escape::walk_block_exprs(body, &mut |e| {
+            if matches!(e.kind, ExprKind::Closure { .. }) {
+                env_free.insert(SpanKey::from_span(&e.span));
+            }
+        });
         let mut unsafe_spans: Vec<SpanKey> = Vec::new();
         for (key, ty) in &tc.expr_types {
             let SpanKey(offset, length) = *key;
             if offset >= lo
                 && offset + length <= hi
                 && crate::cross_task_safe::is_cross_task_safe(ty, tc).is_err()
+                && !(matches!(
+                    ty,
+                    crate::typechecker::Type::Function { .. }
+                        | crate::typechecker::Type::OnceFunction { .. }
+                ) && (tc.fn_item_spans.contains(key) || env_free.contains(key)))
             {
                 unsafe_spans.push(*key);
             }

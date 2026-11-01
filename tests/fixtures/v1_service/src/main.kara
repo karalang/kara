@@ -98,11 +98,11 @@ struct Event {
 }
 
 struct EventBus[with E] {
-    handlers: Vec[Fn(ref Event) with E],
+    handlers: Vec[Fn(ref Event) + CrossTask with E],
 }
 
 impl[with E] EventBus[with E] {
-    fn register(mut ref self, h: escaping Fn(ref Event) with E) {
+    fn register(mut ref self, h: escaping Fn(ref Event) + CrossTask with E) {
         self.handlers.push(h);
     }
 

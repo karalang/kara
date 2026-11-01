@@ -110,6 +110,7 @@ impl<'a> super::TypeChecker<'a> {
                 };
                 self.check_assignable(&self_ty, &other_ty, args[0].value.span);
                 let f_ty = Type::Function {
+                    cross_task: Default::default(),
                     params: vec![elem.clone(), elem.clone()],
                     return_type: Box::new(elem),
                 };

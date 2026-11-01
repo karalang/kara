@@ -72,6 +72,7 @@ impl<'a> super::TypeChecker<'a> {
         let elem = match expected {
             Some((elem, _)) => {
                 let f_ty = Type::Function {
+                    cross_task: Default::default(),
                     params: vec![idx_ty],
                     return_type: Box::new(elem.clone()),
                 };
@@ -90,10 +91,12 @@ impl<'a> super::TypeChecker<'a> {
                     Type::Function {
                         params,
                         return_type,
+                        ..
                     }
                     | Type::OnceFunction {
                         params,
                         return_type,
+                        ..
                     } if params.len() == 1 => {
                         self.check_assignable(&idx_ty, &params[0], args[1].value.span);
                         resolve_type_var_top(&return_type, &self.env.substitutions)
@@ -531,10 +534,12 @@ impl<'a> super::TypeChecker<'a> {
                 Type::Function {
                     params,
                     return_type,
+                    ..
                 }
                 | Type::OnceFunction {
                     params,
                     return_type,
+                    ..
                 } if params.is_empty() => (**return_type).clone(),
                 // A closure that takes arguments is not a valid branch (a
                 // branch is invoked with no args).
@@ -804,10 +809,12 @@ impl<'a> super::TypeChecker<'a> {
             Type::Function {
                 params,
                 return_type,
+                ..
             }
             | Type::OnceFunction {
                 params,
                 return_type,
+                ..
             } => {
                 params
                     .iter()
@@ -2027,10 +2034,12 @@ impl<'a> super::TypeChecker<'a> {
                     Type::Function {
                         params,
                         return_type,
+                        ..
                     }
                     | Type::OnceFunction {
                         params,
                         return_type,
+                        ..
                     } => {
                         if params.len() != 1 {
                             self.type_error(
@@ -2876,10 +2885,12 @@ impl<'a> super::TypeChecker<'a> {
             Type::Function {
                 params,
                 return_type,
+                ..
             }
             | Type::OnceFunction {
                 params,
                 return_type,
+                ..
             } => {
                 if args.len() != params.len() && named_reported {
                     for arg in args {

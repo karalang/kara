@@ -15,11 +15,11 @@ fn karac() -> Command {
 const BUS: &str = "struct Event { n: i64 }
 
 struct EventBus[with E] {
-    handlers: Vec[Fn(Event) with E],
+    handlers: Vec[Fn(Event) + CrossTask with E],
 }
 
 impl[with E] EventBus[with E] {
-    fn register(mut ref self, h: escaping Fn(Event) with E) {
+    fn register(mut ref self, h: escaping Fn(Event) + CrossTask with E) {
         self.handlers.push(h);
     }
 

@@ -319,6 +319,12 @@ impl super::Formatter {
                     self.write_str(" -> ");
                     self.format_type_expr(rt);
                 }
+                if self
+                    .cross_task_fn_types
+                    .contains(&crate::resolver::SpanKey::from_span(&ty.span))
+                {
+                    self.write_str(" + CrossTask");
+                }
                 match effect_spec {
                     Some(EffectSpec::Polymorphic) => self.write_str(" with _"),
                     Some(EffectSpec::Specific(list)) => {

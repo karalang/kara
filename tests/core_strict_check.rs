@@ -14543,8 +14543,9 @@ fn a_nested_closure_reads_an_escaping_closures_capture() {
 /// B-2026-10-26-13: a function value is CrossTask only when everything its
 /// environment reaches is (core semantics §6.3), through nested closures
 /// and erased `Fn` values. A spawned closure holding one that captures a
-/// `shared` handle, the same passed to a function whose parameter is
-/// spawned, and a `Server.serve` handler over a `shared` store are refused;
+/// `shared` handle, the same passed to a `+ CrossTask` parameter that is
+/// spawned (B-2026-11-01-26: an unmarked one is refused where it is
+/// spawned), and a `Server.serve` handler over a `shared` store are refused;
 /// a `sync` store and a plain capture check and run.
 #[test]
 fn a_function_value_reaching_a_shared_handle_does_not_cross_a_task() {
@@ -14615,7 +14616,7 @@ fn a_function_value_reaching_a_shared_handle_does_not_cross_a_task() {
              mut n: i64,\n\
          }\n\
          \n\
-         fn run_all(f: Fn() -> i64) -> i64 {\n\
+         fn run_all(f: Fn() -> i64 + CrossTask) -> i64 {\n\
              let g = TaskGroup.new();\n\
              let h = g.spawn(|| f());\n\
              h.join()\n\

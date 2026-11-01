@@ -146,15 +146,21 @@ impl<'a> super::TypeChecker<'a> {
                     .as_ref()
                     .map(|t| self.lower_type_expr_inner(t, generic_scope, false))
                     .unwrap_or(Type::Unit);
+                let cross_task = super::types::CrossTaskMark(crate::prelude::marks_cross_task_fn(
+                    self.program,
+                    &crate::resolver::SpanKey::from_span(&ty.span),
+                ));
                 if *is_once {
                     Type::OnceFunction {
                         params: param_types,
                         return_type: Box::new(ret),
+                        cross_task,
                     }
                 } else {
                     Type::Function {
                         params: param_types,
                         return_type: Box::new(ret),
+                        cross_task,
                     }
                 }
             }
@@ -1716,7 +1722,9 @@ impl<'a> super::TypeChecker<'a> {
             Type::Function {
                 params,
                 return_type,
+                cross_task,
             } => Type::Function {
+                cross_task: crate::typechecker::types::CrossTaskMark(cross_task.0),
                 params: params
                     .iter()
                     .map(|p| self.resolve_assoc_projections(p))
@@ -1726,7 +1734,9 @@ impl<'a> super::TypeChecker<'a> {
             Type::OnceFunction {
                 params,
                 return_type,
+                cross_task,
             } => Type::OnceFunction {
+                cross_task: crate::typechecker::types::CrossTaskMark(cross_task.0),
                 params: params
                     .iter()
                     .map(|p| self.resolve_assoc_projections(p))

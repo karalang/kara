@@ -1804,6 +1804,11 @@ pub struct TypeCheckResult {
     /// `OnceFn` value. Calling one moves it (§9.6), and the ownership pass
     /// words a second call's E0500 by it.
     pub core_once_calls: FxHashSet<SpanKey>,
+    /// Each identifier that names a top-level function item (not a local).
+    /// Its value has no environment, so it is `CrossTask` whatever its
+    /// `Fn` type says; the auto-par safety sweep reads this
+    /// (B-2026-11-01-26).
+    pub fn_item_spans: FxHashSet<SpanKey>,
     /// v2 core (strict commands only): initializers of `let u = x;` where
     /// `x` is a `ref` binding. `ref T` is Copy (`docs/core-semantics.md`
     /// §1.1), so the read copies the reference and moves nothing; the
@@ -2813,6 +2818,8 @@ pub struct TypeChecker<'a> {
     pub(super) flatten_hinted: bool,
     /// See [`TypeCheckResult::core_once_calls`].
     pub(super) core_once_calls: FxHashSet<SpanKey>,
+    /// See [`TypeCheckResult::fn_item_spans`].
+    pub(super) fn_item_spans: FxHashSet<SpanKey>,
     /// core §14.9: which functions can start a branch or a task, computed on
     /// the first `with_provider` whose provider is not `CrossTask`.
     pub(super) forking: Option<provider_share::Forking>,
@@ -3098,6 +3105,17 @@ pub struct TypeChecker<'a> {
     /// with the set above. Read only by the `par` cross-task check, which
     /// lets a `frozen` handle into a branch (B-2026-10-19-46).
     pub(super) current_fn_frozen_lets: FxHashSet<String>,
+    /// This function's `let f = |..| ..;` bindings, saved and restored with
+    /// the sets above: such a function value's environment is in sight, so
+    /// its type is not erased and it may cross a task boundary unmarked,
+    /// where `fn_env_cross_task.rs` checks the environment (core semantics
+    /// §6.3, B-2026-11-01-26).
+    pub(super) current_fn_closure_lets: FxHashSet<String>,
+    /// For each of this function's bindings whose type is declared with an
+    /// unmarked function type in sight (a parameter, a `let` annotation, the
+    /// return type of the function a `let` is bound from), where `+
+    /// CrossTask` goes: the `E_NOT_CROSS_TASK` fix-it.
+    pub(super) current_fn_fn_markers: FxHashMap<String, Span>,
     /// Set while the constant-initializer walker checks a `const` under
     /// strict check (B-2026-10-22-19). design.md § Constants admits no calls,
     /// so the module-binding special forms (`Vec.new()`, `LazyLock.new`, ...)
@@ -3829,6 +3847,7 @@ impl<'a> TypeChecker<'a> {
             into_iter_hinted: false,
             flatten_hinted: false,
             core_once_calls: FxHashSet::default(),
+            fn_item_spans: FxHashSet::default(),
             forking: None,
             core_moving_scrutinees: FxHashMap::default(),
             pattern_may_move: false,
@@ -3872,6 +3891,8 @@ impl<'a> TypeChecker<'a> {
             current_fn_is_gpu: false,
             current_fn_frozen_params: FxHashSet::default(),
             current_fn_frozen_lets: FxHashSet::default(),
+            current_fn_closure_lets: FxHashSet::default(),
+            current_fn_fn_markers: FxHashMap::default(),
             const_init_strict: false,
             const_init_resource_default: false,
             current_fn_ref_params: FxHashSet::default(),
@@ -4397,6 +4418,7 @@ impl<'a> TypeChecker<'a> {
             copy_derive_first_steps,
             str_retyped_uses: std::mem::take(&mut self.str_retyped_uses),
             core_once_calls: std::mem::take(&mut self.core_once_calls),
+            fn_item_spans: std::mem::take(&mut self.fn_item_spans),
             core_ref_copy_spans: self.core_ref_copy_spans,
             rejected_assign_spans: self.rejected_assign_spans,
             core_ref_copy_nodes: self.core_ref_copy_nodes,
@@ -6943,11 +6965,13 @@ impl<'a> TypeChecker<'a> {
             let return_type = Box::new(ret.clone());
             if once {
                 Type::OnceFunction {
+                    cross_task: Default::default(),
                     params,
                     return_type,
                 }
             } else {
                 Type::Function {
+                    cross_task: Default::default(),
                     params,
                     return_type,
                 }
@@ -8123,10 +8147,12 @@ impl<'a> TypeChecker<'a> {
                 Type::Function {
                     params,
                     return_type,
+                    ..
                 }
                 | Type::OnceFunction {
                     params,
                     return_type,
+                    ..
                 } => params.iter().any(|t| walk(t, scope)) || walk(return_type, scope),
                 _ => false,
             }
@@ -8460,10 +8486,12 @@ fn names_foreign_param(ty: &Type, scope: &[String]) -> bool {
         Type::Function {
             params,
             return_type,
+            ..
         }
         | Type::OnceFunction {
             params,
             return_type,
+            ..
         } => {
             params.iter().any(|t| names_foreign_param(t, scope))
                 || names_foreign_param(return_type, scope)
@@ -8580,10 +8608,12 @@ pub(crate) fn refine_node_types_from_wholes(
                     Type::Function {
                         params,
                         return_type,
+                        ..
                     }
                     | Type::OnceFunction {
                         params,
                         return_type,
+                        ..
                     },
                     callee_frame,
                 )) = node_types.get(&callee)
@@ -8621,10 +8651,12 @@ fn fn_parts(t: &Type) -> Option<(&[Type], &Type, bool)> {
         Type::Function {
             params,
             return_type,
+            ..
         } => Some((params, return_type, false)),
         Type::OnceFunction {
             params,
             return_type,
+            ..
         } => Some((params, return_type, true)),
         _ => None,
     }

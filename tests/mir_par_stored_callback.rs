@@ -28,7 +28,7 @@ fn check(tag: &str, src: &str) -> String {
 }
 
 const SRC: &str = r#"
-struct Job { run: Fn(i64) -> i64 }
+struct Job { run: Fn(i64) -> i64 + CrossTask }
 
 fn sq(x: i64) -> i64 { x * x }
 
@@ -53,12 +53,18 @@ fn mir_par_stored_callback_without_a_clause_names_the_call() {
 #[test]
 fn mir_par_stored_callback_with_a_clause_has_its_effects() {
     // The slot declares only `reads(Clock)`, and two reads do not conflict.
-    let src = SRC.replace("Fn(i64) -> i64 }", "Fn(i64) -> i64 with reads(Clock) }");
+    let src = SRC.replace(
+        "Fn(i64) -> i64 + CrossTask }",
+        "Fn(i64) -> i64 + CrossTask with reads(Clock) }",
+    );
     assert_eq!(check("clause", &src), "");
     let r = karac::mir::lower::run_source(&src).unwrap_or_else(|e| panic!("build: {e}"));
     assert_eq!(r.output, "25\n", "stderr: {}", r.stderr);
     // Two writes of the declared resource keep their order.
-    let src = SRC.replace("Fn(i64) -> i64 }", "Fn(i64) -> i64 with writes(Stdout) }");
+    let src = SRC.replace(
+        "Fn(i64) -> i64 + CrossTask }",
+        "Fn(i64) -> i64 + CrossTask with writes(Stdout) }",
+    );
     let err = check("writes", &src);
     assert!(
         err.contains("conflict: `writes(Stdout)` and `writes(Stdout)`"),
@@ -71,12 +77,12 @@ fn mir_par_stored_callback_captured_from_a_let_has_its_effects() {
     let src = r#"
 fn sq(x: i64) -> i64 { x * x }
 
-fn pick(n: i64) -> Fn(i64) -> i64 with reads(Clock) {
+fn pick(n: i64) -> Fn(i64) -> i64 + CrossTask with reads(Clock) {
     sq
 }
 
 fn main() {
-    let f: Fn(i64) -> i64 with reads(Clock) = pick(0);
+    let f: Fn(i64) -> i64 + CrossTask with reads(Clock) = pick(0);
     let (a, b) = par { f(3), f(4) };
     println(f"{a + b}");
 }

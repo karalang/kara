@@ -37,6 +37,7 @@ fn format_program_inner(program: &Program, comments: Vec<comments::Comment>) -> 
     f.mut_ref_binding_spans = program.mut_ref_binding_spans.clone();
     f.escaping_fn_types = program.escaping_fn_types.clone();
     f.mut_fn_types = program.mut_fn_types.clone();
+    f.cross_task_fn_types = program.cross_task_fn_types.clone();
     f.paren_return_types = program.paren_return_types.clone();
     f.container_hashers = program.container_hashers.clone();
     f.stmt_lint_overrides = program.stmt_lint_overrides.clone();
@@ -115,6 +116,8 @@ pub(super) struct Formatter {
     pub(super) escaping_fn_types: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
     /// `MutFn(...)` types, copied from `Program::mut_fn_types`.
     pub(super) mut_fn_types: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
+    /// `Fn(..) + CrossTask` types, copied from `Program::cross_task_fn_types`.
+    pub(super) cross_task_fn_types: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
     /// Parenthesized return types, copied from `Program::paren_return_types`:
     /// `-> (dyn T) with X` keeps its parentheses, which silence
     /// `return_clause_on_fn`.
@@ -147,6 +150,7 @@ impl Formatter {
             mut_ref_binding_spans: rustc_hash::FxHashSet::default(),
             escaping_fn_types: rustc_hash::FxHashSet::default(),
             mut_fn_types: rustc_hash::FxHashSet::default(),
+            cross_task_fn_types: rustc_hash::FxHashSet::default(),
             paren_return_types: rustc_hash::FxHashSet::default(),
             container_hashers: rustc_hash::FxHashMap::default(),
             stmt_lint_overrides: rustc_hash::FxHashMap::default(),

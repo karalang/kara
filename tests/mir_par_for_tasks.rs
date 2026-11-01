@@ -93,7 +93,7 @@ fn runs(name: &str, src: &str) -> Vec<(String, Duration)> {
 #[test]
 fn mir_par_for_values_keep_iteration_order() {
     let src = r#"struct P { name: String, n: i64 }
-fn total[T: Copy](xs: ref Vec[T], f: Fn(T) -> i64) -> Vec[i64] {
+fn total[T: Copy](xs: ref Vec[T], f: Fn(T) -> i64 + CrossTask) -> Vec[i64] {
     let r: Vec[i64] = par for x in xs.iter() { f(*x) };
     r
 }

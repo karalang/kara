@@ -234,10 +234,12 @@ pub(super) fn contains_type_var(t: &Type) -> bool {
         Type::Function {
             params,
             return_type,
+            ..
         }
         | Type::OnceFunction {
             params,
             return_type,
+            ..
         } => params.iter().any(contains_type_var) || contains_type_var(return_type),
         Type::Dyn { args, assoc, .. } => {
             args.iter().any(contains_type_var) || assoc.iter().any(|(_, t)| contains_type_var(t))
@@ -686,16 +688,20 @@ impl<'a> super::TypeChecker<'a> {
                 Type::Function {
                     params,
                     return_type,
+                    cross_task,
                 },
                 Type::Function {
                     params: p2,
                     return_type: r2,
+                    ..
                 }
                 | Type::OnceFunction {
                     params: p2,
                     return_type: r2,
+                    ..
                 },
             ) if params.len() == p2.len() => Type::Function {
+                cross_task: *cross_task,
                 params: merge_all(params, p2),
                 return_type: Box::new(self.merge_foreign_params(return_type, r2)),
             },
@@ -703,16 +709,20 @@ impl<'a> super::TypeChecker<'a> {
                 Type::OnceFunction {
                     params,
                     return_type,
+                    cross_task,
                 },
                 Type::Function {
                     params: p2,
                     return_type: r2,
+                    ..
                 }
                 | Type::OnceFunction {
                     params: p2,
                     return_type: r2,
+                    ..
                 },
             ) if params.len() == p2.len() => Type::OnceFunction {
+                cross_task: *cross_task,
                 params: merge_all(params, p2),
                 return_type: Box::new(self.merge_foreign_params(return_type, r2)),
             },
@@ -2944,6 +2954,7 @@ impl<'a> super::TypeChecker<'a> {
                                 let n_ty = self.infer_expr(&args[0].value);
                                 self.check_i64_arg(&args[0].value, &n_ty);
                                 let f_ty = Type::Function {
+                                    cross_task: Default::default(),
                                     params: vec![Type::Int(IntSize::I64)],
                                     return_type: Box::new(type_args[0].clone()),
                                 };
@@ -3276,10 +3287,12 @@ impl<'a> super::TypeChecker<'a> {
             Type::Function {
                 params,
                 return_type,
+                ..
             }
             | Type::OnceFunction {
                 params,
                 return_type,
+                ..
             } => Some((params.as_slice(), return_type.as_ref())),
             _ => None,
         };
@@ -6030,10 +6043,12 @@ impl<'a> super::TypeChecker<'a> {
             Type::Function {
                 params,
                 return_type,
+                ..
             }
             | Type::OnceFunction {
                 params,
                 return_type,
+                ..
             } => Some((params.clone(), (**return_type).clone())),
             _ => None,
         };
@@ -7018,10 +7033,12 @@ impl<'a> super::TypeChecker<'a> {
             Type::Function {
                 params,
                 return_type,
+                ..
             }
             | Type::OnceFunction {
                 params,
                 return_type,
+                ..
             } => {
                 for param in params {
                     self.discharge_gat_decl_constraints_in(param, discharge_span);
@@ -9189,6 +9206,14 @@ impl<'a> super::TypeChecker<'a> {
                         .insert(SpanKey::from_span(&expr.span), name.clone());
                 }
                 let ty = self.resolve_identifier_type(name, &expr.span);
+                // B-2026-11-01-26: a name that is no local and still has a
+                // function type is a function item or a constructor. It has
+                // no environment, so auto-par may treat it as `CrossTask`.
+                if matches!(ty, Type::Function { .. } | Type::OnceFunction { .. })
+                    && self.local_scope.lookup(name).is_none()
+                {
+                    self.fn_item_spans.insert(SpanKey::from_span(&expr.span));
+                }
                 self.refuse_core_bare_variant(name, &ty, &expr.span);
                 // B-2026-08-19-17 (b) — a bare variant name that two or more
                 // USER enums declare is rejected rather than silently resolved
@@ -9303,10 +9328,20 @@ impl<'a> super::TypeChecker<'a> {
                     Some(ga) => self.qualified_variant_with_type_args(segments, ga, &expr.span),
                     None => None,
                 };
-                match pinned {
+                let ty = match pinned {
                     Some(t) => t,
                     None => self.resolve_path_type(segments, &expr.span),
+                };
+                // B-2026-11-01-26: as for a bare name, a path rooted at no
+                // local (`Type.f`, `Enum.Variant`) is environment-free.
+                if matches!(ty, Type::Function { .. } | Type::OnceFunction { .. })
+                    && segments
+                        .first()
+                        .is_some_and(|s| self.local_scope.lookup(s).is_none())
+                {
+                    self.fn_item_spans.insert(SpanKey::from_span(&expr.span));
                 }
+                ty
             }
 
             ExprKind::SelfValue => self.current_self_type.clone().unwrap_or(Type::Error),
@@ -11954,10 +11989,12 @@ fn type_contains_assoc_projection(ty: &Type) -> bool {
         Type::Function {
             params,
             return_type,
+            ..
         }
         | Type::OnceFunction {
             params,
             return_type,
+            ..
         } => {
             params.iter().any(type_contains_assoc_projection)
                 || type_contains_assoc_projection(return_type)

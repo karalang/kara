@@ -1,0 +1,1 @@
+ERROR at line 28: capture of `orders` (type `EventBus`) cannot cross a par {} task boundary; it reaches `Fn(Event)`, which is CrossTask only as `Fn(Event) + CrossTask` (E_NOT_CROSS_TASK)

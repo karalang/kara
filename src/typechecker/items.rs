@@ -2007,14 +2007,18 @@ impl<'a> super::TypeChecker<'a> {
             Type::Function {
                 params,
                 return_type,
+                cross_task,
             } => Type::Function {
+                cross_task: crate::typechecker::types::CrossTaskMark(cross_task.0),
                 params: params.into_iter().map(rec).collect(),
                 return_type: Box::new(rec(*return_type)),
             },
             Type::OnceFunction {
                 params,
                 return_type,
+                cross_task,
             } => Type::OnceFunction {
+                cross_task: crate::typechecker::types::CrossTaskMark(cross_task.0),
                 params: params.into_iter().map(rec).collect(),
                 return_type: Box::new(rec(*return_type)),
             },
@@ -2497,6 +2501,14 @@ impl<'a> super::TypeChecker<'a> {
         let saved_iter_lets = std::mem::take(&mut self.iter_lets);
         let saved_str_lit_lets = std::mem::take(&mut self.str_lit_lets);
         let saved_frozen_lets = std::mem::take(&mut self.current_fn_frozen_lets);
+        let saved_closure_lets = std::mem::take(&mut self.current_fn_closure_lets);
+        let markers: rustc_hash::FxHashMap<String, Span> = f
+            .params
+            .iter()
+            .filter_map(|p| Some((p, self.fn_marker_point(&p.ty)?)))
+            .flat_map(|(p, at)| p.pattern.binding_names().into_iter().map(move |n| (n, at)))
+            .collect();
+        let saved_fn_markers = std::mem::replace(&mut self.current_fn_fn_markers, markers);
         let saved_frozen_params = std::mem::replace(
             &mut self.current_fn_frozen_params,
             f.params
@@ -2578,6 +2590,8 @@ impl<'a> super::TypeChecker<'a> {
         self.current_fn_is_gpu = saved_fn_is_gpu;
         self.current_fn_frozen_params = saved_frozen_params;
         self.current_fn_frozen_lets = saved_frozen_lets;
+        self.current_fn_closure_lets = saved_closure_lets;
+        self.current_fn_fn_markers = saved_fn_markers;
         self.current_fn_ref_params = saved_ref_params;
         self.current_fn_d5_params = saved_d5_params;
         self.current_fn_mut_self = saved_mut_self;
@@ -9393,6 +9407,43 @@ impl<'a> super::TypeChecker<'a> {
                 {
                     self.current_fn_frozen_lets.extend(pattern.binding_names());
                 }
+                match (&pattern.kind, &value.kind) {
+                    (PatternKind::Binding(name), ExprKind::Closure { .. }) => {
+                        self.current_fn_closure_lets.insert(name.clone());
+                    }
+                    _ => {
+                        for n in pattern.binding_names() {
+                            self.current_fn_closure_lets.remove(&n);
+                        }
+                    }
+                }
+                {
+                    let at = match (ty, &value.kind) {
+                        (Some(t), _) => self.fn_marker_point(t),
+                        (None, ExprKind::Call { callee, .. }) => match &callee.kind {
+                            ExprKind::Identifier(n) => {
+                                self.program.items.iter().find_map(|it| match it {
+                                    Item::Function(g) if &g.name == n => {
+                                        g.return_type.as_ref().and_then(|r| self.fn_marker_point(r))
+                                    }
+                                    _ => None,
+                                })
+                            }
+                            _ => None,
+                        },
+                        _ => None,
+                    };
+                    for n in pattern.binding_names() {
+                        match at {
+                            Some(at) => {
+                                self.current_fn_fn_markers.insert(n, at);
+                            }
+                            None => {
+                                self.current_fn_fn_markers.remove(&n);
+                            }
+                        }
+                    }
+                }
                 let mut expected_ty = if let Some(ty_expr) = ty {
                     // Lower with the enclosing fn's DIM params in scope so a
                     // shape param `let p: Tensor[f32, [D]]` resolves `D`; type
@@ -10771,20 +10822,24 @@ fn sig_types_differ(a: &Type, b: &Type) -> bool {
             Type::Function {
                 params: p1,
                 return_type: r1,
+                ..
             },
             Type::Function {
                 params: p2,
                 return_type: r2,
+                ..
             },
         )
         | (
             Type::OnceFunction {
                 params: p1,
                 return_type: r1,
+                ..
             },
             Type::OnceFunction {
                 params: p2,
                 return_type: r2,
+                ..
             },
         ) => {
             // A function type's parameter modes are D5's rewrite, which the

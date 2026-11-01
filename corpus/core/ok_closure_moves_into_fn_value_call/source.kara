@@ -14,7 +14,7 @@ fn get(i: i64) -> Option[String] {
     if i == 1 { None } else { Some(f"v{i}x") }
 }
 
-fn spawned(f: own Fn(own String) -> i64) -> i64 {
+fn spawned(f: own Fn(own String) -> i64 + CrossTask) -> i64 {
     let mut g = TaskGroup.new();
     let mut hs: Vec[TaskHandle[i64]] = Vec.new();
     let mut i = 0;

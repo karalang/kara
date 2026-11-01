@@ -1530,6 +1530,22 @@ pub fn stdlib_span_base(index: usize) -> usize {
     usize::MAX / 2 + index * (1 << 24)
 }
 
+/// Whether the function type at `key` is written `+ CrossTask` (core
+/// semantics §6.3). A gated module's items are spliced into the program
+/// without the parser's side tables, so a span in one is looked up in that
+/// module's own parse (B-2026-11-01-26: `std.time`'s `timeout`).
+pub fn marks_cross_task_fn(program: &crate::ast::Program, key: &crate::resolver::SpanKey) -> bool {
+    if program.cross_task_fn_types.contains(key) {
+        return true;
+    }
+    let Some(d) = key.0.checked_sub(gated_span_base(0)) else {
+        return false;
+    };
+    GATED_STDLIB_PROGRAMS
+        .get(d >> 24)
+        .is_some_and(|(_, p)| p.cross_task_fn_types.contains(key))
+}
+
 /// The gated module whose text a span at `offset` lies in, with that
 /// module's span base.
 pub fn gated_module_at(offset: usize) -> Option<(&'static [&'static str], usize)> {

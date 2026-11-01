@@ -3,13 +3,14 @@ struct Event { n: i64 }
 // Two buses (design.md § Effect variables): each value's `E` is the set
 // of the handlers bound into it, so a call through `orders`' handlers
 // writes standard output and one through `tally`'s writes nothing, and
-// the two `emit`s may run at once (core semantics §11.2).
+// the two `emit`s may run at once (core semantics §11.2). Each bus moves
+// into a `par` branch, so its handlers' type is `+ CrossTask` (§6.3).
 struct EventBus[with E] {
-    handlers: Vec[Fn(Event) with E],
+    handlers: Vec[Fn(Event) + CrossTask with E],
 }
 
 impl[with E] EventBus[with E] {
-    fn register(mut ref self, h: escaping Fn(Event) with E) {
+    fn register(mut ref self, h: escaping Fn(Event) + CrossTask with E) {
         self.handlers.push(h);
     }
 

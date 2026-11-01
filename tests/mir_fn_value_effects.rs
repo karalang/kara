@@ -80,8 +80,8 @@ println(f\"{f(2) + g(3) + h(4)}\");\n}\n";
 #[test]
 fn mir_a_call_through_a_captured_let_carries_its_declared_clause() {
     let src = "fn sq(x: i64) -> i64 {\n    x * x\n}\n\
-fn pick(n: i64) -> Fn(i64) -> i64 with reads(Clock) {\n    sq\n}\n\
-fn main() {\n    let f: Fn(i64) -> i64 with reads(Clock) = pick(0);\n    \
+fn pick(n: i64) -> Fn(i64) -> i64 + CrossTask with reads(Clock) {\n    sq\n}\n\
+fn main() {\n    let f: Fn(i64) -> i64 + CrossTask with reads(Clock) = pick(0);\n    \
 let (a, b) = par { f(3), f(4) };\n    println(f\"{a + b}\");\n}\n";
     for branch in ["main.c0", "main.c1"] {
         assert_eq!(

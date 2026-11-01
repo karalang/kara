@@ -44,10 +44,13 @@
 //! - `Ref(inner)` / `MutRef(inner)` / `Weak(inner)` — the borrow target's
 //!   transitivity matters
 //!
+//! An erased `Function` / `OnceFunction` is a leaf: the type says nothing of
+//! the environment behind it, so it is cross-task-safe only when written
+//! `+ CrossTask` (core semantics §6.3), and each coercion into that form
+//! checks the environment (`typechecker/fn_env_cross_task.rs`). A closure
+//! literal's environment is checked at its own boundary site instead.
+//!
 //! Does NOT recurse into:
-//! - `Function` / `OnceFunction` — closures are checked at their own
-//!   boundary site (their capture set), not transitively through the
-//!   function type
 //! - `ImplTrait` — unresolved at the type layer
 //! - `Dyn` — only `dyn Trait + CrossTask` may cross, and its coercions
 //!   checked the concrete types
@@ -102,6 +105,9 @@ pub enum CrossTaskUnsafeFixIt {
     /// `dyn Trait` → `dyn Trait + CrossTask`: the concrete type is not in
     /// the type, so only the marked form may cross.
     DynCrossTask,
+    /// `Fn(..) -> R` → `Fn(..) -> R + CrossTask`: an erased function type
+    /// hides its environment, so only the marked form may cross.
+    FnCrossTask,
 }
 
 impl CrossTaskUnsafeFixIt {
@@ -123,6 +129,11 @@ impl CrossTaskUnsafeFixIt {
             ),
             CrossTaskUnsafeFixIt::RawPointer => format!(
                 "wrap `{}` in `Atomic[*mut T]` or transfer ownership through a channel",
+                unsafe_leaf
+            ),
+            CrossTaskUnsafeFixIt::FnCrossTask => format!(
+                "write `{} + CrossTask` where the type is declared, so that each function \
+                 value coerced into it is checked to be `CrossTask` (core semantics §6.3)",
                 unsafe_leaf
             ),
             CrossTaskUnsafeFixIt::DynCrossTask => format!(
@@ -228,6 +239,19 @@ fn walk<S1: BuildHasher, S2: BuildHasher>(
                 path: path.clone(),
                 unsafe_leaf: type_display(ty),
                 fix_it: CrossTaskUnsafeFixIt::DynCrossTask,
+            });
+        }
+        // An erased function type hides its environment: only the marked
+        // form may cross, since each coercion into it checks the
+        // environment (core semantics §6.3, B-2026-11-01-26).
+        Type::Function { cross_task, .. } | Type::OnceFunction { cross_task, .. }
+            if !cross_task.0 =>
+        {
+            return Err(CrossTaskUnsafePath {
+                root: root.to_string(),
+                path: path.clone(),
+                unsafe_leaf: type_display(ty),
+                fix_it: CrossTaskUnsafeFixIt::FnCrossTask,
             });
         }
         Type::Named { name, .. } if name == "OnceCell" => {
@@ -369,10 +393,10 @@ fn walk<S1: BuildHasher, S2: BuildHasher>(
         // fires post-monomorphization so concrete substitutions ARE
         // walked.
         Type::TypeParam(_) | Type::TypeVar(_) | Type::AssocProjection { .. } => {}
-        // Opaque — walker doesn't recurse. The function value's
-        // capture set is checked at the boundary site where the
-        // function is constructed (the closure literal), not at every
-        // place the function-typed value flows.
+        // `+ CrossTask` (the unmarked form returned above): each coercion
+        // into it checked the function value's environment, and its
+        // parameter and return types are values it takes and makes, not
+        // ones it holds.
         Type::Function { .. } | Type::OnceFunction { .. } => {}
         // Unresolved existential trait shape — accepted at this
         // layer; concrete witnesses are walked when they're

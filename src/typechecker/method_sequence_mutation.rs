@@ -101,6 +101,7 @@ impl<'a> super::TypeChecker<'a> {
                     }
                 } else {
                     let f_ty = Type::Function {
+                        cross_task: Default::default(),
                         params: vec![elem],
                         return_type: Box::new(Type::Bool),
                     };

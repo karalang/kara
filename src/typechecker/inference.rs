@@ -159,7 +159,9 @@ pub(crate) fn substitute_type_params(ty: &Type, subs: &HashMap<String, SubstValu
         Type::Function {
             params,
             return_type,
+            cross_task,
         } => Type::Function {
+            cross_task: crate::typechecker::types::CrossTaskMark(cross_task.0),
             params: params
                 .iter()
                 .map(|p| substitute_type_params(p, subs))
@@ -169,7 +171,9 @@ pub(crate) fn substitute_type_params(ty: &Type, subs: &HashMap<String, SubstValu
         Type::OnceFunction {
             params,
             return_type,
+            cross_task,
         } => Type::OnceFunction {
+            cross_task: crate::typechecker::types::CrossTaskMark(cross_task.0),
             params: params
                 .iter()
                 .map(|p| substitute_type_params(p, subs))
@@ -346,10 +350,12 @@ pub(super) fn instantiate_signature_with_fresh_vars(
             Type::Function {
                 params,
                 return_type,
+                ..
             }
             | Type::OnceFunction {
                 params,
                 return_type,
+                ..
             } => {
                 for p in params {
                     collect(p, names, seen, const_names, const_seen);
@@ -487,7 +493,9 @@ pub(super) fn instantiate_signature_with_fresh_vars(
             Type::Function {
                 params,
                 return_type,
+                cross_task,
             } => Type::Function {
+                cross_task: crate::typechecker::types::CrossTaskMark(cross_task.0),
                 params: params
                     .iter()
                     .map(|p| substitute(p, name_to_id, name_to_const_id))
@@ -497,7 +505,9 @@ pub(super) fn instantiate_signature_with_fresh_vars(
             Type::OnceFunction {
                 params,
                 return_type,
+                cross_task,
             } => Type::OnceFunction {
+                cross_task: crate::typechecker::types::CrossTaskMark(cross_task.0),
                 params: params
                     .iter()
                     .map(|p| substitute(p, name_to_id, name_to_const_id))
@@ -804,14 +814,18 @@ pub(super) fn resolve_type_vars(
         Type::Function {
             params,
             return_type,
+            cross_task,
         } => Type::Function {
+            cross_task: crate::typechecker::types::CrossTaskMark(cross_task.0),
             params: params.iter().map(&recur).collect(),
             return_type: Box::new(recur(return_type)),
         },
         Type::OnceFunction {
             params,
             return_type,
+            cross_task,
         } => Type::OnceFunction {
+            cross_task: crate::typechecker::types::CrossTaskMark(cross_task.0),
             params: params.iter().map(&recur).collect(),
             return_type: Box::new(recur(return_type)),
         },
@@ -1039,10 +1053,12 @@ pub(super) fn unify_types(
             Type::Function {
                 params: xp,
                 return_type: xr,
+                ..
             },
             Type::Function {
                 params: yp,
                 return_type: yr,
+                ..
             },
         ) if xp.len() == yp.len() => {
             xp.iter()
@@ -1054,10 +1070,12 @@ pub(super) fn unify_types(
             Type::OnceFunction {
                 params: xp,
                 return_type: xr,
+                ..
             },
             Type::OnceFunction {
                 params: yp,
                 return_type: yr,
+                ..
             },
         ) if xp.len() == yp.len() => {
             xp.iter()
@@ -1081,20 +1099,24 @@ pub(super) fn unify_types(
             Type::OnceFunction {
                 params: xp,
                 return_type: xr,
+                ..
             },
             Type::Function {
                 params: yp,
                 return_type: yr,
+                ..
             },
         )
         | (
             Type::Function {
                 params: xp,
                 return_type: xr,
+                ..
             },
             Type::OnceFunction {
                 params: yp,
                 return_type: yr,
+                ..
             },
         ) if xp.len() == yp.len() => {
             xp.iter()
@@ -1457,10 +1479,12 @@ pub(super) fn find_unbound_const_param<'a>(
         Type::Function {
             params,
             return_type,
+            ..
         }
         | Type::OnceFunction {
             params,
             return_type,
+            ..
         } => params
             .iter()
             .find_map(|p| find_unbound_const_param(p, in_scope))
@@ -1497,10 +1521,12 @@ pub(super) fn find_unbound_type_param<'a>(
         Type::Function {
             params,
             return_type,
+            ..
         }
         | Type::OnceFunction {
             params,
             return_type,
+            ..
         } => params
             .iter()
             .find_map(|p| find_unbound_type_param(p, in_scope))

@@ -1850,6 +1850,14 @@ impl<'a> super::TypeChecker<'a> {
                         self.check_cross_task_safe_captures(&args[0].value, span, &what);
                     }
                 }
+            } else {
+                let recv_ty = self.infer_expr(object);
+                if let Type::Named { name, .. } = &recv_ty {
+                    if name == "TaskGroup" || name == "IsolatingGroup" {
+                        let what = format!("{name}.spawn");
+                        self.check_spawned_fn_value(&args[0].value, span, &what);
+                    }
+                }
             }
         }
 
