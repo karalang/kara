@@ -60,7 +60,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | false-positive | 87 |
 | diagnostics | 86 |
-| perf | 68 |
+| perf | 69 |
 | missing-feature | 60 |
 | soundness | 34 |
 | miscompile | 28 |
@@ -77,7 +77,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | typecheck | 143 |
 | mir | 95 |
-| mir-llvm | 75 |
+| mir-llvm | 76 |
 | cli | 49 |
 | ownership | 38 |
 | interp | 26 |
@@ -141,6 +141,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-01-42 | 2026-11-01 | mir-llvm | medium | Kata 147's insertion-sort-list runs legacy's instruction count on the MIR backend but 1.36x its cycles: the seq lane went from 0.72x to 0.99x rustc -O and from 0.82x to 1.31x C | — |
 | B-2026-11-01-43 | 2026-11-01 | mir-llvm | low | Kata 164's maximum-gap runs 1.30x legacy's instructions on the MIR backend (1.19x its cycles): the seq lane went from 0.84x to 0.99x rustc -O and from 1.17x to 1.42x C | — |
 | B-2026-11-01-44 | 2026-11-01 | mir-llvm | medium | Kata 170's Map[i64, i64]-heavy two-sum-III runs FEWER instructions on the MIR backend than legacy (0.75x) but 1.43x its cycles: the seq lane went from 2.56x to 3.01x rustc -O | — |
+| B-2026-11-01-45 | 2026-11-01 | mir-llvm | low | Four of katas 101-210 lost 10-13% of their wall-time ratio to Rust on the MIR backend, each too small to file alone (1.04-1.12x legacy's instructions, 1.07-1.13x its cycles): the second borderline batch after B-2026-11-01-20 | — |
 
 ### Relocated
 
