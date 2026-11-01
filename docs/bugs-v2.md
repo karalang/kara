@@ -118,7 +118,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-01-8 | 2026-11-01 | parser | medium | `karac fix` on `println!("{}", n)` (and `print!` / `eprintln!` with format arguments) only deletes the `!`, leaving `println("{}", n)`, which fails E0202 "takes 0 or 1 argument(s)" with no fix; and on `println!("{n}")` the same edit silently changes the output from Rust's `3` to the literal `{n}`. `format!` already gets the f-string rewrite (B-2026-10-24-12) | — |
 | B-2026-11-01-9 | 2026-11-01 | typecheck | low | Rust string-method carry-overs `trim_start_matches`, `trim_end_matches`, `trim_matches` and `to_owned` get a bare E0236 "no method 'X' on type 'String'" with no hint (and `trim_matches(|c| ..)` adds a cascaded E0208 on the closure), where `parse::<T>()` and `s.parse()` already get named messages that point at `i64.parse(s)`; Kāra's spellings are `strip_prefix` / `strip_suffix` and `to_string()` | — |
 | B-2026-11-01-10 | 2026-11-01 | typecheck | low | Comparing a library lookup with an owned Option (`m.get(k) == Some(5)`, `m.get(k) == o`, `v.get(i) == o.map(..)`) fails E0208 "cannot compare 'Option[ref i64]' and 'Option[i64]'" with no fix, though the fix is the one the `.copied()` diagnostic already names: `.cloned()` on the ref side (or `?? d`), machine-applicable when the item is Copy | — |
-| B-2026-11-01-11 | 2026-11-01 | ownership+cli | medium | `(x, y) = (y, x)` on two `String` bindings gets the right E0287 fix (drop the parentheses) plus four cascade E0500 move errors with `.clone()` fixes, and `karac fix` applies the clones, not the E0287 edit, leaving `(x.clone(), y.clone()) = (...)` and then `x.clone(), y.clone() = ...`, which no fix repairs; with `i64` bindings the fix works | — |
 | B-2026-11-01-12 | 2026-11-01 | mir | high | A `mut` field of handle-aggregate type passed to a borrowed parameter (`g(h.left, h)` with `a: Option[N]`) is lent in place rather than counted (core-semantics §6.2), so a write to the field through another handle during the call changes what the parameter reads: `cut(h); match a { Some(x) => x.val, None => -1 }` prints -1, want 7 | — |
 
 ### Relocated
@@ -498,6 +497,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-31-36 | cli | high | `karac build --target=wasm_wasi` on a package, in a binary without the llvm feature, checks the package for the HOST platform: `import host` with onl… | b478379db3 |
 | B-2026-11-01-4 | typecheck | low | `s.substring(0, len)` with `len` a `ref i64` from `for len in lengths.iter()` is refused (E0200 "'substring' expects integer byte indices, found 'ref… | b740a6831e |
 | B-2026-11-01-5 | parser | low | A Rust-spelled mutable receiver or parameter type (`fn find(mut self, ..)`, `&mut self`, `ref mut self`, `self: mut ref Self`, `v: &mut Vec[i64]`) ge… | 59f20988a7 |
+| B-2026-11-01-11 | ownership+cli | medium | `(x, y) = (y, x)` on two `String` bindings gets the right E0287 fix (drop the parentheses) plus four cascade E0500 move errors with `.clone()` fixes,… | b5520ddad6 |
 
 </details>
 
