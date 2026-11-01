@@ -3279,6 +3279,91 @@ impl<'a> super::TypeChecker<'a> {
     ///
     /// An operator with no entry in the table above keeps the old operator-
     /// language wording rather than inventing a trait name for it.
+    /// "cannot compare 'A' and 'B'", with the edit for the one mismatch that
+    /// has a mechanical answer (B-2026-11-01-10): an `Option[ref T]` (a
+    /// library lookup, `m.get(k)` / `v.get(i)`) against an `Option[T]` of a
+    /// `Copy` `T`. The refusal is the rule (B-2026-10-12-22: the library side
+    /// is the ref); `.cloned()` after the ref side copies its item out, which
+    /// is the edit the `.copied()` diagnostic already names.
+    fn report_compare_mismatch(
+        &mut self,
+        (left, left_ty): (&Expr, &Type),
+        (right, right_ty): (&Expr, &Type),
+        span: Span,
+    ) {
+        let message = format!(
+            "cannot compare '{}' and '{}'",
+            type_display(left_ty),
+            type_display(right_ty)
+        );
+        let fix = self
+            .option_ref_compare_fix(left, left_ty, right_ty)
+            .or_else(|| self.option_ref_compare_fix(right, right_ty, left_ty));
+        match fix {
+            Some(fix) => self.type_error_with_fix_it(
+                format!(
+                    "{message}: one side views its item, an `Option[ref T]`; `.cloned()` \
+                     copies the item out (library/core-types.md), and `opt ?? d` reads \
+                     it or a default"
+                ),
+                span,
+                TypeErrorKind::InvalidBinaryOp,
+                fix,
+            ),
+            None => self.type_error(message, span, TypeErrorKind::InvalidBinaryOp),
+        }
+    }
+
+    /// The edit inserting `.cloned()` after `side`, when `side_ty` is
+    /// `Option[ref T]` with `T` `Copy`, `other_ty` is `Option[T]`, and the
+    /// end of `side` is known.
+    fn option_ref_compare_fix(
+        &self,
+        side: &Expr,
+        side_ty: &Type,
+        other_ty: &Type,
+    ) -> Option<FixIt> {
+        let item = |t: &Type| -> Option<Type> {
+            match strip_refs_for_compare(t) {
+                Type::Named { name, args } if name == "Option" && args.len() == 1 => {
+                    Some(resolve_type_var_top(&args[0], &self.env.substitutions))
+                }
+                _ => None,
+            }
+        };
+        let viewed = item(side_ty)?;
+        let owned = item(other_ty)?;
+        let inner = match &viewed {
+            Type::Ref(inner) => inner.as_ref(),
+            _ => return None,
+        };
+        if matches!(owned, Type::Ref(_) | Type::MutRef(_))
+            || !types_compatible(inner, &owned)
+            || !self.is_copy_type_during_check(inner)
+        {
+            return None;
+        }
+        let end = match &side.kind {
+            ExprKind::MethodCall {
+                args_close_span, ..
+            } => args_close_span.offset + args_close_span.length,
+            ExprKind::Identifier(_)
+            | ExprKind::FieldAccess { .. }
+            | ExprKind::Index { .. }
+            | ExprKind::TupleIndex { .. }
+            | ExprKind::Call { .. } => side.span.offset + side.span.length,
+            _ => return None,
+        };
+        Some(FixIt {
+            span: Span {
+                offset: end,
+                length: 0,
+                ..side.span
+            },
+            replacement: ".cloned()".to_string(),
+        })
+    }
+
     /// `String + t` with `t` a `Str`: the edit that appends `.to_string()`
     /// to `t`, where `t`'s end is known (B-2026-10-24-24).
     fn str_concat_operand_fix(
@@ -4308,15 +4393,7 @@ impl<'a> super::TypeChecker<'a> {
                 if !types_compatible(cmp_left, cmp_right)
                     && !self.core_text_compare(cmp_left, cmp_right)
                 {
-                    self.type_error(
-                        format!(
-                            "cannot compare '{}' and '{}'",
-                            type_display(&left_ty),
-                            type_display(&right_ty)
-                        ),
-                        *span,
-                        TypeErrorKind::InvalidBinaryOp,
-                    );
+                    self.report_compare_mismatch((left, &left_ty), (right, &right_ty), *span);
                 } else if self.reject_mixed_signedness_compare(
                     (left, cmp_left),
                     (right, cmp_right),
@@ -4355,15 +4432,7 @@ impl<'a> super::TypeChecker<'a> {
                 if !types_compatible(cmp_left, cmp_right)
                     && !self.core_text_compare(cmp_left, cmp_right)
                 {
-                    self.type_error(
-                        format!(
-                            "cannot compare '{}' and '{}'",
-                            type_display(&left_ty),
-                            type_display(&right_ty)
-                        ),
-                        *span,
-                        TypeErrorKind::InvalidBinaryOp,
-                    );
+                    self.report_compare_mismatch((left, &left_ty), (right, &right_ty), *span);
                 } else if self.reject_mixed_signedness_compare(
                     (left, cmp_left),
                     (right, cmp_right),
