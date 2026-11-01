@@ -6351,6 +6351,18 @@ impl<'l, 'a> Bx<'l, 'a> {
             return self.unsupported(target.span, "an index assignment without `Option`");
         };
         let recv = self.recv_place(object, true)?;
+        // A place key is read before the value runs, which may write it
+        // (`m[k] = { k = 2; 5 }` inserts key 1: core semantics §8.2,
+        // B-2026-11-01-28). Only a `Copy` key: moving a `String` key
+        // first would refuse `m[key] = key.len()`, which the ownership
+        // check accepts today (B-2026-11-01-46).
+        if self.is_copy(kt)
+            && self.is_place(index)
+            && !self.plain_operand(value)
+            && self.later_may_write(index, &[value])
+        {
+            self.read_now.insert(index.id);
+        }
         let key = self.owned_operand(index, kt)?;
         let mut val = self.owned_operand(value, vt)?;
         val = if self.downgrades(&val, vt) {
