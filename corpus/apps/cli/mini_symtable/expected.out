@@ -1,0 +1,1833 @@
+$ tables webapp.py
+module top line 0
+  FILTERS: assigned global local
+  Order: assigned global local namespace
+  OrderView: assigned global local namespace
+  ROUTES: assigned global local
+  View: referenced assigned global local namespace
+  __name__: referenced global
+  dataclass: referenced global local imported
+  fetch_rates: assigned global local namespace
+  field: global local imported
+  handlers: global local imported
+  json: global local imported
+  log: assigned global local
+  logging: referenced global
+  make_app: assigned global local namespace
+  orders: assigned global local namespace
+  request_count: assigned global declared_global local
+  route: referenced assigned global local namespace
+  str: referenced global
+  wraps: global local imported
+  function route line 12 optimized
+    params: path, methods
+    locals: methods, path, register
+    methods: parameter local
+    path: parameter local
+    register: referenced assigned local namespace
+    function register line 13 nested optimized
+      params: fn
+      locals: fn, wrapper
+      frees: methods, path
+      globals: ROUTES, wraps
+      ROUTES: referenced global
+      fn: referenced parameter local
+      methods: free
+      path: referenced free
+      wrapper: referenced assigned local namespace
+      wraps: referenced global
+      function wrapper line 15 nested optimized
+        params: request, args, kwargs
+        locals: args, kwargs, request
+        frees: fn, methods
+        globals: list, request_count
+        args: referenced parameter local
+        fn: referenced free
+        kwargs: referenced parameter local
+        list: referenced global
+        methods: referenced free
+        request: referenced parameter local
+        request_count: assigned global declared_global
+  class Order line 27
+    methods: total
+    field: referenced global
+    id: assigned local annotated
+    int: referenced global
+    lines: assigned local annotated
+    list: referenced global
+    status: assigned local annotated
+    str: referenced global
+    total: assigned local namespace
+    function total line 32 optimized
+      params: self
+      locals: self
+      globals: sum
+      self: referenced parameter local
+      sum: referenced global
+      function genexpr line 33 nested optimized
+        params: .0
+        locals: .0, line
+        .0: parameter local
+        line: referenced assigned local
+  class View line 36
+    methods: __init__, render
+    __init__: assigned local namespace
+    render: assigned local namespace
+    template: assigned local
+    function __init__ line 39 optimized
+      params: self, request
+      locals: request, self
+      request: referenced parameter local
+      self: referenced parameter local
+    function render line 42 optimized
+      params: self, context
+      locals: context, self
+      context: referenced parameter local
+      self: referenced parameter local
+  class OrderView line 47
+    methods: __init__, render
+    __init__: assigned local namespace
+    render: assigned local namespace
+    template: assigned local
+    function __init__ line 50 optimized
+      params: self, request, store
+      locals: request, self, store
+      frees: __class__
+      globals: super
+      __class__: referenced free
+      request: referenced parameter local
+      self: referenced parameter local
+      store: referenced parameter local
+      super: referenced global
+    function render line 54 optimized
+      params: self, context
+      locals: context, missing, order, self
+      frees: __class__
+      globals: log, super
+      __class__: referenced free
+      context: referenced parameter local
+      log: referenced global
+      missing: referenced assigned local
+      order: referenced assigned local
+      self: referenced parameter local
+      super: referenced global
+  function orders line 62 optimized
+    params: request, store
+    locals: by_status, exc, o, open_orders, order, p, payload, request, store
+    globals: Order, ValueError, json, len, str
+    Order: referenced global
+    ValueError: referenced global
+    by_status: referenced assigned local
+    exc: referenced assigned local
+    json: referenced global
+    len: referenced global
+    o: referenced assigned local
+    open_orders: referenced assigned local
+    order: referenced assigned local
+    p: referenced assigned local
+    payload: referenced assigned local
+    request: referenced parameter local
+    store: referenced parameter local
+    str: referenced global
+  function fetch_rates line 77 optimized
+    params: client, currencies
+    locals: c, client, cur, currencies, r, rate, rates, session
+    c: referenced assigned local
+    client: referenced parameter local
+    cur: referenced assigned local
+    currencies: referenced parameter local
+    r: referenced assigned local
+    rate: referenced assigned local
+    rates: referenced assigned local
+    session: referenced assigned local
+  function lambda line 86 optimized
+    params: v, places
+    locals: places, v
+    places: referenced parameter local
+    v: referenced parameter local
+  function lambda line 88 optimized
+    params: n, word
+    locals: n, word
+    n: referenced parameter local
+    word: referenced parameter local
+  function make_app line 92 optimized
+    params: store
+    locals: app, fn, handlers_by_path, path, store
+    globals: ROUTES
+    ROUTES: referenced global
+    app: referenced assigned local namespace
+    fn: referenced assigned local
+    handlers_by_path: assigned local
+    path: referenced assigned local
+    store: parameter local
+    function app line 95 nested optimized
+      params: environ, start_response
+      locals: environ, handler, result, start_response
+      frees: handlers_by_path, store
+      globals: json
+      environ: referenced parameter local
+      handler: referenced assigned local
+      handlers_by_path: referenced free
+      json: referenced global
+      result: referenced assigned local
+      start_response: referenced parameter local
+      store: referenced free
+$ dump webapp.py
+symbol table for module from file 'webapp.py':
+    local symbol 'FILTERS': def_local
+    local symbol 'Order': def_local
+    local symbol 'OrderView': def_local
+    local symbol 'ROUTES': def_local
+    local symbol 'View': use, def_local
+    global_implicit symbol '__name__': use
+    local symbol 'dataclass': use, def_import
+    local symbol 'fetch_rates': def_local
+    local symbol 'field': def_import
+    local symbol 'handlers': def_import
+    local symbol 'json': def_import
+    local symbol 'log': def_local
+    global_implicit symbol 'logging': use
+    local symbol 'make_app': def_local
+    local symbol 'orders': def_local
+    global_explicit symbol 'request_count': def_global, def_local
+    local symbol 'route': use, def_local
+    global_implicit symbol 'str': use
+    local symbol 'wraps': def_import
+
+    symbol table for function 'route':
+        cell symbol 'methods': def_param
+        cell symbol 'path': def_param
+        local symbol 'register': use, def_local
+
+        symbol table for nested function 'register':
+            global_implicit symbol 'ROUTES': use
+            cell symbol 'fn': use, def_param
+            free symbol 'methods': 
+            free symbol 'path': use
+            local symbol 'wrapper': use, def_local
+            global_implicit symbol 'wraps': use
+
+            symbol table for nested function 'wrapper':
+                local symbol 'args': use, def_param
+                free symbol 'fn': use
+                local symbol 'kwargs': use, def_param
+                global_implicit symbol 'list': use
+                free symbol 'methods': use
+                local symbol 'request': use, def_param
+                global_explicit symbol 'request_count': def_global, def_local
+
+    symbol table for class 'Order':
+        global_implicit symbol 'field': use
+        local symbol 'id': def_local, def_annot
+        global_implicit symbol 'int': use
+        local symbol 'lines': def_local, def_annot
+        global_implicit symbol 'list': use
+        local symbol 'status': def_local, def_annot
+        global_implicit symbol 'str': use
+        local symbol 'total': def_local
+
+        symbol table for function 'total':
+            local symbol 'self': use, def_param
+            global_implicit symbol 'sum': use
+
+            symbol table for nested function 'genexpr':
+                local symbol '.0': def_param
+                local symbol 'line': use, def_local
+
+    symbol table for class 'View':
+        local symbol '__init__': def_local
+        local symbol 'render': def_local
+        local symbol 'template': def_local
+
+        symbol table for function '__init__':
+            local symbol 'request': use, def_param
+            local symbol 'self': use, def_param
+
+        symbol table for function 'render':
+            local symbol 'context': use, def_param
+            local symbol 'self': use, def_param
+
+    symbol table for class 'OrderView':
+        local symbol '__init__': def_local
+        local symbol 'render': def_local
+        local symbol 'template': def_local
+
+        symbol table for function '__init__':
+            free symbol '__class__': use
+            local symbol 'request': use, def_param
+            local symbol 'self': use, def_param
+            local symbol 'store': use, def_param
+            global_implicit symbol 'super': use
+
+        symbol table for function 'render':
+            free symbol '__class__': use
+            local symbol 'context': use, def_param
+            global_implicit symbol 'log': use
+            local symbol 'missing': use, def_local
+            local symbol 'order': use, def_local
+            local symbol 'self': use, def_param
+            global_implicit symbol 'super': use
+
+    symbol table for function 'orders':
+        global_implicit symbol 'Order': use
+        global_implicit symbol 'ValueError': use
+        local symbol 'by_status': use, def_local
+        local symbol 'exc': use, def_local
+        global_implicit symbol 'json': use
+        global_implicit symbol 'len': use
+        local symbol 'o': use, def_local
+        local symbol 'open_orders': use, def_local
+        local symbol 'order': use, def_local
+        local symbol 'p': use, def_local
+        local symbol 'payload': use, def_local
+        local symbol 'request': use, def_param
+        local symbol 'store': use, def_param
+        global_implicit symbol 'str': use
+
+    symbol table for function 'fetch_rates':
+        local symbol 'c': use, def_local
+        local symbol 'client': use, def_param
+        local symbol 'cur': use, def_local
+        local symbol 'currencies': use, def_param
+        local symbol 'r': use, def_local
+        local symbol 'rate': use, def_local
+        local symbol 'rates': use, def_local
+        local symbol 'session': use, def_local
+
+    symbol table for function 'lambda':
+        local symbol 'places': use, def_param
+        local symbol 'v': use, def_param
+
+    symbol table for function 'lambda':
+        local symbol 'n': use, def_param
+        local symbol 'word': use, def_param
+
+    symbol table for function 'make_app':
+        global_implicit symbol 'ROUTES': use
+        local symbol 'app': use, def_local
+        local symbol 'fn': use, def_local
+        cell symbol 'handlers_by_path': def_local
+        local symbol 'path': use, def_local
+        cell symbol 'store': def_param
+
+        symbol table for nested function 'app':
+            local symbol 'environ': use, def_param
+            local symbol 'handler': use, def_local
+            free symbol 'handlers_by_path': use
+            global_implicit symbol 'json': use
+            local symbol 'result': use, def_local
+            local symbol 'start_response': use, def_param
+            free symbol 'store': use
+
+$ lint webapp.py
+webapp.py:0: undefined name 'logging' in the module
+1 problems
+$ tables cli.py
+module top line 0
+  SystemExit: referenced global
+  Tally: global local imported
+  __name__: referenced global
+  describe: assigned global local namespace
+  frozenset: referenced global
+  main: referenced assigned global local namespace
+  os: global local imported
+  read_records: assigned global local namespace
+  scan: assigned global local namespace
+  sys: global local imported
+  top_words: assigned global local namespace
+  function scan line 6 optimized
+    params: paths, follow, ignore
+    locals: follow, ignore, p, paths, seen, skipped, visit
+    follow: parameter local
+    ignore: parameter local
+    p: referenced assigned local
+    paths: referenced parameter local
+    seen: referenced assigned local
+    skipped: referenced assigned local
+    visit: referenced assigned local namespace
+    function visit line 10 nested optimized
+      params: path, depth
+      locals: child, depth, path
+      frees: follow, ignore, seen, skipped, visit
+      globals: any, os, sorted
+      nonlocals: seen
+      any: referenced global
+      child: referenced assigned local
+      depth: referenced parameter local
+      follow: referenced free
+      ignore: referenced free
+      os: referenced global
+      path: referenced parameter local
+      seen: assigned free nonlocal
+      skipped: referenced free
+      sorted: referenced global
+      visit: referenced free
+      function genexpr line 12 nested optimized
+        params: .0
+        locals: .0, ext
+        frees: path
+        .0: parameter local
+        ext: referenced assigned local
+        path: referenced free
+  function read_records line 25 optimized
+    params: lines
+    locals: _, key, line, lineno, lines, value
+    globals: enumerate
+    _: assigned local
+    enumerate: referenced global
+    key: referenced assigned local
+    line: referenced assigned local
+    lineno: referenced assigned local
+    lines: referenced parameter local
+    value: referenced assigned local
+  function describe line 34 optimized
+    params: event
+    locals: event, first, k, others, pt, px, py, rest, x, y
+    globals: Point, len, sorted, str
+    Point: referenced global
+    event: referenced parameter local
+    first: referenced assigned local
+    k: referenced assigned local
+    len: referenced global
+    others: referenced assigned local
+    pt: referenced assigned local
+    px: referenced assigned local
+    py: referenced assigned local
+    rest: referenced assigned local
+    sorted: referenced global
+    str: referenced global
+    x: referenced assigned local
+    y: referenced assigned local
+  function top_words line 50 optimized
+    params: text, n, stop
+    locals: counts, head, n, order, stop, tail, text
+    globals: Tally, sorted
+    Tally: referenced global
+    counts: referenced assigned local
+    head: referenced assigned local
+    n: referenced parameter local
+    order: referenced assigned local
+    sorted: referenced global
+    stop: parameter local
+    tail: referenced assigned local
+    text: referenced parameter local
+    function genexpr line 51 nested optimized
+      params: .0
+      locals: .0, w
+      frees: stop
+      .0: parameter local
+      stop: referenced free
+      w: referenced assigned local
+    function lambda line 52 nested optimized
+      params: item
+      locals: item
+      item: referenced parameter local
+  function main line 58 optimized
+    params: argv
+    locals: argv, i, key, lineno, skipped, total, value
+    globals: enumerate, len, print, read_records, scan, sys
+    argv: referenced assigned parameter local
+    enumerate: referenced global
+    i: referenced assigned local
+    key: referenced assigned local
+    len: referenced global
+    lineno: referenced assigned local
+    print: referenced global
+    read_records: referenced global
+    scan: referenced global
+    skipped: referenced assigned local
+    sys: referenced global
+    total: referenced assigned local
+    value: referenced assigned local
+$ dump cli.py
+symbol table for module from file 'cli.py':
+    global_implicit symbol 'SystemExit': use
+    local symbol 'Tally': def_import
+    global_implicit symbol '__name__': use
+    local symbol 'describe': def_local
+    global_implicit symbol 'frozenset': use
+    local symbol 'main': use, def_local
+    local symbol 'os': def_import
+    local symbol 'read_records': def_local
+    local symbol 'scan': def_local
+    local symbol 'sys': def_import
+    local symbol 'top_words': def_local
+
+    symbol table for function 'scan':
+        cell symbol 'follow': def_param
+        cell symbol 'ignore': def_param
+        local symbol 'p': use, def_local
+        local symbol 'paths': use, def_param
+        cell symbol 'seen': use, def_local
+        cell symbol 'skipped': use, def_local
+        cell symbol 'visit': use, def_local
+
+        symbol table for nested function 'visit':
+            global_implicit symbol 'any': use
+            local symbol 'child': use, def_local
+            local symbol 'depth': use, def_param
+            free symbol 'follow': use
+            free symbol 'ignore': use
+            global_implicit symbol 'os': use
+            cell symbol 'path': use, def_param
+            free symbol 'seen': def_nonlocal, def_local
+            free symbol 'skipped': use
+            global_implicit symbol 'sorted': use
+            free symbol 'visit': use
+
+            symbol table for nested function 'genexpr':
+                local symbol '.0': def_param
+                local symbol 'ext': use, def_local
+                free symbol 'path': use
+
+    symbol table for function 'read_records':
+        local symbol '_': def_local
+        global_implicit symbol 'enumerate': use
+        local symbol 'key': use, def_local
+        local symbol 'line': use, def_local
+        local symbol 'lineno': use, def_local
+        local symbol 'lines': use, def_param
+        local symbol 'value': use, def_local
+
+    symbol table for function 'describe':
+        global_implicit symbol 'Point': use
+        local symbol 'event': use, def_param
+        local symbol 'first': use, def_local
+        local symbol 'k': use, def_local
+        global_implicit symbol 'len': use
+        local symbol 'others': use, def_local
+        local symbol 'pt': use, def_local
+        local symbol 'px': use, def_local
+        local symbol 'py': use, def_local
+        local symbol 'rest': use, def_local
+        global_implicit symbol 'sorted': use
+        global_implicit symbol 'str': use
+        local symbol 'x': use, def_local
+        local symbol 'y': use, def_local
+
+    symbol table for function 'top_words':
+        global_implicit symbol 'Tally': use
+        local symbol 'counts': use, def_local
+        local symbol 'head': use, def_local
+        local symbol 'n': use, def_param
+        local symbol 'order': use, def_local
+        global_implicit symbol 'sorted': use
+        cell symbol 'stop': def_param
+        local symbol 'tail': use, def_local
+        local symbol 'text': use, def_param
+
+        symbol table for nested function 'genexpr':
+            local symbol '.0': def_param
+            free symbol 'stop': use
+            local symbol 'w': use, def_local
+
+        symbol table for nested function 'lambda':
+            local symbol 'item': use, def_param
+
+    symbol table for function 'main':
+        local symbol 'argv': use, def_local, def_param
+        global_implicit symbol 'enumerate': use
+        local symbol 'i': use, def_local
+        local symbol 'key': use, def_local
+        global_implicit symbol 'len': use
+        local symbol 'lineno': use, def_local
+        global_implicit symbol 'print': use
+        global_implicit symbol 'read_records': use
+        global_implicit symbol 'scan': use
+        local symbol 'skipped': use, def_local
+        global_implicit symbol 'sys': use
+        local symbol 'total': use, def_local
+        local symbol 'value': use, def_local
+
+$ lint cli.py
+cli.py:34: undefined name 'Point' in function 'describe'
+1 problems
+$ tables pipeline.py
+module top line 0
+  Callable: global local imported
+  Iterable: global local imported
+  Pair: assigned global local namespace
+  Row: referenced assigned global local namespace
+  Stage: assigned global local namespace
+  Units: assigned global local namespace
+  compose: assigned global local namespace
+  dict: referenced global
+  first: assigned global local namespace
+  float: referenced global
+  list: referenced global
+  str: referenced global
+  summarize: assigned global local namespace
+  window: assigned global local namespace
+  type alias Row line 3
+    dict: referenced global
+    object: referenced global
+    str: referenced global
+  type parameters Pair line 4
+    K: assigned local
+    V: assigned local
+    type alias Pair line 4 nested
+      K: referenced free
+      V: referenced free
+      tuple: referenced global
+  type parameters Stage line 7
+    .generic_base: referenced assigned local
+    .type_params: referenced assigned local
+    P: assigned local
+    T: assigned local
+    Ts: assigned local
+    class Stage line 7 nested
+      methods: __init__, __call__, registered
+      .type_params: referenced free
+      Callable: referenced global
+      Error: assigned local namespace
+      Exception: referenced global
+      P: referenced free
+      T: referenced free
+      _Stage__registry: assigned local
+      __call__: assigned local namespace
+      __init__: assigned local namespace
+      __type_params__: assigned local
+      classmethod: referenced global
+      list: referenced global
+      registered: assigned local namespace
+      str: referenced global
+      function __init__ line 10 nested optimized
+        params: self, fn, name
+        locals: fn, name, self
+        globals: Stage
+        Stage: referenced global
+        fn: referenced parameter local
+        name: referenced parameter local
+        self: referenced parameter local
+      function __call__ line 15 nested optimized
+        params: self, args, kwargs
+        locals: args, kwargs, self
+        args: referenced parameter local
+        kwargs: referenced parameter local
+        self: referenced parameter local
+      function registered line 19 nested optimized
+        params: cls
+        locals: cls, s
+        cls: referenced parameter local
+        s: referenced assigned local
+      class Error line 22 nested
+        methods: __init__
+        __init__: assigned local namespace
+        function __init__ line 23 nested optimized
+          params: self, stage, cause
+          locals: cause, self, stage
+          frees: __class__
+          globals: super
+          __class__: referenced free
+          cause: referenced parameter local
+          self: referenced parameter local
+          stage: referenced parameter local
+          super: referenced global
+  type parameters first line 28
+    .defaults: parameter local
+    Iterable: referenced global
+    T: referenced assigned local namespace
+    type variable T line 28 nested
+      int: referenced global
+      str: referenced global
+    function first line 28 nested optimized
+      params: items, default
+      locals: default, item, items
+      default: referenced parameter local
+      item: referenced assigned local
+      items: referenced parameter local
+  type parameters window line 34
+    .defaults: parameter local
+    T: referenced assigned local
+    int: referenced global
+    list: referenced global
+    function window line 34 nested optimized
+      params: rows, size
+      locals: i, rows, size
+      globals: len, range
+      i: referenced assigned local
+      len: referenced global
+      range: referenced global
+      rows: referenced parameter local
+      size: referenced parameter local
+  function summarize line 38 optimized
+    params: rows
+    locals: amount, big, r, region, rows, totals
+    globals: float, len, sum
+    amount: referenced assigned local
+    big: referenced assigned local
+    float: referenced global
+    len: referenced global
+    r: referenced assigned local
+    region: referenced assigned local
+    rows: referenced parameter local
+    sum: referenced global
+    totals: referenced assigned local
+    function genexpr line 44 nested optimized
+      params: .0
+      locals: .0, r
+      frees: region
+      globals: float
+      .0: parameter local
+      float: referenced global
+      r: referenced assigned local
+      region: referenced free
+  class Units line 50
+    methods: parse
+    f: referenced assigned local
+    factors: referenced assigned local
+    name: referenced assigned local
+    names: assigned local
+    parse: assigned local namespace
+    scaled: assigned local
+    function parse line 55 optimized
+      params: self, text
+      locals: self, text, unit
+      globals: float
+      float: referenced global
+      self: referenced parameter local
+      text: referenced parameter local
+      unit: referenced assigned local
+  type parameters compose line 60
+    .defaults: parameter local
+    Callable: referenced global
+    P: referenced assigned local
+    R: referenced assigned local
+    function compose line 60 nested optimized
+      params: stages
+      locals: run, stages
+      frees: P, R
+      P: referenced free
+      R: referenced free
+      run: referenced assigned local namespace
+      stages: parameter local
+      function run line 61 nested optimized
+        params: args, kwargs
+        locals: args, kwargs, stage, value
+        frees: stages
+        args: referenced parameter local
+        kwargs: referenced parameter local
+        stage: referenced assigned local
+        stages: referenced free
+        value: referenced assigned local
+$ dump pipeline.py
+symbol table for module from file 'pipeline.py':
+    local symbol 'Callable': def_import
+    local symbol 'Iterable': def_import
+    local symbol 'Pair': def_local
+    local symbol 'Row': use, def_local
+    local symbol 'Stage': def_local
+    local symbol 'Units': def_local
+    local symbol 'compose': def_local
+    global_implicit symbol 'dict': use
+    local symbol 'first': def_local
+    global_implicit symbol 'float': use
+    global_implicit symbol 'list': use
+    global_implicit symbol 'str': use
+    local symbol 'summarize': def_local
+    local symbol 'window': def_local
+
+    symbol table for type alias 'Row':
+        global_implicit symbol 'dict': use
+        global_implicit symbol 'object': use
+        global_implicit symbol 'str': use
+
+    symbol table for type parameters 'Pair':
+        cell symbol 'K': def_local
+        cell symbol 'V': def_local
+
+        symbol table for nested type alias 'Pair':
+            free symbol 'K': use
+            free symbol 'V': use
+            global_implicit symbol 'tuple': use
+
+    symbol table for type parameters 'Stage':
+        local symbol '.generic_base': use, def_local
+        cell symbol '.type_params': use, def_local
+        cell symbol 'P': def_local
+        cell symbol 'T': def_local
+        local symbol 'Ts': def_local
+
+        symbol table for nested class 'Stage':
+            free symbol '.type_params': use
+            global_implicit symbol 'Callable': use
+            local symbol 'Error': def_local
+            global_implicit symbol 'Exception': use
+            free symbol 'P': use
+            free symbol 'T': use
+            local symbol '_Stage__registry': def_local
+            local symbol '__call__': def_local
+            local symbol '__init__': def_local
+            local symbol '__type_params__': def_local
+            global_implicit symbol 'classmethod': use
+            global_implicit symbol 'list': use
+            local symbol 'registered': def_local
+            global_implicit symbol 'str': use
+
+            symbol table for nested function '__init__':
+                global_implicit symbol 'Stage': use
+                local symbol 'fn': use, def_param
+                local symbol 'name': use, def_param
+                local symbol 'self': use, def_param
+
+            symbol table for nested function '__call__':
+                local symbol 'args': use, def_param
+                local symbol 'kwargs': use, def_param
+                local symbol 'self': use, def_param
+
+            symbol table for nested function 'registered':
+                local symbol 'cls': use, def_param
+                local symbol 's': use, def_local
+
+            symbol table for nested class 'Error':
+                local symbol '__init__': def_local
+
+                symbol table for nested function '__init__':
+                    free symbol '__class__': use
+                    local symbol 'cause': use, def_param
+                    local symbol 'self': use, def_param
+                    local symbol 'stage': use, def_param
+                    global_implicit symbol 'super': use
+
+    symbol table for type parameters 'first':
+        local symbol '.defaults': def_param
+        global_implicit symbol 'Iterable': use
+        local symbol 'T': use, def_local
+
+        symbol table for nested type variable 'T':
+            global_implicit symbol 'int': use
+            global_implicit symbol 'str': use
+
+        symbol table for nested function 'first':
+            local symbol 'default': use, def_param
+            local symbol 'item': use, def_local
+            local symbol 'items': use, def_param
+
+    symbol table for type parameters 'window':
+        local symbol '.defaults': def_param
+        local symbol 'T': use, def_local
+        global_implicit symbol 'int': use
+        global_implicit symbol 'list': use
+
+        symbol table for nested function 'window':
+            local symbol 'i': use, def_local
+            global_implicit symbol 'len': use
+            global_implicit symbol 'range': use
+            local symbol 'rows': use, def_param
+            local symbol 'size': use, def_param
+
+    symbol table for function 'summarize':
+        local symbol 'amount': use, def_local
+        local symbol 'big': use, def_local
+        global_implicit symbol 'float': use
+        global_implicit symbol 'len': use
+        local symbol 'r': use, def_local
+        cell symbol 'region': use, def_local
+        local symbol 'rows': use, def_param
+        global_implicit symbol 'sum': use
+        local symbol 'totals': use, def_local
+
+        symbol table for nested function 'genexpr':
+            local symbol '.0': def_param
+            global_implicit symbol 'float': use
+            local symbol 'r': use, def_local
+            free symbol 'region': use
+
+    symbol table for class 'Units':
+        local symbol 'f': use, def_local
+        local symbol 'factors': use, def_local
+        local symbol 'name': use, def_local
+        local symbol 'names': def_local
+        local symbol 'parse': def_local
+        local symbol 'scaled': def_local
+
+        symbol table for function 'parse':
+            global_implicit symbol 'float': use
+            local symbol 'self': use, def_param
+            local symbol 'text': use, def_param
+            local symbol 'unit': use, def_local
+
+    symbol table for type parameters 'compose':
+        local symbol '.defaults': def_param
+        global_implicit symbol 'Callable': use
+        cell symbol 'P': use, def_local
+        cell symbol 'R': use, def_local
+
+        symbol table for nested function 'compose':
+            free symbol 'P': use
+            free symbol 'R': use
+            local symbol 'run': use, def_local
+            cell symbol 'stages': def_param
+
+            symbol table for nested function 'run':
+                local symbol 'args': use, def_param
+                local symbol 'kwargs': use, def_param
+                local symbol 'stage': use, def_local
+                free symbol 'stages': use
+                local symbol 'value': use, def_local
+
+$ lint pipeline.py
+0 problems
+$ tables models.py
+module top line 0
+  Customer: assigned global local namespace
+  Optional: global local imported
+  annotations: global local imported
+  dt: global local imported
+  lookup: assigned global local namespace
+  class Customer line 7
+    methods: tenure
+    email: assigned local annotated
+    referrer: assigned local annotated
+    since: assigned local annotated
+    tenure: assigned local namespace
+    function tenure line 12 optimized
+      params: self, today
+      locals: self, today
+      globals: dt
+      dt: referenced global
+      self: referenced parameter local
+      today: referenced assigned parameter local
+  function lookup line 17 optimized
+    params: customers, email
+    locals: customers, email
+    customers: referenced parameter local
+    email: referenced parameter local
+$ dump models.py
+symbol table for module from file 'models.py':
+    local symbol 'Customer': def_local
+    local symbol 'Optional': def_import
+    local symbol 'annotations': def_import
+    local symbol 'dt': def_import
+    local symbol 'lookup': def_local
+
+    symbol table for class 'Customer':
+        local symbol 'email': def_local, def_annot
+        local symbol 'referrer': def_local, def_annot
+        local symbol 'since': def_local, def_annot
+        local symbol 'tenure': def_local
+
+        symbol table for function 'tenure':
+            global_implicit symbol 'dt': use
+            local symbol 'self': use, def_param
+            local symbol 'today': use, def_local, def_param
+
+    symbol table for function 'lookup':
+        local symbol 'customers': use, def_param
+        local symbol 'email': use, def_param
+
+$ lint models.py
+0 problems
+$ tables smells.py
+module top line 0
+  Config: assigned global local namespace
+  DEBUG: assigned global declared_global local
+  LEVEL: global declared_global
+  cache: assigned global local
+  configure: assigned global local namespace
+  handlers: assigned global local namespace
+  load: assigned global local namespace
+  os: global local imported
+  regex: global local imported
+  report: assigned global local namespace
+  function load line 8 optimized
+    params: path, list
+    locals: data, line, lines, list, path, result
+    globals: open
+    data: referenced assigned local
+    line: referenced assigned local
+    lines: referenced assigned local
+    list: parameter local
+    open: referenced global
+    path: referenced parameter local
+    result: referenced assigned local
+  function configure line 17 optimized
+    params: verbose
+    locals: verbose
+    globals: DEBUG, LEVEL, print
+    DEBUG: assigned global declared_global
+    LEVEL: referenced global declared_global
+    print: referenced global
+    verbose: referenced parameter local
+  class Config line 23
+    methods: connect, try_once
+    connect: assigned local namespace
+    retries: assigned local
+    timeout: assigned local
+    try_once: assigned local namespace
+    function connect line 27 optimized
+      params: self, host
+      locals: attempt, host, self
+      globals: range, retries, timeout
+      attempt: assigned local
+      host: referenced parameter local
+      range: referenced global
+      retries: referenced global
+      self: referenced parameter local
+      timeout: referenced global
+    function try_once line 33 optimized
+      params: self, host, wait
+      locals: host, id, self, wait
+      globals: hash
+      hash: referenced global
+      host: referenced parameter local
+      id: referenced assigned local
+      self: parameter local
+      wait: parameter local
+  function handlers line 38 optimized
+    params: -
+    locals: flush, name, out
+    flush: assigned local namespace
+    name: assigned local
+    out: referenced assigned local
+    function lambda line 41 nested optimized
+      params: -
+      frees: name
+      name: referenced free
+    function flush line 42 nested optimized
+      params: -
+      locals: pending
+      frees: out
+      globals: len
+      len: referenced global
+      out: referenced free
+      pending: assigned local
+  function report line 47 optimized
+    params: rows
+    locals: r, rows, total
+    globals: len, print, totl
+    len: referenced global
+    print: referenced global
+    r: referenced assigned local
+    rows: referenced parameter local
+    total: assigned local
+    totl: referenced global
+$ dump smells.py
+symbol table for module from file 'smells.py':
+    local symbol 'Config': def_local
+    global_explicit symbol 'DEBUG': def_global, def_local
+    global_explicit symbol 'LEVEL': def_global
+    local symbol 'cache': def_local
+    local symbol 'configure': def_local
+    local symbol 'handlers': def_local
+    local symbol 'load': def_local
+    local symbol 'os': def_import
+    local symbol 'regex': def_import
+    local symbol 'report': def_local
+
+    symbol table for function 'load':
+        local symbol 'data': use, def_local
+        local symbol 'line': use, def_local
+        local symbol 'lines': use, def_local
+        local symbol 'list': def_param
+        global_implicit symbol 'open': use
+        local symbol 'path': use, def_param
+        local symbol 'result': use, def_local
+
+    symbol table for function 'configure':
+        global_explicit symbol 'DEBUG': def_global, def_local
+        global_explicit symbol 'LEVEL': use, def_global
+        global_implicit symbol 'print': use
+        local symbol 'verbose': use, def_param
+
+    symbol table for class 'Config':
+        local symbol 'connect': def_local
+        local symbol 'retries': def_local
+        local symbol 'timeout': def_local
+        local symbol 'try_once': def_local
+
+        symbol table for function 'connect':
+            local symbol 'attempt': def_local
+            local symbol 'host': use, def_param
+            global_implicit symbol 'range': use
+            global_implicit symbol 'retries': use
+            local symbol 'self': use, def_param
+            global_implicit symbol 'timeout': use
+
+        symbol table for function 'try_once':
+            global_implicit symbol 'hash': use
+            local symbol 'host': use, def_param
+            local symbol 'id': use, def_local
+            local symbol 'self': def_param
+            local symbol 'wait': def_param
+
+    symbol table for function 'handlers':
+        local symbol 'flush': def_local
+        cell symbol 'name': def_local
+        cell symbol 'out': use, def_local
+
+        symbol table for nested function 'lambda':
+            free symbol 'name': use
+
+        symbol table for nested function 'flush':
+            global_implicit symbol 'len': use
+            free symbol 'out': use
+            local symbol 'pending': def_local
+
+    symbol table for function 'report':
+        global_implicit symbol 'len': use
+        global_implicit symbol 'print': use
+        local symbol 'r': use, def_local
+        local symbol 'rows': use, def_param
+        local symbol 'total': def_local
+        global_implicit symbol 'totl': use
+
+$ lint smells.py
+smells.py:8: 'list' shadows a builtin in function 'load'
+smells.py:17: 'LEVEL' is declared global in function 'configure' but never assigned there
+smells.py:27: function 'connect' reads global 'retries', not class attribute Config.retries
+smells.py:27: function 'connect' reads global 'timeout', not class attribute Config.timeout
+smells.py:27: undefined name 'retries' in function 'connect'
+smells.py:27: undefined name 'timeout' in function 'connect'
+smells.py:27: unused local 'attempt' in function 'connect'
+smells.py:33: 'id' shadows a builtin in function 'try_once'
+smells.py:38: unused local 'flush' in function 'handlers'
+smells.py:42: unused local 'pending' in function 'flush'
+smells.py:47: undefined name 'totl' in function 'report'
+smells.py:47: unused local 'total' in function 'report'
+12 problems
+$ snip tables x = 1\ndef f(): return x
+module top line 0
+  f: assigned global local namespace
+  x: assigned global local
+  function f line 2 optimized
+    params: -
+    globals: x
+    x: referenced global
+$ snip tables def f(x):\n    return lambda: x
+module top line 0
+  f: assigned global local namespace
+  function f line 1 optimized
+    params: x
+    locals: x
+    x: parameter local
+    function lambda line 2 nested optimized
+      params: -
+      frees: x
+      x: referenced free
+$ snip tables def outer():\n    a = 1\n    def mid():\n        def inner():\n            return a\n        return inner\n    return mid
+module top line 0
+  outer: assigned global local namespace
+  function outer line 1 optimized
+    params: -
+    locals: a, mid
+    a: assigned local
+    mid: referenced assigned local namespace
+    function mid line 3 nested optimized
+      params: -
+      locals: inner
+      frees: a
+      a: free
+      inner: referenced assigned local namespace
+      function inner line 4 nested optimized
+        params: -
+        frees: a
+        a: referenced free
+$ snip tables def counter():\n    n = 0\n    def inc():\n        nonlocal n\n        n += 1\n        return n\n    return inc
+module top line 0
+  counter: assigned global local namespace
+  function counter line 1 optimized
+    params: -
+    locals: inc, n
+    inc: referenced assigned local namespace
+    n: assigned local
+    function inc line 3 nested optimized
+      params: -
+      frees: n
+      nonlocals: n
+      n: referenced assigned free nonlocal
+$ snip tables class A:\n    x = 1\n    def m(self):\n        return x
+module top line 0
+  A: assigned global local namespace
+  class A line 1
+    methods: m
+    m: assigned local namespace
+    x: assigned local
+    function m line 3 optimized
+      params: self
+      locals: self
+      globals: x
+      self: parameter local
+      x: referenced global
+$ snip tables class A(B):\n    def m(self):\n        return super().m()
+module top line 0
+  A: assigned global local namespace
+  B: referenced global
+  class A line 1
+    methods: m
+    m: assigned local namespace
+    function m line 2 optimized
+      params: self
+      locals: self
+      frees: __class__
+      globals: super
+      __class__: referenced free
+      self: parameter local
+      super: referenced global
+$ snip tables class C:\n    def f(self):\n        def g():\n            return __class__\n        return g
+module top line 0
+  C: assigned global local namespace
+  class C line 1
+    methods: f
+    f: assigned local namespace
+    function f line 2 optimized
+      params: self
+      locals: g, self
+      frees: __class__
+      __class__: free
+      g: referenced assigned local namespace
+      self: parameter local
+      function g line 3 nested optimized
+        params: -
+        frees: __class__
+        __class__: referenced free
+$ snip tables def f():\n    return [y for y in range(3)]
+module top line 0
+  f: assigned global local namespace
+  function f line 1 optimized
+    params: -
+    locals: y
+    globals: range
+    range: referenced global
+    y: referenced assigned local
+$ snip tables def f(xs):\n    return [(last := x) for x in xs], last
+module top line 0
+  f: assigned global local namespace
+  function f line 1 optimized
+    params: xs
+    locals: last, x, xs
+    last: referenced assigned local
+    x: referenced assigned local
+    xs: referenced parameter local
+$ snip tables [(x := i) for i in range(3)]
+module top line 0
+  i: referenced assigned global local
+  range: referenced global
+  x: global declared_global
+$ snip tables def f(xs):\n    return (x for x in xs)
+module top line 0
+  f: assigned global local namespace
+  function f line 1 optimized
+    params: xs
+    locals: xs
+    xs: referenced parameter local
+    function genexpr line 2 nested optimized
+      params: .0
+      locals: .0, x
+      .0: parameter local
+      x: referenced assigned local
+$ snip tables def f(xs):\n    return {k: v for k, v in xs}, {s for s in xs}
+module top line 0
+  f: assigned global local namespace
+  function f line 1 optimized
+    params: xs
+    locals: k, s, v, xs
+    k: referenced assigned local
+    s: referenced assigned local
+    v: referenced assigned local
+    xs: referenced parameter local
+$ snip tables def f(rows):\n    return [[c for c in r] for r in rows]
+module top line 0
+  f: assigned global local namespace
+  function f line 1 optimized
+    params: rows
+    locals: c, r, rows
+    c: referenced assigned local
+    r: referenced assigned local
+    rows: referenced parameter local
+$ snip tables def f(n):\n    return [lambda: i for i in range(n)]
+module top line 0
+  f: assigned global local namespace
+  function f line 1 optimized
+    params: n
+    locals: i, n
+    globals: range
+    i: assigned local
+    n: referenced parameter local
+    range: referenced global
+    function lambda line 2 nested optimized
+      params: -
+      frees: i
+      i: referenced free
+$ snip tables class K:\n    items = [1, 2]\n    double = [i * 2 for i in items]
+module top line 0
+  K: assigned global local namespace
+  class K line 1
+    double: assigned local
+    i: referenced assigned local
+    items: referenced assigned local
+$ snip tables class K:\n    n = 3\n    sq = [n * i for i in range(n)]
+module top line 0
+  K: assigned global local namespace
+  class K line 1
+    i: referenced assigned local
+    n: referenced assigned local
+    range: referenced global
+    sq: assigned local
+$ snip tables import a.b.c as d, e.f\nfrom g import h as i, j
+module top line 0
+  d: global local imported
+  e: global local imported
+  i: global local imported
+  j: global local imported
+$ snip tables from g import *
+module top line 0
+$ snip tables try:\n    pass\nexcept E as err:\n    print(err)
+module top line 0
+  E: referenced global
+  err: referenced assigned global local
+  print: referenced global
+$ snip tables with open(p) as (f, g), lock:\n    del f
+module top line 0
+  f: assigned global local
+  g: assigned global local
+  lock: referenced global
+  open: referenced global
+  p: referenced global
+$ snip tables for i, (a, *b) in pairs:\n    pass
+module top line 0
+  a: assigned global local
+  b: assigned global local
+  i: assigned global local
+  pairs: referenced global
+$ snip tables def f(a, /, b, *c, d, e=1, **f):\n    pass
+module top line 0
+  f: assigned global local namespace
+  function f line 1 optimized
+    params: a, b, d, e, c, f
+    locals: a, b, c, d, e, f
+    a: parameter local
+    b: parameter local
+    c: parameter local
+    d: parameter local
+    e: parameter local
+    f: parameter local
+$ snip tables def f(a=x, *, b=y): return lambda c=z: c
+module top line 0
+  f: assigned global local namespace
+  x: referenced global
+  y: referenced global
+  function f line 1 optimized
+    params: a, b
+    locals: a, b
+    globals: z
+    a: parameter local
+    b: parameter local
+    z: referenced global
+    function lambda line 1 nested optimized
+      params: c
+      locals: c
+      c: referenced parameter local
+$ snip tables @deco(arg)\ndef f(): pass
+module top line 0
+  arg: referenced global
+  deco: referenced global
+  f: assigned global local namespace
+  function f line 2 optimized
+    params: -
+$ snip tables async def f(s):\n    async with s as t:\n        await t.go()\n    return [x async for x in s]
+module top line 0
+  f: assigned global local namespace
+  function f line 1 optimized
+    params: s
+    locals: s, t, x
+    s: referenced parameter local
+    t: referenced assigned local
+    x: referenced assigned local
+$ snip tables def g():\n    yield 1\n    yield from h()
+module top line 0
+  g: assigned global local namespace
+  function g line 1 optimized
+    params: -
+    globals: h
+    h: referenced global
+$ snip tables def f(x: int, *a: str, **k: T) -> R:\n    v: list = []\n    w: int\n    return v
+module top line 0
+  R: referenced global
+  T: referenced global
+  f: assigned global local namespace
+  int: referenced global
+  str: referenced global
+  function f line 1 optimized
+    params: x, a, k
+    locals: a, k, v, w, x
+    globals: int, list
+    a: parameter local
+    int: referenced global
+    k: parameter local
+    list: referenced global
+    v: referenced assigned local annotated
+    w: assigned local annotated
+    x: parameter local
+$ snip tables x: int\ny: str = "s"\nz.attr: int = 1
+module top line 0
+  int: referenced global
+  str: referenced global
+  x: assigned global local annotated
+  y: assigned global local annotated
+  z: referenced global
+$ snip tables def f[T](x: T) -> T:\n    return x
+module top line 0
+  f: assigned global local namespace
+  type parameters f line 1
+    .defaults: parameter local
+    T: referenced assigned local
+    function f line 1 nested optimized
+      params: x
+      locals: x
+      x: referenced parameter local
+$ snip tables def f[T](*, a=1): pass
+module top line 0
+  f: assigned global local namespace
+  type parameters f line 1
+    .defaults: parameter local
+    .kwdefaults: parameter local
+    T: assigned local
+    function f line 1 nested optimized
+      params: a
+      locals: a
+      a: parameter local
+$ snip tables class C[T](Base[T]):\n    def m(self) -> T: pass
+module top line 0
+  C: assigned global local namespace
+  type parameters C line 1
+    .generic_base: referenced assigned local
+    .type_params: referenced assigned local
+    Base: referenced global
+    T: referenced assigned local
+    class C line 1 nested
+      methods: m
+      .type_params: referenced free
+      T: referenced free
+      __type_params__: assigned local
+      m: assigned local namespace
+      function m line 2 nested optimized
+        params: self
+        locals: self
+        self: parameter local
+$ snip tables class C[__T]:\n    def m(self, x: __T): return __T
+module top line 0
+  C: assigned global local namespace
+  type parameters C line 1
+    .generic_base: referenced assigned local
+    .type_params: referenced assigned local
+    _C__T: assigned local
+    class C line 1 nested
+      methods: m
+      .type_params: referenced free
+      _C__T: referenced free
+      __type_params__: assigned local
+      m: assigned local namespace
+      function m line 2 nested optimized
+        params: self, x
+        locals: self, x
+        frees: _C__T
+        _C__T: referenced free
+        self: parameter local
+        x: parameter local
+$ snip tables type Alias[K, V] = dict[K, V]
+module top line 0
+  Alias: assigned global local namespace
+  type parameters Alias line 1
+    K: assigned local
+    V: assigned local
+    type alias Alias line 1 nested
+      K: referenced free
+      V: referenced free
+      dict: referenced global
+$ snip tables class C:\n    type A = int\n    type B[T] = list[T]
+module top line 0
+  C: assigned global local namespace
+  class C line 1
+    A: assigned local namespace
+    B: assigned local namespace
+    type alias A line 2
+      __classdict__: referenced free
+      int: referenced global
+    type parameters B line 3
+      T: assigned local
+      __classdict__: referenced free
+      type alias B line 3 nested
+        T: referenced free
+        __classdict__: referenced free
+        list: referenced global
+$ snip tables def f[T: int, *Ts, **P](): pass
+module top line 0
+  f: assigned global local namespace
+  type parameters f line 1
+    .defaults: parameter local
+    P: assigned local
+    T: assigned local namespace
+    Ts: assigned local
+    type variable T line 1 nested
+      int: referenced global
+    function f line 1 nested optimized
+      params: -
+$ snip tables class C:\n    def f[T: C](self): pass
+module top line 0
+  C: assigned global local namespace
+  class C line 1
+    methods: f
+    f: assigned local namespace
+    type parameters f line 2
+      .defaults: parameter local
+      T: assigned local namespace
+      __classdict__: referenced free
+      type variable T line 2 nested
+        C: referenced global
+        __classdict__: referenced free
+      function f line 2 nested optimized
+        params: self
+        locals: self
+        self: parameter local
+$ snip tables class C:\n    __x = 1\n    def __m(self):\n        return self.__x + __y
+module top line 0
+  C: assigned global local namespace
+  class C line 1
+    _C__m: assigned local
+    _C__x: assigned local
+    function __m line 3 optimized
+      params: self
+      locals: self
+      globals: _C__y
+      _C__y: referenced global
+      self: referenced parameter local
+$ snip tables class _:\n    __x = 1
+module top line 0
+  _: assigned global local namespace
+  class _ line 1
+    __x: assigned local
+$ snip tables class C:\n    __dunder__ = 1\n    def m(self):\n        import __mod.sub\n        return __q
+module top line 0
+  C: assigned global local namespace
+  class C line 1
+    methods: m
+    __dunder__: assigned local
+    m: assigned local namespace
+    function m line 3 optimized
+      params: self
+      locals: _C__mod, self
+      globals: _C__q
+      _C__mod: local imported
+      _C__q: referenced global
+      self: parameter local
+$ snip tables match p:\n    case {"k": v, **rest}:\n        pass\n    case [a, *b] | (a, b):\n        pass\n    case P(x=xx) as whole:\n        pass
+module top line 0
+  P: referenced global
+  a: assigned global local
+  b: assigned global local
+  p: referenced global
+  rest: assigned global local
+  v: assigned global local
+  whole: assigned global local
+  xx: assigned global local
+$ snip tables f"{a!r:{width}.{prec}} {b}"
+module top line 0
+  a: referenced global
+  b: referenced global
+  prec: referenced global
+  width: referenced global
+$ snip tables def f():\n    global g\n    g = 1\n    def h():\n        return g
+module top line 0
+  f: assigned global local namespace
+  g: global declared_global
+  function f line 1 optimized
+    params: -
+    locals: h
+    globals: g
+    g: assigned global declared_global
+    h: assigned local namespace
+    function h line 4 nested optimized
+      params: -
+      globals: g
+      g: referenced global
+$ snip tables def f():\n    x = 1\n    class C:\n        y = x\n        def m(self): return x
+module top line 0
+  f: assigned global local namespace
+  function f line 1 optimized
+    params: -
+    locals: C, x
+    C: assigned local namespace
+    x: assigned local
+    class C line 3 nested
+      methods: m
+      m: assigned local namespace
+      x: referenced free
+      y: assigned local
+      function m line 5 nested optimized
+        params: self
+        locals: self
+        frees: x
+        self: parameter local
+        x: referenced free
+$ snip tables def f():\n    x = 1\n    class C:\n        x = 2\n        def m(self): return x
+module top line 0
+  f: assigned global local namespace
+  function f line 1 optimized
+    params: -
+    locals: C, x
+    C: assigned local namespace
+    x: assigned local
+    class C line 3 nested
+      methods: m
+      m: assigned local namespace
+      x: assigned local
+      function m line 5 nested optimized
+        params: self
+        locals: self
+        frees: x
+        self: parameter local
+        x: referenced free
+$ snip tables def f():\n    del x
+module top line 0
+  f: assigned global local namespace
+  function f line 1 optimized
+    params: -
+    locals: x
+    x: assigned local
+$ snip tables def f():\n    x += 1
+module top line 0
+  f: assigned global local namespace
+  function f line 1 optimized
+    params: -
+    locals: x
+    x: assigned local
+$ snip tables lambda: (yield)
+module top line 0
+  function lambda line 1 optimized
+    params: -
+$ snip tables def f():\n    return [(yield x) for x in y]
+! SyntaxError: 'yield' inside list comprehension at 2:14-2:21
+$ snip tables class A:\n    def m(self):\n        global super\n        return super
+module top line 0
+  A: assigned global local namespace
+  super: global declared_global
+  class A line 1
+    methods: m
+    m: assigned local namespace
+    function m line 2 optimized
+      params: self
+      locals: self
+      frees: __class__
+      globals: super
+      __class__: referenced free
+      self: parameter local
+      super: referenced global declared_global
+$ snip tables def f(): return super
+module top line 0
+  f: assigned global local namespace
+  function f line 1 optimized
+    params: -
+    globals: __class__, super
+    __class__: referenced global
+    super: referenced global
+$ snip tables x = super
+module top line 0
+  super: referenced global
+  x: assigned global local
+$ snip tables def a():\n    def b():\n        def c():\n            nonlocal q\n        q = 1\n    q = 2
+module top line 0
+  a: assigned global local namespace
+  function a line 1 optimized
+    params: -
+    locals: b, q
+    b: assigned local namespace
+    q: assigned local
+    function b line 2 nested optimized
+      params: -
+      locals: c, q
+      c: assigned local namespace
+      q: assigned local
+      function c line 3 nested optimized
+        params: -
+        frees: q
+        nonlocals: q
+        q: free nonlocal
+$ snip tables def f():\n    print(x)\n    [x := 1 for _ in ()]
+module top line 0
+  f: assigned global local namespace
+  function f line 1 optimized
+    params: -
+    locals: _, x
+    globals: print
+    _: assigned local
+    print: referenced global
+    x: referenced assigned local
+$ snip tables def f[T](x=T): pass
+module top line 0
+  T: referenced global
+  f: assigned global local namespace
+  type parameters f line 1
+    .defaults: parameter local
+    T: assigned local
+    function f line 1 nested optimized
+      params: x
+      locals: x
+      x: parameter local
+$ snip dump def f(a):\n    return lambda: a
+symbol table for module from file 'snip.py':
+    local symbol 'f': def_local
+
+    symbol table for function 'f':
+        cell symbol 'a': def_param
+
+        symbol table for nested function 'lambda':
+            free symbol 'a': use
+
+$ snip dump class C:\n    x: int = 1\n    def m(self): return super()
+symbol table for module from file 'snip.py':
+    local symbol 'C': def_local
+
+    symbol table for class 'C':
+        global_implicit symbol 'int': use
+        local symbol 'm': def_local
+        local symbol 'x': def_local, def_annot
+
+        symbol table for function 'm':
+            free symbol '__class__': use
+            local symbol 'self': def_param
+            global_implicit symbol 'super': use
+
+$ snip dump def f():\n    global g\n    g = 1
+symbol table for module from file 'snip.py':
+    local symbol 'f': def_local
+    global_explicit symbol 'g': def_global
+
+    symbol table for function 'f':
+        global_explicit symbol 'g': def_global, def_local
+
+$ snip dump import os, sys as system\nfrom . import x
+symbol table for module from file 'snip.py':
+    local symbol 'os': def_import
+    local symbol 'system': def_import
+    local symbol 'x': def_import
+
+$ snip dump def f():\n    x = 1\n    return [x for _ in range(2)]
+symbol table for module from file 'snip.py':
+    local symbol 'f': def_local
+
+    symbol table for function 'f':
+        local symbol '_': def_local
+        global_implicit symbol 'range': use
+        local symbol 'x': def_local
+
+$ snip dump def f[T](a: T): return a
+symbol table for module from file 'snip.py':
+    local symbol 'f': def_local
+
+    symbol table for type parameters 'f':
+        local symbol '.defaults': def_param
+        local symbol 'T': use, def_local
+
+        symbol table for nested function 'f':
+            local symbol 'a': use, def_param
+
+$ snip lint def f():\n    x = 1\n    y = 2\n    return y
+snip.py:1: unused local 'x' in function 'f'
+1 problems
+$ snip lint def f(list, dict):\n    str = 1\n    return list
+snip.py:1: 'dict' shadows a builtin in function 'f'
+snip.py:1: 'list' shadows a builtin in function 'f'
+snip.py:1: 'str' shadows a builtin in function 'f'
+snip.py:1: unused local 'str' in function 'f'
+4 problems
+$ snip lint class C:\n    n = 1\n    def m(self):\n        return n
+snip.py:3: function 'm' reads global 'n', not class attribute C.n
+snip.py:3: undefined name 'n' in function 'm'
+2 problems
+$ snip lint def f():\n    global G\n    return 1
+snip.py:1: 'G' is declared global in function 'f' but never assigned there
+1 problems
+$ snip lint print(undefined_name)\nimport os
+snip.py:0: undefined name 'undefined_name' in the module
+1 problems
+$ snip error def f(a, a): pass
+! SyntaxError: duplicate argument 'a' in function definition at 1:10-1:11
+$ snip error def f(x):\n    global x
+! SyntaxError: name 'x' is parameter and global at 2:5-2:13
+$ snip error def f(x):\n    nonlocal x
+! SyntaxError: name 'x' is parameter and nonlocal at 2:5-2:15
+$ snip error def f():\n    x = 1\n    global x
+! SyntaxError: name 'x' is assigned to before global declaration at 3:5-3:13
+$ snip error def f():\n    print(x)\n    global x
+! SyntaxError: name 'x' is used prior to global declaration at 3:5-3:13
+$ snip error def f():\n    global x\n    x: int = 1
+! SyntaxError: annotated name 'x' can't be global at 3:5-3:15
+$ snip error def g():\n    y = 1\n    def f():\n        nonlocal y\n        y: int
+! SyntaxError: annotated name 'y' can't be nonlocal at 5:9-5:15
+$ snip error def f():\n    x: int\n    global x
+! SyntaxError: annotated name 'x' can't be global at 3:5-3:13
+$ snip error def f():\n    y = 1\n    nonlocal y
+! SyntaxError: name 'y' is assigned to before nonlocal declaration at 3:5-3:15
+$ snip error def f():\n    print(y)\n    nonlocal y
+! SyntaxError: name 'y' is used prior to nonlocal declaration at 3:5-3:15
+$ snip error nonlocal x
+! SyntaxError: nonlocal declaration not allowed at module level at 1:1-1:11
+$ snip error def f():\n    nonlocal q
+! SyntaxError: no binding for nonlocal 'q' found at 2:5-2:15
+$ snip error def f():\n    x = 1\n    def g():\n        nonlocal x\n        global x
+! SyntaxError: name 'x' is nonlocal and global at 4:9-4:19
+$ snip error class C:\n    nonlocal x
+! SyntaxError: no binding for nonlocal 'x' found at 2:5-2:15
+$ snip error def f():\n    from g import *
+! SyntaxError: import * only allowed at module level at 2:19-2:20
+$ snip error class C:\n    from g import *
+! SyntaxError: import * only allowed at module level at 2:19-2:20
+$ snip error class C:\n    [(x := i) for i in y]
+! SyntaxError: assignment expression within a comprehension cannot be used in a class body at 2:7-2:8
+$ snip error def f():\n    [x for x in y if (x := 1)]
+! SyntaxError: assignment expression cannot rebind comprehension iteration variable 'x' at 2:23-2:24
+$ snip error [i for i in (j := y)]
+! SyntaxError: assignment expression cannot be used in a comprehension iterable expression at 1:14-1:20
+$ snip error [i for i in [k for k in (j := y)]]
+! SyntaxError: assignment expression cannot be used in a comprehension iterable expression at 1:26-1:32
+$ snip error def f():\n    [[(j := 1) for j in range(2)] for i in range(3)]
+! SyntaxError: assignment expression cannot rebind comprehension iteration variable 'j' at 2:8-2:9
+$ snip error def f():\n    [i := 0 for i, j in y]
+! SyntaxError: assignment expression cannot rebind comprehension iteration variable 'i' at 2:6-2:7
+$ snip error def f():\n    yield\n    [(yield x) for x in y]
+! SyntaxError: 'yield' inside list comprehension at 3:7-3:14
+$ snip error def f():\n    {(yield k): v for k, v in y}
+! SyntaxError: 'yield' inside dict comprehension at 2:7-2:14
+$ snip error def f():\n    {(yield from x) for x in y}
+! SyntaxError: 'yield' inside set comprehension at 2:7-2:19
+$ snip error def f():\n    list((yield x) for x in y)
+! SyntaxError: 'yield' inside generator expression at 2:11-2:18
+$ snip error def f[T, T](): pass
+! SyntaxError: duplicate type parameter 'T' at 1:10-1:11
+$ snip error class C[T, *T]: pass
+! SyntaxError: duplicate type parameter 'T' at 1:12-1:14
+$ snip error def f[T](): nonlocal T
+! SyntaxError: nonlocal binding not allowed for type parameter 'T' at 1:13-1:23
+$ snip error def outer():\n    x = 1\n    def f[T]():\n        nonlocal T
+! SyntaxError: nonlocal binding not allowed for type parameter 'T' at 4:9-4:19
+$ snip error type A[T: (x := 1)] = T
+! SyntaxError: named expression cannot be used within a TypeVar bound at 1:12-1:18
+$ snip error type A[T: (yield)] = T
+! SyntaxError: yield expression cannot be used within a TypeVar bound at 1:12-1:17
+$ snip error type A[T = (await x)] = T
+! SyntaxError: await expression cannot be used within a TypeVar default at 1:13-1:20
+$ snip error type A[*Ts = (x := 1)] = Ts
+! SyntaxError: named expression cannot be used within a TypeVarTuple default at 1:15-1:21
+$ snip error type A[**P = (yield)] = P
+! SyntaxError: yield expression cannot be used within a ParamSpec default at 1:15-1:20
+$ snip error type A[T: (int, (x := 1))] = T
+! SyntaxError: named expression cannot be used within a TypeVar constraint at 1:18-1:24
+$ snip error type A = (x := 1)
+! SyntaxError: named expression cannot be used within a type alias at 1:11-1:17
+$ snip error class C[T]((x := 1)): pass
+! SyntaxError: named expression cannot be used within the definition of a generic at 1:13-1:19
+$ snip error def f[T](x: (yield)): pass
+! SyntaxError: yield expression cannot be used within the definition of a generic at 1:14-1:19
+$ snip error def f[__classdict__](): pass
+! SyntaxError: reserved name '__classdict__' cannot be used for type parameter at 1:7-1:20
+$ snip error class C[T: (yield)]: pass
+! SyntaxError: yield expression cannot be used within a TypeVar bound at 1:13-1:18
+$ snip error def f():\n    def g(a, b, a): pass
+! SyntaxError: duplicate argument 'a' in function definition at 2:17-2:18
+$ snip error lambda a, a: 0
+! SyntaxError: duplicate argument 'a' in function definition at 1:11-1:12
+$ snip error def f(*, k, k): pass
+! SyntaxError: duplicate argument 'k' in function definition at 1:13-1:14
+$ snip error def f(a, **a): pass
+! SyntaxError: duplicate argument 'a' in function definition at 1:12-1:13
