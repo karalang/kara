@@ -1575,6 +1575,10 @@ impl super::Parser {
             || (self.at_kw("own") && matches!(self.peek_token_ref_at(1), Token::SelfValue))
             || self.check(&Token::Ref)
             || self.check(&Token::Mut)
+            || (self.check(&Token::Amp)
+                && (matches!(self.peek_token_ref_at(1), Token::SelfValue)
+                    || (matches!(self.peek_token_ref_at(1), Token::Mut)
+                        && matches!(self.peek_token_ref_at(2), Token::SelfValue))))
         {
             if let Some((sp, sp_span)) = self.try_parse_self_param() {
                 self_param = Some(sp);
@@ -1660,7 +1664,67 @@ impl super::Parser {
 
         // self (bare — owned/consuming receiver under 2A)
         if self.eat(&Token::SelfValue) {
+            // `self: mut ref Self` is Rust's typed receiver: the mode goes
+            // before `self` (B-2026-11-01-5).
+            if self.check(&Token::Colon) {
+                self.advance();
+                let ty = self.parse_type()?;
+                let is_self = |t: &crate::ast::TypeExpr| matches!(&t.kind, TypeKind::Path(p) if p.segments == ["Self"]);
+                let (mode, kara) = match &ty.kind {
+                    TypeKind::MutRef(inner) if is_self(inner) => {
+                        (SelfParam::MutRef, Some("mut ref self"))
+                    }
+                    TypeKind::Ref(inner) if is_self(inner) => (SelfParam::Owned, Some("self")),
+                    _ if is_self(&ty) => (SelfParam::Owned, Some("own self")),
+                    _ => (SelfParam::Owned, None),
+                };
+                let span = self.span_from(&start);
+                let written = format!("self: {}", render_type_for_diagnostic(&ty));
+                match kara {
+                    Some(kara) => self.rust_receiver(
+                        &format!(
+                            "`{written}` is Rust syntax -- a receiver's mode goes before \
+                             `self`: write `{kara}`"
+                        ),
+                        span,
+                        kara,
+                    ),
+                    None => self.error_at(
+                        &format!(
+                            "`{written}` is Rust syntax -- a receiver is `self`, `own self` \
+                             or `mut ref self`, with no type"
+                        ),
+                        span,
+                    ),
+                }
+                return Some((mode, span));
+            }
             return Some((SelfParam::Owned, self.span_from(&start)));
+        }
+
+        // `&self` / `&mut self`: Rust's borrowed receivers. A bare `self`
+        // already borrows (D5) and a writing one is `mut ref self`.
+        if self.eat(&Token::Amp) {
+            let is_mut = self.eat(&Token::Mut);
+            if self.eat(&Token::SelfValue) {
+                let span = self.span_from(&start);
+                if is_mut {
+                    self.rust_receiver(
+                        "`&mut self` is Rust syntax -- a receiver that writes is `mut ref self`",
+                        span,
+                        "mut ref self",
+                    );
+                    return Some((SelfParam::MutRef, span));
+                }
+                self.rust_receiver(
+                    "`&self` is Rust syntax -- a bare `self` already borrows: write `self`",
+                    span,
+                    "self",
+                );
+                return Some((SelfParam::Owned, span));
+            }
+            self.pos = saved;
+            return None;
         }
 
         // mut ref self
@@ -1668,7 +1732,21 @@ impl super::Parser {
             if self.eat(&Token::Ref) && self.eat(&Token::SelfValue) {
                 return Some((SelfParam::MutRef, self.span_from(&start)));
             }
+            // `mut self`: in Rust an owned receiver bound mutably; what a
+            // method that changes its receiver means is `mut ref self`.
             self.pos = saved;
+            if matches!(self.peek_token_ref_at(1), Token::SelfValue) {
+                self.advance();
+                self.advance();
+                let span = self.span_from(&start);
+                self.rust_receiver(
+                    "`mut self` is Rust syntax -- a receiver that writes is `mut ref self` \
+                     (one that consumes is `own self`)",
+                    span,
+                    "mut ref self",
+                );
+                return Some((SelfParam::MutRef, span));
+            }
             return None;
         }
 
@@ -1677,11 +1755,37 @@ impl super::Parser {
             if self.eat(&Token::SelfValue) {
                 return Some((SelfParam::Ref, self.span_from(&start)));
             }
+            // `ref mut self`, the Rust pattern order.
+            if self.check(&Token::Mut) && matches!(self.peek_token_ref_at(1), Token::SelfValue) {
+                self.advance();
+                self.advance();
+                let span = self.span_from(&start);
+                self.rust_receiver(
+                    "`ref mut self` is Rust syntax -- a receiver that writes is `mut ref self`",
+                    span,
+                    "mut ref self",
+                );
+                return Some((SelfParam::MutRef, span));
+            }
             self.pos = saved;
             return None;
         }
 
         None
+    }
+
+    /// Report a Rust-spelled receiver at `span` with the machine edit that
+    /// rewrites it to `kara` (B-2026-11-01-5).
+    fn rust_receiver(&mut self, message: &str, span: Span, kara: &str) {
+        self.error_at(message, span);
+        self.fix_edits.insert(
+            crate::resolver::SpanKey::from_span(&span),
+            crate::resolver::TextEdit {
+                offset: span.offset,
+                length: span.length,
+                replacement: kara.to_string(),
+            },
+        );
     }
 
     pub(super) fn parse_param(&mut self) -> Option<Param> {

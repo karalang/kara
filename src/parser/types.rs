@@ -363,6 +363,49 @@ impl super::Parser {
             return self.parse_fn_type(name, start, return_tail);
         }
         match self.peek_token_ref() {
+            // `&T` / `&mut T`: Rust's borrow types. The edit rewrites the
+            // sigil to the Kāra word and the type parses as that borrow, so
+            // one diagnostic stands for it (B-2026-11-01-5).
+            Token::Amp => {
+                self.advance();
+                let is_mut = self.eat(&Token::Mut);
+                let inner_at = self.current_span().offset;
+                let sigil = Span {
+                    length: inner_at.saturating_sub(start.offset),
+                    ..start
+                };
+                let (message, kara) = if is_mut {
+                    (
+                        "`&mut T` is Rust syntax -- a borrow that writes is `mut ref T`",
+                        "mut ref ",
+                    )
+                } else {
+                    (
+                        "`&T` is Rust syntax -- a borrow is `ref T` (a bare parameter \
+                         already borrows)",
+                        "ref ",
+                    )
+                };
+                self.error_at(message, sigil);
+                self.fix_edits.insert(
+                    crate::resolver::SpanKey::from_span(&sigil),
+                    crate::resolver::TextEdit {
+                        offset: sigil.offset,
+                        length: sigil.length,
+                        replacement: kara.to_string(),
+                    },
+                );
+                let inner = self.parse_type()?;
+                let inner = Box::new(inner);
+                Some(TypeExpr {
+                    kind: if is_mut {
+                        TypeKind::MutRef(inner)
+                    } else {
+                        TypeKind::Ref(inner)
+                    },
+                    span: self.span_from(&start),
+                })
+            }
             // ref Type
             Token::Ref => {
                 self.advance();
