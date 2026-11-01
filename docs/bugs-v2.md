@@ -61,7 +61,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | diagnostics | 85 |
 | false-positive | 82 |
 | missing-feature | 60 |
-| perf | 58 |
+| perf | 59 |
 | soundness | 31 |
 | miscompile | 25 |
 | run-vs-build | 19 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | typecheck | 138 |
 | mir | 88 |
-| mir-llvm | 65 |
+| mir-llvm | 66 |
 | cli | 49 |
 | ownership | 38 |
 | interp | 26 |
@@ -116,6 +116,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-01-17 | 2026-11-01 | runtime | medium | Kata 71's auto-par binary runs 1.6-2.6x SLOWER with exactly two workers than with one (KARAC_THREADS=2: 0.24-0.39 s against 0.15 s) on the M5, on 5x the cycles for 7% more instructions; three or more workers run 0.04-0.06 s | — |
 | B-2026-11-01-18 | 2026-11-01 | mir-llvm | medium | Kata 87's scramble-string DP runs 1.67x legacy's instructions on the MIR backend (1.13x its cycles): the seq lane went from 0.95x to 1.09x rustc -O and the par lane from 1.03x to 1.39x rayon | — |
 | B-2026-11-01-19 | 2026-11-01 | mir-llvm | low | Kata 88's merge-sorted-array two-pointer loop runs 1.38x legacy's instructions and 1.23x its cycles on the MIR backend: 0.81x -> 1.00x rustc -O | — |
+| B-2026-11-01-20 | 2026-11-01 | mir-llvm | low | Seven of katas 1-100 lost 8-17% of their wall-time ratio to Rust on the MIR backend, each too small to file alone (1.00-1.17x legacy's instructions, 1.06-1.14x its cycles): filed together in case they share a mechanism | — |
 
 ### Relocated
 
