@@ -1180,16 +1180,18 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
             .map_err(|e| e.to_string())?;
         // `KARAC_MIR_UNROLL=0` leaves out the unroll hints, full and partial;
         // `KARAC_MIR_UNROLL_PARTIAL=0` only the partial ones.
+        let program = self.program;
+        let callee = |n: &str| program.bodies.get(n);
         let (unroll, partial) = if std::env::var("KARAC_MIR_UNROLL").as_deref() == Ok("0") {
             (Vec::new(), Vec::new())
         } else if std::env::var("KARAC_MIR_UNROLL_PARTIAL").as_deref() == Ok("0") {
             (
-                crate::mir::counters::unroll_full_latches(body, self.tys),
+                crate::mir::counters::unroll_full_latches(body, self.tys, callee),
                 Vec::new(),
             )
         } else {
             (
-                crate::mir::counters::unroll_full_latches(body, self.tys),
+                crate::mir::counters::unroll_full_latches(body, self.tys, callee),
                 crate::mir::counters::unroll_partial_latches(body, self.tys),
             )
         };

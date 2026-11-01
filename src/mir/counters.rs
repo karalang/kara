@@ -115,16 +115,27 @@ pub fn overflow_tests(body: &Body) -> Vec<(usize, BasicBlock)> {
 /// limit scaled to MIR's several statements per source one.
 const UNROLL_FULL_MAX_BOUND: u128 = 32;
 const UNROLL_FULL_MAX_STATEMENTS: usize = 48;
+/// The statement limit for a loop that calls a leaf or itself, a leaf's
+/// statements counted in: kata 36's row scan and kata 37's digit loop fit,
+/// and at this limit no bench of the 1016 screened for B-2026-10-31-44
+/// changed but those two.
+const UNROLL_FULL_MAX_CALLING_STATEMENTS: usize = 128;
 
 /// The latches of `body`'s small counting loops, whose back edges codegen
-/// marks `llvm.loop.unroll.full`: a guard `i < K` with `K` a constant of
+/// marks `llvm.loop.unroll.full`: a guard `i < K` or `i <= K` counting to
 /// at most 32, `i` set to a constant `>= 0` just before the loop and grown
-/// by a constant `>= 1` once per trip, and a body of scalar statements
-/// and element accesses with no other call, no drop and no loop inside it. `default<O2>`'s unroller
+/// by a constant `>= 1` once per trip, and a body of scalar statements,
+/// element accesses and calls to a small leaf or to `body` itself, with no
+/// other call, no drop and no loop inside it. `callee` finds a called
+/// function's body. `default<O2>`'s unroller
 /// declines a 32-trip loop a little over its cost threshold (kata 190's
 /// bit reversal, which unrolled becomes one `llvm.bitreverse`); the hint
 /// is advisory, so a loop LLVM cannot count stays as it was.
-pub fn unroll_full_latches(body: &Body, tys: &TyInterner) -> Vec<usize> {
+pub fn unroll_full_latches<'b>(
+    body: &Body,
+    tys: &TyInterner,
+    callee: impl Fn(&str) -> Option<&'b Body>,
+) -> Vec<usize> {
     let mut out = Vec::new();
     if body.blocks.is_empty() {
         return out;
@@ -133,19 +144,7 @@ pub fn unroll_full_latches(body: &Body, tys: &TyInterner) -> Vec<usize> {
     let idom = dominators(body, &preds);
     let loops = natural_loops(body, &preds, &idom);
     let writes = local_writes(body);
-    let scalar = |t: super::ty::Ty| match tys.kind(t) {
-        TyKind::Bool | TyKind::Char | TyKind::Int(_) | TyKind::Float(_) | TyKind::Unit => true,
-        // A borrow, which an element access takes of its sequence.
-        TyKind::Ref(_) | TyKind::MutRef(_) => true,
-        TyKind::Never => true,
-        TyKind::Tuple(ts) => ts.iter().all(|t| {
-            matches!(
-                tys.kind(*t),
-                TyKind::Bool | TyKind::Char | TyKind::Int(_) | TyKind::Float(_)
-            )
-        }),
-        _ => false,
-    };
+    let scalar = |t: super::ty::Ty| unroll_scalar(tys, t);
     for lp in &loops {
         let inner = loops
             .iter()
@@ -154,6 +153,7 @@ pub fn unroll_full_latches(body: &Body, tys: &TyInterner) -> Vec<usize> {
             continue;
         }
         let mut statements = 0;
+        let mut calls = false;
         let cheap = lp
             .blocks
             .iter()
@@ -169,12 +169,35 @@ pub fn unroll_full_latches(body: &Body, tys: &TyInterner) -> Vec<usize> {
                     | TerminatorKind::Unreachable => true,
                     // An element access, which codegen open-codes as a
                     // bounds check and an address (kata 265's rows).
+                    //
+                    // A call to a small leaf (kata 36's `box_index`), which
+                    // inlining folds into the trip, or to the function itself
+                    // (kata 37's backtracking `go` over the nine digits).
+                    // Any other call is a kernel the loop repeats: unrolled,
+                    // a benchmark's outer pass loop only grows (B-2026-10-31-44).
                     TerminatorKind::Call {
                         func,
                         destination,
                         target: Some(_),
                         ..
-                    } => element_access(func) && scalar(body.local(destination.local).ty),
+                    } if scalar(body.local(destination.local).ty) => {
+                        if element_access(func) {
+                            true
+                        } else if let Some(name) = fn_name(func) {
+                            if name == body.instance.name {
+                                calls = true;
+                                true
+                            } else if let Some(n) = callee(name).and_then(|c| leaf_size(c, tys)) {
+                                calls = true;
+                                statements += n;
+                                true
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        }
+                    }
                     _ => false,
                 };
                 term && data.statements.iter().all(|s| match &s.kind {
@@ -189,7 +212,12 @@ pub fn unroll_full_latches(body: &Body, tys: &TyInterner) -> Vec<usize> {
                     _ => false,
                 })
             });
-        if !cheap || statements > UNROLL_FULL_MAX_STATEMENTS {
+        let max = if calls {
+            UNROLL_FULL_MAX_CALLING_STATEMENTS
+        } else {
+            UNROLL_FULL_MAX_STATEMENTS
+        };
+        if !cheap || statements > max {
             continue;
         }
         let Some(chain) = entry_chain(body, &preds, lp) else {
@@ -199,14 +227,15 @@ pub fn unroll_full_latches(body: &Body, tys: &TyInterner) -> Vec<usize> {
             if !lp.blocks[g] || !lp.latches.iter().all(|&t| dominates(&idom, g, t)) {
                 return false;
             }
-            let Some((i, (bits, signed))) = guard(body, tys, lp, gb) else {
+            let Some((i, (bits, signed))) = guard_by(body, tys, lp, gb, true) else {
                 return false;
             };
-            let Some(k) = guard_bound(body, &writes, gb) else {
+            let Some((k, le)) = guard_bound(body, &writes, gb) else {
                 return false;
             };
             let nonneg = |v: u128| !signed || mask(v, bits) >> (bits - 1) == 0;
-            if !nonneg(k) || mask(k, bits) > UNROLL_FULL_MAX_BOUND {
+            // `i <= K` counts to `K + 1`.
+            if !nonneg(k) || mask(k, bits) + u128::from(le) > UNROLL_FULL_MAX_BOUND {
                 return false;
             }
             if writes.other[i.index()] || writes.assigns[i.index()].len() != 2 {
@@ -364,9 +393,79 @@ fn element_access(func: &Operand) -> bool {
             .any(|p| ty.starts_with(p))
 }
 
-/// The constant `K` of guard block `gb`'s `i < K`: a literal, or a local
-/// assigned only a literal.
-fn guard_bound(body: &Body, writes: &Writes, gb: &BasicBlockData) -> Option<u128> {
+/// Whether a value of type `t` is as cheap to replicate as a register: a
+/// scalar, a borrow (which an element access takes of its sequence), or a
+/// tuple of scalars (a checked operation's value and overflow flag).
+fn unroll_scalar(tys: &TyInterner, t: super::ty::Ty) -> bool {
+    match tys.kind(t) {
+        TyKind::Bool | TyKind::Char | TyKind::Int(_) | TyKind::Float(_) | TyKind::Unit => true,
+        TyKind::Ref(_) | TyKind::MutRef(_) => true,
+        TyKind::Never => true,
+        TyKind::Tuple(ts) => ts.iter().all(|t| {
+            matches!(
+                tys.kind(*t),
+                TyKind::Bool | TyKind::Char | TyKind::Int(_) | TyKind::Float(_)
+            )
+        }),
+        _ => false,
+    }
+}
+
+/// The function a call's `func` names.
+fn fn_name(func: &Operand) -> Option<&str> {
+    match func {
+        Operand::Const(Const {
+            kind: ConstKind::FnDef(inst),
+            ..
+        }) => Some(&inst.name),
+        _ => None,
+    }
+}
+
+/// The most statements a leaf callee may hold for a loop calling it to be
+/// hinted, about a dozen source lines of scalar work.
+const UNROLL_LEAF_MAX_STATEMENTS: usize = 24;
+
+/// The statement count of `callee` when it is a small leaf: no loop, no
+/// call but an element access, no drop, and at most
+/// [`UNROLL_LEAF_MAX_STATEMENTS`] statements, all into scalars.
+fn leaf_size(callee: &Body, tys: &TyInterner) -> Option<usize> {
+    if callee.blocks.is_empty() {
+        return None;
+    }
+    let mut n = 0;
+    for data in &callee.blocks {
+        n += data.statements.len();
+        match &data.terminator.kind {
+            TerminatorKind::Goto { .. }
+            | TerminatorKind::SwitchInt { .. }
+            | TerminatorKind::Return
+            | TerminatorKind::Abort { .. }
+            | TerminatorKind::Unreachable => {}
+            TerminatorKind::Call { func, .. } if element_access(func) => {}
+            _ => return None,
+        }
+        for st in &data.statements {
+            if let StatementKind::Assign(p, _) = &st.kind {
+                let ok = super::place_ty::place_ty(callee, tys, p)
+                    .is_ok_and(|pt| unroll_scalar(tys, pt.ty));
+                if !ok {
+                    return None;
+                }
+            }
+        }
+    }
+    if n > UNROLL_LEAF_MAX_STATEMENTS {
+        return None;
+    }
+    let preds = predecessors(callee);
+    let idom = dominators(callee, &preds);
+    natural_loops(callee, &preds, &idom).is_empty().then_some(n)
+}
+
+/// The constant `K` of guard block `gb`'s `i < K` or `i <= K`: a literal, or
+/// a local assigned only a literal, with whether the guard is `<=`.
+fn guard_bound(body: &Body, writes: &Writes, gb: &BasicBlockData) -> Option<(u128, bool)> {
     let TerminatorKind::SwitchInt {
         discr: Operand::Copy(c),
         ..
@@ -378,8 +477,10 @@ fn guard_bound(body: &Body, writes: &Writes, gb: &BasicBlockData) -> Option<u128
         StatementKind::Assign(d, rv) if d == c => Some(rv),
         _ => None,
     })?;
-    let Rvalue::BinaryOp(BinOp::Lt, _, bound) = rv else {
-        return None;
+    let (le, bound) = match rv {
+        Rvalue::BinaryOp(BinOp::Lt, _, bound) => (false, bound),
+        Rvalue::BinaryOp(BinOp::Le, _, bound) => (true, bound),
+        _ => return None,
     };
     let scalar = |o: &Operand| match o {
         Operand::Const(Const {
@@ -388,7 +489,7 @@ fn guard_bound(body: &Body, writes: &Writes, gb: &BasicBlockData) -> Option<u128
         }) => Some(*v),
         _ => None,
     };
-    match bound {
+    let k = match bound {
         Operand::Const(_) => scalar(bound),
         Operand::Copy(p) if p.projection.is_empty() => {
             let ws = &writes.assigns[p.local.index()];
@@ -402,7 +503,8 @@ fn guard_bound(body: &Body, writes: &Writes, gb: &BasicBlockData) -> Option<u128
             }
         }
         _ => None,
-    }
+    }?;
+    Some((k, le))
 }
 
 pub(super) struct Loop {
