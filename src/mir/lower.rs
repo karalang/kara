@@ -19644,6 +19644,13 @@ impl<'l, 'a> Bx<'l, 'a> {
                 let key = format!("{}.{method}", self.tys().display(base));
                 return self.builtin_method(e, &key, object, method, args, dest);
             }
+            // `v.try_extend(src)`, which the checker types as `extend`'s
+            // fallible companion without a callee of its own.
+            if let ("try_extend", [_]) = (method, args) {
+                let (_, base) = self.strip_ty_full(rt);
+                let key = format!("{}.try_extend", self.tys().display(base));
+                return self.builtin_method(e, &key, object, method, args, dest);
+            }
             return self.unsupported(
                 e.span,
                 &format!("the method call `.{method}` with no resolved callee"),
@@ -23098,6 +23105,25 @@ impl<'l, 'a> Bx<'l, 'a> {
                 return Ok(());
             }
         }
+        // `v.try_extend(src)`: the `extend` it is the fallible companion
+        // of, as an `Ok` (an allocation here does not fail), as for
+        // `Vec.try_from_slice`.
+        if let ("try_extend", [src]) = (method, args) {
+            let rt = self.place_type(&dest);
+            let ok = self
+                .tys()
+                .tcx()
+                .adt_of(rt)
+                .and_then(|(adt, _)| adt.variants.iter().position(|v| v.name == "Ok"));
+            if let Some(ok) = ok {
+                let unit = self.temp(self.unit());
+                if self.extend_from_iterable(object, base, src, Place::local(unit))? {
+                    let u = self.unit();
+                    self.build_variant(rt, ok as u32, vec![unit_const(u)], dest);
+                    return Ok(());
+                }
+            }
+        }
         if let ("spawn", [f]) = (method, args) {
             if self.tys().display(base) == "IsolatingGroup" {
                 return self.isolating_spawn(object, f, dest);
@@ -25349,15 +25375,11 @@ pub fn checked_borrow_errors(
     let (text, user_len) = library_source(src);
     // A program the builder refuses is refused by check too, at the
     // position the build names, and a forbidden move leaves every other
-    // body to the MIR checks (B-2026-11-01-2).
+    // body to the MIR checks (B-2026-11-01-2). An error with no position
+    // in the program (a library or a snippet has no `main`) is the
+    // build's to report, not check's.
     let user_lines = src.lines().count();
-    let at_in_program = |text: &str| {
-        Some(
-            text_position(text)
-                .filter(|&(l, _)| l > 0 && l <= user_lines)
-                .unwrap_or((1, 1)),
-        )
-    };
+    let in_program = |text: &str| text_position(text).filter(|&(l, _)| l > 0 && l <= user_lines);
     let (lowered, moves) = match lower_typed_parts(
         program,
         &text,
@@ -25373,18 +25395,18 @@ pub fn checked_borrow_errors(
         Err(e) => {
             return lowering_messages(&e)
                 .into_iter()
-                .map(|m| {
-                    let at = at_in_program(&m);
-                    SourceBorrowError::moved(m, at)
+                .filter_map(|m| {
+                    let at = in_program(&m)?;
+                    Some(SourceBorrowError::moved(m, Some(at)))
                 })
                 .collect();
         }
     };
     let mut out: Vec<SourceBorrowError> = moves
         .into_iter()
-        .map(|m| {
-            let at = at_in_program(&m);
-            SourceBorrowError::moved(m, at)
+        .filter_map(|m| {
+            let at = in_program(&m)?;
+            Some(SourceBorrowError::moved(m, Some(at)))
         })
         .collect();
     for e in borrow_errors_of(src, lowered) {
