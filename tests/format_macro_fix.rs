@@ -34,24 +34,29 @@ fn format_macro_is_rewritten_to_an_f_string() {
                let s = format!(\"bias {}, n {:03}\", n + 1, n);\n\
                let t = format!(\"{{{}}} of {}\", s.len(), v(n),);\n\
                let u = format!(\"plain\");\n\
+               let w = format!(\"<{}>\", u.replace(\"pl\", \"PL\"));\n\
                println(s);\n\
                println(t);\n\
                println(u);\n\
+               println(w);\n\
                }\n\
                fn v(n: i64) -> i64 { n * 2 }\n";
     let (out, reports) = repaired(src);
-    assert_eq!(reports, 3);
+    assert_eq!(reports, 4);
     for want in [
         "let s = f\"bias {n + 1}, n {n:03}\";",
         "let t = f\"{{{s.len()}}} of {v(n)}\";",
         "let u = f\"plain\";",
+        // A hole balances quotes, so an argument holding a string literal is
+        // carried as written (B-2026-11-01-13).
+        "let w = f\"<{u.replace(\"pl\", \"PL\")}>\";",
     ] {
         assert!(out.contains(want), "missing {want:?} in:\n{out}");
     }
     let reparsed = karac::parse(&out);
     assert!(reparsed.errors.is_empty(), "{:?}", reparsed.errors);
     let run = karac::mir::lower::run_source(&out).unwrap_or_else(|e| panic!("build: {e}"));
-    assert_eq!(run.output, "bias 4, n 003\n{13} of 6\nplain\n");
+    assert_eq!(run.output, "bias 4, n 003\n{13} of 6\nplain\n<PLain>\n");
 }
 
 #[test]
@@ -65,9 +70,10 @@ fn format_macro_without_a_one_to_one_rewrite_has_no_fix() {
         "format!(\"{}\", n, n)",
         // A spec an f-string does not take (Debug is deferred).
         "format!(\"{:?}\", n)",
-        // Argument text that cannot sit in a hole as written.
-        "format!(\"{}\", g(\"a\"))",
+        // Argument text that cannot sit in a hole as written: a brace or a
+        // `:` inside its string literal.
         "format!(\"{}\", g(\"{\"))",
+        "format!(\"{}\", g(\"a:b\"))",
         // The format string is not a plain literal.
         "format!(r\"{}\", n)",
         "format!(f, n)",

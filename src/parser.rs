@@ -1222,8 +1222,10 @@ impl Parser {
     /// is no fix when the first argument is not a one-line `"..."` literal,
     /// when a hole names its argument (`{0}`, `{name}`) or its spec is not
     /// one an f-string accepts, when the counts disagree, or when an
-    /// argument's text could not sit inside a hole as written (a quote, a
-    /// brace, a `:`, a backslash, a comment or a line break in it).
+    /// argument's text could not sit inside a hole as written (a brace, a
+    /// `:`, a backslash, a comment or a line break in it). A quote can: a
+    /// hole balances quotes (design.md § strings, "Full expressions"), so
+    /// `s.replace("a", "b")` is carried as is (B-2026-11-01-13).
     /// Whether the macro call at the current `!` passes a format string
     /// that needs formatting: a string literal first, then more arguments,
     /// or a `{` hole in the literal that is not an escaped `{{`. A call
@@ -1308,7 +1310,7 @@ impl Parser {
         let mut args = args.into_iter().map(|(f, l)| {
             let start = f.offset.checked_sub(*base)?;
             let arg = source.get(start..l.offset - base + l.length)?;
-            let bad = ['"', '{', '}', ':', '\\', '\n'];
+            let bad = ['{', '}', ':', '\\', '\n'];
             (!arg.contains(bad) && !arg.contains("//") && !arg.contains("/*")).then_some(arg)
         });
         let mut out = String::from("f\"");

@@ -422,6 +422,7 @@ fn parse_run_command_from(args: &[String], file_idx: usize) -> Command {
     }
     // No file inside a project runs the project's entry, as `karac build`
     // builds it (B-2026-10-30-18).
+    let mut library: Option<std::path::PathBuf> = None;
     let file = file.or_else(|| {
         if no_manifest {
             return None;
@@ -430,11 +431,27 @@ fn parse_run_command_from(args: &[String], file_idx: usize) -> Command {
         let root = crate::manifest::discover_project_root(&cwd)?;
         let entry = root.join("src").join("main.kara");
         if !entry.is_file() {
+            if root.join("src").join("lib.kara").is_file() {
+                library = Some(cwd);
+            }
             return None;
         }
         let shown = entry.strip_prefix(&cwd).unwrap_or(&entry);
         Some(shown.to_string_lossy().into_owned())
     });
+    // A library package (`karac new --lib`) has no `main`, so there is
+    // nothing to run; say so rather than suggest the command just typed
+    // (B-2026-11-01-14). `karac build` there answers the same way.
+    if let (None, Some(cwd)) = (&file, &library) {
+        let name = crate::manifest::load_from_cwd(cwd)
+            .map(|(_, mf)| mf.name)
+            .unwrap_or_default();
+        eprintln!("error: library package `{name}` has no src/main.kara to run");
+        eprintln!(
+            "  help: a library has no `main`: `karac test` runs its tests, and the packages that depend on it run its code"
+        );
+        process::exit(1);
+    }
     let Some(f) = file else {
         eprintln!("error: missing file argument");
         eprintln!(
