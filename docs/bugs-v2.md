@@ -60,7 +60,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | diagnostics | 85 |
 | false-positive | 82 |
-| perf | 63 |
+| perf | 64 |
 | missing-feature | 60 |
 | soundness | 31 |
 | miscompile | 25 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | typecheck | 138 |
 | mir | 88 |
-| mir-llvm | 70 |
+| mir-llvm | 71 |
 | cli | 49 |
 | ownership | 38 |
 | interp | 26 |
@@ -120,6 +120,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-01-22 | 2026-11-01 | mir-llvm | low | Kata 116's populate-next-right-pointers loop runs legacy's instruction count on the MIR backend but 1.23x its cycles: the seq lane went from 0.90x to 1.10x rustc -O | — |
 | B-2026-11-01-23 | 2026-11-01 | mir-llvm | medium | Kata 120's default build auto-parallelizes its one-off 200-row triangle build and then runs +2.0G instructions (+29%) whenever it has two or more workers: the default binary is 1.10x slower than its KARAC_AUTO_PAR=0 twin | — |
 | B-2026-11-01-24 | 2026-11-01 | mir-llvm | medium | MIR `shared` boxes carry a 16-byte strong+weak count header where legacy carried 8, so a 24-byte node body (a tree's val + left + right) takes a 48-byte macOS malloc block instead of 32: kata 124's peak RSS went from 35.2 MB to 52.1 MB (1.48x) | — |
+| B-2026-11-01-25 | 2026-11-01 | mir-llvm | high | Under the task pool every borrow-flag operation goes through ONE process-wide locked table, so parallel tasks that write `mut` fields of their own `shared` values serialize on it in the kernel: kata 133's par lane runs 28.8x rayon (was 1.36x) with 17 s of system time, and 45x faster with KARAC_MIR_FLAGS=0 | — |
 
 ### Relocated
 
