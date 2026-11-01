@@ -103,7 +103,7 @@ pub struct EnrichedRow {
 
 // A Summary is never built with a negative row count: its one constructor
 // requires it. (A struct `invariant` would say this once for the type, but
-// contracts' `invariant` is in the verification track, not in 0.9.)
+// contracts' `invariant` is in the verification track, not in 0.8.)
 pub struct Summary {
     row_count: i64,
     total_usd: f64,

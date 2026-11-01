@@ -1,4 +1,4 @@
-//! Two rough edges from the v0.9.0 fresh-user walkthrough rehearsal.
+//! Two rough edges from the v0.8.0 fresh-user walkthrough rehearsal.
 //!
 //! `println!("{} {}", c.n, s.replace("a", "b"))` got the macro message and no
 //! edit, because the rewrite refused any argument holding a quote; an f-string

@@ -50,7 +50,7 @@ pub(super) fn cmd_install(spec: &str) {
             );
             eprintln!("       received: git={url}");
             eprintln!(
-                "       note: git sources are not in 0.9; install from a `path = ...` source"
+                "       note: git sources are not in 0.8; install from a `path = ...` source"
             );
             process::exit(2);
         }
@@ -64,7 +64,7 @@ pub(super) fn cmd_install(spec: &str) {
             );
             eprintln!("       received: {rendered}");
             eprintln!(
-                "       note: registry sources are not in 0.9; install from a `path = ...` source"
+                "       note: registry sources are not in 0.8; install from a `path = ...` source"
             );
             process::exit(2);
         }
@@ -325,7 +325,7 @@ pub(super) fn cmd_vendor(no_proxy: bool) {
     if skipped_non_path > 0 {
         eprintln!(
             "note: {skipped_non_path} non-path dependency entr{} skipped: registry and git \
-             vendoring are not in 0.9.",
+             vendoring are not in 0.8.",
             if skipped_non_path == 1 { "y" } else { "ies" }
         );
     }
@@ -502,7 +502,7 @@ pub(super) fn validate_update_target(
             eprintln!(
                 "note: `{pkg}` is a path-dep; its version is pinned by the on-disk manifest. \
                  `karac update {pkg}` re-derives the lockfile entry but cannot bump versions: \
-                 registry dependencies are not in 0.9."
+                 registry dependencies are not in 0.8."
             );
         }
     }

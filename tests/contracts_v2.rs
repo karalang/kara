@@ -1,5 +1,5 @@
 //! Contracts on v2. A struct `invariant` belongs to the verification track,
-//! not 0.9, so `karac check` refuses it by name (B-2026-10-31-23), and an
+//! not 0.8, so `karac check` refuses it by name (B-2026-10-31-23), and an
 //! `ensures(result)` clause reads the returned value without moving it out
 //! of the return place (B-2026-10-31-29), with `old(e)` typed as `e`
 //! (B-2026-10-31-30). examples/weave, which needed these,

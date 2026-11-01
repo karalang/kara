@@ -20,9 +20,9 @@
 #     deletion), so tag-first is a local-machine-only flow.
 #   - tag push `v*` (from a machine that can push tags): same pipeline,
 #     then a DRAFT release on the existing tag.
-#   RELEASE TAGS (0.9.0 on): `v<version in Cargo.toml>`, e.g. v0.9.0,
-#     builds binaries stamped `0.9.0+g<sha>` with no `-dev` part and
-#     bundles named karac-0.9.0-<target>; the draft is titled "(beta)".
+#   RELEASE TAGS (0.8.0 on): `v<version in Cargo.toml>`, e.g. v0.8.0,
+#     builds binaries stamped `0.8.0+g<sha>` with no `-dev` part and
+#     bundles named karac-0.8.0-<target>; the draft is titled "(beta)".
 #   Draft on purpose, in every mode: nothing publishes without a human
 #   clicking the button (unannounced-dev-preview posture; the launch
 #   decides when releases go loud).
@@ -105,7 +105,7 @@ jobs:
           key: release-${{ matrix.label }}
 
       # A tag equal to v<Cargo.toml version> (no `-dev`) builds the
-      # release stamp, `karac 0.9.0+g<sha>` (build.rs); any other tag or
+      # release stamp, `karac 0.8.0+g<sha>` (build.rs); any other tag or
       # a dry run builds the dev stamp, and package-release.sh refuses a
       # release tag that does not match Cargo.toml.
       - name: Package release bundle

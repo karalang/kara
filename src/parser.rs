@@ -1929,7 +1929,7 @@ impl Parser {
                 ParseErrorKind::ReservedSyntax,
                 &format!(
                     "the `\"{abi}\"` calling convention is reserved for a future release \
-                     and cannot be used yet — in 0.9 an `extern` ABI may only be `\"C\"` or \
+                     and cannot be used yet — in 0.8 an `extern` ABI may only be `\"C\"` or \
                      `\"C-unwind\"`. (`\"stdcall\"`, `\"fastcall\"`, `\"win64\"`, `\"sysv64\"` \
                      are recognized but unimplemented; see design.md § FFI.)"
                 ),

@@ -1,8 +1,8 @@
 # Changelog
 
-## 0.9.0
+## 0.8.0
 
-First release, with Kāra 0.9.0 (beta).
+First release, with Kāra 0.8.0 (beta).
 
 - Syntax highlighting for `.kara` files (TextMate grammar).
 - Diagnostics as you type, hover with type and effect signature,

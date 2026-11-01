@@ -90,7 +90,7 @@ pub(super) fn print_help() {
   :dep <name> = ...  register a dependency for the current session
                      (RHS is the same shape as `[dependencies]` in
                      `kara.toml`: a quoted version string or an inline
-                     table). Resolution is not in 0.9: the REPL records
+                     table). Resolution is not in 0.8: the REPL records
                      the entry but the package's symbols are NOT in scope.
 
 Cell semantics:

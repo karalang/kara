@@ -954,7 +954,7 @@ pub fn parse_manifest(path: &Path, source: &str) -> Result<Manifest, ManifestErr
             warnings.push(ManifestWarning {
                 line: None,
                 message: format!(
-                    "unknown key `[package].{key}` — ignored in 0.9 (reserved for a later release)"
+                    "unknown key `[package].{key}` — ignored in 0.8 (reserved for a later release)"
                 ),
             });
         }
@@ -1178,7 +1178,7 @@ fn parse_profile_table(
             other => warnings.push(ManifestWarning {
                 line: None,
                 message: format!(
-                    "unknown key `[profile].{other}` — ignored in 0.9 (reserved for a later release)"
+                    "unknown key `[profile].{other}` — ignored in 0.8 (reserved for a later release)"
                 ),
             }),
         }
@@ -1240,7 +1240,7 @@ fn parse_link_table(
             other => warnings.push(ManifestWarning {
                 line: None,
                 message: format!(
-                    "unknown key `[link].{other}` — ignored in 0.9 (reserved for a later release)"
+                    "unknown key `[link].{other}` — ignored in 0.8 (reserved for a later release)"
                 ),
             }),
         }
@@ -1318,7 +1318,7 @@ fn parse_lib_table(
             other => warnings.push(ManifestWarning {
                 line: None,
                 message: format!(
-                    "unknown key `[lib].{other}` — ignored in 0.9 (reserved for a later release)"
+                    "unknown key `[lib].{other}` — ignored in 0.8 (reserved for a later release)"
                 ),
             }),
         }
@@ -1430,7 +1430,7 @@ fn parse_release_table(
             other => warnings.push(ManifestWarning {
                 line: None,
                 message: format!(
-                    "unknown key `[release].{other}` — ignored in 0.9 (reserved for a later release)"
+                    "unknown key `[release].{other}` — ignored in 0.8 (reserved for a later release)"
                 ),
             }),
         }
@@ -1527,7 +1527,7 @@ fn parse_toolchain_table(
             other => warnings.push(ManifestWarning {
                 line: None,
                 message: format!(
-                    "unknown key `[toolchain].{other}` — ignored in 0.9 (reserved for a later release)"
+                    "unknown key `[toolchain].{other}` — ignored in 0.8 (reserved for a later release)"
                 ),
             }),
         }
@@ -1601,7 +1601,7 @@ fn parse_wasm_table(
             other => warnings.push(ManifestWarning {
                 line: None,
                 message: format!(
-                    "unknown key `[wasm].{other}` — ignored in 0.9 (reserved for a later release)"
+                    "unknown key `[wasm].{other}` — ignored in 0.8 (reserved for a later release)"
                 ),
             }),
         }
@@ -1644,7 +1644,7 @@ fn parse_lints_table(
             other => warnings.push(ManifestWarning {
                 line: None,
                 message: format!(
-                    "unknown key `[lints].{other}` — ignored in 0.9 (reserved for a later release)"
+                    "unknown key `[lints].{other}` — ignored in 0.8 (reserved for a later release)"
                 ),
             }),
         }
@@ -1761,7 +1761,7 @@ fn parse_target_tables(
                 warnings.push(ManifestWarning {
                     line: None,
                     message: format!(
-                        "unknown key `[target.{triple}].{key}` — ignored in 0.9 (recognized: dependencies, dev-dependencies, profile)"
+                        "unknown key `[target.{triple}].{key}` — ignored in 0.8 (recognized: dependencies, dev-dependencies, profile)"
                     ),
                 });
             }
@@ -2285,7 +2285,7 @@ fn parse_dependency_inline_table(
         }
         warnings.push(ManifestWarning {
             line: None,
-            message: format!("unknown key `[{table}].{name}.{key}` — ignored in 0.9"),
+            message: format!("unknown key `[{table}].{name}.{key}` — ignored in 0.8"),
         });
     }
 

@@ -166,7 +166,7 @@ pub(super) fn cmd_build_v2_project(a: BuildArgs) {
             });
     // A missing `src/`, an empty one, or one with no entry file was refused
     // by the walk and the tree. A library package (`src/lib.kara`, as
-    // `karac new --lib` makes it) has no `main`, and 0.9 has no library
+    // `karac new --lib` makes it) has no `main`, and 0.8 has no library
     // artifact (`--crate-type` is the exported C ABI, deferred.md), so its
     // build is its check: the packages that depend on it compile it into
     // themselves (B-2026-10-31-22).
@@ -326,7 +326,7 @@ fn hot_swap_names(source: &str) -> Vec<String> {
         .collect()
 }
 
-/// A flag `karac build` does not honour in 0.9: refused by name, exit 1.
+/// A flag `karac build` does not honour in 0.8: refused by name, exit 1.
 fn refuse_unsupported(a: &BuildArgs) {
     // A triple is built for (a cross one included); of the v1 names,
     // `native` and `wasm_wasi` are.
@@ -382,13 +382,13 @@ fn refuse_unsupported(a: &BuildArgs) {
     let mut lines = Vec::new();
     if !refused.is_empty() {
         lines.push(format!(
-            "error: `karac build` does not support {} in 0.9",
+            "error: `karac build` does not support {} in 0.8",
             refused.join(", ")
         ));
     }
     for (flag, feature) in archived {
         lines.push(format!(
-            "error: {flag} builds {feature}, which is not in 0.9"
+            "error: {flag} builds {feature}, which is not in 0.8"
         ));
     }
     if !lines.is_empty() {

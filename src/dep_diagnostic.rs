@@ -67,7 +67,7 @@ pub fn render_resolver_error(err: &ResolverError) -> Diagnostic {
                 declared_in.display()
             )],
             help: Some(
-                "registry dependencies are not in 0.9; switch to a `path = \"...\"` dependency".to_string()
+                "registry dependencies are not in 0.8; switch to a `path = \"...\"` dependency".to_string()
             ),
         },
         ResolverError::GitDepUnsupported {
@@ -84,7 +84,7 @@ pub fn render_resolver_error(err: &ResolverError) -> Diagnostic {
                 declared_in.display()
             )],
             help: Some(
-                "git dependencies are not in 0.9; switch to a `path = \"...\"` dependency that points at a local checkout".to_string()
+                "git dependencies are not in 0.8; switch to a `path = \"...\"` dependency that points at a local checkout".to_string()
             ),
         },
         ResolverError::VersionConflict {
@@ -357,7 +357,7 @@ mod tests {
         assert_eq!(diag.code, "E_REGISTRY_DEP_UNSUPPORTED");
         assert!(diag.primary.contains("http"));
         assert!(diag.notes.iter().any(|n| n.contains("/proj")));
-        assert!(diag.help.as_ref().unwrap().contains("not in 0.9"));
+        assert!(diag.help.as_ref().unwrap().contains("not in 0.8"));
     }
 
     #[test]

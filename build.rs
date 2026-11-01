@@ -77,7 +77,7 @@ fn emit_version_stamp() {
     let sha = git(&["rev-parse", "--short=9", "HEAD"]);
     let dirty = git(&["status", "--porcelain", "--untracked-files=no"]).map(|s| !s.is_empty());
     // A release build drops the `-dev.<count>` prerelease part and keeps
-    // the SHA as build metadata, so `0.9.0+g<sha>` still names its commit.
+    // the SHA as build metadata, so `0.8.0+g<sha>` still names its commit.
     // The tag is checked against the crate version rather than trusted:
     // a stale or mistyped tag builds a dev stamp, which
     // scripts/package-release.sh then refuses to ship under a release tag.

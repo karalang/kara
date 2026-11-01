@@ -2,7 +2,7 @@
 
 A new language has a bootstrapping problem: no ecosystem yet, and no team wants to rewrite a working system to get one feature. Kāra's answer is to be **additive, not a replacement**. It can call the C libraries a program already depends on, and a later release lets it be the guest: a kernel written in Kāra, built as a linkable library with a plain C ABI, dropped into a C or Rust program that keeps everything else.
 
-This chapter covers the direction that ships in 0.9, calling C from Kāra, and then sketches the export direction that follows.
+This chapter covers the direction that ships in 0.8, calling C from Kāra, and then sketches the export direction that follows.
 
 ## Calling C from Kāra
 
@@ -28,7 +28,7 @@ fn main() {
 }
 ```
 
-This works identically under `karac run` and `karac build`: the JIT resolves the symbols in-process, and the AOT build links them from libc. In 0.9 an imported function's parameters and result must be integers, `bool`, `f32`, `f64` or raw pointers, so libm's `fn sqrt(x: f64) -> f64` imports as written; `#[repr(C)]` structs do not cross an import yet.
+This works identically under `karac run` and `karac build`: the JIT resolves the symbols in-process, and the AOT build links them from libc. In 0.8 an imported function's parameters and result must be integers, `bool`, `f32`, `f64` or raw pointers, so libm's `fn sqrt(x: f64) -> f64` imports as written; `#[repr(C)]` structs do not cross an import yet.
 
 Three rules carry most of the weight:
 
@@ -36,9 +36,9 @@ Three rules carry most of the weight:
 - **C strings cross as `*const u8`.** A `c"..."` literal is a `ref CStr` (NUL-terminated, in rodata); hand it to C with `.as_ptr()`. Declaring an extern parameter as `ref CStr` directly is not the FFI form — `CStr` is a Kāra type, not a C one.
 - **Effects still apply.** An extern fn that writes somewhere declares it: `fn puts(s: *const u8) -> i32 with writes(Console);` — foreign code doesn't get to dodge the effect system (see [Effects](./ch11-effects.md)).
 
-## Kāra as a library (after 0.9)
+## Kāra as a library (after 0.8)
 
-The export direction answers "can I use this next to my existing code?". Its design is settled ([deferred.md § Exported C ABI](https://github.com/karalang/kara/blob/main/docs/deferred.md#exported-c-abi)), and it is not in 0.9: `karac check` refuses a `pub extern "C" fn`.
+The export direction answers "can I use this next to my existing code?". Its design is settled ([deferred.md § Exported C ABI](https://github.com/karalang/kara/blob/main/docs/deferred.md#exported-c-abi)), and it is not in 0.8: `karac check` refuses a `pub extern "C" fn`.
 
 In outline:
 

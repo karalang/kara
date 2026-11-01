@@ -2397,7 +2397,7 @@ impl Session {
         };
         println!("(:dep {verb}: {name} = {normalized})");
         println!(
-            "  note: package resolution is not in 0.9: the entry is recorded but `{name}`'s symbols are not in scope."
+            "  note: package resolution is not in 0.8: the entry is recorded but `{name}`'s symbols are not in scope."
         );
     }
 

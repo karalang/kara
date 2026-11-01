@@ -34510,7 +34510,7 @@ fn test_shape_param_arithmetic_deferred() {
     assert!(
         errors.iter().any(|e| e
             .message
-            .contains("shape-param arithmetic (`[A + B]`, `[N * 2]`) is not in 0.9")),
+            .contains("shape-param arithmetic (`[A + B]`, `[N * 2]`) is not in 0.8")),
         "{errors:?}",
     );
 }

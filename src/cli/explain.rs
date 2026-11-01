@@ -1397,7 +1397,7 @@ Granularity is per-capture-name today: field projections under the
 same root binding (e.g. `o.x` and `o.y`) collapse to one entry for
 the root `o`. The disjoint-capture extension (Rule 2¼) will refine
 this to per-path so two closures over different fields of the same
-struct can each take their own mode; it is not in 0.9.
+struct can each take their own mode; it is not in 0.8.
 
 ────────────────────────────────────────────────────────────────────
 Outer-scope routing for `own`-captured roots
@@ -1585,7 +1585,7 @@ only when all four are present.
 They have no trait and cannot be implemented.
 
 Compound assignment desugars through the binary operator: `a += b` means
-`a = a + b`, checked under `Add`. There is no `AddAssign` trait in 0.9.
+`a = a + b`, checked under `Add`. There is no `AddAssign` trait in 0.8.
 When `a` is a `mut ref T` lvalue the desugar is assign-through —
 `*a = *a + b` — so the caller's value is updated rather than the local
 name being rebound.
@@ -1646,7 +1646,7 @@ will actually see, followed by the fix.
     does take the other operand's type, so `(x: i32) + 2` is fine; it is
     only two typed expressions that never silently widen.
 
-4.  user-defined `impl Index for T` is not supported in 0.9;
+4.  user-defined `impl Index for T` is not supported in 0.8;
     operator traits are stdlib-only
 
     Every command dispatches the arithmetic and bitwise
@@ -1835,7 +1835,7 @@ and `Hasher` agrees with this page on both.
     an adversary, or for anything where a chosen collision is a
     problem. This is scheduled rather than undesigned —
     `deferred.md § std.crypto` commits BLAKE3 as the general-hashing
-    algorithm; it is not in 0.9. Until then the honest answer is an
+    algorithm; it is not in 0.8. Until then the honest answer is an
     external library.
 
     A FASTER UNKEYED DIGEST.  `xxh3` was named in an earlier draft of
@@ -1859,9 +1859,9 @@ there a module-level `let` or `let mut` is refused with E_MODULE_LET:
 `const NAME: T = e;` is the only value declared at module scope, which
 `karac fix` writes for a `let` that is already constant, and mutable
 state is built in `main` and passed down. Module cells (`LazyLock`,
-`OnceLock`, `OnceCell`) and `#[thread_local]` are not in 0.9. The rest
+`OnceLock`, `OnceCell`) and `#[thread_local]` are not in 0.8. The rest
 of this page describes the module-level bindings design.md specifies
-beyond that, which 0.9 refuses.
+beyond that, which 0.8 refuses.
 
 ────────────────────────────────────────────────────────────────────
 The compile-time initializer rule

@@ -187,7 +187,7 @@ impl std::fmt::Display for ResolverError {
                 declared_in,
             } => write!(
                 f,
-                "registry dependency `{}` (declared in `{}/kara.toml`) cannot be resolved: registry dependencies are not in 0.9",
+                "registry dependency `{}` (declared in `{}/kara.toml`) cannot be resolved: registry dependencies are not in 0.8",
                 package,
                 declared_in.display(),
             ),
@@ -196,7 +196,7 @@ impl std::fmt::Display for ResolverError {
                 declared_in,
             } => write!(
                 f,
-                "git dependency `{}` (declared in `{}/kara.toml`) cannot be resolved: git dependencies are not in 0.9",
+                "git dependency `{}` (declared in `{}/kara.toml`) cannot be resolved: git dependencies are not in 0.8",
                 package,
                 declared_in.display(),
             ),

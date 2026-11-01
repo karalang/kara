@@ -188,7 +188,7 @@ The compiler is held to measured bars before each release: run time and build ti
 
 ## Targets
 
-- **Native**: Linux x86_64, Linux aarch64 and Apple-silicon macOS in 0.9. Windows follows in a later release.
+- **Native**: Linux x86_64, Linux aarch64 and Apple-silicon macOS in 0.8. Windows follows in a later release.
 - **WebAssembly**: plain `wasm32` (`karac build --target=wasm_wasi`) for compute programs.
 
 ## Docs
@@ -202,7 +202,7 @@ The compiler is held to measured bars before each release: run time and build ti
 
 ## Project status
 
-Pre-1.0. The first release, 0.9.0, is a beta: the language and tools are complete enough to build real programs, and 1.0 follows outside feedback. The compiler lowers every program to a mid-level IR (MIR), which both the interpreter and the LLVM backend run, and its corpus of thousands of programs with expected outputs is the release gate. `dyn Trait`, effect variables for stored callbacks, and provider overrides for the file system, network and standard streams are in; what remains is release packaging and dogfooding.
+Pre-1.0. The first release, 0.8.0, is a beta: the language and tools are complete enough to build real programs, and 1.0 follows outside feedback. The compiler lowers every program to a mid-level IR (MIR), which both the interpreter and the LLVM backend run, and its corpus of thousands of programs with expected outputs is the release gate. `dyn Trait`, effect variables for stored callbacks, and provider overrides for the file system, network and standard streams are in; what remains is release packaging and dogfooding.
 
 ## Prior art
 
@@ -217,7 +217,7 @@ Pre-1.0. The first release, 0.9.0, is a beta: the language and tools are complet
 
 ### Install
 
-Prebuilt binaries for Linux x86_64, Linux aarch64 and Apple-silicon macOS arrive with the 0.9.0 beta. Until then, build from source.
+Prebuilt binaries for Linux x86_64, Linux aarch64 and Apple-silicon macOS arrive with the 0.8.0 beta. Until then, build from source.
 
 ### Build from source
 
@@ -239,7 +239,7 @@ karac --version
 
 ### Editor support
 
-The language server is `kara-lsp`, a separate binary: build it with `cargo build --release -p kara-lsp` (it lands beside `karac` in `target/release/`) and point your editor's LSP client at it. It gives diagnostics, hover with types and effects, and go-to-definition. Each 0.9.0 release also ships a VS Code extension (`kara-vscode-*-<platform>.vsix`) with `kara-lsp` bundled; install it with `code --install-extension <file>.vsix`. The extension's source is in [editors/vscode](editors/vscode). The WebAssembly and optional archives, and the full test gate, are in [CLAUDE.md](CLAUDE.md) and [CONTRIBUTING.md](CONTRIBUTING.md).
+The language server is `kara-lsp`, a separate binary: build it with `cargo build --release -p kara-lsp` (it lands beside `karac` in `target/release/`) and point your editor's LSP client at it. It gives diagnostics, hover with types and effects, and go-to-definition. Each 0.8.0 release also ships a VS Code extension (`kara-vscode-*-<platform>.vsix`) with `kara-lsp` bundled; install it with `code --install-extension <file>.vsix`. The extension's source is in [editors/vscode](editors/vscode). The WebAssembly and optional archives, and the full test gate, are in [CLAUDE.md](CLAUDE.md) and [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 

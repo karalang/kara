@@ -72,7 +72,7 @@ const EXCLUDED_DIRS: &[&str] = &[
     // machine-fix harness (`examples/mend/harness/mend_batch.py`). A Mend
     // fixture that compiles is a broken fixture.
     "mend",
-    // Programs on a library that arrives after 0.9 (`Tensor`, with
+    // Programs on a library that arrives after 0.8 (`Tensor`, with
     // `kara-data`): examples/deferred/README.md.
     "deferred",
 ];

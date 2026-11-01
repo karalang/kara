@@ -1721,7 +1721,7 @@ impl super::Parser {
                                       block; loop attributes do not apply to other \
                                       expression kinds, and a labeled loop \
                                       (`#[par_order_free] label: while ...`) does not take \
-                                      them in 0.9"
+                                      them in 0.8"
                                 .to_string(),
                             span: self.span_from(&attr_start),
                         });

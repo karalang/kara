@@ -210,7 +210,7 @@ impl super::Parser {
                         kind: crate::parser::ParseErrorKind::Syntax,
                         message: "error[E_ATTR_ON_ASSOC_TYPE_DECL]: \
                                   attributes are not supported on \
-                                  associated-type declarations in 0.9; \
+                                  associated-type declarations in 0.8; \
                                   remove the attribute"
                             .to_string(),
                         span: item_attributes[0].span,

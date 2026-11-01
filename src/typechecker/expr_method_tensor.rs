@@ -110,7 +110,7 @@ impl<'a> super::TypeChecker<'a> {
                         "{} requires the receiver's rank to be statically known; \
                          inside a shape-generic fn the shape is a bare parameter — call \
                          {} at a concrete-shape call site instead (rank-polymorphic \
-                         shape transforms are not in 0.9)",
+                         shape transforms are not in 0.8)",
                         method, method
                     ),
                     *span,
@@ -131,7 +131,7 @@ impl<'a> super::TypeChecker<'a> {
                     "{} requires the receiver's rank to be statically known; \
                      this shape carries a `...` splice — call {} at a \
                      concrete-shape call site instead (rank-polymorphic shape \
-                     transforms are not in 0.9)",
+                     transforms are not in 0.8)",
                     method, method
                 ),
                 *span,
@@ -218,7 +218,7 @@ impl<'a> super::TypeChecker<'a> {
             self.type_error(
                 format!(
                     "matmul requires a rank-2 receiver, found rank {} (shape {}) — \
-                     batched matmul is not in 0.9",
+                     batched matmul is not in 0.8",
                     shape.len(),
                     shape_display(shape)
                 ),
@@ -281,7 +281,7 @@ impl<'a> super::TypeChecker<'a> {
             self.type_error(
                 format!(
                     "matmul requires a rank-2 argument, found rank {} (shape {}) — \
-                     batched matmul is not in 0.9",
+                     batched matmul is not in 0.8",
                     other_shape.len(),
                     shape_display(&other_shape)
                 ),
@@ -472,7 +472,7 @@ impl<'a> super::TypeChecker<'a> {
                     format!(
                         "{} requires the tensor's rank to be statically known; \
                          a bare-`S` or splice-bearing shape isn't supported here \
-                         (rank-polymorphic reduction is not in 0.9)",
+                         (rank-polymorphic reduction is not in 0.8)",
                         method
                     ),
                     *span,
@@ -595,7 +595,7 @@ impl<'a> super::TypeChecker<'a> {
                     format!(
                         "{} requires the receiver's rank to be statically known; \
                          a bare-`S` or splice-bearing shape isn't supported here \
-                         (rank-polymorphic broadcasting is not in 0.9)",
+                         (rank-polymorphic broadcasting is not in 0.8)",
                         method
                     ),
                     *span,
@@ -757,7 +757,7 @@ impl<'a> super::TypeChecker<'a> {
             self.type_error(
                 "reshape requires an array-literal dims argument — the result's \
                  static rank comes from the literal's length (`t.reshape([3, 4])`); \
-                 runtime-shaped reshape is not in 0.9"
+                 runtime-shaped reshape is not in 0.8"
                     .to_string(),
                 args[0].value.span,
                 TypeErrorKind::TypeMismatch,
@@ -855,7 +855,7 @@ impl<'a> super::TypeChecker<'a> {
             self.infer_expr(&args[0].value);
             self.type_error(
                 "permute requires a literal axis-list argument \
-                 (`t.permute([1, 0])`) — runtime-valued permutations are not in 0.9"
+                 (`t.permute([1, 0])`) — runtime-valued permutations are not in 0.8"
                     .to_string(),
                 args[0].value.span,
                 TypeErrorKind::TypeMismatch,
@@ -902,7 +902,7 @@ impl<'a> super::TypeChecker<'a> {
                 IntArg::Runtime => {
                     self.type_error(
                         "permute axes must be integer literals — runtime-valued \
-                         permutations are not in 0.9"
+                         permutations are not in 0.8"
                             .to_string(),
                         entry.span,
                         TypeErrorKind::TypeMismatch,

@@ -342,7 +342,7 @@ impl<'a> super::TypeChecker<'a> {
             let span = p.variance_span.unwrap_or(p.span);
             self.type_error(
                 "error[E_VARIANCE_USER_DECL_NOT_YET]: variance declarations are \
-                 reserved for stdlib types in 0.9; remove the marker — the parameter \
+                 reserved for stdlib types in 0.8; remove the marker — the parameter \
                  will be invariant"
                     .to_string(),
                 span,

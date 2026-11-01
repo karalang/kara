@@ -166,7 +166,7 @@ fn build_v2_install_builds_on_v2() {
     }
 }
 
-/// A flag `karac build` does not support in 0.9 is refused by name, in
+/// A flag `karac build` does not support in 0.8 is refused by name, in
 /// words that name no internal milestone (B-2026-10-31-22).
 #[test]
 fn build_v2_refuses_legacy_only_flags_by_name() {
@@ -179,8 +179,8 @@ fn build_v2_refuses_legacy_only_flags_by_name() {
     assert_eq!(out.status.code(), Some(1));
     assert_eq!(
         text(&out.stderr),
-        "error: `karac build` does not support `--simd-report` in 0.9\n\
-         error: `--target=wasm_browser` builds the browser wasm bindings, which is not in 0.9\n"
+        "error: `karac build` does not support `--simd-report` in 0.8\n\
+         error: `--target=wasm_browser` builds the browser wasm bindings, which is not in 0.8\n"
     );
     let json = karac(
         &dir,
@@ -188,7 +188,7 @@ fn build_v2_refuses_legacy_only_flags_by_name() {
     );
     assert_eq!(json.status.code(), Some(1));
     assert!(
-        text(&json.stdout).starts_with("{\"severity\":\"error\",\"phase\":\"build\",\"message\":\"error: `--crate-type` builds the exported C ABI, which is not in 0.9"),
+        text(&json.stdout).starts_with("{\"severity\":\"error\",\"phase\":\"build\",\"message\":\"error: `--crate-type` builds the exported C ABI, which is not in 0.8"),
         "{}",
         text(&json.stdout)
     );

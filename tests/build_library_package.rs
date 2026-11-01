@@ -1,5 +1,5 @@
 //! `karac build` on a library package, as `karac new --lib` makes it
-//! (B-2026-10-31-22): a library has no `main` and 0.9 has no library
+//! (B-2026-10-31-22): a library has no `main` and 0.8 has no library
 //! artifact, so the build checks the package, says there is nothing to
 //! link, and exits 0; a library that does not check fails as `karac check`
 //! does. A package build's text output is `Built:` alone, with no package

@@ -113,10 +113,10 @@ COMMANDS:
     install <spec>    Build a binary package and install it into
                       ~/.kara/bin/. Spec accepts `path = ...`,
                       `git = ...`, or a registry-proxy reference.
-                      (Path sources only in 0.9.)
+                      (Path sources only in 0.8.)
     vendor            Copy resolved dependencies into ./vendor/.
                       Pairs with `karac build --offline`. (Path
-                      dependencies only in 0.9.)
+                      dependencies only in 0.8.)
     resolve           Print the resolved dependency graph (read-only;
                       does not rewrite kara.lock).
     help              Show this help
@@ -245,14 +245,14 @@ file of a package with other modules builds the whole package. Without a
 file, builds the package in the current directory from `src/main.kara` into
 `<root>/dist/<package name>`. The program is checked as `karac check` checks it,
 built to MIR and compiled to native code (KARAC_MIR_OPT=0..3 sets the IR
-optimisation level, -O2 by default). The flags marked Not in 0.9 below are
+optimisation level, -O2 by default). The flags marked Not in 0.8 below are
 refused by name. A library package (`src/lib.kara`) has no `main`: its build
 checks it, and the packages that depend on it build it.
 
 OPTIONS:
     --output=json           Structured JSON output on stdout
     --output=jsonl          Streaming JSONL output on stdout
-    --concurrency-report    Not in 0.9. Print a human-readable summary of
+    --concurrency-report    Not in 0.8. Print a human-readable summary of
                             the auto-par analyzer's per-function parallel
                             groups (with the
                             calls in source order, their reads/writes effects,
@@ -280,7 +280,7 @@ OPTIONS:
                             KARAC_REGISTRY_PROXY env var). Registry / git
                             deps would then be fetched direct from their
                             source. Registry and git dependencies are not
-                            in 0.9, so today the flag only prints a
+                            in 0.8, so today the flag only prints a
                             confirmation note.
     --offline               Read every transitive path dependency from
                             `./vendor/<name>/` instead of the manifest-
@@ -317,7 +317,7 @@ OPTIONS:
                             manifest > host triple. Accepts the space-
                             separated form `--target <triple>` too.
                             See the TARGETS section.
-    --bindings=<mode>       Not in 0.9. WASM output shape: browser (emit `.js`
+    --bindings=<mode>       Not in 0.8. WASM output shape: browser (emit `.js`
                             ES-module glue + `.d.ts` TypeScript
                             declarations next to the `.wasm`),
                             component (a single embedded-WIT Component
@@ -365,7 +365,7 @@ OPTIONS:
                             targets `+simd128` is the default (Vector
                             ops lower to v128); `-simd128` opts back
                             down to an MVP-clean scalarized module.
-    --features=<list>       Not in 0.9. Build-feature opt-ins (`--features=help` lists
+    --features=<list>       Not in 0.8. Build-feature opt-ins (`--features=help` lists
                             them). The set is closed at one:
                             `wasm-threads` — shared-memory multithreading
                             for `--target=wasm_browser`. Emits a SECOND
@@ -391,13 +391,13 @@ OPTIONS:
                             (wasi-threads and the component model do not
                             compose). Accepts `--features <list>` too.
     --monomorphization-budget=warn:N,error:M
-                            Not in 0.9. Cap per-generic instantiations. After typecheck
+                            Not in 0.8. Cap per-generic instantiations. After typecheck
                             (before codegen), any generic instantiated >= N
                             times emits warning[monomorphization-budget];
                             >= M fails the build. Either threshold may be
                             given alone; warn must be <= error. Off by
                             default (opt-in; there are no default thresholds
-                            in 0.9). Single-file build only. Inspect the
+                            in 0.8). Single-file build only. Inspect the
                             same counts with `karac query monomorphization`.
     -h, --help              Print this message
 
@@ -446,12 +446,12 @@ OFFLINE:
     surfaces `error[E_OFFLINE_VENDOR_ENTRY_MISSING]` naming the
     offending dependency.
 
-    0.9 status:
+    0.8 status:
         Path-source deps are fully wired through `--offline`. Registry
         and git deps in offline mode still surface
         `E_REGISTRY_DEP_UNSUPPORTED` / `E_GIT_DEP_UNSUPPORTED`
         (promoted to a hard error in offline mode rather than the
-        default warning); registry and git vendoring are not in 0.9."
+        default warning); registry and git vendoring are not in 0.8."
         }
         "query" => {
             "\
@@ -483,8 +483,8 @@ KINDS:
                        (Rc/Arc), Arc-provider wraps, borrow-flag
                        fields, partition-guard sites, auto-clone
                        insertions. Per design.md § Compiler Query
-                       API. 0.9 reports static counts only —
-                       runtime attribution is not in 0.9.
+                       API. 0.8 reports static counts only —
+                       runtime attribution is not in 0.8.
     attributes         JSON list of every multi-segment attribute
                        (`#[diagnostic::*]`, `#[karafmt::*]`, etc.).
                        Tool-facing read surface for the
@@ -494,7 +494,7 @@ KINDS:
                        `#[karafmt::*]` occurrence).
     queries            Compiler queries channel — JSON envelope
                        collating every pipeline-phase-emitted
-                       `CompilerQuery`. 0.9 ships an empty array
+                       `CompilerQuery`. 0.8 ships an empty array
                        while the catalogue is being populated; the
                        command surface is stable so external
                        tooling can integrate now. See design.md
@@ -504,9 +504,9 @@ KINDS:
                        `(T1..Tk)` tuples plus the first call site
                        that produced each. Surfaces the cost named
                        in design.md § Effect Polymorphism > Cost
-                       Properties. 0.9 reports type tuples; the
+                       Properties. 0.8 reports type tuples; the
                        per-instance `effects` slot is reserved and
-                       always empty in 0.9.
+                       always empty in 0.8.
     affected-by        Call-graph reach query. Target forms:
                          <file.kara>                whole-file seed
                          <file.kara>:<line>         single line seed
@@ -893,13 +893,13 @@ INSTALL ROOT:
     cache uses for `KARAC_BUILD_CACHE_ROOT`). The directory is created
     on first install.
 
-0.9 status:
+0.8 status:
     Path sources (`path=...`) are fully wired — the project is built
     through the existing pipeline (dep resolution, MSRV check, codegen,
     link) and the produced executable is copied into the install root.
     Git / registry sources surface a forward-compat
     `E_INSTALL_GIT_UNSUPPORTED` / `E_INSTALL_REGISTRY_UNSUPPORTED`
-    diagnostic; they are not in 0.9."
+    diagnostic; they are not in 0.8."
         }
         "explain" => {
             "\
@@ -1015,7 +1015,7 @@ OPTIONS:
     -h, --help        Print this message
 
 Path dependencies are copied verbatim; registry and git vendoring are
-not in 0.9."
+not in 0.8."
         }
         "update" => {
             "\
@@ -1033,11 +1033,11 @@ OPTIONS:
     -h, --help        Print this message
 
 Bare form refreshes every locked package; surgical form targets one
-package by name (the name is not validated in 0.9).
+package by name (the name is not validated in 0.8).
 
-0.9 status: path-deps are manifest-pinned, so bumping isn't meaningful;
+0.8 status: path-deps are manifest-pinned, so bumping isn't meaningful;
 both forms re-derive the lockfile from the current manifest. Version
-bumping needs registry dependencies, which are not in 0.9."
+bumping needs registry dependencies, which are not in 0.8."
         }
         "resolve" => {
             "\

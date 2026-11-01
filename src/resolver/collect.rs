@@ -726,7 +726,7 @@ impl<'a> super::Resolver<'a> {
                 self.errors.push(ResolveError {
                     message: "error[E_DEPRECATED_ON_FIELD]: \
                               `#[deprecated]` on individual struct fields \
-                              is not in 0.9; only item-level deprecation is \
+                              is not in 0.8; only item-level deprecation is \
                               supported."
                         .to_string(),
                     span: attr.span,
@@ -837,7 +837,7 @@ impl<'a> super::Resolver<'a> {
                          trait-impl method, a trait method declaration, an \
                          `extern \"C\" fn` definition, or a `Drop` destructor. To \
                          hint every method of an `impl` block, annotate each method \
-                         (block-level shorthand is not in 0.9).",
+                         (block-level shorthand is not in 0.8).",
                     ),
                     span: attr.span,
                     kind: ResolveErrorKind::CodegenHintInvalidTarget,

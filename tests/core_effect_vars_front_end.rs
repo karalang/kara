@@ -171,7 +171,7 @@ fn a_trait_with_an_effect_variable_is_refused_once() {
     );
     assert!(
         err.message
-            .starts_with("a trait takes no effect variable (`E`) in 0.9"),
+            .starts_with("a trait takes no effect variable (`E`) in 0.8"),
         "{err:?}"
     );
 }
@@ -233,7 +233,7 @@ fn main() { println(1); }
     assert_eq!(
         err.message,
         "`Two` declares a second effect variable `F`; a struct or enum declares at most one \
-         in 0.9, since its effect set is written as one `with` argument (`Two[with ...]`)"
+         in 0.8, since its effect set is written as one `with` argument (`Two[with ...]`)"
     );
     let errs = resolve_errors(
         "fn both[with E, F](f: Fn(i64) with E, g: Fn(i64) with F) with E F { f(1); g(2); }

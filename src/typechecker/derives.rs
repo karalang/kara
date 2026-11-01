@@ -1415,7 +1415,7 @@ impl<'a> super::TypeChecker<'a> {
                                         format!(
                                             "error[E_ENUM_NESTED_ENUM_PAYLOAD]: enum variant \
                                              '{}.{}' has a payload of nested enum type '{}' — \
-                                             0.9 only supports up to one level of enum nesting; \
+                                             0.8 only supports up to one level of enum nesting; \
                                              either flatten the variant, mark the inner enum as \
                                              `shared` (RC pointer) or `par` (cross-task pointer — \
                                              use this one if the value must cross a task \
@@ -1561,7 +1561,7 @@ impl<'a> super::TypeChecker<'a> {
             self.type_error(
                 format!(
                     "error[E_ENUM_NESTED_ENUM_PAYLOAD]: instantiating '{}[{}]' gives enum \
-                     variant '{}.{}' a payload of nested enum type '{}' — 0.9 only supports up \
+                     variant '{}.{}' a payload of nested enum type '{}' — 0.8 only supports up \
                      to one level of enum nesting; either use a different type argument, mark \
                      '{}' as `shared` (RC pointer) or `par` (cross-task pointer — use this one \
                      if the value must cross a task boundary), or wrap it in a `Vec` / \

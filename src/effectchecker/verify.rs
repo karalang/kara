@@ -518,7 +518,7 @@ impl<'a> super::EffectChecker<'a> {
                     "{subject} requires a build with `panic = \"unwind\"`, but this build is \
                      abort-only. The \"C-unwind\" ABI propagates an unwinding panic across the \
                      FFI boundary, which needs a stack unwinder the abort strategy does not \
-                     provide (0.9 is abort-only). Use \
+                     provide (0.8 is abort-only). Use \
                      `extern \"C\"` instead — a body panic auto-aborts at the boundary — or, for \
                      a C-shaped error, return a status/`Result`. See design.md § Panic Semantics \
                      at the FFI Boundary."

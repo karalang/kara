@@ -34,7 +34,7 @@ fn a_column_built_from_a_vec_is_refused_at_check() {
     let (ok, err) = check("column", src);
     assert!(!ok, "check must refuse:\n{err}");
     let want = "main.kara:2:13: `Column.from_vec` is not in the standard library: \
-                `Column` comes with the `kara-data` package, which is not in 0.9 (docs/library/data.md)";
+                `Column` comes with the `kara-data` package, which is not in 0.8 (docs/library/data.md)";
     assert!(err.contains(want), "want {want:?} in\n{err}");
 }
 
@@ -53,7 +53,7 @@ fn a_dataframe_a_lazy_expression_and_a_tensor_are_refused_at_check() {
         "main.kara:2:14: `DataFrame.new` is not in the standard library",
         "main.kara:3:13: `LazyExpr.col` is not in the standard library",
         "main.kara:4:34: `Tensor.zeros` is not in the standard library: `Tensor` comes \
-         with the `kara-data` package, which is not in 0.9 (docs/deferred.md § Numerical types)",
+         with the `kara-data` package, which is not in 0.8 (docs/deferred.md § Numerical types)",
     ] {
         assert!(err.contains(want), "want {want:?} in\n{err}");
     }

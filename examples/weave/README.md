@@ -16,7 +16,7 @@ stages never re-validate:
 | `parse_row`  | `String -> Result[ValidatedRow, ParseError]` `with panics` `ensures …` | refinement `try_from` narrowing; `ensures` postcondition; inferred-effect declaration |
 | `enrich_row` | `ValidatedRow -> EnrichedRow` `with reads(CurrencyDB)` `ensures result.qty == old(row.qty)` | effect resource + `with_provider` injection; `old(...)` pre-state capture on a consumed receiver |
 | `aggregate`  | `NonEmpty[EnrichedRow] -> Summary` `requires …` `ensures …` | generic refinement as a precondition *type*; `requires`/`ensures` |
-| `Summary`    | struct built by `Summary.new`, which `requires row_count >= 0` | the property a struct `invariant` would state (contracts' `invariant` is in the verification track, not 0.9), held by the constructor |
+| `Summary`    | struct built by `Summary.new`, which `requires row_count >= 0` | the property a struct `invariant` would state (contracts' `invariant` is in the verification track, not 0.8), held by the constructor |
 
 Refinement types in play: `BoundedText` (length-bounded String), `PositivePrice`
 (`f64 where self > 0.0`), `PositiveQty` (`i64 where self > 0`), and the generic

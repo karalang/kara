@@ -11713,8 +11713,8 @@ fn test_install_git_spec_surfaces_unsupported_error() {
         "diagnostic must echo the spec, got: {stderr}"
     );
     assert!(
-        stderr.contains("git sources are not in 0.9"),
-        "diagnostic must say what 0.9 installs from, got: {stderr}"
+        stderr.contains("git sources are not in 0.8"),
+        "diagnostic must say what 0.8 installs from, got: {stderr}"
     );
 }
 
@@ -13253,7 +13253,7 @@ fn test_explain_concept_closures_cross_references_disjoint_capture() {
         .unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("Rule 2¼"));
-    assert!(stdout.contains("it is not in 0.9"));
+    assert!(stdout.contains("it is not in 0.8"));
 }
 
 #[test]
@@ -18729,7 +18729,7 @@ fn main() {
         "std.web single-file run should succeed; stdout={stdout} stderr={stderr}",
     );
     assert!(
-        stdout.contains("stub: std.web.net.fetch: not available in 0.9"),
+        stdout.contains("stub: std.web.net.fetch: not available in 0.8"),
         "fetch stub body should execute and surface its message: {stdout}",
     );
     assert!(
@@ -20445,7 +20445,7 @@ fn target_flag_gpu_rejected() {
     assert!(!out.status.success());
     assert!(
         stderr.contains("`--target=gpu` builds GPU compute")
-            && stderr.contains("which is not in 0.9"),
+            && stderr.contains("which is not in 0.8"),
         "expected the gpu rejection, got: {stderr}",
     );
     let _ = std::fs::remove_dir_all(&tmp);

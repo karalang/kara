@@ -3254,7 +3254,7 @@ impl<'a> super::TypeChecker<'a> {
         self.current_self_type = saved_self;
         // The v2 commands run what they check, and the v2 backends do not
         // check an invariant: contracts' `invariant` is in the verification
-        // track, after 0.9 (design.md § Tracks; B-2026-10-31-23).
+        // track, after 0.8 (design.md § Tracks; B-2026-10-31-23).
         if self.cli_lint_overrides.strict_core && !s.stdlib_origin {
             for (inv, form) in s
                 .invariants
@@ -3266,7 +3266,7 @@ impl<'a> super::TypeChecker<'a> {
                     format!(
                         "`{form}` on `{}` is not available: struct invariants are contracts, \
                          which are in the verification track (deferred.md § Contracts) and \
-                         not in 0.9. Check the property where the value is built, in a \
+                         not in 0.8. Check the property where the value is built, in a \
                          constructor",
                         s.name
                     ),
@@ -3703,7 +3703,7 @@ impl<'a> super::TypeChecker<'a> {
                 refusals.push((
                     format!(
                         "`pub extern \"C\" fn {}` is not available: exporting functions to C \
-                         is not in 0.9 (calling C through an `extern \"C\"` import is)",
+                         is not in 0.8 (calling C through an `extern \"C\"` import is)",
                         f.name
                     ),
                     f.span,
@@ -3723,7 +3723,7 @@ impl<'a> super::TypeChecker<'a> {
                 refusals.push((
                     format!(
                         "`pub fn {}` is a WASM export, which is not available: WASM component \
-                         and browser bindings are not in 0.9. Drop `pub` to keep it a \
+                         and browser bindings are not in 0.8. Drop `pub` to keep it a \
                          target-gated function",
                         f.name
                     ),
@@ -5029,7 +5029,7 @@ impl<'a> super::TypeChecker<'a> {
                     format!(
                         "error[E_MODULE_LET]: module-level `const {}` (a `{ty_text}`) is a \
                          cell, which is mutable global state, and Kāra has no mutable \
-                         globals; module cells are not in 0.9 \
+                         globals; module cells are not in 0.8 \
                          (design.md § Constants, \"No mutable globals\"), and a `const` \
                          would build a fresh one at every use\nhelp: create the value \
                          in `main` and pass it down to the functions that use it, \

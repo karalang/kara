@@ -243,7 +243,7 @@ impl TypeChecker<'_> {
                 "error[E_REFINEMENT_IMPLICIT_NARROWING]: cannot coerce refinement `{actual_name}` \
                  to refinement `{name}` implicitly — distinct refinements over the same base `{}` \
                  have no implicit relationship, even when their predicates are textually identical \
-                 (0.9 has no implication-based elision). Use `{name}.try_from(x)?` or `x as {name}`",
+                 (0.8 has no implication-based elision). Use `{name}.try_from(x)?` or `x as {name}`",
                 type_display(base),
             ),
             expr.span,

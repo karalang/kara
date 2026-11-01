@@ -3125,7 +3125,7 @@ impl<'a> super::TypeChecker<'a> {
                         "conflicting impl: `impl {}{}` redefines method{} {} already \
                          provided by an existing `impl {}`; a specialized inherent impl \
                          may only ADD new methods, not redefine or specialize an \
-                         existing one (0.9 has no method specialization)",
+                         existing one (0.8 has no method specialization)",
                         type_name, rendered_args, plural, joined, type_name,
                     ),
                     imp.span,
@@ -3136,7 +3136,7 @@ impl<'a> super::TypeChecker<'a> {
             Some(ImplOverlap::WholeImpl) => {
                 self.type_error(
                     format!(
-                        "conflicting impl: another `impl{} {}{}` already exists; 0.9 \
+                        "conflicting impl: another `impl{} {}{}` already exists; 0.8 \
                          does not support generic-vs-specialized impl overlap on the \
                          same trait + target",
                         trait_name

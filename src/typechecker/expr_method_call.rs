@@ -1703,7 +1703,7 @@ impl<'a> super::TypeChecker<'a> {
                 self.type_error(
                     format!(
                         "`gpu.{method}` is not available: GPU compute (`gpu.*` and `#[gpu]` \
-                         kernels) is not in 0.9"
+                         kernels) is not in 0.8"
                     ),
                     *span,
                     TypeErrorKind::ArchivedWithLegacy,
@@ -5436,7 +5436,7 @@ impl<'a> super::TypeChecker<'a> {
                 format!(
                     concat!(
                         "error[E_GPU_REDUCE_BUFFER]: `gpu.matmul` requires a rank-2 left ",
-                        "operand, found rank {} — batched matmul is not in 0.9, on both surfaces"
+                        "operand, found rank {} — batched matmul is not in 0.8, on both surfaces"
                     ),
                     a_shape.len()
                 ),

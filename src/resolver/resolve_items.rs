@@ -144,7 +144,7 @@ impl<'a> super::Resolver<'a> {
                 self.errors.push(ResolveError {
                     message: format!(
                         "`{name}` declares a second effect variable `{}`; a struct or enum \
-                         declares at most one in 0.9, since its effect set is written as one \
+                         declares at most one in 0.8, since its effect set is written as one \
                          `with` argument (`{name}[with ...]`)",
                         extra.name
                     ),
@@ -518,7 +518,7 @@ impl<'a> super::Resolver<'a> {
             .join(", ");
         self.errors.push(ResolveError {
             message: format!(
-                "a trait takes no effect variable ({var_list}) in 0.9; declare it on the \
+                "a trait takes no effect variable ({var_list}) in 0.8; declare it on the \
                  method that uses it, or on the impl block"
             ),
             span: generics.span,
@@ -586,7 +586,7 @@ impl<'a> super::Resolver<'a> {
         } else {
             (
                 format!(
-                    "user-defined `impl {trait_name} for {target_name}` is not supported in 0.9; \
+                    "user-defined `impl {trait_name} for {target_name}` is not supported in 0.8; \
                      operator traits are stdlib-only"
                 ),
                 Some(format!(

@@ -3,7 +3,7 @@
 All notable changes to the Kāra language and compiler will be documented in this file.
 
 > **Maintenance note (2026-10-28).** This file is a coarse milestone record.
-> The 0.9.0 entry below is a draft until the release. Progress is in
+> The 0.8.0 entry below is a draft until the release. Progress is in
 > [`docs/roadmap.md`](docs/roadmap.md), the bug ledger
 > [`docs/bugs-v2.jsonl`](docs/bugs-v2.jsonl) (rollup in
 > [`docs/bugs-v2.md`](docs/bugs-v2.md); the pre-M3 ledger is archived in
@@ -14,7 +14,7 @@ All notable changes to the Kāra language and compiler will be documented in thi
 
 ---
 
-## 0.9.0 (beta) — draft
+## 0.8.0 (beta) — draft
 
 The first release, and a beta: 1.0 follows outside feedback (decided 2026-10-31). It is the first release of the v2 compiler. Every program lowers to MIR, which the
 interpreter (`karac __mir-run`) and the LLVM backend (`karac build`, `karac
@@ -77,7 +77,7 @@ later in [docs/deferred.md](docs/deferred.md).
   automatic-parallelism speedup floor, and a load test of 100,000 idle
   connections with tail-latency limits.
 
-### Known limits in 0.9
+### Known limits in 0.8
 
 - A callback stored in a field cannot use an overridden provider
   (core-semantics §14.5); test it by calling it directly.

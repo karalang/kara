@@ -865,9 +865,9 @@ fn group_key_name(k: &ExprNode) -> Result<String, String> {
         ExprNode::Col(n) => Ok(n.clone()),
         ExprNode::Alias { name, expr } => match &**expr {
             ExprNode::Col(_) => Ok(name.clone()),
-            _ => Err("LazyFrame.group_by: each key must be a bare col(..) in 0.9".to_string()),
+            _ => Err("LazyFrame.group_by: each key must be a bare col(..) in 0.8".to_string()),
         },
-        _ => Err("LazyFrame.group_by: each key must be a bare col(..) in 0.9".to_string()),
+        _ => Err("LazyFrame.group_by: each key must be a bare col(..) in 0.8".to_string()),
     }
 }
 
@@ -898,7 +898,7 @@ fn agg_output_name(a: &ExprNode) -> Result<String, String> {
         ExprNode::Agg { op, arg } => match &**arg {
             ExprNode::Col(c) => Ok(format!("{c}_{}", AGG_NAMES[*op as usize])),
             _ => Err(
-                "LazyGroupBy.agg: the aggregate argument must be a bare col(..) in 0.9".to_string(),
+                "LazyGroupBy.agg: the aggregate argument must be a bare col(..) in 0.8".to_string(),
             ),
         },
         _ => Err(

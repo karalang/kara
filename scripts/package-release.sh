@@ -87,7 +87,7 @@ if [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+ && "$RELEASE_TAG" != *-dev* ]];
         exit 1
     fi
 fi
-# File names: a release names its version alone (`karac-0.9.0-<target>`);
+# File names: a release names its version alone (`karac-0.8.0-<target>`);
 # a dev build keeps its whole stamp, `+` sanitized to `-`.
 if [[ "$VERSION_RAW" == *-dev.* ]]; then
     VERSION="${VERSION_RAW//+/-}"

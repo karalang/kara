@@ -190,7 +190,7 @@ pub fn byte_offset_to_line_col(source: &str, offset: usize) -> (usize, usize) {
 }
 
 /// The full stamped compiler version: `<base>-dev.<count>+g<sha>[.dirty]`,
-/// e.g. `0.9.0-dev.4213+g07bf66e2a`, or `<base>+g<sha>` on a release
+/// e.g. `0.8.0-dev.4213+g07bf66e2a`, or `<base>+g<sha>` on a release
 /// build (`KARAC_RELEASE_TAG=v<base>`, see `build.rs`). Base is
 /// `CARGO_PKG_VERSION` (a human decision, moved on citable milestones
 /// only); the suffix is
