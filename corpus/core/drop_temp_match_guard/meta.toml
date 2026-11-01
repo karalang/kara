@@ -1,0 +1,12 @@
+source = "core-semantics.md §7.4"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop", "match"]
+class = "a"
+expected_from = "spec"
+rules = ["7.4"]
+backends = []
+env = {}
+note = "core-semantics.md §7.4: a match guard's temporaries drop at the end of the guard, on the success edge before the arm body runs (B-2026-11-01-30) and on the failing edge before the next arm is tried; a guard on a payload binding, inside a loop, and before an arm that returns."
+bucket = "a"

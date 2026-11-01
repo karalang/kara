@@ -1,0 +1,24 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+fn mk(i: i64) -> R { R { id: i } }
+fn see(r: R) -> i64 { r.id }
+fn pick(n: i64) -> i64 {
+    match n {
+        x if mk(x).id == 4 => { println("ret"); return 40; }
+        _ => {}
+    }
+    0
+}
+fn main() {
+    // A guard's temporaries drop at the end of the guard (§7.4), on the
+    // success edge before the arm runs, and on the failing edge before
+    // the next arm is tried.
+    match 1 { x if see(mk(x)) == 1 => println("arm"), _ => {} }
+    let k = match 2 { x if see(mk(x)) == 3 => 0, _ => { println("fallthrough"); 1 } };
+    println(k);
+    match Some(3) { Some(v) if mk(v).id == 3 => println("some"), _ => {} }
+    for i in 5..7 {
+        match i { x if see(mk(x)) == 6 => println("six"), _ => println("other") }
+    }
+    println(pick(4));
+}

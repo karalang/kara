@@ -14572,7 +14572,15 @@ impl<'l, 'a> Bx<'l, 'a> {
                 self.declare(l, t);
             }
             if let Some(g) = &arm.guard {
-                let c = self.expr_operand(g)?;
+                // The guard's temporaries drop once it is evaluated, on
+                // both edges, as an `if` condition's do (core semantics
+                // §7.4, B-2026-11-01-30); the arm's scope keeps only the
+                // bindings.
+                self.push_scope();
+                let bool_t = self.tys().bool();
+                let c = self.owned_operand(g, bool_t)?;
+                let c = self.read_before_drops(c, bool_t);
+                self.pop_scope()?;
                 let body_bb = self.b.new_block();
                 let fail = self.b.new_block();
                 self.goto_with(
