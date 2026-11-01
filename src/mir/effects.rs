@@ -617,14 +617,29 @@ fn par_conflicts(body: &Body, sites: &[Site], origins: &Origins) -> Vec<ParConfl
     let mut out = Vec::new();
     for (ri, r) in body.par_regions.iter().enumerate() {
         // Each branch's sites, in block order, with keys on the values the
-        // branch makes itself turned fresh.
+        // branch makes itself turned fresh. A drop of a local the branch
+        // does not own, on its way out of the function, is the enclosing
+        // frame's teardown: it runs once, after the `par` is torn down
+        // (core §11.7, §11.9), so it is no branch's effect (B-2026-11-01-37:
+        // a cancelled task's teardown at each spawn charged its outer
+        // local's printing `Drop` to every branch).
         let sides: Vec<Vec<(BasicBlock, EffectSet)>> = r
             .branches
             .iter()
             .map(|br| {
                 let blocks: BTreeSet<BasicBlock> = br.iter().copied().collect();
+                let leaves = leaving_blocks(body, &blocks);
+                let own = own_locals(body, r, br, &blocks, origins);
+                let teardown = |b: &BasicBlock| {
+                    leaves.contains(b)
+                        && matches!(
+                            &body.blocks[b.index()].terminator.kind,
+                            TerminatorKind::Drop { place, .. } if !own.contains(&place.local.0)
+                        )
+                };
                 let mut v: Vec<(BasicBlock, EffectSet)> = blocks
                     .iter()
+                    .filter(|b| !teardown(b))
                     .filter_map(|b| at.get(b).map(|s| (*b, origins.privatize(s, &blocks))))
                     .collect();
                 v.sort_by_key(|(b, _)| *b);
@@ -804,55 +819,57 @@ fn own_locals(
     own
 }
 
+/// The blocks of `set` on a branch's way out of the function (a `?` in it,
+/// a whole arm that ends in `return`, or a cancelled task's teardown at a
+/// suspension point): they return and never come back to the code after
+/// the branch. Their drops of everything live and their write of the
+/// result belong to leaving, and the `par` decides which branch's exit
+/// counts (core §11.7, §11.9); every other use is the branch's own work,
+/// which may read what a sibling writes (B-2026-10-24-34). A block that
+/// can neither continue nor return (a loop with no way out) is kept whole.
+fn leaving_blocks(body: &Body, set: &BTreeSet<BasicBlock>) -> BTreeSet<BasicBlock> {
+    let succ = |b: BasicBlock| body.blocks[b.index()].terminator.kind.successors();
+    let mut on: BTreeSet<BasicBlock> = set
+        .iter()
+        .copied()
+        .filter(|&b| succ(b).iter().any(|s| !set.contains(s)))
+        .collect();
+    let mut returns: BTreeSet<BasicBlock> = set
+        .iter()
+        .copied()
+        .filter(|b| {
+            matches!(
+                body.blocks[b.index()].terminator.kind,
+                TerminatorKind::Return
+            )
+        })
+        .collect();
+    loop {
+        let mut changed = false;
+        for &b in set {
+            let s = succ(b);
+            if !on.contains(&b) && s.iter().any(|x| on.contains(x)) {
+                on.insert(b);
+                changed = true;
+            }
+            if !returns.contains(&b) && s.iter().any(|x| returns.contains(x)) {
+                returns.insert(b);
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    returns.difference(&on).copied().collect()
+}
+
 /// Every use of a place by the blocks `set`, in block order and, within a
 /// block, in the order its statements and terminator make them, leaving
 /// out what the blocks on the branch's way out of the function do to leave.
 fn branch_uses(body: &Body, set: &BTreeSet<BasicBlock>) -> Vec<(BasicBlock, Use, Place)> {
     let mut out = Vec::new();
-    // The blocks on a branch's way out of the function (a `?` in it, or a
-    // whole arm that ends in `return`): they return and never come back to
-    // the code after the branch. Their drops of everything live and their
-    // write of the result belong to leaving, and the `par` decides which
-    // branch's exit counts (core §11.7); every other use is the branch's
-    // own work, which may read what a sibling writes (B-2026-10-24-34). A
-    // block that can neither continue nor return (a loop with no way out)
-    // is kept whole.
-    let leaves: BTreeSet<BasicBlock> = {
-        let succ = |b: BasicBlock| body.blocks[b.index()].terminator.kind.successors();
-        let mut on: BTreeSet<BasicBlock> = set
-            .iter()
-            .copied()
-            .filter(|&b| succ(b).iter().any(|s| !set.contains(s)))
-            .collect();
-        let mut returns: BTreeSet<BasicBlock> = set
-            .iter()
-            .copied()
-            .filter(|b| {
-                matches!(
-                    body.blocks[b.index()].terminator.kind,
-                    TerminatorKind::Return
-                )
-            })
-            .collect();
-        loop {
-            let mut changed = false;
-            for &b in set {
-                let s = succ(b);
-                if !on.contains(&b) && s.iter().any(|x| on.contains(x)) {
-                    on.insert(b);
-                    changed = true;
-                }
-                if !returns.contains(&b) && s.iter().any(|x| returns.contains(x)) {
-                    returns.insert(b);
-                    changed = true;
-                }
-            }
-            if !changed {
-                break;
-            }
-        }
-        returns.difference(&on).copied().collect()
-    };
+    let leaves = leaving_blocks(body, set);
     let operand = |o: &Operand| match o {
         Operand::Copy(p) => Some((Use::Read, p.clone())),
         Operand::Move(p) => Some((Use::Move, p.clone())),
