@@ -61,12 +61,12 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | false-positive | 81 |
 | diagnostics | 79 |
 | missing-feature | 60 |
-| perf | 54 |
+| perf | 55 |
 | soundness | 31 |
 | miscompile | 23 |
 | run-vs-build | 19 |
 | other | 15 |
-| codegen-gap | 13 |
+| codegen-gap | 14 |
 | leak | 3 |
 | crash | 2 |
 
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | typecheck | 135 |
 | mir | 86 |
-| mir-llvm | 61 |
+| mir-llvm | 63 |
 | cli | 47 |
 | ownership | 37 |
 | interp | 26 |
@@ -110,6 +110,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-31-41 | 2026-10-31 | mir | medium | karac still compiles a kata 1.54x slower than rustc -O at twice its peak memory on the M5 (median over 24 katas: 165 ms vs 103 ms, 59.8 MiB vs 28.3 MiB), after B-2026-10-28-37's library-prune fix | — |
 | B-2026-10-31-42 | 2026-10-31 | mir-llvm | medium | Kata 20's valid-parentheses stack scan runs 1.41x legacy's instructions on the MIR backend: the seq lane went from 0.74x to 0.90x rustc -O and the par lane from 0.68x to 1.06x rayon | — |
 | B-2026-10-31-43 | 2026-10-31 | mir | medium | Implicit auto-par no longer fires on kata 23 (merge k sorted lists), which the legacy backend parallelized: its par lane now runs the sequential program, 1.49x -> 5.15x rayon | — |
+| B-2026-10-31-44 | 2026-10-31 | mir-llvm | high | MIR never full-unrolls a constant-trip loop that calls or exits early, where the June legacy fix (B-2026-06-17-7) did: kata 36 went from 0.55x to 1.66x rustc -O and kata 37 from 0.97x to 1.37x | — |
+| B-2026-10-31-45 | 2026-10-31 | mir-llvm | medium | `unsafe { xs.get_unchecked(i) }` is bounds-checked on the MIR backend: the escape hatch design.md documents does nothing, and kata 28's unchecked KMP no longer gains on the checked one (1.14x -> 1.01x) | — |
 | B-2026-11-01-1 | 2026-11-01 | mir | medium | `d ?? Node.Leaf(0)` on a bare `d: Option[Node]` parameter, `Node` a `shared enum`, passes `karac check` and is refused by the MIR build as a move out of a borrowed place; `Option[Node]` is a handle aggregate (core-semantics §6.1), so the `??` should count the handle and run, as check already says | — |
 | B-2026-11-01-2 | 2026-11-01 | cli+mir | medium | `karac check` prints "All checks passed" for a program whose MIR lowering fails, and then reports none of the program's MIR borrow errors anywhere: `checked_borrow_errors` (src/mir/lower.rs) returns an empty list when `lower_typed` errs, so one refused function hides an E0516 in another and `karac run` is the first to fail | — |
 | B-2026-11-01-3 | 2026-11-01 | mir | medium | `match n { Some(k) => kind_name(k), None => "NoneType" }` with `n: ref Option[Node]`, `Node` a `shared enum` and `kind_name(n: ref Node) -> Str`, is refused as E0516 "cannot drop `k` while `cls` still holds a borrow of it" (E0509 when returned directly); core-semantics §4.6 makes `k` a `ref` into `n`, so the view lives as long as `n`, and the same match on a non-shared enum checks | — |
