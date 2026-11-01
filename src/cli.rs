@@ -3482,12 +3482,13 @@ fn mir_check_message(e: &crate::mir::BorrowError) -> String {
     }
 }
 
-/// `text` without its leading `line:column:` and the MIR block positions
+/// `text` without its leading `line:column:` (with the function name a
+/// builder error gives after it) and the MIR block positions
 /// (`bb4[3]: `, and ` (borrow at bb0[1] at 16:21)` becomes ` (borrow at 16:21)`),
 /// and with a MIR temporary's place (`_2`, `(*_2).1`), which the program has
 /// no name for, read as "a temporary value" (B-2026-10-24-10).
 fn mir_check_text(text: &str) -> String {
-    let lead = regex::Regex::new(r"^\d+:\d+: (bb\d+\[(\d+|term)\]: )?").unwrap();
+    let lead = regex::Regex::new(r"^\d+:\d+( in `[^`]*`)?: (bb\d+\[(\d+|term)\]: )?").unwrap();
     let block = regex::Regex::new(r"bb\d+\[(\d+|term)\]( at)? ?").unwrap();
     let temp = regex::Regex::new(r"\(\*_\d+\)(\.\d+)*|\b_\d+(\.\d+)*\b").unwrap();
     let t = lead.replace(text, "");

@@ -25334,7 +25334,18 @@ pub fn checked_borrow_errors(
         return source_borrow_errors(src);
     }
     let (text, user_len) = library_source(src);
-    let Ok(lowered) = lower_typed(
+    // A program the builder refuses is refused by check too, at the
+    // position the build names, and a forbidden move leaves every other
+    // body to the MIR checks (B-2026-11-01-2).
+    let user_lines = src.lines().count();
+    let at_in_program = |text: &str| {
+        Some(
+            text_position(text)
+                .filter(|&(l, _)| l > 0 && l <= user_lines)
+                .unwrap_or((1, 1)),
+        )
+    };
+    let (lowered, moves) = match lower_typed_parts(
         program,
         &text,
         user_len,
@@ -25344,10 +25355,60 @@ pub fn checked_borrow_errors(
         &FrozenHints::default(),
         true,
         AutoPar::Off,
-    ) else {
-        return Vec::new();
+    ) {
+        Ok(parts) => parts,
+        Err(e) => {
+            return lowering_messages(&e)
+                .into_iter()
+                .map(|m| {
+                    let at = at_in_program(&m);
+                    SourceBorrowError::moved(m, at)
+                })
+                .collect();
+        }
     };
-    borrow_errors_of(src, lowered)
+    let mut out: Vec<SourceBorrowError> = moves
+        .into_iter()
+        .map(|m| {
+            let at = at_in_program(&m);
+            SourceBorrowError::moved(m, at)
+        })
+        .collect();
+    for e in borrow_errors_of(src, lowered) {
+        if !out.iter().any(|o| o.error.at == e.error.at) {
+            out.push(e);
+        }
+    }
+    out
+}
+
+/// The messages of a lowering failure (`build: 7:5: …; 9:1: …`), one per
+/// error: a `; ` starts the next only where a `line:column` follows it.
+fn lowering_messages(e: &str) -> Vec<String> {
+    let e = e.strip_prefix("build: ").unwrap_or(e);
+    let starts_here = |rest: &str| {
+        let mut parts = rest.splitn(3, ':');
+        let line = parts
+            .next()
+            .is_some_and(|l| !l.is_empty() && l.bytes().all(|b| b.is_ascii_digit()));
+        let col = parts
+            .next()
+            .is_some_and(|c| c.bytes().next().is_some_and(|b| b.is_ascii_digit()));
+        line && col
+    };
+    let mut out = Vec::new();
+    let mut from = 0;
+    let mut i = 0;
+    while let Some(k) = e[i..].find("; ") {
+        let cut = i + k;
+        if starts_here(&e[cut + 2..]) {
+            out.push(e[from..cut].to_string());
+            from = cut + 2;
+        }
+        i = cut + 2;
+    }
+    out.push(e[from..].to_string());
+    out
 }
 
 fn borrow_errors_of(src: &str, mut lowered: Lowered) -> Vec<SourceBorrowError> {
@@ -25431,7 +25492,11 @@ impl SourceBorrowError {
 fn text_position(text: &str) -> Option<(usize, usize)> {
     let mut parts = text.splitn(3, ':');
     let line = parts.next()?.trim().parse().ok()?;
-    let col = parts.next()?.trim().parse().ok()?;
+    // A builder error names its function after the column (`8:33 in
+    // `visit`: …`).
+    let col = parts.next()?.trim();
+    let digits = col.bytes().take_while(u8::is_ascii_digit).count();
+    let col = col[..digits].parse().ok()?;
     Some((line, col))
 }
 
@@ -25871,6 +25936,30 @@ fn lower_typed(
     check_only: bool,
     auto_par: AutoPar,
 ) -> Result<Lowered, String> {
+    let (lowered, moves) = lower_typed_parts(
+        program, src, user_len, tc, r, captures, frozen, check_only, auto_par,
+    )?;
+    if !moves.is_empty() {
+        return Err(format!("build: {}", moves.join("; ")));
+    }
+    Ok(lowered)
+}
+
+/// [`lower_typed`], with §3.7's forbidden moves handed back beside the
+/// program rather than refusing it, so that `karac check` can still run
+/// the MIR checks over every body (B-2026-11-01-2).
+#[allow(clippy::too_many_arguments)]
+fn lower_typed_parts(
+    program: &ast::Program,
+    src: &str,
+    user_len: usize,
+    tc: &TypeCheckResult,
+    r: &ResolveResult,
+    captures: &FxHashMap<SpanKey, Vec<(String, OwnershipMode)>>,
+    frozen: &FrozenHints,
+    check_only: bool,
+    auto_par: AutoPar,
+) -> Result<(Lowered, Vec<String>), String> {
     let mut t = std::time::Instant::now();
     let defs = ProgramDefs::build_for_program(program);
     let mut res = crate::node_res::node_res(r, &defs, 0, None);
@@ -25931,27 +26020,24 @@ fn lower_typed(
             }
         }
     }
-    if !moves.is_empty() {
-        moves.sort_by_key(|m| m.0.offset);
-        let msgs: Vec<String> = moves
-            .iter()
-            .map(|(span, shared)| {
-                let from = if *shared {
-                    "a `shared` value"
-                } else {
-                    "a borrowed place"
-                };
-                format!(
-                    "{}: cannot move a non-`Copy` value out of {from}: take a copy with \
+    moves.sort_by_key(|m| m.0.offset);
+    let msgs: Vec<String> = moves
+        .iter()
+        .map(|(span, shared)| {
+            let from = if *shared {
+                "a `shared` value"
+            } else {
+                "a borrowed place"
+            };
+            format!(
+                "{}: cannot move a non-`Copy` value out of {from}: take a copy with \
                      `.clone()`, use it in place, or take it with `mem.replace` / `mem.swap` \
                      / `Option.take()` (core semantics §3.7)",
-                    at(*span)
-                )
-            })
-            .collect();
-        return Err(format!("build: {}", msgs.join("; ")));
-    }
-    Ok(lowered)
+                at(*span)
+            )
+        })
+        .collect();
+    Ok((lowered, msgs))
 }
 
 /// The rest of [`build_source`]: each body's move and borrow checks, drop
@@ -26111,6 +26197,25 @@ fn stderr_print(callee: &Expr) -> Option<&'static str> {
 
 #[cfg(test)]
 pub(crate) mod tests {
+    /// A lowering failure splits at each `; ` a position follows, and a
+    /// builder error's position reads past its function name
+    /// (B-2026-11-01-2).
+    #[test]
+    fn lowering_messages_split_at_each_position() {
+        let e =
+            "build: 7:5: cannot move (core semantics §3.7; see §6.1); 8:33 in `visit`: not lowered";
+        let m = lowering_messages(e);
+        assert_eq!(
+            m,
+            [
+                "7:5: cannot move (core semantics §3.7; see §6.1)",
+                "8:33 in `visit`: not lowered"
+            ]
+        );
+        assert_eq!(text_position(&m[1]), Some((8, 33)));
+        assert_eq!(lowering_messages("build: no position"), ["no position"]);
+    }
+
     use super::*;
 
     /// Check, build, elaborate and run `src`; the output and exit code, or
