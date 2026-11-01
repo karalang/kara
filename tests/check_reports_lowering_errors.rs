@@ -58,11 +58,13 @@ fn check_reports_a_mir_borrow_error_beside_a_function_that_lowers() {
     assert!(all.contains("1 error(s) found"), "{all}");
 }
 
-/// A builder error (here a struct variant named like a library type,
-/// PREDICTS B-2026-11-01-6: the program prints 2 once it is fixed) is
-/// check's error at its position, without the builder's function name.
+/// The struct variant named like a library type that B-2026-11-01-6 made
+/// the builder refuse (check reported it at 8:33 once B-2026-11-01-2
+/// landed, the builder-refusal example here) checks and runs since that
+/// row's fix; a builder refusal's position is pinned by
+/// `lowering_messages_split_at_each_position`.
 #[test]
-fn check_reports_a_builder_refusal_at_its_position() {
+fn a_struct_variant_named_like_a_library_type_checks_and_runs() {
     let path = program(
         "builder",
         "enum Stmt {\n    Match { cases: Vec[i64] },\n    Other,\n}\n\n\
@@ -71,10 +73,18 @@ fn check_reports_a_builder_refusal_at_its_position() {
          fn main() {\n    println(visit(Stmt.Match { cases: vec![1, 2] }));\n}\n",
     );
     let out = check(&path);
-    let all = text(&out);
-    assert!(!out.status.success(), "{all}");
-    assert!(
-        all.contains(":8:33: a type that failed to check is not lowered yet"),
-        "{all}"
+    assert!(out.status.success(), "{}", text(&out));
+    let run = Command::new(env!("CARGO_BIN_EXE_karac"))
+        .arg("__mir-run")
+        .arg(&path)
+        .current_dir(path.parent().unwrap())
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "2\n",
+        "{}",
+        text(&run)
     );
 }
