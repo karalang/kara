@@ -58,10 +58,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| false-positive | 80 |
-| diagnostics | 78 |
+| false-positive | 81 |
+| diagnostics | 79 |
 | missing-feature | 60 |
-| perf | 52 |
+| perf | 54 |
 | soundness | 31 |
 | miscompile | 22 |
 | run-vs-build | 19 |
@@ -74,14 +74,14 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 134 |
-| mir | 83 |
-| mir-llvm | 60 |
+| typecheck | 135 |
+| mir | 85 |
+| mir-llvm | 61 |
 | cli | 47 |
 | ownership | 37 |
 | interp | 26 |
+| parser | 23 |
 | codegen | 22 |
-| parser | 22 |
 | runtime | 21 |
 | effect | 10 |
 | other | 4 |
@@ -108,10 +108,14 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-31-39 | 2026-10-31 | mir-llvm | medium | Kata 9's auto-par binary executes a constant +1.85G instructions (+75%) whenever it has two or more workers, flat from 2 to 18: the par lane runs 2.10x rayon's time where it ran 1.21x, the B-2026-10-28-35 signature on a loop shape its fix (5b6aab2a3c) did not cover | — |
 | B-2026-10-31-40 | 2026-10-31 | mir-llvm | medium | Kata 10's regex DP runs 1.37x legacy's instructions and 1.50x its cycles on the MIR backend: the seq lane went from 1.11x to 1.60x rustc -O | — |
 | B-2026-10-31-41 | 2026-10-31 | mir | medium | karac still compiles a kata 1.54x slower than rustc -O at twice its peak memory on the M5 (median over 24 katas: 165 ms vs 103 ms, 59.8 MiB vs 28.3 MiB), after B-2026-10-28-37's library-prune fix | — |
+| B-2026-10-31-42 | 2026-10-31 | mir-llvm | medium | Kata 20's valid-parentheses stack scan runs 1.41x legacy's instructions on the MIR backend: the seq lane went from 0.74x to 0.90x rustc -O and the par lane from 0.68x to 1.06x rayon | — |
+| B-2026-10-31-43 | 2026-10-31 | mir | medium | Implicit auto-par no longer fires on kata 23 (merge k sorted lists), which the legacy backend parallelized: its par lane now runs the sequential program, 1.49x -> 5.15x rayon | — |
 | B-2026-11-01-1 | 2026-11-01 | mir | medium | `d ?? Node.Leaf(0)` on a bare `d: Option[Node]` parameter, `Node` a `shared enum`, passes `karac check` and is refused by the MIR build as a move out of a borrowed place; `Option[Node]` is a handle aggregate (core-semantics §6.1), so the `??` should count the handle and run, as check already says | — |
 | B-2026-11-01-2 | 2026-11-01 | cli+mir | medium | `karac check` prints "All checks passed" for a program whose MIR lowering fails, and then reports none of the program's MIR borrow errors anywhere: `checked_borrow_errors` (src/mir/lower.rs) returns an empty list when `lower_typed` errs, so one refused function hides an E0516 in another and `karac run` is the first to fail | — |
 | B-2026-11-01-3 | 2026-11-01 | mir | medium | `match n { Some(k) => kind_name(k), None => "NoneType" }` with `n: ref Option[Node]`, `Node` a `shared enum` and `kind_name(n: ref Node) -> Str`, is refused as E0516 "cannot drop `k` while `cls` still holds a borrow of it" (E0509 when returned directly); core-semantics §4.6 makes `k` a `ref` into `n`, so the view lives as long as `n`, and the same match on a non-shared enum checks | — |
 | B-2026-11-01-4 | 2026-11-01 | typecheck | low | `s.substring(0, len)` with `len` a `ref i64` from `for len in lengths.iter()` is refused (E0200 "'substring' expects integer byte indices, found 'ref i64'"), with no fix-it, where a user function's `i64` parameter, `v[len]`, `v.truncate(len)` and `len.min(..)` all take the same `ref i64`; char_at, repeat, String.truncate and slice check the same way | — |
+| B-2026-11-01-5 | 2026-11-01 | parser | low | A Rust-spelled mutable receiver or parameter type (`fn find(mut self, ..)`, `&mut self`, `ref mut self`, `self: mut ref Self`, `v: &mut Vec[i64]`) gets a bare parse error with no fix, where `mut ref self` / `mut ref T` is the one Kāra spelling; `let (mut x, ..)` already gets a named message and a machine fix | — |
+| B-2026-11-01-6 | 2026-11-01 | typecheck+mir | medium | A struct variant named like a library type (`Stmt.Match { cases: Vec[i64] }`, also `Response`, `Client`, `Regex`, `Stats`) passes `karac check` but `karac run`/`build` refuse a use of its Vec field ("a type that failed to check is not lowered yet"); check also accepts `*n` on its `i64` field | — |
 
 ### Relocated
 
