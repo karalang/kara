@@ -1,0 +1,2468 @@
+$ cfg arith.ir gcd
+rpo: entry test step done
+entry: preds -; succs test
+test: preds entry, step; succs done, step
+step: preds test; succs test
+done: preds test; succs -
+$ dom arith.ir gcd
+entry: idom -; df -
+test: idom entry; df test
+step: idom test; df test
+done: idom test; df -
+tree:
+  entry
+    test
+      step
+      done
+loop test: back edges from step; body test, step
+$ live arith.ir gcd
+entry: in a, b; out a, b
+test: in a, b; out a, b
+step: in a, b; out a, b
+done: in a; out -
+$ ssa arith.ir gcd
+func gcd(a.0, b.0) {
+entry:
+  jmp test
+test:
+  a.1 = phi [a.0, entry], [a.2, step]
+  b.1 = phi [b.0, entry], [b.2, step]
+  z.0 = b.1 == 0
+  br z.0, done, step
+step:
+  t.0 = a.1 % b.1
+  a.2 = b.1
+  b.2 = t.0
+  jmp test
+done:
+  ret a.1
+}
+$ opt arith.ir gcd
+func gcd(a.0, b.0) {
+entry:
+  jmp test
+test:
+  a.1 = phi [a.0, entry], [b.1, step]
+  b.1 = phi [b.0, entry], [t.0, step]
+  z.0 = b.1 == 0
+  br z.0, done, step
+step:
+  t.0 = a.1 % b.1
+  jmp test
+done:
+  ret a.1
+}
+; folded 0, branches 0, copies 2, dead 0, blocks 0
+$ out arith.ir gcd
+func gcd(a.0, b.0) {
+entry:
+  a.1 = a.0
+  b.1 = b.0
+  jmp test
+test:
+  z.0 = b.1 == 0
+  br z.0, done, step
+step:
+  t.0 = a.1 % b.1
+  a.1 = b.1
+  b.1 = t.0
+  jmp test
+done:
+  ret a.1
+}
+$ cfg arith.ir collatz
+rpo: entry head body even odd next done
+entry: preds -; succs head
+head: preds entry, next; succs done, body
+body: preds head; succs odd, even
+even: preds body; succs next
+odd: preds body; succs next
+next: preds even, odd; succs head
+done: preds head; succs -
+$ dom arith.ir collatz
+entry: idom -; df -
+head: idom entry; df head
+body: idom head; df head
+even: idom body; df next
+odd: idom body; df next
+next: idom body; df head
+done: idom head; df -
+tree:
+  entry
+    head
+      body
+        even
+        odd
+        next
+      done
+loop head: back edges from next; body head, body, even, odd, next
+$ live arith.ir collatz
+entry: in n; out n, steps
+head: in n, steps; out n, steps
+body: in n, steps; out n, steps
+even: in n, steps; out n, steps
+odd: in n, steps; out n, steps
+next: in n, steps; out n, steps
+done: in steps; out -
+$ ssa arith.ir collatz
+func collatz(n.0) {
+entry:
+  steps.0 = 0
+  jmp head
+head:
+  n.1 = phi [n.0, entry], [n.4, next]
+  steps.1 = phi [steps.0, entry], [steps.2, next]
+  one.0 = n.1 == 1
+  br one.0, done, body
+body:
+  rem.0 = n.1 % 2
+  br rem.0, odd, even
+even:
+  n.2 = n.1 / 2
+  jmp next
+odd:
+  t.0 = n.1 * 3
+  n.3 = t.0 + 1
+  jmp next
+next:
+  n.4 = phi [n.2, even], [n.3, odd]
+  steps.2 = steps.1 + 1
+  jmp head
+done:
+  ret steps.1
+}
+$ opt arith.ir collatz
+func collatz(n.0) {
+entry:
+  jmp head
+head:
+  n.1 = phi [n.0, entry], [n.4, next]
+  steps.1 = phi [0, entry], [steps.2, next]
+  one.0 = n.1 == 1
+  br one.0, done, body
+body:
+  rem.0 = n.1 % 2
+  br rem.0, odd, even
+even:
+  n.2 = n.1 / 2
+  jmp next
+odd:
+  t.0 = n.1 * 3
+  n.3 = t.0 + 1
+  jmp next
+next:
+  n.4 = phi [n.2, even], [n.3, odd]
+  steps.2 = steps.1 + 1
+  jmp head
+done:
+  ret steps.1
+}
+; folded 1, branches 0, copies 0, dead 0, blocks 0
+$ out arith.ir collatz
+func collatz(n.0) {
+entry:
+  n.1 = n.0
+  steps.1 = 0
+  jmp head
+head:
+  one.0 = n.1 == 1
+  br one.0, done, body
+body:
+  rem.0 = n.1 % 2
+  br rem.0, odd, even
+even:
+  n.2 = n.1 / 2
+  n.4 = n.2
+  jmp next
+odd:
+  t.0 = n.1 * 3
+  n.3 = t.0 + 1
+  n.4 = n.3
+  jmp next
+next:
+  steps.2 = steps.1 + 1
+  n.1 = n.4
+  steps.1 = steps.2
+  jmp head
+done:
+  ret steps.1
+}
+$ cfg arith.ir classify
+rpo: entry check positive huge isz negative out
+entry: preds -; succs negative, check
+negative: preds entry; succs out
+check: preds entry; succs isz, positive
+isz: preds check; succs out
+positive: preds check; succs huge, out
+huge: preds positive; succs out
+out: preds negative, isz, positive, huge; succs -
+$ dom arith.ir classify
+entry: idom -; df -
+check: idom entry; df out
+positive: idom check; df out
+huge: idom positive; df out
+isz: idom check; df out
+negative: idom entry; df out
+out: idom entry; df -
+tree:
+  entry
+    check
+      positive
+        huge
+      isz
+    negative
+    out
+loops: none
+$ live arith.ir classify
+entry: in n; out n
+check: in n; out n
+positive: in n; out r
+huge: in -; out r
+isz: in -; out r
+negative: in -; out r
+out: in r; out -
+$ ssa arith.ir classify
+func classify(n.0) {
+entry:
+  neg.0 = n.0 < 0
+  br neg.0, negative, check
+negative:
+  r.3 = -1
+  jmp out
+check:
+  zero.0 = n.0 == 0
+  br zero.0, isz, positive
+isz:
+  r.2 = 0
+  jmp out
+positive:
+  big.0 = n.0 > 100
+  r.0 = 1
+  br big.0, huge, out
+huge:
+  r.1 = 2
+  jmp out
+out:
+  r.4 = phi [r.3, negative], [r.2, isz], [r.0, positive], [r.1, huge]
+  ret r.4
+}
+$ opt arith.ir classify
+func classify(n.0) {
+entry:
+  neg.0 = n.0 < 0
+  br neg.0, negative, check
+negative:
+  jmp out
+check:
+  zero.0 = n.0 == 0
+  br zero.0, isz, positive
+isz:
+  jmp out
+positive:
+  big.0 = n.0 > 100
+  br big.0, huge, out
+huge:
+  jmp out
+out:
+  r.4 = phi [-1, negative], [0, isz], [1, positive], [2, huge]
+  ret r.4
+}
+; folded 4, branches 0, copies 0, dead 0, blocks 0
+$ out arith.ir classify
+func classify(n.0) {
+entry:
+  neg.0 = n.0 < 0
+  br neg.0, negative, check
+negative:
+  r.4 = -1
+  jmp out
+check:
+  zero.0 = n.0 == 0
+  br zero.0, isz, positive
+isz:
+  r.4 = 0
+  jmp out
+positive:
+  big.0 = n.0 > 100
+  br big.0, huge, positive_out
+positive_out:
+  r.4 = 1
+  jmp out
+huge:
+  r.4 = 2
+  jmp out
+out:
+  ret r.4
+}
+$ cfg loops.ir grid
+rpo: entry outer done init inner next cell
+entry: preds -; succs outer
+outer: preds entry, next; succs init, done
+init: preds outer; succs inner
+inner: preds init, cell; succs cell, next
+cell: preds inner; succs inner
+next: preds inner; succs outer
+done: preds outer; succs -
+$ dom loops.ir grid
+entry: idom -; df -
+outer: idom entry; df outer
+done: idom outer; df -
+init: idom outer; df outer
+inner: idom init; df outer, inner
+next: idom inner; df outer
+cell: idom inner; df inner
+tree:
+  entry
+    outer
+      done
+      init
+        inner
+          next
+          cell
+loop outer: back edges from next; body outer, init, inner, next, cell
+loop inner: back edges from cell; body inner, cell
+$ live loops.ir grid
+entry: in n; out i, n, total
+outer: in i, n, total; out i, n, total
+done: in total; out -
+init: in i, n, total; out i, j, n, total
+inner: in i, j, n, total; out i, j, n, total
+next: in i, n, total; out i, n, total
+cell: in i, j, n, total; out i, j, n, total
+$ ssa loops.ir grid
+func grid(n.0) {
+entry:
+  total.0 = 0
+  i.0 = 0
+  jmp outer
+outer:
+  i.1 = phi [i.0, entry], [i.2, next]
+  j.0 = phi [undef, entry], [j.2, next]
+  total.1 = phi [total.0, entry], [total.2, next]
+  ci.0 = i.1 < n.0
+  br ci.0, init, done
+init:
+  j.1 = 0
+  jmp inner
+inner:
+  j.2 = phi [j.1, init], [j.3, cell]
+  total.2 = phi [total.1, init], [total.3, cell]
+  cj.0 = j.2 < n.0
+  br cj.0, cell, next
+cell:
+  p.0 = i.1 * j.2
+  total.3 = total.2 + p.0
+  j.3 = j.2 + 1
+  jmp inner
+next:
+  i.2 = i.1 + 1
+  jmp outer
+done:
+  ret total.1
+}
+$ opt loops.ir grid
+func grid(n.0) {
+entry:
+  jmp outer
+outer:
+  i.1 = phi [0, entry], [i.2, next]
+  total.1 = phi [0, entry], [total.2, next]
+  ci.0 = i.1 < n.0
+  br ci.0, init, done
+init:
+  jmp inner
+inner:
+  j.2 = phi [0, init], [j.3, cell]
+  total.2 = phi [total.1, init], [total.3, cell]
+  cj.0 = j.2 < n.0
+  br cj.0, cell, next
+cell:
+  p.0 = i.1 * j.2
+  total.3 = total.2 + p.0
+  j.3 = j.2 + 1
+  jmp inner
+next:
+  i.2 = i.1 + 1
+  jmp outer
+done:
+  ret total.1
+}
+; folded 3, branches 0, copies 0, dead 1, blocks 0
+$ out loops.ir grid
+func grid(n.0) {
+entry:
+  i.1 = 0
+  total.1 = 0
+  jmp outer
+outer:
+  ci.0 = i.1 < n.0
+  br ci.0, init, done
+init:
+  j.2 = 0
+  total.2 = total.1
+  jmp inner
+inner:
+  cj.0 = j.2 < n.0
+  br cj.0, cell, next
+cell:
+  p.0 = i.1 * j.2
+  total.3 = total.2 + p.0
+  j.3 = j.2 + 1
+  j.2 = j.3
+  total.2 = total.3
+  jmp inner
+next:
+  i.2 = i.1 + 1
+  i.1 = i.2
+  total.1 = total.2
+  jmp outer
+done:
+  ret total.1
+}
+$ cfg loops.ir primes
+rpo: entry outer done start trial test bump prime composite
+entry: preds -; succs outer
+outer: preds entry, composite; succs start, done
+start: preds outer; succs trial
+trial: preds start, bump; succs prime, test
+test: preds trial; succs composite, bump
+bump: preds test; succs trial
+prime: preds trial; succs composite
+composite: preds test, prime; succs outer
+done: preds outer; succs -
+$ dom loops.ir primes
+entry: idom -; df -
+outer: idom entry; df outer
+done: idom outer; df -
+start: idom outer; df outer
+trial: idom start; df outer, trial
+test: idom trial; df trial, composite
+bump: idom test; df trial
+prime: idom trial; df composite
+composite: idom trial; df outer
+tree:
+  entry
+    outer
+      done
+      start
+        trial
+          test
+            bump
+          prime
+          composite
+loop outer: back edges from composite; body outer, start, trial, test, bump, prime, composite
+loop trial: back edges from bump; body trial, test, bump
+$ live loops.ir primes
+entry: in n; out count, k, n
+outer: in count, k, n; out count, k, n
+done: in count; out -
+start: in count, k, n; out count, d, k, n
+trial: in count, d, k, n; out count, d, k, n
+test: in count, d, k, n; out count, d, k, n
+bump: in count, d, k, n; out count, d, k, n
+prime: in count, k, n; out count, k, n
+composite: in count, k, n; out count, k, n
+$ ssa loops.ir primes
+func primes(n.0) {
+entry:
+  count.0 = 0
+  k.0 = 2
+  jmp outer
+outer:
+  count.1 = phi [count.0, entry], [count.3, composite]
+  d.0 = phi [undef, entry], [d.2, composite]
+  k.1 = phi [k.0, entry], [k.2, composite]
+  more.0 = k.1 <= n.0
+  br more.0, start, done
+start:
+  d.1 = 2
+  jmp trial
+trial:
+  d.2 = phi [d.1, start], [d.3, bump]
+  dd.0 = d.2 * d.2
+  past.0 = dd.0 > k.1
+  br past.0, prime, test
+test:
+  m.0 = k.1 % d.2
+  divides.0 = m.0 == 0
+  br divides.0, composite, bump
+bump:
+  d.3 = d.2 + 1
+  jmp trial
+prime:
+  count.2 = count.1 + 1
+  jmp composite
+composite:
+  count.3 = phi [count.1, test], [count.2, prime]
+  k.2 = k.1 + 1
+  jmp outer
+done:
+  ret count.1
+}
+$ opt loops.ir primes
+func primes(n.0) {
+entry:
+  jmp outer
+outer:
+  count.1 = phi [0, entry], [count.3, composite]
+  k.1 = phi [2, entry], [k.2, composite]
+  more.0 = k.1 <= n.0
+  br more.0, start, done
+start:
+  jmp trial
+trial:
+  d.2 = phi [2, start], [d.3, bump]
+  dd.0 = d.2 * d.2
+  past.0 = dd.0 > k.1
+  br past.0, prime, test
+test:
+  m.0 = k.1 % d.2
+  divides.0 = m.0 == 0
+  br divides.0, composite, bump
+bump:
+  d.3 = d.2 + 1
+  jmp trial
+prime:
+  count.2 = count.1 + 1
+  jmp composite
+composite:
+  count.3 = phi [count.1, test], [count.2, prime]
+  k.2 = k.1 + 1
+  jmp outer
+done:
+  ret count.1
+}
+; folded 3, branches 0, copies 0, dead 1, blocks 0
+$ out loops.ir primes
+func primes(n.0) {
+entry:
+  count.1 = 0
+  k.1 = 2
+  jmp outer
+outer:
+  more.0 = k.1 <= n.0
+  br more.0, start, done
+start:
+  d.2 = 2
+  jmp trial
+trial:
+  dd.0 = d.2 * d.2
+  past.0 = dd.0 > k.1
+  br past.0, prime, test
+test:
+  m.0 = k.1 % d.2
+  divides.0 = m.0 == 0
+  br divides.0, test_composite, bump
+test_composite:
+  count.3 = count.1
+  jmp composite
+bump:
+  d.3 = d.2 + 1
+  d.2 = d.3
+  jmp trial
+prime:
+  count.2 = count.1 + 1
+  count.3 = count.2
+  jmp composite
+composite:
+  k.2 = k.1 + 1
+  count.1 = count.3
+  k.1 = k.2
+  jmp outer
+done:
+  ret count.1
+}
+$ cfg loops.ir two_phase
+rpo: entry up turn down out downb upb
+entry: preds -; succs up
+up: preds entry, upb; succs upb, turn
+upb: preds up; succs up
+turn: preds up; succs down
+down: preds turn, downb; succs downb, out
+downb: preds down; succs down
+out: preds down; succs -
+$ dom loops.ir two_phase
+entry: idom -; df -
+up: idom entry; df up
+turn: idom up; df -
+down: idom turn; df down
+out: idom down; df -
+downb: idom down; df down
+upb: idom up; df up
+tree:
+  entry
+    up
+      turn
+        down
+          out
+          downb
+      upb
+loop up: back edges from upb; body up, upb
+loop down: back edges from downb; body down, downb
+$ live loops.ir two_phase
+entry: in n; out acc, i, n
+up: in acc, i, n; out acc, i, n
+turn: in acc, i; out acc, i
+down: in acc, i; out acc, i
+out: in acc; out -
+downb: in acc, i; out acc, i
+upb: in acc, i, n; out acc, i, n
+$ ssa loops.ir two_phase
+func two_phase(n.0) {
+entry:
+  i.0 = 0
+  acc.0 = 0
+  jmp up
+up:
+  acc.1 = phi [acc.0, entry], [acc.4, upb]
+  i.1 = phi [i.0, entry], [i.4, upb]
+  cu.0 = i.1 < n.0
+  br cu.0, upb, turn
+upb:
+  acc.4 = acc.1 + i.1
+  i.4 = i.1 + 1
+  jmp up
+turn:
+  jmp down
+down:
+  acc.2 = phi [acc.1, turn], [acc.3, downb]
+  i.2 = phi [i.1, turn], [i.3, downb]
+  cd.0 = i.2 > 0
+  br cd.0, downb, out
+downb:
+  i.3 = i.2 - 1
+  acc.3 = acc.2 - 1
+  jmp down
+out:
+  ret acc.2
+}
+$ opt loops.ir two_phase
+func two_phase(n.0) {
+entry:
+  jmp up
+up:
+  acc.1 = phi [0, entry], [acc.4, upb]
+  i.1 = phi [0, entry], [i.4, upb]
+  cu.0 = i.1 < n.0
+  br cu.0, upb, turn
+upb:
+  acc.4 = acc.1 + i.1
+  i.4 = i.1 + 1
+  jmp up
+turn:
+  jmp down
+down:
+  acc.2 = phi [acc.1, turn], [acc.3, downb]
+  i.2 = phi [i.1, turn], [i.3, downb]
+  cd.0 = i.2 > 0
+  br cd.0, downb, out
+downb:
+  i.3 = i.2 - 1
+  acc.3 = acc.2 - 1
+  jmp down
+out:
+  ret acc.2
+}
+; folded 2, branches 0, copies 0, dead 0, blocks 0
+$ out loops.ir two_phase
+func two_phase(n.0) {
+entry:
+  acc.1 = 0
+  i.1 = 0
+  jmp up
+up:
+  cu.0 = i.1 < n.0
+  br cu.0, upb, turn
+upb:
+  acc.4 = acc.1 + i.1
+  i.4 = i.1 + 1
+  acc.1 = acc.4
+  i.1 = i.4
+  jmp up
+turn:
+  acc.2 = acc.1
+  i.2 = i.1
+  jmp down
+down:
+  cd.0 = i.2 > 0
+  br cd.0, downb, out
+downb:
+  i.3 = i.2 - 1
+  acc.3 = acc.2 - 1
+  acc.2 = acc.3
+  i.2 = i.3
+  jmp down
+out:
+  ret acc.2
+}
+$ cfg swap.ir lost
+rpo: entry loop done
+entry: preds -; succs loop
+loop: preds entry, loop; succs loop, done
+done: preds loop; succs -
+$ dom swap.ir lost
+entry: idom -; df -
+loop: idom entry; df loop
+done: idom loop; df -
+tree:
+  entry
+    loop
+      done
+loop loop: back edges from loop; body loop
+$ live swap.ir lost
+entry: in n; out n, x
+loop: in n, x; out n, x, y
+done: in y; out -
+$ ssa swap.ir lost
+func lost(n.0) {
+entry:
+  x.0 = 0
+  jmp loop
+loop:
+  x.1 = phi [x.0, entry], [x.2, loop]
+  y.0 = phi [undef, entry], [y.1, loop]
+  y.1 = x.1
+  x.2 = x.1 + 1
+  c.0 = x.2 < n.0
+  br c.0, loop, done
+done:
+  ret y.1
+}
+$ opt swap.ir lost
+func lost(n.0) {
+entry:
+  jmp loop
+loop:
+  x.1 = phi [0, entry], [x.2, loop]
+  x.2 = x.1 + 1
+  c.0 = x.2 < n.0
+  br c.0, loop, done
+done:
+  ret x.1
+}
+; folded 1, branches 0, copies 1, dead 1, blocks 0
+$ out swap.ir lost
+func lost(n.0) {
+entry:
+  x.1 = 0
+  jmp loop
+loop:
+  x.2 = x.1 + 1
+  c.0 = x.2 < n.0
+  br c.0, loop_loop, done
+loop_loop:
+  x.1 = x.2
+  jmp loop
+done:
+  ret x.1
+}
+$ cfg swap.ir early
+rpo: entry loop step done
+entry: preds -; succs loop
+loop: preds entry, step; succs done, step
+step: preds loop; succs done, loop
+done: preds loop, step; succs -
+$ dom swap.ir early
+entry: idom -; df -
+loop: idom entry; df loop
+step: idom loop; df loop, done
+done: idom loop; df -
+tree:
+  entry
+    loop
+      step
+      done
+loop loop: back edges from step; body loop, step
+$ live swap.ir early
+entry: in n; out n, v
+loop: in n, v; out n, v
+step: in n, v; out n, v
+done: in v; out -
+$ ssa swap.ir early
+func early(n.0) {
+entry:
+  v.0 = 0
+  jmp loop
+loop:
+  n.1 = phi [n.0, entry], [n.2, step]
+  v.1 = phi [v.0, entry], [v.2, step]
+  stop.0 = n.1 == 0
+  br stop.0, done, step
+step:
+  v.2 = v.1 + n.1
+  n.2 = n.1 - 1
+  big.0 = v.2 > 20
+  br big.0, done, loop
+done:
+  n.3 = phi [n.1, loop], [n.2, step]
+  v.3 = phi [v.1, loop], [v.2, step]
+  ret v.3
+}
+$ opt swap.ir early
+func early(n.0) {
+entry:
+  jmp loop
+loop:
+  n.1 = phi [n.0, entry], [n.2, step]
+  v.1 = phi [0, entry], [v.2, step]
+  stop.0 = n.1 == 0
+  br stop.0, done, step
+step:
+  v.2 = v.1 + n.1
+  n.2 = n.1 - 1
+  big.0 = v.2 > 20
+  br big.0, done, loop
+done:
+  v.3 = phi [v.1, loop], [v.2, step]
+  ret v.3
+}
+; folded 1, branches 0, copies 0, dead 1, blocks 0
+$ out swap.ir early
+func early(n.0) {
+entry:
+  n.1 = n.0
+  v.1 = 0
+  jmp loop
+loop:
+  stop.0 = n.1 == 0
+  br stop.0, loop_done, step
+loop_done:
+  v.3 = v.1
+  jmp done
+step:
+  v.2 = v.1 + n.1
+  n.2 = n.1 - 1
+  big.0 = v.2 > 20
+  br big.0, step_done, step_loop
+step_done:
+  v.3 = v.2
+  jmp done
+step_loop:
+  n.1 = n.2
+  v.1 = v.2
+  jmp loop
+done:
+  ret v.3
+}
+$ ssa arith.ir pow
+func pow(base.0, e.0) {
+entry:
+  r.0 = 1
+  jmp loop
+loop:
+  base.1 = phi [base.0, entry], [base.2, sq]
+  e.1 = phi [e.0, entry], [e.2, sq]
+  r.1 = phi [r.0, entry], [r.3, sq]
+  c.0 = e.1 > 0
+  br c.0, body, done
+body:
+  odd.0 = e.1 & 1
+  br odd.0, mul, sq
+mul:
+  r.2 = r.1 * base.1
+  jmp sq
+sq:
+  r.3 = phi [r.1, body], [r.2, mul]
+  base.2 = base.1 * base.1
+  e.2 = e.1 >> 1
+  jmp loop
+done:
+  ret r.1
+}
+$ opt arith.ir pow
+func pow(base.0, e.0) {
+entry:
+  jmp loop
+loop:
+  base.1 = phi [base.0, entry], [base.2, sq]
+  e.1 = phi [e.0, entry], [e.2, sq]
+  r.1 = phi [1, entry], [r.3, sq]
+  c.0 = e.1 > 0
+  br c.0, body, done
+body:
+  odd.0 = e.1 & 1
+  br odd.0, mul, sq
+mul:
+  r.2 = r.1 * base.1
+  jmp sq
+sq:
+  r.3 = phi [r.1, body], [r.2, mul]
+  base.2 = base.1 * base.1
+  e.2 = e.1 >> 1
+  jmp loop
+done:
+  ret r.1
+}
+; folded 1, branches 0, copies 0, dead 0, blocks 0
+$ out arith.ir pow
+func pow(base.0, e.0) {
+entry:
+  base.1 = base.0
+  e.1 = e.0
+  r.1 = 1
+  jmp loop
+loop:
+  c.0 = e.1 > 0
+  br c.0, body, done
+body:
+  odd.0 = e.1 & 1
+  br odd.0, mul, body_sq
+body_sq:
+  r.3 = r.1
+  jmp sq
+mul:
+  r.2 = r.1 * base.1
+  r.3 = r.2
+  jmp sq
+sq:
+  base.2 = base.1 * base.1
+  e.2 = e.1 >> 1
+  base.1 = base.2
+  e.1 = e.2
+  r.1 = r.3
+  jmp loop
+done:
+  ret r.1
+}
+$ ssa arith.ir isqrt
+func isqrt(n.0) {
+entry:
+  lo.0 = 0
+  hi.0 = n.0 + 1
+  jmp loop
+loop:
+  hi.1 = phi [hi.0, entry], [hi.1, up], [hi.2, down]
+  lo.1 = phi [lo.0, entry], [lo.2, up], [lo.1, down]
+  mid.0 = phi [undef, entry], [mid.1, up], [mid.1, down]
+  gap.0 = hi.1 - lo.1
+  more.0 = gap.0 > 1
+  br more.0, body, done
+body:
+  s.0 = lo.1 + hi.1
+  mid.1 = s.0 / 2
+  sq.0 = mid.1 * mid.1
+  le.0 = sq.0 <= n.0
+  br le.0, up, down
+up:
+  lo.2 = mid.1
+  jmp loop
+down:
+  hi.2 = mid.1
+  jmp loop
+done:
+  ret lo.1
+}
+$ opt arith.ir isqrt
+func isqrt(n.0) {
+entry:
+  hi.0 = n.0 + 1
+  jmp loop
+loop:
+  hi.1 = phi [hi.0, entry], [hi.1, up], [mid.1, down]
+  lo.1 = phi [0, entry], [mid.1, up], [lo.1, down]
+  gap.0 = hi.1 - lo.1
+  more.0 = gap.0 > 1
+  br more.0, body, done
+body:
+  s.0 = lo.1 + hi.1
+  mid.1 = s.0 / 2
+  sq.0 = mid.1 * mid.1
+  le.0 = sq.0 <= n.0
+  br le.0, up, down
+up:
+  jmp loop
+down:
+  jmp loop
+done:
+  ret lo.1
+}
+; folded 1, branches 0, copies 2, dead 1, blocks 0
+$ out arith.ir isqrt
+func isqrt(n.0) {
+entry:
+  hi.0 = n.0 + 1
+  hi.1 = hi.0
+  lo.1 = 0
+  jmp loop
+loop:
+  gap.0 = hi.1 - lo.1
+  more.0 = gap.0 > 1
+  br more.0, body, done
+body:
+  s.0 = lo.1 + hi.1
+  mid.1 = s.0 / 2
+  sq.0 = mid.1 * mid.1
+  le.0 = sq.0 <= n.0
+  br le.0, up, down
+up:
+  lo.1 = mid.1
+  jmp loop
+down:
+  hi.1 = mid.1
+  jmp loop
+done:
+  ret lo.1
+}
+$ ssa arith.ir wrap
+func wrap() {
+entry:
+  big.0 = 2147483647
+  x.0 = big.0 + 1
+  y.0 = x.0 - 1
+  m.0 = 65536 * 65536
+  print x.0
+  print y.0
+  print m.0
+  s.0 = -7 / 2
+  r.0 = -7 % 2
+  print s.0
+  print r.0
+  ret 0
+}
+$ opt arith.ir wrap
+func wrap() {
+entry:
+  print -2147483648
+  print 2147483647
+  print 0
+  print -3
+  print -1
+  ret 0
+}
+; folded 6, branches 0, copies 0, dead 0, blocks 0
+$ out arith.ir wrap
+func wrap() {
+entry:
+  print -2147483648
+  print 2147483647
+  print 0
+  print -3
+  print -1
+  ret 0
+}
+$ ssa consts.ir flags
+func flags(x.0) {
+entry:
+  debug.0 = 0
+  level.0 = 3
+  on.0 = debug.0 != 0
+  br on.0, trace, work
+trace:
+  print 999
+  level.1 = 9
+  jmp work
+work:
+  level.2 = phi [level.0, entry], [level.1, trace]
+  t.0 = level.2 * 4
+  r.0 = x.0 + t.0
+  ret r.0
+}
+$ opt consts.ir flags
+func flags(x.0) {
+entry:
+  r.0 = x.0 + 12
+  ret r.0
+}
+; folded 5, branches 1, copies 0, dead 0, blocks 2
+$ out consts.ir flags
+func flags(x.0) {
+entry:
+  r.0 = x.0 + 12
+  ret r.0
+}
+$ ssa consts.ir steady
+func steady(n.0) {
+entry:
+  k.0 = 1
+  i.0 = 0
+  jmp loop
+loop:
+  i.1 = phi [i.0, entry], [i.2, keep]
+  k.1 = phi [k.0, entry], [k.3, keep]
+  c.0 = i.1 < n.0
+  br c.0, body, done
+body:
+  odd.0 = k.1 != 1
+  br odd.0, change, keep
+change:
+  k.2 = k.1 + 1
+  jmp keep
+keep:
+  k.3 = phi [k.1, body], [k.2, change]
+  i.2 = i.1 + 1
+  jmp loop
+done:
+  r.0 = k.1 * 10
+  ret r.0
+}
+$ opt consts.ir steady
+func steady(n.0) {
+entry:
+  jmp loop
+loop:
+  i.1 = phi [0, entry], [i.2, keep]
+  c.0 = i.1 < n.0
+  br c.0, keep, done
+keep:
+  i.2 = i.1 + 1
+  jmp loop
+done:
+  ret 10
+}
+; folded 6, branches 1, copies 0, dead 0, blocks 2
+$ out consts.ir steady
+func steady(n.0) {
+entry:
+  i.1 = 0
+  jmp loop
+loop:
+  c.0 = i.1 < n.0
+  br c.0, keep, done
+keep:
+  i.2 = i.1 + 1
+  i.1 = i.2
+  jmp loop
+done:
+  ret 10
+}
+$ ssa consts.ir table
+func table(sel.0) {
+entry:
+  a.0 = 6
+  b.0 = 7
+  p.0 = a.0 * b.0
+  q.0 = p.0 - 2
+  hit.0 = q.0 == 40
+  br hit.0, yes, no
+yes:
+  r.1 = sel.0 + q.0
+  jmp out
+no:
+  r.0 = 0
+  jmp out
+out:
+  r.2 = phi [r.1, yes], [r.0, no]
+  ret r.2
+}
+$ opt consts.ir table
+func table(sel.0) {
+entry:
+  r.1 = sel.0 + 40
+  ret r.1
+}
+; folded 5, branches 1, copies 1, dead 0, blocks 3
+$ out consts.ir table
+func table(sel.0) {
+entry:
+  r.1 = sel.0 + 40
+  ret r.1
+}
+$ ssa consts.ir chain
+func chain() {
+entry:
+  a.0 = 2
+  b.0 = a.0
+  c.0 = b.0
+  d.0 = c.0 * c.0
+  e.0 = d.0 << 3
+  f.0 = e.0 >> 1
+  g.0 = f.0 ^ 5
+  h.0 = g.0 | 1
+  i.0 = h.0 & 255
+  print i.0
+  ret i.0
+}
+$ opt consts.ir chain
+func chain() {
+entry:
+  print 21
+  ret 21
+}
+; folded 9, branches 0, copies 0, dead 0, blocks 0
+$ out consts.ir chain
+func chain() {
+entry:
+  print 21
+  ret 21
+}
+$ ssa consts.ir zero_div
+func zero_div(x.0) {
+entry:
+  z.0 = 0
+  big.0 = x.0 > 10
+  br big.0, risky, safe
+risky:
+  q.0 = x.0 / z.0
+  jmp safe
+safe:
+  ret x.0
+}
+$ opt consts.ir zero_div
+func zero_div(x.0) {
+entry:
+  big.0 = x.0 > 10
+  br big.0, risky, safe
+risky:
+  q.0 = x.0 / 0
+  jmp safe
+safe:
+  ret x.0
+}
+; folded 1, branches 0, copies 0, dead 0, blocks 0
+$ out consts.ir zero_div
+func zero_div(x.0) {
+entry:
+  big.0 = x.0 > 10
+  br big.0, risky, safe
+risky:
+  q.0 = x.0 / 0
+  jmp safe
+safe:
+  ret x.0
+}
+$ ssa consts.ir dead_end
+func dead_end(x.0) {
+entry:
+  r.0 = x.0 * 2
+  ret r.0
+}
+$ opt consts.ir dead_end
+func dead_end(x.0) {
+entry:
+  r.0 = x.0 * 2
+  ret r.0
+}
+; folded 0, branches 0, copies 0, dead 0, blocks 0
+$ out consts.ir dead_end
+func dead_end(x.0) {
+entry:
+  r.0 = x.0 * 2
+  ret r.0
+}
+$ ssa loops.ir tri
+func tri(n.0) {
+entry:
+  s.0 = 0
+  i.0 = 1
+  jmp head
+head:
+  i.1 = phi [i.0, entry], [i.2, body]
+  s.1 = phi [s.0, entry], [s.2, body]
+  c.0 = i.1 <= n.0
+  br c.0, body, exit
+body:
+  s.2 = s.1 + i.1
+  i.2 = i.1 + 1
+  jmp head
+exit:
+  ret s.1
+}
+$ opt loops.ir tri
+func tri(n.0) {
+entry:
+  jmp head
+head:
+  i.1 = phi [1, entry], [i.2, body]
+  s.1 = phi [0, entry], [s.2, body]
+  c.0 = i.1 <= n.0
+  br c.0, body, exit
+body:
+  s.2 = s.1 + i.1
+  i.2 = i.1 + 1
+  jmp head
+exit:
+  ret s.1
+}
+; folded 2, branches 0, copies 0, dead 0, blocks 0
+$ out loops.ir tri
+func tri(n.0) {
+entry:
+  i.1 = 1
+  s.1 = 0
+  jmp head
+head:
+  c.0 = i.1 <= n.0
+  br c.0, body, exit
+body:
+  s.2 = s.1 + i.1
+  i.2 = i.1 + 1
+  i.1 = i.2
+  s.1 = s.2
+  jmp head
+exit:
+  ret s.1
+}
+$ ssa loops.ir fib
+func fib(n.0) {
+entry:
+  a.0 = 0
+  b.0 = 1
+  i.0 = 0
+  jmp loop
+loop:
+  a.1 = phi [a.0, entry], [a.2, body]
+  b.1 = phi [b.0, entry], [b.2, body]
+  i.1 = phi [i.0, entry], [i.2, body]
+  c.0 = i.1 < n.0
+  br c.0, body, done
+body:
+  t.0 = a.1 + b.1
+  a.2 = b.1
+  b.2 = t.0
+  i.2 = i.1 + 1
+  jmp loop
+done:
+  ret a.1
+}
+$ opt loops.ir fib
+func fib(n.0) {
+entry:
+  jmp loop
+loop:
+  a.1 = phi [0, entry], [b.1, body]
+  b.1 = phi [1, entry], [t.0, body]
+  i.1 = phi [0, entry], [i.2, body]
+  c.0 = i.1 < n.0
+  br c.0, body, done
+body:
+  t.0 = a.1 + b.1
+  i.2 = i.1 + 1
+  jmp loop
+done:
+  ret a.1
+}
+; folded 3, branches 0, copies 2, dead 0, blocks 0
+$ out loops.ir fib
+func fib(n.0) {
+entry:
+  a.1 = 0
+  b.1 = 1
+  i.1 = 0
+  jmp loop
+loop:
+  c.0 = i.1 < n.0
+  br c.0, body, done
+body:
+  t.0 = a.1 + b.1
+  i.2 = i.1 + 1
+  a.1 = b.1
+  b.1 = t.0
+  i.1 = i.2
+  jmp loop
+done:
+  ret a.1
+}
+$ ssa loops.ir search
+func search(target.0) {
+entry:
+  i.0 = 0
+  found.0 = -1
+  jmp loop
+loop:
+  i.1 = phi [i.0, entry], [i.2, step]
+  lim.0 = i.1 < 50
+  br lim.0, body, done
+body:
+  sq.0 = i.1 * i.1
+  hit.0 = sq.0 == target.0
+  br hit.0, yes, step
+yes:
+  found.1 = i.1
+  jmp done
+step:
+  i.2 = i.1 + 1
+  jmp loop
+done:
+  found.2 = phi [found.0, loop], [found.1, yes]
+  ret found.2
+}
+$ opt loops.ir search
+func search(target.0) {
+entry:
+  jmp loop
+loop:
+  i.1 = phi [0, entry], [i.2, step]
+  lim.0 = i.1 < 50
+  br lim.0, body, done
+body:
+  sq.0 = i.1 * i.1
+  hit.0 = sq.0 == target.0
+  br hit.0, yes, step
+yes:
+  jmp done
+step:
+  i.2 = i.1 + 1
+  jmp loop
+done:
+  found.2 = phi [-1, loop], [i.1, yes]
+  ret found.2
+}
+; folded 2, branches 0, copies 1, dead 0, blocks 0
+$ out loops.ir search
+func search(target.0) {
+entry:
+  i.1 = 0
+  jmp loop
+loop:
+  lim.0 = i.1 < 50
+  br lim.0, body, loop_done
+loop_done:
+  found.2 = -1
+  jmp done
+body:
+  sq.0 = i.1 * i.1
+  hit.0 = sq.0 == target.0
+  br hit.0, yes, step
+yes:
+  found.2 = i.1
+  jmp done
+step:
+  i.2 = i.1 + 1
+  i.1 = i.2
+  jmp loop
+done:
+  ret found.2
+}
+$ ssa swap.ir swap
+func swap(n.0) {
+entry:
+  a.0 = 1
+  b.0 = 2
+  i.0 = 0
+  jmp loop
+loop:
+  a.1 = phi [a.0, entry], [a.2, body]
+  b.1 = phi [b.0, entry], [b.2, body]
+  i.1 = phi [i.0, entry], [i.2, body]
+  c.0 = i.1 < n.0
+  br c.0, body, done
+body:
+  t.0 = a.1
+  a.2 = b.1
+  b.2 = t.0
+  i.2 = i.1 + 1
+  jmp loop
+done:
+  r.0 = a.1 * 10
+  r.1 = r.0 + b.1
+  ret r.1
+}
+$ opt swap.ir swap
+func swap(n.0) {
+entry:
+  jmp loop
+loop:
+  a.1 = phi [1, entry], [b.1, body]
+  b.1 = phi [2, entry], [a.1, body]
+  i.1 = phi [0, entry], [i.2, body]
+  c.0 = i.1 < n.0
+  br c.0, body, done
+body:
+  i.2 = i.1 + 1
+  jmp loop
+done:
+  r.0 = a.1 * 10
+  r.1 = r.0 + b.1
+  ret r.1
+}
+; folded 3, branches 0, copies 3, dead 0, blocks 0
+$ out swap.ir swap
+func swap(n.0) {
+entry:
+  a.1 = 1
+  b.1 = 2
+  i.1 = 0
+  jmp loop
+loop:
+  c.0 = i.1 < n.0
+  br c.0, body, done
+body:
+  i.2 = i.1 + 1
+  i.1 = i.2
+  $t0 = a.1
+  a.1 = b.1
+  b.1 = $t0
+  jmp loop
+done:
+  r.0 = a.1 * 10
+  r.1 = r.0 + b.1
+  ret r.1
+}
+$ ssa swap.ir rotate
+func rotate(n.0) {
+entry:
+  a.0 = 1
+  b.0 = 2
+  c.0 = 3
+  i.0 = 0
+  jmp loop
+loop:
+  a.1 = phi [a.0, entry], [a.2, body]
+  b.1 = phi [b.0, entry], [b.2, body]
+  c.1 = phi [c.0, entry], [c.2, body]
+  i.1 = phi [i.0, entry], [i.2, body]
+  go.0 = i.1 < n.0
+  br go.0, body, done
+body:
+  t.0 = a.1
+  a.2 = b.1
+  b.2 = c.1
+  c.2 = t.0
+  i.2 = i.1 + 1
+  jmp loop
+done:
+  r.0 = a.1 * 100
+  s.0 = b.1 * 10
+  r.1 = r.0 + s.0
+  r.2 = r.1 + c.1
+  ret r.2
+}
+$ opt swap.ir rotate
+func rotate(n.0) {
+entry:
+  jmp loop
+loop:
+  a.1 = phi [1, entry], [b.1, body]
+  b.1 = phi [2, entry], [c.1, body]
+  c.1 = phi [3, entry], [a.1, body]
+  i.1 = phi [0, entry], [i.2, body]
+  go.0 = i.1 < n.0
+  br go.0, body, done
+body:
+  i.2 = i.1 + 1
+  jmp loop
+done:
+  r.0 = a.1 * 100
+  s.0 = b.1 * 10
+  r.1 = r.0 + s.0
+  r.2 = r.1 + c.1
+  ret r.2
+}
+; folded 4, branches 0, copies 4, dead 0, blocks 0
+$ out swap.ir rotate
+func rotate(n.0) {
+entry:
+  a.1 = 1
+  b.1 = 2
+  c.1 = 3
+  i.1 = 0
+  jmp loop
+loop:
+  go.0 = i.1 < n.0
+  br go.0, body, done
+body:
+  i.2 = i.1 + 1
+  i.1 = i.2
+  $t0 = a.1
+  a.1 = b.1
+  b.1 = c.1
+  c.1 = $t0
+  jmp loop
+done:
+  r.0 = a.1 * 100
+  s.0 = b.1 * 10
+  r.1 = r.0 + s.0
+  r.2 = r.1 + c.1
+  ret r.2
+}
+$ ssa swap.ir shuffle
+func shuffle(n.0) {
+entry:
+  x.0 = 5
+  y.0 = 9
+  jmp loop
+loop:
+  n.1 = phi [n.0, entry], [n.2, loop]
+  x.1 = phi [x.0, entry], [x.2, loop]
+  y.1 = phi [y.0, entry], [y.2, loop]
+  print x.1
+  t.0 = x.1
+  x.2 = y.1
+  y.2 = t.0
+  n.2 = n.1 - 1
+  more.0 = n.2 > 0
+  br more.0, loop, done
+done:
+  r.0 = x.2 - y.2
+  ret r.0
+}
+$ opt swap.ir shuffle
+func shuffle(n.0) {
+entry:
+  jmp loop
+loop:
+  n.1 = phi [n.0, entry], [n.2, loop]
+  x.1 = phi [5, entry], [y.1, loop]
+  y.1 = phi [9, entry], [x.1, loop]
+  print x.1
+  n.2 = n.1 - 1
+  more.0 = n.2 > 0
+  br more.0, loop, done
+done:
+  r.0 = y.1 - x.1
+  ret r.0
+}
+; folded 2, branches 0, copies 3, dead 0, blocks 0
+$ out swap.ir shuffle
+func shuffle(n.0) {
+entry:
+  n.1 = n.0
+  x.1 = 5
+  y.1 = 9
+  jmp loop
+loop:
+  print x.1
+  n.2 = n.1 - 1
+  more.0 = n.2 > 0
+  br more.0, loop_loop, done
+loop_loop:
+  n.1 = n.2
+  $t0 = x.1
+  x.1 = y.1
+  y.1 = $t0
+  jmp loop
+done:
+  r.0 = y.1 - x.1
+  ret r.0
+}
+$ ssa calls.ir fact
+func fact(n.0) {
+entry:
+  base.0 = n.0 <= 1
+  br base.0, one, rec
+one:
+  ret 1
+rec:
+  m.0 = n.0 - 1
+  r.0 = call fact(m.0)
+  p.0 = n.0 * r.0
+  ret p.0
+}
+$ opt calls.ir fact
+func fact(n.0) {
+entry:
+  base.0 = n.0 <= 1
+  br base.0, one, rec
+one:
+  ret 1
+rec:
+  m.0 = n.0 - 1
+  r.0 = call fact(m.0)
+  p.0 = n.0 * r.0
+  ret p.0
+}
+; folded 0, branches 0, copies 0, dead 0, blocks 0
+$ out calls.ir fact
+func fact(n.0) {
+entry:
+  base.0 = n.0 <= 1
+  br base.0, one, rec
+one:
+  ret 1
+rec:
+  m.0 = n.0 - 1
+  r.0 = call fact(m.0)
+  p.0 = n.0 * r.0
+  ret p.0
+}
+$ ssa calls.ir ack
+func ack(m.0, n.0) {
+entry:
+  mz.0 = m.0 == 0
+  br mz.0, base, inner
+base:
+  r.2 = n.0 + 1
+  ret r.2
+inner:
+  nz.0 = n.0 == 0
+  br nz.0, down, both
+down:
+  m1.1 = m.0 - 1
+  r.1 = call ack(m1.1, 1)
+  ret r.1
+both:
+  n1.0 = n.0 - 1
+  t.0 = call ack(m.0, n1.0)
+  m1.0 = m.0 - 1
+  r.0 = call ack(m1.0, t.0)
+  ret r.0
+}
+$ opt calls.ir ack
+func ack(m.0, n.0) {
+entry:
+  mz.0 = m.0 == 0
+  br mz.0, base, inner
+base:
+  r.2 = n.0 + 1
+  ret r.2
+inner:
+  nz.0 = n.0 == 0
+  br nz.0, down, both
+down:
+  m1.1 = m.0 - 1
+  r.1 = call ack(m1.1, 1)
+  ret r.1
+both:
+  n1.0 = n.0 - 1
+  t.0 = call ack(m.0, n1.0)
+  m1.0 = m.0 - 1
+  r.0 = call ack(m1.0, t.0)
+  ret r.0
+}
+; folded 0, branches 0, copies 0, dead 0, blocks 0
+$ out calls.ir ack
+func ack(m.0, n.0) {
+entry:
+  mz.0 = m.0 == 0
+  br mz.0, base, inner
+base:
+  r.2 = n.0 + 1
+  ret r.2
+inner:
+  nz.0 = n.0 == 0
+  br nz.0, down, both
+down:
+  m1.1 = m.0 - 1
+  r.1 = call ack(m1.1, 1)
+  ret r.1
+both:
+  n1.0 = n.0 - 1
+  t.0 = call ack(m.0, n1.0)
+  m1.0 = m.0 - 1
+  r.0 = call ack(m1.0, t.0)
+  ret r.0
+}
+$ ssa calls.ir report
+func report(n.0) {
+entry:
+  i.0 = 1
+  jmp loop
+loop:
+  i.1 = phi [i.0, entry], [i.2, body]
+  c.0 = i.1 <= n.0
+  br c.0, body, done
+body:
+  f.0 = call fact(i.1)
+  print f.0
+  i.2 = i.1 + 1
+  jmp loop
+done:
+  unused.0 = call fibr(10)
+  call note(n.0)
+  ret
+}
+$ opt calls.ir report
+func report(n.0) {
+entry:
+  jmp loop
+loop:
+  i.1 = phi [1, entry], [i.2, body]
+  c.0 = i.1 <= n.0
+  br c.0, body, done
+body:
+  f.0 = call fact(i.1)
+  print f.0
+  i.2 = i.1 + 1
+  jmp loop
+done:
+  unused.0 = call fibr(10)
+  call note(n.0)
+  ret
+}
+; folded 1, branches 0, copies 0, dead 0, blocks 0
+$ out calls.ir report
+func report(n.0) {
+entry:
+  i.1 = 1
+  jmp loop
+loop:
+  c.0 = i.1 <= n.0
+  br c.0, body, done
+body:
+  f.0 = call fact(i.1)
+  print f.0
+  i.2 = i.1 + 1
+  i.1 = i.2
+  jmp loop
+done:
+  unused.0 = call fibr(10)
+  call note(n.0)
+  ret
+}
+$ ssa warn.ir maybe
+warning: line 9: v may be used before it is set (in block skip)
+func maybe(c.0) {
+entry:
+  br c.0, set, skip
+set:
+  v.0 = 10
+  jmp skip
+skip:
+  v.1 = phi [undef, entry], [v.0, set]
+  r.0 = v.1 + 1
+  ret r.0
+}
+$ opt warn.ir maybe
+warning: line 9: v may be used before it is set (in block skip)
+func maybe(c.0) {
+entry:
+  br c.0, set, skip
+set:
+  jmp skip
+skip:
+  v.1 = phi [undef, entry], [10, set]
+  r.0 = v.1 + 1
+  ret r.0
+}
+; folded 1, branches 0, copies 0, dead 0, blocks 0
+$ out warn.ir maybe
+warning: line 9: v may be used before it is set (in block skip)
+func maybe(c.0) {
+entry:
+  br c.0, set, entry_skip
+entry_skip:
+  v.1 = undef
+  jmp skip
+set:
+  v.1 = 10
+  jmp skip
+skip:
+  r.0 = v.1 + 1
+  ret r.0
+}
+$ ssa warn.ir typo
+warning: line 19: totl may be used before it is set (in block loop)
+func typo(n.0) {
+entry:
+  total.0 = 0
+  i.0 = 0
+  jmp loop
+loop:
+  i.1 = phi [i.0, entry], [i.2, body]
+  totl.0 = phi [undef, entry], [totl.1, body]
+  go.0 = i.1 < n.0
+  br go.0, body, done
+body:
+  totl.1 = total.0 + i.1
+  i.2 = i.1 + 1
+  jmp loop
+done:
+  ret totl.0
+}
+$ opt warn.ir typo
+warning: line 19: totl may be used before it is set (in block loop)
+func typo(n.0) {
+entry:
+  jmp loop
+loop:
+  i.1 = phi [0, entry], [i.2, body]
+  totl.0 = phi [undef, entry], [totl.1, body]
+  go.0 = i.1 < n.0
+  br go.0, body, done
+body:
+  totl.1 = 0 + i.1
+  i.2 = i.1 + 1
+  jmp loop
+done:
+  ret totl.0
+}
+; folded 2, branches 0, copies 0, dead 0, blocks 0
+$ out warn.ir typo
+warning: line 19: totl may be used before it is set (in block loop)
+func typo(n.0) {
+entry:
+  i.1 = 0
+  totl.0 = undef
+  jmp loop
+loop:
+  go.0 = i.1 < n.0
+  br go.0, body, done
+body:
+  totl.1 = 0 + i.1
+  i.2 = i.1 + 1
+  i.1 = i.2
+  totl.0 = totl.1
+  jmp loop
+done:
+  ret totl.0
+}
+$ ssa warn.ir stores
+func stores(x.0) {
+entry:
+  a.0 = x.0 + 1
+  a.1 = x.0 + 2
+  b.0 = a.1 * 2
+  b.1 = 7
+  c.0 = b.1 + a.1
+  unused.0 = c.0 * c.0
+  ret c.0
+}
+$ opt warn.ir stores
+func stores(x.0) {
+entry:
+  a.1 = x.0 + 2
+  c.0 = 7 + a.1
+  ret c.0
+}
+; folded 1, branches 0, copies 0, dead 3, blocks 0
+$ out warn.ir stores
+func stores(x.0) {
+entry:
+  a.1 = x.0 + 2
+  c.0 = 7 + a.1
+  ret c.0
+}
+$ cfg consts.ir dead_end
+note: block orphan (line 90) is unreachable
+note: block entry2 (line 93) is unreachable
+rpo: entry
+entry: preds -; succs -
+$ live consts.ir dead_end
+entry: in x; out -
+$ cfg calls.ir forever
+rpo: entry loop
+entry: preds -; succs loop
+loop: preds entry, loop; succs loop
+$ live calls.ir forever
+entry: in n; out n
+loop: in n; out n
+$ cfg warn.ir typo
+rpo: entry loop done body
+entry: preds -; succs loop
+loop: preds entry, body; succs body, done
+body: preds loop; succs loop
+done: preds loop; succs -
+$ live warn.ir typo
+entry: in n, totl; out i, n, total, totl
+loop: in i, n, total, totl; out i, n, total, totl
+done: in totl; out -
+body: in i, n, total; out i, n, total, totl
+warning: totl is live on entry but is not a parameter
+$ dom calls.ir ack
+entry: idom -; df -
+inner: idom entry; df -
+both: idom inner; df -
+down: idom inner; df -
+base: idom entry; df -
+tree:
+  entry
+    inner
+      both
+      down
+    base
+loops: none
+$ dom swap.ir shuffle
+entry: idom -; df -
+loop: idom entry; df loop
+done: idom loop; df -
+tree:
+  entry
+    loop
+      done
+loop loop: back edges from loop; body loop
+$ run arith.ir gcd 1071 462
+source: returned 21 after 22 steps
+ssa: returned 21 after 22 steps
+opt: returned 21 after 16 steps
+out: returned 21 after 24 steps
+$ run arith.ir gcd 17 5
+source: returned 1 after 22 steps
+ssa: returned 1 after 22 steps
+opt: returned 1 after 16 steps
+out: returned 1 after 24 steps
+$ run arith.ir gcd 0 9
+source: returned 9 after 10 steps
+ssa: returned 9 after 10 steps
+opt: returned 9 after 8 steps
+out: returned 9 after 12 steps
+$ run arith.ir pow 3 13
+source: returned 1594323 after 39 steps
+ssa: returned 1594323 after 39 steps
+opt: returned 1594323 after 38 steps
+out: returned 1594323 after 58 steps
+$ run arith.ir pow 2 31
+source: returned -2147483648 after 50 steps
+ssa: returned -2147483648 after 50 steps
+opt: returned -2147483648 after 49 steps
+out: returned -2147483648 after 72 steps
+$ run arith.ir pow 7 0
+source: returned 1 after 5 steps
+ssa: returned 1 after 5 steps
+opt: returned 1 after 4 steps
+out: returned 1 after 7 steps
+$ run arith.ir collatz 27
+source: returned 111 after 934 steps
+ssa: returned 111 after 934 steps
+opt: returned 111 after 933 steps
+out: returned 111 after 1268 steps
+$ run arith.ir collatz 1
+source: returned 0 after 5 steps
+ssa: returned 0 after 5 steps
+opt: returned 0 after 4 steps
+out: returned 0 after 6 steps
+$ run arith.ir classify -5
+source: returned -1 after 5 steps
+ssa: returned -1 after 5 steps
+opt: returned -1 after 4 steps
+out: returned -1 after 5 steps
+$ run arith.ir classify 0
+source: returned 0 after 7 steps
+ssa: returned 0 after 7 steps
+opt: returned 0 after 6 steps
+out: returned 0 after 7 steps
+$ run arith.ir classify 42
+source: returned 1 after 8 steps
+ssa: returned 1 after 8 steps
+opt: returned 1 after 7 steps
+out: returned 1 after 9 steps
+$ run arith.ir classify 1000
+source: returned 2 after 10 steps
+ssa: returned 2 after 10 steps
+opt: returned 2 after 8 steps
+out: returned 2 after 9 steps
+$ run arith.ir isqrt 0
+source: returned 0 after 7 steps
+ssa: returned 0 after 7 steps
+opt: returned 0 after 6 steps
+out: returned 0 after 8 steps
+$ run arith.ir isqrt 99
+source: returned 9 after 67 steps
+ssa: returned 9 after 67 steps
+opt: returned 9 after 60 steps
+out: returned 9 after 68 steps
+$ run arith.ir isqrt 100
+source: returned 10 after 77 steps
+ssa: returned 10 after 77 steps
+opt: returned 10 after 69 steps
+out: returned 10 after 78 steps
+$ run arith.ir isqrt 123456
+source: returned 113512 after 177 steps
+ssa: returned 113512 after 177 steps
+opt: returned 113512 after 159 steps
+out: returned 113512 after 178 steps
+$ run arith.ir wrap
+source: returned 0 after 12 steps; printed -2147483648 2147483647 0 -3 -1
+ssa: returned 0 after 12 steps; printed -2147483648 2147483647 0 -3 -1
+opt: returned 0 after 6 steps; printed -2147483648 2147483647 0 -3 -1
+out: returned 0 after 6 steps; printed -2147483648 2147483647 0 -3 -1
+$ run consts.ir flags 5
+source: returned 17 after 7 steps
+ssa: returned 17 after 7 steps
+opt: returned 17 after 2 steps
+out: returned 17 after 2 steps
+$ run consts.ir steady 9
+source: returned 10 after 61 steps
+ssa: returned 10 after 61 steps
+opt: returned 10 after 40 steps
+out: returned 10 after 50 steps
+$ run consts.ir table 1
+source: returned 41 after 9 steps
+ssa: returned 41 after 9 steps
+opt: returned 41 after 2 steps
+out: returned 41 after 2 steps
+$ run consts.ir chain
+source: returned 21 after 11 steps; printed 21
+ssa: returned 21 after 11 steps; printed 21
+opt: returned 21 after 2 steps; printed 21
+out: returned 21 after 2 steps; printed 21
+$ run consts.ir zero_div 3
+source: returned 3 after 4 steps
+ssa: returned 3 after 4 steps
+opt: returned 3 after 3 steps
+out: returned 3 after 3 steps
+$ run consts.ir zero_div 30
+source: trap: division by zero in zero_div, block risky after 4 steps
+ssa: trap: division by zero in zero_div, block risky after 4 steps
+opt: trap: division by zero in zero_div, block risky after 3 steps
+out: trap: division by zero in zero_div, block risky after 3 steps
+$ run consts.ir dead_end 21
+source: returned 42 after 2 steps
+ssa: returned 42 after 2 steps
+opt: returned 42 after 2 steps
+out: returned 42 after 2 steps
+$ run loops.ir tri 100
+source: returned 5050 after 506 steps
+ssa: returned 5050 after 506 steps
+opt: returned 5050 after 504 steps
+out: returned 5050 after 706 steps
+$ run loops.ir tri 0
+source: returned 0 after 6 steps
+ssa: returned 0 after 6 steps
+opt: returned 0 after 4 steps
+out: returned 0 after 6 steps
+$ run loops.ir grid 7
+source: returned 441 after 356 steps
+ssa: returned 441 after 356 steps
+opt: returned 441 after 347 steps
+out: returned 441 after 475 steps
+$ run loops.ir primes 100
+source: returned 25 after 2465 steps
+ssa: returned 25 after 2465 steps
+opt: returned 25 after 2364 steps
+out: returned 25 after 2998 steps
+$ run loops.ir primes 2
+source: returned 1 after 17 steps
+ssa: returned 1 after 17 steps
+opt: returned 1 after 14 steps
+out: returned 1 after 20 steps
+$ run loops.ir fib 30
+source: returned 832040 after 217 steps
+ssa: returned 832040 after 217 steps
+opt: returned 832040 after 154 steps
+out: returned 832040 after 247 steps
+$ run loops.ir fib 50
+source: returned -298632863 after 357 steps
+ssa: returned -298632863 after 357 steps
+opt: returned -298632863 after 254 steps
+out: returned -298632863 after 407 steps
+$ run loops.ir search 1764
+source: returned 42 after 305 steps
+ssa: returned 42 after 305 steps
+opt: returned 42 after 302 steps
+out: returned 42 after 346 steps
+$ run loops.ir search 50
+source: returned -1 after 356 steps
+ssa: returned -1 after 356 steps
+opt: returned -1 after 354 steps
+out: returned -1 after 407 steps
+$ run loops.ir two_phase 10
+source: returned 35 after 109 steps
+ssa: returned 35 after 109 steps
+opt: returned 35 after 107 steps
+out: returned 35 after 151 steps
+$ run swap.ir swap 0
+source: returned 12 after 9 steps
+ssa: returned 12 after 9 steps
+opt: returned 12 after 6 steps
+out: returned 12 after 9 steps
+$ run swap.ir swap 1
+source: returned 21 after 16 steps
+ssa: returned 21 after 16 steps
+opt: returned 21 after 10 steps
+out: returned 21 after 17 steps
+$ run swap.ir swap 7
+source: returned 21 after 58 steps
+ssa: returned 21 after 58 steps
+opt: returned 21 after 34 steps
+out: returned 21 after 65 steps
+$ run swap.ir lost 5
+source: returned 4 after 23 steps
+ssa: returned 4 after 23 steps
+opt: returned 4 after 17 steps
+out: returned 4 after 26 steps
+$ run swap.ir lost 1
+source: returned 0 after 7 steps
+ssa: returned 0 after 7 steps
+opt: returned 0 after 5 steps
+out: returned 0 after 6 steps
+$ run swap.ir rotate 4
+source: returned 231 after 44 steps
+ssa: returned 231 after 44 steps
+opt: returned 231 after 24 steps
+out: returned 231 after 48 steps
+$ run swap.ir rotate 5
+source: returned 312 after 52 steps
+ssa: returned 312 after 52 steps
+opt: returned 312 after 28 steps
+out: returned 312 after 57 steps
+$ run swap.ir shuffle 3
+source: returned 4 after 26 steps; printed 5 9 5
+ssa: returned 4 after 26 steps; printed 5 9 5
+opt: returned 4 after 15 steps; printed 5 9 5
+out: returned 4 after 28 steps; printed 5 9 5
+$ run swap.ir early 4
+source: returned 10 after 29 steps
+ssa: returned 10 after 29 steps
+opt: returned 10 after 28 steps
+out: returned 10 after 44 steps
+$ run swap.ir early 9
+source: returned 24 after 21 steps
+ssa: returned 24 after 21 steps
+opt: returned 24 after 20 steps
+out: returned 24 after 30 steps
+$ run calls.ir fact 10
+source: returned 3628800 after 57 steps
+ssa: returned 3628800 after 57 steps
+opt: returned 3628800 after 57 steps
+out: returned 3628800 after 57 steps
+$ run calls.ir fact 13
+source: returned 1932053504 after 75 steps
+ssa: returned 1932053504 after 75 steps
+opt: returned 1932053504 after 75 steps
+out: returned 1932053504 after 75 steps
+$ run calls.ir fibr 15
+source: returned 610 after 10849 steps
+ssa: returned 610 after 10849 steps
+opt: returned 610 after 10849 steps
+out: returned 610 after 10849 steps
+$ run calls.ir even 7
+source: returned 0 after 38 steps
+ssa: returned 0 after 38 steps
+opt: returned 0 after 38 steps
+out: returned 0 after 38 steps
+$ run calls.ir odd 7
+source: returned 1 after 38 steps
+ssa: returned 1 after 38 steps
+opt: returned 1 after 38 steps
+out: returned 1 after 38 steps
+$ run calls.ir ack 2 3
+source: returned 9 after 286 steps
+ssa: returned 9 after 286 steps
+opt: returned 9 after 286 steps
+out: returned 9 after 286 steps
+$ run calls.ir report 5
+source: returned 0 after 1086 steps; printed 1 2 6 24 120 5000
+ssa: returned 0 after 1086 steps; printed 1 2 6 24 120 5000
+opt: returned 0 after 1085 steps; printed 1 2 6 24 120 5000
+out: returned 0 after 1091 steps; printed 1 2 6 24 120 5000
+$ run calls.ir forever 0
+source: trap: step limit after 200001 steps
+ssa: trap: step limit after 200001 steps
+opt: trap: step limit after 200001 steps
+out: trap: step limit after 200001 steps
+$ run calls.ir deep 0
+source: trap: call depth limit after 402 steps
+ssa: trap: call depth limit after 402 steps
+opt: trap: call depth limit after 402 steps
+out: trap: call depth limit after 402 steps
+$ run calls.ir fact
+calls.ir: error: fact takes 1 argument(s), given 0
+$ run calls.ir nosuch 1
+calls.ir: error: no function nosuch
+$ run warn.ir maybe 1
+source: returned 11 after 5 steps
+ssa: returned 11 after 5 steps
+opt: returned 11 after 4 steps
+out: returned 11 after 5 steps
+$ run warn.ir maybe 0
+source: returned 1 after 3 steps
+ssa: returned 1 after 3 steps
+opt: returned 1 after 3 steps
+out: returned 1 after 5 steps
+$ run warn.ir typo 4
+source: returned 3 after 26 steps
+ssa: returned 3 after 26 steps
+opt: returned 3 after 24 steps
+out: returned 3 after 34 steps
+$ run warn.ir stores 3
+source: returned 12 after 7 steps
+ssa: returned 12 after 7 steps
+opt: returned 12 after 3 steps
+out: returned 12 after 3 steps
+$ snip cfg func f() {\nentry:\n  ret 1\n}
+rpo: entry
+entry: preds -; succs -
+$ snip dom func f(c) {\nentry:\n  br c, a, b\na:\n  jmp j\nb:\n  jmp j\nj:\n  ret c\n}
+entry: idom -; df -
+b: idom entry; df j
+a: idom entry; df j
+j: idom entry; df -
+tree:
+  entry
+    b
+    a
+    j
+loops: none
+$ snip dom func f(n) {\nentry:\n  jmp l\nl:\n  n = n - 1\n  br n, l, x\nx:\n  ret n\n}
+entry: idom -; df -
+l: idom entry; df l
+x: idom l; df -
+tree:
+  entry
+    l
+      x
+loop l: back edges from l; body l
+$ snip ssa func f(c) {\nentry:\n  x = 1\n  br c, a, j\na:\n  x = 2\n  jmp j\nj:\n  ret x\n}
+func f(c.0) {
+entry:
+  x.0 = 1
+  br c.0, a, j
+a:
+  x.1 = 2
+  jmp j
+j:
+  x.2 = phi [x.0, entry], [x.1, a]
+  ret x.2
+}
+$ snip opt func f(c) {\nentry:\n  x = 1\n  br c, a, j\na:\n  x = 1\n  jmp j\nj:\n  ret x\n}
+func f(c.0) {
+entry:
+  ret 1
+}
+; folded 3, branches 0, copies 0, dead 0, blocks 2
+$ snip opt func f() {\nentry:\n  x = 10\n  y = x / 3\n  z = x % 3\n  w = y * z\n  ret w\n}
+func f() {
+entry:
+  ret 3
+}
+; folded 4, branches 0, copies 0, dead 0, blocks 0
+$ snip opt func f(a) {\nentry:\n  x = a\n  y = x\n  z = y + 0\n  ret z\n}
+func f(a.0) {
+entry:
+  z.0 = a.0 + 0
+  ret z.0
+}
+; folded 0, branches 0, copies 2, dead 0, blocks 0
+$ snip opt func f(a) {\nentry:\n  x = a * 3\n  y = a * 4\n  ret x\n}
+func f(a.0) {
+entry:
+  x.0 = a.0 * 3
+  ret x.0
+}
+; folded 0, branches 0, copies 0, dead 1, blocks 0
+$ snip opt func f(a) {\nentry:\n  x = a / 0\n  ret 1\n}
+func f(a.0) {
+entry:
+  x.0 = a.0 / 0
+  ret 1
+}
+; folded 0, branches 0, copies 0, dead 0, blocks 0
+$ snip opt func f(a) {\nentry:\n  jmp b\nb:\n  jmp c\nc:\n  jmp d\nd:\n  ret a\n}
+func f(a.0) {
+entry:
+  ret a.0
+}
+; folded 0, branches 0, copies 0, dead 0, blocks 3
+$ snip opt func f(a) {\nentry:\n  br a, x, x\nx:\n  ret a\n}
+func f(a.0) {
+entry:
+  ret a.0
+}
+; folded 0, branches 1, copies 0, dead 0, blocks 1
+$ snip out func f(a) {\nentry:\n  br a, x, x\nx:\n  ret a\n}
+func f(a.0) {
+entry:
+  ret a.0
+}
+$ snip out func f(n) {\nentry:\n  a = 0\n  b = 1\n  jmp l\nl:\n  t = a\n  a = b\n  b = t\n  n = n - 1\n  br n, l, x\nx:\n  ret a\n}
+func f(n.0) {
+entry:
+  a.1 = 0
+  b.1 = 1
+  n.1 = n.0
+  jmp l
+l:
+  n.2 = n.1 - 1
+  br n.2, l_l, x
+l_l:
+  n.1 = n.2
+  $t0 = a.1
+  a.1 = b.1
+  b.1 = $t0
+  jmp l
+x:
+  ret b.1
+}
+$ snip opt func f() {\nentry:\n  x = 2147483647\n  y = x * 2\n  z = y >> 31\n  ret z\n}
+func f() {
+entry:
+  ret -1
+}
+; folded 3, branches 0, copies 0, dead 0, blocks 0
+$ snip opt func f() {\nentry:\n  x = -2147483648\n  y = x / -1\n  ret y\n}
+func f() {
+entry:
+  ret -2147483648
+}
+; folded 2, branches 0, copies 0, dead 0, blocks 0
+$ snip opt func f() {\nentry:\n  a = 5 < 3\n  b = 5 >= 3\n  c = a == b\n  d = a != b\n  e = 1 << 40\n  print a\n  print b\n  print c\n  print d\n  print e\n  ret\n}
+func f() {
+entry:
+  print 0
+  print 1
+  print 0
+  print 1
+  print 256
+  ret
+}
+; folded 5, branches 0, copies 0, dead 0, blocks 0
+$ snip live func f(a) {\nentry:\n  b = a + c\n  ret b\n}
+entry: in a, c; out -
+warning: c is live on entry but is not a parameter
+$ snip ssa func f(a) {\nentry:\n  b = a + c\n  ret b\n}
+warning: line 3: c may be used before it is set (in block entry)
+func f(a.0) {
+entry:
+  b.0 = a.0 + undef
+  ret b.0
+}
+$ snip run func f(a) {\nentry:\n  b = a + c\n  ret b\n} ;; f 4
+source: returned 4 after 2 steps
+ssa: returned 4 after 2 steps
+opt: returned 4 after 2 steps
+out: returned 4 after 2 steps
+$ snip run func f() {\nentry:\n  x = 1 / 0\n  ret x\n} ;; f
+source: trap: division by zero in f, block entry after 1 steps
+ssa: trap: division by zero in f, block entry after 1 steps
+opt: trap: division by zero in f, block entry after 1 steps
+out: trap: division by zero in f, block entry after 1 steps
+$ snip run func f(a, b) {\nentry:\n  q = a / b\n  r = a % b\n  print q\n  print r\n  ret\n} ;; f -17 5
+source: returned 0 after 5 steps; printed -3 -2
+ssa: returned 0 after 5 steps; printed -3 -2
+opt: returned 0 after 5 steps; printed -3 -2
+out: returned 0 after 5 steps; printed -3 -2
+$ snip run func f(a) {\nentry:\n  x = a + 1\n  ret x\n} ;; f 2147483647
+source: returned -2147483648 after 2 steps
+ssa: returned -2147483648 after 2 steps
+opt: returned -2147483648 after 2 steps
+out: returned -2147483648 after 2 steps
+$ snip run func f() {\nentry:\n  ret\n}\nfunc g() {\nentry:\n  call f()\n  ret 3\n} ;; g
+source: returned 3 after 3 steps
+ssa: returned 3 after 3 steps
+opt: returned 3 after 3 steps
+out: returned 3 after 3 steps
+$ snip cfg func f() {\nentry:\n  ret\n} ;; g
+snip.ir: error: no function g
+$ snip cfg ret 1
+snip.ir:1: error: expected 'func name(params) {'
+$ snip cfg func f( {\nentry:\n  ret\n}
+snip.ir:1: error: expected 'func name(params) {'
+$ snip cfg func f(a b) {\nentry:\n  ret\n}
+snip.ir:1: error: bad parameter 'a b'
+$ snip cfg func f() {\n  ret\n}
+snip.ir:2: error: an instruction before the first label
+$ snip cfg func f() {\nentry:\n  ret\n  ret\n}
+snip.ir:4: error: an instruction after the terminator of block entry
+$ snip cfg func f() {\nentry:\n  x = 1\n}
+snip.ir:2: error: block entry has no terminator
+$ snip cfg func f() {\nentry:\n  jmp nowhere\n}
+snip.ir:3: error: unknown label nowhere
+$ snip cfg func f() {\nentry:\n  jmp entry\n}
+snip.ir:3: error: the entry block entry cannot be a jump target
+$ snip cfg func f() {\nentry:\n  ret\nentry:\n  ret\n}
+snip.ir:4: error: label entry is defined twice
+$ snip cfg func f() {\nentry:\n  ret\n}\nfunc f() {\nentry:\n  ret\n}
+snip.ir:5: error: function f is defined twice
+$ snip cfg func f() {\n}
+snip.ir:2: error: function f has no blocks
+$ snip cfg func f() {\nentry:\n  ret\n
+snip.ir:4: error: function f is not closed
+$ snip cfg func f() {\nentry:\n  x = 1 ** 2\n  ret\n}
+snip.ir:3: error: cannot read '1 ** 2'
+$ snip cfg func f() {\nentry:\n  x = y z\n  ret\n}
+snip.ir:3: error: cannot read 'y z'
+$ snip cfg func f() {\nentry:\n  x.0 = 1\n  ret\n}
+snip.ir:3: error: bad destination 'x.0'
+$ snip cfg func f() {\nentry:\n  x = 1 + 2a\n  ret\n}
+snip.ir:3: error: bad operand '2a'
+$ snip cfg func f() {\nentry:\n  print 1 2\n  ret\n}
+snip.ir:3: error: print takes one operand
+$ snip cfg func f() {\nentry:\n  br 1, a\na:\n  ret\n}
+snip.ir:3: error: br takes a condition and two labels
+$ snip cfg func f() {\nentry:\n  jmp\n}
+snip.ir:3: error: jmp takes one label
+$ snip cfg func f() {\nentry:\n  ret 1 2\n}
+snip.ir:3: error: ret takes at most one operand
+$ snip cfg func f() {\nentry:\n  x = call g(1)\n  ret\n}
+snip.ir:3: error: unknown function g
+$ snip cfg func g(a) {\nentry:\n  ret a\n}\nfunc f() {\nentry:\n  x = call g(1, 2)\n  ret\n}
+snip.ir:7: error: g takes 1 argument(s), given 2
+$ snip cfg func f() {\nentry:\n  x = call g 1\n  ret\n}
+snip.ir:3: error: a call is written call f(args)
+$ snip cfg func f() {\nentry:\n  frob x\n  ret\n}
+snip.ir:3: error: unknown instruction 'frob'
+$ snip cfg func f() {\nentry:\n  ret\n9lbl:\n  ret\n}
+snip.ir:4: error: bad label '9lbl'
+$ snip cfg func f() {\nentry:  # a comment\n  ret   # and another\n}  # trailing
+rpo: entry
+entry: preds -; succs -
