@@ -140,7 +140,9 @@ One row, filed in the kara ledger:
   which leaves `(x.clone(), y.clone()) = (y.clone(), x.clone())`, and a
   second run leaves `x.clone(), y.clone() = ...`, which no fix repairs.
   With `i64` bindings the real fix applies alone. The port uses the form
-  the diagnostic names, `x, y = y, x`, which works.
+  the diagnostic names, `x, y = y, x`, which works. Fixed in kara
+  b5520ddad6: the move errors inside a refused assignment are dropped, so
+  `karac fix` applies the real fix alone and the swap runs.
 
 The Mend loop otherwise: `karac check` asked for two renames (`RK` and
 `MI` are not PascalCase), and `karac fix` then had nothing to change. The
