@@ -61,7 +61,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | diagnostics | 85 |
 | false-positive | 82 |
 | missing-feature | 60 |
-| perf | 55 |
+| perf | 56 |
 | soundness | 31 |
 | miscompile | 25 |
 | run-vs-build | 19 |
@@ -82,7 +82,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | interp | 26 |
 | parser | 25 |
 | codegen | 22 |
-| runtime | 21 |
+| runtime | 22 |
 | effect | 10 |
 | other | 4 |
 | resolver | 4 |
@@ -113,6 +113,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-01-3 | 2026-11-01 | mir | medium | `match n { Some(k) => kind_name(k), None => "NoneType" }` with `n: ref Option[Node]`, `Node` a `shared enum` and `kind_name(n: ref Node) -> Str`, is refused as E0516 "cannot drop `k` while `cls` still holds a borrow of it" (E0509 when returned directly); core-semantics §4.6 makes `k` a `ref` into `n`, so the view lives as long as `n`, and the same match on a non-shared enum checks | — |
 | B-2026-11-01-12 | 2026-11-01 | mir | high | A `mut` field of handle-aggregate type passed to a borrowed parameter (`g(h.left, h)` with `a: Option[N]`) is lent in place rather than counted (core-semantics §6.2), so a write to the field through another handle during the call changes what the parameter reads: `cut(h); match a { Some(x) => x.val, None => -1 }` prints -1, want 7 | — |
 | B-2026-11-01-16 | 2026-11-01 | mir | medium | An assignment whose place is a method-call chain evaluates the value before the place, against core-semantics 8.2 (place operands first): `m.entry(1).or_insert(Bag { n: 1 }).n = m[1].n * 2` on an empty map panics `key not found` (want: the place inserts the key, then the value reads it, which 8.2 makes a borrow error), and check accepts it | — |
+| B-2026-11-01-17 | 2026-11-01 | runtime | medium | Kata 71's auto-par binary runs 1.6-2.6x SLOWER with exactly two workers than with one (KARAC_THREADS=2: 0.24-0.39 s against 0.15 s) on the M5, on 5x the cycles for 7% more instructions; three or more workers run 0.04-0.06 s | — |
 
 ### Relocated
 
