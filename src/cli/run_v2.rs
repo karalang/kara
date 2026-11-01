@@ -94,8 +94,7 @@ fn cmd_run_v2(
     }
     // Without the llvm feature the MIR interpreter is the only executor.
     let _ = interp;
-    check();
-    run_on_interpreter(source, output, timeout, argv);
+    run_on_interpreter(source.clone(), check, output, timeout, argv);
 }
 
 /// The checks `karac check` runs, on the program's source (a package's
@@ -335,8 +334,14 @@ enum Step {
     Ran(crate::mir::interp::RunResult),
 }
 
+/// The program is lowered on the interpreter's thread while `check` runs
+/// on this one, as the JIT path does (B-2026-10-31-16); it runs only once
+/// the check has passed, so a check error still ends the command first,
+/// with the check's diagnostics, and nothing the program prints comes
+/// before them.
 fn run_on_interpreter(
     source: String,
+    check: impl FnOnce(),
     output: OutputMode,
     timeout: Option<std::time::Duration>,
     argv: Vec<String>,
@@ -344,6 +349,7 @@ fn run_on_interpreter(
     crate::mir::interp::set_program_args(argv);
     let stream = output == OutputMode::Text;
     let (tx, rx) = std::sync::mpsc::channel();
+    let (go, checked) = std::sync::mpsc::channel::<()>();
     // The MIR interpreter drops a long chain (a 100 000-node list) by
     // recursion, so it runs on a thread with room for that.
     let worker = std::thread::Builder::new()
@@ -365,6 +371,9 @@ fn run_on_interpreter(
                     return;
                 }
             };
+            if checked.recv().is_err() {
+                return;
+            }
             let run = if stream {
                 crate::mir::interp::run_streaming
             } else {
@@ -374,6 +383,8 @@ fn run_on_interpreter(
             let _ = tx.send(Step::Ran(r));
         })
         .expect("failed to spawn the MIR interpreter thread");
+    check();
+    let _ = go.send(());
     let gone = |worker: std::thread::JoinHandle<()>| -> ! {
         match worker.join() {
             Err(p) => std::panic::resume_unwind(p),
