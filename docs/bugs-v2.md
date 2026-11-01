@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 83 |
+| diagnostics | 85 |
 | false-positive | 81 |
 | missing-feature | 60 |
 | perf | 55 |
@@ -77,10 +77,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | typecheck | 137 |
 | mir | 87 |
 | mir-llvm | 63 |
-| cli | 48 |
+| cli | 49 |
 | ownership | 38 |
 | interp | 26 |
-| parser | 24 |
+| parser | 25 |
 | codegen | 22 |
 | runtime | 21 |
 | effect | 10 |
@@ -115,6 +115,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-01-3 | 2026-11-01 | mir | medium | `match n { Some(k) => kind_name(k), None => "NoneType" }` with `n: ref Option[Node]`, `Node` a `shared enum` and `kind_name(n: ref Node) -> Str`, is refused as E0516 "cannot drop `k` while `cls` still holds a borrow of it" (E0509 when returned directly); core-semantics §4.6 makes `k` a `ref` into `n`, so the view lives as long as `n`, and the same match on a non-shared enum checks | — |
 | B-2026-11-01-7 | 2026-11-01 | mir | high | A call, operator or array literal reads a place operand only after the later operands have run, against core-semantics 8.1 (left to right): `pair(c.n, bump(mut c))` prints `11 11` (want `1 11`), `c.n + bump(mut c)` is 22 (want 12) and `[y, { y = 7; y }]` is `[7, 7]` on mir-interp and mir-llvm alike; when the later operand MOVES the place, `wrap(b.n, vec![b])` is refused at run and build (`use of _1.0, which may have been moved or never initialized`) though `karac check` accepts it | — |
 | B-2026-11-01-12 | 2026-11-01 | mir | high | A `mut` field of handle-aggregate type passed to a borrowed parameter (`g(h.left, h)` with `a: Option[N]`) is lent in place rather than counted (core-semantics §6.2), so a write to the field through another handle during the call changes what the parameter reads: `cut(h); match a { Some(x) => x.val, None => -1 }` prints -1, want 7 | — |
+| B-2026-11-01-13 | 2026-11-01 | parser | low | `karac fix` gives `println!("{} {}", c.n, s.replace("a", "b"))` no edit, because format_macro_rewrite refuses any argument holding a `"`, though an f-string hole balances quotes (`f"{s.replace("a", "b")}"` parses); `println!("{} {}", c.n, s.trim())` is rewritten | — |
+| B-2026-11-01-14 | 2026-11-01 | cli | low | `karac run` with no file inside a `karac new --lib` project says "missing file argument" and suggests "`karac run` inside a project to run its src/main.kara", while the user is inside one; `karac build` there says the library has no `main` | — |
 
 ### Relocated
 
