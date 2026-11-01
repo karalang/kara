@@ -3836,9 +3836,7 @@ fn trim_front(strs: own Vec[String]) -> Vec[String] {
     }
     let lead = strs.iter().map(|s| clen(s) - clen(s.trim_start())).min() ?? 0;
     if lead > 0 {
-        // B-2026-10-29-6: the if's type does not reach the inner collect.
-        let cut: Vec[String] = strs.iter().map(|s| s.chars().skip(lead).collect()).collect();
-        cut
+        strs.iter().map(|s| s.chars().skip(lead).collect()).collect()
     } else {
         strs
     }

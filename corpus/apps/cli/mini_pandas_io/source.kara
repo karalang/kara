@@ -2286,8 +2286,6 @@ fn fill(f: Frame, name: Str, forward: bool, limit: Option[i64], by: Option[Strin
     let mut idx: Vec[i64] = Vec.filled(f.height(), -1);
     match by {
         Some(key) => {
-            // B-2026-10-29-4: `[key]` is refused with no hint or fix; the
-            // clone is the remedy the diagnostic should offer.
             let g = group_rows(f, [key.clone()].to_vec())?;
             for rows in g.rows {
                 fill_rows(c, rows, forward, limit, mut idx);

@@ -128,7 +128,8 @@ from mini_read_stata (text helpers, CRC-32, inflate, zip and gzip):
 
 `karac check` reported one error with no fix-it:
 `ch.d.push(Vec.filled(nrows, 0))` into a `Vec[Vec[u64]]` was refused as a
-`Vec[i64]` (B-2026-10-29-24). I wrote `0u64` by hand. `karac fix` then
+`Vec[i64]` (B-2026-10-29-24). I wrote `0u64` by hand until kara 5dd03bfb7d fixed
+it; the app writes `0` again. `karac fix` then
 applied 4 edits (an `own` parameter, two `mut ref` bindings and a
 `.clone()`), and the program checked clean.
 
@@ -142,7 +143,7 @@ the `None` given a typed `let`, every lane matched; since the fix
 
 ## Gaps found
 
-- **B-2026-10-29-24** (open): an integer literal passed to `Vec.filled`
+- **B-2026-10-29-24** (fixed in kara 5dd03bfb7d; the app is back to `0`): an integer literal passed to `Vec.filled`
   does not take its type from where the vector goes when that is a
   method argument (`d.push(Vec.filled(2, 0))` with `d: Vec[Vec[u64]]`), a
   tuple element or an `Option` payload. A `let` annotation, a function

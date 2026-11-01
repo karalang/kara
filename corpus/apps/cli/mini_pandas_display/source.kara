@@ -1615,12 +1615,7 @@ fn series_agg(c: Col, func: Str) -> Val {
     match func {
         "count" => Val.I(range_idx(c.len()).iter().filter(|i| not c.is_na(*i)).count()),
         "sum" => match c {
-            Col.Int(v) => {
-                // B-2026-10-29-5: `Val.I(v.iter().fold(0, ..))` as the arm's value
-                // is refused (the fold takes `Val` as its accumulator).
-                let total: i64 = v.iter().fold(0, |a, x| a.wrapping_add(*x));
-                Val.I(total)
-            }
+            Col.Int(v) => Val.I(v.iter().fold(0, |a, x| a.wrapping_add(*x))),
             _ => Val.F(np_sum(c.floats().iter().map(|x| if is_nan(*x) { 0.0 } else { *x }).collect())),
         },
         "mean" => Val.F(series_mean(c.floats())),
@@ -2414,9 +2409,7 @@ fn trim_front(strs: own Vec[String]) -> Vec[String] {
     }
     let lead = strs.iter().map(|s| clen(s) - clen(s.trim_start())).min() ?? 0;
     if lead > 0 {
-        // B-2026-10-29-6: the if's type does not reach the inner collect.
-        let cut: Vec[String] = strs.iter().map(|s| s.chars().skip(lead).collect()).collect();
-        cut
+        strs.iter().map(|s| s.chars().skip(lead).collect()).collect()
     } else {
         strs
     }

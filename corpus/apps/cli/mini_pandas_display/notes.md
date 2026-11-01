@@ -125,10 +125,12 @@ was pushed or matched, and two `*n` that were already copies. That left
 12 errors:
 
 - a `fold` as an enum constructor's payload took the constructor's type
-  as its accumulator (B-2026-10-29-5); the app binds the fold first;
+  as its accumulator (B-2026-10-29-5); the app bound the fold first until kara 62fb839cf8
+  fixed it, and now builds the value in place;
 - the inner `collect` of a `map(..collect()).collect()` inside an `if`
   could not infer, though the same expression is fine as a function's
-  tail (B-2026-10-29-6); the app binds it to a typed `let`;
+  tail (B-2026-10-29-6); the app bound it to a typed `let` until kara
+  d2677b5af5 fixed it, and now returns it directly;
 - the closure whose `-> Vec[String]` the fix had deleted could no
   longer infer its body (B-2026-10-29-7); the app writes
   `let row: Fn(i64) -> Vec[String] = |r: i64| ..`;
@@ -146,9 +148,9 @@ those written as `let none: Option[String] = None; [none].to_vec()` and
 
 ## Gaps found
 
-- **B-2026-10-29-5** (open): `Val.I(v.iter().fold(0, ..))` as a function's tail
+- **B-2026-10-29-5** (fixed in kara 62fb839cf8; the app is back to its natural code): `Val.I(v.iter().fold(0, ..))` as a function's tail
   is refused; the fold takes `Val` as its accumulator.
-- **B-2026-10-29-6** (open): an `if` or `match` with a known type does not pass it
+- **B-2026-10-29-6** (fixed in kara d2677b5af5; the app is back to its natural code): an `if` or `match` with a known type does not pass it
   into its branches, so a nested `collect` there cannot infer.
 - **B-2026-10-29-7** (fixed in kara 0a5d255d8a): the closure return-type fix deletes the type the body
   needed; it could move it onto the binding as an `Fn` type.

@@ -144,7 +144,7 @@ the program as first written.
 
 ## Gaps found
 
-- **B-2026-10-29-4** (open): a borrowed parameter or pattern binding put in an
+- **B-2026-10-29-4** (fixed in kara c3fb7ea323, which now names the borrow and offers the `.clone()` the app writes): a borrowed parameter or pattern binding put in an
   array literal (`count([key].to_vec())` with `key: String`) is refused
   with only the two types; the same through a `ref` binding gets
   `borrow_projection_copy`'s message with the `.clone()` it needs.

@@ -148,7 +148,7 @@ job. `mini_pandas_clean.orig.kara` is the program as first written.
   and `strip_prefix` did the same; `starts_with`, `contains` and
   `ends_with` passed. All of them borrow their argument, and the app
   passes `old` itself again.
-- **B-2026-10-29-3** (open): `s.bytes().collect()` is refused with a
+- **B-2026-10-29-3** (fixed in kara 803f7ede31): `s.bytes().collect()` is refused with a
   message that spells out `s.bytes().iter().collect(...)`, but the
   diagnostic carries no fix, so `karac fix` leaves it.
 

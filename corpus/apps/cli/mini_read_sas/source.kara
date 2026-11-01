@@ -2321,9 +2321,7 @@ impl Sas7 {
         let mut ch = Chunk { d: Vec.new(), s: Vec.new(), row: 0 };
         for j in 0..self.column_count {
             if self.types[j] == b'd' {
-                // `0u64`, not `0`: B-2026-10-29-24 (the literal is not
-                // inferred from the pushed-to element type).
-                ch.d.push(Vec.filled(nrows, 0u64));
+                ch.d.push(Vec.filled(nrows, 0));
             } else {
                 ch.s.push(Vec.filled(nrows, None));
             }

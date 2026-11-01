@@ -144,7 +144,7 @@ the first run matched pandas on all 1,803 lines.
 
 - **B-2026-10-29-13** (fixed in kara 9d11090195): the fix for a keyword used as a binding
   name renames the binding and none of its uses.
-- **B-2026-10-29-14** (open): a `Vec` built from borrowed parameters
+- **B-2026-10-29-14** (fixed in kara c3fb7ea323, which now offers the clone the app writes; with it B-2026-10-29-6, whose fix d2677b5af5 lets `trim_front` return its `collect` directly again): a `Vec` built from borrowed parameters
   passed where a `Vec` is expected has no help or fix.
 - **B-2026-10-28-28** (fixed in 80e76392cf; the app passes `p` itself
   again) and **B-2026-10-29-10** (fixed in kara 03e92379b1), each met once more.
