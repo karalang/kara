@@ -1,0 +1,9 @@
+source = "B-2026-11-01-16"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["eval-order"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-01-16: core-semantics §8.2 evaluates an assignment's place operands before its value, and §8.1 an index's base before its index, so a place rooted in a call (`at(mut b).n = p(5)`, `at(mut b).v[p(1)] = p(9)`, and the `op=` forms) prints `place` first."

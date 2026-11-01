@@ -477,7 +477,7 @@ Pin: `eval_order`.
 2. Then `v` is evaluated.
 3. Then, in order: the bounds check, the read of the current value (for `op=`), the drop of the old value (§7.5), and the store.
 
-Pins: `eval_order`, `ok_compound_assign_once`. Today an index or field place, and every `op=`, follows this order on both backends; a place rooted in a method call (`m.entry(k).or_insert(d).f = v`) still evaluates `v` first (B-2026-11-01-16).
+Pins: `eval_order`, `ok_compound_assign_once`, `ok_assign_place_call_first`, `err_assign_place_call_then_value_reads`.
 
 **8.3 Short circuits.** `and`, `or` and `??` evaluate the right-hand side only when it is needed.
 

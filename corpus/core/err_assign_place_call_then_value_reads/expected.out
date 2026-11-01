@@ -1,0 +1,1 @@
+ERROR at line 8: `m` is read while the place `m.entry(1).or_insert(..)` borrows it mutably (the place is evaluated first, core semantics §8.2)

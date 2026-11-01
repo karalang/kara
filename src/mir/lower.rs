@@ -6822,6 +6822,16 @@ impl<'l, 'a> Bx<'l, 'a> {
             ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
                 self.pre_index(object)
             }
+            // A place rooted in a call (`m.entry(k).or_insert(d).n = v`) runs
+            // the call now, before the value and before any index along the
+            // place (core semantics §8.1, §8.2; B-2026-11-01-16).
+            ExprKind::MethodCall { .. } | ExprKind::Call { .. }
+                if !self.pinned.contains_key(&e.id) =>
+            {
+                let p = self.temp_place(e)?;
+                self.pinned.insert(e.id, p);
+                Ok(())
+            }
             _ => Ok(()),
         }
     }

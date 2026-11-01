@@ -1,0 +1,22 @@
+// Core semantics §8.2: in `p = v` and `p op= v` the place's operands run
+// first, left to right, then the value. A place rooted in a call runs the
+// call before the value and before the indices along the place
+// (B-2026-11-01-16).
+
+fn p(x: i64) -> i64 {
+    println(f"p{x}");
+    x
+}
+struct Bag { n: i64, v: Vec[i64] }
+fn at(b: mut ref Bag) -> mut ref Bag {
+    println("place");
+    b
+}
+fn main() {
+    let mut b = Bag { n: 0, v: vec![0, 0] };
+    at(mut b).n = p(5);
+    at(mut b).n += p(2);
+    at(mut b).v[p(1)] = p(9);
+    at(mut b).v[p(0)] += p(4);
+    println(f"{b.n} {b.v[0]} {b.v[1]}");
+}

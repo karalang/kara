@@ -1,0 +1,9 @@
+source = "B-2026-11-01-16"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["eval-order", "borrow"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-01-16: before the fix the value ran first and the program panicked `key not found` on an empty map; §8.2 runs the place first, which makes the value's read of `m` a conflict with the place's mutable loan (E0516). The expected.out wording of an error pin is guidance, not a byte oracle."
