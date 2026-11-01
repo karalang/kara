@@ -264,6 +264,9 @@ const CORPUS: &[&str] = &[
     // (offset/length/line/column) and, since B-2026-09-19-6, message parity —
     // several of these messages quote the offending prefix, hash run or
     // codepoint, which is where the port diverged.
+    // The release-name wording in these messages ("not available in 0.8",
+    // "identifiers must be ASCII in 0.8") is mirrored in selfhost/src/lexer.kara
+    // and reached by the `#`-guarded and non-ASCII inputs below (7894256e5).
     // Raw identifiers `r#NAME` — payload is bare NAME, span covers `r#NAME`.
     "r#match r#type r#fn",
     "r#x + r#y",
