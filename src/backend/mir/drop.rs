@@ -30,7 +30,7 @@
 use std::collections::HashMap;
 
 use inkwell::module::Linkage;
-use inkwell::values::{FunctionValue, IntValue, PointerValue};
+use inkwell::values::{BasicValue, FunctionValue, IntValue, PointerValue};
 use inkwell::{AtomicOrdering, IntPredicate};
 
 use super::{Cx, R};
@@ -1041,6 +1041,27 @@ impl<'ctx> Cx<'ctx, '_> {
             .into_int_value())
     }
 
+    /// A sequence's length, loaded from its header word at `p`: at most
+    /// `isize::MAX`, which the load says (`!range`), so a loop bounded by
+    /// it can drop the checks its indexes need below it (B-2026-10-31-38)
+    /// and a cursor below it steps without overflowing.
+    /// `KARAC_MIR_LEN_RANGE=0` loads it bare.
+    pub(super) fn load_len(&self, p: PointerValue<'ctx>) -> R<IntValue<'ctx>> {
+        let n = self.load_i64(p)?;
+        if !len_range_flag() {
+            return Ok(n);
+        }
+        if let Some(load) = n.as_instruction_value() {
+            let i64t = self.llcx.i64_type();
+            let range = self.llcx.metadata_node(&[
+                i64t.const_zero().into(),
+                i64t.const_int(i64::MAX as u64, false).into(),
+            ]);
+            let _ = load.set_metadata(range, self.llcx.get_kind_id("range"));
+        }
+        Ok(n)
+    }
+
     pub(super) fn is_zero(&self, v: IntValue<'ctx>) -> R<IntValue<'ctx>> {
         self.builder
             .build_int_compare(IntPredicate::EQ, v, v.get_type().const_zero(), "")
@@ -1075,6 +1096,13 @@ impl<'ctx> Cx<'ctx, '_> {
         self.builder.position_at_end(done);
         Ok(())
     }
+}
+
+/// Whether sequence lengths load with their `!range` (`load_len`);
+/// `KARAC_MIR_LEN_RANGE=0` turns it off.
+fn len_range_flag() -> bool {
+    static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *FLAG.get_or_init(|| std::env::var("KARAC_MIR_LEN_RANGE").as_deref() != Ok("0"))
 }
 
 #[cfg(test)]

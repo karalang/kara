@@ -675,7 +675,7 @@ impl<'ctx> Cx<'ctx, '_> {
                     | TyKind::Intrinsic(crate::mir::ty::IntrinsicTy::Vec(_))
                     | TyKind::Intrinsic(crate::mir::ty::IntrinsicTy::String) => {
                         let p = self.place_ptr(place)?;
-                        self.load_i64(self.offset(p, 8)?)?
+                        self.load_len(self.offset(p, 8)?)?
                     }
                     _ => {
                         return Err(format!(

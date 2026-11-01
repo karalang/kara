@@ -583,17 +583,9 @@ impl<'ctx> Cx<'ctx, '_> {
             }
         }
         let s = self.load_ptr(p)?;
-        let n = self.load_i64(self.offset(p, 8)?)?;
         // A length is at most `isize::MAX`, so a cursor below it steps
         // without overflowing (`StrChars.next`'s `pos + 1`).
-        if let Some(load) = n.as_instruction_value() {
-            let i64t = self.llcx.i64_type();
-            let range = self.llcx.metadata_node(&[
-                i64t.const_zero().into(),
-                i64t.const_int(i64::MAX as u64, false).into(),
-            ]);
-            let _ = load.set_metadata(range, self.llcx.get_kind_id("range"));
-        }
+        let n = self.load_len(self.offset(p, 8)?)?;
         Ok((s, n))
     }
 
@@ -2003,7 +1995,7 @@ impl<'ctx> Cx<'ctx, '_> {
             TyKind::Array(_, n) => Ok((p, self.i64(n))),
             TyKind::Intrinsic(IntrinsicTy::Vec(_) | IntrinsicTy::String)
             | TyKind::Str
-            | TyKind::Slice(_) => Ok((self.load_ptr(p)?, self.load_i64(self.offset(p, 8)?)?)),
+            | TyKind::Slice(_) => Ok((self.load_ptr(p)?, self.load_len(self.offset(p, 8)?)?)),
             _ => Err(format!("a view of a `{}`", self.tys.display(t))),
         }
     }

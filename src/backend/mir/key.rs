@@ -543,7 +543,7 @@ impl<'ctx> Cx<'ctx, '_> {
     /// value itself for a `str`, a slice or a reference to one, the
     /// `String` or `Vec` header otherwise.
     fn seq_parts(&self, p: PointerValue<'ctx>) -> R<(PointerValue<'ctx>, IntValue<'ctx>)> {
-        Ok((self.load_ptr(p)?, self.load_i64(self.offset(p, 8)?)?))
+        Ok((self.load_ptr(p)?, self.load_len(self.offset(p, 8)?)?))
     }
 
     /// The element type of a sequence type, or `None` for text.
