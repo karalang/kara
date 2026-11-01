@@ -63,7 +63,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | missing-feature | 60 |
 | perf | 55 |
 | soundness | 31 |
-| miscompile | 23 |
+| miscompile | 24 |
 | run-vs-build | 19 |
 | other | 15 |
 | codegen-gap | 14 |
@@ -75,7 +75,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 137 |
-| mir | 86 |
+| mir | 87 |
 | mir-llvm | 63 |
 | cli | 48 |
 | ownership | 38 |
@@ -119,6 +119,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-01-9 | 2026-11-01 | typecheck | low | Rust string-method carry-overs `trim_start_matches`, `trim_end_matches`, `trim_matches` and `to_owned` get a bare E0236 "no method 'X' on type 'String'" with no hint (and `trim_matches(|c| ..)` adds a cascaded E0208 on the closure), where `parse::<T>()` and `s.parse()` already get named messages that point at `i64.parse(s)`; Kāra's spellings are `strip_prefix` / `strip_suffix` and `to_string()` | — |
 | B-2026-11-01-10 | 2026-11-01 | typecheck | low | Comparing a library lookup with an owned Option (`m.get(k) == Some(5)`, `m.get(k) == o`, `v.get(i) == o.map(..)`) fails E0208 "cannot compare 'Option[ref i64]' and 'Option[i64]'" with no fix, though the fix is the one the `.copied()` diagnostic already names: `.cloned()` on the ref side (or `?? d`), machine-applicable when the item is Copy | — |
 | B-2026-11-01-11 | 2026-11-01 | ownership+cli | medium | `(x, y) = (y, x)` on two `String` bindings gets the right E0287 fix (drop the parentheses) plus four cascade E0500 move errors with `.clone()` fixes, and `karac fix` applies the clones, not the E0287 edit, leaving `(x.clone(), y.clone()) = (...)` and then `x.clone(), y.clone() = ...`, which no fix repairs; with `i64` bindings the fix works | — |
+| B-2026-11-01-12 | 2026-11-01 | mir | high | A `mut` field of handle-aggregate type passed to a borrowed parameter (`g(h.left, h)` with `a: Option[N]`) is lent in place rather than counted (core-semantics §6.2), so a write to the field through another handle during the call changes what the parameter reads: `cut(h); match a { Some(x) => x.val, None => -1 }` prints -1, want 7 | — |
 
 ### Relocated
 
