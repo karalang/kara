@@ -2409,6 +2409,7 @@ impl Pipeline {
                 for e in crate::provider_escape::check_core_provider_escape(
                     &self.parsed.program,
                     effects,
+                    self.typed.as_ref(),
                 ) {
                     if !errors.iter().any(|o| o.closure_span == e.closure_span) {
                         errors.push(e);

@@ -208,6 +208,7 @@ pub fn check_provider_escape(
 pub fn check_core_provider_escape(
     program: &Program,
     effects: &crate::effectchecker::EffectCheckResult,
+    types: Option<&TypeCheckResult>,
 ) -> Vec<EscapeError> {
     let esc = crate::core_escape::analyze(program);
     // Function name (bare, or `Type.method`) → the resources its effects
@@ -347,6 +348,40 @@ pub fn check_core_provider_escape(
                     .map(|(r, site)| (r.clone(), *site, f.body.span, Some(f.name.clone()))),
             );
         let scopes: Vec<(String, Span, Span, Option<String>)> = scopes.collect();
+        // A task spawned into a group made outside the `with_provider`
+        // outlives the call: the group borrows the task's origins until it
+        // drops (§9.5), and that is after `p` is gone (§14.5,
+        // B-2026-11-01-27).
+        if let Some(types) = types {
+            for (r, site, arg) in spawns_on_outer_groups(&f.body, types) {
+                let (what, used) = match &arg.kind {
+                    ExprKind::Closure { body, .. } => ("this closure".to_string(), uses(body)),
+                    ExprKind::Identifier(n) if fn_res.contains_key(n) => (
+                        format!("function `{n}`, taken as a value,"),
+                        fn_res[n].clone(),
+                    ),
+                    _ => continue,
+                };
+                if used.contains(&r)
+                    && !errors
+                        .iter()
+                        .any(|e: &EscapeError| e.closure_span == arg.span)
+                {
+                    errors.push(EscapeError {
+                        resource: r,
+                        provider_span: site,
+                        closure_span: arg.span,
+                        escape_span: arg.span,
+                        kind: EscapeKind::Core {
+                            what,
+                            why: "spawned on a task group made outside the `with_provider`, \
+                                  which outlives it",
+                            via: None,
+                        },
+                    });
+                }
+            }
+        }
         for (span, what, used, why) in cands {
             for (r, site, extent, via) in &scopes {
                 if used.contains(r) && within(&span, extent) {
@@ -367,6 +402,166 @@ pub fn check_core_provider_escape(
         }
     }
     errors
+}
+
+/// Each `g.spawn(task)` inside a `with_provider[R]` or `providers { }` body
+/// whose group `g` is not bound inside that body (a parameter, a field, or a
+/// binding made before the call): the resource, its binding site and the
+/// task argument. A group bound inside the body drops, and joins its tasks,
+/// before the provider does.
+fn spawns_on_outer_groups<'a>(
+    body: &'a Block,
+    types: &TypeCheckResult,
+) -> Vec<(String, Span, &'a Expr)> {
+    let mut out = Vec::new();
+    walk_block_exprs(body, &mut |e| {
+        let (resources, inner): (Vec<(String, Span)>, Child<'_>) = match &e.kind {
+            ExprKind::Call { callee, args } => match match_with_provider(callee, args) {
+                Some((r, _, b)) => (vec![(r, e.span)], Child::Expr(b)),
+                None => return,
+            },
+            ExprKind::Providers { bindings, body } => (
+                bindings
+                    .iter()
+                    .map(|b| (b.resource.clone(), b.resource_span))
+                    .collect(),
+                Child::Block(body),
+            ),
+            _ => return,
+        };
+        let mut inside: Vec<String> = Vec::new();
+        let mut spawns: Vec<(&Expr, &Expr)> = Vec::new();
+        let mut visit = |x: &'a Expr| {
+            bound_names(x, &mut inside);
+            if let ExprKind::MethodCall {
+                object,
+                method,
+                args,
+                ..
+            } = &x.kind
+            {
+                if method == "spawn" && !args.is_empty() {
+                    spawns.push((object, &args[0].value));
+                }
+            }
+        };
+        match inner {
+            Child::Expr(b) => walk_expr_exprs(b, &mut visit),
+            Child::Block(b) => walk_block_exprs(b, &mut visit),
+        }
+        if let Child::Block(b) = inner {
+            block_bound_names(b, &mut inside);
+        }
+        for (object, arg) in spawns {
+            let mut ty = types.expr_types.get(&SpanKey::from_span(&object.span));
+            while let Some(Type::Ref(i) | Type::MutRef(i)) = ty {
+                ty = Some(i);
+            }
+            if !matches!(ty, Some(Type::Named { name, .. }) if name == "TaskGroup" || name == "IsolatingGroup")
+            {
+                continue;
+            }
+            let Some(root) = place_root(object) else {
+                continue;
+            };
+            if inside.contains(&root) {
+                continue;
+            }
+            for (r, site) in &resources {
+                out.push((r.clone(), *site, arg));
+            }
+        }
+    });
+    out
+}
+
+use crate::index_disjoint::{for_each_child_public, Child};
+
+/// Visit `e` and every expression under it, with the tree's lifetime.
+fn walk_expr_exprs<'a>(e: &'a Expr, f: &mut dyn FnMut(&'a Expr)) {
+    f(e);
+    for_each_child_public(e, &mut |c| match c {
+        Child::Expr(x) => walk_expr_exprs(x, f),
+        Child::Block(b) => walk_block_exprs(b, f),
+    });
+}
+
+fn walk_block_exprs<'a>(b: &'a Block, f: &mut dyn FnMut(&'a Expr)) {
+    for s in &b.stmts {
+        match &s.kind {
+            StmtKind::Let { value, .. } => walk_expr_exprs(value, f),
+            StmtKind::LetUninit { .. } => {}
+            StmtKind::LetElse {
+                value, else_block, ..
+            } => {
+                walk_expr_exprs(value, f);
+                walk_block_exprs(else_block, f);
+            }
+            StmtKind::Assign { target, value } | StmtKind::CompoundAssign { target, value, .. } => {
+                walk_expr_exprs(target, f);
+                walk_expr_exprs(value, f);
+            }
+            StmtKind::MultiAssign { targets, values } => {
+                for x in targets.iter().chain(values) {
+                    walk_expr_exprs(x, f);
+                }
+            }
+            StmtKind::Expr(x) => walk_expr_exprs(x, f),
+            StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => walk_block_exprs(body, f),
+        }
+    }
+    if let Some(x) = &b.final_expr {
+        walk_expr_exprs(x, f);
+    }
+}
+
+/// The names `e` itself binds for its sub-expressions (closure parameters,
+/// loop and arm patterns), and the `let`s of the blocks directly under it.
+fn bound_names(e: &Expr, out: &mut Vec<String>) {
+    let mut pats: Vec<&Pattern> = Vec::new();
+    match &e.kind {
+        ExprKind::Closure { params, .. } => pats.extend(params.iter().map(|p| &p.pattern)),
+        ExprKind::For { pattern, .. }
+        | ExprKind::WhileLet { pattern, .. }
+        | ExprKind::IfLet { pattern, .. } => pats.push(pattern),
+        ExprKind::Match { arms, .. } => pats.extend(arms.iter().map(|a| &a.pattern)),
+        _ => {}
+    }
+    for p in pats {
+        out.extend(p.binding_names());
+    }
+    for_each_child_public(e, &mut |c| {
+        if let Child::Block(b) = c {
+            block_bound_names(b, out);
+        }
+    });
+}
+
+fn block_bound_names(b: &Block, out: &mut Vec<String>) {
+    for s in &b.stmts {
+        match &s.kind {
+            StmtKind::Let { pattern, .. } | StmtKind::LetElse { pattern, .. } => {
+                out.extend(pattern.binding_names())
+            }
+            StmtKind::LetUninit { name, .. } => out.push(name.clone()),
+            StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
+                block_bound_names(body, out)
+            }
+            _ => {}
+        }
+    }
+}
+
+/// The binding a place expression is rooted at: `g`, `self.g`, `w.gs[0]`.
+fn place_root(e: &Expr) -> Option<String> {
+    match &e.kind {
+        ExprKind::Identifier(n) => Some(n.clone()),
+        ExprKind::SelfValue => Some("self".to_string()),
+        ExprKind::FieldAccess { object, .. }
+        | ExprKind::TupleIndex { object, .. }
+        | ExprKind::Index { object, .. } => place_root(object),
+        _ => None,
+    }
 }
 
 /// For each function in `fns`, the resources that a `with_provider[R]` or
