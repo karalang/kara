@@ -91,6 +91,20 @@ later in [docs/deferred.md](docs/deferred.md).
 - A C import (`unsafe extern "C"`) passes integers, `bool`, floats and raw
   pointers; `#[repr(C)]` structs do not cross yet, and exporting a C ABI
   (`pub extern "C" fn`, `--crate-type`) comes in a later release.
+- Two task-safety holes that `karac check` does not yet catch, both fixed
+  in 0.8.1: a closure holding a `shared` value can cross a task boundary
+  when it is stored in a struct field, collection, `Option`, `dyn` or
+  channel, or erased to a plain `Fn` type (core-semantics §6.3,
+  B-2026-11-01-26); and a task spawned inside `with_provider` onto a
+  `TaskGroup` made outside it can outlive the provider (§14.5,
+  B-2026-11-01-27). Until then, keep `shared` state out of stored closures
+  that tasks run, and create a `TaskGroup` inside the `with_provider` its
+  tasks use.
+- A few evaluation-order corners differ from core-semantics §8.2: `m[k] = v`
+  into a `Map` reads a place key after the value (B-2026-11-01-28), and an
+  assignment whose target starts with a call (`at(mut s).n = v`) evaluates
+  `v` first (B-2026-11-01-16, -29). A temporary in a passing `match` guard
+  drops at the end of the statement, not the guard (B-2026-11-01-30).
 
 ---
 
