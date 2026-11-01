@@ -2237,6 +2237,21 @@ impl<'p> Analysis<'p> {
                 tcx.list(l)
             }
             SK::Array { elem, .. } | SK::Slice { elem, .. } => vec![elem],
+            // A `dyn` value owns a value of whichever type was coerced into
+            // it, and its drop runs that type's drop glue (core §12 default
+            // 3; B-2026-11-01-39). Every type the program coerces to a `dyn`
+            // of this trait has a table here, so their union covers it.
+            SK::Dyn { trait_, .. } => {
+                let mut out: Vec<Ty> = Vec::new();
+                for vt in &self.program.vtables {
+                    if matches!(tcx.kind(vt.dyn_ty), SK::Dyn { trait_: t, .. } if t == trait_)
+                        && !out.contains(&vt.concrete)
+                    {
+                        out.push(vt.concrete);
+                    }
+                }
+                out
+            }
             SK::Adt { .. } | SK::Shared { .. } => {
                 let Some((adt, args)) = tcx.adt_of(ty) else {
                     return Vec::new();
