@@ -2495,6 +2495,50 @@ impl<'a> super::TypeChecker<'a> {
                 return Type::Error;
             }
         }
+        // B-2026-11-01-9: Rust's `str` methods with a Kāra twin that no edit
+        // distance reaches, named instead of a bare "no method". Returning
+        // here also skips the arguments, so a closure passed to
+        // `trim_matches` is not reported again with an unknown parameter.
+        if let Some(twin) = rust_string_method_twin(method) {
+            let stringy = *text == Type::Str
+                || matches!(text, Type::Named { name, args } if name == "StringSlice" && args.is_empty());
+            let defined = ["String", "StringSlice"]
+                .iter()
+                .any(|ty| !self.env.find_methods_with_args(ty, &[], method).is_empty());
+            if stringy && !defined {
+                let message = format!(
+                    "no method '{method}' on type '{}': {twin} (library/strings.md)",
+                    type_display(text)
+                );
+                // `to_owned()` and `to_string()` are the same owned copy, so
+                // that one is a rename; the others change what is returned.
+                let rename = (method == "to_owned" && args.is_empty())
+                    .then(|| {
+                        args_close_span
+                            .offset
+                            .checked_sub(1 + method.len())
+                            .filter(|&o| o > object.span.offset)
+                    })
+                    .flatten();
+                match rename {
+                    Some(offset) => self.type_error_with_fix_it(
+                        message,
+                        *span,
+                        TypeErrorKind::NoMethodFound,
+                        super::FixIt {
+                            span: Span {
+                                offset,
+                                length: method.len(),
+                                ..*args_close_span
+                            },
+                            replacement: "to_string".to_string(),
+                        },
+                    ),
+                    None => self.type_error(message, *span, TypeErrorKind::NoMethodFound),
+                }
+                return Type::Error;
+            }
+        }
         let str_routes_to_user_impl = matches!(&obj_ty_for_named, Type::Str)
             && !STRING_BUILTIN_METHODS.contains(&method)
             && !self
@@ -6134,4 +6178,28 @@ pub(super) fn collect_type_param_names(ty: &Type, out: &mut Vec<String>) {
             collect_type_param_names(a, out);
         }
     }
+}
+
+/// The Kāra spelling of a Rust `str` / `String` method that Kāra does not
+/// have under that name (B-2026-11-01-9), as the rest of the sentence after
+/// "no method 'X' on type 'String': ".
+fn rust_string_method_twin(method: &str) -> Option<&'static str> {
+    Some(match method {
+        "trim_start_matches" => {
+            "Kāra strips a prefix with `strip_prefix(p)`, which removes one \
+             occurrence and returns `Option[Str]`, `None` when the text does not \
+             start with `p`; repeat it in a loop to strip every one"
+        }
+        "trim_end_matches" => {
+            "Kāra strips a suffix with `strip_suffix(p)`, which removes one \
+             occurrence and returns `Option[Str]`, `None` when the text does not \
+             end with `p`; repeat it in a loop to strip every one"
+        }
+        "trim_matches" => {
+            "Kāra strips each end with `strip_prefix(p)` and `strip_suffix(p)`, \
+             and whitespace with `trim()`"
+        }
+        "to_owned" => "an owned copy of the text is `to_string()`",
+        _ => return None,
+    })
 }
