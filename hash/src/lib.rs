@@ -512,10 +512,27 @@ pub fn walk_perm_by(n: u64, hash: impl Fn(u64) -> u64) -> (u64, u64) {
 pub fn walk_index(i: u64, n: u64, a: u64, c: u64) -> u64 {
     // `checked_rem`: a walk has `n > 0`, and `%` would keep a
     // division-by-zero panic, and with it std's panic hook, in every
-    // compiled program that walks a table (B-2026-10-29-41).
-    (u128::from(a) * u128::from(i) + u128::from(c))
-        .checked_rem(u128::from(n))
-        .unwrap_or(0) as u64
+    // compiled program that walks a table (B-2026-10-29-41). No `u128`
+    // either: its remainder is `__umodti3`, whose unwind entry on macOS
+    // names Rust's personality and so keeps the panic hook live too
+    // (B-2026-10-30-37).
+    let rem = |x: u64| x.checked_rem(n).unwrap_or(0);
+    let (a, i, c) = (rem(a), rem(i), rem(c));
+    if n <= 1 << 32 {
+        // All three are below 2^32, so `a * i + c` fits a word.
+        return rem(a * i + c);
+    }
+    // `x + y mod n` for `x, y < n`, without overflowing.
+    let add = |x: u64, y: u64| if x >= n - y { x - (n - y) } else { x + y };
+    let (mut r, mut x, mut k) = (c, a, i);
+    while k != 0 {
+        if k & 1 == 1 {
+            r = add(r, x);
+        }
+        x = add(x, x);
+        k >>= 1;
+    }
+    r
 }
 
 /// The words [`walk_perm`] hashes for its multiplier and its offset.
@@ -533,6 +550,38 @@ mod tests {
                 let j = walk_index(i, n, a, c) as usize;
                 assert!(!seen[j], "n = {n}: index {j} visited twice");
                 seen[j] = true;
+            }
+        }
+    }
+
+    /// The word arithmetic agrees with the 128-bit product it replaced
+    /// (B-2026-10-30-37), on both sides of the `2^32` fast path.
+    #[test]
+    fn walk_index_matches_the_wide_product() {
+        let wide = |i: u64, n: u64, a: u64, c: u64| {
+            ((u128::from(a) * u128::from(i) + u128::from(c)) % u128::from(n)) as u64
+        };
+        let sizes = [
+            1,
+            2,
+            7,
+            1000,
+            (1 << 32) - 1,
+            1 << 32,
+            (1 << 32) + 1,
+            u64::MAX / 3,
+            u64::MAX,
+        ];
+        for n in sizes {
+            let (a, c) = walk_perm(n);
+            for i in [0, 1, 2, n / 2, n.saturating_sub(2), n - 1].map(|i| i.min(n - 1)) {
+                assert_eq!(walk_index(i, n, a, c), wide(i, n, a, c), "n = {n}, i = {i}");
+                let (a, c) = (n - 1, n - 1);
+                assert_eq!(
+                    walk_index(i, n, a, c),
+                    wide(i, n, a, c),
+                    "n = {n}, i = {i}, edge"
+                );
             }
         }
     }
