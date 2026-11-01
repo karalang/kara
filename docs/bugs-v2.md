@@ -63,7 +63,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | perf | 69 |
 | missing-feature | 60 |
 | soundness | 34 |
-| miscompile | 28 |
+| miscompile | 29 |
 | run-vs-build | 20 |
 | other | 15 |
 | codegen-gap | 14 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 143 |
-| mir | 95 |
+| mir | 96 |
 | mir-llvm | 76 |
 | cli | 49 |
 | ownership | 38 |
@@ -141,6 +141,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-01-43 | 2026-11-01 | mir-llvm | low | Kata 164's maximum-gap runs 1.30x legacy's instructions on the MIR backend (1.19x its cycles): the seq lane went from 0.84x to 0.99x rustc -O and from 1.17x to 1.42x C | — |
 | B-2026-11-01-44 | 2026-11-01 | mir-llvm | medium | Kata 170's Map[i64, i64]-heavy two-sum-III runs FEWER instructions on the MIR backend than legacy (0.75x) but 1.43x its cycles: the seq lane went from 2.56x to 3.01x rustc -O | — |
 | B-2026-11-01-45 | 2026-11-01 | mir-llvm | low | Four of katas 101-210 lost 10-13% of their wall-time ratio to Rust on the MIR backend, each too small to file alone (1.04-1.12x legacy's instructions, 1.07-1.13x its cycles): the second borderline batch after B-2026-11-01-20 | — |
+| B-2026-11-01-46 | 2026-11-01 | mir | low | A map index assignment still reads a moved (non-`Copy`) place key after the value, against core-semantics 8.2: `m[key] = { key = "b".to_string(); 5 }` on a `Map[String, i64]` inserts "b", want "a" (the `Copy`-key remainder of B-2026-11-01-28 is fixed) | — |
 
 ### Relocated
 
