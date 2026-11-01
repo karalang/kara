@@ -26467,6 +26467,13 @@ fn finish_build(mut lowered: Lowered) -> Result<Lowered, String> {
             &coroutines,
         );
     }
+    // `KARAC_MIR_DUMP=final` prints each body as it runs, after the
+    // whole-program passes.
+    if dump.as_deref() == Some("final") {
+        for body in lowered.program.bodies.values() {
+            eprintln!("{}", crate::mir::pretty::pretty_body(body, &lowered.tys));
+        }
+    }
     phase_time(
         &format!("finish_build ({} bodies)", lowered.program.bodies.len()),
         &mut t,

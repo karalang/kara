@@ -31,6 +31,20 @@ use crate::ty::TyKind as SK;
 pub fn elide_borrowed_retains(program: &mut Program, tys: &TyInterner, skip: &BTreeSet<String>) {
     let safe = count_safe(program, tys, skip);
     let defined: BTreeSet<String> = program.bodies.keys().cloned().collect();
+    // The count-safe bodies with no `mut` parameter: nothing they run can
+    // change a place their caller lends them.
+    let lendable: BTreeSet<String> = program
+        .bodies
+        .values()
+        .filter(|b| {
+            safe.get(&b.instance.name).copied().unwrap_or(false)
+                && !(1..=b.arg_count).any(|i| writes_a_handle(tys, b.locals[i].ty))
+        })
+        .map(|b| b.instance.name.clone())
+        .collect();
+    for body in program.bodies.values_mut() {
+        lend_fields_to_safe_calls(body, tys, &defined, &lendable);
+    }
     for body in program.bodies.values_mut() {
         if !safe.get(&body.instance.name).copied().unwrap_or(false) {
             continue;
@@ -46,6 +60,350 @@ pub fn elide_borrowed_retains(program: &mut Program, tys: &TyInterner, skip: &BT
         }
         read_scrutinee_parts(body, tys, &defined);
         rewrite(body, tys);
+    }
+}
+
+/// `t = retain(P)` (or `r = &P; t = <native>.clone(move r)`), `b = &t`,
+/// `g(.., move b, ..)`, `drop(t)`, where `P` is a `mut` field of a
+/// `shared` value: the copy a borrowed parameter takes of such a field
+/// (core semantics §6.2, B-2026-11-01-12). When `g` is count-safe with
+/// no `mut` parameter, nothing it runs can overwrite the field, so `b`
+/// borrows `P` itself and the count `t` takes, and its drop, go: a tree
+/// walk `walk(node.left)` counts nothing per node.
+fn lend_fields_to_safe_calls(
+    body: &mut Body,
+    tys: &TyInterner,
+    defined: &BTreeSet<String>,
+    lendable: &BTreeSet<String>,
+) {
+    // Where each local is defined, and how often it is mentioned.
+    let mut mentions: BTreeMap<Local, (usize, usize, usize, usize)> = BTreeMap::new();
+    visit_places(body, &mut |p, role| {
+        let m = mentions.entry(p.local).or_default();
+        match role {
+            Role::Dest => m.0 += 1,
+            Role::Read if p.projection.is_empty() => m.1 += 1,
+            Role::Drop => m.2 += 1,
+            _ => m.3 += 1,
+        }
+    });
+    let mut found = Vec::new();
+    for (cbi, data) in body.blocks.iter().enumerate() {
+        let TerminatorKind::Call {
+            func:
+                Operand::Const(Const {
+                    kind: ConstKind::FnDef(inst),
+                    ..
+                }),
+            args,
+            destination,
+            ..
+        } = &data.terminator.kind
+        else {
+            continue;
+        };
+        if !lendable.contains(&inst.name)
+            || matches!(
+                tys.kind(body.local(destination.local).ty),
+                TyKind::Ref(_) | TyKind::MutRef(_) | TyKind::Slice { .. }
+            )
+        {
+            continue;
+        }
+        // A `mut` borrow of something holding a handle, passed alongside,
+        // could be a borrow of the field itself.
+        let mut_arg = args.iter().any(|o| match o {
+            Operand::Copy(p) | Operand::Move(p) => {
+                place_ty(body, tys, p).map_or(true, |pt| writes_a_handle(tys, pt.ty))
+            }
+            Operand::Const(_) => false,
+        });
+        if mut_arg {
+            continue;
+        }
+        for (ai, o) in args.iter().enumerate() {
+            let Operand::Move(bp) = o else { continue };
+            if !bp.projection.is_empty() || bp.local.index() <= body.arg_count {
+                continue;
+            }
+            if let Some(hit) = lent_copy(body, tys, defined, &mentions, cbi, bp.local) {
+                found.push((cbi, ai, hit));
+            }
+        }
+    }
+    for (_, _, (b, t, field, def)) in found {
+        match def {
+            CopyDef::Retain(bi, si) => body.blocks[bi].statements[si].kind = StatementKind::Nop,
+            CopyDef::Clone(bi, r) => {
+                let TerminatorKind::Call {
+                    target: Some(target),
+                    ..
+                } = body.blocks[bi].terminator.kind
+                else {
+                    unreachable!("a clone returns")
+                };
+                body.blocks[bi].terminator.kind = TerminatorKind::Goto { target };
+                for data in &mut body.blocks {
+                    for st in &mut data.statements {
+                        if matches!(&st.kind, StatementKind::Assign(d, _) if *d == Place::local(r))
+                        {
+                            st.kind = StatementKind::Nop;
+                        }
+                    }
+                }
+            }
+        }
+        for data in &mut body.blocks {
+            for st in &mut data.statements {
+                if let StatementKind::Assign(d, Rvalue::Ref(BorrowKind::Shared, q)) = &mut st.kind {
+                    if *d == Place::local(b) && *q == Place::local(t) {
+                        *q = field.clone();
+                    }
+                }
+            }
+            let k = &mut data.terminator.kind;
+            if let TerminatorKind::Drop { place, target, .. } = k {
+                if *place == Place::local(t) {
+                    *k = TerminatorKind::Goto { target: *target };
+                }
+            }
+        }
+    }
+}
+
+enum CopyDef {
+    /// `t = retain(P)` at block, statement.
+    Retain(usize, usize),
+    /// `r = &P; t = <native>.clone(move r)`, the call ending the block.
+    Clone(usize, Local),
+}
+
+/// Is `b`, moved into the call ending block `cbi`, `b = &t` with `t` a
+/// copy of a `mut` field of a `shared` value, taken with nothing but
+/// plain statements between it and the call? Returns `b`, `t`, the
+/// field's place and how `t` is defined.
+fn lent_copy(
+    body: &Body,
+    tys: &TyInterner,
+    defined: &BTreeSet<String>,
+    mentions: &BTreeMap<Local, (usize, usize, usize, usize)>,
+    cbi: usize,
+    b: Local,
+) -> Option<(Local, Local, Place, CopyDef)> {
+    // `b` is defined once, as `&t`, and moved once, into the call.
+    if mentions.get(&b).copied() != Some((1, 0, 0, 1)) {
+        return None;
+    }
+    let mut t = None;
+    let mut bdef = None;
+    for (bi, data) in body.blocks.iter().enumerate() {
+        for (si, st) in data.statements.iter().enumerate() {
+            if let StatementKind::Assign(d, Rvalue::Ref(BorrowKind::Shared, q)) = &st.kind {
+                if *d == Place::local(b) && q.projection.is_empty() {
+                    t = Some(q.local);
+                    bdef = Some((bi, si));
+                }
+            }
+        }
+    }
+    let t = t?;
+    let (bbi, bsi) = bdef?;
+    // `t` is defined once, borrowed once (by `b`), dropped, nothing else.
+    let m = mentions.get(&t).copied()?;
+    if t.index() <= body.arg_count || m.0 != 1 || m.1 != 1 || m.3 != 0 {
+        return None;
+    }
+    if !matches!(tys.kind(body.local(t).ty), TyKind::Shared(_))
+        && !is_option_like(tys, body.local(t).ty)
+    {
+        return None;
+    }
+    // Where `t` is defined.
+    let mut def = None;
+    for (bi, data) in body.blocks.iter().enumerate() {
+        for (si, st) in data.statements.iter().enumerate() {
+            if let StatementKind::Assign(d, rv) = &st.kind {
+                if *d == Place::local(t) {
+                    let Rvalue::Retain(p) = rv else { return None };
+                    def = Some((CopyDef::Retain(bi, si), p.clone(), bi, Some(si)));
+                }
+            }
+        }
+        if let TerminatorKind::Call {
+            func,
+            args,
+            destination,
+            target: Some(_),
+            ..
+        } = &data.terminator.kind
+        {
+            if *destination == Place::local(t) {
+                let Operand::Const(Const {
+                    kind: ConstKind::FnDef(inst),
+                    ..
+                }) = func
+                else {
+                    return None;
+                };
+                if defined.contains(&inst.name)
+                    || inst.name != format!("{}.clone", tys.display(body.local(t).ty))
+                {
+                    return None;
+                }
+                let [Operand::Move(rp)] = args.as_slice() else {
+                    return None;
+                };
+                if !rp.projection.is_empty()
+                    || mentions.get(&rp.local).copied() != Some((1, 0, 0, 1))
+                {
+                    return None;
+                }
+                let mut src = None;
+                for d2 in &body.blocks {
+                    for st in &d2.statements {
+                        if let StatementKind::Assign(d, Rvalue::Ref(BorrowKind::Shared, q)) =
+                            &st.kind
+                        {
+                            if *d == Place::local(rp.local) {
+                                src = Some(q.clone());
+                            }
+                        }
+                    }
+                }
+                def = Some((CopyDef::Clone(bi, rp.local), src?, bi, None));
+            }
+        }
+    }
+    let (def, field, dbi, dsi) = def?;
+    // The field: a `mut` field of a `shared` value (the only place -12
+    // copies), read through nothing the call could rebind.
+    if !matches!(field.projection.last(), Some(ProjElem::Field(..)))
+        || !through_shared(body, tys, &field)
+        || field
+            .projection
+            .iter()
+            .any(|e| matches!(e, ProjElem::Index(_)))
+    {
+        return None;
+    }
+    // From the copy to the call: plain statements and gotos, writing
+    // nothing through a handle and taking no `mut` borrow through one.
+    let (mut bi, mut si) = match dsi {
+        Some(s) => (dbi, s + 1),
+        None => match body.blocks[dbi].terminator.kind {
+            TerminatorKind::Call {
+                target: Some(tg), ..
+            } => (tg.index(), 0),
+            _ => return None,
+        },
+    };
+    let mut seen_b = false;
+    for _ in 0..body.blocks.len() + 1 {
+        let data = &body.blocks[bi];
+        for (k, st) in data.statements.iter().enumerate().skip(si) {
+            if (bi, k) == (bbi, bsi) {
+                seen_b = true;
+            }
+            match &st.kind {
+                StatementKind::Assign(d, rv) => {
+                    if through_shared(body, tys, d)
+                        || matches!(rv, Rvalue::Ref(BorrowKind::Mut, p) if through_shared(body, tys, p))
+                    {
+                        return None;
+                    }
+                }
+                StatementKind::StorageLive(_)
+                | StatementKind::StorageDead(_)
+                | StatementKind::Nop => {}
+                _ => return None,
+            }
+        }
+        if bi == cbi {
+            return seen_b.then_some((b, t, field, def));
+        }
+        match data.terminator.kind {
+            TerminatorKind::Goto { target } => {
+                bi = target.index();
+                si = 0;
+            }
+            _ => return None,
+        }
+    }
+    None
+}
+
+/// Is `ty` a `mut` borrow through which a handle could be overwritten:
+/// a `mut ref` or `mut` slice of anything holding a `shared` value or a
+/// type this cannot see into? A `mut ref Vec[i64]` beside a lent field
+/// cannot reach it.
+fn writes_a_handle(tys: &TyInterner, ty: Ty) -> bool {
+    match tys.tcx().kind(ty) {
+        SK::MutRef(i)
+        | SK::Slice {
+            elem: i,
+            mutable: true,
+        } => holds_a_handle(tys, i, &mut BTreeSet::new()),
+        _ => false,
+    }
+}
+
+fn holds_a_handle(tys: &TyInterner, ty: Ty, seen: &mut BTreeSet<Ty>) -> bool {
+    if !seen.insert(ty) {
+        return false;
+    }
+    let tcx = tys.tcx();
+    match tcx.kind(ty) {
+        SK::Int(_)
+        | SK::UInt(_)
+        | SK::Float(_)
+        | SK::Bool
+        | SK::Char
+        | SK::Str
+        | SK::Unit
+        | SK::Never => false,
+        // A collection holds what its arguments do.
+        SK::Tuple(l) | SK::Intrinsic { args: l, .. } => tcx
+            .list(l)
+            .into_iter()
+            .any(|t| holds_a_handle(tys, t, seen)),
+        SK::Array { elem, .. } | SK::Slice { elem, .. } | SK::Vector { elem, .. } => {
+            holds_a_handle(tys, elem, seen)
+        }
+        SK::Ref(i) | SK::MutRef(i) => holds_a_handle(tys, i, seen),
+        SK::Adt { .. } => match tcx.adt_of(ty) {
+            None => true,
+            Some((adt, args)) => {
+                if adt.library_name().is_some() {
+                    let lib = adt.library_name().unwrap_or("");
+                    crate::ty::HANDLES.contains(&lib)
+                        || crate::ty::LIBRARY_CELLS.contains(&lib)
+                        || args.iter().any(|&t| holds_a_handle(tys, t, seen))
+                } else {
+                    adt.variants.iter().any(|v| {
+                        v.fields.iter().any(|(_, t)| {
+                            let t = tcx.subst(*t, &args, &[]);
+                            holds_a_handle(tys, t, seen)
+                        })
+                    })
+                }
+            }
+        },
+        _ => true,
+    }
+}
+
+/// A value whose copy is a native `clone` of handles: `Option[shared T]`
+/// and the like, which the clone counts and nothing else.
+fn is_option_like(tys: &TyInterner, ty: Ty) -> bool {
+    let tcx = tys.tcx();
+    match tcx.adt_of(ty) {
+        Some((adt, args)) => {
+            adt.library_name() == Some("Option")
+                && args
+                    .iter()
+                    .all(|&t| matches!(tcx.kind(t), SK::Shared { .. }))
+        }
+        None => false,
     }
 }
 
@@ -807,6 +1165,48 @@ fn main() {\n    let h = N { val: 1, left: Some(N { val: 7, left: Some(N { val: 
     #[test]
     fn a_handle_returned_keeps_its_count() {
         assert_eq!(retains("first"), 1);
+    }
+
+    // A `mut` field lent to a borrowed parameter is copied (core
+    // semantics §6.2, B-2026-11-01-12) unless the callee can write no
+    // field: `walk` reads, `snip` writes `h.left` through `h`.
+    const LENT: &str = "shared struct N { val: i64, mut left: Option[N] }\n\
+fn walk(a: Option[N], out: mut ref Vec[i64]) -> i64 {\n    match a {\n        Some(x) => {\n            out.push(x.val);\n            x.val + walk(x.left, mut out)\n        }\n        None => 0\n    }\n}\n\
+fn snip(a: Option[N], h: N) -> i64 {\n    h.left = None;\n    match a {\n        Some(x) => x.val,\n        None => 0\n    }\n}\n\
+fn main() {\n    let h = N { val: 1, left: Some(N { val: 7, left: Some(N { val: 9, left: None }) }) };\n    let mut out: Vec[i64] = Vec.new();\n    println(walk(h.left, mut out));\n    println(snip(h.left, h));\n    println(walk(h.left, mut out));\n    println(out.len());\n}\n";
+
+    /// The native `clone` calls left in `name` of `src`.
+    fn clones(src: &str, name: &str) -> usize {
+        let l = build_source(src).expect("MIR");
+        let body = l
+            .program
+            .bodies
+            .values()
+            .find(|b| b.instance.name == name)
+            .expect("the body");
+        body.blocks
+            .iter()
+            .filter(|b| match &b.terminator.kind {
+                crate::mir::TerminatorKind::Call {
+                    func:
+                        crate::mir::Operand::Const(crate::mir::Const {
+                            kind: crate::mir::ConstKind::FnDef(inst),
+                            ..
+                        }),
+                    ..
+                } => inst.name.ends_with(".clone"),
+                _ => false,
+            })
+            .count()
+    }
+
+    #[test]
+    fn a_field_lent_to_a_reading_callee_is_not_copied() {
+        // `walk(x.left, mut out)` and the two `walk(h.left, ..)`s lend the
+        // field; `snip(h.left, h)` copies it, since `snip` cuts it.
+        assert_eq!(clones(LENT, "walk"), 0);
+        assert_eq!(clones(LENT, "main"), 1);
+        assert_eq!(run_source(LENT).expect("runs").0, "16\n7\n0\n2\n");
     }
 
     #[test]
