@@ -1646,10 +1646,32 @@ impl<'a> super::TypeChecker<'a> {
                 self.report_wrong_variant_root(path, expected, pattern.span);
                 let struct_name = path.last().cloned().unwrap_or_default();
 
+                // A struct VARIANT of the scrutinee's enum wins over a struct
+                // of the same name. Every lookup below used to ask
+                // `env.structs` first, so `Stmt.Match { cases }` read its
+                // field types from the library's `Match` struct: `cases`
+                // bound at an error type (MIR then refused the arm) and an
+                // `i64` field bound as a borrow (B-2026-11-01-6).
+                let variant_fields: Option<Vec<(String, Type)>> = match expected {
+                    Type::Named { name, .. } => self.env.enums.get(name).and_then(|e| {
+                        e.variants.iter().find(|(n, _)| n == &struct_name).and_then(
+                            |(_, v)| match v {
+                                VariantTypeInfo::Struct(fields) => Some(fields.clone()),
+                                _ => None,
+                            },
+                        )
+                    }),
+                    _ => None,
+                };
+                let names_struct =
+                    variant_fields.is_none() && self.env.structs.contains_key(&struct_name);
+
                 // B-2026-09-01-38 — design.md § Part 8 `Drop` rejects a
                 // partial move out of a `Drop`-implementing struct, and a
                 // struct pattern is one spelling of that move.
-                self.reject_partial_move_pattern(pattern.span, &struct_name, fields, mode);
+                if variant_fields.is_none() {
+                    self.reject_partial_move_pattern(pattern.span, &struct_name, fields, mode);
+                }
 
                 // `#[non_exhaustive]` slice 4 pattern half — cross-package
                 // exhaustive struct pattern (no `..`) on a `#[non_exhaustive]`
@@ -1660,7 +1682,7 @@ impl<'a> super::TypeChecker<'a> {
                 // points at inserting `..` before the closing brace so the
                 // pattern keeps matching when the defining package adds
                 // fields.
-                if let Some(info) = self.env.structs.get(&struct_name) {
+                if let Some(info) = self.env.structs.get(&struct_name).filter(|_| names_struct) {
                     if info.is_non_exhaustive
                         && info.defining_stdlib_origin
                         && !self.current_fn_stdlib_origin
@@ -1710,30 +1732,16 @@ impl<'a> super::TypeChecker<'a> {
                 }
 
                 // Look up struct or enum variant
-                let field_types: Option<Vec<(String, Type)>> =
-                    if let Some(info) = self.env.structs.get(&struct_name) {
-                        Some(
-                            info.fields
-                                .iter()
-                                .map(|(n, t, _)| (n.clone(), t.clone()))
-                                .collect(),
-                        )
-                    } else if let Type::Named { name, .. } = expected {
-                        self.env.enums.get(name).and_then(|e| {
-                            e.variants
-                                .iter()
-                                .find(|(n, _)| n == &struct_name)
-                                .and_then(|(_, v)| {
-                                    if let VariantTypeInfo::Struct(fields) = v {
-                                        Some(fields.clone())
-                                    } else {
-                                        None
-                                    }
-                                })
-                        })
-                    } else {
-                        None
-                    };
+                let field_types: Option<Vec<(String, Type)>> = if variant_fields.is_some() {
+                    variant_fields
+                } else {
+                    self.env.structs.get(&struct_name).map(|info| {
+                        info.fields
+                            .iter()
+                            .map(|(n, t, _)| (n.clone(), t.clone()))
+                            .collect()
+                    })
+                };
 
                 // Substitute the head's generic params with the scrutinee's
                 // concrete args, exactly as the `TupleVariant` arm above does
@@ -1743,18 +1751,19 @@ impl<'a> super::TypeChecker<'a> {
                 // "cannot cast 'D' to 'i64'" while the tuple-shaped `Err(e)`
                 // against `Result[i64, MyError]` resolved correctly. Generic
                 // structs take the same path and had the same gap.
-                let head_params: Vec<String> =
-                    if let Some(info) = self.env.structs.get(&struct_name) {
-                        info.generic_params.clone()
-                    } else if let Type::Named { name, .. } = expected {
-                        self.env
-                            .enums
-                            .get(name)
-                            .map(|e| e.generic_params.clone())
-                            .unwrap_or_default()
-                    } else {
-                        Vec::new()
-                    };
+                let head_params: Vec<String> = if let Some(info) =
+                    self.env.structs.get(&struct_name).filter(|_| names_struct)
+                {
+                    info.generic_params.clone()
+                } else if let Type::Named { name, .. } = expected {
+                    self.env
+                        .enums
+                        .get(name)
+                        .map(|e| e.generic_params.clone())
+                        .unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
                 let field_types = field_types.map(|ft| {
                     let args: &[Type] = match expected {
                         Type::Named { args, .. } => args,
