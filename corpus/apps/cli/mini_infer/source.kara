@@ -1,0 +1,3708 @@
+// mini_infer: a type checker for a subset of OCaml, the way an editor's
+// language server runs one. It lexes and parses .ml source, infers every
+// type with Hindley-Milner inference (union-find variables and levels-based
+// generalisation, as OCaml's typer does), reports the first type error in
+// each top-level item with OCaml's wording, warns about non-exhaustive and
+// unused match cases (Maranget's usefulness algorithm), and answers
+// "what is the type under the cursor". The jobs in data/jobs.txt check six
+// programs, hover over them, and check one-line programs.
+
+// ------------------------------------------------------------ lexer
+
+#[derive(Copy, Clone)]
+struct Loc {
+    sl: i64,
+    sc: i64,
+    el: i64,
+    ec: i64,
+    so: i64,
+    eo: i64,
+}
+
+fn join(a: Loc, b: Loc) -> Loc {
+    Loc { sl: a.sl, sc: a.sc, el: b.el, ec: b.ec, so: a.so, eo: b.eo }
+}
+
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum TokK {
+    IntLit,
+    TextLit,
+    LIdent,
+    UIdent,
+    TyVar,
+    Kw,
+    Sym,
+    Eof,
+}
+
+#[derive(Clone)]
+struct Tok {
+    kind: TokK,
+    text: String,
+    span: Loc,
+}
+
+#[derive(Clone)]
+struct Diag {
+    span: Loc,
+    level: String,
+    msg: String,
+    notes: Vec[String],
+}
+
+fn diag(span: Loc, msg: own String) -> Diag {
+    Diag { span: span, level: "error".to_string(), msg: msg, notes: Vec.new() }
+}
+
+fn is_keyword(s: Str) -> bool {
+    match s {
+        "let" | "rec" | "and" | "in" | "fun" | "function" | "if" | "then" | "else" => true,
+        "match" | "with" | "when" | "type" | "of" | "true" | "false" | "mod" => true,
+        _ => false,
+    }
+}
+
+fn is_digit(c: u8) -> bool {
+    c >= b'0' and c <= b'9'
+}
+
+fn is_lower(c: u8) -> bool {
+    c >= b'a' and c <= b'z'
+}
+
+fn is_upper(c: u8) -> bool {
+    c >= b'A' and c <= b'Z'
+}
+
+fn is_ident_char(c: u8) -> bool {
+    is_digit(c) or is_lower(c) or is_upper(c) or c == b'_' or c == b'\''
+}
+
+fn bytes_text(b: ref Vec[u8], a: i64, e: i64) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    for k in a..e {
+        out.push(b[k]);
+    }
+    String.from_utf8(out).unwrap_or(String.new())
+}
+
+// The two-character symbols, longest match first; then the single ones.
+fn syms2() -> Vec[String] {
+    [";;", "::", "->", "<>", "<=", ">=", "||", "&&"].to_vec()
+}
+
+fn is_sym1(c: u8) -> bool {
+    match c {
+        b'(' | b')' | b'[' | b']' | b'{' | b'}' | b',' | b';' | b':' | b'=' => true,
+        b'<' | b'>' | b'+' | b'-' | b'*' | b'/' | b'^' | b'|' | b'.' | b'@' => true,
+        _ => false,
+    }
+}
+
+struct Lx {
+    b: Vec[u8],
+    i: i64,
+    line: i64,
+    col: i64,
+}
+
+impl Lx {
+    fn at(ref self, k: i64) -> u8 {
+        let j = self.i + k;
+        if j < self.b.len() { self.b[j] } else { 0 }
+    }
+
+    fn adv(mut ref self, k: i64) {
+        for _ in 0..k {
+            if self.b[self.i] == b'\n' {
+                self.line += 1;
+                self.col = 1;
+            } else {
+                self.col += 1;
+            }
+            self.i += 1;
+        }
+    }
+
+    fn here(ref self, w: i64) -> Loc {
+        Loc { sl: self.line, sc: self.col, el: self.line, ec: self.col + w, so: self.i, eo: self.i + w }
+    }
+}
+
+fn lex(src: Str) -> Result[Vec[Tok], Diag] {
+    let mut lx = Lx { b: src.bytes().to_vec(), i: 0, line: 1, col: 1 };
+    let n = lx.b.len();
+    let mut toks: Vec[Tok] = Vec.new();
+    loop {
+        // whitespace and nested comments
+        while lx.i < n {
+            let c = lx.at(0);
+            if c == b' ' or c == b'\t' or c == b'\r' or c == b'\n' {
+                lx.adv(1);
+            } else if c == b'(' and lx.at(1) == b'*' {
+                let start = lx.here(2);
+                let mut depth = 0;
+                loop {
+                    if lx.i >= n {
+                        return Err(diag(start, "this comment is not terminated".to_string()));
+                    }
+                    if lx.at(0) == b'(' and lx.at(1) == b'*' {
+                        depth += 1;
+                        lx.adv(2);
+                    } else if lx.at(0) == b'*' and lx.at(1) == b')' {
+                        depth -= 1;
+                        lx.adv(2);
+                        if depth == 0 {
+                            break;
+                        }
+                    } else {
+                        lx.adv(1);
+                    }
+                }
+            } else {
+                break;
+            }
+        }
+        if lx.i >= n {
+            toks.push(Tok { kind: TokK.Eof, text: String.new(), span: lx.here(0) });
+            return Ok(toks);
+        }
+        let (sl, sc, so) = (lx.line, lx.col, lx.i);
+        let c = lx.at(0);
+        let mut kind = TokK.Sym;
+        let mut text = String.new();
+        if is_digit(c) {
+            let mut j = lx.i;
+            while j < n and is_digit(lx.b[j]) {
+                j += 1;
+            }
+            kind = TokK.IntLit;
+            text = bytes_text(lx.b, lx.i, j);
+            lx.adv(j - lx.i);
+        } else if c == b'"' {
+            let start = lx.here(1);
+            lx.adv(1);
+            let mut buf: Vec[u8] = Vec.new();
+            loop {
+                if lx.i >= n or lx.at(0) == b'\n' {
+                    return Err(diag(start, "this string literal is not terminated".to_string()));
+                }
+                let d = lx.at(0);
+                if d == b'"' {
+                    lx.adv(1);
+                    break;
+                }
+                if d == b'\\' {
+                    let e = lx.at(1);
+                    let esc: u8 = match e {
+                        b'n' => b'\n',
+                        b't' => b'\t',
+                        b'\\' => b'\\',
+                        b'"' => b'"',
+                        _ => 0,
+                    };
+                    if esc == 0 {
+                        let what = if e == 0 { String.new() } else { bytes_text(lx.b, lx.i + 1, lx.i + 2) };
+                        return Err(diag(lx.here(2), f"illegal backslash escape in string: \\{what}"));
+                    }
+                    buf.push(esc);
+                    lx.adv(2);
+                } else {
+                    buf.push(d);
+                    lx.adv(1);
+                }
+            }
+            kind = TokK.TextLit;
+            text = String.from_utf8(buf).unwrap_or(String.new());
+        } else if c == b'\'' and is_lower(lx.at(1)) {
+            let mut j = lx.i + 1;
+            while j < n and is_ident_char(lx.b[j]) {
+                j += 1;
+            }
+            kind = TokK.TyVar;
+            text = bytes_text(lx.b, lx.i + 1, j);
+            lx.adv(j - lx.i);
+        } else if is_lower(c) or is_upper(c) or c == b'_' {
+            let mut j = lx.i;
+            while j < n and is_ident_char(lx.b[j]) {
+                j += 1;
+            }
+            text = bytes_text(lx.b, lx.i, j);
+            if text == "_" {
+                kind = TokK.Sym;
+            } else if is_upper(c) {
+                kind = TokK.UIdent;
+            } else if is_keyword(text) {
+                kind = TokK.Kw;
+            } else {
+                kind = TokK.LIdent;
+            }
+            lx.adv(j - lx.i);
+        } else {
+            let two = if lx.i + 2 <= n { bytes_text(lx.b, lx.i, lx.i + 2) } else { String.new() };
+            let mut found = false;
+            for s in syms2().iter() {
+                if two == *s {
+                    found = true;
+                }
+            }
+            if found {
+                text = two;
+            } else if is_sym1(c) {
+                text = bytes_text(lx.b, lx.i, lx.i + 1);
+            } else {
+                let ch = bytes_text(lx.b, lx.i, lx.i + 1);
+                return Err(diag(lx.here(1), f"illegal character ({ch})"));
+            }
+            kind = TokK.Sym;
+            lx.adv(text.len());
+        }
+        toks.push(Tok { kind: kind, text: text, span: Loc { sl: sl, sc: sc, el: lx.line, ec: lx.col, so: so, eo: lx.i } });
+    }
+}
+
+// ------------------------------------------------------------ syntax
+// One node type for expressions and patterns; `kind` names the form and
+// the other fields are used as the form needs them.
+
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum Nk {
+    EInt,
+    EText,
+    EBool,
+    EUnit,
+    EVar,
+    EPath,
+    ECtor,
+    ETuple,
+    EList,
+    EOp,
+    ENeg,
+    EApp,
+    EFun,
+    EFunction,
+    EMatch,
+    EIf,
+    ESeq,
+    EConstraint,
+    ELet,
+    ERecord,
+    EWith,
+    EField,
+    PWild,
+    PVar,
+    PInt,
+    PText,
+    PBool,
+    PUnit,
+    PTuple,
+    PCons,
+    PList,
+    PCtor,
+    PRecord,
+    PConstraint,
+}
+
+#[derive(Clone)]
+struct Node {
+    kind: Nk,
+    span: Loc,
+    name: String,
+    kids: Vec[Node],
+    pats: Vec[Node],
+    arms: Vec[Arm],
+    binds: Vec[Binding],
+    fields: Vec[FieldE],
+    ty: Vec[TyExpr],
+    flag: bool,
+}
+
+#[derive(Clone)]
+struct Arm {
+    pat: Node,
+    guard: Vec[Node],
+    body: Node,
+}
+
+#[derive(Clone)]
+struct Binding {
+    pat: Node,
+    rhs: Node,
+    span: Loc,
+}
+
+// A record field in an expression or pattern; `value` is empty for the
+// field of an access `e.f`.
+#[derive(Clone)]
+struct FieldE {
+    name: String,
+    span: Loc,
+    value: Vec[Node],
+}
+
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum TyK {
+    TVar,
+    TCon,
+    TArrow,
+    TTuple,
+}
+
+#[derive(Clone)]
+struct TyExpr {
+    kind: TyK,
+    span: Loc,
+    name: String,
+    args: Vec[TyExpr],
+}
+
+#[derive(Clone)]
+struct CtorDecl {
+    name: String,
+    span: Loc,
+    args: Vec[TyExpr],
+}
+
+#[derive(Clone)]
+struct FieldDecl {
+    name: String,
+    span: Loc,
+    ty: TyExpr,
+}
+
+const DECL_VARIANT: i64 = 0;
+const DECL_RECORD: i64 = 1;
+const DECL_ALIAS: i64 = 2;
+
+#[derive(Clone)]
+struct TypeDecl {
+    name: String,
+    params: Vec[String],
+    span: Loc,
+    kind: i64,
+    ctors: Vec[CtorDecl],
+    fields: Vec[FieldDecl],
+    alias: Vec[TyExpr],
+}
+
+#[derive(Clone)]
+struct Item {
+    is_type: bool,
+    span: Loc,
+    flag: bool,
+    binds: Vec[Binding],
+    decls: Vec[TypeDecl],
+}
+
+fn node(kind: Nk, span: Loc) -> Node {
+    Node {
+        kind: kind,
+        span: span,
+        name: String.new(),
+        kids: Vec.new(),
+        pats: Vec.new(),
+        arms: Vec.new(),
+        binds: Vec.new(),
+        fields: Vec.new(),
+        ty: Vec.new(),
+        flag: false,
+    }
+}
+
+fn named(kind: Nk, span: Loc, name: Str) -> Node {
+    let mut n = node(kind, span);
+    n.name = name.to_string();
+    n
+}
+
+fn with_kids(kind: Nk, span: Loc, kids: own Vec[Node]) -> Node {
+    let mut n = node(kind, span);
+    n.kids = kids;
+    n
+}
+
+fn tyexpr(kind: TyK, span: Loc, name: Str, args: own Vec[TyExpr]) -> TyExpr {
+    TyExpr { kind: kind, span: span, name: name.to_string(), args: args }
+}
+
+// ------------------------------------------------------------ parser
+
+const NLEVELS: i64 = 7;
+
+// The binary operators by level, loosest first.
+fn level_ops(lvl: i64) -> Vec[String] {
+    match lvl {
+        0 => ["||"].to_vec(),
+        1 => ["&&"].to_vec(),
+        2 => ["=", "<>", "<", ">", "<=", ">="].to_vec(),
+        3 => ["^", "@"].to_vec(),
+        4 => ["::"].to_vec(),
+        5 => ["+", "-"].to_vec(),
+        _ => ["*", "/", "mod"].to_vec(),
+    }
+}
+
+fn level_right(lvl: i64) -> bool {
+    lvl == 3 or lvl == 4
+}
+
+struct Ps {
+    toks: Vec[Tok],
+    i: i64,
+    last: Loc,
+}
+
+impl Ps {
+    fn idx(ref self, k: i64) -> i64 {
+        let j = self.i + k;
+        if j < self.toks.len() { j } else { self.toks.len() - 1 }
+    }
+
+    fn kind(ref self, k: i64) -> TokK {
+        self.toks[self.idx(k)].kind
+    }
+
+    fn tok(ref self, k: i64) -> Tok {
+        self.toks[self.idx(k)].clone()
+    }
+
+    fn at_k(ref self, text: Str, k: i64) -> bool {
+        let j = self.idx(k);
+        let kd = self.toks[j].kind;
+        (kd == TokK.Sym or kd == TokK.Kw) and self.toks[j].text == text
+    }
+
+    fn at(ref self, text: Str) -> bool {
+        self.at_k(text, 0)
+    }
+
+    fn next(mut ref self) -> Tok {
+        let t = self.toks[self.i].clone();
+        if t.kind != TokK.Eof {
+            self.i += 1;
+        }
+        self.last = t.span;
+        t
+    }
+
+    fn fail(ref self) -> Diag {
+        diag(self.toks[self.idx(0)].span, "syntax error".to_string())
+    }
+
+    fn expect(mut ref self, text: Str) -> Result[Tok, Diag] {
+        if not self.at(text) {
+            return Err(self.fail());
+        }
+        Ok(self.next())
+    }
+
+    fn start(ref self) -> Loc {
+        self.toks[self.idx(0)].span
+    }
+
+    fn done(ref self, s: Loc) -> Loc {
+        join(s, self.last)
+    }
+
+    // ---- items
+
+    fn program(mut ref self) -> Result[Vec[Item], Diag] {
+        let mut items: Vec[Item] = Vec.new();
+        loop {
+            while self.at(";;") {
+                self.next();
+            }
+            if self.kind(0) == TokK.Eof {
+                return Ok(items);
+            }
+            if self.at("let") {
+                items.push(self.let_item()?);
+            } else if self.at("type") {
+                items.push(self.type_item()?);
+            } else {
+                return Err(self.fail());
+            }
+        }
+    }
+
+    fn let_item(mut ref self) -> Result[Item, Diag] {
+        let s = self.start();
+        self.expect("let")?;
+        let mut rec = false;
+        if self.at("rec") {
+            self.next();
+            rec = true;
+        }
+        let mut binds: Vec[Binding] = Vec.new();
+        binds.push(self.binding()?);
+        while self.at("and") {
+            self.next();
+            binds.push(self.binding()?);
+        }
+        if self.at("in") {
+            return Err(self.fail());
+        }
+        Ok(Item { is_type: false, span: self.done(s), flag: rec, binds: binds, decls: Vec.new() })
+    }
+
+    fn type_item(mut ref self) -> Result[Item, Diag] {
+        let s = self.start();
+        self.expect("type")?;
+        let mut decls: Vec[TypeDecl] = Vec.new();
+        decls.push(self.type_decl()?);
+        while self.at("and") {
+            self.next();
+            decls.push(self.type_decl()?);
+        }
+        Ok(Item { is_type: true, span: self.done(s), flag: false, binds: Vec.new(), decls: decls })
+    }
+
+    fn type_decl(mut ref self) -> Result[TypeDecl, Diag] {
+        let mut params: Vec[String] = Vec.new();
+        if self.kind(0) == TokK.TyVar {
+            params.push(self.next().text);
+        } else if self.at("(") and self.kind(1) == TokK.TyVar {
+            self.next();
+            loop {
+                if self.kind(0) != TokK.TyVar {
+                    return Err(self.fail());
+                }
+                params.push(self.next().text);
+                if self.at(",") {
+                    self.next();
+                    continue;
+                }
+                self.expect(")")?;
+                break;
+            }
+        }
+        if self.kind(0) != TokK.LIdent {
+            return Err(self.fail());
+        }
+        let t = self.next();
+        self.expect("=")?;
+        let mut d = TypeDecl {
+            name: t.text,
+            params: params,
+            span: t.span,
+            kind: DECL_VARIANT,
+            ctors: Vec.new(),
+            fields: Vec.new(),
+            alias: Vec.new(),
+        };
+        if self.at("{") {
+            self.next();
+            loop {
+                if self.kind(0) != TokK.LIdent {
+                    return Err(self.fail());
+                }
+                let f = self.next();
+                self.expect(":")?;
+                let te = self.type_expr()?;
+                d.fields.push(FieldDecl { name: f.text, span: f.span, ty: te });
+                if self.at(";") {
+                    self.next();
+                    if self.at("}") {
+                        break;
+                    }
+                    continue;
+                }
+                break;
+            }
+            self.expect("}")?;
+            d.kind = DECL_RECORD;
+            return Ok(d);
+        }
+        if not (self.at("|") or self.kind(0) == TokK.UIdent) {
+            d.alias.push(self.type_expr()?);
+            d.kind = DECL_ALIAS;
+            return Ok(d);
+        }
+        if self.at("|") {
+            self.next();
+        }
+        loop {
+            if self.kind(0) != TokK.UIdent {
+                return Err(self.fail());
+            }
+            let c = self.next();
+            let mut args: Vec[TyExpr] = Vec.new();
+            if self.at("of") {
+                self.next();
+                args.push(self.type_app()?);
+                while self.at("*") {
+                    self.next();
+                    args.push(self.type_app()?);
+                }
+            }
+            d.ctors.push(CtorDecl { name: c.text, span: c.span, args: args });
+            if self.at("|") {
+                self.next();
+                continue;
+            }
+            break;
+        }
+        Ok(d)
+    }
+
+    // ---- type expressions: arrow < tuple < application
+
+    fn type_expr(mut ref self) -> Result[TyExpr, Diag] {
+        let s = self.start();
+        let a = self.type_tuple()?;
+        if self.at("->") {
+            self.next();
+            let b = self.type_expr()?;
+            return Ok(tyexpr(TyK.TArrow, self.done(s), "", vec![a, b]));
+        }
+        Ok(a)
+    }
+
+    fn type_tuple(mut ref self) -> Result[TyExpr, Diag] {
+        let s = self.start();
+        let a = self.type_app()?;
+        if not self.at("*") {
+            return Ok(a);
+        }
+        let mut items = vec![a];
+        while self.at("*") {
+            self.next();
+            items.push(self.type_app()?);
+        }
+        Ok(tyexpr(TyK.TTuple, self.done(s), "", items))
+    }
+
+    fn type_app(mut ref self) -> Result[TyExpr, Diag] {
+        let s = self.start();
+        let k = self.kind(0);
+        let mut base = if k == TokK.TyVar {
+            let t = self.next();
+            tyexpr(TyK.TVar, t.span, t.text, Vec.new())
+        } else if k == TokK.LIdent {
+            let t = self.next();
+            tyexpr(TyK.TCon, t.span, t.text, Vec.new())
+        } else if self.at("(") {
+            self.next();
+            let first = self.type_expr()?;
+            if self.at(",") {
+                let mut args = vec![first];
+                while self.at(",") {
+                    self.next();
+                    args.push(self.type_expr()?);
+                }
+                self.expect(")")?;
+                if self.kind(0) != TokK.LIdent {
+                    return Err(self.fail());
+                }
+                let c = self.next();
+                tyexpr(TyK.TCon, self.done(s), c.text, args)
+            } else {
+                self.expect(")")?;
+                first
+            }
+        } else {
+            return Err(self.fail());
+        };
+        while self.kind(0) == TokK.LIdent {
+            let c = self.next();
+            base = tyexpr(TyK.TCon, self.done(s), c.text, vec![base]);
+        }
+        Ok(base)
+    }
+
+    // ---- bindings
+
+    fn binding(mut ref self) -> Result[Binding, Diag] {
+        let s = self.start();
+        if self.kind(0) == TokK.LIdent and self.pat_atom_start(1) {
+            let t = self.next();
+            let name = named(Nk.PVar, t.span, t.text);
+            let mut params: Vec[Node] = Vec.new();
+            while self.pat_atom_start(0) {
+                params.push(self.pat_atom()?);
+            }
+            let mut ann: Vec[TyExpr] = Vec.new();
+            if self.at(":") {
+                self.next();
+                ann.push(self.type_expr()?);
+            }
+            self.expect("=")?;
+            let mut body = self.seq()?;
+            // B-2026-11-01-7: `f(body.span, vec![body])` reads `body.span` after
+            // the later argument has moved `body`, so the MIR builder
+            // refuses it; the span is copied first. Revert to reading
+            // `body.span` in the call when the row is fixed.
+            let body_span = body.span;
+            if ann.len() > 0 {
+                let mut c = with_kids(Nk.EConstraint, body_span, vec![body]);
+                c.ty = ann;
+                body = c;
+            }
+            let rhs_span = join(params[0].span, body_span);
+            let mut rhs = with_kids(Nk.EFun, rhs_span, vec![body]);
+            rhs.pats = params;
+            return Ok(Binding { pat: name, rhs: rhs, span: self.done(s) });
+        }
+        let mut pat = self.pattern()?;
+        if self.at(":") {
+            self.next();
+            let ann = self.type_expr()?;
+            let mut c = with_kids(Nk.PConstraint, self.done(s), vec![pat]);
+            c.ty = vec![ann];
+            pat = c;
+        }
+        self.expect("=")?;
+        let rhs = self.seq()?;
+        Ok(Binding { pat: pat, rhs: rhs, span: self.done(s) })
+    }
+
+    // ---- expressions
+
+    fn seq(mut ref self) -> Result[Node, Diag] {
+        let s = self.start();
+        let e = self.tuple()?;
+        if self.at(";") {
+            self.next();
+            let rest = self.seq()?;
+            return Ok(with_kids(Nk.ESeq, self.done(s), vec![e, rest]));
+        }
+        Ok(e)
+    }
+
+    fn tuple(mut ref self) -> Result[Node, Diag] {
+        let s = self.start();
+        let e = self.binop(0)?;
+        if not self.at(",") {
+            return Ok(e);
+        }
+        let mut items = vec![e];
+        while self.at(",") {
+            self.next();
+            items.push(self.binop(0)?);
+        }
+        Ok(with_kids(Nk.ETuple, self.done(s), items))
+    }
+
+    fn at_op(ref self, ops: ref Vec[String]) -> bool {
+        let k = self.kind(0);
+        if k != TokK.Sym and k != TokK.Kw {
+            return false;
+        }
+        let j = self.idx(0);
+        for o in ops.iter() {
+            if self.toks[j].text == *o {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn binop(mut ref self, lvl: i64) -> Result[Node, Diag] {
+        if lvl == NLEVELS {
+            return self.unary();
+        }
+        let ops = level_ops(lvl);
+        let s = self.start();
+        let mut lhs = self.binop(lvl + 1)?;
+        while self.at_op(ops) {
+            let op = self.next();
+            let rhs = if level_right(lvl) { self.binop(lvl)? } else { self.binop(lvl + 1)? };
+            let mut n = with_kids(Nk.EOp, self.done(s), vec![lhs, rhs]);
+            n.name = op.text;
+            lhs = n;
+            if level_right(lvl) {
+                break;
+            }
+        }
+        Ok(lhs)
+    }
+
+    fn unary(mut ref self) -> Result[Node, Diag] {
+        if self.at("-") {
+            let s = self.start();
+            self.next();
+            let e = self.unary()?;
+            return Ok(with_kids(Nk.ENeg, self.done(s), vec![e]));
+        }
+        self.app()
+    }
+
+    fn prefix_start(ref self) -> bool {
+        self.at("let") or self.at("fun") or self.at("function") or self.at("if") or self.at("match")
+    }
+
+    fn atom_start(ref self) -> bool {
+        let k = self.kind(0);
+        if k == TokK.IntLit or k == TokK.TextLit or k == TokK.LIdent or k == TokK.UIdent {
+            return true;
+        }
+        self.at("true") or self.at("false") or self.at("(") or self.at("[") or self.at("{")
+    }
+
+    fn app(mut ref self) -> Result[Node, Diag] {
+        if self.prefix_start() {
+            return self.prefix();
+        }
+        let s = self.start();
+        let head = if self.kind(0) == TokK.UIdent and not self.at_k(".", 1) {
+            let t = self.next();
+            if self.atom_start() {
+                let arg = self.postfix()?;
+                let mut c = with_kids(Nk.ECtor, self.done(s), vec![arg]);
+                c.name = t.text;
+                c
+            } else {
+                named(Nk.ECtor, t.span, t.text)
+            }
+        } else {
+            self.postfix()?
+        };
+        if not self.atom_start() {
+            return Ok(head);
+        }
+        let mut kids = vec![head];
+        while self.atom_start() {
+            kids.push(self.postfix()?);
+        }
+        Ok(with_kids(Nk.EApp, self.done(s), kids))
+    }
+
+    fn postfix(mut ref self) -> Result[Node, Diag] {
+        let s = self.start();
+        let mut e = if self.kind(0) == TokK.UIdent and self.at_k(".", 1) and self.kind(2) == TokK.LIdent {
+            // a module path, M.x: there are no modules, so it is unbound
+            let m = self.next();
+            self.next();
+            let x = self.next();
+            let mut p = named(Nk.EPath, self.done(s), m.text + "." + x.text);
+            p.fields.push(FieldE { name: m.text, span: m.span, value: Vec.new() });
+            p
+        } else if self.kind(0) == TokK.UIdent {
+            // a constructor as an argument takes no argument of its own
+            let t = self.next();
+            named(Nk.ECtor, t.span, t.text)
+        } else {
+            self.atom()?
+        };
+        while self.at(".") {
+            self.next();
+            if self.kind(0) != TokK.LIdent {
+                return Err(self.fail());
+            }
+            let f = self.next();
+            let mut n = with_kids(Nk.EField, self.done(s), vec![e]);
+            n.name = f.text.clone();
+            n.fields.push(FieldE { name: f.text, span: f.span, value: Vec.new() });
+            e = n;
+        }
+        Ok(e)
+    }
+
+    fn atom(mut ref self) -> Result[Node, Diag] {
+        let s = self.start();
+        let k = self.kind(0);
+        if k == TokK.IntLit {
+            let t = self.next();
+            return Ok(named(Nk.EInt, t.span, t.text));
+        }
+        if k == TokK.TextLit {
+            let t = self.next();
+            return Ok(named(Nk.EText, t.span, t.text));
+        }
+        if k == TokK.LIdent {
+            let t = self.next();
+            return Ok(named(Nk.EVar, t.span, t.text));
+        }
+        if self.at("true") or self.at("false") {
+            let t = self.next();
+            return Ok(named(Nk.EBool, t.span, t.text));
+        }
+        if self.at("(") {
+            self.next();
+            if self.at(")") {
+                self.next();
+                return Ok(node(Nk.EUnit, self.done(s)));
+            }
+            let e = self.seq()?;
+            if self.at(":") {
+                self.next();
+                let ty = self.type_expr()?;
+                self.expect(")")?;
+                let mut c = with_kids(Nk.EConstraint, self.done(s), vec![e]);
+                c.ty = vec![ty];
+                return Ok(c);
+            }
+            self.expect(")")?;
+            return Ok(e);
+        }
+        if self.at("[") {
+            self.next();
+            let mut items: Vec[Node] = Vec.new();
+            if not self.at("]") {
+                items.push(self.tuple()?);
+                while self.at(";") {
+                    self.next();
+                    if self.at("]") {
+                        break;
+                    }
+                    items.push(self.tuple()?);
+                }
+            }
+            self.expect("]")?;
+            return Ok(with_kids(Nk.EList, self.done(s), items));
+        }
+        if self.at("{") {
+            self.next();
+            let mut base: Vec[Node] = Vec.new();
+            if not (self.kind(0) == TokK.LIdent and self.at_k("=", 1)) {
+                base.push(self.postfix()?);
+                self.expect("with")?;
+            }
+            let mut fields: Vec[FieldE] = Vec.new();
+            loop {
+                if self.kind(0) != TokK.LIdent {
+                    return Err(self.fail());
+                }
+                let f = self.next();
+                self.expect("=")?;
+                let v = self.binop(0)?;
+                fields.push(FieldE { name: f.text, span: f.span, value: vec![v] });
+                if self.at(";") {
+                    self.next();
+                    if self.at("}") {
+                        break;
+                    }
+                    continue;
+                }
+                break;
+            }
+            self.expect("}")?;
+            let mut n = if base.len() == 0 {
+                node(Nk.ERecord, self.done(s))
+            } else {
+                with_kids(Nk.EWith, self.done(s), base)
+            };
+            n.fields = fields;
+            return Ok(n);
+        }
+        Err(self.fail())
+    }
+
+    fn prefix(mut ref self) -> Result[Node, Diag] {
+        let s = self.start();
+        if self.at("let") {
+            self.next();
+            let mut rec = false;
+            if self.at("rec") {
+                self.next();
+                rec = true;
+            }
+            let mut binds: Vec[Binding] = Vec.new();
+            binds.push(self.binding()?);
+            while self.at("and") {
+                self.next();
+                binds.push(self.binding()?);
+            }
+            self.expect("in")?;
+            let body = self.seq()?;
+            let mut n = with_kids(Nk.ELet, self.done(s), vec![body]);
+            n.binds = binds;
+            n.flag = rec;
+            return Ok(n);
+        }
+        if self.at("fun") {
+            self.next();
+            let mut params = vec![self.pat_atom()?];
+            while self.pat_atom_start(0) {
+                params.push(self.pat_atom()?);
+            }
+            self.expect("->")?;
+            let body = self.seq()?;
+            let mut n = with_kids(Nk.EFun, self.done(s), vec![body]);
+            n.pats = params;
+            return Ok(n);
+        }
+        if self.at("function") {
+            self.next();
+            let arms = self.arms()?;
+            let mut n = node(Nk.EFunction, self.done(s));
+            n.arms = arms;
+            return Ok(n);
+        }
+        if self.at("if") {
+            self.next();
+            let c = self.seq()?;
+            self.expect("then")?;
+            let a = self.tuple()?;
+            if self.at("else") {
+                self.next();
+                let b = self.tuple()?;
+                return Ok(with_kids(Nk.EIf, self.done(s), vec![c, a, b]));
+            }
+            return Ok(with_kids(Nk.EIf, self.done(s), vec![c, a]));
+        }
+        self.expect("match")?;
+        let e = self.seq()?;
+        self.expect("with")?;
+        let arms = self.arms()?;
+        let mut n = with_kids(Nk.EMatch, self.done(s), vec![e]);
+        n.arms = arms;
+        Ok(n)
+    }
+
+    fn arms(mut ref self) -> Result[Vec[Arm], Diag] {
+        if self.at("|") {
+            self.next();
+        }
+        let mut arms: Vec[Arm] = Vec.new();
+        loop {
+            let p = self.pattern()?;
+            let mut g: Vec[Node] = Vec.new();
+            if self.at("when") {
+                self.next();
+                g.push(self.seq()?);
+            }
+            self.expect("->")?;
+            let body = self.seq()?;
+            arms.push(Arm { pat: p, guard: g, body: body });
+            if self.at("|") {
+                self.next();
+                continue;
+            }
+            return Ok(arms);
+        }
+    }
+
+    // ---- patterns
+
+    fn pat_atom_start(ref self, k: i64) -> bool {
+        let kd = self.kind(k);
+        if kd == TokK.IntLit or kd == TokK.TextLit or kd == TokK.LIdent or kd == TokK.UIdent {
+            return true;
+        }
+        self.at_k("_", k) or self.at_k("true", k) or self.at_k("false", k) or self.at_k("(", k) or self.at_k("[", k) or self.at_k("{", k)
+    }
+
+    fn pattern(mut ref self) -> Result[Node, Diag] {
+        let s = self.start();
+        let p = self.pat_cons()?;
+        if not self.at(",") {
+            return Ok(p);
+        }
+        let mut items = vec![p];
+        while self.at(",") {
+            self.next();
+            items.push(self.pat_cons()?);
+        }
+        Ok(with_kids(Nk.PTuple, self.done(s), items))
+    }
+
+    fn pat_cons(mut ref self) -> Result[Node, Diag] {
+        let s = self.start();
+        let h = self.pat_app()?;
+        if self.at("::") {
+            self.next();
+            let t = self.pat_cons()?;
+            return Ok(with_kids(Nk.PCons, self.done(s), vec![h, t]));
+        }
+        Ok(h)
+    }
+
+    fn pat_app(mut ref self) -> Result[Node, Diag] {
+        let s = self.start();
+        if self.kind(0) == TokK.UIdent {
+            let t = self.next();
+            if self.pat_atom_start(0) {
+                let arg = self.pat_atom()?;
+                let mut c = with_kids(Nk.PCtor, self.done(s), vec![arg]);
+                c.name = t.text;
+                return Ok(c);
+            }
+            return Ok(named(Nk.PCtor, t.span, t.text));
+        }
+        if self.at("-") and self.kind(1) == TokK.IntLit {
+            self.next();
+            let n = self.next();
+            return Ok(named(Nk.PInt, self.done(s), "-" + n.text));
+        }
+        self.pat_atom()
+    }
+
+    fn pat_atom(mut ref self) -> Result[Node, Diag] {
+        let s = self.start();
+        let k = self.kind(0);
+        if self.at("_") {
+            let t = self.next();
+            return Ok(node(Nk.PWild, t.span));
+        }
+        if k == TokK.LIdent {
+            let t = self.next();
+            return Ok(named(Nk.PVar, t.span, t.text));
+        }
+        if k == TokK.UIdent {
+            let t = self.next();
+            return Ok(named(Nk.PCtor, t.span, t.text));
+        }
+        if k == TokK.IntLit {
+            let t = self.next();
+            return Ok(named(Nk.PInt, t.span, t.text));
+        }
+        if k == TokK.TextLit {
+            let t = self.next();
+            return Ok(named(Nk.PText, t.span, t.text));
+        }
+        if self.at("true") or self.at("false") {
+            let t = self.next();
+            return Ok(named(Nk.PBool, t.span, t.text));
+        }
+        if self.at("(") {
+            self.next();
+            if self.at(")") {
+                self.next();
+                return Ok(node(Nk.PUnit, self.done(s)));
+            }
+            let p = self.pattern()?;
+            if self.at(":") {
+                self.next();
+                let ty = self.type_expr()?;
+                self.expect(")")?;
+                let mut c = with_kids(Nk.PConstraint, self.done(s), vec![p]);
+                c.ty = vec![ty];
+                return Ok(c);
+            }
+            self.expect(")")?;
+            return Ok(p);
+        }
+        if self.at("[") {
+            self.next();
+            let mut items: Vec[Node] = Vec.new();
+            if not self.at("]") {
+                items.push(self.pat_cons()?);
+                while self.at(";") {
+                    self.next();
+                    if self.at("]") {
+                        break;
+                    }
+                    items.push(self.pat_cons()?);
+                }
+            }
+            self.expect("]")?;
+            return Ok(with_kids(Nk.PList, self.done(s), items));
+        }
+        if self.at("{") {
+            self.next();
+            let mut fields: Vec[FieldE] = Vec.new();
+            loop {
+                if self.kind(0) != TokK.LIdent {
+                    return Err(self.fail());
+                }
+                let f = self.next();
+                let p = if self.at("=") {
+                    self.next();
+                    self.pattern()?
+                } else {
+                    named(Nk.PVar, f.span, f.text)
+                };
+                fields.push(FieldE { name: f.text, span: f.span, value: vec![p] });
+                if self.at(";") {
+                    self.next();
+                    if self.at("}") {
+                        break;
+                    }
+                    continue;
+                }
+                break;
+            }
+            self.expect("}")?;
+            let mut n = node(Nk.PRecord, self.done(s));
+            n.fields = fields;
+            return Ok(n);
+        }
+        Err(self.fail())
+    }
+}
+
+fn parse_program(src: Str) -> Result[Vec[Item], Diag] {
+    let toks = lex(src)?;
+    let first = toks[0].span;
+    let mut p = Ps { toks: toks, i: 0, last: first };
+    p.program()
+}
+
+// ------------------------------------------------------------ types
+// The types live in an arena of parallel vectors: each type is an index.
+// A variable has a link (-1 while free) and a level; GENERIC marks a
+// generalised variable.
+
+const GENERIC: i64 = 1073741824;
+
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum Ty {
+    TyVar,
+    TyCon,
+    TyArrow,
+    TyTuple,
+}
+
+const KIND_ABSTRACT: i64 = 0;
+const KIND_VARIANT: i64 = 1;
+const KIND_RECORD: i64 = 2;
+const KIND_ALIAS: i64 = 3;
+
+#[derive(Clone)]
+struct TypeInfo {
+    name: String,
+    arity: i64,
+    kind: i64,
+    params: Vec[i64],
+    ctors: Vec[String],
+    arities: Vec[i64],
+    fields: Vec[String],
+    param_names: Vec[String],
+    body: Vec[TyExpr],
+    expanding: bool,
+}
+
+#[derive(Clone)]
+struct CtorInfo {
+    name: String,
+    tinfo: i64,
+    index: i64,
+    args: Vec[i64],
+    result: i64,
+}
+
+#[derive(Clone)]
+struct FieldInfo {
+    name: String,
+    tinfo: i64,
+    index: i64,
+    ty: i64,
+    result: i64,
+}
+
+#[derive(Clone)]
+struct EnvE {
+    name: String,
+    ty: i64,
+    bid: i64,
+}
+
+#[derive(Copy, Clone)]
+struct Rec {
+    span: Loc,
+    ty: i64,
+}
+
+#[derive(Clone)]
+struct ItemRec {
+    span: Loc,
+    ok: bool,
+    recs: Vec[Rec],
+}
+
+// A variable a pattern binds, before it enters the environment.
+#[derive(Clone)]
+struct Bound {
+    name: String,
+    ty: i64,
+    span: Loc,
+}
+
+// A variable in the environment, for the unused-variable warning.
+#[derive(Clone)]
+struct Pushed {
+    name: String,
+    span: Loc,
+    bid: i64,
+}
+
+// A failed unification: the innermost pair that clashed, or a variable
+// and the type it occurs in.
+#[derive(Copy, Clone)]
+struct UErr {
+    occurs: bool,
+    a: i64,
+    b: i64,
+}
+
+#[derive(Copy, Clone)]
+struct TrailE {
+    link: bool,
+    t: i64,
+    old: i64,
+}
+
+const MODE_SCHEME: i64 = 0;
+const MODE_DECL: i64 = 1;
+const MODE_ANN: i64 = 2;
+
+// ------------------------------------------------------------ patterns for the match warnings
+// A simple pattern is a wildcard or a constructor of a family with its
+// arguments (Maranget, "Warnings for pattern matching"). A tag is a
+// constructor index, or the literal itself for int and string.
+
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum FamK {
+    Variant,
+    Boolean,
+    UnitF,
+    ListF,
+    TupleF,
+    RecordF,
+    IntF,
+    StringF,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq)]
+struct Fam {
+    kind: FamK,
+    info: i64,
+}
+
+#[derive(Clone)]
+struct Tag {
+    n: i64,
+    s: String,
+}
+
+#[derive(Clone)]
+struct SPat {
+    wild: bool,
+    fam: Fam,
+    tag: Tag,
+    args: Vec[SPat],
+}
+
+fn wild() -> SPat {
+    SPat { wild: true, fam: Fam { kind: FamK.UnitF, info: 0 }, tag: Tag { n: 0, s: String.new() }, args: Vec.new() }
+}
+
+fn sp(kind: FamK, info: i64, n: i64, args: own Vec[SPat]) -> SPat {
+    SPat { wild: false, fam: Fam { kind: kind, info: info }, tag: Tag { n: n, s: String.new() }, args: args }
+}
+
+fn wilds(n: i64) -> Vec[SPat] {
+    let mut v: Vec[SPat] = Vec.new();
+    for _ in 0..n {
+        v.push(wild());
+    }
+    v
+}
+
+fn same_tag(a: ref Tag, b: ref Tag) -> bool {
+    a.n == b.n and a.s == b.s
+}
+
+fn slice(v: ref Vec[SPat], a: i64, b: i64) -> Vec[SPat] {
+    let mut out: Vec[SPat] = Vec.new();
+    for k in a..b {
+        out.push(v[k].clone());
+    }
+    out
+}
+
+fn specialize(rows: ref Vec[Vec[SPat]], tag: ref Tag, arity: i64) -> Vec[Vec[SPat]] {
+    let mut out: Vec[Vec[SPat]] = Vec.new();
+    for r in rows.iter() {
+        let h = ref r[0];
+        if h.wild {
+            let mut row = wilds(arity);
+            for k in 1..r.len() {
+                row.push(r[k].clone());
+            }
+            out.push(row);
+        } else if same_tag(h.tag, tag) {
+            let mut row = h.args.clone();
+            for k in 1..r.len() {
+                row.push(r[k].clone());
+            }
+            out.push(row);
+        }
+    }
+    out
+}
+
+fn default_rows(rows: ref Vec[Vec[SPat]]) -> Vec[Vec[SPat]] {
+    let mut out: Vec[Vec[SPat]] = Vec.new();
+    for r in rows.iter() {
+        if r[0].wild {
+            out.push(slice(r, 1, r.len()));
+        }
+    }
+    out
+}
+
+// The family of the first column and its distinct head tags.
+fn heads(rows: ref Vec[Vec[SPat]]) -> (Option[Fam], Vec[Tag]) {
+    let mut fam: Option[Fam] = None;
+    let mut tags: Vec[Tag] = Vec.new();
+    for r in rows.iter() {
+        let h = ref r[0];
+        if not h.wild {
+            fam = Some(h.fam);
+            let mut seen = false;
+            for t in tags.iter() {
+                if same_tag(t, h.tag) {
+                    seen = true;
+                }
+            }
+            if not seen {
+                tags.push(h.tag.clone());
+            }
+        }
+    }
+    (fam, tags)
+}
+
+// ------------------------------------------------------------ helpers
+
+fn rep(s: Str, n: i64) -> String {
+    let mut out = String.new();
+    for _ in 0..n {
+        out.push_str(s);
+    }
+    out
+}
+
+fn imax(a: i64, b: i64) -> i64 {
+    if a > b { a } else { b }
+}
+
+fn imin(a: i64, b: i64) -> i64 {
+    if a < b { a } else { b }
+}
+
+fn levenshtein(a: Str, b: Str) -> i64 {
+    let ab = a.bytes().to_vec();
+    let bb = b.bytes().to_vec();
+    let mut prev: Vec[i64] = Vec.new();
+    for j in 0..bb.len() + 1 {
+        prev.push(j);
+    }
+    for i in 1..ab.len() + 1 {
+        let mut cur: Vec[i64] = vec![i];
+        for j in 1..bb.len() + 1 {
+            let cost = if ab[i - 1] == bb[j - 1] { 0 } else { 1 };
+            cur.push(imin(imin(prev[j] + 1, cur[j - 1] + 1), prev[j - 1] + cost));
+        }
+        prev = cur;
+    }
+    prev[bb.len()]
+}
+
+fn inside(s: Loc, line: i64, col: i64) -> bool {
+    let after_start = s.sl < line or (s.sl == line and s.sc <= col);
+    let before_end = line < s.el or (line == s.el and col < s.ec);
+    after_start and before_end
+}
+
+fn letter(k: i64) -> String {
+    bytes_text([b'a' + k as u8].to_vec(), 0, 1)
+}
+
+fn var_name(i: i64) -> String {
+    let l = letter(i % 26);
+    if i >= 26 { f"'{l}{i / 26}" } else { f"'{l}" }
+}
+
+fn prelude_values() -> Vec[(String, String)] {
+    [
+        ("not", "bool -> bool"),
+        ("print_string", "string -> unit"),
+        ("print_endline", "string -> unit"),
+        ("print_int", "int -> unit"),
+        ("string_of_int", "int -> string"),
+        ("string_of_bool", "bool -> string"),
+        ("int_of_string", "string -> int"),
+        ("string_length", "string -> int"),
+        ("failwith", "string -> 'a"),
+        ("fst", "'a * 'b -> 'a"),
+        ("snd", "'a * 'b -> 'b"),
+        ("ignore", "'a -> unit"),
+        ("compare", "'a -> 'a -> int"),
+        ("max", "'a -> 'a -> 'a"),
+        ("min", "'a -> 'a -> 'a"),
+    ].to_vec()
+}
+
+fn op_schemes() -> Vec[(String, String)] {
+    [
+        ("+", "int -> int -> int"),
+        ("-", "int -> int -> int"),
+        ("*", "int -> int -> int"),
+        ("/", "int -> int -> int"),
+        ("mod", "int -> int -> int"),
+        ("^", "string -> string -> string"),
+        ("@", "'a list -> 'a list -> 'a list"),
+        ("&&", "bool -> bool -> bool"),
+        ("||", "bool -> bool -> bool"),
+        ("=", "'a -> 'a -> bool"),
+        ("<>", "'a -> 'a -> bool"),
+        ("<", "'a -> 'a -> bool"),
+        (">", "'a -> 'a -> bool"),
+        ("<=", "'a -> 'a -> bool"),
+        (">=", "'a -> 'a -> bool"),
+        ("::", "'a -> 'a list -> 'a list"),
+    ].to_vec()
+}
+
+// ------------------------------------------------------------ the checker
+
+struct Checker {
+    fname: String,
+    lines: Vec[String],
+    tkind: Vec[Ty],
+    tname: Vec[String],
+    targs: Vec[Vec[i64]],
+    tlink: Vec[i64],
+    tlevel: Vec[i64],
+    level: i64,
+    trail: Vec[TrailE],
+    env: Vec[EnvE],
+    used: Vec[bool],
+    types: Map[String, i64],
+    tinfos: Vec[TypeInfo],
+    ctors: Map[String, i64],
+    cinfos: Vec[CtorInfo],
+    fields: Map[String, i64],
+    finfos: Vec[FieldInfo],
+    ann_vars: Map[String, i64],
+    records: Vec[Rec],
+    out: Vec[String],
+    items: Vec[ItemRec],
+    op_names: Vec[String],
+    op_types: Vec[i64],
+    t_int: i64,
+    t_bool: i64,
+    t_string: i64,
+    t_unit: i64,
+}
+
+fn new_checker(fname: Str, src: Str) -> Checker {
+    let mut lines: Vec[String] = Vec.new();
+    for l in src.split("\n") {
+        lines.push(l.to_string());
+    }
+    let mut c = Checker {
+        fname: fname.to_string(),
+        lines: lines,
+        tkind: Vec.new(),
+        tname: Vec.new(),
+        targs: Vec.new(),
+        tlink: Vec.new(),
+        tlevel: Vec.new(),
+        level: 0,
+        trail: Vec.new(),
+        env: Vec.new(),
+        used: Vec.new(),
+        types: Map.new(),
+        tinfos: Vec.new(),
+        ctors: Map.new(),
+        cinfos: Vec.new(),
+        fields: Map.new(),
+        finfos: Vec.new(),
+        ann_vars: Map.new(),
+        records: Vec.new(),
+        out: Vec.new(),
+        items: Vec.new(),
+        op_names: Vec.new(),
+        op_types: Vec.new(),
+        t_int: 0,
+        t_bool: 0,
+        t_string: 0,
+        t_unit: 0,
+    };
+    c.t_int = c.con("int", Vec.new());
+    c.t_bool = c.con("bool", Vec.new());
+    c.t_string = c.con("string", Vec.new());
+    c.t_unit = c.con("unit", Vec.new());
+    for (nm, ar) in [("int", 0), ("bool", 0), ("string", 0), ("unit", 0), ("list", 1)].to_vec() {
+        let ti = c.new_typeinfo(nm, ar, KIND_ABSTRACT);
+        c.types.insert(nm.to_string(), ti);
+    }
+    c.prelude_type("type 'a option = None | Some of 'a");
+    for (nm, s) in prelude_values() {
+        let t = c.scheme(s);
+        c.bind(nm, t);
+    }
+    for (op, s) in op_schemes() {
+        let t = c.scheme(s);
+        c.op_names.push(op.clone());
+        c.op_types.push(t);
+    }
+    c
+}
+
+impl Checker {
+    // ---- the arena
+
+    fn new_ty(mut ref self, kind: Ty, name: Str, args: own Vec[i64], level: i64) -> i64 {
+        self.tkind.push(kind);
+        self.tname.push(name.to_string());
+        self.targs.push(args);
+        self.tlink.push(-1);
+        self.tlevel.push(level);
+        self.tkind.len() - 1
+    }
+
+    fn con(mut ref self, name: Str, args: own Vec[i64]) -> i64 {
+        self.new_ty(Ty.TyCon, name, args, 0)
+    }
+
+    fn arrow(mut ref self, a: i64, b: i64) -> i64 {
+        self.new_ty(Ty.TyArrow, "", vec![a, b], 0)
+    }
+
+    fn tuple_ty(mut ref self, items: own Vec[i64]) -> i64 {
+        self.new_ty(Ty.TyTuple, "", items, 0)
+    }
+
+    fn var(mut ref self) -> i64 {
+        let l = self.level;
+        self.new_ty(Ty.TyVar, "", Vec.new(), l)
+    }
+
+    fn generic_var(mut ref self) -> i64 {
+        self.new_ty(Ty.TyVar, "", Vec.new(), GENERIC)
+    }
+
+    fn repr(ref self, t: i64) -> i64 {
+        let mut t = t;
+        while self.tkind[t] == Ty.TyVar and self.tlink[t] >= 0 {
+            t = self.tlink[t];
+        }
+        t
+    }
+
+    fn new_typeinfo(mut ref self, name: Str, arity: i64, kind: i64) -> i64 {
+        self.tinfos.push(TypeInfo {
+            name: name.to_string(),
+            arity: arity,
+            kind: kind,
+            params: Vec.new(),
+            ctors: Vec.new(),
+            arities: Vec.new(),
+            fields: Vec.new(),
+            param_names: Vec.new(),
+            body: Vec.new(),
+            expanding: false,
+        });
+        self.tinfos.len() - 1
+    }
+
+    fn scheme(mut ref self, text: Str) -> i64 {
+        let toks = match lex(text) {
+            Ok(t) => t,
+            Err(_) => return self.generic_var(),
+        };
+        let first = toks[0].span;
+        let mut p = Ps { toks: toks, i: 0, last: first };
+        let te = match p.type_expr() {
+            Ok(te) => te,
+            Err(_) => return self.generic_var(),
+        };
+        let mut vars: Map[String, i64] = Map.new();
+        match self.convert(te, mut vars, MODE_SCHEME) {
+            Ok(t) => t,
+            Err(_) => self.generic_var(),
+        }
+    }
+
+    fn prelude_type(mut ref self, text: Str) {
+        let toks = match lex(text) {
+            Ok(t) => t,
+            Err(_) => return,
+        };
+        let first = toks[0].span;
+        let mut p = Ps { toks: toks, i: 0, last: first };
+        if let Ok(item) = p.type_item() {
+            let _ = self.declare_types(item);
+        }
+    }
+
+    // ---- the environment
+
+    fn bind(mut ref self, name: Str, t: i64) -> i64 {
+        let bid = self.used.len();
+        self.used.push(false);
+        self.env.push(EnvE { name: name.to_string(), ty: t, bid: bid });
+        bid
+    }
+
+    fn lookup(mut ref self, name: Str) -> Option[i64] {
+        let mut k = self.env.len() - 1;
+        while k >= 0 {
+            if self.env[k].name == name {
+                let bid = self.env[k].bid;
+                self.used[bid] = true;
+                return Some(self.env[k].ty);
+            }
+            k -= 1;
+        }
+        None
+    }
+
+    fn truncate_env(mut ref self, mark: i64) {
+        while self.env.len() > mark {
+            self.env.pop();
+        }
+    }
+
+    fn suggest(ref self, name: Str) -> Option[String] {
+        let mut best: Option[String] = None;
+        let mut bestd = 99;
+        let mut seen: Set[String] = Set.new();
+        for e in self.env.iter() {
+            if seen.contains(e.name) {
+                continue;
+            }
+            seen.insert(e.name.clone());
+            let d = levenshtein(name, e.name);
+            if d <= 2 and d < name.len() {
+                let better = match best {
+                    None => true,
+                    Some(ref b) => d < bestd or (d == bestd and e.name < *b),
+                };
+                if better {
+                    best = Some(e.name.clone());
+                    bestd = d;
+                }
+            }
+        }
+        best
+    }
+
+    // ---- type expressions
+
+    // MODE_SCHEME makes each 'a a generic variable; MODE_DECL allows only
+    // the declaration's parameters; MODE_ANN shares annotation variables
+    // across the item.
+    fn convert(mut ref self, te: ref TyExpr, vars: mut ref Map[String, i64], mode: i64) -> Result[i64, Diag] {
+        if te.kind == TyK.TVar {
+            if let Some(v) = vars.get(te.name.clone()) {
+                return Ok(v);
+            }
+            if mode == MODE_DECL {
+                return Err(diag(te.span, f"the type variable '{te.name} is unbound in this type declaration"));
+            }
+            let v = if mode == MODE_SCHEME { self.generic_var() } else { self.new_ty(Ty.TyVar, "", Vec.new(), 1) };
+            vars.insert(te.name.clone(), v);
+            return Ok(v);
+        }
+        if te.kind == TyK.TArrow {
+            let a = self.convert(te.args[0], mut vars, mode)?;
+            let b = self.convert(te.args[1], mut vars, mode)?;
+            return Ok(self.arrow(a, b));
+        }
+        if te.kind == TyK.TTuple {
+            let mut items: Vec[i64] = Vec.new();
+            for x in te.args.iter() {
+                items.push(self.convert(x, mut vars, mode)?);
+            }
+            return Ok(self.tuple_ty(items));
+        }
+        let info = match self.types.get(te.name.clone()) {
+            Some(i) => *i,
+            None => return Err(diag(te.span, f"unbound type constructor {te.name}")),
+        };
+        let arity = self.tinfos[info].arity;
+        if arity != te.args.len() {
+            return Err(diag(te.span, f"the type constructor {te.name} expects {arity} argument(s), but is here applied to {te.args.len()} argument(s)"));
+        }
+        let mut args: Vec[i64] = Vec.new();
+        for x in te.args.iter() {
+            args.push(self.convert(x, mut vars, mode)?);
+        }
+        if self.tinfos[info].kind == KIND_ALIAS {
+            // an abbreviation is expanded where it is used
+            if self.tinfos[info].expanding {
+                return Err(diag(te.span, f"the type abbreviation {te.name} is cyclic"));
+            }
+            let body = self.tinfos[info].body[0].clone();
+            let mut inner: Map[String, i64] = Map.new();
+            for k in 0..args.len() {
+                inner.insert(self.tinfos[info].param_names[k].clone(), args[k]);
+            }
+            self.tinfos[info].expanding = true;
+            let r = self.convert(body, mut inner, MODE_DECL);
+            self.tinfos[info].expanding = false;
+            return r;
+        }
+        Ok(self.con(te.name, args))
+    }
+
+    fn convert_ann(mut ref self, te: ref TyExpr) -> Result[i64, Diag] {
+        let mut vars = self.ann_vars.clone();
+        let r = self.convert(te, mut vars, MODE_ANN);
+        self.ann_vars = vars;
+        r
+    }
+
+    // ---- unification
+
+    // None on success, else the innermost pair that failed. A failure
+    // undoes every link it made.
+    fn unify(mut ref self, a: i64, b: i64) -> Option[UErr] {
+        let mark = self.trail.len();
+        let r = self.unify_rec(a, b);
+        if r.is_some() {
+            while self.trail.len() > mark {
+                let e = self.trail.pop().unwrap();
+                if e.link {
+                    self.tlink[e.t] = -1;
+                } else {
+                    self.tlevel[e.t] = e.old;
+                }
+            }
+        } else {
+            while self.trail.len() > mark {
+                self.trail.pop();
+            }
+        }
+        r
+    }
+
+    fn occurs_adjust(mut ref self, v: i64, t: i64) -> bool {
+        let t = self.repr(t);
+        if t == v {
+            return true;
+        }
+        if self.tkind[t] == Ty.TyVar {
+            if self.tlevel[t] > self.tlevel[v] {
+                self.trail.push(TrailE { link: false, t: t, old: self.tlevel[t] });
+                self.tlevel[t] = self.tlevel[v];
+            }
+            return false;
+        }
+        let args = self.targs[t].clone();
+        for x in args {
+            if self.occurs_adjust(v, x) {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn unify_rec(mut ref self, a: i64, b: i64) -> Option[UErr] {
+        let a = self.repr(a);
+        let b = self.repr(b);
+        if a == b {
+            return None;
+        }
+        let ka = self.tkind[a];
+        let kb = self.tkind[b];
+        if ka == Ty.TyVar or kb == Ty.TyVar {
+            let (v, t) = if ka == Ty.TyVar { (a, b) } else { (b, a) };
+            if self.occurs_adjust(v, t) {
+                return Some(UErr { occurs: true, a: v, b: t });
+            }
+            self.trail.push(TrailE { link: true, t: v, old: -1 });
+            self.tlink[v] = t;
+            return None;
+        }
+        if ka != kb or self.tname[a] != self.tname[b] or self.targs[a].len() != self.targs[b].len() {
+            return Some(UErr { occurs: false, a: a, b: b });
+        }
+        let xs = self.targs[a].clone();
+        let ys = self.targs[b].clone();
+        for k in 0..xs.len() {
+            let r = self.unify_rec(xs[k], ys[k]);
+            if r.is_some() {
+                return r;
+            }
+        }
+        None
+    }
+
+    fn explain(mut ref self, r: UErr, top_a: i64, top_b: i64) -> Vec[String] {
+        if r.occurs {
+            let n = self.show(vec![r.a, r.b], vec![top_a, top_b]);
+            return vec![f"the type variable {n[0]} occurs inside {n[1]}"];
+        }
+        let ra = self.repr(r.a);
+        let rb = self.repr(r.b);
+        let ta = self.repr(top_a);
+        let tb = self.repr(top_b);
+        if (ra == ta and rb == tb) or (ra == tb and rb == ta) {
+            return Vec.new();
+        }
+        let n = self.show(vec![r.a, r.b], vec![top_a, top_b]);
+        vec![f"type {n[0]} is not compatible with type {n[1]}"]
+    }
+
+    fn check_ty(mut ref self, span: Loc, actual: i64, expected: i64) -> Result[(), Diag] {
+        if let Some(r) = self.unify(actual, expected) {
+            let s = self.show(vec![actual, expected], Vec.new());
+            let mut d = diag(span, f"this expression has type {s[0]} but an expression was expected of type {s[1]}");
+            d.notes = self.explain(r, actual, expected);
+            return Err(d);
+        }
+        Ok(())
+    }
+
+    fn check_pat_ty(mut ref self, span: Loc, actual: i64, expected: i64) -> Result[(), Diag] {
+        if let Some(r) = self.unify(actual, expected) {
+            let s = self.show(vec![actual, expected], Vec.new());
+            let mut d = diag(span, f"this pattern matches values of type {s[0]} but a pattern was expected which matches values of type {s[1]}");
+            d.notes = self.explain(r, actual, expected);
+            return Err(d);
+        }
+        Ok(())
+    }
+
+    // ---- levels
+
+    fn instantiate(mut ref self, t: i64, mapping: mut ref Map[i64, i64]) -> i64 {
+        let t = self.repr(t);
+        let k = self.tkind[t];
+        if k == Ty.TyVar {
+            if self.tlevel[t] != GENERIC {
+                return t;
+            }
+            if let Some(v) = mapping.get(t) {
+                return v;
+            }
+            let v = self.var();
+            mapping.insert(t, v);
+            return v;
+        }
+        if self.targs[t].len() == 0 {
+            return t;
+        }
+        let xs = self.targs[t].clone();
+        let mut args: Vec[i64] = Vec.new();
+        for x in xs {
+            args.push(self.instantiate(x, mut mapping));
+        }
+        let name = self.tname[t].clone();
+        self.new_ty(k, name, args, 0)
+    }
+
+    fn inst(mut ref self, t: i64) -> i64 {
+        let mut m: Map[i64, i64] = Map.new();
+        self.instantiate(t, mut m)
+    }
+
+    fn generalize(mut ref self, t: i64) {
+        let t = self.repr(t);
+        if self.tkind[t] == Ty.TyVar {
+            if self.tlevel[t] > self.level and self.tlevel[t] != GENERIC {
+                self.tlevel[t] = GENERIC;
+            }
+            return;
+        }
+        let xs = self.targs[t].clone();
+        for x in xs {
+            self.generalize(x);
+        }
+    }
+
+    // ---- printing
+
+    fn show(ref self, ts: Vec[i64], prior: Vec[i64]) -> Vec[String] {
+        let mut names: Map[i64, String] = Map.new();
+        for t in prior {
+            self.show_one(t, mut names, 0);
+        }
+        let mut out: Vec[String] = Vec.new();
+        for t in ts {
+            out.push(self.show_one(t, mut names, 0));
+        }
+        out
+    }
+
+    fn show1(ref self, t: i64) -> String {
+        let mut names: Map[i64, String] = Map.new();
+        self.show_one(t, mut names, 0)
+    }
+
+    // ctx: 0 top, 1 arrow lhs, 2 tuple item, 3 type argument.
+    fn show_one(ref self, t: i64, names: mut ref Map[i64, String], ctx: i64) -> String {
+        let t = self.repr(t);
+        let k = self.tkind[t];
+        if k == Ty.TyVar {
+            if let Some(n) = names.get(t) {
+                return n.clone();
+            }
+            let n = var_name(names.len());
+            names.insert(t, n.clone());
+            return n;
+        }
+        if k == Ty.TyArrow {
+            let a = self.show_one(self.targs[t][0], mut names, 1);
+            let b = self.show_one(self.targs[t][1], mut names, 0);
+            let s = a + " -> " + b;
+            return if ctx >= 1 { "(" + s + ")" } else { s };
+        }
+        if k == Ty.TyTuple {
+            let mut parts: Vec[String] = Vec.new();
+            for x in self.targs[t].iter() {
+                parts.push(self.show_one(*x, mut names, 2));
+            }
+            let s = parts.join(" * ");
+            return if ctx >= 2 { "(" + s + ")" } else { s };
+        }
+        let n = self.targs[t].len();
+        if n == 0 {
+            return self.tname[t].clone();
+        }
+        if n == 1 {
+            return self.show_one(self.targs[t][0], mut names, 3) + " " + self.tname[t];
+        }
+        let mut parts: Vec[String] = Vec.new();
+        for x in self.targs[t].iter() {
+            parts.push(self.show_one(*x, mut names, 0));
+        }
+        "(" + parts.join(", ") + ") " + self.tname[t]
+    }
+
+    // ---- diagnostics
+
+    fn emit(mut ref self, d: ref Diag) {
+        let sp = d.span;
+        self.out.push(f"{self.fname}:{sp.sl}:{sp.sc}-{sp.el}:{sp.ec}: {d.level}: {d.msg}");
+        let line = if sp.sl - 1 < self.lines.len() { self.lines[sp.sl - 1].clone() } else { String.new() };
+        self.out.push(f"{sp.sl:>4} | {line}");
+        let width = if sp.el == sp.sl { imax(1, sp.ec - sp.sc) } else { imax(1, line.len() - sp.sc + 1) };
+        self.out.push("     | " + rep(" ", sp.sc - 1) + rep("^", width));
+        for n in d.notes.iter() {
+            self.out.push("  " + n);
+        }
+    }
+
+    fn warn(mut ref self, span: Loc, num: i64, msg: Str, notes: own Vec[String]) {
+        let d = Diag { span: span, level: f"warning {num}", msg: msg.to_string(), notes: notes };
+        self.emit(d);
+    }
+
+    // ---- type declarations
+
+    fn declare_types(mut ref self, item: ref Item) -> Result[(), Diag] {
+        let saved = self.types.clone();
+        let r = self.declare_inner(item);
+        if r.is_err() {
+            self.types = saved;
+        }
+        r
+    }
+
+    fn declare_inner(mut ref self, item: ref Item) -> Result[(), Diag] {
+        let mut infos: Vec[i64] = Vec.new();
+        for d in item.decls.iter() {
+            let kind = if d.kind == DECL_RECORD { KIND_RECORD } else if d.kind == DECL_ALIAS { KIND_ALIAS } else { KIND_VARIANT };
+            let ti = self.new_typeinfo(d.name, d.params.len(), kind);
+            for _ in 0..d.params.len() {
+                let v = self.generic_var();
+                self.tinfos[ti].params.push(v);
+            }
+            self.tinfos[ti].param_names = d.params.clone();
+            self.tinfos[ti].body = d.alias.clone();
+            self.types.insert(d.name.clone(), ti);
+            infos.push(ti);
+        }
+        let mut new_ctors: Vec[CtorInfo] = Vec.new();
+        let mut new_fields: Vec[FieldInfo] = Vec.new();
+        for k in 0..item.decls.len() {
+            let d = ref item.decls[k];
+            let ti = infos[k];
+            let mut vars: Map[String, i64] = Map.new();
+            for j in 0..d.params.len() {
+                vars.insert(d.params[j].clone(), self.tinfos[ti].params[j]);
+            }
+            let ps = self.tinfos[ti].params.clone();
+            let result = self.con(d.name, ps);
+            if d.kind == DECL_ALIAS {
+                self.convert(d.alias[0], mut vars, MODE_DECL)?;
+            } else if d.kind == DECL_VARIANT {
+                for idx in 0..d.ctors.len() {
+                    let c = ref d.ctors[idx];
+                    let mut targs: Vec[i64] = Vec.new();
+                    for a in c.args.iter() {
+                        targs.push(self.convert(a, mut vars, MODE_DECL)?);
+                    }
+                    self.tinfos[ti].ctors.push(c.name.clone());
+                    self.tinfos[ti].arities.push(targs.len());
+                    new_ctors.push(CtorInfo { name: c.name.clone(), tinfo: ti, index: idx, args: targs, result: result });
+                }
+            } else {
+                for idx in 0..d.fields.len() {
+                    let f = ref d.fields[idx];
+                    let t = self.convert(f.ty, mut vars, MODE_DECL)?;
+                    self.tinfos[ti].fields.push(f.name.clone());
+                    new_fields.push(FieldInfo { name: f.name.clone(), tinfo: ti, index: idx, ty: t, result: result });
+                }
+            }
+        }
+        for c in new_ctors {
+            self.cinfos.push(c.clone());
+            self.ctors.insert(c.name.clone(), self.cinfos.len() - 1);
+        }
+        for f in new_fields {
+            self.finfos.push(f.clone());
+            self.fields.insert(f.name.clone(), self.finfos.len() - 1);
+        }
+        Ok(())
+    }
+
+    // ---- hover records
+
+    fn note(mut ref self, span: Loc, t: i64) {
+        self.records.push(Rec { span: span, ty: t });
+    }
+
+    // ---- expressions
+
+    fn check(mut ref self, e: ref Node, expected: i64) -> Result[(), Diag] {
+        if e.kind == Nk.EFun or e.kind == Nk.EFunction {
+            // the expected type reaches the parameters before the body
+            self.infer_fun(e, Some(expected))?;
+            return Ok(());
+        }
+        let t = self.infer(e)?;
+        self.check_ty(e.span, t, expected)
+    }
+
+    fn infer_fun(mut ref self, e: ref Node, expected: Option[i64]) -> Result[i64, Diag] {
+        let r = self.var();
+        self.note(e.span, r);
+        if e.kind == Nk.EFunction {
+            let ts = self.var();
+            let res = self.var();
+            let t = self.arrow(ts, res);
+            if let Some(x) = expected {
+                self.check_ty(e.span, t, x)?;
+            }
+            self.match_arms(e, ts, res)?;
+            let _ = self.unify(r, t);
+            return Ok(r);
+        }
+        let mut tps: Vec[i64] = Vec.new();
+        for _ in 0..e.pats.len() {
+            tps.push(self.var());
+        }
+        let rb = self.var();
+        let mut t = rb;
+        let mut k = tps.len() - 1;
+        while k >= 0 {
+            t = self.arrow(tps[k], t);
+            k -= 1;
+        }
+        if let Some(x) = expected {
+            self.check_ty(e.span, t, x)?;
+        }
+        let mark = self.env.len();
+        let mut binds: Vec[Bound] = Vec.new();
+        for k in 0..e.pats.len() {
+            self.check_pat(e.pats[k], tps[k], mut binds)?;
+        }
+        self.push_binds(binds);
+        for p in e.pats.iter() {
+            self.exhaustive_one(p, p.span);
+        }
+        self.check(e.kids[0], rb)?;
+        self.truncate_env(mark);
+        let _ = self.unify(r, t);
+        Ok(r)
+    }
+
+    fn op_type(ref self, name: Str) -> i64 {
+        for k in 0..self.op_names.len() {
+            if self.op_names[k] == name {
+                return self.op_types[k];
+            }
+        }
+        self.op_types[0]
+    }
+
+    fn infer(mut ref self, e: ref Node) -> Result[i64, Diag] {
+        match e.kind {
+            Nk.EInt => {
+                let t = self.t_int;
+                self.note(e.span, t);
+                Ok(t)
+            }
+            Nk.EText => {
+                let t = self.t_string;
+                self.note(e.span, t);
+                Ok(t)
+            }
+            Nk.EBool => {
+                let t = self.t_bool;
+                self.note(e.span, t);
+                Ok(t)
+            }
+            Nk.EUnit => {
+                let t = self.t_unit;
+                self.note(e.span, t);
+                Ok(t)
+            }
+            Nk.EVar => {
+                let s = match self.lookup(e.name) {
+                    Some(s) => s,
+                    None => {
+                        let mut msg = f"unbound value {e.name}";
+                        if let Some(h) = self.suggest(e.name) {
+                            msg = msg + f" (did you mean {h}?)";
+                        }
+                        return Err(diag(e.span, msg));
+                    }
+                };
+                let t = self.inst(s);
+                self.note(e.span, t);
+                Ok(t)
+            }
+            Nk.EPath => Err(diag(e.fields[0].span, f"unbound module {e.fields[0].name}")),
+            Nk.ECtor => {
+                let r = self.var();
+                self.note(e.span, r);
+                let ci = match self.ctors.get(e.name.clone()) {
+                    Some(c) => *c,
+                    None => return Err(diag(e.span, f"unbound constructor {e.name}")),
+                };
+                let mode = self.ctor_args(e, ci)?;
+                let mut mapping: Map[i64, i64] = Map.new();
+                let res = self.instantiate(self.cinfos[ci].result, mut mapping);
+                let decl = self.cinfos[ci].args.clone();
+                let mut targs: Vec[i64] = Vec.new();
+                for a in decl {
+                    targs.push(self.instantiate(a, mut mapping));
+                }
+                if mode == ARGS_ONE {
+                    self.check(e.kids[0], targs[0])?;
+                } else if mode == ARGS_TUPLE {
+                    for k in 0..targs.len() {
+                        self.check(e.kids[0].kids[k], targs[k])?;
+                    }
+                }
+                let _ = self.unify(r, res);
+                Ok(r)
+            }
+            Nk.ETuple => {
+                let r = self.var();
+                self.note(e.span, r);
+                let mut ts: Vec[i64] = Vec.new();
+                for x in e.kids.iter() {
+                    ts.push(self.infer(x)?);
+                }
+                let t = self.tuple_ty(ts);
+                let _ = self.unify(r, t);
+                Ok(r)
+            }
+            Nk.EList => {
+                let a = self.var();
+                let t = self.con("list", vec![a]);
+                self.note(e.span, t);
+                for x in e.kids.iter() {
+                    self.check(x, a)?;
+                }
+                Ok(t)
+            }
+            Nk.EOp => {
+                let r = self.var();
+                self.note(e.span, r);
+                let ot = self.inst(self.op_type(e.name));
+                let a = self.targs[ot][0];
+                let rest = self.targs[ot][1];
+                let b = self.targs[rest][0];
+                let res = self.targs[rest][1];
+                self.check(e.kids[0], a)?;
+                self.check(e.kids[1], b)?;
+                let _ = self.unify(r, res);
+                Ok(r)
+            }
+            Nk.ENeg => {
+                let t = self.t_int;
+                self.note(e.span, t);
+                self.check(e.kids[0], t)?;
+                Ok(t)
+            }
+            Nk.EApp => {
+                let r = self.var();
+                self.note(e.span, r);
+                let f = ref e.kids[0];
+                let mut tf = self.infer(f)?;
+                let t0 = tf;
+                for n in 1..e.kids.len() {
+                    let mut t = self.repr(tf);
+                    if self.tkind[t] == Ty.TyVar {
+                        let a = self.var();
+                        let b = self.var();
+                        let ar = self.arrow(a, b);
+                        let _ = self.unify(t, ar);
+                        t = self.repr(tf);
+                    }
+                    if self.tkind[t] != Ty.TyArrow {
+                        let s = self.show1(t0);
+                        if n == 1 {
+                            return Err(diag(f.span, f"this expression has type {s}. This is not a function; it cannot be applied"));
+                        }
+                        return Err(diag(f.span, f"this function has type {s}. It is applied to too many arguments"));
+                    }
+                    let pa = self.targs[t][0];
+                    self.check(e.kids[n], pa)?;
+                    tf = self.targs[t][1];
+                }
+                let _ = self.unify(r, tf);
+                Ok(r)
+            }
+            Nk.EFun | Nk.EFunction => self.infer_fun(e, None),
+            Nk.EMatch => {
+                let r = self.var();
+                self.note(e.span, r);
+                let ts = self.infer(e.kids[0])?;
+                let res = self.var();
+                self.match_arms(e, ts, res)?;
+                let _ = self.unify(r, res);
+                Ok(r)
+            }
+            Nk.EIf => {
+                let r = self.var();
+                self.note(e.span, r);
+                let tb = self.t_bool;
+                self.check(e.kids[0], tb)?;
+                if e.kids.len() == 2 {
+                    let tu = self.t_unit;
+                    self.check(e.kids[1], tu)?;
+                    let _ = self.unify(r, tu);
+                    return Ok(r);
+                }
+                let ta = self.infer(e.kids[1])?;
+                self.check(e.kids[2], ta)?;
+                let _ = self.unify(r, ta);
+                Ok(r)
+            }
+            Nk.ESeq => {
+                let r = self.var();
+                self.note(e.span, r);
+                let tu = self.t_unit;
+                self.check(e.kids[0], tu)?;
+                let t = self.infer(e.kids[1])?;
+                let _ = self.unify(r, t);
+                Ok(r)
+            }
+            Nk.EConstraint => {
+                let r = self.var();
+                self.note(e.span, r);
+                let t = self.convert_ann(e.ty[0])?;
+                self.check(e.kids[0], t)?;
+                let _ = self.unify(r, t);
+                Ok(r)
+            }
+            Nk.ELet => {
+                let r = self.var();
+                self.note(e.span, r);
+                let mark = self.env.len();
+                let names = self.let_bindings(e.binds, e.flag)?;
+                let tb = self.infer(e.kids[0])?;
+                for p in names.iter() {
+                    if not self.used[p.bid] and not p.name.starts_with("_") {
+                        self.warn(p.span, 26, f"unused variable {p.name}", Vec.new());
+                    }
+                }
+                self.truncate_env(mark);
+                let _ = self.unify(r, tb);
+                Ok(r)
+            }
+            Nk.ERecord => {
+                let r = self.var();
+                self.note(e.span, r);
+                let info = self.record_fields(e)?;
+                let mut mapping: Map[i64, i64] = Map.new();
+                let fi0 = self.fields.get(e.fields[0].name.clone()) ?? 0;
+                let res = self.instantiate(self.finfos[fi0].result, mut mapping);
+                let mut missing: Vec[String] = Vec.new();
+                for fname in self.tinfos[info].fields.iter() {
+                    let mut seen = false;
+                    for f in e.fields.iter() {
+                        if f.name == *fname {
+                            seen = true;
+                        }
+                    }
+                    if not seen {
+                        missing.push(fname.clone());
+                    }
+                }
+                if missing.len() > 0 {
+                    return Err(diag(e.span, "some record fields are undefined: " + missing.join(" ")));
+                }
+                for f in e.fields.iter() {
+                    let fi = self.fields.get(f.name.clone()) ?? 0;
+                    let ft = self.instantiate(self.finfos[fi].ty, mut mapping);
+                    self.check(f.value[0], ft)?;
+                }
+                let _ = self.unify(r, res);
+                Ok(r)
+            }
+            Nk.EWith => {
+                let r = self.var();
+                self.note(e.span, r);
+                self.record_fields(e)?;
+                let mut mapping: Map[i64, i64] = Map.new();
+                let fi0 = self.fields.get(e.fields[0].name.clone()) ?? 0;
+                let res = self.instantiate(self.finfos[fi0].result, mut mapping);
+                self.check(e.kids[0], res)?;
+                for f in e.fields.iter() {
+                    let fi = self.fields.get(f.name.clone()) ?? 0;
+                    let ft = self.instantiate(self.finfos[fi].ty, mut mapping);
+                    self.check(f.value[0], ft)?;
+                }
+                let _ = self.unify(r, res);
+                Ok(r)
+            }
+            Nk.EField => {
+                let r = self.var();
+                self.note(e.span, r);
+                let fname = ref e.fields[0];
+                let fi = match self.fields.get(fname.name.clone()) {
+                    Some(f) => *f,
+                    None => return Err(diag(fname.span, f"unbound record field {fname.name}")),
+                };
+                let mut mapping: Map[i64, i64] = Map.new();
+                let res = self.instantiate(self.finfos[fi].result, mut mapping);
+                self.check(e.kids[0], res)?;
+                let ft = self.instantiate(self.finfos[fi].ty, mut mapping);
+                let _ = self.unify(r, ft);
+                Ok(r)
+            }
+            _ => Err(diag(e.span, "not an expression".to_string())),
+        }
+    }
+
+    // How a constructor's sub-terms are written, checking the arity:
+    // none, one argument, a syntactic tuple of n, or `C _` for all n.
+    fn ctor_args(ref self, e: ref Node, ci: i64) -> Result[i64, Diag] {
+        let n = self.cinfos[ci].args.len();
+        let mut got = 0;
+        let mut mode = ARGS_NONE;
+        if e.kids.len() > 0 {
+            let k = e.kids[0].kind;
+            if n >= 2 and (k == Nk.ETuple or k == Nk.PTuple) {
+                got = e.kids[0].kids.len();
+                mode = ARGS_TUPLE;
+            } else if n >= 2 and k == Nk.PWild {
+                return Ok(ARGS_ALL_WILD);
+            } else {
+                got = 1;
+                mode = ARGS_ONE;
+            }
+        }
+        if got != n {
+            let name = self.cinfos[ci].name.clone();
+            return Err(diag(e.span, f"the constructor {name} expects {n} argument(s), but is applied here to {got} argument(s)"));
+        }
+        Ok(mode)
+    }
+
+    fn record_fields(ref self, e: ref Node) -> Result[i64, Diag] {
+        let f0 = ref e.fields[0];
+        let first = match self.fields.get(f0.name.clone()) {
+            Some(f) => f,
+            None => return Err(diag(f0.span, f"unbound record field {f0.name}")),
+        };
+        let ti = self.finfos[first].tinfo;
+        let mut seen: Set[String] = Set.new();
+        for f in e.fields.iter() {
+            let fi = match self.fields.get(f.name.clone()) {
+                Some(x) => x,
+                None => return Err(diag(f.span, f"unbound record field {f.name}")),
+            };
+            let other = self.finfos[fi].tinfo;
+            if other != ti {
+                let a = self.tinfos[other].name.clone();
+                let b = self.tinfos[ti].name.clone();
+                return Err(diag(f.span, f"the record field {f.name} belongs to the type {a} but is mixed here with fields of type {b}"));
+            }
+            if seen.contains(f.name) {
+                return Err(diag(f.span, f"the record field {f.name} is defined several times"));
+            }
+            seen.insert(f.name.clone());
+        }
+        Ok(ti)
+    }
+
+    fn push_binds(mut ref self, binds: ref Vec[Bound]) -> Vec[Pushed] {
+        let mut out: Vec[Pushed] = Vec.new();
+        for b in binds.iter() {
+            let bid = self.bind(b.name, b.ty);
+            out.push(Pushed { name: b.name.clone(), span: b.span, bid: bid });
+        }
+        out
+    }
+
+    fn match_arms(mut ref self, e: ref Node, ts: i64, res: i64) -> Result[(), Diag] {
+        let mut rows: Vec[(SPat, bool, Loc)] = Vec.new();
+        for arm in e.arms.iter() {
+            let mark = self.env.len();
+            let mut binds: Vec[Bound] = Vec.new();
+            self.check_pat(arm.pat, ts, mut binds)?;
+            self.push_binds(binds);
+            if arm.guard.len() > 0 {
+                let tb = self.t_bool;
+                self.check(arm.guard[0], tb)?;
+            }
+            self.check(arm.body, res)?;
+            self.truncate_env(mark);
+            rows.push((self.simple(arm.pat), arm.guard.len() > 0, arm.pat.span));
+        }
+        self.match_warnings(rows, e.span);
+        Ok(())
+    }
+
+    // Binds the names of a let; returns the simple variables, for the
+    // unused-variable warning.
+    fn let_bindings(mut ref self, binds: ref Vec[Binding], rec: bool) -> Result[Vec[Pushed], Diag] {
+        self.level += 1;
+        let mut allb: Vec[Bound] = Vec.new();
+        let mut tps: Vec[i64] = Vec.new();
+        for b in binds.iter() {
+            let tp = self.var();
+            if rec {
+                let p = if b.pat.kind == Nk.PConstraint { ref b.pat.kids[0] } else { ref b.pat };
+                if p.kind != Nk.PVar {
+                    return Err(diag(b.pat.span, "only variables are allowed as left-hand side of let rec".to_string()));
+                }
+                let rhs = if b.rhs.kind == Nk.EConstraint { ref b.rhs.kids[0] } else { ref b.rhs };
+                if rhs.kind != Nk.EFun and rhs.kind != Nk.EFunction {
+                    return Err(diag(b.rhs.span, "this kind of expression is not allowed as right-hand side of let rec".to_string()));
+                }
+            }
+            self.check_pat(b.pat, tp, mut allb)?;
+            tps.push(tp);
+        }
+        if rec {
+            let mark = self.env.len();
+            self.push_binds(allb);
+            for k in 0..binds.len() {
+                self.check(binds[k].rhs, tps[k])?;
+            }
+            self.truncate_env(mark);
+        } else {
+            for k in 0..binds.len() {
+                self.check(binds[k].rhs, tps[k])?;
+            }
+        }
+        self.level -= 1;
+        for b in allb.iter() {
+            self.generalize(b.ty);
+        }
+        for b in binds.iter() {
+            if b.pat.kind != Nk.PVar {
+                self.exhaustive_one(b.pat, b.pat.span);
+            }
+        }
+        let ids = self.push_binds(allb);
+        let mut out: Vec[Pushed] = Vec.new();
+        for p in ids {
+            let mut simple = false;
+            for b in binds.iter() {
+                if b.pat.kind == Nk.PVar and b.pat.name == p.name {
+                    simple = true;
+                }
+            }
+            if simple {
+                out.push(p.clone());
+            }
+        }
+        Ok(out)
+    }
+
+    // ---- patterns
+
+    fn check_pat(mut ref self, p: ref Node, expected: i64, binds: mut ref Vec[Bound]) -> Result[(), Diag] {
+        self.note(p.span, expected);
+        match p.kind {
+            Nk.PWild => Ok(()),
+            Nk.PVar => {
+                for b in binds.iter() {
+                    if b.name == p.name {
+                        return Err(diag(p.span, f"variable {p.name} is bound several times in this matching"));
+                    }
+                }
+                binds.push(Bound { name: p.name.clone(), ty: expected, span: p.span });
+                Ok(())
+            }
+            Nk.PInt => {
+                let t = self.t_int;
+                self.check_pat_ty(p.span, t, expected)
+            }
+            Nk.PText => {
+                let t = self.t_string;
+                self.check_pat_ty(p.span, t, expected)
+            }
+            Nk.PBool => {
+                let t = self.t_bool;
+                self.check_pat_ty(p.span, t, expected)
+            }
+            Nk.PUnit => {
+                let t = self.t_unit;
+                self.check_pat_ty(p.span, t, expected)
+            }
+            Nk.PTuple => {
+                let mut vs: Vec[i64] = Vec.new();
+                for _ in 0..p.kids.len() {
+                    vs.push(self.var());
+                }
+                let t = self.tuple_ty(vs.clone());
+                self.check_pat_ty(p.span, t, expected)?;
+                for k in 0..p.kids.len() {
+                    self.check_pat(p.kids[k], vs[k], mut binds)?;
+                }
+                Ok(())
+            }
+            Nk.PCons | Nk.PList => {
+                let a = self.var();
+                let lt = self.con("list", vec![a]);
+                self.check_pat_ty(p.span, lt, expected)?;
+                if p.kind == Nk.PCons {
+                    self.check_pat(p.kids[0], a, mut binds)?;
+                    self.check_pat(p.kids[1], lt, mut binds)?;
+                } else {
+                    for x in p.kids.iter() {
+                        self.check_pat(x, a, mut binds)?;
+                    }
+                }
+                Ok(())
+            }
+            Nk.PCtor => {
+                let ci = match self.ctors.get(p.name.clone()) {
+                    Some(c) => *c,
+                    None => return Err(diag(p.span, f"unbound constructor {p.name}")),
+                };
+                let mode = self.ctor_args(p, ci)?;
+                let mut mapping: Map[i64, i64] = Map.new();
+                let res = self.instantiate(self.cinfos[ci].result, mut mapping);
+                let decl = self.cinfos[ci].args.clone();
+                let mut targs: Vec[i64] = Vec.new();
+                for a in decl {
+                    targs.push(self.instantiate(a, mut mapping));
+                }
+                self.check_pat_ty(p.span, res, expected)?;
+                if mode == ARGS_ONE {
+                    self.check_pat(p.kids[0], targs[0], mut binds)?;
+                } else if mode == ARGS_TUPLE {
+                    for k in 0..targs.len() {
+                        self.check_pat(p.kids[0].kids[k], targs[k], mut binds)?;
+                    }
+                } else if mode == ARGS_ALL_WILD {
+                    for k in 0..targs.len() {
+                        self.note(p.kids[0].span, targs[k]);
+                    }
+                }
+                Ok(())
+            }
+            Nk.PRecord => {
+                self.record_fields(p)?;
+                let mut mapping: Map[i64, i64] = Map.new();
+                let fi0 = self.fields.get(p.fields[0].name.clone()) ?? 0;
+                let res = self.instantiate(self.finfos[fi0].result, mut mapping);
+                self.check_pat_ty(p.span, res, expected)?;
+                for f in p.fields.iter() {
+                    let fi = self.fields.get(f.name.clone()) ?? 0;
+                    let ft = self.instantiate(self.finfos[fi].ty, mut mapping);
+                    self.check_pat(f.value[0], ft, mut binds)?;
+                }
+                Ok(())
+            }
+            Nk.PConstraint => {
+                let t = self.convert_ann(p.ty[0])?;
+                self.check_pat_ty(p.span, t, expected)?;
+                self.check_pat(p.kids[0], t, mut binds)
+            }
+            _ => Err(diag(p.span, "not a pattern".to_string())),
+        }
+    }
+
+    // ---- the match warnings
+
+    fn simple(ref self, p: ref Node) -> SPat {
+        match p.kind {
+            Nk.PWild | Nk.PVar => wild(),
+            Nk.PConstraint => self.simple(p.kids[0]),
+            Nk.PInt => sp(FamK.IntF, 0, i64.parse(p.name).unwrap_or(0), Vec.new()),
+            Nk.PText => {
+                let mut s = sp(FamK.StringF, 0, 0, Vec.new());
+                s.tag.s = p.name.clone();
+                s
+            }
+            Nk.PBool => sp(FamK.Boolean, 0, if p.name == "true" { 1 } else { 0 }, Vec.new()),
+            Nk.PUnit => sp(FamK.UnitF, 0, 0, Vec.new()),
+            Nk.PTuple => {
+                let mut args: Vec[SPat] = Vec.new();
+                for x in p.kids.iter() {
+                    args.push(self.simple(x));
+                }
+                sp(FamK.TupleF, p.kids.len(), 0, args)
+            }
+            Nk.PCons => sp(FamK.ListF, 0, 1, vec![self.simple(p.kids[0]), self.simple(p.kids[1])]),
+            Nk.PList => {
+                let mut r = sp(FamK.ListF, 0, 0, Vec.new());
+                let mut k = p.kids.len() - 1;
+                while k >= 0 {
+                    r = sp(FamK.ListF, 0, 1, vec![self.simple(p.kids[k]), r]);
+                    k -= 1;
+                }
+                r
+            }
+            Nk.PCtor => {
+                let ci = self.ctors.get(p.name.clone()) ?? 0;
+                let c = ref self.cinfos[ci];
+                let n = c.args.len();
+                let mut args: Vec[SPat] = Vec.new();
+                if p.kids.len() > 0 {
+                    let a = ref p.kids[0];
+                    if n >= 2 and a.kind == Nk.PTuple {
+                        for x in a.kids.iter() {
+                            args.push(self.simple(x));
+                        }
+                    } else if n >= 2 and a.kind == Nk.PWild {
+                        args = wilds(n);
+                    } else {
+                        args.push(self.simple(a));
+                    }
+                }
+                sp(FamK.Variant, c.tinfo, c.index, args)
+            }
+            Nk.PRecord => {
+                let fi0 = self.fields.get(p.fields[0].name.clone()) ?? 0;
+                let ti = self.finfos[fi0].tinfo;
+                let mut args = wilds(self.tinfos[ti].fields.len());
+                for f in p.fields.iter() {
+                    let fi = self.fields.get(f.name.clone()) ?? 0;
+                    args[self.finfos[fi].index] = self.simple(f.value[0]);
+                }
+                sp(FamK.RecordF, ti, 0, args)
+            }
+            _ => wild(),
+        }
+    }
+
+    // The constructors of a finite family as (tag, arity); None for int
+    // and string.
+    fn signature(ref self, fam: Fam) -> Option[Vec[(i64, i64)]] {
+        match fam.kind {
+            FamK.Variant => {
+                let mut v: Vec[(i64, i64)] = Vec.new();
+                let ar = ref self.tinfos[fam.info].arities;
+                for k in 0..ar.len() {
+                    v.push((k, ar[k]));
+                }
+                Some(v)
+            }
+            FamK.Boolean => Some(vec![(0, 0), (1, 0)]),
+            FamK.UnitF => Some(vec![(0, 0)]),
+            FamK.ListF => Some(vec![(0, 0), (1, 2)]),
+            FamK.TupleF => Some(vec![(0, fam.info)]),
+            FamK.RecordF => Some(vec![(0, self.tinfos[fam.info].fields.len())]),
+            _ => None,
+        }
+    }
+
+    // A vector of n patterns that no row matches, or None when the rows
+    // are exhaustive.
+    fn missing(ref self, rows: ref Vec[Vec[SPat]], n: i64) -> Option[Vec[SPat]] {
+        if n == 0 {
+            return if rows.len() == 0 { Some(Vec.new()) } else { None };
+        }
+        let (fam, tags) = heads(rows);
+        let sig = match fam {
+            Some(f) => self.signature(f),
+            None => None,
+        };
+        if let Some(ref sg) = sig {
+            if tags.len() == sg.len() {
+                let f = fam.unwrap();
+                for (tag, ar) in sg.iter() {
+                    let t = Tag { n: tag, s: String.new() };
+                    let w = self.missing(specialize(rows, t, ar), ar + n - 1);
+                    if let Some(w) = w {
+                        let mut out = vec![SPat { wild: false, fam: f, tag: t, args: slice(w, 0, ar) }];
+                        for k in ar..w.len() {
+                            out.push(w[k].clone());
+                        }
+                        return Some(out);
+                    }
+                }
+                return None;
+            }
+        }
+        let w = match self.missing(default_rows(rows), n - 1) {
+            Some(w) => w,
+            None => return None,
+        };
+        let f = match fam {
+            Some(f) => f,
+            None => {
+                let mut out = vec![wild()];
+                out.extend(w);
+                return Some(out);
+            }
+        };
+        let mut head = wild();
+        if let Some(ref sg) = sig {
+            for (tag, ar) in sg.iter() {
+                let mut present = false;
+                for t in tags.iter() {
+                    if t.n == tag {
+                        present = true;
+                    }
+                }
+                if not present {
+                    head = SPat { wild: false, fam: f, tag: Tag { n: tag, s: String.new() }, args: wilds(ar) };
+                    break;
+                }
+            }
+        } else if f.kind == FamK.IntF {
+            let mut v = 0;
+            loop {
+                let mut present = false;
+                for t in tags.iter() {
+                    if t.n == v {
+                        present = true;
+                    }
+                }
+                if not present {
+                    break;
+                }
+                v += 1;
+            }
+            head = sp(FamK.IntF, 0, v, Vec.new());
+        } else {
+            let mut cands: Vec[String] = vec![String.new()];
+            for k in 0..26 {
+                cands.push(letter(k));
+            }
+            for cand in cands {
+                let mut present = false;
+                for t in tags.iter() {
+                    if t.s == cand {
+                        present = true;
+                    }
+                }
+                if not present {
+                    head = sp(FamK.StringF, 0, 0, Vec.new());
+                    head.tag.s = cand.clone();
+                    break;
+                }
+            }
+        }
+        let mut out = vec![head];
+        out.extend(w);
+        Some(out)
+    }
+
+    fn useful(ref self, rows: ref Vec[Vec[SPat]], q: ref Vec[SPat]) -> bool {
+        if q.len() == 0 {
+            return rows.len() == 0;
+        }
+        let h = ref q[0];
+        if not h.wild {
+            let mut q2 = h.args.clone();
+            for k in 1..q.len() {
+                q2.push(q[k].clone());
+            }
+            return self.useful(specialize(rows, h.tag, h.args.len()), q2);
+        }
+        let (fam, tags) = heads(rows);
+        let sig = match fam {
+            Some(f) => self.signature(f),
+            None => None,
+        };
+        if let Some(ref sg) = sig {
+            if tags.len() == sg.len() {
+                for (tag, ar) in sg.iter() {
+                    let mut q2 = wilds(ar);
+                    for k in 1..q.len() {
+                        q2.push(q[k].clone());
+                    }
+                    let t = Tag { n: tag, s: String.new() };
+                    if self.useful(specialize(rows, t, ar), q2) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+        }
+        self.useful(default_rows(rows), slice(q, 1, q.len()))
+    }
+
+    // ctx: 0 top, 1 constructor argument or cons head.
+    fn show_pat(ref self, p: ref SPat, ctx: i64) -> String {
+        if p.wild {
+            return "_".to_string();
+        }
+        let args = ref p.args;
+        match p.fam.kind {
+            FamK.IntF => f"{p.tag.n}",
+            FamK.StringF => "\"" + p.tag.s + "\"",
+            FamK.Boolean => if p.tag.n == 1 { "true".to_string() } else { "false".to_string() },
+            FamK.UnitF => "()".to_string(),
+            FamK.TupleF => {
+                let mut parts: Vec[String] = Vec.new();
+                for a in args.iter() {
+                    parts.push(self.show_pat(a, 0));
+                }
+                "(" + parts.join(", ") + ")"
+            }
+            FamK.ListF => {
+                if p.tag.n == 0 {
+                    return "[]".to_string();
+                }
+                let s = self.show_pat(args[0], 1) + " :: " + self.show_pat(args[1], 0);
+                if ctx >= 1 { "(" + s + ")" } else { s }
+            }
+            FamK.RecordF => {
+                let names = ref self.tinfos[p.fam.info].fields;
+                let mut parts: Vec[String] = Vec.new();
+                for k in 0..args.len() {
+                    parts.push(names[k] + " = " + self.show_pat(args[k], 0));
+                }
+                "{" + parts.join("; ") + "}"
+            }
+            FamK.Variant => {
+                let name = self.tinfos[p.fam.info].ctors[p.tag.n].clone();
+                if args.len() == 0 {
+                    return name;
+                }
+                let s = if args.len() == 1 {
+                    name + " " + self.show_pat(args[0], 1)
+                } else {
+                    let mut parts: Vec[String] = Vec.new();
+                    for a in args.iter() {
+                        parts.push(self.show_pat(a, 0));
+                    }
+                    name + " (" + parts.join(", ") + ")"
+                };
+                if ctx >= 1 { "(" + s + ")" } else { s }
+            }
+        }
+    }
+
+    fn match_warnings(mut ref self, rows: ref Vec[(SPat, bool, Loc)], span: Loc) {
+        let mut matrix: Vec[Vec[SPat]] = Vec.new();
+        for (p, guarded, _) in rows.iter() {
+            if not guarded {
+                matrix.push(vec![p.clone()]);
+            }
+        }
+        if let Some(w) = self.missing(matrix, 1) {
+            let ex = self.show_pat(w[0], 0);
+            self.warn(span, 8, "this pattern-matching is not exhaustive", vec!["here is an example of a case that is not matched: " + ex]);
+        }
+        let mut prev: Vec[Vec[SPat]] = Vec.new();
+        for (p, guarded, pspan) in rows.iter() {
+            let q = vec![p.clone()];
+            if not self.useful(prev, q) {
+                self.warn(*pspan, 11, "this match case is unused", Vec.new());
+            }
+            if not guarded {
+                prev.push(vec![p.clone()]);
+            }
+        }
+    }
+
+    fn exhaustive_one(mut ref self, p: ref Node, span: Loc) {
+        let rows = vec![vec![self.simple(p)]];
+        if let Some(w) = self.missing(rows, 1) {
+            let ex = self.show_pat(w[0], 0);
+            self.warn(span, 8, "this pattern-matching is not exhaustive", vec!["here is an example of a case that is not matched: " + ex]);
+        }
+    }
+
+    // ---- items
+
+    fn run(mut ref self, items: ref Vec[Item]) {
+        for item in items.iter() {
+            self.records = Vec.new();
+            self.ann_vars = Map.new();
+            let mark = self.env.len();
+            let r = self.run_item(item);
+            let ok = r.is_ok();
+            if let Err(d) = r {
+                self.emit(d);
+                self.level = 0;
+                self.truncate_env(mark);
+                if not item.is_type {
+                    let mut names: Vec[String] = Vec.new();
+                    for b in item.binds.iter() {
+                        pat_names(b.pat, mut names);
+                    }
+                    for nm in names {
+                        let v = self.generic_var();
+                        self.bind(nm, v);
+                    }
+                }
+            }
+            let recs = self.records.clone();
+            self.items.push(ItemRec { span: item.span, ok: ok, recs: recs });
+        }
+    }
+
+    fn run_item(mut ref self, item: ref Item) -> Result[(), Diag] {
+        if item.is_type {
+            self.declare_types(item)?;
+            for d in item.decls.iter() {
+                let mut ps: Vec[String] = Vec.new();
+                for n in d.params.iter() {
+                    ps.push("'" + n);
+                }
+                let pre = if ps.len() == 1 {
+                    ps[0] + " "
+                } else if ps.len() > 1 {
+                    "(" + ps.join(", ") + ") "
+                } else {
+                    String.new()
+                };
+                self.out.push(f"type {pre}{d.name}");
+            }
+            return Ok(());
+        }
+        self.level = 0;
+        let mark = self.env.len();
+        self.let_bindings(item.binds, item.flag)?;
+        for k in mark..self.env.len() {
+            let s = self.show1(self.env[k].ty);
+            let name = self.env[k].name.clone();
+            self.out.push(f"val {name} : {s}");
+        }
+        Ok(())
+    }
+
+    fn hover(ref self, line: i64, col: i64) -> String {
+        for it in self.items.iter() {
+            if not inside(it.span, line, col) {
+                continue;
+            }
+            if not it.ok {
+                return f"{line}:{col}: no type (this item has an error)";
+            }
+            let mut best: Option[Rec] = None;
+            for r in it.recs.iter() {
+                if inside(r.span, line, col) {
+                    let better = match best {
+                        None => true,
+                        Some(b) => r.span.eo - r.span.so < b.span.eo - b.span.so,
+                    };
+                    if better {
+                        best = Some(*r);
+                    }
+                }
+            }
+            return match best {
+                Some(b) => {
+                    let s = self.show1(b.ty);
+                    f"{b.span.sl}:{b.span.sc}-{b.span.el}:{b.span.ec}: {s}"
+                }
+                None => f"{line}:{col}: nothing here",
+            };
+        }
+        f"{line}:{col}: nothing here"
+    }
+}
+
+const ARGS_NONE: i64 = 0;
+const ARGS_ONE: i64 = 1;
+const ARGS_TUPLE: i64 = 2;
+const ARGS_ALL_WILD: i64 = 3;
+
+fn pat_names(p: ref Node, names: mut ref Vec[String]) {
+    if p.kind == Nk.PVar {
+        names.push(p.name.clone());
+    }
+    for x in p.kids.iter() {
+        pat_names(x, mut names);
+    }
+    for f in p.fields.iter() {
+        for v in f.value.iter() {
+            pat_names(v, mut names);
+        }
+    }
+}
+
+// ------------------------------------------------------------ driver
+
+fn analyse(fname: Str, src: Str) -> (Checker, bool) {
+    let mut c = new_checker(fname, src);
+    match parse_program(src) {
+        Ok(items) => {
+            c.run(items);
+            (c, true)
+        }
+        Err(d) => {
+            c.emit(d);
+            (c, false)
+        }
+    }
+}
+
+fn unescape(s: Str) -> String {
+    let b = s.bytes().to_vec();
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'\\' and i + 1 < b.len() {
+            let c = b[i + 1];
+            out.push(if c == b'n' { b'\n' } else if c == b't' { b'\t' } else { c });
+            i += 2;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    String.from_utf8(out).unwrap_or(String.new())
+}
+
+fn transcript(job: String) -> String {
+    let mut out: Vec[String] = Vec.new();
+    out.push("$ " + job);
+    let words: Vec[String] = job.split(" ").map(|w| w.to_string()).collect();
+    let mode = words[0].clone();
+    if mode == "snip" {
+        let src = unescape(job.substring(5));
+        let (c, _) = analyse("snip.ml", src);
+        out.extend(c.out);
+    } else if mode == "check" or mode == "hover" {
+        let name = words[1].clone();
+        match fs.read_to_string("data/" + name) {
+            Ok(src) => {
+                let (c, parsed) = analyse(name, src);
+                if mode == "check" {
+                    out.extend(c.out);
+                } else {
+                    for k in 2..words.len() {
+                        let pos = words[k].clone();
+                        if not parsed {
+                            out.push(f"{pos}: no type (the file does not parse)");
+                            continue;
+                        }
+                        let (l, col) = match pos.split_once(":") {
+                            Some((a, b)) => (i64.parse(a).unwrap_or(0), i64.parse(b).unwrap_or(0)),
+                            None => (0, 0),
+                        };
+                        out.push(c.hover(l, col));
+                    }
+                }
+            }
+            Err(e) => out.push(f"! cannot read {name}: {e}"),
+        }
+    } else {
+        out.push(f"unknown job {mode}");
+    }
+    out.join("\n") + "\n"
+}
+
+fn is_hexd(c: u8) -> bool {
+    (c >= b'0' and c <= b'9') or (c >= b'a' and c <= b'f') or (c >= b'A' and c <= b'F')
+}
+
+fn hex_val(c: u8) -> u8 {
+    if c >= b'0' and c <= b'9' {
+        c - b'0'
+    } else if c >= b'a' and c <= b'f' {
+        c - b'a' + 10
+    } else {
+        c - b'A' + 10
+    }
+}
+
+fn unhex(s: Str) -> Vec[u8] {
+    let mut digits: Vec[u8] = Vec.new();
+    for c in s.bytes() {
+        if is_hexd(c) {
+            digits.push(hex_val(c));
+        }
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i + 1 < digits.len() {
+        out.push(digits[i] * 16 + digits[i + 1]);
+        i += 2;
+    }
+    out
+}
+
+fn put_bytes(path: Str, b: Vec[u8]) -> Result[(), String] {
+    if let Err(e) = fs.write_bytes(path.to_string(), b) {
+        return Err(f"cannot write {path}: {e}");
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = fs.create_dir_all("data".to_string()) {
+        eprintln(f"cannot create data: {e}");
+        return;
+    }
+    if let Err(e) = write_data() {
+        eprintln(e);
+        return;
+    }
+    let jobs = match fs.read_to_string("data/jobs.txt".to_string()) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln(f"cannot read jobs.txt: {e}");
+            return;
+        }
+    };
+    let mut lines: Vec[String] = Vec.new();
+    for l in jobs.split("\n") {
+        let t = l.strip_suffix("\r") ?? l;
+        if t.trim().len() > 0 {
+            lines.push(t.to_string());
+        }
+    }
+    // Every job in a task of its own; the transcript prints in job order.
+    let group = TaskGroup.new();
+    let mut handles = Vec.new();
+    for line in lines {
+        handles.push(group.spawn(|| transcript(line)));
+    }
+    for h in handles.into_iter() {
+        print(h.join());
+    }
+}
+
+// ============================================================ data
+
+// The files under data/, in name order.
+fn write_data() -> Result[(), String] {
+    put_bytes("data/bank.ml", unhex(file_0()))?;
+    put_bytes("data/interp.ml", unhex(file_1()))?;
+    put_bytes("data/jobs.txt", unhex(file_2()))?;
+    put_bytes("data/json.ml", unhex(file_3()))?;
+    put_bytes("data/lists.ml", unhex(file_4()))?;
+    put_bytes("data/queue.ml", unhex(file_5()))?;
+    put_bytes("data/shapes.ml", unhex(file_6()))?;
+    Ok(())
+}
+
+// data/bank.ml
+fn file_0() -> String {
+    """
+74797065206163636f756e74203d207b206964203a20696e743b206f776e6572203a20737472696e673b2062616c616e
+6365203a20696e74207d0a0a747970652074786e203d0a20207c204465706f736974206f6620696e74202a20696e740a
+20207c205769746864726177206f6620696e74202a20696e740a20207c205472616e73666572206f6620696e74202a20
+696e74202a20696e740a0a6c6574206f70656e5f6163636f756e74206964206f776e6572203d207b206964203d206964
+3b206f776e6572203d206f776e65723b2062616c616e6365203d2030207d0a0a6c6574206465706f7369742061636374
+20616d6f756e74203d207b206163637420776974682062616c616e6365203d20616363742e62616c616e6365202b2061
+6d6f756e74207d0a0a6c6574207769746864726177206163637420616d6f756e74203d0a2020696620616d6f756e7420
+3e20616363742e62616c616e6365207468656e204e6f6e650a2020656c736520536f6d65207b20616363742077697468
+2062616c616e6365203d20616363742e62616c616e6365202d20616d6f756e74207d0a0a6c6574206665652061636374
+203d20616363742e62616c616e6365202a2032202f20313030205e202220455552220a0a6c6574206c6162656c206163
+6374203d20616363742e6f776e6572205e2022202322205e20616363742e69640a0a6c6574207265632066696e642069
+64206163637473203d206d6174636820616363747320776974680a20207c205b5d202d3e204e6f6e650a20207c206120
+3a3a2072657374202d3e20696620612e6964203d206964207468656e20536f6d65206120656c73652066696e64206964
+20726573740a0a6c6574206170706c792061636374732074203d206d61746368207420776974680a20207c204465706f
+736974202869642c20616d7429202d3e2066696e642069642061636374730a20207c2057697468647261772028696429
+202d3e2066696e642069642061636374730a20207c205472616e7366657220287372632c206473742c20616d7429202d
+3e2066696e64207372632061636374730a0a6c657420726563207265706c6163652061206163637473203d206d617463
+6820616363747320776974680a20207c205b5d202d3e205b5d0a20207c2062203a3a2072657374202d3e20696620622e
+6964203d20612e6964207468656e2061203a3a207265737420656c73652062203a3a207265706c616365206120726573
+740a0a6c657420706f73742061636374732074203d206d61746368207420776974680a20207c204465706f7369742028
+69642c20616d7429202d3e0a20202020286d617463682066696e6420696420616363747320776974680a20202020207c
+20536f6d652061202d3e207265706c61636520286465706f736974206120616d74292061636374730a20202020207c20
+4e6f6e65202d3e206163637473290a20207c205769746864726177202869642c20616d7429202d3e0a20202020286d61
+7463682066696e6420696420616363747320776974680a20202020207c20536f6d652061202d3e20286d617463682077
+69746864726177206120616d74207769746820536f6d652062202d3e207265706c6163652062206163637473207c204e
+6f6e65202d3e206163637473290a20202020207c204e6f6e65202d3e206163637473290a20207c205472616e73666572
+20287372632c206473742c20616d7429202d3e2061636374730a0a6c65742073756d6d617279206163637473203d206d
+6170202866756e2061202d3e20612e6f776e6572292061636374730a0a6c6574206175646974206163637473203d204c
+6973742e6c656e6774682061636374730a0a6c657420696e7465726573742061203d206465706f73697420612028612e
+62616c616e6365202f20313030292031320a0a6c65742072656e616d6520612077686f203d207b20612077697468206e
+616d65203d2077686f207d0a0a6c657420626f6e75732061203d20696620612e62616c616e6365203e20313030302074
+68656e206465706f73697420612035300a0a6c657420636c6f73652061203d206d6174636820612e62616c616e636520
+776974682030202d3e204f6b2061207c205f202d3e204572726f72202262616c616e6365220a0a6c6574206163636f75
+6e7473203d205b6f70656e5f6163636f756e7420312022616461223b206f70656e5f6163636f756e7420322022677261
+6365225d0a6c6574206166746572203d20706f73742028706f7374206163636f756e747320284465706f736974202831
+2c20353030292929202857697468647261772028312c2032303029290a6c6574207265632062616c616e636573206163
+637473203d206d6174636820616363747320776974680a20207c205b5d202d3e205b5d0a20207c2061203a3a20726573
+74202d3e2028612e6f776e65722c20612e62616c616e636529203a3a2062616c616e63657320726573740a6c65742066
+696e616c203d2062616c616e6365732061667465720a
+"""
+}
+
+// data/interp.ml
+fn file_1() -> String {
+    """
+74797065202827612c2027652920726573756c74203d204f6b206f66202761207c204572726f72206f662027650a0a74
+7970652065787072203d0a20207c204e756d206f6620696e740a20207c20426f6f6c206f6620626f6f6c0a20207c2056
+6172206f6620737472696e670a20207c20416464206f662065787072202a20657870720a20207c204c657373206f6620
+65787072202a20657870720a20207c204966206f662065787072202a2065787072202a20657870720a20207c204c6574
+206f6620737472696e67202a2065787072202a20657870720a20207c20466e206f6620737472696e67202a2065787072
+0a20207c2043616c6c206f662065787072202a20657870720a0a747970652076616c7565203d2056496e74206f662069
+6e74207c2056426f6f6c206f6620626f6f6c207c2056436c6f73757265206f6620737472696e67202a2065787072202a
+20656e760a616e6420656e76203d2028737472696e67202a2076616c756529206c6973740a0a74797065207479203d20
+54496e74207c2054426f6f6c207c205446756e206f66207479202a2074790a0a6c65742062696e6420722066203d206d
+61746368207220776974680a20207c204f6b2076202d3e206620760a20207c204572726f722065202d3e204572726f72
+20650a0a6c657420726563206c6f6f6b7570207820656e76203d206d6174636820656e7620776974680a20207c205b5d
+202d3e204572726f72202822756e626f756e642022205e2078290a20207c2028792c207629203a3a2072657374202d3e
+2069662078203d2079207468656e204f6b207620656c7365206c6f6f6b7570207820726573740a0a6c65742072656320
+6576616c20656e762065203d206d61746368206520776974680a20207c204e756d206e202d3e204f6b202856496e7420
+6e290a20207c20426f6f6c2062202d3e204f6b202856426f6f6c2062290a20207c205661722078202d3e206c6f6f6b75
+70207820656e760a20207c204164642028612c206229202d3e20617269746820656e7620612062202866756e20782079
+202d3e2056496e74202878202b207929290a20207c204c6573732028612c206229202d3e20617269746820656e762061
+2062202866756e20782079202d3e2056426f6f6c202878203c207929290a20207c2049662028632c20742c206629202d
+3e0a2020202062696e6420286576616c20656e76206329202866756e2076202d3e206d61746368207620776974680a20
+20202020207c2056426f6f6c2074727565202d3e206576616c20656e7620740a2020202020207c2056426f6f6c206661
+6c7365202d3e206576616c20656e7620660a2020202020207c205f202d3e204572726f72202269663a206e6f74206120
+626f6f6c22290a20207c204c65742028782c20612c206229202d3e2062696e6420286576616c20656e76206129202866
+756e2076202d3e206576616c202828782c207629203a3a20656e76292062290a20207c20466e2028782c20626f647929
+202d3e204f6b202856436c6f737572652028782c20626f64792c20656e7629290a20207c2043616c6c2028662c206129
+202d3e2062696e6420286576616c20656e76206629202866756e206676202d3e2062696e6420286576616c20656e7620
+6129202866756e206176202d3e206170706c7920667620617629290a616e6420617269746820656e7620612062206b20
+3d0a202062696e6420286576616c20656e76206129202866756e2078202d3e2062696e6420286576616c20656e762062
+29202866756e2079202d3e206d617463682028782c20792920776974680a202020207c202856496e74206d2c2056496e
+74206e29202d3e204f6b20286b206d206e290a202020207c205f202d3e204572726f72202261726974683a206e6f7420
+696e74732229290a616e64206170706c7920662061203d206d61746368206620776974680a20207c2056436c6f737572
+652028782c20626f64792c2063656e7629202d3e206576616c202828782c206129203a3a2063656e762920626f64790a
+20207c205f202d3e204572726f72202263616c6c3a206e6f7420612066756e6374696f6e220a0a6c6574207265632074
+7970655f6f662074656e762065203d206d61746368206520776974680a20207c204e756d205f202d3e204f6b2054496e
+740a20207c20426f6f6c205f202d3e204f6b2054426f6f6c0a20207c205661722078202d3e206c6f6f6b757020782074
+656e760a20207c204164642028612c206229202d3e20626f74682074656e76206120622054496e742054496e740a2020
+7c204c6573732028612c206229202d3e20626f74682074656e76206120622054496e742054426f6f6c0a20207c204966
+2028632c20742c206629202d3e0a2020202062696e642028747970655f6f662074656e76206329202866756e20746320
+2d3e0a2020202020206966207463203c3e2054426f6f6c207468656e204572726f72202269663a20636f6e646974696f
+6e2220656c73650a20202020202062696e642028747970655f6f662074656e76207429202866756e207474202d3e0a20
+2020202020202062696e642028747970655f6f662074656e76206629202866756e207466202d3e0a2020202020202020
+20206966207474203d207466207468656e204f6b20747420656c7365204572726f72202269663a206272616e63686573
+222929290a20207c204c65742028782c20612c206229202d3e2062696e642028747970655f6f662074656e7620612920
+2866756e207461202d3e20747970655f6f66202828782c20746129203a3a2074656e76292062290a20207c20466e2028
+5f2c205f29202d3e204572726f722022666e3a206e6565647320616e20616e6e6f746174696f6e220a20207c2043616c
+6c2028662c206129202d3e0a2020202062696e642028747970655f6f662074656e76206629202866756e207466202d3e
+2062696e642028747970655f6f662074656e76206129202866756e207461202d3e206d6174636820746620776974680a
+2020202020207c205446756e2028702c207229202d3e2069662070203d207461207468656e204f6b207220656c736520
+4572726f72202263616c6c3a20617267756d656e74220a2020202020207c205f202d3e204572726f72202263616c6c3a
+206e6f7420612066756e6374696f6e2229290a616e6420626f74682074656e76206120622077616e7420726573203d0a
+202062696e642028747970655f6f662074656e76206129202866756e207461202d3e2062696e642028747970655f6f66
+2074656e76206229202866756e207462202d3e0a202020206966207461203d2077616e74202626207462203d2077616e
+74207468656e204f6b2072657320656c7365204572726f7220226f706572616e64732229290a0a6c65742073686f7720
+72203d206d61746368207220776974680a20207c204f6b202856496e74206e29202d3e20737472696e675f6f665f696e
+74206e0a20207c204f6b202856426f6f6c206229202d3e20737472696e675f6f665f626f6f6c20620a20207c204f6b20
+2856436c6f737572652028782c205f2c205f2929202d3e20223c66756e2022205e2078205e20223e220a20207c204572
+726f72206d7367202d3e20226572726f723a2022205e206d73670a0a6c65742070726f67203d204c6574202822696e63
+222c20466e2028226e222c20416464202856617220226e222c204e756d203129292c0a20202020202020202020202020
+202020496620284c65737320284e756d20322c204e756d2033292c2043616c6c20285661722022696e63222c204e756d
+203431292c204e756d203029290a6c657420726573756c74203d2073686f7720286576616c205b5d2070726f67290a6c
+657420626164203d2073686f7720286576616c205b5d202841646420284e756d20312c20426f6f6c2074727565292929
+0a6c657420636865636b6564203d20747970655f6f66205b5d202841646420284e756d20312c204e756d203229290a
+"""
+}
+
+// data/jobs.txt
+fn file_2() -> String {
+    """
+636865636b206c697374732e6d6c0a636865636b207368617065732e6d6c0a636865636b206a736f6e2e6d6c0a636865
+636b20696e746572702e6d6c0a636865636b2062616e6b2e6d6c0a636865636b2071756575652e6d6c0a686f76657220
+6c697374732e6d6c2031303a31382031303a32372031363a31382033323a362034383a34392035373a32322036323a33
+302037363a31392037303a313120313a332038303a32340a686f766572207368617065732e6d6c2031343a3335203134
+3a32302035393a31392036313a332035363a31312036333a32352033303a32390a686f766572206a736f6e2e6d6c2032
+333a33352032353a31312033373a31302035343a32342034343a31352035323a31370a686f76657220696e746572702e
+6d6c2031393a352033313a33382034303a38342034333a33312036313a36382036373a31392034363a32340a686f7665
+722062616e6b2e6d6c20383a31382031343a35302031363a352033363a32372036303a31390a686f7665722071756575
+652e6d6c20353a352031343a32312032333a32352033363a33362034393a32352036303a33342036323a31362036383a
+33360a736e6970206c65742069642078203d20785c6e6c6574206b20782079203d20785c6e6c65742073206620672078
+203d206620782028672078290a736e6970206c657420747769636520662078203d20662028662078295c6e6c65742061
+646431203d207477696365202866756e206e202d3e206e202b2031295c6e6c65742068656c6c6f203d20747769636520
+2866756e2073202d3e2073205e202221222920226869220a736e6970206c6574207061697220782079203d2028782c20
+79295c6e6c657420737761702028612c206229203d2028622c2061295c6e6c65742070203d2073776170202870616972
+203120226f6e6522290a736e6970206c657420726563206576656e206e203d206966206e203d2030207468656e207472
+756520656c7365206f646420286e202d2031295c6e616e64206f6464206e203d206966206e203d2030207468656e2066
+616c736520656c7365206576656e20286e202d2031290a736e6970206c6574206170706c795f616c6c2066732078203d
+206d617463682066732077697468205b5d202d3e205b5d207c2066203a3a2072657374202d3e205b6620785d5c6e6c65
+742072203d206170706c795f616c6c205b737472696e675f6f665f696e745d20330a736e6970206c657420666c697020
+6620612062203d2066206220615c6e6c657420737562203d20666c6970202866756e20612062202d3e2061202d206229
+5c6e6c657420636f6e73203d20666c6970202866756e2078206c202d3e2078203a3a206c290a736e6970206c65742066
+203d2066756e2078202d3e206c657420672079203d2028782c20792920696e20675c6e6c65742068203d206620312022
+61220a736e6970206c657420636f6d706f736520662067203d2066756e2078202d3e20662028672078295c6e6c657420
+6c656e5f737472203d20636f6d706f736520737472696e675f6f665f696e7420737472696e675f6c656e6774680a736e
+6970206c657420706f6c79203d206c65742069642078203d207820696e2028696420312c20696420747275652c206964
+20227322290a736e6970207479706520276120626f78203d20426f78206f662027615c6e6c657420756e626f78206220
+3d206d617463682062207769746820426f782076202d3e20765c6e6c6574206e6573746564203d20426f782028426f78
+2033290a736e69702074797065202827612c2027622920656974686572203d204c656674206f66202761207c20526967
+6874206f662027625c6e6c6574206c65667473206c203d206d61746368206c2077697468204c6566742078203a3a205f
+202d3e20536f6d652078207c205f202d3e204e6f6e650a736e6970206c6574206375727279206620612062203d206620
+28612c2062295c6e6c657420756e637572727920662028612c206229203d2066206120620a736e6970206c6574207265
+63206c617374206c203d206d61746368206c2077697468205b5d202d3e204e6f6e65207c205b785d202d3e20536f6d65
+2078207c205f203a3a2072657374202d3e206c61737420726573740a736e6970206c65742078203a20696e74206c6973
+74203d205b5d5c6e6c65742079203d202866756e202861203a20737472696e6729202d3e206129202273220a736e6970
+206c657420636d70202861203a20276129202862203a20276129203d20636f6d70617265206120625c6e6c6574206320
+3d20636d7020310a736e6970206c657420726563206c6f6f70206e203d206966206e203e2030207468656e2028707269
+6e745f696e74206e3b206c6f6f7020286e202d203129295c6e6c6574202829203d206c6f6f7020330a736e6970206c65
+7420662078203d206d61746368207820776974682028302c207929202d3e2079207c2028782c205f29202d3e20785c6e
+6c65742067203d20662028312c2032290a736e697020747970652072203d207b206e616d65203a20737472696e673b20
+616765203a20696e74207d5c6e6c6574206f6c6465722070203d207b2070207769746820616765203d20702e61676520
+2b2031207d5c6e6c657420616461203d206f6c646572207b206e616d65203d2022416461223b20616765203d20333620
+7d0a736e6970206c6574207265632066616374206e203d206966206e203c3d2031207468656e203120656c7365206e20
+2a206661637420286e202d2031295c6e6c657420626967203d2066616374203130203e2031303030202626206e6f7420
+66616c73650a736e6970206c6574206c203d205b313b20325d2040205b335d5c6e6c65742073203d20226122205e2022
+62225c6e6c65742074203d20286c2c20732c202d352c2037206d6f642033290a736e6970206c65742078203d2031202b
+20747275650a736e6970206c657420662078203d2078202b20315c6e6c65742079203d206620226f6e65220a736e6970
+206c6574206c203d205b313b202274776f223b20335d0a736e6970206c65742062203d2069662074727565207468656e
+203120656c736520226e6f220a736e6970206c65742063203d2069662031207468656e203220656c736520330a736e69
+70206c65742073203d20226e203d2022205e2034320a736e6970206c657420662028612c206229203d2061202b20625c
+6e6c65742072203d20662028312c20322c2033290a736e6970206c657420672078203d207820315c6e6c65742072203d
+206720320a736e6970206c6574207468726565203d20335c6e6c65742072203d20746872656520340a736e6970206c65
+742061646420612062203d2061202b20625c6e6c65742072203d206164642031203220330a736e6970206c6574207265
+6320662078203d20660a736e6970206c65742073656c665f6170706c79203d2066756e2066202d3e206620660a736e69
+70206c6574206c203d205b5b315d3b205b747275655d5d0a736e6970206c65742070203a20696e74202a20737472696e
+67203d2028312c2032290a736e6970206c65742066202878203a20737472696e6729203d2078202b20310a736e697020
+6c6574206d203d206d61746368203320776974682022746872656522202d3e2031207c205f202d3e20300a736e697020
+6c6574206d203d206d61746368205b315d20776974682028612c206229202d3e20610a736e6970206c6574206d203d20
+6d6174636820536f6d652031207769746820536f6d6520227822202d3e2031207c205f202d3e20300a736e6970206c65
+74206d203d206d617463682028312c20747275652920776974682028612c203129202d3e2061207c205f202d3e20300a
+736e6970206c65742075203d207072696e745f737472696e67202261223b20350a736e6970206c65742077203d206966
+2074727565207468656e20350a736e6970206c65742068203d2066756e2078202d3e202878203a20696e7429205e2022
+220a736e6970206c657420726563206d61702066206c203d206d61746368206c2077697468205b5d202d3e205b5d207c
+2078203a3a207873202d3e20662078203a3a206d61702078730a736e6970206c657420662078203d2028782c2078295c
+6e6c65742067203d20662031202b20310a736e6970206c6574207265632073686f775f616c6c2066206c203d206d6174
+6368206c2077697468205b5d202d3e202222207c2078203a3a2072202d3e20662078205e2073686f775f616c6c206620
+725c6e616e642073686f775f696e7473206c203d2073686f775f616c6c20737472696e675f6f665f696e74206c5c6e61
+6e642073686f775f626f6f6c73206c203d2073686f775f616c6c20737472696e675f6f665f626f6f6c206c0a736e6970
+206c6574206f7074203d20536f6d652031202b20310a736e6970206c65742077726f6e67203d206673742028312c2032
+29205e2022220a736e6970206c6574206e203d206d61782031202232220a736e6970206c65742072203d206c656e6768
+74205b315d0a736e6970206c657420726563206c656e677468206c203d206d61746368206c2077697468205b5d202d3e
+2030207c205f203a3a2074202d3e2031202b206c656e67687420740a736e6970206c657420746f74616c203d2073756d
+6d203120325c6e6c65742073756d20612062203d2061202b20620a736e6970206c65742076203d204a75737420310a73
+6e6970206c65742078203a207374726e67203d202261220a736e6970206c65742076203d20756e646566696e65645f74
+68696e670a736e6970206c6574207072696e745f6c696e652073203d207072696e745f737472696e20730a736e697020
+6c65742061203d20536f6d650a736e6970206c65742061203d204e6f6e6520310a736e697020747970652074203d2050
+616972206f6620696e74202a20696e745c6e6c65742061203d205061697220310a736e697020747970652074203d2050
+616972206f6620696e74202a20696e745c6e6c65742061203d20506169722028312c20322c2033290a736e6970207479
+70652074203d2050616972206f6620696e74202a20696e745c6e6c657420662070203d206d6174636820702077697468
+20506169722078202d3e20780a736e697020747970652074203d2050616972206f6620696e74202a20696e745c6e6c65
+7420662070203d206d61746368207020776974682050616972205f202d3e20300a736e6970206c65742078203a202869
+6e742c20696e7429206c697374203d205b5d0a736e6970206c65742078203a20696e74206f7074696f6e206f7074696f
+6e203d20536f6d65204e6f6e650a736e697020747970652027612074203d2054206f662027620a736e69702074797065
+2074203d2041206f6620756e646566696e65640a736e697020747970652070203d207b2078203a20696e743b2079203a
+20696e74207d5c6e6c65742061203d207b2078203d20313b2079203d20323b2078203d2033207d0a736e697020747970
+652070203d207b2078203a20696e743b2079203a20696e74207d5c6e6c65742061203d207b2078203d2031207d0a736e
+697020747970652070203d207b2078203a20696e743b2079203a20696e74207d5c6e6c65742061203d207b2078203d20
+313b2079203d20323b207a203d2033207d0a736e697020747970652070203d207b2078203a20696e743b2079203a2069
+6e74207d5c6e6c657420662072203d20722e7a0a736e697020747970652070203d207b2078203a20696e743b2079203a
+20696e74207d5c6e747970652071203d207b207a203a20696e74207d5c6e6c65742061203d207b2078203d20313b207a
+203d2032207d0a736e697020747970652070203d207b2078203a20696e743b2079203a20696e74207d5c6e6c65742061
+203d207b2078203d202231223b2079203d2032207d0a736e697020747970652070203d207b2078203a20696e743b2079
+203a20696e74207d5c6e6c657420662072203d20722e78205e2022220a736e697020747970652070203d207b2078203a
+20696e743b2079203a20696e74207d5c6e6c657420662072203d206d6174636820722077697468207b2078203d20303b
+2079207d202d3e2079207c207b2078207d202d3e20780a736e697020747970652061203d207b2076203a20696e74207d
+5c6e747970652062203d207b2076203a20737472696e67207d5c6e6c657420662072203d20722e760a736e6970206c65
+7420662028782c207829203d20780a736e6970206c657420662078203d206d61746368207820776974682028612c2061
+29202d3e20610a736e6970206c6574206620782078203d20780a736e6970206c6574207265632066203d20330a736e69
+70206c6574207265632028612c206229203d202866756e2078202d3e20782c2066756e2079202d3e2079290a736e6970
+206c657420662078203d206d61746368207820776974682030202d3e20227a65726f22207c2031202d3e20226f6e6522
+0a736e6970206c657420662078203d206d61746368207820776974682074727565202d3e20310a736e6970206c657420
+66206c203d206d61746368206c20776974682078203a3a205f202d3e20780a736e6970206c65742066206c203d206d61
+746368206c2077697468205b5d202d3e2030207c205b785d202d3e20780a736e6970206c657420662073203d206d6174
+636820732077697468202222202d3e2030207c20226122202d3e20310a736e6970206c657420662070203d206d617463
+68207020776974682028747275652c2066616c736529202d3e2031207c202866616c73652c207472756529202d3e2032
+0a736e6970206c65742066206f203d206d61746368206f207769746820536f6d652028536f6d65207829202d3e207820
+7c204e6f6e65202d3e20300a736e6970206c657420662078203d206d6174636820782077697468205f202d3e2031207c
+2030202d3e20320a736e6970206c657420662078203d206d617463682078207769746820536f6d65205f202d3e203120
+7c204e6f6e65202d3e2032207c20536f6d652033202d3e20330a736e6970206c657420662078203d206d617463682078
+20776974682079207768656e2079203e2030202d3e2031207c2030202d3e20320a736e6970206c657420662078203d20
+6d61746368207820776974682079207768656e2079203e2030202d3e2031207c205f202d3e2032207c2035202d3e2033
+0a736e6970206c65742067203d206c657420756e75736564203d203120696e206c6574205f6f6b203d203220696e2033
+0a736e6970206c65742067203d206c65742061203d203120616e642062203d203220696e20610a736e6970206c657420
+66697273742028536f6d65207829203d20780a736e6970206c657420536f6d652079203d20536f6d6520310a736e6970
+20747970652074203d2041207c2042207c20435c6e6c65742066203d2066756e6374696f6e2041202d3e2031207c2042
+202d3e20320a736e697020747970652074203d2041207c2042207c20435c6e6c657420662078203d206d617463682078
+20776974682041202d3e2031207c205f202d3e2032207c2043202d3e20330a736e697020747970652070203d207b2078
+203a20696e743b2079203a20626f6f6c207d5c6e6c657420662072203d206d6174636820722077697468207b2079203d
+2074727565207d202d3e20310a736e6970206c65742078203d20282a206e6576657220636c6f7365640a736e6970206c
+65742073203d20226e6f20656e640a736e6970206c65742078203d2031202420320a736e6970206c65742078203d2022
+626164205c5c7120657363617065220a736e6970206c65742078203d2031202b0a736e6970206c6574203d20350a736e
+6970206c657420662078203d206d6174636820782077697468207c202d3e20310a736e697020747970652074203d207c
+206c6f7765720a736e6970206c65742078203d2028312c20320a736e6970206c65742061203d2031206c65742062203d
+2061202b2e20320a
+"""
+}
+
+// data/json.ml
+fn file_3() -> String {
+    """
+74797065206a736f6e203d0a20207c204e756c6c0a20207c20426f6f6c206f6620626f6f6c0a20207c20496e74206f66
+20696e740a20207c20537472206f6620737472696e670a20207c204c697374206f66206a736f6e206c6973740a20207c
+204f626a206f662028737472696e67202a206a736f6e29206c6973740a0a7479706520706174685f73746570203d204b
+6579206f6620737472696e67207c20496e646578206f6620696e740a0a6c6574207265632071756f74655f6368617273
+2073203d20225c2222205e2073205e20225c22220a0a6c657420726563206a6f696e5f776974682066206c203d206d61
+746368206c20776974680a20207c205b5d202d3e2022220a20207c205b785d202d3e206620780a20207c2078203a3a20
+7873202d3e20662078205e20222c22205e206a6f696e5f7769746820662078730a0a6c65742072656320746f5f737472
+696e67206a203d206d61746368206a20776974680a20207c204e756c6c202d3e20226e756c6c220a20207c20426f6f6c
+2062202d3e20737472696e675f6f665f626f6f6c20620a20207c20496e74206e202d3e20737472696e675f6f665f696e
+74206e0a20207c205374722073202d3e2071756f74655f636861727320730a20207c204c697374206974656d73202d3e
+20225b22205e206a6f696e5f7769746820746f5f737472696e67206974656d73205e20225d220a20207c204f626a2066
+69656c6473202d3e20227b22205e206a6f696e5f77697468206669656c64206669656c6473205e20227d220a616e6420
+6669656c64206b76203d206d61746368206b76207769746820286b2c207629202d3e2071756f74655f6368617273206b
+205e20223a22205e20746f5f737472696e6720760a0a6c657420726563206e7468206c206e203d206d61746368206c20
+776974680a20207c205b5d202d3e204e6f6e650a20207c2078203a3a207873202d3e206966206e203d2030207468656e
+20536f6d65207820656c7365206e746820787320286e202d2031290a0a6c657420726563206d656d626572206b657920
+6669656c6473203d206d61746368206669656c647320776974680a20207c205b5d202d3e204e6f6e650a20207c20286b
+2c207629203a3a2072657374202d3e206966206b203d206b6579207468656e20536f6d65207620656c7365206d656d62
+6572206b657920726573740a0a6c657420726563206765742070617468206a203d206d617463682028706174682c206a
+2920776974680a20207c20285b5d2c205f29202d3e20536f6d65206a0a20207c20284b6579206b203a3a20726573742c
+204f626a206669656c647329202d3e0a20202020286d61746368206d656d626572206b206669656c6473207769746820
+536f6d652076202d3e2067657420726573742076207c204e6f6e65202d3e204e6f6e65290a20207c2028496e64657820
+69203a3a20726573742c204c697374206974656d7329202d3e0a20202020286d61746368206e7468206974656d732069
+207769746820536f6d652076202d3e2067657420726573742076207c204e6f6e65202d3e204e6f6e65290a20207c2028
+5f203a3a205f2c205f29202d3e204e6f6e650a0a6c657420696e745f61742070617468206a203d206d61746368206765
+742070617468206a20776974680a20207c20536f6d652028496e74206e29202d3e20536f6d65206e0a20207c205f202d
+3e204e6f6e650a0a6c6574206f72646572203d0a20204f626a205b28226964222c20496e742031303432293b0a202020
+202020202822637573746f6d6572222c204f626a205b28226e616d65222c20537472202241646122293b202822766970
+222c20426f6f6c2074727565295d293b0a2020202020202028226c696e6573222c204c697374205b4f626a205b282273
+6b75222c205374722022412d3122293b202822717479222c20496e742032295d3b0a2020202020202020202020202020
+2020202020202020204f626a205b2822736b75222c205374722022422d3722293b202822717479222c20496e74203129
+5d5d293b0a2020202020202028226e6f7465222c204e756c6c295d0a0a6c65742066697273745f717479203d20696e74
+5f6174205b4b657920226c696e6573223b20496e64657820303b204b65792022717479225d206f726465720a6c657420
+74657874203d20746f5f737472696e67206f726465720a6c6574206d697373696e67203d20676574205b4b657920226c
+696e6573223b20496e64657820355d206f726465720a0a6c65742072656320746f74616c5f717479206974656d73203d
+206d61746368206974656d7320776974680a20207c205b5d202d3e20300a20207c204f626a206669656c6473203a3a20
+72657374202d3e0a20202020286d61746368206d656d626572202271747922206669656c647320776974680a20202020
+207c20536f6d652028496e74207129202d3e2071202b20746f74616c5f71747920726573740a20202020207c205f202d
+3e20746f74616c5f7174792072657374290a20207c205f203a3a2072657374202d3e20746f74616c5f71747920726573
+740a0a6c657420717479203d206d6174636820676574205b4b657920226c696e6573225d206f7264657220776974680a
+20207c20536f6d6520284c697374206974656d7329202d3e20746f74616c5f717479206974656d730a20207c20536f6d
+65205f202d3e20300a
+"""
+}
+
+// data/lists.ml
+fn file_4() -> String {
+    """
+282a204120736d616c6c206c697374206c6962726172792e202a290a0a6c657420726563206c656e677468206c203d20
+6d61746368206c20776974680a20207c205b5d202d3e20300a20207c205f203a3a2072657374202d3e2031202b206c65
+6e67746820726573740a0a6c657420726576206c203d0a20206c65742072656320676f20616363206c203d206d617463
+68206c20776974680a202020207c205b5d202d3e206163630a202020207c2078203a3a207873202d3e20676f20287820
+3a3a20616363292078730a2020696e0a2020676f205b5d206c0a0a6c657420726563206d61702066206c203d206d6174
+6368206c20776974680a20207c205b5d202d3e205b5d0a20207c2078203a3a207873202d3e20662078203a3a206d6170
+20662078730a0a6c6574207265632066696c7465722070206c203d206d61746368206c20776974680a20207c205b5d20
+2d3e205b5d0a20207c2078203a3a207873202d3e20696620702078207468656e2078203a3a2066696c74657220702078
+7320656c73652066696c74657220702078730a0a6c65742072656320666f6c645f6c656674206620616363206c203d20
+6d61746368206c20776974680a20207c205b5d202d3e206163630a20207c2078203a3a207873202d3e20666f6c645f6c
+6566742066202866206163632078292078730a0a6c65742072656320666f6c645f72696768742066206c20616363203d
+206d61746368206c20776974680a20207c205b5d202d3e206163630a20207c2078203a3a207873202d3e206620782028
+666f6c645f7269676874206620787320616363290a0a6c657420726563206173736f63206b6579206c203d206d617463
+68206c20776974680a20207c205b5d202d3e204e6f6e650a20207c20286b2c207629203a3a2072657374202d3e206966
+206b203d206b6579207468656e20536f6d65207620656c7365206173736f63206b657920726573740a0a6c6574207265
+632072616e6765206c6f206869203d206966206c6f203e206869207468656e205b5d20656c7365206c6f203a3a207261
+6e676520286c6f202b2031292068690a0a6c657420726563207a697020612062203d206d617463682028612c20622920
+776974680a20207c20285b5d2c205b5d29202d3e20536f6d65205b5d0a20207c202878203a3a2078732c2079203a3a20
+797329202d3e0a20202020286d61746368207a697020787320797320776974680a20202020207c20536f6d6520726573
+74202d3e20536f6d65202828782c207929203a3a2072657374290a20202020207c204e6f6e65202d3e204e6f6e65290a
+20207c205f202d3e204e6f6e650a0a6c65742072656320696e7365727420636d702078206c203d206d61746368206c20
+776974680a20207c205b5d202d3e205b785d0a20207c2079203a3a207973202d3e20696620636d7020782079203c3d20
+30207468656e2078203a3a206c20656c73652079203a3a20696e7365727420636d7020782079730a0a6c657420736f72
+7420636d70206c203d20666f6c645f6c656674202866756e206163632078202d3e20696e7365727420636d7020782061
+636329205b5d206c0a0a6c657420726563206578697374732070203d2066756e6374696f6e0a20207c205b5d202d3e20
+66616c73650a20207c2078203a3a207873202d3e20702078207c7c2065786973747320702078730a0a6c657420666f72
+5f616c6c2070206c203d206e6f742028657869737473202866756e2078202d3e206e6f7420287020782929206c290a0a
+6c657420706172746974696f6e2070206c203d0a2020666f6c645f7269676874202866756e207820287965732c206e6f
+29202d3e20696620702078207468656e202878203a3a207965732c206e6f2920656c736520287965732c2078203a3a20
+6e6f2929206c20285b5d2c205b5d290a0a6c657420636f6e6361745f6d61702066206c203d20666f6c645f7269676874
+202866756e207820616363202d3e2066207820402061636329206c205b5d0a0a6c65742072656320756e6971206c203d
+206d61746368206c20776974680a20207c2078203a3a2072657374202d3e20756e69715f66726f6d207820726573740a
+20207c205b5d202d3e205b5d0a616e6420756e69715f66726f6d20782072657374203d206d6174636820726573742077
+6974680a20207c205b5d202d3e205b785d0a20207c2079203a3a207973202d3e2069662078203d2079207468656e2075
+6e69715f66726f6d207820797320656c73652078203a3a20756e69715f66726f6d20792079730a0a6c65742073756d20
+3d20666f6c645f6c656674202866756e20612062202d3e2061202b20622920300a6c6574206a6f696e20736570206c20
+3d206d61746368206c20776974680a20207c205b5d202d3e2022220a20207c2078203a3a207873202d3e20666f6c645f
+6c656674202866756e206163632073202d3e20616363205e20736570205e20732920782078730a0a6c65742073717561
+726573203d206d6170202866756e2078202d3e2078202a207829202872616e67652031203130290a6c6574206576656e
+73203d2066696c746572202866756e2078202d3e2078206d6f642032203d20302920737175617265730a6c657420746f
+74616c203d2073756d206576656e730a6c657420736f72746564203d20736f727420636f6d70617265205b353b20333b
+20393b20313b20335d0a6c6574207265706f7274203d206a6f696e20222c202220286d617020737472696e675f6f665f
+696e742028756e697120736f7274656429290a6c6574207061697273203d207a6970205b313b20323b20335d205b226f
+6e65223b202274776f223b20227468726565225d0a6c6574206c6f6f6b7570203d206d61746368207061697273207769
+74680a20207c20536f6d65207073202d3e206173736f6320322070730a20207c204e6f6e65202d3e204e6f6e650a
+"""
+}
+
+// data/queue.ml
+fn file_5() -> String {
+    """
+74797065202761207175657565203d207b2066726f6e74203a202761206c6973743b206261636b203a202761206c6973
+74207d0a0a6c657420656d707479203d207b2066726f6e74203d205b5d3b206261636b203d205b5d207d0a0a6c657420
+7075736820782071203d207b20712077697468206261636b203d2078203a3a20712e6261636b207d0a0a6c6574207265
+63207265765f6f6e746f206c20616363203d206d61746368206c20776974680a20207c205b5d202d3e206163630a2020
+7c2078203a3a207873202d3e207265765f6f6e746f207873202878203a3a20616363290a0a6c657420706f702071203d
+206d6174636820712e66726f6e7420776974680a20207c2078203a3a2066202d3e20536f6d652028782c207b20712077
+6974682066726f6e74203d2066207d290a20207c205b5d202d3e0a20202020286d61746368207265765f6f6e746f2071
+2e6261636b205b5d20776974680a20202020207c205b5d202d3e204e6f6e650a20202020207c2078203a3a2066202d3e
+20536f6d652028782c207b2066726f6e74203d20663b206261636b203d205b5d207d29290a0a747970652028276b2c20
+2776292074726565203d0a20207c204c6561660a20207c204e6f6465206f662028276b2c202776292074726565202a20
+276b202a202776202a2028276b2c2027762920747265650a0a6c65742072656320616464206b20762074203d206d6174
+6368207420776974680a20207c204c656166202d3e204e6f646520284c6561662c206b2c20762c204c656166290a2020
+7c204e6f646520286c2c206b322c2076322c207229202d3e0a202020206966206b203c206b32207468656e204e6f6465
+2028616464206b2076206c2c206b322c2076322c2072290a20202020656c7365206966206b203e206b32207468656e20
+4e6f646520286c2c206b322c2076322c20616464206b20762072290a20202020656c7365204e6f646520286c2c206b2c
+20762c2072290a0a6c6574207265632066696e64206b2074203d206d61746368207420776974680a20207c204c656166
+202d3e204e6f6e650a20207c204e6f646520286c2c206b322c20762c207229202d3e0a202020206966206b203d206b32
+207468656e20536f6d65207620656c7365206966206b203c206b32207468656e2066696e64206b206c20656c73652066
+696e64206b20720a0a6c65742072656320746f5f6c6973742074203d206d61746368207420776974680a20207c204c65
+6166202d3e205b5d0a20207c204e6f646520286c2c206b2c20762c207229202d3e20746f5f6c697374206c2040205b28
+6b2c2076295d204020746f5f6c69737420720a0a747970652027612068656170203d2045207c2048206f6620696e7420
+2a202761202a2027612068656170202a20276120686561700a0a6c65742072616e6b2068203d206d6174636820682077
+6974682045202d3e2030207c20482028722c205f2c205f2c205f29202d3e20720a0a6c6574206d616b65207820612062
+203d0a202069662072616e6b2061203e3d2072616e6b2062207468656e2048202872616e6b2062202b20312c20782c20
+612c20622920656c73652048202872616e6b2061202b20312c20782c20622c2061290a0a6c657420726563206d657267
+65206831206832203d206d61746368202868312c2068322920776974680a20207c2028452c206829202d3e20680a2020
+7c2028682c204529202d3e20680a20207c20284820285f2c20782c2061312c206231292c204820285f2c20792c206132
+2c2062322929202d3e0a2020202069662078203c3d2079207468656e206d616b65207820613120286d65726765206231
+2068322920656c7365206d616b65207920613220286d65726765206831206232290a20207c2028452c204529202d3e20
+450a0a6c657420696e7365727420782068203d206d657267652028482028312c20782c20452c2045292920680a0a6c65
+7420706f705f6d696e2068203d206d61746368206820776974680a20207c2045202d3e204e6f6e650a20207c20482028
+5f2c20782c20612c206229202d3e20536f6d652028782c206d6572676520612062290a0a6c6574207265632064726169
+6e2068203d206d6174636820706f705f6d696e206820776974680a20207c204e6f6e65202d3e205b5d0a20207c20536f
+6d652028782c207265737429202d3e2078203a3a20647261696e20726573740a0a6c6574206a6f6273203d2061646420
+226275696c642220332028616464202274657374222032202861646420226465706c6f79222031204c65616629290a6c
+6574206f72646572203d20746f5f6c697374206a6f62730a6c6574206e657874203d2066696e6420227465737422206a
+6f62730a6c65742068656170203d20696e7365727420352028696e7365727420312028696e7365727420342028696e73
+657274203220452929290a6c657420617363656e64696e67203d20647261696e20686561700a6c65742071203d207075
+736820332028707573682032202870757368203120656d70747929290a6c6574206669727374203d206d617463682070
+6f702071207769746820536f6d652028782c205f29202d3e2078207c204e6f6e65202d3e20300a
+"""
+}
+
+// data/shapes.ml
+fn file_6() -> String {
+    """
+7479706520706f696e74203d207b2078203a20696e743b2079203a20696e74207d0a0a74797065207368617065203d0a
+20207c20436972636c65206f6620706f696e74202a20696e740a20207c2052656374206f6620706f696e74202a20706f
+696e740a20207c20506f6c79676f6e206f6620706f696e74206c6973740a0a7479706520636f6c6f72203d2052656420
+7c20477265656e207c20426c7565207c20526762206f6620696e74202a20696e74202a20696e740a0a74797065202761
+207374796c6564203d207b207368617065203a2027613b2066696c6c203a20636f6c6f723b207374726f6b65203a2069
+6e74207d0a0a6c6574206f726967696e203d207b2078203d20303b2079203d2030207d0a0a6c6574206d6f7665206478
+2064792070203d207b207020776974682078203d20702e78202b2064783b2079203d20702e79202b206479207d0a0a6c
+657420616273206e203d206966206e203c2030207468656e202d206e20656c7365206e0a0a6c65742072656320706f6c
+795f617265613220707473203d206d617463682070747320776974680a20207c2061203a3a2062203a3a207265737420
+2d3e2028612e78202a20622e79202d20622e78202a20612e7929202b20706f6c795f6172656132202862203a3a207265
+7374290a20207c205f202d3e20300a0a6c657420617265612073203d206d61746368207320776974680a20207c204369
+72636c6520285f2c207229202d3e2033202a2072202a20720a20207c20526563742028612c206229202d3e2061627320
+2828622e78202d20612e7829202a2028622e79202d20612e7929290a20207c20506f6c79676f6e20707473202d3e2061
+62732028706f6c795f61726561322070747329202f20320a0a6c6574207472616e736c6174652064782064792073203d
+206d61746368207320776974680a20207c20436972636c652028632c207229202d3e20436972636c6520286d6f766520
+647820647920632c2072290a20207c20526563742028612c206229202d3e205265637420286d6f766520647820647920
+612c206d6f76652064782064792062290a20207c20506f6c79676f6e20707473202d3e20506f6c79676f6e20284c6973
+745f6d61702e6d617020286d6f76652064782064792920707473290a0a6c657420726563206d61702066206c203d206d
+61746368206c2077697468205b5d202d3e205b5d207c2078203a3a207873202d3e20662078203a3a206d617020662078
+730a0a6c6574207472616e736c617465322064782064792073203d206d61746368207320776974680a20207c20436972
+636c652028632c207229202d3e20436972636c6520286d6f766520647820647920632c2072290a20207c205265637420
+28612c206229202d3e205265637420286d6f766520647820647920612c206d6f76652064782064792062290a20207c20
+506f6c79676f6e20707473202d3e20506f6c79676f6e20286d617020286d6f76652064782064792920707473290a0a6c
+657420636f6c6f725f6e616d652063203d206d61746368206320776974680a20207c20526564202d3e2022726564220a
+20207c20477265656e202d3e2022677265656e220a20207c205267622028722c20672c206229202d3e20227267622822
+205e20737472696e675f6f665f696e742072205e20222c22205e20737472696e675f6f665f696e742067205e20222c22
+205e20737472696e675f6f665f696e742062205e202229220a0a6c6574206272696768746e6573732063203d206d6174
+6368206320776974680a20207c205267622028722c20672c206229202d3e202872202b2067202b206229202f20330a20
+207c205f202d3e2038350a0a6c65742069735f7072696d6172792063203d206d61746368206320776974680a20207c20
+526564202d3e20747275650a20207c20477265656e202d3e20747275650a20207c20426c7565202d3e20747275650a20
+207c2052676220283235352c20302c203029202d3e20747275650a20207c2052676220285f2c205f2c205f29202d3e20
+66616c73650a20207c20426c7565202d3e2066616c73650a0a6c6574207374796c652073203d207b207368617065203d
+20733b2066696c6c203d20426c75653b207374726f6b65203d2031207d0a0a6c6574206465736372696265207374203d
+0a20206c65742061203d20617265612073742e736861706520696e0a20206c6574206c6162656c203d20636f6c6f725f
+6e616d652073742e66696c6c20696e0a20206c6162656c205e2022207368617065206f6620617265612022205e207374
+72696e675f6f665f696e7420610a0a6c65742063616e766173203d206d6170207374796c65205b436972636c6520286f
+726967696e2c2032293b205265637420286f726967696e2c207b2078203d20333b2079203d2034207d295d0a6c657420
+6d6f766564203d206d6170202866756e207374202d3e207b2073742077697468207368617065203d207472616e736c61
+746532203120312073742e7368617065207d292063616e7661730a
+"""
+}

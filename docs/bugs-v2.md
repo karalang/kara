@@ -63,7 +63,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | missing-feature | 60 |
 | perf | 54 |
 | soundness | 31 |
-| miscompile | 22 |
+| miscompile | 23 |
 | run-vs-build | 19 |
 | other | 15 |
 | codegen-gap | 13 |
@@ -75,7 +75,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 135 |
-| mir | 85 |
+| mir | 86 |
 | mir-llvm | 61 |
 | cli | 47 |
 | ownership | 37 |
@@ -116,6 +116,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-01-4 | 2026-11-01 | typecheck | low | `s.substring(0, len)` with `len` a `ref i64` from `for len in lengths.iter()` is refused (E0200 "'substring' expects integer byte indices, found 'ref i64'"), with no fix-it, where a user function's `i64` parameter, `v[len]`, `v.truncate(len)` and `len.min(..)` all take the same `ref i64`; char_at, repeat, String.truncate and slice check the same way | — |
 | B-2026-11-01-5 | 2026-11-01 | parser | low | A Rust-spelled mutable receiver or parameter type (`fn find(mut self, ..)`, `&mut self`, `ref mut self`, `self: mut ref Self`, `v: &mut Vec[i64]`) gets a bare parse error with no fix, where `mut ref self` / `mut ref T` is the one Kāra spelling; `let (mut x, ..)` already gets a named message and a machine fix | — |
 | B-2026-11-01-6 | 2026-11-01 | typecheck+mir | medium | A struct variant named like a library type (`Stmt.Match { cases: Vec[i64] }`, also `Response`, `Client`, `Regex`, `Stats`) passes `karac check` but `karac run`/`build` refuse a use of its Vec field ("a type that failed to check is not lowered yet"); check also accepts `*n` on its `i64` field | — |
+| B-2026-11-01-7 | 2026-11-01 | mir | high | A call, operator or array literal reads a place operand only after the later operands have run, against core-semantics 8.1 (left to right): `pair(c.n, bump(mut c))` prints `11 11` (want `1 11`), `c.n + bump(mut c)` is 22 (want 12) and `[y, { y = 7; y }]` is `[7, 7]` on mir-interp and mir-llvm alike; when the later operand MOVES the place, `wrap(b.n, vec![b])` is refused at run and build (`use of _1.0, which may have been moved or never initialized`) though `karac check` accepts it | — |
 
 ### Relocated
 

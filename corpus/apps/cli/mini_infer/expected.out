@@ -1,0 +1,674 @@
+$ check lists.ml
+val length : 'a list -> int
+val rev : 'a list -> 'a list
+val map : ('a -> 'b) -> 'a list -> 'b list
+val filter : ('a -> bool) -> 'a list -> 'a list
+val fold_left : ('a -> 'b -> 'a) -> 'a -> 'b list -> 'a
+val fold_right : ('a -> 'b -> 'b) -> 'a list -> 'b -> 'b
+val assoc : 'a -> ('a * 'b) list -> 'b option
+val range : int -> int -> int list
+val zip : 'a list -> 'b list -> ('a * 'b) list option
+val insert : ('a -> 'a -> int) -> 'a -> 'a list -> 'a list
+val sort : ('a -> 'a -> int) -> 'a list -> 'a list
+val exists : ('a -> bool) -> 'a list -> bool
+val for_all : ('a -> bool) -> 'a list -> bool
+val partition : ('a -> bool) -> 'a list -> 'a list * 'a list
+val concat_map : ('a -> 'b list) -> 'a list -> 'b list
+val uniq : 'a list -> 'a list
+val uniq_from : 'a -> 'a list -> 'a list
+val sum : int list -> int
+val join : string -> string list -> string
+val squares : int list
+val evens : int list
+val total : int
+val sorted : int list
+val report : string
+val pairs : (int * string) list option
+val lookup : string option
+$ check shapes.ml
+type point
+type shape
+type color
+type 'a styled
+val origin : point
+val move : int -> int -> point -> point
+val abs : int -> int
+val poly_area2 : point list -> int
+val area : shape -> int
+shapes.ml:30:29-30:37: error: unbound module List_map
+  30 |   | Polygon pts -> Polygon (List_map.map (move dx dy) pts)
+     |                             ^^^^^^^^
+val map : ('a -> 'b) -> 'a list -> 'b list
+val translate2 : int -> int -> shape -> shape
+shapes.ml:39:20-42:100: warning 8: this pattern-matching is not exhaustive
+  39 | let color_name c = match c with
+     |                    ^^^^^^^^^^^^
+  here is an example of a case that is not matched: Blue
+val color_name : color -> string
+val brightness : color -> int
+shapes.ml:54:5-54:9: warning 11: this match case is unused
+  54 |   | Blue -> false
+     |     ^^^^
+val is_primary : color -> bool
+val style : 'a -> 'a styled
+val describe : shape styled -> string
+val canvas : shape styled list
+val moved : shape styled list
+$ check json.ml
+type json
+type path_step
+val quote_chars : string -> string
+val join_with : ('a -> string) -> 'a list -> string
+val to_string : json -> string
+val field : string * json -> string
+val nth : 'a list -> int -> 'a option
+val member : 'a -> ('a * 'b) list -> 'b option
+val get : path_step list -> json -> json option
+val int_at : path_step list -> json -> int option
+val order : json
+val first_qty : int option
+val text : string
+val missing : json option
+val total_qty : json list -> int
+json.ml:66:11-68:16: warning 8: this pattern-matching is not exhaustive
+  66 | let qty = match get [Key "lines"] order with
+     |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  here is an example of a case that is not matched: None
+val qty : int
+$ check interp.ml
+type ('a, 'e) result
+type expr
+type value
+type env
+type ty
+val bind : ('a, 'b) result -> ('a -> ('c, 'b) result) -> ('c, 'b) result
+val lookup : string -> (string * 'a) list -> ('a, string) result
+val eval : (string * value) list -> expr -> (value, string) result
+val arith : (string * value) list -> expr -> expr -> (int -> int -> value) -> (value, string) result
+val apply : value -> value -> (value, string) result
+val type_of : (string * ty) list -> expr -> (ty, string) result
+val both : (string * ty) list -> expr -> expr -> ty -> ty -> (ty, string) result
+val show : (value, string) result -> string
+val prog : expr
+val result : string
+val bad : string
+val checked : (ty, string) result
+$ check bank.ml
+type account
+type txn
+val open_account : int -> string -> account
+val deposit : account -> int -> account
+val withdraw : account -> int -> account option
+bank.ml:16:16-16:38: error: this expression has type int but an expression was expected of type string
+  16 | let fee acct = acct.balance * 2 / 100 ^ " EUR"
+     |                ^^^^^^^^^^^^^^^^^^^^^^
+bank.ml:18:38-18:45: error: this expression has type int but an expression was expected of type string
+  18 | let label acct = acct.owner ^ " #" ^ acct.id
+     |                                      ^^^^^^^
+val find : int -> account list -> account option
+bank.ml:26:5-26:18: error: the constructor Withdraw expects 2 argument(s), but is applied here to 1 argument(s)
+  26 |   | Withdraw (id) -> find id accts
+     |     ^^^^^^^^^^^^^
+val replace : account -> account list -> account list
+val post : account list -> txn -> account list
+bank.ml:44:21-44:24: error: unbound value map (did you mean max?)
+  44 | let summary accts = map (fun a -> a.owner) accts
+     |                     ^^^
+bank.ml:46:19-46:23: error: unbound module List
+  46 | let audit accts = List.length accts
+     |                   ^^^^
+bank.ml:48:18-48:25: error: this function has type account -> int -> account. It is applied to too many arguments
+  48 | let interest a = deposit a (a.balance / 100) 12
+     |                  ^^^^^^^
+bank.ml:50:29-50:33: error: unbound record field name
+  50 | let rename a who = { a with name = who }
+     |                             ^^^^
+bank.ml:52:40-52:52: error: this expression has type account but an expression was expected of type unit
+  52 | let bonus a = if a.balance > 1000 then deposit a 50
+     |                                        ^^^^^^^^^^^^
+bank.ml:54:41-54:45: error: unbound constructor Ok
+  54 | let close a = match a.balance with 0 -> Ok a | _ -> Error "balance"
+     |                                         ^^^^
+val accounts : account list
+val after : account list
+val balances : account list -> (string * int) list
+val final : (string * int) list
+$ check queue.ml
+type 'a queue
+val empty : 'a queue
+val push : 'a -> 'a queue -> 'a queue
+val rev_onto : 'a list -> 'a list -> 'a list
+val pop : 'a queue -> ('a * 'a queue) option
+type ('k, 'v) tree
+val add : 'a -> 'b -> ('a, 'b) tree -> ('a, 'b) tree
+val find : 'a -> ('a, 'b) tree -> 'b option
+val to_list : ('a, 'b) tree -> ('a * 'b) list
+type 'a heap
+val rank : 'a heap -> int
+val make : 'a -> 'a heap -> 'a heap -> 'a heap
+queue.ml:50:6-50:10: warning 11: this match case is unused
+  50 |   | (E, E) -> E
+     |      ^^^^
+val merge : 'a heap -> 'a heap -> 'a heap
+val insert : 'a -> 'a heap -> 'a heap
+val pop_min : 'a heap -> ('a * 'a heap) option
+val drain : 'a heap -> 'a list
+val jobs : (string, int) tree
+val order : (string * int) list
+val next : int option
+val heap : int heap
+val ascending : int list
+val q : int queue
+val first : int
+$ hover lists.ml 10:18 10:27 16:18 32:6 48:49 57:22 62:30 76:19 70:11 1:3 80:24
+10:18-10:20: 'a list -> 'a list -> 'a list
+10:27-10:30: 'a list
+16:18-16:19: 'a
+32:6-32:7: 'a
+48:49-48:52: 'a -> 'a -> int
+57:22-57:25: 'a list
+62:30-62:34: 'a list
+76:19-76:26: int -> int -> int
+70:11-70:13: string
+1:3: nothing here
+80:24-80:26: (int * string) list
+$ hover shapes.ml 14:35 14:20 59:19 61:3 56:11 63:25 30:29
+14:33-14:36: int
+14:20-14:57: point
+59:16-59:24: shape
+61:3-61:8: string
+56:11-56:12: 'a
+63:25-63:43: shape
+30:29: no type (this item has an error)
+$ hover json.ml 23:35 25:11 37:10 54:24 44:15 52:17
+23:35-23:44: json -> string
+25:11-25:13: string * json
+37:10-37:11: string
+54:24-54:57: path_step list
+44:15-44:16: int
+52:17-52:21: json
+$ hover interp.ml 19:5 31:38 40:84 43:31 61:68 67:19 46:24
+19:5-19:9: ('a, 'b) result -> ('a -> ('c, 'b) result) -> ('c, 'b) result
+31:38-31:39: int
+40:84-40:86: value
+43:31-43:32: int -> int -> value
+61:68-61:70: ty
+67:19-67:23: ty
+46:24-46:28: (string * value) list
+$ hover bank.ml 8:18 14:50 16:5 36:27 60:19
+8:18-8:20: int
+14:50-14:56: int
+16:5: no type (this item has an error)
+36:27-36:34: account -> int -> account
+60:19-60:20: account
+$ hover queue.ml 5:5 14:21 23:25 36:36 49:25 60:34 62:16 68:36
+5:5-5:9: 'a -> 'a queue -> 'a queue
+14:21-14:22: 'a queue
+23:25-23:26: 'a
+36:26-36:58: ('a * 'b) list
+49:25-49:26: 'a
+60:34-60:38: 'a heap
+62:16-62:23: string
+68:36-68:37: int
+$ snip let id x = x\nlet k x y = x\nlet s f g x = f x (g x)
+val id : 'a -> 'a
+val k : 'a -> 'b -> 'a
+val s : ('a -> 'b -> 'c) -> ('a -> 'b) -> 'a -> 'c
+$ snip let twice f x = f (f x)\nlet add1 = twice (fun n -> n + 1)\nlet hello = twice (fun s -> s ^ "!") "hi"
+val twice : ('a -> 'a) -> 'a -> 'a
+val add1 : int -> int
+val hello : string
+$ snip let pair x y = (x, y)\nlet swap (a, b) = (b, a)\nlet p = swap (pair 1 "one")
+val pair : 'a -> 'b -> 'a * 'b
+val swap : 'a * 'b -> 'b * 'a
+val p : string * int
+$ snip let rec even n = if n = 0 then true else odd (n - 1)\nand odd n = if n = 0 then false else even (n - 1)
+val even : int -> bool
+val odd : int -> bool
+$ snip let apply_all fs x = match fs with [] -> [] | f :: rest -> [f x]\nlet r = apply_all [string_of_int] 3
+val apply_all : ('a -> 'b) list -> 'a -> 'b list
+val r : string list
+$ snip let flip f a b = f b a\nlet sub = flip (fun a b -> a - b)\nlet cons = flip (fun x l -> x :: l)
+val flip : ('a -> 'b -> 'c) -> 'b -> 'a -> 'c
+val sub : int -> int -> int
+val cons : 'a list -> 'a -> 'a list
+$ snip let f = fun x -> let g y = (x, y) in g\nlet h = f 1 "a"
+val f : 'a -> 'b -> 'a * 'b
+val h : int * string
+$ snip let compose f g = fun x -> f (g x)\nlet len_str = compose string_of_int string_length
+val compose : ('a -> 'b) -> ('c -> 'a) -> 'c -> 'b
+val len_str : string -> string
+$ snip let poly = let id x = x in (id 1, id true, id "s")
+val poly : int * bool * string
+$ snip type 'a box = Box of 'a\nlet unbox b = match b with Box v -> v\nlet nested = Box (Box 3)
+type 'a box
+val unbox : 'a box -> 'a
+val nested : int box box
+$ snip type ('a, 'b) either = Left of 'a | Right of 'b\nlet lefts l = match l with Left x :: _ -> Some x | _ -> None
+type ('a, 'b) either
+val lefts : ('a, 'b) either list -> 'a option
+$ snip let curry f a b = f (a, b)\nlet uncurry f (a, b) = f a b
+val curry : ('a * 'b -> 'c) -> 'a -> 'b -> 'c
+val uncurry : ('a -> 'b -> 'c) -> 'a * 'b -> 'c
+$ snip let rec last l = match l with [] -> None | [x] -> Some x | _ :: rest -> last rest
+val last : 'a list -> 'a option
+$ snip let x : int list = []\nlet y = (fun (a : string) -> a) "s"
+val x : int list
+val y : string
+$ snip let cmp (a : 'a) (b : 'a) = compare a b\nlet c = cmp 1
+val cmp : 'a -> 'a -> int
+val c : int -> int
+$ snip let rec loop n = if n > 0 then (print_int n; loop (n - 1))\nlet () = loop 3
+val loop : int -> unit
+$ snip let f x = match x with (0, y) -> y | (x, _) -> x\nlet g = f (1, 2)
+val f : int * int -> int
+val g : int
+$ snip type r = { name : string; age : int }\nlet older p = { p with age = p.age + 1 }\nlet ada = older { name = "Ada"; age = 36 }
+type r
+val older : r -> r
+val ada : r
+$ snip let rec fact n = if n <= 1 then 1 else n * fact (n - 1)\nlet big = fact 10 > 1000 && not false
+val fact : int -> int
+val big : bool
+$ snip let l = [1; 2] @ [3]\nlet s = "a" ^ "b"\nlet t = (l, s, -5, 7 mod 3)
+val l : int list
+val s : string
+val t : int list * string * int * int
+$ snip let x = 1 + true
+snip.ml:1:13-1:17: error: this expression has type bool but an expression was expected of type int
+   1 | let x = 1 + true
+     |             ^^^^
+$ snip let f x = x + 1\nlet y = f "one"
+val f : int -> int
+snip.ml:2:11-2:16: error: this expression has type string but an expression was expected of type int
+   2 | let y = f "one"
+     |           ^^^^^
+$ snip let l = [1; "two"; 3]
+snip.ml:1:13-1:18: error: this expression has type string but an expression was expected of type int
+   1 | let l = [1; "two"; 3]
+     |             ^^^^^
+$ snip let b = if true then 1 else "no"
+snip.ml:1:29-1:33: error: this expression has type string but an expression was expected of type int
+   1 | let b = if true then 1 else "no"
+     |                             ^^^^
+$ snip let c = if 1 then 2 else 3
+snip.ml:1:12-1:13: error: this expression has type int but an expression was expected of type bool
+   1 | let c = if 1 then 2 else 3
+     |            ^
+$ snip let s = "n = " ^ 42
+snip.ml:1:18-1:20: error: this expression has type int but an expression was expected of type string
+   1 | let s = "n = " ^ 42
+     |                  ^^
+$ snip let f (a, b) = a + b\nlet r = f (1, 2, 3)
+val f : int * int -> int
+snip.ml:2:12-2:19: error: this expression has type int * int * int but an expression was expected of type int * int
+   2 | let r = f (1, 2, 3)
+     |            ^^^^^^^
+$ snip let g x = x 1\nlet r = g 2
+val g : (int -> 'a) -> 'a
+snip.ml:2:11-2:12: error: this expression has type int but an expression was expected of type int -> 'a
+   2 | let r = g 2
+     |           ^
+$ snip let three = 3\nlet r = three 4
+val three : int
+snip.ml:2:9-2:14: error: this expression has type int. This is not a function; it cannot be applied
+   2 | let r = three 4
+     |         ^^^^^
+$ snip let add a b = a + b\nlet r = add 1 2 3
+val add : int -> int -> int
+snip.ml:2:9-2:12: error: this function has type int -> int -> int. It is applied to too many arguments
+   2 | let r = add 1 2 3
+     |         ^^^
+$ snip let rec f x = f
+snip.ml:1:15-1:16: error: this expression has type 'a -> 'b but an expression was expected of type 'b
+   1 | let rec f x = f
+     |               ^
+  the type variable 'b occurs inside 'a -> 'b
+$ snip let self_apply = fun f -> f f
+snip.ml:1:29-1:30: error: this expression has type 'a -> 'b but an expression was expected of type 'a
+   1 | let self_apply = fun f -> f f
+     |                             ^
+  the type variable 'a occurs inside 'a -> 'b
+$ snip let l = [[1]; [true]]
+snip.ml:1:15-1:21: error: this expression has type bool list but an expression was expected of type int list
+   1 | let l = [[1]; [true]]
+     |               ^^^^^^
+  type bool is not compatible with type int
+$ snip let p : int * string = (1, 2)
+snip.ml:1:25-1:29: error: this expression has type int * int but an expression was expected of type int * string
+   1 | let p : int * string = (1, 2)
+     |                         ^^^^
+  type int is not compatible with type string
+$ snip let f (x : string) = x + 1
+snip.ml:1:22-1:23: error: this expression has type string but an expression was expected of type int
+   1 | let f (x : string) = x + 1
+     |                      ^
+$ snip let m = match 3 with "three" -> 1 | _ -> 0
+snip.ml:1:22-1:29: error: this pattern matches values of type string but a pattern was expected which matches values of type int
+   1 | let m = match 3 with "three" -> 1 | _ -> 0
+     |                      ^^^^^^^
+$ snip let m = match [1] with (a, b) -> a
+snip.ml:1:25-1:29: error: this pattern matches values of type 'a * 'b but a pattern was expected which matches values of type int list
+   1 | let m = match [1] with (a, b) -> a
+     |                         ^^^^
+$ snip let m = match Some 1 with Some "x" -> 1 | _ -> 0
+snip.ml:1:32-1:35: error: this pattern matches values of type string but a pattern was expected which matches values of type int
+   1 | let m = match Some 1 with Some "x" -> 1 | _ -> 0
+     |                                ^^^
+$ snip let m = match (1, true) with (a, 1) -> a | _ -> 0
+snip.ml:1:34-1:35: error: this pattern matches values of type int but a pattern was expected which matches values of type bool
+   1 | let m = match (1, true) with (a, 1) -> a | _ -> 0
+     |                                  ^
+$ snip let u = print_string "a"; 5
+val u : int
+$ snip let w = if true then 5
+snip.ml:1:22-1:23: error: this expression has type int but an expression was expected of type unit
+   1 | let w = if true then 5
+     |                      ^
+$ snip let h = fun x -> (x : int) ^ ""
+snip.ml:1:18-1:27: error: this expression has type int but an expression was expected of type string
+   1 | let h = fun x -> (x : int) ^ ""
+     |                  ^^^^^^^^^
+$ snip let rec map f l = match l with [] -> [] | x :: xs -> f x :: map xs
+snip.ml:1:65-1:67: error: this expression has type 'a list but an expression was expected of type 'a -> 'b
+   1 | let rec map f l = match l with [] -> [] | x :: xs -> f x :: map xs
+     |                                                                 ^^
+$ snip let f x = (x, x)\nlet g = f 1 + 1
+val f : 'a -> 'a * 'a
+snip.ml:2:9-2:12: error: this expression has type int * int but an expression was expected of type int
+   2 | let g = f 1 + 1
+     |         ^^^
+$ snip let rec show_all f l = match l with [] -> "" | x :: r -> f x ^ show_all f r\nand show_ints l = show_all string_of_int l\nand show_bools l = show_all string_of_bool l
+snip.ml:3:29-3:43: error: this expression has type bool -> string but an expression was expected of type int -> string
+   3 | and show_bools l = show_all string_of_bool l
+     |                             ^^^^^^^^^^^^^^
+  type bool is not compatible with type int
+$ snip let opt = Some 1 + 1
+snip.ml:1:11-1:17: error: this expression has type int option but an expression was expected of type int
+   1 | let opt = Some 1 + 1
+     |           ^^^^^^
+$ snip let wrong = fst (1, 2) ^ ""
+snip.ml:1:13-1:23: error: this expression has type int but an expression was expected of type string
+   1 | let wrong = fst (1, 2) ^ ""
+     |             ^^^^^^^^^^
+$ snip let n = max 1 "2"
+snip.ml:1:15-1:18: error: this expression has type string but an expression was expected of type int
+   1 | let n = max 1 "2"
+     |               ^^^
+$ snip let r = lenght [1]
+snip.ml:1:9-1:15: error: unbound value lenght
+   1 | let r = lenght [1]
+     |         ^^^^^^
+$ snip let rec length l = match l with [] -> 0 | _ :: t -> 1 + lenght t
+snip.ml:1:57-1:63: error: unbound value lenght (did you mean length?)
+   1 | let rec length l = match l with [] -> 0 | _ :: t -> 1 + lenght t
+     |                                                         ^^^^^^
+$ snip let total = summ 1 2\nlet sum a b = a + b
+snip.ml:1:13-1:17: error: unbound value summ
+   1 | let total = summ 1 2
+     |             ^^^^
+val sum : int -> int -> int
+$ snip let v = Just 1
+snip.ml:1:9-1:15: error: unbound constructor Just
+   1 | let v = Just 1
+     |         ^^^^^^
+$ snip let x : strng = "a"
+snip.ml:1:9-1:14: error: unbound type constructor strng
+   1 | let x : strng = "a"
+     |         ^^^^^
+$ snip let v = undefined_thing
+snip.ml:1:9-1:24: error: unbound value undefined_thing
+   1 | let v = undefined_thing
+     |         ^^^^^^^^^^^^^^^
+$ snip let print_line s = print_strin s
+snip.ml:1:20-1:31: error: unbound value print_strin (did you mean print_string?)
+   1 | let print_line s = print_strin s
+     |                    ^^^^^^^^^^^
+$ snip let a = Some
+snip.ml:1:9-1:13: error: the constructor Some expects 1 argument(s), but is applied here to 0 argument(s)
+   1 | let a = Some
+     |         ^^^^
+$ snip let a = None 1
+snip.ml:1:9-1:15: error: the constructor None expects 0 argument(s), but is applied here to 1 argument(s)
+   1 | let a = None 1
+     |         ^^^^^^
+$ snip type t = Pair of int * int\nlet a = Pair 1
+type t
+snip.ml:2:9-2:15: error: the constructor Pair expects 2 argument(s), but is applied here to 1 argument(s)
+   2 | let a = Pair 1
+     |         ^^^^^^
+$ snip type t = Pair of int * int\nlet a = Pair (1, 2, 3)
+type t
+snip.ml:2:9-2:23: error: the constructor Pair expects 2 argument(s), but is applied here to 3 argument(s)
+   2 | let a = Pair (1, 2, 3)
+     |         ^^^^^^^^^^^^^^
+$ snip type t = Pair of int * int\nlet f p = match p with Pair x -> x
+type t
+snip.ml:2:24-2:30: error: the constructor Pair expects 2 argument(s), but is applied here to 1 argument(s)
+   2 | let f p = match p with Pair x -> x
+     |                        ^^^^^^
+$ snip type t = Pair of int * int\nlet f p = match p with Pair _ -> 0
+type t
+val f : t -> int
+$ snip let x : (int, int) list = []
+snip.ml:1:9-1:24: error: the type constructor list expects 1 argument(s), but is here applied to 2 argument(s)
+   1 | let x : (int, int) list = []
+     |         ^^^^^^^^^^^^^^^
+$ snip let x : int option option = Some None
+val x : int option option
+$ snip type 'a t = T of 'b
+snip.ml:1:18-1:20: error: the type variable 'b is unbound in this type declaration
+   1 | type 'a t = T of 'b
+     |                  ^^
+$ snip type t = A of undefined
+snip.ml:1:15-1:24: error: unbound type constructor undefined
+   1 | type t = A of undefined
+     |               ^^^^^^^^^
+$ snip type p = { x : int; y : int }\nlet a = { x = 1; y = 2; x = 3 }
+type p
+snip.ml:2:25-2:26: error: the record field x is defined several times
+   2 | let a = { x = 1; y = 2; x = 3 }
+     |                         ^
+$ snip type p = { x : int; y : int }\nlet a = { x = 1 }
+type p
+snip.ml:2:9-2:18: error: some record fields are undefined: y
+   2 | let a = { x = 1 }
+     |         ^^^^^^^^^
+$ snip type p = { x : int; y : int }\nlet a = { x = 1; y = 2; z = 3 }
+type p
+snip.ml:2:25-2:26: error: unbound record field z
+   2 | let a = { x = 1; y = 2; z = 3 }
+     |                         ^
+$ snip type p = { x : int; y : int }\nlet f r = r.z
+type p
+snip.ml:2:13-2:14: error: unbound record field z
+   2 | let f r = r.z
+     |             ^
+$ snip type p = { x : int; y : int }\ntype q = { z : int }\nlet a = { x = 1; z = 2 }
+type p
+type q
+snip.ml:3:18-3:19: error: the record field z belongs to the type q but is mixed here with fields of type p
+   3 | let a = { x = 1; z = 2 }
+     |                  ^
+$ snip type p = { x : int; y : int }\nlet a = { x = "1"; y = 2 }
+type p
+snip.ml:2:15-2:18: error: this expression has type string but an expression was expected of type int
+   2 | let a = { x = "1"; y = 2 }
+     |               ^^^
+$ snip type p = { x : int; y : int }\nlet f r = r.x ^ ""
+type p
+snip.ml:2:11-2:14: error: this expression has type int but an expression was expected of type string
+   2 | let f r = r.x ^ ""
+     |           ^^^
+$ snip type p = { x : int; y : int }\nlet f r = match r with { x = 0; y } -> y | { x } -> x
+type p
+val f : p -> int
+$ snip type a = { v : int }\ntype b = { v : string }\nlet f r = r.v
+type a
+type b
+val f : b -> string
+$ snip let f (x, x) = x
+snip.ml:1:11-1:12: error: variable x is bound several times in this matching
+   1 | let f (x, x) = x
+     |           ^
+$ snip let f x = match x with (a, a) -> a
+snip.ml:1:28-1:29: error: variable a is bound several times in this matching
+   1 | let f x = match x with (a, a) -> a
+     |                            ^
+$ snip let f x x = x
+snip.ml:1:9-1:10: error: variable x is bound several times in this matching
+   1 | let f x x = x
+     |         ^
+$ snip let rec f = 3
+snip.ml:1:13-1:14: error: this kind of expression is not allowed as right-hand side of let rec
+   1 | let rec f = 3
+     |             ^
+$ snip let rec (a, b) = (fun x -> x, fun y -> y)
+snip.ml:1:10-1:14: error: only variables are allowed as left-hand side of let rec
+   1 | let rec (a, b) = (fun x -> x, fun y -> y)
+     |          ^^^^
+$ snip let f x = match x with 0 -> "zero" | 1 -> "one"
+snip.ml:1:11-1:48: warning 8: this pattern-matching is not exhaustive
+   1 | let f x = match x with 0 -> "zero" | 1 -> "one"
+     |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  here is an example of a case that is not matched: 2
+val f : int -> string
+$ snip let f x = match x with true -> 1
+snip.ml:1:11-1:33: warning 8: this pattern-matching is not exhaustive
+   1 | let f x = match x with true -> 1
+     |           ^^^^^^^^^^^^^^^^^^^^^^
+  here is an example of a case that is not matched: false
+val f : bool -> int
+$ snip let f l = match l with x :: _ -> x
+snip.ml:1:11-1:35: warning 8: this pattern-matching is not exhaustive
+   1 | let f l = match l with x :: _ -> x
+     |           ^^^^^^^^^^^^^^^^^^^^^^^^
+  here is an example of a case that is not matched: []
+val f : 'a list -> 'a
+$ snip let f l = match l with [] -> 0 | [x] -> x
+snip.ml:1:11-1:42: warning 8: this pattern-matching is not exhaustive
+   1 | let f l = match l with [] -> 0 | [x] -> x
+     |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  here is an example of a case that is not matched: _ :: _ :: _
+val f : int list -> int
+$ snip let f s = match s with "" -> 0 | "a" -> 1
+snip.ml:1:11-1:42: warning 8: this pattern-matching is not exhaustive
+   1 | let f s = match s with "" -> 0 | "a" -> 1
+     |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  here is an example of a case that is not matched: "b"
+val f : string -> int
+$ snip let f p = match p with (true, false) -> 1 | (false, true) -> 2
+snip.ml:1:11-1:63: warning 8: this pattern-matching is not exhaustive
+   1 | let f p = match p with (true, false) -> 1 | (false, true) -> 2
+     |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  here is an example of a case that is not matched: (false, false)
+val f : bool * bool -> int
+$ snip let f o = match o with Some (Some x) -> x | None -> 0
+snip.ml:1:11-1:54: warning 8: this pattern-matching is not exhaustive
+   1 | let f o = match o with Some (Some x) -> x | None -> 0
+     |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  here is an example of a case that is not matched: Some None
+val f : int option option -> int
+$ snip let f x = match x with _ -> 1 | 0 -> 2
+snip.ml:1:33-1:34: warning 11: this match case is unused
+   1 | let f x = match x with _ -> 1 | 0 -> 2
+     |                                 ^
+val f : int -> int
+$ snip let f x = match x with Some _ -> 1 | None -> 2 | Some 3 -> 3
+snip.ml:1:50-1:56: warning 11: this match case is unused
+   1 | let f x = match x with Some _ -> 1 | None -> 2 | Some 3 -> 3
+     |                                                  ^^^^^^
+val f : int option -> int
+$ snip let f x = match x with y when y > 0 -> 1 | 0 -> 2
+snip.ml:1:11-1:50: warning 8: this pattern-matching is not exhaustive
+   1 | let f x = match x with y when y > 0 -> 1 | 0 -> 2
+     |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  here is an example of a case that is not matched: 1
+val f : int -> int
+$ snip let f x = match x with y when y > 0 -> 1 | _ -> 2 | 5 -> 3
+snip.ml:1:53-1:54: warning 11: this match case is unused
+   1 | let f x = match x with y when y > 0 -> 1 | _ -> 2 | 5 -> 3
+     |                                                     ^
+val f : int -> int
+$ snip let g = let unused = 1 in let _ok = 2 in 3
+snip.ml:1:13-1:19: warning 26: unused variable unused
+   1 | let g = let unused = 1 in let _ok = 2 in 3
+     |             ^^^^^^
+val g : int
+$ snip let g = let a = 1 and b = 2 in a
+snip.ml:1:23-1:24: warning 26: unused variable b
+   1 | let g = let a = 1 and b = 2 in a
+     |                       ^
+val g : int
+$ snip let first (Some x) = x
+snip.ml:1:12-1:18: warning 8: this pattern-matching is not exhaustive
+   1 | let first (Some x) = x
+     |            ^^^^^^
+  here is an example of a case that is not matched: None
+val first : 'a option -> 'a
+$ snip let Some y = Some 1
+snip.ml:1:5-1:11: warning 8: this pattern-matching is not exhaustive
+   1 | let Some y = Some 1
+     |     ^^^^^^
+  here is an example of a case that is not matched: None
+val y : int
+$ snip type t = A | B | C\nlet f = function A -> 1 | B -> 2
+type t
+snip.ml:2:9-2:33: warning 8: this pattern-matching is not exhaustive
+   2 | let f = function A -> 1 | B -> 2
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^
+  here is an example of a case that is not matched: C
+val f : t -> int
+$ snip type t = A | B | C\nlet f x = match x with A -> 1 | _ -> 2 | C -> 3
+type t
+snip.ml:2:42-2:43: warning 11: this match case is unused
+   2 | let f x = match x with A -> 1 | _ -> 2 | C -> 3
+     |                                          ^
+val f : t -> int
+$ snip type p = { x : int; y : bool }\nlet f r = match r with { y = true } -> 1
+type p
+snip.ml:2:11-2:41: warning 8: this pattern-matching is not exhaustive
+   2 | let f r = match r with { y = true } -> 1
+     |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  here is an example of a case that is not matched: {x = _; y = false}
+val f : p -> int
+$ snip let x = (* never closed
+snip.ml:1:9-1:11: error: this comment is not terminated
+   1 | let x = (* never closed
+     |         ^^
+$ snip let s = "no end
+snip.ml:1:9-1:10: error: this string literal is not terminated
+   1 | let s = "no end
+     |         ^
+$ snip let x = 1 $ 2
+snip.ml:1:11-1:12: error: illegal character ($)
+   1 | let x = 1 $ 2
+     |           ^
+$ snip let x = "bad \\q escape"
+snip.ml:1:14-1:16: error: illegal backslash escape in string: \q
+   1 | let x = "bad \q escape"
+     |              ^^
+$ snip let x = 1 +
+snip.ml:1:12-1:12: error: syntax error
+   1 | let x = 1 +
+     |            ^
+$ snip let = 5
+snip.ml:1:5-1:6: error: syntax error
+   1 | let = 5
+     |     ^
+$ snip let f x = match x with | -> 1
+snip.ml:1:26-1:28: error: syntax error
+   1 | let f x = match x with | -> 1
+     |                          ^^
+$ snip type t = | lower
+snip.ml:1:12-1:17: error: syntax error
+   1 | type t = | lower
+     |            ^^^^^
+$ snip let x = (1, 2
+snip.ml:1:14-1:14: error: syntax error
+   1 | let x = (1, 2
+     |              ^
+$ snip let a = 1 let b = a +. 2
+snip.ml:1:22-1:23: error: syntax error
+   1 | let a = 1 let b = a +. 2
+     |                      ^
