@@ -3374,6 +3374,9 @@ struct Bx<'l, 'a> {
     /// values: an assertion's operands, which its failure message reads
     /// again without running them twice.
     pinned: FxHashMap<NodeId, Place>,
+    /// Place operands read at their own position, before the operands
+    /// after them run (core semantics §8.1; B-2026-11-01-7).
+    read_now: FxHashSet<NodeId>,
     /// The captures a closure body assigns to, found with its moves.
     assigned_caps: std::cell::RefCell<FxHashSet<SymbolId>>,
     /// Whether `moved_captures` is finding a task's: a library builtin's
@@ -3495,6 +3498,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             par_exit: None,
             closure_escapes: false,
             pinned: FxHashMap::default(),
+            read_now: FxHashSet::default(),
             escaping_lets: FxHashSet::default(),
             returned_closures: FxHashSet::default(),
             assigned_caps: Default::default(),
@@ -7517,6 +7521,179 @@ impl<'l, 'a> Bx<'l, 'a> {
         }
     }
 
+    /// Core semantics §8.1: the arguments of a call, the operands of an
+    /// operator and the elements of a tuple, array, collection or struct
+    /// literal run left to right. A place operand would otherwise be read
+    /// where the call or aggregate executes, after the operands that follow
+    /// it, so one that a later operand writes or moves (`pair(c.n, bump(mut
+    /// c))`, `wrap(b.n, vec![b])`) is marked here to be read at its own
+    /// position. Only a place followed by an operand that can run code is
+    /// marked; a list of places and constants reads as it did
+    /// (B-2026-11-01-7).
+    fn note_eval_order(&mut self, e: &Expr) {
+        let ops: Vec<&Expr> = match &e.kind {
+            ExprKind::Call { args, .. } => args.iter().map(|a| &a.value).collect(),
+            ExprKind::MethodCall { object, args, .. } => std::iter::once(&**object)
+                .chain(args.iter().map(|a| &a.value))
+                .collect(),
+            ExprKind::Binary { op, left, right } if !matches!(op, AstBinOp::And | AstBinOp::Or) => {
+                vec![&**left, &**right]
+            }
+            ExprKind::Tuple(es) | ExprKind::ArrayLiteral(es) => es.iter().collect(),
+            ExprKind::PrefixCollectionLiteral { items, .. } => items.iter().collect(),
+            ExprKind::StructLiteral { fields, .. } => fields.iter().map(|f| &f.value).collect(),
+            ExprKind::MapLiteral { entries, .. } => {
+                entries.iter().flat_map(|(k, v)| [k, v]).collect()
+            }
+            ExprKind::InterpolatedStringLit(parts) => parts
+                .iter()
+                .filter_map(|p| match p {
+                    ast::ParsedInterpolationPart::Expr(x, _) => Some(&**x),
+                    ast::ParsedInterpolationPart::Text(_) => None,
+                })
+                .collect(),
+            _ => return,
+        };
+        let Some(last_effect) = ops.iter().rposition(|o| !self.plain_operand(o)) else {
+            return;
+        };
+        for (i, o) in ops[..last_effect].iter().enumerate() {
+            if self.is_place(o) && self.later_may_write(o, &ops[i + 1..]) {
+                self.read_now.insert(o.id);
+            }
+        }
+    }
+
+    /// Whether an operand in `later` can write or move what the place `o`
+    /// reads. A place rooted in locals is written only through a name for
+    /// one of them (an assignment, a `mut` argument, a method's receiver, a
+    /// move) or by a call to a local closure; a place through a static or
+    /// a shared handle can be written by any call, so there any operand
+    /// that runs code counts.
+    fn later_may_write(&mut self, o: &Expr, later: &[&Expr]) -> bool {
+        let mut roots: FxHashSet<SymbolId> = FxHashSet::default();
+        let mut self_root = false;
+        let mut broad = false;
+        let res = &self.lcx.res;
+        let statics = &self.lcx.statics;
+        crate::span_visitor::for_each_expr(o, &mut |x| match &x.kind {
+            ExprKind::Identifier(_) => match res.get(&x.id) {
+                Some(Res::Local(s)) => {
+                    roots.insert(*s);
+                }
+                Some(Res::Def(d)) if statics.contains_key(d) => broad = true,
+                _ => {}
+            },
+            ExprKind::SelfValue => self_root = true,
+            ExprKind::Path { .. } => broad = true,
+            _ => {}
+        });
+        let mut x = o;
+        loop {
+            if self.expr_ty(x).is_ok_and(|t| {
+                let (_, base) = self.strip_ty_full(t);
+                self.is_handle(base) || self.is_handle_aggregate(base)
+            }) {
+                broad = true;
+            }
+            match &x.kind {
+                ExprKind::FieldAccess { object, .. }
+                | ExprKind::TupleIndex { object, .. }
+                | ExprKind::Index { object, .. }
+                | ExprKind::Unary {
+                    op: UnaryOp::Deref,
+                    operand: object,
+                } => x = object,
+                _ => break,
+            }
+        }
+        if broad {
+            return later.iter().any(|l| !self.plain_operand(l));
+        }
+        let res = &self.lcx.res;
+        later.iter().any(|l| {
+            let mut hit = false;
+            crate::span_visitor::for_each_expr(l, &mut |x| match &x.kind {
+                ExprKind::Identifier(_) => {
+                    if let Some(Res::Local(s)) = res.get(&x.id) {
+                        hit |= roots.contains(s);
+                    }
+                }
+                ExprKind::SelfValue => hit |= self_root,
+                ExprKind::Call { callee, .. } => {
+                    hit |= matches!(res.get(&callee.id), Some(Res::Local(_)));
+                }
+                _ => {}
+            });
+            hit
+        })
+    }
+
+    /// An operand that runs no code: a literal, a place reached through
+    /// names, fields and plain indices, or built-in arithmetic, a
+    /// comparison or a cast over those.
+    fn plain_operand(&mut self, e: &Expr) -> bool {
+        let scalar = |s: &mut Self, x: &Expr| {
+            s.expr_ty(x).is_ok_and(|t| {
+                matches!(
+                    s.strip_ty(t),
+                    HK::Int(_) | HK::UInt(_) | HK::Float(_) | HK::Bool | HK::Char
+                )
+            })
+        };
+        match &e.kind {
+            ExprKind::Binary { left, right, .. } => {
+                scalar(self, left)
+                    && scalar(self, right)
+                    && self.plain_operand(left)
+                    && self.plain_operand(right)
+            }
+            ExprKind::Unary {
+                op: UnaryOp::Neg | UnaryOp::Not | UnaryOp::BitNot,
+                operand,
+            } => scalar(self, operand) && self.plain_operand(operand),
+            ExprKind::Cast { expr, .. } => self.plain_operand(expr),
+            ExprKind::Integer(..)
+            | ExprKind::Float(..)
+            | ExprKind::Bool(_)
+            | ExprKind::CharLit(_)
+            | ExprKind::ByteLit(_)
+            | ExprKind::StringLit(_)
+            | ExprKind::Identifier(_)
+            | ExprKind::Path { .. }
+            | ExprKind::SelfValue => true,
+            ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+                self.plain_operand(object)
+            }
+            ExprKind::Index { object, index } => {
+                self.plain_operand(object) && self.plain_operand(index)
+            }
+            ExprKind::Unary {
+                op: UnaryOp::Deref,
+                operand,
+            } => self.plain_operand(operand),
+            _ => false,
+        }
+    }
+
+    /// `op`, a read of the place `e` names, taken into a temporary now when
+    /// `e` is marked by [`Self::note_eval_order`].
+    fn read_at_position(&mut self, e: &Expr, op: Operand, t: Ty) -> Operand {
+        if !self.read_now.contains(&e.id) {
+            return op;
+        }
+        if let Operand::Copy(p) | Operand::Move(p) = &op {
+            if p.projection.is_empty() && self.b.is_temp(p.local) {
+                return op;
+            }
+        } else {
+            return op;
+        }
+        let l = self.temp(t);
+        self.assign(l, Rvalue::Use(op));
+        Operand::Move(Place::local(l))
+    }
+
     // ── expressions ─────────────────────────────────────────────────
 
     /// `e` taken as an owned value of type `want`. A borrowed place (a
@@ -7545,7 +7722,8 @@ impl<'l, 'a> Bx<'l, 'a> {
             self.count_copy(p, inner, Place::local(l));
             return Ok(Operand::Move(Place::local(l)));
         }
-        Ok(self.use_place(p, inner))
+        let op = self.use_place(p, inner);
+        Ok(self.read_at_position(e, op, inner))
     }
 
     /// `e` as an operand for a slot of type `want`. A tuple literal is
@@ -7553,6 +7731,7 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// position: `(b, d)` with `b: u8` fills a `(i64, i64)` slot as
     /// `(b as i64, d as i64)`, not as the `(u8, u32)` the checker records.
     fn operand_at(&mut self, e: &'a Expr, want: Ty) -> R<Operand> {
+        self.note_eval_order(e);
         if let ExprKind::Tuple(es) = &e.kind {
             if let HK::Tuple(l) = self.tys().tcx().kind(want) {
                 let wts = self.tys().tcx().list(l);
@@ -7642,7 +7821,8 @@ impl<'l, 'a> Bx<'l, 'a> {
             if let Some(w) = self.weak_read(&p, t) {
                 return Ok(Operand::Move(Place::local(w)));
             }
-            return Ok(self.use_place(p, t));
+            let op = self.use_place(p, t);
+            return Ok(self.read_at_position(e, op, t));
         }
         let t = self.expr_ty(e)?;
         let l = self.temp_of(e, t)?;
@@ -7788,6 +7968,7 @@ impl<'l, 'a> Bx<'l, 'a> {
     }
 
     fn expr_into_here(&mut self, e: &'a Expr, dest: Place) -> R<()> {
+        self.note_eval_order(e);
         // `process.exit(code)`: the process ends here, with no drops.
         if let Some([code]) = process_exit_args(e) {
             let i32_t = self.tys().tcx().intern(HK::Int(IntSize::I32));
@@ -19049,6 +19230,7 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// after another, a string literal as a constant, a non-`Copy` value
     /// by reference.
     fn print_operands(&mut self, a: &'a Expr, ops: &mut Vec<Operand>) -> R<()> {
+        self.note_eval_order(a);
         match &a.kind {
             ExprKind::StringLit(s) => {
                 ops.push(self.static_str(s));

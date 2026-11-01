@@ -1,0 +1,9 @@
+source = "B-2026-11-01-7"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["eval-order"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-01-7: core-semantics §8.1 evaluates arguments, binary operands and literal elements left to right, so a place operand is read before a later operand writes it (`pair(c.n, bump(mut c))` is `1 11`, `d.n + bump(mut d)` 12, `[y, { y = 7; y }]` `[1, 7]`) or moves it (`wrap(body.n, vec![body])` copies `body.n` out first and is accepted). Python and Rust give the same answers."

@@ -1,0 +1,102 @@
+// Core semantics §8.1: the arguments of a call, the operands of a binary
+// operator and the elements of an array, tuple, struct or collection
+// literal are evaluated left to right. A place operand is read at its own
+// position, so a later operand that writes or moves the place does not
+// change what the earlier one read (B-2026-11-01-7).
+
+struct Counter { n: i64 }
+
+fn bump(c: mut ref Counter) -> i64 {
+    c.n += 10;
+    c.n
+}
+
+fn pair(a: i64, b: i64) -> String {
+    f"{a} {b}"
+}
+
+struct Node { n: i64, kids: Vec[Node] }
+
+fn wrap(n: i64, kids: own Vec[Node]) -> Node {
+    Node { n: n, kids: kids }
+}
+
+fn one(k: own Node) -> Vec[Node] {
+    vec![k]
+}
+
+struct Pt { x: i64, y: i64 }
+
+fn first(n: i64, t: own (Node, i64)) -> String {
+    f"{n} {t.0.n} {t.1}"
+}
+
+fn tag(s: own String, n: i64) -> String {
+    f"{s}:{n}"
+}
+
+shared struct Cell { mut n: i64 }
+
+fn poke(c: Cell) -> i64 {
+    c.n += 10;
+    c.n
+}
+
+fn grow(s: mut ref String) -> i64 {
+    s.push_str("!");
+    s.len()
+}
+
+fn main() {
+    // Call arguments.
+    let mut c = Counter { n: 1 };
+    println(pair(c.n, bump(mut c)));
+    let mut x = 1;
+    println(pair(x, { x += 5; x }));
+
+    // Binary operands.
+    let mut d = Counter { n: 1 };
+    let s = d.n + bump(mut d);
+    println(f"{s}");
+    let mut z = 3;
+    let t = z * { z = 100; z };
+    println(f"{t}");
+
+    // Array, tuple and struct literal elements.
+    let mut y = 1;
+    let arr = [y, { y = 7; y }];
+    println(f"{arr[0]} {arr[1]}");
+    let mut w = 2;
+    let tup = (w, { w = 9; w });
+    println(f"{tup.0} {tup.1}");
+    let mut e = Counter { n: 4 };
+    let p = Pt { x: e.n, y: bump(mut e) };
+    println(f"{p.x} {p.y}");
+
+    // Interpolation holes.
+    let mut f = Counter { n: 5 };
+    println(f"{f.n} {bump(mut f)}");
+
+    // A later operand that moves the place: the earlier field is copied
+    // out before the move.
+    let body = Node { n: 1, kids: Vec.new() };
+    let a = wrap(body.n, vec![body]);
+    println(f"{a.n} {a.kids.len()}");
+    let body2 = Node { n: 2, kids: Vec.new() };
+    let b = wrap(body2.n, one(body2));
+    println(f"{b.n} {b.kids.len()}");
+    let body3 = Node { n: 3, kids: Vec.new() };
+    println(first(body3.n, (body3, 5)));
+
+    // An owned place moved first, then a later operand that writes its
+    // source's neighbour.
+    let mut name = "ab".to_string();
+    let label = "x".to_string();
+    println(tag(label, grow(mut name)));
+    println(name);
+
+    // A shared handle written through another handle to the same value.
+    let h = Cell { n: 1 };
+    let alias = h;
+    println(pair(h.n, poke(alias)));
+}
