@@ -8,12 +8,24 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
 fn karac_in(dir: &Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_karac"))
+    let mut out = Command::new(env!("CARGO_BIN_EXE_karac"))
         .args(args)
         .current_dir(dir)
         .stdin(Stdio::null())
         .output()
-        .expect("karac")
+        .expect("karac");
+    out.stdout = slash_paths(out.stdout);
+    out.stderr = slash_paths(out.stderr);
+    out
+}
+
+/// The host's path separator written as `/`, in plain text (`\`) and in a
+/// JSON string (`\\`), so a path assertion holds on Windows too.
+fn slash_paths(bytes: Vec<u8>) -> Vec<u8> {
+    String::from_utf8_lossy(&bytes)
+        .replace("\\\\", "/")
+        .replace('\\', "/")
+        .into_bytes()
 }
 
 fn text(o: &Output) -> String {

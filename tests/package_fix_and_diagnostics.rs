@@ -30,11 +30,23 @@ fn package(files: &[(&str, &str)]) -> PathBuf {
 }
 
 fn karac(root: &Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_karac"))
+    let mut out = Command::new(env!("CARGO_BIN_EXE_karac"))
         .args(args)
         .current_dir(root)
         .output()
-        .unwrap()
+        .unwrap();
+    out.stdout = slash_paths(out.stdout);
+    out.stderr = slash_paths(out.stderr);
+    out
+}
+
+/// The host's path separator written as `/`, in plain text (`\`) and in a
+/// JSON string (`\\`), so a path assertion holds on Windows too.
+fn slash_paths(bytes: Vec<u8>) -> Vec<u8> {
+    String::from_utf8_lossy(&bytes)
+        .replace("\\\\", "/")
+        .replace('\\', "/")
+        .into_bytes()
 }
 
 fn read(root: &Path, path: &str) -> String {
