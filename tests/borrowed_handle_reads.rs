@@ -71,3 +71,35 @@ fn nil_coalesce_counts_a_handle_out_of_a_borrowed_option() {
     );
     checks_and_prints("coalesce", &src, "2\n0\n2\npair\npair\n");
 }
+
+/// `Some(k)` over `n: ref Option[Node]` binds `k` as a `ref` into `n`
+/// (core semantics §4.6), so `kind_name(k)`'s view lives as long as `n`;
+/// it used to bind a counted copy the arm dropped under the view
+/// (B-2026-11-01-3). A use of `k` as a value still counts the handle.
+/// The expected lines are the program's arithmetic.
+#[test]
+fn a_handle_bound_from_a_ref_scrutinee_is_a_ref_into_it() {
+    let src = format!(
+        "{NODE}fn kind_name(n: ref Node) -> Str {{\n    match n {{\n        Node.Leaf(_) => \"Leaf\",\n        \
+         Node.Pair(_, _) => \"Pair\",\n    }}\n}}\n\n\
+         fn eat(n: own Node) -> i64 {{\n    match n {{\n        Node.Leaf(v) => v,\n        \
+         Node.Pair(_, _) => -1,\n    }}\n}}\n\n\
+         fn no_attr(n: ref Option[Node]) -> String {{\n    let cls = match n {{\n        \
+         Some(k) => kind_name(k),\n        None => \"NoneType\",\n    }};\n    f\"{{cls}} object\"\n}}\n\n\
+         fn cls_of(n: ref Option[Node]) -> Str {{\n    match n {{\n        Some(k) => kind_name(k),\n        \
+         None => \"NoneType\",\n    }}\n}}\n\n\
+         fn get(n: ref Option[Node]) -> Node {{\n    match n {{\n        Some(k) => k,\n        \
+         None => Node.Leaf(0),\n    }}\n}}\n\n\
+         fn many(n: ref Option[Node]) -> i64 {{\n    let mut v: Vec[Node] = Vec.new();\n    \
+         let mut total = 0;\n    if let Some(k) = n {{\n        v.push(k);\n        let y = k;\n        \
+         total += eat(y) + eat(k);\n    }}\n    total + v.len()\n}}\n\n\
+         fn main() {{\n    let o = Some(Node.Leaf(4));\n    println(no_attr(o));\n    \
+         println(cls_of(None));\n    println(show(get(o)));\n    println(many(o));\n    \
+         println(no_attr(o));\n}}\n"
+    );
+    checks_and_prints(
+        "ref-scrutinee",
+        &src,
+        "Leaf object\nNoneType\n4\n9\nLeaf object\n",
+    );
+}

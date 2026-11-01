@@ -3367,6 +3367,10 @@ struct Bx<'l, 'a> {
     /// `mut ref`s, with no `mut ref` binding asking for it: their `Copy`
     /// parts bind by copy (B-2026-10-18-41).
     writable_reborrows: FxHashSet<Local>,
+    /// The reborrows a `match` takes of a collection element (`match
+    /// v[i]`), whose whole-handle bindings still count the handle rather
+    /// than borrow the collection for the arm (B-2026-11-01-3).
+    element_reborrows: FxHashSet<Local>,
     /// The scope of the block a `let` binding being lowered belongs to: a
     /// value its initializer borrows lives to that block's end
     /// (B-2026-10-18-53).
@@ -3509,6 +3513,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             closure_ref_params: false,
             copy_views: FxHashMap::default(),
             writable_reborrows: FxHashSet::default(),
+            element_reborrows: FxHashSet::default(),
             let_scope: None,
             closure_key: false,
             closure_task: false,
@@ -14740,13 +14745,27 @@ impl<'l, 'a> Bx<'l, 'a> {
                 _ => false,
             }
         }
-        let element = element(scrutinee) || self.through_a_reference(scrutinee);
+        let indexed = element(scrutinee);
+        let element = indexed || self.through_a_reference(scrutinee);
         let place = if self.is_place(scrutinee) && (element || self.is_local_rooted(scrutinee)) {
             self.expr_place(scrutinee, mutable)?
         } else {
             let l = self.temp_of(scrutinee, st)?;
             Place::local(l)
         };
+        if indexed {
+            self.element_reborrows.insert(place.local);
+        }
+        // A `mut` field of a `shared` value that is `Copy` or counted is
+        // read as a value (core semantics §6.2), so a binding covering the
+        // whole handle is a counted copy, not a `ref` into the field:
+        // `if let Some(second) = first.next { first.next = .. }`.
+        let value_read = !mutable
+            && (self.is_copy(st) || self.is_handle(st) || self.is_handle_aggregate(st))
+            && self.shared_mut_field(&place);
+        if value_read {
+            self.element_reborrows.insert(place.local);
+        }
         // Matching through a reference binds by reference.
         Ok(match self.tys().tcx().kind(st) {
             HK::Ref(inner) | HK::MutRef(inner) => (place.project(ProjElem::Deref), inner, true),
@@ -14770,6 +14789,9 @@ impl<'l, 'a> Bx<'l, 'a> {
                 let r = self.temp(rt);
                 if writable {
                     self.writable_reborrows.insert(r);
+                }
+                if indexed || value_read {
+                    self.element_reborrows.insert(r);
                 }
                 let kind = if mutable {
                     BorrowKind::Mut
@@ -16058,6 +16080,33 @@ impl<'l, 'a> Bx<'l, 'a> {
         })
     }
 
+    /// Whether `place` is reached through a reference and through no
+    /// `shared` value or collection element: a `ref` scrutinee's part that
+    /// is not a `shared` value's contents (core semantics §4.6). An
+    /// element's handle still binds a counted copy, so `match q[i] {
+    /// Some(n) => q.push(n.left) }` keeps working.
+    fn ref_unshared(&self, place: &Place) -> bool {
+        if self.element_reborrows.contains(&place.local)
+            || place
+                .projection
+                .iter()
+                .any(|p| matches!(p, ProjElem::Index(_) | ProjElem::ConstIndex(_)))
+        {
+            return false;
+        }
+        let mut through_ref = false;
+        let mut q = Place::local(place.local);
+        for el in &place.projection {
+            match self.tys().tcx().kind(self.place_type(&q)) {
+                HK::Shared { .. } => return false,
+                HK::Ref(_) | HK::MutRef(_) if matches!(el, ProjElem::Deref) => through_ref = true,
+                _ => {}
+            }
+            q = q.project(*el);
+        }
+        through_ref
+    }
+
     fn bind_one(
         &mut self,
         name: &str,
@@ -16076,8 +16125,13 @@ impl<'l, 'a> Bx<'l, 'a> {
         let copied = self.is_copy(t) && self.writable_reborrows.contains(&place.local);
         let mutable = by_ref && self.through_mut_ref(&place) && !copied;
         // A binding that covers a whole handle (or handle aggregate) copies
-        // it even from a `ref` scrutinee (core semantics §4.6, §6.1).
-        let handle = self.is_handle(t) || self.is_handle_aggregate(t);
+        // it out of a `shared` value (core semantics §4.6, §6.1). Out of a
+        // `ref` scrutinee that reaches no `shared` value (`Some(k)` over
+        // `n: ref Option[Node]`) it is a `ref` into the scrutinee, as any
+        // non-`Copy` part is, so a view of it lives as long as the
+        // scrutinee (B-2026-11-01-3).
+        let handle =
+            (self.is_handle(t) || self.is_handle_aggregate(t)) && !self.ref_unshared(&place);
         // A generic body's binding the checker typed as a `ref` stays one
         // when its instance is `Copy` (`Option.as_ref` at a `Copy` `T`).
         let typed_ref = by_ref

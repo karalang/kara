@@ -1125,14 +1125,18 @@ mod tests {
     use crate::mir::lower::tests::run_source;
     use crate::mir::{Rvalue, StatementKind};
 
+    // `glance` and `bump` match a `shared` enum, whose payload binds a
+    // counted copy (core semantics §4.6); a payload of a borrowed
+    // `Option` binds a `ref` and counts nothing (B-2026-11-01-3).
     const SRC: &str = "shared struct N { val: i64, mut left: Option[N] }\n\
+shared enum Holder { One(N), Zero }\n\
 fn cut(h: N) {\n    h.left = None;\n}\n\
-fn glance(a: Option[N], h: N) -> i64 {\n    match a {\n        Some(x) => {\n            cut(h);\n            x.val\n        }\n        None => 0\n    }\n}\n\
+fn glance(a: Holder, h: N) -> i64 {\n    match a {\n        Holder.One(x) => {\n            cut(h);\n            x.val\n        }\n        Holder.Zero => 0\n    }\n}\n\
 fn walk(a: Option[N]) -> i64 {\n    match a {\n        Some(x) => x.val + walk(x.left),\n        None => 0\n    }\n}\n\
-fn bump(a: Option[N], h: mut ref i64) -> i64 {\n    match a {\n        Some(x) => {\n            *h = *h + 1;\n            x.val\n        }\n        None => 0\n    }\n}\n\
+fn bump(a: Holder, h: mut ref i64) -> i64 {\n    match a {\n        Holder.One(x) => {\n            *h = *h + 1;\n            x.val\n        }\n        Holder.Zero => 0\n    }\n}\n\
 fn first(a: Option[N]) -> N {\n    match a {\n        Some(x) => x,\n        None => N { val: 0, left: None }\n    }\n}\n\
 fn left_of(h: N) -> Option[N] {\n    return h.left;\n}\n\
-fn main() {\n    let h = N { val: 1, left: Some(N { val: 7, left: Some(N { val: 9, left: None }) }) };\n    println(walk(h.left));\n    println(glance(h.left, h));\n    println(walk(h.left));\n    let mut c = 0;\n    println(bump(h.left, mut c));\n    println(first(h.left).val);\n    println(left_of(h).is_some());\n}\n";
+fn main() {\n    let h = N { val: 1, left: Some(N { val: 7, left: Some(N { val: 9, left: None }) }) };\n    println(walk(h.left));\n    println(glance(Holder.One(N { val: 7, left: None }), h));\n    println(walk(h.left));\n    let mut c = 0;\n    println(bump(Holder.Zero, mut c));\n    println(first(h.left).val);\n    println(left_of(h).is_some());\n}\n";
 
     /// The retains left in `name`.
     fn retains(name: &str) -> usize {
@@ -1158,7 +1162,8 @@ fn main() {\n    let h = N { val: 1, left: Some(N { val: 7, left: Some(N { val: 
 
     #[test]
     fn a_handle_kept_across_a_shared_write_is_counted() {
-        // `cut` drops the caller's last count of the node `x` reads.
+        // `cut` writes a `mut` field through a handle, which could drop
+        // what `x` reads, so the count `x` takes is kept.
         assert_eq!(retains("glance"), 1);
     }
 
