@@ -344,6 +344,13 @@ Pins: `ok_shared_peek_then_mutate`, `err_shared_field_same_handle`, `panic_share
 
 **6.3 Across tasks.** Shared handles never cross a task boundary (`E_NOT_CROSS_TASK`).
 - A function value is `CrossTask` only when everything its environment reaches is, through any depth of nested closures and erased `Fn` / `MutFn` / `OnceFn` values. A closure that captures a `shared` value cannot be spawned, captured by a spawned closure, or passed as a server handler, since a server runs its handler in a task per connection. State that tasks share is a `sync` type with `Mutex[T]` or `Atomic[T]` inside (B-2026-10-26-13, ruling 2026-10-26). This holds on one worker as on many: the rule is about the task boundary, not the thread count.
+- **An erased function type is not `CrossTask` unless it is marked** (B-2026-11-01-26, ruling 2026-11-01). Once a closure's type is erased to `Fn` / `MutFn` / `OnceFn`, by a parameter, a return type, a field or an element type, its environment is out of sight, as a `dyn` value's concrete type is. So it follows the `dyn` rule (`design.md` § Crossing tasks):
+  - `Fn(A) -> R` is not `CrossTask`, and neither is any type that contains one (`Vec[Fn(Event)]`, `Option[OnceFn()]`, a struct with such a field).
+  - `Fn(A) -> R + CrossTask` is. The marker follows the return type and precedes the effect clause, as in `dyn T + CrossTask with E`: `Fn(Event) + CrossTask with E`. The same holds for `MutFn` and `OnceFn`. It binds to the nearest function type, so `Fn() -> Fn() + CrossTask` marks the inner one; parenthesize to mark the outer.
+  - Each coercion into a marked type checks the environment by the bullet above, at the coercion. That is where an unsound capture is reported.
+  - A local bound directly from a closure literal in the same body is not erased: its environment is visible and is checked as the literal's. So `let f = || k + 1; tg.spawn(|| f())` needs no marker.
+  - There is no view carve-out. The race this closes is two tasks calling one function value through views, so an unmarked function type may not reach a task or a `par` branch even as a view. It applies at every site `CrossTask` governs: spawn and `par` captures, task results, channel sends, `sync` fields, `CrossTask` supertraits, `with_provider` (§14.9), and handler parameters. Auto-parallelization uses the same test, so a loop body that calls an unmarked function value stays sequential.
+  - The fix-it adds `+ CrossTask` to the declaring type.
 - `sync struct` and `sync enum` (formerly `par struct` and `par enum`) use an atomic count. Their fields are never `mut` and must be `CrossTask`; mutation goes through `Atomic[T]` and `Mutex[T]`, whose methods borrow.
 - `frozen T` is read-only and may be shared by any number of tasks.
 

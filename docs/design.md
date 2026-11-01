@@ -3665,7 +3665,7 @@ impl[with E] Router[with E] {
 
 **Providers.** A `dyn` value uses the providers that were in scope where it was coerced, as a function value does ([core-semantics.md §14.3](core-semantics.md#14-providers-brought-forward-from-m4a-2026-10-20)). Outside any `with_provider`, that is each program-rooted resource's static default, and the value may go anywhere; a call through it needs no provider. A coercion of a type whose methods reach a provider-rooted resource, or reach a program-rooted resource that a `with_provider` overrides at the coercion, is an error in v1 (`E_DYN_PROVIDER`): the value has no room to carry the provider. The diagnostic names the resource and the `with_provider`, and suggests a generic parameter.
 
-**Crossing tasks.** Whether a `dyn Trait` may enter a task depends on the concrete type, which the type does not show. So `dyn Trait` is not `CrossTask`, and `dyn Trait + CrossTask` is, with each coercion into it checking that the concrete type is `CrossTask` ([`CrossTask`](#crosstask)). A trait with `CrossTask` among its supertraits makes every `dyn` of it `CrossTask`. A view follows the view rules, as for any type.
+**Crossing tasks.** Whether a `dyn Trait` may enter a task depends on the concrete type, which the type does not show. So `dyn Trait` is not `CrossTask`, and `dyn Trait + CrossTask` is, with each coercion into it checking that the concrete type is `CrossTask` ([`CrossTask`](#crosstask)). A trait with `CrossTask` among its supertraits makes every `dyn` of it `CrossTask`. A view follows the view rules, as for any type. An erased function type follows the same rule: `Fn(A) -> R` is not `CrossTask` and `Fn(A) -> R + CrossTask` is, except that it has no view carve-out (core semantics §6.3).
 
 ### `CrossTask`
 
