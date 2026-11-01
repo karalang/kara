@@ -58,11 +58,11 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 85 |
-| false-positive | 84 |
-| perf | 65 |
+| false-positive | 87 |
+| diagnostics | 86 |
+| perf | 66 |
 | missing-feature | 60 |
-| soundness | 33 |
+| soundness | 34 |
 | miscompile | 28 |
 | run-vs-build | 20 |
 | other | 15 |
@@ -75,16 +75,16 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 142 |
-| mir | 94 |
-| mir-llvm | 72 |
+| typecheck | 143 |
+| mir | 95 |
+| mir-llvm | 73 |
 | cli | 49 |
 | ownership | 38 |
 | interp | 26 |
 | parser | 25 |
 | codegen | 22 |
 | runtime | 22 |
-| effect | 10 |
+| effect | 13 |
 | other | 4 |
 | resolver | 4 |
 | autopar | 4 |
@@ -122,17 +122,23 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-01-23 | 2026-11-01 | mir-llvm | medium | Kata 120's default build auto-parallelizes its one-off 200-row triangle build and then runs +2.0G instructions (+29%) whenever it has two or more workers: the default binary is 1.10x slower than its KARAC_AUTO_PAR=0 twin | — |
 | B-2026-11-01-24 | 2026-11-01 | mir-llvm | medium | MIR `shared` boxes carry a 16-byte strong+weak count header where legacy carried 8, so a 24-byte node body (a tree's val + left + right) takes a 48-byte macOS malloc block instead of 32: kata 124's peak RSS went from 35.2 MB to 52.1 MB (1.48x) | — |
 | B-2026-11-01-25 | 2026-11-01 | mir-llvm | high | Under the task pool every borrow-flag operation goes through ONE process-wide locked table, so parallel tasks that write `mut` fields of their own `shared` values serialize on it in the kernel: kata 133's par lane runs 28.8x rayon (was 1.36x) with 17 s of system time, and 45x faster with KARAC_MIR_FLAGS=0 | — |
-| B-2026-11-01-26 | 2026-11-01 | typecheck | high | A `shared` handle crosses a task boundary inside a function value whose type is erased by a SIGNATURE: `fn mkf(s: own S) -> Fn() -> i64 { || { s.n = s.n + 1; s.n } }` then two `TaskGroup.spawn` closures calling `f = mkf(s)` pass `karac check` and race on the non-atomic handle: 2 x 100000 increments print 166280 (run) and 150044 (ASan build) under KARAC_THREADS=4, want a check refusal (core-semantics §6.3) | — |
-| B-2026-11-01-27 | 2026-11-01 | typecheck | high | A task spawned into a `TaskGroup` made OUTSIDE a `with_provider` call captures the provider and outlives it: `let tg = TaskGroup.new(); let h = with_provider[Clk](F { t: vec![1] }, || tg.spawn(|| Clk.now())); h.join()` passes `karac check`, prints `dF` before the task reads, then a garbage number on run and heap-use-after-free under ASan (core-semantics §14.5 makes it a check error) | — |
-| B-2026-11-01-28 | 2026-11-01 | mir | medium | A `Map` index place reads its key operand after the assigned value has run, against core-semantics 8.2 (place operands first): `let mut k = 1; m[k] = { k = 2; 5 };` inserts key 2, want key 1, on mir-interp and mir-llvm alike; a `Vec` index place (`v[i] = { i = 1; 5 }`) and a call key (`m[key()] = val()`, prints place then value) are already right | — |
+| B-2026-11-01-26 | 2026-11-01 | typecheck | high | A `shared` handle crosses a task boundary inside a function value whose type is erased by a SIGNATURE: `fn mkf(s: own S) -> Fn() -> i64 { || { s.n = s.n + 1; s.n } }` then two `TaskGroup.spawn` closures calling `f = mkf(s)` pass `karac check` and race on the non-atomic handle: 2 x 100000 increments print 166280 (run) and 150044 (ASan build) under KARAC_THREADS=4, want a check refusal (core-semantics §6.3) (WIDENED: any container of an erased function type is assumed CrossTask: a struct field `f: Fn() -> i64`, a `Vec[Fn()]` or `Map[_, Fn()]` (local or returned), `Option[Fn()]`, a returned `dyn Trait` over a shared field, a closure returning a closure, a `channel` send of the erased value, a `sync struct` field of type `Fn()`, and an erased `Fn` parameter spawned inside the callee all pass check; only a closure literal visible in the spawning body is refused) | — |
+| B-2026-11-01-27 | 2026-11-01 | typecheck | high | A task spawned into a `TaskGroup` made OUTSIDE a `with_provider` call captures the provider and outlives it: `let tg = TaskGroup.new(); let h = with_provider[Clk](F { t: vec![1] }, || tg.spawn(|| Clk.now())); h.join()` passes `karac check`, prints `dF` before the task reads, then a garbage number on run and heap-use-after-free under ASan (core-semantics §14.5 makes it a check error) (WIDENED: the group as a parameter, an isolating group, a task that reaches the provider through a named function, a nested `with_provider` with the group in the outer one, and a `Stdout` override all pass check; llvm reads freed memory or leaks, while mir-interp stops with `field access ... goes through an uninitialized value`) | — |
+| B-2026-11-01-28 | 2026-11-01 | mir | medium | A `Map` index place reads its key operand after the assigned value has run, against core-semantics 8.2 (place operands first): `let mut k = 1; m[k] = { k = 2; 5 };` inserts key 2, want key 1, on mir-interp and mir-llvm alike; a `Vec` index place (`v[i] = { i = 1; 5 }`) and a call key (`m[key()] = val()`, prints place then value) are already right (WIDENED: every plain `=` into a `Map` or `SortedMap` index place reads a place key late: a field key `m[s.k] = { s.k = 2; 5 }`, a String key, and `v[0][k] = ..` on a `Vec[Map]`; `m[k] += ..` and `m[k][0] = ..` are already right) | — |
 | B-2026-11-01-29 | 2026-11-01 | mir | medium | B-2026-11-01-16 is wider than method chains: an assignment whose place is rooted in ANY call evaluates the value first, against core-semantics 8.2: `at(mut s).n = { println("value"); 3 }` with a free `fn at(s: mut ref S) -> mut ref C` prints `value` before `place`, and so does `get(h).n = ..` with `fn get(h: H) -> H` returning a `shared` handle, on run and build | — |
-| B-2026-11-01-30 | 2026-11-01 | mir | medium | A temporary created in a `match` guard drops at the end of the enclosing statement instead of the end of the guard, against core-semantics 7.4: `match 1 { x if see(mk(x)) == 1 => println("arm"), _ => {} }` prints `arm d1`, want `d1 arm`, on mir-interp, mir-llvm and the ASan build; a guard that FAILS already drops before the next arm | — |
+| B-2026-11-01-30 | 2026-11-01 | mir | medium | A temporary created in a `match` guard drops at the end of the enclosing statement instead of the end of the guard, against core-semantics 7.4: `match 1 { x if see(mk(x)) == 1 => println("arm"), _ => {} }` prints `arm d1`, want `d1 arm`, on mir-interp, mir-llvm and the ASan build; a guard that FAILS already drops before the next arm (WIDENED: every success-path guard shape: a field read on a temporary `mk(x).id == 1`, two temporaries, a guard in a loop, a guard on a payload binding, an arm that returns) | — |
 | B-2026-11-01-31 | 2026-11-01 | mir | low | `let x: i64 = None?;` passes `karac check` and stops `karac run` / `karac build` with `invalid MIR: f: bb5[0]: assigning () to _1 of type i64`; `let x: i64 = g()?;` with `g() -> Option[i64]` is fine | — |
-| B-2026-11-01-32 | 2026-11-01 | typecheck | medium | A `TaskGroup` task that READS a `Copy` local does not borrow it: `let mut x = 1; let tg = TaskGroup.new(); let h = tg.spawn(|| x + 1); x = 5;` passes `karac check` and runs (prints 2, then 5), where core-semantics 9.1/9.5 make writing a place a live task captured an error; a `Vec` capture is refused correctly | — |
+| B-2026-11-01-32 | 2026-11-01 | typecheck | medium | A `TaskGroup` task that READS a `Copy` local does not borrow it: `let mut x = 1; let tg = TaskGroup.new(); let h = tg.spawn(|| x + 1); x = 5;` passes `karac check` and runs (prints 2, then 5), where core-semantics 9.1/9.5 make writing a place a live task captured an error; a `Vec` capture is refused correctly (WIDENED: a whole Copy tuple `t` captured by a task and reassigned is also accepted; a FIELD capture `p.a` and a task that WRITES `x` are refused correctly) | — |
 | B-2026-11-01-33 | 2026-11-01 | typecheck | low | `with_provider[R](p, ..)` moves `p` (core-semantics 14.4), but `karac check` accepts a later use of `p`, which `karac run` and `karac build` then refuse (`move check main: bb11[0]: use of _1.0, which may have been moved`) | — |
 | B-2026-11-01-34 | 2026-11-01 | mir | low | A closure that writes one field through a `mut ref` parameter (`let mut f = || { p.a += 1; };` with `p: mut ref P2`) holds the whole `*p`, so writing a DIFFERENT field (`p.b = 5`) while it is live is refused (E0516 on check and run), against the disjoint field capture of core-semantics 9.1; the same closure over an owned local is accepted | — |
 | B-2026-11-01-35 | 2026-11-01 | mir | low | A generic call with a `Copy` place argument followed by an argument that writes the place (`pr(c.n, bump(mut c))` with `fn pr[T: Display](a: T, b: T)`) is refused E0516 on check and run, where the non-generic `pair(c.n, bump(mut c))` is accepted since B-2026-11-01-7 and prints `1 11` | — |
 | B-2026-11-01-36 | 2026-11-01 | mir-llvm | medium | Kata 139's word-break DP inner loop runs 1.75x legacy's instructions on the MIR backend (1.54x its cycles): the seq lane went from 0.99x to 1.50x rustc -O | — |
+| B-2026-11-01-37 | 2026-11-01 | effect | medium | `par { 1, 2 }` inside a `TaskGroup` task is refused as a `writes(Stdout)` conflict between its two branches when the task holds a local whose `Drop` prints and the program calls `g.cancel()`: the cancellation teardown's drop of the task's OUTER local is charged to every branch (core-semantics 11.2, 11.9) | — |
+| B-2026-11-01-38 | 2026-11-01 | mir | low | A whole `Array[i64, 2]` passed to a bare (copying) parameter is held as a borrow across the later arguments: `sh(a, set(mut a))` and `sh(a, { a[0] = 9; 9 })` are refused E0516 (the second as `write of a temporary value[a temporary value]`), where a `#[derive(Copy)]` struct or a tuple in the same position is copied and prints `1 9` | — |
+| B-2026-11-01-39 | 2026-11-01 | effect | medium | The drop of a `dyn` value is charged no effects, against core-semantics 12 default 3 (a drop's effects are its type's drop glue's): `par { { let d = mkr(); 0 }, { println("x"); 2 } }` with `fn mkr() -> dyn T { mk(1) }` and a printing `Drop` on the concrete type passes check, and so do two branches that each drop such a value; calls THROUGH a `dyn` are charged correctly | — |
+| B-2026-11-01-40 | 2026-11-01 | effect | low | Two `par {}` branches that write CONSTANT, different indices of one `Vec` (`{ v[0] = 1; 0 }` and `{ v[1] = 2; 0 }`) are refused as conflicting mutable borrows of `v`, where core-semantics 11.2 says disjoint index ranges proven by the disjointness analysis do not conflict | — |
+| B-2026-11-01-41 | 2026-11-01 | typecheck | low | Two later-track features named in core-semantics 13 are accepted silently and run as ordinary code: `comptime fn sq(n: i64) -> i64 { n * n }` checks and prints 9 at run time, and a `#[gpu]` function checks and runs on the CPU; `Tensor`/`Column` are refused with a clear 'not in 0.8' diagnostic | — |
+| B-2026-11-01-42 | 2026-11-01 | mir-llvm | medium | Kata 147's insertion-sort-list runs legacy's instruction count on the MIR backend but 1.36x its cycles: the seq lane went from 0.72x to 0.99x rustc -O and from 0.82x to 1.31x C | — |
 
 ### Relocated
 
