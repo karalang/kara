@@ -1,5 +1,5 @@
 //! What the MIR builder refuses, `karac check` refuses, at the position the
-//! build names; and a forbidden move in one function leaves the MIR borrow
+//! build names; and a function the builder refuses leaves the MIR borrow
 //! check of every other function in place (B-2026-11-01-2).
 
 use std::path::PathBuf;
@@ -33,12 +33,12 @@ fn text(out: &Output) -> String {
     )
 }
 
-/// The `??` in `take` is a move the build refuses (PREDICTS
-/// B-2026-11-01-1: once a borrowed handle aggregate counts, only the
-/// E0516 remains), and `grow`'s E0516 is the MIR borrow check's, which
-/// check used to skip for the whole program.
+/// `grow`'s E0516 is the MIR borrow check's, which check used to skip for
+/// the whole program while any other function failed to lower; `take`'s
+/// `??` was one (B-2026-11-01-1) and lowers now, so check reports exactly
+/// the one error.
 #[test]
-fn check_reports_a_forbidden_move_and_another_function_s_borrow_error() {
+fn check_reports_a_mir_borrow_error_beside_a_function_that_lowers() {
     let path = program(
         "moves",
         "shared enum Node {\n    Leaf(i64),\n    Pair(Node, Node),\n}\n\n\
@@ -50,15 +50,12 @@ fn check_reports_a_forbidden_move_and_another_function_s_borrow_error() {
     let out = check(&path);
     let all = text(&out);
     assert!(!out.status.success(), "{all}");
-    assert!(!all.contains("All checks passed"), "{all}");
-    assert!(
-        all.contains(":7:5: cannot move a non-`Copy` value out of a borrowed place"),
-        "{all}"
-    );
+    assert!(!all.contains("cannot move"), "{all}");
     assert!(
         all.contains(":13:5: cannot mutably borrow `v` while `first`"),
         "{all}"
     );
+    assert!(all.contains("1 error(s) found"), "{all}");
 }
 
 /// A builder error (here a struct variant named like a library type,

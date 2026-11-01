@@ -7496,6 +7496,19 @@ impl<'l, 'a> Bx<'l, 'a> {
     }
 
     /// Read a place as an operand: a copy for a `Copy` type, else a move.
+    /// The payload at `p` taken out of its wrapper as a value: a handle or
+    /// handle aggregate reached through a borrow counts, as any read of a
+    /// borrowed handle does (core semantics §6.1, B-2026-11-01-1); anything
+    /// else is [`Self::use_place`].
+    fn payload_read(&mut self, p: Place, t: Ty) -> Operand {
+        if (self.is_handle(t) || self.is_handle_aggregate(t)) && self.borrowed_place(&p) {
+            let l = self.temp(t);
+            self.count_copy(p, t, Place::local(l));
+            return Operand::Move(Place::local(l));
+        }
+        self.use_place(p, t)
+    }
+
     fn use_place(&self, p: Place, t: Ty) -> Operand {
         if self.is_copy(t) {
             Operand::Copy(p)
@@ -22776,7 +22789,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                         pt = inner;
                     }
                 }
-                let op = self.use_place(fp, pt);
+                let op = self.payload_read(fp, pt);
                 self.assign(dest.clone(), Rvalue::Use(op));
             }
             None => self.assign(dest.clone(), Rvalue::Use(unit_const(self.unit()))),
