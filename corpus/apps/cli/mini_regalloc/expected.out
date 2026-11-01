@@ -1,0 +1,3291 @@
+$ sel arith.ir gcd
+gcd:  # frame 0
+.entry:
+  mv %a, a0
+  mv %b, a1
+.test:
+  li %c.0, 0
+  seq %z, %b, %c.0
+  bnez %z, done
+.step:
+  rem %t, %a, %b
+  mv %a, %b
+  mv %b, %t
+  j test
+.done:
+  mv a0, %a
+  ret
+$ live arith.ir gcd
+%a: [1, 18]
+%b: [3, 17]
+%c.0: [5, 6]
+%z: [7, 8]
+%t: [11, 14]
+$ graph arith.ir gcd
+%a: degree 4, cost 22; %b, %c.0, %t, %z
+%b: degree 4, cost 41; %a, %c.0, %t, %z
+%c.0: degree 2, cost 20; %a, %b
+%t: degree 2, cost 20; %a, %b
+%z: degree 2, cost 20; %a, %b
+$ sel arith.ir classify
+classify:  # frame 0
+.entry:
+  mv %n, a0
+  li %c.0, 0
+  slt %neg, %n, %c.0
+  beqz %neg, check
+.negative:
+  li %r, -1
+  j out
+.check:
+  li %c.1, 0
+  seq %zero, %n, %c.1
+  beqz %zero, positive
+.isz:
+  li %r, 0
+  j out
+.positive:
+  li %c.2, 100
+  sgt %big, %n, %c.2
+  li %r, 1
+  beqz %big, out
+.huge:
+  li %r, 2
+.out:
+  mv a0, %r
+  ret
+$ live arith.ir classify
+%n: [1, 24]
+%c.0: [3, 4]
+%neg: [5, 6]
+%r: [9, 32]
+%c.1: [13, 14]
+%zero: [15, 16]
+%c.2: [23, 24]
+%big: [25, 28]
+$ graph arith.ir classify
+%big: degree 1, cost 2; %r
+%c.0: degree 1, cost 2; %n
+%c.1: degree 1, cost 2; %n
+%c.2: degree 1, cost 2; %n
+%n: degree 5, cost 4; %c.0, %c.1, %c.2, %neg, %zero
+%neg: degree 1, cost 2; %n
+%r: degree 1, cost 5; %big
+%zero: degree 1, cost 2; %n
+$ sel loops.ir grid
+grid:  # frame 0
+.entry:
+  mv %n, a0
+  li %total, 0
+  li %i, 0
+.outer:
+  slt %ci, %i, %n
+  beqz %ci, done
+.init:
+  li %j, 0
+.inner:
+  slt %cj, %j, %n
+  beqz %cj, next
+.cell:
+  mul %p, %i, %j
+  add %total, %total, %p
+  addi %j, %j, 1
+  j inner
+.next:
+  addi %i, %i, 1
+  j outer
+.done:
+  mv a0, %total
+  ret
+$ live loops.ir grid
+%n: [1, 27]
+%total: [3, 28]
+%i: [5, 27]
+%ci: [7, 8]
+%j: [11, 23]
+%cj: [13, 14]
+%p: [17, 18]
+$ graph loops.ir grid
+%ci: degree 3, cost 20; %i, %n, %total
+%cj: degree 4, cost 200; %i, %j, %n, %total
+%i: degree 6, cost 131; %ci, %cj, %j, %n, %p, %total
+%j: degree 5, cost 410; %cj, %i, %n, %p, %total
+%n: degree 6, cost 111; %ci, %cj, %i, %j, %p, %total
+%p: degree 4, cost 200; %i, %j, %n, %total
+%total: degree 6, cost 202; %ci, %cj, %i, %j, %n, %p
+$ sel swap.ir lost
+lost:  # frame 0
+.entry:
+  mv %n, a0
+  li %x, 0
+.loop:
+  mv %y, %x
+  addi %x, %x, 1
+  slt %c, %x, %n
+  bnez %c, loop
+.done:
+  mv a0, %y
+  ret
+$ live swap.ir lost
+%n: [1, 11]
+%x: [3, 11]
+%y: [5, 12]
+%c: [9, 10]
+$ graph swap.ir lost
+%c: degree 3, cost 20; %n, %x, %y
+%n: degree 3, cost 11; %c, %x, %y
+%x: degree 3, cost 41; %c, %n, %y
+%y: degree 3, cost 11; %c, %n, %x
+$ sel calls.ir ack
+ack:  # frame 0
+.entry:
+  mv %m, a0
+  mv %n, a1
+  li %c.0, 0
+  seq %mz, %m, %c.0
+  beqz %mz, inner
+.base:
+  addi %r, %n, 1
+  mv a0, %r
+  ret
+.inner:
+  li %c.1, 0
+  seq %nz, %n, %c.1
+  beqz %nz, both
+.down:
+  subi %m1, %m, 1
+  mv a0, %m1
+  li a1, 1
+  call ack
+  mv %r, a0
+  mv a0, %r
+  ret
+.both:
+  subi %n1, %n, 1
+  mv a0, %m
+  mv a1, %n1
+  call ack
+  mv %t, a0
+  subi %m1, %m, 1
+  mv a0, %m1
+  mv a1, %t
+  call ack
+  mv %r, a0
+  mv a0, %r
+  ret
+$ live calls.ir ack
+%m: [1, 46]
+%n: [3, 36]
+%c.0: [5, 6]
+%mz: [7, 8]
+%r: [11, 56]
+%c.1: [17, 18]
+%nz: [19, 20]
+%m1: [23, 48]
+%n1: [37, 40]
+%t: [45, 50]
+call at 28: live across -
+call at 52: live across -
+call at 42: live across %m
+$ graph calls.ir ack
+%c.0: degree 2, cost 2; %m, %n
+%c.1: degree 2, cost 2; %m, %n
+%m: degree 7, cost 5; %c.0, %c.1, %mz, %n, %n1, %nz, %t
+%m1: degree 1, cost 4; %t
+%mz: degree 2, cost 2; %m, %n
+%n: degree 5, cost 4; %c.0, %c.1, %m, %mz, %nz
+%n1: degree 1, cost 2; %m
+%nz: degree 2, cost 2; %m, %n
+%r: degree 0, cost 6; -
+%t: degree 2, cost 2; %m, %m1
+$ sel pressure.ir accum
+accum:  # frame 0
+.entry:
+  mv %n, a0
+  li %s0, 0
+  li %s1, 0
+  li %s2, 0
+  li %s3, 0
+  li %s4, 0
+  li %s5, 0
+  li %i, 0
+.loop:
+  slt %c, %i, %n
+  beqz %c, done
+.body:
+  add %s0, %s0, %i
+  mul %t, %i, %i
+  add %s1, %s1, %t
+  mul %t, %t, %i
+  xor %s2, %s2, %t
+  addi %s3, %s3, 1
+  sub %s4, %s4, %i
+  andi %m, %i, 3
+  add %s5, %s5, %m
+  addi %i, %i, 1
+  j loop
+.done:
+  print %s0
+  print %s1
+  print %s2
+  print %s3
+  print %s4
+  print %s5
+  add %r, %s0, %s1
+  add %r, %r, %s2
+  add %r, %r, %s3
+  add %r, %r, %s4
+  add %r, %r, %s5
+  mv a0, %r
+  ret
+$ live pressure.ir accum
+%n: [1, 41]
+%s0: [3, 54]
+%s1: [5, 54]
+%s2: [7, 56]
+%s3: [9, 58]
+%s4: [11, 60]
+%s5: [13, 62]
+%i: [15, 41]
+%c: [17, 18]
+%t: [23, 28]
+%m: [35, 36]
+%r: [55, 64]
+$ graph pressure.ir accum
+%c: degree 8, cost 20; %i, %n, %s0, %s1, %s2, %s3, %s4, %s5
+%i: degree 10, cost 81; %c, %m, %n, %s0, %s1, %s2, %s3, %s4, %s5, %t
+%m: degree 8, cost 20; %i, %n, %s0, %s1, %s2, %s3, %s4, %s5
+%n: degree 10, cost 11; %c, %i, %m, %s0, %s1, %s2, %s3, %s4, %s5, %t
+%r: degree 4, cost 10; %s2, %s3, %s4, %s5
+%s0: degree 10, cost 23; %c, %i, %m, %n, %s1, %s2, %s3, %s4, %s5, %t
+%s1: degree 10, cost 23; %c, %i, %m, %n, %s0, %s2, %s3, %s4, %s5, %t
+%s2: degree 11, cost 23; %c, %i, %m, %n, %r, %s0, %s1, %s3, %s4, %s5, %t
+%s3: degree 11, cost 23; %c, %i, %m, %n, %r, %s0, %s1, %s2, %s4, %s5, %t
+%s4: degree 11, cost 23; %c, %i, %m, %n, %r, %s0, %s1, %s2, %s3, %s5, %t
+%s5: degree 11, cost 23; %c, %i, %m, %n, %r, %s0, %s1, %s2, %s3, %s4, %t
+%t: degree 8, cost 50; %i, %n, %s0, %s1, %s2, %s3, %s4, %s5
+$ sel abi.ir mix
+mix:  # frame 0
+.entry:
+  mv %x, a0
+  mv %y, a1
+  mv a0, %x
+  mv a1, %y
+  li a2, 1
+  li a3, 2
+  call add4
+  mv %p, a0
+  mv a0, %p
+  mv a1, %x
+  mv a2, %y
+  mv a3, %p
+  call add4
+  mv %q, a0
+  mv a0, %q
+  mv a1, %q
+  mv a2, %q
+  mv a3, %q
+  call add4
+  mv %r, a0
+  mv a0, %r
+  ret
+$ live abi.ir mix
+%x: [1, 18]
+%y: [3, 20]
+%p: [15, 22]
+%q: [27, 34]
+%r: [39, 40]
+call at 36: live across -
+call at 24: live across -
+call at 12: live across %x, %y
+$ graph abi.ir mix
+%p: degree 2, cost 3; %x, %y
+%q: degree 0, cost 5; -
+%r: degree 0, cost 2; -
+%x: degree 2, cost 3; %p, %y
+%y: degree 2, cost 3; %p, %x
+$ sel abi.ir chain
+chain:  # frame 0
+.entry:
+  mv %n, a0
+  li %c.0, 0
+  seq %z, %n, %c.0
+  beqz %z, rec
+.base:
+  li a0, 0
+  ret
+.rec:
+  subi %m, %n, 1
+  mul %k, %n, %n
+  mv a0, %m
+  call chain
+  mv %r, a0
+  add %s, %r, %k
+  mv a0, %s
+  ret
+$ live abi.ir chain
+%n: [1, 14]
+%c.0: [3, 4]
+%z: [5, 6]
+%m: [13, 16]
+%k: [15, 22]
+%r: [21, 22]
+%s: [23, 24]
+call at 18: live across %k
+$ graph abi.ir chain
+%c.0: degree 1, cost 2; %n
+%k: degree 2, cost 2; %m, %r
+%m: degree 2, cost 2; %k, %n
+%n: degree 3, cost 4; %c.0, %m, %z
+%r: degree 1, cost 2; %k
+%s: degree 0, cost 2; -
+%z: degree 1, cost 2; %n
+$ linear arith.ir gcd 3
+; %a r1, %b r2, %c.0 r3, %t r3, %z r3
+gcd:  # frame 0
+.entry:
+  mv r1, a0
+  mv r2, a1
+.test:
+  li r3, 0
+  seq r3, r2, r3
+  bnez r3, done
+.step:
+  rem r3, r1, r2
+  mv r1, r2
+  mv r2, r3
+  j test
+.done:
+  mv a0, r1
+  ret
+; spilled 0, loads 0, stores 0, saves 0, moves removed 0, size 11
+$ colour arith.ir gcd 3
+; %a r3, %b r2, %c.0 r1, %t r1, %z r1
+gcd:  # frame 0
+.entry:
+  mv r3, a0
+  mv r2, a1
+.test:
+  li r1, 0
+  seq r1, r2, r1
+  bnez r1, done
+.step:
+  rem r1, r3, r2
+  mv r3, r2
+  mv r2, r1
+  j test
+.done:
+  mv a0, r3
+  ret
+; spilled 0, loads 0, stores 0, saves 0, moves removed 0, size 11
+$ linear arith.ir collatz 3
+; %c.0 r3, %c.1 r3, %c.2 r3, %c.3 r3, %n r1, %one r3, %rem r3, %steps r2, %t r3
+collatz:  # frame 0
+.entry:
+  mv r1, a0
+  li r2, 0
+.head:
+  li r3, 1
+  seq r3, r1, r3
+  bnez r3, done
+.body:
+  li r3, 2
+  rem r3, r1, r3
+  bnez r3, odd
+.even:
+  li r3, 2
+  div r1, r1, r3
+  j next
+.odd:
+  li r3, 3
+  mul r3, r1, r3
+  addi r1, r3, 1
+.next:
+  addi r2, r2, 1
+  j head
+.done:
+  mv a0, r2
+  ret
+; spilled 0, loads 0, stores 0, saves 0, moves removed 0, size 18
+$ colour arith.ir collatz 3
+; %c.0 r1, %c.1 r1, %c.2 r1, %c.3 r1, %n r3, %one r1, %rem r1, %steps r2, %t r1
+collatz:  # frame 0
+.entry:
+  mv r3, a0
+  li r2, 0
+.head:
+  li r1, 1
+  seq r1, r3, r1
+  bnez r1, done
+.body:
+  li r1, 2
+  rem r1, r3, r1
+  bnez r1, odd
+.even:
+  li r1, 2
+  div r3, r3, r1
+  j next
+.odd:
+  li r1, 3
+  mul r1, r3, r1
+  addi r3, r1, 1
+.next:
+  addi r2, r2, 1
+  j head
+.done:
+  mv a0, r2
+  ret
+; spilled 0, loads 0, stores 0, saves 0, moves removed 0, size 18
+$ linear arith.ir isqrt 3
+; %c.0 r1, %c.1 r2, %gap r2, %hi r3, %le r2, %lo [sp+0], %mid r1, %more r1, %n [sp+1], %s r1, %sq r2
+isqrt:  # frame 2
+.entry:
+  mv t0, a0
+  st t0, [sp+1]
+  li t0, 0
+  st t0, [sp+0]
+  ld t0, [sp+1]
+  addi r3, t0, 1
+.loop:
+  ld t0, [sp+0]
+  sub r2, r3, t0
+  li r1, 1
+  sgt r1, r2, r1
+  beqz r1, done
+.body:
+  ld t0, [sp+0]
+  add r1, t0, r3
+  li r2, 2
+  div r1, r1, r2
+  mul r2, r1, r1
+  ld t0, [sp+1]
+  sle r2, r2, t0
+  beqz r2, down
+.up:
+  mv t0, r1
+  st t0, [sp+0]
+  j loop
+.down:
+  mv r3, r1
+  j loop
+.done:
+  ld t0, [sp+0]
+  mv a0, t0
+  ret
+; spilled 2, loads 5, stores 3, saves 0, moves removed 0, size 27
+$ colour arith.ir isqrt 3
+; %c.0 r3, %c.1 r3, %gap r1, %hi [sp+0], %le r1, %lo r2, %mid r3, %more r1, %n [sp+1], %s r1, %sq r1
+isqrt:  # frame 2
+.entry:
+  mv t0, a0
+  st t0, [sp+1]
+  li r2, 0
+  ld t0, [sp+1]
+  addi t0, t0, 1
+  st t0, [sp+0]
+.loop:
+  ld t0, [sp+0]
+  sub r1, t0, r2
+  li r3, 1
+  sgt r1, r1, r3
+  beqz r1, done
+.body:
+  ld t0, [sp+0]
+  add r1, r2, t0
+  li r3, 2
+  div r3, r1, r3
+  mul r1, r3, r3
+  ld t0, [sp+1]
+  sle r1, r1, t0
+  beqz r1, down
+.up:
+  mv r2, r3
+  j loop
+.down:
+  mv t0, r3
+  st t0, [sp+0]
+  j loop
+.done:
+  mv a0, r2
+  ret
+; spilled 2, loads 4, stores 3, saves 0, moves removed 0, size 26
+$ linear loops.ir grid 3
+; %ci r2, %cj r1, %i r3, %j r2, %n [sp+1], %p r1, %total [sp+0]
+grid:  # frame 2
+.entry:
+  mv t0, a0
+  st t0, [sp+1]
+  li t0, 0
+  st t0, [sp+0]
+  li r3, 0
+.outer:
+  ld t0, [sp+1]
+  slt r2, r3, t0
+  beqz r2, done
+.init:
+  li r2, 0
+.inner:
+  ld t0, [sp+1]
+  slt r1, r2, t0
+  beqz r1, next
+.cell:
+  mul r1, r3, r2
+  ld t0, [sp+0]
+  add t0, t0, r1
+  st t0, [sp+0]
+  addi r2, r2, 1
+  j inner
+.next:
+  addi r3, r3, 1
+  j outer
+.done:
+  ld t0, [sp+0]
+  mv a0, t0
+  ret
+; spilled 2, loads 4, stores 3, saves 0, moves removed 0, size 23
+$ colour loops.ir grid 3
+; %ci r2, %cj r2, %i [sp+0], %j r3, %n [sp+1], %p r2, %total r1
+grid:  # frame 2
+.entry:
+  mv t0, a0
+  st t0, [sp+1]
+  li r1, 0
+  li t0, 0
+  st t0, [sp+0]
+.outer:
+  ld t0, [sp+0]
+  ld t1, [sp+1]
+  slt r2, t0, t1
+  beqz r2, done
+.init:
+  li r3, 0
+.inner:
+  ld t0, [sp+1]
+  slt r2, r3, t0
+  beqz r2, next
+.cell:
+  ld t0, [sp+0]
+  mul r2, t0, r3
+  add r1, r1, r2
+  addi r3, r3, 1
+  j inner
+.next:
+  ld t0, [sp+0]
+  addi t0, t0, 1
+  st t0, [sp+0]
+  j outer
+.done:
+  mv a0, r1
+  ret
+; spilled 2, loads 5, stores 3, saves 0, moves removed 0, size 24
+$ linear loops.ir primes 3
+; %c.0 r3, %count [sp+0], %d r2, %dd r1, %divides r1, %k [sp+2], %m r1, %more r2, %n [sp+1], %past r1
+primes:  # frame 3
+.entry:
+  mv t0, a0
+  st t0, [sp+1]
+  li t0, 0
+  st t0, [sp+0]
+  li t0, 2
+  st t0, [sp+2]
+.outer:
+  ld t0, [sp+2]
+  ld t1, [sp+1]
+  sle r2, t0, t1
+  beqz r2, done
+.start:
+  li r2, 2
+.trial:
+  mul r1, r2, r2
+  ld t0, [sp+2]
+  sgt r1, r1, t0
+  bnez r1, prime
+.test:
+  ld t0, [sp+2]
+  rem r1, t0, r2
+  li r3, 0
+  seq r1, r1, r3
+  bnez r1, composite
+.bump:
+  addi r2, r2, 1
+  j trial
+.prime:
+  ld t0, [sp+0]
+  addi t0, t0, 1
+  st t0, [sp+0]
+.composite:
+  ld t0, [sp+2]
+  addi t0, t0, 1
+  st t0, [sp+2]
+  j outer
+.done:
+  ld t0, [sp+0]
+  mv a0, t0
+  ret
+; spilled 3, loads 7, stores 5, saves 0, moves removed 0, size 32
+$ colour loops.ir primes 3
+; %c.0 [sp+0], %count [sp+1], %d r3, %dd r1, %divides r1, %k r2, %m r1, %more r1, %n [sp+2], %past r1
+primes:  # frame 3
+.entry:
+  mv t0, a0
+  st t0, [sp+2]
+  li t0, 0
+  st t0, [sp+1]
+  li r2, 2
+.outer:
+  ld t0, [sp+2]
+  sle r1, r2, t0
+  beqz r1, done
+.start:
+  li r3, 2
+.trial:
+  mul r1, r3, r3
+  sgt r1, r1, r2
+  bnez r1, prime
+.test:
+  rem r1, r2, r3
+  li t0, 0
+  st t0, [sp+0]
+  ld t0, [sp+0]
+  seq r1, r1, t0
+  bnez r1, composite
+.bump:
+  addi r3, r3, 1
+  j trial
+.prime:
+  ld t0, [sp+1]
+  addi t0, t0, 1
+  st t0, [sp+1]
+.composite:
+  addi r2, r2, 1
+  j outer
+.done:
+  ld t0, [sp+1]
+  mv a0, t0
+  ret
+; spilled 3, loads 4, stores 4, saves 0, moves removed 0, size 28
+$ linear swap.ir swap 3
+; %a [sp+1], %b [sp+0], %c r2, %c.0 r1, %i r3, %n r1, %r r1, %t r2
+swap:  # frame 2
+.entry:
+  mv r1, a0
+  li t0, 1
+  st t0, [sp+1]
+  li t0, 2
+  st t0, [sp+0]
+  li r3, 0
+.loop:
+  slt r2, r3, r1
+  beqz r2, done
+.body:
+  ld t0, [sp+1]
+  mv r2, t0
+  ld t0, [sp+0]
+  st t0, [sp+1]
+  mv t0, r2
+  st t0, [sp+0]
+  addi r3, r3, 1
+  j loop
+.done:
+  li r1, 10
+  ld t0, [sp+1]
+  mul r1, t0, r1
+  ld t0, [sp+0]
+  add r1, r1, t0
+  mv a0, r1
+  ret
+; spilled 2, loads 4, stores 4, saves 0, moves removed 1, size 23
+$ colour swap.ir swap 3
+; %a [sp+0], %b r3, %c r1, %c.0 r1, %i r2, %n [sp+1], %r r1, %t r1
+swap:  # frame 2
+.entry:
+  mv t0, a0
+  st t0, [sp+1]
+  li t0, 1
+  st t0, [sp+0]
+  li r3, 2
+  li r2, 0
+.loop:
+  ld t0, [sp+1]
+  slt r1, r2, t0
+  beqz r1, done
+.body:
+  ld t0, [sp+0]
+  mv r1, t0
+  mv t0, r3
+  st t0, [sp+0]
+  mv r3, r1
+  addi r2, r2, 1
+  j loop
+.done:
+  li r1, 10
+  ld t0, [sp+0]
+  mul r1, t0, r1
+  add r1, r1, r3
+  mv a0, r1
+  ret
+; spilled 2, loads 3, stores 3, saves 0, moves removed 0, size 22
+$ linear swap.ir rotate 3
+; %a [sp+2], %b [sp+1], %c [sp+0], %c.0 r1, %c.1 r2, %go r2, %i r3, %n r1, %r r1, %s r2, %t r2
+rotate:  # frame 3
+.entry:
+  mv r1, a0
+  li t0, 1
+  st t0, [sp+2]
+  li t0, 2
+  st t0, [sp+1]
+  li t0, 3
+  st t0, [sp+0]
+  li r3, 0
+.loop:
+  slt r2, r3, r1
+  beqz r2, done
+.body:
+  ld t0, [sp+2]
+  mv r2, t0
+  ld t0, [sp+1]
+  st t0, [sp+2]
+  ld t0, [sp+0]
+  st t0, [sp+1]
+  mv t0, r2
+  st t0, [sp+0]
+  addi r3, r3, 1
+  j loop
+.done:
+  li r1, 100
+  ld t0, [sp+2]
+  mul r1, t0, r1
+  li r2, 10
+  ld t0, [sp+1]
+  mul r2, t0, r2
+  add r1, r1, r2
+  ld t0, [sp+0]
+  add r1, r1, t0
+  mv a0, r1
+  ret
+; spilled 3, loads 6, stores 6, saves 0, moves removed 2, size 31
+$ colour swap.ir rotate 3
+; %a [sp+1], %b [sp+0], %c r3, %c.0 r1, %c.1 r2, %go r1, %i r2, %n [sp+2], %r r1, %s r2, %t r1
+rotate:  # frame 3
+.entry:
+  mv t0, a0
+  st t0, [sp+2]
+  li t0, 1
+  st t0, [sp+1]
+  li t0, 2
+  st t0, [sp+0]
+  li r3, 3
+  li r2, 0
+.loop:
+  ld t0, [sp+2]
+  slt r1, r2, t0
+  beqz r1, done
+.body:
+  ld t0, [sp+1]
+  mv r1, t0
+  ld t0, [sp+0]
+  st t0, [sp+1]
+  mv t0, r3
+  st t0, [sp+0]
+  mv r3, r1
+  addi r2, r2, 1
+  j loop
+.done:
+  li r1, 100
+  ld t0, [sp+1]
+  mul r1, t0, r1
+  li r2, 10
+  ld t0, [sp+0]
+  mul r2, t0, r2
+  add r1, r1, r2
+  add r1, r1, r3
+  mv a0, r1
+  ret
+; spilled 3, loads 5, stores 5, saves 0, moves removed 1, size 30
+$ linear calls.ir fibr 3
+; %a r2, %b r1, %c.0 r2, %n r1, %s r1, %small r2, %x r2, %y r1
+fibr:  # frame 3
+.entry:
+  mv r1, a0
+  li r2, 2
+  slt r2, r1, r2
+  beqz r2, rec
+.leaf:
+  mv a0, r1
+  ret
+.rec:
+  subi r2, r1, 1
+  subi r1, r1, 2
+  mv a0, r2
+  st r1, [sp+0]
+  call fibr
+  ld r1, [sp+0]
+  mv r2, a0
+  mv a0, r1
+  st r2, [sp+1]
+  call fibr
+  ld r2, [sp+1]
+  mv r1, a0
+  add r1, r2, r1
+  mv a0, r1
+  ret
+; spilled 0, loads 0, stores 0, saves 2, moves removed 0, size 21
+$ colour calls.ir fibr 3
+; %a r3, %b r1, %c.0 r1, %n r2, %s r1, %small r1, %x r2, %y r1
+fibr:  # frame 3
+.entry:
+  mv r2, a0
+  li r1, 2
+  slt r1, r2, r1
+  beqz r1, rec
+.leaf:
+  mv a0, r2
+  ret
+.rec:
+  subi r3, r2, 1
+  subi r1, r2, 2
+  mv a0, r3
+  st r1, [sp+0]
+  call fibr
+  ld r1, [sp+0]
+  mv r2, a0
+  mv a0, r1
+  st r2, [sp+1]
+  call fibr
+  ld r2, [sp+1]
+  mv r1, a0
+  add r1, r2, r1
+  mv a0, r1
+  ret
+; spilled 0, loads 0, stores 0, saves 2, moves removed 0, size 21
+$ linear calls.ir report 3
+; %c r3, %f r3, %i r2, %n r1, %unused r2
+report:  # frame 3
+.entry:
+  mv r1, a0
+  li r2, 1
+.loop:
+  sle r3, r2, r1
+  beqz r3, done
+.body:
+  mv a0, r2
+  st r1, [sp+0]
+  st r2, [sp+1]
+  call fact
+  ld r1, [sp+0]
+  ld r2, [sp+1]
+  mv r3, a0
+  print r3
+  addi r2, r2, 1
+  j loop
+.done:
+  li a0, 10
+  st r1, [sp+0]
+  call fibr
+  ld r1, [sp+0]
+  mv r2, a0
+  mv a0, r1
+  call note
+  li a0, 0
+  ret
+; spilled 0, loads 0, stores 0, saves 3, moves removed 0, size 23
+$ colour calls.ir report 3
+; %c r3, %f r3, %i r1, %n r2, %unused r1
+report:  # frame 3
+.entry:
+  mv r2, a0
+  li r1, 1
+.loop:
+  sle r3, r1, r2
+  beqz r3, done
+.body:
+  mv a0, r1
+  st r1, [sp+0]
+  st r2, [sp+1]
+  call fact
+  ld r1, [sp+0]
+  ld r2, [sp+1]
+  mv r3, a0
+  print r3
+  addi r1, r1, 1
+  j loop
+.done:
+  li a0, 10
+  st r2, [sp+1]
+  call fibr
+  ld r2, [sp+1]
+  mv r1, a0
+  mv a0, r2
+  call note
+  li a0, 0
+  ret
+; spilled 0, loads 0, stores 0, saves 3, moves removed 0, size 23
+$ linear pressure.ir spread 3
+; %a r2, %b [sp+0], %c [sp+1], %c.0 r2, %c.1 r3, %c.2 r3, %c.3 r3, %c.4 r3, %c.5 r3, %c.6 r3, %c.7 r3, %d [sp+2], %e [sp+3], %f [sp+4], %g [sp+5], %h r1, %p r1, %q r2, %r r3, %s [sp+6], %t [sp+7], %u r1, %v r1, %x r1
+spread:  # frame 8
+.entry:
+  mv r1, a0
+  li r2, 3
+  mul r2, r1, r2
+  li r3, 5
+  mul t0, r1, r3
+  st t0, [sp+0]
+  li r3, 7
+  mul t0, r1, r3
+  st t0, [sp+1]
+  li r3, 11
+  mul t0, r1, r3
+  st t0, [sp+2]
+  li r3, 13
+  mul t0, r1, r3
+  st t0, [sp+3]
+  li r3, 17
+  mul t0, r1, r3
+  st t0, [sp+4]
+  li r3, 19
+  mul t0, r1, r3
+  st t0, [sp+5]
+  li r3, 23
+  mul r1, r1, r3
+  ld t0, [sp+0]
+  add t0, r2, t0
+  st t0, [sp+6]
+  ld t0, [sp+6]
+  ld t1, [sp+1]
+  add t0, t0, t1
+  st t0, [sp+6]
+  ld t0, [sp+6]
+  ld t1, [sp+2]
+  add t0, t0, t1
+  st t0, [sp+6]
+  ld t0, [sp+6]
+  ld t1, [sp+3]
+  add t0, t0, t1
+  st t0, [sp+6]
+  ld t0, [sp+6]
+  ld t1, [sp+4]
+  add t0, t0, t1
+  st t0, [sp+6]
+  ld t0, [sp+6]
+  ld t1, [sp+5]
+  add t0, t0, t1
+  st t0, [sp+6]
+  ld t0, [sp+6]
+  add t0, t0, r1
+  st t0, [sp+6]
+  mul r1, r2, r1
+  ld t0, [sp+0]
+  ld t1, [sp+5]
+  mul r2, t0, t1
+  ld t0, [sp+1]
+  ld t1, [sp+4]
+  mul r3, t0, t1
+  ld t0, [sp+2]
+  ld t1, [sp+3]
+  mul t0, t0, t1
+  st t0, [sp+7]
+  sub r1, r1, r2
+  add r1, r1, r3
+  ld t0, [sp+7]
+  sub r1, r1, t0
+  ld t0, [sp+6]
+  xor r1, t0, r1
+  mv a0, r1
+  ret
+; spilled 8, loads 20, stores 14, saves 0, moves removed 0, size 68
+$ colour pressure.ir spread 3
+; %a [sp+0], %b [sp+7], %c [sp+6], %c.0 r2, %c.1 r2, %c.2 r2, %c.3 r2, %c.4 r2, %c.5 r2, %c.6 r2, %c.7 r3, %d [sp+5], %e [sp+4], %f [sp+3], %g r2, %h r3, %p [sp+2], %q r2, %r [sp+1], %s r1, %t r3, %u r2, %v r1, %x r1
+spread:  # frame 8
+.entry:
+  mv r1, a0
+  li r2, 3
+  mul t0, r1, r2
+  st t0, [sp+0]
+  li r2, 5
+  mul t0, r1, r2
+  st t0, [sp+7]
+  li r2, 7
+  mul t0, r1, r2
+  st t0, [sp+6]
+  li r2, 11
+  mul t0, r1, r2
+  st t0, [sp+5]
+  li r2, 13
+  mul t0, r1, r2
+  st t0, [sp+4]
+  li r2, 17
+  mul t0, r1, r2
+  st t0, [sp+3]
+  li r2, 19
+  mul r2, r1, r2
+  li r3, 23
+  mul r3, r1, r3
+  ld t0, [sp+0]
+  ld t1, [sp+7]
+  add r1, t0, t1
+  ld t0, [sp+6]
+  add r1, r1, t0
+  ld t0, [sp+5]
+  add r1, r1, t0
+  ld t0, [sp+4]
+  add r1, r1, t0
+  ld t0, [sp+3]
+  add r1, r1, t0
+  add r1, r1, r2
+  add r1, r1, r3
+  ld t0, [sp+0]
+  mul t0, t0, r3
+  st t0, [sp+2]
+  ld t0, [sp+7]
+  mul r2, t0, r2
+  ld t0, [sp+6]
+  ld t1, [sp+3]
+  mul t0, t0, t1
+  st t0, [sp+1]
+  ld t0, [sp+5]
+  ld t1, [sp+4]
+  mul r3, t0, t1
+  ld t0, [sp+2]
+  sub r2, t0, r2
+  ld t0, [sp+1]
+  add r2, r2, t0
+  sub r2, r2, r3
+  xor r1, r1, r2
+  mv a0, r1
+  ret
+; spilled 8, loads 14, stores 8, saves 0, moves removed 0, size 56
+$ linear pressure.ir accum 3
+; %c r2, %i r3, %m r2, %n r1, %r r1, %s0 [sp+5], %s1 [sp+4], %s2 [sp+0], %s3 [sp+1], %s4 [sp+2], %s5 [sp+3], %t r2
+accum:  # frame 6
+.entry:
+  mv r1, a0
+  li t0, 0
+  st t0, [sp+5]
+  li t0, 0
+  st t0, [sp+4]
+  li t0, 0
+  st t0, [sp+0]
+  li t0, 0
+  st t0, [sp+1]
+  li t0, 0
+  st t0, [sp+2]
+  li t0, 0
+  st t0, [sp+3]
+  li r3, 0
+.loop:
+  slt r2, r3, r1
+  beqz r2, done
+.body:
+  ld t0, [sp+5]
+  add t0, t0, r3
+  st t0, [sp+5]
+  mul r2, r3, r3
+  ld t0, [sp+4]
+  add t0, t0, r2
+  st t0, [sp+4]
+  mul r2, r2, r3
+  ld t0, [sp+0]
+  xor t0, t0, r2
+  st t0, [sp+0]
+  ld t0, [sp+1]
+  addi t0, t0, 1
+  st t0, [sp+1]
+  ld t0, [sp+2]
+  sub t0, t0, r3
+  st t0, [sp+2]
+  andi r2, r3, 3
+  ld t0, [sp+3]
+  add t0, t0, r2
+  st t0, [sp+3]
+  addi r3, r3, 1
+  j loop
+.done:
+  ld t0, [sp+5]
+  print t0
+  ld t0, [sp+4]
+  print t0
+  ld t0, [sp+0]
+  print t0
+  ld t0, [sp+1]
+  print t0
+  ld t0, [sp+2]
+  print t0
+  ld t0, [sp+3]
+  print t0
+  ld t0, [sp+5]
+  ld t1, [sp+4]
+  add r1, t0, t1
+  ld t0, [sp+0]
+  add r1, r1, t0
+  ld t0, [sp+1]
+  add r1, r1, t0
+  ld t0, [sp+2]
+  add r1, r1, t0
+  ld t0, [sp+3]
+  add r1, r1, t0
+  mv a0, r1
+  ret
+; spilled 6, loads 18, stores 12, saves 0, moves removed 0, size 64
+$ colour pressure.ir accum 3
+; %c r1, %i r3, %m r1, %n [sp+5], %r r1, %s0 [sp+2], %s1 [sp+1], %s2 [sp+4], %s3 [sp+3], %s4 [sp+0], %s5 r2, %t r1
+accum:  # frame 6
+.entry:
+  mv t0, a0
+  st t0, [sp+5]
+  li t0, 0
+  st t0, [sp+2]
+  li t0, 0
+  st t0, [sp+1]
+  li t0, 0
+  st t0, [sp+4]
+  li t0, 0
+  st t0, [sp+3]
+  li t0, 0
+  st t0, [sp+0]
+  li r2, 0
+  li r3, 0
+.loop:
+  ld t0, [sp+5]
+  slt r1, r3, t0
+  beqz r1, done
+.body:
+  ld t0, [sp+2]
+  add t0, t0, r3
+  st t0, [sp+2]
+  mul r1, r3, r3
+  ld t0, [sp+1]
+  add t0, t0, r1
+  st t0, [sp+1]
+  mul r1, r1, r3
+  ld t0, [sp+4]
+  xor t0, t0, r1
+  st t0, [sp+4]
+  ld t0, [sp+3]
+  addi t0, t0, 1
+  st t0, [sp+3]
+  ld t0, [sp+0]
+  sub t0, t0, r3
+  st t0, [sp+0]
+  andi r1, r3, 3
+  add r2, r2, r1
+  addi r3, r3, 1
+  j loop
+.done:
+  ld t0, [sp+2]
+  print t0
+  ld t0, [sp+1]
+  print t0
+  ld t0, [sp+4]
+  print t0
+  ld t0, [sp+3]
+  print t0
+  ld t0, [sp+0]
+  print t0
+  print r2
+  ld t0, [sp+2]
+  ld t1, [sp+1]
+  add r1, t0, t1
+  ld t0, [sp+4]
+  add r1, r1, t0
+  ld t0, [sp+3]
+  add r1, r1, t0
+  ld t0, [sp+0]
+  add r1, r1, t0
+  add r1, r1, r2
+  mv a0, r1
+  ret
+; spilled 6, loads 16, stores 11, saves 0, moves removed 0, size 61
+$ linear pressure.ir matfib 3
+; %a [sp+8], %b [sp+7], %c [sp+0], %c.0 r1, %d [sp+1], %more r1, %n [sp+6], %na r2, %nb [sp+9], %nc [sp+10], %nd [sp+11], %odd r1, %ra [sp+2], %rb [sp+3], %rc [sp+4], %rd [sp+5], %t1 r1, %t2 r3
+matfib:  # frame 12
+.entry:
+  mv t0, a0
+  st t0, [sp+6]
+  li t0, 1
+  st t0, [sp+8]
+  li t0, 1
+  st t0, [sp+7]
+  li t0, 1
+  st t0, [sp+0]
+  li t0, 0
+  st t0, [sp+1]
+  li t0, 1
+  st t0, [sp+2]
+  li t0, 0
+  st t0, [sp+3]
+  li t0, 0
+  st t0, [sp+4]
+  li t0, 1
+  st t0, [sp+5]
+.loop:
+  li r1, 0
+  ld t0, [sp+6]
+  sgt r1, t0, r1
+  beqz r1, done
+.body:
+  ld t0, [sp+6]
+  andi r1, t0, 1
+  beqz r1, square
+.mul:
+  ld t0, [sp+2]
+  ld t1, [sp+8]
+  mul r1, t0, t1
+  ld t0, [sp+3]
+  ld t1, [sp+0]
+  mul r3, t0, t1
+  add r2, r1, r3
+  ld t0, [sp+2]
+  ld t1, [sp+7]
+  mul r1, t0, t1
+  ld t0, [sp+3]
+  ld t1, [sp+1]
+  mul r3, t0, t1
+  add t0, r1, r3
+  st t0, [sp+9]
+  ld t0, [sp+4]
+  ld t1, [sp+8]
+  mul r1, t0, t1
+  ld t0, [sp+5]
+  ld t1, [sp+0]
+  mul r3, t0, t1
+  add t0, r1, r3
+  st t0, [sp+10]
+  ld t0, [sp+4]
+  ld t1, [sp+7]
+  mul r1, t0, t1
+  ld t0, [sp+5]
+  ld t1, [sp+1]
+  mul r3, t0, t1
+  add t0, r1, r3
+  st t0, [sp+11]
+  mv t0, r2
+  st t0, [sp+2]
+  ld t0, [sp+9]
+  st t0, [sp+3]
+  ld t0, [sp+10]
+  st t0, [sp+4]
+  ld t0, [sp+11]
+  st t0, [sp+5]
+.square:
+  ld t0, [sp+8]
+  mul r1, t0, t0
+  ld t0, [sp+7]
+  ld t1, [sp+0]
+  mul r3, t0, t1
+  add r2, r1, r3
+  ld t0, [sp+8]
+  ld t1, [sp+7]
+  mul r1, t0, t1
+  ld t0, [sp+7]
+  ld t1, [sp+1]
+  mul r3, t0, t1
+  add t0, r1, r3
+  st t0, [sp+9]
+  ld t0, [sp+0]
+  ld t1, [sp+8]
+  mul r1, t0, t1
+  ld t0, [sp+1]
+  ld t1, [sp+0]
+  mul r3, t0, t1
+  add t0, r1, r3
+  st t0, [sp+10]
+  ld t0, [sp+0]
+  ld t1, [sp+7]
+  mul r1, t0, t1
+  ld t0, [sp+1]
+  mul r3, t0, t0
+  add t0, r1, r3
+  st t0, [sp+11]
+  mv t0, r2
+  st t0, [sp+8]
+  ld t0, [sp+9]
+  st t0, [sp+7]
+  ld t0, [sp+10]
+  st t0, [sp+0]
+  ld t0, [sp+11]
+  st t0, [sp+1]
+  ld t0, [sp+6]
+  srai t0, t0, 1
+  st t0, [sp+6]
+  j loop
+.done:
+  ld t0, [sp+3]
+  mv a0, t0
+  ret
+; spilled 12, loads 40, stores 24, saves 0, moves removed 6, size 108
+$ colour pressure.ir matfib 3
+; %a [sp+2], %b [sp+0], %c r3, %c.0 r1, %d [sp+1], %more r1, %n [sp+6], %na [sp+5], %nb [sp+4], %nc [sp+3], %nd r1, %odd r1, %ra [sp+10], %rb [sp+7], %rc [sp+9], %rd [sp+8], %t1 r2, %t2 r1
+matfib:  # frame 11
+.entry:
+  mv t0, a0
+  st t0, [sp+6]
+  li t0, 1
+  st t0, [sp+2]
+  li t0, 1
+  st t0, [sp+0]
+  li r3, 1
+  li t0, 0
+  st t0, [sp+1]
+  li t0, 1
+  st t0, [sp+10]
+  li t0, 0
+  st t0, [sp+7]
+  li t0, 0
+  st t0, [sp+9]
+  li t0, 1
+  st t0, [sp+8]
+.loop:
+  li r1, 0
+  ld t0, [sp+6]
+  sgt r1, t0, r1
+  beqz r1, done
+.body:
+  ld t0, [sp+6]
+  andi r1, t0, 1
+  beqz r1, square
+.mul:
+  ld t0, [sp+10]
+  ld t1, [sp+2]
+  mul r2, t0, t1
+  ld t0, [sp+7]
+  mul r1, t0, r3
+  add t0, r2, r1
+  st t0, [sp+5]
+  ld t0, [sp+10]
+  ld t1, [sp+0]
+  mul r2, t0, t1
+  ld t0, [sp+7]
+  ld t1, [sp+1]
+  mul r1, t0, t1
+  add t0, r2, r1
+  st t0, [sp+4]
+  ld t0, [sp+9]
+  ld t1, [sp+2]
+  mul r2, t0, t1
+  ld t0, [sp+8]
+  mul r1, t0, r3
+  add t0, r2, r1
+  st t0, [sp+3]
+  ld t0, [sp+9]
+  ld t1, [sp+0]
+  mul r2, t0, t1
+  ld t0, [sp+8]
+  ld t1, [sp+1]
+  mul r1, t0, t1
+  add r1, r2, r1
+  ld t0, [sp+5]
+  st t0, [sp+10]
+  ld t0, [sp+4]
+  st t0, [sp+7]
+  ld t0, [sp+3]
+  st t0, [sp+9]
+  mv t0, r1
+  st t0, [sp+8]
+.square:
+  ld t0, [sp+2]
+  mul r2, t0, t0
+  ld t0, [sp+0]
+  mul r1, t0, r3
+  add t0, r2, r1
+  st t0, [sp+5]
+  ld t0, [sp+2]
+  ld t1, [sp+0]
+  mul r2, t0, t1
+  ld t0, [sp+0]
+  ld t1, [sp+1]
+  mul r1, t0, t1
+  add t0, r2, r1
+  st t0, [sp+4]
+  ld t0, [sp+2]
+  mul r2, r3, t0
+  ld t0, [sp+1]
+  mul r1, t0, r3
+  add t0, r2, r1
+  st t0, [sp+3]
+  ld t0, [sp+0]
+  mul r2, r3, t0
+  ld t0, [sp+1]
+  mul r1, t0, t0
+  add r1, r2, r1
+  ld t0, [sp+5]
+  st t0, [sp+2]
+  ld t0, [sp+4]
+  st t0, [sp+0]
+  ld t0, [sp+3]
+  mv r3, t0
+  mv t0, r1
+  st t0, [sp+1]
+  ld t0, [sp+6]
+  srai t0, t0, 1
+  st t0, [sp+6]
+  j loop
+.done:
+  ld t0, [sp+7]
+  mv a0, t0
+  ret
+; spilled 11, loads 34, stores 22, saves 0, moves removed 5, size 101
+$ linear pressure.ir around 3
+; %a r2, %b r3, %c [sp+0], %d r1, %e [sp+1], %f [sp+2], %g [sp+3], %h [sp+4], %n r1, %s r2
+around:  # frame 8
+.entry:
+  mv r1, a0
+  addi r2, r1, 1
+  addi r3, r1, 2
+  addi t0, r1, 3
+  st t0, [sp+0]
+  addi r1, r1, 4
+  mv a0, r2
+  st r1, [sp+5]
+  st r2, [sp+6]
+  st r3, [sp+7]
+  call sq
+  ld r1, [sp+5]
+  ld r2, [sp+6]
+  ld r3, [sp+7]
+  mv t0, a0
+  st t0, [sp+1]
+  mv a0, r3
+  st r1, [sp+5]
+  st r2, [sp+6]
+  st r3, [sp+7]
+  call sq
+  ld r1, [sp+5]
+  ld r2, [sp+6]
+  ld r3, [sp+7]
+  mv t0, a0
+  st t0, [sp+2]
+  ld t0, [sp+0]
+  mv a0, t0
+  st r1, [sp+5]
+  st r2, [sp+6]
+  st r3, [sp+7]
+  call sq
+  ld r1, [sp+5]
+  ld r2, [sp+6]
+  ld r3, [sp+7]
+  mv t0, a0
+  st t0, [sp+3]
+  mv a0, r1
+  st r1, [sp+5]
+  st r2, [sp+6]
+  st r3, [sp+7]
+  call sq
+  ld r1, [sp+5]
+  ld r2, [sp+6]
+  ld r3, [sp+7]
+  mv t0, a0
+  st t0, [sp+4]
+  add r2, r2, r3
+  ld t0, [sp+0]
+  add r2, r2, t0
+  add r2, r2, r1
+  ld t0, [sp+1]
+  add r2, r2, t0
+  ld t0, [sp+2]
+  add r2, r2, t0
+  ld t0, [sp+3]
+  add r2, r2, t0
+  ld t0, [sp+4]
+  add r2, r2, t0
+  mv a0, r2
+  ret
+; spilled 5, loads 6, stores 5, saves 12, moves removed 0, size 61
+$ colour pressure.ir around 3
+; %a [sp+0], %b r3, %c r2, %d r1, %e [sp+4], %f [sp+3], %g [sp+2], %h [sp+1], %n r1, %s r3
+around:  # frame 8
+.entry:
+  mv r1, a0
+  addi t0, r1, 1
+  st t0, [sp+0]
+  addi r3, r1, 2
+  addi r2, r1, 3
+  addi r1, r1, 4
+  ld t0, [sp+0]
+  mv a0, t0
+  st r1, [sp+5]
+  st r2, [sp+6]
+  st r3, [sp+7]
+  call sq
+  ld r1, [sp+5]
+  ld r2, [sp+6]
+  ld r3, [sp+7]
+  mv t0, a0
+  st t0, [sp+4]
+  mv a0, r3
+  st r1, [sp+5]
+  st r2, [sp+6]
+  st r3, [sp+7]
+  call sq
+  ld r1, [sp+5]
+  ld r2, [sp+6]
+  ld r3, [sp+7]
+  mv t0, a0
+  st t0, [sp+3]
+  mv a0, r2
+  st r1, [sp+5]
+  st r2, [sp+6]
+  st r3, [sp+7]
+  call sq
+  ld r1, [sp+5]
+  ld r2, [sp+6]
+  ld r3, [sp+7]
+  mv t0, a0
+  st t0, [sp+2]
+  mv a0, r1
+  st r1, [sp+5]
+  st r2, [sp+6]
+  st r3, [sp+7]
+  call sq
+  ld r1, [sp+5]
+  ld r2, [sp+6]
+  ld r3, [sp+7]
+  mv t0, a0
+  st t0, [sp+1]
+  ld t0, [sp+0]
+  add r3, t0, r3
+  add r3, r3, r2
+  add r3, r3, r1
+  ld t0, [sp+4]
+  add r3, r3, t0
+  ld t0, [sp+3]
+  add r3, r3, t0
+  ld t0, [sp+2]
+  add r3, r3, t0
+  ld t0, [sp+1]
+  add r3, r3, t0
+  mv a0, r3
+  ret
+; spilled 5, loads 6, stores 5, saves 12, moves removed 0, size 61
+$ linear abi.ir mix 3
+; %p r3, %q r1, %r r1, %x r1, %y r2
+mix:  # frame 3
+.entry:
+  mv r1, a0
+  mv r2, a1
+  mv a0, r1
+  mv a1, r2
+  li a2, 1
+  li a3, 2
+  st r1, [sp+0]
+  st r2, [sp+1]
+  call add4
+  ld r1, [sp+0]
+  ld r2, [sp+1]
+  mv r3, a0
+  mv a0, r3
+  mv a1, r1
+  mv a2, r2
+  mv a3, r3
+  call add4
+  mv r1, a0
+  mv a0, r1
+  mv a1, r1
+  mv a2, r1
+  mv a3, r1
+  call add4
+  mv r1, a0
+  mv a0, r1
+  ret
+; spilled 0, loads 0, stores 0, saves 2, moves removed 0, size 26
+$ colour abi.ir mix 3
+; %p r3, %q r1, %r r1, %x r2, %y r1
+mix:  # frame 3
+.entry:
+  mv r2, a0
+  mv r1, a1
+  mv a0, r2
+  mv a1, r1
+  li a2, 1
+  li a3, 2
+  st r1, [sp+0]
+  st r2, [sp+1]
+  call add4
+  ld r1, [sp+0]
+  ld r2, [sp+1]
+  mv r3, a0
+  mv a0, r3
+  mv a1, r2
+  mv a2, r1
+  mv a3, r3
+  call add4
+  mv r1, a0
+  mv a0, r1
+  mv a1, r1
+  mv a2, r1
+  mv a3, r1
+  call add4
+  mv r1, a0
+  mv a0, r1
+  ret
+; spilled 0, loads 0, stores 0, saves 2, moves removed 0, size 26
+$ linear abi.ir flip 3
+; %a r1, %b r2, %x r3, %y r1, %z r1
+flip:  # frame 3
+.entry:
+  mv r1, a0
+  mv r2, a1
+  mv a0, r2
+  mv a1, r1
+  st r1, [sp+0]
+  st r2, [sp+1]
+  call sub2
+  ld r1, [sp+0]
+  ld r2, [sp+1]
+  mv r3, a0
+  mv a0, r1
+  mv a1, r2
+  st r3, [sp+2]
+  call sub2
+  ld r3, [sp+2]
+  mv r1, a0
+  mv a0, r3
+  mv a1, r1
+  call sub2
+  mv r1, a0
+  mv a0, r1
+  ret
+; spilled 0, loads 0, stores 0, saves 3, moves removed 0, size 22
+$ colour abi.ir flip 3
+; %a r3, %b r1, %x r2, %y r1, %z r1
+flip:  # frame 3
+.entry:
+  mv r3, a0
+  mv r1, a1
+  mv a0, r1
+  mv a1, r3
+  st r1, [sp+0]
+  st r3, [sp+2]
+  call sub2
+  ld r1, [sp+0]
+  ld r3, [sp+2]
+  mv r2, a0
+  mv a0, r3
+  mv a1, r1
+  st r2, [sp+1]
+  call sub2
+  ld r2, [sp+1]
+  mv r1, a0
+  mv a0, r2
+  mv a1, r1
+  call sub2
+  mv r1, a0
+  mv a0, r1
+  ret
+; spilled 0, loads 0, stores 0, saves 3, moves removed 0, size 22
+$ linear abi.ir chain 3
+; %c.0 r2, %k r1, %m r2, %n r1, %r r2, %s r1, %z r2
+chain:  # frame 3
+.entry:
+  mv r1, a0
+  li r2, 0
+  seq r2, r1, r2
+  beqz r2, rec
+.base:
+  li a0, 0
+  ret
+.rec:
+  subi r2, r1, 1
+  mul r1, r1, r1
+  mv a0, r2
+  st r1, [sp+0]
+  call chain
+  ld r1, [sp+0]
+  mv r2, a0
+  add r1, r2, r1
+  mv a0, r1
+  ret
+; spilled 0, loads 0, stores 0, saves 1, moves removed 0, size 16
+$ colour abi.ir chain 3
+; %c.0 r1, %k r2, %m r1, %n r2, %r r1, %s r1, %z r1
+chain:  # frame 3
+.entry:
+  mv r2, a0
+  li r1, 0
+  seq r1, r2, r1
+  beqz r1, rec
+.base:
+  li a0, 0
+  ret
+.rec:
+  subi r1, r2, 1
+  mul r2, r2, r2
+  mv a0, r1
+  st r2, [sp+1]
+  call chain
+  ld r2, [sp+1]
+  mv r1, a0
+  add r1, r1, r2
+  mv a0, r1
+  ret
+; spilled 0, loads 0, stores 0, saves 1, moves removed 0, size 16
+$ linear abi.ir tally 3
+; %acc [sp+0], %c r3, %i r2, %n r1, %v r3
+tally:  # frame 4
+.entry:
+  mv r1, a0
+  li r2, 0
+  li t0, 0
+  st t0, [sp+0]
+.loop:
+  slt r3, r2, r1
+  beqz r3, done
+.body:
+  mv a0, r2
+  ld t0, [sp+0]
+  mv a1, t0
+  li a2, 1
+  li a3, 0
+  st r1, [sp+1]
+  st r2, [sp+2]
+  call add4
+  ld r1, [sp+1]
+  ld r2, [sp+2]
+  mv r3, a0
+  print r3
+  mv t0, r3
+  st t0, [sp+0]
+  addi r2, r2, 1
+  j loop
+.done:
+  ld t0, [sp+0]
+  mv a0, t0
+  ret
+; spilled 1, loads 2, stores 2, saves 2, moves removed 0, size 25
+$ colour abi.ir tally 3
+; %acc r3, %c r2, %i r1, %n [sp+0], %v r2
+tally:  # frame 4
+.entry:
+  mv t0, a0
+  st t0, [sp+0]
+  li r1, 0
+  li r3, 0
+.loop:
+  ld t0, [sp+0]
+  slt r2, r1, t0
+  beqz r2, done
+.body:
+  mv a0, r1
+  mv a1, r3
+  li a2, 1
+  li a3, 0
+  st r1, [sp+1]
+  call add4
+  ld r1, [sp+1]
+  mv r2, a0
+  print r2
+  mv r3, r2
+  addi r1, r1, 1
+  j loop
+.done:
+  mv a0, r3
+  ret
+; spilled 1, loads 1, stores 1, saves 1, moves removed 0, size 21
+$ linear pressure.ir spread 2
+; %a [sp+0], %b [sp+1], %c [sp+2], %c.0 r2, %c.1 r2, %c.2 r2, %c.3 r2, %c.4 r2, %c.5 r2, %c.6 r2, %c.7 r2, %d [sp+3], %e [sp+4], %f [sp+5], %g [sp+6], %h r1, %p r1, %q r2, %r [sp+8], %s [sp+7], %t [sp+9], %u r1, %v r1, %x r1
+spread:  # frame 10
+.entry:
+  mv r1, a0
+  li r2, 3
+  mul t0, r1, r2
+  st t0, [sp+0]
+  li r2, 5
+  mul t0, r1, r2
+  st t0, [sp+1]
+  li r2, 7
+  mul t0, r1, r2
+  st t0, [sp+2]
+  li r2, 11
+  mul t0, r1, r2
+  st t0, [sp+3]
+  li r2, 13
+  mul t0, r1, r2
+  st t0, [sp+4]
+  li r2, 17
+  mul t0, r1, r2
+  st t0, [sp+5]
+  li r2, 19
+  mul t0, r1, r2
+  st t0, [sp+6]
+  li r2, 23
+  mul r1, r1, r2
+  ld t0, [sp+0]
+  ld t1, [sp+1]
+  add t0, t0, t1
+  st t0, [sp+7]
+  ld t0, [sp+7]
+  ld t1, [sp+2]
+  add t0, t0, t1
+  st t0, [sp+7]
+  ld t0, [sp+7]
+  ld t1, [sp+3]
+  add t0, t0, t1
+  st t0, [sp+7]
+  ld t0, [sp+7]
+  ld t1, [sp+4]
+  add t0, t0, t1
+  st t0, [sp+7]
+  ld t0, [sp+7]
+  ld t1, [sp+5]
+  add t0, t0, t1
+  st t0, [sp+7]
+  ld t0, [sp+7]
+  ld t1, [sp+6]
+  add t0, t0, t1
+  st t0, [sp+7]
+  ld t0, [sp+7]
+  add t0, t0, r1
+  st t0, [sp+7]
+  ld t0, [sp+0]
+  mul r1, t0, r1
+  ld t0, [sp+1]
+  ld t1, [sp+6]
+  mul r2, t0, t1
+  ld t0, [sp+2]
+  ld t1, [sp+5]
+  mul t0, t0, t1
+  st t0, [sp+8]
+  ld t0, [sp+3]
+  ld t1, [sp+4]
+  mul t0, t0, t1
+  st t0, [sp+9]
+  sub r1, r1, r2
+  ld t0, [sp+8]
+  add r1, r1, t0
+  ld t0, [sp+9]
+  sub r1, r1, t0
+  ld t0, [sp+7]
+  xor r1, t0, r1
+  mv a0, r1
+  ret
+; spilled 10, loads 23, stores 16, saves 0, moves removed 0, size 73
+$ linear pressure.ir spread 8
+; %a r2, %b r3, %c r4, %c.0 r2, %c.1 r3, %c.2 r4, %c.3 r5, %c.4 r6, %c.5 r7, %c.6 r8, %c.7 r6, %d r5, %e [sp+0], %f r7, %g r8, %h r1, %p r1, %q r2, %r r3, %s r6, %t r4, %u r1, %v r1, %x r1
+spread:  # frame 1
+.entry:
+  mv r1, a0
+  li r2, 3
+  mul r2, r1, r2
+  li r3, 5
+  mul r3, r1, r3
+  li r4, 7
+  mul r4, r1, r4
+  li r5, 11
+  mul r5, r1, r5
+  li r6, 13
+  mul t0, r1, r6
+  st t0, [sp+0]
+  li r7, 17
+  mul r7, r1, r7
+  li r8, 19
+  mul r8, r1, r8
+  li r6, 23
+  mul r1, r1, r6
+  add r6, r2, r3
+  add r6, r6, r4
+  add r6, r6, r5
+  ld t0, [sp+0]
+  add r6, r6, t0
+  add r6, r6, r7
+  add r6, r6, r8
+  add r6, r6, r1
+  mul r1, r2, r1
+  mul r2, r3, r8
+  mul r3, r4, r7
+  ld t0, [sp+0]
+  mul r4, r5, t0
+  sub r1, r1, r2
+  add r1, r1, r3
+  sub r1, r1, r4
+  xor r1, r6, r1
+  mv a0, r1
+  ret
+; spilled 1, loads 2, stores 1, saves 0, moves removed 0, size 37
+$ colour pressure.ir spread 2
+; %a [sp+9], %b [sp+8], %c [sp+7], %c.0 r2, %c.1 r2, %c.2 r2, %c.3 r2, %c.4 r2, %c.5 r2, %c.6 r2, %c.7 r2, %d [sp+6], %e [sp+5], %f [sp+3], %g [sp+0], %h r2, %p [sp+4], %q r2, %r [sp+2], %s r1, %t [sp+1], %u r2, %v r1, %x r1
+spread:  # frame 10
+.entry:
+  mv r1, a0
+  li r2, 3
+  mul t0, r1, r2
+  st t0, [sp+9]
+  li r2, 5
+  mul t0, r1, r2
+  st t0, [sp+8]
+  li r2, 7
+  mul t0, r1, r2
+  st t0, [sp+7]
+  li r2, 11
+  mul t0, r1, r2
+  st t0, [sp+6]
+  li r2, 13
+  mul t0, r1, r2
+  st t0, [sp+5]
+  li r2, 17
+  mul t0, r1, r2
+  st t0, [sp+3]
+  li r2, 19
+  mul t0, r1, r2
+  st t0, [sp+0]
+  li r2, 23
+  mul r2, r1, r2
+  ld t0, [sp+9]
+  ld t1, [sp+8]
+  add r1, t0, t1
+  ld t0, [sp+7]
+  add r1, r1, t0
+  ld t0, [sp+6]
+  add r1, r1, t0
+  ld t0, [sp+5]
+  add r1, r1, t0
+  ld t0, [sp+3]
+  add r1, r1, t0
+  ld t0, [sp+0]
+  add r1, r1, t0
+  add r1, r1, r2
+  ld t0, [sp+9]
+  mul t0, t0, r2
+  st t0, [sp+4]
+  ld t0, [sp+8]
+  ld t1, [sp+0]
+  mul r2, t0, t1
+  ld t0, [sp+7]
+  ld t1, [sp+3]
+  mul t0, t0, t1
+  st t0, [sp+2]
+  ld t0, [sp+6]
+  ld t1, [sp+5]
+  mul t0, t0, t1
+  st t0, [sp+1]
+  ld t0, [sp+4]
+  sub r2, t0, r2
+  ld t0, [sp+2]
+  add r2, r2, t0
+  ld t0, [sp+1]
+  sub r2, r2, t0
+  xor r1, r1, r2
+  mv a0, r1
+  ret
+; spilled 10, loads 17, stores 10, saves 0, moves removed 0, size 61
+$ colour pressure.ir spread 8
+; %a [sp+0], %b r8, %c r7, %c.0 r2, %c.1 r2, %c.2 r2, %c.3 r2, %c.4 r2, %c.5 r2, %c.6 r2, %c.7 r2, %d r6, %e r5, %f r4, %g r3, %h r2, %p r2, %q r8, %r r4, %s r1, %t r3, %u r2, %v r1, %x r1
+spread:  # frame 1
+.entry:
+  mv r1, a0
+  li r2, 3
+  mul t0, r1, r2
+  st t0, [sp+0]
+  li r2, 5
+  mul r8, r1, r2
+  li r2, 7
+  mul r7, r1, r2
+  li r2, 11
+  mul r6, r1, r2
+  li r2, 13
+  mul r5, r1, r2
+  li r2, 17
+  mul r4, r1, r2
+  li r2, 19
+  mul r3, r1, r2
+  li r2, 23
+  mul r2, r1, r2
+  ld t0, [sp+0]
+  add r1, t0, r8
+  add r1, r1, r7
+  add r1, r1, r6
+  add r1, r1, r5
+  add r1, r1, r4
+  add r1, r1, r3
+  add r1, r1, r2
+  ld t0, [sp+0]
+  mul r2, t0, r2
+  mul r8, r8, r3
+  mul r4, r7, r4
+  mul r3, r6, r5
+  sub r2, r2, r8
+  add r2, r2, r4
+  sub r2, r2, r3
+  xor r1, r1, r2
+  mv a0, r1
+  ret
+; spilled 1, loads 2, stores 1, saves 0, moves removed 0, size 37
+$ linear pressure.ir matfib 2
+; %a [sp+8], %b [sp+0], %c [sp+1], %c.0 r1, %d [sp+2], %more r1, %n [sp+7], %na [sp+9], %nb [sp+10], %nc [sp+11], %nd [sp+12], %odd r1, %ra [sp+3], %rb [sp+4], %rc [sp+5], %rd [sp+6], %t1 r1, %t2 r2
+matfib:  # frame 13
+.entry:
+  mv t0, a0
+  st t0, [sp+7]
+  li t0, 1
+  st t0, [sp+8]
+  li t0, 1
+  st t0, [sp+0]
+  li t0, 1
+  st t0, [sp+1]
+  li t0, 0
+  st t0, [sp+2]
+  li t0, 1
+  st t0, [sp+3]
+  li t0, 0
+  st t0, [sp+4]
+  li t0, 0
+  st t0, [sp+5]
+  li t0, 1
+  st t0, [sp+6]
+.loop:
+  li r1, 0
+  ld t0, [sp+7]
+  sgt r1, t0, r1
+  beqz r1, done
+.body:
+  ld t0, [sp+7]
+  andi r1, t0, 1
+  beqz r1, square
+.mul:
+  ld t0, [sp+3]
+  ld t1, [sp+8]
+  mul r1, t0, t1
+  ld t0, [sp+4]
+  ld t1, [sp+1]
+  mul r2, t0, t1
+  add t0, r1, r2
+  st t0, [sp+9]
+  ld t0, [sp+3]
+  ld t1, [sp+0]
+  mul r1, t0, t1
+  ld t0, [sp+4]
+  ld t1, [sp+2]
+  mul r2, t0, t1
+  add t0, r1, r2
+  st t0, [sp+10]
+  ld t0, [sp+5]
+  ld t1, [sp+8]
+  mul r1, t0, t1
+  ld t0, [sp+6]
+  ld t1, [sp+1]
+  mul r2, t0, t1
+  add t0, r1, r2
+  st t0, [sp+11]
+  ld t0, [sp+5]
+  ld t1, [sp+0]
+  mul r1, t0, t1
+  ld t0, [sp+6]
+  ld t1, [sp+2]
+  mul r2, t0, t1
+  add t0, r1, r2
+  st t0, [sp+12]
+  ld t0, [sp+9]
+  st t0, [sp+3]
+  ld t0, [sp+10]
+  st t0, [sp+4]
+  ld t0, [sp+11]
+  st t0, [sp+5]
+  ld t0, [sp+12]
+  st t0, [sp+6]
+.square:
+  ld t0, [sp+8]
+  mul r1, t0, t0
+  ld t0, [sp+0]
+  ld t1, [sp+1]
+  mul r2, t0, t1
+  add t0, r1, r2
+  st t0, [sp+9]
+  ld t0, [sp+8]
+  ld t1, [sp+0]
+  mul r1, t0, t1
+  ld t0, [sp+0]
+  ld t1, [sp+2]
+  mul r2, t0, t1
+  add t0, r1, r2
+  st t0, [sp+10]
+  ld t0, [sp+1]
+  ld t1, [sp+8]
+  mul r1, t0, t1
+  ld t0, [sp+2]
+  ld t1, [sp+1]
+  mul r2, t0, t1
+  add t0, r1, r2
+  st t0, [sp+11]
+  ld t0, [sp+1]
+  ld t1, [sp+0]
+  mul r1, t0, t1
+  ld t0, [sp+2]
+  mul r2, t0, t0
+  add t0, r1, r2
+  st t0, [sp+12]
+  ld t0, [sp+9]
+  st t0, [sp+8]
+  ld t0, [sp+10]
+  st t0, [sp+0]
+  ld t0, [sp+11]
+  st t0, [sp+1]
+  ld t0, [sp+12]
+  st t0, [sp+2]
+  ld t0, [sp+7]
+  srai t0, t0, 1
+  st t0, [sp+7]
+  j loop
+.done:
+  ld t0, [sp+4]
+  mv a0, t0
+  ret
+; spilled 13, loads 42, stores 26, saves 0, moves removed 8, size 110
+$ linear pressure.ir matfib 8
+; %a r2, %b r3, %c [sp+6], %c.0 r7, %d [sp+5], %more r7, %n [sp+4], %na r6, %nb r1, %nc r5, %nd r4, %odd r7, %ra [sp+3], %rb [sp+0], %rc [sp+2], %rd [sp+1], %t1 r7, %t2 r8
+matfib:  # frame 7
+.entry:
+  mv t0, a0
+  st t0, [sp+4]
+  li r2, 1
+  li r3, 1
+  li t0, 1
+  st t0, [sp+6]
+  li t0, 0
+  st t0, [sp+5]
+  li t0, 1
+  st t0, [sp+3]
+  li t0, 0
+  st t0, [sp+0]
+  li t0, 0
+  st t0, [sp+2]
+  li t0, 1
+  st t0, [sp+1]
+.loop:
+  li r7, 0
+  ld t0, [sp+4]
+  sgt r7, t0, r7
+  beqz r7, done
+.body:
+  ld t0, [sp+4]
+  andi r7, t0, 1
+  beqz r7, square
+.mul:
+  ld t0, [sp+3]
+  mul r7, t0, r2
+  ld t0, [sp+0]
+  ld t1, [sp+6]
+  mul r8, t0, t1
+  add r6, r7, r8
+  ld t0, [sp+3]
+  mul r7, t0, r3
+  ld t0, [sp+0]
+  ld t1, [sp+5]
+  mul r8, t0, t1
+  add r1, r7, r8
+  ld t0, [sp+2]
+  mul r7, t0, r2
+  ld t0, [sp+1]
+  ld t1, [sp+6]
+  mul r8, t0, t1
+  add r5, r7, r8
+  ld t0, [sp+2]
+  mul r7, t0, r3
+  ld t0, [sp+1]
+  ld t1, [sp+5]
+  mul r8, t0, t1
+  add r4, r7, r8
+  mv t0, r6
+  st t0, [sp+3]
+  mv t0, r1
+  st t0, [sp+0]
+  mv t0, r5
+  st t0, [sp+2]
+  mv t0, r4
+  st t0, [sp+1]
+.square:
+  mul r7, r2, r2
+  ld t0, [sp+6]
+  mul r8, r3, t0
+  add r6, r7, r8
+  mul r7, r2, r3
+  ld t0, [sp+5]
+  mul r8, r3, t0
+  add r1, r7, r8
+  ld t0, [sp+6]
+  mul r7, t0, r2
+  ld t0, [sp+5]
+  ld t1, [sp+6]
+  mul r8, t0, t1
+  add r5, r7, r8
+  ld t0, [sp+6]
+  mul r7, t0, r3
+  ld t0, [sp+5]
+  mul r8, t0, t0
+  add r4, r7, r8
+  mv r2, r6
+  mv r3, r1
+  mv t0, r5
+  st t0, [sp+6]
+  mv t0, r4
+  st t0, [sp+5]
+  ld t0, [sp+4]
+  srai t0, t0, 1
+  st t0, [sp+4]
+  j loop
+.done:
+  ld t0, [sp+0]
+  mv a0, t0
+  ret
+; spilled 7, loads 23, stores 14, saves 0, moves removed 0, size 87
+$ colour pressure.ir matfib 2
+; %a [sp+3], %b [sp+1], %c [sp+0], %c.0 r1, %d [sp+2], %more r1, %n [sp+7], %na [sp+6], %nb [sp+5], %nc [sp+4], %nd r1, %odd r1, %ra [sp+11], %rb [sp+8], %rc [sp+10], %rd [sp+9], %t1 r2, %t2 r1
+matfib:  # frame 12
+.entry:
+  mv t0, a0
+  st t0, [sp+7]
+  li t0, 1
+  st t0, [sp+3]
+  li t0, 1
+  st t0, [sp+1]
+  li t0, 1
+  st t0, [sp+0]
+  li t0, 0
+  st t0, [sp+2]
+  li t0, 1
+  st t0, [sp+11]
+  li t0, 0
+  st t0, [sp+8]
+  li t0, 0
+  st t0, [sp+10]
+  li t0, 1
+  st t0, [sp+9]
+.loop:
+  li r1, 0
+  ld t0, [sp+7]
+  sgt r1, t0, r1
+  beqz r1, done
+.body:
+  ld t0, [sp+7]
+  andi r1, t0, 1
+  beqz r1, square
+.mul:
+  ld t0, [sp+11]
+  ld t1, [sp+3]
+  mul r2, t0, t1
+  ld t0, [sp+8]
+  ld t1, [sp+0]
+  mul r1, t0, t1
+  add t0, r2, r1
+  st t0, [sp+6]
+  ld t0, [sp+11]
+  ld t1, [sp+1]
+  mul r2, t0, t1
+  ld t0, [sp+8]
+  ld t1, [sp+2]
+  mul r1, t0, t1
+  add t0, r2, r1
+  st t0, [sp+5]
+  ld t0, [sp+10]
+  ld t1, [sp+3]
+  mul r2, t0, t1
+  ld t0, [sp+9]
+  ld t1, [sp+0]
+  mul r1, t0, t1
+  add t0, r2, r1
+  st t0, [sp+4]
+  ld t0, [sp+10]
+  ld t1, [sp+1]
+  mul r2, t0, t1
+  ld t0, [sp+9]
+  ld t1, [sp+2]
+  mul r1, t0, t1
+  add r1, r2, r1
+  ld t0, [sp+6]
+  st t0, [sp+11]
+  ld t0, [sp+5]
+  st t0, [sp+8]
+  ld t0, [sp+4]
+  st t0, [sp+10]
+  mv t0, r1
+  st t0, [sp+9]
+.square:
+  ld t0, [sp+3]
+  mul r2, t0, t0
+  ld t0, [sp+1]
+  ld t1, [sp+0]
+  mul r1, t0, t1
+  add t0, r2, r1
+  st t0, [sp+6]
+  ld t0, [sp+3]
+  ld t1, [sp+1]
+  mul r2, t0, t1
+  ld t0, [sp+1]
+  ld t1, [sp+2]
+  mul r1, t0, t1
+  add t0, r2, r1
+  st t0, [sp+5]
+  ld t0, [sp+0]
+  ld t1, [sp+3]
+  mul r2, t0, t1
+  ld t0, [sp+2]
+  ld t1, [sp+0]
+  mul r1, t0, t1
+  add t0, r2, r1
+  st t0, [sp+4]
+  ld t0, [sp+0]
+  ld t1, [sp+1]
+  mul r2, t0, t1
+  ld t0, [sp+2]
+  mul r1, t0, t0
+  add r1, r2, r1
+  ld t0, [sp+6]
+  st t0, [sp+3]
+  ld t0, [sp+5]
+  st t0, [sp+1]
+  ld t0, [sp+4]
+  st t0, [sp+0]
+  mv t0, r1
+  st t0, [sp+2]
+  ld t0, [sp+7]
+  srai t0, t0, 1
+  st t0, [sp+7]
+  j loop
+.done:
+  ld t0, [sp+8]
+  mv a0, t0
+  ret
+; spilled 12, loads 40, stores 24, saves 0, moves removed 6, size 108
+$ colour pressure.ir matfib 8
+; %a r8, %b r7, %c r6, %c.0 r1, %d r5, %more r1, %n r4, %na [sp+1], %nb [sp+0], %nc r3, %nd r1, %odd r1, %ra [sp+5], %rb [sp+2], %rc [sp+4], %rd [sp+3], %t1 r2, %t2 r1
+matfib:  # frame 6
+.entry:
+  mv r4, a0
+  li r8, 1
+  li r7, 1
+  li r6, 1
+  li r5, 0
+  li t0, 1
+  st t0, [sp+5]
+  li t0, 0
+  st t0, [sp+2]
+  li t0, 0
+  st t0, [sp+4]
+  li t0, 1
+  st t0, [sp+3]
+.loop:
+  li r1, 0
+  sgt r1, r4, r1
+  beqz r1, done
+.body:
+  andi r1, r4, 1
+  beqz r1, square
+.mul:
+  ld t0, [sp+5]
+  mul r2, t0, r8
+  ld t0, [sp+2]
+  mul r1, t0, r6
+  add t0, r2, r1
+  st t0, [sp+1]
+  ld t0, [sp+5]
+  mul r2, t0, r7
+  ld t0, [sp+2]
+  mul r1, t0, r5
+  add t0, r2, r1
+  st t0, [sp+0]
+  ld t0, [sp+4]
+  mul r2, t0, r8
+  ld t0, [sp+3]
+  mul r1, t0, r6
+  add r3, r2, r1
+  ld t0, [sp+4]
+  mul r2, t0, r7
+  ld t0, [sp+3]
+  mul r1, t0, r5
+  add r1, r2, r1
+  ld t0, [sp+1]
+  st t0, [sp+5]
+  ld t0, [sp+0]
+  st t0, [sp+2]
+  mv t0, r3
+  st t0, [sp+4]
+  mv t0, r1
+  st t0, [sp+3]
+.square:
+  mul r2, r8, r8
+  mul r1, r7, r6
+  add t0, r2, r1
+  st t0, [sp+1]
+  mul r2, r8, r7
+  mul r1, r7, r5
+  add t0, r2, r1
+  st t0, [sp+0]
+  mul r2, r6, r8
+  mul r1, r5, r6
+  add r3, r2, r1
+  mul r2, r6, r7
+  mul r1, r5, r5
+  add r1, r2, r1
+  ld t0, [sp+1]
+  mv r8, t0
+  ld t0, [sp+0]
+  mv r7, t0
+  mv r6, r3
+  mv r5, r1
+  srai r4, r4, 1
+  j loop
+.done:
+  ld t0, [sp+2]
+  mv a0, t0
+  ret
+; spilled 6, loads 13, stores 12, saves 0, moves removed 2, size 73
+$ linear loops.ir primes 2
+; %c.0 r1, %count [sp+0], %d [sp+3], %dd r2, %divides r1, %k [sp+2], %m r2, %more r1, %n [sp+1], %past r2
+primes:  # frame 4
+.entry:
+  mv t0, a0
+  st t0, [sp+1]
+  li t0, 0
+  st t0, [sp+0]
+  li t0, 2
+  st t0, [sp+2]
+.outer:
+  ld t0, [sp+2]
+  ld t1, [sp+1]
+  sle r1, t0, t1
+  beqz r1, done
+.start:
+  li t0, 2
+  st t0, [sp+3]
+.trial:
+  ld t0, [sp+3]
+  mul r2, t0, t0
+  ld t0, [sp+2]
+  sgt r2, r2, t0
+  bnez r2, prime
+.test:
+  ld t0, [sp+2]
+  ld t1, [sp+3]
+  rem r2, t0, t1
+  li r1, 0
+  seq r1, r2, r1
+  bnez r1, composite
+.bump:
+  ld t0, [sp+3]
+  addi t0, t0, 1
+  st t0, [sp+3]
+  j trial
+.prime:
+  ld t0, [sp+0]
+  addi t0, t0, 1
+  st t0, [sp+0]
+.composite:
+  ld t0, [sp+2]
+  addi t0, t0, 1
+  st t0, [sp+2]
+  j outer
+.done:
+  ld t0, [sp+0]
+  mv a0, t0
+  ret
+; spilled 4, loads 10, stores 7, saves 0, moves removed 0, size 37
+$ linear loops.ir primes 8
+; %c.0 r6, %count r2, %d r4, %dd r5, %divides r5, %k r3, %m r5, %more r4, %n r1, %past r5
+primes:  # frame 0
+.entry:
+  mv r1, a0
+  li r2, 0
+  li r3, 2
+.outer:
+  sle r4, r3, r1
+  beqz r4, done
+.start:
+  li r4, 2
+.trial:
+  mul r5, r4, r4
+  sgt r5, r5, r3
+  bnez r5, prime
+.test:
+  rem r5, r3, r4
+  li r6, 0
+  seq r5, r5, r6
+  bnez r5, composite
+.bump:
+  addi r4, r4, 1
+  j trial
+.prime:
+  addi r2, r2, 1
+.composite:
+  addi r3, r3, 1
+  j outer
+.done:
+  mv a0, r2
+  ret
+; spilled 0, loads 0, stores 0, saves 0, moves removed 0, size 20
+$ colour loops.ir primes 2
+; %c.0 [sp+0], %count [sp+2], %d r2, %dd r1, %divides r1, %k [sp+1], %m r1, %more r1, %n [sp+3], %past r1
+primes:  # frame 4
+.entry:
+  mv t0, a0
+  st t0, [sp+3]
+  li t0, 0
+  st t0, [sp+2]
+  li t0, 2
+  st t0, [sp+1]
+.outer:
+  ld t0, [sp+1]
+  ld t1, [sp+3]
+  sle r1, t0, t1
+  beqz r1, done
+.start:
+  li r2, 2
+.trial:
+  mul r1, r2, r2
+  ld t0, [sp+1]
+  sgt r1, r1, t0
+  bnez r1, prime
+.test:
+  ld t0, [sp+1]
+  rem r1, t0, r2
+  li t0, 0
+  st t0, [sp+0]
+  ld t0, [sp+0]
+  seq r1, r1, t0
+  bnez r1, composite
+.bump:
+  addi r2, r2, 1
+  j trial
+.prime:
+  ld t0, [sp+2]
+  addi t0, t0, 1
+  st t0, [sp+2]
+.composite:
+  ld t0, [sp+1]
+  addi t0, t0, 1
+  st t0, [sp+1]
+  j outer
+.done:
+  ld t0, [sp+2]
+  mv a0, t0
+  ret
+; spilled 4, loads 8, stores 6, saves 0, moves removed 0, size 34
+$ colour loops.ir primes 8
+; %c.0 r6, %count r4, %d r5, %dd r1, %divides r1, %k r3, %m r1, %more r1, %n r2, %past r1
+primes:  # frame 0
+.entry:
+  mv r2, a0
+  li r4, 0
+  li r3, 2
+.outer:
+  sle r1, r3, r2
+  beqz r1, done
+.start:
+  li r5, 2
+.trial:
+  mul r1, r5, r5
+  sgt r1, r1, r3
+  bnez r1, prime
+.test:
+  rem r1, r3, r5
+  li r6, 0
+  seq r1, r1, r6
+  bnez r1, composite
+.bump:
+  addi r5, r5, 1
+  j trial
+.prime:
+  addi r4, r4, 1
+.composite:
+  addi r3, r3, 1
+  j outer
+.done:
+  mv a0, r4
+  ret
+; spilled 0, loads 0, stores 0, saves 0, moves removed 0, size 20
+$ compare arith.ir pow
+K=2 linear: spilled 2, loads 5, stores 4, saves 0, size 23
+K=2 colour: spilled 2, loads 4, stores 4, saves 0, size 22
+K=3 linear: spilled 1, loads 2, stores 2, saves 0, size 18
+K=3 colour: spilled 1, loads 2, stores 2, saves 0, size 18
+K=4 linear: spilled 0, loads 0, stores 0, saves 0, size 14
+K=4 colour: spilled 0, loads 0, stores 0, saves 0, size 14
+K=6 linear: spilled 0, loads 0, stores 0, saves 0, size 14
+K=6 colour: spilled 0, loads 0, stores 0, saves 0, size 14
+K=8 linear: spilled 0, loads 0, stores 0, saves 0, size 14
+K=8 colour: spilled 0, loads 0, stores 0, saves 0, size 14
+$ compare loops.ir grid
+K=2 linear: spilled 3, loads 7, stores 5, saves 0, size 28
+K=2 colour: spilled 3, loads 7, stores 5, saves 0, size 28
+K=3 linear: spilled 2, loads 4, stores 3, saves 0, size 23
+K=3 colour: spilled 2, loads 5, stores 3, saves 0, size 24
+K=4 linear: spilled 1, loads 2, stores 2, saves 0, size 20
+K=4 colour: spilled 1, loads 2, stores 1, saves 0, size 19
+K=6 linear: spilled 0, loads 0, stores 0, saves 0, size 16
+K=6 colour: spilled 0, loads 0, stores 0, saves 0, size 16
+K=8 linear: spilled 0, loads 0, stores 0, saves 0, size 16
+K=8 colour: spilled 0, loads 0, stores 0, saves 0, size 16
+$ compare loops.ir primes
+K=2 linear: spilled 4, loads 10, stores 7, saves 0, size 37
+K=2 colour: spilled 4, loads 8, stores 6, saves 0, size 34
+K=3 linear: spilled 3, loads 7, stores 5, saves 0, size 32
+K=3 colour: spilled 3, loads 4, stores 4, saves 0, size 28
+K=4 linear: spilled 2, loads 3, stores 3, saves 0, size 26
+K=4 colour: spilled 2, loads 3, stores 3, saves 0, size 26
+K=6 linear: spilled 0, loads 0, stores 0, saves 0, size 20
+K=6 colour: spilled 0, loads 0, stores 0, saves 0, size 20
+K=8 linear: spilled 0, loads 0, stores 0, saves 0, size 20
+K=8 colour: spilled 0, loads 0, stores 0, saves 0, size 20
+$ compare swap.ir rotate
+K=2 linear: spilled 4, loads 7, stores 7, saves 0, size 33
+K=2 colour: spilled 4, loads 7, stores 7, saves 0, size 33
+K=3 linear: spilled 3, loads 6, stores 6, saves 0, size 31
+K=3 colour: spilled 3, loads 5, stores 5, saves 0, size 30
+K=4 linear: spilled 2, loads 4, stores 4, saves 0, size 28
+K=4 colour: spilled 2, loads 3, stores 3, saves 0, size 27
+K=6 linear: spilled 0, loads 0, stores 0, saves 0, size 21
+K=6 colour: spilled 0, loads 0, stores 0, saves 0, size 21
+K=8 linear: spilled 0, loads 0, stores 0, saves 0, size 21
+K=8 colour: spilled 0, loads 0, stores 0, saves 0, size 21
+$ compare calls.ir ack
+K=2 linear: spilled 2, loads 7, stores 4, saves 0, size 41
+K=2 colour: spilled 1, loads 3, stores 1, saves 1, size 36
+K=3 linear: spilled 1, loads 3, stores 3, saves 1, size 38
+K=3 colour: spilled 0, loads 0, stores 0, saves 1, size 32
+K=4 linear: spilled 0, loads 0, stores 0, saves 1, size 32
+K=4 colour: spilled 0, loads 0, stores 0, saves 1, size 32
+K=6 linear: spilled 0, loads 0, stores 0, saves 1, size 32
+K=6 colour: spilled 0, loads 0, stores 0, saves 1, size 32
+K=8 linear: spilled 0, loads 0, stores 0, saves 1, size 32
+K=8 colour: spilled 0, loads 0, stores 0, saves 1, size 32
+$ compare pressure.ir spread
+K=2 linear: spilled 10, loads 23, stores 16, saves 0, size 73
+K=2 colour: spilled 10, loads 17, stores 10, saves 0, size 61
+K=3 linear: spilled 8, loads 20, stores 14, saves 0, size 68
+K=3 colour: spilled 8, loads 14, stores 8, saves 0, size 56
+K=4 linear: spilled 6, loads 17, stores 12, saves 0, size 63
+K=4 colour: spilled 6, loads 11, stores 6, saves 0, size 51
+K=6 linear: spilled 3, loads 6, stores 3, saves 0, size 43
+K=6 colour: spilled 3, loads 6, stores 3, saves 0, size 43
+K=8 linear: spilled 1, loads 2, stores 1, saves 0, size 37
+K=8 colour: spilled 1, loads 2, stores 1, saves 0, size 37
+$ compare pressure.ir accum
+K=2 linear: spilled 7, loads 19, stores 13, saves 0, size 66
+K=2 colour: spilled 7, loads 19, stores 13, saves 0, size 66
+K=3 linear: spilled 6, loads 18, stores 12, saves 0, size 64
+K=3 colour: spilled 6, loads 16, stores 11, saves 0, size 61
+K=4 linear: spilled 5, loads 15, stores 10, saves 0, size 59
+K=4 colour: spilled 5, loads 13, stores 9, saves 0, size 56
+K=6 linear: spilled 3, loads 9, stores 6, saves 0, size 49
+K=6 colour: spilled 3, loads 7, stores 5, saves 0, size 46
+K=8 linear: spilled 1, loads 3, stores 2, saves 0, size 39
+K=8 colour: spilled 1, loads 1, stores 1, saves 0, size 36
+$ compare pressure.ir matfib
+K=2 linear: spilled 13, loads 42, stores 26, saves 0, size 110
+K=2 colour: spilled 12, loads 40, stores 24, saves 0, size 108
+K=3 linear: spilled 12, loads 40, stores 24, saves 0, size 108
+K=3 colour: spilled 11, loads 34, stores 22, saves 0, size 101
+K=4 linear: spilled 11, loads 38, stores 22, saves 0, size 106
+K=4 colour: spilled 10, loads 28, stores 20, saves 0, size 94
+K=6 linear: spilled 9, loads 34, stores 18, saves 0, size 102
+K=6 colour: spilled 8, loads 18, stores 16, saves 0, size 81
+K=8 linear: spilled 7, loads 23, stores 14, saves 0, size 87
+K=8 colour: spilled 6, loads 13, stores 12, saves 0, size 73
+$ compare pressure.ir around
+K=2 linear: spilled 6, loads 8, stores 6, saves 8, size 56
+K=2 colour: spilled 6, loads 8, stores 6, saves 8, size 56
+K=3 linear: spilled 5, loads 6, stores 5, saves 12, size 61
+K=3 colour: spilled 5, loads 6, stores 5, saves 12, size 61
+K=4 linear: spilled 4, loads 4, stores 4, saves 16, size 66
+K=4 colour: spilled 4, loads 4, stores 4, saves 16, size 66
+K=6 linear: spilled 2, loads 2, stores 2, saves 21, size 72
+K=6 colour: spilled 2, loads 2, stores 2, saves 17, size 64
+K=8 linear: spilled 0, loads 0, stores 0, saves 22, size 70
+K=8 colour: spilled 0, loads 0, stores 0, saves 22, size 70
+$ compare pressure.ir checksum
+K=2 linear: spilled 3, loads 12, stores 7, saves 0, size 37
+K=2 colour: spilled 3, loads 6, stores 4, saves 0, size 28
+K=3 linear: spilled 2, loads 8, stores 5, saves 0, size 31
+K=3 colour: spilled 2, loads 2, stores 2, saves 0, size 22
+K=4 linear: spilled 1, loads 7, stores 4, saves 0, size 29
+K=4 colour: spilled 1, loads 1, stores 1, saves 0, size 20
+K=6 linear: spilled 0, loads 0, stores 0, saves 0, size 18
+K=6 colour: spilled 0, loads 0, stores 0, saves 0, size 18
+K=8 linear: spilled 0, loads 0, stores 0, saves 0, size 18
+K=8 colour: spilled 0, loads 0, stores 0, saves 0, size 18
+$ compare abi.ir mix
+K=2 linear: spilled 1, loads 2, stores 1, saves 2, size 29
+K=2 colour: spilled 1, loads 2, stores 1, saves 2, size 29
+K=3 linear: spilled 0, loads 0, stores 0, saves 2, size 26
+K=3 colour: spilled 0, loads 0, stores 0, saves 2, size 26
+K=4 linear: spilled 0, loads 0, stores 0, saves 2, size 26
+K=4 colour: spilled 0, loads 0, stores 0, saves 2, size 26
+K=6 linear: spilled 0, loads 0, stores 0, saves 2, size 26
+K=6 colour: spilled 0, loads 0, stores 0, saves 2, size 26
+K=8 linear: spilled 0, loads 0, stores 0, saves 2, size 26
+K=8 colour: spilled 0, loads 0, stores 0, saves 2, size 26
+$ compare abi.ir tally
+K=2 linear: spilled 2, loads 3, stores 3, saves 1, size 25
+K=2 colour: spilled 2, loads 2, stores 2, saves 1, size 22
+K=3 linear: spilled 1, loads 2, stores 2, saves 2, size 25
+K=3 colour: spilled 1, loads 1, stores 1, saves 1, size 21
+K=4 linear: spilled 0, loads 0, stores 0, saves 2, size 21
+K=4 colour: spilled 0, loads 0, stores 0, saves 2, size 21
+K=6 linear: spilled 0, loads 0, stores 0, saves 2, size 21
+K=6 colour: spilled 0, loads 0, stores 0, saves 2, size 21
+K=8 linear: spilled 0, loads 0, stores 0, saves 2, size 21
+K=8 colour: spilled 0, loads 0, stores 0, saves 2, size 21
+$ run arith.ir gcd 2 1071 462
+ir: returned 21 after 22 steps
+linear: returned 21 after 36 instructions, 8 memory
+colour: returned 21 after 36 instructions, 8 memory
+$ run arith.ir gcd 4 1071 462
+ir: returned 21 after 22 steps
+linear: returned 21 after 28 instructions, 0 memory
+colour: returned 21 after 28 instructions, 0 memory
+$ run arith.ir pow 2 3 13
+ir: returned 1594323 after 39 steps
+linear: returned 1594323 after 69 instructions, 26 memory
+colour: returned 1594323 after 63 instructions, 20 memory
+$ run arith.ir pow 4 3 13
+ir: returned 1594323 after 39 steps
+linear: returned 1594323 after 43 instructions, 0 memory
+colour: returned 1594323 after 43 instructions, 0 memory
+$ run arith.ir collatz 2 27
+ir: returned 111 after 934 steps
+linear: returned 111 after 1452 instructions, 224 memory
+colour: returned 111 after 1452 instructions, 224 memory
+$ run arith.ir collatz 4 27
+ir: returned 111 after 934 steps
+linear: returned 111 after 1228 instructions, 0 memory
+colour: returned 111 after 1228 instructions, 0 memory
+$ run arith.ir classify 2 -5
+ir: returned -1 after 5 steps
+linear: returned -1 after 10 instructions, 2 memory
+colour: returned -1 after 8 instructions, 0 memory
+$ run arith.ir classify 4 -5
+ir: returned -1 after 5 steps
+linear: returned -1 after 8 instructions, 0 memory
+colour: returned -1 after 8 instructions, 0 memory
+$ run arith.ir classify 2 1000
+ir: returned 2 after 10 steps
+linear: returned 2 after 17 instructions, 3 memory
+colour: returned 2 after 14 instructions, 0 memory
+$ run arith.ir classify 4 1000
+ir: returned 2 after 10 steps
+linear: returned 2 after 14 instructions, 0 memory
+colour: returned 2 after 14 instructions, 0 memory
+$ run arith.ir isqrt 2 123456
+ir: returned 113512 after 177 steps
+linear: returned 113512 after 322 instructions, 109 memory
+colour: returned 113512 after 322 instructions, 109 memory
+$ run arith.ir isqrt 4 123456
+ir: returned 113512 after 177 steps
+linear: returned 113512 after 260 instructions, 47 memory
+colour: returned 113512 after 232 instructions, 19 memory
+$ run arith.ir wrap 2
+ir: returned 0 after 12 steps; printed -2147483648 2147483647 0 -3 -1
+linear: returned 0 after 26 instructions, 7 memory; printed -2147483648 2147483647 0 -3 -1
+colour: returned 0 after 25 instructions, 6 memory; printed -2147483648 2147483647 0 -3 -1
+$ run arith.ir wrap 4
+ir: returned 0 after 12 steps; printed -2147483648 2147483647 0 -3 -1
+linear: returned 0 after 19 instructions, 0 memory; printed -2147483648 2147483647 0 -3 -1
+colour: returned 0 after 19 instructions, 0 memory; printed -2147483648 2147483647 0 -3 -1
+$ run loops.ir tri 2 100
+ir: returned 5050 after 506 steps
+linear: returned 5050 after 811 instructions, 304 memory
+colour: returned 5050 after 811 instructions, 304 memory
+$ run loops.ir tri 4 100
+ir: returned 5050 after 506 steps
+linear: returned 5050 after 507 instructions, 0 memory
+colour: returned 5050 after 507 instructions, 0 memory
+$ run loops.ir grid 2 7
+ir: returned 441 after 356 steps
+linear: returned 441 after 587 instructions, 237 memory
+colour: returned 441 after 587 instructions, 237 memory
+$ run loops.ir grid 4 7
+ir: returned 441 after 356 steps
+linear: returned 441 after 450 instructions, 100 memory
+colour: returned 441 after 415 instructions, 65 memory
+$ run loops.ir primes 2 100
+ir: returned 25 after 2465 steps
+linear: returned 25 after 4447 instructions, 1869 memory
+colour: returned 25 after 3999 instructions, 1421 memory
+$ run loops.ir primes 4 100
+ir: returned 25 after 2465 steps
+linear: returned 25 after 2731 instructions, 153 memory
+colour: returned 25 after 2731 instructions, 153 memory
+$ run loops.ir fib 2 50
+ir: returned -298632863 after 357 steps
+linear: returned -298632863 after 664 instructions, 306 memory
+colour: returned -298632863 after 714 instructions, 356 memory
+$ run loops.ir fib 4 50
+ir: returned -298632863 after 357 steps
+linear: returned -298632863 after 460 instructions, 102 memory
+colour: returned -298632863 after 410 instructions, 52 memory
+$ run loops.ir search 2 1764
+ir: returned 42 after 305 steps
+linear: returned 42 after 396 instructions, 47 memory
+colour: returned 42 after 396 instructions, 47 memory
+$ run loops.ir search 4 1764
+ir: returned 42 after 305 steps
+linear: returned 42 after 349 instructions, 0 memory
+colour: returned 42 after 349 instructions, 0 memory
+$ run loops.ir two_phase 2 10
+ir: returned 35 after 109 steps
+linear: returned 35 after 235 instructions, 115 memory
+colour: returned 35 after 198 instructions, 78 memory
+$ run loops.ir two_phase 4 10
+ir: returned 35 after 109 steps
+linear: returned 35 after 120 instructions, 0 memory
+colour: returned 35 after 120 instructions, 0 memory
+$ run swap.ir swap 2 7
+ir: returned 21 after 58 steps
+linear: returned 21 after 94 instructions, 41 memory
+colour: returned 21 after 94 instructions, 41 memory
+$ run swap.ir swap 4 7
+ir: returned 21 after 58 steps
+linear: returned 21 after 76 instructions, 16 memory
+colour: returned 21 after 69 instructions, 9 memory
+$ run swap.ir lost 2 5
+ir: returned 4 after 23 steps
+linear: returned 4 after 46 instructions, 27 memory
+colour: returned 4 after 36 instructions, 12 memory
+$ run swap.ir lost 4 5
+ir: returned 4 after 23 steps
+linear: returned 4 after 24 instructions, 0 memory
+colour: returned 4 after 24 instructions, 0 memory
+$ run swap.ir rotate 2 5
+ir: returned 312 after 52 steps
+linear: returned 312 after 88 instructions, 43 memory
+colour: returned 312 after 88 instructions, 43 memory
+$ run swap.ir rotate 4 5
+ir: returned 312 after 52 steps
+linear: returned 312 after 74 instructions, 24 memory
+colour: returned 312 after 74 instructions, 19 memory
+$ run swap.ir shuffle 2 3
+ir: returned 4 after 26 steps; printed 5 9 5
+linear: returned 4 after 46 instructions, 19 memory; printed 5 9 5
+colour: returned 4 after 48 instructions, 18 memory; printed 5 9 5
+$ run swap.ir shuffle 4 3
+ir: returned 4 after 26 steps; printed 5 9 5
+linear: returned 4 after 30 instructions, 0 memory; printed 5 9 5
+colour: returned 4 after 30 instructions, 0 memory; printed 5 9 5
+$ run swap.ir early 2 9
+ir: returned 24 after 21 steps
+linear: returned 24 after 39 instructions, 11 memory
+colour: returned 24 after 39 instructions, 11 memory
+$ run swap.ir early 4 9
+ir: returned 24 after 21 steps
+linear: returned 24 after 28 instructions, 0 memory
+colour: returned 24 after 28 instructions, 0 memory
+$ run calls.ir fact 2 12
+ir: returned 479001600 after 69 steps
+linear: returned 479001600 after 149 instructions, 22 memory
+colour: returned 479001600 after 149 instructions, 22 memory
+$ run calls.ir fact 4 12
+ir: returned 479001600 after 69 steps
+linear: returned 479001600 after 149 instructions, 22 memory
+colour: returned 479001600 after 149 instructions, 22 memory
+$ run calls.ir fibr 2 15
+ir: returned 610 after 10849 steps
+linear: returned 610 after 24656 instructions, 3944 memory
+colour: returned 610 after 24656 instructions, 3944 memory
+$ run calls.ir fibr 4 15
+ir: returned 610 after 10849 steps
+linear: returned 610 after 24656 instructions, 3944 memory
+colour: returned 610 after 24656 instructions, 3944 memory
+$ run calls.ir even 2 9
+ir: returned 0 after 48 steps
+linear: returned 0 after 96 instructions, 0 memory
+colour: returned 0 after 96 instructions, 0 memory
+$ run calls.ir even 4 9
+ir: returned 0 after 48 steps
+linear: returned 0 after 96 instructions, 0 memory
+colour: returned 0 after 96 instructions, 0 memory
+$ run calls.ir ack 2 2 3
+ir: returned 9 after 286 steps
+linear: returned 9 after 834 instructions, 219 memory
+colour: returned 9 after 760 instructions, 145 memory
+$ run calls.ir ack 4 2 3
+ir: returned 9 after 286 steps
+linear: returned 9 after 653 instructions, 38 memory
+colour: returned 9 after 653 instructions, 38 memory
+$ run calls.ir report 2 5
+ir: returned 0 after 1086 steps; printed 1 2 6 24 120 5000
+linear: returned 0 after 2441 instructions, 390 memory; printed 1 2 6 24 120 5000
+colour: returned 0 after 2441 instructions, 390 memory; printed 1 2 6 24 120 5000
+$ run calls.ir report 4 5
+ir: returned 0 after 1086 steps; printed 1 2 6 24 120 5000
+linear: returned 0 after 2445 instructions, 394 memory; printed 1 2 6 24 120 5000
+colour: returned 0 after 2445 instructions, 394 memory; printed 1 2 6 24 120 5000
+$ run calls.ir deep 2 0
+ir: trap: call depth limit after 402 steps
+linear: trap: call depth limit after 804 instructions, 0 memory
+colour: trap: call depth limit after 804 instructions, 0 memory
+$ run calls.ir deep 4 0
+ir: trap: call depth limit after 402 steps
+linear: trap: call depth limit after 804 instructions, 0 memory
+colour: trap: call depth limit after 804 instructions, 0 memory
+$ run pressure.ir spread 2 9
+ir: returned -3236 after 24 steps
+linear: returned -3236 after 73 instructions, 39 memory
+colour: returned -3236 after 61 instructions, 27 memory
+$ run pressure.ir spread 4 9
+ir: returned -3236 after 24 steps
+linear: returned -3236 after 63 instructions, 29 memory
+colour: returned -3236 after 51 instructions, 17 memory
+$ run pressure.ir spread 2 -1000
+ir: returned 50040496 after 24 steps
+linear: returned 50040496 after 73 instructions, 39 memory
+colour: returned 50040496 after 61 instructions, 27 memory
+$ run pressure.ir spread 4 -1000
+ir: returned 50040496 after 24 steps
+linear: returned 50040496 after 63 instructions, 29 memory
+colour: returned 50040496 after 51 instructions, 17 memory
+$ run pressure.ir accum 2 50
+ir: returned 107605 after 672 steps; printed 1225 40425 67057 50 -1225 73
+linear: returned 107605 after 1343 instructions, 670 memory; printed 1225 40425 67057 50 -1225 73
+colour: returned 107605 after 1343 instructions, 670 memory; printed 1225 40425 67057 50 -1225 73
+$ run pressure.ir accum 4 50
+ir: returned 107605 after 672 steps; printed 1225 40425 67057 50 -1225 73
+linear: returned 107605 after 1188 instructions, 515 memory; printed 1225 40425 67057 50 -1225 73
+colour: returned 107605 after 1137 instructions, 464 memory; printed 1225 40425 67057 50 -1225 73
+$ run pressure.ir matfib 2 40
+ir: returned 102334155 after 178 steps
+linear: returned 102334155 after 399 instructions, 247 memory
+colour: returned 102334155 after 391 instructions, 231 memory
+$ run pressure.ir matfib 4 40
+ir: returned 102334155 after 178 steps
+linear: returned 102334155 after 383 instructions, 215 memory
+colour: returned 102334155 after 333 instructions, 161 memory
+$ run pressure.ir matfib 2 90
+ir: returned -1581614984 after 234 steps
+linear: returned -1581614984 after 528 instructions, 333 memory
+colour: returned -1581614984 after 517 instructions, 311 memory
+$ run pressure.ir matfib 4 90
+ir: returned -1581614984 after 234 steps
+linear: returned -1581614984 after 506 instructions, 289 memory
+colour: returned -1581614984 after 443 instructions, 223 memory
+$ run pressure.ir around 2 6
+ir: returned 328 after 24 steps
+linear: returned 328 after 72 instructions, 30 memory
+colour: returned 328 after 72 instructions, 30 memory
+$ run pressure.ir around 4 6
+ir: returned 328 after 24 steps
+linear: returned 328 after 82 instructions, 40 memory
+colour: returned 328 after 82 instructions, 40 memory
+$ run pressure.ir checksum 2 200
+ir: returned 855846185 after 2207 steps; printed 855846185
+linear: returned 855846185 after 5215 instructions, 2807 memory; printed 855846185
+colour: returned 855846185 after 4012 instructions, 1604 memory; printed 855846185
+$ run pressure.ir checksum 4 200
+ir: returned 855846185 after 2207 steps; printed 855846185
+linear: returned 855846185 after 4011 instructions, 1603 memory; printed 855846185
+colour: returned 855846185 after 2610 instructions, 202 memory; printed 855846185
+$ run abi.ir mix 2 3 4
+ir: returned 108 after 16 steps
+linear: returned 108 after 68 instructions, 19 memory
+colour: returned 108 after 68 instructions, 19 memory
+$ run abi.ir mix 4 3 4
+ir: returned 108 after 16 steps
+linear: returned 108 after 53 instructions, 4 memory
+colour: returned 108 after 53 instructions, 4 memory
+$ run abi.ir flip 2 10 3
+ir: returned -14 after 10 steps
+linear: returned -14 after 37 instructions, 6 memory
+colour: returned -14 after 37 instructions, 6 memory
+$ run abi.ir flip 4 10 3
+ir: returned -14 after 10 steps
+linear: returned -14 after 37 instructions, 6 memory
+colour: returned -14 after 37 instructions, 6 memory
+$ run abi.ir chain 2 30
+ir: returned 9455 after 213 steps
+linear: returned 9455 after 426 instructions, 60 memory
+colour: returned 9455 after 426 instructions, 60 memory
+$ run abi.ir chain 4 30
+ir: returned 9455 after 213 steps
+linear: returned 9455 after 426 instructions, 60 memory
+colour: returned 9455 after 426 instructions, 60 memory
+$ run abi.ir gcdr 2 1071 462
+ir: returned 21 after 18 steps
+linear: returned 21 after 57 instructions, 14 memory
+colour: returned 21 after 51 instructions, 8 memory
+$ run abi.ir gcdr 4 1071 462
+ir: returned 21 after 18 steps
+linear: returned 21 after 43 instructions, 0 memory
+colour: returned 21 after 43 instructions, 0 memory
+$ run abi.ir tally 2 5
+ir: returned 15 after 61 steps; printed 1 3 6 10 15
+linear: returned 15 after 161 instructions, 49 memory; printed 1 3 6 10 15
+colour: returned 15 after 156 instructions, 49 memory; printed 1 3 6 10 15
+$ run abi.ir tally 4 5
+ir: returned 15 after 61 steps; printed 1 3 6 10 15
+linear: returned 15 after 132 instructions, 20 memory; printed 1 3 6 10 15
+colour: returned 15 after 132 instructions, 20 memory; printed 1 3 6 10 15
+$ run abi.ir noargs 2
+ir: returned 60 after 58 steps; printed 1 3 6
+linear: returned 60 after 177 instructions, 50 memory; printed 1 3 6
+colour: returned 60 after 174 instructions, 50 memory; printed 1 3 6
+$ run abi.ir noargs 4
+ir: returned 60 after 58 steps; printed 1 3 6
+linear: returned 60 after 143 instructions, 16 memory; printed 1 3 6
+colour: returned 60 after 143 instructions, 16 memory; printed 1 3 6
+$ run pressure.ir spread 3 9
+ir: returned -3236 after 24 steps
+linear: returned -3236 after 68 instructions, 34 memory
+colour: returned -3236 after 56 instructions, 22 memory
+$ run pressure.ir spread 6 9
+ir: returned -3236 after 24 steps
+linear: returned -3236 after 43 instructions, 9 memory
+colour: returned -3236 after 43 instructions, 9 memory
+$ run pressure.ir spread 8 9
+ir: returned -3236 after 24 steps
+linear: returned -3236 after 37 instructions, 3 memory
+colour: returned -3236 after 37 instructions, 3 memory
+$ run pressure.ir matfib 3 40
+ir: returned 102334155 after 178 steps
+linear: returned 102334155 after 391 instructions, 231 memory
+colour: returned 102334155 after 362 instructions, 196 memory
+$ run pressure.ir matfib 6 40
+ir: returned 102334155 after 178 steps
+linear: returned 102334155 after 367 instructions, 183 memory
+colour: returned 102334155 after 281 instructions, 103 memory
+$ run pressure.ir matfib 8 40
+ir: returned 102334155 after 178 steps
+linear: returned 102334155 after 303 instructions, 119 memory
+colour: returned 102334155 after 241 instructions, 61 memory
+$ run abi.ir chain 3 30
+ir: returned 9455 after 213 steps
+linear: returned 9455 after 426 instructions, 60 memory
+colour: returned 9455 after 426 instructions, 60 memory
+$ run abi.ir chain 6 30
+ir: returned 9455 after 213 steps
+linear: returned 9455 after 426 instructions, 60 memory
+colour: returned 9455 after 426 instructions, 60 memory
+$ run abi.ir chain 8 30
+ir: returned 9455 after 213 steps
+linear: returned 9455 after 426 instructions, 60 memory
+colour: returned 9455 after 426 instructions, 60 memory
+$ run loops.ir primes 3 100
+ir: returned 25 after 2465 steps
+linear: returned 25 after 3527 instructions, 949 memory
+colour: returned 25 after 3203 instructions, 625 memory
+$ run loops.ir primes 6 100
+ir: returned 25 after 2465 steps
+linear: returned 25 after 2578 instructions, 0 memory
+colour: returned 25 after 2578 instructions, 0 memory
+$ run loops.ir primes 8 100
+ir: returned 25 after 2465 steps
+linear: returned 25 after 2578 instructions, 0 memory
+colour: returned 25 after 2578 instructions, 0 memory
+$ run calls.ir forever 4 0
+ir: trap: step limit after 100001 steps
+linear: trap: step limit after 400001 instructions, 0 memory
+colour: trap: step limit after 400001 instructions, 0 memory
+$ run calls.ir fact 4
+calls.ir: error: fact takes 1 argument(s), given 0
+$ run calls.ir nosuch 4 1
+calls.ir: error: no function nosuch
+$ snip sel func f(a) {\nentry:\n  x = a + 1\n  y = 1 + a\n  z = 1 - a\n  w = a * 4\n  v = 3 < a\n  u = a << 2\n  ret u\n}
+f:  # frame 0
+.entry:
+  mv %a, a0
+  addi %x, %a, 1
+  addi %y, %a, 1
+  li %c.0, 1
+  sub %z, %c.0, %a
+  li %c.1, 4
+  mul %w, %a, %c.1
+  li %c.2, 3
+  slt %v, %c.2, %a
+  slli %u, %a, 2
+  mv a0, %u
+  ret
+$ snip sel func f() {\nentry:\n  x = 3 + 4\n  print 9\n  ret 7\n}
+f:  # frame 0
+.entry:
+  li %c.0, 3
+  addi %x, %c.0, 4
+  li %c.1, 9
+  print %c.1
+  li a0, 7
+  ret
+$ snip sel func f(c) {\nentry:\n  br c, a, b\na:\n  ret 1\nb:\n  ret 2\n}
+f:  # frame 0
+.entry:
+  mv %c, a0
+  beqz %c, b
+.a:
+  li a0, 1
+  ret
+.b:
+  li a0, 2
+  ret
+$ snip sel func f(c) {\nentry:\n  br c, b, a\na:\n  ret 1\nb:\n  ret 2\n}
+f:  # frame 0
+.entry:
+  mv %c, a0
+  bnez %c, b
+.a:
+  li a0, 1
+  ret
+.b:
+  li a0, 2
+  ret
+$ snip sel func f(c) {\nentry:\n  br c, a, a\na:\n  ret c\n}
+f:  # frame 0
+.entry:
+  mv %c, a0
+.a:
+  mv a0, %c
+  ret
+$ snip sel func f(c) {\nentry:\n  br 1, a, b\nb:\n  ret 2\na:\n  ret 1\n}
+f:  # frame 0
+.entry:
+  mv %c, a0
+  li %c.0, 1
+  bnez %c.0, a
+.b:
+  li a0, 2
+  ret
+.a:
+  li a0, 1
+  ret
+$ snip sel func f() {\nentry:\n  ret\ndead:\n  print 1\n  ret\n}
+f:  # frame 0
+.entry:
+  li a0, 0
+  ret
+$ snip sel func f(a) {\nentry:\n  b = a + c\n  ret b\n}
+f:  # frame 0
+.entry:
+  li %c, 0
+  mv %a, a0
+  add %b, %a, %c
+  mv a0, %b
+  ret
+$ snip sel func g(a, b, c, d) {\nentry:\n  ret d\n}\nfunc f() {\nentry:\n  x = call g(4, 3, 2, 1)\n  call g(x, x, x, x)\n  ret x\n} ;; f
+f:  # frame 0
+.entry:
+  li a0, 4
+  li a1, 3
+  li a2, 2
+  li a3, 1
+  call g
+  mv %x, a0
+  mv a0, %x
+  mv a1, %x
+  mv a2, %x
+  mv a3, %x
+  call g
+  mv a0, %x
+  ret
+$ snip sel func g(a, b, c, d, e) {\nentry:\n  ret e\n}
+snip.ir:1: error: g has 5 parameters; the calling convention passes at most 4
+$ snip sel func g(a, b, c, d, e) {\nentry:\n  ret a\n}\nfunc f() {\nentry:\n  x = call g(1, 2, 3, 4, 5)\n  ret x\n} ;; f
+snip.ir:7: error: call g passes 5 arguments; the calling convention passes at most 4
+$ snip live func f(a) {\nentry:\n  x = a + 1\n  y = x + 1\n  z = y + 1\n  ret z\n}
+%a: [1, 2]
+%x: [3, 4]
+%y: [5, 6]
+%z: [7, 8]
+$ snip graph func f(a) {\nentry:\n  x = a + 1\n  y = x + 1\n  z = y + 1\n  ret z\n}
+%a: degree 0, cost 2; -
+%x: degree 0, cost 2; -
+%y: degree 0, cost 2; -
+%z: degree 0, cost 2; -
+$ snip graph func f(a, b) {\nentry:\n  x = a\n  y = x + b\n  ret y\n}
+%a: degree 1, cost 2; %b
+%b: degree 2, cost 2; %a, %x
+%x: degree 1, cost 2; %b
+%y: degree 0, cost 2; -
+$ snip linear func f(a, b) {\nentry:\n  x = a\n  y = x + b\n  ret y\n} ;; f 2
+; %a r1, %b r2, %x r1, %y r1
+f:  # frame 0
+.entry:
+  mv r1, a0
+  mv r2, a1
+  add r1, r1, r2
+  mv a0, r1
+  ret
+; spilled 0, loads 0, stores 0, saves 0, moves removed 1, size 5
+$ snip colour func f(a, b) {\nentry:\n  x = a\n  y = x + b\n  ret y\n} ;; f 2
+; %a r1, %b r2, %x r1, %y r1
+f:  # frame 0
+.entry:
+  mv r1, a0
+  mv r2, a1
+  add r1, r1, r2
+  mv a0, r1
+  ret
+; spilled 0, loads 0, stores 0, saves 0, moves removed 1, size 5
+$ snip linear func f(a) {\nentry:\n  x = a + 1\n  y = a + 2\n  z = a + 3\n  s = x + y\n  s = s + z\n  ret s\n} ;; f 2
+; %a r1, %s r2, %x r2, %y [sp+0], %z r1
+f:  # frame 1
+.entry:
+  mv r1, a0
+  addi r2, r1, 1
+  addi t0, r1, 2
+  st t0, [sp+0]
+  addi r1, r1, 3
+  ld t0, [sp+0]
+  add r2, r2, t0
+  add r2, r2, r1
+  mv a0, r2
+  ret
+; spilled 1, loads 1, stores 1, saves 0, moves removed 0, size 10
+$ snip colour func f(a) {\nentry:\n  x = a + 1\n  y = a + 2\n  z = a + 3\n  s = x + y\n  s = s + z\n  ret s\n} ;; f 2
+; %a r1, %s r2, %x [sp+0], %y r2, %z r1
+f:  # frame 1
+.entry:
+  mv r1, a0
+  addi t0, r1, 1
+  st t0, [sp+0]
+  addi r2, r1, 2
+  addi r1, r1, 3
+  ld t0, [sp+0]
+  add r2, t0, r2
+  add r2, r2, r1
+  mv a0, r2
+  ret
+; spilled 1, loads 1, stores 1, saves 0, moves removed 0, size 10
+$ snip linear func f(a) {\nentry:\n  x = a + 1\n  y = a + 2\n  z = a + 3\n  s = x + y\n  s = s + z\n  ret s\n} ;; f 1
+; %a r1, %s [sp+2], %x [sp+0], %y [sp+1], %z r1
+f:  # frame 3
+.entry:
+  mv r1, a0
+  addi t0, r1, 1
+  st t0, [sp+0]
+  addi t0, r1, 2
+  st t0, [sp+1]
+  addi r1, r1, 3
+  ld t0, [sp+0]
+  ld t1, [sp+1]
+  add t0, t0, t1
+  st t0, [sp+2]
+  ld t0, [sp+2]
+  add t0, t0, r1
+  st t0, [sp+2]
+  ld t0, [sp+2]
+  mv a0, t0
+  ret
+; spilled 3, loads 4, stores 4, saves 0, moves removed 0, size 16
+$ snip run func f(a) {\nentry:\n  x = a + 1\n  y = a + 2\n  z = a + 3\n  s = x + y\n  s = s + z\n  ret s\n} ;; f 1 10
+ir: returned 36 after 6 steps
+linear: returned 36 after 16 instructions, 8 memory
+colour: returned 36 after 14 instructions, 6 memory
+$ snip run func f(a) {\nentry:\n  x = 1 / a\n  ret x\n} ;; f 2 0
+ir: trap: division by zero in f after 1 steps
+linear: trap: division by zero in f after 3 instructions, 0 memory
+colour: trap: division by zero in f after 3 instructions, 0 memory
+$ snip run func f(a, b) {\nentry:\n  q = a / b\n  r = a % b\n  print q\n  print r\n  ret\n} ;; f 2 -17 5
+ir: returned 0 after 5 steps; printed -3 -2
+linear: returned 0 after 10 instructions, 2 memory; printed -3 -2
+colour: returned 0 after 10 instructions, 2 memory; printed -3 -2
+$ snip run func f(c) {\nentry:\n  br c, set, skip\nset:\n  v = 10\n  jmp skip\nskip:\n  r = v + 1\n  ret r\n} ;; f 2 0
+ir: returned 1 after 3 steps
+linear: returned 1 after 6 instructions, 0 memory
+colour: returned 1 after 6 instructions, 0 memory
+$ snip run func f(c) {\nentry:\n  br c, set, skip\nset:\n  v = 10\n  jmp skip\nskip:\n  r = v + 1\n  ret r\n} ;; f 2 1
+ir: returned 11 after 5 steps
+linear: returned 11 after 7 instructions, 0 memory
+colour: returned 11 after 7 instructions, 0 memory
+$ snip run func f() {\nentry:\n  x = 2147483647\n  y = x + 1\n  ret y\n} ;; f 2
+ir: returned -2147483648 after 3 steps
+linear: returned -2147483648 after 4 instructions, 0 memory
+colour: returned -2147483648 after 4 instructions, 0 memory
+$ snip linear func f() {\nentry:\n  ret\n} ;; g 2
+snip.ir: error: no function g
+$ snip sel ret 1
+snip.ir:1: error: expected 'func name(params) {'
+$ snip sel func f() {\nentry:\n  jmp entry\n}
+snip.ir:3: error: the entry block entry cannot be a jump target
+$ snip sel func f() {\nentry:\n  x = call g()\n  ret\n}
+snip.ir:3: error: unknown function g

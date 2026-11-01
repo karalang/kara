@@ -1,0 +1,2645 @@
+// mini_regalloc: the back end of a compiler, for mini_ssa's three-address
+// IR. It selects instructions for a small load/store machine, computes
+// liveness, live intervals and the interference graph, and allocates K
+// registers two ways: Poletto and Sarkar's linear scan, and Chaitin's
+// graph colouring with Briggs's optimistic colouring. Spilled values go
+// through two scratch registers, registers live across a call are saved
+// around it, and a simulator runs the result, so every `run` job checks
+// both allocations against an interpreter of the IR.
+
+// ------------------------------------------------------------ arithmetic
+
+const STEP_LIMIT: i64 = 100000;
+const DEPTH_LIMIT: i64 = 200;
+
+// 32-bit two's complement, as the IR's integers are.
+fn wrap(v: i64) -> i64 {
+    let m = v & 4294967295;
+    if (m & 2147483648) != 0 {
+        m - 4294967296
+    } else {
+        m
+    }
+}
+
+fn is_binop(s: Str) -> bool {
+    match s {
+        "==" | "!=" | "<=" | ">=" | "<<" | ">>" | "+" | "-" | "*" | "/" | "%" | "<" | ">" | "&" | "|" | "^" => true,
+        _ => false,
+    }
+}
+
+fn b2i(b: bool) -> i64 {
+    if b {
+        1
+    } else {
+        0
+    }
+}
+
+// The value of a op b, or None when it traps (division by zero).
+fn fold(op: Str, a: i64, b: i64) -> Option[i64] {
+    match op {
+        "+" => Some(wrap(a + b)),
+        "-" => Some(wrap(a - b)),
+        "*" => Some(wrap(a * b)),
+        "/" => {
+            if b == 0 {
+                None
+            } else {
+                Some(wrap(a / b))
+            }
+        }
+        "%" => {
+            if b == 0 {
+                None
+            } else {
+                Some(wrap(a % b))
+            }
+        }
+        "&" => Some(wrap(a & b)),
+        "|" => Some(wrap(a | b)),
+        "^" => Some(wrap(a ^ b)),
+        "<<" => Some(wrap(a << (b & 31))),
+        ">>" => Some(wrap(a >> (b & 31))),
+        "==" => Some(b2i(a == b)),
+        "!=" => Some(b2i(a != b)),
+        "<" => Some(b2i(a < b)),
+        "<=" => Some(b2i(a <= b)),
+        ">" => Some(b2i(a > b)),
+        _ => Some(b2i(a >= b)),
+    }
+}
+
+// ------------------------------------------------------------ IR
+
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum OpK {
+    Var,
+    Const,
+    Undef,
+}
+
+// An operand: a variable, a constant, or undef (which reads as 0).
+#[derive(Clone)]
+struct Opd {
+    kind: OpK,
+    name: String,
+    val: i64,
+}
+
+impl Opd {
+    fn show(ref self) -> String {
+        match self.kind {
+            OpK.Var => self.name.clone(),
+            OpK.Const => f"{self.val}",
+            OpK.Undef => "undef".to_string(),
+        }
+    }
+
+    fn same(ref self, o: ref Opd) -> bool {
+        self.kind == o.kind and self.name == o.name and self.val == o.val
+    }
+
+    fn is_var(ref self) -> bool {
+        self.kind == OpK.Var
+    }
+
+    fn names(ref self, n: Str) -> bool {
+        self.kind == OpK.Var and self.name == n
+    }
+}
+
+fn mkvar(n: Str) -> Opd {
+    Opd { kind: OpK.Var, name: n.to_string(), val: 0 }
+}
+
+fn mkconst(v: i64) -> Opd {
+    Opd { kind: OpK.Const, name: String.new(), val: v }
+}
+
+fn mkundef() -> Opd {
+    Opd { kind: OpK.Undef, name: String.new(), val: 0 }
+}
+
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum Op {
+    Bin,
+    Mov,
+    Call,
+    Print,
+    Br,
+    Jmp,
+    Ret,
+    Phi,
+}
+
+// A phi's args run parallel to its preds.
+#[derive(Clone)]
+struct Instr {
+    op: Op,
+    dst: String,
+    binop: String,
+    args: Vec[Opd],
+    labels: Vec[String],
+    func: String,
+    line: i64,
+    preds: Vec[String],
+}
+
+fn instr(op: Op, line: i64) -> Instr {
+    Instr {
+        op: op,
+        dst: String.new(),
+        binop: String.new(),
+        args: Vec.new(),
+        labels: Vec.new(),
+        func: String.new(),
+        line: line,
+        preds: Vec.new(),
+    }
+}
+
+fn jmp_to(label: Str, line: i64) -> Instr {
+    let mut i = instr(Op.Jmp, line);
+    i.labels.push(label.to_string());
+    i
+}
+
+fn mov(dst: Str, a: own Opd, line: i64) -> Instr {
+    let mut i = instr(Op.Mov, line);
+    i.dst = dst.to_string();
+    i.args.push(a);
+    i
+}
+
+impl Instr {
+    fn is_term(ref self) -> bool {
+        self.op == Op.Br or self.op == Op.Jmp or self.op == Op.Ret
+    }
+
+    // No effect but its value: a division by a variable or by zero may
+    // trap, so it is not.
+    fn pure(ref self) -> bool {
+        if self.op == Op.Bin and (self.binop == "/" or self.binop == "%") {
+            let d = self.args[1].clone();
+            return d.kind == OpK.Const and d.val != 0;
+        }
+        self.op == Op.Bin or self.op == Op.Mov or self.op == Op.Phi
+    }
+
+    fn valued(ref self) -> bool {
+        self.op == Op.Bin or self.op == Op.Mov or self.op == Op.Phi
+    }
+
+    fn show(ref self) -> String {
+        let a: Vec[String] = self.args.iter().map(|x| x.show()).collect();
+        match self.op {
+            Op.Bin => f"{self.dst} = {a[0]} {self.binop} {a[1]}",
+            Op.Mov => f"{self.dst} = {a[0]}",
+            Op.Call => {
+                let j = a.join(", ");
+                let s = f"call {self.func}({j})";
+                if self.dst.len() > 0 {
+                    f"{self.dst} = {s}"
+                } else {
+                    s
+                }
+            }
+            Op.Print => f"print {a[0]}",
+            Op.Br => f"br {a[0]}, {self.labels[0]}, {self.labels[1]}",
+            Op.Jmp => f"jmp {self.labels[0]}",
+            Op.Ret => {
+                if a.len() > 0 {
+                    f"ret {a[0]}"
+                } else {
+                    "ret".to_string()
+                }
+            }
+            Op.Phi => {
+                let mut ps: Vec[String] = Vec.new();
+                let mut k = 0;
+                while k < a.len() and k < self.preds.len() {
+                    ps.push(f"[{a[k]}, {self.preds[k]}]");
+                    k += 1;
+                }
+                let j = ps.join(", ");
+                f"{self.dst} = phi {j}"
+            }
+        }
+    }
+}
+
+#[derive(Clone)]
+struct Block {
+    name: String,
+    line: i64,
+    instrs: Vec[Instr],
+}
+
+impl Block {
+    fn term(ref self) -> Instr {
+        self.instrs[self.instrs.len() - 1].clone()
+    }
+
+    fn succs(ref self) -> Vec[String] {
+        let mut out: Vec[String] = Vec.new();
+        let t = self.term();
+        for l in t.labels.iter() {
+            if not out.contains(l.clone()) {
+                out.push(l.clone());
+            }
+        }
+        out
+    }
+
+    fn has_phi(ref self) -> bool {
+        for i in self.instrs.iter() {
+            if i.op == Op.Phi {
+                return true;
+            }
+        }
+        false
+    }
+}
+
+#[derive(Clone)]
+struct Func {
+    name: String,
+    params: Vec[String],
+    line: i64,
+    blocks: Vec[Block],
+}
+
+impl Func {
+    fn find(ref self, name: Str) -> i64 {
+        for k in 0..self.blocks.len() {
+            if self.blocks[k].name == name {
+                return k;
+            }
+        }
+        -1
+    }
+
+    fn show(ref self) -> Vec[String] {
+        let ps = self.params.join(", ");
+        let mut out: Vec[String] = Vec.new();
+        out.push(f"func {self.name}({ps}) " + "{");
+        for b in self.blocks.iter() {
+            out.push(f"{b.name}:");
+            for i in b.instrs.iter() {
+                out.push("  " + i.show());
+            }
+        }
+        out.push("}".to_string());
+        out
+    }
+}
+
+// ------------------------------------------------------------ parser
+
+struct IrErr {
+    line: i64,
+    msg: String,
+}
+
+fn irerr(line: i64, msg: own String) -> IrErr {
+    IrErr { line: line, msg: msg }
+}
+
+fn is_alpha(c: u8) -> bool {
+    (c >= b'a' and c <= b'z') or (c >= b'A' and c <= b'Z')
+}
+
+fn is_digit(c: u8) -> bool {
+    c >= b'0' and c <= b'9'
+}
+
+fn is_name(s: Str) -> bool {
+    let b = s.bytes().to_vec();
+    if b.len() == 0 or not (is_alpha(b[0]) or b[0] == b'_') {
+        return false;
+    }
+    for c in b {
+        if not (is_alpha(c) or is_digit(c) or c == b'_') {
+            return false;
+        }
+    }
+    true
+}
+
+fn is_int(s: Str) -> bool {
+    let t = s.strip_prefix("-") ?? s;
+    if t.len() == 0 {
+        return false;
+    }
+    for c in t.bytes() {
+        if not is_digit(c) {
+            return false;
+        }
+    }
+    true
+}
+
+fn operand(tok: Str, line: i64) -> Result[Opd, IrErr] {
+    if is_int(tok) {
+        return Ok(mkconst(wrap(i64.parse(tok).unwrap_or(0))));
+    }
+    if is_name(tok) {
+        return Ok(mkvar(tok));
+    }
+    Err(irerr(line, f"bad operand '{tok}'"))
+}
+
+fn split_args(text: Str, line: i64) -> Result[Vec[Opd], IrErr] {
+    let t = text.trim();
+    let mut out: Vec[Opd] = Vec.new();
+    if t.len() == 0 {
+        return Ok(out);
+    }
+    for p in t.split(",") {
+        out.push(operand(p.trim(), line)?);
+    }
+    Ok(out)
+}
+
+fn words_of(s: Str) -> Vec[String] {
+    s.split_whitespace().map(|w| w.to_string()).collect()
+}
+
+fn parse_instr(text: Str, line: i64) -> Result[Instr, IrErr] {
+    let words = words_of(text);
+    let head = words[0].clone();
+    if head == "print" {
+        if words.len() != 2 {
+            return Err(irerr(line, "print takes one operand".to_string()));
+        }
+        let mut i = instr(Op.Print, line);
+        i.args.push(operand(words[1], line)?);
+        return Ok(i);
+    }
+    if head == "jmp" {
+        if words.len() != 2 or not is_name(words[1]) {
+            return Err(irerr(line, "jmp takes one label".to_string()));
+        }
+        return Ok(jmp_to(words[1], line));
+    }
+    if head == "ret" {
+        let mut i = instr(Op.Ret, line);
+        if words.len() == 1 {
+            return Ok(i);
+        }
+        if words.len() != 2 {
+            return Err(irerr(line, "ret takes at most one operand".to_string()));
+        }
+        i.args.push(operand(words[1], line)?);
+        return Ok(i);
+    }
+    if head == "br" {
+        let rest = text.substring(2);
+        let parts: Vec[String] = rest.split(",").map(|p| p.trim().to_string()).collect();
+        if parts.len() != 3 or not is_name(parts[1]) or not is_name(parts[2]) {
+            return Err(irerr(line, "br takes a condition and two labels".to_string()));
+        }
+        let mut i = instr(Op.Br, line);
+        i.args.push(operand(parts[0], line)?);
+        i.labels.push(parts[1].clone());
+        i.labels.push(parts[2].clone());
+        return Ok(i);
+    }
+    if head == "call" {
+        return parse_call("", text, line);
+    }
+    if words.len() >= 3 and words[1] == "=" {
+        let dst = words[0].clone();
+        if not is_name(dst) {
+            return Err(irerr(line, f"bad destination '{dst}'"));
+        }
+        let eq = text.find("=") ?? 0;
+        let rhs = text.substring(eq + 1).trim().to_string();
+        if rhs.starts_with("call ") {
+            return parse_call(dst, rhs, line);
+        }
+        let r = words_of(rhs);
+        if r.len() == 1 {
+            return Ok(mov(dst, operand(r[0], line)?, line));
+        }
+        if r.len() == 3 and is_binop(r[1]) {
+            let mut i = instr(Op.Bin, line);
+            i.dst = dst;
+            i.binop = r[1].clone();
+            i.args.push(operand(r[0], line)?);
+            i.args.push(operand(r[2], line)?);
+            return Ok(i);
+        }
+        return Err(irerr(line, f"cannot read '{rhs}'"));
+    }
+    Err(irerr(line, f"unknown instruction '{head}'"))
+}
+
+fn parse_call(dst: Str, text: Str, line: i64) -> Result[Instr, IrErr] {
+    let rest = text.substring(4).trim().to_string();
+    let open = match rest.find("(") {
+        Some(k) => k,
+        None => -1,
+    };
+    if open < 0 or not rest.ends_with(")") {
+        return Err(irerr(line, "a call is written call f(args)".to_string()));
+    }
+    let name = rest.substring(0, open).trim().to_string();
+    if not is_name(name) {
+        return Err(irerr(line, f"bad function name '{name}'"));
+    }
+    let inner = rest.substring(open + 1, rest.len() - 1);
+    let mut i = instr(Op.Call, line);
+    i.dst = dst.to_string();
+    i.args = split_args(inner, line)?;
+    i.func = name;
+    Ok(i)
+}
+
+fn bad_head(n: i64) -> IrErr {
+    irerr(n, "expected 'func name(params) {'".to_string())
+}
+
+fn parse(src: Str) -> Result[Vec[Func], IrErr] {
+    let mut funcs: Vec[Func] = Vec.new();
+    let mut cur = Func { name: String.new(), params: Vec.new(), line: 0, blocks: Vec.new() };
+    let mut in_func = false;
+    let lines: Vec[String] = src.split("\n").map(|l| l.to_string()).collect();
+    for k in 0..lines.len() {
+        let n = k + 1;
+        let raw = lines[k].clone();
+        let code = match raw.find("#") {
+            Some(h) => raw.substring(0, h),
+            None => raw.clone(),
+        };
+        let text = code.trim().to_string();
+        if text.len() == 0 {
+            continue;
+        }
+        if not in_func {
+            if not (text.starts_with("func ") and text.ends_with("{")) {
+                return Err(bad_head(n));
+            }
+            let head = text.substring(5, text.len() - 1).trim().to_string();
+            let open = match head.find("(") {
+                Some(p) => p,
+                None => -1,
+            };
+            if open < 0 or not head.ends_with(")") {
+                return Err(bad_head(n));
+            }
+            let name = head.substring(0, open).trim().to_string();
+            let mut ps: Vec[String] = Vec.new();
+            for p in head.substring(open + 1, head.len() - 1).split(",") {
+                let q = p.trim();
+                if q.len() > 0 {
+                    ps.push(q.to_string());
+                }
+            }
+            for p in ps.iter() {
+                if not is_name(p) {
+                    return Err(irerr(n, f"bad parameter '{p}'"));
+                }
+            }
+            for f in funcs.iter() {
+                if f.name == name {
+                    return Err(irerr(n, f"function {name} is defined twice"));
+                }
+            }
+            cur = Func { name: name, params: ps, line: n, blocks: Vec.new() };
+            in_func = true;
+            continue;
+        }
+        if text == "}" {
+            if cur.blocks.len() == 0 {
+                let nm = cur.name.clone();
+                return Err(irerr(n, f"function {nm} has no blocks"));
+            }
+            funcs.push(cur.clone());
+            in_func = false;
+            continue;
+        }
+        if text.ends_with(":") {
+            let label = text.substring(0, text.len() - 1).trim().to_string();
+            if not is_name(label) {
+                return Err(irerr(n, f"bad label '{label}'"));
+            }
+            if cur.find(label) >= 0 {
+                return Err(irerr(n, f"label {label} is defined twice"));
+            }
+            cur.blocks.push(Block { name: label, line: n, instrs: Vec.new() });
+            continue;
+        }
+        if cur.blocks.len() == 0 {
+            return Err(irerr(n, "an instruction before the first label".to_string()));
+        }
+        let bk = cur.blocks.len() - 1;
+        let ni = cur.blocks[bk].instrs.len();
+        if ni > 0 and cur.blocks[bk].instrs[ni - 1].is_term() {
+            let bn = cur.blocks[bk].name.clone();
+            return Err(irerr(n, f"an instruction after the terminator of block {bn}"));
+        }
+        let ins = parse_instr(text, n)?;
+        cur.blocks[bk].instrs.push(ins);
+    }
+    if in_func {
+        let nm = cur.name.clone();
+        return Err(irerr(lines.len(), f"function {nm} is not closed"));
+    }
+    for f in funcs.iter() {
+        for b in f.blocks.iter() {
+            if b.instrs.len() == 0 or not b.instrs[b.instrs.len() - 1].is_term() {
+                let bn = b.name.clone();
+                return Err(irerr(b.line, f"block {bn} has no terminator"));
+            }
+            let t = b.term();
+            for l in t.labels.iter() {
+                if f.find(l) < 0 {
+                    return Err(irerr(t.line, f"unknown label {l}"));
+                }
+                if l.clone() == f.blocks[0].name {
+                    return Err(irerr(t.line, f"the entry block {l} cannot be a jump target"));
+                }
+            }
+            for i in b.instrs.iter() {
+                if i.op == Op.Call {
+                    let mut arity = -1;
+                    for h in funcs.iter() {
+                        if h.name == i.func {
+                            arity = h.params.len();
+                        }
+                    }
+                    let fname = i.func.clone();
+                    if arity < 0 {
+                        return Err(irerr(i.line, f"unknown function {fname}"));
+                    }
+                    if arity != i.args.len() {
+                        let given = i.args.len();
+                        return Err(irerr(i.line, f"{fname} takes {arity} argument(s), given {given}"));
+                    }
+                }
+            }
+        }
+    }
+    Ok(funcs)
+}
+
+// ------------------------------------------------------------ CFG
+
+// Reachable blocks, their edges, the RPO and the dominator tree. Blocks
+// are numbered by their place in the function's layout.
+struct Cfg {
+    names: Vec[String],
+    bix: Map[String, i64],
+    reach: Vec[bool],
+    lay: Vec[i64],
+    succ: Vec[Vec[i64]],
+    pred: Vec[Vec[i64]],
+    rpo: Vec[i64],
+    index: Vec[i64],
+    idom: Vec[i64],
+    children: Vec[Vec[i64]],
+    df: Vec[Vec[i64]],
+}
+
+fn build_cfg(f: ref Func) -> Cfg {
+    let nb = f.blocks.len();
+    let mut c = Cfg {
+        names: Vec.new(),
+        bix: Map.new(),
+        reach: Vec.filled(nb, false),
+        lay: Vec.new(),
+        succ: Vec.filled(nb, Vec.new()),
+        pred: Vec.filled(nb, Vec.new()),
+        rpo: Vec.new(),
+        index: Vec.filled(nb, -1),
+        idom: Vec.filled(nb, -1),
+        children: Vec.filled(nb, Vec.new()),
+        df: Vec.filled(nb, Vec.new()),
+    };
+    for k in 0..nb {
+        c.names.push(f.blocks[k].name.clone());
+        c.bix.insert(f.blocks[k].name.clone(), k);
+    }
+    let mut all_succ: Vec[Vec[i64]] = Vec.new();
+    for k in 0..nb {
+        let mut s: Vec[i64] = Vec.new();
+        for l in f.blocks[k].succs().iter() {
+            s.push(c.bix.get(l.clone()) ?? 0);
+        }
+        all_succ.push(s);
+    }
+    // reachable
+    let mut stack: Vec[i64] = vec![0];
+    while stack.len() > 0 {
+        let n = stack.pop() ?? 0;
+        if c.reach[n] {
+            continue;
+        }
+        c.reach[n] = true;
+        for s in all_succ[n].iter() {
+            stack.push(s);
+        }
+    }
+    for k in 0..nb {
+        if c.reach[k] {
+            c.lay.push(k);
+            c.succ[k] = all_succ[k].clone();
+        }
+    }
+    for n in c.lay.clone() {
+        for s in c.succ[n].clone() {
+            c.pred[s].push(n);
+        }
+    }
+    // reverse post-order
+    let mut seen: Vec[bool] = Vec.filled(nb, false);
+    let mut post: Vec[i64] = Vec.new();
+    dfs_post(c.succ, 0, mut seen, mut post);
+    let mut r = post.len() - 1;
+    while r >= 0 {
+        c.rpo.push(post[r]);
+        r -= 1;
+    }
+    for k in 0..c.rpo.len() {
+        c.index[c.rpo[k]] = k;
+    }
+    c.dominators();
+    for k in 1..c.rpo.len() {
+        let n = c.rpo[k];
+        let d = c.idom[n];
+        c.children[d].push(n);
+    }
+    c.frontiers();
+    c
+}
+
+fn dfs_post(succ: ref Vec[Vec[i64]], n: i64, seen: mut ref Vec[bool], post: mut ref Vec[i64]) {
+    seen[n] = true;
+    for s in succ[n].iter() {
+        if not seen[s] {
+            dfs_post(succ, s, mut seen, mut post);
+        }
+    }
+    post.push(n);
+}
+
+impl Cfg {
+    fn dominators(mut ref self) {
+        let entry = self.rpo[0];
+        self.idom[entry] = entry;
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for k in 1..self.rpo.len() {
+                let b = self.rpo[k];
+                let mut new = -1;
+                for p in self.pred[b].clone() {
+                    if self.idom[p] >= 0 {
+                        new = if new < 0 { p } else { self.intersect(p, new) };
+                    }
+                }
+                if self.idom[b] != new {
+                    self.idom[b] = new;
+                    changed = true;
+                }
+            }
+        }
+    }
+
+    fn intersect(ref self, a0: i64, b0: i64) -> i64 {
+        let mut a = a0;
+        let mut b = b0;
+        while a != b {
+            while self.index[a] > self.index[b] {
+                a = self.idom[a];
+            }
+            while self.index[b] > self.index[a] {
+                b = self.idom[b];
+            }
+        }
+        a
+    }
+
+    fn dominates(ref self, a: i64, b0: i64) -> bool {
+        let mut b = b0;
+        loop {
+            if a == b {
+                return true;
+            }
+            if b == self.rpo[0] {
+                return false;
+            }
+            b = self.idom[b];
+        }
+    }
+
+    fn frontiers(mut ref self) {
+        for b in self.rpo.clone() {
+            if self.pred[b].len() >= 2 {
+                for p in self.pred[b].clone() {
+                    let mut r = p;
+                    while r != self.idom[b] {
+                        if not self.df[r].contains(b) {
+                            self.df[r].push(b);
+                        }
+                        r = self.idom[r];
+                    }
+                }
+            }
+        }
+        for n in self.rpo.clone() {
+            let mut d = self.df[n].clone();
+            self.sort_rpo(mut d);
+            self.df[n] = d;
+        }
+    }
+
+    fn sort_rpo(ref self, v: mut ref Vec[i64]) {
+        let mut keys: Vec[(i64, i64)] = Vec.new();
+        for x in v.iter() {
+            keys.push((self.index[x], x));
+        }
+        keys.sort();
+        v.clear();
+        for (_, x) in keys {
+            v.push(x);
+        }
+    }
+
+    fn name_list(ref self, v: ref Vec[i64]) -> String {
+        let mut out: Vec[String] = Vec.new();
+        for x in v.iter() {
+            out.push(self.names[x].clone());
+        }
+        if out.len() == 0 {
+            "-".to_string()
+        } else {
+            out.join(", ")
+        }
+    }
+
+    fn pred_names(ref self, n: i64) -> Vec[String] {
+        let mut out: Vec[String] = Vec.new();
+        for p in self.pred[n].iter() {
+            out.push(self.names[p].clone());
+        }
+        out
+    }
+
+    // (header, back-edge tails, body) for each natural loop, in RPO.
+    fn loops(ref self) -> Vec[(i64, Vec[i64], Vec[i64])] {
+        let mut out: Vec[(i64, Vec[i64], Vec[i64])] = Vec.new();
+        for h in self.rpo.iter() {
+            let mut tails: Vec[i64] = Vec.new();
+            for t in self.pred[h].iter() {
+                if self.dominates(h, t) {
+                    tails.push(t);
+                }
+            }
+            if tails.len() == 0 {
+                continue;
+            }
+            let mut body: Vec[i64] = vec![h];
+            let mut stack = tails.clone();
+            while stack.len() > 0 {
+                let n = stack.pop() ?? 0;
+                if body.contains(n) {
+                    continue;
+                }
+                body.push(n);
+                for p in self.pred[n].iter() {
+                    stack.push(p);
+                }
+            }
+            self.sort_rpo(mut tails);
+            self.sort_rpo(mut body);
+            out.push((h, tails, body));
+        }
+        out
+    }
+}
+
+// Sorted, duplicate-free name sets.
+fn set_of(v: ref Vec[String]) -> Vec[String] {
+    let mut s = v.clone();
+    s.sort();
+    s.dedup();
+    s
+}
+
+fn set_union(a: ref Vec[String], b: ref Vec[String]) -> Vec[String] {
+    let mut s = a.clone();
+    for x in b.iter() {
+        s.push(x.clone());
+    }
+    set_of(s)
+}
+
+fn set_minus(a: ref Vec[String], b: ref Vec[String]) -> Vec[String] {
+    let mut s: Vec[String] = Vec.new();
+    for x in a.iter() {
+        if not b.contains(x.clone()) {
+            s.push(x.clone());
+        }
+    }
+    s
+}
+
+
+// ------------------------------------------------------------ the IR interpreter
+
+fn position(v: ref Vec[String], x: Str) -> i64 {
+    for k in 0..v.len() {
+        if v[k] == x {
+            return k;
+        }
+    }
+    -1
+}
+
+struct Prog {
+    funcs: Vec[Func],
+    fmap: Map[String, i64],
+    bmaps: Vec[Map[String, i64]],
+}
+
+fn prog(funcs: ref Vec[Func]) -> Prog {
+    let mut fmap: Map[String, i64] = Map.new();
+    let mut bmaps: Vec[Map[String, i64]] = Vec.new();
+    for k in 0..funcs.len() {
+        let _ = fmap.insert(funcs[k].name.clone(), k);
+        let mut m: Map[String, i64] = Map.new();
+        for j in 0..funcs[k].blocks.len() {
+            let _ = m.insert(funcs[k].blocks[j].name.clone(), j);
+        }
+        bmaps.push(m);
+    }
+    Prog { funcs: funcs.clone(), fmap: fmap, bmaps: bmaps }
+}
+
+struct IrMachine {
+    steps: i64,
+    out: Vec[String],
+}
+
+fn ir_read(env: ref Map[String, i64], a: ref Opd) -> i64 {
+    if a.kind == OpK.Const {
+        return a.val;
+    }
+    env.get(a.name.clone()) ?? 0
+}
+
+fn ir_call(m: mut ref IrMachine, p: ref Prog, name: Str, args: ref Vec[i64], depth: i64) -> Result[i64, String] {
+    if depth > DEPTH_LIMIT {
+        return Err("call depth limit".to_string());
+    }
+    let fi = p.fmap.get(name.to_string()) ?? 0;
+    let f = ref p.funcs[fi];
+    let mut env: Map[String, i64] = Map.new();
+    for k in 0..f.params.len() {
+        if k < args.len() {
+            let _ = env.insert(f.params[k].clone(), args[k]);
+        }
+    }
+    let mut cur: i64 = 0;
+    loop {
+        let b = ref f.blocks[cur];
+        let mut next = String.new();
+        for i in b.instrs.iter() {
+            m.steps += 1;
+            if m.steps > STEP_LIMIT {
+                return Err("step limit".to_string());
+            }
+            match i.op {
+                Op.Bin => {
+                    match fold(i.binop, ir_read(env, i.args[0]), ir_read(env, i.args[1])) {
+                        Some(r) => {
+                            let _ = env.insert(i.dst.clone(), r);
+                        }
+                        None => return Err(f"division by zero in {name}"),
+                    }
+                }
+                Op.Mov => {
+                    let v = ir_read(env, i.args[0]);
+                    let _ = env.insert(i.dst.clone(), v);
+                }
+                Op.Call => {
+                    let av: Vec[i64] = i.args.iter().map(|a| ir_read(env, a)).collect();
+                    let r = ir_call(mut m, p, i.func, av, depth + 1)?;
+                    if i.dst.len() > 0 {
+                        let _ = env.insert(i.dst.clone(), r);
+                    }
+                }
+                Op.Print => {
+                    let v = ir_read(env, i.args[0]);
+                    m.out.push(f"{v}");
+                }
+                Op.Ret => {
+                    if i.args.len() > 0 {
+                        return Ok(ir_read(env, i.args[0]));
+                    }
+                    return Ok(0);
+                }
+                Op.Jmp => {
+                    next = i.labels[0].clone();
+                    break;
+                }
+                Op.Br => {
+                    next = if ir_read(env, i.args[0]) != 0 { i.labels[0].clone() } else { i.labels[1].clone() };
+                    break;
+                }
+                Op.Phi => {}
+            }
+        }
+        cur = p.bmaps[fi].get(next) ?? 0;
+    }
+}
+
+// ------------------------------------------------------------ the machine
+
+// Registers: r1..rK are allocated; t0 and t1 are scratch for spilled
+// values; a0..a3 carry arguments and the result. Every register is
+// caller-saved. A virtual register is a %name.
+
+const MAX_ARGS: i64 = 4;
+
+fn rri(op: Str) -> String {
+    let s = match op {
+        "+" => "addi",
+        "-" => "subi",
+        "&" => "andi",
+        "|" => "ori",
+        "^" => "xori",
+        "<<" => "slli",
+        ">>" => "srai",
+        _ => "",
+    };
+    s.to_string()
+}
+
+fn rrr(op: Str) -> String {
+    let s = match op {
+        "+" => "add",
+        "-" => "sub",
+        "*" => "mul",
+        "/" => "div",
+        "%" => "rem",
+        "&" => "and",
+        "|" => "or",
+        "^" => "xor",
+        "<<" => "sll",
+        ">>" => "sra",
+        "==" => "seq",
+        "!=" => "sne",
+        "<" => "slt",
+        "<=" => "sle",
+        ">" => "sgt",
+        _ => "sge",
+    };
+    s.to_string()
+}
+
+fn is_rri(mn: Str) -> bool {
+    match mn {
+        "addi" | "subi" | "andi" | "ori" | "xori" | "slli" | "srai" => true,
+        _ => false,
+    }
+}
+
+// The IR operator a machine mnemonic computes, or "" for one that is not
+// arithmetic.
+fn binop_of(mn: Str) -> String {
+    let s = match mn {
+        "add" | "addi" => "+",
+        "sub" | "subi" => "-",
+        "mul" => "*",
+        "div" => "/",
+        "rem" => "%",
+        "and" | "andi" => "&",
+        "or" | "ori" => "|",
+        "xor" | "xori" => "^",
+        "sll" | "slli" => "<<",
+        "sra" | "srai" => ">>",
+        "seq" => "==",
+        "sne" => "!=",
+        "slt" => "<",
+        "sle" => "<=",
+        "sgt" => ">",
+        "sge" => ">=",
+        _ => "",
+    };
+    s.to_string()
+}
+
+fn commutes(op: Str) -> bool {
+    match op {
+        "+" | "*" | "&" | "|" | "^" | "==" | "!=" => true,
+        _ => false,
+    }
+}
+
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum RegK {
+    Virt,
+    Alloc,
+    Scratch,
+    Arg,
+}
+
+// A register operand: a virtual register, or a physical one by name.
+#[derive(Clone)]
+struct Reg {
+    kind: RegK,
+    name: String,
+}
+
+impl Reg {
+    fn show(ref self) -> String {
+        if self.kind == RegK.Virt {
+            "%" + self.name
+        } else {
+            self.name.clone()
+        }
+    }
+
+    fn same(ref self, o: ref Reg) -> bool {
+        self.kind == o.kind and self.name == o.name
+    }
+}
+
+fn vr(n: Str) -> Reg {
+    Reg { kind: RegK.Virt, name: n.to_string() }
+}
+
+fn ar(k: i64) -> Reg {
+    Reg { kind: RegK.Arg, name: f"a{k}" }
+}
+
+fn rr(k: i64) -> Reg {
+    Reg { kind: RegK.Alloc, name: f"r{k}" }
+}
+
+fn tr(k: i64) -> Reg {
+    Reg { kind: RegK.Scratch, name: f"t{k}" }
+}
+
+// op is a mnemonic. dst and srcs are registers; imm is an immediate or a
+// stack slot; label a branch target; func and nargs describe a call.
+#[derive(Clone)]
+struct MInst {
+    op: String,
+    has_dst: bool,
+    dst: Reg,
+    srcs: Vec[Reg],
+    imm: i64,
+    label: String,
+    func: String,
+    nargs: i64,
+}
+
+fn mi(op: Str) -> MInst {
+    MInst {
+        op: op.to_string(),
+        has_dst: false,
+        dst: vr(""),
+        srcs: Vec.new(),
+        imm: 0,
+        label: String.new(),
+        func: String.new(),
+        nargs: 0,
+    }
+}
+
+fn mi_d(op: Str, dst: own Reg) -> MInst {
+    let mut m = mi(op);
+    m.has_dst = true;
+    m.dst = dst;
+    m
+}
+
+fn mi_li(dst: own Reg, v: i64) -> MInst {
+    let mut m = mi_d("li", dst);
+    m.imm = v;
+    m
+}
+
+fn mi_mv(dst: own Reg, src: own Reg) -> MInst {
+    let mut m = mi_d("mv", dst);
+    m.srcs.push(src);
+    m
+}
+
+fn mi_label(op: Str, label: Str) -> MInst {
+    let mut m = mi(op);
+    m.label = label.to_string();
+    m
+}
+
+impl MInst {
+    fn show(ref self) -> String {
+        let s: Vec[String] = self.srcs.iter().map(|x| x.show()).collect();
+        let d = self.dst.show();
+        let op = self.op.clone();
+        if op == "li" {
+            return f"li {d}, {self.imm}";
+        }
+        if op == "mv" {
+            return f"mv {d}, {s[0]}";
+        }
+        if is_rri(op) {
+            return f"{op} {d}, {s[0]}, {self.imm}";
+        }
+        if binop_of(op).len() > 0 {
+            return f"{op} {d}, {s[0]}, {s[1]}";
+        }
+        if op == "print" {
+            return f"print {s[0]}";
+        }
+        if op == "bnez" or op == "beqz" {
+            return f"{op} {s[0]}, {self.label}";
+        }
+        if op == "j" {
+            return f"j {self.label}";
+        }
+        if op == "call" {
+            return f"call {self.func}";
+        }
+        if op == "ld" {
+            return f"ld {d}, [sp+{self.imm}]";
+        }
+        if op == "st" {
+            return f"st {s[0]}, [sp+{self.imm}]";
+        }
+        op
+    }
+
+    fn vdefs(ref self) -> Vec[String] {
+        let mut out: Vec[String] = Vec.new();
+        if self.has_dst and self.dst.kind == RegK.Virt {
+            out.push(self.dst.name.clone());
+        }
+        out
+    }
+
+    fn vuses(ref self) -> Vec[String] {
+        let mut out: Vec[String] = Vec.new();
+        for x in self.srcs.iter() {
+            if x.kind == RegK.Virt and not out.contains(x.name.clone()) {
+                out.push(x.name.clone());
+            }
+        }
+        out
+    }
+
+    fn vall(ref self) -> Vec[String] {
+        let mut out = self.vdefs();
+        out.extend(self.vuses());
+        out
+    }
+}
+
+#[derive(Clone)]
+struct MBlock {
+    name: String,
+    succs: Vec[String],
+    code: Vec[MInst],
+}
+
+#[derive(Clone)]
+struct MFunc {
+    name: String,
+    nparams: i64,
+    blocks: Vec[MBlock],
+    frame: i64,
+    depth: Map[String, i64],
+}
+
+impl MFunc {
+    fn show(ref self) -> Vec[String] {
+        let mut out: Vec[String] = Vec.new();
+        out.push(f"{self.name}:  # frame {self.frame}");
+        for b in self.blocks.iter() {
+            out.push(f".{b.name}:");
+            for m in b.code.iter() {
+                out.push("  " + m.show());
+            }
+        }
+        out
+    }
+
+    fn find(ref self, name: Str) -> i64 {
+        for k in 0..self.blocks.len() {
+            if self.blocks[k].name == name {
+                return k;
+            }
+        }
+        -1
+    }
+}
+
+// ------------------------------------------------------------ instruction selection
+
+struct Selector {
+    k: i64,
+}
+
+impl Selector {
+    fn constant(mut ref self, code: mut ref Vec[MInst], v: i64) -> Reg {
+        let r = vr(f"c.{self.k}");
+        self.k += 1;
+        code.push(mi_li(r.clone(), v));
+        r
+    }
+
+    fn reg(mut ref self, code: mut ref Vec[MInst], a: ref Opd) -> Reg {
+        if a.kind == OpK.Const {
+            return self.constant(mut code, a.val);
+        }
+        vr(a.name)
+    }
+}
+
+fn arg_into(code: mut ref Vec[MInst], k: i64, a: ref Opd) {
+    if a.kind == OpK.Const {
+        code.push(mi_li(ar(k), a.val));
+    } else {
+        code.push(mi_mv(ar(k), vr(a.name)));
+    }
+}
+
+// Machine code over virtual registers. Unreachable blocks are dropped, as
+// a back end does.
+fn select(f: ref Func) -> Result[MFunc, IrErr] {
+    let cfg = build_cfg(f);
+    let mut blocks: Vec[Block] = Vec.new();
+    let mut bsucc: Vec[Vec[String]] = Vec.new();
+    for k in 0..f.blocks.len() {
+        if cfg.reach[k] {
+            blocks.push(f.blocks[k].clone());
+            let ss: Vec[String] = cfg.succ[k].iter().map(|s| cfg.names[s].clone()).collect();
+            bsucc.push(ss);
+        }
+    }
+    let np = f.params.len();
+    if np > MAX_ARGS {
+        let fname = f.name.clone();
+        return Err(irerr(f.line, f"{fname} has {np} parameters; the calling convention passes at most {MAX_ARGS}"));
+    }
+    let mut m = MFunc { name: f.name.clone(), nparams: np, blocks: Vec.new(), frame: 0, depth: Map.new() };
+    let mut sel = Selector { k: 0 };
+    for n in 0..blocks.len() {
+        let b = ref blocks[n];
+        let mut code: Vec[MInst] = Vec.new();
+        if n == 0 {
+            for k in 0..f.params.len() {
+                code.push(mi_mv(vr(f.params[k]), ar(k)));
+            }
+        }
+        let nxt = if n + 1 < blocks.len() { blocks[n + 1].name.clone() } else { String.new() };
+        for i in b.instrs.iter() {
+            if i.op == Op.Bin {
+                let mut x = i.args[0].clone();
+                let mut y = i.args[1].clone();
+                let op = i.binop.clone();
+                if x.kind == OpK.Const and y.kind != OpK.Const and commutes(op) {
+                    x, y = y, x;
+                }
+                if y.kind == OpK.Const and rri(op).len() > 0 {
+                    let mut ins = mi_d(rri(op), vr(i.dst));
+                    ins.srcs.push(sel.reg(mut code, x));
+                    ins.imm = y.val;
+                    code.push(ins);
+                } else {
+                    let rx = sel.reg(mut code, x);
+                    let ry = sel.reg(mut code, y);
+                    let mut ins = mi_d(rrr(op), vr(i.dst));
+                    ins.srcs.push(rx);
+                    ins.srcs.push(ry);
+                    code.push(ins);
+                }
+            } else if i.op == Op.Mov {
+                let a = ref i.args[0];
+                if a.kind == OpK.Const {
+                    code.push(mi_li(vr(i.dst), a.val));
+                } else {
+                    code.push(mi_mv(vr(i.dst), vr(a.name)));
+                }
+            } else if i.op == Op.Call {
+                let na = i.args.len();
+                if na > MAX_ARGS {
+                    let fname = i.func.clone();
+                    return Err(irerr(i.line, f"call {fname} passes {na} arguments; the calling convention passes at most {MAX_ARGS}"));
+                }
+                for k in 0..na {
+                    arg_into(mut code, k, i.args[k]);
+                }
+                let mut c = mi("call");
+                c.func = i.func.clone();
+                c.nargs = na;
+                code.push(c);
+                if i.dst.len() > 0 {
+                    code.push(mi_mv(vr(i.dst), ar(0)));
+                }
+            } else if i.op == Op.Print {
+                let mut p = mi("print");
+                p.srcs.push(sel.reg(mut code, i.args[0]));
+                code.push(p);
+            } else if i.op == Op.Ret {
+                if i.args.len() > 0 {
+                    arg_into(mut code, 0, i.args[0]);
+                } else {
+                    // a bare ret returns 0, as the IR defines it
+                    code.push(mi_li(ar(0), 0));
+                }
+                code.push(mi("ret"));
+            } else if i.op == Op.Jmp {
+                if i.labels[0] != nxt {
+                    code.push(mi_label("j", i.labels[0]));
+                }
+            } else if i.op == Op.Br {
+                let c = sel.reg(mut code, i.args[0]);
+                let t = i.labels[0].clone();
+                let e = i.labels[1].clone();
+                if t == e {
+                    if t != nxt {
+                        code.push(mi_label("j", t));
+                    }
+                } else if t == nxt {
+                    let mut ins = mi_label("beqz", e);
+                    ins.srcs.push(c);
+                    code.push(ins);
+                } else {
+                    let mut ins = mi_label("bnez", t);
+                    ins.srcs.push(c);
+                    code.push(ins);
+                    if e != nxt {
+                        code.push(mi_label("j", e));
+                    }
+                }
+            }
+        }
+        m.blocks.push(MBlock { name: b.name.clone(), succs: bsucc[n].clone(), code: code });
+    }
+    // a name read before any assignment reaches it reads 0, as in the IR
+    let (li, _) = mliveness(m);
+    let mut zero: Vec[MInst] = Vec.new();
+    for v in li[0].iter() {
+        zero.push(mi_li(vr(v), 0));
+    }
+    zero.extend(m.blocks[0].code.clone());
+    m.blocks[0].code = zero;
+    let loops = cfg.loops();
+    for b in m.blocks.iter() {
+        let bk = cfg.bix.get(b.name.clone()) ?? 0;
+        let mut d = 0;
+        for (_, _, body) in loops.iter() {
+            if body.contains(bk) {
+                d += 1;
+            }
+        }
+        let _ = m.depth.insert(b.name.clone(), d);
+    }
+    Ok(m)
+}
+
+// ------------------------------------------------------------ liveness
+
+fn block_index(m: ref MFunc) -> Map[String, i64] {
+    let mut ix: Map[String, i64] = Map.new();
+    for k in 0..m.blocks.len() {
+        let _ = ix.insert(m.blocks[k].name.clone(), k);
+    }
+    ix
+}
+
+// Live-in and live-out of each block, by layout position, as sorted sets.
+fn mliveness(m: ref MFunc) -> (Vec[Vec[String]], Vec[Vec[String]]) {
+    let nb = m.blocks.len();
+    let ix = block_index(m);
+    let mut uses: Vec[Vec[String]] = Vec.new();
+    let mut defs: Vec[Vec[String]] = Vec.new();
+    for b in m.blocks.iter() {
+        let mut u: Vec[String] = Vec.new();
+        let mut d: Vec[String] = Vec.new();
+        for i in b.code.iter() {
+            for x in i.vuses().iter() {
+                if not d.contains(x.clone()) and not u.contains(x.clone()) {
+                    u.push(x.clone());
+                }
+            }
+            for x in i.vdefs().iter() {
+                if not d.contains(x.clone()) {
+                    d.push(x.clone());
+                }
+            }
+        }
+        uses.push(set_of(u));
+        defs.push(set_of(d));
+    }
+    let mut live_in: Vec[Vec[String]] = Vec.filled(nb, Vec.new());
+    let mut live_out: Vec[Vec[String]] = Vec.filled(nb, Vec.new());
+    let mut changed = true;
+    while changed {
+        changed = false;
+        let mut n = nb - 1;
+        while n >= 0 {
+            let mut out: Vec[String] = Vec.new();
+            for s in m.blocks[n].succs.iter() {
+                let sk = ix.get(s.clone()) ?? 0;
+                out = set_union(out, live_in[sk]);
+            }
+            let inn = set_union(uses[n], set_minus(out, defs[n]));
+            if out != live_out[n] or inn != live_in[n] {
+                live_out[n] = out;
+                live_in[n] = inn;
+                changed = true;
+            }
+            n -= 1;
+        }
+    }
+    (live_in, live_out)
+}
+
+#[derive(Copy, Clone)]
+struct Iv {
+    s: i64,
+    e: i64,
+}
+
+struct Intervals {
+    iv: Map[String, Iv],
+    calls: Vec[(i64, Vec[String])],
+}
+
+fn extend(iv: mut ref Map[String, Iv], v: Str, p: i64) {
+    let cur = match iv.get(v.to_string()) {
+        Some(x) => Iv { s: imin(x.s, p), e: imax(x.e, p) },
+        None => Iv { s: p, e: p },
+    };
+    let _ = iv.insert(v.to_string(), cur);
+}
+
+fn imin(a: i64, b: i64) -> i64 {
+    if a < b {
+        a
+    } else {
+        b
+    }
+}
+
+fn imax(a: i64, b: i64) -> i64 {
+    if a > b {
+        a
+    } else {
+        b
+    }
+}
+
+// Linear positions: instruction k of the layout reads at 2k and writes at
+// 2k+1.
+fn intervals(m: ref MFunc) -> Intervals {
+    let (_, lo) = mliveness(m);
+    let mut iv: Map[String, Iv] = Map.new();
+    let mut calls: Vec[(i64, Vec[String])] = Vec.new();
+    let mut base = 0;
+    for bk in 0..m.blocks.len() {
+        let b = ref m.blocks[bk];
+        let mut live = lo[bk].clone();
+        let last = base + b.code.len() - 1;
+        for v in live.iter() {
+            extend(mut iv, v, 2 * last + 1);
+        }
+        let mut k = b.code.len() - 1;
+        while k >= 0 {
+            let i = ref b.code[k];
+            let p = base + k;
+            for d in i.vdefs().iter() {
+                extend(mut iv, d, 2 * p + 1);
+                live.retain(|x| x != d);
+            }
+            if i.op == "call" {
+                calls.push((2 * p, set_of(live)));
+            }
+            for u in i.vuses().iter() {
+                if not live.contains(u.clone()) {
+                    live.push(u.clone());
+                }
+            }
+            for v in live.iter() {
+                extend(mut iv, v, 2 * p);
+            }
+            k -= 1;
+        }
+        base += b.code.len();
+    }
+    Intervals { iv: iv, calls: calls }
+}
+
+// Each virtual register's neighbours, in name order.
+fn interference(m: ref MFunc) -> Map[String, Vec[String]] {
+    let (_, lo) = mliveness(m);
+    let mut edges: Map[String, Vec[String]] = Map.new();
+    for b in m.blocks.iter() {
+        for i in b.code.iter() {
+            for v in i.vall().iter() {
+                if not edges.contains_key(v.clone()) {
+                    let _ = edges.insert(v.clone(), Vec.new());
+                }
+            }
+        }
+    }
+    for bk in 0..m.blocks.len() {
+        let b = ref m.blocks[bk];
+        let mut live = lo[bk].clone();
+        let mut k = b.code.len() - 1;
+        while k >= 0 {
+            let i = ref b.code[k];
+            let src = if i.op == "mv" and i.srcs[0].kind == RegK.Virt { i.srcs[0].name.clone() } else { String.new() };
+            for d in i.vdefs().iter() {
+                for v in live.iter() {
+                    if v != d and v.clone() != src {
+                        add_edge(mut edges, d, v);
+                        add_edge(mut edges, v, d);
+                    }
+                }
+                live.retain(|x| x != d);
+            }
+            for u in i.vuses().iter() {
+                if not live.contains(u.clone()) {
+                    live.push(u.clone());
+                }
+            }
+            k -= 1;
+        }
+    }
+    let keys: Vec[String] = edges.keys().map(|k| k.clone()).collect();
+    for k in keys.iter() {
+        if let Some(v) = edges.get_mut(k.clone()) {
+            v.sort();
+        }
+    }
+    edges
+}
+
+fn add_edge(edges: mut ref Map[String, Vec[String]], a: Str, b: Str) {
+    if let Some(v) = edges.get_mut(a.to_string()) {
+        if not v.contains(b.to_string()) {
+            v.push(b.to_string());
+        }
+    }
+}
+
+fn spill_costs(m: ref MFunc) -> Map[String, i64] {
+    let mut cost: Map[String, i64] = Map.new();
+    for b in m.blocks.iter() {
+        let mut w = 1;
+        for _ in 0..(m.depth.get(b.name.clone()) ?? 0) {
+            w *= 10;
+        }
+        for i in b.code.iter() {
+            for v in i.vall().iter() {
+                let c = cost.get(v.clone()) ?? 0;
+                let _ = cost.insert(v.clone(), c + w);
+            }
+        }
+    }
+    cost
+}
+
+// ------------------------------------------------------------ the two allocators
+
+// Where a virtual register lives: register r<n>, or stack slot n.
+#[derive(Copy, Clone)]
+struct Loc {
+    slot: bool,
+    n: i64,
+}
+
+fn in_reg(n: i64) -> Loc {
+    Loc { slot: false, n: n }
+}
+
+fn in_slot(n: i64) -> Loc {
+    Loc { slot: true, n: n }
+}
+
+fn iv_of(iv: ref Map[String, Iv], v: Str) -> Iv {
+    iv.get(v.to_string()) ?? Iv { s: 0, e: 0 }
+}
+
+fn insert_active(active: mut ref Vec[String], v: Str, iv: ref Map[String, Iv]) {
+    let ve = iv_of(iv, v).e;
+    let mut k = 0;
+    while k < active.len() {
+        let ae = iv_of(iv, active[k]).e;
+        if ae < ve or (ae == ve and active[k] < v) {
+            k += 1;
+        } else {
+            break;
+        }
+    }
+    active.insert(k, v.to_string());
+}
+
+// Poletto and Sarkar's linear scan: intervals by start; at each one,
+// expire those ended, and when all K registers are taken spill whichever
+// of it and the active intervals ends last.
+fn linear_scan(m: ref MFunc, k_regs: i64) -> (Map[String, Loc], i64) {
+    let ivs = intervals(m);
+    let iv = ivs.iv;
+    let mut order: Vec[(i64, String)] = Vec.new();
+    for (v, x) in iv.iter() {
+        order.push((x.s, v.clone()));
+    }
+    order.sort();
+    let mut active: Vec[String] = Vec.new();
+    let mut free: Vec[i64] = Vec.new();
+    for r in 1..(k_regs + 1) {
+        free.push(r);
+    }
+    let mut loc: Map[String, Loc] = Map.new();
+    let mut slots = 0;
+    for (s, v) in order.iter() {
+        let e = iv_of(iv, v).e;
+        while active.len() > 0 and iv_of(iv, active[0]).e < s {
+            let j = active.remove(0);
+            free.push((loc.get(j) ?? in_reg(0)).n);
+            free.sort();
+        }
+        if active.len() == k_regs {
+            let spill = active[active.len() - 1].clone();
+            if iv_of(iv, spill).e > e {
+                let r = loc.get(spill.clone()) ?? in_reg(0);
+                let _ = loc.insert(v.clone(), r);
+                let _ = loc.insert(spill, in_slot(slots));
+                slots += 1;
+                let _ = active.pop();
+                insert_active(mut active, v, iv);
+            } else {
+                let _ = loc.insert(v.clone(), in_slot(slots));
+                slots += 1;
+            }
+        } else {
+            let r = free.remove(0);
+            let _ = loc.insert(v.clone(), in_reg(r));
+            insert_active(mut active, v, iv);
+        }
+    }
+    (loc, slots)
+}
+
+// Chaitin's simplify with Briggs's optimistic colouring: remove a node of
+// degree < K while there is one, else the cheapest per neighbour; then
+// colour in reverse, spilling a node only when no colour is left.
+fn colour(m: ref MFunc, k_regs: i64) -> (Map[String, Loc], i64) {
+    let edges = interference(m);
+    let cost = spill_costs(m);
+    let mut names: Vec[String] = edges.keys().map(|k| k.clone()).collect();
+    names.sort();
+    let n = names.len();
+    let mut ix: Map[String, i64] = Map.new();
+    for k in 0..n {
+        let _ = ix.insert(names[k].clone(), k);
+    }
+    let mut adj: Vec[Vec[i64]] = Vec.new();
+    let mut deg: Vec[i64] = Vec.new();
+    let mut cst: Vec[i64] = Vec.new();
+    for k in 0..n {
+        let ns = edges.get(names[k].clone()).cloned() ?? Vec.new();
+        let a: Vec[i64] = ns.iter().map(|u| ix.get(u.clone()) ?? 0).collect();
+        deg.push(a.len());
+        adj.push(a);
+        cst.push(cost.get(names[k].clone()) ?? 0);
+    }
+    let mut left: Vec[bool] = Vec.filled(n, true);
+    let mut remaining = n;
+    let mut stack: Vec[i64] = Vec.new();
+    while remaining > 0 {
+        let mut pick = -1;
+        for v in 0..n {
+            if left[v] and deg[v] < k_regs {
+                pick = v;
+                break;
+            }
+        }
+        if pick < 0 {
+            for v in 0..n {
+                if left[v] and (pick < 0 or cst[v] * deg[pick] < cst[pick] * deg[v]) {
+                    pick = v;
+                }
+            }
+        }
+        stack.push(pick);
+        left[pick] = false;
+        remaining -= 1;
+        for u in adj[pick].iter() {
+            if left[u] {
+                deg[u] -= 1;
+            }
+        }
+    }
+    let mut colour_of: Vec[i64] = Vec.filled(n, -1);
+    let mut loc: Map[String, Loc] = Map.new();
+    let mut slots = 0;
+    let mut s = stack.len() - 1;
+    while s >= 0 {
+        let v = stack[s];
+        let mut used: Vec[bool] = Vec.filled(k_regs + 1, false);
+        for u in adj[v].iter() {
+            if colour_of[u] > 0 {
+                used[colour_of[u]] = true;
+            }
+        }
+        let mut c = -1;
+        for r in 1..(k_regs + 1) {
+            if not used[r] {
+                c = r;
+                break;
+            }
+        }
+        if c < 0 {
+            let _ = loc.insert(names[v].clone(), in_slot(slots));
+            slots += 1;
+        } else {
+            colour_of[v] = c;
+            let _ = loc.insert(names[v].clone(), in_reg(c));
+        }
+        s -= 1;
+    }
+    (loc, slots)
+}
+
+// ------------------------------------------------------------ rewriting
+
+struct Stats {
+    spilled: i64,
+    loads: i64,
+    stores: i64,
+    saves: i64,
+    moves: i64,
+    size: i64,
+}
+
+fn loc_of(loc: ref Map[String, Loc], v: Str) -> Loc {
+    loc.get(v.to_string()) ?? in_reg(0)
+}
+
+// Physical registers for every operand: a spilled value is loaded into t0
+// or t1 before a use and stored after a definition; a register live across
+// a call is saved before it and restored after; a move between one
+// register and itself goes.
+fn rewrite(m: ref MFunc, loc: ref Map[String, Loc], slots: i64, k_regs: i64) -> (MFunc, Stats) {
+    let ivs = intervals(m);
+    let mut across: Map[i64, Vec[String]] = Map.new();
+    for (p, live) in ivs.calls.iter() {
+        let _ = across.insert(p, live.clone());
+    }
+    let mut st = Stats { spilled: slots, loads: 0, stores: 0, saves: 0, moves: 0, size: 0 };
+    let mut saved = false;
+    let mut out = MFunc { name: m.name.clone(), nparams: m.nparams, blocks: Vec.new(), frame: 0, depth: Map.new() };
+    let mut base = 0;
+    for b in m.blocks.iter() {
+        let mut code: Vec[MInst] = Vec.new();
+        for k in 0..b.code.len() {
+            let i = ref b.code[k];
+            let p = base + k;
+            let mut pre: Vec[MInst] = Vec.new();
+            let mut post: Vec[MInst] = Vec.new();
+            let mut srcs: Vec[Reg] = Vec.new();
+            let mut tnames: Vec[String] = Vec.new();
+            for x in i.srcs.iter() {
+                if x.kind != RegK.Virt {
+                    srcs.push(x.clone());
+                    continue;
+                }
+                let l = loc_of(loc, x.name);
+                if l.slot {
+                    let t = position(tnames, x.name);
+                    if t >= 0 {
+                        srcs.push(tr(t));
+                    } else {
+                        let nt = tnames.len();
+                        let mut ld = mi_d("ld", tr(nt));
+                        ld.imm = l.n;
+                        pre.push(ld);
+                        st.loads += 1;
+                        tnames.push(x.name.clone());
+                        srcs.push(tr(nt));
+                    }
+                } else {
+                    srcs.push(rr(l.n));
+                }
+            }
+            let mut dst = i.dst.clone();
+            if i.has_dst and dst.kind == RegK.Virt {
+                let l = loc_of(loc, dst.name);
+                if l.slot {
+                    let mut s = mi("st");
+                    s.srcs.push(tr(0));
+                    s.imm = l.n;
+                    post.push(s);
+                    st.stores += 1;
+                    dst = tr(0);
+                } else {
+                    dst = rr(l.n);
+                }
+            }
+            if i.op == "call" {
+                let live = across.get(2 * p).cloned() ?? Vec.new();
+                let mut regs: Vec[i64] = Vec.new();
+                for v in live.iter() {
+                    let l = loc_of(loc, v);
+                    if not l.slot and not regs.contains(l.n) {
+                        regs.push(l.n);
+                    }
+                }
+                regs.sort();
+                for r in regs.iter() {
+                    saved = true;
+                    let mut s = mi("st");
+                    s.srcs.push(rr(r));
+                    s.imm = slots + r - 1;
+                    pre.push(s);
+                    let mut l = mi_d("ld", rr(r));
+                    l.imm = slots + r - 1;
+                    post.push(l);
+                    st.saves += 1;
+                }
+            }
+            let mut ni = i.clone();
+            ni.dst = dst;
+            ni.srcs = srcs;
+            code.extend(pre);
+            if ni.op == "mv" and ni.dst.same(ni.srcs[0]) {
+                st.moves += 1;
+            } else {
+                code.push(ni);
+            }
+            code.extend(post);
+        }
+        base += b.code.len();
+        st.size += code.len();
+        out.blocks.push(MBlock { name: b.name.clone(), succs: b.succs.clone(), code: code });
+    }
+    out.frame = slots + (if saved { k_regs } else { 0 });
+    (out, st)
+}
+
+fn allocate(f: ref Func, k_regs: i64, how: Str) -> Result[(Map[String, Loc], MFunc, Stats), IrErr] {
+    let m = select(f)?;
+    let (loc, slots) = if how == "linear" { linear_scan(m, k_regs) } else { colour(m, k_regs) };
+    let (mf, st) = rewrite(m, loc, slots, k_regs);
+    Ok((loc, mf, st))
+}
+
+// ------------------------------------------------------------ the simulator
+
+struct Sim {
+    funcs: Vec[MFunc],
+    fmap: Map[String, i64],
+    bmaps: Vec[Map[String, i64]],
+    regs: Map[String, i64],
+    steps: i64,
+    mem: i64,
+    out: Vec[String],
+}
+
+fn new_sim(funcs: own Vec[MFunc]) -> Sim {
+    let mut fmap: Map[String, i64] = Map.new();
+    let mut bmaps: Vec[Map[String, i64]] = Vec.new();
+    for k in 0..funcs.len() {
+        let _ = fmap.insert(funcs[k].name.clone(), k);
+        bmaps.push(block_index(funcs[k]));
+    }
+    Sim { funcs: funcs, fmap: fmap, bmaps: bmaps, regs: Map.new(), steps: 0, mem: 0, out: Vec.new() }
+}
+
+impl Sim {
+    fn get(ref self, r: ref Reg) -> i64 {
+        self.regs.get(r.name.clone()) ?? 0
+    }
+
+    fn set(mut ref self, r: ref Reg, v: i64) {
+        let _ = self.regs.insert(r.name.clone(), v);
+    }
+
+    fn call(mut ref self, name: Str, depth: i64) -> Result[i64, String] {
+        if depth > DEPTH_LIMIT {
+            return Err("call depth limit".to_string());
+        }
+        let fi = self.fmap.get(name.to_string()) ?? 0;
+        let f = self.funcs[fi].clone();
+        let mut frame: Vec[i64] = Vec.filled(f.frame, 0);
+        let mut bi: i64 = 0;
+        loop {
+            let b = ref f.blocks[bi];
+            let mut jumped = String.new();
+            for i in b.code.iter() {
+                self.steps += 1;
+                if self.steps > 4 * STEP_LIMIT {
+                    return Err("step limit".to_string());
+                }
+                let op = i.op.clone();
+                let bop = binop_of(op);
+                if op == "li" {
+                    self.set(i.dst, i.imm);
+                } else if op == "mv" {
+                    let v = self.get(i.srcs[0]);
+                    self.set(i.dst, v);
+                } else if bop.len() > 0 {
+                    let a = self.get(i.srcs[0]);
+                    let c = if is_rri(op) { i.imm } else { self.get(i.srcs[1]) };
+                    match fold(bop, a, c) {
+                        Some(r) => self.set(i.dst, r),
+                        None => return Err(f"division by zero in {name}"),
+                    }
+                } else if op == "print" {
+                    let v = self.get(i.srcs[0]);
+                    self.out.push(f"{v}");
+                } else if op == "bnez" or op == "beqz" {
+                    if (self.get(i.srcs[0]) != 0) == (op == "bnez") {
+                        jumped = i.label.clone();
+                        break;
+                    }
+                } else if op == "j" {
+                    jumped = i.label.clone();
+                    break;
+                } else if op == "call" {
+                    let _ = self.call(i.func, depth + 1)?;
+                } else if op == "ret" {
+                    return Ok(self.regs.get("a0".to_string()) ?? 0);
+                } else if op == "ld" {
+                    self.mem += 1;
+                    self.set(i.dst, frame[i.imm]);
+                } else if op == "st" {
+                    self.mem += 1;
+                    frame[i.imm] = self.get(i.srcs[0]);
+                }
+            }
+            bi = if jumped.len() > 0 { self.bmaps[fi].get(jumped) ?? 0 } else { bi + 1 };
+        }
+    }
+}
+
+// ------------------------------------------------------------ jobs
+
+fn fmt_loc(l: Loc) -> String {
+    if l.slot {
+        f"[sp+{l.n}]"
+    } else {
+        f"r{l.n}"
+    }
+}
+
+fn fmt_stats(st: ref Stats) -> String {
+    f"; spilled {st.spilled}, loads {st.loads}, stores {st.stores}, saves {st.saves}, moves removed {st.moves}, size {st.size}"
+}
+
+fn err_line(fname: Str, e: ref IrErr) -> String {
+    f"{fname}:{e.line}: error: {e.msg}"
+}
+
+fn run_mode(funcs: ref Vec[Func], rest: ref Vec[String], fname: Str) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    if rest.len() == 0 {
+        out.push(f"{fname}: error: run needs a function");
+        return out;
+    }
+    let name = rest[0].clone();
+    let k_regs = if rest.len() > 1 { i64.parse(rest[1]).unwrap_or(4) } else { 4 };
+    let mut args: Vec[i64] = Vec.new();
+    for k in 2..rest.len() {
+        args.push(wrap(i64.parse(rest[k]).unwrap_or(0)));
+    }
+    let mut np = -1;
+    for h in funcs.iter() {
+        if h.name == name {
+            np = h.params.len();
+        }
+    }
+    if np < 0 {
+        out.push(f"{fname}: error: no function {name}");
+        return out;
+    }
+    if args.len() != np {
+        let given = args.len();
+        out.push(f"{fname}: error: {name} takes {np} argument(s), given {given}");
+        return out;
+    }
+    let p = prog(funcs);
+    let mut ir = IrMachine { steps: 0, out: Vec.new() };
+    let res = match ir_call(mut ir, p, name, args, 0) {
+        Ok(r) => f"returned {r}",
+        Err(t) => f"trap: {t}",
+    };
+    let mut line = f"ir: {res} after {ir.steps} steps";
+    if ir.out.len() > 0 {
+        line = line + "; printed " + ir.out.join(" ");
+    }
+    out.push(line);
+    for how in ["linear", "colour"].to_vec() {
+        let mut mfs: Vec[MFunc] = Vec.new();
+        for f in funcs.iter() {
+            match allocate(f, k_regs, how) {
+                Ok((_, mf, _)) => mfs.push(mf),
+                Err(e) => {
+                    out.push(err_line(fname, e));
+                    return out;
+                }
+            }
+        }
+        let mut sim = new_sim(mfs);
+        for k in 0..args.len() {
+            let _ = sim.regs.insert(f"a{k}", args[k]);
+        }
+        let mres = match sim.call(name, 0) {
+            Ok(r) => f"returned {r}",
+            Err(t) => f"trap: {t}",
+        };
+        let mut l2 = f"{how}: {mres} after {sim.steps} instructions, {sim.mem} memory";
+        if sim.out.len() > 0 {
+            l2 = l2 + "; printed " + sim.out.join(" ");
+        }
+        out.push(l2);
+        if mres != res or sim.out != ir.out {
+            out.push(f"MISMATCH: {how} differs from the IR");
+        }
+    }
+    out
+}
+
+fn run_job(mode: Str, rest: ref Vec[String], fname: Str, src: Str) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let funcs = match parse(src) {
+        Ok(fs) => fs,
+        Err(e) => {
+            out.push(err_line(fname, e));
+            return out;
+        }
+    };
+    if mode == "run" {
+        return run_mode(funcs, rest, fname);
+    }
+    if funcs.len() == 0 {
+        out.push(f"{fname}: error: no functions");
+        return out;
+    }
+    let target = if rest.len() > 0 { rest[0].clone() } else { funcs[0].name.clone() };
+    let mut fi = -1;
+    for k in 0..funcs.len() {
+        if funcs[k].name == target {
+            fi = k;
+        }
+    }
+    if fi < 0 {
+        out.push(f"{fname}: error: no function {target}");
+        return out;
+    }
+    let f = ref funcs[fi];
+    let m = match select(f) {
+        Ok(m) => m,
+        Err(e) => {
+            out.push(err_line(fname, e));
+            return out;
+        }
+    };
+    if mode == "sel" {
+        return m.show();
+    }
+    if mode == "live" {
+        let ivs = intervals(m);
+        let mut order: Vec[(i64, String)] = Vec.new();
+        for (v, x) in ivs.iv.iter() {
+            order.push((x.s, v.clone()));
+        }
+        order.sort();
+        for (_, v) in order.iter() {
+            let x = iv_of(ivs.iv, v);
+            out.push(f"%{v}: [{x.s}, {x.e}]");
+        }
+        for (p, live) in ivs.calls.iter() {
+            let names: Vec[String] = live.iter().map(|v| "%" + v).collect();
+            let ls = if names.len() > 0 { names.join(", ") } else { "-".to_string() };
+            out.push(f"call at {p}: live across {ls}");
+        }
+        return out;
+    }
+    if mode == "graph" {
+        let edges = interference(m);
+        let cost = spill_costs(m);
+        let mut names: Vec[String] = edges.keys().map(|k| k.clone()).collect();
+        names.sort();
+        for v in names.iter() {
+            let ns = edges.get(v.clone()).cloned() ?? Vec.new();
+            let shown: Vec[String] = ns.iter().map(|u| "%" + u).collect();
+            let list = if shown.len() > 0 { shown.join(", ") } else { "-".to_string() };
+            let c = cost.get(v.clone()) ?? 0;
+            let d = ns.len();
+            out.push(f"%{v}: degree {d}, cost {c}; {list}");
+        }
+        return out;
+    }
+    if mode == "linear" or mode == "colour" {
+        let k_regs = if rest.len() > 1 { i64.parse(rest[1]).unwrap_or(4) } else { 4 };
+        match allocate(f, k_regs, mode) {
+            Ok((loc, mf, st)) => {
+                let mut names: Vec[String] = loc.keys().map(|k| k.clone()).collect();
+                names.sort();
+                let parts: Vec[String] = names.iter().map(|v| f"%{v} " + fmt_loc(loc_of(loc, v))).collect();
+                out.push("; " + parts.join(", "));
+                out.extend(mf.show());
+                out.push(fmt_stats(st));
+            }
+            Err(e) => out.push(err_line(fname, e)),
+        }
+        return out;
+    }
+    if mode == "compare" {
+        for k_regs in [2, 3, 4, 6, 8].to_vec() {
+            for how in ["linear", "colour"].to_vec() {
+                if let Ok((_, _, st)) = allocate(f, k_regs, how) {
+                    out.push(f"K={k_regs} {how}: spilled {st.spilled}, loads {st.loads}, stores {st.stores}, saves {st.saves}, size {st.size}");
+                }
+            }
+        }
+        return out;
+    }
+    out.push(f"unknown mode {mode}");
+    out
+}
+fn unescape(s: Str) -> String {
+    let b = s.bytes().to_vec();
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'\\' and i + 1 < b.len() {
+            let c = b[i + 1];
+            out.push(if c == b'n' { b'\n' } else if c == b't' { b'\t' } else { c });
+            i += 2;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    String.from_utf8(out).unwrap_or(String.new())
+}
+
+fn transcript(job: String) -> String {
+    let mut out: Vec[String] = Vec.new();
+    out.push("$ " + job);
+    let words: Vec[String] = job.split(" ").map(|w| w.to_string()).collect();
+    if words[0] == "snip" {
+        let mode = if words.len() > 1 { words[1].clone() } else { String.new() };
+        let skip = 5 + mode.len() + 1;
+        let mut src = unescape(job.substring(skip));
+        let mut rest: Vec[String] = Vec.new();
+        if let Some((a, b)) = src.clone().split_once(" ;; ") {
+            rest = b.split(" ").map(|w| w.to_string()).collect();
+            src = a.to_string();
+        }
+        out.extend(run_job(mode, rest, "snip.ir", src));
+    } else {
+        let mode = words[0].clone();
+        let name = if words.len() > 1 { words[1].clone() } else { String.new() };
+        let mut rest: Vec[String] = Vec.new();
+        for k in 2..words.len() {
+            rest.push(words[k].clone());
+        }
+        match fs.read_to_string("data/" + name) {
+            Ok(src) => out.extend(run_job(mode, rest, name, src)),
+            Err(e) => out.push(f"! cannot read {name}: {e}"),
+        }
+    }
+    out.join("\n") + "\n"
+}
+
+fn is_hexd(c: u8) -> bool {
+    (c >= b'0' and c <= b'9') or (c >= b'a' and c <= b'f') or (c >= b'A' and c <= b'F')
+}
+
+fn hex_val(c: u8) -> u8 {
+    if c >= b'0' and c <= b'9' {
+        c - b'0'
+    } else if c >= b'a' and c <= b'f' {
+        c - b'a' + 10
+    } else {
+        c - b'A' + 10
+    }
+}
+
+fn unhex(s: Str) -> Vec[u8] {
+    let mut digits: Vec[u8] = Vec.new();
+    for c in s.bytes() {
+        if is_hexd(c) {
+            digits.push(hex_val(c));
+        }
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i + 1 < digits.len() {
+        out.push(digits[i] * 16 + digits[i + 1]);
+        i += 2;
+    }
+    out
+}
+
+fn put_bytes(path: Str, b: Vec[u8]) -> Result[(), String] {
+    if let Err(e) = fs.write_bytes(path.to_string(), b) {
+        return Err(f"cannot write {path}: {e}");
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = fs.create_dir_all("data".to_string()) {
+        eprintln(f"cannot create data: {e}");
+        return;
+    }
+    if let Err(e) = write_data() {
+        eprintln(e);
+        return;
+    }
+    let jobs = match fs.read_to_string("data/jobs.txt".to_string()) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln(f"cannot read jobs.txt: {e}");
+            return;
+        }
+    };
+    let mut lines: Vec[String] = Vec.new();
+    for l in jobs.split("\n") {
+        let t = l.strip_suffix("\r") ?? l;
+        if t.trim().len() > 0 {
+            lines.push(t.to_string());
+        }
+    }
+    // Every job in a task of its own; the transcript prints in job order.
+    let group = TaskGroup.new();
+    let mut handles = Vec.new();
+    for line in lines {
+        handles.push(group.spawn(|| transcript(line)));
+    }
+    for h in handles.into_iter() {
+        print(h.join());
+    }
+}
+
+// ============================================================ data
+
+// The files under data/, in name order.
+fn write_data() -> Result[(), String] {
+    put_bytes("data/abi.ir", unhex(file_0()))?;
+    put_bytes("data/arith.ir", unhex(file_1()))?;
+    put_bytes("data/calls.ir", unhex(file_2()))?;
+    put_bytes("data/jobs.txt", unhex(file_3()))?;
+    put_bytes("data/loops.ir", unhex(file_4()))?;
+    put_bytes("data/pressure.ir", unhex(file_5()))?;
+    put_bytes("data/swap.ir", unhex(file_6()))?;
+    Ok(())
+}
+
+// data/abi.ir
+fn file_0() -> String {
+    """
+2320417267756d656e74732c20726573756c747320616e642076616c756573206c697665206163726f73732063616c6c
+732e0a0a66756e63206164643428612c20622c20632c206429207b0a656e7472793a0a202073203d2061202b20620a20
+2073203d2073202b20630a202073203d2073202b20640a202072657420730a7d0a0a66756e63207375623228612c2062
+29207b0a656e7472793a0a202072203d2061202d20620a202072657420720a7d0a0a66756e63206d697828782c207929
+207b0a656e7472793a0a202070203d2063616c6c206164643428782c20792c20312c2032290a202071203d2063616c6c
+206164643428702c20782c20792c2070290a202072203d2063616c6c206164643428712c20712c20712c2071290a2020
+72657420720a7d0a0a66756e6320666c697028612c206229207b0a656e7472793a0a202078203d2063616c6c20737562
+3228622c2061290a202079203d2063616c6c207375623228612c2062290a20207a203d2063616c6c207375623228782c
+2079290a2020726574207a0a7d0a0a66756e6320636861696e286e29207b0a656e7472793a0a20207a203d206e203d3d
+20300a20206272207a2c20626173652c207265630a626173653a0a202072657420300a7265633a0a20206d203d206e20
+2d20310a20206b203d206e202a206e0a202072203d2063616c6c20636861696e286d290a202073203d2072202b206b0a
+202072657420730a7d0a0a66756e63206763647228612c206229207b0a656e7472793a0a20207a203d2062203d3d2030
+0a20206272207a2c20646f6e652c207265630a646f6e653a0a202072657420610a7265633a0a202074203d2061202520
+620a202072203d2063616c6c206763647228622c2074290a202072657420720a7d0a0a66756e632074616c6c79286e29
+207b0a656e7472793a0a202069203d20300a2020616363203d20300a20206a6d70206c6f6f700a6c6f6f703a0a202063
+203d2069203c206e0a2020627220632c20626f64792c20646f6e650a626f64793a0a202076203d2063616c6c20616464
+3428692c206163632c20312c2030290a20207072696e7420760a2020616363203d20760a202069203d2069202b20310a
+20206a6d70206c6f6f700a646f6e653a0a2020726574206163630a7d0a0a66756e63206e6f617267732829207b0a656e
+7472793a0a202063616c6c2074616c6c792833290a202072203d2063616c6c206d697828312c2032290a202072657420
+720a7d0a
+"""
+}
+
+// data/arith.ir
+fn file_1() -> String {
+    """
+2320496e74656765722068656c706572732c20617320612066726f6e7420656e64206c6f77657273207468656d2e0a0a
+66756e632067636428612c206229207b0a656e7472793a0a20206a6d7020746573740a746573743a0a20207a203d2062
+203d3d20300a20206272207a2c20646f6e652c20737465700a737465703a0a202074203d2061202520620a202061203d
+20620a202062203d20740a20206a6d7020746573740a646f6e653a0a202072657420610a7d0a0a66756e6320706f7728
+626173652c206529207b0a656e7472793a0a202072203d20310a20206a6d70206c6f6f700a6c6f6f703a0a202063203d
+2065203e20300a2020627220632c20626f64792c20646f6e650a626f64793a0a20206f6464203d2065202620310a2020
+6272206f64642c206d756c2c2073710a6d756c3a0a202072203d2072202a20626173650a20206a6d702073710a73713a
+0a202062617365203d2062617365202a20626173650a202065203d2065203e3e20310a20206a6d70206c6f6f700a646f
+6e653a0a202072657420720a7d0a0a66756e6320636f6c6c61747a286e29207b0a656e7472793a0a2020737465707320
+3d20300a20206a6d7020686561640a686561643a0a20206f6e65203d206e203d3d20310a20206272206f6e652c20646f
+6e652c20626f64790a626f64793a0a202072656d203d206e202520320a202062722072656d2c206f64642c206576656e
+0a6576656e3a0a20206e203d206e202f20320a20206a6d70206e6578740a6f64643a0a202074203d206e202a20330a20
+206e203d2074202b20310a20206a6d70206e6578740a6e6578743a0a20207374657073203d207374657073202b20310a
+20206a6d7020686561640a646f6e653a0a20207265742073746570730a7d0a0a66756e6320636c617373696679286e29
+207b0a656e7472793a0a20206e6567203d206e203c20300a20206272206e65672c206e656761746976652c2063686563
+6b0a6e656761746976653a0a202072203d202d310a20206a6d70206f75740a636865636b3a0a20207a65726f203d206e
+203d3d20300a20206272207a65726f2c2069737a2c20706f7369746976650a69737a3a0a202072203d20300a20206a6d
+70206f75740a706f7369746976653a0a2020626967203d206e203e203130300a202072203d20310a2020627220626967
+2c20687567652c206f75740a687567653a0a202072203d20320a20206a6d70206f75740a6f75743a0a20207265742072
+0a7d0a0a66756e63206973717274286e29207b0a656e7472793a0a20206c6f203d20300a20206869203d206e202b2031
+0a20206a6d70206c6f6f700a6c6f6f703a0a2020676170203d206869202d206c6f0a20206d6f7265203d20676170203e
+20310a20206272206d6f72652c20626f64792c20646f6e650a626f64793a0a202073203d206c6f202b2068690a20206d
+6964203d2073202f20320a20207371203d206d6964202a206d69640a20206c65203d207371203c3d206e0a2020627220
+6c652c2075702c20646f776e0a75703a0a20206c6f203d206d69640a20206a6d70206c6f6f700a646f776e3a0a202068
+69203d206d69640a20206a6d70206c6f6f700a646f6e653a0a2020726574206c6f0a7d0a0a66756e6320777261702829
+207b0a656e7472793a0a2020626967203d20323134373438333634370a202078203d20626967202b20310a202079203d
+2078202d20310a20206d203d203635353336202a2036353533360a20207072696e7420780a20207072696e7420790a20
+207072696e74206d0a202073203d202d37202f20320a202072203d202d37202520320a20207072696e7420730a202070
+72696e7420720a202072657420300a7d0a
+"""
+}
+
+// data/calls.ir
+fn file_2() -> String {
+    """
+232043616c6c7320616e64207369646520656666656374732e0a0a66756e632066616374286e29207b0a656e7472793a
+0a202062617365203d206e203c3d20310a2020627220626173652c206f6e652c207265630a6f6e653a0a202072657420
+310a7265633a0a20206d203d206e202d20310a202072203d2063616c6c2066616374286d290a202070203d206e202a20
+720a202072657420700a7d0a0a66756e632066696272286e29207b0a656e7472793a0a2020736d616c6c203d206e203c
+20320a2020627220736d616c6c2c206c6561662c207265630a6c6561663a0a2020726574206e0a7265633a0a20206120
+3d206e202d20310a202062203d206e202d20320a202078203d2063616c6c20666962722861290a202079203d2063616c
+6c20666962722862290a202073203d2078202b20790a202072657420730a7d0a0a66756e63206576656e286e29207b0a
+656e7472793a0a20207a203d206e203d3d20300a20206272207a2c207965732c207265630a7965733a0a202072657420
+310a7265633a0a20206d203d206e202d20310a202072203d2063616c6c206f6464286d290a202072657420720a7d0a0a
+66756e63206f6464286e29207b0a656e7472793a0a20207a203d206e203d3d20300a20206272207a2c206e6f2c207265
+630a6e6f3a0a202072657420300a7265633a0a20206d203d206e202d20310a202072203d2063616c6c206576656e286d
+290a202072657420720a7d0a0a66756e632061636b286d2c206e29207b0a656e7472793a0a20206d7a203d206d203d3d
+20300a20206272206d7a2c20626173652c20696e6e65720a626173653a0a202072203d206e202b20310a202072657420
+720a696e6e65723a0a20206e7a203d206e203d3d20300a20206272206e7a2c20646f776e2c20626f74680a646f776e3a
+0a20206d31203d206d202d20310a202072203d2063616c6c2061636b286d312c2031290a202072657420720a626f7468
+3a0a20206e31203d206e202d20310a202074203d2063616c6c2061636b286d2c206e31290a20206d31203d206d202d20
+310a202072203d2063616c6c2061636b286d312c2074290a202072657420720a7d0a0a66756e63207265706f7274286e
+29207b0a656e7472793a0a202069203d20310a20206a6d70206c6f6f700a6c6f6f703a0a202063203d2069203c3d206e
+0a2020627220632c20626f64792c20646f6e650a626f64793a0a202066203d2063616c6c20666163742869290a202070
+72696e7420660a202069203d2069202b20310a20206a6d70206c6f6f700a646f6e653a0a2020756e75736564203d2063
+616c6c2066696272283130290a202063616c6c206e6f7465286e290a20207265740a7d0a0a66756e63206e6f7465286e
+29207b0a656e7472793a0a20206b203d206e202a20313030300a20207072696e74206b0a20207265740a7d0a0a66756e
+6320666f7265766572286e29207b0a656e7472793a0a20206a6d70206c6f6f700a6c6f6f703a0a20206e203d206e202b
+20310a20206a6d70206c6f6f700a7d0a0a66756e632064656570286e29207b0a656e7472793a0a20206d203d206e202b
+20310a202072203d2063616c6c2064656570286d290a202072657420720a7d0a
+"""
+}
+
+// data/jobs.txt
+fn file_3() -> String {
+    """
+73656c2061726974682e6972206763640a6c6976652061726974682e6972206763640a67726170682061726974682e69
+72206763640a73656c2061726974682e697220636c6173736966790a6c6976652061726974682e697220636c61737369
+66790a67726170682061726974682e697220636c6173736966790a73656c206c6f6f70732e697220677269640a6c6976
+65206c6f6f70732e697220677269640a6772617068206c6f6f70732e697220677269640a73656c20737761702e697220
+6c6f73740a6c69766520737761702e6972206c6f73740a677261706820737761702e6972206c6f73740a73656c206361
+6c6c732e69722061636b0a6c6976652063616c6c732e69722061636b0a67726170682063616c6c732e69722061636b0a
+73656c2070726573737572652e697220616363756d0a6c6976652070726573737572652e697220616363756d0a677261
+70682070726573737572652e697220616363756d0a73656c206162692e6972206d69780a6c697665206162692e697220
+6d69780a6772617068206162692e6972206d69780a73656c206162692e697220636861696e0a6c697665206162692e69
+7220636861696e0a6772617068206162692e697220636861696e0a6c696e6561722061726974682e6972206763642033
+0a636f6c6f75722061726974682e69722067636420330a6c696e6561722061726974682e697220636f6c6c61747a2033
+0a636f6c6f75722061726974682e697220636f6c6c61747a20330a6c696e6561722061726974682e6972206973717274
+20330a636f6c6f75722061726974682e697220697371727420330a6c696e656172206c6f6f70732e6972206772696420
+330a636f6c6f7572206c6f6f70732e6972206772696420330a6c696e656172206c6f6f70732e6972207072696d657320
+330a636f6c6f7572206c6f6f70732e6972207072696d657320330a6c696e65617220737761702e697220737761702033
+0a636f6c6f757220737761702e6972207377617020330a6c696e65617220737761702e697220726f7461746520330a63
+6f6c6f757220737761702e697220726f7461746520330a6c696e6561722063616c6c732e6972206669627220330a636f
+6c6f75722063616c6c732e6972206669627220330a6c696e6561722063616c6c732e6972207265706f727420330a636f
+6c6f75722063616c6c732e6972207265706f727420330a6c696e6561722070726573737572652e697220737072656164
+20330a636f6c6f75722070726573737572652e69722073707265616420330a6c696e6561722070726573737572652e69
+7220616363756d20330a636f6c6f75722070726573737572652e697220616363756d20330a6c696e6561722070726573
+737572652e6972206d617466696220330a636f6c6f75722070726573737572652e6972206d617466696220330a6c696e
+6561722070726573737572652e69722061726f756e6420330a636f6c6f75722070726573737572652e69722061726f75
+6e6420330a6c696e656172206162692e6972206d697820330a636f6c6f7572206162692e6972206d697820330a6c696e
+656172206162692e697220666c697020330a636f6c6f7572206162692e697220666c697020330a6c696e656172206162
+692e697220636861696e20330a636f6c6f7572206162692e697220636861696e20330a6c696e656172206162692e6972
+2074616c6c7920330a636f6c6f7572206162692e69722074616c6c7920330a6c696e6561722070726573737572652e69
+722073707265616420320a6c696e6561722070726573737572652e69722073707265616420380a636f6c6f7572207072
+6573737572652e69722073707265616420320a636f6c6f75722070726573737572652e69722073707265616420380a6c
+696e6561722070726573737572652e6972206d617466696220320a6c696e6561722070726573737572652e6972206d61
+7466696220380a636f6c6f75722070726573737572652e6972206d617466696220320a636f6c6f757220707265737375
+72652e6972206d617466696220380a6c696e656172206c6f6f70732e6972207072696d657320320a6c696e656172206c
+6f6f70732e6972207072696d657320380a636f6c6f7572206c6f6f70732e6972207072696d657320320a636f6c6f7572
+206c6f6f70732e6972207072696d657320380a636f6d706172652061726974682e697220706f770a636f6d7061726520
+6c6f6f70732e697220677269640a636f6d70617265206c6f6f70732e6972207072696d65730a636f6d70617265207377
+61702e697220726f746174650a636f6d706172652063616c6c732e69722061636b0a636f6d7061726520707265737375
+72652e6972207370726561640a636f6d706172652070726573737572652e697220616363756d0a636f6d706172652070
+726573737572652e6972206d61746669620a636f6d706172652070726573737572652e69722061726f756e640a636f6d
+706172652070726573737572652e697220636865636b73756d0a636f6d70617265206162692e6972206d69780a636f6d
+70617265206162692e69722074616c6c790a72756e2061726974682e69722067636420322031303731203436320a7275
+6e2061726974682e69722067636420342031303731203436320a72756e2061726974682e697220706f77203220332031
+330a72756e2061726974682e697220706f77203420332031330a72756e2061726974682e697220636f6c6c61747a2032
+2032370a72756e2061726974682e697220636f6c6c61747a20342032370a72756e2061726974682e697220636c617373
+6966792032202d350a72756e2061726974682e697220636c6173736966792034202d350a72756e2061726974682e6972
+20636c617373696679203220313030300a72756e2061726974682e697220636c617373696679203420313030300a7275
+6e2061726974682e69722069737172742032203132333435360a72756e2061726974682e697220697371727420342031
+32333435360a72756e2061726974682e6972207772617020320a72756e2061726974682e6972207772617020340a7275
+6e206c6f6f70732e6972207472692032203130300a72756e206c6f6f70732e6972207472692034203130300a72756e20
+6c6f6f70732e69722067726964203220370a72756e206c6f6f70732e69722067726964203420370a72756e206c6f6f70
+732e6972207072696d65732032203130300a72756e206c6f6f70732e6972207072696d65732034203130300a72756e20
+6c6f6f70732e69722066696220322035300a72756e206c6f6f70732e69722066696220342035300a72756e206c6f6f70
+732e697220736561726368203220313736340a72756e206c6f6f70732e697220736561726368203420313736340a7275
+6e206c6f6f70732e69722074776f5f706861736520322031300a72756e206c6f6f70732e69722074776f5f7068617365
+20342031300a72756e20737761702e69722073776170203220370a72756e20737761702e69722073776170203420370a
+72756e20737761702e6972206c6f7374203220350a72756e20737761702e6972206c6f7374203420350a72756e207377
+61702e697220726f74617465203220350a72756e20737761702e697220726f74617465203420350a72756e2073776170
+2e69722073687566666c65203220330a72756e20737761702e69722073687566666c65203420330a72756e2073776170
+2e6972206561726c79203220390a72756e20737761702e6972206561726c79203420390a72756e2063616c6c732e6972
+206661637420322031320a72756e2063616c6c732e6972206661637420342031320a72756e2063616c6c732e69722066
+69627220322031350a72756e2063616c6c732e6972206669627220342031350a72756e2063616c6c732e697220657665
+6e203220390a72756e2063616c6c732e6972206576656e203420390a72756e2063616c6c732e69722061636b20322032
+20330a72756e2063616c6c732e69722061636b2034203220330a72756e2063616c6c732e6972207265706f7274203220
+350a72756e2063616c6c732e6972207265706f7274203420350a72756e2063616c6c732e69722064656570203220300a
+72756e2063616c6c732e69722064656570203420300a72756e2070726573737572652e69722073707265616420322039
+0a72756e2070726573737572652e697220737072656164203420390a72756e2070726573737572652e69722073707265
+61642032202d313030300a72756e2070726573737572652e6972207370726561642034202d313030300a72756e207072
+6573737572652e697220616363756d20322035300a72756e2070726573737572652e697220616363756d20342035300a
+72756e2070726573737572652e6972206d617466696220322034300a72756e2070726573737572652e6972206d617466
+696220342034300a72756e2070726573737572652e6972206d617466696220322039300a72756e207072657373757265
+2e6972206d617466696220342039300a72756e2070726573737572652e69722061726f756e64203220360a72756e2070
+726573737572652e69722061726f756e64203420360a72756e2070726573737572652e697220636865636b73756d2032
+203230300a72756e2070726573737572652e697220636865636b73756d2034203230300a72756e206162692e6972206d
+69782032203320340a72756e206162692e6972206d69782034203320340a72756e206162692e697220666c6970203220
+313020330a72756e206162692e697220666c6970203420313020330a72756e206162692e697220636861696e20322033
+300a72756e206162692e697220636861696e20342033300a72756e206162692e69722067636472203220313037312034
+36320a72756e206162692e6972206763647220342031303731203436320a72756e206162692e69722074616c6c792032
+20350a72756e206162692e69722074616c6c79203420350a72756e206162692e6972206e6f6172677320320a72756e20
+6162692e6972206e6f6172677320340a72756e2070726573737572652e697220737072656164203320390a72756e2070
+726573737572652e697220737072656164203620390a72756e2070726573737572652e69722073707265616420382039
+0a72756e2070726573737572652e6972206d617466696220332034300a72756e2070726573737572652e6972206d6174
+66696220362034300a72756e2070726573737572652e6972206d617466696220382034300a72756e206162692e697220
+636861696e20332033300a72756e206162692e697220636861696e20362033300a72756e206162692e69722063686169
+6e20382033300a72756e206c6f6f70732e6972207072696d65732033203130300a72756e206c6f6f70732e6972207072
+696d65732036203130300a72756e206c6f6f70732e6972207072696d65732038203130300a72756e2063616c6c732e69
+7220666f7265766572203420300a72756e2063616c6c732e6972206661637420340a72756e2063616c6c732e6972206e
+6f73756368203420310a736e69702073656c2066756e632066286129207b5c6e656e7472793a5c6e202078203d206120
+2b20315c6e202079203d2031202b20615c6e20207a203d2031202d20615c6e202077203d2061202a20345c6e20207620
+3d2033203c20615c6e202075203d2061203c3c20325c6e202072657420755c6e7d0a736e69702073656c2066756e6320
+662829207b5c6e656e7472793a5c6e202078203d2033202b20345c6e20207072696e7420395c6e202072657420375c6e
+7d0a736e69702073656c2066756e632066286329207b5c6e656e7472793a5c6e2020627220632c20612c20625c6e613a
+5c6e202072657420315c6e623a5c6e202072657420325c6e7d0a736e69702073656c2066756e632066286329207b5c6e
+656e7472793a5c6e2020627220632c20622c20615c6e613a5c6e202072657420315c6e623a5c6e202072657420325c6e
+7d0a736e69702073656c2066756e632066286329207b5c6e656e7472793a5c6e2020627220632c20612c20615c6e613a
+5c6e202072657420635c6e7d0a736e69702073656c2066756e632066286329207b5c6e656e7472793a5c6e2020627220
+312c20612c20625c6e623a5c6e202072657420325c6e613a5c6e202072657420315c6e7d0a736e69702073656c206675
+6e6320662829207b5c6e656e7472793a5c6e20207265745c6e646561643a5c6e20207072696e7420315c6e2020726574
+5c6e7d0a736e69702073656c2066756e632066286129207b5c6e656e7472793a5c6e202062203d2061202b20635c6e20
+2072657420625c6e7d0a736e69702073656c2066756e63206728612c20622c20632c206429207b5c6e656e7472793a5c
+6e202072657420645c6e7d5c6e66756e6320662829207b5c6e656e7472793a5c6e202078203d2063616c6c206728342c
+20332c20322c2031295c6e202063616c6c206728782c20782c20782c2078295c6e202072657420785c6e7d203b3b2066
+0a736e69702073656c2066756e63206728612c20622c20632c20642c206529207b5c6e656e7472793a5c6e2020726574
+20655c6e7d0a736e69702073656c2066756e63206728612c20622c20632c20642c206529207b5c6e656e7472793a5c6e
+202072657420615c6e7d5c6e66756e6320662829207b5c6e656e7472793a5c6e202078203d2063616c6c206728312c20
+322c20332c20342c2035295c6e202072657420785c6e7d203b3b20660a736e6970206c6976652066756e632066286129
+207b5c6e656e7472793a5c6e202078203d2061202b20315c6e202079203d2078202b20315c6e20207a203d2079202b20
+315c6e2020726574207a5c6e7d0a736e69702067726170682066756e632066286129207b5c6e656e7472793a5c6e2020
+78203d2061202b20315c6e202079203d2078202b20315c6e20207a203d2079202b20315c6e2020726574207a5c6e7d0a
+736e69702067726170682066756e63206628612c206229207b5c6e656e7472793a5c6e202078203d20615c6e20207920
+3d2078202b20625c6e202072657420795c6e7d0a736e6970206c696e6561722066756e63206628612c206229207b5c6e
+656e7472793a5c6e202078203d20615c6e202079203d2078202b20625c6e202072657420795c6e7d203b3b206620320a
+736e697020636f6c6f75722066756e63206628612c206229207b5c6e656e7472793a5c6e202078203d20615c6e202079
+203d2078202b20625c6e202072657420795c6e7d203b3b206620320a736e6970206c696e6561722066756e6320662861
+29207b5c6e656e7472793a5c6e202078203d2061202b20315c6e202079203d2061202b20325c6e20207a203d2061202b
+20335c6e202073203d2078202b20795c6e202073203d2073202b207a5c6e202072657420735c6e7d203b3b206620320a
+736e697020636f6c6f75722066756e632066286129207b5c6e656e7472793a5c6e202078203d2061202b20315c6e2020
+79203d2061202b20325c6e20207a203d2061202b20335c6e202073203d2078202b20795c6e202073203d2073202b207a
+5c6e202072657420735c6e7d203b3b206620320a736e6970206c696e6561722066756e632066286129207b5c6e656e74
+72793a5c6e202078203d2061202b20315c6e202079203d2061202b20325c6e20207a203d2061202b20335c6e20207320
+3d2078202b20795c6e202073203d2073202b207a5c6e202072657420735c6e7d203b3b206620310a736e69702072756e
+2066756e632066286129207b5c6e656e7472793a5c6e202078203d2061202b20315c6e202079203d2061202b20325c6e
+20207a203d2061202b20335c6e202073203d2078202b20795c6e202073203d2073202b207a5c6e202072657420735c6e
+7d203b3b206620312031300a736e69702072756e2066756e632066286129207b5c6e656e7472793a5c6e202078203d20
+31202f20615c6e202072657420785c6e7d203b3b2066203220300a736e69702072756e2066756e63206628612c206229
+207b5c6e656e7472793a5c6e202071203d2061202f20625c6e202072203d2061202520625c6e20207072696e7420715c
+6e20207072696e7420725c6e20207265745c6e7d203b3b20662032202d313720350a736e69702072756e2066756e6320
+66286329207b5c6e656e7472793a5c6e2020627220632c207365742c20736b69705c6e7365743a5c6e202076203d2031
+305c6e20206a6d7020736b69705c6e736b69703a5c6e202072203d2076202b20315c6e202072657420725c6e7d203b3b
+2066203220300a736e69702072756e2066756e632066286329207b5c6e656e7472793a5c6e2020627220632c20736574
+2c20736b69705c6e7365743a5c6e202076203d2031305c6e20206a6d7020736b69705c6e736b69703a5c6e202072203d
+2076202b20315c6e202072657420725c6e7d203b3b2066203220310a736e69702072756e2066756e6320662829207b5c
+6e656e7472793a5c6e202078203d20323134373438333634375c6e202079203d2078202b20315c6e202072657420795c
+6e7d203b3b206620320a736e6970206c696e6561722066756e6320662829207b5c6e656e7472793a5c6e20207265745c
+6e7d203b3b206720320a736e69702073656c2072657420310a736e69702073656c2066756e6320662829207b5c6e656e
+7472793a5c6e20206a6d7020656e7472795c6e7d0a736e69702073656c2066756e6320662829207b5c6e656e7472793a
+5c6e202078203d2063616c6c206728295c6e20207265745c6e7d0a
+"""
+}
+
+// data/loops.ir
+fn file_4() -> String {
+    """
+23204c6f6f70732c206e657374656420616e6420696e2073657175656e63652e0a0a66756e6320747269286e29207b0a
+656e7472793a0a202073203d20300a202069203d20310a20206a6d7020686561640a686561643a0a202063203d206920
+3c3d206e0a2020627220632c20626f64792c20657869740a626f64793a0a202073203d2073202b20690a202069203d20
+69202b20310a20206a6d7020686561640a657869743a0a202072657420730a7d0a0a66756e632067726964286e29207b
+0a656e7472793a0a2020746f74616c203d20300a202069203d20300a20206a6d70206f757465720a6f757465723a0a20
+206369203d2069203c206e0a202062722063692c20696e69742c20646f6e650a696e69743a0a20206a203d20300a2020
+6a6d7020696e6e65720a696e6e65723a0a2020636a203d206a203c206e0a2020627220636a2c2063656c6c2c206e6578
+740a63656c6c3a0a202070203d2069202a206a0a2020746f74616c203d20746f74616c202b20700a20206a203d206a20
+2b20310a20206a6d7020696e6e65720a6e6578743a0a202069203d2069202b20310a20206a6d70206f757465720a646f
+6e653a0a202072657420746f74616c0a7d0a0a66756e63207072696d6573286e29207b0a656e7472793a0a2020636f75
+6e74203d20300a20206b203d20320a20206a6d70206f757465720a6f757465723a0a20206d6f7265203d206b203c3d20
+6e0a20206272206d6f72652c2073746172742c20646f6e650a73746172743a0a202064203d20320a20206a6d70207472
+69616c0a747269616c3a0a20206464203d2064202a20640a202070617374203d206464203e206b0a2020627220706173
+742c207072696d652c20746573740a746573743a0a20206d203d206b202520640a202064697669646573203d206d203d
+3d20300a2020627220646976696465732c20636f6d706f736974652c2062756d700a62756d703a0a202064203d206420
+2b20310a20206a6d7020747269616c0a7072696d653a0a2020636f756e74203d20636f756e74202b20310a20206a6d70
+20636f6d706f736974650a636f6d706f736974653a0a20206b203d206b202b20310a20206a6d70206f757465720a646f
+6e653a0a202072657420636f756e740a7d0a0a66756e6320666962286e29207b0a656e7472793a0a202061203d20300a
+202062203d20310a202069203d20300a20206a6d70206c6f6f700a6c6f6f703a0a202063203d2069203c206e0a202062
+7220632c20626f64792c20646f6e650a626f64793a0a202074203d2061202b20620a202061203d20620a202062203d20
+740a202069203d2069202b20310a20206a6d70206c6f6f700a646f6e653a0a202072657420610a7d0a0a66756e632073
+65617263682874617267657429207b0a656e7472793a0a202069203d20300a2020666f756e64203d202d310a20206a6d
+70206c6f6f700a6c6f6f703a0a20206c696d203d2069203c2035300a20206272206c696d2c20626f64792c20646f6e65
+0a626f64793a0a20207371203d2069202a20690a2020686974203d207371203d3d207461726765740a20206272206869
+742c207965732c20737465700a7965733a0a2020666f756e64203d20690a20206a6d7020646f6e650a737465703a0a20
+2069203d2069202b20310a20206a6d70206c6f6f700a646f6e653a0a202072657420666f756e640a7d0a0a66756e6320
+74776f5f7068617365286e29207b0a656e7472793a0a202069203d20300a2020616363203d20300a20206a6d70207570
+0a75703a0a20206375203d2069203c206e0a202062722063752c207570622c207475726e0a7570623a0a202061636320
+3d20616363202b20690a202069203d2069202b20310a20206a6d702075700a7475726e3a0a20206a6d7020646f776e0a
+646f776e3a0a20206364203d2069203e20300a202062722063642c20646f776e622c206f75740a646f776e623a0a2020
+69203d2069202d20310a2020616363203d20616363202d20310a20206a6d7020646f776e0a6f75743a0a202072657420
+6163630a7d0a
+"""
+}
+
+// data/pressure.ir
+fn file_5() -> String {
+    """
+23204d6f7265206c6976652076616c756573207468616e207265676973746572732e0a0a66756e632073707265616428
+7829207b0a656e7472793a0a202061203d2078202a20330a202062203d2078202a20350a202063203d2078202a20370a
+202064203d2078202a2031310a202065203d2078202a2031330a202066203d2078202a2031370a202067203d2078202a
+2031390a202068203d2078202a2032330a202073203d2061202b20620a202073203d2073202b20630a202073203d2073
+202b20640a202073203d2073202b20650a202073203d2073202b20660a202073203d2073202b20670a202073203d2073
+202b20680a202070203d2061202a20680a202071203d2062202a20670a202072203d2063202a20660a202074203d2064
+202a20650a202075203d2070202d20710a202075203d2075202b20720a202075203d2075202d20740a202076203d2073
+205e20750a202072657420760a7d0a0a66756e6320616363756d286e29207b0a656e7472793a0a20207330203d20300a
+20207331203d20300a20207332203d20300a20207333203d20300a20207334203d20300a20207335203d20300a202069
+203d20300a20206a6d70206c6f6f700a6c6f6f703a0a202063203d2069203c206e0a2020627220632c20626f64792c20
+646f6e650a626f64793a0a20207330203d207330202b20690a202074203d2069202a20690a20207331203d207331202b
+20740a202074203d2074202a20690a20207332203d207332205e20740a20207333203d207333202b20310a2020733420
+3d207334202d20690a20206d203d2069202620330a20207335203d207335202b206d0a202069203d2069202b20310a20
+206a6d70206c6f6f700a646f6e653a0a20207072696e742073300a20207072696e742073310a20207072696e74207332
+0a20207072696e742073330a20207072696e742073340a20207072696e742073350a202072203d207330202b2073310a
+202072203d2072202b2073320a202072203d2072202b2073330a202072203d2072202b2073340a202072203d2072202b
+2073350a202072657420720a7d0a0a66756e63206d6174666962286e29207b0a656e7472793a0a202061203d20310a20
+2062203d20310a202063203d20310a202064203d20300a20207261203d20310a20207262203d20300a20207263203d20
+300a20207264203d20310a20206a6d70206c6f6f700a6c6f6f703a0a20206d6f7265203d206e203e20300a2020627220
+6d6f72652c20626f64792c20646f6e650a626f64793a0a20206f6464203d206e202620310a20206272206f64642c206d
+756c2c207371756172650a6d756c3a0a20207431203d207261202a20610a20207432203d207262202a20630a20206e61
+203d207431202b2074320a20207431203d207261202a20620a20207432203d207262202a20640a20206e62203d207431
+202b2074320a20207431203d207263202a20610a20207432203d207264202a20630a20206e63203d207431202b207432
+0a20207431203d207263202a20620a20207432203d207264202a20640a20206e64203d207431202b2074320a20207261
+203d206e610a20207262203d206e620a20207263203d206e630a20207264203d206e640a20206a6d7020737175617265
+0a7371756172653a0a20207431203d2061202a20610a20207432203d2062202a20630a20206e61203d207431202b2074
+320a20207431203d2061202a20620a20207432203d2062202a20640a20206e62203d207431202b2074320a2020743120
+3d2063202a20610a20207432203d2064202a20630a20206e63203d207431202b2074320a20207431203d2063202a2062
+0a20207432203d2064202a20640a20206e64203d207431202b2074320a202061203d206e610a202062203d206e620a20
+2063203d206e630a202064203d206e640a20206e203d206e203e3e20310a20206a6d70206c6f6f700a646f6e653a0a20
+207265742072620a7d0a0a66756e63207371287829207b0a656e7472793a0a202079203d2078202a20780a2020726574
+20790a7d0a0a66756e632061726f756e64286e29207b0a656e7472793a0a202061203d206e202b20310a202062203d20
+6e202b20320a202063203d206e202b20330a202064203d206e202b20340a202065203d2063616c6c2073712861290a20
+2066203d2063616c6c2073712862290a202067203d2063616c6c2073712863290a202068203d2063616c6c2073712864
+290a202073203d2061202b20620a202073203d2073202b20630a202073203d2073202b20640a202073203d2073202b20
+650a202073203d2073202b20660a202073203d2073202b20670a202073203d2073202b20680a202072657420730a7d0a
+0a66756e6320636865636b73756d286e29207b0a656e7472793a0a202068203d20353338310a20206b203d20300a2020
+6a6d70206c6f6f700a6c6f6f703a0a202063203d206b203c206e0a2020627220632c20626f64792c20646f6e650a626f
+64793a0a202078203d206b202a2033310a202079203d2078205e206b0a20207a203d2068203c3c20350a202068203d20
+7a202b20680a202068203d2068202b20790a202077203d2068203e3e20370a202068203d2068205e20770a20206b203d
+206b202b20310a20206a6d70206c6f6f700a646f6e653a0a20207072696e7420680a202072657420680a7d0a
+"""
+}
+
+// data/swap.ir
+fn file_6() -> String {
+    """
+23204f75742d6f662d5353412068617a617264732e0a0a66756e632073776170286e29207b0a656e7472793a0a202061
+203d20310a202062203d20320a202069203d20300a20206a6d70206c6f6f700a6c6f6f703a0a202063203d2069203c20
+6e0a2020627220632c20626f64792c20646f6e650a626f64793a0a202074203d20610a202061203d20620a202062203d
+20740a202069203d2069202b20310a20206a6d70206c6f6f700a646f6e653a0a202072203d2061202a2031300a202072
+203d2072202b20620a202072657420720a7d0a0a66756e63206c6f7374286e29207b0a656e7472793a0a202078203d20
+300a20206a6d70206c6f6f700a6c6f6f703a0a202079203d20780a202078203d2078202b20310a202063203d2078203c
+206e0a2020627220632c206c6f6f702c20646f6e650a646f6e653a0a202072657420790a7d0a0a66756e6320726f7461
+7465286e29207b0a656e7472793a0a202061203d20310a202062203d20320a202063203d20330a202069203d20300a20
+206a6d70206c6f6f700a6c6f6f703a0a2020676f203d2069203c206e0a2020627220676f2c20626f64792c20646f6e65
+0a626f64793a0a202074203d20610a202061203d20620a202062203d20630a202063203d20740a202069203d2069202b
+20310a20206a6d70206c6f6f700a646f6e653a0a202072203d2061202a203130300a202073203d2062202a2031300a20
+2072203d2072202b20730a202072203d2072202b20630a202072657420720a7d0a0a66756e632073687566666c65286e
+29207b0a656e7472793a0a202078203d20350a202079203d20390a20206a6d70206c6f6f700a6c6f6f703a0a20207072
+696e7420780a202074203d20780a202078203d20790a202079203d20740a20206e203d206e202d20310a20206d6f7265
+203d206e203e20300a20206272206d6f72652c206c6f6f702c20646f6e650a646f6e653a0a202072203d2078202d2079
+0a202072657420720a7d0a0a66756e63206561726c79286e29207b0a656e7472793a0a202076203d20300a20206a6d70
+206c6f6f700a6c6f6f703a0a202073746f70203d206e203d3d20300a202062722073746f702c20646f6e652c20737465
+700a737465703a0a202076203d2076202b206e0a20206e203d206e202d20310a2020626967203d2076203e2032300a20
+206272206269672c20646f6e652c206c6f6f700a646f6e653a0a202072657420760a7d0a
+"""
+}

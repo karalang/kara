@@ -58,8 +58,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
+| diagnostics | 83 |
 | false-positive | 81 |
-| diagnostics | 79 |
 | missing-feature | 60 |
 | perf | 55 |
 | soundness | 31 |
@@ -74,13 +74,13 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 135 |
+| typecheck | 137 |
 | mir | 86 |
 | mir-llvm | 63 |
-| cli | 47 |
-| ownership | 37 |
+| cli | 48 |
+| ownership | 38 |
 | interp | 26 |
-| parser | 23 |
+| parser | 24 |
 | codegen | 22 |
 | runtime | 21 |
 | effect | 10 |
@@ -119,6 +119,10 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-01-5 | 2026-11-01 | parser | low | A Rust-spelled mutable receiver or parameter type (`fn find(mut self, ..)`, `&mut self`, `ref mut self`, `self: mut ref Self`, `v: &mut Vec[i64]`) gets a bare parse error with no fix, where `mut ref self` / `mut ref T` is the one Kāra spelling; `let (mut x, ..)` already gets a named message and a machine fix | — |
 | B-2026-11-01-6 | 2026-11-01 | typecheck+mir | medium | A struct variant named like a library type (`Stmt.Match { cases: Vec[i64] }`, also `Response`, `Client`, `Regex`, `Stats`) passes `karac check` but `karac run`/`build` refuse a use of its Vec field ("a type that failed to check is not lowered yet"); check also accepts `*n` on its `i64` field | — |
 | B-2026-11-01-7 | 2026-11-01 | mir | high | A call, operator or array literal reads a place operand only after the later operands have run, against core-semantics 8.1 (left to right): `pair(c.n, bump(mut c))` prints `11 11` (want `1 11`), `c.n + bump(mut c)` is 22 (want 12) and `[y, { y = 7; y }]` is `[7, 7]` on mir-interp and mir-llvm alike; when the later operand MOVES the place, `wrap(b.n, vec![b])` is refused at run and build (`use of _1.0, which may have been moved or never initialized`) though `karac check` accepts it | — |
+| B-2026-11-01-8 | 2026-11-01 | parser | medium | `karac fix` on `println!("{}", n)` (and `print!` / `eprintln!` with format arguments) only deletes the `!`, leaving `println("{}", n)`, which fails E0202 "takes 0 or 1 argument(s)" with no fix; and on `println!("{n}")` the same edit silently changes the output from Rust's `3` to the literal `{n}`. `format!` already gets the f-string rewrite (B-2026-10-24-12) | — |
+| B-2026-11-01-9 | 2026-11-01 | typecheck | low | Rust string-method carry-overs `trim_start_matches`, `trim_end_matches`, `trim_matches` and `to_owned` get a bare E0236 "no method 'X' on type 'String'" with no hint (and `trim_matches(|c| ..)` adds a cascaded E0208 on the closure), where `parse::<T>()` and `s.parse()` already get named messages that point at `i64.parse(s)`; Kāra's spellings are `strip_prefix` / `strip_suffix` and `to_string()` | — |
+| B-2026-11-01-10 | 2026-11-01 | typecheck | low | Comparing a library lookup with an owned Option (`m.get(k) == Some(5)`, `m.get(k) == o`, `v.get(i) == o.map(..)`) fails E0208 "cannot compare 'Option[ref i64]' and 'Option[i64]'" with no fix, though the fix is the one the `.copied()` diagnostic already names: `.cloned()` on the ref side (or `?? d`), machine-applicable when the item is Copy | — |
+| B-2026-11-01-11 | 2026-11-01 | ownership+cli | medium | `(x, y) = (y, x)` on two `String` bindings gets the right E0287 fix (drop the parentheses) plus four cascade E0500 move errors with `.clone()` fixes, and `karac fix` applies the clones, not the E0287 edit, leaving `(x.clone(), y.clone()) = (...)` and then `x.clone(), y.clone() = ...`, which no fix repairs; with `i64` bindings the fix works | — |
 
 ### Relocated
 
