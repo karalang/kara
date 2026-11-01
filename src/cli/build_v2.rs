@@ -435,20 +435,37 @@ fn apply_cpu(
     list_cpus_if_asked(a);
     let (baseline_cpu, baseline_features) =
         resolve_native_cpu_baseline(manifest_field(|m| m.release_cpu_baseline.clone()).as_deref());
-    apply_target_cpu_override(
-        a.target_cpu
-            .map(str::to_string)
-            .or_else(read_target_cpu_env)
-            .or_else(|| manifest_field(|m| m.release_target_cpu.clone()))
-            .or(baseline_cpu),
-    );
-    apply_target_features_override(
-        a.target_features
-            .map(str::to_string)
-            .or_else(read_target_features_env)
-            .or_else(|| manifest_field(|m| m.release_target_features.clone()))
-            .or(baseline_features),
-    );
+    // A name the user wrote is validated against LLVM's registry, which
+    // costs a child karac (`__list-target-cpus`, ~16 ms in release). The
+    // baseline's names come from `cpu_baseline_native_override`'s fixed
+    // table, every one of them in LLVM 18's registry, so a default build
+    // installs them directly (B-2026-10-31-8).
+    match a
+        .target_cpu
+        .map(str::to_string)
+        .or_else(read_target_cpu_env)
+        .or_else(|| manifest_field(|m| m.release_target_cpu.clone()))
+    {
+        Some(cpu) => apply_target_cpu_override(Some(cpu)),
+        None => {
+            if let Some(cpu) = baseline_cpu {
+                crate::target::set_target_cpu_override(&cpu);
+            }
+        }
+    }
+    match a
+        .target_features
+        .map(str::to_string)
+        .or_else(read_target_features_env)
+        .or_else(|| manifest_field(|m| m.release_target_features.clone()))
+    {
+        Some(features) => apply_target_features_override(Some(features)),
+        None => {
+            if let Some(features) = baseline_features {
+                crate::target::set_target_features_override(&features);
+            }
+        }
+    }
 }
 
 /// What a package build's `--output=json` document reports: the package,
