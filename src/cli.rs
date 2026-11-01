@@ -2118,6 +2118,32 @@ impl Pipeline {
             self.typed.as_ref().unwrap(),
             profile_config,
         );
+        // An assignment the typechecker refused as a non-place target
+        // (`(x, y) = (y, x)`) reads here as moves of every name in it, so
+        // each `String` operand drew an E0500 with a `.clone()` fix, and
+        // `karac fix` applied those instead of the place error's own edit,
+        // leaving a program no fix repairs (B-2026-11-01-11). Those errors
+        // are a cascade of the refusal: drop each one whose use or move site
+        // is inside such a statement.
+        let rejected = &self.typed.as_ref().unwrap().rejected_assign_spans;
+        if !rejected.is_empty() {
+            let inside = |s: &crate::token::Span| {
+                rejected
+                    .iter()
+                    .any(|r| s.offset >= r.offset && s.offset < r.offset + r.length.max(1))
+            };
+            let mut dropped = Vec::new();
+            ownership.errors.retain(|e| {
+                let cascade = inside(&e.span) || e.consume_span.as_ref().is_some_and(inside);
+                if cascade {
+                    dropped.push(crate::resolver::SpanKey::from_span(&e.span));
+                }
+                !cascade
+            });
+            for k in dropped {
+                ownership.error_fix_diffs.remove(&k);
+            }
+        }
         // v2 core: each implicit-RC site is an E0500 rather than a note, and
         // reported once, as the error.
         if self.strict_core {

@@ -1809,6 +1809,13 @@ pub struct TypeCheckResult {
     /// §1.1), so the read copies the reference and moves nothing; the
     /// pipeline drops a use-after-move whose consume site is one of these.
     pub core_ref_copy_spans: FxHashSet<SpanKey>,
+    /// Each assignment statement whose target `E_ASSIGN_TARGET_NOT_PLACE`
+    /// rejected, from the target's start to the value's end. The ownership
+    /// pass reads such a statement as a plain move of every name on both
+    /// sides, so the pipeline drops its errors there: they are a cascade of
+    /// the place error, and `karac fix` applied their `.clone()` edits in
+    /// place of the real one (B-2026-11-01-11).
+    pub rejected_assign_spans: Vec<Span>,
     /// The nodes of [`Self::core_ref_copy_spans`]. Copies of one trait default
     /// body share their spans ([`Self::default_copy_spans`]), and only some
     /// copies may borrow there; the ownership pass asks each copy's own node
@@ -2780,6 +2787,8 @@ pub struct TypeChecker<'a> {
     pub(super) core_shared_depth: usize,
     /// See [`TypeCheckResult::core_ref_copy_spans`].
     pub(super) core_ref_copy_spans: FxHashSet<SpanKey>,
+    /// See [`TypeCheckResult::rejected_assign_spans`].
+    pub(super) rejected_assign_spans: Vec<Span>,
     /// See [`TypeCheckResult::core_ref_copy_nodes`].
     pub(super) core_ref_copy_nodes: FxHashSet<crate::ids::NodeId>,
     /// v2 core §4.6 (B-2026-10-28-25): the results of a `match`, `if` or
@@ -3811,6 +3820,7 @@ impl<'a> TypeChecker<'a> {
             core_shorthand_field: false,
             core_shared_depth: 0,
             core_ref_copy_spans: FxHashSet::default(),
+            rejected_assign_spans: Vec::new(),
             core_ref_copy_nodes: FxHashSet::default(),
             core_ref_results: FxHashSet::default(),
             core_consuming_for_iterables: FxHashSet::default(),
@@ -4388,6 +4398,7 @@ impl<'a> TypeChecker<'a> {
             str_retyped_uses: std::mem::take(&mut self.str_retyped_uses),
             core_once_calls: std::mem::take(&mut self.core_once_calls),
             core_ref_copy_spans: self.core_ref_copy_spans,
+            rejected_assign_spans: self.rejected_assign_spans,
             core_ref_copy_nodes: self.core_ref_copy_nodes,
             core_consuming_for_iterables: self.core_consuming_for_iterables,
             core_moving_scrutinees: self.core_moving_scrutinees,

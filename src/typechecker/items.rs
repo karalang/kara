@@ -5850,6 +5850,13 @@ impl<'a> super::TypeChecker<'a> {
                 None,
             )
         };
+        let end = value.map_or(target.span.offset + target.span.length, |v| {
+            (v.span.offset + v.span.length).max(target.span.offset + target.span.length)
+        });
+        self.rejected_assign_spans.push(Span {
+            length: end - target.span.offset,
+            ..target.span
+        });
         let kind = TypeErrorKind::AssignTargetNotPlace;
         self.errors.push(super::TypeError {
             message: format!(
