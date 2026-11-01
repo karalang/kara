@@ -2294,9 +2294,12 @@ impl<'ctx> Cx<'ctx, '_> {
                 let k = self.load_i64(w)?;
                 self.store(self.offset(v, 8)?, k.into())?;
             }
+            // `unsafe { xs.get_unchecked(i) }`: the caller ensures
+            // `i < len` (design.md § Bounds checks and get_unchecked), so
+            // nothing is checked (B-2026-10-31-45).
             ("get_unchecked", [i]) => {
                 let i = self.int_arg(i)?;
-                let at = self.checked_elem(p, n, i, size)?;
+                let at = self.elem_ptr(p, i, size)?;
                 let d = self.place_ptr(dest)?;
                 if matches!(self.tys.kind(dty), TyKind::Ref(_) | TyKind::MutRef(_)) {
                     self.store_ref(d, at, el)?;
