@@ -5156,10 +5156,16 @@ impl<'a> super::TypeChecker<'a> {
     /// non-`Copy` payload out of the borrow (core-semantics §3.7). Reported
     /// at the operand with `.clone()` as the fix, so the check refuses what
     /// the build would.
+    ///
+    /// A payload that is a `shared` handle or a handle aggregate is not
+    /// moved: reading it counts its handles and leaves the place usable
+    /// (core-semantics §6.1), so `h.d ?? x` with `d: Option[Node]` reached
+    /// through a borrowed `h` is accepted, as a bare `d: Option[Node]`
+    /// parameter already is (B-2026-11-01-15).
     fn reject_nil_coalesce_out_of_borrow(&mut self, left: &Expr, wrapper: &Type, payload: &Type) {
         let payload = resolve_type_var_top(payload, &self.env.substitutions);
         if matches!(payload, Type::TypeVar(_) | Type::Error)
-            || self.is_copy_type_during_check(&payload)
+            || self.index_read_part_counts_or_copies(&payload)
         {
             return;
         }

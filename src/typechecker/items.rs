@@ -9194,7 +9194,7 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
-    fn index_read_part_counts_or_copies(&self, ty: &Type) -> bool {
+    pub(super) fn index_read_part_counts_or_copies(&self, ty: &Type) -> bool {
         self.is_copy_type_during_check(ty) || self.index_read_counts_or_copies(ty)
     }
 
