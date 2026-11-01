@@ -270,6 +270,25 @@ pub fn parse_args(args: &[String]) -> Command {
                     cmd.env(var, "exitcode=86");
                 }
             }
+            // LeakSanitizer's exit check can catch ASan's own thread start
+            // mid-way: `AsanThread::Init` asks glibc for the new thread's
+            // stack, and `pthread_getattr_np`'s cpuset buffer
+            // (`__pthread_attr_extension`) is not yet freed when the main
+            // thread exits under load. That reads as a 152-byte direct leak
+            // with no program frame and does not repeat, so the lane
+            // suppresses that one allocation site; a user's LSAN_OPTIONS
+            // keeps its own settings and gains the suppression.
+            if !tsan {
+                let supp = dir.join("lsan.supp");
+                if std::fs::write(&supp, "leak:__pthread_attr_extension\n").is_ok() {
+                    let own =
+                        std::env::var("LSAN_OPTIONS").unwrap_or_else(|_| "exitcode=86".into());
+                    cmd.env(
+                        "LSAN_OPTIONS",
+                        format!("{own}:suppressions={}", supp.display()),
+                    );
+                }
+            }
             program_args_env(&mut cmd);
             let status = cmd.status();
             let _ = std::fs::remove_dir_all(&dir);
