@@ -439,6 +439,12 @@ pub const MACRO_FUNCTION_TWINS: &[&str] = &[
     "dbg",
 ];
 
+/// The macros of [`MACRO_FUNCTION_TWINS`] whose first argument is a Rust
+/// format string. Their Kāra twins take one string, so a call with format
+/// arguments is rewritten to an f-string rather than losing its `!`
+/// (B-2026-11-01-8).
+const PRINT_MACROS: &[&str] = &["println", "print", "eprintln", "panic"];
+
 /// Reason an `impl Trait` type expression is rejected at the current
 /// parser position. Encoded as an enum (rather than a single
 /// `disallow_impl_trait: bool` flag) so the rejection diagnostic can
@@ -1088,6 +1094,40 @@ impl Parser {
             }
             return;
         }
+        if PRINT_MACROS.contains(&name) && self.macro_has_format_arguments() {
+            // B-2026-11-01-8: deleting the `!` of `println!("{}", n)` left
+            // `println("{}", n)`, an arity error with no fix, and of
+            // `println!("{n}")` a call that prints the braces. The format
+            // string and its arguments become one f-string instead.
+            match self.format_macro_rewrite() {
+                Some(edit) => {
+                    self.error_at(
+                        &format!(
+                            "Kāra has no macros; `{name}!(...)` is Rust syntax: it takes one \
+                             string, so its format arguments go into an f-string, \
+                             `{name}(f\"{{x}} and {{y}}\")`"
+                        ),
+                        bang_span,
+                    );
+                    self.fix_edits.insert(
+                        key,
+                        crate::resolver::TextEdit {
+                            replacement: format!("{name}({})", edit.replacement),
+                            ..edit
+                        },
+                    );
+                }
+                None => self.error_at(
+                    &format!(
+                        "Kāra has no macros; `{name}!(...)` is Rust syntax: it takes one \
+                         string, so write its format arguments into an f-string, \
+                         `{name}(f\"{{x}} and {{y}}\")`"
+                    ),
+                    bang_span,
+                ),
+            }
+            return;
+        }
         if !MACRO_FUNCTION_TWINS.contains(&name) {
             let instead = match name {
                 "vec" => "write a list literal, `[a, b]`, or `Vec.new()`".to_string(),
@@ -1184,6 +1224,33 @@ impl Parser {
     /// one an f-string accepts, when the counts disagree, or when an
     /// argument's text could not sit inside a hole as written (a quote, a
     /// brace, a `:`, a backslash, a comment or a line break in it).
+    /// Whether the macro call at the current `!` passes a format string
+    /// that needs formatting: a string literal first, then more arguments,
+    /// or a `{` hole in the literal that is not an escaped `{{`. A call
+    /// with a plain literal, or with no literal first (`println!(s)`), is
+    /// the same call once the `!` is gone.
+    fn macro_has_format_arguments(&self) -> bool {
+        if !matches!(
+            self.tokens.get(self.pos + 1).map(|t| &t.token),
+            Some(Token::LeftParen)
+        ) {
+            return false;
+        }
+        let Some(lit) = self.tokens.get(self.pos + 2) else {
+            return false;
+        };
+        let Token::StringLiteral(body) = &lit.token else {
+            return false;
+        };
+        if !matches!(
+            self.tokens.get(self.pos + 3).map(|t| &t.token),
+            Some(Token::RightParen)
+        ) {
+            return true;
+        }
+        body.replace("{{", "").contains('{')
+    }
+
     fn format_macro_rewrite(&self) -> Option<crate::resolver::TextEdit> {
         let (source, base) = self.source.as_ref()?;
         let text = |span: &Span| {
@@ -1270,16 +1337,31 @@ impl Parser {
                             h => hole.push(h),
                         }
                     }
-                    let spec = match hole.strip_prefix(':') {
-                        Some(spec) => {
-                            crate::format_spec::FormatSpec::parse(spec).ok()?;
-                            Some(spec)
-                        }
-                        None if hole.is_empty() => None,
-                        None => return None,
+                    // `{}` / `{:spec}` takes the next argument; `{name}` /
+                    // `{name:spec}` is Rust 2021's inline capture of a
+                    // variable, which an f-string writes the same way
+                    // (B-2026-11-01-8). A hole that is neither (`{0}`, an
+                    // expression) has no rewrite.
+                    let (captured, spec) = match hole.split_once(':') {
+                        Some((name, spec)) => (name, Some(spec)),
+                        None => (hole.as_str(), None),
                     };
+                    if let Some(spec) = spec {
+                        crate::format_spec::FormatSpec::parse(spec).ok()?;
+                    }
+                    let is_ident = captured
+                        .chars()
+                        .next()
+                        .is_some_and(|c| c.is_alphabetic() || c == '_')
+                        && captured.chars().all(|c| c.is_alphanumeric() || c == '_');
                     out.push('{');
-                    out.push_str(args.next()??);
+                    if captured.is_empty() {
+                        out.push_str(args.next()??);
+                    } else if is_ident {
+                        out.push_str(captured);
+                    } else {
+                        return None;
+                    }
                     if let Some(spec) = spec {
                         out.push(':');
                         out.push_str(spec);
