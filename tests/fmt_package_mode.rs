@@ -43,8 +43,9 @@ fn fmt_check_lists_the_files_that_would_change_and_writes_nothing() {
     let dir = package("check");
     let out = karac(&dir, &["fmt", "--check"]);
     assert_eq!(out.status.code(), Some(1));
+    // Paths print with the host's separator; compare them in `/` form.
     assert_eq!(
-        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stdout).replace('\\', "/"),
         "src/main.kara\nsrc/util/helper.kara\n"
     );
     assert_eq!(read(&dir, "src/main.kara"), MESSY);
@@ -95,7 +96,9 @@ fn fmt_reports_a_file_that_does_not_parse_and_formats_the_rest() {
     let out = karac(&dir, &["fmt"]);
     assert_eq!(out.status.code(), Some(1));
     assert!(
-        String::from_utf8_lossy(&out.stderr).contains("error[parse]: src/bad.kara:"),
+        String::from_utf8_lossy(&out.stderr)
+            .replace('\\', "/")
+            .contains("error[parse]: src/bad.kara:"),
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
