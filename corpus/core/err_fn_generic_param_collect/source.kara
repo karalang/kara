@@ -1,0 +1,25 @@
+// B-2026-11-02-15: `collect()` into a `Vec[Fn() -> i64 + CrossTask]` takes each item as a push
+// would, so an item whose type is not marked is out of sight (core-semantics
+// §6.3). Before the fix the two tasks raced on the `shared` handle.
+shared struct S {
+    mut n: i64,
+}
+
+fn mkf(s: own S) -> Fn() -> i64 {
+    || {
+        s.n = s.n + 1;
+        s.n
+    }
+}
+
+fn race2(f: Fn() -> i64 + CrossTask) -> i64 {
+    let g = TaskGroup.new();
+    let a = g.spawn(|| f());
+    let b = g.spawn(|| f());
+    a.join() + b.join()
+}
+
+fn main() {
+    let v: Vec[Fn() -> i64 + CrossTask] = (0..1).map(|i| mkf(S { n: i })).collect();
+    println(race2(v[0]));
+}

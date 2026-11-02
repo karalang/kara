@@ -1,0 +1,26 @@
+// B-2026-11-02-15: `mem.replace(mut f, g)` writes `g` into a `+ CrossTask` place, so `g`
+// is coerced into it (core-semantics §6.3).
+shared struct S {
+    mut n: i64,
+}
+
+fn mkf(s: own S) -> Fn() -> i64 {
+    || {
+        s.n = s.n + 1;
+        s.n
+    }
+}
+
+fn race2(f: Fn() -> i64 + CrossTask) -> i64 {
+    let g = TaskGroup.new();
+    let a = g.spawn(|| f());
+    let b = g.spawn(|| f());
+    a.join() + b.join()
+}
+
+fn main() {
+    let mut f: Fn() -> i64 + CrossTask = || 1;
+    let old = mem.replace(mut f, mkf(S { n: 0 }));
+    println(old());
+    println(race2(f));
+}

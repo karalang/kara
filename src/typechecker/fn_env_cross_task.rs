@@ -175,6 +175,8 @@ impl<'a> super::TypeChecker<'a> {
         }
         let mut calls: Vec<Call> = Vec::new();
         let mut errors: Vec<(Span, String, Option<Span>)> = Vec::new();
+        let fn_items: FxHashMap<String, &Function> =
+            fns.iter().map(|(k, f)| (k.clone(), *f)).collect();
         for (_, f) in &fns {
             let mut scope: Vec<(String, Taint)> = Vec::new();
             if f.self_param.is_some() {
@@ -210,6 +212,7 @@ impl<'a> super::TypeChecker<'a> {
                 calls: &mut calls,
                 errors: &mut errors,
                 ret_marked,
+                fn_items: &fn_items,
             };
             let tail = w.block_value(&f.body);
             if ret_marked {
@@ -288,6 +291,21 @@ impl super::TypeChecker<'_> {
     }
 }
 
+/// Whether `f`'s return type names one of its type parameters, so a call's
+/// result type is what inference solved it as.
+fn returns_type_param(f: &Function) -> bool {
+    let (Some(ret), Some(g)) = (&f.return_type, &f.generic_params) else {
+        return false;
+    };
+    let mut found = false;
+    crate::span_visitor::for_each_type_expr(ret, &mut |x| {
+        if let TypeKind::Path(p) = &x.kind {
+            found |= p.segments.len() == 1 && g.params.iter().any(|gp| gp.name == p.segments[0]);
+        }
+    });
+    found
+}
+
 fn leak_message(lead: &str, leak: &Leak) -> String {
     let path_suffix = if leak.path.path.is_empty() {
         String::new()
@@ -320,9 +338,11 @@ struct Walk<'w, 't, 'a> {
     /// The function's return type holds a `+ CrossTask` function type, so
     /// each `return` value is coerced into it.
     ret_marked: bool,
+    /// The program's functions and methods by name (`Head.method`).
+    fn_items: &'w FxHashMap<String, &'w Function>,
 }
 
-impl Walk<'_, '_, '_> {
+impl<'w> Walk<'w, '_, '_> {
     fn lookup(&self, name: &str) -> Option<(usize, &Taint)> {
         self.scopes
             .iter()
@@ -604,6 +624,26 @@ impl Walk<'_, '_, '_> {
                         self.coerced(t, a.value.span, "an element whose type is `+ CrossTask`");
                     }
                 }
+                // B-2026-11-02-15: `collect()` into a collection of `+
+                // CrossTask` function values takes each item as a push would,
+                // so an item whose type is not marked is out of sight.
+                if method == "collect"
+                    && args.is_empty()
+                    && self
+                        .node_types
+                        .get(&e.id)
+                        .is_some_and(|(t, _)| has_marked_fn_type(t))
+                    && self
+                        .tc
+                        .library_iter_item(object)
+                        .is_some_and(|item| self.unmarked_deep(&item))
+                {
+                    return Taint {
+                        leak: None,
+                        opaque: true,
+                        fix_at: None,
+                    };
+                }
                 self.opaque_if_fn(e)
             }
             ExprKind::Call { callee, args } => {
@@ -626,6 +666,35 @@ impl Walk<'_, '_, '_> {
                         t.join(x);
                     }
                     return t;
+                }
+                // B-2026-11-02-15: a generic function's parameter solved as a
+                // `+ CrossTask` type from where its result goes does not make
+                // the argument one. What the argument reaches is what the
+                // result reaches, and what it writes through a `mut ref` to a
+                // marked place.
+                let generic = key.as_deref().and_then(|k| self.generic_fn(k));
+                // A callee with no body here (`mem.replace`, a builtin) may
+                // write any argument through a `mut ref`.
+                let unseen = key
+                    .as_deref()
+                    .is_some_and(|k| self.lookup(k).is_none() && !self.fn_items.contains_key(k));
+                if generic.is_some() || unseen {
+                    self.coerce_into_marked_places(args, &ts);
+                }
+                if let Some(f) = generic {
+                    if returns_type_param(f) {
+                        let mut t = self.opaque_if_fn(e);
+                        if self
+                            .node_types
+                            .get(&e.id)
+                            .is_some_and(|(ty, _)| has_marked_fn_type(ty))
+                        {
+                            for x in &ts {
+                                t.join(x);
+                            }
+                        }
+                        return t;
+                    }
                 }
                 self.opaque_if_fn(e)
             }
@@ -688,6 +757,64 @@ impl Walk<'_, '_, '_> {
                 self.children(e);
                 Taint::default()
             }
+        }
+    }
+
+    /// The generic function a call names: `id`, or `mem.replace` by its
+    /// last segment.
+    fn generic_fn(&self, key: &str) -> Option<&'w Function> {
+        let f = self.fn_items.get(key).or_else(|| {
+            key.rsplit_once('.')
+                .and_then(|(_, last)| self.fn_items.get(last))
+                .filter(|f| {
+                    f.stdlib_origin
+                        || f.span.offset >= self.tc.program.library_start.unwrap_or(usize::MAX)
+                })
+        })?;
+        f.generic_params
+            .as_ref()
+            .is_some_and(|g| !g.params.is_empty())
+            .then_some(*f)
+    }
+
+    /// An argument written `mut` whose type holds a `+ CrossTask` function
+    /// type is a place the generic callee may write the other arguments
+    /// into (`mem.replace(mut f, g)`, `mem.swap(mut f, mut g)`), so each is
+    /// coerced into it.
+    fn coerce_into_marked_places(&mut self, args: &[CallArg], ts: &[Taint]) {
+        let places: Vec<usize> = (0..args.len())
+            .filter(|&i| {
+                args[i].mut_marker
+                    && self
+                        .node_types
+                        .get(&args[i].value.id)
+                        .is_some_and(|(t, _)| has_marked_fn_type(t))
+            })
+            .collect();
+        for (j, (a, t)) in args.iter().zip(ts).enumerate() {
+            // `mem.swap(mut f, mut g)` writes each into the other.
+            if places.iter().any(|&i| i != j) {
+                self.coerced(t, a.value.span, "a place whose type is `+ CrossTask`");
+            }
+        }
+    }
+
+    /// [`is_unmarked_fn_type`] through the type variables inference solved.
+    fn unmarked_deep(&self, t: &Type) -> bool {
+        let t = super::inference::resolve_type_var_top(t, &self.tc.env.substitutions);
+        match &t {
+            Type::Function { cross_task, .. } | Type::OnceFunction { cross_task, .. } => {
+                !cross_task.0
+            }
+            Type::Named { args, .. } => args.iter().any(|a| self.unmarked_deep(a)),
+            Type::Tuple(ts) => ts.iter().any(|a| self.unmarked_deep(a)),
+            Type::Array { element, .. } | Type::Slice { element, .. } => {
+                self.unmarked_deep(element)
+            }
+            Type::Ref(i) | Type::MutRef(i) | Type::Arc(i) | Type::Rc(i) | Type::Weak(i) => {
+                self.unmarked_deep(i)
+            }
+            _ => false,
         }
     }
 

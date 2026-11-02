@@ -2516,6 +2516,9 @@ fn main() -> () {
             "err_dyn_view_unmarked_par",
             "err_fn_vec_call_result_marked",
             "err_fn_vec_local_push_marked",
+            "err_fn_generic_param_collect",
+            "err_fn_generic_param_id",
+            "err_fn_generic_param_replace",
             // Tasks sharing a written provider (§14.9), refused by the
             // effect pass.
             "err_provider_tasks_write",

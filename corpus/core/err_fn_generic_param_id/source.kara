@@ -1,0 +1,29 @@
+// B-2026-11-02-15: `id[T]`'s `T` is not solved as the marked type from where its result
+// goes, so an unmarked argument does not come out marked (core-semantics
+// §6.3). Before the fix the two tasks raced on the `shared` handle.
+shared struct S {
+    mut n: i64,
+}
+
+fn mkf(s: own S) -> Fn() -> i64 {
+    || {
+        s.n = s.n + 1;
+        s.n
+    }
+}
+
+fn race2(f: Fn() -> i64 + CrossTask) -> i64 {
+    let g = TaskGroup.new();
+    let a = g.spawn(|| f());
+    let b = g.spawn(|| f());
+    a.join() + b.join()
+}
+
+fn id[T](x: own T) -> T {
+    x
+}
+
+fn main() {
+    let f: Fn() -> i64 + CrossTask = id(mkf(S { n: 0 }));
+    println(race2(f));
+}

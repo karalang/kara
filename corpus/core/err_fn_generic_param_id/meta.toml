@@ -1,0 +1,11 @@
+source = "corpus/core/err_fn_generic_param_id"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["closure", "concurrency"]
+class = "a"
+expected_from = "spec"
+rules = ["6.3"]
+backends = []
+env = {}
+note = "B-2026-11-02-15: an unmarked Fn through a generic identity into a marked let is refused (core-semantics §6.3; the review thread's ruling: a type parameter is solved from the argument's own type, and unmarked to marked happens only at a coercion site, which checks the value). The expected.out wording of an error pin is guidance, not a byte oracle."

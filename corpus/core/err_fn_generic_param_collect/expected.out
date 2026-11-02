@@ -1,0 +1,1 @@
+ERROR at line 23: a value coerced into a `let` whose type is `+ CrossTask` must be `CrossTask`, but it holds a function value whose environment is out of sight (E_NOT_CROSS_TASK)

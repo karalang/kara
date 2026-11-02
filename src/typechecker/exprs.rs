@@ -7161,7 +7161,7 @@ impl<'a> super::TypeChecker<'a> {
     /// struct's `Iterator` impl, `ref`s kept (`IterEnumerate[SliceIter[String]]`
     /// gives `(i64, ref String)`). `None` off the library, or when the
     /// projection does not resolve.
-    fn library_iter_item(&self, object: &Expr) -> Option<Type> {
+    pub(super) fn library_iter_item(&self, object: &Expr) -> Option<Type> {
         if !self.library_methods_from_source {
             return None;
         }
