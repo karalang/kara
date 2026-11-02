@@ -3256,6 +3256,18 @@ impl<'a> Interp<'a> {
                 self.vec_elems(id)?.push(val.clone());
                 Ok(Value::Unit)
             }
+            // An auto-par push loop collecting in place (B-2026-11-02-8):
+            // the compiled tasks store into windows of a reserved buffer.
+            // Here tasks run at their spawn, in iteration order, so each
+            // put is a push onto the `Vec` the window names and the join's
+            // absorb has nothing left to do.
+            (true, "__par_window", [v, _]) => Ok(v.clone()),
+            (true, "__par_put", [w, _, val]) => {
+                let id = self.box_behind(w)?;
+                self.vec_elems(id)?.push(val.clone());
+                Ok(Value::Unit)
+            }
+            (true, "__par_absorb", [_, _]) => Ok(Value::Unit),
             (true, "pop", [v]) => {
                 let id = self.box_behind(v)?;
                 let last = self.vec_elems(id)?.pop();

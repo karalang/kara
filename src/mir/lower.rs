@@ -3202,6 +3202,30 @@ struct ChunkJob<'a> {
     /// range as the in-order loop's does (B-2026-10-29-50).
     least: Option<Const>,
     most: Option<Const>,
+    /// The loop's push collects in place ([`AutoRed::window`]): the
+    /// captures holding the address the windows start at and this task's
+    /// first element, and the push.
+    window: Option<(SymbolId, SymbolId, PushWindow<'a>)>,
+}
+
+/// An auto-par loop's push that collects in place (B-2026-11-02-8,
+/// [`Bx::push_window`]): `acc.push(elem)`, a statement of the loop's body
+/// itself, of a `Vec` of `vec_ty` whose elements `elem_ty` need no drop.
+#[derive(Clone, Copy)]
+struct PushWindow<'a> {
+    stmt: &'a Stmt,
+    elem: &'a Expr,
+    vec_ty: Ty,
+    elem_ty: Ty,
+}
+
+/// A task's in-place push while its run is lowered: the push statement
+/// stores at element `k` from `ptr` and counts `k` on.
+#[derive(Clone, Copy)]
+struct WindowAcc<'a> {
+    push: PushWindow<'a>,
+    ptr: Local,
+    k: Local,
 }
 
 /// `while k < n { ..; k += 1 }` (or `k = k + 1`), with `k` an integer
@@ -3243,6 +3267,10 @@ struct AutoRed<'a> {
     /// `acc.push(e)`: each task pushes onto a `Vec` of its own, which the
     /// join appends to `acc` in iteration order (`op` is unused).
     push: bool,
+    /// A push every iteration makes exactly once, of elements that need
+    /// no drop: the tasks store into windows of `acc` itself, reserved
+    /// once before any spawn (B-2026-11-02-8, [`Bx::push_window`]).
+    window: Option<PushWindow<'a>>,
     /// A checked `+` written at several sites: the join knows a run's sum
     /// would overflow but not at which site, so it runs that run again in
     /// order, where the overflow names its site as the sequential loop's
@@ -3451,6 +3479,8 @@ struct Bx<'l, 'a> {
     range_cap: Option<u128>,
     /// An auto-par task's signed sum, while its run is lowered.
     wide_acc: Option<WideAcc<'a>>,
+    /// An auto-par task's in-place push while its run is lowered.
+    window_acc: Option<WindowAcc<'a>>,
     /// The source lines of the reduction sites [`Self::auto_par_plan`] last
     /// planned, for the auto-par report.
     red_lines: Vec<usize>,
@@ -3543,6 +3573,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             auto_par_start: None,
             range_cap: None,
             wide_acc: None,
+            window_acc: None,
             red_lines: Vec::new(),
             closure_extra_caps: Vec::new(),
             closure_skip_caps: FxHashSet::default(),
@@ -5728,12 +5759,46 @@ impl<'l, 'a> Bx<'l, 'a> {
         let site = self
             .wide_acc
             .and_then(|w| Some((w, *w.sums.iter().find(|x| std::ptr::eq(x.stmt, s))?)));
-        let r = match site {
-            Some((w, sum)) => self.wide_add(w, sum),
-            None => self.stmt_here(s),
+        let window = self.window_acc.filter(|w| std::ptr::eq(w.push.stmt, s));
+        let r = match (site, window) {
+            (Some((w, sum)), _) => self.wide_add(w, sum),
+            (None, Some(w)) => self.window_put(w),
+            (None, None) => self.stmt_here(s),
         };
         self.b.set_source_info(outer);
         r
+    }
+
+    /// An auto-par task's in-place push (B-2026-11-02-8): the element
+    /// stored at `k` from the window's start, and `k` counted on.
+    fn window_put(&mut self, w: WindowAcc<'a>) -> R<()> {
+        let x = self.temp(w.push.elem_ty);
+        self.expr_into(w.push.elem, Place::local(x))?;
+        let u = self.unit();
+        let u = self.temp(u);
+        let name = format!("{}.__par_put", self.tys().display(w.push.vec_ty));
+        self.call_native(
+            &name,
+            vec![
+                Operand::Copy(Place::local(w.ptr)),
+                Operand::Copy(Place::local(w.k)),
+                Operand::Move(Place::local(x)),
+            ],
+            Place::local(u),
+        );
+        let kt = self.b.local_ty(w.k);
+        self.assign(
+            w.k,
+            Rvalue::BinaryOp(
+                BinOp::Add,
+                Operand::Copy(Place::local(w.k)),
+                Operand::Const(Const {
+                    ty: kt,
+                    kind: ConstKind::Scalar(1),
+                }),
+            ),
+        );
+        Ok(())
     }
 
     /// An auto-par task's signed sum statement: its term added to the
@@ -12132,6 +12197,23 @@ impl<'l, 'a> Bx<'l, 'a> {
                     Place::local(u),
                 );
             }
+            JoinSink::Fold(r, _) if r.window.is_some() => {
+                // The task's window, counted into `acc` (`AutoRed::window`).
+                let rt = self.tys().tcx().reference(r.ty, true);
+                let ar = self.temp(rt);
+                self.assign(ar, Rvalue::Ref(BorrowKind::Mut, Place::local(r.acc)));
+                let u = self.unit();
+                let u = self.temp(u);
+                let name = format!("{}.__par_absorb", self.tys().display(r.ty));
+                self.call_native(
+                    &name,
+                    vec![
+                        Operand::Move(Place::local(ar)),
+                        Operand::Move(Place::local(v)),
+                    ],
+                    Place::local(u),
+                );
+            }
             JoinSink::Fold(r, _) if r.push => {
                 let rt = self.tys().tcx().reference(r.ty, true);
                 let ar = self.temp(rt);
@@ -12785,6 +12867,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 span: first.span,
                 wide: None,
                 push: true,
+                window: self.push_window(body, first, ty)?,
                 replay: false,
             })));
         }
@@ -12837,8 +12920,72 @@ impl<'l, 'a> Bx<'l, 'a> {
             span: first.span,
             wide,
             push: false,
+            window: None,
             replay: checked && sites.len() > 1,
         })))
+    }
+
+    /// The push of a collecting auto-par loop, when its tasks can store
+    /// into windows of `acc` itself rather than into `Vec`s of their own
+    /// that the join appends (B-2026-11-02-8). The invariants it keeps:
+    /// - every iteration pushes exactly once: the push is a statement of
+    ///   the body itself (not under an `if`, a `match`, a nested loop or
+    ///   a closure), and the loop's body leaves no iteration early (no
+    ///   `continue`, `break`, `return` or `?`, which `loop_tasks` refuses
+    ///   for every auto-par loop), so the trip count is `acc`'s growth
+    ///   and each task's window is exactly its run's length;
+    /// - `acc` is reserved for that growth once, before any task is
+    ///   spawned, and is otherwise untouched until the join: the body
+    ///   names it only at the push, and no task captures it;
+    /// - the tasks store into disjoint windows past `acc`'s length, which
+    ///   only the join's absorb (in iteration order) counts in, so after a
+    ///   panic `acc` holds exactly the runs joined before it;
+    /// - the elements need no drop, so a window that is never absorbed
+    ///   (a panicking or cancelled loop) leaves nothing to drop.
+    ///
+    /// Nothing observable changes: the elements, their order and the
+    /// loop's effects and panics are the chunked form's, only the copy
+    /// and the second buffer go. A push under a condition keeps the chunks.
+    /// `KARAC_AUTO_PAR_WINDOW=0` keeps them for every loop.
+    fn push_window(
+        &mut self,
+        body: &'a Block,
+        site: RedSite<'a>,
+        vec_ty: Ty,
+    ) -> R<Option<PushWindow<'a>>> {
+        if std::env::var("KARAC_AUTO_PAR_WINDOW").as_deref() == Ok("0")
+            || !body.stmts.iter().any(|s| std::ptr::eq(s, site.stmt))
+        {
+            return Ok(None);
+        }
+        let elem_ty = match self.tys().tcx().kind(vec_ty) {
+            HK::Intrinsic {
+                kind: IntrinsicKind::Vec,
+                args,
+            } => self.tys().tcx().list(args)[0],
+            _ => return Ok(None),
+        };
+        if self.needs_drop(elem_ty) || self.expr_ty(site.term)? != elem_ty {
+            return Ok(None);
+        }
+        // `acc` named once in the body, by the push itself.
+        let mut named = 0;
+        crate::span_visitor::for_each_expr_in_block(body, &mut |x| {
+            if matches!(x.kind, ExprKind::Identifier(_))
+                && self.lcx.res.get(&x.id) == Some(&Res::Local(site.sym))
+            {
+                named += 1;
+            }
+        });
+        if named != 1 {
+            return Ok(None);
+        }
+        Ok(Some(PushWindow {
+            stmt: site.stmt,
+            elem: site.term,
+            vec_ty,
+            elem_ty,
+        }))
     }
 
     /// Whether every term a sum's statement adds is never negative: its
@@ -13065,7 +13212,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             } => (&**left, &**right),
             _ => return self.for_range(e, label, pattern, iterable, body, dest),
         };
-        let skip: FxHashSet<SymbolId> = match &pattern.kind {
+        let mut skip: FxHashSet<SymbolId> = match &pattern.kind {
             PatternKind::Binding(n) => self
                 .lcx
                 .binding_syms
@@ -13082,6 +13229,10 @@ impl<'l, 'a> Bx<'l, 'a> {
                 let wt = tcx.intern(HK::Int(IntSize::I128));
                 tcx.tuple(&[wt, wt, wt])
             }
+            // An in-place collect's task returns how many it stored.
+            Some(AutoRed {
+                window: Some(_), ..
+            }) => self.tys().tcx().intern(HK::UInt(UIntSize::Usize)),
             Some(r) => r.ty,
             None => self.unit(),
         };
@@ -13179,6 +13330,36 @@ impl<'l, 'a> Bx<'l, 'a> {
         let remc = self.temp(c);
         self.assign(remc, Rvalue::BinaryOp(BinOp::Rem, copy(n), copy(d)));
         let (k, q, rem) = (narrow(self, kc), narrow(self, qc), narrow(self, remc));
+        // An in-place collect (`AutoRed::window`): `acc` reserved once for
+        // all `n` pushes, before any task runs, and the address one past
+        // its last element, where the windows start.
+        let usize_t = self.tys().tcx().intern(HK::UInt(UIntSize::Usize));
+        let window = match red {
+            Some(
+                r @ AutoRed {
+                    window: Some(pw), ..
+                },
+            ) => {
+                let wt = self.tys().tcx().intern(HK::RawPtr {
+                    mutable: true,
+                    pointee: pw.elem_ty,
+                });
+                let nu = self.temp(usize_t);
+                self.assign(nu, Rvalue::Cast(CastKind::IntToInt, copy(n), usize_t));
+                let rt = self.tys().tcx().reference(r.ty, true);
+                let ar = self.temp(rt);
+                self.assign(ar, Rvalue::Ref(BorrowKind::Mut, Place::local(r.acc)));
+                let w0 = self.temp(wt);
+                let name = format!("{}.__par_window", self.tys().display(r.ty));
+                self.call_native(
+                    &name,
+                    vec![Operand::Move(Place::local(ar)), copy(nu)],
+                    Place::local(w0),
+                );
+                Some((pw, w0, wt))
+            }
+            _ => None,
+        };
         let j = self.temp(t);
         self.assign(j, Rvalue::Use(int(0)));
         let from = self.temp(t);
@@ -13215,8 +13396,31 @@ impl<'l, 'a> Bx<'l, 'a> {
         self.locals.insert(hi_sym, run_hi);
         self.closure_extra_caps = vec![lo_sym, hi_sym];
         self.closure_by_value = [lo_sym, hi_sym].into_iter().collect();
+        // An in-place collect's task takes the windows' start and its own
+        // first element's index, `from - lo`, by value, and never `acc`.
+        let task_window = match window {
+            Some((pw, w0, wt)) => {
+                let (ptr_sym, start_sym) = (self.lcx.synthetic_sym(), self.lcx.synthetic_sym());
+                let ptr = self.temp(wt);
+                self.assign(ptr, Rvalue::Use(copy(w0)));
+                let (from_c, lo_c) = (widen(self, from), widen(self, lo));
+                let d = self.temp(c);
+                self.assign(d, Rvalue::BinaryOp(BinOp::Sub, copy(from_c), copy(lo_c)));
+                let start = self.temp(usize_t);
+                self.assign(start, Rvalue::Cast(CastKind::IntToInt, copy(d), usize_t));
+                self.locals.insert(ptr_sym, ptr);
+                self.locals.insert(start_sym, start);
+                self.closure_extra_caps.extend([ptr_sym, start_sym]);
+                self.closure_by_value.extend([ptr_sym, start_sym]);
+                if let Some(r) = red {
+                    skip.insert(r.sym);
+                }
+                Some((ptr_sym, start_sym, pw))
+            }
+            None => None,
+        };
         let mut held = None;
-        if let Some(r) = red {
+        if let Some(r) = red.filter(|r| r.window.is_none()) {
             let start = self.temp(r.ty);
             if r.push {
                 let name = format!("{}.new", self.tys().display(r.ty));
@@ -13241,6 +13445,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             wide: red.and_then(|r| r.wide),
             least,
             most,
+            window: task_window,
         });
         self.closure_task = true;
         self.closure_ret = Some((et, None));
@@ -13251,6 +13456,10 @@ impl<'l, 'a> Bx<'l, 'a> {
         }
         self.locals.remove(&lo_sym);
         self.locals.remove(&hi_sym);
+        if let Some((ptr_sym, start_sym, _)) = task_window {
+            self.locals.remove(&ptr_sym);
+            self.locals.remove(&start_sym);
+        }
         self.closure_task = false;
         self.closure_ret = None;
         self.closure_ret_capture = None;
@@ -22572,6 +22781,28 @@ impl<'l, 'a> Bx<'l, 'a> {
                 }
             });
             self.wide_acc = wide;
+            // An in-place collect: the windows' start, read once into a
+            // local of the task's, and `k` from the task's first element.
+            let window = match ch.window {
+                Some((ptr_sym, start_sym, push)) => {
+                    let (Some(p), Some(st)) = (
+                        self.captured.get(&ptr_sym).cloned(),
+                        self.captured.get(&start_sym).cloned(),
+                    ) else {
+                        return self.unsupported(body.span, "this loop's task");
+                    };
+                    let (pt, kt) = (self.place_type(&p), self.place_type(&st));
+                    let ptr = self.temp(pt);
+                    self.assign(ptr, Rvalue::Use(Operand::Copy(p)));
+                    let k = self.temp(kt);
+                    self.assign(k, Rvalue::Use(Operand::Copy(st.clone())));
+                    let k0 = self.temp(kt);
+                    self.assign(k0, Rvalue::Use(Operand::Copy(Place::local(k))));
+                    Some((WindowAcc { push, ptr, k }, k0))
+                }
+                None => None,
+            };
+            self.window_acc = window.map(|(w, _)| w);
             self.push_scope();
             // The run lies inside the loop's range, which the capture loads
             // do not show: a constant bound is stated by clamping to it (a
@@ -22630,11 +22861,31 @@ impl<'l, 'a> Bx<'l, 'a> {
             };
             let lo = clamp(self, lo, least, BinOp::Lt);
             let hi = clamp(self, hi, most, BinOp::Gt);
+            let bounds = (lo.clone(), hi.clone());
             let ran = self.range_loop(&None, ch.pattern, ch.body, lo, Some(hi), false, ch.ty);
             self.range_cap = None;
             ran?;
             self.pop_scope()?;
             self.wide_acc = None;
+            self.window_acc = None;
+            // How many the task stored; a debug build of the compiler also
+            // checks that it filled its window, its run's length.
+            let stored = window.map(|(w, k0)| {
+                let kt = self.b.local_ty(w.k);
+                let n = self.temp(kt);
+                self.assign(
+                    n,
+                    Rvalue::BinaryOp(
+                        BinOp::Sub,
+                        Operand::Copy(Place::local(w.k)),
+                        Operand::Copy(Place::local(k0)),
+                    ),
+                );
+                n
+            });
+            if let (Some(n), true) = (stored, cfg!(debug_assertions)) {
+                self.check_window_filled(n, bounds);
+            }
             if let Some(w) = wide {
                 self.wide_rebase(w);
             }
@@ -22643,6 +22894,9 @@ impl<'l, 'a> Bx<'l, 'a> {
                 wide,
                 job.ret_capture.and_then(|s| self.captured.get(&s).cloned()),
             ) {
+                _ if stored.is_some() => {
+                    Rvalue::Use(Operand::Copy(Place::local(stored.unwrap_or(l))))
+                }
                 (Some(w), _) => Rvalue::Aggregate(
                     AggregateKind::Tuple,
                     [w.base, w.least, w.most]
@@ -22675,6 +22929,57 @@ impl<'l, 'a> Bx<'l, 'a> {
         self.return_exit()?;
         self.scopes.clear();
         Ok(())
+    }
+
+    /// An in-place collect's internal check (B-2026-11-02-8, debug builds
+    /// of the compiler): the task stored `n` elements, its run's length
+    /// `hi - lo`, so its window is full and the join's absorb leaves no
+    /// gap. A miss is a compiler bug, and aborts.
+    fn check_window_filled(&mut self, n: Local, (lo, hi): (Operand, Operand)) {
+        let tcx = self.tys().tcx();
+        let wt = tcx.intern(HK::Int(IntSize::I128));
+        let (nt, bool_t) = (self.b.local_ty(n), self.tys().bool());
+        let [lw, hw] = [lo, hi].map(|x| {
+            let w = self.temp(wt);
+            self.assign(w, Rvalue::Cast(CastKind::IntToInt, x, wt));
+            w
+        });
+        let len = self.temp(wt);
+        self.assign(
+            len,
+            Rvalue::BinaryOp(
+                BinOp::Sub,
+                Operand::Copy(Place::local(hw)),
+                Operand::Copy(Place::local(lw)),
+            ),
+        );
+        let want = self.temp(nt);
+        self.assign(
+            want,
+            Rvalue::Cast(CastKind::IntToInt, Operand::Copy(Place::local(len)), nt),
+        );
+        let full = self.temp(bool_t);
+        self.assign(
+            full,
+            Rvalue::BinaryOp(
+                BinOp::Eq,
+                Operand::Copy(Place::local(n)),
+                Operand::Copy(Place::local(want)),
+            ),
+        );
+        let pass = self.b.new_block();
+        let fail = self.b.new_block();
+        self.goto_with(
+            TerminatorKind::SwitchInt {
+                discr: Operand::Copy(Place::local(full)),
+                targets: SwitchTargets::if_else(pass, fail),
+            },
+            fail,
+        );
+        self.diverge(TerminatorKind::Abort {
+            reason: AbortReason::Panic,
+        });
+        self.cur = pass;
     }
 
     /// `g.spawn(f)` on an `IsolatingGroup` (core-semantics §11.12): a task

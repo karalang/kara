@@ -913,6 +913,9 @@ impl<'ctx> Cx<'ctx, '_> {
             self.vec_of_clones(dest, p, n, el)?;
             return self.drop_moved(args);
         }
+        if base == "Vec" && method.starts_with("__par_") {
+            return self.par_window_native(method, args, dest);
+        }
         if matches!(base, "Vec" | "Slice" | "Array")
             && self.seq_native(base, method, args, dest)?.is_some()
         {

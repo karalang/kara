@@ -1559,6 +1559,68 @@ impl<'ctx> Cx<'ctx, '_> {
         }
     }
 
+    /// An auto-par push loop collecting in place (B-2026-11-02-8,
+    /// `Bx::push_window` in `src/mir/lower.rs`):
+    /// - `__par_window(acc, n)` reserves room for `n` more elements and
+    ///   gives the address one past `acc`'s last, where the windows start;
+    /// - `__par_put(w, k, x)` stores `x` at element `k` from `w`, inside
+    ///   the window of the task that stores it, past `acc`'s length;
+    /// - `__par_absorb(acc, k)` counts a joined task's `k` elements into
+    ///   `acc`'s length. Joined in iteration order, `acc` then holds
+    ///   exactly the windows absorbed, and never more than it reserved.
+    pub(super) fn par_window_native(
+        &mut self,
+        method: &str,
+        args: &[Operand],
+        dest: &Place,
+    ) -> R<()> {
+        let elem_size = |cx: &mut Self, t: Ty| -> R<u64> {
+            let mut t = t;
+            while let TyKind::Ref(i) | TyKind::MutRef(i) = cx.tys.kind(t) {
+                t = i;
+            }
+            match cx.tys.kind(t) {
+                TyKind::Intrinsic(IntrinsicTy::Vec(el)) | TyKind::RawPtr { pointee: el, .. } => {
+                    Ok(cx.layout(el)?.size)
+                }
+                _ => Err(format!("Vec.{method} on a `{}`", cx.tys.display(t))),
+            }
+        };
+        match (method, args) {
+            ("__par_window", [acc, n]) => {
+                let size = elem_size(self, self.operand_type(acc)?)?;
+                let n = self.int_arg(n)?;
+                let v = self.ref_arg(acc)?;
+                let pos = self
+                    .builder
+                    .build_int_compare(IntPredicate::SGT, n, self.i64(0), "")
+                    .map_err(e)?;
+                self.if_then(pos, |cx| cx.reserve_via_copy(v, n, cx.i64(size)))?;
+                let buf = self.load_ptr(v)?;
+                let len = self.load_i64(self.offset(v, 8)?)?;
+                let end = self.elem_ptr(buf, len, size)?;
+                let d = self.place_ptr(dest)?;
+                self.store(d, end.into())
+            }
+            ("__par_put", [w, k, x]) => {
+                let size = elem_size(self, self.operand_type(w)?)?;
+                let w = self.operand_ptr(w)?;
+                let w = self.load_ptr(w)?;
+                let k = self.int_arg(k)?;
+                let at = self.elem_ptr(w, k, size)?;
+                self.store_operand(at, x)
+            }
+            ("__par_absorb", [acc, k]) => {
+                let k = self.int_arg(k)?;
+                let v = self.ref_arg(acc)?;
+                let len = self.load_i64(self.offset(v, 8)?)?;
+                let m = self.builder.build_int_add(len, k, "").map_err(e)?;
+                self.store(self.offset(v, 8)?, m.into())
+            }
+            _ => Err(format!("Vec.{method}: not an in-place collect native")),
+        }
+    }
+
     /// The methods of a view or a `Vec`, or `None` for one not lowered here.
     pub(super) fn seq_native(
         &mut self,
