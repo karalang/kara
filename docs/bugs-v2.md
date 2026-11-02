@@ -60,7 +60,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | diagnostics | 86 |
 | false-positive | 86 |
-| perf | 75 |
+| perf | 76 |
 | missing-feature | 61 |
 | soundness | 34 |
 | miscompile | 29 |
@@ -77,7 +77,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | typecheck | 143 |
 | mir | 96 |
-| mir-llvm | 83 |
+| mir-llvm | 84 |
 | cli | 49 |
 | ownership | 38 |
 | interp | 26 |
@@ -133,6 +133,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-02-4 | 2026-11-02 | mir-llvm | medium | Kata 244's Map[String, i64] word-index lookups run 1.27x legacy's instructions on the MIR backend and 1.56x its cycles: the seq lane went from 1.16x to 1.66x rustc -O | — |
 | B-2026-11-02-5 | 2026-11-02 | mir-llvm | low | Kata 246's strobogrammatic check runs 1.31x legacy's instructions on the MIR backend (1.24x its cycles), on top of the wontfix unrolling gap B-2026-08-15-31: the seq lane went from 1.57x to 1.87x rustc -O | — |
 | B-2026-11-02-6 | 2026-11-02 | mir-llvm | medium | Kata 249's Map[String, Vec[String]] grouping (entry(k).or_insert(Vec.new()).push(w)) runs 1.24x legacy's instructions and 1.24x its cycles on the MIR backend: the seq lane went from 0.93x to 1.10x rustc -O | — |
+| B-2026-11-02-7 | 2026-11-02 | mir-llvm | medium | Katas 252 and 253 (meeting rooms I and II), both dominated by sorting a fresh copy of 120k intervals by start each round, run 1.14-1.20x legacy's instructions and 1.23x its cycles on the MIR backend: their seq lanes slipped ~1.2-1.3x against every comparator | — |
 
 ### Relocated
 
