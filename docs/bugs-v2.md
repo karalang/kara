@@ -63,11 +63,11 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | perf | 84 |
 | missing-feature | 62 |
 | soundness | 40 |
-| miscompile | 31 |
+| miscompile | 32 |
 | run-vs-build | 20 |
 | other | 15 |
 | codegen-gap | 14 |
-| crash | 6 |
+| crash | 7 |
 | leak | 4 |
 | use-after-free | 1 |
 
@@ -76,8 +76,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 155 |
-| mir | 99 |
-| mir-llvm | 94 |
+| mir | 100 |
+| mir-llvm | 96 |
 | cli | 49 |
 | ownership | 40 |
 | parser | 27 |
@@ -110,14 +110,11 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-02-7 | 2026-11-02 | mir-llvm | medium | Katas 252 and 253 (meeting rooms I and II), dominated by sorting a fresh copy of 120k intervals by start each round, run 1.14-1.20x legacy's instructions on the M5 (arm64) MIR backend; on x86 they measure 0.97x and 1.02x, so the gap is arm64-only and needs an arm64 measurement | — |
 | B-2026-11-02-10 | 2026-11-02 | mir-llvm | low | Kata 276's par lane runs 1.44x slower than its 2026-08-28 feed while its comparators moved 1.06-1.09x and its seq lane held, so it scales 4.6x over seq where it scaled ~6.0x; there is no matched legacy par baseline | — |
 | B-2026-11-02-17 | 2026-11-02 | mir-llvm | low | After B-2026-10-31-39, an auto-par task's loop still runs about 10% more instructions than the in-order one on kata 9 (Linux): a bounds check the in-order loop drops, the range cap's back-edge test, and two prefix compares per term on a sum whose terms can be negative (kata 7's `sum + (r as i64)`); the buffer reload is fixed (e888029d05) | — |
-| B-2026-11-02-27 | 2026-11-02 | typecheck+mir-llvm | high | `tx.send(s)` on a `Sender[ref String]` with a plain `String` local passes check, though §5.7 forbids a view in a channel; at run the receiver reads garbage: `panic: out of memory` on run and llvm, ASan global-buffer-overflow, interp leak | — |
-| B-2026-11-02-28 | 2026-11-02 | typecheck | medium | A method with a `self` receiver that returns a reference may return a borrowed ARGUMENT (`fn pick(self, k: ref String) -> ref String { k }`): §5.4's receiver rule says the result borrows `self` only and the body is checked against it, but check accepts, so a caller can keep the result past the argument | — |
-| B-2026-11-02-29 | 2026-11-02 | typecheck | medium | Returning `m.get(k) ?? ""` from a function is refused (E0516 'cannot drop the temporary value'), and so is `let o = m.get(k); o ?? ""` ('returned borrow does not originate from a ref parameter'), though §5.3 names `m.get(k) ?? ""` as a static fallback that may be kept and returned | — |
-| B-2026-11-02-30 | 2026-11-02 | typecheck | medium | Two `TaskGroup` tasks that write DISJOINT fields of one local (`p.x` and `p.y`) are refused: 'a task of `g` captures `p` by `mut ref`, which no other task of the group may capture'; §9.1 captures places, and the same pair is accepted in `par {}` and as two plain closures | — |
-| B-2026-11-02-31 | 2026-11-02 | typecheck | low | A non-escaping `Fn` parameter may be captured by a closure the callee returns (`fn wrap(f: Fn() -> i64) -> Fn() -> i64 { || f() + 1 }`); §9.3 lets the callee only call it or pass it to another non-escaping parameter | — |
 | B-2026-11-02-34 | 2026-11-02 | ownership | medium | A local moved BEFORE an `if`/`match` and reassigned in EVERY branch is refused at the later use ('value s moved here, used again here'), though §3.4 makes it initialized again; one reassignment after the move, or a move inside the branch, is accepted | — |
 | B-2026-11-02-35 | 2026-11-02 | typecheck | medium | `return` inside a `par for` body is refused ('`return` may not cross out of a `par for` body'), though §11.7 makes `return` in a branch the same early exit as `?`, with `par for` taking the earliest exit in iteration order; `return` in a `par {}` branch and `?` in `par for` are accepted | — |
 | B-2026-11-02-36 | 2026-11-02 | effect | medium | Two `par` branches calling a generic `fn ap[F: Fn(i64) -> i64](x: i64, f: F)` with pure closures or a pure named fn conflict as 'unknown (a function value that cannot be resolved)'; §12 computes a generic call's effects on the monomorphised instance, and the non-generic `f: Fn(i64) -> i64` form is accepted | — |
+| B-2026-11-02-37 | 2026-11-02 | mir+mir-llvm | high | A string or integer LITERAL stored into a library `ref` slot (`v.push("lit")` on `Vec[ref String]`, `tx.send("lit")` / `tx.send(7)` on `Sender[ref T]`) has no §5.3 static promotion: interp leaks, ASan global-buffer-overflow, llvm prints nothing or OOM | — |
+| B-2026-11-02-38 | 2026-11-02 | mir-llvm | high | llvm natives for `ref` element types: `Vec[ref String].fill(r)` panics out of memory (ASan global-buffer-overflow), and iterating a `SortedSet[ref String]` prints nothing while `len()` is 1 | — |
 
 ### Relocated
 
@@ -574,6 +571,11 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-02-24 | mir-llvm | low | Kata 38's seq binary stays at 312 KiB on g96fca5370 where the B-2026-10-28-36 fix took 12 other kata seq binaries to 52-69 KB | ad984ef96b |
 | B-2026-11-02-25 | parser | medium | 128 nested `{` followed by a statement keyword (`if`, `let`, `while`, ...) runs the parser out of memory: the refused statement is retried forever, o… | 1d2fc6d232 |
 | B-2026-11-02-26 | mir-llvm | medium | A `Vec.with_capacity(n)` filled by a counting push loop runs 12.6x legacy's instructions on x86: mir::presize only takes a `Vec.new()` start, so ever… | 791fe05de0 |
+| B-2026-11-02-27 | typecheck+mir-llvm | high | `tx.send(s)` on a `Sender[ref String]` with a plain `String` local passes check, though §5.7 forbids a view in a channel; at run the receiver reads g… | 5c73fea787 |
+| B-2026-11-02-28 | typecheck | medium | A method with a `self` receiver that returns a reference may return a borrowed ARGUMENT (`fn pick(self, k: ref String) -> ref String { k }`): §5.4's… | 77d7baa2b1 |
+| B-2026-11-02-29 | typecheck | medium | Returning `m.get(k) ?? ""` from a function is refused (E0516 'cannot drop the temporary value'), and so is `let o = m.get(k); o ?? ""` ('returned bor… | 77d7baa2b1 |
+| B-2026-11-02-30 | typecheck | medium | Two `TaskGroup` tasks that write DISJOINT fields of one local (`p.x` and `p.y`) are refused: 'a task of `g` captures `p` by `mut ref`, which no other… | 77d7baa2b1 |
+| B-2026-11-02-31 | typecheck | low | A non-escaping `Fn` parameter may be captured by a closure the callee returns (`fn wrap(f: Fn() -> i64) -> Fn() -> i64 { \|\| f() + 1 }`); §9.3 lets th… | 77d7baa2b1 |
 | B-2026-11-02-33 | effect | low | Coercing a struct whose trait method uses a provider-rooted resource into `dyn At` reports E_NO_PROVIDER ('no provider for Clk .. | 55c64b1eca |
 
 </details>
