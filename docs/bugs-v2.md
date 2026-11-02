@@ -107,13 +107,10 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-31-41 | 2026-10-31 | mir | medium | karac still compiles a kata 1.54x slower than rustc -O at twice its peak memory on the M5 (median over 24 katas: 165 ms vs 103 ms, 59.8 MiB vs 28.3 MiB), after B-2026-10-28-37's library-prune fix | — |
 | B-2026-11-01-17 | 2026-11-01 | runtime | medium | Kata 71's auto-par binary runs 1.6-2.6x SLOWER with exactly two workers than with one (KARAC_THREADS=2: 0.24-0.39 s against 0.15 s) on the M5, on 5x the cycles for 7% more instructions; three or more workers run 0.04-0.06 s | — |
 | B-2026-11-01-18 | 2026-11-01 | mir-llvm | medium | Kata 87's scramble-string DP runs 1.67x legacy's instructions on the MIR backend (1.13x its cycles): the seq lane went from 0.95x to 1.09x rustc -O and the par lane from 1.03x to 1.39x rayon | — |
-| B-2026-11-01-19 | 2026-11-01 | mir-llvm | low | Kata 88's merge-sorted-array two-pointer loop runs 1.38x legacy's instructions and 1.23x its cycles on the MIR backend: 0.81x -> 1.00x rustc -O | — |
 | B-2026-11-01-22 | 2026-11-01 | mir-llvm | low | Kata 116's populate-next-right-pointers loop runs legacy's instruction count on the MIR backend but 1.23x its cycles: the seq lane went from 0.90x to 1.10x rustc -O | — |
-| B-2026-11-01-36 | 2026-11-01 | mir-llvm | medium | Kata 139's word-break DP inner loop runs 1.75x legacy's instructions on the MIR backend (1.54x its cycles): the seq lane went from 0.99x to 1.50x rustc -O | — |
 | B-2026-11-01-42 | 2026-11-01 | mir-llvm | medium | Kata 147's insertion-sort-list runs legacy's instruction count on the MIR backend but 1.36x its cycles: the seq lane went from 0.72x to 0.99x rustc -O and from 0.82x to 1.31x C | — |
 | B-2026-11-01-43 | 2026-11-01 | mir-llvm | low | Kata 164's maximum-gap runs 1.30x legacy's instructions on the M5 (arm64) MIR backend (1.19x its cycles); on x86 it measures 1.06x, so the gap is arm64-only and needs an arm64 measurement | — |
 | B-2026-11-01-44 | 2026-11-01 | mir-llvm | medium | Kata 170's Map[i64, i64]-heavy two-sum-III runs FEWER instructions on the MIR backend than legacy (0.75x) but 1.43x its cycles: the seq lane went from 2.56x to 3.01x rustc -O | — |
-| B-2026-11-01-47 | 2026-11-01 | mir-llvm | medium | Kata 216's combination-sum-III recursion runs 1.41x legacy's instructions on the MIR backend (1.21x its cycles): the seq lane went from 1.07x to 1.26x rustc -O | — |
 | B-2026-11-02-3 | 2026-11-02 | mir-llvm | medium | Kata 242's valid-anagram byte loop runs 1.11x legacy's instructions on the MIR backend but 1.21x its cycles: the seq lane went from 1.08x to 1.30x rustc -O and from 1.00x to 1.22x C | — |
 | B-2026-11-02-5 | 2026-11-02 | mir-llvm | low | Kata 246's strobogrammatic check runs 1.31x legacy's instructions on the MIR backend (1.24x its cycles), on top of the wontfix unrolling gap B-2026-08-15-31: the seq lane went from 1.57x to 1.87x rustc -O | — |
 | B-2026-11-02-7 | 2026-11-02 | mir-llvm | medium | Katas 252 and 253 (meeting rooms I and II), dominated by sorting a fresh copy of 120k intervals by start each round, run 1.14-1.20x legacy's instructions on the M5 (arm64) MIR backend; on x86 they measure 0.97x and 1.02x, so the gap is arm64-only and needs an arm64 measurement | — |
@@ -132,6 +129,17 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-27-6 | 2026-10-27 | mir-llvm | low | The v2 wasm build always emits a core module: `--bindings=component` (the wasm_wasi project default) does not embed the WIT world or componentize, `[toolchain] wasm-tools` is never consulted, and a `host fn` imports from `kara_host` instead of the canonical-ABI `kara:<pkg>/host`; 2 cli tests ignored | docs/deferred.md § Web: Bindings, component model, entry points |
 | B-2026-10-31-16 | 2026-10-31 | mir | low | `karac build` and `karac run` still do the front end's work twice in CPU: `check_v2` and the MIR builder's `frontend()` now run on two threads at once (6777e6ea51), but each parses, resolves, typechecks and ownership-checks the program and its library | docs/deferred.md § Tooling: Shared Front End for `check` and `build` |
 | B-2026-11-01-40 | 2026-11-01 | effect | low | CORRECTED 11-02 (kata thread): no index-disjointness analysis exists on v2 for `par {}` OR `par for` (`par for i in 0..2 { v[i] = i + 1 }` is refused too, and so is an Array); the analysis core-semantics 11.2 calls "existing" is deferred.md "Auto-Parallel Loops over Provably-Disjoint Indexed Writes". Was: Two `par {}` branches that write CONSTANT, different indices of one `Vec` (`{ v[0] = 1; 0 }` and `{ v[1] = 2; 0 }`) are refused as conflicting mutable borrows of `v`, where core-semantics 11.2 says disjoint index ranges proven by the disjointness analysis do not conflict | docs/deferred.md § Auto-Parallel Loops over Provably-Disjoint Indexed Writes |
+
+</details>
+
+### Wontfix
+
+<details><summary>Wontfix — real and reproduced, measured to a standstill, no action left. Titles are kept in full: they carry the measurements that closed the question, so read one before reopening its subject.</summary>
+
+| id | date | surface | sev | title |
+|---|---|---|---|---|
+| B-2026-11-01-36 | 2026-11-01 | mir-llvm | medium | Kata 139's word-break DP inner loop runs 1.18x legacy's instructions on the MIR backend (x86 callgrind; was 1.75x on M5): a deliberate trade, since the rest is LLVM's O2 unroll threshold (0.91x at O3's), which is not raised pipeline-wide for one kernel |
+| B-2026-11-01-47 | 2026-11-01 | mir-llvm | medium | Kata 216's combination-sum-III recursion runs 1.28x legacy's instructions on the MIR backend (x86 callgrind; was 1.41x on M5): a deliberate trade, since legacy's IPSCCP fold needs a monotone fact MIR's step shape loses and the i1-branch form that recovers 1.23x costs kata 139 10% |
 
 </details>
 
@@ -521,6 +529,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-01-14 | cli | low | `karac run` with no file inside a `karac new --lib` project says "missing file argument" and suggests "`karac run` inside a project to run its src/ma… | 51cbfabbb4 |
 | B-2026-11-01-15 | typecheck | medium | `h.d ?? x` with `h` a borrowed struct whose field `d: Option[Node]` holds a `shared` handle is refused by check as a move out of a borrow; core-seman… | 8df360f9f9 |
 | B-2026-11-01-16 | mir | medium | An assignment whose place is a method-call chain evaluates the value before the place, against core-semantics 8.2 (place operands first): `m.entry(1)… | edc88dd260 |
+| B-2026-11-01-19 | mir-llvm | low | Kata 88's merge-sorted-array two-pointer loop runs 1.38x legacy's instructions and 1.23x its cycles on the MIR backend: 0.81x -> 1.00x rustc -O | 80a4fd013b |
 | B-2026-11-01-21 | mir-llvm | medium | Kata 118's Pascal's-triangle build loop runs 1.72x legacy's instructions on the MIR backend (1.30x its cycles): the seq lane went from 0.56x to 0.76x… | 11d7eb7f01 |
 | B-2026-11-01-23 | mir-llvm | medium | Kata 120's default build auto-parallelizes its one-off 200-row triangle build and then runs +2.0G instructions (+29%) whenever it has two or more wor… | 3a1355614d98e3157c3d3187a375b4f0c4ccef97 |
 | B-2026-11-01-24 | mir-llvm | medium | MIR `shared` boxes carry a 16-byte strong+weak count header where legacy carried 8, so a 24-byte node body (a tree's val + left + right) takes a 48-b… | 498a852019e616d880d51340d941042bb46ad0f2 |
