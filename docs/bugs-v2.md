@@ -58,8 +58,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
+| false-positive | 92 |
 | diagnostics | 89 |
-| false-positive | 89 |
 | perf | 84 |
 | missing-feature | 62 |
 | soundness | 40 |
@@ -75,16 +75,16 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 154 |
+| typecheck | 155 |
 | mir | 99 |
 | mir-llvm | 94 |
 | cli | 49 |
-| ownership | 39 |
+| ownership | 40 |
 | parser | 27 |
 | interp | 26 |
 | runtime | 23 |
 | codegen | 22 |
-| effect | 14 |
+| effect | 15 |
 | other | 4 |
 | resolver | 4 |
 | autopar | 4 |
@@ -115,6 +115,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-02-29 | 2026-11-02 | typecheck | medium | Returning `m.get(k) ?? ""` from a function is refused (E0516 'cannot drop the temporary value'), and so is `let o = m.get(k); o ?? ""` ('returned borrow does not originate from a ref parameter'), though §5.3 names `m.get(k) ?? ""` as a static fallback that may be kept and returned | — |
 | B-2026-11-02-30 | 2026-11-02 | typecheck | medium | Two `TaskGroup` tasks that write DISJOINT fields of one local (`p.x` and `p.y`) are refused: 'a task of `g` captures `p` by `mut ref`, which no other task of the group may capture'; §9.1 captures places, and the same pair is accepted in `par {}` and as two plain closures | — |
 | B-2026-11-02-31 | 2026-11-02 | typecheck | low | A non-escaping `Fn` parameter may be captured by a closure the callee returns (`fn wrap(f: Fn() -> i64) -> Fn() -> i64 { || f() + 1 }`); §9.3 lets the callee only call it or pass it to another non-escaping parameter | — |
+| B-2026-11-02-34 | 2026-11-02 | ownership | medium | A local moved BEFORE an `if`/`match` and reassigned in EVERY branch is refused at the later use ('value s moved here, used again here'), though §3.4 makes it initialized again; one reassignment after the move, or a move inside the branch, is accepted | — |
+| B-2026-11-02-35 | 2026-11-02 | typecheck | medium | `return` inside a `par for` body is refused ('`return` may not cross out of a `par for` body'), though §11.7 makes `return` in a branch the same early exit as `?`, with `par for` taking the earliest exit in iteration order; `return` in a `par {}` branch and `?` in `par for` are accepted | — |
+| B-2026-11-02-36 | 2026-11-02 | effect | medium | Two `par` branches calling a generic `fn ap[F: Fn(i64) -> i64](x: i64, f: F)` with pure closures or a pure named fn conflict as 'unknown (a function value that cannot be resolved)'; §12 computes a generic call's effects on the monomorphised instance, and the non-generic `f: Fn(i64) -> i64` form is accepted | — |
 
 ### Relocated
 
@@ -137,7 +140,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 |---|---|---|---|---|
 | B-2026-10-28-3 | 2026-10-28 | mir-llvm | low | A compiled program's run time moves 10-20% with where its hot function lands, and the runtime archive is one of the things that moves it: kata 125 runs about 10% slower whenever karac.main sits at 16 mod 64 (the full archive's larger headers shift user code by 0x3130 bytes), kata 28 KMP 0.41 vs 0.52 s between layouts; no alignment setting tried removes the swing without slowing another program 7-20% |
 | B-2026-10-31-41 | 2026-10-31 | mir | medium | karac compiles a kata 1.54x slower than rustc -O at twice its peak memory on the M5 (median over 24 katas: 165 ms vs 103 ms, 59.8 MiB vs 28.3 MiB): a deliberate divergence, within ADR-2 (0.73x legacy build time over the frozen set at f1416771a4); rustc parity is not a v1 bar |
-| B-2026-11-01-36 | 2026-11-01 | mir-llvm | medium | Kata 139's word-break DP inner loop runs 1.18x legacy's instructions on the MIR backend (x86 callgrind; was 1.75x on M5): a deliberate trade, since the rest is LLVM's O2 unroll threshold (0.91x at O3's), which is not raised pipeline-wide for one kernel |
 | B-2026-11-01-47 | 2026-11-01 | mir-llvm | medium | Kata 216's combination-sum-III recursion runs 1.28x legacy's instructions on the MIR backend (x86 callgrind; was 1.41x on M5): a deliberate trade, since legacy's IPSCCP fold needs a monotone fact MIR's step shape loses and the i1-branch form that recovers 1.23x costs kata 139 10% |
 
 </details>
@@ -545,6 +547,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-01-33 | typecheck | low | `with_provider[R](p, ..)` moves `p` (core-semantics 14.4), but `karac check` accepts a later use of `p`, which `karac run` and `karac build` then ref… | 2ebd405d13 |
 | B-2026-11-01-34 | mir | low | A closure that writes one field through a `mut ref` parameter (`let mut f = \|\| { p.a += 1; };` with `p: mut ref P2`) holds the whole `*p`, so writing… | 2bc12f367e |
 | B-2026-11-01-35 | mir | low | A generic call with a `Copy` place argument followed by an argument that writes the place (`pr(c.n, bump(mut c))` with `fn pr[T: Display](a: T, b: T)… | 6a51dbc47e |
+| B-2026-11-01-36 | mir-llvm | medium | Kata 139's word-break DP inner loop ran 1.18x legacy's instructions on the MIR backend (x86 callgrind; 1.75x on M5): LLVM's O2 unroll threshold left… | 9cde7995eb |
 | B-2026-11-01-37 | effect | medium | `par { 1, 2 }` inside a `TaskGroup` task is refused as a `writes(Stdout)` conflict between its two branches when the task holds a local whose `Drop`… | d0ee689070 |
 | B-2026-11-01-38 | mir | low | A whole `Array[i64, 2]` passed to a bare (copying) parameter is held as a borrow across the later arguments: `sh(a, set(mut a))` and `sh(a, { a[0] =… | 6a51dbc47e |
 | B-2026-11-01-39 | effect | medium | The drop of a `dyn` value is charged no effects, against core-semantics 12 default 3 (a drop's effects are its type's drop glue's): `par { { let d =… | 58b9c2df3e |
