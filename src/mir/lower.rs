@@ -3443,6 +3443,10 @@ struct Bx<'l, 'a> {
     /// `let f = |..| ..` bindings whose closure is later stored where it
     /// escapes, by the binding pattern's id (see `let_closure_escapes`).
     escaping_lets: FxHashSet<NodeId>,
+    /// The `let mut f: Fn(..) = <closure>` bindings that another function
+    /// value may replace, which hold the declared, erased type
+    /// (B-2026-11-02-16).
+    replaced_lets: FxHashSet<NodeId>,
     /// Closure literals inside the value this body returns (see
     /// `note_returned_closures`).
     returned_closures: FxHashSet<NodeId>,
@@ -3558,6 +3562,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             pinned: FxHashMap::default(),
             read_now: FxHashSet::default(),
             escaping_lets: FxHashSet::default(),
+            replaced_lets: FxHashSet::default(),
             returned_closures: FxHashSet::default(),
             assigned_caps: Default::default(),
             task_moves: false,
@@ -5689,12 +5694,30 @@ impl<'l, 'a> Bx<'l, 'a> {
         out
     }
 
-    /// Record the `let f = |..| ..` bindings of `block` whose closure escapes.
+    /// Record the `let f = |..| ..` bindings of `block` whose closure
+    /// escapes, and the declared-`Fn` `let mut` ones another function value
+    /// may replace.
     fn note_escaping_lets(&mut self, block: &Block) {
         for s in &block.stmts {
-            let StmtKind::Let { pattern, value, .. } = &s.kind else {
+            let StmtKind::Let {
+                pattern,
+                value,
+                is_mut,
+                ty,
+            } = &s.kind
+            else {
                 continue;
             };
+            if let (PatternKind::Binding(name), true, Some(_)) = (&pattern.kind, *is_mut, ty) {
+                let sym = self
+                    .lcx
+                    .binding_syms
+                    .get(&(pattern.id, name.clone()))
+                    .copied();
+                if sym.is_some_and(|sym| self.let_fn_replaced(block, sym)) {
+                    self.replaced_lets.insert(pattern.id);
+                }
+            }
             let (PatternKind::Binding(name), ExprKind::Closure { .. }) =
                 (&pattern.kind, &value.kind)
             else {
@@ -5732,6 +5755,54 @@ impl<'l, 'a> Bx<'l, 'a> {
                 }
                 ExprKind::Return(Some(v)) => is_sym(v),
                 ExprKind::Tuple(es) | ExprKind::ArrayLiteral(es) => es.iter().any(is_sym),
+                _ => false,
+            };
+        });
+        found
+    }
+
+    /// Whether a `let mut` binding `sym` of `block` may be given another
+    /// function value: assigned, or lent `mut` to anything but a parameter
+    /// declared `mut ref` / `ref` of a function type, which the callee is
+    /// specialised to (B-2026-10-19-68). `mem.replace(mut f, g)` is the
+    /// case B-2026-11-02-16 found; only the erased type holds both values.
+    fn let_fn_replaced(&self, block: &Block, sym: SymbolId) -> bool {
+        let is_sym = |e: &Expr| {
+            matches!(e.kind, ExprKind::Identifier(_))
+                && matches!(self.lcx.res.get(&e.id), Some(Res::Local(s)) if *s == sym)
+        };
+        let mut found = false;
+        crate::span_visitor::for_each_stmt_in_block(block, &mut |s| {
+            found |= match &s.kind {
+                StmtKind::Assign { target, .. } => is_sym(target),
+                StmtKind::MultiAssign { targets, .. } => targets.iter().any(is_sym),
+                _ => false,
+            };
+        });
+        if found {
+            return true;
+        }
+        let tcx = self.tys().tcx();
+        let takes_fn_ref = |call: &Expr, i: usize| {
+            let Some(Callee::Def(d)) = self.lcx.calls.get(&call.id).map(|rc| &rc.callee) else {
+                return false;
+            };
+            let Some(p) = self.lcx.fns.get(d).and_then(|item| item.f.params.get(i)) else {
+                return false;
+            };
+            self.lcx.node_types.get(&p.pattern.id).is_some_and(|&t| {
+                matches!(tcx.kind(t), HK::Ref(i) | HK::MutRef(i) if matches!(tcx.kind(i), HK::Fn { .. }))
+            })
+        };
+        crate::span_visitor::for_each_expr_in_block(block, &mut |e| {
+            found |= match &e.kind {
+                ExprKind::Call { args, .. } => args
+                    .iter()
+                    .enumerate()
+                    .any(|(i, a)| a.mut_marker && is_sym(&a.value) && !takes_fn_ref(e, i)),
+                ExprKind::MethodCall { args, .. } => {
+                    args.iter().any(|a| a.mut_marker && is_sym(&a.value))
+                }
                 _ => false,
             };
         });
@@ -6002,9 +6073,28 @@ impl<'l, 'a> Bx<'l, 'a> {
                             self.closure_escapes = true;
                         }
                         let (op, t) = self.fn_value(value)?;
+                        // A `let mut` declared `Fn` that another function
+                        // value may replace holds the declared, erased type,
+                        // which only can hold both (B-2026-11-02-16). The
+                        // closure is built as it would be for an undeclared
+                        // binding, its captures included, and erased into
+                        // the local. One that is only called or lent to a
+                        // function-typed parameter keeps the closure's own
+                        // type, whose drop holds no borrow.
+                        let declared = match self.replaced_lets.contains(&pattern.id) {
+                            true => {
+                                Some(self.node_ty(pattern.id, pattern.span)?).filter(|&d| d != t)
+                            }
+                            false => None,
+                        };
+                        let t = declared.unwrap_or(t);
                         let l = self.user_local(name, t, pattern.id);
                         self.note_declared_effects(l, (pattern.id, name), ty.as_ref());
-                        self.assign(l, Rvalue::Use(op));
+                        let rv = match declared {
+                            Some(d) => Rvalue::Cast(CastKind::Erase, self.erase_source(op), d),
+                            None => Rvalue::Use(op),
+                        };
+                        self.assign(l, rv);
                         self.pop_scope()?;
                         self.declare(l, t);
                         return Ok(());
@@ -24200,9 +24290,23 @@ impl<'l, 'a> Bx<'l, 'a> {
                     // A function value stored in a collection of `Fn(..)`
                     // (`v.push(w)`) is erased to the element type, as
                     // `vec![w]` erases it (B-2026-10-15-26).
+                    // So is the closure `Option[Fn() -> T].replace(|| ..)`
+                    // keeps (B-2026-11-02-19).
                     let stored_fn = if stores {
                         self.lib_param_tys(base, method)
                             .and_then(|ps| ps.get(i).copied())
+                            .or_else(|| {
+                                let tcx = self.tys().tcx();
+                                let opt = tcx.adt_of(base).is_some_and(|(a, _)| a.name == "Option");
+                                match tcx.kind(base) {
+                                    HK::Adt { args, .. }
+                                        if opt && method == "replace" && i == 0 =>
+                                    {
+                                        tcx.list(args).first().copied()
+                                    }
+                                    _ => None,
+                                }
+                            })
                             .filter(|&pt| matches!(self.tys().tcx().kind(pt), HK::Fn { .. }))
                     } else {
                         None

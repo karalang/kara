@@ -992,6 +992,21 @@ impl Cx<'_> {
         }
     }
 
+    /// What the value behind the reference `op` holds: each place it
+    /// borrows contributes what that place holds, and a place behind
+    /// another reference, whose contents came from outside, its loan.
+    fn held_behind(&self, o: &Origins, op: &Operand, into: &mut LoanSet) {
+        let Some(p) = op.place() else { return };
+        for li in o.get(p.local).iter() {
+            let l = &self.loans[li];
+            if l.place.projection.contains(&ProjElem::Deref) {
+                into.insert(li);
+            } else {
+                self.place_origins(o, &l.place, into);
+            }
+        }
+    }
+
     /// `dest = <value with origins val>`.
     fn assign(&self, o: &mut Origins, dest: &Place, mut val: LoanSet) {
         if !self.holds(dest) {
@@ -1199,10 +1214,30 @@ impl Cx<'_> {
             let Some(through_shared) = stores.filter(|_| p.projection.is_empty()) else {
                 continue;
             };
+            // Into an erased function slot (`mem.swap(mut f, mut g)` on two
+            // `Fn` locals) a callee stores a function value: one moved out
+            // from behind another reference argument holds what that
+            // pointee holds, never the reference itself, since a closure
+            // stored there captures by move and cannot take a borrowed
+            // parameter (§9.3; B-2026-11-02-19).
+            let fn_slot = matches!(
+                self.tys.kind(pt.ty),
+                TyKind::MutRef(t) if matches!(self.tys.kind(t), TyKind::Fn { .. })
+            );
             let mut others = LoanSet::default();
             let rest = args.iter().enumerate().filter(|(j, _)| *j != i);
             for a in std::iter::once(func).chain(rest.map(|(_, a)| a)) {
-                self.operand_origins(&before, a, &mut others);
+                let behind_ref = fn_slot
+                    && a.place().is_some_and(|q| {
+                        place_ty(self.body, self.tys, q).is_ok_and(|qt| {
+                            matches!(self.tys.kind(qt.ty), TyKind::Ref(_) | TyKind::MutRef(_))
+                        })
+                    });
+                if behind_ref {
+                    self.held_behind(&before, a, &mut others);
+                } else {
+                    self.operand_origins(&before, a, &mut others);
+                }
             }
             self.store_through(o, p.local, &others, through_shared);
         }

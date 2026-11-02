@@ -886,6 +886,8 @@ pub trait MutVisitor {
     fn expr(&mut self, _e: &mut Expr) {}
     /// Every pattern, before its parts are walked.
     fn pattern(&mut self, _p: &mut Pattern) {}
+    /// Every statement, before its parts are walked.
+    fn stmt(&mut self, _s: &mut Stmt) {}
 }
 
 struct SpanOnly<F>(F);
@@ -937,6 +939,20 @@ pub fn for_each_expr_in_block(b: &Block, f: &mut impl FnMut(&Expr)) {
         fn span(&mut self, _: &mut Span) {}
         fn expr(&mut self, e: &mut Expr) {
             (self.0)(e)
+        }
+    }
+    let mut copy = b.clone();
+    visit_block_spans_mut(&mut copy, &mut Each(f));
+}
+
+/// Call `f` on every statement in `b`, nested blocks' included, outermost
+/// first.
+pub fn for_each_stmt_in_block(b: &Block, f: &mut impl FnMut(&Stmt)) {
+    struct Each<'f, F>(&'f mut F);
+    impl<F: FnMut(&Stmt)> MutVisitor for Each<'_, F> {
+        fn span(&mut self, _: &mut Span) {}
+        fn stmt(&mut self, s: &mut Stmt) {
+            (self.0)(s)
         }
     }
     let mut copy = b.clone();
@@ -1223,6 +1239,7 @@ fn visit_block_spans_mut(b: &mut Block, visit: &mut impl MutVisitor) {
 }
 
 fn visit_stmt_spans_mut(s: &mut Stmt, visit: &mut impl MutVisitor) {
+    visit.stmt(s);
     visit.span(&mut s.span);
     visit.node_id(&mut s.id);
     match &mut s.kind {
