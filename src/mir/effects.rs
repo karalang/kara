@@ -581,7 +581,23 @@ pub(crate) fn analyze_with(program: &Program, tys: &TyInterner, size_gate: bool)
                     resource: r.clone(),
                 };
                 if d.default.is_none() {
-                    report.no_provider.push(site);
+                    // A `dyn` `main` makes runs with the defaults, so a
+                    // method of it that needs a provider is refused at
+                    // the coercion as such (design.md §9).
+                    match super::providers::main_dyn_refusal(
+                        program,
+                        a.tys,
+                        main,
+                        block,
+                        span,
+                        r,
+                        &report.providers,
+                    ) {
+                        Some(text) => report
+                            .refused
+                            .push((site, super::providers::Refusal::DynProvider { text })),
+                        None => report.no_provider.push(site),
+                    }
                 } else if d.default_stateful && *access == Access::Writes {
                     let caller = match made {
                         // A value `main` makes: the closure, `dyn` method or

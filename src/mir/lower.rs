@@ -27116,11 +27116,13 @@ fn finish_build(mut lowered: Lowered) -> Result<Lowered, String> {
             && par_conflict(&report).is_none()
             && report.task_conflicts.is_empty()
         {
-            report.refused = crate::mir::providers::specialise(
+            // After `main`'s own refusals, which `analyze` found.
+            let more = crate::mir::providers::specialise(
                 &mut lowered.program,
                 &lowered.tys,
                 &report.providers,
             )?;
+            report.refused.extend(more);
         }
         lowered.effects = Some(report);
     }

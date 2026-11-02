@@ -194,6 +194,61 @@ pub enum Refusal {
 /// the resource the handle method uses.
 pub type Refused = (super::effects::NoProvider, Refusal);
 
+/// The `E_DYN_PROVIDER` message for a coercion of `vt.concrete` to
+/// `vt.name` whose method `m` uses resource `r`, for the reason `why`
+/// (design.md §9).
+pub fn dyn_provider_text(tys: &TyInterner, vt: &Vtable, m: &str, r: &str, why: &str) -> String {
+    let dyn_ty = &vt.name;
+    let bound = dyn_ty.strip_prefix("dyn ").unwrap_or(dyn_ty);
+    let bound = bound.strip_suffix(" + CrossTask").unwrap_or(bound);
+    format!(
+        "`{}` as a `{dyn_ty}` cannot carry a provider, and its `{m}` uses `{r}`, {why} \
+         (design.md §9, E_DYN_PROVIDER): take a generic parameter (`[T: {bound}]`) instead",
+        tys.display(vt.concrete)
+    )
+}
+
+/// Why a coercion in `main` (no hidden parameter, so a `dyn` it makes
+/// can only run with the defaults) cannot reach resource `r`, which has
+/// no default, when the statement at `span` in `block` is one: the
+/// `E_DYN_PROVIDER` text, rather than the generic no-provider one
+/// (B-2026-11-02-33).
+pub fn main_dyn_refusal(
+    program: &Program,
+    tys: &TyInterner,
+    body: &Body,
+    block: BasicBlock,
+    span: crate::token::Span,
+    r: &str,
+    needs: &BTreeMap<String, BTreeMap<String, Access>>,
+) -> Option<String> {
+    let idx = body.blocks[block.index()]
+        .statements
+        .iter()
+        .find_map(|st| match &st.kind {
+            StatementKind::Assign(_, Rvalue::Cast(CastKind::ToDyn(idx), _, _))
+                if st.source_info.span == span =>
+            {
+                Some(*idx)
+            }
+            _ => None,
+        })?;
+    let vt = program.vtables.get(idx as usize)?;
+    let m = vt
+        .slots
+        .iter()
+        .chain(&vt.clone)
+        .chain(vt.starts.iter().flatten())
+        .find(|m| needs.get(*m).is_some_and(|n| n.contains_key(r)))?;
+    Some(dyn_provider_text(
+        tys,
+        vt,
+        m,
+        r,
+        "which has no default, so only a provider supplies it",
+    ))
+}
+
 /// The resources whose open handles a provider can serve (§14.11, §14.12):
 /// a `with_provider` or `providers` block of one registers its provider's
 /// handle methods, these, for as long as it runs. The interpreter calls
@@ -1298,15 +1353,7 @@ impl Spec<'_> {
                         _ if rooted => continue,
                         _ => "which has no default, so only a provider supplies it".to_string(),
                     };
-                    let dyn_ty = &vt.name;
-                    let bound = dyn_ty.strip_prefix("dyn ").unwrap_or(dyn_ty);
-                    let bound = bound.strip_suffix(" + CrossTask").unwrap_or(bound);
-                    let text = format!(
-                        "`{}` as a `{dyn_ty}` cannot carry a provider, and its `{m}` uses \
-                         `{r}`, {why} (design.md §9, E_DYN_PROVIDER): take a generic \
-                         parameter (`[T: {bound}]`) instead",
-                        self.tys.display(vt.concrete)
-                    );
+                    let text = dyn_provider_text(self.tys, vt, m, r, &why);
                     found.push((st.source_info.span, r.clone(), text));
                 }
             }
