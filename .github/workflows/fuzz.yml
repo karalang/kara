@@ -6,7 +6,14 @@ name: Fuzz
 #   * `fuzz/fuzz_targets/*` — three libFuzzer targets asserting the
 #     front-end never panics on arbitrary input (lexer, parser, and the
 #     full resolve → typecheck → effect → ownership pipeline).
-#   * `src/bin/drop_fuzz.rs` + `scripts/drop-fuzz.sh` — the drop-soundness
+#   * (Removed 2026-11-02.) The legacy drop-soundness fuzzer,
+#     `src/bin/drop_fuzz.rs` + `scripts/drop-fuzz.sh`, was deleted with the
+#     legacy pipeline at M3 (9ed792e373), and its job here failed with exit
+#     127 on every nightly run since. Porting it to v2 (generate heap-core
+#     programs, build through MIR, judge under ASan + LSan and a drop-token
+#     log on the MIR interpreter) is tracked in the bug ledger. Until then
+#     the ASan corpus lane (`karac __mir-llvm-asan`) is the drop gate.
+#   * (Historical description of the removed fuzzer follows.) The drop-soundness
 #     fuzzer: it generates well-typed heap-core Kāra programs, compiles
 #     each through the real AOT path, links under ASan + LSan, runs it,
 #     and lets the sanitizer judge. It also runs each program on the
@@ -34,10 +41,6 @@ on:
     - cron: "0 4 * * *"
   workflow_dispatch:
     inputs:
-      drop_fuzz_count:
-        description: "Programs for the drop-soundness fuzzer"
-        required: false
-        default: "400"
       libfuzzer_seconds:
         description: "Seconds per libFuzzer front-end target"
         required: false
@@ -47,58 +50,6 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # ── Drop soundness (ASan + LSan over real compiled binaries) ────────
-  # The high-value leg. LSan ships with upstream LLVM's ASan on Linux
-  # (and NOT on macOS), so this must run on a Linux runner to cover the
-  # leak arm at all — the same reason the `memory-sanitizer` job in
-  # ci.yml is the authoritative leak gate.
-  drop-soundness:
-    name: Drop soundness (drop_fuzz, ASan + LSan)
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
-
-    steps:
-      - uses: actions/checkout@v4
-
-      # Same LLVM 18 provisioning as ci.yml's codegen jobs: inkwell
-      # `llvm18-1-prefer-dynamic` + llvm-sys `181` need libLLVM-18.so and
-      # headers present, and llvm-sys reads the prefix from the env.
-      - name: Install LLVM 18
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y llvm-18 llvm-18-dev
-          echo "LLVM_SYS_181_PREFIX=$(llvm-config-18 --prefix)" >> "$GITHUB_ENV"
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache dependencies
-        uses: Swatinem/rust-cache@v2
-
-      # The script builds the runtime archives (in the CLAUDE.md-mandated
-      # lean-then-full order) and the drop_fuzz binary itself, then runs.
-      # Without the archives the ASan link step has nothing to link, so
-      # the whole run would pass vacuously.
-      - name: Run the drop-soundness fuzzer
-        run: |
-          scripts/drop-fuzz.sh \
-            --count "${{ github.event.inputs.drop_fuzz_count || '400' }}" \
-            --out target/drop-fuzz-corpus \
-            --keep-going \
-            --verbose
-
-      # `--keep-going` means the run completes even when a program trips
-      # the sanitizer, so the shrunk repros are what the triage starts
-      # from. Upload them whether or not the step above went red.
-      - name: Upload shrunk repro corpus
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: drop-fuzz-corpus
-          path: target/drop-fuzz-corpus
-          if-no-files-found: ignore
-          retention-days: 30
-
   # ── Front-end panic-freedom (libFuzzer) ────────────────────────────
   # Cheap by comparison: no codegen, no linking, no sanitizer runtime —
   # just "the front end must return diagnostics, never panic, on
