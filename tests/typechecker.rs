@@ -53062,8 +53062,9 @@ fn unsolved_collection_is_pinned_by_the_declared_slot_it_flows_into() {
 }
 
 /// design.md § `par for`: the loop's value is `Vec[T]` of the body type, the
-/// limit is an `i64`, and `break`, `continue` and `return` may not cross out
-/// of the body or target the `par for` itself.
+/// limit is an `i64`, and `break` and `continue` may not cross out of the
+/// body or target the `par for` itself. `return` is an iteration's early
+/// exit, as `?` is (core semantics §11.7, B-2026-11-02-35).
 #[test]
 fn par_for_is_a_vec_and_keeps_jumps_inside() {
     typecheck_ok(
@@ -53072,7 +53073,6 @@ fn par_for_is_a_vec_and_keeps_jumps_inside() {
     for (body, what) in [
         ("if i > 1 { break; } i", "`break`"),
         ("if i > 1 { continue; } i", "`continue`"),
-        ("if i > 1 { return; } i", "`return`"),
     ] {
         let src = format!("fn main() {{\n    let v = par for i in 0..3 {{ {body} }};\n}}\n");
         let errs = typecheck_errors(&src);
@@ -53082,6 +53082,9 @@ fn par_for_is_a_vec_and_keeps_jumps_inside() {
             "{body}: {errs:?}"
         );
     }
+    typecheck_ok(
+        "fn f() -> i64 {\n    let v = par for i in 0..3 { if i > 1 { return 5; } i };\n    v.len()\n}\nfn main() {\n    let v = par for i in 0..3 { if i > 1 { return; } i };\n    println(f\"{v.len()} {f()}\");\n}\n",
+    );
     // A loop nested in the body keeps its own `break`.
     typecheck_ok(
         "fn main() {\n    let v = par for i in 0..3 { let mut k = 0; while k < i { k += 1; if k > 5 { break; } } k };\n    println(f\"{v.len()}\");\n}\n",

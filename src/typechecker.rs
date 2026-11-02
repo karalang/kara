@@ -531,8 +531,9 @@ pub(super) struct BreakFrame {
     pub(super) accepts_value: bool,
     /// Value types of the `break`s that resolved to this frame.
     pub(super) values: Vec<Type>,
-    /// A `par for` body: `break`, `continue` and `return` may not cross
-    /// out of it, nor target the `par for` itself (design.md § `par for`).
+    /// A `par for` body: `break` and `continue` may not cross out of it,
+    /// nor target the `par for` itself (design.md § `par for`); `return`
+    /// is an iteration's early exit (core semantics §11.7).
     pub(super) par_barrier: bool,
     /// A `par` block's branches: `break` and `continue` may not leave one,
     /// while `return` and `?` may (core-semantics.md §11.7). Never a

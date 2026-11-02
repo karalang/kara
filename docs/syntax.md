@@ -1609,7 +1609,7 @@ let (profile, orders) = par { fetch_profile(id)?, fetch_orders(id)? };
 PAR_FOR_EXPR = "par" [ "(" "limit" ":" EXPR [ "," ] ")" ] FOR_EXPR
 ```
 
-`par for x in it { body }` runs one branch per element and its value is the `Vec` of the bodies' values, in iteration order. The parser records it as a `for` loop whose `par` field is set; `par(limit: n)` evaluates `n` once, before the iterable, and `n <= 0` panics. `break`, `continue` and `return` may not cross out of the body.
+`par for x in it { body }` runs one branch per element and its value is the `Vec` of the bodies' values, in iteration order. The parser records it as a `for` loop whose `par` field is set; `par(limit: n)` evaluates `n` once, before the iterable, and `n <= 0` panics. `break` and `continue` may not cross out of the body; `return` and `?` are an iteration's early exit, the earliest in iteration order winning ([core-semantics.md §11.7](core-semantics.md#11-concurrency-c9)).
 
 ```
 let configs = par for p in paths { parse_config(p)? };

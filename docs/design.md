@@ -5739,7 +5739,7 @@ fn load_dashboard(user_id: u64) -> Result[Dashboard, AppError] {
 - **Order and placement are free.** Once the branches are proven not to conflict, the runtime may run them in any order, in parallel or one after another ([§2](#2-specification-layers)). A target that cannot run them in parallel runs them in sequence with no source change ([§16](#concurrency-across-targets)).
 - **What may enter a branch** is [core-semantics.md §11.3](core-semantics.md#11-concurrency-c9): owned values moved in, `sync` and `frozen` handles, and views. A `shared` handle may not ([What may cross a task boundary](#what-may-cross-a-task-boundary)).
 - **Effects.** The enclosing function's effects include the effects of every branch.
-- **Control flow stays in its branch.** `break`, `continue` and `return` may not cross out of a branch; that is a compile error. Loops inside a branch are fine. `?` is the way out (below).
+- **Control flow stays in its branch.** `break` and `continue` may not cross out of a branch; that is a compile error. Loops inside a branch are fine. `?` and `return` are the ways out (below, and [core-semantics.md §11.7](core-semantics.md#11-concurrency-c9)).
 
 **`?` in a branch pierces the block.** It ends that branch as an error exit, and once every branch is done the enclosing function returns the error ([Failure](#failure)). So:
 - the block's type is the tuple of the branches' success values, never a `Result`;

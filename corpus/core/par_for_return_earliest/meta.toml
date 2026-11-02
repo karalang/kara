@@ -1,0 +1,12 @@
+source = "core-semantics.md §11.7"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["par", "control-flow"]
+class = "a"
+expected_from = "spec"
+rules = []
+backends = []
+env = {}
+note = "`return` in a `par for` iteration is an early exit like `?`: later iterations are cancelled and the function returns the earliest exit's value in iteration order (B-2026-11-02-35)."
+bucket = "a"

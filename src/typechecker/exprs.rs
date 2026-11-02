@@ -11014,13 +11014,11 @@ impl<'a> super::TypeChecker<'a> {
             }
 
             ExprKind::Return(inner) => {
-                if self.break_value_types.iter().any(|f| f.par_barrier) {
-                    self.type_error(
-                        "`return` may not cross out of a `par for` body".to_string(),
-                        expr.span,
-                        TypeErrorKind::TypeMismatch,
-                    );
-                }
+                // A `return` in a `par for` body is an iteration's early
+                // exit, as `?` is: the iterations after it are cancelled and
+                // the function returns the earliest one's value (core
+                // semantics §11.7, B-2026-11-02-35). Only `break` and
+                // `continue` cannot leave a branch.
                 // B-2026-07-31-18 — inside a closure literal body, `return E`
                 // returns from the CLOSURE (design.md § with_provider
                 // signature: the body is `Fn() -> T`; the interpreter and

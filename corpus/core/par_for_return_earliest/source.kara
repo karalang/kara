@@ -1,0 +1,64 @@
+// core semantics §11.7: `return` in a `par for` iteration is that
+// iteration's early exit, as `?` is. The iterations after it are
+// cancelled, and the function returns the earliest exit's value in
+// iteration order, whichever ran first (B-2026-11-02-35).
+fn first_hit(k: i64) -> i64 {
+    par for i in 0..4 {
+        if i == k {
+            return 3 + i;
+        }
+    }
+    0
+}
+
+fn earliest() -> i64 {
+    par for i in 0..6 {
+        if i == 4 {
+            return 40;
+        }
+        if i == 1 {
+            return 10;
+        }
+    }
+    0
+}
+
+fn check(v: ref Vec[i64]) -> Result[i64, Str] {
+    par for x in v {
+        if x < 0 {
+            return Err("neg");
+        }
+    }
+    Ok(v.len())
+}
+
+fn owned_exit() -> i64 {
+    par for i in 0..3 {
+        let t = f"item {i}";
+        if i == 0 {
+            return 7 + t.len();
+        }
+    }
+    0
+}
+
+fn main() {
+    println(first_hit(1));
+    println(first_hit(9));
+    println(earliest());
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1);
+    v.push(-2);
+    v.push(3);
+    println(match check(v) {
+        Ok(n) => f"ok {n}",
+        Err(e) => f"err {e}",
+    });
+    let mut w: Vec[i64] = Vec.new();
+    w.push(1);
+    println(match check(w) {
+        Ok(n) => f"ok {n}",
+        Err(e) => f"err {e}",
+    });
+    println(owned_exit());
+}
