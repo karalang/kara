@@ -67,7 +67,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | run-vs-build | 20 |
 | other | 15 |
 | codegen-gap | 14 |
-| crash | 4 |
+| crash | 5 |
 | leak | 4 |
 | use-after-free | 1 |
 
@@ -80,8 +80,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | mir-llvm | 92 |
 | cli | 49 |
 | ownership | 38 |
+| parser | 27 |
 | interp | 26 |
-| parser | 26 |
 | runtime | 23 |
 | codegen | 22 |
 | effect | 13 |
@@ -130,6 +130,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-02-22 | 2026-11-02 | mir-llvm | medium | The drop-soundness fuzzer was deleted with the legacy pipeline at M3 and has no v2 port: nothing fuzzes drop elaboration against ASan/LSan and a drop-token oracle | — |
 | B-2026-11-02-23 | 2026-11-02 | mir-llvm | medium | Kata 71's simplify-path runs 1.40x legacy's instructions and 1.42x its cycles in the seq lane on the MIR backend, and its par lane slipped from 0.91x to 1.06x rayon between g6697158fa and g96fca5370 while seq held at 0.90x rustc -O | — |
 | B-2026-11-02-24 | 2026-11-02 | mir-llvm | low | Kata 38's seq binary stays at 312 KiB on g96fca5370 where the B-2026-10-28-36 fix took 12 other kata seq binaries to 52-69 KB | — |
+| B-2026-11-02-25 | 2026-11-02 | parser | medium | 128 nested `{` followed by a statement keyword (`if`, `let`, `while`, ...) runs the parser out of memory: the refused statement is retried forever, one diagnostic per turn | — |
 
 ### Relocated
 

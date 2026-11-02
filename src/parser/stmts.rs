@@ -42,11 +42,12 @@ impl super::Parser {
                 continue;
             }
             // Try to parse a statement or final expression
+            let before = self.pos;
             if self.is_statement_start() {
                 match self.parse_statement() {
                     Some(stmt) => stmts.push(stmt),
                     None => {
-                        self.synchronize_to_stmt();
+                        self.recover_stmt(before);
                     }
                 }
             } else {
@@ -124,7 +125,7 @@ impl super::Parser {
                         }
                     }
                     None => {
-                        self.synchronize_to_stmt();
+                        self.recover_stmt(before);
                     }
                 }
             }

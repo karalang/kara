@@ -2030,6 +2030,21 @@ impl Parser {
         }
     }
 
+    /// Recovery after a block statement that began at token `before`
+    /// failed: skip to the next statement, and past at least one token.
+    /// A statement the recursion budget refuses fails without consuming
+    /// its keyword, and [`Self::synchronize_to_stmt`] stops at that same
+    /// keyword, so without the step the block retried it forever, one
+    /// diagnostic a turn, until memory ran out (`fuzz_parser`, 128 `{`
+    /// then `if`; B-2026-11-02-25).
+    pub(crate) fn recover_stmt(&mut self, before: usize) {
+        self.synchronize_to_stmt();
+        if self.pos == before && !self.is_at_end() && !self.check(&Token::RightBrace) {
+            self.advance();
+            self.synchronize_to_stmt();
+        }
+    }
+
     fn synchronize_to_stmt(&mut self) {
         while !self.is_at_end() {
             match self.peek_token_ref() {
