@@ -60,7 +60,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | diagnostics | 86 |
 | false-positive | 86 |
-| perf | 70 |
+| perf | 71 |
 | missing-feature | 61 |
 | soundness | 34 |
 | miscompile | 29 |
@@ -77,7 +77,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | typecheck | 143 |
 | mir | 96 |
-| mir-llvm | 78 |
+| mir-llvm | 79 |
 | cli | 49 |
 | ownership | 38 |
 | interp | 26 |
@@ -130,6 +130,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-01-45 | 2026-11-01 | mir-llvm | low | Four of katas 101-210 lost 10-13% of their wall-time ratio to Rust on the MIR backend, each too small to file alone (1.04-1.12x legacy's instructions, 1.07-1.13x its cycles): the second borderline batch after B-2026-11-01-20 | — |
 | B-2026-11-01-47 | 2026-11-01 | mir-llvm | medium | Kata 216's combination-sum-III recursion runs 1.41x legacy's instructions on the MIR backend (1.21x its cycles): the seq lane went from 1.07x to 1.26x rustc -O | — |
 | B-2026-11-02-1 | 2026-11-02 | mir-llvm+runtime | medium | Cancelling a `TaskGroup` task while it waits inside a `par {}` (or `par for`) whose other branch has already finished leaks: `par { { sleep(2 s); 1 }, 2 }` in a task cancelled after 20 ms leaks 16 bytes on four workers and 104 bytes (the `par`'s internal group from `mir_task::group_new` plus 16 from the task body's resume) on one, every run under ASan; teardown of a `par` whose branches are all still suspended does not leak | — |
+| B-2026-11-02-2 | 2026-11-02 | mir-llvm | medium | Kata 225's queue-rotation loop (Vec push + index read + field update through a `mut ref` struct) runs 1.43x legacy's instructions on the MIR backend and 1.61x its cycles: the seq lane went from 0.80x to 1.24x rustc -O | — |
 
 ### Relocated
 
