@@ -61,8 +61,12 @@ thread_local! {
     static OUT_LOCAL: RefCell<ThreadOwned<LeanVec<u8>>> = const {
         RefCell::new(thread_owned(LeanVec::new()))
     };
-    /// The message `panic(msg)` set for the abort that follows it.
-    static PANIC: RefCell<Option<String>> = const { RefCell::new(None) };
+    /// The message `panic(msg)` or a native set for the abort that follows
+    /// it, held in a [`LeanVec`] rather than a `String` so that setting it
+    /// reaches no panic (B-2026-11-02-24).
+    static PANIC: RefCell<ThreadOwned<PanicMessage>> = const {
+        RefCell::new(thread_owned(PanicMessage { set: false, text: LeanVec::new() }))
+    };
 }
 
 /// Standard output under the pool: one buffer for the program, so the
@@ -85,6 +89,45 @@ fn with_out<R>(f: impl FnOnce(&mut LeanVec<u8>) -> R) -> R {
         }
         _ => buffer_in_use(),
     }
+}
+
+/// The panic message a [`PANIC`] holds, and whether one was set (an
+/// empty `panic("")` is still one).
+struct PanicMessage {
+    set: bool,
+    text: LeanVec<u8>,
+}
+
+/// `f` of this thread's panic message.
+fn with_panic<R>(f: impl FnOnce(&mut PanicMessage) -> R) -> R {
+    match PANIC.try_with(|p| p.try_borrow_mut().map(|mut p| f(&mut p))) {
+        Ok(Ok(r)) => {
+            thread_bufs::release_at_exit();
+            r
+        }
+        _ => buffer_in_use(),
+    }
+}
+
+/// Sets the message for the abort that follows, without a panic of its own.
+fn set_panic_bytes(msg: &[u8]) {
+    with_panic(|p| {
+        p.text.clear();
+        p.text.extend_from_slice(msg);
+        p.set = true;
+    });
+}
+
+/// Takes the message set for this abort, if one was.
+fn take_panic_message() -> Option<String> {
+    with_panic(|p| {
+        if !std::mem::replace(&mut p.set, false) {
+            return None;
+        }
+        let msg = String::from_utf8_lossy(p.text.as_slice()).into_owned();
+        p.text.clear();
+        Some(msg)
+    })
 }
 
 /// A print buffer asked for while it is in use, which only a runtime
@@ -120,7 +163,7 @@ mod thread_bufs {
     use std::cell::Cell;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use super::{FMT, OUT_LOCAL};
+    use super::{FMT, OUT_LOCAL, PANIC};
 
     /// The key, plus one; 0 before it is made.
     static KEY: AtomicUsize = AtomicUsize::new(0);
@@ -175,6 +218,12 @@ mod thread_bufs {
         let _ = OUT_LOCAL.try_with(|o| {
             if let Ok(mut o) = o.try_borrow_mut() {
                 drop(std::mem::take(&mut **o));
+            }
+        });
+        let _ = PANIC.try_with(|p| {
+            if let Ok(mut p) = p.try_borrow_mut() {
+                p.set = false;
+                drop(std::mem::take(&mut p.text));
             }
         });
     }
@@ -767,7 +816,11 @@ pub extern "C" fn karac_mir_capacity_fits(n: u64, size: u64) -> i64 {
 pub unsafe extern "C" fn karac_mir_vec_alloc(out: *mut RawVec, n: u64, size: u64) {
     let n = n as usize;
     let size = size as usize;
-    let bytes = n.checked_mul(size).expect("capacity overflow");
+    let Some(bytes) = n.checked_mul(size) else {
+        // Not `expect`, as in `karac_mir_vec_reserve` (B-2026-11-02-24).
+        crate::fatal::write_stderr(b"panic: capacity overflow\n");
+        std::process::abort()
+    };
     let ptr = if bytes == 0 {
         std::ptr::null_mut()
     } else {
@@ -1061,27 +1114,111 @@ fn str_range_panic(s: &str, lo: i64, hi: i64, mode: i32) {
     // `substring` refuses only a cut inside a code point, and its end past
     // the text is the text's end.
     let hi = if mode == 0 { hi.min(len) } else { hi };
-    let msg = if mode != 0 && !(0 <= lo && lo <= hi && hi <= len) {
-        format!("string slice bounds {lo}..{hi} out of range (len {len})")
-    } else {
-        format!(
-            "E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY: byte range {lo}..{hi} does not fall on \
-             UTF-8 char boundaries of {s:?}"
-        )
+    // Written out rather than `format!`ed: core's integer and `str`
+    // formatting keep a bounds panic, and with it std's panic hook, in
+    // every binary that slices a string (B-2026-11-02-24).
+    let mut msg = LeanVec::<u8>::new();
+    let range = |msg: &mut LeanVec<u8>| {
+        push_i64(msg, lo);
+        msg.extend_from_slice(b"..");
+        push_i64(msg, hi);
     };
-    set_panic_message(msg);
+    if mode != 0 && !(0 <= lo && lo <= hi && hi <= len) {
+        msg.extend_from_slice(b"string slice bounds ");
+        range(&mut msg);
+        msg.extend_from_slice(b" out of range (len ");
+        push_i64(&mut msg, len);
+        msg.push(b')');
+    } else {
+        msg.extend_from_slice(b"E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY: byte range ");
+        range(&mut msg);
+        msg.extend_from_slice(b" does not fall on UTF-8 char boundaries of ");
+        push_str_debug(&mut msg, s);
+    }
+    set_panic_bytes(msg.as_slice());
 }
 
-fn str_range(s: &str, lo: i64, hi: i64, mode: i32) -> Option<std::borrow::Cow<'_, str>> {
+/// `v` in decimal, as `karac_mir_fmt_i64` writes it.
+fn push_i64(out: &mut LeanVec<u8>, v: i64) {
+    let mut d = [0u8; 20];
+    let i = digits(v.unsigned_abs(), &mut d);
+    if v < 0 {
+        out.push(b'-');
+    }
+    out.extend_from_slice(d.get(i..).unwrap_or_default());
+}
+
+/// `s` as `{:?}` writes a `str`: quoted, with what `str::escape_debug`
+/// escapes escaped, except a single quote, which `Debug` leaves alone.
+fn push_str_debug(out: &mut LeanVec<u8>, s: &str) {
+    let mut put = |c: char| {
+        let mut b = [0u8; 4];
+        out.extend_from_slice(c.encode_utf8(&mut b).as_bytes());
+    };
+    put('"');
+    let mut esc = s.escape_debug();
+    while let Some(c) = esc.next() {
+        if c != '\\' {
+            put(c);
+            continue;
+        }
+        // Every backslash `escape_debug` writes opens an escape.
+        match esc.next() {
+            Some('\'') => put('\''),
+            Some(n) => {
+                put('\\');
+                put(n);
+            }
+            None => put('\\'),
+        }
+    }
+    put('"');
+}
+
+/// The text [`str_range`] picks: a view into the string, or, for a byte
+/// range cut inside a code point (`String.slice`), those bytes made valid
+/// as `String::from_utf8_lossy` makes them, in a [`LeanVec`] so that the
+/// natives that slice stay panic-free (B-2026-11-02-24).
+enum Picked<'a> {
+    Text(&'a str),
+    Lossy(LeanVec<u8>),
+}
+
+impl Picked<'_> {
+    fn as_bytes(&self) -> &[u8] {
+        match self {
+            Picked::Text(t) => t.as_bytes(),
+            Picked::Lossy(b) => b.as_slice(),
+        }
+    }
+}
+
+/// `b` as text, each invalid sequence replaced with U+FFFD.
+fn lossy(b: &[u8]) -> Picked<'_> {
+    if let Ok(t) = std::str::from_utf8(b) {
+        return Picked::Text(t);
+    }
+    let mut out = LeanVec::new();
+    for chunk in b.utf8_chunks() {
+        out.extend_from_slice(chunk.valid().as_bytes());
+        if !chunk.invalid().is_empty() {
+            out.extend_from_slice("\u{FFFD}".as_bytes());
+        }
+    }
+    Picked::Lossy(out)
+}
+
+fn str_range(s: &str, lo: i64, hi: i64, mode: i32) -> Option<Picked<'_>> {
     let len = s.len() as i64;
     if mode == 2 {
         if lo < 0 || lo > len {
-            return Some("".into());
+            return Some(Picked::Text(""));
         }
         let end = hi.clamp(lo, len);
-        return Some(String::from_utf8_lossy(
-            &s.as_bytes()[lo as usize..end as usize],
-        ));
+        // `get`, not an index, whose panic the bounds above rule out but
+        // the binary would keep (B-2026-11-02-24).
+        let cut = s.as_bytes().get(lo as usize..end as usize);
+        return Some(lossy(cut.unwrap_or_default()));
     }
     let (lo, hi) = if mode == 0 {
         let hi = hi.min(len);
@@ -1092,7 +1229,7 @@ fn str_range(s: &str, lo: i64, hi: i64, mode: i32) -> Option<std::borrow::Cow<'_
             return None;
         }
         if lo < 0 || lo >= hi {
-            return Some("".into());
+            return Some(Picked::Text(""));
         }
         (lo, hi)
     } else {
@@ -1101,7 +1238,7 @@ fn str_range(s: &str, lo: i64, hi: i64, mode: i32) -> Option<std::borrow::Cow<'_
         }
         (lo, hi)
     };
-    s.get(lo as usize..hi as usize).map(Into::into)
+    s.get(lo as usize..hi as usize).map(Picked::Text)
 }
 
 /// The text [`str_range`] picks as a new `String` at `out`. Returns 1 for
@@ -1152,9 +1289,9 @@ pub unsafe extern "C" fn karac_mir_str_view(
     // SAFETY: the caller's contract.
     let s = unsafe { text(s, n) };
     let (p, len) = match str_range(s, lo, hi, mode) {
-        Some(std::borrow::Cow::Borrowed(t)) => (t.as_ptr(), t.len()),
-        Some(std::borrow::Cow::Owned(t)) => {
-            let t = t.leak();
+        Some(Picked::Text(t)) => (t.as_ptr(), t.len()),
+        Some(Picked::Lossy(t)) => {
+            let t = std::mem::ManuallyDrop::new(t);
             (t.as_ptr(), t.len())
         }
         None => {
@@ -2696,8 +2833,11 @@ pub unsafe extern "C" fn karac_mir_forget(p: *const u8, n: u64) {
 /// Ends a `panic_message` format: its text is the next abort's message.
 #[no_mangle]
 pub extern "C" fn karac_mir_panic_set() {
-    let text = fmt_pop(|t| String::from_utf8_lossy(t).into_owned());
-    set_panic_message(text);
+    // No `rich_abort_used`: a message alone is a part the plain report in
+    // `karac_mir_abort_at` writes, and this path stays panic-free, so a
+    // program whose `unwrap` or `panic(msg)` may fire keeps std's panic
+    // hook out of its binary (B-2026-11-02-24).
+    fmt_pop(set_panic_bytes);
 }
 
 /// Ends the process with `code`, after writing what is buffered.
@@ -3000,7 +3140,7 @@ pub unsafe extern "C" fn karac_mir_abort(ptr: *const u8, len: u64) -> ! {
         karac_mir_exit(101)
     }
     crate::mir_task::drain_logs();
-    let msg = abort_message(PANIC.with(|p| p.borrow_mut().take()).unwrap_or_else(|| {
+    let msg = abort_message(take_panic_message().unwrap_or_else(|| {
         // SAFETY: the caller's contract.
         String::from_utf8_lossy(unsafe { bytes(ptr, len) }).into_owned()
     }));
@@ -3041,7 +3181,11 @@ pub unsafe extern "C" fn karac_mir_abort_at(
     if crate::in_contract_predicate() {
         report.extend_from_slice(CONTRACT_PREDICATE_PANICKED.as_bytes());
     }
-    report.extend_from_slice(msg);
+    with_panic(|p| {
+        report.extend_from_slice(if p.set { p.text.as_slice() } else { msg });
+        p.set = false;
+        p.text.clear();
+    });
     report.push(b'\n');
     if !at.is_empty() {
         for part in [&b"  at "[..], at, b"\nError return trace:\n  ", at, b"\n"] {
@@ -3052,8 +3196,8 @@ pub unsafe extern "C" fn karac_mir_abort_at(
     karac_mir_exit(101)
 }
 
-/// The abort report's parts that only some programs need: a `panic(msg)`
-/// text, the error return trace, held log records, and the program's
+/// The abort report's parts that only some programs need: the error
+/// return trace, held log records, and the program's
 /// panic handler. [`karac_mir_abort_at`] reaches them through this
 /// pointer, which the natives that set any of them store
 /// ([`rich_abort_used`]), so a program that sets none links none of them,
@@ -3077,8 +3221,7 @@ pub(crate) fn rich_abort_used() {
 
 /// The message a `panic(msg)` or a native set for the abort that follows.
 fn set_panic_message(msg: String) {
-    rich_abort_used();
-    PANIC.with(|p| *p.borrow_mut() = Some(msg));
+    set_panic_bytes(msg.as_bytes());
 }
 
 /// [`karac_mir_abort_at`]'s report once a part of it was set.
@@ -3089,7 +3232,7 @@ unsafe fn rich_abort(ptr: *const u8, len: u64, at: *const u8, at_len: u64) -> ! 
     let len = len as usize;
     let at_len = at_len as usize;
     crate::mir_task::drain_logs();
-    let msg = abort_message(PANIC.with(|p| p.borrow_mut().take()).unwrap_or_else(|| {
+    let msg = abort_message(take_panic_message().unwrap_or_else(|| {
         // SAFETY: the caller's contract.
         String::from_utf8_lossy(unsafe { bytes(ptr, len) }).into_owned()
     }));
@@ -3117,7 +3260,7 @@ pub unsafe extern "C" fn karac_mir_panic_at(ptr: *const u8, len: u64, at: *const
     // SAFETY: the caller's contract.
     let place = String::from_utf8_lossy(unsafe { bytes(at, at_len as usize) }).into_owned();
     let message = || {
-        abort_message(PANIC.with(|p| p.borrow_mut().take()).unwrap_or_else(|| {
+        abort_message(take_panic_message().unwrap_or_else(|| {
             // SAFETY: the caller's contract.
             String::from_utf8_lossy(unsafe { bytes(ptr, len as usize) }).into_owned()
         }))
@@ -3125,7 +3268,7 @@ pub unsafe extern "C" fn karac_mir_panic_at(ptr: *const u8, len: u64, at: *const
     if crate::mir_task::contain_panic(message, &place) {
         // The task's frames, and any contract predicate among them, are
         // gone; a later panic's own message is its own.
-        PANIC.with(|p| p.borrow_mut().take());
+        take_panic_message();
         crate::leave_predicates();
         return;
     }
