@@ -522,6 +522,8 @@ A by-move capture of a `Copy` place copies it. A read-only capture of a `Copy` p
 
 An escaping closure captures every place by move. A captured place is then moved (§3), and using it afterwards is E0500. The fix is to clone before creating the closure.
 
+A field or a collection element of function type is escaping by nature (`design.md` § Escaping function values), so a closure stored in one escapes even when the struct, tuple or collection is a local: `let h = Holder { f: || s.len() }` moves `s` in, and a `Copy` capture such as a counter is copied, so the enclosing function's own `n` does not see the closure's writes. Re-affirmed 2026-11-02 against the pin below (B-2026-11-02-32).
+
 **Function-typed parameters** are non-escaping by default:
 - the callee may call such a parameter or pass it to another non-escaping parameter, and nothing else;
 - storing or returning it requires the declaration `f: escaping Fn(A) -> R`;
