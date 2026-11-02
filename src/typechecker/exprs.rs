@@ -9209,9 +9209,10 @@ impl<'a> super::TypeChecker<'a> {
                 // B-2026-11-01-26: a name that is no local and still has a
                 // function type is a function item or a constructor. It has
                 // no environment, so auto-par may treat it as `CrossTask`.
-                if matches!(ty, Type::Function { .. } | Type::OnceFunction { .. })
-                    && self.local_scope.lookup(name).is_none()
-                {
+                if self.local_scope.lookup(name).is_some() {
+                    self.local_ident_uses
+                        .insert(SpanKey::from_span(&expr.span), name.clone());
+                } else if matches!(ty, Type::Function { .. } | Type::OnceFunction { .. }) {
                     self.fn_item_spans.insert(SpanKey::from_span(&expr.span));
                 }
                 self.refuse_core_bare_variant(name, &ty, &expr.span);

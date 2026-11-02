@@ -1,0 +1,27 @@
+// B-2026-11-02-14: a `let mut` holding unmarked function values takes
+// elements nothing follows (`hs.push(f)`), so what it holds is out of
+// sight, and it does not enter a field written `+ CrossTask`. Before the
+// fix the closure below, which writes a `shared` handle, reached two tasks
+// and raced (core-semantics §6.3). The fix is the marker on the local's
+// declaration, which checks each push.
+shared struct S {
+    mut n: i64,
+}
+
+struct Bus {
+    hs: Vec[Fn() -> i64 + CrossTask],
+}
+
+fn main() {
+    let s = S { n: 0 };
+    let mut hs: Vec[Fn() -> i64] = Vec.new();
+    hs.push(|| {
+        s.n = s.n + 1;
+        s.n
+    });
+    let b = Bus { hs: hs };
+    let g = TaskGroup.new();
+    let x = g.spawn(|| (b.hs[0])());
+    let y = g.spawn(|| (b.hs[0])());
+    println(x.join() + y.join());
+}

@@ -2514,6 +2514,8 @@ fn main() -> () {
             "err_effect_dyn_clause_exceeded",
             "err_dyn_view_unmarked_spawned",
             "err_dyn_view_unmarked_par",
+            "err_fn_vec_call_result_marked",
+            "err_fn_vec_local_push_marked",
             // Tasks sharing a written provider (§14.9), refused by the
             // effect pass.
             "err_provider_tasks_write",

@@ -58,11 +58,11 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 86 |
+| diagnostics | 87 |
 | false-positive | 86 |
 | perf | 80 |
 | missing-feature | 61 |
-| soundness | 35 |
+| soundness | 36 |
 | miscompile | 29 |
 | run-vs-build | 20 |
 | other | 15 |
@@ -75,7 +75,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 144 |
+| typecheck | 146 |
 | mir | 96 |
 | mir-llvm | 88 |
 | cli | 49 |
@@ -128,6 +128,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-02-8 | 2026-11-02 | mir-llvm | medium | The auto-par collect lowering (`#[par_order_free]` loop pushing into a Vec) holds the collected Vec twice at peak once there are two or more workers: kata 270's par build peaks at 44-49 MiB against 22 MiB at one worker, with +12.5% instructions, both flat from 2 to 18 workers | — |
 | B-2026-11-02-9 | 2026-11-02 | mir-llvm | medium | Growing a fresh Vec[i64] to 2M elements with push, once per round, runs 1.37x legacy's instructions on the MIR backend (1.13x its cycles): found in kata 283. LOCATED (x86, 2026-11-02): legacy's sequential tabulate lowering (codegen/reduce.rs try_emit_seq_tabulate_lowering) reserved once and stored directly, so LLVM vectorized the copy; MIR keeps a capacity check per push (7 instructions a push even after an exact reserve), 1.19x on x86 after 9f3cc6a792 made the reservation fire | — |
 | B-2026-11-02-10 | 2026-11-02 | mir-llvm | low | Kata 276's par lane runs 1.44x slower than its 2026-08-28 feed while its comparators moved 1.06-1.09x and its seq lane held, so it scales 4.6x over seq where it scaled ~6.0x; there is no matched legacy par baseline | — |
+| B-2026-11-02-13 | 2026-11-02 | typecheck | low | A 0.8.0 program giving a `Vec[dyn Handler]` or `Vec[Fn(..)]` where the `+ CrossTask` form is expected gets a bare E0200 mismatch (dyn) or an opaque E_NOT_CROSS_TASK (Fn) that names neither the missing marker nor where to write it | — |
+| B-2026-11-02-14 | 2026-11-02 | typecheck | high | A `shared` handle crosses tasks through a COLLECTION of unmarked `Fn` values coerced into a `+ CrossTask` slot: a `Vec[Fn() -> i64]` a call hands back, or a local `let mut hs: Vec[Fn() -> i64]` filled by `push`, enters `Vec[Fn() -> i64 + CrossTask]` unchecked and two tasks race on the handle | — |
 
 ### Relocated
 

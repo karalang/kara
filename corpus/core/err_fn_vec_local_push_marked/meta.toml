@@ -1,0 +1,11 @@
+source = "corpus/core/err_fn_vec_local_push_marked"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["closure", "concurrency"]
+class = "a"
+expected_from = "spec"
+rules = ["6.3"]
+backends = []
+env = {}
+note = "B-2026-11-02-14: a `let mut hs: Vec[Fn() -> i64]` filled by `push` holds closures whose environment nothing follows, so it is not coerced into a field written `Vec[Fn() -> i64 + CrossTask]` (core-semantics §6.3). The expected.out wording of an error pin is guidance, not a byte oracle."

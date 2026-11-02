@@ -45,6 +45,10 @@ struct Taint {
     /// sight: an unmarked function type from a call, a field, an element, or
     /// a parameter.
     opaque: bool,
+    /// Where `+ CrossTask` goes in the type the value was declared with: a
+    /// parameter's type, a `let`'s annotation, or the return type of the
+    /// function a `let` was bound from.
+    fix_at: Option<Span>,
 }
 
 #[derive(Clone, Debug)]
@@ -63,6 +67,9 @@ impl Taint {
             self.leak = other.leak.clone();
         }
         self.opaque |= other.opaque;
+        if self.fix_at.is_none() {
+            self.fix_at = other.fix_at;
+        }
     }
 
     fn is_empty(&self) -> bool {
@@ -108,7 +115,14 @@ fn is_fn_type(t: &Type) -> bool {
 fn is_unmarked_fn_type(t: &Type) -> bool {
     match t {
         Type::Function { cross_task, .. } | Type::OnceFunction { cross_task, .. } => !cross_task.0,
-        Type::Ref(inner) | Type::MutRef(inner) => is_unmarked_fn_type(inner),
+        // B-2026-11-02-14: an element or payload too, so a `Vec[Fn()]` a
+        // call hands back is as opaque as the `Fn()` itself.
+        Type::Named { args, .. } => args.iter().any(is_unmarked_fn_type),
+        Type::Tuple(ts) => ts.iter().any(is_unmarked_fn_type),
+        Type::Array { element, .. } | Type::Slice { element, .. } => is_unmarked_fn_type(element),
+        Type::Ref(i) | Type::MutRef(i) | Type::Arc(i) | Type::Rc(i) | Type::Weak(i) => {
+            is_unmarked_fn_type(i)
+        }
         _ => false,
     }
 }
@@ -160,7 +174,7 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
         let mut calls: Vec<Call> = Vec::new();
-        let mut errors: Vec<(Span, String)> = Vec::new();
+        let mut errors: Vec<(Span, String, Option<Span>)> = Vec::new();
         for (_, f) in &fns {
             let mut scope: Vec<(String, Taint)> = Vec::new();
             if f.self_param.is_some() {
@@ -169,9 +183,15 @@ impl<'a> super::TypeChecker<'a> {
             for p in &f.params {
                 // An unmarked function type hides the environment of the
                 // argument behind it.
+                let opaque = self.type_expr_marks_fn(&p.ty, false);
                 let taint = Taint {
                     leak: None,
-                    opaque: self.type_expr_marks_fn(&p.ty, false),
+                    opaque,
+                    fix_at: if opaque {
+                        self.fn_marker_point(&p.ty)
+                    } else {
+                        None
+                    },
                 };
                 for n in p.pattern.binding_names() {
                     scope.push((n, taint.clone()));
@@ -210,18 +230,31 @@ impl<'a> super::TypeChecker<'a> {
                     leak.name,
                     type_display(&leak.ty)
                 );
-                errors.push((c.span, leak_message(&lead, leak)));
+                errors.push((c.span, leak_message(&lead, leak), None));
             } else if c.taint.opaque {
                 errors.push((
                     c.span,
                     opaque_message(&format!("the function passed to `{}`", c.callee)),
+                    c.taint.fix_at,
                 ));
             }
         }
-        errors.sort_by_key(|(s, _)| s.offset);
+        errors.sort_by_key(|(s, _, _)| s.offset);
         errors.dedup_by(|a, b| a.0.offset == b.0.offset && a.1 == b.1);
-        for (span, message) in errors {
-            self.type_error(message, span, TypeErrorKind::CrossTaskUnsafeCapture);
+        for (span, message, fix_at) in errors {
+            match fix_at {
+                // B-2026-11-02-13: the same insertion E0200 offers for a `dyn`.
+                Some(at) => self.type_error_with_fix_it(
+                    message,
+                    span,
+                    TypeErrorKind::CrossTaskUnsafeCapture,
+                    super::FixIt {
+                        span: at,
+                        replacement: " + CrossTask".to_string(),
+                    },
+                ),
+                None => self.type_error(message, span, TypeErrorKind::CrossTaskUnsafeCapture),
+            }
         }
     }
 }
@@ -232,8 +265,8 @@ fn opaque_message(what: &str) -> String {
     format!(
         "error[E_NOT_CROSS_TASK]: {what} must be `CrossTask`, but it holds a function value \
          whose type is not written `+ CrossTask` and whose environment is out of sight (a \
-         call's result, a field, an element, or a parameter), so nothing shows it reaches \
-         only `CrossTask` values (core semantics §6.3)\n\
+         call's result, a field, an element, a parameter, or a `let mut` that takes function \
+         values), so nothing shows it reaches only `CrossTask` values (core semantics §6.3)\n\
          help: write `+ CrossTask` on the function type the value is declared with, so that \
          each value coerced into it is checked"
     )
@@ -283,7 +316,7 @@ struct Walk<'w, 't, 'a> {
     /// what its captures reach so far.
     collectors: Vec<(usize, Taint)>,
     calls: &'w mut Vec<Call>,
-    errors: &'w mut Vec<(Span, String)>,
+    errors: &'w mut Vec<(Span, String, Option<Span>)>,
     /// The function's return type holds a `+ CrossTask` function type, so
     /// each `return` value is coerced into it.
     ret_marked: bool,
@@ -334,6 +367,7 @@ impl Walk<'_, '_, '_> {
                 Err(path) if path.fix_it == CrossTaskUnsafeFixIt::FnCrossTask => Taint {
                     leak: None,
                     opaque: true,
+                    fix_at: None,
                 },
                 Err(path) => Taint {
                     leak: Some(Leak {
@@ -343,6 +377,7 @@ impl Walk<'_, '_, '_> {
                         via_fn: false,
                     }),
                     opaque: false,
+                    fix_at: None,
                 },
             }
         };
@@ -369,9 +404,27 @@ impl Walk<'_, '_, '_> {
     fn stmt(&mut self, s: &Stmt) {
         match &s.kind {
             StmtKind::Let {
-                pattern, value, ty, ..
+                is_mut,
+                pattern,
+                value,
+                ty,
             } => {
-                let t = self.value(value);
+                let mut t = self.value(value);
+                // B-2026-11-02-14: a `let mut` collection, tuple or payload
+                // of unmarked function values takes elements nothing here
+                // follows (`hs.push(f)`, `hs[0] = f`), so what it holds is
+                // out of sight, however it started.
+                if *is_mut
+                    && self
+                        .node_types
+                        .get(&value.id)
+                        .is_some_and(|(vt, _)| !is_fn_type(vt) && is_unmarked_fn_type(vt))
+                {
+                    t.opaque = true;
+                }
+                if let Some(at) = self.declared_marker_point(ty.as_ref(), value) {
+                    t.fix_at = Some(at);
+                }
                 if ty
                     .as_ref()
                     .is_some_and(|ty| self.tc.type_expr_marks_fn(ty, true))
@@ -384,7 +437,19 @@ impl Walk<'_, '_, '_> {
                     self.declare_pattern(pattern);
                 }
             }
-            StmtKind::LetUninit { name, .. } => self.declare(name.clone(), Taint::default()),
+            StmtKind::LetUninit {
+                is_mut, name, ty, ..
+            } => {
+                let opaque = *is_mut
+                    && !matches!(ty.kind, TypeKind::FnType { .. })
+                    && self.tc.type_expr_marks_fn(ty, false);
+                let t = Taint {
+                    leak: None,
+                    opaque,
+                    fix_at: self.tc.fn_marker_point(ty),
+                };
+                self.declare(name.clone(), t);
+            }
             StmtKind::LetElse {
                 pattern,
                 value,
@@ -626,6 +691,27 @@ impl Walk<'_, '_, '_> {
         }
     }
 
+    /// Where `+ CrossTask` goes in the type a `let` binds: its annotation,
+    /// or the return type of the function its value is a call of.
+    fn declared_marker_point(&self, ty: Option<&TypeExpr>, value: &Expr) -> Option<Span> {
+        if let Some(t) = ty {
+            return self.tc.fn_marker_point(t);
+        }
+        let ExprKind::Call { callee, .. } = &value.kind else {
+            return None;
+        };
+        let ExprKind::Identifier(n) = &callee.kind else {
+            return None;
+        };
+        self.tc.program.items.iter().find_map(|it| match it {
+            Item::Function(g) if &g.name == n => g
+                .return_type
+                .as_ref()
+                .and_then(|r| self.tc.fn_marker_point(r)),
+            _ => None,
+        })
+    }
+
     fn children(&mut self, e: &Expr) {
         let mut kids: Vec<Child<'_>> = Vec::new();
         for_each_child_public(e, &mut |c| kids.push(c));
@@ -668,6 +754,7 @@ impl Walk<'_, '_, '_> {
                 .node_types
                 .get(&e.id)
                 .is_some_and(|(t, _)| is_unmarked_fn_type(t)),
+            fix_at: None,
         }
     }
 
@@ -685,11 +772,12 @@ impl Walk<'_, '_, '_> {
                 leak.name,
                 type_display(&leak.ty)
             );
-            self.errors.push((span, leak_message(&lead, leak)));
+            self.errors.push((span, leak_message(&lead, leak), None));
         } else if t.opaque {
             self.errors.push((
                 span,
                 opaque_message(&format!("a value coerced into {slot}")),
+                t.fix_at,
             ));
         }
     }
@@ -715,6 +803,7 @@ impl Walk<'_, '_, '_> {
             leak.name,
             type_display(&leak.ty)
         );
-        self.errors.push((arg.span, leak_message(&lead, leak)));
+        self.errors
+            .push((arg.span, leak_message(&lead, leak), None));
     }
 }

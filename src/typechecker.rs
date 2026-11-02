@@ -3112,6 +3112,9 @@ pub struct TypeChecker<'a> {
     /// return type of the function a `let` is bound from), where `+
     /// CrossTask` goes: the `E_NOT_CROSS_TASK` fix-it.
     pub(super) current_fn_fn_markers: FxHashMap<String, Span>,
+    /// Each use of a local binding by name, for a diagnostic that points
+    /// back at the binding's declaration (B-2026-11-02-13).
+    pub(super) local_ident_uses: FxHashMap<SpanKey, String>,
     /// Set while the constant-initializer walker checks a `const` under
     /// strict check (B-2026-10-22-19). design.md § Constants admits no calls,
     /// so the module-binding special forms (`Vec.new()`, `LazyLock.new`, ...)
@@ -3888,6 +3891,7 @@ impl<'a> TypeChecker<'a> {
             current_fn_frozen_lets: FxHashSet::default(),
             current_fn_closure_lets: FxHashSet::default(),
             current_fn_fn_markers: FxHashMap::default(),
+            local_ident_uses: FxHashMap::default(),
             const_init_strict: false,
             const_init_resource_default: false,
             current_fn_ref_params: FxHashSet::default(),
@@ -7049,6 +7053,68 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    /// B-2026-11-02-13: a value whose `dyn` types lack `+ CrossTask` where
+    /// the slot's have it (`Vec[dyn Handler]` into `Vec[dyn Handler +
+    /// CrossTask]`, the first thing a 0.8.0 program meets in 0.8.1) is
+    /// refused naming the marker, with the fix-it at the value's own
+    /// declaration when it is a local. A plain `dyn` does not become a
+    /// marked one: nothing checked the value coerced into it (core
+    /// semantics §6.3).
+    fn refuse_missing_dyn_marker(&mut self, expected: &Type, found: &Type, span: Span) -> bool {
+        fn mark(t: &Type) -> Type {
+            match t {
+                Type::Dyn {
+                    trait_name,
+                    args,
+                    assoc,
+                    clause,
+                    ..
+                } => Type::Dyn {
+                    trait_name: trait_name.clone(),
+                    args: args.iter().map(mark).collect(),
+                    assoc: assoc.iter().map(|(n, t)| (n.clone(), mark(t))).collect(),
+                    cross_task: true,
+                    clause: clause.clone(),
+                },
+                Type::Named { name, args } => Type::Named {
+                    name: name.clone(),
+                    args: args.iter().map(mark).collect(),
+                },
+                Type::Tuple(ts) => Type::Tuple(ts.iter().map(mark).collect()),
+                Type::Ref(i) => Type::Ref(Box::new(mark(i))),
+                Type::MutRef(i) => Type::MutRef(Box::new(mark(i))),
+                t => t.clone(),
+            }
+        }
+        let marked = mark(found);
+        if marked == *found || !self.is_subtype_with_projections(expected, &marked) {
+            return false;
+        }
+        let msg = format!(
+            "expected '{}', found '{}': a `dyn` type without `+ CrossTask` does not become one \
+             with it, since nothing checked that the value behind it may cross tasks (core \
+             semantics §6.3)\nhelp: write `+ CrossTask` on the `dyn` where the value's type is \
+             declared, so that each value coerced into it is checked",
+            type_display(expected),
+            type_display(found),
+        );
+        let fix = self
+            .local_ident_uses
+            .get(&SpanKey::from_span(&span))
+            .and_then(|n| self.current_fn_fn_markers.get(n))
+            .map(|at| FixIt {
+                span: *at,
+                replacement: " + CrossTask".to_string(),
+            });
+        match fix {
+            Some(f) => self.type_error_with_fix_it(msg, span, TypeErrorKind::TypeMismatch, f),
+            None => {
+                self.type_error_with_types(msg, span, TypeErrorKind::TypeMismatch, expected, found)
+            }
+        }
+        true
+    }
+
     pub(super) fn check_assignable(&mut self, expected: &Type, found: &Type, span: Span) -> bool {
         // B-2026-10-27-14: an operator's result on a `T: Add` is the bound's
         // `T.Output`, which the `TypeParam` wildcard of `types_compatible`
@@ -7342,6 +7408,9 @@ impl<'a> TypeChecker<'a> {
         }
         if self.erased_impl_self_matches(expected, found) {
             return true;
+        }
+        if self.refuse_missing_dyn_marker(expected, found, span) {
+            return false;
         }
         if Self::is_once_into_fn_shape(expected, found) {
             let mut msg = format!(

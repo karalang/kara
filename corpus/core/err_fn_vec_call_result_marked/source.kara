@@ -1,0 +1,26 @@
+// Core semantics §6.3: a function value a call hands back has its
+// environment out of sight, and so does a `Vec` of them. Coerced into a
+// field written `+ CrossTask`, it would let two tasks bump the `shared`
+// counter its closure captured (B-2026-11-02-14), so it is refused.
+// `mk`'s return type written `Vec[Fn() -> i64 + CrossTask]` would check
+// the closure where it is pushed.
+shared struct S { mut n: i64 }
+
+struct Bus { hs: Vec[Fn() -> i64 + CrossTask] }
+
+fn mk(s: own S) -> Vec[Fn() -> i64] {
+    let mut v: Vec[Fn() -> i64] = Vec.new();
+    v.push(|| {
+        s.n = s.n + 1;
+        s.n
+    });
+    v
+}
+
+fn main() {
+    let b = Bus { hs: mk(S { n: 0 }) };
+    let g = TaskGroup.new();
+    let x = g.spawn(|| (b.hs[0])());
+    let y = g.spawn(|| (b.hs[0])());
+    println(x.join() + y.join());
+}
