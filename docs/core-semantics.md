@@ -715,14 +715,14 @@ These leave the core and the v2 gate until after parity:
 - GPU, tensors, autograd;
 - dataframe, columns, Arrow;
 - `comptime` beyond `#[derive]`;
-- named effect variables (`with E`);
 - layout blocks;
-- `dyn`;
 - self-hosting;
 - the WASM component model;
 - SSO.
 
-Plain `wasm32` targets stay.
+Plain `wasm32` targets stay. Named effect variables (`with E`) and `dyn` were on this list; both were brought into v1 by the v1 release checklist (2026-10-28) and are specified in `design.md`.
+
+**A later-track feature that compiles today is a warning, not an error** (ruling 2026-11-02, B-2026-11-01-41). `#[gpu]` and `comptime` outside a `#[derive]` backer are accepted, run with the meaning they have today (a `#[gpu]` kernel runs on the CPU; a `comptime` function or block may be evaluated at run time), and draw the warning `later_track`, which names the feature and this section. Their behaviour is not covered by 0.8's compatibility promise.
 
 ---
 
