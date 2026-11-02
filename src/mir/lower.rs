@@ -4887,6 +4887,17 @@ impl<'l, 'a> Bx<'l, 'a> {
         l
     }
 
+    /// Takes back the drops of the locals `ls` that [`Self::schedule`] put
+    /// in any open scope, for code that now drops or moves them itself.
+    fn unschedule_drops(&mut self, ls: &[Local]) {
+        for scope in &mut self.scopes {
+            scope.retain(|e| {
+                !matches!(e, ScopeEntry::Drop(p)
+                    if p.projection.is_empty() && ls.contains(&p.local))
+            });
+        }
+    }
+
     fn schedule(&mut self, e: ScopeEntry<'a>) {
         self.scopes
             .last_mut()
@@ -11503,6 +11514,12 @@ impl<'l, 'a> Bx<'l, 'a> {
         if hidden {
             self.hide_group(g, group_ty);
         }
+        // Until the joins are done, the group and each spawned handle drop
+        // on an exit from here: a cancelled task's teardown at a join leaves
+        // by its cancel exit, which must free the group and the result a
+        // finished branch left in its handle (core semantics §11.9,
+        // B-2026-11-02-1). A joined handle is moved, so it does not drop.
+        self.schedule(ScopeEntry::Drop(Place::local(g)));
         let mut handles = Vec::new();
         for &x in es {
             let vt = self.expr_ty(x)?;
@@ -11547,6 +11564,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             let gr = self.ref_to(Place::local(g), group_ty);
             let h = self.temp(ht);
             self.call_native("TaskGroup.spawn", vec![gr, c], Place::local(h));
+            self.schedule(ScopeEntry::Drop(Place::local(h)));
             self.branch_end(region, entry);
             handles.push((h, ht, tt));
         }
@@ -11561,6 +11579,11 @@ impl<'l, 'a> Bx<'l, 'a> {
             self.call_native(&name, vec![Operand::Move(Place::local(h))], Place::local(o));
             outs.push((o, tt));
         }
+        // Past the joins, the group drops here and the handles are moved.
+        let par_locals: Vec<Local> = std::iter::once(g)
+            .chain(handles.iter().map(|&(h, _, _)| h))
+            .collect();
+        self.unschedule_drops(&par_locals);
         // The group ends here, so what its tasks borrow is free again.
         let next = self.b.new_block();
         self.goto_with(
@@ -11943,6 +11966,12 @@ impl<'l, 'a> Bx<'l, 'a> {
         let handles = self.temp(handles_ty);
         let name = format!("{}.new", self.tys().display(handles_ty));
         self.call_native(&name, Vec::new(), Place::local(handles));
+        // Until the joins are done, an exit from the loop's spawns or joins
+        // drops the handles (an unjoined one detaches or frees its result)
+        // and then the group, as `par_for_join` does at its end: a cancelled
+        // task's teardown leaves by such an exit (§11.9, B-2026-11-02-1).
+        self.schedule(ScopeEntry::Drop(Place::local(group)));
+        self.schedule(ScopeEntry::Drop(Place::local(handles)));
         Ok(Some(ParForTasks {
             group,
             group_ty,
@@ -12146,6 +12175,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         );
         self.goto(head);
         self.cur = exit;
+        self.unschedule_drops(&[hs, g]);
         for (p, _) in [(hs, hvt), (g, gt)] {
             let next = self.b.new_block();
             self.goto_with(
