@@ -3202,6 +3202,9 @@ struct ChunkJob<'a> {
     /// range as the in-order loop's does (B-2026-10-29-50).
     least: Option<Const>,
     most: Option<Const>,
+    /// The loop's signed sum cannot overflow however its iterations run
+    /// ([`Bx::sum_cannot_overflow`]), so the task keeps no prefixes.
+    quiet: bool,
     /// The loop's push collects in place ([`AutoRed::window`]): the
     /// captures holding the address the windows start at and this task's
     /// first element, and the push.
@@ -3312,6 +3315,9 @@ struct WideAcc<'a> {
     run: Local,
     run_least: Local,
     run_most: Local,
+    /// The sum cannot overflow ([`ChunkJob::quiet`]): a term costs no
+    /// compares, and the prefixes stay 0.
+    quiet: bool,
 }
 
 /// How to run one run of an auto-par loop's iterations again, in order:
@@ -5996,6 +6002,9 @@ impl<'l, 'a> Bx<'l, 'a> {
             b.assign(next, Rvalue::Use(Operand::Copy(Place::local(xn))));
         });
         self.assign(w.run, Rvalue::Use(Operand::Copy(Place::local(next))));
+        if w.quiet {
+            return Ok(());
+        }
         if rising {
             self.assign(w.run_most, Rvalue::Use(Operand::Copy(Place::local(w.run))));
             return Ok(());
@@ -12874,7 +12883,20 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// `let mut k = <literal>`. Nothing between can write `k`, since nothing
     /// between names it, and that `let` runs on every way in.
     fn counter_start(&mut self, e: &'a Expr, counter: &'a Expr, t: Ty) -> R<Option<Const>> {
-        let (ExprKind::Identifier(name), Some((block, at))) = (&counter.kind, self.stmt_at) else {
+        let ExprKind::Identifier(name) = &counter.kind else {
+            return Ok(None);
+        };
+        let counter_sym = match self.lcx.res.get(&counter.id) {
+            Some(Res::Local(sym)) => *sym,
+            _ => return Ok(None),
+        };
+        self.start_const(e, name, counter_sym, t)
+    }
+
+    /// The value the local `sym` (named `name`) holds on the way into the
+    /// loop `e`, when that is a constant (see [`Bx::counter_start`]).
+    fn start_const(&mut self, e: &'a Expr, name: &str, sym: SymbolId, t: Ty) -> R<Option<Const>> {
+        let Some((block, at)) = self.stmt_at else {
             return Ok(None);
         };
         let here = match block.stmts.get(at) {
@@ -12891,16 +12913,12 @@ impl<'l, 'a> Bx<'l, 'a> {
         if !here {
             return Ok(None);
         }
-        let counter_sym = match self.lcx.res.get(&counter.id) {
-            Some(Res::Local(sym)) => *sym,
-            _ => return Ok(None),
-        };
         let mentions = |x: &Expr| crate::deque_head::expr_mentions_name_deep(x, name);
         for s in block.stmts[..at].iter().rev() {
             match &s.kind {
                 StmtKind::Let { pattern, value, .. } if matches!(&pattern.kind, PatternKind::Binding(n) if n == name) =>
                 {
-                    if self.lcx.binding_syms.get(&(pattern.id, name.clone())) != Some(&counter_sym)
+                    if self.lcx.binding_syms.get(&(pattern.id, name.to_string())) != Some(&sym)
                         || !matches!(value.kind, ExprKind::Integer(..))
                     {
                         return Ok(None);
@@ -12916,6 +12934,66 @@ impl<'l, 'a> Bx<'l, 'a> {
             }
         }
         Ok(None)
+    }
+
+    /// Whether the signed sum `r` of the auto-par loop `e` over the
+    /// constant range `least..most` stays in its type's range however the
+    /// loop runs: it starts at a constant ([`Bx::start_const`]), and each
+    /// iteration adds at most one bounded term per site
+    /// ([`Bx::term_bounds`]), so no prefix of the in-order sum can leave
+    /// the range and the join has nothing to find. Its tasks then keep no
+    /// least or greatest prefix, two compares a term (kata 7's
+    /// `sum + (r as i64)`, B-2026-11-02-17). `KARAC_AUTO_PAR_BOUNDED_SUM=0`
+    /// keeps them.
+    fn sum_cannot_overflow(
+        &mut self,
+        e: &'a Expr,
+        body: &'a Block,
+        r: AutoRed<'a>,
+        least: Option<Const>,
+        most: Option<Const>,
+    ) -> R<bool> {
+        if std::env::var("KARAC_AUTO_PAR_BOUNDED_SUM").as_deref() == Ok("0") {
+            return Ok(false);
+        }
+        let (Some(sums), Some(lo), Some(hi)) = (r.wide, least, most) else {
+            return Ok(false);
+        };
+        let (ConstKind::Scalar(lo), ConstKind::Scalar(hi)) = (lo.kind, hi.kind) else {
+            return Ok(false);
+        };
+        let n = (hi as i128).saturating_sub(lo as i128).max(0);
+        let Some(name) = self
+            .lcx
+            .binding_syms
+            .iter()
+            .find(|(_, s)| **s == r.sym)
+            .map(|((_, n), _)| n.clone())
+        else {
+            return Ok(false);
+        };
+        let Some(Const {
+            kind: ConstKind::Scalar(start),
+            ..
+        }) = self.start_const(e, &name, r.sym, r.ty)?
+        else {
+            return Ok(false);
+        };
+        let (mut down, mut up) = (0i128, 0i128);
+        for sum in sums {
+            let Some((l, h)) = self.terms_bounds(body, sum.term, sum.acc, sum.chain)? else {
+                return Ok(false);
+            };
+            let (Some(d), Some(u)) = (down.checked_add(l.min(0)), up.checked_add(h.max(0))) else {
+                return Ok(false);
+            };
+            (down, up) = (d, u);
+        }
+        let (min, max) = int_range(self.tys().tcx().kind(r.ty));
+        let start = start as i128;
+        let low = n.checked_mul(down).and_then(|x| x.checked_add(start));
+        let high = n.checked_mul(up).and_then(|x| x.checked_add(start));
+        Ok(matches!((low, high), (Some(l), Some(h)) if l >= min && h <= max))
     }
 
     /// A range bound that is a constant: a literal, or a `let` of one.
@@ -13194,6 +13272,114 @@ impl<'l, 'a> Bx<'l, 'a> {
         }
     }
 
+    /// The least and greatest value one statement of a sum adds: its term,
+    /// or for a chain (`acc = acc + a + b`) the sum of each operand's but
+    /// `acc`'s, when every one is bounded ([`Bx::term_bounds`]).
+    fn terms_bounds(
+        &mut self,
+        body: &Block,
+        e: &Expr,
+        acc: SymbolId,
+        chain: bool,
+    ) -> R<Option<(i128, i128)>> {
+        if !chain {
+            return self.term_bounds(body, e, 0);
+        }
+        if let (ExprKind::Identifier(_), Some(Res::Local(s))) = (&e.kind, self.lcx.res.get(&e.id)) {
+            if *s == acc {
+                return Ok(Some((0, 0)));
+            }
+        }
+        match &e.kind {
+            ExprKind::Binary { op, left, right } if reduction_op(op) == Some(BinOp::Add) => {
+                let (Some(l), Some(r)) = (
+                    self.terms_bounds(body, left, acc, true)?,
+                    self.terms_bounds(body, right, acc, true)?,
+                ) else {
+                    return Ok(None);
+                };
+                Ok(l.0.checked_add(r.0).zip(l.1.checked_add(r.1)))
+            }
+            _ => self.term_bounds(body, e, 0),
+        }
+    }
+
+    /// The least and greatest value the term `e` of a sum in the auto-par
+    /// loop `body` can have, read from its shape: a literal; a cast from
+    /// an integer type whose values the term's type all holds (kata 7's
+    /// `r as i64` with `r: i32`); an `if` of such arms; or a name an
+    /// immutable `let` of `body` binds to one (B-2026-11-02-17).
+    fn term_bounds(&mut self, body: &Block, e: &Expr, depth: u32) -> R<Option<(i128, i128)>> {
+        if depth > 8 {
+            return Ok(None);
+        }
+        let union = |a: Option<(i128, i128)>, b: Option<(i128, i128)>| {
+            a.zip(b).map(|(a, b)| (a.0.min(b.0), a.1.max(b.1)))
+        };
+        Ok(match &e.kind {
+            ExprKind::Integer(v, _) => Some((*v, *v)),
+            ExprKind::Cast { expr: inner, .. } => {
+                let (from, to) = (self.expr_ty(inner)?, self.expr_ty(e)?);
+                let tcx = self.tys().tcx();
+                let int = |k: HK| {
+                    matches!(k, HK::Int(_) | HK::UInt(_))
+                        && !matches!(k, HK::Int(IntSize::I128) | HK::UInt(UIntSize::U128))
+                };
+                let (fk, tk) = (tcx.kind(from), tcx.kind(to));
+                if !int(fk) || !int(tk) {
+                    return Ok(None);
+                }
+                let ((fl, fh), (tl, th)) = (int_range(fk), int_range(tk));
+                (fl >= tl && fh <= th).then_some((fl, fh))
+            }
+            ExprKind::Block(b) if b.stmts.is_empty() => match b.final_expr.as_deref() {
+                Some(x) => self.term_bounds(body, x, depth + 1)?,
+                None => None,
+            },
+            ExprKind::If {
+                then_block,
+                else_branch: Some(other),
+                ..
+            } => {
+                let then = match then_block.final_expr.as_deref() {
+                    Some(x) if then_block.stmts.is_empty() => {
+                        self.term_bounds(body, x, depth + 1)?
+                    }
+                    _ => None,
+                };
+                union(then, self.term_bounds(body, other, depth + 1)?)
+            }
+            ExprKind::Identifier(_) => {
+                let sym = match self.lcx.res.get(&e.id) {
+                    Some(Res::Local(sym)) => *sym,
+                    _ => return Ok(None),
+                };
+                let bound = body.stmts.iter().find_map(|s| match &s.kind {
+                    StmtKind::Let {
+                        is_mut: false,
+                        pattern,
+                        value,
+                        ..
+                    } => match &pattern.kind {
+                        PatternKind::Binding(name)
+                            if self.lcx.binding_syms.get(&(pattern.id, name.clone()))
+                                == Some(&sym) =>
+                        {
+                            Some(value)
+                        }
+                        _ => None,
+                    },
+                    _ => None,
+                });
+                match bound {
+                    Some(v) => self.term_bounds(body, v, depth + 1)?,
+                    None => None,
+                }
+            }
+            _ => None,
+        })
+    }
+
     /// The reduction at span `r` of an auto-par loop's `body`: `acc op= e`,
     /// `acc = .. acc ..` (a chain of one operator), or `acc.push(e)`.
     fn reduction_site(&mut self, body: &'a Block, r: Span) -> R<Option<RedSite<'a>>> {
@@ -13408,6 +13594,12 @@ impl<'l, 'a> Bx<'l, 'a> {
             None => self.bound_const(left, t)?,
         };
         let most = self.bound_const(right, t)?;
+        let quiet = match red {
+            Some(r) if r.wide.is_some() => {
+                self.sum_cannot_overflow(e, body, r, least.clone(), most.clone())?
+            }
+            _ => false,
+        };
         let int = |v: u128| {
             Operand::Const(Const {
                 ty: t,
@@ -13585,6 +13777,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             wide: red.and_then(|r| r.wide),
             least,
             most,
+            quiet,
             window: task_window,
         });
         self.closure_task = true;
@@ -22918,6 +23111,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                     run,
                     run_least,
                     run_most,
+                    quiet: ch.quiet,
                 }
             });
             self.wide_acc = wide;
