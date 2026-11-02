@@ -197,6 +197,9 @@ struct Task {
     /// Its active span stack, swapped into the thread's while it runs: span
     /// context is per task, inherited from the spawner.
     spans: Vec<i64>,
+    /// Its borrow flags, swapped into the thread's as its spans are
+    /// (B-2026-11-01-25).
+    flags: crate::mir_flags::Table,
     /// Cancelled (core-semantics §11.9): it is torn down at the wait it is
     /// suspended in, or the next one it reaches.
     cancel: bool,
@@ -1492,8 +1495,10 @@ fn poll_nested(t: &mut Task) -> bool {
         *e.cur_mut() = Some(t.cur());
     });
     let outer = crate::mir::swap_spans(std::mem::take(&mut t.spans));
+    let outer_flags = crate::mir_flags::swap_table(std::mem::take(&mut t.flags));
     // SAFETY: the task has not answered 1 yet.
     let done = unsafe { (t.poll)(t.a, t.b) } != 0;
+    t.flags = crate::mir_flags::swap_table(outer_flags);
     t.spans = crate::mir::swap_spans(outer);
     let cur = EXEC.with(|e| {
         let mut e = e.borrow_mut();
@@ -1669,6 +1674,7 @@ pub unsafe extern "C" fn karac_mir_task_spawn(
             wait: Wait::None,
             inflight: None,
             spans: crate::mir::current_spans(),
+            flags: Default::default(),
             cancel: false,
             torn: false,
             unwind: false,
@@ -1787,8 +1793,10 @@ pub unsafe extern "C" fn karac_mir_task_run(poll: TaskPoll, a: *mut u8, b: *mut 
         since += 1;
         let before = EXEC.with(|e| e.borrow().progress);
         let outer = crate::mir::swap_spans(std::mem::take(&mut t.spans));
+        let outer_flags = crate::mir_flags::swap_table(std::mem::take(&mut t.flags));
         // SAFETY: the task has not answered 1 yet.
         let done = unsafe { (t.poll)(t.a, t.b) } != 0;
+        t.flags = crate::mir_flags::swap_table(outer_flags);
         t.spans = crate::mir::swap_spans(outer);
         let (after, cur) = EXEC.with(|e| {
             let mut e = e.borrow_mut();
@@ -2006,8 +2014,10 @@ fn worker_loop(w: usize) {
             continue;
         };
         let outer = crate::mir::swap_spans(std::mem::take(&mut t.spans));
+        let outer_flags = crate::mir_flags::swap_table(std::mem::take(&mut t.flags));
         // SAFETY: the task has not answered 1 yet.
         let done = unsafe { (t.poll)(t.a, t.b) } != 0;
+        t.flags = crate::mir_flags::swap_table(outer_flags);
         t.spans = crate::mir::swap_spans(outer);
         if let Some(cur) = EXEC.with(|e| e.borrow_mut().cur_mut().take()) {
             t.keep(cur);

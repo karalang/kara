@@ -5,19 +5,24 @@
 //! (`src/mir/flags.rs`) places the operations; this keeps the flags, by the
 //! field's address.
 //!
-//! `shared` values never cross tasks, but under the pool a task can move
-//! between workers at a suspension, so the flags are program state
-//! (`mir_task::program_state!`): each thread's own on one worker, one table
-//! behind a lock under the pool. Few are held at once (one per live loan of a flagged field), so they sit
-//! in a short list, and a check with none held returns at once.
+//! `shared` values never cross tasks, so a flag one task holds can never
+//! meet another task's access: each task keeps its own [`Table`], which
+//! the executor swaps into the polling thread while the task runs and back
+//! out when its poll returns, as it does the task's span stack. Under the
+//! pool a task can move between workers at a suspension and its table moves
+//! with it, and no access takes a lock: one process-wide table behind the
+//! pool's lock serialized every task that wrote a `mut` field of its own
+//! `shared` values (kata 133's par lane ran 16x slower at four workers than
+//! at one, B-2026-11-01-25). Few flags are held at once (one per live loan
+//! of a flagged field), so they sit in a short list, and a check with none
+//! held returns at once.
 //!
 //! A coroutine's resume body has no frame slots of its own to remember
 //! what it took, so the `_in` entry points keep that here, by the
 //! coroutine frame's address and the slot's index, across suspensions
 //! (B-2026-10-20-14).
 
-use crate::mir_task::program_state;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::cell::RefCell;
 
 /// One flagged field: how many readers hold it, or whether a writer does.
 struct Flag {
@@ -34,15 +39,36 @@ struct Hold {
     mutable: u8,
 }
 
-program_state! {
-    static FLAGS: Vec<Flag> = Vec::new();
-}
-program_state! {
-    static HOLDS: Vec<Hold> = Vec::new();
+/// A task's flags and its coroutine frames' holds.
+#[derive(Default)]
+pub(crate) struct Table {
+    flags: Vec<Flag>,
+    holds: Vec<Hold>,
 }
 
-/// How many flags any thread holds: a check with none held is one load.
-static HELD: AtomicUsize = AtomicUsize::new(0);
+thread_local! {
+    /// The running task's table (outside every task, the thread's own).
+    static TABLE: RefCell<Table> = const {
+        RefCell::new(Table {
+            flags: Vec::new(),
+            holds: Vec::new(),
+        })
+    };
+}
+
+/// Puts `t` in the running task's place and answers what was there: the
+/// executor's swap around a task's poll.
+pub(crate) fn swap_table(t: Table) -> Table {
+    TABLE.with(|c| std::mem::replace(&mut *c.borrow_mut(), t))
+}
+
+fn flags<R>(f: impl FnOnce(&mut Vec<Flag>) -> R) -> R {
+    TABLE.with(|c| f(&mut c.borrow_mut().flags))
+}
+
+fn holds<R>(f: impl FnOnce(&mut Vec<Hold>) -> R) -> R {
+    TABLE.with(|c| f(&mut c.borrow_mut().holds))
+}
 
 fn conflicts(f: &Flag, mutable: bool) -> bool {
     f.writer || (mutable && f.readers > 0)
@@ -54,7 +80,7 @@ fn conflicts(f: &Flag, mutable: bool) -> bool {
 pub extern "C" fn karac_mir_flag_acquire(addr: *const u8, mutable: u8) -> u8 {
     let addr = addr as usize;
     let mutable = mutable != 0;
-    FLAGS.with(|fl| {
+    flags(|fl| {
         match fl.iter_mut().find(|f| f.addr == addr) {
             Some(f) if conflicts(f, mutable) => return 1,
             Some(f) => {
@@ -70,7 +96,6 @@ pub extern "C" fn karac_mir_flag_acquire(addr: *const u8, mutable: u8) -> u8 {
                     readers: u32::from(!mutable),
                     writer: mutable,
                 });
-                HELD.fetch_add(1, Ordering::Relaxed);
             }
         }
         0
@@ -82,7 +107,7 @@ pub extern "C" fn karac_mir_flag_acquire(addr: *const u8, mutable: u8) -> u8 {
 #[no_mangle]
 pub extern "C" fn karac_mir_flag_release(addr: *const u8, mutable: u8) {
     let addr = addr as usize;
-    FLAGS.with(|fl| {
+    flags(|fl| {
         let Some(i) = fl.iter().position(|f| f.addr == addr) else {
             return;
         };
@@ -94,7 +119,6 @@ pub extern "C" fn karac_mir_flag_release(addr: *const u8, mutable: u8) {
         }
         if f.readers == 0 && !f.writer {
             fl.swap_remove(i);
-            HELD.fetch_sub(1, Ordering::Relaxed);
         }
     })
 }
@@ -103,11 +127,8 @@ pub extern "C" fn karac_mir_flag_release(addr: *const u8, mutable: u8) {
 /// (`mutable` non-zero) meets a held flag, or a read meets a writer's.
 #[no_mangle]
 pub extern "C" fn karac_mir_flag_check(addr: *const u8, mutable: u8) -> u8 {
-    if HELD.load(Ordering::Relaxed) == 0 {
-        return 0;
-    }
     let addr = addr as usize;
-    FLAGS.with(|fl| {
+    flags(|fl| {
         u8::from(
             fl.iter()
                 .any(|f| f.addr == addr && conflicts(f, mutable != 0)),
@@ -130,7 +151,7 @@ pub extern "C" fn karac_mir_flag_acquire_in(
     if karac_mir_flag_acquire(addr, mutable) != 0 {
         return 1;
     }
-    HOLDS.with(|h| {
+    holds(|h| {
         h.push(Hold {
             frame: frame as usize,
             slot,
@@ -146,7 +167,7 @@ pub extern "C" fn karac_mir_flag_acquire_in(
 #[no_mangle]
 pub extern "C" fn karac_mir_flag_release_in(frame: *const u8, slot: u32) {
     let frame = frame as usize;
-    let held = HOLDS.with(|h| {
+    let held = holds(|h| {
         let i = h.iter().position(|x| x.frame == frame && x.slot == slot)?;
         Some(h.swap_remove(i))
     });
@@ -160,7 +181,7 @@ pub extern "C" fn karac_mir_flag_release_in(frame: *const u8, slot: u32) {
 #[no_mangle]
 pub extern "C" fn karac_mir_flag_release_frame(frame: *const u8) {
     let frame = frame as usize;
-    let held: Vec<Hold> = HOLDS.with(|h| {
+    let held: Vec<Hold> = holds(|h| {
         let (mine, rest) = std::mem::take(h)
             .into_iter()
             .partition(|x| x.frame == frame);
