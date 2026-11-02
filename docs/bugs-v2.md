@@ -60,7 +60,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | diagnostics | 87 |
 | false-positive | 86 |
-| perf | 80 |
+| perf | 81 |
 | missing-feature | 61 |
 | soundness | 37 |
 | miscompile | 29 |
@@ -77,7 +77,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | typecheck | 147 |
 | mir | 97 |
-| mir-llvm | 88 |
+| mir-llvm | 89 |
 | cli | 49 |
 | ownership | 38 |
 | interp | 26 |
@@ -104,7 +104,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-31-28 | 2026-10-31 | mir-llvm | low | A rare LeakSanitizer report on corpus programs that spawn tasks or run `par` under load (fixtures/coro_e2e/SPAWN_NONBLOCK_SRC, SPAWN_MULTI_CAPTURE_SRC, interpreter/concurrency/test_dbg_json_in_par_emits_numeric_task_id, par_codegen/test_e2e_par_join_branch_float_method) | — |
 | B-2026-10-31-37 | 2026-10-31 | mir-llvm | medium | kata 38 (count_and_say) runs legacy's instruction count but 1.22-1.28x its cycles on the MIR backend, 1.44x rustc -O on wall time where legacy was 1.10x; the cause is unattributed | — |
 | B-2026-10-31-38 | 2026-10-31 | mir-llvm | high | MIR reloads a value the previous loop iteration just stored (kata 64's `dp[c] = cost + min(dp[c], dp[c - 1])` loads dp[c-1] back through an `ldp` that overlaps the last `str`), where legacy carried it in a register: same 15-instruction loop, 1.77x legacy's cycles on the M5; katas 6 and 293 show the same instructions-vs-cycles signature; on x86 it shows on wall time too: kata 1031's prefix-sum loop reloads prefix[i] and the input Vec's buffer pointer every trip, 2.7x rustc -O -C overflow-checks=on | — |
-| B-2026-10-31-39 | 2026-10-31 | mir-llvm | medium | Kata 9's auto-par binary executes a constant +1.85G instructions (+75%) whenever it has two or more workers, flat from 2 to 18: the par lane runs 2.10x rayon's time where it ran 1.21x, the B-2026-10-28-35 signature on a loop shape its fix (5b6aab2a3c) did not cover | — |
 | B-2026-10-31-40 | 2026-10-31 | mir-llvm | medium | Kata 10's regex DP runs 1.37x legacy's instructions and 1.50x its cycles on the MIR backend: the seq lane went from 1.11x to 1.60x rustc -O | — |
 | B-2026-10-31-41 | 2026-10-31 | mir | medium | karac still compiles a kata 1.54x slower than rustc -O at twice its peak memory on the M5 (median over 24 katas: 165 ms vs 103 ms, 59.8 MiB vs 28.3 MiB), after B-2026-10-28-37's library-prune fix | — |
 | B-2026-10-31-43 | 2026-10-31 | mir | medium | Implicit auto-par no longer fires on kata 23 (merge k sorted lists), which the legacy backend parallelized: its par lane now runs the sequential program, 1.49x -> 5.15x rayon | — |
@@ -128,6 +127,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-02-10 | 2026-11-02 | mir-llvm | low | Kata 276's par lane runs 1.44x slower than its 2026-08-28 feed while its comparators moved 1.06-1.09x and its seq lane held, so it scales 4.6x over seq where it scaled ~6.0x; there is no matched legacy par baseline | — |
 | B-2026-11-02-15 | 2026-11-02 | typecheck | high | An unmarked `Fn` reaches a `+ CrossTask` slot through a GENERIC parameter (`collect()` into `Vec[Fn() -> i64 + CrossTask]`, `id[T](mkf(..))`, `mem.replace(mut f, mkf(..))`): `karac check` passes and two tasks race on the captured `shared` handle | — |
 | B-2026-11-02-16 | 2026-11-02 | mir | medium | `mem.replace(mut f, g)` on a local of an erased `Fn` type is refused after check with `error[mir]: invalid MIR: assigning Fn() -> i64 to _6 of type closure#N()`, marked or not | — |
+| B-2026-11-02-17 | 2026-11-02 | mir-llvm | low | After B-2026-10-31-39, an auto-par task's loop still runs about 12% more instructions than the in-order one on kata 9 (Linux): a bounds check and a buffer reload the in-order loop drops, and two prefix compares per term on a sum whose terms can be negative (kata 7's `sum + (r as i64)`) | — |
 
 ### Relocated
 
@@ -505,6 +505,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-31-34 | mir-llvm | high | Under the multi-worker pool, `send` on a full bounded `channel(n)` from several producer tasks returns `Err` instead of waiting: compiled programs lo… | 59a342fad1 |
 | B-2026-10-31-35 | typecheck+cli | medium | User-facing diagnostics and help say "in v1", "v1.5", "post-v1", "v1.x" for what 0.9 does not support ("identifiers must be ASCII in v1", "batched ma… | 4f8cb2f424 |
 | B-2026-10-31-36 | cli | high | `karac build --target=wasm_wasi` on a package, in a binary without the llvm feature, checks the package for the HOST platform: `import host` with onl… | b478379db3 |
+| B-2026-10-31-39 | mir-llvm | medium | Kata 9's auto-par binary executes a constant +1.85G instructions (+75%) whenever it has two or more workers, flat from 2 to 18: the par lane runs 2.1… | f117a8f69f9eb1d23ba79ec433aaeded4593c983 |
 | B-2026-10-31-42 | mir-llvm | medium | Kata 20's valid-parentheses stack scan runs 1.41x legacy's instructions on the MIR backend: the seq lane went from 0.74x to 0.90x rustc -O and the pa… | 11d7eb7f01 |
 | B-2026-10-31-44 | mir-llvm | high | MIR never full-unrolls a constant-trip loop that calls or exits early, where the June legacy fix (B-2026-06-17-7) did: kata 36 went from 0.55x to 1.6… | c26d97bd87 |
 | B-2026-10-31-45 | mir-llvm | medium | `unsafe { xs.get_unchecked(i) }` is bounds-checked on the MIR backend: the escape hatch design.md documents does nothing, and kata 28's unchecked KMP… | 62aae3a95a |
