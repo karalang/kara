@@ -62,7 +62,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | false-positive | 86 |
 | perf | 80 |
 | missing-feature | 61 |
-| soundness | 34 |
+| soundness | 35 |
 | miscompile | 29 |
 | run-vs-build | 20 |
 | other | 15 |
@@ -75,7 +75,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 143 |
+| typecheck | 144 |
 | mir | 96 |
 | mir-llvm | 88 |
 | cli | 49 |
@@ -117,7 +117,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-01-22 | 2026-11-01 | mir-llvm | low | Kata 116's populate-next-right-pointers loop runs legacy's instruction count on the MIR backend but 1.23x its cycles: the seq lane went from 0.90x to 1.10x rustc -O | — |
 | B-2026-11-01-23 | 2026-11-01 | mir-llvm | medium | Kata 120's default build auto-parallelizes its one-off 200-row triangle build and then runs +2.0G instructions (+29%) whenever it has two or more workers: the default binary is 1.10x slower than its KARAC_AUTO_PAR=0 twin | — |
 | B-2026-11-01-24 | 2026-11-01 | mir-llvm | medium | MIR `shared` boxes carry a 16-byte strong+weak count header where legacy carried 8, so a 24-byte node body (a tree's val + left + right) takes a 48-byte macOS malloc block instead of 32: kata 124's peak RSS went from 35.2 MB to 52.1 MB (1.48x) | — |
-| B-2026-11-01-26 | 2026-11-01 | typecheck | high | A `shared` handle crosses a task boundary inside a function value whose type is erased by a SIGNATURE: `fn mkf(s: own S) -> Fn() -> i64 { || { s.n = s.n + 1; s.n } }` then two `TaskGroup.spawn` closures calling `f = mkf(s)` pass `karac check` and race on the non-atomic handle: 2 x 100000 increments print 166280 (run) and 150044 (ASan build) under KARAC_THREADS=4, want a check refusal (core-semantics §6.3) (WIDENED: any container of an erased function type is assumed CrossTask: a struct field `f: Fn() -> i64`, a `Vec[Fn()]` or `Map[_, Fn()]` (local or returned), `Option[Fn()]`, a returned `dyn Trait` over a shared field, a closure returning a closure, a `channel` send of the erased value, a `sync struct` field of type `Fn()`, and an erased `Fn` parameter spawned inside the callee all pass check; only a closure literal visible in the spawning body is refused) | — |
 | B-2026-11-01-36 | 2026-11-01 | mir-llvm | medium | Kata 139's word-break DP inner loop runs 1.75x legacy's instructions on the MIR backend (1.54x its cycles): the seq lane went from 0.99x to 1.50x rustc -O | — |
 | B-2026-11-01-41 | 2026-11-01 | typecheck | low | Two later-track features named in core-semantics 13 are accepted silently and run as ordinary code: `comptime fn sq(n: i64) -> i64 { n * n }` checks and prints 9 at run time, and a `#[gpu]` function checks and runs on the CPU; `Tensor`/`Column` are refused with a clear 'not in 0.8' diagnostic | — |
 | B-2026-11-01-42 | 2026-11-01 | mir-llvm | medium | Kata 147's insertion-sort-list runs legacy's instruction count on the MIR backend but 1.36x its cycles: the seq lane went from 0.72x to 0.99x rustc -O and from 0.82x to 1.31x C | — |
@@ -135,6 +134,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-02-9 | 2026-11-02 | mir-llvm | medium | Growing a fresh Vec[i64] to 2M elements with push, once per round, runs 1.37x legacy's instructions on the MIR backend (1.13x its cycles): found in kata 283, where it was the whole of the seq lane's 1.11x -> 1.26x rustc -O slip | — |
 | B-2026-11-02-10 | 2026-11-02 | mir-llvm | low | Kata 276's par lane runs 1.44x slower than its 2026-08-28 feed while its comparators moved 1.06-1.09x and its seq lane held, so it scales 4.6x over seq where it scaled ~6.0x; there is no matched legacy par baseline | — |
 | B-2026-11-02-11 | 2026-11-02 | mir-llvm | medium | Kata 294's memoised flip-game search (per-node successor Strings built char by char, Map[String, bool] memo) runs 1.60x legacy's instructions and 1.51x its cycles on the MIR backend: the seq lane went from 0.62x to 0.95x rustc -O | — |
+| B-2026-11-02-12 | 2026-11-02 | typecheck | high | A `shared` handle crosses tasks inside an unmarked `dyn T` that a task or `par` branch only VIEWS: `fn mkd(s: own S) -> dyn Bump` and two `TaskGroup.spawn` closures calling `d.bump()` pass `karac check` and race (397329328 of 600000001 at KARAC_THREADS=4). The view carve-out for `dyn` captures is unsound; an unmarked `dyn T` may not reach a task or a branch even as a view | — |
 
 ### Relocated
 
@@ -531,6 +531,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-01-15 | typecheck | medium | `h.d ?? x` with `h` a borrowed struct whose field `d: Option[Node]` holds a `shared` handle is refused by check as a move out of a borrow; core-seman… | 8df360f9f9 |
 | B-2026-11-01-16 | mir | medium | An assignment whose place is a method-call chain evaluates the value before the place, against core-semantics 8.2 (place operands first): `m.entry(1)… | edc88dd260 |
 | B-2026-11-01-25 | mir-llvm | high | Under the task pool every borrow-flag operation goes through ONE process-wide locked table, so parallel tasks that write `mut` fields of their own `s… | 57efe5bc2fbb907120a3e7aca5bcd7dbb052c710 |
+| B-2026-11-01-26 | typecheck | high | A `shared` handle crosses a task boundary inside a function value whose type is erased by a SIGNATURE: `fn mkf(s: own S) -> Fn() -> i64 { \|\| { s.n =… | 3139c3c5bf |
 | B-2026-11-01-27 | typecheck | high | A task spawned into a `TaskGroup` made OUTSIDE a `with_provider` call captures the provider and outlives it: `let tg = TaskGroup.new(); let h = with_… | 7bb878c704 |
 | B-2026-11-01-28 | mir | medium | A `Map` index place reads its key operand after the assigned value has run, against core-semantics 8.2 (place operands first): `let mut k = 1; m[k] =… | 84c96d6599 |
 | B-2026-11-01-29 | mir | medium | B-2026-11-01-16 is wider than method chains: an assignment whose place is rooted in ANY call evaluates the value first, against core-semantics 8.2: `… | edc88dd260 |
