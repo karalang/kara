@@ -86,6 +86,7 @@ MAC = platform.system() == "Darwin"
 ROWS = [
     ("B-2026-10-31-37", "1-100/38-count-and-say", "count_and_say.kara", "pair", "cycles", ""),
     ("B-2026-11-01-17", "1-100/71-simplify-path", "simplify.kara", "threads:2:1", "wall", "2 workers vs 1"),
+    ("B-2026-11-01-18", "1-100/87-scramble-string", "scramble_string.kara", "pair", "instructions", "x86 1.054x"),
     ("B-2026-11-01-22", "101-200/116-populating-next-right-pointers-in-each-node", "connect.kara", "pair", "cycles", ""),
     ("B-2026-11-01-42", "101-200/147-insertion-sort-list", "insertion_sort_list.kara", "pair", "cycles", ""),
     ("B-2026-11-01-43", "101-200/164-maximum-gap", "maximum_gap.kara", "pair", "instructions", "x86 1.06x"),
