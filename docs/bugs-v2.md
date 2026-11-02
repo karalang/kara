@@ -59,15 +59,15 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 88 |
-| false-positive | 87 |
+| false-positive | 88 |
 | perf | 84 |
 | missing-feature | 62 |
-| soundness | 38 |
+| soundness | 39 |
 | miscompile | 30 |
 | run-vs-build | 20 |
 | other | 15 |
 | codegen-gap | 14 |
-| crash | 5 |
+| crash | 6 |
 | leak | 4 |
 | use-after-free | 1 |
 
@@ -75,9 +75,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 149 |
+| typecheck | 152 |
 | mir | 98 |
-| mir-llvm | 93 |
+| mir-llvm | 94 |
 | cli | 49 |
 | ownership | 38 |
 | parser | 27 |
@@ -112,7 +112,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-02-7 | 2026-11-02 | mir-llvm | medium | Katas 252 and 253 (meeting rooms I and II), dominated by sorting a fresh copy of 120k intervals by start each round, run 1.14-1.20x legacy's instructions on the M5 (arm64) MIR backend; on x86 they measure 0.97x and 1.02x, so the gap is arm64-only and needs an arm64 measurement | — |
 | B-2026-11-02-10 | 2026-11-02 | mir-llvm | low | Kata 276's par lane runs 1.44x slower than its 2026-08-28 feed while its comparators moved 1.06-1.09x and its seq lane held, so it scales 4.6x over seq where it scaled ~6.0x; there is no matched legacy par baseline | — |
 | B-2026-11-02-17 | 2026-11-02 | mir-llvm | low | After B-2026-10-31-39, an auto-par task's loop still runs about 10% more instructions than the in-order one on kata 9 (Linux): a bounds check the in-order loop drops, the range cap's back-edge test, and two prefix compares per term on a sum whose terms can be negative (kata 7's `sum + (r as i64)`); the buffer reload is fixed (e888029d05) | — |
-| B-2026-11-02-21 | 2026-11-02 | typecheck | medium | `*a = || 9` through a `a: mut ref Fn() -> i64` parameter is refused with E0517 "cannot write to `a`: it is reached through a shared `ref`", though `a` is `mut ref`; the same write through `mut ref Vec[Fn]` or a struct field is accepted | — |
+| B-2026-11-02-27 | 2026-11-02 | typecheck+mir-llvm | high | `tx.send(s)` on a `Sender[ref String]` with a plain `String` local passes check, though §5.7 forbids a view in a channel; at run the receiver reads garbage: `panic: out of memory` on run and llvm, ASan global-buffer-overflow, interp leak | — |
+| B-2026-11-02-28 | 2026-11-02 | typecheck | medium | A method with a `self` receiver that returns a reference may return a borrowed ARGUMENT (`fn pick(self, k: ref String) -> ref String { k }`): §5.4's receiver rule says the result borrows `self` only and the body is checked against it, but check accepts, so a caller can keep the result past the argument | — |
+| B-2026-11-02-29 | 2026-11-02 | typecheck | medium | Returning `m.get(k) ?? ""` from a function is refused (E0516 'cannot drop the temporary value'), and so is `let o = m.get(k); o ?? ""` ('returned borrow does not originate from a ref parameter'), though §5.3 names `m.get(k) ?? ""` as a static fallback that may be kept and returned | — |
 
 ### Relocated
 
@@ -561,6 +563,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-02-18 | typecheck | high | After the B-2026-11-02-15 fix, five more generic paths still let an unmarked `Fn` into a `+ CrossTask` slot and race: a generic impl's `Bx.new(x)`, `… | 0d618d8646 |
 | B-2026-11-02-19 | mir | high | Generic std ops on erased `Fn` values miscompile when a closure LITERAL is involved: `mem.swap` of two `Fn` locals is a no-op, and `Option[Fn].replac… | 66c81328c7 |
 | B-2026-11-02-20 | parser | low | `(Fn() -> Fn() -> i64) + CrossTask` is a parse error (`Expected =, found +`); §6.3 says to parenthesize to mark the outer function type, and only `Fn… | 04ae52b256 |
+| B-2026-11-02-21 | typecheck | medium | `*a = \|\| 9` through a `a: mut ref Fn() -> i64` parameter is refused with E0517 "cannot write to `a`: it is reached through a shared `ref`", though `a… | 206d1362de |
 | B-2026-11-02-22 | mir-llvm | medium | The drop-soundness fuzzer was deleted with the legacy pipeline at M3 and has no v2 port: nothing fuzzes drop elaboration against ASan/LSan and a drop… | 041a8ce231 |
 | B-2026-11-02-23 | mir-llvm | medium | Kata 71's simplify-path runs 1.40x legacy's instructions and 1.42x its cycles in the seq lane on the MIR backend, and its par lane slipped from 0.91x… | 791fe05de0 |
 | B-2026-11-02-24 | mir-llvm | low | Kata 38's seq binary stays at 312 KiB on g96fca5370 where the B-2026-10-28-36 fix took 12 other kata seq binaries to 52-69 KB | ad984ef96b |
