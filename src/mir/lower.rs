@@ -3263,6 +3263,10 @@ struct WideSum<'a> {
     acc: SymbolId,
     /// `acc`'s type.
     ty: Ty,
+    /// The term is never negative ([`Bx::term_never_negative`]), so the
+    /// run never falls: its least prefix stays 0 and its greatest is the
+    /// run itself, and a term costs no compares (B-2026-10-31-39).
+    rising: bool,
 }
 
 /// An auto-par task's wide sum while its run is lowered, the locals the
@@ -5738,7 +5742,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         if sum.chain {
             return self.wide_chain(w, sum, sum.term);
         }
-        self.wide_term(w, sum.term)
+        self.wide_term(w, sum.term, sum.rising)
     }
 
     /// The chain `e` of a wide sum, evaluated as the sequential statement
@@ -5750,18 +5754,20 @@ impl<'l, 'a> Bx<'l, 'a> {
             return Ok(());
         };
         if self.acc_chain(left, BinOp::Add, sum.acc) == Ok(None) {
-            self.wide_term(w, left)?;
+            self.wide_term(w, left, sum.rising)?;
             self.wide_chain(w, sum, right)
         } else {
             self.wide_chain(w, sum, left)?;
-            self.wide_term(w, right)
+            self.wide_term(w, right, sum.rising)
         }
     }
 
     /// `e`, one term of a wide sum, added to the task's run, the least
     /// and greatest prefix kept; a run that would overflow `acc`'s type
-    /// folds into the `i128` base first.
-    fn wide_term(&mut self, w: WideAcc<'a>, e: &'a Expr) -> R<()> {
+    /// folds into the `i128` base first. A `rising` term is never
+    /// negative: the least prefix stays where it was and the greatest is
+    /// the run.
+    fn wide_term(&mut self, w: WideAcc<'a>, e: &'a Expr, rising: bool) -> R<()> {
         let t = self.expr_ty(e)?;
         let x = self.temp(t);
         self.expr_into(e, Place::local(x))?;
@@ -5804,6 +5810,10 @@ impl<'l, 'a> Bx<'l, 'a> {
             b.assign(next, Rvalue::Use(Operand::Copy(Place::local(xn))));
         });
         self.assign(w.run, Rvalue::Use(Operand::Copy(Place::local(next))));
+        if rising {
+            self.assign(w.run_most, Rvalue::Use(Operand::Copy(Place::local(w.run))));
+            return Ok(());
+        }
         for (bound, op) in [(w.run_least, BinOp::Lt), (w.run_most, BinOp::Gt)] {
             let past = self.temp(bool_t);
             self.assign(
@@ -12806,6 +12816,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                                 chain: x.chain,
                                 acc: sym,
                                 ty,
+                                rising: self.terms_never_negative(body, x.term, sym, x.chain),
                             })
                             .collect::<Vec<_>>()
                             .into_boxed_slice(),
@@ -12828,6 +12839,72 @@ impl<'l, 'a> Bx<'l, 'a> {
             push: false,
             replay: checked && sites.len() > 1,
         })))
+    }
+
+    /// Whether every term a sum's statement adds is never negative: its
+    /// term, or for a chain (`acc = acc + a + b`) each operand but `acc`.
+    fn terms_never_negative(&self, body: &Block, e: &Expr, acc: SymbolId, chain: bool) -> bool {
+        if !chain {
+            return self.term_never_negative(body, e, 0);
+        }
+        if let (ExprKind::Identifier(_), Some(Res::Local(s))) = (&e.kind, self.lcx.res.get(&e.id)) {
+            if *s == acc {
+                return true;
+            }
+        }
+        match &e.kind {
+            ExprKind::Binary { op, left, right } if reduction_op(op) == Some(BinOp::Add) => {
+                self.terms_never_negative(body, left, acc, true)
+                    && self.terms_never_negative(body, right, acc, true)
+            }
+            _ => self.term_never_negative(body, e, 0),
+        }
+    }
+
+    /// Whether the term `e` of a sum in the auto-par loop `body` is never
+    /// negative, read from its shape: a literal that is not, an `if` both
+    /// of whose arms are such, or a name an immutable `let` of `body`
+    /// binds to one (kata 9's `let inc: i64 = if r { 1 } else { 0 }`).
+    fn term_never_negative(&self, body: &Block, e: &Expr, depth: u32) -> bool {
+        if depth > 8 {
+            return false;
+        }
+        let block = |b: &Block| {
+            b.stmts.is_empty()
+                && b.final_expr
+                    .as_deref()
+                    .is_some_and(|x| self.term_never_negative(body, x, depth + 1))
+        };
+        match &e.kind {
+            ExprKind::Integer(v, _) => *v >= 0,
+            ExprKind::Block(b) => block(b),
+            ExprKind::If {
+                then_block,
+                else_branch: Some(other),
+                ..
+            } => block(then_block) && self.term_never_negative(body, other, depth + 1),
+            ExprKind::Identifier(_) => {
+                let Some(Res::Local(sym)) = self.lcx.res.get(&e.id) else {
+                    return false;
+                };
+                body.stmts.iter().any(|s| match &s.kind {
+                    StmtKind::Let {
+                        is_mut: false,
+                        pattern,
+                        value,
+                        ..
+                    } => match &pattern.kind {
+                        PatternKind::Binding(name) => {
+                            self.lcx.binding_syms.get(&(pattern.id, name.clone())) == Some(sym)
+                                && self.term_never_negative(body, value, depth + 1)
+                        }
+                        _ => false,
+                    },
+                    _ => false,
+                })
+            }
+            _ => false,
+        }
     }
 
     /// The reduction at span `r` of an auto-par loop's `body`: `acc op= e`,
