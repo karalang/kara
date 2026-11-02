@@ -60,7 +60,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | diagnostics | 86 |
 | false-positive | 86 |
-| perf | 76 |
+| perf | 77 |
 | missing-feature | 61 |
 | soundness | 34 |
 | miscompile | 29 |
@@ -77,7 +77,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | typecheck | 143 |
 | mir | 96 |
-| mir-llvm | 84 |
+| mir-llvm | 85 |
 | cli | 49 |
 | ownership | 38 |
 | interp | 26 |
@@ -134,6 +134,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-02-5 | 2026-11-02 | mir-llvm | low | Kata 246's strobogrammatic check runs 1.31x legacy's instructions on the MIR backend (1.24x its cycles), on top of the wontfix unrolling gap B-2026-08-15-31: the seq lane went from 1.57x to 1.87x rustc -O | — |
 | B-2026-11-02-6 | 2026-11-02 | mir-llvm | medium | Kata 249's Map[String, Vec[String]] grouping (entry(k).or_insert(Vec.new()).push(w)) runs 1.24x legacy's instructions and 1.24x its cycles on the MIR backend: the seq lane went from 0.93x to 1.10x rustc -O | — |
 | B-2026-11-02-7 | 2026-11-02 | mir-llvm | medium | Katas 252 and 253 (meeting rooms I and II), both dominated by sorting a fresh copy of 120k intervals by start each round, run 1.14-1.20x legacy's instructions and 1.23x its cycles on the MIR backend: their seq lanes slipped ~1.2-1.3x against every comparator | — |
+| B-2026-11-02-8 | 2026-11-02 | mir-llvm | medium | The auto-par collect lowering (`#[par_order_free]` loop pushing into a Vec) holds the collected Vec twice at peak once there are two or more workers: kata 270's par build peaks at 44-49 MiB against 22 MiB at one worker, with +12.5% instructions, both flat from 2 to 18 workers | — |
 
 ### Relocated
 
