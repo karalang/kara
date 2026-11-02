@@ -585,12 +585,25 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
 
     /// The register type a value of `t` is passed in by value: `Some(None)`
     /// for a value with no bytes, a scalar or pointer as it is loaded, an
-    /// integer for any other value of 1, 2, 4 or 8 bytes; `None` when it
-    /// is passed in memory.
+    /// integer for any other value of 1, 2, 4 or 8 bytes, and `{ptr, i64}`
+    /// for a slice or `str` (or a reference to one), whose two words are
+    /// laid out so; `None` when it is passed in memory. A slice in memory
+    /// made every recursive call of kata 10's matcher copy both of its
+    /// slices and return its `bool` through a pointer (B-2026-10-31-40).
     fn reg_class(&self, t: Ty) -> Option<Option<BasicTypeEnum<'ctx>>> {
         let l = self.layout(t).ok()?;
         if l.size == 0 {
             return Some(None);
+        }
+        let view = |k: TyKind| matches!(k, TyKind::Str | TyKind::Slice(_));
+        let two_words = match self.tys.kind(t) {
+            TyKind::Ref(p) | TyKind::MutRef(p) => view(self.tys.kind(p)),
+            k => view(k),
+        };
+        if two_words && l.size == 16 && std::env::var("KARAC_MIR_SLICE_REGS").as_deref() != Ok("0")
+        {
+            let pair = [self.ptr_ty().into(), self.llcx.i64_type().into()];
+            return Some(Some(self.llcx.struct_type(&pair, false).into()));
         }
         let lt = self.llvm_ty(t).ok()?;
         if !lt.is_array_type() {
