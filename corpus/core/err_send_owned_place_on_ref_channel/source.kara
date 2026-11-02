@@ -1,0 +1,10 @@
+// A `String` local passed to `send` on a `Sender[ref String]` is lent,
+// as an owned place passed for any `ref` slot is, and a view may not flow
+// into a channel (core semantics §5.7). The explicit `let r = ref s;
+// tx.send(r)` is refused the same way.
+fn main() {
+    let (tx, rx): (Sender[ref String], Receiver[ref String]) = channel(1);
+    let s = "x".to_string();
+    let _ = tx.send(s);
+    println(rx.recv().unwrap());
+}

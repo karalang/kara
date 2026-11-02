@@ -1,0 +1,15 @@
+// An owned place passed for a library method's `ref` element slot is lent,
+// not moved (core semantics §5.3): the local keeps its value and drops it
+// once, and the container reads it through the reference.
+fn main() {
+    let a = "one".to_string();
+    let b = "two".to_string();
+    let mut o: Option[ref String] = None;
+    let _ = o.replace(a);
+    println(o.unwrap());
+    let mut d: VecDeque[ref String] = VecDeque.new();
+    d.push_back(a);
+    d.insert(0, b);
+    println(f"{d[0]} {d[1]} {d.len()}");
+    println(f"{a} {b}");
+}

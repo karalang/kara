@@ -341,6 +341,9 @@ impl<'a> super::TypeChecker<'a> {
                 let idx_ty = self.infer_expr(&args[0].value);
                 self.check_i64_arg(&args[0].value, &idx_ty);
                 let val_ty = self.infer_element_arg(&args[1].value, &elem);
+                // An owned local inserted into a `ref` slot is lent, as
+                // `push` lends it (v2 core §5.3; B-2026-11-02-27).
+                self.note_view_lent_into_ref(&args[1].value, &elem, true);
                 unify_types(
                     &elem,
                     &val_ty,
@@ -631,6 +634,9 @@ impl<'a> super::TypeChecker<'a> {
             };
             if let Some(elem) = element_ty {
                 let arg_ty = self.infer_element_arg(&args[0].value, &elem);
+                // An owned local pushed into a `ref` slot is lent, as `push`
+                // lends it (v2 core §5.3; B-2026-11-02-27).
+                self.note_view_lent_into_ref(&args[0].value, &elem, true);
                 // Mirror the unification in the `Vec.push` arm above so an
                 // unsolved receiver-element typevar gets pinned to the first
                 // pushed value type.

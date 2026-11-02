@@ -1,0 +1,9 @@
+source = "B-2026-11-02-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["references"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-02-27: `Option[ref String].replace(a)` and `VecDeque[ref String].insert(0, b)` lend the owned place, as `Vec[ref String].push(a)` does (core semantics §5.3); before the fix they moved the String in where the slot holds a reference (a leak on the interpreter, out of memory on llvm)."

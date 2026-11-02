@@ -21386,6 +21386,20 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// the parameter type the receiver implies.
     /// The parameter types of a library collection method, where known.
     fn lib_param_tys(&self, recv: Ty, method: &str) -> Option<Vec<Ty>> {
+        // A channel end's `send` and an `Option`'s `replace` take the
+        // element. Without the slot, an owned place sent on a
+        // `Sender[ref T]` moved in where it is lent, as into a `Vec[ref T]`,
+        // and the borrow check could not refuse the view in a channel
+        // (§5.7; B-2026-11-02-27).
+        if let Some((adt, targs)) = self.tys().tcx().adt_of(recv) {
+            let slot = match (adt.name.as_str(), method) {
+                ("Sender" | "Channel", "send" | "try_send") | ("Option", "replace") => {
+                    targs.first().copied()
+                }
+                _ => None,
+            };
+            return slot.map(|t| vec![t]);
+        }
         let HK::Intrinsic { kind, args: targs } = self.tys().tcx().kind(recv) else {
             return None;
         };
@@ -21397,7 +21411,8 @@ impl<'l, 'a> Bx<'l, 'a> {
         Some(match (kind, method) {
             (IntrinsicKind::Vec, "push" | "contains") => vec![targs[0]],
             (IntrinsicKind::VecDeque, "push_back" | "push_front") => vec![targs[0]],
-            (IntrinsicKind::Vec, "insert") => vec![usize_t, targs[0]],
+            (IntrinsicKind::Vec | IntrinsicKind::VecDeque, "insert") => vec![usize_t, targs[0]],
+            (IntrinsicKind::Vec | IntrinsicKind::VecDeque, "fill") => vec![targs[0]],
             // `fn resize(mut ref self, n: i64, val: own T)`: a negative
             // `n` counts as 0.
             (IntrinsicKind::Vec, "resize") => {
@@ -21405,7 +21420,9 @@ impl<'l, 'a> Bx<'l, 'a> {
             }
             (IntrinsicKind::Map | IntrinsicKind::SortedMap, "insert") => vec![targs[0], targs[1]],
             (IntrinsicKind::Map, "get" | "contains_key" | "remove") => vec![targs[0]],
-            (IntrinsicKind::Set, "insert" | "contains" | "remove") => vec![targs[0]],
+            (IntrinsicKind::Set | IntrinsicKind::SortedSet, "insert" | "contains" | "remove") => {
+                vec![targs[0]]
+            }
             _ => return None,
         })
     }

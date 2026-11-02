@@ -1,0 +1,1 @@
+error[E0509]: a view is stored in an escaping closure, a `shared` value or a channel, where its borrow is not kept (core semantics §5.7, §9.3)
