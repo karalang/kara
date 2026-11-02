@@ -58,10 +58,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| false-positive | 87 |
 | diagnostics | 86 |
+| false-positive | 86 |
 | perf | 70 |
-| missing-feature | 60 |
+| missing-feature | 61 |
 | soundness | 34 |
 | miscompile | 29 |
 | run-vs-build | 20 |
@@ -129,7 +129,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-01-35 | 2026-11-01 | mir | low | A generic call with a `Copy` place argument followed by an argument that writes the place (`pr(c.n, bump(mut c))` with `fn pr[T: Display](a: T, b: T)`) is refused E0516 on check and run, where the non-generic `pair(c.n, bump(mut c))` is accepted since B-2026-11-01-7 and prints `1 11` | — |
 | B-2026-11-01-36 | 2026-11-01 | mir-llvm | medium | Kata 139's word-break DP inner loop runs 1.75x legacy's instructions on the MIR backend (1.54x its cycles): the seq lane went from 0.99x to 1.50x rustc -O | — |
 | B-2026-11-01-38 | 2026-11-01 | mir | low | A whole `Array[i64, 2]` passed to a bare (copying) parameter is held as a borrow across the later arguments: `sh(a, set(mut a))` and `sh(a, { a[0] = 9; 9 })` are refused E0516 (the second as `write of a temporary value[a temporary value]`), where a `#[derive(Copy)]` struct or a tuple in the same position is copied and prints `1 9` | — |
-| B-2026-11-01-40 | 2026-11-01 | effect | low | Two `par {}` branches that write CONSTANT, different indices of one `Vec` (`{ v[0] = 1; 0 }` and `{ v[1] = 2; 0 }`) are refused as conflicting mutable borrows of `v`, where core-semantics 11.2 says disjoint index ranges proven by the disjointness analysis do not conflict | — |
+| B-2026-11-01-40 | 2026-11-01 | effect | low | CORRECTED 11-02 (kata thread): no index-disjointness analysis exists on v2 for `par {}` OR `par for` (`par for i in 0..2 { v[i] = i + 1 }` is refused too, and so is an Array); the analysis core-semantics 11.2 calls "existing" is deferred.md "Auto-Parallel Loops over Provably-Disjoint Indexed Writes". Was: Two `par {}` branches that write CONSTANT, different indices of one `Vec` (`{ v[0] = 1; 0 }` and `{ v[1] = 2; 0 }`) are refused as conflicting mutable borrows of `v`, where core-semantics 11.2 says disjoint index ranges proven by the disjointness analysis do not conflict | — |
 | B-2026-11-01-41 | 2026-11-01 | typecheck | low | Two later-track features named in core-semantics 13 are accepted silently and run as ordinary code: `comptime fn sq(n: i64) -> i64 { n * n }` checks and prints 9 at run time, and a `#[gpu]` function checks and runs on the CPU; `Tensor`/`Column` are refused with a clear 'not in 0.8' diagnostic | — |
 | B-2026-11-01-42 | 2026-11-01 | mir-llvm | medium | Kata 147's insertion-sort-list runs legacy's instruction count on the MIR backend but 1.36x its cycles: the seq lane went from 0.72x to 0.99x rustc -O and from 0.82x to 1.31x C | — |
 | B-2026-11-01-43 | 2026-11-01 | mir-llvm | low | Kata 164's maximum-gap runs 1.30x legacy's instructions on the MIR backend (1.19x its cycles): the seq lane went from 0.84x to 0.99x rustc -O and from 1.17x to 1.42x C | — |
