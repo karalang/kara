@@ -27,6 +27,7 @@ pub mod library_prune;
 pub mod literal_tables;
 pub mod lower;
 pub mod midpoint;
+pub mod monotone;
 pub mod movecheck;
 pub mod parse;
 pub mod place_ty;

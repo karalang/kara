@@ -57,7 +57,7 @@ use inkwell::basic_block::BasicBlock as LlBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::{Linkage, Module};
-use inkwell::types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum, FunctionType};
+use inkwell::types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum, FunctionType, IntType};
 use inkwell::values::{BasicMetadataValueEnum, BasicValue, FunctionValue, IntValue, PointerValue};
 use inkwell::AddressSpace;
 use inkwell::IntPredicate;
@@ -933,6 +933,77 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
         Ok(())
     }
 
+    /// The loop counters of `body` that only move one way
+    /// ([`crate::mir::monotone`]), each with an entry-block slot for the
+    /// value it held when its loop was entered. At the builder's position,
+    /// which must be the entry block.
+    #[allow(clippy::type_complexity)]
+    fn monotone_slots(
+        &mut self,
+        body: &Body,
+    ) -> R<
+        Vec<(
+            crate::mir::monotone::Monotone,
+            PointerValue<'ctx>,
+            IntType<'ctx>,
+        )>,
+    > {
+        let mut out = Vec::new();
+        for m in crate::mir::monotone::monotones(body, self.tys) {
+            let BasicTypeEnum::IntType(t) = self.llvm_ty(body.local(m.local).ty)? else {
+                continue;
+            };
+            let slot = self
+                .builder
+                .build_alloca(t, "mono.init")
+                .map_err(|e| e.to_string())?;
+            out.push((m, slot, t));
+        }
+        Ok(out)
+    }
+
+    /// States that a loop counter is still on the side of its value on
+    /// entry that its steps move it to (`crate::mir::monotone`): `slot`
+    /// took that value on the loop's entry edge. At the top of the
+    /// header, so LLVM meets it on every trip.
+    fn assume_monotone(
+        &mut self,
+        m: &crate::mir::monotone::Monotone,
+        slot: PointerValue<'ctx>,
+        ty: IntType<'ctx>,
+    ) -> R<()> {
+        let e = |x: inkwell::builder::BuilderError| x.to_string();
+        let cur = self
+            .operand_scalar(&Operand::Copy(Place::local(m.local)))?
+            .into_int_value();
+        let init = self
+            .builder
+            .build_load(ty, slot, "mono.init")
+            .map_err(e)?
+            .into_int_value();
+        let pred = match (m.up, m.signed) {
+            (true, true) => IntPredicate::SGE,
+            (true, false) => IntPredicate::UGE,
+            (false, true) => IntPredicate::SLE,
+            (false, false) => IntPredicate::ULE,
+        };
+        let fact = self
+            .builder
+            .build_int_compare(pred, cur, init, "mono.fact")
+            .map_err(e)?;
+        let assume = self.module.get_function("llvm.assume").unwrap_or_else(|| {
+            let ty = self
+                .llcx
+                .void_type()
+                .fn_type(&[self.llcx.bool_type().into()], false);
+            self.module.add_function("llvm.assume", ty, None)
+        });
+        self.builder
+            .build_call(assume, &[fact.into()], "")
+            .map_err(e)?;
+        Ok(())
+    }
+
     /// Weighs the edges of `sw`, the switch lowered from `targets`, so the
     /// one to `rare` is taken about once in 2000 ([`crate::mir::counters::overflow_tests`]).
     fn rare_edge(
@@ -1178,6 +1249,12 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
         }
         self.assume_ref_params(body)?;
         self.flag_slots()?;
+        // `KARAC_MIR_MONOTONE=0` leaves loop counters' directions unstated.
+        let monotones = if std::env::var("KARAC_MIR_MONOTONE").as_deref() == Ok("0") {
+            Vec::new()
+        } else {
+            self.monotone_slots(body)?
+        };
         self.blocks = (0..body.blocks.len())
             .map(|i| self.llcx.append_basic_block(f, &format!("bb{i}")))
             .collect();
@@ -1228,12 +1305,21 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
         };
         for (i, block) in body.blocks.iter().enumerate() {
             self.builder.position_at_end(self.blocks[i]);
+            for (m, slot, ty) in monotones.iter().filter(|(m, ..)| m.header == i) {
+                self.assume_monotone(m, *slot, *ty)?;
+            }
             for (si, s) in block.statements.iter().enumerate() {
                 self.locate(s.source_info.span);
                 self.statement(s)?;
                 if let Some(m) = midpoints.iter().find(|m| m.block == i && m.statement == si) {
                     self.assume_midpoint(m)?;
                 }
+            }
+            for (m, slot, _) in monotones.iter().filter(|(m, ..)| m.entry == i) {
+                let v = self.operand_scalar(&Operand::Copy(Place::local(m.local)))?;
+                self.builder
+                    .build_store(*slot, v)
+                    .map_err(|e| e.to_string())?;
             }
             self.locate(block.terminator.source_info.span);
             self.upper_proven = proven.contains(&i);

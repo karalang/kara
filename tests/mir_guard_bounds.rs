@@ -146,6 +146,9 @@ fn function(ll: &Path, name: &str) -> Vec<String> {
     ir.lines()
         .skip_while(|l| !(l.starts_with("define") && l.contains(&head)))
         .take_while(|l| *l != "}")
+        // A loop counter's monotone fact (`mir::monotone`) is an assume,
+        // not a bounds check, though it compares the same way.
+        .filter(|l| !l.trim_start().starts_with("%mono.fact"))
         .map(str::to_string)
         .collect()
 }
