@@ -308,9 +308,8 @@ impl<'ctx> Cx<'ctx, '_> {
             {
                 (ptr, p)
             }
-            TyKind::Ref(p) | TyKind::MutRef(p) | TyKind::RawPtr { pointee: p, .. } => {
-                (self.load_ptr(ptr)?, p)
-            }
+            TyKind::Ref(p) | TyKind::MutRef(p) => (self.load_ref(ptr, p)?, p),
+            TyKind::RawPtr { pointee: p, .. } => (self.load_ptr(ptr)?, p),
             TyKind::Shared(a) => {
                 let b = self.load_ptr(ptr)?;
                 let body = self.shared_body_off(ty).unwrap_or(SHARED_COUNTS);
@@ -323,6 +322,34 @@ impl<'ctx> Cx<'ctx, '_> {
                 ))
             }
         })
+    }
+
+    /// A thin reference to a `pointee` loaded from `ptr`, the load marked
+    /// with what a reference guarantees: non-null, aligned to its pointee
+    /// and dereferenceable for its size (B-2026-11-02-17). LLVM can then
+    /// read through it ahead of a branch, so an auto-par task's loop
+    /// reads a captured `Vec`'s buffer once, before the loop, rather than
+    /// after each iteration's bounds check. The alignment stated is at
+    /// most 8, the most every place the backend makes is known to keep.
+    /// `KARAC_MIR_REF_LOADS=0` loads it bare.
+    fn load_ref(&self, ptr: PointerValue<'ctx>, pointee: Ty) -> R<PointerValue<'ctx>> {
+        let p = self.load_ptr(ptr)?;
+        let l = self.layout(pointee)?;
+        if l.size == 0 || !ref_loads_flag() {
+            return Ok(p);
+        }
+        if let Some(load) = p.as_instruction_value() {
+            let i64t = self.llcx.i64_type();
+            let node = |v: u64| self.llcx.metadata_node(&[i64t.const_int(v, false).into()]);
+            let _ = load.set_metadata(
+                self.llcx.metadata_node(&[]),
+                self.llcx.get_kind_id("nonnull"),
+            );
+            let _ = load.set_metadata(node(l.size), self.llcx.get_kind_id("dereferenceable"));
+            let align = l.align.clamp(1, 8);
+            let _ = load.set_metadata(node(align), self.llcx.get_kind_id("align"));
+        }
+        Ok(p)
     }
 
     /// Element `i` of the sequence of type `ty` at `ptr`, and its type.
@@ -1707,4 +1734,11 @@ impl<'ctx> Cx<'ctx, '_> {
             _ => Ok((p, ty)),
         }
     }
+}
+
+/// `KARAC_MIR_REF_LOADS=0` loads references without what they guarantee
+/// ([`Cx::load_ref`]).
+fn ref_loads_flag() -> bool {
+    static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *FLAG.get_or_init(|| std::env::var("KARAC_MIR_REF_LOADS").as_deref() != Ok("0"))
 }
