@@ -74,6 +74,12 @@ accepted by 0.8.0 are now refused, each with a fix-it.
   table (B-2026-11-01-25); short counting loops that call a leaf fully
   unroll (B-2026-10-31-44); `unsafe { xs.get_unchecked(i) }` is not
   bounds-checked (B-2026-10-31-45).
+- An auto-parallel loop that pushes exactly once per iteration writes its
+  result in place instead of joining per-task chunks, halving peak memory at
+  two or more workers (B-2026-11-02-8). `shared` types that no `weak` names
+  carry an 8-byte count header (B-2026-11-01-24). String building, integer
+  formatting and `Vec` fills presize (B-2026-11-02-4, -6, -9, -11;
+  B-2026-11-01-21; B-2026-10-31-42).
 
 ---
 
