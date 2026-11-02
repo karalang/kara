@@ -2280,6 +2280,33 @@ impl<'a> super::TypeChecker<'a> {
                 return result;
             }
         }
+        // `let x: i64 = None?;`: a bare `None` has no payload type of its
+        // own, so the `?` result's expectation is its payload, as it is for
+        // `let o: Option[i64] = None;`. Without this it synthesized as the
+        // enum's own `Option[T]` and lowered with a unit payload
+        // (B-2026-11-01-31).
+        if let ExprKind::Question(inner) = &expr.kind {
+            let none = match &inner.kind {
+                ExprKind::Identifier(n) => n == "None",
+                ExprKind::Path { segments, .. } => {
+                    segments.len() == 2 && segments[0] == "Option" && segments[1] == "None"
+                }
+                _ => false,
+            };
+            if none && *expected != Type::Error && !self.in_defer {
+                let wrapped = Type::Named {
+                    name: "Option".to_string(),
+                    args: vec![expected.clone()],
+                };
+                let inner_ty = self.check_expr(inner, &wrapped);
+                if inner_ty == Type::Error {
+                    return Type::Error;
+                }
+                let result = self.resolve_question(inner_ty, &expr.span);
+                self.record_expr_type(&expr.span, &result);
+                return result;
+            }
+        }
         // `let u: User = Json.deserialize(text)?;` (design.md § Serialize and
         // Deserialize): the annotation selects the generic call's return
         // through the `?`. The call's return is seeded with the expectation
