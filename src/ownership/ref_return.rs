@@ -107,26 +107,40 @@ impl<'a> super::OwnershipChecker<'a> {
         // parameters are no source for the result.
         let receiver_only = super::core_rules()
             && matches!(f.self_param, Some(SelfParam::Ref) | Some(SelfParam::MutRef));
+        let all_params = ref_params.clone();
         if receiver_only {
             ref_params.retain(|n| n == "self");
         }
         let ref_returning_fns = self.ref_returning_fn_names();
-        let mut ref_locals: HashSet<String> = HashSet::new();
-        collect_ref_locals(&f.body, &ref_returning_fns, &mut ref_locals);
-        // v2 core §5.1: `let x = ref <place>` borrows the place, so `x` is a
-        // borrow source when the place's root is one (B-2026-10-14-38).
-        if super::core_rules() {
-            // A local bound to a call or `??` whose result borrows only
-            // what the parameters lend is one too: `let o = m.get(k);
-            // o ?? ""` (B-2026-11-02-29).
-            let lent = |e: &Expr, all: &HashSet<String>| {
-                matches!(
-                    e.kind,
-                    ExprKind::MethodCall { .. } | ExprKind::NilCoalesce { .. }
-                ) && self.core_return_shape(e, &ref_params, all).is_none()
-            };
-            collect_core_ref_locals(&f.body, &ref_params, &mut ref_locals, &lent);
-        }
+        let locals_for = |params: &HashSet<String>| {
+            let mut locals: HashSet<String> = HashSet::new();
+            collect_ref_locals(&f.body, &ref_returning_fns, &mut locals);
+            // v2 core §5.1: `let x = ref <place>` borrows the place, so `x`
+            // is a borrow source when the place's root is one
+            // (B-2026-10-14-38).
+            if super::core_rules() {
+                // A local bound to a call or `??` whose result borrows only
+                // what the parameters lend is one too: `let o = m.get(k);
+                // o ?? ""` (B-2026-11-02-29).
+                let lent = |e: &Expr, all: &HashSet<String>| {
+                    matches!(
+                        e.kind,
+                        ExprKind::MethodCall { .. } | ExprKind::NilCoalesce { .. }
+                    ) && self.core_return_shape(e, params, all).is_none()
+                };
+                collect_core_ref_locals(&f.body, params, &mut locals, &lent);
+            }
+            locals
+        };
+        let ref_locals = locals_for(&ref_params);
+        // The sources the result could borrow without the receiver rule:
+        // a return that only they reach gets the §5.4 message, not the
+        // dangling-temporary one.
+        let all_locals = if receiver_only {
+            locals_for(&all_params)
+        } else {
+            HashSet::new()
+        };
 
         // Borrowed-collection path (B-2026-07-11-30) — separate from the Tier-1
         // ref-return classification, since the returned value is an OWNED
@@ -214,18 +228,25 @@ impl<'a> super::OwnershipChecker<'a> {
                 continue;
             }
             let (message, suggestion) = match shape {
-                BorrowReturnShape::DanglingSource if receiver_only => (
-                    "a method with a `self` receiver returns a borrow of `self` only \
+                BorrowReturnShape::DanglingSource
+                    if receiver_only
+                        && self
+                            .core_return_shape(e, &all_params, &all_locals)
+                            .is_none() =>
+                {
+                    (
+                        "a method with a `self` receiver returns a borrow of `self` only \
                      (core semantics §5.4), and this returned borrow is not reached \
                      through `self`"
-                        .to_string(),
-                    Some(
-                        "return a borrow reached through `self` (`ref self.field`), return \
+                            .to_string(),
+                        Some(
+                            "return a borrow reached through `self` (`ref self.field`), return \
                          an owned value, or make it an associated function without `self`, \
                          whose result borrows its `ref` parameters"
-                            .to_string(),
-                    ),
-                ),
+                                .to_string(),
+                        ),
+                    )
+                }
                 BorrowReturnShape::DanglingSource => (
                     "returned borrow does not originate from a `ref` parameter; its source is \
                      dropped when the function returns, leaving a dangling reference"

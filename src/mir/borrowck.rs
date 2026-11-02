@@ -2601,6 +2601,8 @@ fn main() -> () {
             // of such results a reference, in the check the build runs with
             // the library (core semantics §4.6, B-2026-10-28-25).
             "ok_match_result_is_a_ref",
+            // `Option.replace` is option.kara's (B-2026-11-02-27).
+            "ok_owned_place_into_ref_slot",
         ];
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus/core");
         let mut pins: Vec<_> = std::fs::read_dir(&root)

@@ -9989,12 +9989,11 @@ fn a_returned_reference_lends_its_element_and_traces_a_method_call() {
              fn pick(self, i: i64) -> ref String { if i > 0 { ref self.items[0] } else { ref self.name } }\n\
              fn early(self) -> ref String { if self.items.len() == 0 { return ref self.name; } return ref self.items[0]; }\n\
              fn got(self) -> ref String { self.items.get(0).unwrap_or(self.name) }\n\
-             fn or(self, d: String) -> ref String { self.items.get(0) ?? d }\n\
          }\n\
          fn name_or_empty(m: Map[String, String], k: String) -> ref String { m.get(k).unwrap_or(\"\") }\n\
          fn main() {\n\
              let b = Bag { items: [\"x\".to_string()], name: \"n\".to_string() };\n\
-             println(f\"{b.first()} {b.pick(0)} {b.early()} {b.got()} {b.or(\"d\".to_string())}\");\n\
+             println(f\"{b.first()} {b.pick(0)} {b.early()} {b.got()}\");\n\
              let m: Map[String, String] = Map.new();\n\
              println(name_or_empty(m, \"k\".to_string()));\n\
          }\n",
@@ -10020,6 +10019,15 @@ fn a_returned_reference_lends_its_element_and_traces_a_method_call() {
         assert!(err.contains("dangling reference"), "{tag}: {err}");
         let _ = std::fs::remove_dir_all(&dir);
     }
+    // A method with a `self` receiver borrows `self` only (§5.4), so a
+    // borrowed argument is no fallback for its result (B-2026-11-02-28).
+    rejected(
+        "ref-return-argument-fallback",
+        "struct Bag { items: Vec[String] }\n\
+         impl Bag { fn or(self, d: String) -> ref String { self.items.get(0) ?? d } }\n\
+         fn main() {}\n",
+        "returns a borrow of `self` only",
+    );
 }
 
 /// B-2026-10-19-38 (core-semantics §9.3): a returned capturing closure may be
