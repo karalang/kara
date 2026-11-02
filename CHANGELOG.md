@@ -28,6 +28,10 @@ accepted by 0.8.0 are now refused, each with a fix-it.
   B-2026-11-01-26, B-2026-11-02-12). `karac fix` adds the marker where the
   type is declared. `Server.serve*` handlers and `std.time.timeout` take
   marked parameters; a closure literal passed directly needs no change.
+  A collection of unmarked function values (`Vec[Fn() -> i64]`) cannot be
+  passed where the marked form is expected; mark the collection's type, and
+  each push is checked (B-2026-11-02-14). The type-mismatch error names the
+  missing marker (B-2026-11-02-13).
 - **A task spawned inside `with_provider` onto a `TaskGroup` made outside it**
   is refused, since it could outlive the provider (§14.5, B-2026-11-01-27).
 - **A task that reads a `Copy` local borrows it** until the group joins, so a
