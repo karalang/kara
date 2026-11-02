@@ -597,6 +597,16 @@ impl TyInterner {
     }
 
     /// Register `adt` under its DefId, which is its [`AdtId`].
+    /// The `shared` types some `weak` type names: the ones whose boxes
+    /// carry a weak count ([`crate::mir::layout::SHARED_COUNTS`]).
+    pub fn weak_targets(&self) -> rustc_hash::FxHashSet<AdtId> {
+        self.tcx
+            .weak_shared_defs()
+            .into_iter()
+            .map(|d| AdtId(d.0))
+            .collect()
+    }
+
     pub fn add_adt(&self, adt: AdtDef) -> AdtId {
         let id = AdtId(adt.def.0);
         self.tcx.add_adt_def(adt);

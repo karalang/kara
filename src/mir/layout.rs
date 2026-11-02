@@ -213,8 +213,15 @@ pub fn enum_tag(tys: &TyInterner, t: Ty) -> Option<Layout> {
     })
 }
 
-/// The bytes before a `shared` box's body: the strong and the weak count.
+/// The bytes before a `shared` box's body when some `weak` handle can name
+/// its type: the strong count, then the weak count (both `u64`).
 pub const SHARED_COUNTS: u64 = 16;
+
+/// The bytes before the body of a `shared` type no `weak` type names: the
+/// strong count alone. A tree node's 24-byte body then takes a 32-byte
+/// allocation, where two counts made it 40, which macOS rounds to 48
+/// (B-2026-11-01-24).
+pub const SHARED_STRONG_ONLY: u64 = 8;
 
 /// The layout of the body of the ADT `t` (plain or `shared`): for a plain
 /// ADT this is `layout(t)`; for a `shared` one it is what the box holds
@@ -223,9 +230,10 @@ pub fn body_layout(tys: &TyInterner, t: Ty) -> Option<Layout> {
     adt_body(tys, t, 0)
 }
 
-/// Where a `shared` box keeps the body of `t`: after the counts, aligned.
-pub fn shared_body_offset(tys: &TyInterner, t: Ty) -> Option<u64> {
-    Some(align_up(SHARED_COUNTS, body_layout(tys, t)?.align))
+/// Where a `shared` box keeps the body of `t`: after its `header` bytes
+/// of counts ([`SHARED_COUNTS`] or [`SHARED_STRONG_ONLY`]), aligned.
+pub fn shared_body_offset(tys: &TyInterner, t: Ty, header: u64) -> Option<u64> {
+    Some(align_up(header, body_layout(tys, t)?.align))
 }
 
 /// The offset of field `f` within a value of `t` (seen as `variant` when

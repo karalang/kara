@@ -11,8 +11,9 @@ use inkwell::values::{BasicValue, BasicValueEnum, IntValue, PointerValue, Vector
 use inkwell::{AtomicOrdering, AtomicRMWBinOp, FloatPredicate, IntPredicate};
 
 use super::{Cx, R};
-use crate::mir::layout::{self, SHARED_COUNTS};
+use crate::mir::layout::{self, SHARED_COUNTS, SHARED_STRONG_ONLY};
 use crate::mir::place_ty::place_ty;
+use crate::mir::ty::AdtId;
 use crate::mir::ty::{FloatTy, IntTy};
 use crate::mir::{
     AbortReason, AggregateKind, BinOp, CastKind, Const, ConstKind, NullOp, Operand, Place,
@@ -232,7 +233,7 @@ impl<'ctx> Cx<'ctx, '_> {
                     // points at.
                     if let TyKind::Shared(_) = self.tys.kind(ty) {
                         let b = self.load_ptr(ptr)?;
-                        let at = layout::shared_body_offset(self.tys, ty).unwrap_or(SHARED_COUNTS);
+                        let at = self.shared_body_off(ty).unwrap_or(SHARED_COUNTS);
                         ptr = self.offset(b, at)?;
                     }
                     let boxed = layout::boxed_field(self.tys, ty, variant, f.0);
@@ -312,7 +313,7 @@ impl<'ctx> Cx<'ctx, '_> {
             }
             TyKind::Shared(a) => {
                 let b = self.load_ptr(ptr)?;
-                let body = layout::shared_body_offset(self.tys, ty).unwrap_or(SHARED_COUNTS);
+                let body = self.shared_body_off(ty).unwrap_or(SHARED_COUNTS);
                 (self.offset(b, body)?, self.tys.intern(TyKind::Adt(a)))
             }
             _ => {
@@ -716,18 +717,61 @@ impl<'ctx> Cx<'ctx, '_> {
     /// another thread may hold one. `ty` is the `shared` or `weak` handle,
     /// behind any references, or an `Option` of one.
     pub(super) fn atomic_counts(&self, ty: Ty) -> bool {
+        self.shared_adt(ty).is_some_and(|a| self.tys.adt(a).sync)
+    }
+
+    /// The `shared` type a handle of type `ty` points at: `ty` is the
+    /// `shared` or `weak` handle, behind any references, or an `Option` of
+    /// one.
+    pub(super) fn shared_adt(&self, ty: Ty) -> Option<AdtId> {
         let mut t = ty;
         loop {
             match self.tys.kind(t) {
                 TyKind::Ref(i) | TyKind::MutRef(i) | TyKind::Weak(i) => t = i,
-                TyKind::Shared(a) => return self.tys.adt(a).sync,
+                TyKind::Shared(a) => return Some(a),
                 TyKind::Adt(_) => match self.tys.tcx().adt_of(t) {
                     Some((adt, args)) if adt.name == "Option" && !args.is_empty() => t = args[0],
-                    _ => return false,
+                    _ => return None,
                 },
-                _ => return false,
+                _ => return None,
             }
         }
+    }
+
+    /// Whether the box a handle of type `ty` points at carries a weak
+    /// count: its type is one some `weak` type names ([`Cx::weak_shared`]).
+    pub(super) fn has_weak_count(&self, ty: Ty) -> bool {
+        self.shared_adt(ty)
+            .is_some_and(|a| self.weak_shared.contains(&a))
+    }
+
+    /// The bytes of counts before the body of the box a handle of type
+    /// `ty` points at.
+    pub(super) fn shared_header(&self, ty: Ty) -> u64 {
+        if self.has_weak_count(ty) {
+            SHARED_COUNTS
+        } else {
+            SHARED_STRONG_ONLY
+        }
+    }
+
+    /// Where the box of the `shared` type `ty` keeps its body.
+    pub(super) fn shared_body_off(&self, ty: Ty) -> Option<u64> {
+        layout::shared_body_offset(self.tys, ty, self.shared_header(ty))
+    }
+
+    /// The weak count of the box `h` a handle of type `ty` points at. A
+    /// type no `weak` type named when code generation began has none, and
+    /// reaching for it is a compiler fault, never a write past the strong
+    /// count.
+    pub(super) fn weak_count_ptr(&self, h: PointerValue<'ctx>, ty: Ty) -> R<PointerValue<'ctx>> {
+        if !self.has_weak_count(ty) {
+            return Err(format!(
+                "a weak handle to `{}`, which no `weak` type named before code generation",
+                self.tys.display(ty)
+            ));
+        }
+        self.offset(h, 8)
     }
 
     /// `*w += 1` (`up`) or `*w -= 1` on the count word `w` of a box,
@@ -1289,7 +1333,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 let atomic = self.atomic_counts(from);
                 let live = self.builder.build_is_not_null(h, "").map_err(e)?;
                 self.if_then(live, |cx| {
-                    let w = cx.offset(h, 8)?;
+                    let w = cx.weak_count_ptr(h, from)?;
                     cx.add_count(w, true, atomic)?;
                     Ok(())
                 })?;
@@ -1551,7 +1595,7 @@ impl<'ctx> Cx<'ctx, '_> {
             AggregateKind::Shared { ty: sty, variant } => {
                 let body = layout::body_layout(self.tys, *sty)
                     .ok_or("a shared type has no body layout")?;
-                let off = layout::shared_body_offset(self.tys, *sty).unwrap_or(SHARED_COUNTS);
+                let off = self.shared_body_off(*sty).unwrap_or(SHARED_COUNTS);
                 let malloc = self.libc_fn("malloc");
                 let h = self
                     .builder
@@ -1564,8 +1608,10 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.builder.build_store(h, self.i64(1)).map_err(e)?;
                 // The strong handles together hold one weak count, given
                 // back once the body is dropped ([`Cx::release_last`]).
-                let w = self.offset(h, 8)?;
-                self.builder.build_store(w, self.i64(1)).map_err(e)?;
+                if self.has_weak_count(*sty) {
+                    let w = self.offset(h, 8)?;
+                    self.builder.build_store(w, self.i64(1)).map_err(e)?;
+                }
                 let b = self.offset(h, off)?;
                 self.fill_adt(b, *sty, variant.0, ops)?;
                 self.store(dst, h.into())

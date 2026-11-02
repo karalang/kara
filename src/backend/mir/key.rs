@@ -570,8 +570,9 @@ impl<'ctx> Cx<'ctx, '_> {
             }
             TyKind::Shared(a) => {
                 let b = self.load_ptr(p)?;
-                let off =
-                    layout::shared_body_offset(self.tys, ty).ok_or("a shared type has no body")?;
+                let off = self
+                    .shared_body_off(ty)
+                    .ok_or("a shared type has no body")?;
                 Ok((self.offset(b, off)?, self.tys.intern(TyKind::Adt(a))))
             }
             _ => Ok((p, ty)),

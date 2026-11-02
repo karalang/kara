@@ -194,6 +194,11 @@ pub struct Cx<'ctx, 'p> {
     pub builder: Builder<'ctx>,
     pub program: &'p Program,
     pub tys: &'p TyInterner,
+    /// The `shared` types some `weak` type names, whose boxes carry a weak
+    /// count after the strong one; every other box has the strong count
+    /// alone ([`Cx::shared_header`]). Taken once, before any code, so each
+    /// type keeps one layout.
+    pub weak_shared: rustc_hash::FxHashSet<crate::mir::ty::AdtId>,
     /// The function of each body, by its MIR name.
     pub fns: HashMap<String, FunctionValue<'ctx>>,
     /// The bodies some caller other than a direct call reaches, which may
@@ -294,6 +299,7 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
             builder: llcx.create_builder(),
             program,
             tys,
+            weak_shared: tys.weak_targets(),
             fns: HashMap::new(),
             shared_fns: std::collections::HashSet::new(),
             body: None,

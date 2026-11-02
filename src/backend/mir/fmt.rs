@@ -13,7 +13,6 @@ use inkwell::values::{BasicMetadataValueEnum, FunctionValue, PointerValue};
 
 use super::{Cx, R};
 use crate::mir::interp::DisplayStyle;
-use crate::mir::layout;
 use crate::mir::ty::{FloatTy, IntTy, IntrinsicTy};
 use crate::mir::{Operand, Place, Ty, TyKind};
 
@@ -476,8 +475,9 @@ impl<'ctx> Cx<'ctx, '_> {
         let (p, ty) = match self.tys.kind(ty) {
             TyKind::Shared(_) => {
                 let b = self.load_ptr(p)?;
-                let off =
-                    layout::shared_body_offset(self.tys, ty).ok_or("a shared type has no body")?;
+                let off = self
+                    .shared_body_off(ty)
+                    .ok_or("a shared type has no body")?;
                 (self.offset(b, off)?, self.tys.intern(TyKind::Adt(a)))
             }
             _ => (p, ty),

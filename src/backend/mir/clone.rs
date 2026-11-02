@@ -184,7 +184,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 let some = self.builder.build_is_not_null(h, "").map_err(e)?;
                 let atomic = self.atomic_counts(ty);
                 self.if_then(some, |cx| {
-                    let wp = cx.offset(h, 8)?;
+                    let wp = cx.weak_count_ptr(h, ty)?;
                     cx.add_count(wp, true, atomic)?;
                     Ok(())
                 })

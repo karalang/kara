@@ -35,7 +35,7 @@ use inkwell::{AtomicOrdering, IntPredicate};
 
 use super::{Cx, R};
 use crate::mir::coroutine;
-use crate::mir::layout::{self, SHARED_COUNTS};
+use crate::mir::layout;
 use crate::mir::place_ty::place_ty;
 use crate::mir::ty::{AdtId, IntrinsicTy, TyKind};
 use crate::mir::{BasicBlock, Place, Ty};
@@ -279,7 +279,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.drop_fields(p, ty)
             }
             TyKind::Shared(a) => self.release(p, ty, a),
-            TyKind::Weak(_) => self.release_weak(p, self.atomic_counts(ty)),
+            TyKind::Weak(_) => self.release_weak(p, ty),
             TyKind::Tuple(ts) | TyKind::Closure(_, ts) => {
                 for i in (0..ts.len()).rev() {
                     if self.tys.needs_drop(ts[i]) {
@@ -736,9 +736,10 @@ impl<'ctx> Cx<'ctx, '_> {
         let b = self.load_ptr(cur)?;
         // The weak count the strong handles held together keeps the box
         // through the drop, so the body may release the last weak handle
-        // to its own box without freeing it.
+        // to its own box without freeing it. A type no `weak` type names
+        // has no weak count, and its box goes with its last strong handle.
         let atomic = self.atomic_counts(ty);
-        let wp = self.offset(b, 8)?;
+        let weak = self.has_weak_count(ty);
         if self.adt_has_drop_body(a)? {
             // The body takes a reference to a handle, as every read
             // through one does: a handle on `b`.
@@ -748,7 +749,8 @@ impl<'ctx> Cx<'ctx, '_> {
             self.store(slot, h.into())?;
             self.call_drop_body(a, ty, slot)?;
         }
-        let off = layout::shared_body_offset(self.tys, ty)
+        let off = self
+            .shared_body_off(ty)
             .ok_or_else(|| format!("`{}` has no layout", self.tys.display(ty)))?;
         let body = self.offset(b, off)?;
         let next = match chain {
@@ -759,9 +761,14 @@ impl<'ctx> Cx<'ctx, '_> {
                 None
             }
         };
-        let weak = self.add_count(wp, false, atomic)?;
-        let no_weak = self.is_zero(weak)?;
-        self.if_then(no_weak, |cx| cx.free(b))?;
+        if weak {
+            let wp = self.weak_count_ptr(b, ty)?;
+            let left = self.add_count(wp, false, atomic)?;
+            let no_weak = self.is_zero(left)?;
+            self.if_then(no_weak, |cx| cx.free(b))?;
+        } else {
+            self.free(b)?;
+        }
         if let Some(next) = next {
             let null = self
                 .builder
@@ -822,8 +829,9 @@ impl<'ctx> Cx<'ctx, '_> {
         Ok(found)
     }
 
-    /// Drops the `weak` handle at `p`, its counts atomic when `atomic`.
-    fn release_weak(&mut self, p: PointerValue<'ctx>, atomic: bool) -> R<()> {
+    /// Drops the `weak` handle of type `ty` at `p`.
+    fn release_weak(&mut self, p: PointerValue<'ctx>, ty: Ty) -> R<()> {
+        let atomic = self.atomic_counts(ty);
         let b = self.load_ptr(p)?;
         let empty = self
             .builder
@@ -838,12 +846,11 @@ impl<'ctx> Cx<'ctx, '_> {
             // one they hold together, so it reaches 0 only once the body
             // is dropped: no read of the strong count, which another
             // thread's last release could race.
-            let wp = cx.offset(b, 8)?;
+            let wp = cx.weak_count_ptr(b, ty)?;
             let left = cx.add_count(wp, false, atomic)?;
             let dead = cx.is_zero(left)?;
             cx.if_then(dead, |cx| cx.free(b))
         })?;
-        debug_assert_eq!(SHARED_COUNTS, 16);
         Ok(())
     }
 
@@ -1410,7 +1417,8 @@ fn cells(o: own OnceLock[R], f: own Option[File], x: own Atomic[i64], q: own Vec
         let weak = l.tys.field_ty(node, None, 2).unwrap();
         let c = Context::create();
         let (_e, g) = jit(&c, &l, &[node, weak]);
-        let body = layout::shared_body_offset(&l.tys, node).unwrap();
+        // `Node` names itself in a `weak` field: its box has both counts.
+        let body = layout::shared_body_offset(&l.tys, node, layout::SHARED_COUNTS).unwrap();
         let size = layout::body_layout(&l.tys, node).unwrap().size;
         let next_ty = l.tys.field_ty(node, None, 1).unwrap();
         // `Option[Node]` is a bare pointer: `None` is null.

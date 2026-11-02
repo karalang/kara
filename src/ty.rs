@@ -409,6 +409,23 @@ impl TyCtxt {
         self.tables.borrow().kinds[ty.0 as usize]
     }
 
+    /// The definitions of the `shared` types that some interned `weak`
+    /// type names: every type a `weak` handle can reach, since a handle's
+    /// type is interned before any code uses it.
+    pub fn weak_shared_defs(&self) -> FxHashSet<DefId> {
+        let t = self.tables.borrow();
+        t.kinds
+            .iter()
+            .filter_map(|k| match *k {
+                TyKind::Weak(i) => match t.kinds[i.0 as usize] {
+                    TyKind::Shared { def, .. } => Some(def),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect()
+    }
+
     /// The elements of an interned list, copied out (lists are short).
     pub fn list(&self, list: TyList) -> Vec<Ty> {
         self.tables.borrow().lists[list.0 as usize].to_vec()
