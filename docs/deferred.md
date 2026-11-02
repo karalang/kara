@@ -7274,6 +7274,22 @@ A published measurement of how *repairable* a toolchain is by an LLM that has ne
 
 **Cross-reference:** `examples/mend/TASK_FORMAT.md` (the task+oracle format).
 
+### Shared Front End for `check` and `build`
+
+> Compile-time CPU, not language. Relocated from B-2026-10-31-16.
+
+`karac build` and `karac run` run the program's `karac check` on one thread (`run_v2::checked_alongside`; the interpreter path does the same) while the MIR builder's own `frontend()` parses, resolves, type-checks and ownership-checks the same source on another. The latency is the check's. The CPU is spent twice: each front end covers the program and its library. Step one (6927dcb48a) made a check that keeps the library's bodies cost about what `frontend()` does. It resolves and type-checks them and then sets them aside for the later passes.
+
+**Why the simple shape was dropped.** Sharing one `Pipeline` serially means running the check, then lowering its typed program. That cannot start lowering until the check's typecheck is done, and today the two overlap. The cost was measured at bd06c31fe7 (release, `KARAC_MIR_TIME=1`, medians). On kata 2 iterative it is at least 164 ms (the check with bodies kept) plus about 10 ms of lowering, against a 151 ms `run` today: +15-20% wall for about 15% less CPU. On `corpus/apps/cli/mini_markdown` (14.8k lines) it is at least 3.2 s plus about 1.08 s of lowering (`mir_builder` 261 ms, `finish_build` 785 ms over 571 bodies), against about 3.2 s today: +34% wall for about 20% less CPU. That is a lower bound for any serial implementation, so it fails the bar that kata 2's wall time stay within noise.
+
+**Shape (a), the one to build.** Parse, resolve and type-check once, with the library's bodies kept. Then fork. The check's remaining passes (lower, effects, ownership and the MIR checks; about 1.7 s on mini_markdown) run on one thread. The builder's ownership check and lowering (about 1.4 s) run on the other. Both read the typed program and its `TypeCheckResult`. Estimates from the same phase timings: mini_markdown about 2.85 s wall against 3.2 s, and about 4.25 s CPU against 5.4 s; kata 2 about 140 ms against 151 ms. Two things are needed first:
+- The program and the type tables must be readable from two threads at once. The builder reads `node_types`, the call substitutions, `binding_syms`, the resolver's table, the closure capture tables, `bare_assoc_fn_targets` and `builtin_owns` / `builtin_mut_self`, and these must not be cloned per thread.
+- Proof that the builder lowers a strict-core `TypeCheckResult` exactly as it lowers `frontend()`'s. The cheapest proof is to lower both behind an env flag and diff `mir_build`, `mir_interp` and `corpus/core`. A table the strict check drops or reshapes fails as `unsupported` or invalid MIR, because the verifier runs on every body.
+
+**Shape (b), the alternative.** The check already builds MIR for the user's bodies for the borrow checker (the `mir_builder` phase inside "check ownership+mir"). The build could take those bodies and lower only the library's. This saves more, but it reaches into the builder and into `finish_build`'s drop elaboration, and the check's MIR must be exactly the build's.
+
+**Done when:** `karac run` / `karac build` on kata 2 and on a large app have wall time within noise of today's, and CPU lower by the duplicated front end.
+
 ## Unscheduled language extensions
 
 Language extensions and library additions that have a design but no track. Each waits for programs that need it.
