@@ -28,9 +28,9 @@
 //! - every path through one trip, from the header to a latch, runs exactly
 //!   one `Vec.push(&mut v, _)` and none before `G`; inside the loop `v` is
 //!   otherwise only borrowed shared;
-//! - `v = Vec.new()` on the chain of single-predecessor blocks before the
-//!   loop, with nothing between it and the loop mentioning `v` but pushes
-//!   (seeds, each one more element).
+//! - `v = Vec.new()` (or `Vec.with_capacity(n)`) on the chain of
+//!   single-predecessor blocks before the loop, with nothing between it
+//!   and the loop mentioning `v` but pushes (seeds, each one more element).
 //!
 //! Then the loop runs `bound - k` trips (`+ 1` for `<=`), one push each.
 //! A vector with no `Vec.new()` on the chain (a second fill of it) is
@@ -41,13 +41,16 @@
 //! `v` is only read besides them, so below `reach` there is room, and the
 //! compiled push skips its capacity check there, which lets LLVM drop the
 //! growth path from the fill (a fill of one value becomes a `memset`).
+//!
+//! A `for c in s.chars()` loop pushing once a trip is reserved `s.len()`
+//! more, right after the iterator is made (see [`plan_chars`]).
 
 use super::counters::{
     dominates, dominators, increment, local_writes, mask, natural_loops, predecessors, Loop, Writes,
 };
 use super::rc_pairs::{statement_mentions, terminator_mentions};
 use super::syntax::*;
-use super::ty::{IntrinsicTy, TyInterner, TyKind};
+use super::ty::{IntrinsicTy, Ty, TyInterner, TyKind};
 use crate::ids::DefId;
 use crate::mir::interp::split_method;
 
@@ -75,9 +78,13 @@ struct Plan {
     delta: i128,
     /// The loop's blocks that end in the push.
     fills: Vec<usize>,
+    /// A text whose `len()` is the bound, worked out where the
+    /// reservation is made (`plan_chars`), and the type of a borrow of it.
+    len_of: Option<(Place, Ty)>,
 }
 
-/// Adds a `presize` after each `Vec.new()` a counting loop fills.
+/// Adds a `presize` after each `Vec.new()` a counting loop fills, and
+/// after the iterator of each chars walk that fills a vector.
 pub fn presize_pushes(body: &mut Body, tys: &TyInterner) {
     if body.blocks.is_empty() {
         return;
@@ -94,7 +101,11 @@ pub fn presize_pushes(body: &mut Body, tys: &TyInterner) {
         {
             continue;
         }
-        for p in plan(body, tys, &preds, &idom, lp, &writes) {
+        let mut found = plan(body, tys, &preds, &idom, lp, &writes);
+        if found.is_empty() {
+            found = plan_chars(body, tys, &preds, lp);
+        }
+        for p in found {
             if !plans.iter().any(|q| q.new_block == p.new_block) {
                 plans.push(p);
             }
@@ -507,23 +518,9 @@ fn plan(
     if !step {
         return out;
     }
-    // The single-predecessor chain into the loop, nearest block first.
-    let outside: Vec<usize> = preds[lp.header]
-        .iter()
-        .copied()
-        .filter(|&p| !in_loop(p))
-        .collect();
-    let [entry] = outside.as_slice() else {
+    let Some(chain) = chain_into(preds, lp) else {
         return out;
     };
-    let mut chain = vec![*entry];
-    while chain.len() < 16 {
-        let last = *chain.last().expect("non-empty");
-        match preds[last].as_slice() {
-            [p] if *p != last && !in_loop(*p) && !chain.contains(p) => chain.push(*p),
-            _ => break,
-        }
-    }
     // The start: the last write of `i` on the chain, nearest the loop.
     let start = chain.iter().find_map(|&cb| {
         writes.assigns[i.index()]
@@ -543,47 +540,8 @@ fn plan(
     if k < 0 {
         return out;
     }
-    // Each `v` some block of the loop pushes to.
-    let mut vs: Vec<Local> = Vec::new();
-    for b in (0..n).filter(|&b| in_loop(b)) {
-        for s in &body.blocks[b].statements {
-            if let Some((_, BorrowKind::Mut, v)) = borrow_of(s) {
-                if pushes(body, b, v) && !vs.contains(&v) {
-                    vs.push(v);
-                }
-            }
-        }
-    }
-    // The trip's blocks in an order that has each after its predecessors
-    // (edges back to the header left out).
-    let order = {
-        let mut post = Vec::new();
-        let mut seen = vec![false; n];
-        let mut stack = vec![(lp.header, 0usize)];
-        seen[lp.header] = true;
-        while let Some((b, k)) = stack.pop() {
-            let succ: Vec<usize> = body.blocks[b]
-                .terminator
-                .kind
-                .successors()
-                .iter()
-                .map(|s| s.index())
-                .filter(|&s| in_loop(s) && s != lp.header)
-                .collect();
-            if k < succ.len() {
-                stack.push((b, k + 1));
-                let s = succ[k];
-                if !seen[s] {
-                    seen[s] = true;
-                    stack.push((s, 0));
-                }
-            } else {
-                post.push(b);
-            }
-        }
-        post.reverse();
-        post
-    };
+    let vs = pushed_vecs(body, lp);
+    let order = trip_order(body, lp);
     'v: for v in vs {
         if !matches!(
             tys.kind(body.local(v).ty),
@@ -597,36 +555,9 @@ fn plan(
         {
             continue;
         }
-        // One push per trip, on every path, none before the guard.
-        let mut fill_blocks = Vec::new();
-        let mut range: Vec<Option<(u32, u32)>> = vec![None; n];
-        range[lp.header] = Some((0, 0));
-        for &b in &order {
-            let Some((lo, hi)) = range[b] else {
-                continue 'v;
-            };
-            if b == g && (lo, hi) != (0, 0) {
-                continue 'v;
-            }
-            let p = u32::from(pushes(body, b, v));
-            if p == 1 {
-                fill_blocks.push(b);
-            }
-            let (lo, hi) = (lo + p, hi + p);
-            if (lp.latches.contains(&b) || last_exits.contains(&b)) && (lo, hi) != (1, 1) {
-                continue 'v;
-            }
-            for s in body.blocks[b].terminator.kind.successors() {
-                let s = s.index();
-                if !in_loop(s) || s == lp.header {
-                    continue;
-                }
-                range[s] = Some(match range[s] {
-                    None => (lo, hi),
-                    Some((a, z)) => (a.min(lo), z.max(hi)),
-                });
-            }
-        }
+        let Some(fill_blocks) = trip_fills(body, lp, &order, g, v, &last_exits) else {
+            continue 'v;
+        };
         // `v = Vec.new()` on the chain, and only seed pushes after it.
         let mut seeds = 0i128;
         let mut new_block = None;
@@ -641,10 +572,18 @@ fn plan(
             } = &data.terminator.kind
             {
                 if *destination == Place::local(v) {
-                    let fresh = fn_name(func)
-                        .map(split_method)
-                        .is_some_and(|(base, m)| m == "new" && fills(base));
-                    if !fresh || !args.is_empty() {
+                    // `with_capacity(n)` starts empty too: the reserve
+                    // then asks for what `n` does not already hold
+                    // (B-2026-11-02-26).
+                    let fresh = fn_name(func).map(split_method).is_some_and(|(base, m)| {
+                        fills(base)
+                            && match m {
+                                "new" => args.is_empty(),
+                                "with_capacity" => args.len() == 1,
+                                _ => false,
+                            }
+                    });
+                    if !fresh {
                         continue 'v;
                     }
                     if data.statements.iter().any(|s| {
@@ -737,13 +676,302 @@ fn plan(
             bound,
             delta,
             fills: fill_blocks,
+            len_of: None,
+        });
+    }
+    out
+}
+
+/// The single-predecessor chain into loop `lp`, nearest block first, from
+/// its one entry from outside.
+fn chain_into(preds: &[Vec<usize>], lp: &Loop) -> Option<Vec<usize>> {
+    let in_loop = |b: usize| lp.blocks[b];
+    let outside: Vec<usize> = preds[lp.header]
+        .iter()
+        .copied()
+        .filter(|&p| !in_loop(p))
+        .collect();
+    let [entry] = outside.as_slice() else {
+        return None;
+    };
+    let mut chain = vec![*entry];
+    while chain.len() < 16 {
+        let last = *chain.last().expect("non-empty");
+        match preds[last].as_slice() {
+            [p] if *p != last && !in_loop(*p) && !chain.contains(p) => chain.push(*p),
+            _ => break,
+        }
+    }
+    Some(chain)
+}
+
+/// Each `v` some block of loop `lp` pushes to.
+fn pushed_vecs(body: &Body, lp: &Loop) -> Vec<Local> {
+    let mut vs: Vec<Local> = Vec::new();
+    for b in (0..body.blocks.len()).filter(|&b| lp.blocks[b]) {
+        for s in &body.blocks[b].statements {
+            if let Some((_, BorrowKind::Mut, v)) = borrow_of(s) {
+                if pushes(body, b, v) && !vs.contains(&v) {
+                    vs.push(v);
+                }
+            }
+        }
+    }
+    vs
+}
+
+/// Loop `lp`'s blocks in an order that has each after its predecessors
+/// (edges back to the header left out).
+fn trip_order(body: &Body, lp: &Loop) -> Vec<usize> {
+    let in_loop = |b: usize| lp.blocks[b];
+    let mut post = Vec::new();
+    let mut seen = vec![false; body.blocks.len()];
+    let mut stack = vec![(lp.header, 0usize)];
+    seen[lp.header] = true;
+    while let Some((b, k)) = stack.pop() {
+        let succ: Vec<usize> = body.blocks[b]
+            .terminator
+            .kind
+            .successors()
+            .iter()
+            .map(|s| s.index())
+            .filter(|&s| in_loop(s) && s != lp.header)
+            .collect();
+        if k < succ.len() {
+            stack.push((b, k + 1));
+            let s = succ[k];
+            if !seen[s] {
+                seen[s] = true;
+                stack.push((s, 0));
+            }
+        } else {
+            post.push(b);
+        }
+    }
+    post.reverse();
+    post
+}
+
+/// The blocks of loop `lp` that end in a push to `v`, when every path
+/// through one trip (from the header to a latch, or to one of
+/// `last_exits`) runs exactly one, and none runs before the guard `g`.
+fn trip_fills(
+    body: &Body,
+    lp: &Loop,
+    order: &[usize],
+    g: usize,
+    v: Local,
+    last_exits: &[usize],
+) -> Option<Vec<usize>> {
+    let in_loop = |b: usize| lp.blocks[b];
+    let mut fill_blocks = Vec::new();
+    let mut range: Vec<Option<(u32, u32)>> = vec![None; body.blocks.len()];
+    range[lp.header] = Some((0, 0));
+    for &b in order {
+        let (lo, hi) = range[b]?;
+        if b == g && (lo, hi) != (0, 0) {
+            return None;
+        }
+        let p = u32::from(pushes(body, b, v));
+        if p == 1 {
+            fill_blocks.push(b);
+        }
+        let (lo, hi) = (lo + p, hi + p);
+        if (lp.latches.contains(&b) || last_exits.contains(&b)) && (lo, hi) != (1, 1) {
+            return None;
+        }
+        for s in body.blocks[b].terminator.kind.successors() {
+            let s = s.index();
+            if !in_loop(s) || s == lp.header {
+                continue;
+            }
+            range[s] = Some(match range[s] {
+                None => (lo, hi),
+                Some((a, z)) => (a.min(lo), z.max(hi)),
+            });
+        }
+    }
+    Some(fill_blocks)
+}
+
+/// `for c in s.chars() { ...; v.push(x); ... }`: a walk over a `String`'s
+/// chars runs at most `s.len()` trips (a char is at least one byte), so a
+/// loop pushing to `v` once on every trip has `v` reserved `s.len()` more
+/// right after the iterator is made, as legacy's `iterable_len_bound`
+/// does (B-2026-11-02-23). The shape:
+///
+/// - the header ends in `o = StrChars.next(move m)` with `m = &mut it` in
+///   it, and the block after ends in a `switchInt` on `discriminant(o)`
+///   with one target out of the loop: the guard, and with aborts the
+///   loop's only way out;
+/// - `it = String.chars(move r)`, with `r = &p` in its block, ends a block
+///   `C` on the chain into the loop, and from `C` on nothing mentions `v`
+///   before the loop;
+/// - every path through one trip runs exactly one push to `v`, none before
+///   the guard, and the loop otherwise only reads `v`.
+///
+/// `v` may hold anything at `C`: the reservation is for that many more.
+fn plan_chars(body: &Body, tys: &TyInterner, preds: &[Vec<usize>], lp: &Loop) -> Vec<Plan> {
+    let mut out = Vec::new();
+    let n = body.blocks.len();
+    let in_loop = |b: usize| lp.blocks[b];
+    let h = lp.header;
+    let TerminatorKind::Call {
+        func,
+        args,
+        destination: o,
+        target: Some(g),
+        ..
+    } = &body.blocks[h].terminator.kind
+    else {
+        return out;
+    };
+    if fn_name(func) != Some("StrChars.next") || !o.projection.is_empty() {
+        return out;
+    }
+    let [Operand::Move(m)] = args.as_slice() else {
+        return out;
+    };
+    let it = body.blocks[h]
+        .statements
+        .iter()
+        .find_map(|s| match borrow_of(s) {
+            Some((t, BorrowKind::Mut, it)) if t == m.local && m.projection.is_empty() => Some(it),
+            _ => None,
+        });
+    let Some(it) = it else {
+        return out;
+    };
+    // The guard: a test of `o`'s variant, one way out of the loop.
+    let g = g.index();
+    let TerminatorKind::SwitchInt {
+        discr: Operand::Copy(d),
+        ..
+    } = &body.blocks[g].terminator.kind
+    else {
+        return out;
+    };
+    let tests_o = body.blocks[g].statements.iter().any(|s| {
+        matches!(&s.kind, StatementKind::Assign(p, Rvalue::Discriminant(q))
+            if p == d && *q == Place::local(o.local))
+    });
+    let succ: Vec<usize> = body.blocks[g]
+        .terminator
+        .kind
+        .successors()
+        .iter()
+        .map(|s| s.index())
+        .collect();
+    let [a, b] = succ.as_slice() else {
+        return out;
+    };
+    let exit = match (in_loop(*a), in_loop(*b)) {
+        (true, false) => *b,
+        (false, true) => *a,
+        _ => return out,
+    };
+    if !tests_o || !in_loop(g) {
+        return out;
+    }
+    let is_abort = |b: usize| {
+        matches!(
+            body.blocks[b].terminator.kind,
+            TerminatorKind::Abort { .. } | TerminatorKind::Unreachable
+        )
+    };
+    for b in (0..n).filter(|&b| in_loop(b)) {
+        if matches!(body.blocks[b].terminator.kind, TerminatorKind::Return) {
+            return out;
+        }
+        for s in body.blocks[b].terminator.kind.successors() {
+            let s = s.index();
+            if !in_loop(s) && !(b == g && s == exit) && !is_abort(s) {
+                return out;
+            }
+        }
+    }
+    // `C`: the iterator made from a borrow of the text, on the chain.
+    let Some(chain) = chain_into(preds, lp) else {
+        return out;
+    };
+    let Some(at) = chain.iter().position(|&cb| {
+        matches!(&body.blocks[cb].terminator.kind,
+            TerminatorKind::Call { destination, target: Some(_), .. }
+                if *destination == Place::local(it))
+    }) else {
+        return out;
+    };
+    let c = chain[at];
+    let TerminatorKind::Call { func, args, .. } = &body.blocks[c].terminator.kind else {
+        return out;
+    };
+    if fn_name(func) != Some("String.chars") {
+        return out;
+    }
+    let [Operand::Move(r)] = args.as_slice() else {
+        return out;
+    };
+    let text = body.blocks[c]
+        .statements
+        .iter()
+        .find_map(|s| match &s.kind {
+            StatementKind::Assign(t, Rvalue::Ref(BorrowKind::Shared, p))
+                if *t == Place::local(r.local) && r.projection.is_empty() =>
+            {
+                Some(p.clone())
+            }
+            _ => None,
+        });
+    let Some(text) = text else {
+        return out;
+    };
+    let order = trip_order(body, lp);
+    for v in pushed_vecs(body, lp) {
+        if !matches!(
+            tys.kind(body.local(v).ty),
+            TyKind::Intrinsic(IntrinsicTy::Vec(_) | IntrinsicTy::String)
+        ) || v == it
+            || text.local == v
+        {
+            continue;
+        }
+        let quiet = |b: usize| {
+            !body.blocks[b]
+                .statements
+                .iter()
+                .any(|s| statement_mentions(&s.kind, v))
+                && !terminator_mentions(&body.blocks[b].terminator.kind, v)
+        };
+        if !chain[..=at].iter().all(|&b| quiet(b))
+            || !(0..n)
+                .filter(|&b| in_loop(b))
+                .all(|b| mentions_only_reads(body, b, v, true))
+        {
+            continue;
+        }
+        let Some(fills) = trip_fills(body, lp, &order, g, v, &[]) else {
+            continue;
+        };
+        out.push(Plan {
+            new_block: c,
+            v,
+            // Set where the reservation is made, from `len_of`.
+            bound: Operand::Const(Const {
+                ty: tys.intern(TyKind::Int(super::ty::IntTy::I64)),
+                kind: ConstKind::Scalar(0),
+            }),
+            delta: 0,
+            fills,
+            len_of: Some((text.clone(), body.local(r.local).ty)),
         });
     }
     out
 }
 
 /// `v = Vec.new() -> t` becomes `v = Vec.new() -> X; X: r = &mut v;
-/// Vec.presize(move r, bound, delta) -> t`.
+/// Vec.presize(move r, bound, delta) -> t`. A chars walk's reservation
+/// follows `it = String.chars(..)` instead, after `t = &text;
+/// n = String.len(move t)` works out its bound.
 fn apply(body: &mut Body, tys: &TyInterner, p: Plan) {
     let vty = body.local(p.v).ty;
     let x = BasicBlock(body.blocks.len() as u32);
@@ -771,6 +999,44 @@ fn apply(body: &mut Body, tys: &TyInterner, p: Plan) {
     };
     let r = fresh(tys.intern(TyKind::MutRef(vty)));
     let room = fresh(tys.intern(TyKind::Int(super::ty::IntTy::I64)));
+    // A text's length, worked out first: `t = &text; n = String.len(move t)`.
+    let mut bound = p.bound;
+    let mut added = vec![x];
+    let text = p.len_of.map(|(text, ref_ty)| {
+        (
+            text,
+            fresh(ref_ty),
+            fresh(tys.intern(TyKind::Int(super::ty::IntTy::I64))),
+        )
+    });
+    if let Some((text, t, n)) = text {
+        let y = BasicBlock(x.0 + 1);
+        body.blocks.push(BasicBlockData {
+            statements: vec![Statement {
+                kind: StatementKind::Assign(Place::local(t), Rvalue::Ref(BorrowKind::Shared, text)),
+                source_info: info,
+            }],
+            terminator: Terminator {
+                kind: TerminatorKind::Call {
+                    func: Operand::Const(Const {
+                        ty: tys.intern(TyKind::Unit),
+                        kind: ConstKind::FnDef(InstanceId {
+                            def: DefId(u32::MAX),
+                            args: Vec::new(),
+                            name: "String.len".to_string(),
+                        }),
+                    }),
+                    args: vec![Operand::Move(Place::local(t))],
+                    destination: Place::local(n),
+                    target: Some(y),
+                    unwind: UnwindAction::Abort,
+                },
+                source_info: info,
+            },
+        });
+        bound = Operand::Copy(Place::local(n));
+        added.push(y);
+    }
     let func = Operand::Const(Const {
         ty: tys.intern(TyKind::Unit),
         kind: ConstKind::FnDef(InstanceId {
@@ -794,7 +1060,7 @@ fn apply(body: &mut Body, tys: &TyInterner, p: Plan) {
         terminator: Terminator {
             kind: TerminatorKind::Call {
                 func,
-                args: vec![Operand::Move(Place::local(r)), p.bound, delta],
+                args: vec![Operand::Move(Place::local(r)), bound, delta],
                 destination: Place::local(room),
                 target: Some(after),
                 unwind: UnwindAction::Abort,
@@ -813,7 +1079,7 @@ fn apply(body: &mut Body, tys: &TyInterner, p: Plan) {
     {
         for branch in &mut region.branches {
             if branch.contains(&from) {
-                branch.push(x);
+                branch.extend(added.iter().copied());
             }
         }
     }
@@ -1022,5 +1288,56 @@ mod tests {
             .replace("    let n = 2000000;\n", "")
             .replace("k < n", "k < 2000000");
         assert_eq!(reserved(&literal, "fill"), 0);
+    }
+
+    /// `for c in s.chars()` pushing once a trip reserves the text's byte
+    /// length after the iterator is made, with the vector's seeds kept,
+    /// and its pushes know the room (B-2026-11-02-23). The capacity is
+    /// the bytes: 5 chars of 7 bytes, plus the one seed.
+    #[test]
+    fn mir_presize_reserves_a_chars_walk() {
+        let src = "fn snap(s: ref String) -> Vec[char] {\n    let mut cs: Vec[char] = Vec.new();\n    cs.push('<');\n    \
+                   for c in s.chars() {\n        if c == 'a' {\n            cs.push('A');\n        } else {\n            \
+                   cs.push(c);\n        }\n    }\n    cs\n}\nfn main() {\n    let t = \"a\u{e9}a\u{e9}a\";\n    \
+                   let cs = snap(t);\n    println(f\"{cs.len()} {cs.capacity()} {cs[2]} {cs[5]}\");\n    \
+                   println(snap(\"\").len());\n}\n";
+        assert_eq!(reserved(src, "snap"), 1);
+        assert_eq!(within(src, "snap"), 2);
+        assert_eq!(
+            run_source(src).unwrap(),
+            ("6 8 \u{e9} A\n1\n".into(), Some(0))
+        );
+        // Off the shape: a push on some trips only, and a way out besides
+        // the end of the text.
+        for body in [
+            "        if c != 'a' {\n            cs.push(c);\n        }\n",
+            "        if c == 'b' {\n            break;\n        }\n        cs.push(c);\n",
+        ] {
+            let src = format!(
+                "fn snap(s: ref String) -> i64 {{\n    let mut cs: Vec[char] = Vec.new();\n    \
+                 for c in s.chars() {{\n{body}    }}\n    cs.len()\n}}\nfn main() {{\n    println(snap(\"abc\"));\n}}\n"
+            );
+            assert_eq!(reserved(&src, "snap"), 0, "{body}");
+        }
+    }
+
+    /// A `with_capacity(n)` start is a fresh start too: its fill is
+    /// reserved, which takes nothing more when `n` holds it, and its
+    /// pushes know the room (B-2026-11-02-26).
+    #[test]
+    fn mir_presize_reserves_a_with_capacity_fill() {
+        for (start, cap) in [("Vec.with_capacity(4)", 10), ("Vec.with_capacity(64)", 64)] {
+            let src = fill(&format!(
+                "    v = {start};\n    let mut i = 0;\n    while i < n {{\n        v.push(i + 1);\n        i = i + 1;\n    }}\n"
+            ))
+            .replace("let mut v: Vec[i64] = Vec.new();\n    v = ", "let mut v: Vec[i64] = ");
+            assert_eq!(reserved(&src, "fill"), 1, "{start}");
+            assert_eq!(within(&src, "fill"), 1, "{start}");
+            assert_eq!(
+                run_source(&src).unwrap(),
+                (format!("10 {cap} 10\n0\n"), Some(0)),
+                "{start}"
+            );
+        }
     }
 }
