@@ -60,7 +60,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | diagnostics | 88 |
 | false-positive | 87 |
-| perf | 83 |
+| perf | 84 |
 | missing-feature | 62 |
 | soundness | 38 |
 | miscompile | 30 |
@@ -77,7 +77,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | typecheck | 149 |
 | mir | 98 |
-| mir-llvm | 92 |
+| mir-llvm | 93 |
 | cli | 49 |
 | ownership | 38 |
 | parser | 27 |
@@ -114,11 +114,10 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-01-22 | 2026-11-01 | mir-llvm | low | Kata 116's populate-next-right-pointers loop runs legacy's instruction count on the MIR backend but 1.23x its cycles: the seq lane went from 0.90x to 1.10x rustc -O | — |
 | B-2026-11-01-36 | 2026-11-01 | mir-llvm | medium | Kata 139's word-break DP inner loop runs 1.75x legacy's instructions on the MIR backend (1.54x its cycles): the seq lane went from 0.99x to 1.50x rustc -O | — |
 | B-2026-11-01-42 | 2026-11-01 | mir-llvm | medium | Kata 147's insertion-sort-list runs legacy's instruction count on the MIR backend but 1.36x its cycles: the seq lane went from 0.72x to 0.99x rustc -O and from 0.82x to 1.31x C | — |
-| B-2026-11-01-43 | 2026-11-01 | mir-llvm | low | Kata 164's maximum-gap runs 1.30x legacy's instructions on the MIR backend (1.19x its cycles): the seq lane went from 0.84x to 0.99x rustc -O and from 1.17x to 1.42x C | — |
+| B-2026-11-01-43 | 2026-11-01 | mir-llvm | low | Kata 164's maximum-gap runs 1.30x legacy's instructions on the M5 (arm64) MIR backend (1.19x its cycles); on x86 it measures 1.06x, so the gap is arm64-only and needs an arm64 measurement | — |
 | B-2026-11-01-44 | 2026-11-01 | mir-llvm | medium | Kata 170's Map[i64, i64]-heavy two-sum-III runs FEWER instructions on the MIR backend than legacy (0.75x) but 1.43x its cycles: the seq lane went from 2.56x to 3.01x rustc -O | — |
 | B-2026-11-01-45 | 2026-11-01 | mir-llvm | low | Four of katas 101-210 lost 10-13% of their wall-time ratio to Rust on the MIR backend, each too small to file alone (1.04-1.12x legacy's instructions, 1.07-1.13x its cycles): the second borderline batch after B-2026-11-01-20 | — |
 | B-2026-11-01-47 | 2026-11-01 | mir-llvm | medium | Kata 216's combination-sum-III recursion runs 1.41x legacy's instructions on the MIR backend (1.21x its cycles): the seq lane went from 1.07x to 1.26x rustc -O | — |
-| B-2026-11-02-2 | 2026-11-02 | mir-llvm | medium | Kata 225's queue-rotation loop (Vec push + index read + field update through a `mut ref` struct) runs 1.43x legacy's instructions on the MIR backend and 1.61x its cycles: the seq lane went from 0.80x to 1.24x rustc -O | — |
 | B-2026-11-02-3 | 2026-11-02 | mir-llvm | medium | Kata 242's valid-anagram byte loop runs 1.11x legacy's instructions on the MIR backend but 1.21x its cycles: the seq lane went from 1.08x to 1.30x rustc -O and from 1.00x to 1.22x C | — |
 | B-2026-11-02-5 | 2026-11-02 | mir-llvm | low | Kata 246's strobogrammatic check runs 1.31x legacy's instructions on the MIR backend (1.24x its cycles), on top of the wontfix unrolling gap B-2026-08-15-31: the seq lane went from 1.57x to 1.87x rustc -O | — |
 | B-2026-11-02-7 | 2026-11-02 | mir-llvm | medium | Katas 252 and 253 (meeting rooms I and II), dominated by sorting a fresh copy of 120k intervals by start each round, run 1.14-1.20x legacy's instructions on the M5 (arm64) MIR backend; on x86 they measure 0.97x and 1.02x, so the gap is arm64-only and needs an arm64 measurement | — |
@@ -130,7 +129,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-02-22 | 2026-11-02 | mir-llvm | medium | The drop-soundness fuzzer was deleted with the legacy pipeline at M3 and has no v2 port: nothing fuzzes drop elaboration against ASan/LSan and a drop-token oracle | — |
 | B-2026-11-02-23 | 2026-11-02 | mir-llvm | medium | Kata 71's simplify-path runs 1.40x legacy's instructions and 1.42x its cycles in the seq lane on the MIR backend, and its par lane slipped from 0.91x to 1.06x rayon between g6697158fa and g96fca5370 while seq held at 0.90x rustc -O | — |
 | B-2026-11-02-24 | 2026-11-02 | mir-llvm | low | Kata 38's seq binary stays at 312 KiB on g96fca5370 where the B-2026-10-28-36 fix took 12 other kata seq binaries to 52-69 KB | — |
-| B-2026-11-02-25 | 2026-11-02 | parser | medium | 128 nested `{` followed by a statement keyword (`if`, `let`, `while`, ...) runs the parser out of memory: the refused statement is retried forever, one diagnostic per turn | — |
+| B-2026-11-02-26 | 2026-11-02 | mir-llvm | medium | A `Vec.with_capacity(n)` filled by a counting push loop runs 12.6x legacy's instructions on x86: mir::presize only takes a `Vec.new()` start, so every push keeps its capacity check and LLVM cannot turn the fill into a copy | — |
 
 ### Relocated
 
@@ -548,6 +547,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-01-41 | typecheck | low | Two later-track features named in core-semantics 13 are accepted silently and run as ordinary code: `comptime fn sq(n: i64) -> i64 { n * n }` checks… | d68355351e |
 | B-2026-11-01-46 | mir | low | A map index assignment still reads a moved (non-`Copy`) place key after the value, against core-semantics 8.2: `m[key] = { key = "b".to_string(); 5 }… | 0e9a42f043 |
 | B-2026-11-02-1 | mir-llvm+runtime | medium | Cancelling a `TaskGroup` task while it waits inside a `par {}` (or `par for`) whose other branch has already finished leaks: `par { { sleep(2 s); 1 }… | 59908af3782752651ec380b11bcb90bc0103f540 |
+| B-2026-11-02-2 | mir-llvm | medium | Kata 225's queue-rotation loop (Vec push + index read + field update through a `mut ref` struct) runs 1.43x legacy's instructions on the MIR backend… | 7310a8f945 |
 | B-2026-11-02-4 | mir-llvm | medium | Kata 244's Map[String, i64] word-index lookups run 1.27x legacy's instructions on the MIR backend and 1.56x its cycles: the seq lane went from 1.16x… | 9f3cc6a792 |
 | B-2026-11-02-6 | mir-llvm | medium | Kata 249's Map[String, Vec[String]] grouping (entry(k).or_insert(Vec.new()).push(w)) runs 1.24x legacy's instructions and 1.24x its cycles on the MIR… | 9f3cc6a792 |
 | B-2026-11-02-8 | mir-llvm | medium | The auto-par collect lowering (`#[par_order_free]` loop pushing into a Vec) holds the collected Vec twice at peak once there are two or more workers:… | 2939cedca0 |
@@ -559,6 +559,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-02-15 | typecheck | high | An unmarked `Fn` reaches a `+ CrossTask` slot through a GENERIC parameter (`collect()` into `Vec[Fn() -> i64 + CrossTask]`, `id[T](mkf(..))`, `mem.re… | 37030edcb2 |
 | B-2026-11-02-16 | mir | medium | `mem.replace(mut f, g)` on a local of an erased `Fn` type is refused after check with `error[mir]: invalid MIR: assigning Fn() -> i64 to _6 of type c… | 66c81328c7 |
 | B-2026-11-02-19 | mir | high | Generic std ops on erased `Fn` values miscompile when a closure LITERAL is involved: `mem.swap` of two `Fn` locals is a no-op, and `Option[Fn].replac… | 66c81328c7 |
+| B-2026-11-02-25 | parser | medium | 128 nested `{` followed by a statement keyword (`if`, `let`, `while`, ...) runs the parser out of memory: the refused statement is retried forever, o… | 1d2fc6d232 |
 
 </details>
 
