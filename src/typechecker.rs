@@ -4367,7 +4367,7 @@ impl<'a> TypeChecker<'a> {
         let (node_types, node_call_subs) = self.resolved_node_tables();
         self.emit_core_generic_move_errors(&node_call_subs);
         if self.cli_lint_overrides.strict_core || self.library_methods_from_source {
-            self.fn_env_cross_task_pass(&node_types);
+            self.fn_env_cross_task_pass(&node_types, &node_call_subs);
         }
         let mut core_task_moved_captures = FxHashMap::default();
         if self.library_methods_from_source && !self.cli_lint_overrides.strict_core {

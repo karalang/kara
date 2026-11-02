@@ -1,0 +1,35 @@
+// B-2026-11-02-18: `Bx.new`'s `x: T` is solved as `Fn() -> i64 +
+// CrossTask`, so the argument is coerced into it (core-semantics §6.3).
+// Before the fix the two tasks raced on the `shared` handle.
+shared struct S {
+    mut n: i64,
+}
+
+fn mkf(s: own S) -> Fn() -> i64 {
+    || {
+        s.n = s.n + 1;
+        s.n
+    }
+}
+
+fn race2(f: Fn() -> i64 + CrossTask) -> i64 {
+    let g = TaskGroup.new();
+    let a = g.spawn(|| f());
+    let b = g.spawn(|| f());
+    a.join() + b.join()
+}
+
+struct Bx[T] {
+    x: T,
+}
+
+impl[T] Bx[T] {
+    fn new(x: own T) -> Bx[T] {
+        Bx { x: x }
+    }
+}
+
+fn main() {
+    let b: Bx[Fn() -> i64 + CrossTask] = Bx.new(mkf(S { n: 0 }));
+    println(race2(b.x));
+}

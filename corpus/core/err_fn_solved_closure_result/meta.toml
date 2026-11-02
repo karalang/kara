@@ -1,0 +1,11 @@
+source = "corpus/core/err_fn_solved_closure_result"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["closure", "concurrency"]
+class = "a"
+expected_from = "spec"
+rules = ["6.3"]
+backends = []
+env = {}
+note = "B-2026-11-02-18: a closure's result is checked against its solved + CrossTask return type (core-semantics §6.3; the review thread's structural rule: a value is coerced wherever it flows into a slot whose type holds the marker once the call's type parameters are solved). The expected.out wording of an error pin is guidance, not a byte oracle."

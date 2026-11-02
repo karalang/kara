@@ -1,0 +1,27 @@
+// B-2026-11-02-18: the closure handed to `unwrap_or_else` returns `T`,
+// solved as `Fn() -> i64 + CrossTask`, so its result is coerced into that
+// type, as a function's return is (core-semantics §6.3). Before the fix the
+// two tasks raced on the `shared` handle.
+shared struct S {
+    mut n: i64,
+}
+
+fn mkf(s: own S) -> Fn() -> i64 {
+    || {
+        s.n = s.n + 1;
+        s.n
+    }
+}
+
+fn race2(f: Fn() -> i64 + CrossTask) -> i64 {
+    let g = TaskGroup.new();
+    let a = g.spawn(|| f());
+    let b = g.spawn(|| f());
+    a.join() + b.join()
+}
+
+fn main() {
+    let o: Option[Fn() -> i64 + CrossTask] = None;
+    let f: Fn() -> i64 + CrossTask = o.unwrap_or_else(|| mkf(S { n: 0 }));
+    println(race2(f));
+}

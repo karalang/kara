@@ -2554,6 +2554,8 @@ fn main() -> () {
             "err_fn_generic_param_collect",
             "err_fn_generic_param_id",
             "err_fn_generic_param_replace",
+            "err_fn_solved_closure_result",
+            "err_fn_solved_impl_new",
             // Tasks sharing a written provider (§14.9), refused by the
             // effect pass.
             "err_provider_tasks_write",
