@@ -124,7 +124,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-02-7 | 2026-11-02 | mir-llvm | medium | Katas 252 and 253 (meeting rooms I and II), dominated by sorting a fresh copy of 120k intervals by start each round, run 1.14-1.20x legacy's instructions on the M5 (arm64) MIR backend; on x86 they measure 0.97x and 1.02x, so the gap is arm64-only and needs an arm64 measurement | — |
 | B-2026-11-02-8 | 2026-11-02 | mir-llvm | medium | The auto-par collect lowering (`#[par_order_free]` loop pushing into a Vec) holds the collected Vec twice at peak once there are two or more workers: kata 270's par build peaks at 44-49 MiB against 22 MiB at one worker, with +12.5% instructions, both flat from 2 to 18 workers | — |
 | B-2026-11-02-10 | 2026-11-02 | mir-llvm | low | Kata 276's par lane runs 1.44x slower than its 2026-08-28 feed while its comparators moved 1.06-1.09x and its seq lane held, so it scales 4.6x over seq where it scaled ~6.0x; there is no matched legacy par baseline | — |
-| B-2026-11-02-15 | 2026-11-02 | typecheck | high | An unmarked `Fn` reaches a `+ CrossTask` slot through a GENERIC parameter (`collect()` into `Vec[Fn() -> i64 + CrossTask]`, `id[T](mkf(..))`, `mem.replace(mut f, mkf(..))`): `karac check` passes and two tasks race on the captured `shared` handle | — |
 | B-2026-11-02-16 | 2026-11-02 | mir | medium | `mem.replace(mut f, g)` on a local of an erased `Fn` type is refused after check with `error[mir]: invalid MIR: assigning Fn() -> i64 to _6 of type closure#N()`, marked or not | — |
 | B-2026-11-02-17 | 2026-11-02 | mir-llvm | low | After B-2026-10-31-39, an auto-par task's loop still runs about 12% more instructions than the in-order one on kata 9 (Linux): a bounds check and a buffer reload the in-order loop drops, and two prefix compares per term on a sum whose terms can be negative (kata 7's `sum + (r as i64)`) | — |
 
@@ -551,6 +550,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-02-12 | typecheck | high | A `shared` handle crosses tasks inside an unmarked `dyn T` that a task or `par` branch only VIEWS: `fn mkd(s: own S) -> dyn Bump` and two `TaskGroup.… | bc157b9903 |
 | B-2026-11-02-13 | typecheck | low | A 0.8.0 program giving a `Vec[dyn Handler]` or `Vec[Fn(..)]` where the `+ CrossTask` form is expected gets a bare E0200 mismatch (dyn) or an opaque E… | 9dc35df0a8 |
 | B-2026-11-02-14 | typecheck | high | A `shared` handle crosses tasks through a COLLECTION of unmarked `Fn` values coerced into a `+ CrossTask` slot: a `Vec[Fn() -> i64]` a call hands bac… | 9dc35df0a8 |
+| B-2026-11-02-15 | typecheck | high | An unmarked `Fn` reaches a `+ CrossTask` slot through a GENERIC parameter (`collect()` into `Vec[Fn() -> i64 + CrossTask]`, `id[T](mkf(..))`, `mem.re… | 37030edcb2 |
 
 </details>
 
