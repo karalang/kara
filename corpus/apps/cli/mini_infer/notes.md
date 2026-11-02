@@ -89,9 +89,9 @@ One row, filed in the kara ledger:
   later argument has moved or written that place. `wrap(body.span,
   vec![body])` is refused when run or built ("use of _3.0, which may have
   been moved"), and `pair(c.n, bump(mut c))` prints `11 11` instead of
-  `1 11`, against core-semantics §8.1. `karac check` accepts both. The
-  parser copies the span into a local first, with a comment naming the
-  row.
+  `1 11`, against core-semantics §8.1. `karac check` accepted both.
+  Fixed in kara d8e47c345a, so the parser reads `body.span` in the call
+  again.
 
 The Mend loop otherwise: `karac fix` applied 19 changes on 17 lines. It
 dropped a `*` on 11 lines where a loop bound an `i64` or a `bool` by copy,

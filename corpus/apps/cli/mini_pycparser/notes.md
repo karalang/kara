@@ -86,9 +86,9 @@ Three rows, filed in the kara ledger for the MIR builder:
 - B-2026-11-01-2: while any function's MIR lowering failed, `karac check` printed "All
   checks passed" and reported none of the program's MIR borrow errors.
   Fixed in kara 3e19124daa: check now refuses what the build refuses.
-- B-2026-11-01-3: `Some(k) => kind_name(k)` on a `ref Option[Node]` scrutinee is refused
-  as E0516, though `k` is a `ref` into the scrutinee. The app copies the
-  name to a `String` there, with a comment naming the row.
+- B-2026-11-01-3: `Some(k) => kind_name(k)` on a `ref Option[Node]` scrutinee was refused
+  as E0516, though `k` is a `ref` into the scrutinee. Fixed in kara
+  cc078c37f4, so the match returns the `Str` name again.
 
 The Mend loop otherwise: `karac fix` applied 20 changes (`own` parameters
 and `.clone()` at moves out of borrows, and `let mut (a, b)` for

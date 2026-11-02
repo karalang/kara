@@ -728,17 +728,12 @@ impl Ps {
             }
             self.expect("=")?;
             let mut body = self.seq()?;
-            // B-2026-11-01-7: `f(body.span, vec![body])` reads `body.span` after
-            // the later argument has moved `body`, so the MIR builder
-            // refuses it; the span is copied first. Revert to reading
-            // `body.span` in the call when the row is fixed.
-            let body_span = body.span;
             if ann.len() > 0 {
-                let mut c = with_kids(Nk.EConstraint, body_span, vec![body]);
+                let mut c = with_kids(Nk.EConstraint, body.span, vec![body]);
                 c.ty = ann;
                 body = c;
             }
-            let rhs_span = join(params[0].span, body_span);
+            let rhs_span = join(params[0].span, body.span);
             let mut rhs = with_kids(Nk.EFun, rhs_span, vec![body]);
             rhs.pats = params;
             return Ok(Binding { pat: name, rhs: rhs, span: self.done(s) });

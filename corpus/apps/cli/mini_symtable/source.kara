@@ -447,10 +447,7 @@ shared enum Stmt {
     While { test: Expr, body: Vec[Stmt], orelse: Vec[Stmt], pos: Pos },
     If { test: Expr, body: Vec[Stmt], orelse: Vec[Stmt], pos: Pos },
     With { items: Vec[(Expr, Option[Expr])], body: Vec[Stmt], pos: Pos },
-    // B-2026-11-01-6: a struct variant named `Match` (like std.regex's
-    // struct) is refused by the MIR builder; revert to `Match` when the row
-    // is fixed.
-    MatchStmt { subject: Expr, cases: Vec[Case], pos: Pos },
+    Match { subject: Expr, cases: Vec[Case], pos: Pos },
     Raise { exc: Option[Expr], cause: Option[Expr], pos: Pos },
     Try { body: Vec[Stmt], handlers: Vec[Handler], orelse: Vec[Stmt], finalbody: Vec[Stmt], pos: Pos },
     Assert { test: Expr, msg: Option[Expr], pos: Pos },
@@ -1416,7 +1413,7 @@ fn stmt_pos(s: ref Stmt) -> Pos {
         Stmt.While { pos, .. } => pos,
         Stmt.If { pos, .. } => pos,
         Stmt.With { pos, .. } => pos,
-        Stmt.MatchStmt { pos, .. } => pos,
+        Stmt.Match { pos, .. } => pos,
         Stmt.Raise { pos, .. } => pos,
         Stmt.Try { pos, .. } => pos,
         Stmt.Assert { pos, .. } => pos,
@@ -2025,7 +2022,7 @@ fn match_stmt(p: mut ref Ps) -> Result[Stmt, String] {
     if tk(p, 0) == Tk.Dedent {
         p.i += 1;
     }
-    Ok(Stmt.MatchStmt { subject: subject, cases: cases, pos: end })
+    Ok(Stmt.Match { subject: subject, cases: cases, pos: end })
 }
 
 fn pat_pos(pt: ref Pat) -> Pos {
@@ -2745,7 +2742,7 @@ fn visit_stmt(st: mut ref St, s: ref Stmt) -> Result[(), String] {
             }
             visit_body(mut st, body)?;
         }
-        Stmt.MatchStmt { subject, cases, .. } => {
+        Stmt.Match { subject, cases, .. } => {
             visit_expr(mut st, subject)?;
             for c in cases.iter() {
                 visit_pattern(mut st, c.pattern)?;

@@ -103,8 +103,8 @@ One row, filed in the kara ledger:
   (`Stmt.Match { cases }`; `Response`, `Client`, `Regex` and `Stats` too)
   passes `karac check`, but `karac run` and `karac build` refuse a use of
   its `Vec` field. The checker also reads that variant's field types from
-  somewhere else, and accepts `*pos` on its `Pos` field. The app names the
-  variant `MatchStmt`, with a comment naming the row.
+  somewhere else, and accepted `*pos` on its `Pos` field. Fixed in
+  kara d07a6cee24, so the variant is `Match` again.
 
 The Mend loop otherwise: `karac fix` applied 99 changes on 92 lines.
 Most of them (76 lines) drop a `*` on a copied value bound by a pattern,

@@ -2126,11 +2126,9 @@ fn with_ty(n: ref Node, t: Option[Node]) -> Node {
 }
 
 fn no_attr(n: ref Option[Node], attr: Str) -> String {
-    // B-2026-11-01-3: `Some(k) => kind_name(k)` on this `ref` scrutinee is refused (E0516),
-    // so the name is copied out; revert to the `Str` match when the row is fixed.
     let cls = match n {
-        Some(k) => kind_name(k).to_string(),
-        None => "NoneType".to_string(),
+        Some(k) => kind_name(k),
+        None => "NoneType",
     };
     f"AttributeError: {py_repr(cls)} object has no attribute {py_repr(attr)}"
 }
