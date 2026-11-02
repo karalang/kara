@@ -1053,7 +1053,11 @@ fn reductions(body: &Body, set: &BTreeSet<BasicBlock>, touched: &[PlaceAccess]) 
     };
     // Every `acc = acc op e` the body has, by accumulator.
     let mut sites: BTreeMap<Local, Vec<Reduction>> = BTreeMap::new();
+    let mut reserves: BTreeMap<Local, usize> = BTreeMap::new();
     for b in set {
+        if let Some(v) = chain.reserve(*b) {
+            *reserves.entry(v).or_default() += 1;
+        }
         for (k, st) in body.blocks[b.index()].statements.iter().enumerate() {
             let StatementKind::Assign(dst, rv) = &st.kind else {
                 continue;
@@ -1080,7 +1084,7 @@ fn reductions(body: &Body, set: &BTreeSet<BasicBlock>, touched: &[PlaceAccess]) 
     for (acc, rs) in sites {
         // Used nowhere else: for `acc op e`, one read (the one in the
         // operation) and one write at each site, all of one operator; for
-        // a push, its one mutable borrow, at one site.
+        // a push, its one mutable borrow, at one site (and a reserve's).
         let uses: Vec<&PlaceAccess> = touched.iter().filter(|a| a.place.local == acc).collect();
         let count = |how: Use| uses.iter().filter(|a| a.how == how).count();
         let plain = uses.iter().all(|a| a.place.projection.is_empty());
@@ -1090,7 +1094,10 @@ fn reductions(body: &Body, set: &BTreeSet<BasicBlock>, touched: &[PlaceAccess]) 
             ReduceOp::Op(_) => {
                 uses.len() == 2 * n && count(Use::Read) == n && count(Use::Write) == n
             }
-            ReduceOp::Push => n == 1 && uses.len() == 1 && count(Use::MutBorrow) == 1,
+            ReduceOp::Push => {
+                let held = 1 + reserves.get(&acc).copied().unwrap_or(0);
+                n == 1 && uses.len() == held && count(Use::MutBorrow) == held
+            }
         };
         if plain && one_op && alone {
             out.extend(rs);
@@ -1155,6 +1162,37 @@ impl Chain<'_> {
         }
     }
 
+    /// The `Vec` that `mir::presize` reserves room in at the end of block
+    /// `b`, through a temporary of its own: a reserve changes no element,
+    /// so its borrow does not stop that `Vec` being a push's reduction.
+    fn reserve(&self, b: BasicBlock) -> Option<Local> {
+        let TerminatorKind::Call {
+            func:
+                Operand::Const(Const {
+                    kind: ConstKind::FnDef(f),
+                    ..
+                }),
+            args,
+            ..
+        } = &self.body.blocks[b.index()].terminator.kind
+        else {
+            return None;
+        };
+        if !(f.name.starts_with("Vec[") && f.name.ends_with("].presize")) {
+            return None;
+        }
+        let Some(Operand::Move(r)) = args.first() else {
+            return None;
+        };
+        if !r.projection.is_empty() || self.reads.get(&r.local) != Some(&1) {
+            return None;
+        }
+        match self.assignment(r.local)? {
+            Rvalue::Ref(BorrowKind::Mut, v) if v.projection.is_empty() => Some(v.local),
+            _ => None,
+        }
+    }
+
     /// `v.push(e)` at the end of block `b`, with `v` a local `Vec` the
     /// call borrows mutably through a temporary of its own.
     fn push(&self, b: BasicBlock) -> Option<Reduction> {
@@ -1169,12 +1207,18 @@ impl Chain<'_> {
         else {
             return None;
         };
-        if !(f.name.starts_with("Vec[") && f.name.ends_with("].push")) {
+        // `__push_within` is a push in a fill `mir::presize` reserved for;
+        // the loop's tasks are lowered afresh, each pushing its own `Vec`.
+        let within = f.name.ends_with("].__push_within");
+        if !(f.name.starts_with("Vec[") && (f.name.ends_with("].push") || within)) {
             return None;
         }
-        let [Operand::Move(r), _] = args.as_slice() else {
+        let (Some(Operand::Move(r)), 2 | 3) = (args.first(), args.len()) else {
             return None;
         };
+        if args.len() == 3 && !within {
+            return None;
+        }
         if !r.projection.is_empty() || self.reads.get(&r.local) != Some(&1) {
             return None;
         }

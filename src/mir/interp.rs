@@ -1704,7 +1704,11 @@ impl<'a> Interp<'a> {
                 self.vec_elems(id)?.clear();
                 Ok(Value::Unit)
             }
-            ("Vec", "push") if args.len() == 2 => {
+            // A push in a fill `mir::presize` reserved room for, whose
+            // third argument is that room: a push here.
+            ("Vec", "push") | ("Vec", "__push_within")
+                if args.len() == 2 || (method == "__push_within" && args.len() == 3) =>
+            {
                 let mut args = args.into_iter();
                 let (Some(v), Some(val)) = (args.next(), args.next()) else {
                     unreachable!("two arguments")
@@ -2507,6 +2511,9 @@ impl<'a> Interp<'a> {
                         if n > 0 {
                             self.caps.insert(id, cap.max(len + n as usize));
                         }
+                        // The length the room reaches, which the fill's
+                        // `__push_within`s take.
+                        return Ok(Value::Int(len as i128 + n));
                     }
                     (_, [Value::Int(n)]) if *n > 0 => {
                         self.caps.insert(id, cap.max(len + *n as usize));
@@ -2541,7 +2548,10 @@ impl<'a> Interp<'a> {
                 self.option(ret, found)
             }
             // `String.presize` is `mir::presize`'s capacity hint.
-            ("String", "reserve" | "reserve_exact" | "presize") => Ok(Value::Unit),
+            ("String", "reserve" | "reserve_exact") => Ok(Value::Unit),
+            // Its result is the room's reach, which only a `Vec`'s fill
+            // reads.
+            ("String", "presize") => Ok(Value::Int(0)),
             ("String", "with_capacity") => Ok(self.alloc_box("String", Value::Str(String::new()))),
             // `Array.from_fn(n, f)` builds its elements the same way, in
             // place; `n` must be the array's length (B-2026-10-21-30).

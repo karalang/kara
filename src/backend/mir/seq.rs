@@ -74,6 +74,20 @@ impl<'ctx> Cx<'ctx, '_> {
         x: PointerValue<'ctx>,
         et: Ty,
     ) -> R<()> {
+        self.vec_push_within(v, x, et, None)
+    }
+
+    /// [`Self::vec_push`] inside a fill `mir::presize` reserved `room`
+    /// elements for (`Vec.__push_within`): below `room` the buffer has
+    /// space by construction, so the capacity is not consulted, and LLVM,
+    /// which can count the fill against `room`, drops the growth path.
+    pub(super) fn vec_push_within(
+        &mut self,
+        v: PointerValue<'ctx>,
+        x: PointerValue<'ctx>,
+        et: Ty,
+        room: Option<IntValue<'ctx>>,
+    ) -> R<()> {
         let size = self.layout(et)?.size;
         if size == 0 {
             return self.rt("vec_push", &[v.into(), x.into(), self.i64(0).into()]);
@@ -81,10 +95,18 @@ impl<'ctx> Cx<'ctx, '_> {
         let lenp = self.offset(v, 8)?;
         let len = self.load_i64(lenp)?;
         let cap = self.load_i64(self.offset(v, 16)?)?;
-        let full = self
+        let mut full = self
             .builder
             .build_int_compare(IntPredicate::UGE, len, cap, "full")
             .map_err(e)?;
+        if let Some(room) = room {
+            let within = self
+                .builder
+                .build_int_compare(IntPredicate::SLT, len, room, "within")
+                .map_err(e)?;
+            let outside = self.builder.build_not(within, "").map_err(e)?;
+            full = self.builder.build_and(outside, full, "full").map_err(e)?;
+        }
         self.if_then(full, |cx| cx.grow_by_one(v, len, cap, size))?;
         let buf = self.load_ptr(v)?;
         let at = self.elem_ptr(buf, len, size)?;

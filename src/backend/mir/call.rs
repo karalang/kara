@@ -1351,7 +1351,8 @@ impl<'ctx> Cx<'ctx, '_> {
                     self.layout(et)?.size
                 };
                 if size == 0 {
-                    return Ok(());
+                    let d = self.place_ptr(dest)?;
+                    return self.store(d, self.i64(0).into());
                 }
                 let b = self.int_arg(&args[1])?;
                 let d = self.int_arg(&args[2])?;
@@ -1371,8 +1372,56 @@ impl<'ctx> Cx<'ctx, '_> {
                 // the length (a fill to a constant count) at the call.
                 let lenp = self.offset(v, 8)?;
                 let len = self.load_i64(lenp)?;
-                self.if_then(pos, |cx| cx.reserve_via_copy(v, n, cx.i64(size)))?;
-                self.store(lenp, len.into())
+                // The pass places it right after `Vec.new()`, so the vector
+                // is empty: it takes exactly `n` in one allocation, inline,
+                // and LLVM sees the capacity the pushes then fill. A fill
+                // to it drops its per-push capacity check, and a constant
+                // fill becomes a `memset` (kata 20's bracket runs,
+                // B-2026-10-31-42). Anything else reserves as before.
+                let cap = self.load_i64(self.offset(v, 16)?)?;
+                let no_cap = self.is_zero(cap)?;
+                let no_len = self.is_zero(len)?;
+                let empty = self.builder.build_and(no_cap, no_len, "").map_err(e)?;
+                let fresh = self.builder.build_and(pos, empty, "").map_err(e)?;
+                let not_empty = self.builder.build_not(empty, "").map_err(e)?;
+                let grow = self.builder.build_and(pos, not_empty, "").map_err(e)?;
+                let realloc = self.extern_fn(
+                    "karac_realloc_or_panic",
+                    self.ptr_ty()
+                        .fn_type(&[self.ptr_ty().into(), self.llcx.i64_type().into()], false),
+                );
+                self.if_then(fresh, |cx| {
+                    let bytes = cx
+                        .builder
+                        .build_int_nuw_mul(n, cx.i64(size), "")
+                        .map_err(e)?;
+                    let null = cx.ptr_ty().const_null();
+                    let p = cx
+                        .builder
+                        .build_call(realloc, &[null.into(), bytes.into()], "buf")
+                        .map_err(e)?
+                        .try_as_basic_value()
+                        .unwrap_basic();
+                    cx.store(v, p)?;
+                    cx.store(cx.offset(v, 16)?, n.into())
+                })?;
+                self.if_then(grow, |cx| cx.reserve_via_copy(v, n, cx.i64(size)))?;
+                self.store(lenp, len.into())?;
+                // The length the room reaches, for the fill's
+                // `__push_within`s: the reservation leaves at least that
+                // much capacity.
+                let reach = self.builder.build_int_nsw_add(len, n, "").map_err(e)?;
+                let d = self.place_ptr(dest)?;
+                self.store(d, reach.into())
+            }
+            // A push in a fill `presize` reserved `room` for: below it the
+            // buffer has space by construction.
+            ("Vec", "__push_within") => {
+                let v = self.ref_arg(&args[0])?;
+                let et = self.vec_elem(name, &args[0])?;
+                let x = self.operand_as(&args[1], et)?;
+                let room = self.int_arg(&args[2])?;
+                self.vec_push_within(v, x, et, Some(room))
             }
             ("Vec", "push") => {
                 let v = self.ref_arg(&args[0])?;

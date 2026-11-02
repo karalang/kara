@@ -16,12 +16,15 @@
 //! - a guard block `G` that dominates every latch and leaves the loop when
 //!   `i < bound` (or `i <= bound`) is false, and no other way out of the
 //!   loop than `G`'s exit and aborts;
-//! - `i` an integer local written twice: `i = k` (`k >= 0`) just before
-//!   the loop and `i = i + 1`, checked, in a block that dominates every
-//!   latch;
+//! - `i` an integer local the loop writes once, `i = i + 1`, checked, in a
+//!   block that dominates every latch, and whose last write on the way in
+//!   is `i = k` (`k >= 0`); writes elsewhere (a reset for another loop)
+//!   do not matter;
 //! - `bound` a literal, or a local written once (or a parameter never
-//!   written) where that write dominates `Vec.new()`, so it holds the same
-//!   value there and at `G`;
+//!   written) where that write dominates `Vec.new()`, or one neither the
+//!   loop nor the blocks after `Vec.new()` write, so it holds the same
+//!   value there and at `G`; a bound `n - c` the guard works out on every
+//!   trip reserves for `n`, less `c`;
 //! - every path through one trip, from the header to a latch, runs exactly
 //!   one `Vec.push(&mut v, _)` and none before `G`; inside the loop `v` is
 //!   otherwise only borrowed shared;
@@ -30,6 +33,14 @@
 //!   (seeds, each one more element).
 //!
 //! Then the loop runs `bound - k` trips (`+ 1` for `<=`), one push each.
+//! A vector with no `Vec.new()` on the chain (a second fill of it) is
+//! reserved for the trips at the loop's way in instead.
+//!
+//! The reservation returns the length it leaves room for, and the loop's
+//! pushes become `Vec.__push_within(&mut v, x, reach)`: inside the loop
+//! `v` is only read besides them, so below `reach` there is room, and the
+//! compiled push skips its capacity check there, which lets LLVM drop the
+//! growth path from the fill (a fill of one value becomes a `memset`).
 
 use super::counters::{
     dominates, dominators, increment, local_writes, mask, natural_loops, predecessors, Loop, Writes,
@@ -62,6 +73,8 @@ struct Plan {
     v: Local,
     bound: Operand,
     delta: i128,
+    /// The loop's blocks that end in the push.
+    fills: Vec<usize>,
 }
 
 /// Adds a `presize` after each `Vec.new()` a counting loop fills.
@@ -215,6 +228,65 @@ fn settled(body: &Body, idom: &[usize], nb: usize, l: Local) -> Option<Local> {
         _ => false,
     };
     ok.then_some(l)
+}
+
+/// `l` when every write of it is a whole-local one outside the loop and
+/// outside the chain blocks between `Vec.new()`'s block `nb` and the loop
+/// (`chain` is nearest the loop first): no path from `Vec.new()` to the
+/// guard then writes it, so it holds one value along it.
+fn unwritten_since(
+    body: &Body,
+    l: Local,
+    nb: usize,
+    chain: &[usize],
+    in_loop: &impl Fn(usize) -> bool,
+) -> Option<Local> {
+    let ds = defs(body, l)?;
+    let at = chain.iter().position(|&b| b == nb)?;
+    let between = &chain[..at];
+    let ok = !ds.is_empty()
+        && ds
+            .iter()
+            .all(|&(bi, si)| !in_loop(bi) && !between.contains(&bi) && (bi != nb || si.is_some()));
+    ok.then_some(l)
+}
+
+/// A bound `t.0` for `t = n + c` (or `n - c`), checked, with `c` a small
+/// constant: `n` and the `c` that `n` is off by.
+fn offset_bound(body: &Body, b: &Operand, bits: u32, signed: bool) -> Option<(Operand, i128)> {
+    let Operand::Copy(p) = b else {
+        return None;
+    };
+    if !p.projection.is_empty() {
+        return None;
+    }
+    let Rvalue::Use(Operand::Copy(f)) = sole_assign(body, p.local)? else {
+        return None;
+    };
+    let [ProjElem::Field(FieldIdx(0), _)] = f.projection.as_slice() else {
+        return None;
+    };
+    let Rvalue::CheckedBinaryOp(op, Operand::Copy(n), Operand::Const(c)) =
+        sole_assign(body, f.local)?
+    else {
+        return None;
+    };
+    let ConstKind::Scalar(raw) = c.kind else {
+        return None;
+    };
+    if !n.projection.is_empty() {
+        return None;
+    }
+    let c = signed_value(raw, bits, signed);
+    if c.abs() > MAX_LITERAL_ROOM {
+        return None;
+    }
+    let off = match op {
+        BinOp::Sub => -c,
+        BinOp::Add => c,
+        _ => return None,
+    };
+    Some((Operand::Copy(n.clone()), off))
 }
 
 /// The one write of `l`, when it is a statement `l = rv`.
@@ -403,14 +475,33 @@ fn plan(
         return out;
     };
     let (bits, signed) = (it.bits(), it.signed());
-    if bits > 64 || writes.other[i.index()] || writes.assigns[i.index()].len() != 2 {
+    if bits > 64 || writes.other[i.index()] {
         return out;
     }
-    let step = match increment(body, writes, i) {
+    // The loop writes `i` once, its step. Writes outside it (a counter
+    // reset for a second loop, B-2026-10-31-42) do not reach a trip: the
+    // way in is the chain, whose nearest write of `i` is its start.
+    let inside: Vec<(usize, usize)> = writes.assigns[i.index()]
+        .iter()
+        .copied()
+        .filter(|&(bi, _)| in_loop(bi))
+        .collect();
+    if inside.len() != 1 {
+        return out;
+    }
+    let steps = Writes {
+        assigns: {
+            let mut a = writes.assigns.clone();
+            a[i.index()] = inside;
+            a
+        },
+        other: writes.other.clone(),
+    };
+    let step = match increment(body, &steps, i) {
         Some((cb, _, c)) => mask(c, bits) == 1 && dominates_latches(cb),
         // A range `for` steps with an unchecked add: its guard keeps `i`
         // below the bound.
-        None => plain_increment(body, writes, i)
+        None => plain_increment(body, &steps, i)
             .is_some_and(|(cb, c)| mask(c, bits) == 1 && dominates_latches(cb)),
     };
     if !step {
@@ -433,14 +524,17 @@ fn plan(
             _ => break,
         }
     }
-    let k = writes.assigns[i.index()].iter().find_map(|&(bi, si)| {
-        if !chain.contains(&bi) {
-            return None;
-        }
-        match &body.blocks[bi].statements[si].kind {
-            StatementKind::Assign(_, Rvalue::Use(o)) => int_const(o),
-            _ => None,
-        }
+    // The start: the last write of `i` on the chain, nearest the loop.
+    let start = chain.iter().find_map(|&cb| {
+        writes.assigns[i.index()]
+            .iter()
+            .filter(|&&(bi, _)| bi == cb)
+            .max_by_key(|&&(_, si)| si)
+            .copied()
+    });
+    let k = start.and_then(|(bi, si)| match &body.blocks[bi].statements[si].kind {
+        StatementKind::Assign(_, Rvalue::Use(o)) => int_const(o),
+        _ => None,
     });
     let Some(k) = k else {
         return out;
@@ -504,6 +598,7 @@ fn plan(
             continue;
         }
         // One push per trip, on every path, none before the guard.
+        let mut fill_blocks = Vec::new();
         let mut range: Vec<Option<(u32, u32)>> = vec![None; n];
         range[lp.header] = Some((0, 0));
         for &b in &order {
@@ -514,6 +609,9 @@ fn plan(
                 continue 'v;
             }
             let p = u32::from(pushes(body, b, v));
+            if p == 1 {
+                fill_blocks.push(b);
+            }
             let (lo, hi) = (lo + p, hi + p);
             if (lp.latches.contains(&b) || last_exits.contains(&b)) && (lo, hi) != (1, 1) {
                 continue 'v;
@@ -564,11 +662,24 @@ fn plan(
             }
             seeds += i128::from(pushes(body, b, v));
         }
-        let Some(nb) = new_block else {
-            continue;
+        // A vector the loop goes on filling (a second run of pushes into
+        // it, B-2026-10-31-42) is reserved for the loop's trips at the
+        // way in.
+        let nb = match new_block {
+            Some(nb) => nb,
+            None => {
+                seeds = 0;
+                chain[0]
+            }
         };
         let adj = i128::from(op == BinOp::Le);
         let delta = seeds + adj - k;
+        // `i < n - 1`: the guard works its bound out of a still `n` on
+        // every trip, so `n` is reserved for, less the constant.
+        let (bound, delta) = match offset_bound(body, &bound, bits, signed) {
+            Some((b, c)) => (b, delta + c),
+            None => (bound.clone(), delta),
+        };
         // The bound, holding at `Vec.new()` what it holds at the guard.
         // A range `for` copies a literal bound into a local.
         // A named binding is a variable bound even when a literal sets
@@ -600,9 +711,16 @@ fn plan(
         } else {
             match &bound {
                 Operand::Copy(p) if p.projection.is_empty() => {
-                    let Some(b) = settled(body, idom, nb, p.local)
-                        .or_else(|| copied_from(body, p.local, |x| settled(body, idom, nb, x)))
-                    else {
+                    // A bound the loop and the blocks after `Vec.new()`
+                    // never write holds there what it holds at the guard
+                    // too, however often it is written elsewhere: Pascal's
+                    // row `while j <= i` under an outer `i = i + 1`
+                    // (B-2026-11-01-21).
+                    let held = |x: Local| {
+                        settled(body, idom, nb, x)
+                            .or_else(|| unwritten_since(body, x, nb, &chain, &in_loop))
+                    };
+                    let Some(b) = held(p.local).or_else(|| copied_from(body, p.local, held)) else {
                         continue;
                     };
                     if !matches!(tys.kind(body.local(b).ty), TyKind::Int(t) if t.bits() <= 64) {
@@ -618,6 +736,7 @@ fn plan(
             v,
             bound,
             delta,
+            fills: fill_blocks,
         });
     }
     out
@@ -629,12 +748,14 @@ fn apply(body: &mut Body, tys: &TyInterner, p: Plan) {
     let vty = body.local(p.v).ty;
     let x = BasicBlock(body.blocks.len() as u32);
     let info = body.blocks[p.new_block].terminator.source_info;
-    let TerminatorKind::Call {
-        target: Some(target),
-        ..
-    } = &mut body.blocks[p.new_block].terminator.kind
-    else {
-        return;
+    // After `Vec.new()`'s call, or on a filled vector's way into the loop.
+    let target = match &mut body.blocks[p.new_block].terminator.kind {
+        TerminatorKind::Call {
+            target: Some(target),
+            ..
+        }
+        | TerminatorKind::Goto { target } => target,
+        _ => return,
     };
     let after = *target;
     *target = x;
@@ -649,7 +770,7 @@ fn apply(body: &mut Body, tys: &TyInterner, p: Plan) {
         l
     };
     let r = fresh(tys.intern(TyKind::MutRef(vty)));
-    let unit = fresh(tys.intern(TyKind::Unit));
+    let room = fresh(tys.intern(TyKind::Int(super::ty::IntTy::I64)));
     let func = Operand::Const(Const {
         ty: tys.intern(TyKind::Unit),
         kind: ConstKind::FnDef(InstanceId {
@@ -674,13 +795,54 @@ fn apply(body: &mut Body, tys: &TyInterner, p: Plan) {
             kind: TerminatorKind::Call {
                 func,
                 args: vec![Operand::Move(Place::local(r)), p.bound, delta],
-                destination: Place::local(unit),
+                destination: Place::local(room),
                 target: Some(after),
                 unwind: UnwindAction::Abort,
             },
             source_info: info,
         },
     });
+    // The new block is the tail of the one it follows: a region branch
+    // that holds that block holds it too, or auto-par reads it as a way
+    // out of a loop body (a `break`) when the reserve is inside one.
+    let from = BasicBlock(p.new_block as u32);
+    for region in body
+        .par_regions
+        .iter_mut()
+        .chain(body.auto_par_candidates.iter_mut())
+    {
+        for branch in &mut region.branches {
+            if branch.contains(&from) {
+                branch.push(x);
+            }
+        }
+    }
+    // The fill's pushes know the length the room reaches: inside the loop
+    // `v` is only read besides them, so its length only grows and its
+    // capacity stays at least that, and a push below it has space.
+    for b in p.fills {
+        let TerminatorKind::Call { func, args, .. } = &mut body.blocks[b].terminator.kind else {
+            continue;
+        };
+        let Operand::Const(Const {
+            kind: ConstKind::FnDef(inst),
+            ..
+        }) = func
+        else {
+            continue;
+        };
+        // A `String`'s room is in bytes and its push takes up to four, so
+        // only a `Vec`'s pushes know theirs.
+        let Some(base) = inst.name.strip_suffix(".push") else {
+            continue;
+        };
+        if !base.starts_with("Vec[") {
+            continue;
+        }
+        inst.name = format!("{base}.__push_within");
+        inst.def = DefId(u32::MAX);
+        args.push(Operand::Copy(Place::local(room)));
+    }
 }
 
 #[cfg(test)]
@@ -722,6 +884,53 @@ mod tests {
         );
         assert_eq!(reserved(&src, "fill"), 1);
         assert_eq!(run_source(&src).unwrap(), ("11 11 10\n1\n".into(), Some(0)));
+    }
+
+    /// How many pushes in `f`'s body know their fill's room.
+    fn within(src: &str, f: &str) -> usize {
+        let l = build_source(src).unwrap_or_else(|e| panic!("{e}"));
+        let body = l
+            .program
+            .bodies
+            .values()
+            .find(|b| b.instance.name == f)
+            .unwrap_or_else(|| panic!("no body {f}"));
+        body.blocks
+            .iter()
+            .filter(|b| {
+                matches!(&b.terminator.kind, TerminatorKind::Call { func, .. }
+                    if format!("{func:?}").contains(".__push_within"))
+            })
+            .count()
+    }
+
+    /// A row filled up to an outer loop's counter (Pascal's triangle,
+    /// B-2026-11-01-21), and a counter reset for a second fill of the same
+    /// vector to `n - 1` (kata 20's brackets, B-2026-10-31-42): each fill
+    /// is reserved, and its pushes know the room. The expected lines are
+    /// the programs' arithmetic.
+    #[test]
+    fn mir_presize_reserves_rows_and_refills() {
+        let rows = "fn tri(n: i64) -> i64 {\n    let mut s = 0;\n    let mut i = 0;\n    while i < n {\n        \
+                    let mut row: Vec[i64] = Vec.new();\n        let mut j = 0;\n        while j <= i {\n            \
+                    row.push(j);\n            j = j + 1;\n        }\n        s = s + row.len() * 100 + row[i];\n        \
+                    i = i + 1;\n    }\n    s\n}\nfn main() {\n    println(tri(4));\n    println(tri(0));\n}\n";
+        assert_eq!(reserved(rows, "tri"), 1);
+        assert_eq!(within(rows, "tri"), 1);
+        // Rows of 1..4 elements: 100 + 200 + 300 + 400, plus 0 + 1 + 2 + 3.
+        assert_eq!(run_source(rows).unwrap(), ("1006\n0\n".into(), Some(0)));
+        let refill = fill(
+            "    let mut i = 0;\n    while i < n {\n        v.push(1);\n        i = i + 1;\n    }\n    \
+             i = 0;\n    while i < n - 1 {\n        v.push(i + 2);\n        i = i + 1;\n    }\n",
+        );
+        assert_eq!(reserved(&refill, "fill"), 2);
+        assert_eq!(within(&refill, "fill"), 2);
+        // 10 ones, then 2..=10: 19 long, ending in 10, with room for all;
+        // `fill(-5)` pushes nothing.
+        assert_eq!(
+            run_source(&refill).unwrap(),
+            ("19 19 10\n0\n".into(), Some(0))
+        );
     }
 
     /// A range `for` steps with an unchecked add and copies its bound into
