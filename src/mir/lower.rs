@@ -21542,7 +21542,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         }
         let res = &self.lcx.res;
         let is_sym = |x: &Expr| {
-            matches!(x.kind, ExprKind::Identifier(_))
+            matches!(x.kind, ExprKind::Identifier(_) | ExprKind::SelfValue)
                 && matches!(res.get(&x.id), Some(Res::Local(s)) if *s == sym)
         };
         let (mut names, mut objects, mut uses, mut nested) =
@@ -21570,7 +21570,9 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// The capture of `object.field` when a closure captured that field of
     /// an outer binding apart (`disjoint_fields`).
     fn captured_field(&self, object: &Expr, field: &str) -> Option<Place> {
-        if self.captured_fields.is_empty() || !matches!(object.kind, ExprKind::Identifier(_)) {
+        if self.captured_fields.is_empty()
+            || !matches!(object.kind, ExprKind::Identifier(_) | ExprKind::SelfValue)
+        {
             return None;
         }
         let Some(Res::Local(sym)) = self.lcx.res.get(&object.id) else {
@@ -22085,10 +22087,21 @@ impl<'l, 'a> Bx<'l, 'a> {
             // A struct binding the body uses only through its fields is
             // captured field by field, so the rest of it stays usable
             // outside the closure (core semantics §9.1).
-            if cm != CapMode::Value && self.locals.contains_key(&sym) {
-                if let Some(names) = self.disjoint_fields(body, sym, t) {
+            // A binding that is itself a borrow (`p: mut ref P2`) is
+            // captured the same way, field by field through the borrow:
+            // `(*p).a` is a place (§2.1), so writing `p.b` while the closure
+            // is live is no conflict (B-2026-11-01-34).
+            let own_self = !self.captured.contains_key(&sym) && self.self_local.is_some();
+            if cm != CapMode::Value && (self.locals.contains_key(&sym) || own_self) {
+                let (base, st, through_mut) = match self.tys().tcx().kind(t) {
+                    HK::Ref(inner) => (place.clone().project(ProjElem::Deref), inner, false),
+                    HK::MutRef(inner) => (place.clone().project(ProjElem::Deref), inner, true),
+                    _ => (place.clone(), t, false),
+                };
+                if let Some(names) = self.disjoint_fields(body, sym, st) {
                     for (name, idx, ft) in names {
-                        let mutable = cm == CapMode::Mut;
+                        let mutable =
+                            cm == CapMode::Mut || (through_mut && assigned.contains(&sym));
                         let rt = self.tys().tcx().reference(ft, mutable);
                         let r = self.temp(rt);
                         let kind = if mutable {
@@ -22096,7 +22109,8 @@ impl<'l, 'a> Bx<'l, 'a> {
                         } else {
                             BorrowKind::Shared
                         };
-                        self.assign(r, Rvalue::Ref(kind, place.field(idx, ft)));
+                        self.assign(r, Rvalue::Ref(kind, base.clone().field(idx, ft)));
+                        let cm = if mutable { CapMode::Mut } else { cm };
                         caps.push((sym, cm, rt));
                         fields.push(Some(name));
                         lent.push(false);
