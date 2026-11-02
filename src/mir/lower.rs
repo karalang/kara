@@ -5790,9 +5790,20 @@ impl<'l, 'a> Bx<'l, 'a> {
             let Some(p) = self.lcx.fns.get(d).and_then(|item| item.f.params.get(i)) else {
                 return false;
             };
-            self.lcx.node_types.get(&p.pattern.id).is_some_and(|&t| {
-                matches!(tcx.kind(t), HK::Ref(i) | HK::MutRef(i) if matches!(tcx.kind(i), HK::Fn { .. }))
-            })
+            let Some(&t) = self.lcx.node_types.get(&p.pattern.id) else {
+                return false;
+            };
+            match tcx.kind(t) {
+                HK::Ref(i) => matches!(tcx.kind(i), HK::Fn { .. }),
+                // A `mut ref` one the callee writes through (`*a = || 9`)
+                // replaces the value, which only the erased type can hold
+                // (B-2026-11-02-21); one it only calls is specialised.
+                HK::MutRef(i) => {
+                    matches!(tcx.kind(i), HK::Fn { .. })
+                        && !self.writes_through_param(self.lcx.fns[d].f, &p.pattern)
+                }
+                _ => false,
+            }
         };
         crate::span_visitor::for_each_expr_in_block(block, &mut |e| {
             found |= match &e.kind {
@@ -5801,6 +5812,45 @@ impl<'l, 'a> Bx<'l, 'a> {
                     .enumerate()
                     .any(|(i, a)| a.mut_marker && is_sym(&a.value) && !takes_fn_ref(e, i)),
                 ExprKind::MethodCall { args, .. } => {
+                    args.iter().any(|a| a.mut_marker && is_sym(&a.value))
+                }
+                _ => false,
+            };
+        });
+        found
+    }
+
+    /// Whether `f`'s body may give the parameter bound by `pattern` a new
+    /// value through its reference: an assignment to `*p`, or `p` lent `mut`
+    /// onward, which may do the same.
+    fn writes_through_param(&self, f: &Function, pattern: &Pattern) -> bool {
+        let PatternKind::Binding(name) = &pattern.kind else {
+            return false;
+        };
+        let Some(sym) = self
+            .lcx
+            .binding_syms
+            .get(&(pattern.id, name.clone()))
+            .copied()
+        else {
+            return false;
+        };
+        let is_sym = |e: &Expr| {
+            matches!(e.kind, ExprKind::Identifier(_))
+                && matches!(self.lcx.res.get(&e.id), Some(Res::Local(s)) if *s == sym)
+        };
+        let is_deref = |e: &Expr| matches!(&e.kind, ExprKind::Unary { op: UnaryOp::Deref, operand } if is_sym(operand));
+        let mut found = false;
+        crate::span_visitor::for_each_stmt_in_block(&f.body, &mut |s| {
+            found |= match &s.kind {
+                StmtKind::Assign { target, .. } => is_deref(target),
+                StmtKind::MultiAssign { targets, .. } => targets.iter().any(is_deref),
+                _ => false,
+            };
+        });
+        crate::span_visitor::for_each_expr_in_block(&f.body, &mut |e| {
+            found |= match &e.kind {
+                ExprKind::Call { args, .. } | ExprKind::MethodCall { args, .. } => {
                     args.iter().any(|a| a.mut_marker && is_sym(&a.value))
                 }
                 _ => false,
