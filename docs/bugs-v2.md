@@ -60,7 +60,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | diagnostics | 86 |
 | false-positive | 86 |
-| perf | 71 |
+| perf | 75 |
 | missing-feature | 61 |
 | soundness | 34 |
 | miscompile | 29 |
@@ -77,7 +77,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | typecheck | 143 |
 | mir | 96 |
-| mir-llvm | 79 |
+| mir-llvm | 83 |
 | cli | 49 |
 | ownership | 38 |
 | interp | 26 |
@@ -129,6 +129,10 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-01-47 | 2026-11-01 | mir-llvm | medium | Kata 216's combination-sum-III recursion runs 1.41x legacy's instructions on the MIR backend (1.21x its cycles): the seq lane went from 1.07x to 1.26x rustc -O | — |
 | B-2026-11-02-1 | 2026-11-02 | mir-llvm+runtime | medium | Cancelling a `TaskGroup` task while it waits inside a `par {}` (or `par for`) whose other branch has already finished leaks: `par { { sleep(2 s); 1 }, 2 }` in a task cancelled after 20 ms leaks 16 bytes on four workers and 104 bytes (the `par`'s internal group from `mir_task::group_new` plus 16 from the task body's resume) on one, every run under ASan; teardown of a `par` whose branches are all still suspended does not leak | — |
 | B-2026-11-02-2 | 2026-11-02 | mir-llvm | medium | Kata 225's queue-rotation loop (Vec push + index read + field update through a `mut ref` struct) runs 1.43x legacy's instructions on the MIR backend and 1.61x its cycles: the seq lane went from 0.80x to 1.24x rustc -O | — |
+| B-2026-11-02-3 | 2026-11-02 | mir-llvm | medium | Kata 242's valid-anagram byte loop runs 1.11x legacy's instructions on the MIR backend but 1.21x its cycles: the seq lane went from 1.08x to 1.30x rustc -O and from 1.00x to 1.22x C | — |
+| B-2026-11-02-4 | 2026-11-02 | mir-llvm | medium | Kata 244's Map[String, i64] word-index lookups run 1.27x legacy's instructions on the MIR backend and 1.56x its cycles: the seq lane went from 1.16x to 1.66x rustc -O | — |
+| B-2026-11-02-5 | 2026-11-02 | mir-llvm | low | Kata 246's strobogrammatic check runs 1.31x legacy's instructions on the MIR backend (1.24x its cycles), on top of the wontfix unrolling gap B-2026-08-15-31: the seq lane went from 1.57x to 1.87x rustc -O | — |
+| B-2026-11-02-6 | 2026-11-02 | mir-llvm | medium | Kata 249's Map[String, Vec[String]] grouping (entry(k).or_insert(Vec.new()).push(w)) runs 1.24x legacy's instructions and 1.24x its cycles on the MIR backend: the seq lane went from 0.93x to 1.10x rustc -O | — |
 
 ### Relocated
 
