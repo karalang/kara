@@ -10045,11 +10045,12 @@ fn b25_partial_move_then_whole_use_still_uam() {
 }
 
 #[test]
-fn b26_with_provider_value_slot_is_borrow_not_consume() {
-    // `with_provider[Metric](p, || ..); println(p.n)` — the provider value
-    // is borrowed by the provider frame (mutation visible after pop), not
-    // consumed, so the post-pop use is fine.
-    ownership_lowered_ok(
+fn b26_with_provider_value_slot_moves_the_provider() {
+    // `with_provider[Metric](p, || ..); println(p.n)`: core semantics §14.4
+    // moves `p` into the call, which owns it, so the later use is a use
+    // after move (B-2026-11-01-33; this pin held the legacy borrow, a
+    // mutation visible after the provider pops, which §14.4 overrules).
+    let errors = ownership_lowered_errors(
         "pub trait Recorder { fn record(mut ref self, value: i64); }\n\
          pub struct Counter { n: i64 }\n\
          impl Recorder for Counter { fn record(mut ref self, value: i64) { self.n = value; } }\n\
@@ -10059,6 +10060,12 @@ fn b26_with_provider_value_slot_is_borrow_not_consume() {
              with_provider[Metric](p, || { Metric.record(99); });\n\
              println(p.n);\n\
          }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == OwnershipErrorKind::UseAfterMove),
+        "a use of the provider after with_provider is a UAM; got {errors:?}"
     );
 }
 
@@ -10081,7 +10088,7 @@ fn b26_with_provider_closure_ref_capture_no_escape_error() {
              let outer = 7;\n\
              let mut p = Counter { n: 0 };\n\
              with_provider[Metric](p, || { Metric.record(outer); });\n\
-             println(p.n);\n\
+             println(outer);\n\
          }",
     );
 }

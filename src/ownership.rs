@@ -3942,12 +3942,11 @@ fn impl_target_name(target_type: &TypeExpr) -> Option<String> {
 /// form (B-2026-07-02-26). That form parses as
 /// `Call(Index(Ident|Path("with_provider"), R), [provider, closure])`, so
 /// its callee is an `Index`, not a bare `Identifier`/`Path` — the ordinary
-/// key derivation returns `None` and both args fall to the consume default,
-/// wrongly flagging a post-pop use of the provider (`println(p.n)`) as a
-/// use-after-move. The provider is borrowed by the provider frame (its
-/// mutation is visible after pop), so the intrinsic `with_provider →
-/// [Ref, Own]` entry in `collect_callee_param_modes` is the right modes —
-/// this helper just routes the generic-callee shape to that key.
+/// key derivation returns `None`. This helper routes the generic-callee
+/// shape to the intrinsic `with_provider → [Own, Own]` entry in
+/// `collect_callee_param_modes` (the provider moves into the call, core
+/// semantics §14.4), which also keeps the closure slot out of the escape
+/// scan's unknown-callee path.
 pub(crate) fn callee_param_modes_key(callee: &Expr) -> Option<String> {
     match &callee.kind {
         ExprKind::Identifier(name) => Some(name.clone()),
@@ -3982,12 +3981,11 @@ pub(crate) fn collect_callee_param_modes(
     // was rejected by `karac check` — contradicting design.md § Display
     // ("borrows the receiver — the same value can appear in multiple `{}`
     // slots without being consumed"; printing is a read, never a consume,
-    // on both execution surfaces). `with_provider(value, body)`'s value
-    // slot is likewise non-consuming per the documented mutation-visible-
-    // after-pop semantics (classified `Ref` here — the provider machinery
-    // owns the mutation plumbing; `Ref` only asserts "not consumed").
-    // The body Fn slot stays `Own` (it is a once-invoked closure — calling
-    // it consumes owned captures). Inserted first so stdlib/user
+    // on both execution surfaces). `with_provider(value, body)` is the
+    // other intrinsic: its value slot MOVES (core semantics §14.4,
+    // B-2026-11-01-33, which overruled the legacy mutation-visible-after-pop
+    // borrow), and its body Fn slot is a once-invoked closure, so both are
+    // `Own`. Inserted first so stdlib/user
     // definitions of the same key win below.
     // `dbg` joins them (B-2026-08-23-18) for a reason the print family shares
     // and then some: `dbg` is STRIPPED from release builds (design.md §
@@ -3999,9 +3997,11 @@ pub(crate) fn collect_callee_param_modes(
     for name in ["print", "println", "eprint", "eprintln", "dbg"] {
         map.insert(name.to_string(), vec![OwnershipMode::Ref]);
     }
+    // `with_provider[R](p, f)` moves `p` into the call, which owns it
+    // (core semantics §14.4, B-2026-11-01-33).
     map.insert(
         "with_provider".to_string(),
-        vec![OwnershipMode::Ref, OwnershipMode::Own],
+        vec![OwnershipMode::Own, OwnershipMode::Own],
     );
     // Baked-stdlib static methods next (B-2026-07-01-10): the ownership
     // pass previously saw only the USER program's items, so a baked

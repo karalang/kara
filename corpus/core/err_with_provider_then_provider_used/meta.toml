@@ -1,0 +1,9 @@
+source = "B-2026-11-01-33"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["provider", "ownership"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-01-33: before the fix `karac check` accepted the later use of `p` and `karac run` refused it with an internal move-check error; §14.4 moves the provider into the call, so check reports E0500. The expected.out wording of an error pin is guidance, not a byte oracle."

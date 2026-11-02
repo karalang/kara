@@ -1,0 +1,17 @@
+// Core semantics §14.4: `with_provider[R](p, f)` moves `p` into the call,
+// which owns it and drops it when the call returns, so a use of `p` after
+// the call is a use after move (B-2026-11-01-33).
+
+effect resource Clk: ClkP;
+trait ClkP { fn now(ref self) -> i64; }
+struct F { t: Vec[i64] }
+impl ClkP for F {
+    fn now(ref self) -> i64 { self.t[0] }
+}
+
+fn main() {
+    let p = F { t: vec![1] };
+    let r = with_provider[Clk](p, || Clk.now());
+    println(r);
+    println(p.t[0]);
+}
