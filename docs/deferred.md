@@ -6981,6 +6981,19 @@ A compiler-internal pass that pattern-matches common safe-indexing idioms (`for 
 - Falls back to LLVM-friendly emission for non-matched sites.
 - Diagnostic affordance: `karac explain` should be able to point at an indexing site and say "this could not be elided because *X*; consider rewriting *Y* or using `get_unchecked`."
 
+### Interprocedural Range Facts
+
+The MIR backend's index proofs (`src/mir/guard_bounds.rs`, `src/mir/range_bounds.rs`) run on one body at a time. A private function that indexes a `ref Vec[T]` parameter at an offset the caller computes cannot see what the call sites guarantee. Kata 246's `is_strobogrammatic(corpus: ref Vec[u8], base: i64, len: i64)` reads `corpus[base + lo]` and `corpus[base + hi]` with `lo` and `hi` between `0` and `len - 1`. Its one caller passes a `Vec.filled(n * len, _)` at `base = i * len`, `i < n`. Legacy proved those indexes in bounds across the call (`bce_interproc.rs` with `bce_length_pin.rs`). On MIR, each pair still pays two `sadd.with.overflow` tests and two bounds checks, even after LLVM inlines the call: on x86 callgrind, bench/strobogrammatic.kara runs 683.9M instructions against legacy dd86e3955's 498.6M (1.372x, outputs equal; B-2026-11-02-5).
+
+**Why deferred:** one kata, inside the M2 perf bar, and the work spans two owners.
+
+**Design shape:**
+
+- **(a) Per-call-site parameter facts in `range_bounds`.** For a function every call of which is a direct call in the program (no function value of it is made), join each integer argument's interval and each `ref Vec` argument's least length over its call sites, and seed the callee's entry state with them. Callers run first; a recursive cycle gets none. Here that gives `base ∈ [0, 639968]`, `len = 32` and `len(corpus) ≥ 640000`, so `base + lo` and `base + hi` lie in `[0, 639999]`.
+- **(b) A fully-proven index category in the backend (`src/backend/mir/seq.rs`, the drop schedule's).** A range proof today marks an index upper-proven, and codegen still tests its sign. An index whose interval also starts at or above 0 should get no test, and a checked add whose interval fits the type should not branch. Without (b), (a) saves nothing on this kernel.
+
+**Why non-breaking:** a proof only removes a test that cannot fail; programs print the same.
+
 ### Type-Based Alias Analysis (TBAA)
 
 **Decision:** Do **not** emit general C-style type-based alias metadata (`!tbaa`). It does not fit Kāra's memory model; a narrow *sound-subset* investigation stays open. The sound alias facts are `noalias` on `mut ref` / owned params, `readonly` on Freeze `ref T`, and scoped-alias on slice params.
