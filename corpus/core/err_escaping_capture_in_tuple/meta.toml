@@ -1,0 +1,13 @@
+source = "corpus/core/err_escaping_capture_in_tuple"
+dedup_of = []
+expect = "error:E0500"
+exit = 1
+tags = ["closure"]
+class = "a"
+expected_from = "spec"
+rules = ["9.3"]
+backends = []
+env = {}
+note = "B-2026-11-02-39: a tuple element is a positional field, so a closure stored in a let-bound tuple escapes (core-semantics §9.3, 102ed9f295) and moves `s`; check reports E0500 at the reuse, as err_escaping_capture_reused does for a struct field. The expected.out wording of an error pin is guidance, not a byte oracle."
+bucket = "a:refused"
+classified_with = "5a7fe232b"

@@ -400,9 +400,15 @@ impl Walker<'_> {
                     self.walk_expr(x, Pos::Escape("stored in a collection"));
                 }
             }
+            // A tuple element is a positional field, so a closure in one
+            // escapes as in a struct field (§9.3, B-2026-11-02-39).
             ExprKind::Tuple(es) => {
+                let pos = match pos {
+                    Pos::Escape(why) => Pos::Escape(why),
+                    _ => Pos::Escape("stored in a tuple"),
+                };
                 for x in es {
-                    self.walk_expr(x, tail_of(pos));
+                    self.walk_expr(x, pos);
                 }
             }
             ExprKind::Return(Some(v)) => self.walk_expr(v, Pos::Escape("returned")),
@@ -503,8 +509,7 @@ fn names_in(e: &Expr, out: &mut Vec<(String, Span)>, bound: &mut FxHashSet<Strin
     }
 }
 
-/// The position of a value that flows on into `pos` unchanged (a tail, a
-/// tuple element). Binding a tuple is not binding its parts.
+/// The position of a value that flows on into `pos` unchanged (a tail).
 fn tail_of(pos: Pos) -> Pos {
     match pos {
         Pos::Bind => Pos::Other,

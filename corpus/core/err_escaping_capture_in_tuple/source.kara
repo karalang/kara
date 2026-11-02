@@ -1,0 +1,6 @@
+fn main() {
+    let s = "abc".to_string();
+    let t = (1, || s.len());
+    println(s);
+    println(f"{(t.1)()}");
+}
