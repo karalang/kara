@@ -114,8 +114,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-02-10 | 2026-11-02 | mir-llvm | low | Kata 276's par lane runs 1.44x slower than its 2026-08-28 feed while its comparators moved 1.06-1.09x and its seq lane held, so it scales 4.6x over seq where it scaled ~6.0x; there is no matched legacy par baseline | — |
 | B-2026-11-02-17 | 2026-11-02 | mir-llvm | low | After B-2026-10-31-39, an auto-par task's loop still runs about 10% more instructions than the in-order one on kata 9 (Linux): a bounds check the in-order loop drops, the range cap's back-edge test, and two prefix compares per term on a sum whose terms can be negative (kata 7's `sum + (r as i64)`); the buffer reload is fixed (e888029d05) | — |
 | B-2026-11-02-21 | 2026-11-02 | typecheck | medium | `*a = || 9` through a `a: mut ref Fn() -> i64` parameter is refused with E0517 "cannot write to `a`: it is reached through a shared `ref`", though `a` is `mut ref`; the same write through `mut ref Vec[Fn]` or a struct field is accepted | — |
-| B-2026-11-02-23 | 2026-11-02 | mir-llvm | medium | Kata 71's simplify-path runs 1.40x legacy's instructions and 1.42x its cycles in the seq lane on the MIR backend, and its par lane slipped from 0.91x to 1.06x rayon between g6697158fa and g96fca5370 while seq held at 0.90x rustc -O | — |
-| B-2026-11-02-26 | 2026-11-02 | mir-llvm | medium | A `Vec.with_capacity(n)` filled by a counting push loop runs 12.6x legacy's instructions on x86: mir::presize only takes a `Vec.new()` start, so every push keeps its capacity check and LLVM cannot turn the fill into a copy | — |
 
 ### Relocated
 
@@ -565,8 +563,10 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-02-19 | mir | high | Generic std ops on erased `Fn` values miscompile when a closure LITERAL is involved: `mem.swap` of two `Fn` locals is a no-op, and `Option[Fn].replac… | 66c81328c7 |
 | B-2026-11-02-20 | parser | low | `(Fn() -> Fn() -> i64) + CrossTask` is a parse error (`Expected =, found +`); §6.3 says to parenthesize to mark the outer function type, and only `Fn… | 04ae52b256 |
 | B-2026-11-02-22 | mir-llvm | medium | The drop-soundness fuzzer was deleted with the legacy pipeline at M3 and has no v2 port: nothing fuzzes drop elaboration against ASan/LSan and a drop… | 041a8ce231 |
+| B-2026-11-02-23 | mir-llvm | medium | Kata 71's simplify-path runs 1.40x legacy's instructions and 1.42x its cycles in the seq lane on the MIR backend, and its par lane slipped from 0.91x… | 791fe05de0 |
 | B-2026-11-02-24 | mir-llvm | low | Kata 38's seq binary stays at 312 KiB on g96fca5370 where the B-2026-10-28-36 fix took 12 other kata seq binaries to 52-69 KB | ad984ef96b |
 | B-2026-11-02-25 | parser | medium | 128 nested `{` followed by a statement keyword (`if`, `let`, `while`, ...) runs the parser out of memory: the refused statement is retried forever, o… | 1d2fc6d232 |
+| B-2026-11-02-26 | mir-llvm | medium | A `Vec.with_capacity(n)` filled by a counting push loop runs 12.6x legacy's instructions on x86: mir::presize only takes a `Vec.new()` start, so ever… | 791fe05de0 |
 
 </details>
 
