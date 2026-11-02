@@ -1,5 +1,9 @@
 # drop-fuzz corpus
 
+> **Historical.** The fuzzer below was deleted with the legacy pipeline at M3.
+> Its v2 port is [`scripts/fuzz/drop_fuzz.py`](../../../scripts/fuzz/drop_fuzz.py)
+> (B-2026-11-02-22), run nightly by `.github/workflows/fuzz.yml`.
+
 Output home for the **drop-soundness fuzzer** (`src/bin/drop_fuzz.rs`) — Slice 1
 of [`../ownership-model-mechanization.md`](../ownership-model-mechanization.md).
 

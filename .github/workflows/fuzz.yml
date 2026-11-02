@@ -6,24 +6,15 @@ name: Fuzz
 #   * `fuzz/fuzz_targets/*` — three libFuzzer targets asserting the
 #     front-end never panics on arbitrary input (lexer, parser, and the
 #     full resolve → typecheck → effect → ownership pipeline).
-#   * (Removed 2026-11-02.) The legacy drop-soundness fuzzer,
-#     `src/bin/drop_fuzz.rs` + `scripts/drop-fuzz.sh`, was deleted with the
-#     legacy pipeline at M3 (9ed792e373), and its job here failed with exit
-#     127 on every nightly run since. Porting it to v2 (generate heap-core
-#     programs, build through MIR, judge under ASan + LSan and a drop-token
-#     log on the MIR interpreter) is tracked in the bug ledger. Until then
-#     the ASan corpus lane (`karac __mir-llvm-asan`) is the drop gate.
-#   * (Historical description of the removed fuzzer follows.) The drop-soundness
-#     fuzzer: it generates well-typed heap-core Kāra programs, compiles
-#     each through the real AOT path, links under ASan + LSan, runs it,
-#     and lets the sanitizer judge. It also runs each program on the
-#     interpreter and checks a drop-token log, which is what covers user
-#     `impl Drop` bodies — no sanitizer can see a destructor that runs
-#     twice or not at all while the heap is still freed correctly.
-#     (docs/spikes/ownership-model-mechanization.md. The "0 bugs over
-#     ~2500 executions" figure recorded there predates the drop-log
-#     oracle and describes the implicit-drop heap core only — see the
-#     scope correction under it.)
+#   * `scripts/fuzz/drop_fuzz.py` — the drop-soundness fuzzer
+#     (B-2026-11-02-22; the v2 port of the legacy `src/bin/drop_fuzz.rs`,
+#     deleted with the legacy pipeline at M3). It generates well-typed
+#     heap-core Kāra programs, runs each on the MIR interpreter and
+#     through `karac __mir-llvm-asan` in order and with auto-par on four
+#     workers, and judges them with ASan + LSan, a drop-token log (the
+#     only instrument that sees a user `impl Drop` body run twice or not
+#     at all while the heap is still freed correctly), and agreement
+#     with the interpreter's output.
 #
 # Neither ran on a schedule, so both measurements were only ever as fresh
 # as the last time someone remembered. That matters here more than in most
@@ -45,6 +36,10 @@ on:
         description: "Seconds per libFuzzer front-end target"
         required: false
         default: "300"
+      drop_fuzz_count:
+        description: "Programs for the drop-soundness fuzzer"
+        required: false
+        default: "600"
 
 env:
   CARGO_TERM_COLOR: always
@@ -94,5 +89,60 @@ jobs:
         with:
           name: ${{ matrix.target }}-artifacts
           path: fuzz/artifacts
+          if-no-files-found: ignore
+          retention-days: 30
+
+  # ── Drop soundness (ASan + LSan + drop-token log, B-2026-11-02-22) ──
+  # LSan ships with upstream LLVM's ASan on Linux and not on macOS, so
+  # this must run on a Linux runner to judge leaks at all.
+  drop-soundness:
+    name: Drop soundness (drop_fuzz, ASan + LSan)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install LLVM 18
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y llvm-18 llvm-18-dev
+          echo "LLVM_SYS_181_PREFIX=$(llvm-config-18 --prefix)" >> "$GITHUB_ENV"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+
+      # `__mir-llvm-asan` links these; without them every compiled
+      # surface fails to link and the run is void (exit 2), not green.
+      - name: Build runtime archives (lean, then full)
+        run: |
+          cargo rustc -p karac-runtime --release --no-default-features --features net --crate-type staticlib
+          cp target/release/libkarac_runtime.a target/release/libkarac_runtime_min.a
+          cargo rustc -p karac-runtime --release --crate-type staticlib
+
+      - name: Build karac
+        run: cargo build --release --features llvm
+
+      # A planted double drop must be reported on all three surfaces
+      # before a clean run means anything.
+      - name: Prove the drop-log oracle reports
+        run: python3 scripts/fuzz/drop_fuzz.py --canary
+
+      - name: Run the drop-soundness fuzzer
+        run: |
+          python3 scripts/fuzz/drop_fuzz.py \
+            --count "${{ github.event.inputs.drop_fuzz_count || '600' }}" \
+            --seed "$(( $(date +%s) / 86400 * 1000 ))" \
+            --out target/drop-fuzz
+
+      - name: Upload shrunk repros and the report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: drop-fuzz
+          path: target/drop-fuzz
           if-no-files-found: ignore
           retention-days: 30
