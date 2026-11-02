@@ -281,6 +281,36 @@ impl Walker<'_> {
             ExprKind::Closure { params, body, .. } => {
                 if let Pos::Escape(why) = pos {
                     self.escapes(SpanKey::from_span(&e.span), why);
+                    // An escaping closure captures by move, so a
+                    // non-escaping function parameter it names is stored
+                    // with it (§9.3; B-2026-11-02-31).
+                    if why != CLOSURE_RESULT {
+                        let mut bound: FxHashSet<String> = params
+                            .iter()
+                            .flat_map(|p| p.pattern.binding_names())
+                            .collect();
+                        let mut names = Vec::new();
+                        names_in(body, &mut names, &mut bound);
+                        let mut seen = FxHashSet::default();
+                        for (n, span) in names {
+                            if bound.contains(&n) || !seen.insert(n.clone()) {
+                                continue;
+                            }
+                            if let Some(Bound::NonEscParam) = self.lookup(&n) {
+                                self.out.errors.push((
+                                    span,
+                                    format!(
+                                        "parameter `{n}` is a non-escaping function value and \
+                                         cannot be captured by a closure that is {why}: the \
+                                         closure stores it. A function-typed parameter may only \
+                                         be called or passed to another non-escaping parameter. \
+                                         Declare it `{n}: escaping Fn(...)` to store or return \
+                                         it (core-semantics.md §9.3)"
+                                    ),
+                                ));
+                            }
+                        }
+                    }
                 }
                 let mut scope = FxHashMap::default();
                 for p in params {
@@ -424,6 +454,52 @@ impl Walker<'_> {
                  return it (core-semantics.md §9.3)"
             ),
         ));
+    }
+}
+
+/// Every identifier `e` names, with its span, in source order, and in
+/// `bound` every name a `let` or pattern inside it binds.
+fn names_in(e: &Expr, out: &mut Vec<(String, Span)>, bound: &mut FxHashSet<String>) {
+    if let ExprKind::Identifier(n) = &e.kind {
+        out.push((n.clone(), e.span));
+        return;
+    }
+    if let ExprKind::Closure { params, .. } = &e.kind {
+        for p in params {
+            bound.extend(p.pattern.binding_names());
+        }
+    }
+    if let ExprKind::Match { arms, .. } = &e.kind {
+        for arm in arms {
+            bound.extend(arm.pattern.binding_names());
+        }
+    }
+    let mut kids: Vec<Child<'_>> = Vec::new();
+    for_each_child_public(e, &mut |c| kids.push(c));
+    for c in kids {
+        match c {
+            Child::Expr(x) => names_in(x, out, bound),
+            Child::Block(b) => {
+                for st in &b.stmts {
+                    match &st.kind {
+                        StmtKind::Let { pattern, value, .. } => {
+                            bound.extend(pattern.binding_names());
+                            names_in(value, out, bound);
+                        }
+                        StmtKind::Expr(x) => names_in(x, out, bound),
+                        StmtKind::Assign { target, value }
+                        | StmtKind::CompoundAssign { target, value, .. } => {
+                            names_in(target, out, bound);
+                            names_in(value, out, bound);
+                        }
+                        _ => {}
+                    }
+                }
+                if let Some(t) = &b.final_expr {
+                    names_in(t, out, bound);
+                }
+            }
+        }
     }
 }
 

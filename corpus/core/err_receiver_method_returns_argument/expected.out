@@ -1,0 +1,1 @@
+error[ownership]: a method with a `self` receiver returns a borrow of `self` only (core semantics §5.4), and this returned borrow is not reached through `self`

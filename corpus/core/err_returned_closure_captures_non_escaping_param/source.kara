@@ -1,0 +1,8 @@
+// A closure the callee returns escapes and captures by move, so naming the
+// non-escaping parameter `f` in it stores `f` (core semantics §9.3): it
+// needs `f: escaping Fn() -> i64`, as returning `f` itself does.
+fn wrap(f: Fn() -> i64) -> Fn() -> i64 { || f() + 1 }
+fn main() {
+    let g = wrap(|| 2);
+    println(g());
+}

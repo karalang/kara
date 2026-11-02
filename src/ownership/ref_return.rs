@@ -101,13 +101,31 @@ impl<'a> super::OwnershipChecker<'a> {
                 ref_params.extend(p.pattern.binding_names());
             }
         }
+        // v2 core §5.4: a method with a `self` or `mut ref self` receiver
+        // returns a borrow of `self` only, whatever else it borrows, and its
+        // callers rely on that (B-2026-11-02-28). Its other borrowed
+        // parameters are no source for the result.
+        let receiver_only = super::core_rules()
+            && matches!(f.self_param, Some(SelfParam::Ref) | Some(SelfParam::MutRef));
+        if receiver_only {
+            ref_params.retain(|n| n == "self");
+        }
         let ref_returning_fns = self.ref_returning_fn_names();
         let mut ref_locals: HashSet<String> = HashSet::new();
         collect_ref_locals(&f.body, &ref_returning_fns, &mut ref_locals);
         // v2 core §5.1: `let x = ref <place>` borrows the place, so `x` is a
         // borrow source when the place's root is one (B-2026-10-14-38).
         if super::core_rules() {
-            collect_core_ref_locals(&f.body, &ref_params, &mut ref_locals);
+            // A local bound to a call or `??` whose result borrows only
+            // what the parameters lend is one too: `let o = m.get(k);
+            // o ?? ""` (B-2026-11-02-29).
+            let lent = |e: &Expr, all: &HashSet<String>| {
+                matches!(
+                    e.kind,
+                    ExprKind::MethodCall { .. } | ExprKind::NilCoalesce { .. }
+                ) && self.core_return_shape(e, &ref_params, all).is_none()
+            };
+            collect_core_ref_locals(&f.body, &ref_params, &mut ref_locals, &lent);
         }
 
         // Borrowed-collection path (B-2026-07-11-30) — separate from the Tier-1
@@ -196,6 +214,18 @@ impl<'a> super::OwnershipChecker<'a> {
                 continue;
             }
             let (message, suggestion) = match shape {
+                BorrowReturnShape::DanglingSource if receiver_only => (
+                    "a method with a `self` receiver returns a borrow of `self` only \
+                     (core semantics §5.4), and this returned borrow is not reached \
+                     through `self`"
+                        .to_string(),
+                    Some(
+                        "return a borrow reached through `self` (`ref self.field`), return \
+                         an owned value, or make it an associated function without `self`, \
+                         whose result borrows its `ref` parameters"
+                            .to_string(),
+                    ),
+                ),
                 BorrowReturnShape::DanglingSource => (
                     "returned borrow does not originate from a `ref` parameter; its source is \
                      dropped when the function returns, leaving a dangling reference"
@@ -1200,6 +1230,7 @@ fn collect_core_ref_locals(
     body: &Block,
     ref_params: &HashSet<String>,
     ref_locals: &mut HashSet<String>,
+    lent: &dyn Fn(&Expr, &HashSet<String>) -> bool,
 ) {
     let mut defs: std::collections::HashMap<String, Vec<CoreDef<'_>>> =
         std::collections::HashMap::new();
@@ -1221,7 +1252,7 @@ fn collect_core_ref_locals(
                         operand,
                     } => ref_place_shape(operand, ref_params, &all).is_none(),
                     ExprKind::Identifier(m) => ref_params.contains(m) || all.contains(m),
-                    _ => false,
+                    _ => lent(e, &all),
                 },
                 CoreDef::Projection(e) => ref_place_shape(e, ref_params, &all).is_none(),
             })

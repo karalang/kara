@@ -1,0 +1,10 @@
+source = "B-2026-11-02-28"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["references"]
+expected_from = "spec"
+rules = ["5.4"]
+backends = []
+env = {}
+note = "B-2026-11-02-28: core semantics §5.4, a method with a `self` or `mut ref self` receiver returns a borrow of `self` only and its body is checked against that; returning the `ref` argument `k` is an error at the return. Before the fix check accepted it and the caller read `k` after it dropped. The expected.out wording of an error pin is guidance, not a byte oracle."

@@ -1,0 +1,1 @@
+error[typecheck]: parameter `f` is a non-escaping function value and cannot be captured by a closure that is returned (core-semantics.md §9.3)

@@ -1,0 +1,16 @@
+// A method with a `self` receiver returns a borrow of `self` only (core
+// semantics §5.4), so its callers keep the result as long as `self`, not as
+// long as `k`. Returning the borrowed argument would let the result outlive
+// it: the body is checked against the rule.
+struct Pool { tag: String }
+impl Pool {
+    fn pick(self, k: ref String) -> ref String { k }
+}
+fn main() {
+    let pool = Pool { tag: "t".to_string() };
+    let r = {
+        let k = "q".to_string();
+        pool.pick(k)
+    };
+    println(r);
+}

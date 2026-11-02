@@ -1,0 +1,10 @@
+source = "B-2026-11-02-31"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["closure"]
+expected_from = "spec"
+rules = ["9.3"]
+backends = []
+env = {}
+note = "B-2026-11-02-31: core semantics §9.3, a function-typed parameter may only be called or passed to another non-escaping parameter; a returned closure that captures it stores it, so it needs `escaping`. The expected.out wording of an error pin is guidance, not a byte oracle."

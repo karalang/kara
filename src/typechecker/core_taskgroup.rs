@@ -78,6 +78,10 @@ struct Capture {
     /// The closure passed to `spawn`.
     closure: Span,
     copy: bool,
+    /// The places under the binding the task names, as field paths
+    /// (`p.x` is `["x"]`, `p` and `p.v[i]` stop at the binding and at `v`):
+    /// two tasks that name only disjoint fields do not overlap (§5.6, §9.1).
+    paths: Vec<Vec<String>>,
 }
 
 /// A write or move of a place, for checking against the live borrows.
@@ -502,6 +506,8 @@ impl Walk<'_, '_> {
             .collect();
         let mut names: Vec<(String, Expr)> = Vec::new();
         free_identifiers(body, &mut names);
+        let mut paths: FxHashMap<String, Vec<Vec<String>>> = FxHashMap::default();
+        capture_paths(body, &mut paths);
         // A capture the body moves is captured by move (§9.1), not borrowed.
         let mut moved: FxHashSet<String> = FxHashSet::default();
         self.moved_in(body, true, &mut moved);
@@ -525,6 +531,10 @@ impl Walk<'_, '_> {
             self.captures.push(Capture {
                 group,
                 mutable: written.contains(&name),
+                paths: paths
+                    .get(&name)
+                    .cloned()
+                    .unwrap_or_else(|| vec![Vec::new()]),
                 name,
                 decl,
                 spawn: span,
@@ -703,11 +713,14 @@ impl Walk<'_, '_> {
             if !c.mutable {
                 continue;
             }
-            let other = self
-                .captures
-                .iter()
-                .enumerate()
-                .any(|(j, d)| j != i && d.group == c.group && d.decl == c.decl);
+            let other = self.captures.iter().enumerate().any(|(j, d)| {
+                j != i
+                    && d.group == c.group
+                    && d.decl == c.decl
+                    && c.paths
+                        .iter()
+                        .any(|a| d.paths.iter().any(|b| overlap(a, b)))
+            });
             if other || c.in_loop {
                 self.errors.push((
                     c.spawn,
@@ -728,6 +741,78 @@ impl Walk<'_, '_> {
         self.errors.sort_by_key(|(s, _)| s.offset);
         self.errors
             .dedup_by(|a, b| a.0.offset == b.0.offset && a.1 == b.1);
+    }
+}
+
+/// Whether two field paths under one binding overlap: one is a prefix of
+/// the other (§5.6: distinct fields do not overlap).
+fn overlap(a: &[String], b: &[String]) -> bool {
+    a.iter().zip(b).all(|(x, y)| x == y)
+}
+
+/// A place expression's binding and field path, when it is one. An index
+/// projection ends the path at the indexed collection, which any index
+/// overlaps (§5.6); the index expressions are pushed to `rest`.
+fn field_path<'e>(e: &'e Expr, rest: &mut Vec<&'e Expr>) -> Option<(String, Vec<String>, bool)> {
+    match &e.kind {
+        ExprKind::Identifier(n) => Some((n.clone(), Vec::new(), false)),
+        ExprKind::FieldAccess { object, field } => {
+            let (n, mut path, closed) = field_path(object, rest)?;
+            if !closed {
+                path.push(field.clone());
+            }
+            Some((n, path, closed))
+        }
+        ExprKind::TupleIndex { object, index } => {
+            let (n, mut path, closed) = field_path(object, rest)?;
+            if !closed {
+                path.push(index.to_string());
+            }
+            Some((n, path, closed))
+        }
+        ExprKind::Index { object, index } => {
+            rest.push(index);
+            let (n, path, _) = field_path(object, rest)?;
+            Some((n, path, true))
+        }
+        _ => None,
+    }
+}
+
+/// Every place path the expression names, by binding.
+fn capture_paths(e: &Expr, out: &mut FxHashMap<String, Vec<Vec<String>>>) {
+    let mut rest = Vec::new();
+    if let Some((n, path, _)) = field_path(e, &mut rest) {
+        out.entry(n).or_default().push(path);
+        for r in rest {
+            capture_paths(r, out);
+        }
+        return;
+    }
+    let mut kids: Vec<Child<'_>> = Vec::new();
+    for_each_child_public(e, &mut |c| kids.push(c));
+    for c in kids {
+        match c {
+            Child::Expr(x) => capture_paths(x, out),
+            Child::Block(b) => {
+                for s in &b.stmts {
+                    match &s.kind {
+                        StmtKind::Let { value, .. } | StmtKind::Expr(value) => {
+                            capture_paths(value, out)
+                        }
+                        StmtKind::Assign { target, value }
+                        | StmtKind::CompoundAssign { target, value, .. } => {
+                            capture_paths(target, out);
+                            capture_paths(value, out);
+                        }
+                        _ => {}
+                    }
+                }
+                if let Some(t) = &b.final_expr {
+                    capture_paths(t, out);
+                }
+            }
+        }
     }
 }
 

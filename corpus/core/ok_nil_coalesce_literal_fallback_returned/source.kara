@@ -1,0 +1,18 @@
+// A literal checked against `ref T` is a reference to static data, so
+// `m.get(k) ?? ""` borrows only `m` (and `k`) and may be returned, bound
+// first or not (core semantics §5.3).
+fn pick(m: ref Map[String, String], k: ref String) -> ref String { m.get(k) ?? "" }
+fn pick_bound(m: ref Map[String, String], k: ref String) -> ref String {
+    let o = m.get(k);
+    o ?? "none"
+}
+fn main() {
+    let mut m: Map[String, String] = Map.new();
+    m.insert("a".to_string(), "b".to_string());
+    let k = "zz".to_string();
+    let k2 = "a".to_string();
+    let r = pick(m, k);
+    let r2 = pick(m, k2);
+    println(f"[{r}] [{r2}]");
+    println(f"[{pick_bound(m, k)}] [{pick_bound(m, k2)}]");
+}

@@ -1,0 +1,9 @@
+source = "B-2026-11-02-30"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["concurrency", "closure"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-02-30: core semantics §9.1 captures places and §5.6 says distinct fields do not overlap, so two TaskGroup tasks writing `p.x` and `p.y` are accepted (§9.5 forbids only another task's capture of an overlapping place); before the fix the task check widened each capture to the binding `p` and refused both spawns."

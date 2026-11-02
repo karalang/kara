@@ -1,0 +1,15 @@
+// Two tasks of one group may write distinct fields of one local: §9.1
+// infers captures per place, and distinct fields do not overlap (§5.6), so
+// neither task's `mut ref` capture overlaps the other's (§9.5).
+struct Pt { mut x: i64, mut y: i64 }
+fn main() {
+    let mut p = Pt { x: 0, y: 0 };
+    {
+        let g = TaskGroup.new();
+        let a = g.spawn(|| { p.x = 1; 0 });
+        let b = g.spawn(|| { p.y = 2; 0 });
+        a.join();
+        b.join();
+    }
+    println(p.x + p.y);
+}

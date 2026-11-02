@@ -2527,6 +2527,11 @@ fn main() -> () {
             "err_fn_param_unmarked_spawned",
             "err_effect_vars_par_unmarked",
             "err_fn_kind_mismatch",
+            // The receiver rule's body check (§5.4, B-2026-11-02-28) and a
+            // non-escaping parameter captured by a returned closure (§9.3,
+            // B-2026-11-02-31).
+            "err_receiver_method_returns_argument",
+            "err_returned_closure_captures_non_escaping_param",
             // `std.log`'s fields and its attribute (B-2026-10-27-20).
             "err_log_reserved_label",
             "err_log_duplicate_label",

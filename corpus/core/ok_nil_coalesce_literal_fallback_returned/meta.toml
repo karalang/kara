@@ -1,0 +1,9 @@
+source = "B-2026-11-02-29"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["references"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-02-29: core semantics §5.3 names `m.get(k) ?? \"\"` as a static fallback that may be kept and returned; before the fix the MIR builder held the literal in a temporary the result borrowed (E0516), and with the Option bound first the ownership pass refused the return as not originating from a `ref` parameter."

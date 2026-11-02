@@ -23978,6 +23978,17 @@ impl<'l, 'a> Bx<'l, 'a> {
         } else {
             BorrowKind::Shared
         };
+        // A literal fallback lent to a `ref` result is static data, which
+        // borrows nothing: `m.get(k) ?? ""` may be kept and returned (core
+        // semantics §5.3; B-2026-11-02-29).
+        if fallback_value.is_some() && kind == BorrowKind::Shared {
+            if let Some(op) = self.literal_ref(right, Some(dt))? {
+                self.assign(dest, Rvalue::Use(op));
+                self.goto(join);
+                self.cur = join;
+                return Ok(());
+            }
+        }
         match fallback_value {
             // A named place is borrowed where it is, never moved into the
             // temporary (B-2026-10-23-2): `m.get(k) ?? empty` leaves `empty`.
