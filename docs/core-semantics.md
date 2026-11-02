@@ -604,7 +604,8 @@ A `main` that returns `Err(e)` is an ordinary error exit: `main`'s drops, `defer
 - `println` has `writes(Stdout)`, so two printing branches conflict.
 - Two branches that both `sends` to the same resource conflict, and so do two that both `receives` from it, because messages on one channel or connection have an order (D6, 2026-10-07). A branch that sends and one that receives on the same resource do not conflict.
 - The iterations of a `par for` are branches of one block, so two iterations conflict by the same rule.
-- A conflict is an error that names both accesses. Disjoint index ranges proven by the existing disjointness analysis do not conflict.
+- A conflict is an error that names both accesses.
+- **Elements of one collection are one place in v1** (ruling 2026-11-02, B-2026-11-01-40). There is no index-disjointness analysis yet, so two branches of a `par {}`, or two iterations of a `par for`, that write elements of the same `Vec` or `Array` conflict even when the indices differ (`{ v[0] = 1 }` and `{ v[1] = 2 }`). Split the collection first and give each branch its own part: `let (a, b) = v.split_at_mut(mid);`. Proving disjoint index ranges is scheduled in `deferred.md` § Auto-Parallel Loops over Provably-Disjoint Indexed Writes; when it lands, ranges it proves disjoint will not conflict.
 
 Pin: `err_par_conflict` (already an error today, E0408).
 
