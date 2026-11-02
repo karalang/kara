@@ -115,7 +115,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-02-29 | 2026-11-02 | typecheck | medium | Returning `m.get(k) ?? ""` from a function is refused (E0516 'cannot drop the temporary value'), and so is `let o = m.get(k); o ?? ""` ('returned borrow does not originate from a ref parameter'), though §5.3 names `m.get(k) ?? ""` as a static fallback that may be kept and returned | — |
 | B-2026-11-02-30 | 2026-11-02 | typecheck | medium | Two `TaskGroup` tasks that write DISJOINT fields of one local (`p.x` and `p.y`) are refused: 'a task of `g` captures `p` by `mut ref`, which no other task of the group may capture'; §9.1 captures places, and the same pair is accepted in `par {}` and as two plain closures | — |
 | B-2026-11-02-31 | 2026-11-02 | typecheck | low | A non-escaping `Fn` parameter may be captured by a closure the callee returns (`fn wrap(f: Fn() -> i64) -> Fn() -> i64 { || f() + 1 }`); §9.3 lets the callee only call it or pass it to another non-escaping parameter | — |
-| B-2026-11-02-33 | 2026-11-02 | effect | low | Coercing a struct whose trait method uses a provider-rooted resource into `dyn At` reports E_NO_PROVIDER ('no provider for Clk ... main takes no hidden provider parameter') instead of E_DYN_PROVIDER naming the resource and suggesting a generic parameter | — |
 
 ### Relocated
 
@@ -572,6 +571,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-02-24 | mir-llvm | low | Kata 38's seq binary stays at 312 KiB on g96fca5370 where the B-2026-10-28-36 fix took 12 other kata seq binaries to 52-69 KB | ad984ef96b |
 | B-2026-11-02-25 | parser | medium | 128 nested `{` followed by a statement keyword (`if`, `let`, `while`, ...) runs the parser out of memory: the refused statement is retried forever, o… | 1d2fc6d232 |
 | B-2026-11-02-26 | mir-llvm | medium | A `Vec.with_capacity(n)` filled by a counting push loop runs 12.6x legacy's instructions on x86: mir::presize only takes a `Vec.new()` start, so ever… | 791fe05de0 |
+| B-2026-11-02-33 | effect | low | Coercing a struct whose trait method uses a provider-rooted resource into `dyn At` reports E_NO_PROVIDER ('no provider for Clk .. | 55c64b1eca |
 
 </details>
 
