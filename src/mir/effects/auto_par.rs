@@ -301,22 +301,24 @@ const FEW_TRIPS: u128 = 16;
 /// local written once with one, and `i` written once with a literal (and
 /// otherwise only stepped).
 fn constant_trips(body: &Body, header: BasicBlock) -> Option<u128> {
-    let data = &body.blocks[header.index()];
-    let TerminatorKind::SwitchInt {
-        discr: Operand::Copy(d),
-        ..
-    } = &data.terminator.kind
-    else {
-        return None;
-    };
-    let (op, i, bound) = data.statements.iter().rev().find_map(|s| match &s.kind {
-        StatementKind::Assign(p, Rvalue::BinaryOp(op @ (BinOp::Lt | BinOp::Le), i, b))
-            if p == d =>
-        {
-            Some((*op, i, b))
-        }
-        _ => None,
-    })?;
+    loop_trips(body, header, None)
+}
+
+/// At most how many trips all the iterations of a loop that makes few in
+/// all take together: a top-level loop whose iterations each run inner
+/// loops of known trips (`for i in 0..200 { for j in 0..=i { .. } }`)
+/// below this does too little work for its tasks to pay (kata 120's
+/// one-off 200-row triangle, about 20,000 pushes, B-2026-11-01-23). A
+/// task's spawn and join cost little, but the loop's results then come
+/// back through the join, where the code after it no longer knows what
+/// it built (a `Vec`'s length, so its bounds checks stay).
+const SMALL_WORK: u128 = 100_000;
+
+/// [`constant_trips`], or, with `outer` the header of a loop that holds
+/// this one and makes constant trips, also for a bound that is `outer`'s
+/// counter: at most as many trips as that counter's last value allows.
+fn loop_trips(body: &Body, header: BasicBlock, outer: Option<BasicBlock>) -> Option<u128> {
+    let (op, i, bound) = header_test(body, header)?;
     // The literals `l` is written with, and how many other writes it has
     // (`None` when a call writes it).
     let writes = |l: Local| -> Option<(Vec<u128>, usize)> {
@@ -357,10 +359,89 @@ fn constant_trips(body: &Body, header: BasicBlock) -> Option<u128> {
             _ => None,
         }
     };
-    let end = value(bound, false)?;
     let start = value(i, true)?;
+    let end = match value(bound, false) {
+        Some(end) => end,
+        None => {
+            // `j < i` (or `j <= i`) with `i` the counter of `outer`, which
+            // makes literal trips from a literal start: at most its last
+            // value.
+            let Operand::Copy(b) = bound else {
+                return None;
+            };
+            let (_, oi, _) = header_test(body, outer?)?;
+            let Operand::Copy(oc) = oi else {
+                return None;
+            };
+            if !b.projection.is_empty() || !oc.projection.is_empty() {
+                return None;
+            }
+            // The bound may be a copy of a copy of the counter (a `for`
+            // binding, then the range's end): follow locals written once
+            // with a plain copy.
+            let mut l = b.local;
+            for _ in 0..4 {
+                if l == oc.local {
+                    break;
+                }
+                l = copied_from(body, l)?;
+            }
+            if l != oc.local {
+                return None;
+            }
+            loop_trips(body, outer?, None)?
+                .checked_add(value(oi, true)?)?
+                .checked_sub(1)?
+        }
+    };
     let trips = end.checked_sub(start)?;
     Some(if op == BinOp::Le { trips + 1 } else { trips })
+}
+
+/// The local `l` is a copy of, when its only write is `l = copy m`.
+fn copied_from(body: &Body, l: Local) -> Option<Local> {
+    let mut from = None;
+    for bb in &body.blocks {
+        for s in &bb.statements {
+            if let StatementKind::Assign(p, rv) = &s.kind {
+                if p.local == l {
+                    match (rv, from) {
+                        (Rvalue::Use(Operand::Copy(m)), None) if m.projection.is_empty() => {
+                            from = Some(m.local)
+                        }
+                        _ => return None,
+                    }
+                }
+            }
+        }
+        if let TerminatorKind::Call { destination, .. } = &bb.terminator.kind {
+            if destination.local == l {
+                return None;
+            }
+        }
+    }
+    from
+}
+
+/// The test the loop header `header` ends with: `i < bound` or
+/// `i <= bound`, as `(op, i, bound)`.
+fn header_test(body: &Body, header: BasicBlock) -> Option<(BinOp, &Operand, &Operand)> {
+    let data = &body.blocks[header.index()];
+    let TerminatorKind::SwitchInt {
+        discr: Operand::Copy(d),
+        ..
+    } = &data.terminator.kind
+    else {
+        return None;
+    };
+    data.statements.iter().rev().find_map(|s| match &s.kind {
+        StatementKind::Assign(p, Rvalue::BinaryOp(op @ (BinOp::Lt | BinOp::Le), i, b))
+            if p == d =>
+        {
+            Some((*op, i, b))
+        }
+        _ => None,
+    })
 }
 
 /// A natural loop: its header and every block on a cycle back to it.
@@ -524,8 +605,31 @@ impl Cost {
             .iter()
             .any(|m| m.header != own.header && m.blocks.contains(&own.header));
         let trips = constant_trips(body, own.header)?;
-        (nested && trips <= FEW_TRIPS)
-            .then(|| format!("it is inside a loop and makes {trips} trips"))
+        if nested {
+            return (trips <= FEW_TRIPS)
+                .then(|| format!("it is inside a loop and makes {trips} trips"));
+        }
+        // A top-level loop whose iterations only run inner loops of known
+        // trips (no call that loops): all its work, in trips.
+        if self.weight_of(name, &set) != 1
+            || set.iter().any(|&b| {
+                self.calls[name]
+                    .get(b.index())
+                    .into_iter()
+                    .flatten()
+                    .any(|c| self.weight.get(c).copied().unwrap_or(0) > 0)
+            })
+        {
+            return None;
+        }
+        let mut inner = 0u128;
+        for l in loops.iter().filter(|l| set.contains(&l.header)) {
+            inner = inner.checked_add(loop_trips(body, l.header, Some(own.header))?)?;
+        }
+        let work = trips.checked_mul(inner.max(1))?;
+        (work < SMALL_WORK).then(|| {
+            format!("its {trips} trips run about {work} inner trips in all, too few to pay")
+        })
     }
 
     /// Why a statement group in `name` covering `blocks` may run many
@@ -1953,6 +2057,95 @@ fn main() {{
         let v = written(&src);
         assert!(only(&v, "fill").verdict.is_ok(), "{v:#?}");
         assert!(only(&v, "channels").verdict.is_ok(), "{v:#?}");
+    }
+
+    /// A top-level loop whose iterations only run inner loops of known
+    /// trips stays in order when all of them make fewer than
+    /// [`SMALL_WORK`] trips: kata 120's one-off triangle build (an inner
+    /// loop bounded by the outer counter), and a literal 100 by 100 grid.
+    /// A bigger grid, or an inner loop of unknown trips, still runs as
+    /// tasks (B-2026-11-01-23).
+    #[test]
+    fn auto_par_top_level_loop_of_little_work_stays_in_order() {
+        let src = "
+fn grid(side: i64) -> i64 {
+    let mut out: Vec[i64] = Vec.new();
+    par for a in 0..100 {
+        for b in 0..100 {
+            out.push(a * b);
+        }
+    }
+    out.len() as i64 + side
+}
+
+fn big() -> i64 {
+    let mut out: Vec[i64] = Vec.new();
+    par for a in 0..1000 {
+        for b in 0..1000 {
+            out.push(a * b);
+        }
+    }
+    out.len() as i64
+}
+
+fn unknown(n: i64) -> i64 {
+    let mut out: Vec[i64] = Vec.new();
+    par for a in 0..10 {
+        for b in 0..n {
+            out.push(a * b);
+        }
+    }
+    out.len() as i64
+}
+
+fn main() {
+    println(grid(1));
+    println(big());
+    println(unknown(5));
+}
+";
+        let v = written_sized(src);
+        assert_eq!(
+            cost_reason(only(&v, "grid")),
+            "its 100 trips run about 10000 inner trips in all, too few to pay"
+        );
+        assert!(only(&v, "big").verdict.is_ok(), "{v:#?}");
+        assert!(only(&v, "unknown").verdict.is_ok(), "{v:#?}");
+        // Kata 120's shape, as the builder records it: an inner loop
+        // bounded by the outer loop's counter.
+        let src = "
+fn triangle() -> i64 {
+    let mut tri: Vec[Vec[i64]] = Vec.new();
+    let mut i = 0;
+    while i < 200 {
+        let mut row: Vec[i64] = Vec.new();
+        let mut j = 0;
+        while j <= i {
+            row.push((i * 31 + j * 17) % 100);
+            j = j + 1;
+        }
+        tri.push(row);
+        i = i + 1;
+    }
+    tri.len() as i64
+}
+
+fn main() {
+    println(triangle());
+}
+";
+        let l = crate::mir::lower::build_source_recording(src).unwrap_or_else(|e| panic!("{e}"));
+        let v = analyze_with(&l.program, &l.tys, true).auto_par;
+        let outer: Vec<&AutoParVerdict> = v
+            .iter()
+            .filter(|x| x.instance == "triangle" && x.span.line == 5)
+            .filter(|x| matches!(x.kind, VerdictKind::Loop))
+            .collect();
+        assert_eq!(outer.len(), 1, "{v:#?}");
+        assert_eq!(
+            cost_reason(outer[0]),
+            "its 200 trips run about 40000 inner trips in all, too few to pay"
+        );
     }
 
     /// The pins of the review thread's ruling: a group in a function
