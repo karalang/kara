@@ -127,7 +127,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-01-44 | 2026-11-01 | mir-llvm | medium | Kata 170's Map[i64, i64]-heavy two-sum-III runs FEWER instructions on the MIR backend than legacy (0.75x) but 1.43x its cycles: the seq lane went from 2.56x to 3.01x rustc -O | — |
 | B-2026-11-01-45 | 2026-11-01 | mir-llvm | low | Four of katas 101-210 lost 10-13% of their wall-time ratio to Rust on the MIR backend, each too small to file alone (1.04-1.12x legacy's instructions, 1.07-1.13x its cycles): the second borderline batch after B-2026-11-01-20 | — |
 | B-2026-11-01-47 | 2026-11-01 | mir-llvm | medium | Kata 216's combination-sum-III recursion runs 1.41x legacy's instructions on the MIR backend (1.21x its cycles): the seq lane went from 1.07x to 1.26x rustc -O | — |
-| B-2026-11-02-1 | 2026-11-02 | mir-llvm+runtime | medium | Cancelling a `TaskGroup` task while it waits inside a `par {}` (or `par for`) whose other branch has already finished leaks: `par { { sleep(2 s); 1 }, 2 }` in a task cancelled after 20 ms leaks 16 bytes on four workers and 104 bytes (the `par`'s internal group from `mir_task::group_new` plus 16 from the task body's resume) on one, every run under ASan; teardown of a `par` whose branches are all still suspended does not leak | — |
 | B-2026-11-02-2 | 2026-11-02 | mir-llvm | medium | Kata 225's queue-rotation loop (Vec push + index read + field update through a `mut ref` struct) runs 1.43x legacy's instructions on the MIR backend and 1.61x its cycles: the seq lane went from 0.80x to 1.24x rustc -O | — |
 | B-2026-11-02-3 | 2026-11-02 | mir-llvm | medium | Kata 242's valid-anagram byte loop runs 1.11x legacy's instructions on the MIR backend but 1.21x its cycles: the seq lane went from 1.08x to 1.30x rustc -O and from 1.00x to 1.22x C | — |
 | B-2026-11-02-4 | 2026-11-02 | mir-llvm | medium | Kata 244's Map[String, i64] word-index lookups run 1.27x legacy's instructions on the MIR backend and 1.56x its cycles: the seq lane went from 1.16x to 1.66x rustc -O | — |
@@ -542,6 +541,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-01-38 | mir | low | A whole `Array[i64, 2]` passed to a bare (copying) parameter is held as a borrow across the later arguments: `sh(a, set(mut a))` and `sh(a, { a[0] =… | 6a51dbc47e |
 | B-2026-11-01-39 | effect | medium | The drop of a `dyn` value is charged no effects, against core-semantics 12 default 3 (a drop's effects are its type's drop glue's): `par { { let d =… | 58b9c2df3e |
 | B-2026-11-01-46 | mir | low | A map index assignment still reads a moved (non-`Copy`) place key after the value, against core-semantics 8.2: `m[key] = { key = "b".to_string(); 5 }… | 0e9a42f043 |
+| B-2026-11-02-1 | mir-llvm+runtime | medium | Cancelling a `TaskGroup` task while it waits inside a `par {}` (or `par for`) whose other branch has already finished leaks: `par { { sleep(2 s); 1 }… | 59908af3782752651ec380b11bcb90bc0103f540 |
 
 </details>
 
