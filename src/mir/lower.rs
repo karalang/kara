@@ -25519,11 +25519,54 @@ fn panic_handler_name(src: &str) -> Option<String> {
 /// check reads it to tell what the method's result borrows
 /// (`through_ref_fields`, B-2026-10-21-59).
 pub fn library_bodies_unchecked(program: &mut crate::ast::Program, range: std::ops::Range<usize>) {
-    use crate::ast::{Block, ImplItem, Item, TraitItem, TypeKind};
-    let empty = |b: &mut Block| {
+    for_each_library_body(program, range, &mut |b| {
         b.stmts.clear();
         b.final_expr = None;
-    };
+    });
+}
+
+/// The bodies [`library_bodies_unchecked`] empties, set aside to put back
+/// with [`restore_library_bodies`]: a check that type-checks them runs its
+/// later passes, whose findings in the library it drops, without them
+/// (B-2026-10-31-16).
+pub struct LibraryBodies {
+    range: std::ops::Range<usize>,
+    bodies: Vec<(Vec<crate::ast::Stmt>, Option<Box<crate::ast::Expr>>)>,
+}
+
+/// Empty the library's bodies in `range` as [`library_bodies_unchecked`]
+/// does, keeping them.
+pub fn take_library_bodies(
+    program: &mut crate::ast::Program,
+    range: std::ops::Range<usize>,
+) -> LibraryBodies {
+    let mut bodies = Vec::new();
+    for_each_library_body(program, range.clone(), &mut |b| {
+        bodies.push((std::mem::take(&mut b.stmts), b.final_expr.take()));
+    });
+    LibraryBodies { range, bodies }
+}
+
+/// Put back the bodies [`take_library_bodies`] set aside.
+pub fn restore_library_bodies(program: &mut crate::ast::Program, aside: LibraryBodies) {
+    let mut it = aside.bodies.into_iter();
+    for_each_library_body(program, aside.range, &mut |b| {
+        if let Some((stmts, final_expr)) = it.next() {
+            b.stmts = stmts;
+            b.final_expr = final_expr;
+        }
+    });
+}
+
+/// Each library body in `range` that [`library_bodies_unchecked`] empties,
+/// handed to `visit`.
+fn for_each_library_body(
+    program: &mut crate::ast::Program,
+    range: std::ops::Range<usize>,
+    visit: &mut dyn FnMut(&mut crate::ast::Block),
+) {
+    use crate::ast::{Block, ImplItem, Item, TraitItem, TypeKind};
+    let mut empty = |b: &mut Block| visit(b);
     let ref_structs: FxHashSet<String> = program
         .items
         .iter()

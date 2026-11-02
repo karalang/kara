@@ -1173,6 +1173,23 @@ struct Pipeline {
     /// The library methods [`crate::mir::library_prune`] removed from the
     /// appended library, for the typechecker.
     library_pruned: Option<crate::mir::library_prune::Pruned>,
+    /// The library's bodies, when [`Self::with_library`] kept them: resolved
+    /// and type-checked with the program, then set aside for the passes after
+    /// (B-2026-10-31-16), whose findings in the library are dropped.
+    library_bodies: LibraryBodiesState,
+}
+
+/// Whether a check over the library keeps its bodies through the passes
+/// after type-checking.
+#[derive(Default)]
+pub(crate) enum LibraryBodiesState {
+    /// Emptied before resolving, or no library: nothing to set aside.
+    #[default]
+    Unchecked,
+    /// Kept for resolve and typecheck: the range to set aside after.
+    Kept(std::ops::Range<usize>),
+    /// Set aside after typecheck, to put back once the checks end.
+    Aside(crate::mir::lower::LibraryBodies),
 }
 
 impl Pipeline {
@@ -1203,6 +1220,7 @@ impl Pipeline {
             user_source: None,
             mir_program: None,
             library_pruned: None,
+            library_bodies: LibraryBodiesState::Unchecked,
         }
     }
 
@@ -1246,13 +1264,18 @@ impl Pipeline {
         crate::mir::lower::mark_library_builtins(&mut self.parsed.program, user_len);
         library_closures_take_their_callers_effects(&mut self.parsed.program, user_len);
         // A comptime evaluation runs library bodies (a derive's), so they stay.
-        if std::env::var("KARAC_CHECK_LIBRARY_BODIES").as_deref() != Ok("1")
-            && !crate::comptime::has_comptime_work(&self.parsed.program)
-        {
+        if !crate::comptime::has_comptime_work(&self.parsed.program) {
             // The always-appended sources, not the baked modules after them:
             // a derive or `proto_schema` runs its `comptime` body at check.
             let end = crate::mir::lower::library_sources_end(user_len);
-            crate::mir::lower::library_bodies_unchecked(&mut self.parsed.program, user_len..end);
+            if std::env::var("KARAC_CHECK_LIBRARY_BODIES").as_deref() == Ok("1") {
+                self.library_bodies = LibraryBodiesState::Kept(user_len..end);
+            } else {
+                crate::mir::lower::library_bodies_unchecked(
+                    &mut self.parsed.program,
+                    user_len..end,
+                );
+            }
         }
         self.parsed.program.library_start = Some(user_len);
         self.library_fns = library_fn_names(&self.parsed.program, user_len);
@@ -2442,6 +2465,14 @@ impl Pipeline {
         self.typecheck();
         crate::mir::lower::phase_time("check typecheck", t);
         self.drop_library_diagnostics();
+        // The library's bodies have been resolved and type-checked, as the
+        // build needs them; what the passes after find in them is dropped,
+        // so they run without them, as when the bodies are unchecked.
+        if let LibraryBodiesState::Kept(range) = std::mem::take(&mut self.library_bodies) {
+            self.library_bodies = LibraryBodiesState::Aside(
+                crate::mir::lower::take_library_bodies(&mut self.parsed.program, range),
+            );
+        }
         self.lower();
         crate::mir::lower::phase_time("check lower", t);
         self.drop_library_diagnostics();
@@ -2458,6 +2489,9 @@ impl Pipeline {
         self.provider_escape_check();
         self.simd_check();
         self.drop_library_diagnostics();
+        if let LibraryBodiesState::Aside(aside) = std::mem::take(&mut self.library_bodies) {
+            crate::mir::lower::restore_library_bodies(&mut self.parsed.program, aside);
+        }
         crate::mir::lower::phase_time("check rest", t);
     }
 
