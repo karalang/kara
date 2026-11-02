@@ -257,6 +257,11 @@ pub struct Parser {
     /// `impl` return with its own clause is parenthesized
     /// (`-> (Fn(Str) with writes(Log)) with allocates(Heap)`).
     pub(crate) return_tail: bool,
+    /// The token position where a function type's return type begins
+    /// (`Fn() -> (Fn() -> i64) + CrossTask`): a parenthesized type there
+    /// leaves a following `+ CrossTask` to the function type around it
+    /// (core semantics §6.3, B-2026-11-02-20).
+    pub(crate) fn_return_at: Option<usize>,
     /// While the type after `as` is parsed: a `<` after it is a comparison
     /// (`x as i64 < y`), not Rust's generic arguments.
     pub(crate) cast_type: bool,
@@ -498,6 +503,7 @@ impl Parser {
             frozen_self_consumed: false,
             own_self_consumed: false,
             return_tail: false,
+            fn_return_at: None,
             cast_type: false,
             member_fn_name: false,
             freeze_spans: rustc_hash::FxHashSet::default(),

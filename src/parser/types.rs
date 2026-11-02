@@ -79,6 +79,7 @@ impl super::Parser {
         // the function's clause.
         let return_type = if self.eat(&Token::Arrow) {
             self.return_tail = return_tail;
+            self.fn_return_at = Some(self.pos);
             Some(Box::new(self.parse_type()?))
         } else {
             None
@@ -538,6 +539,9 @@ impl super::Parser {
             }
             // () unit type or (A, B) tuple type
             Token::LeftParen => {
+                // Read before the inner type, whose own function types
+                // move it.
+                let fn_return = self.fn_return_at == Some(self.pos);
                 self.advance();
                 if self.eat(&Token::RightParen) {
                     return Some(TypeExpr {
@@ -563,6 +567,22 @@ impl super::Parser {
                 } else {
                     // Parenthesized type
                     self.expect(&Token::RightParen)?;
+                    // `(Fn() -> Fn() -> i64) + CrossTask` (core semantics
+                    // §6.3): the marker binds to the nearest function type,
+                    // and parentheses make that the outer one
+                    // (B-2026-11-02-20). A parenthesized return type of a
+                    // function type, `Fn() -> (Fn() -> i64) + CrossTask`,
+                    // leaves the marker to that outer function type.
+                    if !fn_return
+                        && matches!(first.kind, TypeKind::FnType { .. })
+                        && self.peek_token_ref() == &Token::Plus
+                        && self.at_kw_at(1, "CrossTask")
+                    {
+                        self.advance(); // `+`
+                        self.advance(); // `CrossTask`
+                        self.cross_task_fn_types
+                            .insert(crate::resolver::SpanKey::from_span(&first.span));
+                    }
                     Some(first)
                 }
             }

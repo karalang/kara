@@ -22,13 +22,36 @@ impl super::Formatter {
         let written = self
             .paren_return_types
             .contains(&crate::resolver::SpanKey::from_span(&t.span));
-        if tail_has_with(t) || (written && !matches!(t.kind, TypeKind::Tuple(_) | TypeKind::Unit)) {
+        if !self.wraps_marked_fn(t)
+            && (tail_has_with(t)
+                || (written && !matches!(t.kind, TypeKind::Tuple(_) | TypeKind::Unit)))
+        {
             self.write_str("(");
             self.format_type_expr(t);
             self.write_str(")");
         } else {
             self.format_type_expr(t);
         }
+    }
+
+    /// Whether `t` prints as `(Fn(..) -> Fn(..) ..) + CrossTask`: a marked
+    /// function type with no `with` of its own whose return type is a
+    /// function type, where the bare marker would bind to the inner one.
+    fn wraps_marked_fn(&self, t: &TypeExpr) -> bool {
+        let TypeKind::FnType {
+            return_type,
+            effect_spec: None,
+            ..
+        } = &t.kind
+        else {
+            return false;
+        };
+        matches!(
+            return_type.as_deref().map(|r| &r.kind),
+            Some(TypeKind::FnType { .. })
+        ) && self
+            .cross_task_fn_types
+            .contains(&crate::resolver::SpanKey::from_span(&t.span))
     }
 
     pub(super) fn format_generic_params(&mut self, gp: &Option<GenericParams>) {
@@ -298,6 +321,10 @@ impl super::Formatter {
                 let is_mut = self
                     .mut_fn_types
                     .contains(&crate::resolver::SpanKey::from_span(&ty.span));
+                let whole = self.wraps_marked_fn(ty);
+                if whole {
+                    self.write_str("(");
+                }
                 self.write_str(if *is_once {
                     "OnceFn("
                 } else if is_mut {
@@ -315,14 +342,33 @@ impl super::Formatter {
                     self.format_type_expr(p);
                 }
                 self.write_str(")");
+                let marked = self
+                    .cross_task_fn_types
+                    .contains(&crate::resolver::SpanKey::from_span(&ty.span));
+                // A marker after a function return type would bind to that
+                // inner type (core semantics §6.3), so a marked function
+                // that returns one is parenthesized: whole, or around the
+                // return type when its own `with` follows the marker
+                // (B-2026-11-02-20).
+                let fn_return = marked
+                    && matches!(
+                        return_type.as_deref().map(|t| &t.kind),
+                        Some(TypeKind::FnType { .. })
+                    );
                 if let Some(ref rt) = return_type {
                     self.write_str(" -> ");
-                    self.format_type_expr(rt);
+                    if fn_return && effect_spec.is_some() {
+                        self.write_str("(");
+                        self.format_type_expr(rt);
+                        self.write_str(")");
+                    } else {
+                        self.format_type_expr(rt);
+                    }
                 }
-                if self
-                    .cross_task_fn_types
-                    .contains(&crate::resolver::SpanKey::from_span(&ty.span))
-                {
+                if whole {
+                    self.write_str(")");
+                }
+                if marked {
                     self.write_str(" + CrossTask");
                 }
                 match effect_spec {
