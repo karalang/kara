@@ -621,6 +621,14 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
         ty("RedundantCast", Some(DiagnosticClass::LintWarning)),
     ),
     (
+        "W0292",
+        ty("LaterTrack", Some(DiagnosticClass::LintWarning)),
+    ),
+    (
+        "E0292",
+        ty("LaterTrack", Some(DiagnosticClass::LintWarning)),
+    ),
+    (
         "E0291",
         ty("RedundantCast", Some(DiagnosticClass::LintWarning)),
     ),

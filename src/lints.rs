@@ -146,6 +146,11 @@ pub const STARTER_LINTS: &[LintInfo] = &[
         description: "A numeric literal's explicit suffix matches the context's inferred type.",
     },
     LintInfo {
+        name: "later_track",
+        default_level: LintLevel::Warn,
+        description: "A feature core-semantics.md §13 leaves to a later track (`#[gpu]`, `comptime` beyond `#[derive]`), which compiles as ordinary code today.",
+    },
+    LintInfo {
         name: "redundant_cast",
         default_level: LintLevel::Warn,
         description: "An `as` cast to the type its operand already has.",

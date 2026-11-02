@@ -1,0 +1,12 @@
+// Core semantics §13: `comptime` beyond `#[derive]` is a later track. A
+// `comptime fn` compiles as an ordinary function and may be evaluated at run
+// time; `karac check` says so with the `later_track` warning
+// (B-2026-11-01-41, asserted by tests/later_track_lint.rs).
+
+comptime fn sq(n: i64) -> i64 {
+    n * n
+}
+
+fn main() {
+    println(sq(3));
+}

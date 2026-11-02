@@ -1,0 +1,13 @@
+// Core semantics §13: GPU compute is a later track. A `#[gpu]` function
+// compiles as an ordinary function and runs on the CPU; `karac check` says
+// so with the `later_track` warning (B-2026-11-01-41, asserted by
+// tests/later_track_lint.rs).
+
+#[gpu]
+fn k(x: i64) -> i64 {
+    x * 2
+}
+
+fn main() {
+    println(k(21));
+}

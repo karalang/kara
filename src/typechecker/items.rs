@@ -106,6 +106,70 @@ impl<'a> super::TypeChecker<'a> {
         self.lint_override_stack.pop();
     }
 
+    /// `later_track` (B-2026-11-01-41): `#[gpu]` and `comptime` beyond
+    /// `#[derive]` are later tracks (core-semantics.md §13). They compile as
+    /// ordinary code today, so the author is told what the feature does now
+    /// instead of nothing. A derive backer (`comptime fn derive_x`) and the
+    /// `comptime fn`s it calls are the core's `#[derive]` and stay silent.
+    fn warn_later_track(&mut self, f: &Function, derive_backers: &HashSet<String>) {
+        if f.stdlib_origin || self.compiling_stdlib {
+            return;
+        }
+        let mut found: Vec<(Span, String)> = Vec::new();
+        if let Some(a) = f.attributes.iter().find(|a| a.is_bare("gpu")) {
+            found.push((
+                a.span,
+                format!(
+                    "`#[gpu]` is a later-track feature (core-semantics.md §13): GPU compute \
+                     is not in 0.8, so `{}` runs on the CPU",
+                    f.name
+                ),
+            ));
+        }
+        if !derive_backers.contains(&f.name) {
+            if f.is_comptime {
+                found.push((
+                    f.span,
+                    format!(
+                        "`comptime fn` beyond `#[derive]` is a later-track feature \
+                         (core-semantics.md §13): `{}` may be evaluated at run time",
+                        f.name
+                    ),
+                ));
+            }
+            if let Some(p) = f.params.iter().find(|p| p.is_comptime) {
+                found.push((
+                    p.span,
+                    "a `comptime` parameter beyond `#[derive]` is a later-track feature \
+                     (core-semantics.md §13): it may be evaluated at run time"
+                        .to_string(),
+                ));
+            }
+            let mut blocks = Vec::new();
+            crate::span_visitor::for_each_expr_in_block(&f.body, &mut |e| {
+                if matches!(e.kind, ExprKind::Comptime(_)) {
+                    blocks.push(e.span);
+                }
+            });
+            if let Some(span) = blocks.first() {
+                found.push((
+                    *span,
+                    "a `comptime` block beyond `#[derive]` is a later-track feature \
+                     (core-semantics.md §13): it may be evaluated at run time"
+                        .to_string(),
+                ));
+            }
+        }
+        if found.is_empty() {
+            return;
+        }
+        self.lint_override_stack.push(f.lint_overrides.to_vec());
+        for (span, message) in found {
+            self.type_lint_warning(message, span, TypeErrorKind::LaterTrack, "later_track");
+        }
+        self.lint_override_stack.pop();
+    }
+
     /// `return_clause_on_fn` (design.md § `dyn Trait`, B-2026-10-30-9): a
     /// bare `dyn` or function return type with no clause of its own,
     /// followed by the function's own clause. The clause is the function's,
@@ -245,6 +309,7 @@ impl<'a> super::TypeChecker<'a> {
     pub(super) fn check_items(&mut self) {
         self.preregister_impl_assoc_types();
         let items: &[Item] = &self.program.items;
+        let derive_backers = derive_backers(items);
         for item in items {
             match item {
                 Item::Function(f) => {
@@ -273,6 +338,7 @@ impl<'a> super::TypeChecker<'a> {
                     }
                     self.check_function(f, None, &[]);
                     self.check_wasm_export_boundary(f);
+                    self.warn_later_track(f, &derive_backers);
                 }
                 Item::ImplBlock(imp) => self.check_impl_block(imp),
                 Item::EffectResource(r) => self.check_effect_resource_bounds(r),
@@ -10875,4 +10941,39 @@ fn sig_types_differ(a: &Type, b: &Type) -> bool {
         ) => m1 != m2 || sig_types_differ(x, y),
         _ => a != b,
     }
+}
+
+/// The `comptime fn`s that back a `#[derive]`: each `comptime fn derive_*`
+/// and, transitively, the `comptime fn`s it calls by name (B-2026-11-01-41).
+fn derive_backers(items: &[Item]) -> HashSet<String> {
+    let comptime: HashMap<&str, &Function> = items
+        .iter()
+        .filter_map(|i| match i {
+            Item::Function(f) if f.is_comptime => Some((f.name.as_str(), f)),
+            _ => None,
+        })
+        .collect();
+    let mut out: HashSet<String> = HashSet::new();
+    let mut work: Vec<&Function> = comptime
+        .values()
+        .filter(|f| f.name.starts_with("derive_"))
+        .copied()
+        .collect();
+    while let Some(f) = work.pop() {
+        if !out.insert(f.name.clone()) {
+            continue;
+        }
+        crate::span_visitor::for_each_expr_in_block(&f.body, &mut |e| {
+            if let ExprKind::Call { callee, .. } = &e.kind {
+                if let ExprKind::Identifier(n) = &callee.kind {
+                    if let Some(g) = comptime.get(n.as_str()) {
+                        if !out.contains(&g.name) {
+                            work.push(g);
+                        }
+                    }
+                }
+            }
+        });
+    }
+    out
 }

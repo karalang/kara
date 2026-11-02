@@ -1283,6 +1283,10 @@ pub enum TypeErrorKind {
     /// function's clause, which leaves the returned value with every effect
     /// (design.md § `dyn Trait`).
     ReturnClauseOnFn,
+    /// `later_track` lint (B-2026-11-01-41): a feature core-semantics §13
+    /// takes out of the core (`#[gpu]`, `comptime` beyond `#[derive]`),
+    /// which compiles and runs as ordinary code today.
+    LaterTrack,
     /// Bare `method(args)` call appears in a synthesis position (no expected
     /// type) where the only candidate resolutions are trait associated
     /// functions. The typechecker cannot infer the target type — programmer
@@ -1664,7 +1668,8 @@ pub(crate) fn class_for_type_error_kind(
         | TypeErrorKind::RedundantCast
         | TypeErrorKind::PreludeShadow
         | TypeErrorKind::ModuleMutBinding
-        | TypeErrorKind::ReturnClauseOnFn => Some(DC::LintWarning),
+        | TypeErrorKind::ReturnClauseOnFn
+        | TypeErrorKind::LaterTrack => Some(DC::LintWarning),
 
         // Kinds not yet individually classified — `Other` at the JSON
         // emit site. Backfill is incremental; each one is a small

@@ -1,0 +1,9 @@
+source = "B-2026-11-01-41"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["later-track"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-01-41: core-semantics §13 leaves this feature to a later track; it runs as ordinary code and check warns `later_track` (W0292), which tests/later_track_lint.rs asserts."
