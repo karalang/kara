@@ -132,7 +132,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-02-9 | 2026-11-02 | mir-llvm | medium | Growing a fresh Vec[i64] to 2M elements with push, once per round, runs 1.37x legacy's instructions on the MIR backend (1.13x its cycles): found in kata 283, where it was the whole of the seq lane's 1.11x -> 1.26x rustc -O slip | — |
 | B-2026-11-02-10 | 2026-11-02 | mir-llvm | low | Kata 276's par lane runs 1.44x slower than its 2026-08-28 feed while its comparators moved 1.06-1.09x and its seq lane held, so it scales 4.6x over seq where it scaled ~6.0x; there is no matched legacy par baseline | — |
 | B-2026-11-02-11 | 2026-11-02 | mir-llvm | medium | Kata 294's memoised flip-game search (per-node successor Strings built char by char, Map[String, bool] memo) runs 1.60x legacy's instructions and 1.51x its cycles on the MIR backend: the seq lane went from 0.62x to 0.95x rustc -O | — |
-| B-2026-11-02-12 | 2026-11-02 | typecheck | high | A `shared` handle crosses tasks inside an unmarked `dyn T` that a task or `par` branch only VIEWS: `fn mkd(s: own S) -> dyn Bump` and two `TaskGroup.spawn` closures calling `d.bump()` pass `karac check` and race (397329328 of 600000001 at KARAC_THREADS=4). The view carve-out for `dyn` captures is unsound; an unmarked `dyn T` may not reach a task or a branch even as a view | — |
 
 ### Relocated
 
@@ -546,6 +545,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-01-41 | typecheck | low | Two later-track features named in core-semantics 13 are accepted silently and run as ordinary code: `comptime fn sq(n: i64) -> i64 { n * n }` checks… | d68355351e |
 | B-2026-11-01-46 | mir | low | A map index assignment still reads a moved (non-`Copy`) place key after the value, against core-semantics 8.2: `m[key] = { key = "b".to_string(); 5 }… | 0e9a42f043 |
 | B-2026-11-02-1 | mir-llvm+runtime | medium | Cancelling a `TaskGroup` task while it waits inside a `par {}` (or `par for`) whose other branch has already finished leaks: `par { { sleep(2 s); 1 }… | 59908af3782752651ec380b11bcb90bc0103f540 |
+| B-2026-11-02-12 | typecheck | high | A `shared` handle crosses tasks inside an unmarked `dyn T` that a task or `par` branch only VIEWS: `fn mkd(s: own S) -> dyn Bump` and two `TaskGroup.… | bc157b9903 |
 
 </details>
 
