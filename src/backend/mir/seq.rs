@@ -5,9 +5,10 @@
 //! `vec_more_method` (`src/mir/interp.rs`).
 
 use inkwell::attributes::{Attribute, AttributeLoc};
-use inkwell::values::{BasicMetadataValueEnum, IntValue, PointerValue};
+use inkwell::values::{BasicMetadataValueEnum, FunctionValue, IntValue, PointerValue};
 use inkwell::IntPredicate;
 
+use super::callable::Shim;
 use super::key::KeyOp;
 use super::{Cx, R};
 use crate::mir::ty::{IntTy, IntrinsicTy};
@@ -121,6 +122,14 @@ impl<'ctx> Cx<'ctx, '_> {
     /// Grow the `Vec` or `String` at `v` (holding `len` of `cap`) by one
     /// `size`-byte element: [`Self::reserve_via_copy`] with the header
     /// already loaded.
+    ///
+    /// The growth itself is a call of the `size`'s [`Shim::GrowByOne`],
+    /// which takes and returns the header's words, so the runtime still
+    /// never sees `v`. In line, its three paths cost each push site some
+    /// 150 of LLVM's inline budget, and a function holding a push missed
+    /// being inlined into its caller; there a `mut ref` struct's fields
+    /// stayed in memory through the caller's loop (kata 225,
+    /// B-2026-11-02-2).
     pub(super) fn grow_by_one(
         &mut self,
         v: PointerValue<'ctx>,
@@ -132,6 +141,63 @@ impl<'ctx> Cx<'ctx, '_> {
         if size == 0 {
             return self.reserve_header(v, ptr, len, cap, self.i64(1), self.i64(size));
         }
+        let grow = self.shim_fn(Shim::GrowByOne { size });
+        let words = self
+            .builder
+            .build_call(grow, &[ptr.into(), len.into(), cap.into()], "grown")
+            .map_err(e)?
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_struct_value();
+        let buf = self.builder.build_extract_value(words, 0, "").map_err(e)?;
+        let cap = self.builder.build_extract_value(words, 1, "").map_err(e)?;
+        self.store(v, buf)?;
+        self.store(self.offset(v, 16)?, cap)
+    }
+
+    /// The body of [`Shim::GrowByOne`]: the header `{buf, len, cap}` in a
+    /// slot of the shim's own, grown by one `size`-byte element, its new
+    /// buffer and capacity returned.
+    pub(super) fn build_grow_by_one(&mut self, f: FunctionValue<'ctx>, size: u64) -> R<()> {
+        let word = |i: u32| f.get_nth_param(i).ok_or("grow1 is missing a word");
+        let ptr = word(0)?.into_pointer_value();
+        let len = word(1)?.into_int_value();
+        let cap = word(2)?.into_int_value();
+        let v = self.entry_slot(24, "hdr")?;
+        self.store(v, ptr.into())?;
+        self.store(self.offset(v, 8)?, len.into())?;
+        self.store(self.offset(v, 16)?, cap.into())?;
+        self.grow_in_line(v, ptr, len, cap, size)?;
+        let buf = self.load_ptr(v)?;
+        let cap = self.load_i64(self.offset(v, 16)?)?;
+        let ty = f
+            .get_type()
+            .get_return_type()
+            .ok_or("grow1 returns nothing")?;
+        let mut out = ty.into_struct_type().get_undef();
+        out = self
+            .builder
+            .build_insert_value(out, buf, 0, "")
+            .map_err(e)?
+            .into_struct_value();
+        out = self
+            .builder
+            .build_insert_value(out, cap, 1, "")
+            .map_err(e)?
+            .into_struct_value();
+        self.builder.build_return(Some(&out)).map_err(e)?;
+        Ok(())
+    }
+
+    /// [`Self::grow_by_one`]'s growth paths, emitted where the builder is.
+    fn grow_in_line(
+        &mut self,
+        v: PointerValue<'ctx>,
+        ptr: PointerValue<'ctx>,
+        len: IntValue<'ctx>,
+        cap: IntValue<'ctx>,
+        size: u64,
+    ) -> R<()> {
         // A full buffer doubles, and an empty Vec takes its first block,
         // straight through `karac_realloc_or_panic`; only a borrowed
         // literal (no capacity, some length) goes to `karac_mir_vec_reserve`.

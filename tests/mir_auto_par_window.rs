@@ -105,9 +105,12 @@ fn build(dir: &Path, name: &str, src: &str, window: bool) -> (bool, bool, Option
         .skip_while(|l| !(l.starts_with("define") && l.contains("@kara.main.ap0(")))
         .take_while(|l| *l != "}")
         .collect();
-    let grows = task
-        .iter()
-        .any(|l| l.contains("@karac_realloc_or_panic") || l.contains("@karac_mir_vec_reserve"));
+    let grows = task.iter().any(|l| {
+        // A push grows through its element size's `grow1.<size>`.
+        l.contains("@karac_realloc_or_panic")
+            || l.contains("@karac_mir_vec_reserve")
+            || l.contains("@grow1.")
+    });
     let ran = common::link_or_skip(if built.status.success() {
         Ok(())
     } else {

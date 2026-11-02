@@ -16,6 +16,7 @@
 
 use std::collections::HashMap;
 
+use inkwell::attributes::{Attribute, AttributeLoc};
 use inkwell::module::Linkage;
 use inkwell::types::BasicMetadataTypeEnum;
 use inkwell::values::{BasicMetadataValueEnum, FunctionValue, IntValue, PointerValue};
@@ -87,6 +88,10 @@ pub(super) enum Shim {
     IntLen { signed: bool },
     /// `void (ptr end, i64 v)`: `f"{v}"`'s bytes, written to end at `end`.
     IntWrite { signed: bool },
+    /// `{ptr, i64} (ptr buf, i64 len, i64 cap)`: a full `Vec` or `String`
+    /// buffer of `size`-byte elements grown by one, its new buffer and
+    /// capacity (`seq.rs`'s `grow_by_one`). Cold and never inlined.
+    GrowByOne { size: u64 },
 }
 
 #[derive(Default)]
@@ -243,8 +248,26 @@ impl<'ctx> Cx<'ctx, '_> {
                     .void_type()
                     .fn_type(&[p.into(), self.llcx.i64_type().into()], false),
             ),
+            Shim::GrowByOne { size } => {
+                let i64t = self.llcx.i64_type();
+                (
+                    format!("grow1.{size}"),
+                    self.llcx
+                        .struct_type(&[p.into(), i64t.into()], false)
+                        .fn_type(&[p.into(), i64t.into(), i64t.into()], false),
+                )
+            }
         };
         let f = self.module.add_function(&name, ty, Some(Linkage::Internal));
+        if matches!(s, Shim::GrowByOne { .. }) {
+            for a in ["noinline", "cold"] {
+                let k = Attribute::get_named_enum_kind_id(a);
+                f.add_attribute(
+                    AttributeLoc::Function,
+                    self.llcx.create_enum_attribute(k, 0),
+                );
+            }
+        }
         self.shims.fns.insert(s.clone(), f);
         self.shims.todo.push((s, f));
         f
@@ -384,6 +407,7 @@ impl<'ctx> Cx<'ctx, '_> {
                     self.build_int_write(f, param(0)?, v, signed)?;
                     self.builder.build_return(None).map_err(e)?;
                 }
+                Shim::GrowByOne { size } => self.build_grow_by_one(f, size)?,
             }
         }
         Ok(())
