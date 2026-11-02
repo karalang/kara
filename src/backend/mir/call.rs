@@ -355,9 +355,11 @@ impl<'ctx> Cx<'ctx, '_> {
     }
 
     /// `format` without the runtime's format buffer, when its pieces
-    /// allow: text pieces alone (literal text and `str` or `String` holes)
-    /// as one exact allocation and a copy of each piece, and one integer
-    /// as its digits. False, with nothing emitted, for any other pieces.
+    /// allow: text pieces (literal text and `str` or `String` holes) and
+    /// integer holes below 128 bits, as one exact allocation, a copy of
+    /// each text piece and each integer's digits written in place (one
+    /// integer alone is [`Shim::StringOfInt`]). False, with nothing
+    /// emitted, for any other pieces.
     fn format_direct(&mut self, args: &[Operand], dest: &Place) -> R<bool> {
         let text = |cx: &Self, t: Ty| {
             matches!(
@@ -365,24 +367,22 @@ impl<'ctx> Cx<'ctx, '_> {
                 TyKind::Str | TyKind::Intrinsic(IntrinsicTy::String)
             )
         };
-        let mut all_text = true;
+        // Each piece: text, or an integer (`Some(signed)`) below 128 bits.
+        let mut kinds = Vec::with_capacity(args.len());
         for a in args {
             let t = self.operand_type(a)?;
-            all_text &= match self.tys.kind(t) {
-                TyKind::Ref(i) | TyKind::MutRef(i) => text(self, i),
-                _ => text(self, t),
+            let t = match self.tys.kind(t) {
+                TyKind::Ref(i) | TyKind::MutRef(i) if text(self, i) => i,
+                _ => t,
             };
+            kinds.push(match self.tys.kind(t) {
+                _ if text(self, t) => None,
+                TyKind::Int(i) if !matches!(i, IntTy::I128 | IntTy::U128) => Some(i),
+                _ => return Ok(false),
+            });
         }
-        if !all_text {
-            let [a] = args else { return Ok(false) };
-            let t = self.operand_type(a)?;
-            let TyKind::Int(i) = self.tys.kind(t) else {
-                return Ok(false);
-            };
-            if matches!(i, IntTy::I128 | IntTy::U128) {
-                return Ok(false);
-            }
-            let v = self.operand_scalar(a)?.into_int_value();
+        if let [Some(i)] = kinds.as_slice() {
+            let v = self.operand_scalar(&args[0])?.into_int_value();
             let w = self
                 .builder
                 .build_int_cast_sign_flag(v, self.llcx.i64_type(), i.signed(), "")
@@ -394,12 +394,42 @@ impl<'ctx> Cx<'ctx, '_> {
                 .map_err(e)?;
             return Ok(true);
         }
+        // A piece is copied from `(ptr, len)`, or an integer's digits
+        // written from its `i64` value.
+        enum Part<'ctx> {
+            Text(PointerValue<'ctx>, IntValue<'ctx>),
+            Int(IntValue<'ctx>, bool, IntValue<'ctx>),
+        }
         let mut parts = Vec::with_capacity(args.len());
         let mut total = self.i64(0);
-        for a in args {
-            let (p, n) = self.str_parts(a)?;
+        for (a, kind) in args.iter().zip(&kinds) {
+            let part = match kind {
+                None => {
+                    let (p, n) = self.str_parts(a)?;
+                    Part::Text(p, n)
+                }
+                Some(i) => {
+                    let v = self.operand_scalar(a)?.into_int_value();
+                    let w = self
+                        .builder
+                        .build_int_cast_sign_flag(v, self.llcx.i64_type(), i.signed(), "")
+                        .map_err(e)?;
+                    let f = self.shim_fn(Shim::IntLen { signed: i.signed() });
+                    let n = self
+                        .builder
+                        .build_call(f, &[w.into()], "")
+                        .map_err(e)?
+                        .try_as_basic_value()
+                        .unwrap_basic()
+                        .into_int_value();
+                    Part::Int(w, i.signed(), n)
+                }
+            };
+            let n = match &part {
+                Part::Text(_, n) | Part::Int(_, _, n) => *n,
+            };
             total = self.builder.build_int_add(total, n, "").map_err(e)?;
-            parts.push((p, n));
+            parts.push(part);
         }
         // At least one byte, so the capacity is never 0 and the block is
         // freed with the `String`.
@@ -422,9 +452,20 @@ impl<'ctx> Cx<'ctx, '_> {
             .unwrap_basic()
             .into_pointer_value();
         let mut at = buf;
-        for (p, n) in parts {
-            self.builder.build_memcpy(at, 1, p, 1, n).map_err(e)?;
-            at = self.elem_ptr(at, n, 1)?;
+        for part in parts {
+            match part {
+                Part::Text(p, n) => {
+                    self.builder.build_memcpy(at, 1, p, 1, n).map_err(e)?;
+                    at = self.elem_ptr(at, n, 1)?;
+                }
+                Part::Int(w, signed, n) => {
+                    at = self.elem_ptr(at, n, 1)?;
+                    let f = self.shim_fn(Shim::IntWrite { signed });
+                    self.builder
+                        .build_call(f, &[at.into(), w.into()], "")
+                        .map_err(e)?;
+                }
+            }
         }
         let d = self.place_ptr(dest)?;
         self.store(d, buf.into())?;
@@ -445,8 +486,48 @@ impl<'ctx> Cx<'ctx, '_> {
         v: IntValue<'ctx>,
         signed: bool,
     ) -> R<()> {
+        let (neg, mag, len) = self.int_digits(f, v, signed)?;
+        let malloc = self.libc_fn("malloc");
+        let buf = self
+            .builder
+            .build_call(malloc, &[len.into()], "text")
+            .map_err(e)?
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+        self.write_digits(f, buf, len, mag, neg)?;
+        self.store(out, buf.into())?;
+        self.store(self.offset(out, 8)?, len.into())?;
+        self.store(self.offset(out, 16)?, len.into())
+    }
+
+    /// The body of [`Shim::IntWrite`]: `v`'s digits (and sign), written to
+    /// end at `end`.
+    pub(super) fn build_int_write(
+        &mut self,
+        f: FunctionValue<'ctx>,
+        end: PointerValue<'ctx>,
+        v: IntValue<'ctx>,
+        signed: bool,
+    ) -> R<()> {
+        let (neg, mag, len) = self.int_digits(f, v, signed)?;
+        let back = self
+            .builder
+            .build_int_sub(self.i64(0), len, "")
+            .map_err(e)?;
+        let buf = self.elem_ptr(end, back, 1)?;
+        self.write_digits(f, buf, len, mag, neg)
+    }
+
+    /// Whether `v` (an `i64`, read `signed` or not) is negative, its
+    /// magnitude, and the bytes its decimal text takes, sign included.
+    pub(super) fn int_digits(
+        &mut self,
+        f: FunctionValue<'ctx>,
+        v: IntValue<'ctx>,
+        signed: bool,
+    ) -> R<(IntValue<'ctx>, IntValue<'ctx>, IntValue<'ctx>)> {
         let i64t = self.llcx.i64_type();
-        let i8t = self.llcx.i8_type();
         let entry = self.builder.get_insert_block().ok_or("no block")?;
         let (neg, mag) = if signed {
             let neg = self
@@ -471,10 +552,6 @@ impl<'ctx> Cx<'ctx, '_> {
         let count = self.llcx.append_basic_block(f, "count");
         let more = self.llcx.append_basic_block(f, "more");
         let counted = self.llcx.append_basic_block(f, "counted");
-        let write = self.llcx.append_basic_block(f, "write");
-        let written = self.llcx.append_basic_block(f, "written");
-        let sign = self.llcx.append_basic_block(f, "sign");
-        let done = self.llcx.append_basic_block(f, "done");
         let ten = i64t.const_int(10, false);
         self.builder.build_unconditional_branch(count).map_err(e)?;
 
@@ -508,14 +585,27 @@ impl<'ctx> Cx<'ctx, '_> {
         self.builder.position_at_end(counted);
         let wide = self.builder.build_int_z_extend(neg, i64t, "").map_err(e)?;
         let len = self.builder.build_int_add(nv, wide, "len").map_err(e)?;
-        let malloc = self.libc_fn("malloc");
-        let buf = self
-            .builder
-            .build_call(malloc, &[len.into()], "text")
-            .map_err(e)?
-            .try_as_basic_value()
-            .unwrap_basic()
-            .into_pointer_value();
+        Ok((neg, mag, len))
+    }
+
+    /// Writes the `len` bytes of an integer's text at `buf`: the digits of
+    /// `mag` from the end, and a `-` first when `neg`.
+    fn write_digits(
+        &mut self,
+        f: FunctionValue<'ctx>,
+        buf: PointerValue<'ctx>,
+        len: IntValue<'ctx>,
+        mag: IntValue<'ctx>,
+        neg: IntValue<'ctx>,
+    ) -> R<()> {
+        let i64t = self.llcx.i64_type();
+        let i8t = self.llcx.i8_type();
+        let from = self.builder.get_insert_block().ok_or("no block")?;
+        let write = self.llcx.append_basic_block(f, "write");
+        let written = self.llcx.append_basic_block(f, "written");
+        let sign = self.llcx.append_basic_block(f, "sign");
+        let done = self.llcx.append_basic_block(f, "done");
+        let ten = i64t.const_int(10, false);
         self.builder.build_unconditional_branch(write).map_err(e)?;
 
         self.builder.position_at_end(write);
@@ -551,8 +641,8 @@ impl<'ctx> Cx<'ctx, '_> {
         self.builder
             .build_conditional_branch(left, write, written)
             .map_err(e)?;
-        i.add_incoming(&[(&len, counted), (&i1, write)]);
-        u.add_incoming(&[(&mag, counted), (&u2, write)]);
+        i.add_incoming(&[(&len, from), (&i1, write)]);
+        u.add_incoming(&[(&mag, from), (&u2, write)]);
 
         self.builder.position_at_end(written);
         self.builder
@@ -563,11 +653,8 @@ impl<'ctx> Cx<'ctx, '_> {
             .build_store(buf, i8t.const_int(u64::from(b'-'), false))
             .map_err(e)?;
         self.builder.build_unconditional_branch(done).map_err(e)?;
-
         self.builder.position_at_end(done);
-        self.store(out, buf.into())?;
-        self.store(self.offset(out, 8)?, len.into())?;
-        self.store(self.offset(out, 16)?, len.into())
+        Ok(())
     }
 
     /// The `{ptr, len}` of a `str`, `ref str` or `String` operand.
@@ -1254,10 +1341,15 @@ impl<'ctx> Cx<'ctx, '_> {
             }
             // A counting loop's pushes, reserved before it
             // (`mir::presize`): `bound + delta` elements, clamped.
-            ("Vec", "presize") => {
+            ("Vec" | "String", "presize") => {
                 let v = self.ref_arg(&args[0])?;
-                let et = self.vec_elem(name, &args[0])?;
-                let size = self.layout(et)?.size;
+                // A `String`'s element is a byte.
+                let size = if base == "String" {
+                    1
+                } else {
+                    let et = self.vec_elem(name, &args[0])?;
+                    self.layout(et)?.size
+                };
                 if size == 0 {
                     return Ok(());
                 }

@@ -8,7 +8,8 @@
 //! to `0..=` a limit) up front. It is a capacity hint: the pushes still
 //! grow `v` if the count is off, so output never changes. The legacy
 //! backend does the same on the AST (`src/presize.rs`, where the patterns
-//! and the measurements are).
+//! and the measurements are). A `String.new()` filled by `String.push`
+//! gets the same, `String.presize`, in bytes: each char is at least one.
 //!
 //! The shape, on an elaborated body, for a loop with no loop inside it:
 //!
@@ -113,7 +114,7 @@ fn pushes(body: &Body, b: usize, v: Local) -> bool {
         return false;
     };
     let (base, method) = split_method(name);
-    if method != "push" || !base.starts_with("Vec[") {
+    if method != "push" || !fills(base) {
         return false;
     }
     let Some(Operand::Move(t)) = args.first() else {
@@ -124,6 +125,13 @@ fn pushes(body: &Body, b: usize, v: Local) -> bool {
             .statements
             .iter()
             .any(|s| borrow_of(s) == Some((t.local, BorrowKind::Mut, v)))
+}
+
+/// Whether `base` names a collection this pass reserves for: a `Vec`, or a
+/// `String`, whose `push` appends one char (at least one byte, so a
+/// reservation of the trip count is a floor, as legacy's was).
+fn fills(base: &str) -> bool {
+    base.starts_with("Vec[") || base == "String"
 }
 
 fn fn_name(func: &Operand) -> Option<&str> {
@@ -485,7 +493,7 @@ fn plan(
     'v: for v in vs {
         if !matches!(
             tys.kind(body.local(v).ty),
-            TyKind::Intrinsic(IntrinsicTy::Vec(_))
+            TyKind::Intrinsic(IntrinsicTy::Vec(_) | IntrinsicTy::String)
         ) {
             continue;
         }
@@ -537,7 +545,7 @@ fn plan(
                 if *destination == Place::local(v) {
                     let fresh = fn_name(func)
                         .map(split_method)
-                        .is_some_and(|(base, m)| m == "new" && base.starts_with("Vec["));
+                        .is_some_and(|(base, m)| m == "new" && fills(base));
                     if !fresh || !args.is_empty() {
                         continue 'v;
                     }
@@ -563,9 +571,20 @@ fn plan(
         let delta = seeds + adj - k;
         // The bound, holding at `Vec.new()` what it holds at the guard.
         // A range `for` copies a literal bound into a local.
+        // A named binding is a variable bound even when a literal sets
+        // it (`let n = 2000000`), as it is on legacy's AST: the limit is
+        // for a loop counting to a literal written in its own condition.
         let lit = match &bound {
             Operand::Const(_) => int_const(&bound),
-            Operand::Copy(p) if p.projection.is_empty() => copied_const(body, p.local),
+            Operand::Copy(p)
+                if p.projection.is_empty()
+                    && !matches!(
+                        body.local(p.local).kind,
+                        LocalKind::User { .. } | LocalKind::Arg { .. }
+                    ) =>
+            {
+                copied_const(body, p.local)
+            }
             _ => None,
         };
         // (`if let` rather than a guard: the MSRV floor has no `if let` guards.)
@@ -766,5 +785,33 @@ mod tests {
             assert_eq!(format!("{} {}", first[0], first[2]), out, "{body}");
             assert_eq!(got.lines().nth(1), Some("0"), "{body}");
         }
+    }
+
+    /// A `String` filled by one `push` per trip is reserved in bytes, and
+    /// `chars().collect()` into a `Vec[char]` is reserved to the text's
+    /// byte length (B-2026-11-02-11).
+    #[test]
+    fn mir_presize_reserves_a_string_fill_and_a_char_collect() {
+        let src = "fn spell(n: i64) -> String {\n    let mut t = String.new();\n    let mut j = 0;\n    while j < n {\n        if j % 2 == 0 {\n            t.push('a');\n        } else {\n            t.push('\u{e9}');\n        }\n        j = j + 1;\n    }\n    t\n}\nfn chars_of(s: ref String) -> i64 {\n    let cs: Vec[char] = s.chars().collect();\n    cs.len()\n}\nfn main() {\n    let t = spell(5);\n    println(f\"{t} {t.len()} {chars_of(t)}\");\n    println(spell(0 - 2).len());\n}\n";
+        assert_eq!(reserved(src, "spell"), 1);
+        assert_eq!(reserved(src, "chars_of"), 1);
+        assert_eq!(
+            run_source(src).unwrap(),
+            ("a\u{e9}a\u{e9}a 7 5\n0\n".into(), Some(0))
+        );
+    }
+
+    /// A named binding a literal sets is a variable bound, as on legacy:
+    /// `let n = 2000000` reserves although the literal is past the limit
+    /// a loop counting to a literal in its own condition keeps
+    /// (B-2026-11-02-9).
+    #[test]
+    fn mir_presize_takes_a_named_bound_past_the_literal_limit() {
+        let named = "fn fill() -> i64 {\n    let n = 2000000;\n    let mut v: Vec[i64] = Vec.new();\n    let mut k = 0;\n    while k < n {\n        v.push(k);\n        k = k + 1;\n    }\n    v.len()\n}\nfn main() {\n    println(fill());\n}\n";
+        assert_eq!(reserved(named, "fill"), 1);
+        let literal = named
+            .replace("    let n = 2000000;\n", "")
+            .replace("k < n", "k < 2000000");
+        assert_eq!(reserved(&literal, "fill"), 0);
     }
 }

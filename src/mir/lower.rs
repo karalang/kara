@@ -13876,10 +13876,14 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// through the library's `String.char_at_byte(ref s, i)` and
     /// `char.len_utf8(c)`. `continue` goes to the loop head (`i` has
     /// already stepped).
+    /// `reserve`, when given, is a `Vec` the walk fills with one push per
+    /// char: it is presized to the text's byte length, a ceiling on its
+    /// chars, as legacy's `chars().collect()` sized its buffer.
     fn walk_chars(
         &mut self,
         label: &Option<String>,
         text: &'a Expr,
+        reserve: Option<(Local, Ty)>,
         each: &mut dyn FnMut(&mut Self, Local) -> R<()>,
     ) -> R<()> {
         let (i64_t, bool_t, char_t) = {
@@ -13908,6 +13912,26 @@ impl<'l, 'a> Bx<'l, 'a> {
         let n = self.temp(i64_t);
         let r = reborrow(self);
         self.call_native("String.len", vec![r], Place::local(n));
+        if let Some((v, vt)) = reserve {
+            let name = self.tys().display(vt);
+            let mt = self.tys().tcx().reference(vt, true);
+            let unit_t = self.unit();
+            let r = self.temp(mt);
+            self.assign(r, Rvalue::Ref(BorrowKind::Mut, Place::local(v)));
+            let u = self.temp(unit_t);
+            self.call_native(
+                &format!("{name}.presize"),
+                vec![
+                    Operand::Move(Place::local(r)),
+                    Operand::Copy(Place::local(n)),
+                    Operand::Const(Const {
+                        ty: i64_t,
+                        kind: ConstKind::Scalar(0),
+                    }),
+                ],
+                Place::local(u),
+            );
+        }
         let i = self.temp(i64_t);
         self.assign(
             i,
@@ -13988,7 +14012,7 @@ impl<'l, 'a> Bx<'l, 'a> {
     ) -> R<()> {
         let char_t = self.tys().tcx().intern(HK::Char);
         self.push_scope();
-        let r = self.walk_chars(label, text, &mut |this, ch| {
+        let r = self.walk_chars(label, text, None, &mut |this, ch| {
             let mut binds = Vec::new();
             this.bind_pattern(pattern, &Place::local(ch), char_t, false, &mut binds)?;
             for &(l, t) in &binds {
@@ -14021,7 +14045,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         self.call_native(&format!("{name}.new"), vec![], Place::local(v));
         let mt = self.tys().tcx().reference(vt, true);
         let unit_t = self.unit();
-        self.walk_chars(&None, text, &mut |this, ch| {
+        self.walk_chars(&None, text, Some((v, vt)), &mut |this, ch| {
             let r = this.temp(mt);
             this.assign(r, Rvalue::Ref(BorrowKind::Mut, Place::local(v)));
             let u = this.temp(unit_t);

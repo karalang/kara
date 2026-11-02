@@ -2540,7 +2540,8 @@ impl<'a> Interp<'a> {
                     .map(|i| Value::Int(i as i128));
                 self.option(ret, found)
             }
-            ("String", "reserve" | "reserve_exact") => Ok(Value::Unit),
+            // `String.presize` is `mir::presize`'s capacity hint.
+            ("String", "reserve" | "reserve_exact" | "presize") => Ok(Value::Unit),
             ("String", "with_capacity") => Ok(self.alloc_box("String", Value::Str(String::new()))),
             // `Array.from_fn(n, f)` builds its elements the same way, in
             // place; `n` must be the array's length (B-2026-10-21-30).

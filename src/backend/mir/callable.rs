@@ -82,6 +82,11 @@ pub(super) enum Shim {
     /// `void (ptr out, i64 v)`: `f"{v}"` of a (`signed`) integer, written
     /// into a `String` from a `malloc` LLVM can see (`call.rs`).
     StringOfInt { signed: bool },
+    /// `i64 (i64 v)`: the bytes `f"{v}"` of a (`signed`) integer takes,
+    /// its digits and a sign (`call.rs`'s `format_direct`).
+    IntLen { signed: bool },
+    /// `void (ptr end, i64 v)`: `f"{v}"`'s bytes, written to end at `end`.
+    IntWrite { signed: bool },
 }
 
 #[derive(Default)]
@@ -226,6 +231,18 @@ impl<'ctx> Cx<'ctx, '_> {
                     .void_type()
                     .fn_type(&[p.into(), self.llcx.i64_type().into()], false),
             ),
+            Shim::IntLen { signed } => (
+                format!("int_len.{}64", if *signed { "i" } else { "u" }),
+                self.llcx
+                    .i64_type()
+                    .fn_type(&[self.llcx.i64_type().into()], false),
+            ),
+            Shim::IntWrite { signed } => (
+                format!("int_write.{}64", if *signed { "i" } else { "u" }),
+                self.llcx
+                    .void_type()
+                    .fn_type(&[p.into(), self.llcx.i64_type().into()], false),
+            ),
         };
         let f = self.module.add_function(&name, ty, Some(Linkage::Internal));
         self.shims.fns.insert(s.clone(), f);
@@ -349,6 +366,22 @@ impl<'ctx> Cx<'ctx, '_> {
                         .ok_or("string_of has no value")?
                         .into_int_value();
                     self.build_string_of_int(f, param(0)?, v, signed)?;
+                    self.builder.build_return(None).map_err(e)?;
+                }
+                Shim::IntLen { signed } => {
+                    let v = f
+                        .get_nth_param(0)
+                        .ok_or("int_len has no value")?
+                        .into_int_value();
+                    let (_, _, len) = self.int_digits(f, v, signed)?;
+                    self.builder.build_return(Some(&len)).map_err(e)?;
+                }
+                Shim::IntWrite { signed } => {
+                    let v = f
+                        .get_nth_param(1)
+                        .ok_or("int_write has no value")?
+                        .into_int_value();
+                    self.build_int_write(f, param(0)?, v, signed)?;
                     self.builder.build_return(None).map_err(e)?;
                 }
             }

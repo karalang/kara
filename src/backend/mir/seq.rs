@@ -2603,26 +2603,18 @@ impl<'ctx> Cx<'ctx, '_> {
             (TyKind::Int(it), "abs", [x]) => {
                 let x = x.into_int_value();
                 if it.signed() {
-                    let min = x.get_type().const_int(1u64 << 63, false);
-                    let min = if it.bits() == 64 {
-                        min
-                    } else {
-                        b.build_left_shift(
-                            x.get_type().const_int(1, false),
-                            x.get_type().const_int(u64::from(it.bits() - 1), false),
-                            "",
-                        )
-                        .map_err(e)?
-                    };
-                    let ok = b
-                        .build_int_compare(IntPredicate::NE, x, min, "")
-                        .map_err(e)?;
+                    // `0 - x` overflows exactly at the type's minimum, the
+                    // one value with no absolute value: one negation and
+                    // its flag (`neg; jo`), not a compare to the minimum
+                    // and a negation.
+                    let z = x.get_type().const_zero();
+                    let (nx, o) = self.with_overflow("sub", true, z, x)?;
+                    let ok = self.builder.build_not(o, "").map_err(e)?;
                     self.abort_unless(ok, "integer overflow")?;
                     let b = &self.builder;
                     let neg = b
-                        .build_int_compare(IntPredicate::SLT, x, x.get_type().const_zero(), "")
+                        .build_int_compare(IntPredicate::SLT, x, z, "")
                         .map_err(e)?;
-                    let nx = b.build_int_neg(x, "").map_err(e)?;
                     b.build_select(neg, nx, x, "").map_err(e)?
                 } else {
                     x.into()

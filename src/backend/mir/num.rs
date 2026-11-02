@@ -988,7 +988,7 @@ impl<'ctx> Cx<'ctx, '_> {
 
     /// `x op y` and whether it overflowed, through
     /// `llvm.{s,u}{add,sub,mul}.with.overflow`.
-    fn with_overflow(
+    pub(super) fn with_overflow(
         &mut self,
         op: &str,
         signed: bool,
