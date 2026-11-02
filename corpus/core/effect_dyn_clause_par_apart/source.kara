@@ -1,6 +1,8 @@
 // A call through a `dyn` value in a field has the effects its type's `with`
 // clause declares (design.md § `dyn Trait`): `reads(Clock)` here, so two
 // such calls, directly and through a function's parameter, may run at once.
+// The field is `+ CrossTask`: an unmarked `dyn` may not reach a `par`
+// branch even as a view (B-2026-11-02-12).
 trait Meter {
     fn level(self) -> i64;
 }
@@ -16,7 +18,7 @@ impl Meter for Doubled {
     fn level(self) -> i64 { self.n * 2 }
 }
 
-struct Panel { m: dyn Meter with reads(Clock) }
+struct Panel { m: dyn Meter + CrossTask with reads(Clock) }
 
 fn read(p: ref Panel) -> i64 { p.m.level() }
 

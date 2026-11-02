@@ -105,7 +105,7 @@ test "stock asks the fake network" {
 // it would keep a view of it (core semantics §14.5, §14.7).
 #[with_provider(FileSystem, MemFs.with_catalog)]
 test "serve runs under the fake, its bus charged where it emits" {
-    let mut routes: Vec[dyn Handler] = Vec.new();
+    let mut routes: Vec[dyn Handler + CrossTask] = Vec.new();
     routes.push(Health {});
     let router = Router { routes: routes };
     let mut bus = EventBus { handlers: Vec.new() };
@@ -119,7 +119,7 @@ test "serve runs under the fake, its bus charged where it emits" {
 }
 
 test "a router at the defaults serves plain routes" {
-    let mut routes: Vec[dyn Handler] = Vec.new();
+    let mut routes: Vec[dyn Handler + CrossTask] = Vec.new();
     routes.push(Health {});
     let router = Router { routes: routes };
     let r = router.dispatch(Req { route: 0, body: "".to_string() });

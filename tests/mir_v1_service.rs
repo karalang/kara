@@ -187,7 +187,7 @@ fn v1_service_dyn_router_under_a_fake_is_refused() {
     text.push_str(
         "\n#[with_provider(Network, FakeStock.new)]
 test \"a router of dyn handlers under the fake\" {
-    let mut routes: Vec[dyn Handler] = Vec.new();
+    let mut routes: Vec[dyn Handler + CrossTask] = Vec.new();
     routes.push(Stock { addr: \"stock:1\".to_string() });
     let router = Router { routes: routes };
     let r = router.dispatch(Req { route: 0, body: \"apple\".to_string() });
@@ -207,7 +207,7 @@ test \"a router of dyn handlers under the fake\" {
             "{lane:?}: {stdout}"
         );
         assert!(
-            stdout.contains("`Stock` as a `dyn Handler` cannot carry a provider")
+            stdout.contains("`Stock` as a `dyn Handler + CrossTask` cannot carry a provider")
                 && stdout.contains("take a generic parameter (`[T: Handler]`)"),
             "{lane:?}: {stdout}"
         );

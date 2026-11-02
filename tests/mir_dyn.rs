@@ -1014,7 +1014,7 @@ impl Handler for Upstream {
     }
 }
 struct Router {
-    routes: Vec[dyn Handler],
+    routes: Vec[dyn Handler + CrossTask],
 }
 impl Router {
     fn dispatch(ref self, route: i64, req: i64) -> i64 {
@@ -1032,7 +1032,7 @@ fn serve(r: ref Router, reqs: ref Vec[(i64, i64)]) -> i64 {
 }
 fn main() {
     let (tx, rx) = channel(4);
-    let mut routes: Vec[dyn Handler] = Vec.new();
+    let mut routes: Vec[dyn Handler + CrossTask] = Vec.new();
     routes.push(Echo {});
     routes.push(Upstream { rx: rx });
     let router = Router { routes: routes };
@@ -1074,7 +1074,7 @@ impl Job for Waits {
         self.seen * 100 + self.rx.recv().unwrap()
     }
 }
-fn run(j: own dyn Job) -> i64 {
+fn run(j: own dyn Job + CrossTask) -> i64 {
     let mut j = j;
     let a = j.step();
     let b = j.step();
@@ -1082,7 +1082,7 @@ fn run(j: own dyn Job) -> i64 {
 }
 fn main() {
     let (tx, rx) = channel(4);
-    let j: dyn Job = Waits { rx: rx, seen: 0 };
+    let j: dyn Job + CrossTask = Waits { rx: rx, seen: 0 };
     let group = TaskGroup.new();
     let r = group.spawn(|| run(j));
     let s = group.spawn(|| {

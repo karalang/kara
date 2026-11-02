@@ -600,6 +600,15 @@ impl super::Parser {
                     effect_args: None,
                     span: self.span_from(&dyn_kw_span),
                 };
+                // Where a fix-it writes `+ CrossTask`: after the trait,
+                // before any bound or `with` (B-2026-11-02-12).
+                let last = self.tokens[self.pos.saturating_sub(1)].span;
+                let marker_point = Span {
+                    line: last.line,
+                    column: last.column + last.length,
+                    offset: last.offset + last.length,
+                    length: 0,
+                };
                 let mut cross_task = false;
                 while self.peek_token_ref() == &Token::Plus {
                     self.advance(); // `+`
@@ -624,6 +633,8 @@ impl super::Parser {
                 }
                 let effects = self.parse_type_effect_clause(&dyn_kw_span, return_tail)?;
                 let span = self.span_from(&start);
+                self.fn_type_marker_points
+                    .insert(crate::resolver::SpanKey::from_span(&span), marker_point);
                 Some(TypeExpr {
                     kind: TypeKind::Dyn {
                         trait_path: trait_path_clean,

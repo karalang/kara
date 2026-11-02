@@ -1,5 +1,5 @@
-//! A `dyn Handler with E` read out of a collection in `self` (an element of
-//! `Vec[dyn Handler with E]`, or the payload of an `Option` element bound by
+//! A `dyn Handler + CrossTask with E` read out of a collection in `self` (an element of
+//! `Vec[dyn Handler + CrossTask with E]`, or the payload of an `Option` element bound by
 //! `if let Some(h)`) has the effects of the handlers that can flow into the
 //! value it is read out of (design.md § Effect variables), so a `par` over
 //! two dispatches through effect-free handlers runs, and one through a
@@ -26,10 +26,10 @@ impl Handler for Logged {
 ";
 
 const OPTION_ROUTER: &str = "struct Router[with E] {
-    routes: Vec[Option[dyn Handler with E]],
+    routes: Vec[Option[dyn Handler + CrossTask with E]],
 }
 impl[with E] Router[with E] {
-    fn add(mut ref self, h: escaping dyn Handler with E) {
+    fn add(mut ref self, h: escaping dyn Handler + CrossTask with E) {
         self.routes.push(Some(h));
     }
     fn dispatch(self, i: i64, req: i64) -> i64 with E {
@@ -42,10 +42,10 @@ impl[with E] Router[with E] {
 ";
 
 const VEC_ROUTER: &str = "struct Router[with E] {
-    routes: Vec[dyn Handler with E],
+    routes: Vec[dyn Handler + CrossTask with E],
 }
 impl[with E] Router[with E] {
-    fn add(mut ref self, h: escaping dyn Handler with E) {
+    fn add(mut ref self, h: escaping dyn Handler + CrossTask with E) {
         self.routes.push(h);
     }
     fn dispatch(self, i: i64, req: i64) -> i64 with E {
@@ -124,9 +124,9 @@ fn dyn_element_option_payload_while_iterating_runs_in_par() {
         "option_iter",
         "struct Add { k: i64 }
 impl Handler for Add { fn handle(self, n: i64) -> i64 { n + self.k } }
-struct Router[with E] { slots: Vec[Option[dyn Handler with E]] }
+struct Router[with E] { slots: Vec[Option[dyn Handler + CrossTask with E]] }
 impl[with E] Router[with E] {
-    fn add(mut ref self, h: escaping dyn Handler with E) { self.slots.push(Some(h)); }
+    fn add(mut ref self, h: escaping dyn Handler + CrossTask with E) { self.slots.push(Some(h)); }
     fn total(ref self, n: i64) -> i64 with E {
         let mut t = 0;
         for s in self.slots.iter() { if let Some(h) = s { t += h.handle(n); } }

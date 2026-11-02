@@ -1,0 +1,1 @@
+ERROR at line 16: capture of `owned` (type `dyn Shape`) cannot cross a par {} task boundary; write `dyn Shape + CrossTask` (E_NOT_CROSS_TASK)

@@ -2,6 +2,8 @@
 // the value passed there (design.md § `dyn Trait`): a circle's area writes
 // nothing, so the two `show`s run apart; and a local coerced in view has
 // its concrete type's methods' effects.
+// `owned` is `+ CrossTask`: an unmarked `dyn` may not reach a `par` branch
+// even as a view (B-2026-11-02-12).
 trait Shape {
     fn area(self) -> f64;
     fn draw(self);
@@ -27,7 +29,7 @@ fn main() {
     let q = Square { side: 2.0 };
     let (x, y) = par { show(c), show(q) };
     println(f"{x} {y}");
-    let owned: dyn Shape = Square { side: 3.0 };
+    let owned: dyn Shape + CrossTask = Square { side: 3.0 };
     let (a, _) = par { owned.area(), q.draw() };
     println(f"{a}");
 }

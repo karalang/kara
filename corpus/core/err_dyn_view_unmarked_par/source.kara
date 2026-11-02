@@ -1,0 +1,18 @@
+// Core semantics §6.3: a plain `dyn T` is not CrossTask, so a `par` branch
+// may not reach one even to view it (B-2026-11-02-12). `effect_dyn_par_apart`
+// is the marked form, `dyn Shape + CrossTask`.
+trait Shape {
+    fn area(self) -> f64;
+}
+
+struct Square { side: f64 }
+
+impl Shape for Square {
+    fn area(self) -> f64 { self.side * self.side }
+}
+
+fn main() {
+    let owned: dyn Shape = Square { side: 3.0 };
+    let (a, b) = par { owned.area(), owned.area() };
+    println(f"{a + b}");
+}

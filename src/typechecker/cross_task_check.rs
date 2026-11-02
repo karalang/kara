@@ -108,17 +108,6 @@ impl<'a> super::TypeChecker<'a> {
             if let Err(path) = is_cross_task_safe_with(ty, &self.env.structs, &self.env.enums)
                 .or_else(|p| self.fn_value_in_sight(&name, p))
             {
-                if path.fix_it == CrossTaskUnsafeFixIt::DynCrossTask {
-                    // A task may view a `dyn` value under the view rules
-                    // (design.md § `dyn Trait`: "a view follows the view
-                    // rules"), and this pass sees no capture modes. The
-                    // ownership pass refuses a capture the task moves.
-                    self.core_dyn_task_captures
-                        .entry(SpanKey::from_span(&closure_expr.span))
-                        .or_default()
-                        .push((name.clone(), anchor_span, type_display(ty)));
-                    continue;
-                }
                 self.emit_cross_task_unsafe(
                     name.as_str(),
                     ty,
@@ -210,10 +199,6 @@ impl<'a> super::TypeChecker<'a> {
             if let Err(path) = is_cross_task_safe_with(ty, &self.env.structs, &self.env.enums)
                 .or_else(|p| self.fn_value_in_sight(&name, p))
             {
-                // A branch may view a `dyn` value, as a task may (above).
-                if path.fix_it == CrossTaskUnsafeFixIt::DynCrossTask {
-                    continue;
-                }
                 // Sole-ownership carve-out: shared struct/enum leaves are
                 // the branch-precise ownership phase's territory (see the
                 // doc comment above). Deferring here avoids both double-
@@ -350,16 +335,22 @@ impl<'a> super::TypeChecker<'a> {
             })
     }
 
-    /// Where `+ CrossTask` goes in the first unmarked function type inside
-    /// `t`, if there is one.
+    /// Where `+ CrossTask` goes in the first unmarked function type or
+    /// `dyn` type inside `t`, if there is one (B-2026-11-02-12 for `dyn`).
     pub(super) fn fn_marker_point(&self, t: &TypeExpr) -> Option<Span> {
         let mut found: Option<Span> = None;
         crate::span_visitor::for_each_type_expr(t, &mut |x| {
-            if found.is_none() && matches!(x.kind, TypeKind::FnType { .. }) {
-                let key = SpanKey::from_span(&x.span);
-                if !crate::prelude::marks_cross_task_fn(self.program, &key) {
-                    found = self.program.fn_type_marker_points.get(&key).copied();
-                }
+            if found.is_some() {
+                return;
+            }
+            let key = SpanKey::from_span(&x.span);
+            let unmarked = match &x.kind {
+                TypeKind::FnType { .. } => !crate::prelude::marks_cross_task_fn(self.program, &key),
+                TypeKind::Dyn { cross_task, .. } => !cross_task,
+                _ => false,
+            };
+            if unmarked {
+                found = self.program.fn_type_marker_points.get(&key).copied();
             }
         });
         found
@@ -386,9 +377,12 @@ impl<'a> super::TypeChecker<'a> {
         } else {
             *anchor_span
         };
-        let fix = (path.fix_it == CrossTaskUnsafeFixIt::FnCrossTask && path.path.is_empty())
-            .then(|| self.fn_marker_fix(capture_name))
-            .flatten();
+        let fix = (matches!(
+            path.fix_it,
+            CrossTaskUnsafeFixIt::FnCrossTask | CrossTaskUnsafeFixIt::DynCrossTask
+        ) && path.path.is_empty())
+        .then(|| self.fn_marker_fix(capture_name))
+        .flatten();
         match fix {
             Some(f) => {
                 self.type_error_with_fix_it(msg, span, TypeErrorKind::CrossTaskUnsafeCapture, f)

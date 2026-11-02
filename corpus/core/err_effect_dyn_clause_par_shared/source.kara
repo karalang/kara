@@ -1,6 +1,8 @@
 // The field's clause says a call may write standard output, so two calls
 // through it conflict in a `par` (design.md § `dyn Trait`), though this
 // value's method writes nothing.
+// The field is `+ CrossTask`, so the refusal is the effect conflict and not
+// the view of an unmarked `dyn` (B-2026-11-02-12).
 trait Meter {
     fn level(self) -> i64;
 }
@@ -11,7 +13,7 @@ impl Meter for Fixed {
     fn level(self) -> i64 { self.n }
 }
 
-struct Panel { m: dyn Meter with writes(Stdout) }
+struct Panel { m: dyn Meter + CrossTask with writes(Stdout) }
 
 fn main() {
     let a = Panel { m: Fixed { n: 3 } };

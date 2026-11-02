@@ -1,0 +1,31 @@
+// Core semantics §6.3: a plain `dyn T` hides its concrete type, which may
+// hold a `shared` handle, so it is not CrossTask, and a task may not reach
+// one even to view it (B-2026-11-02-12). Here `D` holds a `shared` counter
+// and two tasks would bump it at once. `dyn Bump + CrossTask` on `mkd`'s
+// return type would check the value coerced into it.
+shared struct S { mut n: i64 }
+
+trait Bump {
+    fn bump(ref self) -> i64;
+}
+
+struct D { s: S }
+
+impl Bump for D {
+    fn bump(ref self) -> i64 {
+        self.s.n = self.s.n + 1;
+        self.s.n
+    }
+}
+
+fn mkd(s: own S) -> dyn Bump {
+    D { s: s }
+}
+
+fn main() {
+    let d = mkd(S { n: 0 });
+    let g = TaskGroup.new();
+    let a = g.spawn(|| d.bump());
+    let b = g.spawn(|| d.bump());
+    println(a.join() + b.join());
+}

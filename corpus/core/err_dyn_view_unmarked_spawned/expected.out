@@ -1,0 +1,1 @@
+ERROR at line 28: capture of `d` (type `dyn Bump`) cannot cross a TaskGroup.spawn task boundary; write `dyn Bump + CrossTask` (E_NOT_CROSS_TASK)

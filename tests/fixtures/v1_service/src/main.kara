@@ -80,7 +80,7 @@ fn ask(addr: Str, item: Str) -> Result[String, NetError] {
 }
 
 struct Router {
-    routes: Vec[dyn Handler],
+    routes: Vec[dyn Handler + CrossTask],
 }
 
 impl Router {
@@ -166,7 +166,7 @@ fn main() {
     let _ = fs.write(path, "apple=3\npear=5\n");
     let l = TcpListener.bind("127.0.0.1:0").unwrap();
     let addr = l.local_addr().unwrap();
-    let mut routes: Vec[dyn Handler] = Vec.new();
+    let mut routes: Vec[dyn Handler + CrossTask] = Vec.new();
     routes.push(Health {});
     routes.push(Catalog { path: path.to_string() });
     routes.push(Stock { addr: addr });

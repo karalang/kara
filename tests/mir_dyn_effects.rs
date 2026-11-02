@@ -30,13 +30,13 @@ impl Shape for Loud {
     fn draw(self) { println(\"loud\"); }
 }
 
-struct Holder { s: dyn Shape }
+struct Holder { s: dyn Shape + CrossTask }
 
 fn show(s: ref dyn Shape) -> f64 { s.area() }
 fn paint(s: ref dyn Shape) { s.draw(); }
 fn twice(s: ref dyn Shape) { paint(s); paint(s); }
-fn make(k: i64) -> dyn Shape { if k == 0 { Circle { r: 1.0 } } else { Loud { n: k } } }
-fn swap_in(s: mut ref dyn Shape) { s.draw(); }
+fn make(k: i64) -> dyn Shape + CrossTask { if k == 0 { Circle { r: 1.0 } } else { Loud { n: k } } }
+fn swap_in(s: mut ref dyn Shape + CrossTask) { s.draw(); }
 ";
 
 fn fixture(tag: &str, main: &str) -> (PathBuf, PathBuf) {
@@ -123,18 +123,18 @@ fn dyn_param_passed_along_keeps_the_callers_value() {
 fn dyn_local_has_the_values_coerced_into_it() {
     accepted(
         "local_quiet",
-        "    let o: dyn Shape = Circle { r: 1.0 };
+        "    let o: dyn Shape + CrossTask = Circle { r: 1.0 };
     par { o.draw(), println(\"x\") };",
     );
     refused(
         "local_loud",
-        "    let o: dyn Shape = Loud { n: 1 };
+        "    let o: dyn Shape + CrossTask = Loud { n: 1 };
     par { o.draw(), println(\"x\") };",
         STDOUT,
     );
     refused(
         "local_reassigned",
-        "    let mut o: dyn Shape = Circle { r: 1.0 };
+        "    let mut o: dyn Shape + CrossTask = Circle { r: 1.0 };
     o = Loud { n: 1 };
     par { o.draw(), println(\"x\") };",
         STDOUT,
@@ -145,7 +145,7 @@ fn dyn_local_has_the_values_coerced_into_it() {
     // they were.
     accepted(
         "local_lent_to_a_callee",
-        "    let mut o: dyn Shape = Circle { r: 1.0 };
+        "    let mut o: dyn Shape + CrossTask = Circle { r: 1.0 };
     swap_in(mut o);
     par { o.area(), println(\"x\") };",
     );
@@ -161,7 +161,7 @@ fn dyn_value_in_a_field_element_or_result_has_its_declared_effects() {
     );
     refused(
         "element",
-        "    let v: Vec[dyn Shape] = vec![Circle { r: 1.0 }];
+        "    let v: Vec[dyn Shape + CrossTask] = vec![Circle { r: 1.0 }];
     for s in v { par { s.draw(), println(\"x\") }; }",
         "a call through a `dyn` value a call hands back",
     );
