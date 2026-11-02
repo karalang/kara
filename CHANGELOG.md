@@ -33,7 +33,8 @@ accepted by 0.8.0 are now refused, each with a fix-it.
   each push is checked (B-2026-11-02-14). The type-mismatch error names the
   missing marker (B-2026-11-02-13).
   The same holds through generic calls, `collect()` and `mem.replace` /
-  `mem.swap` (B-2026-11-02-15).
+  `mem.swap` (B-2026-11-02-15), and through every generic method,
+  associated function and closure result (B-2026-11-02-18).
 - **A task spawned inside `with_provider` onto a `TaskGroup` made outside it**
   is refused, since it could outlive the provider (§14.5, B-2026-11-01-27).
 - **A task that reads a `Copy` local borrows it** until the group joins, so a
