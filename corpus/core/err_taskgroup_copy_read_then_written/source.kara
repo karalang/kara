@@ -1,0 +1,12 @@
+// Core semantics §9.1, §9.5: a task's read-only capture of a `Copy` place is
+// a `ref` capture, so writing the place while the group lives is an error,
+// never a silent read of a stale copy (B-2026-11-01-32).
+
+fn main() {
+    let mut x = 1;
+    let tg = TaskGroup.new();
+    let h = tg.spawn(|| x + 1);
+    x = 5;
+    println(h.join());
+    println(x);
+}

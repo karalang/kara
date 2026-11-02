@@ -9,7 +9,8 @@ let mut pool: TaskGroup = TaskGroup.new();
 let mut handles: Vec[TaskHandle[Vec[i64]]] = Vec.new();
 let mut k = 0;
 while k < 3 {
-let handle: TaskHandle[Vec[i64]] = pool.spawn(|| band(k + 2));
+let n = k + 2;
+let handle: TaskHandle[Vec[i64]] = pool.spawn(|| band(n));
 handles.push(handle);
 k = k + 1;
 }

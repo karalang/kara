@@ -1,0 +1,1 @@
+ERROR at line 16: `k` is written while a task of `tg` borrows it (spawned at line 15; the task reads `k`, a `Copy` place that drops before `tg`)

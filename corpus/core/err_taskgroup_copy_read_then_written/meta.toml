@@ -1,0 +1,9 @@
+source = "B-2026-11-01-32"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["closure", "concurrency", "post-m1:par"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-01-32: core-semantics §9.1 makes a task's read-only capture of a Copy place a ref capture, so a write while the group lives is refused (before the fix the task took a silent copy). The expected.out wording of an error pin is guidance, not a byte oracle."

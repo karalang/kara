@@ -522,9 +522,6 @@ impl Walk<'_, '_> {
             if moved.contains(&name) && !(copy && written.contains(&name)) {
                 continue;
             }
-            if copy && !written.contains(&name) {
-                continue;
-            }
             self.captures.push(Capture {
                 group,
                 mutable: written.contains(&name),
@@ -629,6 +626,30 @@ impl Walk<'_, '_> {
             // E0500; a `Copy` place (captured by `mut ref`, or it would not
             // be here) keeps the borrow, so no use of it may follow.
             if c.decl.offset > g.decl.offset && c.decl.offset != usize::MAX {
+                // A read-only capture of a `Copy` place that drops first is
+                // a copy that still counts as a `ref` borrow until the place
+                // dies (§9.1): reads may follow, a write may not
+                // (B-2026-11-01-32).
+                if c.copy && !c.mutable {
+                    if seen.insert((c.decl.offset, c.group)) {
+                        if let Some(w) = self
+                            .writes
+                            .iter()
+                            .find(|w| w.decl == c.decl && w.span.offset > c.spawn.offset)
+                        {
+                            self.errors.push((
+                                w.span,
+                                format!(
+                                    "`{}` is {} while a task of `{}` borrows it (spawned at \
+                                     line {}; the task reads `{}`, and the borrow lasts until \
+                                     `{}` drops, core-semantics.md §9.1, §9.5)",
+                                    w.name, w.what, g.name, c.spawn.line, w.name, c.name
+                                ),
+                            ));
+                        }
+                    }
+                    continue;
+                }
                 if !c.copy {
                     self.moved
                         .push((c.closure, c.name.clone(), g.name.clone(), g.param));

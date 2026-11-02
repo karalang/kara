@@ -1,0 +1,1 @@
+ERROR at line 9: `x` is written while a task of `tg` borrows it (spawned at line 8; the borrow lasts until `tg` drops)

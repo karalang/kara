@@ -2516,6 +2516,10 @@ fn main() -> () {
             "err_provider_override_tasks_write",
             // `hash` into a type that is no `Hasher` (B-2026-10-31-25).
             "err_hash_into_non_hasher",
+            // A task's read of a `Copy` place is a borrow (§9.1, §9.5),
+            // refused by the strict task-group pass (B-2026-11-01-32).
+            "err_taskgroup_copy_read_then_written",
+            "err_taskgroup_copy_read_in_loop_then_written",
         ];
         // Pins that call Kāra library functions, which `check_built` does
         // not append (a `select` desugars to calls into sync.kara;

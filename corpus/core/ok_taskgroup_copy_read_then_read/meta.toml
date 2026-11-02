@@ -1,0 +1,9 @@
+source = "B-2026-11-01-32"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure", "concurrency", "post-m1:par"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-01-32: a task's read-only capture of a Copy place (a local, a tuple field) is a ref borrow that other reads share, and a copy taken before the spawn may be stepped."

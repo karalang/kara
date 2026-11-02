@@ -1,0 +1,27 @@
+// Core semantics §9.1, §9.5: a task's read-only capture of a `Copy` place is
+// a `ref` borrow, which other reads share: the place may be read while the
+// task lives, and a copy taken before the spawn may be stepped freely
+// (B-2026-11-01-32).
+
+fn work(n: i64) -> i64 {
+    n * 10
+}
+
+fn main() {
+    let x = 4;
+    let t = (1, 2);
+    let tg = TaskGroup.new();
+    let h = tg.spawn(|| x + t.0);
+    println(x + t.1);
+    let mut handles: Vec[TaskHandle[i64]] = Vec.new();
+    let mut k = 0;
+    while k < 3 {
+        let c = k;
+        handles.push(tg.spawn(|| work(c)));
+        k = k + 1;
+    }
+    let mut total = 0;
+    for g in handles.into_iter() { total = total + g.join(); }
+    println(h.join());
+    println(total);
+}

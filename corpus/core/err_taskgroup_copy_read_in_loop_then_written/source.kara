@@ -1,0 +1,21 @@
+// Core semantics §9.1: a `Copy` place that drops before the group is copied
+// into the task, and still counts as borrowed until it dies, so the counter
+// a task reads may not be stepped while it lives; `let c = k;` before the
+// spawn is the spelling that compiles (B-2026-11-01-32).
+
+fn work(n: i64) -> i64 {
+    n * 10
+}
+
+fn main() {
+    let tg = TaskGroup.new();
+    let mut handles: Vec[TaskHandle[i64]] = Vec.new();
+    let mut k = 0;
+    while k < 3 {
+        handles.push(tg.spawn(|| work(k)));
+        k = k + 1;
+    }
+    let mut total = 0;
+    for h in handles.into_iter() { total = total + h.join(); }
+    println(total);
+}
