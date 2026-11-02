@@ -1,0 +1,11 @@
+// Core semantics §8.2: an index assignment's place operands run before its
+// value, so `m[key] = v` moves `key` into the map first, and a value that
+// reads `key` reads a moved value (E0500), as `put(mut m, key, key.len())`
+// does (B-2026-11-01-46).
+
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    let key = "abc".to_string();
+    m[key] = key.len();
+    println(m["abc"]);
+}

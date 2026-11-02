@@ -1,0 +1,9 @@
+source = "B-2026-11-01-46"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["eval-order", "ownership"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-01-46: before the fix the value ran first and the program printed 3; §8.2 moves the key at the place's position, so the value's `key.len()` is a use after move (E0500), and the fix-it computes the value first. The expected.out wording of an error pin is guidance, not a byte oracle."

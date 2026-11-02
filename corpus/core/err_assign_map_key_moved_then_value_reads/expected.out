@@ -1,0 +1,1 @@
+ERROR at line 9: value `key` moved here as the key of a map assignment (the key moves before the value runs, core semantics §8.2), used again in the value

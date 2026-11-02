@@ -300,6 +300,12 @@ pub struct Cfg {
     pub let_closures: FxHashMap<SpanKey, String>,
     /// [`Classification::statement_closures`].
     pub statement_closures: FxHashMap<SpanKey, (usize, usize)>,
+    /// Each index assignment `p[k] = v`, keyed by its index `k`: `v`'s span,
+    /// the span from `p[k]` to the end of `v`, and the statement with `v`
+    /// hoisted into a binding first (two lines, split by a `\n`). A map key moves before `v` runs (core
+    /// semantics §8.2), and a `v` that reads it is repaired this way
+    /// (B-2026-11-01-46).
+    pub index_assigns: FxHashMap<SpanKey, (Span, Span, String)>,
 }
 
 impl Cfg {
@@ -367,6 +373,7 @@ pub fn build_cfg_with_classification<'a>(
         closure_body_owner: builder.closure_body_owner,
         let_closures: builder.let_closures,
         statement_closures: classification.statement_closures.clone(),
+        index_assigns: builder.index_assigns,
     }
 }
 
@@ -512,6 +519,7 @@ struct CfgBuilder<'a> {
     closure_owner_stack: Vec<SpanKey>,
     closure_body_owner: FxHashMap<BlockId, SpanKey>,
     let_closures: FxHashMap<SpanKey, String>,
+    index_assigns: FxHashMap<SpanKey, (Span, Span, String)>,
 }
 
 impl<'a> CfgBuilder<'a> {
@@ -527,6 +535,7 @@ impl<'a> CfgBuilder<'a> {
             closure_depth: 0,
             sink_continuations: FxHashMap::default(),
             closure_creations: FxHashMap::default(),
+            index_assigns: FxHashMap::default(),
             closure_owner_stack: Vec::new(),
             closure_body_owner: FxHashMap::default(),
             let_closures: FxHashMap::default(),
@@ -983,6 +992,23 @@ impl<'a> CfgBuilder<'a> {
                     });
                 cur
             }
+            // An index place's index runs before the value (core semantics
+            // §8.2), so a map key the index moves (`m[key] = v` inserts) is
+            // moved before `v` reads it (B-2026-11-01-46). The base stays
+            // after the value: it is written through, not read.
+            StmtKind::Assign {
+                target:
+                    target @ Expr {
+                        kind: ExprKind::Index { object, index },
+                        ..
+                    },
+                value,
+            } if !matches!(index.kind, ExprKind::Range { .. }) => {
+                self.record_index_assign(target, index, value);
+                let after_index = self.lower_expr(index, cur, exit, loops);
+                let after_rhs = self.lower_expr(value, after_index, exit, loops);
+                self.lower_expr(object, after_rhs, exit, loops)
+            }
             StmtKind::Assign { target, value } => {
                 let after_rhs = self.lower_expr(value, cur, exit, loops);
                 self.lower_expr(target, after_rhs, exit, loops)
@@ -993,6 +1019,35 @@ impl<'a> CfgBuilder<'a> {
             }
             StmtKind::Expr(e) => self.lower_expr(e, cur, exit, loops),
         }
+    }
+
+    /// Records `p[k] = v` for [`Cfg::index_assigns`].
+    fn record_index_assign(&mut self, target: &Expr, index: &Expr, value: &Expr) {
+        let place = crate::formatter::render_expr(target);
+        let v = crate::formatter::render_expr(value);
+        let name = (0..)
+            .map(|i| {
+                if i == 0 {
+                    "value".to_string()
+                } else {
+                    format!("value{i}")
+                }
+            })
+            .find(|n| !place.contains(n.as_str()) && !v.contains(n.as_str()))
+            .unwrap_or_default();
+        let end = value.span.offset + value.span.length;
+        let stmt = Span {
+            length: end.saturating_sub(target.span.offset),
+            ..target.span
+        };
+        self.index_assigns.insert(
+            SpanKey::from_span(&index.span),
+            (
+                value.span,
+                stmt,
+                format!("let {name} = {v};\n{place} = {name};"),
+            ),
+        );
     }
 
     /// Lower an expression for use-collection. Returns the block id where

@@ -1,6 +1,7 @@
 // Core semantics §8.2: in `p = v` the place's operands run first, then the
 // value. A `Copy` key of a map index place is read before the value, which
-// may write it (B-2026-11-01-28), and a place rooted in a call returning a
+// may write it (B-2026-11-01-28); a moved key moves then
+// (B-2026-11-01-46); and a place rooted in a call returning a
 // shared handle runs that call first (B-2026-11-01-29).
 
 struct K { k: i64 }
@@ -26,6 +27,11 @@ fn main() {
     let mut q = 1;
     sm[q] = { q = 2; 5 };
     println(f"{sm.contains_key(1)} {sm.contains_key(2)}");
+
+    let mut key = "a".to_string();
+    let mut sk: Map[String, i64] = Map.new();
+    sk[key] = { key = "b".to_string(); 5 };
+    println(f"{sk.contains_key("a")} {sk.contains_key("b")} {key}");
 
     let mut vm: Vec[Map[i64, i64]] = vec![Map.new(), Map.new()];
     let mut i = 0;

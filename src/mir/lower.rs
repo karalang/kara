@@ -6358,11 +6358,9 @@ impl<'l, 'a> Bx<'l, 'a> {
         let recv = self.recv_place(object, true)?;
         // A place key is read before the value runs, which may write it
         // (`m[k] = { k = 2; 5 }` inserts key 1: core semantics §8.2,
-        // B-2026-11-01-28). Only a `Copy` key: moving a `String` key
-        // first would refuse `m[key] = key.len()`, which the ownership
-        // check accepts today (B-2026-11-01-46).
-        if self.is_copy(kt)
-            && self.is_place(index)
+        // B-2026-11-01-28); a moved key moves then, so a value that reads
+        // it is refused as a use after move (B-2026-11-01-46).
+        if self.is_place(index)
             && !self.plain_operand(value)
             && self.later_may_write(index, &[value])
         {

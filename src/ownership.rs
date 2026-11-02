@@ -1690,6 +1690,11 @@ pub struct OwnershipChecker<'a> {
     pub(crate) core_copy_index_moves: Vec<Span>,
     /// See [`OwnershipCheckResult::core_read_only_index_lets`].
     pub(crate) core_read_only_index_lets: HashSet<SpanKey>,
+    /// The key of each `m[k] = v` on a map, which moves into the map before
+    /// `v` runs (core semantics §8.2): the value's span, and the statement's
+    /// span and hoisted spelling for a use of the key inside `v`
+    /// (B-2026-11-01-46).
+    pub(crate) map_assign_keys: HashMap<SpanKey, MapAssignKey>,
     /// Index projections the use classifier saw in a moving position
     /// ([`crate::cfg::Classification::core_index_moves`]), across every
     /// function; turned into `MoveOutOfPlace` errors by `core_move_errors`.
@@ -2145,6 +2150,7 @@ impl<'a> OwnershipChecker<'a> {
             core_copy_non_moves: HashMap::new(),
             core_copy_index_moves: Vec::new(),
             core_read_only_index_lets: HashSet::new(),
+            map_assign_keys: HashMap::new(),
             core_index_moves: Vec::new(),
             core_borrow_moves: Vec::new(),
             core_escaping_borrow_captures: Vec::new(),
@@ -3376,6 +3382,17 @@ impl<'a> OwnershipChecker<'a> {
     ) {
         let (cfg, dom, rc_witnesses) =
             run_predicate_for_function_with(prelude, self.typecheck_result, f);
+        self.map_assign_keys
+            .extend(cfg.index_assigns.iter().map(|(k, (value, stmt, hoisted))| {
+                (
+                    *k,
+                    MapAssignKey {
+                        value: *value,
+                        stmt: *stmt,
+                        hoisted: hoisted.clone(),
+                    },
+                )
+            }));
         for (binding, w) in rc_witnesses {
             let trigger = match w.consume_origin {
                 ConsumeOrigin::Direct => RcTrigger::DirectReuseAfterConsume,
@@ -3523,6 +3540,10 @@ impl<'a> OwnershipChecker<'a> {
             // but there is no auto-fix. Multi-use chains (`f(a); g(a); h(a)`)
             // surface one witness at a time, so an iterated `fix` resolves each
             // pair.
+            if let Some(e) = self.map_assign_key_error(binding, w.consume_span, w.other_use_span) {
+                self.errors.push(e);
+                continue;
+            }
             let supports_clone = self.moved_type_supports_clone(&w.consume_span);
             // v2 core: a local type that could be `Copy` is fixed by saying so.
             let derive_copy = if supports_clone {
@@ -5057,4 +5078,59 @@ impl OwnershipCheckResult {
             .map(|e| (e.consume_span.offset, e.consume_span.length))
             .collect()
     }
+}
+
+impl OwnershipChecker<'_> {
+    /// The use-after-move error for a map assignment's value that reads the
+    /// key it moved (`m[key] = key.len()`): the key moves into the map before
+    /// the value runs (core semantics §8.2), so the repair computes the value
+    /// first (B-2026-11-01-46).
+    pub(crate) fn map_assign_key_error(
+        &self,
+        binding: &str,
+        consume: Span,
+        other: Span,
+    ) -> Option<OwnershipError> {
+        let k = self.map_assign_keys.get(&SpanKey::from_span(&consume))?;
+        if other.offset < k.value.offset || other.offset >= k.value.offset + k.value.length {
+            return None;
+        }
+        Some(OwnershipError {
+            message: format!(
+                "value '{binding}' moved here, used again here (moved at line {}:{} as the \
+                 key of a map assignment, which moves before the value runs)",
+                consume.line, consume.column
+            ),
+            span: other,
+            kind: OwnershipErrorKind::UseAfterMove,
+            suggestion: Some(format!(
+                "an index assignment evaluates its key before its value (core semantics \
+                 §8.2): compute the value first (`{}`)",
+                k.hoisted.replace('\n', " ")
+            )),
+            // The statement's own `;` follows the value, so the edit ends
+            // without one; the second line keeps the statement's indent.
+            replacement: Some(Box::new(crate::resolver::TextEdit {
+                offset: k.stmt.offset,
+                length: k.stmt.length,
+                replacement: k.hoisted.trim_end_matches(';').replace(
+                    '\n',
+                    &format!("\n{}", " ".repeat(k.stmt.column.saturating_sub(1))),
+                ),
+            })),
+            consume_span: Some(consume),
+        })
+    }
+}
+
+/// A map index assignment's key (`m[k] = v`), for the use-after-move
+/// diagnostic when `v` reads the key it moved (B-2026-11-01-46).
+#[derive(Debug, Clone)]
+pub(crate) struct MapAssignKey {
+    /// The assigned value.
+    pub(crate) value: Span,
+    /// From the place's start to the value's end.
+    pub(crate) stmt: Span,
+    /// The statement with its value hoisted into a binding first.
+    pub(crate) hoisted: String,
 }

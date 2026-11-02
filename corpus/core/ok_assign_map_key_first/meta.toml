@@ -6,4 +6,4 @@ tags = ["eval-order"]
 expected_from = "spec"
 backends = []
 env = {}
-note = "B-2026-11-01-28, B-2026-11-01-29: core-semantics §8.2 evaluates an assignment's place operands before its value, so `m[k] = { k = 2; 5 }` inserts key 1 (a local, a field, a SortedMap and a Vec[Map] element alike), and `get(h).n = v` with `get` returning a shared handle prints `place` before `value`."
+note = "B-2026-11-01-28, B-2026-11-01-29: core-semantics §8.2 evaluates an assignment's place operands before its value, so `m[k] = { k = 2; 5 }` inserts key 1 (a local, a field, a SortedMap and a Vec[Map] element alike), a moved `String` key inserts \"a\" (B-2026-11-01-46), and `get(h).n = v` with `get` returning a shared handle prints `place` before `value`."

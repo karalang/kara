@@ -233,6 +233,12 @@ impl<'a> super::OwnershipChecker<'a> {
             // clone belongs in a `let` before the closure, which is not a
             // one-span edit.
             let capture = entry.trigger == RcTrigger::ClosureCaptureWithOuterUse;
+            if let Some(e) =
+                self.map_assign_key_error(&binding, entry.consume_span, entry.other_use_span)
+            {
+                out.push(e);
+                continue;
+            }
             let supports_clone = self.moved_type_supports_clone(&moved_span);
             // A local type that could be `Copy` is fixed by saying so.
             let derive_copy = if supports_clone {
