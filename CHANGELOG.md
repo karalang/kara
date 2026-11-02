@@ -3,7 +3,7 @@
 All notable changes to the Kāra language and compiler will be documented in this file.
 
 > **Maintenance note (2026-10-28).** This file is a coarse milestone record.
-> The 0.8.0 entry below is a draft until the release. Progress is in
+> 0.8.0 was released on 2026-11-01; 0.8.x releases carry fixes only. Progress is in
 > [`docs/roadmap.md`](docs/roadmap.md), the bug ledger
 > [`docs/bugs-v2.jsonl`](docs/bugs-v2.jsonl) (rollup in
 > [`docs/bugs-v2.md`](docs/bugs-v2.md); the pre-M3 ledger is archived in
@@ -14,7 +14,64 @@ All notable changes to the Kāra language and compiler will be documented in thi
 
 ---
 
-## 0.8.0 (beta) — draft
+## 0.8.1 — unreleased
+
+Fixes only. Several close soundness holes, so programs that were wrongly
+accepted by 0.8.0 are now refused, each with a fix-it.
+
+### Programs 0.8.0 accepted that are now refused
+
+- **A function or `dyn` value that crosses a task must say so.** An erased
+  `Fn` / `MutFn` / `OnceFn` type, or a `dyn T`, is `CrossTask` only when
+  written `Fn(A) -> R + CrossTask` / `dyn T + CrossTask`, and an unmarked one
+  may not reach a task or `par` branch even as a view (core-semantics §6.3;
+  B-2026-11-01-26, B-2026-11-02-12). `karac fix` adds the marker where the
+  type is declared. `Server.serve*` handlers and `std.time.timeout` take
+  marked parameters; a closure literal passed directly needs no change.
+- **A task spawned inside `with_provider` onto a `TaskGroup` made outside it**
+  is refused, since it could outlive the provider (§14.5, B-2026-11-01-27).
+- **A task that reads a `Copy` local borrows it** until the group joins, so a
+  later write is refused; copy it first, `let c = k;` (§9.1, B-2026-11-01-32).
+- **`with_provider` moves its provider**, so a later use is E0500 (§14.4,
+  B-2026-11-01-33).
+- **`m[key] = key.len()` with a moved key** is E0500 with a hoist fix-it,
+  because the key moves before the value runs (§8.2, B-2026-11-01-46).
+
+### Wrong behaviour fixed
+
+- An assignment whose place starts with a call, or is a `Map` index with a
+  `Copy` key, evaluates the place before the value (§8.2; B-2026-11-01-16,
+  -28, -29).
+- A temporary in a `match` guard drops at the end of the guard (§7,
+  B-2026-11-01-30).
+- Cancelling a task while it waits inside a `par` no longer leaks
+  (B-2026-11-02-1).
+- `let x: i64 = None?;` no longer stops `karac run` with invalid MIR
+  (B-2026-11-01-31).
+
+### Diagnostics
+
+- `#[gpu]` and `comptime` outside a `#[derive]` backer draw the
+  `later_track` warning (W0292): they run with today's meaning, but are not
+  covered by 0.8's compatibility promise (§13, B-2026-11-01-41).
+- Fewer false refusals: `par` inside a task (B-2026-11-01-37), closures that
+  write a field through a `mut ref` parameter (-34), `Copy` arguments a
+  later argument writes (-35, -38), handles bound out of a `ref` scrutinee
+  (-3).
+- §11.2 now states that v1 has no index-disjointness check: two `par`
+  branches writing elements of one `Vec` conflict; split it with
+  `split_at_mut` (B-2026-11-01-40, relocated to `deferred.md`).
+
+### Performance
+
+- Each task keeps its own borrow flags instead of one process-wide locked
+  table (B-2026-11-01-25); short counting loops that call a leaf fully
+  unroll (B-2026-10-31-44); `unsafe { xs.get_unchecked(i) }` is not
+  bounds-checked (B-2026-10-31-45).
+
+---
+
+## 0.8.0 (beta) — 2026-11-01
 
 The first release, and a beta: 1.0 follows outside feedback (decided 2026-10-31). It is the first release of the v2 compiler. Every program lowers to MIR, which the
 interpreter (`karac __mir-run`) and the LLVM backend (`karac build`, `karac
