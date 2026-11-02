@@ -345,7 +345,35 @@ fn route_heap(module: &Module<'_>) {
     }
 }
 
+/// LLVM's full-unroll threshold, set once per process before any pipeline
+/// runs: O3's 300 rather than O2's 150, the rest of the pipeline staying
+/// O2. Kata 139's 24-trip window loop with its inner loop is fully
+/// unrolled only at 300, and ran 1.18x legacy's instructions without it
+/// (0.91x with). Over the 707 frozen-set programs it costs 0.7% of build
+/// time and 0.15% of stripped size (B-2026-11-01-36).
+/// `KARAC_MIR_UNROLL_THRESHOLD=<n>` sets another; 150 is LLVM's O2 value.
+fn unroll_threshold() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let n = std::env::var("KARAC_MIR_UNROLL_THRESHOLD")
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(300);
+        let args = [
+            std::ffi::CString::new("karac").unwrap_or_default(),
+            std::ffi::CString::new(format!("-unroll-threshold={n}")).unwrap_or_default(),
+        ];
+        let argv: Vec<*const std::ffi::c_char> = args.iter().map(|a| a.as_ptr()).collect();
+        // SAFETY: two NUL-terminated strings that outlive the call; LLVM
+        // copies what it keeps.
+        unsafe {
+            llvm_sys::support::LLVMParseCommandLineOptions(2, argv.as_ptr(), std::ptr::null())
+        };
+    });
+}
+
 fn run_passes(module: &Module<'_>, opt: u8, tm: &TargetMachine) -> Result<(), String> {
+    unroll_threshold();
     if opt > 0 {
         let mut passes = format!("default<O{}>", opt.min(3));
         // Every argument is passed by pointer; `default<O2>` has no
