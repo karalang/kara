@@ -58,12 +58,12 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 88 |
-| false-positive | 88 |
+| diagnostics | 89 |
+| false-positive | 89 |
 | perf | 84 |
 | missing-feature | 62 |
-| soundness | 39 |
-| miscompile | 30 |
+| soundness | 40 |
+| miscompile | 31 |
 | run-vs-build | 20 |
 | other | 15 |
 | codegen-gap | 14 |
@@ -75,16 +75,16 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 152 |
-| mir | 98 |
+| typecheck | 154 |
+| mir | 99 |
 | mir-llvm | 94 |
 | cli | 49 |
-| ownership | 38 |
+| ownership | 39 |
 | parser | 27 |
 | interp | 26 |
 | runtime | 23 |
 | codegen | 22 |
-| effect | 13 |
+| effect | 14 |
 | other | 4 |
 | resolver | 4 |
 | autopar | 4 |
@@ -103,7 +103,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-31-40 | 2026-10-31 | mir-llvm | medium | Kata 10's regex DP runs 1.37x legacy's instructions and 1.50x its cycles on the MIR backend: the seq lane went from 1.11x to 1.60x rustc -O | — |
 | B-2026-10-31-41 | 2026-10-31 | mir | medium | karac still compiles a kata 1.54x slower than rustc -O at twice its peak memory on the M5 (median over 24 katas: 165 ms vs 103 ms, 59.8 MiB vs 28.3 MiB), after B-2026-10-28-37's library-prune fix | — |
 | B-2026-11-01-17 | 2026-11-01 | runtime | medium | Kata 71's auto-par binary runs 1.6-2.6x SLOWER with exactly two workers than with one (KARAC_THREADS=2: 0.24-0.39 s against 0.15 s) on the M5, on 5x the cycles for 7% more instructions; three or more workers run 0.04-0.06 s | — |
-| B-2026-11-01-18 | 2026-11-01 | mir-llvm | medium | Kata 87's scramble-string DP runs 1.67x legacy's instructions on the MIR backend (1.13x its cycles): the seq lane went from 0.95x to 1.09x rustc -O and the par lane from 1.03x to 1.39x rayon | — |
+| B-2026-11-01-18 | 2026-11-01 | mir-llvm | medium | Kata 87's scramble-string DP runs 1.67x legacy's instructions on the M5 (arm64) MIR backend (1.13x its cycles): the seq lane went from 0.95x to 1.09x rustc -O and the par lane from 1.03x to 1.39x rayon; on x86 it measures 1.125x at the same sha and 1.054x at head, so the gap is arm64-only and needs an arm64 measurement | — |
 | B-2026-11-01-22 | 2026-11-01 | mir-llvm | low | Kata 116's populate-next-right-pointers loop runs legacy's instruction count on the MIR backend but 1.23x its cycles: the seq lane went from 0.90x to 1.10x rustc -O | — |
 | B-2026-11-01-42 | 2026-11-01 | mir-llvm | medium | Kata 147's insertion-sort-list runs legacy's instruction count on the MIR backend but 1.36x its cycles: the seq lane went from 0.72x to 0.99x rustc -O and from 0.82x to 1.31x C | — |
 | B-2026-11-01-43 | 2026-11-01 | mir-llvm | low | Kata 164's maximum-gap runs 1.30x legacy's instructions on the M5 (arm64) MIR backend (1.19x its cycles); on x86 it measures 1.06x, so the gap is arm64-only and needs an arm64 measurement | — |
@@ -115,6 +115,10 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-02-27 | 2026-11-02 | typecheck+mir-llvm | high | `tx.send(s)` on a `Sender[ref String]` with a plain `String` local passes check, though §5.7 forbids a view in a channel; at run the receiver reads garbage: `panic: out of memory` on run and llvm, ASan global-buffer-overflow, interp leak | — |
 | B-2026-11-02-28 | 2026-11-02 | typecheck | medium | A method with a `self` receiver that returns a reference may return a borrowed ARGUMENT (`fn pick(self, k: ref String) -> ref String { k }`): §5.4's receiver rule says the result borrows `self` only and the body is checked against it, but check accepts, so a caller can keep the result past the argument | — |
 | B-2026-11-02-29 | 2026-11-02 | typecheck | medium | Returning `m.get(k) ?? ""` from a function is refused (E0516 'cannot drop the temporary value'), and so is `let o = m.get(k); o ?? ""` ('returned borrow does not originate from a ref parameter'), though §5.3 names `m.get(k) ?? ""` as a static fallback that may be kept and returned | — |
+| B-2026-11-02-30 | 2026-11-02 | typecheck | medium | Two `TaskGroup` tasks that write DISJOINT fields of one local (`p.x` and `p.y`) are refused: 'a task of `g` captures `p` by `mut ref`, which no other task of the group may capture'; §9.1 captures places, and the same pair is accepted in `par {}` and as two plain closures | — |
+| B-2026-11-02-31 | 2026-11-02 | typecheck | low | A non-escaping `Fn` parameter may be captured by a closure the callee returns (`fn wrap(f: Fn() -> i64) -> Fn() -> i64 { || f() + 1 }`); §9.3 lets the callee only call it or pass it to another non-escaping parameter | — |
+| B-2026-11-02-32 | 2026-11-02 | ownership+mir | high | A closure stored in a field of a LOCAL struct or tuple (`Hm { f: || { n = n + 1; n } }`, `(1, || ..)`) captures a `Copy` place by copy instead of by `mut ref`, so its writes are lost and `n` reads 0 after two calls (expected 2); every lane agrees | — |
+| B-2026-11-02-33 | 2026-11-02 | effect | low | Coercing a struct whose trait method uses a provider-rooted resource into `dyn At` reports E_NO_PROVIDER ('no provider for Clk ... main takes no hidden provider parameter') instead of E_DYN_PROVIDER naming the resource and suggesting a generic parameter | — |
 
 ### Relocated
 
