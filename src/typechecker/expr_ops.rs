@@ -1957,6 +1957,17 @@ impl<'a> super::TypeChecker<'a> {
     /// associated-call dispatch). The shape `Vec[i64].new()` carries
     /// `generic_args: Some(...)` so it routes through the UFCS path,
     /// not this one; same for longer paths (`module.Sub.fn()`).
+    /// Whether `name` is a type parameter the body being checked can
+    /// name: its function's or an enclosing item's, or `Self`.
+    pub(super) fn type_param_in_scope(&self, name: &str) -> bool {
+        name == "Self"
+            || self.enclosing_bounds.contains_key(name)
+            || self
+                .node_generic_frames
+                .get(self.current_generic_frame as usize)
+                .is_some_and(|f| f.iter().any(|p| p == name))
+    }
+
     pub(super) fn path_first_segment_is_value_binding(&self, name: &str) -> bool {
         // A type parameter in scope names the type, as `V.default()` does,
         // even where the program has a value (a bare variant `V`) by that name.
@@ -5653,6 +5664,30 @@ impl<'a> super::TypeChecker<'a> {
                 // Cross-error type: require `impl From[InnerErr] for RetErr`.
                 let target_name = match ret_err {
                     Type::Named { name, .. } => name.clone(),
+                    // `Ok(1)?`: nothing fixes the operand's error type, so
+                    // it is an unsolved parameter, not a conversion to
+                    // refuse (design.md § Type inference, B-2026-11-03-7).
+                    _ if matches!(inner_err, Type::TypeParam(p)
+                        if !self.type_param_in_scope(p)) =>
+                    {
+                        let shown = type_display(&inner_ty);
+                        self.type_error(
+                            format!(
+                                "cannot infer type parameter '{}' of `{shown}`, this `?` \
+                                 operand's type: nothing in the body fixes it (design.md \
+                                 § Type inference); annotate the operand \
+                                 (`let r: {} = ..; r?`)",
+                                type_display(inner_err),
+                                type_display(&Type::Named {
+                                    name: "Result".to_string(),
+                                    args: vec![inner_args[0].clone(), ret_err.clone()],
+                                }),
+                            ),
+                            *span,
+                            TypeErrorKind::CannotInferTypeParam,
+                        );
+                        return Type::Error;
+                    }
                     _ => {
                         self.type_error(
                             format!(

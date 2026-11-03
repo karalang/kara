@@ -81,3 +81,30 @@ fn a_question_whose_operand_type_is_fixed_still_runs() {
     let (_, out) = karac("controls", "__mir-run", &src);
     assert_eq!(out, "true\ntrue\ntrue\n");
 }
+
+/// `Ok(1)?`: the operand's error type is what nothing fixes. Check said
+/// "'?' cannot propagate error 'E' as 'i64': target is not a named type",
+/// a conversion refusal for what is an unsolved parameter.
+#[test]
+fn an_ok_literal_question_names_its_unsolved_error_type() {
+    for (tag, body) in [
+        ("stmt", "fn f() -> Result[i64, i64] { Ok(1)?; Ok(0) }\n"),
+        (
+            "let",
+            "fn f() -> Result[i64, i64] { let v = Ok(1)?; Ok(v) }\n",
+        ),
+    ] {
+        let src = format!("{body}fn main() {{ println(f().is_err()); }}\n");
+        let (ok, out) = karac(tag, "check", &src);
+        assert!(!ok, "{tag}: check accepted it:\n{src}");
+        assert!(
+            out.contains(
+                "cannot infer type parameter 'E' of `Result[i64, E]`, this `?` operand's type"
+            ) && out.contains("`let r: Result[i64, i64] = ..; r?`")
+                && !out.contains("not a named type")
+                && !out.contains("not lowered"),
+            "{tag}:\n{out}"
+        );
+        assert_eq!(out.matches("error[").count(), 1, "{tag}:\n{out}");
+    }
+}
