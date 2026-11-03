@@ -1,0 +1,331 @@
+// LeetCode #1041: Robot Bounded In Circle -- differential
+//
+// The five arms, copied here under their own names, against the robot
+// walked step by step for many passes and four properties of the answer.
+
+// ---- one pass of the instructions (robot_bounded.kara)
+
+fn pass_arm(instructions: ref String) -> bool {
+    let mut x = 0;
+    let mut y = 0;
+    // north, east, south, west
+    let mut facing = 0;
+    for c in instructions.chars() {
+        if c == 'G' {
+            if facing == 0 {
+                y += 1;
+            } else if facing == 1 {
+                x += 1;
+            } else if facing == 2 {
+                y -= 1;
+            } else {
+                x -= 1;
+            }
+        } else if c == 'L' {
+            facing = (facing + 3) % 4;
+        } else {
+            facing = (facing + 1) % 4;
+        }
+    }
+    (x == 0 and y == 0) or facing != 0
+}
+
+// ---- four passes (robot_bounded_four.kara)
+
+fn four_arm(instructions: ref String) -> bool {
+    // north, east, south, west
+    let steps: Array[(i64, i64), 4] = [(0, 1), (1, 0), (0, -1), (-1, 0)];
+    let mut x = 0;
+    let mut y = 0;
+    let mut facing = 0;
+    for _ in 0..4 {
+        for c in instructions.chars() {
+            match c {
+                'G' => {
+                    let (dx, dy) = steps[facing];
+                    x += dx;
+                    y += dy;
+                }
+                'L' => facing = (facing + 3) % 4,
+                _ => facing = (facing + 1) % 4,
+            }
+        }
+    }
+    x == 0 and y == 0
+}
+
+// ---- the heading as a vector (robot_bounded_rotate.kara)
+
+fn rotate_arm(instructions: ref String) -> bool {
+    let mut (x, y) = (0, 0);
+    let mut (dx, dy) = (0, 1);
+    for c in instructions.chars() {
+        match c {
+            'G' => {
+                x += dx;
+                y += dy;
+            }
+            'L' => { dx, dy = -dy, dx; }
+            _ => { dx, dy = dy, -dx; }
+        }
+    }
+    (x == 0 and y == 0) or (dx, dy) != (0, 1)
+}
+
+// ---- the heading as an enum (robot_bounded_enum.kara)
+
+enum Heading {
+    North,
+    East,
+    South,
+    West,
+}
+
+impl Heading {
+    fn left(self) -> Heading {
+        match self {
+            Heading.North => Heading.West,
+            Heading.West => Heading.South,
+            Heading.South => Heading.East,
+            Heading.East => Heading.North,
+        }
+    }
+
+    fn right(self) -> Heading {
+        match self {
+            Heading.North => Heading.East,
+            Heading.East => Heading.South,
+            Heading.South => Heading.West,
+            Heading.West => Heading.North,
+        }
+    }
+
+    fn step(self) -> (i64, i64) {
+        match self {
+            Heading.North => (0, 1),
+            Heading.East => (1, 0),
+            Heading.South => (0, -1),
+            Heading.West => (-1, 0),
+        }
+    }
+}
+
+struct Robot {
+    x: i64,
+    y: i64,
+    heading: Heading,
+}
+
+impl Robot {
+    fn obey(mut ref self, c: char) {
+        match c {
+            'G' => {
+                let (dx, dy) = self.heading.step();
+                self.x += dx;
+                self.y += dy;
+            }
+            'L' => self.heading = self.heading.left(),
+            _ => self.heading = self.heading.right(),
+        }
+    }
+}
+
+fn enum_arm(instructions: ref String) -> bool {
+    let mut robot = Robot { x: 0, y: 0, heading: Heading.North };
+    for c in instructions.chars() {
+        robot.obey(c);
+    }
+    let home = robot.x == 0 and robot.y == 0;
+    let north = match robot.heading {
+        Heading.North => true,
+        _ => false,
+    };
+    home or not north
+}
+
+// ---- one fold over the instructions (robot_bounded_fold.kara)
+
+fn fold_arm(instructions: ref String) -> bool {
+    let (x, y, facing) = instructions.chars().fold((0, 0, 0), |state, c| {
+        let (x, y, facing) = state;
+        if c == 'L' {
+            (x, y, (facing + 3) % 4)
+        } else if c == 'R' {
+            (x, y, (facing + 1) % 4)
+        } else if facing % 2 == 0 {
+            (x, y + 1 - facing, facing)
+        } else {
+            (x + 2 - facing, y, facing)
+        }
+    });
+    (x == 0 and y == 0) or facing != 0
+}
+
+// ---- the robot walked step by step
+
+// Walks `passes` passes of the instructions and says whether every point
+// the robot reaches is within `reach` of the origin in both coordinates.
+fn stays_within(instructions: ref String, passes: i64, reach: i64) -> bool {
+    let mut x = 0;
+    let mut y = 0;
+    // north, east, south, west
+    let mut facing = 0;
+    for _ in 0..passes {
+        for c in instructions.chars() {
+            if c == 'G' {
+                if facing == 0 {
+                    y += 1;
+                } else if facing == 1 {
+                    x += 1;
+                } else if facing == 2 {
+                    y -= 1;
+                } else {
+                    x -= 1;
+                }
+                if x.abs() > reach or y.abs() > reach {
+                    return false;
+                }
+            } else if c == 'L' {
+                facing = (facing + 3) % 4;
+            } else {
+                facing = (facing + 1) % 4;
+            }
+        }
+    }
+    true
+}
+
+// The statement read literally, for n instructions: the robot stays
+// inside a circle exactly when it stays within 4n of the origin over
+// 4(4n + 1) passes. A bounded robot repeats its path every four passes,
+// none of which takes it more than 4n steps out; an unbounded one is
+// moved by the same nonzero whole offset every four passes, so after
+// 4(4n + 1) passes it is at least 4n + 1 out in one coordinate.
+fn walked(instructions: ref String) -> bool {
+    let n = instructions.len();
+    stays_within(instructions, 4 * (4 * n + 1), 4 * n)
+}
+
+// ---- the checks
+
+fn arm(k: i64, instructions: ref String) -> bool {
+    match k {
+        0 => pass_arm(instructions),
+        1 => four_arm(instructions),
+        2 => rotate_arm(instructions),
+        3 => enum_arm(instructions),
+        _ => fold_arm(instructions),
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_instructions(seed: mut ref i64, n: i64) -> String {
+    let mut out = String.new();
+    for _ in 0..n {
+        out.push("GLR".char_at(next_random(mut seed) % 3).unwrap());
+    }
+    out
+}
+
+struct Tally {
+    cases: i64,
+    walked: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    // failures by property, P1 to P6 at 1 to 6
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+// Every check on one string of instructions; `walk` says whether to walk
+// it step by step too.
+fn check_case(t: mut ref Tally, instructions: ref String, walk: bool, seed: mut ref i64) {
+    let n = instructions.len();
+    let answers: Vec[bool] = (0..5).map(|k| arm(k, instructions)).collect();
+    let want = if walk { Some(walked(instructions)) } else { None };
+    // the same loop started at another instruction
+    let r = next_random(mut seed) % n;
+    let turned = f"{instructions.substring(r, n)}{instructions.substring(0, r)}";
+    // left and right swapped: the mirror image of the path
+    let mut mirrored = String.new();
+    for c in instructions.chars() {
+        mirrored.push(if c == 'L' { 'R' } else if c == 'R' { 'L' } else { c });
+    }
+    // two to four passes taken as one
+    let times = next_random(mut seed) % 3 + 2;
+    let repeated = instructions.repeat(times);
+    // a turn that undoes itself, put in anywhere
+    let at = next_random(mut seed) % (n + 1);
+    let undo = vec!["LR", "RL", "LLLL", "RRRR"][next_random(mut seed) % 4].clone();
+    let padded = f"{instructions.substring(0, at)}{undo}{instructions.substring(at, n)}";
+    for k in 0..5 {
+        let answer = answers[k];
+        if let Some(w) = want {
+            expect(mut t, 1, answer == w, f"P1 arm {k} {instructions}: {answer} vs walked {w}");
+        }
+        expect(mut t, 2, arm(k, turned) == answer, f"P2 arm {k} {instructions} started at {r}");
+        expect(mut t, 3, arm(k, mirrored) == answer, f"P3 arm {k} {instructions} mirrored");
+        expect(mut t, 4, arm(k, repeated) == answer, f"P4 arm {k} {instructions} {times} times");
+        expect(mut t, 5, arm(k, padded) == answer, f"P5 arm {k} {instructions} with {undo} at {at}");
+        let mut agree = 0;
+        for o in 0..5 {
+            if o != k and answers[o] == answer {
+                agree += 1;
+            }
+        }
+        expect(mut t, 6, agree >= 2, f"P6 arm {k} {instructions}: agrees with {agree}");
+    }
+    if walk {
+        t.walked += 1;
+    }
+    t.cases += 1;
+    t.check = (t.check * 131 + if answers[0] { 2 } else { 1 }) % 1000000007;
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, walked: 0, checks: 0, failures: 0, check: 0, by: Vec.filled(7, 0) };
+    let mut seed = 10411;
+    // every string of 1 to 7 instructions, walked
+    for n in 1..8 {
+        let mut count = 1;
+        for _ in 0..n {
+            count *= 3;
+        }
+        for code in 0..count {
+            let mut instructions = String.new();
+            let mut c = code;
+            for _ in 0..n {
+                instructions.push("GLR".char_at(c % 3).unwrap());
+                c /= 3;
+            }
+            check_case(mut t, instructions, true, mut seed);
+        }
+    }
+    // 400 random strings of 8 to 20 instructions, walked, and 200 of 21
+    // to 100, too long to walk
+    for k in 0..600 {
+        let n = if k < 400 { next_random(mut seed) % 13 + 8 } else { next_random(mut seed) % 80 + 21 };
+        let instructions = random_instructions(mut seed, n);
+        check_case(mut t, instructions, k < 400, mut seed);
+    }
+    println(f"{t.cases} strings ({t.walked} walked): checksum {t.check}, {t.checks} checks over 5 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

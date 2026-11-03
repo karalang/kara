@@ -1,0 +1,21 @@
+GGLLGG -> true
+GG -> false
+GL -> true
+L -> true
+R -> true
+G -> false
+GRGRGRG -> true
+GRGRGRGR -> true
+GLGLGGLGL -> false
+LLGRR -> false
+all 3 of length 1: 2 bounded, checksum 17425
+all 9 of length 2: 8 bounded, checksum 675154746
+all 27 of length 3: 20 bounded, checksum 376624500
+all 81 of length 4: 68 bounded, checksum 422247758
+all 243 of length 5: 182 bounded, checksum 917228265
+all 729 of length 6: 590 bounded, checksum 568949335
+all 2187 of length 7: 1640 bounded, checksum 300199994
+all 6561 of length 8: 5196 bounded, checksum 64405325
+500 random strings: 370 bounded, checksum 801525805
+G x 100: false
+GL x 50: true

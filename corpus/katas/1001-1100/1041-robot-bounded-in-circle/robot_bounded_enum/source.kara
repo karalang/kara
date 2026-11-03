@@ -1,0 +1,152 @@
+// LeetCode #1041: Robot Bounded In Circle -- the heading as an enum.
+//
+// A Heading enum knows its turns and its step, and a Robot struct holds
+// the position and the heading and obeys one instruction at a time. One
+// pass decides it, as in the ★ arm: bounded unless the robot has moved
+// and faces north again. O(n).
+
+enum Heading {
+    North,
+    East,
+    South,
+    West,
+}
+
+impl Heading {
+    fn left(self) -> Heading {
+        match self {
+            Heading.North => Heading.West,
+            Heading.West => Heading.South,
+            Heading.South => Heading.East,
+            Heading.East => Heading.North,
+        }
+    }
+
+    fn right(self) -> Heading {
+        match self {
+            Heading.North => Heading.East,
+            Heading.East => Heading.South,
+            Heading.South => Heading.West,
+            Heading.West => Heading.North,
+        }
+    }
+
+    fn step(self) -> (i64, i64) {
+        match self {
+            Heading.North => (0, 1),
+            Heading.East => (1, 0),
+            Heading.South => (0, -1),
+            Heading.West => (-1, 0),
+        }
+    }
+}
+
+struct Robot {
+    x: i64,
+    y: i64,
+    heading: Heading,
+}
+
+impl Robot {
+    fn obey(mut ref self, c: char) {
+        match c {
+            'G' => {
+                let (dx, dy) = self.heading.step();
+                self.x += dx;
+                self.y += dy;
+            }
+            'L' => self.heading = self.heading.left(),
+            _ => self.heading = self.heading.right(),
+        }
+    }
+}
+
+fn is_robot_bounded(instructions: ref String) -> bool {
+    let mut robot = Robot { x: 0, y: 0, heading: Heading.North };
+    for c in instructions.chars() {
+        robot.obey(c);
+    }
+    let home = robot.x == 0 and robot.y == 0;
+    let north = match robot.heading {
+        Heading.North => true,
+        _ => false,
+    };
+    home or not north
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The instructions numbered `code` among those of length `n`, in base 3.
+fn instructions_of(code: i64, n: i64) -> String {
+    let letters = "GLR";
+    let mut out = String.new();
+    let mut c = code;
+    for _ in 0..n {
+        out.push(letters.char_at(c % 3).unwrap());
+        c /= 3;
+    }
+    out
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let examples: Vec[String] = vec![
+        "GGLLGG".to_string(),
+        "GG".to_string(),
+        "GL".to_string(),
+        "L".to_string(),
+        "R".to_string(),
+        "G".to_string(),
+        "GRGRGRG".to_string(),
+        "GRGRGRGR".to_string(),
+        "GLGLGGLGL".to_string(),
+        "LLGRR".to_string(),
+    ];
+    for instructions in examples.iter() {
+        println(f"{instructions} -> {is_robot_bounded(instructions)}");
+    }
+    // every string of 1 to 8 instructions
+    for n in 1..9 {
+        let mut count = 1;
+        for _ in 0..n {
+            count *= 3;
+        }
+        let mut bounded = 0;
+        let mut check = 0;
+        for code in 0..count {
+            let answer = is_robot_bounded(instructions_of(code, n));
+            if answer {
+                bounded += 1;
+            }
+            check = (check * 131 + if answer { 2 } else { 1 }) % 1000000007;
+        }
+        println(f"all {count} of length {n}: {bounded} bounded, checksum {check}");
+    }
+    // 500 random strings of 1 to 100 instructions, half of them mostly G
+    let mut seed = 1041;
+    let mut bounded = 0;
+    let mut check = 0;
+    for k in 0..500 {
+        let n = next_random(mut seed) % 100 + 1;
+        let mut instructions = String.new();
+        for _ in 0..n {
+            let r = next_random(mut seed) % 10;
+            let c = if k % 2 == 0 { "GLR".char_at(r % 3).unwrap() } else if r < 8 { 'G' } else if r == 8 { 'L' } else { 'R' };
+            instructions.push(c);
+        }
+        let answer = is_robot_bounded(instructions);
+        if answer {
+            bounded += 1;
+        }
+        check = (check * 131 + if answer { 2 } else { 1 }) % 1000000007;
+    }
+    println(f"500 random strings: {bounded} bounded, checksum {check}");
+    // the longest: 100 G, and GL 50 times
+    println(f"G x 100: {is_robot_bounded("G".repeat(100))}");
+    println(f"GL x 50: {is_robot_bounded("GL".repeat(50))}");
+}

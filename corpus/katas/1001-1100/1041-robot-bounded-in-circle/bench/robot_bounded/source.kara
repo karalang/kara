@@ -1,0 +1,67 @@
+// Benchmark lane for LeetCode 1041 -- Robot Bounded In Circle.
+//
+// BUILD ONCE + PUNCH: 2000 strings of 100 instructions (the problem's
+// most) are built once, half drawn evenly from G, L and R and half mostly
+// G. Then every string is solved 500 times with the ★ arm, one pass over
+// its characters, and each answer is counted and folded into a checksum.
+//
+// Mirrors: robot_bounded.c / .rs / .py / go-seq/main.go -- same algorithm.
+
+fn is_robot_bounded(instructions: ref String) -> bool {
+    let mut x = 0;
+    let mut y = 0;
+    // north, east, south, west
+    let mut facing = 0;
+    for c in instructions.chars() {
+        if c == 'G' {
+            if facing == 0 {
+                y += 1;
+            } else if facing == 1 {
+                x += 1;
+            } else if facing == 2 {
+                y -= 1;
+            } else {
+                x -= 1;
+            }
+        } else if c == 'L' {
+            facing = (facing + 3) % 4;
+        } else {
+            facing = (facing + 1) % 4;
+        }
+    }
+    (x == 0 and y == 0) or facing != 0
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let count = 2000;
+    let size = 100;
+    let rounds = 500;
+    let mut seed = 1041;
+    let mut strings: Vec[String] = Vec.new();
+    for k in 0..count {
+        let mut instructions = String.new();
+        for _ in 0..size {
+            let r = next_random(mut seed) % 10;
+            let c = if k % 2 == 0 { "GLR".char_at(r % 3).unwrap() } else if r < 8 { 'G' } else if r == 8 { 'L' } else { 'R' };
+            instructions.push(c);
+        }
+        strings.push(instructions);
+    }
+    let mut bounded = 0;
+    let mut check = 0;
+    for _ in 0..rounds {
+        for instructions in strings.iter() {
+            let answer = is_robot_bounded(instructions);
+            if answer {
+                bounded += 1;
+            }
+            check = (check * 131 + if answer { 2 } else { 1 }) % 1000000007;
+        }
+    }
+    println(f"{count} strings of {size} instructions, {rounds} rounds: {bounded} bounded, checksum {check}");
+}
