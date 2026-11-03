@@ -4410,28 +4410,38 @@ impl<'a> super::TypeChecker<'a> {
                     span,
                 ) {
                 } else if !self.type_supports_partial_eq(cmp_left) {
-                    self.type_error(
-                        // B-2026-08-25-30 — name the PARTIAL trait: the
-                        // desugaring runs through `PartialEq` (the guard
-                        // right above is `type_supports_partial_eq`), and
-                        // `#[derive(PartialEq)]` ALONE compiles. Prescribing
-                        // `Eq` was not merely imprecise — for a type with an
-                        // `f32`/`f64` field it named a derive the language
-                        // deliberately does not offer on floats (`NaN != NaN`
-                        // breaks reflexivity), sending that reader to a dead
-                        // end. design.md: the `Eq` marker "is never named by
-                        // the desugaring".
-                        self.comparison_impl_written_but_undispatched(cmp_left, true)
-                            .unwrap_or_else(|| {
-                                format!(
-                                    "type '{}' does not implement PartialEq; add \
+                    // B-2026-08-25-30 — name the PARTIAL trait: the
+                    // desugaring runs through `PartialEq` (the guard
+                    // right above is `type_supports_partial_eq`), and
+                    // `#[derive(PartialEq)]` ALONE compiles. Prescribing
+                    // `Eq` was not merely imprecise — for a type with an
+                    // `f32`/`f64` field it named a derive the language
+                    // deliberately does not offer on floats (`NaN != NaN`
+                    // breaks reflexivity), sending that reader to a dead
+                    // end. design.md: the `Eq` marker "is never named by
+                    // the desugaring".
+                    match self.comparison_impl_written_but_undispatched(cmp_left, true) {
+                        Some(msg) => self.type_error(msg, *span, TypeErrorKind::InvalidBinaryOp),
+                        None => {
+                            let msg = format!(
+                                "type '{}' does not implement PartialEq; add \
                                  #[derive(PartialEq)] to use == or !=",
-                                    type_display(cmp_left)
-                                )
-                            }),
-                        *span,
-                        TypeErrorKind::InvalidBinaryOp,
-                    );
+                                type_display(cmp_left)
+                            );
+                            // The derive the message names, as an edit `karac
+                            // fix` applies, where it compiles as written
+                            // (B-2026-11-03-10).
+                            match self.partial_eq_derive_fix(cmp_left) {
+                                Some(fix) => self.type_error_with_fix_it(
+                                    msg,
+                                    *span,
+                                    TypeErrorKind::InvalidBinaryOp,
+                                    fix,
+                                ),
+                                None => self.type_error(msg, *span, TypeErrorKind::InvalidBinaryOp),
+                            }
+                        }
+                    }
                 }
                 Type::Bool
             }

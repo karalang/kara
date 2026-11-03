@@ -8193,6 +8193,10 @@ impl<'a> super::TypeChecker<'a> {
                 | ExprKind::MethodCall { .. }
                 | ExprKind::Call { .. }
                 | ExprKind::Index { .. }
+                | ExprKind::Unary {
+                    op: UnaryOp::Deref,
+                    ..
+                }
         ) && end > start)
             .then(|| FixIt {
                 span: Span {

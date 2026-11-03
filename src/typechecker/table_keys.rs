@@ -378,7 +378,52 @@ impl<'a> super::TypeChecker<'a> {
     /// `#[derive(…)]` for a non-generic struct or enum of the program whose
     /// fields all have what the derive needs.
     fn table_key_derive_fix(&self, key: &Type, hash: bool, eq: bool) -> Option<FixIt> {
-        let name = match key {
+        let (name, span, fields, derived) = self.derivable_decl(key)?;
+        if self.env.has_user_impl_hash(name) || self.env.has_impl("PartialEq", name, &[]) {
+            return None;
+        }
+        if !fields
+            .iter()
+            .all(|f| self.type_supports_hash(f) && self.type_supports_eq(f))
+        {
+            return None;
+        }
+        let mut wanted: Vec<&str> = Vec::new();
+        if !hash {
+            wanted.push("Hash");
+        }
+        if !eq {
+            for t in ["PartialEq", "Eq"] {
+                if !derived.contains(t) {
+                    wanted.push(t);
+                }
+            }
+        }
+        Some(derive_line(span, &wanted))
+    }
+
+    /// `#[derive(PartialEq)]` for `==` / `!=` on a non-generic struct or enum
+    /// of the program that neither derives nor implements it, when every
+    /// field compares, so the derive compiles as it is written.
+    pub(super) fn partial_eq_derive_fix(&self, ty: &Type) -> Option<FixIt> {
+        let (name, span, fields, derived) = self.derivable_decl(ty)?;
+        if derived.contains("PartialEq") || self.env.has_impl("PartialEq", name, &[]) {
+            return None;
+        }
+        if !fields.iter().all(|f| self.type_supports_partial_eq(f)) {
+            return None;
+        }
+        Some(derive_line(span, &["PartialEq"]))
+    }
+
+    /// The declaration of the non-generic struct or enum `ty` names, in the
+    /// program's own source: its span, its field (or payload) types and
+    /// the traits it derives.
+    fn derivable_decl<'t>(
+        &self,
+        ty: &'t Type,
+    ) -> Option<(&'t str, Span, Vec<Type>, std::collections::HashSet<String>)> {
+        let name = match ty {
             Type::Named { name, args } if args.is_empty() => name,
             Type::Shared(name) => name,
             _ => return None,
@@ -411,35 +456,21 @@ impl<'a> super::TypeChecker<'a> {
         if span.length == 0 || span.column == 0 || span.offset >= library {
             return None;
         }
-        if self.env.has_user_impl_hash(name) || self.env.has_impl("PartialEq", name, &[]) {
-            return None;
-        }
-        if !fields
-            .iter()
-            .all(|f| self.type_supports_hash(f) && self.type_supports_eq(f))
-        {
-            return None;
-        }
-        let mut wanted: Vec<&str> = Vec::new();
-        if !hash {
-            wanted.push("Hash");
-        }
-        if !eq {
-            for t in ["PartialEq", "Eq"] {
-                if !derived.contains(t) {
-                    wanted.push(t);
-                }
-            }
-        }
-        let indent = " ".repeat(span.column - 1);
-        Some(FixIt {
-            span: Span {
-                offset: span.offset - (span.column - 1),
-                length: 0,
-                line: span.line,
-                column: 1,
-            },
-            replacement: format!("{indent}#[derive({})]\n", wanted.join(", ")),
-        })
+        Some((name.as_str(), span, fields, derived))
+    }
+}
+
+/// A `#[derive(…)]` line inserted above the declaration at `span`, at its
+/// indent.
+fn derive_line(span: Span, traits: &[&str]) -> FixIt {
+    let indent = " ".repeat(span.column - 1);
+    FixIt {
+        span: Span {
+            offset: span.offset - (span.column - 1),
+            length: 0,
+            line: span.line,
+            column: 1,
+        },
+        replacement: format!("{indent}#[derive({})]\n", traits.join(", ")),
     }
 }
