@@ -88,7 +88,7 @@ pub(super) fn read_only_index_lets(body: &Block, c: &Classification, out: &mut H
         // An element of a temporary (`vec!["LR", "RL"][k]`, `f()[i]`) is
         // not borrowed: the temporary drops at the end of the `let`, so
         // `ref` there is an E0516, and the `.clone()` fix stands
-        // (B-2026-11-03-21).
+        // (B-2026-11-03-23).
         let Some(root) = place_root(object) else {
             continue;
         };

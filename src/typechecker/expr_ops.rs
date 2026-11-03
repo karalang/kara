@@ -4663,7 +4663,7 @@ impl<'a> super::TypeChecker<'a> {
     /// The canonical assignment / argument mismatch, `String.push`'s
     /// argument and the if/else and match branch joins take the same hint:
     /// `s.push(t.char_at(i))` and `let c: char = t.char_at(i)` are the
-    /// same forgotten unwrap (B-2026-11-03-19).
+    /// same forgotten unwrap (B-2026-11-03-21).
     pub(super) fn wrapper_unwrap_hint(expected: &Type, found: &Type) -> String {
         let Type::Named { name, args } = found else {
             return String::new();

@@ -2797,7 +2797,7 @@ pub struct TypeChecker<'a> {
     /// braces (`'L' => (dx, dy) = (-dy, dx),`), while its block is checked.
     /// The parser wraps such a body in a block whose span is the
     /// assignment's own, so no brace marks it; a fix-it that rewrites the
-    /// assignment there must add the braces (B-2026-11-03-20).
+    /// assignment there must add the braces (B-2026-11-03-22).
     pub(super) braceless_arm_assign: Option<usize>,
     /// See [`TypeCheckResult::core_ref_copy_nodes`].
     pub(super) core_ref_copy_nodes: FxHashSet<crate::ids::NodeId>,

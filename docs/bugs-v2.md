@@ -58,8 +58,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
+| diagnostics | 98 |
 | false-positive | 97 |
-| diagnostics | 95 |
 | perf | 86 |
 | missing-feature | 64 |
 | soundness | 42 |
@@ -75,10 +75,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 164 |
+| typecheck | 165 |
 | mir | 103 |
 | mir-llvm | 100 |
-| cli | 49 |
+| cli | 51 |
 | ownership | 44 |
 | parser | 30 |
 | interp | 27 |
@@ -110,6 +110,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-03-16 | 2026-11-03 | mir+mir-llvm | low | `substring` with a negative start gives "" instead of clamping the start to 0 as strings.md says ("Out-of-range, negative or inverted bounds saturate"): `"hello".substring(-5, 2)` is "" (want "he"), `"hello".substring(-1)` is "" (want "hello"), `"日本語".substring(-2, 3)` is "" (want "日"); several pins hold the "" and flip with the fix | — |
 | B-2026-11-03-17 | 2026-11-03 | typecheck | low | A binding destructured from a `Map` / `SortedMap` `iter_mut()` item is typed `V`, not `mut ref V`, when `V` is Copy: `for (k, v) in m.iter_mut() { *v = 9; }` (m: SortedMap[i64, i64]) is refused ("unary '*' requires 'ref T' ... found 'i64'; a 'i64' is copied, so drop the `*`"), though collections.md gives the item as `(ref K, mut ref V)` and design.md says assigning through a `mut ref` needs an explicit `*` | — |
 | B-2026-11-03-18 | 2026-11-03 | mir+mir-llvm | high | `Client.get` / `Client.post` under a `Network` fake crash on every lane: the interpreter stops with `in Fh.__get at bb13[term]: a String place holds no box`, the compiled build segfaults (`karac run` exit 139) or fails `memory allocation of 94402663242032 bytes`, and ASan reports a stack-buffer-overflow in `kara.Fh.__get`; `c.request(..).send()` under the same fake works | — |
+| B-2026-11-03-21 | 2026-11-03 | typecheck | low | A type mismatch whose found type is an `Option`/`Result` wrapping the expected one (`s.push(t.char_at(i))`, `let c: char = t.char_at(0)`, `take(t.char_at(1))`, an if/else or match with a `char` branch and an `Option[char]` one) gets no hint to unwrap; only the arithmetic mismatch carried it (B-2026-07-30-13) | — |
+| B-2026-11-03-22 | 2026-11-03 | cli | medium | `karac fix` on `'L' => (dx, dy) = (-dy, dx),` (a braceless match arm) writes `'L' => dx, dy = -dy, dx,`, which does not parse, so it refuses to write the file; a Mend-loop dead end | — |
+| B-2026-11-03-23 | 2026-11-03 | cli | medium | `let undo = vec!["LR", "RL"][k];` (an element of a TEMPORARY, binding only read) gets E_INDEX_MOVE_NON_COPY's borrow fix `ref vec![..][k]`, and `karac fix` then leaves an E0516 (the temporary drops while `undo` borrows it) with no fix | — |
 
 ### Relocated
 

@@ -10386,7 +10386,7 @@ impl<'a> super::TypeChecker<'a> {
     /// without braces: `'L' => dx, dy = -dy, dx,` reads its first `,` as the
     /// end of the arm. So when the assignment is a braceless arm's body
     /// (`braceless`), the edit braces it, `{ dx, dy = -dy, dx; }`
-    /// (B-2026-11-03-20).
+    /// (B-2026-11-03-22).
     fn unparenthesized_multi_assign_fix(
         target: &Expr,
         places: &[Expr],

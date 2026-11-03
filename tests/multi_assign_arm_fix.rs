@@ -2,7 +2,7 @@
 //! its machine-applicable fix drops the parentheses: `a, b = c, d`. As the
 //! body of a braceless `match` arm that edit did not parse, since the arm
 //! ends at the first `,`, so `karac fix` refused to write the file
-//! (B-2026-11-03-20, kata 1041's `'L' => (dx, dy) = (-dy, dx),`). There
+//! (B-2026-11-03-22, kata 1041's `'L' => (dx, dy) = (-dy, dx),`). There
 //! the fix now braces the statement: `'L' => { dx, dy = -dy, dx; }`.
 
 use std::process::{Command, Output, Stdio};

@@ -1,6 +1,6 @@
 //! A mismatch whose found type is an `Option` or `Result` wrapping the
 //! expected one is a forgotten unwrap, and the diagnostic says so
-//! (B-2026-11-03-19). The arithmetic mismatch carried the hint since
+//! (B-2026-11-03-21). The arithmetic mismatch carried the hint since
 //! B-2026-07-30-13; a `let` annotation, a call argument, `String.push`
 //! and the if/else and match branch joins said only "expected 'char',
 //! found 'Option[char]'". Kata 1041 met it on `s.push(t.char_at(i))`.

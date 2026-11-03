@@ -3,7 +3,7 @@
 //! (B-2026-10-24-18). The borrow was offered for an element of a
 //! TEMPORARY too, `let undo = vec!["LR", "RL"][k];`, and the temporary
 //! drops at the end of the `let`, so `karac fix` wrote an E0516 it then
-//! had no fix for (B-2026-11-03-21, kata 1041's differential). An element
+//! had no fix for (B-2026-11-03-23, kata 1041's differential). An element
 //! of a temporary now keeps the `.clone()` fix.
 
 use std::process::{Command, Output, Stdio};
