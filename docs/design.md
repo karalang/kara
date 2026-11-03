@@ -5578,7 +5578,7 @@ The reverse is an error: a `Fn(T) -> U with writes(Log)` cannot fill a slot decl
 
 **How a call through a function value gets its effects** ([core-semantics.md §12](core-semantics.md#12-effects-soundness-defaults-c10)):
 - **A non-escaping parameter** (the default) has, at each call site, the effects of the argument passed there, charged to that caller. With no clause it accepts any function value. A clause, if written, is an upper bound the argument must fit.
-- **An escaping value** (an `escaping` parameter, a struct field, a collection element) has the effects its type declares. Storing a value whose effects exceed the clause is an error. With no clause, a call through it has every effect.
+- **An escaping value** (an `escaping` parameter, a struct field, a collection element) has the effects its type declares. Storing a value whose effects exceed the clause is an error. With no clause, a call through it has every effect. To declare one with no effects, write the empty clause `with ()`: `handlers: Vec[Fn(Event) with ()]` accepts only a value whose effects are default-permitted (`allocates(Heap)`, `panics`), and a call through it has none, so two `par` branches calling stored pure callbacks do not conflict. `with ()` is written only on a function type or a `dyn` type, never on a `fn` declaration, where a missing clause already means inferred or none (Gowtham, 2026-11-03).
 
 ```kara
 struct EventBus {
