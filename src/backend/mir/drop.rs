@@ -1254,8 +1254,8 @@ fn cells(o: own OnceLock[R], f: own Option[File], x: own Atomic[i64], q: own Vec
                 rt::karac_mir_map_at as *const () as usize,
             ),
             (
-                "karac_mir_map_walk_at",
-                rt::karac_mir_map_walk_at as *const () as usize,
+                "karac_mir_map_walk_entry",
+                rt::karac_mir_map_walk_entry as *const () as usize,
             ),
             (
                 "karac_mir_map_free",

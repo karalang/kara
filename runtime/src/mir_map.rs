@@ -18,7 +18,7 @@ pub type HashFn = unsafe extern "C" fn(*const u8) -> u64;
 pub type EqFn = unsafe extern "C" fn(*const u8, *const u8) -> bool;
 pub type CmpFn = unsafe extern "C" fn(*const u8, *const u8) -> i32;
 
-/// The first nine fields are read by compiled code, which probes a table
+/// The first ten fields are read by compiled code, which probes a table
 /// of scalar keys and counts and walks its entries in line
 /// (`src/backend/mir/table.rs`): each is a pointer-sized word, the `k`-th
 /// at `k` words, as the assertions after [`NO_PAIR`] check.
@@ -38,7 +38,7 @@ pub struct MirMap {
     /// compiled code (0 cells while it is empty).
     cells: *const u64,
     ncells: usize,
-    /// The walk order of a hashed table ([`karac_mir_map_walk_at`]): the
+    /// The walk order of a hashed table ([`karac_mir_map_walk_entry`]): the
     /// `i`th entry of a walk is the entry at index `(perm_a * i + perm_c)
     /// mod perm_len`, from `karac_hash::walk_perm(perm_len)`. Compiled
     /// code walks in line while `perm_len` is the table's length, and
@@ -47,6 +47,11 @@ pub struct MirMap {
     perm_len: std::sync::atomic::AtomicUsize,
     perm_a: std::sync::atomic::AtomicUsize,
     perm_c: std::sync::atomic::AtomicUsize,
+    /// `floor((2^64 - 1) / perm_len)`, so compiled code on a 64-bit target
+    /// (a 32-bit one divides) takes the walk's remainder by a multiply
+    /// rather than a division (B-2026-11-01-44): `karac_hash`'s
+    /// `walk_reciprocal`, whose test proves the one correction it needs.
+    perm_m: std::sync::atomic::AtomicUsize,
     cap: usize,
     /// Each slot's hash, for the hashed kinds.
     hashes: LeanVec<u64>,
@@ -106,6 +111,7 @@ const _: () = {
     assert!(std::mem::offset_of!(MirMap, perm_len) == 6 * w);
     assert!(std::mem::offset_of!(MirMap, perm_a) == 7 * w);
     assert!(std::mem::offset_of!(MirMap, perm_c) == 8 * w);
+    assert!(std::mem::offset_of!(MirMap, perm_m) == 9 * w);
     assert!(std::mem::size_of::<std::sync::atomic::AtomicUsize>() == w);
 };
 
@@ -231,6 +237,8 @@ impl MirMap {
             };
             self.perm_a.store(a as usize, Relaxed);
             self.perm_c.store(c as usize, Relaxed);
+            self.perm_m
+                .store(karac_hash::walk_reciprocal(n as u64) as usize, Relaxed);
             self.perm_len.store(n, Release);
         }
         (n, self.perm_a.load(Relaxed), self.perm_c.load(Relaxed))
@@ -619,6 +627,7 @@ fn empty(entry_size: usize) -> *mut MirMap {
             perm_len: std::sync::atomic::AtomicUsize::new(usize::MAX),
             perm_a: std::sync::atomic::AtomicUsize::new(1),
             perm_c: std::sync::atomic::AtomicUsize::new(0),
+            perm_m: std::sync::atomic::AtomicUsize::new(0),
             cap: 0,
             hashes: LeanVec::new(),
             index: LeanVec::new(),
@@ -751,12 +760,15 @@ pub unsafe extern "C" fn karac_mir_map_walk_perm(h: *const MirMap) {
 }
 
 /// The `i`th entry of a walk over the table at `h` (in bounds), in the
-/// order [`karac_mir_map_walk_perm`] describes.
+/// order [`karac_mir_map_walk_perm`] describes. Renamed from
+/// `karac_mir_map_walk_at` when compiled code began reading `perm_m`, so a
+/// program built against an archive older than that field fails to link
+/// rather than reading `cap` as the reciprocal.
 ///
 /// # Safety
 /// `h` is a live table with more than `i` entries.
 #[no_mangle]
-pub unsafe extern "C" fn karac_mir_map_walk_at(h: *const MirMap, i: i64) -> *mut u8 {
+pub unsafe extern "C" fn karac_mir_map_walk_entry(h: *const MirMap, i: i64) -> *mut u8 {
     // SAFETY: the caller's contract.
     let m = unsafe { &*h };
     let (n, a, c) = m.walk_perm();

@@ -535,6 +535,28 @@ pub fn walk_index(i: u64, n: u64, a: u64, c: u64) -> u64 {
     r
 }
 
+/// The reciprocal compiled code takes a walk's remainder by, for a table
+/// of `n < 2^32` entries: `floor((2^64 - 1) / n)` (B-2026-11-01-44). A
+/// division sits on every step of a walk, where a multiply is a few cycles.
+pub fn walk_reciprocal(n: u64) -> u64 {
+    u64::MAX.checked_div(n).unwrap_or(0)
+}
+
+/// [`walk_index`] as compiled code computes it, for `i, a, c < n < 2^32`
+/// and `m = `[`walk_reciprocal`]`(n)`: `x = a * i + c` is below `n^2`, the
+/// high word of `x * m` is `x / n` or one less, so one subtraction of `n`
+/// corrects the remainder. `walk_index_near_matches_walk_index` checks it.
+pub fn walk_index_near(i: u64, n: u64, a: u64, c: u64, m: u64) -> u64 {
+    let x = a * i + c;
+    let q = ((u128::from(x) * u128::from(m)) >> 64) as u64;
+    let r = x - q * n;
+    if r >= n {
+        r - n
+    } else {
+        r
+    }
+}
+
 /// The words [`walk_perm`] hashes for its multiplier and its offset.
 const WALK_A: u64 = 0x7761_6c6b_2d61; // "walk-a"
 const WALK_C: u64 = 0x7761_6c6b_2d63; // "walk-c"
@@ -556,6 +578,40 @@ mod tests {
 
     /// The word arithmetic agrees with the 128-bit product it replaced
     /// (B-2026-10-30-37), on both sides of the `2^32` fast path.
+    /// The reciprocal form compiled code walks by (B-2026-11-01-44) is
+    /// [`walk_index`], at the sizes where its one correction is tightest:
+    /// the largest `x = a * i + c` for sizes up to `2^32 - 1`.
+    #[test]
+    fn walk_index_near_matches_walk_index() {
+        let mut sizes: Vec<u64> = (1..2000).collect();
+        sizes.extend([65535, 65536, 65537, 1 << 31, (1 << 32) - 2, (1 << 32) - 1]);
+        let mut s = 0x9E37_79B9_7F4A_7C15u64;
+        for _ in 0..200 {
+            s = s
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            sizes.push((s >> 32).max(1));
+        }
+        for &n in &sizes {
+            let m = walk_reciprocal(n);
+            let top = n - 1;
+            let mut cases = vec![(top, top, top), (0, 0, 0), (top, 1, 0), (1, top, top)];
+            for k in 0..8u64 {
+                s = s
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                cases.push(((s >> 7) % n, (s >> 29) % n, (s ^ k) % n));
+            }
+            for (i, a, c) in cases {
+                assert_eq!(
+                    walk_index_near(i, n, a, c, m),
+                    walk_index(i, n, a, c),
+                    "n = {n}, i = {i}, a = {a}, c = {c}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn walk_index_matches_the_wide_product() {
         let wide = |i: u64, n: u64, a: u64, c: u64| {

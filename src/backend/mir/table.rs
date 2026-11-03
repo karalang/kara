@@ -449,8 +449,9 @@ impl<'ctx> Cx<'ctx, '_> {
     /// The `i`th entry of a walk over the table `h`, which has more than
     /// `i`: in key order for a sorted table, else in the seeded walk order
     /// the interpreter walks too (`karac_hash::walk_perm`, collections.md
-    /// § Map, B-2026-10-23-19). The entry at index `(a * i + c) mod n`
-    /// while the header's walk words are current for `n` entries (and the
+    /// § Map, B-2026-10-23-19). The entry at index `(a * i + c) mod n`,
+    /// by the header's reciprocal on a 64-bit target, while its walk words
+    /// are current for `n` entries (and the
     /// product fits a word), else the runtime brings them up to date.
     pub(super) fn walk_at(
         &self,
@@ -503,14 +504,50 @@ impl<'ctx> Cx<'ctx, '_> {
         // `a`, `c` and `i` are below `n` < 2^32, so `a * i + c` fits.
         let ai = self.builder.build_int_mul(a, i, "").map_err(e)?;
         let ai = self.builder.build_int_add(ai, c, "").map_err(e)?;
-        let j = self.builder.build_int_unsigned_rem(ai, n, "").map_err(e)?;
+        let j = if w == 8 {
+            // The remainder by the header's reciprocal, as
+            // `karac_hash::walk_index_near` takes it: a division on every
+            // step costs a walk more than the probes it feeds
+            // (B-2026-11-01-44).
+            let m = word(9, inkwell::AtomicOrdering::Monotonic)?;
+            let i128t = self.llcx.i128_type();
+            let wide = |v: IntValue<'ctx>| self.builder.build_int_z_extend(v, i128t, "").map_err(e);
+            let p = self
+                .builder
+                .build_int_mul(wide(ai)?, wide(m)?, "")
+                .map_err(e)?;
+            let hi = self
+                .builder
+                .build_right_shift(p, i128t.const_int(64, false), false, "")
+                .map_err(e)?;
+            let q = self
+                .builder
+                .build_int_truncate(hi, self.llcx.i64_type(), "")
+                .map_err(e)?;
+            let qn = self.builder.build_int_mul(q, n, "").map_err(e)?;
+            let r = self.builder.build_int_sub(ai, qn, "").map_err(e)?;
+            let over = self
+                .builder
+                .build_int_compare(IntPredicate::UGE, r, n, "")
+                .map_err(e)?;
+            let less = self.builder.build_int_sub(r, n, "").map_err(e)?;
+            self.builder
+                .build_select(over, less, r, "")
+                .map_err(e)?
+                .into_int_value()
+        } else {
+            self.builder.build_int_unsigned_rem(ai, n, "").map_err(e)?
+        };
         let near = self.entry_at(h, j)?;
         let near_bb = self.builder.get_insert_block().ok_or("no block")?;
         self.builder.build_unconditional_branch(done).map_err(e)?;
         self.builder.position_at_end(slow);
         let args: [BasicMetadataValueEnum<'ctx>; 2] = [h.into(), i.into()];
         let tys = self.arg_tys(&args);
-        let rf = self.extern_fn("karac_mir_map_walk_at", self.ptr_ty().fn_type(&tys, false));
+        let rf = self.extern_fn(
+            "karac_mir_map_walk_entry",
+            self.ptr_ty().fn_type(&tys, false),
+        );
         let far = self
             .builder
             .build_call(rf, &args, "")
