@@ -1,0 +1,10 @@
+// B-2026-11-03-17: `iter_mut()` lends a map's values, not its keys; writing
+// a key in place would break the map's hash.
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    m.insert("a".to_string(), 1);
+    for (k, v) in m.iter_mut() {
+        k.push_str("x");
+    }
+    println(m.len());
+}

@@ -217,6 +217,9 @@ enum Origin {
     Param,
     /// The item of a bare `for` over a collection (§4.6).
     ForElem,
+    /// The key of a `for (k, v) in m.iter_mut()` over a map: only the
+    /// value is lent mutably (collections.md; B-2026-11-03-17).
+    MapKey,
     /// A `ref name` pattern binding.
     RefPattern,
     /// A `mut ref name` pattern binding: writable, and the write through
@@ -1210,7 +1213,13 @@ impl Walk<'_, '_> {
                 }
                 self.scopes.push(Vec::new());
                 self.for_item_scopes.push(self.scopes.len() - 1);
-                self.bind(pattern, origin, fix);
+                match &pattern.kind {
+                    PatternKind::Tuple(kv) if kv.len() == 2 && self.map_iter_mut(iterable) => {
+                        self.bind(&kv[0], Origin::MapKey, None);
+                        self.bind(&kv[1], origin, fix);
+                    }
+                    _ => self.bind(pattern, origin, fix),
+                }
                 self.block(body);
                 self.for_item_scopes.pop();
                 self.scopes.pop();
@@ -1756,6 +1765,31 @@ impl Walk<'_, '_> {
         }
     }
 
+    /// `m.iter_mut()` over a `Map` or `SortedMap`, whose item is
+    /// `(ref K, mut ref V)` (collections.md; B-2026-11-03-17).
+    fn map_iter_mut(&self, iterable: &Expr) -> bool {
+        let ExprKind::MethodCall {
+            object,
+            method,
+            args,
+            ..
+        } = &iterable.kind
+        else {
+            return false;
+        };
+        if method != "iter_mut" || !args.is_empty() {
+            return false;
+        }
+        let Some((t, _)) = self.node_types.get(&object.id) else {
+            return false;
+        };
+        let mut t = t;
+        while let Type::Ref(inner) | Type::MutRef(inner) = t {
+            t = inner;
+        }
+        matches!(t, Type::Named { name, .. } if matches!(name.as_str(), "Map" | "SortedMap"))
+    }
+
     /// §4.6: a bare `for` over a standard collection, or over an iterator
     /// that yields shared references, binds its elements as `ref`.
     fn for_binds_read_only(&self, iterable: &Expr) -> bool {
@@ -2081,6 +2115,12 @@ impl Walk<'_, '_> {
                 "`{name}` is a `ref` to an element of the collection the `for` iterates \
                  (§4.6), so {action} cannot modify it (core-semantics.md §5.9). Iterate \
                  with `.iter_mut()`"
+            ),
+            Origin::MapKey => format!(
+                "`{name}` is a `ref` to a key of the map the `for` iterates: `iter_mut()` \
+                 lends only the values (collections.md), so {action} cannot modify it \
+                 (core-semantics.md §5.9). Changing a key in place would break the map; \
+                 `remove` the entry and `insert` it under the new key"
             ),
             Origin::RefPattern => format!(
                 "`{name}` is bound by `ref`, so {action} cannot modify it \

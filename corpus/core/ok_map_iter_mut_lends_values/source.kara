@@ -1,0 +1,23 @@
+// B-2026-11-03-17: a map's `iter_mut()` item is `(ref K, mut ref V)`
+// (docs/library/collections.md), a `Copy` V included, so `*v = ...` writes
+// the entry in place.
+fn main() {
+    let mut m: Map[i64, i64] = Map.new();
+    m.insert(1, 10);
+    m.insert(2, 20);
+    for (k, v) in m.iter_mut() {
+        *v = *v + k;
+    }
+    println(f"{m[1]} {m[2]}");
+    let mut s: SortedMap[String, f64] = SortedMap.new();
+    s.insert("a".to_string(), 1.5);
+    s.insert("b".to_string(), 2.5);
+    for (k, v) in s.iter_mut() {
+        *v = *v * 2.0 + k.len() as f64;
+    }
+    for (k, v) in s.iter() { println(f"{k} {v}"); }
+    let mut w: SortedMap[i64, String] = SortedMap.new();
+    w.insert(3, "x".to_string());
+    for (_, v) in w.iter_mut() { v.push_str("y"); }
+    println(w[3]);
+}

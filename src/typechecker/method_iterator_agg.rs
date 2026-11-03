@@ -104,9 +104,22 @@ impl<'a> super::TypeChecker<'a> {
                         self.infer_expr(&arg.value);
                     }
                 }
+                // collections.md: a map's `iter_mut()` item is
+                // `(ref K, mut ref V)`: only the value is lent mutably, since
+                // writing a key in place would break the map's hash or order
+                // (B-2026-11-03-17). The key part reads as a `for` over the
+                // map reads it, and `core_ref_write` refuses a write to it.
+                let item = match (base, item_ty) {
+                    (Type::Named { name, .. }, Type::Tuple(kv))
+                        if matches!(name.as_str(), "Map" | "SortedMap") && kv.len() == 2 =>
+                    {
+                        Type::Tuple(vec![kv[0].clone(), Type::MutRef(Box::new(kv[1].clone()))])
+                    }
+                    (_, item_ty) => Type::MutRef(Box::new(item_ty)),
+                };
                 return Some(Type::Named {
                     name: "Iterator".to_string(),
-                    args: vec![Type::MutRef(Box::new(item_ty))],
+                    args: vec![item],
                 });
             }
         }

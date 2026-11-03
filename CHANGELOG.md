@@ -43,6 +43,12 @@ accepted by 0.8.0 are now refused, each with a fix-it.
   B-2026-11-01-33).
 - **`m[key] = key.len()` with a moved key** is E0500 with a hoist fix-it,
   because the key moves before the value runs (§8.2, B-2026-11-01-46).
+- **Writing a map's key through `iter_mut()`** (`for (k, v) in
+  m.iter_mut() { k.push_str("x"); }`) is refused: `iter_mut()` over a `Map` or
+  `SortedMap` yields `(ref K, mut ref V)` (collections.md), and a key changed
+  in place breaks the map's hash or order. `remove` and `insert` instead.
+  The value binding is now a `mut ref V` for a `Copy` `V` too, so `*v = 9`
+  writes it and `v = 9` gets the auto-deref diagnostic (B-2026-11-03-17).
 
 ### Added
 
@@ -81,6 +87,15 @@ accepted by 0.8.0 are now refused, each with a fix-it.
   `split_at_mut` (B-2026-11-01-40, relocated to `deferred.md`).
 - `return` inside a `par` branch or `par for` body is accepted, per
   core-semantics §11.7 (B-2026-11-02-35).
+- Mixed-width operands are accepted: the narrower operand of an arithmetic
+  or bitwise operator widens within its kind (`u8 + i64`, `f32 + f64`), per
+  design.md § Mixed-width operands. Integer with float, and a pair where
+  neither type holds the other (`i32 + u32`), are still refused. A cast the
+  widening makes redundant (`u as i64 + w`) draws `lossless_cast`, and
+  `karac fix` deletes it (B-2026-11-03-12).
+- A literal returned from a closure inside `Ok` / `Err` / `Some` solves the
+  callee's type parameter: `c.or_else(|e| Err(0))` is accepted
+  (B-2026-11-03-14).
 
 ### Performance
 

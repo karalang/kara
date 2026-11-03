@@ -1,0 +1,9 @@
+source = "B-2026-11-03-17"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["collections"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-03-17: a map's iter_mut() item is (ref K, mut ref V). Before the fix a Copy V bound as a value and a key was writable."

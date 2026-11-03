@@ -1,0 +1,10 @@
+// B-2026-11-03-17: `v` is a `mut ref i64`; plain `=` rebinds nothing and
+// does not write through it (design.md § Auto-deref).
+fn main() {
+    let mut m: SortedMap[i64, i64] = SortedMap.new();
+    m.insert(1, 2);
+    for (k, v) in m.iter_mut() {
+        v = 9;
+    }
+    println(m[1]);
+}

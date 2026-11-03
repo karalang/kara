@@ -2537,6 +2537,10 @@ fn main() -> () {
             // strict cross-task pass, before MIR (B-2026-11-03-8).
             "err_par_branch_uses_closure_over_shared",
             "err_par_for_uses_closure_over_shared",
+            // A map's `iter_mut()` lends the value, not the key, and the
+            // value binding is a `mut ref` (B-2026-11-03-17).
+            "err_map_iter_mut_key_write",
+            "err_map_iter_mut_value_plain_assign",
             // `std.log`'s fields and its attribute (B-2026-10-27-20).
             "err_log_reserved_label",
             "err_log_duplicate_label",
