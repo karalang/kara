@@ -6,10 +6,10 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 
 - **Gate (the M1 slice): 10390 / 10563 = 98.4%** passing (a, b, c, auto-resolved e-spec); bar 95%.
 - Slice without `lib:`/`io:` programs: 8364 / 8497 = 98.4%.
-- Every classified non-deferred program (context): 16993 / 18125 = 93.8%.
+- Every classified non-deferred program (context): 16994 / 18126 = 93.8%.
 - Bench variants (outside the gate): 287 / 1007 = 28.5%; timeouts 642.
 - Legacy test programs (`src:legacy-tests`, M3 item 9, outside the gate): 5395 / 5411 = 99.7%; failing mir-gap 16.
-- Deferred (class d): 751; outside the slice (`post-m1:*`): 1144.
+- Deferred (class d): 751; outside the slice (`post-m1:*`): 1145.
 - mir-llvm (`karac __mir-llvm-run`), measured at d42264fd85: 9036 / 9218 = 98.0% of the slice; 8995 pass on both backends. Every executed program: 10168 / 10808.
 
 ## Denominator by bucket (slice)
@@ -50,7 +50,7 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 
 | tag | programs |
 |---|---|
-| post-m1:par | 295 |
+| post-m1:par | 296 |
 | post-m1:escaping | 209 |
 | post-m1:simd | 199 |
 | post-m1:net | 136 |
@@ -64,7 +64,7 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 | post-m1:url | 4 |
 | post-m1:dyn | 2 |
 
-## Auto-resolved e-spec (4653): MIR matches the spec's model or pin, legacy does not
+## Auto-resolved e-spec (4654): MIR matches the spec's model or pin, legacy does not
 
 - `apps/cli/archive`
 - `apps/cli/btree_kv`
@@ -408,6 +408,7 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 - `core/ok_compound_assign_once`
 - `core/ok_match_binding_modes`
 - `core/ok_match_result_is_a_ref`
+- `core/ok_par_generic_call_with_pure_fn_value`
 - `core/ok_pattern_binds_nothing`
 - `core/ok_provider_task_writes`
 - `core/ok_ref_self_wins`

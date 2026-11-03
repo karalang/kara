@@ -1,0 +1,20 @@
+fn ap[F: Fn(i64) -> i64](x: i64, f: F) -> i64 {
+    f(x)
+}
+
+fn dbl(x: i64) -> i64 {
+    x * 2
+}
+
+fn main() {
+    // A generic call's effects are the monomorphised instance's (§12): the
+    // instance calls the closure or function it is given, which here reads
+    // and writes nothing, so the branches do not conflict (§11.2).
+    let (a, b) = par { ap(3, |x| x * 2), ap(4, |x| x * 2) };
+    let (c, d) = par { ap(3, dbl), ap(4, dbl) };
+    let k = 5;
+    let (e, f) = par { ap(1, |x| x + k), ap(2, |x| x * k) };
+    println(a + b);
+    println(c + d);
+    println(f"{e} {f}");
+}

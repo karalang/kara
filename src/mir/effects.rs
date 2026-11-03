@@ -2219,9 +2219,81 @@ impl<'p> Analysis<'p> {
         }
         let def: DefId = match tcx.kind(t) {
             SK::Closure { def, .. } | SK::FnDef { def, .. } => def,
+            SK::Fn { .. } => return self.erased_fn_bodies(body, arg),
             _ => return Vec::new(),
         };
         self.bodies_of(def)
+    }
+
+    /// The bodies an erased `Fn` value `arg` can name, when this body made
+    /// it: a generic parameter instantiated at an erased `Fn` is passed
+    /// `&f` where `f = closure as Fn (Erase)`, so its call runs that
+    /// closure (core semantics §12: a generic call's effects are the
+    /// instance's, B-2026-11-02-36). Traced through single-assignment
+    /// copies and borrows to a local every assignment of which erases a
+    /// closure or function item, and that is never lent `mut` or written
+    /// by a call; empty (unresolved) otherwise.
+    fn erased_fn_bodies(&self, body: &Body, arg: &Operand) -> Vec<String> {
+        let Some(p) = arg.place() else {
+            return Vec::new();
+        };
+        let defs = single_defs(body);
+        let mut root = p.local.0;
+        for _ in 0..32 {
+            match defs.get(&root) {
+                Some(src) if src.projection.iter().all(|e| *e == ProjElem::Deref) => {
+                    root = src.local.0
+                }
+                Some(_) => return Vec::new(),
+                None => break,
+            }
+        }
+        if root as usize <= body.arg_count {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        for bb in &body.blocks {
+            for st in &bb.statements {
+                let StatementKind::Assign(dst, rv) = &st.kind else {
+                    continue;
+                };
+                if dst.local.0 == root {
+                    let Rvalue::Cast(CastKind::Erase, op, _) = rv else {
+                        return Vec::new();
+                    };
+                    if !dst.projection.is_empty() {
+                        return Vec::new();
+                    }
+                    let ty = match op {
+                        Operand::Copy(q) | Operand::Move(q) => {
+                            place_ty(body, self.tys, q).ok().map(|t| t.ty)
+                        }
+                        Operand::Const(c) => Some(c.ty),
+                    };
+                    // A widened `Fn` is erased already: no further.
+                    let found = match ty {
+                        Some(t) if !matches!(self.tys.tcx().kind(t), SK::Fn { .. }) => {
+                            self.fn_value_bodies(body, op)
+                        }
+                        _ => Vec::new(),
+                    };
+                    if found.is_empty() {
+                        return Vec::new();
+                    }
+                    out.extend(found);
+                } else if matches!(rv, Rvalue::Ref(BorrowKind::Mut, q) if q.local.0 == root) {
+                    return Vec::new();
+                }
+            }
+            if let TerminatorKind::Call { destination, .. } = &bb.terminator.kind {
+                if destination.local.0 == root {
+                    return Vec::new();
+                }
+            }
+        }
+        out.sort();
+        out.dedup();
+        out
     }
 
     /// The `Drop` bodies dropping a value of type `ty` can run.

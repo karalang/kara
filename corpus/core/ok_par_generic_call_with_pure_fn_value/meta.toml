@@ -1,0 +1,13 @@
+source = "corpus/core/ok_par_generic_call_with_pure_fn_value"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["concurrency", "effects", "post-m1:par"]
+class = "e"
+expected_from = "spec"
+rules = ["11.2", "12"]
+backends = []
+env = {}
+note = "B-2026-11-02-36: two par branches calling a generic `ap[F: Fn(i64) -> i64]` with pure closures or a pure named fn do not conflict; the instance's call through its type-parameter value has the effects of the value it is given (core-semantics §12). Expected output worked by hand. e-spec: legacy differs from the drop model; v2 matches it"
+bucket = "e-spec"
+classified_with = "9a117acba"
