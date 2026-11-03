@@ -2597,6 +2597,8 @@ fn main() -> () {
             "for_into_iter_consumes",
             "ok_ref_copied_from_a_tuple_element",
             "ok_error_anyerror",
+            // `Result.or_else` is result.kara's.
+            "ok_closure_literal_solves_callee_param",
             // `std.log` is spliced from the library with `std.json`.
             "log_custom_backend",
             "log_filtering",

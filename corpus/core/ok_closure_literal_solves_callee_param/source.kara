@@ -1,0 +1,20 @@
+// B-2026-11-03-14: a literal returned from a closure, inside `Ok`/`Err`/`Some`,
+// solves the callee's type parameter it lands in. Literals default last
+// (design.md § type inference), so `Err(0)` makes `or_else`'s `F` an `i64`.
+fn wrap[F](f: own OnceFn() -> Option[F]) -> Option[F] {
+    f()
+}
+
+fn main() {
+    let c: Result[i64, i64] = Err(4);
+    let r = c.or_else(|e| Err(0));
+    println(r);
+    println(r.unwrap_err() + 1);
+    let d: Result[i64, i64] = Err(-3);
+    let s = d.or_else(|e| if e > 0 { Err(e) } else { Ok(7) });
+    println(s);
+    let o = wrap(|| Some(5));
+    println(o.unwrap() * 2);
+    let g = wrap(|| Some(2.5));
+    println(g);
+}

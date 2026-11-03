@@ -1,0 +1,9 @@
+source = "B-2026-11-03-14"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["inference"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-03-14: before the fix check refused the first and fourth bindings with 'cannot infer type parameter'."

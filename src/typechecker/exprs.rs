@@ -2588,8 +2588,25 @@ impl<'a> super::TypeChecker<'a> {
                                 // elements coerce into it: `Some((1, Hello {}))`.
                                 || (matches!(args[0].value.kind, ExprKind::Tuple(_))
                                     && tuple_has_dyn_slot(&slot));
+                        // B-2026-11-03-14 — a slot that is still an unsolved
+                        // metavar (`Err(0)` returned to `or_else`'s `F`) has no
+                        // type for the literal to adopt; returning `expected`
+                        // would leave it unsolved. Synthesis types the literal
+                        // and the caller's unification solves the slot.
+                        // The slot can also be the callee's own parameter,
+                        // when the closure is checked against the signature
+                        // before instantiation; a parameter of the enclosing
+                        // item is rigid and keeps the check below.
+                        let slot_unsolved =
+                            match resolve_type_var_top(&slot, &self.env.substitutions) {
+                                Type::TypeVar(_) => true,
+                                Type::TypeParam(n) => {
+                                    n != "Self" && !self.enclosing_bounds.contains_key(&n)
+                                }
+                                _ => false,
+                            };
                         if payload_is_inferred_ctor
-                            || payload_is_unsuffixed_int
+                            || (payload_is_unsuffixed_int && !slot_unsolved)
                             || payload_needs_slot
                         {
                             self.check_expr(&args[0].value, &slot);
