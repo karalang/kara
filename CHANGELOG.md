@@ -68,6 +68,8 @@ accepted by 0.8.0 are now refused, each with a fix-it.
 - §11.2 now states that v1 has no index-disjointness check: two `par`
   branches writing elements of one `Vec` conflict; split it with
   `split_at_mut` (B-2026-11-01-40, relocated to `deferred.md`).
+- `return` inside a `par` branch or `par for` body is accepted, per
+  core-semantics §11.7 (B-2026-11-02-35).
 
 ### Performance
 
