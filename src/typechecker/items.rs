@@ -6497,6 +6497,47 @@ impl<'a> super::TypeChecker<'a> {
                 }
             }
         });
+        // B-2026-11-03-7: the operand of a `?` whose value a statement
+        // discards (`Err(1)?;`, `g()?;`). Nothing after it can fix its
+        // `Ok` type, so an unbound parameter there is final.
+        let mut discarded: Option<(Span, String, Type, bool)> = None;
+        if found.is_none() {
+            crate::span_visitor::for_each_stmt_in_block(body, &mut |s| {
+                if discarded.is_some() {
+                    return;
+                }
+                let StmtKind::Expr(e) = &s.kind else { return };
+                let ExprKind::Question(operand) = &e.kind else {
+                    return;
+                };
+                let Some(t) = self.expr_types.get(&SpanKey::from_span(&operand.span)) else {
+                    return;
+                };
+                if let Some(name) = find_unbound_type_param(t, &in_scope) {
+                    let err_literal = matches!(&operand.kind, ExprKind::Call { callee, .. }
+                        if matches!(&callee.kind, ExprKind::Identifier(n) if n == "Err"));
+                    discarded = Some((operand.span, name.to_string(), t.clone(), err_literal));
+                }
+            });
+        }
+        if let Some((span, name, ty, err_literal)) = discarded {
+            let fix = if err_literal {
+                "to return the error, write `return Err(..)`"
+            } else {
+                "bind the result with a type annotation (`let v: <type> = ..?;`)"
+            };
+            self.type_error(
+                format!(
+                    "cannot infer type parameter '{name}' of `{}`, this `?` operand's \
+                     type: the statement discards its value, so nothing in the body \
+                     fixes it (design.md § Type inference); {fix}",
+                    type_display(&ty)
+                ),
+                span,
+                TypeErrorKind::CannotInferTypeParam,
+            );
+            return;
+        }
         if let Some((span, name, ty)) = found {
             let of = if matches!(ty, Type::TypeParam(_)) {
                 String::new()
