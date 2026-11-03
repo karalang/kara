@@ -110,8 +110,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-02-10 | 2026-11-02 | mir-llvm | low | Kata 276's par lane runs 1.44x slower than its 2026-08-28 feed while its comparators moved 1.06-1.09x and its seq lane held, so it scales 4.6x over seq where it scaled ~6.0x; there is no matched legacy par baseline | — |
 | B-2026-11-02-36 | 2026-11-02 | effect | medium | Two `par` branches calling a generic `fn ap[F: Fn(i64) -> i64](x: i64, f: F)` with pure closures or a pure named fn conflict as 'unknown (a function value that cannot be resolved)'; §12 computes a generic call's effects on the monomorphised instance, and the non-generic `f: Fn(i64) -> i64` form is accepted | — |
 | B-2026-11-03-2 | 2026-11-03 | mir-llvm | low | Kata 302's default build no longer auto-parallelizes on the MIR backend (0 task spawns; par lane 254.7 ms at 99.6% CPU against seq 251.9 ms), where the 2026-08-28 build fired at 332% CPU for only a 1.03x gain | — |
-| B-2026-11-03-3 | 2026-11-03 | typecheck | low | `[|x: i64| x + 1].to_vec()` into a `Vec[Fn(i64) -> i64]`, and `.clone()` of a `Vec[Fn(i64) -> i64]`, pass `karac check` and fail at run ('clone of Fn(i64) -> i64 needs its Clone body'): a value of function type is move-only (design.md § Escaping function values), but require_elements_clone reported nothing for an element that does not clone unless it was a derivable type or a `dyn` | — |
-| B-2026-11-03-4 | 2026-11-03 | parser | low | `move |..|` is refused with 'use `own |...|` for closure capture-by-value', naming a capture prefix core semantics §9.6 removed (and refuses as E0519) | — |
 
 ### Relocated
 
@@ -582,6 +580,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-02-38 | mir-llvm | high | llvm natives for `ref` element types: `Vec[ref String].fill(r)` panics out of memory (ASan global-buffer-overflow), and iterating a `SortedSet[ref St… | ebfe307c38 |
 | B-2026-11-02-39 | ownership | low | A closure in an element of a let-bound tuple is treated as non-escaping by `karac check` (core_escape gives tuple elements tail_of(pos)), so a non-Co… | 59ca8f5a88 |
 | B-2026-11-03-1 | parser | medium | The empty effect clause `with ()` on a function type (design.md § How a call through a function value gets its effects, Gowtham 2026-11-03) was a par… | 1446dde436 |
+| B-2026-11-03-3 | typecheck | low | `[\|x: i64\| x + 1].to_vec()` into a `Vec[Fn(i64) -> i64]`, and `.clone()` of a `Vec[Fn(i64) -> i64]`, pass `karac check` and fail at run ('clone of Fn… | f907cfec34 |
+| B-2026-11-03-4 | parser | low | `move \|..\|` is refused with 'use `own \|...\|` for closure capture-by-value', naming a capture prefix core semantics §9.6 removed (and refuses as E0519) | f907cfec34 |
 
 </details>
 
