@@ -61,7 +61,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | false-positive | 92 |
 | diagnostics | 89 |
 | perf | 84 |
-| missing-feature | 62 |
+| missing-feature | 63 |
 | soundness | 41 |
 | miscompile | 32 |
 | run-vs-build | 20 |
@@ -80,7 +80,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | mir-llvm | 96 |
 | cli | 49 |
 | ownership | 41 |
-| parser | 27 |
+| parser | 28 |
 | interp | 26 |
 | runtime | 23 |
 | codegen | 22 |
@@ -91,7 +91,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | lexer | 1 |
 ## Current state
 
-_Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-11-02). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-11-03). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open
 
@@ -578,6 +578,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-02-37 | mir+mir-llvm | high | A string or integer LITERAL stored into a library `ref` slot (`v.push("lit")` on `Vec[ref String]`, `tx.send("lit")` / `tx.send(7)` on `Sender[ref T]… | def3886d61 |
 | B-2026-11-02-38 | mir-llvm | high | llvm natives for `ref` element types: `Vec[ref String].fill(r)` panics out of memory (ASan global-buffer-overflow), and iterating a `SortedSet[ref St… | ebfe307c38 |
 | B-2026-11-02-39 | ownership | low | A closure in an element of a let-bound tuple is treated as non-escaping by `karac check` (core_escape gives tuple elements tail_of(pos)), so a non-Co… | 59ca8f5a88 |
+| B-2026-11-03-1 | parser | medium | The empty effect clause `with ()` on a function type (design.md § How a call through a function value gets its effects, Gowtham 2026-11-03) was a par… | 1446dde436 |
 
 </details>
 
