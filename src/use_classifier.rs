@@ -2707,6 +2707,15 @@ fn holds_no_closure(ty: &Type) -> bool {
                     | "SortedSet"
                     | "Option"
                     | "Result"
+                    // B-2026-11-03-20: a range is two bounds, so
+                    // `(1..n + 1).filter(|i| ..).collect()` is a chain whose
+                    // root holds no closure, like `v.iter()`'s.
+                    | "Range"
+                    | "RangeInclusive"
+                    | "RangeFrom"
+                    | "RangeTo"
+                    | "RangeToInclusive"
+                    | "RangeFull"
             ) && args.iter().all(holds_no_closure)
         }
         _ => false,

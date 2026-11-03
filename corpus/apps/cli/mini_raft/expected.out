@@ -1,0 +1,269 @@
+== 1_basic.sim: 3 nodes, seed 11, until t=1500
+t=171 n1 starts an election for term 1
+t=180 n1 becomes leader of term 1 (votes n1 n2)
+t=400 c1 -> n1: set x 1 appended at index 2 (term 1)
+t=410 c1 committed: set x 1 at index 2 (term 1)
+t=420 c2 -> n2: not the leader, redirected to n1
+t=420 c2 -> n1: set y 2 appended at index 3 (term 1)
+t=430 c3 -> n3: not the leader, redirected to n1
+t=430 c3 -> n1: incr x 5 appended at index 4 (term 1)
+t=431 c2 committed: set y 2 at index 3 (term 1)
+t=438 c3 committed: incr x 5 at index 4 (term 1)
+t=600 status
+  n1: leader    term 1, log 4 (last term 1), commit 4, kv {x=6, y=2}
+  n2: follower  term 1, log 4 (last term 1), commit 4, kv {x=6, y=2}
+  n3: follower  term 1, log 4 (last term 1), commit 4, kv {x=6, y=2}
+t=900 c4 -> n1: del y appended at index 5 (term 1)
+t=908 c4 committed: del y at index 5 (term 1)
+t=910 c5 -> n2: not the leader, redirected to n1
+t=910 c5 -> n1: incr hits 1 appended at index 6 (term 1)
+t=920 c6 -> n3: not the leader, redirected to n1
+t=920 c6 -> n1: incr hits 1 appended at index 7 (term 1)
+t=924 c5 committed: incr hits 1 at index 6 (term 1)
+t=924 c6 committed: incr hits 1 at index 7 (term 1)
+-- end at t=1500
+  n1: leader    term 1, log 7 (last term 1), commit 7, kv {hits=2, x=6}
+  n2: follower  term 1, log 7 (last term 1), commit 7, kv {hits=2, x=6}
+  n3: follower  term 1, log 7 (last term 1), commit 7, kv {hits=2, x=6}
+  leaders: 1:n1
+  clients: 6 of 6 committed
+  log matching ok
+  committed prefixes ok
+== 2_leader_crash.sim: 5 nodes, seed 23, until t=3000
+t=207 n5 starts an election for term 1
+t=220 n5 becomes leader of term 1 (votes n2 n3 n5)
+t=400 c1 -> n1: not the leader, redirected to n5
+t=400 c1 -> n5: set config v1 appended at index 2 (term 1)
+t=410 c2 -> n2: not the leader, redirected to n5
+t=410 c2 -> n5: set config v1 appended at index 3 (term 1)
+t=411 c1 committed: set config v1 at index 2 (term 1)
+t=418 c2 committed: set config v1 at index 3 (term 1)
+t=420 c3 -> n3: not the leader, redirected to n5
+t=420 c3 -> n5: set config v1 appended at index 4 (term 1)
+t=430 c4 -> n4: not the leader, redirected to n5
+t=430 c4 -> n5: set config v1 appended at index 5 (term 1)
+t=431 c3 committed: set config v1 at index 4 (term 1)
+t=440 c5 -> n5: set config v1 appended at index 6 (term 1)
+t=441 c4 committed: set config v1 at index 5 (term 1)
+t=446 c5 committed: set config v1 at index 6 (term 1)
+t=700 n5 crashes (leader, term 1)
+t=881 n4 starts an election for term 2
+t=891 n4 becomes leader of term 2 (votes n2 n3 n4)
+t=900 c6 -> n1: not the leader, redirected to n4
+t=900 c6 -> n4: set config v2 appended at index 8 (term 2)
+t=905 c7 -> n2: not the leader, redirected to n4
+t=905 c7 -> n4: set config v2 appended at index 9 (term 2)
+t=910 c8 -> n3: not the leader, redirected to n4
+t=910 c8 -> n4: set config v2 appended at index 10 (term 2)
+t=912 c6 committed: set config v2 at index 8 (term 2)
+t=915 c9 -> n4: set config v2 appended at index 11 (term 2)
+t=917 c7 committed: set config v2 at index 9 (term 2)
+t=920 c10 -> n5: no answer (down)
+t=922 c8 committed: set config v2 at index 10 (term 2)
+t=923 c9 committed: set config v2 at index 11 (term 2)
+t=1200 status
+  n1: follower  term 2, log 11 (last term 2), commit 11, kv {config=v2}
+  n2: follower  term 2, log 11 (last term 2), commit 11, kv {config=v2}
+  n3: follower  term 2, log 11 (last term 2), commit 11, kv {config=v2}
+  n4: leader    term 2, log 11 (last term 2), commit 11, kv {config=v2}
+  n5: down      term 1, log 6 (last term 1), commit 6, kv {config=v1}
+t=1500 n5 restarts (term 1, log 6)
+t=2000 status
+  n1: follower  term 2, log 11 (last term 2), commit 11, kv {config=v2}
+  n2: follower  term 2, log 11 (last term 2), commit 11, kv {config=v2}
+  n3: follower  term 2, log 11 (last term 2), commit 11, kv {config=v2}
+  n4: leader    term 2, log 11 (last term 2), commit 11, kv {config=v2}
+  n5: follower  term 2, log 11 (last term 2), commit 11, kv {config=v2}
+-- end at t=3000
+  n1: follower  term 2, log 11 (last term 2), commit 11, kv {config=v2}
+  n2: follower  term 2, log 11 (last term 2), commit 11, kv {config=v2}
+  n3: follower  term 2, log 11 (last term 2), commit 11, kv {config=v2}
+  n4: leader    term 2, log 11 (last term 2), commit 11, kv {config=v2}
+  n5: follower  term 2, log 11 (last term 2), commit 11, kv {config=v2}
+  leaders: 1:n5 2:n4
+  clients: 9 of 10 committed; c10 not committed
+  log matching ok
+  committed prefixes ok
+== 3_partition.sim: 5 nodes, seed 5, until t=4000
+t=176 n1 starts an election for term 1
+t=185 n1 becomes leader of term 1 (votes n1 n3 n4)
+t=500 c1 -> n1: set owner alice appended at index 2 (term 1)
+t=514 c1 committed: set owner alice at index 2 (term 1)
+t=800 partition n1 n2 | n3 n4 n5
+t=900 c2 -> n1: set owner bob appended at index 3 (term 1)
+t=905 c3 -> n1: incr seats 2 appended at index 4 (term 1)
+t=906 n5 starts an election for term 2
+t=922 n5 becomes leader of term 2 (votes n3 n4 n5)
+t=1500 c4 -> n5: set owner carol appended at index 4 (term 2)
+t=1510 c5 -> n5: incr seats 7 appended at index 5 (term 2)
+t=1512 c4 committed: set owner carol at index 4 (term 2)
+t=1522 c5 committed: incr seats 7 at index 5 (term 2)
+t=1700 status
+  n1: leader    term 1, log 4 (last term 1), commit 2, kv {owner=alice}
+  n2: follower  term 1, log 4 (last term 1), commit 2, kv {owner=alice}
+  n3: follower  term 2, log 5 (last term 2), commit 5, kv {owner=carol, seats=7}
+  n4: follower  term 2, log 5 (last term 2), commit 5, kv {owner=carol, seats=7}
+  n5: leader    term 2, log 5 (last term 2), commit 5, kv {owner=carol, seats=7}
+t=2500 heal
+t=2512 n1 steps down to follower in term 2 (n4 has term 2)
+t=2514 n2 drops 2 conflicting entries from index 3
+t=2517 n1 drops 2 conflicting entries from index 3
+t=3200 status
+  n1: follower  term 2, log 5 (last term 2), commit 5, kv {owner=carol, seats=7}
+  n2: follower  term 2, log 5 (last term 2), commit 5, kv {owner=carol, seats=7}
+  n3: follower  term 2, log 5 (last term 2), commit 5, kv {owner=carol, seats=7}
+  n4: follower  term 2, log 5 (last term 2), commit 5, kv {owner=carol, seats=7}
+  n5: leader    term 2, log 5 (last term 2), commit 5, kv {owner=carol, seats=7}
+t=3300 c6 -> n5: incr seats 1 appended at index 6 (term 2)
+t=3307 c6 committed: incr seats 1 at index 6 (term 2)
+-- end at t=4000
+  n1: follower  term 2, log 6 (last term 2), commit 6, kv {owner=carol, seats=8}
+  n2: follower  term 2, log 6 (last term 2), commit 6, kv {owner=carol, seats=8}
+  n3: follower  term 2, log 6 (last term 2), commit 6, kv {owner=carol, seats=8}
+  n4: follower  term 2, log 6 (last term 2), commit 6, kv {owner=carol, seats=8}
+  n5: leader    term 2, log 6 (last term 2), commit 6, kv {owner=carol, seats=8}
+  leaders: 1:n1 2:n5
+  clients: 4 of 6 committed; c2 not committed, c3 not committed
+  log matching ok
+  committed prefixes ok
+== 4_flaky.sim: 5 nodes, seed 99, until t=6000
+t=151 n3 starts an election for term 1
+t=160 n3 becomes leader of term 1 (votes n2 n3 n4)
+t=200 drop 300 per mille
+t=600 c1 -> n3: set k1 a appended at index 2 (term 1)
+t=607 c1 committed: set k1 a at index 2 (term 1)
+t=1153 n2 starts an election for term 2
+t=1155 n3 steps down to follower in term 2 (n2 has term 2)
+t=1200 c2 set k2 b: no leader to send to
+t=1321 n1 starts an election for term 3
+t=1328 n2 steps down to follower in term 3 (n1 has term 3)
+t=1334 n1 becomes leader of term 3 (votes n1 n2 n5)
+t=1800 c3 -> n1: set k3 c appended at index 4 (term 3)
+t=1814 c3 committed: set k3 c at index 4 (term 3)
+t=2400 c4 -> n1: incr n 1 appended at index 5 (term 3)
+t=2412 c4 committed: incr n 1 at index 5 (term 3)
+t=3000 c5 -> n1: incr n 1 appended at index 6 (term 3)
+t=3011 c5 committed: incr n 1 at index 6 (term 3)
+t=3600 c6 -> n1: incr n 1 appended at index 7 (term 3)
+t=3611 c6 committed: incr n 1 at index 7 (term 3)
+t=4000 drop 0 per mille
+t=4500 status
+  n1: leader    term 3, log 7 (last term 3), commit 7, kv {k1=a, k3=c, n=3}
+  n2: follower  term 3, log 7 (last term 3), commit 7, kv {k1=a, k3=c, n=3}
+  n3: follower  term 3, log 7 (last term 3), commit 7, kv {k1=a, k3=c, n=3}
+  n4: follower  term 3, log 7 (last term 3), commit 7, kv {k1=a, k3=c, n=3}
+  n5: follower  term 3, log 7 (last term 3), commit 7, kv {k1=a, k3=c, n=3}
+-- end at t=6000
+  n1: leader    term 3, log 7 (last term 3), commit 7, kv {k1=a, k3=c, n=3}
+  n2: follower  term 3, log 7 (last term 3), commit 7, kv {k1=a, k3=c, n=3}
+  n3: follower  term 3, log 7 (last term 3), commit 7, kv {k1=a, k3=c, n=3}
+  n4: follower  term 3, log 7 (last term 3), commit 7, kv {k1=a, k3=c, n=3}
+  n5: follower  term 3, log 7 (last term 3), commit 7, kv {k1=a, k3=c, n=3}
+  leaders: 1:n3 3:n1
+  clients: 5 of 6 committed; c2 never sent
+  log matching ok
+  committed prefixes ok
+== 5_churn.sim: 5 nodes, seed 41, until t=5000
+t=172 n2 starts an election for term 1
+t=180 n2 becomes leader of term 1 (votes n1 n2 n5)
+t=400 c1 -> n2: set a 1 appended at index 2 (term 1)
+t=414 c1 committed: set a 1 at index 2 (term 1)
+t=600 n1 crashes (follower, term 1)
+t=700 c2 -> n2: incr a 1 appended at index 3 (term 1)
+t=708 c2 committed: incr a 1 at index 3 (term 1)
+t=900 n3 crashes (follower, term 1)
+t=1000 c3 -> n2: incr a 1 appended at index 4 (term 1)
+t=1018 c3 committed: incr a 1 at index 4 (term 1)
+t=1300 n1 restarts (term 1, log 2)
+t=1300 n3 restarts (term 1, log 3)
+t=1400 c4 -> n2: incr a 1 appended at index 5 (term 1)
+t=1410 c4 committed: incr a 1 at index 5 (term 1)
+t=1600 n2 crashes (leader, term 1)
+t=1715 n1 starts an election for term 2
+t=1724 n1 becomes leader of term 2 (votes n1 n4 n5)
+t=2200 c5 -> n1: incr a 10 appended at index 7 (term 2)
+t=2214 c5 committed: incr a 10 at index 7 (term 2)
+t=2400 status
+  n1: leader    term 2, log 7 (last term 2), commit 7, kv {a=14}
+  n2: down      term 1, log 5 (last term 1), commit 5, kv {a=4}
+  n3: follower  term 2, log 7 (last term 2), commit 7, kv {a=14}
+  n4: follower  term 2, log 7 (last term 2), commit 7, kv {a=14}
+  n5: follower  term 2, log 7 (last term 2), commit 7, kv {a=14}
+t=2600 n2 restarts (term 1, log 5)
+t=3000 n2 crashes (follower, term 2)
+t=3100 n3 crashes (follower, term 2)
+t=3200 n4 crashes (follower, term 2)
+t=3300 c6 -> n1: incr a 100 appended at index 8 (term 2)
+t=3600 status
+  n1: leader    term 2, log 8 (last term 2), commit 7, kv {a=14}
+  n2: down      term 2, log 7 (last term 2), commit 7, kv {a=14}
+  n3: down      term 2, log 7 (last term 2), commit 7, kv {a=14}
+  n4: down      term 2, log 7 (last term 2), commit 7, kv {a=14}
+  n5: follower  term 2, log 8 (last term 2), commit 7, kv {a=14}
+t=3700 n2 restarts (term 2, log 7)
+t=3700 n3 restarts (term 2, log 7)
+t=3700 n4 restarts (term 2, log 7)
+t=3709 c6 committed: incr a 100 at index 8 (term 2)
+t=4400 status
+  n1: leader    term 2, log 8 (last term 2), commit 8, kv {a=114}
+  n2: follower  term 2, log 8 (last term 2), commit 8, kv {a=114}
+  n3: follower  term 2, log 8 (last term 2), commit 8, kv {a=114}
+  n4: follower  term 2, log 8 (last term 2), commit 8, kv {a=114}
+  n5: follower  term 2, log 8 (last term 2), commit 8, kv {a=114}
+-- end at t=5000
+  n1: leader    term 2, log 8 (last term 2), commit 8, kv {a=114}
+  n2: follower  term 2, log 8 (last term 2), commit 8, kv {a=114}
+  n3: follower  term 2, log 8 (last term 2), commit 8, kv {a=114}
+  n4: follower  term 2, log 8 (last term 2), commit 8, kv {a=114}
+  n5: follower  term 2, log 8 (last term 2), commit 8, kv {a=114}
+  leaders: 1:n2 2:n1
+  clients: 6 of 6 committed
+  log matching ok
+  committed prefixes ok
+== 6_isolated.sim: 3 nodes, seed 8, until t=4000
+t=157 n3 starts an election for term 1
+t=168 n3 becomes leader of term 1 (votes n2 n3)
+t=400 c1 -> n3: set mode on appended at index 2 (term 1)
+t=411 c1 committed: set mode on at index 2 (term 1)
+t=600 partition n1 | n2 n3
+t=801 n1 starts an election for term 2
+t=991 n1 starts an election for term 3
+t=1000 c2 -> n3: set mode off appended at index 3 (term 1)
+t=1016 c2 committed: set mode off at index 3 (term 1)
+t=1290 n1 starts an election for term 4
+t=1526 n1 starts an election for term 5
+t=1803 n1 starts an election for term 6
+t=1989 n1 starts an election for term 7
+t=2186 n1 starts an election for term 8
+t=2386 n1 starts an election for term 9
+t=2600 status
+  n1: candidate term 9, log 2 (last term 1), commit 2, kv {mode=on}
+  n2: follower  term 1, log 3 (last term 1), commit 3, kv {mode=off}
+  n3: leader    term 1, log 3 (last term 1), commit 3, kv {mode=off}
+t=2650 n1 starts an election for term 10
+t=2700 heal
+t=2711 n3 steps down to follower in term 10 (n1 has term 10)
+t=2835 n1 starts an election for term 11
+t=2864 n3 starts an election for term 12
+t=2872 n1 steps down to follower in term 12 (n3 has term 12)
+t=2876 n3 becomes leader of term 12 (votes n1 n3)
+t=3500 status
+  n1: follower  term 12, log 4 (last term 12), commit 4, kv {mode=off}
+  n2: follower  term 12, log 4 (last term 12), commit 4, kv {mode=off}
+  n3: leader    term 12, log 4 (last term 12), commit 4, kv {mode=off}
+t=3600 c3 -> n3: set mode auto appended at index 5 (term 12)
+t=3608 c3 committed: set mode auto at index 5 (term 12)
+-- end at t=4000
+  n1: follower  term 12, log 5 (last term 12), commit 5, kv {mode=auto}
+  n2: follower  term 12, log 5 (last term 12), commit 5, kv {mode=auto}
+  n3: leader    term 12, log 5 (last term 12), commit 5, kv {mode=auto}
+  leaders: 1:n3 12:n3
+  clients: 3 of 3 committed
+  log matching ok
+  committed prefixes ok
+== 7_bad.sim: 3 nodes, seed 1, until t=500
+! 7_bad.sim line 5: unknown line: frobnicate
+! 7_bad.sim line 6: no node n9
+! 7_bad.sim line 7: unknown action: explode
+! 7_bad.sim line 8: partition needs one argument
+! 7_bad.sim line 9: nodes must be 1 to 9

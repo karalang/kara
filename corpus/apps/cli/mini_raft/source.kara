@@ -1,0 +1,1072 @@
+// mini_raft: a Raft cluster in a deterministic simulator, the consensus
+// protocol under etcd, Consul, CockroachDB and TiKV. Nodes elect a leader
+// by randomized timeouts, the leader replicates a log of key-value
+// commands with AppendEntries, and an entry commits once a majority holds
+// it in the leader's term. The simulator runs a millisecond clock over a
+// network with latency, loss and partitions, crashes and restarts nodes,
+// sends client commands, and after each scenario checks the Log Matching
+// and committed-prefix properties. Each scenario is its own cluster and
+// runs as its own task.
+
+const MASK32: i64 = 4294967295;
+const ELECTION_MIN: i64 = 150;
+const ELECTION_SPREAD: i64 = 150;
+const HEARTBEAT: i64 = 50;
+const LAT_MIN: i64 = 2;
+const LAT_SPREAD: i64 = 8;
+const BATCH: i64 = 4;
+
+// ------------------------------------------------------------ randomness
+
+// xorshift32: one stream per node for its timeouts, one for the network.
+struct Rng {
+    x: i64,
+}
+
+impl Rng {
+    fn new(seed: i64) -> Rng {
+        let x = seed & MASK32;
+        Rng { x: if x == 0 { 1 } else { x } }
+    }
+
+    fn next(mut ref self) -> i64 {
+        let mut x = self.x;
+        x = x ^ ((x << 13) & MASK32);
+        x = x ^ (x >> 17);
+        x = x ^ ((x << 5) & MASK32);
+        self.x = x;
+        x
+    }
+
+    fn below(mut ref self, n: i64) -> i64 {
+        self.next() % n
+    }
+}
+
+// ------------------------------------------------------------ the protocol
+
+#[derive(Clone, PartialEq)]
+struct LogEntry {
+    term: i64,
+    cmd: String,
+    client: String,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Role {
+    Follower,
+    Candidate,
+    Leader,
+}
+
+impl Role {
+    fn name(self) -> Str {
+        match self {
+            Role.Follower => "follower",
+            Role.Candidate => "candidate",
+            Role.Leader => "leader",
+        }
+    }
+}
+
+// RequestVote, AppendEntries and their replies (Raft's Figure 2).
+enum Msg {
+    Vote { term: i64, last_index: i64, last_term: i64 },
+    Voted { term: i64, granted: bool },
+    Append { term: i64, prev: i64, prev_term: i64, entries: Vec[LogEntry], commit: i64 },
+    Appended { term: i64, ok: bool, matched: i64 },
+}
+
+impl Msg {
+    fn term(self) -> i64 {
+        match self {
+            Msg.Vote { term, .. } => term,
+            Msg.Voted { term, .. } => term,
+            Msg.Append { term, .. } => term,
+            Msg.Appended { term, .. } => term,
+        }
+    }
+}
+
+struct Queued {
+    time: i64,
+    seq: i64,
+    src: i64,
+    dst: i64,
+    msg: Msg,
+}
+
+struct Node {
+    id: i64,
+    rng: Rng,
+    // Persistent: survives a crash.
+    term: i64,
+    voted: i64,
+    log: Vec[LogEntry],
+    alive: bool,
+    // Volatile: lost in a crash.
+    role: Role,
+    commit: i64,
+    applied: i64,
+    kv: SortedMap[String, String],
+    votes: SortedSet[i64],
+    next_index: Vec[i64],
+    match_index: Vec[i64],
+    leader: i64,
+    deadline: i64,
+    beat: i64,
+}
+
+impl Node {
+    fn new(id: i64, seed: i64, n: i64) -> Node {
+        let mut nd = Node {
+            id: id,
+            rng: Rng.new(seed * 1000 + id * 7919),
+            term: 0,
+            voted: 0,
+            log: Vec.new(),
+            alive: true,
+            role: Role.Follower,
+            commit: 0,
+            applied: 0,
+            kv: SortedMap.new(),
+            votes: SortedSet.new(),
+            next_index: Vec.new(),
+            match_index: Vec.new(),
+            leader: 0,
+            deadline: 0,
+            beat: 0,
+        };
+        nd.reset_volatile(n);
+        nd
+    }
+
+    fn reset_volatile(mut ref self, n: i64) {
+        self.role = Role.Follower;
+        self.commit = 0;
+        self.applied = 0;
+        self.kv = SortedMap.new();
+        self.votes = SortedSet.new();
+        self.next_index = Vec.filled(n + 1, 0);
+        self.match_index = Vec.filled(n + 1, 0);
+        self.leader = 0;
+        self.deadline = 0;
+        self.beat = 0;
+    }
+
+    fn last_index(self) -> i64 {
+        self.log.len()
+    }
+
+    fn last_term(self) -> i64 {
+        match self.log.last() {
+            Some(e) => e.term,
+            None => 0,
+        }
+    }
+}
+
+struct Client {
+    name: String,
+    cmd: String,
+    status: String,
+}
+
+struct Sim {
+    n: i64,
+    // nodes[1..=n]; nodes[0] is never used.
+    nodes: Vec[Node],
+    net: Rng,
+    queue: Vec[Queued],
+    seq: i64,
+    loss: i64,
+    groups: Option[(Vec[i64], Vec[i64])],
+    now: i64,
+    out: Vec[String],
+    leaders: SortedMap[i64, i64],
+    clients: Vec[Client],
+    reported: SortedSet[String],
+}
+
+fn node_names(ids: ref Vec[i64]) -> String {
+    let names: Vec[String] = ids.iter().map(|i| f"n{i}").collect();
+    names.join(" ")
+}
+
+impl Sim {
+    fn new(n: i64, seed: i64) -> Sim {
+        let mut nodes: Vec[Node] = Vec.new();
+        for i in 0..n + 1 {
+            nodes.push(Node.new(i, seed, n));
+        }
+        let mut sim = Sim {
+            n: n,
+            nodes: nodes,
+            net: Rng.new(seed * 31 + 17),
+            queue: Vec.new(),
+            seq: 0,
+            loss: 0,
+            groups: None,
+            now: 0,
+            out: Vec.new(),
+            leaders: SortedMap.new(),
+            clients: Vec.new(),
+            reported: SortedSet.new(),
+        };
+        for i in 1..n + 1 {
+            sim.reset_timer(i);
+        }
+        sim
+    }
+
+    fn say(mut ref self, text: String) {
+        let line = f"t={self.now} {text}";
+        self.out.push(line);
+    }
+
+    fn majority(self) -> i64 {
+        self.n / 2 + 1
+    }
+
+    fn reset_timer(mut ref self, i: i64) {
+        let d = self.now + ELECTION_MIN + self.nodes[i].rng.below(ELECTION_SPREAD);
+        self.nodes[i].deadline = d;
+    }
+
+    // ------------------------------------------------------- network
+
+    fn send(mut ref self, src: i64, dst: i64, msg: own Msg) {
+        if self.loss > 0 and self.net.below(1000) < self.loss {
+            return;
+        }
+        let t = self.now + LAT_MIN + self.net.below(LAT_SPREAD);
+        self.seq += 1;
+        self.queue.push(Queued { time: t, seq: self.seq, src: src, dst: dst, msg: msg });
+    }
+
+    fn connected(self, a: i64, b: i64) -> bool {
+        match self.groups.as_ref() {
+            Some(g) => g.0.contains(a) == g.0.contains(b),
+            None => true,
+        }
+    }
+
+    // ------------------------------------------------------- roles
+
+    fn become_follower(mut ref self, i: i64, term: i64, why: String) {
+        let was = self.nodes[i].role;
+        if term > self.nodes[i].term {
+            self.nodes[i].term = term;
+            self.nodes[i].voted = 0;
+        }
+        self.nodes[i].role = Role.Follower;
+        if was == Role.Leader {
+            // A leader's election timer has not run; start it afresh.
+            self.reset_timer(i);
+        }
+        if was != Role.Follower {
+            let t = self.nodes[i].term;
+            self.say(f"n{i} steps down to follower in term {t} ({why})");
+        }
+    }
+
+    fn start_election(mut ref self, i: i64) {
+        self.nodes[i].role = Role.Candidate;
+        self.nodes[i].term += 1;
+        self.nodes[i].voted = i;
+        self.nodes[i].votes = SortedSet.new();
+        self.nodes[i].votes.insert(i);
+        self.nodes[i].leader = 0;
+        self.reset_timer(i);
+        let term = self.nodes[i].term;
+        self.say(f"n{i} starts an election for term {term}");
+        let last_index = self.nodes[i].last_index();
+        let last_term = self.nodes[i].last_term();
+        for p in 1..self.n + 1 {
+            if p != i {
+                self.send(i, p, Msg.Vote { term: term, last_index: last_index, last_term: last_term });
+            }
+        }
+        self.check_votes(i);
+    }
+
+    fn check_votes(mut ref self, i: i64) {
+        if self.nodes[i].role != Role.Candidate or self.nodes[i].votes.len() < self.majority() {
+            return;
+        }
+        self.nodes[i].role = Role.Leader;
+        self.nodes[i].leader = i;
+        let term = self.nodes[i].term;
+        let voters: Vec[i64] = self.nodes[i].votes.iter().cloned().collect();
+        self.say(f"n{i} becomes leader of term {term} (votes {node_names(voters)})");
+        if let Some(other) = self.leaders.get(term) {
+            if *other != i {
+                self.say(f"SAFETY: two leaders in term {term}");
+            }
+        }
+        self.leaders.insert(term, i);
+        self.nodes[i].log.push(LogEntry { term: term, cmd: "noop".to_string(), client: String.new() });
+        let last = self.nodes[i].last_index();
+        for p in 1..self.n + 1 {
+            self.nodes[i].next_index[p] = last;
+            self.nodes[i].match_index[p] = 0;
+        }
+        self.nodes[i].match_index[i] = last;
+        self.broadcast(i);
+    }
+
+    fn broadcast(mut ref self, i: i64) {
+        self.nodes[i].beat = self.now + HEARTBEAT;
+        for p in 1..self.n + 1 {
+            if p != i {
+                self.send_append(i, p);
+            }
+        }
+    }
+
+    fn send_append(mut ref self, i: i64, p: i64) {
+        let nd = ref self.nodes[i];
+        let prev = nd.next_index[p] - 1;
+        let prev_term = if prev > 0 { nd.log[prev - 1].term } else { 0 };
+        let end = (prev + BATCH).min(nd.log.len());
+        let entries = nd.log[prev..end].to_vec();
+        let msg = Msg.Append { term: nd.term, prev: prev, prev_term: prev_term, entries: entries, commit: nd.commit };
+        self.send(i, p, msg);
+    }
+
+    // ------------------------------------------------------- messages
+
+    fn deliver(mut ref self, src: i64, i: i64, msg: Msg) {
+        let term = msg.term();
+        if term > self.nodes[i].term {
+            self.become_follower(i, term, f"n{src} has term {term}");
+            self.nodes[i].leader = 0;
+        }
+        match msg {
+            Msg.Vote { term, last_index, last_term } => {
+                let mine = (self.nodes[i].last_term(), self.nodes[i].last_index());
+                let up_to_date = (last_term, last_index) >= mine;
+                let voted = self.nodes[i].voted;
+                let grant = term == self.nodes[i].term and (voted == 0 or voted == src) and up_to_date;
+                if grant {
+                    self.nodes[i].voted = src;
+                    self.reset_timer(i);
+                }
+                let t = self.nodes[i].term;
+                self.send(i, src, Msg.Voted { term: t, granted: grant });
+            }
+            Msg.Voted { term, granted } => {
+                if self.nodes[i].role == Role.Candidate and term == self.nodes[i].term and granted {
+                    self.nodes[i].votes.insert(src);
+                    self.check_votes(i);
+                }
+            }
+            Msg.Append { term, prev, prev_term, entries, commit } => {
+                if term < self.nodes[i].term {
+                    let t = self.nodes[i].term;
+                    self.send(i, src, Msg.Appended { term: t, ok: false, matched: 0 });
+                    return;
+                }
+                if self.nodes[i].role != Role.Follower {
+                    self.become_follower(i, term, f"n{src} leads term {term}");
+                }
+                self.nodes[i].leader = src;
+                self.reset_timer(i);
+                let t = self.nodes[i].term;
+                if prev > self.nodes[i].last_index() or (prev > 0 and self.nodes[i].log[prev - 1].term != prev_term) {
+                    self.send(i, src, Msg.Appended { term: t, ok: false, matched: 0 });
+                    return;
+                }
+                let count = entries.len();
+                let mut k = prev;
+                for e in entries.clone().into_iter() {
+                    if k < self.nodes[i].last_index() {
+                        if self.nodes[i].log[k].term != e.term {
+                            let dropped = self.nodes[i].last_index() - k;
+                            self.nodes[i].log.truncate(k);
+                            self.say(f"n{i} drops {dropped} conflicting entries from index {k + 1}");
+                            self.nodes[i].log.push(e);
+                        }
+                    } else {
+                        self.nodes[i].log.push(e);
+                    }
+                    k += 1;
+                }
+                if commit > self.nodes[i].commit {
+                    self.nodes[i].commit = commit.min(prev + count);
+                    self.apply(i);
+                }
+                self.send(i, src, Msg.Appended { term: t, ok: true, matched: prev + count });
+            }
+            Msg.Appended { term, ok, matched } => {
+                if self.nodes[i].role != Role.Leader or term != self.nodes[i].term {
+                    return;
+                }
+                if ok {
+                    if matched > self.nodes[i].match_index[src] {
+                        self.nodes[i].match_index[src] = matched;
+                    }
+                    self.nodes[i].next_index[src] = self.nodes[i].match_index[src] + 1;
+                    self.advance_commit(i);
+                    if self.nodes[i].next_index[src] <= self.nodes[i].last_index() {
+                        self.send_append(i, src);
+                    }
+                } else {
+                    self.nodes[i].next_index[src] = (self.nodes[i].next_index[src] - 1).max(1);
+                    self.send_append(i, src);
+                }
+            }
+        }
+    }
+
+    // The leader commits the newest entry of its own term that a majority
+    // holds, and with it every entry before it.
+    fn advance_commit(mut ref self, i: i64) {
+        let mut idx = self.nodes[i].last_index();
+        let floor = self.nodes[i].commit;
+        while idx > floor {
+            if self.nodes[i].log[idx - 1].term != self.nodes[i].term {
+                break;
+            }
+            let nd = ref self.nodes[i];
+            let have = (1..self.n + 1).filter(|p| nd.match_index[p] >= idx).count();
+            if have >= self.majority() {
+                self.nodes[i].commit = idx;
+                self.apply(i);
+                break;
+            }
+            idx -= 1;
+        }
+    }
+
+    fn apply(mut ref self, i: i64) {
+        while self.nodes[i].applied < self.nodes[i].commit {
+            self.nodes[i].applied += 1;
+            let at = self.nodes[i].applied;
+            let e = self.nodes[i].log[at - 1].clone();
+            let f: Vec[Str] = e.cmd.split(" ").collect();
+            if f[0] == "set" {
+                self.nodes[i].kv.insert(f[1].to_string(), f[2].to_string());
+            } else if f[0] == "del" {
+                self.nodes[i].kv.remove(f[1]);
+            } else if f[0] == "incr" {
+                let old = self.nodes[i].kv.get(f[1]).cloned() ?? "0".to_string();
+                let base = if is_digits(old) { number(old) } else { 0 };
+                self.nodes[i].kv.insert(f[1].to_string(), f"{base + number(f[2])}");
+            }
+            if self.nodes[i].role == Role.Leader and e.client.len() > 0 and not self.reported.contains(e.client) {
+                self.reported.insert(e.client.clone());
+                self.say(f"{e.client} committed: {e.cmd} at index {at} (term {e.term})");
+                for c in self.clients.iter_mut() {
+                    if c.name == e.client {
+                        c.status = f"committed at index {at}";
+                    }
+                }
+            }
+        }
+    }
+
+    // ------------------------------------------------------- the clock
+
+    fn tick(mut ref self) {
+        let now = self.now;
+        let mut (due, rest) = mem.take(mut self.queue).into_iter().partition(|m| m.time == now);
+        self.queue = rest;
+        due.sort_by(|a, b| a.seq.cmp(b.seq));
+        for m in due.into_iter() {
+            if self.nodes[m.dst].alive and self.connected(m.src, m.dst) {
+                self.deliver(m.src, m.dst, m.msg);
+            }
+        }
+        for i in 1..self.n + 1 {
+            if not self.nodes[i].alive {
+                continue;
+            }
+            if self.nodes[i].role == Role.Leader {
+                if now >= self.nodes[i].beat {
+                    self.broadcast(i);
+                }
+            } else if now >= self.nodes[i].deadline {
+                self.start_election(i);
+            }
+        }
+    }
+
+    // ------------------------------------------------------- targets
+
+    // The live leader with the highest term, among some nodes or all;
+    // 0 when there is none.
+    fn leader_node(self, among: Option[ref Vec[i64]]) -> i64 {
+        let mut best = 0;
+        for i in 1..self.n + 1 {
+            if let Some(g) = among {
+                if not g.contains(i) {
+                    continue;
+                }
+            }
+            let nd = ref self.nodes[i];
+            if nd.alive and nd.role == Role.Leader and (best == 0 or nd.term > self.nodes[best].term) {
+                best = i;
+            }
+        }
+        best
+    }
+
+    // A node for a client, crash or restart target; 0 when there is none.
+    fn resolve(self, target: Str) -> i64 {
+        if target.starts_with("n") and is_digits(target.substring(1, target.len())) {
+            return number(target.substring(1, target.len()));
+        }
+        match target {
+            "leader" => self.leader_node(None),
+            "follower" => {
+                for i in 1..self.n + 1 {
+                    if self.nodes[i].alive and self.nodes[i].role != Role.Leader {
+                        return i;
+                    }
+                }
+                0
+            }
+            "minority" | "majority" => {
+                let (a, b) = match self.groups.as_ref() {
+                    Some(g) => (g.0.clone(), g.1.clone()),
+                    None => return 0,
+                };
+                let (small, big) = if a.len() < b.len() { (a, b) } else { (b, a) };
+                let g = if target == "minority" { small } else { big };
+                let ld = self.leader_node(Some(ref g));
+                if ld != 0 {
+                    return ld;
+                }
+                for i in g.iter() {
+                    if self.nodes[*i].alive {
+                        return *i;
+                    }
+                }
+                0
+            }
+            _ => 0,
+        }
+    }
+
+    // ------------------------------------------------------- actions
+
+    fn act(mut ref self, w: ref Vec[String]) {
+        match w[0].as_str() {
+            "client" => self.client(w),
+            "crash" => {
+                let id = self.resolve(w[1]);
+                if id == 0 or not self.nodes[id].alive {
+                    self.say(f"crash {w[1]}: nothing to crash");
+                    return;
+                }
+                self.nodes[id].alive = false;
+                let role = self.nodes[id].role.name();
+                let term = self.nodes[id].term;
+                self.say(f"n{id} crashes ({role}, term {term})");
+            }
+            "restart" => {
+                let todo: Vec[i64] = if w[1] == "all" {
+                    (1..self.n + 1).filter(|i| not self.nodes[i].alive).collect()
+                } else {
+                    let id = self.resolve(w[1]);
+                    if id != 0 and not self.nodes[id].alive { [id].to_vec() } else { Vec.new() }
+                };
+                if todo.is_empty() {
+                    self.say(f"restart {w[1]}: nothing is down");
+                }
+                for id in todo.iter() {
+                    let n = self.n;
+                    self.nodes[*id].alive = true;
+                    self.nodes[*id].reset_volatile(n);
+                    self.reset_timer(*id);
+                    let term = self.nodes[*id].term;
+                    let len = self.nodes[*id].last_index();
+                    self.say(f"n{id} restarts (term {term}, log {len})");
+                }
+            }
+            "partition" => {
+                let spec = w[1].as_str();
+                let mut side: Vec[i64] = Vec.new();
+                if spec == "leader+1" {
+                    let ld = self.leader_node(None);
+                    if ld == 0 {
+                        self.say("partition leader+1: no leader".to_string());
+                        return;
+                    }
+                    let other = (1..self.n + 1).find(|i| i != ld and self.nodes[i].alive) ?? 0;
+                    side.push(ld);
+                    side.push(other);
+                } else if spec == "follower" {
+                    let id = self.resolve("follower");
+                    if id == 0 {
+                        self.say("partition follower: no follower".to_string());
+                        return;
+                    }
+                    side.push(id);
+                } else {
+                    for x in spec.split(",") {
+                        side.push(number(x));
+                    }
+                }
+                side.sort();
+                side.dedup();
+                let rest: Vec[i64] = (1..self.n + 1).filter(|i| not side.contains(i)).collect();
+                self.say(f"partition {node_names(side)} | {node_names(rest)}");
+                self.groups = Some((side, rest));
+            }
+            "heal" => {
+                self.groups = None;
+                self.say("heal".to_string());
+            }
+            "drop" => {
+                self.loss = number(w[1]);
+                let loss = self.loss;
+                self.say(f"drop {loss} per mille");
+            }
+            "status" => {
+                self.say("status".to_string());
+                let lines = self.status_lines();
+                self.out.extend(lines);
+            }
+            _ => {}
+        }
+    }
+
+    fn client(mut ref self, w: ref Vec[String]) {
+        let target = w[1].as_str();
+        let op = w[2..w.len()].join(" ");
+        let name = f"c{self.clients.len() + 1}";
+        self.clients.push(Client { name: name.clone(), cmd: op.clone(), status: "not committed".to_string() });
+        let mut id = self.resolve(target);
+        if id == 0 {
+            self.say(f"{name} {op}: no {target} to send to");
+            let last = self.clients.len() - 1;
+            self.clients[last].status = "never sent".to_string();
+            return;
+        }
+        // A client follows one redirect, as client libraries do.
+        for attempt in 0..2 {
+            if not self.nodes[id].alive {
+                self.say(f"{name} -> n{id}: no answer (down)");
+                return;
+            }
+            if self.nodes[id].role == Role.Leader {
+                break;
+            }
+            let ld = self.nodes[id].leader;
+            if ld == 0 or attempt == 1 {
+                let hint = if ld != 0 { f"try n{ld}" } else { "no leader known".to_string() };
+                self.say(f"{name} -> n{id}: not the leader, {hint}");
+                return;
+            }
+            self.say(f"{name} -> n{id}: not the leader, redirected to n{ld}");
+            id = ld;
+        }
+        let term = self.nodes[id].term;
+        self.nodes[id].log.push(LogEntry { term: term, cmd: op.clone(), client: name.clone() });
+        let last = self.nodes[id].last_index();
+        self.nodes[id].match_index[id] = last;
+        self.say(f"{name} -> n{id}: {op} appended at index {last} (term {term})");
+        self.broadcast(id);
+    }
+
+    fn status_lines(self) -> Vec[String] {
+        let mut lines: Vec[String] = Vec.new();
+        for i in 1..self.n + 1 {
+            let nd = ref self.nodes[i];
+            let state = if nd.alive { nd.role.name() } else { "down" };
+            let kv: Vec[String] = nd.kv.iter().map(|(k, v)| f"{k}={v}").collect();
+            lines.push(f"  n{i}: {state:<9} term {nd.term}, log {nd.last_index()} (last term {nd.last_term()}), commit {nd.commit}, kv {{{kv.join(", ")}}}");
+        }
+        lines
+    }
+
+    // ------------------------------------------------------- checks
+
+    fn safety(self) -> Vec[String] {
+        let mut out: Vec[String] = Vec.new();
+        let mut bad: Vec[String] = Vec.new();
+        for a in 1..self.n + 1 {
+            for b in a + 1..self.n + 1 {
+                let la = ref self.nodes[a].log;
+                let lb = ref self.nodes[b].log;
+                // Log Matching: two logs that agree on an entry's term at
+                // an index agree on everything up to it.
+                let mut idx = la.len().min(lb.len()) - 1;
+                while idx >= 0 {
+                    if la[idx].term == lb[idx].term {
+                        if la[0..idx + 1] != lb[0..idx + 1] {
+                            bad.push(f"n{a}/n{b} at {idx + 1}");
+                        }
+                        break;
+                    }
+                    idx -= 1;
+                }
+            }
+        }
+        out.push(if bad.is_empty() { "log matching ok".to_string() } else { "log matching FAILED: " + bad.join(", ") });
+        let (hi, who) = (1..self.n + 1).map(|i| (self.nodes[i].commit, i)).max() ?? (0, 0);
+        let reference = ref self.nodes[who].log;
+        let mut bad: Vec[String] = Vec.new();
+        for i in 1..self.n + 1 {
+            let c = self.nodes[i].commit;
+            if self.nodes[i].log[0..c] != reference[0..c] {
+                bad.push(f"n{i}");
+            }
+        }
+        let _ = hi;
+        out.push(if bad.is_empty() { "committed prefixes ok".to_string() } else { "committed prefixes FAILED: " + bad.join(", ") });
+        out
+    }
+}
+
+// ------------------------------------------------------------ scenarios
+
+fn is_digits(s: Str) -> bool {
+    s.len() > 0 and s.bytes().iter().all(|c| c >= b'0' and c <= b'9')
+}
+
+fn number(s: Str) -> i64 {
+    i64.parse(s).unwrap_or(0)
+}
+
+struct Plan {
+    n: i64,
+    seed: i64,
+    until: i64,
+    acts: Vec[(i64, Vec[String])],
+    errs: Vec[String],
+}
+
+impl Plan {
+    fn line(mut ref self, t: Str) -> Result[(), String] {
+        let w: Vec[Str] = t.split_whitespace().collect();
+        if w[0] == "nodes" or w[0] == "seed" or w[0] == "until" {
+            if w.len() != 2 or not is_digits(w[1]) {
+                return Err(f"{w[0]} needs a number");
+            }
+            let v = number(w[1]);
+            match w[0] {
+                "nodes" => {
+                    if v < 1 or v > 9 {
+                        return Err("nodes must be 1 to 9".to_string());
+                    }
+                    self.n = v;
+                }
+                "seed" => self.seed = v,
+                _ => self.until = v,
+            }
+            return Ok(());
+        }
+        if not is_digits(w[0]) {
+            return Err(f"unknown line: {t}");
+        }
+        let at = number(w[0]);
+        if let Some(last) = self.acts.last() {
+            if at < last.0 {
+                return Err(f"time {at} is before the line above");
+            }
+        }
+        if w.len() < 2 {
+            return Err("missing action".to_string());
+        }
+        let a = w[1];
+        let args = w[2..w.len()].to_vec();
+        match a {
+            "client" => {
+                if args.len() < 2 {
+                    return Err("client needs a target and a command".to_string());
+                }
+                let op = args[1..args.len()].to_vec();
+                let ok = (op[0] == "set" and op.len() == 3)
+                    or (op[0] == "del" and op.len() == 2)
+                    or (op[0] == "incr" and op.len() == 3 and is_digits(op[2]));
+                if not ok {
+                    return Err(f"bad command: {op.join(" ")}");
+                }
+            }
+            "crash" | "restart" | "partition" | "drop" => {
+                if args.len() != 1 {
+                    return Err(f"{a} needs one argument");
+                }
+                if a == "drop" and not (is_digits(args[0]) and number(args[0]) <= 1000) {
+                    return Err("drop needs 0 to 1000".to_string());
+                }
+                if a == "partition" and args[0] != "leader+1" and args[0] != "follower" {
+                    let top = self.n.max(1);
+                    let fine = args[0].split(",").all(|p| is_digits(p) and number(p) >= 1 and number(p) <= top);
+                    if not fine {
+                        return Err("partition needs leader+1, follower or node numbers".to_string());
+                    }
+                }
+            }
+            "heal" | "status" => {
+                if args.len() > 0 {
+                    return Err(f"{a} takes no arguments");
+                }
+            }
+            _ => return Err(f"unknown action: {a}"),
+        }
+        if a == "client" or a == "crash" or a == "restart" {
+            let tgt = args[0];
+            if tgt.starts_with("n") and is_digits(tgt.substring(1, tgt.len())) {
+                let k = number(tgt.substring(1, tgt.len()));
+                if k < 1 or k > self.n.max(1) {
+                    return Err(f"no node {tgt}");
+                }
+            }
+        }
+        let words: Vec[String] = w[1..w.len()].iter().map(|s| s.to_string()).collect();
+        self.acts.push((at, words));
+        Ok(())
+    }
+}
+
+fn parse(name: Str, text: Str) -> Plan {
+    let mut p = Plan { n: 0, seed: 0, until: 0, acts: Vec.new(), errs: Vec.new() };
+    let mut no = 0;
+    for line in text.split("\n") {
+        no += 1;
+        let t = line.trim();
+        if t.len() == 0 or t.starts_with("#") {
+            continue;
+        }
+        if let Err(e) = p.line(t) {
+            p.errs.push(f"{name} line {no}: {e}");
+        }
+    }
+    if p.n == 0 {
+        p.errs.push(f"{name}: no nodes line");
+    }
+    p
+}
+
+fn run(name: String, text: String) -> Vec[String] {
+    let p = parse(name, text);
+    let mut out: Vec[String] = Vec.new();
+    out.push(f"== {name}: {p.n} nodes, seed {p.seed}, until t={p.until}");
+    if not p.errs.is_empty() {
+        for e in p.errs.iter() {
+            out.push(f"! {e}");
+        }
+        return out;
+    }
+    let mut sim = Sim.new(p.n, p.seed);
+    let mut k = 0;
+    for t in 0..p.until + 1 {
+        sim.now = t;
+        while k < p.acts.len() and p.acts[k].0 == t {
+            sim.act(p.acts[k].1);
+            k += 1;
+        }
+        sim.tick();
+    }
+    sim.out.push(f"-- end at t={p.until}");
+    let lines = sim.status_lines();
+    sim.out.extend(lines);
+    let terms: Vec[String] = sim.leaders.iter().map(|(t, i)| f"{t}:n{i}").collect();
+    let shown = if terms.is_empty() { "none".to_string() } else { terms.join(" ") };
+    sim.out.push(f"  leaders: {shown}");
+    let (done, rest): (Vec[ref Client], Vec[ref Client]) = sim.clients.iter().partition(|c| c.status.starts_with("committed"));
+    let mut line = f"  clients: {done.len()} of {sim.clients.len()} committed";
+    if not rest.is_empty() {
+        let parts: Vec[String] = rest.iter().map(|c| f"{c.name} {c.status}").collect();
+        line = line + "; " + parts.join(", ");
+    }
+    sim.out.push(line);
+    for s in sim.safety().iter() {
+        sim.out.push(f"  {s}");
+    }
+    out.extend(mem.take(mut sim.out));
+    out
+}
+
+// ------------------------------------------------------------ files
+
+fn is_hexd(c: u8) -> bool {
+    (c >= b'0' and c <= b'9') or (c >= b'a' and c <= b'f') or (c >= b'A' and c <= b'F')
+}
+
+fn hex_val(c: u8) -> u8 {
+    if c >= b'0' and c <= b'9' {
+        c - b'0'
+    } else if c >= b'a' and c <= b'f' {
+        c - b'a' + 10
+    } else {
+        c - b'A' + 10
+    }
+}
+
+fn unhex(s: Str) -> Vec[u8] {
+    let mut digits: Vec[u8] = Vec.new();
+    for c in s.bytes() {
+        if is_hexd(c) {
+            digits.push(hex_val(c));
+        }
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i + 1 < digits.len() {
+        out.push(digits[i] * 16 + digits[i + 1]);
+        i += 2;
+    }
+    out
+}
+
+fn put_bytes(path: Str, b: Vec[u8]) -> Result[(), String] {
+    if let Err(e) = fs.write_bytes(path.to_string(), b) {
+        return Err(f"cannot write {path}: {e}");
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = fs.create_dir_all("data".to_string()) {
+        eprintln(f"cannot create data: {e}");
+        return;
+    }
+    if let Err(e) = write_data() {
+        eprintln(e);
+        return;
+    }
+    let mut names: Vec[String] = match fs.read_dir("data".to_string()) {
+        Ok(n) => n.into_iter().filter(|n| n.ends_with(".sim")).collect(),
+        Err(e) => {
+            eprintln(f"cannot list data: {e}");
+            return;
+        }
+    };
+    names.sort();
+    // One task per scenario, each its own cluster; the logs print in
+    // file name order.
+    let group = TaskGroup.new();
+    let mut handles = Vec.new();
+    for name in names.iter() {
+        let text = match fs.read_to_string(f"data/{name}") {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln(f"cannot read {name}: {e}");
+                return;
+            }
+        };
+        let owned = name.clone();
+        handles.push(group.spawn(|| run(owned, text)));
+    }
+    let mut out: Vec[String] = Vec.new();
+    for h in handles.into_iter() {
+        out.extend(h.join());
+    }
+    println(out.join("\n"));
+}
+
+// ============================================================ data
+
+// The files under data/, in name order.
+fn write_data() -> Result[(), String] {
+    put_bytes("data/1_basic.sim", unhex(file_0()))?;
+    put_bytes("data/2_leader_crash.sim", unhex(file_1()))?;
+    put_bytes("data/3_partition.sim", unhex(file_2()))?;
+    put_bytes("data/4_flaky.sim", unhex(file_3()))?;
+    put_bytes("data/5_churn.sim", unhex(file_4()))?;
+    put_bytes("data/6_isolated.sim", unhex(file_5()))?;
+    put_bytes("data/7_bad.sim", unhex(file_6()))?;
+    Ok(())
+}
+
+// data/1_basic.sim
+fn file_0() -> String {
+    """
+23205468726565206e6f64657320656c6563742061206c656164657220616e64207265706c6963617465206120666577
+207772697465732e0a6e6f64657320330a736565642031310a756e74696c20313530300a34303020636c69656e74206e
+3120736574207820310a34323020636c69656e74206e3220736574207920320a34333020636c69656e74206e3320696e
+6372207820350a363030207374617475730a39303020636c69656e74206e312064656c20790a39313020636c69656e74
+206e3220696e6372206869747320310a39323020636c69656e74206e3320696e6372206869747320310a
+"""
+}
+
+// data/2_leader_crash.sim
+fn file_1() -> String {
+    """
+2320546865206c656164657220637261736865733b20746865207265737420656c6563742061206e6577206f6e652c20
+616e6420746865206f6c640a23206c656164657220636f6d6573206261636b206173206120666f6c6c6f77657220616e
+6420636174636865732075702e0a6e6f64657320350a736565642032330a756e74696c20333030300a34303020636c69
+656e74206e312073657420636f6e6669672076310a34313020636c69656e74206e322073657420636f6e666967207631
+0a34323020636c69656e74206e332073657420636f6e6669672076310a34333020636c69656e74206e34207365742063
+6f6e6669672076310a34343020636c69656e74206e352073657420636f6e6669672076310a373030206372617368206c
+65616465720a39303020636c69656e74206e312073657420636f6e6669672076320a39303520636c69656e74206e3220
+73657420636f6e6669672076320a39313020636c69656e74206e332073657420636f6e6669672076320a39313520636c
+69656e74206e342073657420636f6e6669672076320a39323020636c69656e74206e352073657420636f6e6669672076
+320a31323030207374617475730a31353030207265737461727420616c6c0a32303030207374617475730a
+"""
+}
+
+// data/3_partition.sim
+fn file_2() -> String {
+    """
+2320546865206c656164657220697320637574206f66662077697468206f6e6520666f6c6c6f7765722e204974206b65
+6570732074616b696e67207772697465732069740a232063616e6e6f7420636f6d6d69743b20746865206d616a6f7269
+7479207369646520656c656374732061206c6561646572206f6620697473206f776e20616e6420676f65730a23206f6e
+2e20416674657220746865206865616c20746865206f6c64206c6561646572277320756e636f6d6d697474656420656e
+747269657320617265207265706c616365642e0a6e6f64657320350a7365656420350a756e74696c20343030300a3530
+3020636c69656e74206c656164657220736574206f776e657220616c6963650a38303020706172746974696f6e206c65
+616465722b310a39303020636c69656e74206d696e6f7269747920736574206f776e657220626f620a39303520636c69
+656e74206d696e6f7269747920696e637220736561747320320a3135303020636c69656e74206d616a6f726974792073
+6574206f776e6572206361726f6c0a3135313020636c69656e74206d616a6f7269747920696e63722073656174732037
+0a31373030207374617475730a32353030206865616c0a33323030207374617475730a3333303020636c69656e74206c
+656164657220696e637220736561747320310a
+"""
+}
+
+// data/4_flaky.sim
+fn file_3() -> String {
+    """
+232041206c6f737379206e6574776f726b3a20333025206f66206d65737361676573206172652064726f707065642e20
+456c656374696f6e732074616b650a23206c6f6e67657220616e6420736f6d6520617070656e6473206e656564207265
+74726965732c20627574206e6f7468696e67206973206c6f73742e0a6e6f64657320350a736565642039390a756e7469
+6c20363030300a3230302064726f70203330300a36303020636c69656e74206c656164657220736574206b3120610a31
+32303020636c69656e74206c656164657220736574206b3220620a3138303020636c69656e74206c6561646572207365
+74206b3320630a3234303020636c69656e74206c656164657220696e6372206e20310a3330303020636c69656e74206c
+656164657220696e6372206e20310a3336303020636c69656e74206c656164657220696e6372206e20310a3430303020
+64726f7020300a34353030207374617475730a
+"""
+}
+
+// data/5_churn.sim
+fn file_4() -> String {
+    """
+2320466f6c6c6f7765727320637261736820616e642072657374617274207768696c652077726974657320676f206f6e
+3b206174206f6e6520706f696e742074776f0a232061726520646f776e206174206f6e63652c207768696368206c6561
+7665732061206d616a6f72697479206f662074687265652e0a6e6f64657320350a736565642034310a756e74696c2035
+3030300a34303020636c69656e74206c656164657220736574206120310a36303020637261736820666f6c6c6f776572
+0a37303020636c69656e74206c656164657220696e6372206120310a39303020637261736820666f6c6c6f7765720a31
+30303020636c69656e74206c656164657220696e6372206120310a31333030207265737461727420616c6c0a31343030
+20636c69656e74206c656164657220696e6372206120310a31363030206372617368206c65616465720a323230302063
+6c69656e74206c656164657220696e637220612031300a32343030207374617475730a32363030207265737461727420
+616c6c0a3330303020637261736820666f6c6c6f7765720a3331303020637261736820666f6c6c6f7765720a33323030
+20637261736820666f6c6c6f7765720a3333303020636c69656e74206c656164657220696e63722061203130300a3336
+3030207374617475730a33373030207265737461727420616c6c0a34343030207374617475730a
+"""
+}
+
+// data/6_isolated.sim
+fn file_5() -> String {
+    """
+23204120666f6c6c6f77657220697320706172746974696f6e656420616c6f6e652e2049747320656c656374696f6e73
+206661696c2c20697473207465726d0a2320636c696d62732c20616e64206f6e20746865206865616c20697473206869
+67686572207465726d20666f726365732061206e657720656c656374696f6e2e0a6e6f64657320330a7365656420380a
+756e74696c20343030300a34303020636c69656e74206c656164657220736574206d6f6465206f6e0a36303020706172
+746974696f6e20666f6c6c6f7765720a3130303020636c69656e74206c656164657220736574206d6f6465206f66660a
+32363030207374617475730a32373030206865616c0a33353030207374617475730a3336303020636c69656e74206c65
+6164657220736574206d6f6465206175746f0a
+"""
+}
+
+// data/7_bad.sim
+fn file_6() -> String {
+    """
+23204d697374616b657320746865206c6f61646572207265706f7274732e0a6e6f64657320330a7365656420310a756e
+74696c203530300a66726f626e69636174650a31303020636c69656e74206e3920736574207820310a32303020657870
+6c6f6465206e310a33303020706172746974696f6e0a6e6f6465732039390a
+"""
+}

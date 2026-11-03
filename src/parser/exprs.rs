@@ -567,7 +567,18 @@ impl super::Parser {
                 Token::LeftParen => {
                     // Function call
                     self.advance();
-                    let args = self.parse_arg_list()?;
+                    let ctor = match &lhs.kind {
+                        ExprKind::Identifier(n) => Self::is_ctor_name(n),
+                        ExprKind::Path { segments, .. } => {
+                            segments.last().is_some_and(|n| Self::is_ctor_name(n))
+                        }
+                        _ => false,
+                    };
+                    let args = if ctor {
+                        self.parse_ctor_arg_list()?
+                    } else {
+                        self.parse_arg_list()?
+                    };
                     self.expect(&Token::RightParen)?;
                     // B-2026-08-18-33 — span the whole call (callee start ->
                     // past the `)`) rather than copying `lhs.span`. A call and
@@ -2825,7 +2836,11 @@ impl super::Parser {
             // Check for function call: Path(args)
             if self.check(&Token::LeftParen) {
                 self.advance();
-                let args = self.parse_arg_list()?;
+                let args = if path.last().is_some_and(|n| Self::is_ctor_name(n)) {
+                    self.parse_ctor_arg_list()?
+                } else {
+                    self.parse_arg_list()?
+                };
                 self.expect(&Token::RightParen)?;
                 // `P.size_of()`: see the postfix-call arm.
                 if args.is_empty()
@@ -3745,10 +3760,28 @@ impl super::Parser {
     /// are always unrestricted — a `Name { … }` arg is a struct literal even
     /// when the call sits in a condition (`while items.contains(P { x }) { … }`).
     fn parse_arg_list(&mut self) -> Option<Vec<CallArg>> {
-        self.with_struct_literals(Self::parse_arg_list_inner)
+        self.with_struct_literals(|p| p.parse_arg_list_inner(false))
     }
 
-    fn parse_arg_list_inner(&mut self) -> Option<Vec<CallArg>> {
+    /// The argument list of a call whose callee is named in Type case
+    /// (design.md § Naming): an enum variant or tuple-struct constructor,
+    /// `Some(..)`, `Ok(..)`, `Shape.Circle(..)`. A constructor has no
+    /// parameter modes, so `ref place` / `mut ref place` in it is the
+    /// borrow expression that builds a view, `Some(ref self.items[0])`
+    /// (design.md § `ref place` borrows a place), not the call-site mode
+    /// marker that the plain list rejects (B-2026-11-03-19).
+    fn parse_ctor_arg_list(&mut self) -> Option<Vec<CallArg>> {
+        self.with_struct_literals(|p| p.parse_arg_list_inner(true))
+    }
+
+    /// A callee name in Type case: an uppercase first letter and either a
+    /// later lowercase letter or exactly one letter. `MAX` is a constant.
+    fn is_ctor_name(name: &str) -> bool {
+        starts_upper(name)
+            && (name.chars().count() == 1 || name.chars().any(|c| c.is_ascii_lowercase()))
+    }
+
+    fn parse_arg_list_inner(&mut self, ctor: bool) -> Option<Vec<CallArg>> {
         let mut args = Vec::new();
         while !self.check(&Token::RightParen) && !self.is_at_end() {
             let arg_start = self.current_span();
@@ -3764,7 +3797,7 @@ impl super::Parser {
             // Reject `ref <expr>` at call sites (design.md Part 1½ Rule 4).
             // The keyword `ref` is never legal in argument position; the
             // parameter's mode is declared on the callee's signature.
-            if self.check(&Token::Ref) {
+            if !ctor && self.check(&Token::Ref) {
                 let ref_span = self.current_span();
                 self.error(
                     "`ref` is not written at call sites. \
@@ -3788,12 +3821,16 @@ impl super::Parser {
             // both prescribe deleting this token and had no way to name it:
             // `CallArg::span` starts at the label for `f(name: mut x)`, so it
             // cannot stand in.
-            let mut_marker_span = if self.check(&Token::Mut) {
+            // In a constructor's list `mut ref place` is the borrow
+            // expression; leave both tokens for `parse_expression`.
+            let ctor_mut_ref =
+                ctor && self.check(&Token::Mut) && matches!(self.peek_token_ref_at(1), Token::Ref);
+            let mut_marker_span = if self.check(&Token::Mut) && !ctor_mut_ref {
                 Some(self.current_span())
             } else {
                 None
             };
-            let mut_marker = if self.check(&Token::Mut) {
+            let mut_marker = if self.check(&Token::Mut) && !ctor_mut_ref {
                 // Look ahead: if the next token is `ref`, the user wrote
                 // `mut ref <expr>` — reject with a suggesting diagnostic.
                 if self.pos + 1 < self.tokens.len()
