@@ -1,0 +1,85 @@
+// LeetCode #1035: Uncrossed Lines -- one row and a diagonal
+//
+// The same recurrence as the table, kept in one row over nums2: before
+// row[j] is overwritten it holds the row above, and `diagonal` carries
+// the row above's value at j - 1 from one step to the next. O(m * n)
+// time, O(n) space.
+
+fn max_uncrossed_lines(nums1: ref Vec[i64], nums2: ref Vec[i64]) -> i64 {
+    let n = nums2.len();
+    let mut row: Vec[i64] = Vec.filled(n + 1, 0);
+    for x in nums1.iter() {
+        let mut diagonal = 0;
+        for j in 1..n + 1 {
+            let above = row[j];
+            row[j] = if x == nums2[j - 1] { diagonal + 1 } else { above.max(row[j - 1]) };
+            diagonal = above;
+        }
+    }
+    row[n]
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_list(len: i64, top: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut nums: Vec[i64] = Vec.new();
+    for _ in 0..len {
+        nums.push(next_random(mut seed) % top + 1);
+    }
+    nums
+}
+
+fn show(nums: ref Vec[i64]) -> String {
+    let parts: Vec[String] = nums.iter().map(|v| f"{v}").collect();
+    f"[{parts.join(",")}]"
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let examples: Vec[(Vec[i64], Vec[i64])] = vec![
+        (vec![1, 4, 2], vec![1, 2, 4]),
+        (vec![2, 5, 1, 2, 5], vec![10, 5, 2, 1, 5, 2]),
+        (vec![1, 3, 7, 1, 7, 5], vec![1, 9, 2, 5, 1]),
+        (vec![1], vec![1]),
+        (vec![1], vec![2]),
+        (vec![3, 3, 3], vec![3, 3]),
+        (vec![1, 2, 3, 4, 5], vec![5, 4, 3, 2, 1]),
+        (vec![1, 2, 1, 2, 1, 2], vec![2, 1, 2, 1, 2, 1]),
+    ];
+    for (nums1, nums2) in examples.iter() {
+        println(f"{show(nums1)}, {show(nums2)} -> {max_uncrossed_lines(nums1, nums2)}");
+    }
+    // random lists, values from 1 to `top`
+    let mut seed = 1035;
+    for (count, longest, top) in vec![(300, 8, 3), (200, 30, 2), (200, 30, 10), (40, 200, 5), (40, 200, 2000), (6, 500, 4), (6, 500, 2000)].iter() {
+        let mut total = 0;
+        let mut check = 0;
+        for _ in 0..count {
+            let len1 = next_random(mut seed) % longest + 1;
+            let len2 = next_random(mut seed) % longest + 1;
+            let nums1 = random_list(len1, top, mut seed);
+            let nums2 = random_list(len2, top, mut seed);
+            let lines = max_uncrossed_lines(nums1, nums2);
+            total += lines;
+            check = (check * 131 + lines) % 1000000007;
+        }
+        println(f"{count} pairs of up to {longest} values from 1 to {top}: sum {total}, checksum {check}");
+    }
+    // the largest: equal lists, one reversed, and one value against itself
+    let mut up: Vec[i64] = Vec.new();
+    let mut down: Vec[i64] = Vec.new();
+    for i in 0..500 {
+        up.push(i % 2000 + 1);
+        down.push(500 - i);
+    }
+    let same: Vec[i64] = Vec.filled(500, 7);
+    let wide = random_list(500, 2000, mut seed);
+    for (name, nums1, nums2) in vec![("1 to 500 against itself", up.clone(), up.clone()), ("1 to 500 against 500 to 1", up.clone(), down), ("500 sevens against 500 sevens", same.clone(), same), ("random against itself", wide.clone(), wide)].iter() {
+        println(f"{name}: {max_uncrossed_lines(nums1, nums2)}");
+    }
+}

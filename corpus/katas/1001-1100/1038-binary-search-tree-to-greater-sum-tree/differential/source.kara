@@ -1,0 +1,446 @@
+// LeetCode #1038: Binary Search Tree to Greater Sum Tree -- differential
+//
+// The five arms, copied here under their own names, against the statement
+// read literally and five properties of the answer.
+
+// ---- the running sum passed and returned (gst.kara)
+
+fn walk_add_greater(node: Option[TreeNode], above: i64) -> i64 {
+    match node {
+        None => above,
+        Some(n) => {
+            let total = walk_add_greater(n.right, above) + n.val;
+            n.val = total;
+            walk_add_greater(n.left, total)
+        }
+    }
+}
+
+fn walk_arm(root: Option[TreeNode]) -> Option[TreeNode] {
+    walk_add_greater(root, 0);
+    root
+}
+
+// ---- a new tree (gst_rebuild.kara)
+
+shared enum RTree {
+    Empty,
+    Node(RTree, i64, RTree),
+}
+
+fn rebuild_read(node: Option[TreeNode]) -> RTree {
+    match node {
+        None => RTree.Empty,
+        Some(n) => RTree.Node(rebuild_read(n.left), n.val, rebuild_read(n.right)),
+    }
+}
+
+fn rebuild_greater(tree: RTree, above: i64) -> (RTree, i64) {
+    match tree {
+        RTree.Empty => (RTree.Empty, above),
+        RTree.Node(left, key, right) => {
+            let (new_right, sum) = rebuild_greater(right, above);
+            let total = sum + key;
+            let (new_left, all) = rebuild_greater(left, total);
+            (RTree.Node(new_left, total, new_right), all)
+        }
+    }
+}
+
+fn rebuild_write(tree: RTree) -> Option[TreeNode] {
+    match tree {
+        RTree.Empty => None,
+        RTree.Node(left, key, right) => Some(TreeNode { val: key, left: rebuild_write(left), right: rebuild_write(right) }),
+    }
+}
+
+fn rebuild_arm(root: Option[TreeNode]) -> Option[TreeNode] {
+    let (tree, _) = rebuild_greater(rebuild_read(root), 0);
+    rebuild_write(tree)
+}
+
+// ---- a table of the keys (gst_counts.kara)
+
+fn counts_arm(root: Option[TreeNode]) -> Option[TreeNode] {
+    let mut present: Vec[bool] = Vec.filled(101, false);
+    let mut stack: Vec[TreeNode] = Vec.new();
+    if let Some(r) = root {
+        stack.push(r);
+    }
+    while let Some(n) = stack.pop() {
+        present[n.val] = true;
+        if let Some(l) = n.left {
+            stack.push(l);
+        }
+        if let Some(r) = n.right {
+            stack.push(r);
+        }
+    }
+    let mut at_least: Vec[i64] = Vec.filled(102, 0);
+    for v in (0..101).rev() {
+        at_least[v] = at_least[v + 1] + if present[v] { v } else { 0 };
+    }
+    if let Some(r) = root {
+        stack.push(r);
+    }
+    while let Some(n) = stack.pop() {
+        n.val = at_least[n.val];
+        if let Some(l) = n.left {
+            stack.push(l);
+        }
+        if let Some(r) = n.right {
+            stack.push(r);
+        }
+    }
+    root
+}
+
+// ---- the nodes sorted (gst_sorted.kara)
+
+fn sorted_arm(root: Option[TreeNode]) -> Option[TreeNode] {
+    let mut nodes: Vec[TreeNode] = Vec.new();
+    if let Some(r) = root {
+        nodes.push(r);
+    }
+    let mut head = 0;
+    while head < nodes.len() {
+        let n = nodes[head];
+        if let Some(l) = n.left {
+            nodes.push(l);
+        }
+        if let Some(r) = n.right {
+            nodes.push(r);
+        }
+        head += 1;
+    }
+    nodes.sort_by(|a, b| b.val.cmp(a.val));
+    let mut total = 0;
+    for n in nodes.iter() {
+        total += n.val;
+        n.val = total;
+    }
+    root
+}
+
+// ---- a search for each node (gst_prune.kara)
+
+fn prune_total(node: Option[TreeNode]) -> i64 {
+    match node {
+        None => 0,
+        Some(n) => prune_total(n.left) + n.val + prune_total(n.right),
+    }
+}
+
+fn prune_at_least(node: Option[TreeNode], v: i64) -> i64 {
+    match node {
+        None => 0,
+        Some(n) => if n.val >= v { n.val + prune_total(n.right) + prune_at_least(n.left, v) } else { prune_at_least(n.right, v) },
+    }
+}
+
+fn prune_preorder(node: Option[TreeNode], out: mut ref Vec[TreeNode]) {
+    if let Some(n) = node {
+        out.push(n);
+        prune_preorder(n.left, mut out);
+        prune_preorder(n.right, mut out);
+    }
+}
+
+fn prune_arm(root: Option[TreeNode]) -> Option[TreeNode] {
+    let mut nodes: Vec[TreeNode] = Vec.new();
+    prune_preorder(root, mut nodes);
+    let sums: Vec[i64] = nodes.iter().map(|n| prune_at_least(root, n.val)).collect();
+    for i in 0..nodes.len() {
+        nodes[i].val = sums[i];
+    }
+    root
+}
+
+// ---- the checks
+
+shared struct TreeNode {
+    mut val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn leaf(v: i64) -> TreeNode {
+    TreeNode { val: v, left: None, right: None }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A search tree of the keys, inserted in the order given.
+fn build(keys: ref Vec[i64]) -> Option[TreeNode] {
+    if keys.is_empty() {
+        return None;
+    }
+    let root = leaf(keys[0]);
+    for i in 1..keys.len() {
+        let v = keys[i];
+        let mut node = root;
+        loop {
+            if v < node.val {
+                match node.left {
+                    Some(l) => node = l,
+                    None => {
+                        node.left = Some(leaf(v));
+                        break;
+                    }
+                }
+            } else {
+                match node.right {
+                    Some(r) => node = r,
+                    None => {
+                        node.right = Some(leaf(v));
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    Some(root)
+}
+
+// The tree level by level, LeetCode's form without the trailing nulls.
+fn levels(root: Option[TreeNode]) -> Vec[Option[i64]] {
+    let mut out: Vec[Option[i64]] = Vec.new();
+    let mut queue: Vec[Option[TreeNode]] = vec![root];
+    let mut head = 0;
+    while head < queue.len() {
+        match queue[head] {
+            Some(n) => {
+                out.push(Some(n.val));
+                queue.push(n.left);
+                queue.push(n.right);
+            }
+            None => out.push(None),
+        }
+        head += 1;
+    }
+    while out.len() > 0 and out[out.len() - 1].is_none() {
+        out.pop();
+    }
+    out
+}
+
+fn run_arm(arm: i64, root: Option[TreeNode]) -> Option[TreeNode] {
+    match arm {
+        0 => walk_arm(root),
+        1 => rebuild_arm(root),
+        2 => counts_arm(root),
+        3 => sorted_arm(root),
+        _ => prune_arm(root),
+    }
+}
+
+// Each arm's answer for the keys inserted in this order, as the tree
+// level by level, and as a map from each old key to its new value.
+fn answer(arm: i64, keys: ref Vec[i64]) -> (Vec[Option[i64]], Map[i64, i64]) {
+    let root = build(keys);
+    let before = levels(root);
+    let after = levels(run_arm(arm, root));
+    let mut new_of: Map[i64, i64] = Map.new();
+    for i in 0..before.len() {
+        if let Some(k) = before[i] {
+            if i < after.len() {
+                if let Some(v) = after[i] {
+                    new_of.insert(k, v);
+                }
+            }
+        }
+    }
+    (after, new_of)
+}
+
+// The statement read literally: every key changed to the original key
+// plus the sum of all keys greater than it, in the same tree.
+fn literal(keys: ref Vec[i64]) -> Vec[Option[i64]] {
+    levels(build(keys)).iter().map(|item| match item {
+        None => None,
+        Some(k) => {
+            let mut sum = k;
+            for j in keys.iter() {
+                if j > k {
+                    sum += j;
+                }
+            }
+            Some(sum)
+        }
+    }).collect()
+}
+
+// The keys in order, smallest first.
+fn in_order(node: Option[TreeNode], out: mut ref Vec[i64]) {
+    if let Some(n) = node {
+        in_order(n.left, mut out);
+        out.push(n.val);
+        in_order(n.right, mut out);
+    }
+}
+
+fn main() {
+    let mut failures: Vec[i64] = Vec.filled(6, 0);
+    let mut checks = 0;
+    let mut check = 0;
+    let mut seed = 10381;
+    // every insertion order of five keys (120 trees, the 42 shapes), then
+    // random trees of 1 to 100 distinct keys from 0 to 100, most small
+    let mut cases: Vec[Vec[i64]] = Vec.new();
+    for a in 0..5 {
+        for b in 0..5 {
+            for c in 0..5 {
+                for d in 0..5 {
+                    for e in 0..5 {
+                        let order = vec![a, b, c, d, e];
+                        let mut seen: Vec[bool] = Vec.filled(5, false);
+                        for x in order.iter() {
+                            seen[x] = true;
+                        }
+                        if seen.iter().all(|s| s) {
+                            cases.push(order.iter().map(|x| 10 * x + 20).collect());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    for k in 0..330 {
+        let size = if k % 10 == 9 { next_random(mut seed) % 100 + 1 } else { next_random(mut seed) % 20 + 1 };
+        let mut pool: Vec[i64] = (0..101).collect();
+        for i in 0..size {
+            let j = i + next_random(mut seed) % (101 - i);
+            pool.swap(i, j);
+        }
+        cases.push(pool[0..size].to_vec());
+    }
+    let mut nodes = 0;
+    for keys in cases.iter() {
+        nodes += keys.len();
+        let want = literal(keys);
+        let total: i64 = keys.iter().sum();
+        let top = keys.iter().max().unwrap();
+        // the keys moved up by c, as far as 100 allows
+        let c = next_random(mut seed) % (100 - top + 1);
+        let shifted: Vec[i64] = keys.iter().map(|k| k + c).collect();
+        // each key k turned into 100 - k: the mirror image of the tree
+        let mirrored: Vec[i64] = keys.iter().map(|k| 100 - k).collect();
+        // one key not in the tree inserted last, when there is one
+        let mut absent: Vec[i64] = Vec.new();
+        for x in 0..101 {
+            if not keys.contains(x) {
+                absent.push(x);
+            }
+        }
+        let added = if absent.is_empty() { -1 } else { absent[next_random(mut seed) % absent.len()] };
+        let mut grown = keys.clone();
+        if added >= 0 {
+            grown.push(added);
+        }
+        let results: Vec[(Vec[Option[i64]], Map[i64, i64])] = (0..5).map(|i| answer(i, keys)).collect();
+        let (first, _) = ref results[0];
+        for item in first.iter() {
+            let x = match item {
+                Some(v) => v + 1000,
+                None => 7,
+            };
+            check = (check * 131 + x) % 1000000007;
+        }
+        for i in 0..5 {
+            let (got, new_of) = ref results[i];
+            // P1: the statement read literally
+            checks += 1;
+            if got != want {
+                failures[0] += 1;
+            }
+            // P2: in order the new values never rise, the smallest key's
+            // is the sum of every key and the largest key keeps its own
+            checks += 1;
+            let root = build(keys);
+            let mut order: Vec[i64] = Vec.new();
+            in_order(run_arm(i, root), mut order);
+            let mut falls = order.len() == keys.len();
+            for j in 1..order.len() {
+                if order[j] > order[j - 1] {
+                    falls = false;
+                }
+            }
+            if not falls or order[0] != total or order[order.len() - 1] != top {
+                failures[1] += 1;
+            }
+            // P3: moving every key up by c adds c once for each key at
+            // least as large
+            checks += 1;
+            let (_, new_shifted) = answer(i, shifted);
+            let mut ok = new_shifted.len() == keys.len();
+            for k in keys.iter() {
+                let rank = keys.iter().filter(|j| j >= k).count();
+                if new_shifted.get(k + c).cloned() != new_of.get(k).map(|v| v + c * rank) {
+                    ok = false;
+                }
+            }
+            if not ok {
+                failures[2] += 1;
+            }
+            // P4: in the mirror image, 100 - k gets the sum of 100 - j
+            // over every key j at most k, which the old answer gives as
+            // the total less the keys above k
+            checks += 1;
+            let (_, new_mirrored) = answer(i, mirrored);
+            let mut ok = new_mirrored.len() == keys.len();
+            for k in keys.iter() {
+                let count_at_most = keys.iter().filter(|j| j <= k).count();
+                let expect = new_of.get(k).map(|v| 100 * count_at_most - (total - v + k));
+                if new_mirrored.get(100 - k).cloned() != expect {
+                    ok = false;
+                }
+            }
+            if not ok {
+                failures[3] += 1;
+            }
+            // P5: a key inserted as a new leaf adds itself to every
+            // smaller key's value and changes no other
+            if added >= 0 {
+                checks += 1;
+                let (_, new_grown) = answer(i, grown);
+                let mut ok = new_grown.len() == keys.len() + 1;
+                for k in keys.iter() {
+                    let extra = if k < added { added } else { 0 };
+                    if new_grown.get(k).cloned() != new_of.get(k).map(|v| v + extra) {
+                        ok = false;
+                    }
+                }
+                let above = keys.iter().filter(|j| j > added).sum();
+                if new_grown.get(added).cloned() != Some(added + above) {
+                    ok = false;
+                }
+                if not ok {
+                    failures[4] += 1;
+                }
+            }
+            // P6: each arm agrees with at least two of the other four
+            checks += 1;
+            let mut agree = 0;
+            for o in 0..5 {
+                let (other, _) = ref results[o];
+                if o != i and other == got {
+                    agree += 1;
+                }
+            }
+            if agree < 2 {
+                failures[5] += 1;
+            }
+        }
+    }
+    let mut sum = 0;
+    for p in 0..6 {
+        if failures[p] > 0 {
+            println(f"P{p + 1}: {failures[p]} failures");
+        }
+        sum += failures[p];
+    }
+    println(f"{cases.len()} trees, {nodes} nodes: checksum {check}, {checks} checks over 5 arms: {sum} failures");
+}

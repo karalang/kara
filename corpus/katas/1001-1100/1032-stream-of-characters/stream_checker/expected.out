@@ -1,0 +1,14 @@
+cd,f,kl / abcdefghijkl: FFFTFTFFFFFT
+ab,ba,aaab,abab,baa / aaaaabababbbababbbbababaaabaaa: FFFFFTTTTTFFTTTTFFFTTTTTTFTTTF
+a / abcaba: TFFTFT
+abc,bc,c / abcbcc: FFTFTT
+aaa / aaaaaa: FFTTTT
+zz,xyz / xyzzyxz: FFTTFFF
+1000 checkers of 3 words up to 3 letters over 2, 30 queries each: 19063 found, checksum 200589322
+300 checkers of 10 words up to 6 letters over 3, 200 queries each: 33162 found, checksum 816510465
+100 checkers of 40 words up to 12 letters over 4, 500 queries each: 32148 found, checksum 965280090
+20 checkers of 200 words up to 40 letters over 6, 2000 queries each: 25191 found, checksum 861624200
+5 checkers of 100 words up to 5 letters over 26, 4000 queries each: 10958 found, checksum 976887432
+2 checkers of 2000 words up to 200 letters over 26, 20000 queries each: 13728 found, checksum 228409109
+"a" against 40000 a's: 40000 found
+200 a's and "b" against 40000 a's: 39801 found, first at query 200

@@ -1,0 +1,260 @@
+// LeetCode #1039: Minimum Score Triangulation of Polygon -- differential
+//
+// The five arms, copied here under their own names, against the statement
+// read literally and four properties of the answer.
+
+// ---- interval table, by length (triangulation.kara)
+
+fn table_arm(values: ref Vec[i64]) -> i64 {
+    let n = values.len();
+    let mut best: Vec[Vec[i64]] = Vec.filled(n, Vec.filled(n, 0));
+    for len in 2..n {
+        for i in 0..n - len {
+            let j = i + len;
+            let mut least = i64.MAX;
+            for k in i + 1..j {
+                let score = best[i][k] + best[k][j] + values[i] * values[k] * values[j];
+                if score < least {
+                    least = score;
+                }
+            }
+            best[i][j] = least;
+        }
+    }
+    best[0][n - 1]
+}
+
+// ---- recursion with a memo (triangulation_memo.kara)
+
+fn memo_least(values: ref Vec[i64], i: i64, j: i64, memo: mut ref Vec[Vec[i64]]) -> i64 {
+    if j - i < 2 {
+        return 0;
+    }
+    if memo[i][j] >= 0 {
+        return memo[i][j];
+    }
+    let mut best = i64.MAX;
+    for k in i + 1..j {
+        let score = memo_least(values, i, k, mut memo) + memo_least(values, k, j, mut memo) + values[i] * values[k] * values[j];
+        best = best.min(score);
+    }
+    memo[i][j] = best;
+    best
+}
+
+fn memo_arm(values: ref Vec[i64]) -> i64 {
+    let n = values.len();
+    let mut memo: Vec[Vec[i64]] = Vec.filled(n, Vec.filled(n, -1));
+    memo_least(values, 0, n - 1, mut memo)
+}
+
+// ---- one flat table (triangulation_flat.kara)
+
+fn flat_arm(values: ref Vec[i64]) -> i64 {
+    let n = values.len();
+    let mut best: Vec[i64] = Vec.filled(n * n, 0);
+    for i in (0..n - 2).rev() {
+        for j in i + 2..n {
+            let mut least = i64.MAX;
+            for k in i + 1..j {
+                let score = best[i * n + k] + best[k * n + j] + values[i] * values[k] * values[j];
+                if score < least {
+                    least = score;
+                }
+            }
+            best[i * n + j] = least;
+        }
+    }
+    best[n - 1]
+}
+
+// ---- the answers kept in a Map (triangulation_map.kara)
+
+fn map_least(values: ref Vec[i64], i: i64, j: i64, known: mut ref Map[(i64, i64), i64]) -> i64 {
+    if j - i < 2 {
+        return 0;
+    }
+    if let Some(score) = known.get((i, j)) {
+        return score;
+    }
+    let mut best = i64.MAX;
+    for k in i + 1..j {
+        let left = map_least(values, i, k, mut known);
+        let right = map_least(values, k, j, mut known);
+        let score = left + right + values[i] * values[k] * values[j];
+        if score < best {
+            best = score;
+        }
+    }
+    known.insert((i, j), best);
+    best
+}
+
+fn map_arm(values: ref Vec[i64]) -> i64 {
+    let mut known: Map[(i64, i64), i64] = Map.new();
+    map_least(values, 0, values.len() - 1, mut known)
+}
+
+// ---- each entry the min of an iterator (triangulation_iter.kara)
+
+fn iter_arm(values: ref Vec[i64]) -> i64 {
+    let n = values.len();
+    let mut best: Vec[Vec[i64]] = Vec.filled(n, Vec.filled(n, 0));
+    for len in 2..n {
+        for i in 0..n - len {
+            let j = i + len;
+            let least = (i + 1..j).map(|k| best[i][k] + best[k][j] + values[i] * values[k] * values[j]).min();
+            best[i][j] = least.unwrap();
+        }
+    }
+    best[0][n - 1]
+}
+
+// ---- the checks
+
+fn arms(values: ref Vec[i64]) -> Vec[i64] {
+    vec![table_arm(values), memo_arm(values), flat_arm(values), map_arm(values), iter_arm(values)]
+}
+
+// The statement read literally: every triangulation of the vertices i
+// to j, as the list of its scores. The edge i..j is a side of exactly
+// one triangle, whose third vertex k is anything between them; the rest
+// is a triangulation of i..k beside one of k..j.
+fn every_score(values: ref Vec[i64], i: i64, j: i64) -> Vec[i64] {
+    if j - i < 2 {
+        return vec![0];
+    }
+    let mut out: Vec[i64] = Vec.new();
+    for k in i + 1..j {
+        let lefts = every_score(values, i, k);
+        let rights = every_score(values, k, j);
+        for l in lefts.iter() {
+            for r in rights.iter() {
+                out.push(l + r + values[i] * values[k] * values[j]);
+            }
+        }
+    }
+    out
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let mut failures: Vec[i64] = Vec.filled(6, 0);
+    let mut checks = 0;
+    let mut check = 0;
+    let mut seed = 10391;
+    // every polygon of 3 to 6 vertices with values from 1 to 3; 400
+    // random ones of 3 to 8 vertices and 60 of 9 to 50, values 1 to 100
+    let mut cases: Vec[Vec[i64]] = Vec.new();
+    for n in 3..7 {
+        let mut count = 1;
+        for _ in 0..n {
+            count *= 3;
+        }
+        for code in 0..count {
+            let mut values: Vec[i64] = Vec.new();
+            let mut c = code;
+            for _ in 0..n {
+                values.push(c % 3 + 1);
+                c /= 3;
+            }
+            cases.push(values);
+        }
+    }
+    for k in 0..460 {
+        let n = if k < 400 { next_random(mut seed) % 6 + 3 } else { next_random(mut seed) % 42 + 9 };
+        cases.push((0..n).map(|_| next_random(mut seed) % 100 + 1).collect());
+    }
+    // the number of triangulations of n vertices, Catalan(n - 2)
+    let catalan: Vec[i64] = vec![1, 1, 2, 5, 14, 42, 132];
+    let mut searched = 0;
+    for values in cases.iter() {
+        let n = values.len();
+        let got = arms(values);
+        check = (check * 131 + got[0]) % 1000000007;
+        let small = n <= 8;
+        let mut want = -1;
+        let mut counted = true;
+        if small {
+            searched += 1;
+            let scores = every_score(values, 0, n - 1);
+            counted = scores.len() == catalan[n - 2];
+            want = scores.iter().min().unwrap();
+        }
+        // P2: the polygon turned by r places
+        let r = next_random(mut seed) % n;
+        let turned: Vec[i64] = (0..n).map(|i| values[(i + r) % n]).collect();
+        let got_turned = arms(turned);
+        // P3: the polygon walked the other way round
+        let reversed: Vec[i64] = (0..n).map(|i| values[n - 1 - i]).collect();
+        let got_reversed = arms(reversed);
+        // P4: every value scaled by the same factor from 2 to 5
+        let c = next_random(mut seed) % 4 + 2;
+        let scaled: Vec[i64] = values.iter().map(|v| v * c).collect();
+        let got_scaled = arms(scaled);
+        // P5: at least n - 2 triangles of the smallest value cubed, and
+        // at most the fan from any one vertex
+        let low = values.iter().min().unwrap();
+        let floor = (n - 2) * low * low * low;
+        let mut ceiling = i64.MAX;
+        for v in 0..n {
+            let mut fan = 0;
+            for a in 1..n - 1 {
+                fan += values[v] * values[(v + a) % n] * values[(v + a + 1) % n];
+            }
+            ceiling = ceiling.min(fan);
+        }
+        for i in 0..5 {
+            // P1: the statement read literally, on at most 8 vertices
+            if small {
+                checks += 1;
+                if got[i] != want or not counted {
+                    failures[0] += 1;
+                }
+            }
+            // P2: turning the polygon changes nothing
+            checks += 1;
+            if got_turned[i] != got[i] {
+                failures[1] += 1;
+            }
+            // P3: nor does walking it the other way round
+            checks += 1;
+            if got_reversed[i] != got[i] {
+                failures[2] += 1;
+            }
+            // P4: scaling by c scales every triangle by c^3
+            checks += 1;
+            if got_scaled[i] != got[i] * c * c * c {
+                failures[3] += 1;
+            }
+            // P5: between the floor and the best fan
+            checks += 1;
+            if got[i] < floor or got[i] > ceiling {
+                failures[4] += 1;
+            }
+            // P6: each arm agrees with at least two of the other four
+            checks += 1;
+            let mut agree = 0;
+            for o in 0..5 {
+                if o != i and got[o] == got[i] {
+                    agree += 1;
+                }
+            }
+            if agree < 2 {
+                failures[5] += 1;
+            }
+        }
+    }
+    let mut total = 0;
+    for p in 0..6 {
+        if failures[p] > 0 {
+            println(f"P{p + 1}: {failures[p]} failures");
+        }
+        total += failures[p];
+    }
+    println(f"{cases.len()} polygons ({searched} searched in full): checksum {check}, {checks} checks over 5 arms: {total} failures");
+}

@@ -1,0 +1,90 @@
+// LeetCode #1031: Maximum Sum of Two Non-Overlapping Subarrays -- a table from the right
+//
+// best[i][w] is the largest sum of the windows in the set w (bit 0 the
+// first length, bit 1 the second) placed without overlap in nums[i..],
+// or -1 when they do not fit; every value is at least 0, so no real sum
+// is -1. Fill it from the right end: skip nums[i], or start a wanted
+// window there. O(n).
+
+fn max_sum_two_no_overlap(nums: Vec[i64], first_len: i64, second_len: i64) -> i64 {
+    let n = nums.len();
+    let lens: Vec[i64] = vec![first_len, second_len];
+    let mut prefix: Vec[i64] = Vec.filled(n + 1, 0);
+    for i in 0..n {
+        prefix[i + 1] = prefix[i] + nums[i];
+    }
+    let mut best: Vec[Vec[i64]] = Vec.filled(n + 1, vec![0, -1, -1, -1]);
+    for i in (0..n).rev() {
+        for w in 1..4 {
+            let mut here = best[i + 1][w];
+            for k in 0..2 {
+                if w & (1 << k) != 0 and i + lens[k] <= n {
+                    let rest = best[i + lens[k]][w & ~(1 << k)];
+                    if rest >= 0 {
+                        here = here.max(prefix[i + lens[k]] - prefix[i] + rest);
+                    }
+                }
+            }
+            best[i][w] = here;
+        }
+    }
+    best[0][3]
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(nums: ref Vec[i64]) -> String {
+    let parts: Vec[String] = nums.iter().map(|x| f"{x}").collect();
+    "[" + parts.join(",") + "]"
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let examples: Vec[(Vec[i64], i64, i64)] = vec![
+        (vec![0, 6, 5, 2, 2, 5, 1, 9, 4], 1, 2),
+        (vec![3, 8, 1, 3, 2, 1, 8, 9, 0], 3, 2),
+        (vec![2, 1, 5, 6, 0, 9, 5, 0, 3, 8], 4, 3),
+        (vec![1, 2], 1, 1),
+        (vec![5, 5, 5, 5, 5], 2, 3),
+        (vec![0, 0, 0, 0], 1, 2),
+        (vec![9, 0, 0, 0, 0, 9], 1, 1),
+        (vec![1, 9, 9, 1, 1, 1, 8, 8], 2, 2),
+    ];
+    for (nums, first_len, second_len) in examples.iter() {
+        println(f"{show(nums)}, {first_len}, {second_len} -> {max_sum_two_no_overlap(nums, first_len, second_len)}");
+    }
+    // random arrays of `n` values from 0 to `top`, with random lengths
+    let mut seed = 1031;
+    let groups: Vec[(i64, i64, i64)] = vec![(3000, 4, 9), (1000, 12, 1000), (300, 40, 100), (60, 200, 1000), (10, 1000, 1000), (200, 30, 1)];
+    for (count, n, top) in groups.iter() {
+        let mut total = 0;
+        let mut check = 0;
+        for _ in 0..count {
+            let mut nums: Vec[i64] = Vec.new();
+            for _ in 0..n {
+                nums.push(next_random(mut seed) % (top + 1));
+            }
+            let first_len = next_random(mut seed) % (n - 1) + 1;
+            let second_len = next_random(mut seed) % (n - first_len) + 1;
+            let answer = max_sum_two_no_overlap(nums, first_len, second_len);
+            total += answer;
+            check = (check * 131 + answer) % 1000000007;
+        }
+        println(f"{count} arrays of {n} values (0 to {top}): sum {total}, checksum {check}");
+    }
+    // the largest arrays: every value 1000, and a rising run
+    let full: Vec[i64] = Vec.filled(1000, 1000);
+    let mut rising: Vec[i64] = Vec.new();
+    for i in 0..1000 {
+        rising.push(i);
+    }
+    println(f"1000 values of 1000, lengths 1 and 999: {max_sum_two_no_overlap(full, 1, 999)}");
+    println(f"1000 values of 1000, lengths 500 and 500: {max_sum_two_no_overlap(full, 500, 500)}");
+    println(f"0 to 999, lengths 10 and 300: {max_sum_two_no_overlap(rising, 10, 300)}");
+    println(f"0 to 999, lengths 300 and 10: {max_sum_two_no_overlap(rising, 300, 10)}");
+}

@@ -1,0 +1,321 @@
+// LeetCode #1031: Maximum Sum of Two Non-Overlapping Subarrays -- differential
+//
+// The five arms, copied here under their own names, against the statement
+// read literally and five properties of the answer.
+
+// ---- one pass over prefix sums (max_two.kara)
+
+fn prefix_pass(nums: Vec[i64], first_len: i64, second_len: i64) -> i64 {
+    let n = nums.len();
+    let mut prefix: Vec[i64] = Vec.filled(n + 1, 0);
+    for i in 0..n {
+        prefix[i + 1] = prefix[i] + nums[i];
+    }
+    let mut best = 0;
+    let mut best_first = 0;
+    let mut best_second = 0;
+    for i in first_len + second_len..n + 1 {
+        // the first-length window just left of a second-length window ending at i
+        best_first = best_first.max(prefix[i - second_len] - prefix[i - second_len - first_len]);
+        best_second = best_second.max(prefix[i - first_len] - prefix[i - first_len - second_len]);
+        best = best
+            .max(best_first + prefix[i] - prefix[i - second_len])
+            .max(best_second + prefix[i] - prefix[i - first_len]);
+    }
+    best
+}
+
+// ---- every pair of windows (max_two_pairs.kara)
+
+fn pairs_arm(nums: Vec[i64], first_len: i64, second_len: i64) -> i64 {
+    let n = nums.len();
+    let mut prefix: Vec[i64] = Vec.filled(n + 1, 0);
+    for i in 0..n {
+        prefix[i + 1] = prefix[i] + nums[i];
+    }
+    let mut best = 0;
+    for a in 0..n - first_len + 1 {
+        for b in 0..n - second_len + 1 {
+            if a + first_len <= b or b + second_len <= a {
+                let total = prefix[a + first_len] - prefix[a] + prefix[b + second_len] - prefix[b];
+                best = best.max(total);
+            }
+        }
+    }
+    best
+}
+
+// ---- the best window to the right (max_two_sides.kara)
+
+fn window_sums(nums: ref Vec[i64], len: i64) -> Vec[i64] {
+    let mut sums: Vec[i64] = Vec.new();
+    let mut sum = 0;
+    for i in 0..nums.len() {
+        sum += nums[i];
+        if i >= len {
+            sum -= nums[i - len];
+        }
+        if i + 1 >= len {
+            sums.push(sum);
+        }
+    }
+    sums
+}
+
+fn left_then_right(nums: ref Vec[i64], left_len: i64, right_len: i64) -> i64 {
+    let left = window_sums(nums, left_len);
+    let right = window_sums(nums, right_len);
+    // best_right[j]: the best right-hand window starting at j or later
+    let mut best_right: Vec[i64] = Vec.filled(right.len() + 1, 0);
+    for j in (0..right.len()).rev() {
+        best_right[j] = best_right[j + 1].max(right[j]);
+    }
+    let mut best = 0;
+    for i in 0..left.len() {
+        let j = i + left_len;
+        if j < right.len() {
+            best = best.max(left[i] + best_right[j]);
+        }
+    }
+    best
+}
+
+fn sides_arm(nums: Vec[i64], first_len: i64, second_len: i64) -> i64 {
+    left_then_right(nums, first_len, second_len).max(left_then_right(nums, second_len, first_len))
+}
+
+// ---- recursion with a memo (max_two_memo.kara)
+
+fn best_from(prefix: ref Vec[i64], lens: ref Vec[i64], i: i64, wanted: i64, memo: mut ref Map[(i64, i64), Option[i64]]) -> Option[i64] {
+    if wanted == 0 {
+        return Some(0);
+    }
+    if let Some(known) = memo.get((i, wanted)) {
+        return known.clone();
+    }
+    let n = prefix.len() - 1;
+    let mut best: Option[i64] = None;
+    if i < n {
+        best = best_from(prefix, lens, i + 1, wanted, mut memo);
+    }
+    for k in 0..2 {
+        if wanted & (1 << k) != 0 and i + lens[k] <= n {
+            if let Some(rest) = best_from(prefix, lens, i + lens[k], wanted & ~(1 << k), mut memo) {
+                let total = prefix[i + lens[k]] - prefix[i] + rest;
+                best = match best {
+                    Some(b) => Some(b.max(total)),
+                    None => Some(total),
+                };
+            }
+        }
+    }
+    memo.insert((i, wanted), best);
+    best
+}
+
+fn memo_arm(nums: Vec[i64], first_len: i64, second_len: i64) -> i64 {
+    let n = nums.len();
+    let mut prefix: Vec[i64] = Vec.filled(n + 1, 0);
+    for i in 0..n {
+        prefix[i + 1] = prefix[i] + nums[i];
+    }
+    let mut memo: Map[(i64, i64), Option[i64]] = Map.new();
+    best_from(prefix, vec![first_len, second_len], 0, 3, mut memo).unwrap_or(0)
+}
+
+// ---- a table from the right (max_two_table.kara)
+
+fn table_arm(nums: Vec[i64], first_len: i64, second_len: i64) -> i64 {
+    let n = nums.len();
+    let lens: Vec[i64] = vec![first_len, second_len];
+    let mut prefix: Vec[i64] = Vec.filled(n + 1, 0);
+    for i in 0..n {
+        prefix[i + 1] = prefix[i] + nums[i];
+    }
+    let mut best: Vec[Vec[i64]] = Vec.filled(n + 1, vec![0, -1, -1, -1]);
+    for i in (0..n).rev() {
+        for w in 1..4 {
+            let mut here = best[i + 1][w];
+            for k in 0..2 {
+                if w & (1 << k) != 0 and i + lens[k] <= n {
+                    let rest = best[i + lens[k]][w & ~(1 << k)];
+                    if rest >= 0 {
+                        here = here.max(prefix[i + lens[k]] - prefix[i] + rest);
+                    }
+                }
+            }
+            best[i][w] = here;
+        }
+    }
+    best[0][3]
+}
+
+// ---- harness ----------------------------------------------------------------
+
+fn arms(nums: ref Vec[i64], first_len: i64, second_len: i64) -> Vec[i64] {
+    vec![
+        prefix_pass(nums, first_len, second_len),
+        pairs_arm(nums, first_len, second_len),
+        sides_arm(nums, first_len, second_len),
+        memo_arm(nums, first_len, second_len),
+        table_arm(nums, first_len, second_len),
+    ]
+}
+
+fn sum_of(nums: ref Vec[i64], start: i64, len: i64) -> i64 {
+    let mut total = 0;
+    for i in start..start + len {
+        total += nums[i];
+    }
+    total
+}
+
+// The statement read literally: of every first-length subarray and every
+// second-length one that share no index, the largest total, each summed
+// element by element.
+fn literal(nums: ref Vec[i64], first_len: i64, second_len: i64) -> i64 {
+    let n = nums.len();
+    let mut best = -1;
+    for a in 0..n - first_len + 1 {
+        for b in 0..n - second_len + 1 {
+            let mut shared = false;
+            for i in a..a + first_len {
+                if i >= b and i < b + second_len {
+                    shared = true;
+                }
+            }
+            if not shared {
+                best = best.max(sum_of(nums, a, first_len) + sum_of(nums, b, second_len));
+            }
+        }
+    }
+    best
+}
+
+// The largest sum of one subarray of length `len`.
+fn best_window(nums: ref Vec[i64], len: i64) -> i64 {
+    let mut best = 0;
+    for a in 0..nums.len() - len + 1 {
+        best = best.max(sum_of(nums, a, len));
+    }
+    best
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let mut failures: Vec[i64] = Vec.filled(6, 0);
+    let mut checks = 0;
+    let mut check = 0;
+    let mut seed = 10311;
+    // every array of 2 to 4 values from 0 to 2 with every pair of lengths
+    // that fits; then 600 random arrays of 2 to 30 values and 30 of 31 to
+    // 300, with values up to 3, 20 or 1000
+    let mut cases: Vec[(Vec[i64], i64, i64)] = Vec.new();
+    let mut size = 9;
+    for n in 2..5 {
+        for code in 0..size {
+            let mut nums: Vec[i64] = Vec.new();
+            let mut rest = code;
+            for _ in 0..n {
+                nums.push(rest % 3);
+                rest = rest / 3;
+            }
+            for first_len in 1..n {
+                for second_len in 1..n - first_len + 1 {
+                    cases.push((nums.clone(), first_len, second_len));
+                }
+            }
+        }
+        size = size * 3;
+    }
+    let tops: Vec[i64] = vec![3, 20, 1000];
+    for k in 0..630 {
+        let n = if k < 600 { 2 + next_random(mut seed) % 29 } else { 31 + next_random(mut seed) % 270 };
+        let top = tops[next_random(mut seed) % 3];
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            nums.push(next_random(mut seed) % (top + 1));
+        }
+        let first_len = next_random(mut seed) % (n - 1) + 1;
+        let second_len = next_random(mut seed) % (n - first_len) + 1;
+        cases.push((nums, first_len, second_len));
+    }
+    let mut searched = 0;
+    for (nums, first_len, second_len) in cases.iter() {
+        let n = nums.len();
+        let got = arms(nums, first_len, second_len);
+        check = (check * 131 + got[0]) % 1000000007;
+        let want = if n <= 30 { searched += 1; literal(nums, first_len, second_len) } else { -1 };
+        // P2: the two lengths the other way round
+        let got_swapped = arms(nums, second_len, first_len);
+        // P3: the array reversed
+        let mut reversed: Vec[i64] = Vec.new();
+        for i in 0..n {
+            reversed.push(nums[n - 1 - i]);
+        }
+        let got_reversed = arms(reversed, first_len, second_len);
+        // P4: every value raised by the same amount
+        let shift = next_random(mut seed) % 50 + 1;
+        let shifted: Vec[i64] = nums.iter().map(|x| x + shift).collect();
+        let got_shifted = arms(shifted, first_len, second_len);
+        // P5: bounds from single windows
+        let low = best_window(nums, first_len + second_len);
+        let high = best_window(nums, first_len) + best_window(nums, second_len);
+        for a in 0..5 {
+            // P1: the statement read literally, on arrays of at most 30
+            // values
+            if n <= 30 {
+                checks += 1;
+                if got[a] != want {
+                    failures[0] += 1;
+                }
+            }
+            // P2: which window is called first does not matter
+            checks += 1;
+            if got_swapped[a] != got[a] {
+                failures[1] += 1;
+            }
+            // P3: reversing the array reverses every pair of windows
+            checks += 1;
+            if got_reversed[a] != got[a] {
+                failures[2] += 1;
+            }
+            // P4: every value up by `shift` puts every pair's total up by
+            // `shift` for each of its first_len + second_len values
+            checks += 1;
+            if got_shifted[a] != got[a] + shift * (first_len + second_len) {
+                failures[3] += 1;
+            }
+            // P5: at least the best window of both lengths together, which
+            // splits into two that do not overlap, and at most the best
+            // window of each length added
+            checks += 1;
+            if got[a] < low or got[a] > high {
+                failures[4] += 1;
+            }
+            // P6: each arm agrees with at least two of the other four
+            checks += 1;
+            let mut agree = 0;
+            for o in 0..5 {
+                if o != a and got[o] == got[a] {
+                    agree += 1;
+                }
+            }
+            if agree < 2 {
+                failures[5] += 1;
+            }
+        }
+    }
+    let mut total = 0;
+    for p in 0..6 {
+        if failures[p] > 0 {
+            println(f"P{p + 1}: {failures[p]} failures");
+        }
+        total += failures[p];
+    }
+    println(f"{cases.len()} cases ({searched} searched in full): checksum {check}, {checks} checks over 5 arms: {total} failures");
+}

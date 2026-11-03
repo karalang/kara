@@ -1,0 +1,467 @@
+// LeetCode #1034: Coloring A Border -- differential
+//
+// The five arms, copied here under their own names, against the statement
+// read literally and five properties of the answer.
+
+// ---- depth-first, by recursion (color_border.kara)
+
+fn star_visit(grid: ref Vec[Vec[i64]], r: i64, c: i64, color: i64, seen: mut ref Vec[Vec[bool]], out: mut ref Vec[Vec[i64]]) {
+    seen[r][c] = true;
+    let m = grid.len();
+    let n = grid[0].len();
+    let mut border = false;
+    for (dr, dc) in vec![(-1, 0), (1, 0), (0, -1), (0, 1)].iter() {
+        let (nr, nc) = (r + dr, c + dc);
+        if nr < 0 or nr >= m or nc < 0 or nc >= n or grid[nr][nc] != grid[r][c] {
+            border = true;
+        } else if not seen[nr][nc] {
+            star_visit(grid, nr, nc, color, mut seen, mut out);
+        }
+    }
+    if border {
+        out[r][c] = color;
+    }
+}
+
+fn star_arm(grid: ref Vec[Vec[i64]], row: i64, col: i64, color: i64) -> Vec[Vec[i64]] {
+    let mut seen: Vec[Vec[bool]] = Vec.filled(grid.len(), Vec.filled(grid[0].len(), false));
+    let mut out = grid.clone();
+    star_visit(grid, row, col, color, mut seen, mut out);
+    out
+}
+
+// ---- breadth-first, with a queue (color_border_bfs.kara)
+
+fn bfs_arm(grid: ref Vec[Vec[i64]], row: i64, col: i64, color: i64) -> Vec[Vec[i64]] {
+    let m = grid.len();
+    let n = grid[0].len();
+    let start = grid[row][col];
+    let mut seen: Vec[Vec[bool]] = Vec.filled(m, Vec.filled(n, false));
+    let mut queue: VecDeque[(i64, i64)] = VecDeque.new();
+    let mut border: Vec[(i64, i64)] = Vec.new();
+    seen[row][col] = true;
+    queue.push_back((row, col));
+    while let Some((r, c)) = queue.pop_front() {
+        let mut edge = false;
+        for (dr, dc) in vec![(-1, 0), (1, 0), (0, -1), (0, 1)].iter() {
+            let (nr, nc) = (r + dr, c + dc);
+            if nr < 0 or nr >= m or nc < 0 or nc >= n or grid[nr][nc] != start {
+                edge = true;
+            } else if not seen[nr][nc] {
+                seen[nr][nc] = true;
+                queue.push_back((nr, nc));
+            }
+        }
+        if edge {
+            border.push((r, c));
+        }
+    }
+    let mut out = grid.clone();
+    for (r, c) in border.iter() {
+        out[r][c] = color;
+    }
+    out
+}
+
+// ---- marking in place, with a stack (color_border_mark.kara)
+
+fn mark_arm(grid: ref Vec[Vec[i64]], row: i64, col: i64, color: i64) -> Vec[Vec[i64]] {
+    let m = grid.len();
+    let n = grid[0].len();
+    let start = grid[row][col];
+    let mut out = grid.clone();
+    let mut stack: Vec[(i64, i64)] = vec![(row, col)];
+    let mut cells: Vec[(i64, i64)] = Vec.new();
+    out[row][col] = -start;
+    while let Some((r, c)) = stack.pop() {
+        cells.push((r, c));
+        for (dr, dc) in vec![(-1, 0), (1, 0), (0, -1), (0, 1)].iter() {
+            let (nr, nc) = (r + dr, c + dc);
+            if nr >= 0 and nr < m and nc >= 0 and nc < n and out[nr][nc] == start {
+                out[nr][nc] = -start;
+                stack.push((nr, nc));
+            }
+        }
+    }
+    let mut border: Vec[bool] = Vec.new();
+    for (r, c) in cells.iter() {
+        let mut edge = false;
+        for (dr, dc) in vec![(-1, 0), (1, 0), (0, -1), (0, 1)].iter() {
+            let (nr, nc) = (r + dr, c + dc);
+            if nr < 0 or nr >= m or nc < 0 or nc >= n or out[nr][nc] > 0 {
+                edge = true;
+            }
+        }
+        border.push(edge);
+    }
+    for i in 0..cells.len() {
+        let (r, c) = cells[i];
+        out[r][c] = if border[i] { color } else { start };
+    }
+    out
+}
+
+// ---- union-find over the whole grid (color_border_union.kara)
+
+struct UnionSets {
+    parent: Vec[i64],
+    size: Vec[i64],
+}
+
+impl UnionSets {
+    fn new(count: i64) -> UnionSets {
+        let mut parent: Vec[i64] = Vec.new();
+        for i in 0..count {
+            parent.push(i);
+        }
+        UnionSets { parent: parent, size: Vec.filled(count, 1) }
+    }
+
+    fn find(mut ref self, x: i64) -> i64 {
+        let mut x = x;
+        while self.parent[x] != x {
+            self.parent[x] = self.parent[self.parent[x]];
+            x = self.parent[x];
+        }
+        x
+    }
+
+    fn join(mut ref self, a: i64, b: i64) {
+        let mut ra = self.find(a);
+        let mut rb = self.find(b);
+        if ra == rb {
+            return;
+        }
+        if self.size[ra] < self.size[rb] {
+            let t = ra;
+            ra = rb;
+            rb = t;
+        }
+        self.parent[rb] = ra;
+        self.size[ra] += self.size[rb];
+    }
+}
+
+fn union_arm(grid: ref Vec[Vec[i64]], row: i64, col: i64, color: i64) -> Vec[Vec[i64]] {
+    let m = grid.len();
+    let n = grid[0].len();
+    let mut sets = UnionSets.new(m * n);
+    for r in 0..m {
+        for c in 0..n {
+            if r + 1 < m and grid[r + 1][c] == grid[r][c] {
+                sets.join(r * n + c, (r + 1) * n + c);
+            }
+            if c + 1 < n and grid[r][c + 1] == grid[r][c] {
+                sets.join(r * n + c, r * n + c + 1);
+            }
+        }
+    }
+    let target = sets.find(row * n + col);
+    let mut out = grid.clone();
+    for r in 0..m {
+        for c in 0..n {
+            if sets.find(r * n + c) == target {
+                let mut edge = false;
+                for (dr, dc) in vec![(-1, 0), (1, 0), (0, -1), (0, 1)].iter() {
+                    let (nr, nc) = (r + dr, c + dc);
+                    if nr < 0 or nr >= m or nc < 0 or nc >= n or sets.find(nr * n + nc) != target {
+                        edge = true;
+                    }
+                }
+                if edge {
+                    out[r][c] = color;
+                }
+            }
+        }
+    }
+    out
+}
+
+// ---- sweeps until nothing changes (color_border_sweeps.kara)
+
+fn sweeps_arm(grid: ref Vec[Vec[i64]], row: i64, col: i64, color: i64) -> Vec[Vec[i64]] {
+    let m = grid.len();
+    let n = grid[0].len();
+    let start = grid[row][col];
+    let mut inside: Vec[Vec[bool]] = Vec.filled(m, Vec.filled(n, false));
+    inside[row][col] = true;
+    let mut grew = true;
+    while grew {
+        grew = false;
+        for r in 0..m {
+            for c in 0..n {
+                if not inside[r][c] and grid[r][c] == start {
+                    let near = (r > 0 and inside[r - 1][c])
+                        or (r + 1 < m and inside[r + 1][c])
+                        or (c > 0 and inside[r][c - 1])
+                        or (c + 1 < n and inside[r][c + 1]);
+                    if near {
+                        inside[r][c] = true;
+                        grew = true;
+                    }
+                }
+            }
+        }
+    }
+    let mut out = grid.clone();
+    for r in 0..m {
+        for c in 0..n {
+            if inside[r][c] {
+                let mut held = 0;
+                if r > 0 and inside[r - 1][c] {
+                    held += 1;
+                }
+                if r + 1 < m and inside[r + 1][c] {
+                    held += 1;
+                }
+                if c > 0 and inside[r][c - 1] {
+                    held += 1;
+                }
+                if c + 1 < n and inside[r][c + 1] {
+                    held += 1;
+                }
+                if held < 4 {
+                    out[r][c] = color;
+                }
+            }
+        }
+    }
+    out
+}
+
+// ---- the checks
+
+fn arms(grid: ref Vec[Vec[i64]], row: i64, col: i64, color: i64) -> Vec[Vec[Vec[i64]]] {
+    vec![star_arm(grid, row, col, color), bfs_arm(grid, row, col, color), mark_arm(grid, row, col, color), union_arm(grid, row, col, color), sweeps_arm(grid, row, col, color)]
+}
+
+// The statement read literally. Two squares are connected when they have
+// the same colour and are next to each other in one of the four
+// directions; a connected component is every square joined to (row, col)
+// by a chain of such pairs, found here as the closure of the "next to and
+// the same colour" relation over every pair of squares (Warshall). A
+// square of the component is on the border when it is next to a square
+// not in the component, or on the boundary of the grid: the first row or
+// column, or the last.
+fn literal(grid: ref Vec[Vec[i64]], row: i64, col: i64, color: i64) -> Vec[Vec[i64]] {
+    let m = grid.len();
+    let n = grid[0].len();
+    let cells = m * n;
+    let mut joined: Vec[Vec[bool]] = Vec.filled(cells, Vec.filled(cells, false));
+    for a in 0..cells {
+        joined[a][a] = true;
+        for b in 0..cells {
+            let (ra, ca, rb, cb) = (a / n, a % n, b / n, b % n);
+            let next_to = (ra - rb).abs() + (ca - cb).abs() == 1;
+            if next_to and grid[ra][ca] == grid[rb][cb] {
+                joined[a][b] = true;
+            }
+        }
+    }
+    for k in 0..cells {
+        for a in 0..cells {
+            if joined[a][k] {
+                for b in 0..cells {
+                    if joined[k][b] {
+                        joined[a][b] = true;
+                    }
+                }
+            }
+        }
+    }
+    let start = row * n + col;
+    let mut out = grid.clone();
+    for a in 0..cells {
+        if joined[start][a] {
+            let (r, c) = (a / n, a % n);
+            let mut border = r == 0 or c == 0 or r == m - 1 or c == n - 1;
+            for b in 0..cells {
+                let (rb, cb) = (b / n, b % n);
+                if (r - rb).abs() + (c - cb).abs() == 1 and not joined[start][b] {
+                    border = true;
+                }
+            }
+            if border {
+                out[r][c] = color;
+            }
+        }
+    }
+    out
+}
+
+fn transpose(grid: ref Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for c in 0..grid[0].len() {
+        let mut line: Vec[i64] = Vec.new();
+        for r in 0..grid.len() {
+            line.push(grid[r][c]);
+        }
+        out.push(line);
+    }
+    out
+}
+
+fn upside_down(grid: ref Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for r in 0..grid.len() {
+        out.push(grid[grid.len() - 1 - r].clone());
+    }
+    out
+}
+
+fn raised(grid: ref Vec[Vec[i64]], k: i64) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for line in grid.iter() {
+        let moved: Vec[i64] = line.iter().map(|v| v + k).collect();
+        out.push(moved);
+    }
+    out
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let mut failures: Vec[i64] = Vec.filled(6, 0);
+    let mut checks = 0;
+    let mut check = 0;
+    let mut seed = 10341;
+    // every grid of up to 3 by 3 squares of colours 1 and 2, from a
+    // random square with a random colour from 1 to 3; then 300 random
+    // grids of up to 6 by 6 with colours up to 1, 2, 3 or 9, and 40 of up
+    // to 30 by 30
+    let mut cases: Vec[(Vec[Vec[i64]], i64, i64, i64)] = Vec.new();
+    for m in 1..4 {
+        for n in 1..4 {
+            for code in 0..(1 << (m * n)) {
+                let mut grid: Vec[Vec[i64]] = Vec.new();
+                for r in 0..m {
+                    let mut line: Vec[i64] = Vec.new();
+                    for c in 0..n {
+                        line.push((code >> (r * n + c)) % 2 + 1);
+                    }
+                    grid.push(line);
+                }
+                let row = next_random(mut seed) % m;
+                let col = next_random(mut seed) % n;
+                let color = next_random(mut seed) % 3 + 1;
+                cases.push((grid, row, col, color));
+            }
+        }
+    }
+    let tops: Vec[i64] = vec![1, 2, 3, 9];
+    for k in 0..340 {
+        let size = if k < 300 { 6 } else { 30 };
+        let m = next_random(mut seed) % size + 1;
+        let n = next_random(mut seed) % size + 1;
+        let top = tops[next_random(mut seed) % 4];
+        let mut grid: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..m {
+            let mut line: Vec[i64] = Vec.new();
+            for _ in 0..n {
+                line.push(next_random(mut seed) % top + 1);
+            }
+            grid.push(line);
+        }
+        let row = next_random(mut seed) % m;
+        let col = next_random(mut seed) % n;
+        let color = next_random(mut seed) % (top + 1) + 1;
+        cases.push((grid, row, col, color));
+    }
+    let mut searched = 0;
+    for (grid, row, col, color) in cases.iter() {
+        let m = grid.len();
+        let n = grid[0].len();
+        let got = arms(grid, row, col, color);
+        for line in got[0].iter() {
+            for v in line.iter() {
+                check = (check * 131 + v) % 1000000007;
+            }
+        }
+        let small = m * n <= 36;
+        let want = if small { searched += 1; literal(grid, row, col, color) } else { grid.clone() };
+        // P2: the grid turned on its diagonal
+        let got_turned = arms(transpose(grid), col, row, color);
+        // P3: the grid upside down
+        let got_flipped = arms(upside_down(grid), m - 1 - row, col, color);
+        // P4: every colour, and the new one, raised by the same amount
+        let k = next_random(mut seed) % 50 + 1;
+        let got_raised = arms(raised(grid, k), row, col, color + k);
+        let start = grid[row][col];
+        for a in 0..5 {
+            // P1: the statement read literally, on grids of at most 36
+            // squares
+            if small {
+                checks += 1;
+                if got[a] != want {
+                    failures[0] += 1;
+                }
+            }
+            // P2: turning the grid on its diagonal turns the answer
+            checks += 1;
+            if got_turned[a] != transpose(got[a]) {
+                failures[1] += 1;
+            }
+            // P3: turning the grid upside down turns the answer
+            checks += 1;
+            if got_flipped[a] != upside_down(got[a]) {
+                failures[2] += 1;
+            }
+            // P4: only which squares share a colour matters, so raising
+            // every colour and the new one by k raises the answer by k
+            checks += 1;
+            if got_raised[a] != raised(got[a], k) {
+                failures[3] += 1;
+            }
+            // P5: the grid keeps its shape; a square changes only to the
+            // new colour, and only if it had the starting square's colour;
+            // the starting square, when on the grid's edge, takes the new
+            // colour
+            checks += 1;
+            let mut sound = got[a].len() == m;
+            for r in 0..m {
+                if sound and got[a][r].len() != n {
+                    sound = false;
+                }
+            }
+            if sound {
+                for r in 0..m {
+                    for c in 0..n {
+                        let v = got[a][r][c];
+                        if v != grid[r][c] and (v != color or grid[r][c] != start) {
+                            sound = false;
+                        }
+                    }
+                }
+                let on_edge = row == 0 or col == 0 or row == m - 1 or col == n - 1;
+                if on_edge and got[a][row][col] != color {
+                    sound = false;
+                }
+            }
+            if not sound {
+                failures[4] += 1;
+            }
+            // P6: each arm agrees with at least two of the other four
+            checks += 1;
+            let mut agree = 0;
+            for o in 0..5 {
+                if o != a and got[o] == got[a] {
+                    agree += 1;
+                }
+            }
+            if agree < 2 {
+                failures[5] += 1;
+            }
+        }
+    }
+    let mut total = 0;
+    for p in 0..6 {
+        if failures[p] > 0 {
+            println(f"P{p + 1}: {failures[p]} failures");
+        }
+        total += failures[p];
+    }
+    println(f"{cases.len()} cases ({searched} searched in full): checksum {check}, {checks} checks over 5 arms: {total} failures");
+}

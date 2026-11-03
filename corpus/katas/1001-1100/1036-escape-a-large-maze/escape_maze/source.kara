@@ -1,0 +1,111 @@
+// LeetCode #1036: Escape a Large Maze -- breadth-first, bounded
+//
+// The grid is 10^6 by 10^6 but at most 200 squares are blocked. n
+// blocked squares fence off the most room when they cut a corner on a
+// diagonal, which shuts in n * (n - 1) / 2 squares. So a breadth-first
+// search from the source that reaches the target, or reaches more
+// squares than that, cannot be fenced in; the source and the target can
+// meet exactly when neither is. The size of the grid is a parameter of
+// the search. O(n^2) squares per search.
+
+fn not_fenced(blocked: ref Set[(i64, i64)], from: (i64, i64), to: (i64, i64), side: i64) -> bool {
+    let limit = blocked.len() * (blocked.len() - 1) / 2;
+    let mut seen: Set[(i64, i64)] = Set.new();
+    let mut queue: VecDeque[(i64, i64)] = VecDeque.new();
+    seen.insert(from);
+    queue.push_back(from);
+    while let Some((x, y)) = queue.pop_front() {
+        if (x, y) == to or seen.len() > limit {
+            return true;
+        }
+        for (dx, dy) in vec![(1, 0), (-1, 0), (0, 1), (0, -1)].iter() {
+            let next = (x + dx, y + dy);
+            let (nx, ny) = next;
+            if nx >= 0 and nx < side and ny >= 0 and ny < side and not blocked.contains(next) and not seen.contains(next) {
+                seen.insert(next);
+                queue.push_back(next);
+            }
+        }
+    }
+    false
+}
+
+fn escape_within(blocked: ref Vec[(i64, i64)], source: (i64, i64), target: (i64, i64), side: i64) -> bool {
+    let walls: Set[(i64, i64)] = blocked.iter().cloned().collect();
+    not_fenced(walls, source, target, side) and not_fenced(walls, target, source, side)
+}
+
+fn is_escape_possible(blocked: ref Vec[(i64, i64)], source: (i64, i64), target: (i64, i64)) -> bool {
+    escape_within(blocked, source, target, 1000000)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // LeetCode's two examples, then a few more
+    let mut corner: Vec[(i64, i64)] = Vec.new();
+    for k in 0..200 {
+        corner.push((k, 199 - k));
+    }
+    // a diamond of 200 blocks at distance 50 from (500000, 500000)
+    let mut diamond: Vec[(i64, i64)] = Vec.new();
+    for k in 0..50 {
+        diamond.push((500000 + k, 500000 + 50 - k));
+        diamond.push((500000 + 50 - k, 500000 - k));
+        diamond.push((500000 - k, 500000 - 50 + k));
+        diamond.push((500000 - 50 + k, 500000 + k));
+    }
+    let examples: Vec[(String, Vec[(i64, i64)], (i64, i64), (i64, i64))] = vec![
+        ("two blocks round a corner", vec![(0, 1), (1, 0)], (0, 0), (0, 2)),
+        ("no blocks", Vec.new(), (0, 0), (999999, 999999)),
+        ("two blocks, target in the corner", vec![(0, 1), (1, 0)], (0, 2), (0, 0)),
+        ("a wall of 200 across a corner, from inside", corner.clone(), (0, 0), (500, 500)),
+        ("a wall of 200 across a corner, from the last square inside", corner.clone(), (198, 0), (199, 1)),
+        ("a wall of 200 across a corner, both inside", corner.clone(), (0, 0), (0, 198)),
+        ("a wall of 200 across a corner, both outside", corner.clone(), (199, 1), (999999, 0)),
+        ("a diamond of 200, from the centre", diamond.clone(), (500000, 500000), (0, 0)),
+        ("a diamond of 200, to the centre", diamond.clone(), (999999, 999999), (500000, 500000)),
+        ("a diamond of 200, both inside", diamond.clone(), (500000, 500000), (500049, 500000)),
+        ("a diamond of 200, just outside", diamond.clone(), (500000, 500051), (0, 999999)),
+    ];
+    for (name, blocked, source, target) in examples.iter() {
+        println(f"{name}: {is_escape_possible(blocked, source, target)}");
+    }
+    // random blocks, near each other or anywhere
+    let mut seed = 1036;
+    for (count, blocks, spread) in vec![(40, 10, 6), (40, 50, 12), (20, 200, 25), (20, 200, 1000000)].iter() {
+        let mut free = 0;
+        let mut check = 0;
+        for _ in 0..count {
+            let base = if next_random(mut seed) % 2 == 0 { 0 } else { 1000000 - spread };
+            let mut taken: Set[(i64, i64)] = Set.new();
+            let mut blocked: Vec[(i64, i64)] = Vec.new();
+            while blocked.len() < blocks {
+                let cell = (base + next_random(mut seed) % spread, base + next_random(mut seed) % spread);
+                if not taken.contains(cell) {
+                    taken.insert(cell);
+                    blocked.push(cell);
+                }
+            }
+            let mut ends: Vec[(i64, i64)] = Vec.new();
+            while ends.len() < 2 {
+                let cell = (base + next_random(mut seed) % spread, base + next_random(mut seed) % spread);
+                if not taken.contains(cell) {
+                    taken.insert(cell);
+                    ends.push(cell);
+                }
+            }
+            let answer = is_escape_possible(blocked, ends[0], ends[1]);
+            if answer {
+                free += 1;
+            }
+            check = (check * 131 + if answer { 2 } else { 1 }) % 1000000007;
+        }
+        println(f"{count} mazes of {blocks} blocks within {spread} of a corner: {free} escape, checksum {check}");
+    }
+}

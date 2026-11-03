@@ -1,0 +1,16 @@
+[1, 2, 3] -> 6
+[3, 7, 4, 5] -> 144
+[1, 3, 1, 4, 1, 5] -> 13
+[100, 100, 100] -> 1000000
+[1, 1, 1, 1, 1, 1, 1, 1] -> 6
+[5, 1, 5, 1, 5, 1] -> 16
+[2, 100, 3, 100, 4] -> 1824
+[35, 73, 90, 27, 71, 80, 21, 33, 33, 13, 48, 12, 68, 70, 80, 36, 66, 3, 70, 58] -> 140295
+all 27 polygons of 3 vertices from 1 to 3: total 216, checksum 177983746
+all 81 polygons of 4 vertices from 1 to 3: total 1068, checksum 20980391
+all 243 polygons of 5 vertices from 1 to 3: total 4198, checksum 737858904
+all 729 polygons of 6 vertices from 1 to 3: total 15254, checksum 327278860
+all 2187 polygons of 7 vertices from 1 to 3: total 53366, checksum 704896124
+300 random polygons: total 86396933, checksum 828209702
+50 vertices of 100: 48000000
+1 to 50: 41648

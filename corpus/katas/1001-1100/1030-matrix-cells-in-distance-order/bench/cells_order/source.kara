@@ -1,0 +1,43 @@
+// LeetCode #1030: Matrix Cells in Distance Order -- bench
+// Mirrors ../cells_order.kara; see ../README.md § Benchmarks.
+
+fn all_cells_dist_order(rows: i64, cols: i64, r_center: i64, c_center: i64) -> Vec[Vec[i64]] {
+    let mut cells: Vec[Vec[i64]] = Vec.new();
+    for r in 0..rows {
+        for c in 0..cols {
+            cells.push(vec![r, c]);
+        }
+    }
+    cells.sort_by_key(|cell| (cell[0] - r_center).abs() + (cell[1] - c_center).abs());
+    cells
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let count = 300;
+    let mut seed = 1030;
+    let mut centres: Vec[(i64, i64)] = Vec.new();
+    for _ in 0..count {
+        let r0 = next_random(mut seed) % 100;
+        let c0 = next_random(mut seed) % 100;
+        centres.push((r0, c0));
+    }
+    // each answer folded by its distances in order, which any order among
+    // ties leaves the same
+    let mut total = 0;
+    let mut check = 0;
+    for (r0, c0) in centres.iter() {
+        let cells = all_cells_dist_order(100, 100, r0, c0);
+        let mut weighted = 0;
+        for i in 0..cells.len() {
+            weighted += (i + 1) * ((cells[i][0] - r0).abs() + (cells[i][1] - c0).abs());
+        }
+        total += weighted;
+        check = (check * 131 + weighted) % 1000000007;
+    }
+    println(f"{count} centres on a 100x100 grid: sum {total}, checksum {check}");
+}

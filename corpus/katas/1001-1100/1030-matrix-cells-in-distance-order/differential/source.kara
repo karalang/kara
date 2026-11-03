@@ -1,0 +1,256 @@
+// LeetCode #1030: Matrix Cells in Distance Order -- differential
+//
+// The five arms, copied here under their own names, against the statement
+// read literally and four properties of the answer. Any order among cells
+// at the same distance is accepted, so an answer is compared by its
+// canonical form: each run of equal distances in row-major order.
+
+// ---- sorted by distance (cells_order.kara)
+
+fn sorted_order(rows: i64, cols: i64, r_center: i64, c_center: i64) -> Vec[Vec[i64]] {
+    let mut cells: Vec[Vec[i64]] = Vec.new();
+    for r in 0..rows {
+        for c in 0..cols {
+            cells.push(vec![r, c]);
+        }
+    }
+    cells.sort_by_key(|cell| (cell[0] - r_center).abs() + (cell[1] - c_center).abs());
+    cells
+}
+
+// ---- breadth-first from the centre (cells_order_bfs.kara)
+
+fn bfs_order(rows: i64, cols: i64, r_center: i64, c_center: i64) -> Vec[Vec[i64]] {
+    let mut seen: Vec[Vec[bool]] = Vec.filled(rows, Vec.filled(cols, false));
+    let mut queue: VecDeque[(i64, i64)] = VecDeque.new();
+    let mut cells: Vec[Vec[i64]] = Vec.new();
+    seen[r_center][c_center] = true;
+    queue.push_back((r_center, c_center));
+    while let Some((r, c)) = queue.pop_front() {
+        cells.push(vec![r, c]);
+        for (dr, dc) in [(-1, 0), (1, 0), (0, -1), (0, 1)].iter() {
+            let nr = r + dr;
+            let nc = c + dc;
+            if nr >= 0 and nr < rows and nc >= 0 and nc < cols and not seen[nr][nc] {
+                seen[nr][nc] = true;
+                queue.push_back((nr, nc));
+            }
+        }
+    }
+    cells
+}
+
+// ---- a bucket per distance (cells_order_buckets.kara)
+
+fn buckets_order(rows: i64, cols: i64, r_center: i64, c_center: i64) -> Vec[Vec[i64]] {
+    let mut buckets: Vec[Vec[Vec[i64]]] = Vec.filled(rows + cols - 1, Vec.new());
+    for r in 0..rows {
+        for c in 0..cols {
+            let d = (r - r_center).abs() + (c - c_center).abs();
+            buckets[d].push(vec![r, c]);
+        }
+    }
+    let mut cells: Vec[Vec[i64]] = Vec.new();
+    for bucket in buckets.iter() {
+        for cell in bucket.iter() {
+            cells.push(cell.clone());
+        }
+    }
+    cells
+}
+
+// ---- walking the rings (cells_order_rings.kara)
+
+fn rings_order(rows: i64, cols: i64, r_center: i64, c_center: i64) -> Vec[Vec[i64]] {
+    let mut cells: Vec[Vec[i64]] = Vec.new();
+    let far = r_center.max(rows - 1 - r_center) + c_center.max(cols - 1 - c_center);
+    for d in 0..=far {
+        for dr in -d..=d {
+            let r = r_center + dr;
+            if r < 0 or r >= rows {
+                continue;
+            }
+            let dc = d - dr.abs();
+            if c_center - dc >= 0 {
+                cells.push(vec![r, c_center - dc]);
+            }
+            if dc > 0 and c_center + dc < cols {
+                cells.push(vec![r, c_center + dc]);
+            }
+        }
+    }
+    cells
+}
+
+// ---- merging the rows (cells_order_merge.kara)
+
+fn merge_order(rows: i64, cols: i64, r_center: i64, c_center: i64) -> Vec[Vec[i64]] {
+    // the columns nearest the centre's first
+    let mut outward: Vec[i64] = vec![c_center];
+    for step in 1..cols {
+        if c_center - step >= 0 {
+            outward.push(c_center - step);
+        }
+        if c_center + step < cols {
+            outward.push(c_center + step);
+        }
+    }
+    // (distance, row, index into outward) of each row's next cell
+    let mut heap: PriorityQueue[(i64, i64, i64)] = PriorityQueue.new();
+    for r in 0..rows {
+        heap.push(((r - r_center).abs(), r, 0));
+    }
+    let mut cells: Vec[Vec[i64]] = Vec.new();
+    while let Some((_, r, k)) = heap.pop() {
+        cells.push(vec![r, outward[k]]);
+        if k + 1 < outward.len() {
+            heap.push(((r - r_center).abs() + (outward[k + 1] - c_center).abs(), r, k + 1));
+        }
+    }
+    cells
+}
+
+// ---- harness ----------------------------------------------------------------
+
+fn arms(rows: i64, cols: i64, r_center: i64, c_center: i64) -> Vec[Vec[Vec[i64]]] {
+    vec![
+        sorted_order(rows, cols, r_center, c_center),
+        bfs_order(rows, cols, r_center, c_center),
+        buckets_order(rows, cols, r_center, c_center),
+        rings_order(rows, cols, r_center, c_center),
+        merge_order(rows, cols, r_center, c_center),
+    ]
+}
+
+fn distance(cell: ref Vec[i64], r_center: i64, c_center: i64) -> i64 {
+    (cell[0] - r_center).abs() + (cell[1] - c_center).abs()
+}
+
+// The statement read literally: for each distance from 0 to the largest a
+// grid can hold, every cell at that distance, row by row.
+fn literal(rows: i64, cols: i64, r_center: i64, c_center: i64) -> Vec[Vec[i64]] {
+    let mut cells: Vec[Vec[i64]] = Vec.new();
+    for d in 0..rows + cols - 1 {
+        for r in 0..rows {
+            for c in 0..cols {
+                if (r - r_center).abs() + (c - c_center).abs() == d {
+                    cells.push(vec![r, c]);
+                }
+            }
+        }
+    }
+    cells
+}
+
+fn in_order(cells: ref Vec[Vec[i64]], r_center: i64, c_center: i64) -> bool {
+    for i in 1..cells.len() {
+        if distance(cells[i - 1], r_center, c_center) > distance(cells[i], r_center, c_center) {
+            return false;
+        }
+    }
+    true
+}
+
+fn canonical(cells: ref Vec[Vec[i64]], r_center: i64, c_center: i64) -> Vec[Vec[i64]] {
+    let mut sorted = cells.clone();
+    sorted.sort_by_key(|cell| (distance(cell, r_center, c_center), cell[0], cell[1]));
+    sorted
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let mut failures: Vec[i64] = Vec.filled(6, 0);
+    let mut checks = 0;
+    let mut check = 0;
+    let mut seed = 10301;
+    // every grid up to 4 by 4 from every centre; then 800 random grids up
+    // to 10 by 10 and 40 up to 60 by 60, each from a random centre
+    let mut cases: Vec[(i64, i64, i64, i64)] = Vec.new();
+    for rows in 1..5 {
+        for cols in 1..5 {
+            for r0 in 0..rows {
+                for c0 in 0..cols {
+                    cases.push((rows, cols, r0, c0));
+                }
+            }
+        }
+    }
+    for k in 0..840 {
+        let top = if k < 800 { 10 } else { 60 };
+        let rows = next_random(mut seed) % top + 1;
+        let cols = next_random(mut seed) % top + 1;
+        let r0 = next_random(mut seed) % rows;
+        let c0 = next_random(mut seed) % cols;
+        cases.push((rows, cols, r0, c0));
+    }
+    for (rows, cols, r0, c0) in cases.iter() {
+        let want = literal(rows, cols, r0, c0);
+        for cell in want.iter() {
+            check = (check * 131 + cell[0] * 101 + cell[1] + 1) % 1000000007;
+        }
+        let got = arms(rows, cols, r0, c0);
+        let canon: Vec[Vec[Vec[i64]]] = got.iter().map(|cells| canonical(cells, r0, c0)).collect();
+        // P3: the centre's row mirrored top to bottom
+        let got_mirrored = arms(rows, cols, rows - 1 - r0, c0);
+        // P4: the grid transposed
+        let got_transposed = arms(cols, rows, c0, r0);
+        // P5: the grid one row taller
+        let got_taller = arms(rows + 1, cols, r0, c0);
+        for a in 0..5 {
+            // P1: the statement read literally
+            checks += 1;
+            if canon[a] != want {
+                failures[0] += 1;
+            }
+            // P2: the distances never fall
+            checks += 1;
+            if not in_order(got[a], r0, c0) {
+                failures[1] += 1;
+            }
+            // P3: mirrored back, the answer from the mirrored centre is
+            // the same cells at the same distances
+            checks += 1;
+            let back: Vec[Vec[i64]] = got_mirrored[a].iter().map(|cell| vec![rows - 1 - cell[0], cell[1]]).collect();
+            if canonical(back, r0, c0) != canon[a] {
+                failures[2] += 1;
+            }
+            // P4: transposed back, the answer on the transposed grid is the
+            // same cells at the same distances
+            checks += 1;
+            let flipped: Vec[Vec[i64]] = got_transposed[a].iter().map(|cell| vec![cell[1], cell[0]]).collect();
+            if canonical(flipped, r0, c0) != canon[a] {
+                failures[3] += 1;
+            }
+            // P5: on a grid one row taller, the cells of this grid come in
+            // an order of distance and are this grid's cells
+            checks += 1;
+            let kept: Vec[Vec[i64]] = got_taller[a].iter().filter(|cell| cell[0] < rows).map(|cell| cell.clone()).collect();
+            if not in_order(kept, r0, c0) or canonical(kept, r0, c0) != canon[a] {
+                failures[4] += 1;
+            }
+            // P6: each arm agrees with at least two of the other four
+            checks += 1;
+            let mut agree = 0;
+            for o in 0..5 {
+                if o != a and canon[o] == canon[a] {
+                    agree += 1;
+                }
+            }
+            if agree < 2 {
+                failures[5] += 1;
+            }
+        }
+    }
+    let mut total = 0;
+    for p in 0..6 {
+        if failures[p] > 0 {
+            println(f"P{p + 1}: {failures[p]} failures");
+        }
+        total += failures[p];
+    }
+    println(f"{cases.len()} cases: checksum {check}, {checks} checks over 5 arms: {total} failures");
+}

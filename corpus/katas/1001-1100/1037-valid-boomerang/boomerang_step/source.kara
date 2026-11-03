@@ -1,0 +1,103 @@
+// LeetCode #1037: Valid Boomerang -- a whole number of steps
+//
+// From a, the smallest lattice step towards b is (b - a) divided by the
+// gcd of its two parts. The points are on one line exactly when c - a
+// is a whole number of those steps, the same number along x and along
+// y. Two equal points are never a boomerang. O(log of the coordinates).
+
+fn gcd(a: i64, b: i64) -> i64 {
+    let mut (x, y) = (a.abs(), b.abs());
+    while y != 0 {
+        let t = x % y;
+        x = y;
+        y = t;
+    }
+    x
+}
+
+fn is_boomerang(points: ref Vec[(i64, i64)]) -> bool {
+    let ((ax, ay), (bx, by), (cx, cy)) = (points[0], points[1], points[2]);
+    if (ax, ay) == (bx, by) or (bx, by) == (cx, cy) or (ax, ay) == (cx, cy) {
+        return false;
+    }
+    let g = gcd(bx - ax, by - ay);
+    let (sx, sy) = ((bx - ax) / g, (by - ay) / g);
+    let (ux, uy) = (cx - ax, cy - ay);
+    let on_line = if sx != 0 {
+        ux % sx == 0 and uy == ux / sx * sy
+    } else {
+        ux == 0
+    };
+    not on_line
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // LeetCode's two examples, then a few more
+    let examples: Vec[Vec[(i64, i64)]] = vec![
+        vec![(1, 1), (2, 3), (3, 2)],
+        vec![(1, 1), (2, 2), (3, 3)],
+        vec![(0, 0), (0, 0), (1, 1)],
+        vec![(0, 0), (1, 1), (0, 0)],
+        vec![(5, 5), (5, 5), (5, 5)],
+        vec![(0, 0), (0, 5), (0, 100)],
+        vec![(0, 0), (100, 0), (0, 100)],
+        vec![(0, 0), (99, 100), (100, 100)],
+        vec![(0, 0), (49, 50), (98, 100)],
+        vec![(0, 1), (50, 51), (100, 100)],
+    ];
+    for points in examples.iter() {
+        let (a, b, c) = (points[0], points[1], points[2]);
+        println(f"{a}, {b}, {c} -> {is_boomerang(points)}");
+    }
+    // every three points of a small grid, repeats allowed, in every order
+    for side in vec![3, 5].iter() {
+        let mut yes = 0;
+        let mut check = 0;
+        let mut count = 0;
+        for p in 0..side * side {
+            for q in 0..side * side {
+                for r in 0..side * side {
+                    let points: Vec[(i64, i64)] = vec![(p / side, p % side), (q / side, q % side), (r / side, r % side)];
+                    let answer = is_boomerang(points);
+                    if answer {
+                        yes += 1;
+                    }
+                    check = (check * 131 + if answer { 2 } else { 1 }) % 1000000007;
+                    count += 1;
+                }
+            }
+        }
+        println(f"all {count} triples on a {side} by {side} grid: {yes} boomerangs, checksum {check}");
+    }
+    // random points from 0 to 100, and near a line
+    let mut seed = 1037;
+    let mut yes = 0;
+    let mut check = 0;
+    for k in 0..3000 {
+        let a = (next_random(mut seed) % 101, next_random(mut seed) % 101);
+        let b = (next_random(mut seed) % 101, next_random(mut seed) % 101);
+        let c = if k % 3 == 0 {
+            (next_random(mut seed) % 101, next_random(mut seed) % 101)
+        } else {
+            // a point on the line through a and b, or one step off it
+            let (ax, ay) = a;
+            let (bx, by) = b;
+            let t = next_random(mut seed) % 3 - 1;
+            let off = if k % 3 == 1 { 0 } else { 1 };
+            (ax + t * (bx - ax) + off, ay + t * (by - ay))
+        };
+        let answer = is_boomerang(vec![a, b, c]);
+        if answer {
+            yes += 1;
+        }
+        check = (check * 131 + if answer { 2 } else { 1 }) % 1000000007;
+    }
+    println(f"3000 random triples: {yes} boomerangs, checksum {check}");
+}

@@ -1,0 +1,348 @@
+// LeetCode #1040: Moving Stones Until Consecutive II -- differential
+//
+// The five arms, copied here under their own names, against the game
+// played out move by move and four properties of the answer.
+
+// ---- sorted, then a sliding window (moving_stones.kara)
+
+fn window_arm(stones: ref Vec[i64]) -> (i64, i64) {
+    let mut s = stones.clone();
+    s.sort();
+    let n = s.len();
+    let most = (s[n - 1] - s[1] - n + 2).max(s[n - 2] - s[0] - n + 2);
+    let mut least = n;
+    let mut i = 0;
+    for j in 0..n {
+        while s[j] - s[i] >= n {
+            i += 1;
+        }
+        let inside = j - i + 1;
+        if inside == n - 1 and s[j] - s[i] == n - 2 {
+            least = least.min(2);
+        } else {
+            least = least.min(n - inside);
+        }
+    }
+    (least, most)
+}
+
+// ---- a binary search from each stone (moving_stones_bsearch.kara)
+
+fn bsearch_count_upto(s: ref Vec[i64], x: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = s.len();
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if s[mid] <= x {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+fn bsearch_arm(stones: ref Vec[i64]) -> (i64, i64) {
+    let mut s = stones.clone();
+    s.sort();
+    let n = s.len();
+    let most = (s[n - 1] - s[1] - n + 2).max(s[n - 2] - s[0] - n + 2);
+    let mut least = n;
+    for i in 0..n {
+        let inside = bsearch_count_upto(s, s[i] + n - 1) - i;
+        let last = s[i + inside - 1];
+        if inside == n - 1 and last - s[i] == n - 2 {
+            least = least.min(2);
+        } else {
+            least = least.min(n - inside);
+        }
+    }
+    (least, most)
+}
+
+// ---- the stones in a SortedSet (moving_stones_set.kara)
+
+fn set_arm(stones: ref Vec[i64]) -> (i64, i64) {
+    let mut set: SortedSet[i64] = SortedSet.new();
+    for x in stones.iter() {
+        set.insert(*x);
+    }
+    let n = set.len();
+    let ordered: Vec[i64] = set.iter().map(|x| *x).collect();
+    let first = ordered[0];
+    let second = ordered[1];
+    let last = ordered[n - 1];
+    let before_last = ordered[n - 2];
+    let most = (last - second - n + 2).max(before_last - first - n + 2);
+    let mut least = n;
+    for x in set.iter() {
+        let start = *x;
+        let inside = set.range_inclusive(start, start + n - 1).count();
+        let top = set.range_inclusive(start, start + n - 1).last().map(|y| *y).unwrap_or(start);
+        if inside == n - 1 and top - start == n - 2 {
+            least = least.min(2);
+        } else {
+            least = least.min(n - inside);
+        }
+    }
+    (least, most)
+}
+
+// ---- the windows as iterators (moving_stones_iter.kara)
+
+fn iter_window_cost(s: ref Vec[i64], start: i64) -> i64 {
+    let n = s.len();
+    let inside = s.iter().filter(|x| *x >= start and *x <= start + n - 1).count();
+    let top = s.iter().filter(|x| *x >= start and *x <= start + n - 1).map(|x| *x).max().unwrap();
+    if inside == n - 1 and top - start == n - 2 { 2 } else { n - inside }
+}
+
+fn iter_arm(stones: ref Vec[i64]) -> (i64, i64) {
+    let mut s = stones.clone();
+    s.sort();
+    let n = s.len();
+    let most = (s[n - 1] - s[1] - n + 2).max(s[n - 2] - s[0] - n + 2);
+    let least = s.iter().map(|x| iter_window_cost(s, *x)).min().unwrap();
+    (least, most)
+}
+
+// ---- counted in gaps (moving_stones_gaps.kara)
+
+fn gaps_arm(stones: ref Vec[i64]) -> (i64, i64) {
+    let mut s = stones.clone();
+    s.sort();
+    let n = s.len();
+    // gap[k]: the empty slots between s[k] and s[k + 1]
+    let gap: Vec[i64] = (0..n - 1).map(|k| s[k + 1] - s[k] - 1).collect();
+    // before[k]: the empty slots between s[0] and s[k]
+    let mut before: Vec[i64] = Vec.filled(n, 0);
+    for k in 1..n {
+        before[k] = before[k - 1] + gap[k - 1];
+    }
+    let empty = before[n - 1];
+    let most = empty - gap[0].min(gap[n - 2]);
+    let mut least = n;
+    let mut j = 0;
+    for i in 0..n {
+        // stones i..=j span (j - i) + (before[j] - before[i]) + 1 slots;
+        // j is never left behind i, since stone i alone spans one
+        while j + 1 < n and (j + 1 - i) + before[j + 1] - before[i] <= n - 1 {
+            j += 1;
+        }
+        let inside = j - i + 1;
+        let packed = before[j] == before[i];
+        if inside == n - 1 and packed {
+            least = least.min(2);
+        } else {
+            least = least.min(n - inside);
+        }
+    }
+    (least, most)
+}
+
+// ---- the game played out move by move
+
+// The fewest and the most moves from the stones in `mask` (bit p for a
+// stone at p), each memo holding -1 until known. An endpoint stone moves
+// to an empty slot strictly inside the stones that stay, so it is no
+// longer an endpoint; the game ends when the stones are consecutive.
+fn play(mask: i64, least: mut ref Vec[i64], most: mut ref Vec[i64]) -> (i64, i64) {
+    if least[mask] >= 0 {
+        return (least[mask], most[mask]);
+    }
+    let mut lo = 0;
+    while (mask >> lo) & 1 == 0 {
+        lo += 1;
+    }
+    let mut hi = 62;
+    while (mask >> hi) & 1 == 0 {
+        hi -= 1;
+    }
+    let mut stones = 0;
+    for p in lo..hi + 1 {
+        stones += (mask >> p) & 1;
+    }
+    if hi - lo + 1 == stones {
+        least[mask] = 0;
+        most[mask] = 0;
+        return (0, 0);
+    }
+    let mut second = lo + 1;
+    while (mask >> second) & 1 == 0 {
+        second += 1;
+    }
+    let mut before_hi = hi - 1;
+    while (mask >> before_hi) & 1 == 0 {
+        before_hi -= 1;
+    }
+    let mut fewest = i64.MAX;
+    let mut longest = -1;
+    // the lowest stone to an empty slot between `second` and `hi`
+    for p in second + 1..hi {
+        if (mask >> p) & 1 == 0 {
+            let (a, b) = play(mask - (1 << lo) + (1 << p), mut least, mut most);
+            fewest = fewest.min(a + 1);
+            longest = longest.max(b + 1);
+        }
+    }
+    // the highest stone to an empty slot between `lo` and `before_hi`
+    for p in lo + 1..before_hi {
+        if (mask >> p) & 1 == 0 {
+            let (a, b) = play(mask - (1 << hi) + (1 << p), mut least, mut most);
+            fewest = fewest.min(a + 1);
+            longest = longest.max(b + 1);
+        }
+    }
+    least[mask] = fewest;
+    most[mask] = longest;
+    (fewest, longest)
+}
+
+// ---- the checks
+
+fn arm(k: i64, stones: ref Vec[i64]) -> (i64, i64) {
+    match k {
+        0 => window_arm(stones),
+        1 => bsearch_arm(stones),
+        2 => set_arm(stones),
+        3 => iter_arm(stones),
+        _ => gaps_arm(stones),
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_below(seed: mut ref i64, top: i64) -> i64 {
+    (next_random(mut seed) * 32768 + next_random(mut seed)) % top
+}
+
+struct Tally {
+    sets: i64,
+    played: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    // failures by property, P1 to P6 at 1 to 6
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+// Every check on one set of stones; `played` is the game's answer when the
+// set was small enough to play out.
+fn check_set(t: mut ref Tally, stones: ref Vec[i64], played: Option[(i64, i64)], seed: mut ref i64) {
+    let n = stones.len();
+    let answers: Vec[(i64, i64)] = (0..5).map(|k| arm(k, stones)).collect();
+    let mut lo = stones[0];
+    let mut hi = stones[0];
+    for x in stones.iter() {
+        lo = lo.min(*x);
+        hi = hi.max(*x);
+    }
+    let empty = hi - lo + 1 - n;
+    // a shift that keeps every stone from 1 to 10^9
+    let shift = random_below(mut seed, 1000000000 - hi + 1) - lo + 1;
+    let shifted: Vec[i64] = stones.iter().map(|x| *x + shift).collect();
+    let mirrored: Vec[i64] = stones.iter().map(|x| lo + hi - *x).collect();
+    let mut shuffled = stones.clone();
+    let mut i = n - 1;
+    while i > 0 {
+        let j = random_below(mut seed, i + 1);
+        let keep = shuffled[i];
+        shuffled[i] = shuffled[j];
+        shuffled[j] = keep;
+        i -= 1;
+    }
+    for k in 0..5 {
+        let (least, most) = answers[k];
+        if let Some((a, b)) = played {
+            expect(mut t, 1, least == a and most == b, f"P1 arm {k} {stones}: [{least}, {most}] vs played [{a}, {b}]");
+        }
+        expect(mut t, 2, arm(k, shifted) == answers[k], f"P2 arm {k} {stones} shifted by {shift}");
+        expect(mut t, 3, arm(k, mirrored) == answers[k], f"P3 arm {k} {stones} mirrored");
+        expect(mut t, 4, arm(k, shuffled) == answers[k], f"P4 arm {k} {stones} shuffled");
+        expect(
+            mut t,
+            5,
+            0 <= least and least <= most and most <= empty and (least == 0) == (empty == 0),
+            f"P5 arm {k} {stones}: [{least}, {most}] with {empty} empty",
+        );
+        let mut agree = 0;
+        for o in 0..5 {
+            if o != k and answers[o] == answers[k] {
+                agree += 1;
+            }
+        }
+        expect(mut t, 6, agree >= 2, f"P6 arm {k} {stones}: agrees with {agree}");
+    }
+    let (least, most) = answers[0];
+    t.sets += 1;
+    t.check = (t.check * 131 + least * 1000003 + most) % 1000000007;
+}
+
+fn main() {
+    let mut t = Tally { sets: 0, played: 0, checks: 0, failures: 0, check: 0, by: Vec.filled(7, 0) };
+    let mut least: Vec[i64] = Vec.filled(1 << 15, -1);
+    let mut most: Vec[i64] = Vec.filled(1 << 15, -1);
+    let mut seed = 1040;
+    // P1 in full: every set of 3 or more stones from 1 to 12
+    for mask in 0..(1 << 13) {
+        if mask & 1 == 1 {
+            continue;
+        }
+        let stones: Vec[i64] = (1..13).filter(|p| (mask >> p) & 1 == 1).collect();
+        if stones.len() >= 3 {
+            let played = play(mask, mut least, mut most);
+            t.played += 1;
+            check_set(mut t, stones, Some(played), mut seed);
+        }
+    }
+    // 400 random sets of 3 to 10 stones from 1 to 14, played out too
+    for _ in 0..400 {
+        let count = random_below(mut seed, 8) + 3;
+        let mut mask = 0;
+        let mut stones: Vec[i64] = Vec.new();
+        while stones.len() < count {
+            let p = random_below(mut seed, 14) + 1;
+            if (mask >> p) & 1 == 0 {
+                mask += 1 << p;
+                stones.push(p);
+            }
+        }
+        let played = play(mask, mut least, mut most);
+        t.played += 1;
+        check_set(mut t, stones, Some(played), mut seed);
+    }
+    // 200 sets of 3 to 60 stones, too many to play out: 100 spread from 1
+    // to 10^9 and 100 packed into a stretch twice their number
+    for r in 0..200 {
+        let count = random_below(mut seed, 58) + 3;
+        let top = if r < 100 { 1000000000 } else { count * 2 };
+        let mut taken: Set[i64] = Set.new();
+        let mut stones: Vec[i64] = Vec.new();
+        while stones.len() < count {
+            let x = random_below(mut seed, top) + 1;
+            if taken.insert(x) {
+                stones.push(x);
+            }
+        }
+        check_set(mut t, stones, None, mut seed);
+    }
+    println(f"{t.sets} sets ({t.played} played out): checksum {t.check}, {t.checks} checks over 5 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

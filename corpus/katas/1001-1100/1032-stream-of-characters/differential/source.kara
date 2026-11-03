@@ -1,0 +1,407 @@
+// LeetCode #1032: Stream of Characters -- differential
+//
+// The five arms, copied here under their own names, against the statement
+// read literally and five properties of the answers.
+
+// ---- a trie of the reversed words (stream_checker.kara)
+
+struct StarChecker {
+    next: Vec[Vec[i64]],
+    end: Vec[bool],
+    stream: Vec[i64],
+}
+
+impl StarChecker {
+    fn new(words: Vec[String]) -> StarChecker {
+        let mut next: Vec[Vec[i64]] = vec![Vec.filled(26, -1)];
+        let mut end: Vec[bool] = vec![false];
+        for word in words.iter() {
+            let mut node = 0;
+            for c in word.chars().rev() {
+                let k = c as i64 - 'a' as i64;
+                if next[node][k] == -1 {
+                    next[node][k] = next.len();
+                    next.push(Vec.filled(26, -1));
+                    end.push(false);
+                }
+                node = next[node][k];
+            }
+            end[node] = true;
+        }
+        StarChecker { next, end, stream: Vec.new() }
+    }
+
+    fn query(mut ref self, letter: char) -> bool {
+        self.stream.push(letter as i64 - 'a' as i64);
+        let mut node = 0;
+        let mut i = self.stream.len();
+        while i > 0 {
+            i -= 1;
+            node = self.next[node][self.stream[i]];
+            if node == -1 {
+                return false;
+            }
+            if self.end[node] {
+                return true;
+            }
+        }
+        false
+    }
+}
+
+// ---- a set of the words (stream_checker_sets.kara)
+
+struct SetsChecker {
+    words: Set[String],
+    lengths: Vec[i64],
+    stream: String,
+}
+
+impl SetsChecker {
+    fn new(words: Vec[String]) -> SetsChecker {
+        let mut set: Set[String] = Set.new();
+        let mut lengths: Vec[i64] = Vec.new();
+        for word in words.iter() {
+            if not lengths.contains(word.len()) {
+                lengths.push(word.len());
+            }
+            set.insert(word.clone());
+        }
+        SetsChecker { words: set, lengths, stream: String.new() }
+    }
+
+    fn query(mut ref self, letter: char) -> bool {
+        self.stream.push(letter);
+        let n = self.stream.len();
+        for len in self.lengths.iter() {
+            if len <= n and self.words.contains(self.stream.substring(n - len)) {
+                return true;
+            }
+        }
+        false
+    }
+}
+
+// ---- an Aho-Corasick automaton (stream_checker_aho.kara)
+
+struct AhoChecker {
+    moves: Vec[Vec[i64]],
+    matched: Vec[bool],
+    state: i64,
+}
+
+impl AhoChecker {
+    fn new(words: Vec[String]) -> AhoChecker {
+        let mut moves: Vec[Vec[i64]] = vec![Vec.filled(26, -1)];
+        let mut matched: Vec[bool] = vec![false];
+        for word in words.iter() {
+            let mut node = 0;
+            for c in word.chars() {
+                let k = c as i64 - 'a' as i64;
+                if moves[node][k] == -1 {
+                    moves[node][k] = moves.len();
+                    moves.push(Vec.filled(26, -1));
+                    matched.push(false);
+                }
+                node = moves[node][k];
+            }
+            matched[node] = true;
+        }
+        let mut fail: Vec[i64] = Vec.filled(moves.len(), 0);
+        let mut queue: VecDeque[i64] = VecDeque.new();
+        for k in 0..26 {
+            if moves[0][k] == -1 {
+                moves[0][k] = 0;
+            } else {
+                queue.push_back(moves[0][k]);
+            }
+        }
+        while let Some(node) = queue.pop_front() {
+            if matched[fail[node]] {
+                matched[node] = true;
+            }
+            for k in 0..26 {
+                let child = moves[node][k];
+                if child == -1 {
+                    moves[node][k] = moves[fail[node]][k];
+                } else {
+                    fail[child] = moves[fail[node]][k];
+                    queue.push_back(child);
+                }
+            }
+        }
+        AhoChecker { moves, matched, state: 0 }
+    }
+
+    fn query(mut ref self, letter: char) -> bool {
+        self.state = self.moves[self.state][letter as i64 - 'a' as i64];
+        self.matched[self.state]
+    }
+}
+
+// ---- every match still open (stream_checker_active.kara)
+
+struct ActiveChecker {
+    next: Vec[Vec[i64]],
+    end: Vec[bool],
+    open: Vec[i64],
+}
+
+impl ActiveChecker {
+    fn new(words: Vec[String]) -> ActiveChecker {
+        let mut next: Vec[Vec[i64]] = vec![Vec.filled(26, -1)];
+        let mut end: Vec[bool] = vec![false];
+        for word in words.iter() {
+            let mut node = 0;
+            for c in word.chars() {
+                let k = c as i64 - 'a' as i64;
+                if next[node][k] == -1 {
+                    next[node][k] = next.len();
+                    next.push(Vec.filled(26, -1));
+                    end.push(false);
+                }
+                node = next[node][k];
+            }
+            end[node] = true;
+        }
+        ActiveChecker { next, end, open: Vec.new() }
+    }
+
+    fn query(mut ref self, letter: char) -> bool {
+        let k = letter as i64 - 'a' as i64;
+        self.open.push(0);
+        let mut moved: Vec[i64] = Vec.new();
+        let mut found = false;
+        for node in self.open.iter() {
+            let child = self.next[node][k];
+            if child != -1 {
+                moved.push(child);
+                if self.end[child] {
+                    found = true;
+                }
+            }
+        }
+        self.open = moved;
+        found
+    }
+}
+
+// ---- the words by their last letter (stream_checker_endings.kara)
+
+struct EndingsChecker {
+    by_last: Map[char, Vec[String]],
+    stream: String,
+}
+
+impl EndingsChecker {
+    fn new(words: Vec[String]) -> EndingsChecker {
+        let mut by_last: Map[char, Vec[String]] = Map.new();
+        for word in words.iter() {
+            let last = word.chars().rev().next().unwrap();
+            match by_last.get_mut(last) {
+                Some(list) => list.push(word.clone()),
+                None => {
+                    by_last.insert(last, vec![word.clone()]);
+                }
+            }
+        }
+        EndingsChecker { by_last, stream: String.new() }
+    }
+
+    fn query(mut ref self, letter: char) -> bool {
+        self.stream.push(letter);
+        match self.by_last.get(letter) {
+            Some(list) => list.iter().any(|w| self.stream.ends_with(w)),
+            None => false,
+        }
+    }
+}
+
+// ---- harness ----------------------------------------------------------------
+
+// Every arm's answers to the stream, one T or F per letter.
+fn arms(words: ref Vec[String], stream: ref String) -> Vec[String] {
+    let mut star = StarChecker.new(words.clone());
+    let mut sets = SetsChecker.new(words.clone());
+    let mut aho = AhoChecker.new(words.clone());
+    let mut active = ActiveChecker.new(words.clone());
+    let mut endings = EndingsChecker.new(words.clone());
+    let mut out: Vec[String] = vec![String.new(), String.new(), String.new(), String.new(), String.new()];
+    for c in stream.chars() {
+        let got: Vec[bool] = vec![star.query(c), sets.query(c), aho.query(c), active.query(c), endings.query(c)];
+        for a in 0..5 {
+            out[a].push(if got[a] { 'T' } else { 'F' });
+        }
+    }
+    out
+}
+
+// The statement read literally: after each letter, whether some word is
+// exactly the last as many letters of the stream so far, compared letter
+// by letter.
+fn literal(words: ref Vec[String], stream: ref String) -> String {
+    let letters: Vec[char] = stream.chars().collect();
+    let spelled: Vec[Vec[char]] = words.iter().map(|w| w.chars().collect()).collect();
+    let mut out = String.new();
+    for k in 1..letters.len() + 1 {
+        let mut found = false;
+        for w in spelled.iter() {
+            if w.len() <= k {
+                let mut same = true;
+                for j in 0..w.len() {
+                    if w[j] != letters[k - w.len() + j] {
+                        same = false;
+                    }
+                }
+                if same {
+                    found = true;
+                }
+            }
+        }
+        out.push(if found { 'T' } else { 'F' });
+    }
+    out
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_text(seed: mut ref i64, len: i64, letters: i64) -> String {
+    let mut s = String.new();
+    for _ in 0..len {
+        s.push((97 + next_random(mut seed) % letters) as u8 as char);
+    }
+    s
+}
+
+fn main() {
+    let mut failures: Vec[i64] = Vec.filled(6, 0);
+    let mut checks = 0;
+    let mut check = 0;
+    let mut seed = 10321;
+    // every set of one or two words of one or two letters over a and b,
+    // against every stream of four letters; then 300 random cases of up
+    // to 8 words of up to 4 letters with streams of up to 30, and 30 of
+    // up to 50 words of up to 15 letters with streams of 300, over 2 to 4
+    // letters
+    let mut cases: Vec[(Vec[String], String, i64)] = Vec.new();
+    let small: Vec[String] = vec!["a", "b", "aa", "ab", "ba", "bb"].iter().map(|w| w.to_string()).collect();
+    let mut sets: Vec[Vec[String]] = Vec.new();
+    for i in 0..6 {
+        sets.push(vec![small[i].clone()]);
+        for j in i + 1..6 {
+            sets.push(vec![small[i].clone(), small[j].clone()]);
+        }
+    }
+    for words in sets.iter() {
+        for code in 0..16 {
+            let mut stream = String.new();
+            for b in 0..4 {
+                stream.push(if (code >> b) & 1 == 1 { 'b' } else { 'a' });
+            }
+            cases.push((words.clone(), stream, 2));
+        }
+    }
+    for k in 0..330 {
+        let letters = 2 + next_random(mut seed) % 3;
+        let (count, longest, queries) = if k < 300 {
+            (1 + next_random(mut seed) % 8, 4, 1 + next_random(mut seed) % 30)
+        } else {
+            (1 + next_random(mut seed) % 50, 15, 300)
+        };
+        let mut words: Vec[String] = Vec.new();
+        for _ in 0..count {
+            let len = 1 + next_random(mut seed) % longest;
+            words.push(random_text(mut seed, len, letters));
+        }
+        let stream = random_text(mut seed, queries, letters);
+        cases.push((words, stream, letters));
+    }
+    for (words, stream, letters) in cases.iter() {
+        let n = stream.len();
+        let want = literal(words, stream);
+        for c in want.chars() {
+            check = (check * 3 + if c == 'T' { 2 } else { 1 }) % 1000000007;
+        }
+        let got = arms(words, stream);
+        // P2: the words in the opposite order, each given twice
+        let mut twice: Vec[String] = Vec.new();
+        for i in 0..words.len() {
+            twice.push(words[words.len() - 1 - i].clone());
+            twice.push(words[words.len() - 1 - i].clone());
+        }
+        let got_twice = arms(twice, stream);
+        // P3: one more word with a letter the stream never has
+        let mut never = words.clone();
+        never.push(random_text(mut seed, next_random(mut seed) % 3, letters) + "z");
+        let got_never = arms(never, stream);
+        // P4: a fresh checker asked only the first half of the stream
+        let half = stream.substring(0, n / 2);
+        let got_half = arms(words, half);
+        // P5: one more word, a random piece of the stream
+        let from = next_random(mut seed) % n;
+        let to = from + 1 + next_random(mut seed) % (n - from);
+        let piece = stream.substring(from, to);
+        let mut more = words.clone();
+        more.push(piece.clone());
+        let got_more = arms(more, stream);
+        let piece_ends = literal(vec![piece], stream);
+        for a in 0..5 {
+            // P1: the statement read literally
+            checks += 1;
+            if got[a] != want {
+                failures[0] += 1;
+            }
+            // P2: the order of the words and repeats do not matter
+            checks += 1;
+            if got_twice[a] != got[a] {
+                failures[1] += 1;
+            }
+            // P3: a word that never occurs changes no answer
+            checks += 1;
+            if got_never[a] != got[a] {
+                failures[2] += 1;
+            }
+            // P4: each answer depends only on the stream so far
+            checks += 1;
+            if got_half[a] != got[a].substring(0, n / 2) {
+                failures[3] += 1;
+            }
+            // P5: one more word turns F into T exactly where it ends
+            checks += 1;
+            let g: Vec[char] = got[a].chars().collect();
+            let m: Vec[char] = got_more[a].chars().collect();
+            let e: Vec[char] = piece_ends.chars().collect();
+            let mut ok = m.len() == n;
+            for i in 0..n {
+                if ok and m[i] != (if g[i] == 'T' or e[i] == 'T' { 'T' } else { 'F' }) {
+                    ok = false;
+                }
+            }
+            if not ok {
+                failures[4] += 1;
+            }
+            // P6: each arm agrees with at least two of the other four
+            checks += 1;
+            let mut agree = 0;
+            for o in 0..5 {
+                if o != a and got[o] == got[a] {
+                    agree += 1;
+                }
+            }
+            if agree < 2 {
+                failures[5] += 1;
+            }
+        }
+    }
+    let mut total = 0;
+    for p in 0..6 {
+        if failures[p] > 0 {
+            println(f"P{p + 1}: {failures[p]} failures");
+        }
+        total += failures[p];
+    }
+    println(f"{cases.len()} cases: checksum {check}, {checks} checks over 5 arms: {total} failures");
+}

@@ -1,0 +1,15 @@
+two blocks round a corner: false
+no blocks: true
+two blocks, target in the corner: false
+a wall of 200 across a corner, from inside: false
+a wall of 200 across a corner, from the last square inside: false
+a wall of 200 across a corner, both inside: true
+a wall of 200 across a corner, both outside: true
+a diamond of 200, from the centre: false
+a diamond of 200, to the centre: false
+a diamond of 200, both inside: true
+a diamond of 200, just outside: true
+40 mazes of 10 blocks within 6 of a corner: 39 escape, checksum 497854396
+40 mazes of 50 blocks within 12 of a corner: 32 escape, checksum 259576256
+20 mazes of 200 blocks within 25 of a corner: 17 escape, checksum 20459210
+20 mazes of 200 blocks within 1000000 of a corner: 20 escape, checksum 745346411

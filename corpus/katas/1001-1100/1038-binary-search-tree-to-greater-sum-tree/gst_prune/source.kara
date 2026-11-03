@@ -1,0 +1,209 @@
+// LeetCode #1038: Binary Search Tree to Greater Sum Tree -- a search
+// for each node.
+//
+// The sum of the keys at least `v` is found from the root: where a node's
+// key is at least `v`, it and its whole right subtree count and the
+// search goes left; where it is smaller, only its right subtree can hold
+// such keys. Every node's new value is found this way on the old keys,
+// kept in preorder, then written back in the same order. O(n * h) with
+// the right subtrees summed again each time, O(n^2) for a chain.
+
+fn total(node: Option[TreeNode]) -> i64 {
+    match node {
+        None => 0,
+        Some(n) => total(n.left) + n.val + total(n.right),
+    }
+}
+
+fn at_least(node: Option[TreeNode], v: i64) -> i64 {
+    match node {
+        None => 0,
+        Some(n) => if n.val >= v { n.val + total(n.right) + at_least(n.left, v) } else { at_least(n.right, v) },
+    }
+}
+
+fn preorder(node: Option[TreeNode], out: mut ref Vec[TreeNode]) {
+    if let Some(n) = node {
+        out.push(n);
+        preorder(n.left, mut out);
+        preorder(n.right, mut out);
+    }
+}
+
+fn bst_to_gst(root: Option[TreeNode]) -> Option[TreeNode] {
+    let mut nodes: Vec[TreeNode] = Vec.new();
+    preorder(root, mut nodes);
+    let sums: Vec[i64] = nodes.iter().map(|n| at_least(root, n.val)).collect();
+    for i in 0..nodes.len() {
+        nodes[i].val = sums[i];
+    }
+    root
+}
+
+// ---- test harness ---------------------------------------------------------
+
+shared struct TreeNode {
+    mut val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn leaf(v: i64) -> TreeNode {
+    TreeNode { val: v, left: None, right: None }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// LeetCode's level-order form, "[4,1,6,null,2]": each node's two
+// children come next, in the order the nodes were met, "null" for none.
+fn parse(text: Str) -> Option[TreeNode] {
+    let inner = text.strip_prefix("[").unwrap().strip_suffix("]").unwrap();
+    if inner.is_empty() {
+        return None;
+    }
+    let items: Vec[Option[i64]] = inner.split(",").map(|s| if s == "null" { None } else { Some(i64.parse(s).unwrap()) }).collect();
+    let root = leaf(items[0].unwrap());
+    let mut queue: Vec[TreeNode] = vec![root];
+    let mut head = 0;
+    let mut i = 1;
+    while i < items.len() {
+        let node = queue[head];
+        head += 1;
+        if let Some(v) = items[i] {
+            let child = leaf(v);
+            node.left = Some(child);
+            queue.push(child);
+        }
+        i += 1;
+        if i < items.len() {
+            if let Some(v) = items[i] {
+                let child = leaf(v);
+                node.right = Some(child);
+                queue.push(child);
+            }
+            i += 1;
+        }
+    }
+    Some(root)
+}
+
+fn written(root: Option[TreeNode]) -> String {
+    let mut out: Vec[String] = Vec.new();
+    let mut queue: Vec[Option[TreeNode]] = vec![root];
+    let mut head = 0;
+    while head < queue.len() {
+        match queue[head] {
+            Some(n) => {
+                out.push(f"{n.val}");
+                queue.push(n.left);
+                queue.push(n.right);
+            }
+            None => out.push("null".to_string()),
+        }
+        head += 1;
+    }
+    while out.len() > 0 and out[out.len() - 1] == "null" {
+        out.pop();
+    }
+    f"[{out.join(",")}]"
+}
+
+// A search tree of the values, inserted in the order given.
+fn insert(root: TreeNode, v: i64) {
+    let mut node = root;
+    loop {
+        if v < node.val {
+            match node.left {
+                Some(l) => node = l,
+                None => {
+                    node.left = Some(leaf(v));
+                    return;
+                }
+            }
+        } else {
+            match node.right {
+                Some(r) => node = r,
+                None => {
+                    node.right = Some(leaf(v));
+                    return;
+                }
+            }
+        }
+    }
+}
+
+fn random_tree(seed: mut ref i64, size: i64) -> String {
+    // the first `size` places of a shuffle of 0 to 100
+    let mut pool: Vec[i64] = (0..101).collect();
+    for i in 0..size {
+        let j = i + next_random(mut seed) % (101 - i);
+        pool.swap(i, j);
+    }
+    let root = leaf(pool[0]);
+    for i in 1..size {
+        insert(root, pool[i]);
+    }
+    written(Some(root))
+}
+
+fn fold(h: i64, text: Str) -> i64 {
+    let mut h = h;
+    for b in text.bytes() {
+        h = (h * 131 + b as i64) % 1000000007;
+    }
+    h
+}
+
+fn main() {
+    let cases = vec![
+        "[4,1,6,0,2,5,7,null,null,null,3,null,null,null,8]",
+        "[0,null,1]",
+        "[5]",
+        "[0]",
+        "[100]",
+        "[1,0,2]",
+        "[3,2,4,1]",
+        "[0,null,100]",
+        "[100,0]",
+        "[50,25,75,12,37,62,87,6,18,31,43,56,68,81,93]",
+    ];
+    for text in cases.iter() {
+        println(f"{text} -> {written(bst_to_gst(parse(text)))}");
+    }
+    // every node count from 1 to 100, three random trees of each
+    let mut seed = 1038;
+    let mut h = 0;
+    let mut nodes = 0;
+    for size in 1..101 {
+        for _ in 0..3 {
+            let text = random_tree(mut seed, size);
+            let out = written(bst_to_gst(parse(text)));
+            h = fold(h, out);
+            nodes += size;
+        }
+    }
+    println(f"300 random trees, {nodes} nodes: checksum {h}");
+    // the deepest trees of 100 nodes: 0 to 99 as a rising chain, and
+    // 100 down to 1 as a falling one
+    let rising = leaf(0);
+    let mut last = rising;
+    for v in 1..100 {
+        let next = leaf(v);
+        last.right = Some(next);
+        last = next;
+    }
+    let result = bst_to_gst(Some(rising)).unwrap();
+    println(f"a rising chain of 100: checksum {fold(0, written(Some(result)))}, top {result.val}");
+    let falling = leaf(100);
+    let mut last = falling;
+    for v in (1..100).rev() {
+        let next = leaf(v);
+        last.left = Some(next);
+        last = next;
+    }
+    let result = bst_to_gst(Some(falling)).unwrap();
+    println(f"a falling chain of 100: checksum {fold(0, written(Some(result)))}, top {result.val}");
+}

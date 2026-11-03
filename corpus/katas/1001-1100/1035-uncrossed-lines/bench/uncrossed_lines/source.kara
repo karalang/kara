@@ -1,0 +1,51 @@
+// LeetCode #1035: Uncrossed Lines -- bench
+// Mirrors ../uncrossed_lines.kara; see ../README.md § Benchmarks.
+
+fn max_uncrossed_lines(nums1: ref Vec[i64], nums2: ref Vec[i64]) -> i64 {
+    let m = nums1.len();
+    let n = nums2.len();
+    let mut best: Vec[Vec[i64]] = Vec.filled(m + 1, Vec.filled(n + 1, 0));
+    for i in 1..m + 1 {
+        for j in 1..n + 1 {
+            best[i][j] = if nums1[i - 1] == nums2[j - 1] {
+                best[i - 1][j - 1] + 1
+            } else {
+                best[i - 1][j].max(best[i][j - 1])
+            };
+        }
+    }
+    best[m][n]
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let count = 40;
+    let rounds = 20;
+    let mut seed = 1035;
+    let mut pairs: Vec[(Vec[i64], Vec[i64])] = Vec.new();
+    for _ in 0..count {
+        let mut nums1: Vec[i64] = Vec.new();
+        let mut nums2: Vec[i64] = Vec.new();
+        for _ in 0..500 {
+            nums1.push(next_random(mut seed) % 10 + 1);
+        }
+        for _ in 0..500 {
+            nums2.push(next_random(mut seed) % 10 + 1);
+        }
+        pairs.push((nums1, nums2));
+    }
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..rounds {
+        for (nums1, nums2) in pairs.iter() {
+            let lines = max_uncrossed_lines(nums1, nums2);
+            total += lines;
+            check = (check * 131 + lines) % 1000000007;
+        }
+    }
+    println(f"{count} pairs of 500 values, {rounds} rounds: sum {total}, checksum {check}");
+}

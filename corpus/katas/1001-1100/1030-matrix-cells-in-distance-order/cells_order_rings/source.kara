@@ -1,0 +1,113 @@
+// LeetCode #1030: Matrix Cells in Distance Order -- walking the rings
+//
+// The cells at distance d from the centre lie on a diamond: for each row
+// offset dr from -d to d, the columns cCenter - (d - |dr|) and
+// cCenter + (d - |dr|), one column when that is 0. Walk the diamonds
+// from d = 0 out to the farthest corner and keep the cells inside the
+// grid. Visits only the cells listed and the diamonds' parts outside the
+// grid. O((R + C)^2).
+
+fn all_cells_dist_order(rows: i64, cols: i64, r_center: i64, c_center: i64) -> Vec[Vec[i64]] {
+    let mut cells: Vec[Vec[i64]] = Vec.new();
+    let far = r_center.max(rows - 1 - r_center) + c_center.max(cols - 1 - c_center);
+    for d in 0..=far {
+        for dr in -d..=d {
+            let r = r_center + dr;
+            if r < 0 or r >= rows {
+                continue;
+            }
+            let dc = d - dr.abs();
+            if c_center - dc >= 0 {
+                cells.push(vec![r, c_center - dc]);
+            }
+            if dc > 0 and c_center + dc < cols {
+                cells.push(vec![r, c_center + dc]);
+            }
+        }
+    }
+    cells
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn distance(cell: ref Vec[i64], r_center: i64, c_center: i64) -> i64 {
+    (cell[0] - r_center).abs() + (cell[1] - c_center).abs()
+}
+
+// Whether the distances never fall along the answer.
+fn in_order(cells: ref Vec[Vec[i64]], r_center: i64, c_center: i64) -> bool {
+    for i in 1..cells.len() {
+        if distance(cells[i - 1], r_center, c_center) > distance(cells[i], r_center, c_center) {
+            return false;
+        }
+    }
+    true
+}
+
+// The answer with each run of equal distances put in row-major order, so
+// every arm prints the same text whatever order it leaves ties in.
+fn canonical(cells: ref Vec[Vec[i64]], r_center: i64, c_center: i64) -> Vec[Vec[i64]] {
+    let mut sorted = cells.clone();
+    sorted.sort_by_key(|cell| (distance(cell, r_center, c_center), cell[0], cell[1]));
+    sorted
+}
+
+fn show(cells: ref Vec[Vec[i64]]) -> String {
+    let parts: Vec[String] = cells.iter().map(|c| f"[{c[0]},{c[1]}]").collect();
+    "[" + parts.join(",") + "]"
+}
+
+fn fold(check: i64, cells: ref Vec[Vec[i64]]) -> i64 {
+    let mut h = check;
+    for cell in cells.iter() {
+        h = (h * 131 + cell[0] * 101 + cell[1] + 1) % 1000000007;
+    }
+    h
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let examples: Vec[(i64, i64, i64, i64)] = vec![
+        (1, 2, 0, 0), (2, 2, 0, 1), (2, 3, 1, 2),
+        (1, 1, 0, 0), (3, 3, 1, 1), (1, 5, 0, 2), (4, 1, 3, 0), (3, 4, 2, 0),
+    ];
+    for (rows, cols, r0, c0) in examples.iter() {
+        let cells = all_cells_dist_order(rows, cols, r0, c0);
+        let order = if in_order(cells, r0, c0) { "in order" } else { "OUT OF ORDER" };
+        println(f"{rows}x{cols} from ({r0},{c0}): {show(canonical(cells, r0, c0))} {order}");
+    }
+    // random grids up to `top_r` by `top_c`, each with a random centre
+    let mut seed = 1030;
+    let groups: Vec[(i64, i64, i64)] = vec![(3000, 3, 3), (1000, 8, 8), (300, 20, 5), (100, 30, 30), (20, 100, 100), (10, 1, 100)];
+    for (count, top_r, top_c) in groups.iter() {
+        let mut total = 0;
+        let mut out_of_order = 0;
+        let mut check = 0;
+        for _ in 0..count {
+            let rows = next_random(mut seed) % top_r + 1;
+            let cols = next_random(mut seed) % top_c + 1;
+            let r0 = next_random(mut seed) % rows;
+            let c0 = next_random(mut seed) % cols;
+            let cells = all_cells_dist_order(rows, cols, r0, c0);
+            total += cells.len();
+            if not in_order(cells, r0, c0) {
+                out_of_order += 1;
+            }
+            check = fold(check, canonical(cells, r0, c0));
+        }
+        println(f"{count} grids up to {top_r}x{top_c}: {total} cells, {out_of_order} out of order, checksum {check}");
+    }
+    // the largest grid from a corner, the far corner and the middle
+    for (r0, c0) in vec![(0, 0), (99, 99), (50, 50), (0, 73)].iter() {
+        let cells = all_cells_dist_order(100, 100, r0, c0);
+        let canon = canonical(cells, r0, c0);
+        let last = canon[canon.len() - 1].clone();
+        let order = if in_order(cells, r0, c0) { "in order" } else { "OUT OF ORDER" };
+        println(f"100x100 from ({r0},{c0}): {cells.len()} cells {order}, farthest [{last[0]},{last[1]}] at {distance(last, r0, c0)}, checksum {fold(0, canon)}");
+    }
+}

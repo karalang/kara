@@ -1,0 +1,140 @@
+// LeetCode #1034: Coloring A Border -- depth-first, by recursion
+//
+// Walk the component from (row, col) depth first, over neighbours of the
+// same value. A square is on the border when any of its four neighbours
+// is off the grid or holds another value; those squares are painted in a
+// copy, so the walk always reads the original values. O(m * n).
+
+fn visit(grid: ref Vec[Vec[i64]], r: i64, c: i64, color: i64, seen: mut ref Vec[Vec[bool]], out: mut ref Vec[Vec[i64]]) {
+    seen[r][c] = true;
+    let m = grid.len();
+    let n = grid[0].len();
+    let mut border = false;
+    for (dr, dc) in vec![(-1, 0), (1, 0), (0, -1), (0, 1)].iter() {
+        let (nr, nc) = (r + dr, c + dc);
+        if nr < 0 or nr >= m or nc < 0 or nc >= n or grid[nr][nc] != grid[r][c] {
+            border = true;
+        } else if not seen[nr][nc] {
+            visit(grid, nr, nc, color, mut seen, mut out);
+        }
+    }
+    if border {
+        out[r][c] = color;
+    }
+}
+
+fn color_border(grid: ref Vec[Vec[i64]], row: i64, col: i64, color: i64) -> Vec[Vec[i64]] {
+    let mut seen: Vec[Vec[bool]] = Vec.filled(grid.len(), Vec.filled(grid[0].len(), false));
+    let mut out = grid.clone();
+    visit(grid, row, col, color, mut seen, mut out);
+    out
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(grid: ref Vec[Vec[i64]]) -> String {
+    let mut rows: Vec[String] = Vec.new();
+    for row in grid.iter() {
+        let cells: Vec[String] = row.iter().map(|v| f"{v}").collect();
+        rows.push(f"[{cells.join(",")}]");
+    }
+    f"[{rows.join(",")}]"
+}
+
+fn fold(grid: ref Vec[Vec[i64]], check: i64) -> i64 {
+    let mut h = check;
+    for row in grid.iter() {
+        for v in row.iter() {
+            h = (h * 131 + v) % 1000000007;
+        }
+    }
+    h
+}
+
+fn random_grid(m: i64, n: i64, top: i64, seed: mut ref i64) -> Vec[Vec[i64]] {
+    let mut grid: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..m {
+        let mut row: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            row.push(next_random(mut seed) % top + 1);
+        }
+        grid.push(row);
+    }
+    grid
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let examples: Vec[(Vec[Vec[i64]], i64, i64, i64)] = vec![
+        (vec![vec![1, 1], vec![1, 2]], 0, 0, 3),
+        (vec![vec![1, 2, 2], vec![2, 3, 2]], 0, 1, 3),
+        (vec![vec![1, 1, 1], vec![1, 1, 1], vec![1, 1, 1]], 1, 1, 2),
+        (vec![vec![7]], 0, 0, 9),
+        (vec![vec![1, 1, 1], vec![1, 1, 1], vec![1, 1, 1]], 1, 1, 1),
+        (vec![vec![1, 2, 1], vec![1, 1, 1], vec![2, 1, 2]], 1, 1, 2),
+        (vec![vec![1, 1, 1, 1], vec![1, 2, 2, 1], vec![1, 2, 2, 1], vec![1, 1, 1, 1]], 0, 0, 2),
+        (vec![vec![5, 5, 5, 5, 5], vec![5, 4, 4, 4, 5], vec![5, 4, 5, 4, 5], vec![5, 4, 4, 4, 5], vec![5, 5, 5, 5, 5]], 2, 2, 6),
+    ];
+    for (grid, row, col, color) in examples.iter() {
+        let painted = color_border(grid, row, col, color);
+        println(f"{show(grid)}, {row}, {col}, {color} -> {show(painted)}");
+    }
+    let mut seed = 1034;
+    let small = random_grid(6, 6, 2, mut seed);
+    println(f"{show(small)}, 2, 3, 3 -> {show(color_border(small, 2, 3, 3))}");
+    // random grids, values from 1 to `top`
+    for top in vec![1, 2, 3, 1000].iter() {
+        let mut check = 0;
+        let mut painted_cells = 0;
+        for _ in 0..60 {
+            let m = next_random(mut seed) % 30 + 1;
+            let n = next_random(mut seed) % 30 + 1;
+            let grid = random_grid(m, n, top, mut seed);
+            let row = next_random(mut seed) % m;
+            let col = next_random(mut seed) % n;
+            let color = next_random(mut seed) % (top + 1) + 1;
+            let painted = color_border(grid, row, col, color);
+            for i in 0..m {
+                for j in 0..n {
+                    if painted[i][j] != grid[i][j] {
+                        painted_cells += 1;
+                    }
+                }
+            }
+            check = fold(painted, check);
+        }
+        println(f"60 random grids up to 30 by 30, values from 1 to {top}: {painted_cells} cells changed, checksum {check}");
+    }
+    // the largest grids: one colour, rings, and a winding path
+    let full: Vec[Vec[i64]] = Vec.filled(50, Vec.filled(50, 4));
+    let mut rings: Vec[Vec[i64]] = Vec.new();
+    let mut path: Vec[Vec[i64]] = Vec.new();
+    for i in 0..50 {
+        let mut ring_row: Vec[i64] = Vec.new();
+        let mut path_row: Vec[i64] = Vec.new();
+        for j in 0..50 {
+            ring_row.push(i.min(j).min(49 - i).min(49 - j) % 2 + 1);
+            let open = i % 2 == 0 or (i % 4 == 1 and j == 49) or (i % 4 == 3 and j == 0);
+            path_row.push(if open { 1 } else { 2 });
+        }
+        rings.push(ring_row);
+        path.push(path_row);
+    }
+    for (name, grid, row, col) in vec![("one colour", full, 25, 25), ("rings", rings.clone(), 0, 0), ("rings", rings, 24, 24), ("winding path", path, 0, 0)].iter() {
+        let painted = color_border(grid, row, col, 3);
+        let mut changed = 0;
+        for i in 0..50 {
+            for j in 0..50 {
+                if painted[i][j] != grid[i][j] {
+                    changed += 1;
+                }
+            }
+        }
+        println(f"50 by 50, {name}, from ({row}, {col}): {changed} cells changed, checksum {fold(painted, 0)}");
+    }
+}

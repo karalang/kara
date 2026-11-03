@@ -1,0 +1,110 @@
+// LeetCode #1035: Uncrossed Lines -- a bit-parallel row
+//
+// Allison and Dix, as Crochemore et al. write it: one bit per place of
+// nums2, in 64-bit words. For each value of nums2 a mask marks where it
+// occurs. Start with every bit set; for each x of nums1, with M its mask,
+// V becomes (V + (V & M)) | (V & ~M), the addition carried from word to
+// word. Each pass clears one more bit wherever the common subsequence
+// can grow, so the answer is the number of clear bits. O(m * n / 64).
+
+fn max_uncrossed_lines(nums1: ref Vec[i64], nums2: ref Vec[i64]) -> i64 {
+    let n = nums2.len();
+    let words = (n + 63) / 64;
+    let mut masks: Map[i64, Vec[u64]] = Map.new();
+    for j in 0..n {
+        let bit: u64 = 1 << ((j % 64) as u32);
+        match masks.get_mut(nums2[j]) {
+            Some(mask) => mask[j / 64] = mask[j / 64] | bit,
+            None => {
+                let mut mask: Vec[u64] = Vec.filled(words, 0);
+                mask[j / 64] = bit;
+                masks.insert(nums2[j], mask);
+            }
+        }
+    }
+    let mut v: Vec[u64] = Vec.filled(words, ~(0 as u64));
+    for x in nums1.iter() {
+        if let Some(mask) = masks.get(x) {
+            let mut carry: u64 = 0;
+            for k in 0..words {
+                let u = v[k] & mask[k];
+                let first = v[k].wrapping_add(u);
+                let sum = first.wrapping_add(carry);
+                carry = if first < v[k] or sum < first { 1 } else { 0 };
+                v[k] = sum | (v[k] & ~mask[k]);
+            }
+        }
+    }
+    let mut clear = 0;
+    for k in 0..words {
+        let width = if k == words - 1 and n % 64 != 0 { n % 64 } else { 64 };
+        let low: u64 = if width == 64 { ~(0 as u64) } else { (1 << (width as u32)) - 1 };
+        clear += width - (v[k] & low).count_ones();
+    }
+    clear
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_list(len: i64, top: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut nums: Vec[i64] = Vec.new();
+    for _ in 0..len {
+        nums.push(next_random(mut seed) % top + 1);
+    }
+    nums
+}
+
+fn show(nums: ref Vec[i64]) -> String {
+    let parts: Vec[String] = nums.iter().map(|v| f"{v}").collect();
+    f"[{parts.join(",")}]"
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let examples: Vec[(Vec[i64], Vec[i64])] = vec![
+        (vec![1, 4, 2], vec![1, 2, 4]),
+        (vec![2, 5, 1, 2, 5], vec![10, 5, 2, 1, 5, 2]),
+        (vec![1, 3, 7, 1, 7, 5], vec![1, 9, 2, 5, 1]),
+        (vec![1], vec![1]),
+        (vec![1], vec![2]),
+        (vec![3, 3, 3], vec![3, 3]),
+        (vec![1, 2, 3, 4, 5], vec![5, 4, 3, 2, 1]),
+        (vec![1, 2, 1, 2, 1, 2], vec![2, 1, 2, 1, 2, 1]),
+    ];
+    for (nums1, nums2) in examples.iter() {
+        println(f"{show(nums1)}, {show(nums2)} -> {max_uncrossed_lines(nums1, nums2)}");
+    }
+    // random lists, values from 1 to `top`
+    let mut seed = 1035;
+    for (count, longest, top) in vec![(300, 8, 3), (200, 30, 2), (200, 30, 10), (40, 200, 5), (40, 200, 2000), (6, 500, 4), (6, 500, 2000)].iter() {
+        let mut total = 0;
+        let mut check = 0;
+        for _ in 0..count {
+            let len1 = next_random(mut seed) % longest + 1;
+            let len2 = next_random(mut seed) % longest + 1;
+            let nums1 = random_list(len1, top, mut seed);
+            let nums2 = random_list(len2, top, mut seed);
+            let lines = max_uncrossed_lines(nums1, nums2);
+            total += lines;
+            check = (check * 131 + lines) % 1000000007;
+        }
+        println(f"{count} pairs of up to {longest} values from 1 to {top}: sum {total}, checksum {check}");
+    }
+    // the largest: equal lists, one reversed, and one value against itself
+    let mut up: Vec[i64] = Vec.new();
+    let mut down: Vec[i64] = Vec.new();
+    for i in 0..500 {
+        up.push(i % 2000 + 1);
+        down.push(500 - i);
+    }
+    let same: Vec[i64] = Vec.filled(500, 7);
+    let wide = random_list(500, 2000, mut seed);
+    for (name, nums1, nums2) in vec![("1 to 500 against itself", up.clone(), up.clone()), ("1 to 500 against 500 to 1", up.clone(), down), ("500 sevens against 500 sevens", same.clone(), same), ("random against itself", wide.clone(), wide)].iter() {
+        println(f"{name}: {max_uncrossed_lines(nums1, nums2)}");
+    }
+}

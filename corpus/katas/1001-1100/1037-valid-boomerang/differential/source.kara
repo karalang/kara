@@ -1,0 +1,252 @@
+// LeetCode #1037: Valid Boomerang -- differential
+//
+// The five arms, copied here under their own names, against the statement
+// read literally and six properties of the answer.
+
+// ---- the cross product (boomerang.kara)
+
+fn cross_arm(points: ref Vec[(i64, i64)]) -> bool {
+    let (ax, ay) = points[0];
+    let (bx, by) = points[1];
+    let (cx, cy) = points[2];
+    (bx - ax) * (cy - ay) - (by - ay) * (cx - ax) != 0
+}
+
+// ---- slopes as reduced fractions (boomerang_slopes.kara)
+
+fn slopes_gcd(a: i64, b: i64) -> i64 {
+    if b == 0 { a.abs() } else { slopes_gcd(b, a % b) }
+}
+
+fn slopes_slope(from: (i64, i64), to: (i64, i64)) -> (i64, i64) {
+    let (fx, fy) = from;
+    let (tx, ty) = to;
+    let mut dx = tx - fx;
+    let mut dy = ty - fy;
+    if dx < 0 or (dx == 0 and dy < 0) {
+        dx = -dx;
+        dy = -dy;
+    }
+    let g = slopes_gcd(dx, dy);
+    (dy / g, dx / g)
+}
+
+fn slopes_arm(points: ref Vec[(i64, i64)]) -> bool {
+    let (a, b, c) = (points[0], points[1], points[2]);
+    if a == b or b == c or a == c {
+        return false;
+    }
+    slopes_slope(a, b) != slopes_slope(a, c)
+}
+
+// ---- the shoelace formula (boomerang_shoelace.kara)
+
+fn shoelace_arm(points: ref Vec[(i64, i64)]) -> bool {
+    let mut twice_area = 0;
+    for i in 0..3 {
+        let (x, _) = points[i];
+        let (_, y_next) = points[(i + 1) % 3];
+        let (_, y_prev) = points[(i + 2) % 3];
+        twice_area += x * (y_next - y_prev);
+    }
+    twice_area.abs() > 0
+}
+
+// ---- Heron's formula in integers (boomerang_heron.kara)
+
+fn heron_squared(a: (i64, i64), b: (i64, i64)) -> i64 {
+    let (ax, ay) = a;
+    let (bx, by) = b;
+    (ax - bx) * (ax - bx) + (ay - by) * (ay - by)
+}
+
+fn heron_arm(points: ref Vec[(i64, i64)]) -> bool {
+    let p = heron_squared(points[0], points[1]);
+    let q = heron_squared(points[1], points[2]);
+    let r = heron_squared(points[2], points[0]);
+    2 * (p * q + q * r + r * p) - (p * p + q * q + r * r) != 0
+}
+
+// ---- a whole number of steps (boomerang_step.kara)
+
+fn step_gcd(a: i64, b: i64) -> i64 {
+    let mut (x, y) = (a.abs(), b.abs());
+    while y != 0 {
+        let t = x % y;
+        x = y;
+        y = t;
+    }
+    x
+}
+
+fn step_arm(points: ref Vec[(i64, i64)]) -> bool {
+    let ((ax, ay), (bx, by), (cx, cy)) = (points[0], points[1], points[2]);
+    if (ax, ay) == (bx, by) or (bx, by) == (cx, cy) or (ax, ay) == (cx, cy) {
+        return false;
+    }
+    let g = step_gcd(bx - ax, by - ay);
+    let (sx, sy) = ((bx - ax) / g, (by - ay) / g);
+    let (ux, uy) = (cx - ax, cy - ay);
+    let on_line = if sx != 0 {
+        ux % sx == 0 and uy == ux / sx * sy
+    } else {
+        ux == 0
+    };
+    not on_line
+}
+
+// ---- the checks
+
+fn arms(points: ref Vec[(i64, i64)]) -> Vec[bool] {
+    vec![cross_arm(points), slopes_arm(points), shoelace_arm(points), heron_arm(points), step_arm(points)]
+}
+
+// The statement read literally, for points from 0 to 6: three points
+// are a boomerang when all three are distinct and not in a straight
+// line. A straight line through two lattice points of that square is
+// u x + v y = w for some u and v from -6 to 6, not both 0, so the points
+// are in a straight line exactly when some such u, v gives all three the
+// same u x + v y.
+fn literal(points: ref Vec[(i64, i64)]) -> bool {
+    let (a, b, c) = (points[0], points[1], points[2]);
+    let distinct = a != b and b != c and a != c;
+    let mut in_line = false;
+    for u in -6..7 {
+        for v in -6..7 {
+            if u != 0 or v != 0 {
+                let w: Vec[i64] = points.iter().map(|(x, y)| u * x + v * y).collect();
+                if w[0] == w[1] and w[1] == w[2] {
+                    in_line = true;
+                }
+            }
+        }
+    }
+    distinct and not in_line
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let mut failures: Vec[i64] = Vec.filled(7, 0);
+    let mut checks = 0;
+    let mut check = 0;
+    let mut seed = 10371;
+    // every three points of a 4 by 4 grid in every order, repeats
+    // allowed; then 2000 random triples from 0 to 6 and 1000 from 0 to 100,
+    // a third of each on one line
+    let mut cases: Vec[Vec[(i64, i64)]] = Vec.new();
+    for p in 0..16 {
+        for q in 0..16 {
+            for r in 0..16 {
+                cases.push(vec![(p / 4, p % 4), (q / 4, q % 4), (r / 4, r % 4)]);
+            }
+        }
+    }
+    for k in 0..3000 {
+        let top = if k < 2000 { 7 } else { 101 };
+        let a = (next_random(mut seed) % top, next_random(mut seed) % top);
+        let b = (next_random(mut seed) % top, next_random(mut seed) % top);
+        let c = if k % 3 == 0 {
+            let (ax, ay) = a;
+            let (bx, by) = b;
+            let (mx, my) = ((ax + bx) / 2, (ay + by) / 2);
+            if 2 * mx == ax + bx and 2 * my == ay + by { (mx, my) } else { b }
+        } else {
+            (next_random(mut seed) % top, next_random(mut seed) % top)
+        };
+        cases.push(vec![a, b, c]);
+    }
+    let mut searched = 0;
+    let mut yes = 0;
+    for points in cases.iter() {
+        let got = arms(points);
+        if got[0] {
+            yes += 1;
+        }
+        check = (check * 131 + if got[0] { 2 } else { 1 }) % 1000000007;
+        let small = points.iter().all(|(x, y)| x <= 6 and y <= 6);
+        let want = if small { searched += 1; literal(points) } else { false };
+        let (a, b, c) = (points[0], points[1], points[2]);
+        // P2: the points in every other order
+        let orders: Vec[Vec[(i64, i64)]] = vec![vec![a, c, b], vec![b, a, c], vec![b, c, a], vec![c, a, b], vec![c, b, a]];
+        let got_orders: Vec[Vec[bool]] = orders.iter().map(|o| arms(o)).collect();
+        // P3: every point moved by the same random amount
+        let (dx, dy) = (next_random(mut seed) % 201 - 100, next_random(mut seed) % 201 - 100);
+        let moved: Vec[(i64, i64)] = points.iter().map(|(x, y)| (x + dx, y + dy)).collect();
+        let got_moved = arms(moved);
+        // P4: the plane turned a quarter, and mirrored
+        let turned: Vec[(i64, i64)] = points.iter().map(|(x, y)| (-y, x)).collect();
+        let mirrored: Vec[(i64, i64)] = points.iter().map(|(x, y)| (y, x)).collect();
+        let got_turned = arms(turned);
+        let got_mirrored = arms(mirrored);
+        // P5: every point scaled by the same factor from 2 to 9
+        let k = next_random(mut seed) % 8 + 2;
+        let scaled: Vec[(i64, i64)] = points.iter().map(|(x, y)| (k * x, k * y)).collect();
+        let got_scaled = arms(scaled);
+        // P6: the third point replaced by one of the first two
+        let repeated = vec![a, b, if next_random(mut seed) % 2 == 0 { a } else { b }];
+        let got_repeated = arms(repeated);
+        for i in 0..5 {
+            // P1: the statement read literally, on points from 0 to 6
+            if small {
+                checks += 1;
+                if got[i] != want {
+                    failures[0] += 1;
+                }
+            }
+            // P2: the order of the points does not matter
+            checks += 1;
+            let mut same = true;
+            for o in got_orders.iter() {
+                if o[i] != got[i] {
+                    same = false;
+                }
+            }
+            if not same {
+                failures[1] += 1;
+            }
+            // P3: moving every point by the same amount moves the line
+            checks += 1;
+            if got_moved[i] != got[i] {
+                failures[2] += 1;
+            }
+            // P4: turning or mirroring the plane turns or mirrors the line
+            checks += 1;
+            if got_turned[i] != got[i] or got_mirrored[i] != got[i] {
+                failures[3] += 1;
+            }
+            // P5: scaling every point by the same factor scales the line
+            checks += 1;
+            if got_scaled[i] != got[i] {
+                failures[4] += 1;
+            }
+            // P6: a repeated point is never a boomerang
+            checks += 1;
+            if got_repeated[i] {
+                failures[5] += 1;
+            }
+            // P7: each arm agrees with at least two of the other four
+            checks += 1;
+            let mut agree = 0;
+            for o in 0..5 {
+                if o != i and got[o] == got[i] {
+                    agree += 1;
+                }
+            }
+            if agree < 2 {
+                failures[6] += 1;
+            }
+        }
+    }
+    let mut total = 0;
+    for p in 0..7 {
+        if failures[p] > 0 {
+            println(f"P{p + 1}: {failures[p]} failures");
+        }
+        total += failures[p];
+    }
+    println(f"{cases.len()} cases ({searched} searched in full, {yes} boomerangs): checksum {check}, {checks} checks over 5 arms: {total} failures");
+}

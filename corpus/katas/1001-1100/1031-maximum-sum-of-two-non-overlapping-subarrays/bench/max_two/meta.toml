@@ -1,0 +1,11 @@
+source = "kara-katas/leetcode/1001-1100/1031-maximum-sum-of-two-non-overlapping-subarrays/bench/max_two.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["bench"]
+class = "e"
+expected_from = "mirror"
+note = "mirror: the C, Rust, Go and Python bench programs print this line (kara-katas 1031 bench/); there is no legacy record (the legacy compiler went at M3)"
+bucket = "timeout"
+classified_with = "61703766d"
+extracted_src = "7cb898d2"

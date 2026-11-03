@@ -1,0 +1,19 @@
+[1,4,2], [1,2,4] -> 2
+[2,5,1,2,5], [10,5,2,1,5,2] -> 3
+[1,3,7,1,7,5], [1,9,2,5,1] -> 2
+[1], [1] -> 1
+[1], [2] -> 0
+[3,3,3], [3,3] -> 2
+[1,2,3,4,5], [5,4,3,2,1] -> 1
+[1,2,1,2,1,2], [2,1,2,1,2,1] -> 5
+300 pairs of up to 8 values from 1 to 3: sum 614, checksum 571361740
+200 pairs of up to 30 values from 1 to 2: sum 1899, checksum 834011511
+200 pairs of up to 30 values from 1 to 10: sum 1023, checksum 548450378
+40 pairs of up to 200 values from 1 to 5: sum 1877, checksum 961482998
+40 pairs of up to 200 values from 1 to 2000: sum 115, checksum 51719305
+6 pairs of up to 500 values from 1 to 4: sum 451, checksum 284821637
+6 pairs of up to 500 values from 1 to 2000: sum 46, checksum 250368059
+1 to 500 against itself: 500
+1 to 500 against 500 to 1: 1
+500 sevens against 500 sevens: 500
+random against itself: 500

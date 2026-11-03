@@ -1,0 +1,90 @@
+// LeetCode #1039: Minimum Score Triangulation of Polygon -- interval
+// table, by length.
+//
+// Any triangulation has one triangle on the edge from vertex i to vertex
+// j, with a third vertex k between them, and that triangle splits the
+// polygon i..j into the polygons i..k and k..j. So best[i][j], the least
+// score for the vertices i to j, is the least over k of best[i][k] +
+// best[k][j] + v[i] v[k] v[j], filled for ever longer stretches.
+// O(n^3) time, O(n^2) space.
+
+fn min_score_triangulation(values: ref Vec[i64]) -> i64 {
+    let n = values.len();
+    let mut best: Vec[Vec[i64]] = Vec.filled(n, Vec.filled(n, 0));
+    for len in 2..n {
+        for i in 0..n - len {
+            let j = i + len;
+            let mut least = i64.MAX;
+            for k in i + 1..j {
+                let score = best[i][k] + best[k][j] + values[i] * values[k] * values[j];
+                if score < least {
+                    least = score;
+                }
+            }
+            best[i][j] = least;
+        }
+    }
+    best[0][n - 1]
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let examples: Vec[Vec[i64]] = vec![
+        vec![1, 2, 3],
+        vec![3, 7, 4, 5],
+        vec![1, 3, 1, 4, 1, 5],
+        vec![100, 100, 100],
+        vec![1, 1, 1, 1, 1, 1, 1, 1],
+        vec![5, 1, 5, 1, 5, 1],
+        vec![2, 100, 3, 100, 4],
+        vec![35, 73, 90, 27, 71, 80, 21, 33, 33, 13, 48, 12, 68, 70, 80, 36, 66, 3, 70, 58],
+    ];
+    for values in examples.iter() {
+        println(f"{values} -> {min_score_triangulation(values)}");
+    }
+    // every polygon of 3 to 7 vertices with values from 1 to 3
+    for n in 3..8 {
+        let mut count = 1;
+        for _ in 0..n {
+            count *= 3;
+        }
+        let mut sum = 0;
+        let mut check = 0;
+        for code in 0..count {
+            let mut values: Vec[i64] = Vec.new();
+            let mut c = code;
+            for _ in 0..n {
+                values.push(c % 3 + 1);
+                c /= 3;
+            }
+            let score = min_score_triangulation(values);
+            sum += score;
+            check = (check * 131 + score) % 1000000007;
+        }
+        println(f"all {count} polygons of {n} vertices from 1 to 3: total {sum}, checksum {check}");
+    }
+    // 300 random polygons of 3 to 50 vertices with values from 1 to 100
+    let mut seed = 1039;
+    let mut sum = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = next_random(mut seed) % 48 + 3;
+        let values: Vec[i64] = (0..n).map(|_| next_random(mut seed) % 100 + 1).collect();
+        let score = min_score_triangulation(values);
+        sum += score;
+        check = (check * 131 + score) % 1000000007;
+    }
+    println(f"300 random polygons: total {sum}, checksum {check}");
+    // the largest: 50 vertices, all 100; and 1 to 50 in order
+    let top: Vec[i64] = Vec.filled(50, 100);
+    println(f"50 vertices of 100: {min_score_triangulation(top)}");
+    let rising: Vec[i64] = (1..51).collect();
+    println(f"1 to 50: {min_score_triangulation(rising)}");
+}

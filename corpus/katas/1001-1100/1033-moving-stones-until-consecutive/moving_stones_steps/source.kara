@@ -1,0 +1,103 @@
+// LeetCode #1033: Moving Stones Until Consecutive -- trying the moves
+//
+// The fewest: 0 if the stones touch; otherwise try every single move of
+// an end stone to a free place between the ends, and 1 if one of them
+// makes the stones touch; otherwise 2, by moving the low stone next to
+// the middle one and then the high stone next to it. The most: play it
+// out, one free place at a time, always taking the end stone with free
+// places beside it one step in.
+
+fn touching(p: ref Vec[i64]) -> bool {
+    let mut s = p.clone();
+    s.sort();
+    s[2] - s[0] == 2
+}
+
+fn num_moves_stones(a: i64, b: i64, c: i64) -> Vec[i64] {
+    let mut s: Vec[i64] = vec![a, b, c];
+    s.sort();
+    let mut fewest = 2;
+    if touching(s) {
+        fewest = 0;
+    } else {
+        for k in s[0] + 1..s[2] {
+            if k != s[1] and (touching(vec![k, s[1], s[2]]) or touching(vec![s[0], s[1], k])) {
+                fewest = 1;
+            }
+        }
+    }
+    let mut most = 0;
+    while not touching(s) {
+        if s[1] - s[0] > 1 {
+            s[0] += 1;
+        } else {
+            s[2] -= 1;
+        }
+        most += 1;
+    }
+    vec![fewest, most]
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let examples: Vec[(i64, i64, i64)] = vec![
+        (1, 2, 5), (4, 3, 2), (3, 5, 1),
+        (1, 3, 5), (1, 4, 7), (10, 1, 100), (50, 52, 49), (7, 1, 3),
+    ];
+    for (a, b, c) in examples.iter() {
+        let moves = num_moves_stones(a, b, c);
+        println(f"{a}, {b}, {c} -> [{moves[0]},{moves[1]}]");
+    }
+    // every three positions from 1 to `top`, in every order
+    for top in vec![6, 20].iter() {
+        let mut least = 0;
+        let mut most = 0;
+        let mut check = 0;
+        let mut count = 0;
+        for a in 1..top + 1 {
+            for b in 1..top + 1 {
+                for c in 1..top + 1 {
+                    if a != b and b != c and a != c {
+                        let moves = num_moves_stones(a, b, c);
+                        least += moves[0];
+                        most += moves[1];
+                        check = (check * 131 + moves[0] * 101 + moves[1]) % 1000000007;
+                        count += 1;
+                    }
+                }
+            }
+        }
+        println(f"all {count} orders of three positions from 1 to {top}: minimum sum {least}, maximum sum {most}, checksum {check}");
+    }
+    // random positions from 1 to 100
+    let mut seed = 1033;
+    let mut least = 0;
+    let mut most = 0;
+    let mut check = 0;
+    let mut count = 0;
+    while count < 50 {
+        let a = next_random(mut seed) % 100 + 1;
+        let b = next_random(mut seed) % 100 + 1;
+        let c = next_random(mut seed) % 100 + 1;
+        if a != b and b != c and a != c {
+            let moves = num_moves_stones(a, b, c);
+            least += moves[0];
+            most += moves[1];
+            check = (check * 131 + moves[0] * 101 + moves[1]) % 1000000007;
+            count += 1;
+        }
+    }
+    println(f"50 random positions from 1 to 100: minimum sum {least}, maximum sum {most}, checksum {check}");
+    // the widest spans
+    for (a, b, c) in vec![(1, 50, 100), (1, 2, 100), (1, 99, 100), (98, 99, 100), (100, 1, 3)].iter() {
+        let moves = num_moves_stones(a, b, c);
+        println(f"{a}, {b}, {c} -> [{moves[0]},{moves[1]}]");
+    }
+}

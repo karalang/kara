@@ -1,0 +1,117 @@
+// LeetCode #1040: Moving Stones Until Consecutive II -- the stones in a
+// SortedSet.
+//
+// The stones kept in a SortedSet, which orders them; the window of n slots
+// starting at each stone is counted with `range_inclusive`, and the ends
+// and the stones next to them are read off the set's first and last two.
+// The most moves and the one exception are as in the ★ arm. O(n k) for k
+// the most stones in any window.
+
+fn moves(stones: ref Vec[i64]) -> (i64, i64) {
+    let mut set: SortedSet[i64] = SortedSet.new();
+    for x in stones.iter() {
+        set.insert(*x);
+    }
+    let n = set.len();
+    let ordered: Vec[i64] = set.iter().map(|x| *x).collect();
+    let first = ordered[0];
+    let second = ordered[1];
+    let last = ordered[n - 1];
+    let before_last = ordered[n - 2];
+    let most = (last - second - n + 2).max(before_last - first - n + 2);
+    let mut least = n;
+    for x in set.iter() {
+        let start = *x;
+        let inside = set.range_inclusive(start, start + n - 1).count();
+        let top = set.range_inclusive(start, start + n - 1).last().map(|y| *y).unwrap_or(start);
+        if inside == n - 1 and top - start == n - 2 {
+            least = least.min(2);
+        } else {
+            least = least.min(n - inside);
+        }
+    }
+    (least, most)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `count` distinct stones from 1 to `top`, in the order drawn.
+fn random_stones(seed: mut ref i64, count: i64, top: i64) -> Vec[i64] {
+    let mut taken: Set[i64] = Set.new();
+    let mut out: Vec[i64] = Vec.new();
+    while out.len() < count {
+        let x = (next_random(mut seed) * 32768 + next_random(mut seed)) % top + 1;
+        if taken.insert(x) {
+            out.push(x);
+        }
+    }
+    out
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let examples: Vec[Vec[i64]] = vec![
+        vec![7, 4, 9],
+        vec![6, 5, 4, 3, 10],
+        vec![100, 101, 104, 102, 103],
+        vec![1, 2, 5],
+        vec![1, 3, 5, 7, 9],
+        vec![1, 2, 3, 4, 10],
+        vec![1, 1000000000, 500000000],
+        vec![8, 7, 6, 5, 4, 3, 2, 1, 100, 200],
+    ];
+    for stones in examples.iter() {
+        let (least, most) = moves(stones);
+        println(f"{stones} -> [{least}, {most}]");
+    }
+    // every set of 3 or more stones from 1 to 12, by size
+    for size in 3..13 {
+        let mut sets = 0;
+        let mut sum = 0;
+        let mut check = 0;
+        for mask in 0..4096 {
+            let mut stones: Vec[i64] = Vec.new();
+            for b in 0..12 {
+                if (mask >> b) & 1 == 1 {
+                    stones.push(b + 1);
+                }
+            }
+            if stones.len() == size {
+                let (least, most) = moves(stones);
+                sets += 1;
+                sum += least * 100 + most;
+                check = (check * 131 + least * 1000 + most) % 1000000007;
+            }
+        }
+        println(f"all {sets} sets of {size} stones from 1 to 12: total {sum}, checksum {check}");
+    }
+    // 300 random sets of 3 to 200 stones from 1 to 10^9, and 300 packed
+    // into a stretch about twice their number
+    let mut seed = 1040;
+    for (label, spread) in [("wide", 0), ("packed", 2)] {
+        let mut sum = 0;
+        let mut check = 0;
+        for _ in 0..300 {
+            let count = next_random(mut seed) % 198 + 3;
+            let top = if spread == 0 { 1000000000 } else { count * spread };
+            let stones = random_stones(mut seed, count, top);
+            let (least, most) = moves(stones);
+            sum += least + most;
+            check = (check * 131 + least * 1000003 + most) % 1000000007;
+        }
+        println(f"300 {label} random sets: total {sum}, checksum {check}");
+    }
+    // the largest: 2000 stones spread wide, and 2000 packed with one gap
+    let wide = random_stones(mut seed, 2000, 1000000000);
+    let (a, b) = moves(wide);
+    println(f"2000 wide: [{a}, {b}]");
+    let mut packed: Vec[i64] = (1..2000).collect();
+    packed.push(3000);
+    let (c, d) = moves(packed);
+    println(f"1 to 1999 and 3000: [{c}, {d}]");
+}

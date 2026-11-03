@@ -1,0 +1,426 @@
+// LeetCode #1036: Escape a Large Maze -- differential
+//
+// The five arms, copied here under their own names with the side of the
+// grid a parameter, against the statement read literally on small grids
+// and five properties of the answer.
+
+// ---- breadth-first, bounded (escape_maze.kara)
+
+fn bfs_not_fenced(blocked: ref Set[(i64, i64)], from: (i64, i64), to: (i64, i64), side: i64) -> bool {
+    let limit = blocked.len() * (blocked.len() - 1) / 2;
+    let mut seen: Set[(i64, i64)] = Set.new();
+    let mut queue: VecDeque[(i64, i64)] = VecDeque.new();
+    seen.insert(from);
+    queue.push_back(from);
+    while let Some((x, y)) = queue.pop_front() {
+        if (x, y) == to or seen.len() > limit {
+            return true;
+        }
+        for (dx, dy) in vec![(1, 0), (-1, 0), (0, 1), (0, -1)].iter() {
+            let next = (x + dx, y + dy);
+            let (nx, ny) = next;
+            if nx >= 0 and nx < side and ny >= 0 and ny < side and not blocked.contains(next) and not seen.contains(next) {
+                seen.insert(next);
+                queue.push_back(next);
+            }
+        }
+    }
+    false
+}
+
+fn bfs_arm(blocked: ref Vec[(i64, i64)], source: (i64, i64), target: (i64, i64), side: i64) -> bool {
+    let walls: Set[(i64, i64)] = blocked.iter().cloned().collect();
+    bfs_not_fenced(walls, source, target, side) and bfs_not_fenced(walls, target, source, side)
+}
+
+// ---- depth-first, by recursion (escape_maze_dfs.kara)
+
+fn dfs_walk(blocked: ref Set[(i64, i64)], at: (i64, i64), to: (i64, i64), side: i64, limit: i64, seen: mut ref Set[(i64, i64)]) -> bool {
+    if at == to or seen.len() > limit {
+        return true;
+    }
+    let (x, y) = at;
+    for (dx, dy) in vec![(1, 0), (-1, 0), (0, 1), (0, -1)].iter() {
+        let next = (x + dx, y + dy);
+        let (nx, ny) = next;
+        if nx >= 0 and nx < side and ny >= 0 and ny < side and not blocked.contains(next) and not seen.contains(next) {
+            seen.insert(next);
+            if dfs_walk(blocked, next, to, side, limit, mut seen) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn dfs_not_fenced(blocked: ref Set[(i64, i64)], from: (i64, i64), to: (i64, i64), side: i64) -> bool {
+    let limit = blocked.len() * (blocked.len() - 1) / 2;
+    let mut seen: Set[(i64, i64)] = Set.new();
+    seen.insert(from);
+    dfs_walk(blocked, from, to, side, limit, mut seen)
+}
+
+fn dfs_arm(blocked: ref Vec[(i64, i64)], source: (i64, i64), target: (i64, i64), side: i64) -> bool {
+    let walls: Set[(i64, i64)] = blocked.iter().cloned().collect();
+    dfs_not_fenced(walls, source, target, side) and dfs_not_fenced(walls, target, source, side)
+}
+
+// ---- a stack over numbered squares (escape_maze_stack.kara)
+
+fn stack_not_fenced(blocked: ref Set[i64], from: (i64, i64), to: (i64, i64), side: i64) -> bool {
+    let limit = blocked.len() * (blocked.len() - 1) / 2;
+    let (fx, fy) = from;
+    let (tx, ty) = to;
+    let goal = tx * side + ty;
+    let mut seen: Set[i64] = Set.new();
+    let mut stack: Vec[i64] = vec![fx * side + fy];
+    seen.insert(fx * side + fy);
+    while let Some(square) = stack.pop() {
+        if square == goal or seen.len() > limit {
+            return true;
+        }
+        let (x, y) = (square / side, square % side);
+        if x > 0 {
+            let next = square - side;
+            if not blocked.contains(next) and not seen.contains(next) {
+                seen.insert(next);
+                stack.push(next);
+            }
+        }
+        if x + 1 < side {
+            let next = square + side;
+            if not blocked.contains(next) and not seen.contains(next) {
+                seen.insert(next);
+                stack.push(next);
+            }
+        }
+        if y > 0 {
+            let next = square - 1;
+            if not blocked.contains(next) and not seen.contains(next) {
+                seen.insert(next);
+                stack.push(next);
+            }
+        }
+        if y + 1 < side {
+            let next = square + 1;
+            if not blocked.contains(next) and not seen.contains(next) {
+                seen.insert(next);
+                stack.push(next);
+            }
+        }
+    }
+    false
+}
+
+fn stack_arm(blocked: ref Vec[(i64, i64)], source: (i64, i64), target: (i64, i64), side: i64) -> bool {
+    let walls: Set[i64] = blocked.iter().map(|(x, y)| x * side + y).collect();
+    stack_not_fenced(walls, source, target, side) and stack_not_fenced(walls, target, source, side)
+}
+
+// ---- a looser bound, squares by row (escape_maze_rows.kara)
+
+fn rows_holds(rows: ref Map[i64, Set[i64]], x: i64, y: i64) -> bool {
+    match rows.get(x) {
+        Some(cols) => cols.contains(y),
+        None => false,
+    }
+}
+
+fn rows_mark(rows: mut ref Map[i64, Set[i64]], x: i64, y: i64) {
+    match rows.get_mut(x) {
+        Some(cols) => {
+            cols.insert(y);
+        }
+        None => {
+            let mut cols: Set[i64] = Set.new();
+            cols.insert(y);
+            rows.insert(x, cols);
+        }
+    }
+}
+
+fn rows_not_fenced(blocked: ref Map[i64, Set[i64]], count: i64, from: (i64, i64), to: (i64, i64), side: i64) -> bool {
+    let limit = count * count;
+    let mut seen: Map[i64, Set[i64]] = Map.new();
+    let mut reached = 1;
+    let mut queue: VecDeque[(i64, i64)] = VecDeque.new();
+    let (fx, fy) = from;
+    rows_mark(mut seen, fx, fy);
+    queue.push_back(from);
+    while let Some((x, y)) = queue.pop_front() {
+        if (x, y) == to or reached > limit {
+            return true;
+        }
+        for (nx, ny) in vec![(x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)].iter() {
+            if nx >= 0 and nx < side and ny >= 0 and ny < side and not rows_holds(blocked, nx, ny) and not rows_holds(seen, nx, ny) {
+                rows_mark(mut seen, nx, ny);
+                reached += 1;
+                queue.push_back((nx, ny));
+            }
+        }
+    }
+    false
+}
+
+fn rows_arm(blocked: ref Vec[(i64, i64)], source: (i64, i64), target: (i64, i64), side: i64) -> bool {
+    let mut walls: Map[i64, Set[i64]] = Map.new();
+    for (x, y) in blocked.iter() {
+        rows_mark(mut walls, x, y);
+    }
+    rows_not_fenced(walls, blocked.len(), source, target, side) and rows_not_fenced(walls, blocked.len(), target, source, side)
+}
+
+// ---- two searches at once (escape_maze_both.kara)
+
+struct BothSearch {
+    seen: Set[(i64, i64)],
+    queue: VecDeque[(i64, i64)],
+}
+
+fn both_start(at: (i64, i64)) -> BothSearch {
+    let mut seen: Set[(i64, i64)] = Set.new();
+    let mut queue: VecDeque[(i64, i64)] = VecDeque.new();
+    seen.insert(at);
+    queue.push_back(at);
+    BothSearch { seen: seen, queue: queue }
+}
+
+// One square of `search` taken off its queue and its neighbours seen:
+// 1 if one of them is one the other search has seen, -1 if the queue
+// was already empty, 0 otherwise.
+fn both_step(search: mut ref BothSearch, other: ref BothSearch, blocked: ref Set[(i64, i64)], side: i64) -> i64 {
+    match search.queue.pop_front() {
+        None => -1,
+        Some((x, y)) => {
+            for (dx, dy) in vec![(1, 0), (-1, 0), (0, 1), (0, -1)].iter() {
+                let next = (x + dx, y + dy);
+                let (nx, ny) = next;
+                if nx >= 0 and nx < side and ny >= 0 and ny < side and not blocked.contains(next) and not search.seen.contains(next) {
+                    if other.seen.contains(next) {
+                        return 1;
+                    }
+                    search.seen.insert(next);
+                    search.queue.push_back(next);
+                }
+            }
+            0
+        }
+    }
+}
+
+fn both_arm(blocked: ref Vec[(i64, i64)], source: (i64, i64), target: (i64, i64), side: i64) -> bool {
+    let walls: Set[(i64, i64)] = blocked.iter().cloned().collect();
+    let limit = walls.len() * (walls.len() - 1) / 2;
+    let mut a = both_start(source);
+    let mut b = both_start(target);
+    loop {
+        let a_free = a.seen.len() > limit;
+        let b_free = b.seen.len() > limit;
+        if a_free and b_free {
+            return true;
+        }
+        if not a_free {
+            let r = both_step(mut a, b, walls, side);
+            if r == 1 {
+                return true;
+            }
+            if r == -1 {
+                return false;
+            }
+        }
+        if not b_free {
+            let r = both_step(mut b, a, walls, side);
+            if r == 1 {
+                return true;
+            }
+            if r == -1 {
+                return false;
+            }
+        }
+    }
+}
+
+// ---- the checks
+
+fn arms(blocked: ref Vec[(i64, i64)], source: (i64, i64), target: (i64, i64), side: i64) -> Vec[bool] {
+    vec![bfs_arm(blocked, source, target, side), dfs_arm(blocked, source, target, side), stack_arm(blocked, source, target, side), rows_arm(blocked, source, target, side), both_arm(blocked, source, target, side)]
+}
+
+// The statement read literally, on a small grid: from the source, move
+// one square north, east, south or west at a time, never onto a blocked
+// square and never off the grid; the answer is whether the target is
+// among the squares that can be reached, found by visiting every one of
+// them.
+fn literal(blocked: ref Vec[(i64, i64)], source: (i64, i64), target: (i64, i64), side: i64) -> bool {
+    let mut open: Vec[Vec[bool]] = Vec.filled(side, Vec.filled(side, true));
+    for (x, y) in blocked.iter() {
+        open[x][y] = false;
+    }
+    let mut reached: Vec[Vec[bool]] = Vec.filled(side, Vec.filled(side, false));
+    let (sx, sy) = source;
+    reached[sx][sy] = true;
+    let mut grew = true;
+    while grew {
+        grew = false;
+        for x in 0..side {
+            for y in 0..side {
+                if open[x][y] and not reached[x][y] {
+                    let near = (x > 0 and reached[x - 1][y]) or (x + 1 < side and reached[x + 1][y]) or (y > 0 and reached[x][y - 1]) or (y + 1 < side and reached[x][y + 1]);
+                    if near {
+                        reached[x][y] = true;
+                        grew = true;
+                    }
+                }
+            }
+        }
+    }
+    let (tx, ty) = target;
+    reached[tx][ty]
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let mut failures: Vec[i64] = Vec.filled(6, 0);
+    let mut checks = 0;
+    let mut check = 0;
+    let mut seed = 10361;
+    // 600 random mazes on grids of side 2 to 7 with up to 12 blocked
+    // squares, then 60 on the 10^6 grid with up to 30 blocked within 8
+    // squares of a corner, then the corner walls below
+    let mut cases: Vec[(Vec[(i64, i64)], (i64, i64), (i64, i64), i64)] = Vec.new();
+    // the answer a case's construction forces: 1 true, 0 false, -1 none
+    let mut forced: Vec[i64] = Vec.new();
+    for k in 0..660 {
+        let side = if k < 600 { next_random(mut seed) % 6 + 2 } else { 1000000 };
+        let spread = if k < 600 { side } else { 8 };
+        let most = if k < 600 { (side * side - 2).min(12) } else { 30 };
+        let blocks = next_random(mut seed) % (most + 1);
+        let base = if k < 600 or next_random(mut seed) % 2 == 0 { 0 } else { side - spread };
+        let mut taken: Set[(i64, i64)] = Set.new();
+        let mut cells: Vec[(i64, i64)] = Vec.new();
+        while cells.len() < blocks + 2 {
+            let cell = (base + next_random(mut seed) % spread, base + next_random(mut seed) % spread);
+            if not taken.contains(cell) {
+                taken.insert(cell);
+                cells.push(cell);
+            }
+        }
+        let source = cells[blocks];
+        let target = cells[blocks + 1];
+        let blocked: Vec[(i64, i64)] = cells.iter().take(blocks).cloned().collect();
+        cases.push((blocked, source, target, side));
+        forced.push(-1);
+    }
+    // 60 walls of 2 to 30 blocks across a corner of the 10^6 grid, which
+    // shut in exactly as many squares as the bound allows, from a square
+    // inside to one outside or to another inside
+    for k in 0..60 {
+        let n = 2 + k % 29;
+        let flip_x = (k / 2) % 2 == 1;
+        let flip_y = (k / 4) % 2 == 1;
+        let place = |(x, y): (i64, i64)| (if flip_x { 999999 - x } else { x }, if flip_y { 999999 - y } else { y });
+        let mut wall: Vec[(i64, i64)] = Vec.new();
+        for i in 0..n {
+            wall.push(place((i, n - 1 - i)));
+        }
+        let si = next_random(mut seed) % (n - 1);
+        let source = (si, next_random(mut seed) % (n - 1 - si));
+        let target = if k % 2 == 0 {
+            let ti = next_random(mut seed) % (n + 3);
+            (ti, n + next_random(mut seed) % 3 - ti.min(n))
+        } else {
+            let ti = next_random(mut seed) % (n - 1);
+            (ti, next_random(mut seed) % (n - 1 - ti))
+        };
+        if source != target {
+            cases.push((wall, place(source), place(target), 1000000));
+            forced.push(k % 2);
+        }
+    }
+    let mut searched = 0;
+    for c in 0..cases.len() {
+        let (blocked, source, target, side) = cases[c].clone();
+        let got = arms(blocked, source, target, side);
+        check = (check * 131 + if got[0] { 2 } else { 1 }) % 1000000007;
+        let small = side <= 7;
+        let known = small or forced[c] >= 0;
+        let want = if small { searched += 1; literal(blocked, source, target, side) } else { forced[c] == 1 };
+        // P2: the source and the target the other way round
+        let got_swapped = arms(blocked, target, source, side);
+        // P3: the grid mirrored, x read as side - 1 - x
+        let mirror = |(x, y): (i64, i64)| (side - 1 - x, y);
+        let mirrored: Vec[(i64, i64)] = blocked.iter().map(|c| mirror(c)).collect();
+        let got_mirrored = arms(mirrored, mirror(source), mirror(target), side);
+        // P4: the grid turned on its diagonal
+        let turned: Vec[(i64, i64)] = blocked.iter().map(|(x, y)| (y, x)).collect();
+        let (sx, sy) = source;
+        let (tx, ty) = target;
+        let got_turned = arms(turned, (sy, sx), (ty, tx), side);
+        // P5: one blocked square taken away
+        let mut fewer = blocked.clone();
+        if fewer.len() > 0 {
+            let gone = next_random(mut seed) % fewer.len();
+            fewer.remove(gone);
+        }
+        let got_fewer = arms(fewer, source, target, side);
+        for a in 0..5 {
+            // P1: the statement read literally, on grids of side at most 7,
+            // or the answer a corner wall forces
+            if known {
+                checks += 1;
+                if got[a] != want {
+                    failures[0] += 1;
+                }
+            }
+            // P2: a path one way is a path back
+            checks += 1;
+            if got_swapped[a] != got[a] {
+                failures[1] += 1;
+            }
+            // P3: mirroring the grid mirrors every path
+            checks += 1;
+            if got_mirrored[a] != got[a] {
+                failures[2] += 1;
+            }
+            // P4: turning the grid on its diagonal turns every path
+            checks += 1;
+            if got_turned[a] != got[a] {
+                failures[3] += 1;
+            }
+            // P5: taking a blocked square away never closes a path
+            checks += 1;
+            if got[a] and not got_fewer[a] {
+                failures[4] += 1;
+            }
+            // P6: each arm agrees with at least two of the other four
+            checks += 1;
+            let mut agree = 0;
+            for o in 0..5 {
+                if o != a and got[o] == got[a] {
+                    agree += 1;
+                }
+            }
+            if agree < 2 {
+                failures[5] += 1;
+            }
+        }
+    }
+    let mut escapes = 0;
+    for (blocked, source, target, side) in cases.iter() {
+        if bfs_arm(blocked, source, target, side) {
+            escapes += 1;
+        }
+    }
+    let mut total = 0;
+    for p in 0..6 {
+        if failures[p] > 0 {
+            println(f"P{p + 1}: {failures[p]} failures");
+        }
+        total += failures[p];
+    }
+    println(f"{cases.len()} cases ({searched} searched in full, {escapes} with a path): checksum {check}, {checks} checks over 5 arms: {total} failures");
+}

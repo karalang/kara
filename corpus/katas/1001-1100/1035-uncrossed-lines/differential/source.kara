@@ -1,0 +1,333 @@
+// LeetCode #1035: Uncrossed Lines -- differential
+//
+// The five arms, copied here under their own names, against the statement
+// read literally and six properties of the answer.
+
+// ---- a table over both prefixes (uncrossed_lines.kara)
+
+fn table_arm(nums1: ref Vec[i64], nums2: ref Vec[i64]) -> i64 {
+    let m = nums1.len();
+    let n = nums2.len();
+    let mut best: Vec[Vec[i64]] = Vec.filled(m + 1, Vec.filled(n + 1, 0));
+    for i in 1..m + 1 {
+        for j in 1..n + 1 {
+            best[i][j] = if nums1[i - 1] == nums2[j - 1] {
+                best[i - 1][j - 1] + 1
+            } else {
+                best[i - 1][j].max(best[i][j - 1])
+            };
+        }
+    }
+    best[m][n]
+}
+
+// ---- one row and a diagonal (uncrossed_lines_row.kara)
+
+fn row_arm(nums1: ref Vec[i64], nums2: ref Vec[i64]) -> i64 {
+    let n = nums2.len();
+    let mut row: Vec[i64] = Vec.filled(n + 1, 0);
+    for x in nums1.iter() {
+        let mut diagonal = 0;
+        for j in 1..n + 1 {
+            let above = row[j];
+            row[j] = if x == nums2[j - 1] { diagonal + 1 } else { above.max(row[j - 1]) };
+            diagonal = above;
+        }
+    }
+    row[n]
+}
+
+// ---- recursion over the suffixes (uncrossed_lines_memo.kara)
+
+fn memo_lines(nums1: ref Vec[i64], nums2: ref Vec[i64], i: i64, j: i64, memo: mut ref Vec[Vec[i64]]) -> i64 {
+    if i == nums1.len() or j == nums2.len() {
+        return 0;
+    }
+    if memo[i][j] >= 0 {
+        return memo[i][j];
+    }
+    let answer = if nums1[i] == nums2[j] {
+        memo_lines(nums1, nums2, i + 1, j + 1, mut memo) + 1
+    } else {
+        memo_lines(nums1, nums2, i + 1, j, mut memo).max(memo_lines(nums1, nums2, i, j + 1, mut memo))
+    };
+    memo[i][j] = answer;
+    answer
+}
+
+fn memo_arm(nums1: ref Vec[i64], nums2: ref Vec[i64]) -> i64 {
+    let mut memo: Vec[Vec[i64]] = Vec.filled(nums1.len(), Vec.filled(nums2.len(), -1));
+    memo_lines(nums1, nums2, 0, 0, mut memo)
+}
+
+// ---- matches as an increasing subsequence (uncrossed_lines_lis.kara)
+
+fn lis_arm(nums1: ref Vec[i64], nums2: ref Vec[i64]) -> i64 {
+    let mut places: Map[i64, Vec[i64]] = Map.new();
+    for j in 0..nums2.len() {
+        match places.get_mut(nums2[j]) {
+            Some(list) => list.push(j),
+            None => {
+                places.insert(nums2[j], vec![j]);
+            }
+        }
+    }
+    // tails[k] is the smallest last place of an increasing chain of k + 1
+    let mut tails: Vec[i64] = Vec.new();
+    for x in nums1.iter() {
+        if let Some(list) = places.get(x) {
+            for t in 0..list.len() {
+                let j = list[list.len() - 1 - t];
+                let mut low = 0;
+                let mut high = tails.len();
+                while low < high {
+                    let mid = (low + high) / 2;
+                    if tails[mid] < j {
+                        low = mid + 1;
+                    } else {
+                        high = mid;
+                    }
+                }
+                if low == tails.len() {
+                    tails.push(j);
+                } else {
+                    tails[low] = j;
+                }
+            }
+        }
+    }
+    tails.len()
+}
+
+// ---- a bit-parallel row (uncrossed_lines_bits.kara)
+
+fn bits_arm(nums1: ref Vec[i64], nums2: ref Vec[i64]) -> i64 {
+    let n = nums2.len();
+    let words = (n + 63) / 64;
+    let mut masks: Map[i64, Vec[u64]] = Map.new();
+    for j in 0..n {
+        let bit: u64 = 1 << ((j % 64) as u32);
+        match masks.get_mut(nums2[j]) {
+            Some(mask) => mask[j / 64] = mask[j / 64] | bit,
+            None => {
+                let mut mask: Vec[u64] = Vec.filled(words, 0);
+                mask[j / 64] = bit;
+                masks.insert(nums2[j], mask);
+            }
+        }
+    }
+    let mut v: Vec[u64] = Vec.filled(words, ~(0 as u64));
+    for x in nums1.iter() {
+        if let Some(mask) = masks.get(x) {
+            let mut carry: u64 = 0;
+            for k in 0..words {
+                let u = v[k] & mask[k];
+                let first = v[k].wrapping_add(u);
+                let sum = first.wrapping_add(carry);
+                carry = if first < v[k] or sum < first { 1 } else { 0 };
+                v[k] = sum | (v[k] & ~mask[k]);
+            }
+        }
+    }
+    let mut clear = 0;
+    for k in 0..words {
+        let width = if k == words - 1 and n % 64 != 0 { n % 64 } else { 64 };
+        let low: u64 = if width == 64 { ~(0 as u64) } else { (1 << (width as u32)) - 1 };
+        clear += width - (v[k] & low).count_ones();
+    }
+    clear
+}
+
+// ---- the checks
+
+fn arms(nums1: ref Vec[i64], nums2: ref Vec[i64]) -> Vec[i64] {
+    vec![table_arm(nums1, nums2), row_arm(nums1, nums2), memo_arm(nums1, nums2), lis_arm(nums1, nums2), bits_arm(nums1, nums2)]
+}
+
+// The statement read literally: a set of lines joins some values of
+// nums1 to some of nums2, each value in at most one line. Lines do not
+// cross exactly when the k-th chosen value of nums1 is joined to the k-th
+// chosen of nums2, so try every choice of k values from each list, joined
+// in that order, and keep the largest k whose lines all join equal
+// values.
+fn literal(nums1: ref Vec[i64], nums2: ref Vec[i64]) -> i64 {
+    let m = nums1.len();
+    let n = nums2.len();
+    let mut best = 0;
+    for a in 0..(1 << m) {
+        let mut left: Vec[i64] = Vec.new();
+        for i in 0..m {
+            if (a >> i) % 2 == 1 {
+                left.push(nums1[i]);
+            }
+        }
+        for b in 0..(1 << n) {
+            let mut right: Vec[i64] = Vec.new();
+            for j in 0..n {
+                if (b >> j) % 2 == 1 {
+                    right.push(nums2[j]);
+                }
+            }
+            if left.len() == right.len() and left.len() > best {
+                let mut equal = true;
+                for k in 0..left.len() {
+                    if left[k] != right[k] {
+                        equal = false;
+                    }
+                }
+                if equal {
+                    best = left.len();
+                }
+            }
+        }
+    }
+    best
+}
+
+fn reversed(nums: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for i in 0..nums.len() {
+        out.push(nums[nums.len() - 1 - i]);
+    }
+    out
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_list(len: i64, top: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut nums: Vec[i64] = Vec.new();
+    for _ in 0..len {
+        nums.push(next_random(mut seed) % top + 1);
+    }
+    nums
+}
+
+fn main() {
+    let mut failures: Vec[i64] = Vec.filled(7, 0);
+    let mut checks = 0;
+    let mut check = 0;
+    let mut seed = 10351;
+    // every pair of lists of 1 to 3 values from 1 and 2; then 600 random
+    // pairs of 1 to 6 values up to 2, 3 or 6, 60 of up to 100 values up
+    // to 3, 50 or 2000, and 6 of up to 500
+    let mut lists: Vec[Vec[i64]] = Vec.new();
+    for len in 1..4 {
+        for code in 0..(1 << len) {
+            let mut nums: Vec[i64] = Vec.new();
+            for i in 0..len {
+                nums.push((code >> i) % 2 + 1);
+            }
+            lists.push(nums);
+        }
+    }
+    let mut cases: Vec[(Vec[i64], Vec[i64])] = Vec.new();
+    for a in lists.iter() {
+        for b in lists.iter() {
+            cases.push((a.clone(), b.clone()));
+        }
+    }
+    let small_tops: Vec[i64] = vec![2, 3, 6];
+    let big_tops: Vec[i64] = vec![3, 50, 2000];
+    for k in 0..666 {
+        let (longest, top) = if k < 600 {
+            (6, small_tops[next_random(mut seed) % 3])
+        } else if k < 660 {
+            (100, big_tops[next_random(mut seed) % 3])
+        } else {
+            (500, big_tops[next_random(mut seed) % 3])
+        };
+        let len1 = next_random(mut seed) % longest + 1;
+        let len2 = next_random(mut seed) % longest + 1;
+        cases.push((random_list(len1, top, mut seed), random_list(len2, top, mut seed)));
+    }
+    let mut searched = 0;
+    for (nums1, nums2) in cases.iter() {
+        let m = nums1.len();
+        let n = nums2.len();
+        let got = arms(nums1, nums2);
+        check = (check * 131 + got[0]) % 1000000007;
+        let small = m <= 6 and n <= 6;
+        let want = if small { searched += 1; literal(nums1, nums2) } else { -1 };
+        // P2: the two lists the other way round
+        let got_swapped = arms(nums2, nums1);
+        // P3: both lists reversed
+        let got_reversed = arms(reversed(nums1), reversed(nums2));
+        // P4: every value v renamed 2001 - v
+        let renamed1: Vec[i64] = nums1.iter().map(|v| 2001 - v).collect();
+        let renamed2: Vec[i64] = nums2.iter().map(|v| 2001 - v).collect();
+        let got_renamed = arms(renamed1, renamed2);
+        // P6: one more equal value at the end of both
+        let x = next_random(mut seed) % 2000 + 1;
+        let mut longer1 = nums1.clone();
+        let mut longer2 = nums2.clone();
+        longer1.push(x);
+        longer2.push(x);
+        let got_longer = arms(longer1, longer2);
+        let mut shared = false;
+        for a in nums1.iter() {
+            for b in nums2.iter() {
+                if a == b {
+                    shared = true;
+                }
+            }
+        }
+        for a in 0..5 {
+            // P1: the statement read literally, on lists of at most 6
+            if small {
+                checks += 1;
+                if got[a] != want {
+                    failures[0] += 1;
+                }
+            }
+            // P2: which list is first does not matter
+            checks += 1;
+            if got_swapped[a] != got[a] {
+                failures[1] += 1;
+            }
+            // P3: reversing both lists reverses every set of lines
+            checks += 1;
+            if got_reversed[a] != got[a] {
+                failures[2] += 1;
+            }
+            // P4: only which values are equal matters
+            checks += 1;
+            if got_renamed[a] != got[a] {
+                failures[3] += 1;
+            }
+            // P5: at most the shorter list's length, and 0 exactly when
+            // the lists share no value
+            checks += 1;
+            if got[a] < 0 or got[a] > m.min(n) or (got[a] == 0) == shared {
+                failures[4] += 1;
+            }
+            // P6: an equal value added at the end of both adds one line,
+            // drawn below every other
+            checks += 1;
+            if got_longer[a] != got[a] + 1 {
+                failures[5] += 1;
+            }
+            // P7: each arm agrees with at least two of the other four
+            checks += 1;
+            let mut agree = 0;
+            for o in 0..5 {
+                if o != a and got[o] == got[a] {
+                    agree += 1;
+                }
+            }
+            if agree < 2 {
+                failures[6] += 1;
+            }
+        }
+    }
+    let mut total = 0;
+    for p in 0..7 {
+        if failures[p] > 0 {
+            println(f"P{p + 1}: {failures[p]} failures");
+        }
+        total += failures[p];
+    }
+    println(f"{cases.len()} cases ({searched} searched in full): checksum {check}, {checks} checks over 5 arms: {total} failures");
+}

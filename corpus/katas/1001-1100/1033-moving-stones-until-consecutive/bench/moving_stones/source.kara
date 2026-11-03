@@ -1,0 +1,46 @@
+// LeetCode #1033: Moving Stones Until Consecutive -- bench
+// Mirrors ../moving_stones.kara; see ../README.md § Benchmarks.
+
+fn num_moves_stones(a: i64, b: i64, c: i64) -> Vec[i64] {
+    let mut s: Vec[i64] = vec![a, b, c];
+    s.sort();
+    let (x, y, z) = (s[0], s[1], s[2]);
+    let fewest = if z - x == 2 {
+        0
+    } else if y - x <= 2 or z - y <= 2 {
+        1
+    } else {
+        2
+    };
+    vec![fewest, z - x - 2]
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let count = 1000000;
+    let rounds = 40;
+    let mut seed = 1033;
+    let mut cases: Vec[(i64, i64, i64)] = Vec.new();
+    while cases.len() < count {
+        let a = next_random(mut seed) % 100 + 1;
+        let b = next_random(mut seed) % 100 + 1;
+        let c = next_random(mut seed) % 100 + 1;
+        if a != b and b != c and a != c {
+            cases.push((a, b, c));
+        }
+    }
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..rounds {
+        for (a, b, c) in cases.iter() {
+            let moves = num_moves_stones(a, b, c);
+            total += moves[0] + moves[1];
+            check = (check * 131 + moves[0] * 101 + moves[1]) % 1000000007;
+        }
+    }
+    println(f"{count} triples, {rounds} rounds: sum {total}, checksum {check}");
+}

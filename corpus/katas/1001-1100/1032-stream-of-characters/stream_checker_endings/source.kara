@@ -1,0 +1,112 @@
+// LeetCode #1032: Stream of Characters -- the words by their last letter
+//
+// A word can end at the newest letter only if it ends in that letter, so
+// keep the words in a `Map` from their last letter, and on each query ask
+// only those words whether the stream ends with them. O(words ending in
+// the letter x longest word) per query.
+
+struct StreamChecker {
+    by_last: Map[char, Vec[String]],
+    stream: String,
+}
+
+impl StreamChecker {
+    fn new(words: Vec[String]) -> StreamChecker {
+        let mut by_last: Map[char, Vec[String]] = Map.new();
+        for word in words.iter() {
+            let last = word.chars().rev().next().unwrap();
+            match by_last.get_mut(last) {
+                Some(list) => list.push(word.clone()),
+                None => {
+                    by_last.insert(last, vec![word.clone()]);
+                }
+            }
+        }
+        StreamChecker { by_last, stream: String.new() }
+    }
+
+    fn query(mut ref self, letter: char) -> bool {
+        self.stream.push(letter);
+        match self.by_last.get(letter) {
+            Some(list) => list.iter().any(|w| self.stream.ends_with(w)),
+            None => false,
+        }
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The answer to every query, T or F, in order.
+fn answers(words: ref Vec[String], stream: ref String) -> String {
+    let mut checker = StreamChecker.new(words.clone());
+    let mut out = String.new();
+    for c in stream.chars() {
+        out.push(if checker.query(c) { 'T' } else { 'F' });
+    }
+    out
+}
+
+fn random_text(seed: mut ref i64, len: i64, letters: i64) -> String {
+    let mut s = String.new();
+    for _ in 0..len {
+        s.push((97 + next_random(mut seed) % letters) as u8 as char);
+    }
+    s
+}
+
+fn main() {
+    // LeetCode's example, then a few more
+    let examples: Vec[(Vec[String], String)] = vec![
+        (vec!["cd", "f", "kl"].iter().map(|w| w.to_string()).collect(), "abcdefghijkl".to_string()),
+        (vec!["ab", "ba", "aaab", "abab", "baa"].iter().map(|w| w.to_string()).collect(), "aaaaabababbbababbbbababaaabaaa".to_string()),
+        (vec!["a"].iter().map(|w| w.to_string()).collect(), "abcaba".to_string()),
+        (vec!["abc", "bc", "c"].iter().map(|w| w.to_string()).collect(), "abcbcc".to_string()),
+        (vec!["aaa"].iter().map(|w| w.to_string()).collect(), "aaaaaa".to_string()),
+        (vec!["zz", "xyz"].iter().map(|w| w.to_string()).collect(), "xyzzyxz".to_string()),
+    ];
+    for (words, stream) in examples.iter() {
+        println(f"{words.join(",")} / {stream}: {answers(words, stream)}");
+    }
+    // random words and streams over the first `letters` letters
+    let mut seed = 1032;
+    let groups: Vec[(i64, i64, i64, i64, i64)] = vec![
+        (1000, 3, 3, 2, 30), (300, 10, 6, 3, 200), (100, 40, 12, 4, 500),
+        (20, 200, 40, 6, 2000), (5, 100, 5, 26, 4000), (2, 2000, 200, 26, 20000),
+    ];
+    for (count, word_count, longest, letters, queries) in groups.iter() {
+        let mut found = 0;
+        let mut check = 0;
+        for _ in 0..count {
+            let mut words: Vec[String] = Vec.new();
+            for _ in 0..word_count {
+                let len = next_random(mut seed) % longest + 1;
+                words.push(random_text(mut seed, len, letters));
+            }
+            let stream = random_text(mut seed, queries, letters);
+            for c in answers(words, stream).chars() {
+                let hit = if c == 'T' { 1 } else { 0 };
+                found += hit;
+                check = (check * 3 + hit + 1) % 1000000007;
+            }
+        }
+        println(f"{count} checkers of {word_count} words up to {longest} letters over {letters}, {queries} queries each: {found} found, checksum {check}");
+    }
+    // the largest cases: one letter, and one 200-letter word
+    let mut many_a = String.new();
+    let mut long_a = String.new();
+    for i in 0..40000 {
+        many_a.push('a');
+        if i < 200 {
+            long_a.push('a');
+        }
+    }
+    let ones = answers(vec!["a".to_string()], many_a);
+    let longs = answers(vec![long_a.clone(), "b".to_string()], many_a);
+    println(f"\"a\" against 40000 a's: {ones.chars().filter(|c| c == 'T').count()} found");
+    println(f"200 a's and \"b\" against 40000 a's: {longs.chars().filter(|c| c == 'T').count()} found, first at query {longs.find("T").unwrap_or(-1) + 1}");
+}
