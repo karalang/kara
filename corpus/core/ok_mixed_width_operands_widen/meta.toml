@@ -1,0 +1,9 @@
+source = "B-2026-11-03-12"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["numerics"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-03-12: before the fix check refused every one of these with 'cannot mix integer/float types ... cast with as'."

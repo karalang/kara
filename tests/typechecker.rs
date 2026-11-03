@@ -35055,8 +35055,11 @@ fn float_slots_reject_an_implicit_narrowing() {
 /// variables … There is no 'numerics dialect' where typed variables silently
 /// widen", and the mixed-precision section writes the ML pattern (store `bf16`,
 /// compute `f32`, store back) with an explicit `as` in both directions.
+/// B-2026-11-03-12 (design.md § Mixed-width operands): `f32` widens to
+/// `f64` in an operator, in either operand order, and the result is `f64`.
+/// The other float pairs stay errors.
 #[test]
-fn mixed_width_float_arithmetic_is_rejected() {
+fn mixed_width_float_arithmetic_widens_only_f32_to_f64() {
     let mixes = |src: &str| {
         assert!(
             typecheck_errors(src)
@@ -35065,17 +35068,15 @@ fn mixed_width_float_arithmetic_is_rejected() {
             "expected a mixed-float rejection from: {src}"
         );
     };
-    // All five arithmetic operators, and BOTH operand orders — the order is the
-    // whole point, since it is what used to pick the result width.
     for op in ["+", "-", "*", "/", "%"] {
-        mixes(&format!(
-            "fn main() {{ let a: f32 = 1.5f32; let b: f64 = 1.5; println(a {op} b); }}"
+        typecheck_ok(&format!(
+            "fn main() {{ let a: f32 = 1.5f32; let b: f64 = 1.5; let c: f64 = a {op} b; println(c); }}"
         ));
-        mixes(&format!(
-            "fn main() {{ let a: f32 = 1.5f32; let b: f64 = 1.5; println(b {op} a); }}"
+        typecheck_ok(&format!(
+            "fn main() {{ let a: f32 = 1.5f32; let b: f64 = 1.5; let c: f64 = b {op} a; println(c); }}"
         ));
     }
-    // Every pair of distinct widths, not just f32/f64.
+    // Every other pair of distinct widths.
     mixes("fn main() { let h: f16 = 1.5f16; let a: f32 = 1.5f32; println(h + a); }");
     mixes("fn main() { let h: f16 = 1.5f16; let d: f64 = 1.5; println(h + d); }");
     mixes("fn main() { let b: bf16 = 1.5bf16; let a: f32 = 1.5f32; println(b + a); }");
@@ -38000,32 +38001,31 @@ fn test_range_pattern_mixed_width_int_bounds_rejected() {
     );
 }
 
-// ── Strict narrow-integer arithmetic (design.md § Integer overflow) ──
+// ── Narrow-integer arithmetic (design.md § Mixed-width operands) ──
 //
-// Narrow ints are real fixed-width types: arithmetic operands must match
-// exactly (same width AND signedness); mixed-width / mixed-signedness needs
-// an explicit `as` cast. This is the typechecker half of restoring real
-// narrow-int semantics — it turns the former `i64 + u8` silent codegen
-// miscompile (B-2026-06-08-1) into a clean "cast explicitly" error. Q4
-// literal promotion (a suffix-free literal adopting the other operand's
-// type) is preserved.
+// Narrow ints are real fixed-width types. Two operands of different integer
+// types meet at the wider one when that conversion is lossless (MIR lowering
+// widens the operand, so the former `i64 + u8` miscompile, B-2026-06-08-1,
+// cannot return); a pair with no lossless direction (`i32 + u32`) needs an
+// explicit `as`. Q4 literal promotion (a suffix-free literal adopting the
+// other operand's type) is preserved.
 
+/// B-2026-11-03-12 (design.md § Mixed-width operands): the narrower integer
+/// operand widens when the conversion is lossless, and the result has the
+/// wider operand's type.
 #[test]
-fn test_mixed_width_int_arithmetic_rejected() {
+fn test_mixed_width_int_arithmetic_widens() {
     for src in [
-        "fn main() { let a: i64 = 1; let b: i32 = 2; let _ = a + b; }",
-        "fn main() { let a: i64 = 1; let b: u8 = 2; let _ = a + b; }",
-        "fn main() { let a: i32 = 1; let b: i64 = 2; let _ = a * b; }",
-        "fn main() { let a: u8 = 1; let b: u16 = 2; let _ = a - b; }",
+        "fn main() { let a: i64 = 1; let b: i32 = 2; let c: i64 = a + b; println(c); }",
+        "fn main() { let a: i64 = 1; let b: u8 = 2; let c: i64 = b - a; println(c); }",
+        "fn main() { let a: i32 = 1; let b: i64 = 2; let c: i64 = a * b; println(c); }",
+        "fn main() { let a: u8 = 1; let b: u16 = 2; let c: u16 = a - b; println(c); }",
+        "fn main() { let a: u32 = 1; let b: i64 = 2; let c: i64 = a % b; println(c); }",
+        "fn main() { let a: u32 = 1; let b: usize = 2; let c: usize = a + b; println(c); }",
+        "fn main() { let a: u64 = 1; let b: usize = 2; let c: u64 = a + b; println(c); }",
+        "fn main() { let a: u8 = 1; let b: u32 = 2; let c: u32 = a | b; println(c); }",
     ] {
-        let errors = typecheck_errors(src);
-        assert!(
-            errors
-                .iter()
-                .any(|e| e.message.contains("cannot mix integer types")),
-            "expected a mixed-integer-type diagnostic for: {src}\ngot: {:?}",
-            errors.iter().map(|e| &e.message).collect::<Vec<_>>()
-        );
+        typecheck_ok(src);
     }
 }
 
@@ -38041,65 +38041,6 @@ fn test_mixed_signedness_int_arithmetic_rejected() {
         "expected a mixed-integer-type diagnostic for i32 + u32, got: {:?}",
         errors.iter().map(|e| &e.message).collect::<Vec<_>>()
     );
-}
-
-// ── E0200 names the WIDENING repair (B-2026-08-17-11) ───────────
-
-#[test]
-fn test_mixed_int_diagnostic_steers_widening() {
-    // The repair E0200 names must be the value-preserving one. The old text
-    // always exampled the LEFT operand's type — for `u8 - i64` that is the
-    // NARROWING cast, which also compiles but overflows at runtime on
-    // exactly the inputs the subtraction was written for (the ledger row
-    // measured it: `65u8` widened to i64 gives -32; `97i64 as u8` traps).
-    for (src, steer) in [
-        (
-            "fn main() { let a: u8 = 1; let b: i64 = 2; let _ = a - b; }",
-            "cast the 'u8' operand up to 'i64'",
-        ),
-        // Operand ORDER must not flip the direction.
-        (
-            "fn main() { let a: u8 = 1; let b: i64 = 2; let _ = b - a; }",
-            "cast the 'u8' operand up to 'i64'",
-        ),
-        (
-            "fn main() { let a: i32 = 1; let b: i64 = 2; let _ = a + b; }",
-            "cast the 'i32' operand up to 'i64'",
-        ),
-        // Unsigned → wider signed is value-preserving, so it widens too.
-        (
-            "fn main() { let a: u32 = 1; let b: i64 = 2; let _ = a * b; }",
-            "cast the 'u32' operand up to 'i64'",
-        ),
-        // `usize` is 32-bit on wasm32 and 64-bit native, so `u32` widens
-        // into it on every supported target...
-        (
-            "fn main() { let a: u32 = 1; let b: usize = 2; let _ = a + b; }",
-            "cast the 'u32' operand up to 'usize'",
-        ),
-        // ...and `usize` itself widens into `u64` on every target (its max
-        // width), so that pair has a safe direction too.
-        (
-            "fn main() { let a: u64 = 1; let b: usize = 2; let _ = a + b; }",
-            "cast the 'usize' operand up to 'u64'",
-        ),
-    ] {
-        let errors = typecheck_errors(src);
-        assert!(
-            errors.iter().any(|e| e.message.contains(steer)),
-            "expected widening steer {steer:?} for {src}, got: {:?}",
-            errors.iter().map(|e| &e.message).collect::<Vec<_>>()
-        );
-        // The old example phrasing pointed at a concrete type with no
-        // direction argument; its shape must be gone entirely.
-        assert!(
-            !errors
-                .iter()
-                .any(|e| e.message.contains("e.g. the operand as")),
-            "the direction-blind example must be gone for {src}, got: {:?}",
-            errors.iter().map(|e| &e.message).collect::<Vec<_>>()
-        );
-    }
 }
 
 #[test]
@@ -38132,55 +38073,6 @@ fn test_mixed_int_without_value_preserving_direction_stays_advisory() {
             "no direction is safe, so no machine edit may be attached for {src}"
         );
     }
-}
-
-#[test]
-fn test_mixed_int_fix_it_widens_the_narrow_operand() {
-    // Identifier narrow operand: its span is its exact source extent, so the
-    // widening repair is machine-applicable — an ` as <wide>` insertion just
-    // past the operand (`karac fix` applies it; the CLI twin asserts that).
-    let src = "fn main() { let n: i64 = 1; let w: i32 = 2; let _ = n + w; }";
-    let errors = typecheck_errors(src);
-    let e = errors
-        .iter()
-        .find(|e| e.message.contains("cannot mix integer types"))
-        .expect("mixed-int diagnostic");
-    let fix = e
-        .fix_it
-        .as_ref()
-        .expect("identifier operand must carry the machine edit");
-    assert_eq!(fix.replacement, " as i64");
-    assert_eq!(fix.span.length, 0, "an insertion, not a rewrite");
-    assert_eq!(
-        fix.span.offset,
-        src.find("n + w").unwrap() + "n + w".len(),
-        "insertion point must sit just past the narrow operand"
-    );
-
-    // Index-shaped narrow operand (`b[0i64] - 97i64`, the kata-278 shape):
-    // the parser aliases postfix spans to the RECEIVER (`Index.span =
-    // object.span`), so the operand's true extent is unrecoverable and a
-    // span-end insertion would land mid-expression (`b as i64[0i64]`). The
-    // steer stays prose-only — still the widening direction — rather than
-    // shipping an edit that rewrites the wrong place. Lifting this needs
-    // the `]` span recorded in the AST (see `appended_cast_end_offset`).
-    let errors = typecheck_errors(
-        "fn main() { let s = \"Ab\"; let b = s.bytes(); let _ = b[0i64] - 97i64; }",
-    );
-    let e = errors
-        .iter()
-        .find(|e| e.message.contains("cannot mix integer types"))
-        .expect("mixed-int diagnostic");
-    assert!(
-        e.message.contains("cast the 'u8' operand up to 'i64'"),
-        "prose must still steer widening, got: {}",
-        e.message
-    );
-    assert!(
-        e.fix_it.is_none(),
-        "an Index operand's extent is not exactly recoverable — no edit may \
-         be attached (a wrong-place insertion is worse than prose)"
-    );
 }
 
 #[test]
@@ -52439,7 +52331,7 @@ fn test_range_literal_bound_takes_the_other_bounds_integer_type() {
 #[test]
 fn test_assignment_rhs_fault_is_reported_once() {
     let errs = typecheck_errors(
-        "fn main() {\n    let y: i64 = 2;\n    let mut s: u8 = 0;\n    s = s + y;\n    println(s);\n}\n",
+        "fn main() {\n    let y: i64 = 2;\n    let mut s: u64 = 0;\n    s = s + y;\n    println(s);\n}\n",
     );
     let mix: Vec<_> = errs
         .iter()

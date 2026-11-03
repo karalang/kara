@@ -64,7 +64,7 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 | post-m1:url | 4 |
 | post-m1:dyn | 2 |
 
-## Auto-resolved e-spec (4723): MIR matches the spec's model or pin, legacy does not
+## Auto-resolved e-spec (4724): MIR matches the spec's model or pin, legacy does not
 
 - `apps/cli/archive`
 - `apps/cli/btree_kv`
@@ -653,6 +653,7 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 - `fixtures/cli/map_iteration_order_varies_per_process_and_a_pinned_seed_reproduces`
 - `fixtures/cli/ref_binding_codegen_gap_explains_itself`
 - `fixtures/cli/test_errdefer_tail_error_exit_parity_across_backends`
+- `fixtures/cli/test_fix_widens_mixed_int_operand`
 - `fixtures/cli/test_query_concurrency_float_accumulator_reduction_declines`
 - `fixtures/cli/test_sso_string_slice_failure_reports_the_actual_range`
 - `fixtures/cli/test_sso_string_slice_failure_reports_the_actual_range_2`

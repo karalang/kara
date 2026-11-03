@@ -8124,7 +8124,7 @@ impl<'a> super::TypeChecker<'a> {
     /// the `as` and its type. Only integer and float widenings are flagged:
     /// an integer to `f64` needs its `as` as an operator's operand, and a
     /// literal takes its type from the cast.
-    fn lint_unneeded_cast(
+    pub(super) fn lint_unneeded_cast(
         &mut self,
         expr: &Expr,
         inner: &Expr,
@@ -11332,6 +11332,10 @@ impl<'a> super::TypeChecker<'a> {
                     .pending_cast_expected
                     .take_if(|(key, _)| *key == SpanKey::from_span(&expr.span))
                     .map(|(_, t)| t);
+                if expected.is_none() {
+                    self.operand_casts
+                        .insert(expr.id, (from_ty.clone(), to_ty.clone()));
+                }
                 self.lint_unneeded_cast(expr, inner, ty, &from_ty, &to_ty, expected.as_ref());
                 // B-2026-08-14-3 — record whether the SOURCE is unsigned, so
                 // codegen can pick zext over sext on the widening lane. It

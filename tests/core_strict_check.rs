@@ -8421,10 +8421,11 @@ fn a_bitwise_operation_on_mixed_integer_types_is_refused() {
         "fn main() {\n    let a: u128 = 12;\n    let b: i64 = 10;\n    let z = a & b;\n    println(f\"{z}\");\n}\n",
         "cannot mix integer types 'u128' and 'i64' in a bitwise operation",
     );
-    rejected(
+    // A lossless pair widens (design.md § Mixed-width operands;
+    // B-2026-11-03-12).
+    accepted(
         "bitwise-mixed-width",
         "fn main() {\n    let a: u8 = 12;\n    let b: u32 = 10;\n    println(f\"{a | b}\");\n}\n",
-        "cannot mix integer types 'u8' and 'u32' in a bitwise operation",
     );
 }
 

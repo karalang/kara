@@ -1,0 +1,10 @@
+// Each operation runs in its own operands' type (design.md § Mixed-width
+// operands): the `i32` product overflows and traps before the sum widens it
+// to `i64`.
+fn main() {
+    let a: i32 = 2147483647;
+    let b: i32 = 2;
+    let c: i64 = 0;
+    println("start");
+    println(a * b + c);
+}

@@ -1,0 +1,8 @@
+// The result of an operator is always one of its operand types: neither
+// `i32` nor `u32` holds every value of the other, so `as` must choose
+// (design.md § Mixed-width operands).
+fn main() {
+    let a: i32 = 1;
+    let b: u32 = 2;
+    println(a + b);
+}

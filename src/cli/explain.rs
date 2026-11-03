@@ -1645,14 +1645,19 @@ will actually see, followed by the fix.
     `< <= > >=` need an `impl Ord` supplying `cmp`. If you wrote only
     `impl PartialOrd`, see rejection 6.
 
-3.  cannot mix integer types 'i32' and 'i64' in arithmetic — they must match
+3.  cannot mix integer types 'i32' and 'u32' in arithmetic — they must match
     cannot mix integer and floating-point operands ('i64' and 'f64')
 
-    Operands must have the SAME type. Cast the narrower one explicitly:
-    `(x as i64) + y`. There is no implicit widening between two TYPED
-    operands — that is the specified rule, not a gap. A numeric LITERAL
-    does take the other operand's type, so `(x: i32) + 2` is fine; it is
-    only two typed expressions that never silently widen.
+    The narrower operand widens within its kind when that loses nothing:
+    `(x: i32) + (y: i64)` is an `i64`, `(u: u8) + (w: i64)` too, and an
+    `f32` widens to `f64`. The result is always one of the two operand
+    types, so `i32 + u32` and `u64 + i64`, where neither holds every
+    value of the other, need an `as` that chooses. Each operation runs in
+    its own operands' type: `a_i32 * b_i32 + c_i64` multiplies (and
+    traps on overflow) in `i32` before widening. An integer and a float
+    never mix in an operator: write `x as f64`, so integer division done
+    earlier stays visible. A numeric LITERAL takes the other operand's
+    type, so `(x: i32) + 2` is fine.
 
 4.  user-defined `impl Index for T` is not supported in 0.8;
     operator traits are stdlib-only

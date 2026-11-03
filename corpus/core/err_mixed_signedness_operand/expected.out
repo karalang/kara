@@ -1,0 +1,1 @@
+error[typecheck]: cannot mix integer types 'i32' and 'u32' in arithmetic — they must match; cast explicitly with `as`, choosing the direction deliberately: neither type can represent every value of the other

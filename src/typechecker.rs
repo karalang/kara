@@ -3202,6 +3202,10 @@ pub struct TypeChecker<'a> {
     /// The type `check_expr` wants of the `as` cast at this span, so the cast
     /// can tell a lossless widening that happens implicitly there.
     pub(super) pending_cast_expected: Option<(SpanKey, Type)>,
+    /// Each `as` cast checked with no expected type, by node: its source and
+    /// target types, for the `lossless_cast` lint on an operator operand
+    /// (B-2026-11-03-12).
+    pub(super) operand_casts: FxHashMap<crate::ids::NodeId, (Type, Type)>,
     /// Spans of inline associated-type bindings that already reported
     /// `E_UNKNOWN_ASSOC_TYPE_BINDING` (B-2026-08-22-4). A signature's return
     /// type is lowered more than once — once when the function's type is
@@ -3921,6 +3925,7 @@ impl<'a> TypeChecker<'a> {
             redundant_suffix_reported: rustc_hash::FxHashSet::default(),
             cast_lints_reported: FxHashSet::default(),
             pending_cast_expected: None,
+            operand_casts: FxHashMap::default(),
             assoc_binding_typos_reported: rustc_hash::FxHashSet::default(),
             question_conversions: FxHashMap::default(),
             assoc_conversion_dispatch: FxHashMap::default(),

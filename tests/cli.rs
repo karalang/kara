@@ -10685,16 +10685,16 @@ fn test_fix_integer_bang_is_bitwise_not_in_one_pass() {
     let _ = std::fs::remove_file(&path);
 }
 
-/// B-2026-08-17-11 — E0200's widening repair is machine-applicable: the
-/// mixed-int diagnostic carries an ` as <wide>` insertion at the narrow
-/// operand, and `karac fix` applies it. The fixed program computes the
-/// value the widening direction preserves (the narrowing cast the old text
-/// suggested would instead trap at runtime for this program's inputs).
+/// B-2026-11-03-12 — the narrower operand widens implicitly (design.md §
+/// Mixed-width operands), so the explicit widening cast that B-2026-08-17-11's
+/// fix-it used to insert is now redundant: `lossless_cast` flags it and
+/// `karac fix` deletes it, and the result checks clean and computes the same
+/// value.
 #[test]
 fn test_fix_widens_mixed_int_operand() {
     let path = fix_scratch_file(
         "widen-int",
-        "fn main() {\n    let n: i64 = 100;\n    let w: i32 = 3;\n    println(f\"{n + w}\");\n}\n",
+        "fn main() {\n    let n: i64 = 100;\n    let w: i32 = 3;\n    println(f\"{n + w as i64}\");\n}\n",
     );
     let out = karac_bin()
         .args(["fix", path.to_str().unwrap()])
@@ -10709,8 +10709,8 @@ fn test_fix_widens_mixed_int_operand() {
     assert!(stdout.contains("applied 1 fix"), "got: {stdout}");
     let rewritten = std::fs::read_to_string(&path).unwrap();
     assert!(
-        rewritten.contains("n + w as i64"),
-        "expected the narrow operand widened in place, got: {rewritten}"
+        rewritten.contains("{n + w}"),
+        "expected the redundant widening cast deleted, got: {rewritten}"
     );
     // The fix-it contract: the applied edit yields a program that no longer
     // triggers the diagnostic (and here, one that runs).
@@ -12226,7 +12226,7 @@ fn test_operators_page_quotes_live_diagnostics() {
         ),
         (
             "mixint",
-            "fn main() { let x: i32 = 1; let y: i64 = 2; let z = x + y; }",
+            "fn main() { let x: i32 = 1; let y: u32 = 2; let z = x + y; }",
             "cannot mix integer types",
         ),
         // The two complements Kara splits where Rust spells one `!`. Pinned

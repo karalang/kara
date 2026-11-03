@@ -1,0 +1,22 @@
+// In a binary operator the narrower operand widens within its kind when the
+// conversion loses nothing, and the result has the wider operand's type
+// (design.md § Mixed-width operands): integer to integer, `f32` to `f64`,
+// for the arithmetic and bitwise operators, in either operand order.
+fn main() {
+    let u: u8 = 200;
+    let w: i64 = 1000;
+    let s: i16 = -5;
+    let i: i64 = 3;
+    let a: u32 = 7;
+    let x: u16 = 9;
+    let y: u32 = 70000;
+    let wide: i64 = u + w;
+    println(f"{wide} {w - u} {s * i} {a % i} {x + y}");
+    let f: f32 = 1.5;
+    let d: f64 = 2.25;
+    let g: f64 = f + d;
+    println(f"{g} {d / f}");
+    let m: u8 = 12;
+    let n: u32 = 10;
+    println(f"{m & n} {m | n} {n ^ m}");
+}

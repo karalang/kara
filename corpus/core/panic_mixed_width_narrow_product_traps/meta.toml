@@ -1,0 +1,9 @@
+source = "B-2026-11-03-12"
+dedup_of = []
+expect = "panic:101"
+exit = 101
+tags = ["numerics", "panic"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-03-12: `a_i32 * b_i32 + c_i64` multiplies in i32 and traps there, then would widen; before the fix check refused the mixed operator."

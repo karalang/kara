@@ -4056,104 +4056,53 @@ impl<'a> super::TypeChecker<'a> {
                     let left_is_int = matches!(left_ty, Type::Int(_) | Type::UInt(_));
                     let right_is_int = matches!(right_ty, Type::Int(_) | Type::UInt(_));
                     let both_ints = left_is_int && right_is_int;
-                    if both_ints {
-                        if left_ty != right_ty {
-                            // B-2026-08-17-11 — the repair this message names
-                            // must be the WIDENING one. The old text's example
-                            // always named the LEFT type ("the operand as
-                            // 'u8'" for `u8 - i64`), i.e. the narrowing
-                            // direction half the time — and both repairs
-                            // compile, but only widening preserves every
-                            // value; the narrowing cast converts this caught
-                            // compile-time error into a runtime overflow trap
-                            // on exactly the inputs the subtraction was
-                            // written for. When one direction is value-
-                            // preserving, name it — and when the narrow
-                            // operand's source extent is exactly recoverable
-                            // (see `appended_cast_end_offset`), emit it as a
-                            // machine-applicable ` as <wide>` insertion so
-                            // `karac fix` can apply it. A signed/unsigned
-                            // pair of equal width has NO value-preserving
-                            // direction, so it stays advisory: naming either
-                            // side would be the same wrong steer this row
-                            // fixed.
+                    // design.md § Mixed-width operands: the narrower operand
+                    // widens within its kind when the conversion is lossless,
+                    // and the result has the other operand's type
+                    // (B-2026-11-03-12). MIR lowering widens the operand.
+                    let mut result = left_ty.clone();
+                    if both_ints && left_ty != right_ty {
+                        if int_cast_preserves_all_values(&left_ty, &right_ty) {
+                            result = right_ty.clone();
+                        } else if !int_cast_preserves_all_values(&right_ty, &left_ty) {
+                            // Neither type holds every value of the other
+                            // (`i32 + u32`, `u64 + i64`): the result would be
+                            // a third type, so `as` chooses (B-2026-08-17-11
+                            // named the widening repair when there was one;
+                            // that case now widens implicitly).
                             let l_disp = type_display(&left_ty);
                             let r_disp = type_display(&right_ty);
-                            let narrow_side = if int_cast_preserves_all_values(&left_ty, &right_ty)
-                            {
-                                Some((left, &left_ty, &right_ty))
-                            } else if int_cast_preserves_all_values(&right_ty, &left_ty) {
-                                Some((right, &right_ty, &left_ty))
+                            let i64_ty = Type::Int(IntSize::I64);
+                            let drop_cast = if left_ty == i64_ty {
+                                self.usize_cast_of_an_i64(right)
+                            } else if right_ty == i64_ty {
+                                self.usize_cast_of_an_i64(left)
                             } else {
                                 None
                             };
-                            match narrow_side {
-                                Some((narrow_expr, narrow_ty, wide_ty)) => {
-                                    let narrow_disp = type_display(narrow_ty);
-                                    let wide_disp = type_display(wide_ty);
-                                    let message = format!(
-                                        "cannot mix integer types '{l_disp}' and '{r_disp}' in \
-                                         arithmetic — they must match; cast the '{narrow_disp}' \
-                                         operand up to '{wide_disp}' with `as` — widening \
-                                         preserves every value, while the cast down to \
-                                         '{narrow_disp}' can overflow at runtime"
-                                    );
-                                    match appended_cast_end_offset(narrow_expr) {
-                                        Some(end) => self.type_error_with_fix_it(
-                                            message,
-                                            right.span,
-                                            TypeErrorKind::TypeMismatch,
-                                            FixIt {
-                                                span: Span {
-                                                    line: narrow_expr.span.line,
-                                                    column: narrow_expr.span.column,
-                                                    offset: end,
-                                                    length: 0,
-                                                },
-                                                replacement: format!(" as {wide_disp}"),
-                                            },
-                                        ),
-                                        None => self.type_error(
-                                            message,
-                                            right.span,
-                                            TypeErrorKind::TypeMismatch,
-                                        ),
-                                    }
-                                }
-                                None => {
-                                    let i64_ty = Type::Int(IntSize::I64);
-                                    let drop_cast = if left_ty == i64_ty {
-                                        self.usize_cast_of_an_i64(right)
-                                    } else if right_ty == i64_ty {
-                                        self.usize_cast_of_an_i64(left)
-                                    } else {
-                                        None
-                                    };
-                                    match drop_cast {
-                                        Some(fix) => self.type_error_with_fix_it(
-                                            format!(
-                                                "cannot mix integer types '{l_disp}' and \
-                                                 '{r_disp}' in arithmetic — sizes, lengths and \
-                                                 indices are `i64` in Kāra (`usize` is for \
-                                                 FFI), so drop the `as usize`"
-                                            ),
-                                            right.span,
-                                            TypeErrorKind::TypeMismatch,
-                                            fix,
-                                        ),
-                                        None => self.type_error(
-                                            format!(
-                                                "cannot mix integer types '{l_disp}' and \
-                                                 '{r_disp}' in arithmetic — they must match; \
-                                                 cast explicitly with `as`, choosing the \
-                                                 direction deliberately: neither type can \
-                                                 represent every value of the other"
-                                            ),
-                                            right.span,
-                                            TypeErrorKind::TypeMismatch,
-                                        ),
-                                    }
-                                }
+                            match drop_cast {
+                                Some(fix) => self.type_error_with_fix_it(
+                                    format!(
+                                        "cannot mix integer types '{l_disp}' and \
+                                         '{r_disp}' in arithmetic — sizes, lengths and \
+                                         indices are `i64` in Kāra (`usize` is for \
+                                         FFI), so drop the `as usize`"
+                                    ),
+                                    right.span,
+                                    TypeErrorKind::TypeMismatch,
+                                    fix,
+                                ),
+                                None => self.type_error(
+                                    format!(
+                                        "cannot mix integer types '{l_disp}' and \
+                                         '{r_disp}' in arithmetic — they must match; \
+                                         cast explicitly with `as`, choosing the \
+                                         direction deliberately: neither type can \
+                                         represent every value of the other"
+                                    ),
+                                    right.span,
+                                    TypeErrorKind::TypeMismatch,
+                                ),
                             }
                         }
                     } else if (left_is_int && matches!(right_ty, Type::Float(_)))
@@ -4189,6 +4138,19 @@ impl<'a> super::TypeChecker<'a> {
                             right.span,
                             TypeErrorKind::TypeMismatch,
                         );
+                    } else if matches!(
+                        (&left_ty, &right_ty),
+                        (
+                            Type::Float(super::FloatSize::F32),
+                            Type::Float(super::FloatSize::F64)
+                        ) | (
+                            Type::Float(super::FloatSize::F64),
+                            Type::Float(super::FloatSize::F32)
+                        )
+                    ) {
+                        // `f32` widens to `f64` (design.md § Mixed-width
+                        // operands; B-2026-11-03-12).
+                        result = Type::Float(super::FloatSize::F64);
                     } else if matches!(left_ty, Type::Float(_))
                         && matches!(right_ty, Type::Float(_))
                         && left_ty != right_ty
@@ -4256,7 +4218,8 @@ impl<'a> super::TypeChecker<'a> {
                             TypeErrorKind::TypeMismatch,
                         );
                     }
-                    left_ty
+                    self.lint_operand_casts(left, right, &left_ty, &right_ty);
+                    result
                 } else if self.distinct_type_has_arithmetic(&left_ty) {
                     // Arithmetic on a distinct type: both operands must be the same type.
                     if left_ty != right_ty {
@@ -4606,15 +4569,28 @@ impl<'a> super::TypeChecker<'a> {
                 // was promoted to its peer above. `types_compatible` admits
                 // any two integer types, so `u128 & i64` passed here and
                 // the MIR validator refused the program at run.
-                if matches!(op, BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor)
+                let mixed = matches!(op, BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor)
                     && matches!(left_ty, Type::Int(_) | Type::UInt(_))
                     && matches!(right_ty, Type::Int(_) | Type::UInt(_))
-                    && left_ty != right_ty
-                {
+                    && left_ty != right_ty;
+                // design.md § Mixed-width operands covers `& | ^`: the
+                // narrower operand widens when that is lossless
+                // (B-2026-11-03-12).
+                if matches!(op, BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor) {
+                    self.lint_operand_casts(left, right, &left_ty, &right_ty);
+                }
+                if mixed && int_cast_preserves_all_values(&left_ty, &right_ty) {
+                    return right_ty;
+                }
+                if mixed && int_cast_preserves_all_values(&right_ty, &left_ty) {
+                    return left_ty;
+                }
+                if mixed {
                     self.type_error(
                         format!(
                             "cannot mix integer types '{}' and '{}' in a bitwise operation \
-                             — they must match; cast one operand explicitly with `as`",
+                             — neither type can represent every value of the other; cast one \
+                             operand explicitly with `as`",
                             type_display(&left_ty),
                             type_display(&right_ty)
                         ),
@@ -4646,6 +4622,43 @@ impl<'a> super::TypeChecker<'a> {
                     name: "Range".to_string(),
                     args: vec![left_ty],
                 }
+            }
+        }
+    }
+
+    /// `lossless_cast` on an operator operand (design.md § `as` casts,
+    /// § Mixed-width operands; B-2026-11-03-12): `u as i64 + w` with `w:
+    /// i64` widens `u` implicitly. Only when the other operand is not a cast
+    /// itself: in `(a as i64) * (b as i64)` deleting both would multiply in
+    /// the narrow type.
+    fn lint_operand_casts(&mut self, left: &Expr, right: &Expr, left_ty: &Type, right_ty: &Type) {
+        for (side, other, other_ty) in [(left, right, right_ty), (right, left, left_ty)] {
+            let ExprKind::Cast { expr: inner, ty } = &side.kind else {
+                continue;
+            };
+            // The other operand must fix its own type: an unsuffixed literal
+            // there took the cast's type, so dropping the cast would retype
+            // it and run the operation in the narrower type
+            // (`old as i64 - 97` is not `old - 97`).
+            if matches!(other.kind, ExprKind::Cast { .. }) || !operand_fixes_own_type(other) {
+                continue;
+            }
+            let Some((from, to)) = self.operand_casts.get(&side.id).cloned() else {
+                continue;
+            };
+            if &to != other_ty {
+                continue;
+            }
+            let widens_here = int_cast_preserves_all_values(&from, &to)
+                || matches!(
+                    (&from, &to),
+                    (
+                        Type::Float(super::FloatSize::F32),
+                        Type::Float(super::FloatSize::F64)
+                    )
+                );
+            if widens_here {
+                self.lint_unneeded_cast(side, inner, ty, &from, &to, Some(other_ty));
             }
         }
     }
@@ -5830,4 +5843,33 @@ fn to_string_fix(e: &Expr) -> Option<FixIt> {
         },
         replacement: ".to_string()".to_string(),
     })
+}
+
+/// B-2026-11-03-12 — whether `e`'s type is fixed by `e` itself rather than by
+/// the context it sits in. An unsuffixed literal (or an `if` / `match` /
+/// block whose arms are literals) adapts to the other operand, so a cast on
+/// that other operand is what typed it. Conservative: anything unlisted
+/// counts as context-typed, which only costs a missed lint.
+fn operand_fixes_own_type(e: &Expr) -> bool {
+    match &e.kind {
+        ExprKind::Integer(_, suffix) => suffix.is_some(),
+        ExprKind::Float(_, suffix) => suffix.is_some(),
+        ExprKind::ByteLit(_)
+        | ExprKind::CharLit(_)
+        | ExprKind::Identifier(_)
+        | ExprKind::Path { .. }
+        | ExprKind::SelfValue
+        | ExprKind::FieldAccess { .. }
+        | ExprKind::TupleIndex { .. }
+        | ExprKind::Index { .. }
+        | ExprKind::Call { .. }
+        | ExprKind::Cast { .. } => true,
+        ExprKind::MethodCall { object, .. } => operand_fixes_own_type(object),
+        ExprKind::Unary { operand, .. } => operand_fixes_own_type(operand),
+        ExprKind::Binary { op, left, right } => match op {
+            BinOp::Shl | BinOp::Shr => operand_fixes_own_type(left),
+            _ => operand_fixes_own_type(left) || operand_fixes_own_type(right),
+        },
+        _ => false,
+    }
 }
