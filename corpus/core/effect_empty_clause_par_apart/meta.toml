@@ -1,0 +1,11 @@
+source = "design.md § How a call through a function value gets its effects"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["effects", "par", "fn-values", "post-m1:par"]
+class = "e"
+expected_from = "spec"
+rules = []
+backends = []
+env = {}
+note = "A call through a value typed `Fn(..) with ()` has no effects, so two `par` branches calling stored callbacks run apart: elements of a local `Vec`, and a struct field's elements read in a `for` loop and by index. A callback that allocates fits the empty clause."

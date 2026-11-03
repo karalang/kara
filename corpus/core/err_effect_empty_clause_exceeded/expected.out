@@ -1,0 +1,2 @@
+ERROR at line 11: binding `fs` element has effect writes(Stdout) not declared in slot [pure]
+ERROR at line 16: field `bus.handlers` element has effect writes(Stdout) not declared in slot [pure]

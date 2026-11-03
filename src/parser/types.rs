@@ -101,7 +101,19 @@ impl super::Parser {
             self.advance(); // `CrossTask`
         }
 
-        let effect_spec = if !return_tail && self.at_kw("with") {
+        let effect_spec = if self.at_empty_effect_clause() {
+            // `Fn(A) -> R with ()`: the empty set, declared. Taken in a
+            // return tail too: `with ()` is never a declaration's clause, so
+            // `fn make() -> Fn(i64) -> i64 with () {` can only mean the type's.
+            let at = self.current_span();
+            self.advance(); // with
+            self.advance(); // (
+            self.advance(); // )
+            Some(EffectSpec::Specific(EffectList {
+                items: Vec::new(),
+                span: self.span_from(&at),
+            }))
+        } else if !return_tail && self.at_kw("with") {
             // Peek-only: `parse_effect_list` consumes the `with`
             // keyword itself and then handles `_` / verbs / named
             // effect variables / group names uniformly. Pre-

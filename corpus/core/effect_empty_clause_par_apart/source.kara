@@ -1,0 +1,34 @@
+// The empty clause `with ()` on a function type (design.md § How a call
+// through a function value gets its effects): a stored value must have only
+// default-permitted effects, and a call through it has none, so two `par`
+// branches calling stored callbacks do not conflict. A closure that
+// allocates still fits. The element type is `+ CrossTask`, since an
+// unmarked function value may not reach a `par` branch.
+struct Bus {
+    handlers: Vec[Fn(i64) -> i64 + CrossTask with ()],
+}
+
+fn total(b: ref Bus, x: i64) -> i64 {
+    let mut t = 0;
+    for h in b.handlers {
+        t = t + h(x);
+    }
+    t
+}
+
+fn main() {
+    let mut fs: Vec[Fn(i64) -> i64 + CrossTask with ()] = Vec.new();
+    fs.push(|x: i64| x + 1);
+    fs.push(|x: i64| {
+        let v = Vec.filled(2, x);
+        v[0] + v[1]
+    });
+    let (a, b) = par { fs[0](10), fs[1](10) };
+    println(f"{a} {b}");
+
+    let mut bus = Bus { handlers: Vec.new() };
+    bus.handlers.push(|x: i64| x + 1);
+    bus.handlers.push(|x: i64| x * 3);
+    let (p, q) = par { total(bus, 1), bus.handlers[1](5) };
+    println(f"{p} {q}");
+}

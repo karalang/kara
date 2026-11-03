@@ -2552,6 +2552,9 @@ fn main() -> () {
             "err_effect_dyn_par_shared",
             "err_effect_dyn_clause_par_shared",
             "err_effect_dyn_clause_exceeded",
+            // The empty clause `with ()` on a function type (design.md § How a
+            // call through a function value gets its effects).
+            "err_effect_empty_clause_exceeded",
             "err_dyn_view_unmarked_spawned",
             "err_dyn_view_unmarked_par",
             "err_fn_vec_call_result_marked",

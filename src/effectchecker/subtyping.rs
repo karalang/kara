@@ -323,6 +323,11 @@ impl<'a> super::EffectChecker<'a> {
                 if let Some(ty) = ty {
                     self.check_annotation_slots(ty, &binding_subject(pattern), value);
                     remember_slot(w, pattern, ty);
+                } else if let Some(ty) = self.literal_struct_type(value) {
+                    // `let mut bus = Bus { handlers: Vec.new() };` names its
+                    // type as surely as an annotation does, so a later
+                    // `bus.handlers.push(save)` finds the field's slot.
+                    remember_slot(w, pattern, &ty);
                 }
                 self.check_subtyping_in_expr(value, w);
                 if let PatternKind::Binding(name) = &pattern.kind {
@@ -643,6 +648,29 @@ impl<'a> super::EffectChecker<'a> {
     /// rare enough that building and invalidating a table would cost more
     /// than it saves. Returns `None` for an unknown struct or field, which
     /// is the right answer for a literal the typechecker will reject anyway.
+    /// The type a struct literal names, when the struct has no generic
+    /// parameters: its fields' written types are then the slots, exactly as
+    /// under an annotation. A generic struct's fields name its parameters,
+    /// which a literal does not bind here, so it gets no slot.
+    fn literal_struct_type(&self, value: &Expr) -> Option<TypeExpr> {
+        let ExprKind::StructLiteral { path, .. } = &value.kind else {
+            return None;
+        };
+        let name = path.last()?;
+        let plain = self.program.items.iter().any(|item| {
+            matches!(item, Item::StructDef(sd) if &sd.name == name && sd.generic_params.is_none())
+        });
+        plain.then(|| TypeExpr {
+            kind: TypeKind::Path(PathExpr {
+                segments: vec![name.clone()],
+                generic_args: None,
+                effect_args: None,
+                span: value.span,
+            }),
+            span: value.span,
+        })
+    }
+
     pub(super) fn struct_field_type(&self, struct_name: &str, field: &str) -> Option<TypeExpr> {
         self.program.items.iter().find_map(|item| match item {
             Item::StructDef(sd) if sd.name == struct_name => sd

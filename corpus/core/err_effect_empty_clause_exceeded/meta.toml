@@ -1,0 +1,11 @@
+source = "design.md § How a call through a function value gets its effects"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["effects", "fn-values"]
+class = "a"
+expected_from = "pin"
+rules = []
+backends = []
+env = {}
+note = "A closure that prints is refused where it is stored under the empty clause `with ()`: into a local `Vec` and into an unannotated struct local's field. The expected.out wording of an error pin is guidance, not a byte oracle."

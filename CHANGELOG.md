@@ -44,6 +44,17 @@ accepted by 0.8.0 are now refused, each with a fix-it.
 - **`m[key] = key.len()` with a moved key** is E0500 with a hoist fix-it,
   because the key moves before the value runs (§8.2, B-2026-11-01-46).
 
+### Added
+
+- **The empty effect clause `with ()` on a function type.** A field or
+  collection element typed `Fn(A) -> R with ()` holds only values whose
+  effects are default-permitted (`allocates(Heap)`, `panics`), and a call
+  through it has none, so two `par` branches calling stored pure callbacks
+  do not conflict (design.md § How a call through a function value gets its
+  effects; B-2026-11-03-1). It is a parse error on a `fn` declaration,
+  with a fix-it that removes it. Storing a value into a field of an
+  unannotated struct local is now checked against the field's clause too.
+
 ### Wrong behaviour fixed
 
 - An assignment whose place starts with a call, or is a `Map` index with a

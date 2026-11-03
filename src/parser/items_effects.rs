@@ -214,6 +214,25 @@ impl super::Parser {
         if !self.is_effect_start() {
             return None;
         }
+        // `with ()` declares a function TYPE's empty set; a declaration
+        // with no clause already has its effects inferred, or none when
+        // public, so the clause is refused here and deleted by the fix.
+        if self.at_empty_effect_clause() {
+            let at = self.pos;
+            let span = self.current_span();
+            self.advance(); // with
+            self.advance(); // (
+            self.advance(); // )
+            self.record_token_range_deletion(at, self.pos, &span);
+            self.error_at(
+                "`with ()` is written only on a function type, such as \
+                 `Vec[Fn(i64) -> i64 with ()]`; a function declaration with no \
+                 clause already has its effects inferred, or none when it is \
+                 public, so remove the `with ()`",
+                span,
+            );
+            return None;
+        }
         // Signature-position effect clause: a `{`/`;`/end follows, so a comma
         // between effect items is always a mistake — recovery on.
         self.parse_effect_list(effect_vars, true)
@@ -238,6 +257,14 @@ impl super::Parser {
             Some(Token::Colon) => false,
             _ => matches!(name.as_str(), "blocks" | "suspends" | "panics"),
         }
+    }
+
+    /// At `with ()`, the empty clause, which only a function type takes
+    /// (design.md § How a call through a function value gets its effects).
+    pub(super) fn at_empty_effect_clause(&self) -> bool {
+        self.at_kw("with")
+            && matches!(self.peek_token_ref_at(1), Token::LeftParen)
+            && matches!(self.peek_token_ref_at(2), Token::RightParen)
     }
 
     fn is_effect_start(&self) -> bool {

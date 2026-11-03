@@ -1,0 +1,21 @@
+// A value stored where the function type's clause is empty, `with ()`, may
+// have only default-permitted effects (design.md § How a call through a
+// function value gets its effects). A closure that prints is refused where
+// it is stored: into a local collection and into a struct field's.
+struct Bus {
+    handlers: Vec[Fn(i64) -> i64 with ()],
+}
+
+fn main() {
+    let mut fs: Vec[Fn(i64) -> i64 with ()] = Vec.new();
+    fs.push(|x: i64| {
+        println(x);
+        x
+    });
+    let mut bus = Bus { handlers: Vec.new() };
+    bus.handlers.push(|x: i64| {
+        println(x);
+        x
+    });
+    println(fs[0](1) + bus.handlers[0](2));
+}

@@ -388,6 +388,22 @@ fn lower_program_inner<'a>(
                 })
             })
             .collect(),
+        fn_field_elem_effects: program
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                Item::StructDef(s) => Some(s),
+                _ => None,
+            })
+            .flat_map(|s| {
+                s.fields.iter().filter_map(|f| {
+                    Some((
+                        (s.name.clone(), f.name.clone()),
+                        declared_elem_effects(&f.ty)?,
+                    ))
+                })
+            })
+            .collect(),
         mut_fields: program
             .items
             .iter()
@@ -404,6 +420,7 @@ fn lower_program_inner<'a>(
             })
             .collect(),
         let_fn_effects: FxHashMap::default(),
+        let_elem_fn_effects: FxHashMap::default(),
         user_types,
         refined: program
             .items
@@ -1052,6 +1069,12 @@ struct Lcx<'a> {
     /// clause, by symbol, so a closure that captures one finds it too
     /// (B-2026-10-27-8).
     let_fn_effects: FxHashMap<SymbolId, Vec<DeclaredEffect>>,
+    /// The declared clause of the function values an annotated `let`'s
+    /// collection holds (`let fs: Vec[Fn(i64) -> i64 with ()]`), by its
+    /// symbol: what a call through `fs[i]` or a `for` binding over `fs` has.
+    let_elem_fn_effects: FxHashMap<SymbolId, Vec<DeclaredEffect>>,
+    /// The same for a struct field's collection, by struct and field name.
+    fn_field_elem_effects: FxHashMap<(String, String), Vec<DeclaredEffect>>,
     /// The structs and enums the user's program declares, as opposed to
     /// the appended library's (`lower_program_with_library`).
     user_types: FxHashSet<String>,
@@ -12697,6 +12720,15 @@ impl<'l, 'a> Bx<'l, 'a> {
         body: &'a Block,
         dest: Place,
     ) -> R<()> {
+        // `for h in self.handlers { h(e) }` over a `Vec[Fn(..) with ..]`:
+        // a call through the binding has the elements' declared clause.
+        if let (PatternKind::Binding(name), Some(declared)) =
+            (&pattern.kind, self.elem_effects(iterable))
+        {
+            if let Some(&sym) = self.lcx.binding_syms.get(&(pattern.id, name.clone())) {
+                self.lcx.let_fn_effects.insert(sym, declared);
+            }
+        }
         if self.seq_depth == 0 {
             match &self.lcx.auto_par {
                 AutoPar::Off => {}
@@ -23482,6 +23514,35 @@ impl<'l, 'a> Bx<'l, 'a> {
             }
             self.b.fn_value_effects.push((l, declared));
         }
+        if let Some(declared) = ty.and_then(declared_elem_effects) {
+            if let Some(&sym) = self.lcx.binding_syms.get(&(node, name.to_string())) {
+                self.lcx.let_elem_fn_effects.insert(sym, declared);
+            }
+        }
+    }
+
+    /// The declared clause of the function values the collection `e` holds,
+    /// when its written type declares one: an annotated `let`'s or a struct
+    /// field's `Vec[Fn(..) with ..]`.
+    fn elem_effects(&mut self, e: &Expr) -> Option<Vec<DeclaredEffect>> {
+        match &e.kind {
+            ExprKind::FieldAccess { object, field } => {
+                let mut t = self.expr_ty(object).ok()?;
+                if let HK::Ref(i) | HK::MutRef(i) = self.tys().tcx().kind(t) {
+                    t = i;
+                }
+                let (adt, _) = self.tys().tcx().adt_of(t)?;
+                self.lcx
+                    .fn_field_elem_effects
+                    .get(&(adt.name.clone(), field.clone()))
+                    .cloned()
+            }
+            ExprKind::Identifier(_) => match self.lcx.res.get(&e.id) {
+                Some(Res::Local(sym)) => self.lcx.let_elem_fn_effects.get(sym).cloned(),
+                _ => None,
+            },
+            _ => None,
+        }
     }
 
     /// The effect clause of the function value `callee` names, when its
@@ -23504,6 +23565,8 @@ impl<'l, 'a> Bx<'l, 'a> {
                 Some(Res::Local(sym)) => self.lcx.let_fn_effects.get(sym).cloned(),
                 _ => None,
             },
+            // `fs[i](x)` over a `Vec[Fn(..) with ..]`.
+            ExprKind::Index { object, .. } => self.elem_effects(object),
             _ => None,
         }
     }
@@ -25762,6 +25825,25 @@ fn declared_effects(te: &ast::TypeExpr) -> Option<Vec<DeclaredEffect>> {
         return None;
     };
     declared_effect_list(list)
+}
+
+/// The clause of the function type a collection type holds as its value,
+/// its last type argument: `Vec[Fn(i64) -> i64 with ()]`, `Map[K, Fn() with
+/// reads(Db)]`, `Array[Fn() with (), 4]`.
+fn declared_elem_effects(te: &ast::TypeExpr) -> Option<Vec<DeclaredEffect>> {
+    let ast::TypeKind::Path(p) = &te.kind else {
+        return None;
+    };
+    let elem = p
+        .generic_args
+        .as_ref()?
+        .iter()
+        .rev()
+        .find_map(|a| match a {
+            ast::GenericArg::Type(t) => Some(t),
+            _ => None,
+        })?;
+    declared_effects(elem)
 }
 
 /// The effects a written clause declares, or `None` when it names something

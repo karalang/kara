@@ -59,6 +59,11 @@ pub fn render_type_expr(ty: &TypeExpr) -> String {
 /// ` with ` keyword — the caller decides whether to wrap. Mirrors
 /// [`render_type_expr`].
 pub fn render_effect_list(effects: &EffectList) -> String {
+    // A function type's declared empty set, `with ()` (design.md § How a
+    // call through a function value gets its effects).
+    if effects.items.is_empty() {
+        return "()".to_string();
+    }
     let mut f = Formatter::new();
     let mut first = true;
     for item in &effects.items {
