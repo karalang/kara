@@ -20093,6 +20093,21 @@ impl<'l, 'a> Bx<'l, 'a> {
                         ops.push(self.fn_value(&a.value)?.0);
                         continue;
                     }
+                    // `String.from_utf8(bytes: Slice[u8])` borrows its
+                    // bytes (strings.md; B-2026-11-03-13): a `Vec[u8]` is
+                    // lent, and stays its holder's to use and drop.
+                    if owner == "String" && m == "from_utf8" {
+                        let t = self.expr_ty(&a.value)?;
+                        if !self.is_copy(t) {
+                            self.note_eval_order(&a.value);
+                            let p = self.expr_place(&a.value, false)?;
+                            let rt = self.tys().tcx().reference(t, false);
+                            let r = self.temp(rt);
+                            self.assign(r, Rvalue::Ref(BorrowKind::Shared, p));
+                            ops.push(Operand::Move(Place::local(r)));
+                            continue;
+                        }
+                    }
                     ops.push(match elem {
                         Some(el) if i == 1 => self.operand_filling_holes(&a.value, el)?,
                         _ => self.expr_operand(&a.value)?,

@@ -4004,6 +4004,12 @@ pub(crate) fn collect_callee_param_modes(
     for name in ["print", "println", "eprint", "eprintln", "dbg"] {
         map.insert(name.to_string(), vec![OwnershipMode::Ref]);
     }
+    // `String.from_utf8(bytes: Slice[u8])` (strings.md) reads its bytes and
+    // copies them into a fresh String; its signature is the typechecker's
+    // (`env_build.rs`), with no declaration here to read a mode from, so it
+    // fell to the consume default and a second call on one `Vec[u8]` was
+    // refused (B-2026-11-03-13). Parameters borrow by default.
+    map.insert("String.from_utf8".to_string(), vec![OwnershipMode::Ref]);
     // `with_provider[R](p, f)` moves `p` into the call, which owns it
     // (core semantics §14.4, B-2026-11-01-33).
     map.insert(
