@@ -1,0 +1,573 @@
+== 1_bank.mvcc
+setup begin si at 0
+setup put acct:alice 100
+setup put acct:bob 50
+setup commit at 1 (2 writes)
+t1 begin rc
+t2 begin rc
+t1 add acct:alice -30: 100 -> 70
+t1 add acct:bob 30: 50 -> 80
+t2 add acct:alice 20: 100 -> 120
+t1 commit at 2 (2 writes)
+t2 commit at 3 (1 write)
+audit begin si at 3
+audit scan acct: -> acct:alice=120 acct:bob=80
+audit sum acct: = 200 over 2 keys
+audit commit (read-only)
+fix begin si at 3
+fix put acct:alice 90
+fix commit at 4 (1 write)
+t3 begin si at 4
+t4 begin si at 4
+t3 add acct:alice -30: 90 -> 60
+t3 add acct:bob 30: 80 -> 110
+t4 add acct:alice 20: 90 -> 110
+t3 commit at 5 (2 writes)
+t4 abort: write-write conflict on acct:alice (t3 committed it at 5)
+! t4 is not active
+t4 begin si at 5
+t4 add acct:alice 20: 60 -> 80
+t4 commit at 6 (1 write)
+audit begin si at 6
+audit scan acct: -> acct:alice=80 acct:bob=110
+audit sum acct: = 190 over 2 keys
+audit get acct:carol = (none)
+audit commit (read-only)
+dump at clock 6:
+  acct:alice @1 100 @2 70 @3 120 @4 90 @5 60 @6 80
+  acct:bob @1 50 @2 80 @5 110
+stats: 8 commits, 1 abort, clock 6, 2 keys, 9 versions, wal 325 bytes
+== 2_oncall.mvcc
+setup begin si at 0
+setup put oncall:alice yes
+setup put oncall:bob yes
+setup commit at 1 (2 writes)
+a begin si at 1
+b begin si at 1
+a scan oncall: -> oncall:alice=yes oncall:bob=yes
+b scan oncall: -> oncall:alice=yes oncall:bob=yes
+a put oncall:alice no
+b put oncall:bob no
+a commit at 2 (1 write)
+b commit at 3 (1 write)
+check begin si at 3
+check scan oncall: -> oncall:alice=no oncall:bob=no
+check commit (read-only)
+fix begin si at 3
+fix put oncall:alice yes
+fix put oncall:bob yes
+fix commit at 4 (2 writes)
+a begin ser at 4
+b begin ser at 4
+a get oncall:alice = yes
+a get oncall:bob = yes
+b get oncall:alice = yes
+b get oncall:bob = yes
+a put oncall:alice no
+b put oncall:bob no
+a commit at 5 (1 write)
+b abort: read-write conflict on oncall:alice (a committed it at 5)
+r begin ser at 5
+w begin si at 5
+r scan oncall: -> oncall:alice=no oncall:bob=yes
+w put oncall:carol yes
+w commit at 6 (1 write)
+r put shift:count 2
+r abort: phantom under oncall: (w committed oncall:carol at 6)
+ro begin ser at 6
+w2 begin si at 6
+ro scan oncall: -> oncall:alice=no oncall:bob=yes oncall:carol=yes
+w2 put oncall:alice yes
+w2 commit at 7 (1 write)
+ro get oncall:alice = no
+ro commit (read-only)
+check begin si at 7
+check scan oncall: -> oncall:alice=yes oncall:bob=yes oncall:carol=yes
+check scan shift: -> (none)
+check commit (read-only)
+stats: 10 commits, 2 aborts, clock 7, 3 keys, 9 versions, wal 369 bytes
+== 3_reads.mvcc
+setup begin si at 0
+setup put cfg:mode fast
+setup put cfg:retries 3
+setup put user:1 ann
+setup commit at 1 (3 writes)
+rc1 begin rc
+si1 begin si at 1
+rc1 get cfg:mode = fast
+si1 get cfg:mode = fast
+w begin si at 1
+w put cfg:mode safe
+w del cfg:retries
+w put cfg:timeout 30
+w commit at 2 (3 writes)
+rc1 get cfg:mode = safe
+si1 get cfg:mode = fast
+rc1 scan cfg: -> cfg:mode=safe cfg:timeout=30
+si1 scan cfg: -> cfg:mode=fast cfg:retries=3
+si1 put cfg:mode slow
+si1 del cfg:timeout
+si1 put cfg:level 2
+si1 scan cfg: -> cfg:level=2 cfg:mode=slow cfg:retries=3
+si1 get cfg:mode = slow
+si1 abort: write-write conflict on cfg:mode (w committed it at 2)
+! si1 is not active
+rc1 put cfg:retries 5
+rc1 commit at 3 (1 write)
+r begin si at 3
+r scan cfg: -> cfg:mode=safe cfg:retries=5 cfg:timeout=30
+r get user:1 = ann
+r get user:2 = (none)
+r del user:1
+r get user:1 = (none)
+r scan user: -> (none)
+r add user:1 1: 0 -> 1
+r abort
+r2 begin si at 3
+r2 get user:1 = ann
+! r2 add user:1: "ann" is not a number; r2 aborted
+! r2 is not active
+r3 begin si at 3
+r3 get user:1 = ann
+r3 commit (read-only)
+dump at clock 3:
+  cfg:mode @1 fast @2 safe
+  cfg:retries @1 3 @2 - @3 5
+  cfg:timeout @2 30
+  user:1 @1 ann
+stats: 4 commits, 3 aborts, clock 3, 4 keys, 7 versions, wal 206 bytes
+== 4_vacuum.mvcc
+s begin si at 0
+s put page:home v1
+s put page:about v1
+s put tmp:x 1
+s commit at 1 (3 writes)
+long begin si at 1
+e1 begin si at 1
+e1 put page:home v2
+e1 commit at 2 (1 write)
+e2 begin si at 2
+e2 put page:home v3
+e2 del tmp:x
+e2 commit at 3 (2 writes)
+e3 begin si at 3
+e3 put page:home v4
+e3 put page:about v2
+e3 commit at 4 (2 writes)
+watcher begin rc
+dump at clock 4:
+  page:about @1 v1 @4 v2
+  page:home @1 v1 @2 v2 @3 v3 @4 v4
+  tmp:x @1 1 @3 -
+vacuum at horizon 1: removed 0 versions, 0 keys gone
+long get page:home = v1
+long scan page: -> page:about=v1 page:home=v1
+long scan tmp: -> tmp:x=1
+long commit (read-only)
+vacuum at horizon 4: removed 6 versions, 1 key gone
+dump at clock 4:
+  page:about @4 v2
+  page:home @4 v4
+e4 begin si at 4
+e4 del page:about
+e4 commit at 5 (1 write)
+watcher scan page: -> page:home=v4
+vacuum at horizon 5: removed 2 versions, 1 key gone
+dump at clock 5:
+  page:home @4 v4
+watcher commit (read-only)
+stats: 7 commits, 0 aborts, clock 5, 1 key, 1 version, wal 341 bytes
+== 5_crash.mvcc
+a begin si at 0
+a put order:1 new
+a put order:2 new
+a commit at 1 (2 writes)
+b begin si at 1
+b put order:1 paid
+b commit at 2 (1 write)
+c begin si at 2
+c put order:3 new
+d begin ser at 2
+d get order:1 = paid
+crash: lost c d
+! the store is down
+recover: replayed 2 commits and 0 vacuums, clock 2
+e begin si at 2
+e scan order: -> order:1=paid order:2=new
+e put order:2 shipped
+e commit at 3 (1 write)
+crash: no open transactions
+tear 9: wal 147 -> 138 bytes
+recover: replayed 2 commits and 0 vacuums, clock 2
+recover: dropped a torn record at byte 101 (37 bytes)
+f begin si at 2
+f scan order: -> order:1=paid order:2=new
+f put order:4 new
+f del order:1
+f commit at 3 (2 writes)
+vacuum at horizon 3: removed 3 versions, 1 key gone
+checkpoint at clock 3: 2 versions, wal 177 -> 0 bytes
+g begin si at 3
+g put order:1 refunded
+g commit at 4 (1 write)
+crash: no open transactions
+recover: snapshot at clock 3, 2 versions
+recover: replayed 1 commit and 0 vacuums, clock 4
+h begin si at 4
+h scan order: -> order:1=refunded order:2=new order:4=new
+h commit (read-only)
+dump at clock 4:
+  order:1 @4 refunded
+  order:2 @1 new
+  order:4 @3 new
+! the store is up
+! tear needs a crashed store
+crash: no open transactions
+! the store is down
+recover: snapshot at clock 3, 2 versions
+recover: replayed 1 commit and 0 vacuums, clock 4
+stats: 6 commits, 0 aborts, clock 4, 3 keys, 3 versions, wal 47 bytes
+== 6_load.mvcc
+setup begin si at 0
+setup put acct:00 100
+setup put acct:01 100
+setup put acct:02 100
+setup put acct:03 100
+setup put acct:04 100
+setup put acct:05 100
+setup put acct:06 100
+setup put acct:07 100
+setup put acct:08 100
+setup put acct:09 100
+setup commit at 1 (10 writes)
+x1 begin si at 1
+x2 begin rc
+x3 begin si at 1
+x1 add acct:01 -26: 100 -> 74
+x1 add acct:09 26: 100 -> 126
+x2 add acct:01 -34: 100 -> 66
+x2 add acct:03 34: 100 -> 134
+x3 add acct:03 -20: 100 -> 80
+x3 add acct:09 20: 100 -> 120
+x3 commit at 2 (2 writes)
+x2 commit at 3 (2 writes)
+x1 abort: write-write conflict on acct:01 (x2 committed it at 3)
+x4 begin si at 3
+x5 begin ser at 3
+x6 begin ser at 3
+x4 add acct:04 -14: 100 -> 86
+x4 add acct:05 14: 100 -> 114
+x5 add acct:02 -19: 100 -> 81
+x5 add acct:06 19: 100 -> 119
+x6 add acct:09 -26: 120 -> 94
+x6 add acct:00 26: 100 -> 126
+x4 commit at 4 (2 writes)
+x6 commit at 5 (2 writes)
+x5 commit at 6 (2 writes)
+x7 begin si at 6
+x8 begin ser at 6
+x9 begin ser at 6
+x7 add acct:01 -15: 66 -> 51
+x7 add acct:06 15: 119 -> 134
+x8 add acct:07 -26: 100 -> 74
+x8 add acct:04 26: 86 -> 112
+x9 add acct:01 -7: 66 -> 59
+x9 add acct:02 7: 81 -> 88
+x8 commit at 7 (2 writes)
+x9 commit at 8 (2 writes)
+x7 abort: write-write conflict on acct:01 (x9 committed it at 8)
+x10 begin ser at 8
+x11 begin ser at 8
+x12 begin si at 8
+x10 add acct:03 -2: 134 -> 132
+x10 add acct:08 2: 100 -> 102
+x11 add acct:09 -17: 94 -> 77
+x11 add acct:02 17: 88 -> 105
+x12 add acct:06 -38: 119 -> 81
+x12 add acct:01 38: 59 -> 97
+x10 commit at 9 (2 writes)
+x11 commit at 10 (2 writes)
+x12 commit at 11 (2 writes)
+x13 begin si at 11
+x14 begin ser at 11
+x15 begin ser at 11
+x13 add acct:01 -7: 97 -> 90
+x13 add acct:08 7: 102 -> 109
+x14 add acct:08 -18: 102 -> 84
+x14 add acct:00 18: 126 -> 144
+x15 add acct:07 -5: 74 -> 69
+x15 add acct:01 5: 97 -> 102
+x13 commit at 12 (2 writes)
+x15 abort: write-write conflict on acct:01 (x13 committed it at 12)
+x14 abort: write-write conflict on acct:08 (x13 committed it at 12)
+x16 begin si at 12
+x17 begin si at 12
+x18 begin rc
+x16 add acct:06 -25: 81 -> 56
+x16 add acct:03 25: 132 -> 157
+x17 add acct:08 -2: 109 -> 107
+x17 add acct:02 2: 105 -> 107
+x18 add acct:06 -5: 81 -> 76
+x18 add acct:08 5: 109 -> 114
+x17 commit at 13 (2 writes)
+x16 commit at 14 (2 writes)
+x18 commit at 15 (2 writes)
+audit begin si at 15
+audit sum acct: = 1047 over 10 keys
+audit commit (read-only)
+vacuum at horizon 15: removed 28 versions, 0 keys gone
+x19 begin si at 15
+x20 begin si at 15
+x21 begin ser at 15
+x19 add acct:02 -26: 107 -> 81
+x19 add acct:05 26: 114 -> 140
+x20 add acct:04 -10: 112 -> 102
+x20 add acct:02 10: 107 -> 117
+x21 add acct:04 -31: 112 -> 81
+x21 add acct:01 31: 90 -> 121
+x20 commit at 16 (2 writes)
+x21 abort: write-write conflict on acct:04 (x20 committed it at 16)
+x19 abort: write-write conflict on acct:02 (x20 committed it at 16)
+x22 begin rc
+x23 begin ser at 16
+x24 begin rc
+x22 add acct:01 -10: 90 -> 80
+x22 add acct:00 10: 126 -> 136
+x23 add acct:07 -6: 74 -> 68
+x23 add acct:03 6: 157 -> 163
+x24 add acct:04 -7: 102 -> 95
+x24 add acct:02 7: 117 -> 124
+x24 commit at 17 (2 writes)
+x22 commit at 18 (2 writes)
+x23 commit at 19 (2 writes)
+x25 begin si at 19
+x26 begin ser at 19
+x27 begin ser at 19
+x25 add acct:07 -17: 68 -> 51
+x25 add acct:01 17: 80 -> 97
+x26 add acct:06 -26: 76 -> 50
+x26 add acct:03 26: 163 -> 189
+x27 add acct:08 -38: 114 -> 76
+x27 add acct:05 38: 114 -> 152
+x27 commit at 20 (2 writes)
+x25 commit at 21 (2 writes)
+x26 commit at 22 (2 writes)
+x28 begin ser at 22
+x29 begin ser at 22
+x30 begin rc
+x28 add acct:05 -34: 152 -> 118
+x28 add acct:09 34: 77 -> 111
+x29 add acct:01 -34: 97 -> 63
+x29 add acct:03 34: 189 -> 223
+x30 add acct:07 -14: 51 -> 37
+x30 add acct:08 14: 76 -> 90
+x29 commit at 23 (2 writes)
+x28 commit at 24 (2 writes)
+x30 commit at 25 (2 writes)
+x31 begin rc
+x32 begin si at 25
+x33 begin si at 25
+x31 add acct:01 -16: 63 -> 47
+x31 add acct:04 16: 95 -> 111
+x32 add acct:00 -13: 136 -> 123
+x32 add acct:08 13: 90 -> 103
+x33 add acct:07 -18: 37 -> 19
+x33 add acct:02 18: 124 -> 142
+x33 commit at 26 (2 writes)
+x31 commit at 27 (2 writes)
+x32 commit at 28 (2 writes)
+x34 begin ser at 28
+x35 begin si at 28
+x36 begin si at 28
+x34 add acct:00 -20: 123 -> 103
+x34 add acct:06 20: 50 -> 70
+x35 add acct:04 -22: 111 -> 89
+x35 add acct:02 22: 142 -> 164
+x36 add acct:05 -17: 118 -> 101
+x36 add acct:02 17: 142 -> 159
+x34 commit at 29 (2 writes)
+x36 commit at 30 (2 writes)
+x35 abort: write-write conflict on acct:02 (x36 committed it at 30)
+audit begin si at 30
+audit sum acct: = 1047 over 10 keys
+audit commit (read-only)
+vacuum at horizon 30: removed 30 versions, 0 keys gone
+x37 begin si at 30
+x38 begin rc
+x39 begin ser at 30
+x37 add acct:00 -23: 103 -> 80
+x37 add acct:02 23: 159 -> 182
+x38 add acct:08 -19: 103 -> 84
+x38 add acct:06 19: 70 -> 89
+x39 add acct:00 -36: 103 -> 67
+x39 add acct:05 36: 101 -> 137
+x39 commit at 31 (2 writes)
+x38 commit at 32 (2 writes)
+x37 abort: write-write conflict on acct:00 (x39 committed it at 31)
+x40 begin ser at 32
+x41 begin rc
+x42 begin rc
+x40 add acct:00 -39: 67 -> 28
+x40 add acct:08 39: 84 -> 123
+x41 add acct:09 -29: 111 -> 82
+x41 add acct:04 29: 111 -> 140
+x42 add acct:09 -4: 111 -> 107
+x42 add acct:02 4: 159 -> 163
+x40 commit at 33 (2 writes)
+x42 commit at 34 (2 writes)
+x41 commit at 35 (2 writes)
+x43 begin rc
+x44 begin si at 35
+x45 begin si at 35
+x43 add acct:01 -10: 47 -> 37
+x43 add acct:03 10: 223 -> 233
+x44 add acct:05 -12: 137 -> 125
+x44 add acct:04 12: 140 -> 152
+x45 add acct:09 -19: 82 -> 63
+x45 add acct:02 19: 163 -> 182
+x44 commit at 36 (2 writes)
+x43 commit at 37 (2 writes)
+x45 commit at 38 (2 writes)
+x46 begin rc
+x47 begin ser at 38
+x48 begin ser at 38
+x46 add acct:05 -7: 125 -> 118
+x46 add acct:03 7: 233 -> 240
+x47 add acct:06 -29: 89 -> 60
+x47 add acct:05 29: 125 -> 154
+x48 add acct:00 -2: 28 -> 26
+x48 add acct:09 2: 63 -> 65
+x46 commit at 39 (2 writes)
+x48 commit at 40 (2 writes)
+x47 abort: write-write conflict on acct:05 (x46 committed it at 39)
+x49 begin si at 40
+x50 begin rc
+x51 begin si at 40
+x49 add acct:02 -38: 182 -> 144
+x49 add acct:08 38: 123 -> 161
+x50 add acct:03 -2: 240 -> 238
+x50 add acct:09 2: 65 -> 67
+x51 add acct:01 -33: 37 -> 4
+x51 add acct:03 33: 240 -> 273
+x49 commit at 41 (2 writes)
+x50 commit at 42 (2 writes)
+x51 abort: write-write conflict on acct:03 (x50 committed it at 42)
+x52 begin ser at 42
+x53 begin si at 42
+x54 begin rc
+x52 add acct:06 -27: 89 -> 62
+x52 add acct:01 27: 37 -> 64
+x53 add acct:02 -37: 144 -> 107
+x53 add acct:09 37: 67 -> 104
+x54 add acct:00 -24: 26 -> 2
+x54 add acct:06 24: 89 -> 113
+x54 commit at 43 (2 writes)
+x52 abort: write-write conflict on acct:06 (x54 committed it at 43)
+x53 commit at 44 (2 writes)
+audit begin si at 44
+audit sum acct: = 1051 over 10 keys
+audit commit (read-only)
+vacuum at horizon 44: removed 28 versions, 0 keys gone
+x55 begin si at 44
+x56 begin si at 44
+x57 begin ser at 44
+x55 add acct:07 -4: 19 -> 15
+x55 add acct:08 4: 161 -> 165
+x56 add acct:07 -31: 19 -> -12
+x56 add acct:05 31: 118 -> 149
+x57 add acct:01 -35: 37 -> 2
+x57 add acct:05 35: 118 -> 153
+x55 commit at 45 (2 writes)
+x57 commit at 46 (2 writes)
+x56 abort: write-write conflict on acct:05 (x57 committed it at 46)
+x58 begin ser at 46
+x59 begin si at 46
+x60 begin si at 46
+x58 add acct:08 -6: 165 -> 159
+x58 add acct:05 6: 153 -> 159
+x59 add acct:04 -26: 152 -> 126
+x59 add acct:06 26: 113 -> 139
+x60 add acct:02 -11: 107 -> 96
+x60 add acct:05 11: 153 -> 164
+x60 commit at 47 (2 writes)
+x58 abort: write-write conflict on acct:05 (x60 committed it at 47)
+x59 commit at 48 (2 writes)
+x61 begin rc
+x62 begin ser at 48
+x63 begin ser at 48
+x61 add acct:02 -24: 96 -> 72
+x61 add acct:06 24: 139 -> 163
+x62 add acct:09 -25: 104 -> 79
+x62 add acct:03 25: 238 -> 263
+x63 add acct:04 -21: 126 -> 105
+x63 add acct:00 21: 2 -> 23
+x61 commit at 49 (2 writes)
+x63 commit at 50 (2 writes)
+x62 commit at 51 (2 writes)
+x64 begin ser at 51
+x65 begin rc
+x66 begin ser at 51
+x64 add acct:05 -6: 164 -> 158
+x64 add acct:04 6: 105 -> 111
+x65 add acct:07 -6: 15 -> 9
+x65 add acct:04 6: 105 -> 111
+x66 add acct:00 -33: 23 -> -10
+x66 add acct:09 33: 79 -> 112
+x66 commit at 52 (2 writes)
+x64 commit at 53 (2 writes)
+x65 commit at 54 (2 writes)
+x67 begin si at 54
+x68 begin ser at 54
+x69 begin si at 54
+x67 add acct:09 -12: 112 -> 100
+x67 add acct:02 12: 72 -> 84
+x68 add acct:04 -28: 111 -> 83
+x68 add acct:07 28: 9 -> 37
+x69 add acct:02 -14: 72 -> 58
+x69 add acct:09 14: 112 -> 126
+x67 commit at 55 (2 writes)
+x68 commit at 56 (2 writes)
+x69 abort: write-write conflict on acct:02 (x67 committed it at 55)
+x70 begin si at 56
+x71 begin ser at 56
+x72 begin si at 56
+x70 add acct:06 -35: 163 -> 128
+x70 add acct:04 35: 83 -> 118
+x71 add acct:06 -3: 163 -> 160
+x71 add acct:00 3: -10 -> -7
+x72 add acct:01 -15: 2 -> -13
+x72 add acct:05 15: 158 -> 173
+x70 commit at 57 (2 writes)
+x71 abort: write-write conflict on acct:06 (x70 committed it at 57)
+x72 commit at 58 (2 writes)
+audit begin si at 58
+audit sum acct: = 1045 over 10 keys
+audit commit (read-only)
+vacuum at horizon 58: removed 28 versions, 0 keys gone
+audit begin si at 58
+audit scan acct: -> acct:00=-10 acct:01=-13 acct:02=84 acct:03=263 acct:04=118 acct:05=173 acct:06=128 acct:07=37 acct:08=165 acct:09=100
+audit sum acct: = 1045 over 10 keys
+audit commit (read-only)
+checkpoint at clock 58: 10 versions, wal 3694 -> 0 bytes
+late begin si at 58
+late add acct:00 5: -10 -> -5
+late add acct:09 -5: 100 -> 95
+late commit at 59 (2 writes)
+crash: no open transactions
+recover: snapshot at clock 58, 10 versions
+recover: replayed 1 commit and 0 vacuums, clock 59
+audit begin si at 59
+audit sum acct: = 1045 over 10 keys
+audit commit (read-only)
+stats: 65 commits, 15 aborts, clock 59, 10 keys, 12 versions, wal 60 bytes
+== 7_bad.mvcc
+! 7_bad.mvcc line 2: unknown level snapshot
+! 7_bad.mvcc line 3: t9 has no begin before this line
+! 7_bad.mvcc line 4: put takes a key and a value
+! 7_bad.mvcc line 5: a value cannot be -
+! 7_bad.mvcc line 6: add needs a whole number
+! 7_bad.mvcc line 7: tear needs a byte count
+! 7_bad.mvcc line 8: vacuum takes no arguments
+! 7_bad.mvcc line 9: unknown command launch
+! 7_bad.mvcc line 10: unknown action frobnicate
+! 7_bad.mvcc line 11: begin takes a name and an optional level

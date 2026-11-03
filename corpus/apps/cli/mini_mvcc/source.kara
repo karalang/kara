@@ -1,0 +1,1102 @@
+// mini_mvcc: a multi-version key-value store with transactions, the
+// concurrency control under PostgreSQL, CockroachDB, Badger and etcd.
+// Every commit adds a new version of each key it wrote, stamped with the
+// commit time; a transaction reads the versions its snapshot can see, and
+// at commit it is checked against what committed since its snapshot, by
+// its isolation level: read committed, snapshot isolation or
+// serializable. Commits go to a write-ahead log first, so a crash loses
+// only the open transactions; recovery replays the log, drops a torn
+// record at its end, and starts from the last checkpoint. Each session
+// file is a script of interleaved transactions and runs as its own task.
+
+// ------------------------------------------------------------ text
+
+fn is_digits(s: Str) -> bool {
+    s.len() > 0 and s.bytes().iter().all(|c| c >= b'0' and c <= b'9')
+}
+
+fn is_int(s: Str) -> bool {
+    if s.starts_with("-") { is_digits(s.substring(1, s.len())) } else { is_digits(s) }
+}
+
+fn number(s: Str) -> i64 {
+    i64.parse(s).unwrap_or(0)
+}
+
+fn plural(n: i64, word: Str) -> String {
+    if n == 1 { f"1 {word}" } else { f"{n} {word}s" }
+}
+
+// FNV-1a, 32 bits: the checksum at the end of every log record.
+fn fnv(b: Slice[u8]) -> i64 {
+    let mut h: i64 = 0x811c9dc5;
+    for c in b.iter() {
+        h = h ^ (c as i64);
+        h = (h * 0x01000193) % 4294967296;
+    }
+    h
+}
+
+// A log record: a header line, its body lines, and an end line with the
+// checksum of everything before it.
+fn record(header: Str, body: ref Vec[String]) -> String {
+    let mut text = f"{header}\n";
+    for l in body.iter() {
+        text.push_str(l);
+        text.push_str("\n");
+    }
+    let sum = fnv(text.bytes());
+    text + f"end {sum:08x}\n"
+}
+
+fn show(v: ref Option[String]) -> String {
+    match v {
+        Some(s) => s.clone(),
+        None => "-".to_string(),
+    }
+}
+
+// ------------------------------------------------------------ the store
+
+#[derive(Clone)]
+struct Version {
+    ts: i64,
+    // The transaction that committed it.
+    txn: String,
+    // None is a delete.
+    value: Option[String],
+}
+
+#[derive(Clone, PartialEq)]
+enum Level {
+    ReadCommitted,
+    Snapshot,
+    Serializable,
+}
+
+fn level_name(l: ref Level) -> Str {
+    match l {
+        Level.ReadCommitted => "rc",
+        Level.Snapshot => "si",
+        Level.Serializable => "ser",
+    }
+}
+
+struct Txn {
+    name: String,
+    level: Level,
+    read_ts: i64,
+    // Buffered writes, applied at commit.
+    writes: SortedMap[String, Option[String]],
+    // Keys read from the store, and the prefixes scanned.
+    reads: SortedSet[String],
+    prefixes: SortedSet[String],
+}
+
+enum Record {
+    Commit { ts: i64, txn: String, writes: Vec[(String, Option[String])] },
+    Vacuum(i64),
+}
+
+struct Store {
+    wal: String,
+    snap: String,
+    versions: Map[String, Vec[Version]],
+    clock: i64,
+    // Open transactions, in the order they began.
+    txns: Vec[Txn],
+    down: bool,
+    commits: i64,
+    aborts: i64,
+    out: Vec[String],
+}
+
+fn file_size(path: Str) -> i64 {
+    match fs.metadata(path) {
+        Ok(m) => m.len,
+        Err(_) => 0,
+    }
+}
+
+impl Store {
+    fn new(stem: Str) -> Result[Store, String] {
+        let wal = f"data/run/{stem}.wal";
+        let snap = f"data/run/{stem}.snap";
+        for p in [wal.clone(), snap.clone(), snap + ".tmp"] {
+            if fs.exists(p) and fs.remove_file(p).is_err() {
+                return Err(f"cannot remove {p}");
+            }
+        }
+        if fs.write_bytes(wal.clone(), Vec.new()).is_err() {
+            return Err(f"cannot create {wal}");
+        }
+        Ok(Store {
+            wal,
+            snap,
+            versions: Map.new(),
+            clock: 0,
+            txns: Vec.new(),
+            down: false,
+            commits: 0,
+            aborts: 0,
+            out: Vec.new(),
+        })
+    }
+
+    fn sorted_keys(self) -> Vec[String] {
+        let mut keys: Vec[String] = self.versions.keys().cloned().collect();
+        keys.sort();
+        keys
+    }
+
+    fn version_count(self) -> i64 {
+        self.versions.values().map(|vs| vs.len()).sum()
+    }
+
+    // ---------------------------------------------------------- reading
+
+    fn newest(self, key: Str) -> Option[Version] {
+        match self.versions.get(key) {
+            Some(vs) => vs.last().cloned(),
+            None => None,
+        }
+    }
+
+    // The value the newest version at or before ts holds.
+    fn visible(self, key: Str, ts: i64) -> Option[String] {
+        let vs = self.versions.get(key)?;
+        for v in vs.iter().rev() {
+            if v.ts <= ts {
+                return v.value.clone();
+            }
+        }
+        None
+    }
+
+    fn find(self, name: Str) -> Option[i64] {
+        self.txns.iter().position(|t| t.name == name)
+    }
+
+    // A read committed transaction reads the latest commit at every
+    // statement; the others read at their snapshot.
+    fn snap_ts(self, i: i64) -> i64 {
+        if self.txns[i].level == Level.ReadCommitted { self.clock } else { self.txns[i].read_ts }
+    }
+
+    fn read(mut ref self, i: i64, key: Str) -> Option[String] {
+        if let Some(v) = self.txns[i].writes.get(key) {
+            return v.clone();
+        }
+        let ts = self.snap_ts(i);
+        self.txns[i].reads.insert(key.to_string());
+        self.visible(key, ts)
+    }
+
+    fn range(mut ref self, i: i64, p: Str) -> Vec[(String, String)] {
+        let ts = self.snap_ts(i);
+        self.txns[i].prefixes.insert(p.to_string());
+        let mut seen: SortedMap[String, String] = SortedMap.new();
+        for k in self.versions.keys() {
+            if k.starts_with(p) {
+                if let Some(v) = self.visible(k, ts) {
+                    seen.insert(k.clone(), v);
+                }
+            }
+        }
+        for (k, v) in self.txns[i].writes.iter() {
+            if k.starts_with(p) {
+                match v {
+                    Some(s) => {
+                        seen.insert(k.clone(), s.clone());
+                    }
+                    None => {
+                        seen.remove(k);
+                    }
+                }
+            }
+        }
+        seen.into_iter().collect()
+    }
+
+    // ---------------------------------------------------------- the log
+
+    fn append(self, text: Str) -> Result[(), String] {
+        let appended = match File.append(self.wal) {
+            Ok(f) => f.write(text.bytes()),
+            Err(e) => Err(e),
+        };
+        if appended.is_err() {
+            return Err(f"cannot append to {self.wal}");
+        }
+        Ok(())
+    }
+
+    fn install(mut ref self, ts: i64, txn: Str, writes: ref Vec[(String, Option[String])]) {
+        for (k, v) in writes.iter() {
+            let version = Version { ts, txn: txn.to_string(), value: v.clone() };
+            match self.versions.get_mut(k) {
+                Some(vs) => vs.push(version),
+                None => {
+                    self.versions.insert(k.clone(), vec![version]);
+                }
+            }
+        }
+    }
+
+    // Drops every version no snapshot at h or later can see: all but the
+    // newest at or before h, and that one too when it is a delete.
+    fn vacuum_at(mut ref self, h: i64) -> (i64, i64) {
+        let mut removed = 0;
+        let mut gone = 0;
+        for k in self.sorted_keys() {
+            let vs = self.versions.remove(k) ?? Vec.new();
+            let n = vs.len();
+            let mut (old, keep): (Vec[Version], Vec[Version]) = vs.into_iter().partition(|v| v.ts <= h);
+            if let Some(last) = old.last() {
+                if last.value.is_some() {
+                    keep.insert(0, last.clone());
+                }
+            }
+            removed += n - keep.len();
+            if keep.is_empty() {
+                gone += 1;
+            } else {
+                self.versions.insert(k.clone(), keep);
+            }
+        }
+        (removed, gone)
+    }
+
+    // ---------------------------------------------------------- commands
+
+    fn run(mut ref self, w: ref Vec[String]) -> Result[(), String] {
+        let cmd = w[0].as_str();
+        if cmd == "tear" {
+            return self.tear(number(w[1]));
+        }
+        if cmd == "recover" {
+            if not self.down {
+                return Err("the store is up".to_string());
+            }
+            return self.recover();
+        }
+        if self.down {
+            return Err("the store is down".to_string());
+        }
+        match cmd {
+            "begin" => self.begin(w),
+            "dump" => {
+                self.dump();
+                Ok(())
+            }
+            "vacuum" => self.vacuum(),
+            "crash" => {
+                self.crash();
+                Ok(())
+            }
+            "checkpoint" => self.checkpoint(),
+            _ => self.txn_command(w),
+        }
+    }
+
+    fn begin(mut ref self, w: ref Vec[String]) -> Result[(), String] {
+        let name = w[1].clone();
+        if self.find(name).is_some() {
+            return Err(f"{name} is already active");
+        }
+        let level = if w.len() == 3 { w[2].as_str() } else { "si" };
+        let level = match level {
+            "rc" => Level.ReadCommitted,
+            "ser" => Level.Serializable,
+            _ => Level.Snapshot,
+        };
+        if level == Level.ReadCommitted {
+            self.out.push(f"{name} begin rc");
+        } else {
+            self.out.push(f"{name} begin {level_name(level)} at {self.clock}");
+        }
+        self.txns.push(Txn {
+            name,
+            level,
+            read_ts: self.clock,
+            writes: SortedMap.new(),
+            reads: SortedSet.new(),
+            prefixes: SortedSet.new(),
+        });
+        Ok(())
+    }
+
+    fn dump(mut ref self) {
+        self.out.push(f"dump at clock {self.clock}:");
+        if self.versions.is_empty() {
+            self.out.push("  (empty)".to_string());
+        }
+        for k in self.sorted_keys() {
+            let vs: Vec[String] = self.versions[k].iter().map(|v| f"@{v.ts} {show(v.value)}").collect();
+            self.out.push(f"  {k} {vs.join(" ")}");
+        }
+    }
+
+    fn vacuum(mut ref self) -> Result[(), String] {
+        let mut h = self.clock;
+        for t in self.txns.iter() {
+            if t.level != Level.ReadCommitted and t.read_ts < h {
+                h = t.read_ts;
+            }
+        }
+        let (removed, gone) = self.vacuum_at(h);
+        self.append(record(f"vacuum {h}", Vec.new()))?;
+        self.out.push(f"vacuum at horizon {h}: removed {plural(removed, "version")}, {plural(gone, "key")} gone");
+        Ok(())
+    }
+
+    fn crash(mut ref self) {
+        if self.txns.is_empty() {
+            self.out.push("crash: no open transactions".to_string());
+        } else {
+            let lost: Vec[String] = self.txns.iter().map(|t| t.name.clone()).collect();
+            self.out.push(f"crash: lost {lost.join(" ")}");
+        }
+        self.versions = Map.new();
+        self.clock = 0;
+        self.txns = Vec.new();
+        self.down = true;
+    }
+
+    // Cuts the last n bytes off the log: a write the disk never finished.
+    fn tear(mut ref self, n: i64) -> Result[(), String] {
+        if not self.down {
+            return Err("tear needs a crashed store".to_string());
+        }
+        let b = match fs.read_bytes(self.wal) {
+            Ok(b) => b,
+            Err(_) => return Err(f"cannot read {self.wal}"),
+        };
+        let keep = if b.len() > n { b.len() - n } else { 0 };
+        if fs.write_bytes(self.wal.clone(), b[0..keep].to_vec()).is_err() {
+            return Err(f"cannot write {self.wal}");
+        }
+        self.out.push(f"tear {n}: wal {b.len()} -> {keep} bytes");
+        Ok(())
+    }
+
+    fn checkpoint(mut ref self) -> Result[(), String] {
+        let n = self.version_count();
+        let mut text = f"snapshot {self.clock} {n}\n";
+        for k in self.sorted_keys() {
+            for v in self.versions[k].iter() {
+                text.push_str(f"v {k} {v.ts} {v.txn} {show(v.value)}\n");
+            }
+        }
+        let tmp = self.snap + ".tmp";
+        if fs.write(tmp, text).is_err() {
+            return Err(f"cannot write {tmp}");
+        }
+        if fs.rename(tmp, self.snap).is_err() {
+            return Err(f"cannot rename {tmp}");
+        }
+        let size = file_size(self.wal);
+        if fs.write_bytes(self.wal.clone(), Vec.new()).is_err() {
+            return Err(f"cannot empty {self.wal}");
+        }
+        self.out.push(f"checkpoint at clock {self.clock}: {plural(n, "version")}, wal {size} -> 0 bytes");
+        Ok(())
+    }
+
+    // ---------------------------------------------------------- transactions
+
+    fn kill(mut ref self, i: i64) {
+        self.txns.remove(i);
+        self.aborts += 1;
+    }
+
+    fn txn_command(mut ref self, w: ref Vec[String]) -> Result[(), String] {
+        let name = w[0].clone();
+        let i = match self.find(name) {
+            Some(i) => i,
+            None => return Err(f"{name} is not active"),
+        };
+        let act = w[1].as_str();
+        match act {
+            "get" => {
+                let v = self.read(i, w[2]);
+                self.out.push(f"{name} get {w[2]} = {v ?? "(none)".to_string()}");
+            }
+            "put" => {
+                self.txns[i].writes.insert(w[2].clone(), Some(w[3].clone()));
+                self.out.push(f"{name} put {w[2]} {w[3]}");
+            }
+            "del" => {
+                self.txns[i].writes.insert(w[2].clone(), None);
+                self.out.push(f"{name} del {w[2]}");
+            }
+            "add" => {
+                let v = self.read(i, w[2]);
+                let cur = match v {
+                    Some(s) => {
+                        if not is_int(s) {
+                            self.kill(i);
+                            return Err(f"{name} add {w[2]}: \"{s}\" is not a number; {name} aborted");
+                        }
+                        number(s)
+                    }
+                    None => 0,
+                };
+                let new = cur + number(w[3]);
+                self.txns[i].writes.insert(w[2].clone(), Some(new.to_string()));
+                self.out.push(f"{name} add {w[2]} {w[3]}: {cur} -> {new}");
+            }
+            "scan" => {
+                let items = self.range(i, w[2]);
+                let pairs: Vec[String] = items.iter().map(|(k, v)| f"{k}={v}").collect();
+                let shown = if items.is_empty() { "(none)".to_string() } else { pairs.join(" ") };
+                self.out.push(f"{name} scan {w[2]} -> {shown}");
+            }
+            "sum" => {
+                let items = self.range(i, w[2]);
+                let mut total = 0;
+                for (k, v) in items.iter() {
+                    if not is_int(v) {
+                        self.kill(i);
+                        return Err(f"{name} sum {w[2]}: {k} is \"{v}\", not a number; {name} aborted");
+                    }
+                    total += number(v);
+                }
+                self.out.push(f"{name} sum {w[2]} = {total} over {plural(items.len(), "key")}");
+            }
+            "abort" => {
+                self.kill(i);
+                self.out.push(f"{name} abort");
+            }
+            _ => self.commit(i)?,
+        }
+        Ok(())
+    }
+
+    // Why a transaction cannot commit, if it cannot: a key it wrote, or
+    // under serializable a key it read or a range it scanned, changed
+    // after its snapshot.
+    fn conflict(self, t: ref Txn) -> Option[String] {
+        if t.level == Level.ReadCommitted {
+            return None;
+        }
+        for k in t.writes.keys() {
+            if let Some(v) = self.newest(k) {
+                if v.ts > t.read_ts {
+                    return Some(f"write-write conflict on {k} ({v.txn} committed it at {v.ts})");
+                }
+            }
+        }
+        if t.level != Level.Serializable {
+            return None;
+        }
+        for k in t.reads.iter() {
+            if let Some(v) = self.newest(k) {
+                if v.ts > t.read_ts {
+                    return Some(f"read-write conflict on {k} ({v.txn} committed it at {v.ts})");
+                }
+            }
+        }
+        let keys = self.sorted_keys();
+        for p in t.prefixes.iter() {
+            for k in keys.iter() {
+                if k.starts_with(p) {
+                    let v = self.newest(k)?;
+                    if v.ts > t.read_ts {
+                        return Some(f"phantom under {p} ({v.txn} committed {k} at {v.ts})");
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    fn commit(mut ref self, i: i64) -> Result[(), String] {
+        let t = self.txns.remove(i);
+        if t.writes.is_empty() {
+            self.commits += 1;
+            self.out.push(f"{t.name} commit (read-only)");
+            return Ok(());
+        }
+        if let Some(why) = self.conflict(t) {
+            self.aborts += 1;
+            self.out.push(f"{t.name} abort: {why}");
+            return Ok(());
+        }
+        self.clock += 1;
+        let writes: Vec[(String, Option[String])] = t.writes.into_iter().collect();
+        let body: Vec[String] = writes.iter().map(|(k, v)| match v {
+            Some(s) => f"put {k} {s}",
+            None => f"del {k}",
+        }).collect();
+        self.append(record(f"commit {self.clock} {t.name} {body.len()}", body))?;
+        self.install(self.clock, t.name, writes);
+        self.commits += 1;
+        self.out.push(f"{t.name} commit at {self.clock} ({plural(body.len(), "write")})");
+        Ok(())
+    }
+
+    // ---------------------------------------------------------- recovery
+
+    fn load_snapshot(mut ref self) -> Result[(), String] {
+        let text = match fs.read_to_string(self.snap) {
+            Ok(t) => t,
+            Err(_) => return Err(f"cannot read {self.snap}"),
+        };
+        let mut lines = text.split("\n");
+        let head: Vec[Str] = (lines.next() ?? "").split(" ").collect();
+        if head.len() != 3 or head[0] != "snapshot" {
+            return Err(f"{self.snap} is not a snapshot");
+        }
+        self.clock = number(head[1]);
+        for l in lines {
+            let w: Vec[Str] = l.split(" ").collect();
+            if w.len() != 5 {
+                continue;
+            }
+            let value = if w[4] == "-" { None } else { Some(w[4].to_string()) };
+            self.install(number(w[2]), w[3], vec![(w[1].to_string(), value)]);
+        }
+        self.out.push(f"recover: snapshot at clock {self.clock}, {plural(number(head[2]), "version")}");
+        Ok(())
+    }
+
+    fn recover(mut ref self) -> Result[(), String] {
+        if fs.exists(self.snap) {
+            self.load_snapshot()?;
+        }
+        let data = match fs.read_bytes(self.wal) {
+            Ok(d) => d,
+            Err(_) => return Err(f"cannot read {self.wal}"),
+        };
+        let mut pos = 0;
+        let mut commits = 0;
+        let mut vacuums = 0;
+        while pos < data.len() {
+            let (next, rec) = match parse_record(data, pos) {
+                Some(r) => r,
+                None => break,
+            };
+            pos = next;
+            match rec {
+                Record.Commit { ts, txn, writes } => {
+                    self.clock = ts;
+                    self.install(ts, txn, writes);
+                    commits += 1;
+                }
+                Record.Vacuum(h) => {
+                    self.vacuum_at(h);
+                    vacuums += 1;
+                }
+            }
+        }
+        self.out.push(f"recover: replayed {plural(commits, "commit")} and {plural(vacuums, "vacuum")}, clock {self.clock}");
+        if pos < data.len() {
+            self.out.push(f"recover: dropped a torn record at byte {pos} ({plural(data.len() - pos, "byte")})");
+            if fs.write_bytes(self.wal.clone(), data[0..pos].to_vec()).is_err() {
+                return Err(f"cannot truncate {self.wal}");
+            }
+        }
+        self.down = false;
+        Ok(())
+    }
+
+    fn summary(self) -> Vec[String] {
+        let mut out: Vec[String] = Vec.new();
+        if not self.txns.is_empty() {
+            let open: Vec[String] = self.txns.iter().map(|t| t.name.clone()).collect();
+            out.push(f"open at end: {open.join(" ")}");
+        }
+        out.push(
+            f"stats: {plural(self.commits, "commit")}, {plural(self.aborts, "abort")}, clock {self.clock}, {plural(self.versions.len(), "key")}, {plural(self.version_count(), "version")}, wal {file_size(self.wal)} bytes",
+        );
+        out
+    }
+}
+
+// The line that starts at byte p, and the byte after its newline; None
+// when the data ends before a newline.
+fn line_at(data: ref Vec[u8], p: i64) -> Option[(String, i64)] {
+    let mut i = p;
+    while i < data.len() {
+        if data[i] == b'\n' {
+            let text = String.from_utf8(data[p..i].to_vec()).ok()?;
+            return Some((text, i + 1));
+        }
+        i += 1;
+    }
+    None
+}
+
+// One whole record starting at pos, and the byte after it; None for a
+// record cut short or damaged.
+fn parse_record(data: ref Vec[u8], pos: i64) -> Option[(i64, Record)] {
+    let mut (head, p) = line_at(data, pos)?;
+    let w: Vec[Str] = head.split(" ").collect();
+    let rec = if w[0] == "commit" and w.len() == 4 and is_digits(w[1]) and is_digits(w[3]) {
+        let mut writes: Vec[(String, Option[String])] = Vec.new();
+        for _ in 0..number(w[3]) {
+            let (b, next) = line_at(data, p)?;
+            p = next;
+            let bw: Vec[Str] = b.split(" ").collect();
+            if bw[0] == "put" and bw.len() == 3 {
+                writes.push((bw[1].to_string(), Some(bw[2].to_string())));
+            } else if bw[0] == "del" and bw.len() == 2 {
+                writes.push((bw[1].to_string(), None));
+            } else {
+                return None;
+            }
+        }
+        Record.Commit { ts: number(w[1]), txn: w[2].to_string(), writes }
+    } else if w[0] == "vacuum" and w.len() == 2 and is_digits(w[1]) {
+        Record.Vacuum(number(w[1]))
+    } else {
+        return None;
+    };
+    let (end, q) = line_at(data, p)?;
+    let sum = fnv(data[pos..p]);
+    if end != f"end {sum:08x}" {
+        return None;
+    }
+    Some((q, rec))
+}
+
+// ------------------------------------------------------------ the scripts
+
+fn session_command(cmd: Str) -> bool {
+    match cmd {
+        "dump" | "vacuum" | "crash" | "recover" | "checkpoint" => true,
+        _ => false,
+    }
+}
+
+// How many arguments an action takes, and what to say when it gets some
+// other number.
+fn action(act: Str) -> Option[(i64, Str)] {
+    match act {
+        "get" => Some((1, "get takes a key")),
+        "del" => Some((1, "del takes a key")),
+        "put" => Some((2, "put takes a key and a value")),
+        "add" => Some((2, "add takes a key and a whole number")),
+        "scan" => Some((1, "scan takes a prefix")),
+        "sum" => Some((1, "sum takes a prefix")),
+        "commit" => Some((0, "commit takes no arguments")),
+        "abort" => Some((0, "abort takes no arguments")),
+        _ => None,
+    }
+}
+
+fn check_line(w: ref Vec[String], begun: mut ref Set[String]) -> Result[(), String] {
+    let cmd = w[0].as_str();
+    if cmd == "begin" {
+        if w.len() != 2 and w.len() != 3 {
+            return Err("begin takes a name and an optional level".to_string());
+        }
+        begun.insert(w[1].clone());
+        if w.len() == 3 and not ["rc", "si", "ser"].contains(w[2]) {
+            return Err(f"unknown level {w[2]}");
+        }
+        return Ok(());
+    }
+    if session_command(cmd) {
+        if w.len() != 1 {
+            return Err(f"{cmd} takes no arguments");
+        }
+        return Ok(());
+    }
+    if cmd == "tear" {
+        if w.len() != 2 or not is_digits(w[1]) {
+            return Err("tear needs a byte count".to_string());
+        }
+        return Ok(());
+    }
+    if w.len() == 1 {
+        return Err(f"unknown command {cmd}");
+    }
+    if not begun.contains(w[0]) {
+        return Err(f"{cmd} has no begin before this line");
+    }
+    let (n, msg) = match action(w[1]) {
+        Some(a) => a,
+        None => return Err(f"unknown action {w[1]}"),
+    };
+    if w.len() != n + 2 {
+        return Err(msg.to_string());
+    }
+    if w[1] == "put" and w[3] == "-" {
+        return Err("a value cannot be -".to_string());
+    }
+    if w[1] == "add" and not is_int(w[3]) {
+        return Err("add needs a whole number".to_string());
+    }
+    Ok(())
+}
+
+fn run(name: String, text: String) -> Vec[String] {
+    let mut out: Vec[String] = vec![f"== {name}"];
+    let mut lines: Vec[Vec[String]] = Vec.new();
+    let mut errs: Vec[String] = Vec.new();
+    let mut begun: Set[String] = Set.new();
+    let mut no = 0;
+    for line in text.split("\n") {
+        no += 1;
+        if line.len() == 0 or line.starts_with("#") {
+            continue;
+        }
+        let w: Vec[String] = line.split(" ").map(|s| s.to_string()).collect();
+        match check_line(w, mut begun) {
+            Ok(()) => lines.push(w),
+            Err(e) => errs.push(f"! {name} line {no}: {e}"),
+        }
+    }
+    if not errs.is_empty() {
+        out.extend(errs);
+        return out;
+    }
+    let stem = name.split(".").next() ?? "";
+    let mut s = match Store.new(stem) {
+        Ok(s) => s,
+        Err(e) => {
+            out.push(f"! {e}");
+            return out;
+        }
+    };
+    for w in lines.iter() {
+        if let Err(e) = s.run(w) {
+            s.out.push(f"! {e}");
+        }
+    }
+    out.extend(mem.take(mut s.out));
+    out.extend(s.summary());
+    out
+}
+
+// ------------------------------------------------------------ files
+
+fn is_hexd(c: u8) -> bool {
+    (c >= b'0' and c <= b'9') or (c >= b'a' and c <= b'f') or (c >= b'A' and c <= b'F')
+}
+
+fn hex_val(c: u8) -> u8 {
+    if c >= b'0' and c <= b'9' {
+        c - b'0'
+    } else if c >= b'a' and c <= b'f' {
+        c - b'a' + 10
+    } else {
+        c - b'A' + 10
+    }
+}
+
+fn unhex(s: Str) -> Vec[u8] {
+    let mut digits: Vec[u8] = Vec.new();
+    for c in s.bytes() {
+        if is_hexd(c) {
+            digits.push(hex_val(c));
+        }
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i + 1 < digits.len() {
+        out.push(digits[i] * 16 + digits[i + 1]);
+        i += 2;
+    }
+    out
+}
+
+fn put_bytes(path: Str, b: Vec[u8]) -> Result[(), String] {
+    if let Err(e) = fs.write_bytes(path.to_string(), b) {
+        return Err(f"cannot write {path}: {e}");
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = fs.create_dir_all("data/run".to_string()) {
+        eprintln(f"cannot create data/run: {e}");
+        return;
+    }
+    if let Err(e) = write_data() {
+        eprintln(e);
+        return;
+    }
+    let mut names: Vec[String] = match fs.read_dir("data".to_string()) {
+        Ok(n) => n.into_iter().filter(|n| n.ends_with(".mvcc")).collect(),
+        Err(e) => {
+            eprintln(f"cannot list data: {e}");
+            return;
+        }
+    };
+    names.sort();
+    // One task per session, each with its own store and log; the reports
+    // print in file name order.
+    let group = TaskGroup.new();
+    let mut handles = Vec.new();
+    for name in names.iter() {
+        let text = match fs.read_to_string(f"data/{name}") {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln(f"cannot read {name}: {e}");
+                return;
+            }
+        };
+        let owned = name.clone();
+        handles.push(group.spawn(|| run(owned, text)));
+    }
+    let mut out: Vec[String] = Vec.new();
+    for h in handles.into_iter() {
+        out.extend(h.join());
+    }
+    println(out.join("\n"));
+}
+
+// ============================================================ data
+
+// The files under data/, in name order.
+fn write_data() -> Result[(), String] {
+    put_bytes("data/1_bank.mvcc", unhex(file_0()))?;
+    put_bytes("data/2_oncall.mvcc", unhex(file_1()))?;
+    put_bytes("data/3_reads.mvcc", unhex(file_2()))?;
+    put_bytes("data/4_vacuum.mvcc", unhex(file_3()))?;
+    put_bytes("data/5_crash.mvcc", unhex(file_4()))?;
+    put_bytes("data/6_load.mvcc", unhex(file_5()))?;
+    put_bytes("data/7_bad.mvcc", unhex(file_6()))?;
+    Ok(())
+}
+
+// data/1_bank.mvcc
+fn file_0() -> String {
+    """
+232054776f207472616e73666572732072616365206f6e207468652073616d65206163636f756e742e20556e64657220
+7265616420636f6d6d6974746564207468650a23206c61746572207772697465722077696e7320616e64206120646570
+6f736974206973206c6f73743b20756e64657220736e617073686f742069736f6c6174696f6e207468650a2320736563
+6f6e64207772697465722061626f72747320616e6420726574726965732e0a626567696e2073657475700a7365747570
+2070757420616363743a616c696365203130300a73657475702070757420616363743a626f622035300a736574757020
+636f6d6d69740a626567696e2074312072630a626567696e2074322072630a74312061646420616363743a616c696365
+202d33300a74312061646420616363743a626f622033300a74322061646420616363743a616c6963652032300a743120
+636f6d6d69740a743220636f6d6d69740a626567696e2061756469740a6175646974207363616e20616363743a0a6175
+6469742073756d20616363743a0a617564697420636f6d6d69740a626567696e206669780a6669782070757420616363
+743a616c6963652039300a66697820636f6d6d69740a626567696e2074332073690a626567696e2074342073690a7433
+2061646420616363743a616c696365202d33300a74332061646420616363743a626f622033300a743420616464206163
+63743a616c6963652032300a743320636f6d6d69740a743420636f6d6d69740a74342067657420616363743a616c6963
+650a626567696e2074342073690a74342061646420616363743a616c6963652032300a743420636f6d6d69740a626567
+696e2061756469740a6175646974207363616e20616363743a0a61756469742073756d20616363743a0a617564697420
+67657420616363743a6361726f6c0a617564697420636f6d6d69740a64756d700a
+"""
+}
+
+// data/2_oncall.mvcc
+fn file_1() -> String {
+    """
+232054776f20646f63746f7273206f6e2063616c6c206561636820636865636b207468617420736f6d656f6e6520656c
+7365206973206f6e2063616c6c2c207468656e0a2320676f206f66662e20536e617073686f742069736f6c6174696f6e
+206c65747320626f746820636f6d6d69742028777269746520736b6577293b2073657269616c697a61626c650a232061
+626f72747320746865207365636f6e642c2077686f736520726561647320746865206669727374206f6e652773207772
+697465206d616465207374616c652e0a626567696e2073657475700a736574757020707574206f6e63616c6c3a616c69
+6365207965730a736574757020707574206f6e63616c6c3a626f62207965730a736574757020636f6d6d69740a626567
+696e20612073690a626567696e20622073690a61207363616e206f6e63616c6c3a0a62207363616e206f6e63616c6c3a
+0a6120707574206f6e63616c6c3a616c696365206e6f0a6220707574206f6e63616c6c3a626f62206e6f0a6120636f6d
+6d69740a6220636f6d6d69740a626567696e20636865636b0a636865636b207363616e206f6e63616c6c3a0a63686563
+6b20636f6d6d69740a626567696e206669780a66697820707574206f6e63616c6c3a616c696365207965730a66697820
+707574206f6e63616c6c3a626f62207965730a66697820636f6d6d69740a626567696e2061207365720a626567696e20
+62207365720a6120676574206f6e63616c6c3a616c6963650a6120676574206f6e63616c6c3a626f620a622067657420
+6f6e63616c6c3a616c6963650a6220676574206f6e63616c6c3a626f620a6120707574206f6e63616c6c3a616c696365
+206e6f0a6220707574206f6e63616c6c3a626f62206e6f0a6120636f6d6d69740a6220636f6d6d69740a232041207363
+616e2077686f73652072616e6765206761696e732061206b6579206265666f726520746865207363616e6e657220636f
+6d6d6974732e0a626567696e2072207365720a626567696e20772073690a72207363616e206f6e63616c6c3a0a772070
+7574206f6e63616c6c3a6361726f6c207965730a7720636f6d6d69740a72207075742073686966743a636f756e742032
+0a7220636f6d6d69740a23204120726561642d6f6e6c79207472616e73616374696f6e20736177206f6e6520736e6170
+73686f742c20736f20697420636f6d6d69747320756e636865636b65642e0a626567696e20726f207365720a62656769
+6e2077322073690a726f207363616e206f6e63616c6c3a0a773220707574206f6e63616c6c3a616c696365207965730a
+773220636f6d6d69740a726f20676574206f6e63616c6c3a616c6963650a726f20636f6d6d69740a626567696e206368
+65636b0a636865636b207363616e206f6e63616c6c3a0a636865636b207363616e2073686966743a0a636865636b2063
+6f6d6d69740a
+"""
+}
+
+// data/3_reads.mvcc
+fn file_2() -> String {
+    """
+2320576861742061207472616e73616374696f6e20736565733a207265616420636f6d6d69747465642072652d726561
+647320746865206c617465737420636f6d6d69742061740a232065766572792073746174656d656e742c206120736e61
+7073686f7420646f6573206e6f74206d6f76652c20616e642061207472616e73616374696f6e20616c776179730a2320
+7365657320697473206f776e207772697465732e0a626567696e2073657475700a736574757020707574206366673a6d
+6f646520666173740a736574757020707574206366673a7265747269657320330a73657475702070757420757365723a
+3120616e6e0a736574757020636f6d6d69740a626567696e207263312072630a626567696e207369312073690a726331
+20676574206366673a6d6f64650a73693120676574206366673a6d6f64650a626567696e20770a772070757420636667
+3a6d6f646520736166650a772064656c206366673a726574726965730a7720707574206366673a74696d656f75742033
+300a7720636f6d6d69740a72633120676574206366673a6d6f64650a73693120676574206366673a6d6f64650a726331
+207363616e206366673a0a736931207363616e206366673a0a73693120707574206366673a6d6f646520736c6f770a73
+69312064656c206366673a74696d656f75740a73693120707574206366673a6c6576656c20320a736931207363616e20
+6366673a0a73693120676574206366673a6d6f64650a73693120636f6d6d69740a73693120676574206366673a6d6f64
+650a72633120707574206366673a7265747269657320350a72633120636f6d6d69740a626567696e20720a7220736361
+6e206366673a0a722067657420757365723a310a722067657420757365723a320a722064656c20757365723a310a7220
+67657420757365723a310a72207363616e20757365723a0a722061646420757365723a3120310a722061626f72740a62
+6567696e2072320a72322067657420757365723a310a72322061646420757365723a3120310a72322067657420757365
+723a310a626567696e2072330a72332067657420757365723a310a723320636f6d6d69740a64756d700a
+"""
+}
+
+// data/4_vacuum.mvcc
+fn file_3() -> String {
+    """
+23204f6c642076657273696f6e732073746179207768696c65206120736e617073686f7420746861742063616e207365
+65207468656d206973206f70656e3b2076616375756d0a232072656d6f7665732074686520726573742e204120726561
+6420636f6d6d6974746564207472616e73616374696f6e20686f6c6473206e6f7468696e67206261636b2e0a62656769
+6e20730a732070757420706167653a686f6d652076310a732070757420706167653a61626f75742076310a7320707574
+20746d703a7820310a7320636f6d6d69740a626567696e206c6f6e672073690a626567696e2065310a65312070757420
+706167653a686f6d652076320a653120636f6d6d69740a626567696e2065320a65322070757420706167653a686f6d65
+2076330a65322064656c20746d703a780a653220636f6d6d69740a626567696e2065330a65332070757420706167653a
+686f6d652076340a65332070757420706167653a61626f75742076320a653320636f6d6d69740a626567696e20776174
+636865722072630a64756d700a76616375756d0a6c6f6e672067657420706167653a686f6d650a6c6f6e67207363616e
+20706167653a0a6c6f6e67207363616e20746d703a0a6c6f6e6720636f6d6d69740a76616375756d0a64756d700a6265
+67696e2065340a65342064656c20706167653a61626f75740a653420636f6d6d69740a77617463686572207363616e20
+706167653a0a76616375756d0a64756d700a7761746368657220636f6d6d69740a
+"""
+}
+
+// data/5_crash.mvcc
+fn file_4() -> String {
+    """
+2320457665727920636f6d6d697420697320617070656e64656420746f20612077726974652d6168656164206c6f672e
+2041206372617368206c6f7365732077686174207761730a2320696e206d656d6f727920616e6420746865206f70656e
+207472616e73616374696f6e733b207265636f766572207265706c61797320746865206c6f672e204120746f726e0a23
+2077726974652061742074686520656e64206f6620746865206c6f672069732064726f707065642c20616e6420612063
+6865636b706f696e742077726974657320610a2320736e617073686f7420616e6420656d707469657320746865206c6f
+672e0a626567696e20610a6120707574206f726465723a31206e65770a6120707574206f726465723a32206e65770a61
+20636f6d6d69740a626567696e20620a6220707574206f726465723a3120706169640a6220636f6d6d69740a62656769
+6e20630a6320707574206f726465723a33206e65770a626567696e2064207365720a6420676574206f726465723a310a
+63726173680a6420676574206f726465723a310a7265636f7665720a626567696e20650a65207363616e206f72646572
+3a0a6520707574206f726465723a3220736869707065640a6520636f6d6d69740a63726173680a7465617220390a7265
+636f7665720a626567696e20660a66207363616e206f726465723a0a6620707574206f726465723a34206e65770a6620
+64656c206f726465723a310a6620636f6d6d69740a76616375756d0a636865636b706f696e740a626567696e20670a67
+20707574206f726465723a3120726566756e6465640a6720636f6d6d69740a63726173680a7265636f7665720a626567
+696e20680a68207363616e206f726465723a0a6820636f6d6d69740a64756d700a7265636f7665720a7465617220330a
+63726173680a63726173680a7265636f7665720a
+"""
+}
+
+// data/6_load.mvcc
+fn file_5() -> String {
+    """
+232054656e206163636f756e74732c20323420726f756e6473206f66207468726565206f7665726c617070696e672074
+72616e7366657273206174206d697865640a232069736f6c6174696f6e206c6576656c732e20536e617073686f742061
+6e642073657269616c697a61626c65207472616e7366657273206b656570207468650a2320746f74616c3b2061207265
+616420636f6d6d6974746564206f6e652063616e206c6f736520616e6f746865722773207570646174652e0a62656769
+6e2073657475700a73657475702070757420616363743a3030203130300a73657475702070757420616363743a303120
+3130300a73657475702070757420616363743a3032203130300a73657475702070757420616363743a3033203130300a
+73657475702070757420616363743a3034203130300a73657475702070757420616363743a3035203130300a73657475
+702070757420616363743a3036203130300a73657475702070757420616363743a3037203130300a7365747570207075
+7420616363743a3038203130300a73657475702070757420616363743a3039203130300a736574757020636f6d6d6974
+0a626567696e2078312073690a626567696e2078322072630a626567696e2078332073690a7831206164642061636374
+3a3031202d32360a78312061646420616363743a30392032360a78322061646420616363743a3031202d33340a783220
+61646420616363743a30332033340a78332061646420616363743a3033202d32300a78332061646420616363743a3039
+2032300a783320636f6d6d69740a783220636f6d6d69740a783120636f6d6d69740a626567696e2078342073690a6265
+67696e207835207365720a626567696e207836207365720a78342061646420616363743a3034202d31340a7834206164
+6420616363743a30352031340a78352061646420616363743a3032202d31390a78352061646420616363743a30362031
+390a78362061646420616363743a3039202d32360a78362061646420616363743a30302032360a783420636f6d6d6974
+0a783620636f6d6d69740a783520636f6d6d69740a626567696e2078372073690a626567696e207838207365720a6265
+67696e207839207365720a78372061646420616363743a3031202d31350a78372061646420616363743a30362031350a
+78382061646420616363743a3037202d32360a78382061646420616363743a30342032360a7839206164642061636374
+3a3031202d370a78392061646420616363743a303220370a783820636f6d6d69740a783920636f6d6d69740a78372063
+6f6d6d69740a626567696e20783130207365720a626567696e20783131207365720a626567696e207831322073690a78
+31302061646420616363743a3033202d320a7831302061646420616363743a303820320a783131206164642061636374
+3a3039202d31370a7831312061646420616363743a30322031370a7831322061646420616363743a3036202d33380a78
+31322061646420616363743a30312033380a78313020636f6d6d69740a78313120636f6d6d69740a78313220636f6d6d
+69740a626567696e207831332073690a626567696e20783134207365720a626567696e20783135207365720a78313320
+61646420616363743a3031202d370a7831332061646420616363743a303820370a7831342061646420616363743a3038
+202d31380a7831342061646420616363743a30302031380a7831352061646420616363743a3037202d350a7831352061
+646420616363743a303120350a78313320636f6d6d69740a78313520636f6d6d69740a78313420636f6d6d69740a6265
+67696e207831362073690a626567696e207831372073690a626567696e207831382072630a7831362061646420616363
+743a3036202d32350a7831362061646420616363743a30332032350a7831372061646420616363743a3038202d320a78
+31372061646420616363743a303220320a7831382061646420616363743a3036202d350a783138206164642061636374
+3a303820350a78313720636f6d6d69740a78313620636f6d6d69740a78313820636f6d6d69740a626567696e20617564
+69742073690a61756469742073756d20616363743a0a617564697420636f6d6d69740a76616375756d0a626567696e20
+7831392073690a626567696e207832302073690a626567696e20783231207365720a7831392061646420616363743a30
+32202d32360a7831392061646420616363743a30352032360a7832302061646420616363743a3034202d31300a783230
+2061646420616363743a30322031300a7832312061646420616363743a3034202d33310a783231206164642061636374
+3a30312033310a78323020636f6d6d69740a78323120636f6d6d69740a78313920636f6d6d69740a626567696e207832
+322072630a626567696e20783233207365720a626567696e207832342072630a7832322061646420616363743a303120
+2d31300a7832322061646420616363743a30302031300a7832332061646420616363743a3037202d360a783233206164
+6420616363743a303320360a7832342061646420616363743a3034202d370a7832342061646420616363743a30322037
+0a78323420636f6d6d69740a78323220636f6d6d69740a78323320636f6d6d69740a626567696e207832352073690a62
+6567696e20783236207365720a626567696e20783237207365720a7832352061646420616363743a3037202d31370a78
+32352061646420616363743a30312031370a7832362061646420616363743a3036202d32360a78323620616464206163
+63743a30332032360a7832372061646420616363743a3038202d33380a7832372061646420616363743a30352033380a
+78323720636f6d6d69740a78323520636f6d6d69740a78323620636f6d6d69740a626567696e20783238207365720a62
+6567696e20783239207365720a626567696e207833302072630a7832382061646420616363743a3035202d33340a7832
+382061646420616363743a30392033340a7832392061646420616363743a3031202d33340a7832392061646420616363
+743a30332033340a7833302061646420616363743a3037202d31340a7833302061646420616363743a30382031340a78
+323920636f6d6d69740a78323820636f6d6d69740a78333020636f6d6d69740a626567696e207833312072630a626567
+696e207833322073690a626567696e207833332073690a7833312061646420616363743a3031202d31360a7833312061
+646420616363743a30342031360a7833322061646420616363743a3030202d31330a7833322061646420616363743a30
+382031330a7833332061646420616363743a3037202d31380a7833332061646420616363743a30322031380a78333320
+636f6d6d69740a78333120636f6d6d69740a78333220636f6d6d69740a626567696e20783334207365720a626567696e
+207833352073690a626567696e207833362073690a7833342061646420616363743a3030202d32300a78333420616464
+20616363743a30362032300a7833352061646420616363743a3034202d32320a7833352061646420616363743a303220
+32320a7833362061646420616363743a3035202d31370a7833362061646420616363743a30322031370a78333420636f
+6d6d69740a78333620636f6d6d69740a78333520636f6d6d69740a626567696e2061756469742073690a617564697420
+73756d20616363743a0a617564697420636f6d6d69740a76616375756d0a626567696e207833372073690a626567696e
+207833382072630a626567696e20783339207365720a7833372061646420616363743a3030202d32330a783337206164
+6420616363743a30322032330a7833382061646420616363743a3038202d31390a7833382061646420616363743a3036
+2031390a7833392061646420616363743a3030202d33360a7833392061646420616363743a30352033360a7833392063
+6f6d6d69740a78333820636f6d6d69740a78333720636f6d6d69740a626567696e20783430207365720a626567696e20
+7834312072630a626567696e207834322072630a7834302061646420616363743a3030202d33390a7834302061646420
+616363743a30382033390a7834312061646420616363743a3039202d32390a7834312061646420616363743a30342032
+390a7834322061646420616363743a3039202d340a7834322061646420616363743a303220340a78343020636f6d6d69
+740a78343220636f6d6d69740a78343120636f6d6d69740a626567696e207834332072630a626567696e207834342073
+690a626567696e207834352073690a7834332061646420616363743a3031202d31300a7834332061646420616363743a
+30332031300a7834342061646420616363743a3035202d31320a7834342061646420616363743a30342031320a783435
+2061646420616363743a3039202d31390a7834352061646420616363743a30322031390a78343420636f6d6d69740a78
+343320636f6d6d69740a78343520636f6d6d69740a626567696e207834362072630a626567696e20783437207365720a
+626567696e20783438207365720a7834362061646420616363743a3035202d370a7834362061646420616363743a3033
+20370a7834372061646420616363743a3036202d32390a7834372061646420616363743a30352032390a783438206164
+6420616363743a3030202d320a7834382061646420616363743a303920320a78343620636f6d6d69740a78343820636f
+6d6d69740a78343720636f6d6d69740a626567696e207834392073690a626567696e207835302072630a626567696e20
+7835312073690a7834392061646420616363743a3032202d33380a7834392061646420616363743a30382033380a7835
+302061646420616363743a3033202d320a7835302061646420616363743a303920320a7835312061646420616363743a
+3031202d33330a7835312061646420616363743a30332033330a78343920636f6d6d69740a78353020636f6d6d69740a
+78353120636f6d6d69740a626567696e20783532207365720a626567696e207835332073690a626567696e2078353420
+72630a7835322061646420616363743a3036202d32370a7835322061646420616363743a30312032370a783533206164
+6420616363743a3032202d33370a7835332061646420616363743a30392033370a7835342061646420616363743a3030
+202d32340a7835342061646420616363743a30362032340a78353420636f6d6d69740a78353220636f6d6d69740a7835
+3320636f6d6d69740a626567696e2061756469742073690a61756469742073756d20616363743a0a617564697420636f
+6d6d69740a76616375756d0a626567696e207835352073690a626567696e207835362073690a626567696e2078353720
+7365720a7835352061646420616363743a3037202d340a7835352061646420616363743a303820340a78353620616464
+20616363743a3037202d33310a7835362061646420616363743a30352033310a7835372061646420616363743a303120
+2d33350a7835372061646420616363743a30352033350a78353520636f6d6d69740a78353720636f6d6d69740a783536
+20636f6d6d69740a626567696e20783538207365720a626567696e207835392073690a626567696e207836302073690a
+7835382061646420616363743a3038202d360a7835382061646420616363743a303520360a7835392061646420616363
+743a3034202d32360a7835392061646420616363743a30362032360a7836302061646420616363743a3032202d31310a
+7836302061646420616363743a30352031310a78363020636f6d6d69740a78353820636f6d6d69740a78353920636f6d
+6d69740a626567696e207836312072630a626567696e20783632207365720a626567696e20783633207365720a783631
+2061646420616363743a3032202d32340a7836312061646420616363743a30362032340a783632206164642061636374
+3a3039202d32350a7836322061646420616363743a30332032350a7836332061646420616363743a3034202d32310a78
+36332061646420616363743a30302032310a78363120636f6d6d69740a78363320636f6d6d69740a78363220636f6d6d
+69740a626567696e20783634207365720a626567696e207836352072630a626567696e20783636207365720a78363420
+61646420616363743a3035202d360a7836342061646420616363743a303420360a7836352061646420616363743a3037
+202d360a7836352061646420616363743a303420360a7836362061646420616363743a3030202d33330a783636206164
+6420616363743a30392033330a78363620636f6d6d69740a78363420636f6d6d69740a78363520636f6d6d69740a6265
+67696e207836372073690a626567696e20783638207365720a626567696e207836392073690a78363720616464206163
+63743a3039202d31320a7836372061646420616363743a30322031320a7836382061646420616363743a3034202d3238
+0a7836382061646420616363743a30372032380a7836392061646420616363743a3032202d31340a7836392061646420
+616363743a30392031340a78363720636f6d6d69740a78363820636f6d6d69740a78363920636f6d6d69740a62656769
+6e207837302073690a626567696e20783731207365720a626567696e207837322073690a783730206164642061636374
+3a3036202d33350a7837302061646420616363743a30342033350a7837312061646420616363743a3036202d330a7837
+312061646420616363743a303020330a7837322061646420616363743a3031202d31350a783732206164642061636374
+3a30352031350a78373020636f6d6d69740a78373120636f6d6d69740a78373220636f6d6d69740a626567696e206175
+6469742073690a61756469742073756d20616363743a0a617564697420636f6d6d69740a76616375756d0a626567696e
+2061756469740a6175646974207363616e20616363743a0a61756469742073756d20616363743a0a617564697420636f
+6d6d69740a636865636b706f696e740a626567696e206c6174650a6c6174652061646420616363743a303020350a6c61
+74652061646420616363743a3039202d350a6c61746520636f6d6d69740a63726173680a7265636f7665720a62656769
+6e2061756469740a61756469742073756d20616363743a0a617564697420636f6d6d69740a
+"""
+}
+
+// data/7_bad.mvcc
+fn file_6() -> String {
+    """
+23204d697374616b657320746865206c6f61646572207265706f7274732e0a626567696e20743120736e617073686f74
+0a74392067657420780a74312070757420780a7431207075742078202d0a7431206164642078206c6f74730a74656172
+202d330a76616375756d206e6f770a6c61756e63680a74312066726f626e696361746520780a626567696e0a
+"""
+}

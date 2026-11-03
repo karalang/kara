@@ -3320,6 +3320,12 @@ pub struct TypeChecker<'a> {
     /// parentheses first, or the call binds to its last operand
     /// (`*r.to_string()`, B-2026-11-03-24).
     pub(super) loose_expr_spans: FxHashSet<SpanKey>,
+    /// Each `x.as_str()` call with no arguments, by the call's span: the
+    /// receiver's span. Where a `ref String` is wanted and the receiver is a
+    /// `String`, the fix drops the `.as_str()` rather than appending
+    /// `.to_string()` to it, a copy of text the place already holds
+    /// (B-2026-11-03-28).
+    pub(super) as_str_calls: FxHashMap<SpanKey, Span>,
     /// While a method call's arguments are checked: the receiver's
     /// substitution (`Self` and the impl's parameters), which a
     /// function-trait bound on the method (`F: MutFn(own Self.Item) -> U`)
@@ -3969,6 +3975,7 @@ impl<'a> TypeChecker<'a> {
             fn_value_param_types: FxHashMap::default(),
             error_fix_diffs: FxHashMap::default(),
             loose_expr_spans: FxHashSet::default(),
+            as_str_calls: FxHashMap::default(),
             call_bound_receiver_subs: None,
             call_rigid_params: Vec::new(),
             deferred_call_bounds: Vec::new(),
@@ -5035,6 +5042,36 @@ impl<'a> TypeChecker<'a> {
                 .insert(SpanKey::from_span(&e.span), edits);
             e.fix_it = None;
         }
+    }
+
+    /// For a `x.as_str()` passed where a `ref String` is wanted, with `x` a
+    /// `String`: the edit that deletes `.as_str()`, so the call borrows `x`
+    /// (B-2026-11-03-28). None for any other shape, including an owned
+    /// `String` wanted, where dropping it would move `x`.
+    fn drop_as_str_fix(&self, expected: &Type, span: Span) -> Option<FixIt> {
+        if !matches!(expected, Type::Ref(_)) {
+            return None;
+        }
+        let object = self.as_str_calls.get(&SpanKey::from_span(&span))?;
+        let receiver = self.expr_types.get(&SpanKey::from_span(object))?;
+        let receiver = inference::resolve_type_var_top(receiver, &self.env.substitutions);
+        let owned = match &receiver {
+            Type::Ref(t) | Type::MutRef(t) => t.as_ref(),
+            t => t,
+        };
+        if *owned != Type::Str {
+            return None;
+        }
+        let start = object.offset + object.length;
+        Some(FixIt {
+            span: Span {
+                line: object.line,
+                column: object.column,
+                offset: start,
+                length: span.offset + span.length - start,
+            },
+            replacement: String::new(),
+        })
     }
 
     pub(super) fn type_error_with_fix_it(
@@ -7757,6 +7794,19 @@ impl<'a> TypeChecker<'a> {
                 Type::Named { ref name, ref args } if name == "StringSlice" && args.is_empty()
             );
             if *want == Type::Str && is_view {
+                if let Some(fix) = self.drop_as_str_fix(expected, span) {
+                    self.type_error_with_fix_it(
+                        format!(
+                            "expected '{}', found 'Str': drop the `.as_str()`, and the \
+                             `String` itself is borrowed",
+                            type_display(expected)
+                        ),
+                        span,
+                        TypeErrorKind::TypeMismatch,
+                        fix,
+                    );
+                    return false;
+                }
                 self.type_error_with_fix_it(
                     format!(
                         "expected '{}', found 'Str': `.to_string()` copies the text into a \

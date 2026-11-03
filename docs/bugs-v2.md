@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 101 |
+| diagnostics | 102 |
 | false-positive | 97 |
 | perf | 86 |
 | missing-feature | 64 |
@@ -75,7 +75,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 168 |
+| typecheck | 169 |
 | mir | 103 |
 | mir-llvm | 100 |
 | cli | 51 |
@@ -105,6 +105,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-03-13 | 2026-11-03 | ownership | low | `String.from_utf8(v)` moves its argument, though strings.md declares `from_utf8(bytes: Slice[u8])`, a borrowed parameter: calling it twice on one local `Vec[u8]` or byte array is refused with `value 'v' moved here, used again here` | — |
 | B-2026-11-03-15 | 2026-11-03 | mir+mir-llvm | low | A negative capacity: `String.with_capacity(-3)` gives an empty string on the interpreter and panics with a bare `explicit panic` on the compiled backend (and ASan lane); `Vec.with_capacity(-3)` panics `explicit panic` on both, while `Vec.filled(-3, v)` is empty and `reserve(n <= 0)` does nothing | — |
 | B-2026-11-03-16 | 2026-11-03 | mir+mir-llvm | low | `substring` with a negative start gives "" instead of clamping the start to 0 as strings.md says ("Out-of-range, negative or inverted bounds saturate"): `"hello".substring(-5, 2)` is "" (want "he"), `"hello".substring(-1)` is "" (want "hello"), `"日本語".substring(-2, 3)` is "" (want "日"); several pins hold the "" and flip with the fix | — |
+| B-2026-11-03-28 | 2026-11-03 | typecheck | low | `x.as_str()` passed where a `ref String` is wanted (`["rc", "si", "ser"].contains(w[2].as_str())`, `w: Vec[String]`) gets the fix that appends `.to_string()`, so `karac fix` writes `w[2].as_str().to_string()`, a copy of text the place already holds, where dropping the `.as_str()` borrows the `String` itself | — |
 
 ### Relocated
 

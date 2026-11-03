@@ -8234,8 +8234,21 @@ impl<'a> super::TypeChecker<'a> {
     }
 
     /// Remembers an expression that binds looser than a postfix `.`, for
-    /// `parenthesize_suffix_fixes` (B-2026-11-03-24).
+    /// `parenthesize_suffix_fixes` (B-2026-11-03-24), and a `.as_str()`
+    /// call's receiver, for `drop_as_str_fix` (B-2026-11-03-28).
     fn note_loose_expr(&mut self, expr: &Expr) {
+        if let ExprKind::MethodCall {
+            object,
+            method,
+            args,
+            ..
+        } = &expr.kind
+        {
+            if method == "as_str" && args.is_empty() {
+                self.as_str_calls
+                    .insert(SpanKey::from_span(&expr.span), object.span);
+            }
+        }
         if matches!(
             expr.kind,
             ExprKind::Unary { .. }
