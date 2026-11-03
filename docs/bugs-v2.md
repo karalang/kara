@@ -59,7 +59,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | false-positive | 92 |
-| diagnostics | 90 |
+| diagnostics | 91 |
 | perf | 85 |
 | missing-feature | 63 |
 | soundness | 41 |
@@ -75,7 +75,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 156 |
+| typecheck | 157 |
 | mir | 100 |
 | mir-llvm | 97 |
 | cli | 49 |
@@ -109,6 +109,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-02-7 | 2026-11-02 | mir-llvm | medium | Katas 252 and 253 (meeting rooms I and II), dominated by sorting a fresh copy of 120k intervals by start each round, run 1.14-1.20x legacy's instructions on the M5 (arm64) MIR backend; on x86 they measure 0.97x and 1.02x, so the gap is arm64-only and needs an arm64 measurement | — |
 | B-2026-11-02-10 | 2026-11-02 | mir-llvm | low | Kata 276's par lane runs 1.44x slower than its 2026-08-28 feed while its comparators moved 1.06-1.09x and its seq lane held, so it scales 4.6x over seq where it scaled ~6.0x; there is no matched legacy par baseline | — |
 | B-2026-11-03-2 | 2026-11-03 | mir-llvm | low | Kata 302's default build no longer auto-parallelizes on the MIR backend (0 task spawns; par lane 254.7 ms at 99.6% CPU against seq 251.9 ms), where the 2026-08-28 build fired at 332% CPU for only a 1.03x gain | — |
+| B-2026-11-03-5 | 2026-11-03 | typecheck | low | A method call on a function value (`f.clone()`, `f.foo()`) checks to an error with no diagnostic; MIR then reports "a type that failed to check is not lowered yet" | — |
 
 ### Relocated
 

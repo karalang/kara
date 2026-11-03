@@ -120,3 +120,41 @@ fn a_move_closure_is_told_to_drop_move() {
     assert!(check("move-fixed", &fixed).is_empty());
     runs("move-fixed", &fixed, "3\n");
 }
+
+/// A method call on a function value checked to an error with no
+/// diagnostic, and MIR then said "a type that failed to check is not
+/// lowered yet" (B-2026-11-03-5). `clone` is told the move-only rule;
+/// any other method that a function value has none.
+#[test]
+fn a_method_on_a_function_value_is_named() {
+    for (tag, call, needle) in [
+        (
+            "fn-clone",
+            "f.clone()",
+            "a value of function type 'Fn(i64) -> i64' is move-only; it cannot be cloned",
+        ),
+        (
+            "fn-other",
+            "f.foo()",
+            "no method 'foo' on function type 'Fn(i64) -> i64': a function value has no methods",
+        ),
+    ] {
+        let src = format!(
+            "fn main() {{\n    let f: Fn(i64) -> i64 = |x: i64| x + 1;\n    let g = {call};\n    println(g(2));\n}}\n"
+        );
+        let found = check(tag, &src);
+        assert_eq!(found.len(), 1, "{tag}: {found:?}");
+        let (line, col, msg, _) = &found[0];
+        assert_eq!((*line, *col), (3, 13), "{tag}: {msg}");
+        assert!(
+            msg.contains(needle) && !msg.contains("not lowered"),
+            "{tag}: {msg}"
+        );
+    }
+    // The copy the clone hint names: a closure literal with only `Copy`
+    // captures is copied by assignment (core semantics §1.1).
+    let copied =
+        "fn main() {\n    let f = |x: i64| x + 1;\n    let g = f;\n    println(f(1) + g(2));\n}\n";
+    assert!(check("copied", copied).is_empty());
+    runs("copied", copied, "5\n");
+}

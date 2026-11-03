@@ -2005,6 +2005,44 @@ impl<'a> super::TypeChecker<'a> {
         if let Some(ty) = self.try_dyn_receiver_method(&obj_ty, method, args, span) {
             return ty;
         }
+        // A function value has no methods: it is called. It fell through
+        // every arm below to an `Error` with no diagnostic, which MIR then
+        // reported as "a type that failed to check is not lowered yet"
+        // (B-2026-11-03-5). `clone` gets the move-only rule
+        // (design.md § Escaping function values).
+        let fn_recv = match &obj_ty {
+            Type::Ref(t) | Type::MutRef(t) => t.as_ref(),
+            t => t,
+        };
+        if matches!(fn_recv, Type::Function { .. } | Type::OnceFunction { .. }) {
+            for arg in args {
+                self.infer_expr(&arg.value);
+            }
+            let shown = type_display(fn_recv);
+            if method == "clone" {
+                self.type_error(
+                    format!(
+                        "a value of function type '{shown}' is move-only; it cannot be \
+                         cloned (design.md § Escaping function values). A closure literal \
+                         whose captures are all `Copy` is copied by assignment \
+                         (`let g = f;`); to give one function many holders, wrap it in a \
+                         `shared struct`"
+                    ),
+                    *span,
+                    TypeErrorKind::TraitBoundNotSatisfied,
+                );
+            } else {
+                self.type_error(
+                    format!(
+                        "no method '{method}' on function type '{shown}': a function \
+                         value has no methods; call it as `f(..)`"
+                    ),
+                    *span,
+                    TypeErrorKind::NoMethodFound,
+                );
+            }
+            return Type::Error;
+        }
 
         // A library type's method with a Kāra body (redesign A2) is typed
         // through that body's signature, so the call records the callee and
