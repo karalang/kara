@@ -113,7 +113,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-02-36 | 2026-11-02 | effect | medium | Two `par` branches calling a generic `fn ap[F: Fn(i64) -> i64](x: i64, f: F)` with pure closures or a pure named fn conflict as 'unknown (a function value that cannot be resolved)'; §12 computes a generic call's effects on the monomorphised instance, and the non-generic `f: Fn(i64) -> i64` form is accepted | — |
 | B-2026-11-02-37 | 2026-11-02 | mir+mir-llvm | high | A string or integer LITERAL stored into a library `ref` slot (`v.push("lit")` on `Vec[ref String]`, `tx.send("lit")` / `tx.send(7)` on `Sender[ref T]`) has no §5.3 static promotion: interp leaks, ASan global-buffer-overflow, llvm prints nothing or OOM | — |
 | B-2026-11-02-38 | 2026-11-02 | mir-llvm | high | llvm natives for `ref` element types: `Vec[ref String].fill(r)` panics out of memory (ASan global-buffer-overflow), and iterating a `SortedSet[ref String]` prints nothing while `len()` is 1 | — |
-| B-2026-11-02-39 | 2026-11-02 | ownership | low | A closure in an element of a let-bound tuple is treated as non-escaping by `karac check` (core_escape gives tuple elements tail_of(pos)), so a non-Copy capture read after it passes check and is refused later by MIR's move check, with the wrong error | — |
 
 ### Relocated
 
@@ -578,6 +577,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-02-30 | typecheck | medium | Two `TaskGroup` tasks that write DISJOINT fields of one local (`p.x` and `p.y`) are refused: 'a task of `g` captures `p` by `mut ref`, which no other… | 77d7baa2b1 |
 | B-2026-11-02-31 | typecheck | low | A non-escaping `Fn` parameter may be captured by a closure the callee returns (`fn wrap(f: Fn() -> i64) -> Fn() -> i64 { \|\| f() + 1 }`); §9.3 lets th… | 77d7baa2b1 |
 | B-2026-11-02-33 | effect | low | Coercing a struct whose trait method uses a provider-rooted resource into `dyn At` reports E_NO_PROVIDER ('no provider for Clk .. | 55c64b1eca |
+| B-2026-11-02-39 | ownership | low | A closure in an element of a let-bound tuple is treated as non-escaping by `karac check` (core_escape gives tuple elements tail_of(pos)), so a non-Co… | 59ca8f5a88 |
 
 </details>
 
