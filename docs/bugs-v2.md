@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 94 |
+| diagnostics | 95 |
 | false-positive | 92 |
 | perf | 86 |
 | missing-feature | 63 |
@@ -75,7 +75,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 160 |
+| typecheck | 161 |
 | mir | 100 |
 | mir-llvm | 97 |
 | cli | 49 |
@@ -588,6 +588,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-03-4 | parser | low | `move \|..\|` is refused with 'use `own \|...\|` for closure capture-by-value', naming a capture prefix core semantics §9.6 removed (and refuses as E0519) | f907cfec34 |
 | B-2026-11-03-5 | typecheck | low | A method call on a function value (`f.clone()`, `f.foo()`) checks to an error with no diagnostic; MIR then reports "a type that failed to check is no… | ea349dd9ce |
 | B-2026-11-03-10 | typecheck | low | `karac fix` left two edits its diagnostics name unapplied: `==` / `!=` on a type without `PartialEq` says "add #[derive(PartialEq)]" with no fix-it (… | 67f5b2209d |
+| B-2026-11-03-11 | typecheck | low | `s + t` with a `Str` on the left said only "type 'Str' does not implement trait Add", with no hint and no `karac fix` edit, where `String + Str` alre… | 592000a587 |
 
 </details>
 
