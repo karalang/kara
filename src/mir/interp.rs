@@ -751,6 +751,8 @@ fn run_with(
         spare_bufs: Vec::new(),
         callees: Default::default(),
         fast_callees: Vec::new(),
+        erased_callees: Vec::new(),
+        erased_index: Default::default(),
         decoded: Default::default(),
         droppable: Default::default(),
         heap: Vec::new(),
@@ -1116,6 +1118,15 @@ struct Interp<'a> {
     /// The functions a decoded call ([`fast::Term::Call`]) names, by the
     /// index it holds.
     fast_callees: Vec<(&'a str, &'a Body)>,
+    /// The closure bodies a decoded erased call ([`fast::Term::CallErased`])
+    /// has found by name: each with whether it takes its environment by
+    /// reference, and a bit for each parameter after it that is not a
+    /// reference (a reference argument there is read through first).
+    erased_callees: Vec<(&'a str, &'a Body, bool, u64)>,
+    /// Where in `erased_callees` the name an erased value holds was last
+    /// found, keyed by that name's address and length (checked against
+    /// the name on each use, as an address can be reused).
+    erased_index: rustc_hash::FxHashMap<(usize, usize), usize>,
     /// Each body's decoded scalar steps ([`fast`]), keyed by its address,
     /// made on its first call.
     decoded: rustc_hash::FxHashMap<usize, std::rc::Rc<[fast::Block]>>,
@@ -12419,6 +12430,15 @@ impl<'a> Interp<'a> {
                     dst,
                     target,
                 } => match self.fast_call(callee, args, dst, target) {
+                    Some(next) => next,
+                    None => self.terminator(body, &block.terminator.kind, strict),
+                },
+                fast::Term::CallErased {
+                    f,
+                    ref args,
+                    dst,
+                    target,
+                } => match self.fast_erased_call(f, args, dst, target) {
                     Some(next) => next,
                     None => self.terminator(body, &block.terminator.kind, strict),
                 },

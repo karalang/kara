@@ -20,6 +20,12 @@ pub(super) enum Src {
     Field(u32, u32),
     /// What a local reference points at, copied.
     Deref(u32),
+    /// A scalar field of the tuple, struct or closure environment a local
+    /// reference points at, copied: `(*l).f` (B-2026-11-03-9).
+    DerefField(u32, u32),
+    /// What a reference held in such a field points at, copied:
+    /// `*(*l).f`, a closure's capture by reference.
+    DerefFieldDeref(u32, u32),
     /// A constant, worked out when the body was decoded.
     Const(Scalar),
 }
@@ -61,6 +67,8 @@ pub(super) enum Arg {
     Scalar(Src),
     /// `copy (*l)`, a tuple of scalars behind a local reference.
     DerefTuple(u32),
+    /// A bare local of a reference type; `true` when it is moved.
+    Ref(u32, bool),
 }
 
 /// One statement, decoded.
@@ -145,6 +153,37 @@ pub(super) enum Op {
     Live(u32),
     /// `StorageDead(l)` of a scalar local, which owns nothing.
     DeadPlain(u32),
+    /// `StorageDead(l)` of a local of a type that owns nothing to drop: a
+    /// reference, or an enum of them (B-2026-11-03-9).
+    DeadNoDrop(u32),
+    /// `(*dst).field = src`: a scalar stored in a field of the tuple or
+    /// struct a local reference points at.
+    StoreField { dst: u32, field: u32, src: Src },
+    /// `dst = &(*src).field` (or `&mut`): a reference to a field of what a
+    /// local reference points at.
+    RefField { dst: u32, src: u32, field: u32 },
+    /// `dst = &(*(*src).field)`: the reference held in that field, again.
+    RefFieldDeref { dst: u32, src: u32, field: u32 },
+    /// `dst = discriminant(src)` of an enum local held in place.
+    Discr { dst: u32, src: u32 },
+    /// `dst = copy (src as variant).field`, a scalar or a reference.
+    VariantField {
+        dst: u32,
+        src: u32,
+        variant: u32,
+        field: u32,
+    },
+    /// `dst = Enum.variant { parts.. }` (`variant` is `Some`) or
+    /// `dst = Struct { parts.. }` (`None`), into a local whose type owns
+    /// nothing to drop.
+    Adt {
+        dst: u32,
+        variant: Option<u32>,
+        parts: Box<[Arg]>,
+    },
+    /// `dst = copy src` (or `move`) of a local whose type owns nothing to
+    /// drop: an enum or aggregate of scalars and references.
+    CopyNoDrop { dst: u32, src: u32, moved: bool },
     /// Run the general statement.
     General,
 }
@@ -194,6 +233,29 @@ pub(super) enum Term {
         args: Box<[Arg]>,
         dst: u32,
         target: BasicBlock,
+    },
+    /// `dst = (copy f)(args..) -> target`, a call through a reference to
+    /// an erased function value (an adaptor's `(self.pred)(x)`), whose
+    /// result owns nothing to drop (B-2026-11-03-9). Anything but a closure
+    /// with a body that borrows its environment is left to the general
+    /// terminator.
+    CallErased {
+        f: u32,
+        args: Box<[Arg]>,
+        dst: u32,
+        target: BasicBlock,
+    },
+    /// `dst = Vec[T].get(recv, index) -> target` with an `Option[ref T]`
+    /// result whose variants are `some` and `none`: a reference to the
+    /// element, or `None`.
+    VecGet {
+        dst: u32,
+        recv: u32,
+        moved: bool,
+        index: Src,
+        target: BasicBlock,
+        some: u32,
+        none: u32,
     },
     /// A call of a library function with no body, whose result has type
     /// `ret`: run without looking the name up among the bodies.
@@ -300,6 +362,25 @@ fn store_checked_in_place(slot: &mut Value, v: &Value, overflow: bool) -> bool {
         }
     }
     false
+}
+
+/// Copies `fs` into `buf` when each part is an initialized scalar or a
+/// reference; `false`, with `buf` emptied, otherwise.
+#[inline(always)]
+fn shallow_copy(fs: &[Value], buf: &mut Vec<Value>) -> bool {
+    for f in fs {
+        match f {
+            Value::Ref(_) => buf.push(f.clone()),
+            f => match Scalar::of(f) {
+                Some(x) => buf.push(x.value()),
+                None => {
+                    buf.clear();
+                    return false;
+                }
+            },
+        }
+    }
+    true
 }
 
 /// A type whose values are plain scalars.
@@ -456,7 +537,7 @@ impl<'a> Interp<'a> {
             }
             let Some(args) = args
                 .iter()
-                .map(|a| self.decode_arg(body, a))
+                .map(|a| self.decode_part(body, a))
                 .collect::<Option<Box<[Arg]>>>()
             else {
                 continue;
@@ -501,11 +582,33 @@ impl<'a> Interp<'a> {
         dst: u32,
         target: BasicBlock,
     ) -> Option<R<Option<BasicBlock>>> {
+        let vals = self.read_args(args)?;
+        let (name, body) = self.fast_callees[callee as usize];
+        let ret = match self.call_body(name, body, vals) {
+            Ok(v) => v,
+            Err(e) => return Some(Err(e)),
+        };
+        let old = std::mem::replace(&mut self.locals()[dst as usize], ret);
+        self.recycle_value(old);
+        Some(Ok(Some(target)))
+    }
+
+    /// The values of decoded arguments (or aggregate parts), each read
+    /// and then, once all of them could be, moved out when the operand
+    /// moves; `None`, with nothing changed, when one cannot be read the
+    /// quick way.
+    fn read_args(&mut self, args: &[Arg]) -> Option<Vec<Value>> {
         let mut vals = self.small_buf();
         for a in args {
             let v = match *a {
                 Arg::Scalar(src) => self.peek(src).map(Scalar::value),
                 Arg::DerefTuple(l) => self.deref_tuple(l),
+                Arg::Ref(l, moved) => match self.frames.last()?.locals.get(l as usize) {
+                    // A moved reference is taken below, not copied.
+                    Some(Value::Ref(_)) if moved => Some(Value::Uninit),
+                    Some(Value::Ref(a)) => Some(Value::Ref(a.clone())),
+                    _ => None,
+                },
             };
             match v {
                 Some(v) => vals.push(v),
@@ -518,19 +621,16 @@ impl<'a> Interp<'a> {
                 }
             }
         }
-        for a in args {
-            if let Arg::Scalar(src) = *a {
-                self.take(src);
+        for (a, v) in args.iter().zip(vals.iter_mut()) {
+            match *a {
+                Arg::Scalar(src) => self.take(src),
+                Arg::Ref(l, true) => {
+                    *v = std::mem::replace(&mut self.locals()[l as usize], Value::Uninit);
+                }
+                _ => {}
             }
         }
-        let (name, body) = self.fast_callees[callee as usize];
-        let ret = match self.call_body(name, body, vals) {
-            Ok(v) => v,
-            Err(e) => return Some(Err(e)),
-        };
-        let old = std::mem::replace(&mut self.locals()[dst as usize], ret);
-        self.recycle_value(old);
-        Some(Ok(Some(target)))
+        Some(vals)
     }
 
     /// A copy of the tuple of scalars local `l` refers to, in a reused
@@ -556,6 +656,20 @@ impl<'a> Interp<'a> {
         } else {
             self.give_back(buf);
             None
+        }
+    }
+
+    /// Whether `ty` is a reference to a tuple, a struct or a closure
+    /// environment: an aggregate held in place (not behind a `shared`
+    /// handle, whose fields the general step reaches through the box).
+    fn aggregate_behind(&self, ty: Ty) -> bool {
+        let Some(to) = self.tys.pointee(ty) else {
+            return false;
+        };
+        match self.tys.kind(to) {
+            TyKind::Tuple(_) | TyKind::Closure(..) => true,
+            TyKind::Adt(a) => !self.tys.adt(a).is_enum,
+            _ => false,
         }
     }
 
@@ -586,6 +700,20 @@ impl<'a> Interp<'a> {
                         let to = self.tys.pointee(local.ty)?;
                         plain_ty(self.tys, to).then_some((Src::Deref(p.local.0), to))
                     }
+                    [ProjElem::Deref, ProjElem::Field(f, fty)]
+                        if copy && self.aggregate_behind(local.ty) && plain_ty(self.tys, *fty) =>
+                    {
+                        Some((Src::DerefField(p.local.0, f.0), *fty))
+                    }
+                    [ProjElem::Deref, ProjElem::Field(f, fty), ProjElem::Deref]
+                        if copy && self.aggregate_behind(local.ty) =>
+                    {
+                        let to = match self.tys.kind(*fty) {
+                            TyKind::Ref(t) | TyKind::MutRef(t) => t,
+                            _ => return None,
+                        };
+                        plain_ty(self.tys, to).then_some((Src::DerefFieldDeref(p.local.0, f.0), to))
+                    }
                     _ => None,
                 }
             }
@@ -601,6 +729,9 @@ impl<'a> Interp<'a> {
             TyKind::Int(it) => Some(it),
             _ => None,
         };
+        if let Some(op) = self.decode_place_step(body, s) {
+            return Some(op);
+        }
         Some(match s {
             StatementKind::Assign(p, Rvalue::Use(o))
                 if matches!(p.projection.as_slice(), [ProjElem::Deref])
@@ -711,8 +842,150 @@ impl<'a> Interp<'a> {
             StatementKind::StorageDead(l) if plain_ty(self.tys, body.local(*l).ty) => {
                 Op::DeadPlain(l.0)
             }
+            StatementKind::StorageDead(l) if !self.needs_drop(body.local(*l).ty) => {
+                Op::DeadNoDrop(l.0)
+            }
             _ => return None,
         })
+    }
+
+    /// The steps through references, fields and enum variants that an
+    /// iterator adaptor's `next` is made of (B-2026-11-03-9): each into a
+    /// bare local whose type owns nothing to drop, so overwriting it frees
+    /// nothing the general step would have checked.
+    fn decode_place_step(&self, body: &Body, s: &StatementKind) -> Option<Op> {
+        let StatementKind::Assign(p, rv) = s else {
+            return None;
+        };
+        // `(*l).f = scalar`.
+        if let ([ProjElem::Deref, ProjElem::Field(f, fty)], Rvalue::Use(o)) =
+            (p.projection.as_slice(), rv)
+        {
+            if !self.aggregate_behind(body.local(p.local).ty) || !plain_ty(self.tys, *fty) {
+                return None;
+            }
+            let (src, _) = self.decode_src(body, o)?;
+            return Some(Op::StoreField {
+                dst: p.local.0,
+                field: f.0,
+                src,
+            });
+        }
+        if !p.projection.is_empty() || self.needs_drop(body.local(p.local).ty) {
+            return None;
+        }
+        let dst = p.local.0;
+        Some(match rv {
+            Rvalue::Use(o @ (Operand::Copy(q) | Operand::Move(q)))
+                if q.projection.is_empty() && !plain_ty(self.tys, body.local(q.local).ty) =>
+            {
+                if self.needs_drop(body.local(q.local).ty) {
+                    return None;
+                }
+                Op::CopyNoDrop {
+                    dst,
+                    src: q.local.0,
+                    moved: matches!(o, Operand::Move(_)),
+                }
+            }
+            Rvalue::Ref(_, q) => {
+                if !self.aggregate_behind(body.local(q.local).ty) {
+                    return None;
+                }
+                match q.projection.as_slice() {
+                    [ProjElem::Deref, ProjElem::Field(f, _)] => Op::RefField {
+                        dst,
+                        src: q.local.0,
+                        field: f.0,
+                    },
+                    [ProjElem::Deref, ProjElem::Field(f, fty), ProjElem::Deref]
+                        if self.tys.pointee(*fty).is_some() =>
+                    {
+                        Op::RefFieldDeref {
+                            dst,
+                            src: q.local.0,
+                            field: f.0,
+                        }
+                    }
+                    _ => return None,
+                }
+            }
+            Rvalue::Discriminant(q) if q.projection.is_empty() => {
+                let TyKind::Adt(a) = self.tys.kind(body.local(q.local).ty) else {
+                    return None;
+                };
+                if !self.tys.adt(a).is_enum {
+                    return None;
+                }
+                Op::Discr {
+                    dst,
+                    src: q.local.0,
+                }
+            }
+            Rvalue::Use(Operand::Copy(q)) => {
+                let [ProjElem::Downcast(v), ProjElem::Field(f, fty)] = q.projection.as_slice()
+                else {
+                    return None;
+                };
+                if !matches!(self.tys.kind(body.local(q.local).ty), TyKind::Adt(_))
+                    || !(plain_ty(self.tys, *fty) || self.tys.pointee(*fty).is_some())
+                {
+                    return None;
+                }
+                Op::VariantField {
+                    dst,
+                    src: q.local.0,
+                    variant: v.0,
+                    field: f.0,
+                }
+            }
+            Rvalue::Aggregate(AggregateKind::Adt { ty, variant }, ops) => {
+                let TyKind::Adt(a) = self.tys.kind(*ty) else {
+                    return None;
+                };
+                let parts = ops
+                    .iter()
+                    .map(|o| self.decode_part(body, o))
+                    .collect::<Option<Box<[Arg]>>>()?;
+                Op::Adt {
+                    dst,
+                    variant: self.tys.adt(a).is_enum.then_some(variant.0),
+                    parts,
+                }
+            }
+            _ => return None,
+        })
+    }
+
+    /// The `Some` and `None` variants of `ty` when it is an `Option` of a
+    /// reference.
+    fn option_of_ref(&self, ty: Ty) -> Option<(u32, u32)> {
+        let TyKind::Adt(a) = self.tys.kind(ty) else {
+            return None;
+        };
+        let adt = self.tys.adt(a);
+        let at = |n: &str| adt.variants.iter().position(|v| v.name == n);
+        let (some, none) = (at("Some")? as u32, at("None")? as u32);
+        self.tys.pointee(self.tys.field_ty(ty, Some(some), 0)?)?;
+        Some((some, none))
+    }
+
+    /// A part of a decoded aggregate or a decoded call's argument: a
+    /// scalar, a tuple of scalars behind a reference, or a reference
+    /// local.
+    fn decode_part(&self, body: &Body, o: &Operand) -> Option<Arg> {
+        if let Some(a) = self.decode_arg(body, o) {
+            return Some(a);
+        }
+        match o {
+            Operand::Copy(p) | Operand::Move(p)
+                if p.projection.is_empty()
+                    && self.tys.pointee(body.local(p.local).ty).is_some() =>
+            {
+                Some(Arg::Ref(p.local.0, matches!(o, Operand::Move(_))))
+            }
+            _ => None,
+        }
     }
 
     fn decode_term(&self, body: &Body, t: &TerminatorKind) -> Option<Term> {
@@ -763,6 +1036,65 @@ impl<'a> Interp<'a> {
                     moved: matches!(args[0], Operand::Move(_)),
                     index,
                     target: *target,
+                }
+            }
+            TerminatorKind::Call {
+                func: Operand::Copy(fp),
+                args,
+                destination,
+                target: Some(target),
+                unwind: UnwindAction::Abort,
+            } if fp.projection.is_empty()
+                && destination.projection.is_empty()
+                && self.tys.pointee(body.local(fp.local).ty).is_some()
+                && !self.needs_drop(body.local(destination.local).ty) =>
+            {
+                Term::CallErased {
+                    f: fp.local.0,
+                    args: args
+                        .iter()
+                        .map(|a| self.decode_part(body, a))
+                        .collect::<Option<Box<[Arg]>>>()?,
+                    dst: destination.local.0,
+                    target: *target,
+                }
+            }
+            TerminatorKind::Call {
+                func:
+                    Operand::Const(Const {
+                        kind: ConstKind::FnDef(inst),
+                        ..
+                    }),
+                args,
+                destination,
+                target: Some(target),
+                unwind: UnwindAction::Abort,
+            } if destination.projection.is_empty()
+                && inst.name.starts_with("Vec[")
+                && inst.name.ends_with("].get")
+                && !inst.name.starts_with("Vec[ref ")
+                && !inst.name.starts_with("Vec[mut ref ")
+                && !self.program.bodies.contains_key(&inst.name)
+                && self
+                    .option_of_ref(body.local(destination.local).ty)
+                    .is_some() =>
+            {
+                let [Operand::Copy(r) | Operand::Move(r), index] = args.as_slice() else {
+                    return None;
+                };
+                if !r.projection.is_empty() {
+                    return None;
+                }
+                let (index, _) = self.decode_src(body, index)?;
+                let (some, none) = self.option_of_ref(body.local(destination.local).ty)?;
+                Term::VecGet {
+                    dst: destination.local.0,
+                    recv: r.local.0,
+                    moved: matches!(args[0], Operand::Move(_)),
+                    index,
+                    target: *target,
+                    some,
+                    none,
                 }
             }
             TerminatorKind::Call {
@@ -824,6 +1156,14 @@ impl<'a> Interp<'a> {
         self.finish_call(body, destination, target, ret, name)
     }
 
+    /// `dst = v`, for a local whose type owns nothing to drop: what it held
+    /// goes, its buffer kept for reuse.
+    #[inline(always)]
+    fn set_local(&mut self, dst: u32, v: Value) {
+        let old = std::mem::replace(&mut self.locals()[dst as usize], v);
+        self.recycle_value(old);
+    }
+
     #[inline(always)]
     fn locals(&mut self) -> &mut Vec<Value> {
         &mut self.frames.last_mut().expect("frame").locals
@@ -858,7 +1198,24 @@ impl<'a> Interp<'a> {
                 Value::Ref(a) => Scalar::of(self.slot_ref(a).ok()?),
                 _ => None,
             },
+            Src::DerefField(l, f) => Scalar::of(self.deref_field(l, f)?),
+            Src::DerefFieldDeref(l, f) => match self.deref_field(l, f)? {
+                Value::Ref(a) => Scalar::of(self.slot_ref(a).ok()?),
+                _ => None,
+            },
             Src::Const(c) => Some(c),
+        }
+    }
+
+    /// Field `f` of the aggregate local `l`'s reference points at.
+    #[inline(always)]
+    fn deref_field(&self, l: u32, f: u32) -> Option<&Value> {
+        match self.frames.last()?.locals.get(l as usize)? {
+            Value::Ref(a) => match self.slot_ref(a).ok()? {
+                Value::Agg(fs) => fs.get(f as usize),
+                _ => None,
+            },
+            _ => None,
         }
     }
 
@@ -1088,6 +1445,126 @@ impl<'a> Interp<'a> {
                 Value::overwrite(&mut self.locals()[l as usize], Value::Uninit);
                 true
             }
+            Op::DeadNoDrop(l) => {
+                let old = std::mem::replace(&mut self.locals()[l as usize], Value::Uninit);
+                self.recycle_value(old);
+                true
+            }
+            Op::StoreField { dst, field, src } => {
+                let Some(v) = self.peek(src) else {
+                    return false;
+                };
+                let Some(Value::Ref(a)) =
+                    self.frames.last().and_then(|f| f.locals.get(dst as usize))
+                else {
+                    return false;
+                };
+                let a = a.clone();
+                match self.slot_mut(&a) {
+                    Ok(Value::Agg(fs)) => match fs.get_mut(field as usize) {
+                        Some(slot) if slot.is_plain() => Value::overwrite(slot, v.value()),
+                        _ => return false,
+                    },
+                    _ => return false,
+                }
+                self.take(src);
+                true
+            }
+            Op::RefField { dst, src, field } => {
+                let Some(Value::Ref(a)) =
+                    self.frames.last().and_then(|f| f.locals.get(src as usize))
+                else {
+                    return false;
+                };
+                // The general step walks to an aggregate that has the field.
+                match self.slot_ref(a) {
+                    Ok(Value::Agg(fs)) if (field as usize) < fs.len() => {}
+                    _ => return false,
+                }
+                let r = Value::Ref(a.child(u64::from(field)));
+                self.set_local(dst, r);
+                true
+            }
+            Op::RefFieldDeref { dst, src, field } => {
+                let Some(Value::Ref(b)) = self.deref_field(src, field) else {
+                    return false;
+                };
+                let r = Value::Ref(b.clone());
+                self.set_local(dst, r);
+                true
+            }
+            Op::Discr { dst, src } => {
+                let locals = self.locals();
+                let Value::Variant(v, _) = locals[src as usize] else {
+                    return false;
+                };
+                Value::overwrite(&mut locals[dst as usize], Value::Int(i128::from(v)));
+                true
+            }
+            Op::VariantField {
+                dst,
+                src,
+                variant,
+                field,
+            } => {
+                let locals = self.locals();
+                let v = match &locals[src as usize] {
+                    Value::Variant(cur, fs) if *cur == variant => match fs.get(field as usize) {
+                        Some(v @ Value::Ref(_)) => v.clone(),
+                        Some(v) => match Scalar::of(v) {
+                            Some(x) => x.value(),
+                            None => return false,
+                        },
+                        None => return false,
+                    },
+                    _ => return false,
+                };
+                self.set_local(dst, v);
+                true
+            }
+            Op::CopyNoDrop { dst, src, moved } => {
+                let v = if moved {
+                    // The general move refuses a value not wholly there.
+                    if !self.locals()[src as usize].fully_init() {
+                        return false;
+                    }
+                    std::mem::replace(&mut self.locals()[src as usize], Value::Uninit)
+                } else {
+                    let mut buf = self.small_buf();
+                    let v = match &self.locals()[src as usize] {
+                        Value::Variant(k, fs) if shallow_copy(fs, &mut buf) => {
+                            Value::Variant(*k, std::mem::take(&mut buf))
+                        }
+                        Value::Agg(fs) if shallow_copy(fs, &mut buf) => {
+                            Value::Agg(std::mem::take(&mut buf))
+                        }
+                        v @ Value::Ref(_) => v.clone(),
+                        _ => {
+                            self.give_back(buf);
+                            return false;
+                        }
+                    };
+                    self.give_back(buf);
+                    v
+                };
+                self.set_local(dst, v);
+                true
+            }
+            Op::Adt {
+                dst,
+                variant,
+                ref parts,
+            } => {
+                let Some(vals) = self.read_args(parts) else {
+                    return false;
+                };
+                let v = match variant {
+                    Some(k) => Value::Variant(k, vals),
+                    None => Value::Agg(vals),
+                };
+                self.set_local(dst, v);
+                true
+            }
             Op::General => false,
         }
     }
@@ -1195,8 +1672,189 @@ impl<'a> Interp<'a> {
                 });
                 Some(target)
             }
+            (
+                &Term::VecGet {
+                    dst,
+                    recv,
+                    moved,
+                    index,
+                    target,
+                    some,
+                    none,
+                },
+                _,
+            ) => {
+                let i = self.peek_int(index)?;
+                let id = self.box_of_local(recv)?;
+                let found = match self.heap.get(id.0 as usize) {
+                    Some(Some(obj)) => match &obj.value {
+                        // An element that is itself a reference is the
+                        // result (`collapse_ref_of_ref`): the general call.
+                        Value::Agg(fs) => match usize::try_from(i).ok().and_then(|i| fs.get(i)) {
+                            Some(Value::Ref(_)) => return None,
+                            Some(_) => true,
+                            None => false,
+                        },
+                        _ => return None,
+                    },
+                    _ => return None,
+                };
+                if moved {
+                    self.locals()[recv as usize] = Value::Uninit;
+                }
+                self.take(index);
+                let v = if found {
+                    let mut payload = self.small_buf();
+                    payload.push(Value::Ref(Addr {
+                        root: Root::Heap(id),
+                        path: Path::from_slice(&[i as u64]),
+                    }));
+                    Value::Variant(some, payload)
+                } else {
+                    Value::Variant(none, Vec::new())
+                };
+                self.set_local(dst, v);
+                Some(target)
+            }
             _ => None,
         }
+    }
+
+    /// The `Vec` box local `recv` holds, through any references to it.
+    #[inline(always)]
+    fn box_of_local(&self, recv: u32) -> Option<AllocId> {
+        let mut v = self.frames.last()?.locals.get(recv as usize)?;
+        loop {
+            match v {
+                Value::Box(a) => return Some(*a),
+                Value::Ref(addr) => v = self.slot_ref(addr).ok()?,
+                _ => return None,
+            }
+        }
+    }
+
+    /// Runs a decoded call through an erased function value; `None`, with
+    /// nothing changed, leaves it to the general terminator.
+    pub(super) fn fast_erased_call(
+        &mut self,
+        f: u32,
+        args: &[Arg],
+        dst: u32,
+        target: BasicBlock,
+    ) -> Option<R<Option<BasicBlock>>> {
+        let program: &'a Program = self.program;
+        let (slot, found) = {
+            let Value::Ref(a) = self.frames.last()?.locals.get(f as usize)? else {
+                return None;
+            };
+            let Value::Erased {
+                body: name,
+                env: Some((slot, _)),
+            } = self.slot_ref(a).ok()?
+            else {
+                return None;
+            };
+            let key = (name.as_ptr() as usize, name.len());
+            let found = self
+                .erased_index
+                .get(&key)
+                .copied()
+                .filter(|&i| self.erased_callees[i].0 == name.as_str());
+            match found {
+                Some(i) => (*slot, Ok(i)),
+                None => (
+                    *slot,
+                    Err((key, program.bodies.get_key_value(name.as_str())?)),
+                ),
+            }
+        };
+        let ix = match found {
+            Ok(i) => i,
+            Err((key, (name, body))) => {
+                if let Some(i) = self
+                    .erased_callees
+                    .iter()
+                    .position(|e| e.0 == name.as_str())
+                {
+                    self.erased_index.insert(key, i);
+                    return self.fast_erased_call_at(i, slot, args, dst, target);
+                }
+                let tys = self.tys;
+                let by_ref = |l: Local| {
+                    matches!(
+                        tys.kind(body.local(l).ty),
+                        TyKind::Ref(_) | TyKind::MutRef(_) | TyKind::RawPtr { .. }
+                    )
+                };
+                let mut params = body.args();
+                let env_by_ref = params.next().is_some_and(|l| {
+                    matches!(
+                        tys.kind(body.local(l).ty),
+                        TyKind::Ref(_) | TyKind::MutRef(_)
+                    )
+                });
+                let mut values = 0u64;
+                for (i, l) in params.enumerate() {
+                    if i >= 64 {
+                        return None;
+                    }
+                    if !by_ref(l) {
+                        values |= 1 << i;
+                    }
+                }
+                self.erased_callees
+                    .push((name.as_str(), body, env_by_ref, values));
+                let i = self.erased_callees.len() - 1;
+                self.erased_index.insert(key, i);
+                i
+            }
+        };
+        self.fast_erased_call_at(ix, slot, args, dst, target)
+    }
+
+    /// [`Interp::fast_erased_call`] of `erased_callees[ix]`, whose
+    /// environment is in heap slot `slot`.
+    fn fast_erased_call_at(
+        &mut self,
+        ix: usize,
+        slot: AllocId,
+        args: &[Arg],
+        dst: u32,
+        target: BasicBlock,
+    ) -> Option<R<Option<BasicBlock>>> {
+        let (name, body, env_by_ref, values) = self.erased_callees[ix];
+        // A closure that takes its environment by value, or a reference
+        // argument lent to a parameter that takes a copy: the general call.
+        if !env_by_ref
+            || args.len() + 1 != body.arg_count
+            || args
+                .iter()
+                .enumerate()
+                .any(|(i, a)| matches!(a, Arg::Ref(..)) && values >> i & 1 == 1)
+        {
+            return None;
+        }
+        let mut vals = self.read_args(args)?;
+        vals.insert(
+            0,
+            Value::Ref(Addr {
+                root: Root::Heap(slot),
+                path: Path::new(),
+            }),
+        );
+        self.calls += 1;
+        let r = self.call_body(name, body, vals);
+        self.calls -= 1;
+        let ret = match r {
+            Ok(v) => v,
+            Err(e) => return Some(Err(e)),
+        };
+        if self.panic_unwinding() {
+            self.recycle_value(ret);
+            return Some(Err(Stop::Abort(AbortReason::Panic)));
+        }
+        self.set_local(dst, ret);
+        Some(Ok(Some(target)))
     }
 }
 
