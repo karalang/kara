@@ -920,13 +920,27 @@ impl Spec<'_> {
             let TerminatorKind::Call { args, .. } = &mut call else {
                 unreachable!()
             };
-            let lit @ Operand::Const(Const {
-                kind: ConstKind::Str(_),
-                ..
-            }) = args[i].clone()
-            else {
-                continue;
+            // A literal, or a borrowed `String` (`c.get(url)` with a `url:
+            // String` passes `&url`): either is a view the library's
+            // `__get` / `__post` would read as the `String` it owns
+            // (B-2026-11-03-18). The receiver, a `ref Client`, is not text.
+            let lit = args[i].clone();
+            let ty = match &lit {
+                Operand::Const(c) => c.ty,
+                Operand::Copy(p) | Operand::Move(p) if p.projection.is_empty() => {
+                    fx.body.local(p.local).ty
+                }
+                _ => continue,
             };
+            let tcx = self.tys.tcx();
+            let viewed = match tcx.kind(ty) {
+                SK::StaticStr => true,
+                SK::Ref(t) | SK::MutRef(t) => matches!(tcx.kind(t), SK::Str | SK::StaticStr),
+                _ => false,
+            };
+            if !viewed {
+                continue;
+            }
             let text = fx.temp(string);
             args[i] = Operand::Move(Place::local(text));
             let next = fx.block(call, info);
