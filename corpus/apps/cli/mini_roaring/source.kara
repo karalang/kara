@@ -1,0 +1,2922 @@
+// mini_roaring: Roaring bitmaps (Chambi, Lemire, Kaser and Godin), the
+// compressed sets of u32 that Lucene, Druid, ClickHouse and Spark keep their
+// postings and row sets in. A bitmap splits each value into a 16-bit chunk
+// key and a 16-bit low half; each chunk is an array of sorted lows (at most
+// 4096 of them), a 1024-word bitmap, or a list of runs. Sets combine chunk
+// by chunk, and a bitmap reads and writes the portable serialization format
+// that CRoaring, the Java library and pyroaring share (RoaringFormatSpec).
+//
+// The jobs are an analytics session over a week of product events: daily
+// actives, retention and funnels as intersections, then ranges, rank and
+// select, and .roar files written, dumped and read back.
+
+const ARRAY_MAX: i64 = 4096;
+const WORDS: i64 = 1024;
+const COOKIE_NO_RUN: i64 = 12346;
+const COOKIE_RUN: i64 = 12347;
+const TOP: i64 = 4294967296;
+
+// ------------------------------------------------------------ containers
+
+// One chunk's lows: sorted u16s, 1024 words of bits with their count, or
+// runs (each a start and its length less one).
+#[derive(Clone)]
+enum Container {
+    Array(Vec[u16]),
+    Bits(Vec[u64], i64),
+    Runs(Vec[u16], Vec[u16]),
+}
+
+struct Chunk {
+    key: i64,
+    c: Container,
+}
+
+#[derive(Clone)]
+struct Bitmap {
+    chunks: Vec[Chunk],
+}
+
+fn bit(x: i64) -> u64 {
+    (1 as u64) << ((x & 63) as u32)
+}
+
+fn card_of(c: ref Container) -> i64 {
+    match c {
+        Container.Array(a) => a.len(),
+        Container.Bits(_, n) => n,
+        Container.Runs(_, lens) => {
+            let mut n = 0;
+            for l in lens.iter() {
+                n += (*l as i64) + 1;
+            }
+            n
+        }
+    }
+}
+
+fn kind_name(c: ref Container) -> Str {
+    match c {
+        Container.Array(_) => "array",
+        Container.Bits(_, _) => "bitmap",
+        Container.Runs(_, _) => "run",
+    }
+}
+
+// The chunk's lows, ascending.
+fn lows_of(c: ref Container) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    match c {
+        Container.Array(a) => {
+            for x in a.iter() {
+                out.push(*x as i64);
+            }
+        }
+        Container.Bits(w, _) => {
+            for i in 0..WORDS {
+                let mut word = w[i];
+                while word != 0 {
+                    let t = word.trailing_zeros();
+                    out.push(i * 64 + t);
+                    word = word & (word - 1);
+                }
+            }
+        }
+        Container.Runs(starts, lens) => {
+            for i in 0..starts.len() {
+                let s = starts[i] as i64;
+                for x in s..(s + (lens[i] as i64) + 1) {
+                    out.push(x);
+                }
+            }
+        }
+    }
+    out
+}
+
+fn bits_of(c: ref Container) -> Vec[u64] {
+    match c {
+        Container.Bits(w, _) => w.clone(),
+        _ => {
+            let mut w: Vec[u64] = Vec.filled(WORDS, 0 as u64);
+            for x in lows_of(c) {
+                w[x >> 6] = w[x >> 6] | bit(x);
+            }
+            w
+        }
+    }
+}
+
+fn popcount(w: ref Vec[u64]) -> i64 {
+    let mut n = 0;
+    for x in w.iter() {
+        n += x.count_ones();
+    }
+    n
+}
+
+// An array or a bitmap, by the count: the form every change leaves.
+fn from_bits(w: own Vec[u64]) -> Option[Container] {
+    let n = popcount(w);
+    if n == 0 {
+        None
+    } else if n > ARRAY_MAX {
+        Some(Container.Bits(w, n))
+    } else {
+        let c = Container.Bits(w, n);
+        let mut a: Vec[u16] = Vec.new();
+        for x in lows_of(c) {
+            a.push(x as u16);
+        }
+        Some(Container.Array(a))
+    }
+}
+
+fn from_lows(lows: ref Vec[i64]) -> Option[Container] {
+    if lows.len() == 0 {
+        None
+    } else if lows.len() <= ARRAY_MAX {
+        let mut a: Vec[u16] = Vec.new();
+        for x in lows.iter() {
+            a.push(*x as u16);
+        }
+        Some(Container.Array(a))
+    } else {
+        let mut w: Vec[u64] = Vec.filled(WORDS, 0 as u64);
+        for x in lows.iter() {
+            w[*x >> 6] = w[*x >> 6] | bit(*x);
+        }
+        Some(Container.Bits(w, lows.len()))
+    }
+}
+
+// A run container as an array or a bitmap.
+fn plain(c: ref Container) -> Container {
+    match c {
+        Container.Runs(_, _) => from_lows(lows_of(c)).unwrap(),
+        Container.Array(a) => Container.Array(a.clone()),
+        Container.Bits(w, n) => Container.Bits(w.clone(), n),
+    }
+}
+
+// The first index in `a` whose value is not below `x`.
+fn lower_bound(a: ref Vec[u16], x: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = a.len();
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if (a[mid] as i64) < x {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+fn contains_low(c: ref Container, x: i64) -> bool {
+    match c {
+        Container.Array(a) => {
+            let i = lower_bound(a, x);
+            i < a.len() and (a[i] as i64) == x
+        }
+        Container.Bits(w, _) => (w[x >> 6] & bit(x)) != 0,
+        Container.Runs(starts, lens) => {
+            // The last run starting at or before x.
+            let i = lower_bound(starts, x + 1) - 1;
+            i >= 0 and x <= (starts[i] as i64) + (lens[i] as i64)
+        }
+    }
+}
+
+// How many lows of the chunk are at most x.
+fn rank_low(c: ref Container, x: i64) -> i64 {
+    match c {
+        Container.Array(a) => lower_bound(a, x + 1),
+        Container.Bits(w, _) => {
+            let mut n = 0;
+            let last = x >> 6;
+            for i in 0..last {
+                n += w[i].count_ones();
+            }
+            let keep = if (x & 63) == 63 { ~(0 as u64) } else { bit(x + 1) - 1 };
+            n + (w[last] & keep).count_ones()
+        }
+        Container.Runs(starts, lens) => {
+            let mut n = 0;
+            for i in 0..starts.len() {
+                let s = starts[i] as i64;
+                let e = s + (lens[i] as i64);
+                if s > x {
+                    break;
+                }
+                n += if e <= x { e - s + 1 } else { x - s + 1 };
+            }
+            n
+        }
+    }
+}
+
+fn runs_in(lows: ref Vec[i64]) -> (Vec[u16], Vec[u16]) {
+    let mut starts: Vec[u16] = Vec.new();
+    let mut lens: Vec[u16] = Vec.new();
+    let mut i = 0;
+    while i < lows.len() {
+        let s = lows[i];
+        let mut j = i;
+        while j + 1 < lows.len() and lows[j + 1] == lows[j] + 1 {
+            j += 1;
+        }
+        starts.push(s as u16);
+        lens.push((lows[j] - s) as u16);
+        i = j + 1;
+    }
+    (starts, lens)
+}
+
+// The runs a container would need, counted without building them.
+fn run_count(c: ref Container) -> i64 {
+    match c {
+        Container.Runs(starts, _) => starts.len(),
+        Container.Array(a) => {
+            let mut n = 0;
+            for i in 0..a.len() {
+                if i == 0 or (a[i] as i64) != (a[i - 1] as i64) + 1 {
+                    n += 1;
+                }
+            }
+            n
+        }
+        Container.Bits(w, _) => {
+            // A run starts at every set bit whose lower neighbour is clear.
+            let mut n = 0;
+            let mut carry: u64 = 0;
+            for i in 0..WORDS {
+                let word = w[i];
+                let below = (word << 1) | carry;
+                n += (word & ~below).count_ones();
+                carry = word >> 63;
+            }
+            n
+        }
+    }
+}
+
+// ------------------------------------------------------------ two chunks
+
+#[derive(PartialEq)]
+enum Op {
+    And,
+    Or,
+    Xor,
+    AndNot,
+}
+
+fn merge_arrays(op: Op, a: ref Vec[u16], b: ref Vec[u16]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    let mut j = 0;
+    while i < a.len() or j < b.len() {
+        let x = if i < a.len() { a[i] as i64 } else { 65536 };
+        let y = if j < b.len() { b[j] as i64 } else { 65536 };
+        if x == y {
+            match op {
+                Op.And | Op.Or => out.push(x),
+                _ => {}
+            }
+            i += 1;
+            j += 1;
+        } else if x < y {
+            match op {
+                Op.Or | Op.Xor | Op.AndNot => out.push(x),
+                _ => {}
+            }
+            i += 1;
+        } else {
+            match op {
+                Op.Or | Op.Xor => out.push(y),
+                _ => {}
+            }
+            j += 1;
+        }
+    }
+    out
+}
+
+fn combine(op: Op, a: ref Container, b: ref Container) -> Option[Container] {
+    let pa = plain(a);
+    let pb = plain(b);
+    match (pa, pb) {
+        (Container.Array(x), Container.Array(y)) => from_lows(merge_arrays(op, x, y)),
+        (Container.Array(x), other) if op == Op.And => {
+            // Probe the bitmap for each of the array's lows.
+            let mut out: Vec[i64] = Vec.new();
+            for v in x.iter() {
+                if contains_low(other, *v as i64) {
+                    out.push(*v as i64);
+                }
+            }
+            from_lows(out)
+        }
+        (other, Container.Array(y)) if op == Op.And => {
+            let mut out: Vec[i64] = Vec.new();
+            for v in y.iter() {
+                if contains_low(other, *v as i64) {
+                    out.push(*v as i64);
+                }
+            }
+            from_lows(out)
+        }
+        (x, y) => {
+            let wa = bits_of(x);
+            let wb = bits_of(y);
+            let mut w: Vec[u64] = Vec.filled(WORDS, 0 as u64);
+            for i in 0..WORDS {
+                w[i] = match op {
+                    Op.And => wa[i] & wb[i],
+                    Op.Or => wa[i] | wb[i],
+                    Op.Xor => wa[i] ^ wb[i],
+                    Op.AndNot => wa[i] & ~wb[i],
+                };
+            }
+            from_bits(w)
+        }
+    }
+}
+
+impl Op {
+    fn name(ref self) -> Str {
+        match self {
+            Op.And => "and",
+            Op.Or => "or",
+            Op.Xor => "xor",
+            Op.AndNot => "andnot",
+        }
+    }
+}
+
+// ------------------------------------------------------------ bitmaps
+
+impl Bitmap {
+    fn new() -> Bitmap {
+        Bitmap { chunks: Vec.new() }
+    }
+
+    fn card(ref self) -> i64 {
+        let mut n = 0;
+        for ch in self.chunks.iter() {
+            n += card_of(ch.c);
+        }
+        n
+    }
+
+    // The index of the chunk with this key, or where it would go.
+    fn find(ref self, key: i64) -> (i64, bool) {
+        let mut lo = 0;
+        let mut hi = self.chunks.len();
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            if self.chunks[mid].key < key {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        (lo, lo < self.chunks.len() and self.chunks[lo].key == key)
+    }
+
+    fn contains(ref self, v: i64) -> bool {
+        let (i, found) = self.find(v >> 16);
+        found and contains_low(self.chunks[i].c, v & 65535)
+    }
+
+    fn add(mut ref self, v: i64) {
+        let key = v >> 16;
+        let low = v & 65535;
+        let (i, found) = self.find(key);
+        if not found {
+            let mut a: Vec[u16] = Vec.new();
+            a.push(low as u16);
+            self.chunks.insert(i, Chunk { key: key, c: Container.Array(a) });
+            return;
+        }
+        if contains_low(self.chunks[i].c, low) {
+            return;
+        }
+        let next = match plain(self.chunks[i].c) {
+            Container.Array(a) => {
+                let mut a = a;
+                let at = lower_bound(a, low);
+                a.insert(at, low as u16);
+                if a.len() > ARRAY_MAX {
+                    let mut w: Vec[u64] = Vec.filled(WORDS, 0 as u64);
+                    for x in a.iter() {
+                        let x = *x as i64;
+                        w[x >> 6] = w[x >> 6] | bit(x);
+                    }
+                    Container.Bits(w, a.len())
+                } else {
+                    Container.Array(a)
+                }
+            }
+            Container.Bits(w, n) => {
+                let mut w = w;
+                w[low >> 6] = w[low >> 6] | bit(low);
+                Container.Bits(w, n + 1)
+            }
+            Container.Runs(_, _) => unreachable("plain leaves no runs"),
+        };
+        self.chunks[i].c = next;
+    }
+
+    fn remove(mut ref self, v: i64) {
+        let key = v >> 16;
+        let low = v & 65535;
+        let (i, found) = self.find(key);
+        if not found or not contains_low(self.chunks[i].c, low) {
+            return;
+        }
+        let next = match plain(self.chunks[i].c) {
+            Container.Array(a) => {
+                let mut a = a;
+                let at = lower_bound(a, low);
+                let _ = a.remove(at);
+                if a.len() == 0 {
+                    None
+                } else {
+                    Some(Container.Array(a))
+                }
+            }
+            Container.Bits(w, _) => {
+                let mut w = w;
+                w[low >> 6] = w[low >> 6] & ~bit(low);
+                from_bits(w)
+            }
+            Container.Runs(_, _) => unreachable("plain leaves no runs"),
+        };
+        match next {
+            Some(c) => self.chunks[i].c = c,
+            None => {
+                let _ = self.chunks.remove(i);
+            }
+        }
+    }
+
+    // Adds, removes or flips [lo, hi) chunk by chunk: `how` is 0, 1 or 2.
+    // A chunk the range adds to that was empty becomes one run; a chunk
+    // whose values change becomes an array or a bitmap by its count, and
+    // one whose values do not keeps its form.
+    fn range_op(mut ref self, lo: i64, hi: i64, how: i64) {
+        if lo >= hi {
+            return;
+        }
+        let first = lo >> 16;
+        let last = (hi - 1) >> 16;
+        for key in first..(last + 1) {
+            let a = if key == first { lo & 65535 } else { 0 };
+            let b = if key == last { (hi - 1) & 65535 } else { 65535 };
+            let (i, found) = self.find(key);
+            if not found {
+                if how == 1 {
+                    continue;
+                }
+                let c = if how == 0 {
+                    let mut s: Vec[u16] = Vec.new();
+                    let mut l: Vec[u16] = Vec.new();
+                    s.push(a as u16);
+                    l.push((b - a) as u16);
+                    Container.Runs(s, l)
+                } else {
+                    let mut w: Vec[u64] = Vec.filled(WORDS, 0 as u64);
+                    set_span(mut w, a, b, 0);
+                    from_bits(w).unwrap()
+                };
+                self.chunks.insert(i, Chunk { key: key, c: c });
+                continue;
+            }
+            let before = card_of(self.chunks[i].c);
+            let mut w = bits_of(self.chunks[i].c);
+            set_span(mut w, a, b, how);
+            if popcount(w) == before and how != 2 {
+                continue;
+            }
+            match from_bits(w) {
+                Some(c) => self.chunks[i].c = c,
+                None => {
+                    let _ = self.chunks.remove(i);
+                }
+            }
+        }
+    }
+
+    fn combine_with(ref self, op: Op, other: ref Bitmap) -> Bitmap {
+        let mut out = Bitmap.new();
+        let mut i = 0;
+        let mut j = 0;
+        let a = ref self.chunks;
+        let b = ref other.chunks;
+        while i < a.len() or j < b.len() {
+            let ka = if i < a.len() { a[i].key } else { 65536 };
+            let kb = if j < b.len() { b[j].key } else { 65536 };
+            if ka == kb {
+                if let Some(c) = combine(op, a[i].c, b[j].c) {
+                    out.chunks.push(Chunk { key: ka, c: c });
+                }
+                i += 1;
+                j += 1;
+            } else if ka < kb {
+                match op {
+                    Op.And => {}
+                    _ => out.chunks.push(Chunk { key: ka, c: plain(a[i].c) }),
+                }
+                i += 1;
+            } else {
+                match op {
+                    Op.Or | Op.Xor => out.chunks.push(Chunk { key: kb, c: plain(b[j].c) }),
+                    _ => {}
+                }
+                j += 1;
+            }
+        }
+        out
+    }
+
+    // Each chunk as runs when that is smaller than both other forms.
+    fn optimize(mut ref self) {
+        for ch in self.chunks.iter_mut() {
+            let n = card_of(ch.c);
+            let runs = run_count(ch.c);
+            let other = if 2 * n < 8192 { 2 * n } else { 8192 };
+            if 2 + 4 * runs < other {
+                let (s, l) = runs_in(lows_of(ch.c));
+                ch.c = Container.Runs(s, l);
+            } else {
+                ch.c = plain(ch.c);
+            }
+        }
+    }
+
+    fn rank(ref self, v: i64) -> i64 {
+        let key = v >> 16;
+        let mut n = 0;
+        for ch in self.chunks.iter() {
+            if ch.key < key {
+                n += card_of(ch.c);
+            } else if ch.key == key {
+                n += rank_low(ch.c, v & 65535);
+            }
+        }
+        n
+    }
+
+    fn select(ref self, i: i64) -> Option[i64] {
+        let mut left = i;
+        for ch in self.chunks.iter() {
+            let n = card_of(ch.c);
+            if left < n {
+                let lows = lows_of(ch.c);
+                return Some(ch.key * 65536 + lows[left]);
+            }
+            left -= n;
+        }
+        None
+    }
+
+    // The first `n` values, ascending.
+    fn first(ref self, n: i64) -> Vec[i64] {
+        let mut out: Vec[i64] = Vec.new();
+        for ch in self.chunks.iter() {
+            for x in lows_of(ch.c) {
+                if out.len() == n {
+                    return out;
+                }
+                out.push(ch.key * 65536 + x);
+            }
+        }
+        out
+    }
+
+    fn max(ref self) -> i64 {
+        let ch = self.chunks.last().unwrap();
+        let lows = lows_of(ch.c);
+        ch.key * 65536 + lows[lows.len() - 1]
+    }
+
+    fn values_equal(ref self, other: ref Bitmap) -> bool {
+        if self.chunks.len() != other.chunks.len() {
+            return false;
+        }
+        for i in 0..self.chunks.len() {
+            if self.chunks[i].key != other.chunks[i].key {
+                return false;
+            }
+            if lows_of(self.chunks[i].c) != lows_of(other.chunks[i].c) {
+                return false;
+            }
+        }
+        true
+    }
+
+    // Containers by form: (array, bitmap, run).
+    fn forms(ref self) -> (i64, i64, i64) {
+        let mut a = 0;
+        let mut b = 0;
+        let mut r = 0;
+        for ch in self.chunks.iter() {
+            match ch.c {
+                Container.Array(_) => a += 1,
+                Container.Bits(_, _) => b += 1,
+                Container.Runs(_, _) => r += 1,
+            }
+        }
+        (a, b, r)
+    }
+}
+
+// Sets (how 0), clears (1) or flips (2) the lows a..=b of 1024 words.
+fn set_span(w: mut ref Vec[u64], a: i64, b: i64, how: i64) {
+    let wa = a >> 6;
+    let wb = b >> 6;
+    for i in wa..(wb + 1) {
+        let lo = if i == wa { a & 63 } else { 0 };
+        let hi = if i == wb { b & 63 } else { 63 };
+        let top = if hi == 63 { ~(0 as u64) } else { bit(hi + 1) - 1 };
+        let mask = top & ~(bit(lo) - 1);
+        w[i] = match how {
+            0 => w[i] | mask,
+            1 => w[i] & ~mask,
+            _ => w[i] ^ mask,
+        };
+    }
+}
+
+// A bitmap of ascending, distinct values.
+fn from_sorted(vals: ref Vec[i64]) -> Bitmap {
+    let mut out = Bitmap.new();
+    let mut i = 0;
+    while i < vals.len() {
+        let key = vals[i] >> 16;
+        let mut lows: Vec[i64] = Vec.new();
+        while i < vals.len() and vals[i] >> 16 == key {
+            lows.push(vals[i] & 65535);
+            i += 1;
+        }
+        out.chunks.push(Chunk { key: key, c: from_lows(lows).unwrap() });
+    }
+    out
+}
+
+// ------------------------------------------------------------ the format
+
+fn put16(out: mut ref Vec[u8], v: i64) {
+    out.push((v & 255) as u8);
+    out.push(((v >> 8) & 255) as u8);
+}
+
+fn put32(out: mut ref Vec[u8], v: i64) {
+    put16(mut out, v & 65535);
+    put16(mut out, (v >> 16) & 65535);
+}
+
+fn put64(out: mut ref Vec[u8], v: u64) {
+    for k in 0..8 {
+        out.push(((v >> ((8 * k) as u32)) & 255) as u8);
+    }
+}
+
+fn body_of(c: ref Container) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    match c {
+        Container.Array(a) => {
+            for x in a.iter() {
+                put16(mut out, *x as i64);
+            }
+        }
+        Container.Bits(w, _) => {
+            for x in w.iter() {
+                put64(mut out, *x);
+            }
+        }
+        Container.Runs(starts, lens) => {
+            put16(mut out, starts.len());
+            for i in 0..starts.len() {
+                put16(mut out, starts[i]);
+                put16(mut out, lens[i]);
+            }
+        }
+    }
+    out
+}
+
+fn serialize(b: ref Bitmap) -> Vec[u8] {
+    let n = b.chunks.len();
+    let mut hasrun = false;
+    for ch in b.chunks.iter() {
+        if kind_name(ch.c) == "run" {
+            hasrun = true;
+        }
+    }
+    let mut out: Vec[u8] = Vec.new();
+    if hasrun {
+        put32(mut out, COOKIE_RUN | ((n - 1) << 16));
+        let mut bits: Vec[u8] = Vec.filled((n + 7) / 8, 0 as u8);
+        for i in 0..n {
+            if kind_name(b.chunks[i].c) == "run" {
+                bits[i / 8] = bits[i / 8] | ((1 as u8) << ((i % 8) as u32));
+            }
+        }
+        out.extend(bits);
+    } else {
+        put32(mut out, COOKIE_NO_RUN);
+        put32(mut out, n);
+    }
+    let mut bodies: Vec[Vec[u8]] = Vec.new();
+    for ch in b.chunks.iter() {
+        put16(mut out, ch.key);
+        put16(mut out, card_of(ch.c) - 1);
+        bodies.push(body_of(ch.c));
+    }
+    if not hasrun or n >= 4 {
+        let mut pos = out.len() + 4 * n;
+        for body in bodies.iter() {
+            put32(mut out, pos);
+            pos += body.len();
+        }
+    }
+    for body in bodies.iter() {
+        out.extend(body.clone());
+    }
+    out
+}
+
+struct Reader {
+    data: Vec[u8],
+    pos: i64,
+}
+
+impl Reader {
+    fn need(ref self, k: i64, what: Str) -> Result[(), String] {
+        if self.pos + k > self.data.len() {
+            return Err(f"truncated {what}");
+        }
+        Ok(())
+    }
+
+    fn u16(mut ref self) -> i64 {
+        let v = (self.data[self.pos] as i64) | ((self.data[self.pos + 1] as i64) << 8);
+        self.pos += 2;
+        v
+    }
+
+    fn u32(mut ref self) -> i64 {
+        let lo = self.u16();
+        let hi = self.u16();
+        lo | (hi << 16)
+    }
+
+    fn u64(mut ref self) -> u64 {
+        let mut v: u64 = 0;
+        for k in 0..8 {
+            v = v | ((self.data[self.pos + k] as u64) << ((8 * k) as u32));
+        }
+        self.pos += 8;
+        v
+    }
+}
+
+fn deserialize(data: own Vec[u8]) -> Result[Bitmap, String] {
+    let mut r = Reader { data: data, pos: 0 };
+    r.need(4, "header")?;
+    let cookie = r.u32();
+    let mut runbits: Option[Vec[u8]] = None;
+    let n = if (cookie & 65535) == COOKIE_RUN {
+        let n = (cookie >> 16) + 1;
+        let k = (n + 7) / 8;
+        r.need(k, "header")?;
+        let mut bits: Vec[u8] = Vec.new();
+        for _ in 0..k {
+            bits.push(r.data[r.pos]);
+            r.pos += 1;
+        }
+        runbits = Some(bits);
+        n
+    } else if cookie == COOKIE_NO_RUN {
+        r.need(4, "header")?;
+        r.u32()
+    } else {
+        return Err(f"bad cookie {cookie}");
+    };
+    if n > 65536 {
+        return Err(f"{n} containers is more than 65536");
+    }
+    r.need(4 * n, "header")?;
+    let mut keys: Vec[i64] = Vec.new();
+    let mut cards: Vec[i64] = Vec.new();
+    for i in 0..n {
+        let k = r.u16();
+        let c = r.u16() + 1;
+        if i > 0 and k <= keys[i - 1] {
+            return Err(f"keys out of order at container {i}");
+        }
+        keys.push(k);
+        cards.push(c);
+    }
+    let mut offsets: Vec[i64] = Vec.new();
+    if runbits.is_none() or n >= 4 {
+        r.need(4 * n, "header")?;
+        for _ in 0..n {
+            offsets.push(r.u32());
+        }
+    }
+    let mut out = Bitmap.new();
+    for i in 0..n {
+        if offsets.len() > 0 and offsets[i] != r.pos {
+            return Err(f"offset of container {i} is {offsets[i]}, not {r.pos}");
+        }
+        let isrun = match runbits {
+            Some(ref bits) => ((bits[i / 8] >> ((i % 8) as u32)) & 1) == 1,
+            None => false,
+        };
+        let card = cards[i];
+        let c = if isrun {
+            r.need(2, f"container {i}")?;
+            let nr = r.u16();
+            r.need(4 * nr, f"container {i}")?;
+            let mut starts: Vec[u16] = Vec.new();
+            let mut lens: Vec[u16] = Vec.new();
+            let mut total = 0;
+            let mut last = -1;
+            for _ in 0..nr {
+                let s = r.u16();
+                let l = r.u16();
+                if s <= last or s + l > 65535 {
+                    return Err(f"bad run in container {i}");
+                }
+                last = s + l;
+                total += l + 1;
+                starts.push(s as u16);
+                lens.push(l as u16);
+            }
+            if total != card {
+                return Err(f"container {i} holds {total} values, its header says {card}");
+            }
+            Container.Runs(starts, lens)
+        } else if card <= ARRAY_MAX {
+            r.need(2 * card, f"container {i}")?;
+            let mut a: Vec[u16] = Vec.new();
+            for j in 0..card {
+                let x = r.u16();
+                if j > 0 and x <= (a[j - 1] as i64) {
+                    return Err(f"unsorted array in container {i}");
+                }
+                a.push(x as u16);
+            }
+            Container.Array(a)
+        } else {
+            r.need(8192, f"container {i}")?;
+            let mut w: Vec[u64] = Vec.new();
+            for _ in 0..WORDS {
+                w.push(r.u64());
+            }
+            let got = popcount(w);
+            if got != card {
+                return Err(f"container {i} holds {got} values, its header says {card}");
+            }
+            Container.Bits(w, card)
+        };
+        out.chunks.push(Chunk { key: keys[i], c: c });
+    }
+    if r.pos != r.data.len() {
+        let extra = r.data.len() - r.pos;
+        return Err(f"{extra} bytes after the last container");
+    }
+    Ok(out)
+}
+
+// CRC-32 (IEEE), as zlib computes it.
+fn crc32(data: ref Vec[u8]) -> i64 {
+    let mut table: Vec[i64] = Vec.new();
+    for n in 0..256 {
+        let mut c = n;
+        for _ in 0..8 {
+            c = if (c & 1) == 1 { 3988292384 ^ (c >> 1) } else { c >> 1 };
+        }
+        table.push(c);
+    }
+    let mut crc = 4294967295;
+    for b in data.iter() {
+        crc = table[(crc ^ (*b as i64)) & 255] ^ (crc >> 8);
+    }
+    crc ^ 4294967295
+}
+
+fn hex2(v: i64) -> String {
+    let digits = "0123456789abcdef";
+    let hi = (v >> 4) & 15;
+    let lo = v & 15;
+    digits.substring(hi, hi + 1).to_string() + digits.substring(lo, lo + 1)
+}
+
+fn hex_word(v: i64, n: i64) -> String {
+    let mut s = String.new();
+    let mut k = n - 1;
+    while k >= 0 {
+        s = s + hex2((v >> ((8 * k) as u32)) & 255);
+        k -= 1;
+    }
+    s
+}
+
+// ------------------------------------------------------------ events
+
+const DAYS: Array[Str, 7] = ["1", "2", "3", "4", "5", "6", "7"];
+const EVENTS: Array[Str, 4] = ["view", "signup", "cart", "buy"];
+
+struct Row {
+    day: String,
+    user: i64,
+    event: String,
+}
+
+fn is_digits(s: Str) -> bool {
+    if s.len() == 0 {
+        return false;
+    }
+    for c in s.bytes() {
+        if c < b'0' or c > b'9' {
+            return false;
+        }
+    }
+    true
+}
+
+// A u32, or 2^32 itself where a range may end there.
+fn parse_u32(s: Str, allow_top: bool) -> Result[i64, String] {
+    if not is_digits(s) or s.len() > 10 {
+        return Err(f"bad value: {s}");
+    }
+    let v = match i64.parse(s) {
+        Ok(v) => v,
+        Err(_) => return Err(f"bad value: {s}"),
+    };
+    let limit = if allow_top { TOP } else { TOP - 1 };
+    if v > limit {
+        return Err(f"bad value: {s}");
+    }
+    Ok(v)
+}
+
+fn parse_row(line: Str) -> Option[Row] {
+    let parts: Vec[Str] = line.split(",").collect();
+    if parts.len() != 3 {
+        return None;
+    }
+    if not DAYS.contains(parts[0]) or not EVENTS.contains(parts[2]) {
+        return None;
+    }
+    match parse_u32(parts[1], false) {
+        Ok(u) => Some(Row { day: parts[0].to_string(), user: u, event: parts[2].to_string() }),
+        Err(_) => None,
+    }
+}
+
+// The users of the rows `keep` accepts, as a bitmap.
+fn users_where(rows: ref Vec[Row], name: String) -> Bitmap {
+    let mut vals: Vec[i64] = Vec.new();
+    for r in rows.iter() {
+        let hit = if name.starts_with("d") {
+            "d" + r.day == name
+        } else {
+            "e_" + r.event == name
+        };
+        if hit {
+            vals.push(r.user);
+        }
+    }
+    vals.sort();
+    vals.dedup();
+    from_sorted(vals)
+}
+
+// ------------------------------------------------------------ jobs
+
+fn forms_text(b: ref Bitmap) -> String {
+    let (a, bm, r) = b.forms();
+    f"array {a}, bitmap {bm}, run {r}"
+}
+
+fn stats_line(name: Str, b: ref Bitmap) -> String {
+    let (a, bm, r) = b.forms();
+    let bytes = serialize(b).len();
+    let card = b.card();
+    let n = b.chunks.len();
+    f"{name}: card={card} containers={n} array={a} bitmap={bm} run={r} bytes={bytes}"
+}
+
+fn show(name: Str, b: ref Bitmap, out: mut ref Vec[String]) {
+    if b.chunks.len() == 0 {
+        out.push(f"{name}: empty");
+        return;
+    }
+    let card = b.card();
+    let min = b.first(1)[0];
+    let max = b.max();
+    out.push(f"{name}: card={card} min={min} max={max}");
+    let n = b.chunks.len();
+    out.push(f"  containers: {n} ({forms_text(b)})");
+    let mut parts: Vec[String] = Vec.new();
+    for i in 0..n {
+        if i == 6 {
+            parts.push("...".to_string());
+            break;
+        }
+        let ch = ref b.chunks[i];
+        parts.push(f"{ch.key}:{kind_name(ch.c)}:{card_of(ch.c)}");
+    }
+    out.push("  " + parts.join(" "));
+    let first: Vec[String] = b.first(8).iter().map(|v| f"{v}").collect();
+    let more = if card > 8 { " ..." } else { "" };
+    out.push("  first: " + first.join(" ") + more);
+}
+
+fn hexdump(b: ref Bitmap, out: mut ref Vec[String]) {
+    let data = serialize(b);
+    let shown = if data.len() < 64 { data.len() } else { 64 };
+    let mut i = 0;
+    while i < shown {
+        let end = if i + 16 < shown { i + 16 } else { shown };
+        let mut row: Vec[String] = Vec.new();
+        for k in i..end {
+            row.push(hex2(data[k]));
+        }
+        out.push(f"  {hex_word(i, 2)}: {row.join(" ")}");
+        i += 16;
+    }
+    let more = if data.len() > 64 { " (first 64 shown)" } else { "" };
+    out.push(f"  {data.len()} bytes{more}");
+}
+
+struct Session {
+    maps: Map[String, Bitmap],
+}
+
+impl Session {
+    fn get(ref self, name: Str) -> Result[Bitmap, String] {
+        match self.maps.get(name.to_string()) {
+            Some(b) => Ok(b.clone()),
+            None => Err(f"no bitmap named {name}"),
+        }
+    }
+
+    fn get_or_new(ref self, name: Str) -> Bitmap {
+        self.maps.get(name.to_string()).cloned() ?? Bitmap.new()
+    }
+
+    fn load(mut ref self, file: Str, out: mut ref Vec[String]) -> Result[(), String] {
+        let text = match fs.read_to_string("data/" + file.to_string()) {
+            Ok(t) => t,
+            Err(e) => return Err(f"{file}: {e}"),
+        };
+        let mut rows: Vec[Row] = Vec.new();
+        let mut bad = 0;
+        let mut first = true;
+        for line in text.split("\n") {
+            if first {
+                first = false;
+                continue;
+            }
+            if line.len() == 0 {
+                continue;
+            }
+            match parse_row(line) {
+                Some(r) => rows.push(r),
+                None => bad += 1,
+            }
+        }
+        // One bitmap per day and per event, each built in a task of its
+        // own; they print in name order.
+        let mut names: Vec[String] = Vec.new();
+        for d in DAYS {
+            names.push("d" + d.to_string());
+        }
+        for e in EVENTS {
+            names.push("e_" + e.to_string());
+        }
+        names.sort();
+        let group = TaskGroup.new();
+        let mut handles = Vec.new();
+        for name in names.iter() {
+            let name = name.clone();
+            handles.push(group.spawn(|| users_where(rows, name)));
+        }
+        let mut built: Vec[Bitmap] = Vec.new();
+        for h in handles.into_iter() {
+            built.push(h.join());
+        }
+        out.push(f"loaded {file}: {rows.len()} rows, {bad} skipped, {names.len()} bitmaps");
+        for i in 0..names.len() {
+            let card = built[i].card();
+            out.push(f"  {names[i]}: {card} users");
+            self.maps[names[i].clone()] = built[i].clone();
+        }
+        Ok(())
+    }
+
+    fn job(mut ref self, line: Str, out: mut ref Vec[String]) -> Result[(), String] {
+        let w: Vec[Str] = line.split_whitespace().collect();
+        let cmd = w[0];
+        let args: Vec[Str] = w[1..].to_vec();
+        let need = |k: i64| {
+            if args.len() < k {
+                let s = if k > 1 { "s" } else { "" };
+                return Err(f"{cmd}: needs {k} argument{s}");
+            }
+            Ok(())
+        };
+        match cmd {
+            "load" => {
+                need(1)?;
+                self.load(args[0], out)?;
+            }
+            "show" => {
+                need(1)?;
+                let b = self.get(args[0])?;
+                show(args[0], b, mut out);
+            }
+            "stats" => {
+                need(1)?;
+                let b = self.get(args[0])?;
+                out.push(stats_line(args[0], b));
+            }
+            "and" | "or" | "xor" | "andnot" => {
+                need(1)?;
+                let op = match cmd {
+                    "and" => Op.And,
+                    "or" => Op.Or,
+                    "xor" => Op.Xor,
+                    _ => Op.AndNot,
+                };
+                let mut srcs: Vec[Bitmap] = Vec.new();
+                for a in args[1..].iter() {
+                    srcs.push(self.get(*a)?);
+                }
+                let mut acc = if srcs.len() == 0 { Bitmap.new() } else { srcs[0].clone() };
+                for k in 1..srcs.len() {
+                    acc = acc.combine_with(op, srcs[k]);
+                }
+                // A lone source is copied as its values, in plain form.
+                if srcs.len() == 1 {
+                    acc = acc.combine_with(Op.Or, Bitmap.new());
+                }
+                let card = acc.card();
+                let names = args[1..].join(", ");
+                self.maps[args[0].to_string()] = acc;
+                out.push(f"{args[0]} = {op.name()}({names}): card={card}");
+            }
+            "addrange" | "removerange" | "flip" => {
+                need(3)?;
+                let lo = parse_u32(args[1], true)?;
+                let hi = parse_u32(args[2], true)?;
+                let mut b = self.get_or_new(args[0]);
+                let (how, sign) = match cmd {
+                    "addrange" => (0, "+="),
+                    "removerange" => (1, "-="),
+                    _ => (2, "^="),
+                };
+                b.range_op(lo, hi, how);
+                let card = b.card();
+                self.maps[args[0].to_string()] = b;
+                out.push(f"{args[0]} {sign} [{lo}, {hi}): card={card}");
+            }
+            "add" | "remove" => {
+                need(2)?;
+                let mut vals: Vec[i64] = Vec.new();
+                for a in args[1..].iter() {
+                    vals.push(parse_u32(*a, false)?);
+                }
+                let mut b = self.get_or_new(args[0]);
+                for v in vals.iter() {
+                    if cmd == "add" {
+                        b.add(*v);
+                    } else {
+                        b.remove(*v);
+                    }
+                }
+                let card = b.card();
+                self.maps[args[0].to_string()] = b;
+                let sign = if cmd == "add" { "+" } else { "-" };
+                let shown: Vec[String] = vals.iter().map(|v| f"{v}").collect();
+                out.push(f"{args[0]} {sign} {{{shown.join(", ")}}}: card={card}");
+            }
+            "optimize" => {
+                need(1)?;
+                let mut b = self.get(args[0])?;
+                b.optimize();
+                out.push(f"{args[0]} optimized: {forms_text(b)}");
+                self.maps[args[0].to_string()] = b;
+            }
+            "rank" => {
+                need(2)?;
+                let b = self.get(args[0])?;
+                let v = parse_u32(args[1], false)?;
+                out.push(f"rank({args[0]}, {v}) = {b.rank(v)}");
+            }
+            "select" => {
+                need(2)?;
+                let b = self.get(args[0])?;
+                let i = parse_u32(args[1], false)?;
+                match b.select(i) {
+                    Some(v) => out.push(f"select({args[0]}, {i}) = {v}"),
+                    None => out.push(f"! select({args[0]}, {i}): out of range (card {b.card()})"),
+                }
+            }
+            "contains" => {
+                need(2)?;
+                let b = self.get(args[0])?;
+                let mut parts: Vec[String] = Vec.new();
+                for a in args[1..].iter() {
+                    let v = parse_u32(*a, false)?;
+                    let yes = if b.contains(v) { "yes" } else { "no" };
+                    parts.push(f"{v} {yes}");
+                }
+                out.push(f"contains {args[0]}: {parts.join(", ")}");
+            }
+            "retention" => {
+                need(2)?;
+                let a = self.get(args[0])?;
+                let b = self.get(args[1])?;
+                let k = a.combine_with(Op.And, b).card();
+                let n = a.card();
+                if n == 0 {
+                    out.push(f"retention {args[0]} -> {args[1]}: kept 0 of 0");
+                } else {
+                    let pm = k * 1000 / n;
+                    out.push(f"retention {args[0]} -> {args[1]}: kept {k} of {n} ({pm} per mille)");
+                }
+            }
+            "jaccard" => {
+                need(2)?;
+                let a = self.get(args[0])?;
+                let b = self.get(args[1])?;
+                let u = a.combine_with(Op.Or, b).card();
+                if u == 0 {
+                    out.push(f"jaccard({args[0]}, {args[1]}) undefined: both empty");
+                } else {
+                    let pm = a.combine_with(Op.And, b).card() * 1000 / u;
+                    out.push(f"jaccard({args[0]}, {args[1]}) = {pm} per mille");
+                }
+            }
+            "equal" => {
+                need(2)?;
+                let a = self.get(args[0])?;
+                let b = self.get(args[1])?;
+                let yes = if a.values_equal(b) { "yes" } else { "no" };
+                out.push(f"{args[0]} == {args[1]}: {yes}");
+            }
+            "hexdump" => {
+                need(1)?;
+                let b = self.get(args[0])?;
+                out.push(f"{args[0]}:");
+                hexdump(b, mut out);
+            }
+            "save" => {
+                need(2)?;
+                let b = self.get(args[0])?;
+                let data = serialize(b);
+                let n = data.len();
+                let crc = hex_word(crc32(data), 4);
+                if let Err(e) = fs.write_bytes("data/" + args[1].to_string(), data) {
+                    return Err(f"{args[1]}: {e}");
+                }
+                out.push(f"saved {args[0]} -> {args[1]}: {n} bytes, crc32 {crc}");
+            }
+            "loadroar" => {
+                need(2)?;
+                let data = match fs.read_bytes("data/" + args[1].to_string()) {
+                    Ok(d) => d,
+                    Err(_) => return Err(f"{args[1]}: cannot read"),
+                };
+                let b = match deserialize(data) {
+                    Ok(b) => b,
+                    Err(e) => return Err(f"{args[1]}: {e}"),
+                };
+                let card = b.card();
+                let n = b.chunks.len();
+                out.push(f"loaded {args[0]} <- {args[1]}: card={card} containers={n} ({forms_text(b)})");
+                self.maps[args[0].to_string()] = b;
+            }
+            _ => return Err(f"unknown command: {cmd}"),
+        }
+        Ok(())
+    }
+}
+
+fn is_hexd(c: u8) -> bool {
+    (c >= b'0' and c <= b'9') or (c >= b'a' and c <= b'f') or (c >= b'A' and c <= b'F')
+}
+
+fn hex_val(c: u8) -> u8 {
+    if c >= b'0' and c <= b'9' {
+        c - b'0'
+    } else if c >= b'a' and c <= b'f' {
+        c - b'a' + 10
+    } else {
+        c - b'A' + 10
+    }
+}
+
+fn unhex(s: Str) -> Vec[u8] {
+    let mut digits: Vec[u8] = Vec.new();
+    for c in s.bytes() {
+        if is_hexd(c) {
+            digits.push(hex_val(c));
+        }
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i + 1 < digits.len() {
+        out.push(digits[i] * 16 + digits[i + 1]);
+        i += 2;
+    }
+    out
+}
+
+fn put_bytes(path: Str, b: Vec[u8]) -> Result[(), String] {
+    if let Err(e) = fs.write_bytes(path.to_string(), b) {
+        return Err(f"cannot write {path}: {e}");
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = fs.create_dir_all("data".to_string()) {
+        eprintln(f"cannot create data: {e}");
+        return;
+    }
+    if let Err(e) = write_data() {
+        eprintln(e);
+        return;
+    }
+    let jobs = match fs.read_to_string("data/jobs.txt".to_string()) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln(f"cannot read jobs.txt: {e}");
+            return;
+        }
+    };
+    let mut s = Session { maps: Map.new() };
+    let mut out: Vec[String] = Vec.new();
+    for line in jobs.split("\n") {
+        let t = line.trim();
+        if t.len() == 0 or t.starts_with("#") {
+            continue;
+        }
+        out.push(f"> {t}");
+        if let Err(e) = s.job(t, out) {
+            out.push(f"! {e}");
+        }
+    }
+    println(out.join("\n"));
+}
+
+// ============================================================ data
+
+// The files under data/, in name order.
+fn write_data() -> Result[(), String] {
+    put_bytes("data/bad_cookie.roar", unhex(file_0()))?;
+    put_bytes("data/events.csv", unhex(file_1()))?;
+    put_bytes("data/jobs.txt", unhex(file_2()))?;
+    put_bytes("data/shipped.roar", unhex(file_3()))?;
+    put_bytes("data/truncated.roar", unhex(file_4()))?;
+    put_bytes("data/unsorted.roar", unhex(file_5()))?;
+    Ok(())
+}
+
+// data/bad_cookie.roar
+fn file_0() -> String {
+    """
+3b3100000a0000050001007c0205000a1affff050025000000310000003f0000003f2000000100020003006400e803ff
+ff030000006300c8000000e8fd1702499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224490000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001
+00faff0500
+"""
+}
+
+// data/events.csv
+fn file_1() -> String {
+    """
+6461792c757365722c6576656e740a352c343334362c766965770a312c313837322c6275790a322c333838382c766965
+770a322c333134392c766965770a342c313039303334392c766965770a362c37303335382c766965770a372c37353135
+332c636172740a332c37353233362c766965770a352c333034352c636172740a362c313230373838322c766965770a32
+2c313439382c766965770a322c333234352c766965770a342c333330342c7369676e75700a362c313239393133322c73
+69676e75700a322c323435382c766965770a312c313133353137332c7369676e75700a362c353133362c766965770a33
+2c6e6f74616e756d6265722c766965770a332c37353034302c766965770a322c333333362c636172740a342c34363333
+2c766965770a362c313133313631352c766965770a372c313236323235302c7369676e75700a342c37303930372c7369
+676e75700a352c37333334302c7369676e75700a372c333533332c766965770a362c333034352c766965770a332c3432
+39343936323132312c636172740a312c37333736372c766965770a322c313234303138382c766965770a352c34323934
+3936343838302c636172740a312c343239343936363236312c766965770a342c343239343936303933302c636172740a
+352c313136373435392c766965770a312c37313537382c766965770a372c37323835352c766965770a322c333937362c
+766965770a322c37323832392c766965770a362c313238303231392c7369676e75700a312c313032362c766965770a32
+2c323738322c766965770a362c313232383639362c766965770a332c313638322c766965770a312c333132392c766965
+770a312c323939382c636172740a322c333332302c766965770a332c37333836312c766965770a332c343730392c7669
+65770a352c323637302c766965770a312c313036383630382c6275790a342c313138332c766965770a362c3432393439
+36333834372c766965770a322c313332392c766965770a332c37343237382c766965770a332c34323934393632343431
+2c6275790a322c343239343936303832352c766965770a312c37353538312c766965770a332c313135393234312c7669
+65770a312c37333833372c636172740a342c313232333636392c7369676e75700a312c323739322c766965770a372c31
+3236393331322c766965770a342c313130362c636172740a312c37343131332c766965770a332c37343436302c636172
+740a312c343539302c766965770a362c323834342c7369676e75700a332c37313530312c766965770a322c323639302c
+7369676e75700a312c313337362c636172740a312c323430322c766965770a332c323431342c636172740a362c333934
+372c766965770a372c333830372c766965770a342c37343131332c766965770a342c37323331342c766965770a352c31
+3835392c766965770a332c333635352c766965770a342c343134392c766965770a322c313238312c636172740a322c34
+3239343936353039342c766965770a342c37303037312c766965770a312c343937312c766965770a312c343532312c76
+6965770a362c37303935392c7369676e75700a322c313232363034312c766965770a312c333234352c766965770a362c
+37333237362c766965770a322c343333322c6275790a352c333634332c7369676e75700a352c313230313239342c7669
+65770a372c313938382c6275790a332c343239343936343731322c766965770a332c343632362c766965770a372c3132
+30353133322c766965770a362c37343931302c766965770a342c313038383337362c766965770a332c31303531393337
+2c766965770a372c313738382c7369676e75700a352c313138303435312c766965770a362c323538372c766965770a31
+2c313430322c636172740a372c323333352c766965770a362c333134322c766965770a322c313032362c766965770a35
+2c333233342c636172740a332c313339302c7369676e75700a332c343937322c766965770a362c313233393837332c76
+6965770a342c343238332c636172740a352c37343732322c7369676e75700a352c37343538332c766965770a362c3430
+31302c766965770a332c323338342c766965770a342c343538332c7369676e75700a332c313136373435392c63617274
+0a312c313238303231392c636172740a322c37343030312c7369676e75700a312c313238312c766965770a352c313131
+393330342c766965770a322c313233393837332c6275790a322c323335362c7369676e75700a322c313132333337322c
+766965770a332c323738322c766965770a312c343239343936323432392c7369676e75700a362c313633302c6275790a
+322c343838382c636172740a322c333934312c6275790a362c333533332c766965770a342c37333031312c766965770a
+372c343239343936343332342c766965770a362c343733332c766965770a312c37303438392c766965770a342c313133
+343336372c766965770a342c37343730312c636172740a362c343732362c766965770a342c323630352c766965770a33
+2c323439392c766965770a342c37303636302c766965770a312c37353838312c766965770a342c343333322c76696577
+0a332c343239343936363638322c636172740a352c333039322c766965770a322c343239343936363637382c7369676e
+75700a352c37313735302c6275790a332c37303433392c766965770a352c343338352c7369676e75700a362c33373230
+2c766965770a332c313039373235352c766965770a342c37343631362c766965770a312c313736372c766965770a312c
+323439312c766965770a332c37333937362c6275790a342c37313136372c7369676e75700a332c323637302c76696577
+0a322c37323437372c766965770a332c313238353736342c766965770a312c323536352c766965770a362c313835332c
+6275790a322c343636322c7369676e75700a342c37303337312c636172740a312c37323835352c766965770a342c3231
+30302c636172740a322c313733302c7369676e75700a342c343239343936373039342c766965770a322c323832382c76
+6965770a372c313231373436352c766965770a362c333836382c6275790a322c37323834312c766965770a312c333937
+362c766965770a362c343930362c766965770a342c37353939322c766965770a312c323335362c766965770a322c3432
+39343936323930352c766965770a342c343634382c636172740a342c313237373134342c766965770a372c3735393537
+2c7369676e75700a352c37333630362c766965770a312c37303635352c766965770a312c313136303333312c76696577
+0a312c37323430322c766965770a312c313131313830382c766965770a312c353036302c7369676e75700a342c373433
+37352c6275790a322c37353133342c636172740a312c37323735302c766965770a342c313132333337322c766965770a
+342c343239343936323435322c636172740a332c313139393834332c766965770a352c353033312c766965770a332c32
+3339332c766965770a322c323030342c766965770a332c343239343936353632372c7369676e75700a352c3735353935
+2c766965770a322c313135393234312c766965770a372c313232353032322c766965770a322c37303236342c76696577
+0a332c37323433342c766965770a312c323630362c766965770a352c313239323539312c766965770a322c3731333036
+2c766965770a342c343239343936363735332c766965770a312c313833392c636172740a352c37313637372c76696577
+0a372c313635302c766965770a312c313639362c636172740a342c313035313933372c766965770a322c313638322c62
+75790a352c37323435372c766965770a352c37313133322c766965770a312c37353135332c7369676e75700a352c3337
+33342c766965770a352c313039313139362c636172740a332c313234373530372c6275790a322c333634392c76696577
+0a342c353136302c766965770a362c37323131312c766965770a322c333332372c636172740a342c323533352c766965
+770a362c37343230342c766965770a312c343239343936333333392c766965770a372c343436382c7369676e75700a33
+2c343239343936363236312c636172740a332c353036302c766965770a312c37323936392c6275790a342c3432393439
+36343334392c766965770a342c333737382c6275790a372c323939382c7369676e75700a332c37353233372c76696577
+0a322c323833302c766965770a362c333531362c766965770a352c37333131342c6275790a372c333034352c76696577
+0a332c313330332c766965770a362c343333382c766965770a322c343239343936323737362c7369676e75700a332c37
+323333342c636172740a312c313133323338382c766965770a312c343239343936353334352c766965770a322c373439
+37362c636172740a352c37323238392c6275790a342c343239343936323038322c766965770a312c323833302c766965
+770a312c333733342c7369676e75700a332c313330392c7369676e75700a332c333038312c766965770a352c37313933
+382c766965770a312c333332352c7369676e75700a332c313235333530362c766965770a322c343732362c7369676e75
+700a332c333332392c7369676e75700a332c343730372c766965770a322c323039392c766965770a322c37333630362c
+636172740a332c343435342c636172740a312c37343531392c636172740a332c313035373434372c636172740a352c33
+3633332c636172740a352c313633302c766965770a312c313039363132362c636172740a372c313237363433322c7669
+65770a312c37353231362c7369676e75700a362c323239312c7369676e75700a352c323032382c766965770a312c3333
+30342c766965770a322c343239343936343731322c636172740a312c37303032332c7369676e75700a332c343032352c
+766965770a342c313439322c6275790a312c343432372c766965770a312c333938392c636172740a372c323131362c76
+6965770a372c313231333131392c636172740a372c333032342c766965770a352c333937392c766965770a352c323234
+352c766965770a312c343239343936303534322c766965770a352c37303438392c7369676e75700a362c37343732322c
+636172740a362c313231373436352c636172740a342c313130373534302c766965770a342c313231333131392c766965
+770a372c313439352c766965770a332c343833302c766965770a332c37353835382c766965770a352c31323431313134
+2c766965770a342c333433392c7369676e75700a362c333431332c766965770a342c343239343936323233352c766965
+770a332c313332392c766965770a312c333938362c766965770a342c37313638362c766965770a322c313835332c7669
+65770a312c313839332c766965770a362c323131342c636172740a312c37313231372c7369676e75700a342c34353130
+2c766965770a362c313038383337362c766965770a362c37343131332c766965770a372c313036323339312c6275790a
+372c37323836322c766965770a362c313036363730302c766965770a362c343531302c7369676e75700a332c31313536
+3730352c766965770a342c313238343232382c766965770a342c37323137392c766965770a362c313038313332372c76
+6965770a322c343938362c766965770a322c37333238342c766965770a372c343239343936303134352c766965770a33
+2c37323033382c766965770a352c313437342c7369676e75700a312c313332392c7369676e75700a312c343734392c76
+6965770a352c313031352c766965770a332c343739372c766965770a332c37313633372c766965770a372c333835382c
+766965770a352c333430332c6275790a342c343339382c636172740a312c37343734302c766965770a372c343632342c
+7369676e75700a322c313539372c766965770a372c313234343439362c766965770a312c37343936372c7369676e7570
+0a362c313437352c766965770a372c333632372c6275790a312c37353133372c766965770a342c323332322c76696577
+0a312c37323836322c766965770a372c323739322c636172740a332c343532312c6275790a362c323138302c63617274
+0a312c323130332c7369676e75700a372c333439342c766965770a372c343239343936363331372c766965770a342c35
+3034392c7369676e75700a342c313135333531372c636172740a352c313237373633362c766965770a312c3732313934
+2c7369676e75700a332c353033352c766965770a322c313038363635362c766965770a322c37303934382c6275790a31
+2c313233343236352c766965770a362c333635352c766965770a312c37343737362c766965770a342c323938382c7669
+65770a322c343239343936333937372c636172740a362c343239343936363638322c7369676e75700a342c3432393439
+36333239362c766965770a332c343239343936343936382c766965770a332c333836372c766965770a322c3734343734
+2c766965770a342c343830352c6275790a362c313438312c7369676e75700a372c313231313530342c7369676e75700a
+352c343633332c636172740a372c37303936312c6275790a322c343239343936303831342c636172740a372c31383339
+2c766965770a332c343239343936343536352c766965770a322c313131313830382c766965770a312c323433332c6361
+72740a312c343239343936303336332c7369676e75700a312c333838382c766965770a362c37353936352c766965770a
+362c37303638332c766965770a342c37353233372c7369676e75700a362c313634362c766965770a372c343736372c76
+6965770a322c37353330372c766965770a332c37313736382c7369676e75700a322c313835312c766965770a312c3236
+34382c766965770a322c313139323036312c6275790a342c313232383639362c766965770a332c313439382c6275790a
+342c313132313335382c766965770a322c323439392c6275790a342c313636312c6275790a352c37353930362c766965
+770a322c313733322c766965770a362c343535372c6275790a332c313232313930382c766965770a372c343434352c73
+69676e75700a372c343734392c766965770a312c333038302c7369676e75700a372c37353639332c766965770a312c34
+3239343936353632372c766965770a362c333330392c766965770a322c313237363433322c766965770a352c31373332
+2c7369676e75700a352c313132333830342c7369676e75700a372c323738382c636172740a362c37353538312c627579
+0a342c343239343936303637352c766965770a312c313132323630332c766965770a352c333337362c766965770a332c
+323137392c766965770a332c343234372c766965770a392c313233342c766965770a362c313238373833342c76696577
+0a332c343833382c636172740a352c343239372c766965770a362c313030342c766965770a342c343239343936303739
+372c7369676e75700a372c313038343836342c636172740a352c353133352c766965770a312c34323934393636333931
+2c7369676e75700a312c333939302c7369676e75700a332c323138302c6275790a312c313038373735352c766965770a
+342c343239343936353833342c766965770a362c37333937362c766965770a352c343239343936333032372c76696577
+0a312c313131383336362c636172740a352c37323832392c766965770a342c313236373533392c766965770a372c3734
+3536312c7369676e75700a322c333234322c766965770a312c323130302c636172740a332c343239343936323038322c
+766965770a342c313038323835352c766965770a342c353135372c766965770a312c353034362c636172740a332c3139
+38332c766965770a322c333835382c766965770a362c37303036332c636172740a342c323439322c766965770a352c37
+353536322c636172740a312c313132333830342c766965770a312c313239393133322c766965770a312c313238343232
+382c636172740a352c343239343936313436302c636172740a322c343239343936363435302c636172740a362c323335
+392c766965770a362c343239343936323233352c636172740a372c313233323238352c636172740a342c343239343936
+323434312c766965770a352c333533312c7369676e75700a332c343239343936303431392c766965770a342c31393438
+2c7369676e75700a352c343239343936303534322c766965770a322c323030322c766965770a362c333332392c766965
+770a332c37353133322c766965770a372c37343732302c7369676e75700a342c313231303839302c766965770a362c37
+353639332c7369676e75700a312c353139382c766965770a332c343239343936303831342c766965770a342c37313232
+352c636172740a352c343637372c766965770a362c37343235312c766965770a332c37323634312c766965770a372c32
+3137362c766965770a312c323032382c766965770a342c343730392c6275790a322c313134323231362c766965770a33
+2c313038353733312c766965770a342c313332392c766965770a342c343239343936303530372c766965770a342c3333
+32302c766965770a312c343938362c636172740a342c333234352c766965770a342c37343933372c7369676e75700a34
+2c343239343936313135332c766965770a312c37313431382c6275790a362c343734392c766965770a332c343938362c
+636172740a312c37303538322c7369676e75700a372c313239323539312c766965770a312c333031322c766965770a33
+2c333837342c766965770a322c313035373439312c766965770a322c37303134352c766965770a372c31323233363639
+2c7369676e75700a372c333939332c766965770a322c313231373436352c766965770a342c313339302c766965770a33
+2c313139363330302c636172740a332c333632372c766965770a342c313130343632382c766965770a342c313134332c
+766965770a332c313639382c636172740a362c333138332c766965770a362c37353731392c766965770a362c34323934
+3936323031302c636172740a312c313339302c766965770a352c333431342c766965770a312c353034382c6275790a35
+2c323234302c766965770a342c37313031382c766965770a332c37343239302c766965770a352c37353032352c766965
+770a332c343438302c766965770a312c343833382c6275790a312c313938382c766965770a322c323537312c76696577
+0a332c333937342c766965770a322c323838302c7369676e75700a322c343134392c7369676e75700a322c343036302c
+6275790a362c313738382c766965770a362c37353339312c766965770a372c343637372c766965770a332c3732333134
+2c6275790a322c313131383738362c636172740a312c37313830382c7369676e75700a352c343833372c766965770a33
+2c37343730312c636172740a322c313230313239342c7369676e75700a352c343239343936343835372c766965770a31
+2c313239393238322c636172740a312c37323634312c6275790a372c37323435342c7369676e75700a322c3735393537
+2c766965770a312c323738382c766965770a342c37323238392c636172740a352c343134342c636172740a332c343939
+342c7369676e75700a322c333639332c636172740a372c313030382c766965770a332c37353639332c766965770a372c
+323938352c766965770a332c343239343936343838302c6275790a342c343239343936343731322c7369676e75700a33
+2c37303231332c766965770a332c37333330352c766965770a312c333638352c766965770a352c343632362c76696577
+0a362c37333831302c7369676e75700a372c37353332382c766965770a352c313234373530372c7369676e75700a312c
+37313933382c6275790a322c333734332c636172740a332c343239343936333139312c766965770a372c323134342c76
+6965770a372c37313331372c7369676e75700a312c313234313131342c636172740a342c313634362c766965770a322c
+343638312c766965770a362c37333934332c766965770a332c313234343439362c636172740a312c313232312c766965
+770a322c37323731362c766965770a342c333635352c766965770a312c343738342c636172740a342c37353133342c76
+6965770a362c343239343936353738362c636172740a332c37303039392c766965770a312c343239343936343838302c
+766965770a342c343932302c636172740a322c343732352c7369676e75700a352c333738322c636172740a312c313039
+363536342c766965770a362c343939332c766965770a322c37303537332c766965770a352c313039363536342c736967
+6e75700a332c313239332c766965770a322c37333039352c636172740a352c343239343936343636392c766965770a36
+2c343135302c766965770a322c313239373137382c766965770a352c333332302c766965770a362c313135333531372c
+636172740a312c313039303334392c766965770a362c323738362c766965770a312c313134332c636172740a352c3238
+34342c766965770a362c343239343936323132312c766965770a362c343239343936343636392c766965770a312c3431
+33342c766965770a342c333836372c766965770a372c323933332c766965770a362c343239343936303738372c627579
+0a332c313535392c766965770a362c313234373530372c7369676e75700a312c37313938312c766965770a332c373332
+38342c766965770a342c37313036352c766965770a312c37323435342c766965770a312c353033332c766965770a352c
+313236383034332c766965770a332c343239302c636172740a312c343239343936333536362c766965770a322c313430
+382c636172740a312c37343933372c766965770a352c37353338312c6275790a352c313438312c636172740a312c3432
+39343936353834372c6275790a332c343333382c636172740a312c333634332c766965770a352c313130373739362c76
+6965770a332c313537362c766965770a322c37353833372c766965770a322c323335392c7369676e75700a322c313037
+383737362c766965770a312c37333031312c636172740a352c323339332c766965770a312c343239343936343138332c
+766965770a322c333736332c766965770a312c333337382c6275790a332c313135373235322c766965770a362c343939
+302c766965770a352c323830362c766965770a352c333031322c766965770a342c313130373230382c6275790a312c35
+3137362c6275790a322c323630352c766965770a342c343239343936353536382c766965770a352c313133373432342c
+766965770a372c333431322c766965770a352c333732342c766965770a312c313131343031342c636172740a372c3731
+3133322c766965770a322c313434372c636172740a312c333634392c766965770a352c333235322c766965770a312c34
+3939322c7369676e75700a362c313035303138322c636172740a322c353133352c766965770a332c37353638362c7369
+676e75700a362c333430332c766965770a352c323339392c766965770a342c323339392c766965770a372c323830312c
+766965770a312c313137353530322c7369676e75700a312c333431322c766965770a342c37303437322c766965770a33
+2c313231373436352c766965770a332c343239343936353334352c766965770a332c313036343531342c636172740a32
+2c343638332c766965770a322c343239343936323434312c766965770a362c37353536322c636172740a372c34393230
+2c766965770a362c313135363730352c7369676e75700a312c323039342c636172740a352c343433302c7369676e7570
+0a312c343331342c6275790a362c37333033332c766965770a352c343239343936323737362c636172740a362c373530
+34352c766965770a312c313236313533302c766965770a352c37323233372c766965770a342c333838312c766965770a
+372c37323437372c636172740a352c313130343632382c766965770a332c37333930392c766965770a352c3735313831
+2c766965770a352c343633382c636172740a332c313833392c636172740a332c313035343838372c766965770a332c31
+3132333337322c7369676e75700a352c313230353133322c766965770a322c333034392c766965770a332c3131333531
+37332c766965770a372c343239343936333234382c766965770a332c343338352c766965770a342c37353830302c6361
+72740a362c37353439382c766965770a322c313138323835362c766965770a312c37303236332c766965770a312c3132
+31323130392c766965770a332c343530362c766965770a352c343535362c766965770a312c333736332c766965770a32
+2c313239373138352c636172740a342c313931352c7369676e75700a372c323137352c7369676e75700a312c32393036
+2c766965770a332c343239343936333333392c766965770a352c343036362c766965770a312c353138362c766965770a
+322c313132363637322c766965770a332c343239343936323535312c766965770a372c343239343936363236312c7669
+65770a362c323833302c7369676e75700a342c37303935392c7369676e75700a312c37353138312c6275790a332c3734
+3231312c766965770a332c343239343936323836352c766965770a352c37343730312c636172740a322c343937312c73
+69676e75700a342c343132312c766965770a342c37353139352c766965770a372c37313036352c6275790a312c313039
+393235322c766965770a372c313037373630322c6275790a342c37343634362c7369676e75700a372c37323932392c63
+6172740a322c313231323130392c766965770a312c323834332c766965770a332c37353333382c766965770a352c3735
+3337372c766965770a352c37333930392c636172740a322c353136302c6275790a312c313130393131302c636172740a
+322c313139393834332c6275790a342c323538372c766965770a372c37313432342c6275790a322c333838312c766965
+770a332c313130363631332c766965770a322c323739322c636172740a362c333937342c636172740a312c3132373731
+34342c766965770a332c323439322c636172740a312c313838332c6275790a312c37353330372c766965770a312c3735
+3830302c766965770a332c333633362c766965770a312c343239343936343630382c766965770a352c313638322c7669
+65770a362c37333736372c6275790a352c313639382c766965770a312c353133362c636172740a312c333032342c7369
+676e75700a352c343732362c7369676e75700a342c333939302c7369676e75700a322c313239393631312c7369676e75
+700a362c313430382c766965770a342c343832362c766965770a342c323338312c766965770a372c37303038352c7669
+65770a322c323538392c636172740a352c37323232312c766965770a322c313232333636392c766965770a332c353134
+392c766965770a312c343531382c766965770a322c343239343936303637352c636172740a352c313133313631352c62
+75790a342c313630372c766965770a372c37303530332c7369676e75700a342c353036302c766965770a372c33313333
+2c766965770a342c37323636382c636172740a352c313234343439362c766965770a322c37333031312c636172740a36
+2c313931392c766965770a352c37353738392c6275790a312c37343732302c766965770a312c333835382c766965770a
+312c343239343936313038372c766965770a342c37323333342c766965770a342c333232312c6275790a312c33303439
+2c6275790a362c313132313539312c6275790a312c313036383636332c766965770a312c313139323036312c76696577
+0a372c333938392c766965770a362c343439342c636172740a372c323039392c7369676e75700a352c34323934393635
+3337302c6275790a312c323535302c636172740a362c313537342c7369676e75700a312c313039373235352c76696577
+0a312c333835352c766965770a332c37313139372c7369676e75700a362c323630352c6275790a352c31303839313134
+2c7369676e75700a372c323634382c766965770a312c323939342c636172740a362c343735312c766965770a332c3132
+30302c766965770a352c343239343936333036312c636172740a312c37303630362c7369676e75700a342c3730393438
+2c6275790a342c313131383336362c766965770a312c333332392c7369676e75700a362c313937392c636172740a352c
+343032332c7369676e75700a352c313239393133322c7369676e75700a312c313835392c766965770a332c323833372c
+636172740a312c37343839362c7369676e75700a322c343731352c766965770a312c37333236342c766965770a342c37
+343732302c766965770a342c313131323534342c766965770a342c343132392c766965770a372c323733302c76696577
+0a342c37343734302c766965770a342c313234343439362c766965770a322c313139303832382c766965770a332c3735
+3933302c636172740a312c343239343936333234382c7369676e75700a312c313130392c766965770a372c323539302c
+766965770a332c343239343936323930352c7369676e75700a322c333933302c636172740a362c313039373235352c76
+6965770a312c343032332c766965770a332c333730322c636172740a342c37323930322c766965770a362c323439392c
+766965770a332c313433312c636172740a352c323732342c636172740a342c343239343936373138332c6275790a342c
+333938392c766965770a322c333930372c766965770a322c343338352c6275790a332c343239343936363637382c7669
+65770a342c37303736392c636172740a322c343632362c766965770a322c37343536312c766965770a342c3131393137
+38382c766965770a372c323039342c636172740a332c343034372c766965770a322c37303830362c766965770a362c37
+313035372c7369676e75700a362c37353133372c766965770a332c323137362c636172740a332c343730342c76696577
+0a372c323536352c766965770a312c343239343936343531372c636172740a342c37343937362c766965770a362c3132
+34313131342c766965770a332c37353133372c766965770a322c37343032312c766965770a362c37303835342c627579
+0a332c37313136372c636172740a312c343735312c766965770a322c37303239372c766965770a332c323239312c7669
+65770a322c37323936392c636172740a342c333034392c766965770a332c37313331372c766965770a352c323130382c
+766965770a332c313135333639392c7369676e75700a312c333335342c766965770a372c37343239302c766965770a37
+2c313330392c766965770a322c343239343936363436332c766965770a372c313133323532332c636172740a312c3230
+37372c636172740a342c313234392c766965770a322c37323234352c6275790a372c37323238392c6275790a362c3134
+31392c6275790a322c323138342c766965770a372c343239343936353431312c636172740a352c313630372c76696577
+0a352c333532342c636172740a312c333235332c766965770a352c37343130302c766965770a342c37303838352c6361
+72740a332c353135372c636172740a342c37303039392c636172740a332c37313537382c7369676e75700a342c343239
+343936323737362c6275790a362c313230353133322c7369676e75700a312c313439352c6275790a322c313038362c76
+6965770a332c323139362c766965770a312c37323932372c766965770a372c37303238362c7369676e75700a332c3131
+32363637322c7369676e75700a372c323833302c766965770a332c37323233372c766965770a322c333337382c766965
+770a342c313236313530362c766965770a372c313731362c766965770a322c333232312c6275790a342c323930362c76
+6965770a352c313137392c766965770a332c37333934332c766965770a312c323139362c636172740a312c3130363233
+39312c636172740a322c343730392c766965770a332c37343631362c766965770a322c343239343936363331372c7669
+65770a352c323133392c766965770a372c313237373134342c766965770a352c313132313335382c766965770a342c34
+3239343936353135342c766965770a342c37353339312c766965770a322c323137362c766965770a322c343239343936
+373138372c766965770a352c323335362c766965770a322c313235373332352c636172740a352c343338362c76696577
+0a372c323838302c766965770a322c323131362c6275790a372c37303337312c636172740a352c37313031382c766965
+770a312c343230332c636172740a352c343239343936313635382c766965770a312c313135333531372c766965770a31
+2c37353431352c766965770a372c37313637372c766965770a342c323431302c766965770a372c343239343936313038
+372c766965770a352c343239343936313135332c766965770a342c343239343936323930352c6275790a322c34373333
+2c766965770a312c313236383034332c766965770a362c37333531362c7369676e75700a352c333838342c766965770a
+332c313736372c766965770a322c37343930372c7369676e75700a322c343239343936373239362c766965770a352c35
+3131302c766965770a312c323637332c766965770a322c37303531372c636172740a322c313234363334302c63617274
+0a332c343239343936343131352c6275790a332c37343732302c6275790a322c343239343936343630382c766965770a
+322c343939302c766965770a362c313134333439382c766965770a312c313134343239302c766965770a362c31313630
+3333312c766965770a322c313234333539382c766965770a362c37323230322c7369676e75700a322c323933332c7669
+65770a332c37313938312c7369676e75700a352c313133323532332c766965770a352c37313733392c766965770a312c
+333934372c766965770a352c333333362c7369676e75700a342c37333934332c766965770a332c343735352c7369676e
+75700a322c313234343439362c6275790a322c37303039392c766965770a332c333034352c766965770a332c37343735
+362c766965770a332c343139332c766965770a342c37313631302c766965770a322c323338342c7369676e75700a352c
+353133362c766965770a322c343230332c766965770a342c333234332c766965770a362c313035373434372c7369676e
+75700a352c343139312c766965770a362c343239343936303336332c766965770a332c313538342c636172740a372c37
+303537332c766965770a362c313138323835362c6275790a352c333431322c636172740a342c333633332c6275790a34
+2c343239343936303534322c766965770a312c37303835342c636172740a352c323738352c766965770a342c31353937
+2c766965770a312c323834342c7369676e75700a332c37353533362c766965770a352c37303530332c766965770a372c
+343531382c766965770a352c313237343933392c766965770a372c343132312c766965770a312c323239312c76696577
+0a352c343535372c6275790a322c37313636372c6275790a332c323833352c766965770a332c323635362c766965770a
+342c343239343936343531372c766965770a352c343239343936353431312c7369676e75700a342c313932382c766965
+770a322c37353539352c766965770a342c343932372c766965770a312c343239343936353930342c766965770a342c34
+3534342c636172740a362c313236313530362c766965770a372c323834342c7369676e75700a312c3432393439363331
+39312c766965770a322c37323935392c636172740a322c323439352c636172740a322c37353738392c6275790a362c33
+3439322c636172740a362c313835392c7369676e75700a312c37343735362c766965770a352c323930362c766965770a
+332c313137392c766965770a332c313030382c766965770a352c343239343936303739372c766965770a342c31363239
+2c766965770a312c37353131302c636172740a322c323333352c636172740a342c37303038352c766965770a312c3234
+35382c6275790a312c343932312c766965770a332c37303435362c766965770a312c343537342c766965770a312c3132
+31303033302c766965770a342c333738322c766965770a332c37343130302c7369676e75700a372c323032382c636172
+740a312c313234343230302c766965770a362c313231313037352c766965770a362c343239343936333835352c627579
+0a312c323738322c766965770a342c313232363034312c7369676e75700a352c37303630362c766965770a352c373039
+35392c766965770a312c37333037322c766965770a332c313336392c766965770a372c323935362c766965770a342c34
+3739372c636172740a312c313239373138352c766965770a332c343239343936333536362c636172740a322c37323834
+372c766965770a322c313639382c766965770a322c353133342c766965770a322c37303433392c766965770a372c3130
+39373634332c766965770a322c333533332c766965770a372c343633332c766965770a372c313234303130372c766965
+770a332c313138333533362c636172740a312c313037383737362c766965770a312c313234392c766965770a332c3732
+3437372c636172740a322c343239343936323038372c766965770a332c343732362c766965770a322c31323734393339
+2c7369676e75700a332c313934312c636172740a342c313934312c766965770a312c333338372c6275790a342c343137
+392c766965770a362c313138353734332c7369676e75700a362c333337362c766965770a352c37303238362c63617274
+0a352c313135333531372c766965770a342c37333339302c636172740a312c323931342c766965770a362c353036302c
+766965770a322c313934312c766965770a322c37323331342c766965770a322c343738342c7369676e75700a332c3336
+33392c766965770a312c343730372c766965770a312c323637302c766965770a362c333832362c766965770a342c3730
+3634352c766965770a312c323539322c7369676e75700a312c343932352c636172740a312c313130362c766965770a33
+2c343239343936333032372c636172740a342c343239343936313539342c766965770a322c37333836312c766965770a
+352c313837322c766965770a312c333633392c6275790a322c333031322c766965770a352c313239393631312c766965
+770a332c37343537382c766965770a322c333235322c636172740a332c313230392c766965770a372c353039392c7369
+676e75700a342c37313330362c766965770a312c37323137392c766965770a312c37333531362c7369676e75700a322c
+313235333530362c7369676e75700a322c343239343936333239362c766965770a342c37303238302c766965770a332c
+323536352c766965770a332c343632342c766965770a372c37353537322c636172740a322c313239332c766965770a33
+2c37303530392c6275790a342c313231323130392c766965770a322c333330312c766965770a362c313131323534342c
+636172740a322c323138312c766965770a322c333937392c766965770a342c313438312c636172740a352c333134322c
+766965770a352c343239302c6275790a352c37323938352c766965770a342c313231303033302c766965770a332c3735
+3532312c766965770a322c37353138312c766965770a362c343239343936363236312c6275790a372c313931352c7669
+65770a342c323839322c766965770a362c313839302c766965770a312c323734312c766965770a322c323830362c7369
+676e75700a372c313030342c766965770a372c333536302c636172740a362c313131383336362c766965770a332c3734
+3737362c636172740a352c313934312c766965770a372c313039343337342c766965770a352c37333735312c76696577
+0a312c37313031382c636172740a332c333733342c766965770a362c333633362c766965770a342c313132363637322c
+7369676e75700a372c37353835382c766965770a342c37333131342c766965770a332c37353034352c636172740a312c
+353038322c766965770a322c313039313736382c766965770a312c37343634362c636172740a332c37303837342c7369
+676e75700a352c343134392c766965770a342c313039313736382c766965770a362c343830352c6275790a322c343137
+392c6275790a332c313038343836342c766965770a332c313733302c6275790a332c37303638332c766965770a332c34
+3838382c6275790a332c37323137392c766965770a372c37303538322c766965770a372c333038392c636172740a342c
+37333835362c636172740a372c313231303033302c766965770a352c313736372c6275790a352c313131343031342c76
+6965770a312c313237303038332c766965770a312c313133372c766965770a332c313037313930302c766965770a312c
+313134303132362c766965770a372c343439342c766965770a332c313630352c766965770a372c313031352c76696577
+0a362c37313633372c636172740a352c313634362c766965770a352c37323038382c636172740a372c37343834392c63
+6172740a352c37353139352c7369676e75700a342c37303631322c766965770a332c313231303839302c766965770a35
+2c343239343936303933302c766965770a332c333835352c7369676e75700a332c343239343936373132352c7369676e
+75700a352c343638372c766965770a372c343732352c766965770a342c333830372c766965770a332c37313735302c76
+6965770a322c323135312c766965770a372c323936352c7369676e75700a352c323030342c766965770a372c31313039
+2c766965770a372c313136313931372c766965770a362c343239343936363336342c766965770a342c37353134342c76
+6965770a322c37303238312c766965770a342c313239393631312c7369676e75700a332c37353731392c7369676e7570
+0a322c313130343632382c7369676e75700a312c343239343936363336342c766965770a342c333034352c766965770a
+332c333938362c636172740a352c343239343936343332342c766965770a312c333933302c766965770a332c34353536
+2c766965770a322c313236373533392c766965770a342c37303236332c766965770a372c313533372c766965770a342c
+37343536312c7369676e75700a312c313438312c766965770a332c313233363333322c766965770a362c333532342c76
+6965770a332c37343937362c766965770a332c313036383636332c7369676e75700a372c37303933362c766965770a36
+2c333932352c766965770a332c313039353437322c6275790a352c37313735362c766965770a332c333330342c736967
+6e75700a322c313039353437322c7369676e75700a362c343535362c766965770a312c313639382c636172740a332c32
+3832382c766965770a352c37303832392c766965770a322c343939332c766965770a352c333234352c766965770a372c
+343632362c766965770a342c37353430372c6275790a372c353034362c636172740a332c313232313230322c76696577
+0a352c343031372c766965770a312c323733302c636172740a332c343637372c636172740a332c37353032352c627579
+0a352c37323930322c766965770a312c333738382c7369676e75700a322c343239343936333834372c766965770a312c
+343432302c636172740a312c313035373434372c636172740a372c343038312c636172740a352c37323331342c766965
+770a362c323939382c766965770a312c313135333237362c766965770a372c343730342c766965770a332c333930362c
+766965770a332c313039363132362c6275790a372c37333037322c766965770a352c37303435352c766965770a322c31
+3131393330342c7369676e75700a342c343239343936353431312c766965770a322c37353939322c766965770a312c31
+3638322c6275790a362c37323639332c636172740a312c353132352c766965770a372c37353532372c766965770a352c
+343239343936303637352c766965770a342c37372c726566756e640a322c333837382c7369676e75700a362c31323532
+3938302c7369676e75700a332c343239343936363331372c766965770a322c313231313530342c766965770a342c3239
+39342c636172740a362c37353135332c766965770a352c37353638362c636172740a362c37343732302c766965770a37
+2c37313638362c766965770a342c313036303134342c6275790a322c343239343936313539342c7369676e75700a362c
+333431322c766965770a332c333436332c7369676e75700a332c333533332c6275790a362c37323731362c766965770a
+322c313132353636302c6275790a332c333532342c766965770a342c37333437352c6275790a342c313138383732332c
+636172740a342c37343930372c766965770a372c343335312c766965770a342c313035373439312c766965770a352c31
+3234363334302c636172740a352c37353439382c766965770a312c313238343737352c766965770a322c313039343337
+342c766965770a322c333838342c766965770a362c343239343936343536352c7369676e75700a362c313938352c6275
+790a312c343031302c766965770a342c313133343438352c7369676e75700a352c37313530312c766965770a372c3134
+33312c7369676e75700a332c343239343936313135332c766965770a312c37323130362c636172740a342c3130363836
+30382c766965770a332c313638302c6275790a332c37333932332c766965770a312c343239343936333036312c766965
+770a332c37353138312c766965770a342c37323530372c766965770a352c333331332c7369676e75700a352c37353533
+352c766965770a342c323130382c766965770a322c323938382c7369676e75700a312c333936302c636172740a322c37
+303231332c6275790a332c313237373633362c6275790a362c343732352c636172740a362c313538342c7369676e7570
+0a352c313238343232382c766965770a342c313230373135392c766965770a362c333939302c766965770a322c373137
+33342c766965770a372c323538382c7369676e75700a312c353033312c766965770a322c333138332c7369676e75700a
+342c313231393734332c766965770a372c323939342c766965770a362c313131383738362c6275790a342c3735353237
+2c7369676e75700a312c323535352c636172740a362c313530382c7369676e75700a332c333234332c636172740a372c
+313037383737362c636172740a342c37353536322c766965770a362c313133343036372c766965770a342c3131333430
+36372c6275790a362c343837352c766965770a362c37343536332c766965770a362c37323234352c766965770a332c34
+3734392c766965770a362c323234302c766965770a372c37353133372c6275790a362c37303133332c636172740a362c
+313130343838392c766965770a352c313439382c636172740a312c37323137352c766965770a372c37323930322c7669
+65770a322c313031342c766965770a322c343239343936323930362c766965770a312c343239343936323038322c7669
+65770a372c313036363730302c766965770a352c313236313530362c766965770a372c37353339312c766965770a332c
+37333835362c766965770a332c343939322c766965770a322c313036383630382c6275790a352c333638352c7369676e
+75700a332c323039392c766965770a312c323738362c766965770a362c333633392c766965770a312c37343130302c76
+6965770a322c37303238302c6275790a362c343239343936353938302c766965770a332c313039323138322c63617274
+0a342c313235323938302c766965770a362c333333372c7369676e75700a312c343138372c766965770a342c31303738
+3834312c766965770a322c313133323938392c636172740a362c313038363635362c636172740a372c37323430322c73
+69676e75700a372c313237333831332c766965770a352c333736332c7369676e75700a352c37353730362c636172740a
+322c37343933372c6275790a342c313139363330302c6275790a342c37313936362c766965770a332c333833352c7369
+676e75700a362c37353835382c766965770a332c313437342c766965770a322c37313031382c636172740a362c313539
+372c766965770a352c333038312c766965770a312c323936352c766965770a352c323131342c6275790a342c31373830
+2c766965770a312c313233363333322c766965770a312c343239343936333530372c7369676e75700a332c3130393137
+36382c766965770a352c37353134342c7369676e75700a362c323537312c636172740a362c313139303832382c736967
+6e75700a332c37343534362c6275790a322c37343235312c766965770a332c343239343936353236322c766965770a34
+2c313835332c636172740a322c313638342c766965770a372c343239343936333835352c766965770a312c3731393138
+2c766965770a312c353136342c766965770a352c37343136382c766965770a332c313237333832372c636172740a362c
+323035392c766965770a322c323436362c766965770a332c37303435352c766965770a352c333435332c766965770a32
+2c353037392c636172740a372c343830352c766965770a342c323437352c7369676e75700a352c37333339302c736967
+6e75700a312c343239343936333339362c766965770a342c313736372c766965770a312c343739372c766965770a372c
+333732342c766965770a372c313038323835352c766965770a332c313036323339312c6275790a362c34323934393637
+3039342c766965770a362c333234322c766965770a372c323834332c766965770a332c333937392c636172740a362c37
+343736322c6275790a372c343634382c636172740a342c323339332c636172740a372c323535352c766965770a332c34
+3632372c766965770a352c313237342c636172740a352c313238323931392c766965770a322c37323139312c76696577
+0a372c313630352c766965770a322c353033352c766965770a322c37303639362c7369676e75700a332c313232353032
+322c7369676e75700a352c37343737362c766965770a322c37353538312c766965770a362c353139382c766965770a34
+2c343535382c6275790a342c323333352c766965770a312c313231303235312c766965770a332c37333736372c766965
+770a312c323131312c7369676e75700a372c313137392c766965770a352c313235302c7369676e75700a332c37333338
+342c636172740a342c333633392c6275790a332c37343933372c636172740a312c333234322c766965770a372c343139
+312c766965770a362c313039303334392c766965770a322c343730342c766965770a322c343531382c766965770a352c
+37333033382c766965770a332c313431392c766965770a372c37353131302c6275790a352c37343436302c636172740a
+352c333838382c766965770a362c353130342c766965770a322c343239343936313238392c766965770a372c37303736
+332c6275790a312c37343139382c7369676e75700a332c313231313037352c766965770a332c313130373739362c7369
+676e75700a312c333532342c636172740a342c333430332c7369676e75700a322c313731362c6275790a312c31333735
+2c766965770a322c343539302c766965770a372c313036393136372c636172740a322c343638372c636172740a312c34
+3932302c636172740a322c313237363439372c766965770a332c343434352c766965770a332c323736332c766965770a
+332c313237333831332c636172740a342c313135353230352c766965770a352c37323634312c636172740a332c343932
+372c766965770a322c37313631302c766965770a342c37343139382c766965770a312c37353232322c6275790a332c31
+3630362c766965770a312c37303238312c6275790a362c37303235312c636172740a312c333838342c766965770a342c
+313234303138382c766965770a332c323832322c766965770a332c37303830362c766965770a352c333633362c766965
+770a322c343239343936323933352c766965770a322c37353031392c766965770a312c343132392c7369676e75700a35
+2c313235323938302c636172740a352c313036393136372c636172740a322c343435342c766965770a322c3734303430
+2c766965770a332c313731362c7369676e75700a352c313131313336342c766965770a322c313239373130302c766965
+770a362c343032352c766965770a352c313236393331322c766965770a322c37303838352c766965770a312c31323633
+3439372c766965770a332c37303133332c766965770a362c343535382c766965770a372c313231303839302c63617274
+0a332c37303832392c766965770a322c343433302c766965770a342c37343232362c636172740a362c34323934393637
+3138372c766965770a322c37353131302c6275790a312c37353533362c766965770a362c37353134342c766965770a34
+2c323433332c6275790a322c333931302c766965770a362c313839392c766965770a362c313539362c636172740a322c
+37343730352c766965770a312c313436362c7369676e75700a332c323939342c7369676e75700a312c343833372c6275
+790a372c37353337372c766965770a352c323436372c766965770a312c343239343936333835352c7369676e75700a36
+2c313134332c766965770a352c37353339382c636172740a322c323736332c766965770a362c34323934393637313833
+2c766965770a352c313234303130372c766965770a342c323135312c766965770a332c313132353636302c766965770a
+322c343239343936353938302c636172740a342c343331322c6275790a352c313038343836342c7369676e75700a352c
+313934382c766965770a342c333736332c766965770a322c37333736372c766965770a352c313138323835362c736967
+6e75700a362c313130392c766965770a352c37323439342c766965770a362c37313331372c766965770a342c33363238
+2c766965770a322c343239343936333339362c766965770a322c313639362c766965770a352c313130362c766965770a
+352c313135333237362c766965770a372c37303634352c766965770a322c313230383639352c636172740a332c323439
+382c766965770a322c313035312c766965770a312c313539372c766965770a372c333634332c766965770a372c373434
+36302c636172740a372c37333831362c636172740a332c343335392c636172740a312c343239343936323233352c6275
+790a312c343239343936303837392c6275790a342c313232363834332c766965770a352c313332342c766965770a352c
+343239343936313238392c766965770a322c343239343936333333392c766965770a322c323732342c766965770a332c
+323035392c766965770a362c37303134352c636172740a362c353132352c766965770a332c313139313738382c766965
+770a332c37313330362c766965770a362c37303038352c6275790a312c343231362c766965770a332c37313133322c76
+6965770a342c37313035372c766965770a312c313237342c7369676e75700a312c313835312c766965770a332c313036
+323239362c766965770a312c313539362c766965770a312c333730322c766965770a312c37343035342c766965770a34
+2c343338362c766965770a362c343239343936313135352c7369676e75700a342c313038363635362c766965770a362c
+313037353132382c766965770a342c343239343936363537342c766965770a362c313230302c766965770a342c373232
+33372c766965770a362c333038382c6275790a352c343239343936303134352c636172740a332c37313830382c736967
+6e75700a362c343434352c766965770a322c313134393838302c7369676e75700a352c37343237382c766965770a332c
+313435382c766965770a312c343137372c766965770a322c333535312c7369676e75700a312c37323434372c76696577
+0a332c313238343737352c766965770a372c37313435312c766965770a332c343433302c766965770a362c333436332c
+766965770a362c37343531392c636172740a362c313434342c7369676e75700a362c37333435382c766965770a332c31
+3239383833312c766965770a332c343239343936343630382c7369676e75700a372c323637332c6275790a372c373233
+33392c766965770a342c313833312c766965770a342c313433312c766965770a312c37343436302c766965770a372c33
+3635352c7369676e75700a312c333439322c766965770a312c343638332c7369676e75700a332c343139312c76696577
+0a332c37353330372c766965770a362c333330342c766965770a332c37323435362c766965770a322c323937302c7369
+676e75700a372c313130343632382c636172740a372c313234332c766965770a352c323738392c636172740a342c3339
+37392c766965770a342c333533312c766965770a322c37333331322c636172740a372c37303235312c766965770a372c
+37353730362c766965770a342c343239343936313033392c7369676e75700a312c343239343936373039382c76696577
+0a342c333633362c766965770a342c313638302c766965770a322c333332352c6275790a332c37333236362c7369676e
+75700a372c313530322c766965770a362c343539302c636172740a322c313635302c766965770a342c37313935382c62
+75790a372c37353638302c766965770a352c37303439352c766965770a312c343137392c766965770a322c3432393439
+36313436302c636172740a352c333330392c766965770a332c313234332c7369676e75700a332c313833332c7369676e
+75700a322c323138302c766965770a322c37353337372c766965770a352c323838302c766965770a312c343239343936
+373039342c766965770a312c313530322c766965770a372c343530362c7369676e75700a312c313039323138322c7669
+65770a352c313535392c7369676e75700a352c37343030312c766965770a342c333738332c6275790a372c3732373136
+2c766965770a352c343137372c766965770a372c313037383834312c636172740a342c37303635352c636172740a312c
+313135393234312c766965770a362c343137392c766965770a352c313233393837332c766965770a372c323738392c76
+6965770a312c313430332c636172740a322c37303636302c636172740a372c37353032352c766965770a362c37353333
+382c636172740a362c343932352c766965770a362c37323137392c766965770a342c313738332c7369676e75700a342c
+323234302c636172740a342c37343239302c766965770a362c343239343936333333392c636172740a352c343432302c
+636172740a372c343334352c766965770a322c343239302c636172740a322c313630372c766965770a312c333138332c
+766965770a332c333235332c766965770a352c37303236332c766965770a352c323536352c636172740a342c34323934
+3936363235332c766965770a332c313132373436382c636172740a322c343239343936303336332c766965770a372c31
+3530382c636172740a362c37343237382c766965770a362c37343936372c766965770a362c313835312c766965770a36
+2c37313631302c766965770a362c333435332c636172740a372c343539302c636172740a322c37353830302c6275790a
+342c343239343936333835362c7369676e75700a332c343239343936303134352c766965770a312c323439392c766965
+770a322c37343732322c766965770a372c333933302c766965770a312c313130343838392c7369676e75700a312c3735
+3532312c766965770a372c353136302c766965770a332c353034392c7369676e75700a372c37313938312c6275790a36
+2c323037372c766965770a332c37333732382c7369676e75700a312c313836342c766965770a352c343935342c636172
+740a342c313134323231362c766965770a352c313239383833312c766965770a362c313530322c7369676e75700a342c
+343239343936373132352c766965770a312c333535312c6275790a362c313237343933392c7369676e75700a322c3438
+32352c766965770a322c37303438392c7369676e75700a342c343535372c7369676e75700a342c333733342c76696577
+0a322c37313439322c7369676e75700a352c323433332c7369676e75700a342c313135383336392c766965770a342c33
+3632372c766965770a352c323939342c7369676e75700a352c333635352c766965770a352c343239343936343630382c
+636172740a312c343239343936333032372c766965770a372c343832362c7369676e75700a312c333837382c7369676e
+75700a322c323332322c766965770a372c313139323036312c766965770a322c343837352c766965770a322c31323437
+3530372c636172740a332c37303134352c766965770a322c313230373135392c766965770a322c323130302c76696577
+0a372c333330342c766965770a322c37343634332c7369676e75700a372c343638372c766965770a312c37313035352c
+7369676e75700a342c323935362c766965770a372c37313136382c766965770a342c333937302c6275790a332c343733
+332c766965770a322c323539302c7369676e75700a322c343138372c636172740a352c37303335382c766965770a312c
+353133332c6275790a312c313237363439372c766965770a312c37323333392c7369676e75700a322c34323934393632
+3432392c7369676e75700a362c37343539302c766965770a352c37323931322c766965770a362c343239343936303933
+302c766965770a342c37343130302c7369676e75700a332c343439342c7369676e75700a372c37353735392c76696577
+0a372c343239343936343932342c636172740a342c343738342c636172740a342c313833372c766965770a332c313437
+352c7369676e75700a342c313038313332372c766965770a312c313230313239342c766965770a372c31303537343931
+2c766965770a342c313039353437322c766965770a312c323338312c766965770a352c343239343936363637382c7669
+65770a322c333738322c766965770a312c333034302c766965770a322c333534362c636172740a342c37343239392c76
+6965770a372c343239343936323434312c766965770a332c37313232362c7369676e75700a372c37333236342c636172
+740a352c37353034352c766965770a322c313232313733372c766965770a312c343535302c766965770a332c34373239
+2c766965770a352c353138362c766965770a342c37343537382c766965770a322c37323836322c766965770a342c3437
+36372c766965770a312c313037333636312c6275790a332c37303439352c766965770a352c37303736392c766965770a
+352c313332392c7369676e75700a332c343239343936343334392c7369676e75700a332c323332382c636172740a352c
+313239373137382c766965770a352c313239332c6275790a342c333936302c636172740a312c37333934332c76696577
+0a342c333932392c766965770a342c37353835382c7369676e75700a372c353136342c7369676e75700a322c34323934
+3936303738372c766965770a312c353034392c766965770a322c313530322c636172740a372c34323934393636353131
+2c7369676e75700a312c333034322c636172740a342c323536352c766965770a322c343132312c766965770a362c3730
+3635352c636172740a342c343032332c766965770a312c313638342c766965770a322c333331392c766965770a312c31
+3533342c766965770a332c333631352c636172740a362c313332392c7369676e75700a312c313133323938392c766965
+770a312c37303335382c7369676e75700a322c333637352c766965770a342c313036393136372c766965770a312c3432
+39343936343131352c6275790a332c313232313733372c7369676e75700a312c37303433392c766965770a352c373332
+36362c766965770a372c37353034352c7369676e75700a352c343239343936323930362c636172740a312c3130363931
+36372c766965770a312c323130382c766965770a372c343338362c636172740a342c37333831362c766965770a322c31
+3132373436382c766965770a362c313131393330342c766965770a372c343239343936303431392c6275790a352c3138
+38332c636172740a352c313731362c636172740a322c313039373235352c7369676e75700a352c333332392c7369676e
+75700a312c37333237362c766965770a372c353131302c636172740a352c343638332c7369676e75700a342c33383834
+2c766965770a362c313239373138352c766965770a312c343031372c766965770a342c343538392c6275790a322c3731
+3736382c766965770a322c343530362c766965770a342c313036343531342c7369676e75700a372c323139362c766965
+770a362c333938392c636172740a312c333038312c766965770a352c37353332382c7369676e75700a362c333330312c
+766965770a352c343739342c766965770a352c37353838362c636172740a332c323935362c636172740a332c31313332
+3938392c766965770a352c343239343936343531372c636172740a322c37353638362c6275790a342c343539302c7669
+65770a342c343239343936303831342c766965770a332c323439352c766965770a312c343937322c7369676e75700a36
+2c353136342c766965770a342c343239343936323930362c766965770a362c343239343936333139312c766965770a36
+2c37323434372c7369676e75700a312c37303231332c636172740a312c323131342c766965770a342c37353233362c73
+69676e75700a332c333034302c636172740a332c333039322c7369676e75700a312c323137392c766965770a342c3734
+3531392c766965770a342c313237363433322c766965770a322c313533342c6275790a372c313434372c6275790a362c
+353033352c766965770a322c37303635352c766965770a342c333532342c7369676e75700a332c333939302c63617274
+0a352c343239343936353938302c6275790a362c333031322c7369676e75700a362c343435342c6275790a332c313035
+312c6275790a332c323431302c7369676e75700a352c333931302c636172740a332c333233342c766965770a312c3231
+35312c6275790a322c333533312c636172740a332c333736332c7369676e75700a322c333133332c766965770a312c31
+3038353733312c766965770a322c37313136382c766965770a332c333639332c7369676e75700a322c31313039313130
+2c636172740a332c333933302c766965770a332c313437312c636172740a322c37353636382c6275790a362c32383031
+2c766965770a312c313239373130302c7369676e75700a372c37353139352c766965770a332c313231393734332c7669
+65770a332c37353332382c7369676e75700a362c37313935382c636172740a322c313035373434372c7369676e75700a
+322c323834342c766965770a332c323539302c766965770a322c343137382c7369676e75700a352c323138312c627579
+0a372c333430332c636172740a332c313836392c766965770a372c333633392c766965770a362c343239343936343334
+392c7369676e75700a352c37343231312c766965770a332c37303537332c766965770a322c343239343936343932342c
+636172740a372c333932352c766965770a312c313038323835352c7369676e75700a362c343239343936343531372c73
+69676e75700a322c343739372c6275790a372c343239343936363234362c636172740a312c343236322c7369676e7570
+0a312c343239343936323535312c7369676e75700a312c37313331372c766965770a342c37303830362c766965770a32
+2c313630362c6275790a352c37353133322c766965770a342c37303530392c766965770a312c37333734302c7369676e
+75700a362c313232333636392c6275790a322c313136303333312c766965770a372c37333934332c7369676e75700a32
+2c333739312c766965770a372c313633302c766965770a342c313835392c766965770a322c343635342c7369676e7570
+0a352c37353731392c766965770a362c323431342c766965770a352c313230392c7369676e75700a332c343239343936
+353834372c766965770a342c37333930392c766965770a352c343732352c766965770a362c37323932372c766965770a
+322c37323435372c636172740a372c333234322c636172740a362c37313733392c6275790a372c333339382c76696577
+0a352c343734392c766965770a362c313439322c636172740a342c343635342c766965770a332c313436362c76696577
+0a352c37313936362c766965770a332c313135353230352c766965770a342c37333435382c636172740a332c34363632
+2c766965770a332c343239343936363537342c6275790a372c313738302c636172740a362c37303934382c636172740a
+342c313037373630322c6275790a342c37303530332c6275790a362c37353231362c7369676e75700a352c3734303231
+2c766965770a342c323733302c766965770a372c313337362c636172740a352c37323639332c636172740a342c313036
+323339312c766965770a362c323938382c766965770a372c343239343936323038322c766965770a332c323539322c62
+75790a312c323639302c636172740a352c37303032332c766965770a312c343331352c766965770a352c313430382c63
+6172740a322c37323434372c636172740a362c323039342c766965770a342c323332382c766965770a332c333034392c
+766965770a332c323437352c636172740a332c323538382c7369676e75700a332c37313330332c766965770a352c3730
+3930372c636172740a322c37333932332c7369676e75700a312c37353536322c7369676e75700a332c37303736352c76
+6965770a352c37353133372c766965770a362c37333630362c766965770a362c37353638362c766965770a322c313239
+333038352c766965770a352c323538392c6275790a322c313232363834332c636172740a352c313135383336392c7669
+65770a312c343239343936323434312c766965770a342c333836332c766965770a362c37303532382c766965770a342c
+353130362c766965770a342c313131313830382c636172740a352c343930362c7369676e75700a332c37333831302c76
+6965770a322c313138333533362c636172740a342c343038312c7369676e75700a342c313230383639352c766965770a
+352c343331352c7369676e75700a342c313037313930302c766965770a372c37303830362c766965770a342c35313335
+2c766965770a322c343239343936303739372c7369676e75700a362c313632392c7369676e75700a352c333734332c76
+6965770a322c37323634312c766965770a342c313734352c766965770a332c343239343936313539342c766965770a33
+2c313839302c766965770a332c313439352c7369676e75700a322c333436332c7369676e75700a372c31323439343734
+2c7369676e75700a362c37323834392c766965770a322c313039393931332c6275790a352c37343035342c766965770a
+312c313039393931332c636172740a342c323833372c766965770a332c323939382c766965770a322c313431392c7669
+65770a332c313234343230302c766965770a332c37313031382c7369676e75700a372c313135393234312c766965770a
+312c313035373439312c766965770a322c313232313230322c766965770a342c37333531362c6275790a332c33303830
+2c636172740a342c37353636382c636172740a342c343939322c766965770a352c323439352c766965770a342c373034
+39352c766965770a332c37343730352c766965770a342c37303135362c766965770a342c313239373130302c76696577
+0a362c313736372c7369676e75700a352c37313231372c636172740a352c313933372c766965770a342c313235393338
+352c766965770a362c323337302c6275790a352c37303638332c766965770a322c37353232322c766965770a352c3333
+33372c636172740a372c313037333636312c7369676e75700a332c333738322c766965770a362c323138312c76696577
+0a342c343239343936303832352c766965770a322c37313931382c766965770a362c343239343936343630382c636172
+740a312c37343234322c766965770a332c333633332c636172740a332c353030392c766965770a342c333233342c7669
+65770a332c343239343936313033392c766965770a312c37353837322c766965770a322c333938362c7369676e75700a
+342c343436382c7369676e75700a352c343134332c766965770a352c343939332c766965770a322c37353333382c7669
+65770a312c313936312c766965770a332c333332302c766965770a322c333430332c636172740a372c37313636372c76
+6965770a322c37303236332c7369676e75700a322c353036302c766965770a322c323337302c766965770a352c313231
+373436352c7369676e75700a322c343239343936343835372c766965770a342c37353133372c636172740a372c313839
+332c636172740a372c323933302c766965770a332c353138362c766965770a362c343633382c766965770a362c343239
+343936323038372c766965770a362c37303439352c7369676e75700a322c37343436382c766965770a332c3432393439
+36343835372c766965770a342c313638342c7369676e75700a372c37313035372c636172740a312c343239302c636172
+740a352c37313435312c766965770a352c343239343936353135342c766965770a332c333939332c636172740a322c31
+3234392c766965770a312c353137322c7369676e75700a312c333932392c7369676e75700a362c313034383637342c76
+6965770a352c313135323837342c6275790a322c37343634362c766965770a332c323738352c7369676e75700a352c32
+3533352c766965770a332c343239343936303739372c636172740a322c313232382c636172740a362c323430322c7669
+65770a322c323738362c6275790a332c37333334302c766965770a322c37303032332c766965770a332c313639362c76
+6965770a312c313630362c7369676e75700a332c37323034332c766965770a342c323739322c766965770a312c343239
+343936343335312c766965770a372c37303238312c6275790a362c343239343936363531312c766965770a342c313530
+322c636172740a332c343239343936363234362c6275790a322c37313231372c766965770a332c353139382c6275790a
+332c37353532382c636172740a332c313539392c766965770a352c37353330372c766965770a342c343535362c736967
+6e75700a372c313436362c766965770a312c323034312c766965770a322c313039313139362c766965770a332c373430
+34302c766965770a342c37313735362c766965770a332c313236393331322c6275790a332c313738332c636172740a34
+2c313231303235312c7369676e75700a342c313133353934312c766965770a312c37303537332c766965770a332c3433
+33322c766965770a332c37303635352c766965770a312c37333630362c6275790a342c333438342c766965770a352c31
+3738332c636172740a362c313732302c766965770a332c313635302c766965770a322c333431322c766965770a342c34
+3036302c766965770a362c323939342c636172740a322c343239343936333234382c766965770a352c343331322c7669
+65770a322c343331322c766965770a372c313135363730352c766965770a332c37303538342c766965770a342c333133
+332c766965770a362c343239343936363336332c6275790a352c343239343936323933352c7369676e75700a322c3131
+31343031342c766965770a342c333038302c766965770a322c313438312c766965770a372c37353431352c7369676e75
+700a342c313237363439372c7369676e75700a312c37313733392c766965770a342c323234352c766965770a332c3132
+30383639352c766965770a362c37353532372c766965770a332c37333831362c766965770a342c343930362c76696577
+0a352c313839342c766965770a322c313230353133322c636172740a342c333331392c636172740a342c37343231312c
+766965770a372c313733302c7369676e75700a312c313134392c766965770a342c323936352c766965770a322c353137
+362c766965770a312c343239343936363234362c766965770a352c313235362c766965770a372c37343534362c766965
+770a372c343138372c766965770a322c343239343936363235332c766965770a312c343634382c7369676e75700a352c
+313133353137332c766965770a332c37313232352c6275790a352c37353833372c766965770a322c333039322c766965
+770a342c313233393837332c766965770a332c343239343936363336342c636172740a362c323439352c7369676e7570
+0a332c37323735302c766965770a342c343239343936333333392c636172740a352c333335342c766965770a312c3735
+3333382c766965770a362c343833302c766965770a332c343239343936333234382c766965770a322c323538322c7669
+65770a362c313131393930302c636172740a362c343239343936363234362c766965770a332c37353431352c6275790a
+362c313233343236352c766965770a322c313236323235302c6275790a342c37323033382c766965770a362c32373838
+2c636172740a372c343239343936323737362c636172740a372c313131313830382c766965770a322c31323332323835
+2c636172740a352c313239343836352c766965770a362c37353537322c766965770a362c313039393235322c76696577
+0a362c323430332c766965770a372c37343230342c766965770a332c333936302c636172740a342c343939332c766965
+770a312c313833332c766965770a342c313136373435392c636172740a322c343231362c766965770a352c3731363637
+2c766965770a322c37303935392c766965770a362c343638312c766965770a352c343238332c636172740a332c323738
+362c766965770a342c37313733392c766965770a322c333333372c7369676e75700a342c313933372c766965770a312c
+333630342c636172740a342c333332372c766965770a352c343239343936363435302c766965770a322c353039392c76
+6965770a312c37313036352c766965770a332c333638352c766965770a312c313931352c766965770a352c3734343638
+2c766965770a372c37343736322c766965770a322c313135373235322c766965770a332c313734352c766965770a312c
+343732392c766965770a352c353034392c766965770a312c37353833372c766965770a322c343535382c766965770a32
+2c343532312c766965770a362c313232353032322c7369676e75700a312c37353636332c7369676e75700a342c313130
+313039392c766965770a322c37323435342c766965770a352c343738342c766965770a342c343239343936353738362c
+766965770a312c313539392c766965770a312c323635362c636172740a372c353135372c766965770a342c3730353733
+2c766965770a322c37343539302c7369676e75700a372c333431342c636172740a322c313234353030352c636172740a
+362c37353131312c766965770a362c343239343936353834372c6275790a342c313230393734332c766965770a312c37
+353032352c766965770a362c313039313736382c766965770a312c37313236352c766965770a362c313135343039312c
+7369676e75700a352c37303830362c7369676e75700a332c313038362c636172740a342c313733322c766965770a362c
+37333833372c766965770a332c343239343936363235332c766965770a362c37353736362c636172740a322c37353933
+302c636172740a352c333730332c636172740a372c313231393734332c7369676e75700a312c343334352c766965770a
+322c343239343936363236312c766965770a322c37313435312c766965770a372c313131323833302c766965770a312c
+37353337372c7369676e75700a322c37313431382c766965770a352c343132312c766965770a362c37333238342c7369
+676e75700a322c313037333636312c636172740a312c343239343936343932342c766965770a332c333333362c636172
+740a362c343432372c766965770a312c313236333536332c766965770a362c37333232382c766965770a362c31303836
+2c766965770a352c313037333636312c766965770a342c343239343936303837392c6275790a312c313738302c766965
+770a322c313036393932392c636172740a342c313337352c766965770a372c313135333639392c766965770a342c3339
+30362c766965770a362c37303938322c766965770a312c37323935392c766965770a372c323832322c636172740a332c
+313937352c766965770a362c343937312c766965770a342c313131383738362c7369676e75700a332c323938382c7369
+676e75700a332c313139323036312c6275790a332c313132323630332c766965770a372c343433302c766965770a352c
+323538322c766965770a362c37353833372c636172740a362c313238363330352c766965770a342c343633382c766965
+770a322c323536352c766965770a342c323933332c7369676e75700a322c313134332c766965770a352c323433372c76
+6965770a322c313038343836342c7369676e75700a332c333531362c766965770a312c343338352c766965770a322c31
+3533372c636172740a352c343038312c636172740a342c313836392c766965770a342c333032342c636172740a332c37
+333435382c766965770a362c313833372c766965770a362c37303537332c766965770a342c333932352c7369676e7570
+0a342c323837332c7369676e75700a312c313232382c6275790a332c323335362c766965770a332c37303236332c7369
+676e75700a352c313039353437322c766965770a332c353136302c766965770a372c323833352c766965770a322c3131
+36373432352c7369676e75700a312c313937392c766965770a352c323130332c636172740a312c323333352c7369676e
+75700a312c313235333530362c636172740a372c343537342c766965770a362c343134352c766965770a342c34373135
+2c766965770a322c313133343036372c766965770a362c323130382c636172740a372c333637352c7369676e75700a32
+2c313634362c766965770a322c37343436302c766965770a362c313234393437342c7369676e75700a322c3432393439
+36363339312c766965770a342c37343436302c766965770a322c353132352c766965770a312c313136313931372c7669
+65770a352c333534362c636172740a322c343239343936333835352c636172740a332c313236323235302c636172740a
+332c323034312c766965770a352c313037373630322c6275790a372c37303630362c766965770a332c343230332c7669
+65770a372c313238312c766965770a342c37353731392c766965770a332c313233373430352c766965770a362c343132
+312c6275790a322c37343931302c6275790a352c313139313738382c766965770a332c37303935392c766965770a342c
+37303435362c766965770a342c343239343936313135352c766965770a372c343239343936353834372c766965770a32
+2c353139382c636172740a362c353135372c766965770a312c37333836312c766965770a312c343731352c7369676e75
+700a342c333637352c636172740a362c343239343936313033392c766965770a362c37303435352c7369676e75700a31
+2c313133323235392c766965770a332c333134322c6275790a312c37343634332c766965770a332c37353232382c7669
+65770a342c353132352c766965770a322c343535372c766965770a352c343239343936343936382c636172740a372c33
+3132392c636172740a372c37343730352c766965770a352c313937392c766965770a322c313230302c766965770a342c
+37323034332c766965770a372c37323130362c636172740a352c37323130362c766965770a322c333934372c76696577
+0a352c313136343532302c766965770a322c333836332c766965770a362c333233342c766965770a352c343637342c63
+6172740a372c313038363635362c7369676e75700a352c323030322c7369676e75700a372c313233343236352c627579
+0a342c37303438392c766965770a352c313037313930302c766965770a352c353034382c766965770a312c343134352c
+7369676e75700a332c37313035372c7369676e75700a312c37323932392c766965770a372c313135383336392c627579
+0a372c313439322c766965770a322c333634332c766965770a352c333937342c636172740a352c343534342c76696577
+0a372c313539362c636172740a372c343239343936323233352c7369676e75700a342c313236333536332c766965770a
+342c333038392c766965770a342c343239343936313635382c766965770a332c343135302c766965770a342c32313834
+2c766965770a372c37353430372c766965770a322c313233343730372c766965770a342c333235332c636172740a332c
+333835382c766965770a362c37353933302c766965770a362c313234332c766965770a342c37333831302c766965770a
+332c37323832392c766965770a322c313130343838392c766965770a322c37343139382c766965770a322c3132393838
+33312c766965770a362c37313036352c7369676e75700a342c37333238342c766965770a352c313130392c766965770a
+332c37323139342c766965770a332c343238332c766965770a332c343239343936343531372c766965770a322c313135
+333639392c766965770a352c343736372c7369676e75700a372c343633382c766965770a362c34323934393632373736
+2c766965770a372c343239343936323535312c7369676e75700a332c333630342c6275790a322c37303037312c766965
+770a362c37353332382c766965770a312c37343539302c766965770a322c313134303132362c7369676e75700a352c33
+3930372c766965770a322c323637302c766965770a372c343239343936333237342c6275790a362c323335362c636172
+740a332c323639302c7369676e75700a342c313135333639392c7369676e75700a362c343239343936363637382c7369
+676e75700a332c313430322c766965770a312c313630352c766965770a332c37323139312c7369676e75700a372c3433
+31322c766965770a322c313332342c7369676e75700a312c37353639332c766965770a342c37333030392c766965770a
+372c333531362c636172740a322c37343730312c766965770a322c37353735392c7369676e75700a332c313534372c76
+6965770a332c323630362c766965770a312c343638372c636172740a312c353030392c766965770a322c343331352c76
+6965770a312c37353530312c7369676e75700a342c313537342c7369676e75700a372c37323635342c766965770a372c
+343239372c766965770a322c313833372c766965770a352c37343337352c636172740a322c313530382c766965770a36
+2c313239383833312c766965770a332c37353537322c766965770a312c333738322c7369676e75700a332c323138312c
+766965770a342c323635362c766965770a332c343036362c636172740a372c343036362c636172740a312c323335392c
+766965770a372c333630342c636172740a372c323030342c7369676e75700a352c37323435342c766965770a312c3336
+39332c766965770a312c37303038352c766965770a342c333738382c7369676e75700a322c37353639332c766965770a
+332c313132313539312c636172740a342c37303433392c766965770a342c37333234392c766965770a352c3132343333
+36362c766965770a342c333739392c766965770a372c313839302c6275790a352c37313331372c7369676e75700a342c
+37313938312c636172740a342c37343234322c766965770a322c37303638332c766965770a362c313233363333322c76
+6965770a362c333939332c636172740a342c37313830382c7369676e75700a362c353137362c766965770a322c373333
+39302c7369676e75700a362c37353032352c766965770a342c37343536332c766965770a352c37333932332c76696577
+0a332c37303936312c766965770a312c333133332c766965770a352c333934312c766965770a322c343939322c766965
+770a372c37303238302c766965770a322c313036323239362c6275790a312c37303830362c7369676e75700a352c3732
+3935392c766965770a352c333538392c766965770a372c37303832392c766965770a312c37353133342c636172740a34
+2c333838382c7369676e75700a322c313138393836392c766965770a372c353133342c766965770a322c37303538342c
+766965770a352c37303038352c766965770a372c313036323239362c766965770a362c343239343936303530372c6361
+72740a332c313037353132382c636172740a352c323630332c766965770a322c333633392c766965770a332c32373838
+2c766965770a332c313937392c766965770a312c343538332c766965770a312c343338362c766965770a312c37313636
+372c6275790a352c343538392c636172740a332c313130343632382c766965770a312c313231333131392c6275790a36
+2c343932302c766965770a352c313134303935342c6275790a362c37303236332c766965770a322c37333333352c7669
+65770a312c343239343936323038372c636172740a312c313130373739362c766965770a312c343535372c766965770a
+322c333536302c766965770a362c37343038352c766965770a332c313036393136372c7369676e75700a352c32313131
+2c766965770a322c37343131332c636172740a352c343239343936333239362c766965770a332c313239313531372c62
+75790a352c343239343936343131352c766965770a352c343832362c766965770a342c37303134352c636172740a342c
+313530382c766965770a322c313039373634332c7369676e75700a362c37333339302c766965770a372c333439322c76
+6965770a352c343932302c766965770a322c343534342c766965770a332c37313033392c7369676e75700a322c313838
+332c766965770a352c313134392c7369676e75700a332c343535382c636172740a362c313239393631312c766965770a
+342c313134303132362c7369676e75700a372c37303736392c766965770a362c313238353736342c766965770a352c37
+303936312c766965770a322c313239323539312c766965770a342c313134343239302c766965770a352c37343131332c
+766965770a322c353033312c766965770a372c343932372c766965770a362c343239343936333530372c766965770a35
+2c37303837342c766965770a322c343432302c766965770a322c313132372c636172740a322c37353730362c63617274
+0a352c353036302c7369676e75700a342c313235302c766965770a352c313035313933372c6275790a332c3432393439
+36323031302c636172740a342c37353034352c6275790a342c37313432342c636172740a312c37303935392c6275790a
+312c343939302c636172740a362c37303039392c636172740a372c313133323938392c766965770a362c313237333831
+332c766965770a322c37303231342c636172740a312c313636312c766965770a372c313236333439372c7369676e7570
+0a362c333335342c636172740a332c37333033382c766965770a352c313632392c7369676e75700a322c343937322c76
+6965770a312c313131383738362c766965770a352c343239343936353632372c7369676e75700a342c333330312c7669
+65770a332c313237303038332c6275790a352c343636322c7369676e75700a322c343531302c636172740a322c323137
+352c636172740a372c343535362c766965770a312c313032342c766965770a352c313134393838302c6275790a372c31
+3039393235322c766965770a322c343239343936303933302c766965770a372c37353034302c636172740a372c343239
+343936373138332c636172740a372c313039382c766965770a312c37343232362c766965770a372c37353837322c7669
+65770a352c313239373130302c766965770a312c313038383337362c7369676e75700a362c323936372c766965770a34
+2c343730372c766965770a362c37343436302c7369676e75700a342c313232313733372c7369676e75700a342c323937
+302c7369676e75700a312c333134392c766965770a312c323436302c636172740a312c37323439342c636172740a362c
+313135373235322c636172740a342c313133313631352c766965770a312c37343231312c766965770a322c353137322c
+766965770a352c313233343730372c7369676e75700a372c343939342c6275790a322c313130383738352c766965770a
+352c343239343936303431392c766965770a332c343531382c7369676e75700a312c37303238302c766965770a322c37
+353537322c636172740a372c343239343936323038372c7369676e75700a372c37313931382c636172740a342c323433
+372c766965770a322c37353532372c766965770a372c343739342c636172740a362c333732342c6275790a372c373437
+34302c766965770a372c323035392c766965770a322c37333237362c766965770a332c37343834392c766965770a342c
+323931342c766965770a322c313037313930302c7369676e75700a342c343338352c766965770a362c323738322c7669
+65770a362c343239343936303032332c6275790a372c313230373135392c636172740a372c37343732322c636172740a
+372c343239343936303832352c766965770a332c353037392c766965770a312c343239343936323930352c6275790a37
+2c37303134352c766965770a362c333830372c636172740a322c313035343838372c636172740a322c343939342c7669
+65770a322c37303132312c766965770a372c333930362c7369676e75700a312c37353933302c766965770a332c323933
+332c766965770a352c37343239302c766965770a342c313835312c766965770a352c37353233362c766965770a362c37
+323635342c766965770a342c313238323931392c636172740a362c313734352c6275790a342c313137392c766965770a
+352c37303135362c636172740a322c313135353230352c766965770a372c333836372c7369676e75700a372c34323934
+3936363638322c766965770a342c333730322c766965770a312c37323034332c7369676e75700a362c31313037353430
+2c766965770a332c313138323835362c766965770a352c313036343531342c766965770a352c313533342c636172740a
+322c313931352c766965770a312c37323931322c766965770a312c37343536332c766965770a342c37303430342c6275
+790a342c37343437342c6275790a322c343536342c766965770a332c313037373630322c766965770a362c3731323635
+2c7369676e75700a372c333936302c766965770a312c333435332c766965770a312c313431392c636172740a332c3732
+3434372c7369676e75700a312c323736372c6275790a352c323130302c6275790a332c37343230342c766965770a332c
+323833302c766965770a362c343436382c766965770a322c37343833322c636172740a352c37313736382c6275790a37
+2c333235322c766965770a322c313236333439372c766965770a372c313239373130302c7369676e75700a342c313234
+303130372c766965770a322c313133353137332c7369676e75700a362c37303736392c766965770a342c313039393931
+332c636172740a332c37343839362c766965770a362c343239343936363436332c766965770a332c37353830302c7669
+65770a312c313238373833342c7369676e75700a322c323736372c766965770a342c313238343737352c766965770a36
+2c313238323931392c766965770a312c313132372c636172740a322c333034372c766965770a372c323936372c636172
+740a312c313235323938302c766965770a362c37303930372c766965770a352c313734352c766965770a332c33333235
+2c766965770a322c313937352c7369676e75700a372c313134373236352c7369676e75700a332c37323131312c736967
+6e75700a352c343434352c766965770a322c37333236342c766965770a332c323436362c6275790a362c313533342c62
+75790a372c343538392c7369676e75700a372c323439392c6275790a322c37313836342c766965770a312c313436352c
+766965770a362c313138383732332c766965770a352c37353634352c766965770a362c343239343936333239362c7669
+65770a362c333734332c766965770a342c37353838362c636172740a362c313139393834332c6275790a332c34303233
+2c7369676e75700a372c37323932372c766965770a312c333631352c766965770a372c313130383738352c766965770a
+312c333330392c766965770a352c323736332c7369676e75700a352c323134342c6275790a362c313234343230302c76
+6965770a372c323332382c766965770a342c323338342c636172740a352c37353939322c766965770a332c3131333430
+36372c766965770a362c323630362c766965770a312c353033352c7369676e75700a322c37323233372c766965770a37
+2c343432372c766965770a362c37343930372c636172740a342c343239343936353337302c766965770a322c37333930
+392c6275790a322c313139363330302c766965770a322c313230393734332c766965770a372c353133352c766965770a
+312c37303837342c766965770a322c313236393331322c766965770a362c313833332c766965770a342c313130383738
+352c766965770a312c323537312c636172740a312c343038312c766965770a332c343933302c766965770a362c373139
+31382c636172740a322c313234332c766965770a372c37333238342c6275790a322c37313830382c636172740a322c37
+303736352c766965770a342c37323938352c766965770a312c323133392c636172740a332c37313935382c7369676e75
+700a342c37333431322c766965770a342c343239343936353334352c766965770a322c313036363730302c766965770a
+322c313237333831332c766965770a312c313337392c636172740a322c343239343936333139312c766965770a332c33
+3931302c766965770a312c343239343936353135342c6275790a332c333332312c7369676e75700a332c313835312c63
+6172740a322c313039382c766965770a352c313138383732332c766965770a332c313131303233302c766965770a312c
+313036323239362c766965770a362c333738332c766965770a312c37303037312c766965770a322c37353338312c7669
+65770a322c37333232382c766965770a342c37303638332c766965770a312c313232363834332c766965770a322c3731
+3933382c766965770a322c37333732382c766965770a322c323234352c766965770a352c37343234322c766965770a37
+2c37353838362c766965770a362c343239343936313635382c766965770a342c37353638302c7369676e75700a342c37
+323433342c7369676e75700a352c37313431382c7369676e75700a312c323832382c7369676e75700a342c313839332c
+766965770a312c313237333831332c766965770a332c313239323539312c766965770a362c333332352c7369676e7570
+0a362c343832362c766965770a332c313233343730372c7369676e75700a372c37303631322c636172740a362c313234
+353030352c766965770a362c313336392c7369676e75700a322c313137373832352c766965770a332c31323430313838
+2c766965770a322c333833352c7369676e75700a342c333431332c766965770a352c37353530312c766965770a322c35
+3130362c7369676e75700a342c313733302c7369676e75700a332c313039382c7369676e75700a342c313938382c7669
+65770a332c313931392c766965770a322c343239343936303134352c766965770a332c343239343936333530372c6275
+790a362c313330332c766965770a342c323833352c766965770a322c313839332c766965770a342c323738362c766965
+770a312c313038393131342c7369676e75700a312c343036362c7369676e75700a312c37333431322c636172740a322c
+37353532312c636172740a362c333835352c766965770a352c313138393836392c766965770a322c343833372c766965
+770a362c313833312c766965770a332c333330392c766965770a362c343134392c766965770a332c37353936352c6275
+790a352c323431302c7369676e75700a312c37303532382c766965770a312c323333332c766965770a312c3131303735
+34302c766965770a342c313233373430352c766965770a362c323436372c636172740a322c313231303235312c766965
+770a352c313234303138382c766965770a342c313238353736342c766965770a352c343239343936353930342c766965
+770a312c37343136382c766965770a362c37343234322c766965770a312c37303936312c766965770a322c3131333233
+38382c766965770a352c343239343936303530372c766965770a352c343730372c636172740a352c37343536332c7669
+65770a342c37323034392c766965770a322c343134332c6275790a322c343032332c636172740a312c37353233362c76
+6965770a372c313837322c766965770a332c333038382c7369676e75700a332c323938352c766965770a362c32393635
+2c636172740a342c37323832392c766965770a322c313736372c766965770a322c313539362c766965770a332c313231
+303235312c7369676e75700a332c323533352c766965770a362c313638302c6275790a372c333031322c766965770a31
+2c313237373633362c6275790a332c313134393838302c766965770a312c37303933362c636172740a352c3132313030
+33302c766965770a362c343239343936343131352c636172740a372c37353533352c766965770a332c313530382c6275
+790a352c333837342c6275790a332c343932302c766965770a332c313932382c766965770a332c313135383336392c63
+6172740a322c333433392c766965770a342c333938362c766965770a372c313238323931392c766965770a372c343239
+343936343539392c766965770a312c333333372c636172740a322c37333934332c6275790a342c343438302c63617274
+0a352c313139323036312c7369676e75700a342c37323834372c766965770a372c37303635352c766965770a312c3131
+33373432342c766965770a312c313138333533362c7369676e75700a332c313132313335382c766965770a352c373031
+32312c6275790a352c313232343831392c766965770a372c323639302c636172740a332c313236373533392c76696577
+0a362c313230392c766965770a362c37353232322c766965770a332c37353532372c766965770a372c37333131342c76
+6965770a322c313237303038332c7369676e75700a322c343239343936343539392c766965770a362c313337392c7369
+676e75700a362c343335392c766965770a322c37303630362c7369676e75700a322c313134303935342c766965770a35
+2c343239343936373039382c766965770a332c343239343936373039342c6275790a372c313039313736382c6275790a
+352c313134373236352c766965770a322c343239343936303837392c6275790a322c343239343936343936382c766965
+770a322c313134373236352c766965770a352c343234372c7369676e75700a342c313035312c766965770a352c323338
+312c7369676e75700a322c37343239392c636172740a332c37333732352c766965770a342c343439342c6275790a362c
+313836392c766965770a362c37303430342c766965770a342c37333033332c636172740a332c343239372c766965770a
+322c37353930362c7369676e75700a362c343239343936323930362c766965770a312c313135343039312c6275790a31
+2c313939392c636172740a342c343638332c636172740a342c37303335382c6275790a312c333632372c766965770a33
+2c313738382c6275790a362c333234352c766965770a322c343239343936343335312c766965770a312c37303639362c
+7369676e75700a312c323835372c766965770a312c313031352c7369676e75700a352c343537342c7369676e75700a33
+2c37353833372c766965770a372c343239343936303032332c636172740a372c313734352c766965770a342c37343931
+302c7369676e75700a352c323436362c7369676e75700a322c313233343236352c766965770a372c313132313539312c
+766965770a342c313836342c6275790a322c343239343936343138332c766965770a352c343239343936353738362c62
+75790a352c313135373235322c766965770a352c37353131312c766965770a342c323439392c636172740a332c373134
+31382c766965770a332c343134332c766965770a352c343239343936333937372c766965770a312c333734332c636172
+740a342c343239343936363336342c766965770a322c333532342c636172740a312c313230383639352c766965770a35
+2c343730392c766965770a362c343334352c766965770a342c37303435352c766965770a332c313235323938302c7369
+676e75700a332c343239343936343636392c636172740a322c37353139352c7369676e75700a342c343637372c766965
+770a312c37303337312c766965770a322c323935362c636172740a322c323338312c766965770a312c37353731392c63
+6172740a322c333330392c766965770a312c333934312c766965770a372c343239343936373039382c636172740a312c
+353037392c766965770a332c333937302c766965770a362c313231303839302c766965770a322c343734392c76696577
+0a352c37353034302c766965770a372c333836382c6275790a372c313839342c766965770a362c313134303132362c76
+6965770a332c343239343936353738362c636172740a332c37303038352c766965770a342c313039393235322c766965
+770a322c37303332352c636172740a312c343933302c7369676e75700a322c323433332c766965770a322c3131313939
+30302c7369676e75700a352c313938352c636172740a332c333331392c6275790a372c313130373739362c766965770a
+362c323535302c7369676e75700a342c343230332c7369676e75700a312c313130343632382c766965770a372c373137
+36382c6275790a362c37303634352c766965770a352c37303437322c766965770a312c313537342c766965770a312c37
+353738392c6275790a362c333432392c766965770a342c333333372c766965770a322c37303430342c6275790a372c34
+3239343936353337302c6275790a342c37353539352c766965770a342c37343839362c766965770a312c343239343936
+343334392c636172740a312c333431342c766965770a312c313039313736382c766965770a362c37353634352c766965
+770a332c313131313830382c766965770a352c323630352c7369676e75700a312c343239343936343536352c63617274
+0a342c313032362c766965770a322c37303530392c766965770a312c343239343936343636392c7369676e75700a322c
+37303135362c6275790a342c343135302c766965770a312c37303238362c766965770a352c323634382c636172740a33
+2c313039313139362c636172740a342c313133363734332c636172740a312c37323832392c766965770a322c32373838
+2c766965770a332c37343531392c636172740a352c343239343936323434312c636172740a322c313036303134342c76
+6965770a342c323738322c636172740a312c313138303435312c636172740a362c313234363334302c766965770a332c
+313837322c766965770a372c343239343936313033392c766965770a312c37313133322c766965770a322c333633332c
+766965770a362c313435382c7369676e75700a362c37323430322c7369676e75700a372c37333031312c7369676e7570
+0a332c323637392c766965770a322c333739392c766965770a312c313135363730352c6275790a342c37303133332c76
+6965770a342c333337362c766965770a332c333739392c766965770a362c323137352c766965770a322c343031372c62
+75790a342c37353936352c766965770a332c343138372c766965770a312c313234373530372c766965770a312c343239
+343936353833342c636172740a332c323131312c766965770a352c37353533362c766965770a352c353033332c627579
+0a312c343333322c7369676e75700a352c37313136382c7369676e75700a362c343634382c636172740a332c37353939
+322c766965770a322c333038392c7369676e75700a312c37353532382c7369676e75700a352c313839302c766965770a
+312c343239343936363537342c766965770a342c313936312c766965770a362c343637372c766965770a372c31313637
+3435392c766965770a362c313131303233302c766965770a372c313133353137332c766965770a342c37353538312c73
+69676e75700a322c323535302c766965770a322c37323639332c7369676e75700a352c37343533362c766965770a372c
+323339392c636172740a352c313134323231362c766965770a362c343534342c7369676e75700a372c31313434323930
+2c766965770a372c313136303333312c766965770a352c313433312c766965770a332c37353031392c766965770a372c
+313431392c766965770a332c343832362c636172740a322c353034382c636172740a322c37313035372c766965770a36
+2c37353930362c766965770a372c37333033332c6275790a312c313234343439362c6275790a312c323938382c766965
+770a342c343532312c766965770a362c37323435342c766965770a332c37343139322c766965770a332c37313733392c
+636172740a322c323130312c766965770a362c313630372c7369676e75700a332c313237373134342c766965770a312c
+313037373630322c636172740a312c37313936362c766965770a372c37313936362c766965770a372c333934372c7669
+65770a372c313132313335382c7369676e75700a322c333632382c636172740a312c37333831362c766965770a352c37
+333233372c636172740a332c37353338312c766965770a322c37343230342c7369676e75700a352c37323836322c7669
+65770a312c343239343936313033392c636172740a372c313133313631352c766965770a332c333333372c766965770a
+312c323439322c7369676e75700a312c37303538342c766965770a322c353030392c766965770a312c31323937313738
+2c766965770a342c323138312c766965770a312c323030342c636172740a352c343532312c766965770a352c35313034
+2c766965770a362c323538322c7369676e75700a372c343239343936353930342c766965770a332c353130342c766965
+770a342c343530362c766965770a352c333837382c766965770a342c343239343936363336332c7369676e75700a322c
+343239343936353738362c766965770a372c313237373633362c636172740a312c343134332c636172740a322c373231
+39342c636172740a352c333133332c766965770a332c323135312c766965770a312c313938352c7369676e75700a352c
+343239343936333835352c766965770a332c343833372c7369676e75700a362c37323333342c766965770a312c313234
+393437342c766965770a312c37303235312c7369676e75700a372c313136343532302c636172740a332c323435382c76
+6965770a352c313132363637322c7369676e75700a312c37303736332c766965770a372c313636312c766965770a322c
+333937302c636172740a352c37303036332c7369676e75700a352c313539392c766965770a312c343239343936303032
+332c766965770a332c323830362c766965770a352c343739372c766965770a322c313135333531372c766965770a332c
+313239353339322c766965770a352c323335392c766965770a312c313235302c636172740a342c343134332c76696577
+0a342c37353337372c6275790a312c313239333038352c766965770a352c37353333382c636172740a342c3732313931
+2c7369676e75700a322c313136313931372c636172740a352c353033352c766965770a322c343239343936303530372c
+7369676e75700a312c37353638362c766965770a332c37313432342c766965770a312c37323437372c766965770a322c
+343932372c7369676e75700a332c323837332c766965770a312c313636352c7369676e75700a352c323332322c766965
+770a322c323837332c7369676e75700a322c343736372c766965770a342c323039342c636172740a342c333835382c76
+6965770a342c37353638362c636172740a322c37333833372c636172740a372c343432302c766965770a322c37343234
+322c636172740a352c323938352c7369676e75700a342c37313735302c766965770a342c313139303832382c63617274
+0a342c313231313037352c766965770a312c343434352c636172740a342c37303238362c766965770a352c343138372c
+636172740a312c353135372c766965770a332c313236333439372c7369676e75700a322c343239343936323132312c73
+69676e75700a322c313038313934302c636172740a312c353130362c766965770a312c313836392c766965770a372c37
+333136372c766965770a312c313134393838302c766965770a322c313435382c766965770a322c313237342c76696577
+0a342c37353131312c766965770a322c37303235312c766965770a342c313133373432342c636172740a342c37303036
+332c6275790a362c323338312c766965770a312c323935362c636172740a332c333734352c766965770a332c34373934
+2c766965770a372c343239343936333032372c766965770a362c37343730312c766965770a362c333034392c76696577
+0a322c323734312c766965770a332c323130302c766965770a322c313437342c766965770a312c343239343936353938
+302c7369676e75700a372c37343139382c6275790a322c343238332c766965770a332c313136303333312c766965770a
+312c313134373236352c766965770a352c343833302c766965770a312c323431302c6275790a352c37323932392c7669
+65770a332c343331352c766965770a342c353136342c636172740a322c323133372c7369676e75700a362c3132343333
+36362c766965770a342c323437362c636172740a352c37313035372c766965770a342c353034362c766965770a332c37
+333236342c766965770a322c37333732352c6275790a372c313638342c766965770a372c37323139342c636172740a34
+2c313430332c766965770a372c37353134342c766965770a362c313437342c766965770a332c37333437352c76696577
+0a372c313036393932392c766965770a312c313132353636302c766965770a372c343239343936313938332c76696577
+0a372c323332322c766965770a362c313137392c7369676e75700a342c313635302c6275790a332c343633382c766965
+770a322c333432392c7369676e75700a322c37323834392c766965770a322c343239343936343131352c7369676e7570
+0a372c313430382c766965770a372c313039303334392c6275790a352c37303238312c766965770a312c333235322c73
+69676e75700a372c313139303832382c7369676e75700a312c37353430372c766965770a342c313136343532302c7669
+65770a352c313036323239362c766965770a332c37323034392c766965770a352c353136342c766965770a342c343239
+343936323437322c766965770a352c343932372c766965770a352c343535382c7369676e75700a322c37333531362c76
+6965770a342c37343139322c7369676e75700a322c313231303839302c7369676e75700a362c323833372c7369676e75
+700a352c313135353230352c766965770a362c323630332c766965770a312c323434342c636172740a332c3130373837
+37362c766965770a322c343333382c766965770a312c343536342c766965770a352c313330392c766965770a332c3130
+38323835352c6275790a322c323832322c636172740a352c37303332352c766965770a372c343032352c766965770a36
+2c323637392c636172740a342c37303538342c766965770a342c333235322c7369676e75700a322c37303832392c7669
+65770a342c313230392c636172740a342c37353634352c7369676e75700a362c323339332c766965770a312c37343038
+352c766965770a362c343636322c766965770a332c37333431322c636172740a322c343034372c766965770a372c3135
+34372c766965770a372c313030302c766965770a362c333331392c766965770a322c323037372c636172740a312c3132
+34332c766965770a372c313039333338392c7369676e75700a322c333730322c766965770a362c313039343337342c76
+6965770a352c37353031392c766965770a352c313236323235302c766965770a352c37333236342c766965770a342c37
+323932392c636172740a342c313132313539312c766965770a312c37323630342c766965770a362c323133392c636172
+740a322c323433372c766965770a332c37303634352c636172740a322c37343136382c7369676e75700a322c37353532
+382c7369676e75700a362c313230383639352c766965770a352c343239343936343932342c766965770a372c34323934
+3936333536362c766965770a372c333036342c636172740a332c343334352c766965770a352c333636322c766965770a
+312c333633332c766965770a312c323133372c636172740a322c313636352c766965770a332c333431332c7369676e75
+700a312c343637342c6275790a322c37323635342c766965770a332c313933372c766965770a342c323335392c766965
+770a312c343239343936313238392c766965770a372c313634362c7369676e75700a362c343239343936353833342c76
+6965770a332c323434342c766965770a352c343239343936323031302c636172740a322c343239343936323535312c73
+69676e75700a312c323338342c7369676e75700a312c313130313039392c6275790a342c313738382c7369676e75700a
+362c343239343936303637352c766965770a312c343530362c766965770a322c37333835362c7369676e75700a352c32
+3333352c636172740a372c37343533362c636172740a332c323434372c636172740a332c313135333237362c63617274
+0a312c343239343936343332342c766965770a332c313134303935342c766965770a362c313039393931332c76696577
+0a312c37343730312c636172740a352c343239343936323836352c766965770a332c37323038382c636172740a352c37
+343931302c766965770a312c313133343438352c636172740a312c313430382c766965770a342c313232382c76696577
+0a352c37303634352c766965770a332c313239393133322c766965770a312c313230393734332c766965770a312c3132
+32333636392c766965770a322c323134342c6275790a322c37313638362c636172740a352c313231333131392c766965
+770a322c333132392c766965770a342c37333236362c636172740a352c333339382c636172740a322c37323238392c76
+6965770a332c343531302c766965770a342c343239343936333834372c766965770a362c313139363330302c76696577
+0a312c37333435382c7369676e75700a362c333932392c766965770a352c313035373439312c766965770a312c373037
+33332c766965770a322c313337362c7369676e75700a372c37323333342c636172740a342c37313431382c7369676e75
+700a342c313230353133322c636172740a322c323430322c766965770a312c37303134352c766965770a312c31373838
+2c766965770a352c313131303233302c766965770a312c353136302c636172740a342c353134392c7369676e75700a31
+2c343239343936303738372c636172740a352c313230373838322c766965770a342c313237373633362c766965770a34
+2c343732392c766965770a342c323138302c766965770a312c37303334302c636172740a332c323339392c766965770a
+332c343335312c766965770a312c37333234392c766965770a342c323139362c766965770a312c313038313332372c76
+6965770a372c343239343936323933352c766965770a312c313236373533392c6275790a322c323535352c636172740a
+312c313231313037352c766965770a312c313833372c7369676e75700a342c313130392c766965770a372c3131303438
+38392c6275790a332c333034372c766965770a352c333932392c766965770a342c343435342c7369676e75700a342c35
+3138362c636172740a342c343937322c7369676e75700a342c333134392c766965770a362c313036393932392c636172
+740a322c37333136372c636172740a352c343932352c766965770a322c333836382c766965770a312c31313332353233
+2c636172740a322c37303530332c766965770a322c313439352c766965770a362c343833382c766965770a362c313136
+373435392c766965770a312c323538372c6275790a342c313135373235322c766965770a372c37323137392c76696577
+0a372c37333333352c636172740a362c333038302c766965770a332c343137392c766965770a372c313138383732332c
+766965770a352c343830352c6275790a312c313638302c7369676e75700a332c37343634332c766965770a342c333439
+342c766965770a362c343239343936343539392c766965770a352c333734352c636172740a322c37323333342c736967
+6e75700a372c313039363132362c766965770a332c343536342c636172740a342c37323634312c6275790a332c313636
+352c766965770a352c313836342c766965770a332c37313836342c636172740a352c313231393734332c766965770a32
+2c323439322c636172740a322c37343531392c766965770a362c343138372c636172740a312c37353930362c76696577
+0a332c37313130352c7369676e75700a352c343239343936343536352c766965770a332c343331392c766965770a352c
+333932352c766965770a342c313239353339322c766965770a332c313232383639362c766965770a352c343832352c76
+6965770a332c37303036332c766965770a312c313233343730372c766965770a332c343239343936323435322c766965
+770a322c313035313933372c766965770a362c313330392c7369676e75700a342c37323434372c766965770a312c3733
+3338342c636172740a322c323437352c636172740a352c37313036352c766965770a352c343239343936363531312c63
+6172740a362c37323634312c766965770a322c313032342c7369676e75700a352c343031302c766965770a312c313036
+343531342c766965770a332c343239343936363436332c766965770a362c37353735392c766965770a312c333430332c
+636172740a342c323434342c6275790a312c37343534362c766965770a332c37343035342c7369676e75700a332c3233
+38312c766965770a372c37303835382c766965770a332c313039303334392c766965770a372c323734312c7369676e75
+700a322c37353133322c766965770a332c343731352c766965770a332c333534362c766965770a312c323637392c7369
+676e75700a352c323034312c766965770a332c37333030392c7369676e75700a352c313237303038332c766965770a36
+2c313133363734332c636172740a332c37353935372c766965770a
+"""
+}
+
+// data/jobs.txt
+fn file_2() -> String {
+    """
+232041207765656b206f662070726f64756374206576656e74732c2061732074686520616e616c7974696373206a6f62
+207265616473207468656d2e0a6c6f6164206576656e74732e6373760a73686f772064310a73746174732064310a616e
+6420626f74682064312064320a73686f7720626f74680a726574656e74696f6e2064312064320a726574656e74696f6e
+2064312064370a616e646e6f7420636875726e2064312064370a737461747320636875726e0a6f72207765656b206431
+2064322064332064342064352064362064370a7374617473207765656b0a616e642066756e6e656c20655f7369676e75
+7020655f6361727420655f6275790a73686f772066756e6e656c0a6a6163636172642064312064320a6a616363617264
+2064362064370a786f72206f64642064312064320a657175616c206f646420626f74680a232052616e6765733a206120
+72756e20636f6e7461696e65722070657220656d707479206368756e6b2c207468656e206261636b20746f2061727261
+79206f72206269746d61700a61646472616e676520626c6b203635353336203134303030300a737461747320626c6b0a
+73686f7720626c6b0a61646420626c6b203320373030303020343239343936373239352037303030300a72656d6f7665
+20626c6b20363535333620390a73686f7720626c6b0a6f7074696d697a6520626c6b0a737461747320626c6b0a72656d
+6f766572616e676520626c6b20313030303030203133313037320a73686f7720626c6b0a6f7074696d697a6520626c6b
+0a737461747320626c6b0a23205468652061727261792f6269746d617020626f756e6461727920617420343039360a61
+646472616e67652074203020343039360a737461747320740a72656d6f7665207420350a737461747320740a61646420
+7420350a737461747320740a616464207420343039360a737461747320740a61646420742037303030300a7374617473
+20740a72656d6f76652074203020310a737461747320740a6f7074696d697a6520740a737461747320740a232072616e
+6b20616e642073656c6563740a72616e6b207765656b20300a72616e6b207765656b2037303030300a72616e6b207765
+656b20343239343936373239350a73656c656374207765656b20300a73656c656374207765656b20313030300a73656c
+656374207765656b2039393939390a636f6e7461696e73207765656b2031303030203130303120343239343936373239
+350a666c697020662031302032300a666c697020662031352037303030300a737461747320660a73686f7720660a666c
+697020662030203230303030300a737461747320660a72616e6b206620343239343936373239350a73656c6563742066
+203135303030300a666c69702066203432393439363732393020343239343936373239360a73686f7720660a23205468
+6520706f727461626c6520666f726d61743a207772697474656e2c2064756d7065642c2072656164206261636b0a6164
+6472616e676520736d616c6c2031302031330a61646420736d616c6c2031303030203635353336203133313037310a68
+657864756d7020736d616c6c0a6f7074696d697a6520736d616c6c0a68657864756d7020736d616c6c0a736176652073
+6d616c6c20736d616c6c2e726f61720a6c6f6164726f617220736d616c6c3220736d616c6c2e726f61720a657175616c
+20736d616c6c20736d616c6c320a73617665207765656b207765656b2e726f61720a6c6f6164726f6172207765656b32
+207765656b2e726f61720a657175616c207765656b207765656b320a7374617473207765656b320a6f7074696d697a65
+207765656b0a73617665207765656b207765656b5f6f70742e726f61720a6c6f6164726f6172207765656b3320776565
+6b5f6f70742e726f61720a7374617473207765656b330a657175616c207765656b207765656b330a616e6420656d7074
+79206431206e6f737563680a6f7220656d7074790a737461747320656d7074790a68657864756d7020656d7074790a73
+61766520656d70747920656d7074792e726f61720a6c6f6164726f617220656d7074793220656d7074792e726f61720a
+737461747320656d707479320a232046696c657320616e6f7468657220696d706c656d656e746174696f6e2077726f74
+650a6c6f6164726f6172207368697070656420736869707065642e726f61720a73686f7720736869707065640a737461
+747320736869707065640a68657864756d7020736869707065640a73617665207368697070656420736869707065645f
+616761696e2e726f61720a6c6f6164726f617220626164206261645f636f6f6b69652e726f61720a6c6f6164726f6172
+20626164207472756e63617465642e726f61720a6c6f6164726f61722062616420756e736f727465642e726f61720a6c
+6f6164726f617220626164206d697373696e672e726f61720a23204d697374616b65730a73686f77206e6f737563680a
+616464207420343239343936373239360a6164642074202d310a61646472616e67652074203520780a66726f626e6963
+61746520740a73656c65637420740a
+"""
+}
+
+// data/shipped.roar
+fn file_3() -> String {
+    """
+3b3003000a0000050001007c0205000a1affff050025000000310000003f0000003f2000000100020003006400e803ff
+ff030000006300c8000000e8fd1702499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224490000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001
+00faff0500
+"""
+}
+
+// data/truncated.roar
+fn file_4() -> String {
+    """
+3b3003000a0000050001007c0205000a1affff050025000000310000003f0000003f2000000100020003006400e803ff
+ff030000006300c8000000e8fd1702499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224499224
+499224499224499224499224499224499224490000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00000000000000000000000000000000000000000000000000
+"""
+}
+
+// data/unsorted.roar
+fn file_5() -> String {
+    """
+3a300000020000000300010002000000180000001c000000050006000700
+"""
+}
