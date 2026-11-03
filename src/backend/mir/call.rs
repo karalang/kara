@@ -1490,7 +1490,24 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.store(lenp, len.into())?;
                 self.builder.build_unconditional_branch(done).map_err(e)?;
                 self.builder.position_at_end(wide);
-                self.rt("string_push_char", &[v.into(), c.into()])?;
+                // Through a copy of the header, so the runtime never holds
+                // `v`'s address: a local `String` whose address escapes
+                // stays in memory, and every byte push above then reloads
+                // the length the push before it stored, a store-to-load
+                // chain per push (kata 38, B-2026-10-31-37). The copy lets
+                // SROA keep the header in registers.
+                let tmp = self.entry_slot(24, "push.wide")?;
+                self.store(tmp, self.load_ptr(v)?.into())?;
+                for at in [8, 16] {
+                    let w = self.load_i64(self.offset(v, at)?)?;
+                    self.store(self.offset(tmp, at)?, w.into())?;
+                }
+                self.rt("string_push_char", &[tmp.into(), c.into()])?;
+                self.store(v, self.load_ptr(tmp)?.into())?;
+                for at in [8, 16] {
+                    let w = self.load_i64(self.offset(tmp, at)?)?;
+                    self.store(self.offset(v, at)?, w.into())?;
+                }
                 self.builder.build_unconditional_branch(done).map_err(e)?;
                 self.builder.position_at_end(done);
                 Ok(())

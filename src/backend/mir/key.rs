@@ -1130,11 +1130,20 @@ impl<'ctx> Cx<'ctx, '_> {
     }
 
     /// -1 / 0 / 1 from `lt` and `gt`.
+    /// -1, 0 or 1 from two exclusive tests. A `select`, not
+    /// `zext(gt) - zext(lt)`: LLVM folds a caller's `< 0` / `> 0` / `== 0`
+    /// through a select of constants back to the one compare, and it does not
+    /// fold the subtraction, which costs a sort's partition loop a
+    /// `cset; cset; sub; cmp` per element on arm64 (B-2026-11-02-7).
     fn ord_of(&self, lt: IntValue<'ctx>, gt: IntValue<'ctx>) -> R<IntValue<'ctx>> {
         let i32t = self.llcx.i32_type();
         let g = self.builder.build_int_z_extend(gt, i32t, "").map_err(e)?;
-        let l = self.builder.build_int_z_extend(lt, i32t, "").map_err(e)?;
-        self.builder.build_int_sub(g, l, "").map_err(e)
+        let minus_one = i32t.const_all_ones();
+        Ok(self
+            .builder
+            .build_select(lt, minus_one, g, "")
+            .map_err(e)?
+            .into_int_value())
     }
 
     fn ord_ints(&self, x: IntValue<'ctx>, y: IntValue<'ctx>, signed: bool) -> R<IntValue<'ctx>> {

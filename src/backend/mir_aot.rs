@@ -18,6 +18,7 @@ use inkwell::AddressSpace;
 use std::path::Path;
 
 mod carry_store;
+mod overflow_flag;
 mod select_branch;
 mod split;
 mod walk_carry;
@@ -442,6 +443,7 @@ fn run_passes(module: &Module<'_>, opt: u8, tm: &TargetMachine) -> Result<(), St
         unsafe {
             carry_store::carry_stores(module.as_mut_ptr());
             select_branch::mark_index_steps(module.as_mut_ptr());
+            overflow_flag::flag_steps(module.as_mut_ptr());
         }
     }
     Ok(())
