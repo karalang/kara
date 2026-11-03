@@ -58,8 +58,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
+| false-positive | 97 |
 | diagnostics | 95 |
-| false-positive | 95 |
 | perf | 86 |
 | missing-feature | 64 |
 | soundness | 42 |
@@ -67,7 +67,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | run-vs-build | 22 |
 | other | 16 |
 | codegen-gap | 14 |
-| crash | 7 |
+| crash | 8 |
 | leak | 4 |
 | use-after-free | 1 |
 
@@ -76,11 +76,11 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 164 |
-| mir | 102 |
-| mir-llvm | 99 |
+| mir | 103 |
+| mir-llvm | 100 |
 | cli | 49 |
-| ownership | 43 |
-| parser | 29 |
+| ownership | 44 |
+| parser | 30 |
 | interp | 27 |
 | runtime | 23 |
 | codegen | 22 |
@@ -109,6 +109,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-03-15 | 2026-11-03 | mir+mir-llvm | low | A negative capacity: `String.with_capacity(-3)` gives an empty string on the interpreter and panics with a bare `explicit panic` on the compiled backend (and ASan lane); `Vec.with_capacity(-3)` panics `explicit panic` on both, while `Vec.filled(-3, v)` is empty and `reserve(n <= 0)` does nothing | — |
 | B-2026-11-03-16 | 2026-11-03 | mir+mir-llvm | low | `substring` with a negative start gives "" instead of clamping the start to 0 as strings.md says ("Out-of-range, negative or inverted bounds saturate"): `"hello".substring(-5, 2)` is "" (want "he"), `"hello".substring(-1)` is "" (want "hello"), `"日本語".substring(-2, 3)` is "" (want "日"); several pins hold the "" and flip with the fix | — |
 | B-2026-11-03-17 | 2026-11-03 | typecheck | low | A binding destructured from a `Map` / `SortedMap` `iter_mut()` item is typed `V`, not `mut ref V`, when `V` is Copy: `for (k, v) in m.iter_mut() { *v = 9; }` (m: SortedMap[i64, i64]) is refused ("unary '*' requires 'ref T' ... found 'i64'; a 'i64' is copied, so drop the `*`"), though collections.md gives the item as `(ref K, mut ref V)` and design.md says assigning through a `mut ref` needs an explicit `*` | — |
+| B-2026-11-03-18 | 2026-11-03 | mir+mir-llvm | high | `Client.get` / `Client.post` under a `Network` fake crash on every lane: the interpreter stops with `in Fh.__get at bb13[term]: a String place holds no box`, the compiled build segfaults (`karac run` exit 139) or fails `memory allocation of 94402663242032 bytes`, and ASan reports a stack-buffer-overflow in `kara.Fh.__get`; `c.request(..).send()` under the same fake works | — |
 
 ### Relocated
 
@@ -595,6 +596,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-03-8 | typecheck | high | A `shared` handle enters a `par` branch or `par for` body through a local closure's environment: `let a = n(1); let f = \|\| a.id; let (x, y) = par { f… | 21c89bae17 |
 | B-2026-11-03-10 | typecheck | low | `karac fix` left two edits its diagnostics name unapplied: `==` / `!=` on a type without `PartialEq` says "add #[derive(PartialEq)]" with no fix-it (… | 67f5b2209d |
 | B-2026-11-03-11 | typecheck | low | `s + t` with a `Str` on the left said only "type 'Str' does not implement trait Add", with no hint and no `karac fix` edit, where `String + Str` alre… | 592000a587 |
+| B-2026-11-03-19 | parser | medium | `Some(ref place)`, the spec's own way to build an `Option[ref T]` (design.md § `ref place` borrows a place: `let first = Some(ref self.items[0]);`),… | 53e7f5f11a |
+| B-2026-11-03-20 | ownership | medium | `karac check` refuses moving a binding after an adaptor chain rooted at a range reads it (`let rest: Vec[i64] = (1..n + 1).filter(\|i\| not side.contai… | 53e7f5f11a |
 
 </details>
 
