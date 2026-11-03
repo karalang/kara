@@ -2603,6 +2603,8 @@ fn main() -> () {
             "ok_match_result_is_a_ref",
             // `Option.replace` is option.kara's (B-2026-11-02-27).
             "ok_owned_place_into_ref_slot",
+            // `Receiver.recv` is sync.kara's (B-2026-11-02-37).
+            "ok_literal_into_ref_slot",
         ];
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus/core");
         let mut pins: Vec<_> = std::fs::read_dir(&root)

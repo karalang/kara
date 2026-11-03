@@ -1,0 +1,27 @@
+// A literal checked against `ref T` is a reference to a constant in static
+// data (core semantics §5.3): bound to a `ref` local, pushed into a
+// `Vec[ref String]` or `VecDeque[ref i64]`, or sent on a `Sender[ref T]`.
+// It borrows nothing and is never dropped.
+fn main() {
+    let r: ref String = "bound";
+    println(r);
+
+    let s = "owned".to_string();
+    let mut v: Vec[ref String] = Vec.new();
+    v.push("lit");
+    v.push(s);
+    v.push("lit");
+    println(f"{v[0]} {v[1]} {v[2]} {v.len()}");
+
+    let mut d: VecDeque[ref i64] = VecDeque.new();
+    d.push_back(7);
+    d.push_front(3);
+    println(f"{d[0]} {d[1]}");
+
+    let (tx, rx): (Sender[ref String], Receiver[ref String]) = channel(2);
+    let _ = tx.send("sent");
+    println(rx.recv().unwrap());
+    let (ti, ri): (Sender[ref i64], Receiver[ref i64]) = channel(1);
+    let _ = ti.send(42);
+    println(ri.recv().unwrap());
+}

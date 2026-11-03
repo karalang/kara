@@ -8354,7 +8354,10 @@ impl<'l, 'a> Bx<'l, 'a> {
                 }
             }
         }
-        if let Some(op) = self.literal_ref(e, None)? {
+        // The destination's type decides too: `let r: ref String = "lit"`
+        // binds static data (§5.3; B-2026-11-02-37).
+        let slot = self.place_type(&dest);
+        if let Some(op) = self.literal_ref(e, Some(slot))? {
             self.assign(dest, Rvalue::Use(op));
             return Ok(());
         }
@@ -24706,6 +24709,19 @@ impl<'l, 'a> Bx<'l, 'a> {
                                 });
                                 continue;
                             }
+                        }
+                    }
+                    // A literal stored into a `ref` slot (`v.push("lit")` on
+                    // a `Vec[ref String]`, `tx.send(7)` on a `Sender[ref
+                    // i64]`) is a reference to static data (§5.3;
+                    // B-2026-11-02-37).
+                    if stores {
+                        let slot = self
+                            .lib_param_tys(base, method)
+                            .and_then(|s| s.get(rest.len()).copied());
+                        if let Some(op) = self.literal_ref(&a.value, slot)? {
+                            rest.push(op);
+                            continue;
                         }
                     }
                     // An owned place stored into a `ref` slot (`v.push(t)`
