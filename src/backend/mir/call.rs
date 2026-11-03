@@ -1555,10 +1555,11 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.drop_moved(args)
             }
             // Exactly `n` slots up front, and no elements (B-2026-10-14-14).
+            // A negative `n` counts as 0, as in `Vec.filled`
+            // (B-2026-11-03-15).
             ("String" | "Vec", "with_capacity") => {
                 let n = self.int_arg(&args[0])?;
-                let ok = self.non_negative(n)?;
-                self.abort_unless(ok, "explicit panic")?;
+                let n = self.clamp_non_negative(n)?;
                 let size = match self.tys.kind(dty) {
                     TyKind::Intrinsic(IntrinsicTy::Vec(el)) => self.layout(el)?.size,
                     _ => 1,
@@ -1568,12 +1569,11 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.store(self.offset(d, 8)?, self.i64(0).into())
             }
             // The fallible twin: exactly `n` slots in the `Ok`, or the
-            // `AllocError` (B-2026-10-21-28). A negative `n` panics, as it
-            // does for `with_capacity`.
+            // `AllocError` (B-2026-10-21-28). A negative `n` counts as 0, as
+            // it does for `with_capacity` (B-2026-11-03-15).
             ("String" | "Vec", "try_with_capacity") => {
                 let n = self.int_arg(&args[0])?;
-                let nonneg = self.non_negative(n)?;
-                self.abort_unless(nonneg, "explicit panic")?;
+                let n = self.clamp_non_negative(n)?;
                 let ok = self.variant_of(dty, "Ok")?;
                 let vty = self
                     .tys
@@ -1717,12 +1717,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 // A negative count is no elements, as `from_fn` and `resize`
                 // take it (B-2026-10-22-38).
                 let n = self.int_arg(&args[0])?;
-                let ok = self.non_negative(n)?;
-                let n = self
-                    .builder
-                    .build_select(ok, n, self.i64(0), "")
-                    .map_err(e)?
-                    .into_int_value();
+                let n = self.clamp_non_negative(n)?;
                 let val = self.operand_ptr(&args[1])?;
                 let d = self.place_ptr(dest)?;
                 self.vec_alloc(d, n, size)?;
@@ -1960,6 +1955,16 @@ impl<'ctx> Cx<'ctx, '_> {
         self.builder
             .build_int_compare(IntPredicate::SGE, n, self.i64(0), "")
             .map_err(e)
+    }
+
+    /// `max(n, 0)`: a negative count or capacity counts as 0.
+    pub(super) fn clamp_non_negative(&self, n: IntValue<'ctx>) -> R<IntValue<'ctx>> {
+        let ok = self.non_negative(n)?;
+        Ok(self
+            .builder
+            .build_select(ok, n, self.i64(0), "")
+            .map_err(e)?
+            .into_int_value())
     }
 
     /// `if !ok { abort(msg) }`, leaving the builder after it.

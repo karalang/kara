@@ -3242,13 +3242,13 @@ impl<'a> Interp<'a> {
         let is_vec = ty_name.starts_with("Vec");
         match (is_vec, method, args.as_slice()) {
             (true, "with_capacity", [Value::Int(n), ..])
-                if *n < 0 || self.over_max_alloc(*n as u128, ret) =>
+                if *n >= 0 && self.over_max_alloc(*n as u128, ret) =>
             {
-                // A negative capacity panics, as in legacy, and so does one
-                // whose bytes no allocation can hold (collections.md
-                // § Fallible allocation: `with_capacity` panics when the
-                // allocation fails; runtime/src/alloc.rs's
+                // A capacity whose bytes no allocation can hold panics
+                // (collections.md § Fallible allocation: `with_capacity`
+                // panics when the allocation fails; runtime/src/alloc.rs's
                 // `KARAC_MAX_ALLOC_BYTES` is the compiled backend's bound).
+                // A negative one counts as 0 (B-2026-11-03-15).
                 if self.trace {
                     self.events.push(Event::Abort(AbortReason::Panic));
                 }
@@ -3257,7 +3257,7 @@ impl<'a> Interp<'a> {
             (true, "new" | "with_capacity", _) => {
                 let v = self.alloc_box(ty_name, Value::Agg(vec![]));
                 if let (Value::Box(id), [Value::Int(n), ..]) = (&v, args.as_slice()) {
-                    self.caps.insert(*id, *n as usize);
+                    self.caps.insert(*id, (*n).max(0) as usize);
                 }
                 Ok(v)
             }
@@ -11308,14 +11308,14 @@ impl<'a> Interp<'a> {
                 new_string(self, t)
             }
             "substring" => {
-                // Byte offsets, saturating to an empty String when out of
-                // range or inverted; a cut inside a codepoint panics
-                // (legacy's rule, B-2026-08-14-19).
+                // Byte offsets, each saturating to `0..=len` (strings.md:
+                // "Out-of-range, negative or inverted bounds saturate",
+                // B-2026-11-03-16), so an inverted range is empty; a cut
+                // inside a codepoint panics (B-2026-08-14-19).
                 let len = s.len() as i128;
-                let lo = int(1)?;
-                // An end past the text is the text's end.
+                let lo = int(1)?.clamp(0, len);
                 let hi = if args.len() > 2 {
-                    int(2)?.min(len)
+                    int(2)?.clamp(0, len)
                 } else {
                     len
                 };

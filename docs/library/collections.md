@@ -79,7 +79,7 @@ A growable array. It has every [`Slice[T]`](#slicet) method, plus:
 | Method | Signature | Notes |
 |---|---|---|
 | `new` | `fn new() -> Vec[T]` | Empty, no allocation |
-| `with_capacity` | `fn with_capacity(cap: i64) -> Vec[T]` | Preallocates `cap` slots |
+| `with_capacity` | `fn with_capacity(cap: i64) -> Vec[T]` | Preallocates `cap` slots. `cap < 0` counts as 0, as in `filled` |
 | `filled` | `fn filled(n: i64, val: T) -> Vec[T] where T: Clone` | `n` copies of `val`. `n < 0` counts as 0 |
 | `from_fn` | `fn from_fn(n: i64, f: own MutFn(i64) -> T) -> Vec[T]` | `n` elements computed from their index. `n < 0` counts as 0, as in `resize` |
 | `as_slice` | `fn as_slice(self) -> Slice[T]` | The whole vector as a `Slice[T]` value |

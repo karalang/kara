@@ -1111,9 +1111,13 @@ pub unsafe extern "C" fn karac_mir_str_map(out: *mut RawVec, op: i32, s: *const 
 /// words it, for the abort that follows.
 fn str_range_panic(s: &str, lo: i64, hi: i64, mode: i32) {
     let len = s.len() as i64;
-    // `substring` refuses only a cut inside a code point, and its end past
-    // the text is the text's end.
-    let hi = if mode == 0 { hi.min(len) } else { hi };
+    // `substring` refuses only a cut inside a code point, and each bound
+    // saturates to `0..=len` (B-2026-11-03-16).
+    let (lo, hi) = if mode == 0 {
+        (lo.clamp(0, len), hi.clamp(0, len))
+    } else {
+        (lo, hi)
+    };
     // Written out rather than `format!`ed: core's integer and `str`
     // formatting keep a bounds panic, and with it std's panic hook, in
     // every binary that slices a string (B-2026-11-02-24).
@@ -1221,14 +1225,15 @@ fn str_range(s: &str, lo: i64, hi: i64, mode: i32) -> Option<Picked<'_>> {
         return Some(lossy(cut.unwrap_or_default()));
     }
     let (lo, hi) = if mode == 0 {
-        let hi = hi.min(len);
+        // Each bound saturates to `0..=len` (strings.md, B-2026-11-03-16).
+        let (lo, hi) = (lo.clamp(0, len), hi.clamp(0, len));
         // An end inside a code point panics even when the range is empty
         // there (docs/library/strings.md, B-2026-10-22-38).
-        let cut = |x: i64| (0..=len).contains(&x) && !s.is_char_boundary(x as usize);
+        let cut = |x: i64| !s.is_char_boundary(x as usize);
         if cut(lo) || cut(hi) {
             return None;
         }
-        if lo < 0 || lo >= hi {
+        if lo >= hi {
             return Some(Picked::Text(""));
         }
         (lo, hi)

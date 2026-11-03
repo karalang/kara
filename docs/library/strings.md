@@ -78,7 +78,7 @@ Parsing text into a number is `T.parse(s)` on the target type, which returns `Re
 | Method | Signature | Notes |
 |---|---|---|
 | `new` | `fn new() -> String` | Empty string |
-| `with_capacity` | `fn with_capacity(cap: i64) -> String` | Preallocates `cap` bytes |
+| `with_capacity` | `fn with_capacity(cap: i64) -> String` | Preallocates `cap` bytes. `cap < 0` counts as 0 |
 | `from_utf8` | `fn from_utf8(bytes: Slice[u8]) -> Result[String, Utf8Error]` | Checks that the bytes are valid UTF-8 |
 | `as_str` | `fn as_str(self) -> Str` | The whole string as a `Str` value, for places other than call boundaries |
 | `push` | `fn push(mut ref self, c: char)` | Appends one scalar value, encoded as UTF-8 |

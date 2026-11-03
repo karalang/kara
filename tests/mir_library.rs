@@ -1206,8 +1206,9 @@ fn a_char_radix_out_of_range_panics() {
 }
 
 /// `substring` panics on an end inside a code point, an empty range there
-/// included, and otherwise saturates (docs/library/strings.md,
-/// B-2026-10-22-38).
+/// included, and otherwise saturates each bound to `[0, len]`, a
+/// negative start included (docs/library/strings.md, B-2026-10-22-38,
+/// B-2026-11-03-16).
 #[test]
 fn substring_panics_on_an_end_inside_a_code_point() {
     for (lo, hi) in [(1, 1), (0, 1), (1, 3), (4, 2), (2, 100)] {
@@ -1223,7 +1224,7 @@ fn main() {
     println(f"[{s.substring(3, 3)}] [{s.substring(3, 6)}] [{s.substring(6, 3)}] [{s.substring(-2, 3)}] [{s.substring(3, 100)}] [{s.substring(20, 30)}]");
 }
 "#,
-        "[] [本] [] [] [本語] []\n",
+        "[] [本] [] [日] [本語] []\n",
     );
 }
 
