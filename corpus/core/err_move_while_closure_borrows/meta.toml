@@ -1,0 +1,9 @@
+source = "B-2026-11-03-6"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["moves", "closures"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-03-6: before the fix the refusal used the §3.3 loop message ('moved inside a loop and not assigned again') in code with no loop. The expected.out wording of an error pin is guidance, not a byte oracle."

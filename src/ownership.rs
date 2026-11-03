@@ -1707,6 +1707,10 @@ pub struct OwnershipChecker<'a> {
     /// [`crate::cfg::Classification::core_projection_consumes`], across
     /// every function.
     pub(crate) core_projection_consumes: FxHashMap<SpanKey, (Span, String)>,
+    /// Consume sites (keyed by span) that move a place a `let`-bound
+    /// closure, used after the move, captures by borrow, with that
+    /// closure's name (B-2026-11-03-6).
+    pub(crate) core_live_closure_moves: FxHashMap<SpanKey, String>,
     /// Effective `panic_on_alloc_failure` (phase-8-stdlib-floor item 6). `true`
     /// (the default) leaves RC fallback as a perf note; `false` (hard mode)
     /// turns every RC-fallback site into a hard
@@ -2150,6 +2154,7 @@ impl<'a> OwnershipChecker<'a> {
             core_escaping_borrow_captures: Vec::new(),
             core_bare_ref_returns: Vec::new(),
             core_projection_consumes: FxHashMap::default(),
+            core_live_closure_moves: FxHashMap::default(),
             panic_on_alloc_failure: true,
             elided_bindings: HashMap::new(),
             elision_blocked: HashMap::new(),
@@ -3417,6 +3422,14 @@ impl<'a> OwnershipChecker<'a> {
             });
             if is_gpu_buffer {
                 continue;
+            }
+            if trigger == RcTrigger::DirectReuseAfterConsume {
+                if let Some(f) = crate::rc_predicate::live_closure_over_consume(&cfg, &dom, &w) {
+                    self.core_live_closure_moves.insert(
+                        SpanKey::from_span(&w.consume_span),
+                        demangle_binding(&f).to_string(),
+                    );
+                }
             }
             let binding = demangle_binding(&binding).to_string();
             let type_name = self.binding_type_names.get(&binding).cloned();

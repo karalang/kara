@@ -1,0 +1,1 @@
+error[ownership]: cannot move 's' (moved at line 7:13) while the closure `f` still borrows it: the closure reads it here and is used after the move (core-semantics.md §5.6, §9.1)

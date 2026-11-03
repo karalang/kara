@@ -173,7 +173,21 @@ impl<'a> super::OwnershipChecker<'a> {
             };
             let moved_span = projection.map_or(entry.consume_span, |(span, _)| *span);
             let (line, col) = (entry.consume_span.line, entry.consume_span.column);
+            // The use is in the body of a closure that is called after the
+            // move: the closure still borrows the place (B-2026-11-03-6).
+            let live_closure = (entry.trigger == RcTrigger::DirectReuseAfterConsume)
+                .then(|| {
+                    self.core_live_closure_moves
+                        .get(&SpanKey::from_span(&entry.consume_span))
+                })
+                .flatten();
             let message = match entry.trigger {
+                RcTrigger::DirectReuseAfterConsume if live_closure.is_some() => format!(
+                    "cannot move '{binding}' (moved at line {line}:{col}) while the closure `{}` \
+                     still borrows it: the closure reads it here and is used after the move \
+                     (core-semantics.md §5.6, §9.1)",
+                    live_closure.map_or("", |f| f.as_str())
+                ),
                 RcTrigger::DirectReuseAfterConsume | RcTrigger::ContainerStoreWithSubsequentUse
                     if entry.other_use_span.offset <= entry.consume_span.offset =>
                 {
@@ -264,6 +278,13 @@ impl<'a> super::OwnershipChecker<'a> {
                     .contains(&SpanKey::from_span(&moved_span));
                 let advice = crate::ownership::derive_advice(ty, edit, &binding, first);
                 format!("{advice}, or restructure to avoid the reuse")
+            } else if let (Some(f), true) = (live_closure, supports_clone) {
+                format!(
+                    "clone '{binding}' at the move site (`{binding}.clone()`), or finish using \
+                     `{f}` before the move"
+                )
+            } else if let Some(f) = live_closure {
+                format!("finish using `{f}` before moving '{binding}', or restructure")
             } else if capture && supports_clone {
                 format!(
                     "clone '{binding}' into a new binding before the closure and capture that, \

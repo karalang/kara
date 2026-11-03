@@ -1,0 +1,10 @@
+// Moving a place that a closure borrows, while the closure is used after
+// the move, is refused (core semantics §5.6, §9.1). There is no loop: the
+// diagnostic names the closure that still borrows it.
+fn main() {
+    let s = "abc".to_string();
+    let f = || s.len();
+    let t = s;
+    println(f());
+    println(t);
+}

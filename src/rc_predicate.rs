@@ -303,6 +303,41 @@ fn in_capture_scope(c: &UseSite, u: &UseSite) -> bool {
         .is_some_and(|k| k.0 <= u.span.offset && u.span.offset < k.0 + k.1)
 }
 
+/// B-2026-11-03-6: the `let`-bound closure whose body holds the witness's
+/// use, when that closure is used again after the consume. The pair is
+/// then a move of a place a live closure borrows (core semantics §5.6,
+/// §9.1), not a move carried around a loop: the closure's body only looks
+/// like an earlier use because it is written before the move.
+pub(crate) fn live_closure_over_consume(
+    cfg: &Cfg,
+    dom: &DominatorTree,
+    w: &RcWitness,
+) -> Option<String> {
+    let f = cfg
+        .closure_body_owner
+        .get(&w.other_block)
+        .and_then(|k| cfg.let_closures.get(k))?;
+    let cb = w.consume_block;
+    let ci = cfg
+        .block(cb)
+        .uses
+        .iter()
+        .position(|u| u.kind == UseKind::Consume && u.span.offset == w.consume_span.offset)?;
+    cfg.blocks.iter().enumerate().find_map(|(b, block)| {
+        if cfg.closure_body_blocks.contains(&b) {
+            return None;
+        }
+        block
+            .uses
+            .iter()
+            .enumerate()
+            .any(|(i, u)| {
+                u.binding == *f && u.kind != UseKind::Define && precedes(cb, ci, b, i, dom)
+            })
+            .then(|| f.clone())
+    })
+}
+
 /// B-2026-10-29-37: whether the body of the `let`-bound closure holding
 /// block `ub` runs only before the consume at `(cb, ci)`: the closure
 /// binding is never moved (a moved closure can be called from wherever it
