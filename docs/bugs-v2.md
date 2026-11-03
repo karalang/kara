@@ -59,13 +59,13 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 95 |
-| false-positive | 92 |
+| false-positive | 95 |
 | perf | 86 |
-| missing-feature | 63 |
+| missing-feature | 64 |
 | soundness | 42 |
 | miscompile | 32 |
-| run-vs-build | 21 |
-| other | 15 |
+| run-vs-build | 22 |
+| other | 16 |
 | codegen-gap | 14 |
 | crash | 7 |
 | leak | 4 |
@@ -75,11 +75,11 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 161 |
-| mir | 100 |
-| mir-llvm | 97 |
+| typecheck | 164 |
+| mir | 102 |
+| mir-llvm | 99 |
 | cli | 49 |
-| ownership | 42 |
+| ownership | 43 |
 | parser | 29 |
 | interp | 27 |
 | runtime | 23 |
@@ -104,6 +104,12 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-02-3 | 2026-11-02 | mir-llvm | medium | Kata 242's valid-anagram byte loop runs 1.11x legacy's instructions on the MIR backend but 1.21x its cycles: the seq lane went from 1.08x to 1.30x rustc -O and from 1.00x to 1.22x C; on x86 it runs 0.85x legacy's wall time, so the gap needs an arm64 measurement | — |
 | B-2026-11-02-7 | 2026-11-02 | mir-llvm | medium | Kata 253 (meeting rooms II), dominated by sorting a fresh copy of 120k intervals by start each round, runs 1.17x legacy's instructions on the M5 (arm64) MIR backend (x86 1.02x); kata 252 is within the bar (1.12x M5, 0.97x x86) as of 2026-11-03 | — |
 | B-2026-11-03-9 | 2026-11-03 | interp | medium | `karac __mir-run` runs an iterator adaptor chain with a closure (`v.iter().filter(|x| ..).count()`, `.map(|x| *x).max()`) about 11x slower than the same hand loop, about 2.9 us an element; kata 1040's iterator arm times out at 102 s against the corpus's 60 s cap | — |
+| B-2026-11-03-12 | 2026-11-03 | typecheck | medium | Mixed-width arithmetic is refused where design.md § Mixed-width operands widens the narrower operand within its kind: `u + w` (u: u8, w: i64), `s * i` (s: i16, i: i64) and `f + d` (f: f32, d: f64) each get `cannot mix integer/float types ... cast the 'u8' operand up to 'i64' with as`, and the cast the message asks for is the one the spec says is implicit there | — |
+| B-2026-11-03-13 | 2026-11-03 | ownership | low | `String.from_utf8(v)` moves its argument, though strings.md declares `from_utf8(bytes: Slice[u8])`, a borrowed parameter: calling it twice on one local `Vec[u8]` or byte array is refused with `value 'v' moved here, used again here` | — |
+| B-2026-11-03-14 | 2026-11-03 | typecheck | low | A generic parameter fixed only by an integer literal is reported unsolved instead of taking the literal's default: `c.or_else(|e| Err(0))` (c: Result[i64, i64]) and `g.or_else(|e| if e > 3 { Ok(e) } else { Err(0) })` get `cannot infer type parameter 'F'`, though design.md § Type inference says literals default last (`let x = identity(3.14)` is f64) | — |
+| B-2026-11-03-15 | 2026-11-03 | mir+mir-llvm | low | A negative capacity: `String.with_capacity(-3)` gives an empty string on the interpreter and panics with a bare `explicit panic` on the compiled backend (and ASan lane); `Vec.with_capacity(-3)` panics `explicit panic` on both, while `Vec.filled(-3, v)` is empty and `reserve(n <= 0)` does nothing | — |
+| B-2026-11-03-16 | 2026-11-03 | mir+mir-llvm | low | `substring` with a negative start gives "" instead of clamping the start to 0 as strings.md says ("Out-of-range, negative or inverted bounds saturate"): `"hello".substring(-5, 2)` is "" (want "he"), `"hello".substring(-1)` is "" (want "hello"), `"日本語".substring(-2, 3)` is "" (want "日"); several pins hold the "" and flip with the fix | — |
+| B-2026-11-03-17 | 2026-11-03 | typecheck | low | A binding destructured from a `Map` / `SortedMap` `iter_mut()` item is typed `V`, not `mut ref V`, when `V` is Copy: `for (k, v) in m.iter_mut() { *v = 9; }` (m: SortedMap[i64, i64]) is refused ("unary '*' requires 'ref T' ... found 'i64'; a 'i64' is copied, so drop the `*`"), though collections.md gives the item as `(ref K, mut ref V)` and design.md says assigning through a `mut ref` needs an explicit `*` | — |
 
 ### Relocated
 
