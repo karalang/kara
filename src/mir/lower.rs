@@ -27893,7 +27893,8 @@ fn main() -> Result[(), String] {
         assert_eq!(r.exit_code(), Some(1));
 
         let neg = "fn main() {\n    let n: i64 = 0 - 1;\n    let v: Vec[i64] = Vec.with_capacity(n);\n    println(f\"{v.len()}\");\n}\n";
-        assert_eq!(run_source(neg).map(|r| r.1), Ok(Some(101)));
+        // A negative capacity counts as 0 (B-2026-11-03-15).
+        assert_eq!(run_source(neg).map(|r| r.1), Ok(Some(0)));
     }
 
     /// The library cells run as interpreter natives: `Atomic` writes its

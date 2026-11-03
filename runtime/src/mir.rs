@@ -1114,7 +1114,9 @@ fn str_range_panic(s: &str, lo: i64, hi: i64, mode: i32) {
     // `substring` refuses only a cut inside a code point, and each bound
     // saturates to `0..=len` (B-2026-11-03-16).
     let (lo, hi) = if mode == 0 {
-        (lo.clamp(0, len), hi.clamp(0, len))
+        // `max`/`min`, not `clamp`: `clamp`'s `min <= max` assert would
+        // link std's panic hook into every binary that slices.
+        (lo.max(0).min(len), hi.max(0).min(len))
     } else {
         (lo, hi)
     };
@@ -1226,7 +1228,8 @@ fn str_range(s: &str, lo: i64, hi: i64, mode: i32) -> Option<Picked<'_>> {
     }
     let (lo, hi) = if mode == 0 {
         // Each bound saturates to `0..=len` (strings.md, B-2026-11-03-16).
-        let (lo, hi) = (lo.clamp(0, len), hi.clamp(0, len));
+        // `max`/`min`, not `clamp`: `clamp`'s assert links std's panic hook.
+        let (lo, hi) = (lo.max(0).min(len), hi.max(0).min(len));
         // An end inside a code point panics even when the range is empty
         // there (docs/library/strings.md, B-2026-10-22-38).
         let cut = |x: i64| !s.is_char_boundary(x as usize);
