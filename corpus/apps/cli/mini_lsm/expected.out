@@ -1,0 +1,319 @@
+> create shop
+created shop: log 000001.log
+> load shop catalog.csv
+loaded 160 rows from catalog.csv (seq 1..160), 3 skipped
+  flush -> L0 000002.sst: 46 entries, 7 blocks, 1989 bytes
+  flush -> L0 000004.sst: 46 entries, 7 blocks, 1982 bytes
+  flush -> L0 000006.sst: 46 entries, 7 blocks, 2007 bytes
+> stats shop
+shop: seq 160, memtable 22 entries (992 bytes), log 000007.log 1146 bytes
+  L0: 3 tables, 138 entries, 5978 bytes [000002 000004 000006]
+  L1: 0 tables, 0 entries, 0 bytes
+> ls shop
+shop/:
+  000002.sst 1989
+  000004.sst 1982
+  000006.sst 2007
+  000007.log 1146
+  MANIFEST 146
+> get shop sku:00024
+sku:00024 = oak_router|354.85|192 (L0 000006, read 1, skipped 0)
+> get shop sku:05079
+sku:05079 = steel_fan|98.80|244 (L0 000004, read 1, skipped 1)
+> get shop sku:09941
+sku:09941 = eco_kettle|447.50|234 (L0 000006, read 1, skipped 0)
+> get shop sku:00000
+sku:00000: not found (read 0, skipped 0)
+> get shop sku:99999
+sku:99999: not found (read 0, skipped 0)
+> scan shop sku:00332 sku:01302
+scan [sku:00332, sku:01302): 10 keys
+  sku:00332 = dual_blender|123.51|49
+  sku:00421 = smart_chair|331.97|93
+  sku:00465 = steel_chair|91.59|166
+  sku:00520 = steel_drill|164.16|239
+  sku:00595 = mini_saw|318.57|239
+  sku:00655 = quiet_blender|452.16|178
+  sku:00999 = pro_drill|228.63|225
+  sku:01040 = smart_drill|186.74|30
+  sku:01089 = steel_mug|81.58|50
+  sku:01207 = steel_kettle|259.22|211
+> scan shop sku: sku:~ 5
+scan [sku:, sku:~): 160 keys
+  sku:00024 = oak_router|354.85|192
+  sku:00081 = eco_mug|250.94|6
+  sku:00085 = steel_desk|139.56|219
+  sku:00107 = red_desk|498.00|38
+  sku:00111 = blue_lamp|218.72|8
+  ... 155 more
+> snap shop before_sale
+snapshot before_sale at seq 160
+> put shop sku:05079 sale_kettle|9.99|12
+put sku:05079 (seq 161)
+> del shop sku:05101
+del sku:05101 (seq 162)
+> batch shop sku:05107=boxed_set|59.00|4 -sku:05129 note:sale=on
+batch of 3 (seq 163..165)
+> get shop sku:05079
+sku:05079 = sale_kettle|9.99|12 (memtable, read 0, skipped 0)
+> get shop sku:05079 @before_sale
+sku:05079 = steel_fan|98.80|244 (L0 000004, read 1, skipped 1)
+> get shop sku:05101
+sku:05101: deleted at seq 162 (memtable, read 0, skipped 0)
+> get shop sku:05101 @before_sale
+sku:05101 = oak_kettle|358.02|246 (L0 000004, read 1, skipped 1)
+> get shop sku:05129
+sku:05129: deleted at seq 164 (memtable, read 0, skipped 0)
+> get shop note:sale
+note:sale = on (memtable, read 0, skipped 0)
+> scan shop sku:05023 sku:05170
+scan [sku:05023, sku:05170): 4 keys
+  sku:05023 = smart_kettle|254.75|203
+  sku:05079 = sale_kettle|9.99|12
+  sku:05107 = boxed_set|59.00|4
+  sku:05161 = blue_blender|178.63|108
+> scan shop sku:05023 sku:05170 @before_sale
+scan [sku:05023, sku:05170): 6 keys
+  sku:05023 = smart_kettle|254.75|203
+  sku:05079 = steel_fan|98.80|244
+  sku:05101 = oak_kettle|358.02|246
+  sku:05107 = steel_saw|14.68|72
+  sku:05129 = dual_saw|83.72|4
+  sku:05161 = blue_blender|178.63|108
+> flush shop
+flush -> L0 000008.sst: 27 entries, 4 blocks, 1129 bytes
+compact 4 L0 + 0 L1 tables (165 entries) -> 3 L1 tables, 165 entries kept, 0 dropped
+> stats shop
+shop: seq 165, memtable 0 entries (0 bytes), log 000009.log 0 bytes
+  L0: 0 tables, 0 entries, 0 bytes
+  L1: 3 tables, 165 entries, 7016 bytes [000010 000011 000012]
+  snapshots: before_sale@160
+> compact shop
+compact 0 L0 + 3 L1 tables (165 entries) -> 3 L1 tables, 165 entries kept, 0 dropped
+> stats shop
+shop: seq 165, memtable 0 entries (0 bytes), log 000009.log 0 bytes
+  L0: 0 tables, 0 entries, 0 bytes
+  L1: 3 tables, 165 entries, 7016 bytes [000013 000014 000015]
+  snapshots: before_sale@160
+> get shop sku:05079 @before_sale
+sku:05079 = steel_fan|98.80|244 (L1 000014, read 1, skipped 0)
+> get shop sku:05101 @before_sale
+sku:05101 = oak_kettle|358.02|246 (L1 000014, read 1, skipped 0)
+> release shop before_sale
+released before_sale
+> compact shop
+compact 0 L0 + 3 L1 tables (165 entries) -> 3 L1 tables, 159 entries kept, 6 dropped
+> stats shop
+shop: seq 165, memtable 0 entries (0 bytes), log 000009.log 0 bytes
+  L0: 0 tables, 0 entries, 0 bytes
+  L1: 3 tables, 159 entries, 6778 bytes [000016 000017 000018]
+> get shop sku:05101
+sku:05101: not found (read 0, skipped 1)
+> sst shop 16
+000016.sst: L1, 57 entries, 8 blocks, 2403 bytes, keys note:sale .. sku:03619
+  bloom: 576 bits, 6 probes
+  block 0: offset 0, 270 bytes, 8 entries, 2 restarts, last sku:00169@128
+  block 1: offset 274, 269 bytes, 7 entries, 2 restarts, last sku:00520@115
+  block 2: offset 547, 266 bytes, 7 entries, 2 restarts, last sku:01302@77
+  block 3: offset 817, 260 bytes, 7 entries, 2 restarts, last sku:01758@101
+  block 4: offset 1081, 258 bytes, 7 entries, 2 restarts, last sku:02297@70
+  block 5: offset 1343, 248 bytes, 7 entries, 2 restarts, last sku:02729@117
+  block 6: offset 1595, 261 bytes, 7 entries, 2 restarts, last sku:03272@150
+  block 7: offset 1860, 251 bytes, 7 entries, 2 restarts, last sku:03619@87
+> check shop
+check shop: 3 tables
+  000016.sst: ok, 57 entries in 8 blocks
+  000017.sst: ok, 56 entries in 8 blocks
+  000018.sst: ok, 46 entries in 7 blocks
+> put shop cart:alice sku:00107x2
+put cart:alice (seq 166)
+> put shop cart:bob sku:00196x1
+put cart:bob (seq 167)
+> del shop cart:alice
+del cart:alice (seq 168)
+> crash shop
+crashed shop: 3 memtable entries lost, 000009.log holds 118 bytes
+> get shop cart:bob
+! no open store named shop
+> open shop
+opened shop: seq 168, 3 tables, 000009.log: 3 records (3 ops) replayed
+> get shop cart:bob
+cart:bob = sku:00196x1 (memtable, read 0, skipped 0)
+> get shop cart:alice
+cart:alice: deleted at seq 168 (memtable, read 0, skipped 0)
+> put shop cart:carol sku:00313x5
+put cart:carol (seq 169)
+> put shop cart:dave sku:00421x1
+put cart:dave (seq 170)
+> crash shop
+crashed shop: 5 memtable entries lost, 000009.log holds 205 bytes
+> tear shop 7
+tore 7 bytes off 000009.log, 198 left
+> open shop
+opened shop: seq 169, 3 tables, 000009.log: 4 records (4 ops) replayed, stopped at record 5: torn record, 36 bytes dropped
+> get shop cart:carol
+cart:carol = sku:00313x5 (memtable, read 0, skipped 0)
+> get shop cart:dave
+cart:dave: not found (read 0, skipped 0)
+> put shop cart:dave sku:00421x3
+put cart:dave (seq 170)
+> get shop cart:dave
+cart:dave = sku:00421x3 (memtable, read 0, skipped 0)
+> put shop cart:erin sku:00465x1
+put cart:erin (seq 171)
+> put shop cart:frank sku:00520x2
+put cart:frank (seq 172)
+> put shop cart:gina sku:00595x4
+put cart:gina (seq 173)
+> crash shop
+crashed shop: 8 memtable entries lost, 000009.log holds 335 bytes
+> flip shop log 260
+flipped byte 260 of 000009.log
+> open shop
+opened shop: seq 171, 3 tables, 000009.log: 6 records (6 ops) replayed, stopped at record 7: bad checksum, 87 bytes dropped
+> get shop cart:erin
+cart:erin = sku:00465x1 (memtable, read 0, skipped 0)
+> get shop cart:frank
+cart:frank: not found (read 0, skipped 0)
+> get shop cart:gina
+cart:gina: not found (read 0, skipped 0)
+> putn metrics m:cpu: 0 1
+! no open store named metrics
+> create metrics
+created metrics: log 000001.log
+> putn metrics m:cpu: 60 40
+put 60 keys m:cpu:00000..m:cpu:00059 (seq 1..60)
+  flush -> L0 000002.sst: 31 entries, 7 blocks, 2096 bytes
+> putn metrics m:mem: 60 40
+put 60 keys m:mem:00000..m:mem:00059 (seq 61..120)
+  flush -> L0 000004.sst: 31 entries, 7 blocks, 2096 bytes
+  flush -> L0 000006.sst: 31 entries, 7 blocks, 2099 bytes
+> putn metrics m:disk: 60 40
+put 60 keys m:disk:00000..m:disk:00059 (seq 121..180)
+  flush -> L0 000008.sst: 31 entries, 7 blocks, 2099 bytes
+  compact 4 L0 + 0 L1 tables (124 entries) -> 4 L1 tables, 124 entries kept, 0 dropped
+  flush -> L0 000014.sst: 31 entries, 7 blocks, 2119 bytes
+> putn metrics m:net: 60 40
+put 60 keys m:net:00000..m:net:00059 (seq 181..240)
+  flush -> L0 000016.sst: 31 entries, 7 blocks, 2111 bytes
+  flush -> L0 000018.sst: 31 entries, 7 blocks, 2096 bytes
+> stats metrics
+metrics: seq 240, memtable 23 entries (1541 bytes), log 000019.log 1702 bytes
+  L0: 3 tables, 93 entries, 6326 bytes [000014 000016 000018]
+  L1: 4 tables, 124 entries, 8251 bytes [000010 000011 000012 000013]
+> get metrics m:mem:00042
+m:mem:00042 = 1d951f3f1d951f3f1d951f3f1d951f3f1d951f3f (L1 000013, read 1, skipped 1)
+> get metrics m:net:00059
+m:net:00059 = 1396749113967491139674911396749113967491 (memtable, read 0, skipped 0)
+> get metrics m:zzz:00000
+m:zzz:00000: not found (read 0, skipped 0)
+> scan metrics m:disk:00057 m:mem:00002
+scan [m:disk:00057, m:mem:00002): 5 keys
+  m:disk:00057 = 7e7a19397e7a19397e7a1939...
+  m:disk:00058 = 877a2764877a2764877a2764...
+  m:disk:00059 = 887a28f7887a28f7887a28f7...
+  m:mem:00000 = a78b6b21a78b6b21a78b6b21...
+  m:mem:00001 = a68b698ea68b698ea68b698e...
+> putn metrics m:cpu: 30 12
+put 30 keys m:cpu:00000..m:cpu:00029 (seq 241..270)
+  flush -> L0 000020.sst: 36 entries, 7 blocks, 2009 bytes
+  compact 4 L0 + 4 L1 tables (253 entries) -> 7 L1 tables, 240 entries kept, 13 dropped
+> stats metrics
+metrics: seq 270, memtable 17 entries (663 bytes), log 000021.log 782 bytes
+  L0: 0 tables, 0 entries, 0 bytes
+  L1: 7 tables, 240 entries, 15586 bytes [000022 000023 000024 000025 000026 000027 000028]
+> compact metrics
+compact 0 L0 + 7 L1 tables (240 entries) -> 7 L1 tables, 240 entries kept, 0 dropped
+> stats metrics
+metrics: seq 270, memtable 17 entries (663 bytes), log 000021.log 782 bytes
+  L0: 0 tables, 0 entries, 0 bytes
+  L1: 7 tables, 240 entries, 15586 bytes [000029 000030 000031 000032 000033 000034 000035]
+> ls metrics
+metrics/:
+  000021.log 782
+  000029.sst 2326
+  000030.sst 2335
+  000031.sst 2345
+  000032.sst 2328
+  000033.sst 2324
+  000034.sst 2324
+  000035.sst 1604
+  MANIFEST 339
+> get metrics m:cpu:00007
+m:cpu:00007 = eddc1a03eddc (L1 000029, read 1, skipped 0)
+> get metrics m:cpu:00045
+m:cpu:00045 = 6fe5e1056fe5e1056fe5e1056fe5e1056fe5e105 (L1 000030, read 1, skipped 0)
+> scan metrics m:cpu:00027 m:cpu:00033
+scan [m:cpu:00027, m:cpu:00033): 6 keys
+  m:cpu:00027 = edd79cd5edd7
+  m:cpu:00028 = eed79e68eed7
+  m:cpu:00029 = efd79ffbefd7
+  m:cpu:00030 = ecd9d9d9ecd9d9d9ecd9d9d9...
+  m:cpu:00031 = ebd9d846ebd9d846ebd9d846...
+  m:cpu:00032 = ead9d6b3ead9d6b3ead9d6b3...
+> check metrics
+check metrics: 7 tables
+  000029.sst: ok, 41 entries in 8 blocks
+  000030.sst: ok, 35 entries in 7 blocks
+  000031.sst: ok, 35 entries in 7 blocks
+  000032.sst: ok, 35 entries in 7 blocks
+  000033.sst: ok, 35 entries in 7 blocks
+  000034.sst: ok, 35 entries in 7 blocks
+  000035.sst: ok, 24 entries in 5 blocks
+> sst metrics 32
+000032.sst: L1, 35 entries, 7 blocks, 2328 bytes, keys m:disk:00051 .. m:mem:00025
+  bloom: 352 bits, 6 probes
+  block 0: offset 0, 294 bytes, 5 entries, 2 restarts, last m:disk:00055@176
+  block 1: offset 298, 293 bytes, 5 entries, 2 restarts, last m:mem:00000@61
+  block 2: offset 595, 292 bytes, 5 entries, 2 restarts, last m:mem:00005@66
+  block 3: offset 891, 292 bytes, 5 entries, 2 restarts, last m:mem:00010@71
+  block 4: offset 1187, 292 bytes, 5 entries, 2 restarts, last m:mem:00015@76
+  block 5: offset 1483, 292 bytes, 5 entries, 2 restarts, last m:mem:00020@81
+  block 6: offset 1779, 292 bytes, 5 entries, 2 restarts, last m:mem:00025@86
+> flip metrics 32 100
+flipped byte 100 of 000032.sst
+> check metrics
+check metrics: 7 tables
+  000029.sst: ok, 41 entries in 8 blocks
+  000030.sst: ok, 35 entries in 7 blocks
+  000031.sst: ok, 35 entries in 7 blocks
+  000032.sst: block 0: bad checksum
+  000033.sst: ok, 35 entries in 7 blocks
+  000034.sst: ok, 35 entries in 7 blocks
+  000035.sst: ok, 24 entries in 5 blocks
+> get metrics m:cpu:00002
+m:cpu:00002 = f0dc1ebcf0dc (L1 000029, read 1, skipped 0)
+> get metrics m:disk:00053
+! 000032.sst: block 0: bad checksum
+> open metrics
+! metrics is already open
+> get nosuch k
+! no open store named nosuch
+> create shop
+! shop is already open
+> open nosuch
+! nosuch: cannot read MANIFEST
+> put shop
+! put: needs 3 arguments
+> get shop
+! get: needs 2 arguments
+> scan shop z a
+! scan: empty range [z, a)
+> snap shop
+! snap: needs 2 arguments
+> get shop k @nosnap
+! no snapshot named nosnap
+> release shop nosnap
+! no snapshot named nosnap
+> sst shop 9999
+! no table 009999 in shop
+> flip shop 9999 1
+! no file 009999.sst in shop
+> tear shop 100000
+! tear: 000009.log holds only 248 bytes
+> batch shop =x
+! batch: bad operation: =x
+> putn shop p: x 4
+! bad number: x
+> frobnicate shop
+! unknown command: frobnicate

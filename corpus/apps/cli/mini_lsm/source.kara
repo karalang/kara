@@ -1,0 +1,1680 @@
+// mini_lsm: a log-structured merge-tree key-value store, the design under
+// LevelDB, RocksDB, Cassandra and ScyllaDB's storage engines. Writes go to
+// a write-ahead log and a sorted in-memory table; a full memtable is
+// flushed to an immutable sorted table file (data blocks with prefix
+// compression and restart points, a bloom filter, an index and a footer);
+// tables in level 0 overlap, and compaction merges them into level 1,
+// dropping the versions no reader can see. A MANIFEST, replaced by
+// rename, names the live files; opening a store replays its log and cuts
+// off a torn or corrupt tail. Snapshots pin old versions by sequence
+// number.
+
+const MEM_LIMIT: i64 = 2048;
+const BLOCK_SIZE: i64 = 256;
+const RESTART: i64 = 4;
+const TABLE_BYTES: i64 = 2048;
+const L0_TRIGGER: i64 = 4;
+const BITS_PER_KEY: i64 = 10;
+const PROBES: i64 = 6;
+const MAGIC: i64 = 5422350349010259249;
+const FOOTER: i64 = 40;
+const DEL: i64 = 0;
+const VAL: i64 = 1;
+const MASK32: i64 = 4294967295;
+
+// ------------------------------------------------------------ encoding
+
+fn put_u32(out: mut ref Vec[u8], v: i64) {
+    for i in 0..4 {
+        out.push(((v >> (8 * i)) & 255) as u8);
+    }
+}
+
+fn put_u64(out: mut ref Vec[u8], v: i64) {
+    for i in 0..8 {
+        out.push(((v >> (8 * i)) & 255) as u8);
+    }
+}
+
+fn get_u32(b: ref Vec[u8], p: i64) -> i64 {
+    let mut v: i64 = 0;
+    for i in 0..4 {
+        v = v | ((b[p + i] as i64) << (8 * i));
+    }
+    v
+}
+
+fn get_u64(b: ref Vec[u8], p: i64) -> i64 {
+    let mut v: i64 = 0;
+    for i in 0..8 {
+        v = v | ((b[p + i] as i64) << (8 * i));
+    }
+    v
+}
+
+fn put_varint(out: mut ref Vec[u8], n: i64) {
+    let mut v = n;
+    while v >= 128 {
+        out.push(((v & 127) | 128) as u8);
+        v = v >> 7;
+    }
+    out.push(v as u8);
+}
+
+// A varint at `p`: its value and the position after it.
+fn get_varint(b: ref Vec[u8], p: i64) -> Result[(i64, i64), String] {
+    let mut n: i64 = 0;
+    let mut shift = 0;
+    let mut pos = p;
+    loop {
+        if pos >= b.len() or shift > 28 {
+            return Err("bad varint".to_string());
+        }
+        let c = b[pos] as i64;
+        pos += 1;
+        n = n | ((c & 127) << shift);
+        if c < 128 {
+            return Ok((n, pos));
+        }
+        shift += 7;
+    }
+}
+
+fn bytes_of(s: Str) -> Vec[u8] {
+    s.bytes().to_vec()
+}
+
+fn text_of(b: ref Vec[u8], from: i64, to: i64) -> String {
+    match String.from_utf8(b[from..to]) {
+        Ok(s) => s,
+        Err(_) => "?".to_string(),
+    }
+}
+
+fn sub(b: ref Vec[u8], from: i64, to: i64) -> Vec[u8] {
+    b[from..to].to_vec()
+}
+
+// An internal key: the user key, then (seq << 8 | kind) as 8 bytes.
+fn ikey(user: Str, seq: i64, kind: i64) -> Vec[u8] {
+    let mut k = bytes_of(user);
+    put_u64(mut k, (seq << 8) | kind);
+    k
+}
+
+fn trailer(k: ref Vec[u8]) -> i64 {
+    get_u64(k, k.len() - 8)
+}
+
+fn user_of(k: ref Vec[u8]) -> String {
+    text_of(k, 0, k.len() - 8)
+}
+
+// -1, 0 or 1 as a[..alen] sorts before, with or after b[..blen].
+fn cmp_bytes(a: ref Vec[u8], alen: i64, b: ref Vec[u8], blen: i64) -> i64 {
+    let n = if alen < blen { alen } else { blen };
+    for i in 0..n {
+        if a[i] != b[i] {
+            return if a[i] < b[i] { -1 } else { 1 };
+        }
+    }
+    if alen < blen {
+        -1
+    } else if alen > blen {
+        1
+    } else {
+        0
+    }
+}
+
+// Internal key order: user keys ascending, then newest first.
+fn ikey_lt(a: ref Vec[u8], b: ref Vec[u8]) -> bool {
+    let c = cmp_bytes(a, a.len() - 8, b, b.len() - 8);
+    if c != 0 {
+        return c < 0;
+    }
+    trailer(a) > trailer(b)
+}
+
+fn crc32(data: ref Vec[u8]) -> i64 {
+    let mut table: Vec[i64] = Vec.new();
+    for n in 0..256 {
+        let mut c = n;
+        for _ in 0..8 {
+            c = if (c & 1) == 1 { 3988292384 ^ (c >> 1) } else { c >> 1 };
+        }
+        table.push(c);
+    }
+    let mut crc = MASK32;
+    for b in data.iter() {
+        crc = table[(crc ^ (*b as i64)) & 255] ^ (crc >> 8);
+    }
+    crc ^ MASK32
+}
+
+fn crc_of(b: ref Vec[u8], from: i64, to: i64) -> i64 {
+    crc32(sub(b, from, to))
+}
+
+// ------------------------------------------------------------ bloom filter
+
+// The 32-bit hash LevelDB's bloom filter uses (a Murmur variant), in
+// wrapping u32 arithmetic.
+fn bloom_hash(data: ref Vec[u8]) -> i64 {
+    let m: u32 = 3332679571;
+    let mut h: u32 = 3164544308u32 ^ (data.len() as u32).wrapping_mul(m);
+    let mut i = 0;
+    while i + 4 <= data.len() {
+        let w = get_u32(data, i) as u32;
+        h = h.wrapping_add(w).wrapping_mul(m);
+        h = h ^ (h >> 16);
+        i += 4;
+    }
+    let rest = data.len() - i;
+    if rest == 3 {
+        h = h.wrapping_add((data[i + 2] as u32) << 16);
+    }
+    if rest >= 2 {
+        h = h.wrapping_add((data[i + 1] as u32) << 8);
+    }
+    if rest >= 1 {
+        h = h.wrapping_add(data[i] as u32).wrapping_mul(m);
+        h = h ^ (h >> 24);
+    }
+    h
+}
+
+fn rotate(h: i64) -> i64 {
+    ((h >> 17) | (h << 15)) & MASK32
+}
+
+fn bloom_build(keys: ref Vec[String]) -> Vec[u8] {
+    let mut bits = keys.len() * BITS_PER_KEY;
+    if bits < 64 {
+        bits = 64;
+    }
+    let nbytes = (bits + 7) / 8;
+    bits = nbytes * 8;
+    let mut arr: Vec[u8] = Vec.filled(nbytes, 0);
+    for k in keys.iter() {
+        let mut h = bloom_hash(bytes_of(k));
+        let delta = rotate(h);
+        for _ in 0..PROBES {
+            let pos = h % bits;
+            arr[pos / 8] = arr[pos / 8] | ((1 << (pos % 8)) as u8);
+            h = (h + delta) & MASK32;
+        }
+    }
+    arr.push(PROBES as u8);
+    arr
+}
+
+fn bloom_may_contain(f: ref Vec[u8], key: Str) -> bool {
+    if f.len() < 2 {
+        return true;
+    }
+    let bits = (f.len() - 1) * 8;
+    let k = f[f.len() - 1] as i64;
+    let mut h = bloom_hash(bytes_of(key));
+    let delta = rotate(h);
+    for _ in 0..k {
+        let pos = h % bits;
+        if (f[pos / 8] & ((1 << (pos % 8)) as u8)) == 0 {
+            return false;
+        }
+        h = (h + delta) & MASK32;
+    }
+    true
+}
+
+fn fname(n: i64) -> String {
+    let s = f"{n}";
+    let mut out = String.new();
+    for _ in s.len()..6 {
+        out.push_str("0");
+    }
+    out + s
+}
+
+// ------------------------------------------------------------ table files
+
+struct Pair {
+    key: Vec[u8],
+    value: Vec[u8],
+}
+
+fn build_block(entries: ref Vec[Pair]) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    let mut restarts: Vec[i64] = Vec.new();
+    for i in 0..entries.len() {
+        let k = entries[i].key.clone();
+        let mut shared = 0;
+        if i % RESTART == 0 {
+            restarts.push(out.len());
+        } else {
+            let prev = entries[i - 1].key.clone();
+            let n = if prev.len() < k.len() { prev.len() } else { k.len() };
+            while shared < n and prev[shared] == k[shared] {
+                shared += 1;
+            }
+        }
+        let v = entries[i].value.clone();
+        put_varint(mut out, shared);
+        put_varint(mut out, k.len() - shared);
+        put_varint(mut out, v.len());
+        out.extend_from_slice(k[shared..k.len()]);
+        out.extend_from_slice(v[0..v.len()]);
+    }
+    for r in restarts.iter() {
+        put_u32(mut out, *r);
+    }
+    put_u32(mut out, restarts.len());
+    out
+}
+
+// Writes a table of sorted entries; returns its size and block count.
+fn write_table(path: Str, entries: ref Vec[Pair]) -> Result[(i64, i64), String] {
+    let mut out: Vec[u8] = Vec.new();
+    let mut index: Vec[u8] = Vec.new();
+    let mut blocks = 0;
+    let mut cur: Vec[Pair] = Vec.new();
+    let mut size = 0;
+    let mut users: Vec[String] = Vec.new();
+    for i in 0..entries.len() {
+        let e = ref entries[i];
+        size += e.key.len() + e.value.len() + 3;
+        let u = user_of(e.key);
+        if users.is_empty() or users[users.len() - 1] != u {
+            users.push(u);
+        }
+        cur.push(Pair { key: e.key.clone(), value: e.value.clone() });
+        if size >= BLOCK_SIZE or i == entries.len() - 1 {
+            let blk = build_block(cur);
+            let last = cur[cur.len() - 1].key.clone();
+            put_varint(mut index, last.len());
+            index.extend_from_slice(last[0..last.len()]);
+            put_varint(mut index, out.len());
+            put_varint(mut index, blk.len());
+            let c = crc32(blk);
+            out.extend(blk);
+            put_u32(mut out, c);
+            blocks += 1;
+            cur = Vec.new();
+            size = 0;
+        }
+    }
+    let filt = bloom_build(users);
+    let foff = out.len();
+    let flen = filt.len();
+    out.extend(filt);
+    let ioff = out.len();
+    let ilen = index.len();
+    out.extend(index);
+    put_u64(mut out, ioff);
+    put_u64(mut out, ilen);
+    put_u64(mut out, foff);
+    put_u64(mut out, flen);
+    put_u64(mut out, MAGIC);
+    let total = out.len();
+    if let Err(e) = fs.write_bytes(path, out) {
+        return Err(f"cannot write {path}: {e}");
+    }
+    Ok((total, blocks))
+}
+
+struct IndexEntry {
+    last: Vec[u8],
+    off: i64,
+    size: i64,
+}
+
+// An open table: the footer, filter and index are read when it opens,
+// and each data block is read from the file when it is wanted.
+struct Table {
+    name: String,
+    file: File,
+    size: i64,
+    filter: Vec[u8],
+    index: Vec[IndexEntry],
+}
+
+fn read_at(f: ref File, off: i64, n: i64) -> Result[Vec[u8], IoError] {
+    f.seek(SeekFrom.Start, off)?;
+    let mut buf: Vec[u8] = Vec.filled(n, 0);
+    let mut got = 0;
+    while got < n {
+        let r = f.read(mut buf[got..n])?;
+        if r == 0 {
+            break;
+        }
+        got += r;
+    }
+    buf.truncate(got);
+    Ok(buf)
+}
+
+impl Table {
+    fn open(path: Str, num: i64) -> Result[Table, String] {
+        let name = fname(num) + ".sst";
+        let file = match File.open(path) {
+            Ok(f) => f,
+            Err(_) => return Err(f"{name}: cannot read"),
+        };
+        let size = match file.seek(SeekFrom.End, 0) {
+            Ok(n) => n,
+            Err(_) => return Err(f"{name}: cannot read"),
+        };
+        if size < FOOTER {
+            return Err(f"{name}: too short for a footer");
+        }
+        let foot = match read_at(file, size - FOOTER, FOOTER) {
+            Ok(b) => b,
+            Err(_) => return Err(f"{name}: cannot read"),
+        };
+        let ioff = get_u64(foot, 0);
+        let ilen = get_u64(foot, 8);
+        let foff = get_u64(foot, 16);
+        let flen = get_u64(foot, 24);
+        if get_u64(foot, 32) != MAGIC {
+            return Err(f"{name}: bad magic");
+        }
+        if ioff + ilen > size - FOOTER or foff + flen > ioff {
+            return Err(f"{name}: footer points past the end");
+        }
+        let (filter, idx) = match (read_at(file, foff, flen), read_at(file, ioff, ilen)) {
+            (Ok(a), Ok(b)) => (a, b),
+            _ => return Err(f"{name}: cannot read"),
+        };
+        let mut index: Vec[IndexEntry] = Vec.new();
+        let mut p = 0;
+        while p < idx.len() {
+            let (kl, q) = get_varint(idx, p)?;
+            let last = sub(idx, q, q + kl);
+            let (off, q2) = get_varint(idx, q + kl)?;
+            let (sz, q3) = get_varint(idx, q2)?;
+            index.push(IndexEntry { last, off, size: sz });
+            p = q3;
+        }
+        Ok(Table { name, file, size, filter, index })
+    }
+
+    fn block(self, i: i64) -> Result[Vec[u8], String] {
+        let ie = ref self.index[i];
+        if ie.off + ie.size + 4 > self.size {
+            return Err(f"{self.name}: block {i} runs past the end");
+        }
+        let raw = match read_at(self.file, ie.off, ie.size + 4) {
+            Ok(b) => b,
+            Err(_) => return Err(f"{self.name}: cannot read"),
+        };
+        let blk = sub(raw, 0, ie.size);
+        if crc32(blk) != get_u32(raw, ie.size) {
+            return Err(f"{self.name}: block {i}: bad checksum");
+        }
+        Ok(blk)
+    }
+}
+
+fn block_restarts(blk: ref Vec[u8]) -> (Vec[i64], i64) {
+    let n = get_u32(blk, blk.len() - 4);
+    let start = blk.len() - 4 - 4 * n;
+    let mut rs: Vec[i64] = Vec.new();
+    for i in 0..n {
+        rs.push(get_u32(blk, start + 4 * i));
+    }
+    (rs, start)
+}
+
+fn block_entries(blk: ref Vec[u8]) -> Result[Vec[Pair], String] {
+    let (_, end) = block_restarts(blk);
+    let mut out: Vec[Pair] = Vec.new();
+    let mut p = 0;
+    let mut prev: Vec[u8] = Vec.new();
+    while p < end {
+        let (shared, p1) = get_varint(blk, p)?;
+        let (unshared, p2) = get_varint(blk, p1)?;
+        let (vlen, p3) = get_varint(blk, p2)?;
+        let mut k = sub(prev, 0, shared);
+        k.extend_from_slice(blk[p3..p3 + unshared]);
+        let v = sub(blk, p3 + unshared, p3 + unshared + vlen);
+        p = p3 + unshared + vlen;
+        prev = k.clone();
+        out.push(Pair { key: k, value: v });
+    }
+    Ok(out)
+}
+
+// The first entry >= target: a binary search over the restart points,
+// then a scan from the last restart below the target.
+fn block_seek(blk: ref Vec[u8], target: ref Vec[u8]) -> Result[Option[Pair], String] {
+    let (rs, end) = block_restarts(blk);
+    let mut lo = 0;
+    let mut hi = rs.len() - 1;
+    while lo < hi {
+        let mid = (lo + hi + 1) / 2;
+        let (_, p1) = get_varint(blk, rs[mid])?;
+        let (unshared, p2) = get_varint(blk, p1)?;
+        let (_, p3) = get_varint(blk, p2)?;
+        let k = sub(blk, p3, p3 + unshared);
+        if ikey_lt(k, target) {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    let mut p = rs[lo];
+    let mut prev: Vec[u8] = Vec.new();
+    while p < end {
+        let (shared, p1) = get_varint(blk, p)?;
+        let (unshared, p2) = get_varint(blk, p1)?;
+        let (vlen, p3) = get_varint(blk, p2)?;
+        let mut k = sub(prev, 0, shared);
+        k.extend_from_slice(blk[p3..p3 + unshared]);
+        p = p3 + unshared + vlen;
+        if not ikey_lt(k, target) {
+            let v = sub(blk, p3 + unshared, p);
+            return Ok(Some(Pair { key: k, value: v }));
+        }
+        prev = k;
+    }
+    Ok(None)
+}
+
+// ------------------------------------------------------------ the store
+
+#[derive(Clone)]
+struct Meta {
+    level: i64,
+    num: i64,
+    entries: i64,
+    size: i64,
+    smallest: String,
+    largest: String,
+}
+
+#[derive(Clone)]
+struct Version {
+    seq: i64,
+    kind: i64,
+    value: String,
+}
+
+#[derive(Clone)]
+struct Op {
+    kind: i64,
+    key: String,
+    value: String,
+}
+
+enum Found {
+    Missing,
+    Hit(Version, String),
+}
+
+struct Store {
+    name: String,
+    dir: String,
+    next: i64,
+    seq: i64,
+    log: i64,
+    tables: Vec[Meta],
+    mem: SortedMap[String, Vec[Version]],
+    mem_bytes: i64,
+    mem_entries: i64,
+    snaps: SortedMap[String, i64],
+}
+
+fn file_size(path: Str) -> i64 {
+    match fs.metadata(path) {
+        Ok(m) => m.len,
+        Err(_) => 0,
+    }
+}
+
+impl Store {
+    fn new(name: Str) -> Store {
+        Store {
+            name: name.to_string(),
+            dir: "data/" + name.to_string(),
+            next: 1,
+            seq: 0,
+            log: 0,
+            tables: Vec.new(),
+            mem: SortedMap.new(),
+            mem_bytes: 0,
+            mem_entries: 0,
+            snaps: SortedMap.new(),
+        }
+    }
+
+    fn path(self, n: i64, ext: Str) -> String {
+        f"{self.dir}/{fname(n)}{ext}"
+    }
+
+    fn log_path(self) -> String {
+        self.path(self.log, ".log")
+    }
+
+    fn log_name(self) -> String {
+        fname(self.log) + ".log"
+    }
+
+    fn save_manifest(self) -> Result[(), String] {
+        let mut lines: Vec[String] = Vec.new();
+        lines.push("kara-lsm 1".to_string());
+        lines.push(f"next {self.next}");
+        lines.push(f"seq {self.seq}");
+        lines.push(f"log {self.log}");
+        let mut ts = self.tables.clone();
+        ts.sort_by(|a, b| (a.level, a.num).cmp((b.level, b.num)));
+        for t in ts.iter() {
+            lines.push(f"table {t.level} {t.num} {t.entries} {t.size} {t.smallest} {t.largest}");
+        }
+        let tmp = self.dir + "/MANIFEST.tmp";
+        let body = lines.join("\n") + "\n";
+        if fs.write(tmp, body).is_err() {
+            return Err(f"{self.name}: cannot write MANIFEST");
+        }
+        if fs.rename(tmp, self.dir + "/MANIFEST").is_err() {
+            return Err(f"{self.name}: cannot replace MANIFEST");
+        }
+        Ok(())
+    }
+
+    fn load_manifest(mut ref self) -> Result[(), String] {
+        let text = match fs.read_to_string(self.dir + "/MANIFEST") {
+            Ok(t) => t,
+            Err(_) => return Err(f"{self.name}: cannot read MANIFEST"),
+        };
+        let lines: Vec[Str] = text.split("\n").collect();
+        if lines[0] != "kara-lsm 1" {
+            return Err(f"{self.name}: MANIFEST: bad header");
+        }
+        for ln in lines[1..lines.len()].iter() {
+            if ln.len() == 0 {
+                continue;
+            }
+            let f: Vec[Str] = ln.split(" ").collect();
+            let bad = f"{self.name}: MANIFEST: bad line: {ln}";
+            let num = |s: Str| i64.parse(s).ok();
+            match (f[0], f.len()) {
+                ("next", 2) => self.next = num(f[1]) ?? return Err(bad),
+                ("seq", 2) => self.seq = num(f[1]) ?? return Err(bad),
+                ("log", 2) => self.log = num(f[1]) ?? return Err(bad),
+                ("table", 7) => {
+                    let (lv, n, e, s) = match (num(f[1]), num(f[2]), num(f[3]), num(f[4])) {
+                        (Some(a), Some(b), Some(c), Some(d)) => (a, b, c, d),
+                        _ => return Err(bad),
+                    };
+                    self.tables.push(Meta {
+                        level: lv,
+                        num: n,
+                        entries: e,
+                        size: s,
+                        smallest: f[5].to_string(),
+                        largest: f[6].to_string(),
+                    });
+                }
+                _ => return Err(bad),
+            }
+        }
+        Ok(())
+    }
+
+    fn new_log(mut ref self) -> Result[(), String] {
+        self.log = self.next;
+        self.next += 1;
+        if fs.write_bytes(self.log_path(), Vec.new()).is_err() {
+            return Err(f"{self.name}: cannot create {self.log_name()}");
+        }
+        Ok(())
+    }
+
+    // -------------------------------------------------------- writes
+
+    fn apply(mut ref self, seq: i64, kind: i64, key: Str, value: Str) {
+        let mut vs = self.mem.remove(key) ?? Vec.new();
+        vs.insert(0, Version { seq, kind, value: value.to_string() });
+        self.mem.insert(key.to_string(), vs);
+        self.mem_bytes += key.len() + value.len() + 16;
+        self.mem_entries += 1;
+    }
+
+    // One log record for the operations, then the memtable; a full
+    // memtable is flushed.
+    fn write(mut ref self, ops: ref Vec[Op], out: mut ref Vec[String]) -> Result[i64, String] {
+        let first = self.seq + 1;
+        let mut payload: Vec[u8] = Vec.new();
+        put_u64(mut payload, first);
+        put_u32(mut payload, ops.len());
+        for op in ops.iter() {
+            payload.push(op.kind as u8);
+            put_varint(mut payload, op.key.len());
+            payload.extend_from_slice(op.key.bytes());
+            if op.kind == VAL {
+                put_varint(mut payload, op.value.len());
+                payload.extend_from_slice(op.value.bytes());
+            }
+        }
+        let mut rec: Vec[u8] = Vec.new();
+        put_u32(mut rec, crc32(payload));
+        put_u32(mut rec, payload.len());
+        rec.extend(payload);
+        let appended = match File.append(self.log_path()) {
+            Ok(f) => f.write(rec),
+            Err(e) => Err(e),
+        };
+        if appended.is_err() {
+            return Err(f"{self.name}: cannot append to {self.log_name()}");
+        }
+        for i in 0..ops.len() {
+            self.apply(first + i, ops[i].kind, ops[i].key, ops[i].value);
+        }
+        self.seq = first + ops.len() - 1;
+        if self.mem_bytes >= MEM_LIMIT {
+            self.flush(out, "  ")?;
+        }
+        Ok(first)
+    }
+
+    fn flush(mut ref self, out: mut ref Vec[String], pad: Str) -> Result[(), String] {
+        if self.mem.is_empty() {
+            out.push(f"{pad}memtable empty");
+            return Ok(());
+        }
+        let mut entries: Vec[Pair] = Vec.new();
+        for (k, vs) in self.mem.iter() {
+            for v in vs.iter() {
+                entries.push(Pair { key: ikey(k, v.seq, v.kind), value: bytes_of(v.value) });
+            }
+        }
+        let num = self.next;
+        self.next += 1;
+        let (size, blocks) = write_table(self.path(num, ".sst"), entries)?;
+        let keys: Vec[String] = self.mem.keys().cloned().collect();
+        self.tables.push(Meta {
+            level: 0,
+            num,
+            entries: entries.len(),
+            size,
+            smallest: keys[0].clone(),
+            largest: keys[keys.len() - 1].clone(),
+        });
+        let old = self.log_path();
+        self.new_log()?;
+        self.save_manifest()?;
+        let _ = fs.remove_file(old);
+        out.push(f"{pad}flush -> L0 {fname(num)}.sst: {entries.len()} entries, {blocks} blocks, {size} bytes");
+        self.mem = SortedMap.new();
+        self.mem_bytes = 0;
+        self.mem_entries = 0;
+        let l0 = self.tables.iter().filter(|t| t.level == 0).count();
+        if l0 >= L0_TRIGGER {
+            self.compact(out, pad)?;
+        }
+        Ok(())
+    }
+
+    // Merges every L0 and L1 table into new L1 tables. A version is kept
+    // when it is the newest one some snapshot (or the present) can see; a
+    // deletion with nothing older kept under it goes too.
+    fn compact(mut ref self, out: mut ref Vec[String], pad: Str) -> Result[(), String] {
+        let inputs: Vec[Meta] = self.tables.iter().filter(|t| t.level <= 1).cloned().collect();
+        if inputs.is_empty() {
+            out.push(f"{pad}nothing to compact");
+            return Ok(());
+        }
+        let mut versions: SortedMap[String, Vec[Version]] = SortedMap.new();
+        let mut total = 0;
+        for t in inputs.iter() {
+            let tab = Table.open(self.path(t.num, ".sst"), t.num)?;
+            for i in 0..tab.index.len() {
+                for e in block_entries(tab.block(i)?)?.iter() {
+                    let u = user_of(e.key);
+                    let tr = trailer(e.key);
+                    let v = Version { seq: tr >> 8, kind: tr & 255, value: text_of(e.value, 0, e.value.len()) };
+                    let mut vs = versions.remove(u) ?? Vec.new();
+                    vs.push(v);
+                    versions.insert(u, vs);
+                    total += 1;
+                }
+            }
+        }
+        let mut bounds: Vec[i64] = self.snaps.values().cloned().collect();
+        bounds.sort();
+        bounds.push(self.seq);
+        // (user key, internal key, value), in internal key order.
+        let mut kept: Vec[(String, Pair)] = Vec.new();
+        for (u, vs) in versions.iter() {
+            let mut vs = vs.clone();
+            vs.sort_by(|a, b| b.seq.cmp(a.seq));
+            let mut keep: Vec[Version] = Vec.new();
+            for b in bounds.iter() {
+                for v in vs.iter() {
+                    if v.seq <= *b {
+                        if not keep.iter().any(|k| k.seq == v.seq) {
+                            keep.push(v.clone());
+                        }
+                        break;
+                    }
+                }
+            }
+            keep.sort_by(|a, b| b.seq.cmp(a.seq));
+            while not keep.is_empty() and keep[keep.len() - 1].kind == DEL {
+                keep.pop();
+            }
+            for v in keep.iter() {
+                kept.push((u.clone(), Pair { key: ikey(u, v.seq, v.kind), value: bytes_of(v.value) }));
+            }
+        }
+        // Cut into tables of about TABLE_BYTES, never between two
+        // versions of one key, so L1 tables do not overlap.
+        let mut groups: Vec[Vec[(String, Pair)]] = Vec.new();
+        let mut cur: Vec[(String, Pair)] = Vec.new();
+        let mut size = 0;
+        for (u, e) in kept.iter() {
+            if not cur.is_empty() and size >= TABLE_BYTES and cur[cur.len() - 1].0 != *u {
+                groups.push(cur);
+                cur = Vec.new();
+                size = 0;
+            }
+            size += e.key.len() + e.value.len();
+            cur.push((u.clone(), Pair { key: e.key.clone(), value: e.value.clone() }));
+        }
+        if not cur.is_empty() {
+            groups.push(cur);
+        }
+        let mut made: Vec[Meta] = Vec.new();
+        for g in groups.iter() {
+            let num = self.next;
+            self.next += 1;
+            let entries: Vec[Pair] = g.iter().map(|p| Pair { key: p.1.key.clone(), value: p.1.value.clone() }).collect();
+            let (sz, _) = write_table(self.path(num, ".sst"), entries)?;
+            made.push(Meta {
+                level: 1,
+                num,
+                entries: g.len(),
+                size: sz,
+                smallest: g[0].0.clone(),
+                largest: g[g.len() - 1].0.clone(),
+            });
+        }
+        let made_n = made.len();
+        self.tables.retain(|t| t.level > 1);
+        self.tables.extend(made);
+        self.save_manifest()?;
+        for t in inputs.iter() {
+            let _ = fs.remove_file(self.path(t.num, ".sst"));
+        }
+        let n0 = inputs.iter().filter(|t| t.level == 0).count();
+        let n1 = inputs.len() - n0;
+        out.push(f"{pad}compact {n0} L0 + {n1} L1 tables ({total} entries) -> {made_n} L1 tables, {kept.len()} entries kept, {total - kept.len()} dropped");
+        Ok(())
+    }
+
+    // -------------------------------------------------------- reads
+
+    // The newest version of `key` at `snap`, where it came from, and the
+    // tables read and skipped by their bloom filters on the way.
+    fn get(self, key: Str, snap: i64) -> Result[(Found, i64, i64), String] {
+        let mut read = 0;
+        let mut skipped = 0;
+        if let Some(vs) = self.mem.get(key) {
+            for v in vs.iter() {
+                if v.seq <= snap {
+                    return Ok((Found.Hit(v.clone(), "memtable".to_string()), read, skipped));
+                }
+            }
+        }
+        let mut l0: Vec[Meta] = self.tables.iter().filter(|t| t.level == 0).cloned().collect();
+        l0.sort_by(|a, b| b.num.cmp(a.num));
+        let mut l1: Vec[Meta] = self.tables.iter().filter(|t| t.level == 1).cloned().collect();
+        l1.sort_by(|a, b| a.smallest.cmp(b.smallest));
+        l0.extend(l1);
+        let target = ikey(key, snap, VAL);
+        for t in l0.iter() {
+            if key < t.smallest.as_str() or key > t.largest.as_str() {
+                continue;
+            }
+            let tab = Table.open(self.path(t.num, ".sst"), t.num)?;
+            if not bloom_may_contain(tab.filter, key) {
+                skipped += 1;
+                continue;
+            }
+            read += 1;
+            let mut lo = 0;
+            let mut hi = tab.index.len();
+            while lo < hi {
+                let mid = (lo + hi) / 2;
+                if ikey_lt(tab.index[mid].last, target) {
+                    lo = mid + 1;
+                } else {
+                    hi = mid;
+                }
+            }
+            if lo == tab.index.len() {
+                continue;
+            }
+            if let Some(e) = block_seek(tab.block(lo)?, target)? {
+                if user_of(e.key) == key {
+                    let tr = trailer(e.key);
+                    let v = Version { seq: tr >> 8, kind: tr & 255, value: text_of(e.value, 0, e.value.len()) };
+                    return Ok((Found.Hit(v, f"L{t.level} {fname(t.num)}"), read, skipped));
+                }
+            }
+        }
+        Ok((Found.Missing, read, skipped))
+    }
+
+    // The live keys in [lo, hi) at `snap`, in order.
+    fn scan(self, lo: Str, hi: Str, snap: i64) -> Result[Vec[(String, String)], String] {
+        let mut versions: SortedMap[String, Vec[Version]] = SortedMap.new();
+        for (k, vs) in self.mem.range(lo.to_string(), hi.to_string()) {
+            versions.insert(k.clone(), vs.clone());
+        }
+        for t in self.tables.iter() {
+            if t.largest.as_str() < lo or t.smallest.as_str() >= hi {
+                continue;
+            }
+            let tab = Table.open(self.path(t.num, ".sst"), t.num)?;
+            for i in 0..tab.index.len() {
+                for e in block_entries(tab.block(i)?)?.iter() {
+                    let u = user_of(e.key);
+                    if u.as_str() >= lo and u.as_str() < hi {
+                        let tr = trailer(e.key);
+                        let mut vs = versions.remove(u) ?? Vec.new();
+                        vs.push(Version { seq: tr >> 8, kind: tr & 255, value: text_of(e.value, 0, e.value.len()) });
+                        versions.insert(u, vs);
+                    }
+                }
+            }
+        }
+        let mut rows: Vec[(String, String)] = Vec.new();
+        for (u, vs) in versions.iter() {
+            let mut best: Option[Version] = None;
+            for v in vs.iter() {
+                if v.seq <= snap {
+                    let newer = match best {
+                        Some(ref b) => v.seq > b.seq,
+                        None => true,
+                    };
+                    if newer {
+                        best = Some(v.clone());
+                    }
+                }
+            }
+            if let Some(b) = best {
+                if b.kind == VAL {
+                    rows.push((u.clone(), b.value));
+                }
+            }
+        }
+        Ok(rows)
+    }
+
+    // -------------------------------------------------------- recovery
+
+    // Replays the log into the memtable, stopping at the first record
+    // that is torn or fails its checksum, and cuts the log there.
+    fn replay(mut ref self) -> Result[String, String] {
+        let path = self.log_path();
+        let data = match fs.read_bytes(path) {
+            Ok(d) => d,
+            Err(_) => return Err(f"{self.name}: cannot read {self.log_name()}"),
+        };
+        let mut p = 0;
+        let mut records = 0;
+        let mut ops = 0;
+        let mut why = "";
+        while p < data.len() {
+            if p + 8 > data.len() {
+                why = "torn header";
+                break;
+            }
+            let want = get_u32(data, p);
+            let n = get_u32(data, p + 4);
+            if p + 8 + n > data.len() {
+                why = "torn record";
+                break;
+            }
+            let payload = sub(data, p + 8, p + 8 + n);
+            if crc32(payload) != want {
+                why = "bad checksum";
+                break;
+            }
+            let batch = match decode_batch(payload) {
+                Ok(b) => b,
+                Err(_) => {
+                    why = "bad record";
+                    break;
+                }
+            };
+            let (seq, list) = batch;
+            for i in 0..list.len() {
+                self.apply(seq + i, list[i].kind, list[i].key, list[i].value);
+            }
+            let last = seq + list.len() - 1;
+            if last > self.seq {
+                self.seq = last;
+            }
+            records += 1;
+            ops += list.len();
+            p += 8 + n;
+        }
+        let mut msg = f"{self.log_name()}: {records} records ({ops} ops) replayed";
+        if why.len() > 0 {
+            msg = msg + f", stopped at record {records + 1}: {why}, {data.len() - p} bytes dropped";
+            let cut = match File.options().read(true).write(true).open(path) {
+                Ok(f) => f.set_len(p),
+                Err(e) => Err(e),
+            };
+            if cut.is_err() {
+                return Err(f"{self.name}: cannot cut {self.log_name()}");
+            }
+        }
+        Ok(msg)
+    }
+}
+
+fn decode_batch(payload: ref Vec[u8]) -> Result[(i64, Vec[Op]), String] {
+    if payload.len() < 12 {
+        return Err("short".to_string());
+    }
+    let seq = get_u64(payload, 0);
+    let count = get_u32(payload, 8);
+    let mut q = 12;
+    let mut list: Vec[Op] = Vec.new();
+    for _ in 0..count {
+        if q >= payload.len() {
+            return Err("short".to_string());
+        }
+        let kind = payload[q] as i64;
+        let (kl, q1) = get_varint(payload, q + 1)?;
+        if q1 + kl > payload.len() {
+            return Err("short".to_string());
+        }
+        let key = text_of(payload, q1, q1 + kl);
+        q = q1 + kl;
+        let mut value = String.new();
+        if kind == VAL {
+            let (vl, q2) = get_varint(payload, q)?;
+            if q2 + vl > payload.len() {
+                return Err("short".to_string());
+            }
+            value = text_of(payload, q2, q2 + vl);
+            q = q2 + vl;
+        }
+        list.push(Op { kind, key, value });
+    }
+    Ok((seq, list))
+}
+
+// ------------------------------------------------------------ checking
+
+fn check_table(path: String, meta: Meta) -> String {
+    let tab = match Table.open(path, meta.num) {
+        Ok(t) => t,
+        Err(e) => return e,
+    };
+    let mut n = 0;
+    let mut prev: Option[Vec[u8]] = None;
+    for i in 0..tab.index.len() {
+        let ents = match tab.block(i) {
+            Ok(b) => match block_entries(b) {
+                Ok(es) => es,
+                Err(e) => return f"{tab.name}: block {i}: {e}",
+            },
+            Err(e) => return e,
+        };
+        for e in ents.iter() {
+            if let Some(p) = prev {
+                if not ikey_lt(p, e.key) {
+                    return f"{tab.name}: block {i}: keys out of order";
+                }
+            }
+            prev = Some(e.key.clone());
+        }
+        if not ents.is_empty() and ents[ents.len() - 1].key != tab.index[i].last {
+            return f"{tab.name}: block {i}: index key does not match";
+        }
+        n += ents.len();
+    }
+    if n != meta.entries {
+        return f"{tab.name}: {n} entries, MANIFEST says {meta.entries}";
+    }
+    f"{tab.name}: ok, {n} entries in {tab.index.len()} blocks"
+}
+
+// ------------------------------------------------------------ session
+
+fn clip(v: Str) -> String {
+    if v.len() <= 24 { v.to_string() } else { v.substring(0, 24).to_string() + "..." }
+}
+
+fn fnv(s: Str) -> i64 {
+    let mut h: i64 = 2166136261;
+    for c in s.bytes() {
+        h = h ^ (c as i64);
+        h = (h * 16777619) & MASK32;
+    }
+    h
+}
+
+fn hex8(v: i64) -> String {
+    let digits = "0123456789abcdef";
+    let mut s = String.new();
+    let mut k = 7;
+    while k >= 0 {
+        let d = (v >> (4 * k)) & 15;
+        s.push_str(digits.substring(d, d + 1));
+        k -= 1;
+    }
+    s
+}
+
+fn gen_value(key: Str, size: i64) -> String {
+    let unit = hex8(fnv(key));
+    let mut s = String.new();
+    while s.len() < size {
+        s.push_str(unit);
+    }
+    s.truncate(size);
+    s
+}
+
+fn is_token(s: Str) -> bool {
+    s.len() > 0 and s.bytes().iter().all(|b| *b >= 33 and *b <= 126)
+}
+
+fn parse_num(s: Str) -> Result[i64, String] {
+    if s.len() == 0 or s.len() > 9 or not s.bytes().iter().all(|b| *b >= b'0' and *b <= b'9') {
+        return Err(f"bad number: {s}");
+    }
+    match i64.parse(s) {
+        Ok(n) => Ok(n),
+        Err(_) => Err(f"bad number: {s}"),
+    }
+}
+
+struct Session {
+    stores: Map[String, Store],
+}
+
+fn arity(cmd: Str) -> Option[i64] {
+    match cmd {
+        "create" | "open" | "crash" | "stats" | "ls" | "check" | "flush" | "compact" => Some(1),
+        "put" | "flip" => Some(3),
+        "del" | "get" | "snap" | "release" | "sst" | "tear" | "load" => Some(2),
+        "putn" => Some(4),
+        _ => None,
+    }
+}
+
+impl Session {
+    fn store(mut ref self, name: Str) -> Result[mut ref Store, String] {
+        match self.stores.get_mut(name) {
+            Some(s) => Ok(mut s),
+            None => Err(f"no open store named {name}"),
+        }
+    }
+
+    fn job(mut ref self, line: Str, out: mut ref Vec[String]) -> Result[(), String] {
+        let a: Vec[Str] = line.split_whitespace().collect();
+        let cmd = a[0];
+        let args = a[1..a.len()].to_vec();
+        if cmd == "scan" {
+            if args.len() < 3 {
+                return Err("scan: needs a store and a range".to_string());
+            }
+        } else if cmd == "batch" {
+            if args.len() < 2 {
+                return Err("batch: needs a store and operations".to_string());
+            }
+        } else {
+            match arity(cmd) {
+                Some(n) => {
+                    if not (args.len() == n or (cmd == "get" and args.len() == 3)) {
+                        return Err(f"{cmd}: needs {n} arguments");
+                    }
+                }
+                None => return Err(f"unknown command: {cmd}"),
+            }
+        }
+
+        if cmd == "create" {
+            let name = args[0];
+            if self.stores.contains_key(name) {
+                return Err(f"{name} is already open");
+            }
+            let dir = "data/" + name.to_string();
+            if fs.exists(dir) {
+                let _ = fs.remove_dir_all(dir);
+            }
+            if fs.create_dir_all(dir).is_err() {
+                return Err(f"cannot create {dir}");
+            }
+            let mut st = Store.new(name);
+            st.new_log()?;
+            st.save_manifest()?;
+            out.push(f"created {name}: log {st.log_name()}");
+            self.stores.insert(name.to_string(), st);
+            return Ok(());
+        }
+        if cmd == "open" {
+            let name = args[0];
+            if self.stores.contains_key(name) {
+                return Err(f"{name} is already open");
+            }
+            let mut st = Store.new(name);
+            st.load_manifest()?;
+            let msg = st.replay()?;
+            out.push(f"opened {name}: seq {st.seq}, {st.tables.len()} tables, {msg}");
+            self.stores.insert(name.to_string(), st);
+            return Ok(());
+        }
+        if (cmd == "tear" or cmd == "flip") and not self.stores.contains_key(args[0]) {
+            // Disk tools: on a closed store they go through its MANIFEST.
+            let mut st = Store.new(args[0]);
+            st.load_manifest()?;
+            return disk_tool(st, cmd, args, mut out);
+        }
+        if cmd == "crash" {
+            let st = self.stores.remove(args[0]) ?? return Err(f"no open store named {args[0]}");
+            let size = file_size(st.log_path());
+            out.push(f"crashed {st.name}: {st.mem_entries} memtable entries lost, {st.log_name()} holds {size} bytes");
+            return Ok(());
+        }
+        let st = self.store(args[0])?;
+        match cmd {
+            "tear" | "flip" => disk_tool(st, cmd, args, mut out)?,
+            "put" => {
+                let mut sub: Vec[String] = Vec.new();
+                let seq = st.write([Op { kind: VAL, key: args[1].to_string(), value: args[2].to_string() }].to_vec(), mut sub)?;
+                out.push(f"put {args[1]} (seq {seq})");
+                out.extend(sub);
+            }
+            "del" => {
+                let mut sub: Vec[String] = Vec.new();
+                let seq = st.write([Op { kind: DEL, key: args[1].to_string(), value: String.new() }].to_vec(), mut sub)?;
+                out.push(f"del {args[1]} (seq {seq})");
+                out.extend(sub);
+            }
+            "batch" => {
+                let mut ops: Vec[Op] = Vec.new();
+                for tok in args[1..args.len()].iter() {
+                    if tok.starts_with("-") and tok.len() > 1 {
+                        ops.push(Op { kind: DEL, key: tok.substring(1, tok.len()).to_string(), value: String.new() });
+                    } else {
+                        match tok.find("=") {
+                            Some(i) if i > 0 => ops.push(Op {
+                                kind: VAL,
+                                key: tok.substring(0, i).to_string(),
+                                value: tok.substring(i + 1, tok.len()).to_string(),
+                            }),
+                            _ => return Err(f"batch: bad operation: {tok}"),
+                        }
+                    }
+                }
+                let n = ops.len();
+                let mut sub: Vec[String] = Vec.new();
+                let first = st.write(ops, mut sub)?;
+                out.push(f"batch of {n} (seq {first}..{first + n - 1})");
+                out.extend(sub);
+            }
+            "putn" => {
+                let prefix = args[1];
+                let n = parse_num(args[2])?;
+                let size = parse_num(args[3])?;
+                let mut sub: Vec[String] = Vec.new();
+                let first = st.seq + 1;
+                for i in 0..n {
+                    let k = prefix.to_string() + fname(i).substring(1, 6);
+                    let v = gen_value(k, size);
+                    st.write([Op { kind: VAL, key: k, value: v }].to_vec(), mut sub)?;
+                }
+                let last = fname(n - 1).substring(1, 6).to_string();
+                out.push(f"put {n} keys {prefix}00000..{prefix}{last} (seq {first}..{st.seq})");
+                out.extend(sub);
+            }
+            "load" => {
+                let text = match fs.read_to_string("data/" + args[1].to_string()) {
+                    Ok(t) => t,
+                    Err(_) => return Err(f"{args[1]}: cannot read"),
+                };
+                let mut sub: Vec[String] = Vec.new();
+                let first = st.seq + 1;
+                let mut rows = 0;
+                let mut skipped = 0;
+                for (i, ln) in text.split("\n").enumerate() {
+                    if i == 0 or ln.len() == 0 {
+                        continue;
+                    }
+                    let f: Vec[Str] = ln.split(",").collect();
+                    if f.len() != 4 or not f.iter().all(|x| is_token(*x)) {
+                        skipped += 1;
+                        continue;
+                    }
+                    let op = Op { kind: VAL, key: f"sku:{f[0]}", value: f"{f[1]}|{f[2]}|{f[3]}" };
+                    st.write([op].to_vec(), mut sub)?;
+                    rows += 1;
+                }
+                out.push(f"loaded {rows} rows from {args[1]} (seq {first}..{st.seq}), {skipped} skipped");
+                out.extend(sub);
+            }
+            "get" => {
+                let (snap, rest) = snap_of(st, args)?;
+                if rest.len() != 2 {
+                    return Err("get: needs 2 arguments".to_string());
+                }
+                let k = rest[1];
+                let (found, r, s) = st.get(k, snap)?;
+                let tail = f"read {r}, skipped {s}";
+                match found {
+                    Found.Missing => out.push(f"{k}: not found ({tail})"),
+                    Found.Hit(v, src) => {
+                        if v.kind == DEL {
+                            out.push(f"{k}: deleted at seq {v.seq} ({src}, {tail})");
+                        } else {
+                            out.push(f"{k} = {v.value} ({src}, {tail})");
+                        }
+                    }
+                }
+            }
+            "scan" => {
+                let (snap, rest) = snap_of(st, args)?;
+                if rest.len() != 3 and rest.len() != 4 {
+                    return Err("scan: needs a store and a range".to_string());
+                }
+                let lo = rest[1];
+                let hi = rest[2];
+                if not (lo < hi) {
+                    return Err(f"scan: empty range [{lo}, {hi})");
+                }
+                let limit = if rest.len() == 4 { parse_num(rest[3])? } else { 10 };
+                let rows = st.scan(lo, hi, snap)?;
+                out.push(f"scan [{lo}, {hi}): {rows.len()} keys");
+                for (k, v) in rows.iter().take(limit) {
+                    out.push(f"  {k} = {clip(v)}");
+                }
+                if rows.len() > limit {
+                    out.push(f"  ... {rows.len() - limit} more");
+                }
+            }
+            "snap" => {
+                st.snaps.insert(args[1].to_string(), st.seq);
+                out.push(f"snapshot {args[1]} at seq {st.seq}");
+            }
+            "release" => {
+                if st.snaps.remove(args[1]).is_none() {
+                    return Err(f"no snapshot named {args[1]}");
+                }
+                out.push(f"released {args[1]}");
+            }
+            "flush" => st.flush(out, "")?,
+            "compact" => st.compact(out, "")?,
+            "stats" => {
+                let size = file_size(st.log_path());
+                out.push(f"{st.name}: seq {st.seq}, memtable {st.mem_entries} entries ({st.mem_bytes} bytes), log {st.log_name()} {size} bytes");
+                for lvl in 0..2 {
+                    let mut ts: Vec[Meta] = st.tables.iter().filter(|t| t.level == lvl).cloned().collect();
+                    ts.sort_by(|a, b| a.num.cmp(b.num));
+                    let entries: i64 = ts.iter().map(|t| t.entries).sum();
+                    let bytes: i64 = ts.iter().map(|t| t.size).sum();
+                    let mut line = f"  L{lvl}: {ts.len()} tables, {entries} entries, {bytes} bytes";
+                    if not ts.is_empty() {
+                        let names: Vec[String] = ts.iter().map(|t| fname(t.num)).collect();
+                        line = line + f" [{names.join(" ")}]";
+                    }
+                    out.push(line);
+                }
+                if not st.snaps.is_empty() {
+                    let parts: Vec[String] = st.snaps.iter().map(|(k, v)| f"{k}@{v}").collect();
+                    out.push("  snapshots: " + parts.join(" "));
+                }
+            }
+            "ls" => {
+                out.push(f"{st.name}/:");
+                let names = match fs.read_dir(st.dir) {
+                    Ok(n) => n,
+                    Err(_) => return Err(f"cannot list {st.dir}"),
+                };
+                for n in names.iter() {
+                    out.push(f"  {n} {file_size(st.dir + "/" + n)}");
+                }
+            }
+            "sst" => {
+                let num = parse_num(args[1])?;
+                let t = match st.tables.iter().find(|t| t.num == num) {
+                    Some(t) => t.clone(),
+                    None => return Err(f"no table {fname(num)} in {st.name}"),
+                };
+                let tab = Table.open(st.path(num, ".sst"), num)?;
+                out.push(f"{tab.name}: L{t.level}, {t.entries} entries, {tab.index.len()} blocks, {tab.size} bytes, keys {t.smallest} .. {t.largest}");
+                let probes = tab.filter[tab.filter.len() - 1];
+                out.push(f"  bloom: {(tab.filter.len() - 1) * 8} bits, {probes} probes");
+                for i in 0..tab.index.len() {
+                    let blk = tab.block(i)?;
+                    let (rs, _) = block_restarts(blk);
+                    let n = block_entries(blk)?.len();
+                    let ie = ref tab.index[i];
+                    let tr = trailer(ie.last);
+                    out.push(f"  block {i}: offset {ie.off}, {ie.size} bytes, {n} entries, {rs.len()} restarts, last {user_of(ie.last)}@{tr >> 8}");
+                }
+            }
+            "check" => {
+                // One task per table; the reports print in table order.
+                let mut ts = st.tables.clone();
+                ts.sort_by(|a, b| a.num.cmp(b.num));
+                out.push(f"check {st.name}: {ts.len()} tables");
+                let group = TaskGroup.new();
+                let mut handles = Vec.new();
+                for t in ts.iter() {
+                    let path = st.path(t.num, ".sst");
+                    let meta = t.clone();
+                    handles.push(group.spawn(|| check_table(path, meta)));
+                }
+                for h in handles.into_iter() {
+                    out.push("  " + h.join());
+                }
+            }
+            _ => return Err(f"unknown command: {cmd}"),
+        }
+        Ok(())
+    }
+}
+
+fn snap_of(st: ref Store, args: ref Vec[Str]) -> Result[(i64, Vec[Str]), String] {
+    let last = args[args.len() - 1];
+    if last.starts_with("@") {
+        let s = last.substring(1, last.len());
+        return match st.snaps.get(s) {
+            Some(seq) => Ok((*seq, args[0..args.len() - 1].to_vec())),
+            None => Err(f"no snapshot named {s}"),
+        };
+    }
+    Ok((st.seq, args.clone()))
+}
+
+// `tear` cuts bytes off the end of the log; `flip` inverts one byte of
+// the log or of a table. They stand in for a torn write and a bad disk.
+fn disk_tool(st: ref Store, cmd: Str, args: ref Vec[Str], out: mut ref Vec[String]) -> Result[(), String] {
+    if cmd == "tear" {
+        let n = parse_num(args[1])?;
+        let path = st.log_path();
+        let size = file_size(path);
+        if n > size {
+            return Err(f"tear: {st.log_name()} holds only {size} bytes");
+        }
+        let cut = match File.options().write(true).open(path) {
+            Ok(f) => f.set_len(size - n),
+            Err(e) => Err(e),
+        };
+        if cut.is_err() {
+            return Err(f"tear: cannot cut {st.log_name()}");
+        }
+        out.push(f"tore {n} bytes off {st.log_name()}, {size - n} left");
+        return Ok(());
+    }
+    let (path, shown) = if args[1] == "log" {
+        (st.log_path(), st.log_name())
+    } else {
+        let num = parse_num(args[1])?;
+        let p = st.path(num, ".sst");
+        let shown = fname(num) + ".sst";
+        if not fs.exists(p) {
+            return Err(f"no file {shown} in {st.name}");
+        }
+        (p, shown)
+    };
+    let off = parse_num(args[2])?;
+    let size = file_size(path);
+    if off >= size {
+        return Err(f"flip: {shown} holds only {size} bytes");
+    }
+    let flipped = flip_byte(path, off);
+    if flipped.is_err() {
+        return Err(f"flip: cannot write {shown}");
+    }
+    out.push(f"flipped byte {off} of {shown}");
+    Ok(())
+}
+
+fn flip_byte(path: Str, off: i64) -> Result[(), IoError] {
+    let f = File.options().read(true).write(true).open(path)?;
+    let b = read_at(f, off, 1)?;
+    f.seek(SeekFrom.Start, off)?;
+    f.write([b[0] ^ 255].to_vec())?;
+    Ok(())
+}
+
+fn is_hexd(c: u8) -> bool {
+    (c >= b'0' and c <= b'9') or (c >= b'a' and c <= b'f') or (c >= b'A' and c <= b'F')
+}
+
+fn hex_val(c: u8) -> u8 {
+    if c >= b'0' and c <= b'9' {
+        c - b'0'
+    } else if c >= b'a' and c <= b'f' {
+        c - b'a' + 10
+    } else {
+        c - b'A' + 10
+    }
+}
+
+fn unhex(s: Str) -> Vec[u8] {
+    let mut digits: Vec[u8] = Vec.new();
+    for c in s.bytes() {
+        if is_hexd(c) {
+            digits.push(hex_val(c));
+        }
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i + 1 < digits.len() {
+        out.push(digits[i] * 16 + digits[i + 1]);
+        i += 2;
+    }
+    out
+}
+
+fn put_bytes(path: Str, b: Vec[u8]) -> Result[(), String] {
+    if let Err(e) = fs.write_bytes(path.to_string(), b) {
+        return Err(f"cannot write {path}: {e}");
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = fs.create_dir_all("data".to_string()) {
+        eprintln(f"cannot create data: {e}");
+        return;
+    }
+    if let Err(e) = write_data() {
+        eprintln(e);
+        return;
+    }
+    let jobs = match fs.read_to_string("data/jobs.txt".to_string()) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln(f"cannot read jobs.txt: {e}");
+            return;
+        }
+    };
+    let mut s = Session { stores: Map.new() };
+    let mut out: Vec[String] = Vec.new();
+    for line in jobs.split("\n") {
+        let t = line.trim();
+        if t.len() == 0 or t.starts_with("#") {
+            continue;
+        }
+        out.push(f"> {t}");
+        if let Err(e) = s.job(t, mut out) {
+            out.push(f"! {e}");
+        }
+    }
+    println(out.join("\n"));
+}
+
+// ============================================================ data
+
+// The files under data/, in name order.
+fn write_data() -> Result[(), String] {
+    put_bytes("data/catalog.csv", unhex(file_0()))?;
+    put_bytes("data/jobs.txt", unhex(file_1()))?;
+    Ok(())
+}
+
+// data/catalog.csv
+fn file_0() -> String {
+    """
+736b752c6e616d652c70726963652c73746f636b0a30333432362c70726f5f626c656e6465722c3435312e34312c3230
+350a30353239322c7265645f63686169722c3130312e31322c34390a30363037362c70726f5f726f757465722c323332
+2e31392c3135330a30383137322c6f616b5f6c616d702c3436382e36312c34330a30393638392c70726f5f6465736b2c
+3231322e38342c32330a30303333322c6475616c5f626c656e6465722c3132332e35312c34390a30333733372c647561
+6c5f7361772c33352e32352c3134310a30363334372c737465656c5f7361772c3335342e33312c3136380a3030313037
+2c7265645f6465736b2c3439382e30302c33380a30383837332c7265645f6472696c6c2c3132392e34302c3136330a30
+393630322c6d696e695f66616e2c3438362e30312c38380a30313230372c737465656c5f6b6574746c652c3235392e32
+322c3231310a30373439352c7265645f6472696c6c2c3431312e34372c3134370a30363135352c6d696e695f6465736b
+2c3334302e30372c31340a30303436352c737465656c5f63686169722c39312e35392c3136360a30373334352c726564
+5f7361772c3137352e35302c3139330a30323632362c7265645f6c616d702c3131362e36312c36330a30383936372c6d
+696e695f6465736b2c3437312e30352c3136320a30373732312c736d6172745f726f757465722c3139322e33312c3233
+330a30333932312c71756965745f626c656e6465722c3439372e38362c3131320a30313839302c65636f5f6465736b2c
+3435352e30342c36360a30343638322c6f616b5f63686169722c332e38302c31330a30343737312c6f616b5f6b657474
+6c652c35342e32312c32380a30333438362c65636f5f66616e2c32392e36392c36320a30313832312c7265645f646573
+6b2c3431342e33342c3136330a30353233362c626c75655f6472696c6c2c31382e39352c3234340a30393031392c6f61
+6b5f626c656e6465722c3233352e31362c37310a30383235352c736d6172745f6d75672c3337302e33302c3231350a30
+383135392c71756965745f726f757465722c3338352e32352c35360a30383631362c626c75655f6c616d702c33372e36
+312c3130380a30383038342c6f616b5f726f757465722c3435362e39322c3139330a30363331382c6475616c5f626c65
+6e6465722c3331392e33362c3130310a30383731332c737465656c5f6d75672c37322e36392c3137360a30373430342c
+71756965745f6472696c6c2c37322e33342c3233390a30353132392c6475616c5f7361772c38332e37322c340a303239
+37332c71756965745f66616e2c3437392e31352c3136380a30363831392c6d696e695f7361772c3438312e35312c3231
+350a30333435392c6d696e695f726f757465722c31382e32322c390a30323531332c70726f5f63686169722c3136342e
+30302c3233390a30393839382c736d6172745f6b6574746c652c3438312e30382c33330a30333631312c736d6172745f
+6d75672c33392e35342c32330a30303539352c6d696e695f7361772c3331382e35372c3233390a30383732372c65636f
+5f63686169722c35322e30312c3139300a30353137302c736d6172745f6472696c6c2c3130302e39352c3138350a3038
+3036352c70726f5f626c656e6465722c3434352e37332c3134390a30383437362c70726f5f7361772c3131322e33352c
+32350a30303139362c71756965745f6472696c6c2c3336372e33372c3232320a30383338312c6f616b5f6b6574746c65
+2c3232362e32382c31360a30353735392c6d696e695f726f757465722c3336352e37352c39350a30383039322c70726f
+5f6c616d702c3332342e31362c3132380a30363234322c6d696e695f726f757465722c3337342e32352c340a30373136
+372c65636f5f626c656e6465722c3138372e33342c39320a30333137372c6f616b5f7361772c3135382e30382c323031
+0a30343034382c626c75655f6465736b2c3331352e30392c32350a30383531382c71756965745f66616e2c3130342e37
+352c32390a30303230342c626c75655f6c616d702c3432312e30312c3139370a30383633352c6d696e695f6b6574746c
+652c3436332e34312c31340a30373533352c70726f5f6465736b2c37382e39342c34390a30383734392c6f616b5f6b65
+74746c652c3439352e35342c39330a30333634372c6f616b5f6d75672c3236372e39392c35330a30393033382c65636f
+5f66616e2c3230382e35332c3136310a30353037392c737465656c5f66616e2c39382e38302c3234340a30373136382c
+71756965745f6465736b2c3233312e31312c3136380a30303635352c71756965745f626c656e6465722c3435322e3136
+2c3137380a30313731362c65636f5f6b6574746c652c3134312e39302c3136330a30383332302c70726f5f6465736b2c
+3330372e35352c3233300a30313736352c626c75655f6d75672c3332392e37372c3137330a30353632332c7265645f66
+616e2c3238382e35392c35370a30373131322c65636f5f7361772c3438372e36362c3230300a30323239372c626c7565
+5f63686169722c3239352e36362c3134380a30383739332c626c75655f63686169722c3236312e30302c35340a303030
+38312c65636f5f6d75672c3235302e39342c360a30343232352c71756965745f7361772c34392e33332c3130310a3036
+3038342c6d696e695f6b6574746c652c3339342e37352c36340a30313034302c736d6172745f6472696c6c2c3138362e
+37342c33300a30323732322c626c75655f6d75672c3431372e33342c33340a30313330322c70726f5f6d75672c313937
+2e36392c3233320a30363032312c6d696e695f6b6574746c652c3436312e30392c3131300a30353130312c6f616b5f6b
+6574746c652c3335382e30322c3234360a30363737372c6f616b5f66616e2c39312e37302c3233330a30333934322c6d
+696e695f66616e2c3336392e34362c3132390a30373330362c626c75655f6465736b2c38382e31382c36380a30333635
+302c6d696e695f626c656e6465722c36392e33332c38370a30323731322c6f616b5f726f757465722c33372e31352c34
+380a30313637312c6475616c5f6b6574746c652c3234392e34322c3133380a30343739332c7265645f6465736b2c3335
+352e34362c3136320a30333631392c71756965745f63686169722c35332e37392c31380a30363233382c626c75655f6b
+6574746c652c3230322e37322c3134300a30313439322c626c75655f6465736b2c3331382e32352c35340a3039373437
+2c6d696e695f6465736b2c3236372e35332c3132380a30393637382c6f616b5f6472696c6c2c35392e37372c3230370a
+30383636392c737465656c5f6b6574746c652c3436352e35342c33380a30323034322c6d696e695f63686169722c3237
+342e32322c32320a30383834392c71756965745f6b6574746c652c3437302e36332c3232320a30363332362c626c7565
+5f626c656e6465722c3234392e39382c31340a30313534312c65636f5f66616e2c3236322e35322c37310a3039323137
+2c736d6172745f6472696c6c2c3436342e37332c3134380a30393133302c737465656c5f63686169722c3233372e3833
+2c360a30393437342c7265645f6465736b2c3431302e36382c3136300a30343135372c70726f5f7361772c3234382e38
+332c330a30313735382c626c75655f6b6574746c652c3133312e39302c37350a30363638352c737465656c5f6c616d70
+2c3332322e31362c3136310a30333330312c6f616b5f6d75672c34322e34362c3135310a30393737352c736d6172745f
+6d75672c37392e38302c3230350a30353130372c737465656c5f7361772c31342e36382c37320a30393934312c65636f
+5f6b6574746c652c3434372e35302c3233340a30333837312c626c75655f626c656e6465722c3332372e34332c323231
+0a30343936312c70726f5f6d75672c3334352e38372c38300a30383837372c70726f5f6472696c6c2c3433342e31372c
+3232370a30333333392c736d6172745f6c616d702c3231392e33362c3231390a30353136312c626c75655f626c656e64
+65722c3137382e36332c3130380a30373635392c65636f5f6b6574746c652c3130332e35312c3233350a30393131392c
+65636f5f626c656e6465722c3131312e33322c3139320a30383532352c6f616b5f6472696c6c2c3433392e39392c3137
+380a30303532302c737465656c5f6472696c6c2c3136342e31362c3233390a30313432342c736d6172745f6472696c6c
+2c3233392e37352c3138320a30323732392c71756965745f6465736b2c3134332e35322c39390a30303032342c6f616b
+5f726f757465722c3335342e38352c3139320a30343936302c7265645f7361772c34382e30392c3134330a3030333133
+2c6475616c5f726f757465722c3331362e31342c32340a30373936392c71756965745f6c616d702c3230372e36392c31
+35310a30323833312c6475616c5f66616e2c3136362e39342c33360a30313935342c626c75655f63686169722c313035
+2e32312c3138320a30363436352c736d6172745f6d75672c37362e38392c37310a30343735352c70726f5f726f757465
+722c3134382e39392c3131330a30353032332c736d6172745f6b6574746c652c3235342e37352c3230330a3032363839
+2c65636f5f6465736b2c38322e39362c37380a30303136392c6475616c5f726f757465722c3334302e39382c37340a30
+323233342c6475616c5f6c616d702c3230332e33362c3136330a30343332312c6f616b5f66616e2c3138372e32312c32
+30320a30303038352c737465656c5f6465736b2c3133392e35362c3231390a30303939392c70726f5f6472696c6c2c32
+32382e36332c3232350a30343437322c6475616c5f626c656e6465722c34302e36352c3139310a30383938372c6d696e
+695f6472696c6c2c3334332e30372c31350a30373335382c6f616b5f6b6574746c652c3137362e36392c3234360a3037
+3631382c737465656c5f626c656e6465722c3239362e31302c3132340a30343331342c6475616c5f66616e2c33332e32
+302c3133340a30373734312c7265645f7361772c3332382e31372c3232360a30323339362c7265645f6d75672c313033
+2e38302c3131380a30313537342c626c75655f6d75672c3332372e39312c3137300a30373334392c7265645f63686169
+722c3432332e34332c3132380a30363530362c737465656c5f6b6574746c652c3234312e30342c36360a30343438382c
+737465656c5f7361772c3435352e30362c31300a30323832302c736d6172745f7361772c3131322e35312c3136330a30
+343735382c737465656c5f6b6574746c652c3330302e33382c35370a30363836332c736d6172745f726f757465722c34
+31312e38322c3234300a30313038392c737465656c5f6d75672c38312e35382c35300a30303432312c736d6172745f63
+686169722c3333312e39372c39330a30343739372c6d696e695f6b6574746c652c3131342e32302c34380a3033323732
+2c737465656c5f6465736b2c3336372e33352c3133350a30353837302c736d6172745f66616e2c3237342e31332c3138
+390a30333138392c6475616c5f6472696c6c2c38332e37312c3134370a30343239392c6f616b5f6c616d702c3438382e
+33302c37380a30373534322c7265645f6c616d702c3237382e38362c3132320a30353732342c6d696e695f6b6574746c
+652c3131332e33302c3132390a30333230372c736d6172745f6b6574746c652c3437322e39302c3133350a3039333233
+2c6d696e695f6c616d702c3430332e30322c3231350a30333738372c736d6172745f6472696c6c2c3237332e33352c34
+310a30303134392c7265645f7361772c3132302e35322c37330a30303131312c626c75655f6c616d702c3231382e3732
+2c380a6f6f70730a30303034322c2c312e30302c330a30303034332c626164206e616d652c312e30302c330a0a
+"""
+}
+
+// data/jobs.txt
+fn file_1() -> String {
+    """
+2320412070726f647563742073746f72653a206c6f6164206120636174616c6f672c2072656164207468726f75676820
+6576657279206c6576656c2e0a6372656174652073686f700a6c6f61642073686f7020636174616c6f672e6373760a73
+746174732073686f700a6c732073686f700a6765742073686f7020736b753a30303032340a6765742073686f7020736b
+753a30353037390a6765742073686f7020736b753a30393934310a6765742073686f7020736b753a30303030300a6765
+742073686f7020736b753a39393939390a7363616e2073686f7020736b753a303033333220736b753a30313330320a73
+63616e2073686f7020736b753a20736b753a7e20350a2320557064617465732c2064656c6574657320616e6420612073
+6e617073686f7420746861742070696e7320746865206f6c642076657273696f6e732e0a736e61702073686f70206265
+666f72655f73616c650a7075742073686f7020736b753a30353037392073616c655f6b6574746c657c392e39397c3132
+0a64656c2073686f7020736b753a30353130310a62617463682073686f7020736b753a30353130373d626f7865645f73
+65747c35392e30307c34202d736b753a3035313239206e6f74653a73616c653d6f6e0a6765742073686f7020736b753a
+30353037390a6765742073686f7020736b753a303530373920406265666f72655f73616c650a6765742073686f702073
+6b753a30353130310a6765742073686f7020736b753a303531303120406265666f72655f73616c650a6765742073686f
+7020736b753a30353132390a6765742073686f70206e6f74653a73616c650a7363616e2073686f7020736b753a303530
+323320736b753a30353137300a7363616e2073686f7020736b753a303530323320736b753a303531373020406265666f
+72655f73616c650a666c7573682073686f700a73746174732073686f700a636f6d706163742073686f700a7374617473
+2073686f700a6765742073686f7020736b753a303530373920406265666f72655f73616c650a6765742073686f702073
+6b753a303531303120406265666f72655f73616c650a72656c656173652073686f70206265666f72655f73616c650a63
+6f6d706163742073686f700a73746174732073686f700a6765742073686f7020736b753a30353130310a737374207368
+6f702031360a636865636b2073686f700a232041206372617368206c6f73657320746865206d656d7461626c65206275
+74206e6f7420746865206c6f672e0a7075742073686f7020636172743a616c69636520736b753a303031303778320a70
+75742073686f7020636172743a626f6220736b753a303031393678310a64656c2073686f7020636172743a616c696365
+0a63726173682073686f700a6765742073686f7020636172743a626f620a6f70656e2073686f700a6765742073686f70
+20636172743a626f620a6765742073686f7020636172743a616c6963650a23204120746f726e20777269746520617420
+74686520656e64206f6620746865206c6f6720697320637574206f6666206f6e207265636f766572792e0a7075742073
+686f7020636172743a6361726f6c20736b753a303033313378350a7075742073686f7020636172743a6461766520736b
+753a303034323178310a63726173682073686f700a746561722073686f7020370a6f70656e2073686f700a6765742073
+686f7020636172743a6361726f6c0a6765742073686f7020636172743a646176650a7075742073686f7020636172743a
+6461766520736b753a303034323178330a6765742073686f7020636172743a646176650a232041206261642062797465
+20696e20746865206d6964646c65206f6620746865206c6f672073746f7073207265706c61792074686572652e0a7075
+742073686f7020636172743a6572696e20736b753a303034363578310a7075742073686f7020636172743a6672616e6b
+20736b753a303035323078320a7075742073686f7020636172743a67696e6120736b753a303035393578340a63726173
+682073686f700a666c69702073686f70206c6f67203236300a6f70656e2073686f700a6765742073686f702063617274
+3a6572696e0a6765742073686f7020636172743a6672616e6b0a6765742073686f7020636172743a67696e610a232042
+756c6b207772697465733a20666c75736865732c207468656e206120636f6d70616374696f6e207768656e204c302066
+696c6c732075702e0a7075746e206d657472696373206d3a6370753a203020310a637265617465206d6574726963730a
+7075746e206d657472696373206d3a6370753a2036302034300a7075746e206d657472696373206d3a6d656d3a203630
+2034300a7075746e206d657472696373206d3a6469736b3a2036302034300a7075746e206d657472696373206d3a6e65
+743a2036302034300a7374617473206d6574726963730a676574206d657472696373206d3a6d656d3a30303034320a67
+6574206d657472696373206d3a6e65743a30303035390a676574206d657472696373206d3a7a7a7a3a30303030300a73
+63616e206d657472696373206d3a6469736b3a3030303537206d3a6d656d3a30303030320a7075746e206d6574726963
+73206d3a6370753a2033302031320a7374617473206d6574726963730a636f6d70616374206d6574726963730a737461
+7473206d6574726963730a6c73206d6574726963730a676574206d657472696373206d3a6370753a30303030370a6765
+74206d657472696373206d3a6370753a30303034350a7363616e206d657472696373206d3a6370753a3030303237206d
+3a6370753a30303033330a636865636b206d6574726963730a23204120666c6970706564206279746520696e20612074
+61626c65206973206361756768742062792069747320626c6f636b20636865636b73756d2e0a737374206d6574726963
+732033320a666c6970206d657472696373203332203130300a636865636b206d6574726963730a676574206d65747269
+6373206d3a6370753a30303030320a676574206d657472696373206d3a6469736b3a30303035330a6f70656e206d6574
+726963730a23204572726f72732e0a676574206e6f73756368206b0a6372656174652073686f700a6f70656e206e6f73
+7563680a7075742073686f700a6765742073686f700a7363616e2073686f70207a20610a736e61702073686f700a6765
+742073686f70206b20406e6f736e61700a72656c656173652073686f70206e6f736e61700a7373742073686f70203939
+39390a666c69702073686f70203939393920310a746561722073686f70203130303030300a62617463682073686f7020
+3d780a7075746e2073686f7020703a207820340a66726f626e69636174652073686f700a
+"""
+}
