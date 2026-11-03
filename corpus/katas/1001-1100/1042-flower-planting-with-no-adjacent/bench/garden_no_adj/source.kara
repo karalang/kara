@@ -1,0 +1,83 @@
+// LeetCode #1042: Flower Planting With No Adjacent -- bench. The greedy
+// of ../garden_no_adj.kara over the gardens in order.
+//
+// No garden has more than three paths, so its neighbors take at most
+// three of the four flower types and one is always left. Planting each
+// garden in turn with the smallest type its planted neighbors have not
+// taken never gets stuck, and it gives the smallest answer in dictionary
+// order: a smaller type for a garden is ruled out by a neighbor planted
+// before it. O(n + paths).
+
+fn garden_no_adj(n: i64, paths: ref Vec[(i64, i64)]) -> Vec[i64] {
+    let mut neighbors: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        neighbors.push(Vec.new());
+    }
+    for (x, y) in paths.iter() {
+        neighbors[x - 1].push(y - 1);
+        neighbors[y - 1].push(x - 1);
+    }
+    let mut answer = Vec.filled(n, 0);
+    for garden in 0..n {
+        let mut taken = [false; 5];
+        for other in neighbors[garden].iter() {
+            taken[answer[other]] = true;
+        }
+        let mut flower = 1;
+        while taken[flower] {
+            flower += 1;
+        }
+        answer[garden] = flower;
+    }
+    answer
+}
+
+// ---- bench -------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_paths(n: i64, tries: i64, seed: mut ref i64) -> Vec[(i64, i64)] {
+    let mut joined: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        joined.push(Vec.new());
+    }
+    let mut paths: Vec[(i64, i64)] = Vec.new();
+    for _ in 0..tries {
+        let x = next_random(mut seed) % n;
+        let y = next_random(mut seed) % n;
+        if x != y and joined[x].len() < 3 and joined[y].len() < 3 and not joined[x].contains(y) {
+            joined[x].push(y);
+            joined[y].push(x);
+            paths.push((x + 1, y + 1));
+        }
+    }
+    paths
+}
+
+fn main() {
+    let count = 10;
+    let n = 10000;
+    let rounds = 100;
+    let mut seed = 1042;
+    let mut gardens: Vec[Vec[(i64, i64)]] = Vec.new();
+    for _ in 0..count {
+        gardens.push(random_paths(n, 4 * n, mut seed));
+    }
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..rounds {
+        for paths in gardens.iter() {
+            let answer = garden_no_adj(n, paths);
+            let mut sum = 0;
+            for flower in answer.iter() {
+                sum += flower;
+            }
+            total += sum;
+            check = (check * 131 + sum) % 1000000007;
+        }
+    }
+    println(f"{count} gardens of {n} plots, {rounds} rounds: types sum to {total}, checksum {check}");
+}

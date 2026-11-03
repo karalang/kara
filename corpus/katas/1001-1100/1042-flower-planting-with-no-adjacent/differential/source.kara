@@ -1,0 +1,353 @@
+// LeetCode #1042: Flower Planting With No Adjacent -- differential
+//
+// The five arms, copied here under their own names, against the first
+// valid planting in dictionary order found by counting through every
+// planting, and four properties of the answer.
+
+// ---- greedy over the gardens in order (garden_no_adj.kara)
+
+fn greedy_arm(n: i64, paths: ref Vec[(i64, i64)]) -> Vec[i64] {
+    let mut neighbors: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        neighbors.push(Vec.new());
+    }
+    for (x, y) in paths.iter() {
+        neighbors[x - 1].push(y - 1);
+        neighbors[y - 1].push(x - 1);
+    }
+    let mut answer = Vec.filled(n, 0);
+    for garden in 0..n {
+        let mut taken = [false; 5];
+        for other in neighbors[garden].iter() {
+            taken[answer[other]] = true;
+        }
+        let mut flower = 1;
+        while taken[flower] {
+            flower += 1;
+        }
+        answer[garden] = flower;
+    }
+    answer
+}
+
+// ---- the taken types as bits (garden_no_adj_mask.kara)
+
+fn mask_arm(n: i64, paths: ref Vec[(i64, i64)]) -> Vec[i64] {
+    let mut neighbors: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        neighbors.push(Vec.new());
+    }
+    for (x, y) in paths.iter() {
+        neighbors[x - 1].push(y - 1);
+        neighbors[y - 1].push(x - 1);
+    }
+    let mut answer = Vec.filled(n, 0);
+    for garden in 0..n {
+        let mut taken = 1;
+        for other in neighbors[garden].iter() {
+            taken |= 1 << answer[other];
+        }
+        answer[garden] = (~taken).trailing_zeros();
+    }
+    answer
+}
+
+// ---- the paths sorted by their later garden (garden_no_adj_sorted.kara)
+
+fn sorted_arm(n: i64, paths: ref Vec[(i64, i64)]) -> Vec[i64] {
+    let mut back: Vec[(i64, i64)] = Vec.new();
+    for (x, y) in paths.iter() {
+        back.push(if x > y { (x, y) } else { (y, x) });
+    }
+    back.sort();
+    let mut answer = Vec.filled(n + 1, 0);
+    let mut next = 0;
+    for garden in 1..n + 1 {
+        let mut taken = [false; 5];
+        while next < back.len() and back[next].0 == garden {
+            taken[answer[back[next].1]] = true;
+            next += 1;
+        }
+        let mut flower = 1;
+        while taken[flower] {
+            flower += 1;
+        }
+        answer[garden] = flower;
+    }
+    answer.remove(0);
+    answer
+}
+
+// ---- three slots a garden (garden_no_adj_slots.kara)
+
+struct Garden {
+    links: Array[i64, 3],
+    count: i64,
+}
+
+impl Garden {
+    fn new() -> Garden {
+        Garden { links: [0; 3], count: 0 }
+    }
+
+    fn link(mut ref self, other: i64) {
+        self.links[self.count] = other;
+        self.count += 1;
+    }
+
+    fn free_type(ref self, planted: ref Vec[i64]) -> i64 {
+        let mut flower = 1;
+        loop {
+            let mut clash = false;
+            for i in 0..self.count {
+                if planted[self.links[i]] == flower {
+                    clash = true;
+                }
+            }
+            if not clash {
+                return flower;
+            }
+            flower += 1;
+        }
+    }
+}
+
+fn slots_arm(n: i64, paths: ref Vec[(i64, i64)]) -> Vec[i64] {
+    let mut gardens: Vec[Garden] = Vec.new();
+    for _ in 0..n {
+        gardens.push(Garden.new());
+    }
+    for (x, y) in paths.iter() {
+        gardens[x - 1].link(y - 1);
+        gardens[y - 1].link(x - 1);
+    }
+    let mut answer = Vec.filled(n, 0);
+    for i in 0..n {
+        answer[i] = gardens[i].free_type(answer);
+    }
+    answer
+}
+
+// ---- iterator adaptors (garden_no_adj_iter.kara)
+
+fn iter_arm(n: i64, paths: ref Vec[(i64, i64)]) -> Vec[i64] {
+    let mut neighbors: Vec[Vec[i64]] = (0..n).map(|_| Vec.new()).collect();
+    for (x, y) in paths.iter() {
+        neighbors[x - 1].push(y - 1);
+        neighbors[y - 1].push(x - 1);
+    }
+    let mut answer = Vec.filled(n, 0);
+    for garden in 0..n {
+        answer[garden] = (1..5).find(|flower| neighbors[garden].iter().all(|other| answer[other] != flower)).unwrap();
+    }
+    answer
+}
+
+// ---- the first valid planting in dictionary order
+
+// Counts through every planting, 1 to 4 at each garden with the first
+// garden the most significant, and returns the first under which the two
+// ends of every path differ. O(4^n paths).
+fn smallest(n: i64, paths: ref Vec[(i64, i64)]) -> Vec[i64] {
+    let mut plan = Vec.filled(n, 1);
+    loop {
+        if valid(plan, paths) {
+            return plan;
+        }
+        let mut at = n - 1;
+        while plan[at] == 4 {
+            plan[at] = 1;
+            at -= 1;
+        }
+        plan[at] += 1;
+    }
+}
+
+fn valid(plan: ref Vec[i64], paths: ref Vec[(i64, i64)]) -> bool {
+    for flower in plan.iter() {
+        if flower < 1 or flower > 4 {
+            return false;
+        }
+    }
+    for (x, y) in paths.iter() {
+        if plan[x - 1] == plan[y - 1] {
+            return false;
+        }
+    }
+    true
+}
+
+// Each garden's type is the smallest not taken by a neighbor with a
+// smaller number: every smaller type is.
+fn greedy_shape(plan: ref Vec[i64], paths: ref Vec[(i64, i64)]) -> bool {
+    for garden in 0..plan.len() {
+        for below in 1..plan[garden] {
+            let mut taken = false;
+            for (x, y) in paths.iter() {
+                let (a, b) = if x > y { (x - 1, y - 1) } else { (y - 1, x - 1) };
+                if a == garden and plan[b] == below {
+                    taken = true;
+                }
+            }
+            if not taken {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+// ---- the checks
+
+fn arm(k: i64, n: i64, paths: ref Vec[(i64, i64)]) -> Vec[i64] {
+    match k {
+        0 => greedy_arm(n, paths),
+        1 => mask_arm(n, paths),
+        2 => sorted_arm(n, paths),
+        3 => slots_arm(n, paths),
+        _ => iter_arm(n, paths),
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_paths(n: i64, tries: i64, seed: mut ref i64) -> Vec[(i64, i64)] {
+    let mut joined: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        joined.push(Vec.new());
+    }
+    let mut paths: Vec[(i64, i64)] = Vec.new();
+    for _ in 0..tries {
+        let x = next_random(mut seed) % n;
+        let y = next_random(mut seed) % n;
+        if x != y and joined[x].len() < 3 and joined[y].len() < 3 and not joined[x].contains(y) {
+            joined[x].push(y);
+            joined[y].push(x);
+            paths.push((x + 1, y + 1));
+        }
+    }
+    paths
+}
+
+fn show(answer: ref Vec[i64]) -> String {
+    let parts: Vec[String] = answer.iter().map(|f| f"{f}").collect();
+    f"[{parts.join(", ")}]"
+}
+
+struct Tally {
+    cases: i64,
+    counted: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    // failures by property, P1 to P6 at 1 to 6
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+// Every check on one garden; `count` says whether to count through every
+// planting too.
+fn check_case(t: mut ref Tally, n: i64, paths: ref Vec[(i64, i64)], count: bool, seed: mut ref i64) {
+    let answers: Vec[Vec[i64]] = (0..5).map(|k| arm(k, n, paths)).collect();
+    let want = if count { Some(smallest(n, paths)) } else { None };
+    // the paths in another order, each written either way round
+    let mut shuffled = paths.clone();
+    for i in (1..shuffled.len()).rev() {
+        let j = next_random(mut seed) % (i + 1);
+        shuffled.swap(i, j);
+    }
+    for i in 0..shuffled.len() {
+        if next_random(mut seed) % 2 == 1 {
+            let (x, y) = shuffled[i];
+            shuffled[i] = (y, x);
+        }
+    }
+    // the first k gardens and the paths among them
+    let k = next_random(mut seed) % n + 1;
+    let mut inside: Vec[(i64, i64)] = Vec.new();
+    for (x, y) in paths.iter() {
+        if x <= k and y <= k {
+            inside.push((x, y));
+        }
+    }
+    for a in 0..5 {
+        let answer = answers[a].clone();
+        let what = f"arm {a}, n = {n}, paths {paths}";
+        if let Some(w) = want.clone() {
+            expect(mut t, 1, answer == w, f"P1 {what}: {show(answer)} vs counted {show(w)}");
+        }
+        expect(mut t, 2, valid(answer, paths), f"P2 {what}: {show(answer)} is not a valid planting");
+        expect(mut t, 3, greedy_shape(answer, paths), f"P3 {what}: {show(answer)} is not the greedy's shape");
+        expect(mut t, 4, arm(a, n, shuffled) == answer, f"P4 {what} shuffled");
+        let first = arm(a, k, inside);
+        expect(mut t, 5, first == answer[0..k].to_vec(), f"P5 {what}: the first {k} give {show(first)}");
+        let mut agree = 0;
+        for o in 0..5 {
+            if o != a and answers[o] == answer {
+                agree += 1;
+            }
+        }
+        expect(mut t, 6, agree >= 2, f"P6 {what}: agrees with {agree}");
+    }
+    if count {
+        t.counted += 1;
+    }
+    t.cases += 1;
+    for flower in answers[0].iter() {
+        t.check = (t.check * 131 + flower) % 1000000007;
+    }
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, counted: 0, checks: 0, failures: 0, check: 0, by: Vec.filled(7, 0) };
+    let mut seed = 10421;
+    // every garden of 1 to 5 plots with at most three paths at each plot
+    for n in 1..6 {
+        let mut pairs: Vec[(i64, i64)] = Vec.new();
+        for x in 1..n + 1 {
+            for y in x + 1..n + 1 {
+                pairs.push((x, y));
+            }
+        }
+        for mask in 0..1 << pairs.len() {
+            let mut paths: Vec[(i64, i64)] = Vec.new();
+            let mut degree = Vec.filled(n + 1, 0);
+            for (i, (x, y)) in pairs.iter().enumerate() {
+                if (mask >> i) & 1 == 1 {
+                    paths.push((x, y));
+                    degree[x] += 1;
+                    degree[y] += 1;
+                }
+            }
+            if degree.iter().all(|d| d <= 3) {
+                check_case(mut t, n, paths, true, mut seed);
+            }
+        }
+    }
+    // 2000 random gardens of 2 to 8 plots, counted through, and 300 of 9
+    // to 60, too many to count through
+    for c in 0..2300 {
+        let n = if c < 2000 { next_random(mut seed) % 7 + 2 } else { next_random(mut seed) % 52 + 9 };
+        let tries = next_random(mut seed) % (2 * n + 1);
+        let paths = random_paths(n, tries, mut seed);
+        check_case(mut t, n, paths, c < 2000, mut seed);
+    }
+    println(f"{t.cases} gardens ({t.counted} counted through): checksum {t.check}, {t.checks} checks over 5 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

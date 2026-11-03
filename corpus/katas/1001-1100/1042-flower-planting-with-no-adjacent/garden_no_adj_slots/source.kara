@@ -1,0 +1,181 @@
+// LeetCode #1042: Flower Planting With No Adjacent -- three slots a
+// garden.
+//
+// The same greedy as garden_no_adj.kara, with the problem's bound kept
+// in the type: a `Garden` holds its paths in an `Array` of three slots,
+// and knows which type is free given what its neighbors were planted
+// with. O(n + paths).
+
+struct Garden {
+    links: Array[i64, 3],
+    count: i64,
+}
+
+impl Garden {
+    fn new() -> Garden {
+        Garden { links: [0; 3], count: 0 }
+    }
+
+    fn link(mut ref self, other: i64) {
+        self.links[self.count] = other;
+        self.count += 1;
+    }
+
+    fn free_type(ref self, planted: ref Vec[i64]) -> i64 {
+        let mut flower = 1;
+        loop {
+            let mut clash = false;
+            for i in 0..self.count {
+                if planted[self.links[i]] == flower {
+                    clash = true;
+                }
+            }
+            if not clash {
+                return flower;
+            }
+            flower += 1;
+        }
+    }
+}
+
+fn garden_no_adj(n: i64, paths: ref Vec[(i64, i64)]) -> Vec[i64] {
+    let mut gardens: Vec[Garden] = Vec.new();
+    for _ in 0..n {
+        gardens.push(Garden.new());
+    }
+    for (x, y) in paths.iter() {
+        gardens[x - 1].link(y - 1);
+        gardens[y - 1].link(x - 1);
+    }
+    let mut answer = Vec.filled(n, 0);
+    for i in 0..n {
+        answer[i] = gardens[i].free_type(answer);
+    }
+    answer
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(answer: ref Vec[i64]) -> String {
+    let mut out = "[".to_string();
+    for (i, flower) in answer.iter().enumerate() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(f"{flower}");
+    }
+    out.push_str("]");
+    out
+}
+
+fn fold_into(check: mut ref i64, answer: ref Vec[i64]) {
+    for flower in answer.iter() {
+        *check = (*check * 131 + flower) % 1000000007;
+    }
+}
+
+// A random garden of `n` plots: `tries` paths drawn at random, each kept
+// when it joins two different gardens not yet joined, both with fewer
+// than three paths. Each path is written either way round.
+fn random_paths(n: i64, tries: i64, seed: mut ref i64) -> Vec[(i64, i64)] {
+    let mut joined: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        joined.push(Vec.new());
+    }
+    let mut paths: Vec[(i64, i64)] = Vec.new();
+    for _ in 0..tries {
+        let x = next_random(mut seed) % n;
+        let y = next_random(mut seed) % n;
+        if x != y and joined[x].len() < 3 and joined[y].len() < 3 and not joined[x].contains(y) {
+            joined[x].push(y);
+            joined[y].push(x);
+            paths.push((x + 1, y + 1));
+        }
+    }
+    paths
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let examples: Vec[(i64, Vec[(i64, i64)])] = vec![
+        (3, vec![(1, 2), (2, 3), (3, 1)]),
+        (4, vec![(1, 2), (3, 4)]),
+        (4, vec![(1, 2), (2, 3), (3, 4), (4, 1), (1, 3), (2, 4)]),
+        (1, vec![]),
+        (5, vec![(5, 1), (4, 1), (3, 1)]),
+        (6, vec![(6, 5), (5, 4), (4, 3), (3, 2), (2, 1)]),
+        (7, vec![(1, 2), (2, 3), (3, 1), (5, 6), (6, 7), (7, 5)]),
+        // a cube
+        (8, vec![(1, 2), (2, 3), (3, 4), (4, 1), (5, 6), (6, 7), (7, 8), (8, 5), (1, 5), (2, 6), (3, 7), (4, 8)]),
+        // the Petersen graph
+        (10, vec![(1, 2), (2, 3), (3, 4), (4, 5), (5, 1), (1, 6), (2, 7), (3, 8), (4, 9), (5, 10), (6, 8), (8, 10), (10, 7), (7, 9), (9, 6)]),
+        (5, vec![(1, 5), (2, 5), (3, 5), (1, 4), (2, 4), (3, 4)]),
+    ];
+    for (n, paths) in examples.iter() {
+        println(f"n = {n}, {paths.len()} paths -> {show(garden_no_adj(n, paths))}");
+    }
+    // every garden of 1 to 6 plots with at most three paths at each plot
+    for n in 1..7 {
+        let mut pairs: Vec[(i64, i64)] = Vec.new();
+        for x in 1..n + 1 {
+            for y in x + 1..n + 1 {
+                pairs.push((x, y));
+            }
+        }
+        let mut gardens = 0;
+        let mut four = 0;
+        let mut check = 0;
+        for mask in 0..1 << pairs.len() {
+            let mut paths: Vec[(i64, i64)] = Vec.new();
+            let mut degree = Vec.filled(n + 1, 0);
+            for (i, (x, y)) in pairs.iter().enumerate() {
+                if (mask >> i) & 1 == 1 {
+                    paths.push((x, y));
+                    degree[x] += 1;
+                    degree[y] += 1;
+                }
+            }
+            if degree.iter().all(|d| d <= 3) {
+                let answer = garden_no_adj(n, paths);
+                gardens += 1;
+                if answer.contains(4) {
+                    four += 1;
+                }
+                fold_into(mut check, answer);
+            }
+        }
+        println(f"{n} plots: {gardens} gardens, {four} need four types, checksum {check}");
+    }
+    // 300 random gardens of 1 to 50 plots
+    let mut seed = 1042;
+    let mut total = 0;
+    let mut four = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = next_random(mut seed) % 50 + 1;
+        let tries = next_random(mut seed) % (2 * n + 1);
+        let paths = random_paths(n, tries, mut seed);
+        total += paths.len();
+        let answer = garden_no_adj(n, paths);
+        if answer.contains(4) {
+            four += 1;
+        }
+        fold_into(mut check, answer);
+    }
+    println(f"300 random gardens: {total} paths, {four} need four types, checksum {check}");
+    // the largest: 10000 plots
+    let paths = random_paths(10000, 40000, mut seed);
+    let answer = garden_no_adj(10000, paths);
+    let mut counts = [0; 5];
+    for flower in answer.iter() {
+        counts[flower] += 1;
+    }
+    let mut check = 0;
+    fold_into(mut check, answer);
+    println(f"10000 plots, {paths.len()} paths: types {counts[1]} {counts[2]} {counts[3]} {counts[4]}, checksum {check}");
+}
