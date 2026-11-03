@@ -1781,9 +1781,14 @@ impl<'ctx> Cx<'ctx, '_> {
             ("fill", [v]) => {
                 // Each element drops and becomes a clone of the value, which
                 // drops once every slot holds its own.
+                // Down to the element: a `Vec[ref String]`'s is the
+                // reference itself (B-2026-11-02-38).
                 let mut vt = self.operand_type(v)?;
                 let mut vp = self.operand_ptr(v)?;
-                while let TyKind::Ref(i) | TyKind::MutRef(i) = self.tys.kind(vt) {
+                while vt != el {
+                    let (TyKind::Ref(i) | TyKind::MutRef(i)) = self.tys.kind(vt) else {
+                        break;
+                    };
                     vp = self.load_ptr(vp)?;
                     vt = i;
                 }

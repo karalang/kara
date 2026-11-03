@@ -71,7 +71,12 @@ impl<'ctx> Cx<'ctx, '_> {
     /// (B-2026-10-29-30).
     fn lend_value(&mut self, d: PointerValue<'ctx>, v: PointerValue<'ctx>, t: Table) -> R<()> {
         let vt = t.val.unwrap_or(t.key);
-        if matches!(self.tys.kind(vt), TyKind::Dyn { .. }) {
+        // A value that is a reference is lent as itself (a borrow of a
+        // borrow is the borrow, B-2026-11-02-38).
+        if matches!(
+            self.tys.kind(vt),
+            TyKind::Dyn { .. } | TyKind::Ref(_) | TyKind::MutRef(_)
+        ) {
             self.copy(d, v, vt)
         } else {
             self.store(d, v.into())
@@ -723,7 +728,13 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.abort_unless(ok, "index out of bounds")?;
                 let at = self.walk_at(h, i, t)?;
                 let d = self.place_ptr(dest)?;
-                self.store(d, at.into())?;
+                // A set of references gives the reference it holds (a
+                // borrow of a borrow is the borrow, B-2026-11-02-38).
+                if matches!(self.tys.kind(t.entry), TyKind::Ref(_) | TyKind::MutRef(_)) {
+                    self.copy(d, at, t.entry)?;
+                } else {
+                    self.store(d, at.into())?;
+                }
             }
             ("insert", [k, rest @ ..]) => self.table_insert(hp, t, k, rest, dest, dty, unit)?,
             ("entries", []) if is_map => {
