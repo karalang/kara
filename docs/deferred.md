@@ -1280,6 +1280,14 @@ The "Three layers, named" framing above separates *semantic independence* (when 
 
 **`--sequential`.** Non-conflicting effects mean order doesn't affect results. `karac build --sequential` is a debug-only, global, compile-time flag that disables all auto-parallelism, useful for isolating correctness bugs where parallelism is suspected. It is not for production use. For per-scope sequential execution in production code, use a `seq { }` block (see [Feature 5](#feature-5-auto-concurrency-via-effect-analysis)).
 
+### Runtime Work Estimate for Auto-Par Groups in Hot Bodies
+
+The static cost gate (M4 item 13, `src/mir/effects/auto_par.rs`) keeps a statement group in order when its body is recursive or reached from a loop, however much work its statements do. That ruling has kata 165 as its pin: legacy spawned `compare_version`'s two `revisions(..)` statements on each of 10M trips of `main`'s loop and ran 318x slower. Its cost is kata 302 (B-2026-11-03-2): `min_area`'s four bisections, called once on each of 1200 trips of `main`'s loop, each scanning rows or columns of a 4096-wide image. On x86 with 4 workers they would run 1.9x faster as tasks (seq 0.65 s, 2 workers 0.36 s, 4 workers 0.34 s, outputs equal; the kata thread's measurement).
+
+No static signal separates the two shapes. In both, every statement of the group weighs 2 (a loop with a loop in it, or a call to a looping body from a loop). In both, the trips are dynamic (the image's width, a string's length), and the caller is a literal-trip loop in a body that is not itself hot (1200 trips against 10M). Allowing hot groups whose statements all weigh 2 flips both, and a cap on the calling loop's trips would be tuned to benchmarks.
+
+So the decision belongs at run time, in the builder rather than the cost gate. Keep the group as tasks in the compiled graph, and let the code decide on each run whether to spawn them or run them inline on the current worker. It would decide from a cheap measure of the work: the sizes the statements' loops will run over, read at entry, or the time the previous call took. Running a task inline is a scheduling choice, so the parallelization graph stays a pure function of the source and the [Determinism Contract](#determinism-contract) holds. The estimate needs to be cheap enough that kata 165's 10M calls lose nothing measurable, and to spawn for kata 302's 1200.
+
 ### Determinism Contract
 
 [design.md §13](design.md#determinism-contract) states the v1 determinism contract for `par {}` and `par for`: the property, the guarantees that give it, and what is not guaranteed. Automatic parallelism must keep that contract and change nothing observable ([core-semantics.md §11.5](core-semantics.md#11-concurrency-c9)). It adds two guarantees:
