@@ -1105,6 +1105,7 @@ impl<'a> super::TypeChecker<'a> {
     }
 
     pub(super) fn check_expr(&mut self, expr: &Expr, expected: &Type) -> Type {
+        self.note_loose_expr(expr);
         if matches!(expr.kind, ExprKind::Cast { .. }) {
             self.pending_cast_expected = Some((SpanKey::from_span(&expr.span), expected.clone()));
         }
@@ -8232,7 +8233,23 @@ impl<'a> super::TypeChecker<'a> {
         );
     }
 
+    /// Remembers an expression that binds looser than a postfix `.`, for
+    /// `parenthesize_suffix_fixes` (B-2026-11-03-24).
+    fn note_loose_expr(&mut self, expr: &Expr) {
+        if matches!(
+            expr.kind,
+            ExprKind::Unary { .. }
+                | ExprKind::Binary { .. }
+                | ExprKind::Cast { .. }
+                | ExprKind::Range { .. }
+                | ExprKind::Closure { .. }
+        ) {
+            self.loose_expr_spans.insert(SpanKey::from_span(&expr.span));
+        }
+    }
+
     pub(super) fn infer_expr(&mut self, expr: &Expr) -> Type {
+        self.note_loose_expr(expr);
         // B-2026-09-14-3: hand `infer_call`'s callee-position marker on to a
         // `Path` node and to nothing else. The marker says "a tuple-shaped
         // enum variant here is the construction form `Col.A(3)`", and only the

@@ -5070,17 +5070,26 @@ impl<'a> super::TypeChecker<'a> {
                     );
                     // A `Copy` value is already the value: `*c` on a `char`
                     // parameter (a predicate over `chars()`, core-semantics.md
-                    // §5.10) means `c`. The fix drops the `*`.
-                    if self.is_copy_type_during_check(&ty) && operand.span.offset > span.offset {
+                    // §5.10) means `c`. The fix drops the `*`. So it does for
+                    // any value compared with `==`, `<` and the rest, which
+                    // borrow both operands and move neither (`el.id == *a`
+                    // with `a: (i64, String)`, B-2026-11-03-25).
+                    let copied = self.is_copy_type_during_check(&ty);
+                    let compared = self
+                        .borrowed_deref_operands
+                        .contains(&SpanKey::from_span(span));
+                    if (copied || compared) && operand.span.offset > span.offset {
                         let star = Span {
                             length: operand.span.offset - span.offset,
                             ..*span
                         };
+                        let why = if copied {
+                            format!("a '{}' is copied", type_display(&ty))
+                        } else {
+                            "a comparison borrows its operands".to_string()
+                        };
                         self.type_error_with_fix_it(
-                            format!(
-                                "{message}; a '{}' is copied, so drop the `*`",
-                                type_display(&ty)
-                            ),
+                            format!("{message}; {why}, so drop the `*`"),
                             *span,
                             TypeErrorKind::InvalidUnaryOp,
                             super::FixIt {

@@ -1,0 +1,978 @@
+// mini_crdt: conflict-free replicated data types, the model under
+// offline-first apps and collaborative editors (Automerge, Yjs, Riak's
+// data types, Redis Enterprise's active-active). Replicas edit shared
+// counters, add-wins sets, last-writer-wins registers and RGA text while
+// cut off from each other, then exchange operations; each operation
+// carries a version vector, so a sync delivers it after everything it
+// depends on, and every replica that has seen the same operations shows
+// the same state. Each replica keeps an op log on disk and can crash and
+// rebuild itself from it. Each session file runs as its own task.
+
+// ------------------------------------------------------------ operations
+
+// An element of a text: a Lamport counter and the replica that made it.
+type Id = (i64, String);
+
+fn fmt_id(id: ref Id) -> String {
+    f"{id.0}@{id.1}"
+}
+
+fn parse_id(s: Str) -> Result[Id, String] {
+    let parts: Vec[Str] = s.split("@").collect();
+    if parts.len() != 2 or not is_digits(parts[0]) {
+        return Err(f"bad element id {s}");
+    }
+    Ok((number(parts[0]), parts[1].to_string()))
+}
+
+#[derive(Clone)]
+enum Edit {
+    Add(i64),
+    SetAdd(String),
+    SetRemove { elem: String, tags: Vec[String] },
+    RegSet(String),
+    Insert { after: Option[Id], text: String },
+    Delete(Vec[Id]),
+}
+
+#[derive(Clone)]
+struct Op {
+    origin: String,
+    // The origin's position in the replicas line.
+    oi: i64,
+    seq: i64,
+    lamport: i64,
+    // A version vector, in replicas-line order: what the origin had
+    // applied from each replica when it made this op (its own count is
+    // this op's seq).
+    vc: Vec[i64],
+    obj: String,
+    edit: Edit,
+}
+
+impl Op {
+    fn type_name(self) -> Str {
+        match self.edit {
+            Edit.Add(_) => "counter",
+            Edit.SetAdd(_) | Edit.SetRemove { .. } => "set",
+            Edit.RegSet(_) => "reg",
+            Edit.Insert { .. } | Edit.Delete(_) => "text",
+        }
+    }
+
+    fn kind_name(self) -> Str {
+        match self.edit {
+            Edit.Add(_) | Edit.SetAdd(_) => "add",
+            Edit.SetRemove { .. } => "remove",
+            Edit.RegSet(_) => "set",
+            Edit.Insert { .. } => "insert",
+            Edit.Delete(_) => "delete",
+        }
+    }
+
+    // How many Lamport counters the op uses: one per inserted character.
+    fn span(self) -> i64 {
+        match self.edit {
+            Edit.Insert { text, .. } => text.chars().count(),
+            _ => 1,
+        }
+    }
+
+    // Causal delivery order: a vector's sum grows along every
+    // happened-before edge, and the origin and seq break ties.
+    fn causal_key(self) -> (i64, String, i64) {
+        let total: i64 = self.vc.iter().sum();
+        (total, self.origin.clone(), self.seq)
+    }
+
+    fn line(self, names: ref Vec[String]) -> String {
+        let mut vc: Vec[String] = Vec.new();
+        for i in 0..names.len() {
+            vc.push(f"{names[i]}:{self.vc[i]}");
+        }
+        let payload = match self.edit {
+            Edit.Add(n) => f"{n}",
+            Edit.SetAdd(e) => e.clone(),
+            Edit.SetRemove { elem, tags } => f"{elem} {tags.join(",")}",
+            Edit.RegSet(v) => v.clone(),
+            Edit.Insert { after, text } => {
+                let a = match after {
+                    Some(id) => fmt_id(id),
+                    None => "root".to_string(),
+                };
+                f"{a} {text}"
+            }
+            Edit.Delete(ids) => {
+                let parts: Vec[String] = ids.iter().map(|id| fmt_id(id)).collect();
+                parts.join(",")
+            }
+        };
+        f"op {self.origin} {self.seq} {self.lamport} {vc.join(",")} {self.type_name()} {self.obj} {self.kind_name()} {payload}"
+    }
+
+    fn parse(text: Str, names: ref Vec[String]) -> Result[Op, String] {
+        let w: Vec[Str] = text.split(" ").collect();
+        if w.len() < 9 or w[0] != "op" {
+            return Err(f"bad log line: {text}");
+        }
+        let oi = match names.iter().position(|n| n == w[1]) {
+            Some(i) => i,
+            None => return Err(f"unknown replica {w[1]} in the log"),
+        };
+        let mut vc: Vec[i64] = Vec.new();
+        for part in w[4].split(",") {
+            let kv: Vec[Str] = part.split(":").collect();
+            vc.push(number(kv[1]));
+        }
+        let edit = match (w[5], w[7]) {
+            ("counter", "add") => Edit.Add(number(w[8])),
+            ("set", "add") => Edit.SetAdd(w[8].to_string()),
+            ("set", "remove") => Edit.SetRemove {
+                elem: w[8].to_string(),
+                tags: w[9].split(",").map(|t| t.to_string()).collect(),
+            },
+            ("reg", "set") => Edit.RegSet(w[8].to_string()),
+            ("text", "insert") => {
+                let after = if w[8] == "root" { None } else { Some(parse_id(w[8])?) };
+                Edit.Insert { after: after, text: w[9..w.len()].join(" ") }
+            }
+            ("text", "delete") => {
+                let mut ids: Vec[Id] = Vec.new();
+                for s in w[8].split(",") {
+                    ids.push(parse_id(s)?);
+                }
+                Edit.Delete(ids)
+            }
+            _ => return Err(f"bad log line: {text}"),
+        };
+        Ok(Op {
+            origin: w[1].to_string(),
+            oi: oi,
+            seq: number(w[2]),
+            lamport: number(w[3]),
+            vc: vc,
+            obj: w[6].to_string(),
+            edit: edit,
+        })
+    }
+}
+
+// ------------------------------------------------------------ replicas
+
+struct Elem {
+    id: Id,
+    ch: char,
+    deleted: bool,
+}
+
+struct Replica {
+    name: String,
+    idx: i64,
+    names: Vec[String],
+    path: String,
+    alive: bool,
+    log: Option[File],
+    clock: i64,
+    // vv[i]: how many of replica i's ops this one has applied.
+    vv: Vec[i64],
+    ops: Vec[Op],
+    counters: Map[String, i64],
+    // Set name -> element -> the tags of the adds not yet removed.
+    sets: Map[String, Map[String, SortedSet[String]]],
+    // Register name -> (the winning write's Lamport stamp, its value).
+    regs: Map[String, (Id, String)],
+    // Text name -> every element ever inserted, deleted ones kept.
+    texts: Map[String, Vec[Elem]],
+}
+
+fn plural(n: i64) -> String {
+    if n == 1 { "1 op".to_string() } else { f"{n} ops" }
+}
+
+fn sorted_keys[V](m: ref Map[String, V]) -> Vec[String] {
+    let mut keys: Vec[String] = m.keys().cloned().collect();
+    keys.sort();
+    keys
+}
+
+impl Replica {
+    fn new(idx: i64, names: ref Vec[String], dir: Str) -> Replica {
+        let name = names[idx].clone();
+        Replica {
+            path: f"{dir}/{name}.log",
+            name: name,
+            idx: idx,
+            names: names.clone(),
+            alive: true,
+            log: None,
+            clock: 0,
+            vv: Vec.filled(names.len(), 0),
+            ops: Vec.new(),
+            counters: Map.new(),
+            sets: Map.new(),
+            regs: Map.new(),
+            texts: Map.new(),
+        }
+    }
+
+    // A crash loses everything in memory; only the log is left.
+    fn reset(mut ref self) {
+        self.log = None;
+        self.clock = 0;
+        self.vv = Vec.filled(self.names.len(), 0);
+        self.ops = Vec.new();
+        self.counters = Map.new();
+        self.sets = Map.new();
+        self.regs = Map.new();
+        self.texts = Map.new();
+    }
+
+    // -------------------------------------------------------- apply
+
+    fn apply(mut ref self, op: own Op, log: bool) -> Result[(), String] {
+        match op.edit.clone() {
+            Edit.Add(n) => {
+                *self.counters.entry(op.obj.clone()).or_insert(0) += n;
+            }
+            Edit.SetAdd(e) => {
+                let elems = self.sets.entry(op.obj.clone()).or_insert_with(Map.new);
+                elems.entry(e.clone()).or_insert_with(SortedSet.new).insert(f"{op.origin}.{op.seq}");
+            }
+            Edit.SetRemove { elem, tags } => {
+                let elems = self.sets.entry(op.obj.clone()).or_insert_with(Map.new);
+                if let Some(have) = elems.get_mut(elem) {
+                    for t in tags.iter() {
+                        have.remove(t);
+                    }
+                }
+            }
+            Edit.RegSet(v) => {
+                let stamp = (op.lamport, op.origin.clone());
+                let wins = match self.regs.get(op.obj) {
+                    Some(cur) => stamp > cur.0,
+                    None => true,
+                };
+                if wins {
+                    self.regs.insert(op.obj.clone(), (stamp, v.clone()));
+                }
+            }
+            Edit.Insert { after, text } => {
+                let seqs = self.texts.entry(op.obj.clone()).or_insert_with(Vec.new);
+                let mut i = match after {
+                    None => 0,
+                    Some(a) => match seqs.iter().position(|el| el.id == a) {
+                        Some(k) => k + 1,
+                        None => return Err(f"{op.obj}: no element {fmt_id(a)}"),
+                    },
+                };
+                // RGA: skip the elements after the anchor with a larger id
+                // (later or concurrent inserts that win); place it there.
+                let mut k = 0;
+                for ch in text.chars() {
+                    let nid = (op.lamport + k, op.origin.clone());
+                    while i < seqs.len() and seqs[i].id > nid {
+                        i += 1;
+                    }
+                    seqs.insert(i, Elem { id: nid, ch: ch, deleted: false });
+                    i += 1;
+                    k += 1;
+                }
+            }
+            Edit.Delete(ids) => {
+                let seqs = self.texts.entry(op.obj.clone()).or_insert_with(Vec.new);
+                for el in seqs.iter_mut() {
+                    if ids.contains(el.id) {
+                        el.deleted = true;
+                    }
+                }
+            }
+        }
+        self.clock = self.clock.max(op.lamport + op.span() - 1);
+        self.vv[op.oi] = op.seq;
+        if log {
+            let line = op.line(self.names) + "\n";
+            let written = match self.log.as_ref() {
+                Some(f) => f.write(line.bytes()),
+                None => return Err(f"{self.name} has no log open"),
+            };
+            if let Err(e) = written {
+                return Err(f"cannot write {self.path}: {e}");
+            }
+        }
+        self.ops.push(op);
+        Ok(())
+    }
+
+    // -------------------------------------------------------- views
+
+    fn visible(self, obj: Str) -> Vec[ref Elem] {
+        match self.texts.get(obj) {
+            Some(seqs) => seqs.iter().filter(|el| not el.deleted).collect(),
+            None => Vec.new(),
+        }
+    }
+
+    fn text_of(self, obj: Str) -> String {
+        let mut s = String.new();
+        for el in self.visible(obj).iter() {
+            s.push(el.ch);
+        }
+        s
+    }
+
+    fn set_of(self, obj: Str) -> String {
+        let mut live: Vec[String] = Vec.new();
+        if let Some(elems) = self.sets.get(obj) {
+            for (e, tags) in elems.iter() {
+                if not tags.is_empty() {
+                    live.push(e.clone());
+                }
+            }
+        }
+        live.sort();
+        f"{{{live.join(", ")}}}"
+    }
+
+    fn show_lines(self) -> Vec[String] {
+        let mut out: Vec[String] = Vec.new();
+        for k in sorted_keys(self.counters).iter() {
+            out.push(f"  counter {k} = {self.counters[k]}");
+        }
+        for k in sorted_keys(self.regs).iter() {
+            let ((lam, who), v) = self.regs[k].clone();
+            out.push(f"  reg {k} = {v} ({who}@{lam})");
+        }
+        for k in sorted_keys(self.sets).iter() {
+            out.push(f"  set {k} = {self.set_of(k)}");
+        }
+        for k in sorted_keys(self.texts).iter() {
+            let all = self.texts[k].len();
+            let vis = self.visible(k).len();
+            out.push(f"  text {k} = \"{self.text_of(k)}\" ({vis} visible, {all - vis} deleted)");
+        }
+        out
+    }
+
+    // -------------------------------------------------------- local edits
+
+    fn make(mut ref self, obj: Str, edit: own Edit) -> Result[i64, String] {
+        let seq = self.vv[self.idx] + 1;
+        let mut vc = self.vv.clone();
+        vc[self.idx] = seq;
+        let lamport = self.clock + 1;
+        let op = Op { origin: self.name.clone(), oi: self.idx, seq: seq, lamport: lamport, vc: vc, obj: obj.to_string(), edit: edit };
+        self.apply(op, true)?;
+        Ok(lamport)
+    }
+
+    // One edit line; returns the event text.
+    fn local(mut ref self, w: ref Vec[String]) -> Result[String, String] {
+        let typ = w[1].as_str();
+        let obj = w[2].as_str();
+        let kind = w[3].as_str();
+        match typ {
+            "counter" => {
+                let n = number(w[4]);
+                self.make(obj, Edit.Add(n))?;
+                let sign = if n >= 0 { "+" } else { "" };
+                Ok(f"{obj} {sign}{n} -> {self.counters[obj]}")
+            }
+            "set" => {
+                let e = w[4].clone();
+                if kind == "add" {
+                    self.make(obj, Edit.SetAdd(e.clone()))?;
+                    return Ok(f"{obj} add {e} -> {self.set_of(obj)}");
+                }
+                let tags: Vec[String] = match self.sets.get(obj) {
+                    Some(elems) => match elems.get(e) {
+                        Some(t) => t.iter().cloned().collect(),
+                        None => Vec.new(),
+                    },
+                    None => Vec.new(),
+                };
+                if tags.is_empty() {
+                    return Err(f"{obj} remove {e}: not in the set");
+                }
+                let n = tags.len();
+                self.make(obj, Edit.SetRemove { elem: e.clone(), tags: tags })?;
+                let adds = if n == 1 { "add" } else { "adds" };
+                Ok(f"{obj} remove {e} ({n} {adds}) -> {self.set_of(obj)}")
+            }
+            "reg" => {
+                let lamport = self.make(obj, Edit.RegSet(w[4].clone()))?;
+                Ok(f"{obj} = {w[4]} ({self.name}@{lamport})")
+            }
+            _ => {
+                let vis: Vec[Id] = self.visible(obj).iter().map(|el| el.id.clone()).collect();
+                if kind == "insert" {
+                    let pos = number(w[4]);
+                    let text = w[5..w.len()].join(" ");
+                    if pos > vis.len() {
+                        return Err(f"{obj} insert at {pos}: only {vis.len()} chars");
+                    }
+                    let after = if pos == 0 { None } else { Some(vis[pos - 1].clone()) };
+                    self.make(obj, Edit.Insert { after: after, text: text.clone() })?;
+                    return Ok(f"{obj} insert \"{text}\" at {pos} -> \"{self.text_of(obj)}\"");
+                }
+                let pos = number(w[4]);
+                let n = number(w[5]);
+                if pos + n > vis.len() {
+                    return Err(f"{obj} delete {pos}..{pos + n}: only {vis.len()} chars");
+                }
+                self.make(obj, Edit.Delete(vis[pos..pos + n].to_vec()))?;
+                Ok(f"{obj} delete {pos}..{pos + n} -> \"{self.text_of(obj)}\"")
+            }
+        }
+    }
+
+    // Rebuild from the op log after a crash.
+    fn restart(mut ref self) -> Result[String, String] {
+        let data = match fs.read_to_string(self.path) {
+            Ok(d) => d,
+            Err(e) => return Err(f"cannot read {self.path}: {e}"),
+        };
+        let mut n = 0;
+        for line in data.split("\n") {
+            if line.len() > 0 {
+                let op = Op.parse(line, self.names)?;
+                self.apply(op, false)?;
+                n += 1;
+            }
+        }
+        self.log = match File.append(self.path) {
+            Ok(f) => Some(f),
+            Err(e) => return Err(f"cannot open {self.path}: {e}"),
+        };
+        self.alive = true;
+        Ok(f"{self.name} restarts: {plural(n)} replayed from {self.name}.log ({data.len()} bytes), clock {self.clock}")
+    }
+}
+
+// ------------------------------------------------------------ sessions
+
+fn file_size(path: Str) -> i64 {
+    match fs.metadata(path) {
+        Ok(m) => m.len,
+        Err(_) => 0,
+    }
+}
+
+struct Session {
+    names: Vec[String],
+    reps: Vec[Replica],
+    out: Vec[String],
+}
+
+impl Session {
+    fn new(stem: Str, names: own Vec[String]) -> Result[Session, String] {
+        let dir = f"data/run/{stem}";
+        if let Err(e) = fs.create_dir_all(dir) {
+            return Err(f"cannot create {dir}: {e}");
+        }
+        let mut reps: Vec[Replica] = Vec.new();
+        for i in 0..names.len() {
+            let mut r = Replica.new(i, names, dir);
+            r.log = match File.create(r.path) {
+                Ok(f) => Some(f),
+                Err(e) => return Err(f"cannot create {r.path}: {e}"),
+            };
+            reps.push(r);
+        }
+        Ok(Session { names: names, reps: reps, out: Vec.new() })
+    }
+
+    fn idx(self, name: Str) -> i64 {
+        self.names.iter().position(|n| n == name) ?? 0
+    }
+
+    // Applies the ops `from` holds that `to` lacks, in causal order.
+    fn deliver(mut ref self, from: i64, to: i64) -> Result[Vec[i64], String] {
+        let mut missing: Vec[Op] = self.reps[from].ops.iter().filter(|op| self.reps[to].vv[op.oi] < op.seq).cloned().collect();
+        missing.sort_by(|a, b| a.causal_key().cmp(b.causal_key()));
+        let mut by: Vec[i64] = Vec.filled(self.names.len(), 0);
+        for op in missing.into_iter() {
+            by[op.oi] += 1;
+            self.reps[to].apply(op, true)?;
+        }
+        Ok(by)
+    }
+
+    fn sync_all(mut ref self) -> Result[(), String] {
+        // Every op a live replica holds, once each, in causal order.
+        let mut pool: SortedMap[(i64, String, i64), Op] = SortedMap.new();
+        for r in self.reps.iter() {
+            if r.alive {
+                for op in r.ops.iter() {
+                    pool.insert(op.causal_key(), op.clone());
+                }
+            }
+        }
+        let mut parts: Vec[String] = Vec.new();
+        for i in 0..self.reps.len() {
+            if not self.reps[i].alive {
+                parts.push(f"{self.names[i]} down");
+                continue;
+            }
+            let mut got = 0;
+            for op in pool.values() {
+                if self.reps[i].vv[op.oi] < op.seq {
+                    self.reps[i].apply(op.clone(), true)?;
+                    got += 1;
+                }
+            }
+            parts.push(f"{self.names[i]} +{got}");
+        }
+        self.out.push("sync all: " + parts.join(", "));
+        Ok(())
+    }
+
+    fn run(mut ref self, w: ref Vec[String]) -> Result[(), String] {
+        match w[0].as_str() {
+            "sync" => {
+                if w[1] == "all" {
+                    return self.sync_all();
+                }
+                let a = self.idx(w[1]);
+                let b = self.idx(w[2]);
+                for r in [a, b] {
+                    if not self.reps[r].alive {
+                        self.out.push(f"sync {w[1]} -> {w[2]}: {self.names[r]} is down");
+                        return Ok(());
+                    }
+                }
+                let by = self.deliver(a, b)?;
+                let total: i64 = by.iter().sum();
+                if total == 0 {
+                    self.out.push(f"sync {w[1]} -> {w[2]}: up to date");
+                    return Ok(());
+                }
+                let mut detail: Vec[String] = Vec.new();
+                for i in 0..self.names.len() {
+                    if by[i] > 0 {
+                        detail.push(f"{self.names[i]}:{by[i]}");
+                    }
+                }
+                self.out.push(f"sync {w[1]} -> {w[2]}: {plural(total)} ({detail.join(" ")})");
+            }
+            "show" => {
+                let r = ref self.reps[self.idx(w[1])];
+                if not r.alive {
+                    self.out.push(f"show {r.name}: down");
+                    return Ok(());
+                }
+                let head = f"show {r.name}: clock {r.clock}, {plural(r.ops.len())}";
+                let lines = r.show_lines();
+                self.out.push(head);
+                self.out.extend(lines);
+            }
+            "check" => {
+                let mut groups: Vec[(Vec[String], Vec[String])] = Vec.new();
+                for r in self.reps.iter() {
+                    if not r.alive {
+                        continue;
+                    }
+                    let view = r.show_lines();
+                    match groups.iter().position(|g| g.0 == view) {
+                        Some(k) => groups[k].1.push(r.name.clone()),
+                        None => groups.push((view, [r.name.clone()].to_vec())),
+                    }
+                }
+                if groups.len() == 1 {
+                    self.out.push(f"check: converged ({groups[0].1.join(" ")})");
+                } else {
+                    let parts: Vec[String] = groups.iter().map(|g| g.1.join(" ")).collect();
+                    self.out.push(f"check: {groups.len()} states: {parts.join(" | ")}");
+                }
+            }
+            "crash" => {
+                let i = self.idx(w[1]);
+                if not self.reps[i].alive {
+                    return Err(f"{w[1]} is already down");
+                }
+                self.reps[i].alive = false;
+                self.reps[i].reset();
+                self.out.push(f"{w[1]} crashes");
+            }
+            "restart" => {
+                let i = self.idx(w[1]);
+                if self.reps[i].alive {
+                    return Err(f"{w[1]} is not down");
+                }
+                let line = self.reps[i].restart()?;
+                self.out.push(line);
+            }
+            _ => {
+                let i = self.idx(w[0]);
+                if not self.reps[i].alive {
+                    return Err(f"{w[0]} is down");
+                }
+                let event = self.reps[i].local(w)?;
+                self.out.push(f"{w[0]}: {event}");
+            }
+        }
+        Ok(())
+    }
+
+    fn summary(self) -> Vec[String] {
+        let mut out: Vec[String] = Vec.new();
+        out.push("-- end".to_string());
+        for r in self.reps.iter() {
+            let size = file_size(r.path);
+            if not r.alive {
+                out.push(f"  {r.name}: down, log {size} bytes");
+                continue;
+            }
+            let own = r.ops.iter().filter(|op| op.oi == r.idx).count();
+            out.push(f"  {r.name}: {plural(r.ops.len())} ({own} own), clock {r.clock}, log {size} bytes");
+        }
+        out
+    }
+}
+
+// ------------------------------------------------------------ the loader
+
+fn is_digits(s: Str) -> bool {
+    s.len() > 0 and s.bytes().iter().all(|c| c >= b'0' and c <= b'9')
+}
+
+fn is_int(s: Str) -> bool {
+    if s.starts_with("-") { is_digits(s.substring(1, s.len())) } else { is_digits(s) }
+}
+
+fn number(s: Str) -> i64 {
+    i64.parse(s).unwrap_or(0)
+}
+
+fn is_type(typ: Str) -> bool {
+    match typ {
+        "counter" | "set" | "reg" | "text" => true,
+        _ => false,
+    }
+}
+
+fn has_action(typ: Str, kind: Str) -> bool {
+    match (typ, kind) {
+        ("counter", "add") | ("set", "add") | ("set", "remove") | ("reg", "set") => true,
+        ("text", "insert") | ("text", "delete") => true,
+        _ => false,
+    }
+}
+
+struct Script {
+    names: Vec[String],
+    types: Map[String, String],
+    lines: Vec[Vec[String]],
+    errs: Vec[String],
+}
+
+impl Script {
+    fn line(mut ref self, line: Str) -> Result[(), String] {
+        let w: Vec[Str] = line.split(" ").collect();
+        if w[0] == "replicas" {
+            if not self.names.is_empty() {
+                return Err("replicas given twice".to_string());
+            }
+            let mut seen: SortedSet[Str] = SortedSet.new();
+            for n in w[1..w.len()].iter() {
+                seen.insert(*n);
+            }
+            if w.len() < 2 or seen.len() != w.len() - 1 {
+                return Err("replicas needs distinct names".to_string());
+            }
+            self.names = w[1..w.len()].iter().map(|s| s.to_string()).collect();
+            return Ok(());
+        }
+        if self.names.is_empty() {
+            return Err("the replicas line must come first".to_string());
+        }
+        let owned: Vec[String] = w.iter().map(|s| s.to_string()).collect();
+        let want = match w[0] {
+            "sync" => 3,
+            "show" | "crash" | "restart" => 2,
+            "check" => 1,
+            _ => 0,
+        };
+        if want > 0 {
+            if w[0] == "sync" and w.len() == 2 and w[1] == "all" {
+                self.lines.push(owned);
+                return Ok(());
+            }
+            if w.len() != want {
+                let s = if want != 2 { "s" } else { "" };
+                return Err(f"{w[0]} takes {want - 1} argument{s}");
+            }
+            for r in w[1..w.len()].iter() {
+                if not self.names.contains((*r).to_string()) {
+                    return Err(f"no replica {r}");
+                }
+            }
+            self.lines.push(owned);
+            return Ok(());
+        }
+        if not self.names.contains(w[0].to_string()) {
+            return Err(f"no replica {w[0]}");
+        }
+        if w.len() < 4 {
+            return Err("an edit is: replica type object action ...".to_string());
+        }
+        let (typ, obj, kind) = (w[1], w[2], w[3]);
+        if not is_type(typ) {
+            return Err(f"unknown type {typ}");
+        }
+        if not has_action(typ, kind) {
+            return Err(f"a {typ} has no {kind}");
+        }
+        if let Some(t) = self.types.get(obj) {
+            if t != typ {
+                return Err(f"{obj} is a {t}, not a {typ}");
+            }
+        }
+        let args = w[4..w.len()].to_vec();
+        if typ == "counter" and not (args.len() == 1 and is_int(args[0])) {
+            return Err("add needs a whole number".to_string());
+        }
+        if (typ == "set" or typ == "reg") and args.len() != 1 {
+            return Err("a value is one word".to_string());
+        }
+        if kind == "insert" and (args.len() < 2 or not is_digits(args[0])) {
+            return Err("insert needs a position and text".to_string());
+        }
+        if kind == "delete" and not (args.len() == 2 and is_digits(args[0]) and is_digits(args[1]) and number(args[1]) > 0) {
+            return Err("delete needs a position and a count".to_string());
+        }
+        self.types.insert(obj.to_string(), typ.to_string());
+        self.lines.push(owned);
+        Ok(())
+    }
+}
+
+fn parse(name: Str, text: Str) -> Script {
+    let mut s = Script { names: Vec.new(), types: Map.new(), lines: Vec.new(), errs: Vec.new() };
+    let mut no = 0;
+    for line in text.split("\n") {
+        no += 1;
+        if line.len() == 0 or line.starts_with("#") {
+            continue;
+        }
+        if let Err(e) = s.line(line) {
+            s.errs.push(f"{name} line {no}: {e}");
+        }
+    }
+    if s.names.is_empty() {
+        s.errs.push(f"{name}: no replicas line");
+    }
+    s
+}
+
+fn run(name: String, text: String) -> Vec[String] {
+    let script = parse(name, text);
+    let mut out: Vec[String] = Vec.new();
+    out.push(f"== {name}: replicas {script.names.join(" ")}");
+    if not script.errs.is_empty() {
+        for e in script.errs.iter() {
+            out.push(f"! {e}");
+        }
+        return out;
+    }
+    let stem = name.split(".").next() ?? "";
+    let mut s = match Session.new(stem, script.names.clone()) {
+        Ok(s) => s,
+        Err(e) => {
+            out.push(f"! {e}");
+            return out;
+        }
+    };
+    for w in script.lines.iter() {
+        if let Err(e) = s.run(w) {
+            s.out.push(f"! {e}");
+        }
+    }
+    out.extend(mem.take(mut s.out));
+    out.extend(s.summary());
+    out
+}
+
+// ------------------------------------------------------------ files
+
+fn is_hexd(c: u8) -> bool {
+    (c >= b'0' and c <= b'9') or (c >= b'a' and c <= b'f') or (c >= b'A' and c <= b'F')
+}
+
+fn hex_val(c: u8) -> u8 {
+    if c >= b'0' and c <= b'9' {
+        c - b'0'
+    } else if c >= b'a' and c <= b'f' {
+        c - b'a' + 10
+    } else {
+        c - b'A' + 10
+    }
+}
+
+fn unhex(s: Str) -> Vec[u8] {
+    let mut digits: Vec[u8] = Vec.new();
+    for c in s.bytes() {
+        if is_hexd(c) {
+            digits.push(hex_val(c));
+        }
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i + 1 < digits.len() {
+        out.push(digits[i] * 16 + digits[i + 1]);
+        i += 2;
+    }
+    out
+}
+
+fn put_bytes(path: Str, b: Vec[u8]) -> Result[(), String] {
+    if let Err(e) = fs.write_bytes(path.to_string(), b) {
+        return Err(f"cannot write {path}: {e}");
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = fs.create_dir_all("data".to_string()) {
+        eprintln(f"cannot create data: {e}");
+        return;
+    }
+    if let Err(e) = write_data() {
+        eprintln(e);
+        return;
+    }
+    let mut names: Vec[String] = match fs.read_dir("data".to_string()) {
+        Ok(n) => n.into_iter().filter(|n| n.ends_with(".crdt")).collect(),
+        Err(e) => {
+            eprintln(f"cannot list data: {e}");
+            return;
+        }
+    };
+    names.sort();
+    // One task per session, each with its own replicas and log directory;
+    // the reports print in file name order.
+    let group = TaskGroup.new();
+    let mut handles = Vec.new();
+    for name in names.iter() {
+        let text = match fs.read_to_string(f"data/{name}") {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln(f"cannot read {name}: {e}");
+                return;
+            }
+        };
+        let owned = name.clone();
+        handles.push(group.spawn(|| run(owned, text)));
+    }
+    let mut out: Vec[String] = Vec.new();
+    for h in handles.into_iter() {
+        out.extend(h.join());
+    }
+    println(out.join("\n"));
+}
+
+// ============================================================ data
+
+// The files under data/, in name order.
+fn write_data() -> Result[(), String] {
+    put_bytes("data/1_counters.crdt", unhex(file_0()))?;
+    put_bytes("data/2_cart.crdt", unhex(file_1()))?;
+    put_bytes("data/3_profile.crdt", unhex(file_2()))?;
+    put_bytes("data/4_doc.crdt", unhex(file_3()))?;
+    put_bytes("data/5_offline.crdt", unhex(file_4()))?;
+    put_bytes("data/6_bad.crdt", unhex(file_5()))?;
+    Ok(())
+}
+
+// data/1_counters.crdt
+fn file_0() -> String {
+    """
+2320546872656520617070207365727665727320636f756e74207061676520766965777320616e642061646a75737420
+73746f636b207768696c6520637574206f66660a232066726f6d2065616368206f746865722c207468656e2073796e63
+2e20436f756e746572732061646420757020776861746576657220746865206f726465722e0a7265706c696361732061
+206220630a6120636f756e7465722076696577732061646420330a6220636f756e746572207669657773206164642032
+0a6320636f756e7465722076696577732061646420350a6120636f756e7465722073746f636b206164642034300a6220
+636f756e7465722073746f636b20616464202d330a6320636f756e7465722073746f636b20616464202d340a73686f77
+20610a73796e63206120620a73686f7720620a73796e63206220630a73796e63206320610a73686f7720610a63686563
+6b0a6120636f756e7465722073746f636b20616464202d310a636865636b0a73796e6320616c6c0a636865636b0a
+"""
+}
+
+// data/2_cart.crdt
+fn file_1() -> String {
+    """
+232041207368617265642073686f7070696e67206c697374206f6e2074776f2070686f6e657320616e642061206c6170
+746f702e20546865207365742069730a23206164642d77696e733a20612072656d6f76652074616b6573206177617920
+6f6e6c7920746865206164647320697473207265706c69636120686164207365656e2e0a7265706c696361732070686f
+6e65207461626c6574206c6170746f700a70686f6e6520736574206361727420616464206d696c6b0a70686f6e652073
+657420636172742061646420656767730a73796e632070686f6e65207461626c65740a7461626c657420736574206361
+72742072656d6f7665206d696c6b0a6c6170746f7020736574206361727420616464206d696c6b0a6c6170746f702073
+65742063617274206164642062726561640a70686f6e6520736574206361727420616464206d696c6b0a73686f772074
+61626c65740a73796e6320616c6c0a73686f772070686f6e650a636865636b0a7461626c657420736574206361727420
+72656d6f7665206d696c6b0a7461626c65742073657420636172742072656d6f76652062726561640a6c6170746f7020
+73657420636172742072656d6f76652062726561640a73796e6320616c6c0a73686f77206c6170746f700a6c6170746f
+702073657420636172742072656d6f7665206275747465720a636865636b0a
+"""
+}
+
+// data/3_profile.crdt
+fn file_2() -> String {
+    """
+2320412070726f66696c6520656469746564206f6e20746872656520646576696365732e2045616368206669656c6420
+69732061206c6173742d7772697465722d77696e730a232072656769737465723a2074686520686967686572204c616d
+706f72742074696d652077696e732c20616e6420612074696520676f657320746f20746865206c617465720a23207265
+706c696361206e616d652e0a7265706c696361732077656220696f7320616e64726f69640a77656220726567206e616d
+6520736574204164610a696f7320726567206e616d6520736574204164615f4c0a616e64726f69642072656720636974
+79207365742050617269730a73796e632077656220696f730a696f7320726567206369747920736574204c796f6e0a61
+6e64726f696420726567206e616d6520736574204164615f4c6f76656c6163650a776562207265672063697479207365
+74204e6963650a73686f77207765620a73796e6320616c6c0a73686f7720696f730a636865636b0a7765622072656720
+6e616d652073657420436f756e746573730a73796e632077656220616e64726f69640a73686f7720616e64726f69640a
+73796e6320616c6c0a636865636b0a
+"""
+}
+
+// data/4_doc.crdt
+fn file_3() -> String {
+    """
+232054776f207772697465727320616e6420612072657669657765722065646974206f6e6520646f63756d656e742e20
+436f6e63757272656e7420696e73657274732061740a23207468652073616d6520706c616365206b65657020626f7468
+2c20696e204c616d706f7274206f726465722c20616e64206e6576657220696e7465726c656176652e0a7265706c6963
+617320616e6e20626f622063790a616e6e207465787420646f6320696e7365727420302054686520636174207361742e
+0a73796e6320616e6e20626f620a73796e6320616e6e2063790a616e6e207465787420646f6320696e73657274203420
+626c61636b200a626f62207465787420646f6320696e73657274203420666174200a6379207465787420646f63206465
+6c657465203420340a73686f7720616e6e0a73686f7720626f620a73796e6320616c6c0a73686f772063790a63686563
+6b0a626f62207465787420646f6320696e736572742030203e3e200a616e6e207465787420646f632064656c65746520
+3020330a6379207465787420646f6320696e7365727420313820210a6379207465787420646f632064656c6574652030
+2034300a73796e6320616c6c0a73686f7720626f620a636865636b0a
+"""
+}
+
+// data/5_offline.crdt
+fn file_4() -> String {
+    """
+232041206669656c64206170703a2074776f207461626c65747320616e642061207365727665722e204f6e6520746162
+6c657420676f6573206f66666c696e6520666f720a23206120736869667420616e6420637261736865733b2069742072
+657374617274732066726f6d20697473206f70206c6f6720616e642073796e63732e0a7265706c696361732073657276
+65722074312074320a7365727665722073657420736974657320616464206e6f7274680a736572766572207365742073
+697465732061646420736f7574680a73657276657220726567206c65616420736574206b696d0a73796e6320616c6c0a
+743120636f756e7465722073616d706c6573206164642031320a7431207365742073697465732061646420656173740a
+74312074657874206e6f74657320696e736572742030206e6f7274683a20636c6561720a743220636f756e7465722073
+616d706c65732061646420370a7432207365742073697465732072656d6f766520736f7574680a74322074657874206e
+6f74657320696e73657274203020736f7574683a20636c6f7365640a73796e63207432207365727665720a6372617368
+2074310a743120636f756e7465722073616d706c65732061646420310a73796e63207365727665722074310a73796e63
+20616c6c0a73686f77207365727665720a726573746172742074310a73686f772074310a743120726567206c65616420
+736574206c65650a74312074657874206e6f74657320696e73657274203132203b0a73796e6320743120736572766572
+0a73796e63207365727665722074320a73686f772074320a63726173682074320a73796e6320616c6c0a726573746172
+742074320a73796e6320616c6c0a73686f772074320a636865636b0a
+"""
+}
+
+// data/6_bad.crdt
+fn file_5() -> String {
+    """
+23204d697374616b657320746865206c6f61646572207265706f7274732e0a6120636f756e7465722078206164642031
+0a7265706c69636173206120620a7265706c69636173206120630a7a20636f756e74657220782061646420310a612073
+6574206361727420616464206d696c6b0a6120636f756e74657220636172742061646420310a6120636f756e74657220
+6e20616464206d616e790a61207465787420646f6320696e7365727420782068656c6c6f0a6220676164676574206720
+706f6b650a73796e6320610a6120726567207469746c65207365742074776f20776f7264730a
+"""
+}

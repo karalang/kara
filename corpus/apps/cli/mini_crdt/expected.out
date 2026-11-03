@@ -1,0 +1,168 @@
+== 1_counters.crdt: replicas a b c
+a: views +3 -> 3
+b: views +2 -> 2
+c: views +5 -> 5
+a: stock +40 -> 40
+b: stock -3 -> -3
+c: stock -4 -> -4
+show a: clock 2, 2 ops
+  counter stock = 40
+  counter views = 3
+sync a -> b: 2 ops (a:2)
+show b: clock 2, 4 ops
+  counter stock = 37
+  counter views = 5
+sync b -> c: 4 ops (a:2 b:2)
+sync c -> a: 4 ops (b:2 c:2)
+show a: clock 2, 6 ops
+  counter stock = 33
+  counter views = 10
+check: 2 states: a c | b
+a: stock -1 -> 32
+check: 3 states: a | b | c
+sync all: a +0, b +3, c +1
+check: converged (a b c)
+-- end
+  a: 7 ops (3 own), clock 3, log 291 bytes
+  b: 7 ops (2 own), clock 3, log 291 bytes
+  c: 7 ops (2 own), clock 3, log 291 bytes
+== 2_cart.crdt: replicas phone tablet laptop
+phone: cart add milk -> {milk}
+phone: cart add eggs -> {eggs, milk}
+sync phone -> tablet: 2 ops (phone:2)
+tablet: cart remove milk (1 add) -> {eggs}
+laptop: cart add milk -> {milk}
+laptop: cart add bread -> {bread, milk}
+phone: cart add milk -> {eggs, milk}
+show tablet: clock 3, 3 ops
+  set cart = {eggs}
+sync all: phone +3, tablet +3, laptop +4
+show phone: clock 3, 6 ops
+  set cart = {bread, eggs, milk}
+check: converged (phone tablet laptop)
+tablet: cart remove milk (2 adds) -> {bread, eggs}
+tablet: cart remove bread (1 add) -> {eggs}
+laptop: cart remove bread (1 add) -> {eggs, milk}
+sync all: phone +3, tablet +1, laptop +2
+show laptop: clock 5, 9 ops
+  set cart = {eggs}
+! cart remove butter: not in the set
+check: converged (phone tablet laptop)
+-- end
+  phone: 9 ops (3 own), clock 5, log 577 bytes
+  tablet: 9 ops (3 own), clock 5, log 577 bytes
+  laptop: 9 ops (3 own), clock 5, log 577 bytes
+== 3_profile.crdt: replicas web ios android
+web: name = Ada (web@1)
+ios: name = Ada_L (ios@1)
+android: city = Paris (android@1)
+sync web -> ios: 1 op (web:1)
+ios: city = Lyon (ios@2)
+android: name = Ada_Lovelace (android@2)
+web: city = Nice (web@2)
+show web: clock 2, 2 ops
+  reg city = Nice (web@2)
+  reg name = Ada (web@1)
+sync all: web +4, ios +3, android +4
+show ios: clock 2, 6 ops
+  reg city = Nice (web@2)
+  reg name = Ada_Lovelace (android@2)
+check: converged (web ios android)
+web: name = Countess (web@3)
+sync web -> android: 1 op (web:1)
+show android: clock 3, 7 ops
+  reg city = Nice (web@2)
+  reg name = Countess (web@3)
+sync all: web +0, ios +1, android +0
+check: converged (web ios android)
+-- end
+  web: 7 ops (3 own), clock 3, log 378 bytes
+  ios: 7 ops (2 own), clock 3, log 378 bytes
+  android: 7 ops (2 own), clock 3, log 378 bytes
+== 4_doc.crdt: replicas ann bob cy
+ann: doc insert "The cat sat." at 0 -> "The cat sat."
+sync ann -> bob: 1 op (ann:1)
+sync ann -> cy: 1 op (ann:1)
+ann: doc insert "black " at 4 -> "The black cat sat."
+bob: doc insert "fat " at 4 -> "The fat cat sat."
+cy: doc delete 4..8 -> "The sat."
+show ann: clock 18, 2 ops
+  text doc = "The black cat sat." (18 visible, 0 deleted)
+show bob: clock 16, 2 ops
+  text doc = "The fat cat sat." (16 visible, 0 deleted)
+sync all: ann +2, bob +2, cy +2
+show cy: clock 18, 4 ops
+  text doc = "The fat black sat." (18 visible, 4 deleted)
+check: converged (ann bob cy)
+bob: doc insert ">> " at 0 -> ">> The fat black sat."
+ann: doc delete 0..3 -> " fat black sat."
+cy: doc insert "!" at 18 -> "The fat black sat.!"
+! doc delete 0..40: only 19 chars
+sync all: ann +2, bob +2, cy +2
+show bob: clock 21, 7 ops
+  text doc = ">>  fat black sat.!" (19 visible, 7 deleted)
+check: converged (ann bob cy)
+-- end
+  ann: 7 ops (3 own), clock 21, log 414 bytes
+  bob: 7 ops (2 own), clock 21, log 414 bytes
+  cy: 7 ops (2 own), clock 21, log 414 bytes
+== 5_offline.crdt: replicas server t1 t2
+server: sites add north -> {north}
+server: sites add south -> {north, south}
+server: lead = kim (server@3)
+sync all: server +0, t1 +3, t2 +3
+t1: samples +12 -> 12
+t1: sites add east -> {east, north, south}
+t1: notes insert "north: clear" at 0 -> "north: clear"
+t2: samples +7 -> 7
+t2: sites remove south (1 add) -> {north}
+t2: notes insert "south: closed" at 0 -> "south: closed"
+sync t2 -> server: 3 ops (t2:3)
+t1 crashes
+! t1 is down
+sync server -> t1: t1 is down
+sync all: server +0, t1 down, t2 +0
+show server: clock 18, 6 ops
+  counter samples = 7
+  reg lead = kim (server@3)
+  set sites = {north}
+  text notes = "south: closed" (13 visible, 0 deleted)
+t1 restarts: 6 ops replayed from t1.log (321 bytes), clock 17
+show t1: clock 17, 6 ops
+  counter samples = 12
+  reg lead = kim (server@3)
+  set sites = {east, north, south}
+  text notes = "north: clear" (12 visible, 0 deleted)
+t1: lead = lee (t1@18)
+t1: notes insert ";" at 12 -> "north: clear;"
+sync t1 -> server: 5 ops (t1:5)
+sync server -> t2: 5 ops (t1:5)
+show t2: clock 19, 11 ops
+  counter samples = 19
+  reg lead = lee (t1@18)
+  set sites = {east, north}
+  text notes = "south: closednorth: clear;" (26 visible, 0 deleted)
+t2 crashes
+sync all: server +0, t1 +3, t2 down
+t2 restarts: 11 ops replayed from t2.log (602 bytes), clock 19
+sync all: server +0, t1 +0, t2 +0
+show t2: clock 19, 11 ops
+  counter samples = 19
+  reg lead = lee (t1@18)
+  set sites = {east, north}
+  text notes = "south: closednorth: clear;" (26 visible, 0 deleted)
+check: converged (server t1 t2)
+-- end
+  server: 11 ops (3 own), clock 19, log 602 bytes
+  t1: 11 ops (5 own), clock 19, log 602 bytes
+  t2: 11 ops (3 own), clock 19, log 602 bytes
+== 6_bad.crdt: replicas a b
+! 6_bad.crdt line 2: the replicas line must come first
+! 6_bad.crdt line 4: replicas given twice
+! 6_bad.crdt line 5: no replica z
+! 6_bad.crdt line 7: cart is a set, not a counter
+! 6_bad.crdt line 8: add needs a whole number
+! 6_bad.crdt line 9: insert needs a position and text
+! 6_bad.crdt line 10: unknown type gadget
+! 6_bad.crdt line 11: sync takes 2 arguments
+! 6_bad.crdt line 12: a value is one word

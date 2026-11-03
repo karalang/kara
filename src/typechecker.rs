@@ -3314,6 +3314,12 @@ pub struct TypeChecker<'a> {
     pub(super) fn_value_callee_types: FxHashMap<SpanKey, TypeExpr>,
     pub(super) fn_value_param_types: FxHashMap<SpanKey, Vec<Type>>,
     pub(super) error_fix_diffs: FxHashMap<SpanKey, Vec<crate::resolver::TextEdit>>,
+    /// Spans of the expressions that bind looser than a postfix `.`
+    /// (`*r`, `-x`, `a + b`, `x as T`, a range, a closure): a fix that
+    /// appends `.to_string()` / `.clone()` to one of these must wrap it in
+    /// parentheses first, or the call binds to its last operand
+    /// (`*r.to_string()`, B-2026-11-03-24).
+    pub(super) loose_expr_spans: FxHashSet<SpanKey>,
     /// While a method call's arguments are checked: the receiver's
     /// substitution (`Self` and the impl's parameters), which a
     /// function-trait bound on the method (`F: MutFn(own Self.Item) -> U`)
@@ -3962,6 +3968,7 @@ impl<'a> TypeChecker<'a> {
             fn_value_callee_types: FxHashMap::default(),
             fn_value_param_types: FxHashMap::default(),
             error_fix_diffs: FxHashMap::default(),
+            loose_expr_spans: FxHashSet::default(),
             call_bound_receiver_subs: None,
             call_rigid_params: Vec::new(),
             deferred_call_bounds: Vec::new(),
@@ -4402,6 +4409,7 @@ impl<'a> TypeChecker<'a> {
             } else {
                 Default::default()
             };
+        self.parenthesize_suffix_fixes();
         // A library type kept private to its module reads by its path
         // (`std.time.Duration`, B-2026-10-19-10).
         for e in &mut self.errors {
@@ -4991,6 +4999,44 @@ impl<'a> TypeChecker<'a> {
     /// span. The fix-it is structurally captured on the `TypeError`
     /// and surfaced into JSON output via `src/cli.rs` so
     /// IDE / formatter consumers can apply it directly.
+    /// B-2026-11-03-24: a type mismatch's fix that appends a method call
+    /// (`.to_string()`, `.clone()`, `.to_vec()`) at the end of the
+    /// mismatched value is only right when the expression there binds at
+    /// least as tightly as a postfix `.`. For a looser one (`*r`, `a + b`,
+    /// `x as T`) it becomes two edits that parenthesize the expression
+    /// first: `(*r).to_string()`. Only a mismatch qualifies: its span is the
+    /// value the fix converts, where an operator error's span is the whole
+    /// operation and its fix converts one operand (`Some(6) != m.get(1)`).
+    fn parenthesize_suffix_fixes(&mut self) {
+        for e in self.errors.iter_mut().chain(self.warnings.iter_mut()) {
+            let Some(fix) = &e.fix_it else { continue };
+            let end = e.span.offset + e.span.length;
+            if !matches!(e.kind, TypeErrorKind::TypeMismatch)
+                || fix.span.length != 0
+                || fix.span.offset != end
+                || !fix.replacement.starts_with('.')
+                || !self.loose_expr_spans.contains(&SpanKey::from_span(&e.span))
+            {
+                continue;
+            }
+            let edits = vec![
+                crate::resolver::TextEdit {
+                    offset: e.span.offset,
+                    length: 0,
+                    replacement: "(".to_string(),
+                },
+                crate::resolver::TextEdit {
+                    offset: end,
+                    length: 0,
+                    replacement: format!("){}", fix.replacement),
+                },
+            ];
+            self.error_fix_diffs
+                .insert(SpanKey::from_span(&e.span), edits);
+            e.fix_it = None;
+        }
+    }
+
     pub(super) fn type_error_with_fix_it(
         &mut self,
         message: String,
