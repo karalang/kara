@@ -1,0 +1,12 @@
+// A local moved before an `if` and assigned again on only one path is still
+// moved at the join (core semantics §3.4), so the read after it is refused.
+fn main() {
+    let k = 1;
+    let mut s = "a".to_string();
+    let t = s;
+    if k > 0 {
+        s = "b".to_string();
+    }
+    println(s);
+    println(t);
+}

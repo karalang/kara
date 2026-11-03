@@ -1,0 +1,1 @@
+error[ownership]: value 's' moved here, used again here (moved at line 6:13)

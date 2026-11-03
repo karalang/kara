@@ -1,0 +1,29 @@
+// A local moved before an `if` or `match` and assigned again on every path
+// through it is initialized at the join (core semantics §3.4), so it may be
+// read and dropped there.
+fn pick(k: i64) -> String {
+    let mut s = "a".to_string();
+    let t = s;
+    if k > 0 {
+        s = "b".to_string();
+    } else {
+        s = "c".to_string();
+    }
+    f"{t}{s}"
+}
+
+fn name(k: i64) -> String {
+    let mut s = "a".to_string();
+    let t = s;
+    match k {
+        0 => { s = "zero".to_string(); }
+        1 => { s = "one".to_string(); }
+        _ => { s = "many".to_string(); }
+    }
+    f"{t} {s}"
+}
+
+fn main() {
+    println(f"{pick(1)} {pick(0)}");
+    println(f"{name(0)} / {name(1)} / {name(7)}");
+}

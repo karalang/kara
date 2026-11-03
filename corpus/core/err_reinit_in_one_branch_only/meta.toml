@@ -1,0 +1,9 @@
+source = "B-2026-11-02-34"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["moves", "ownership"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-02-34 guard: the fix initializes a binding at a join only when every path through the branch assigns it; with one branch assigning, the read after the `if` is still a use after move. The expected.out wording of an error pin is guidance, not a byte oracle."

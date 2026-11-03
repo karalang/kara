@@ -3471,7 +3471,7 @@ impl<'a> OwnershipChecker<'a> {
         // move whose source is read again, or the moves after the first run
         // their source-zeroing suppression uncopied.
         let sites = crate::rc_predicate::collect_use_sites(&cfg);
-        for sp in crate::rc_predicate::direct_uam_all_consume_sites_from_sites(&sites, &dom) {
+        for sp in crate::rc_predicate::direct_uam_all_consume_sites_from_sites(&sites, &cfg, &dom) {
             self.all_uam_consume_sites.insert((sp.offset, sp.length));
         }
         // B-2026-08-24-22 (second half) — SORT before emitting. The witnesses
@@ -3492,9 +3492,9 @@ impl<'a> OwnershipChecker<'a> {
         // The strict commands report every reused move, not just the first
         // per binding, so one `karac fix` pass clones them all.
         let mut uam_witnesses: Vec<_> = if core_rules() {
-            crate::rc_predicate::direct_uam_all_witnesses_from_sites(&sites, &dom)
+            crate::rc_predicate::direct_uam_all_witnesses_from_sites(&sites, &cfg, &dom)
         } else {
-            crate::rc_predicate::direct_uam_candidates_from_sites(&sites, &dom)
+            crate::rc_predicate::direct_uam_candidates_from_sites(&sites, &cfg, &dom)
                 .into_iter()
                 .collect()
         };

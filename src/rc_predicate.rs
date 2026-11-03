@@ -622,7 +622,7 @@ pub fn run_predicate_for_function_with(
     let (mut witnesses, uam_keys, loop_witnesses) = {
         let sites = collect_use_sites(&cfg);
         let witnesses = rc_candidates_from_sites(&sites, &cfg, &dom);
-        let uam_keys: FxHashSet<String> = direct_uam_candidates_from_sites(&sites, &dom)
+        let uam_keys: FxHashSet<String> = direct_uam_candidates_from_sites(&sites, &cfg, &dom)
             .into_keys()
             .collect();
         let loop_witnesses = loop_of_consume_candidates_from_sites(&sites, &cfg, &dom);
@@ -725,16 +725,17 @@ pub struct UamWitness {
 /// (RC fallback shape) or read-then-consumed (sequentially fine) —
 /// are absent from the map.
 pub fn direct_uam_candidates(cfg: &Cfg, dom: &DominatorTree) -> HashMap<String, UamWitness> {
-    direct_uam_candidates_from_sites(&collect_use_sites(cfg), dom)
+    direct_uam_candidates_from_sites(&collect_use_sites(cfg), cfg, dom)
 }
 
 pub(crate) fn direct_uam_candidates_from_sites(
     sites: &UseSitesByBinding<'_>,
+    cfg: &Cfg,
     dom: &DominatorTree,
 ) -> HashMap<String, UamWitness> {
     let mut witnesses = HashMap::new();
     for (binding, uses) in sites {
-        if let Some(w) = first_uam_witness(binding, uses, dom) {
+        if let Some(w) = first_uam_witness(binding, uses, cfg, dom) {
             witnesses.insert(binding.to_string(), w);
         }
     }
@@ -747,9 +748,10 @@ pub(crate) fn direct_uam_candidates_from_sites(
 fn first_uam_witness(
     binding: &str,
     uses: &[(BlockId, usize, &UseSite)],
+    cfg: &Cfg,
     dom: &DominatorTree,
 ) -> Option<UamWitness> {
-    uam_witnesses_for_binding(binding, uses, dom, true)
+    uam_witnesses_for_binding(binding, uses, cfg, dom, true)
         .into_iter()
         .next()
 }
@@ -763,6 +765,7 @@ fn first_uam_witness(
 fn uam_witnesses_for_binding(
     binding: &str,
     uses: &[(BlockId, usize, &UseSite)],
+    cfg: &Cfg,
     dom: &DominatorTree,
     first_only: bool,
 ) -> Vec<UamWitness> {
@@ -804,6 +807,13 @@ fn uam_witnesses_for_binding(
             if reassign_kills(uses, *cb, *ci, *ub, *ui, dom, &c.place) {
                 continue;
             }
+            // A rebind on every path from C to U, none of which dominates
+            // U on its own: `let t = s; if k > 0 { s = a } else { s = b };
+            // s` is initialized again at the join (core semantics §3.4,
+            // B-2026-11-02-34). The same block is `reassign_kills`'s.
+            if cb != ub && reassign_kills_by_reachability(uses, cfg, *cb, *ci, *ub, *ui, &c.place) {
+                continue;
+            }
             out.push(UamWitness {
                 binding: binding.to_string(),
                 consume_span: c.span,
@@ -835,7 +845,7 @@ fn uam_witnesses_for_binding(
 /// suppression with no copy, and the reuse after it read a zeroed Vec —
 /// length intact, contents gone, on both compiled backends.
 pub fn direct_uam_all_consume_sites(cfg: &Cfg, dom: &DominatorTree) -> Vec<crate::token::Span> {
-    direct_uam_all_consume_sites_from_sites(&collect_use_sites(cfg), dom)
+    direct_uam_all_consume_sites_from_sites(&collect_use_sites(cfg), cfg, dom)
 }
 
 /// Every (C, U) witness in the function, one per reused consume site.
@@ -843,11 +853,12 @@ pub fn direct_uam_all_consume_sites(cfg: &Cfg, dom: &DominatorTree) -> Vec<crate
 /// reused move in one pass instead of one per binding per pass.
 pub(crate) fn direct_uam_all_witnesses_from_sites(
     sites: &UseSitesByBinding<'_>,
+    cfg: &Cfg,
     dom: &DominatorTree,
 ) -> Vec<(String, UamWitness)> {
     let mut out = Vec::new();
     for (binding, uses) in sites {
-        for w in uam_witnesses_for_binding(binding, uses, dom, false) {
+        for w in uam_witnesses_for_binding(binding, uses, cfg, dom, false) {
             out.push((binding.to_string(), w));
         }
     }
@@ -856,11 +867,12 @@ pub(crate) fn direct_uam_all_witnesses_from_sites(
 
 pub(crate) fn direct_uam_all_consume_sites_from_sites(
     sites: &UseSitesByBinding<'_>,
+    cfg: &Cfg,
     dom: &DominatorTree,
 ) -> Vec<crate::token::Span> {
     let mut spans = Vec::new();
     for (binding, uses) in sites {
-        for w in uam_witnesses_for_binding(binding, uses, dom, false) {
+        for w in uam_witnesses_for_binding(binding, uses, cfg, dom, false) {
             spans.push(w.consume_span);
         }
     }
