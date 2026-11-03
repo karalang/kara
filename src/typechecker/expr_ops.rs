@@ -3383,33 +3383,30 @@ impl<'a> super::TypeChecker<'a> {
         right: &Expr,
         right_ty: &Type,
     ) -> Option<FixIt> {
-        let is_str = |t: &Type| matches!(t, Type::Named { name, args } if name == "StringSlice" && args.is_empty());
-        let str_right = match right_ty {
-            Type::Ref(inner) => is_str(inner),
-            t => is_str(t),
-        };
-        if !matches!(op, BinOp::Add) || !is_string_concat_operand(left_ty) || !str_right {
+        if !matches!(op, BinOp::Add) || !is_string_concat_operand(left_ty) || !is_str_view(right_ty)
+        {
             return None;
         }
-        let end = match &right.kind {
-            ExprKind::MethodCall {
-                args_close_span, ..
-            } => args_close_span.offset + args_close_span.length,
-            ExprKind::Identifier(_)
-            | ExprKind::FieldAccess { .. }
-            | ExprKind::Index { .. }
-            | ExprKind::TupleIndex { .. }
-            | ExprKind::Call { .. } => right.span.offset + right.span.length,
-            _ => return None,
-        };
-        Some(FixIt {
-            span: Span {
-                offset: end,
-                length: 0,
-                ..right.span
-            },
-            replacement: ".to_string()".to_string(),
-        })
+        to_string_fix(right)
+    }
+
+    /// `s + t` with `s` a `Str` and `t` a `Str` or a `String`: the edit that
+    /// appends `.to_string()` to `s`, so the sum starts from an owned
+    /// `String` (B-2026-11-03-11).
+    fn str_concat_left_fix(
+        &self,
+        op: &BinOp,
+        left: &Expr,
+        left_ty: &Type,
+        right_ty: &Type,
+    ) -> Option<FixIt> {
+        if !matches!(op, BinOp::Add)
+            || !is_str_view(left_ty)
+            || !(is_str_view(right_ty) || is_string_concat_operand(right_ty))
+        {
+            return None;
+        }
+        to_string_fix(left)
     }
 
     pub(super) fn arithmetic_rejection_message(
@@ -4378,6 +4375,21 @@ impl<'a> super::TypeChecker<'a> {
                     Type::Error
                 } else {
                     let message = self.arithmetic_rejection_message(op, &left_ty, &right_ty);
+                    if let Some(fix) = self.str_concat_left_fix(op, left, &left_ty, &right_ty) {
+                        // `Str + s`: the view is on the left (B-2026-11-03-11).
+                        self.type_error_with_fix_it(
+                            format!(
+                                "'+' on '{}' needs an owned 'String' on its left: a `Str` \
+                                 is a view and `+` appends to an owned `String` (design.md \
+                                 § Operator traits). Take an owned copy with `.to_string()`",
+                                type_display(&left_ty)
+                            ),
+                            left.span,
+                            TypeErrorKind::InvalidBinaryOp,
+                            fix,
+                        );
+                        return Type::Error;
+                    }
                     match self.str_concat_operand_fix(op, &left_ty, right, &right_ty) {
                         Some(fix) => self.type_error_with_fix_it(
                             format!(
@@ -5764,4 +5776,36 @@ pub(super) fn is_named_place_projection(e: &Expr) -> bool {
         | ExprKind::Index { object, .. } => is_named_place_projection(object),
         _ => false,
     }
+}
+
+/// A `Str` (a string view), or a borrow of one.
+fn is_str_view(t: &Type) -> bool {
+    let is_str = |t: &Type| matches!(t, Type::Named { name, args } if name == "StringSlice" && args.is_empty());
+    match t {
+        Type::Ref(inner) => is_str(inner),
+        t => is_str(t),
+    }
+}
+
+/// The edit that appends `.to_string()` to `e`, where `e`'s end is known.
+fn to_string_fix(e: &Expr) -> Option<FixIt> {
+    let end = match &e.kind {
+        ExprKind::MethodCall {
+            args_close_span, ..
+        } => args_close_span.offset + args_close_span.length,
+        ExprKind::Identifier(_)
+        | ExprKind::FieldAccess { .. }
+        | ExprKind::Index { .. }
+        | ExprKind::TupleIndex { .. }
+        | ExprKind::Call { .. } => e.span.offset + e.span.length,
+        _ => return None,
+    };
+    Some(FixIt {
+        span: Span {
+            offset: end,
+            length: 0,
+            ..e.span
+        },
+        replacement: ".to_string()".to_string(),
+    })
 }
