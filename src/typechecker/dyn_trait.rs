@@ -342,6 +342,27 @@ impl<'a> super::TypeChecker<'a> {
                 *span,
                 TypeErrorKind::TraitBoundNotSatisfied,
             );
+        } else if let Some(f) = fn_within(self_ty) {
+            // A function value is move-only (design.md § Escaping function
+            // values): only a closure literal that is `Copy` copies, and a
+            // value of an erased `Fn` type has no `.clone()`
+            // (B-2026-11-03-3).
+            let build = if what == ".to_vec()" {
+                "build the `Vec` with `vec![..]` or `push` instead, or "
+            } else {
+                ""
+            };
+            self.type_error(
+                format!(
+                    "`{what}` on '{shown}' clones each element, and a value of function \
+                     type '{}' is move-only and has no `.clone()` (design.md § Escaping \
+                     function values): {build}wrap the function in a `shared struct` to \
+                     give it many holders",
+                    type_display(f)
+                ),
+                *span,
+                TypeErrorKind::TraitBoundNotSatisfied,
+            );
         }
     }
 
@@ -706,5 +727,17 @@ impl crate::span_visitor::MutVisitor for ExprsBySpan<'_> {
                 .or_default()
                 .push(e.id);
         }
+    }
+}
+
+/// The first function type inside `ty`, whose values do not clone.
+fn fn_within(ty: &Type) -> Option<&Type> {
+    match ty {
+        Type::Function { .. } | Type::OnceFunction { .. } => Some(ty),
+        Type::Named { args, .. } | Type::Tuple(args) => args.iter().find_map(fn_within),
+        Type::Array { element, .. } | Type::Ref(element) | Type::MutRef(element) => {
+            fn_within(element)
+        }
+        _ => None,
     }
 }

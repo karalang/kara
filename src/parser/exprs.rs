@@ -2021,15 +2021,21 @@ impl super::Parser {
                 self.parse_closure(Some(CaptureMode::MutRef), Some(prefix_span))
             }
 
-            // `move |...|` is reserved against Rust's idiom but not active in
-            // Kāra — the same role is played by `own |...|`. Emit a focused
-            // redirect diagnostic and parse the rest as `own` for recovery.
+            // `move |...|` is Rust's idiom, not Kāra's. Kāra has no capture
+            // prefix at all (core semantics §9.6, which removed `own |...|`
+            // too): captures are inferred from the body. The fix deletes
+            // `move`, and the rest parses as a bare closure (B-2026-11-03-4).
             Token::Move if matches!(self.peek_token_ref_at(1), Token::Pipe | Token::PipePipe) => {
-                self.error("the `move` keyword is not used in Kāra; use `own |...|` for closure capture-by-value");
-                let prefix_start = self.current_span();
+                let at = self.current_span();
+                self.error(
+                    "the `move` keyword is not used in Kāra: delete it. A closure's captures \
+                     are inferred from its body (core semantics §9.6); clone a value before \
+                     the closure to give the closure its own copy",
+                );
+                let idx = self.pos;
+                self.record_token_range_deletion(idx, idx + 1, &at);
                 self.advance();
-                let prefix_span = self.span_from(&prefix_start);
-                self.parse_closure(Some(CaptureMode::Own), Some(prefix_span))
+                self.parse_closure(None, None)
             }
 
             // Parenthesized expression or tuple. A struct literal nested in a
