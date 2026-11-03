@@ -110,9 +110,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-03-16 | 2026-11-03 | mir+mir-llvm | low | `substring` with a negative start gives "" instead of clamping the start to 0 as strings.md says ("Out-of-range, negative or inverted bounds saturate"): `"hello".substring(-5, 2)` is "" (want "he"), `"hello".substring(-1)` is "" (want "hello"), `"日本語".substring(-2, 3)` is "" (want "日"); several pins hold the "" and flip with the fix | — |
 | B-2026-11-03-17 | 2026-11-03 | typecheck | low | A binding destructured from a `Map` / `SortedMap` `iter_mut()` item is typed `V`, not `mut ref V`, when `V` is Copy: `for (k, v) in m.iter_mut() { *v = 9; }` (m: SortedMap[i64, i64]) is refused ("unary '*' requires 'ref T' ... found 'i64'; a 'i64' is copied, so drop the `*`"), though collections.md gives the item as `(ref K, mut ref V)` and design.md says assigning through a `mut ref` needs an explicit `*` | — |
 | B-2026-11-03-18 | 2026-11-03 | mir+mir-llvm | high | `Client.get` / `Client.post` under a `Network` fake crash on every lane: the interpreter stops with `in Fh.__get at bb13[term]: a String place holds no box`, the compiled build segfaults (`karac run` exit 139) or fails `memory allocation of 94402663242032 bytes`, and ASan reports a stack-buffer-overflow in `kara.Fh.__get`; `c.request(..).send()` under the same fake works | — |
-| B-2026-11-03-21 | 2026-11-03 | typecheck | low | A type mismatch whose found type is an `Option`/`Result` wrapping the expected one (`s.push(t.char_at(i))`, `let c: char = t.char_at(0)`, `take(t.char_at(1))`, an if/else or match with a `char` branch and an `Option[char]` one) gets no hint to unwrap; only the arithmetic mismatch carried it (B-2026-07-30-13) | — |
-| B-2026-11-03-22 | 2026-11-03 | cli | medium | `karac fix` on `'L' => (dx, dy) = (-dy, dx),` (a braceless match arm) writes `'L' => dx, dy = -dy, dx,`, which does not parse, so it refuses to write the file; a Mend-loop dead end | — |
-| B-2026-11-03-23 | 2026-11-03 | cli | medium | `let undo = vec!["LR", "RL"][k];` (an element of a TEMPORARY, binding only read) gets E_INDEX_MOVE_NON_COPY's borrow fix `ref vec![..][k]`, and `karac fix` then leaves an E0516 (the temporary drops while `undo` borrows it) with no fix | — |
 
 ### Relocated
 
@@ -601,6 +598,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-03-11 | typecheck | low | `s + t` with a `Str` on the left said only "type 'Str' does not implement trait Add", with no hint and no `karac fix` edit, where `String + Str` alre… | 592000a587 |
 | B-2026-11-03-19 | parser | medium | `Some(ref place)`, the spec's own way to build an `Option[ref T]` (design.md § `ref place` borrows a place: `let first = Some(ref self.items[0]);`),… | 53e7f5f11a |
 | B-2026-11-03-20 | ownership | medium | `karac check` refuses moving a binding after an adaptor chain rooted at a range reads it (`let rest: Vec[i64] = (1..n + 1).filter(\|i\| not side.contai… | 53e7f5f11a |
+| B-2026-11-03-21 | typecheck | low | A type mismatch whose found type is an `Option`/`Result` wrapping the expected one (`s.push(t.char_at(i))`, `let c: char = t.char_at(0)`, `take(t.cha… | 1a547cb615 |
+| B-2026-11-03-22 | cli | medium | `karac fix` on `'L' => (dx, dy) = (-dy, dx),` (a braceless match arm) writes `'L' => dx, dy = -dy, dx,`, which does not parse, so it refuses to write… | 1a547cb615 |
+| B-2026-11-03-23 | cli | medium | `let undo = vec!["LR", "RL"][k];` (an element of a TEMPORARY, binding only read) gets E_INDEX_MOVE_NON_COPY's borrow fix `ref vec![..][k]`, and `kara… | 1a547cb615 |
 
 </details>
 
