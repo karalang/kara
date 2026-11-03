@@ -105,7 +105,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-03-13 | 2026-11-03 | ownership | low | `String.from_utf8(v)` moves its argument, though strings.md declares `from_utf8(bytes: Slice[u8])`, a borrowed parameter: calling it twice on one local `Vec[u8]` or byte array is refused with `value 'v' moved here, used again here` | — |
 | B-2026-11-03-15 | 2026-11-03 | mir+mir-llvm | low | A negative capacity: `String.with_capacity(-3)` gives an empty string on the interpreter and panics with a bare `explicit panic` on the compiled backend (and ASan lane); `Vec.with_capacity(-3)` panics `explicit panic` on both, while `Vec.filled(-3, v)` is empty and `reserve(n <= 0)` does nothing | — |
 | B-2026-11-03-16 | 2026-11-03 | mir+mir-llvm | low | `substring` with a negative start gives "" instead of clamping the start to 0 as strings.md says ("Out-of-range, negative or inverted bounds saturate"): `"hello".substring(-5, 2)` is "" (want "he"), `"hello".substring(-1)` is "" (want "hello"), `"日本語".substring(-2, 3)` is "" (want "日"); several pins hold the "" and flip with the fix | — |
-| B-2026-11-03-27 | 2026-11-03 | parser | low | Rust's `&` sigil gets no fix in a pattern (`for &(x, y) in v.iter()`, `|&x| ..`, `&3 =>`, `&mut z`), on an argument (`f(&x)`, `f(&mut x)`) or as a borrow (`let r = &v;`, `match &v[0]`): only `Expected pattern / parameter pattern / expression, found `&``, and in a `for` the failure cascades into a top-level-statements error | — |
 
 ### Relocated
 
@@ -605,6 +604,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-03-24 | typecheck | medium | `karac fix` appends `.to_string()` / `.clone()` after an expression that binds looser than a postfix `.`, so `names.contains(*r)` (r: ref Str, names:… | c42cbe441c |
 | B-2026-11-03-25 | typecheck | low | `*a` on a non-reference, non-`Copy` value compared with `==` (`seqs.iter().position(\|el\| el.id == *a)` with `a: (i64, String)` bound by value) gets "… | c42cbe441c |
 | B-2026-11-03-26 | typecheck | medium | A `Map` / `SortedMap` key is writable through `iter_mut()`: `for (k, v) in m.iter_mut() { k.push_str("x"); }` (m: Map[String, i64]) is accepted and c… | 597c6ce7e2 |
+| B-2026-11-03-27 | parser | low | Rust's `&` sigil gets no fix in a pattern (`for &(x, y) in v.iter()`, `\|&x\| ..`, `&3 =>`, `&mut z`), on an argument (`f(&x)`, `f(&mut x)`) or as a bo… | 25a40f3d26 |
 
 </details>
 
