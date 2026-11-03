@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 98 |
+| diagnostics | 100 |
 | false-positive | 97 |
 | perf | 86 |
 | missing-feature | 64 |
@@ -75,7 +75,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 165 |
+| typecheck | 167 |
 | mir | 103 |
 | mir-llvm | 100 |
 | cli | 51 |
@@ -601,6 +601,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-03-21 | typecheck | low | A type mismatch whose found type is an `Option`/`Result` wrapping the expected one (`s.push(t.char_at(i))`, `let c: char = t.char_at(0)`, `take(t.cha… | 1a547cb615 |
 | B-2026-11-03-22 | cli | medium | `karac fix` on `'L' => (dx, dy) = (-dy, dx),` (a braceless match arm) writes `'L' => dx, dy = -dy, dx,`, which does not parse, so it refuses to write… | 1a547cb615 |
 | B-2026-11-03-23 | cli | medium | `let undo = vec!["LR", "RL"][k];` (an element of a TEMPORARY, binding only read) gets E_INDEX_MOVE_NON_COPY's borrow fix `ref vec![..][k]`, and `kara… | 1a547cb615 |
+| B-2026-11-03-24 | typecheck | medium | `karac fix` appends `.to_string()` / `.clone()` after an expression that binds looser than a postfix `.`, so `names.contains(*r)` (r: ref Str, names:… | c42cbe441c |
+| B-2026-11-03-25 | typecheck | low | `*a` on a non-reference, non-`Copy` value compared with `==` (`seqs.iter().position(\|el\| el.id == *a)` with `a: (i64, String)` bound by value) gets "… | c42cbe441c |
 
 </details>
 
