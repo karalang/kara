@@ -40,10 +40,12 @@ pub struct MirMap {
     ncells: usize,
     /// The walk order of a hashed table ([`karac_mir_map_walk_entry`]): the
     /// `i`th entry of a walk is the entry at index `(perm_a * i + perm_c)
-    /// mod perm_len`, from `karac_hash::walk_perm(perm_len)`. Compiled
-    /// code walks in line while `perm_len` is the table's length, and
-    /// calls [`karac_mir_map_walk_perm`] to bring the words up to date
-    /// when it is not; `usize::MAX` until the first walk.
+    /// mod perm_len`, from `karac_hash::walk_perm(perm_len)`;
+    /// `usize::MAX` until the first walk. Compiled code reads them while
+    /// `perm_len` is the table's length, and calls
+    /// [`karac_mir_map_walk_perm`] to bring them up to date when it is not
+    /// (on a 64-bit target through `karac.walk.words`, which a loop runs
+    /// once, `src/backend/mir/table.rs`).
     perm_len: std::sync::atomic::AtomicUsize,
     perm_a: std::sync::atomic::AtomicUsize,
     perm_c: std::sync::atomic::AtomicUsize,
@@ -760,10 +762,9 @@ pub unsafe extern "C" fn karac_mir_map_walk_perm(h: *const MirMap) {
 }
 
 /// The `i`th entry of a walk over the table at `h` (in bounds), in the
-/// order [`karac_mir_map_walk_perm`] describes. Renamed from
-/// `karac_mir_map_walk_at` when compiled code began reading `perm_m`, so a
-/// program built against an archive older than that field fails to link
-/// rather than reading `cap` as the reciprocal.
+/// order [`karac_mir_map_walk_perm`] describes. Named `walk_at` before
+/// the header's layout changed (B-2026-11-01-44), so a program built
+/// against an older archive fails to link.
 ///
 /// # Safety
 /// `h` is a live table with more than `i` entries.

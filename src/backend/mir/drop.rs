@@ -1244,7 +1244,7 @@ fn cells(o: own OnceLock[R], f: own Option[File], x: own Atomic[i64], q: own Vec
         engine.add_global_mapping(&free, logged_free as *const () as usize);
         engine.add_global_mapping(&log, logged_drop as *const () as usize);
         use karac_runtime::mir_map as rt;
-        let stubs: [(&str, usize); 8] = [
+        let stubs: [(&str, usize); 9] = [
             (
                 "karac_mir_map_len",
                 rt::karac_mir_map_len as *const () as usize,
@@ -1256,6 +1256,10 @@ fn cells(o: own OnceLock[R], f: own Option[File], x: own Atomic[i64], q: own Vec
             (
                 "karac_mir_map_walk_entry",
                 rt::karac_mir_map_walk_entry as *const () as usize,
+            ),
+            (
+                "karac_mir_map_walk_perm",
+                rt::karac_mir_map_walk_perm as *const () as usize,
             ),
             (
                 "karac_mir_map_free",

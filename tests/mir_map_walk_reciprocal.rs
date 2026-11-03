@@ -1,9 +1,12 @@
 //! B-2026-11-01-44: compiled code takes a walk's remainder `(a * i + c) mod
-//! n` by the table header's reciprocal of `n` rather than by a division,
-//! and must still visit the entries in the interpreter's seeded order.
-//! Tables of every size up to 300, and a few larger ones, each fold their
-//! walk into a checksum; a removal leaves holes, and a table that grows
-//! between walks makes the header's walk words stale.
+//! n` by the table header's reciprocal of `n` rather than by a division, and
+//! a loop carries the walk index from one trip to the next
+//! (`mir_aot::walk_carry`); it must still visit the entries in the
+//! interpreter's seeded order. Tables of every size up to 300, and a few
+//! larger ones, each fold their walk into a checksum; a removal leaves
+//! holes, a table that grows between walks makes the header's walk words
+//! stale, and a walk whose loop writes (a push per key) asks for the words
+//! on every step. Built with the carrying reported, and off.
 #![cfg(feature = "llvm")]
 
 mod common;
@@ -24,6 +27,15 @@ fn walk(n: i64) -> i64 {
     for x in s { acc = fold(acc, x); }
     acc
 }
+fn pushed(n: i64) -> i64 {
+    let mut m: Map[i64, i64] = Map.new();
+    for i in 0..n { let _ = m.insert(i * 13 + 1, i); }
+    let mut v: Vec[i64] = Vec.new();
+    for k in m.keys() { v.push(k); }
+    let mut acc = 0;
+    for x in v { acc = fold(acc, x); }
+    acc
+}
 fn holed(n: i64) -> i64 {
     let mut m: Map[i64, i64] = Map.new();
     for i in 0..n { let _ = m.insert(i, i * i); }
@@ -41,6 +53,7 @@ fn main() {
     while n <= 300 {
         acc = fold(acc, walk(n));
         acc = fold(acc, holed(n));
+        acc = fold(acc, pushed(n));
         n = n + 1;
     }
     println(f"{acc}");
@@ -65,22 +78,35 @@ fn mir_map_walk_by_reciprocal_keeps_the_interpreters_order() {
     let dir =
         std::env::temp_dir().join(format!("karac-mir-walk-reciprocal-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let (src, exe) = (dir.join("walk.kara"), dir.join("walk"));
+    let src = dir.join("walk.kara");
     std::fs::write(&src, SRC).unwrap();
-    let out = Command::new(env!("CARGO_BIN_EXE_karac"))
-        .arg("build")
-        .arg(&src)
-        .arg("-o")
-        .arg(&exe)
-        .output()
-        .expect("karac build");
-    let ok = if out.status.success() {
-        Ok(())
-    } else {
-        Err(String::from_utf8_lossy(&out.stderr).into_owned())
-    };
-    if common::link_or_skip(ok).is_none() {
-        return;
+    let mut exes = Vec::new();
+    for carry in ["report", "0"] {
+        let exe = dir.join(format!("walk{carry}"));
+        let out = Command::new(env!("CARGO_BIN_EXE_karac"))
+            .env("KARAC_MIR_WALK_CARRY", carry)
+            .arg("build")
+            .arg(&src)
+            .arg("-o")
+            .arg(&exe)
+            .output()
+            .expect("karac build");
+        let ok = if out.status.success() {
+            Ok(())
+        } else {
+            Err(String::from_utf8_lossy(&out.stderr).into_owned())
+        };
+        if common::link_or_skip(ok).is_none() {
+            return;
+        }
+        if carry == "report" {
+            let err = String::from_utf8_lossy(&out.stderr);
+            assert!(
+                err.lines().any(|l| l.starts_with("walk-carry: ")),
+                "no walk index carried: {err}"
+            );
+        }
+        exes.push(exe);
     }
     let mut seen = Vec::new();
     for seed in ["1", "42", "31337"] {
@@ -91,7 +117,13 @@ fn mir_map_walk_by_reciprocal_keeps_the_interpreters_order() {
             seed,
         );
         assert_eq!(want.lines().count(), 5, "{want}");
-        assert_eq!(run(&mut Command::new(&exe), seed), want, "seed {seed}");
+        for exe in &exes {
+            assert_eq!(
+                run(&mut Command::new(exe), seed),
+                want,
+                "seed {seed}: {exe:?}"
+            );
+        }
         seen.push(want);
     }
     seen.dedup();

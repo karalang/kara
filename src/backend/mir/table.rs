@@ -449,10 +449,15 @@ impl<'ctx> Cx<'ctx, '_> {
     /// The `i`th entry of a walk over the table `h`, which has more than
     /// `i`: in key order for a sorted table, else in the seeded walk order
     /// the interpreter walks too (`karac_hash::walk_perm`, collections.md
-    /// § Map, B-2026-10-23-19). The entry at index `(a * i + c) mod n`,
-    /// by the header's reciprocal on a 64-bit target, while its walk words
-    /// are current for `n` entries (and the
-    /// product fits a word), else the runtime brings them up to date.
+    /// § Map, B-2026-10-23-19): the entry at index `(a * i + c) mod n`.
+    ///
+    /// On a 64-bit target the runtime hands over `a`, `c` and the
+    /// reciprocal of `n` through calls that read memory only, so a loop
+    /// that walks the table makes them once, and the remainder is a
+    /// multiply ([`Self::walk_index`]). A table of `2^32` entries or more
+    /// walks through the runtime. On a 32-bit one the walk words are read
+    /// from the header while current, and the runtime brings them up to
+    /// date when not (B-2026-11-01-44).
     pub(super) fn walk_at(
         &self,
         h: PointerValue<'ctx>,
@@ -470,75 +475,64 @@ impl<'ctx> Cx<'ctx, '_> {
         );
         let n = self.table_len(h)?;
         let (w, it) = self.map_word_ty();
-        // `perm_len` is stored last, with release: once it reads current,
-        // so do the multiplier and offset stored before it.
-        let word = |k: u64, order| -> R<IntValue<'ctx>> {
-            let v = self
-                .builder
-                .build_load(it, self.offset(h, k * w)?, "")
-                .map_err(e)?;
-            let v = v.into_int_value();
-            let inst = v.as_instruction().ok_or("a load")?;
-            inst.set_alignment(w as u32).map_err(e)?;
-            inst.set_atomic_ordering(order).map_err(e)?;
-            self.builder
-                .build_int_z_extend_or_bit_cast(v, self.llcx.i64_type(), "")
-                .map_err(e)
-        };
-        let plen = word(6, inkwell::AtomicOrdering::Acquire)?;
-        let current = self
-            .builder
-            .build_int_compare(IntPredicate::EQ, plen, n, "")
-            .map_err(e)?;
         let small = self
             .builder
             .build_int_compare(IntPredicate::ULT, n, self.i64(1 << 32), "")
             .map_err(e)?;
-        let ok = self.builder.build_and(current, small, "").map_err(e)?;
-        self.builder
-            .build_conditional_branch(ok, fast, slow)
-            .map_err(e)?;
-        self.builder.position_at_end(fast);
-        let a = word(7, inkwell::AtomicOrdering::Monotonic)?;
-        let c = word(8, inkwell::AtomicOrdering::Monotonic)?;
-        // `a`, `c` and `i` are below `n` < 2^32, so `a * i + c` fits.
-        let ai = self.builder.build_int_mul(a, i, "").map_err(e)?;
-        let ai = self.builder.build_int_add(ai, c, "").map_err(e)?;
-        let j = if w == 8 {
-            // The remainder by the header's reciprocal, as
-            // `karac_hash::walk_index_near` takes it: a division on every
-            // step costs a walk more than the probes it feeds
-            // (B-2026-11-01-44).
-            let m = word(9, inkwell::AtomicOrdering::Monotonic)?;
-            let i128t = self.llcx.i128_type();
-            let wide = |v: IntValue<'ctx>| self.builder.build_int_z_extend(v, i128t, "").map_err(e);
-            let p = self
-                .builder
-                .build_int_mul(wide(ai)?, wide(m)?, "")
-                .map_err(e)?;
-            let hi = self
-                .builder
-                .build_right_shift(p, i128t.const_int(64, false), false, "")
-                .map_err(e)?;
-            let q = self
-                .builder
-                .build_int_truncate(hi, self.llcx.i64_type(), "")
-                .map_err(e)?;
-            let qn = self.builder.build_int_mul(q, n, "").map_err(e)?;
-            let r = self.builder.build_int_sub(ai, qn, "").map_err(e)?;
-            let over = self
-                .builder
-                .build_int_compare(IntPredicate::UGE, r, n, "")
-                .map_err(e)?;
-            let less = self.builder.build_int_sub(r, n, "").map_err(e)?;
+        let near = if w == 8 {
             self.builder
-                .build_select(over, less, r, "")
-                .map_err(e)?
-                .into_int_value()
+                .build_conditional_branch(small, fast, slow)
+                .map_err(e)?;
+            self.builder.position_at_end(fast);
+            let words = self.walk_words_fn()?;
+            let call = self
+                .builder
+                .build_call(words, &[h.into(), n.into()], "")
+                .map_err(e)?;
+            let three = call.try_as_basic_value().unwrap_basic().into_struct_value();
+            let part = |k: u32| -> R<IntValue<'ctx>> {
+                Ok(self
+                    .builder
+                    .build_extract_value(three, k, "")
+                    .map_err(e)?
+                    .into_int_value())
+            };
+            let j = self.walk_index(i, n, part(0)?, part(1)?, part(2)?)?;
+            self.entry_at(h, j)?
         } else {
-            self.builder.build_int_unsigned_rem(ai, n, "").map_err(e)?
+            // `perm_len` is stored last, with release: once it reads
+            // current, so do the multiplier and offset stored before it.
+            let word = |k: u64, order| -> R<IntValue<'ctx>> {
+                let v = self
+                    .builder
+                    .build_load(it, self.offset(h, k * w)?, "")
+                    .map_err(e)?;
+                let v = v.into_int_value();
+                let inst = v.as_instruction().ok_or("a load")?;
+                inst.set_alignment(w as u32).map_err(e)?;
+                inst.set_atomic_ordering(order).map_err(e)?;
+                self.builder
+                    .build_int_z_extend_or_bit_cast(v, self.llcx.i64_type(), "")
+                    .map_err(e)
+            };
+            let plen = word(6, inkwell::AtomicOrdering::Acquire)?;
+            let current = self
+                .builder
+                .build_int_compare(IntPredicate::EQ, plen, n, "")
+                .map_err(e)?;
+            let ok = self.builder.build_and(current, small, "").map_err(e)?;
+            self.builder
+                .build_conditional_branch(ok, fast, slow)
+                .map_err(e)?;
+            self.builder.position_at_end(fast);
+            let a = word(7, inkwell::AtomicOrdering::Monotonic)?;
+            let c = word(8, inkwell::AtomicOrdering::Monotonic)?;
+            // `a`, `c` and `i` are below `n` < 2^32, so `a * i + c` fits.
+            let ai = self.builder.build_int_mul(a, i, "").map_err(e)?;
+            let ai = self.builder.build_int_add(ai, c, "").map_err(e)?;
+            let j = self.builder.build_int_unsigned_rem(ai, n, "").map_err(e)?;
+            self.entry_at(h, j)?
         };
-        let near = self.entry_at(h, j)?;
         let near_bb = self.builder.get_insert_block().ok_or("no block")?;
         self.builder.build_unconditional_branch(done).map_err(e)?;
         self.builder.position_at_end(slow);
@@ -548,10 +542,13 @@ impl<'ctx> Cx<'ctx, '_> {
             "karac_mir_map_walk_entry",
             self.ptr_ty().fn_type(&tys, false),
         );
-        let far = self
-            .builder
-            .build_call(rf, &args, "")
-            .map_err(e)?
+        let call = self.builder.build_call(rf, &args, "").map_err(e)?;
+        // What it writes is the walk words' cache, which compiled code on
+        // a 64-bit target does not read.
+        if w == 8 {
+            self.read_only(call);
+        }
+        let far = call
             .try_as_basic_value()
             .unwrap_basic()
             .into_pointer_value();
@@ -560,6 +557,207 @@ impl<'ctx> Cx<'ctx, '_> {
         let phi = self.builder.build_phi(self.ptr_ty(), "").map_err(e)?;
         phi.add_incoming(&[(&near, near_bb), (&far, slow)]);
         Ok(phi.as_basic_value().into_pointer_value())
+    }
+
+    /// `karac.walk.words(h, n)`: the multiplier, offset and reciprocal of a
+    /// walk over the table `h` (null: none yet) of `n` entries, brought up
+    /// to date by the runtime when the header's are not current. `perm_len` is stored last, with release: once it reads
+    /// current, so do the words stored before it.
+    ///
+    /// Marked as reading its argument only, and safe to call at any point
+    /// the table is live, so the passes hoist it out of a loop that writes
+    /// nothing the table could be: what it writes is the header's cache,
+    /// which only it reads, and a table of one length always gets the same
+    /// words (B-2026-11-01-44). Out of line until `walk_carry` has run,
+    /// which then has it inlined: in a loop that may write, it runs on every
+    /// step, as cheap as the header's loads.
+    fn walk_words_fn(&self) -> R<inkwell::values::FunctionValue<'ctx>> {
+        let name = crate::backend::mir_aot::WALK_WORDS;
+        if let Some(f) = self.module.get_function(name) {
+            return Ok(f);
+        }
+        let i64t = self.llcx.i64_type();
+        let three = self
+            .llcx
+            .struct_type(&[i64t.into(), i64t.into(), i64t.into()], false);
+        let f = self.module.add_function(
+            name,
+            three.fn_type(&[self.ptr_ty().into(), i64t.into()], false),
+            Some(inkwell::module::Linkage::Internal),
+        );
+        for (attr, v) in [
+            ("noinline", 0),
+            ("memory", 0b00_00_01),
+            ("nounwind", 0),
+            ("willreturn", 0),
+            ("speculatable", 0),
+        ] {
+            f.add_attribute(
+                AttributeLoc::Function,
+                self.llcx
+                    .create_enum_attribute(Attribute::get_named_enum_kind_id(attr), v),
+            );
+        }
+        let at = self.builder.get_insert_block();
+        let bb = |n: &str| self.llcx.append_basic_block(f, n);
+        let (entry, none, live, stale, read) =
+            (bb("entry"), bb("none"), bb("live"), bb("stale"), bb("read"));
+        let b = &self.builder;
+        b.position_at_end(entry);
+        let h = f
+            .get_first_param()
+            .ok_or("karac.walk.words has a table")?
+            .into_pointer_value();
+        let n = f
+            .get_nth_param(1)
+            .ok_or("karac.walk.words has a length")?
+            .into_int_value();
+        let null = b.build_is_null(h, "").map_err(e)?;
+        b.build_conditional_branch(null, none, live).map_err(e)?;
+        b.position_at_end(none);
+        let empty =
+            three.const_named_struct(&[self.i64(1).into(), self.i64(0).into(), self.i64(0).into()]);
+        b.build_return(Some(&empty)).map_err(e)?;
+        b.position_at_end(live);
+        let word = |k: u64, order| -> R<IntValue<'ctx>> {
+            let v = b
+                .build_load(i64t, self.offset(h, k * 8)?, "")
+                .map_err(e)?
+                .into_int_value();
+            let inst = v.as_instruction().ok_or("a load")?;
+            inst.set_alignment(8).map_err(e)?;
+            inst.set_atomic_ordering(order).map_err(e)?;
+            Ok(v)
+        };
+        let plen = word(6, inkwell::AtomicOrdering::Acquire)?;
+        let current = b
+            .build_int_compare(IntPredicate::EQ, plen, n, "")
+            .map_err(e)?;
+        b.build_conditional_branch(current, read, stale)
+            .map_err(e)?;
+        b.position_at_end(stale);
+        let rf = self.extern_fn(
+            "karac_mir_map_walk_perm",
+            self.llcx
+                .void_type()
+                .fn_type(&[self.ptr_ty().into()], false),
+        );
+        b.build_call(rf, &[h.into()], "").map_err(e)?;
+        b.build_unconditional_branch(read).map_err(e)?;
+        b.position_at_end(read);
+        let a = word(7, inkwell::AtomicOrdering::Monotonic)?;
+        let c = word(8, inkwell::AtomicOrdering::Monotonic)?;
+        let m = word(9, inkwell::AtomicOrdering::Monotonic)?;
+        let mut out = three.get_undef();
+        for (k, v) in [a, c, m].into_iter().enumerate() {
+            out = b
+                .build_insert_value(out, v, k as u32, "")
+                .map_err(e)?
+                .into_struct_value();
+        }
+        b.build_return(Some(&out)).map_err(e)?;
+        if let Some(at) = at {
+            b.position_at_end(at);
+        }
+        Ok(f)
+    }
+
+    /// `(a * i + c) mod n` for `i < n < 2^32`, `m` the reciprocal of `n`:
+    /// a call of `karac.walk.index`
+    /// ([`Self::walk_index_fn`]), which reads no memory, so the passes hoist
+    /// and share it, and after them `mir_aot::walk_carry` carries it from
+    /// one trip of a loop to the next or expands it in place
+    /// (B-2026-11-01-44).
+    fn walk_index(
+        &self,
+        i: IntValue<'ctx>,
+        n: IntValue<'ctx>,
+        a: IntValue<'ctx>,
+        c: IntValue<'ctx>,
+        m: IntValue<'ctx>,
+    ) -> R<IntValue<'ctx>> {
+        let f = self.walk_index_fn()?;
+        let call = self
+            .builder
+            .build_call(f, &[i.into(), n.into(), a.into(), c.into(), m.into()], "")
+            .map_err(e)?;
+        Ok(call.try_as_basic_value().unwrap_basic().into_int_value())
+    }
+
+    /// `karac.walk.index(i, n, a, c, m)`, as `karac_hash::walk_index_near`
+    /// takes it: the high word of `x * m` is `x / n` or one less, so one
+    /// subtraction of `n` corrects the remainder. A division on every step
+    /// costs a walk more than the probes it feeds. Out of line until
+    /// `walk_carry` runs, which the attributes allow to be hoisted.
+    fn walk_index_fn(&self) -> R<inkwell::values::FunctionValue<'ctx>> {
+        let name = crate::backend::mir_aot::WALK_INDEX;
+        if let Some(f) = self.module.get_function(name) {
+            return Ok(f);
+        }
+        let i64t = self.llcx.i64_type();
+        let f = self.module.add_function(
+            name,
+            i64t.fn_type(&[i64t.into(); 5], false),
+            Some(inkwell::module::Linkage::Internal),
+        );
+        for (attr, v) in [
+            ("noinline", 0),
+            ("memory", 0),
+            ("nounwind", 0),
+            ("willreturn", 0),
+            ("speculatable", 0),
+        ] {
+            f.add_attribute(
+                AttributeLoc::Function,
+                self.llcx
+                    .create_enum_attribute(Attribute::get_named_enum_kind_id(attr), v),
+            );
+        }
+        let at = self.builder.get_insert_block();
+        self.builder
+            .position_at_end(self.llcx.append_basic_block(f, "entry"));
+        let p = |k: u32| -> R<IntValue<'ctx>> {
+            Ok(f.get_nth_param(k)
+                .ok_or("karac.walk.index has five parameters")?
+                .into_int_value())
+        };
+        let j = self.walk_index_body(p(0)?, p(1)?, p(2)?, p(3)?, p(4)?)?;
+        self.builder.build_return(Some(&j)).map_err(e)?;
+        if let Some(at) = at {
+            self.builder.position_at_end(at);
+        }
+        Ok(f)
+    }
+
+    fn walk_index_body(
+        &self,
+        i: IntValue<'ctx>,
+        n: IntValue<'ctx>,
+        a: IntValue<'ctx>,
+        c: IntValue<'ctx>,
+        m: IntValue<'ctx>,
+    ) -> R<IntValue<'ctx>> {
+        let b = &self.builder;
+        let x = b.build_int_mul(a, i, "").map_err(e)?;
+        let x = b.build_int_add(x, c, "").map_err(e)?;
+        let i128t = self.llcx.i128_type();
+        let wide = |v: IntValue<'ctx>| b.build_int_z_extend(v, i128t, "").map_err(e);
+        let p = b.build_int_mul(wide(x)?, wide(m)?, "").map_err(e)?;
+        let hi = b
+            .build_right_shift(p, i128t.const_int(64, false), false, "")
+            .map_err(e)?;
+        let q = b
+            .build_int_truncate(hi, self.llcx.i64_type(), "")
+            .map_err(e)?;
+        let qn = b.build_int_mul(q, n, "").map_err(e)?;
+        let r = b.build_int_sub(x, qn, "").map_err(e)?;
+        let over = b
+            .build_int_compare(IntPredicate::UGE, r, n, "")
+            .map_err(e)?;
+        let less = b.build_int_sub(r, n, "").map_err(e)?;
+        Ok(b.build_select(over, less, r, "")
+            .map_err(e)?
+            .into_int_value())
     }
 
     /// Marks a call into the runtime that only reads memory, so loads

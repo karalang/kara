@@ -20,6 +20,16 @@ use std::path::Path;
 mod carry_store;
 mod select_branch;
 mod split;
+mod walk_carry;
+
+/// The walk-index marker `walk_carry` carries or expands after the
+/// passes (`src/backend/mir/table.rs` emits it).
+pub(crate) const WALK_INDEX: &str = walk_carry::MARKER;
+
+/// A walk's words, out of line through the passes so a loop that writes
+/// nothing the table could be runs it once, then inlined
+/// (`src/backend/mir/table.rs`).
+pub(crate) const WALK_WORDS: &str = "karac.walk.words";
 
 /// Compile `ir` to a native object at `obj`.
 ///
@@ -410,6 +420,24 @@ fn run_passes(module: &Module<'_>, opt: u8, tm: &TargetMachine) -> Result<(), St
         module
             .run_passes(&passes, tm, PassBuilderOptions::create())
             .map_err(|e| format!("{passes}: {}", e.to_string()))?;
+        // SAFETY: the module is live for the call.
+        unsafe { walk_carry::carry_walks(module.as_mut_ptr()) };
+        // In a loop that may write, a walk asks for its words on every
+        // step: in line, that is the header's loads, not a call.
+        if let Some(f) = module.get_function(WALK_WORDS) {
+            let kind = |name| inkwell::attributes::Attribute::get_named_enum_kind_id(name);
+            let fun = inkwell::attributes::AttributeLoc::Function;
+            f.remove_enum_attribute(fun, kind("noinline"));
+            f.add_attribute(
+                fun,
+                module
+                    .get_context()
+                    .create_enum_attribute(kind("alwaysinline"), 0),
+            );
+            module
+                .run_passes("always-inline", tm, PassBuilderOptions::create())
+                .map_err(|e| format!("always-inline: {}", e.to_string()))?;
+        }
         // SAFETY: the module is live for the calls.
         unsafe {
             carry_store::carry_stores(module.as_mut_ptr());

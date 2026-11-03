@@ -151,11 +151,11 @@ unsafe fn dump(m: LLVMModuleRef) {
     }
 }
 
-fn opcode(v: LLVMValueRef) -> Option<LLVMOpcode> {
+pub(super) fn opcode(v: LLVMValueRef) -> Option<LLVMOpcode> {
     unsafe { (!LLVMIsAInstruction(v).is_null()).then(|| LLVMGetInstructionOpcode(v)) }
 }
 
-unsafe fn successors(b: LLVMBasicBlockRef) -> Vec<LLVMBasicBlockRef> {
+pub(super) unsafe fn successors(b: LLVMBasicBlockRef) -> Vec<LLVMBasicBlockRef> {
     unsafe {
         let t = LLVMGetBasicBlockTerminator(b);
         if t.is_null() {
@@ -167,7 +167,7 @@ unsafe fn successors(b: LLVMBasicBlockRef) -> Vec<LLVMBasicBlockRef> {
     }
 }
 
-unsafe fn instructions(b: LLVMBasicBlockRef) -> Vec<LLVMValueRef> {
+pub(super) unsafe fn instructions(b: LLVMBasicBlockRef) -> Vec<LLVMValueRef> {
     let mut out = Vec::new();
     unsafe {
         let mut i = LLVMGetFirstInstruction(b);
@@ -277,7 +277,7 @@ unsafe fn address(
 }
 
 /// An `i64` `v` as `a*iv + c`, wrapping.
-unsafe fn linear(v: LLVMValueRef, iv: LLVMValueRef, depth: usize) -> Option<(i64, i64)> {
+pub(super) unsafe fn linear(v: LLVMValueRef, iv: LLVMValueRef, depth: usize) -> Option<(i64, i64)> {
     use LLVMOpcode::*;
     unsafe {
         let t = LLVMTypeOf(v);
