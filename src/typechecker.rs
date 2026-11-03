@@ -2793,6 +2793,12 @@ pub struct TypeChecker<'a> {
     pub(super) core_ref_copy_spans: FxHashSet<SpanKey>,
     /// See [`TypeCheckResult::rejected_assign_spans`].
     pub(super) rejected_assign_spans: Vec<Span>,
+    /// The start offset of the assignment a `match` arm holds without
+    /// braces (`'L' => (dx, dy) = (-dy, dx),`), while its block is checked.
+    /// The parser wraps such a body in a block whose span is the
+    /// assignment's own, so no brace marks it; a fix-it that rewrites the
+    /// assignment there must add the braces (B-2026-11-03-20).
+    pub(super) braceless_arm_assign: Option<usize>,
     /// See [`TypeCheckResult::core_ref_copy_nodes`].
     pub(super) core_ref_copy_nodes: FxHashSet<crate::ids::NodeId>,
     /// v2 core §4.6 (B-2026-10-28-25): the results of a `match`, `if` or
@@ -3839,6 +3845,7 @@ impl<'a> TypeChecker<'a> {
             core_shared_depth: 0,
             core_ref_copy_spans: FxHashSet::default(),
             rejected_assign_spans: Vec::new(),
+            braceless_arm_assign: None,
             core_ref_copy_nodes: FxHashSet::default(),
             core_ref_results: FxHashSet::default(),
             core_consuming_for_iterables: FxHashSet::default(),
@@ -7949,9 +7956,10 @@ impl<'a> TypeChecker<'a> {
         let found_display = self.display_type_at_use(found, &span);
         self.type_error_with_types(
             format!(
-                "expected '{}', found '{}'",
+                "expected '{}', found '{}'{}",
                 type_display(expected),
-                found_display
+                found_display,
+                Self::wrapper_unwrap_hint(expected, found)
             ),
             span,
             TypeErrorKind::TypeMismatch,

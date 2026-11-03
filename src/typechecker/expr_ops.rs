@@ -4250,7 +4250,7 @@ impl<'a> super::TypeChecker<'a> {
                                 "expected '{}', found '{}'{}",
                                 type_display(&left_ty),
                                 type_display(&right_ty),
-                                Self::arith_wrapper_unwrap_hint(&left_ty, &right_ty)
+                                Self::wrapper_unwrap_hint(&left_ty, &right_ty)
                             ),
                             right.span,
                             TypeErrorKind::TypeMismatch,
@@ -4659,14 +4659,25 @@ impl<'a> super::TypeChecker<'a> {
     /// error lands on the arithmetic, several steps from the cause. Naming the
     /// wrapper and the payload turns "expected 'i64', found 'Option[i64]'" into
     /// something that says what to do about it.
-    fn arith_wrapper_unwrap_hint(expected: &Type, found: &Type) -> String {
+    ///
+    /// The canonical assignment / argument mismatch, `String.push`'s
+    /// argument and the if/else and match branch joins take the same hint:
+    /// `s.push(t.char_at(i))` and `let c: char = t.char_at(i)` are the
+    /// same forgotten unwrap (B-2026-11-03-19).
+    pub(super) fn wrapper_unwrap_hint(expected: &Type, found: &Type) -> String {
         let Type::Named { name, args } = found else {
             return String::new();
         };
         if !matches!(name.as_str(), "Option" | "Result") || args.is_empty() {
             return String::new();
         }
-        if !types_compatible(expected, &args[0]) {
+        // `v.first()` is an `Option[ref i64]`, and `.unwrap()` of it reads
+        // as the `i64` a `let x: i64` wants.
+        let payload = match &args[0] {
+            Type::Ref(inner) if !types_compatible(expected, &args[0]) => inner.as_ref(),
+            t => t,
+        };
+        if !types_compatible(expected, payload) {
             return String::new();
         }
         format!(
@@ -4675,6 +4686,17 @@ impl<'a> super::TypeChecker<'a> {
             name,
             type_display(&args[0])
         )
+    }
+
+    /// [`Self::wrapper_unwrap_hint`] for two branches of one `if` or
+    /// `match`, either of which may be the wrapped one.
+    pub(super) fn branch_unwrap_hint(a: &Type, b: &Type) -> String {
+        let hint = Self::wrapper_unwrap_hint(a, b);
+        if hint.is_empty() {
+            Self::wrapper_unwrap_hint(b, a)
+        } else {
+            hint
+        }
     }
 
     /// v2 core (strict commands): is `operand` a view the checker binds at

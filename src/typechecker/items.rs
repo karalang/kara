@@ -3672,9 +3672,12 @@ impl<'a> super::TypeChecker<'a> {
     pub(super) fn check_block_against(&mut self, block: &Block, expected: &Type) -> Type {
         self.local_scope.push();
         let mut diverged = false;
+        let saved_arm = self.braceless_arm_assign;
+        self.braceless_arm_assign = Self::braceless_arm_block(block);
         for stmt in &block.stmts {
             diverged |= self.check_stmt(stmt) == Type::Never;
         }
+        self.braceless_arm_assign = saved_arm;
         let ty = if let Some(ref expr) = block.final_expr {
             let t = self.check_expr(expr, expected);
             // B-2026-09-03-20 — a block's TAIL is its value, so `fn f() -> R {
@@ -5918,10 +5921,17 @@ impl<'a> super::TypeChecker<'a> {
                 }),
             )
         } else if let ExprKind::Tuple(places) = &target.kind {
+            let braceless = self.braceless_arm_assign == Some(target.span.offset);
             (
-                "a parenthesized tuple is a value, not a place; to assign several places at \
-                 once, drop the parentheses (`a, b = b, a`)",
-                Self::unparenthesized_multi_assign_fix(target, places, value),
+                if braceless {
+                    "a parenthesized tuple is a value, not a place; to assign several places at \
+                     once, drop the parentheses, and as a `match` arm's body brace the statement \
+                     (`=> { a, b = b, a; }`)"
+                } else {
+                    "a parenthesized tuple is a value, not a place; to assign several places at \
+                     once, drop the parentheses (`a, b = b, a`)"
+                },
+                Self::unparenthesized_multi_assign_fix(target, places, value, braceless),
             )
         } else {
             (
@@ -6310,9 +6320,12 @@ impl<'a> super::TypeChecker<'a> {
     pub(super) fn infer_block(&mut self, block: &Block) -> Type {
         self.local_scope.push();
         let mut diverged = false;
+        let saved_arm = self.braceless_arm_assign;
+        self.braceless_arm_assign = Self::braceless_arm_block(block);
         for stmt in &block.stmts {
             diverged |= self.check_stmt(stmt) == Type::Never;
         }
+        self.braceless_arm_assign = saved_arm;
         let ty = if let Some(ref expr) = block.final_expr {
             let t = self.infer_expr(expr);
             // The un-annotated twin of the tail above: `let x = { w.r };`
@@ -10368,10 +10381,17 @@ impl<'a> super::TypeChecker<'a> {
     /// source, which the typechecker does not see; each element comes back in
     /// the formatter's canonical spelling, which is what `karac fmt` would
     /// give it anyway.
+    ///
+    /// A multi-assign is a statement, and a `match` arm cannot hold one
+    /// without braces: `'L' => dx, dy = -dy, dx,` reads its first `,` as the
+    /// end of the arm. So when the assignment is a braceless arm's body
+    /// (`braceless`), the edit braces it, `{ dx, dy = -dy, dx; }`
+    /// (B-2026-11-03-20).
     fn unparenthesized_multi_assign_fix(
         target: &Expr,
         places: &[Expr],
         value: Option<&Expr>,
+        braceless: bool,
     ) -> Option<super::FixIt> {
         let value = value?;
         let ExprKind::Tuple(values) = &value.kind else {
@@ -10395,8 +10415,30 @@ impl<'a> super::TypeChecker<'a> {
                 length: end - target.span.offset,
                 ..target.span
             },
-            replacement: format!("{} = {}", join(places), join(values)),
+            replacement: if braceless {
+                format!("{{ {} = {}; }}", join(places), join(values))
+            } else {
+                format!("{} = {}", join(places), join(values))
+            },
         })
+    }
+
+    /// The start offset of the one assignment in `block` when the block is
+    /// the parser's wrapper for a braceless `match` arm body: it holds that
+    /// statement alone, and its span is the statement's own, where a written
+    /// block's span takes in its braces.
+    fn braceless_arm_block(block: &Block) -> Option<usize> {
+        match block.stmts.as_slice() {
+            [stmt]
+                if block.final_expr.is_none()
+                    && stmt.span.offset == block.span.offset
+                    && stmt.span.length == block.span.length
+                    && matches!(stmt.kind, StmtKind::Assign { .. }) =>
+            {
+                Some(stmt.span.offset)
+            }
+            _ => None,
+        }
     }
 
     /// `impl Trait` slice 4 — walk `return_ty` for every `TypeKind::ImplTrait`

@@ -899,8 +899,9 @@ impl<'a> super::TypeChecker<'a> {
                     if !is_char_arg(&arg_ty) {
                         self.type_error(
                             format!(
-                                "'push' expects a Char argument, found '{}'",
-                                type_display(&arg_ty)
+                                "'push' expects a Char argument, found '{}'{}",
+                                type_display(&arg_ty),
+                                Self::wrapper_unwrap_hint(&Type::Char, &arg_ty)
                             ),
                             args[0].value.span,
                             TypeErrorKind::TypeMismatch,

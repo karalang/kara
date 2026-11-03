@@ -835,9 +835,10 @@ impl<'a> super::TypeChecker<'a> {
                         }
                         self.type_error(
                             format!(
-                                "match arms have incompatible types: '{}' and '{}'",
+                                "match arms have incompatible types: '{}' and '{}'{}",
                                 type_display(&result_ty),
-                                type_display(arm_ty)
+                                type_display(arm_ty),
+                                Self::branch_unwrap_hint(&result_ty, arm_ty)
                             ),
                             *span,
                             TypeErrorKind::BranchTypeMismatch,

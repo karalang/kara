@@ -10425,9 +10425,10 @@ impl<'a> super::TypeChecker<'a> {
                             if then_ty != Type::Error && else_ty != Type::Error {
                                 self.type_error(
                                     format!(
-                                        "if/else branches have incompatible types: '{}' and '{}'",
+                                        "if/else branches have incompatible types: '{}' and '{}'{}",
                                         type_display(&then_ty),
-                                        type_display(&else_ty)
+                                        type_display(&else_ty),
+                                        Self::branch_unwrap_hint(&then_ty, &else_ty)
                                     ),
                                     expr.span,
                                     TypeErrorKind::BranchTypeMismatch,

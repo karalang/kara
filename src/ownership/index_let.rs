@@ -85,12 +85,17 @@ pub(super) fn read_only_index_lets(body: &Block, c: &Classification, out: &mut H
             .min()
             .unwrap_or(last);
         let window = (end, held_to.max(last + 1));
-        if let Some(root) = place_root(object) {
-            let mut written = false;
-            writes_in_block(body, root, window, c, &mut written);
-            if written {
-                continue;
-            }
+        // An element of a temporary (`vec!["LR", "RL"][k]`, `f()[i]`) is
+        // not borrowed: the temporary drops at the end of the `let`, so
+        // `ref` there is an E0516, and the `.clone()` fix stands
+        // (B-2026-11-03-21).
+        let Some(root) = place_root(object) else {
+            continue;
+        };
+        let mut written = false;
+        writes_in_block(body, root, window, c, &mut written);
+        if written {
+            continue;
         }
         out.insert(SpanKey::from_span(&value.span));
     }
