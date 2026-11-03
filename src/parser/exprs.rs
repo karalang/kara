@@ -1082,6 +1082,49 @@ impl super::Parser {
                     },
                 })
             }
+            // `&expr` / `&mut expr`: Rust's borrow operators. Kāra spells
+            // them `ref expr` and `mut ref expr`; the edit rewrites the sigil
+            // and the borrow parses as that, so one diagnostic stands for it
+            // (B-2026-11-03-27). An argument's `&` is caught before this, in
+            // the argument list, since an argument takes no borrow sigil.
+            Token::Amp => {
+                self.advance();
+                let is_mut = self.eat(&Token::Mut);
+                let sigil = Span {
+                    length: self.current_span().offset.saturating_sub(start.offset),
+                    ..start
+                };
+                let (message, kara) = if is_mut {
+                    (
+                        "`&mut` is Rust syntax -- a borrow that writes is `mut ref place`",
+                        "mut ref ",
+                    )
+                } else {
+                    ("`&` is Rust syntax -- a borrow is `ref place`", "ref ")
+                };
+                self.error_at(message, sigil);
+                self.fix_edits.insert(
+                    crate::resolver::SpanKey::from_span(&sigil),
+                    crate::resolver::TextEdit {
+                        offset: sigil.offset,
+                        length: sigil.length,
+                        replacement: kara.to_string(),
+                    },
+                );
+                let operand = self.parse_expr_bp(24)?;
+                Some(Expr {
+                    id: crate::ids::NodeId::DUMMY,
+                    span: self.span_from(&start),
+                    kind: ExprKind::Unary {
+                        op: if is_mut {
+                            UnaryOp::MutRef
+                        } else {
+                            UnaryOp::Ref
+                        },
+                        operand: Box::new(operand),
+                    },
+                })
+            }
             // `ref expr` — shared borrow in expression position (design.md
             // § "Binding-extension exception"). Same binding power as the
             // other prefix operators, so `ref v[i]` borrows the ELEMENT
@@ -3793,6 +3836,43 @@ impl super::Parser {
             } else {
                 None
             };
+
+            // `f(&x)` / `f(&mut x)`: Rust's borrow sigils on an argument.
+            // An argument borrows with no sigil and a writing one is marked
+            // `mut x`, so in both cases only the `&` goes; a `mut` after it
+            // is then the call-site marker below (B-2026-11-03-27).
+            if !ctor && self.check(&Token::Amp) {
+                let amp = self.current_span();
+                let is_mut = matches!(self.peek_token_ref_at(1), Token::Mut);
+                let next = self
+                    .tokens
+                    .get(self.pos + 1)
+                    .map_or(amp.offset + amp.length, |t| t.span.offset);
+                let sigil = Span {
+                    length: next.saturating_sub(amp.offset),
+                    ..amp
+                };
+                self.error_at(
+                    if is_mut {
+                        "`&mut` on an argument is Rust syntax -- an argument the callee \
+                         writes is marked `mut x`: drop the `&`"
+                    } else {
+                        "`&` on an argument is Rust syntax -- an argument is borrowed \
+                         with no sigil (the parameter's mode is on the callee's \
+                         signature): drop the `&`"
+                    },
+                    sigil,
+                );
+                self.fix_edits.insert(
+                    crate::resolver::SpanKey::from_span(&sigil),
+                    crate::resolver::TextEdit {
+                        offset: sigil.offset,
+                        length: sigil.length,
+                        replacement: String::new(),
+                    },
+                );
+                self.advance();
+            }
 
             // Reject `ref <expr>` at call sites (design.md Part 1½ Rule 4).
             // The keyword `ref` is never legal in argument position; the

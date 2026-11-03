@@ -2156,6 +2156,10 @@ impl super::Parser {
                     })
                 }
             }
+            Token::Amp | Token::AmpAmp => {
+                self.skip_rust_amp_pattern();
+                self.parse_param_pattern()
+            }
             _ => {
                 if self.recover_keyword_as_ident("parameter pattern") {
                     return self.parse_param_pattern();

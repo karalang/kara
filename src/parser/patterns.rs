@@ -115,6 +115,44 @@ impl super::Parser {
         Some(first)
     }
 
+    /// `&pat` and `&mut pat` are Rust's reference patterns (`for &(x, y) in
+    /// v.iter()`, `|&x| ..`). A Kāra pattern already matches through a
+    /// reference, so the sigil only goes: say so, offer deleting it, and
+    /// step past it so the pattern parses on (B-2026-11-03-27). The caller
+    /// is at a `&` or `&&`.
+    pub(crate) fn skip_rust_amp_pattern(&mut self) {
+        let start = self.current_span();
+        let double = matches!(self.peek_token_ref(), Token::AmpAmp);
+        self.advance();
+        let is_mut = !double && self.eat(&Token::Mut);
+        let sigil = crate::token::Span {
+            length: self.current_span().offset.saturating_sub(start.offset),
+            ..start
+        };
+        let what = if double {
+            "&&"
+        } else if is_mut {
+            "&mut"
+        } else {
+            "&"
+        };
+        self.error_at(
+            &format!(
+                "`{what}` before a pattern is Rust syntax -- a Kāra pattern already \
+                 matches through a reference, so drop the `{what}`"
+            ),
+            sigil,
+        );
+        self.fix_edits.insert(
+            crate::resolver::SpanKey::from_span(&sigil),
+            crate::resolver::TextEdit {
+                offset: sigil.offset,
+                length: sigil.length,
+                replacement: String::new(),
+            },
+        );
+    }
+
     pub(crate) fn parse_single_pattern(&mut self) -> Option<Pattern> {
         let start = self.current_span();
 
@@ -250,6 +288,12 @@ impl super::Parser {
                     }
                 }
                 self.advance();
+                self.parse_single_pattern()
+            }
+            // `&pat` and `&mut pat` are Rust's reference patterns
+            // (B-2026-11-03-27).
+            Token::Amp | Token::AmpAmp => {
+                self.skip_rust_amp_pattern();
                 self.parse_single_pattern()
             }
             // Half-open range patterns with a missing start: `..lit` and `..=lit`.
