@@ -1,0 +1,9 @@
+source = "B-2026-11-03-8"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["concurrency", "cross-task"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-03-8 control: a closure whose environment reaches only CrossTask data stays callable from par branches and a par for body."

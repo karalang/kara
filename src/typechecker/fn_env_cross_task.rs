@@ -49,6 +49,9 @@ struct Taint {
     /// parameter's type, a `let`'s annotation, or the return type of the
     /// function a `let` was bound from.
     fix_at: Option<Span>,
+    /// The binding is a `frozen` handle (a `frozen` parameter or `let x =
+    /// freeze y`), which may cross into a task (core semantics §11.3).
+    frozen: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -198,6 +201,7 @@ impl<'a> super::TypeChecker<'a> {
                     } else {
                         None
                     },
+                    frozen: p.is_frozen,
                 };
                 for n in p.pattern.binding_names() {
                     scope.push((n, taint.clone()));
@@ -400,6 +404,9 @@ impl<'w> Walk<'w, '_, '_> {
             return;
         };
         let taint = taint.clone();
+        if taint.frozen {
+            return;
+        }
         let Some((ty, _)) = self.node_types.get(&e.id) else {
             return;
         };
@@ -418,6 +425,7 @@ impl<'w> Walk<'w, '_, '_> {
                     leak: None,
                     opaque: true,
                     fix_at: None,
+                    frozen: false,
                 },
                 Err(path) => Taint {
                     leak: Some(Leak {
@@ -428,6 +436,7 @@ impl<'w> Walk<'w, '_, '_> {
                     }),
                     opaque: false,
                     fix_at: None,
+                    frozen: false,
                 },
             }
         };
@@ -475,6 +484,11 @@ impl<'w> Walk<'w, '_, '_> {
                 if let Some(at) = self.declared_marker_point(ty.as_ref(), value) {
                     t.fix_at = Some(at);
                 }
+                t.frozen = self
+                    .tc
+                    .program
+                    .freeze_spans
+                    .contains(&SpanKey::from_span(&value.span));
                 if ty
                     .as_ref()
                     .is_some_and(|ty| self.tc.type_expr_marks_fn(ty, true))
@@ -497,6 +511,7 @@ impl<'w> Walk<'w, '_, '_> {
                     leak: None,
                     opaque,
                     fix_at: self.tc.fn_marker_point(ty),
+                    frozen: false,
                 };
                 self.declare(name.clone(), t);
             }
@@ -701,6 +716,7 @@ impl<'w> Walk<'w, '_, '_> {
                         leak: None,
                         opaque: true,
                         fix_at: None,
+                        frozen: false,
                     };
                 }
                 self.opaque_if_fn(e)
@@ -809,6 +825,36 @@ impl<'w> Walk<'w, '_, '_> {
                     t.join(&self.value(sp));
                 }
                 t
+            }
+            // core semantics §6.3, §11.3 (B-2026-11-03-8): a `par` branch
+            // and a `par for` body are tasks, so a function value they use
+            // must reach nothing that cannot cross, as a spawned one must.
+            ExprKind::Par(b) => {
+                self.collectors.push((self.scopes.len(), Taint::default()));
+                let t = self.block_value(b);
+                let reach = self.collectors.pop().map(|(_, t)| t).unwrap_or_default();
+                self.par_crossed(&reach, e.span, "a `par` branch");
+                t
+            }
+            ExprKind::For {
+                pattern,
+                iterable,
+                body,
+                par: Some(par),
+                ..
+            } => {
+                if let Some(limit) = &par.limit {
+                    self.value(limit);
+                }
+                self.value(iterable);
+                self.collectors.push((self.scopes.len(), Taint::default()));
+                self.scopes.push(Vec::new());
+                self.declare_pattern(pattern);
+                self.block_value(body);
+                self.scopes.pop();
+                let reach = self.collectors.pop().map(|(_, t)| t).unwrap_or_default();
+                self.par_crossed(&reach, e.span, "a `par for` body");
+                Taint::default()
             }
             ExprKind::For { pattern, .. } | ExprKind::WhileLet { pattern, .. } => {
                 // The loop's own binding shadows inside its body.
@@ -1004,6 +1050,7 @@ impl<'w> Walk<'w, '_, '_> {
                 .get(&e.id)
                 .is_some_and(|(t, _)| is_unmarked_fn_type(t)),
             fix_at: None,
+            frozen: false,
         }
     }
 
@@ -1029,6 +1076,33 @@ impl<'w> Walk<'w, '_, '_> {
                 t.fix_at,
             ));
         }
+    }
+
+    /// A `par` branch or `par for` body (at `span`) uses function values
+    /// whose environments reach `t`. A capture the branch names itself is
+    /// `cross_task_check.rs`'s, which reports it (B-2026-11-03-8).
+    fn par_crossed(&mut self, t: &Taint, span: Span, what: &str) {
+        let Some(leak) = &t.leak else {
+            return;
+        };
+        if !self.user || !leak.via_fn {
+            return;
+        }
+        // Outside the core rules a `shared` leaf in one branch is the
+        // ownership phase's sole-ownership carve-out, as for a direct
+        // capture.
+        if leak.path.fix_it == CrossTaskUnsafeFixIt::SharedToPar
+            && !self.tc.cli_lint_overrides.strict_core
+        {
+            return;
+        }
+        let lead = format!(
+            "{what} uses a function value whose environment captures `{}` (type `{}`), \
+             which cannot enter a task (core semantics §6.3, §11.3)",
+            leak.name,
+            type_display(&leak.ty)
+        );
+        self.errors.push((span, leak_message(&lead, leak), None));
     }
 
     /// The function value `arg` is sent to a task: what it reaches must be

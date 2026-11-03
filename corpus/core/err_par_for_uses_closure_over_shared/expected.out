@@ -1,0 +1,1 @@
+error[E_NOT_CROSS_TASK]: a `par for` body uses a function value whose environment captures `a` (type `N`), which cannot enter a task (core semantics §6.3, §11.3)

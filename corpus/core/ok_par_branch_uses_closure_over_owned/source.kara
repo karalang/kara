@@ -1,0 +1,12 @@
+// A function value whose environment reaches only CrossTask data may be
+// called from `par` branches and a `par for` body (core semantics §6.3).
+struct P { id: i64 }
+fn main() {
+    let p = P { id: 3 };
+    let f = || p.id;
+    let (x, y) = par { f(), 2 };
+    let r = par for i in 0..4 { f() + i };
+    let mut total = 0;
+    for v in r { total = total + v; }
+    println(f"{x} {y} {total}");
+}

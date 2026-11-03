@@ -1,0 +1,11 @@
+// A `par for` body is a task per element, so a function value it calls must
+// reach nothing that cannot cross (core semantics §6.3, §11.3). Moving the
+// handle inside the closure (`let h = a`) copies its count from every worker.
+shared struct N { id: i64, mut items: Vec[i64] }
+fn n(i: i64) -> N { N { id: i, items: Vec.new() } }
+fn main() {
+    let a = n(1);
+    let f = || { let h = a; h.id };
+    let r = par for i in 0..4 { f() + i };
+    println(r.len());
+}

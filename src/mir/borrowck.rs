@@ -2532,6 +2532,11 @@ fn main() -> () {
             // B-2026-11-02-31).
             "err_receiver_method_returns_argument",
             "err_returned_closure_captures_non_escaping_param",
+            // A function value whose environment reaches a `shared` handle
+            // called from a `par` branch or `par for` body: refused by the
+            // strict cross-task pass, before MIR (B-2026-11-03-8).
+            "err_par_branch_uses_closure_over_shared",
+            "err_par_for_uses_closure_over_shared",
             // `std.log`'s fields and its attribute (B-2026-10-27-20).
             "err_log_reserved_label",
             "err_log_duplicate_label",

@@ -1,0 +1,9 @@
+source = "B-2026-11-03-8"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["concurrency", "cross-task"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-03-8: before the fix a par branch calling a closure over a shared handle passed check and ran; a direct capture and the TaskGroup.spawn form were refused. The expected.out wording of an error pin is guidance, not a byte oracle."
