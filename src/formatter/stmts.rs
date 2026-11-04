@@ -42,6 +42,21 @@ impl super::Formatter {
 
     // ── Statements ──────────────────────────────────────────────
 
+    /// A script-mode statement at the top level, written as a statement of
+    /// a block is (every one ends in `;`, since the implicit `main` ends
+    /// with its own `Ok(())`).
+    pub(super) fn format_top_level_stmt(&mut self, stmt: &Stmt) {
+        match &stmt.kind {
+            StmtKind::Expr(expr) if !block_stmt_needs_semicolon(expr, false) => {
+                self.write_indent();
+                self.stmt_start = true;
+                self.format_expr(expr);
+                self.output.push('\n');
+            }
+            _ => self.format_stmt(stmt),
+        }
+    }
+
     pub(super) fn format_stmt(&mut self, stmt: &Stmt) {
         let key = crate::resolver::SpanKey::from_span(&stmt.span);
         if let Some(overrides) = self.stmt_lint_overrides.get(&key).cloned() {

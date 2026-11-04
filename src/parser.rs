@@ -758,6 +758,7 @@ impl Parser {
         // arms below mean the source carried top-level statements, and the
         // item-only arm turns them into an error that erases the evidence.
         self.saw_top_level_statements |= !script_stmts.is_empty();
+        let mut script_main = false;
         if !script_stmts.is_empty() && !self.allow_script_mode {
             // Item-only context (`ast.item` quote, module file): top-level
             // statements are an error here, never a synthesized main.
@@ -795,6 +796,7 @@ impl Parser {
                 // `fn main()`.
                 let last_span = script_stmts.last().map(|s| s.span).unwrap();
                 let (return_type, tail) = self.script_main_signature();
+                script_main = true;
                 let body_span = Span {
                     line: first_span.line,
                     column: first_span.column,
@@ -841,6 +843,7 @@ impl Parser {
             }
         }
         Program {
+            script_main,
             items,
             module_doc_comment,
             inner_attrs,

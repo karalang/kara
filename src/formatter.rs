@@ -297,15 +297,36 @@ impl Formatter {
             self.output.push('\n');
         }
 
-        let mut first = true;
-        for item in &rest {
-            if !first {
-                self.flush_trailing_comments(item.span().offset);
+        // A script's statements go back among the items, in file order,
+        // and the `main` the parser wrapped them in is not written
+        // (design.md § Script mode, B-2026-11-04-36).
+        let mut pieces: Vec<(usize, Result<&Item, &Stmt>)> = Vec::new();
+        for (i, item) in rest.iter().enumerate() {
+            match item {
+                Item::Function(f) if program.script_main && i + 1 == rest.len() => {
+                    pieces.extend(f.body.stmts.iter().map(|s| (s.span.offset, Err(s))));
+                }
+                _ => pieces.push((item.span().offset, Ok(*item))),
+            }
+        }
+        if program.script_main {
+            pieces.sort_by_key(|(at, _)| *at);
+        }
+        let mut prev_stmt = false;
+        for (n, (at, piece)) in pieces.iter().enumerate() {
+            let is_stmt = piece.is_err();
+            // Consecutive statements share a paragraph; anything next to an
+            // item is set apart by a blank line.
+            if n > 0 && !(is_stmt && prev_stmt) {
+                self.flush_trailing_comments(*at);
                 self.output.push('\n');
             }
-            first = false;
-            self.flush_comments_before(item.span().offset);
-            self.format_item(item);
+            prev_stmt = is_stmt;
+            self.flush_comments_before(*at);
+            match piece {
+                Ok(item) => self.format_item(item),
+                Err(stmt) => self.format_top_level_stmt(stmt),
+            }
         }
         self.flush_comments_before(usize::MAX);
         while self.output.ends_with("\n\n") {

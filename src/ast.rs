@@ -789,6 +789,11 @@ pub type DropMethodKeysTable = std::collections::HashMap<String, String>;
 #[derive(Debug, Clone, Default)]
 pub struct Program {
     pub items: Vec<Item>,
+    /// Script mode (design.md § Script mode): the last item is the `main`
+    /// the parser synthesized around the file's top-level statements. The
+    /// formatter writes those statements back where they were, never the
+    /// implicit `main` (B-2026-11-04-36).
+    pub script_main: bool,
     /// Where the appended Kāra library starts in the source, when the
     /// program was checked with it (`karac check`, B-2026-10-12-23): items
     /// at or past this byte offset are the library's, not the user's.
