@@ -625,6 +625,14 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
         ty("LaterTrack", Some(DiagnosticClass::LintWarning)),
     ),
     (
+        "W0293",
+        ty("RedundantAliasBound", Some(DiagnosticClass::LintWarning)),
+    ),
+    (
+        "E0293",
+        ty("RedundantAliasBound", Some(DiagnosticClass::LintWarning)),
+    ),
+    (
         "E0292",
         ty("LaterTrack", Some(DiagnosticClass::LintWarning)),
     ),

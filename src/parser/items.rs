@@ -2245,24 +2245,33 @@ impl super::Parser {
         self.push_effect_scope(generic_params.as_ref());
         let where_clause = self.parse_optional_where_clause();
 
-        // Unit struct: `struct Name;` is sugar for `struct Name {}`.
-        // design.md § Typestate via Phantom Type Parameters writes its
-        // zero-size state markers this way (`struct Disconnected;`), and
-        // the language already HAS that shape — a zero-field struct — so
-        // this accepts the terminator instead of introducing a new kind of
-        // declaration. Everything downstream (resolver, typechecker,
-        // codegen, interpreter) sees exactly what `struct Name {}` produces:
-        // an empty field list, no invariants. The braced spelling stays
-        // canonical and is what the rest of the document uses.
-        let (fields, invariants, impl_invariants) = if self.eat(&Token::Semicolon) {
+        // design.md §5 Structs: "A struct with no fields is declared and
+        // built with empty braces ... The form `struct Marker;` is not
+        // valid" (B-2026-11-04-60). It was accepted as sugar while the spec's
+        // typestate example used it (B-2026-08-23-10); it is refused now,
+        // with the braces as the fix, and parsing goes on as `{}`.
+        let (fields, invariants, impl_invariants) = if self.check(&Token::Semicolon) {
+            let semi = self.current_span();
+            self.advance();
+            self.error_at(
+                &format!(
+                    "`struct {name};` is not valid: a struct with no fields is written \
+                     with empty braces, `struct {name} {{}}` (design.md §5 Structs)"
+                ),
+                semi,
+            );
+            self.fix_edits.insert(
+                crate::resolver::SpanKey::from_span(&semi),
+                crate::resolver::TextEdit {
+                    offset: semi.offset,
+                    length: semi.length,
+                    replacement: " {}".to_string(),
+                },
+            );
             (Vec::new(), Vec::new(), Vec::new())
         } else {
             if !self.check(&Token::LeftBrace) {
-                // Both spellings are legal, so name both. Reporting only
-                // "Expected LeftBrace" here would read as if `;` were still
-                // a parse error, which is exactly the message this row was
-                // filed about.
-                self.error("Expected `{` or `;` after struct name");
+                self.error("Expected `{` after struct name; a struct with no fields is `{}`");
                 return None;
             }
             let open = self.current_span();

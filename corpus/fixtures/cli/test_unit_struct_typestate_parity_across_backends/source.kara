@@ -1,5 +1,5 @@
-struct Disconnected;
-struct Connected;
+struct Disconnected {}
+struct Connected {}
 
 struct Connection[State] { fd: i64 }
 
@@ -11,7 +11,7 @@ fn send(c: ref Connection[Connected], n: i64) -> i64 { c.fd + n }
 
 // A unit struct is still a struct: constructible with the braced literal
 // and usable as an ordinary value, not only as a phantom argument.
-struct Marker;
+struct Marker {}
 
 fn main() {
     let c = Connection[Disconnected] { fd: 4 };

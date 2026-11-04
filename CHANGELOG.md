@@ -49,6 +49,10 @@ accepted by 0.8.0 are now refused, each with a fix-it.
   in place breaks the map's hash or order. `remove` and `insert` instead.
   The value binding is now a `mut ref V` for a `Copy` `V` too, so `*v = 9`
   writes it and `v = 9` gets the auto-deref diagnostic (B-2026-11-03-17).
+- An or-pattern whose alternatives bind different names (`A(x) | B(y)`)
+  is refused (design.md §5 Or-patterns; B-2026-11-04-60).
+- `struct Marker;` is refused; a struct with no fields is `struct Marker {}`
+  (design.md §5 Structs), which `karac fix` writes (B-2026-11-04-60).
 
 ### Added
 
@@ -91,6 +95,8 @@ accepted by 0.8.0 are now refused, each with a fix-it.
 - A struct literal that names a field not visible where it is written (a
   `private` field from another directory) is refused, `E0111`, as a read of
   that field already was (B-2026-11-04-46).
+- `karac fmt` keeps the parentheses of `x @ (1 | 2)`; it wrote
+  `x @ 1 | 2`, which binds `x` in the first alternative only.
 
 ### Diagnostics
 
@@ -153,6 +159,14 @@ accepted by 0.8.0 are now refused, each with a fix-it.
   (B-2026-11-04-44). A `for` over a borrowed concrete iterator
   (`it: VecIntoIter[i64]`) gets the borrowed-iterator diagnostic and fix
   above instead of the same internal message.
+- A list literal builds a `Set` where one is expected:
+  `let s: Set[i64] = [1, 2, 2, 3]` and a `Set` argument, per design.md §5
+  Collection literals (B-2026-11-04-58).
+- An alias whose bound a type argument does not meet reports one E0262
+  naming the whole bound, `'f64' does not satisfy 'T: Eq + Hash' required by
+  alias 'Counts'`, and a bound the aliased type already requires
+  (`type Sk[T: Ord] = SortedMap[T, i32]`) draws `redundant_alias_bound`
+  (W0293). design.md names E0262 and E0263 (B-2026-11-04-60).
 - An inherent `m(self)` called as `s.m()` borrows `s` even when a trait's
   `m(own self)` is also implemented for the type; the ownership check
   charged the trait's mode (B-2026-11-04-12).

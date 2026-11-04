@@ -234,7 +234,7 @@ fn fmt_keeps_a_literals_escapes() {
 
 #[test]
 fn fmt_writes_an_empty_struct_on_one_line() {
-    let src = "struct Unit;\n\nstruct Empty {}\n\nfn main() {\n    let u = Unit {};\n}\n";
+    let src = "struct Unit {\n}\n\nstruct Empty {}\n\nfn main() {\n    let u = Unit {};\n}\n";
     let once = karac::format_source(src).unwrap();
     assert_eq!(
         once,

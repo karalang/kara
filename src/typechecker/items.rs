@@ -413,6 +413,9 @@ impl<'a> super::TypeChecker<'a> {
                 // phase-8 "type alias bounds" entry) live elsewhere.
                 Item::TypeAlias(t) => {
                     self.reject_user_variance_markers(&t.generic_params, false);
+                    self.lint_override_stack.push(t.lint_overrides.to_vec());
+                    self.check_redundant_alias_bounds(t);
+                    self.lint_override_stack.pop();
                     if let Some(pred) = &t.refinement {
                         let base = match self.env.type_aliases.get(&t.name) {
                             Some(Type::Refinement { base, .. }) => Some((**base).clone()),

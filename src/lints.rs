@@ -156,6 +156,11 @@ pub const STARTER_LINTS: &[LintInfo] = &[
         description: "An `as` cast to the type its operand already has.",
     },
     LintInfo {
+        name: "redundant_alias_bound",
+        default_level: LintLevel::Warn,
+        description: "A bound on a type alias's parameter that the aliased type already requires (`type Sk[T: Ord] = SortedMap[T, i32]`).",
+    },
+    LintInfo {
         name: "lossless_cast",
         default_level: LintLevel::Warn,
         description: "An `as` cast whose lossless widening happens implicitly where it stands (a binding, argument or return of the target type).",

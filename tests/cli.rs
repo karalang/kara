@@ -28904,13 +28904,11 @@ fn test_shared_struct_still_has_no_display_impl() {
 }
 
 /// design.md § Typestate via Phantom Type Parameters, transcribed with its
-/// own declaration syntax — `struct Disconnected;` / `struct Connected;`.
-/// B-2026-08-23-10: that spelling did not parse, so the section's worked
-/// example could not be written as the spec writes it. The pattern itself
-/// always worked once the markers were respelled `{}`; this pins that the
-/// SPEC'S spelling now reaches all three backends with identical output,
-/// so the sugar is a parser-level desugar and nothing downstream sees a
-/// different shape.
+/// own declaration syntax. The markers were written `struct Disconnected;`
+/// there once (B-2026-08-23-10); design.md §5 now writes a field-less struct
+/// with empty braces and refuses the semicolon form (B-2026-11-04-60), so
+/// the markers are `struct Disconnected {}`. This pins that the typestate
+/// pattern reaches all three backends with identical output.
 ///
 /// B-2026-08-24-3 completed the transcription: the literal now carries its
 /// explicit generic arguments (`Connection[Connected] { fd: ... }`), which is
@@ -28920,8 +28918,8 @@ fn test_shared_struct_still_has_no_display_impl() {
 #[test]
 fn test_unit_struct_typestate_parity_across_backends() {
     let tmp = scratch_project("unit-struct-typestate-parity");
-    let src = r#"struct Disconnected;
-struct Connected;
+    let src = r#"struct Disconnected {}
+struct Connected {}
 
 struct Connection[State] { fd: i64 }
 
@@ -28933,7 +28931,7 @@ fn send(c: ref Connection[Connected], n: i64) -> i64 { c.fd + n }
 
 // A unit struct is still a struct: constructible with the braced literal
 // and usable as an ordinary value, not only as a phantom argument.
-struct Marker;
+struct Marker {}
 
 fn main() {
     let c = Connection[Disconnected] { fd: 4 };

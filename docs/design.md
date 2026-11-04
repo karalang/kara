@@ -1511,10 +1511,10 @@ let by_score: Counts[f64] = Map.new();       // ERROR: f64 does not implement Eq
 
 **Bounds add to the aliased type's own bounds.** `type SortedVec[T: Ord] = Vec[T]` adds a requirement that `Vec` does not have. `SortedVec[String]` checks `String: Ord`, and for every other purpose the alias is `Vec[String]`. When the aliased type already requires the bound (`type SortedKeyMap[T: Ord] = SortedMap[T, i32]`, where `SortedMap` already needs `K: Ord`), the bound is redundant but accepted, with `warning[redundant_alias_bound]: bound 'T: Ord' on alias 'SortedKeyMap' is implied by the underlying type 'SortedMap[T, i32]'; consider removing`. `#[allow(redundant_alias_bound)]` keeps it when the author wants to document the requirement.
 
-**Diagnostic.** When a use site does not satisfy an alias's bound:
+**Diagnostic.** When a use site does not satisfy an alias's bound, the error is `E0262 TypeAliasBoundNotSatisfied`:
 
 ```
-error[E_TYPE_ALIAS_BOUND_NOT_SATISFIED]: 'f64' does not satisfy 'T: Eq + Hash' required by alias 'Counts'
+error[E0262]: 'f64' does not satisfy 'T: Eq + Hash' required by alias 'Counts'
   --> src/lookup.kara:42:26
    |
 42 |     let by_score: Counts[f64] = Map.new();
@@ -1710,7 +1710,7 @@ match age {
 }
 ```
 
-A named bound follows the same type, ordering, exhaustiveness and composition rules as a literal; it only names a value. A path that does not resolve to such a constant is `error[E_RANGE_PATTERN_BOUND_NOT_CONST]: range pattern bound 'PATH' must resolve to a module-level integer or char const`, which says whether the path was not found, not a const, of the wrong type, or not module-level. Two bounds of different resolved types fall under the same-type rule, and the diagnostic names both types. Calls and other constant expressions are not accepted in a pattern, only literals and bare paths, so that patterns stay simple enough for the exhaustiveness algorithm.
+A named bound follows the same type, ordering, exhaustiveness and composition rules as a literal; it only names a value. A path that does not resolve to such a constant is E0263 RangePatternBoundNotConst, `error[E0263]: range pattern bound 'PATH' must resolve to a module-level integer or char const`, which says whether the path was not found, not a const, of the wrong type, or not module-level. Two bounds of different resolved types fall under the same-type rule, and the diagnostic names both types. Calls and other constant expressions are not accepted in a pattern, only literals and bare paths, so that patterns stay simple enough for the exhaustiveness algorithm.
 
 #### `@` bindings
 

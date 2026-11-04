@@ -46,7 +46,17 @@ impl super::Formatter {
                 }
                 self.write_ident(name);
                 self.write_str(" @ ");
+                // `x @ (1 | 2)` keeps its parentheses: unparenthesized,
+                // `x @ 1 | 2` parses as `(x @ 1) | 2` and binds `x` in one
+                // alternative only.
+                let grouped = matches!(pattern.kind, PatternKind::Or(_));
+                if grouped {
+                    self.write_str("(");
+                }
                 self.format_pattern(pattern);
+                if grouped {
+                    self.write_str(")");
+                }
             }
             PatternKind::Struct {
                 path,

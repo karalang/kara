@@ -1981,6 +1981,7 @@ impl<'a> super::TypeChecker<'a> {
                 for alt in alternatives {
                     self.check_pattern_against(alt, expected, mode);
                 }
+                self.check_or_pattern_names(alternatives);
             }
             PatternKind::Slice {
                 prefix,
@@ -2268,6 +2269,45 @@ impl<'a> super::TypeChecker<'a> {
             TypeErrorKind::PatternScrutineeMismatch,
         );
         true
+    }
+
+    /// design.md §5 Or-patterns: "Every alternative must bind the same names
+    /// with the same types. `A(x) | B(y)` is an error" (B-2026-11-04-60; it
+    /// was accepted, and an arm reading `y` after matching `A` reads nothing).
+    fn check_or_pattern_names(&mut self, alternatives: &[Pattern]) {
+        let names = |p: &Pattern| -> std::collections::BTreeSet<String> {
+            p.binding_names()
+                .into_iter()
+                // A qualified unit variant (`Val.Nil`) reads as a binding
+                // leaf; it binds nothing.
+                .filter(|n| n != "_" && !n.contains('.') && !self.is_known_unit_variant(n))
+                .collect()
+        };
+        let Some(first) = alternatives.first() else {
+            return;
+        };
+        let want = names(first);
+        for alt in &alternatives[1..] {
+            let got = names(alt);
+            if got == want {
+                continue;
+            }
+            let missing: Vec<String> = want
+                .symmetric_difference(&got)
+                .map(|n| format!("`{n}`"))
+                .collect();
+            self.type_error(
+                format!(
+                    "every alternative of an or-pattern binds the same names (design.md §5 \
+                     Or-patterns): {} {} bound in one alternative and not in another",
+                    missing.join(", "),
+                    if missing.len() == 1 { "is" } else { "are" },
+                ),
+                alt.span,
+                TypeErrorKind::TypeMismatch,
+            );
+            return;
+        }
     }
 
     fn is_known_unit_variant(&self, name: &str) -> bool {

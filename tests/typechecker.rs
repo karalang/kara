@@ -46345,8 +46345,8 @@ fn test_phantom_parameter_is_bound_by_explicit_literal_type_args() {
     // this reported "cannot infer type parameter 'State'". design.md
     // § Typestate via Phantom Type Parameters depends on exactly this.
     typecheck_ok(
-        "struct Disconnected;\n\
-         struct Connected;\n\
+        "struct Disconnected {}\n\
+         struct Connected {}\n\
          struct Connection[State] { fd: i64 }\n\
          fn connect(c: Connection[Disconnected]) -> Connection[Connected] {\n\
              Connection[Connected] { fd: c.fd }\n\
@@ -46366,8 +46366,8 @@ fn test_wrong_typestate_is_still_rejected() {
     // A feature that made every state compatible would "pass" the positive
     // test above while destroying the reason the pattern exists.
     let errors = typecheck_errors(
-        "struct Disconnected;\n\
-         struct Connected;\n\
+        "struct Disconnected {}\n\
+         struct Connected {}\n\
          struct Connection[State] { fd: i64 }\n\
          fn send(c: ref Connection[Connected], n: i64) -> i64 { c.fd + n }\n\
          fn main() {\n\
@@ -46407,7 +46407,7 @@ fn test_literal_type_arg_arity_is_diagnosed() {
     // diagnostic here, not a silent fallback to inference that reports
     // something less specific somewhere else.
     let errors = typecheck_errors(
-        "struct S;\nstruct C[T] { fd: i64 }\nfn main() { let c = C[S, S] { fd: 1 }; }",
+        "struct S {}\nstruct C[T] { fd: i64 }\nfn main() { let c = C[S, S] { fd: 1 }; }",
     );
     assert!(
         errors
@@ -46418,7 +46418,7 @@ fn test_literal_type_arg_arity_is_diagnosed() {
     );
 
     let errors =
-        typecheck_errors("struct S;\nstruct P { x: i64 }\nfn main() { let p = P[S] { x: 1 }; }");
+        typecheck_errors("struct S {}\nstruct P { x: i64 }\nfn main() { let p = P[S] { x: 1 }; }");
     assert!(
         errors.iter().any(|e| e.message.contains("is not generic")),
         "expected a non-generic diagnostic, got: {:?}",
@@ -46430,7 +46430,7 @@ fn test_literal_type_arg_arity_is_diagnosed() {
 fn test_bare_and_annotated_struct_literal_forms_are_unaffected() {
     // The two spellings that already worked must keep working — the lookahead
     // only fires on `Name[...]` immediately followed by a literal body.
-    typecheck_ok("struct S;\nstruct C[T] { fd: i64 }\nfn main() { let c: C[S] = C { fd: 1 }; }");
+    typecheck_ok("struct S {}\nstruct C[T] { fd: i64 }\nfn main() { let c: C[S] = C { fd: 1 }; }");
     typecheck_ok("struct P { x: i64 }\nfn main() { let p = P { x: 1 }; }");
 }
 

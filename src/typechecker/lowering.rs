@@ -1293,24 +1293,27 @@ impl<'a> super::TypeChecker<'a> {
         let mut subs: HashMap<String, SubstValue> = HashMap::new();
         for (param, arg) in params.params.iter().zip(supplied.iter()) {
             if !matches!(arg, Type::TypeParam(_)) {
-                for bound in &param.bounds {
-                    let Some(trait_name) = bound.path.last() else {
-                        continue;
-                    };
-                    if !self.type_satisfies_bound(arg, trait_name) {
-                        self.type_error(
-                            format!(
-                                "'{}' does not satisfy '{}' required by type alias \
-                                 '{}' parameter '{}'",
-                                type_display(arg),
-                                trait_name,
-                                alias_name,
-                                param.name,
-                            ),
-                            path.span,
-                            TypeErrorKind::TypeAliasBoundNotSatisfied,
-                        );
-                    }
+                // design.md § Type aliases: one error naming the parameter's
+                // whole bound, `'f64' does not satisfy 'T: Eq + Hash' required
+                // by alias 'Counts'` (B-2026-11-04-60; it was one per bound).
+                let traits: Vec<&String> =
+                    param.bounds.iter().filter_map(|b| b.path.last()).collect();
+                if traits.iter().any(|t| !self.type_satisfies_bound(arg, t)) {
+                    self.type_error(
+                        format!(
+                            "'{}' does not satisfy '{}: {}' required by alias '{}'",
+                            type_display(arg),
+                            param.name,
+                            traits
+                                .iter()
+                                .map(|t| t.as_str())
+                                .collect::<Vec<_>>()
+                                .join(" + "),
+                            alias_name,
+                        ),
+                        path.span,
+                        TypeErrorKind::TypeAliasBoundNotSatisfied,
+                    );
                 }
             }
             subs.insert(param.name.clone(), SubstValue::Type(arg.clone()));

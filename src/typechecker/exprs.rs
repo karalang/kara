@@ -3171,6 +3171,26 @@ impl<'a> super::TypeChecker<'a> {
             self.record_expr_type(&expr.span, expected);
             return expected.clone();
         }
+        // design.md §5 Collection literals: `[a, b, c]` "follows the expected
+        // type: with an `Array[T, N]` or `Set[T]` annotation it builds that
+        // type" (B-2026-11-04-58; a `Set` was refused as "found 'Vec'"). MIR
+        // builds it as the prefix literal `Set[a, b, c]`, adding in order.
+        if let ExprKind::ArrayLiteral(items) = &expr.kind {
+            let wanted = Self::peel_borrow(expected);
+            if (self.cli_lint_overrides.strict_core || self.library_methods_from_source)
+                && matches!(wanted, Type::Named { name, args } if name == "Set" && args.len() == 1)
+            {
+                let Type::Named { args, .. } = wanted else {
+                    unreachable!()
+                };
+                let element = args[0].clone();
+                for item in items {
+                    self.check_expr(item, &element);
+                }
+                self.record_expr_type(&expr.span, wanted);
+                return wanted.clone();
+            }
+        }
         // design.md § Collection literals: a bare map literal is a
         // `SortedMap` where one is expected, and `[:]` takes its key and
         // value types from the expected type (B-2026-10-19-60).

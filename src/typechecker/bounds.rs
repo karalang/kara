@@ -329,6 +329,94 @@ impl<'a> super::TypeChecker<'a> {
         Some(self.lower_type_expr(&te, &scope))
     }
 
+    /// design.md § Type aliases: "When the aliased type already requires the
+    /// bound (`type SortedKeyMap[T: Ord] = SortedMap[T, i32]`, where
+    /// `SortedMap` already needs `K: Ord`), the bound is redundant but
+    /// accepted, with `warning[redundant_alias_bound]`" (B-2026-11-04-60; the
+    /// lint was specified and never emitted). A parameter passed straight
+    /// into a slot that requires the trait is the one case read here: an
+    /// ordered collection's key, or a user type's bounded parameter.
+    pub(super) fn check_redundant_alias_bounds(&mut self, alias: &crate::ast::TypeAliasDef) {
+        let Some(params) = &alias.generic_params else {
+            return;
+        };
+        let TypeKind::Path(path) = &alias.ty.kind else {
+            return;
+        };
+        let Some(head) = path.segments.last() else {
+            return;
+        };
+        let Some(args) = &path.generic_args else {
+            return;
+        };
+        let required_at = |this: &Self, i: usize| -> Vec<String> {
+            // `Map` / `Set` keys need `Eq + Hash` too, but the spec's own
+            // showcase of an enforced bound is `type Counts[T: Eq + Hash] =
+            // Map[T, i64]`, whose bound buys the alias-level E0262 at the use
+            // site; the spec's redundant example is the ordered map's `Ord`.
+            let keyed: &[&str] = match head.as_str() {
+                "SortedMap" | "SortedSet" if i == 0 => &["Ord"],
+                _ => &[],
+            };
+            if !keyed.is_empty() {
+                return keyed.iter().map(|t| t.to_string()).collect();
+            }
+            let declared = this.program.items.iter().find_map(|it| match it {
+                Item::StructDef(d) if &d.name == head => d.generic_params.as_ref(),
+                Item::EnumDef(d) if &d.name == head => d.generic_params.as_ref(),
+                _ => None,
+            });
+            declared
+                .and_then(|g| g.params.get(i))
+                .map(|p| {
+                    p.bounds
+                        .iter()
+                        .filter_map(|b| b.path.last().cloned())
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        let mut found: Vec<(String, String)> = Vec::new();
+        for (i, arg) in args.iter().enumerate() {
+            let GenericArg::Type(te) = arg else {
+                continue;
+            };
+            let TypeKind::Path(p) = &te.kind else {
+                continue;
+            };
+            if p.segments.len() != 1 || p.generic_args.is_some() {
+                continue;
+            }
+            let Some(param) = params.params.iter().find(|gp| gp.name == p.segments[0]) else {
+                continue;
+            };
+            let required = required_at(self, i);
+            for b in &param.bounds {
+                if let Some(t) = b.path.last() {
+                    if required.contains(t) {
+                        found.push((param.name.clone(), t.clone()));
+                    }
+                }
+            }
+        }
+        if found.is_empty() {
+            return;
+        }
+        let underlying = crate::formatter::render_type_expr(&alias.ty);
+        for (param, t) in found {
+            self.type_lint_warning(
+                format!(
+                    "bound '{param}: {t}' on alias '{}' is implied by the underlying type \
+                     '{underlying}'; consider removing",
+                    alias.name
+                ),
+                alias.span,
+                TypeErrorKind::RedundantAliasBound,
+                "redundant_alias_bound",
+            );
+        }
+    }
+
     /// B-2026-11-04-17 — a `for` over a borrow of a type parameter bounded by
     /// `Iterator` (`it: I`, `it: mut ref I`, `it: impl Iterator[..]`), or of
     /// a concrete non-`Copy` iterator type. The

@@ -1263,6 +1263,10 @@ pub enum TypeErrorKind {
     /// `as` the program does not need, to the type its operand already has,
     /// or a lossless widening that happens implicitly where the cast stands.
     RedundantCast,
+    /// `redundant_alias_bound` lint (design.md § Type aliases): a bound on an
+    /// alias parameter that the aliased type already requires
+    /// (`type Sk[T: Ord] = SortedMap[T, i32]`).
+    RedundantAliasBound,
     /// `prelude_shadow` lint (B-2026-08-27-15) — a user `struct`/`enum`
     /// declaration takes a prelude type's name. design.md § Module System
     /// states the warning as shipped behaviour: prelude names are NOT
@@ -1673,6 +1677,7 @@ pub(crate) fn class_for_type_error_kind(
         | TypeErrorKind::UnfulfilledLintExpectation
         | TypeErrorKind::RedundantSuffix
         | TypeErrorKind::RedundantCast
+        | TypeErrorKind::RedundantAliasBound
         | TypeErrorKind::PreludeShadow
         | TypeErrorKind::ModuleMutBinding
         | TypeErrorKind::ReturnClauseOnFn

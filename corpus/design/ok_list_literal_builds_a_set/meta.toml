@@ -1,0 +1,9 @@
+source = "B-2026-11-04-58"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "collections"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md §5 Collection literals: \"`[a, b, c]` is a `Vec` by default and follows the expected type: with an `Array[T, N]` or `Set[T]` annotation it builds that type\", example `let s: Set[i64] = [1, 2, 3];`. A `Set` parameter is an expected type too."
