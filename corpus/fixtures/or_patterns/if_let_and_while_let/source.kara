@@ -1,0 +1,17 @@
+enum Lr { Left(i64), Right(i64) }
+enum K { A, B, C }
+
+fn main() {
+    let v = Lr.Right(4);
+    if let Lr.Left(x) | Lr.Right(x) = v {
+        println(x);
+    }
+    if let K.A | K.B = K.B { println("yes"); } else { println("no"); }
+    if let K.A | K.B = K.C { println("yes"); } else { println("no"); }
+    let mut items: Vec[Lr] = Vec.new();
+    items.push(Lr.Left(1));
+    items.push(Lr.Right(2));
+    while let Some(Lr.Left(n) | Lr.Right(n)) = items.pop() {
+        println(n);
+    }
+}

@@ -1,0 +1,11 @@
+source = "corpus/fixtures/distinct_types/literal_pattern"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["patterns"]
+class = "a"
+expected_from = "spec"
+rules = []
+backends = []
+env = {}
+note = "design.md § Distinct types: a distinct type has its base type's values for matching, so `Uid(0)` is a literal pattern and `Uid(n)` covers every value (B-2026-11-04-57: \"this variant is not lowered yet\", and `Uid(n)` was reported non-exhaustive)."

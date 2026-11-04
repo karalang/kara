@@ -1,0 +1,25 @@
+#[derive(PartialEq, Eq, Copy, Clone)]
+distinct type Uid = i64;
+
+fn label(u: Uid) -> String {
+    match u {
+        Uid(0) => "zero".to_string(),
+        Uid(1) => "one".to_string(),
+        _ => "many".to_string(),
+    }
+}
+
+fn score(u: Uid) -> i64 {
+    match u {
+        Uid(0) => 100,
+        Uid(n) => n,
+    }
+}
+
+fn main() {
+    println(label(Uid(1)));
+    println(label(Uid(0)));
+    println(label(Uid(9)));
+    println(score(Uid(0)));
+    println(score(Uid(7)));
+}

@@ -1,0 +1,11 @@
+source = "corpus/fixtures/or_patterns/if_let_and_while_let"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["patterns"]
+class = "a"
+expected_from = "spec"
+rules = []
+backends = []
+env = {}
+note = "design.md § Or-patterns: or-patterns work in `if let` and `while let`, `if let Left(x) | Right(x) = val` (B-2026-11-04-57: \"this pattern is not lowered yet\")."

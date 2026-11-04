@@ -1,0 +1,28 @@
+enum E { A(i64), B(i64) }
+enum S { A(String), B(String), C }
+
+fn g(n: i64) -> bool {
+    println("g");
+    n > 0
+}
+
+fn take(s: own String) -> String { s }
+
+fn main() {
+    match E.B(3) {
+        E.A(x) | E.B(x) if g(x) => println(x),
+        _ => println("no"),
+    }
+    match E.A(-1) {
+        E.A(x) | E.B(x) if g(x) => println(x),
+        _ => println("no"),
+    }
+    match S.B("hi".to_string()) {
+        S.A(t) | S.B(t) if t.len() > 1 => println(take(t)),
+        _ => println("short"),
+    }
+    match S.A("x".to_string()) {
+        S.A(t) | S.B(t) if t.len() > 1 => println(take(t)),
+        _ => println("short"),
+    }
+}

@@ -723,6 +723,16 @@ fn lower_pattern(p: &Pattern, scrut_type: &Type, env: &TypeEnv) -> Pat {
         }
         PatternKind::TupleVariant { path, patterns } => {
             let name = path.last().cloned().unwrap_or_default();
+            // `Uid(p)` on a distinct `Uid`: a distinct type has its base
+            // type's values (design.md § Distinct types), so `Uid(n)` covers
+            // them all (B-2026-11-04-57).
+            if let (Type::Named { name: tn, .. }, [sub]) = (scrut_type, patterns.as_slice()) {
+                if *tn == name {
+                    if let Some(base) = env.distinct_bases.get(tn) {
+                        return lower_pattern(sub, base, env);
+                    }
+                }
+            }
             let payload_types = variant_payload_types(scrut_type, &name, env);
             let args = patterns
                 .iter()

@@ -1,0 +1,16 @@
+enum In { A, B, C }
+enum Out { Foo(In), Bar }
+
+fn name(o: Out) -> String {
+    match o {
+        Out.Foo(In.A | In.B) => "ab".to_string(),
+        Out.Foo(In.C) => "c".to_string(),
+        Out.Bar => "bar".to_string(),
+    }
+}
+
+fn main() {
+    println(name(Out.Foo(In.B)));
+    println(name(Out.Foo(In.C)));
+    println(name(Out.Bar));
+}

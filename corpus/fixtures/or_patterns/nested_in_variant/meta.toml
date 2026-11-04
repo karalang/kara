@@ -1,0 +1,11 @@
+source = "corpus/fixtures/or_patterns/nested_in_variant"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["patterns"]
+class = "a"
+expected_from = "spec"
+rules = []
+backends = []
+env = {}
+note = "design.md § Or-patterns: or-patterns may be nested, `Foo(A | B)` means `Foo(A) | Foo(B)` (B-2026-11-04-57: \"this pattern is not lowered yet\")."

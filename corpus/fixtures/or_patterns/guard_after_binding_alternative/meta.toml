@@ -1,0 +1,11 @@
+source = "corpus/fixtures/or_patterns/guard_after_binding_alternative"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["patterns"]
+class = "a"
+expected_from = "spec"
+rules = []
+backends = []
+env = {}
+note = "design.md § Or-patterns: a guard applies after either alternative matches, runs once per match, and a false guard goes on to the next arm; a payload the arm moves is moved only once the guard holds (B-2026-11-04-57: \"this pattern is not lowered yet\")."

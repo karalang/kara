@@ -15396,8 +15396,17 @@ impl<'l, 'a> Bx<'l, 'a> {
         let join = self.b.new_block();
         for arm in arms {
             if let PatternKind::Or(alts) = &arm.pattern.kind {
-                if arm.guard.is_none() && self.pattern_binds(&arm.pattern) {
-                    self.or_arm(alts, &arm.body, &place, st, by_ref, join, dest.clone())?;
+                if self.pattern_binds(&arm.pattern) {
+                    self.or_arm(
+                        alts,
+                        arm.guard.as_ref(),
+                        &arm.body,
+                        &place,
+                        st,
+                        by_ref,
+                        join,
+                        dest.clone(),
+                    )?;
                     continue;
                 }
             }
@@ -15501,9 +15510,15 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// alternative's; the body reads those. Leaves `self.cur` at the next
     /// arm's test.
     #[allow(clippy::too_many_arguments)]
+    /// A binding or-pattern arm `P1 | P2 [if G] => body`: the first
+    /// alternative that matches binds the names every alternative shares,
+    /// then the guard runs once against them (design.md § Or-patterns and
+    /// guards); a false guard goes on to the next arm (B-2026-11-04-57).
+    #[allow(clippy::too_many_arguments)]
     fn or_arm(
         &mut self,
         alts: &'a [Pattern],
+        guard: Option<&'a Expr>,
         body: &'a Expr,
         place: &Place,
         st: Ty,
@@ -15513,6 +15528,17 @@ impl<'l, 'a> Bx<'l, 'a> {
     ) -> R<()> {
         let body_bb = self.b.new_block();
         let next = self.b.new_block();
+        let guard_bb = match guard {
+            Some(_) => self.b.new_block(),
+            None => body_bb,
+        };
+        // A guard reads the bindings by reference; the arm moves them only
+        // once it is chosen, from the alternative that matched.
+        let guard_by_ref = guard.is_some() && !by_ref;
+        let which = guard_by_ref.then(|| {
+            let t = self.tys().tcx().intern(HK::Int(IntSize::I64));
+            (self.temp(t), t)
+        });
         self.push_scope();
         let mut canon: Vec<(String, Local, Ty)> = Vec::new();
         for (i, alt) in alts.iter().enumerate() {
@@ -15522,40 +15548,116 @@ impl<'l, 'a> Bx<'l, 'a> {
                 self.b.new_block()
             };
             self.test_pattern(alt, place, st, fail)?;
-            let mut binds = Vec::new();
-            self.bind_pattern(alt, place, st, by_ref, &mut binds)?;
-            for (l, t) in binds {
-                let Some((name, node)) = self.b.user_name(l) else {
-                    continue;
-                };
-                let c = match canon.iter().find(|(n, ..)| *n == name) {
-                    Some(&(_, c, _)) => {
-                        let op = self.use_place(Place::local(l), t);
-                        self.assign(c, Rvalue::Use(op));
-                        c
-                    }
-                    None => {
-                        canon.push((name.clone(), l, t));
-                        l
-                    }
-                };
-                // The body's uses of `name` resolve to one alternative's
-                // binding: every alternative's names the shared local.
-                if let Some(&sym) = self.lcx.binding_syms.get(&(node, name)) {
-                    self.locals.insert(sym, c);
-                }
+            self.bind_alternative(alt, place, st, by_ref || guard_by_ref, &mut canon)?;
+            if let Some((w, t)) = which {
+                self.assign(
+                    w,
+                    Rvalue::Use(Operand::Const(Const {
+                        ty: t,
+                        kind: ConstKind::Scalar(i as u128),
+                    })),
+                );
             }
-            self.goto(body_bb);
+            self.goto(guard_bb);
             self.cur = fail;
         }
-        self.cur = body_bb;
+        self.cur = guard_bb;
         for &(_, l, t) in &canon {
             self.declare(l, t);
+        }
+        if let Some(g) = guard {
+            self.push_scope();
+            let bool_t = self.tys().bool();
+            let c = self.owned_operand(g, bool_t)?;
+            let c = self.read_before_drops(c, bool_t);
+            self.pop_scope()?;
+            let pass = self.b.new_block();
+            let fail = self.b.new_block();
+            self.goto_with(
+                TerminatorKind::SwitchInt {
+                    discr: c,
+                    targets: SwitchTargets::if_else(pass, fail),
+                },
+                fail,
+            );
+            // A failed guard leaves the arm's scope and tries the next arm.
+            let entries = std::mem::take(self.scopes.last_mut().unwrap());
+            self.exit_entries(&entries, false)?;
+            *self.scopes.last_mut().unwrap() = entries;
+            self.goto(next);
+            self.cur = pass;
+            if let Some((w, _)) = which {
+                let picks: Vec<BasicBlock> = alts.iter().map(|_| self.b.new_block()).collect();
+                let unreachable = self.b.new_block();
+                self.goto_with(
+                    TerminatorKind::SwitchInt {
+                        discr: Operand::Copy(Place::local(w)),
+                        targets: SwitchTargets {
+                            values: picks
+                                .iter()
+                                .enumerate()
+                                .map(|(i, &b)| (i as u128, b))
+                                .collect(),
+                            otherwise: unreachable,
+                        },
+                    },
+                    unreachable,
+                );
+                self.diverge(TerminatorKind::Unreachable);
+                let mut moved: Vec<(String, Local, Ty)> = Vec::new();
+                for (alt, &bb) in alts.iter().zip(&picks) {
+                    self.cur = bb;
+                    self.bind_alternative(alt, place, st, false, &mut moved)?;
+                    self.goto(body_bb);
+                }
+                self.cur = body_bb;
+                for &(_, l, t) in &moved {
+                    self.declare(l, t);
+                }
+            } else {
+                self.goto(body_bb);
+                self.cur = body_bb;
+            }
         }
         self.expr_into(body, dest)?;
         self.pop_scope()?;
         self.goto(join);
         self.cur = next;
+        Ok(())
+    }
+
+    /// Bind one alternative of an or-pattern into the locals `canon` names
+    /// (the first alternative's), so the arm's uses of a name read one local
+    /// whichever alternative matched.
+    fn bind_alternative(
+        &mut self,
+        alt: &'a Pattern,
+        place: &Place,
+        st: Ty,
+        by_ref: bool,
+        canon: &mut Vec<(String, Local, Ty)>,
+    ) -> R<()> {
+        let mut binds = Vec::new();
+        self.bind_pattern(alt, place, st, by_ref, &mut binds)?;
+        for (l, t) in binds {
+            let Some((name, node)) = self.b.user_name(l) else {
+                continue;
+            };
+            let c = match canon.iter().find(|(n, ..)| *n == name) {
+                Some(&(_, c, _)) => {
+                    let op = self.use_place(Place::local(l), t);
+                    self.assign(c, Rvalue::Use(op));
+                    c
+                }
+                None => {
+                    canon.push((name.clone(), l, t));
+                    l
+                }
+            };
+            if let Some(&sym) = self.lcx.binding_syms.get(&(node, name)) {
+                self.locals.insert(sym, c);
+            }
+        }
         Ok(())
     }
 
@@ -16628,6 +16730,10 @@ impl<'l, 'a> Bx<'l, 'a> {
         t: Ty,
         fail: BasicBlock,
     ) -> R<()> {
+        // `Uid(0)` on a distinct type: its base value (B-2026-11-04-57).
+        if let (Some(bt), [sub]) = (self.distinct_ctor_base(v, t), subs) {
+            return self.test_pattern(sub, &place.field(0, bt), bt, fail);
+        }
         let Some(idx) = self.variant_at(v, t) else {
             return self.unsupported(pat.span, "this variant");
         };
@@ -16671,7 +16777,31 @@ impl<'l, 'a> Bx<'l, 'a> {
     }
 
     fn pattern_binds(&self, pat: &Pattern) -> bool {
-        !pat.binding_names().is_empty()
+        match &pat.kind {
+            // A name that resolves to a unit variant or a constant tests the
+            // value; it binds nothing (`Out.Foo(In.A | In.B)`,
+            // B-2026-11-04-57).
+            PatternKind::Binding(_) => !matches!(self.lcx.res.get(&pat.id), Some(Res::Def(_))),
+            PatternKind::AtBinding { .. } => true,
+            PatternKind::Wildcard | PatternKind::Literal(_) | PatternKind::RangePattern { .. } => {
+                false
+            }
+            PatternKind::Tuple(ps) | PatternKind::TupleVariant { patterns: ps, .. } => {
+                ps.iter().any(|p| self.pattern_binds(p))
+            }
+            PatternKind::Struct { fields, .. } => fields
+                .iter()
+                .any(|f| f.pattern.as_ref().is_none_or(|p| self.pattern_binds(p))),
+            PatternKind::Or(alts) => alts.iter().any(|p| self.pattern_binds(p)),
+            PatternKind::Slice {
+                prefix,
+                rest,
+                suffix,
+            } => {
+                matches!(rest, Some(ast::RestPattern::Bound(_)))
+                    || prefix.iter().chain(suffix).any(|p| self.pattern_binds(p))
+            }
+        }
     }
 
     /// Whether an irrefutable pattern binds only by `ref` or copies, so
@@ -16761,6 +16891,9 @@ impl<'l, 'a> Bx<'l, 'a> {
                 let Some(&Res::Def(d)) = self.lcx.res.get(&pat.id) else {
                     return Ok(());
                 };
+                if let (Some(bt), [sub]) = (self.distinct_ctor_base(d, t), patterns.as_slice()) {
+                    return self.bind_pattern(sub, &place.field(0, bt), bt, by_ref, out);
+                }
                 let Some(idx) = self.variant_at(d, t) else {
                     return Ok(());
                 };
@@ -16794,6 +16927,29 @@ impl<'l, 'a> Bx<'l, 'a> {
             // Which alternative matched is not known here, so only an
             // or-pattern that binds nothing is lowered.
             PatternKind::Or(_) if !self.pattern_binds(pat) => Ok(()),
+            // One that binds, where the pattern is known to match (an `if
+            // let`, a `while let`, a nested alternative): the first
+            // alternative that matches binds the names they share
+            // (B-2026-11-04-57).
+            PatternKind::Or(alts) => {
+                let done = self.b.new_block();
+                let mut canon: Vec<(String, Local, Ty)> = Vec::new();
+                for (i, alt) in alts.iter().enumerate() {
+                    if i + 1 < alts.len() {
+                        let other = self.b.new_block();
+                        self.test_pattern(alt, place, t, other)?;
+                        self.bind_alternative(alt, place, t, by_ref, &mut canon)?;
+                        self.goto(done);
+                        self.cur = other;
+                    } else {
+                        self.bind_alternative(alt, place, t, by_ref, &mut canon)?;
+                        self.goto(done);
+                    }
+                }
+                self.cur = done;
+                out.extend(canon.into_iter().map(|(_, l, t)| (l, t)));
+                Ok(())
+            }
             // `x @ p`: `x` names the whole, `p` binds its parts. Both can
             // hold their values only when the whole is copied or borrowed.
             PatternKind::AtBinding {
@@ -16891,7 +17047,6 @@ impl<'l, 'a> Bx<'l, 'a> {
                 }
                 Ok(())
             }
-            _ => self.unsupported(pat.span, "this pattern"),
         }
     }
 
@@ -19799,6 +19954,15 @@ impl<'l, 'a> Bx<'l, 'a> {
             return None;
         }
         self.tys().tcx().field_ty(t, None, 0)
+    }
+
+    /// The base of the distinct type `t` when `ctor` names it: a pattern
+    /// `Uid(p)` on a `Uid` tests and binds its base with `p`.
+    fn distinct_ctor_base(&self, ctor: DefId, t: Ty) -> Option<Ty> {
+        match self.tys().tcx().kind(t) {
+            HK::Adt { def, .. } if def == ctor => self.distinct_base(t),
+            _ => None,
+        }
     }
 
     /// `dest = T(v)` for the distinct type `t`.
