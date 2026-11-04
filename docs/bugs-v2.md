@@ -59,7 +59,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 113 |
-| false-positive | 101 |
+| false-positive | 102 |
 | perf | 90 |
 | missing-feature | 70 |
 | soundness | 48 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 177 |
-| mir | 109 |
+| mir | 110 |
 | mir-llvm | 105 |
 | cli | 53 |
 | ownership | 48 |
@@ -102,10 +102,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-04-5 | 2026-11-04 | parser | medium | Remainder after c2a612b69c (which names and fixes a Rust `::` path in an expression or a pattern: `Vec::new()`, `String::from("ab")`, `i64::MAX`, `HashMap::new()`, `std::cmp::max`, `Dir::Up =>`): an import path `import std::collections::HashMap;` (what `karac fix` makes of Rust's `use`) still gets only `Expected ';', found '::'` with no fix, and once `HashMap::new()` is fixed to `HashMap.new()` the resolver says only "undefined name 'HashMap'" with no hint toward Kāra's `Map` | — |
 | B-2026-11-04-6 | 2026-11-04 | parser | low | Rust angle-bracket generics on a DECLARATION (`struct Bx<T> { v: T }`, `impl<T> Bx<T> { .. }`) get `Expected '{' or ';' after struct name` with no fix, though the same brackets in a type position (`Vec<i64>`, `Result<i64, String>`, `Box<..>`) are named and machine-fixed to `[..]` | — |
 | B-2026-11-04-7 | 2026-11-04 | parser | low | Two Rust-isms are fixed into a program that is still refused: `fn first(s: &[i64])` is fixed to `ref [i64]`, whose `[T]` diagnostic then offers no machine edit to `Slice[i64]`; `-> Box<dyn Fn(i64) -> i64>` is fixed to `Box[dyn Fn(i64) -> i64]`, which then fails to parse (`Expected ']', found '('`) | — |
-| B-2026-11-04-8 | 2026-11-04 | mir | high | UFCS on a program trait (`A.m(s)`, design.md §9 Method resolution) is refused by `karac check`, `karac run` and `karac build` with "a call that leaves out default arguments is not lowered yet"; this is the fix the ambiguity diagnostic points at, so two traits sharing a method name have no way out, and inside a generic body under `T: A + B` the UFCS call `A.m(x)` is itself reported as ambiguous | — |
-| B-2026-11-04-9 | 2026-11-04 | mir | high | In a generic body under `T: Named`, `T.label()` calls the concrete type's INHERENT associated function of the same name instead of the trait's (prints "inherent", expected "trait") on every lane; the method form `x.m()` under the same shape correctly calls the trait's | — |
-| B-2026-11-04-10 | 2026-11-04 | mir | medium | A program associated function named like a comptime reflection method (`fn name() -> String` in a trait or inherent impl) passes `karac check` but `P.name()` / `T.name()` lowers to the native `Type.name`: `karac run`/interp stops with "`Type.name` runs only at compile time, inside a `comptime` evaluation" and the LLVM lane with "native `Type.name` is not lowered yet" | — |
-| B-2026-11-04-11 | 2026-11-04 | mir | medium | A generic body under one bound `[T: B]` calling `x.m()` is refused ("the method call `.m` with no resolved callee is not lowered yet") when the concrete type also implements ANOTHER trait with a method `m`; design.md §9 says lookup uses the bound and gives one candidate | — |
 | B-2026-11-04-12 | 2026-11-04 | ownership | medium | The ownership check charges `s.m()` with the TRAIT method's `own self` when an inherent `m(self)` is the method chosen: `let s = S {}; println(s.m()); println(s.m());` is refused "value 's' moved here, used again" though inherent methods win (design.md §9 Method resolution) and interp runs it (inh, inh) | — |
 | B-2026-11-04-13 | 2026-11-04 | typecheck | medium | An impl method with a STRONGER mode than its trait (`fn look(mut ref self)` for the trait's `fn look(self)`) is not refused at the impl (design.md §9 Conformance: the impl's modes may be the trait's or weaker); the method silently gets the trait's `self`, so with no write it is accepted, and a write in its body reports "the receiver is `ref self` ... Declare the method `mut ref self`", which it already is | — |
 | B-2026-11-04-14 | 2026-11-04 | typecheck | medium | Coherence is not checked where impls are declared for three overlap shapes: a duplicate `impl T for S` twice, `impl[X: Eq] T for B[X]` beside `impl[X: Ord] T for B[X]`, and a second `impl Iterator for Up` with another `Item`; each is accepted and the first call says "ambiguous ... Use UFCS" listing two identical candidates (`T.f(S)` twice) that UFCS cannot separate | — |
@@ -126,6 +122,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-04-32 | 2026-11-04 | mir-llvm | low | Kata 297's peak RSS is 1.35x Rust's (233-235 MiB vs 173 MiB) on the MIR backend, where the 2026-08-28 feed read 179.9 vs 174.3 MiB | — |
 | B-2026-11-04-33 | 2026-11-04 | mir-llvm | low | Six more katas sit at 1.03-1.20x legacy's cycles or instructions on the MIR backend, each too small to file alone, and kata 895's par lane slipped to 2.31x rayon: the third borderline batch after B-2026-11-01-45 | — |
 | B-2026-11-04-36 | 2026-11-04 | cli | low | `karac fmt` rewrites a script-mode file into an explicit `fn main()`, its top-level statements moved after every item; since B-2026-11-04-19 it also writes the implicit main's `-> Result[(), AnyError]` and `Ok(())`, so formatting a script changes its shape (design.md § Script mode) | — |
+| B-2026-11-04-40 | 2026-11-04 | mir | medium | A trait's default method body calling `self.m()` is refused as ambiguous ("ambiguous method 'm' on receiver of type 'S'") in the copy for a type that also implements another trait with a method `m`; inside trait `A`'s default, `self.m()` is `A.m` | — |
 
 ### Relocated
 
@@ -638,6 +635,10 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-04-2 | typecheck | low | `items.into_iter()` on a bare `Vec[Item]` parameter whose `Item` is not clonable gets the fix `items.clone().into_iter()`, which does not check eithe… | 4230ad12ec |
 | B-2026-11-04-3 | ownership | low | `let s = v[i].field;` with `s` only read gets the fix that clones the field, where `let s = v[i];` already gets `ref`; under `self`, a write to any o… | 4230ad12ec |
 | B-2026-11-04-4 | mir | medium | `for f in rx.into_iter()` over a `Receiver[Fn(i64) -> i64 + CrossTask]` passes `karac check` and fails the MIR borrow check inside the library: `borr… | 555b8efd68 |
+| B-2026-11-04-8 | mir | high | UFCS on a program trait (`A.m(s)`, design.md §9 Method resolution) is refused by `karac check`, `karac run` and `karac build` with "a call that leave… | 5bb971cb18 |
+| B-2026-11-04-9 | mir | high | In a generic body under `T: Named`, `T.label()` calls the concrete type's INHERENT associated function of the same name instead of the trait's (print… | 5bb971cb18 |
+| B-2026-11-04-10 | mir | medium | A program associated function named like a comptime reflection method (`fn name() -> String` in a trait or inherent impl) passes `karac check` but `P… | 5bb971cb18 |
+| B-2026-11-04-11 | mir | medium | A generic body under one bound `[T: B]` calling `x.m()` is refused ("the method call `.m` with no resolved callee is not lowered yet") when the concr… | 5bb971cb18 |
 | B-2026-11-04-19 | parser | medium | Script mode's implicit `main` returns `()`, so a top-level `?` is refused with "'?' requires the enclosing function to return `Result` or `Option`, f… | ab80e422aa |
 | B-2026-11-04-21 | resolver | medium | In a package, importing a NESTED module itself (`import db.connection;`, then `connection.open(7)`) is refused with "error[E0112]: unknown module `db… | ab80e422aa |
 | B-2026-11-04-23 | cli | low | `karac run` in a package whose src/ has both main.kara and lib.kara runs main.kara and exits 0, while `karac check` and `karac build` refuse it ("a K… | ab80e422aa |
