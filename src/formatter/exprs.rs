@@ -69,27 +69,27 @@ impl super::Formatter {
         }
     }
 
-    /// The object of a `.method()`, `.field`, `.0` or `[i]`. A collection
-    /// literal there reads back as a type application (`Vec[Vec["a"]].len()`
-    /// parses as `Vec[T].len` with `T = Vec["a"]`), so a `Vec` one is written
-    /// in its `vec![..]` spelling and any other is parenthesized. Not as the
-    /// bare `[..]`: a `let` keeping a borrow of `["a"]` and of `Vec["a"]` are
-    /// refused by two different rules, so the formatter would change the
-    /// diagnostic (PREDICTS B-2026-11-04-45).
+    /// Whether a `Vec` literal was written `vec![..]` (the deprecated
+    /// spelling, kept as written: `karac fix` is what rewrites it).
+    fn is_vec_macro(&self, e: &Expr) -> bool {
+        self.vec_macros
+            .contains(&crate::resolver::SpanKey::from_span(&e.span))
+    }
+
+    /// The object of a `.method()`, `.field`, `.0` or `[i]`. A prefix
+    /// collection literal there reads back as a type application
+    /// (`Vec[Vec["a"]].len()` parses as `Vec[T].len` with `T = Vec["a"]`), so
+    /// one is parenthesized, `(Vec[1, 2]).len()`, unless it was written
+    /// `vec![..]`, which is kept. Neither becomes the bare `[..]`: a `let`
+    /// keeping a borrow of `["a"]` and of `Vec["a"]` are refused by two
+    /// different rules (PREDICTS B-2026-11-04-45).
     fn format_receiver(&mut self, object: &Expr) {
         if self.paren_block_like_at_stmt_start(object) {
             return;
         }
-        if let ExprKind::PrefixCollectionLiteral { type_name, items } = &object.kind {
-            if type_name == "Vec" {
-                self.write_str("vec![");
-                for (i, e) in items.iter().enumerate() {
-                    if i > 0 {
-                        self.write_str(", ");
-                    }
-                    self.format_expr(e);
-                }
-                self.write_str("]");
+        if let ExprKind::PrefixCollectionLiteral { .. } = &object.kind {
+            if self.is_vec_macro(object) {
+                self.format_expr(object);
             } else {
                 self.write_str("(");
                 self.format_expr(object);
@@ -619,7 +619,11 @@ impl super::Formatter {
                 self.write_str("]");
             }
             ExprKind::PrefixCollectionLiteral { type_name, items } => {
-                self.write_str(type_name);
+                if self.is_vec_macro(expr) {
+                    self.write_str("vec!");
+                } else {
+                    self.write_str(type_name);
+                }
                 self.write_str("[");
                 for (i, e) in items.iter().enumerate() {
                     if i > 0 {
@@ -634,7 +638,9 @@ impl super::Formatter {
                 value,
                 count,
             } => {
-                if let Some(name) = type_name {
+                if self.is_vec_macro(expr) {
+                    self.write_str("vec!");
+                } else if let Some(name) = type_name {
                     self.write_ident(name);
                 }
                 self.write_str("[");

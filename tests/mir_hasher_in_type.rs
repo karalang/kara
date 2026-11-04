@@ -147,7 +147,7 @@ fn mir_hasher_in_type_tables_of_two_hashers_differ() {
         "an Fx table passed as a default one: {stderr}"
     );
     assert!(
-        stderr.contains("expected 'ref Map[i64, i64]', found 'Map[i64, i64, FxBuildHasher]'"),
+        stderr.contains("expected 'Map[i64, i64]', found 'Map[i64, i64, FxBuildHasher]'"),
         "{stderr}"
     );
     let _ = std::fs::remove_dir_all(&dir);

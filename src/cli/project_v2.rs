@@ -35,6 +35,13 @@ pub(super) struct Amalgam {
     pub lines: Vec<(usize, String, usize)>,
     /// `(first combined byte, byte length, file)` for each copied file.
     bytes: Vec<(usize, usize, String)>,
+    /// Each file's own text, by the name reports show it: a snippet line
+    /// quotes the file, not the combined text a rename rewrote.
+    originals: HashMap<String, String>,
+    /// `(name in the combined text, module-path name)` for every declaration
+    /// that took another name in it (`P__a` is `a.P`, B-2026-11-04-24),
+    /// longest first so that no name is replaced inside a longer one.
+    names: Vec<(String, String)>,
     /// The package's module-aware check refused it by a type or late-phase
     /// rule: the v2 check of this source reports the refusal if it makes it
     /// too, and this is reported if it does not.
@@ -94,6 +101,10 @@ impl Amalgam {
             .find_map(numbered)
             .map(|(digits, l)| (digits, l.to_string().len()));
         let mut file = None;
+        // The last snippet line quoted from its file where the combined text
+        // differs (a rename), as `(combined, file's)` characters: the caret
+        // rows under it move with the text.
+        let mut quoted: Option<(Vec<char>, Vec<char>)> = None;
         for (i, line) in block.split_inclusive('\n').enumerate() {
             if i == 0 {
                 let header = self.remap_header(name, line);
@@ -107,9 +118,25 @@ impl Amalgam {
                 gutter = Some((digits, l.to_string().len()));
                 out.push_str(indent);
                 out.push_str(&l.to_string());
-                out.push_str(&trimmed[digits..]);
+                let rest = &trimmed[digits..];
+                quoted = None;
+                match self.quote_line(trimmed[..digits].parse().ok(), rest) {
+                    Some((combined, own)) => {
+                        out.push_str(" | ");
+                        out.push_str(&own.iter().collect::<String>());
+                        if rest.ends_with('\n') {
+                            out.push('\n');
+                        }
+                        quoted = Some((combined, own));
+                    }
+                    None => out.push_str(rest),
+                }
                 continue;
             }
+            let line = &match &quoted {
+                Some((combined, own)) => move_carets(line, combined, own),
+                None => line.to_string(),
+            };
             // A `help:` / `note:` line can name a place too.
             if !line.trim_start().starts_with('|') {
                 out.push_str(&self.remap_message_lines(file.as_deref(), line));
@@ -123,6 +150,48 @@ impl Amalgam {
                 }
                 _ => out.push_str(line),
             }
+        }
+        out
+    }
+
+    /// A snippet line's text (`rest` is ` | text`) as its file has it, with
+    /// the combined line's characters, when the two differ: a rename wrote
+    /// `P__b` where the file says `BP`.
+    fn quote_line(
+        &self,
+        combined_line: Option<usize>,
+        rest: &str,
+    ) -> Option<(Vec<char>, Vec<char>)> {
+        let shown = rest.strip_prefix(" | ")?.trim_end_matches('\n');
+        let (file, l) = self.locate(combined_line?)?;
+        let own = self.originals.get(file)?.lines().nth(l.checked_sub(1)?)?;
+        (own != shown).then(|| (shown.chars().collect(), own.chars().collect()))
+    }
+
+    /// `text` with each name a rename minted written as the module-path name
+    /// it stands for (`P__a` -> `a.P`), whole words only.
+    fn demangle(&self, text: &str) -> String {
+        if self.names.is_empty() {
+            return text.to_string();
+        }
+        let word = |c: char| c.is_alphanumeric() || c == '_';
+        let mut out = String::with_capacity(text.len());
+        let mut at = 0;
+        'scan: while at < text.len() {
+            let rest = &text[at..];
+            let starts_word = !text[..at].ends_with(word);
+            if starts_word {
+                for (fresh, shown) in &self.names {
+                    if rest.starts_with(fresh.as_str()) && !rest[fresh.len()..].starts_with(word) {
+                        out.push_str(shown);
+                        at += fresh.len();
+                        continue 'scan;
+                    }
+                }
+            }
+            let c = rest.chars().next().unwrap_or_default();
+            out.push(c);
+            at += c.len_utf8();
         }
         out
     }
@@ -159,7 +228,7 @@ impl Amalgam {
             rest = &after[digits..];
         }
         out.push_str(rest);
-        out
+        self.demangle(&out)
     }
 
     /// `… name:L:C: …` → `… file:l:C: …`, for the first such place.
@@ -177,7 +246,45 @@ impl Amalgam {
         else {
             return line.to_string();
         };
-        format!("{}{file}:{l}{}", &line[..at], &rest[digits..])
+        // `:C` names a column of the combined line; the file's line may be
+        // shorter or longer before it where a rename differs.
+        let after = &rest[digits..];
+        let col_digits = after
+            .strip_prefix(':')
+            .map_or(0, |c| c.chars().take_while(char::is_ascii_digit).count());
+        if col_digits > 0 {
+            let combined_line = rest[..digits].parse().unwrap_or(0);
+            if let Ok(col) = after[1..1 + col_digits].parse::<usize>() {
+                let col = self.own_column(combined_line, col);
+                return format!(
+                    "{}{file}:{l}:{col}{}",
+                    &line[..at],
+                    &after[1 + col_digits..]
+                );
+            }
+        }
+        format!("{}{file}:{l}{}", &line[..at], after)
+    }
+
+    /// Column `col` (1-based) of combined line `line`, as a column of the
+    /// file's own line.
+    fn own_column(&self, line: usize, col: usize) -> usize {
+        let Some((file, l)) = self.locate(line) else {
+            return col;
+        };
+        let combined = self.text.lines().nth(line.saturating_sub(1));
+        let own = self
+            .originals
+            .get(file)
+            .and_then(|t| t.lines().nth(l.checked_sub(1)?));
+        match (combined, own) {
+            (Some(c), Some(o)) if c != o && col > 0 => {
+                let c: Vec<char> = c.chars().collect();
+                let o: Vec<char> = o.chars().collect();
+                word_map(&c, &o).0[(col - 1).min(c.len())] + 1
+            }
+            _ => col,
+        }
     }
 
     /// Rewrite a JSON value's locations in place: an object whose `file` is
@@ -200,6 +307,13 @@ impl Amalgam {
                         .and_then(|l| self.locate(l as usize))
                     {
                         let file = file.to_string();
+                        if let (Some(line), Some(col)) = (
+                            map.get("line").and_then(|l| l.as_u64()),
+                            map.get("column").and_then(|c| c.as_u64()),
+                        ) {
+                            let col = self.own_column(line as usize, col as usize);
+                            map.insert("column".into(), col.into());
+                        }
                         map.insert("file".into(), file.into());
                         map.insert("line".into(), l.into());
                     }
@@ -213,6 +327,12 @@ impl Amalgam {
                     if let Some(m) = map.get(key).and_then(|m| m.as_str()) {
                         let m = self.remap_message_lines(here.as_deref(), m);
                         map.insert(key.into(), m.into());
+                    }
+                }
+                for key in ["expected", "got"] {
+                    if let Some(t) = map.get(key).and_then(|t| t.as_str()) {
+                        let t = self.demangle(t);
+                        map.insert(key.into(), t.into());
                     }
                 }
                 if let Some(off) = map.get("offset").and_then(|o| o.as_u64()) {
@@ -383,6 +503,67 @@ pub(super) fn source_files(
     Ok(out)
 }
 
+/// A snippet's caret row (`<pad> | <spaces>^^^<label>`) under a line shown
+/// as `own` where the combined text had `combined`: the columns move with
+/// the text. The two differ only in names (a rename writes `P__b` where the
+/// file says `BP`), so a word that differs maps onto the word in its place.
+fn move_carets(row: &str, combined: &[char], own: &[char]) -> String {
+    let Some(bar) = row.find("| ").filter(|_| row.trim_start().starts_with('|')) else {
+        return row.to_string();
+    };
+    let body = &row[bar + 2..];
+    let lead = body.chars().take_while(|c| *c == ' ').count();
+    let marks = body[lead..].chars().take_while(|c| *c == '^').count();
+    if marks == 0 {
+        return row.to_string();
+    }
+    let (starts, ends) = word_map(combined, own);
+    let at = |v: &Vec<usize>, k: usize| v[k.min(combined.len())];
+    let from = at(&starts, lead);
+    let to = at(&ends, lead + marks).max(from + 1);
+    let label = &body[lead + marks..];
+    format!(
+        "{}| {}{}{label}",
+        &row[..bar],
+        " ".repeat(from),
+        "^".repeat(to - from)
+    )
+}
+
+/// Where each column of `combined` begins and ends in `own`, two texts that
+/// differ only in names: a word that differs maps onto the word in its place.
+fn word_map(combined: &[char], own: &[char]) -> (Vec<usize>, Vec<usize>) {
+    let word = |c: &char| c.is_alphanumeric() || *c == '_';
+    let mut starts = vec![own.len(); combined.len() + 1];
+    let mut ends = vec![own.len(); combined.len() + 1];
+    let (mut i, mut j) = (0, 0);
+    ends[0] = 0;
+    while i < combined.len() && j < own.len() {
+        if combined[i] == own[j] {
+            starts[i] = j;
+            ends[i + 1] = j + 1;
+            i += 1;
+            j += 1;
+            continue;
+        }
+        // Back up to the start of the word both sides are in, then map the
+        // whole word onto the whole word.
+        while i > 0 && j > 0 && word(&combined[i - 1]) && combined[i - 1] == own[j - 1] {
+            i -= 1;
+            j -= 1;
+        }
+        let wi = i + combined[i..].iter().take_while(|c| word(c)).count().max(1);
+        let wj = j + own[j..].iter().take_while(|c| word(c)).count().max(1);
+        for k in i..wi {
+            starts[k] = j;
+            ends[k + 1] = wj;
+        }
+        i = wi;
+        j = wj.min(own.len());
+    }
+    (starts, ends)
+}
+
 /// Combine the package's files into one source text. `extra` adds edits per
 /// file (by its index in `files`) on top of the import handling; `tail` is
 /// appended after the last file and maps to no file.
@@ -409,6 +590,22 @@ pub(super) fn amalgamate(
         })
         .collect();
     let renames = Flat::new(tree, crate::module_rename::plan(tree), files, &quals_of);
+    let mut names: Vec<(String, String)> = tree
+        .modules
+        .iter()
+        .flat_map(|m| {
+            renames.renamed_in(m.id).map(|(name, fresh)| {
+                let shown = if m.path.is_empty() {
+                    name
+                } else {
+                    format!("{}.{name}", m.path.join("."))
+                };
+                (fresh, shown)
+            })
+        })
+        .collect();
+    names.sort_by(|a, b| b.0.len().cmp(&a.0.len()).then_with(|| a.0.cmp(&b.0)));
+    names.dedup();
     let mut header: Vec<(String, String, usize)> = Vec::new();
     let mut seen_std: std::collections::HashSet<(Vec<String>, String)> = Default::default();
     let mut bodies: Vec<String> = Vec::new();
@@ -522,10 +719,16 @@ pub(super) fn amalgamate(
     // The tail maps to no file: its lines keep their combined numbers.
     lines.push((line, String::from("<generated>"), line));
     text.push_str(tail);
+    let originals = files
+        .iter()
+        .map(|f| (shown(f.path), f.text.clone()))
+        .collect();
     Ok(Amalgam {
         text,
         lines,
         bytes,
+        originals,
+        names,
         refusal: None,
     })
 }

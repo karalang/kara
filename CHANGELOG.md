@@ -88,6 +88,9 @@ accepted by 0.8.0 are now refused, each with a fix-it.
   (B-2026-11-04-22).
 - Of several `From` impls on one type, `T.from(x)` calls the one `x`'s type
   names; it called the first whatever the argument (B-2026-11-04-47).
+- A struct literal that names a field not visible where it is written (a
+  `private` field from another directory) is refused, `E0111`, as a read of
+  that field already was (B-2026-11-04-46).
 
 ### Diagnostics
 
@@ -122,6 +125,16 @@ accepted by 0.8.0 are now refused, each with a fix-it.
   `Slice[T]` / `mut Slice[T]` in one edit, `Box<dyn Fn(A) -> R>` as the
   function type `Fn(A) -> R` (B-2026-11-04-7), and `Box::new(e)` as `e`,
   which `karac fix` used to rename to `Hex.new(e)` (B-2026-11-04-43).
+- In a multi-file project, a type error names a type from another module by
+  its path (`a.P`, not the internal `P__a`), quotes the file's own line and
+  puts the caret under it (B-2026-11-04-24). An expected type is no longer
+  shown as a borrow (`'Map[..]'`, not `'ref Map[..]'`) when the borrow is not
+  what differs.
+- A field read from where it is not visible is coded `E0111
+  PrivateItemAccess`, as design.md §4 says, not `E0221` (B-2026-11-04-46).
+- `karac fmt` prints a collection literal as written: it keeps `vec![..]`
+  only where the source used it, and never turns `Vec[..]` or `[..]` into
+  `vec![..]`.
 
 ### Performance
 

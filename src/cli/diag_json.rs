@@ -1686,6 +1686,7 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 crate::typechecker::TypeErrorKind::InvalidMutMarker => "E0219",
                 crate::typechecker::TypeErrorKind::UnsupportedNumericSuffix => "E0220",
                 crate::typechecker::TypeErrorKind::PrivateTypeInPublicSignature => "E0221",
+                crate::typechecker::TypeErrorKind::PrivateFieldAccess => "E0111",
                 crate::typechecker::TypeErrorKind::RefutablePattern => "E0222",
                 crate::typechecker::TypeErrorKind::MissingSupertrait => "E0229",
                 crate::typechecker::TypeErrorKind::TraitBoundNotSatisfied => "E0232",

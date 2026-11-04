@@ -1128,6 +1128,8 @@ pub(super) fn type_error_code(kind: &crate::typechecker::TypeErrorKind) -> &'sta
     use crate::typechecker::TypeErrorKind as K;
     match kind {
         K::PrivateTypeInPublicSignature => "E0221",
+        // design.md §4: direct access to an invisible item, a field included.
+        K::PrivateFieldAccess => "E0111",
         K::TypeMismatch => "E0200",
         K::UndefinedField => "E0201",
         K::WrongNumberOfArgs => "E0202",
@@ -1521,6 +1523,7 @@ fn type_error_is_a_module_boundary_rule(kind: &crate::typechecker::TypeErrorKind
     matches!(
         kind,
         K::PrivateTypeInPublicSignature
+            | K::PrivateFieldAccess
             | K::NonExhaustiveCrossPackageLiteral
             | K::NonExhaustiveCrossPackageMatch
             | K::NonExhaustiveCrossPackagePattern

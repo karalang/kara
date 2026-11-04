@@ -825,7 +825,7 @@ fn slice6b_cross_module_non_pub_field_access_rejected() {
     let errs = typecheck_module_errors(&built.tree, built.tree.root);
     assert!(
         errs.iter()
-            .any(|e| e.kind == TypeErrorKind::PrivateTypeInPublicSignature
+            .any(|e| e.kind == TypeErrorKind::PrivateFieldAccess
                 && e.message.contains("password_hash")),
         "expected cross-module field-access error, got {errs:?}",
     );
@@ -846,7 +846,7 @@ fn slice6b_same_module_non_pub_field_access_ok() {
     assert!(
         !errs
             .iter()
-            .any(|e| e.kind == TypeErrorKind::PrivateTypeInPublicSignature),
+            .any(|e| e.kind == TypeErrorKind::PrivateFieldAccess),
         "same-module field access should NOT trip, got {errs:?}",
     );
 }
@@ -866,7 +866,7 @@ fn slice6b_cross_module_pub_field_access_ok() {
     assert!(
         !errs
             .iter()
-            .any(|e| e.kind == TypeErrorKind::PrivateTypeInPublicSignature),
+            .any(|e| e.kind == TypeErrorKind::PrivateFieldAccess),
         "pub field access across modules should NOT trip, got {errs:?}",
     );
 }
@@ -1045,7 +1045,7 @@ fn slice7_cross_module_field_access_through_reexport() {
     assert!(
         !errs
             .iter()
-            .any(|e| e.kind == TypeErrorKind::PrivateTypeInPublicSignature),
+            .any(|e| e.kind == TypeErrorKind::PrivateFieldAccess),
         "pub field access through re-export should succeed: {errs:?}",
     );
 }
@@ -1071,7 +1071,7 @@ fn slice7_cross_module_non_pub_field_rejected_through_reexport() {
     let errs = typecheck_module_errors(&built.tree, built.tree.root);
     assert!(
         errs.iter()
-            .any(|e| e.kind == TypeErrorKind::PrivateTypeInPublicSignature
+            .any(|e| e.kind == TypeErrorKind::PrivateFieldAccess
                 && e.message.contains("password_hash")),
         "non-pub field access through re-export should still fail: {errs:?}",
     );

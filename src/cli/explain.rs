@@ -2123,10 +2123,24 @@ mod tests {
     /// The emitter itself must mint no code from two phases. This is
     /// the real invariant; the `CODE_TABLE` check below is downstream
     /// of it.
+    /// Codes the spec assigns to one rule that two phases enforce. Each is
+    /// the SAME diagnostic, so `karac explain` keeps its one row; the guard
+    /// below still refuses any other code minted twice.
+    const SPEC_SHARED_CODES: &[(&str, &str)] = &[(
+        "E0111",
+        "design.md §4: direct access to an invisible item is `E0111 \
+         PrivateItemAccess`. The resolver refuses an item; the typechecker \
+         refuses a field, since only it knows the struct a field belongs to \
+         (B-2026-11-04-46).",
+    )];
+
     #[test]
     fn emitter_mints_no_code_from_two_phases() {
         let mut collided: Vec<&str> = Vec::new();
         for (_, code) in emitted_codes() {
+            if SPEC_SHARED_CODES.iter().any(|(c, _)| *c == code) {
+                continue;
+            }
             let phases: Vec<&str> = emitted_codes()
                 .into_iter()
                 .filter(|(_, c)| *c == code)
@@ -2144,6 +2158,21 @@ mod tests {
              Each phase owns a band (resolve E01xx, typecheck E02xx/W02xx, \
              ownership E05xx); allocate from the emitting phase's band."
         );
+        // An exemption that no longer applies is a stale one: each shared
+        // code must still be minted by two phases.
+        for (code, why) in SPEC_SHARED_CODES {
+            let mut phases: Vec<&str> = emitted_codes()
+                .into_iter()
+                .filter(|(_, c)| c == code)
+                .map(|(p, _)| p)
+                .collect();
+            phases.sort_unstable();
+            phases.dedup();
+            assert!(
+                phases.len() > 1,
+                "{code} is no longer shared ({why}): {phases:?}"
+            );
+        }
     }
 
     /// The resolver allocates only from its own `E01xx` band (plus the

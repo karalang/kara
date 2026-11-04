@@ -9836,7 +9836,7 @@ fn get_mut_takes_the_keys_view() {
     rejected(
         "get-mut-key-of-another-type",
         "fn main() {\n    let mut m: Map[String, i64] = Map.new();\n    m.insert(\"a\".to_string(), 1);\n    if let Some(v) = m.get_mut(5) { *v += 1; }\n}\n",
-        "expected 'ref String', found 'i64'",
+        "expected 'String', found 'i64'",
     );
 }
 

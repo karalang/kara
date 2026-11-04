@@ -41,6 +41,7 @@ fn format_program_inner(program: &Program, comments: Vec<comments::Comment>) -> 
     f.paren_return_types = program.paren_return_types.clone();
     f.container_hashers = program.container_hashers.clone();
     f.stmt_lint_overrides = program.stmt_lint_overrides.clone();
+    f.vec_macros = program.vec_macro_literals.keys().copied().collect();
     f.format_program(program);
     f.output
 }
@@ -133,6 +134,10 @@ pub(super) struct Formatter {
         rustc_hash::FxHashMap<crate::resolver::SpanKey, crate::hasher_kind::HasherKind>,
     /// `#[allow(lint)]` and the other lint levels written on a statement,
     /// which the parser keeps beside the tree (`Program::stmt_lint_overrides`).
+    /// The `Vec` literals written `vec![..]` (`Program::vec_macro_literals`):
+    /// the formatter prints a literal as it was written, so it neither adds
+    /// the deprecated spelling nor takes it away (`karac fix` does that).
+    pub(super) vec_macros: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
     pub(super) stmt_lint_overrides:
         rustc_hash::FxHashMap<crate::resolver::SpanKey, Vec<crate::lints::LintLevelOverride>>,
     /// The source's comments, in source order, and the index of the first
@@ -159,6 +164,7 @@ impl Formatter {
             paren_return_types: rustc_hash::FxHashSet::default(),
             container_hashers: rustc_hash::FxHashMap::default(),
             stmt_lint_overrides: rustc_hash::FxHashMap::default(),
+            vec_macros: rustc_hash::FxHashSet::default(),
             comments: Vec::new(),
             next_comment: 0,
             line_comment_end: usize::MAX,

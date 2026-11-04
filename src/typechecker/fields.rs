@@ -554,7 +554,7 @@ impl<'a> super::TypeChecker<'a> {
         substitute_type_params(field_ty, &subs)
     }
 
-    /// Emit `E0221 PrivateTypeInPublicSignature` when a non-`pub` field is
+    /// Emit `E0111` ([`TypeErrorKind::PrivateFieldAccess`]) when a field is
     /// accessed on an imported struct from outside its defining module. For
     /// local structs (and when no `ProgramTree` is attached), silently
     /// accepts the access — slice 6b treats same-module field access as
@@ -603,7 +603,7 @@ impl<'a> super::TypeChecker<'a> {
             field,
             struct_name,
         ) {
-            self.type_error(message, *span, TypeErrorKind::PrivateTypeInPublicSignature);
+            self.type_error(message, *span, TypeErrorKind::PrivateFieldAccess);
         }
     }
 
@@ -731,7 +731,7 @@ impl<'a> super::TypeChecker<'a> {
                     struct_name,
                 )
             }) {
-                self.type_error(message, *span, TypeErrorKind::PrivateTypeInPublicSignature);
+                self.type_error(message, *span, TypeErrorKind::PrivateFieldAccess);
             }
         }
 
@@ -1253,8 +1253,14 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
-        // Check for extra fields
+        // Check for extra fields, and that each named field is visible here:
+        // a literal names its fields as surely as a read does (design.md §5,
+        // B-2026-11-04-46; a `private` field from another directory was
+        // accepted in a literal).
         for f in fields {
+            if expected_fields.contains(f.name.as_str()) {
+                self.check_cross_module_field_access(&struct_name, &f.name, &f.span);
+            }
             if !expected_fields.contains(f.name.as_str()) {
                 self.type_error(
                     format!("unknown field '{}' in struct '{}'", f.name, struct_name),

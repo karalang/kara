@@ -1117,6 +1117,12 @@ pub enum TypeErrorKind {
     /// payload, public type alias, public constant). See design.md
     /// § Struct Field Visibility and § Three-level visibility. (CR-18.)
     PrivateTypeInPublicSignature,
+    /// A field the reading module may not see: a default-visibility field
+    /// from another package, or a `private` one from another directory
+    /// (design.md §5 Structs, the three levels of §4 Visibility). Coded
+    /// `E0111 PrivateItemAccess`, which §4 names for direct access to an
+    /// invisible item (B-2026-11-04-46; it was coded E0221).
+    PrivateFieldAccess,
     /// A `ScopeLocal` marker-trait type (e.g. `TaskHandle[T]`) appears
     /// in an escape position — function return type, struct/enum field
     /// type, or as the argument to `Sender.send`. The handle is bound to
@@ -1680,6 +1686,7 @@ pub(crate) fn class_for_type_error_kind(
         | TypeErrorKind::BareVariantConstructor
         | TypeErrorKind::UnsupportedNumericSuffix
         | TypeErrorKind::PrivateTypeInPublicSignature
+        | TypeErrorKind::PrivateFieldAccess
         | TypeErrorKind::ConflictingImpl
         | TypeErrorKind::NonExhaustiveCrossPackageLiteral
         | TypeErrorKind::NonExhaustiveCrossPackageMatch
@@ -8071,10 +8078,22 @@ impl<'a> TypeChecker<'a> {
         // that names it correctly. Scoped to the renderer: the type itself is
         // still the borrow every other phase agreed on.
         let found_display = self.display_type_at_use(found, &span);
+        // A bare parameter borrows, so the slot reads `ref P`; the caller
+        // wrote `P`, passes a value, and the borrow is not what differs
+        // (B-2026-11-04-24). A mismatch in the borrow itself keeps it.
+        let expected_display = match expected {
+            Type::Ref(inner)
+                if !matches!(found, Type::Ref(_) | Type::MutRef(_))
+                    && type_display(inner) != type_display(found) =>
+            {
+                type_display(inner)
+            }
+            _ => type_display(expected),
+        };
         self.type_error_with_types(
             format!(
                 "expected '{}', found '{}'{}",
-                type_display(expected),
+                expected_display,
                 found_display,
                 Self::wrapper_unwrap_hint(expected, found)
             ),
