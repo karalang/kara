@@ -117,6 +117,7 @@ impl<'ctx> Cx<'ctx, '_> {
             AbortReason::DivByZero => "division by zero",
             AbortReason::BoundsCheck => "index out of bounds",
             AbortReason::UnreachableArm => "entered unreachable code",
+            AbortReason::ShiftOutOfRange => "shift amount out of range",
         }
     }
 

@@ -6991,6 +6991,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             tcx.tuple(&[t, b])
         };
         let pair = self.temp(pair_t);
+        let shift = matches!(bin, BinOp::Shl | BinOp::Shr);
         self.assign(pair, Rvalue::CheckedBinaryOp(bin, l, r));
         let bool_t = self.tys().bool();
         let ok = self.b.new_block();
@@ -7002,8 +7003,14 @@ impl<'l, 'a> Bx<'l, 'a> {
             },
             bad,
         );
+        // A checked shift's flag is its amount out of range, not an
+        // overflow (design.md §5, B-2026-11-04-74).
         self.diverge(TerminatorKind::Abort {
-            reason: AbortReason::Overflow,
+            reason: if shift {
+                AbortReason::ShiftOutOfRange
+            } else {
+                AbortReason::Overflow
+            },
         });
         self.cur = ok;
         self.assign(

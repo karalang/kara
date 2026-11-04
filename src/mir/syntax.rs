@@ -605,6 +605,9 @@ pub enum AbortReason {
     DivByZero,
     BoundsCheck,
     UnreachableArm,
+    /// A shift amount that is negative or at least the operand's width
+    /// (design.md §5, B-2026-11-04-74).
+    ShiftOutOfRange,
 }
 
 impl AbortReason {
@@ -617,6 +620,7 @@ impl AbortReason {
             AbortReason::DivByZero => 2,
             AbortReason::BoundsCheck => 3,
             AbortReason::UnreachableArm => 4,
+            AbortReason::ShiftOutOfRange => 5,
         }
     }
 
@@ -628,6 +632,7 @@ impl AbortReason {
             2 => AbortReason::DivByZero,
             3 => AbortReason::BoundsCheck,
             4 => AbortReason::UnreachableArm,
+            5 => AbortReason::ShiftOutOfRange,
             _ => return None,
         })
     }

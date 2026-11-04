@@ -17182,6 +17182,7 @@ fn abort_text(reason: &AbortReason) -> &'static str {
         AbortReason::DivByZero => "division by zero",
         AbortReason::BoundsCheck => "index out of bounds",
         AbortReason::UnreachableArm => "entered unreachable code",
+        AbortReason::ShiftOutOfRange => "shift amount out of range",
     }
 }
 

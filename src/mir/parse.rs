@@ -828,6 +828,7 @@ impl Parser {
                 "DivByZero" => AbortReason::DivByZero,
                 "BoundsCheck" => AbortReason::BoundsCheck,
                 "UnreachableArm" => AbortReason::UnreachableArm,
+                "ShiftOutOfRange" => AbortReason::ShiftOutOfRange,
                 other => return Err(format!("unknown abort reason `{other}`")),
             };
             c.expect(")")?;
