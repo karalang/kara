@@ -58,10 +58,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 121 |
-| false-positive | 105 |
+| diagnostics | 125 |
+| false-positive | 110 |
 | perf | 95 |
-| missing-feature | 72 |
+| missing-feature | 74 |
 | soundness | 48 |
 | miscompile | 34 |
 | run-vs-build | 23 |
@@ -75,16 +75,16 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 186 |
+| typecheck | 193 |
 | mir | 118 |
 | mir-llvm | 110 |
 | cli | 55 |
-| ownership | 48 |
-| parser | 37 |
+| ownership | 50 |
+| parser | 38 |
 | interp | 27 |
 | runtime | 23 |
 | codegen | 22 |
-| effect | 21 |
+| effect | 22 |
 | resolver | 6 |
 | other | 4 |
 | autopar | 4 |
@@ -112,7 +112,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-04-39 | 2026-11-04 | mir-llvm | low | Seven first-run katas (321, 326, 333, 337, 338, 339, 343) execute 1.14-1.26x legacy's instructions on the MIR backend with cycles mostly flat: too small to file alone | — |
 | B-2026-11-04-44 | 2026-11-04 | typecheck | low | An empty list literal with no expected type (`let mut w = [];`) is refused by `karac check` with MIR's internal "a type that failed to check is not lowered yet", not a diagnostic saying the element type is needed | — |
 | B-2026-11-04-45 | 2026-11-04 | typecheck | low | A `let` keeping a borrow of a prefix `Vec` literal's temporary (`let g = Vec["a"].last();`, and `vec!["a"].last()`, the same node) is refused late, as E0516 "cannot drop the temporary value ... while `g` still borrows it", where the list literal `["a"].last()` gets the §5.5 rule "a reference to a temporary outlives its statement"; next to another refusal the late E0516 never shows | — |
-| B-2026-11-04-54 | 2026-11-04 | typecheck | medium | With two impls of a user generic trait on one type (`impl Make[i64] for Out` + `impl Make[String] for Out`, `fn make(x: T) -> Self`), `Out.make("abcd".to_string())` is refused at check ("expected 'i64', found 'String'"): the checker picks among `From` impls by the argument's type but takes the first impl of any other trait | — |
 | B-2026-11-04-55 | 2026-11-04 | mir-llvm | low | `PriorityQueue.pop` sifts down by swapping, two comparisons a level, where Rust's `BinaryHeap::pop` sifts a hole to the bottom with one: kata 1046's bench (1000 piles of 3000 stones, 3 rounds of the heap game) runs 2.66x Rust's time under overflow checks, of which the compiler is about 1.15x and the heap algorithm the rest | — |
 | B-2026-11-04-56 | 2026-11-04 | mir | medium | `karac check` does not run the MIR borrow check on a function that `main` never reaches, so a library package's `pub fn bad() -> Str { let s = "abc".to_string(); s.as_str() }` (a view of its own local escaping, E0516/E0509) is reported clean; the same function called from `main` is refused by check | — |
 | B-2026-11-04-57 | 2026-11-04 | mir | medium | Three pattern shapes design.md §5 specifies pass the front end but are refused with "this pattern is not lowered yet": an or-pattern whose alternatives bind under a guard (`E.A(x) | E.B(x) if g(x) =>`), an or-pattern nested inside a variant (`Out.Foo(In.A | In.B) =>`), and an or-pattern in `if let` (`if let Lr.Left(x) | Lr.Right(x) = v`); a distinct type's literal pattern (`Uid(0) =>`) is refused the same way ("this variant is not lowered yet") | — |
@@ -120,6 +119,17 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-04-59 | 2026-11-04 | mir | medium | Mixed-width compound assignment passes `karac check` and then fails in MIR: `total_i64 += n_i32` (legal per design.md §5) stops `run`/`build` with "invalid MIR: binary operands of different types i64 and i32", and the illegal narrowing `n_i32 += total_i64` is accepted by check and fails the same way; `let w: Slice[i64] = v;` (a let does not coerce, §5 Slices) is likewise accepted by check and fails in MIR | — |
 | B-2026-11-04-60 | 2026-11-04 | typecheck | low | Small §5 divergences in refusals and lints: an or-pattern whose alternatives bind different names (`E.A(x) | E.B(y)`) is accepted; `mut port: i64` on a plain struct field and `struct Marker;` are accepted; the `redundant_alias_bound` warning never fires; a shift amount out of range reports "integer overflow" instead of "shift amount out of range"; and the alias-bound and range-bound errors carry E0262/E0263 where §5 names E_TYPE_ALIAS_BOUND_NOT_SATISFIED / E_RANGE_PATTERN_BOUND_NOT_CONST | — |
 | B-2026-11-04-61 | 2026-11-04 | typecheck+cli | low | `m.get(k) == Some(v)` with a non-Copy value (Map[String, String]) refuses E0208 "cannot compare 'Option[ref String]' and 'Option[String]'" with no edit, and `karac fix` instead applies E0200's `.clone()` inside the `Some`, leaving the E0208 standing; the no-copy edit `Some(ref v)` (design.md § Views) is never offered | — |
+| B-2026-11-04-62 | 2026-11-04 | typecheck | medium | Rebinding an `own MutFn` / `own Fn` parameter with `let mut f = f;`, the spelling design.md §7 Function types and kinds prescribes for calling an owned MutFn, is refused by karac check as binding a non-escaping function value; the backends run it | — |
+| B-2026-11-04-63 | 2026-11-04 | parser | medium | A struct pattern with a `..` rest in parameter position is a parse error ("Expected identifier, found `..`"), though design.md §7 Destructuring parameters shows `fn inspect(Request { headers, .. }: Request)` | — |
+| B-2026-11-04-64 | 2026-11-04 | typecheck | medium | An unbound method value `User.adult` gets the type `Fn() -> bool` with the receiver dropped, so `let check = User.adult; check(u)` is refused ("expected 0 argument(s), found 1") and `.map(User.adult)` fails to infer | — |
+| B-2026-11-04-65 | 2026-11-04 | typecheck | medium | An escaping closure that captures a String and calls `println(s)` is classified OnceFn ("consumes captured binding `s`") and refused for an Fn slot; `println(f"{s}")`, `show(s)` and `s.len()` in the same closure are Fn | — |
+| B-2026-11-04-66 | 2026-11-04 | effect | medium | A function type with no effect clause in a struct field or a return type is treated as pure ("has effect writes(Stdout) not declared in slot [pure]"); design.md §12 says a call through it has every effect, and the same unannotated type on an escaping parameter does accept it | — |
+| B-2026-11-04-67 | 2026-11-04 | ownership | medium | A use after move of a function value (a OnceFn closure called twice, or an Fn value called after `let h2 = h`) passes karac check and is refused only by the MIR move check with an internal message ("move check main: bb10[term]: use of _3") | — |
+| B-2026-11-04-68 | 2026-11-04 | typecheck | low | A named-parameter default that names a function (`g: Fn(i64) -> i64 = id`) is refused ("'id' is not a known const"); design.md §7 says a function name is a constant expression for defaults | — |
+| B-2026-11-04-69 | 2026-11-04 | typecheck | low | §7 functions/closures: five spec errors accepted (MutFn called from a plain `let`; OnceFn bare parameter; UFCS receiver without `mut`; `a == r` with non-Copy `r: ref T`; `own escaping`) and two misleading diagnostics (refutable parameter pattern; `f[i64]` value) | — |
+| B-2026-11-04-70 | 2026-11-04 | ownership | medium | A closure cannot capture a `frozen` binding at all ("`frozen` alias `g` is captured by a closure"), and a TaskGroup.spawn closure over one is also E_NOT_CROSS_TASK; design.md §11 Handles in closures says such a closure is a view that may be called, passed down and enter par branches and TaskGroup tasks | — |
+| B-2026-11-04-71 | 2026-11-04 | typecheck | medium | design.md §11 #[must_use] mandate unmet: a discarded `m.lock()` guard, iterator adapter (`v.iter().map(..);`) and `s.trim()` give no warning, so a lock released at the wrong point is silent; also no `.unwrap()` -> `.expect` suggestion and no warning on a deprecated enum variant | — |
+| B-2026-11-04-72 | 2026-11-04 | typecheck | low | §11 sharing roll-up: `own self` on a sync type and `weak` on a non-shared type accepted; borrow-flag panic does not name the field or both spans; several sharing diagnostics give stale or wrong wording | — |
 
 ### Relocated
 
@@ -668,6 +678,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-04-51 | typecheck | low | An iterator method called straight on a sequence draws an edit-distance guess with no fix for `find`, `position`, `nth`, `rev` and `flatten`: `window… | 6ef646c141 |
 | B-2026-11-04-52 | typecheck | low | `.iter().flatten()` over collection items names the exact rewrite ("write `.flat_map(\|v\| v.iter())` in place of `.flatten()`") but carries no fix, so… | e9fa6bddd1 |
 | B-2026-11-04-53 | cli | low | `karac fmt` breaks an expression holding two `unsafe { . | 19775ae374 |
+| B-2026-11-04-54 | typecheck | medium | With two impls of a user generic trait on one type (`impl Make[i64] for Out` + `impl Make[String] for Out`, `fn make(x: T) -> Self`), `Out.make("abcd… | 2b657fbeba |
 
 </details>
 
