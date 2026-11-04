@@ -551,7 +551,7 @@ pub struct Manifest {
     /// `[link] search-paths = [...]` — directories the linker searches for
     /// the `link_libs`, appended to the `cc` line as `-L<path>`. Typically
     /// populated from `llvm-config --libdir` of the same LLVM prefix the
-    /// Rust stage pins (`LLVM_SYS_181_PREFIX`), which is environment-
+    /// Rust stage pins (`LLVM_SYS_221_PREFIX`), which is environment-
     /// specific and therefore a build/manifest concern, not a source-level
     /// `extern` attribute. Empty when absent.
     pub link_search_paths: Vec<String>,

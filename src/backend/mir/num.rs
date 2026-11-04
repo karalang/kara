@@ -1078,11 +1078,8 @@ impl<'ctx> Cx<'ctx, '_> {
                 // The bound the true result passed: below zero for an
                 // unsigned `sub`, else by the signs for a signed one.
                 let xt = x.get_type();
-                let bits = it.bits();
                 let (min, max) = if signed {
-                    let min = xt
-                        .const_int(1, false)
-                        .const_shl(xt.const_int(u64::from(bits - 1), false));
+                    let min = super::signed_min(xt);
                     (min, min.const_not())
                 } else {
                     (xt.const_zero(), xt.const_all_ones())
@@ -1156,11 +1153,7 @@ impl<'ctx> Cx<'ctx, '_> {
         let bits = it.bits();
         let one = xt.const_int(1, false);
         let z = xt.const_zero();
-        let min = if signed {
-            one.const_shl(xt.const_int(u64::from(bits - 1), false))
-        } else {
-            z
-        };
+        let min = if signed { super::signed_min(xt) } else { z };
         let max = if signed {
             min.const_not()
         } else {

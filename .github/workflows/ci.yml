@@ -170,7 +170,7 @@ jobs:
   # FFI's Windows body) — the exact set validated clean on the box. The
   # `#[cfg(windows)]` codegen linker driver (`src/codegen/driver.rs`) is
   # `--features llvm`-gated and stays uncovered until the broader "LLVM in CI"
-  # decision puts LLVM 18 on the Windows runner (the documented yak-shave the
+  # decision puts LLVM on the Windows runner (the documented yak-shave the
   # spike defers — same reason the codegen E2E jobs are Linux-only). That
   # uncovered surface now also includes the producer-mode library link arms
   # (`link_static_library` / `link_shared_library` Windows branches +
@@ -179,7 +179,7 @@ jobs:
   # They mirror this file's proven `link_executable_windows` toolchain
   # conventions; a Windows `codegen-lint` job (clippy `--features llvm` on
   # windows-latest, mirroring the Linux `codegen-lint` below) is the intended
-  # first coverage step once LLVM 18 lands on the Windows runner.
+  # first coverage step once LLVM lands on the Windows runner.
   windows-lint:
     name: Windows clippy (cfg(windows) surface)
     runs-on: windows-latest
@@ -272,12 +272,8 @@ jobs:
 
       # Same LLVM recipe as codegen-e2e: the `karac` binary itself needs
       # --features llvm to emit wasm objects.
-      - name: Install LLVM 18
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y llvm-18 llvm-18-dev
-          echo "LLVM_SYS_181_PREFIX=$(llvm-config-18 --prefix)" >> "$GITHUB_ENV"
-          echo "LD_LIBRARY_PATH=$(llvm-config-18 --libdir)" >> "$GITHUB_ENV"
+      - name: Install LLVM 22
+        run: bash scripts/ci-install-llvm22.sh
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -408,8 +404,8 @@ jobs:
   # lint sit undetected in `src/codegen/column.rs` (a wrapped `//!` doc line
   # whose continuation read as a markdown bullet) until a local
   # `cargo clippy --all --all-targets --features llvm` run caught it. This job
-  # closes the gap with the SAME LLVM-18.1 install as `codegen-e2e` below
-  # (inkwell → llvm-sys needs `llvm-config-18` + libLLVM-18.so), plus the
+  # closes the gap with the SAME LLVM 22 install as `codegen-e2e` below
+  # (inkwell → llvm-sys needs `llvm-config-22` + libLLVM-22.so), plus the
   # `clippy` component the bare `codegen-e2e` job omits. `--all-targets` keeps
   # the `#[cfg(feature = "llvm")]` test targets (`tests/cli.rs`,
   # `tests/run_v2.rs`, the `tests/mir_*.rs` set) under the gate too —
@@ -419,22 +415,18 @@ jobs:
   # This is the codegen sibling of the per-target `wasm` and `windows-lint`
   # clippy jobs — each gates a cfg surface the ubuntu-native `lint` can't see.
   codegen-lint:
-    name: Codegen clippy (LLVM 18)
+    name: Codegen clippy (LLVM 22)
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
 
-      # Mirror codegen-e2e's LLVM-18.1 setup. clippy is a check build (no final
-      # link), so libLLVM-18.so isn't strictly loaded, but llvm-sys's build
-      # script invokes `llvm-config-18`; install `llvm-18-dev` and export the
-      # prefix it queries. LD_LIBRARY_PATH is kept for parity with the E2E jobs.
-      - name: Install LLVM 18
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y llvm-18 llvm-18-dev
-          echo "LLVM_SYS_181_PREFIX=$(llvm-config-18 --prefix)" >> "$GITHUB_ENV"
-          echo "LD_LIBRARY_PATH=$(llvm-config-18 --libdir)" >> "$GITHUB_ENV"
+      # Mirror codegen-e2e's LLVM 22 setup. clippy is a check build (no final
+      # link), so libLLVM-22.so isn't strictly loaded, but llvm-sys's build
+      # script invokes `llvm-config-22`; the script installs `llvm-22-dev` and
+      # exports the prefix it queries.
+      - name: Install LLVM 22
+        run: bash scripts/ci-install-llvm22.sh
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -450,7 +442,7 @@ jobs:
         run: cargo clippy --all --all-targets --features llvm -- -D warnings
 
   codegen-e2e:
-    name: Codegen E2E (LLVM 18)
+    name: Codegen E2E (LLVM 22)
     runs-on: ubuntu-latest
     env:
       # This job builds the runtime archives itself, so a link soft-skip here
@@ -462,20 +454,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # inkwell `llvm18-1-prefer-dynamic` + llvm-sys `181` → LLVM 18.1, linked
-      # dynamically (libLLVM-18.so must be present at build AND run time).
-      # ubuntu-latest ships LLVM 18.1 in apt — more deterministic than the
+      # inkwell `llvm22-1-prefer-dynamic` + llvm-sys `221` → LLVM 22, linked
+      # dynamically (libLLVM-22.so must be present at build AND run time).
+      # scripts/ci-install-llvm22.sh takes it from apt.llvm.org (Ubuntu's own
+      # archive stops at LLVM 20) — more deterministic than the
       # install-action's prebuilt layout, whose tree the llvm-sys build script
-      # couldn't find `llvm-config` in. `llvm-18-dev` provides `llvm-config-18`
-      # + `libLLVM-18.so` + headers; export the prefix llvm-sys queries and the
-      # libdir the test binaries load the shared lib from (both job-wide via
-      # GITHUB_ENV).
-      - name: Install LLVM 18
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y llvm-18 llvm-18-dev
-          echo "LLVM_SYS_181_PREFIX=$(llvm-config-18 --prefix)" >> "$GITHUB_ENV"
-          echo "LD_LIBRARY_PATH=$(llvm-config-18 --libdir)" >> "$GITHUB_ENV"
+      # couldn't find `llvm-config` in. `llvm-22-dev` provides `llvm-config-22`
+      # + `libLLVM-22.so` + headers; the script exports the prefix llvm-sys
+      # queries and the libdir the test binaries load the shared lib from
+      # (both job-wide via GITHUB_ENV).
+      - name: Install LLVM 22
+        run: bash scripts/ci-install-llvm22.sh
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -534,12 +523,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install LLVM 18
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y llvm-18 llvm-18-dev
-          echo "LLVM_SYS_181_PREFIX=$(llvm-config-18 --prefix)" >> "$GITHUB_ENV"
-          echo "LD_LIBRARY_PATH=$(llvm-config-18 --libdir)" >> "$GITHUB_ENV"
+      - name: Install LLVM 22
+        run: bash scripts/ci-install-llvm22.sh
 
       # gcc's libtsan cannot map its shadow memory under the 32-bit mmap
       # randomisation of recent runner kernels ("unexpected memory mapping").
@@ -603,8 +588,8 @@ jobs:
   # `int64_t` mapping and the scalar-payload tagged-union box both rest on the
   # SysV "one-eightbyte struct in one register" rule holding on AArch64 too —
   # this job is where that stops being an assumption. `macos-latest` IS arm64,
-  # so no emulation. LLVM 18 comes from Homebrew's `llvm@18` (18.1.x, what
-  # llvm-sys `181` wants); the dylib is found at test-runtime via
+  # so no emulation. LLVM 22 comes from Homebrew's `llvm@22` (22.1.x, what
+  # llvm-sys `221` wants); the dylib is found at test-runtime via
   # DYLD_FALLBACK_LIBRARY_PATH (SIP strips DYLD_LIBRARY_PATH from spawned
   # children, the fallback var survives). `cc` is clang, already present.
   #
@@ -618,7 +603,7 @@ jobs:
   # to branch protection only once stable, so a first-run macOS-toolchain
   # hiccup can't block the required gates.
   codegen-e2e-macos:
-    name: Codegen E2E (macOS arm64, LLVM 18)
+    name: Codegen E2E (macOS arm64, LLVM 22)
     runs-on: macos-latest
     env:
       # This job builds the runtime archives itself, so a link soft-skip here
@@ -630,12 +615,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install LLVM 18 (Homebrew)
-        run: |
-          brew install llvm@18
-          PREFIX="$(brew --prefix llvm@18)"
-          echo "LLVM_SYS_181_PREFIX=$PREFIX" >> "$GITHUB_ENV"
-          echo "DYLD_FALLBACK_LIBRARY_PATH=$PREFIX/lib" >> "$GITHUB_ENV"
+      - name: Install LLVM 22 (Homebrew)
+        run: bash scripts/ci-install-llvm22.sh
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -690,12 +671,12 @@ jobs:
   # arm64 ABI), so it independently confirms the `#[repr(C)]` struct-by-value
   # coercion (B-2026-07-09-2) and would catch any Apple-vs-Linux ABI divergence
   # in it. Native arm64, so the real target classifier fires (no forced arch)
-  # and the producer struct tests exercise it by execution. Same apt LLVM-18 +
+  # and the producer struct tests exercise it by execution. Same LLVM 22 +
   # lean→full archive setup as the x86-64 `codegen-e2e` job — just a different
   # `runs-on`. NON-REQUIRED until it has a green streak (mirrors the other
   # matrix legs).
   codegen-e2e-linux-arm64:
-    name: Codegen E2E (Linux arm64, LLVM 18)
+    name: Codegen E2E (Linux arm64, LLVM 22)
     runs-on: ubuntu-24.04-arm
     env:
       # This job builds the runtime archives itself, so a link soft-skip here
@@ -707,12 +688,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install LLVM 18
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y llvm-18 llvm-18-dev
-          echo "LLVM_SYS_181_PREFIX=$(llvm-config-18 --prefix)" >> "$GITHUB_ENV"
-          echo "LD_LIBRARY_PATH=$(llvm-config-18 --libdir)" >> "$GITHUB_ENV"
+      - name: Install LLVM 22
+        run: bash scripts/ci-install-llvm22.sh
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -794,7 +771,7 @@ jobs:
   # `[bench-override: <reason>]` token in the head commit message. Latency
   # on a shared runner is noisy, so its baseline tolerances are wide and the
   # deterministic sentinel is per-conn memory density (scale- &
-  # machine-invariant). Same LLVM-18 + native-archive setup as `codegen-e2e`.
+  # machine-invariant). Same LLVM 22 + native-archive setup as `codegen-e2e`.
   # Deliberately a SEPARATE, NON-required job (not in branch protection)
   # until it builds a green streak — a noisy latency false-positive must not
   # block the required gates. Slice 7 detail + the load-tier rationale:
@@ -821,12 +798,8 @@ jobs:
       - name: Bench gate self-test
         run: python3 examples/ws_idle_holder/bench/scripts/bench_gate.py --selftest
 
-      - name: Install LLVM 18
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y llvm-18 llvm-18-dev
-          echo "LLVM_SYS_181_PREFIX=$(llvm-config-18 --prefix)" >> "$GITHUB_ENV"
-          echo "LD_LIBRARY_PATH=$(llvm-config-18 --libdir)" >> "$GITHUB_ENV"
+      - name: Install LLVM 22
+        run: bash scripts/ci-install-llvm22.sh
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable

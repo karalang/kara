@@ -924,11 +924,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 IntTy::I8 | IntTy::I16 | IntTy::I32 | IntTy::I64 | IntTy::I128 | IntTy::Isize
             );
             let bad = if signed {
-                let w = x.get_type().get_bit_width();
-                let min = x
-                    .get_type()
-                    .const_int(1, false)
-                    .const_shl(x.get_type().const_int(u64::from(w - 1), false));
+                let min = super::signed_min(x.get_type());
                 self.builder.build_int_compare(IntPredicate::EQ, x, min, "")
             } else {
                 self.builder

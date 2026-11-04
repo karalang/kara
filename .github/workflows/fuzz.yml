@@ -103,11 +103,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install LLVM 18
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y llvm-18 llvm-18-dev
-          echo "LLVM_SYS_181_PREFIX=$(llvm-config-18 --prefix)" >> "$GITHUB_ENV"
+      - name: Install LLVM 22
+        run: bash scripts/ci-install-llvm22.sh
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable

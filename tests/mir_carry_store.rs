@@ -110,7 +110,10 @@ fn main() {
     println(f"{acc}");
 }
 "#;
-    check("rows", src, "256350813\n", 1);
+    // Two since LLVM 22, which allocates the fill loop's `push`es up front
+    // (one `realloc` of `n * 8`, then plain stores): with no growth call
+    // left in it, its `dp[j - 1]` is forwarded as well as the row loop's.
+    check("rows", src, "256350813\n", 2);
 }
 
 /// A loop walking down, `dp[c + 1]` stored by the trip before, and a

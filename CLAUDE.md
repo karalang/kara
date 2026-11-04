@@ -31,6 +31,21 @@ cargo test --features llvm                                       # everything, i
   `--all` (measured at M3: two kernel reds reached main this way).
 - `cargo test lexer` runs one test file; `cargo test -- <name>` runs one test.
 
+## LLVM 22
+
+`--features llvm` builds against LLVM 22 (inkwell `llvm22-1`, llvm-sys `221`).
+A cloud container cannot reach apt.llvm.org and Ubuntu's archive stops at 20,
+so once per container, before any `--features llvm` build:
+
+```bash
+bash scripts/setup-llvm22.sh   # idempotent; ~1.9 GB download, ~710 MiB kept in /opt/llvm-22
+```
+
+It sets `LLVM_SYS_221_PREFIX` in `~/.cargo/config.toml`, so nothing needs
+exporting. CI and the release take apt.llvm.org's packages through
+`scripts/ci-install-llvm22.sh`; on macOS, `brew install llvm@22` and
+`LLVM_SYS_221_PREFIX=$(brew --prefix llvm@22)`.
+
 ## Runtime archives
 
 `karac build`, `karac run` (through `karac_jit_runner`) and the

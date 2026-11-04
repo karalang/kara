@@ -16,11 +16,12 @@ use std::ptr;
 use std::sync::OnceLock;
 
 use llvm_sys::core::{
-    LLVMCreateMemoryBufferWithMemoryRange, LLVMDisposeMessage, LLVMSetDataLayout, LLVMSetTarget,
+    LLVMContextCreate, LLVMContextDispose, LLVMCreateMemoryBufferWithMemoryRange,
+    LLVMDisposeMemoryBuffer, LLVMDisposeMessage, LLVMSetDataLayout, LLVMSetTarget,
 };
 use llvm_sys::error::{LLVMDisposeErrorMessage, LLVMErrorRef, LLVMGetErrorMessage};
 use llvm_sys::execution_engine::LLVMCreateGDBRegistrationListener;
-use llvm_sys::ir_reader::LLVMParseIRInContext;
+use llvm_sys::ir_reader::LLVMParseIRInContext2;
 use llvm_sys::orc2::ee::{
     LLVMOrcCreateRTDyldObjectLinkingLayerWithSectionMemoryManager,
     LLVMOrcRTDyldObjectLinkingLayerRegisterJITEventListener,
@@ -35,15 +36,14 @@ use llvm_sys::orc2::lljit::{
 use llvm_sys::orc2::LLVMOrcThreadSafeModuleRef;
 use llvm_sys::orc2::{
     LLVMJITEvaluatedSymbol, LLVMJITSymbolFlags, LLVMOrcAbsoluteSymbols, LLVMOrcCSymbolMapPair,
-    LLVMOrcCreateDynamicLibrarySearchGeneratorForProcess, LLVMOrcCreateNewThreadSafeContext,
-    LLVMOrcCreateNewThreadSafeModule, LLVMOrcDefinitionGeneratorRef,
-    LLVMOrcDisposeThreadSafeContext, LLVMOrcExecutionSessionIntern, LLVMOrcExecutionSessionRef,
-    LLVMOrcExecutorAddress, LLVMOrcJITDylibAddGenerator, LLVMOrcJITDylibCreateResourceTracker,
-    LLVMOrcJITDylibDefine, LLVMOrcObjectLayerRef, LLVMOrcReleaseResourceTracker,
-    LLVMOrcResourceTrackerRef, LLVMOrcResourceTrackerRemove, LLVMOrcThreadSafeContextGetContext,
-    LLVMOrcThreadSafeContextRef,
+    LLVMOrcCreateDynamicLibrarySearchGeneratorForProcess,
+    LLVMOrcCreateNewThreadSafeContextFromLLVMContext, LLVMOrcCreateNewThreadSafeModule,
+    LLVMOrcDefinitionGeneratorRef, LLVMOrcDisposeThreadSafeContext, LLVMOrcExecutionSessionIntern,
+    LLVMOrcExecutionSessionRef, LLVMOrcExecutorAddress, LLVMOrcJITDylibAddGenerator,
+    LLVMOrcJITDylibCreateResourceTracker, LLVMOrcJITDylibDefine, LLVMOrcObjectLayerRef,
+    LLVMOrcReleaseResourceTracker, LLVMOrcResourceTrackerRef, LLVMOrcResourceTrackerRemove,
 };
-use llvm_sys::prelude::{LLVMContextRef, LLVMModuleRef};
+use llvm_sys::prelude::LLVMModuleRef;
 use llvm_sys::target_machine::{
     LLVMCodeGenOptLevel, LLVMCodeModel, LLVMCreateTargetMachine, LLVMDisposeTargetMachine,
     LLVMGetTargetFromTriple, LLVMRelocMode, LLVMTargetMachineRef, LLVMTargetRef,
@@ -133,7 +133,6 @@ pub const PUBLISHED_LIBM_SYMBOLS: [&str; 2] = ["cbrt", "cbrtf"];
 /// is independent of engine ownership because worker threads run compiled
 /// function pointers and never touch the engine handle.
 pub struct LLJITEngine {
-    ts_ctx: LLVMOrcThreadSafeContextRef,
     jit: LLVMOrcLLJITRef,
 }
 
@@ -196,8 +195,7 @@ impl LLJITEngine {
             }
             LLVMOrcJITDylibAddGenerator(main_jd, dg);
 
-            let ts_ctx = LLVMOrcCreateNewThreadSafeContext();
-            let engine = Self { ts_ctx, jit };
+            let engine = Self { jit };
             engine.define_compiler_rt_builtins()?;
             Ok(engine)
         }
@@ -337,12 +335,6 @@ impl LLJITEngine {
         }
     }
 
-    /// Underlying `LLVMContextRef` from the engine's thread-safe context.
-    /// Use this when building modules destined for `add_ir_module`.
-    fn context_ref(&self) -> LLVMContextRef {
-        unsafe { LLVMOrcThreadSafeContextGetContext(self.ts_ctx) }
-    }
-
     /// Parse an LLVM-IR text blob into a module under the engine's
     /// thread-safe context, wrap it in a `ThreadSafeModule`, and add it
     /// to the main JITDylib. The text is copied by `LLVMParseIRInContext`,
@@ -414,14 +406,20 @@ impl LLJITEngine {
                 1,
             );
 
-            let ctx = self.context_ref();
+            // Each module gets a context of its own, which the
+            // ThreadSafeModule below comes to own: LLVM 21 took away a
+            // thread-safe context's access to the context it wraps.
+            let ctx = LLVMContextCreate();
             let mut module: LLVMModuleRef = ptr::null_mut();
             let mut errmsg: *mut c_char = ptr::null_mut();
-            // Returns 0 on success; non-zero means parse error and the
-            // memory buffer has been consumed. On success, `module` owns
-            // the parsed IR; we hand that ownership to TSM below.
-            let failed = LLVMParseIRInContext(ctx, buf, &mut module, &mut errmsg);
+            // Returns 0 on success. Unlike `LLVMParseIRInContext`, the
+            // parser does not take the memory buffer, so it is disposed
+            // here either way. On success, `module` owns the parsed IR; we
+            // hand that ownership to TSM below.
+            let failed = LLVMParseIRInContext2(ctx, buf, &mut module, &mut errmsg);
+            LLVMDisposeMemoryBuffer(buf);
             if failed != 0 {
+                LLVMContextDispose(ctx);
                 let msg = if errmsg.is_null() {
                     "LLVMParseIRInContext failed (no message)".to_string()
                 } else {
@@ -469,11 +467,19 @@ impl LLJITEngine {
             // otherwise be silent (un-split coroutine → no-op), so it is
             // surfaced as a hard `Err`. See `phase-7-codegen.md` L591 +
             // `driver.rs`.
-            self.run_coro_passes(module)?;
+            if let Err(e) = self.run_coro_passes(module) {
+                llvm_sys::core::LLVMDisposeModule(module);
+                LLVMContextDispose(ctx);
+                return Err(e);
+            }
 
-            // ThreadSafeModule takes ownership of the module — DO NOT
-            // dispose the LLVMModuleRef separately.
-            Ok(LLVMOrcCreateNewThreadSafeModule(module, self.ts_ctx))
+            // ThreadSafeModule takes ownership of the module, and the
+            // thread-safe context of `ctx`, which the handle here only
+            // shares — DO NOT dispose either separately.
+            let ts_ctx = LLVMOrcCreateNewThreadSafeContextFromLLVMContext(ctx);
+            let tsm = LLVMOrcCreateNewThreadSafeModule(module, ts_ctx);
+            LLVMOrcDisposeThreadSafeContext(ts_ctx);
+            Ok(tsm)
         }
     }
 
@@ -631,9 +637,6 @@ impl Drop for LLJITEngine {
                 if !err.is_null() {
                     eprintln!("LLJITEngine::drop: dispose error: {}", consume_error(err));
                 }
-            }
-            if !self.ts_ctx.is_null() {
-                LLVMOrcDisposeThreadSafeContext(self.ts_ctx);
             }
         }
     }

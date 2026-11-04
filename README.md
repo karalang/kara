@@ -221,7 +221,7 @@ Prebuilt binaries for Linux x86_64, Linux aarch64 and Apple-silicon macOS arrive
 
 ### Build from source
 
-You need a [Rust toolchain](https://rustup.rs) and LLVM 18 (`llvm-18-dev libpolly-18-dev` on apt, `brew install llvm@18` on macOS; point `llvm-sys` at it with `LLVM_SYS_181_PREFIX=$(llvm-config-18 --prefix)` or `$(brew --prefix llvm@18)` if it is not found):
+You need a [Rust toolchain](https://rustup.rs) and LLVM 22 (`llvm-22-dev libpolly-22-dev` from [apt.llvm.org](https://apt.llvm.org) on Debian/Ubuntu, or `bash scripts/ci-install-llvm22.sh`; `brew install llvm@22` on macOS; point `llvm-sys` at it with `LLVM_SYS_221_PREFIX=$(llvm-config-22 --prefix)` or `$(brew --prefix llvm@22)` if it is not found):
 
 ```bash
 git clone https://github.com/karalang/kara

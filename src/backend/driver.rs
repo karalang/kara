@@ -297,7 +297,7 @@ fn append_wasm_export_flags(cmd: &mut std::process::Command, wasm_exports: &[Str
 ///      it exists.
 ///   3. `wasm-ld` on `PATH` (fallback for a non-rustup toolchain).
 ///   4. Homebrew LLVM's `wasm-ld` (macOS: Apple's toolchain ships no
-///      wasm backend driver, brew's llvm/llvm@18 do).
+///      wasm backend driver, brew's llvm/llvm@22 do).
 ///
 /// Returns the command plus any prefix args the flavor needs.
 fn resolve_wasm_linker() -> Result<(std::path::PathBuf, Vec<String>), String> {
@@ -334,9 +334,9 @@ fn resolve_wasm_linker() -> Result<(std::path::PathBuf, Vec<String>), String> {
     }
     for brew in [
         "/opt/homebrew/opt/llvm/bin/wasm-ld",
-        "/opt/homebrew/opt/llvm@18/bin/wasm-ld",
+        "/opt/homebrew/opt/llvm@22/bin/wasm-ld",
         "/usr/local/opt/llvm/bin/wasm-ld",
-        "/usr/local/opt/llvm@18/bin/wasm-ld",
+        "/usr/local/opt/llvm@22/bin/wasm-ld",
     ] {
         if std::path::Path::new(brew).exists() {
             return Ok((std::path::PathBuf::from(brew), vec![]));

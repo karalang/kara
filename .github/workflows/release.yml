@@ -75,20 +75,10 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Install LLVM 18 (apt)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          # libpolly-18-dev: Ubuntu splits libPolly.a out of llvm-18-dev,
-          # and the static link needs it.
-          sudo apt-get install -y llvm-18 llvm-18-dev libpolly-18-dev libzstd-dev zlib1g-dev
-          echo "LLVM_SYS_181_PREFIX=$(llvm-config-18 --prefix)" >> "$GITHUB_ENV"
-
-      - name: Install LLVM 18 (Homebrew)
-        if: runner.os == 'macOS'
-        run: |
-          brew install llvm@18
-          echo "LLVM_SYS_181_PREFIX=$(brew --prefix llvm@18)" >> "$GITHUB_ENV"
+      # `--static`: apt splits libPolly.a out of llvm-22-dev
+      # (libpolly-22-dev), and the static link needs it.
+      - name: Install LLVM 22
+        run: bash scripts/ci-install-llvm22.sh --static
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable

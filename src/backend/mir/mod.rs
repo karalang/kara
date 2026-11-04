@@ -137,6 +137,19 @@ pub fn noalias_flag() -> bool {
     std::env::var("KARAC_MIR_NOALIAS").as_deref() != Ok("0")
 }
 
+/// The least value of the signed integer type `t`: its sign bit alone.
+/// (LLVM 19 took away the constant `shl` this was built with.)
+pub(super) fn signed_min(t: IntType<'_>) -> IntValue<'_> {
+    let w = t.get_bit_width();
+    if w <= 64 {
+        t.const_int(1u64 << (w - 1), false)
+    } else {
+        let mut words = vec![0u64; w.div_ceil(64) as usize];
+        words[((w - 1) / 64) as usize] = 1u64 << ((w - 1) % 64);
+        t.const_int_arbitrary_precision(&words)
+    }
+}
+
 /// Whether a body whose result has no register class keeps its
 /// parameters in registers, taking a pointer to the result first
 /// (`Cx::ret_in_memory`); `KARAC_MIR_SRET_REGS=0` passes it all in memory.
@@ -520,7 +533,7 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
     /// Whether the runtime function `name` keeps none of the pointers it
     /// is passed past its return: it reads or writes through them and no
     /// more. Each of these builds or grows the `String` or `Vec` header
-    /// its first pointer names, so `nocapture` lets a local vector's slot
+    /// its first pointer names, so `captures(none)` lets a local vector's slot
     /// stay out of reach of the stores through its own buffer: kata 343's
     /// `best[i] = whole` reloaded the slot's length and buffer after every
     /// store, and its bounds check stayed in the loop (B-2026-11-04-39).
@@ -551,7 +564,9 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
             let f = self.module.add_function(name, ty, Some(Linkage::External));
             self.bool_abi(f, true);
             if Self::keeps_no_pointer(name) {
-                let k = Attribute::get_named_enum_kind_id("nocapture");
+                // `captures(none)`: LLVM 21 replaced `nocapture` with the
+                // `captures` attribute, whose value 0 captures nothing.
+                let k = Attribute::get_named_enum_kind_id("captures");
                 for (i, t) in ty.get_param_types().into_iter().enumerate() {
                     if t.is_pointer_type() {
                         f.add_attribute(
@@ -1008,25 +1023,34 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
                 i64t.const_int(l.align.max(1), false).as_value_ref(),
             ];
             let mut arg = [self.llcx.bool_type().const_int(1, false).as_value_ref()];
-            // SAFETY: every value comes from this module's context, and each
-            // bundle is disposed after the call that copies it.
-            unsafe {
-                let mut bundles = [
-                    LLVMCreateOperandBundle(c"dereferenceable".as_ptr(), 15, deref.as_mut_ptr(), 2),
-                    LLVMCreateOperandBundle(c"align".as_ptr(), 5, align.as_mut_ptr(), 2),
-                ];
-                LLVMBuildCallWithOperandBundles(
-                    self.builder.as_mut_ptr(),
-                    assume.get_type().as_type_ref(),
-                    assume.as_value_ref(),
-                    arg.as_mut_ptr(),
-                    1,
-                    bundles.as_mut_ptr(),
-                    2,
-                    c"".as_ptr(),
-                );
-                for b in bundles {
-                    LLVMDisposeOperandBundle(b);
+            // One bundle per assume. LLVM 22.1's `drop-unnecessary-assumes`
+            // rebuilds an assume that keeps some of its bundles and drops
+            // others, and registers the copy in the assumption cache it is
+            // iterating: the vector grows under the loop and the pass reads
+            // freed memory (the selfhost parser's `Parser.parse_type`
+            // segfaulted). Upstream replaces the entry in place since; with
+            // a single bundle an assume is kept or erased whole.
+            for (tag, ops) in [(c"dereferenceable", &mut deref), (c"align", &mut align)] {
+                // SAFETY: every value comes from this module's context, and
+                // the bundle is disposed after the call that copies it.
+                unsafe {
+                    let mut bundle = [LLVMCreateOperandBundle(
+                        tag.as_ptr(),
+                        tag.count_bytes(),
+                        ops.as_mut_ptr(),
+                        2,
+                    )];
+                    LLVMBuildCallWithOperandBundles(
+                        self.builder.as_mut_ptr(),
+                        assume.get_type().as_type_ref(),
+                        assume.as_value_ref(),
+                        arg.as_mut_ptr(),
+                        1,
+                        bundle.as_mut_ptr(),
+                        1,
+                        c"".as_ptr(),
+                    );
+                    LLVMDisposeOperandBundle(bundle[0]);
                 }
             }
         }

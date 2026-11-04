@@ -30,8 +30,9 @@
 #        scripts/package-release.sh aarch64-linux
 #        scripts/package-release.sh aarch64-macos
 #
-# Requirements: LLVM 18 with static archives (apt llvm-18-dev / brew
-# llvm@18) reachable by llvm-sys (LLVM_SYS_181_PREFIX), a full-depth
+# Requirements: LLVM 22 with static archives (apt.llvm.org llvm-22-dev +
+# libpolly-22-dev / brew llvm@22; scripts/ci-install-llvm22.sh --static)
+# reachable by llvm-sys (LLVM_SYS_221_PREFIX), a full-depth
 # git checkout — a shallow clone stamps `dev.shallow`, which the check
 # below rejects for release artifacts (fetch-depth: 0 in CI) — and
 # Node 18+ with npm for the extension (`npm ci` fetches `vsce`).
@@ -125,7 +126,7 @@ cp target/release/libkarac_runtime_min.a "$STAGE/lib/"
 
 # macOS: brew's LLVM links its OWN support dylibs from the keg —
 # libunwind at minimum (brew builds LLVM against LLVM's libunwind, and
-# the static-LLVM link still records `/opt/homebrew/opt/llvm@18/lib/
+# the static-LLVM link still records `/opt/homebrew/opt/llvm@22/lib/
 # libunwind.1.dylib`, which no user machine has; the first dry-run's
 # clean-runner smoke died on exactly this dyld abort). Relocate every
 # brew-/usr/local-prefixed dylib into the bundle's lib/ and rewrite the

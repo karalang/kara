@@ -31,14 +31,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Same LLVM 18.1 setup as codegen-e2e (see ci.yml for rationale);
-      # hyperfine rides the same apt transaction.
-      - name: Install LLVM 18 + hyperfine
+      # Same LLVM 22 setup as codegen-e2e (see ci.yml for rationale).
+      - name: Install LLVM 22 + hyperfine
         run: |
-          sudo apt-get update
-          sudo apt-get install -y llvm-18 llvm-18-dev hyperfine
-          echo "LLVM_SYS_181_PREFIX=$(llvm-config-18 --prefix)" >> "$GITHUB_ENV"
-          echo "LD_LIBRARY_PATH=$(llvm-config-18 --libdir)" >> "$GITHUB_ENV"
+          bash scripts/ci-install-llvm22.sh
+          sudo apt-get install -y hyperfine
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable

@@ -53,12 +53,8 @@ jobs:
           path: kara-katas
 
       # The same LLVM recipe as ci.yml's codegen-e2e job.
-      - name: Install LLVM 18
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y llvm-18 llvm-18-dev
-          echo "LLVM_SYS_181_PREFIX=$(llvm-config-18 --prefix)" >> "$GITHUB_ENV"
-          echo "LD_LIBRARY_PATH=$(llvm-config-18 --libdir)" >> "$GITHUB_ENV"
+      - name: Install LLVM 22
+        run: bash scripts/ci-install-llvm22.sh
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable

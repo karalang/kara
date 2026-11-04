@@ -100,7 +100,15 @@ unsafe fn is_index_step(s: LLVMValueRef) -> bool {
         if opcode(s) != Some(LLVMOpcode::LLVMSelect)
             || LLVMIsAConstantInt(LLVMGetOperand(s, 1)).is_null()
             || LLVMIsAConstantInt(LLVMGetOperand(s, 2)).is_null()
-            || !LLVMGetMetadata(s, LLVMGetMDKindID("prof".as_ptr().cast(), 4)).is_null()
+            || !LLVMGetMetadata(
+                s,
+                LLVMGetMDKindIDInContext(
+                    LLVMGetTypeContext(LLVMTypeOf(s)),
+                    "prof".as_ptr().cast(),
+                    4,
+                ),
+            )
+            .is_null()
         {
             return false;
         }

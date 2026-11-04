@@ -123,7 +123,7 @@ fn mir_pair_results_and_sret_results_keep_parameters_in_registers() {
         // The runtime keeps no pointer it is passed to grow a vector, so
         // a local vector's slot is out of reach of stores through its
         // buffer (kata 343's `best[i] = whole`).
-        "declare void @karac_mir_vec_reserve(ptr nocapture, i64, i64)",
+        "declare void @karac_mir_vec_reserve(ptr captures(none), i64, i64)",
     ] {
         assert!(ir.contains(want), "no `{want}` in:\n{ir}");
     }
