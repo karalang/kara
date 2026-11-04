@@ -2430,13 +2430,13 @@ fn test_let_annotation_slot_and_parameter_slot_agree() {
     let via_param = effectcheck_errors(
         "effect resource UserDB;\n\
          fn save(n: i64) -> i64 with writes(UserDB) { n * 2 }\n\
-         fn apply(f: Fn(i64) -> i64, n: i64) -> i64 { f(n) }\n\
+         fn apply(f: Fn(i64) -> i64 with (), n: i64) -> i64 { f(n) }\n\
          fn main() with writes(UserDB) { apply(save, 7); }",
     );
     let via_let = effectcheck_errors(
         "effect resource UserDB;\n\
          fn save(n: i64) -> i64 with writes(UserDB) { n * 2 }\n\
-         fn main() with writes(UserDB) { let f: Fn(i64) -> i64 = save; f(7); }",
+         fn main() with writes(UserDB) { let f: Fn(i64) -> i64 with () = save; f(7); }",
     );
     let violates = |errs: &[EffectError]| {
         errs.iter()
@@ -2472,7 +2472,7 @@ fn test_let_annotation_slot_and_parameter_slot_agree() {
 const SLOT_PRELUDE: &str = "effect resource UserDB;\n\
      fn save(n: i64) -> i64 with writes(UserDB) { n * 2 }\n\
      fn dbl(n: i64) -> i64 { n * 2 }\n\
-     struct H { f: Fn(i64) -> i64 }\n";
+     struct H { f: Fn(i64) -> i64 with () }\n";
 
 /// The slot violations in one program, through the REAL pipeline.
 ///
@@ -2539,24 +2539,24 @@ fn test_all_four_fn_slot_positions_are_checked() {
     for (body, what, subject) in [
         (
             "pub fn go() -> i64 with writes(UserDB) \
-             { let mut f: Fn(i64) -> i64 = dbl; f = save; f(7) }",
+             { let mut f: Fn(i64) -> i64 with () = dbl; f = save; f(7) }",
             "assignment to a declared binding",
             "binding `f`",
         ),
         (
             "pub fn go() -> i64 with writes(UserDB) \
-             { let f: Fn(i64) -> i64; f = save; f(7) }",
+             { let f: Fn(i64) -> i64 with (); f = save; f(7) }",
             "the LetUninit form",
             "binding `f`",
         ),
         (
-            "fn get() -> Fn(i64) -> i64 { save }\n\
+            "fn get() -> Fn(i64) -> i64 with () { save }\n\
              pub fn go() -> i64 with writes(UserDB) { let g = get(); g(7) }",
             "return position, tail expression",
             "returned value",
         ),
         (
-            "fn get() -> Fn(i64) -> i64 { return save; }\n\
+            "fn get() -> Fn(i64) -> i64 with () { return save; }\n\
              pub fn go() -> i64 with writes(UserDB) { let g = get(); g(7) }",
             "return position, explicit return",
             "returned value",
@@ -2656,7 +2656,7 @@ fn test_inner_slot_applies_inside_its_block() {
     let msgs = slot_violations(
         "pub fn go() -> i64 with writes(UserDB) {\n\
          \x20   let mut f: Fn(i64) -> i64 with writes(UserDB) = save;\n\
-         \x20   { let mut f: Fn(i64) -> i64 = dbl; f = save; let _ = f(1); }\n\
+         \x20   { let mut f: Fn(i64) -> i64 with () = dbl; f = save; let _ = f(1); }\n\
          \x20   f(7)\n\
          }",
     );
@@ -2672,7 +2672,7 @@ fn test_inner_slot_applies_inside_its_block() {
 #[test]
 fn test_return_slot_follows_branch_tails() {
     let msgs = slot_violations(
-        "fn get(c: bool) -> Fn(i64) -> i64 { if c { save } else { dbl } }\n\
+        "fn get(c: bool) -> Fn(i64) -> i64 with () { if c { save } else { dbl } }\n\
          pub fn go() -> i64 with writes(UserDB) { let g = get(true); g(7) }",
     );
     assert_eq!(
@@ -2733,7 +2733,7 @@ fn test_fn_returning_pub_fn_gets_followable_advice() {
     let msgs: Vec<String> = effectcheck_errors(
         "effect resource UserDB;\n\
          fn save(n: i64) -> i64 with writes(UserDB) { n * 2 }\n\
-         pub fn get() -> Fn(i64) -> i64 { save }",
+         pub fn get() -> Fn(i64) -> i64 with () { save }",
     )
     .into_iter()
     .filter(|e| e.kind == EffectErrorKind::MissingEffectDeclaration)
@@ -2745,7 +2745,7 @@ fn test_fn_returning_pub_fn_gets_followable_advice() {
         "expected one missing-declaration error: {msgs:?}"
     );
     assert!(
-        msgs[0].contains("PARENTHESISED") && msgs[0].contains("(Fn(i64) -> i64)"),
+        msgs[0].contains("PARENTHESISED") && msgs[0].contains("(Fn(i64) -> i64 with ())"),
         "advice must name the parenthesised spelling, rendered concretely; got {}",
         msgs[0]
     );
@@ -2759,7 +2759,7 @@ fn test_fn_returning_pub_fn_gets_followable_advice() {
     let after: Vec<String> = effectcheck_errors(
         "effect resource UserDB;\n\
          fn save(n: i64) -> i64 with writes(UserDB) { n * 2 }\n\
-         pub fn get() -> (Fn(i64) -> i64) with writes(UserDB) { save }",
+         pub fn get() -> (Fn(i64) -> i64 with ()) with writes(UserDB) { save }",
     )
     .into_iter()
     .map(|e| e.message)
@@ -2817,43 +2817,43 @@ fn test_container_element_slots_are_checked() {
     for (body, what, subject) in [
         (
             "pub fn go() with writes(UserDB) \
-             { let v: Vec[Fn(i64) -> i64] = [save, dbl]; let _ = v; }",
+             { let v: Vec[Fn(i64) -> i64 with ()] = [save, dbl]; let _ = v; }",
             "Vec literal (PrefixCollectionLiteral after lower)",
             "element 0",
         ),
         (
             "pub fn go() with writes(UserDB) \
-             { let a: Array[Fn(i64) -> i64, 2] = [save, dbl]; let _ = a; }",
+             { let a: Array[Fn(i64) -> i64 with (), 2] = [save, dbl]; let _ = a; }",
             "Array literal (stays an ArrayLiteral)",
             "element 0",
         ),
         (
             "pub fn go() with writes(UserDB) \
-             { let v: Vec[Fn(i64) -> i64] = [save; 3]; let _ = v; }",
+             { let v: Vec[Fn(i64) -> i64 with ()] = [save; 3]; let _ = v; }",
             "repeat literal",
             "element",
         ),
         (
             "pub fn go() with writes(UserDB) \
-             { let o: Option[Fn(i64) -> i64] = Some(save); let _ = o; }",
+             { let o: Option[Fn(i64) -> i64 with ()] = Some(save); let _ = o; }",
             "Option payload",
             "binding `o`",
         ),
         (
             "pub fn go() with writes(UserDB) \
-             { let t: (Fn(i64) -> i64, i64) = (save, 1); let _ = t; }",
+             { let t: (Fn(i64) -> i64 with (), i64) = (save, 1); let _ = t; }",
             "tuple element",
             "element 0",
         ),
         (
             "pub fn go() with writes(UserDB) \
-             { let m: Map[String, Fn(i64) -> i64] = Map[\"k\": save]; let _ = m; }",
+             { let m: Map[String, Fn(i64) -> i64 with ()] = Map[\"k\": save]; let _ = m; }",
             "map value",
             "value 0",
         ),
         (
             "pub fn go() with writes(UserDB) \
-             { let v: Vec[Option[Fn(i64) -> i64]] = [Some(save)]; let _ = v; }",
+             { let v: Vec[Option[Fn(i64) -> i64 with ()]] = [Some(save)]; let _ = v; }",
             "nested Vec[Option[Fn]]",
             "element 0",
         ),
@@ -2953,29 +2953,73 @@ fn test_panics_does_not_constrain_a_bare_fn_slot() {
     }
 }
 
+/// A function type with NO clause, stored in a field or a collection
+/// element, returned, or bound by a `let`, admits every effect: a call
+/// through it has every effect (design.md § How a call through a function
+/// value gets its effects). It used to read as pure (B-2026-11-04-66).
+#[test]
+fn a_function_type_with_no_clause_admits_every_effect() {
+    for (body, what) in [
+        (
+            "struct R { h: Fn(i64) -> i64 }\n\
+             pub fn go() -> i64 with writes(UserDB) { let r = R { h: save }; (r.h)(1) }",
+            "struct-literal field",
+        ),
+        (
+            "fn get() -> Fn(i64) -> i64 { save }\n\
+             pub fn go() -> i64 with writes(UserDB) { let g = get(); g(1) }",
+            "return position",
+        ),
+        (
+            "pub fn go() -> i64 with writes(UserDB) \
+             { let f: Fn(i64) -> i64 = save; f(1) }",
+            "let annotation",
+        ),
+        (
+            "pub fn go() -> i64 with writes(UserDB) \
+             { let mut v: Vec[Fn(i64) -> i64] = [dbl]; v.push(save); v[1](1) }",
+            "collection element",
+        ),
+        (
+            "fn waits(n: i64) -> i64 with blocks { n }\n\
+             fn get() -> Fn(i64) -> i64 { waits }\n\
+             pub fn go() -> i64 with blocks { let f = get(); f(1) }",
+            "an execution verb through a return",
+        ),
+    ] {
+        let msgs = slot_violations(body);
+        assert!(
+            msgs.is_empty(),
+            "{what}: expected no slot violation, got {msgs:?}"
+        );
+    }
+}
+
 /// The other half of the cut, and the reason this is not just "make the
 /// comparison lax". `blocks` and `suspends` are EXECUTION verbs driving
 /// scheduler placement, so "this callback must not block" is a constraint
 /// a slot may really mean — they stay checked. So do the resource verbs.
+/// The slot is the empty clause `with ()`: a slot with NO clause admits
+/// every effect (B-2026-11-04-66).
 #[test]
-fn test_other_verbs_still_constrain_a_bare_fn_slot() {
+fn test_other_verbs_still_constrain_an_empty_clause_slot() {
     for (body, verb) in [
         (
             "fn waits(n: i64) -> i64 with blocks { n }\n\
-             fn get() -> Fn(i64) -> i64 { waits }\n\
+             fn get() -> Fn(i64) -> i64 with () { waits }\n\
              pub fn go() -> i64 with blocks { let f = get(); f(1) }",
             "blocks",
         ),
         (
             "fn yields(n: i64) -> i64 with suspends { n }\n\
-             fn get() -> Fn(i64) -> i64 { yields }\n\
+             fn get() -> Fn(i64) -> i64 with () { yields }\n\
              pub fn go() -> i64 with suspends { let f = get(); f(1) }",
             "suspends",
         ),
         (
             "effect resource UserDB;\n\
              fn save(n: i64) -> i64 with writes(UserDB) { n * 2 }\n\
-             fn get() -> Fn(i64) -> i64 { save }\n\
+             fn get() -> Fn(i64) -> i64 with () { save }\n\
              pub fn go() -> i64 with writes(UserDB) { let f = get(); f(1) }",
             "writes",
         ),
@@ -2987,7 +3031,7 @@ fn test_other_verbs_still_constrain_a_bare_fn_slot() {
             .collect();
         assert!(
             msgs.iter().any(|m| m.contains(verb)),
-            "`{verb}` must still constrain a bare slot; got {msgs:?}"
+            "`{verb}` must still constrain an empty-clause slot; got {msgs:?}"
         );
     }
 }
@@ -2997,7 +3041,7 @@ fn test_let_annotation_wider_value_rejected() {
     let errors = effectcheck_errors(
         "effect resource UserDB;\n\
          fn save(n: i64) -> i64 with writes(UserDB) { n * 2 }\n\
-         fn main() with writes(UserDB) { let f: Fn(i64) -> i64 = save; f(7); }",
+         fn main() with writes(UserDB) { let f: Fn(i64) -> i64 with () = save; f(7); }",
     );
     assert!(
         errors
@@ -3086,7 +3130,7 @@ fn test_let_else_annotation_wider_value_rejected() {
         "effect resource UserDB;\n\
          fn save(n: i64) -> i64 with writes(UserDB) { n * 2 }\n\
          fn main() with writes(UserDB) {\n\
-             let f: Fn(i64) -> i64 = save else { return; };\n\
+             let f: Fn(i64) -> i64 with () = save else { return; };\n\
              f(7);\n\
          }",
     );
@@ -3104,7 +3148,7 @@ fn test_let_annotation_wider_closure_rejected() {
     let errors = effectcheck_errors(
         "effect resource UserDB;\n\
          fn save(n: i64) -> i64 with writes(UserDB) { n * 2 }\n\
-         fn main() with writes(UserDB) { let f: Fn(i64) -> i64 = |x| save(x); f(7); }",
+         fn main() with writes(UserDB) { let f: Fn(i64) -> i64 with () = |x| save(x); f(7); }",
     );
     assert!(
         errors
@@ -3123,7 +3167,7 @@ fn test_oncefn_let_annotation_wider_value_rejected() {
     let errors = effectcheck_errors(
         "effect resource UserDB;\n\
          fn save(n: i64) -> i64 with writes(UserDB) { n * 2 }\n\
-         fn main() with writes(UserDB) { let f: OnceFn(i64) -> i64 = save; f(7); }",
+         fn main() with writes(UserDB) { let f: OnceFn(i64) -> i64 with () = save; f(7); }",
     );
     assert!(
         errors
@@ -3144,7 +3188,7 @@ fn test_oncefn_let_annotation_wider_value_rejected() {
 fn test_let_annotation_resource_less_verb_follows_the_slot() {
     let errors = effectcheck_errors(
         "fn waits(n: i64) -> i64 with blocks { n }\n\
-         fn main() with blocks { let f: Fn(i64) -> i64 = waits; f(7); }",
+         fn main() with blocks { let f: Fn(i64) -> i64 with () = waits; f(7); }",
     );
     assert!(
         errors
@@ -11689,15 +11733,15 @@ fn test_design_md_io_skeletons_infer_documented_effects() {
 fn stdlib_stores_are_checked_against_the_receivers_element_slot() {
     let found = slot_violations(
         "pub fn main() with writes(UserDB) {\n\
-         let mut v: Vec[Fn(i64) -> i64] = [dbl];\n\
+         let mut v: Vec[Fn(i64) -> i64 with ()] = [dbl];\n\
          v.push(save);\n\
          v.insert(0, save);\n\
-         let mut d: VecDeque[Fn(i64) -> i64] = VecDeque.new();\n\
+         let mut d: VecDeque[Fn(i64) -> i64 with ()] = VecDeque.new();\n\
          d.push_back(save);\n\
          d.push_front(save);\n\
-         let mut m: Map[i64, Fn(i64) -> i64] = Map.new();\n\
+         let mut m: Map[i64, Fn(i64) -> i64 with ()] = Map.new();\n\
          m.insert(1, save);\n\
-         let mut s: SortedMap[i64, Fn(i64) -> i64] = SortedMap.new();\n\
+         let mut s: SortedMap[i64, Fn(i64) -> i64 with ()] = SortedMap.new();\n\
          s.insert(1, save);\n\
          }\n",
     );
@@ -11771,11 +11815,11 @@ fn an_unannotated_receiver_has_no_slot() {
 fn assignment_descends_into_the_declared_annotation() {
     let found = slot_violations(
         "pub fn main() with writes(UserDB) {\n\
-         let mut o: Option[Fn(i64) -> i64] = None;\n\
+         let mut o: Option[Fn(i64) -> i64 with ()] = None;\n\
          o = Some(save);\n\
-         let mut v: Vec[Fn(i64) -> i64] = [dbl];\n\
+         let mut v: Vec[Fn(i64) -> i64 with ()] = [dbl];\n\
          v = [save];\n\
-         let mut t: (Fn(i64) -> i64, i64) = (dbl, 1);\n\
+         let mut t: (Fn(i64) -> i64 with (), i64) = (dbl, 1);\n\
          t = (save, 2);\n\
          }\n",
     );
@@ -11797,7 +11841,7 @@ fn a_user_generic_methods_parameter_is_a_substituted_slot() {
 
     let found = slot_violations(&format!(
         "{HOLDER}pub fn main() with writes(UserDB) {{\n\
-         let mut h: Holder[Fn(i64) -> i64] = Holder {{ item: dbl }};\n\
+         let mut h: Holder[Fn(i64) -> i64 with ()] = Holder {{ item: dbl }};\n\
          h.set(save);\n\
          }}\n"
     ));
@@ -11828,7 +11872,7 @@ fn a_user_generic_methods_parameter_is_a_substituted_slot() {
 #[test]
 fn a_field_receivers_declared_element_slot_is_checked() {
     let found = slot_violations(
-        "struct Inner { items: Vec[Fn(i64) -> i64] }\n\
+        "struct Inner { items: Vec[Fn(i64) -> i64 with ()] }\n\
          struct Outer { inner: Inner }\n\
          impl Outer {\n\
          fn nest(mut ref self) with writes(UserDB) { self.inner.items.push(save); }\n\
@@ -11856,7 +11900,7 @@ fn a_field_receivers_declared_element_slot_is_checked() {
 #[test]
 fn a_self_receiver_is_not_an_identifier() {
     let found = slot_violations(
-        "struct R { items: Vec[Fn(i64) -> i64] }\n\
+        "struct R { items: Vec[Fn(i64) -> i64 with ()] }\n\
          impl R {\n\
          fn add(mut ref self) with writes(UserDB) { self.items.push(save); }\n\
          }\n",
@@ -11869,8 +11913,8 @@ fn a_self_receiver_is_not_an_identifier() {
 #[test]
 fn a_parameter_is_a_declared_slot() {
     let found = slot_violations(
-        "struct R { items: Vec[Fn(i64) -> i64] }\n\
-         fn direct(v: mut ref Vec[Fn(i64) -> i64]) with writes(UserDB) { v.push(save); }\n\
+        "struct R { items: Vec[Fn(i64) -> i64 with ()] }\n\
+         fn direct(v: mut ref Vec[Fn(i64) -> i64 with ()]) with writes(UserDB) { v.push(save); }\n\
          fn through_field(r: mut ref R) with writes(UserDB) { r.items.push(save); }\n",
     );
     assert_eq!(found.len(), 2, "one per parameter; got: {found:?}");
@@ -11883,9 +11927,9 @@ fn a_parameter_is_a_declared_slot() {
 fn an_index_receiver_reads_the_containers_element_type() {
     let found = slot_violations(
         "pub fn main() with writes(UserDB) {\n\
-         let mut buckets: Vec[Vec[Fn(i64) -> i64]] = [[dbl]];\n\
+         let mut buckets: Vec[Vec[Fn(i64) -> i64 with ()]] = [[dbl]];\n\
          buckets[0].push(save);\n\
-         let mut byname: Map[i64, Vec[Fn(i64) -> i64]] = Map.new();\n\
+         let mut byname: Map[i64, Vec[Fn(i64) -> i64 with ()]] = Map.new();\n\
          byname[1].push(save);\n\
          }\n",
     );
@@ -11941,11 +11985,11 @@ fn the_new_receiver_shapes_do_not_over_fire() {
 /// exactly as a pure slot.
 #[test]
 fn a_chained_receiver_reads_the_callees_declared_return_type() {
-    const DECLS: &str = "fn hand_out() -> Vec[Fn(i64) -> i64] { [dbl] }\n\
+    const DECLS: &str = "fn hand_out() -> Vec[Fn(i64) -> i64 with ()] { [dbl] }\n\
          fn hand_ok() -> Vec[Fn(i64) -> i64 with writes(UserDB)] { [dbl] }\n\
-         struct Reg { items: Vec[Fn(i64) -> i64] }\n\
+         struct Reg { items: Vec[Fn(i64) -> i64 with ()] }\n\
          impl Reg {\n\
-         fn part(mut ref self) -> Vec[Fn(i64) -> i64] { [dbl] }\n\
+         fn part(mut ref self) -> Vec[Fn(i64) -> i64 with ()] { [dbl] }\n\
          }\n";
 
     let found = slot_violations(&format!(

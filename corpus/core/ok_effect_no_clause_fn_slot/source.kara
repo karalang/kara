@@ -1,0 +1,18 @@
+// A function type with no effect clause, stored in a struct field or
+// returned, has every effect, so it holds a closure that prints (design.md
+// § How a call through a function value gets its effects). Only the empty
+// clause `with ()` declares none.
+struct R {
+    h: Fn(i64),
+}
+
+fn mk() -> Fn(i64) {
+    |x| println(x)
+}
+
+fn main() {
+    let r = R { h: |x| println(x) };
+    (r.h)(1);
+    let g = mk();
+    g(2);
+}

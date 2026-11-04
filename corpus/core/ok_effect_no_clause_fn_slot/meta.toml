@@ -1,0 +1,10 @@
+source = "design.md § How a call through a function value gets its effects"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["effects", "fn-values"]
+expected_from = "spec"
+rules = ["12"]
+backends = []
+env = {}
+note = "A struct field typed `Fn(i64)` holds a printing closure, and a function returning `Fn(i64)` returns one: with no clause the type has every effect (B-2026-11-04-66). Both print."

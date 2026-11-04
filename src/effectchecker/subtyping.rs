@@ -562,13 +562,20 @@ impl<'a> super::EffectChecker<'a> {
     /// Effects admitted by an explicit `Fn(..)` / `OnceFn(..)` type annotation.
     ///
     /// `Some(set)` when the annotation is a function type whose effect clause
-    /// resolves to a concrete set at this site -- an ABSENT clause reading as
-    /// the empty (pure) set, the same way the argument-position rule reads an
-    /// unannotated slot (`test_subtype_unannotated_slot_treated_as_pure`).
+    /// resolves to a concrete set at this site; the empty clause `with ()` is
+    /// the empty set, which admits only default-permitted effects.
     ///
-    /// `None` -- meaning "no check here" -- in three cases:
+    /// `None` -- meaning "no check here" -- in four cases:
     ///
     ///   * `ty` is not a function type at all, so there is no slot.
+    ///   * the type has NO clause. A stored or returned function value whose
+    ///     type declares none has every effect, and a call through it is
+    ///     charged every effect (design.md § How a call through a function
+    ///     value gets its effects, Gowtham 2026-11-03; MIR's effect pass
+    ///     already charges it so). Reading the absent clause as pure refused
+    ///     `struct R { h: Fn(i64) }` holding a printing closure, and a
+    ///     `-> Fn(i64)` returning one (B-2026-11-04-66). A local `let f:
+    ///     Fn(i64) = ..` is no escaping slot, so it is not checked either.
     ///   * `with _` ([`EffectSpec::Polymorphic`]) admits any effects by
     ///     definition, exactly as the argument path `continue`s on it.
     ///   * the clause names an effect VARIABLE (`with E`). Those are bound per
@@ -593,7 +600,7 @@ impl<'a> super::EffectChecker<'a> {
                 }
                 Some(self.resolve_effect_list_to_set(list, None))
             }
-            None => Some(HashSet::new()),
+            None => None,
         }
     }
 
