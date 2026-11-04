@@ -5717,7 +5717,7 @@ There is no free `spawn`, no `async fn` and no `.await`. A function that waits l
 
 The compiler verifies that the branches of a `par` block and the iterations of a `par for` do not conflict, using places and the effect system. A conflict is a compile error, not something the compiler quietly runs in order: running conflicting branches one after another without saying so would hide that the parallelism the programmer wrote did not happen. `TaskGroup` tasks are checked by the borrow rules and `CrossTask`, so they cannot race on memory, but they are not checked for effect conflicts and they run in no fixed order ([`TaskGroup`](#taskgroup)). The rules are [core-semantics.md §11](core-semantics.md#11-concurrency-c9); this section gives the surface and the examples.
 
-v1 does not parallelize loops or statements on its own. Automatic parallelism arrives with the automatic-parallelism track (M4b), as an optimization that may change nothing observable ([core-semantics.md §11.5](core-semantics.md#11-concurrency-c9)).
+The compiler also parallelizes loops and statements on its own (automatic parallelism, M4b, on by default; `KARAC_AUTO_PAR=0` turns it off). It is an optimization that may change nothing observable ([core-semantics.md §11.5](core-semantics.md#11-concurrency-c9)): it runs work in parallel only where the same conflict test as `par` proves the pieces independent and its cost model says the work outweighs a task's start-up cost, and otherwise leaves the code in order.
 
 ### `par` blocks
 
@@ -5972,7 +5972,7 @@ fn validate(form: Form) -> (Result[Name, FieldError], Result[Email, FieldError],
 1. **Conflicts are errors.** No two branches touch one place or resource in a conflicting way, so every resource a branch writes is used by that branch alone, in that branch's program order. Two branches that both print are rejected rather than interleaved.
 2. **Results are bound to positions.** A `par` block's tuple is in source order and a `par for` loop's `Vec` is in iteration order, whatever order the branches finish in.
 3. **Errors are chosen by source order.** When several branches fail, the enclosing function returns the source-earliest error ([Failure](#failure)).
-4. **Sequential code stays sequential.** v1 runs loops and statements in order. When automatic parallelism arrives (M4b), it may change nothing observable ([core-semantics.md §11.5](core-semantics.md#11-concurrency-c9)).
+4. **Sequential code behaves sequentially.** Automatic parallelism (on by default) may run loops and statements in parallel only where that changes nothing observable ([core-semantics.md §11.5](core-semantics.md#11-concurrency-c9)).
 
 **What is not guaranteed:**
 - the order in which branches, iterations and tasks run or finish;
