@@ -2523,6 +2523,8 @@ fn main() -> () {
         // the closure kinds (§9.6).
         let not_mir = [
             "err_par_conflict",
+            "err_par_user_resource",
+            "err_question_from_effects",
             "err_partial_move_drop_type",
             "err_enum_payload_drop_type_into_constructor",
             "err_fn_value_shared_crosses_task",

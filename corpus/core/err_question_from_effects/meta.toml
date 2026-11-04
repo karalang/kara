@@ -1,0 +1,12 @@
+source = "B-2026-11-04-18"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["effects", "errors"]
+class = "a"
+expected_from = "pin"
+rules = ["12"]
+backends = []
+env = {}
+note = "B-2026-11-04-18: the effects of the `From` impl a `?` converts through are the enclosing function's (design.md §10), so `high` performs writes(Log) and, being public, must declare it. The expected.out wording of an error pin is guidance, not a byte oracle."
+bucket = "a:refused"

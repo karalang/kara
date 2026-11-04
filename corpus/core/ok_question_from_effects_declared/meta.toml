@@ -1,0 +1,10 @@
+source = "B-2026-11-04-18"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["effects", "errors"]
+expected_from = "spec"
+rules = ["12"]
+backends = []
+env = {}
+note = "B-2026-11-04-18: with `writes(Log)` declared, a `pub fn` whose `?` converts through a `From` impl that writes `Log` is accepted, and the conversion runs (design.md §10)."

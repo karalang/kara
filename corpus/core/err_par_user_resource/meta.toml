@@ -1,0 +1,12 @@
+source = "B-2026-11-04-25"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["par", "effects"]
+class = "a"
+expected_from = "pin"
+rules = ["12", "14.1"]
+backends = []
+env = {}
+note = "B-2026-11-04-25: two par branches writing one user-declared resource conflict (design.md § User-declared resources; core-semantics §14.1, an annotation-only resource takes part in conflicts). The expected.out wording of an error pin is guidance, not a byte oracle."
+bucket = "a:refused"

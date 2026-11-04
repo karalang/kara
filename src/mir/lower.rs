@@ -5228,6 +5228,19 @@ impl<'l, 'a> Bx<'l, 'a> {
                 .iter()
                 .any(|i| matches!(i, ast::EffectItem::Variable(_)))
         });
+        // See [`Program::clause_effects`].
+        // Only declared resources: `sends(self)` or `writes(f)` roots a
+        // resource at a value, which the body's own sites key.
+        if let Some(list) = f.effects.as_ref().and_then(declared_effect_list) {
+            let list: Vec<DeclaredEffect> = list
+                .into_iter()
+                .filter(|d| self.lcx.resource_bounds.contains_key(&d.resource))
+                .collect();
+            if !list.is_empty() {
+                let name = self.b.instance().name.clone();
+                self.lcx.program.clause_effects.insert(name, list);
+            }
+        }
         if self
             .lcx
             .signatures_only_from

@@ -1,0 +1,10 @@
+source = "B-2026-11-04-25"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["par", "effects"]
+expected_from = "spec"
+rules = ["12", "14.1"]
+backends = []
+env = {}
+note = "B-2026-11-04-25: the refusal of two branches writing one user-declared resource leaves reads/reads of one resource and writes of two different ones free (design.md § Conflict rules)."

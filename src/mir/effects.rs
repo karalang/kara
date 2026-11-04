@@ -486,6 +486,7 @@ pub(crate) fn analyze_with(program: &Program, tys: &TyInterner, size_gate: bool)
                 if body.suspends {
                     summary.add(Effect::new(Verb::Suspends, "", Key::Any));
                 }
+                summary.union(a.user_clause(body));
                 for s in &sites {
                     let mut e = s.effects.clone();
                     e.effects = e
@@ -1868,6 +1869,39 @@ impl<'p> Analysis<'p> {
             .filter_map(|ms| ms.get(m).or_else(|| ms.get(via)).cloned())
             .collect();
         Some((resource, access, impls))
+    }
+
+    /// The effects `body`'s own clause declares on resources the program
+    /// declares itself (design.md § User-declared resources: "It enters
+    /// the effect graph where a function declares it"). Such a resource
+    /// has no operation a body performs, so without these a call charged
+    /// nothing for it, and two `par` branches writing it ran unrefused
+    /// (B-2026-11-04-25). A resource is a class with no value to key it,
+    /// so the effect overlaps every other on it. A built-in resource is
+    /// left to the body's own operations, which key it more finely (a
+    /// channel, a file) than a clause can.
+    fn user_clause(&self, body: &Body) -> EffectSet {
+        let mut out = EffectSet::default();
+        let Some(clause) = self.program.clause_effects.get(&body.instance.name) else {
+            return out;
+        };
+        for d in clause {
+            let verb = match d.verb.as_str() {
+                "reads" => Verb::Reads,
+                "writes" => Verb::Writes,
+                "sends" => Verb::Sends,
+                "receives" => Verb::Receives,
+                _ => continue,
+            };
+            if d.resource.is_empty()
+                || crate::target::is_host_resource(&d.resource)
+                || crate::prelude::PRELUDE_EFFECT_RESOURCES.contains(&d.resource.as_str())
+            {
+                continue;
+            }
+            out.add(Effect::new(verb, &d.resource, Key::Any));
+        }
+        out
     }
 
     /// The resource `name` binds when it is `with_provider[R]` (§14.4).

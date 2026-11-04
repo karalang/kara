@@ -1014,8 +1014,10 @@ pub struct EffectChecker<'a> {
     /// key. The lowering rewrites an operator only when its operands share a
     /// type, so `v * 2.0` on `impl Mul[f64] for V` (and `2.0 * c` on
     /// `impl Mul[Col] for f64`) stays a `Binary`, and this is what charges it
-    /// the impl's effects (B-2026-10-29-51). Empty when constructed via the
-    /// unparameterised `new` family.
+    /// the impl's effects (B-2026-10-29-51). A `?` that converts its error
+    /// through a program `From` impl is here too, by the `?`'s span
+    /// (B-2026-11-04-18). Empty when constructed via the unparameterised
+    /// `new` family.
     pub(crate) user_operator_calls: FxHashMap<SpanKey, Symbol>,
     /// Each coercion to a `dyn` type, by the coerced expression's node
     /// ([`DynTables::coercions`]). Empty when constructed via the

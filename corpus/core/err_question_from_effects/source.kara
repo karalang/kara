@@ -1,0 +1,36 @@
+// design.md §10, Results and propagation: the `From` conversion a `?`
+// inserts is a real call for effects, so a public function whose `?`
+// converts through an impl that writes a resource must declare it.
+effect resource Log;
+
+pub struct Low {}
+
+pub struct High {
+    pub n: i64,
+}
+
+fn note() with writes(Log) {
+}
+
+impl From[Low] for High {
+    fn from(e: own Low) -> High with writes(Log) {
+        note();
+        High { n: 1 }
+    }
+}
+
+fn low() -> Result[i64, Low] {
+    Err(Low {})
+}
+
+pub fn high() -> Result[i64, High] {
+    let v = low()?;
+    Ok(v)
+}
+
+fn main() {
+    match high() {
+        Ok(v) => println(f"{v}"),
+        Err(e) => println(f"error {e.n}"),
+    }
+}

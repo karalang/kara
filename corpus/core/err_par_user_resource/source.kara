@@ -1,0 +1,13 @@
+// design.md § User-declared resources: a resource the program declares
+// enters the effect graph where a function declares it, so two `par`
+// branches that both write it conflict, though nothing else in them does.
+effect resource AuditLog;
+
+fn record(n: i64) -> i64 with writes(AuditLog) {
+    n + 1
+}
+
+fn main() {
+    let (a, b) = par { record(1), record(2) };
+    println(f"{a + b}");
+}

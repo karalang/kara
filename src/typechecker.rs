@@ -2013,7 +2013,9 @@ pub struct TypeCheckResult {
     pub method_callee_types: FxHashMap<SpanKey, String>,
     /// B-2026-10-14-30 — each binary expression the v2 pipelines dispatch
     /// to a user operator impl, by span, with its `Type.method` key, so the
-    /// ownership pass reads the operands' modes off the method.
+    /// ownership pass reads the operands' modes off the method. Also each
+    /// `?` whose error converts through a program `From` impl, with its
+    /// `Type.from` key, which the effect checker charges (B-2026-11-04-18).
     pub user_operator_calls: FxHashMap<SpanKey, String>,
     /// B-2026-10-29-46 — of those, each whose type has more than one impl
     /// of the operator's trait with that method (`impl Add for Col` and

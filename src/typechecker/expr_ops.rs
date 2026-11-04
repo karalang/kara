@@ -5713,6 +5713,11 @@ impl<'a> super::TypeChecker<'a> {
                     let seg = self.resolved_impl_dispatch_segment(target_span, &target_name);
                     self.question_conversions
                         .insert(SpanKey::from_span(span), seg);
+                    // The conversion is a real call for effects (design.md
+                    // §10, Results and propagation): `?` is an operator on
+                    // a program impl, charged as one (B-2026-11-04-18).
+                    self.user_operator_calls
+                        .insert(SpanKey::from_span(span), format!("{target_name}.from"));
                     return inner_args[0].clone();
                 }
                 // A blanket conversion the source lacks a bound of: name the

@@ -1620,7 +1620,22 @@ impl<'a> super::EffectChecker<'a> {
             ExprKind::Closure { body, .. } => {
                 self.collect_calls_in_expr(body, calls, bounds);
             }
-            ExprKind::Return(Some(inner)) | ExprKind::Question(inner) => {
+            ExprKind::Return(Some(inner)) => {
+                self.collect_calls_in_expr(inner, calls, bounds);
+            }
+            ExprKind::Question(inner) => {
+                // A `?` whose error converts through a program `From` impl
+                // calls its `from`, whose effects are the enclosing
+                // function's (design.md §10, B-2026-11-04-18).
+                if let Some(&key) = self
+                    .user_operator_calls
+                    .get(&SpanKey::from_span(&expr.span))
+                {
+                    calls.push((key, expr.span));
+                    if self.method_bodies.contains_key(&key) {
+                        self.charge_bound_calls_at(key, expr.id, expr.span, calls);
+                    }
+                }
                 self.collect_calls_in_expr(inner, calls, bounds);
             }
             ExprKind::Break {

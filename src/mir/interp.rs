@@ -53,6 +53,13 @@ pub struct Program {
     /// semantics §14), by name: what effect inference needs to decide
     /// which functions take a hidden provider parameter.
     pub resources: BTreeMap<String, super::effects::ResourceDecl>,
+    /// Each function's own `with` clause, by instance name: its effects on
+    /// the resources the program declares (`effect resource`), when the
+    /// clause names plain verbs on plain resources. A resource the program declares
+    /// itself (`effect resource Db;`) has no operation a body can perform,
+    /// so the clause is where the effect pass finds it (design.md §
+    /// User-declared resources, B-2026-11-04-25).
+    pub clause_effects: BTreeMap<String, Vec<DeclaredEffect>>,
     /// The `extern "C"` functions the program calls, by name, with their
     /// declared signatures: a call to one is a call into a native library
     /// (design.md § FFI), not to a body or a library native.

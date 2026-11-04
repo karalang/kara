@@ -1,0 +1,23 @@
+// design.md § User-declared resources, with §12's conflict rules: two
+// reads of one declared resource do not conflict, and neither do writes
+// of two different ones, so these branches run together.
+effect resource Db;
+effect resource Log;
+
+fn look(n: i64) -> i64 with reads(Db) {
+    n * 2
+}
+
+fn store(n: i64) -> i64 with writes(Db) {
+    n - 1
+}
+
+fn note(n: i64) -> i64 with writes(Log) {
+    n + 1
+}
+
+fn main() {
+    let (a, b) = par { look(1), look(2) };
+    let (c, d) = par { note(3), store(4) };
+    println(f"{a} {b} {c} {d}");
+}
