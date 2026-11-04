@@ -832,9 +832,28 @@ impl<'a> super::EffectChecker<'a> {
                 let block_calls = self.collect_calls_in_block(body, bounds);
                 calls.extend(block_calls);
             }
-            StmtKind::Assign { target, value } | StmtKind::CompoundAssign { target, value, .. } => {
+            StmtKind::Assign { target, value } => {
                 self.collect_calls_in_expr(target, calls, bounds);
                 self.collect_calls_in_expr(value, calls, bounds);
+            }
+            StmtKind::CompoundAssign { target, op, value } => {
+                self.collect_calls_in_expr(target, calls, bounds);
+                self.collect_calls_in_expr(value, calls, bounds);
+                // `x += 1` on an integer is the checked `+` (B-2026-11-04-29).
+                if self.int_nodes.contains(&target.id) || self.int_nodes.contains(&value.id) {
+                    let atom = match op {
+                        CompoundOp::Div | CompoundOp::Mod => Some(self.syms.builtin_div_rem),
+                        CompoundOp::Add
+                        | CompoundOp::Sub
+                        | CompoundOp::Mul
+                        | CompoundOp::Shl
+                        | CompoundOp::Shr => Some(self.syms.builtin_int_overflow),
+                        CompoundOp::BitAnd | CompoundOp::BitOr | CompoundOp::BitXor => None,
+                    };
+                    if let Some(key) = atom {
+                        calls.push((key, stmt.span));
+                    }
+                }
             }
             StmtKind::Expr(expr) => self.collect_calls_in_expr(expr, calls, bounds),
         }
@@ -1141,6 +1160,19 @@ impl<'a> super::EffectChecker<'a> {
                 // caller. Concrete-type dispatch (`Wrapper.method()`) and
                 // ordinary free-function calls still use `extract_callee_name`.
                 let trait_keys = self.extract_trait_assoc_fn_keys(callee, bounds);
+                // B-2026-11-04-29: a built-in integer operator the lowering
+                // wrote as `i64.rem(a, b)` / `i64.neg(a)` is a `panics` atom
+                // (design.md §12): `/` and `%` may divide by zero, and `+`,
+                // `-`, `*`, the shifts and negation may overflow or shift out
+                // of range in checked mode.
+                if let Some(atom) = super::lowered_int_op_panic_atom(callee, args) {
+                    let key = if atom == super::INT_OVERFLOW_KEY {
+                        self.syms.builtin_int_overflow
+                    } else {
+                        self.syms.builtin_div_rem
+                    };
+                    calls.push((key, expr.span));
+                }
                 let callee_name: Option<Symbol> =
                     if super::is_lowered_builtin_operator_call(callee, args) {
                         // The built-in operator, never a program impl under the
@@ -1444,6 +1476,16 @@ impl<'a> super::EffectChecker<'a> {
                         calls.push((qualified, expr.span));
                     }
                 }
+                // B-2026-11-04-28: `collect`, `to_vec` and `to_string` build a
+                // new heap value whatever the receiver. The library bodies do
+                // not show it: `collect` is the `Iterator` default, copied into
+                // each impl, and hands off through a `FromIterator` bound;
+                // `to_vec` and `to_string` are built in. Charged by name, so a
+                // program method of the same name is over-approximated, the
+                // direction the name-matched seeds above already take.
+                if matches!(method.as_str(), "collect" | "to_vec" | "to_string") {
+                    calls.push((self.syms.builtin_heap_alloc, expr.span));
+                }
                 // Fallible-allocation instance companions (phase-8-stdlib-floor
                 // item 2) — `try_push` / `try_insert` / `try_clone` / … carry
                 // `allocates(Heap)`, like their panicking counterparts. Matched
@@ -1507,14 +1549,25 @@ impl<'a> super::EffectChecker<'a> {
                 self.collect_calls_in_expr(right, calls, bounds);
                 if matches!(op, BinOp::Div | BinOp::Mod) {
                     calls.push((self.syms.builtin_div_rem, expr.span));
+                } else if matches!(
+                    op,
+                    BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Shl | BinOp::Shr
+                ) && self.int_nodes.contains(&left.id)
+                {
+                    // An integer operator the lowering left in place
+                    // (B-2026-11-04-29).
+                    calls.push((self.syms.builtin_int_overflow, expr.span));
                 }
             }
             ExprKind::Pipe { left, right } => {
                 self.collect_calls_in_expr(left, calls, bounds);
                 self.collect_calls_in_expr(right, calls, bounds);
             }
-            ExprKind::Unary { operand, .. } => {
+            ExprKind::Unary { operand, op } => {
                 self.collect_calls_in_expr(operand, calls, bounds);
+                if matches!(op, UnaryOp::Neg) && self.int_nodes.contains(&operand.id) {
+                    calls.push((self.syms.builtin_int_overflow, expr.span));
+                }
             }
             // B-2026-08-30-35 — an f-string INTERPOLATION HOLE is a real
             // sub-expression, not part of the literal. It sat in the leaf list
@@ -1536,10 +1589,16 @@ impl<'a> super::EffectChecker<'a> {
             // misled by this, and the shape of that walker's arm is what this
             // one mirrors.
             ExprKind::InterpolatedStringLit(parts) => {
+                let mut holes = false;
                 for part in parts {
                     if let crate::ast::ParsedInterpolationPart::Expr(inner, _) = part {
+                        holes = true;
                         self.collect_calls_in_expr(inner, calls, bounds);
                     }
+                }
+                // Formatting a hole builds a `String` (B-2026-11-04-28).
+                if holes {
+                    calls.push((self.syms.builtin_heap_alloc, expr.span));
                 }
             }
             ExprKind::Block(block) | ExprKind::Comptime(block) => {
@@ -1659,6 +1718,9 @@ impl<'a> super::EffectChecker<'a> {
                 }
             }
             ExprKind::MapLiteral { entries, .. } => {
+                // A `Map` / `SortedMap` literal builds a heap table
+                // (B-2026-11-04-28).
+                calls.push((self.syms.builtin_heap_alloc, expr.span));
                 for (key, val) in entries {
                     self.collect_calls_in_expr(key, calls, bounds);
                     self.collect_calls_in_expr(val, calls, bounds);
@@ -1723,12 +1785,27 @@ impl<'a> super::EffectChecker<'a> {
                 for e in elements {
                     self.collect_calls_in_expr(e, calls, bounds);
                 }
+                // `let v: Vec[i64] = [1, 2]` builds a heap `Vec`; a fixed
+                // `Array` does not (B-2026-11-04-28).
+                if self.heap_nodes.contains(&expr.id) {
+                    calls.push((self.syms.builtin_heap_alloc, expr.span));
+                }
             }
-            ExprKind::RepeatLiteral { value, count, .. } => {
+            ExprKind::RepeatLiteral {
+                value,
+                count,
+                type_name,
+            } => {
                 self.collect_calls_in_expr(value, calls, bounds);
                 self.collect_calls_in_expr(count, calls, bounds);
+                if type_name.as_deref() == Some("Vec") || self.heap_nodes.contains(&expr.id) {
+                    calls.push((self.syms.builtin_heap_alloc, expr.span));
+                }
             }
-            ExprKind::PrefixCollectionLiteral { items, .. } => {
+            ExprKind::PrefixCollectionLiteral { items, type_name } => {
+                if type_name != "Array" {
+                    calls.push((self.syms.builtin_heap_alloc, expr.span));
+                }
                 for e in items {
                     self.collect_calls_in_expr(e, calls, bounds);
                 }

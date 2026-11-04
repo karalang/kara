@@ -1,0 +1,11 @@
+source = "design.md §12 Default-permitted effects (#[no_effect(allocates(Heap))])"
+dedup_of = []
+expect = "error:E0416"
+exit = 1
+tags = ["effects", "no-effect", "allocates"]
+class = "a"
+expected_from = "pin"
+rules = []
+backends = []
+env = {}
+note = "`to_vec`, `to_string`, an f-string with a hole, a `Vec` and a `Map` literal, `Vec.filled`, `String + Str` and `collect` all allocate, so each function under `#[no_effect(allocates(Heap))]` is refused (B-2026-11-04-28). The expected.out wording of an error pin is guidance, not a byte oracle."

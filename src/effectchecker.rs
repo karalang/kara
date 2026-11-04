@@ -307,6 +307,57 @@ pub fn lowered_builtin_op_is_pure(key: &str) -> bool {
 /// `crate::lowering`'s `call_path` gives the callee its first argument's span,
 /// while a written `f64.mul(a, b)` names its callee with its own text, so the
 /// two spans coincide only on a lowered call.
+/// The `panics` atom for integer arithmetic that may overflow or shift out of
+/// range in checked mode, the default (design.md §12 Effect lattice,
+/// core-semantics §10.1; B-2026-11-04-29).
+pub const INT_OVERFLOW_KEY: &str = "__builtin_int_overflow";
+
+/// The `allocates(Heap)` a construct performs with no call to charge it to:
+/// an f-string with a hole, a `Vec` / `Map` / `Set` literal
+/// (B-2026-11-04-28).
+pub const HEAP_ALLOC_KEY: &str = "__builtin_heap_alloc";
+
+/// The integer heads of [`LOWERED_OP_HEADS`].
+pub fn is_int_head(head: &str) -> bool {
+    matches!(
+        head,
+        "i8" | "i16"
+            | "i32"
+            | "i64"
+            | "i128"
+            | "isize"
+            | "u8"
+            | "u16"
+            | "u32"
+            | "u64"
+            | "u128"
+            | "usize"
+    )
+}
+
+/// The `panics` atom a lowered built-in operator on integers performs:
+/// `__builtin_div_rem` for `/` and `%`, [`INT_OVERFLOW_KEY`] for `+`, `-`,
+/// `*`, `<<`, `>>` and negation, none for the rest. The lowering writes
+/// `a % b` on `i64` as `i64.rem(a, b)` and `-a` as `i64.neg(a)`, both with
+/// the callee spanned as the first argument (see
+/// [`is_lowered_builtin_operator_call`]).
+pub fn lowered_int_op_panic_atom(callee: &Expr, args: &[CallArg]) -> Option<&'static str> {
+    let ExprKind::Path { segments, .. } = &callee.kind else {
+        return None;
+    };
+    let [head, op] = segments.as_slice() else {
+        return None;
+    };
+    if !is_int_head(head) || args.is_empty() || callee.span != args[0].value.span {
+        return None;
+    }
+    match (op.as_str(), args.len()) {
+        ("div" | "rem", 2) => Some("__builtin_div_rem"),
+        ("add" | "sub" | "mul" | "shl" | "shr", 2) | ("neg", 1) => Some(INT_OVERFLOW_KEY),
+        _ => None,
+    }
+}
+
 pub fn is_lowered_builtin_operator_call(callee: &Expr, args: &[CallArg]) -> bool {
     let ExprKind::Path { segments, .. } = &callee.kind else {
         return false;
@@ -807,6 +858,14 @@ pub struct DynCoercion {
 }
 
 /// A `dyn` value whose type writes a `with` clause.
+/// The expressions the typechecker typed as a primitive integer, and those
+/// typed as a heap collection, by `NodeId` ([`crate::node_type_facts`]).
+#[derive(Debug, Clone, Default)]
+pub struct NodeTypeFacts {
+    pub ints: FxHashSet<crate::ids::NodeId>,
+    pub heap: FxHashSet<crate::ids::NodeId>,
+}
+
 #[derive(Debug, Clone)]
 pub struct DynValue {
     pub trait_name: String,
@@ -822,6 +881,8 @@ pub(crate) struct BuiltinSyms {
     pub(crate) builtin_unwrap: Symbol,
     pub(crate) builtin_expect: Symbol,
     pub(crate) builtin_div_rem: Symbol,
+    pub(crate) builtin_int_overflow: Symbol,
+    pub(crate) builtin_heap_alloc: Symbol,
     pub(crate) builtin_refinement_assert: Symbol,
     pub(crate) float_trunc_to_int: Symbol,
     pub(crate) try_alloc: Symbol,
@@ -837,6 +898,8 @@ impl BuiltinSyms {
             builtin_unwrap: interner.intern("__builtin_unwrap"),
             builtin_expect: interner.intern("__builtin_expect"),
             builtin_div_rem: interner.intern("__builtin_div_rem"),
+            builtin_int_overflow: interner.intern(INT_OVERFLOW_KEY),
+            builtin_heap_alloc: interner.intern(HEAP_ALLOC_KEY),
             builtin_refinement_assert: interner.intern("__builtin_refinement_assert"),
             float_trunc_to_int: interner.intern("float.trunc_to_int"),
             try_alloc: interner.intern(crate::fallible_alloc::TRY_ALLOC_EFFECT_KEY),
@@ -1066,6 +1129,14 @@ pub struct EffectChecker<'a> {
     /// naming the parameter. Built from `TypeCheckResult.node_types` by
     /// [`crate::typeparam_value_nodes`].
     pub(crate) typeparam_nodes: FxHashMap<crate::ids::NodeId, String>,
+    /// Expressions the typechecker typed as a primitive integer (or a `ref`
+    /// to one), from [`crate::node_type_facts`]: an operator the lowering
+    /// leaves in place (`x += 1`, a mixed-type `a + b`) is a `panics` atom
+    /// when its operand is one of these (B-2026-11-04-29).
+    pub(crate) int_nodes: FxHashSet<crate::ids::NodeId>,
+    /// Expressions typed as a heap collection (`Vec`, `Map`, `Set`, …): a
+    /// bare `[1, 2]` literal typed `Vec[i64]` allocates (B-2026-11-04-28).
+    pub(crate) heap_nodes: FxHashSet<crate::ids::NodeId>,
     /// B-2026-10-15-21: per function, the `(type parameter, method)` pairs its
     /// body calls through a bound whose trait method declares no effects,
     /// directly or through a generic callee instantiated at one of its own
@@ -1264,6 +1335,8 @@ impl<'a> EffectChecker<'a> {
             call_type_subs: FxHashMap::default(),
             node_call_subs: FxHashMap::default(),
             typeparam_nodes: FxHashMap::default(),
+            int_nodes: FxHashSet::default(),
+            heap_nodes: FxHashSet::default(),
             bound_calls: FxHashMap::default(),
             bound_events: std::cell::RefCell::new(None),
             trait_names: FxHashSet::default(),
@@ -1329,6 +1402,14 @@ impl<'a> EffectChecker<'a> {
     ) -> Self {
         self.node_call_subs = node_call_subs;
         self.typeparam_nodes = typeparam_nodes;
+        self
+    }
+
+    /// Attach what the typechecker found about operand types
+    /// ([`crate::node_type_facts`]).
+    pub fn with_node_type_facts(mut self, facts: NodeTypeFacts) -> Self {
+        self.int_nodes = facts.ints;
+        self.heap_nodes = facts.heap;
         self
     }
 
@@ -1403,10 +1484,10 @@ impl<'a> EffectChecker<'a> {
             verb: EffectVerbKind::Panics,
             resource: String::new(),
         };
-        // Exhaustive list per design.md § Effect Inference and Boundaries (F-057):
-        // unwrap/expect/panic/assert/assert_eq/assert_ne/todo/unreachable/index/div/rem.
-        // Arithmetic overflow is NOT in this list — it traps at runtime but is outside
-        // the effect system's scope.
+        // The `panics` atoms of design.md §12 (Effect lattice):
+        // unwrap/expect/panic/assert/assert_eq/assert_ne/todo/unreachable,
+        // indexing, integer `/` and `%`, and integer arithmetic that may
+        // overflow or shift out of range in checked mode (B-2026-11-04-29).
         for builtin in [
             "todo",
             "unreachable",
@@ -1418,6 +1499,7 @@ impl<'a> EffectChecker<'a> {
             "__builtin_unwrap",
             "__builtin_expect",
             "__builtin_div_rem",
+            INT_OVERFLOW_KEY,
             // `x as Refined` runtime predicate assertion — panics when the
             // value fails the refinement predicate (phase-9 step 3).
             "__builtin_refinement_assert",
@@ -1431,10 +1513,8 @@ impl<'a> EffectChecker<'a> {
 
         // `f.trunc_to_<intN>()` traps (panics) on NaN / out-of-range — the
         // trapping float→int conversion form (phase-8 § "Saturating float→int",
-        // slice 2; design.md § Numeric Semantics > as-cast semantics). Unlike
-        // the arithmetic-overflow traps above (e.g. `abs` on `iN::MIN`, which is
-        // deliberately outside the effect system), this one carries `panics` by
-        // spec, so callers inherit it. Every `trunc_to_<target>` method name is
+        // slice 2; design.md § Numeric Semantics > as-cast semantics). It
+        // carries `panics` by spec, so callers inherit it. Every `trunc_to_<target>` method name is
         // routed to this single key in `effectchecker/inference.rs`.
         {
             let mut set = EffectSet::new();
@@ -1670,12 +1750,20 @@ impl<'a> EffectChecker<'a> {
             "VecDeque.try_push_back",
             "VecDeque.try_push_front",
             crate::fallible_alloc::TRY_ALLOC_EFFECT_KEY,
+            // B-2026-11-04-28: what `#[no_effect(allocates(Heap))]` must see
+            // (design.md §12 Default-permitted effects): a filled `Vec`, a
+            // `String + Str` concatenation, and the constructs with no call
+            // to charge (`HEAP_ALLOC_KEY`).
+            "Vec.filled",
+            "String.add",
+            HEAP_ALLOC_KEY,
         ] {
             let mut set = EffectSet::new();
             set.add(alloc_heap.clone(), EffectOrigin::Direct(builtin_span));
             self.inferred_effects
                 .insert(self.interner.intern(stdlib_fn), set);
         }
+
         // B-2026-08-22-20 — the CHANNEL COMMUNICATION effects. design.md:6070
         // declares `send` with `sends(tx)` and the `recv` family with
         // `receives(rx)`, but the compiler seeded `Sender.send` with
@@ -2258,6 +2346,7 @@ impl<'a> EffectChecker<'a> {
         self.infer_private_trait_ceilings();
         self.check_contract_purity();
         self.verify_declarations();
+        self.verify_written_declarations();
         self.verify_extern_export_panics();
         self.verify_extern_cunwind_requires_unwind_profile();
         self.verify_extern_export_no_suspends();
@@ -2720,11 +2809,16 @@ impl<'a> EffectChecker<'a> {
                 continue; // Has at least one impl — normal ceiling rules apply.
             }
             // Private trait with no visible impls: override all method ceilings to unbound.
+            // A WRITTEN clause stays: a default body is checked against it
+            // (design.md §12 Trait methods; B-2026-11-04-27).
             for trait_item in &t.items {
                 let m = match trait_item {
                     TraitItem::Method(m) => m,
                     TraitItem::AssocType(_) => continue,
                 };
+                if m.effects.is_some() || t.trait_effects.is_some() {
+                    continue;
+                }
                 let key = self.interner.dotted_str(&t.name, &m.name);
                 self.declared_effects
                     .insert(key, DeclaredEffects::Polymorphic);

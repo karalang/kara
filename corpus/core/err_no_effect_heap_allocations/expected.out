@@ -1,0 +1,8 @@
+ERROR at line 6: fn `copied` declares `#[no_effect(allocates(Heap))]` but its effect set includes `allocates(Heap)`
+ERROR at line 12: fn `owned` declares `#[no_effect(allocates(Heap))]` but its effect set includes `allocates(Heap)`
+ERROR at line 18: fn `formatted` declares `#[no_effect(allocates(Heap))]` but its effect set includes `allocates(Heap)`
+ERROR at line 24: fn `literal` declares `#[no_effect(allocates(Heap))]` but its effect set includes `allocates(Heap)`
+ERROR at line 30: fn `table` declares `#[no_effect(allocates(Heap))]` but its effect set includes `allocates(Heap)`
+ERROR at line 36: fn `filled` declares `#[no_effect(allocates(Heap))]` but its effect set includes `allocates(Heap)`
+ERROR at line 42: fn `joined` declares `#[no_effect(allocates(Heap))]` but its effect set includes `allocates(Heap)`
+ERROR at line 48: fn `collected` declares `#[no_effect(allocates(Heap))]` but its effect set includes `allocates(Heap)`

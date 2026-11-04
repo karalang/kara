@@ -1,0 +1,11 @@
+source = "design.md §12 Default-permitted effects (#[no_effect(allocates(Heap))])"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["effects", "no-effect", "allocates"]
+class = "a"
+expected_from = "spec"
+rules = []
+backends = []
+env = {}
+note = "A borrowed `Vec` read in a loop, a fixed `[0; 4]` and a string literal do not allocate, so `#[no_effect(allocates(Heap))]` accepts them (B-2026-11-04-28): 4 + 3 + 1 + 2 + 3 = 13."

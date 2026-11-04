@@ -596,13 +596,15 @@ pub fn effectcheck_with_typecheck_tables(
     typeparam_nodes: rustc_hash::FxHashMap<crate::ids::NodeId, String>,
     user_operator_calls: rustc_hash::FxHashMap<crate::resolver::SpanKey, String>,
     dyn_tables: effectchecker::DynTables,
+    node_type_facts: effectchecker::NodeTypeFacts,
 ) -> EffectCheckResult {
     let checker = EffectChecker::new_with_policy_and_config(program, policy, profile_config.into())
         .with_method_callee_types(method_callee_types)
         .with_call_type_subs(call_type_subs)
         .with_bound_dispatch_tables(node_call_subs, typeparam_nodes)
         .with_user_operator_calls(user_operator_calls)
-        .with_dyn_tables(dyn_tables);
+        .with_dyn_tables(dyn_tables)
+        .with_node_type_facts(node_type_facts);
     checker.check()
 }
 
@@ -689,6 +691,40 @@ pub fn typeparam_value_nodes(
             }
         })
         .collect()
+}
+
+/// The expressions the typechecker typed as a primitive integer, and those
+/// typed as a heap collection, each seen through `ref` / `mut ref`, by
+/// `NodeId`. Integer arithmetic is a `panics` atom in checked mode
+/// (design.md §12), and an operator the lowering does not rewrite into a
+/// call (`x += 1`) is recognised by its operand's type (B-2026-11-04-29); a
+/// bare `[1, 2]` allocates when it is typed `Vec[i64]` (B-2026-11-04-28).
+pub fn node_type_facts(
+    typed: &crate::typechecker::TypeCheckResult,
+) -> effectchecker::NodeTypeFacts {
+    use crate::typechecker::Type;
+    let mut facts = effectchecker::NodeTypeFacts::default();
+    for (&node, (ty, _)) in &typed.node_types {
+        let mut ty = ty;
+        while let Type::Ref(inner) | Type::MutRef(inner) = ty {
+            ty = inner;
+        }
+        match ty {
+            Type::Int(_) | Type::UInt(_) => {
+                facts.ints.insert(node);
+            }
+            Type::Named { name, .. }
+                if matches!(
+                    name.as_str(),
+                    "Vec" | "Map" | "Set" | "SortedMap" | "SortedSet" | "VecDeque"
+                ) =>
+            {
+                facts.heap.insert(node);
+            }
+            _ => {}
+        }
+    }
+    facts
 }
 
 /// Analyze concurrency opportunities in a parsed program.
@@ -1766,7 +1802,10 @@ mod playground_tests {
 
     #[test]
     fn hover_at_shows_pure_for_effectless_function() {
-        let src = "fn add(a: i64, b: i64) -> i64 { a + b }\nfn main() { let _ = add(1, 2); }";
+        // `a + b` is a `panics` atom in checked mode (B-2026-11-04-29); the
+        // wrapping form is pure.
+        let src =
+            "fn add(a: i64, b: i64) -> i64 { a.wrapping_add(b) }\nfn main() { let _ = add(1, 2); }";
         let call = src.rfind("add").unwrap();
         let info = hover_at(src, call).expect("expected hover");
         assert_eq!(info.effect_signature.as_deref(), Some("pure"));

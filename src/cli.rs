@@ -2041,6 +2041,10 @@ impl Pipeline {
                 .as_ref()
                 .map(crate::dyn_tables)
                 .unwrap_or_default(),
+            self.typed
+                .as_ref()
+                .map(crate::node_type_facts)
+                .unwrap_or_default(),
         ));
         // B-2026-10-19-41: core semantics §7.11 lets a `Drop` body panic (a
         // panic ends the process; there is no unwinding to panic during), so

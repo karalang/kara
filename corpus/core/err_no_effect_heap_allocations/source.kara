@@ -1,0 +1,56 @@
+// A function under `#[no_effect(allocates(Heap))]` is proven allocation-free
+// for the whole call (design.md §12 Default-permitted effects): copying a
+// sequence out, building a string, a `Vec` or `Map` literal, a filled `Vec`
+// and collecting all allocate, and each is refused.
+#[no_effect(allocates(Heap))]
+fn copied() -> i64 {
+    let v = [1, 2].to_vec();
+    v.len()
+}
+
+#[no_effect(allocates(Heap))]
+fn owned() -> i64 {
+    let s = "a".to_string();
+    s.len()
+}
+
+#[no_effect(allocates(Heap))]
+fn formatted(n: i64) -> i64 {
+    let s = f"{n}";
+    s.len()
+}
+
+#[no_effect(allocates(Heap))]
+fn literal() -> i64 {
+    let v: Vec[i64] = [1, 2];
+    v.len()
+}
+
+#[no_effect(allocates(Heap))]
+fn table() -> i64 {
+    let m = ["a": 1];
+    m.len()
+}
+
+#[no_effect(allocates(Heap))]
+fn filled() -> i64 {
+    let v = Vec.filled(3, 0);
+    v.len()
+}
+
+#[no_effect(allocates(Heap))]
+fn joined() -> i64 {
+    let s = "ab".to_string() + "c";
+    s.len()
+}
+
+#[no_effect(allocates(Heap))]
+fn collected() -> i64 {
+    let v: Vec[i64] = (0..3).collect();
+    v.len()
+}
+
+fn main() {
+    println(copied() + owned() + formatted(7) + literal() + table());
+    println(filled() + joined() + collected());
+}

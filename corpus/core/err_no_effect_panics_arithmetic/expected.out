@@ -1,0 +1,6 @@
+ERROR at line 5: fn `rem` declares `#[no_effect(panics)]` but its effect set includes `panics`
+ERROR at line 10: fn `div` declares `#[no_effect(panics)]` but its effect set includes `panics`
+ERROR at line 15: fn `add` declares `#[no_effect(panics)]` but its effect set includes `panics`
+ERROR at line 20: fn `negate` declares `#[no_effect(panics)]` but its effect set includes `panics`
+ERROR at line 25: fn `bump` declares `#[no_effect(panics)]` but its effect set includes `panics`
+ERROR at line 32: fn `shift` declares `#[no_effect(panics)]` but its effect set includes `panics`

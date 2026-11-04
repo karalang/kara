@@ -616,6 +616,7 @@ pub fn effectcheck_as_build_does(
         karac::typeparam_value_nodes(typed),
         typed.user_operator_calls.clone(),
         karac::dyn_tables(typed),
+        karac::node_type_facts(typed),
     )
 }
 

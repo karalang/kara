@@ -1,0 +1,11 @@
+source = "design.md §12 Inference and declarations; Trait methods"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["effects", "declarations"]
+class = "a"
+expected_from = "pin"
+rules = []
+backends = []
+env = {}
+note = "A private function's clause, a method's clause and a private trait's default body are each checked against what the body performs, and each is narrower here (B-2026-11-04-27). The expected.out wording of an error pin is guidance, not a byte oracle."

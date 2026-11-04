@@ -1,0 +1,3 @@
+ERROR at line 11: function 'fetch' performs writes(Db) (via call to 'put' at line 12) but its `with` clause does not declare it; add writes(Db) to the clause or remove the call
+ERROR at line 19: method 'Store.load' performs writes(Db) (via call to 'put' at line 20) but its `with` clause does not declare it; add writes(Db) to the clause or remove the call
+ERROR at line 26: default body of 'Repo.get' performs writes(Db) but the method ceiling is [reads(Db)]; declare the effect on the method or remove it from the default body

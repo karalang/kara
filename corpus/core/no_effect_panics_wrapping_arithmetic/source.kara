@@ -1,0 +1,29 @@
+// The wrapping, saturating and checked forms never panic, and neither do
+// comparison and the bitwise operators, so a function built from them is
+// proven panic-free under `#[no_effect(panics)]` (design.md §12 Effect
+// lattice: only arithmetic that may overflow in checked mode is an atom).
+#[no_effect(panics)]
+fn mix(a: i64, b: i64) -> i64 {
+    let s = a.wrapping_add(b);
+    let t = s.wrapping_mul(3);
+    let u = t.saturating_sub(i64.MAX);
+    if (a & b) < (a | b) {
+        u ^ 1
+    } else {
+        u
+    }
+}
+
+#[no_effect(panics)]
+fn safe_div(a: i64, b: i64) -> i64 {
+    match a.checked_div(b) {
+        Some(q) => q,
+        None => 0,
+    }
+}
+
+fn main() {
+    println(mix(9223372036854775807, 1));
+    println(safe_div(7, 2));
+    println(safe_div(7, 0));
+}

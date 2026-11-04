@@ -1,0 +1,19 @@
+// Reading a borrowed `Vec`, a fixed `Array` built by `[v; n]` and a plain
+// string literal allocate nothing, so `#[no_effect(allocates(Heap))]`
+// accepts the function (design.md §12 Default-permitted effects). Only
+// the caller builds the `Vec`.
+#[no_effect(allocates(Heap))]
+fn total(xs: ref Vec[i64]) -> i64 {
+    let window = [0; 4];
+    let label = "sum";
+    let mut s = window.len() + label.len();
+    for i in 0..xs.len() {
+        s = s + xs[i];
+    }
+    s
+}
+
+fn main() {
+    let xs: Vec[i64] = [1, 2, 3];
+    println(total(xs));
+}

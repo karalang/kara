@@ -384,6 +384,114 @@ impl<'a> super::EffectChecker<'a> {
         }
     }
 
+    /// Verify a WRITTEN effect clause where [`Self::verify_declarations`] does
+    /// not look: on a private free function and on a program's own method,
+    /// public or private (design.md §12: "a declared set is checked like a
+    /// public one"; "Declarations are verified, not trusted";
+    /// B-2026-11-04-27). Only what the body performs beyond the clause is
+    /// reported. A function with no clause is inferred and has nothing to
+    /// verify, and a clause naming more than the body does is allowed, so a
+    /// library can reserve an effect. The library's own bodies are not
+    /// re-verified here, and a trait's default body has its own pass
+    /// ([`Self::verify_trait_default_bodies`]).
+    pub(crate) fn verify_written_declarations(&mut self) {
+        // (key, what it is, is public, the verbs its clause roots at a value)
+        let mut targets: Vec<(Symbol, &'static str, bool, Vec<EffectVerbKind>)> = self
+            .function_bodies
+            .iter()
+            .filter(|(sym, f)| {
+                !f.stdlib_origin && !self.function_visibility.get(*sym).copied().unwrap_or(false)
+            })
+            .map(|(&sym, f)| (sym, "function", false, value_rooted_verbs(f)))
+            .collect();
+        // Inherent methods only: a trait impl's method is held to the trait's
+        // ceiling by `verify_impl_trait_ceilings`, and a default body copied
+        // into an impl carries the trait's clause, which its own pass checks.
+        for item in &self.program.items {
+            let Item::ImplBlock(imp) = item else {
+                continue;
+            };
+            let TypeKind::Path(p) = &imp.target_type.kind else {
+                continue;
+            };
+            if imp.trait_name.is_some() {
+                continue;
+            }
+            let Some(type_name) = p.segments.last() else {
+                continue;
+            };
+            for it in &imp.items {
+                if let ImplItem::Method(m) = it {
+                    if !m.stdlib_origin {
+                        targets.push((
+                            self.interner.dotted_str(type_name, &m.name),
+                            "method",
+                            m.is_pub,
+                            value_rooted_verbs(m),
+                        ));
+                    }
+                }
+            }
+        }
+        targets.sort_by_cached_key(|(sym, ..)| self.interner.resolve(*sym));
+        targets.dedup_by_key(|(sym, ..)| *sym);
+        let mut new_errors = Vec::new();
+        for (sym, what, is_pub, rooted) in targets {
+            if self.fn_uses_with_underscore.contains(&sym) {
+                continue;
+            }
+            let (allowed, poly) = match self.declared_effects.get(&sym) {
+                Some(DeclaredEffects::Explicit(set)) => (set.effect_set(), false),
+                Some(DeclaredEffects::PolymorphicWithFixed(fixed)) => (fixed.effect_set(), true),
+                _ => continue,
+            };
+            let Some(inferred) = self.inferred_effects.get(&sym) else {
+                continue;
+            };
+            let name = self.interner.resolve(sym);
+            let span = self.function_spans.get(&sym).copied().unwrap_or(Span {
+                line: 0,
+                column: 0,
+                offset: 0,
+                length: 0,
+            });
+            for te in &inferred.effects {
+                if self.is_transparent_verb(&te.effect.verb)
+                    || self.is_default_permitted_effect(&te.effect)
+                    || self.is_synthetic_modbind_resource(&te.effect.resource)
+                    || (poly && self.effect_came_via_polymorphic_callee(te, sym))
+                    || declared_admits(&allowed, &te.effect)
+                    // A resource rooted at `self` or a parameter stands for
+                    // what the body does to that value, which the MIR pass
+                    // keys; this checker has no key for it.
+                    || rooted.contains(&te.effect.verb)
+                    // "Private functions infer" `blocks` (design.md §12
+                    // blocks), clause or none.
+                    || (!is_pub
+                        && matches!(te.effect.verb, EffectVerbKind::Blocks | EffectVerbKind::Suspends))
+                {
+                    continue;
+                }
+                let origin_msg = self.format_effect_origin(sym, &te.effect);
+                new_errors.push(EffectError {
+                    message: format!(
+                        "{what} '{name}' performs {}({}){origin_msg} but its `with` clause does \
+                         not declare it; add {}({}) to the clause or remove the call",
+                        verb_name(&te.effect.verb),
+                        te.effect.resource,
+                        verb_name(&te.effect.verb),
+                        te.effect.resource,
+                    ),
+                    span,
+                    kind: EffectErrorKind::MissingEffectDeclaration,
+                    subtype_trace: None,
+                    replacement: None,
+                });
+            }
+        }
+        self.errors.extend(new_errors);
+    }
+
     /// Enforce design.md § Panic Semantics at the FFI Boundary, case 2:
     /// an exported `extern "C-unwind" fn` whose body may panic **must**
     /// declare `panics` in its `with` clause
@@ -845,4 +953,28 @@ impl<'a> super::EffectChecker<'a> {
         }
         self.errors.extend(new_errors);
     }
+}
+
+/// The verbs whose resources `f`'s clause roots at `self` or at a parameter
+/// (design.md § Value-rooted resources): `sends(self)`, `writes(f)`.
+fn value_rooted_verbs(f: &Function) -> Vec<EffectVerbKind> {
+    let params = crate::ast::value_root_param_names(&f.params);
+    let Some(list) = &f.effects else {
+        return Vec::new();
+    };
+    list.items
+        .iter()
+        .filter_map(|i| match i {
+            EffectItem::Verb(v)
+                if v.resources.iter().any(|r| {
+                    r.path
+                        .first()
+                        .is_some_and(|root| root == "self" || params.iter().any(|p| p == root))
+                }) =>
+            {
+                Some(v.kind.clone())
+            }
+            _ => None,
+        })
+        .collect()
 }

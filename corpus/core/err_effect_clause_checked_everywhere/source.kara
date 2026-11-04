@@ -1,0 +1,36 @@
+// A declared effect set is verified, not trusted, wherever it is written
+// (design.md §12 Inference and declarations: "a declared set is checked like
+// a public one"; Trait methods: "Default method bodies are checked against
+// their method's clause"). Each clause below is narrower than its body.
+effect resource Db;
+
+fn put() with writes(Db) {
+}
+
+// A private function.
+fn fetch() with reads(Db) {
+    put();
+}
+
+struct Store {}
+
+// A method.
+impl Store {
+    fn load(self) with reads(Db) {
+        put();
+    }
+}
+
+// A default body of a private trait no type implements.
+trait Repo {
+    fn get(self) -> i64 with reads(Db) {
+        put();
+        1
+    }
+}
+
+fn main() with reads(Db) writes(Db) {
+    fetch();
+    let s = Store {};
+    s.load();
+}

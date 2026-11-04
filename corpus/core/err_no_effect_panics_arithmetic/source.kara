@@ -1,0 +1,39 @@
+// Integer `/` and `%` may divide by zero, and arithmetic that may overflow
+// in checked mode, the default, panics too: all are `panics` atoms
+// (design.md §12 Effect lattice). `#[no_effect(panics)]` refuses each.
+#[no_effect(panics)]
+fn rem(a: i64, b: i64) -> i64 {
+    a % b
+}
+
+#[no_effect(panics)]
+fn div(a: i64, b: i64) -> i64 {
+    a / b
+}
+
+#[no_effect(panics)]
+fn add(a: i64, b: i64) -> i64 {
+    a + b
+}
+
+#[no_effect(panics)]
+fn negate(a: i64) -> i64 {
+    -a
+}
+
+#[no_effect(panics)]
+fn bump(a: i64) -> i64 {
+    let mut x = a;
+    x += 1;
+    x
+}
+
+#[no_effect(panics)]
+fn shift(a: u32, b: u32) -> u32 {
+    a << b
+}
+
+fn main() {
+    println(rem(1, 0) + div(1, 1) + add(1, 2) + negate(3) + bump(4));
+    println(shift(1, 2));
+}

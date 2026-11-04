@@ -1,0 +1,11 @@
+source = "design.md §12 Effect lattice (panics atoms)"
+dedup_of = []
+expect = "error:E0416"
+exit = 1
+tags = ["effects", "no-effect", "panics"]
+class = "a"
+expected_from = "pin"
+rules = []
+backends = []
+env = {}
+note = "Integer `/`, `%`, `+`, `-`, `*`, `<<`, negation and `+=` are `panics` atoms, so each function under `#[no_effect(panics)]` is refused (B-2026-11-04-29). The expected.out wording of an error pin is guidance, not a byte oracle."

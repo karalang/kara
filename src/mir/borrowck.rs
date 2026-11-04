@@ -2568,6 +2568,12 @@ fn main() -> () {
             // The empty clause `with ()` on a function type (design.md § How a
             // call through a function value gets its effects).
             "err_effect_empty_clause_exceeded",
+            // `#[no_effect]` over arithmetic and allocation, and clauses on
+            // private functions, methods and trait defaults (design.md §12;
+            // B-2026-11-04-27, -28, -29).
+            "err_no_effect_panics_arithmetic",
+            "err_no_effect_heap_allocations",
+            "err_effect_clause_checked_everywhere",
             "err_dyn_view_unmarked_spawned",
             "err_dyn_view_unmarked_par",
             "err_fn_vec_call_result_marked",

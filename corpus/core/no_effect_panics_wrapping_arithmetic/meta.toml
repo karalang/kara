@@ -1,0 +1,11 @@
+source = "design.md §12 Effect lattice (panics atoms)"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["effects", "no-effect", "panics"]
+class = "a"
+expected_from = "spec"
+rules = []
+backends = []
+env = {}
+note = "The wrapping, saturating and checked forms and the bitwise operators are not `panics` atoms, so `#[no_effect(panics)]` accepts them (B-2026-11-04-29). The values follow from two's-complement wrapping: MAX + 1 wraps to MIN, MIN * 3 wraps to MIN, and MIN - MAX saturates at MIN."
