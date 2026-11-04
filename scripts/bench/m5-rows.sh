@@ -100,6 +100,10 @@ ROWS = [
     ("B-2026-11-02-24", "1-100/38-count-and-say", "count_and_say.kara", "pair", "size", "fixed ad984ef96b"),
     ("B-2026-11-02-24", "201-300/282-expression-add-operators", "exprops_seq.kara", "pair", "size", "fixed ad984ef96b"),
     ("B-2026-11-02-23", "1-100/71-simplify-path", "simplify.kara", "par", "wall", "fixed 791fe05de0; par lane"),
+    ("B-2026-11-04-31", "201-300/297-serialize-and-deserialize-binary-tree", "treecodec.kara", "pair", "size", "fixed 5984ed3080"),
+    ("B-2026-11-04-31", "301-400/315-count-of-smaller-numbers-after-self", "count_smaller.kara", "pair", "size", "fixed 5984ed3080"),
+    ("B-2026-11-04-31", "301-400/332-reconstruct-itinerary", "reconstruct_itinerary.kara", "pair", "size", "fixed 5984ed3080"),
+    ("B-2026-11-04-31", "301-400/394-decode-string", "decode_string.kara", "pair", "size", "fixed 5984ed3080"),
 ]
 
 def log(*a):
