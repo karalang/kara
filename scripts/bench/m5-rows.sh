@@ -118,6 +118,8 @@ ROWS = [
     ("B-2026-11-04-39", "301-400/338-counting-bits", "counting_bits.kara", "pair", "instructions", "x86 1.15x -> 1.10x; ..= to B"),
     ("B-2026-11-04-39", "301-400/321-create-maximum-number", "create_max_number.kara", "pair", "instructions", "x86 1.12x, not fixed"),
     ("B-2026-11-04-39", "301-400/339-nested-list-weight-sum", "nested_weight_sum.kara", "pair", "instructions", "x86 1.09x, not fixed"),
+    # -41's bar is rustc -O's 0.819G instructions on the M5, not legacy's.
+    ("B-2026-11-04-41", "301-400/344-reverse-string", "reverse_string.kara", "pair", "instructions", "x86 LLVM 22: 3.60G -> 0.25G"),
 ]
 
 def log(*a):
