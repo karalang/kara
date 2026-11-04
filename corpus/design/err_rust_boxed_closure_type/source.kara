@@ -1,0 +1,7 @@
+fn mk(k: i64) -> Box<dyn Fn(i64) -> i64> {
+    |x| x + k
+}
+fn main() {
+    let f = mk(2);
+    println(f(3));
+}

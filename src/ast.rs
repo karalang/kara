@@ -858,6 +858,12 @@ pub struct Program {
     /// the PARSER, which desugars the literal to an ordinary `Vec` one.
     pub vec_macro_literals:
         rustc_hash::FxHashMap<crate::resolver::SpanKey, Option<crate::resolver::TextEdit>>,
+    /// Rust's `Box.new(e)` (what `Box::new(e)` reads as), keyed by the offset
+    /// of `Box`, with the edit that writes `e` in the call's place: Kāra has
+    /// no `Box`, the owned form is the value itself (design.md § dyn Trait).
+    /// Set by the PARSER; the resolver reports it when nothing declares a
+    /// `Box` (B-2026-11-04-43).
+    pub rust_box_new: rustc_hash::FxHashMap<usize, crate::resolver::TextEdit>,
     /// Function return types written in parentheses, `-> (dyn Shape)`, keyed
     /// by the type's span. The parentheses leave no node of their own; a
     /// trailing `with` after them is the function's clause either way, and

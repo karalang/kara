@@ -1,0 +1,9 @@
+source = "B-2026-11-04-7"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "slices", "closures"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md § Slices; Escaping function values: a `Slice[T]` parameter reads a view, a `mut Slice[T]` one writes through it, and a closure is returned as `Fn(A) -> R`."

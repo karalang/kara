@@ -1,0 +1,8 @@
+struct Bx<T> { v: T }
+impl<T> Bx<T> {
+    fn get(self) -> T { self.v }
+}
+fn main() {
+    let b = Bx { v: 4 };
+    println(b.get());
+}

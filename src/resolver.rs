@@ -1934,6 +1934,29 @@ impl<'a> Resolver<'a> {
             });
             return;
         }
+        // Rust's heap box: Kāra has none, so no near name is the answer
+        // (`Box` -> `Hex` is one edit away). `Box.new(e)` is `e`
+        // (B-2026-11-04-43).
+        if name == "Box" {
+            let replacement = self
+                .program
+                .rust_box_new
+                .get(&span.offset)
+                .cloned()
+                .map(Box::new);
+            self.errors.push(ResolveError {
+                message: "`Box` is Rust's heap box: Kāra has none (design.md § dyn Trait). A \
+                          value is owned where it is, and a `dyn Trait` or function value is \
+                          already a handle, so `Box.new(e)` is `e`"
+                    .to_string(),
+                span,
+                kind: ResolveErrorKind::UndefinedName,
+                suggestion: None,
+                replacement,
+                stub_hint: None,
+            });
+            return;
+        }
         let visible = self.suggestable_names();
         // Same known-rename preference as `error_undefined_type` — the
         // constructor half (`TreeMap.new()`) resolves as a NAME.

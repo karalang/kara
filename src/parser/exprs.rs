@@ -517,6 +517,11 @@ impl super::Parser {
                                     offset: lhs.span.offset,
                                     length: end.saturating_sub(lhs.span.offset),
                                 };
+                                if method == "new"
+                                    && matches!(&lhs.kind, ExprKind::Identifier(n) if n == "Box")
+                                {
+                                    self.note_rust_box_new(lhs.span.offset, &args, &span);
+                                }
                                 lhs = if args.is_empty()
                                     && matches!(method.as_str(), "size_of" | "align_of")
                                     && Self::is_type_receiver(&lhs)
@@ -608,6 +613,11 @@ impl super::Parser {
                                 continue;
                             }
                         }
+                    }
+                    if matches!(&lhs.kind, ExprKind::Path { segments, generic_args: None }
+                        if segments.len() == 2 && segments[0] == "Box" && segments[1] == "new")
+                    {
+                        self.note_rust_box_new(lhs.span.offset, &args, &call_span);
                     }
                     lhs = Expr {
                         id: crate::ids::NodeId::DUMMY,
@@ -2940,6 +2950,10 @@ impl super::Parser {
                         return Some(Self::layout_query(ty, &path[1], self.span_from(&start)));
                     }
                 }
+                if path.len() == 2 && path[0] == "Box" && path[1] == "new" {
+                    let call = self.span_from(&start);
+                    self.note_rust_box_new(start.offset, &args, &call);
+                }
                 return Some(Expr {
                     id: crate::ids::NodeId::DUMMY,
                     span: self.span_from(&start),
@@ -3096,6 +3110,32 @@ impl super::Parser {
     /// The edit that rewrites a `vec![..]` literal (`vec` at `start`, its
     /// `!` at `bang`) in the spelling design.md keeps: `[a, b]`,
     /// `Vec.filled(n, v)` (`[v; n]` is a fixed `Array`), `Vec.new()`.
+    /// Rust's `Box.new(e)`, whose `Box` starts at `box_at`: record the edit
+    /// that writes `e` in the call's place, for the resolver to attach if
+    /// `Box` turns out undeclared ([`crate::ast::Program::rust_box_new`]).
+    fn note_rust_box_new(&mut self, box_at: usize, args: &[CallArg], call: &Span) {
+        let [arg] = args else { return };
+        if arg.label.is_some() || arg.mut_marker {
+            return;
+        }
+        let Some((source, base)) = self.source.as_ref() else {
+            return;
+        };
+        let at = arg.value.span.offset;
+        let Some(text) = at
+            .checked_sub(*base)
+            .and_then(|s| source.get(s..s + arg.value.span.length))
+        else {
+            return;
+        };
+        let edit = crate::resolver::TextEdit {
+            offset: call.offset,
+            length: call.length,
+            replacement: text.to_string(),
+        };
+        self.rust_box_new.insert(box_at, edit);
+    }
+
     fn vec_macro_fix(
         &self,
         start: &Span,

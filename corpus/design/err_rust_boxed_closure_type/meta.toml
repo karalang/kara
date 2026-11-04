@@ -1,0 +1,9 @@
+source = "B-2026-11-04-7"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["design", "closures", "rust-ism"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md § Escaping function values: a function value has its own type, `Fn(A) -> R`, and a closure that escapes is returned as itself; there is no `Box`. Rust's `Box<dyn Fn(A) -> R>` is refused with a fix-it to the function type. The expected.out wording of an error pin is guidance, not a byte oracle."

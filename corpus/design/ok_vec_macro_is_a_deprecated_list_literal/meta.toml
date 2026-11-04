@@ -1,0 +1,9 @@
+source = "internal:vec-macro-deprecation"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "collections"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md § Collection literals: `vec![a, b]` is a deprecated spelling of the list literal (Gowtham, 2026-11-04): `karac check` warns and the program still builds and runs; `vec![v; n]` is `Vec.filled(n, v)`."

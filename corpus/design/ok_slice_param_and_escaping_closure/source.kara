@@ -1,0 +1,11 @@
+fn first(s: Slice[i64]) -> i64 { s[0] }
+fn zero(s: mut Slice[i64]) { s[0] = 0; }
+fn mk(k: i64) -> Fn(i64) -> i64 { |x| x + k }
+fn main() {
+    let mut v = [9, 8].to_vec();
+    println(first(v[..]));
+    zero(mut v[..]);
+    println(first(v[..]));
+    let f = mk(2);
+    println(f(3));
+}

@@ -1,0 +1,18 @@
+struct Bx[T] { v: T }
+enum E[T] { A(T), B }
+trait Get[T] {
+    fn get(self) -> T;
+}
+impl[T: Copy] Get[T] for Bx[T] {
+    fn get(self) -> T { self.v }
+}
+fn id[T](x: own T) -> T { x }
+fn main() {
+    let b = Bx { v: 4 };
+    let e = E.A(1);
+    match e {
+        E.A(n) => println(n + id(2)),
+        E.B => println(0),
+    }
+    println(b.get());
+}

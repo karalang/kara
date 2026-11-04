@@ -1,0 +1,7 @@
+fn first(s: &[i64]) -> i64 {
+    s[0]
+}
+fn main() {
+    let v = [9, 8].to_vec();
+    println(first(v[..]));
+}

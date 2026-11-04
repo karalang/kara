@@ -1,0 +1,9 @@
+source = "B-2026-11-04-6"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["design", "generics", "rust-ism"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md § Generic parameters and arguments: a declaration's generic parameters are in brackets, `struct Bx[T]`, `impl[T] Bx[T]`. The Rust spelling is refused with the bracket fix-it. The expected.out wording of an error pin is guidance, not a byte oracle."

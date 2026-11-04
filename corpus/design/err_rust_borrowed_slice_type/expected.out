@@ -1,0 +1,1 @@
+ERROR at line 1: `&[T]` is Rust's slice -- in Kāra a borrowed view of a run of elements is `Slice[T]`

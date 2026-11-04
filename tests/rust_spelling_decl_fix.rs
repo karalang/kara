@@ -1,9 +1,10 @@
 //! Rust spellings `karac fix` takes to a program that checks in one pass:
 //! generic parameters in angle brackets on a declaration (B-2026-11-04-6),
 //! `&[T]` / `&mut [T]` as Kāra's `Slice[T]` / `mut Slice[T]`, and
-//! `Box<dyn Fn(A) -> R>` as the function type itself (B-2026-11-04-7).
-//! Also the deprecated `vec![..]` list literal, which `karac check` warns on
-//! and `karac fix` rewrites (design.md § Collection literals, 2026-11-04).
+//! `Box<dyn Fn(A) -> R>` as the function type itself (B-2026-11-04-7), and
+//! `Box.new(e)` as `e` (B-2026-11-04-43). Also the deprecated `vec![..]`
+//! list literal, which `karac check` warns on and `karac fix` rewrites
+//! (design.md § Collection literals, 2026-11-04).
 
 use std::process::{Command, Stdio};
 
@@ -142,4 +143,38 @@ fn karac_fix_rewrites_the_deprecated_vec_macro() {
         "{}",
         String::from_utf8_lossy(&run.stderr)
     );
+}
+
+#[test]
+fn karac_fix_writes_the_value_for_rusts_box_new() {
+    // B-2026-11-04-43: Kāra has no `Box`; `Box::new(e)` (read as
+    // `Box.new(e)`) is `e`, where it used to be renamed to `Hex.new(e)`.
+    let src = "fn mk(k: i64) -> Box<dyn Fn(i64) -> i64> {\n    Box::new(|x| x + k)\n}\n\
+               fn main() {\n    let b = Box.new(5);\n    let f = mk(2);\n    println(b + f(3));\n}\n";
+    let path = std::env::temp_dir().join(format!("karac-box-new-{}.kara", std::process::id()));
+    let file = path.to_str().unwrap();
+    std::fs::write(&path, src).unwrap();
+    // The parse-level fixes (`Box<dyn Fn>`, `::`) land first; then the
+    // resolver names the box.
+    karac(&["fix", file]);
+    let check = karac(&["check", file]);
+    let err = String::from_utf8_lossy(&check.stderr).to_string();
+    assert!(err.contains("`Box` is Rust's heap box"), "{err}");
+    assert!(!err.contains("Hex"), "{err}");
+    for _ in 0..4 {
+        let before = std::fs::read_to_string(&path).unwrap();
+        karac(&["fix", file]);
+        if std::fs::read_to_string(&path).unwrap() == before {
+            break;
+        }
+    }
+    let out = std::fs::read_to_string(&path).unwrap();
+    let run = karac(&["__mir-run", file]);
+    let _ = std::fs::remove_file(&path);
+    assert!(
+        out.contains("-> Fn(i64) -> i64 {\n    |x| x + k\n}"),
+        "{out}"
+    );
+    assert!(out.contains("let b = 5;"), "{out}");
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "10\n", "{out}");
 }

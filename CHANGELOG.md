@@ -117,8 +117,9 @@ accepted by 0.8.0 are now refused, each with a fix-it.
 - More Rust spellings carry a `karac fix` edit that reaches a program that
   parses: generic parameters in angle brackets on a declaration
   (`struct Bx<T>`, `impl<T>`, B-2026-11-04-6), `&[T]` / `&mut [T]` as
-  `Slice[T]` / `mut Slice[T]` in one edit, and `Box<dyn Fn(A) -> R>` as the
-  function type `Fn(A) -> R` (B-2026-11-04-7).
+  `Slice[T]` / `mut Slice[T]` in one edit, `Box<dyn Fn(A) -> R>` as the
+  function type `Fn(A) -> R` (B-2026-11-04-7), and `Box::new(e)` as `e`,
+  which `karac fix` used to rename to `Hex.new(e)` (B-2026-11-04-43).
 
 ### Performance
 
