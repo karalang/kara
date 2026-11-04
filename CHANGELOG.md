@@ -132,6 +132,15 @@ accepted by 0.8.0 are now refused, each with a fix-it.
   what differs.
 - A field read from where it is not visible is coded `E0111
   PrivateItemAccess`, as design.md §4 says, not `E0221` (B-2026-11-04-46).
+- A `for` over a borrowed iterator parameter (`it: I` or `it: mut ref I`
+  with `I: Iterator`, or `it: impl Iterator[..]`) is refused at `it`: the loop
+  consumes an `Iterator`. `karac fix` writes `own` on a read-only parameter
+  and `it.by_ref()` for a `mut ref` one. It used to type the loop variable as
+  the iterator (B-2026-11-04-17). The item of `it.by_ref()` under
+  `I: Iterator[Item = i64]` is `i64`, not `I.Item`.
+- An inherent `m(self)` called as `s.m()` borrows `s` even when a trait's
+  `m(own self)` is also implemented for the type; the ownership check
+  charged the trait's mode (B-2026-11-04-12).
 - `karac fmt` prints a collection literal as written: it keeps `vec![..]`
   only where the source used it, and never turns `Vec[..]` or `[..]` into
   `vec![..]`.

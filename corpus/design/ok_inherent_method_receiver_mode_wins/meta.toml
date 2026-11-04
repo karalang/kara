@@ -1,0 +1,9 @@
+source = "B-2026-11-04-12"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "methods", "ownership"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md §9 Method resolution: \"An inherent `m(self)` always wins over a trait's `m(own self)`\", and \"the check never changes which method was chosen\". The trait impl follows the inherent one, so a lookup where the last impl wins picked the trait's `own self` and refused the second call."

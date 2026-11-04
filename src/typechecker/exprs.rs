@@ -10677,6 +10677,18 @@ impl<'a> super::TypeChecker<'a> {
                 {
                     elem_ty = item;
                 }
+                // A `for` consumes an `Iterator` (design.md § `Iterator` and
+                // `Iterable`), which a borrow of one cannot give: `it: I` or
+                // `it: mut ref I` with `I: Iterator` bound the loop variable
+                // to the borrow itself (B-2026-11-04-17).
+                if self.cli_lint_overrides.strict_core {
+                    if let Some(item) = self.borrowed_iterator_for(iterable, &iter_ty) {
+                        elem_ty = item;
+                    }
+                }
+                // `I.Item` under `I: Iterator[Item = i64]` is `i64`: the
+                // item of `it.by_ref()` names the projection.
+                elem_ty = self.normalize_enclosing_assoc_eqs(&elem_ty);
                 // `for` never calls `into_iter` (design.md § `Iterator` and
                 // `Iterable`): a type that is only `IntoIterator` is consumed
                 // explicitly, which the fix writes (B-2026-10-20-32).

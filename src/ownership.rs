@@ -3869,6 +3869,7 @@ pub(crate) enum ParamUsage {
 /// design.md § Consume Predicate step 1.
 pub(crate) fn collect_method_self_modes(program: &Program) -> FxHashMap<String, SelfParam> {
     let mut map = FxHashMap::default();
+    let mut inherent = FxHashSet::default();
     let mut ordinals = TraitImplOrdinals::default();
     for item in &program.items {
         match item {
@@ -3879,9 +3880,12 @@ pub(crate) fn collect_method_self_modes(program: &Program) -> FxHashMap<String, 
                 for impl_item in &impl_block.items {
                     if let ImplItem::Method(method) = impl_item {
                         if let Some(self_param) = &method.self_param {
-                            map.insert(
+                            insert_self_mode(
+                                &mut map,
+                                &mut inherent,
+                                impl_block,
                                 format!("{target_name}.{}", method.name),
-                                self_param.clone(),
+                                self_param,
                             );
                             if let Some(k) = ordinals.next(impl_block, &target_name, &method.name) {
                                 map.insert(
@@ -3909,6 +3913,27 @@ pub(crate) fn collect_method_self_modes(program: &Program) -> FxHashMap<String, 
         }
     }
     map
+}
+
+/// Record the receiver mode under a `Type.method` key. An inherent method
+/// always wins over a trait's method of the same name (design.md §9 Method
+/// resolution), so `s.m()` resolves to the inherent `m` and must be charged
+/// its mode, whichever impl comes first in the source: a trait impl never
+/// overwrites an inherent entry (B-2026-11-04-12, where the trait's
+/// `own self` moved `s` on an inherent `m(self)` call).
+pub(crate) fn insert_self_mode(
+    map: &mut FxHashMap<String, SelfParam>,
+    inherent: &mut FxHashSet<String>,
+    impl_block: &ImplBlock,
+    key: String,
+    self_param: &SelfParam,
+) {
+    if impl_block.trait_name.is_none() {
+        inherent.insert(key.clone());
+        map.insert(key, self_param.clone());
+    } else if !inherent.contains(&key) {
+        map.insert(key, self_param.clone());
+    }
 }
 
 /// The place of a trait impl's method among the impls of that trait with

@@ -1,0 +1,28 @@
+// design.md §9 Method resolution: an inherent `m(self)` always wins over a
+// trait's `m(own self)`, and the ownership check charges the method chosen.
+// `s.m()` borrows `s`, so it can be called twice and then handed to the
+// trait's consuming `m` by its qualified name (B-2026-11-04-12).
+trait T {
+    fn m(own self) -> String;
+}
+
+struct S {}
+
+impl S {
+    fn m(self) -> String {
+        "inherent".to_string()
+    }
+}
+
+impl T for S {
+    fn m(own self) -> String {
+        "trait".to_string()
+    }
+}
+
+fn main() {
+    let s = S {};
+    println(s.m());
+    println(s.m());
+    println(T.m(s));
+}

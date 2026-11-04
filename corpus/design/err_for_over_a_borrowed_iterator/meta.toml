@@ -1,0 +1,9 @@
+source = "B-2026-11-04-17"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["design", "iterators", "ownership"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md § `Iterator` and `Iterable`: an `Iterator` is consumed by `for`, and `for x in it.by_ref()` loops without consuming it. A bare parameter is a borrow, so the loop is refused at `it` with `own I` as the fix-it. The expected.out wording of an error pin is guidance, not a byte oracle."

@@ -1,0 +1,1 @@
+ERROR at line 7: `it` is 'ref I', a borrowed iterator, and a `for` loop consumes an `Iterator`

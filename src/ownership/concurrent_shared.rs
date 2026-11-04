@@ -2769,6 +2769,7 @@ pub(crate) struct ConsumerRewriteTypeCtx<'a> {
 /// outside callers go through the `&Program` variant.
 fn collect_method_self_modes_in_items(items: &[Item]) -> FxHashMap<String, SelfParam> {
     let mut map = FxHashMap::default();
+    let mut inherent = rustc_hash::FxHashSet::default();
     for item in items {
         match item {
             Item::ImplBlock(impl_block) => {
@@ -2783,9 +2784,12 @@ fn collect_method_self_modes_in_items(items: &[Item]) -> FxHashMap<String, SelfP
                 for impl_item in &impl_block.items {
                     if let ImplItem::Method(method) = impl_item {
                         if let Some(self_param) = &method.self_param {
-                            map.insert(
+                            crate::ownership::insert_self_mode(
+                                &mut map,
+                                &mut inherent,
+                                impl_block,
                                 format!("{target_name}.{}", method.name),
-                                self_param.clone(),
+                                self_param,
                             );
                         }
                     }

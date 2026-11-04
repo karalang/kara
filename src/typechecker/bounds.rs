@@ -329,6 +329,110 @@ impl<'a> super::TypeChecker<'a> {
         Some(self.lower_type_expr(&te, &scope))
     }
 
+    /// B-2026-11-04-17 — a `for` over a borrow of a type parameter bounded by
+    /// `Iterator` (`it: I`, `it: mut ref I`, `it: impl Iterator[..]`). The
+    /// loop consumes an `Iterator` (design.md § `Iterator` and `Iterable`),
+    /// and a borrow cannot be consumed, so this is refused naming the way
+    /// out: `.by_ref()` from a `mut ref`, `own` for a read-only borrow, whose
+    /// iterator could not be advanced. `Some(Type::Error)` when refused.
+    pub(super) fn borrowed_iterator_for(&mut self, iterable: &Expr, ty: &Type) -> Option<Type> {
+        let (inner, mutable) = match ty {
+            Type::Ref(inner) => (inner.as_ref(), false),
+            Type::MutRef(inner) => (inner.as_ref(), true),
+            _ => return None,
+        };
+        let param = self.type_param_name(inner)?.clone();
+        let bounds = self.enclosing_bounds.get(&param)?;
+        let is = |t: &str| bounds.iter().any(|b| b.path.last().is_some_and(|n| n == t));
+        if !is("Iterator") || is("Iterable") {
+            return None;
+        }
+        // `it: impl Iterator[..]` desugars to a synthetic parameter; name it
+        // as written.
+        let inner_shown = if param.starts_with("T_impl_arg_") {
+            "impl Iterator[..]".to_string()
+        } else {
+            type_display(inner)
+        };
+        let shown = format!("{}{inner_shown}", if mutable { "mut ref " } else { "ref " });
+        let name = match &iterable.kind {
+            ExprKind::Identifier(n) => format!("`{n}`"),
+            _ => "the iterator".to_string(),
+        };
+        let end = Span {
+            line: iterable.span.line,
+            column: iterable.span.column + iterable.span.length,
+            offset: iterable.span.offset + iterable.span.length,
+            length: 0,
+        };
+        let simple = matches!(
+            iterable.kind,
+            ExprKind::Identifier(_) | ExprKind::FieldAccess { .. }
+        );
+        if mutable {
+            let message = format!(
+                "{name} is '{shown}', a borrowed iterator, and a `for` loop consumes an \
+                 `Iterator` (design.md § `Iterator` and `Iterable`); loop over \
+                 `{}.by_ref()`, which advances it in place and leaves it usable",
+                match &iterable.kind {
+                    ExprKind::Identifier(n) => n.as_str(),
+                    _ => "it",
+                },
+            );
+            if simple {
+                let fix = super::FixIt {
+                    span: end,
+                    replacement: ".by_ref()".to_string(),
+                };
+                self.type_error_with_fix_it(
+                    message,
+                    iterable.span,
+                    TypeErrorKind::TraitBoundNotSatisfied,
+                    fix,
+                );
+            } else {
+                self.type_error(
+                    message,
+                    iterable.span,
+                    TypeErrorKind::TraitBoundNotSatisfied,
+                );
+            }
+        } else {
+            let own_at = match &iterable.kind {
+                ExprKind::Identifier(n) => self.current_fn_d5_params.get(n).copied(),
+                _ => None,
+            };
+            let take = match &iterable.kind {
+                ExprKind::Identifier(n) if own_at.is_some() => {
+                    format!("take the parameter by value, `{n}: own {inner_shown}`")
+                }
+                _ => "take it by value (`own`)".to_string(),
+            };
+            let message = format!(
+                "{name} is '{shown}', a borrowed iterator, and a `for` loop consumes an \
+                 `Iterator` (design.md § `Iterator` and `Iterable`): a read-only borrow \
+                 cannot be advanced; {take}, or `mut ref` and loop over `.by_ref()`"
+            );
+            match own_at {
+                Some(at) => self.type_error_with_fix_it(
+                    message,
+                    iterable.span,
+                    TypeErrorKind::TraitBoundNotSatisfied,
+                    super::FixIt {
+                        span: at,
+                        replacement: "own ".to_string(),
+                    },
+                ),
+                None => self.type_error(
+                    message,
+                    iterable.span,
+                    TypeErrorKind::TraitBoundNotSatisfied,
+                ),
+            }
+        }
+        Some(Type::Error)
+    }
+
     /// `t` with each projection the enclosing function's bounds fix
     /// (`I.Item` under `I: Iterator[Item = i64]`) replaced by its type, so a
     /// closure handed to a method reached through `I` takes an `i64`
