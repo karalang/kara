@@ -59,7 +59,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 113 |
-| false-positive | 102 |
+| false-positive | 103 |
 | perf | 94 |
 | missing-feature | 70 |
 | soundness | 48 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 177 |
-| mir | 110 |
+| mir | 111 |
 | mir-llvm | 109 |
 | cli | 53 |
 | ownership | 48 |
@@ -108,11 +108,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-04-15 | 2026-11-04 | typecheck | low | An inherent impl on a standard type, `impl Vec[i64] { fn total(self) -> i64 { .. } }`, is accepted and runs (prints 3), though design.md §9 Coherence says a package may write `impl Type { .. }` only for a type it declares, the application exemption not changing this | — |
 | B-2026-11-04-16 | 2026-11-04 | typecheck | medium | A blanket impl of the program's own trait, `impl[T: Display] Twice for T { .. }` (design.md §9 Coherence: allowed when the package defines the trait), is accepted but never found: `5.twice()` is "no method 'twice' on type 'i64'", `"ab".twice()` "no method on 'String'", and UFCS `Twice.twice(5)` the same | — |
 | B-2026-11-04-17 | 2026-11-04 | typecheck | low | `for x in it` with `it: I` or `it: mut ref I` (I: Iterator[Item = i64], a borrowed iterator) reports "expected 'i64', found 'ref I'" at the first use of `x`, typing the loop variable as the iterator; design.md §9 says a `for` over a type that is neither Iterator nor Iterable is an error naming the missing impl | — |
-| B-2026-11-04-18 | 2026-11-04 | effect | high | The effects of the `From` impl that a `?` inserts are not charged to the enclosing function (design.md §10: "The conversion is a real call for effects"): a `pub fn` whose `?` converts through `impl From[E1] for E2 { fn from(..) -> E2 with writes(Log) }` passes `karac check` with no effect clause and reports no effects, while the same conversion written as `E2.from(e)` is refused for the undeclared `writes(Log)` | — |
 | B-2026-11-04-20 | 2026-11-04 | mir | low | `#[track_caller]` on a program function is accepted but does nothing: a wrapper `#[track_caller] fn must(o: Option[i64]) -> i64 { o.unwrap() }` called at line 10 panics with `at <file>:6:5`, the `unwrap()` inside the wrapper; design.md §10 says user code may use it on its own panicking wrappers and that it is transitive | — |
 | B-2026-11-04-22 | 2026-11-04 | typecheck | medium | Struct field visibility does not follow design.md §5's three levels: a field with no keyword is refused from another module of the SAME package ("private field 'inner' of struct 'S' is not visible outside its defining module", coded E0221 PrivateTypeInPublicSignature), though the default is package-visible, and `private inner: i64` (directory-only) is a parse error "'private' is a reserved keyword" | — |
 | B-2026-11-04-24 | 2026-11-04 | typecheck | low | A type mismatch between two same-named types from different modules prints the compiler's internal mangled names: `expected 'ref P__a', found 'P__b'` for `a.P` and `b.P` imported as `AP` and `BP` | — |
-| B-2026-11-04-25 | 2026-11-04 | effect | high | Two `par` branches that write the same USER-DECLARED resource are never refused: with `effect resource Db;` and `fn put() with writes(Db)`, `par { put(), put() }`, `par { { put(); }, { put(); } }` and `par { put(), rd() }` (rd: reads(Db)) all pass `karac check` and run, though `karac query effects` lists writes(Db) on both; design.md §12's own AuditLog example is refused only through its `writes(Stderr)` | — |
 | B-2026-11-04-26 | 2026-11-04 | effect | medium | Call sites are charged the callee's BODY effects, not the declared contract: a `pub fn g() -> i64 with writes(Stdout) { 1 }` called in two `par` branches is not a conflict, and a call through `[T: Storage]` whose trait method has the ceiling `with writes(Stdout)` is charged the instance impl's (empty) effects, so `par { via(a), via(b) }` passes | — |
 | B-2026-11-04-27 | 2026-11-04 | effect | medium | A declared effect clause is not verified on a PRIVATE function or on a trait's DEFAULT method body: `fn f() with reads(Clock) { println("x"); }` and `trait T { fn m(self) -> i64 with reads(Clock) { println("x"); 1 } }` pass `karac check`, though design.md §12 says a private function's declared set "is checked like a public one" and default bodies "are checked against their method's clause" | — |
 | B-2026-11-04-28 | 2026-11-04 | effect | medium | `#[no_effect(allocates(Heap))]` (design.md §12's real-time guarantee) misses most allocations: `[1, 2].to_vec()`, `"a".to_string()`, an f-string, a `Vec` literal `let v: Vec[i64] = [1, 2]`, `Vec.filled(3, 0)`, `String + Str` and `(0..3).collect()` all pass under it; only `push` is caught | — |
@@ -126,6 +124,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-04-37 | 2026-11-04 | mir-llvm | low | Kata 342 runs 1.20x legacy's instructions and 1.39x its cycles on the MIR backend, the largest cycle ratio in its batch | — |
 | B-2026-11-04-38 | 2026-11-04 | mir-llvm | low | Kata 3629's seq peak RSS rose from 59.9 to 88.9 MiB on the MIR backend while Rust held at 60.1 MiB | — |
 | B-2026-11-04-39 | 2026-11-04 | mir-llvm | low | Seven first-run katas (321, 326, 333, 337, 338, 339, 343) execute 1.14-1.26x legacy's instructions on the MIR backend with cycles mostly flat: too small to file alone | — |
+| B-2026-11-04-42 | 2026-11-04 | mir | medium | The MIR effect pass gives every call of an `extern` function every effect, ignoring its declaration: two `par` branches that each call a `pure fn` from an `unsafe extern "C"` block are refused with `unknown (native labs)` and `unknown (native labs)`, though design.md § Effects ("an `extern` function ... has the effects it declares, none if it is declared `pure`") and core-semantics §12 item 2 give it none | — |
 
 ### Relocated
 
@@ -642,9 +641,11 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-04-9 | mir | high | In a generic body under `T: Named`, `T.label()` calls the concrete type's INHERENT associated function of the same name instead of the trait's (print… | 5bb971cb18 |
 | B-2026-11-04-10 | mir | medium | A program associated function named like a comptime reflection method (`fn name() -> String` in a trait or inherent impl) passes `karac check` but `P… | 5bb971cb18 |
 | B-2026-11-04-11 | mir | medium | A generic body under one bound `[T: B]` calling `x.m()` is refused ("the method call `.m` with no resolved callee is not lowered yet") when the concr… | 5bb971cb18 |
+| B-2026-11-04-18 | effect | high | The effects of the `From` impl that a `?` inserts are not charged to the enclosing function (design.md §10: "The conversion is a real call for effect… | 7c0ff1e85c |
 | B-2026-11-04-19 | parser | medium | Script mode's implicit `main` returns `()`, so a top-level `?` is refused with "'?' requires the enclosing function to return `Result` or `Option`, f… | ab80e422aa |
 | B-2026-11-04-21 | resolver | medium | In a package, importing a NESTED module itself (`import db.connection;`, then `connection.open(7)`) is refused with "error[E0112]: unknown module `db… | ab80e422aa |
 | B-2026-11-04-23 | cli | low | `karac run` in a package whose src/ has both main.kara and lib.kara runs main.kara and exits 0, while `karac check` and `karac build` refuse it ("a K… | ab80e422aa |
+| B-2026-11-04-25 | effect | high | Two `par` branches that write the same USER-DECLARED resource are never refused: with `effect resource Db;` and `fn put() with writes(Db)`, `par { pu… | 7c0ff1e85c |
 | B-2026-11-04-34 | ownership | medium | A closure or task made in each arm of an `if`, each moving the same value in, is refused as "moved into a closure, used again here" (or "moved into a… | f575bce6f0 |
 | B-2026-11-04-35 | ownership | medium | `match p.c { C.At(s) => . | f575bce6f0 |
 | B-2026-11-04-36 | cli | low | `karac fmt` rewrites a script-mode file into an explicit `fn main()`, its top-level statements moved after every item; since B-2026-11-04-19 it also… | e5ccf4fc0c |
