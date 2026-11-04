@@ -104,6 +104,7 @@ ROWS = [
     ("B-2026-11-04-31", "301-400/315-count-of-smaller-numbers-after-self", "count_smaller.kara", "pair", "size", "fixed 5984ed3080"),
     ("B-2026-11-04-31", "301-400/332-reconstruct-itinerary", "reconstruct_itinerary.kara", "pair", "size", "fixed 5984ed3080"),
     ("B-2026-11-04-31", "301-400/394-decode-string", "decode_string.kara", "pair", "size", "fixed 5984ed3080"),
+    ("B-2026-11-04-38", "3601-3700/3629-minimum-jumps-to-reach-end-via-prime-teleportation", "bfs_sieve.kara", "pair", "rss", "fixed d273d89f37"),
 ]
 
 def log(*a):
