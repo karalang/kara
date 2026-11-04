@@ -122,7 +122,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-04-47 | 2026-11-04 | mir | high | With two `From` impls on one type, `Out.from(c)` calls the FIRST impl's `from` whatever the argument (prints 6 for `Out.from(C { n: 6 })` whose impl multiplies by 10), on run and --interp; with argument-less headers (`impl From for Out` twice, told apart by the parameter) `.into()` picks the first impl too | — |
 | B-2026-11-04-48 | 2026-11-04 | mir | medium | `self.raw()` in a method of a `distinct type` whose receiver is a bare (borrowed, D5) `self` is refused after check: "`raw` of a borrowed distinct value is not lowered yet" | — |
 | B-2026-11-04-49 | 2026-11-04 | mir | medium | A trait default method that calls another of the trait's methods (`fn shout(self, n: i64) -> String { let s = self.tag(); .. }`), reached through a blanket impl over a bare parameter (`impl[T: Display] Shout for T`), is refused after check: "the method call `.tag` with no resolved callee is not lowered yet", by a bound (`fn go[U: Shout](u: U) { u.shout(3) }`) and on a concrete receiver alike | — |
-| B-2026-11-04-50 | 2026-11-04 | mir | medium | An inherent impl on a type alias of the program's own struct (`type Wrap = W; impl Wrap { fn get(self) -> i64 { .. } }`) passes check, then `W { n: 4 }.get()` fails in MIR: "call of unknown function W.get" (--interp), "native `W.get` is not lowered yet" (run) | — |
 
 ### Relocated
 
@@ -657,6 +656,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-04-36 | cli | low | `karac fmt` rewrites a script-mode file into an explicit `fn main()`, its top-level statements moved after every item; since B-2026-11-04-19 it also… | e5ccf4fc0c |
 | B-2026-11-04-43 | resolver+parser | low | Rust's `Box.new(e)` (what `Box::new(e)` becomes) gets `undefined name 'Box', did you mean 'Hex'?` with no fix, though Kāra has no `Box` (design.md §… | a3e6d2fd30 |
 | B-2026-11-04-46 | typecheck | low | Reading a `private` field from another directory is refused with code E0221 (PrivateTypeInPublicSignature) instead of E0111 PrivateItemAccess, which… | 3942d674ca |
+| B-2026-11-04-50 | mir | medium | An inherent impl on a type alias of the program's own struct (`type Wrap = W; impl Wrap { fn get(self) -> i64 { . | fbe0caf3bc |
 
 </details>
 
