@@ -1,0 +1,267 @@
+// LeetCode #1047: Remove All Adjacent Duplicates In String -- the
+// differential.
+//
+// The five arms against the statement read literally, on every string of 1
+// to 7 letters from a, b, c and 1500 random strings, with six properties:
+//
+// P1  the answer is the statement read literally
+// P2  the answer has no two equal letters side by side, and each letter
+//     occurs in it as many times as in the input, less an even number
+// P3  the answer is the input with letters taken out (a subsequence)
+// P4  the input followed by its reverse leaves nothing
+// P5  the answer for a string is the answer for its two halves' answers put
+//     together, and the answer for the answer is the answer itself
+// P6  each arm agrees with at least two of the other four
+
+// ---- remove_dups.kara (the ★ arm): a stack of chars
+
+fn stack_arm(s: String) -> String {
+    let mut stack: Vec[char] = Vec.new();
+    for c in s.chars() {
+        if stack.last().cloned() == Some(c) {
+            stack.pop();
+        } else {
+            stack.push(c);
+        }
+    }
+    stack.iter().collect()
+}
+
+// ---- remove_dups_string.kara: the answer as the stack
+
+fn string_arm(s: String) -> String {
+    let mut out = String.new();
+    for c in s.chars() {
+        if out.ends_with(c.to_string()) {
+            out.pop();
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+// ---- remove_dups_inplace.kara: two indices over the bytes
+
+fn inplace_arm(s: String) -> String {
+    let mut b: Vec[u8] = s.bytes().to_vec();
+    let mut top = 0;
+    for i in 0..b.len() {
+        if top > 0 and b[top - 1] == b[i] {
+            top -= 1;
+        } else {
+            b[top] = b[i];
+            top += 1;
+        }
+    }
+    b.truncate(top);
+    String.from_utf8(b).unwrap()
+}
+
+// ---- remove_dups_scan.kara: the removals one at a time
+
+fn scan_arm(s: String) -> String {
+    let mut v: Vec[char] = s.chars().collect();
+    let mut i = 0;
+    while i + 1 < v.len() {
+        if v[i] == v[i + 1] {
+            v.remove(i + 1);
+            v.remove(i);
+            if i > 0 {
+                i -= 1;
+            }
+        } else {
+            i += 1;
+        }
+    }
+    v.iter().collect()
+}
+
+// ---- remove_dups_fold.kara: a fold
+
+fn fold_arm(s: String) -> String {
+    s.chars().fold(String.new(), |acc, c| {
+        let mut acc = acc;
+        if acc.chars().next_back() == Some(c) {
+            acc.pop();
+        } else {
+            acc.push(c);
+        }
+        acc
+    })
+}
+
+// ---- the statement read literally
+
+// Look at every pair of neighbours for two equal letters, take the last such
+// pair out, and start again on what is left, until no pair is found.
+fn every_removal(s: String) -> String {
+    let letters: Vec[char] = s.chars().collect();
+    let mut found = -1;
+    for i in 0..letters.len() - 1 {
+        if letters[i] == letters[i + 1] {
+            found = i;
+        }
+    }
+    if found < 0 {
+        return s.clone();
+    }
+    let mut rest = String.new();
+    for i in 0..letters.len() {
+        if i != found and i != found + 1 {
+            rest.push(letters[i]);
+        }
+    }
+    every_removal(rest)
+}
+
+// ---- the harness
+
+fn arm(a: i64, s: String) -> String {
+    match a {
+        0 => stack_arm(s),
+        1 => string_arm(s),
+        2 => inplace_arm(s),
+        3 => scan_arm(s),
+        _ => fold_arm(s),
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_string(n: i64, k: i64, seed: mut ref i64) -> String {
+    let mut s = String.new();
+    for _ in 0..n {
+        s.push((b'a' + (next_random(mut seed) % k) as u8) as char);
+    }
+    s
+}
+
+// how many of each letter
+fn counts(s: String) -> Vec[i64] {
+    let mut c: Vec[i64] = Vec.filled(26, 0);
+    for b in s.bytes() {
+        c[(b - b'a') as i64] += 1;
+    }
+    c
+}
+
+fn is_subsequence(small: String, big: String) -> bool {
+    let mut letters = big.chars();
+    for c in small.chars() {
+        loop {
+            match letters.next() {
+                Some(d) if d == c => break,
+                Some(_) => {}
+                None => return false,
+            }
+        }
+    }
+    true
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    // failures by property, P1 to P6 at 1 to 6
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+// Every check on one string; `cut` splits it in two for P5.
+fn check_case(t: mut ref Tally, s: String, cut: i64) {
+    let answers: Vec[String] = (0..5).map(|a| arm(a, s.clone())).collect();
+    let want = every_removal(s.clone());
+    let before = counts(s.clone());
+    let reversed: String = s.chars().rev().collect();
+    let doubled = s.clone() + reversed;
+    let left = s.substring(0, cut);
+    let right = s.substring(cut);
+    for a in 0..5 {
+        let answer = answers[a].clone();
+        let what = f"arm {a}, \"{s}\" -> \"{answer}\"";
+        expect(mut t, 1, answer == want, f"P1 {what}, read literally \"{want}\"");
+        let letters: Vec[char] = answer.chars().collect();
+        let mut alternating = true;
+        for i in 1..letters.len() {
+            if letters[i] == letters[i - 1] {
+                alternating = false;
+            }
+        }
+        let after = counts(answer.clone());
+        let mut parity = true;
+        for l in 0..26 {
+            if after[l] > before[l] or (before[l] - after[l]) % 2 != 0 {
+                parity = false;
+            }
+        }
+        expect(mut t, 2, alternating and parity, f"P2 {what}: a pair left, or a letter's count off");
+        expect(mut t, 3, is_subsequence(answer.clone(), s.clone()), f"P3 {what}: not a subsequence");
+        expect(mut t, 4, arm(a, doubled.clone()).is_empty(), f"P4 {what}: followed by its reverse");
+        let halves = arm(a, left.clone()) + arm(a, right.clone());
+        expect(mut t, 5, arm(a, halves) == answer and arm(a, answer.clone()) == answer, f"P5 {what}: cut at {cut}");
+        let mut agree = 0;
+        for o in 0..5 {
+            if o != a and answers[o] == answer {
+                agree += 1;
+            }
+        }
+        expect(mut t, 6, agree >= 2, f"P6 {what}: agrees with {agree}");
+    }
+    t.cases += 1;
+    for c in answers[0].chars() {
+        t.check = (t.check * 31 + (c as i64)) % 1000000007;
+    }
+    t.check = (t.check * 31 + 1) % 1000000007;
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: Vec.filled(7, 0) };
+    // every string of 1 to 7 letters from a, b, c
+    let mut seed = 10471;
+    for n in 1..8 {
+        let mut count = 1;
+        for _ in 0..n {
+            count *= 3;
+        }
+        for code in 0..count {
+            let mut s = String.new();
+            let mut c = code;
+            for _ in 0..n {
+                s.push((b'a' + (c % 3) as u8) as char);
+                c /= 3;
+            }
+            let cut = next_random(mut seed) % (n + 1);
+            check_case(mut t, s, cut);
+        }
+    }
+    // 1500 random strings of 1 to 60 letters: 1000 from a, b, c, which
+    // cancel often, and 500 from a to z
+    for i in 0..1500 {
+        let n = next_random(mut seed) % 60 + 1;
+        let k = if i < 1000 { 3 } else { 26 };
+        let s = random_string(n, k, mut seed);
+        let cut = next_random(mut seed) % (n + 1);
+        check_case(mut t, s, cut);
+    }
+    println(f"{t.cases} strings: checksum {t.check}, {t.checks} checks over 5 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

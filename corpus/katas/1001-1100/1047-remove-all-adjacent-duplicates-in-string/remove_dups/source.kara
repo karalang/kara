@@ -1,0 +1,117 @@
+// LeetCode #1047: Remove All Adjacent Duplicates In String -- a stack.
+//
+// Push each letter, unless it equals the letter on top, which it cancels:
+// that pair is adjacent once everything between them has gone. What is left
+// on the stack, bottom to top, is the answer. O(n).
+
+fn remove_duplicates(s: String) -> String {
+    let mut stack: Vec[char] = Vec.new();
+    for c in s.chars() {
+        if stack.last().cloned() == Some(c) {
+            stack.pop();
+        } else {
+            stack.push(c);
+        }
+    }
+    stack.iter().collect()
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `n` letters from the first `k` of the alphabet
+fn random_string(n: i64, k: i64, seed: mut ref i64) -> String {
+    let mut s = String.new();
+    for _ in 0..n {
+        s.push((b'a' + (next_random(mut seed) % k) as u8) as char);
+    }
+    s
+}
+
+// the answer's length, and a checksum over its letters and its end
+fn fold_answer(answer: Str, length: mut ref i64, empty: mut ref i64, check: mut ref i64) {
+    *length += answer.len();
+    if answer.is_empty() {
+        *empty += 1;
+    }
+    for c in answer.chars() {
+        *check = (*check * 31 + (c as i64)) % 1000000007;
+    }
+    *check = (*check * 31 + 1) % 1000000007;
+}
+
+fn main() {
+    // LeetCode's two examples, then a few more
+    let examples = [
+        "abbaca", "azxxzy", "a", "aa", "aaa", "abba", "abccba", "abcd", "aabbcc", "abcddcbaz",
+    ];
+    for s in examples.iter() {
+        let answer = remove_duplicates(s.to_string());
+        println(f"\"{s}\" -> \"{answer}\"");
+    }
+    // every string of 1 to 8 letters from a, b, c
+    let mut cases = 0;
+    let mut length = 0;
+    let mut empty = 0;
+    let mut check = 0;
+    for n in 1..9 {
+        let mut count = 1;
+        for _ in 0..n {
+            count *= 3;
+        }
+        for code in 0..count {
+            let mut s = String.new();
+            let mut c = code;
+            for _ in 0..n {
+                s.push((b'a' + (c % 3) as u8) as char);
+                c /= 3;
+            }
+            let answer = remove_duplicates(s);
+            cases += 1;
+            fold_answer(answer.as_str(), mut length, mut empty, mut check);
+        }
+    }
+    println(f"every string of 1 to 8 of a, b, c: {cases} cases, length {length}, {empty} empty, checksum {check}");
+    // 1000 random strings of 1 to 200 letters from a, b, c, and 1000 from a to z
+    let mut seed = 1047;
+    for k in [3, 26] {
+        length = 0;
+        empty = 0;
+        check = 0;
+        for _ in 0..1000 {
+            let n = next_random(mut seed) % 200 + 1;
+            let answer = remove_duplicates(random_string(n, k, mut seed));
+            fold_answer(answer.as_str(), mut length, mut empty, mut check);
+        }
+        println(f"1000 random strings of {k} letters: length {length}, {empty} empty, checksum {check}");
+    }
+    // the largest: ab repeated, a run of a, and a string followed by its reverse
+    let mut alternating = String.new();
+    for _ in 0..5000 {
+        alternating.push_str("ab");
+    }
+    let mut run = String.new();
+    for _ in 0..10001 {
+        run.push('a');
+    }
+    let mut half: Vec[char] = Vec.new();
+    for i in 0..5000 {
+        half.push((b'a' + ((i * 7 + i / 26) % 26) as u8) as char);
+    }
+    let mut mirrored: String = half.iter().collect();
+    for c in half.iter().rev() {
+        mirrored.push(*c);
+    }
+    for (name, s) in [("ab x 5000", alternating), ("a x 10001", run), ("5000 letters and their reverse", mirrored)] {
+        let answer = remove_duplicates(s);
+        let mut l = 0;
+        let mut e = 0;
+        let mut ch = 0;
+        fold_answer(answer.as_str(), mut l, mut e, mut ch);
+        println(f"{name}: length {l}, checksum {ch}");
+    }
+}

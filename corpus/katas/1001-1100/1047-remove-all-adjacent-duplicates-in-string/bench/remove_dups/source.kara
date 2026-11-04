@@ -1,0 +1,52 @@
+// LeetCode #1047: Remove All Adjacent Duplicates In String -- benchmark
+// driver.
+//
+// The ★ arm (remove_dups.kara) over 100 strings of 200000 letters from a,
+// b, c, d, built once, then reduced again every round. With four letters a
+// quarter of the neighbours are equal, so the stack both grows and cancels.
+
+fn remove_duplicates(s: String) -> String {
+    let mut stack: Vec[char] = Vec.new();
+    for c in s.chars() {
+        if stack.last().cloned() == Some(c) {
+            stack.pop();
+        } else {
+            stack.push(c);
+        }
+    }
+    stack.iter().collect()
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let count = 100;
+    let n = 200000;
+    let rounds = 10;
+    let mut seed = 1047;
+    let mut strings: Vec[String] = Vec.new();
+    for _ in 0..count {
+        let mut s = String.new();
+        for _ in 0..n {
+            s.push((b'a' + (next_random(mut seed) % 4) as u8) as char);
+        }
+        strings.push(s);
+    }
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..rounds {
+        for s in strings.iter() {
+            let answer = remove_duplicates(s);
+            let last = match answer.chars().next_back() {
+                Some(c) => c as i64,
+                None => 0,
+            };
+            total += answer.len();
+            check = (check * 131 + answer.len() + last) % 1000000007;
+        }
+    }
+    println(f"{count} strings of {n} letters, {rounds} rounds: total length {total}, checksum {check}");
+}

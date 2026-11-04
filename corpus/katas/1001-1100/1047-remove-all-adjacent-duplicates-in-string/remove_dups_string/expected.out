@@ -1,0 +1,16 @@
+"abbaca" -> "ca"
+"azxxzy" -> "ay"
+"a" -> "a"
+"aa" -> ""
+"aaa" -> "a"
+"abba" -> ""
+"abccba" -> ""
+"abcd" -> "abcd"
+"aabbcc" -> ""
+"abcddcbaz" -> "z"
+every string of 1 to 8 of a, b, c: 9840 cases, length 35244, 648 empty, checksum 21324040
+1000 random strings of 3 letters: length 34076, 9 empty, checksum 562686950
+1000 random strings of 26 letters: length 91393, 0 empty, checksum 780773520
+ab x 5000: length 10000, checksum 880654025
+a x 10001: length 1, checksum 3008
+5000 letters and their reverse: length 0, checksum 1
