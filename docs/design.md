@@ -2270,7 +2270,7 @@ So `a + b as f64` is `a + (b as f64)`, `-x as u8` is `(-x) as u8`, and `x as u32
 
 **`not` binds tighter than comparison**, so `not x == y` is `(not x) == y`, as with `!` in C-family languages. Parenthesize for `not (x == y)`; the `ambiguous_not_comparison` lint warns about `not` directly before a comparison.
 
-**No automatic dereference in operators.** Field access and method calls look through `ref T` and `mut ref T`, so `r.field` needs no `*`. Operators do not: comparing `a: T` with `b: ref T` is a type error; write `a == *b`. Use `*` for comparisons, arithmetic and assignment through a reference (`*r = v`).
+**No automatic dereference in operators.** Field access and method calls look through `ref T` and `mut ref T`, so `r.field` needs no `*`. Operators do not: comparing `a: T` with `b: ref T` is a type error; write `a == *b`. A literal beside a `ref T` is itself a `ref T`, so `s == "("` needs no `*` ([`*` and `ref` in expressions](#-and-ref-in-expressions)). Use `*` for comparisons, arithmetic and assignment through a reference (`*r = v`).
 
 **Operators are trait calls.** Each operator calls the method of its operator trait for the operand types ([§9](#9-traits)); on numeric primitives the rules of [Numeric semantics](#numeric-semantics) apply.
 
@@ -2614,7 +2614,7 @@ fn bump(counter: mut ref i64) {
 }
 ```
 
-- **Auto-deref happens only at `.`**: field access, tuple positions and method calls. Binary operators, comparisons, arithmetic and indexing on the reference itself do not auto-deref, with one exception: a `ref T` or `mut ref T` whose `T` is `Copy` is read as a `T` wherever a `T` is expected, an operator operand included ([core-semantics.md §5.10](core-semantics.md#5-references-and-views-c5)). So `total += x` with `x: ref i64` needs no `*`. For a non-`Copy` `T`, `a == b` with `a: T` and `b: ref T` is a type error with the fix-it `*b`.
+- **Auto-deref happens only at `.`**: field access, tuple positions and method calls. Binary operators, comparisons, arithmetic and indexing on the reference itself do not auto-deref, with one exception: a `ref T` or `mut ref T` whose `T` is `Copy` is read as a `T` wherever a `T` is expected, an operator operand included ([core-semantics.md §5.10](core-semantics.md#5-references-and-views-c5)). So `total += x` with `x: ref i64` needs no `*`. For a non-`Copy` `T`, `a == b` with `a: T` and `b: ref T` is a type error with the fix-it `*b`. A literal is not such an `a`: beside a `ref T` it is itself a `ref T`, a reference to a constant in static data (as in a `ref T` slot, [String literals](#string-literals)), so `s == "("` with `s: ref String` compares two references and needs no `*` (B-2026-11-04-69).
 - **Using `*r` as a value copies it**, so it needs `T: Copy`. For a non-`Copy` `T` that would be a move out of a reference, an error ([core-semantics.md §3.7](core-semantics.md#3-moves)). Operators that borrow their operands, such as `==` and `<`, borrow `*r` and need no copy.
 - **`*r` is assignable when `r: mut ref T`.** `*r = v` drops the old value and stores the new one ([core-semantics.md §7.5](core-semantics.md#7-destruction-c6-supersedes-the-drop-judgment-0)). Through a `ref T` it is read-only.
 - **Compound assignment through a `mut ref` binding writes through it.** `x += 1` with `x: mut ref i64` means `*x = *x + 1` and updates the caller's value. Plain `=` does not auto-deref: write `*x = v`.
