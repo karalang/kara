@@ -2395,7 +2395,7 @@ fn closure_kinds_follow_their_bodies() {
     accepted(
         "closure-kinds",
         "fn twice(f: own MutFn()) { f(); f(); }\n\
-         fn once(f: OnceFn() -> String) -> String { f() }\n\
+         fn once(f: own OnceFn() -> String) -> String { f() }\n\
          fn apply(f: Fn(i64) -> i64, x: i64) -> i64 { f(x) }\n\
          fn main() {\n\
              let mut count = 0;\n\

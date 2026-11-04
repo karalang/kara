@@ -1,0 +1,11 @@
+// design.md §7 Diagnostics: calling an OnceFn twice is an error that points
+// at the capture making it OnceFn and at the use that moves it. `|| s` gives
+// its capture away as its result.
+fn main() {
+    let s: String = "a";
+    let f = || s;
+    let a = f();
+    let b = f();
+    println(a);
+    println(b);
+}

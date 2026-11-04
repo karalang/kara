@@ -1,0 +1,19 @@
+// design.md §7 Named and default parameters: "Defaults are constant
+// expressions: whatever a const initializer allows. A function name is one;
+// a closure literal is not."
+fn id(x: i64) -> i64 {
+    x
+}
+
+fn dbl(x: i64) -> i64 {
+    x * 2
+}
+
+fn f(a: i64; g: Fn(i64) -> i64 = id) -> i64 {
+    g(a)
+}
+
+fn main() {
+    println(f(4));
+    println(f(4, g: dbl));
+}

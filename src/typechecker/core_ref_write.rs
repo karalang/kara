@@ -118,6 +118,10 @@ struct Walk<'t, 'a> {
     /// Its `MutFn` parameters held by a shared borrow (a bare or `ref`
     /// one), with the edit that makes each `own` where there is one.
     shared_mut_fn_params: FxHashMap<String, Option<FixIt>>,
+    /// Its `OnceFn` parameters held by a shared borrow: calling one moves
+    /// it, which a borrow cannot (design.md §7: "A MutFn or OnceFn
+    /// parameter is declared own"; B-2026-11-04-69).
+    shared_once_fn_params: FxHashMap<String, Option<FixIt>>,
     /// Calls of a `MutFn` through a shared borrow (§9.6).
     shared_mut_fn_calls: Vec<(Span, String, Option<FixIt>)>,
     /// The scopes that hold a `for` pattern's bindings.
@@ -125,6 +129,10 @@ struct Walk<'t, 'a> {
     /// Locals bound to a closure literal that writes a capture, with the
     /// capture's name.
     mut_closure_locals: Vec<((usize, usize), String)>,
+    /// The ones a plain `let` binds, with the edit that makes it `let mut`:
+    /// calling a local `MutFn` needs `let mut` (design.md §7;
+    /// B-2026-11-04-69).
+    immutable_mut_closure_locals: Vec<((usize, usize), FixIt)>,
     /// MutFn locals a `let` has moved out of (§1.1: a `MutFn` is never
     /// `Copy`), with the binding that took each one (B-2026-10-19-36).
     moved_mut_fns: Vec<((usize, usize), String)>,
@@ -316,9 +324,11 @@ impl<'a> TypeChecker<'a> {
             closure_writes: FxHashMap::default(),
             mut_fn_params: FxHashSet::default(),
             shared_mut_fn_params: FxHashMap::default(),
+            shared_once_fn_params: FxHashMap::default(),
             shared_mut_fn_calls: Vec::new(),
             for_item_scopes: Vec::new(),
             mut_closure_locals: Vec::new(),
+            immutable_mut_closure_locals: Vec::new(),
             moved_mut_fns: Vec::new(),
             kind_errors: Vec::new(),
             prefix_errors: Vec::new(),
@@ -385,6 +395,7 @@ impl<'a> TypeChecker<'a> {
             w.branches.clear();
             w.mut_fn_params.clear();
             w.mut_closure_locals.clear();
+            w.immutable_mut_closure_locals.clear();
             w.moved_mut_fns.clear();
             let mut_fns: Vec<String> = f
                 .params
@@ -422,6 +433,32 @@ impl<'a> TypeChecker<'a> {
                         .binding_names()
                         .into_iter()
                         .map(move |n| (n, fix.clone()))
+                })
+                .collect();
+            w.shared_once_fn_params = f
+                .params
+                .iter()
+                .filter(|p| !p.is_own && crate::d5_params::on())
+                .filter(|p| {
+                    matches!(p.ty.kind, TypeKind::FnType { is_once: true, .. })
+                        && !w
+                            .tc
+                            .program
+                            .escaping_fn_types
+                            .contains(&SpanKey::from_span(&p.ty.span))
+                })
+                .flat_map(|p| {
+                    let fix = FixIt {
+                        span: Span {
+                            length: 0,
+                            ..p.ty.span
+                        },
+                        replacement: "own ".to_string(),
+                    };
+                    p.pattern
+                        .binding_names()
+                        .into_iter()
+                        .map(move |n| (n, Some(fix.clone())))
                 })
                 .collect();
             w.block(&f.body);
@@ -538,6 +575,8 @@ impl Walk<'_, '_> {
         self.scopes.pop();
         let depth = self.scopes.len();
         self.mut_closure_locals.retain(|((i, _), _)| *i < depth);
+        self.immutable_mut_closure_locals
+            .retain(|((i, _), _)| *i < depth);
         self.moved_mut_fns.retain(|((i, _), _)| *i < depth);
     }
 
@@ -1006,6 +1045,18 @@ impl Walk<'_, '_> {
                     if matches!(value.kind, ExprKind::Closure { .. }) {
                         if let Root::Local(i, j) = self.root_of(name) {
                             self.mut_closure_locals.push(((i, j), n));
+                            if !*is_mut {
+                                self.immutable_mut_closure_locals.push((
+                                    (i, j),
+                                    FixIt {
+                                        span: Span {
+                                            length: 0,
+                                            ..pattern.span
+                                        },
+                                        replacement: "mut ".to_string(),
+                                    },
+                                ));
+                            }
                         }
                     }
                 }
@@ -1545,8 +1596,39 @@ impl Walk<'_, '_> {
         let ExprKind::Identifier(name) = &callee.kind else {
             return;
         };
-        let Some(fix) = self.shared_mut_fn_params.get(name).cloned() else {
-            return;
+        // design.md §7: "Calling a local MutFn needs let mut"
+        // (B-2026-11-04-69).
+        if let Some(Root::Local(i, j)) = self.binding_root(name) {
+            let found = self
+                .immutable_mut_closure_locals
+                .iter()
+                .find(|(r, _)| *r == (i, j))
+                .map(|(_, fix)| fix.clone());
+            if let Some(fix) = found {
+                let capture = self
+                    .mut_closure_locals
+                    .iter()
+                    .find(|(r, _)| *r == (i, j))
+                    .map(|(_, n)| n.clone())
+                    .unwrap_or_default();
+                self.shared_mut_fn_calls.push((
+                    callee.span,
+                    format!(
+                        "`{name}` is a `MutFn` (it writes captured `{capture}`), so calling it \
+                         needs `let mut {name}` (design.md §7 Function types and kinds)"
+                    ),
+                    Some(fix),
+                ));
+                return;
+            }
+        }
+        let (fix, kind) = match (
+            self.shared_mut_fn_params.get(name),
+            self.shared_once_fn_params.get(name),
+        ) {
+            (Some(fix), _) => (fix.clone(), "MutFn"),
+            (None, Some(fix)) => (fix.clone(), "OnceFn"),
+            (None, None) => return,
         };
         // A local of the same name shadows the parameter.
         let innermost = self
@@ -1558,12 +1640,20 @@ impl Walk<'_, '_> {
         }
         self.shared_mut_fn_calls.push((
             callee.span,
-            format!(
-                "`{name}` is a borrowed `MutFn`, so it cannot be called \
-                 (core-semantics.md §9.6): a `MutFn` is called only through an owned \
-                 binding, an `own` parameter or a `mut ref`. Declare the parameter \
-                 `{name}: own MutFn(...)`"
-            ),
+            if kind == "MutFn" {
+                format!(
+                    "`{name}` is a borrowed `MutFn`, so it cannot be called \
+                     (core-semantics.md §9.6): a `MutFn` is called only through an owned \
+                     binding, an `own` parameter or a `mut ref`. Declare the parameter \
+                     `{name}: own MutFn(...)`"
+                )
+            } else {
+                format!(
+                    "`{name}` is a borrowed `OnceFn`, so it cannot be called \
+                     (core-semantics.md §9.6): calling an `OnceFn` moves it, and a bare \
+                     parameter is a borrow. Declare the parameter `{name}: own OnceFn(...)`"
+                )
+            },
             fix,
         ));
     }

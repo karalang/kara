@@ -1,0 +1,9 @@
+source = "B-2026-11-04-75"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "collections"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md § Collection literals: an empty literal takes its element types from the expected type; compared with a `Vec[T]`, `[]` is a `Vec[T]`. `[1, 2] == []` is false, an empty `Vec[String]` equals `[]`, and `[1] != []` is true."

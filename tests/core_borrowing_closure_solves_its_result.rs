@@ -57,7 +57,7 @@ fn a_borrowing_closure_in_an_owning_slot_solves_the_call_s_result() {
         ),
     ] {
         let src = format!(
-            "fn ap[T, U](x: own T, f: OnceFn(own T) -> U) -> U {{ f(x) }}
+            "fn ap[T, U](x: own T, f: own OnceFn(own T) -> U) -> U {{ f(x) }}
 fn main() {{
     {body}
 }}

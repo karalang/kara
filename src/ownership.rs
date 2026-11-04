@@ -1446,6 +1446,44 @@ pub(crate) fn collect_copy_bounded_type_params(
 /// `lower_type_for_ownership` both produce for a type parameter; `TypeParam`
 /// is what reaches here from `tc.expr_types`. Both are accepted — see the
 /// typechecker's `type_param_has_trait_bound` for the Named-vs-TypeParam trap.
+/// The closure literal last bound to `name` by a `let` before `before`, so a
+/// second call of an `OnceFn` local can name what made it `OnceFn`
+/// (B-2026-11-04-67).
+fn once_closure_of(body: &Block, name: &str, before: &Span) -> Option<SpanKey> {
+    fn block(b: &Block, name: &str, before: &Span, out: &mut Option<SpanKey>) {
+        for st in &b.stmts {
+            match &st.kind {
+                StmtKind::Let { pattern, value, .. } => {
+                    if value.span.offset < before.offset {
+                        if let (PatternKind::Binding(n), ExprKind::Closure { .. }) =
+                            (&pattern.kind, &value.kind)
+                        {
+                            if n == name {
+                                *out = Some(SpanKey::from_span(&value.span));
+                            }
+                        }
+                    }
+                    expr(value, name, before, out);
+                }
+                StmtKind::Expr(e) => expr(e, name, before, out),
+                _ => {}
+            }
+        }
+        if let Some(e) = &b.final_expr {
+            expr(e, name, before, out);
+        }
+    }
+    fn expr(e: &Expr, name: &str, before: &Span, out: &mut Option<SpanKey>) {
+        crate::index_disjoint::for_each_child_public(e, &mut |c| match c {
+            crate::index_disjoint::Child::Expr(x) => expr(x, name, before, out),
+            crate::index_disjoint::Child::Block(b) => block(b, name, before, out),
+        });
+    }
+    let mut out = None;
+    block(body, name, before, &mut out);
+    out
+}
+
 /// Whether `ty` holds a `Result` by value (in itself, an `Option`, a tuple or
 /// an array), which core semantics §1.1 never makes `Copy`.
 fn mentions_result(ty: &Type) -> bool {
@@ -3580,11 +3618,34 @@ impl<'a> OwnershipChecker<'a> {
                 .typecheck_result
                 .core_once_calls
                 .contains(&SpanKey::from_span(&w.consume_span));
+            // design.md §7 Diagnostics: name the capture that makes the
+            // closure `OnceFn` (B-2026-11-04-67).
+            let once_why = if once_call {
+                once_closure_of(&f.body, binding, &w.consume_span)
+                    .and_then(|k| self.typecheck_result.once_closure_reasons.get(&k))
+                    .map(|(cap, at)| {
+                        format!(
+                            "; it is an OnceFn because its body moves captured `{cap}` out at \
+                             line {}:{}",
+                            at.line, at.column
+                        )
+                    })
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            };
+            let fn_value = !once_call
+                && matches!(
+                    self.typecheck_result
+                        .expr_types
+                        .get(&SpanKey::from_span(&w.consume_span)),
+                    Some(Type::Function { .. })
+                );
             self.errors.push(OwnershipError {
                 message: if once_call {
                     format!(
                         "{binding} moved by the first call at line {}:{} (an OnceFn is \
-                         called once, §9.6)",
+                         called once, §9.6){once_why}",
                         w.consume_span.line, w.consume_span.column
                     )
                 } else {
@@ -3605,7 +3666,18 @@ impl<'a> OwnershipChecker<'a> {
                 // acting on it, so a confident wrong steer is worse than no
                 // suggestion. Both gaps filed off this fix's own session were
                 // walked into exactly this way.
-                suggestion: Some(if supports_clone {
+                suggestion: Some(if once_call {
+                    format!(
+                        "call `{binding}` once, or have its body clone what it moves out so \
+                         it is an `Fn` (design.md §7 Function types and kinds)"
+                    )
+                } else if fn_value {
+                    format!(
+                        "a function value is move-only (design.md § Escaping function \
+                         values): borrow it (`ref {binding}`) instead of moving it, or wrap it \
+                         in a `shared` type to give it many holders"
+                    )
+                } else if supports_clone {
                     format!(
                         "clone '{}' at the move site (`{}.clone()`), drop `own` from the \
                          callee parameter if it only reads, or restructure to avoid reuse",

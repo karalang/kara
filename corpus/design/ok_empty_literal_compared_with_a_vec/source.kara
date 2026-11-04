@@ -1,0 +1,11 @@
+// design.md § Collection literals: "An empty literal, `[]` or `[:]`, takes
+// its element types from the expected type." In a comparison, that is the
+// other operand's type.
+fn main() {
+    let v = [1, 2];
+    println(v == []);
+    let names: Vec[String] = [];
+    println([] == names);
+    let w = [1];
+    println(w != []);
+}

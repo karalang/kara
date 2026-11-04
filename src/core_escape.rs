@@ -115,6 +115,7 @@ pub fn analyze(program: &Program) -> CoreEscape {
             esc,
             scopes: Vec::new(),
             out: &mut out,
+            rebound: FxHashMap::default(),
         };
         w.walk_fn(f);
     }
@@ -128,6 +129,9 @@ struct Walker<'a> {
     esc: &'a FxHashSet<SpanKey>,
     scopes: Vec<FxHashMap<String, Bound>>,
     out: &'a mut CoreEscape,
+    /// A local bound from a non-escaping parameter (`let mut f = g;`), to
+    /// the parameter it holds, for the diagnostic (B-2026-11-04-62).
+    rebound: FxHashMap<String, String>,
 }
 
 impl Walker<'_> {
@@ -190,6 +194,15 @@ impl Walker<'_> {
                         }
                         ExprKind::Identifier(n) => match self.lookup(n) {
                             Some(Bound::Closure(k)) => Bound::Closure(k),
+                            // `let mut f = f;` is how design.md §7 calls an
+                            // `own MutFn` parameter. A local rebind stores
+                            // nothing; the new name is held to the same rule
+                            // (B-2026-11-04-62).
+                            Some(Bound::NonEscParam) => {
+                                let origin = self.rebound.get(n).cloned().unwrap_or(n.clone());
+                                self.rebound.insert(name.clone(), origin);
+                                Bound::NonEscParam
+                            }
                             _ => {
                                 self.walk_expr(value, Pos::Bind);
                                 Bound::Other
@@ -297,15 +310,16 @@ impl Walker<'_> {
                                 continue;
                             }
                             if let Some(Bound::NonEscParam) = self.lookup(&n) {
+                                let (subject, param) = self.non_escaping_subject(&n);
                                 self.out.errors.push((
                                     span,
                                     format!(
-                                        "parameter `{n}` is a non-escaping function value and \
+                                        "{subject} is a non-escaping function value and \
                                          cannot be captured by a closure that is {why}: the \
                                          closure stores it. A function-typed parameter may only \
                                          be called or passed to another non-escaping parameter. \
-                                         Declare it `{n}: escaping Fn(...)` to store or return \
-                                         it (core-semantics.md §9.3)"
+                                         Declare it `{param}: escaping Fn(...)` to store or \
+                                         return it (core-semantics.md §9.3)"
                                     ),
                                 ));
                             }
@@ -450,13 +464,23 @@ impl Walker<'_> {
         }
     }
 
+    /// How a diagnostic names a non-escaping function value: the parameter
+    /// itself, or a local that holds one (`let mut g = f;`).
+    fn non_escaping_subject(&self, name: &str) -> (String, String) {
+        match self.rebound.get(name) {
+            Some(p) if p != name => (format!("`{name}` holds parameter `{p}`, which"), p.clone()),
+            _ => (format!("parameter `{name}`"), name.to_string()),
+        }
+    }
+
     fn non_escaping(&mut self, e: &Expr, name: &str, why: &str) {
+        let (subject, param) = self.non_escaping_subject(name);
         self.out.errors.push((
             e.span,
             format!(
-                "parameter `{name}` is a non-escaping function value and cannot be {why}: \
+                "{subject} is a non-escaping function value and cannot be {why}: \
                  a function-typed parameter may only be called or passed to another \
-                 non-escaping parameter. Declare it `{name}: escaping Fn(...)` to store or \
+                 non-escaping parameter. Declare it `{param}: escaping Fn(...)` to store or \
                  return it (core-semantics.md §9.3)"
             ),
         ));

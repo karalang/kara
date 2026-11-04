@@ -1,11 +1,11 @@
 
 struct W[T] { v: T }
 impl[T] W[T] {
-    fn apply[U](self, f: OnceFn(T) -> U) -> U {
+    fn apply[U](self, f: own OnceFn(T) -> U) -> U {
         f(self.v)
     }
 }
-fn mapit[T, U](o: Option[T], f: OnceFn(T) -> U) -> Option[U] {
+fn mapit[T, U](o: Option[T], f: own OnceFn(T) -> U) -> Option[U] {
     match o {
         Some(x) => Some(f(x)),
         None => None,

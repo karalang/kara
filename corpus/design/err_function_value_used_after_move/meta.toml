@@ -1,0 +1,9 @@
+source = "B-2026-11-04-67"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["design", "closures", "ownership"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md § Escaping function values: \"A value of a function type is move-only. Only a closure literal that core-semantics §1.1 makes Copy is copied.\" `mk()` returns an erased `Fn`, so `let h2 = h;` moves it and `h()` is a use after move. The expected.out wording of an error pin is guidance, not a byte oracle."

@@ -86,6 +86,9 @@ pub struct ClassifierPrelude {
     /// a program-wide set would silently suppress the real diagnostic in an
     /// unbounded sibling that happens to reuse the letter.
     copy_bounded_type_params: FxHashMap<SpanKey, HashSet<String>>,
+    /// Per function body, the parameters that hold an erased function value
+    /// by value: `f: own Fn(..)` or `f: escaping Fn(..)` (B-2026-11-04-67).
+    erased_fn_params: FxHashMap<SpanKey, HashSet<String>>,
 }
 
 impl ClassifierPrelude {
@@ -102,6 +105,7 @@ impl ClassifierPrelude {
             ref_bindings: program.ref_binding_spans.iter().copied().collect(),
             imported_names: collect_imported_names(program),
             copy_bounded_type_params: collect_copy_bounded_type_params_by_body(program),
+            erased_fn_params: collect_erased_fn_params_by_body(program),
         }
     }
 }
@@ -139,6 +143,44 @@ pub(crate) fn type_counts_or_copies(
         Type::Tuple(ps) => parts(ps),
         other => !top && is_copy(other),
     }
+}
+
+/// design.md § Escaping function values: a value of a function type is
+/// move-only. A parameter holds one by value when it is `own` or `escaping`;
+/// a bare function-typed parameter is a borrow (B-2026-11-04-67).
+fn collect_erased_fn_params_by_body(program: &Program) -> FxHashMap<SpanKey, HashSet<String>> {
+    let mut out: FxHashMap<SpanKey, HashSet<String>> = FxHashMap::default();
+    let mut record = |f: &Function| {
+        let names: HashSet<String> = f
+            .params
+            .iter()
+            .filter(|p| {
+                matches!(p.ty.kind, crate::ast::TypeKind::FnType { .. })
+                    && (p.is_own
+                        || program
+                            .escaping_fn_types
+                            .contains(&SpanKey::from_span(&p.ty.span)))
+            })
+            .filter_map(|p| p.name().map(str::to_string))
+            .collect();
+        if !names.is_empty() {
+            out.insert(SpanKey::from_span(&f.body.span), names);
+        }
+    };
+    for item in &program.items {
+        match item {
+            Item::Function(f) => record(f),
+            Item::ImplBlock(imp) => {
+                for it in &imp.items {
+                    if let ImplItem::Method(method) = it {
+                        record(method);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
 }
 
 fn collect_copy_bounded_type_params_by_body(
@@ -259,6 +301,11 @@ pub fn classify_function_body_with(
             .get(&SpanKey::from_span(&body.span))
             .cloned()
             .unwrap_or_default(),
+        erased_fns: prelude
+            .erased_fn_params
+            .get(&SpanKey::from_span(&body.span))
+            .cloned()
+            .unwrap_or_default(),
         param_types,
         local_types: HashMap::new(),
         classification: Classification::default(),
@@ -298,6 +345,12 @@ struct UseClassifier<'a> {
     /// The enclosing function's `Copy`-bounded generic type parameters — see
     /// `ClassifierPrelude::copy_bounded_type_params` (B-2026-09-02-19).
     copy_bounded_type_params: HashSet<String>,
+    /// Bindings holding an erased function value, which is move-only
+    /// (design.md § Escaping function values; B-2026-11-04-67): an `own` or
+    /// `escaping` function parameter, or a local bound from anything but a
+    /// closure literal, a function name or another copyable function value.
+    /// `Type::Function` does not say which, so it is tracked by name.
+    erased_fns: HashSet<String>,
     /// Round 12.18: name-keyed types for `let`-bound locals,
     /// populated as the walker enters each `let pat = value;` and
     /// consulted by `classify_identifier` before falling back to the
@@ -786,6 +839,17 @@ impl<'a> UseClassifier<'a> {
                         self.once_callable_closures.insert(name);
                     } else {
                         self.once_callable_closures.remove(&name);
+                    }
+                }
+                let erased = crate::ownership::core_rules()
+                    && matches!(pattern.kind, PatternKind::Binding(_))
+                    && matches!(self.tc.expr_type(value), Some(Type::Function { .. }))
+                    && self.value_is_erased_fn(value);
+                for name in pattern.binding_names() {
+                    if erased {
+                        self.erased_fns.insert(name);
+                    } else {
+                        self.erased_fns.remove(&name);
                     }
                 }
             }
@@ -1616,7 +1680,17 @@ impl<'a> UseClassifier<'a> {
                     .flat_map(|p| p.pattern.binding_names())
                     .collect();
                 let shadowed = self.shadow_locals(&param_names);
-                self.walk_expr(body, Mode::Reading);
+                // v2 core §9.6: the body's value is the closure's result and
+                // moves out to the caller, so `|| s` gives `s` away and is an
+                // `OnceFn`, as the typechecker's kind inference already says
+                // (B-2026-11-04-67). A block body's tail was already walked
+                // this way; a bare expression body was read.
+                let body_mode = if crate::ownership::core_rules() {
+                    Mode::Consuming
+                } else {
+                    Mode::Reading
+                };
+                self.walk_expr(body, body_mode);
                 self.unshadow_locals(shadowed);
                 self.task_moved_captures.pop();
                 self.escaping_closure_depth -= u32::from(escaping);
@@ -1998,6 +2072,7 @@ impl<'a> UseClassifier<'a> {
             // downgrade) or copying a `weak` value moves nothing
             // (B-2026-10-12-20).
             Some(Type::Weak(_)) => UseKind::Read,
+            Some(Type::Function { .. }) if self.erased_fns.contains(name) => UseKind::Consume,
             Some(t) if !self.is_copy_type(t) => UseKind::Consume,
             _ => UseKind::Read,
         }
@@ -2403,6 +2478,17 @@ impl<'a> UseClassifier<'a> {
     /// A tuple, array or struct literal is a temporary built by value, so it
     /// is consumed whatever the pattern binds (`let (ref a, ref b) = (x, y);`
     /// moves `x` and `y`).
+    /// Whether a function-typed `let` initializer is an erased function
+    /// value rather than a closure literal or a function name, whose values
+    /// MIR copies (B-2026-11-04-67).
+    fn value_is_erased_fn(&self, value: &Expr) -> bool {
+        match &value.kind {
+            ExprKind::Closure { .. } | ExprKind::Path { .. } => false,
+            ExprKind::Identifier(n) => self.erased_fns.contains(n),
+            _ => true,
+        }
+    }
+
     fn let_rhs_mode(&self, pattern: &Pattern, value: &Expr) -> Mode {
         if !(crate::ownership::core_rules() && builds_a_temporary(value))
             && (matches!(&pattern.kind, PatternKind::AtBinding { by_ref: true, .. })

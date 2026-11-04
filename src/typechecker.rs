@@ -1827,6 +1827,10 @@ pub struct TypeCheckResult {
     /// `OnceFn` value. Calling one moves it (§9.6), and the ownership pass
     /// words a second call's E0500 by it.
     pub core_once_calls: FxHashSet<SpanKey>,
+    /// Each `OnceFn` closure literal, by its span: the capture its body moves
+    /// out and where, so a second call's E0500 names what made it `OnceFn`
+    /// (design.md §7 Diagnostics; B-2026-11-04-67).
+    pub once_closure_reasons: FxHashMap<SpanKey, (String, crate::token::Span)>,
     /// Each identifier that names a top-level function item (not a local).
     /// Its value has no environment, so it is `CrossTask` whatever its
     /// `Fn` type says; the auto-par safety sweep reads this
@@ -4490,6 +4494,11 @@ impl<'a> TypeChecker<'a> {
             copy_derive_first_steps,
             str_retyped_uses: std::mem::take(&mut self.str_retyped_uses),
             core_once_calls: std::mem::take(&mut self.core_once_calls),
+            once_closure_reasons: self
+                .closure_once_reasons
+                .iter()
+                .map(|(k, r)| (*k, (r.consumed_binding.clone(), r.consumed_span)))
+                .collect(),
             fn_item_spans: std::mem::take(&mut self.fn_item_spans),
             core_ref_copy_spans: self.core_ref_copy_spans,
             rejected_assign_spans: self.rejected_assign_spans,

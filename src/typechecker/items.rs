@@ -1961,6 +1961,16 @@ impl<'a> super::TypeChecker<'a> {
                 }
             }
         }
+        // The print family and `dbg` are intrinsics with no declared
+        // signature; printing reads its argument (design.md § Display), as
+        // the ownership pass's `collect_callee_param_modes` already says. A
+        // closure that prints a capture is an `Fn` (B-2026-11-04-65).
+        if matches!(
+            key.as_str(),
+            "print" | "println" | "eprint" | "eprintln" | "dbg"
+        ) {
+            return Some(vec![true]);
+        }
         None
     }
 

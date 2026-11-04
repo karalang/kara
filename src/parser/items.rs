@@ -1894,6 +1894,8 @@ impl super::Parser {
         self.escaping_ok = true;
         self.frozen_consumed = false;
         // `x: own T` (D5): owned, which a bare `T` also means until the flip.
+        let own_span = self.current_span();
+        let own_written = self.at_kw("own");
         let is_own = self.at_kw("own")
             && !matches!(
                 self.peek_token_ref_at(1),
@@ -1906,6 +1908,29 @@ impl super::Parser {
         self.escaping_ok = false;
         let is_frozen = std::mem::take(&mut self.frozen_consumed);
         let ty = ty?;
+        // design.md § Escaping function values: "An `escaping` parameter is
+        // owned ... `own` is not written beside `escaping`" (B-2026-11-04-69).
+        if own_written
+            && is_own
+            && self
+                .escaping_fn_types
+                .contains(&crate::resolver::SpanKey::from_span(&ty.span))
+        {
+            self.error_at(
+                "an `escaping` parameter is owned, so `own` is not written beside \
+                 `escaping` (design.md § Escaping function values)",
+                own_span,
+            );
+            // `own` and the whitespace character that must follow it.
+            self.fix_edits.insert(
+                crate::resolver::SpanKey::from_span(&own_span),
+                crate::resolver::TextEdit {
+                    offset: own_span.offset,
+                    length: own_span.length + 1,
+                    replacement: String::new(),
+                },
+            );
+        }
         let default_value = if self.eat(&Token::Equal) {
             Some(self.parse_expression()?)
         } else {
@@ -2202,6 +2227,37 @@ impl super::Parser {
                             has_rest,
                         },
                         span: self.span_from(&start),
+                    })
+                } else if self.check(&Token::LeftParen) {
+                    // `Some(x): Option[i64]`: a variant pattern can fail, and a
+                    // parameter's pattern must not (design.md § Destructuring
+                    // parameters; B-2026-11-04-69). Parsed as a tuple pattern
+                    // under the name, so the error is the only one.
+                    self.advance();
+                    let mut patterns = Vec::new();
+                    while !self.check(&Token::RightParen) && !self.is_at_end() {
+                        patterns.push(self.parse_param_pattern()?);
+                        if !self.eat(&Token::Comma) {
+                            break;
+                        }
+                    }
+                    self.expect(&Token::RightParen)?;
+                    let span = self.span_from(&start);
+                    self.error_at(
+                        &format!(
+                            "a parameter's pattern must be irrefutable, and `{name}(..)` matches \
+                             only some values (design.md § Destructuring parameters): take the value \
+                             and use `if let` or `match` in the body"
+                        ),
+                        span,
+                    );
+                    Some(Pattern {
+                        id: crate::ids::NodeId::DUMMY,
+                        kind: PatternKind::TupleVariant {
+                            path: vec![name],
+                            patterns,
+                        },
+                        span,
                     })
                 } else {
                     // Simple binding

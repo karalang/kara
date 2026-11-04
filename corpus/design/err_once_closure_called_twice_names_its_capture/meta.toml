@@ -1,0 +1,9 @@
+source = "B-2026-11-04-67"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["design", "closures", "ownership"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md §7 Function types and kinds: \"OnceFn if it moves one out\", and core-semantics §9.6: the call moves the value, so a second call is E0500. design.md §7 Diagnostics asks the error to name the capture that makes the closure OnceFn. The expected.out wording of an error pin is guidance, not a byte oracle."

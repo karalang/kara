@@ -1,4 +1,4 @@
-fn call_twice(f: OnceFn()) {
+fn call_twice(f: own OnceFn()) {
     f();
     f();
 }

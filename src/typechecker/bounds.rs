@@ -908,6 +908,15 @@ impl<'a> super::TypeChecker<'a> {
         })
     }
 
+    /// Does this bare name denote a top-level function item, whose value is
+    /// a constant (design.md §7 Named and default parameters)?
+    fn default_value_names_function(&self, name: &str) -> bool {
+        self.program
+            .items
+            .iter()
+            .any(|item| matches!(item, crate::ast::Item::Function(f) if f.name == name))
+    }
+
     /// Verify `expr` is a valid constant for a default-parameter
     /// position. Composite literals (tuple, array, struct) and variant
     /// constructors recurse argument-wise; string literals, unit variants
@@ -972,6 +981,11 @@ impl<'a> super::TypeChecker<'a> {
             ExprKind::Identifier(name)
                 if self.default_value_names_unit_variant(name)
                     || self.default_value_names_module_binding(name) => {}
+            // A FUNCTION NAME: design.md §7 Named and default parameters,
+            // "A function name is one; a closure literal is not"
+            // (B-2026-11-04-68). The closure literal still reaches the
+            // evaluator's refusal below.
+            ExprKind::Identifier(name) if self.default_value_names_function(name) => {}
             _ => {
                 if let Err(err) = self.eval_const_expr(expr, target_ty) {
                     match err {

@@ -1,0 +1,1 @@
+ERROR at line 8: f moved by the first call at line 7:13 (an OnceFn is called once, §9.6); it is an OnceFn because its body moves captured `s` out at line 6:16

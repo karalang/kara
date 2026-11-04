@@ -58,6 +58,16 @@ accepted by 0.8.0 are now refused, each with a fix-it.
   is refused (design.md §5 Or-patterns; B-2026-11-04-60).
 - `struct Marker;` is refused; a struct with no fields is `struct Marker {}`
   (design.md §5 Structs), which `karac fix` writes (B-2026-11-04-60).
+- **Function kinds (design.md §7).** Calling an `OnceFn` local twice is
+  E0500, and the error names the capture that makes it `OnceFn`; `|| s`,
+  which returns its capture, is one (B-2026-11-04-67). A function value that
+  is not a closure literal or a function name (a call's result, an `own` or
+  `escaping` parameter) is move-only, so `let h2 = h;` moves `h`. Calling a
+  local `MutFn` needs `let mut`, and a bare `OnceFn` parameter cannot be
+  called (`own OnceFn`); `karac fix` writes both (B-2026-11-04-69).
+- A UFCS call to a `mut ref self` method marks its receiver,
+  `Counter.bump(mut c)`, and `own` is not written beside `escaping`; `karac
+  fix` writes both (B-2026-11-04-69).
 
 ### Added
 
@@ -102,6 +112,13 @@ accepted by 0.8.0 are now refused, each with a fix-it.
   that field already was (B-2026-11-04-46).
 - `karac fmt` keeps the parentheses of `x @ (1 | 2)`; it wrote
   `x @ 1 | 2`, which binds `x` in the first alternative only.
+- `let mut f = f;` rebinds an `own MutFn` parameter, the spelling design.md
+  §7 prescribes; it was refused as storing a non-escaping value
+  (B-2026-11-04-62). A closure that prints a capture is an `Fn`, so it may
+  escape into an `Fn` slot (B-2026-11-04-65).
+- A default parameter value may name a function, `g: Fn(i64) -> i64 = id`
+  (B-2026-11-04-68), and `v == []` gives `[]` the element type of `v`
+  (B-2026-11-04-75).
 
 ### Diagnostics
 
@@ -178,6 +195,9 @@ accepted by 0.8.0 are now refused, each with a fix-it.
 - `karac fmt` prints a collection literal as written: it keeps `vec![..]`
   only where the source used it, and never turns `Vec[..]` or `[..]` into
   `vec![..]`.
+- A variant pattern in a parameter (`fn f(Some(x): Option[i64])`) is
+  reported as a refutable parameter pattern, and `srt[i64]` as a use-site
+  type argument, instead of naming-class and cast advice (B-2026-11-04-69).
 
 ### Performance
 

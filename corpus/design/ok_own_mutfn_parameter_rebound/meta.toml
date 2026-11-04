@@ -1,0 +1,9 @@
+source = "B-2026-11-04-62"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "closures"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md §7 Function types and kinds: the spec's own `repeat` example, which rebinds an `own MutFn` parameter with `let mut f = f;` and prints 3; an `Fn` passed where `MutFn` is expected runs twice."

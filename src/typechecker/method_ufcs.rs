@@ -14,7 +14,7 @@ use crate::resolver::SpanKey;
 use crate::token::Span;
 
 use super::types::{type_display, Type};
-use super::TypeErrorKind;
+use super::{FixIt, TypeErrorKind};
 
 impl<'a> super::TypeChecker<'a> {
     /// Type `Trait.method(recv, ..)` or `Type.method(recv, ..)` when
@@ -71,6 +71,32 @@ impl<'a> super::TypeChecker<'a> {
                 self.node_method_callees.remove(&node);
             }
         }
+        // design.md § Call-site `mut` markers: a UFCS call marks its
+        // receiver, `Counter.bump(mut c)`, when the method takes `mut ref
+        // self` (B-2026-11-04-69).
+        let in_program = recv.value.span.offset < self.program.library_start.unwrap_or(usize::MAX);
+        if !recv.mut_marker
+            && (self.cli_lint_overrides.strict_core
+                || (self.library_methods_from_source && in_program))
+            && self.ufcs_self_mode(is_type.then_some(name), trait_name.as_deref(), method)
+                == Some(SelfParam::MutRef)
+        {
+            let mut edit_span = recv.value.span;
+            edit_span.length = 0;
+            self.type_error_with_fix_it(
+                format!(
+                    "`{alias}.{method}` takes `mut ref self`, so its receiver is marked: \
+                     write `{alias}.{method}(mut <expr>, ..)` (design.md § Call-site `mut` \
+                     markers)"
+                ),
+                recv.span,
+                TypeErrorKind::MissingMutMarker,
+                FixIt {
+                    span: edit_span,
+                    replacement: "mut ".to_string(),
+                },
+            );
+        }
         let errors = self.errors.len();
         let saved = self.env.ufcs_trait.take();
         self.env.ufcs_trait = trait_name.map(|t| (t, method.to_string()));
@@ -123,6 +149,100 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
         cur
+    }
+
+    /// `srt[i64]` used as a value: a generic function item indexed by a type
+    /// name. design.md §8 writes no type arguments at a use site, so the
+    /// message says so rather than reading `i64` as a value
+    /// (B-2026-11-04-69).
+    pub(super) fn call_site_type_args_on_fn_value(
+        &self,
+        object: &Expr,
+        index: &Expr,
+    ) -> Option<String> {
+        let ExprKind::Identifier(f) = &object.kind else {
+            return None;
+        };
+        let ExprKind::Identifier(t) = &index.kind else {
+            return None;
+        };
+        if self.local_scope.lookup(f).is_some() || self.local_scope.lookup(t).is_some() {
+            return None;
+        }
+        let generic_fn = self.program.items.iter().any(|item| {
+            matches!(item, Item::Function(func) if func.name == *f
+                && func.generic_params.as_ref().is_some_and(|g| !g.params.is_empty()))
+        });
+        let names_type = super::types::is_prelude_type_or_module_name(t)
+            || self.env.structs.contains_key(t.as_str())
+            || self.env.enums.contains_key(t.as_str())
+            || matches!(
+                t.as_str(),
+                "i8" | "i16"
+                    | "i32"
+                    | "i64"
+                    | "i128"
+                    | "u8"
+                    | "u16"
+                    | "u32"
+                    | "u64"
+                    | "u128"
+                    | "usize"
+                    | "isize"
+                    | "f16"
+                    | "bf16"
+                    | "f32"
+                    | "f64"
+                    | "bool"
+                    | "char"
+            );
+        (generic_fn && names_type).then(|| {
+            format!(
+                "`{f}[{t}]`: a function takes no type arguments where it is used \
+                 (design.md §8 Generic parameters and arguments); the arguments or the expected type \
+                 decide them. Annotate the binding, `let g: Fn(..) -> .. = {f};`, or call \
+                 `{f}(x)`"
+            )
+        })
+    }
+
+    /// The receiver mode of the method a UFCS call names: the type's
+    /// inherent method first, then the trait's declaration.
+    fn ufcs_self_mode(
+        &self,
+        type_name: Option<&str>,
+        trait_name: Option<&str>,
+        method: &str,
+    ) -> Option<SelfParam> {
+        if let Some(t) = trait_name {
+            return self
+                .find_trait_method(t, method)
+                .and_then(|m| m.self_param.clone());
+        }
+        let type_name = type_name?;
+        for item in &self.program.items {
+            let Item::ImplBlock(imp) = item else { continue };
+            let TypeKind::Path(path) = &imp.target_type.kind else {
+                continue;
+            };
+            if path
+                .segments
+                .last()
+                .map(|n| self.unaliased_type_name(n))
+                .as_deref()
+                != Some(type_name)
+            {
+                continue;
+            }
+            for ii in &imp.items {
+                if let ImplItem::Method(f) = ii {
+                    if f.name == method {
+                        return f.self_param.clone();
+                    }
+                }
+            }
+        }
+        None
     }
 
     /// Whether `Trait.method` takes `self`, or `None` when the trait (or a

@@ -9728,6 +9728,10 @@ impl<'a> super::TypeChecker<'a> {
                 // gate, and the bounds must not see it at all (`v[s.a..s.b]`
                 // is a read of `s.a`, not a write through it).
                 let range_mut_through = self.mut_through_param_arg;
+                if let Some(msg) = self.call_site_type_args_on_fn_value(object, index) {
+                    self.type_error(msg, expr.span, TypeErrorKind::TypeMismatch);
+                    return Type::Error;
+                }
                 let obj_ty = super::types::strip_refinement_through_ref(&self.infer_expr(object));
                 self.mut_through_param_arg = false;
                 // The index is read, never the target of the write: `v[n.val]

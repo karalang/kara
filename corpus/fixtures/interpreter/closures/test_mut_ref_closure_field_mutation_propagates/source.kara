@@ -1,7 +1,7 @@
 struct Counter { n: i64 }
 fn main() {
 let mut c = Counter { n: 0 };
-let bump = || { c.n = c.n + 1; };
+let mut bump = || { c.n = c.n + 1; };
 bump();
 bump();
 bump();

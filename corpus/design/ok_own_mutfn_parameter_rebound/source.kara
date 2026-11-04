@@ -1,0 +1,17 @@
+// design.md §7 Function types and kinds: "Calling a local MutFn needs
+// let mut. An own parameter is rebound first: let mut f = f;", and an Fn
+// may be passed where a MutFn is expected (Subsumption).
+fn repeat(n: i64, f: own MutFn()) {
+    let mut f = f;
+    for _ in 0..n {
+        f();
+    }
+}
+
+fn main() {
+    let mut count = 0;
+    repeat(3, || { count += 1; });
+    println(count);
+    let k = 7;
+    repeat(2, || println(k));
+}

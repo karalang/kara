@@ -1,0 +1,13 @@
+// design.md §7: a closure gets the most permissive kind its body allows.
+// Printing a capture reads it, so this escaping closure is an Fn and may be
+// called twice, though it captured `s` by move.
+fn mk() -> (Fn() with writes(Stdout)) {
+    let s: String = "abc";
+    || println(s)
+}
+
+fn main() {
+    let f = mk();
+    f();
+    f();
+}

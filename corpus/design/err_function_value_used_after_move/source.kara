@@ -1,0 +1,12 @@
+// design.md § Escaping function values: a value of a function type is
+// move-only. `let h2 = h;` moves `h`.
+fn mk() -> (Fn() -> i64) {
+    || 1
+}
+
+fn main() {
+    let h = mk();
+    let h2 = h;
+    println(h());
+    println(h2());
+}

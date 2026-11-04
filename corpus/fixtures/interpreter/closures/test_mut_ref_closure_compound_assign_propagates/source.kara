@@ -1,6 +1,6 @@
 fn main() {
 let mut counter = 10;
-let bump = || { counter += 5; };
+let mut bump = || { counter += 5; };
 bump();
 bump();
 println(counter);

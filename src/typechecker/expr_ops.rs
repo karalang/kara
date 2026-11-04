@@ -3842,8 +3842,25 @@ impl<'a> super::TypeChecker<'a> {
                 }
             }
         }
-        let mut left_ty = strip_refinement(&self.infer_expr(left)).clone();
-        let mut right_ty = strip_refinement(&self.infer_expr(right)).clone();
+        // design.md § Collection literals: an empty literal takes its element
+        // types from the expected type, and in a comparison that is the other
+        // operand's: `v == []` (B-2026-11-04-75).
+        let empty = |e: &Expr| matches!(&e.kind, ExprKind::ArrayLiteral(v) if v.is_empty());
+        let (mut left_ty, mut right_ty) = if compares && empty(right) && !empty(left) {
+            let l = strip_refinement(&self.infer_expr(left)).clone();
+            let want = strip_refs_for_compare(&l).clone();
+            let r = strip_refinement(&self.check_expr(right, &want)).clone();
+            (l, r)
+        } else if compares && empty(left) && !empty(right) {
+            let r = strip_refinement(&self.infer_expr(right)).clone();
+            let want = strip_refs_for_compare(&r).clone();
+            let l = strip_refinement(&self.check_expr(left, &want)).clone();
+            (l, r)
+        } else {
+            let l = strip_refinement(&self.infer_expr(left)).clone();
+            let r = strip_refinement(&self.infer_expr(right)).clone();
+            (l, r)
+        };
         for key in borrowed {
             self.borrowed_deref_operands.remove(&key);
         }

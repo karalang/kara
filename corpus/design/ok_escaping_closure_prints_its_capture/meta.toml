@@ -1,0 +1,9 @@
+source = "B-2026-11-04-65"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "closures"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md §7 Function types and kinds: \"A closure literal gets the most permissive kind its body allows: `Fn` if it only reads its captures\". `println` borrows its argument (§ Display), so `|| println(s)` is an `Fn` even when it escapes and captures by move."
