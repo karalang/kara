@@ -7,7 +7,8 @@
 //! bound's method when another trait of the type has an `m`
 //! (B-2026-11-04-11); a program's associated function named like a
 //! reflection method (`name`) is the program's (B-2026-11-04-10); and of
-//! two `From` impls, `Out.from(b)` calls the one `b`'s type names. Each
+//! two `From` impls, `Out.from(b)` calls the one `b`'s type names, also when
+//! neither header names its argument (B-2026-11-04-47). Each
 //! checks clean and prints the same through the MIR interpreter and, with
 //! the backend, `karac run`.
 
@@ -112,6 +113,22 @@ fn main() {
 }
 "#,
         "2\n101\n102\n",
+    ),
+    (
+        "from_impls_without_trait_arguments",
+        r#"struct A { n: i64 }
+struct C { n: i64 }
+struct Out { n: i64 }
+impl From for Out { fn from(a: A) -> Out { Out { n: a.n } } }
+impl From for Out { fn from(c: C) -> Out { Out { n: c.n * 10 } } }
+fn main() {
+    let p: Out = C { n: 5 }.into();
+    println(p.n);
+    println(Out.from(C { n: 6 }).n);
+    println(Out.from(A { n: 7 }).n);
+}
+"#,
+        "50\n60\n7\n",
     ),
 ];
 

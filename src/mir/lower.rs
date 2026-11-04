@@ -1646,10 +1646,14 @@ impl<'a> Lcx<'a> {
                         .get(&SpanKey::from_span(&b.target_type.span))
                         .cloned();
                     let impl_path = self.defs.table.get(impl_id).path.segments.clone();
+                    // The second and later impls of one trait for one type
+                    // are named apart: `impl From[A]` and `impl From[B]`,
+                    // or two `impl From` told apart by their parameters
+                    // (B-2026-11-04-47).
                     let impl_suffix = b
                         .trait_name
                         .as_ref()
-                        .filter(|t| t.generic_args.is_some())
+                        .filter(|t| t.generic_args.is_some() || target.is_some() || prim.is_some())
                         .and(impl_path.last())
                         .and_then(|l| l.rsplit_once('#'))
                         .filter(|(_, k)| *k != "0")
@@ -11469,8 +11473,9 @@ impl<'l, 'a> Bx<'l, 'a> {
 
     /// The `from` of the user's non-generic `impl From[source] for
     /// target`, as `?` converts an error.
-    /// Of the impls of one generic trait for one type (`impl From[A] for
-    /// Out`, `impl From[B] for Out`), each with its function `d`'s name, the
+    /// Of the impls of one trait for one type (`impl From[A] for Out`,
+    /// `impl From[B] for Out`, or two `impl From for Out` told apart by
+    /// their parameters), each with its function `d`'s name, the
     /// one whose parameters `args` have, when `d` is such a function and
     /// exactly one fits; `None` leaves the call to `d` (B-2026-11-04-47).
     fn trait_sibling_by_args(&mut self, d: DefId, args: &'a [CallArg]) -> R<Option<DefId>> {
@@ -11478,8 +11483,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             return Ok(None);
         };
         let plain = |i: &FnItem<'_>| {
-            i.impl_trait_args.is_some()
-                && i.impl_params == 0
+            i.impl_params == 0
                 && i.f.self_param.is_none()
                 && i.f.params.len() == args.len()
                 && i.f
