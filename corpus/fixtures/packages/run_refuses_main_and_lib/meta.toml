@@ -9,3 +9,5 @@ rules = []
 backends = ["mir-build"]
 env = {}
 note = "design.md § Modules, entry points: a package cannot have both main.kara and lib.kara; run and build refuse it (B-2026-11-04-23); a package entry, so only the lane that builds packages (`karac build`) runs it: `__mir-run` takes one file"
+bucket = "a:refused"
+classified_with = "56fd1de20"

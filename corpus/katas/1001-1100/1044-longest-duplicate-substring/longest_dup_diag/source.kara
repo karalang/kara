@@ -1,0 +1,144 @@
+// LeetCode #1044: Longest Duplicate Substring -- every pair of positions,
+// one diagonal at a time.
+//
+// Two occurrences of a substring sit some distance `d` apart. For each
+// `d`, one pass compares byte `i` with byte `i + d` and keeps the length
+// of the run of matches ending at `i`: a run of length `r` is a substring
+// of `r` bytes that also occurs `d` bytes later. The longest run over
+// every `d` is the answer, and of runs as long as the best, the one whose
+// bytes come first in dictionary order is kept. No search and no hashing:
+// O(n^2) time, O(1) space beyond the string.
+
+fn longest_dup_substring(s: Str) -> String {
+    let bytes = s.bytes();
+    let n = bytes.len();
+    let mut best_start = 0;
+    let mut best_len = 0;
+    for d in 1..n {
+        let mut run = 0;
+        for i in 0..n - d {
+            if bytes[i] != bytes[i + d] {
+                run = 0;
+                continue;
+            }
+            run += 1;
+            let start = i + 1 - run;
+            if run > best_len {
+                best_len = run;
+                best_start = start;
+            } else if run == best_len and before(bytes, start, best_start, run) {
+                best_start = start;
+            }
+        }
+    }
+    s[best_start..best_start + best_len].to_string()
+}
+
+// Whether the `len` bytes at `a` come before the `len` bytes at `b`.
+fn before(bytes: Slice[u8], a: i64, b: i64, len: i64) -> bool {
+    for k in 0..len {
+        if bytes[a + k] != bytes[b + k] {
+            return bytes[a + k] < bytes[b + k];
+        }
+    }
+    false
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn fold_into(check: mut ref i64, answer: Str) {
+    *check = (*check * 131 + answer.len() + 1) % 1000000007;
+    for b in answer.bytes().iter() {
+        *check = (*check * 131 + b as i64) % 1000000007;
+    }
+}
+
+fn show(answer: Str) -> String {
+    if answer.len() <= 24 {
+        f"\"{answer}\""
+    } else {
+        f"\"{answer[0..12]}...{answer[answer.len() - 12..answer.len()]}\" ({answer.len()} letters)"
+    }
+}
+
+// A string of `n` letters drawn from the first `k` of the alphabet.
+fn random_string(n: i64, k: i64, seed: mut ref i64) -> String {
+    let mut out = String.new();
+    for _ in 0..n {
+        out.push((b'a' + (next_random(mut seed) % k) as u8) as char);
+    }
+    out
+}
+
+fn main() {
+    // LeetCode's two examples, then a few more
+    let examples = [
+        "banana",
+        "abcd",
+        "aa",
+        "ab",
+        "aaaaa",
+        "abcabc",
+        "mississippi",
+        "abababab",
+        "zxyzxyxyz",
+        "theeuntheeuntheeun",
+    ];
+    for s in examples.iter() {
+        println(f"\"{s}\" -> {show(longest_dup_substring(s))}");
+    }
+    // every string of 2 to 12 letters from "ab", and of 2 to 7 from "abc"
+    for (k, most) in [(2, 12), (3, 7)].iter() {
+        let mut cases = 0;
+        let mut total = 0;
+        let mut check = 0;
+        for n in 2..most + 1 {
+            let mut count = 1;
+            for _ in 0..n {
+                count *= k;
+            }
+            for code in 0..count {
+                let mut s = String.new();
+                let mut c = code;
+                for _ in 0..n {
+                    s.push((b'a' + (c % k) as u8) as char);
+                    c /= k;
+                }
+                let answer = longest_dup_substring(s);
+                cases += 1;
+                total += answer.len();
+                fold_into(mut check, answer);
+            }
+        }
+        println(f"every string of 2 to {most} letters from {k}: {cases} cases, total length {total}, checksum {check}");
+    }
+    // 300 random strings of 2 to 200 letters from 2 to 26
+    let mut seed = 1044;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..300 {
+        let n = next_random(mut seed) % 199 + 2;
+        let k = next_random(mut seed) % 25 + 2;
+        let answer = longest_dup_substring(random_string(n, k, mut seed));
+        total += answer.len();
+        fold_into(mut check, answer);
+    }
+    println(f"300 random strings: total length {total}, checksum {check}");
+    // the largest: 5000 random letters, and 5000 letters of the Fibonacci word
+    let wide = random_string(5000, 26, mut seed);
+    println(f"5000 random letters -> {show(longest_dup_substring(wide))}");
+    let mut a = "a".to_string();
+    let mut b = "ab".to_string();
+    while b.len() < 5000 {
+        let next = f"{b}{a}";
+        a = b;
+        b = next;
+    }
+    let fib = b[0..5000];
+    println(f"5000 letters of the Fibonacci word -> {show(longest_dup_substring(fib))}");
+}

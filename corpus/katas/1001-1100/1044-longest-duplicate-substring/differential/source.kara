@@ -1,0 +1,413 @@
+// LeetCode #1044: Longest Duplicate Substring -- differential
+//
+// The five arms, copied here under their own names, against the statement
+// read literally, and four properties of the answer. See README.md §
+// Differential.
+
+// ---- binary search, rolling hash (longest_dup.kara)
+
+const BASE: i64 = 131;
+const MODULUS: i64 = 1_000_000_007;
+
+fn hash_arm(s: Str) -> String {
+    let bytes = s.bytes();
+    let mut low = 1;
+    let mut high = bytes.len() - 1;
+    let mut best_start = 0;
+    let mut best_len = 0;
+    while low <= high {
+        let len = (low + high) / 2;
+        match hash_window(bytes, len) {
+            Some(start) => {
+                best_start = start;
+                best_len = len;
+                low = len + 1;
+            }
+            None => high = len - 1,
+        }
+    }
+    s[best_start..best_start + best_len].to_string()
+}
+
+// The start of the smallest window of `len` bytes that occurs twice.
+fn hash_window(bytes: Slice[u8], len: i64) -> Option[i64] {
+    let n = bytes.len();
+    let mut lead = 1;
+    for _ in 1..len {
+        lead = lead * BASE % MODULUS;
+    }
+    let mut hash = 0;
+    for i in 0..len {
+        hash = (hash * BASE + bytes[i]) % MODULUS;
+    }
+    let mut seen: Map[i64, Vec[i64]] = Map.new();
+    let mut found: Option[i64] = None;
+    let mut start = 0;
+    loop {
+        let earlier = match seen.get(hash) {
+            Some(starts) => starts.iter().any(|j| hash_same(bytes, j, start, len)),
+            None => false,
+        };
+        if earlier {
+            found = match found {
+                Some(f) if not hash_smaller(bytes, start, f, len) => Some(f),
+                _ => Some(start),
+            };
+        } else {
+            seen.entry(hash).or_insert(Vec.new()).push(start);
+        }
+        if start + len == n {
+            break;
+        }
+        hash = (hash - bytes[start] * lead % MODULUS + MODULUS) % MODULUS;
+        hash = (hash * BASE + bytes[start + len]) % MODULUS;
+        start += 1;
+    }
+    found
+}
+
+fn hash_same(bytes: Slice[u8], a: i64, b: i64, len: i64) -> bool {
+    for k in 0..len {
+        if bytes[a + k] != bytes[b + k] {
+            return false;
+        }
+    }
+    true
+}
+
+// Whether the window at `a` comes before the window at `b`.
+fn hash_smaller(bytes: Slice[u8], a: i64, b: i64, len: i64) -> bool {
+    for k in 0..len {
+        if bytes[a + k] != bytes[b + k] {
+            return bytes[a + k] < bytes[b + k];
+        }
+    }
+    false
+}
+
+// ---- suffix array (longest_dup_suffix.kara)
+
+fn suffix_arm(s: Str) -> String {
+    let bytes = s.bytes();
+    let n = bytes.len();
+    let order = suffix_order(bytes);
+    let mut rank = Vec.filled(n, 0);
+    for (r, i) in order.iter().enumerate() {
+        rank[i] = r;
+    }
+    let mut best_start = 0;
+    let mut best_len = 0;
+    let mut common = 0;
+    for i in 0..n {
+        if rank[i] == 0 {
+            common = 0;
+            continue;
+        }
+        let j = order[rank[i] - 1];
+        while i + common < n and j + common < n and bytes[i + common] == bytes[j + common] {
+            common += 1;
+        }
+        if common > best_len or (common == best_len and common > 0 and rank[i] < rank[best_start]) {
+            best_len = common;
+            best_start = i;
+        }
+        if common > 0 {
+            common -= 1;
+        }
+    }
+    s[best_start..best_start + best_len].to_string()
+}
+
+// The starts of the suffixes of `bytes`, in dictionary order.
+fn suffix_order(bytes: Slice[u8]) -> Vec[i64] {
+    let n = bytes.len();
+    let mut order: Vec[i64] = (0..n).collect();
+    let mut rank: Vec[i64] = bytes.iter().map(|b| b as i64).collect();
+    let mut k = 1;
+    loop {
+        let key = |i: i64| (rank[i], if i + k < n { rank[i + k] } else { -1 });
+        order.sort_by_key(key);
+        let mut next = Vec.filled(n, 0);
+        for r in 1..n {
+            next[order[r]] = next[order[r - 1]] + if key(order[r]) == key(order[r - 1]) { 0 } else { 1 };
+        }
+        rank = next;
+        if n == 1 or rank[order[n - 1]] == n - 1 {
+            return order;
+        }
+        k *= 2;
+    }
+}
+
+// ---- binary search, set of windows (longest_dup_set.kara)
+
+fn set_arm(s: Str) -> String {
+    let mut low = 1;
+    let mut high = s.len() - 1;
+    let mut best = String.new();
+    while low <= high {
+        let len = (low + high) / 2;
+        match set_window(s, len) {
+            Some(window) => {
+                best = window;
+                low = len + 1;
+            }
+            None => high = len - 1,
+        }
+    }
+    best
+}
+
+// The smallest window of `len` bytes that occurs twice.
+fn set_window(s: Str, len: i64) -> Option[String] {
+    let mut seen: Set[String] = Set.new();
+    let mut found: Option[String] = None;
+    for start in 0..s.len() - len + 1 {
+        let window = s[start..start + len].to_string();
+        if seen.contains(window) {
+            let keep = match found {
+                Some(ref f) => window < f,
+                None => true,
+            };
+            if keep {
+                found = Some(window);
+            }
+        } else {
+            seen.insert(window);
+        }
+    }
+    found
+}
+
+// ---- every diagonal (longest_dup_diag.kara)
+
+fn diag_arm(s: Str) -> String {
+    let bytes = s.bytes();
+    let n = bytes.len();
+    let mut best_start = 0;
+    let mut best_len = 0;
+    for d in 1..n {
+        let mut run = 0;
+        for i in 0..n - d {
+            if bytes[i] != bytes[i + d] {
+                run = 0;
+                continue;
+            }
+            run += 1;
+            let start = i + 1 - run;
+            if run > best_len {
+                best_len = run;
+                best_start = start;
+            } else if run == best_len and diag_before(bytes, start, best_start, run) {
+                best_start = start;
+            }
+        }
+    }
+    s[best_start..best_start + best_len].to_string()
+}
+
+// Whether the `len` bytes at `a` come before the `len` bytes at `b`.
+fn diag_before(bytes: Slice[u8], a: i64, b: i64, len: i64) -> bool {
+    for k in 0..len {
+        if bytes[a + k] != bytes[b + k] {
+            return bytes[a + k] < bytes[b + k];
+        }
+    }
+    false
+}
+
+// ---- binary search, sorted windows (longest_dup_iter.kara)
+
+fn iter_arm(s: Str) -> String {
+    let mut low = 1;
+    let mut high = s.len() - 1;
+    let mut best = String.new();
+    while low <= high {
+        let len = (low + high) / 2;
+        let mut windows: Vec[Str] = (0..s.len() - len + 1).map(|i| s[i..i + len]).collect();
+        windows.sort();
+        match windows.windows(2).iter().find(|pair| pair[0] == pair[1]) {
+            Some(pair) => {
+                best = pair[0].to_string();
+                low = len + 1;
+            }
+            None => high = len - 1,
+        }
+    }
+    best
+}
+
+// ---- the statement read literally
+
+// Every length from the longest down: the windows of that length that
+// occur at two different starts, and the smallest of them. The first
+// length with one is the answer; none at all is "".
+fn every_window(s: Str) -> String {
+    let n = s.len();
+    let mut len = n - 1;
+    while len > 0 {
+        let mut found: Option[Str] = None;
+        for a in 0..n - len + 1 {
+            for b in a + 1..n - len + 1 {
+                if s[a..a + len] == s[b..b + len] {
+                    let w = s[a..a + len];
+                    found = match found {
+                        Some(f) if f <= w => Some(f),
+                        _ => Some(w),
+                    };
+                }
+            }
+        }
+        if let Some(f) = found {
+            return f.to_string();
+        }
+        len -= 1;
+    }
+    String.new()
+}
+
+// ---- the harness
+
+fn arm(a: i64, s: Str) -> String {
+    match a {
+        0 => hash_arm(s),
+        1 => suffix_arm(s),
+        2 => set_arm(s),
+        3 => diag_arm(s),
+        _ => iter_arm(s),
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_string(n: i64, k: i64, seed: mut ref i64) -> String {
+    let mut out = String.new();
+    for _ in 0..n {
+        out.push((b'a' + (next_random(mut seed) % k) as u8) as char);
+    }
+    out
+}
+
+// How many times `w` occurs in `s`, overlaps counted.
+fn occurrences(s: Str, w: Str) -> i64 {
+    let mut count = 0;
+    for a in 0..s.len() - w.len() + 1 {
+        if s[a..a + w.len()] == w {
+            count += 1;
+        }
+    }
+    count
+}
+
+// The smallest window of `len` bytes that occurs twice, if any.
+fn smallest_repeat(s: Str, len: i64) -> Option[String] {
+    let mut seen: Set[Str] = Set.new();
+    let mut found: Option[Str] = None;
+    for a in 0..s.len() - len + 1 {
+        let w = s[a..a + len];
+        if not seen.insert(w) {
+            found = match found {
+                Some(f) if f <= w => Some(f),
+                _ => Some(w),
+            };
+        }
+    }
+    found.map(|f| f.to_string())
+}
+
+struct Tally {
+    cases: i64,
+    literal: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    // failures by property, P1 to P6 at 1 to 6
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+// Every check on one string; `literal` says whether to read the
+// statement literally too.
+fn check_case(t: mut ref Tally, s: Str, literal: bool) {
+    let n = s.len();
+    let answers: Vec[String] = (0..5).map(|a| arm(a, s)).collect();
+    let want = if literal { Some(every_window(s)) } else { None };
+    let reversed: String = s.chars().rev().collect();
+    for a in 0..5 {
+        let answer = ref answers[a];
+        let len = answer.len();
+        let what = f"arm {a}, \"{s}\" -> \"{answer}\"";
+        if let Some(ref w) = want {
+            expect(mut t, 1, answer == w, f"P1 {what}, read literally \"{w}\"");
+        }
+        expect(mut t, 2, len == 0 or occurrences(s, answer) >= 2, f"P2 {what} does not repeat");
+        expect(mut t, 3, len == n - 1 or smallest_repeat(s, len + 1).is_none(), f"P3 {what}: a longer one repeats");
+        let smallest = if len == 0 { Some(String.new()) } else { smallest_repeat(s, len) };
+        expect(mut t, 4, smallest == Some(answer.clone()), f"P4 {what}: smallest of its length {smallest}");
+        expect(mut t, 5, arm(a, reversed).len() == len, f"P5 {what} reversed");
+        let mut agree = 0;
+        for o in 0..5 {
+            if o != a and answers[o] == answer {
+                agree += 1;
+            }
+        }
+        expect(mut t, 6, agree >= 2, f"P6 {what}: agrees with {agree}");
+    }
+    if literal {
+        t.literal += 1;
+    }
+    t.cases += 1;
+    t.check = (t.check * 131 + answers[0].len() + 1) % 1000000007;
+    for b in answers[0].bytes().iter() {
+        t.check = (t.check * 131 + b as i64) % 1000000007;
+    }
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, literal: 0, checks: 0, failures: 0, check: 0, by: Vec.filled(7, 0) };
+    // every string of 2 to 10 letters from "ab", and of 2 to 6 from "abc"
+    for (k, most) in [(2, 10), (3, 6)].iter() {
+        for n in 2..most + 1 {
+            let mut count = 1;
+            for _ in 0..n {
+                count *= k;
+            }
+            for code in 0..count {
+                let mut s = String.new();
+                let mut c = code;
+                for _ in 0..n {
+                    s.push((b'a' + (c % k) as u8) as char);
+                    c /= k;
+                }
+                check_case(mut t, s, true);
+            }
+        }
+    }
+    // 1000 random strings of 2 to 16 letters from 2 to 5, read literally,
+    // and 200 of 17 to 300 letters from 2 to 26
+    let mut seed = 10441;
+    for c in 0..1200 {
+        let n = if c < 1000 { next_random(mut seed) % 15 + 2 } else { next_random(mut seed) % 284 + 17 };
+        let k = if c < 1000 { next_random(mut seed) % 4 + 2 } else { next_random(mut seed) % 25 + 2 };
+        let s = random_string(n, k, mut seed);
+        check_case(mut t, s, c < 1000);
+    }
+    println(f"{t.cases} strings ({t.literal} read literally): checksum {t.check}, {t.checks} checks over 5 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

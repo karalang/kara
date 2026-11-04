@@ -1,0 +1,139 @@
+// LeetCode #1044: Longest Duplicate Substring -- bench. The binary
+// search with a rolling hash of ../longest_dup.kara.
+//
+// If some substring of length `len` occurs twice, so does its prefix of
+// length `len - 1`, so the lengths that repeat run from 0 up to the
+// answer's, and a binary search finds the longest. A length is checked by
+// sliding a polynomial hash along the string: each window's hash keys the
+// starts of the earlier windows with that hash, and a window whose bytes
+// equal one of them repeats it. Of the windows that repeat, the answer is
+// the smallest in dictionary order, so every arm returns the same one.
+// O(n log n) expected.
+
+const BASE: i64 = 131;
+const MODULUS: i64 = 1_000_000_007;
+
+fn longest_dup_substring(s: Str) -> String {
+    let bytes = s.bytes();
+    let mut low = 1;
+    let mut high = bytes.len() - 1;
+    let mut best_start = 0;
+    let mut best_len = 0;
+    while low <= high {
+        let len = (low + high) / 2;
+        match repeated_window(bytes, len) {
+            Some(start) => {
+                best_start = start;
+                best_len = len;
+                low = len + 1;
+            }
+            None => high = len - 1,
+        }
+    }
+    s[best_start..best_start + best_len].to_string()
+}
+
+// The start of the smallest window of `len` bytes that occurs twice.
+fn repeated_window(bytes: Slice[u8], len: i64) -> Option[i64] {
+    let n = bytes.len();
+    let mut lead = 1;
+    for _ in 1..len {
+        lead = lead * BASE % MODULUS;
+    }
+    let mut hash = 0;
+    for i in 0..len {
+        hash = (hash * BASE + bytes[i]) % MODULUS;
+    }
+    let mut seen: Map[i64, Vec[i64]] = Map.new();
+    let mut found: Option[i64] = None;
+    let mut start = 0;
+    loop {
+        let earlier = match seen.get(hash) {
+            Some(starts) => starts.iter().any(|j| same(bytes, j, start, len)),
+            None => false,
+        };
+        if earlier {
+            found = match found {
+                Some(f) if not smaller(bytes, start, f, len) => Some(f),
+                _ => Some(start),
+            };
+        } else {
+            seen.entry(hash).or_insert(Vec.new()).push(start);
+        }
+        if start + len == n {
+            break;
+        }
+        hash = (hash - bytes[start] * lead % MODULUS + MODULUS) % MODULUS;
+        hash = (hash * BASE + bytes[start + len]) % MODULUS;
+        start += 1;
+    }
+    found
+}
+
+fn same(bytes: Slice[u8], a: i64, b: i64, len: i64) -> bool {
+    for k in 0..len {
+        if bytes[a + k] != bytes[b + k] {
+            return false;
+        }
+    }
+    true
+}
+
+// Whether the window at `a` comes before the window at `b`.
+fn smaller(bytes: Slice[u8], a: i64, b: i64, len: i64) -> bool {
+    for k in 0..len {
+        if bytes[a + k] != bytes[b + k] {
+            return bytes[a + k] < bytes[b + k];
+        }
+    }
+    false
+}
+
+// ---- bench -------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let count = 12;
+    let n = 30000;
+    let rounds = 2;
+    let mut seed = 1044;
+    let mut strings: Vec[String] = Vec.new();
+    for c in 0..count {
+        // letters from the first 2, 4, 8 or 26; every other string has a
+        // block of n / 8 letters copied to a second place
+        let k = [2, 4, 8, 26][c % 4];
+        let mut letters: Vec[u8] = Vec.new();
+        for _ in 0..n {
+            letters.push(b'a' + (next_random(mut seed) % k) as u8);
+        }
+        if c % 2 == 1 {
+            let from = next_random(mut seed) % (n / 2);
+            let to = n / 2 + next_random(mut seed) % (n / 2 - n / 8);
+            for i in 0..n / 8 {
+                letters[to + i] = letters[from + i];
+            }
+        }
+        let mut s = String.new();
+        for b in letters.iter() {
+            s.push(b as char);
+        }
+        strings.push(s);
+    }
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..rounds {
+        for s in strings.iter() {
+            let answer = longest_dup_substring(s);
+            total += answer.len();
+            check = (check * 131 + answer.len() + 1) % 1000000007;
+            for b in answer.bytes().iter() {
+                check = (check * 131 + b) % 1000000007;
+            }
+        }
+    }
+    println(f"{count} strings of {n} letters, {rounds} rounds: total length {total}, checksum {check}");
+}

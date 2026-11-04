@@ -1,0 +1,15 @@
+"banana" -> "ana"
+"abcd" -> ""
+"aa" -> "a"
+"ab" -> ""
+"aaaaa" -> "aaaa"
+"abcabc" -> "abc"
+"mississippi" -> "issi"
+"abababab" -> "ababab"
+"zxyzxyxyz" -> "xyz"
+"theeuntheeuntheeun" -> "theeuntheeun"
+every string of 2 to 12 letters from 2: 8188 cases, total length 34540, checksum 764977666
+every string of 2 to 7 letters from 3: 3276 cases, total length 6609, checksum 838283007
+300 random strings: total length 1046, checksum 268513756
+5000 random letters -> "agzm"
+5000 letters of the Fibonacci word -> "abaababaabaa...aabaababaaba" (2582 letters)

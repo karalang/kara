@@ -69,7 +69,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from corpus_lib import (ROOT, Origin, entries, execute, matches_filter, read_toml, render_template,  # noqa: E402
-                        template_stdout, write_toml)
+                        run_program, template_stdout, write_toml)
 
 PASSING = {"a", "b", "c"}
 # expected.out that states the spec rather than a legacy record: a core pin,
@@ -247,6 +247,11 @@ def classify(entry: Path, corpus: Path, args, rev: str, sha: str) -> dict:
     # A `format!` template entry runs filled in, as `run.py` runs it, with its
     # files and its origin, and is judged on the same stdout.
     template = read_toml(entry / "template.toml") or None
+    # A package entry (`entry = "src/main.kara"` beside its `[files]`) is no
+    # single file: `check` and `__mir-run` take one, so it is judged on the
+    # lane that builds a package, as `run.py` runs it.
+    if template is not None and "entry" in template:
+        return classify_package(entry, args, meta, out, expect)
     origin = Origin(template["origin"]) if template and "origin" in template else None
     try:
         res = classify_in(entry, args, rev, meta, out, src, expect, env, driver, template, origin)
@@ -269,6 +274,27 @@ def classify(entry: Path, corpus: Path, args, rev: str, sha: str) -> dict:
     finally:
         if origin is not None:
             origin.stop()
+
+
+def classify_package(entry, args, meta, out, expect):
+    """A package entry on `mir-build`: a refusal where an error is expected,
+    else the spec's stdout and exit. No legacy record exists for a package
+    (the legacy compiler went at M3), so a match is an `e-spec` pass."""
+    env = {"KARAC_HASH_SEED": str(args.seed), **meta.get("env", {})}
+    r = run_program(entry, "mir-build", args.karac, args.timeout, env)
+    if expect.startswith("error"):
+        if r["status"] == "refused":
+            return {**out, "class": "a", "bucket": "a:refused"}
+        return {**out, "class": "e", "bucket": "e-not-refused:" + (expect.split(":", 1)[1] if ":" in expect else "any")}
+    if r["status"] == "timeout":
+        return {**out, "class": "e", "bucket": "timeout"}
+    if r["status"] == "refused":
+        return {**out, "class": "e", "bucket": "check-refuses:package"}
+    spec = (entry / "expected.out").read_bytes() \
+        if meta.get("expected_from") in SPEC_SOURCES and (entry / "expected.out").exists() else None
+    if spec is not None and r["stdout"] == spec and r["exit"] == int(meta.get("exit", 0)):
+        return {**out, "class": "e", "bucket": "e-spec", "expected": r["stdout"]}
+    return {**out, "class": "e", "bucket": "e-differs:" + ("exit" if r["stdout"] == spec else "stdout")}
 
 
 def classify_in(entry, args, rev, meta, out, src, expect, env, driver, template, origin):
