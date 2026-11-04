@@ -1,0 +1,20 @@
+struct Meters { v: i64 }
+type Distance = Meters;
+
+impl Distance {
+    fn doubled(self) -> i64 { self.v * 2 }
+}
+
+impl Meters {
+    fn plus(self, k: i64) -> i64 { self.v + k }
+}
+
+fn main() {
+    let d: Distance = Meters { v: 5 };
+    println(d.doubled());
+    println(Meters { v: 7 }.doubled());
+    println(d.plus(1));
+    println(Distance.doubled(d));
+    println(Meters.doubled(d));
+    println(Distance.plus(d, 3));
+}

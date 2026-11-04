@@ -4548,8 +4548,12 @@ impl<'a> super::TypeChecker<'a> {
         // declarations (design.md § Variance) — never on impl blocks.
         self.reject_user_variance_markers(&imp.generic_params, false);
 
+        // Through a non-generic alias to the type it names: `impl Wrap` on
+        // `type Wrap = W` is `W`'s, and its `self` a `W` (B-2026-11-04-50).
         let type_name = match &imp.target_type.kind {
-            TypeKind::Path(p) => p.segments.last().cloned().unwrap_or_default(),
+            TypeKind::Path(p) => {
+                self.unaliased_type_name(&p.segments.last().cloned().unwrap_or_default())
+            }
             _ => return,
         };
         // Slice 1b: `env_add_impl` already emitted

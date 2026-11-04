@@ -203,9 +203,13 @@ impl ProgramDefs {
             defs.module_imports[id] = Self::imports_of(&defs, tree, id);
         }
         defs.module_impls = vec![Vec::new(); n];
+        // Aliases first: an impl through an alias (`impl Wrap` for `type Wrap
+        // = W`) belongs to the aliased type (B-2026-11-04-50).
+        for (id, m) in tree.modules.iter().enumerate() {
+            defs.add_aliases(&m.items, |defs, name| defs.lookup(id, name));
+        }
         for (id, m) in tree.modules.iter().enumerate() {
             defs.module_impls[id] = defs.add_impls(&m.items, |defs, name| defs.lookup(id, name));
-            defs.add_aliases(&m.items, |defs, name| defs.lookup(id, name));
         }
         defs
     }
@@ -218,8 +222,8 @@ impl ProgramDefs {
         let items = defs.add_items(&[], &program.items);
         defs.module_items = vec![items];
         defs.module_imports = vec![HashMap::new()];
-        defs.module_impls = vec![defs.add_impls(&program.items, |defs, name| defs.lookup(0, name))];
         defs.add_aliases(&program.items, |defs, name| defs.lookup(0, name));
+        defs.module_impls = vec![defs.add_impls(&program.items, |defs, name| defs.lookup(0, name))];
         defs
     }
 
@@ -410,7 +414,11 @@ impl ProgramDefs {
                 TypeKind::Path(p) => p.segments.last().cloned(),
                 _ => None,
             };
-            let target = target_name.as_deref().and_then(|n| resolve(self, n));
+            // Through an alias to the type it names (B-2026-11-04-50).
+            let target = target_name
+                .as_deref()
+                .and_then(|n| resolve(self, n))
+                .map(|t| self.unalias(t));
             let target_path = match (target, &target_name) {
                 (Some(t), _) => self.table.get(t).path.segments.clone(),
                 (None, Some(n)) => vec!["<builtin>".to_string(), n.clone()],

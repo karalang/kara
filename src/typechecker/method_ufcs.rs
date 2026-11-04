@@ -36,8 +36,13 @@ impl<'a> super::TypeChecker<'a> {
         if self.local_scope.lookup(name).is_some() {
             return None;
         }
+        // `Wrap.get(w)` through `type Wrap = W` names `W` (B-2026-11-04-50).
+        let alias = name;
+        let canon = self.unaliased_type_name(name);
+        let name = canon.as_str();
         let is_type = self.env.structs.contains_key(name) || self.env.enums.contains_key(name);
-        let trait_name = (!is_type && self.env.traits.contains_key(name)).then(|| name.to_string());
+        let trait_name =
+            (!is_type && self.env.traits.contains_key(alias)).then(|| alias.to_string());
         let takes_self = match &trait_name {
             Some(t) => self.trait_method_takes_self(t, method)?,
             None if is_type => self.type_method_takes_self(name, method)?,
@@ -71,8 +76,9 @@ impl<'a> super::TypeChecker<'a> {
         self.env.ufcs_trait = trait_name.map(|t| (t, method.to_string()));
         let ret = self.infer_method_call(&recv.value, method, rest, span, args_close_span);
         self.env.ufcs_trait = saved;
+        // The name as written: `lowering` matches it against the callee.
         self.ufcs_calls
-            .insert(SpanKey::from_span(span), name.to_string());
+            .insert(SpanKey::from_span(span), alias.to_string());
         // `User.validate(x)` calls `User`'s method, so `x` is a `User`.
         if is_type && self.errors.len() == errors {
             let rt = self
@@ -104,6 +110,21 @@ impl<'a> super::TypeChecker<'a> {
         Some(ret)
     }
 
+    /// `name`, or the type a non-generic alias of it names (`type Wrap =
+    /// W`), followed through aliases of aliases.
+    pub(super) fn unaliased_type_name(&self, name: &str) -> String {
+        let mut cur = name.to_string();
+        for _ in 0..8 {
+            match self.env.type_aliases.get(&cur) {
+                Some(Type::Named { name: to, args }) if args.is_empty() && *to != cur => {
+                    cur = to.clone();
+                }
+                _ => break,
+            }
+        }
+        cur
+    }
+
     /// Whether `Trait.method` takes `self`, or `None` when the trait (or a
     /// supertrait) declares no such method.
     fn trait_method_takes_self(&self, trait_name: &str, method: &str) -> Option<bool> {
@@ -122,7 +143,12 @@ impl<'a> super::TypeChecker<'a> {
                 continue;
             };
             if imp.trait_name.is_some()
-                || path.segments.last().map(String::as_str) != Some(type_name)
+                || path
+                    .segments
+                    .last()
+                    .map(|n| self.unaliased_type_name(n))
+                    .as_deref()
+                    != Some(type_name)
             {
                 continue;
             }

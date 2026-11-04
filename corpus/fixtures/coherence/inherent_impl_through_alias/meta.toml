@@ -1,0 +1,11 @@
+source = "corpus/fixtures/coherence/inherent_impl_through_alias"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["coherence", "aliases"]
+class = "a"
+expected_from = "spec"
+rules = []
+backends = []
+env = {}
+note = "design.md § Type aliases: an alias is the type it names, so `impl Distance` through `type Distance = Meters` is an inherent impl of the program's own `Meters`, reached by method call and by UFCS through either name (B-2026-11-04-50: it failed in MIR)."

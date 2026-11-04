@@ -6,7 +6,9 @@
 //!   (B-2026-11-04-14: each was accepted, and a call listed two identical
 //!   UFCS candidates).
 //! - An inherent impl on a type the program does not declare is refused
-//!   (B-2026-11-04-15: `impl Vec[i64] { .. }` ran).
+//!   (B-2026-11-04-15: `impl Vec[i64] { .. }` ran). One on an alias of the
+//!   program's own struct is that struct's, by method call and by UFCS
+//!   through either name (B-2026-11-04-50: it failed in MIR).
 //! - A blanket impl of the program's trait over a bare parameter is found by
 //!   a method call and by UFCS on a type meeting its bounds
 //!   (B-2026-11-04-16: "no method 'twice' on type 'i64'").
@@ -136,6 +138,25 @@ fn impls_of_one_trait_on_distinct_headers_coexist() {
              let o: Out = A { n: 4 }.into();\n    let p: Out = C { n: 5 }.into();\n\
              println(o.n + p.n);\n}\n",
         "3\n54\n",
+    );
+}
+
+#[test]
+fn an_inherent_impl_through_an_alias_of_an_own_struct_is_the_structs() {
+    runs(
+        "alias-impl",
+        "struct W { n: i64 }\ntype Wrap = W;\n\
+         impl Wrap { fn get(self) -> i64 { self.n } }\n\
+         impl W { fn dbl(self) -> i64 { self.n * 2 } }\n\
+         fn main() {\n\
+             let w: Wrap = W { n: 4 };\n\
+             println(W { n: 4 }.get());\n\
+             println(w.dbl() + w.get());\n\
+             println(Wrap.get(w));\n\
+             println(W.get(w));\n\
+             println(Wrap.dbl(w));\n\
+         }\n",
+        "4\n12\n4\n4\n8\n",
     );
 }
 
