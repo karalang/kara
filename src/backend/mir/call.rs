@@ -167,6 +167,17 @@ impl<'ctx> Cx<'ctx, '_> {
             .value_sig(body)
             .ok_or("a by-value call to a body passed in memory")?;
         let mut vals: Vec<BasicMetadataValueEnum<'ctx>> = Vec::new();
+        // A result in memory is written to a slot of its own, as the
+        // pointer convention's (`call_body`), then copied to `dest`.
+        let out = match self.ret_in_memory(body) {
+            true => {
+                let dty = self.place_type(dest)?;
+                let slot = self.temp(dty, "ret")?;
+                vals.push(slot.into());
+                Some((slot, dty))
+            }
+            false => None,
+        };
         for (i, a) in args.iter().enumerate() {
             let Some(rt) = params.get(i).copied().flatten() else {
                 continue;
@@ -191,7 +202,10 @@ impl<'ctx> Cx<'ctx, '_> {
         }
         vals.extend_from_slice(extra);
         let r = self.call_function(name, v, &vals)?;
-        if ret.is_some() {
+        if let Some((slot, dty)) = out {
+            let d = self.place_ptr(dest)?;
+            self.copy(d, slot, dty)?;
+        } else if ret.is_some() {
             let x = r.try_as_basic_value().unwrap_basic();
             let dty = self.place_type(dest)?;
             let tmp = self.temp(dty, "ret")?;

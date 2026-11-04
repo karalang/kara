@@ -274,8 +274,16 @@ impl<'ctx> Cx<'ctx, '_> {
             [self.ptr_ty().into(), self.llcx.i64_type().into()];
         let ty = match self.value_sig(body) {
             Some((params, ret)) => {
-                let mut ps: Vec<BasicMetadataTypeEnum> =
-                    params.iter().flatten().map(|t| (*t).into()).collect();
+                let mut ps: Vec<BasicMetadataTypeEnum> = Vec::new();
+                if self.ret_in_memory(body) {
+                    ps.push(self.ptr_ty().into());
+                }
+                ps.extend(
+                    params
+                        .iter()
+                        .flatten()
+                        .map(|t| BasicMetadataTypeEnum::from(*t)),
+                );
                 ps.extend(place);
                 match ret {
                     Some(r) => r.fn_type(&ps, false),

@@ -137,6 +137,13 @@ pub fn noalias_flag() -> bool {
     std::env::var("KARAC_MIR_NOALIAS").as_deref() != Ok("0")
 }
 
+/// Whether a body whose result has no register class keeps its
+/// parameters in registers, taking a pointer to the result first
+/// (`Cx::ret_in_memory`); `KARAC_MIR_SRET_REGS=0` passes it all in memory.
+pub fn sret_flag() -> bool {
+    std::env::var("KARAC_MIR_SRET_REGS").as_deref() != Ok("0")
+}
+
 /// The LLVM IR of `program`, for `karac_jit_runner` to run: that binary
 /// links the runtime the compiled code calls, which `karac` itself does
 /// not.
@@ -510,6 +517,28 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
         f
     }
 
+    /// Whether the runtime function `name` keeps none of the pointers it
+    /// is passed past its return: it reads or writes through them and no
+    /// more. Each of these builds or grows the `String` or `Vec` header
+    /// its first pointer names, so `nocapture` lets a local vector's slot
+    /// stay out of reach of the stores through its own buffer: kata 343's
+    /// `best[i] = whole` reloaded the slot's length and buffer after every
+    /// store, and its bounds check stayed in the loop (B-2026-11-04-39).
+    fn keeps_no_pointer(name: &str) -> bool {
+        matches!(
+            name,
+            "karac_mir_vec_alloc"
+                | "karac_mir_vec_push"
+                | "karac_mir_vec_reserve"
+                | "karac_mir_string_from"
+                | "karac_mir_string_from_chars"
+                | "karac_mir_string_push_char"
+                | "karac_mir_string_push_str"
+                | "karac_mir_str_repeat"
+                | "karac_mir_str_from_utf8"
+        )
+    }
+
     /// The external function `name` of type `ty`, declared once (a
     /// runtime entry point).
     pub fn extern_fn(&self, name: &str, ty: FunctionType<'ctx>) -> FunctionValue<'ctx> {
@@ -521,6 +550,17 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
         self.module.get_function(name).unwrap_or_else(|| {
             let f = self.module.add_function(name, ty, Some(Linkage::External));
             self.bool_abi(f, true);
+            if Self::keeps_no_pointer(name) {
+                let k = Attribute::get_named_enum_kind_id("nocapture");
+                for (i, t) in ty.get_param_types().into_iter().enumerate() {
+                    if t.is_pointer_type() {
+                        f.add_attribute(
+                            AttributeLoc::Param(i as u32),
+                            self.llcx.create_enum_attribute(k, 0),
+                        );
+                    }
+                }
+            }
             // The runtime's `-> !` functions: a call to one is a path the
             // optimizer may treat as rare, so a check that aborts does not
             // weigh against inlining the function it is in.
@@ -605,6 +645,9 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
             let pair = [self.ptr_ty().into(), self.llcx.i64_type().into()];
             return Some(Some(self.llcx.struct_type(&pair, false).into()));
         }
+        if let Some(pair) = self.scalar_pair(t, l) {
+            return Some(Some(pair));
+        }
         let lt = self.llvm_ty(t).ok()?;
         if !lt.is_array_type() {
             return Some(Some(lt));
@@ -612,9 +655,67 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
         matches!(l.size, 1 | 2 | 4 | 8).then(|| Some(self.int_ty(l.size as u32 * 8).into()))
     }
 
-    /// The by-value signature of `body`, when every parameter and the
-    /// result have a register class: each parameter's register type
-    /// (`None` for one passed as nothing), then the result's.
+    /// The two-register type of a tuple or plain struct of `l` (at most
+    /// 16 bytes) whose parts other than empty ones are exactly two
+    /// scalars or one-word pointers: `{a, b}`, which LLVM lays out where
+    /// the C layout puts them, as Rust passes its scalar pairs. A function
+    /// returning `(i64, i64)` was passed in memory, every parameter too,
+    /// so a `ref Vec` parameter of kata 337's recursive `visit` went as a
+    /// pointer to a slot holding the reference (B-2026-11-04-39).
+    /// `KARAC_MIR_PAIR_REGS=0` leaves them in memory.
+    fn scalar_pair(&self, t: Ty, l: Layout) -> Option<BasicTypeEnum<'ctx>> {
+        if l.size > 16 || std::env::var("KARAC_MIR_PAIR_REGS").as_deref() == Ok("0") {
+            return None;
+        }
+        let parts: Vec<Ty> = match self.tys.kind(t) {
+            TyKind::Tuple(ts) => ts.to_vec(),
+            TyKind::Adt(_) => {
+                if layout::library_cell(self.tys, t).is_some()
+                    || layout::null_niche(self.tys, t).is_some()
+                {
+                    return None;
+                }
+                let (adt, _) = self.tys.tcx().adt_of(t)?;
+                if adt.is_enum {
+                    return None;
+                }
+                let n = adt.variants.first()?.fields.len() as u32;
+                (0..n)
+                    .map(|f| {
+                        (!layout::boxed_field(self.tys, t, None, f))
+                            .then(|| self.tys.field_ty(t, None, f))
+                            .flatten()
+                    })
+                    .collect::<Option<Vec<_>>>()?
+            }
+            _ => return None,
+        };
+        let mut regs: Vec<(u64, BasicTypeEnum<'ctx>, Layout)> = Vec::new();
+        for (i, p) in parts.iter().enumerate() {
+            let pl = self.layout(*p).ok()?;
+            if pl.size == 0 {
+                continue;
+            }
+            let lt = self.llvm_ty(*p).ok()?;
+            if lt.is_array_type() {
+                return None;
+            }
+            regs.push((layout::field_offset(self.tys, t, None, i as u32)?, lt, pl));
+        }
+        let [(o0, t0, l0), (o1, t1, l1)] = regs[..] else {
+            return None;
+        };
+        let at = |v: u64, a: u64| v.div_ceil(a) * a;
+        let whole = at(o1 + l1.size, l0.align.max(l1.align));
+        (o0 == 0 && o1 == at(l0.size, l1.align) && whole == l.size)
+            .then(|| self.llcx.struct_type(&[t0, t1], false).into())
+    }
+
+    /// The by-value signature of `body`, when every parameter has a
+    /// register class: each parameter's register type (`None` for one
+    /// passed as nothing), then the result's. A result with no register
+    /// class is `None` here too, and is written through a pointer the
+    /// function takes first ([`Self::ret_in_memory`]).
     /// `KARAC_MIR_BYVALUE=0` passes everything in memory.
     #[allow(clippy::type_complexity)]
     pub(super) fn value_sig(
@@ -627,11 +728,25 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
         if body.arg_count > 8 || std::env::var("KARAC_MIR_BYVALUE").as_deref() == Ok("0") {
             return None;
         }
-        let ret = self.reg_class(body.locals[0].ty)?;
+        let ret = match self.reg_class(body.locals[0].ty) {
+            Some(r) => r,
+            None if sret_flag() => None,
+            None => return None,
+        };
         let params = (1..=body.arg_count)
             .map(|i| self.reg_class(body.locals[i].ty))
             .collect::<Option<Vec<_>>>()?;
         Some((params, ret))
+    }
+
+    /// Whether the by-value function of `body` takes a pointer to its
+    /// result first, as Rust passes a result too large for registers: the
+    /// parameters stay in registers. A result passed in memory used to put
+    /// every parameter there too, so kata 333's recursive `visit`, which
+    /// returns a four-field struct, took each `ref Vec` and `mut ref i64`
+    /// as a pointer to a slot holding the reference (B-2026-11-04-39).
+    pub(super) fn ret_in_memory(&self, body: &Body) -> bool {
+        self.reg_class(body.locals[0].ty).is_none()
     }
 
     /// The by-value function of the body `name`, declared now (and the
@@ -648,7 +763,16 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
         let Some((params, ret)) = self.value_sig(body) else {
             return Ok(None);
         };
-        let ps: Vec<BasicMetadataTypeEnum> = params.iter().flatten().map(|t| (*t).into()).collect();
+        let mut ps: Vec<BasicMetadataTypeEnum> = Vec::new();
+        if self.ret_in_memory(body) {
+            ps.push(self.ptr_ty().into());
+        }
+        ps.extend(
+            params
+                .iter()
+                .flatten()
+                .map(|t| BasicMetadataTypeEnum::from(*t)),
+        );
         let ty = match ret {
             Some(r) => r.fn_type(&ps, false),
             None => self.llcx.void_type().fn_type(&ps, false),
@@ -656,6 +780,14 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
         let f = self
             .module
             .add_function(&fn_symbol(name), ty, Some(Linkage::Internal));
+        // Every call passes a result slot of its own (`call_by_value`).
+        if self.ret_in_memory(body) && noalias_flag() {
+            let k = Attribute::get_named_enum_kind_id("noalias");
+            f.add_attribute(
+                AttributeLoc::Param(0),
+                self.llcx.create_enum_attribute(k, 0),
+            );
+        }
         self.vfns.insert(name.to_string(), f);
         if self.located(name) {
             self.site_todo.push((name.to_string(), true));
@@ -704,6 +836,10 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
         self.builder.position_at_end(entry);
         self.builder.unset_current_debug_location();
         let mut args: Vec<inkwell::values::BasicMetadataValueEnum> = Vec::new();
+        if self.ret_in_memory(body) {
+            let out = f.get_nth_param(0).ok_or("the result slot is missing")?;
+            args.push(out.into());
+        }
         for (i, t) in params.iter().enumerate() {
             if let Some(t) = t {
                 let p = f
@@ -1228,11 +1364,23 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
         // A by-value body's parameters, in order, skipping those passed as
         // nothing.
         let mut incoming = f.get_param_iter();
+        // A by-value body whose result is in memory takes its slot first.
+        let out = match sig.is_some() && self.ret_in_memory(body) {
+            true => Some(
+                incoming
+                    .next()
+                    .ok_or("the result slot is missing")?
+                    .into_pointer_value(),
+            ),
+            false => None,
+        };
         for (i, decl) in body.locals.iter().enumerate() {
             let slot = if i <= body.arg_count && sig.is_none() {
                 f.get_nth_param(i as u32)
                     .ok_or("a parameter is missing")?
                     .into_pointer_value()
+            } else if let (0, Some(out)) = (i, out) {
+                out
             } else {
                 let l = self.layout(decl.ty)?;
                 let a = self

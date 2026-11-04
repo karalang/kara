@@ -105,6 +105,12 @@ ROWS = [
     ("B-2026-11-04-31", "301-400/332-reconstruct-itinerary", "reconstruct_itinerary.kara", "pair", "size", "fixed 5984ed3080"),
     ("B-2026-11-04-31", "301-400/394-decode-string", "decode_string.kara", "pair", "size", "fixed 5984ed3080"),
     ("B-2026-11-04-38", "3601-3700/3629-minimum-jumps-to-reach-end-via-prime-teleportation", "bfs_sieve.kara", "pair", "rss", "fixed d273d89f37"),
+    ("B-2026-11-04-39", "301-400/337-house-robber-iii", "house_robber_iii.kara", "pair", "instructions", "x86 1.32x -> 1.04x"),
+    ("B-2026-11-04-39", "301-400/333-largest-bst-subtree", "largest_bst.kara", "pair", "instructions", "x86 1.12x -> 1.05x"),
+    ("B-2026-11-04-39", "301-400/343-integer-break", "integer_break.kara", "pair", "instructions", "x86 1.14x -> 1.08x"),
+    ("B-2026-11-04-39", "301-400/338-counting-bits", "counting_bits.kara", "pair", "instructions", "x86 1.15x -> 1.10x; ..= to B"),
+    ("B-2026-11-04-39", "301-400/321-create-maximum-number", "create_max_number.kara", "pair", "instructions", "x86 1.12x, not fixed"),
+    ("B-2026-11-04-39", "301-400/339-nested-list-weight-sum", "nested_weight_sum.kara", "pair", "instructions", "x86 1.09x, not fixed"),
 ]
 
 def log(*a):
