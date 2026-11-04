@@ -124,6 +124,11 @@ pub struct ExternSig {
     /// A `host fn`: the wasm module's host provides it, as an import of
     /// the `kara_host` module (design.md § Host Functions).
     pub host: bool,
+    /// The effects its declaration gives it (design.md § Effects: an
+    /// `extern` function has the effects it declares, none if it is
+    /// `pure`): `None` when it declares none, or a clause the effect pass
+    /// cannot read, which leaves it every effect (B-2026-11-04-42).
+    pub effects: Option<Vec<DeclaredEffect>>,
 }
 
 /// How a derived `Display` departs from the default.

@@ -1,0 +1,21 @@
+// design.md § Effects: an `extern` function has the effects it declares,
+// none if it is `pure` (core-semantics §12 item 2), so two `par` branches
+// that call a pure one do not conflict.
+
+/// # Safety
+/// `labs` is the C library's absolute value: it reads only its argument.
+unsafe extern "C" {
+    pure fn labs(n: i64) -> i64;
+}
+
+fn magnitude(n: i64) -> i64 {
+    // Safety: `labs` takes and returns a plain integer.
+    unsafe {
+        labs(n)
+    }
+}
+
+fn main() {
+    let (a, b) = par { magnitude(-3), magnitude(-4) };
+    println(f"{a} {b}");
+}

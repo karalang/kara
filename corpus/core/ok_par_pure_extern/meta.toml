@@ -1,0 +1,10 @@
+source = "B-2026-11-04-42"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["par", "effects", "ffi"]
+expected_from = "spec"
+rules = ["12"]
+backends = []
+env = {}
+note = "B-2026-11-04-42: a `pure` extern has no effects (design.md § Effects), so two par branches calling it run together; the MIR pass used to give every extern call every effect."

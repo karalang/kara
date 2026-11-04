@@ -7,8 +7,9 @@
 //!
 //! 1. **Unknown callees have every effect.** A `Call` whose function is not
 //!    a `FnDef` constant, a `FnDef` with no body and no native entry (an
-//!    `extern` fn, which MIR has no effect clause for yet), and a library
-//!    native missing from [`native_effects`] all give [`EffectSet::unknown`].
+//!    `extern` fn with no effect clause; one with a clause has what it
+//!    declares, none if it is `pure`), and a library native missing from
+//!    [`native_effects`] all give [`EffectSet::unknown`].
 //!    The exception is a call through a function-typed *parameter* (core
 //!    §12): the body records [`EffectSet::calls`] for it, and each caller
 //!    substitutes the effects of the function it passes, the way keys are
@@ -2605,7 +2606,19 @@ impl<'p> Analysis<'p> {
                     }
                 }
             }
-            None if native => eff.union(EffectSet::unknown(format!("native {}", inst.name))),
+            // An `extern` function has the effects it declares, none if it
+            // is `pure`, and every effect if it declares none (core §12
+            // item 2, B-2026-11-04-42).
+            None if native => match self
+                .program
+                .externs
+                .get(&inst.name)
+                .and_then(|x| x.effects.as_deref())
+                .and_then(clause_set)
+            {
+                Some(declared) => eff.union(declared),
+                None => eff.union(EffectSet::unknown(format!("native {}", inst.name))),
+            },
             None => eff.union(EffectSet::unknown(format!("no body for {}", inst.name))),
         }
     }
@@ -3339,9 +3352,18 @@ fn declared_fn_value_effects(body: &Body, p: &Place) -> Option<EffectSet> {
         return None;
     }
     let (_, declared) = body.fn_value_effects.iter().find(|(l, _)| *l == p.local)?;
-    let mut out = EffectSet::default();
+    let mut out = clause_set(declared)?;
     out.add(Effect::new(Verb::Panics, "", Key::Any));
     out.add(Effect::new(Verb::Allocates, "Heap", Key::Any));
+    Some(out)
+}
+
+/// The effects a written clause declares, `None` when one of its verbs is
+/// not a plain one. A declared resource is a class with no value to key
+/// it, so it overlaps every value of the class, `Network` and
+/// `FileSystem` being capabilities (core §12 item 5).
+fn clause_set(declared: &[DeclaredEffect]) -> Option<EffectSet> {
+    let mut out = EffectSet::default();
     for d in declared {
         let verb = match d.verb.as_str() {
             "reads" => Verb::Reads,

@@ -17208,6 +17208,11 @@ impl<'l, 'a> Bx<'l, 'a> {
                 params,
                 ret,
                 host: decl.abi == "host",
+                effects: if decl.is_pure {
+                    Some(Vec::new())
+                } else {
+                    decl.effects.as_ref().and_then(declared_effect_list)
+                },
             },
         );
         self.call_native(&decl.name, ops, dest);
