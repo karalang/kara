@@ -1565,7 +1565,7 @@ A distinct type does not inherit `Copy` from its base either ([core-semantics.md
 
 **Conversion:**
 - Wrap with the constructor: `UserId(42)`.
-- Unwrap with `uid.raw()`, which returns the base type.
+- Unwrap with `uid.raw()`, which returns the base type. On an owned value it gives up the base; on a borrowed one it copies a `Copy` base and otherwise returns `ref Base`, so `fn f(self) -> Vec[i64] { self.raw() }` (a borrowed `self` over a `Vec` base) is a type error that `.raw().clone()` or `own self` fixes (B-2026-11-04-48).
 
 **Generics.** `fn find[T: Eq](items: Slice[T], target: T) -> Option[i64]` works on a `Vec[UserId]` when `UserId` derives `Eq`.
 
