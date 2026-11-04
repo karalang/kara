@@ -2427,6 +2427,7 @@ impl super::Parser {
             let start = self.current_span();
             let attributes = self.parse_attributes();
             let is_pub = self.eat(&Token::Pub);
+            let is_private = !is_pub && self.eat(&Token::Private);
             let mut_keyword_span = if self.check(&Token::Mut) {
                 let s = self.current_span();
                 self.advance();
@@ -2452,6 +2453,7 @@ impl super::Parser {
                 attributes,
                 doc_comment,
                 is_pub,
+                is_private,
                 is_mut,
                 mut_keyword_span,
                 name,

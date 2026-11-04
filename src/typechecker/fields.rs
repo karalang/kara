@@ -583,14 +583,67 @@ impl<'a> super::TypeChecker<'a> {
             // sibling code.
             return;
         }
-        self.type_error(
+        let canonical = self
+            .type_origins
+            .get(struct_name)
+            .map_or(struct_name, |(_, name, _)| name.as_str())
+            .to_string();
+        let private = tree
+            .graph
+            .by_path
+            .get::<[String]>(&origin_path)
+            .and_then(|&id| find_struct_def(tree.module(id), &canonical))
+            .and_then(|sd| sd.fields.iter().find(|f| f.name == field))
+            .is_some_and(|f| f.is_private);
+        if let Some(message) = self.field_visibility_refusal(
+            tree,
+            &origin_path,
+            current_id,
+            private,
+            field,
+            struct_name,
+        ) {
+            self.type_error(message, *span, TypeErrorKind::PrivateTypeInPublicSignature);
+        }
+    }
+
+    /// design.md §5: a field takes the three levels of §4 Visibility. With no
+    /// keyword it is visible in its package, with `private` in its directory
+    /// (B-2026-11-04-22; it was refused outside its defining module). The
+    /// refusal's message, or `None` when `current` may read it.
+    fn field_visibility_refusal(
+        &self,
+        tree: &crate::module::ProgramTree,
+        origin_path: &[String],
+        current: crate::module::ModuleId,
+        private: bool,
+        field: &str,
+        struct_name: &str,
+    ) -> Option<String> {
+        let current_path = &tree.module(current).path;
+        let dir = |p: &[String]| p[..p.len().saturating_sub(1)].to_vec();
+        if private {
+            return (dir(origin_path) != dir(current_path)).then(|| {
+                format!(
+                    "field '{field}' of struct '{struct_name}' is `private`: visible only to \
+                     files in the same directory as module `{}`",
+                    origin_path.join(".")
+                )
+            });
+        }
+        let package = |id: crate::module::ModuleId| tree.module(id).package.clone();
+        let origin_pkg = tree
+            .graph
+            .by_path
+            .get::<[String]>(origin_path)
+            .and_then(|&id| package(id));
+        (origin_pkg != package(current)).then(|| {
             format!(
-                "private field '{}' of struct '{}' is not visible outside its defining module",
-                field, struct_name,
-            ),
-            *span,
-            TypeErrorKind::PrivateTypeInPublicSignature,
-        );
+                "field '{field}' of struct '{struct_name}' is not `pub`: only `pub` fields are \
+                 visible outside package `{}`",
+                origin_pkg.as_deref().unwrap_or("<root package>")
+            )
+        })
     }
 
     /// The module of the package that defines struct `name`, for a struct the
@@ -667,14 +720,19 @@ impl<'a> super::TypeChecker<'a> {
             // `origin_path` is guaranteed to differ from `current_module`'s
             // path: `type_origins` only holds cross-module entries, and
             // `unimported_struct_origin` answers only for another module.
-            self.type_error(
-                format!(
-                    "private field '{}' of struct '{}' is not visible outside its defining module",
-                    field, struct_name,
-                ),
-                *span,
-                TypeErrorKind::PrivateTypeInPublicSignature,
-            );
+            let private = field_def.is_private;
+            if let Some(message) = self.current_module.and_then(|current| {
+                self.field_visibility_refusal(
+                    tree,
+                    &origin_path,
+                    current,
+                    private,
+                    field,
+                    struct_name,
+                )
+            }) {
+                self.type_error(message, *span, TypeErrorKind::PrivateTypeInPublicSignature);
+            }
         }
 
         // Return the field's declared type. We lower the TypeExpr with an

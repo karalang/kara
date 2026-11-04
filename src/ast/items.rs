@@ -534,6 +534,9 @@ pub struct StructField {
     /// item-level `doc_comment` fields.
     pub doc_comment: Option<String>,
     pub is_pub: bool,
+    /// `private field: T`: visible only in its directory (design.md §5,
+    /// the three levels of §4 Visibility). No keyword is package-visible.
+    pub is_private: bool,
     pub is_mut: bool,
     /// Span of the `mut` keyword token, when present (Some iff
     /// `is_mut`). Powers the `E_CONCURRENT_*_STRUCT` fix_diff's

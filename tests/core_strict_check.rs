@@ -14300,26 +14300,29 @@ fn a_library_index_argument_drops_an_as_usize() {
 #[test]
 fn a_private_field_is_refused_through_an_imported_call() {
     // B-2026-10-26-1: a struct reached only through an imported function's
-    // result keeps its fields private: `mk().secret` and `let p = mk();
+    // result keeps its fields' visibility: `mk().secret` and `let p = mk();
     // p.secret` are refused as the read through an imported `P` is, while
-    // a `pub` field and the defining module's own read pass.
+    // a `pub` field and the defining module's own read pass. The field is
+    // `private` and its module in another directory, since a field with no
+    // keyword is visible in its whole package (design.md §5,
+    // B-2026-11-04-22).
     let (dir, _) = fixture("private-field-through-a-call", "");
     std::fs::write(
         dir.join("kara.toml"),
         "[package]\nname = \"pf\"\nversion = \"0.1.0\"\n",
     )
     .unwrap();
-    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::create_dir_all(dir.join("src/db")).unwrap();
     std::fs::write(
-        dir.join("src/ast.kara"),
-        "pub struct P {\n    secret: i64,\n    pub open: i64,\n}\npub fn mk() -> P {\n    \
+        dir.join("src/db/ast.kara"),
+        "pub struct P {\n    private secret: i64,\n    pub open: i64,\n}\npub fn mk() -> P {\n    \
          P { secret: 1, open: 2 }\n}\npub fn peek(p: P) -> i64 {\n    p.secret\n}\n",
     )
     .unwrap();
     let check_with = |body: &str| {
         std::fs::write(
             dir.join("src/main.kara"),
-            format!("import ast.{{mk, peek}};\nfn main() {{\n{body}}}\n"),
+            format!("import db.ast.{{mk, peek}};\nfn main() {{\n{body}}}\n"),
         )
         .unwrap();
         let out = karac().arg("check").current_dir(&dir).output().unwrap();
@@ -14341,9 +14344,7 @@ fn a_private_field_is_refused_through_an_imported_call() {
         let (ok, out) = check_with(body);
         assert!(!ok, "{body}: must be refused: {out}");
         assert!(
-            out.contains(
-                "private field 'secret' of struct 'P' is not visible outside its defining module"
-            ),
+            out.contains("field 'secret' of struct 'P' is `private`: visible only to files in the same directory as module `db.ast`"),
             "{body}: {out}"
         );
     }

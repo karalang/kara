@@ -81,6 +81,11 @@ accepted by 0.8.0 are now refused, each with a fix-it.
   `m` (B-2026-11-04-11). A program's associated function named `name` (or
   any other reflection method) is no longer run as reflection
   (B-2026-11-04-10).
+- Struct fields follow the three visibility levels of design.md §5: a field
+  with no keyword is visible in its whole package, `private` limits it to
+  files in its directory, and `pub` exports it. 0.8.0 refused an unmarked
+  field outside its own file and did not parse `private` on a field
+  (B-2026-11-04-22).
 
 ### Diagnostics
 
