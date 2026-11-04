@@ -26887,11 +26887,23 @@ fn result_borrows(
         return crate::mir::ResultBorrows::ReceiverPointeeValue;
     }
     // A native that moves a value out of its receiver returns what that
-    // value borrowed, not a borrow of the receiver.
+    // value borrowed, not a borrow of the receiver: a channel's `recv`
+    // too, whose `ReceiverIter[Fn(..)].next` read as returning a borrow
+    // of the receiver (B-2026-11-04-4).
     let moves_out = !names.contains(i.name.as_str())
         && matches!(
             i.name.rsplit('.').next(),
-            Some("take" | "replace" | "pop" | "pop_front" | "pop_back" | "remove" | "swap_remove")
+            Some(
+                "take"
+                    | "replace"
+                    | "pop"
+                    | "pop_front"
+                    | "pop_back"
+                    | "remove"
+                    | "swap_remove"
+                    | "recv"
+                    | "try_recv"
+            )
         );
     // An element read out of a sequence of shared references
     // (`Vec[ref Node].index`) is one of those references, so it borrows
