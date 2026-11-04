@@ -121,7 +121,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-04-31 | 2026-11-04 | mir-llvm | low | Seq binaries of katas 297, 315, 330, 331, 332, 336 and 394 are still 319-336 KB on gd33cb285d and gf0017054a, after ad984ef96b took katas 38, 282 and 306 down to 67-83 KB | — |
 | B-2026-11-04-32 | 2026-11-04 | mir-llvm | low | Kata 297's peak RSS is 1.35x Rust's (233-235 MiB vs 173 MiB) on the MIR backend, where the 2026-08-28 feed read 179.9 vs 174.3 MiB | — |
 | B-2026-11-04-33 | 2026-11-04 | mir-llvm | low | Six more katas sit at 1.03-1.20x legacy's cycles or instructions on the MIR backend, each too small to file alone, and kata 895's par lane slipped to 2.31x rayon: the third borderline batch after B-2026-11-01-45 | — |
-| B-2026-11-04-36 | 2026-11-04 | cli | low | `karac fmt` rewrites a script-mode file into an explicit `fn main()`, its top-level statements moved after every item; since B-2026-11-04-19 it also writes the implicit main's `-> Result[(), AnyError]` and `Ok(())`, so formatting a script changes its shape (design.md § Script mode) | — |
 | B-2026-11-04-40 | 2026-11-04 | mir | medium | A trait's default method body calling `self.m()` is refused as ambiguous ("ambiguous method 'm' on receiver of type 'S'") in the copy for a type that also implements another trait with a method `m`; inside trait `A`'s default, `self.m()` is `A.m` | — |
 | B-2026-11-04-41 | 2026-11-04 | mir-llvm | medium | Kata 344's in-place reverse of a Slice[char] runs 4.9x the instructions of rustc -O and clang -O3 (4.017G vs 0.82G) and 2.47x their wall time, the same on legacy, so it is not a MIR regression | — |
 | B-2026-11-04-37 | 2026-11-04 | mir-llvm | low | Kata 342 runs 1.20x legacy's instructions and 1.39x its cycles on the MIR backend, the largest cycle ratio in its batch | — |
@@ -648,6 +647,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-04-23 | cli | low | `karac run` in a package whose src/ has both main.kara and lib.kara runs main.kara and exits 0, while `karac check` and `karac build` refuse it ("a K… | ab80e422aa |
 | B-2026-11-04-34 | ownership | medium | A closure or task made in each arm of an `if`, each moving the same value in, is refused as "moved into a closure, used again here" (or "moved into a… | f575bce6f0 |
 | B-2026-11-04-35 | ownership | medium | `match p.c { C.At(s) => . | f575bce6f0 |
+| B-2026-11-04-36 | cli | low | `karac fmt` rewrites a script-mode file into an explicit `fn main()`, its top-level statements moved after every item; since B-2026-11-04-19 it also… | e5ccf4fc0c |
 
 </details>
 
