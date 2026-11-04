@@ -566,9 +566,43 @@ fn lower_program_inner<'a>(
             Some(main) => {
                 lcx.instance(main, Vec::new());
             }
+            // A check needs no `main`: a library has none.
+            None if signatures_only_from.is_some() => {}
             None => lcx.errors.push("no `main` function".into()),
         },
     }
+    // A check builds every function of the program's own that it can build
+    // on its own, not only what `main` reaches, so that a move or borrow
+    // error in one nothing calls yet (a library's `pub fn`) is reported
+    // where it is written rather than at its first caller's build
+    // (B-2026-11-04-56). A function with type parameters of its own or of
+    // its impl is built only where a call gives them. They are built after
+    // everything `main` reaches, and what they alone fail to lower is left
+    // to a build that reaches them: a check refuses what is wrong, not what
+    // the builder does not lower yet.
+    let mut later_roots: Option<Vec<DefId>> = None;
+    if let (Some(from), None) = (signatures_only_from, roots) {
+        let mut own: Vec<DefId> = lcx
+            .fns
+            .iter()
+            .filter(|(_, i)| {
+                i.f.span.offset < from
+                    && !i.f.stdlib_origin
+                    && !i.f.is_comptime
+                    && i.impl_dyn.is_none()
+                    && i.impl_params == 0
+                    && !i.impl_slice
+                    && i.f
+                        .generic_params
+                        .as_ref()
+                        .is_none_or(|g| g.params.is_empty())
+            })
+            .map(|(d, _)| *d)
+            .collect();
+        own.sort();
+        later_roots = Some(own);
+    }
+    let mut later_errors_from = None;
     // The `#[panic_handler]` thunk is a root too: nothing calls it but the
     // backends, when a panic ends the process.
     if let Some(thunk) = defs.lookup(0, PANIC_THUNK) {
@@ -631,8 +665,17 @@ fn lower_program_inner<'a>(
         } else if let Some((t, h, name)) = lcx.hash_queue.pop() {
             lcx.lower_derived_hash(t, h, &name);
         } else if !lcx.note_table_hashes() {
-            break;
+            let Some(roots) = later_roots.take() else {
+                break;
+            };
+            later_errors_from = Some(lcx.errors.len());
+            for d in roots {
+                lcx.instance(d, Vec::new());
+            }
         }
+    }
+    if let Some(n) = later_errors_from {
+        lcx.errors.truncate(n);
     }
     let pointee_views: FxHashSet<String> = views
         .iter()

@@ -21,6 +21,11 @@ accepted by 0.8.0 are now refused, each with a fix-it.
 
 ### Programs 0.8.0 accepted that are now refused
 
+- **`karac check` borrow-checks functions nothing calls yet, and libraries.**
+  The MIR move and borrow checks ran only on what `main` reaches, so a
+  library's `pub fn bad() -> Str { let s = ..; s.as_str() }` checked clean
+  and was refused at its first caller's build. Every non-generic function of
+  the program is now checked, with or without a `main` (B-2026-11-04-56).
 - **A function or `dyn` value that crosses a task must say so.** An erased
   `Fn` / `MutFn` / `OnceFn` type, or a `dyn T`, is `CrossTask` only when
   written `Fn(A) -> R + CrossTask` / `dyn T + CrossTask`, and an unmarked one
