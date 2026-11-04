@@ -355,6 +355,9 @@ impl<'a> super::TypeChecker<'a> {
                     self.check_struct_variance(s);
                     self.check_struct_invariants(s, &gp);
                     self.check_repr_transparent_struct(s, &gp);
+                    if !s.stdlib_origin {
+                        self.check_weak_field_targets(&s.fields, &gp);
+                    }
                     if s.is_par {
                         self.check_par_field_constraints("struct", &s.name, &s.fields);
                         let fields: Vec<_> =
@@ -370,6 +373,13 @@ impl<'a> super::TypeChecker<'a> {
                     self.check_repr_transparent_enum(e);
                     self.check_enum_discriminants(e);
                     self.record_enum_discriminant_surface(e);
+                    if !e.stdlib_origin {
+                        for v in &e.variants {
+                            if let VariantKind::Struct(fields) = &v.kind {
+                                self.check_weak_field_targets(fields, &gp);
+                            }
+                        }
+                    }
                     if e.is_par {
                         let gp = Self::generic_param_names(&e.generic_params);
                         for v in &e.variants {
@@ -3613,6 +3623,58 @@ impl<'a> super::TypeChecker<'a> {
     /// `par`-type field) to reject a disallowed type wherever it is nested.
     /// Operates on the surface `TypeExpr` (pre-lowering), matching the
     /// last-segment convention of `is_concurrent_field_type`.
+    /// design.md § Cycles and `weak`: `weak` is a back-edge between counted
+    /// handles, so the type it points at must be a `shared` or `sync` type.
+    /// On a plain value it has no count to skip and was accepted, then
+    /// failed at its first use with unrelated borrow errors
+    /// (B-2026-11-04-72). A type parameter is left to its instantiation.
+    fn check_weak_field_targets(&mut self, fields: &[StructField], generic_params: &[String]) {
+        for f in fields {
+            let mut bad: Vec<(String, Span)> = Vec::new();
+            crate::span_visitor::for_each_type_expr(&f.ty, &mut |x| {
+                let TypeKind::Weak(inner) = &x.kind else {
+                    return;
+                };
+                let TypeKind::Path(p) = &inner.kind else {
+                    return;
+                };
+                let Some(name) = p.segments.last() else {
+                    return;
+                };
+                if p.segments.len() == 1 && generic_params.contains(name) {
+                    return;
+                }
+                let counted = self
+                    .env
+                    .structs
+                    .get(name.as_str())
+                    .map(|i| i.is_shared || i.is_par)
+                    .or_else(|| {
+                        self.env
+                            .enums
+                            .get(name.as_str())
+                            .map(|i| i.is_shared || i.is_par)
+                    });
+                if counted == Some(false) {
+                    bad.push((name.clone(), x.span));
+                }
+            });
+            for (name, span) in bad {
+                self.type_error(
+                    format!(
+                        "field `{field}` is `weak {name}`, but `{name}` is not a `shared` or \
+                         `sync` type: `weak` is a back-edge between counted handles (design.md \
+                         § Cycles and `weak`), and a plain value has no count to skip. Drop \
+                         `weak`, or declare `{name}` as a `shared` type",
+                        field = f.name,
+                    ),
+                    span,
+                    TypeErrorKind::TypeMismatch,
+                );
+            }
+        }
+    }
+
     fn type_expr_mentions_type(ty: &TypeExpr, target: &str) -> bool {
         match &ty.kind {
             TypeKind::Path(p) => {
@@ -4473,13 +4535,19 @@ impl<'a> super::TypeChecker<'a> {
     /// v2 core §4.3: a `shared` type's methods take a borrowed `self` only.
     /// A handle is never consumed by a call, and its `mut` fields are written
     /// through any handle (§6.2), so `own self` and `mut ref self` have
-    /// nothing to say. A trait impl keeps the trait's modes (§4.7).
+    /// nothing to say. A trait impl keeps the trait's modes (§4.7). A `sync`
+    /// type's methods take a borrowed `self` "for the same reason" (design.md
+    /// § `sync struct`, B-2026-11-04-72); its `mut ref self` has its own
+    /// error (`ParMutSelfReceiver`), so only `own self` is reported here.
     fn check_core_shared_receivers(&mut self, imp: &ImplBlock, type_name: &str) {
         let shared = self.env.structs.get(type_name).is_some_and(|s| s.is_shared)
             || self.env.enums.get(type_name).is_some_and(|e| e.is_shared);
-        if !shared {
+        let sync = self.env.structs.get(type_name).is_some_and(|s| s.is_par)
+            || self.env.enums.get(type_name).is_some_and(|e| e.is_par);
+        if !shared && !sync {
             return;
         }
+        let kind = if sync { "sync" } else { "shared" };
         for item in &imp.items {
             let ImplItem::Method(f) = item else { continue };
             if f.stdlib_origin {
@@ -4487,18 +4555,24 @@ impl<'a> super::TypeChecker<'a> {
             }
             let written = if f.self_is_own {
                 "own self"
-            } else if matches!(f.self_param, Some(SelfParam::MutRef)) {
+            } else if !sync && matches!(f.self_param, Some(SelfParam::MutRef)) {
                 "mut ref self"
             } else {
                 continue;
             };
             let Some(span) = f.self_span else { continue };
+            let why = if sync {
+                "a call never consumes a handle, and state changes through `Atomic[T]` and \
+                 `Mutex[T]` fields, whose methods take a borrowed `self` (design.md § `sync \
+                 struct`)"
+            } else {
+                "a call never consumes a handle, and `mut` fields are written through any \
+                 handle (core semantics §4.3)"
+            };
             self.type_error_with_fix_it(
                 format!(
-                    "method '{}' of the shared type '{type_name}' takes `{written}`, but a \
-                     shared type's methods take a borrowed `self` only (core semantics \
-                     §4.3): a call never consumes a handle, and `mut` fields are written \
-                     through any handle. Write `self`",
+                    "method '{}' of the {kind} type '{type_name}' takes `{written}`, but a \
+                     {kind} type's methods take a borrowed `self` only: {why}. Write `self`",
                     f.name
                 ),
                 span,
@@ -5060,12 +5134,12 @@ impl<'a> super::TypeChecker<'a> {
                     if target_is_par && method.self_param == Some(SelfParam::MutRef) {
                         self.type_error(
                             format!(
-                                "method `{m}` on `par {tn}` cannot take a `mut ref self` \
-                                 receiver: a `par` value is always Arc-allocated and may \
-                                 have multiple holders, so exclusive mutable access is \
-                                 never available. Use `ref self` and mutate `Atomic[T]` \
-                                 fields via their atomic operations or `Mutex[T]` fields \
-                                 inside a `lock` block",
+                                "method `{m}` of the sync type `{tn}` cannot take a `mut ref \
+                                 self` receiver: methods of a sync type take a borrowed \
+                                 `self`, since a sync value may have many holders across \
+                                 tasks and exclusive access is never available. Write \
+                                 `self`, and change state through `Atomic[T]` methods or a \
+                                 `Mutex[T]` field's lock guard",
                                 m = method.name,
                                 tn = type_name,
                             ),

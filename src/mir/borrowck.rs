@@ -2527,6 +2527,8 @@ fn main() -> () {
             "err_par_pub_clause_contract",
             "err_par_bound_clause_ceiling",
             "err_frozen_closure_escapes",
+            "err_sync_own_self",
+            "err_weak_plain_target",
             "err_question_from_effects",
             "err_partial_move_drop_type",
             "err_enum_payload_drop_type_into_constructor",

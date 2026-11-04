@@ -1956,6 +1956,15 @@ fn walk_expr<'a>(e: &'a Expr, cx: &mut Cx<'a, '_>) {
                     && cx.permits_builtin_query(object, method))
             {
                 walk_place_indices(object, cx);
+            } else if let Some(root) = cx
+                .frozen_place_root(object)
+                .filter(|_| !cx.in_closure && crate::ast::is_mutating_collection_method(method))
+            {
+                // `n.neighbors.push(1)` WRITES through the frozen place: say
+                // so, rather than that `.neighbors` cannot be projected "yet"
+                // (design.md § frozen: deeply immutable; B-2026-11-04-72).
+                cx.flag(root, &object.span, Reason::Written);
+                walk_place_indices(object, cx);
             } else {
                 walk_expr(object, cx);
             }

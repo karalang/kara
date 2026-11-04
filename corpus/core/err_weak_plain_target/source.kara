@@ -1,0 +1,15 @@
+// design.md § Cycles and `weak`: `weak` is a back-edge between counted
+// handles, so a `weak` field must point at a `shared` or `sync` type
+// (B-2026-11-04-72).
+
+struct Place {
+    x: i64,
+}
+
+shared struct Holder {
+    mut w: weak Place,
+}
+
+fn main() {
+    println("unreached");
+}

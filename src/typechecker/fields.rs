@@ -403,13 +403,20 @@ impl<'a> super::TypeChecker<'a> {
                         && (struct_info.is_shared || struct_info.is_par)
                         && !struct_info.mut_fields.contains(field)
                     {
-                        self.type_error(
+                        // A `sync` field is never `mut` (design.md § `sync
+                        // struct`), so naming `mut` would point at an illegal
+                        // fix (B-2026-11-04-72).
+                        let message = if struct_info.is_par {
                             format!(
-                                "shared struct field '{type_name}.{field}' is not declared mut"
-                            ),
-                            *span,
-                            TypeErrorKind::SharedFieldNotMut,
-                        );
+                                "field '{type_name}.{field}' of the sync type '{type_name}' \
+                                 cannot be written: a sync value's plain fields are fixed at \
+                                 construction, and state that changes lives in an `Atomic[T]` \
+                                 or `Mutex[T]` field"
+                            )
+                        } else {
+                            format!("shared struct field '{type_name}.{field}' is not declared mut")
+                        };
+                        self.type_error(message, *span, TypeErrorKind::SharedFieldNotMut);
                     }
                     // Substitute the receiver's concrete generic args into the
                     // field's declared type so `b.v` on `b: Box[f64]` resolves

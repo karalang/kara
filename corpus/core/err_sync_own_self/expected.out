@@ -1,0 +1,1 @@
+ERROR at line 10: method 'finish' of the sync type 'Counter' takes `own self`, but a sync type's methods take a borrowed `self` only

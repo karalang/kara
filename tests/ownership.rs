@@ -603,9 +603,11 @@ fn test_cycle_reported_once_per_back_edge() {
 
 #[test]
 fn test_weak_breaks_cycle() {
+    // `weak` points at a counted type (design.md § Cycles and `weak`;
+    // B-2026-11-04-72 refuses it on a plain one).
     ownership_ok(
-        "struct Parent { child: Child }\n\
-         struct Child { parent: weak Parent }",
+        "shared struct Parent { child: Child }\n\
+         shared struct Child { parent: weak Parent }",
     );
 }
 
@@ -673,8 +675,10 @@ fn test_tuple_mediated_cycle_rejected_as_uninhabitable() {
 }
 
 /// A tuple edge must not mask a DIRECT one. When a type reaches the same target
-/// both ways, the direct back-edge is real and `weak` genuinely breaks it, so
-/// the merged edge keeps the direct (leak) diagnostic.
+/// both ways, the merged edge keeps the direct diagnostic. Both say no value
+/// can be built (design.md § Cycles and `weak`: "A type that no value can
+/// inhabit is rejected"); the direct one does not blame the tuple
+/// (B-2026-11-04-72 flipped the old "will leak, add `weak`" wording).
 #[test]
 fn test_direct_edge_wins_over_tuple_edge() {
     let errors =
@@ -684,15 +688,18 @@ fn test_direct_edge_wins_over_tuple_edge() {
         .find(|e| e.kind == OwnershipErrorKind::OwnershipCycle)
         .expect("expected a cycle diagnostic");
     assert!(
-        cycle.message.contains("shared-type cycle detected"),
-        "a type with a direct back-edge keeps the leak diagnostic — got: {}",
+        cycle
+            .message
+            .contains("no value of it can ever be constructed")
+            && !cycle.message.contains("through a tuple"),
+        "a type with a direct back-edge gets the direct diagnostic — got: {}",
         cycle.message
     );
     assert!(cycle
         .suggestion
         .clone()
         .unwrap_or_default()
-        .contains("weak"));
+        .contains("Option[T]"));
 }
 
 /// The tuple edge feeds `cycle_has_base_escape` through the same function that
@@ -1048,8 +1055,10 @@ fn test_ownership_cycle_has_suggestion() {
 
 #[test]
 fn test_shared_struct_cycle_distinct_diagnostic() {
-    // A cycle among `shared` types should produce a distinct diagnostic that
-    // steers toward `weak`, because the semantics (RC leak) are different.
+    // A cycle among `shared` types with no base case is a type no value can
+    // inhabit (design.md § Cycles and `weak`), not a leak: nothing can be
+    // built, so `weak` is not the advice; a terminating wrapper is
+    // (B-2026-11-04-72).
     let errors = ownership_errors(
         "shared struct A { b: B }\n\
          shared struct B { a: A }",
@@ -1059,14 +1068,15 @@ fn test_shared_struct_cycle_distinct_diagnostic() {
         .find(|e| e.kind == OwnershipErrorKind::OwnershipCycle)
         .unwrap();
     assert!(
-        err.message.contains("shared-type cycle"),
-        "shared cycle should be labeled as shared-type cycle: {}",
+        err.message
+            .contains("no value of it can ever be constructed"),
+        "shared cycle should be reported as uninhabitable: {}",
         err.message
     );
     let suggestion = err.suggestion.as_ref().expect("expected suggestion");
     assert!(
-        suggestion.contains("weak"),
-        "shared-type cycle suggestion should mention 'weak', got: {}",
+        suggestion.contains("Option[T]") && !suggestion.contains("weak"),
+        "shared-type cycle suggestion should name a terminating wrapper, got: {}",
         suggestion
     );
 }
@@ -11297,9 +11307,11 @@ fn frozen_param_projection_still_refuses_materializing_uses() {
             "cannot be used through this element",
         ),
         (
+            // A mutating builtin method is a WRITE through the frozen place
+            // and says so (B-2026-11-04-72).
             "a non-whitelisted builtin method on the container",
             "fn f(n: frozen Node) -> i64 { n.kids.push(n.kids[0]); 0 }",
-            "cannot be projected through `.kids`",
+            "cannot be written through",
         ),
         (
             "an element stored in a tuple",
@@ -11894,7 +11906,7 @@ fn freeze_statement_relaxes_e0512_only_for_a_uniquely_bound_source() {
             "a WRITE through the source after the freeze",
             "fn f() -> i64 { let t = Node { val: 1, neighbors: [] }; let g = freeze t; \
              t.neighbors.push(1); g.val }",
-            "cannot be projected through `.neighbors`",
+            "cannot be written through",
         ),
     ];
     for (label, body, expected) in reject {
@@ -12061,13 +12073,13 @@ fn frozen_mut_field_is_readable_but_never_writable() {
             "cannot be written through",
         ),
         (
-            // A mutating METHOD is refused by not being one of the two
-            // permitted builtin queries, so it reports as a projection rather
-            // than a write. Different message, same refusal.
+            // A mutating METHOD is a write through the frozen place, and is
+            // reported as one (B-2026-11-04-72; it used to read as a
+            // projection the pass could not follow "yet").
             "a mutating method on a `mut` container field",
             "fn f() -> i64 { let t = Node { val: 1, visits: 0, kids: [] }; let g = freeze t; \
              g.kids.push(t); g.val }",
-            "cannot be projected through",
+            "cannot be written through",
         ),
     ];
     for (label, body, expected) in reject {

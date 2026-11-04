@@ -2634,13 +2634,21 @@ impl<'a> OwnershipChecker<'a> {
                             ),
                         )
                     } else if all_shared {
+                        // design.md § Cycles and `weak`: a shared type reaching
+                        // itself through plain fields, with no base case to
+                        // end on, is a type no value can inhabit, so nothing
+                        // is ever built to leak; `weak` is a running program's
+                        // back-edge, not this (B-2026-11-04-72).
                         (
                             format!(
-                                "shared-type cycle detected: {} → {}. Shared types use reference counting — a cycle without a 'weak' edge will leak.",
+                                "type cycle detected: {} → {}. Every value of this type would need a complete value of the type inside it, so no value of it can ever be constructed.",
                                 cycle.join(" → "),
                                 neighbor,
                             ),
-                            Some("add 'weak' to one field in the back-edge of the cycle".to_string()),
+                            Some(
+                                "wrap the recursive position in a type that can terminate the recursion, such as 'Option[T]' or 'Vec[T]'"
+                                    .to_string(),
+                            ),
                         )
                     } else {
                         (

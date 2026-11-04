@@ -1,0 +1,18 @@
+// design.md § `sync struct`: methods of a sync type take a borrowed `self`
+// only, for the same reason as on `shared` types; `own self` is refused
+// (B-2026-11-04-72).
+
+sync struct Counter {
+    count: Atomic[i64],
+}
+
+impl Counter {
+    fn finish(own self) -> i64 {
+        self.count.load()
+    }
+}
+
+fn main() {
+    let c = Counter { count: Atomic.new(3) };
+    println(c.finish());
+}
