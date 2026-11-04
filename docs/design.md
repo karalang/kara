@@ -4895,7 +4895,7 @@ fn connect(a: own GraphNode, b: own GraphNode) {
 - **`Option.expect(msg)` is the tool for an invariant that guarantees the object is alive**, for example `node.parent.expect("a constructed tree has a parent")`. It panics like `.unwrap()`, but the message documents the invariant at the use site and appears in the panic report.
 - **Upgrade once per scope.** `while let Some(p) = current.parent { current = p; }` upgrades once per iteration. Chained `.parent.expect(...).parent.expect(...)` reads count once per step.
 - **If validity is guaranteed by the structure, the reference should be strong**, or the data should move to a central store (`Map[NodeId, NodeData]`, or a `SlotMap`) with ids.
-- **Diagnostic.** `.unwrap()` on any `Option` gets a suggestion to use `.expect("…")` with a machine-applicable fix; this covers `weak` reads without a special rule.
+- **Diagnostic.** `.unwrap()` directly on a `weak` read (`node.parent.unwrap()`, `w.upgrade().unwrap()`) is a `karac check` warning whose machine-applicable fix rewrites it to `.expect("…")`. On any other `Option`, the same rewrite is offered as an editor code action, never as a check warning, because `.unwrap()` on an ordinary `Option` is common and usually fine (B-2026-11-04-80).
 
 **There is no unsafe escape hatch** such as `assume_valid`. `weak` is memory-safe even when the programmer's invariant is wrong, and an operation with undefined behavior on a dead reference would remove that property. The cost is one `.expect` per upgrade, at a site that says why the reference is live.
 
