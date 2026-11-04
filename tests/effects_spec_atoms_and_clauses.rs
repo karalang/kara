@@ -179,3 +179,29 @@ fn a_clause_wider_than_its_body_is_allowed() {
     );
     assert!(ok, "{text}");
 }
+
+#[test]
+fn a_resolved_library_send_is_not_charged_as_a_channel_send() {
+    // `RequestBuilder.send` resolves to the HTTP client, not to
+    // `Sender.send`, so a clause naming only the network admits it; a real
+    // channel send under the same clause is still refused.
+    let (ok, text) = check(
+        "builder_send",
+        "fn main() with sends(Network) receives(Network) writes(Stdout) {\n\
+         let c = Client.new();\n\
+         match c.request(\"GET\", \"http://127.0.0.1:1/\").header(\"X-A\", \"b\").send() {\n\
+         Ok(resp) => { println(resp.body()); }\n\
+         Err(e) => { println(e.message()); }\n\
+         }\n}\n",
+    );
+    assert!(ok, "{text}");
+    let (ok, text) = check(
+        "channel_send",
+        "fn main() with writes(Stdout) {\n\
+         let (tx, rx) = channel(4);\n\
+         tx.send(1);\n\
+         println(1);\n}\n",
+    );
+    assert!(!ok, "{text}");
+    assert!(text.contains("sends(Channel)"), "{text}");
+}

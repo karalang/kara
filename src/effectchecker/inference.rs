@@ -1467,10 +1467,28 @@ impl<'a> super::EffectChecker<'a> {
                 // with a body, i.e. one the walker infers for itself: a user
                 // type's own `send` or `recv` is not a channel operation, and
                 // matching it by name gave it the channel's effects (B-2026-10-21-81).
+                //
+                // Skipped too when the typechecker resolved the call to a
+                // concrete type's method that is not one of the seeded names:
+                // `RequestBuilder.send` is not `Sender.send`, and charging it
+                // `sends(Channel)` refused a client whose written clause names
+                // only the network (B-2026-11-04-27). A trait-owned key still
+                // takes the seeds, since the instance behind it is unknown.
                 let resolved_to_body = precise.is_some_and(|k| self.method_bodies.contains_key(&k));
+                let resolved_elsewhere = |quals: &Vec<Symbol>| {
+                    precise.is_some_and(|k| {
+                        !quals.contains(&k)
+                            && !self
+                                .interner
+                                .resolve(k)
+                                .rsplit_once('.')
+                                .is_some_and(|(o, _)| self.trait_names.contains(o))
+                    })
+                };
                 if let Some(quals) = method_sym
                     .filter(|_| !resolved_to_body && !through_dyn)
                     .and_then(|m| self.stdlib_method_seeds.get(&m))
+                    .filter(|q| !resolved_elsewhere(q))
                 {
                     for &qualified in quals {
                         calls.push((qualified, expr.span));
