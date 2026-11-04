@@ -51,7 +51,12 @@ pub(super) fn read_only_index_lets(body: &Block, c: &Classification, out: &mut H
         // A destructuring `let (a, b) = v[i];` borrows the same way when
         // every part is only read (B-2026-10-24-38).
         let mut names = Vec::new();
-        if !matches!(value.kind, ExprKind::Index { .. }) || !simple_bindings(pattern, &mut names) {
+        // A field of an element (`let s = v[i].samples;`) moves out of the
+        // collection the same way, and borrows the same way (B-2026-11-04-3).
+        let Some(indexed) = indexed_place(value) else {
+            continue;
+        };
+        if !simple_bindings(pattern, &mut names) {
             continue;
         }
         // The uses after the `let` are the ones past its initializer.
@@ -67,7 +72,7 @@ pub(super) fn read_only_index_lets(body: &Block, c: &Classification, out: &mut H
         {
             continue;
         }
-        let ExprKind::Index { object, .. } = &value.kind else {
+        let ExprKind::Index { object, .. } = &indexed.kind else {
             continue;
         };
         // The statements from the `let` to the one holding the last use.
@@ -93,13 +98,25 @@ pub(super) fn read_only_index_lets(body: &Block, c: &Classification, out: &mut H
             continue;
         };
         let mut written = false;
-        writes_in_block(body, root, window, c, &mut written);
+        writes_in_block(body, &root, window, c, &mut written);
         if written {
             continue;
         }
         out.insert(SpanKey::from_span(&value.span));
     }
     for_each_block_child(body, &mut |ch| nested(ch, c, out));
+}
+
+/// The element access a `let` initializer reads: the `v[i]` of `v[i]`,
+/// `v[i].f` or `v[i].f.0`, or None when the initializer is no such place.
+fn indexed_place(e: &Expr) -> Option<&Expr> {
+    match &e.kind {
+        ExprKind::Index { .. } => Some(e),
+        ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+            indexed_place(object)
+        }
+        _ => None,
+    }
 }
 
 /// The names a pattern of plain bindings, `_` and tuples of them binds, or
@@ -142,15 +159,33 @@ fn uses_in_expr(e: &Expr, name: &str, out: &mut Vec<SpanKey>) {
 }
 
 /// The binding a place is rooted at.
-fn place_root(e: &Expr) -> Option<&str> {
+/// The variable a place hangs off, and under `self` the field too: in a
+/// method every place is `self`'s, so `self.series[k]` and `self.out` are
+/// told apart (B-2026-11-04-3).
+fn place_root(e: &Expr) -> Option<String> {
     match &e.kind {
-        ExprKind::Identifier(n) => Some(n),
-        ExprKind::SelfValue => Some("self"),
+        ExprKind::Identifier(n) => Some(n.clone()),
+        ExprKind::SelfValue => Some("self".to_string()),
+        ExprKind::FieldAccess { object, field } if matches!(object.kind, ExprKind::SelfValue) => {
+            Some(format!("self.{field}"))
+        }
         ExprKind::FieldAccess { object, .. }
         | ExprKind::TupleIndex { object, .. }
         | ExprKind::Index { object, .. } => place_root(object),
         _ => None,
     }
+}
+
+/// Whether a write to the place under `written` can touch the one under
+/// `root`: the same root, or one inside the other (`self` and `self.out`).
+fn overlaps(written: Option<String>, root: &str) -> bool {
+    written.is_some_and(|w| {
+        w == root
+            || root
+                .strip_prefix(w.as_str())
+                .is_some_and(|r| r.starts_with('.'))
+            || w.strip_prefix(root).is_some_and(|r| r.starts_with('.'))
+    })
 }
 
 fn in_window(e: &Expr, window: (usize, usize)) -> bool {
@@ -175,7 +210,7 @@ fn writes_in_block(
         };
         *w |= targets
             .into_iter()
-            .any(|t| in_window(t, window) && place_root(t) == Some(root));
+            .any(|t| in_window(t, window) && overlaps(place_root(t), root));
     }
     for_each_block_child(b, &mut |ch| writes_in(ch, root, window, c, w));
 }
@@ -190,7 +225,7 @@ fn writes_in(ch: Child<'_>, root: &str, window: (usize, usize), c: &Classificati
 fn writes_in_expr(e: &Expr, root: &str, window: (usize, usize), c: &Classification, w: &mut bool) {
     if in_window(e, window) {
         let args = match &e.kind {
-            ExprKind::Identifier(n) if n == root => {
+            ExprKind::Identifier(n) if overlaps(Some(n.clone()), root) => {
                 *w |= matches!(
                     c.kinds.get(&SpanKey::from_span(&e.span)),
                     Some(UseKind::Consume)
@@ -203,8 +238,8 @@ fn writes_in_expr(e: &Expr, root: &str, window: (usize, usize), c: &Classificati
                 args,
                 ..
             } => {
-                *w |=
-                    place_root(object) == Some(root) && !READING_METHODS.contains(&method.as_str());
+                *w |= overlaps(place_root(object), root)
+                    && !READING_METHODS.contains(&method.as_str());
                 Some(args)
             }
             ExprKind::Call { args, .. } => Some(args),
@@ -212,14 +247,14 @@ fn writes_in_expr(e: &Expr, root: &str, window: (usize, usize), c: &Classificati
                 op: UnaryOp::MutRef,
                 operand,
             } => {
-                *w |= place_root(operand) == Some(root);
+                *w |= overlaps(place_root(operand), root);
                 None
             }
             _ => None,
         };
         *w |= args.is_some_and(|args| {
             args.iter()
-                .any(|a| a.mut_marker && place_root(&a.value) == Some(root))
+                .any(|a| a.mut_marker && overlaps(place_root(&a.value), root))
         });
     }
     for_each_child_public(e, &mut |ch| writes_in(ch, root, window, c, w));

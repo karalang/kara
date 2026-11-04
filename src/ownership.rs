@@ -3617,8 +3617,8 @@ impl<'a> OwnershipChecker<'a> {
                     format!(
                         "drop `own` from the callee parameter if it only reads, or \
                          restructure to avoid reuse ('{}' has no `.clone()` — that \
-                         exists only on `String`, the built-in heap collections and \
-                         RC types)",
+                         exists only on `String`, RC types and the built-in heap \
+                         collections whose elements have one)",
                         binding
                     )
                 }),

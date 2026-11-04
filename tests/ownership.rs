@@ -14030,18 +14030,25 @@ fn uam_hint_rejects_result_halves_codegen_cannot_deep_copy() {
 }
 
 #[test]
-fn uam_hint_offers_clone_for_vec_of_non_clone_element() {
-    // The other direction of the same choice: `Vec.clone()` resolves even
-    // when the ELEMENT has no `Clone` derive, so the bound-side predicate
-    // (which recurses into type arguments) would wrongly withhold the hint.
+fn uam_hint_withholds_clone_for_vec_of_non_clone_element() {
+    // A `Vec` clones each element, so `Vec[Q].clone()` with `Q` not clonable
+    // is refused by the typechecker ("clones each element, and 'Q' has no
+    // `.clone()`"). This fixture used to assert the hint offered it, from
+    // when that call resolved; once the typechecker refused it, the edit led
+    // straight to an error and then a `#[derive(Clone)]` (B-2026-11-04-2).
+    // Was `uam_hint_offers_clone_for_vec_of_non_clone_element`.
     let (hint, has_edit) = uam_clone_hint(&uam_program(CLONE_PRELUDE, "Vec[Q]", "Vec.new()"));
     assert!(
-        hint.contains("at the move site") && !hint.contains("has no `.clone()`"),
-        "Vec[Q]: `Vec.clone()` resolves, hint should offer it — {hint:?}"
+        !hint.contains("at the move site") && hint.contains("has no `.clone()`"),
+        "Vec[Q]: `q.clone()` does not check, hint must not offer it — {hint:?}"
     );
     assert!(
-        has_edit,
-        "Vec[Q]: karac fix withheld a valid `.clone()` edit"
+        hint.contains("collections whose elements have one"),
+        "Vec[Q]: hint should say why a Vec has no clone here — {hint:?}"
+    );
+    assert!(
+        !has_edit,
+        "Vec[Q]: karac fix wrote a `.clone()` edit that does not check"
     );
 }
 

@@ -4356,7 +4356,11 @@ impl<'a> TypeChecker<'a> {
             .iter()
             .filter(|(key, ty)| match ty {
                 Type::TypeParam(_) => self.typeparam_clone_bound_spans.contains(*key),
-                _ => self.clone_receiver_self_type(ty).is_some(),
+                // `.clone()` resolves on any `Vec`, but it only checks when
+                // the elements clone too; a fix that writes it on a `Vec` of
+                // a type with no `.clone()` starts a cascade of derives where
+                // the right repair is elsewhere (B-2026-11-04-2).
+                _ => self.clone_receiver_self_type(ty).is_some() && self.type_supports_clone(ty),
             })
             .map(|(key, _)| *key)
             .collect();

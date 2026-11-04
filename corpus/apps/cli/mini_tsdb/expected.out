@@ -1,0 +1,91 @@
+== ingest
+h1.prom: 960 samples added to 4 series
+h2.prom: 912 samples added to 4 series
+h3.prom: 960 samples added to 4 series
+zz_late.prom: 2 samples added to 1 series, 1 duplicate ignored, 8 rejected
+  ! line 2: out of order sample for node_cpu_temp{instance="h1"} at 1700001200000
+  ! line 4: out of order sample for queue_depth{instance="h2",job="worker"} at 1700000030000
+  ! line 5: out of order sample for http_requests_total{code="200",instance="h1",job="api"} at 1700001800000
+  ! line 7: node_cpu_temp{instance="h4"} already has a different value at 1700001200000
+  ! line 9: the value of label instance must be quoted
+  ! line 10: bad value "warm"
+  ! line 11: missing timestamp
+  ! line 12: missing metric name
+== block
+http_requests_total{code="200",instance="h1",job="api"}: 240 samples in 2 chunks, 975 bytes
+http_requests_total{code="200",instance="h2",job="api"}: 228 samples in 2 chunks, 929 bytes
+http_requests_total{code="200",instance="h3",job="api"}: 240 samples in 2 chunks, 1016 bytes
+http_requests_total{code="500",instance="h1",job="api"}: 240 samples in 2 chunks, 679 bytes
+http_requests_total{code="500",instance="h2",job="api"}: 228 samples in 2 chunks, 665 bytes
+http_requests_total{code="500",instance="h3",job="api"}: 240 samples in 2 chunks, 784 bytes
+node_cpu_temp{instance="h1"}: 240 samples in 2 chunks, 2003 bytes
+node_cpu_temp{instance="h2"}: 228 samples in 2 chunks, 1908 bytes
+node_cpu_temp{instance="h3"}: 240 samples in 2 chunks, 1979 bytes
+node_cpu_temp{instance="h4"}: 2 samples in 1 chunk, 23 bytes
+queue_depth{instance="h1",job="worker"}: 240 samples in 2 chunks, 749 bytes
+queue_depth{instance="h2",job="worker"}: 228 samples in 2 chunks, 729 bytes
+queue_depth{instance="h3",job="worker"}: 240 samples in 2 chunks, 760 bytes
+13 series, 2834 samples, 25 chunks, 13199 bytes, 4.66 bytes a sample
+every chunk decodes back to its samples
+== queries
+> instant 600 node_cpu_temp
+  node_cpu_temp{instance="h1"} 49.6000
+  node_cpu_temp{instance="h2"} 46.8000
+  node_cpu_temp{instance="h3"} 47.1000
+> instant 600 node_cpu_temp{instance="h2"}
+  node_cpu_temp{instance="h2"} 46.8000
+> instant 1590 queue_depth{instance="h2"}
+  queue_depth{instance="h2",job="worker"} 9.0000
+> instant 3599 http_requests_total{code="500"}
+  http_requests_total{code="500",instance="h1",job="api"} 315.0000
+  http_requests_total{code="500",instance="h2",job="api"} 296.0000
+  http_requests_total{code="500",instance="h3",job="api"} 143.0000
+> instant 1800 rate(http_requests_total[5m])
+  {code="200",instance="h1",job="api"} 7.8445
+  {code="200",instance="h2",job="api"} 2.6563
+  {code="200",instance="h3",job="api"} 7.0983
+  {code="500",instance="h1",job="api"} 0.0815
+  {code="500",instance="h2",job="api"} 0.0283
+  {code="500",instance="h3",job="api"} 0.1088
+> instant 1800 sum by (code) (rate(http_requests_total[5m]))
+  {code="200"} 17.5991
+  {code="500"} 0.2186
+> instant 2100 increase(http_requests_total{instance="h3"}[10m])
+  {code="200",instance="h3",job="api"} 4515.0075
+  {code="500",instance="h3",job="api"} 61.0001
+> instant 1800 rate(http_requests_total{code="200"}[1m]) * 60
+  {code="200",instance="h1",job="api"} 485.3225
+  {code="200",instance="h2",job="api"} 384.0085
+  {code="200",instance="h3",job="api"} 322.6954
+> range 600 1200 300 avg_over_time(node_cpu_temp[5m])
+  {instance="h1"} 600=48.2700 900=49.6526 1200=45.5800
+  {instance="h2"} 600=44.5950 900=47.1286 1200=51.1789
+  {instance="h3"} 600=44.6900 900=46.2050 1200=41.0000
+  {instance="h4"} 1200=39.0000
+> range 0 3600 900 max by (instance) (max_over_time(queue_depth[15m]))
+  {instance="h1"} 0=12.0000 900=37.0000 1800=65.0000 2700=56.0000 3600=42.0000
+  {instance="h2"} 0=8.0000 900=14.0000 1800=24.0000 2700=22.0000 3600=33.0000
+  {instance="h3"} 0=2.0000 900=48.0000 1800=58.0000 2700=46.0000 3600=37.0000
+> instant 1800 sum(queue_depth)
+  {} 97.0000
+> instant 1800 avg by (job) (queue_depth)
+  {job="worker"} 32.3333
+> instant 1800 count_over_time(queue_depth{instance!="h1"}[1m])
+  {instance="h2",job="worker"} 4.0000
+  {instance="h3",job="worker"} 4.0000
+> instant 1800 min_over_time(node_cpu_temp{instance!="h4"}[1h]) / 10
+  {instance="h1"} 4.1800
+  {instance="h2"} 4.2900
+  {instance="h3"} 3.8400
+> instant 1230 node_cpu_temp{instance="h4"}
+  node_cpu_temp{instance="h4"} 40.2500
+> instant 5000 node_cpu_temp
+  (no data)
+> instant 1800 nosuch_metric
+  (no data)
+> instant 1800 rate(node_cpu_temp)
+  ! rate takes a range vector, like rate(x[5m])
+> instant 1800 sum by code (queue_depth)
+  ! parse error at column 8: expected (
+> range 100 50 10 queue_depth
+  ! a range needs start <= end and a step above 0

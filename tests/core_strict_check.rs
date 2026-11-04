@@ -1965,14 +1965,15 @@ fn an_unbounded_type_parameter_does_not_satisfy_a_callee_bound() {
 }
 
 /// The derive goes on the innermost type first: `P` inside `Option[P]`,
-/// and `R` before the `E` that holds it.
+/// and `R` before the `E` that holds it. The field is moved on into a `Vec`:
+/// a binding that is only read borrows the field instead (B-2026-11-04-3).
 #[test]
 fn derive_clone_reaches_through_option_and_payloads() {
     rejected_then_fixed_in(
         "derive-nested",
         "struct P { a: String }\n\
          struct H { p: Option[P] }\n\
-         fn main() { let v = vec![H { p: Some(P { a: \"x\" }) }]; let q = v[0].p; println(q.is_some()); }\n",
+         fn main() { let v = vec![H { p: Some(P { a: \"x\" }) }]; let q = v[0].p; let w = vec![q]; println(w[0].is_some()); }\n",
         "cannot move a non-`Copy` value out of a collection element",
         "#[derive(Clone)]\nstruct P",
         2,

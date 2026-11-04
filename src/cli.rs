@@ -2236,6 +2236,23 @@ impl Pipeline {
                     replacement: "ref ".to_string(),
                 });
             }
+            // The same `let` over a field of an element (`let s =
+            // v[i].samples;`) is reported by the ownership pass, and is
+            // repaired the same way (B-2026-11-04-3).
+            for e in ownership.errors.iter_mut() {
+                if e.kind != crate::ownership::OwnershipErrorKind::MoveOutOfPlace
+                    || !read_only.contains(&crate::resolver::SpanKey::from_span(&e.span))
+                {
+                    continue;
+                }
+                e.message += "; the binding is only read, so the fix borrows the field";
+                e.suggestion = Some("write `ref` before it to borrow it in place".to_string());
+                e.replacement = Some(Box::new(crate::resolver::TextEdit {
+                    offset: e.span.offset,
+                    length: 0,
+                    replacement: "ref ".to_string(),
+                }));
+            }
             // §4.6: when the move is a pattern binding taking a part out of
             // the scrutinee, the repair is `ref` on that binding.
             let pattern_moves = &self.typed.as_ref().unwrap().core_moving_scrutinees;

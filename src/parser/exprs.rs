@@ -1166,6 +1166,41 @@ impl super::Parser {
                     },
                 })
             }
+            // `let s = mut place;` writes a call argument's marker where a
+            // borrow is wanted; a call argument's `mut` is taken before its
+            // expression is parsed, so one reaching here is never a marker.
+            // The fix inserts the `ref` of `mut ref place` (core-semantics
+            // §5.1, B-2026-11-04-1); the rest parses as that borrow.
+            Token::Mut
+                if !matches!(
+                    self.peek_token_ref_at(1),
+                    Token::Ref | Token::Pipe | Token::PipePipe
+                ) =>
+            {
+                let at = self.current_span();
+                self.error(
+                    "`mut place` is the marker a call argument takes; a borrow for writing \
+                     is `mut ref place` (core-semantics §5.1)",
+                );
+                self.fix_edits.insert(
+                    crate::resolver::SpanKey::from_span(&at),
+                    crate::resolver::TextEdit {
+                        offset: at.offset + at.length,
+                        length: 0,
+                        replacement: " ref".to_string(),
+                    },
+                );
+                self.advance(); // mut
+                let operand = self.parse_expr_bp(24)?;
+                Some(Expr {
+                    id: crate::ids::NodeId::DUMMY,
+                    span: self.span_from(&start),
+                    kind: ExprKind::Unary {
+                        op: UnaryOp::MutRef,
+                        operand: Box::new(operand),
+                    },
+                })
+            }
             // Half-open ranges in prefix (start-less) position:
             //   `..expr`  → RangeTo[T]
             //   `..=expr` → RangeToInclusive[T]
