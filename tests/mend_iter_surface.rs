@@ -4,7 +4,9 @@
 //! `nth`, `position` and `rev` had drifted out of the typechecker's
 //! iterator-surface list, so they drew an edit-distance guess ("did you mean
 //! 'fill'?") with no fix; kata 1044's `windows.windows(2).find(..)` found it
-//! (B-2026-11-04-51).
+//! (B-2026-11-04-51). A `flatten` over collection items, the step after the
+//! hop for `g.flatten()` on a `Vec[Vec[T]]`, is fixed to `flat_map`
+//! (B-2026-11-04-52).
 
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -33,10 +35,14 @@ const CELLS: &[(&str, &str, &str)] = &[
     (
         "vec_flatten",
         "fn main() { let g = [[1, 2], [3]]; let f: Vec[i64] = g.flatten().collect(); println(f.len()); }",
-        // The hop is the first step only: `.iter().flatten()` over `Vec`
-        // items is refused next with the `.flat_map(|v| v.iter())` spelling,
-        // which has no fix yet (B-2026-11-04-52).
-        "",
+        // The hop, then `.iter().flatten()` over `Vec` items becomes
+        // `.flat_map(|v| v.iter())` (B-2026-11-04-52).
+        "3",
+    ),
+    (
+        "into_iter_flatten",
+        "fn main() { let g = [[1, 2], [3]]; for x in g.into_iter().flatten() { print(x); } println(\"\"); }",
+        "123",
     ),
     (
         "slice_position",
@@ -90,8 +96,8 @@ fn mend(dir: &Path, src: &str) -> (String, Result<String, String>) {
             Err(format!("still refused:\n{err}\nfixed text:\n{text}")),
         );
     }
-    if !text.contains(".iter().") {
-        return (first, Err(format!("no `.iter()` inserted:\n{text}")));
+    if !text.contains(".iter().") && !text.contains(".flat_map(") {
+        return (first, Err(format!("no fix applied:\n{text}")));
     }
     let (_, stdout, stderr) = karac(dir, &["__mir-run", "cell.kara"]);
     if stdout.is_empty() {
@@ -124,13 +130,17 @@ fn an_iterator_method_on_a_sequence_mends_to_an_iter_hop() {
     assert_eq!(results.len(), CELLS.len());
     let mut bad = Vec::new();
     for (name, want, first, got) in results {
-        if !first.contains("require an explicit `.iter()`") {
+        let hint = if name == "into_iter_flatten" {
+            "in place of `.flatten()`"
+        } else {
+            "require an explicit `.iter()`"
+        };
+        if !first.contains(hint) {
             bad.push(format!(
                 "{name}: no `.iter()` hint on the first check:\n{first}"
             ));
         }
         match got {
-            _ if want.is_empty() => {}
             Ok(out) if out.trim_end() == want => {}
             Ok(out) => bad.push(format!("{name}: printed {out:?}, want {want:?}")),
             Err(why) => bad.push(format!("{name}: {why}")),

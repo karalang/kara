@@ -6845,7 +6845,17 @@ impl<'a> super::TypeChecker<'a> {
                         .iter()
                         .any(|e| e.span == *discharge_span && e.message == msg)
                     {
-                        self.type_error(msg, *discharge_span, TypeErrorKind::TypeMismatch);
+                        match self.flatten_fix(discharge_span, walk) {
+                            Some(fix) => self.type_error_with_fix_it(
+                                msg,
+                                *discharge_span,
+                                TypeErrorKind::TypeMismatch,
+                                fix,
+                            ),
+                            None => {
+                                self.type_error(msg, *discharge_span, TypeErrorKind::TypeMismatch)
+                            }
+                        }
                     }
                     continue;
                 }

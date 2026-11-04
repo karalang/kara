@@ -229,7 +229,9 @@ impl<'a> super::TypeChecker<'a> {
     /// `karac fix` makes the edit the message names (B-2026-10-29-3).
     /// Offered on a receiver that ends where its span ends: a place, a call
     /// or a method call (whose end is its closing paren).
-    pub(super) fn iter_hint_fix(object: &Expr) -> Option<FixIt> {
+    /// The source offset just past a method call's receiver, for a receiver
+    /// whose span is known to end there.
+    pub(super) fn receiver_end(object: &Expr) -> Option<usize> {
         let end = match &object.kind {
             ExprKind::MethodCall {
                 args_close_span, ..
@@ -242,7 +244,24 @@ impl<'a> super::TypeChecker<'a> {
             | ExprKind::Index { .. } => object.span.offset + object.span.length,
             _ => return None,
         };
-        (object.span.length > 0 && end > object.span.offset).then(|| FixIt {
+        (object.span.length > 0 && end > object.span.offset).then_some(end)
+    }
+
+    /// The fix for a `.flatten()` over collection items: the call, from its
+    /// receiver's end to its `)`, becomes `.flat_map(|v| v.<walk>())`
+    /// (B-2026-11-04-52).
+    pub(super) fn flatten_fix(&self, call: &Span, walk: &str) -> Option<FixIt> {
+        self.flatten_calls
+            .get(&SpanKey::from_span(call))
+            .map(|span| FixIt {
+                span: *span,
+                replacement: format!(".flat_map(|v| v.{walk}())"),
+            })
+    }
+
+    pub(super) fn iter_hint_fix(object: &Expr) -> Option<FixIt> {
+        let end = Self::receiver_end(object)?;
+        Some(FixIt {
             span: Span {
                 offset: end,
                 length: 0,
@@ -1654,7 +1673,9 @@ impl<'a> super::TypeChecker<'a> {
                     // `flatten()` over items that are collections, not
                     // iterators (`mat.iter().flatten()` on a `Vec[Vec[T]]`):
                     // say what to write, as the spec's own example does.
+                    let mut flatten_fix = None;
                     if type_name == "IterFlatten" && bound_trait == "Iterator" {
+                        flatten_fix = self.flatten_fix(span, "iter");
                         msg = format!(
                             "`flatten` needs items that are themselves iterators \
                              (docs/library/iterators.md: `where Self.Item: Iterator`), \
@@ -1673,7 +1694,8 @@ impl<'a> super::TypeChecker<'a> {
                             self.copy_derive_fix(&owned)
                         })
                         .flatten()
-                        .filter(|f| f.replacement.contains("Clone"));
+                        .filter(|f| f.replacement.contains("Clone"))
+                        .or(flatten_fix);
                     match derive {
                         Some(fix) => self.type_error_with_fix_it(
                             msg,

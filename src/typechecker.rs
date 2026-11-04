@@ -2830,6 +2830,10 @@ pub struct TypeChecker<'a> {
     /// A `flatten` over non-iterator items was already refused at the
     /// call, so the adapters chained on it stay quiet.
     pub(super) flatten_hinted: bool,
+    /// Each `.flatten()` call, by its span: the source span from the end of
+    /// its receiver to its `)`, which the `flat_map` fix rewrites
+    /// (B-2026-11-04-52).
+    pub(super) flatten_calls: FxHashMap<SpanKey, Span>,
     /// See [`TypeCheckResult::core_once_calls`].
     pub(super) core_once_calls: FxHashSet<SpanKey>,
     /// See [`TypeCheckResult::fn_item_spans`].
@@ -3888,6 +3892,7 @@ impl<'a> TypeChecker<'a> {
             into_iter_sites: FxHashMap::default(),
             into_iter_hinted: false,
             flatten_hinted: false,
+            flatten_calls: FxHashMap::default(),
             core_once_calls: FxHashSet::default(),
             fn_item_spans: FxHashSet::default(),
             forking: None,

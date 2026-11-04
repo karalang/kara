@@ -1689,6 +1689,22 @@ impl<'a> super::TypeChecker<'a> {
                 }
             }
         }
+        if method == "flatten" && args.is_empty() {
+            if let Some(end) = Self::receiver_end(object) {
+                let close = args_close_span.offset + args_close_span.length;
+                if close > end {
+                    self.flatten_calls.insert(
+                        SpanKey::from_span(span),
+                        Span {
+                            offset: end,
+                            length: close - end,
+                            line: args_close_span.line,
+                            column: args_close_span.column,
+                        },
+                    );
+                }
+            }
+        }
         // `Trait.method(x, ..)` / `Type.method(x, ..)`: the receiver form
         // `x.method(..)` (B-2026-10-28-17).
         if let ExprKind::Identifier(name) = &object.kind {
