@@ -1,0 +1,43 @@
+// design.md §10: a panic in a `#[track_caller]` function is reported at
+// the call into it, transitively through tracked callers; an untracked
+// caller reports its own call (B-2026-11-04-20).
+
+#[track_caller]
+fn must(o: Option[i64]) -> i64 {
+    o.unwrap()
+}
+
+#[track_caller]
+fn outer(o: Option[i64]) -> i64 {
+    must(o) + 1
+}
+
+fn plain(o: Option[i64]) -> i64 {
+    must(o)
+}
+
+fn show(r: Result[i64, TaskFailed]) {
+    match r {
+        Ok(v) => println(f"ok {v}"),
+        Err(TaskFailed.Panicked { message, location }) => {
+            // The place without its file name, which names the run's path.
+            match location.find(":") {
+                Some(i) => println(f"{location[i + 1..]}: {message}"),
+                None => println(f"{location}: {message}"),
+            }
+        }
+        Err(TaskFailed.Cancelled) => println("cancelled"),
+    }
+}
+
+fn main() {
+    let g = TaskGroup.isolating();
+    let a = g.spawn(|| must(Some(3)));
+    let b = g.spawn(|| must(None));
+    let c = g.spawn(|| outer(None));
+    let d = g.spawn(|| plain(None));
+    show(a.join());
+    show(b.join());
+    show(c.join());
+    show(d.join());
+}

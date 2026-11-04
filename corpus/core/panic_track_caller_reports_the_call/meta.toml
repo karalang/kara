@@ -1,0 +1,11 @@
+source = "design.md §10 Errors and panics"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["panic", "track_caller", "taskgroup"]
+class = "e"
+expected_from = "spec"
+rules = []
+backends = []
+env = {}
+note = "design.md §10 `#[track_caller]`: user code may mark its own panicking wrappers, and the mark is transitive; the place lands in TaskFailed.Panicked's location (B-2026-11-04-20)."

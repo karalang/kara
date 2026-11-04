@@ -509,6 +509,9 @@ pub fn specialise(
         let mut body = templates[&template].clone();
         body.instance.name = name.clone();
         s.rewrite(&template, &mut body, &env)?;
+        if program.tracked.contains(&template) {
+            program.tracked.insert(name.clone());
+        }
         program.bodies.insert(name, body);
     }
     for name in removed {

@@ -237,8 +237,8 @@ impl<'ctx> Cx<'ctx, '_> {
         g.as_pointer_value()
     }
 
-    /// Whether the body `name` is located: a library body that can
-    /// abort, which takes the place of the program's call into it as two
+    /// Whether the body `name` is located: a library body, or a
+    /// `#[track_caller]` one (design.md §10), that can abort, which takes the place of the program's call into it as two
     /// trailing parameters, forwarded from library body to library body,
     /// so that its abort reports the program's line. A place in a global
     /// cost two stores before each such call, on every trip of a loop
@@ -252,7 +252,10 @@ impl<'ctx> Cx<'ctx, '_> {
         }
         let program = self.program;
         let l = match program.bodies.get(name) {
-            Some(body) => !self.in_user_source(self.body_start(body)) && self.may_abort(name),
+            Some(body) => {
+                (!self.in_user_source(self.body_start(body)) || program.tracked.contains(name))
+                    && self.may_abort(name)
+            }
             None => false,
         };
         self.located.insert(name.to_string(), l);
@@ -311,10 +314,7 @@ impl<'ctx> Cx<'ctx, '_> {
     /// body of the program's source; in a located body, the place it was
     /// given; otherwise none.
     pub(super) fn site_args(&mut self) -> R<(PointerValue<'ctx>, IntValue<'ctx>)> {
-        let own = match self.body {
-            Some(b) => self.in_user_source(self.body_start(b)),
-            None => false,
-        };
+        let own = self.own_body();
         if own {
             if self.in_user_source(self.site) && self.site.line > 0 {
                 return self.str_const(&Self::site_text(self.site));
@@ -322,6 +322,19 @@ impl<'ctx> Cx<'ctx, '_> {
             return Ok(self.no_site());
         }
         Ok(self.given_site().unwrap_or_else(|| self.no_site()))
+    }
+
+    /// Whether the body being lowered places its own aborts and calls: one
+    /// of the program's source that is not `#[track_caller]` (design.md
+    /// §10), which takes its caller's place as a library body does.
+    fn own_body(&self) -> bool {
+        match self.body {
+            Some(b) => {
+                self.in_user_source(self.body_start(b))
+                    && !self.program.tracked.contains(&b.instance.name)
+            }
+            None => false,
+        }
     }
 
     /// The place parameters of the function being built, when it is the
@@ -379,10 +392,7 @@ impl<'ctx> Cx<'ctx, '_> {
     /// in a body of the program's own source; in a located body, the place
     /// of the program's call into it; otherwise none.
     pub(super) fn abort_site(&mut self) -> R<(PointerValue<'ctx>, IntValue<'ctx>)> {
-        let own = match self.body {
-            Some(b) => self.in_user_source(self.body_start(b)),
-            None => false,
-        };
+        let own = self.own_body();
         if own && self.in_user_source(self.site) && self.site.line > 0 {
             return self.str_const(&Self::site_text(self.site));
         }

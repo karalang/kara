@@ -94,6 +94,10 @@ accepted by 0.8.0 are now refused, each with a fix-it.
 
 ### Diagnostics
 
+- `#[track_caller]` on a program's own function now works: a panic inside
+  it, or inside a tracked function it calls, is reported at the call into
+  it, on stderr and in `TaskFailed.Panicked`'s `location` (design.md §10,
+  B-2026-11-04-20). It was accepted and ignored.
 - `#[gpu]` and `comptime` outside a `#[derive]` backer draw the
   `later_track` warning (W0292): they run with today's meaning, but are not
   covered by 0.8's compatibility promise (§13, B-2026-11-01-41).

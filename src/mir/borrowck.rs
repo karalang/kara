@@ -2606,6 +2606,7 @@ fn main() -> () {
         let needs_library = [
             "select_source_order",
             "isolating_panic_ends_its_task",
+            "panic_track_caller_reports_the_call",
             "ok_weak_local_reads_as_option",
             "ok_ref_handle_collects_as_the_handle",
             "ok_weak_slot_upgrade",

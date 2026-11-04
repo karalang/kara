@@ -81,6 +81,10 @@ pub struct Program {
     /// `LogCall.emit`), whose instances (`init[JsonBackend]`) a call to
     /// adds no effect.
     pub transparent: std::collections::BTreeSet<String>,
+    /// The instances of `#[track_caller]` functions (design.md §10): a
+    /// panic in one reports the place of the call into it, as a library
+    /// body's does, and transitively through tracked callers.
+    pub tracked: std::collections::BTreeSet<String>,
     /// How a hashed table runs Kāra code to hash a key, by its key type
     /// and the `BuildHasher` it names, `None` for the default
     /// (collections.md § Hashing, B-2026-10-25-31). A table with no entry
@@ -149,6 +153,14 @@ impl Program {
     pub fn is_transparent(&self, name: &str) -> bool {
         let base = name.split('[').next().unwrap_or(name);
         self.transparent.contains(base)
+    }
+
+    /// Whether a panic in `body`, at `span`, is placed at the call into
+    /// `body` rather than where it happened: a library body's, and a
+    /// `#[track_caller]` function's (design.md §10).
+    pub fn defers_location(&self, body: &Body, span: crate::token::Span) -> bool {
+        self.user_source_len.is_some_and(|n| span.offset >= n)
+            || self.tracked.contains(&body.instance.name)
     }
 
     pub fn add(&mut self, body: Body) {
@@ -7666,10 +7678,7 @@ impl<'a> Interp<'a> {
         };
         let exit = matches!(kind, TerminatorKind::Call { .. })
             && coroutine::has_cancel_exit(body, *target);
-        let in_library = self
-            .program
-            .user_source_len
-            .is_some_and(|n| span.offset >= n);
+        let in_library = self.program.defers_location(body, span);
         // A panic recorded in a library body (`unwrap`'s `panic`) is placed
         // at the program's call into it, the first call of the program's
         // own the unwinding passes, as `report_abort` places a process-
@@ -12429,7 +12438,7 @@ impl<'a> Interp<'a> {
                 }
                 let st = &block.statements[i];
                 self.statement(body, &st.kind)
-                    .map_err(|s| self.report_abort(s, st.source_info.span))
+                    .map_err(|s| self.report_abort(s, body, st.source_info.span))
                     .map_err(|s| locate(s, body, format!("{bb}[{i}]")))?;
             }
             if let Some(b) = self.fast_term(&fast_block.term, &block.terminator.kind) {
@@ -12462,7 +12471,7 @@ impl<'a> Interp<'a> {
                     let i = block.statements.len() - 1;
                     let st = &block.statements[i];
                     self.statement(body, &st.kind)
-                        .map_err(|s| self.report_abort(s, st.source_info.span))
+                        .map_err(|s| self.report_abort(s, body, st.source_info.span))
                         .map_err(|s| locate(s, body, format!("{bb}[{i}]")))?;
                     self.terminator(body, &block.terminator.kind, strict)
                 }
@@ -12471,7 +12480,7 @@ impl<'a> Interp<'a> {
             let span = block.terminator.source_info.span;
             let next = self
                 .contain(body, &block.terminator.kind, span, next)
-                .map_err(|s| self.report_abort(s, block.terminator.source_info.span))
+                .map_err(|s| self.report_abort(s, body, block.terminator.source_info.span))
                 .map_err(|s| locate(s, body, format!("{bb}[term]")))?;
             match next {
                 Some(b) => bb = b,
@@ -12493,7 +12502,7 @@ impl<'a> Interp<'a> {
             for (i, st) in block.statements.iter().enumerate() {
                 self.tick()?;
                 self.statement(body, &st.kind)
-                    .map_err(|s| self.report_abort(s, st.source_info.span))
+                    .map_err(|s| self.report_abort(s, body, st.source_info.span))
                     .map_err(|s| locate(s, body, format!("{bb}[{i}]")))?;
             }
             self.tick()?;
@@ -12501,7 +12510,7 @@ impl<'a> Interp<'a> {
             let span = block.terminator.source_info.span;
             let next = self
                 .contain(body, &block.terminator.kind, span, next)
-                .map_err(|s| self.report_abort(s, block.terminator.source_info.span))
+                .map_err(|s| self.report_abort(s, body, block.terminator.source_info.span))
                 .map_err(|s| locate(s, body, format!("{bb}[term]")))?;
             match next {
                 Some(b) => bb = b,
@@ -12517,13 +12526,10 @@ impl<'a> Interp<'a> {
     /// An abort, reported on stderr where it happened the first time it
     /// passes a frame, as legacy reports a runtime error (core semantics
     /// §10.2): the message, then the place.
-    fn report_abort(&mut self, s: Stop, span: crate::token::Span) -> Stop {
-        // A library body (`unwrap`'s `panic`) leaves the report to the
-        // program's call into it.
-        let in_library = self
-            .program
-            .user_source_len
-            .is_some_and(|n| span.offset >= n);
+    fn report_abort(&mut self, s: Stop, body: &Body, span: crate::token::Span) -> Stop {
+        // A library body (`unwrap`'s `panic`), or a `#[track_caller]`
+        // one, leaves the report to the call into it.
+        let in_library = self.program.defers_location(body, span);
         if let Stop::Abort(reason) = &s {
             if !self.abort_reported && !in_library {
                 self.abort_reported = true;

@@ -2279,6 +2279,9 @@ impl<'a> Lcx<'a> {
         let (body, errors) = bx.finish();
         self.errors.extend(errors);
         if let Some(body) = body {
+            if f.is_track_caller {
+                self.program.tracked.insert(name.to_string());
+            }
             self.program.add(body);
         }
     }
