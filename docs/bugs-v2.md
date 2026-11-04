@@ -60,7 +60,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | diagnostics | 119 |
 | false-positive | 105 |
-| perf | 94 |
+| perf | 95 |
 | missing-feature | 70 |
 | soundness | 48 |
 | miscompile | 34 |
@@ -77,7 +77,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | typecheck | 183 |
 | mir | 115 |
-| mir-llvm | 109 |
+| mir-llvm | 110 |
 | cli | 54 |
 | ownership | 48 |
 | parser | 37 |
@@ -99,7 +99,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 |---|---|---|---|---|---|
 | B-2026-10-31-8 | 2026-10-31 | mir-llvm | low | Every `karac` process starts at 15-20 ms and 46.6 MB peak RSS before doing anything (`karac --version`), and the link step of a small kata's `karac build` is its largest phase at 72-102 ms | — |
 | B-2026-11-01-17 | 2026-11-01 | runtime | medium | Kata 71's auto-par binary runs 1.6-2.6x SLOWER with exactly two workers than with one (KARAC_THREADS=2: 0.24-0.39 s against 0.15 s) on the M5, on 5x the cycles for 7% more instructions; three or more workers run 0.04-0.06 s | — |
-| B-2026-11-04-5 | 2026-11-04 | parser | medium | Remainder after c2a612b69c (which names and fixes a Rust `::` path in an expression or a pattern: `Vec::new()`, `String::from("ab")`, `i64::MAX`, `HashMap::new()`, `std::cmp::max`, `Dir::Up =>`): an import path `import std::collections::HashMap;` (what `karac fix` makes of Rust's `use`) still gets only `Expected ';', found '::'` with no fix, and once `HashMap::new()` is fixed to `HashMap.new()` the resolver says only "undefined name 'HashMap'" with no hint toward Kāra's `Map` | — |
+| B-2026-11-04-5 | 2026-11-04 | parser | medium | Remainder after c2a612b69c (which names and fixes a Rust `::` path in an expression or a pattern: `Vec::new()`, `String::from("ab")`, `i64::MAX`, `HashMap::new()`, `std::cmp::max`, `Dir::Up =>`): an import path `import std::collections::HashMap;` (what `karac fix` makes of Rust's `use`) still gets only `Expected ';', found '::'` with no fix, and once `HashMap::new()` is fixed to `HashMap.new()` the resolver says only "undefined name 'HashMap'" with no hint toward Kāra's `Map`; likewise `HashSet` ("did you mean 'Hasher'?"), `BTreeMap`, `BTreeSet` and `BinaryHeap`, where the rename must also flip the direction (`BinaryHeap::from(v)` is `PriorityQueue.max_first_from(v)`: Kāra's queue pops the smallest first) | — |
 | B-2026-11-04-20 | 2026-11-04 | mir | low | `#[track_caller]` on a program function is accepted but does nothing: a wrapper `#[track_caller] fn must(o: Option[i64]) -> i64 { o.unwrap() }` called at line 10 panics with `at <file>:6:5`, the `unwrap()` inside the wrapper; design.md §10 says user code may use it on its own panicking wrappers and that it is transitive | — |
 | B-2026-11-04-26 | 2026-11-04 | effect | medium | Call sites are charged the callee's BODY effects, not the declared contract: a `pub fn g() -> i64 with writes(Stdout) { 1 }` called in two `par` branches is not a conflict, and a call through `[T: Storage]` whose trait method has the ceiling `with writes(Stdout)` is charged the instance impl's (empty) effects, so `par { via(a), via(b) }` passes | — |
 | B-2026-11-04-30 | 2026-11-04 | mir-llvm | medium | Kata 394's String decode loop runs 1.27x legacy's instructions and 1.26x its cycles on the MIR backend; seq 0.99x -> 1.17x rustc -O, par 0.86x -> 1.27x rayon | — |
@@ -114,6 +114,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-04-44 | 2026-11-04 | typecheck | low | An empty list literal with no expected type (`let mut w = [];`) is refused by `karac check` with MIR's internal "a type that failed to check is not lowered yet", not a diagnostic saying the element type is needed | — |
 | B-2026-11-04-45 | 2026-11-04 | typecheck | low | A `let` keeping a borrow of a prefix `Vec` literal's temporary (`let g = Vec["a"].last();`, and `vec!["a"].last()`, the same node) is refused late, as E0516 "cannot drop the temporary value ... while `g` still borrows it", where the list literal `["a"].last()` gets the §5.5 rule "a reference to a temporary outlives its statement"; next to another refusal the late E0516 never shows | — |
 | B-2026-11-04-54 | 2026-11-04 | typecheck | medium | With two impls of a user generic trait on one type (`impl Make[i64] for Out` + `impl Make[String] for Out`, `fn make(x: T) -> Self`), `Out.make("abcd".to_string())` is refused at check ("expected 'i64', found 'String'"): the checker picks among `From` impls by the argument's type but takes the first impl of any other trait | — |
+| B-2026-11-04-55 | 2026-11-04 | mir-llvm | low | `PriorityQueue.pop` sifts down by swapping, two comparisons a level, where Rust's `BinaryHeap::pop` sifts a hole to the bottom with one: kata 1046's bench (1000 piles of 3000 stones, 3 rounds of the heap game) runs 2.66x Rust's time under overflow checks, of which the compiler is about 1.15x and the heap algorithm the rest | — |
 
 ### Relocated
 
