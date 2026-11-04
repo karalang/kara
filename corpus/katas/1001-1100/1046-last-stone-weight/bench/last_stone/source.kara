@@ -1,0 +1,54 @@
+// LeetCode #1046: Last Stone Weight -- benchmark driver.
+//
+// The ★ arm (last_stone.kara) over 1000 piles of 3000 stones, built once,
+// then played again every round. Weights run to 10^9, past LeetCode's
+// 1000, so the pile is the heap's work and not a count's.
+
+fn last_stone_weight(stones: Slice[i64]) -> i64 {
+    let mut heap: PriorityQueue[i64] = PriorityQueue.max_first_from(stones.to_vec());
+    loop {
+        let y = match heap.pop() {
+            Some(y) => y,
+            None => return 0,
+        };
+        let x = match heap.pop() {
+            Some(x) => x,
+            None => return y,
+        };
+        if y > x {
+            heap.push(y - x);
+        }
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let count = 1000;
+    let n = 3000;
+    let rounds = 3;
+    let mut seed = 1046;
+    let mut piles: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..count {
+        let mut pile: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            let high = next_random(mut seed);
+            let low = next_random(mut seed);
+            pile.push((high * 32768 + low) % 1000000000 + 1);
+        }
+        piles.push(pile);
+    }
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..rounds {
+        for pile in piles.iter() {
+            let answer = last_stone_weight(pile);
+            total += answer;
+            check = (check * 131 + answer % 1000000007 + 1) % 1000000007;
+        }
+    }
+    println(f"{count} piles of {n} stones, {rounds} rounds: total {total}, checksum {check}");
+}

@@ -1,0 +1,130 @@
+// LeetCode #1046: Last Stone Weight -- a count for every weight.
+//
+// Weights are small (at most 1000), so the pile is a count of the stones
+// of each weight. A cursor walks down from the heaviest weight: two
+// stones of the cursor's weight smash to nothing, and one is smashed
+// against the next heavier weight still there, below the cursor, which
+// leaves their difference, lighter than the cursor, to be met again as
+// the cursor goes down. O(n + W) for weights up to W.
+
+fn last_stone_weight(stones: Slice[i64]) -> i64 {
+    let mut heaviest = 0;
+    for w in stones.iter() {
+        heaviest = heaviest.max(w);
+    }
+    let mut count: Vec[i64] = Vec.filled(heaviest + 1, 0);
+    for w in stones.iter() {
+        count[w] += 1;
+    }
+    let mut y = heaviest;
+    while y > 0 {
+        if count[y] == 0 {
+            y -= 1;
+            continue;
+        }
+        // pairs of the same weight smash to nothing
+        count[y] %= 2;
+        if count[y] == 0 {
+            y -= 1;
+            continue;
+        }
+        let mut x = y - 1;
+        while x > 0 and count[x] == 0 {
+            x -= 1;
+        }
+        if x == 0 {
+            return y;
+        }
+        count[y] -= 1;
+        count[x] -= 1;
+        count[y - x] += 1;
+        y -= 1;
+    }
+    0
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `n` stones of 1 to `most`
+fn random_stones(n: i64, most: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut stones: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        stones.push(next_random(mut seed) % most + 1);
+    }
+    stones
+}
+
+fn show(stones: Slice[i64]) -> String {
+    let parts: Vec[String] = stones.iter().map(|w| w.to_string()).collect();
+    "[" + parts.join(",") + "]"
+}
+
+fn main() {
+    // LeetCode's two examples, then a few more
+    let examples: Vec[Vec[i64]] = [
+        [2, 7, 4, 1, 8, 1],
+        [1],
+        [2, 2],
+        [3, 1],
+        [1, 1, 1],
+        [10, 3, 3],
+        [5, 5, 5, 5],
+        [9, 3, 2, 10],
+        [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+        [1000, 1, 1, 1, 1],
+    ];
+    for stones in examples.iter() {
+        println(f"{show(stones)} -> {last_stone_weight(stones)}");
+    }
+    // every pile of 1 to 6 stones of 1 to 4
+    let mut cases = 0;
+    let mut total = 0;
+    let mut check = 0;
+    for n in 1..7 {
+        let mut count = 1;
+        for _ in 0..n {
+            count *= 4;
+        }
+        for code in 0..count {
+            let mut stones: Vec[i64] = Vec.new();
+            let mut c = code;
+            for _ in 0..n {
+                stones.push(c % 4 + 1);
+                c /= 4;
+            }
+            let answer = last_stone_weight(stones);
+            cases += 1;
+            total += answer;
+            check = (check * 131 + answer + 1) % 1000000007;
+        }
+    }
+    println(f"every pile of 1 to 6 stones of 1 to 4: {cases} cases, total {total}, checksum {check}");
+    // 1000 random piles of 1 to 30 stones of 1 to 1000
+    let mut seed = 1046;
+    total = 0;
+    check = 0;
+    for _ in 0..1000 {
+        let n = next_random(mut seed) % 30 + 1;
+        let answer = last_stone_weight(random_stones(n, 1000, mut seed));
+        total += answer;
+        check = (check * 131 + answer + 1) % 1000000007;
+    }
+    println(f"1000 random piles: total {total}, checksum {check}");
+    // the largest: 30 stones of 1000, 30 of 1 to 30, and 1 doubling to 512
+    let same: Vec[i64] = Vec.filled(30, 1000);
+    let rising: Vec[i64] = (1..31).collect();
+    let mut doubling: Vec[i64] = Vec.new();
+    let mut w = 1;
+    for _ in 0..10 {
+        doubling.push(w);
+        w *= 2;
+    }
+    println(f"30 stones of 1000 -> {last_stone_weight(same)}");
+    println(f"1 to 30 -> {last_stone_weight(rising)}");
+    println(f"1, 2, 4, ..., 512 -> {last_stone_weight(doubling)}");
+}

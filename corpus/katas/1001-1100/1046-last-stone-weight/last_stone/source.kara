@@ -1,0 +1,109 @@
+// LeetCode #1046: Last Stone Weight -- a largest-first priority queue.
+//
+// Do what the statement says: take the two heaviest stones, and put back
+// their difference if it is not zero, until at most one stone is left.
+// A largest-first queue hands over the two heaviest in O(log n) each, so
+// the whole game is O(n log n).
+
+fn last_stone_weight(stones: Slice[i64]) -> i64 {
+    let mut heap: PriorityQueue[i64] = PriorityQueue.max_first_from(stones.to_vec());
+    loop {
+        let y = match heap.pop() {
+            Some(y) => y,
+            None => return 0,
+        };
+        let x = match heap.pop() {
+            Some(x) => x,
+            None => return y,
+        };
+        if y > x {
+            heap.push(y - x);
+        }
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `n` stones of 1 to `most`
+fn random_stones(n: i64, most: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut stones: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        stones.push(next_random(mut seed) % most + 1);
+    }
+    stones
+}
+
+fn show(stones: Slice[i64]) -> String {
+    let parts: Vec[String] = stones.iter().map(|w| w.to_string()).collect();
+    "[" + parts.join(",") + "]"
+}
+
+fn main() {
+    // LeetCode's two examples, then a few more
+    let examples: Vec[Vec[i64]] = [
+        [2, 7, 4, 1, 8, 1],
+        [1],
+        [2, 2],
+        [3, 1],
+        [1, 1, 1],
+        [10, 3, 3],
+        [5, 5, 5, 5],
+        [9, 3, 2, 10],
+        [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+        [1000, 1, 1, 1, 1],
+    ];
+    for stones in examples.iter() {
+        println(f"{show(stones)} -> {last_stone_weight(stones)}");
+    }
+    // every pile of 1 to 6 stones of 1 to 4
+    let mut cases = 0;
+    let mut total = 0;
+    let mut check = 0;
+    for n in 1..7 {
+        let mut count = 1;
+        for _ in 0..n {
+            count *= 4;
+        }
+        for code in 0..count {
+            let mut stones: Vec[i64] = Vec.new();
+            let mut c = code;
+            for _ in 0..n {
+                stones.push(c % 4 + 1);
+                c /= 4;
+            }
+            let answer = last_stone_weight(stones);
+            cases += 1;
+            total += answer;
+            check = (check * 131 + answer + 1) % 1000000007;
+        }
+    }
+    println(f"every pile of 1 to 6 stones of 1 to 4: {cases} cases, total {total}, checksum {check}");
+    // 1000 random piles of 1 to 30 stones of 1 to 1000
+    let mut seed = 1046;
+    total = 0;
+    check = 0;
+    for _ in 0..1000 {
+        let n = next_random(mut seed) % 30 + 1;
+        let answer = last_stone_weight(random_stones(n, 1000, mut seed));
+        total += answer;
+        check = (check * 131 + answer + 1) % 1000000007;
+    }
+    println(f"1000 random piles: total {total}, checksum {check}");
+    // the largest: 30 stones of 1000, 30 of 1 to 30, and 1 doubling to 512
+    let same: Vec[i64] = Vec.filled(30, 1000);
+    let rising: Vec[i64] = (1..31).collect();
+    let mut doubling: Vec[i64] = Vec.new();
+    let mut w = 1;
+    for _ in 0..10 {
+        doubling.push(w);
+        w *= 2;
+    }
+    println(f"30 stones of 1000 -> {last_stone_weight(same)}");
+    println(f"1 to 30 -> {last_stone_weight(rising)}");
+    println(f"1, 2, 4, ..., 512 -> {last_stone_weight(doubling)}");
+}
