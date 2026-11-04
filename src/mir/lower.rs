@@ -11469,6 +11469,81 @@ impl<'l, 'a> Bx<'l, 'a> {
 
     /// The `from` of the user's non-generic `impl From[source] for
     /// target`, as `?` converts an error.
+    /// Of the impls of one generic trait for one type (`impl From[A] for
+    /// Out`, `impl From[B] for Out`), each with its function `d`'s name, the
+    /// one whose parameters `args` have, when `d` is such a function and
+    /// exactly one fits; `None` leaves the call to `d` (B-2026-11-04-47).
+    fn trait_sibling_by_args(&mut self, d: DefId, args: &'a [CallArg]) -> R<Option<DefId>> {
+        let Some(item) = self.lcx.fns.get(&d) else {
+            return Ok(None);
+        };
+        let plain = |i: &FnItem<'_>| {
+            i.impl_trait_args.is_some()
+                && i.impl_params == 0
+                && i.f.self_param.is_none()
+                && i.f.params.len() == args.len()
+                && i.f
+                    .generic_params
+                    .as_ref()
+                    .is_none_or(|g| g.params.is_empty())
+        };
+        if !plain(item) || args.is_empty() {
+            return Ok(None);
+        }
+        let trait_of = |d: DefId| {
+            let path = &self.lcx.defs.table.get(d).path.segments;
+            path.len()
+                .checked_sub(2)
+                .and_then(|i| path[i].rsplit_once('#'))
+                .map(|(t, _)| t.to_string())
+        };
+        let Some(tr) = trait_of(d) else {
+            return Ok(None);
+        };
+        let (target, prim, name) = (item.impl_target, item.impl_prim, item.f.name.as_str());
+        let sibs: Vec<DefId> = self
+            .lcx
+            .fns
+            .iter()
+            .filter(|(&s, i)| {
+                i.impl_target == target
+                    && i.impl_prim == prim
+                    && i.f.name == name
+                    && plain(i)
+                    && trait_of(s).as_deref() == Some(tr.as_str())
+            })
+            .map(|(&s, _)| s)
+            .collect();
+        if sibs.len() < 2 {
+            return Ok(None);
+        }
+        let mut have = Vec::new();
+        for a in args {
+            let t = self.expr_ty(&a.value)?;
+            have.push(self.strip_ty_full(t).1);
+        }
+        let mut fits = Vec::new();
+        for s in sibs {
+            let f = self.lcx.fns[&s].f;
+            let mut all = true;
+            for (p, &h) in f.params.iter().zip(&have) {
+                let t = self.lcx.node_types.get(&p.pattern.id).copied();
+                let pt = t.and_then(|t| self.lcx.mir_ty(t, &[]).ok());
+                if pt.is_none_or(|pt| self.strip_ty_full(pt).1 != h) {
+                    all = false;
+                    break;
+                }
+            }
+            if all {
+                fits.push(s);
+            }
+        }
+        Ok(match fits.as_slice() {
+            [s] => Some(*s),
+            _ => None,
+        })
+    }
+
     fn user_from(&mut self, target: Ty, source: Ty) -> Option<(DefId, Vec<Ty>)> {
         let (adt, _) = self.tys().tcx().adt_of(target)?;
         let base = self.lcx.defs.table.get(adt.def).path.segments.clone();
@@ -17714,6 +17789,13 @@ impl<'l, 'a> Bx<'l, 'a> {
                     }
                     self.call_native(&name, ops, dest);
                     return Ok(());
+                };
+                // `Out.from(b)` beside `impl From[A] for Out` and `impl
+                // From[B] for Out`: the impl whose parameters the arguments
+                // have, which the path names only as the trait's.
+                let (d, f) = match self.trait_sibling_by_args(d, args)? {
+                    Some(s) => (s, self.lcx.fns[&s].f),
+                    None => (d, f),
                 };
                 let recv = self.variant_receiver(callee, d, f, &inst_args)?;
                 self.def_call(e, d, f, inst_args, recv, args, dest)

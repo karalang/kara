@@ -86,6 +86,8 @@ accepted by 0.8.0 are now refused, each with a fix-it.
   files in its directory, and `pub` exports it. 0.8.0 refused an unmarked
   field outside its own file and did not parse `private` on a field
   (B-2026-11-04-22).
+- Of several `From` impls on one type, `T.from(x)` calls the one `x`'s type
+  names; it called the first whatever the argument (B-2026-11-04-47).
 
 ### Diagnostics
 

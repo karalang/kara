@@ -5,8 +5,9 @@
 //! accepted and calls `A`'s impl, also beside a `B.m` and in a generic body
 //! under `T: A + B` (B-2026-11-04-8); `x.m()` under one bound calls that
 //! bound's method when another trait of the type has an `m`
-//! (B-2026-11-04-11); and a program's associated function named like a
-//! reflection method (`name`) is the program's (B-2026-11-04-10). Each
+//! (B-2026-11-04-11); a program's associated function named like a
+//! reflection method (`name`) is the program's (B-2026-11-04-10); and of
+//! two `From` impls, `Out.from(b)` calls the one `b`'s type names. Each
 //! checks clean and prints the same through the MIR interpreter and, with
 //! the backend, `karac run`.
 
@@ -95,6 +96,22 @@ fn main() {
 }
 "#,
         "trait\ntrait\ninherent\n",
+    ),
+    (
+        "from_impl_by_argument",
+        r#"struct A { x: i64 }
+struct B { y: i64 }
+struct Out { v: i64 }
+impl From[A] for Out { fn from(a: A) -> Out { Out { v: a.x + 1 } } }
+impl From[B] for Out { fn from(b: B) -> Out { Out { v: b.y + 100 } } }
+fn main() {
+    println(Out.from(A { x: 1 }).v);
+    println(Out.from(B { y: 1 }).v);
+    let o: Out = B { y: 2 }.into();
+    println(o.v);
+}
+"#,
+        "2\n101\n102\n",
     ),
 ];
 

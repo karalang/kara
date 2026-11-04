@@ -1,0 +1,30 @@
+struct Meters { v: i64 }
+struct Feet { v: i64 }
+struct Length { mm: i64 }
+
+impl From[Meters] for Length {
+    fn from(m: Meters) -> Length { Length { mm: m.v * 1000 } }
+}
+
+impl From[Feet] for Length {
+    fn from(f: Feet) -> Length { Length { mm: f.v * 305 } }
+}
+
+impl From[i64] for Length {
+    fn from(mm: i64) -> Length { Length { mm: mm } }
+}
+
+impl From[String] for Length {
+    fn from(s: String) -> Length { Length { mm: s.len() } }
+}
+
+fn main() {
+    println(Length.from(Meters { v: 2 }).mm);
+    println(Length.from(Feet { v: 2 }).mm);
+    println(Length.from(7).mm);
+    println(Length.from("abcd".to_string()).mm);
+    let f: Length = Feet { v: 1 }.into();
+    println(f.mm);
+    let m: Length = Meters { v: 1 }.into();
+    println(m.mm);
+}

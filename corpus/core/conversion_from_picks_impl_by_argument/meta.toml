@@ -1,0 +1,11 @@
+source = "design.md § Conversion traits"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["traits", "conversions"]
+class = "e"
+expected_from = "spec"
+rules = []
+backends = []
+env = {}
+note = "Choosing among several impls: a type may implement both From[A] and From[B]; T.from(x) picks the impl by the type of x, and x.into() by the expected type. Length has four From impls, and each Length.from(..) and .into() reaches the one its argument's type names."
