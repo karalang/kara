@@ -1246,7 +1246,7 @@ let empty: Map[String, i64] = [:];
 
 An empty literal, `[]` or `[:]`, takes its element types from the expected type.
 
-There is one way to write each collection: `[a, b]`, `[v; n]`, `[k: v]`, `[:]`, `Vec.new()` and `Vec.filled(n, v)`, plus the `from` constructors (`Set.from([1, 2, 3])`, `Map.from([(k, v)])`) where no expected type is available. There is no `vec!` and no `Vec[...]` or `Set[...]` prefix literal. `Vec`, `Map`, `Set` and the other collections are library types ([library/collections.md](library/collections.md)).
+There is one way to write each collection: `[a, b]`, `[v; n]`, `[k: v]`, `[:]`, `Vec.new()` and `Vec.filled(n, v)`, plus the `from` constructors (`Set.from([1, 2, 3])`, `Map.from([(k, v)])`) where no expected type is available. There is no `Vec[...]` or `Set[...]` prefix literal. `vec![a, b]` is accepted as a deprecated spelling of the list literal: `karac check` warns on it and `karac fix` rewrites it to `[a, b]` (Gowtham, 2026-11-04). `Vec`, `Map`, `Set` and the other collections are library types ([library/collections.md](library/collections.md)).
 
 ### Structs
 
