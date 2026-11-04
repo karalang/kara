@@ -133,6 +133,7 @@ pub(super) const VEC_METHOD_NAMES: &[&str] = &[
     "concat",
     "contains",
     "dedup",
+    "drain",
     "extend",
     "extend_from_slice",
     "fill",
@@ -1689,6 +1690,11 @@ impl<'a> super::TypeChecker<'a> {
         // arms below.
         args_close_span: &Span,
     ) -> Type {
+        if let ("drain", [arg]) = (method, args) {
+            if let Some(t) = self.drain_range_spelling(object, &arg.value) {
+                return t;
+            }
+        }
         // A `std.log` field call the rewrite made (`crate::log_calls`): its
         // key literal is the label, at the call's own start, which no
         // written call can be.
@@ -6312,4 +6318,100 @@ fn rust_string_method_twin(method: &str) -> Option<&'static str> {
         "to_owned" => "an owned copy of the text is `to_string()`",
         _ => return None,
     })
+}
+
+impl super::TypeChecker<'_> {
+    /// `v.drain(a..)`, `v.drain(..b)`, `v.drain(a..=b)` or `v.drain(..)` on a
+    /// `Vec`: Rust's spellings of a range `Vec.drain` takes as `start..end`
+    /// (docs/library/collections.md). Refused with the `start..end` that
+    /// means the same as a machine-applicable fix (B-2026-11-04-77). `None`
+    /// for anything else, which checks as usual.
+    fn drain_range_spelling(&mut self, object: &Expr, arg: &Expr) -> Option<Type> {
+        let ExprKind::Range {
+            start,
+            end,
+            inclusive,
+        } = &arg.kind
+        else {
+            return None;
+        };
+        if start.is_some() && end.is_some() && !*inclusive {
+            return None;
+        }
+        let mut base = self.infer_expr(object);
+        while let Type::Ref(inner) | Type::MutRef(inner) = base {
+            base = *inner;
+        }
+        if !matches!(&base, Type::Named { name, .. } if name == "Vec") {
+            return None;
+        }
+        let render = |e: &Expr| {
+            let t = crate::formatter::render_expr(e);
+            match e.kind {
+                ExprKind::Identifier(_)
+                | ExprKind::Integer(..)
+                | ExprKind::MethodCall { .. }
+                | ExprKind::Call { .. }
+                | ExprKind::Index { .. }
+                | ExprKind::FieldAccess { .. } => t,
+                _ => format!("({t})"),
+            }
+        };
+        let lo = start
+            .as_deref()
+            .map(crate::formatter::render_expr)
+            .unwrap_or_else(|| "0".to_string());
+        let hi = match end.as_deref() {
+            Some(Expr {
+                kind: ExprKind::Integer(n, None),
+                ..
+            }) if *inclusive => (n + 1).to_string(),
+            // `i..=i + 1` folds its literal: `i..i + 2`.
+            Some(Expr {
+                kind:
+                    ExprKind::Binary {
+                        op: BinOp::Add,
+                        left,
+                        right,
+                    },
+                ..
+            }) if *inclusive && matches!(right.kind, ExprKind::Integer(_, None)) => {
+                let ExprKind::Integer(n, None) = &right.kind else {
+                    unreachable!()
+                };
+                format!("{} + {}", crate::formatter::render_expr(left), n + 1)
+            }
+            Some(
+                e @ Expr {
+                    kind:
+                        ExprKind::Binary {
+                            op: BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod,
+                            ..
+                        },
+                    ..
+                },
+            ) if *inclusive => format!("{} + 1", crate::formatter::render_expr(e)),
+            Some(e) if *inclusive => format!("{} + 1", render(e)),
+            Some(e) => crate::formatter::render_expr(e),
+            None => format!("{}.len()", render(object)),
+        };
+        let fixed = format!("{lo}..{hi}");
+        self.error_fix_diffs.insert(
+            SpanKey::from_span(&arg.span),
+            vec![crate::resolver::TextEdit {
+                offset: arg.span.offset,
+                length: arg.span.length,
+                replacement: fixed.clone(),
+            }],
+        );
+        self.type_error(
+            format!(
+                "`Vec.drain` takes a `start..end` range (the end excluded): write \
+                 `drain({fixed})`"
+            ),
+            arg.span,
+            TypeErrorKind::TypeMismatch,
+        );
+        Some(Type::Error)
+    }
 }

@@ -22,7 +22,7 @@
 use crate::ast::*;
 
 use super::inference::{resolve_type_var_top, resolve_type_vars, unify_types};
-use super::types::{type_display, Type};
+use super::types::{type_display, IntSize, Type};
 use super::{FixIt, TypeErrorKind};
 use crate::token::Span;
 use std::collections::HashMap;
@@ -564,6 +564,38 @@ impl<'a> super::TypeChecker<'a> {
                 let arg_ty = self.infer_expr(&args[0].value);
                 self.check_i64_arg(&args[0].value, &arg_ty);
                 return Some(resolve_type_var_top(&elem, &self.env.substitutions));
+            }
+        }
+
+        // `Vec[T].drain(r: Range[i64]) -> VecIntoIter[T]` (B-2026-11-04-77):
+        // the body is library source (`collections.kara`); this arm types
+        // the call the same way where that source is not loaded. The Rust
+        // spellings (`a..`, `..b`, `a..=b`) were answered with a fix-it in
+        // `drain_range_spelling` before this arm is reached.
+        if method == "drain" && args.len() == 1 {
+            let elem = match obj_ty {
+                Type::Named { name, args } if name == "Vec" && args.len() == 1 => {
+                    Some(args[0].clone())
+                }
+                Type::Ref(inner) | Type::MutRef(inner) => match inner.as_ref() {
+                    Type::Named { name, args } if name == "Vec" && args.len() == 1 => {
+                        Some(args[0].clone())
+                    }
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some(elem) = elem {
+                let want = Type::Named {
+                    name: "Range".to_string(),
+                    args: vec![Type::Int(IntSize::I64)],
+                };
+                let arg_ty = self.infer_expr(&args[0].value);
+                self.check_assignable(&want, &arg_ty, args[0].value.span);
+                return Some(Type::Named {
+                    name: "VecIntoIter".to_string(),
+                    args: vec![resolve_type_var_top(&elem, &self.env.substitutions)],
+                });
             }
         }
 

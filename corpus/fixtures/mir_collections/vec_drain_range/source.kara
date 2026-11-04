@@ -1,0 +1,43 @@
+// Vec.drain(start..end) (docs/library/collections.md, B-2026-11-04-77):
+// removes the elements at the range, the end excluded, shifts the rest
+// down, and yields them front to back. They are removed at the call, so an
+// iterator dropped unread still removed them.
+struct Tag { n: i64 }
+impl Drop for Tag { fn drop(mut ref self) { println(f"drop {self.n}"); } }
+
+fn main() {
+    let mut v: Vec[i64] = [1, 2, 3, 4, 5].to_vec();
+    let d: Vec[i64] = v.drain(1..3).collect();
+    println(f"{d} {v}");
+
+    let mut s: Vec[String] = ["a".to_string(), "b".to_string(), "c".to_string()].to_vec();
+    for x in s.drain(0..2) {
+        println(x);
+    }
+    println(f"{s}");
+
+    let mut w: Vec[i64] = [7, 8, 9].to_vec();
+    let _ = w.drain(1..2);
+    println(f"{w}");
+
+    let mut e: Vec[i64] = [1, 2].to_vec();
+    let none: Vec[i64] = e.drain(1..1).collect();
+    let all: Vec[i64] = e.drain(0..e.len()).collect();
+    println(f"{none} {all} {e.len()}");
+
+    // The taken elements are owned by the iterator: the one read is moved
+    // out, the unread rest drop with it, and the kept ones with the Vec.
+    let mut t: Vec[Tag] = Vec.new();
+    for n in 0..4 {
+        t.push(Tag { n: n });
+    }
+    {
+        let mut it = t.drain(1..3);
+        match it.next() {
+            Some(x) => println(f"took {x.n}"),
+            None => println("none"),
+        }
+        println("end of scope");
+    }
+    println(f"left {t.len()}");
+}

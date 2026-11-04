@@ -1888,6 +1888,7 @@ mod vec_method_table_tests {
         ("concat", "vv.concat()"),
         ("contains", "v.contains(1)"),
         ("dedup", "v.dedup()"),
+        ("drain", "v.drain(0..0)"),
         ("extend", "v.extend(w.clone())"),
         ("extend_from_slice", "v.extend_from_slice(w.as_slice())"),
         ("fill", "v.fill(0)"),

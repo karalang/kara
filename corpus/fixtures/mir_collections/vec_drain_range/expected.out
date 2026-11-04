@@ -1,0 +1,13 @@
+[2, 3] [1, 4, 5]
+a
+b
+[c]
+[7, 9]
+[] [1, 2] 0
+took 1
+drop 1
+end of scope
+drop 2
+left 2
+drop 0
+drop 3

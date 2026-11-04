@@ -91,6 +91,7 @@ A growable array. It has every [`Slice[T]`](#slicet) method, plus:
 | `retain` | `fn retain(mut ref self, pred: own MutFn(T) -> bool)` | Keeps the elements satisfying `pred` and drops the rest, in one pass |
 | `dedup` | `fn dedup(mut ref self) where T: PartialEq` | Drops consecutive equal elements |
 | `truncate` | `fn truncate(mut ref self, len: i64)` | Drops the elements from `len` on. Does nothing if `len >= self.len()` |
+| `drain` | `fn drain(mut ref self, r: Range[i64]) -> VecIntoIter[T]` | Removes the elements at `start..end` (the end excluded), shifting the rest down, and returns them front to back. They are removed at once, so dropping the iterator unread still removes them. Panics if the range is reversed or past the end. Rust's `drain(a..)`, `drain(..b)`, `drain(a..=b)` and `drain(..)` are refused with the `start..end` that means the same as a fix |
 | `split_off` | `fn split_off(mut ref self, at: i64) -> Vec[T]` | Moves the elements from `at` on into a new `Vec` and returns it, leaving `[0, at)`. Panics if `at > self.len()` |
 | `clear` | `fn clear(mut ref self)` | Drops every element |
 | `resize` | `fn resize(mut ref self, n: i64, val: own T) where T: Clone` | Sets the length to exactly `n`: truncates when shrinking, appends copies of `val` when growing. `n < 0` counts as 0. `val` is moved into the first new slot and cloned into the rest, and dropped when there is no new slot |

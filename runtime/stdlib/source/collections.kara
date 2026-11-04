@@ -211,6 +211,21 @@ impl[T] Vec[T] {
         self.pop().unwrap()
     }
 
+    /// Removes the elements at `r` (`start..end`, the end excluded),
+    /// shifting the rest down, and returns them front to back. They are
+    /// removed at once, so dropping the iterator unread still removes
+    /// them. A range past the end, or one whose start is after its end,
+    /// aborts (B-2026-11-04-77).
+    fn drain(mut ref self, r: Range[i64]) -> VecIntoIter[T] {
+        if r.start < 0 or r.end > self.len() or r.start > r.end {
+            panic("drain range out of bounds");
+        }
+        let tail = self.split_off(r.end);
+        let taken = self.split_off(r.start);
+        self.extend(tail);
+        VecIntoIter { front: Vec.new(), back: taken }
+    }
+
     /// Removes and returns the first element `pred` accepts, shifting the
     /// rest down, or `None` when it accepts none.
     fn remove_first(mut ref self, pred: own MutFn(T) -> bool) -> Option[T] {
