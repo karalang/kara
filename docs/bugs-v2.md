@@ -65,8 +65,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | soundness | 48 |
 | miscompile | 33 |
 | run-vs-build | 22 |
+| other | 18 |
 | codegen-gap | 18 |
-| other | 17 |
 | crash | 8 |
 | leak | 4 |
 | use-after-free | 1 |
@@ -78,7 +78,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | typecheck | 177 |
 | mir | 109 |
 | mir-llvm | 105 |
-| cli | 52 |
+| cli | 53 |
 | ownership | 48 |
 | parser | 36 |
 | interp | 27 |
@@ -114,11 +114,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-04-16 | 2026-11-04 | typecheck | medium | A blanket impl of the program's own trait, `impl[T: Display] Twice for T { .. }` (design.md §9 Coherence: allowed when the package defines the trait), is accepted but never found: `5.twice()` is "no method 'twice' on type 'i64'", `"ab".twice()` "no method on 'String'", and UFCS `Twice.twice(5)` the same | — |
 | B-2026-11-04-17 | 2026-11-04 | typecheck | low | `for x in it` with `it: I` or `it: mut ref I` (I: Iterator[Item = i64], a borrowed iterator) reports "expected 'i64', found 'ref I'" at the first use of `x`, typing the loop variable as the iterator; design.md §9 says a `for` over a type that is neither Iterator nor Iterable is an error naming the missing impl | — |
 | B-2026-11-04-18 | 2026-11-04 | effect | high | The effects of the `From` impl that a `?` inserts are not charged to the enclosing function (design.md §10: "The conversion is a real call for effects"): a `pub fn` whose `?` converts through `impl From[E1] for E2 { fn from(..) -> E2 with writes(Log) }` passes `karac check` with no effect clause and reports no effects, while the same conversion written as `E2.from(e)` is refused for the undeclared `writes(Log)` | — |
-| B-2026-11-04-19 | 2026-11-04 | parser | medium | Script mode's implicit `main` returns `()`, so a top-level `?` is refused with "'?' requires the enclosing function to return `Result` or `Option`, found '()'"; design.md §10 Script mode gives it `fn main() -> Result[(), AnyError]` so that `?` works and an `Err` exits 1 with `Error: ..` | — |
 | B-2026-11-04-20 | 2026-11-04 | mir | low | `#[track_caller]` on a program function is accepted but does nothing: a wrapper `#[track_caller] fn must(o: Option[i64]) -> i64 { o.unwrap() }` called at line 10 panics with `at <file>:6:5`, the `unwrap()` inside the wrapper; design.md §10 says user code may use it on its own panicking wrappers and that it is transitive | — |
-| B-2026-11-04-21 | 2026-11-04 | resolver | medium | In a package, importing a NESTED module itself (`import db.connection;`, then `connection.open(7)`) is refused with "error[E0112]: unknown module `db`" by `karac check`, `run` and `build`; design.md §4 Imports binds the module as `connection`, and a top-level module import (`import util;`) works | — |
 | B-2026-11-04-22 | 2026-11-04 | typecheck | medium | Struct field visibility does not follow design.md §5's three levels: a field with no keyword is refused from another module of the SAME package ("private field 'inner' of struct 'S' is not visible outside its defining module", coded E0221 PrivateTypeInPublicSignature), though the default is package-visible, and `private inner: i64` (directory-only) is a parse error "'private' is a reserved keyword" | — |
-| B-2026-11-04-23 | 2026-11-04 | cli | low | `karac run` in a package whose src/ has both main.kara and lib.kara runs main.kara and exits 0, while `karac check` and `karac build` refuse it ("a Kāra package cannot contain both ... a package is either an executable or a library, never both", design.md §4 Entry points) | — |
 | B-2026-11-04-24 | 2026-11-04 | typecheck | low | A type mismatch between two same-named types from different modules prints the compiler's internal mangled names: `expected 'ref P__a', found 'P__b'` for `a.P` and `b.P` imported as `AP` and `BP` | — |
 | B-2026-11-04-25 | 2026-11-04 | effect | high | Two `par` branches that write the same USER-DECLARED resource are never refused: with `effect resource Db;` and `fn put() with writes(Db)`, `par { put(), put() }`, `par { { put(); }, { put(); } }` and `par { put(), rd() }` (rd: reads(Db)) all pass `karac check` and run, though `karac query effects` lists writes(Db) on both; design.md §12's own AuditLog example is refused only through its `writes(Stderr)` | — |
 | B-2026-11-04-26 | 2026-11-04 | effect | medium | Call sites are charged the callee's BODY effects, not the declared contract: a `pub fn g() -> i64 with writes(Stdout) { 1 }` called in two `par` branches is not a conflict, and a call through `[T: Storage]` whose trait method has the ceiling `with writes(Stdout)` is charged the instance impl's (empty) effects, so `par { via(a), via(b) }` passes | — |
@@ -129,6 +126,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-04-31 | 2026-11-04 | mir-llvm | low | Seq binaries of katas 297, 315, 332 and 394 are still 319-336 KB on gd33cb285d, after ad984ef96b took katas 38, 282 and 306 down to 67-83 KB | — |
 | B-2026-11-04-32 | 2026-11-04 | mir-llvm | low | Kata 297's peak RSS is 1.35x Rust's (233-235 MiB vs 173 MiB) on the MIR backend, where the 2026-08-28 feed read 179.9 vs 174.3 MiB | — |
 | B-2026-11-04-33 | 2026-11-04 | mir-llvm | low | Six more katas sit at 1.03-1.20x legacy's cycles or instructions on the MIR backend, each too small to file alone, and kata 895's par lane slipped to 2.31x rayon: the third borderline batch after B-2026-11-01-45 | — |
+| B-2026-11-04-36 | 2026-11-04 | cli | low | `karac fmt` rewrites a script-mode file into an explicit `fn main()`, its top-level statements moved after every item; since B-2026-11-04-19 it also writes the implicit main's `-> Result[(), AnyError]` and `Ok(())`, so formatting a script changes its shape (design.md § Script mode) | — |
 
 ### Relocated
 
@@ -640,6 +638,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-04-1 | parser | low | `let s = mut place;` (a call argument's marker where a borrow for writing is wanted) is refused as "'mut' is a reserved keyword and cannot be used as… | 4230ad12ec |
 | B-2026-11-04-2 | typecheck | low | `items.into_iter()` on a bare `Vec[Item]` parameter whose `Item` is not clonable gets the fix `items.clone().into_iter()`, which does not check eithe… | 4230ad12ec |
 | B-2026-11-04-3 | ownership | low | `let s = v[i].field;` with `s` only read gets the fix that clones the field, where `let s = v[i];` already gets `ref`; under `self`, a write to any o… | 4230ad12ec |
+| B-2026-11-04-19 | parser | medium | Script mode's implicit `main` returns `()`, so a top-level `?` is refused with "'?' requires the enclosing function to return `Result` or `Option`, f… | ab80e422aa |
+| B-2026-11-04-21 | resolver | medium | In a package, importing a NESTED module itself (`import db.connection;`, then `connection.open(7)`) is refused with "error[E0112]: unknown module `db… | ab80e422aa |
+| B-2026-11-04-23 | cli | low | `karac run` in a package whose src/ has both main.kara and lib.kara runs main.kara and exits 0, while `karac check` and `karac build` refuse it ("a K… | ab80e422aa |
 | B-2026-11-04-34 | ownership | medium | A closure or task made in each arm of an `if`, each moving the same value in, is refused as "moved into a closure, used again here" (or "moved into a… | f575bce6f0 |
 | B-2026-11-04-35 | ownership | medium | `match p.c { C.At(s) => . | f575bce6f0 |
 
