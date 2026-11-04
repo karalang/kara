@@ -58,14 +58,14 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 119 |
+| diagnostics | 121 |
 | false-positive | 105 |
 | perf | 95 |
-| missing-feature | 70 |
+| missing-feature | 72 |
 | soundness | 48 |
 | miscompile | 34 |
 | run-vs-build | 23 |
-| codegen-gap | 20 |
+| codegen-gap | 22 |
 | other | 18 |
 | crash | 8 |
 | leak | 4 |
@@ -75,10 +75,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 183 |
-| mir | 115 |
+| typecheck | 186 |
+| mir | 118 |
 | mir-llvm | 110 |
-| cli | 54 |
+| cli | 55 |
 | ownership | 48 |
 | parser | 37 |
 | interp | 27 |
@@ -114,6 +114,12 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-04-45 | 2026-11-04 | typecheck | low | A `let` keeping a borrow of a prefix `Vec` literal's temporary (`let g = Vec["a"].last();`, and `vec!["a"].last()`, the same node) is refused late, as E0516 "cannot drop the temporary value ... while `g` still borrows it", where the list literal `["a"].last()` gets the §5.5 rule "a reference to a temporary outlives its statement"; next to another refusal the late E0516 never shows | — |
 | B-2026-11-04-54 | 2026-11-04 | typecheck | medium | With two impls of a user generic trait on one type (`impl Make[i64] for Out` + `impl Make[String] for Out`, `fn make(x: T) -> Self`), `Out.make("abcd".to_string())` is refused at check ("expected 'i64', found 'String'"): the checker picks among `From` impls by the argument's type but takes the first impl of any other trait | — |
 | B-2026-11-04-55 | 2026-11-04 | mir-llvm | low | `PriorityQueue.pop` sifts down by swapping, two comparisons a level, where Rust's `BinaryHeap::pop` sifts a hole to the bottom with one: kata 1046's bench (1000 piles of 3000 stones, 3 rounds of the heap game) runs 2.66x Rust's time under overflow checks, of which the compiler is about 1.15x and the heap algorithm the rest | — |
+| B-2026-11-04-56 | 2026-11-04 | mir | medium | `karac check` does not run the MIR borrow check on a function that `main` never reaches, so a library package's `pub fn bad() -> Str { let s = "abc".to_string(); s.as_str() }` (a view of its own local escaping, E0516/E0509) is reported clean; the same function called from `main` is refused by check | — |
+| B-2026-11-04-57 | 2026-11-04 | mir | medium | Three pattern shapes design.md §5 specifies pass the front end but are refused with "this pattern is not lowered yet": an or-pattern whose alternatives bind under a guard (`E.A(x) | E.B(x) if g(x) =>`), an or-pattern nested inside a variant (`Out.Foo(In.A | In.B) =>`), and an or-pattern in `if let` (`if let Lr.Left(x) | Lr.Right(x) = v`); a distinct type's literal pattern (`Uid(0) =>`) is refused the same way ("this variant is not lowered yet") | — |
+| B-2026-11-04-58 | 2026-11-04 | typecheck | medium | A list literal with a `Set[T]` expected type is refused: `let s: Set[i64] = [1, 2, 2, 3];` -> "expected 'Set[i64]', found 'Vec[i64]'", though design.md §5 Collection literals says the literal follows the expected type and builds a `Set` there | — |
+| B-2026-11-04-59 | 2026-11-04 | mir | medium | Mixed-width compound assignment passes `karac check` and then fails in MIR: `total_i64 += n_i32` (legal per design.md §5) stops `run`/`build` with "invalid MIR: binary operands of different types i64 and i32", and the illegal narrowing `n_i32 += total_i64` is accepted by check and fails the same way; `let w: Slice[i64] = v;` (a let does not coerce, §5 Slices) is likewise accepted by check and fails in MIR | — |
+| B-2026-11-04-60 | 2026-11-04 | typecheck | low | Small §5 divergences in refusals and lints: an or-pattern whose alternatives bind different names (`E.A(x) | E.B(y)`) is accepted; `mut port: i64` on a plain struct field and `struct Marker;` are accepted; the `redundant_alias_bound` warning never fires; a shift amount out of range reports "integer overflow" instead of "shift amount out of range"; and the alias-bound and range-bound errors carry E0262/E0263 where §5 names E_TYPE_ALIAS_BOUND_NOT_SATISFIED / E_RANGE_PATTERN_BOUND_NOT_CONST | — |
+| B-2026-11-04-61 | 2026-11-04 | typecheck+cli | low | `m.get(k) == Some(v)` with a non-Copy value (Map[String, String]) refuses E0208 "cannot compare 'Option[ref String]' and 'Option[String]'" with no edit, and `karac fix` instead applies E0200's `.clone()` inside the `Some`, leaving the E0208 standing; the no-copy edit `Some(ref v)` (design.md § Views) is never offered | — |
 
 ### Relocated
 

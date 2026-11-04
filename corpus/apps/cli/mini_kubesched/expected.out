@@ -1,0 +1,248 @@
+== load
+data/batch.pods: 0 nodes, 10 pods
+data/cluster.nodes: 7 nodes, 0 pods
+data/system.pods: 0 nodes, 7 pods
+data/web.pods: 0 nodes, 13 pods
+data/zz_broken.pods: 1 nodes, 1 pods
+data/zz_broken.pods:2: pod name 'nightly-backup' needs a namespace
+data/zz_broken.pods:5: bad priority 'high'
+data/zz_broken.pods:7: bad quantity '3Gb'
+data/zz_broken.pods:10: bad effect 'Sometimes'
+data/zz_broken.pods:12: bad operator 'Near'
+data/zz_broken.pods:14: bad skew '0'
+data/zz_broken.pods:16: node 'tiny' needs cpu, memory and pods
+data/zz_broken.pods:19: unknown directive 'deployment'
+data/zz_broken.pods:15: duplicate node 'web-a1'
+data/zz_broken.pods:20: duplicate pod 'shop/storefront-3'
+7 nodes, 30 pods
+== events
+> schedule
+bind kube-system/coredns-1 -> web-c1 (score 497)
+bind kube-system/coredns-2 -> web-a1 (score 496)
+bind kube-system/metrics-server -> web-b1 (score 496)
+bind kube-system/fluent-bit -> cp-1 (score 496)
+bind kube-system/ingress-1 -> web-a1 (score 684)
+bind kube-system/ingress-2 -> web-b1 (score 684)
+bind kube-system/ingress-3 -> web-c1 (score 681)
+bind shop/redis-0 -> web-b1 (score 658)
+bind shop/redis-1 -> web-a1 (score 458)
+bind shop/storefront-1 -> web-c1 (score 674)
+bind shop/storefront-2 -> web-a1 (score 651)
+bind shop/storefront-3 -> web-b1 (score 651)
+bind shop/storefront-4 -> web-c1 (score 665)
+bind shop/storefront-5 -> web-a1 (score 644)
+bind shop/storefront-6 -> web-b1 (score 644)
+bind shop/api-1 -> web-b1 (score 629)
+bind shop/api-2 -> web-c1 (score 447)
+bind shop/api-3 -> web-a1 (score 429)
+bind shop/api-4 -> big-b2 (score 395)
+bind shop/search -> web-c1 (score 444)
+bind data/train-llm -> gpu-a2 (score 425)
+FailedScheduling data/train-small: 0/7 nodes are available: 1 node(s) had untolerated taint {node-role: control-plane}, 1 node(s) had untolerated taint {nvidia.com/gpu: present}, 5 node(s) didn't match Pod's node affinity/selector.
+bind data/etl-1 -> big-b2 (score 479)
+bind data/etl-2 -> big-b2 (score 464)
+bind data/etl-3 -> big-b2 (score 448)
+bind data/etl-4 -> big-b2 (score 432)
+bind data/etl-5 -> big-b2 (score 417)
+bind data/scratch-1 -> web-c1 (score 416)
+bind data/scratch-2 -> web-a1 (score 404)
+bind data/scratch-3 -> web-b1 (score 404)
+bound 29, pending 1
+> show nodes
+NAME      STATUS   CPU                   MEMORY               PODS   TAINTS
+big-b2    Ready    13100m/16000m (81%)   51Gi/64Gi (79%)      6/30   maintenance=soon:PreferNoSchedule
+cp-1      Ready    50m/2000m (2%)        64Mi/4Gi (1%)        1/10   node-role=control-plane:NoSchedule
+gpu-a2    Ready    6000m/8000m (75%)     24Gi/32Gi (75%)      1/8    nvidia.com/gpu=present:NoSchedule
+spot-c2   Ready    0m/8000m (0%)         0/15625000Ki (0%)    0/20   spot=true:PreferNoSchedule
+web-a1    Ready    3800m/4000m (95%)     10566Mi/16Gi (64%)   7/12   <none>
+web-b1    Ready    3800m/4000m (95%)     10696Mi/16Gi (65%)   7/12   <none>
+web-c1    Ready    2800m/3500m (80%)     4422Mi/8Gi (53%)     7/12   <none>
+> show pods
+NAMESPACE     NAME             PRIORITY   STATUS    NODE
+data          etl-1            0          Running   big-b2
+data          etl-2            0          Running   big-b2
+data          etl-3            0          Running   big-b2
+data          etl-4            0          Running   big-b2
+data          etl-5            0          Running   big-b2
+data          scratch-1        -10        Running   web-c1
+data          scratch-2        -10        Running   web-a1
+data          scratch-3        -10        Running   web-b1
+data          train-llm        100        Running   gpu-a2
+data          train-small      100        Pending   <none>
+kube-system   coredns-1        2000       Running   web-c1
+kube-system   coredns-2        2000       Running   web-a1
+kube-system   fluent-bit       1800       Running   cp-1
+kube-system   ingress-1        1500       Running   web-a1
+kube-system   ingress-2        1500       Running   web-b1
+kube-system   ingress-3        1500       Running   web-c1
+kube-system   metrics-server   2000       Running   web-b1
+shop          api-1            1000       Running   web-b1
+shop          api-2            1000       Running   web-c1
+shop          api-3            1000       Running   web-a1
+shop          api-4            1000       Running   big-b2
+shop          redis-0          1200       Running   web-b1
+shop          redis-1          1200       Running   web-a1
+shop          search           900        Running   web-c1
+shop          storefront-1     1000       Running   web-c1
+shop          storefront-2     1000       Running   web-a1
+shop          storefront-3     1000       Running   web-b1
+shop          storefront-4     1000       Running   web-c1
+shop          storefront-5     1000       Running   web-a1
+shop          storefront-6     1000       Running   web-b1
+> show pending
+1 pending: data/train-small
+> apply data/urgent.later
+data/urgent.later: 0 nodes, 1 pods
+> schedule
+preempt on big-b2 for finance/quarter-close: evicts data/etl-2, data/etl-3, data/etl-4, data/etl-5
+bind finance/quarter-close -> big-b2 (after preemption)
+FailedScheduling data/train-small: 0/7 nodes are available: 1 node(s) had untolerated taint {node-role: control-plane}, 1 node(s) had untolerated taint {nvidia.com/gpu: present}, 5 node(s) didn't match Pod's node affinity/selector.
+bound 1, pending 5
+> show pending
+5 pending: data/train-small, data/etl-2, data/etl-3, data/etl-4, data/etl-5
+> drain web-b1
+evict data/scratch-3 from web-b1 (drain)
+evict kube-system/ingress-2 from web-b1 (drain)
+evict kube-system/metrics-server from web-b1 (drain)
+evict shop/api-1 from web-b1 (drain)
+evict shop/redis-0 from web-b1 (drain)
+evict shop/storefront-3 from web-b1 (drain)
+evict shop/storefront-6 from web-b1 (drain)
+node web-b1 drained
+> schedule
+bind kube-system/metrics-server -> web-c1 (score 413)
+bind kube-system/ingress-2 -> big-b2 (score 301)
+preempt on big-b2 for shop/redis-0: evicts data/etl-1
+bind shop/redis-0 -> big-b2 (after preemption)
+bind shop/storefront-3 -> big-b2 (score 309)
+bind shop/storefront-6 -> big-b2 (score 307)
+bind shop/api-1 -> spot-c2 (score 191)
+FailedScheduling data/train-small: 0/7 nodes are available: 1 node(s) had untolerated taint {node-role: control-plane}, 1 node(s) had untolerated taint {nvidia.com/gpu: present}, 1 node(s) were unschedulable, 4 node(s) didn't match Pod's node affinity/selector.
+FailedScheduling data/etl-2: 0/7 nodes are available: 1 Insufficient cpu, 1 node(s) had untolerated taint {node-role: control-plane}, 1 node(s) had untolerated taint {nvidia.com/gpu: present}, 1 node(s) were unschedulable, 3 node(s) didn't match Pod's node affinity/selector.
+FailedScheduling data/etl-3: 0/7 nodes are available: 1 Insufficient cpu, 1 node(s) had untolerated taint {node-role: control-plane}, 1 node(s) had untolerated taint {nvidia.com/gpu: present}, 1 node(s) were unschedulable, 3 node(s) didn't match Pod's node affinity/selector.
+FailedScheduling data/etl-4: 0/7 nodes are available: 1 Insufficient cpu, 1 node(s) had untolerated taint {node-role: control-plane}, 1 node(s) had untolerated taint {nvidia.com/gpu: present}, 1 node(s) were unschedulable, 3 node(s) didn't match Pod's node affinity/selector.
+FailedScheduling data/etl-5: 0/7 nodes are available: 1 Insufficient cpu, 1 node(s) had untolerated taint {node-role: control-plane}, 1 node(s) had untolerated taint {nvidia.com/gpu: present}, 1 node(s) were unschedulable, 3 node(s) didn't match Pod's node affinity/selector.
+bind data/scratch-3 -> spot-c2 (score 178)
+bound 7, pending 6
+> uncordon web-b1
+node web-b1 uncordoned
+> schedule
+FailedScheduling data/train-small: 0/7 nodes are available: 1 node(s) had untolerated taint {node-role: control-plane}, 1 node(s) had untolerated taint {nvidia.com/gpu: present}, 5 node(s) didn't match Pod's node affinity/selector.
+bind data/etl-1 -> web-b1 (score 437)
+FailedScheduling data/etl-2: 0/7 nodes are available: 1 Insufficient memory, 1 node(s) had untolerated taint {node-role: control-plane}, 1 node(s) had untolerated taint {nvidia.com/gpu: present}, 2 Insufficient cpu, 3 node(s) didn't match Pod's node affinity/selector.
+FailedScheduling data/etl-3: 0/7 nodes are available: 1 Insufficient memory, 1 node(s) had untolerated taint {node-role: control-plane}, 1 node(s) had untolerated taint {nvidia.com/gpu: present}, 2 Insufficient cpu, 3 node(s) didn't match Pod's node affinity/selector.
+FailedScheduling data/etl-4: 0/7 nodes are available: 1 Insufficient memory, 1 node(s) had untolerated taint {node-role: control-plane}, 1 node(s) had untolerated taint {nvidia.com/gpu: present}, 2 Insufficient cpu, 3 node(s) didn't match Pod's node affinity/selector.
+FailedScheduling data/etl-5: 0/7 nodes are available: 1 Insufficient memory, 1 node(s) had untolerated taint {node-role: control-plane}, 1 node(s) had untolerated taint {nvidia.com/gpu: present}, 2 Insufficient cpu, 3 node(s) didn't match Pod's node affinity/selector.
+bound 1, pending 5
+> taint spot-c2 spot=reclaim:NoExecute
+node spot-c2 tainted spot=reclaim:NoExecute
+evict data/scratch-3 from spot-c2 (taint spot=reclaim:NoExecute)
+evict shop/api-1 from spot-c2 (taint spot=reclaim:NoExecute)
+> schedule
+bind shop/api-1 -> web-b1 (score 621)
+FailedScheduling data/train-small: 0/7 nodes are available: 1 node(s) had untolerated taint {node-role: control-plane}, 1 node(s) had untolerated taint {nvidia.com/gpu: present}, 1 node(s) had untolerated taint {spot: reclaim}, 4 node(s) didn't match Pod's node affinity/selector.
+FailedScheduling data/etl-2: 0/7 nodes are available: 1 Insufficient memory, 1 node(s) had untolerated taint {node-role: control-plane}, 1 node(s) had untolerated taint {nvidia.com/gpu: present}, 1 node(s) had untolerated taint {spot: reclaim}, 2 Insufficient cpu, 2 node(s) didn't match Pod's node affinity/selector.
+FailedScheduling data/etl-3: 0/7 nodes are available: 1 Insufficient memory, 1 node(s) had untolerated taint {node-role: control-plane}, 1 node(s) had untolerated taint {nvidia.com/gpu: present}, 1 node(s) had untolerated taint {spot: reclaim}, 2 Insufficient cpu, 2 node(s) didn't match Pod's node affinity/selector.
+FailedScheduling data/etl-4: 0/7 nodes are available: 1 Insufficient memory, 1 node(s) had untolerated taint {node-role: control-plane}, 1 node(s) had untolerated taint {nvidia.com/gpu: present}, 1 node(s) had untolerated taint {spot: reclaim}, 2 Insufficient cpu, 2 node(s) didn't match Pod's node affinity/selector.
+FailedScheduling data/etl-5: 0/7 nodes are available: 1 Insufficient memory, 1 node(s) had untolerated taint {node-role: control-plane}, 1 node(s) had untolerated taint {nvidia.com/gpu: present}, 1 node(s) had untolerated taint {spot: reclaim}, 2 Insufficient cpu, 2 node(s) didn't match Pod's node affinity/selector.
+bind data/scratch-3 -> big-b2 (score 101)
+bound 2, pending 5
+> fail web-c1
+node web-c1 failed: 8 pods back to pending
+> schedule
+bind kube-system/coredns-1 -> cp-1 (score 491)
+bind kube-system/metrics-server -> web-b1 (score 419)
+FailedScheduling kube-system/ingress-3: 0/6 nodes are available: 1 node(s) didn't match pod topology spread constraints, 1 node(s) had untolerated taint {node-role: control-plane}, 1 node(s) had untolerated taint {nvidia.com/gpu: present}, 1 node(s) had untolerated taint {spot: reclaim}, 2 Insufficient cpu.
+FailedScheduling shop/storefront-1: 0/6 nodes are available: 1 Insufficient cpu, 1 node(s) had untolerated taint {node-role: control-plane}, 1 node(s) had untolerated taint {nvidia.com/gpu: present}, 1 node(s) had untolerated taint {spot: reclaim}, 2 node(s) didn't match pod topology spread constraints.
+FailedScheduling shop/storefront-4: 0/6 nodes are available: 1 Insufficient cpu, 1 node(s) had untolerated taint {node-role: control-plane}, 1 node(s) had untolerated taint {nvidia.com/gpu: present}, 1 node(s) had untolerated taint {spot: reclaim}, 2 node(s) didn't match pod topology spread constraints.
+FailedScheduling shop/api-2: 0/6 nodes are available: 1 node(s) didn't match pod anti-affinity rules, 1 node(s) had untolerated taint {node-role: control-plane}, 1 node(s) had untolerated taint {nvidia.com/gpu: present}, 1 node(s) had untolerated taint {spot: reclaim}, 2 Insufficient cpu.
+bind shop/search -> web-b1 (score 416)
+FailedScheduling data/train-small: 0/6 nodes are available: 1 node(s) had untolerated taint {node-role: control-plane}, 1 node(s) had untolerated taint {nvidia.com/gpu: present}, 1 node(s) had untolerated taint {spot: reclaim}, 3 node(s) didn't match Pod's node affinity/selector.
+FailedScheduling data/etl-2: 0/6 nodes are available: 1 Insufficient memory, 1 node(s) didn't match Pod's node affinity/selector, 1 node(s) had untolerated taint {node-role: control-plane}, 1 node(s) had untolerated taint {nvidia.com/gpu: present}, 1 node(s) had untolerated taint {spot: reclaim}, 2 Insufficient cpu.
+FailedScheduling data/etl-3: 0/6 nodes are available: 1 Insufficient memory, 1 node(s) didn't match Pod's node affinity/selector, 1 node(s) had untolerated taint {node-role: control-plane}, 1 node(s) had untolerated taint {nvidia.com/gpu: present}, 1 node(s) had untolerated taint {spot: reclaim}, 2 Insufficient cpu.
+FailedScheduling data/etl-4: 0/6 nodes are available: 1 Insufficient memory, 1 node(s) didn't match Pod's node affinity/selector, 1 node(s) had untolerated taint {node-role: control-plane}, 1 node(s) had untolerated taint {nvidia.com/gpu: present}, 1 node(s) had untolerated taint {spot: reclaim}, 2 Insufficient cpu.
+FailedScheduling data/etl-5: 0/6 nodes are available: 1 Insufficient memory, 1 node(s) didn't match Pod's node affinity/selector, 1 node(s) had untolerated taint {node-role: control-plane}, 1 node(s) had untolerated taint {nvidia.com/gpu: present}, 1 node(s) had untolerated taint {spot: reclaim}, 2 Insufficient cpu.
+FailedScheduling data/scratch-1: 0/6 nodes are available: 1 node(s) had untolerated taint {node-role: control-plane}, 1 node(s) had untolerated taint {nvidia.com/gpu: present}, 1 node(s) had untolerated taint {spot: reclaim}, 3 Insufficient cpu.
+bound 3, pending 10
+> apply data/scaleup.later
+data/scaleup.later: 1 nodes, 2 pods
+> schedule
+bind kube-system/ingress-3 -> web-c3 (score 692)
+bind shop/storefront-1 -> web-c3 (score 689)
+bind shop/storefront-4 -> web-c3 (score 686)
+bind shop/api-2 -> web-c3 (score 677)
+bind shop/storefront-7 -> web-c3 (score 674)
+FailedScheduling shop/api-5: 0/7 nodes are available: 1 node(s) had untolerated taint {node-role: control-plane}, 1 node(s) had untolerated taint {nvidia.com/gpu: present}, 1 node(s) had untolerated taint {spot: reclaim}, 2 Insufficient cpu, 2 node(s) didn't match pod anti-affinity rules.
+FailedScheduling data/train-small: 0/7 nodes are available: 1 node(s) had untolerated taint {node-role: control-plane}, 1 node(s) had untolerated taint {nvidia.com/gpu: present}, 1 node(s) had untolerated taint {spot: reclaim}, 4 node(s) didn't match Pod's node affinity/selector.
+bind data/etl-2 -> web-c3 (score 442)
+bind data/etl-3 -> web-c3 (score 411)
+FailedScheduling data/etl-4: 0/7 nodes are available: 1 node(s) didn't match Pod's node affinity/selector, 1 node(s) had untolerated taint {node-role: control-plane}, 1 node(s) had untolerated taint {nvidia.com/gpu: present}, 1 node(s) had untolerated taint {spot: reclaim}, 2 Insufficient memory, 3 Insufficient cpu.
+FailedScheduling data/etl-5: 0/7 nodes are available: 1 node(s) didn't match Pod's node affinity/selector, 1 node(s) had untolerated taint {node-role: control-plane}, 1 node(s) had untolerated taint {nvidia.com/gpu: present}, 1 node(s) had untolerated taint {spot: reclaim}, 2 Insufficient memory, 3 Insufficient cpu.
+bind data/scratch-1 -> web-c3 (score 399)
+bound 8, pending 4
+> delete data/train-llm
+deleted data/train-llm
+> untaint gpu-a2 nvidia.com/gpu
+node gpu-a2 untainted nvidia.com/gpu (1 removed)
+> schedule
+bind shop/api-5 -> gpu-a2 (score 491)
+bind data/train-small -> gpu-a2 (score 441)
+FailedScheduling data/etl-4: 0/7 nodes are available: 1 node(s) had untolerated taint {node-role: control-plane}, 1 node(s) had untolerated taint {spot: reclaim}, 2 Insufficient memory, 2 node(s) didn't match Pod's node affinity/selector, 3 Insufficient cpu.
+FailedScheduling data/etl-5: 0/7 nodes are available: 1 node(s) had untolerated taint {node-role: control-plane}, 1 node(s) had untolerated taint {spot: reclaim}, 2 Insufficient memory, 2 node(s) didn't match Pod's node affinity/selector, 3 Insufficient cpu.
+bound 2, pending 2
+> delete shop/nope
+error: data/events.txt:32: no pod 'shop/nope'
+> cordon nowhere
+error: data/events.txt:33: no node 'nowhere'
+> reboot web-a1
+error: data/events.txt:34: bad event 'reboot web-a1'
+> apply data/missing.later
+error: data/events.txt:35: cannot read data/missing.later
+> show nodes
+NAME      STATUS   CPU                   MEMORY               PODS   TAINTS
+big-b2    Ready    15700m/16000m (98%)   51456Mi/64Gi (78%)   7/30   maintenance=soon:PreferNoSchedule
+cp-1      Ready    150m/2000m (7%)       134Mi/4Gi (3%)       2/10   node-role=control-plane:NoSchedule
+gpu-a2    Ready    4600m/8000m (57%)     13Gi/32Gi (40%)      2/8    <none>
+spot-c2   Ready    0m/8000m (0%)         0/15625000Ki (0%)    0/20   spot=true:PreferNoSchedule,spot=reclaim:NoExecute
+web-a1    Ready    3800m/4000m (95%)     10566Mi/16Gi (64%)   7/12   <none>
+web-b1    Ready    3200m/4000m (80%)     11464Mi/16Gi (69%)   4/12   <none>
+web-c3    Ready    8000m/8000m (100%)    25216Mi/32Gi (76%)   8/16   <none>
+> show pods
+NAMESPACE     NAME             PRIORITY   STATUS    NODE
+data          etl-1            0          Running   web-b1
+data          etl-2            0          Running   web-c3
+data          etl-3            0          Running   web-c3
+data          etl-4            0          Pending   <none>
+data          etl-5            0          Pending   <none>
+data          scratch-1        -10        Running   web-c3
+data          scratch-2        -10        Running   web-a1
+data          scratch-3        -10        Running   big-b2
+data          train-small      100        Running   gpu-a2
+finance       quarter-close    500        Running   big-b2
+kube-system   coredns-1        2000       Running   cp-1
+kube-system   coredns-2        2000       Running   web-a1
+kube-system   fluent-bit       1800       Running   cp-1
+kube-system   ingress-1        1500       Running   web-a1
+kube-system   ingress-2        1500       Running   big-b2
+kube-system   ingress-3        1500       Running   web-c3
+kube-system   metrics-server   2000       Running   web-b1
+shop          api-1            1000       Running   web-b1
+shop          api-2            1000       Running   web-c3
+shop          api-3            1000       Running   web-a1
+shop          api-4            1000       Running   big-b2
+shop          api-5            1000       Running   gpu-a2
+shop          redis-0          1200       Running   big-b2
+shop          redis-1          1200       Running   web-a1
+shop          search           900        Running   web-b1
+shop          storefront-1     1000       Running   web-c3
+shop          storefront-2     1000       Running   web-a1
+shop          storefront-3     1000       Running   big-b2
+shop          storefront-4     1000       Running   web-c3
+shop          storefront-5     1000       Running   web-a1
+shop          storefront-6     1000       Running   big-b2
+shop          storefront-7     1000       Running   web-c3
+> show pending
+2 pending: data/etl-4, data/etl-5
+== write
+data/out/bindings.txt: 30 bindings, 702 bytes
+big-b2 7, cp-1 2, gpu-a2 2, web-a1 7, web-b1 4, web-c3 8

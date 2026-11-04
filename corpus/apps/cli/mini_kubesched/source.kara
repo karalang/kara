@@ -1,0 +1,1392 @@
+// mini_kubesched: a pod scheduler in the shape of kube-scheduler. Nodes
+// and pods come from manifest files (each parsed in a task of its own);
+// filter and score plugins place each pod, lower-priority pods are
+// preempted when nothing fits, and a day of cluster events plays out.
+// README.md is the spec; oracle.py is the reference.
+
+const MILLI_DEFAULT: i64 = 100;
+const MEM_DEFAULT: i64 = 200 * 1024 * 1024;
+const KI: i64 = 1024;
+
+// ------------------------------------------------------------ quantities
+
+fn is_digit(c: u8) -> bool {
+    c >= b'0' and c <= b'9'
+}
+
+fn digits(s: Str) -> bool {
+    s.len() > 0 and s.bytes().iter().all(|c| is_digit(c))
+}
+
+// An optional '-' and digits.
+fn parse_int(s: Str) -> Option[i64] {
+    let neg = s.starts_with("-");
+    let body = if neg { s.substring(1) } else { s.to_string() };
+    if not digits(body) or body.len() > 15 {
+        return None;
+    }
+    let v = i64.parse(body).ok()?;
+    Some(if neg { -v } else { v })
+}
+
+fn bad_quantity(s: Str) -> String {
+    f"bad quantity '{s}'"
+}
+
+fn parse_cpu(s: Str) -> Result[i64, String] {
+    if s.ends_with("m") {
+        let n = s.substring(0, s.len() - 1);
+        if not digits(n) or s.len() > 13 {
+            return Err(bad_quantity(s));
+        }
+        return Ok(i64.parse(n).ok() ?? 0);
+    }
+    let (whole, frac) = match s.split_once(".") {
+        Some((w, f)) => {
+            if not digits(f) or f.len() > 3 {
+                return Err(bad_quantity(s));
+            }
+            (w.to_string(), Some(f.to_string()))
+        }
+        None => (s.to_string(), None),
+    };
+    if not digits(whole) or whole.len() > 9 {
+        return Err(bad_quantity(s));
+    }
+    let mut v = (i64.parse(whole).ok() ?? 0) * 1000;
+    if let Some(f) = frac {
+        let mut padded = f.clone();
+        while padded.len() < 3 {
+            padded.push_str("0");
+        }
+        v += i64.parse(padded).ok() ?? 0;
+    }
+    Ok(v)
+}
+
+fn mem_units() -> Vec[(String, i64)] {
+    let mut out: Vec[(String, i64)] = Vec.new();
+    out.push(("Ki".to_string(), KI));
+    out.push(("Mi".to_string(), KI * KI));
+    out.push(("Gi".to_string(), KI * KI * KI));
+    out.push(("Ti".to_string(), KI * KI * KI * KI));
+    out.push(("k".to_string(), 1000));
+    out.push(("M".to_string(), 1000000));
+    out.push(("G".to_string(), 1000000000));
+    out.push(("T".to_string(), 1000000000000));
+    out
+}
+
+fn parse_mem(s: Str) -> Result[i64, String] {
+    for (suf, mul) in mem_units().iter() {
+        if s.ends_with(suf) {
+            let n = s.substring(0, s.len() - suf.len());
+            if not digits(n) or n.len() > 9 {
+                return Err(bad_quantity(s));
+            }
+            return Ok((i64.parse(n).ok() ?? 0) * mul);
+        }
+    }
+    if not digits(s) or s.len() > 15 {
+        return Err(bad_quantity(s));
+    }
+    Ok(i64.parse(s).ok() ?? 0)
+}
+
+fn show_cpu(m: i64) -> String {
+    f"{m}m"
+}
+
+fn show_mem(b: i64) -> String {
+    for (suf, mul) in [("Gi", KI * KI * KI), ("Mi", KI * KI), ("Ki", KI)].iter() {
+        if b != 0 and b % mul == 0 {
+            return f"{b / mul}{suf}";
+        }
+    }
+    f"{b}"
+}
+
+fn pct(used: i64, cap: i64) -> i64 {
+    if cap == 0 { 0 } else { used * 100 / cap }
+}
+
+// ------------------------------------------------------------ terms
+
+#[derive(Clone)]
+struct Taint {
+    key: String,
+    value: String,
+    effect: String,
+}
+
+impl Taint {
+    fn show(self) -> String {
+        if self.value.len() > 0 {
+            f"{self.key}={self.value}:{self.effect}"
+        } else {
+            f"{self.key}:{self.effect}"
+        }
+    }
+}
+
+// Key "" with `exists` tolerates every key; effect "" every effect.
+#[derive(Clone)]
+struct Toleration {
+    key: String,
+    exists: bool,
+    value: String,
+    effect: String,
+}
+
+#[derive(Clone)]
+struct Req {
+    key: String,
+    op: String,
+    vals: Vec[String],
+}
+
+#[derive(Clone)]
+struct Pref {
+    weight: i64,
+    req: Req,
+}
+
+#[derive(Clone)]
+struct Label {
+    key: String,
+    value: String,
+}
+
+#[derive(Clone)]
+struct Apart {
+    key: String,
+    sel: Vec[Label],
+}
+
+#[derive(Clone)]
+struct Spread {
+    key: String,
+    skew: i64,
+    sel: Vec[Label],
+}
+
+fn is_effect(s: Str) -> bool {
+    s == "NoSchedule" or s == "PreferNoSchedule" or s == "NoExecute"
+}
+
+fn is_op(s: Str) -> bool {
+    s == "In" or s == "NotIn" or s == "Exists" or s == "DoesNotExist" or s == "Gt" or s == "Lt"
+}
+
+fn parse_label(tok: Str) -> Result[Label, String] {
+    match tok.split_once("=") {
+        Some((k, v)) if k.len() > 0 => Ok(Label { key: k.to_string(), value: v.to_string() }),
+        _ => Err(f"bad label '{tok}'"),
+    }
+}
+
+fn parse_selector(tok: Str) -> Result[Vec[Label], String] {
+    let mut out: Vec[Label] = Vec.new();
+    for t in tok.split(",") {
+        out.push(parse_label(t)?);
+    }
+    Ok(out)
+}
+
+fn parse_taint(tok: Str) -> Result[Taint, String] {
+    let Some((kv, eff)) = tok.rsplit_once(":") else {
+        return Err(f"bad taint '{tok}'");
+    };
+    if kv.len() == 0 {
+        return Err(f"bad taint '{tok}'");
+    }
+    if not is_effect(eff) {
+        return Err(f"bad effect '{eff}'");
+    }
+    let (k, v) = kv.split_once("=") ?? (kv, "");
+    if k.len() == 0 {
+        return Err(f"bad taint '{tok}'");
+    }
+    Ok(Taint { key: k.to_string(), value: v.to_string(), effect: eff.to_string() })
+}
+
+fn parse_toleration(tok: Str) -> Result[Toleration, String] {
+    if tok == "*" {
+        return Ok(Toleration { key: "".to_string(), exists: true, value: "".to_string(), effect: "".to_string() });
+    }
+    let (kv, eff) = match tok.rsplit_once(":") {
+        Some((kv, eff)) => {
+            if not is_effect(eff) {
+                return Err(f"bad effect '{eff}'");
+            }
+            (kv, eff)
+        }
+        None => (tok, ""),
+    };
+    let (k, v, exists) = match kv.split_once("=") {
+        Some((k, v)) => (k, v, false),
+        None => (kv, "", true),
+    };
+    if k.len() == 0 {
+        return Err(f"bad toleration '{tok}'");
+    }
+    Ok(Toleration { key: k.to_string(), exists: exists, value: v.to_string(), effect: eff.to_string() })
+}
+
+fn parse_requirement(toks: Vec[Str]) -> Result[Req, String] {
+    let text = toks.join(" ");
+    if toks.len() < 2 {
+        return Err(f"bad requirement '{text}'");
+    }
+    if not is_op(toks[1]) {
+        return Err(f"bad operator '{toks[1]}'");
+    }
+    let key = toks[0].to_string();
+    let op = toks[1].to_string();
+    if op == "Exists" or op == "DoesNotExist" {
+        if toks.len() != 2 {
+            return Err(f"bad requirement '{text}'");
+        }
+        return Ok(Req { key: key, op: op, vals: Vec.new() });
+    }
+    if toks.len() != 3 {
+        return Err(f"bad requirement '{text}'");
+    }
+    let vals: Vec[String] = toks[2].split(",").map(|v| v.to_string()).collect();
+    if (op == "Gt" or op == "Lt") and (vals.len() != 1 or parse_int(vals[0]).is_none()) {
+        return Err(f"bad requirement '{text}'");
+    }
+    Ok(Req { key: key, op: op, vals: vals })
+}
+
+fn holds(r: Req, labels: SortedMap[String, String]) -> bool {
+    let got = labels.get(r.key);
+    match r.op.as_str() {
+        "In" => match got {
+            Some(v) => r.vals.contains(v),
+            None => false,
+        },
+        "NotIn" => match got {
+            Some(v) => not r.vals.contains(v),
+            None => true,
+        },
+        "Exists" => got.is_some(),
+        "DoesNotExist" => got.is_none(),
+        _ => {
+            let Some(v) = got else {
+                return false;
+            };
+            let Some(n) = parse_int(v) else {
+                return false;
+            };
+            let bound = parse_int(r.vals[0]) ?? 0;
+            if r.op == "Gt" { n > bound } else { n < bound }
+        }
+    }
+}
+
+fn tolerates(tols: Vec[Toleration], t: Taint) -> bool {
+    for tol in tols.iter() {
+        if tol.effect.len() > 0 and tol.effect != t.effect {
+            continue;
+        }
+        if tol.exists and (tol.key.len() == 0 or tol.key == t.key) {
+            return true;
+        }
+        if not tol.exists and tol.key == t.key and tol.value == t.value {
+            return true;
+        }
+    }
+    false
+}
+
+// ------------------------------------------------------------ manifests
+
+#[derive(Clone)]
+struct Node {
+    name: String,
+    cpu: i64,
+    mem: i64,
+    max_pods: i64,
+    labels: SortedMap[String, String],
+    taints: Vec[Taint],
+    cordoned: bool,
+    at: String,
+}
+
+#[derive(Clone)]
+struct Pod {
+    name: String,
+    ns: String,
+    prio: i64,
+    cpu: i64,
+    mem: i64,
+    labels: SortedMap[String, String],
+    select: Vec[Label],
+    require: Vec[Req],
+    prefer: Vec[Pref],
+    tols: Vec[Toleration],
+    apart: Vec[Apart],
+    spread: Vec[Spread],
+    node: Option[String],
+    seq: i64,
+    at: String,
+}
+
+enum Block {
+    N(Node),
+    P(Pod),
+}
+
+struct Parsed {
+    nodes: Vec[Node],
+    pods: Vec[Pod],
+    errors: Vec[String],
+}
+
+fn parse_header(toks: Vec[Str], at: own String) -> Result[Block, String] {
+    let kind = toks[0];
+    if kind == "node" {
+        if toks.len() < 2 {
+            return Err("node needs a name".to_string());
+        }
+        let name = toks[1].to_string();
+        let mut cpu: Option[i64] = None;
+        let mut mem: Option[i64] = None;
+        let mut pods: Option[i64] = None;
+        for t in toks.iter().skip(2) {
+            let Some((k, v)) = t.split_once("=") else {
+                return Err(f"unknown field '{t}'");
+            };
+            if k == "cpu" {
+                cpu = Some(parse_cpu(v)?);
+            } else if k == "memory" {
+                mem = Some(parse_mem(v)?);
+            } else if k == "pods" {
+                match parse_int(v) {
+                    Some(n) if n >= 0 => pods = Some(n),
+                    _ => return Err(bad_quantity(v)),
+                }
+            } else {
+                return Err(f"unknown field '{t}'");
+            }
+        }
+        let (Some(c), Some(m), Some(p)) = (cpu, mem, pods) else {
+            return Err(f"node '{name}' needs cpu, memory and pods");
+        };
+        let mut labels: SortedMap[String, String] = SortedMap.new();
+        labels.insert("hostname".to_string(), name.clone());
+        return Ok(Block.N(Node {
+            name: name.clone(),
+            cpu: c,
+            mem: m,
+            max_pods: p,
+            labels: labels,
+            taints: Vec.new(),
+            cordoned: false,
+            at: at,
+        }));
+    }
+    if kind == "pod" {
+        if toks.len() < 2 {
+            return Err("pod needs a name".to_string());
+        }
+        let name = toks[1].to_string();
+        let ns = match name.split_once("/") {
+            Some((ns, short)) if ns.len() > 0 and short.len() > 0 => ns.to_string(),
+            _ => return Err(f"pod name '{name}' needs a namespace"),
+        };
+        let mut prio = 0;
+        for t in toks.iter().skip(2) {
+            match t.split_once("=") {
+                Some(("priority", v)) => match parse_int(v) {
+                    Some(n) => prio = n,
+                    None => return Err(f"bad priority '{v}'"),
+                },
+                _ => return Err(f"unknown field '{t}'"),
+            }
+        }
+        return Ok(Block.P(Pod {
+            name: name,
+            ns: ns,
+            prio: prio,
+            cpu: 0,
+            mem: 0,
+            labels: SortedMap.new(),
+            select: Vec.new(),
+            require: Vec.new(),
+            prefer: Vec.new(),
+            tols: Vec.new(),
+            apart: Vec.new(),
+            spread: Vec.new(),
+            node: None,
+            seq: 0,
+            at: at,
+        }));
+    }
+    Err(f"unknown directive '{kind}'")
+}
+
+fn node_field(n: mut ref Node, toks: Vec[Str]) -> Result[(), String] {
+    let f = toks[0];
+    let rest: Vec[Str] = toks.iter().skip(1).collect();
+    if f == "label" {
+        for t in rest.iter() {
+            let l = parse_label(t)?;
+            n.labels.insert(l.key, l.value);
+        }
+    } else if f == "taint" {
+        for t in rest.iter() {
+            n.taints.push(parse_taint(t)?);
+        }
+    } else if f == "unschedulable" and rest.len() == 0 {
+        n.cordoned = true;
+    } else {
+        return Err(f"unknown field '{f}'");
+    }
+    Ok(())
+}
+
+fn pod_field(p: mut ref Pod, toks: Vec[Str]) -> Result[(), String] {
+    let f = toks[0];
+    let rest: Vec[Str] = toks.iter().skip(1).collect();
+    if f == "request" {
+        for t in rest.iter() {
+            match t.split_once("=") {
+                Some(("cpu", v)) => p.cpu = parse_cpu(v)?,
+                Some(("memory", v)) => p.mem = parse_mem(v)?,
+                _ => return Err(f"unknown field '{t}'"),
+            }
+        }
+    } else if f == "label" {
+        for t in rest.iter() {
+            let l = parse_label(t)?;
+            p.labels.insert(l.key, l.value);
+        }
+    } else if f == "select" {
+        for t in rest.iter() {
+            p.select.push(parse_label(t)?);
+        }
+    } else if f == "require" {
+        p.require.push(parse_requirement(rest)?);
+    } else if f == "prefer" {
+        let w = if rest.len() > 0 { parse_int(rest[0]) } else { None };
+        match w {
+            Some(w) if w >= 1 and w <= 100 => {
+                let req = parse_requirement(rest.iter().skip(1).collect())?;
+                p.prefer.push(Pref { weight: w, req: req });
+            }
+            _ => {
+                let shown = if rest.len() > 0 { rest[0] } else { "" };
+                return Err(f"bad weight '{shown}'");
+            }
+        }
+    } else if f == "tolerate" {
+        for t in rest.iter() {
+            p.tols.push(parse_toleration(t)?);
+        }
+    } else if f == "apart" {
+        if rest.len() != 2 {
+            return Err(f"bad term '{rest.join(" ")}'");
+        }
+        p.apart.push(Apart { key: rest[0].to_string(), sel: parse_selector(rest[1])? });
+    } else if f == "spread" {
+        if rest.len() != 3 {
+            return Err(f"bad term '{rest.join(" ")}'");
+        }
+        let skew = match parse_int(rest[1]) {
+            Some(s) if s >= 1 => s,
+            _ => return Err(f"bad skew '{rest[1]}'"),
+        };
+        p.spread.push(Spread { key: rest[0].to_string(), skew: skew, sel: parse_selector(rest[2])? });
+    } else {
+        return Err(f"unknown field '{f}'");
+    }
+    Ok(())
+}
+
+fn close_block(cur: own Option[Block], bad: bool, out: mut ref Parsed) {
+    if bad {
+        return;
+    }
+    match cur {
+        Some(Block.N(n)) => out.nodes.push(n),
+        Some(Block.P(p)) => out.pods.push(p),
+        None => {}
+    }
+}
+
+fn parse_file(path: String, text: String) -> Parsed {
+    let mut out = Parsed { nodes: Vec.new(), pods: Vec.new(), errors: Vec.new() };
+    let mut cur: Option[Block] = None;
+    let mut bad = false;
+    for (i, raw) in text.split("\n").enumerate() {
+        let line = match raw.split_once("#") {
+            Some((before, _)) => before,
+            None => raw,
+        };
+        let toks: Vec[Str] = line.split_whitespace().collect();
+        if toks.len() == 0 {
+            continue;
+        }
+        let at = f"{path}:{i + 1}";
+        if line.starts_with(" ") or line.starts_with("\t") {
+            if bad {
+                continue;
+            }
+            let res = match cur {
+                Some(Block.N(mut ref n)) => node_field(mut n, toks),
+                Some(Block.P(mut ref p)) => pod_field(mut p, toks),
+                None => Err("field outside a block".to_string()),
+            };
+            if let Err(e) = res {
+                out.errors.push(f"{at}: {e}");
+                bad = true;
+            }
+            continue;
+        }
+        close_block(cur, bad, mut out);
+        cur = None;
+        bad = false;
+        match parse_header(toks, at.clone()) {
+            Ok(b) => cur = Some(b),
+            Err(e) => {
+                out.errors.push(f"{at}: {e}");
+                bad = true;
+            }
+        }
+    }
+    close_block(cur, bad, mut out);
+    out
+}
+
+// ------------------------------------------------------------ the cluster
+
+fn sel_matches(sel: Vec[Label], ns: Str, p: Pod) -> bool {
+    p.ns == ns and sel.iter().all(|l| p.labels.get(l.key) == Some(ref l.value))
+}
+
+fn label_of(n: Node, key: Str) -> Option[String] {
+    n.labels.get(key).cloned()
+}
+
+fn is_resource(why: Str) -> bool {
+    why == "Too many pods" or why == "Insufficient cpu" or why == "Insufficient memory"
+}
+
+struct Cluster {
+    nodes: SortedMap[String, Node],
+    pods: SortedMap[String, Pod],
+    pending: Vec[String],
+    next_seq: i64,
+    out: Vec[String],
+}
+
+impl Cluster {
+    fn admit(mut ref self, nodes: own Vec[Node], pods: own Vec[Pod]) {
+        for n in nodes.into_iter() {
+            if self.nodes.contains_key(n.name) {
+                self.out.push(f"{n.at}: duplicate node '{n.name}'");
+                continue;
+            }
+            self.nodes.insert(n.name.clone(), n);
+        }
+        for p in pods.into_iter() {
+            if self.pods.contains_key(p.name) {
+                self.out.push(f"{p.at}: duplicate pod '{p.name}'");
+                continue;
+            }
+            let mut p = p;
+            p.seq = self.next_seq;
+            self.next_seq += 1;
+            self.pending.push(p.name.clone());
+            self.pods.insert(p.name.clone(), p);
+        }
+    }
+
+    fn on(self, node: Str) -> Vec[Pod] {
+        self.pods.values().filter(|p| p.node == Some(node.to_string())).cloned().collect()
+    }
+
+    // cpu, memory and pod count on a node, leaving out the pods in skip.
+    fn used(self, node: Str, skip: Vec[String]) -> (i64, i64, i64) {
+        let mut c = 0;
+        let mut m = 0;
+        let mut k = 0;
+        for p in self.pods.values() {
+            if p.node == Some(node.to_string()) and not skip.contains(p.name) {
+                c += p.cpu;
+                m += p.mem;
+                k += 1;
+            }
+        }
+        (c, m, k)
+    }
+
+    fn affinity_ok(self, pod: Pod, n: Node) -> bool {
+        for l in pod.select.iter() {
+            if n.labels.get(l.key) != Some(ref l.value) {
+                return false;
+            }
+        }
+        pod.require.iter().all(|r| holds(r, n.labels))
+    }
+
+    // The running pods other than `pod` and those in skip.
+    fn others(self, pod: Pod, skip: Vec[String]) -> Vec[Pod] {
+        self.pods
+            .values()
+            .filter(|p| p.node.is_some() and p.name != pod.name and not skip.contains(p.name))
+            .cloned()
+            .collect()
+    }
+
+    fn host(self, p: Pod) -> Node {
+        let name = p.node.clone() ?? "".to_string();
+        self.nodes.get(name).cloned().unwrap()
+    }
+
+    // Why node n refuses pod; empty when it fits.
+    fn filter(self, pod: Pod, n: Node, skip: Vec[String]) -> Vec[String] {
+        let mut why: Vec[String] = Vec.new();
+        if n.cordoned {
+            why.push("node(s) were unschedulable".to_string());
+            return why;
+        }
+        for t in n.taints.iter() {
+            if t.effect != "PreferNoSchedule" and not tolerates(pod.tols, t) {
+                why.push(f"node(s) had untolerated taint {{{t.key}: {t.value}}}");
+                return why;
+            }
+        }
+        if not self.affinity_ok(pod, n) {
+            why.push("node(s) didn't match Pod's node affinity/selector".to_string());
+            return why;
+        }
+        let (c, m, k) = self.used(n.name, skip);
+        if k + 1 > n.max_pods {
+            why.push("Too many pods".to_string());
+        }
+        if c + pod.cpu > n.cpu {
+            why.push("Insufficient cpu".to_string());
+        }
+        if m + pod.mem > n.mem {
+            why.push("Insufficient memory".to_string());
+        }
+        if why.len() > 0 {
+            return why;
+        }
+        let others = self.others(pod, skip);
+        for s in pod.spread.iter() {
+            let Some(mine) = label_of(n, s.key) else {
+                why.push("node(s) didn't match pod topology spread constraints".to_string());
+                return why;
+            };
+            let mut counts: SortedMap[String, i64] = SortedMap.new();
+            let mut eligible: Vec[String] = Vec.new();
+            for m2 in self.nodes.values() {
+                if let Some(d) = label_of(m2, s.key) {
+                    if self.affinity_ok(pod, m2) {
+                        counts.insert(d, 0);
+                        eligible.push(m2.name.clone());
+                    }
+                }
+            }
+            for p in others.iter() {
+                let host = p.node.clone() ?? "".to_string();
+                if eligible.contains(host) and sel_matches(s.sel, pod.ns, p) {
+                    let d = label_of(self.host(p), s.key) ?? "".to_string();
+                    let c = counts.get(d).cloned() ?? 0;
+                    counts.insert(d, c + 1);
+                }
+            }
+            let me = if sel_matches(s.sel, pod.ns, pod) { 1 } else { 0 };
+            let low = counts.values().cloned().min() ?? 0;
+            let here = counts.get(mine).cloned() ?? 0;
+            if here + me - low > s.skew {
+                why.push("node(s) didn't match pod topology spread constraints".to_string());
+                return why;
+            }
+        }
+        for a in pod.apart.iter() {
+            let Some(mine) = label_of(n, a.key) else {
+                continue;
+            };
+            for p in others.iter() {
+                if label_of(self.host(p), a.key) == Some(mine.clone()) and sel_matches(a.sel, pod.ns, p) {
+                    why.push("node(s) didn't match pod anti-affinity rules".to_string());
+                    return why;
+                }
+            }
+        }
+        for p in others.iter() {
+            let host = self.host(p);
+            for a in p.apart.iter() {
+                if let Some(mine) = label_of(n, a.key) {
+                    if label_of(host, a.key) == Some(mine) and sel_matches(a.sel, p.ns, pod) {
+                        why.push("node(s) didn't satisfy existing pods anti-affinity rules".to_string());
+                        return why;
+                    }
+                }
+            }
+        }
+        why
+    }
+
+    // The total score of each feasible node.
+    fn scores(self, pod: Pod, feasible: Vec[Node]) -> SortedMap[String, i64] {
+        let pc = if pod.cpu == 0 { MILLI_DEFAULT } else { pod.cpu };
+        let pm = if pod.mem == 0 { MEM_DEFAULT } else { pod.mem };
+        let mut least: SortedMap[String, i64] = SortedMap.new();
+        let mut bal: SortedMap[String, i64] = SortedMap.new();
+        let mut aff: SortedMap[String, i64] = SortedMap.new();
+        let mut taint: SortedMap[String, i64] = SortedMap.new();
+        let mut spread: SortedMap[String, i64] = SortedMap.new();
+        for n in feasible.iter() {
+            let mut c = pc;
+            let mut m = pm;
+            for p in self.on(n.name).iter() {
+                c += if p.cpu == 0 { MILLI_DEFAULT } else { p.cpu };
+                m += if p.mem == 0 { MEM_DEFAULT } else { p.mem };
+            }
+            let lc = if n.cpu == 0 { 0 } else { (n.cpu - c).max(0) * 100 / n.cpu };
+            let lm = if n.mem == 0 { 0 } else { (n.mem - m).max(0) * 100 / n.mem };
+            least.insert(n.name.clone(), (lc + lm) / 2);
+            let fc = if n.cpu == 0 { 10000 } else { (c * 10000 / n.cpu).min(10000) };
+            let fm = if n.mem == 0 { 10000 } else { (m * 10000 / n.mem).min(10000) };
+            bal.insert(n.name.clone(), (20000 - (fc - fm).abs()) / 200);
+            let mut a = 0;
+            for pr in pod.prefer.iter() {
+                if holds(pr.req, n.labels) {
+                    a += pr.weight;
+                }
+            }
+            aff.insert(n.name.clone(), a);
+            let mut t = 0;
+            for tn in n.taints.iter() {
+                if tn.effect == "PreferNoSchedule" and not tolerates(pod.tols, tn) {
+                    t += 1;
+                }
+            }
+            taint.insert(n.name.clone(), t);
+            let mut s = 0;
+            for sp in pod.spread.iter() {
+                let mine = label_of(n, sp.key);
+                for p in self.others(pod, Vec.new()).iter() {
+                    if label_of(self.host(p), sp.key) == mine and sel_matches(sp.sel, pod.ns, p) {
+                        s += 1;
+                    }
+                }
+            }
+            spread.insert(n.name.clone(), s);
+        }
+        let hi = aff.values().cloned().max() ?? 0;
+        let ht = taint.values().cloned().max() ?? 0;
+        let hs = spread.values().cloned().max() ?? 0;
+        let ls = spread.values().cloned().min() ?? 0;
+        let mut total: SortedMap[String, i64] = SortedMap.new();
+        for (name, l) in least.iter() {
+            let a = aff.get(name).cloned() ?? 0;
+            let a = if hi == 0 { 0 } else { a * 100 / hi };
+            let t = taint.get(name).cloned() ?? 0;
+            let t = if ht == 0 { 100 } else { 100 - t * 100 / ht };
+            let s = spread.get(name).cloned() ?? 0;
+            let s = if pod.spread.len() == 0 {
+                0
+            } else if hs == 0 {
+                100
+            } else {
+                (hs + ls - s) * 100 / hs
+            };
+            let b = bal.get(name).cloned() ?? 0;
+            total.insert(name.clone(), l + b + 2 * a + 3 * t + 2 * s);
+        }
+        total
+    }
+
+    // The node to preempt on and its victims, or None.
+    fn preempt(self, pod: Pod) -> Option[(String, Vec[String])] {
+        let mut best: Option[((i64, i64, i64, String), Vec[String])] = None;
+        for n in self.nodes.values() {
+            let why = self.filter(pod, n, Vec.new());
+            if not why.iter().all(|w| is_resource(w)) {
+                continue;
+            }
+            let mut lower: Vec[Pod] = self.on(n.name).into_iter().filter(|p| p.prio < pod.prio).collect();
+            if lower.len() == 0 {
+                continue;
+            }
+            let mut gone: Vec[String] = lower.iter().map(|p| p.name.clone()).collect();
+            if self.filter(pod, n, gone).len() > 0 {
+                continue;
+            }
+            lower.sort_by_key(|p| (-p.prio, p.seq));
+            for p in lower.iter() {
+                gone.retain(|g| g != p.name);
+                if self.filter(pod, n, gone).len() > 0 {
+                    gone.push(p.name.clone());
+                }
+            }
+            gone.sort();
+            let prios: Vec[i64] = gone.iter().map(|v| self.pods.get(v).unwrap().prio).collect();
+            let key = (prios.iter().cloned().max() ?? 0, prios.iter().sum(), gone.len(), n.name.clone());
+            let better = match best {
+                Some((ref k, _)) => key < k,
+                None => true,
+            };
+            if better {
+                best = Some((key, gone));
+            }
+        }
+        best.map(|(k, v)| (k.3, v))
+    }
+
+    fn set_node(mut ref self, pod: Str, node: own Option[String]) {
+        if let Some(p) = self.pods.get_mut(pod) {
+            p.node = node;
+        }
+    }
+
+    fn queue_order(self, names: Vec[String]) -> Vec[String] {
+        let mut q = names.clone();
+        q.sort_by_key(|n| {
+            let p = self.pods.get(n).unwrap();
+            (-p.prio, p.seq)
+        });
+        q
+    }
+
+    fn schedule(mut ref self) {
+        let queue = self.queue_order(self.pending);
+        self.pending = Vec.new();
+        let mut bound = 0;
+        for name in queue.iter() {
+            let pod = self.pods.get(name).cloned().unwrap();
+            let mut feasible: Vec[Node] = Vec.new();
+            let mut reasons: SortedMap[String, i64] = SortedMap.new();
+            for n in self.nodes.values() {
+                let why = self.filter(pod, n, Vec.new());
+                if why.len() == 0 {
+                    feasible.push(n.clone());
+                }
+                for w in why.into_iter() {
+                    let c = reasons.get(w).cloned() ?? 0;
+                    reasons.insert(w, c + 1);
+                }
+            }
+            if feasible.len() > 0 {
+                let sc = self.scores(pod, feasible);
+                let top = sc.values().cloned().max() ?? 0;
+                let pick = sc.iter().find(|(_, v)| v == top).map(|(k, _)| k.clone()).unwrap();
+                self.set_node(name, Some(pick.clone()));
+                bound += 1;
+                self.out.push(f"bind {name} -> {pick} (score {top})");
+                continue;
+            }
+            if let Some((node, victims)) = self.preempt(pod) {
+                self.out.push(f"preempt on {node} for {name}: evicts {victims.join(", ")}");
+                for v in victims.iter() {
+                    self.set_node(v, None);
+                    self.pending.push(v.clone());
+                }
+                self.set_node(name, Some(node.clone()));
+                bound += 1;
+                self.out.push(f"bind {name} -> {node} (after preemption)");
+                continue;
+            }
+            let mut parts: Vec[String] = reasons.iter().map(|(w, c)| f"{c} {w}").collect();
+            parts.sort();
+            self.out.push(f"FailedScheduling {name}: 0/{self.nodes.len()} nodes are available: {parts.join(", ")}.");
+            self.pending.push(name.clone());
+        }
+        self.out.push(f"bound {bound}, pending {self.pending.len()}");
+    }
+
+    fn evict(mut ref self, name: Str, why: Str) {
+        let node = self.pods.get(name).and_then(|p| p.node.clone()) ?? "".to_string();
+        self.out.push(f"evict {name} from {node} ({why})");
+        self.set_node(name, None);
+        self.pending.push(name.to_string());
+    }
+
+    fn pod_names_on(self, node: Str) -> Vec[String] {
+        let mut names: Vec[String] = self.on(node).iter().map(|p| p.name.clone()).collect();
+        names.sort();
+        names
+    }
+
+    fn event(mut ref self, toks: Vec[Str]) -> Result[(), String] {
+        let cmd = toks[0];
+        let args: Vec[Str] = toks.iter().skip(1).collect();
+        let whole = toks.join(" ");
+        if cmd == "schedule" and args.len() == 0 {
+            self.schedule();
+        } else if cmd == "apply" and args.len() == 1 {
+            let path = args[0].to_string();
+            let text = read(path)?;
+            let parsed = parse_file(path.clone(), text);
+            self.out.push(f"{path}: {parsed.nodes.len()} nodes, {parsed.pods.len()} pods");
+            for e in parsed.errors.iter() {
+                self.out.push(e.clone());
+            }
+            self.admit(parsed.nodes, parsed.pods);
+        } else if cmd == "delete" and args.len() == 1 {
+            let name = args[0].to_string();
+            if self.pods.remove(name).is_none() {
+                return Err(f"no pod '{name}'");
+            }
+            self.pending.retain(|q| q != name);
+            self.out.push(f"deleted {name}");
+        } else if (cmd == "cordon" or cmd == "uncordon" or cmd == "drain" or cmd == "fail" or cmd == "taint" or cmd == "untaint") and args.len() > 0 {
+            let node = args[0].to_string();
+            if not self.nodes.contains_key(node) {
+                return Err(f"no node '{node}'");
+            }
+            if (cmd == "cordon" or cmd == "uncordon") and args.len() == 1 {
+                let on = cmd == "cordon";
+                self.nodes.get_mut(node).unwrap().cordoned = on;
+                self.out.push(f"node {node} {cmd}ed");
+            } else if cmd == "drain" and args.len() == 1 {
+                self.nodes.get_mut(node).unwrap().cordoned = true;
+                for p in self.pod_names_on(node).iter() {
+                    self.evict(p, "drain");
+                }
+                self.out.push(f"node {node} drained");
+            } else if cmd == "fail" and args.len() == 1 {
+                let gone = self.pod_names_on(node);
+                for q in gone.iter() {
+                    self.set_node(q, None);
+                    self.pending.push(q.clone());
+                }
+                self.nodes.remove(node);
+                self.out.push(f"node {node} failed: {gone.len()} pods back to pending");
+            } else if cmd == "taint" and args.len() == 2 {
+                let t = parse_taint(args[1])?;
+                self.nodes.get_mut(node).unwrap().taints.push(t.clone());
+                self.out.push(f"node {node} tainted {t.show()}");
+                if t.effect == "NoExecute" {
+                    for name in self.pod_names_on(node).iter() {
+                        let p = self.pods.get(name).cloned().unwrap();
+                        if not tolerates(p.tols, t) {
+                            self.evict(name, f"taint {t.show()}");
+                        }
+                    }
+                }
+            } else if cmd == "untaint" and args.len() == 2 {
+                let key = args[1].to_string();
+                let n = self.nodes.get_mut(node).unwrap();
+                let before = n.taints.len();
+                n.taints.retain(|t| t.key != key);
+                let removed = before - n.taints.len();
+                self.out.push(f"node {node} untainted {key} ({removed} removed)");
+            } else {
+                return Err(f"bad event '{whole}'");
+            }
+        } else if cmd == "show" and args.len() == 1 and args[0] == "pods" {
+            let mut rows: Vec[Vec[String]] = Vec.new();
+            rows.push(["NAMESPACE", "NAME", "PRIORITY", "STATUS", "NODE"].iter().map(|s| s.to_string()).collect());
+            for p in self.pods.values() {
+                let short = p.name.split_once("/").map(|(_, s)| s.to_string()) ?? "".to_string();
+                let status = if p.node.is_some() { "Running" } else { "Pending" };
+                let node = p.node.clone() ?? "<none>".to_string();
+                rows.push([p.ns.clone(), short, f"{p.prio}", status.to_string(), node].to_vec());
+            }
+            table(rows, mut self.out);
+        } else if cmd == "show" and args.len() == 1 and args[0] == "nodes" {
+            let mut rows: Vec[Vec[String]] = Vec.new();
+            rows.push(["NAME", "STATUS", "CPU", "MEMORY", "PODS", "TAINTS"].iter().map(|s| s.to_string()).collect());
+            for n in self.nodes.values() {
+                let (c, m, k) = self.used(n.name, Vec.new());
+                let status = if n.cordoned { "Ready,SchedulingDisabled" } else { "Ready" };
+                let taints: Vec[String] = n.taints.iter().map(|t| t.show()).collect();
+                let shown = if taints.len() == 0 { "<none>".to_string() } else { taints.join(",") };
+                rows.push([
+                    n.name.clone(),
+                    status.to_string(),
+                    f"{show_cpu(c)}/{show_cpu(n.cpu)} ({pct(c, n.cpu)}%)",
+                    f"{show_mem(m)}/{show_mem(n.mem)} ({pct(m, n.mem)}%)",
+                    f"{k}/{n.max_pods}",
+                    shown,
+                ].to_vec());
+            }
+            table(rows, mut self.out);
+        } else if cmd == "show" and args.len() == 1 and args[0] == "pending" {
+            let q = self.queue_order(self.pending);
+            if q.len() == 0 {
+                self.out.push("0 pending".to_string());
+            } else {
+                self.out.push(f"{q.len()} pending: {q.join(", ")}");
+            }
+        } else {
+            return Err(f"bad event '{whole}'");
+        }
+        Ok(())
+    }
+}
+
+fn table(rows: Vec[Vec[String]], out: mut ref Vec[String]) {
+    let mut w: Vec[i64] = Vec.new();
+    for i in 0..rows[0].len() {
+        w.push(rows.iter().map(|r| r[i].len()).max() ?? 0);
+    }
+    for r in rows.iter() {
+        let mut line = String.new();
+        for (i, c) in r.iter().enumerate() {
+            if i > 0 {
+                line.push_str("   ");
+            }
+            line.push_str(c);
+            for _ in c.len()..w[i] {
+                line.push_str(" ");
+            }
+        }
+        out.push(line.trim_end().to_string());
+    }
+}
+
+fn read(path: Str) -> Result[String, String] {
+    match fs.read_to_string(path.to_string()) {
+        Ok(t) => Ok(t),
+        Err(_) => Err(f"cannot read {path}"),
+    }
+}
+
+fn run() -> Result[(), String] {
+    fs.create_dir_all("data/out".to_string()).map_err(|e| f"cannot create data/out: {e}")?;
+    write_data()?;
+    let mut names: Vec[String] = fs.read_dir("data".to_string()).map_err(|e| f"cannot list data: {e}")?
+        .into_iter()
+        .filter(|n| n.ends_with(".nodes") or n.ends_with(".pods"))
+        .collect();
+    names.sort();
+    // Each manifest is parsed in a task of its own.
+    let group = TaskGroup.new();
+    let mut handles = Vec.new();
+    for name in names.iter() {
+        let path = f"data/{name}";
+        let text = read(path)?;
+        handles.push(group.spawn(|| parse_file(path, text)));
+    }
+    let mut out: Vec[String] = Vec.new();
+    out.push("== load".to_string());
+    let mut nodes: Vec[Node] = Vec.new();
+    let mut pods: Vec[Pod] = Vec.new();
+    for (name, h) in names.iter().zip(handles.into_iter()) {
+        let p = h.join();
+        out.push(f"data/{name}: {p.nodes.len()} nodes, {p.pods.len()} pods");
+        for e in p.errors.into_iter() {
+            out.push(e);
+        }
+        for n in p.nodes.into_iter() {
+            nodes.push(n);
+        }
+        for q in p.pods.into_iter() {
+            pods.push(q);
+        }
+    }
+    let mut c = Cluster { nodes: SortedMap.new(), pods: SortedMap.new(), pending: Vec.new(), next_seq: 0, out: out };
+    c.admit(nodes, pods);
+    c.out.push(f"{c.nodes.len()} nodes, {c.pods.len()} pods");
+    c.out.push("== events".to_string());
+    for (i, raw) in read("data/events.txt")?.split("\n").enumerate() {
+        let line = match raw.split_once("#") {
+            Some((before, _)) => before.trim(),
+            None => raw.trim(),
+        };
+        if line.len() == 0 {
+            continue;
+        }
+        c.out.push(f"> {line}");
+        if let Err(e) = c.event(line.split_whitespace().collect()) {
+            c.out.push(f"error: data/events.txt:{i + 1}: {e}");
+        }
+    }
+    let mut rows: Vec[String] = Vec.new();
+    for p in c.pods.values() {
+        if let Some(n) = p.node.clone() {
+            rows.push(f"{p.name} {n}");
+        }
+    }
+    rows.sort();
+    let mut body = String.new();
+    for r in rows.iter() {
+        body.push_str(r);
+        body.push_str("\n");
+    }
+    put_bytes("data/out/bindings.txt", body.bytes().to_vec())?;
+    let back = read("data/out/bindings.txt")?;
+    let lines: Vec[Str] = back.split("\n").filter(|l| l.len() > 0).collect();
+    c.out.push("== write".to_string());
+    c.out.push(f"data/out/bindings.txt: {lines.len()} bindings, {back.len()} bytes");
+    let mut per: SortedMap[String, i64] = SortedMap.new();
+    for l in lines.iter() {
+        let node = l.split_once(" ").map(|(_, n)| n.to_string()) ?? "".to_string();
+        let k = per.get(node).cloned() ?? 0;
+        per.insert(node, k + 1);
+    }
+    let counts: Vec[String] = per.iter().map(|(k, v)| f"{k} {v}").collect();
+    c.out.push(counts.join(", "));
+    println(c.out.join("\n"));
+    Ok(())
+}
+
+fn is_hexd(c: u8) -> bool {
+    is_digit(c) or (c >= b'a' and c <= b'f')
+}
+
+fn hex_val(c: u8) -> u8 {
+    if is_digit(c) { c - b'0' } else { c - b'a' + 10 }
+}
+
+fn unhex(s: Str) -> Vec[u8] {
+    let mut digits: Vec[u8] = Vec.new();
+    for c in s.bytes() {
+        if is_hexd(c) {
+            digits.push(hex_val(c));
+        }
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i + 1 < digits.len() {
+        out.push(digits[i] * 16 + digits[i + 1]);
+        i += 2;
+    }
+    out
+}
+
+fn put_bytes(path: Str, b: Vec[u8]) -> Result[(), String] {
+    if let Err(e) = fs.write_bytes(path.to_string(), b) {
+        return Err(f"cannot write {path}: {e}");
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = run() {
+        eprintln(e);
+    }
+}
+
+// ============================================================ data
+
+// The files under data/, in name order.
+fn write_data() -> Result[(), String] {
+    put_bytes("data/batch.pods", unhex(file_0()))?;
+    put_bytes("data/cluster.nodes", unhex(file_1()))?;
+    put_bytes("data/events.txt", unhex(file_2()))?;
+    put_bytes("data/scaleup.later", unhex(file_3()))?;
+    put_bytes("data/system.pods", unhex(file_4()))?;
+    put_bytes("data/urgent.later", unhex(file_5()))?;
+    put_bytes("data/web.pods", unhex(file_6()))?;
+    put_bytes("data/zz_broken.pods", unhex(file_7()))?;
+    Ok(())
+}
+
+// data/batch.pods
+fn file_0() -> String {
+    """
+232044617461207465616d3a206e696768746c79206a6f6273206174207072696f726974792030207468617420736f61
+6b2075702074686520626967206e6f64652c20626573740a23206566666f7274206a6f62732062656c6f772074686174
+2c20616e64206120747261696e696e672072756e2074686174206e6565647320746865204750552e0a0a706f64206461
+74612f65746c2d310a202072657175657374206370753d323530306d206d656d6f72793d313047690a20206c6162656c
+206170703d65746c0a20207265717569726520706f6f6c20496e2067656e6572616c0a2020726571756972652067656e
+65726174696f6e20477420350a2020746f6c6572617465206d61696e74656e616e63653a5072656665724e6f53636865
+64756c650a0a706f6420646174612f65746c2d320a202072657175657374206370753d323530306d206d656d6f72793d
+313047690a20206c6162656c206170703d65746c0a20207265717569726520706f6f6c20496e2067656e6572616c0a20
+20726571756972652067656e65726174696f6e20477420350a2020746f6c6572617465206d61696e74656e616e63653a
+5072656665724e6f5363686564756c650a0a706f6420646174612f65746c2d330a202072657175657374206370753d32
+3530306d206d656d6f72793d313047690a20206c6162656c206170703d65746c0a20207265717569726520706f6f6c20
+496e2067656e6572616c0a2020726571756972652067656e65726174696f6e20477420350a2020746f6c657261746520
+6d61696e74656e616e63653a5072656665724e6f5363686564756c650a0a706f6420646174612f65746c2d340a202072
+657175657374206370753d323530306d206d656d6f72793d313047690a20206c6162656c206170703d65746c0a202072
+65717569726520706f6f6c20496e2067656e6572616c0a2020726571756972652067656e65726174696f6e2047742035
+0a2020746f6c6572617465206d61696e74656e616e63653a5072656665724e6f5363686564756c650a0a706f64206461
+74612f65746c2d350a202072657175657374206370753d323530306d206d656d6f72793d313047690a20206c6162656c
+206170703d65746c0a20207265717569726520706f6f6c20496e2067656e6572616c0a2020726571756972652067656e
+65726174696f6e20477420350a2020746f6c6572617465206d61696e74656e616e63653a5072656665724e6f53636865
+64756c650a0a706f6420646174612f736372617463682d31207072696f726974793d2d31300a20207265717565737420
+6370753d31206d656d6f72793d3247690a20206c6162656c206170703d736372617463680a0a706f6420646174612f73
+6372617463682d32207072696f726974793d2d31300a202072657175657374206370753d31206d656d6f72793d324769
+0a20206c6162656c206170703d736372617463680a0a706f6420646174612f736372617463682d33207072696f726974
+793d2d31300a202072657175657374206370753d31206d656d6f72793d3247690a20206c6162656c206170703d736372
+617463680a0a706f6420646174612f747261696e2d6c6c6d207072696f726974793d3130300a20207265717565737420
+6370753d36206d656d6f72793d323447690a20206c6162656c206170703d747261696e0a202073656c65637420616363
+656c657261746f723d6e76696469612d613130300a2020746f6c6572617465206e76696469612e636f6d2f6770753d70
+726573656e743a4e6f5363686564756c650a0a706f6420646174612f747261696e2d736d616c6c207072696f72697479
+3d3130300a202072657175657374206370753d34206d656d6f72793d313247690a20206c6162656c206170703d747261
+696e0a202073656c65637420616363656c657261746f723d6e76696469612d613130300a
+"""
+}
+
+// data/cluster.nodes
+fn file_1() -> String {
+    """
+23205468652070726f64756374696f6e20636c75737465723a207468726565207a6f6e65732c206120475055206e6f64
+652c20612073706f74206e6f646520616e64207468650a2320636f6e74726f6c20706c616e652e205175616e74697469
+657320617265204b756265726e65746573273a2063707520696e20636f726573206f72206d696c6c69636f7265732c0a
+23206d656d6f727920776974682062696e61727920284b692c204d692c20476929206f7220646563696d616c20286b2c
+204d2c2047292073756666697865732e0a0a6e6f64652063702d31206370753d32206d656d6f72793d34476920706f64
+733d31300a20206c6162656c207a6f6e653d75732d656173742d316120726f6c653d636f6e74726f6c2d706c616e650a
+20207461696e74206e6f64652d726f6c653d636f6e74726f6c2d706c616e653a4e6f5363686564756c650a0a6e6f6465
+207765622d6131206370753d34206d656d6f72793d3136476920706f64733d31320a20206c6162656c207a6f6e653d75
+732d656173742d3161206469736b747970653d73736420706f6f6c3d67656e6572616c2067656e65726174696f6e3d35
+0a0a6e6f6465207765622d6231206370753d34206d656d6f72793d3136476920706f64733d31320a20206c6162656c20
+7a6f6e653d75732d656173742d3162206469736b747970653d73736420706f6f6c3d67656e6572616c2067656e657261
+74696f6e3d360a0a6e6f6465207765622d6331206370753d333530306d206d656d6f72793d38476920706f64733d3132
+0a20206c6162656c207a6f6e653d75732d656173742d3163206469736b747970653d68646420706f6f6c3d67656e6572
+616c2067656e65726174696f6e3d340a0a6e6f6465206269672d6232206370753d3136206d656d6f72793d3634476920
+706f64733d33300a20206c6162656c207a6f6e653d75732d656173742d3162206469736b747970653d73736420706f6f
+6c3d67656e6572616c2067656e65726174696f6e3d360a20207461696e74206d61696e74656e616e63653d736f6f6e3a
+5072656665724e6f5363686564756c650a0a6e6f6465206770752d6132206370753d38206d656d6f72793d3332476920
+706f64733d380a20206c6162656c207a6f6e653d75732d656173742d316120706f6f6c3d67707520616363656c657261
+746f723d6e76696469612d613130300a20207461696e74206e76696469612e636f6d2f6770753d70726573656e743a4e
+6f5363686564756c650a0a6e6f64652073706f742d6332206370753d38206d656d6f72793d31363030304d20706f6473
+3d32300a20206c6162656c207a6f6e653d75732d656173742d316320706f6f6c3d73706f740a20207461696e74207370
+6f743d747275653a5072656665724e6f5363686564756c650a
+"""
+}
+
+// data/events.txt
+fn file_2() -> String {
+    """
+23204f6e6520646179206f6e2074686520636c75737465722e0a7363686564756c650a73686f77206e6f6465730a7368
+6f7720706f64730a73686f772070656e64696e670a0a232054686520757267656e74207265706f727420707265656d70
+747320626174636820776f726b206f6e2074686520626967206e6f64652e0a6170706c7920646174612f757267656e74
+2e6c617465720a7363686564756c650a73686f772070656e64696e670a0a23205061746368207765622d62313a206472
+61696e2069742c2072657363686564756c652c206272696e67206974206261636b2e0a647261696e207765622d62310a
+7363686564756c650a756e636f72646f6e207765622d62310a7363686564756c650a0a232053706f7420636170616369
+7479206973207265636c61696d65642e0a7461696e742073706f742d63322073706f743d7265636c61696d3a4e6f4578
+65637574650a7363686564756c650a0a232041207a6f6e652063206e6f646520646965733b20746865206175746f7363
+616c6572207265706c616365732069742e0a6661696c207765622d63310a7363686564756c650a6170706c7920646174
+612f7363616c6575702e6c617465720a7363686564756c650a0a232054686520747261696e696e672072756e73206669
+6e6973683b2074686520475055207461696e7420676f6573206177617920666f72206d61696e74656e616e63652e0a64
+656c65746520646174612f747261696e2d6c6c6d0a756e7461696e74206770752d6132206e76696469612e636f6d2f67
+70750a7363686564756c650a64656c6574652073686f702f6e6f70650a636f72646f6e206e6f77686572650a7265626f
+6f74207765622d61310a6170706c7920646174612f6d697373696e672e6c617465720a73686f77206e6f6465730a7368
+6f7720706f64730a73686f772070656e64696e670a
+"""
+}
+
+// data/scaleup.later
+fn file_3() -> String {
+    """
+2320546865206175746f7363616c657220616464732061206e6f646520696e2075732d656173742d31632c20616e6420
+7468652073686f70207363616c6573206f75742e0a6e6f6465207765622d6333206370753d38206d656d6f72793d3332
+476920706f64733d31360a20206c6162656c207a6f6e653d75732d656173742d3163206469736b747970653d73736420
+706f6f6c3d67656e6572616c2067656e65726174696f6e3d370a0a706f642073686f702f73746f726566726f6e742d37
+207072696f726974793d313030300a202072657175657374206370753d3330306d206d656d6f72793d3338344d690a20
+206c6162656c206170703d73746f726566726f6e7420746965723d7765620a2020737072656164207a6f6e6520312061
+70703d73746f726566726f6e740a0a706f642073686f702f6170692d35207072696f726974793d313030300a20207265
+7175657374206370753d3630306d206d656d6f72793d3147690a20206c6162656c206170703d61706920746965723d62
+61636b656e640a2020617061727420686f73746e616d65206170703d6170690a20207072656665722035302067656e65
+726174696f6e20477420350a
+"""
+}
+
+// data/system.pods
+fn file_4() -> String {
+    """
+23206b7562652d73797374656d3a20444e532074776963652c206e657665722074776f206f6e206f6e65206e6f64653b
+20746865206d657472696373207365727665723b20616e0a2320696e677265737320636f6e74726f6c6c657220696e20
+65616368207a6f6e653b2061206c6f672073686970706572207468617420746f6c65726174657320616e797468696e67
+2e0a0a706f64206b7562652d73797374656d2f636f7265646e732d31207072696f726974793d323030300a2020726571
+75657374206370753d3130306d206d656d6f72793d37304d690a20206c6162656c206170703d636f7265646e730a2020
+617061727420686f73746e616d65206170703d636f7265646e730a2020746f6c6572617465206e6f64652d726f6c653d
+636f6e74726f6c2d706c616e653a4e6f5363686564756c650a0a706f64206b7562652d73797374656d2f636f7265646e
+732d32207072696f726974793d323030300a202072657175657374206370753d3130306d206d656d6f72793d37304d69
+0a20206c6162656c206170703d636f7265646e730a2020617061727420686f73746e616d65206170703d636f7265646e
+730a2020746f6c6572617465206e6f64652d726f6c653d636f6e74726f6c2d706c616e653a4e6f5363686564756c650a
+0a706f64206b7562652d73797374656d2f6d6574726963732d736572766572207072696f726974793d323030300a2020
+72657175657374206370753d3130306d206d656d6f72793d3230304d690a20206c6162656c206170703d6d6574726963
+732d7365727665720a20207265717569726520706f6f6c20496e2067656e6572616c0a0a706f64206b7562652d737973
+74656d2f696e67726573732d31207072696f726974793d313530300a202072657175657374206370753d3530306d206d
+656d6f72793d3531324d690a20206c6162656c206170703d696e67726573730a2020737072656164207a6f6e65203120
+6170703d696e67726573730a20207265717569726520706f6f6c20496e2067656e6572616c2c73706f740a0a706f6420
+6b7562652d73797374656d2f696e67726573732d32207072696f726974793d313530300a202072657175657374206370
+753d3530306d206d656d6f72793d3531324d690a20206c6162656c206170703d696e67726573730a2020737072656164
+207a6f6e652031206170703d696e67726573730a20207265717569726520706f6f6c20496e2067656e6572616c2c7370
+6f740a0a706f64206b7562652d73797374656d2f696e67726573732d33207072696f726974793d313530300a20207265
+7175657374206370753d3530306d206d656d6f72793d3531324d690a20206c6162656c206170703d696e67726573730a
+2020737072656164207a6f6e652031206170703d696e67726573730a20207265717569726520706f6f6c20496e206765
+6e6572616c2c73706f740a0a706f64206b7562652d73797374656d2f666c75656e742d626974207072696f726974793d
+313830300a202072657175657374206370753d35306d206d656d6f72793d36344d690a20206c6162656c206170703d66
+6c75656e742d6269740a2020746f6c6572617465202a0a202073656c65637420726f6c653d636f6e74726f6c2d706c61
+6e650a
+"""
+}
+
+// data/urgent.later
+fn file_5() -> String {
+    """
+23204170706c696564206d69642d6461793a206120717561727465722d656e64207265706f72742074686174206d7573
+742072756e206e6f772c206f6e2067656e6572616c0a23206e6f64657320696e2075732d656173742d31622e0a706f64
+2066696e616e63652f717561727465722d636c6f7365207072696f726974793d3530300a202072657175657374206370
+753d3132206d656d6f72793d343047690a20206c6162656c206170703d717561727465722d636c6f73650a2020726571
+75697265207a6f6e6520496e2075732d656173742d31620a20207265717569726520706f6f6c20496e2067656e657261
+6c0a
+"""
+}
+
+// data/web.pods
+fn file_6() -> String {
+    """
+23205468652073686f703a20612073746f726566726f6e7420737072656164206f76657220746865207a6f6e65732c20
+616e204150492074686174206b65657073206f6e650a23207265706c69636120706572206e6f64652c20612063616368
+6520746861742077616e7473205353447320616e64206e65776572206d616368696e65732e0a0a706f642073686f702f
+73746f726566726f6e742d31207072696f726974793d313030300a202072657175657374206370753d3330306d206d65
+6d6f72793d3338344d690a20206c6162656c206170703d73746f726566726f6e7420746965723d7765620a2020737072
+656164207a6f6e652031206170703d73746f726566726f6e740a0a706f642073686f702f73746f726566726f6e742d32
+207072696f726974793d313030300a202072657175657374206370753d3330306d206d656d6f72793d3338344d690a20
+206c6162656c206170703d73746f726566726f6e7420746965723d7765620a2020737072656164207a6f6e6520312061
+70703d73746f726566726f6e740a0a706f642073686f702f73746f726566726f6e742d33207072696f726974793d3130
+30300a202072657175657374206370753d3330306d206d656d6f72793d3338344d690a20206c6162656c206170703d73
+746f726566726f6e7420746965723d7765620a2020737072656164207a6f6e652031206170703d73746f726566726f6e
+740a0a706f642073686f702f73746f726566726f6e742d34207072696f726974793d313030300a202072657175657374
+206370753d3330306d206d656d6f72793d3338344d690a20206c6162656c206170703d73746f726566726f6e74207469
+65723d7765620a2020737072656164207a6f6e652031206170703d73746f726566726f6e740a0a706f642073686f702f
+73746f726566726f6e742d35207072696f726974793d313030300a202072657175657374206370753d3330306d206d65
+6d6f72793d3338344d690a20206c6162656c206170703d73746f726566726f6e7420746965723d7765620a2020737072
+656164207a6f6e652031206170703d73746f726566726f6e740a0a706f642073686f702f73746f726566726f6e742d36
+207072696f726974793d313030300a202072657175657374206370753d3330306d206d656d6f72793d3338344d690a20
+206c6162656c206170703d73746f726566726f6e7420746965723d7765620a2020737072656164207a6f6e6520312061
+70703d73746f726566726f6e740a0a706f642073686f702f6170692d31207072696f726974793d313030300a20207265
+7175657374206370753d3630306d206d656d6f72793d3147690a20206c6162656c206170703d61706920746965723d62
+61636b656e640a2020617061727420686f73746e616d65206170703d6170690a20207072656665722035302067656e65
+726174696f6e20477420350a0a706f642073686f702f6170692d32207072696f726974793d313030300a202072657175
+657374206370753d3630306d206d656d6f72793d3147690a20206c6162656c206170703d61706920746965723d626163
+6b656e640a2020617061727420686f73746e616d65206170703d6170690a20207072656665722035302067656e657261
+74696f6e20477420350a0a706f642073686f702f6170692d33207072696f726974793d313030300a2020726571756573
+74206370753d3630306d206d656d6f72793d3147690a20206c6162656c206170703d61706920746965723d6261636b65
+6e640a2020617061727420686f73746e616d65206170703d6170690a20207072656665722035302067656e6572617469
+6f6e20477420350a0a706f642073686f702f6170692d34207072696f726974793d313030300a20207265717565737420
+6370753d3630306d206d656d6f72793d3147690a20206c6162656c206170703d61706920746965723d6261636b656e64
+0a2020617061727420686f73746e616d65206170703d6170690a20207072656665722035302067656e65726174696f6e
+20477420350a0a706f642073686f702f72656469732d30207072696f726974793d313230300a20207265717565737420
+6370753d31206d656d6f72793d3647690a20206c6162656c206170703d726564697320746965723d63616368650a2020
+73656c656374206469736b747970653d7373640a20207072656665722038302067656e65726174696f6e20477420350a
+2020707265666572203230207a6f6e6520496e2075732d656173742d31620a0a706f642073686f702f72656469732d31
+207072696f726974793d313230300a202072657175657374206370753d31206d656d6f72793d3647690a20206c616265
+6c206170703d726564697320746965723d63616368650a202073656c656374206469736b747970653d7373640a202061
+70617274207a6f6e65206170703d72656469730a20207072656665722038302067656e65726174696f6e20477420350a
+0a706f642073686f702f736561726368207072696f726974793d3930300a20206c6162656c206170703d736561726368
+0a202070726566657220313020706f6f6c20496e2073706f740a
+"""
+}
+
+// data/zz_broken.pods
+fn file_7() -> String {
+    """
+23204d697374616b65732061206d616e69666573742072657669657720776f756c642063617463682e0a706f64206e69
+6768746c792d6261636b7570207072696f726974793d31300a202072657175657374206370753d310a20207369646563
+6172206c6f67726f746174650a706f6420646174612f6261636b7570207072696f726974793d686967680a706f642064
+6174612f7265706f72740a202072657175657374206370753d312e3235206d656d6f72793d3347620a706f6420646174
+612f7265706f72742d320a202072657175657374206370753d3235306d0a2020746f6c65726174652064656469636174
+65643d62617463683a536f6d6574696d65730a706f6420646174612f7265706f72742d330a202072657175697265207a
+6f6e65204e6561722075732d656173742d31610a706f6420646174612f7265706f72742d340a2020737072656164207a
+6f6e652030206170703d7265706f72740a6e6f6465207765622d6131206370753d34206d656d6f72793d313647692070
+6f64733d31320a6e6f64652074696e79206370753d310a20206c6162656c207a6f6e653d75732d656173742d31610a20
+2072657175657374206370753d310a6465706c6f796d656e742073686f702f66726f6e74656e640a706f642073686f70
+2f73746f726566726f6e742d33207072696f726974793d313030300a202072657175657374206370753d3330306d206d
+656d6f72793d3338344d690a
+"""
+}
