@@ -98,10 +98,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-10-31-8 | 2026-10-31 | mir-llvm | low | Every `karac` process starts at 15-20 ms and 46.6 MB peak RSS before doing anything (`karac --version`), and the link step of a small kata's `karac build` is its largest phase at 72-102 ms | — |
-| B-2026-10-31-37 | 2026-10-31 | mir-llvm | medium | kata 38 (count_and_say) runs legacy's instruction count but 1.22-1.28x its cycles on the MIR backend, 1.44x rustc -O on wall time where legacy was 1.10x; the cause is unattributed | — |
 | B-2026-11-01-17 | 2026-11-01 | runtime | medium | Kata 71's auto-par binary runs 1.6-2.6x SLOWER with exactly two workers than with one (KARAC_THREADS=2: 0.24-0.39 s against 0.15 s) on the M5, on 5x the cycles for 7% more instructions; three or more workers run 0.04-0.06 s | — |
-| B-2026-11-02-3 | 2026-11-02 | mir-llvm | medium | Kata 242's valid-anagram byte loop runs 1.11x legacy's instructions on the MIR backend but 1.21x its cycles: the seq lane went from 1.08x to 1.30x rustc -O and from 1.00x to 1.22x C; on x86 it runs 0.85x legacy's wall time, so the gap needs an arm64 measurement | — |
-| B-2026-11-02-7 | 2026-11-02 | mir-llvm | medium | Kata 253 (meeting rooms II), dominated by sorting a fresh copy of 120k intervals by start each round, runs 1.17x legacy's instructions on the M5 (arm64) MIR backend (x86 1.02x); kata 252 is within the bar (1.12x M5, 0.97x x86) as of 2026-11-03 | — |
 | B-2026-11-03-29 | 2026-11-03 | mir-llvm | low | `mir_serve_ws_upgrades_while_serving` is schedule-sensitive: under the full `cargo test --features llvm` load the built server's output lacks `closed 1001`, because the session that says `bye` calls `exit(0)` while the other session's handler has not yet printed the close it received | — |
 
 ### Relocated
@@ -497,6 +494,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-10-31-34 | mir-llvm | high | Under the multi-worker pool, `send` on a full bounded `channel(n)` from several producer tasks returns `Err` instead of waiting: compiled programs lo… | 59a342fad1 |
 | B-2026-10-31-35 | typecheck+cli | medium | User-facing diagnostics and help say "in v1", "v1.5", "post-v1", "v1.x" for what 0.9 does not support ("identifiers must be ASCII in v1", "batched ma… | 4f8cb2f424 |
 | B-2026-10-31-36 | cli | high | `karac build --target=wasm_wasi` on a package, in a binary without the llvm feature, checks the package for the HOST platform: `import host` with onl… | b478379db3 |
+| B-2026-10-31-37 | mir-llvm | medium | kata 38 (count_and_say) runs legacy's instruction count but 1.22-1.28x its cycles on the MIR backend, 1.44x rustc -O on wall time where legacy was 1.… | 3d8ac8a2c5 |
 | B-2026-10-31-38 | mir-llvm | high | MIR reloads a value the previous loop iteration just stored (kata 64's `dp[c] = cost + min(dp[c], dp[c - 1])` loads dp[c-1] back through an `ldp` tha… | 4eb76cba00 |
 | B-2026-10-31-39 | mir-llvm | medium | Kata 9's auto-par binary executes a constant +1.85G instructions (+75%) whenever it has two or more workers, flat from 2 to 18: the par lane runs 2.1… | f117a8f69f9eb1d23ba79ec433aaeded4593c983 |
 | B-2026-10-31-40 | mir-llvm | medium | Kata 10's regex DP runs 1.37x legacy's instructions and 1.50x its cycles on the MIR backend: the seq lane went from 1.11x to 1.60x rustc -O | 4e55fcd778 |
@@ -547,8 +545,10 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-01-46 | mir | low | A map index assignment still reads a moved (non-`Copy`) place key after the value, against core-semantics 8.2: `m[key] = { key = "b".to_string(); 5 }… | 0e9a42f043 |
 | B-2026-11-02-1 | mir-llvm+runtime | medium | Cancelling a `TaskGroup` task while it waits inside a `par {}` (or `par for`) whose other branch has already finished leaks: `par { { sleep(2 s); 1 }… | 59908af3782752651ec380b11bcb90bc0103f540 |
 | B-2026-11-02-2 | mir-llvm | medium | Kata 225's queue-rotation loop (Vec push + index read + field update through a `mut ref` struct) runs 1.43x legacy's instructions on the MIR backend… | 7310a8f945 |
+| B-2026-11-02-3 | mir-llvm | medium | Kata 242's valid-anagram byte loop runs 1.11x legacy's instructions on the MIR backend but 1.21x its cycles: the seq lane went from 1.08x to 1.30x ru… | 3d8ac8a2c5 |
 | B-2026-11-02-4 | mir-llvm | medium | Kata 244's Map[String, i64] word-index lookups run 1.27x legacy's instructions on the MIR backend and 1.56x its cycles: the seq lane went from 1.16x… | 9f3cc6a792 |
 | B-2026-11-02-6 | mir-llvm | medium | Kata 249's Map[String, Vec[String]] grouping (entry(k).or_insert(Vec.new()).push(w)) runs 1.24x legacy's instructions and 1.24x its cycles on the MIR… | 9f3cc6a792 |
+| B-2026-11-02-7 | mir-llvm | medium | Kata 253 (meeting rooms II), dominated by sorting a fresh copy of 120k intervals by start each round, runs 1.17x legacy's instructions on the M5 (arm… | 3d8ac8a2c5 |
 | B-2026-11-02-8 | mir-llvm | medium | The auto-par collect lowering (`#[par_order_free]` loop pushing into a Vec) holds the collected Vec twice at peak once there are two or more workers:… | 2939cedca0 |
 | B-2026-11-02-9 | mir-llvm | medium | Growing a fresh Vec[i64] to 2M elements with push, once per round, runs 1.37x legacy's instructions on the MIR backend (1.13x its cycles): found in k… | 11d7eb7f01 |
 | B-2026-11-02-10 | mir-llvm | low | Kata 276's par lane runs 1.44x slower than its 2026-08-28 feed while its comparators moved 1.06-1.09x and its seq lane held, so it scales 4.6x over s… | cd7fd85dec |
