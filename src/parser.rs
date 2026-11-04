@@ -154,6 +154,21 @@ pub(crate) enum FnContext {
 // disambiguates using the case class of the initial identifier: Type- and Const-class
 // names (uppercase leading letter) start paths; Value-class names (lowercase) start
 // postfix chains. See docs/design.md § Identifiers and Naming.
+/// Kāra's name for a Rust standard collection (`HashMap` -> `Map`). Rust's
+/// `BinaryHeap` pops the largest first and Kāra's `PriorityQueue` the
+/// smallest, so its rename holds for a type and not for a constructor, which
+/// becomes `PriorityQueue.max_first` / `max_first_from`. B-2026-11-04-5.
+pub(crate) fn rust_collection_rename(name: &str) -> Option<&'static str> {
+    match name {
+        "HashMap" => Some("Map"),
+        "HashSet" => Some("Set"),
+        "BTreeMap" => Some("SortedMap"),
+        "BTreeSet" => Some("SortedSet"),
+        "BinaryHeap" => Some("PriorityQueue"),
+        _ => None,
+    }
+}
+
 pub(crate) fn starts_upper(s: &str) -> bool {
     s.chars().next().is_some_and(|c| c.is_ascii_uppercase())
 }
@@ -215,6 +230,8 @@ pub struct Parser {
         rustc_hash::FxHashMap<crate::resolver::SpanKey, Option<crate::resolver::TextEdit>>,
     /// See [`crate::ast::Program::rust_box_new`].
     pub(crate) rust_box_new: rustc_hash::FxHashMap<usize, crate::resolver::TextEdit>,
+    /// See [`crate::ast::Program::rust_heap_ctor`].
+    pub(crate) rust_heap_ctor: rustc_hash::FxHashMap<usize, crate::resolver::TextEdit>,
     /// See [`crate::ast::Program::paren_return_types`].
     pub(crate) paren_return_types: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
     /// See [`crate::ast::Program::mut_fn_types`].
@@ -498,6 +515,7 @@ impl Parser {
             escaping_fn_types: rustc_hash::FxHashSet::default(),
             vec_macro_literals: rustc_hash::FxHashMap::default(),
             rust_box_new: rustc_hash::FxHashMap::default(),
+            rust_heap_ctor: rustc_hash::FxHashMap::default(),
             paren_return_types: rustc_hash::FxHashSet::default(),
             mut_fn_types: rustc_hash::FxHashSet::default(),
             cross_task_fn_types: rustc_hash::FxHashSet::default(),
@@ -861,6 +879,7 @@ impl Parser {
             escaping_fn_types: std::mem::take(&mut self.escaping_fn_types),
             vec_macro_literals: std::mem::take(&mut self.vec_macro_literals),
             rust_box_new: std::mem::take(&mut self.rust_box_new),
+            rust_heap_ctor: std::mem::take(&mut self.rust_heap_ctor),
             paren_return_types: std::mem::take(&mut self.paren_return_types),
             mut_fn_types: std::mem::take(&mut self.mut_fn_types),
             cross_task_fn_types: std::mem::take(&mut self.cross_task_fn_types),
@@ -2047,6 +2066,175 @@ impl Parser {
             .insert(crate::resolver::SpanKey::from_span(&whole), edits);
         for &seg in &segments[..segments.len() - 1] {
             self.tokens[seg + 1].token = Token::Dot;
+        }
+    }
+
+    /// The source text at `offset .. offset + length`, when the parser was
+    /// given it ([`Self::with_source`]).
+    fn source_at(&self, offset: usize, length: usize) -> Option<&str> {
+        let (source, base) = self.source.as_ref()?;
+        let at = offset.checked_sub(*base)?;
+        source.get(at..at + length)
+    }
+
+    /// Rust's `use std::collections::HashMap;`, or the `import` `karac fix`
+    /// makes of its `use`, at the `use` / `import` keyword. Rust's
+    /// collections, `cmp` and `mem` are in Kāra's prelude (`Map`, `max`,
+    /// `swap`), so the statement goes: one diagnostic whose fix deletes the
+    /// line, in place of the `use` -> `import` one so the edits never
+    /// overlap, and the parse skips it. A use of `HashMap` then gets the
+    /// resolver's rename to `Map`. Returns `false`, consuming nothing, for any
+    /// other import, and for a renaming one (`as`), whose name the line
+    /// would take with it. B-2026-11-04-5.
+    pub(crate) fn reject_rust_prelude_import(&mut self) -> bool {
+        let at = self.pos;
+        let token = |i: usize| self.tokens.get(i).map(|t| &t.token);
+        let ident = |i: usize| match token(i) {
+            Some(Token::Identifier { name, .. }) => Some(name.as_str()),
+            _ => None,
+        };
+        if !matches!(ident(at + 1), Some("std" | "core" | "alloc"))
+            || !matches!(token(at + 2), Some(Token::ColonColon))
+            || !matches!(ident(at + 3), Some("collections" | "cmp" | "mem"))
+            || !matches!(token(at + 4), Some(Token::ColonColon | Token::Semicolon))
+        {
+            return false;
+        }
+        // The leaves (`HashMap`, or each name of a `{..}` group) up to the
+        // statement's `;`.
+        let mut leaves: Vec<String> = Vec::new();
+        // `use std::mem;` imports the module, whose functions Kāra's prelude
+        // holds; `mem::swap` loses its `mem::` at the use site.
+        let mut semi = if matches!(token(at + 4), Some(Token::Semicolon)) {
+            at + 4
+        } else {
+            at + 5
+        };
+        loop {
+            match token(semi) {
+                Some(Token::Semicolon) => break,
+                Some(Token::Identifier { name, .. }) => {
+                    if !matches!(token(semi + 1), Some(Token::ColonColon)) {
+                        leaves.push(name.clone());
+                    }
+                }
+                Some(
+                    Token::ColonColon
+                    | Token::LeftBrace
+                    | Token::RightBrace
+                    | Token::Comma
+                    | Token::Star
+                    | Token::SelfValue,
+                ) => {}
+                _ => return false,
+            }
+            semi += 1;
+        }
+        let first = self.tokens[at].span;
+        let end = self.tokens[semi].span;
+        let whole = Span {
+            length: end.offset + end.length - first.offset,
+            ..first
+        };
+        let path_start = self.tokens[at + 1].span.offset;
+        let path_end = {
+            let last = self.tokens[semi - 1].span;
+            last.offset + last.length
+        };
+        let written = self
+            .source_at(path_start, path_end - path_start)
+            .map(str::to_string)
+            .unwrap_or_else(|| {
+                format!(
+                    "{}::{}",
+                    ident(at + 1).unwrap_or_default(),
+                    ident(at + 3).unwrap_or_default()
+                )
+            });
+        let kara: Vec<String> = leaves
+            .iter()
+            .filter(|n| n.as_str() != "self")
+            .map(|n| format!("`{}`", rust_collection_rename(n).unwrap_or(n)))
+            .collect();
+        let named = if kara.is_empty() {
+            "its names".to_string()
+        } else {
+            kara.join(", ")
+        };
+        let message = format!(
+            "`{written}` is Rust's standard library -- Kāra has {named} in its prelude, with \
+             no import: delete the line"
+        );
+        // The edit takes the line's newline too, so no blank line is left.
+        let mut edit_length = whole.length;
+        if self.source_at(whole.offset + whole.length, 1) == Some("\n") {
+            edit_length += 1;
+        }
+        self.error_at(&message, whole);
+        self.fix_diffs.insert(
+            crate::resolver::SpanKey::from_span(&whole),
+            vec![crate::resolver::TextEdit {
+                offset: whole.offset,
+                length: edit_length,
+                replacement: String::new(),
+            }],
+        );
+        self.pos = semi + 1;
+        true
+    }
+
+    /// An import path written with Rust's `::` (`import std::sync::mpsc;`,
+    /// what `karac fix` makes of a `use`), with the cursor just past the
+    /// keyword: one diagnostic naming the path, whose fix writes `.` for each
+    /// `::`, and the tokens rewritten so the import parses. B-2026-11-04-5.
+    pub(crate) fn rewrite_rust_import_path(&mut self) {
+        let at = self.pos;
+        let mut colons = Vec::new();
+        let mut end = at;
+        while let Some(t) = self.tokens.get(end).map(|t| &t.token) {
+            match t {
+                Token::ColonColon => colons.push(end),
+                Token::Identifier { .. }
+                | Token::Dot
+                | Token::LeftBrace
+                | Token::RightBrace
+                | Token::Comma
+                | Token::Star
+                | Token::As
+                | Token::SelfValue => {}
+                _ => break,
+            }
+            end += 1;
+        }
+        if colons.is_empty() || end == at {
+            return;
+        }
+        let first = self.tokens[at].span;
+        let last = self.tokens[end - 1].span;
+        let whole = Span {
+            length: last.offset + last.length - first.offset,
+            ..first
+        };
+        let edits: Vec<crate::resolver::TextEdit> = colons
+            .iter()
+            .map(|&i| crate::resolver::TextEdit {
+                offset: self.tokens[i].span.offset,
+                length: self.tokens[i].span.length,
+                replacement: ".".to_string(),
+            })
+            .collect();
+        let message = match self.source_at(whole.offset, whole.length) {
+            Some(written) => format!(
+                "`{written}` is Rust's `::` path -- Kāra writes an import path with `.`: `{}`",
+                written.replace("::", ".")
+            ),
+            None => "Rust's `::` path -- Kāra writes an import path with `.`".to_string(),
+        };
+        self.error_at(&message, whole);
+        self.fix_diffs
+            .insert(crate::resolver::SpanKey::from_span(&whole), edits);
+        for &i in &colons {
+            self.tokens[i].token = Token::Dot;
         }
     }
 

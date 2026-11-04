@@ -282,6 +282,9 @@ impl super::Parser {
                 ref name,
                 raw: false,
             } if name == "use" && matches!(self.peek_token_ref_at(1), Token::Identifier { .. }) => {
+                if self.reject_rust_prelude_import() {
+                    return None;
+                }
                 let use_span = self.current_span();
                 self.error_at(
                     "`use` is not Kāra syntax; write `import` (`import a.b.C;`)",
@@ -297,7 +300,12 @@ impl super::Parser {
                 );
                 self.import_item(is_pub)
             }
-            Token::Import => self.import_item(is_pub),
+            Token::Import => {
+                if self.reject_rust_prelude_import() {
+                    return None;
+                }
+                self.import_item(is_pub)
+            }
             Token::Const => {
                 let decl = self.parse_const_decl(attributes, is_pub, is_private)?;
                 Some(Item::ConstDecl(decl))
@@ -2887,6 +2895,7 @@ impl super::Parser {
     fn parse_import_decl(&mut self, is_pub: bool) -> Option<Vec<ImportDecl>> {
         let start = self.current_span();
         self.advance(); // `import` (or a diagnosed `use`)
+        self.rewrite_rust_import_path();
 
         let first_span = self.current_span();
         let first_name = self.expect_identifier()?;

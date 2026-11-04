@@ -864,6 +864,13 @@ pub struct Program {
     /// Set by the PARSER; the resolver reports it when nothing declares a
     /// `Box` (B-2026-11-04-43).
     pub rust_box_new: rustc_hash::FxHashMap<usize, crate::resolver::TextEdit>,
+    /// Rust's `BinaryHeap.new()` / `BinaryHeap.from(v)`, keyed by the offset
+    /// of `BinaryHeap`, with the edit that writes `PriorityQueue.max_first` /
+    /// `max_first_from`: Kāra's queue pops the smallest first unless built
+    /// largest-first, so a rename alone would reverse the program. Set by the
+    /// PARSER; the resolver reports it when nothing declares a `BinaryHeap`
+    /// (B-2026-11-04-5).
+    pub rust_heap_ctor: rustc_hash::FxHashMap<usize, crate::resolver::TextEdit>,
     /// Function return types written in parentheses, `-> (dyn Shape)`, keyed
     /// by the type's span. The parentheses leave no node of their own; a
     /// trailing `with` after them is the function's clause either way, and

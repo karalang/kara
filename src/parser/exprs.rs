@@ -522,6 +522,10 @@ impl super::Parser {
                                 {
                                     self.note_rust_box_new(lhs.span.offset, &args, &span);
                                 }
+                                if matches!(&lhs.kind, ExprKind::Identifier(n) if n == "BinaryHeap")
+                                {
+                                    self.note_rust_heap_ctor(lhs.span.offset, &method);
+                                }
                                 lhs = if args.is_empty()
                                     && matches!(method.as_str(), "size_of" | "align_of")
                                     && Self::is_type_receiver(&lhs)
@@ -618,6 +622,18 @@ impl super::Parser {
                         if segments.len() == 2 && segments[0] == "Box" && segments[1] == "new")
                     {
                         self.note_rust_box_new(lhs.span.offset, &args, &call_span);
+                    }
+                    if let ExprKind::Path {
+                        segments,
+                        generic_args: None,
+                    } = &lhs.kind
+                    {
+                        if let [ty, method] = segments.as_slice() {
+                            if ty == "BinaryHeap" {
+                                let method = method.clone();
+                                self.note_rust_heap_ctor(lhs.span.offset, &method);
+                            }
+                        }
                     }
                     lhs = Expr {
                         id: crate::ids::NodeId::DUMMY,
@@ -2954,6 +2970,9 @@ impl super::Parser {
                     let call = self.span_from(&start);
                     self.note_rust_box_new(start.offset, &args, &call);
                 }
+                if path.len() == 2 && path[0] == "BinaryHeap" {
+                    self.note_rust_heap_ctor(start.offset, &path[1]);
+                }
                 return Some(Expr {
                     id: crate::ids::NodeId::DUMMY,
                     span: self.span_from(&start),
@@ -3134,6 +3153,42 @@ impl super::Parser {
             replacement: text.to_string(),
         };
         self.rust_box_new.insert(box_at, edit);
+    }
+
+    /// Rust's `BinaryHeap.new()` / `BinaryHeap.from(v)`, whose `BinaryHeap`
+    /// starts at `at`: record the edit that writes Kāra's largest-first
+    /// constructor, for the resolver to attach if `BinaryHeap` turns out
+    /// undeclared ([`crate::ast::Program::rust_heap_ctor`]).
+    fn note_rust_heap_ctor(&mut self, at: usize, method: &str) {
+        let kara = match method {
+            "new" => "max_first",
+            "from" => "max_first_from",
+            _ => return,
+        };
+        let Some((source, base)) = self.source.as_ref() else {
+            return;
+        };
+        let Some(text) = at.checked_sub(*base).and_then(|s| source.get(s..)) else {
+            return;
+        };
+        let Some(rest) = text.strip_prefix("BinaryHeap") else {
+            return;
+        };
+        let gap = rest.len() - rest.trim_start().len();
+        let Some(after_dot) = rest[gap..].strip_prefix('.') else {
+            return;
+        };
+        let gap2 = after_dot.len() - after_dot.trim_start().len();
+        if !after_dot[gap2..].starts_with(method) {
+            return;
+        }
+        let mid = &rest[..gap + 1 + gap2];
+        let edit = crate::resolver::TextEdit {
+            offset: at,
+            length: "BinaryHeap".len() + mid.len() + method.len(),
+            replacement: format!("PriorityQueue{mid}{kara}"),
+        };
+        self.rust_heap_ctor.insert(at, edit);
     }
 
     fn vec_macro_fix(

@@ -1957,6 +1957,9 @@ impl<'a> Resolver<'a> {
             });
             return;
         }
+        if self.report_rust_binary_heap(name, span) {
+            return;
+        }
         let visible = self.suggestable_names();
         // Same known-rename preference as `error_undefined_type` — the
         // constructor half (`TreeMap.new()`) resolves as a NAME.
@@ -2067,6 +2070,9 @@ impl<'a> Resolver<'a> {
         if self.named_by_failed_import_fix(name) {
             return;
         }
+        if self.report_rust_binary_heap(name, span) {
+            return;
+        }
         let visible = self.suggestable_names();
         // Same known-rename preference as `error_undefined_type` — the
         // constructor half (`TreeMap.new()`) resolves as a NAME.
@@ -2145,12 +2151,50 @@ impl<'a> Resolver<'a> {
     ///
     /// `TreeSet` is here for symmetry: the spec never uses it, but anyone
     /// reaching for `TreeMap`'s sibling by analogy lands on the same wall.
+    ///
+    /// Rust's collections rename the same way (`HashMap` -> `Map`,
+    /// `BTreeSet` -> `SortedSet`, [`crate::parser::rust_collection_rename`]):
+    /// `HashSet` was otherwise "did you mean 'Hasher'?" (B-2026-11-04-5).
+    /// `BinaryHeap` -> `PriorityQueue` is right for a TYPE only; a name
+    /// position goes through [`Self::report_rust_binary_heap`] first.
     fn renamed_stdlib_type(name: &str) -> Option<&'static str> {
         match name {
             "TreeMap" => Some("SortedMap"),
             "TreeSet" => Some("SortedSet"),
-            _ => None,
+            _ => crate::parser::rust_collection_rename(name),
         }
+    }
+
+    /// `BinaryHeap` in a name position (`BinaryHeap.from(v)`, what
+    /// `BinaryHeap::from(v)` reads as). Rust's heap pops the largest first and
+    /// Kāra's `PriorityQueue` the smallest, so the rename the type takes would
+    /// reverse the program: the diagnostic says so, and its fix is the
+    /// largest-first constructor the parser recorded, `max_first` /
+    /// `max_first_from` (none for another method). B-2026-11-04-5.
+    fn report_rust_binary_heap(&mut self, name: &str, span: Span) -> bool {
+        if name != "BinaryHeap" {
+            return false;
+        }
+        let replacement = self
+            .program
+            .rust_heap_ctor
+            .get(&span.offset)
+            .cloned()
+            .map(Box::new);
+        self.errors.push(ResolveError {
+            message: "`BinaryHeap` is Rust's heap, which pops the largest first; Kāra's is \
+                      `PriorityQueue`, which pops the smallest first unless it is built with \
+                      `PriorityQueue.max_first()` or `PriorityQueue.max_first_from(v)`, so \
+                      `BinaryHeap.new()` is `PriorityQueue.max_first()` and \
+                      `BinaryHeap.from(v)` is `PriorityQueue.max_first_from(v)`"
+                .to_string(),
+            span,
+            kind: ResolveErrorKind::UndefinedName,
+            suggestion: Some("PriorityQueue".to_string()),
+            replacement,
+            stub_hint: None,
+        });
+        true
     }
 
     fn error_undefined_type(&mut self, name: &str, span: Span) {
