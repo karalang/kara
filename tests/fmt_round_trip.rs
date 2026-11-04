@@ -61,10 +61,13 @@ fn par_map<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Vec<R> 
 
 /// Diagnostics as phase and message with every number masked, sorted:
 /// formatting moves code between lines, and a message can name a position
-/// (`moved at line 5:13`).
+/// (`moved at line 5:13`). The deprecation of `vec![..]` is left out: the
+/// formatter writes that literal in another spelling, which is the point of
+/// the deprecation (design.md § Collection literals).
 fn diagnostics(source: &str) -> Vec<String> {
     let mut d: Vec<String> = karac::check_source(source)
         .into_iter()
+        .filter(|d| !d.message.starts_with("use of deprecated `vec![..]`"))
         .map(|d| {
             let mut m = format!("{}: ", d.phase);
             for c in d.message.chars() {

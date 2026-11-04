@@ -51,7 +51,8 @@ fn an_element_of_a_temporary_vec_is_fixed_by_a_clone() {
     fixed_to(
         "vec-literal",
         "fn main() {\n    let k = 1;\n    let undo = vec![\"LR\", \"RL\", \"LLLL\"][k];\n    println(f\"{undo} {undo.len()}\");\n}\n",
-        "let undo = vec![\"LR\", \"RL\", \"LLLL\"][k].clone();",
+        // The deprecated `vec!` goes too (design.md § Collection literals).
+        "let undo = [\"LR\", \"RL\", \"LLLL\"][k].clone();",
         "RL 2\n",
     );
 }

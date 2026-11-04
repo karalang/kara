@@ -134,7 +134,7 @@ fn std_log_transparent_to_effects() {
 fn std_log_default_backend_in_order() {
     let path = write(
         "default",
-        "import std.log.{debug, info, warn};\n\nfn main() {\n    let xs = vec![3, 1, 2];\n    let ys = vec![\"b\", \"a\"];\n    debug(\"dropped\", xs: xs);\n    info(\"first\", xs: xs);\n    warn(\"second\", ys: ys);\n    info(\"third\", n: xs.len() + ys.len());\n    println(\"done\");\n}\n",
+        "import std.log.{debug, info, warn};\n\nfn main() {\n    let xs = [3, 1, 2];\n    let ys = [\"b\", \"a\"];\n    debug(\"dropped\", xs: xs);\n    info(\"first\", xs: xs);\n    warn(\"second\", ys: ys);\n    info(\"third\", n: xs.len() + ys.len());\n    println(\"done\");\n}\n",
     );
     let expect = "{\"level\":\"info\",\"msg\":\"first\",\"xs\":[3,1,2],\"task_id\":null}\n\
                   {\"level\":\"warn\",\"msg\":\"second\",\"ys\":[\"b\",\"a\"],\"task_id\":null}\n\

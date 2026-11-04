@@ -806,15 +806,19 @@ fn slice6b_pub_signature_with_imported_pub_type_is_ok() {
 #[test]
 fn slice6b_cross_module_non_pub_field_access_rejected() {
     // CR-18 field-access half: `u.password_hash` from outside the defining
-    // module where `password_hash` is not `pub`. Skipping the struct literal
-    // keeps the test focused on the field-access rule — cross-module struct
-    // construction is a separate typechecker path.
+    // module's directory where `password_hash` is `private` (design.md §5:
+    // a field with no keyword is visible in the whole package, B-2026-11-04-22).
+    // Skipping the struct literal keeps the test focused on the field-access
+    // rule — cross-module struct construction is a separate typechecker path.
     let d = ScratchDir::new("field-access");
     d.write(
         "src/main.kara",
-        "import db.User;\nfn touch(u: User) { let _x = u.password_hash; }\nfn main() {}\n",
+        "import db.user.User;\nfn touch(u: User) { let _x = u.password_hash; }\nfn main() {}\n",
     );
-    d.write("src/db.kara", "pub struct User { password_hash: i64 }\n");
+    d.write(
+        "src/db/user.kara",
+        "pub struct User { private password_hash: i64 }\n",
+    );
 
     let w = walked(d.root());
     let built = build_program_tree(&w).expect("build tree");
@@ -1048,15 +1052,19 @@ fn slice7_cross_module_field_access_through_reexport() {
 
 #[test]
 fn slice7_cross_module_non_pub_field_rejected_through_reexport() {
-    // Same setup but the field isn't `pub` — canonical-identity check still
-    // treats it as a cross-module private-field access.
+    // Same setup but the field is `private` to its directory — the
+    // canonical-identity check still treats it as a private-field access
+    // from another directory (B-2026-11-04-22).
     let d = ScratchDir::new("reexport-non-pub-field");
     d.write(
         "src/main.kara",
         "import mid.User;\nfn touch(u: User) { let _x = u.password_hash; }\nfn main() {}\n",
     );
-    d.write("src/mid.kara", "pub import db.User;\n");
-    d.write("src/db.kara", "pub struct User { password_hash: i64 }\n");
+    d.write("src/mid.kara", "pub import db.user.User;\n");
+    d.write(
+        "src/db/user.kara",
+        "pub struct User { private password_hash: i64 }\n",
+    );
 
     let w = walked(d.root());
     let built = build_program_tree(&w).expect("build tree");

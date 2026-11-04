@@ -11472,7 +11472,7 @@ fn a_held_borrow_of_a_shared_or_copy_value_is_fixed_by_a_copy() {
         "m.get(1).cloned();",
     );
     let src = "fn main() {\n\
-               \x20   let mut v = vec![String.from(\"a\")];\n\
+               \x20   let mut v = [String.from(\"a\")];\n\
                \x20   let first = v.get(0).unwrap();\n\
                \x20   v.push(String.from(\"b\"));\n\
                \x20   println(f\"{first} {v.len()}\");\n\
@@ -14094,24 +14094,25 @@ fn a_package_is_refused_by_its_modules_only_at_a_module_boundary() {
     // B-2026-10-25-46: past the v2 check of a package's combined source,
     // the per-module typecheck refuses only what a module boundary carries.
     // A `ref` to an imported `shared` enum and `f64.parse(..).ok()` check and
-    // run as they do in a lone file; a private field read from another
-    // module is still refused.
+    // run as they do in a lone file; a `private` field read from another
+    // directory is still refused (a field with no keyword is visible in the
+    // whole package, design.md §5, B-2026-11-04-22).
     let (dir, _) = fixture("package-boundary-refusals", "");
     std::fs::write(
         dir.join("kara.toml"),
         "[package]\nname = \"pb\"\nversion = \"0.1.0\"\n",
     )
     .unwrap();
-    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::create_dir_all(dir.join("src/db")).unwrap();
     std::fs::write(
-        dir.join("src/ast.kara"),
-        "pub shared enum E {\n    A(i64),\n    B,\n}\npub struct P {\n    secret: i64,\n}\n\
+        dir.join("src/db/ast.kara"),
+        "pub shared enum E {\n    A(i64),\n    B,\n}\npub struct P {\n    private secret: i64,\n}\n\
          pub fn mk() -> P {\n    P { secret: 1 }\n}\n",
     )
     .unwrap();
     let main = |tail: &str| {
         format!(
-            "import ast.{{E, P, mk}};\nfn size(e: E) -> i64 {{\n    match e {{\n        E.A(n) => n,\n        \
+            "import db.ast.{{E, P, mk}};\nfn size(e: E) -> i64 {{\n    match e {{\n        E.A(n) => n,\n        \
              E.B => 0,\n    }}\n}}\nfn main() {{\n    let v = Vec[E.A(4), E.B];\n    let r = ref v[0];\n    \
              let x = f64.parse(\"1.5\").ok().unwrap_or(0.0);\n    let p: P = mk();\n    \
              println(f\"{{size(r)}} {{x}}\");\n{tail}}}\n"
@@ -14144,7 +14145,7 @@ fn a_package_is_refused_by_its_modules_only_at_a_module_boundary() {
         String::from_utf8_lossy(&check.stderr)
     );
     assert!(
-        !check.status.success() && out.contains("private field 'secret' of struct 'P'"),
+        !check.status.success() && out.contains("field 'secret' of struct 'P' is `private`"),
         "{out}"
     );
     let _ = std::fs::remove_dir_all(&dir);

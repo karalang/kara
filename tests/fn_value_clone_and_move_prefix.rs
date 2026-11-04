@@ -66,11 +66,11 @@ fn a_collection_of_function_values_does_not_clone() {
             "fn main() {\n    let fs: Vec[Fn(i64) -> i64] = [|x: i64| x + 1].to_vec();\n    println(fs[0](2));\n}\n",
             (2, 35),
             "`.to_vec()` on 'Vec[Fn(i64) -> i64]'",
-            "build the `Vec` with `vec![..]` or `push` instead",
+            "build the `Vec` with a list literal `[f, g]` or `push` instead",
         ),
         (
             "clone",
-            "fn main() {\n    let fs: Vec[Fn(i64) -> i64] = vec![|x: i64| x + 1];\n    let gs = fs.clone();\n    println(gs[0](2));\n}\n",
+            "fn main() {\n    let fs: Vec[Fn(i64) -> i64] = [|x: i64| x + 1];\n    let gs = fs.clone();\n    println(gs[0](2));\n}\n",
             (3, 14),
             "`.clone()` on 'Vec[Fn(i64) -> i64]'",
             "wrap the function in a `shared struct`",
@@ -88,7 +88,7 @@ fn a_collection_of_function_values_does_not_clone() {
         );
     }
     // The ways the hint names build the same `Vec`, and run.
-    let built = "fn main() {\n    let fs: Vec[Fn(i64) -> i64] = vec![|x: i64| x + 1];\n    \
+    let built = "fn main() {\n    let fs: Vec[Fn(i64) -> i64] = [|x: i64| x + 1];\n    \
                  let mut gs: Vec[Fn(i64) -> i64] = Vec.new();\n    gs.push(|x: i64| x * 2);\n    \
                  println(fs[0](2) + gs[0](2));\n}\n";
     assert!(check("built", built).is_empty());

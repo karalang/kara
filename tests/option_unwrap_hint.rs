@@ -110,7 +110,7 @@ fn unwrap_hint_on_a_result_argument() {
 fn unwrap_hint_on_an_option_of_a_ref() {
     hinted(
         "first",
-        "fn main() {\n    let v: Vec[i64] = vec![1, 2];\n    let x: i64 = v.first();\n    println(f\"{x}\");\n}\n",
+        "fn main() {\n    let v: Vec[i64] = [1, 2];\n    let x: i64 = v.first();\n    println(f\"{x}\");\n}\n",
         3,
         "`Option` wraps the 'ref i64'; unwrap it first",
     );

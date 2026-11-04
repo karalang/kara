@@ -72,14 +72,16 @@ impl super::Formatter {
     /// The object of a `.method()`, `.field`, `.0` or `[i]`. A collection
     /// literal there reads back as a type application (`Vec[Vec["a"]].len()`
     /// parses as `Vec[T].len` with `T = Vec["a"]`), so a `Vec` one is written
-    /// in its `vec![..]` spelling and any other is parenthesized.
+    /// as the bare list literal `[..]` (a `Vec` with no expected type; not the
+    /// deprecated `vec![..]`, design.md § Collection literals) and any other
+    /// is parenthesized.
     fn format_receiver(&mut self, object: &Expr) {
         if self.paren_block_like_at_stmt_start(object) {
             return;
         }
         if let ExprKind::PrefixCollectionLiteral { type_name, items } = &object.kind {
             if type_name == "Vec" {
-                self.write_str("vec![");
+                self.write_str("[");
                 for (i, e) in items.iter().enumerate() {
                     if i > 0 {
                         self.write_str(", ");

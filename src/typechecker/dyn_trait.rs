@@ -348,7 +348,7 @@ impl<'a> super::TypeChecker<'a> {
             // value of an erased `Fn` type has no `.clone()`
             // (B-2026-11-03-3).
             let build = if what == ".to_vec()" {
-                "build the `Vec` with `vec![..]` or `push` instead, or "
+                "build the `Vec` with a list literal `[f, g]` or `push` instead, or "
             } else {
                 ""
             };
