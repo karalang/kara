@@ -58,15 +58,15 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 105 |
-| false-positive | 97 |
+| diagnostics | 113 |
+| false-positive | 99 |
 | perf | 86 |
-| missing-feature | 64 |
-| soundness | 43 |
-| miscompile | 32 |
+| missing-feature | 70 |
+| soundness | 48 |
+| miscompile | 33 |
 | run-vs-build | 22 |
+| codegen-gap | 18 |
 | other | 17 |
-| codegen-gap | 14 |
 | crash | 8 |
 | leak | 4 |
 | use-after-free | 1 |
@@ -75,18 +75,18 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 170 |
-| mir | 103 |
+| typecheck | 177 |
+| mir | 109 |
 | mir-llvm | 101 |
-| cli | 51 |
-| ownership | 45 |
-| parser | 32 |
+| cli | 52 |
+| ownership | 46 |
+| parser | 36 |
 | interp | 27 |
 | runtime | 23 |
 | codegen | 22 |
-| effect | 15 |
+| effect | 21 |
+| resolver | 5 |
 | other | 4 |
-| resolver | 4 |
 | autopar | 4 |
 | lexer | 1 |
 ## Current state
@@ -99,7 +99,32 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 |---|---|---|---|---|---|
 | B-2026-10-31-8 | 2026-10-31 | mir-llvm | low | Every `karac` process starts at 15-20 ms and 46.6 MB peak RSS before doing anything (`karac --version`), and the link step of a small kata's `karac build` is its largest phase at 72-102 ms | — |
 | B-2026-11-01-17 | 2026-11-01 | runtime | medium | Kata 71's auto-par binary runs 1.6-2.6x SLOWER with exactly two workers than with one (KARAC_THREADS=2: 0.24-0.39 s against 0.15 s) on the M5, on 5x the cycles for 7% more instructions; three or more workers run 0.04-0.06 s | — |
-| B-2026-11-03-29 | 2026-11-03 | mir-llvm | low | `mir_serve_ws_upgrades_while_serving` is schedule-sensitive: under the full `cargo test --features llvm` load the built server's output lacks `closed 1001`, because the session that says `bye` calls `exit(0)` while the other session's handler has not yet printed the close it received | — |
+| B-2026-11-04-4 | 2026-11-04 | mir | medium | `for f in rx.into_iter()` over a `Receiver[Fn(i64) -> i64 + CrossTask]` passes `karac check` and fails the MIR borrow check inside the library: `borrow check ReceiverIter[Fn(i64) -> i64].next: ... the result borrows (*_1).0, which the receiver owns [E0509]`, on __mir-run, __mir-llvm-run and `karac run`; `while let Some(f) = rx.recv()` on the same channel works | — |
+| B-2026-11-04-5 | 2026-11-04 | parser | medium | A Rust `Type::item` path (`Vec::new()`, `String::from("ab")`, `i64::MAX`, `HashMap::new()`) gets only the bare parse error `Expected ';', found '::'` (or `Expected ')'`), with no Rust-ism naming and no machine-applicable fix, where every sibling Rust-ism (turbofish, `Vec<..>`, `&x`, `println!`, `move`, `use`) is named and fixed | — |
+| B-2026-11-04-6 | 2026-11-04 | parser | low | Rust angle-bracket generics on a DECLARATION (`struct Bx<T> { v: T }`, `impl<T> Bx<T> { .. }`) get `Expected '{' or ';' after struct name` with no fix, though the same brackets in a type position (`Vec<i64>`, `Result<i64, String>`, `Box<..>`) are named and machine-fixed to `[..]` | — |
+| B-2026-11-04-7 | 2026-11-04 | parser | low | Two Rust-isms are fixed into a program that is still refused: `fn first(s: &[i64])` is fixed to `ref [i64]`, whose `[T]` diagnostic then offers no machine edit to `Slice[i64]`; `-> Box<dyn Fn(i64) -> i64>` is fixed to `Box[dyn Fn(i64) -> i64]`, which then fails to parse (`Expected ']', found '('`) | — |
+| B-2026-11-04-8 | 2026-11-04 | mir | high | UFCS on a program trait (`A.m(s)`, design.md §9 Method resolution) is refused by `karac check`, `karac run` and `karac build` with "a call that leaves out default arguments is not lowered yet"; this is the fix the ambiguity diagnostic points at, so two traits sharing a method name have no way out, and inside a generic body under `T: A + B` the UFCS call `A.m(x)` is itself reported as ambiguous | — |
+| B-2026-11-04-9 | 2026-11-04 | mir | high | In a generic body under `T: Named`, `T.label()` calls the concrete type's INHERENT associated function of the same name instead of the trait's (prints "inherent", expected "trait") on every lane; the method form `x.m()` under the same shape correctly calls the trait's | — |
+| B-2026-11-04-10 | 2026-11-04 | mir | medium | A program associated function named like a comptime reflection method (`fn name() -> String` in a trait or inherent impl) passes `karac check` but `P.name()` / `T.name()` lowers to the native `Type.name`: `karac run`/interp stops with "`Type.name` runs only at compile time, inside a `comptime` evaluation" and the LLVM lane with "native `Type.name` is not lowered yet" | — |
+| B-2026-11-04-11 | 2026-11-04 | mir | medium | A generic body under one bound `[T: B]` calling `x.m()` is refused ("the method call `.m` with no resolved callee is not lowered yet") when the concrete type also implements ANOTHER trait with a method `m`; design.md §9 says lookup uses the bound and gives one candidate | — |
+| B-2026-11-04-12 | 2026-11-04 | ownership | medium | The ownership check charges `s.m()` with the TRAIT method's `own self` when an inherent `m(self)` is the method chosen: `let s = S {}; println(s.m()); println(s.m());` is refused "value 's' moved here, used again" though inherent methods win (design.md §9 Method resolution) and interp runs it (inh, inh) | — |
+| B-2026-11-04-13 | 2026-11-04 | typecheck | medium | An impl method with a STRONGER mode than its trait (`fn look(mut ref self)` for the trait's `fn look(self)`) is not refused at the impl (design.md §9 Conformance: the impl's modes may be the trait's or weaker); the method silently gets the trait's `self`, so with no write it is accepted, and a write in its body reports "the receiver is `ref self` ... Declare the method `mut ref self`", which it already is | — |
+| B-2026-11-04-14 | 2026-11-04 | typecheck | medium | Coherence is not checked where impls are declared for three overlap shapes: a duplicate `impl T for S` twice, `impl[X: Eq] T for B[X]` beside `impl[X: Ord] T for B[X]`, and a second `impl Iterator for Up` with another `Item`; each is accepted and the first call says "ambiguous ... Use UFCS" listing two identical candidates (`T.f(S)` twice) that UFCS cannot separate | — |
+| B-2026-11-04-15 | 2026-11-04 | typecheck | low | An inherent impl on a standard type, `impl Vec[i64] { fn total(self) -> i64 { .. } }`, is accepted and runs (prints 3), though design.md §9 Coherence says a package may write `impl Type { .. }` only for a type it declares, the application exemption not changing this | — |
+| B-2026-11-04-16 | 2026-11-04 | typecheck | medium | A blanket impl of the program's own trait, `impl[T: Display] Twice for T { .. }` (design.md §9 Coherence: allowed when the package defines the trait), is accepted but never found: `5.twice()` is "no method 'twice' on type 'i64'", `"ab".twice()` "no method on 'String'", and UFCS `Twice.twice(5)` the same | — |
+| B-2026-11-04-17 | 2026-11-04 | typecheck | low | `for x in it` with `it: I` or `it: mut ref I` (I: Iterator[Item = i64], a borrowed iterator) reports "expected 'i64', found 'ref I'" at the first use of `x`, typing the loop variable as the iterator; design.md §9 says a `for` over a type that is neither Iterator nor Iterable is an error naming the missing impl | — |
+| B-2026-11-04-18 | 2026-11-04 | effect | high | The effects of the `From` impl that a `?` inserts are not charged to the enclosing function (design.md §10: "The conversion is a real call for effects"): a `pub fn` whose `?` converts through `impl From[E1] for E2 { fn from(..) -> E2 with writes(Log) }` passes `karac check` with no effect clause and reports no effects, while the same conversion written as `E2.from(e)` is refused for the undeclared `writes(Log)` | — |
+| B-2026-11-04-19 | 2026-11-04 | parser | medium | Script mode's implicit `main` returns `()`, so a top-level `?` is refused with "'?' requires the enclosing function to return `Result` or `Option`, found '()'"; design.md §10 Script mode gives it `fn main() -> Result[(), AnyError]` so that `?` works and an `Err` exits 1 with `Error: ..` | — |
+| B-2026-11-04-20 | 2026-11-04 | mir | low | `#[track_caller]` on a program function is accepted but does nothing: a wrapper `#[track_caller] fn must(o: Option[i64]) -> i64 { o.unwrap() }` called at line 10 panics with `at <file>:6:5`, the `unwrap()` inside the wrapper; design.md §10 says user code may use it on its own panicking wrappers and that it is transitive | — |
+| B-2026-11-04-21 | 2026-11-04 | resolver | medium | In a package, importing a NESTED module itself (`import db.connection;`, then `connection.open(7)`) is refused with "error[E0112]: unknown module `db`" by `karac check`, `run` and `build`; design.md §4 Imports binds the module as `connection`, and a top-level module import (`import util;`) works | — |
+| B-2026-11-04-22 | 2026-11-04 | typecheck | medium | Struct field visibility does not follow design.md §5's three levels: a field with no keyword is refused from another module of the SAME package ("private field 'inner' of struct 'S' is not visible outside its defining module", coded E0221 PrivateTypeInPublicSignature), though the default is package-visible, and `private inner: i64` (directory-only) is a parse error "'private' is a reserved keyword" | — |
+| B-2026-11-04-23 | 2026-11-04 | cli | low | `karac run` in a package whose src/ has both main.kara and lib.kara runs main.kara and exits 0, while `karac check` and `karac build` refuse it ("a Kāra package cannot contain both ... a package is either an executable or a library, never both", design.md §4 Entry points) | — |
+| B-2026-11-04-24 | 2026-11-04 | typecheck | low | A type mismatch between two same-named types from different modules prints the compiler's internal mangled names: `expected 'ref P__a', found 'P__b'` for `a.P` and `b.P` imported as `AP` and `BP` | — |
+| B-2026-11-04-25 | 2026-11-04 | effect | high | Two `par` branches that write the same USER-DECLARED resource are never refused: with `effect resource Db;` and `fn put() with writes(Db)`, `par { put(), put() }`, `par { { put(); }, { put(); } }` and `par { put(), rd() }` (rd: reads(Db)) all pass `karac check` and run, though `karac query effects` lists writes(Db) on both; design.md §12's own AuditLog example is refused only through its `writes(Stderr)` | — |
+| B-2026-11-04-26 | 2026-11-04 | effect | medium | Call sites are charged the callee's BODY effects, not the declared contract: a `pub fn g() -> i64 with writes(Stdout) { 1 }` called in two `par` branches is not a conflict, and a call through `[T: Storage]` whose trait method has the ceiling `with writes(Stdout)` is charged the instance impl's (empty) effects, so `par { via(a), via(b) }` passes | — |
+| B-2026-11-04-27 | 2026-11-04 | effect | medium | A declared effect clause is not verified on a PRIVATE function or on a trait's DEFAULT method body: `fn f() with reads(Clock) { println("x"); }` and `trait T { fn m(self) -> i64 with reads(Clock) { println("x"); 1 } }` pass `karac check`, though design.md §12 says a private function's declared set "is checked like a public one" and default bodies "are checked against their method's clause" | — |
+| B-2026-11-04-28 | 2026-11-04 | effect | medium | `#[no_effect(allocates(Heap))]` (design.md §12's real-time guarantee) misses most allocations: `[1, 2].to_vec()`, `"a".to_string()`, an f-string, a `Vec` literal `let v: Vec[i64] = [1, 2]`, `Vec.filled(3, 0)`, `String + Str` and `(0..3).collect()` all pass under it; only `push` is caught | — |
+| B-2026-11-04-29 | 2026-11-04 | effect | medium | Integer `/` and `%` and checked-mode overflow arithmetic are not `panics` atoms: `#[no_effect(panics)] fn f(a: i64, b: i64) -> i64 { a % b }` (and `a / b`, `a + b`) passes `karac check`, and `f(1, 0)` then panics at run time with "division by zero" | — |
 
 ### Relocated
 
@@ -607,6 +632,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-03-26 | typecheck | medium | A `Map` / `SortedMap` key is writable through `iter_mut()`: `for (k, v) in m.iter_mut() { k.push_str("x"); }` (m: Map[String, i64]) is accepted and c… | 597c6ce7e2 |
 | B-2026-11-03-27 | parser | low | Rust's `&` sigil gets no fix in a pattern (`for &(x, y) in v.iter()`, `\|&x\| ..`, `&3 =>`, `&mut z`), on an argument (`f(&x)`, `f(&mut x)`) or as a bo… | 25a40f3d26 |
 | B-2026-11-03-28 | typecheck | low | `x.as_str()` passed where a `ref String` is wanted (`["rc", "si", "ser"].contains(w[2].as_str())`, `w: Vec[String]`) gets the fix that appends `.to_s… | 3bd1b54849 |
+| B-2026-11-03-29 | mir-llvm | low | `mir_serve_ws_upgrades_while_serving` is schedule-sensitive: under the full `cargo test --features llvm` load the built server's output lacks `closed… | 8c67849f18 |
 | B-2026-11-04-1 | parser | low | `let s = mut place;` (a call argument's marker where a borrow for writing is wanted) is refused as "'mut' is a reserved keyword and cannot be used as… | 4230ad12ec |
 | B-2026-11-04-2 | typecheck | low | `items.into_iter()` on a bare `Vec[Item]` parameter whose `Item` is not clonable gets the fix `items.clone().into_iter()`, which does not check eithe… | 4230ad12ec |
 | B-2026-11-04-3 | ownership | low | `let s = v[i].field;` with `s` only read gets the fix that clones the field, where `let s = v[i];` already gets `ref`; under `self`, a write to any o… | 4230ad12ec |
