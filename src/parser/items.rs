@@ -521,7 +521,10 @@ impl super::Parser {
         // self` can never leak into this one, and taken immediately after.
         self.frozen_self_consumed = false;
         self.own_self_consumed = false;
+        let m0 = self.pattern_muts.len();
         let (self_param, self_span, params) = self.parse_fn_params()?;
+        // `(mut a, b): (i64, i64)` (B-2026-11-04-76): fixed in the body.
+        let muts = self.take_pattern_muts(m0);
         let self_is_frozen = std::mem::take(&mut self.frozen_self_consumed);
         let self_is_own = std::mem::take(&mut self.own_self_consumed);
         self.fn_context_stack.pop();
@@ -538,6 +541,7 @@ impl super::Parser {
         let ensures = self.parse_ensures_clauses();
         let where_clause = self.parse_optional_where_clause();
         let body = self.parse_block()?;
+        self.fix_pattern_muts(muts, body.span, true);
         self.effect_var_stack.pop();
 
         // `#[track_caller]` is a bare type-level attribute on `fn`
@@ -2083,6 +2087,41 @@ impl super::Parser {
 
     /// Parse an irrefutable pattern for a function parameter position.
     /// Supports: identifier, `_`, tuple `(a, b)`, and struct `Name { x, y }`.
+    /// At `mut name` in a parameter pattern: report it as Rust syntax,
+    /// queue the fix (drop the `mut`, rebind in the body) on
+    /// `pattern_muts`, and step past the `mut`. `closure` marks the
+    /// top-level closure parameter, which gets its own wording.
+    pub(crate) fn report_param_pattern_mut(&mut self, closure: bool) {
+        let mut_span = self.current_span();
+        let next = self.tokens.get(self.pos + 1).map(|t| t.span.offset);
+        let Token::Identifier { name, .. } = self.peek_token_ref_at(1) else {
+            return;
+        };
+        let name = name.clone();
+        if closure {
+            self.error(&format!(
+                "`mut {name}` on a closure parameter is Rust syntax -- Kāra has no \
+                 `mut` in a pattern; a closure parameter takes its mode from the \
+                 slot it fills, so rebind it in the body: `let mut {name} = {name};`"
+            ));
+        } else {
+            self.error(&format!(
+                "`mut {name}` inside a parameter's pattern is Rust syntax -- Kāra has \
+                 no `mut` in a pattern; rebind it in the body: `let mut {name} = {name};`"
+            ));
+        }
+        self.pattern_muts.push((
+            crate::resolver::SpanKey::from_span(&mut_span),
+            crate::resolver::TextEdit {
+                offset: mut_span.offset,
+                length: next.map_or(mut_span.length, |n| n - mut_span.offset),
+                replacement: String::new(),
+            },
+            name,
+        ));
+        self.advance();
+    }
+
     pub(crate) fn parse_param_pattern(&mut self) -> Option<Pattern> {
         let start = self.current_span();
         match self.peek_token_ref() {
@@ -2181,6 +2220,15 @@ impl super::Parser {
             }
             Token::Amp | Token::AmpAmp => {
                 self.skip_rust_amp_pattern();
+                self.parse_param_pattern()
+            }
+            // `(mut a, b)` inside a parameter's pattern (B-2026-11-04-76):
+            // Rust syntax, as in any pattern. A top-level `mut x` was
+            // answered by the caller (the closure's or the `fn`'s own
+            // report), so this is a nested one; the caller takes it from
+            // `pattern_muts` and fixes it in the body.
+            Token::Mut if matches!(self.peek_token_ref_at(1), Token::Identifier { .. }) => {
+                self.report_param_pattern_mut(false);
                 self.parse_param_pattern()
             }
             _ => {

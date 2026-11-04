@@ -2618,6 +2618,7 @@ impl super::Parser {
     ) -> Option<Expr> {
         let start = self.current_span();
         let mut params = Vec::new();
+        let m0 = self.pattern_muts.len();
 
         if self.eat(&Token::PipePipe) {
             // || — no params
@@ -2625,6 +2626,16 @@ impl super::Parser {
             self.expect(&Token::Pipe)?;
             while !self.check(&Token::Pipe) && !self.is_at_end() {
                 let pstart = self.current_span();
+                // `|mut acc, x|` is Rust's spelling (design.md § Patterns:
+                // there is no `mut name` pattern). A closure parameter
+                // takes its mode from the slot it fills, so the fix drops
+                // the `mut` and opens the body with `let mut acc = acc;`
+                // (B-2026-11-04-76).
+                if self.check(&Token::Mut)
+                    && matches!(self.peek_token_ref_at(1), Token::Identifier { .. })
+                {
+                    self.report_param_pattern_mut(true);
+                }
                 let pattern = self.parse_param_pattern()?;
                 // `|x: own T|` sets the parameter's mode, as `x: own T` does
                 // on a `fn` (B-2026-10-15-25). A type named `own` still
@@ -2686,7 +2697,10 @@ impl super::Parser {
             );
         }
 
-        let body = if self.check(&Token::LeftBrace) {
+        let muts = self.take_pattern_muts(m0);
+        let body_is_block = self.check(&Token::LeftBrace);
+        let body_start = self.current_span();
+        let body = if body_is_block {
             let block = self.parse_block()?;
             Expr {
                 id: crate::ids::NodeId::DUMMY,
@@ -2696,6 +2710,10 @@ impl super::Parser {
         } else {
             self.parse_expression()?
         };
+        // The tokens the body took: a method call's own span is its
+        // receiver's, too short to wrap.
+        let body_extent = self.span_from(&body_start);
+        self.fix_pattern_muts(muts, body_extent, body_is_block);
 
         Some(Expr {
             id: crate::ids::NodeId::DUMMY,

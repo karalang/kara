@@ -434,7 +434,10 @@ impl super::Parser {
         // (`fn m() -> impl T`) keeps working.
         self.push_impl_trait_block(crate::parser::ImplTraitBlockReason::TraitMethodArg);
         self.own_self_consumed = false;
+        let m0 = self.pattern_muts.len();
         let (self_param, self_span, params) = self.parse_fn_params()?;
+        // `(mut a, b): (i64, i64)` (B-2026-11-04-76): fixed in the body.
+        let muts = self.take_pattern_muts(m0);
         let self_is_own = std::mem::take(&mut self.own_self_consumed);
         self.pop_impl_trait_block();
         self.fn_context_stack.pop();
@@ -453,7 +456,9 @@ impl super::Parser {
 
         // Default method body or required method (semicolon)
         let body = if self.peek_token_ref() == &Token::LeftBrace {
-            Some(self.parse_block()?)
+            let block = self.parse_block()?;
+            self.fix_pattern_muts(muts, block.span, true);
+            Some(block)
         } else {
             self.expect(&Token::Semicolon)?;
             None
