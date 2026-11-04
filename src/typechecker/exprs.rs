@@ -1105,6 +1105,7 @@ impl<'a> super::TypeChecker<'a> {
     }
 
     pub(super) fn check_expr(&mut self, expr: &Expr, expected: &Type) -> Type {
+        self.warn_vec_macro(expr);
         self.note_loose_expr(expr);
         if matches!(expr.kind, ExprKind::Cast { .. }) {
             self.pending_cast_expected = Some((SpanKey::from_span(&expr.span), expected.clone()));
@@ -8093,6 +8094,50 @@ impl<'a> super::TypeChecker<'a> {
     ///
     /// De-duplicated by span: `infer_expr` re-infers the same literal under
     /// bidirectional checking, and each visit would otherwise warn again.
+    /// `deprecated` on a `vec![..]` literal (design.md § Collection
+    /// literals; Gowtham 2026-11-04), with the parser's rewrite as the fix.
+    /// A warning, never an error: the spelling still means what it did.
+    fn warn_vec_macro(&mut self, expr: &Expr) {
+        if !matches!(
+            expr.kind,
+            ExprKind::PrefixCollectionLiteral { .. } | ExprKind::RepeatLiteral { .. }
+        ) || self.compiling_stdlib
+        {
+            return;
+        }
+        let Some(edit) = self
+            .program
+            .vec_macro_literals
+            .get(&SpanKey::from_span(&expr.span))
+            .cloned()
+        else {
+            return;
+        };
+        if !self
+            .vec_macro_reported
+            .insert((expr.span.offset, expr.span.length))
+        {
+            return;
+        }
+        let fix_it = edit.map(|e| crate::typechecker::FixIt {
+            span: Span {
+                offset: e.offset,
+                length: e.length,
+                ..expr.span
+            },
+            replacement: e.replacement,
+        });
+        self.type_lint_warning_with_fix(
+            "use of deprecated `vec![..]`: the list literal is `[a, b]` (and `Vec.filled(n, v)` \
+             for `vec![v; n]`) — suppress with `#[allow(deprecated)]` on the enclosing item"
+                .to_string(),
+            expr.span,
+            TypeErrorKind::Deprecated,
+            "deprecated",
+            fix_it,
+        );
+    }
+
     fn warn_redundant_suffix(&mut self, suffix: &str, span: Span) {
         if !self
             .redundant_suffix_reported
@@ -8263,6 +8308,7 @@ impl<'a> super::TypeChecker<'a> {
 
     pub(super) fn infer_expr(&mut self, expr: &Expr) -> Type {
         self.note_loose_expr(expr);
+        self.warn_vec_macro(expr);
         // B-2026-09-14-3: hand `infer_call`'s callee-position marker on to a
         // `Path` node and to nothing else. The marker says "a tuple-shaped
         // enum variant here is the construction form `Col.A(3)`", and only the

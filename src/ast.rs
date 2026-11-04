@@ -851,6 +851,13 @@ pub struct Program {
     /// A function-typed parameter without the mark is non-escaping: the
     /// callee may call it or pass it to another non-escaping parameter.
     pub escaping_fn_types: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
+    /// `vec![..]` literals, the deprecated spelling of the list literal
+    /// (design.md § Collection literals, Gowtham 2026-11-04), keyed by the
+    /// literal's span, each with the edit `karac fix` applies: `[a, b]`,
+    /// `Vec.filled(n, v)` for `vec![v; n]`, `Vec.new()` for `vec![]`. Set by
+    /// the PARSER, which desugars the literal to an ordinary `Vec` one.
+    pub vec_macro_literals:
+        rustc_hash::FxHashMap<crate::resolver::SpanKey, Option<crate::resolver::TextEdit>>,
     /// Function return types written in parentheses, `-> (dyn Shape)`, keyed
     /// by the type's span. The parentheses leave no node of their own; a
     /// trailing `with` after them is the function's clause either way, and

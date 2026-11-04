@@ -105,6 +105,15 @@ accepted by 0.8.0 are now refused, each with a fix-it.
 - A literal returned from a closure inside `Ok` / `Err` / `Some` solves the
   callee's type parameter: `c.or_else(|e| Err(0))` is accepted
   (B-2026-11-03-14).
+- `vec![a, b]` is a deprecated spelling of the list literal: `karac check`
+  warns (`deprecated`) and `karac fix` rewrites it to `[a, b]`, `vec![v; n]`
+  to `Vec.filled(n, v)` and `vec![]` to `Vec.new()` (design.md § Collection
+  literals). It still compiles as before.
+- More Rust spellings carry a `karac fix` edit that reaches a program that
+  parses: generic parameters in angle brackets on a declaration
+  (`struct Bx<T>`, `impl<T>`, B-2026-11-04-6), `&[T]` / `&mut [T]` as
+  `Slice[T]` / `mut Slice[T]` in one edit, and `Box<dyn Fn(A) -> R>` as the
+  function type `Fn(A) -> R` (B-2026-11-04-7).
 
 ### Performance
 

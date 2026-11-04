@@ -18,6 +18,19 @@ use crate::token::Token;
 
 impl super::Parser {
     pub(crate) fn parse_optional_generic_params(&mut self) -> Option<GenericParams> {
+        // `struct Bx<T>`, `impl<T>`: Rust's spelling of a declaration's
+        // generic parameters. Named with the bracket edit, and the tokens
+        // rewritten so the list parses as `[T]` (B-2026-11-04-6).
+        if self.check(&Token::LessThan) {
+            let name = match self.pos.checked_sub(1).map(|i| &self.tokens[i].token) {
+                Some(Token::Identifier { name, .. }) => name.clone(),
+                Some(Token::Impl) => "impl".to_string(),
+                _ => String::new(),
+            };
+            if !name.is_empty() {
+                self.angle_generic_list(&name, "parameters");
+            }
+        }
         if !self.check(&Token::LeftBracket) {
             return None;
         }

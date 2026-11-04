@@ -262,6 +262,58 @@ impl super::Parser {
         result
     }
 
+    /// `Box<dyn Fn(A) -> R>`, Rust's boxed closure, at the current token. A
+    /// Kāra function value has its own type, so the edit deletes `Box<dyn `
+    /// and the closing `>`, and the type parses as the function type. The
+    /// generic `Box<..>` edit would write `Box[dyn Fn(..)]`, which does not
+    /// parse (B-2026-11-04-7). `None` when this is not that shape.
+    fn rust_boxed_closure(&mut self, start: Span) -> Option<Option<TypeExpr>> {
+        let fn_head = |t: &Token| {
+            matches!(t, Token::Identifier { name, raw: false }
+                if matches!(name.as_str(), "Fn" | "MutFn" | "OnceFn" | "FnMut" | "FnOnce"))
+        };
+        if !matches!(self.peek_token_ref(), Token::Identifier { name, raw: false } if name == "Box")
+            || !matches!(self.peek_token_ref_at(1), Token::LessThan)
+            || !matches!(self.peek_token_ref_at(2), Token::Dyn)
+            || !fn_head(self.peek_token_ref_at(3))
+        {
+            return None;
+        }
+        let fn_at = self.tokens[self.pos + 3].span.offset;
+        let (saved, saved_errors) = (self.pos, self.errors.len());
+        self.pos += 3;
+        let inner = self.parse_type();
+        if inner.is_none() || !self.check(&Token::GreaterThan) {
+            self.pos = saved;
+            self.errors.truncate(saved_errors);
+            return None;
+        }
+        let close = self.current_span();
+        self.advance();
+        self.error_at(
+            "`Box<dyn Fn(..)>` is Rust's boxed closure: in Kāra a function value has its \
+             own type, `Fn(A) -> R`, and a closure is one; return or store the closure \
+             itself",
+            start,
+        );
+        self.fix_diffs.insert(
+            crate::resolver::SpanKey::from_span(&start),
+            vec![
+                crate::resolver::TextEdit {
+                    offset: start.offset,
+                    length: fn_at - start.offset,
+                    replacement: String::new(),
+                },
+                crate::resolver::TextEdit {
+                    offset: close.offset,
+                    length: close.length,
+                    replacement: String::new(),
+                },
+            ],
+        );
+        Some(inner)
+    }
+
     fn parse_type_inner(&mut self) -> Option<TypeExpr> {
         let start = self.current_span();
 
@@ -275,6 +327,9 @@ impl super::Parser {
         let escaping_ok = std::mem::replace(&mut self.escaping_ok, false);
         // Same one-shot shape: only the return type's own tail sees it.
         let return_tail = std::mem::replace(&mut self.return_tail, false);
+        if let Some(boxed) = self.rust_boxed_closure(start) {
+            return boxed;
+        }
 
         // `escaping Fn(...)` (`docs/core-semantics.md` §9.3) and `escaping
         // dyn Trait` (design.md § `dyn Trait`): a contextual keyword,
@@ -421,6 +476,94 @@ impl super::Parser {
                         "ref ",
                     )
                 };
+                // `&[T]` / `&mut [T]`: a borrowed run of elements, which is
+                // exactly `Slice[T]` / `mut Slice[T]` (a slice is already a
+                // view). One diagnostic and one edit, in place of the `&`
+                // edit followed by the `[T]` one, which has no edit because
+                // a bare `[T]` could mean `Vec[T]` (B-2026-11-04-7).
+                if self.check(&Token::LeftBracket) {
+                    let open = self.current_span();
+                    let before = self.errors.len();
+                    let inner = self.parse_type()?;
+                    let is_slice = matches!(&inner.kind, TypeKind::Path(p)
+                        if p.segments.len() == 1 && p.segments[0] == "Slice");
+                    let pos = self.errors[before..]
+                        .iter()
+                        .position(|e| e.span == open && e.message.starts_with("`[T]` is Rust's"));
+                    if let (true, Some(at)) = (is_slice, pos) {
+                        self.errors.remove(before + at);
+                        let (message, word) = if is_mut {
+                            ("`&mut [T]` is Rust's mutable slice -- in Kāra it is `mut Slice[T]`", "mut ")
+                        } else {
+                            (
+                                "`&[T]` is Rust's slice -- in Kāra a borrowed view of a run of \
+                                 elements is `Slice[T]`",
+                                "",
+                            )
+                        };
+                        self.error_at(message, sigil);
+                        self.fix_diffs.insert(
+                            crate::resolver::SpanKey::from_span(&sigil),
+                            vec![
+                                crate::resolver::TextEdit {
+                                    offset: sigil.offset,
+                                    length: sigil.length,
+                                    replacement: word.to_string(),
+                                },
+                                crate::resolver::TextEdit {
+                                    offset: open.offset,
+                                    length: open.length,
+                                    replacement: "Slice[".to_string(),
+                                },
+                            ],
+                        );
+                        let elem = match inner.kind {
+                            TypeKind::Path(PathExpr {
+                                generic_args: Some(mut args),
+                                ..
+                            }) if args.len() == 1 => match args.pop() {
+                                Some(GenericArg::Type(t)) => t,
+                                _ => return None,
+                            },
+                            _ => return None,
+                        };
+                        let span = self.span_from(&start);
+                        return Some(if is_mut {
+                            TypeExpr {
+                                kind: TypeKind::MutSlice(Box::new(elem)),
+                                span,
+                            }
+                        } else {
+                            TypeExpr {
+                                kind: TypeKind::Path(PathExpr {
+                                    segments: vec!["Slice".to_string()],
+                                    generic_args: Some(vec![GenericArg::Type(elem)]),
+                                    effect_args: None,
+                                    span,
+                                }),
+                                span,
+                            }
+                        });
+                    }
+                    self.error_at(message, sigil);
+                    self.fix_edits.insert(
+                        crate::resolver::SpanKey::from_span(&sigil),
+                        crate::resolver::TextEdit {
+                            offset: sigil.offset,
+                            length: sigil.length,
+                            replacement: kara.to_string(),
+                        },
+                    );
+                    let inner = Box::new(inner);
+                    return Some(TypeExpr {
+                        kind: if is_mut {
+                            TypeKind::MutRef(inner)
+                        } else {
+                            TypeKind::Ref(inner)
+                        },
+                        span: self.span_from(&start),
+                    });
+                }
                 self.error_at(message, sigil);
                 self.fix_edits.insert(
                     crate::resolver::SpanKey::from_span(&sigil),
@@ -910,7 +1053,13 @@ impl super::Parser {
     /// balanced, and the tokens rewritten the same way so the list parses as
     /// `Name[T, U]` and nothing cascades (B-2026-10-29-23). An unbalanced
     /// list is reported with no fix and left as it was.
-    fn angle_generic_args(&mut self, name: &str) {
+    pub(crate) fn angle_generic_args(&mut self, name: &str) {
+        self.angle_generic_list(name, "arguments");
+    }
+
+    /// The same, for any bracketed list: `what` names it in the message
+    /// ("arguments" in a type, "parameters" on a declaration).
+    pub(crate) fn angle_generic_list(&mut self, name: &str, what: &str) {
         let open = self.current_span();
         // The open brackets, innermost last; each closer must match its own.
         let mut open_brackets = Vec::new();
@@ -952,7 +1101,7 @@ impl super::Parser {
         }
         self.error_at(
             &format!(
-                "`{name}<..>` is Rust's spelling: Kāra writes generic arguments in \
+                "`{name}<..>` is Rust's spelling: Kāra writes generic {what} in \
                  brackets, `{name}[..]`"
             ),
             open,

@@ -210,6 +210,9 @@ pub struct Parser {
     pub(crate) escaping_ok: bool,
     /// See [`crate::ast::Program::escaping_fn_types`].
     pub(crate) escaping_fn_types: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
+    /// See [`crate::ast::Program::vec_macro_literals`].
+    pub(crate) vec_macro_literals:
+        rustc_hash::FxHashMap<crate::resolver::SpanKey, Option<crate::resolver::TextEdit>>,
     /// See [`crate::ast::Program::paren_return_types`].
     pub(crate) paren_return_types: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
     /// See [`crate::ast::Program::mut_fn_types`].
@@ -491,6 +494,7 @@ impl Parser {
             generic_defaults_ok: false,
             escaping_ok: false,
             escaping_fn_types: rustc_hash::FxHashSet::default(),
+            vec_macro_literals: rustc_hash::FxHashMap::default(),
             paren_return_types: rustc_hash::FxHashSet::default(),
             mut_fn_types: rustc_hash::FxHashSet::default(),
             cross_task_fn_types: rustc_hash::FxHashSet::default(),
@@ -852,6 +856,7 @@ impl Parser {
             mut_ref_binding_spans: std::mem::take(&mut self.mut_ref_binding_spans),
             ref_binding_keywords: std::mem::take(&mut self.ref_binding_keywords),
             escaping_fn_types: std::mem::take(&mut self.escaping_fn_types),
+            vec_macro_literals: std::mem::take(&mut self.vec_macro_literals),
             paren_return_types: std::mem::take(&mut self.paren_return_types),
             mut_fn_types: std::mem::take(&mut self.mut_fn_types),
             cross_task_fn_types: std::mem::take(&mut self.cross_task_fn_types),

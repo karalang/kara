@@ -2851,8 +2851,13 @@ impl super::Parser {
             && self.check(&Token::Bang)
             && matches!(self.peek_token_ref_at(1), Token::LeftBracket)
         {
+            let bang = self.current_span();
             self.advance(); // consume !
-            return self.parse_prefix_collection_literal("Vec".to_string(), &start);
+            let lit = self.parse_prefix_collection_literal("Vec".to_string(), &start)?;
+            let fix = self.vec_macro_fix(&start, &bang, &lit);
+            self.vec_macro_literals
+                .insert(crate::resolver::SpanKey::from_span(&lit.span), fix);
+            return Some(lit);
         }
 
         // The pre-sigil label spelling `outer: loop { .. }`. Labels are now
@@ -3088,6 +3093,44 @@ impl super::Parser {
     /// `PrefixCollectionLiteral` / `RepeatLiteral` / `MapLiteral` as the body
     /// shape dictates. Shared between the `TypeName[...]` form and the
     /// `vec![...]` list-macro sugar.
+    /// The edit that rewrites a `vec![..]` literal (`vec` at `start`, its
+    /// `!` at `bang`) in the spelling design.md keeps: `[a, b]`,
+    /// `Vec.filled(n, v)` (`[v; n]` is a fixed `Array`), `Vec.new()`.
+    fn vec_macro_fix(
+        &self,
+        start: &Span,
+        bang: &Span,
+        lit: &Expr,
+    ) -> Option<crate::resolver::TextEdit> {
+        let whole = |replacement: String| crate::resolver::TextEdit {
+            offset: lit.span.offset,
+            length: lit.span.length,
+            replacement,
+        };
+        match &lit.kind {
+            ExprKind::PrefixCollectionLiteral { items, .. } if items.is_empty() => {
+                Some(whole("Vec.new()".to_string()))
+            }
+            ExprKind::PrefixCollectionLiteral { .. } => Some(crate::resolver::TextEdit {
+                offset: start.offset,
+                length: (bang.offset + bang.length).checked_sub(start.offset)?,
+                replacement: String::new(),
+            }),
+            ExprKind::RepeatLiteral { value, count, .. } => {
+                let (source, base) = self.source.as_ref()?;
+                let text = |span: &Span| {
+                    source.get(span.offset.checked_sub(*base)?..span.offset - base + span.length)
+                };
+                Some(whole(format!(
+                    "Vec.filled({}, {})",
+                    text(&count.span)?,
+                    text(&value.span)?
+                )))
+            }
+            _ => None,
+        }
+    }
+
     fn parse_prefix_collection_literal(&mut self, name: String, start: &Span) -> Option<Expr> {
         self.advance(); // consume [
         let mut items = Vec::new();

@@ -3198,6 +3198,8 @@ pub struct TypeChecker<'a> {
     /// `42i64` warns once per visit. Keyed on `(offset, length)` like the
     /// other span-keyed state above.
     pub(super) redundant_suffix_reported: rustc_hash::FxHashSet<(usize, usize)>,
+    /// `vec![..]` literals already warned on, by `(offset, length)`.
+    pub(super) vec_macro_reported: rustc_hash::FxHashSet<(usize, usize)>,
     /// Casts `redundant_cast` / `lossless_cast` already reported, for the
     /// same reason.
     pub(super) cast_lints_reported: FxHashSet<SpanKey>,
@@ -3937,6 +3939,7 @@ impl<'a> TypeChecker<'a> {
             wide_int_literals: Vec::new(),
             wide_int_literals_judged: FxHashSet::default(),
             redundant_suffix_reported: rustc_hash::FxHashSet::default(),
+            vec_macro_reported: rustc_hash::FxHashSet::default(),
             cast_lints_reported: FxHashSet::default(),
             pending_cast_expected: None,
             operand_casts: FxHashMap::default(),
