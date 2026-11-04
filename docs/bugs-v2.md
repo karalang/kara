@@ -60,7 +60,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | diagnostics | 113 |
 | false-positive | 99 |
-| perf | 86 |
+| perf | 90 |
 | missing-feature | 70 |
 | soundness | 48 |
 | miscompile | 33 |
@@ -77,7 +77,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | typecheck | 177 |
 | mir | 109 |
-| mir-llvm | 101 |
+| mir-llvm | 105 |
 | cli | 52 |
 | ownership | 46 |
 | parser | 36 |
@@ -125,6 +125,10 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-04-27 | 2026-11-04 | effect | medium | A declared effect clause is not verified on a PRIVATE function or on a trait's DEFAULT method body: `fn f() with reads(Clock) { println("x"); }` and `trait T { fn m(self) -> i64 with reads(Clock) { println("x"); 1 } }` pass `karac check`, though design.md §12 says a private function's declared set "is checked like a public one" and default bodies "are checked against their method's clause" | — |
 | B-2026-11-04-28 | 2026-11-04 | effect | medium | `#[no_effect(allocates(Heap))]` (design.md §12's real-time guarantee) misses most allocations: `[1, 2].to_vec()`, `"a".to_string()`, an f-string, a `Vec` literal `let v: Vec[i64] = [1, 2]`, `Vec.filled(3, 0)`, `String + Str` and `(0..3).collect()` all pass under it; only `push` is caught | — |
 | B-2026-11-04-29 | 2026-11-04 | effect | medium | Integer `/` and `%` and checked-mode overflow arithmetic are not `panics` atoms: `#[no_effect(panics)] fn f(a: i64, b: i64) -> i64 { a % b }` (and `a / b`, `a + b`) passes `karac check`, and `f(1, 0)` then panics at run time with "division by zero" | — |
+| B-2026-11-04-30 | 2026-11-04 | mir-llvm | medium | Kata 394's String decode loop runs 1.27x legacy's instructions and 1.26x its cycles on the MIR backend; seq 0.99x -> 1.17x rustc -O, par 0.86x -> 1.27x rayon | — |
+| B-2026-11-04-31 | 2026-11-04 | mir-llvm | low | Seq binaries of katas 297, 315, 332 and 394 are still 319-336 KB on gd33cb285d, after ad984ef96b took katas 38, 282 and 306 down to 67-83 KB | — |
+| B-2026-11-04-32 | 2026-11-04 | mir-llvm | low | Kata 297's peak RSS is 1.35x Rust's (233-235 MiB vs 173 MiB) on the MIR backend, where the 2026-08-28 feed read 179.9 vs 174.3 MiB | — |
+| B-2026-11-04-33 | 2026-11-04 | mir-llvm | low | Six more katas sit at 1.03-1.20x legacy's cycles or instructions on the MIR backend, each too small to file alone, and kata 895's par lane slipped to 2.31x rayon: the third borderline batch after B-2026-11-01-45 | — |
 
 ### Relocated
 
