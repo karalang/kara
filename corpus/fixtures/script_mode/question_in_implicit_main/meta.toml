@@ -1,0 +1,11 @@
+source = "corpus/fixtures/script_mode/question_in_implicit_main"
+dedup_of = []
+expect = "stdout"
+exit = 1
+tags = ["script-mode"]
+class = "a"
+expected_from = "spec"
+rules = []
+backends = []
+env = {}
+note = "design.md § Script mode: the implicit main returns Result[(), AnyError], so the third `?` returns its Err from main: stdout a, 4, then exit 1 (B-2026-11-04-19)"

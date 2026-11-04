@@ -1,0 +1,16 @@
+// design.md § Script mode: a file of top-level statements gets an implicit
+// `fn main() -> Result[(), AnyError]` ending with `Ok(())`, so `?` works and
+// an `Err` exits 1 with `Error: ..` on stderr (B-2026-11-04-19).
+struct Bad { why: String }
+impl Error for Bad { fn message(self) -> String { f"bad:{self.why}" } }
+impl Display for Bad { fn to_string(self) -> String { f"bad:{self.why}" } }
+fn chk(n: i64) -> Result[i64, Bad] {
+    if n < 0 { Err(Bad { why: f"neg{n}" }) } else { Ok(n * 2) }
+}
+fn h() -> Result[i64, AnyError] { Ok(2) }
+println("a");
+let x = h()?;
+let v = chk(x)?;
+println(v);
+let w = chk(-1)?;
+println(w);

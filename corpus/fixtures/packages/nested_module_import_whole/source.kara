@@ -1,0 +1,10 @@
+// design.md § Imports: `import db.connection;` binds the module itself as
+// `connection`, with `db` a directory and no `db.kara` (B-2026-11-04-21).
+import db.connection;
+import db.connection as c;
+
+fn main() {
+    let a: connection.Connection = connection.open(7);
+    println(a.port);
+    println(c.open(8).port);
+}

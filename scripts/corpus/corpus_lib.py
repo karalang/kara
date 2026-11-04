@@ -87,6 +87,10 @@ def run_program(entry: Path, backend: str, karac: str, timeout: float, env_extra
     env.update({k: str(v) for k, v in env_extra.items()})
     driver = read_toml(entry / "driver.toml") or None
     template = read_toml(entry / "template.toml") or None
+    # A package entry (`entry = "src/main.kara"`) runs its program from that
+    # path, beside the `[files]` that make up the rest of the package.
+    prog = (template or {}).get("entry", "source.kara")
+    exe = Path(prog).stem
     start = time.monotonic()
     with tempfile.TemporaryDirectory(prefix="corpus-") as tmp:
         tmpd = Path(tmp)
@@ -95,24 +99,25 @@ def run_program(entry: Path, backend: str, karac: str, timeout: float, env_extra
             shutil.copy(entry / source, tmpd / "source.kara")
         else:
             origin = Origin(template["origin"]) if "origin" in template else None
-            (tmpd / "source.kara").write_text(
+            (tmpd / prog).parent.mkdir(parents=True, exist_ok=True)
+            (tmpd / prog).write_text(
                 render_template((entry / source).read_text(), template, tmpd, origin))
         try:
             if spec.get("check"):
-                c = subprocess.run([karac, "check", "source.kara"], cwd=tmpd, env=env,
+                c = subprocess.run([karac, "check", prog], cwd=tmpd, env=env,
                                    capture_output=True, timeout=timeout, stdin=subprocess.DEVNULL)
                 if c.returncode != 0:
                     return {"status": "refused", "exit": c.returncode, "stdout": c.stdout,
                             "stderr": c.stderr, "secs": time.monotonic() - start}
             if "build" in spec:
-                b = subprocess.run([karac, *spec["build"], "source.kara"], cwd=tmpd, env=env,
+                b = subprocess.run([karac, *spec["build"], prog], cwd=tmpd, env=env,
                                    capture_output=True, timeout=timeout, stdin=subprocess.DEVNULL)
-                if b.returncode != 0 or not (tmpd / "source").exists():
+                if b.returncode != 0 or not (tmpd / exe).exists():
                     return {"status": "refused", "exit": b.returncode, "stdout": b.stdout,
                             "stderr": b.stderr, "secs": time.monotonic() - start}
-                r = execute(["./source"], tmpd, env, timeout, driver)
+                r = execute([f"./{exe}"], tmpd, env, timeout, driver)
             else:
-                r = execute([karac, *spec["run"], "source.kara"], tmpd, env, timeout, driver)
+                r = execute([karac, *spec["run"], prog], tmpd, env, timeout, driver)
                 # A deadlock is a panic (core semantics §10.1) whose record
                 # reads `error: deadlock: ...`, not a refusal.
                 if r.returncode != 0 and REFUSAL.search(r.stderr) and b"panicked" not in r.stderr \
@@ -157,7 +162,8 @@ def render_template(src: str, template: dict, tmpd: Path, origin) -> str:
     `{origin_port}`, the port of the HTTP origin `[origin]` describes.
     A template filled in by `str::replace` instead gives `[replace]`, each
     word and its value, and has no holes.
-    `[files]` are written into that directory first, and the contents of the
+    `[files]` are written into that directory first (a name may hold a
+    directory, `src/db/connection.kara`), and the contents of the
     files `show_files` names end the entry's stdout, each after a
     `=== file <name> ===` line, for a test that checks a file after the run.
     With `mask_origin_port = true` the origin's port in the entry's stdout
@@ -165,6 +171,7 @@ def render_template(src: str, template: dict, tmpd: Path, origin) -> str:
     fills = {"tmp": str(tmpd), "origin_port": str(origin.port) if origin else ""}
     holes = {k: str(v).format(**fills) for k, v in template.get("holes", {}).items()}
     for name, text in template.get("files", {}).items():
+        (tmpd / name).parent.mkdir(parents=True, exist_ok=True)
         (tmpd / name).write_text(text)
     if "replace" in template:
         # A raw-string template its test fills in with `str::replace`

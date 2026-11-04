@@ -1,0 +1,5 @@
+// design.md § Modules, entry points: a package has `main.kara` or
+// `lib.kara`, never both; run refuses it as build does (B-2026-11-04-23).
+fn main() {
+    println("ran");
+}

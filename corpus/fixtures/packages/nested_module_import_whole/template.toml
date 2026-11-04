@@ -1,0 +1,6 @@
+# A package: the program is its src/main.kara, beside these files.
+entry = "src/main.kara"
+
+[files]
+"kara.toml" = "[package]\nname = \"app\"\nversion = \"0.1.0\"\n"
+"src/db/connection.kara" = "pub struct Connection { pub port: i64 }\npub fn open(p: i64) -> Connection { Connection { port: p } }\n"

@@ -1,0 +1,11 @@
+source = "corpus/fixtures/packages/run_refuses_main_and_lib"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["package"]
+class = "a"
+expected_from = "spec"
+rules = []
+backends = ["mir-build"]
+env = {}
+note = "design.md § Modules, entry points: a package cannot have both main.kara and lib.kara; run and build refuse it (B-2026-11-04-23); a package entry, so only the lane that builds packages (`karac build`) runs it: `__mir-run` takes one file"

@@ -1,0 +1,11 @@
+source = "corpus/fixtures/packages/nested_module_import_whole"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["package"]
+class = "a"
+expected_from = "spec"
+rules = []
+backends = ["mir-build"]
+env = {}
+note = "design.md § Imports, binding rule: `import db.connection;` binds the module `connection` (B-2026-11-04-21); a package entry, so only the lane that builds packages (`karac build`) runs it: `__mir-run` takes one file"

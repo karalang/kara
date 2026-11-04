@@ -1,0 +1,6 @@
+# A package with both entry files: the program is its src/main.kara.
+entry = "src/main.kara"
+
+[files]
+"kara.toml" = "[package]\nname = \"app\"\nversion = \"0.1.0\"\n"
+"src/lib.kara" = "pub fn f() -> i64 { 1 }\n"
