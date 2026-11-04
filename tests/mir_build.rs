@@ -4834,12 +4834,12 @@ fn main() {
 
 /// `a.lt(b)` and the other comparison methods on a scalar or string
 /// receiver are the operators, and the free `clamp` takes integers, chars
-/// and bools as `min` and `max` do; a program's own `lt` on a primitive
-/// still wins.
+/// and bools as `min` and `max` do. (A program's own `impl i32 { fn lt }`
+/// once won here; an inherent impl on a primitive is refused now,
+/// B-2026-11-04-15.)
 #[test]
 fn mir_comparison_methods_and_clamp_on_scalars() {
-    const SRC: &str = r#"impl i32 { fn lt(self, other: i32) -> String { "user" } }
-fn main() {
+    const SRC: &str = r#"fn main() {
     let a: u8 = 200u8;
     let b: u8 = 100u8;
     println(f"{a.lt(b)} {a.le(b)} {a.gt(b)} {a.ge(b)} {a.eq(b)} {a.ne(b)}");
@@ -4854,7 +4854,7 @@ fn main() {
     println(f"{clamp('z', 'a', 'm')} {clamp(5, 9, 1)} {min(true, false)} {max(true, false)}");
 }
 "#;
-    let want = "false false true true false true\ntrue false false true true\ntrue false false true\nuser\n0 7 10\nm 9 false true\n";
+    let want = "false false true true false true\ntrue false false true true\ntrue false false true\ntrue\n0 7 10\nm 9 false true\n";
     let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
     assert_eq!(interp.output, want);
     for opt in [0, 2] {
@@ -4864,15 +4864,18 @@ fn main() {
     }
 }
 
-/// A program's own associated function on a primitive, from a trait impl
-/// or an inherent one, is called through the type's name.
+/// A program's own associated function on a primitive, from a trait impl,
+/// is called through the type's name. (An inherent `impl i64 { .. }` is
+/// refused, B-2026-11-04-15, so `two`, `add_to` and `yes` come from traits.)
 #[test]
 fn mir_assoc_fn_on_a_primitive_is_the_programs_own() {
     const SRC: &str = r#"trait Zero { fn zero() -> Self; }
 impl Zero for i64 { fn zero() -> i64 { 41 } }
 impl Zero for u8 { fn zero() -> u8 { 7u8 } }
-impl i64 { fn two() -> i64 { 42 } fn add_to(n: i64) -> i64 { n + 100 } }
-impl bool { fn yes() -> bool { true } }
+trait Two { fn two() -> Self; fn add_to(n: i64) -> i64; }
+impl Two for i64 { fn two() -> i64 { 42 } fn add_to(n: i64) -> i64 { n + 100 } }
+trait Yes { fn yes() -> Self; }
+impl Yes for bool { fn yes() -> bool { true } }
 fn main() {
     println(i64.zero());
     println(u8.zero());

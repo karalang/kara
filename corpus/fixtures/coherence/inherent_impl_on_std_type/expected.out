@@ -1,0 +1,1 @@
+ERROR at line 1: inherent impl on `Vec[i64]`, a type this program does not declare. Write a trait, or wrap the type in a `distinct type`

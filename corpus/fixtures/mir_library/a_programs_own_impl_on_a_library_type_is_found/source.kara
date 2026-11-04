@@ -1,5 +1,6 @@
 
-impl[T] Option[T] {
+trait GetOr[T] { fn get_or(own self, d: own T) -> T; }
+impl[T] GetOr[T] for Option[T] {
     fn get_or(own self, d: own T) -> T {
         match self {
             Some(x) => x,

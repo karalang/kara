@@ -1,4 +1,3 @@
-impl i32 { fn lt(self, other: i32) -> String { "user" } }
 fn main() {
     let a: u8 = 200u8;
     let b: u8 = 100u8;

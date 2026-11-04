@@ -1,0 +1,11 @@
+source = "corpus/fixtures/coherence/duplicate_trait_impl"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["coherence"]
+class = "a"
+expected_from = "spec"
+rules = []
+backends = []
+env = {}
+note = "design.md § Coherence: a type implements a trait once; the second impl is refused (B-2026-11-04-14: accepted, and the call reported two identical UFCS candidates). The expected.out wording is guidance, not a byte oracle."

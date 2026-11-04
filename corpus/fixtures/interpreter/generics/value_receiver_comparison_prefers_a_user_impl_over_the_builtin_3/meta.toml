@@ -17,3 +17,4 @@ model_exit = 0
 model_rev = "3acf4472"
 model_src = "81107fea"
 model_verdict = "SAME"
+v2_reject = "B-2026-11-04-15: design.md § Coherence, inherent impls only on your own types: outside the standard library an inherent impl on a primitive or library type is an error. Write a trait, or wrap the type in a `distinct type`"

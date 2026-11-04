@@ -1,0 +1,10 @@
+struct Up { n: i64 }
+impl Iterator for Up {
+    type Item = i64;
+    fn next(mut ref self) -> Option[i64] { None }
+}
+impl Iterator for Up {
+    type Item = String;
+    fn next(mut ref self) -> Option[String] { None }
+}
+fn main() { let mut u = Up { n: 0 }; println(u.next()); }

@@ -1,0 +1,4 @@
+trait T { fn look(self) -> i64; }
+struct S { n: i64 }
+impl T for S { fn look(mut ref self) -> i64 { self.n += 1; self.n } }
+fn main() { let mut s = S { n: 1 }; println(s.look()); }

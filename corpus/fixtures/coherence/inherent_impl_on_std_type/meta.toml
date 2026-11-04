@@ -1,0 +1,11 @@
+source = "corpus/fixtures/coherence/inherent_impl_on_std_type"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["coherence"]
+class = "a"
+expected_from = "spec"
+rules = []
+backends = []
+env = {}
+note = "design.md § Coherence: inherent impls only on your own types; outside the standard library `impl Vec[i64] { ... }` is an error (B-2026-11-04-15: it ran and printed 3). The expected.out wording is guidance."

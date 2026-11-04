@@ -1,0 +1,11 @@
+source = "corpus/fixtures/coherence/blanket_impl_bare_param"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["coherence", "traits"]
+class = "a"
+expected_from = "spec"
+rules = []
+backends = []
+env = {}
+note = "design.md § Coherence, Blanket impls: `impl[T: B] Trait for T` is allowed in the package defining `Trait`, and every type meeting the bounds has the method, by method call and by UFCS (B-2026-11-04-16: \"no method twice on type i64\")."

@@ -20642,6 +20642,18 @@ impl<'l, 'a> Bx<'l, 'a> {
             if let Some((d, inst_args)) = self.dyn_default_by_receiver(rt, method, args, ret)? {
                 return self.user_method_call(e, object, d, inst_args, args, dest);
             }
+            // `Trait.m(x)` on a type with no impl of the trait: its blanket
+            // impl's `m`, ahead of an inherent `m` (B-2026-11-04-16).
+            if self
+                .lcx
+                .tc
+                .ufcs_calls
+                .contains_key(&SpanKey::from_span(&e.span))
+            {
+                if let Some((d, inst_args)) = self.blanket_method(e, rt, method) {
+                    return self.user_method_call(e, object, d, inst_args, args, dest);
+                }
+            }
             if let Some((d, inst_args)) = self.method_by_receiver(rt, method) {
                 return self.user_method_call(e, object, d, inst_args, args, dest);
             }
@@ -29314,12 +29326,15 @@ fn main() {
     }
 
     /// A method of an impl whose target nests its params: `self` in
-    /// `impl[T] Option[Option[T]]` at `T = i64` is an `Option[Option[i64]]`,
-    /// so its payload is the `Option[i64]` the method returns.
+    /// `impl[T] Flat[T] for Option[Option[T]]` at `T = i64` is an
+    /// `Option[Option[i64]]`, so its payload is the `Option[i64]` the method
+    /// returns. (A trait impl: an inherent impl on `Option` is the standard
+    /// library's alone, B-2026-11-04-15.)
     #[test]
     fn a_nested_impl_target_types_self() {
         let src = r#"
-impl[T] Option[Option[T]] {
+trait Flat[T] { fn flat(own self) -> Option[T]; }
+impl[T] Flat[T] for Option[Option[T]] {
     fn flat(own self) -> Option[T] {
         match self {
             Some(inner) => inner,

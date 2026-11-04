@@ -155,7 +155,13 @@ pub fn borrow_bare_params(program: &mut Program) {
                         if let Some((self_borrows, modes)) =
                             traits.get(&(tn.clone(), m.name.clone()))
                         {
-                            if *self_borrows && !m.self_is_own {
+                            // Only a bare `self` takes the trait's borrow: a
+                            // written `mut ref self` stays, for the §4.7 check
+                            // to refuse (B-2026-11-04-13).
+                            if *self_borrows
+                                && !m.self_is_own
+                                && matches!(m.self_param, Some(SelfParam::Owned))
+                            {
                                 m.self_param = Some(SelfParam::Ref);
                             }
                             apply(&mut m.params, modes);

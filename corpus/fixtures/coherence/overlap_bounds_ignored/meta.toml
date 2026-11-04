@@ -1,0 +1,11 @@
+source = "corpus/fixtures/coherence/overlap_bounds_ignored"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["coherence"]
+class = "a"
+expected_from = "spec"
+rules = []
+backends = []
+env = {}
+note = "design.md § Coherence: two impls overlap when their headers unify, ignoring their bounds; `impl[T: Eq] Foo for Bar[T]` and `impl[T: Ord] Foo for Bar[T]` is the spec's own example (B-2026-11-04-14). The expected.out wording is guidance."

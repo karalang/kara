@@ -3312,6 +3312,11 @@ pub struct TypeChecker<'a> {
     /// generic-receiver dispatch. See the matching `TypeCheckResult` field
     /// (B-2026-07-08-6 secondary — ownership arg-mode of a generic trait call).
     pub(super) method_typeparam_trait_key: FxHashMap<SpanKey, String>,
+    /// Method calls on a concrete receiver answered by a blanket impl over
+    /// its own parameter (`5.twice()` of `impl[T: Display] Twice for T`).
+    /// They record no `Type.method` callee: the MIR builder finds the blanket
+    /// impl through `method_typeparam_trait_key`, as under a bound.
+    pub(super) blanket_method_spans: FxHashSet<SpanKey>,
     /// Call span → callee `Fn(..)` `TypeExpr` for a closure-VALUE call through
     /// a non-identifier callee. See the public copy on `TypeCheckResult` for
     /// the full rationale.
@@ -3976,6 +3981,7 @@ impl<'a> TypeChecker<'a> {
             direct_iter_terminals: FxHashSet::default(),
             method_typeparam_receiver: FxHashMap::default(),
             method_typeparam_trait_key: FxHashMap::default(),
+            blanket_method_spans: FxHashSet::default(),
             fn_value_callee_types: FxHashMap::default(),
             fn_value_param_types: FxHashMap::default(),
             error_fix_diffs: FxHashMap::default(),
@@ -4173,6 +4179,7 @@ impl<'a> TypeChecker<'a> {
         self.validate_enum_payload_no_nested_enum();
         self.validate_derive_arithmetic();
         self.check_signature_visibility();
+        self.check_inherent_impl_locality();
         // Phase 6 line 218 slice 2 — reject ScopeLocal-marked types
         // (e.g. `TaskHandle[T]`) appearing in escape positions:
         // function/method return type, struct/enum field type. The
@@ -8206,6 +8213,9 @@ impl<'a> TypeChecker<'a> {
     /// Record a method call's `Type.method` callee key, by span for the
     /// legacy backends and by the enclosing call's node for typed HIR.
     pub(super) fn record_method_callee(&mut self, key: SpanKey, callee: String) {
+        if self.blanket_method_spans.contains(&key) {
+            return;
+        }
         if let Some((node, call_key)) = self.current_call_node {
             if call_key == key && !node.is_dummy() {
                 self.node_method_callees.insert(node, callee.clone());

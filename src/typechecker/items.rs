@@ -1012,6 +1012,100 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// Refuse an inherent impl on a type the program does not declare,
+    /// `impl Vec[i64] { .. }` (design.md § Coherence, "Inherent impls only on
+    /// your own types"; B-2026-11-04-15). The standard library's own impls
+    /// are exempt: the appended library sources, a spliced gated module, and
+    /// a baked module compiled as its own program.
+    pub(super) fn check_inherent_impl_locality(&mut self) {
+        if self.compiling_stdlib {
+            return;
+        }
+        let library = self.program.library_start.unwrap_or(usize::MAX);
+        let mut local: HashSet<&str> = HashSet::new();
+        let mut aliases: Vec<(&str, &TypeExpr)> = Vec::new();
+        for item in &self.program.items {
+            match item {
+                Item::StructDef(s) => {
+                    local.insert(s.name.as_str());
+                }
+                Item::EnumDef(e) => {
+                    local.insert(e.name.as_str());
+                }
+                Item::UnionDef(u) => {
+                    local.insert(u.name.as_str());
+                }
+                Item::DistinctType(d) => {
+                    local.insert(d.name.as_str());
+                }
+                Item::TypeAlias(a) => aliases.push((a.name.as_str(), &a.ty)),
+                Item::ExternBlock(b) => {
+                    for it in &b.items {
+                        if let ExternItem::OpaqueType(o) = it {
+                            local.insert(o.name.as_str());
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        fn head(ty: &TypeExpr) -> Option<&str> {
+            match &ty.kind {
+                TypeKind::Path(p) => p.segments.last().map(String::as_str),
+                _ => None,
+            }
+        }
+        // An alias names its own type only when what it aliases is one
+        // (`type Grid = Board`); `type Grid = Vec[i64]` stays the Vec.
+        loop {
+            let before = local.len();
+            for (name, ty) in &aliases {
+                if head(ty).is_some_and(|h| local.contains(h)) {
+                    local.insert(name);
+                }
+            }
+            if local.len() == before {
+                break;
+            }
+        }
+        let mut refused: Vec<(String, Span)> = Vec::new();
+        for item in &self.program.items {
+            let Item::ImplBlock(imp) = item else { continue };
+            if imp.trait_name.is_some()
+                || imp.span.offset >= library
+                || crate::prelude::gated_module_at(imp.span.offset).is_some()
+                || matches!(imp.target_type.kind, TypeKind::Error)
+                || imp.items.iter().any(|it| match it {
+                    ImplItem::Method(m) => m.stdlib_origin,
+                    ImplItem::AssocType(_) => false,
+                })
+            {
+                continue;
+            }
+            let impl_params = Self::generic_param_names(&imp.generic_params);
+            let own = head(&imp.target_type)
+                .is_some_and(|h| local.contains(h) && !impl_params.contains(&h.to_string()));
+            if !own {
+                refused.push((
+                    crate::formatter::render_type_expr(&imp.target_type),
+                    imp.span,
+                ));
+            }
+        }
+        for (target, span) in refused {
+            self.type_error(
+                format!(
+                    "inherent impl on `{target}`, a type this program does not declare: \
+                     a package may write `impl Type {{ .. }}` only for its own types \
+                     (design.md § Coherence). Write a trait and implement it for \
+                     `{target}`, or wrap the type in a `distinct type`"
+                ),
+                span,
+                TypeErrorKind::ConflictingImpl,
+            );
+        }
+    }
+
     /// Flag non-`pub` types appearing in `pub` signature positions across
     /// functions, methods, extern functions, struct fields, enum variant
     /// payloads, type aliases, and constants. See CR-18.
@@ -4001,7 +4095,8 @@ impl<'a> super::TypeChecker<'a> {
             match sp {
                 SelfParam::Owned => (0, "self"),
                 SelfParam::MutRef => (1, "mut ref self"),
-                SelfParam::Ref => (2, "ref self"),
+                // A bare `self` borrows (D5) and reads `ref self` here.
+                SelfParam::Ref => (2, "self"),
             }
         }
         // The prefix that spells a mode, for the fix.

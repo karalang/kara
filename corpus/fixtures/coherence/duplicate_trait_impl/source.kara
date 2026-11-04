@@ -1,0 +1,5 @@
+trait T { fn f(self) -> i64; }
+struct S {}
+impl T for S { fn f(self) -> i64 { 1 } }
+impl T for S { fn f(self) -> i64 { 2 } }
+fn main() { println(S {}.f()); }

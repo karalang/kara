@@ -1,0 +1,5 @@
+trait T { fn f(self) -> i64; }
+struct B[X] { x: X }
+impl[X: Eq] T for B[X] { fn f(self) -> i64 { 1 } }
+impl[X: Ord] T for B[X] { fn f(self) -> i64 { 2 } }
+fn main() { println(B { x: 1 }.f()); }

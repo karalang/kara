@@ -1,8 +1,10 @@
 trait Zero { fn zero() -> Self; }
 impl Zero for i64 { fn zero() -> i64 { 41 } }
 impl Zero for u8 { fn zero() -> u8 { 7u8 } }
-impl i64 { fn two() -> i64 { 42 } fn add_to(n: i64) -> i64 { n + 100 } }
-impl bool { fn yes() -> bool { true } }
+trait Two { fn two() -> Self; fn add_to(n: i64) -> i64; }
+impl Two for i64 { fn two() -> i64 { 42 } fn add_to(n: i64) -> i64 { n + 100 } }
+trait Yes { fn yes() -> Self; }
+impl Yes for bool { fn yes() -> bool { true } }
 fn main() {
     println(i64.zero());
     println(u8.zero());

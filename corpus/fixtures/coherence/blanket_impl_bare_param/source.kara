@@ -1,0 +1,10 @@
+trait Twice { fn twice(self) -> String; }
+impl[T: Display] Twice for T { fn twice(self) -> String { f"{self}{self}" } }
+struct P { n: i64 }
+impl Display for P { fn to_string(self) -> String { f"P{self.n}" } }
+fn main() {
+    println(5.twice());
+    println("ab".twice());
+    println(P { n: 1 }.twice());
+    println(Twice.twice(7));
+}

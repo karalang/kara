@@ -1,0 +1,1 @@
+ERROR at line 3: impl method `S.look` takes its receiver as `mut ref self`, but `T.look` declares `self`

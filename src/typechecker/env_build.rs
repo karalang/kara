@@ -37,6 +37,11 @@ enum ImplOverlap {
     /// That is specialization — still rejected — but the diagnostic names the
     /// offending methods. Disjoint-method inherent impls are admitted instead.
     MethodRedefinition(Vec<String>),
+    /// A second impl of one trait whose header unifies with an existing
+    /// one's, bounds ignored: `impl T for S` twice, `impl[X: Eq] T for B[X]`
+    /// beside `impl[X: Ord] T for B[X]` (design.md § Coherence, "a type
+    /// implements a trait once"). Names the first impl's associated types.
+    Duplicate(Vec<(String, Type)>),
 }
 
 impl<'a> super::TypeChecker<'a> {
@@ -3099,8 +3104,52 @@ impl<'a> super::TypeChecker<'a> {
         // `phase-4-interpreter.md` § `impl Option[Ordering]` for the
         // locked design rationale (rejection over Rust-style
         // specialization).
-        match self.impl_overlap_conflict(&trait_name, &type_name, &target_args, &methods) {
+        match self.impl_overlap_conflict(
+            &trait_name,
+            &type_name,
+            &target_args,
+            &trait_args,
+            &methods,
+        ) {
             None => {}
+            Some(ImplOverlap::Duplicate(assoc)) => {
+                let trait_shown = trait_name.as_deref().unwrap_or_default();
+                let args = if trait_args.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        "[{}]",
+                        trait_args
+                            .iter()
+                            .map(type_display)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                };
+                let with = if assoc.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        ", with {}",
+                        assoc
+                            .iter()
+                            .map(|(n, t)| format!("{n} = {}", type_display(t)))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                };
+                self.type_error(
+                    format!(
+                        "conflicting impl: `{type_name}` already implements \
+                         `{trait_shown}{args}`{with}; a type implements a trait once, and \
+                         two impls whose headers unify overlap whatever their bounds \
+                         (design.md § Coherence)"
+                    ),
+                    imp.span,
+                    TypeErrorKind::ConflictingImpl,
+                );
+                return;
+            }
             Some(ImplOverlap::MethodRedefinition(names)) => {
                 let rendered_args = if target_args.is_empty() {
                     String::new()
@@ -3226,11 +3275,45 @@ impl<'a> super::TypeChecker<'a> {
         trait_name: &Option<String>,
         target_type: &str,
         target_args: &[Type],
+        trait_args: &[Type],
         new_methods: &HashMap<String, FunctionSig>,
     ) -> Option<ImplOverlap> {
-        for existing in &self.env.impls {
+        for (i, existing) in self.env.impls.iter().enumerate() {
             if existing.trait_name != *trait_name || existing.target_type != target_type {
                 continue;
+            }
+            // Two trait impls on the same header: both generic over the
+            // target's name (`impl T for S`, `impl[X: Eq] T for B[X]`) or
+            // both on the same concrete arguments, with the same trait
+            // arguments. A library source re-stating a baked impl replaces
+            // it instead (`env_add_impl`).
+            // `From` and `TryFrom` take their source from the method rather
+            // than a trait argument (`impl From for Out { fn from(a: A) }`),
+            // so their impls are told apart by that parameter.
+            let source_differs = match trait_name.as_deref() {
+                Some(t @ ("From" | "TryFrom")) if trait_args.is_empty() => {
+                    let m = if t == "From" { "from" } else { "try_from" };
+                    let src = |ms: &HashMap<String, FunctionSig>| {
+                        ms.get(m).and_then(|f| f.params.first().cloned())
+                    };
+                    let (a, b) = (src(&existing.methods), src(new_methods));
+                    a.is_none() || b.is_none() || a != b
+                }
+                _ => false,
+            };
+            if trait_name.is_some()
+                && !source_differs
+                && existing.target_args == target_args
+                && existing.trait_args == trait_args
+                && !(self.library_methods_from_source && self.baked_impls.contains(&i))
+            {
+                let assoc = self
+                    .env
+                    .impl_own_assoc_types
+                    .get(&i)
+                    .cloned()
+                    .unwrap_or_default();
+                return Some(ImplOverlap::Duplicate(assoc));
             }
             let existing_empty = existing.target_args.is_empty();
             let new_empty = target_args.is_empty();

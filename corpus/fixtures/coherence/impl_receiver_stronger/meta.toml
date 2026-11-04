@@ -1,0 +1,11 @@
+source = "corpus/fixtures/coherence/impl_receiver_stronger"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["coherence", "modes"]
+class = "a"
+expected_from = "spec"
+rules = []
+backends = []
+env = {}
+note = "design.md § Conformance / core-semantics §4.7: an impl's modes, the receiver's included, may be the trait's or weaker, never stronger; `mut ref self` for the trait's `self` is refused at the impl (B-2026-11-04-13: the impl was given the trait's receiver, and the write reported \"Declare the method mut ref self\", which it was). The expected.out wording is guidance."

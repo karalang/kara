@@ -2601,10 +2601,11 @@ impl<'a> super::TypeChecker<'a> {
         }
         let str_routes_to_user_impl = matches!(&obj_ty_for_named, Type::Str)
             && !STRING_BUILTIN_METHODS.contains(&method)
-            && !self
+            && (!self
                 .env
                 .find_methods_with_args("String", &[], method)
-                .is_empty();
+                .is_empty()
+                || !self.blanket_impl_candidates(&Type::Str, method).is_empty());
         if obj_ty == Type::Str && !str_routes_to_user_impl {
             return self.infer_str_method(method, args, span);
         }

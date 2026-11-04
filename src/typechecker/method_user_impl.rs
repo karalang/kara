@@ -263,6 +263,131 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// The traits whose blanket impl over its own parameter declares
+    /// `method` for `recv` ([`Self::blanket_impl_method`]).
+    pub(super) fn blanket_impl_candidates(
+        &self,
+        recv: &Type,
+        method: &str,
+    ) -> Vec<(String, crate::ast::TraitMethod)> {
+        if matches!(
+            recv,
+            Type::TypeParam(_) | Type::TypeVar(_) | Type::Error | Type::Never
+        ) {
+            return Vec::new();
+        }
+        // The program's own blanket impls: the library's (`impl[I: Iterator]
+        // IntoIterator for I`) answer through their own surfaces, which
+        // refuse `(1..).into_iter()` with a fix rather than accept it.
+        let library = self.program.library_start.unwrap_or(usize::MAX);
+        let blankets: Vec<(String, Vec<String>)> = self
+            .env
+            .impls
+            .iter()
+            .enumerate()
+            .filter(|(i, imp)| {
+                !self.baked_impls.contains(i)
+                    && imp.target_span.is_some_and(|s| {
+                        s.offset < library && crate::prelude::gated_module_at(s.offset).is_none()
+                    })
+            })
+            .map(|(_, imp)| imp)
+            .filter(|imp| imp.trait_args.is_empty())
+            .filter_map(|imp| {
+                let tr = imp.trait_name.as_ref()?;
+                let p = imp
+                    .generic_params
+                    .as_ref()?
+                    .params
+                    .iter()
+                    .find(|p| p.name == imp.target_type)?;
+                let bounds = p
+                    .bounds
+                    .iter()
+                    .filter_map(|b| b.path.last().cloned())
+                    .collect::<Vec<_>>();
+                Some((tr.clone(), bounds))
+            })
+            .collect();
+        let mut found: Vec<(String, crate::ast::TraitMethod)> = Vec::new();
+        for (tr, bounds) in blankets {
+            if found.iter().any(|(t, _)| *t == tr) {
+                continue;
+            }
+            if let Some((t, m)) = &self.env.ufcs_trait {
+                if m == method && *t != tr {
+                    continue;
+                }
+            }
+            if bounds.contains(&tr) || !bounds.iter().all(|b| self.type_satisfies_bound(recv, b)) {
+                continue;
+            }
+            let Some(m) = self.find_trait_method(&tr, method) else {
+                continue;
+            };
+            if m.self_param.is_none() {
+                continue;
+            }
+            found.push((tr, m.clone()));
+        }
+        found
+    }
+
+    /// A method of a blanket impl over the impl's own parameter
+    /// (`impl[T: Display] Twice for T`) on a concrete receiver that meets
+    /// the parameter's bounds (design.md § Coherence, B-2026-11-04-16). It is
+    /// recorded as a call of the trait's method, as under a bound, and the
+    /// MIR builder instances the blanket impl at the receiver. `None` when no
+    /// such impl declares `method` for the receiver.
+    pub(super) fn blanket_impl_method(
+        &mut self,
+        recv: &Type,
+        method: &str,
+        args: &[CallArg],
+        span: &Span,
+    ) -> Option<Type> {
+        let mut found = self.blanket_impl_candidates(recv, method);
+        match found.len() {
+            0 => None,
+            1 => {
+                let (tr, m) = found.pop().unwrap();
+                self.method_typeparam_trait_key
+                    .insert(SpanKey::from_span(span), format!("{tr}.{method}"));
+                let key = SpanKey::from_span(span);
+                self.blanket_method_spans.insert(key);
+                // A `Type.method` callee recorded before the lookup got here
+                // would send the call to a function that does not exist.
+                self.method_callee_types.remove(&key);
+                if let Some((node, call_key)) = self.current_call_node {
+                    if call_key == key {
+                        self.node_method_callees.remove(&node);
+                    }
+                }
+                Some(self.dispatch_trait_method_on(recv.clone(), &m, &[], None, None, args, span))
+            }
+            _ => {
+                for arg in args {
+                    self.infer_expr(&arg.value);
+                }
+                let traits = found
+                    .iter()
+                    .map(|(t, _)| format!("`{t}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                self.type_error(
+                    format!(
+                        "ambiguous method '{method}' on type '{}': the blanket impls of {traits} \
+                         each apply. Use UFCS `Trait.{method}(receiver, ...)` to disambiguate.",
+                        type_display(recv)
+                    ),
+                    *span,
+                    TypeErrorKind::AmbiguousAssocFn,
+                );
+                Some(Type::Error)
+            }
+        }
+    }
+
     pub(super) fn dispatch_user_impl_method(
         &mut self,
         object: &Expr,
@@ -329,6 +454,23 @@ impl<'a> super::TypeChecker<'a> {
         let receiver_for_lookup: &Type = array_user_impl_receiver
             .as_ref()
             .unwrap_or(receiver_for_lookup);
+        // `Trait.m(x)` names the trait: on a type with no impl of it of its
+        // own, its blanket impl's `m`, even where the type has an inherent
+        // `m` too (B-2026-11-04-16).
+        if let Some((t, m)) = self.env.ufcs_trait.clone() {
+            let own_impl =
+                super::types::impl_table_key(receiver_for_lookup).is_none_or(|(name, _)| {
+                    self.env.impls.iter().any(|i| {
+                        i.trait_name.as_deref() == Some(t.as_str()) && i.target_type == name
+                    })
+                });
+            if m == method && !own_impl {
+                if let Some(ty) = self.blanket_impl_method(receiver_for_lookup, method, args, span)
+                {
+                    return ty;
+                }
+            }
+        }
 
         let (type_name, type_args) = match receiver_for_lookup {
             Type::Named { name, args } => (name.clone(), args.clone()),
@@ -568,6 +710,10 @@ impl<'a> super::TypeChecker<'a> {
                             // Route to impl-table dispatch (arg inference /
                             // label validation / Self resolution happen there).
                             (prim, Vec::new())
+                        } else if let Some(t) =
+                            self.blanket_impl_method(receiver_for_lookup, method, args, span)
+                        {
+                            return t;
                         } else {
                             // For non-impl methods, just type-check args and
                             // return Error. Close the silent-poison hole for
@@ -1300,6 +1446,9 @@ impl<'a> super::TypeChecker<'a> {
                 ret
             }
             None => {
+                if let Some(t) = self.blanket_impl_method(receiver_for_lookup, method, args, span) {
+                    return t;
+                }
                 for arg in args {
                     self.infer_expr(&arg.value);
                 }

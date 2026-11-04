@@ -13681,8 +13681,11 @@ fn test_method_resolution_specialized_impl_correct_args_resolves() {
     // Same impl, but called on the matching `Option[bool]`
     // instantiation — must resolve cleanly with no NoMethodFound
     // diagnostic from the args-specialization tightening.
+    // A trait impl: an inherent `impl Option[bool]` is refused outside the
+    // standard library (B-2026-11-04-15).
     typecheck_ok(
-        "impl Option[bool] { fn is_lt(ref self) -> bool { false } }\n\
+        "trait IsLt { fn is_lt(ref self) -> bool; }\n\
+         impl IsLt for Option[bool] { fn is_lt(ref self) -> bool { false } }\n\
          fn main() { let o: Option[bool] = Some(true); o.is_lt(); }",
     );
 }
@@ -18102,7 +18105,10 @@ fn test_user_impl_on_char_and_bool_dispatches_and_types_its_return() {
                impl Dbl for bool {
                    fn dbl(self) -> String { if self { return \"TT\" } return \"FF\" }
                }
-               impl char {
+               trait Shout {
+                   fn shout(self) -> String;
+               }
+               impl Shout for char {
                    fn shout(self) -> String { return f\"{self}!\" }
                }
                fn main() {
@@ -18263,10 +18269,13 @@ fn test_user_impl_named_cast_on_a_primitive_is_reachable() {
     // on a primitive receiver — the one name in the language you could not
     // define there. Now it dispatches like any other, and its return type is
     // enforced.
-    let src = "impl i64 {
+    // Trait impls: an inherent `impl i64` is refused (B-2026-11-04-15).
+    let src = "trait CastF { fn cast(self) -> f64; }
+               trait CastI { fn cast(self) -> i64; }
+               impl CastF for i64 {
                    fn cast(self) -> f64 { return self as f64 }
                }
-               impl char {
+               impl CastI for char {
                    fn cast(self) -> i64 { return self as i64 }
                }
                fn main() {
@@ -18376,7 +18385,9 @@ fn test_user_impl_named_cmp_on_a_float_is_reachable() {
     // floats these seven names were undefinable on a float receiver. Dropping it
     // for floats makes a user impl dispatch like any other, with its return type
     // enforced.
-    let src = "impl f64 {
+    // A trait impl: an inherent `impl f64` is refused (B-2026-11-04-15).
+    let src = "trait FCmp { fn cmp(self, other: f64) -> i64; }
+               impl FCmp for f64 {
                    fn cmp(self, other: f64) -> i64 {
                        if self < other { return -1 }
                        if self > other { return 1 }
@@ -21753,12 +21764,23 @@ fn test_inherent_specialized_impl_adds_method_over_container() {
     // generic-on-name `impl[T] Column[T] { .. }` (which provides sum/min/…).
     // Method-granular overlap admission: no method is defined twice, so it is
     // not specialization.
-    typecheck_ok(
+    //
+    // FLIPPED by B-2026-11-04-15: an inherent impl on a library type is
+    // refused outside the standard library (design.md § Coherence), so the
+    // admission is the library's alone.
+    let errors = typecheck_errors(
         "impl Column[i64] { fn doubled_sum(ref self) -> i64 { self.sum() + self.sum() } }\n\
          fn main() {\n\
              let c: Column[i64] = Column.from_vec([1, 2, 3]);\n\
              print(c.doubled_sum());\n\
          }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("inherent impl on `Column[i64]`")),
+        "{:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
     );
 }
 
@@ -21787,7 +21809,9 @@ fn test_two_disjoint_inherent_impls_over_container_admitted() {
     // Two user inherent impls on the same concrete container with DISJOINT
     // method names coexist (natural multi-inherent-impl shape); each adds
     // a distinct method.
-    typecheck_ok(
+    // FLIPPED by B-2026-11-04-15: both are inherent impls on a library type,
+    // each refused.
+    let errors = typecheck_errors(
         "impl Column[i64] { fn a(ref self) -> i64 { self.sum() } }\n\
          impl Column[i64] { fn b(ref self) -> i64 { self.max() } }\n\
          fn main() {\n\
@@ -21795,6 +21819,15 @@ fn test_two_disjoint_inherent_impls_over_container_admitted() {
              print(c.a());\n\
              print(c.b());\n\
          }",
+    );
+    assert_eq!(
+        errors
+            .iter()
+            .filter(|e| e.message.contains("inherent impl on `Column[i64]`"))
+            .count(),
+        2,
+        "{:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
     );
 }
 
@@ -21818,13 +21851,21 @@ fn test_two_inherent_impls_same_method_rejected() {
 
 #[test]
 fn test_inherent_specialized_impl_adds_method_over_tensor() {
-    // Tensor parity for the container inherent-impl admission.
-    typecheck_ok(
+    // Tensor parity for the container inherent-impl admission. FLIPPED by
+    // B-2026-11-04-15: refused outside the standard library.
+    let errors = typecheck_errors(
         "impl Tensor[i64, [3]] { fn twice_sum(ref self) -> i64 { self.sum() + self.sum() } }\n\
          fn main() {\n\
              let t: Tensor[i64, [3]] = Tensor.from([1, 2, 3]);\n\
              print(t.twice_sum());\n\
          }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("inherent impl on `Tensor")),
+        "{:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
     );
 }
 
@@ -48559,12 +48600,17 @@ fn comparison_methods_on_a_primitive_receiver_are_typed_not_poisoned() {
          let p: Option[Ordering] = x.partial_cmp(y); }",
     );
 
-    // A user `impl` owning one of these names still wins over the baked one —
-    // the impl-table route the exemption used to skip is what makes this work,
-    // so it is the change's own consequence, not an unrelated control.
-    let _ = typecheck_ok(
+    // A user `impl i64 { fn lt }` once won over the baked one here; an
+    // inherent impl on a primitive is refused now (B-2026-11-04-15).
+    let errs = typecheck_errors(
         "impl i64 { fn lt(self, other: i64) -> String { \"user\" } }\n\
          fn main() { let a: i64 = 1; let b: i64 = 2; let s: String = a.lt(b); println(s); }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("inherent impl on `i64`")),
+        "{:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
     );
 }
 

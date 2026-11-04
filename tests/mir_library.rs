@@ -92,12 +92,15 @@ fn main() {
     assert_runs(src, "4 5 true\n");
 }
 
-/// A program's own `impl Option[T]` is found although the stdlib's
-/// `impl Option[Ordering]` already took `impl#0` for that target.
+/// A program's own impl on `Option[T]`, of its own trait, is found
+/// although the stdlib's `impl Option[Ordering]` already took `impl#0` for
+/// that target. (An inherent `impl[T] Option[T]` is refused outside the
+/// standard library, B-2026-11-04-15.)
 #[test]
 fn a_programs_own_impl_on_a_library_type_is_found() {
     let src = r#"
-impl[T] Option[T] {
+trait GetOr[T] { fn get_or(own self, d: own T) -> T; }
+impl[T] GetOr[T] for Option[T] {
     fn get_or(own self, d: own T) -> T {
         match self {
             Some(x) => x,

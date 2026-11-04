@@ -1,0 +1,2 @@
+impl Vec[i64] { fn total(self) -> i64 { let mut t = 0; for x in self { t += x; } t } }
+fn main() { let v: Vec[i64] = [1, 2].to_vec(); println(v.total()); }
