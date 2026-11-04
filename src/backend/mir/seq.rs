@@ -2831,8 +2831,8 @@ impl<'ctx> Cx<'ctx, '_> {
 /// Vec's first block holds.
 fn min_first_cap(size: u64) -> u64 {
     match size {
-        0..=256 => 8,
-        257..=1024 => 4,
+        0..=1 => 8,
+        2..=1024 => 4,
         _ => 1,
     }
 }

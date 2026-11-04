@@ -784,7 +784,7 @@ fn main() {
     println(f"{sum} {caps} {b[2].a[199]} {b.capacity()} {w} {w.capacity()}");
 }
 "#;
-    let want = "1498500 [8, 16, 1024] 2 4 [1, 2, 3, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9] 24\n";
+    let want = "1498500 [4, 16, 1024] 2 4 [1, 2, 3, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9] 24\n";
     for opt in [0, 2] {
         if let Some(out) = build_and_run(SRC, opt) {
             assert_eq!(out, want, "at -O{opt}");

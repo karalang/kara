@@ -9421,8 +9421,8 @@ impl<'a> Interp<'a> {
         let grown = if reserving {
             // runtime/src/mir.rs's `min_first_cap`.
             want.max(cap * 2).max(match size {
-                0..=256 => 8,
-                257..=1024 => 4,
+                0..=1 => 8,
+                2..=1024 => 4,
                 _ => 1,
             })
         } else {

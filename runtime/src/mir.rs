@@ -675,16 +675,18 @@ pub unsafe extern "C" fn karac_mir_string_from(out: *mut RawVec, ptr: *const u8,
     unsafe { string_of(out, bytes(ptr, len)) };
 }
 
-/// The fewest elements of `size` bytes a vector's first block holds: 8, as
-/// legacy's in-line push growth gives, so a short `Vec` built by `push`
-/// allocates once where a start of 4 allocated twice (kata 638's six-element
-/// memo keys, 2.0x legacy, B-2026-10-14-69); 4 for elements up to 1 KiB
-/// and 1 beyond, as Rust's `Vec` does, so a first block stays small. The
-/// MIR interpreter's `try_*` twins use the same rule.
+/// The fewest elements of `size` bytes a vector's first block holds, as
+/// Rust's `Vec` starts: 8 for bytes, 4 for elements up to 1 KiB, 1 beyond.
+/// A start of 8 for every element up to 256 bytes (B-2026-10-14-69, for
+/// kata 638's six-element memo keys, which presizing now covers) doubled
+/// the memory of many short `Vec[i64]`s: kata 3629's million factor lists
+/// took 64 bytes each where Rust takes 32, 89 MiB of RSS against 60 on the
+/// M5 (B-2026-11-04-38). The MIR interpreter's `try_*` twins use the same
+/// rule.
 pub(crate) fn min_first_cap(size: usize) -> usize {
     match size {
-        0..=256 => 8,
-        257..=1024 => 4,
+        0..=1 => 8,
+        2..=1024 => 4,
         _ => 1,
     }
 }
