@@ -58,8 +58,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 117 |
-| false-positive | 103 |
+| diagnostics | 119 |
+| false-positive | 104 |
 | perf | 94 |
 | missing-feature | 70 |
 | soundness | 48 |
@@ -75,10 +75,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 180 |
+| typecheck | 182 |
 | mir | 115 |
 | mir-llvm | 109 |
-| cli | 53 |
+| cli | 54 |
 | ownership | 48 |
 | parser | 37 |
 | interp | 27 |
@@ -122,6 +122,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-04-47 | 2026-11-04 | mir | high | With two `From` impls on one type, `Out.from(c)` calls the FIRST impl's `from` whatever the argument (prints 6 for `Out.from(C { n: 6 })` whose impl multiplies by 10), on run and --interp; with argument-less headers (`impl From for Out` twice, told apart by the parameter) `.into()` picks the first impl too | — |
 | B-2026-11-04-48 | 2026-11-04 | mir | medium | `self.raw()` in a method of a `distinct type` whose receiver is a bare (borrowed, D5) `self` is refused after check: "`raw` of a borrowed distinct value is not lowered yet" | — |
 | B-2026-11-04-49 | 2026-11-04 | mir | medium | A trait default method that calls another of the trait's methods (`fn shout(self, n: i64) -> String { let s = self.tag(); .. }`), reached through a blanket impl over a bare parameter (`impl[T: Display] Shout for T`), is refused after check: "the method call `.tag` with no resolved callee is not lowered yet", by a bound (`fn go[U: Shout](u: U) { u.shout(3) }`) and on a concrete receiver alike | — |
+| B-2026-11-04-51 | 2026-11-04 | typecheck | low | An iterator method called straight on a sequence draws an edit-distance guess with no fix for `find`, `position`, `nth`, `rev` and `flatten`: `windows.windows(2).find(|p| p[0] == p[1])` (kata 1044's Rust-shaped iterator arm) gets "no method 'find' on type 'Vec', did you mean 'fill'?", where `map`, `filter` or `any` get the `.iter()` hint and a fix | — |
+| B-2026-11-04-52 | 2026-11-04 | typecheck | low | `.iter().flatten()` over collection items names the exact rewrite ("write `.flat_map(|v| v.iter())` in place of `.flatten()`") but carries no fix, so `karac fix` leaves `g.iter().flatten().collect()` on a `Vec[Vec[i64]]` refused | — |
+| B-2026-11-04-53 | 2026-11-04 | cli | low | `karac fmt` breaks an expression holding two `unsafe { .. }` blocks over lines, and the `undocumented_unsafe` lint then fires on the second though the statement carries a `// Safety:` comment: `// Safety: ..` above `let (a, b) = par { unsafe { labs(-3) }, unsafe { labs(-4) } };` is clean, and its formatted form is not, with no place a comment could go | — |
 
 ### Relocated
 
