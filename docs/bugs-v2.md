@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 129 |
+| diagnostics | 130 |
 | false-positive | 110 |
 | perf | 95 |
 | missing-feature | 75 |
@@ -75,7 +75,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 196 |
+| typecheck | 197 |
 | mir | 119 |
 | mir-llvm | 111 |
 | cli | 55 |
@@ -131,6 +131,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-04-75 | 2026-11-04 | typecheck | low | An empty list literal compared with a typed `Vec` (`v == []`) is refused with MIR's internal "a type that failed to check is not lowered yet"; the other operand gives `[]` its element type, so it should check | — |
 | B-2026-11-04-76 | 2026-11-04 | parser | low | A closure parameter written `mut acc` (Rust's `fold(init, |mut acc, x| ..)`) is refused with "'mut' is a reserved keyword and cannot be used as an identifier" and a cascade error at the closing `)`, with no fix; a `fn` parameter written `mut x` gets a diagnostic naming the Kāra spelling (`let mut x = x;` in the body) | — |
 | B-2026-11-04-77 | 2026-11-04 | typecheck | low | `Vec` has no `drain(range)`: Rust's `v.drain(i..i + 2);` gets only "no method 'drain' on type 'Vec'" with no hint, though `remove`, `truncate` and `split_off`-style edits exist | — |
+| B-2026-11-04-78 | 2026-11-04 | typecheck | medium | A borrowed parameter passed where a library constructor takes `own Vec[T]` (`PriorityQueue.from(v)`, `max_first_from(v)` with `v: Vec[i64]`) draws "expected 'Vec[T]', found 'ref Vec[i64]'" and a cascade "cannot infer type parameter 'T'", with no fix; the same parameter given away by `let`/return gets "cannot give away parameter `v`" with its `own` / `.clone()` fix | — |
 
 ### Relocated
 
