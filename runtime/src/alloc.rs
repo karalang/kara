@@ -82,7 +82,7 @@ pub extern "C" fn karac_alloc_fallible(size: usize) -> *mut u8 {
             return p;
         }
     }
-    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    #[cfg(any(all(target_os = "linux", target_env = "gnu"), target_os = "macos"))]
     {
         let p = small::take(n);
         if !p.is_null() {
@@ -102,7 +102,14 @@ pub extern "C" fn karac_alloc_fallible(size: usize) -> *mut u8 {
 /// chunk taken from one may be freed by libc `free`, and one freed here may
 /// come from any allocation path. A thread keeps at most [`KEEP`] chunks a
 /// size, under 600 KiB in all. `KARAC_ALLOC_CACHE=0` leaves them off.
-#[cfg(all(target_os = "linux", target_env = "gnu"))]
+///
+/// On macOS the default allocator (xzone malloc) contends at two and three
+/// threads: katas 71 and 125 spent most of a two-worker run in
+/// `_xzm_xzone_malloc_tiny`, `_xzm_free` and the clock reads under them,
+/// and ran slower than on one worker, until a fourth thread let it spread
+/// its slots (B-2026-11-01-17). The same lists serve it there, keyed by
+/// `malloc_size`.
+#[cfg(any(all(target_os = "linux", target_env = "gnu"), target_os = "macos"))]
 pub(crate) mod small {
     use std::cell::Cell;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -110,7 +117,11 @@ pub(crate) mod small {
     /// One list per 16-byte chunk size, up to [`MAX`]-byte requests.
     const CLASSES: usize = 33;
     /// The largest request a list serves: a 512-byte chunk.
+    #[cfg(target_os = "linux")]
     pub(crate) const MAX: usize = CLASSES * 16 - 24;
+    /// The largest request a list serves: 512 usable bytes.
+    #[cfg(target_os = "macos")]
+    pub(crate) const MAX: usize = (CLASSES - 1) * 16;
     /// Chunks each list keeps before `free` takes the rest.
     const KEEP: u32 = 64;
 
@@ -146,8 +157,13 @@ pub(crate) mod small {
             c"__msan_init",
             c"__hwasan_init",
         ] {
-            // SAFETY: RTLD_DEFAULT (null) and a NUL-terminated name.
-            if !unsafe { dlsym(std::ptr::null_mut(), name.as_ptr()) }.is_null() {
+            // `RTLD_DEFAULT`: null on glibc, -2 on Apple platforms.
+            #[cfg(target_os = "linux")]
+            let any = std::ptr::null_mut();
+            #[cfg(target_os = "macos")]
+            let any = -2isize as *mut u8;
+            // SAFETY: RTLD_DEFAULT and a NUL-terminated name.
+            if !unsafe { dlsym(any, name.as_ptr()) }.is_null() {
                 return;
             }
         }
@@ -162,7 +178,11 @@ pub(crate) mod small {
         }
         // glibc's chunk for `n` bytes: a header word, 16-byte steps, 32 at
         // least.
+        #[cfg(target_os = "linux")]
         let c = ((n + 23) >> 4).max(2);
+        // A list `c` chunk has at least `16 * c` usable bytes (`put`).
+        #[cfg(target_os = "macos")]
+        let c = ((n + 15) >> 4).max(1);
         LISTS
             .try_with(|l| {
                 let p = l.head[c].get();
@@ -184,8 +204,23 @@ pub(crate) mod small {
             return false;
         }
         // SAFETY: `p` is a live chunk of the allocator.
-        let c = (unsafe { super::buf_cache::usable_size(p) } + 8) >> 4;
-        if c >= CLASSES {
+        put_sized(p, unsafe { super::buf_cache::usable_size(p) })
+    }
+
+    /// [`put`] of a chunk whose usable size the caller has read already.
+    #[inline]
+    pub(crate) fn put_sized(p: *mut u8, usable: usize) -> bool {
+        if !ON.load(Ordering::Relaxed) {
+            return false;
+        }
+        #[cfg(target_os = "linux")]
+        let c = (usable + 8) >> 4;
+        // Rounded down, so every chunk on list `c` serves `16 * c` bytes;
+        // 0 (a pointer no zone owns, or a chunk too small for the link)
+        // goes to `free`.
+        #[cfg(target_os = "macos")]
+        let c = usable >> 4;
+        if c >= CLASSES || c == 0 {
             return false;
         }
         LISTS
@@ -193,7 +228,8 @@ pub(crate) mod small {
                 if l.len[c].get() >= KEEP {
                     return false;
                 }
-                // SAFETY: the chunk is at least 24 bytes, and dead.
+                // SAFETY: the chunk is dead and holds a pointer (at least
+                // 24 bytes from glibc, 16 from a macOS zone).
                 unsafe { *(p as *mut *mut u8) = l.head[c].get() };
                 l.head[c].set(p);
                 l.len[c].set(l.len[c].get() + 1);
@@ -206,7 +242,7 @@ pub(crate) mod small {
 /// `malloc` as compiled code calls it.
 #[no_mangle]
 pub extern "C" fn karac_malloc(size: usize) -> *mut u8 {
-    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    #[cfg(any(all(target_os = "linux", target_env = "gnu"), target_os = "macos"))]
     {
         let p = small::take(size);
         if !p.is_null() {
@@ -222,7 +258,7 @@ pub extern "C" fn karac_free(ptr: *mut u8) {
     if ptr.is_null() {
         return;
     }
-    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    #[cfg(any(all(target_os = "linux", target_env = "gnu"), target_os = "macos"))]
     if small::put(ptr) {
         return;
     }
@@ -496,12 +532,25 @@ const SMALL_REALLOC_MAX: usize = 1024;
 /// Uses plain libc `free`, not [`karac_free_buf`]: `realloc`'s internal release
 /// never fed the cache's small-churn bookkeeping either, so this keeps the
 /// `malloc_trim` compensation decision exactly where it was.
+///
+/// On macOS both halves go through the per-thread lists ([`small`]) when
+/// they are on: there xzone malloc contends at two and three threads, and
+/// a Vec grown from empty passes through here several times a build
+/// (B-2026-11-01-17). glibc's tcache already serves both on Linux.
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 fn small_realloc(ptr: *mut u8, old: usize, new: usize) -> *mut u8 {
     extern "C" {
         fn free(ptr: *mut core::ffi::c_void);
     }
-    let fresh = unsafe { malloc(new) };
+    #[cfg(target_os = "macos")]
+    let kept = small::take(new);
+    #[cfg(not(target_os = "macos"))]
+    let kept: *mut u8 = std::ptr::null_mut();
+    let fresh = if kept.is_null() {
+        unsafe { malloc(new) }
+    } else {
+        kept
+    };
     if fresh.is_null() {
         crate::fatal::write_stderr(b"panic: out of memory\n");
         std::process::abort();
@@ -511,6 +560,10 @@ fn small_realloc(ptr: *mut u8, old: usize, new: usize) -> *mut u8 {
     // and `copy <= new` bytes by `fresh`; the two blocks are distinct.
     unsafe {
         std::ptr::copy_nonoverlapping(ptr, fresh, copy);
+        #[cfg(target_os = "macos")]
+        if small::put_sized(ptr, old) {
+            return fresh;
+        }
         free(ptr as *mut core::ffi::c_void);
     }
     fresh
@@ -1033,7 +1086,7 @@ pub extern "C" fn karac_free_buf(ptr: *mut u8, bytes_hint: usize) {
         // allocator query), plus the one relaxed load that records small-chunk
         // churn for the park-side `malloc_trim` decision (B-2026-07-30-4).
         buf_cache::note_small_free();
-        #[cfg(target_env = "gnu")]
+        #[cfg(any(target_env = "gnu", target_os = "macos"))]
         if small::put(ptr) {
             return;
         }
@@ -1132,6 +1185,26 @@ mod tests {
         assert!(small::take(small::MAX + 1).is_null());
         karac_free(p);
         karac_free(q);
+    }
+
+    /// The macOS lists key a chunk by `malloc_size`: a freed chunk serves a
+    /// request of its usable size, not a larger one, and a request past
+    /// the lists goes to `malloc` (B-2026-11-01-17).
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn small_lists_key_a_chunk_by_its_usable_size_on_macos() {
+        small::start();
+        let p = karac_malloc(40);
+        // The list it goes on serves this many bytes.
+        let fits = unsafe { buf_cache::usable_size(p) } & !15;
+        assert!(fits >= 32);
+        karac_free(p);
+        assert!(small::take(fits + 16) != p);
+        assert_eq!(karac_malloc(fits), p);
+        let big = karac_malloc(small::MAX + 1);
+        karac_free(big);
+        assert!(small::take(small::MAX + 1).is_null());
+        karac_free(p);
     }
 
     #[cfg(any(target_os = "macos", target_os = "linux"))]

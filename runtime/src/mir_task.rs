@@ -1886,7 +1886,7 @@ fn start_workers() {
     }
     // While this is the only thread: see [`Reactor::open`].
     EXEC.with(|e| e.borrow_mut().reactor.open());
-    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    #[cfg(any(all(target_os = "linux", target_env = "gnu"), target_os = "macos"))]
     crate::alloc::small::start();
     spawn_worker(1);
 }
