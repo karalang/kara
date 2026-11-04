@@ -1881,7 +1881,7 @@ fn test_jsonl_resolve_error_skips_later_phases() {
 // ── Query ───────────────────────────────────────────────────────
 
 #[test]
-fn test_query_effects_pure_function() {
+fn test_query_effects_of_an_arithmetic_function() {
     let out = karac_bin()
         .args(["query", "effects", "tests/snapshots/type_error.kara.add"])
         .output()
@@ -1889,7 +1889,9 @@ fn test_query_effects_pure_function() {
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("\"function\":\"add\""));
-    assert!(stdout.contains("\"inferred_effects\":[]"));
+    // `a + b` may overflow in checked mode, a `panics` atom (design.md §12,
+    // B-2026-11-04-29), and `panics` is the only effect `add` has.
+    assert!(stdout.contains("\"inferred_effects\":[{\"verb\":\"panics\",\"resource\":\"\"}]"));
     assert!(stdout.contains("\"declared_effects\":null"));
 }
 

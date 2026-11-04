@@ -1002,11 +1002,11 @@ fn build_and_emit_all() -> Option<String> {
         "import parser.parse_program;\n\
          import codegen.emit_program;\n\
          \n\
-         fn dump(src: own String, sym: String) with panics {\n\
+         fn dump(src: own String, sym: String) with panics writes(Stdout) {\n\
          \x20   println(\";;;KARA_ENTRY;;;\");\n\
          \x20   print(emit_program(parse_program(src), sym));\n\
          }\n\
-         fn dumpx(src: own String, sym: String) with panics {\n\
+         fn dumpx(src: own String, sym: String) with panics writes(Stdout) {\n\
          \x20   println(\";;;KARA_XHOST;;;\");\n\
          \x20   print(emit_program(parse_program(src), sym));\n\
          }\n\

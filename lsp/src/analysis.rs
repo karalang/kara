@@ -704,7 +704,9 @@ mod tests {
     fn hover_renders_pure_effect_signature_inline() {
         // A single-line signature ((pure)/`_`) has no group label, so it stays
         // inline rather than becoming a list.
-        let src = "fn add(a: i64, b: i64) -> i64 { a + b }\nfn main() { let _ = add(1, 2); }";
+        // `a + b` is a `panics` atom (B-2026-11-04-29); the wrapping form is pure.
+        let src =
+            "fn add(a: i64, b: i64) -> i64 { a.wrapping_add(b) }\nfn main() { let _ = add(1, 2); }";
         let idx = LineIndex::new(src);
         let call = src.rfind("add").unwrap();
         let h = hover(src, idx.position(call)).expect("expected hover");

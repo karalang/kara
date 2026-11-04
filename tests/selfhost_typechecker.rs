@@ -556,7 +556,7 @@ fn selfhost_typechecker_matches_rust_typechecker() {
         "import parser.parse_program;\n\
          import typechecker.{typecheck_program, render_errors};\n\
          \n\
-         fn check(src: own String) with panics {\n\
+         fn check(src: own String) with panics writes(Stdout) {\n\
          \x20   println(render_errors(typecheck_program(parse_program(src))));\n\
          }\n\
          fn main() {\n",

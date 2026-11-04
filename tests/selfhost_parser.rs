@@ -876,7 +876,7 @@ fn selfhost_parser_matches_rust_parser() {
          import parser.parse_expr;\n\
          import ast_render.render_expr;\n\
          \n\
-         fn parse_and_print(src: own String) with panics {\n\
+         fn parse_and_print(src: own String) with panics writes(Stdout) {\n\
          \x20   println(render_expr(parse_expr(src)));\n\
          }\n\
          fn main() {\n",

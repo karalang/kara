@@ -81,7 +81,7 @@ fn a_generic_trait_resource_passes_ref_and_mut_ref_modes_per_instance() {
          impl Store[String] for Lens {\n    fn put(ref self, v: String) -> i64 {\n        v.len() + self.base\n    }\n\n    \
          fn bump(ref self, n: mut ref String) {\n        n.push_str(\"!\");\n    }\n}\n\n\
          pub fn add(v: i64) -> i64 with reads(Sink) {\n    let mut x = v;\n    Sink.bump(mut x);\n    Sink.put(x)\n}\n\n\
-         fn name(s: String) -> i64 with reads(Names) {\n    let mut t = s.clone();\n    Names.bump(mut t);\n    \
+         fn name(s: String) -> i64 with reads(Names) writes(Stdout) {\n    let mut t = s.clone();\n    Names.bump(mut t);\n    \
          println(t);\n    Names.put(s)\n}\n\n\
          fn main() {\n    with_provider[Sink](Count { base: 10 }, || {\n        println(add(1));\n    });\n    \
          with_provider[Names](Lens { base: 1 }, || {\n        println(name(\"abc\".to_string()));\n    });\n}\n",

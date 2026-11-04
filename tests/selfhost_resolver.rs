@@ -475,7 +475,7 @@ fn selfhost_resolver_matches_rust_resolver() {
         "import parser.parse_item_str;\n\
          import resolver.{resolve_item, render_errors};\n\
          \n\
-         fn check(src: own String) with panics {\n\
+         fn check(src: own String) with panics writes(Stdout) {\n\
          \x20   println(render_errors(resolve_item(parse_item_str(src))));\n\
          }\n\
          fn main() {\n",
@@ -504,7 +504,7 @@ fn selfhost_resolver_program_matches_rust_resolver() {
         "import parser.parse_program;\n\
          import resolver.{resolve_program, render_errors};\n\
          \n\
-         fn check(src: own String) with panics {\n\
+         fn check(src: own String) with panics writes(Stdout) {\n\
          \x20   println(render_errors(resolve_program(parse_program(src))));\n\
          }\n\
          fn main() {\n",

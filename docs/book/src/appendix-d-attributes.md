@@ -154,9 +154,11 @@ On a function: asserts that its transitive effect set is compatible with the *in
 ```kara
 #[profile(embedded, kernel)]
 fn scale(x: i64, factor: i64) -> i64 {
-    x * factor
+    x.wrapping_mul(factor)
 }
 ```
+
+Checked arithmetic may panic on overflow, and `/` and `%` on a zero divisor, so a `kernel` function uses the `wrapping_`, `saturating_` or `checked_` forms.
 
 ### `#[no_effect(VERB, ...)]`
 
