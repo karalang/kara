@@ -54,8 +54,10 @@ pub struct Program {
     /// which functions take a hidden provider parameter.
     pub resources: BTreeMap<String, super::effects::ResourceDecl>,
     /// Each function's own `with` clause, by instance name: its effects on
-    /// the resources the program declares (`effect resource`), when the
-    /// clause names plain verbs on plain resources. A resource the program declares
+    /// the resources the program declares (`effect resource`) and the
+    /// host's named ones, when the clause names plain verbs on plain
+    /// resources; a trait impl's method with no clause has its trait
+    /// method's (B-2026-11-04-26). A resource the program declares
     /// itself (`effect resource Db;`) has no operation a body can perform,
     /// so the clause is where the effect pass finds it (design.md §
     /// User-declared resources, B-2026-11-04-25).

@@ -1,0 +1,12 @@
+source = "B-2026-11-04-26"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["par", "effects"]
+class = "a"
+expected_from = "spec"
+rules = ["12"]
+backends = []
+env = {}
+note = "B-2026-11-04-26: charging callers the declared set keeps reads apart from reads and Network/FileSystem as capabilities, not conflict keys (design.md §12; core-semantics §12 item 5), so these par blocks still run."
+bucket = "a"

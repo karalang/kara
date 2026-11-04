@@ -1878,9 +1878,17 @@ impl<'p> Analysis<'p> {
     /// has no operation a body performs, so without these a call charged
     /// nothing for it, and two `par` branches writing it ran unrefused
     /// (B-2026-11-04-25). A resource is a class with no value to key it,
-    /// so the effect overlaps every other on it. A built-in resource is
-    /// left to the body's own operations, which key it more finely (a
-    /// channel, a file) than a clause can.
+    /// so the effect overlaps every other on it.
+    ///
+    /// A clause on a built-in resource counts too: a caller is charged the
+    /// declared contract, not only what the body happens to do today, so a
+    /// library can reserve an effect and a change inside it cannot change
+    /// which callers' `par` blocks compile (design.md §12, B-2026-11-04-26).
+    /// Lowering leaves out what a value keys more finely than a clause can
+    /// (a `Channel`, `sends(self)`), and `Network` and `FileSystem` are
+    /// capabilities, not conflict keys (core §12 item 5), as in
+    /// [`clause_set`]. A trait impl's method with no clause carries its
+    /// trait method's.
     fn user_clause(&self, body: &Body) -> EffectSet {
         let mut out = EffectSet::default();
         let Some(clause) = self.program.clause_effects.get(&body.instance.name) else {
@@ -1894,13 +1902,15 @@ impl<'p> Analysis<'p> {
                 "receives" => Verb::Receives,
                 _ => continue,
             };
-            if d.resource.is_empty()
-                || crate::target::is_host_resource(&d.resource)
-                || crate::prelude::PRELUDE_EFFECT_RESOURCES.contains(&d.resource.as_str())
-            {
+            if d.resource.is_empty() {
                 continue;
             }
-            out.add(Effect::new(verb, &d.resource, Key::Any));
+            let key = if matches!(d.resource.as_str(), "Network" | "FileSystem") {
+                Key::Fresh
+            } else {
+                Key::Any
+            };
+            out.add(Effect::new(verb, &d.resource, key));
         }
         out
     }

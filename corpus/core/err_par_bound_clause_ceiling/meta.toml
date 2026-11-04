@@ -1,0 +1,12 @@
+source = "B-2026-11-04-26"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["par", "effects"]
+class = "a"
+expected_from = "pin"
+rules = ["12"]
+backends = []
+env = {}
+note = "B-2026-11-04-26: a call through a type-parameter bound is charged the trait method clause, so two par branches calling a no-op impl through `T: Storage` whose method declares writes(Stdout) conflict (design.md §12 Trait methods and generic calls). The expected.out wording of an error pin is guidance, not a byte oracle."
+bucket = "a:refused"

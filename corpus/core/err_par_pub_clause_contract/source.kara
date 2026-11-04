@@ -1,0 +1,12 @@
+// design.md §12 Inference and declarations: "A call to a public function
+// contributes its declared set; the compiler never looks through it." `g`
+// reserves writes(Stdout) though its body prints nothing today, so two
+// `par` branches calling it conflict on the contract, not on the body.
+pub fn g() -> i64 with writes(Stdout) {
+    1
+}
+
+fn main() with writes(Stdout) {
+    let (a, b) = par { g(), g() };
+    println(f"{a + b}");
+}

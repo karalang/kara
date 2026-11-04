@@ -1,0 +1,22 @@
+// design.md §12: a caller is charged a public function's declared set.
+// Reads never conflict with reads, and `Network`/`FileSystem` are
+// capabilities rather than conflict keys (core-semantics §12 item 5), so
+// two branches calling functions that declare them still run apart.
+pub fn stamp() -> i64 with reads(Clock) {
+    2
+}
+
+pub fn fetch() -> i64 with sends(Network) receives(Network) {
+    3
+}
+
+pub fn save() -> i64 with writes(FileSystem) {
+    4
+}
+
+fn main() with reads(Clock) sends(Network) receives(Network) writes(FileSystem) writes(Stdout) {
+    let (a, b) = par { stamp(), stamp() };
+    let (c, d) = par { fetch(), fetch() };
+    let (e, f) = par { save(), save() };
+    println(f"{a + b + c + d + e + f}");
+}

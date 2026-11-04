@@ -1,0 +1,25 @@
+// design.md §12 Trait methods and generic calls: "a call through a
+// type-parameter bound has the clause's effects, whatever the instance's
+// impl does". `Ro.save` does nothing, but `via` calls it through
+// `T: Storage`, whose method writes Stdout, so two branches conflict.
+trait Storage {
+    fn save(self) with writes(Stdout);
+}
+
+struct Ro {}
+
+impl Storage for Ro {
+    fn save(self) {}
+}
+
+fn via[T: Storage](s: T) -> i64 {
+    s.save();
+    1
+}
+
+fn main() with writes(Stdout) {
+    let a = Ro {};
+    let b = Ro {};
+    let (x, y) = par { via(a), via(b) };
+    println(f"{x + y}");
+}

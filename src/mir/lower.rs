@@ -472,6 +472,7 @@ fn lower_program_inner<'a>(
         default_queue: Vec::new(),
         resource_bounds: FxHashMap::default(),
         trait_defs: FxHashMap::default(),
+        impl_method_trait: FxHashMap::default(),
         trait_impl_fns: FxHashMap::default(),
         bound_resources: FxHashSet::default(),
         bindings: FxHashMap::default(),
@@ -1136,6 +1137,10 @@ struct Lcx<'a> {
     resource_bounds: FxHashMap<String, Vec<String>>,
     /// Every trait the program declares, by name.
     trait_defs: FxHashMap<String, &'a ast::TraitDef>,
+    /// The trait of each trait-impl method that writes no `with` clause of
+    /// its own, by the method's span: such a method is held to its trait
+    /// method's clause (B-2026-11-04-26).
+    impl_method_trait: FxHashMap<SpanKey, &'a String>,
     /// The methods of the first impl of each trait, which stand for the
     /// trait's own when its declaration is not in the program (the
     /// library's `EnvProvider` is the checker's, not the MIR library's).
@@ -1591,6 +1596,14 @@ impl<'a> Lcx<'a> {
                 }
                 Item::ImplBlock(b) => {
                     if let Some(t) = b.trait_name.as_ref().and_then(|t| t.segments.last()) {
+                        for it in &b.items {
+                            if let ImplItem::Method(f) = it {
+                                if f.effects.is_none() {
+                                    self.impl_method_trait
+                                        .insert(SpanKey::from_span(&f.span), t);
+                                }
+                            }
+                        }
                         self.trait_impl_fns.entry(t.clone()).or_insert_with(|| {
                             b.items
                                 .iter()
@@ -5233,12 +5246,39 @@ impl<'l, 'a> Bx<'l, 'a> {
                 .any(|i| matches!(i, ast::EffectItem::Variable(_)))
         });
         // See [`Program::clause_effects`].
-        // Only declared resources: `sends(self)` or `writes(f)` roots a
-        // resource at a value, which the body's own sites key.
-        if let Some(list) = f.effects.as_ref().and_then(declared_effect_list) {
+        // Only named resources, the program's or the host's: `sends(self)`
+        // or `writes(f)` roots a resource at a value, and a `Channel` is
+        // keyed by its endpoint, both of which the body's own sites key.
+        // A trait impl's method with no clause of its own is held to its
+        // trait method's: a call through a bound has the clause's effects
+        // whatever the instance does (design.md §12, B-2026-11-04-26).
+        let inherited = f
+            .effects
+            .is_none()
+            .then(|| self.lcx.impl_method_trait.get(&SpanKey::from_span(&f.span)))
+            .flatten()
+            .and_then(|t| self.lcx.trait_defs.get(*t))
+            .and_then(|t| {
+                t.items.iter().find_map(|it| match it {
+                    ast::TraitItem::Method(m) if m.name == f.name => m.effects.as_ref(),
+                    _ => None,
+                })
+            });
+        if let Some(list) = f
+            .effects
+            .as_ref()
+            .or(inherited)
+            .and_then(declared_effect_list)
+        {
             let list: Vec<DeclaredEffect> = list
                 .into_iter()
-                .filter(|d| self.lcx.resource_bounds.contains_key(&d.resource))
+                .filter(|d| {
+                    self.lcx.resource_bounds.contains_key(&d.resource)
+                        || (d.resource != "Channel"
+                            && (crate::target::is_host_resource(&d.resource)
+                                || crate::prelude::PRELUDE_EFFECT_RESOURCES
+                                    .contains(&d.resource.as_str())))
+                })
                 .collect();
             if !list.is_empty() {
                 let name = self.b.instance().name.clone();
