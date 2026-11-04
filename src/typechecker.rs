@@ -6014,6 +6014,25 @@ impl<'a> TypeChecker<'a> {
         self.reported_uninferrable_empty_literal = true;
     }
 
+    /// [`Self::report_empty_prefix_literal`] for the list literal `[]`.
+    pub(super) fn report_empty_list_literal(&mut self, span: &Span) {
+        // `Vec.new()` takes its element type from later use (`w.push(1)`),
+        // which the literal does not.
+        self.type_error_with_fix_it(
+            "error[E_EMPTY_PREFIX_LITERAL_NEEDS_ANNOTATION]: cannot infer the element \
+             type of the empty list literal `[]`: this `let` does not say what it \
+             holds. Give the binding a type, `let v: Vec[T] = []`, or use `Vec.new()`"
+                .to_string(),
+            *span,
+            TypeErrorKind::TypeMismatch,
+            FixIt {
+                span: *span,
+                replacement: "Vec.new()".to_string(),
+            },
+        );
+        self.reported_uninferrable_empty_literal = true;
+    }
+
     /// Default `_` arm body for per-type `infer_*_method` dispatch on arms
     /// whose typechecker enumeration has reached parity with the interpreter:
     /// **always** emit `NoMethodFound`, type-check the arguments, and return

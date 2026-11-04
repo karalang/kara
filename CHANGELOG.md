@@ -138,6 +138,17 @@ accepted by 0.8.0 are now refused, each with a fix-it.
   and `it.by_ref()` for a `mut ref` one. It used to type the loop variable as
   the iterator (B-2026-11-04-17). The item of `it.by_ref()` under
   `I: Iterator[Item = i64]` is `i64`, not `I.Item`.
+- A `let` keeping a borrow of a `Vec[..]`, `vec![..]`, repeat or map
+  literal's temporary (`let g = Vec["a"].last();`) is refused at the
+  statement with the §5.5 temporary rule, as the list literal already was;
+  it was refused only later by the MIR borrow check (E0516), which another
+  error could hide (B-2026-11-04-45).
+- `let w = [];` with no type names the problem
+  (`E_EMPTY_PREFIX_LITERAL_NEEDS_ANNOTATION`) and `karac fix` writes
+  `Vec.new()`; it was refused with an internal "not lowered yet" message
+  (B-2026-11-04-44). A `for` over a borrowed concrete iterator
+  (`it: VecIntoIter[i64]`) gets the borrowed-iterator diagnostic and fix
+  above instead of the same internal message.
 - An inherent `m(self)` called as `s.m()` borrows `s` even when a trait's
   `m(own self)` is also implemented for the type; the ownership check
   charged the trait's mode (B-2026-11-04-12).

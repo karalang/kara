@@ -80,9 +80,8 @@ impl super::Formatter {
     /// collection literal there reads back as a type application
     /// (`Vec[Vec["a"]].len()` parses as `Vec[T].len` with `T = Vec["a"]`), so
     /// one is parenthesized, `(Vec[1, 2]).len()`, unless it was written
-    /// `vec![..]`, which is kept. Neither becomes the bare `[..]`: a `let`
-    /// keeping a borrow of `["a"]` and of `Vec["a"]` are refused by two
-    /// different rules (PREDICTS B-2026-11-04-45).
+    /// `vec![..]`, which is kept. Neither becomes the bare `[..]`: the
+    /// formatter prints a literal as written.
     fn format_receiver(&mut self, object: &Expr) {
         if self.paren_block_like_at_stmt_start(object) {
             return;

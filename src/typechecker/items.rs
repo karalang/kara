@@ -2351,6 +2351,9 @@ impl<'a> super::TypeChecker<'a> {
             ExprKind::StructLiteral { .. }
                 | ExprKind::Tuple(_)
                 | ExprKind::ArrayLiteral(_)
+                | ExprKind::PrefixCollectionLiteral { .. }
+                | ExprKind::RepeatLiteral { .. }
+                | ExprKind::MapLiteral { .. }
                 | ExprKind::Integer(..)
                 | ExprKind::Float(..)
                 | ExprKind::StringLit(_)
@@ -8884,6 +8887,11 @@ impl<'a> super::TypeChecker<'a> {
             | ExprKind::Bool(_)
             | ExprKind::Binary { .. }
             | ExprKind::ArrayLiteral(_)
+            // A prefix (`Vec[..]`, `vec![..]`), repeat or map literal builds a
+            // value as surely as `[..]` does (B-2026-11-04-45).
+            | ExprKind::PrefixCollectionLiteral { .. }
+            | ExprKind::RepeatLiteral { .. }
+            | ExprKind::MapLiteral { .. }
             | ExprKind::StructLiteral { .. }
             | ExprKind::Cast { .. } => true,
             ExprKind::FieldAccess { object, .. }
@@ -9679,6 +9687,14 @@ impl<'a> super::TypeChecker<'a> {
                     declared
                 } else {
                     let inferred = self.infer_expr(value);
+                    // design.md § Collection literals: an empty literal takes
+                    // its element type from the expected type, and an
+                    // unannotated `let` gives none. `let w = [];` typed as
+                    // `Vec[Error]` and MIR refused it as "a type that failed
+                    // to check is not lowered yet" (B-2026-11-04-44).
+                    if matches!(&value.kind, ExprKind::ArrayLiteral(items) if items.is_empty()) {
+                        self.report_empty_list_literal(&value.span);
+                    }
                     self.check_unsolved_type_param(&inferred, &value.span);
                     self.record_uninferrable_binding_origin(pattern, &inferred, value);
                     inferred
@@ -10038,6 +10054,14 @@ impl<'a> super::TypeChecker<'a> {
                     declared
                 } else {
                     let inferred = self.infer_expr(value);
+                    // design.md § Collection literals: an empty literal takes
+                    // its element type from the expected type, and an
+                    // unannotated `let` gives none. `let w = [];` typed as
+                    // `Vec[Error]` and MIR refused it as "a type that failed
+                    // to check is not lowered yet" (B-2026-11-04-44).
+                    if matches!(&value.kind, ExprKind::ArrayLiteral(items) if items.is_empty()) {
+                        self.report_empty_list_literal(&value.span);
+                    }
                     self.check_unsolved_type_param(&inferred, &value.span);
                     self.record_uninferrable_binding_origin(pattern, &inferred, value);
                     inferred

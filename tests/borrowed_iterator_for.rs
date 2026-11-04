@@ -2,7 +2,9 @@
 //! is consumed. `for x in it` moves `it`", and "To loop over an iterator
 //! without consuming it, write `for x in it.by_ref()`". A `for` over a
 //! borrowed iterator parameter bound the loop variable to the borrow
-//! itself ("expected 'i64', found 'ref I'" at the first use of `x`). It is
+//! itself ("expected 'i64', found 'ref I'" at the first use of `x`), and a
+//! concrete one reached MIR as "a `for` loop over a collection is not
+//! lowered yet". It is
 //! refused at `it`, and `karac fix` reaches a program that runs.
 
 use std::process::{Command, Stdio};
@@ -36,6 +38,12 @@ fn a_for_over_a_borrowed_iterator_is_refused_and_fixed() {
             "",
             "`it` is 'ref impl Iterator[..]', a borrowed iterator",
             "(it: own impl Iterator[Item = i64])",
+        ),
+        (
+            "(it: VecIntoIter[i64])",
+            "",
+            "`it` is 'ref VecIntoIter[i64]', a borrowed iterator",
+            "(it: own VecIntoIter[i64])",
         ),
         (
             "[I: Iterator[Item = i64]](it: mut ref I)",

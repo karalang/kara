@@ -330,7 +330,8 @@ impl<'a> super::TypeChecker<'a> {
     }
 
     /// B-2026-11-04-17 — a `for` over a borrow of a type parameter bounded by
-    /// `Iterator` (`it: I`, `it: mut ref I`, `it: impl Iterator[..]`). The
+    /// `Iterator` (`it: I`, `it: mut ref I`, `it: impl Iterator[..]`), or of
+    /// a concrete non-`Copy` iterator type. The
     /// loop consumes an `Iterator` (design.md § `Iterator` and `Iterable`),
     /// and a borrow cannot be consumed, so this is refused naming the way
     /// out: `.by_ref()` from a `mut ref`, `own` for a read-only borrow, whose
@@ -341,15 +342,37 @@ impl<'a> super::TypeChecker<'a> {
             Type::MutRef(inner) => (inner.as_ref(), true),
             _ => return None,
         };
-        let param = self.type_param_name(inner)?.clone();
-        let bounds = self.enclosing_bounds.get(&param)?;
-        let is = |t: &str| bounds.iter().any(|b| b.path.last().is_some_and(|n| n == t));
-        if !is("Iterator") || is("Iterable") {
-            return None;
+        let param = self.type_param_name(inner).cloned();
+        match &param {
+            Some(param) => {
+                let bounds = self.enclosing_bounds.get(param)?;
+                let is = |t: &str| bounds.iter().any(|b| b.path.last().is_some_and(|n| n == t));
+                if !is("Iterator") || is("Iterable") {
+                    return None;
+                }
+            }
+            // A concrete iterator (`it: VecIntoIter[i64]`, a user type with
+            // `impl Iterator`) reached MIR as "a `for` loop over a collection
+            // is not lowered yet". A `Copy` one is consumed by copying it.
+            None => {
+                let Type::Named { name, args } = inner else {
+                    return None;
+                };
+                if !self.env.has_impl("Iterator", name, args)
+                    || self.env.has_impl("Iterable", name, args)
+                    || Self::for_iterable_is_core_collection(inner)
+                    || self.is_copy_type_during_check(inner)
+                {
+                    return None;
+                }
+            }
         }
         // `it: impl Iterator[..]` desugars to a synthetic parameter; name it
         // as written.
-        let inner_shown = if param.starts_with("T_impl_arg_") {
+        let inner_shown = if param
+            .as_deref()
+            .is_some_and(|p| p.starts_with("T_impl_arg_"))
+        {
             "impl Iterator[..]".to_string()
         } else {
             type_display(inner)
