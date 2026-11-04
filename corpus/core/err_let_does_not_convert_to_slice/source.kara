@@ -1,0 +1,8 @@
+// design.md § Slices: a `Vec[T]` passes as a `Slice[T]` at a call boundary;
+// "`let` and assignment do not convert". The view is named with
+// `.as_slice()` (B-2026-11-04-59).
+fn main() {
+    let v = [1, 2, 3];
+    let w: Slice[i64] = v;
+    println(w.len());
+}

@@ -2598,6 +2598,11 @@ fn main() -> () {
             // refused by the strict task-group pass (B-2026-11-01-32).
             "err_taskgroup_copy_read_then_written",
             "err_taskgroup_copy_read_in_loop_then_written",
+            // A compound assignment whose result would narrow back into the
+            // place, and a `let` of a `Vec` into a `Slice` (B-2026-11-04-59).
+            "err_compound_assign_narrows",
+            "err_compound_assign_float_narrows",
+            "err_let_does_not_convert_to_slice",
         ];
         // Pins that call Kāra library functions, which `check_built` does
         // not append (a `select` desugars to calls into sync.kara;

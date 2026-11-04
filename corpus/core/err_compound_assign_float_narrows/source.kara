@@ -1,0 +1,9 @@
+// design.md §5, Compound assignment, for floats: `f + d` with `f: f32` and
+// `d: f64` is an `f64`, which does not convert implicitly back to `f`'s
+// `f32` (B-2026-11-04-59).
+fn main() {
+    let mut f: f32 = 1.5;
+    let d: f64 = 2.0;
+    f += d;
+    println(f);
+}

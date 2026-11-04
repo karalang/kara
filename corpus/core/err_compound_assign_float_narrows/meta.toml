@@ -1,0 +1,11 @@
+source = "B-2026-11-04-59"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["numeric", "compound-assign"]
+class = "a"
+expected_from = "pin"
+backends = []
+env = {}
+note = "B-2026-11-04-59: refused at check (design.md §5 Compound assignment / § Slices); it used to pass check and stop in MIR. The expected.out wording of an error pin is guidance, not a byte oracle."
+bucket = "a:refused"

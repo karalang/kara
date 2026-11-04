@@ -9666,6 +9666,58 @@ impl<'a> super::TypeChecker<'a> {
     /// core-semantics.md §5.1 (B-2026-10-15-14): a `let` annotation states
     /// the type and never creates the borrow. `let p: mut ref P = w.p;` would
     /// move `w.p`; the fix writes the operator, `mut ref w.p`.
+    /// design.md § Slices: "`let` and assignment do not convert" a
+    /// `Vec[T]` or `Array[T, N]` to a `Slice[T]`; that happens only at a
+    /// call boundary. `types_compatible` accepts the pair for the call
+    /// case, so a `let w: Slice[i64] = v;` cleared check and stopped in
+    /// MIR (B-2026-11-04-59). The fix names the view: `v.as_slice()`.
+    fn reject_slice_conversion(&mut self, value: &Expr, declared: &Type, site: &str) {
+        let Type::Slice { mutable, .. } = declared else {
+            return;
+        };
+        let Some(found) = self
+            .expr_types
+            .get(&SpanKey::from_span(&value.span))
+            .cloned()
+        else {
+            return;
+        };
+        let mut have = &found;
+        while let Type::Ref(inner) | Type::MutRef(inner) = have {
+            have = inner.as_ref();
+        }
+        let collection = match have {
+            Type::Named { name, args } if name == "Vec" && args.len() == 1 => "Vec",
+            Type::Array { .. } => "Array",
+            _ => return,
+        };
+        let method = if *mutable { "as_slice_mut" } else { "as_slice" };
+        let msg = format!(
+            "{site} does not convert a `{}` to `{}` (design.md § Slices: a `{collection}` \
+             becomes a slice only at a call boundary); name the view with `.{method}()`",
+            type_display(have),
+            type_display(declared),
+        );
+        let place = matches!(
+            value.kind,
+            ExprKind::Identifier(_) | ExprKind::FieldAccess { .. } | ExprKind::MethodCall { .. }
+        );
+        if place {
+            let text = crate::formatter::render_expr(value);
+            self.type_error_with_fix_it(
+                msg,
+                value.span,
+                TypeErrorKind::TypeMismatch,
+                super::FixIt {
+                    span: value.span,
+                    replacement: format!("{text}.{method}()"),
+                },
+            );
+        } else {
+            self.type_error(msg, value.span, TypeErrorKind::TypeMismatch);
+        }
+    }
+
     fn reject_borrow_by_annotation(&mut self, value: &Expr, declared: &Type) {
         if !(self.cli_lint_overrides.strict_core || self.library_methods_from_source)
             || !super::expr_ops::is_named_place_projection(value)
@@ -9768,6 +9820,7 @@ impl<'a> super::TypeChecker<'a> {
                     let scope = self.current_body_dim_scope.clone();
                     let declared = self.lower_body_type_expr(ty_expr, &scope);
                     self.check_expr(value, &declared);
+                    self.reject_slice_conversion(value, &declared, "`let`");
                     self.reject_borrow_by_annotation(value, &declared);
                     self.check_core_collect_into(value, &declared);
                     self.record_declared_type_for_polymorphic_rhs(value, &declared);
@@ -10138,6 +10191,7 @@ impl<'a> super::TypeChecker<'a> {
                     let scope = self.current_body_dim_scope.clone();
                     let declared = self.lower_body_type_expr(ty_expr, &scope);
                     self.check_expr(value, &declared);
+                    self.reject_slice_conversion(value, &declared, "`let`");
                     declared
                 } else {
                     let inferred = self.infer_expr(value);
@@ -10353,6 +10407,11 @@ impl<'a> super::TypeChecker<'a> {
                     _ => target_ty.clone(),
                 };
                 self.check_expr(value, &slot_ty);
+                // `v[1..] = [5, 6]` writes elements through the range; it
+                // rebinds no slice (B-2026-10-21-36).
+                if !matches!(target.kind, ExprKind::Index { .. }) {
+                    self.reject_slice_conversion(value, &slot_ty, "assignment");
+                }
                 self.drop_repeated_errors(errors_before_rhs, errors_before_check);
             }
             StmtKind::CompoundAssign { target, value, op } => {
@@ -10390,6 +10449,34 @@ impl<'a> super::TypeChecker<'a> {
                         .cloned()
                     {
                         self.check_assignable(&tt, &result, value.span);
+                    }
+                } else if let Some(tt) = self
+                    .expr_types
+                    .get(&SpanKey::from_span(&target.span))
+                    .cloned()
+                {
+                    // design.md §5, Compound assignment: "`p op= e` computes
+                    // `p op e` by the same rule, and the result must then
+                    // convert implicitly to the type of `p`". The mixed-width
+                    // rule may have widened the result past `p`'s own type
+                    // (`n_i32 += total_i64` is an `i64`), which must not
+                    // narrow back silently (B-2026-11-04-59).
+                    let mut place_ty = tt;
+                    while let Type::Ref(inner) | Type::MutRef(inner) = place_ty {
+                        place_ty = *inner;
+                    }
+                    let numeric =
+                        |t: &Type| matches!(t, Type::Int(_) | Type::UInt(_) | Type::Float(_));
+                    if numeric(&place_ty) && numeric(&result) && place_ty != result {
+                        let value_ty = self
+                            .expr_types
+                            .get(&SpanKey::from_span(&value.span))
+                            .cloned()
+                            .unwrap_or_else(|| result.clone());
+                        if self.check_assignable(&place_ty, &result, value.span) {
+                            self.check_int_widening_coercion(value, &place_ty, &value_ty);
+                            self.check_float_narrowing_coercion(value, &place_ty, &value_ty);
+                        }
                     }
                 }
                 self.check_assignment_target_is_place(target, None);

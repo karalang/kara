@@ -1,0 +1,9 @@
+// design.md §5, Compound assignment: "`total_i64 += n_i32` is legal, and
+// `n_i32 += total_i64` is an error": `n + total` is an `i64`, which does
+// not convert implicitly back to `n`'s `i32` (B-2026-11-04-59).
+fn main() {
+    let total: i64 = 5;
+    let mut n: i32 = 3;
+    n += total;
+    println(n);
+}

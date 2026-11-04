@@ -6888,7 +6888,17 @@ impl<'l, 'a> Bx<'l, 'a> {
         let rhs = if matches!(bin, BinOp::Shl | BinOp::Shr) {
             rhs
         } else {
-            self.fit_const(rhs, t)
+            // `total_i64 += n_i32` (design.md §5, Compound assignment):
+            // `total op n` widens the narrower operand losslessly, as the
+            // plain binary form does, and the checker has refused a result
+            // that would not fit back in the place (B-2026-11-04-59).
+            let rhs = self.fit_const(rhs, t);
+            let rt = self.operand_ty(&rhs);
+            if rt != t && self.lossless(rt, t) {
+                self.widen(rhs, t)
+            } else {
+                rhs
+            }
         };
         self.arith(bin, lhs, rhs, t, place);
         Ok(())

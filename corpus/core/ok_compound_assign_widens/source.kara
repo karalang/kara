@@ -1,0 +1,24 @@
+// design.md §5, Compound assignment: `p op= e` computes `p op e` by the
+// mixed-width rule (the narrower operand widens losslessly), and the result
+// must then convert implicitly to the type of `p` (B-2026-11-04-59).
+fn main() {
+    let mut total: i64 = 5;
+    let n: i32 = 3;
+    total += n;
+    let s: i16 = 7;
+    total -= s;
+    total *= s;
+    let mut w: u64 = 10;
+    let b: u8 = 2;
+    w += b;
+    let mut g: f64 = 2.0;
+    let h: f32 = 0.5;
+    g += h;
+    let mut v: Vec[i64] = [1, 2].to_vec();
+    v[0] += n;
+    // A shift's amount keeps its own type.
+    let mut x: i64 = 1;
+    let k: u32 = 4;
+    x <<= k;
+    println(f"{total} {w} {g} {v} {x}");
+}
