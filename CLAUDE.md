@@ -191,6 +191,13 @@ CARGO_PROFILE_TEST_DEBUG=line-tables-only cargo test --features llvm   # ~250 ->
 cargo clean -p karac                                                    # between legs
 ```
 
+- **Since LLVM 22 the `--features llvm` test leg does not fit at all** in a
+  cloud container: about 24 GiB is used before it starts, and linking every
+  test binary runs out even after `rm -rf target/debug`. Run it as
+  `bash scripts/llvm-leg-split.sh`, one target at a time, deleting each test
+  binary after it runs. It honors the plain leg's environment and prints the
+  pass/fail totals to compare with a whole-leg run.
+
 Read `df` AFTER the failing leg, and re-run the named failures alone before
 blaming a commit you rebased onto.
 
