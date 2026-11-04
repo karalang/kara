@@ -241,7 +241,33 @@ impl<'a> super::OwnershipChecker<'a> {
                 ExprKind::Identifier(name) => param_types.get(name).cloned(),
                 _ => None,
             });
-        matches!(ty, Some(Type::Ref(_)) | Some(Type::MutRef(_)))
+        if matches!(ty, Some(Type::Ref(_)) | Some(Type::MutRef(_))) {
+            return true;
+        }
+        // B-2026-11-04-35: a field of a place reached through a borrow
+        // (`p.cost` with `p` from `.iter()`) is matched in place: its
+        // bindings borrow too (core semantics §4.6), so the match reads it.
+        let mut e = scrutinee;
+        while let ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } =
+            &e.kind
+        {
+            e = object;
+        }
+        if std::ptr::eq(e, scrutinee) {
+            return false;
+        }
+        let root = self
+            .typecheck_result
+            .expr_type(e)
+            .cloned()
+            .or_else(|| match &e.kind {
+                ExprKind::Identifier(name) => param_types
+                    .get(name)
+                    .or_else(|| self.binding_types.get(name))
+                    .cloned(),
+                _ => None,
+            });
+        matches!(root, Some(Type::Ref(_)) | Some(Type::MutRef(_)))
     }
 
     /// GPU-SLIP-4b-2b: the buffer argument (index 1) of a resident

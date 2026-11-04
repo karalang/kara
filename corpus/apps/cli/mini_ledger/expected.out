@@ -1,0 +1,253 @@
+== load
+data/2025.journal: 140 directives
+data/2026.journal: 27 directives
+data/accounts.journal: 24 directives
+data/bank.csv: 37 rows, 33 matched, 4 to Expenses:Uncategorized
+data/bank.csv:11: bad date "13/45/2026"
+data/prices.journal: 61 directives
+data/zz_broken.journal: 13 directives
+data/zz_broken.journal:2: bad date "2026-02-30"
+data/zz_broken.journal:26: an added lot needs a cost
+data/zz_broken.journal:30: bad amount "12.3.4 USD"
+data/zz_broken.journal:55: posting outside a transaction
+data/zz_broken.journal:56: unknown directive "pad"
+data/zz_broken.journal:57: cannot parse line
+data/zz_broken.journal:59: transaction needs a payee
+data/zz_broken.journal:63: bad account name "expenses:food"
+== check
+2025-12-31 data/zz_broken.journal:54: balance failed: Assets:Bank:Savings expected 99.00 USD, got 17,405.20 USD
+2026-01-01 data/zz_broken.journal:58: account Assets:Bank:Checking is already open
+2026-02-01 data/zz_broken.journal:49: account Assets:Bank:Credit-Union is not open yet
+2026-03-02 data/zz_broken.journal:5: transaction does not balance: 0.01 USD
+2026-03-03 data/zz_broken.journal:9: more than one posting without an amount
+2026-03-04 data/zz_broken.journal:13: unknown account Expenses:Food:Grocery
+2026-03-05 data/zz_broken.journal:17: account Assets:Bank:Old-Checking is closed
+2026-03-06 data/zz_broken.journal:21: not enough VTI in Assets:Broker:Stocks: have 20, need 40
+2026-03-09 data/zz_broken.journal:33: account Assets:Wise:EUR does not take USD
+2026-03-10 data/zz_broken.journal:37: not enough AAPL {150.00 USD} in Assets:Broker:Stocks: have 0, need 2
+2026-03-11 data/zz_broken.journal:41: nothing to fill in the posting without an amount
+2026-03-12 data/zz_broken.journal:45: account Assets:Broker:Stocks does not take USD
+303 directives, 194 transactions, 10 refused, 21 balance assertions, 1 failed
+== write
+data/out/ledger.journal: 292 directives, 23062 bytes
+round trip: 292 directives, 1 reported again, every balance matches
+== reports
+> balance --depth 2
+              1 AAPL  Assets
+        1,203.85 EUR
+             11 MSFT
+       70,125.94 USD
+              20 VTI
+       65,866.74 USD    Bank
+              1 AAPL    Broker
+             11 MSFT
+        4,259.20 USD
+              20 VTI
+        1,203.85 EUR    Wise
+         -216.89 USD  Liabilities
+         -216.89 USD    Card
+      -19,450.00 USD  Equity
+      -19,450.00 USD    Opening-Balances
+      -98,918.14 USD  Income
+         -662.55 USD    Capital-Gains
+         -146.45 USD    Dividends
+         -609.14 USD    Interest
+      -97,500.00 USD    Salary
+          796.15 EUR  Expenses
+       36,171.29 USD
+            4.95 USD    Fees
+          109.85 EUR    Food
+        4,575.77 USD
+       27,975.00 USD    Rent
+           82.44 USD    Subscriptions
+           31.30 EUR    Transport
+          232.21 USD
+          655.00 EUR    Travel
+        1,430.21 USD    Uncategorized
+        1,870.71 USD    Utilities
+--------------------
+              1 AAPL
+        2,000.00 EUR
+             11 MSFT
+      -12,287.80 USD
+              20 VTI
+> balance Expenses
+          796.15 EUR  Expenses
+       36,171.29 USD
+            4.95 USD    Fees
+          109.85 EUR    Food
+        4,575.77 USD
+           26.82 USD      Coffee
+        3,705.59 USD      Groceries
+          109.85 EUR      Restaurants
+          843.36 USD
+       27,975.00 USD    Rent
+           82.44 USD    Subscriptions
+           31.30 EUR    Transport
+          232.21 USD
+          158.33 USD      Fuel
+           31.30 EUR      Transit
+           73.88 USD
+          655.00 EUR    Travel
+        1,430.21 USD    Uncategorized
+        1,870.71 USD    Utilities
+--------------------
+          796.15 EUR
+       36,171.29 USD
+> balance --at 2025-06-30 Assets Liabilities
+             18 AAPL  Assets
+          718.85 EUR
+       33,718.38 USD
+              20 VTI
+       33,552.71 USD    Bank
+       21,341.19 USD      Checking
+       12,211.52 USD      Savings
+             18 AAPL    Broker
+          165.67 USD
+              20 VTI
+          165.67 USD      Cash
+             18 AAPL      Stocks
+              20 VTI
+          718.85 EUR    Wise
+          718.85 EUR      EUR
+--------------------
+             18 AAPL
+          718.85 EUR
+       33,718.38 USD
+              20 VTI
+> register Assets:Bank:Checking --from 2026-03-01
+2026-03-01 Parkview Apartments  Assets:Bank:Checking            -1,925.00 USD    -1,925.00 USD
+2026-03-05 PG&E                 Assets:Bank:Checking              -140.38 USD    -2,065.38 USD
+2026-03-15 Acme Robotics        Assets:Bank:Checking             3,450.00 USD     1,384.62 USD
+2026-03-26 Card payment         Assets:Bank:Checking              -400.00 USD       984.62 USD
+2026-03-31 Acme Robotics        Assets:Bank:Checking             3,450.00 USD     4,434.62 USD
+> register Liabilities:Card --to 2026-01-20
+2026-01-03 Netflix              Liabilities:Card:Visa              -15.49 USD       -15.49 USD
+2026-01-03 Whole Foods          Liabilities:Card:Visa              -64.98 USD       -80.47 USD
+2026-01-06 BLUE BOTTLE COFFEE,  Liabilities:Card:Visa              -10.31 USD       -90.78 USD
+2026-01-09 Spotify              Liabilities:Card:Visa              -11.99 USD      -102.77 USD
+2026-01-11 Whole Foods          Liabilities:Card:Visa             -100.36 USD      -203.13 USD
+2026-01-14 Shell                Liabilities:Card:Visa              -49.25 USD      -252.38 USD
+2026-01-16 AMZN Mktp US*2K4L19  Liabilities:Card:Visa              -76.96 USD      -329.34 USD
+2026-01-20 Whole Foods          Liabilities:Card:Visa              -36.48 USD      -365.82 USD
+> register Assets:Broker:Stocks
+2025-02-10 Fidelity             Assets:Broker:Stocks                  10 AAPL          10 AAPL
+2025-03-03 Fidelity             Assets:Broker:Stocks                   20 VTI           20 VTI
+2025-05-12 Fidelity             Assets:Broker:Stocks                   8 AAPL          18 AAPL
+2025-08-04 Fidelity             Assets:Broker:Stocks                   5 MSFT           5 MSFT
+2025-11-14 Fidelity             Assets:Broker:Stocks                 -12 AAPL           6 AAPL
+2026-02-09 Fidelity             Assets:Broker:Stocks                   6 MSFT          11 MSFT
+2026-03-10 Fidelity             Assets:Broker:Stocks                  -5 AAPL           1 AAPL
+> value USD
+       48,257.60 USD  Assets:Bank:Checking
+       17,609.14 USD  Assets:Bank:Savings
+        4,259.20 USD  Assets:Broker:Cash
+          178.89 USD  Assets:Broker:Stocks  (1 AAPL)
+        4,626.60 USD  Assets:Broker:Stocks  (11 MSFT)
+        5,876.60 USD  Assets:Broker:Stocks  (20 VTI)
+        1,286.55 USD  Assets:Wise:EUR  (1,203.85 EUR)
+         -216.89 USD  Liabilities:Card:Visa
+--------------------
+       81,877.69 USD
+> value USD --at 2025-06-30
+       21,341.19 USD  Assets:Bank:Checking
+       12,211.52 USD  Assets:Bank:Savings
+          165.67 USD  Assets:Broker:Cash
+        3,092.58 USD  Assets:Broker:Stocks  (18 AAPL)
+        5,695.60 USD  Assets:Broker:Stocks  (20 VTI)
+          765.00 USD  Assets:Wise:EUR  (718.85 EUR)
+--------------------
+       43,271.56 USD
+> value EUR --at 2025-06-30
+       20,053.74 EUR  Assets:Bank:Checking  (21,341.19 USD)
+       11,474.84 EUR  Assets:Bank:Savings  (12,211.52 USD)
+          155.68 EUR  Assets:Broker:Cash  (165.67 USD)
+             18 AAPL  Assets:Broker:Stocks  (no price in EUR)
+              20 VTI  Assets:Broker:Stocks  (no price in EUR)
+          718.85 EUR  Assets:Wise:EUR
+--------------------
+       32,403.10 EUR
+> income 2025-01-01 2025-12-31
+      -77,834.64 USD  Income
+         -463.30 USD    Capital-Gains
+         -115.38 USD    Dividends
+         -455.96 USD    Interest
+      -76,800.00 USD    Salary
+          781.15 EUR  Expenses
+       27,354.74 USD
+            4.95 USD    Fees
+          109.85 EUR    Food
+        3,703.74 USD
+        2,908.62 USD      Groceries
+          109.85 EUR      Restaurants
+          795.12 USD
+       22,200.00 USD    Rent
+           31.30 EUR    Transport
+           31.30 EUR      Transit
+          640.00 EUR    Travel
+        1,446.05 USD    Utilities
+--------------------
+         -781.15 EUR  net income
+       50,479.90 USD  net income
+> income 2026-01-01 2026-03-31
+      -21,083.50 USD  Income
+         -199.25 USD    Capital-Gains
+          -31.07 USD    Dividends
+         -153.18 USD    Interest
+      -20,700.00 USD    Salary
+           15.00 EUR  Expenses
+        8,816.55 USD
+          872.03 USD    Food
+           26.82 USD      Coffee
+          796.97 USD      Groceries
+           48.24 USD      Restaurants
+        5,775.00 USD    Rent
+           82.44 USD    Subscriptions
+          232.21 USD    Transport
+          158.33 USD      Fuel
+           73.88 USD      Transit
+           15.00 EUR    Travel
+        1,430.21 USD    Uncategorized
+          424.66 USD    Utilities
+--------------------
+          -15.00 EUR  net income
+       12,266.95 USD  net income
+> lots Assets:Broker
+Assets:Broker:Stocks AAPL
+  2025-05-12  1 AAPL {201.25 USD}  201.25 USD
+Assets:Broker:Stocks MSFT
+  2025-08-04  5 MSFT {410.00 USD}  2,050.00 USD
+  2026-02-09  6 MSFT {398.60 USD}  2,391.60 USD
+Assets:Broker:Stocks VTI
+  2025-03-03  20 VTI {270.10 USD}  5,402.00 USD
+> print 2025-11-14 2025-11-14
+2025-11-14 * Fidelity | Sell AAPL
+  Assets:Broker:Stocks  -12 AAPL {} @ 228.40 USD
+  Assets:Broker:Cash  2,735.85 USD
+  Expenses:Fees  4.95 USD
+  Income:Capital-Gains  -463.30 USD
+
+> print 2026-01-20 2026-01-21
+2026-01-20 * Wise | Euros for Porto
+  Assets:Wise:EUR  500.00 EUR @@ 541.65 USD
+  Assets:Bank:Checking  -541.65 USD
+
+2026-01-20 * Whole Foods
+  Liabilities:Card:Visa  -36.48 USD
+  Expenses:Food:Groceries  36.48 USD
+
+> balance Equity:Nothing
+--------------------
+                   0
+> register Assets:Nope
+error: no account Assets:Nope
+> value
+error: value takes a commodity
+> income 2026-03-31 2026-01-01
+error: the period ends before it starts
+> balance --depth x
+error: bad depth "x"
+> income 2026-01-01 2026-02-30
+error: bad date "2026-02-30"
+> frobnicate now
+error: unknown command "frobnicate"

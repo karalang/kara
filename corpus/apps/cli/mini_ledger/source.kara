@@ -1,0 +1,2215 @@
+// mini_ledger: plain-text double-entry accounting, in the shape of
+// ledger-cli, hledger and Beancount. It reads journals of dated
+// directives (each file parsed in a task of its own), imports a bank's
+// card statement through rules, books every transaction in date order
+// (balancing, stock lots held at cost and sold first in first out,
+// currency conversions, balance assertions), writes the accepted journal
+// back out, reads that back to check it, and runs the reports people run
+// at the end of a month.
+
+const ONE: i64 = 1000000;
+
+// ------------------------------------------------------------ numbers
+
+// n / d rounded half away from zero, for d > 0.
+fn rdiv(n: i64, d: i64) -> i64 {
+    let q = (n.abs() * 2 + d) / (2 * d);
+    if n < 0 { -q } else { q }
+}
+
+fn mul(a: i64, b: i64) -> i64 {
+    rdiv(a * b, ONE)
+}
+
+fn pow10(n: i64) -> i64 {
+    let mut p = 1;
+    for _ in 0..n {
+        p *= 10;
+    }
+    p
+}
+
+fn round_to(x: i64, prec: i64) -> i64 {
+    let u = pow10(6 - prec);
+    rdiv(x, u) * u
+}
+
+// A number with `,` grouping and `prec` decimals.
+fn fmt_num(x: i64, prec: i64) -> String {
+    let x = round_to(x, prec);
+    let neg = x < 0;
+    let x = x.abs();
+    let digits = f"{x / ONE}";
+    let mut s = String.new();
+    let n = digits.len();
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 and (n - i) % 3 == 0 {
+            s.push(',');
+        }
+        s.push(c);
+    }
+    if prec > 0 {
+        let frac = f"{x % ONE + ONE}";
+        s.push('.');
+        s.push_str(frac.substring(1, 1 + prec));
+    }
+    if neg and x != 0 {
+        return f"-{s}";
+    }
+    s
+}
+
+fn rjust(s: Str, w: i64) -> String {
+    let mut out = String.new();
+    for _ in s.len()..w {
+        out.push(' ');
+    }
+    out.push_str(s);
+    out
+}
+
+// The first `w` bytes of `s`, padded with spaces to `w`.
+fn cell(s: Str, w: i64) -> String {
+    let mut out = if s.len() > w { s.substring(0, w) } else { s.to_string() };
+    while out.len() < w {
+        out.push(' ');
+    }
+    out
+}
+
+// ------------------------------------------------------------ dates
+
+fn leap(y: i64) -> bool {
+    y % 4 == 0 and (y % 100 != 0 or y % 400 == 0)
+}
+
+fn mdays(y: i64, m: i64) -> i64 {
+    if m == 2 {
+        return if leap(y) { 29 } else { 28 };
+    }
+    if m == 4 or m == 6 or m == 9 or m == 11 { 30 } else { 31 }
+}
+
+fn is_digit(c: u8) -> bool {
+    c >= b'0' and c <= b'9'
+}
+
+fn is_upper(c: u8) -> bool {
+    c >= b'A' and c <= b'Z'
+}
+
+fn is_lower(c: u8) -> bool {
+    c >= b'a' and c <= b'z'
+}
+
+fn all_digits(s: Str) -> bool {
+    s.bytes().iter().all(|c| is_digit(c))
+}
+
+fn date_shape(s: Str) -> bool {
+    let b = s.bytes();
+    s.len() == 10 and b[4] == b'-' and b[7] == b'-'
+}
+
+fn valid_date(s: Str) -> bool {
+    if not date_shape(s) {
+        return false;
+    }
+    let y = s.substring(0, 4);
+    let m = s.substring(5, 7);
+    let d = s.substring(8, 10);
+    if not (all_digits(y) and all_digits(m) and all_digits(d)) {
+        return false;
+    }
+    let y = i64.parse(y).unwrap_or(0);
+    let m = i64.parse(m).unwrap_or(0);
+    let d = i64.parse(d).unwrap_or(0);
+    m >= 1 and m <= 12 and d >= 1 and d <= mdays(y, m)
+}
+
+fn two(n: i64) -> String {
+    if n < 10 { f"0{n}" } else { f"{n}" }
+}
+
+fn next_day(s: Str) -> String {
+    let mut y = i64.parse(s.substring(0, 4)).unwrap_or(0);
+    let mut m = i64.parse(s.substring(5, 7)).unwrap_or(0);
+    let mut d = i64.parse(s.substring(8, 10)).unwrap_or(0) + 1;
+    if d > mdays(y, m) {
+        d = 1;
+        m += 1;
+        if m > 12 {
+            m = 1;
+            y += 1;
+        }
+    }
+    f"{y}-{two(m)}-{two(d)}"
+}
+
+// ------------------------------------------------------------ syntax
+
+const TYPES: Array[Str, 5] = ["Assets", "Liabilities", "Equity", "Income", "Expenses"];
+
+fn type_rank(s: Str) -> i64 {
+    for (i, t) in TYPES.iter().enumerate() {
+        if t == s {
+            return i;
+        }
+    }
+    TYPES.len()
+}
+
+fn valid_account(s: Str) -> bool {
+    let parts: Vec[Str] = s.split(":").collect();
+    if parts.len() < 2 or type_rank(parts[0]) == TYPES.len() {
+        return false;
+    }
+    for p in parts.iter().skip(1) {
+        let b = p.bytes();
+        if b.len() == 0 or not (is_upper(b[0]) or is_digit(b[0])) {
+            return false;
+        }
+        if not b.iter().all(|c| is_upper(c) or is_lower(c) or is_digit(c) or c == b'-') {
+            return false;
+        }
+    }
+    true
+}
+
+fn valid_commodity(s: Str) -> bool {
+    let b = s.bytes();
+    b.len() >= 2 and b.len() <= 10 and is_upper(b[0]) and b.iter().all(|c| is_upper(c) or is_digit(c))
+}
+
+// (micro, decimals written) from a number.
+fn parse_number(s: Str) -> Option[(i64, i64)] {
+    let neg = s.starts_with("-");
+    let body = if neg { s.substring(1) } else { s.to_string() };
+    let (whole, frac) = match body.split_once(".") {
+        Some((w, f)) => {
+            if f.len() == 0 or f.contains(".") {
+                return None;
+            }
+            (w.to_string(), f.to_string())
+        }
+        None => (body.clone(), "".to_string()),
+    };
+    let groups: Vec[Str] = whole.split(",").collect();
+    if groups.len() > 1 {
+        if groups[0].len() < 1 or groups[0].len() > 3 {
+            return None;
+        }
+        for g in groups.iter().skip(1) {
+            if g.len() != 3 {
+                return None;
+            }
+        }
+    }
+    let whole = groups.join("");
+    if whole.len() == 0 or not all_digits(whole) {
+        return None;
+    }
+    if not all_digits(frac) or frac.len() > 6 {
+        return None;
+    }
+    let mut v = i64.parse(whole).ok()? * ONE;
+    if frac.len() > 0 {
+        v += i64.parse(frac).ok()? * pow10(6 - frac.len());
+    }
+    Some((if neg { -v } else { v }, frac.len()))
+}
+
+#[derive(Clone)]
+struct Amount {
+    qty: i64,
+    comm: String,
+    scale: i64,
+}
+
+// `NUMBER COMMODITY`.
+fn parse_amount(s: Str) -> Option[Amount] {
+    let toks: Vec[Str] = s.split_whitespace().collect();
+    if toks.len() != 2 or not valid_commodity(toks[1]) {
+        return None;
+    }
+    let (qty, scale) = parse_number(toks[0])?;
+    Some(Amount { qty: qty, comm: toks[1].to_string(), scale: scale })
+}
+
+fn strip_comment(line: Str) -> String {
+    match line.find(";") {
+        Some(i) => line.substring(0, i),
+        None => line.to_string(),
+    }
+}
+
+#[derive(Clone)]
+enum Cost {
+    NoCost,
+    AnyLot,
+    At(Amount),
+}
+
+#[derive(Clone)]
+enum Price {
+    NoPrice,
+    Unit(Amount),
+    Total(Amount),
+}
+
+#[derive(Clone)]
+struct Posting {
+    account: String,
+    amount: Option[Amount],
+    cost: Cost,
+    price: Price,
+}
+
+fn parse_posting(text: Str) -> Result[Posting, String] {
+    let text = text.trim();
+    let (account, rest) = match text.split_once(" ") {
+        Some((a, r)) => (a.to_string(), r.trim().to_string()),
+        None => (text.to_string(), "".to_string()),
+    };
+    if not valid_account(account) {
+        return Err(f"bad account name \"{account}\"");
+    }
+    let mut p = Posting { account: account, amount: None, cost: Cost.NoCost, price: Price.NoPrice };
+    if rest.len() == 0 {
+        return Ok(p);
+    }
+    let bad = f"bad amount \"{rest}\"";
+    let mut left = rest.clone();
+    if let Some(i) = rest.find("@") {
+        left = rest.substring(0, i).trim().to_string();
+        let total = rest.substring(i + 1).starts_with("@");
+        let pa = if total { parse_amount(rest.substring(i + 2)) } else { parse_amount(rest.substring(i + 1)) };
+        match pa {
+            Some(a) if a.qty >= 0 => {
+                p.price = if total { Price.Total(a) } else { Price.Unit(a) };
+            }
+            _ => return Err(bad),
+        }
+    }
+    if let Some(j) = left.find("{") {
+        let k = match left.find("}") {
+            Some(k) if k > j => k,
+            _ => return Err(bad),
+        };
+        if left.substring(k + 1).trim().len() > 0 {
+            return Err(bad);
+        }
+        let inner = left.substring(j + 1, k).trim().to_string();
+        left = left.substring(0, j).trim().to_string();
+        if inner.len() == 0 {
+            p.cost = Cost.AnyLot;
+        } else {
+            match parse_amount(inner) {
+                Some(c) if c.qty > 0 => p.cost = Cost.At(c),
+                _ => return Err(bad),
+            }
+        }
+    }
+    let a = match parse_amount(left) {
+        Some(a) => a,
+        None => return Err(bad),
+    };
+    if a.qty > 0 and match p.cost { Cost.AnyLot => true, _ => false } {
+        return Err("an added lot needs a cost".to_string());
+    }
+    if a.qty == 0 and match p.price { Price.Total(_) => true, _ => false } {
+        return Err(bad);
+    }
+    p.amount = Some(a);
+    Ok(p)
+}
+
+#[derive(Clone)]
+enum Body {
+    Open(String, Vec[String]),
+    Close(String),
+    Balance(String, Amount),
+    PriceOf(String, Amount),
+    Txn(Txn),
+}
+
+#[derive(Clone)]
+struct Txn {
+    flag: String,
+    payee: String,
+    narration: String,
+    postings: Vec[Posting],
+}
+
+#[derive(Clone)]
+struct Directive {
+    date: String,
+    file: String,
+    fidx: i64,
+    line: i64,
+    body: Body,
+}
+
+impl Directive {
+    fn rank(self) -> i64 {
+        match self.body {
+            Body.Open(_, _) => 0,
+            Body.Balance(_, _) => 1,
+            Body.Close(_) => 3,
+            _ => 2,
+        }
+    }
+}
+
+struct Parsed {
+    directives: Vec[Directive],
+    errors: Vec[String],
+}
+
+// A directive line other than a transaction header.
+fn parse_directive(toks: Vec[Str]) -> Result[Body, String] {
+    let kind = toks[1];
+    if kind == "open" {
+        if toks.len() != 3 and toks.len() != 4 {
+            return Err("cannot parse line".to_string());
+        }
+        if not valid_account(toks[2]) {
+            return Err(f"bad account name \"{toks[2]}\"");
+        }
+        let mut comms: Vec[String] = Vec.new();
+        if toks.len() == 4 {
+            for c in toks[3].split(",") {
+                if not valid_commodity(c) {
+                    return Err(f"bad commodity \"{c}\"");
+                }
+                comms.push(c.to_string());
+            }
+        }
+        return Ok(Body.Open(toks[2].to_string(), comms));
+    }
+    if kind == "close" {
+        if toks.len() != 3 {
+            return Err("cannot parse line".to_string());
+        }
+        if not valid_account(toks[2]) {
+            return Err(f"bad account name \"{toks[2]}\"");
+        }
+        return Ok(Body.Close(toks[2].to_string()));
+    }
+    if kind == "balance" {
+        if toks.len() != 5 {
+            return Err("cannot parse line".to_string());
+        }
+        if not valid_account(toks[2]) {
+            return Err(f"bad account name \"{toks[2]}\"");
+        }
+        let text = f"{toks[3]} {toks[4]}";
+        return match parse_amount(text) {
+            Some(a) => Ok(Body.Balance(toks[2].to_string(), a)),
+            None => Err(f"bad amount \"{text}\""),
+        };
+    }
+    if kind == "price" {
+        if toks.len() != 5 or not valid_commodity(toks[2]) {
+            return Err("cannot parse line".to_string());
+        }
+        let text = f"{toks[3]} {toks[4]}";
+        return match parse_amount(text) {
+            Some(a) if a.qty > 0 => Ok(Body.PriceOf(toks[2].to_string(), a)),
+            _ => Err(f"bad amount \"{text}\""),
+        };
+    }
+    Err(f"unknown directive \"{kind}\"")
+}
+
+struct Pending {
+    date: String,
+    line: i64,
+    txn: Txn,
+    bad: bool,
+}
+
+fn finish(path: Str, fidx: i64, cur: own Option[Pending], out: mut ref Parsed) {
+    if let Some(t) = cur {
+        if t.bad {
+            return;
+        }
+        if t.txn.postings.is_empty() {
+            out.errors.push(f"{path}:{t.line}: transaction has no postings");
+            return;
+        }
+        out.directives.push(Directive {
+            date: t.date,
+            file: path.to_string(),
+            fidx: fidx,
+            line: t.line,
+            body: Body.Txn(t.txn),
+        });
+    }
+}
+
+fn parse_journal(path: String, fidx: i64, text: String) -> Parsed {
+    let mut out = Parsed { directives: Vec.new(), errors: Vec.new() };
+    let mut cur: Option[Pending] = None;
+    let mut skipping = false;
+    let mut n = 0;
+    for raw in text.split("\n") {
+        n += 1;
+        if raw.trim().len() == 0 {
+            finish(path, fidx, cur, mut out);
+            cur = None;
+            skipping = false;
+            continue;
+        }
+        if raw.starts_with("#") {
+            continue;
+        }
+        let line = strip_comment(raw).trim_end().to_string();
+        if line.trim().len() == 0 {
+            continue;
+        }
+        if raw.starts_with(" ") or raw.starts_with("\t") {
+            if skipping {
+                continue;
+            }
+            match cur {
+                None => {
+                    out.errors.push(f"{path}:{n}: posting outside a transaction");
+                    skipping = true;
+                }
+                Some(mut ref t) => {
+                    if not t.bad {
+                        match parse_posting(line) {
+                            Ok(p) => t.txn.postings.push(p),
+                            Err(e) => {
+                                out.errors.push(f"{path}:{n}: {e}");
+                                t.bad = true;
+                            }
+                        }
+                    }
+                }
+            }
+            continue;
+        }
+        finish(path, fidx, cur, mut out);
+        cur = None;
+        skipping = false;
+        let toks: Vec[Str] = line.split_whitespace().collect();
+        let date = toks[0];
+        if not valid_date(date) {
+            if date_shape(date) {
+                out.errors.push(f"{path}:{n}: bad date \"{date}\"");
+            } else {
+                out.errors.push(f"{path}:{n}: cannot parse line");
+            }
+            skipping = true;
+            continue;
+        }
+        if toks.len() < 2 {
+            out.errors.push(f"{path}:{n}: cannot parse line");
+            skipping = true;
+            continue;
+        }
+        if toks[1] == "*" or toks[1] == "!" {
+            let rest = line.trim().substring(10).trim().substring(1).trim().to_string();
+            let (payee, narration) = match rest.split_once("|") {
+                Some((p, q)) => (p.trim().to_string(), q.trim().to_string()),
+                None => (rest.clone(), "".to_string()),
+            };
+            if payee.len() == 0 {
+                out.errors.push(f"{path}:{n}: transaction needs a payee");
+                skipping = true;
+                continue;
+            }
+            cur = Some(Pending {
+                date: date.to_string(),
+                line: n,
+                txn: Txn { flag: toks[1].to_string(), payee: payee, narration: narration, postings: Vec.new() },
+                bad: false,
+            });
+            continue;
+        }
+        match parse_directive(toks) {
+            Ok(body) => out.directives.push(Directive {
+                date: date.to_string(),
+                file: path.clone(),
+                fidx: fidx,
+                line: n,
+                body: body,
+            }),
+            Err(e) => {
+                out.errors.push(f"{path}:{n}: {e}");
+                skipping = true;
+            }
+        }
+    }
+    finish(path, fidx, cur, mut out);
+    out
+}
+
+// ------------------------------------------------------------ the bank import
+
+fn split_csv(line: Str) -> Option[Vec[String]] {
+    let mut fields: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    let mut quoted = false;
+    let chars: Vec[char] = line.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if quoted {
+            if c == '"' {
+                if i + 1 < chars.len() and chars[i + 1] == '"' {
+                    cur.push('"');
+                    i += 1;
+                } else {
+                    quoted = false;
+                }
+            } else {
+                cur.push(c);
+            }
+        } else if c == '"' {
+            quoted = true;
+        } else if c == ',' {
+            fields.push(cur);
+            cur = String.new();
+        } else {
+            cur.push(c);
+        }
+        i += 1;
+    }
+    if quoted {
+        return None;
+    }
+    fields.push(cur);
+    Some(fields)
+}
+
+struct Rule {
+    pattern: String,
+    account: String,
+    payee: Option[String],
+}
+
+struct Rules {
+    account: String,
+    currency: String,
+    default: String,
+    matches: Vec[Rule],
+}
+
+fn parse_rules(text: Str) -> Rules {
+    let mut r = Rules { account: "".to_string(), currency: "".to_string(), default: "".to_string(), matches: Vec.new() };
+    for raw in text.split("\n") {
+        let line = raw.trim();
+        if line.len() == 0 or line.starts_with("#") {
+            continue;
+        }
+        let (word, rest) = match line.split_once(" ") {
+            Some((w, x)) => (w, x.trim()),
+            None => (line, ""),
+        };
+        if word == "match" {
+            let parts: Vec[String] = rest.split("=>").map(|x| x.trim().to_string()).collect();
+            let payee = if parts.len() > 2 { Some(parts[2].clone()) } else { None };
+            r.matches.push(Rule { pattern: parts[0].to_uppercase(), account: parts[1].clone(), payee: payee });
+        } else if word == "account" {
+            r.account = rest.to_string();
+        } else if word == "currency" {
+            r.currency = rest.to_string();
+        } else if word == "default" {
+            r.default = rest.to_string();
+        }
+    }
+    r
+}
+
+struct Row {
+    date: String,
+    line: i64,
+    desc: String,
+    amount: (i64, i64),
+    balance: Option[(i64, i64)],
+}
+
+struct Imported {
+    directives: Vec[Directive],
+    errors: Vec[String],
+    summary: String,
+}
+
+fn csv_amount(s: Str) -> Option[(i64, i64)] {
+    let s = s.trim();
+    let neg = s.starts_with("-");
+    let s = if neg { s.substring(1) } else { s.to_string() };
+    let s = s.strip_prefix("$") ?? s.as_str();
+    let (v, scale) = parse_number(s)?;
+    Some((if neg { -v } else { v }, scale))
+}
+
+fn import_csv(path: String, fidx: i64, text: String, rules: Rules) -> Imported {
+    let mut lines: Vec[Str] = text.split("\n").collect();
+    if lines.len() > 0 and lines[lines.len() - 1].len() == 0 {
+        lines.pop();
+    }
+    let head: Vec[String] = (split_csv(lines[0]) ?? Vec.new()).iter().map(|h| h.trim().to_lowercase()).collect();
+    let col = |name: Str| {
+        for (i, h) in head.iter().enumerate() {
+            if h == name {
+                return i;
+            }
+        }
+        0
+    };
+    let (cd, cdesc, camt, cbal) = (col("date"), col("description"), col("amount"), col("balance"));
+    let mut rows: Vec[Row] = Vec.new();
+    let mut errors: Vec[String] = Vec.new();
+    for (k, line) in lines.iter().enumerate().skip(1) {
+        let n = k + 1;
+        let f = match split_csv(line) {
+            Some(f) if f.len() == head.len() => f,
+            _ => {
+                errors.push(f"{path}:{n}: cannot parse row");
+                continue;
+            }
+        };
+        let ds = f[cd].trim().to_string();
+        let p: Vec[Str] = ds.split("/").collect();
+        let date = if p.len() == 3 and p[2].len() == 4 and p[0].len() == 2 and p[1].len() == 2 {
+            f"{p[2]}-{p[0]}-{p[1]}"
+        } else {
+            "".to_string()
+        };
+        if not valid_date(date) {
+            errors.push(f"{path}:{n}: bad date \"{ds}\"");
+            continue;
+        }
+        let amount = match csv_amount(f[camt]) {
+            Some(a) => a,
+            None => {
+                errors.push(f"{path}:{n}: bad amount \"{f[camt].trim()}\"");
+                continue;
+            }
+        };
+        let desc: Vec[Str] = f[cdesc].split_whitespace().collect();
+        rows.push(Row { date: date, line: n, desc: desc.join(" "), amount: amount, balance: csv_amount(f[cbal]) });
+    }
+    rows.sort_by(|a, b| a.date.cmp(b.date).then(b.line.cmp(a.line)));
+    let mut out: Vec[Directive] = Vec.new();
+    let mut matched = 0;
+    for r in rows.iter() {
+        let mut account = rules.default.clone();
+        let mut payee = r.desc.clone();
+        let mut flag = "!";
+        let upper = r.desc.to_uppercase();
+        for m in rules.matches.iter() {
+            if upper.contains(m.pattern) {
+                account = m.account.clone();
+                flag = "*";
+                if let Some(p) = m.payee {
+                    payee = p.clone();
+                }
+                break;
+            }
+        }
+        if flag == "*" {
+            matched += 1;
+        }
+        let card = Posting {
+            account: rules.account.clone(),
+            amount: Some(Amount { qty: r.amount.0, comm: rules.currency.clone(), scale: r.amount.1 }),
+            cost: Cost.NoCost,
+            price: Price.NoPrice,
+        };
+        let other = Posting { account: account, amount: None, cost: Cost.NoCost, price: Price.NoPrice };
+        out.push(Directive {
+            date: r.date.clone(),
+            file: path.clone(),
+            fidx: fidx,
+            line: r.line,
+            body: Body.Txn(Txn { flag: flag.to_string(), payee: payee, narration: "".to_string(), postings: vec![card, other] }),
+        });
+    }
+    if let Some(newest) = rows.last() {
+        if let Some((b, scale)) = newest.balance {
+            out.push(Directive {
+                date: next_day(newest.date),
+                file: path.clone(),
+                fidx: fidx,
+                line: newest.line,
+                body: Body.Balance(rules.account.clone(), Amount { qty: b, comm: rules.currency.clone(), scale: scale }),
+            });
+        }
+    }
+    let summary = f"{path}: {rows.len()} rows, {matched} matched, {rows.len() - matched} to {rules.default}";
+    Imported { directives: out, errors: errors, summary: summary }
+}
+
+// ------------------------------------------------------------ checking
+
+fn under(acc: Str, root: Str) -> bool {
+    acc == root or acc.starts_with(f"{root}:")
+}
+
+// Tree order: segment by segment.
+fn tree_key(acc: Str) -> String {
+    acc.replace(":", "\u{1}")
+}
+
+#[derive(Clone)]
+struct Lot {
+    date: String,
+    qty: i64,
+    cost: i64,
+    comm: String,
+    scale: i64,
+}
+
+struct Posted {
+    date: String,
+    payee: String,
+    account: String,
+    comm: String,
+    qty: i64,
+}
+
+struct PricePoint {
+    date: String,
+    comm: String,
+    value: i64,
+    target: String,
+}
+
+struct Ledger {
+    dirs: Vec[Directive],
+    prec: Map[String, i64],
+    ever: Set[String],
+    open: Map[String, Vec[String]],
+    closed: Set[String],
+    bal: SortedMap[String, SortedMap[String, i64]],
+    lots: SortedMap[String, SortedMap[String, Vec[Lot]]],
+    entries: Vec[Posted],
+    prices: Vec[PricePoint],
+    accepted: Vec[Directive],
+    errors: Vec[String],
+    txns: i64,
+    refused: i64,
+    asserts: i64,
+    failed: i64,
+}
+
+fn see(prec: mut ref Map[String, i64], a: Amount) {
+    let old = prec.get(a.comm).cloned() ?? 0;
+    if a.scale > old or not prec.contains_key(a.comm) {
+        prec.insert(a.comm.clone(), if a.scale > old { a.scale } else { old });
+    }
+}
+
+fn precisions(dirs: Vec[Directive]) -> Map[String, i64] {
+    let mut prec: Map[String, i64] = Map.new();
+    for d in dirs.iter() {
+        match d.body {
+            Body.Txn(t) => {
+                for p in t.postings.iter() {
+                    if let Some(a) = p.amount {
+                        see(mut prec, a);
+                    }
+                }
+            }
+            Body.Balance(_, a) => see(mut prec, a),
+            _ => {}
+        }
+    }
+    prec
+}
+
+fn add(m: mut ref SortedMap[String, i64], comm: Str, v: i64) {
+    let old = m.get(comm).cloned() ?? 0;
+    m.insert(comm.to_string(), old + v);
+}
+
+impl Ledger {
+    fn new(dirs: own Vec[Directive]) -> Ledger {
+        let mut dirs = dirs;
+        dirs.sort_by(|a, b| a.date.cmp(b.date).then(a.rank().cmp(b.rank())).then(a.fidx.cmp(b.fidx)).then(a.line.cmp(b.line)));
+        let prec = precisions(dirs);
+        let mut ever: Set[String] = Set.new();
+        for d in dirs.iter() {
+            if let Body.Open(acc, _) = d.body {
+                ever.insert(acc.clone());
+            }
+        }
+        Ledger {
+            dirs: dirs,
+            prec: prec,
+            ever: ever,
+            open: Map.new(),
+            closed: Set.new(),
+            bal: SortedMap.new(),
+            lots: SortedMap.new(),
+            entries: Vec.new(),
+            prices: Vec.new(),
+            accepted: Vec.new(),
+            errors: Vec.new(),
+            txns: 0,
+            refused: 0,
+            asserts: 0,
+            failed: 0,
+        }
+    }
+
+    fn p(self, comm: Str) -> i64 {
+        self.prec.get(comm).cloned() ?? 2
+    }
+
+    fn amt(self, x: i64, comm: Str) -> String {
+        f"{fmt_num(x, self.p(comm))} {comm}"
+    }
+
+    fn err(mut ref self, d: Directive, msg: Str) {
+        self.errors.push(f"{d.date} {d.file}:{d.line}: {msg}");
+    }
+
+    fn known(self, acc: Str) -> bool {
+        self.ever.iter().any(|o| under(o, acc))
+    }
+
+    fn run(mut ref self) {
+        let dirs = self.dirs.clone();
+        for d in dirs.iter() {
+            match d.body {
+                Body.Open(acc, comms) => {
+                    if self.open.contains_key(acc) {
+                        self.err(d, f"account {acc} is already open");
+                        continue;
+                    }
+                    self.open.insert(acc.clone(), comms.clone());
+                    self.accepted.push(d.clone());
+                }
+                Body.Close(acc) => {
+                    if not self.open.contains_key(acc) or self.closed.contains(acc) {
+                        self.err(d, f"account {acc} is not open");
+                        continue;
+                    }
+                    self.closed.insert(acc.clone());
+                    self.accepted.push(d.clone());
+                }
+                Body.PriceOf(comm, a) => {
+                    self.prices.push(PricePoint { date: d.date.clone(), comm: comm.clone(), value: a.qty, target: a.comm.clone() });
+                    self.accepted.push(d.clone());
+                }
+                Body.Balance(acc, want) => {
+                    self.asserts += 1;
+                    if not self.known(acc) {
+                        self.err(d, f"unknown account {acc}");
+                        self.failed += 1;
+                        continue;
+                    }
+                    let mut got = 0;
+                    for (a, m) in self.bal.iter() {
+                        if under(a, acc) {
+                            got += m.get(want.comm).cloned() ?? 0;
+                        }
+                    }
+                    self.accepted.push(d.clone());
+                    if round_to(got, self.p(want.comm)) != want.qty {
+                        self.failed += 1;
+                        let msg = f"balance failed: {acc} expected {self.amt(want.qty, want.comm)}, got {self.amt(got, want.comm)}";
+                        self.err(d, msg);
+                    }
+                }
+                Body.Txn(t) => {
+                    self.txns += 1;
+                    if let Err(msg) = self.book(d, t) {
+                        self.refused += 1;
+                        self.err(d, msg);
+                    }
+                }
+            }
+        }
+    }
+
+    fn account_ok(self, acc: Str, comm: Option[String]) -> Result[(), String] {
+        if not self.ever.contains(acc) {
+            return Err(f"unknown account {acc}");
+        }
+        if self.closed.contains(acc) {
+            return Err(f"account {acc} is closed");
+        }
+        let comms = match self.open.get(acc) {
+            Some(c) => c,
+            None => return Err(f"account {acc} is not open yet"),
+        };
+        if let Some(c) = comm {
+            if comms.len() > 0 and not comms.contains(c) {
+                return Err(f"account {acc} does not take {c}");
+            }
+        }
+        Ok(())
+    }
+
+    fn book(mut ref self, d: Directive, t: Txn) -> Result[(), String] {
+        for p in t.postings.iter() {
+            let comm = match p.amount {
+                Some(a) => Some(a.comm.clone()),
+                None => None,
+            };
+            self.account_ok(p.account, comm)?;
+        }
+        let elided: Vec[String] = t.postings.iter().filter(|p| p.amount.is_none()).map(|p| p.account.clone()).collect();
+        if elided.len() > 1 {
+            return Err("more than one posting without an amount".to_string());
+        }
+        let mut lots: SortedMap[String, Vec[Lot]] = SortedMap.new();
+        let mut weights: SortedMap[String, i64] = SortedMap.new();
+        let mut new_prices: Vec[PricePoint] = Vec.new();
+        for p in t.postings.iter() {
+            let a = match p.amount {
+                Some(a) => a,
+                None => continue,
+            };
+            let (q, c) = (a.qty, a.comm.clone());
+            match p.price {
+                Price.Unit(pa) => new_prices.push(PricePoint { date: d.date.clone(), comm: c.clone(), value: pa.qty, target: pa.comm.clone() }),
+                Price.Total(pa) => new_prices.push(PricePoint {
+                    date: d.date.clone(),
+                    comm: c.clone(),
+                    value: rdiv(pa.qty * ONE, q.abs()),
+                    target: pa.comm.clone(),
+                }),
+                Price.NoPrice => {}
+            }
+            let key = f"{p.account}\t{c}";
+            match p.cost {
+                Cost.NoCost => match p.price {
+                    Price.Unit(pa) => add(mut weights, pa.comm, mul(q, pa.qty)),
+                    Price.Total(pa) => add(mut weights, pa.comm, if q > 0 { pa.qty } else { -pa.qty }),
+                    Price.NoPrice => add(mut weights, c, q),
+                },
+                _ => {
+                    if not lots.contains_key(key) {
+                        let held = match self.lots.get(p.account) {
+                            Some(m) => m.get(c).cloned() ?? Vec.new(),
+                            None => Vec.new(),
+                        };
+                        lots.insert(key.clone(), held);
+                    }
+                    let held = lots[key].clone();
+                    if let Cost.At(ca) = p.cost {
+                        if q > 0 {
+                            let mut held = held;
+                            held.push(Lot { date: d.date.clone(), qty: q, cost: ca.qty, comm: ca.comm.clone(), scale: ca.scale });
+                            lots.insert(key.clone(), held);
+                            add(mut weights, ca.comm, mul(q, ca.qty));
+                            continue;
+                        }
+                    }
+                    let fits = |l: Lot| {
+                        match p.cost {
+                            Cost.At(ca) => l.cost == ca.qty and l.comm == ca.comm,
+                            _ => true,
+                        }
+                    };
+                    let mut need = -q;
+                    let mut have = 0;
+                    for l in held.iter() {
+                        if fits(l) {
+                            have += l.qty;
+                        }
+                    }
+                    if have < need {
+                        let what = match p.cost {
+                            Cost.At(ca) => f"{c} {{{fmt_num(ca.qty, ca.scale)} {ca.comm}}}",
+                            _ => c.clone(),
+                        };
+                        return Err(f"not enough {what} in {p.account}: have {fmt_num(have, self.p(c))}, need {fmt_num(need, self.p(c))}");
+                    }
+                    let mut kept: Vec[Lot] = Vec.new();
+                    for l in held.iter() {
+                        let mut l = l.clone();
+                        if need > 0 and fits(l) {
+                            let take = if need < l.qty { need } else { l.qty };
+                            l.qty -= take;
+                            need -= take;
+                            add(mut weights, l.comm, -mul(take, l.cost));
+                        }
+                        if l.qty > 0 {
+                            kept.push(l);
+                        }
+                    }
+                    lots.insert(key.clone(), kept);
+                }
+            }
+        }
+        let mut left: SortedMap[String, i64] = SortedMap.new();
+        for (c, v) in weights.iter() {
+            if round_to(v, self.p(c)) != 0 {
+                left.insert(c.clone(), v);
+            }
+        }
+        let mut filled: Vec[Amount] = Vec.new();
+        if elided.len() == 1 {
+            if left.is_empty() {
+                return Err("nothing to fill in the posting without an amount".to_string());
+            }
+            for (c, v) in left.iter() {
+                self.account_ok(elided[0], Some(c.clone()))?;
+                filled.push(Amount { qty: round_to(-v, self.p(c)), comm: c.clone(), scale: self.p(c) });
+            }
+        } else if not left.is_empty() {
+            let parts: Vec[String] = left.iter().map(|(c, v)| self.amt(v, c)).collect();
+            return Err(f"transaction does not balance: {parts.join(", ")}");
+        }
+        // Commit.
+        for (key, held) in lots.iter() {
+            let (acc, comm) = key.split_once("\t") ?? ("", "");
+            if not self.lots.contains_key(acc) {
+                self.lots.insert(acc.to_string(), SortedMap.new());
+            }
+            self.lots[acc].insert(comm.to_string(), held.clone());
+        }
+        for pp in new_prices.into_iter() {
+            self.prices.push(pp);
+        }
+        let mut out: Vec[Posting] = Vec.new();
+        for p in t.postings.iter() {
+            if p.amount.is_none() {
+                for a in filled.iter() {
+                    out.push(Posting { account: p.account.clone(), amount: Some(a.clone()), cost: Cost.NoCost, price: Price.NoPrice });
+                }
+            } else {
+                out.push(p.clone());
+            }
+        }
+        for p in out.iter() {
+            let a = match p.amount {
+                Some(a) => a,
+                None => continue,
+            };
+            if not self.bal.contains_key(p.account) {
+                self.bal.insert(p.account.clone(), SortedMap.new());
+            }
+            add(mut self.bal[p.account], a.comm, a.qty);
+            self.entries.push(Posted { date: d.date.clone(), payee: t.payee.clone(), account: p.account.clone(), comm: a.comm.clone(), qty: a.qty });
+        }
+        let mut t = t.clone();
+        t.postings = out;
+        self.accepted.push(Directive { date: d.date.clone(), file: d.file.clone(), fidx: d.fidx, line: d.line, body: Body.Txn(t) });
+        Ok(())
+    }
+}
+
+// ------------------------------------------------------------ writing back
+
+fn show_amount(a: Amount, prec: i64) -> String {
+    f"{fmt_num(a.qty, prec)} {a.comm}"
+}
+
+fn canonical(d: Directive, l: Ledger) -> Vec[String] {
+    match d.body {
+        Body.Open(acc, comms) => {
+            if comms.is_empty() {
+                vec![f"{d.date} open {acc}"]
+            } else {
+                vec![f"{d.date} open {acc} {comms.join(",")}"]
+            }
+        }
+        Body.Close(acc) => vec![f"{d.date} close {acc}"],
+        Body.Balance(acc, a) => vec![f"{d.date} balance {acc} {show_amount(a, l.p(a.comm))}"],
+        Body.PriceOf(comm, a) => vec![f"{d.date} price {comm} {show_amount(a, a.scale)}"],
+        Body.Txn(t) => {
+            let mut out: Vec[String] = Vec.new();
+            if t.narration.len() > 0 {
+                out.push(f"{d.date} {t.flag} {t.payee} | {t.narration}");
+            } else {
+                out.push(f"{d.date} {t.flag} {t.payee}");
+            }
+            for p in t.postings.iter() {
+                let a = match p.amount {
+                    Some(a) => a,
+                    None => continue,
+                };
+                let mut s = f"  {p.account}  {show_amount(a, l.p(a.comm))}";
+                match p.cost {
+                    Cost.AnyLot => s.push_str(" {}"),
+                    Cost.At(c) => s.push_str(f" {{{show_amount(c, c.scale)}}}"),
+                    Cost.NoCost => {}
+                }
+                match p.price {
+                    Price.Unit(pa) => s.push_str(f" @ {show_amount(pa, pa.scale)}"),
+                    Price.Total(pa) => s.push_str(f" @@ {show_amount(pa, pa.scale)}"),
+                    Price.NoPrice => {}
+                }
+                out.push(s);
+            }
+            out.push("".to_string());
+            out
+        }
+    }
+}
+
+// ------------------------------------------------------------ reports
+
+// (account, comm) -> qty over the entries in the period under the roots.
+type Totals = SortedMap[String, SortedMap[String, i64]];
+
+fn totals(l: Ledger, from: Option[String], to: Option[String], roots: Vec[String]) -> Totals {
+    let mut t: Totals = SortedMap.new();
+    for e in l.entries.iter() {
+        if let Some(f) = from {
+            if e.date < f {
+                continue;
+            }
+        }
+        if let Some(x) = to {
+            if e.date > x {
+                continue;
+            }
+        }
+        if not roots.iter().any(|r| under(e.account, r)) {
+            continue;
+        }
+        if not t.contains_key(e.account) {
+            t.insert(e.account.clone(), SortedMap.new());
+        }
+        add(mut t[e.account], e.comm, e.qty);
+    }
+    t
+}
+
+fn nonzero(l: Ledger, m: SortedMap[String, i64]) -> SortedMap[String, i64] {
+    let mut out: SortedMap[String, i64] = SortedMap.new();
+    for (c, v) in m.iter() {
+        if round_to(v, l.p(c)) != 0 {
+            out.insert(c.clone(), v);
+        }
+    }
+    out
+}
+
+fn sum_under(t: Totals, node: Str) -> SortedMap[String, i64] {
+    let mut sums: SortedMap[String, i64] = SortedMap.new();
+    for (a, m) in t.iter() {
+        if under(a, node) {
+            for (c, v) in m.iter() {
+                add(mut sums, c, v);
+            }
+        }
+    }
+    sums
+}
+
+fn sum_all(t: Totals) -> SortedMap[String, i64] {
+    let mut sums: SortedMap[String, i64] = SortedMap.new();
+    for (_, m) in t.iter() {
+        for (c, v) in m.iter() {
+            add(mut sums, c, v);
+        }
+    }
+    sums
+}
+
+struct TreeRow {
+    name: String,
+    level: i64,
+    amounts: SortedMap[String, i64],
+}
+
+fn segments(s: Str) -> i64 {
+    s.split(":").count()
+}
+
+fn tree_rows(l: Ledger, roots: Vec[String], t: Totals, depth: Option[i64]) -> Vec[TreeRow] {
+    let mut names: Set[String] = Set.new();
+    for acc in l.ever.iter().chain(l.bal.keys()) {
+        let parts: Vec[Str] = acc.split(":").collect();
+        for i in 1..parts.len() + 1 {
+            names.insert(parts[0..i].join(":"));
+        }
+    }
+    let mut rows: Vec[TreeRow] = Vec.new();
+    for root in roots.iter() {
+        let mut sub: Vec[String] = names.iter().filter(|n| under(n, root)).cloned().collect();
+        sub.sort_by_key(|n| tree_key(n));
+        let base = segments(root);
+        for n in sub.iter() {
+            let seg = segments(n);
+            if let Some(d) = depth {
+                if seg > d {
+                    continue;
+                }
+            }
+            let amounts = nonzero(l, sum_under(t, n));
+            if not amounts.is_empty() {
+                rows.push(TreeRow { name: n.clone(), level: seg - base, amounts: amounts });
+            }
+        }
+    }
+    rows
+}
+
+fn print_tree(l: Ledger, out: mut ref Vec[String], rows: Vec[TreeRow]) {
+    for r in rows.iter() {
+        let last = r.name.rsplit_once(":").map(|(_, x)| x.to_string()) ?? r.name.clone();
+        let mut first = true;
+        for (c, v) in r.amounts.iter() {
+            let a = rjust(l.amt(v, c), 20);
+            if first {
+                let mut indent = String.new();
+                for _ in 0..r.level {
+                    indent.push_str("  ");
+                }
+                out.push(f"{a}  {indent}{last}");
+            } else {
+                out.push(a);
+            }
+            first = false;
+        }
+    }
+}
+
+fn price_of(l: Ledger, comm: Str, target: Str, at: Str) -> (Option[i64], Option[i64]) {
+    let mut direct: Option[i64] = None;
+    let mut inverse: Option[i64] = None;
+    for p in l.prices.iter() {
+        if p.date > at {
+            continue;
+        }
+        if p.comm == comm and p.target == target {
+            direct = Some(p.value);
+        } else if p.comm == target and p.target == comm {
+            inverse = Some(p.value);
+        }
+    }
+    (direct, inverse)
+}
+
+fn check_period(pos: Vec[String]) -> Result[(String, String), String] {
+    for x in pos.iter() {
+        if not valid_date(x) {
+            return Err(f"bad date \"{x}\"");
+        }
+    }
+    if pos[1] < pos[0] {
+        return Err("the period ends before it starts".to_string());
+    }
+    Ok((pos[0].clone(), pos[1].clone()))
+}
+
+fn report(l: Ledger, line: Str, out: mut ref Vec[String]) -> Result[(), String] {
+    let toks: Vec[Str] = line.split_whitespace().collect();
+    let cmd = toks[0];
+    let mut opts: Map[String, String] = Map.new();
+    let mut pos: Vec[String] = Vec.new();
+    let mut i = 1;
+    while i < toks.len() {
+        if toks[i].starts_with("--") {
+            if i + 1 >= toks.len() {
+                return Err(f"{toks[i]} needs a value");
+            }
+            opts.insert(toks[i].substring(2), toks[i + 1].to_string());
+            i += 2;
+        } else {
+            pos.push(toks[i].to_string());
+            i += 1;
+        }
+    }
+    for k in ["at", "from", "to"] {
+        if let Some(v) = opts.get(k) {
+            if not valid_date(v) {
+                return Err(f"bad date \"{v}\"");
+            }
+        }
+    }
+    if cmd == "balance" {
+        let mut depth: Option[i64] = None;
+        if let Some(d) = opts.get("depth") {
+            let n = if all_digits(d) and d.len() > 0 { i64.parse(d).unwrap_or(0) } else { 0 };
+            if n == 0 {
+                return Err(f"bad depth \"{d}\"");
+            }
+            depth = Some(n);
+        }
+        let roots = if pos.is_empty() {
+            let mut tops: Vec[String] = Vec.new();
+            for t in TYPES.iter() {
+                if l.ever.iter().any(|a| under(a, t)) {
+                    tops.push(t.clone());
+                }
+            }
+            tops
+        } else {
+            pos.clone()
+        };
+        let t = totals(l, None, opts.get("at").cloned(), roots);
+        print_tree(l, mut out, tree_rows(l, roots, t, depth));
+        out.push("--------------------".to_string());
+        let total = nonzero(l, sum_all(t));
+        if total.is_empty() {
+            out.push(rjust("0", 20));
+        }
+        for (c, v) in total.iter() {
+            out.push(rjust(l.amt(v, c), 20));
+        }
+    } else if cmd == "register" {
+        if pos.len() != 1 {
+            return Err("register takes one account".to_string());
+        }
+        let acc = pos[0].clone();
+        if not l.known(acc) {
+            return Err(f"no account {acc}");
+        }
+        let from = opts.get("from").cloned();
+        let to = opts.get("to").cloned();
+        let mut run: SortedMap[String, i64] = SortedMap.new();
+        for e in l.entries.iter() {
+            if not under(e.account, acc) {
+                continue;
+            }
+            if let Some(ref f) = from {
+                if e.date < f {
+                    continue;
+                }
+            }
+            if let Some(ref x) = to {
+                if e.date > x {
+                    continue;
+                }
+            }
+            add(mut run, e.comm, e.qty);
+            let total = run.get(e.comm).cloned() ?? 0;
+            out.push(f"{e.date} {cell(e.payee, 20)} {cell(e.account, 28)} {rjust(l.amt(e.qty, e.comm), 16)} {rjust(l.amt(total, e.comm), 16)}");
+        }
+    } else if cmd == "value" {
+        if pos.len() != 1 or not valid_commodity(pos[0]) {
+            return Err("value takes a commodity".to_string());
+        }
+        let target = pos[0].clone();
+        let at = opts.get("at").cloned() ?? "9999-12-31".to_string();
+        let t = totals(l, None, Some(at.clone()), vec!["Assets".to_string(), "Liabilities".to_string()]);
+        let mut keys: Vec[(String, String)] = Vec.new();
+        for (a, m) in t.iter() {
+            for (c, _) in m.iter() {
+                keys.push((a.clone(), c.clone()));
+            }
+        }
+        keys.sort_by_key(|(a, c)| f"{tree_key(a)}\t{c}");
+        let mut total = 0;
+        for (acc, c) in keys.iter() {
+            let q = t[acc][c];
+            if round_to(q, l.p(c)) == 0 {
+                continue;
+            }
+            let v = if c == target {
+                q
+            } else {
+                match price_of(l, c, target, at) {
+                    (Some(p), _) => mul(q, p),
+                    (None, Some(p)) => rdiv(q * ONE, p),
+                    (None, None) => {
+                        out.push(f"{rjust(l.amt(q, c), 20)}  {acc}  (no price in {target})");
+                        continue;
+                    }
+                }
+            };
+            total += v;
+            if c == target {
+                out.push(f"{rjust(l.amt(v, target), 20)}  {acc}");
+            } else {
+                out.push(f"{rjust(l.amt(v, target), 20)}  {acc}  ({l.amt(q, c)})");
+            }
+        }
+        out.push("--------------------".to_string());
+        out.push(rjust(l.amt(total, target), 20));
+    } else if cmd == "income" {
+        if pos.len() != 2 {
+            return Err("income takes two dates".to_string());
+        }
+        let (from, to) = check_period(pos)?;
+        let t = totals(l, Some(from), Some(to), vec!["Income".to_string(), "Expenses".to_string()]);
+        print_tree(l, mut out, tree_rows(l, vec!["Income".to_string(), "Expenses".to_string()], t, None));
+        out.push("--------------------".to_string());
+        let mut net: SortedMap[String, i64] = SortedMap.new();
+        for (c, v) in sum_all(t).iter() {
+            net.insert(c.clone(), -v);
+        }
+        let net = nonzero(l, net);
+        if net.is_empty() {
+            out.push(f"{rjust("0", 20)}  net income");
+        }
+        for (c, v) in net.iter() {
+            out.push(f"{rjust(l.amt(v, c), 20)}  net income");
+        }
+    } else if cmd == "lots" {
+        if pos.len() != 1 {
+            return Err("lots takes one account".to_string());
+        }
+        let acc = pos[0].clone();
+        if not l.known(acc) {
+            return Err(f"no account {acc}");
+        }
+        let mut accounts: Vec[String] = l.lots.keys().cloned().collect();
+        accounts.sort_by_key(|a| tree_key(a));
+        for a in accounts.iter() {
+            if not under(a, acc) {
+                continue;
+            }
+            for (c, held) in l.lots[a].iter() {
+                if held.is_empty() {
+                    continue;
+                }
+                out.push(f"{a} {c}");
+                for lot in held.iter() {
+                    out.push(f"  {lot.date}  {l.amt(lot.qty, c)} {{{fmt_num(lot.cost, lot.scale)} {lot.comm}}}  {l.amt(mul(lot.qty, lot.cost), lot.comm)}");
+                }
+            }
+        }
+    } else if cmd == "print" {
+        if pos.len() != 2 {
+            return Err("print takes two dates".to_string());
+        }
+        let (from, to) = check_period(pos)?;
+        for d in l.accepted.iter() {
+            if d.date >= from and d.date <= to {
+                for s in canonical(d, l).into_iter() {
+                    out.push(s);
+                }
+            }
+        }
+    } else {
+        return Err(f"unknown command \"{cmd}\"");
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------ main
+
+enum Loaded {
+    Journal(Parsed),
+    Csv(Imported),
+}
+
+fn balances(l: Ledger) -> SortedMap[String, i64] {
+    let mut out: SortedMap[String, i64] = SortedMap.new();
+    for (a, m) in l.bal.iter() {
+        for (c, v) in m.iter() {
+            if v != 0 {
+                out.insert(f"{a}\t{c}", v);
+            }
+        }
+    }
+    out
+}
+
+fn read(path: Str) -> Result[String, String] {
+    match fs.read_to_string(path.to_string()) {
+        Ok(t) => Ok(t),
+        Err(e) => Err(f"cannot read {path}: {e}"),
+    }
+}
+
+fn run() -> Result[(), String] {
+    fs.create_dir_all("data/out".to_string()).map_err(|e| f"cannot create data/out: {e}")?;
+    write_data()?;
+    let mut names: Vec[String] = fs.read_dir("data".to_string()).map_err(|e| f"cannot list data: {e}")?
+        .into_iter()
+        .filter(|n| n.ends_with(".journal") or n.ends_with(".csv"))
+        .collect();
+    names.sort();
+    let rules_text = read("data/bank.rules")?;
+    // Each input file is parsed in a task of its own.
+    let group = TaskGroup.new();
+    let mut handles = Vec.new();
+    for (fidx, name) in names.iter().enumerate() {
+        let path = f"data/{name}";
+        let text = read(path)?;
+        if name.ends_with(".journal") {
+            handles.push(group.spawn(|| Loaded.Journal(parse_journal(path, fidx, text))));
+        } else {
+            let rules = parse_rules(rules_text);
+            handles.push(group.spawn(|| Loaded.Csv(import_csv(path, fidx, text, rules))));
+        }
+    }
+    let mut out: Vec[String] = vec!["== load".to_string()];
+    let mut dirs: Vec[Directive] = Vec.new();
+    for (name, h) in names.iter().zip(handles.into_iter()) {
+        match h.join() {
+            Loaded.Journal(p) => {
+                out.push(f"data/{name}: {p.directives.len()} directives");
+                for e in p.errors.into_iter() {
+                    out.push(e);
+                }
+                for d in p.directives.into_iter() {
+                    dirs.push(d);
+                }
+            }
+            Loaded.Csv(c) => {
+                out.push(c.summary);
+                for e in c.errors.into_iter() {
+                    out.push(e);
+                }
+                for d in c.directives.into_iter() {
+                    dirs.push(d);
+                }
+            }
+        }
+    }
+    let mut l = Ledger.new(dirs);
+    l.run();
+    out.push("== check".to_string());
+    for e in l.errors.iter() {
+        out.push(e.clone());
+    }
+    out.push(f"{l.dirs.len()} directives, {l.txns} transactions, {l.refused} refused, {l.asserts} balance assertions, {l.failed} failed");
+    let mut text: Vec[String] = Vec.new();
+    for d in l.accepted.iter() {
+        for s in canonical(d, l).into_iter() {
+            text.push(s);
+        }
+    }
+    let body = f"{text.join("\n")}\n";
+    fs.write_bytes("data/out/ledger.journal".to_string(), body.bytes().to_vec()).map_err(|e| f"cannot write data/out/ledger.journal: {e}")?;
+    out.push("== write".to_string());
+    out.push(f"data/out/ledger.journal: {l.accepted.len()} directives, {body.len()} bytes");
+    let back = read("data/out/ledger.journal")?;
+    let parsed = parse_journal("data/out/ledger.journal".to_string(), 0, back);
+    let count = parsed.directives.len();
+    if parsed.errors.len() > 0 {
+        out.push(f"round trip: {parsed.errors.len()} parse errors");
+    }
+    let mut r = Ledger.new(parsed.directives);
+    r.run();
+    let a = balances(l);
+    let b = balances(r);
+    let mut keys: Vec[String] = a.keys().chain(b.keys()).cloned().collect();
+    keys.sort_by_key(|k| tree_key(k));
+    keys.dedup();
+    let mut differs: Option[String] = None;
+    for k in keys.iter() {
+        if (a.get(k).cloned() ?? 0) != (b.get(k).cloned() ?? 0) {
+            differs = Some(k.clone());
+            break;
+        }
+    }
+    match differs {
+        Some(k) => {
+            let (acc, c) = k.split_once("\t") ?? ("", "");
+            out.push(f"round trip: {acc} differs in {c}");
+        }
+        None => out.push(f"round trip: {count} directives, {r.errors.len()} reported again, every balance matches"),
+    }
+    out.push("== reports".to_string());
+    for raw in read("data/reports.txt")?.split("\n") {
+        let line = raw.trim();
+        if line.len() == 0 or line.starts_with("#") {
+            continue;
+        }
+        out.push(f"> {line}");
+        if let Err(e) = report(l, line, mut out) {
+            out.push(f"error: {e}");
+        }
+    }
+    println(out.join("\n"));
+    Ok(())
+}
+
+fn is_hexd(c: u8) -> bool {
+    is_digit(c) or (c >= b'a' and c <= b'f')
+}
+
+fn hex_val(c: u8) -> u8 {
+    if is_digit(c) { c - b'0' } else { c - b'a' + 10 }
+}
+
+fn unhex(s: Str) -> Vec[u8] {
+    let mut digits: Vec[u8] = Vec.new();
+    for c in s.bytes() {
+        if is_hexd(c) {
+            digits.push(hex_val(c));
+        }
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i + 1 < digits.len() {
+        out.push(digits[i] * 16 + digits[i + 1]);
+        i += 2;
+    }
+    out
+}
+
+fn put_bytes(path: Str, b: Vec[u8]) -> Result[(), String] {
+    if let Err(e) = fs.write_bytes(path.to_string(), b) {
+        return Err(f"cannot write {path}: {e}");
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = run() {
+        eprintln(e);
+    }
+}
+
+// ============================================================ data
+
+// The files under data/, in name order.
+fn write_data() -> Result[(), String] {
+    put_bytes("data/2025.journal", unhex(file_0()))?;
+    put_bytes("data/2026.journal", unhex(file_1()))?;
+    put_bytes("data/accounts.journal", unhex(file_2()))?;
+    put_bytes("data/bank.csv", unhex(file_3()))?;
+    put_bytes("data/bank.rules", unhex(file_4()))?;
+    put_bytes("data/prices.journal", unhex(file_5()))?;
+    put_bytes("data/reports.txt", unhex(file_6()))?;
+    put_bytes("data/zz_broken.journal", unhex(file_7()))?;
+    Ok(())
+}
+
+// data/2025.journal
+fn file_0() -> String {
+    """
+3b20323032353a2073616c6172792c2072656e742c207468652062726f6b657220616e642061207472697020746f204c
+6973626f6e0a0a323032352d30312d3031202a204f70656e696e672062616c616e6365730a20204173736574733a4261
+6e6b3a436865636b696e672020342c3230302e3030205553440a20204173736574733a42616e6b3a536176696e677320
+2031322c3030302e3030205553440a20204173736574733a42616e6b3a4f6c642d436865636b696e6720203235302e30
+30205553440a20204173736574733a42726f6b65723a436173682020332c3030302e3030205553440a20204571756974
+793a4f70656e696e672d42616c616e6365730a0a323032352d30312d3031202a205061726b766965772041706172746d
+656e7473207c2052656e740a2020457870656e7365733a52656e742020312c3835302e3030205553440a202041737365
+74733a42616e6b3a436865636b696e6720202d312c3835302e3030205553440a0a323032352d30312d3035202a205047
+26450a2020457870656e7365733a5574696c6974696573202039332e3831205553440a20204173736574733a42616e6b
+3a436865636b696e6720202d39332e3831205553440a0a323032352d30312d3037202a2057686f6c6520466f6f64730a
+2020457870656e7365733a466f6f643a47726f636572696573202037352e3034205553440a20204173736574733a4261
+6e6b3a436865636b696e6720202d37352e3034205553440a0a323032352d30312d3134202a204265726b656c65792042
+6f776c0a2020457870656e7365733a466f6f643a47726f636572696573202036362e3732205553440a20204173736574
+733a42616e6b3a436865636b696e6720202d36362e3732205553440a0a323032352d30312d3231202a20536166657761
+790a2020457870656e7365733a466f6f643a47726f63657269657320203130322e3730205553440a2020417373657473
+3a42616e6b3a436865636b696e6720202d3130322e3730205553440a0a323032352d30312d3139202a204368657a2050
+616e69737365207c2044696e6e65720a2020457870656e7365733a466f6f643a52657374617572616e7473202039342e
+3333205553440a20204173736574733a42616e6b3a436865636b696e6720202d39342e3333205553440a0a323032352d
+30312d3135202a2041636d6520526f626f74696373207c2053616c6172790a20204173736574733a42616e6b3a436865
+636b696e672020332c3230302e3030205553440a2020496e636f6d653a53616c61727920202d332c3230302e30302055
+53440a0a323032352d30312d3331202a2041636d6520526f626f74696373207c2053616c6172790a2020417373657473
+3a42616e6b3a436865636b696e672020332c3230302e3030205553440a2020496e636f6d653a53616c61727920202d33
+2c3230302e3030205553440a0a323032352d30312d3331202a20416c6c792042616e6b207c20496e7465726573740a20
+204173736574733a42616e6b3a536176696e6773202033352e3030205553440a2020496e636f6d653a496e7465726573
+740a0a323032352d30322d30312062616c616e6365204173736574733a42616e6b3a436865636b696e6720382c333137
+2e3430205553440a0a323032352d30322d3031202a205061726b766965772041706172746d656e7473207c2052656e74
+0a2020457870656e7365733a52656e742020312c3835302e3030205553440a20204173736574733a42616e6b3a436865
+636b696e6720202d312c3835302e3030205553440a0a323032352d30322d3035202a20504726450a2020457870656e73
+65733a5574696c697469657320203131332e3135205553440a20204173736574733a42616e6b3a436865636b696e6720
+202d3131332e3135205553440a0a323032352d30322d3035202a20536166657761790a2020457870656e7365733a466f
+6f643a47726f636572696573202037352e3333205553440a20204173736574733a42616e6b3a436865636b696e672020
+2d37352e3333205553440a0a323032352d30322d3133202a204265726b656c657920426f776c0a2020457870656e7365
+733a466f6f643a47726f636572696573202037342e3536205553440a20204173736574733a42616e6b3a436865636b69
+6e6720202d37342e3536205553440a0a323032352d30322d3232202a20547261646572204a6f6527730a202045787065
+6e7365733a466f6f643a47726f63657269657320203132312e3333205553440a20204173736574733a42616e6b3a4368
+65636b696e6720202d3132312e3333205553440a0a323032352d30322d3232202a204275726d61205375706572737461
+72207c2044696e6e65720a2020457870656e7365733a466f6f643a52657374617572616e7473202037322e3837205553
+440a20204173736574733a42616e6b3a436865636b696e6720202d37322e3837205553440a0a323032352d30322d3135
+202a2041636d6520526f626f74696373207c2053616c6172790a20204173736574733a42616e6b3a436865636b696e67
+2020332c3230302e3030205553440a2020496e636f6d653a53616c61727920202d332c3230302e3030205553440a0a32
+3032352d30322d3238202a2041636d6520526f626f74696373207c2053616c6172790a20204173736574733a42616e6b
+3a436865636b696e672020332c3230302e3030205553440a2020496e636f6d653a53616c61727920202d332c3230302e
+3030205553440a0a323032352d30322d3238202a20416c6c792042616e6b207c20496e7465726573740a202041737365
+74733a42616e6b3a536176696e6773202033352e3130205553440a2020496e636f6d653a496e7465726573740a0a3230
+32352d30322d3033202a205472616e73666572207c20546f207468652062726f6b65720a20204173736574733a42726f
+6b65723a436173682020362c3030302e3030205553440a20204173736574733a42616e6b3a436865636b696e6720202d
+362c3030302e3030205553440a0a323032352d30322d3130202a20466964656c697479207c20427579204141504c0a20
+204173736574733a42726f6b65723a53746f636b7320203130204141504c207b3138372e3530205553447d0a20204173
+736574733a42726f6b65723a436173680a0a323032352d30332d30312062616c616e6365204173736574733a42616e6b
+3a436865636b696e6720362c3431302e3136205553440a0a323032352d30332d3031202a205061726b76696577204170
+6172746d656e7473207c2052656e740a2020457870656e7365733a52656e742020312c3835302e3030205553440a2020
+4173736574733a42616e6b3a436865636b696e6720202d312c3835302e3030205553440a0a323032352d30332d303520
+2a20504726450a2020457870656e7365733a5574696c697469657320203130362e3130205553440a2020417373657473
+3a42616e6b3a436865636b696e6720202d3130362e3130205553440a0a323032352d30332d3034202a2057686f6c6520
+466f6f64730a2020457870656e7365733a466f6f643a47726f636572696573202035372e3730205553440a2020417373
+6574733a42616e6b3a436865636b696e6720202d35372e3730205553440a0a323032352d30332d3134202a2053616665
+7761790a2020457870656e7365733a466f6f643a47726f636572696573202036392e3339205553440a20204173736574
+733a42616e6b3a436865636b696e6720202d36392e3339205553440a0a323032352d30332d3231202a20547261646572
+204a6f6527730a2020457870656e7365733a466f6f643a47726f636572696573202039352e3934205553440a20204173
+736574733a42616e6b3a436865636b696e6720202d39352e3934205553440a0a323032352d30332d3232202a205a6163
+6861727927732050697a7a61207c2044696e6e65720a2020457870656e7365733a466f6f643a52657374617572616e74
+73202037372e3434205553440a20204173736574733a42616e6b3a436865636b696e6720202d37372e3434205553440a
+0a323032352d30332d3135202a2041636d6520526f626f74696373207c2053616c6172790a20204173736574733a4261
+6e6b3a436865636b696e672020332c3230302e3030205553440a2020496e636f6d653a53616c61727920202d332c3230
+302e3030205553440a0a323032352d30332d3331202a2041636d6520526f626f74696373207c2053616c6172790a2020
+4173736574733a42616e6b3a436865636b696e672020332c3230302e3030205553440a2020496e636f6d653a53616c61
+727920202d332c3230302e3030205553440a0a323032352d30332d3331202a20416c6c792042616e6b207c20496e7465
+726573740a20204173736574733a42616e6b3a536176696e6773202033352e3230205553440a2020496e636f6d653a49
+6e7465726573740a0a323032352d30332d3033202a20466964656c697479207c20427579205654490a20204173736574
+733a42726f6b65723a53746f636b732020323020565449207b3237302e3130205553447d0a20204173736574733a4272
+6f6b65723a436173680a0a323032352d30332d3135202a205472616e73666572207c20456d70747920746865206f6c64
+206163636f756e740a20204173736574733a42616e6b3a436865636b696e6720203235302e3030205553440a20204173
+736574733a42616e6b3a4f6c642d436865636b696e6720202d3235302e3030205553440a0a323032352d30332d333120
+636c6f7365204173736574733a42616e6b3a4f6c642d436865636b696e670a0a323032352d30332d3236202a2056616e
+6775617264207c20565449206469766964656e640a20204173736574733a42726f6b65723a43617368202032352e3630
+205553440a2020496e636f6d653a4469766964656e64730a0a323032352d30342d30312062616c616e63652041737365
+74733a42616e6b3a436865636b696e672031302c3830332e3539205553440a0a323032352d30342d3031202a20506172
+6b766965772041706172746d656e7473207c2052656e740a2020457870656e7365733a52656e742020312c3835302e30
+30205553440a20204173736574733a42616e6b3a436865636b696e6720202d312c3835302e3030205553440a0a323032
+352d30342d3035202a20504726450a2020457870656e7365733a5574696c697469657320203135342e3138205553440a
+20204173736574733a42616e6b3a436865636b696e6720202d3135342e3138205553440a0a323032352d30342d303720
+2a20536166657761790a2020457870656e7365733a466f6f643a47726f636572696573202035362e3136205553440a20
+204173736574733a42616e6b3a436865636b696e6720202d35362e3136205553440a0a323032352d30342d3134202a20
+4265726b656c657920426f776c0a2020457870656e7365733a466f6f643a47726f636572696573202039332e35352055
+53440a20204173736574733a42616e6b3a436865636b696e6720202d39332e3535205553440a0a323032352d30342d32
+30202a20547261646572204a6f6527730a2020457870656e7365733a466f6f643a47726f636572696573202038382e32
+37205553440a20204173736574733a42616e6b3a436865636b696e6720202d38382e3237205553440a0a323032352d30
+342d3139202a204368657a2050616e69737365207c2044696e6e65720a2020457870656e7365733a466f6f643a526573
+74617572616e7473202037342e3035205553440a20204173736574733a42616e6b3a436865636b696e6720202d37342e
+3035205553440a0a323032352d30342d3135202a2041636d6520526f626f74696373207c2053616c6172790a20204173
+736574733a42616e6b3a436865636b696e672020332c3230302e3030205553440a2020496e636f6d653a53616c617279
+20202d332c3230302e3030205553440a0a323032352d30342d3330202a2041636d6520526f626f74696373207c205361
+6c6172790a20204173736574733a42616e6b3a436865636b696e672020332c3230302e3030205553440a2020496e636f
+6d653a53616c61727920202d332c3230302e3030205553440a0a323032352d30342d3330202a20416c6c792042616e6b
+207c20496e7465726573740a20204173736574733a42616e6b3a536176696e6773202033352e3330205553440a202049
+6e636f6d653a496e7465726573740a0a323032352d30352d30312062616c616e6365204173736574733a42616e6b3a43
+6865636b696e672031342c3838372e3338205553440a0a323032352d30352d3031202a205061726b7669657720417061
+72746d656e7473207c2052656e740a2020457870656e7365733a52656e742020312c3835302e3030205553440a202041
+73736574733a42616e6b3a436865636b696e6720202d312c3835302e3030205553440a0a323032352d30352d3035202a
+20504726450a2020457870656e7365733a5574696c697469657320203133362e3430205553440a20204173736574733a
+42616e6b3a436865636b696e6720202d3133362e3430205553440a0a323032352d30352d3034202a2057686f6c652046
+6f6f64730a2020457870656e7365733a466f6f643a47726f63657269657320203131372e3537205553440a2020417373
+6574733a42616e6b3a436865636b696e6720202d3131372e3537205553440a0a323032352d30352d3133202a20536166
+657761790a2020457870656e7365733a466f6f643a47726f636572696573202036392e3431205553440a202041737365
+74733a42616e6b3a436865636b696e6720202d36392e3431205553440a0a323032352d30352d3231202a205361666577
+61790a2020457870656e7365733a466f6f643a47726f63657269657320203132392e3838205553440a20204173736574
+733a42616e6b3a436865636b696e6720202d3132392e3838205553440a0a323032352d30352d3232202a205461636f73
+2053696e616c6f61207c2044696e6e65720a2020457870656e7365733a466f6f643a52657374617572616e7473202038
+352e3636205553440a20204173736574733a42616e6b3a436865636b696e6720202d38352e3636205553440a0a323032
+352d30352d3135202a2041636d6520526f626f74696373207c2053616c6172790a20204173736574733a42616e6b3a43
+6865636b696e672020332c3230302e3030205553440a2020496e636f6d653a53616c61727920202d332c3230302e3030
+205553440a0a323032352d30352d3331202a2041636d6520526f626f74696373207c2053616c6172790a202041737365
+74733a42616e6b3a436865636b696e672020332c3230302e3030205553440a2020496e636f6d653a53616c6172792020
+2d332c3230302e3030205553440a0a323032352d30352d3331202a20416c6c792042616e6b207c20496e746572657374
+0a20204173736574733a42616e6b3a536176696e6773202033352e3431205553440a2020496e636f6d653a496e746572
+6573740a0a323032352d30352d3132202a20466964656c697479207c20427579204141504c0a20204173736574733a42
+726f6b65723a53746f636b73202038204141504c207b3230312e3235205553447d0a20204173736574733a42726f6b65
+723a436173680a0a323032352d30362d30312062616c616e6365204173736574733a42616e6b3a436865636b696e6720
+31382c3839382e3436205553440a0a323032352d30362d3031202a205061726b766965772041706172746d656e747320
+7c2052656e740a2020457870656e7365733a52656e742020312c3835302e3030205553440a20204173736574733a4261
+6e6b3a436865636b696e6720202d312c3835302e3030205553440a0a323032352d30362d3035202a20504726450a2020
+457870656e7365733a5574696c697469657320203133352e3238205553440a20204173736574733a42616e6b3a436865
+636b696e6720202d3133352e3238205553440a0a323032352d30362d3034202a20547261646572204a6f6527730a2020
+457870656e7365733a466f6f643a47726f636572696573202034352e3737205553440a20204173736574733a42616e6b
+3a436865636b696e6720202d34352e3737205553440a0a323032352d30362d3134202a20547261646572204a6f652773
+0a2020457870656e7365733a466f6f643a47726f63657269657320203131392e3832205553440a20204173736574733a
+42616e6b3a436865636b696e6720202d3131392e3832205553440a0a323032352d30362d3233202a2053616665776179
+0a2020457870656e7365733a466f6f643a47726f63657269657320203130352e3130205553440a20204173736574733a
+42616e6b3a436865636b696e6720202d3130352e3130205553440a0a323032352d30362d3135202a2041636d6520526f
+626f74696373207c2053616c6172790a20204173736574733a42616e6b3a436865636b696e672020332c3230302e3030
+205553440a2020496e636f6d653a53616c61727920202d332c3230302e3030205553440a0a323032352d30362d333020
+2a2041636d6520526f626f74696373207c2053616c6172790a20204173736574733a42616e6b3a436865636b696e6720
+20332c3230302e3030205553440a2020496e636f6d653a53616c61727920202d332c3230302e3030205553440a0a3230
+32352d30362d3330202a20416c6c792042616e6b207c20496e7465726573740a20204173736574733a42616e6b3a5361
+76696e6773202033352e3531205553440a2020496e636f6d653a496e7465726573740a0a323032352d30362d3236202a
+2056616e6775617264207c20565449206469766964656e640a20204173736574733a42726f6b65723a43617368202032
+372e3037205553440a2020496e636f6d653a4469766964656e64730a0a323032352d30362d3032202a2057697365207c
+204575726f7320666f72204c6973626f6e0a20204173736574733a576973653a4555522020312c3530302e3030204555
+52204020312e31333432205553440a20204173736574733a42616e6b3a436865636b696e670a0a323032352d30362d31
+31202a20486f74656c204176656e6964610a2020457870656e7365733a54726176656c20203634302e3030204555520a
+20204173736574733a576973653a4555520a0a323032352d30362d3132202a2054696d65204f7574204d61726b65740a
+2020457870656e7365733a466f6f643a52657374617572616e7473202033382e3630204555520a20204173736574733a
+576973653a4555520a0a323032352d30362d3133202a204361727269730a2020457870656e7365733a5472616e73706f
+72743a5472616e736974202031322e3430204555520a20204173736574733a576973653a4555520a0a323032352d3036
+2d3134202a2043657276656a617269612052616d69726f0a2020457870656e7365733a466f6f643a5265737461757261
+6e7473202037312e3235204555520a20204173736574733a576973653a4555520a0a323032352d30362d3135202a2055
+6265720a2020457870656e7365733a5472616e73706f72743a5472616e736974202031382e3930204555520a20204173
+736574733a576973653a4555520a0a323032352d30372d30312062616c616e6365204173736574733a42616e6b3a4368
+65636b696e672032312c3334312e3139205553440a0a323032352d30372d3031202a205061726b766965772041706172
+746d656e7473207c2052656e740a2020457870656e7365733a52656e742020312c3835302e3030205553440a20204173
+736574733a42616e6b3a436865636b696e6720202d312c3835302e3030205553440a0a323032352d30372d3035202a20
+504726450a2020457870656e7365733a5574696c6974696573202039372e3934205553440a20204173736574733a4261
+6e6b3a436865636b696e6720202d39372e3934205553440a0a323032352d30372d3036202a2057686f6c6520466f6f64
+730a2020457870656e7365733a466f6f643a47726f63657269657320203130322e3531205553440a2020417373657473
+3a42616e6b3a436865636b696e6720202d3130322e3531205553440a0a323032352d30372d3132202a204265726b656c
+657920426f776c0a2020457870656e7365733a466f6f643a47726f63657269657320203130372e3630205553440a2020
+4173736574733a42616e6b3a436865636b696e6720202d3130372e3630205553440a0a323032352d30372d3230202a20
+547261646572204a6f6527730a2020457870656e7365733a466f6f643a47726f636572696573202039362e3138205553
+440a20204173736574733a42616e6b3a436865636b696e6720202d39362e3138205553440a0a323032352d30372d3231
+202a205a61636861727927732050697a7a61207c2044696e6e65720a2020457870656e7365733a466f6f643a52657374
+617572616e7473202037352e3933205553440a20204173736574733a42616e6b3a436865636b696e6720202d37352e39
+33205553440a0a323032352d30372d3135202a2041636d6520526f626f74696373207c2053616c6172790a2020417373
+6574733a42616e6b3a436865636b696e672020332c3230302e3030205553440a2020496e636f6d653a53616c61727920
+202d332c3230302e3030205553440a0a323032352d30372d3331202a2041636d6520526f626f74696373207c2053616c
+6172790a20204173736574733a42616e6b3a436865636b696e672020332c3230302e3030205553440a2020496e636f6d
+653a53616c61727920202d332c3230302e3030205553440a0a323032352d30372d3331202a20416c6c792042616e6b20
+7c20496e7465726573740a20204173736574733a42616e6b3a536176696e6773202033352e3631205553440a2020496e
+636f6d653a496e7465726573740a0a323032352d30372d3031202a205472616e73666572207c20546f20746865206272
+6f6b65720a20204173736574733a42726f6b65723a436173682020342c3530302e3030205553440a2020417373657473
+3a42616e6b3a436865636b696e6720202d342c3530302e3030205553440a0a323032352d30382d30312062616c616e63
+65204173736574733a42616e6b3a436865636b696e672032302c3931312e3033205553440a0a323032352d30382d3031
+202a205061726b766965772041706172746d656e7473207c2052656e740a2020457870656e7365733a52656e74202031
+2c3835302e3030205553440a20204173736574733a42616e6b3a436865636b696e6720202d312c3835302e3030205553
+440a0a323032352d30382d3035202a20504726450a2020457870656e7365733a5574696c697469657320203131312e39
+33205553440a20204173736574733a42616e6b3a436865636b696e6720202d3131312e3933205553440a0a323032352d
+30382d3036202a20547261646572204a6f6527730a2020457870656e7365733a466f6f643a47726f6365726965732020
+34352e3631205553440a20204173736574733a42616e6b3a436865636b696e6720202d34352e3631205553440a0a3230
+32352d30382d3135202a20536166657761790a2020457870656e7365733a466f6f643a47726f63657269657320203432
+2e3233205553440a20204173736574733a42616e6b3a436865636b696e6720202d34322e3233205553440a0a32303235
+2d30382d3232202a204265726b656c657920426f776c0a2020457870656e7365733a466f6f643a47726f636572696573
+202036372e3335205553440a20204173736574733a42616e6b3a436865636b696e6720202d36372e3335205553440a0a
+323032352d30382d3138202a204275726d6120537570657273746172207c2044696e6e65720a2020457870656e736573
+3a466f6f643a52657374617572616e7473202037312e3739205553440a20204173736574733a42616e6b3a436865636b
+696e6720202d37312e3739205553440a0a323032352d30382d3135202a2041636d6520526f626f74696373207c205361
+6c6172790a20204173736574733a42616e6b3a436865636b696e672020332c3230302e3030205553440a2020496e636f
+6d653a53616c61727920202d332c3230302e3030205553440a0a323032352d30382d3331202a2041636d6520526f626f
+74696373207c2053616c6172790a20204173736574733a42616e6b3a436865636b696e672020332c3230302e30302055
+53440a2020496e636f6d653a53616c61727920202d332c3230302e3030205553440a0a323032352d30382d3331202a20
+416c6c792042616e6b207c20496e7465726573740a20204173736574733a42616e6b3a536176696e6773202033352e37
+32205553440a2020496e636f6d653a496e7465726573740a0a323032352d30382d3034202a20466964656c697479207c
+20427579204d5346540a20204173736574733a42726f6b65723a53746f636b73202035204d534654207b3431302e3030
+205553447d0a20204173736574733a42726f6b65723a436173680a0a323032352d30392d30312062616c616e63652041
+73736574733a42616e6b3a436865636b696e672032352c3132322e3132205553440a0a323032352d30392d3031202a20
+5061726b766965772041706172746d656e7473207c2052656e740a2020457870656e7365733a52656e742020312c3835
+302e3030205553440a20204173736574733a42616e6b3a436865636b696e6720202d312c3835302e3030205553440a0a
+323032352d30392d3035202a20504726450a2020457870656e7365733a5574696c697469657320203132372e30302055
+53440a20204173736574733a42616e6b3a436865636b696e6720202d3132372e3030205553440a0a323032352d30392d
+3036202a20547261646572204a6f6527730a2020457870656e7365733a466f6f643a47726f636572696573202035342e
+3936205553440a20204173736574733a42616e6b3a436865636b696e6720202d35342e3936205553440a0a323032352d
+30392d3133202a20536166657761790a2020457870656e7365733a466f6f643a47726f63657269657320203130332e32
+36205553440a20204173736574733a42616e6b3a436865636b696e6720202d3130332e3236205553440a0a323032352d
+30392d3233202a204265726b656c657920426f776c0a2020457870656e7365733a466f6f643a47726f63657269657320
+2035372e3833205553440a20204173736574733a42616e6b3a436865636b696e6720202d35372e3833205553440a0a32
+3032352d30392d3232202a204368657a2050616e69737365207c2044696e6e65720a2020457870656e7365733a466f6f
+643a52657374617572616e7473202038392e3131205553440a20204173736574733a42616e6b3a436865636b696e6720
+202d38392e3131205553440a0a323032352d30392d3135202a2041636d6520526f626f74696373207c2053616c617279
+0a20204173736574733a42616e6b3a436865636b696e672020332c3230302e3030205553440a2020496e636f6d653a53
+616c61727920202d332c3230302e3030205553440a0a323032352d30392d3330202a2041636d6520526f626f74696373
+207c2053616c6172790a20204173736574733a42616e6b3a436865636b696e672020332c3230302e3030205553440a20
+20496e636f6d653a53616c61727920202d332c3230302e3030205553440a0a323032352d30392d3330202a20416c6c79
+2042616e6b207c20496e7465726573740a20204173736574733a42616e6b3a536176696e6773202033352e3832205553
+440a2020496e636f6d653a496e7465726573740a0a323032352d30392d3236202a2056616e6775617264207c20565449
+206469766964656e640a20204173736574733a42726f6b65723a43617368202033322e3136205553440a2020496e636f
+6d653a4469766964656e64730a0a323032352d31302d30312062616c616e6365204173736574733a42616e6b3a436865
+636b696e672032392c3233392e3936205553440a0a323032352d31302d3031202a205061726b76696577204170617274
+6d656e7473207c2052656e740a2020457870656e7365733a52656e742020312c3835302e3030205553440a2020417373
+6574733a42616e6b3a436865636b696e6720202d312c3835302e3030205553440a0a323032352d31302d3035202a2050
+4726450a2020457870656e7365733a5574696c697469657320203133342e3339205553440a20204173736574733a4261
+6e6b3a436865636b696e6720202d3133342e3339205553440a0a323032352d31302d3035202a204265726b656c657920
+426f776c0a2020457870656e7365733a466f6f643a47726f63657269657320203132362e3237205553440a2020417373
+6574733a42616e6b3a436865636b696e6720202d3132362e3237205553440a0a323032352d31302d3135202a20426572
+6b656c657920426f776c0a2020457870656e7365733a466f6f643a47726f636572696573202038382e3538205553440a
+20204173736574733a42616e6b3a436865636b696e6720202d38382e3538205553440a0a323032352d31302d3232202a
+20547261646572204a6f6527730a2020457870656e7365733a466f6f643a47726f636572696573202036382e35342055
+53440a20204173736574733a42616e6b3a436865636b696e6720202d36382e3534205553440a0a323032352d31302d32
+32202a204275726d6120537570657273746172207c2044696e6e65720a2020457870656e7365733a466f6f643a526573
+74617572616e7473202034382e3232205553440a20204173736574733a42616e6b3a436865636b696e6720202d34382e
+3232205553440a0a323032352d31302d3135202a2041636d6520526f626f74696373207c2053616c6172790a20204173
+736574733a42616e6b3a436865636b696e672020332c3230302e3030205553440a2020496e636f6d653a53616c617279
+20202d332c3230302e3030205553440a0a323032352d31302d3331202a2041636d6520526f626f74696373207c205361
+6c6172790a20204173736574733a42616e6b3a436865636b696e672020332c3230302e3030205553440a2020496e636f
+6d653a53616c61727920202d332c3230302e3030205553440a0a323032352d31302d3331202a20416c6c792042616e6b
+207c20496e7465726573740a20204173736574733a42616e6b3a536176696e6773202033352e3932205553440a202049
+6e636f6d653a496e7465726573740a0a323032352d31302d3036202a205472616e73666572207c20546f20736176696e
+67730a20204173736574733a42616e6b3a536176696e67732020352c3030302e3030205553440a20204173736574733a
+42616e6b3a436865636b696e6720202d352c3030302e3030205553440a0a323032352d31312d30312062616c616e6365
+204173736574733a42616e6b3a436865636b696e672032382c3332332e3936205553440a0a323032352d31312d303120
+2a205061726b766965772041706172746d656e7473207c2052656e740a2020457870656e7365733a52656e742020312c
+3835302e3030205553440a20204173736574733a42616e6b3a436865636b696e6720202d312c3835302e303020555344
+0a0a323032352d31312d3035202a20504726450a2020457870656e7365733a5574696c697469657320203133342e3835
+205553440a20204173736574733a42616e6b3a436865636b696e6720202d3133342e3835205553440a0a323032352d31
+312d3036202a2057686f6c6520466f6f64730a2020457870656e7365733a466f6f643a47726f63657269657320203434
+2e3235205553440a20204173736574733a42616e6b3a436865636b696e6720202d34342e3235205553440a0a32303235
+2d31312d3132202a20547261646572204a6f6527730a2020457870656e7365733a466f6f643a47726f63657269657320
+203130332e3239205553440a20204173736574733a42616e6b3a436865636b696e6720202d3130332e3239205553440a
+0a323032352d31312d3232202a204265726b656c657920426f776c0a2020457870656e7365733a466f6f643a47726f63
+6572696573202034312e3530205553440a20204173736574733a42616e6b3a436865636b696e6720202d34312e353020
+5553440a0a323032352d31312d3139202a205a61636861727927732050697a7a61207c2044696e6e65720a2020457870
+656e7365733a466f6f643a52657374617572616e7473202036312e3238205553440a20204173736574733a42616e6b3a
+436865636b696e6720202d36312e3238205553440a0a323032352d31312d3135202a2041636d6520526f626f74696373
+207c2053616c6172790a20204173736574733a42616e6b3a436865636b696e672020332c3230302e3030205553440a20
+20496e636f6d653a53616c61727920202d332c3230302e3030205553440a0a323032352d31312d3330202a2041636d65
+20526f626f74696373207c2053616c6172790a20204173736574733a42616e6b3a436865636b696e672020332c323030
+2e3030205553440a2020496e636f6d653a53616c61727920202d332c3230302e3030205553440a0a323032352d31312d
+3330202a20416c6c792042616e6b207c20496e7465726573740a20204173736574733a42616e6b3a536176696e677320
+2035302e3631205553440a2020496e636f6d653a496e7465726573740a0a323032352d31312d3134202a20466964656c
+697479207c2053656c6c204141504c0a20204173736574733a42726f6b65723a53746f636b7320202d3132204141504c
+207b7d2040203232382e3430205553440a20204173736574733a42726f6b65723a436173682020322c3733352e383520
+5553440a2020457870656e7365733a466565732020342e3935205553440a2020496e636f6d653a4361706974616c2d47
+61696e730a0a323032352d31322d30312062616c616e6365204173736574733a42616e6b3a436865636b696e67203332
+2c3438382e3739205553440a0a323032352d31322d3031202a205061726b766965772041706172746d656e7473207c20
+52656e740a2020457870656e7365733a52656e742020312c3835302e3030205553440a20204173736574733a42616e6b
+3a436865636b696e6720202d312c3835302e3030205553440a0a323032352d31322d3035202a20504726450a20204578
+70656e7365733a5574696c697469657320203130312e3032205553440a20204173736574733a42616e6b3a436865636b
+696e6720202d3130312e3032205553440a0a323032352d31322d3034202a2057686f6c6520466f6f64730a2020457870
+656e7365733a466f6f643a47726f636572696573202035322e3238205553440a20204173736574733a42616e6b3a4368
+65636b696e6720202d35322e3238205553440a0a323032352d31322d3134202a204265726b656c657920426f776c0a20
+20457870656e7365733a466f6f643a47726f636572696573202036372e3835205553440a20204173736574733a42616e
+6b3a436865636b696e6720202d36372e3835205553440a0a323032352d31322d3231202a2057686f6c6520466f6f6473
+0a2020457870656e7365733a466f6f643a47726f636572696573202037342e3239205553440a20204173736574733a42
+616e6b3a436865636b696e6720202d37342e3239205553440a0a323032352d31322d3232202a205461636f732053696e
+616c6f61207c2044696e6e65720a2020457870656e7365733a466f6f643a52657374617572616e7473202034342e3434
+205553440a20204173736574733a42616e6b3a436865636b696e6720202d34342e3434205553440a0a323032352d3132
+2d3135202a2041636d6520526f626f74696373207c2053616c6172790a20204173736574733a42616e6b3a436865636b
+696e672020332c3230302e3030205553440a2020496e636f6d653a53616c61727920202d332c3230302e303020555344
+0a0a323032352d31322d3331202a2041636d6520526f626f74696373207c2053616c6172790a20204173736574733a42
+616e6b3a436865636b696e672020332c3230302e3030205553440a2020496e636f6d653a53616c61727920202d332c32
+30302e3030205553440a0a323032352d31322d3331202a20416c6c792042616e6b207c20496e7465726573740a202041
+73736574733a42616e6b3a536176696e6773202035302e3736205553440a2020496e636f6d653a496e7465726573740a
+0a323032352d31322d3236202a2056616e6775617264207c20565449206469766964656e640a20204173736574733a42
+726f6b65723a43617368202033302e3535205553440a2020496e636f6d653a4469766964656e64730a0a323032362d30
+312d30312062616c616e6365204173736574733a42616e6b3a536176696e67732031372c3435352e3936205553440a
+"""
+}
+
+// data/2026.journal
+fn file_1() -> String {
+    """
+3b20323032362c20666972737420717561727465723b20746865206361726427732070757263686173657320636f6d65
+2066726f6d207468652062616e6b20696d706f72740a0a323032362d30312d30312062616c616e636520417373657473
+3a42616e6b3a436865636b696e672033362c3639382e3931205553440a0a323032362d30312d3031202a205061726b76
+6965772041706172746d656e7473207c2052656e740a2020457870656e7365733a52656e742020312c3932352e303020
+5553440a20204173736574733a42616e6b3a436865636b696e6720202d312c3932352e3030205553440a0a323032362d
+30312d3035202a20504726450a2020457870656e7365733a5574696c697469657320203134312e3331205553440a2020
+4173736574733a42616e6b3a436865636b696e6720202d3134312e3331205553440a0a323032362d30312d3135202a20
+41636d6520526f626f74696373207c2053616c6172790a20204173736574733a42616e6b3a436865636b696e67202033
+2c3435302e3030205553440a2020496e636f6d653a53616c61727920202d332c3435302e3030205553440a0a32303236
+2d30312d3331202a2041636d6520526f626f74696373207c2053616c6172790a20204173736574733a42616e6b3a4368
+65636b696e672020332c3435302e3030205553440a2020496e636f6d653a53616c61727920202d332c3435302e303020
+5553440a0a323032362d30312d3331202a20416c6c792042616e6b207c20496e7465726573740a20204173736574733a
+42616e6b3a536176696e6773202035302e3931205553440a2020496e636f6d653a496e7465726573740a0a323032362d
+30312d3230202a2057697365207c204575726f7320666f7220506f72746f0a20204173736574733a576973653a455552
+20203530302e303020455552204040203534312e3635205553440a20204173736574733a42616e6b3a436865636b696e
+6720202d3534312e3635205553440a0a323032362d30312d3330202a2056616e6775617264207c205654492064697669
+64656e640a20204173736574733a42726f6b65723a43617368202033312e3037205553440a2020496e636f6d653a4469
+766964656e64730a0a323032362d30322d30312062616c616e6365204173736574733a42616e6b3a436865636b696e67
+2034302c3439302e3935205553440a0a323032362d30322d3031202a205061726b766965772041706172746d656e7473
+207c2052656e740a2020457870656e7365733a52656e742020312c3932352e3030205553440a20204173736574733a42
+616e6b3a436865636b696e6720202d312c3932352e3030205553440a0a323032362d30322d3035202120504726450a20
+20457870656e7365733a5574696c697469657320203134322e3937205553440a20204173736574733a42616e6b3a4368
+65636b696e6720202d3134322e3937205553440a0a323032362d30322d3135202a2041636d6520526f626f7469637320
+7c2053616c6172790a20204173736574733a42616e6b3a436865636b696e672020332c3435302e3030205553440a2020
+496e636f6d653a53616c61727920202d332c3435302e3030205553440a0a323032362d30322d3238202a2041636d6520
+526f626f74696373207c2053616c6172790a20204173736574733a42616e6b3a436865636b696e672020332c3435302e
+3030205553440a2020496e636f6d653a53616c61727920202d332c3435302e3030205553440a0a323032362d30322d32
+38202a20416c6c792042616e6b207c20496e7465726573740a20204173736574733a42616e6b3a536176696e67732020
+35312e3036205553440a2020496e636f6d653a496e7465726573740a0a323032362d30322d3039202a20466964656c69
+7479207c20427579204d5346540a20204173736574733a42726f6b65723a53746f636b73202036204d534654207b3339
+382e3630205553447d0a20204173736574733a42726f6b65723a436173680a0a323032362d30322d3134202a204c6976
+7261726961204c656c6c6f0a2020457870656e7365733a54726176656c202031352e3030204555520a20204173736574
+733a576973653a4555520a0a323032362d30332d30312062616c616e6365204173736574733a42616e6b3a436865636b
+696e672034332c3832322e3938205553440a0a323032362d30332d3031202a205061726b766965772041706172746d65
+6e7473207c2052656e740a2020457870656e7365733a52656e742020312c3932352e3030205553440a20204173736574
+733a42616e6b3a436865636b696e6720202d312c3932352e3030205553440a0a323032362d30332d3035202a20504726
+450a2020457870656e7365733a5574696c697469657320203134302e3338205553440a20204173736574733a42616e6b
+3a436865636b696e6720202d3134302e3338205553440a0a323032362d30332d3135202a2041636d6520526f626f7469
+6373207c2053616c6172790a20204173736574733a42616e6b3a436865636b696e672020332c3435302e303020555344
+0a2020496e636f6d653a53616c61727920202d332c3435302e3030205553440a0a323032362d30332d3331202a204163
+6d6520526f626f74696373207c2053616c6172790a20204173736574733a42616e6b3a436865636b696e672020332c34
+35302e3030205553440a2020496e636f6d653a53616c61727920202d332c3435302e3030205553440a0a323032362d30
+332d3331202a20416c6c792042616e6b207c20496e7465726573740a20204173736574733a42616e6b3a536176696e67
+73202035312e3231205553440a2020496e636f6d653a496e7465726573740a0a323032362d30332d3130202a20466964
+656c697479207c2053656c6c20746865204141504c20626f7567687420696e204d61790a20204173736574733a42726f
+6b65723a53746f636b7320202d35204141504c207b3230312e3235205553447d2040203234312e3130205553440a2020
+4173736574733a42726f6b65723a436173682020312c3230352e3530205553440a2020496e636f6d653a436170697461
+6c2d4761696e730a0a323032362d30332d33312062616c616e6365204173736574733a42726f6b65723a53746f636b73
+203131204d5346540a323032362d30332d33312062616c616e6365204173736574733a42726f6b65722031204141504c
+0a0a323032362d30342d30312062616c616e6365204173736574733a42616e6b3a436865636b696e672034382c323537
+2e3630205553440a323032362d30342d30312062616c616e6365204173736574733a42616e6b3a536176696e67732031
+372c3630392e3134205553440a
+"""
+}
+
+// data/accounts.journal
+fn file_2() -> String {
+    """
+3b20746865206368617274206f66206163636f756e74730a323032352d30312d3031206f70656e204173736574733a42
+616e6b3a436865636b696e67205553440a323032352d30312d3031206f70656e204173736574733a42616e6b3a536176
+696e6773205553440a323032352d30312d3031206f70656e204173736574733a42616e6b3a4f6c642d436865636b696e
+67205553440a323032352d30312d3031206f70656e204173736574733a42726f6b65723a43617368205553440a323032
+352d30312d3031206f70656e204173736574733a42726f6b65723a53746f636b73204141504c2c5654492c4d5346540a
+323032352d30312d3031206f70656e204173736574733a576973653a455552204555520a323032352d30312d3031206f
+70656e204c696162696c69746965733a436172643a56697361205553440a323032352d30312d3031206f70656e204571
+756974793a4f70656e696e672d42616c616e6365730a323032352d30312d3031206f70656e20496e636f6d653a53616c
+617279205553440a323032352d30312d3031206f70656e20496e636f6d653a496e746572657374205553440a32303235
+2d30312d3031206f70656e20496e636f6d653a4469766964656e6473205553440a323032352d30312d3031206f70656e
+20496e636f6d653a4361706974616c2d4761696e73205553440a323032352d30312d3031206f70656e20457870656e73
+65733a52656e74205553440a323032352d30312d3031206f70656e20457870656e7365733a5574696c69746965732055
+53440a323032352d30312d3031206f70656e20457870656e7365733a466f6f643a47726f636572696573205553440a32
+3032352d30312d3031206f70656e20457870656e7365733a466f6f643a52657374617572616e74730a323032352d3031
+2d3031206f70656e20457870656e7365733a466f6f643a436f66666565205553440a323032352d30312d3031206f7065
+6e20457870656e7365733a5472616e73706f72743a4675656c205553440a323032352d30312d3031206f70656e204578
+70656e7365733a5472616e73706f72743a5472616e7369740a323032352d30312d3031206f70656e20457870656e7365
+733a54726176656c0a323032352d30312d3031206f70656e20457870656e7365733a537562736372697074696f6e7320
+5553440a323032352d30312d3031206f70656e20457870656e7365733a53686f7070696e67205553440a323032352d30
+312d3031206f70656e20457870656e7365733a46656573205553440a323032352d30312d3031206f70656e2045787065
+6e7365733a556e63617465676f72697a6564205553440a
+"""
+}
+
+// data/bank.csv
+fn file_3() -> String {
+    """
+446174652c4465736372697074696f6e2c416d6f756e742c42616c616e63650a30332f32362f323032362c225041594d
+454e54202d205448414e4b20594f55222c3430302e30302c2d3231362e38390a30332f32362f323032362c57484f4c45
+20464f4f4453204d4b54202331303233342c2d37302e39332c2d3631362e38390a30332f32312f323032362c43484950
+4f544c4520313838332c2d2431352e31392c2d3534352e39360a30332f31392f323032362c554245522020202a545249
+50202048454c502e554245522e434f4d2c2d33302e31392c2d3533302e37370a30332f31362f323032362c4245524b45
+4c455920424f574c20574553542c2d2437322e37322c2d3530302e35380a30332f31342f323032362c414d5a4e204d6b
+74702055532a324b344c31392c2d2436312e33342c2d3432372e38360a30332f31322f323032362c5348454c4c204f49
+4c2035373434342c2d34342e36362c2d3336362e35320a30332f30392f323032362c53504f54494659205553412c2d31
+312e39392c2d3332312e38360a30332f30392f323032362c57484f4c4520464f4f4453204d4b54202331303233342c2d
+2434332e34332c2d3330392e38370a31332f34352f323032362c22524546554e442c204241442044415445222c352e30
+302c302e30300a30332f30382f323032362c22424c554520424f54544c4520434f464645452c204f414b4c414e44222c
+2d362e32382c2d3236362e34340a30332f30332f323032362c4e4554464c49582e434f4d2c2d31352e34392c2d323630
+2e31360a30332f30322f323032362c5341464557415920303938312c2d36312e30322c2d3234342e36370a30322f3236
+2f323032362c225041594d454e54202d205448414e4b20594f55222c22312c3530302e3030222c2d3138332e36350a30
+322f32362f323032362c5341464557415920303938312c2d37392e38312c222d312c3638332e3635220a30322f32332f
+323032362c434849504f544c4520313838332c2d31342e33322c222d312c3630332e3834220a30322f32312f32303236
+2c4150504c452053544f524520523031342c222d312c3234392e3030222c222d312c3538392e3532220a30322f32302f
+323032362c554245522020202a54524950202048454c502e554245522e434f4d2c2d2432352e31312c2d3334302e3532
+0a30322f31362f323032362c414d5a4e204d6b74702055532a324b344c31392c2d2434322e39312c2d3331352e34310a
+30322f31362f323032362c4245524b454c455920424f574c20574553542c2d243132322e37372c2d3237322e35300a30
+322f31342f323032362c5348454c4c204f494c2035373434342c2d36342e34322c2d3134392e37330a30322f31302f32
+3032362c57484f4c4520464f4f4453204d4b54202331303233342c2d2435342e30392c2d38352e33310a30322f30392f
+323032362c53504f54494659205553412c2d31312e39392c2d33312e32320a30322f30372f323032362c22424c554520
+424f54544c4520434f464645452c204f414b4c414e44222c2d31302e32332c2d31392e32330a30322f30332f32303236
+2c4e4554464c49582e434f4d2c2d2431352e34392c2d392e30300a30322f30322f323032362c224245524b454c455920
+424f574c2057455354222c2d34302e38392c362e34390a30312f32372f323032362c5041594d454e54202d205448414e
+4b20594f552c3530302e30302c34372e33380a30312f32372f323032362c545241444552204a4f45275320233132372c
+2d2434392e34392c2d3435322e36320a30312f32322f323032362c434849504f544c4520313838332c2d2431382e3733
+2c2d3430332e31330a30312f32322f323032362c554245522020202a54524950202048454c502e554245522e434f4d2c
+2d2431382e35382c2d3338342e34300a30312f32302f323032362c57484f4c4520464f4f4453204d4b54202331303233
+342c2d2433362e34382c2d3336352e38320a30312f31362f323032362c414d5a4e204d6b74702055532a324b344c3139
+2c2d37362e39362c2d3332392e33340a30312f31342f323032362c5348454c4c204f494c2035373434342c2d34392e32
+352c2d3235322e33380a30312f31312f323032362c57484f4c4520464f4f4453204d4b54202331303233342c2d313030
+2e33362c2d3230332e31330a30312f30392f323032362c53504f54494659205553412c2d31312e39392c2d3130322e37
+370a30312f30362f323032362c22424c554520424f54544c4520434f464645452c204f414b4c414e44222c2d31302e33
+312c2d39302e37380a30312f30332f323032362c4e4554464c49582e434f4d2c2d31352e34392c2d38302e34370a3031
+2f30332f323032362c57484f4c4520464f4f4453204d4b54202331303233342c2d36342e39382c2d36342e39380a
+"""
+}
+
+// data/bank.rules
+fn file_4() -> String {
+    """
+2320496d706f7274696e672074686520566973612073746174656d656e743a206669727374206d617463682077696e73
+2c2069676e6f72696e6720636173652e0a6163636f756e74204c696162696c69746965733a436172643a566973610a63
+757272656e6379205553440a64656661756c7420457870656e7365733a556e63617465676f72697a65640a0a6d617463
+682077686f6c6520666f6f6473203d3e20457870656e7365733a466f6f643a47726f636572696573203d3e2057686f6c
+6520466f6f64730a6d6174636820747261646572206a6f65203d3e20457870656e7365733a466f6f643a47726f636572
+696573203d3e20547261646572204a6f6527730a6d617463682073616665776179203d3e20457870656e7365733a466f
+6f643a47726f636572696573203d3e20536166657761790a6d61746368206265726b656c657920626f776c203d3e2045
+7870656e7365733a466f6f643a47726f636572696573203d3e204265726b656c657920426f776c0a6d61746368206e65
+74666c6978203d3e20457870656e7365733a537562736372697074696f6e73203d3e204e6574666c69780a6d61746368
+2073706f74696679203d3e20457870656e7365733a537562736372697074696f6e73203d3e2053706f746966790a6d61
+746368207368656c6c206f696c203d3e20457870656e7365733a5472616e73706f72743a4675656c203d3e205368656c
+6c0a6d617463682075626572203d3e20457870656e7365733a5472616e73706f72743a5472616e736974203d3e205562
+65720a6d6174636820626c756520626f74746c65203d3e20457870656e7365733a466f6f643a436f666665650a6d6174
+636820636869706f746c65203d3e20457870656e7365733a466f6f643a52657374617572616e7473203d3e2043686970
+6f746c650a6d61746368207061796d656e74202d207468616e6b20796f75203d3e204173736574733a42616e6b3a4368
+65636b696e67203d3e2043617264207061796d656e740a
+"""
+}
+
+// data/prices.journal
+fn file_5() -> String {
+    """
+3b206d6f6e74682d656e6420636c6f73696e67207072696365730a0a323032352d30312d333120707269636520414150
+4c203137392e3532205553440a323032352d30312d333120707269636520565449203237312e3732205553440a323032
+352d30312d3331207072696365204d534654203431342e3638205553440a323032352d30312d33312070726963652045
+555220312e30383032205553440a323032352d30322d3238207072696365204141504c203138312e3931205553440a32
+3032352d30322d323820707269636520565449203237322e3534205553440a323032352d30322d323820707269636520
+4d534654203431332e3836205553440a323032352d30322d32382070726963652045555220312e30373334205553440a
+323032352d30332d3331207072696365204141504c203137392e3531205553440a323032352d30332d33312070726963
+6520565449203237312e3433205553440a323032352d30332d3331207072696365204d534654203430392e3238205553
+440a323032352d30332d33312070726963652045555220312e30373737205553440a323032352d30342d333020707269
+6365204141504c203137322e3531205553440a323032352d30342d333020707269636520565449203237312e39382055
+53440a323032352d30342d3330207072696365204d534654203430322e3633205553440a323032352d30342d33302070
+726963652045555220312e30363839205553440a323032352d30352d3331207072696365204141504c203137382e3439
+205553440a323032352d30352d333120707269636520565449203238322e3531205553440a323032352d30352d333120
+7072696365204d534654203430372e3732205553440a323032352d30352d33312070726963652045555220312e303633
+35205553440a323032352d30362d3330207072696365204141504c203137312e3831205553440a323032352d30362d33
+3020707269636520565449203238342e3738205553440a323032352d30362d3330207072696365204d53465420343034
+2e3831205553440a323032352d30362d33302070726963652045555220312e30363432205553440a323032352d30372d
+3331207072696365204141504c203137312e3839205553440a323032352d30372d333120707269636520565449203238
+312e3635205553440a323032352d30372d3331207072696365204d534654203431342e3637205553440a323032352d30
+372d33312070726963652045555220312e30363938205553440a323032352d30382d3331207072696365204141504c20
+3136382e3838205553440a323032352d30382d333120707269636520565449203238342e3032205553440a323032352d
+30382d3331207072696365204d534654203431302e3839205553440a323032352d30382d333120707269636520455552
+20312e30373339205553440a323032352d30392d3330207072696365204141504c203137322e3333205553440a323032
+352d30392d333020707269636520565449203238392e3531205553440a323032352d30392d3330207072696365204d53
+4654203431312e3037205553440a323032352d30392d33302070726963652045555220312e30373234205553440a3230
+32352d31302d3331207072696365204141504c203136382e3835205553440a323032352d31302d333120707269636520
+565449203330302e3339205553440a323032352d31302d3331207072696365204d534654203431352e3735205553440a
+323032352d31302d33312070726963652045555220312e30363431205553440a323032352d31312d3330207072696365
+204141504c203136332e3538205553440a323032352d31312d333020707269636520565449203239342e363320555344
+0a323032352d31312d3330207072696365204d534654203432302e3236205553440a323032352d31312d333020707269
+63652045555220312e30353539205553440a323032352d31322d3331207072696365204141504c203137302e31312055
+53440a323032352d31322d333120707269636520565449203238372e3835205553440a323032352d31322d3331207072
+696365204d534654203432382e3738205553440a323032352d31322d33312070726963652045555220312e3034383720
+5553440a323032362d30312d3331207072696365204141504c203136362e3137205553440a323032362d30312d333120
+707269636520565449203239372e3839205553440a323032362d30312d3331207072696365204d534654203432342e34
+30205553440a323032362d30312d33312070726963652045555220312e30363235205553440a323032362d30322d3238
+207072696365204141504c203137342e3832205553440a323032362d30322d323820707269636520565449203239312e
+3838205553440a323032362d30322d3238207072696365204d534654203432342e3837205553440a323032362d30322d
+32382070726963652045555220312e30373432205553440a323032362d30332d3331207072696365204141504c203137
+382e3839205553440a323032362d30332d333120707269636520565449203239332e3833205553440a323032362d3033
+2d3331207072696365204d534654203432302e3630205553440a323032362d30332d3331207072696365204555522031
+2e30363837205553440a323032362d30332d33312070726963652055534420302e39323135204555520a
+"""
+}
+
+// data/reports.txt
+fn file_6() -> String {
+    """
+23206f6e6520636f6d6d616e642061206c696e650a62616c616e6365202d2d646570746820320a62616c616e63652045
+7870656e7365730a62616c616e6365202d2d617420323032352d30362d333020417373657473204c696162696c697469
+65730a7265676973746572204173736574733a42616e6b3a436865636b696e67202d2d66726f6d20323032362d30332d
+30310a7265676973746572204c696162696c69746965733a43617264202d2d746f20323032362d30312d32300a726567
+6973746572204173736574733a42726f6b65723a53746f636b730a76616c7565205553440a76616c756520555344202d
+2d617420323032352d30362d33300a76616c756520455552202d2d617420323032352d30362d33300a696e636f6d6520
+323032352d30312d303120323032352d31322d33310a696e636f6d6520323032362d30312d303120323032362d30332d
+33310a6c6f7473204173736574733a42726f6b65720a7072696e7420323032352d31312d313420323032352d31312d31
+340a7072696e7420323032362d30312d323020323032362d30312d32310a62616c616e6365204571756974793a4e6f74
+68696e670a7265676973746572204173736574733a4e6f70650a76616c75650a696e636f6d6520323032362d30332d33
+3120323032362d30312d30310a62616c616e6365202d2d646570746820780a696e636f6d6520323032362d30312d3031
+20323032362d30322d33300a66726f626e6963617465206e6f770a
+"""
+}
+
+// data/zz_broken.journal
+fn file_7() -> String {
+    """
+3b206d697374616b65733a20656163682069732072656675736564206f72207265706f727465642c20616e64206e6f74
+68696e6720656c7365206368616e6765730a323032362d30322d3330202a20436f726e65722053746f7265207c206120
+646179207468617420646f6573206e6f742065786973740a2020457870656e7365733a466f6f643a47726f6365726965
+73202031302e3030205553440a20204173736574733a42616e6b3a436865636b696e670a323032362d30332d3032202a
+20436f726e65722053746f7265207c20646f6573206e6f742062616c616e63650a2020457870656e7365733a466f6f64
+3a47726f636572696573202031322e3430205553440a20204173736574733a42616e6b3a436865636b696e6720202d31
+322e3339205553440a0a323032362d30332d3033202a20436f726e65722053746f7265207c2074776f20706f7374696e
+677320776974686f757420616d6f756e74730a2020457870656e7365733a466f6f643a47726f6365726965730a202041
+73736574733a42616e6b3a436865636b696e670a0a323032362d30332d3034202a20436f726e65722053746f7265207c
+2061207479706f20696e20746865206163636f756e740a2020457870656e7365733a466f6f643a47726f636572792020
+352e3030205553440a20204173736574733a42616e6b3a436865636b696e670a0a323032362d30332d3035202a204f6c
+642062616e6b207c20746865206163636f756e742077617320636c6f7365640a20204173736574733a42616e6b3a4f6c
+642d436865636b696e672020352e3030205553440a20204173736574733a42616e6b3a436865636b696e670a0a323032
+362d30332d3036202a20466964656c697479207c2073656c6c73206d6f7265207468616e20697420686f6c64730a2020
+4173736574733a42726f6b65723a53746f636b7320202d343020565449207b7d0a20204173736574733a42726f6b6572
+3a436173680a0a323032362d30332d3037202a20466964656c697479207c2061206c6f742077697468206e6f20636f73
+740a20204173736574733a42726f6b65723a53746f636b7320203320565449207b7d0a20204173736574733a42726f6b
+65723a436173680a0a323032362d30332d3038202a2043616665207c20612062616420616d6f756e740a202045787065
+6e7365733a466f6f643a52657374617572616e7473202031322e332e34205553440a20204173736574733a42616e6b3a
+436865636b696e670a0a323032362d30332d3039202a2057697365207c20646f6c6c61727320696e746f207468652065
+75726f206163636f756e740a20204173736574733a576973653a455552202032302e3030205553440a20204173736574
+733a42616e6b3a436865636b696e670a0a323032362d30332d3130202a20466964656c697479207c206e6f206c6f7420
+6174207468617420636f73740a20204173736574733a42726f6b65723a53746f636b7320202d32204141504c207b3135
+302e3030205553447d0a20204173736574733a42726f6b65723a436173680a0a323032362d30332d3131202a2042616e
+6b207c206e6f7468696e6720746f2066696c6c20696e0a2020457870656e7365733a466565732020302e303020555344
+0a20204173736574733a42616e6b3a436865636b696e670a0a323032362d30332d3132202a20466964656c697479207c
+206469766964656e647320696e746f20612073746f636b206163636f756e740a20204173736574733a42726f6b65723a
+53746f636b73202031322e3030205553440a2020496e636f6d653a4469766964656e64730a0a323032362d30322d3031
+202a2043726564697420756e696f6e207c206e6f74206f70656e207965740a20204173736574733a42616e6b3a437265
+6469742d556e696f6e2020352e3030205553440a20204173736574733a42616e6b3a436865636b696e670a0a32303236
+2d30362d3031206f70656e204173736574733a42616e6b3a4372656469742d556e696f6e205553440a323032352d3132
+2d33312062616c616e6365204173736574733a42616e6b3a536176696e67732039392e3030205553440a202045787065
+6e7365733a466565732020312e3030205553440a323032362d30312d313520706164204173736574733a42616e6b3a43
+6865636b696e67204571756974793a4f70656e696e672d42616c616e6365730a54686973206c696e65206973206e6f74
+2061206469726563746976650a323032362d30312d3031206f70656e204173736574733a42616e6b3a436865636b696e
+67205553440a323032362d30332d3133202a207c206e6f2070617965650a2020457870656e7365733a46656573202031
+2e3030205553440a20204173736574733a42616e6b3a436865636b696e670a323032362d30332d3134202a20436f726e
+65722053746f72650a2020657870656e7365733a666f6f642020312e3030205553440a20204173736574733a42616e6b
+3a436865636b696e670a
+"""
+}

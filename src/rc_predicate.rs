@@ -276,6 +276,23 @@ fn reassign_kills_by_reachability(
 /// must keep triggering RC, while the same two arms outside a loop cannot. It
 /// is also what keeps a consume INSIDE a loop firing against a use earlier in
 /// the same body, which the next iteration reaches.
+/// Whether `to` is reachable from `from` along a path that does not pass
+/// through a block of `kills` (one that rebinds the value).
+fn reaches_avoiding(cfg: &Cfg, from: BlockId, to: BlockId, kills: &FxHashSet<BlockId>) -> bool {
+    let mut seen: FxHashSet<BlockId> = FxHashSet::default();
+    let mut stack: Vec<BlockId> = cfg.block(from).successors.clone();
+    while let Some(n) = stack.pop() {
+        if n == to {
+            return true;
+        }
+        if kills.contains(&n) || !seen.insert(n) {
+            continue;
+        }
+        stack.extend(cfg.block(n).successors.iter().copied());
+    }
+    false
+}
+
 fn cfg_reaches(cfg: &Cfg, from: BlockId, to: BlockId) -> bool {
     let mut seen: FxHashSet<BlockId> = FxHashSet::default();
     let mut stack: Vec<BlockId> = cfg.block(from).successors.clone();
@@ -526,6 +543,46 @@ fn first_witness(
                 && !cfg_reaches(cfg, *cb, *ub)
             {
                 continue;
+            }
+            // B-2026-11-04-34: a closure that takes a captured value moves it
+            // in when the closure is made (core semantics §9.3, §9.6), and a
+            // use in another closure's body happens no earlier than that
+            // closure is made. When the two closures are made on mutually
+            // exclusive paths (one `if` arm each, no loop around them), no
+            // run makes both, so nothing uses the value after the move.
+            if !closure_local && (c.capture_scope.is_some() || cfg.closure_body_blocks.contains(cb))
+            {
+                let made = |site: &UseSite, b: BlockId| -> Option<BlockId> {
+                    let owner = site
+                        .capture_scope
+                        .or_else(|| cfg.closure_body_owner.get(&b).copied());
+                    // A closure made inside another closure's body is made
+                    // when that one runs, which the edges do not show.
+                    let at = match owner {
+                        Some(k) => cfg.closure_creations.get(&k).copied()?,
+                        None => b,
+                    };
+                    (!cfg.closure_body_blocks.contains(&at)).then_some(at)
+                };
+                // A path through a fresh `let` of the binding (the next turn
+                // of a loop whose body declares it) reaches a new value.
+                let kills: FxHashSet<BlockId> = uses
+                    .iter()
+                    .filter(|(b, _, x)| {
+                        matches!(x.kind, UseKind::Define | UseKind::Reassign)
+                            && place_rebind_covers(&x.place, &c.place)
+                            && !cfg.closure_body_blocks.contains(b)
+                    })
+                    .map(|(b, _, _)| *b)
+                    .collect();
+                if let (Some(mc), Some(mu)) = (made(c, *cb), made(u, *ub)) {
+                    if mc != mu
+                        && !reaches_avoiding(cfg, mc, mu, &kills)
+                        && !reaches_avoiding(cfg, mu, mc, &kills)
+                    {
+                        continue;
+                    }
+                }
             }
             // B-2026-10-29-37: a read in the body of `let f = |..| ..` runs at
             // a call of `f`, so it follows the consume only if `f` is used
