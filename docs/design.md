@@ -4699,7 +4699,7 @@ print(f"hello, {name}");
 
 ```kara
 // file: analyze.kara
-let data = File.read("input.csv")?;
+let data = fs.read_to_string("input.csv")?;
 let rows = parse_csv(data);
 print(f"{rows.len()} rows");
 ```
