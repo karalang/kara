@@ -309,19 +309,17 @@ fn check_unsafe_span(
     // the justification; stop at the first non-comment line, so a `Safety:`
     // comment belonging to some earlier construct cannot be borrowed across
     // intervening code.
-    let mut preceding_ok = false;
-    let mut idx = span.line as isize - 2;
-    while idx >= 0 {
-        let line = lines[idx as usize].trim();
-        if !line.starts_with("//") {
-            break;
-        }
-        if is_safety_comment(line) {
-            preceding_ok = true;
-            break;
-        }
-        idx -= 1;
-    }
+    //
+    // B-2026-11-04-53 — the comment above the statement the block is in
+    // covers it too, as it covers every block that starts on the
+    // statement's first line. `karac fmt` breaks `par { unsafe { a },
+    // unsafe { b } }` so the second block starts on `}, unsafe {`, where no
+    // comment can go; the statement's comment justified both before. Only
+    // the innermost statement counts: a block inside a nested block is that
+    // block's statement's.
+    let stmt_line = STMT_LINE.with(|l| l.get());
+    let preceding_ok = safety_comment_above(span.line, lines)
+        || (stmt_line != 0 && stmt_line < span.line && safety_comment_above(stmt_line, lines));
     if !preceding_ok {
         diags.push(LintDiagnostic {
             level,
@@ -332,6 +330,38 @@ fn check_unsafe_span(
             note: None,
         });
     }
+}
+
+/// Whether the contiguous comment block directly above the 1-indexed
+/// `line` holds a `// Safety:` comment.
+fn safety_comment_above(line: usize, lines: &[&str]) -> bool {
+    let mut idx = line as isize - 2;
+    while idx >= 0 {
+        let Some(text) = lines.get(idx as usize).map(|l| l.trim()) else {
+            return false;
+        };
+        if !text.starts_with("//") {
+            return false;
+        }
+        if is_safety_comment(text) {
+            return true;
+        }
+        idx -= 1;
+    }
+    false
+}
+
+thread_local! {
+    /// The first line of the statement (or block tail) being walked, 0
+    /// outside one.
+    static STMT_LINE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Run `f` with `line` as the enclosing statement's first line.
+fn in_stmt(line: usize, f: impl FnOnce()) {
+    let saved = STMT_LINE.with(|l| l.replace(line));
+    f();
+    STMT_LINE.with(|l| l.set(saved));
 }
 
 fn is_safety_comment(line: &str) -> bool {
@@ -351,10 +381,10 @@ fn is_safety_comment(line: &str) -> bool {
 
 fn walk_block(block: &Block, lines: &[&str], level: LintLevel, diags: &mut Vec<LintDiagnostic>) {
     for stmt in &block.stmts {
-        walk_stmt(stmt, lines, level, diags);
+        in_stmt(stmt.span.line, || walk_stmt(stmt, lines, level, diags));
     }
     if let Some(tail) = &block.final_expr {
-        walk_expr(tail, lines, level, diags);
+        in_stmt(tail.span.line, || walk_expr(tail, lines, level, diags));
     }
 }
 

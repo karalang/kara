@@ -1,0 +1,15 @@
+// design.md § Unsafe: a `// Safety:` comment above a statement justifies
+// every `unsafe` block in it, also after `karac fmt` puts the second block
+// on a `}, unsafe {` line (B-2026-11-04-53).
+
+/// # Safety
+/// `labs` is the C library's absolute value: it reads only its argument.
+unsafe extern "C" {
+    pure fn labs(n: i64) -> i64;
+}
+
+fn main() {
+    // Safety: `labs` takes and returns a plain integer.
+    let (a, b) = par { unsafe { labs(-3) }, unsafe { labs(-4) } };
+    println(f"{a} {b}");
+}

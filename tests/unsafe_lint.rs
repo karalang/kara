@@ -1208,3 +1208,20 @@ fn test_source_allow_beats_cli_deny() {
 // Note: `E_UNION_READ_REQUIRES_UNSAFE` is emitted by the typechecker
 // (not this lint pass) — see `tests/typechecker.rs::union_field_read_*`
 // for the slice-2a coverage.
+
+// B-2026-11-04-53 — the comment above a statement covers every unsafe block
+// in it, including one `karac fmt` moved onto a `}, unsafe {` line.
+#[test]
+fn test_statement_safety_comment_covers_a_second_block_on_a_later_line() {
+    let src = "fn f(p: *const i64) -> i64 {\n    // Safety: the caller passes a live pointer.\n    let (a, b) = par { unsafe {\n        *p\n    }, unsafe {\n        *p\n    } };\n    a + b\n}\n";
+    let d = lint(src);
+    assert!(d.is_empty(), "{d:?}");
+}
+
+#[test]
+fn test_statement_safety_comment_does_not_reach_a_nested_statement() {
+    let src = "fn f(p: *const i64) -> i64 {\n    // Safety: covers only the `if` line.\n    if true {\n        let x = 1;\n        let y = unsafe { *p };\n        y + x\n    } else {\n        0\n    }\n}\n";
+    let d = lint(src);
+    assert_eq!(d.len(), 1, "{d:?}");
+    assert_eq!(d[0].span.line, 5);
+}

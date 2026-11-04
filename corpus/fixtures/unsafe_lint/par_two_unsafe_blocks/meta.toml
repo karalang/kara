@@ -1,0 +1,11 @@
+source = "corpus/fixtures/unsafe_lint/par_two_unsafe_blocks"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["unsafe", "fmt"]
+class = "a"
+expected_from = "spec"
+rules = []
+backends = []
+env = {}
+note = "design.md § Unsafe: the statement's `// Safety:` comment covers both blocks, and tests/fmt_round_trip.rs checks the formatted form the same (B-2026-11-04-53: the second block, moved to `}, unsafe {`, drew undocumented_unsafe)."
