@@ -166,11 +166,7 @@ const CELLS: &[(&str, &str, &str)] = &[
 /// Cells `karac fix` cannot carry to a working program yet, with the open
 /// ledger row that tracks each. They run and report, but do not fail the test;
 /// once the row is fixed the cell moves out of this list.
-const OPEN: &[(&str, &str)] = &[
-    // PREDICTS B-2026-11-04-5: `import std::collections::HashMap;` gets a
-    // machine fix, and `HashMap` a hint toward `Map`.
-    ("r28_hashmap_name", "B-2026-11-04-5"),
-];
+const OPEN: &[(&str, &str)] = &[];
 
 /// Cells refused with a named diagnostic that has no single right edit: the
 /// diagnostic must stay.
