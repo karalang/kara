@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 102 |
+| diagnostics | 105 |
 | false-positive | 97 |
 | perf | 86 |
 | missing-feature | 64 |
@@ -75,12 +75,12 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 169 |
+| typecheck | 170 |
 | mir | 103 |
 | mir-llvm | 101 |
 | cli | 51 |
-| ownership | 44 |
-| parser | 31 |
+| ownership | 45 |
+| parser | 32 |
 | interp | 27 |
 | runtime | 23 |
 | codegen | 22 |
@@ -91,7 +91,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | lexer | 1 |
 ## Current state
 
-_Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-11-03). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-11-04). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open
 
@@ -607,6 +607,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-03-26 | typecheck | medium | A `Map` / `SortedMap` key is writable through `iter_mut()`: `for (k, v) in m.iter_mut() { k.push_str("x"); }` (m: Map[String, i64]) is accepted and c… | 597c6ce7e2 |
 | B-2026-11-03-27 | parser | low | Rust's `&` sigil gets no fix in a pattern (`for &(x, y) in v.iter()`, `\|&x\| ..`, `&3 =>`, `&mut z`), on an argument (`f(&x)`, `f(&mut x)`) or as a bo… | 25a40f3d26 |
 | B-2026-11-03-28 | typecheck | low | `x.as_str()` passed where a `ref String` is wanted (`["rc", "si", "ser"].contains(w[2].as_str())`, `w: Vec[String]`) gets the fix that appends `.to_s… | 3bd1b54849 |
+| B-2026-11-04-1 | parser | low | `let s = mut place;` (a call argument's marker where a borrow for writing is wanted) is refused as "'mut' is a reserved keyword and cannot be used as… | 4230ad12ec |
+| B-2026-11-04-2 | typecheck | low | `items.into_iter()` on a bare `Vec[Item]` parameter whose `Item` is not clonable gets the fix `items.clone().into_iter()`, which does not check eithe… | 4230ad12ec |
+| B-2026-11-04-3 | ownership | low | `let s = v[i].field;` with `s` only read gets the fix that clones the field, where `let s = v[i];` already gets `ref`; under `self`, a write to any o… | 4230ad12ec |
 
 </details>
 
