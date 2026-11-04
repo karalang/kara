@@ -113,7 +113,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-04-39 | 2026-11-04 | mir-llvm | low | Seven first-run katas (321, 326, 333, 337, 338, 339, 343) execute 1.14-1.26x legacy's instructions on the MIR backend with cycles mostly flat: too small to file alone | — |
 | B-2026-11-04-44 | 2026-11-04 | typecheck | low | An empty list literal with no expected type (`let mut w = [];`) is refused by `karac check` with MIR's internal "a type that failed to check is not lowered yet", not a diagnostic saying the element type is needed | — |
 | B-2026-11-04-45 | 2026-11-04 | typecheck | low | A `let` keeping a borrow of a prefix `Vec` literal's temporary (`let g = Vec["a"].last();`, and `vec!["a"].last()`, the same node) is refused late, as E0516 "cannot drop the temporary value ... while `g` still borrows it", where the list literal `["a"].last()` gets the §5.5 rule "a reference to a temporary outlives its statement"; next to another refusal the late E0516 never shows | — |
-| B-2026-11-04-52 | 2026-11-04 | typecheck | low | `.iter().flatten()` over collection items names the exact rewrite ("write `.flat_map(|v| v.iter())` in place of `.flatten()`") but carries no fix, so `karac fix` leaves `g.iter().flatten().collect()` on a `Vec[Vec[i64]]` refused | — |
 | B-2026-11-04-53 | 2026-11-04 | cli | low | `karac fmt` breaks an expression holding two `unsafe { .. }` blocks over lines, and the `undocumented_unsafe` lint then fires on the second though the statement carries a `// Safety:` comment: `// Safety: ..` above `let (a, b) = par { unsafe { labs(-3) }, unsafe { labs(-4) } };` is clean, and its formatted form is not, with no place a comment could go | — |
 | B-2026-11-04-54 | 2026-11-04 | typecheck | medium | With two impls of a user generic trait on one type (`impl Make[i64] for Out` + `impl Make[String] for Out`, `fn make(x: T) -> Self`), `Out.make("abcd".to_string())` is refused at check ("expected 'i64', found 'String'"): the checker picks among `From` impls by the argument's type but takes the first impl of any other trait | — |
 
@@ -661,6 +660,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-04-49 | mir | medium | A trait default method that calls another of the trait's methods (`fn shout(self, n: i64) -> String { let s = self.tag(); . | 36c03e2120 |
 | B-2026-11-04-50 | mir | medium | An inherent impl on a type alias of the program's own struct (`type Wrap = W; impl Wrap { fn get(self) -> i64 { . | fbe0caf3bc |
 | B-2026-11-04-51 | typecheck | low | An iterator method called straight on a sequence draws an edit-distance guess with no fix for `find`, `position`, `nth`, `rev` and `flatten`: `window… | 6ef646c141 |
+| B-2026-11-04-52 | typecheck | low | `.iter().flatten()` over collection items names the exact rewrite ("write `.flat_map(\|v\| v.iter())` in place of `.flatten()`") but carries no fix, so… | e9fa6bddd1 |
 
 </details>
 
