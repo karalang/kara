@@ -174,8 +174,15 @@ pub fn compile_mir_ir(program: &Program, tys: &TyInterner) -> R<String> {
 pub fn compile_mir_ir_for_jit(program: &Program, tys: &TyInterner) -> R<String> {
     let llcx = Context::create();
     let module = compile_mir(&llcx, "main", program, tys)?;
+    // The host's layout, as the AOT path stamps it (`mir_aot`). Without it
+    // the passes below read the IR under LLVM's default layout, where an
+    // `i64` is 4-aligned: a register pair `{ i8, i64 }` then has its `i64`
+    // at byte 4, not the 8 every load of the tuple uses, and SROA splits
+    // the pair wrongly (mini_astral's `parse_tz` offset read as garbage).
+    let tm = super::driver::create_target_machine()?;
+    module.set_triple(&tm.get_triple());
+    module.set_data_layout(&tm.get_target_data().get_data_layout());
     if std::env::var("KARAC_MIR_JIT_SROA").as_deref() != Ok("0") {
-        let tm = super::driver::create_target_machine()?;
         // Inlining as well: every argument is passed by pointer, and a
         // small callee left out of line costs its loads and stores at each
         // call. On kata 3629's bench (release build) the run drops from

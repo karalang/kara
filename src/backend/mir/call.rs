@@ -1367,7 +1367,17 @@ impl<'ctx> Cx<'ctx, '_> {
                     let et = self.vec_elem(name, &args[0])?;
                     self.layout(et)?.size
                 };
+                // The reach goes to an `i64` destination (`mir::presize`'s
+                // fills read it); a chars collect's reservation
+                // (`lower.rs`) discards it into a unit, which has no room
+                // for it: an 8-byte store into that zero-size slot
+                // overwrote a neighbouring spill once LLVM 22 packed the
+                // frame tighter (mini_spellchecker's `self` under the JIT).
+                let keeps_reach = self.layout(self.place_type(dest)?)?.size != 0;
                 if size == 0 {
+                    if !keeps_reach {
+                        return Ok(());
+                    }
                     let d = self.place_ptr(dest)?;
                     return self.store(d, self.i64(0).into());
                 }
@@ -1427,6 +1437,9 @@ impl<'ctx> Cx<'ctx, '_> {
                 // The length the room reaches, for the fill's
                 // `__push_within`s: the reservation leaves at least that
                 // much capacity.
+                if !keeps_reach {
+                    return Ok(());
+                }
                 let reach = self.builder.build_int_nsw_add(len, n, "").map_err(e)?;
                 let d = self.place_ptr(dest)?;
                 self.store(d, reach.into())
