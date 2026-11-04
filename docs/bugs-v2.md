@@ -99,7 +99,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 |---|---|---|---|---|---|
 | B-2026-10-31-8 | 2026-10-31 | mir-llvm | low | Every `karac` process starts at 15-20 ms and 46.6 MB peak RSS before doing anything (`karac --version`), and the link step of a small kata's `karac build` is its largest phase at 72-102 ms | — |
 | B-2026-11-01-17 | 2026-11-01 | runtime | medium | Kata 71's auto-par binary runs 1.6-2.6x SLOWER with exactly two workers than with one (KARAC_THREADS=2: 0.24-0.39 s against 0.15 s) on the M5, on 5x the cycles for 7% more instructions; three or more workers run 0.04-0.06 s | — |
-| B-2026-11-04-20 | 2026-11-04 | mir | low | `#[track_caller]` on a program function is accepted but does nothing: a wrapper `#[track_caller] fn must(o: Option[i64]) -> i64 { o.unwrap() }` called at line 10 panics with `at <file>:6:5`, the `unwrap()` inside the wrapper; design.md §10 says user code may use it on its own panicking wrappers and that it is transitive | — |
 | B-2026-11-04-30 | 2026-11-04 | mir-llvm | medium | Kata 394's String decode loop runs 1.27x legacy's instructions and 1.26x its cycles on the MIR backend; seq 0.99x -> 1.17x rustc -O, par 0.86x -> 1.27x rayon | — |
 | B-2026-11-04-31 | 2026-11-04 | mir-llvm | low | Seq binaries of katas 297, 315, 330, 331, 332, 336 and 394 are still 319-336 KB on gd33cb285d and gf0017054a, after ad984ef96b took katas 38, 282 and 306 down to 67-83 KB | — |
 | B-2026-11-04-32 | 2026-11-04 | mir-llvm | low | Kata 297's peak RSS is 1.35x Rust's (233-235 MiB vs 173 MiB) on the MIR backend, where the 2026-08-28 feed read 179.9 vs 174.3 MiB | — |
@@ -656,6 +655,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-04-17 | typecheck | low | `for x in it` with `it: I` or `it: mut ref I` (I: Iterator[Item = i64], a borrowed iterator) reports "expected 'i64', found 'ref I'" at the first use… | ee3803b7f8 |
 | B-2026-11-04-18 | effect | high | The effects of the `From` impl that a `?` inserts are not charged to the enclosing function (design.md §10: "The conversion is a real call for effect… | 7c0ff1e85c |
 | B-2026-11-04-19 | parser | medium | Script mode's implicit `main` returns `()`, so a top-level `?` is refused with "'?' requires the enclosing function to return `Result` or `Option`, f… | ab80e422aa |
+| B-2026-11-04-20 | mir | low | `#[track_caller]` on a program function is accepted but does nothing: a wrapper `#[track_caller] fn must(o: Option[i64]) -> i64 { o.unwrap() }` calle… | aed0200c63 |
 | B-2026-11-04-21 | resolver | medium | In a package, importing a NESTED module itself (`import db.connection;`, then `connection.open(7)`) is refused with "error[E0112]: unknown module `db… | ab80e422aa |
 | B-2026-11-04-22 | typecheck | medium | Struct field visibility does not follow design.md §5's three levels: a field with no keyword is refused from another module of the SAME package ("pri… | c32f787973 |
 | B-2026-11-04-23 | cli | low | `karac run` in a package whose src/ has both main.kara and lib.kara runs main.kara and exits 0, while `karac check` and `karac build` refuse it ("a K… | ab80e422aa |
