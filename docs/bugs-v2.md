@@ -58,15 +58,15 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 116 |
+| diagnostics | 117 |
 | false-positive | 103 |
 | perf | 94 |
 | missing-feature | 70 |
 | soundness | 48 |
-| miscompile | 33 |
-| run-vs-build | 22 |
+| miscompile | 34 |
+| run-vs-build | 23 |
+| codegen-gap | 20 |
 | other | 18 |
-| codegen-gap | 18 |
 | crash | 8 |
 | leak | 4 |
 | use-after-free | 1 |
@@ -75,8 +75,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 179 |
-| mir | 111 |
+| typecheck | 180 |
+| mir | 115 |
 | mir-llvm | 109 |
 | cli | 53 |
 | ownership | 48 |
@@ -124,6 +124,11 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-04-42 | 2026-11-04 | mir | medium | The MIR effect pass gives every call of an `extern` function every effect, ignoring its declaration: two `par` branches that each call a `pure fn` from an `unsafe extern "C"` block are refused with `unknown (native labs)` and `unknown (native labs)`, though design.md § Effects ("an `extern` function ... has the effects it declares, none if it is declared `pure`") and core-semantics §12 item 2 give it none | — |
 | B-2026-11-04-44 | 2026-11-04 | typecheck | low | An empty list literal with no expected type (`let mut w = [];`) is refused by `karac check` with MIR's internal "a type that failed to check is not lowered yet", not a diagnostic saying the element type is needed | — |
 | B-2026-11-04-45 | 2026-11-04 | typecheck | low | A `let` keeping a borrow of a prefix `Vec` literal's temporary (`let g = Vec["a"].last();`, and `vec!["a"].last()`, the same node) is refused late, as E0516 "cannot drop the temporary value ... while `g` still borrows it", where the list literal `["a"].last()` gets the §5.5 rule "a reference to a temporary outlives its statement"; next to another refusal the late E0516 never shows | — |
+| B-2026-11-04-46 | 2026-11-04 | typecheck | low | Reading a `private` field from another directory is refused with code E0221 (PrivateTypeInPublicSignature) instead of E0111 PrivateItemAccess, which design.md §4 names for direct access to an invisible item (leftover of B-2026-11-04-22) | — |
+| B-2026-11-04-47 | 2026-11-04 | mir | high | With two `From` impls on one type, `Out.from(c)` calls the FIRST impl's `from` whatever the argument (prints 6 for `Out.from(C { n: 6 })` whose impl multiplies by 10), on run and --interp; with argument-less headers (`impl From for Out` twice, told apart by the parameter) `.into()` picks the first impl too | — |
+| B-2026-11-04-48 | 2026-11-04 | mir | medium | `self.raw()` in a method of a `distinct type` whose receiver is a bare (borrowed, D5) `self` is refused after check: "`raw` of a borrowed distinct value is not lowered yet" | — |
+| B-2026-11-04-49 | 2026-11-04 | mir | medium | A trait default method that calls another of the trait's methods (`fn shout(self, n: i64) -> String { let s = self.tag(); .. }`), reached through a blanket impl over a bare parameter (`impl[T: Display] Shout for T`), is refused after check: "the method call `.tag` with no resolved callee is not lowered yet", by a bound (`fn go[U: Shout](u: U) { u.shout(3) }`) and on a concrete receiver alike | — |
+| B-2026-11-04-50 | 2026-11-04 | mir | medium | An inherent impl on a type alias of the program's own struct (`type Wrap = W; impl Wrap { fn get(self) -> i64 { .. } }`) passes check, then `W { n: 4 }.get()` fails in MIR: "call of unknown function W.get" (--interp), "native `W.get` is not lowered yet" (run) | — |
 
 ### Relocated
 
