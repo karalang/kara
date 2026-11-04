@@ -1019,6 +1019,30 @@ fn rename(t: &Ident, flat: &str) -> Edit {
     }
 }
 
+/// What the walker refuses about the package whose `src/` holds
+/// `filename`, as `check` and `build` report it: a package with both a
+/// `main.kara` and a `lib.kara`, a `mod.kara`, a module written twice
+/// (design.md § Modules). [`package_tree`] reads a refused walk as "no
+/// package", so without this `run` ran such a file as a lone one
+/// (B-2026-11-04-23).
+pub(super) fn package_walk_refusal(
+    filename: &str,
+    no_manifest: bool,
+) -> Option<walker::WalkerError> {
+    if no_manifest {
+        return None;
+    }
+    let entry = std::fs::canonicalize(filename).ok()?;
+    let root = manifest::discover_project_root(entry.parent()?)?;
+    if !entry.starts_with(root.join(walker::SRC_DIRNAME)) {
+        return None;
+    }
+    match walker::walk_project(&root, WalkerOpts::default()) {
+        Err(walker::WalkerError::SrcDirMissing { .. }) | Ok(_) => None,
+        Err(e) => Some(e),
+    }
+}
+
 /// The package `filename` belongs to, when `filename` is one of its modules:
 /// its root and module tree. `with_tests` merges each module's `_test.kara`
 /// companion into it.

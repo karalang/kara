@@ -1991,8 +1991,19 @@ impl<'a> super::Resolver<'a> {
             return;
         };
 
-        // Validate the dotted prefix exists.
-        if !tree.graph.by_path.contains_key(&imp.path) && !imp.path.is_empty() {
+        // Validate the dotted prefix exists. A prefix that is only a
+        // directory (`db/` with no `db.kara`) is a valid one when every name
+        // the import binds is a module under it: `import db.connection;`
+        // binds the module `connection` (design.md § Imports,
+        // B-2026-11-04-21).
+        let only_submodules = !imp.is_wildcard
+            && !imp.items.is_empty()
+            && imp.items.iter().all(|item| {
+                let mut full = imp.path.clone();
+                full.push(item.name.clone());
+                tree.graph.by_path.contains_key(&full)
+            });
+        if !tree.graph.by_path.contains_key(&imp.path) && !imp.path.is_empty() && !only_submodules {
             let wanted = imp.path.join(".");
             let all_paths: Vec<String> = tree
                 .graph

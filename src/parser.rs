@@ -787,15 +787,14 @@ impl Parser {
                     first_span,
                 );
             } else {
-                // Synthesize `fn main()` wrapping the statements in file
-                // order. Unit return (the REPL cell-wrapper precedent and
-                // the entry-point contract's `()` arm); the design doc's
-                // `Result[Unit, Error]` signature upgrade is deferred until
-                // a catch-all `Error` type exists in v1 — until then a
-                // top-level `?` reports the ordinary ?-in-unit-fn
-                // diagnostic. Effects are inferred exactly as for a
-                // user-written private `fn main()`.
+                // Synthesize `fn main() -> Result[(), AnyError]` wrapping
+                // the statements in file order and ending with `Ok(())`
+                // (design.md § Script mode), so a top-level `?` works and an
+                // `Err` exits 1 with `Error: ..` (B-2026-11-04-19). Effects
+                // are inferred exactly as for a user-written private
+                // `fn main()`.
                 let last_span = script_stmts.last().map(|s| s.span).unwrap();
+                let (return_type, tail) = self.script_main_signature();
                 let body_span = Span {
                     line: first_span.line,
                     column: first_span.column,
@@ -817,14 +816,14 @@ impl Parser {
                     self_is_frozen: false,
                     self_is_own: false,
                     self_span: None,
-                    return_type: None,
+                    return_type,
                     effects: None,
                     requires: Vec::new(),
                     ensures: Vec::new(),
                     where_clause: None,
                     body: Block {
                         stmts: script_stmts,
-                        final_expr: None,
+                        final_expr: tail.map(Box::new),
                         span: body_span,
                     },
                     stdlib_origin: false,
@@ -858,6 +857,25 @@ impl Parser {
             container_hashers: std::mem::take(&mut self.container_hashers),
             ..Program::default()
         }
+    }
+
+    /// Script mode's implicit `main` signature and tail: the return type
+    /// `Result[(), AnyError]` and the closing `Ok(())` (design.md § Script
+    /// mode). Parsed from their own text, with every offset moved past the
+    /// file's end, so no synthesized node's span is any written node's
+    /// (types are recorded by span).
+    fn script_main_signature(&self) -> (Option<TypeExpr>, Option<Expr>) {
+        let end = self.tokens.last().map(|t| t.span).unwrap_or_default();
+        let mut tokens = crate::tokenize("Result[(), AnyError] Ok(())");
+        for t in &mut tokens {
+            t.span.offset += end.offset + 1;
+            t.span.line = end.line;
+            t.span.column += end.column;
+        }
+        let mut sub = Parser::new(tokens);
+        let ty = sub.parse_type();
+        let tail = sub.parse_expression();
+        (ty, tail)
     }
 
     // ── Path Helpers ─────────────────────────────────────────────

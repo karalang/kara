@@ -199,6 +199,10 @@ pub(super) fn package_source(
     output: OutputMode,
     cmd: &str,
 ) -> Option<super::project_v2::Amalgam> {
+    if let Some(e) = super::project_v2::package_walk_refusal(filename, no_manifest) {
+        super::build_cmds::emit_walker_error(&e, output);
+        process::exit(1);
+    }
     let (root, tree) = super::project_v2::package_tree(filename, no_manifest, false)?;
     if tree.modules.iter().filter(|m| !m.is_synthetic).count() > 1 {
         return Some(combine(&root, &tree, output, cmd));

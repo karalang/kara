@@ -13721,7 +13721,23 @@ fn script_mode_synthesizes_main_from_top_level_statements() {
         .collect();
     assert_eq!(mains.len(), 1, "exactly one synthesized main");
     let main = mains[0];
-    assert!(main.return_type.is_none(), "synthesized main is unit");
+    // design.md § Script mode: `fn main() -> Result[(), AnyError]`, ending
+    // with `Ok(())` (B-2026-11-04-19).
+    let ret = main
+        .return_type
+        .as_ref()
+        .expect("synthesized main returns a Result");
+    assert!(
+        matches!(&ret.kind, TypeKind::Path(p) if p.segments == ["Result"]),
+        "synthesized main returns `Result[(), AnyError]`: {ret:?}"
+    );
+    assert!(
+        matches!(
+            main.body.final_expr.as_deref().map(|e| &e.kind),
+            Some(ExprKind::Call { callee, .. }) if matches!(&callee.kind, ExprKind::Identifier(n) if n == "Ok")
+        ),
+        "synthesized main ends with `Ok(())`"
+    );
     assert_eq!(
         main.body.stmts.len(),
         2,
