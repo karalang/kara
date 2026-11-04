@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 130 |
+| diagnostics | 132 |
 | false-positive | 110 |
 | perf | 95 |
 | missing-feature | 75 |
@@ -75,13 +75,13 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 198 |
+| typecheck | 199 |
 | mir | 119 |
-| mir-llvm | 111 |
+| mir-llvm | 112 |
 | cli | 55 |
 | ownership | 50 |
 | parser | 39 |
-| interp | 27 |
+| interp | 28 |
 | runtime | 23 |
 | codegen | 22 |
 | effect | 22 |
@@ -116,13 +116,13 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-04-67 | 2026-11-04 | ownership | medium | A use after move of a function value (a OnceFn closure called twice, or an Fn value called after `let h2 = h`) passes karac check and is refused only by the MIR move check with an internal message ("move check main: bb10[term]: use of _3") | — |
 | B-2026-11-04-68 | 2026-11-04 | typecheck | low | A named-parameter default that names a function (`g: Fn(i64) -> i64 = id`) is refused ("'id' is not a known const"); design.md §7 says a function name is a constant expression for defaults | — |
 | B-2026-11-04-69 | 2026-11-04 | typecheck | low | §7 functions/closures: five spec errors accepted (MutFn called from a plain `let`; OnceFn bare parameter; UFCS receiver without `mut`; `a == r` with non-Copy `r: ref T`; `own escaping`) and two misleading diagnostics (refutable parameter pattern; `f[i64]` value) | — |
-| B-2026-11-04-71 | 2026-11-04 | typecheck | medium | design.md §11 #[must_use] mandate unmet: a discarded `m.lock()` guard, iterator adapter (`v.iter().map(..);`) and `s.trim()` give no warning, so a lock released at the wrong point is silent; also no `.unwrap()` -> `.expect` suggestion and no warning on a deprecated enum variant | — |
-| B-2026-11-04-72 | 2026-11-04 | typecheck | low | §11 sharing roll-up: `own self` on a sync type and `weak` on a non-shared type accepted; borrow-flag panic does not name the field or both spans; several sharing diagnostics give stale or wrong wording | — |
 | B-2026-11-04-75 | 2026-11-04 | typecheck | low | An empty list literal compared with a typed `Vec` (`v == []`) is refused with MIR's internal "a type that failed to check is not lowered yet"; the other operand gives `[]` its element type, so it should check | — |
 | B-2026-11-04-76 | 2026-11-04 | parser | low | A closure parameter written `mut acc` (Rust's `fold(init, |mut acc, x| ..)`) is refused with "'mut' is a reserved keyword and cannot be used as an identifier" and a cascade error at the closing `)`, with no fix; a `fn` parameter written `mut x` gets a diagnostic naming the Kāra spelling (`let mut x = x;` in the body) | — |
 | B-2026-11-04-77 | 2026-11-04 | typecheck | low | `Vec` has no `drain(range)`: Rust's `v.drain(i..i + 2);` gets only "no method 'drain' on type 'Vec'" with no hint, though `remove`, `truncate` and `split_off`-style edits exist | — |
 | B-2026-11-04-78 | 2026-11-04 | typecheck | medium | A borrowed parameter passed where a library constructor takes `own Vec[T]` (`PriorityQueue.from(v)`, `max_first_from(v)` with `v: Vec[i64]`) draws "expected 'Vec[T]', found 'ref Vec[i64]'" and a cascade "cannot infer type parameter 'T'", with no fix; the same parameter given away by `let`/return gets "cannot give away parameter `v`" with its `own` / `.clone()` fix | — |
 | B-2026-11-04-79 | 2026-11-04 | typecheck | low | `mut` on a field of a plain (non-`shared`) struct is accepted; design.md §5 Structs makes it a compile error, but 305 corpus programs write it, so the refusal needs a migration call (split from B-2026-11-04-60) | — |
+| B-2026-11-04-80 | 2026-11-04 | typecheck | low | Remainder of B-2026-11-04-71: `.unwrap()` on an Option gets no `.expect("...")` suggestion with a fix (design.md §11 Ergonomics), and a use of a `#[deprecated]` enum variant (constructor `E.A` or pattern) gives no deprecated warning | — |
+| B-2026-11-04-81 | 2026-11-04 | interp+mir-llvm | low | Remainder of B-2026-11-04-72: the shared-field borrow-flag panic says "already borrowed: this `shared` field is borrowed through another handle" with one span; design.md §11 says it names the field and the source spans of both accesses | — |
 
 ### Relocated
 
@@ -684,6 +684,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-04-63 | parser | medium | A struct pattern with a `..` rest in parameter position is a parse error ("Expected identifier, found `..`"), though design.md §7 Destructuring param… | 1776ad9f5e |
 | B-2026-11-04-66 | effect | medium | A function type with no effect clause in a struct field or a return type is treated as pure ("has effect writes(Stdout) not declared in slot [pure]")… | d50ea9e470 |
 | B-2026-11-04-70 | ownership | medium | A closure cannot capture a `frozen` binding at all ("`frozen` alias `g` is captured by a closure"), and a TaskGroup.spawn closure over one is also E_… | bf270628d9 |
+| B-2026-11-04-71 | typecheck | medium | design.md §11 #[must_use] mandate unmet: a discarded `m.lock()` guard, iterator adapter (`v.iter().map(..);`) and `s.trim()` give no warning, so a lo… | 75fe0ae07f |
+| B-2026-11-04-72 | typecheck | low | §11 sharing roll-up: `own self` on a sync type and `weak` on a non-shared type accepted; borrow-flag panic does not name the field or both spans; sev… | b378b20b59 |
 | B-2026-11-04-73 | typecheck | low | A `for` over a borrow of a concrete non-`Copy` iterator (`it: VecIntoIter[i64]`, a user `impl Iterator for Up`) is refused with MIR's internal "a `fo… | aa857c6355 |
 | B-2026-11-04-74 | mir+mir-llvm | low | A shift by an out-of-range amount (`x << 32` on an i32, `x << -1`) panics with "integer overflow" on run and build; design.md §5 says it panics with… | 6f9132f62b |
 
