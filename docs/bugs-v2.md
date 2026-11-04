@@ -60,10 +60,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | diagnostics | 132 |
 | false-positive | 110 |
-| perf | 95 |
+| perf | 96 |
 | missing-feature | 75 |
 | soundness | 49 |
-| miscompile | 34 |
+| miscompile | 35 |
 | run-vs-build | 23 |
 | codegen-gap | 22 |
 | other | 18 |
@@ -77,7 +77,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | typecheck | 199 |
 | mir | 119 |
-| mir-llvm | 112 |
+| mir-llvm | 114 |
 | cli | 55 |
 | ownership | 50 |
 | parser | 39 |
@@ -123,6 +123,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-04-79 | 2026-11-04 | typecheck | low | `mut` on a field of a plain (non-`shared`) struct is accepted; design.md §5 Structs makes it a compile error, but 305 corpus programs write it, so the refusal needs a migration call (split from B-2026-11-04-60) | — |
 | B-2026-11-04-80 | 2026-11-04 | typecheck | low | Remainder of B-2026-11-04-71: `.unwrap()` on an Option gets no `.expect("...")` suggestion with a fix (design.md §11 Ergonomics), and a use of a `#[deprecated]` enum variant (constructor `E.A` or pattern) gives no deprecated warning | — |
 | B-2026-11-04-81 | 2026-11-04 | interp+mir-llvm | low | Remainder of B-2026-11-04-72: the shared-field borrow-flag panic says "already borrowed: this `shared` field is borrowed through another handle" with one span; design.md §11 says it names the field and the source spans of both accesses | — |
+| B-2026-11-04-82 | 2026-11-04 | mir-llvm | high | An integer tuple literal passed as a collection key or compared with `==`/`<` keeps the default (i64, i64) layout instead of the declared narrow tuple type: `s.contains((1, 2))` on a `SortedSet`/`Set`/`Vec[(i32, i32)]` and `m.contains_key((1, 2))`/`m.get((1, 2))` on a `Map[(i32, i32), _]` answer false/None on compiled code, and `a == (1, 2)` with `a: (i32, i32)` is invalid MIR on run and build | — |
+| B-2026-11-04-83 | 2026-11-04 | mir-llvm | low | The backend does not emit the facts LLVM 19-22 added: `range` attributes on parameters and returns, `nuw`/`nusw`/`inbounds` flags on GEPs beyond inbounds, `nuw`/`nsw` on `trunc`, `samesign` on `icmp`, and `captures(address/read_provenance)` beyond `captures(none)` | — |
 
 ### Relocated
 
