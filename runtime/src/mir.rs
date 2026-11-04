@@ -2171,19 +2171,43 @@ pub unsafe extern "C" fn karac_mir_str_join(
     let n = n as usize;
     let stride = stride as usize;
     let sepn = sepn as usize;
-    let mut t = String::new();
+    // Sized first and copied into one allocation of the runtime's own: a
+    // `String` grown by `push_str` reaches std's capacity-overflow panic,
+    // and with it the panic and backtrace machinery, some 270 KB of every
+    // binary that joins (kata 331, B-2026-11-04-31). The sum saturates: a
+    // length no allocation can hold fails as out of memory.
+    // SAFETY: the caller's contract, `n` live strings `stride` bytes apart
+    // at `elems`.
+    let elem = |i: usize| unsafe { &*(elems.add(i * stride) as *const RawVec) };
+    let mut total = sepn.saturating_mul(n.saturating_sub(1));
     for i in 0..n {
-        // SAFETY: the caller's contract.
-        unsafe {
-            if i > 0 {
-                t.push_str(text(sep, sepn));
-            }
-            let e = elems.add(i * stride) as *const RawVec;
-            t.push_str(text((*e).ptr, (*e).len));
-        }
+        total = total.saturating_add(elem(i).len);
     }
-    // SAFETY: as above.
-    unsafe { string_of(out, t.as_bytes()) };
+    if total == 0 {
+        // SAFETY: the caller's contract; `out` is writable.
+        unsafe { out.write(RawVec::new(std::ptr::null_mut(), 0, 0)) };
+        return;
+    }
+    let p = karac_realloc_or_panic(std::ptr::null_mut(), total);
+    let put = |from: *const u8, len: usize, at: &mut usize| {
+        // An empty string's pointer may be null: nothing is read from it.
+        if len > 0 {
+            // SAFETY: `from` holds `len` bytes, and `p` has room for
+            // `total`, the sum of every `len` put.
+            unsafe { std::ptr::copy_nonoverlapping(from, p.add(*at), len) };
+            *at += len;
+        }
+    };
+    let mut at = 0;
+    for i in 0..n {
+        if i > 0 {
+            put(sep, sepn, &mut at);
+        }
+        let e = elem(i);
+        put(e.ptr, e.len, &mut at);
+    }
+    // SAFETY: the caller's contract; `out` is writable.
+    unsafe { out.write(RawVec::new(p, total, total)) };
 }
 
 extern "C" {

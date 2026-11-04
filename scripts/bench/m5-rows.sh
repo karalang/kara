@@ -83,6 +83,8 @@ MAC = platform.system() == "Darwin"
 #  threads:  MIR default build at KARAC_THREADS=a vs =b (ratio a/b)
 #  par:      default (auto-par) MIR vs default legacy
 #  base:     default MIR against a fixed baseline the row gives
+#  seqfix:   seq MIR against the row's own figure before its fix (a source
+#            legacy cannot compile); within when at most half of it
 ROWS = [
     ("B-2026-10-31-37", "1-100/38-count-and-say", "count_and_say.kara", "pair", "cycles", ""),
     ("B-2026-11-01-17", "1-100/71-simplify-path", "simplify.kara", "threads:2:1", "wall", "2 workers vs 1"),
@@ -100,9 +102,14 @@ ROWS = [
     ("B-2026-11-02-24", "1-100/38-count-and-say", "count_and_say.kara", "pair", "size", "fixed ad984ef96b"),
     ("B-2026-11-02-24", "201-300/282-expression-add-operators", "exprops_seq.kara", "pair", "size", "fixed ad984ef96b"),
     ("B-2026-11-02-23", "1-100/71-simplify-path", "simplify.kara", "par", "wall", "fixed 791fe05de0; par lane"),
-    ("B-2026-11-04-31", "201-300/297-serialize-and-deserialize-binary-tree", "treecodec.kara", "pair", "size", "fixed 5984ed3080"),
+    # Legacy dd86 refuses 297's, 330's, 331's, 332's and 336's sources: their
+    # MIR seq builds are held to the row's own M5 bytes before the fix.
+    ("B-2026-11-04-31", "201-300/297-serialize-and-deserialize-binary-tree", "treecodec.kara", "seqfix:319576", "size", "fixed 5984ed3080"),
     ("B-2026-11-04-31", "301-400/315-count-of-smaller-numbers-after-self", "count_smaller.kara", "pair", "size", "fixed 5984ed3080"),
-    ("B-2026-11-04-31", "301-400/332-reconstruct-itinerary", "reconstruct_itinerary.kara", "pair", "size", "fixed 5984ed3080"),
+    ("B-2026-11-04-31", "301-400/330-patching-array", "patching_array.kara", "seqfix:336128", "size", "fixed 5984ed3080"),
+    ("B-2026-11-04-31", "301-400/331-verify-preorder-serialization-of-a-binary-tree", "verify_preorder.kara", "seqfix:319568", "size", "str_join fix"),
+    ("B-2026-11-04-31", "301-400/332-reconstruct-itinerary", "reconstruct_itinerary.kara", "seqfix:319800", "size", "fixed 5984ed3080"),
+    ("B-2026-11-04-31", "301-400/336-palindrome-pairs", "palindrome_pairs.kara", "seqfix:336320", "size", "fixed 5984ed3080"),
     ("B-2026-11-04-31", "301-400/394-decode-string", "decode_string.kara", "pair", "size", "fixed 5984ed3080"),
     ("B-2026-11-04-38", "3601-3700/3629-minimum-jumps-to-reach-end-via-prime-teleportation", "bfs_sieve.kara", "pair", "rss", "fixed d273d89f37"),
     ("B-2026-11-04-39", "301-400/337-house-robber-iii", "house_robber_iii.kara", "pair", "instructions", "x86 1.32x -> 1.04x"),
@@ -215,6 +222,11 @@ for rid, kdir, srcname, kind, metric, note in ROWS:
         ea, eb = build(KARAC, src, False), build(LEGACY, src, False)
         if ea and eb:
             a, b = measure(ea, {}), measure(eb, {})
+    elif kind.startswith("seqfix:"):
+        e = build(KARAC, src, True)
+        if e:
+            a = measure(e, {})
+            b = {metric: float(kind.split(":")[1]), "stdout": a["stdout"], "ok": True}
     elif kind.startswith("base:"):
         e = build(KARAC, src, False)
         if e:
@@ -230,7 +242,7 @@ for rid, kdir, srcname, kind, metric, note in ROWS:
     elif sink != "same":
         verdict = "VOID"
     else:
-        verdict = "within" if ratio <= BAR else "OVER"
+        verdict = "within" if ratio <= (0.5 if kind.startswith("seqfix:") else BAR) else "OVER"
     extra = ""
     if a and kind == "pair" and metric == "cycles" and a.get("instructions") and b.get("instructions"):
         extra = f"instr {a['instructions']/b['instructions']:.3f}x"
