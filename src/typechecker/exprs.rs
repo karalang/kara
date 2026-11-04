@@ -9460,6 +9460,13 @@ impl<'a> super::TypeChecker<'a> {
                     Some(t) => t,
                     None => self.resolve_path_type(segments, &expr.span),
                 };
+                if let [enum_name, variant] = segments.as_slice() {
+                    if self.env.enums.contains_key(enum_name)
+                        && self.local_scope.lookup(enum_name).is_none()
+                    {
+                        self.check_deprecated_variant_use(enum_name, variant, &expr.span);
+                    }
+                }
                 // B-2026-11-01-26: as for a bare name, a path rooted at no
                 // local (`Type.f`, `Enum.Variant`) is environment-free.
                 if matches!(ty, Type::Function { .. } | Type::OnceFunction { .. })
@@ -9583,6 +9590,9 @@ impl<'a> super::TypeChecker<'a> {
                     }
                 }
                 let t = self.infer_method_call(object, method, args, &expr.span, args_close_span);
+                if method == "unwrap" && args.is_empty() {
+                    self.warn_weak_read_unwrap(object, args_close_span);
+                }
                 if method == "spawn" && args.len() == 1 {
                     self.check_spawn_result_cross_task(&t, &expr.span, "TaskGroup.spawn");
                 }

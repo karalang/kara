@@ -629,6 +629,14 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
         ty("RedundantAliasBound", Some(DiagnosticClass::LintWarning)),
     ),
     (
+        "W0294",
+        ty("WeakReadUnwrap", Some(DiagnosticClass::LintWarning)),
+    ),
+    (
+        "E0294",
+        ty("WeakReadUnwrap", Some(DiagnosticClass::LintWarning)),
+    ),
+    (
         "E0293",
         ty("RedundantAliasBound", Some(DiagnosticClass::LintWarning)),
     ),

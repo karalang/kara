@@ -282,6 +282,16 @@ pub const STARTER_LINTS: &[LintInfo] = &[
              disambiguate with explicit parentheses.",
     },
     LintInfo {
+        name: "weak_read_unwrap",
+        default_level: LintLevel::Warn,
+        description:
+            "`.unwrap()` directly on a `weak` read (`node.parent.unwrap()`, \
+             `w.upgrade().unwrap()`): the read is `None` once the referent is gone, so the \
+             invariant that keeps it alive belongs at the use site as `.expect(\"…\")` \
+             (design.md § Cycles and `weak`, Ergonomics). On any other `Option` the same \
+             rewrite is an editor code action, never this warning.",
+    },
+    LintInfo {
         name: "borrow_projection_copy",
         default_level: LintLevel::Warn,
         description:

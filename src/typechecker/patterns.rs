@@ -1283,6 +1283,29 @@ impl<'a> super::TypeChecker<'a> {
                 }
             }
             PatternKind::Binding(name) => {
+                // A unit-variant pattern (`E.A`, or bare `A`) of a
+                // `#[deprecated]` variant warns (B-2026-11-04-80).
+                {
+                    let mut peeled = expected;
+                    while let Type::Ref(inner) | Type::MutRef(inner) = peeled {
+                        peeled = inner;
+                    }
+                    if let Type::Named { name: en, .. } = peeled {
+                        let (root, v) = match name.rsplit_once('.') {
+                            Some((r, v)) => (Some(r), v),
+                            None => (None, name.as_str()),
+                        };
+                        let declares = self
+                            .env
+                            .enums
+                            .get(en)
+                            .is_some_and(|e| e.variants.iter().any(|(vn, _)| vn == v));
+                        if declares && root.is_none_or(|r| r == en) {
+                            let (en, v) = (en.clone(), v.to_string());
+                            self.check_deprecated_variant_use(&en, &v, &pattern.span);
+                        }
+                    }
+                }
                 // A bare name that the scrutinee's enum declares is that
                 // variant (design.md § Enums), whatever else the name means in
                 // scope: a prelude type (`Fn`), or nothing at all (a library
@@ -1532,6 +1555,16 @@ impl<'a> super::TypeChecker<'a> {
             }
             PatternKind::TupleVariant { path, patterns } => {
                 self.report_wrong_variant_root(path, expected, pattern.span);
+                let mut peeled = expected;
+                while let Type::Ref(inner) | Type::MutRef(inner) = peeled {
+                    peeled = inner;
+                }
+                if let (Type::Named { name, .. }, Some(v)) = (peeled, path.last()) {
+                    if self.env.enums.contains_key(name) {
+                        let (n, v) = (name.clone(), v.clone());
+                        self.check_deprecated_variant_use(&n, &v, &pattern.span);
+                    }
+                }
                 let variant_name = path.last().cloned().unwrap_or_default();
                 if let Type::Named { name, args } = expected {
                     if let Some(enum_info) = self.env.enums.get(name).cloned() {
@@ -1646,6 +1679,16 @@ impl<'a> super::TypeChecker<'a> {
             } => {
                 self.report_wrong_variant_root(path, expected, pattern.span);
                 let struct_name = path.last().cloned().unwrap_or_default();
+                let mut peeled = expected;
+                while let Type::Ref(inner) | Type::MutRef(inner) = peeled {
+                    peeled = inner;
+                }
+                if let (Type::Named { name, .. }, Some(v)) = (peeled, path.last()) {
+                    if self.env.enums.contains_key(name) {
+                        let (n, v) = (name.clone(), v.clone());
+                        self.check_deprecated_variant_use(&n, &v, &pattern.span);
+                    }
+                }
 
                 // A struct VARIANT of the scrutinee's enum wins over a struct
                 // of the same name. Every lookup below used to ask

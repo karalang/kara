@@ -1675,6 +1675,9 @@ impl<'a> super::TypeChecker<'a> {
         span: &Span,
         pinned: Option<&[Type]>,
     ) -> Type {
+        // B-2026-11-04-80: a deprecated struct variant warns at construction,
+        // keyed by its enum.
+        self.check_deprecated_variant_use(enum_name, variant, span);
         let provided: HashSet<&str> = fields.iter().map(|f| f.name.as_str()).collect();
         for (fname, _) in declared_fields {
             if !provided.contains(fname.as_str()) {

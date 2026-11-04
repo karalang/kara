@@ -53,6 +53,7 @@ mod const_eval;
 mod core_ref_write;
 mod core_taskgroup;
 mod cross_task_check;
+mod deprecated_variant;
 mod derives;
 pub mod env;
 mod env_build;
@@ -1267,6 +1268,9 @@ pub enum TypeErrorKind {
     /// alias parameter that the aliased type already requires
     /// (`type Sk[T: Ord] = SortedMap[T, i32]`).
     RedundantAliasBound,
+    /// `weak_read_unwrap` lint (design.md § Cycles and `weak`, Ergonomics):
+    /// `.unwrap()` directly on a `weak` read (B-2026-11-04-80).
+    WeakReadUnwrap,
     /// `prelude_shadow` lint (B-2026-08-27-15) — a user `struct`/`enum`
     /// declaration takes a prelude type's name. design.md § Module System
     /// states the warning as shipped behaviour: prelude names are NOT
@@ -1678,6 +1682,7 @@ pub(crate) fn class_for_type_error_kind(
         | TypeErrorKind::RedundantSuffix
         | TypeErrorKind::RedundantCast
         | TypeErrorKind::RedundantAliasBound
+        | TypeErrorKind::WeakReadUnwrap
         | TypeErrorKind::PreludeShadow
         | TypeErrorKind::ModuleMutBinding
         | TypeErrorKind::ReturnClauseOnFn
@@ -2807,6 +2812,8 @@ pub struct TypeChecker<'a> {
     pub(super) core_ref_copy_spans: FxHashSet<SpanKey>,
     /// See [`TypeCheckResult::rejected_assign_spans`].
     pub(super) rejected_assign_spans: Vec<Span>,
+    /// See [`deprecated_variant`]; built on first use.
+    pub(super) deprecated_variants: Option<deprecated_variant::DeprecatedVariants>,
     /// The start offset of the assignment a `match` arm holds without
     /// braces (`'L' => (dx, dy) = (-dy, dx),`), while its block is checked.
     /// The parser wraps such a body in a block whose span is the
@@ -3889,6 +3896,7 @@ impl<'a> TypeChecker<'a> {
             core_shared_depth: 0,
             core_ref_copy_spans: FxHashSet::default(),
             rejected_assign_spans: Vec::new(),
+            deprecated_variants: None,
             braceless_arm_assign: None,
             core_ref_copy_nodes: FxHashSet::default(),
             core_ref_results: FxHashSet::default(),
