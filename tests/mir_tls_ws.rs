@@ -71,6 +71,20 @@ impl Ports {
             .parse()
             .unwrap()
     }
+
+    /// Waits for the server to write `marker` on a stderr line of its
+    /// own, skipping any other line.
+    fn wait_for(&self, marker: &str) {
+        loop {
+            let line = self
+                .0
+                .recv_timeout(Duration::from_secs(60))
+                .unwrap_or_else(|_| panic!("the server wrote no {marker:?} within 60s"));
+            if line.trim() == marker {
+                return;
+            }
+        }
+    }
 }
 
 /// Runs the server `cmd` with `client` driving it: the server's stdout and
@@ -674,6 +688,10 @@ fn chat(ws: own WebSocket) {
                     Some(n) => println(f"closed {n}"),
                     None => println("closed"),
                 }
+                // The client waits for this before it goes on: another
+                // session's `bye` exits the process, and this task's
+                // line must be out first (B-2026-11-03-29).
+                eprintln("SESSION_CLOSED");
                 break;
             }
             Ok(_) => {}
@@ -710,8 +728,12 @@ fn http_over<S: Read + Write>(mut s: S, request: &str) -> String {
 }
 
 /// Two sessions at once, with plain requests served while both are open,
-/// over `connect`'s streams.
-fn upgrades<S: Read + Write>(connect: &dyn Fn() -> S) -> String {
+/// over `connect`'s streams. The server's handler reports a session's
+/// close on stderr, and the client waits for it before the next request:
+/// the order of two tasks' lines is the scheduler's, and the `bye` that
+/// exits the process would otherwise race the closing session's line
+/// (B-2026-11-03-29).
+fn upgrades<S: Read + Write>(ports: &Ports, connect: &dyn Fn() -> S) -> String {
     let mut t = String::new();
     let mut one = Ws::open(connect(), &mut t);
     let mut two = Ws::open(connect(), &mut t);
@@ -726,6 +748,7 @@ fn upgrades<S: Read + Write>(connect: &dyn Fn() -> S) -> String {
     two.send(true, Opcode::Close, &1001u16.to_be_bytes());
     two.recv(&mut t);
     drop(two);
+    ports.wait_for("SESSION_CLOSED");
     // A 101 to a request that is no handshake is sent as it is, and a
     // handshake the handler refuses gets the handler's answer.
     t.push_str(&http_over(
@@ -745,12 +768,12 @@ fn upgrades<S: Read + Write>(connect: &dyn Fn() -> S) -> String {
 
 fn serve_ws_client(ports: &Ports, _config: &Arc<rustls::ClientConfig>) -> String {
     let port = ports.next();
-    upgrades(&|| tcp(port))
+    upgrades(ports, &|| tcp(port))
 }
 
 fn serve_ws_tls_client(ports: &Ports, config: &Arc<rustls::ClientConfig>) -> String {
     let port = ports.next();
-    upgrades(&|| tls_stream(port, config))
+    upgrades(ports, &|| tls_stream(port, config))
 }
 
 const SERVE_WS_OUT: &str = "request /chat\nrequest /chat\nrequest /health\ntext two\ntext one\n\
