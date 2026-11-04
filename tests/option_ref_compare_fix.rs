@@ -3,7 +3,9 @@
 //! For a `Copy` item the error carries the `.cloned()` that copies the item
 //! out, so `karac fix` makes it (B-2026-11-01-10): on either side of `==`
 //! and `!=`, after a `Map.get` and a `Vec.get`, and on an ordering. A
-//! non-`Copy` item keeps the message with no edit.
+//! non-`Copy` item compared with `Some(place)` gets `Some(ref place)`
+//! (B-2026-11-04-61); any other non-`Copy` shape keeps the message with no
+//! edit.
 
 use std::process::{Command, Stdio};
 
@@ -73,11 +75,61 @@ fn karac_fix_clones_the_viewed_side_of_an_option_compare() {
 }
 
 #[test]
-fn a_non_copy_item_compare_keeps_the_message_without_an_edit() {
+fn karac_fix_views_a_some_place_compared_with_a_non_copy_lookup() {
+    // B-2026-11-04-61: a non-`Copy` item gets `Some(ref e)`, an
+    // `Option[ref T]` built in place, and not the `.clone()` the argument's
+    // move would otherwise ask for.
+    let src = "struct L { key: String, value: String }
+fn has(m: SortedMap[String, String], l: L) -> bool { m.get(l.key) == Some(l.value) }
+fn main() {
+    let mut m: SortedMap[String, String] = SortedMap.new();
+    m.insert(\"zone\".to_string(), \"a\".to_string());
+    let s = \"a\".to_string();
+    let l = L { key: \"zone\".to_string(), value: \"a\".to_string() };
+    println(f\"{has(m, l)} {Some(s) == m.get(\"zone\")} {m.get(\"x\") != Some(s)}\");
+}
+";
+    let path = temp("view", src);
+    let file = path.to_str().unwrap();
+
+    let check = karac(&["check", "--output=json", file]);
+    let json = String::from_utf8_lossy(&check.stdout);
+    assert_eq!(json.matches("\"text\":\"ref \"").count(), 3, "{json}");
+    assert!(json.contains("`Some(ref e)` views"), "{json}");
+    assert!(!json.contains("borrow_projection_copy"), "{json}");
+
+    let fix = karac(&["fix", file]);
+    assert!(
+        fix.status.success(),
+        "{}",
+        String::from_utf8_lossy(&fix.stderr)
+    );
+    let out = std::fs::read_to_string(&path).unwrap();
+    for want in [
+        "m.get(l.key) == Some(ref l.value)",
+        "Some(ref s) == m.get(",
+        "!= Some(ref s)",
+    ] {
+        assert!(out.contains(want), "missing {want:?} in:\n{out}");
+    }
+    let run = karac(&["__mir-run", file]);
+    let _ = std::fs::remove_file(&path);
+    assert_eq!(
+        (
+            run.status.code(),
+            String::from_utf8_lossy(&run.stdout).as_ref()
+        ),
+        (Some(0), "true true true\n"),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+}
+
+#[test]
+fn a_non_copy_item_compare_with_a_temporary_keeps_the_message_without_an_edit() {
     let src = "fn main() {
     let ms: Map[i64, String] = Map.new();
-    let s = \"x\".to_string();
-    println(f\"{ms.get(1) == Some(s)}\");
+    println(f\"{ms.get(1) == Some(\"x\".to_string())}\");
 }
 ";
     let path = temp("non-copy", src);
@@ -90,4 +142,5 @@ fn a_non_copy_item_compare_keeps_the_message_without_an_edit() {
         "{json}"
     );
     assert!(!json.contains(".cloned()"), "{json}");
+    assert!(!json.contains("\"text\":\"ref \""), "{json}");
 }

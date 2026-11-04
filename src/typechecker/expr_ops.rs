@@ -3320,6 +3320,36 @@ impl<'a> super::TypeChecker<'a> {
         let fix = self
             .option_ref_compare_fix(left, left_ty, right_ty)
             .or_else(|| self.option_ref_compare_fix(right, right_ty, left_ty));
+        let view = if fix.is_some() {
+            None
+        } else {
+            self.option_some_view_fix(right, left_ty, right_ty)
+                .or_else(|| self.option_some_view_fix(left, right_ty, left_ty))
+        };
+        if let Some((fix, arg)) = view {
+            // The `.clone()` E0200 offered for the `Some` argument exists only
+            // because the literal owns its item: viewed in place, nothing
+            // moves, so the two edits must not both apply (B-2026-11-04-61).
+            let (start, end) = (arg.offset, arg.offset + arg.length);
+            self.errors.retain(|e| {
+                e.lint_name.as_deref() != Some("borrow_projection_copy")
+                    || e.span.offset < start
+                    || e.span.offset > end
+            });
+            // ... and the ownership pass's use-after-move of the same place,
+            // whose `.clone()` edit `karac fix` would apply inside the `ref`.
+            self.core_ref_copy_spans.insert(SpanKey::from_span(&arg));
+            self.type_error_with_fix_it(
+                format!(
+                    "{message}: one side views its item, an `Option[ref T]`; `Some(ref e)` \
+                     views the other side's item in place too (design.md § Views), with no copy"
+                ),
+                span,
+                TypeErrorKind::InvalidBinaryOp,
+                fix,
+            );
+            return;
+        }
         match fix {
             Some(fix) => self.type_error_with_fix_it(
                 format!(
@@ -3383,6 +3413,67 @@ impl<'a> super::TypeChecker<'a> {
             },
             replacement: ".cloned()".to_string(),
         })
+    }
+
+    /// The edit writing `ref ` before the argument of a `Some(e)` literal
+    /// (`side`, of type `Option[T]`) compared with an `Option[ref T]`, when
+    /// `e` is a place, for any `T` (B-2026-11-04-61): `Some(ref e)` is an
+    /// `Option[ref T]` built in place (design.md § Views), so a non-`Copy`
+    /// item needs no copy. Returns the edit and the argument's span.
+    fn option_some_view_fix(
+        &self,
+        side: &Expr,
+        viewed_ty: &Type,
+        side_ty: &Type,
+    ) -> Option<(FixIt, Span)> {
+        let ExprKind::Call { callee, args } = &side.kind else {
+            return None;
+        };
+        let is_some = match &callee.kind {
+            ExprKind::Identifier(n) => n == "Some",
+            ExprKind::Path { segments, .. } => {
+                segments.len() == 2 && segments[0] == "Option" && segments[1] == "Some"
+            }
+            _ => false,
+        };
+        let [arg] = args.as_slice() else {
+            return None;
+        };
+        if !is_some || arg.label.is_some() || arg.mut_marker {
+            return None;
+        }
+        if !matches!(
+            arg.value.kind,
+            ExprKind::Identifier(_)
+                | ExprKind::FieldAccess { .. }
+                | ExprKind::Index { .. }
+                | ExprKind::TupleIndex { .. }
+        ) {
+            return None;
+        }
+        let item = |t: &Type| -> Option<Type> {
+            match strip_refs_for_compare(t) {
+                Type::Named { name, args } if name == "Option" && args.len() == 1 => {
+                    Some(resolve_type_var_top(&args[0], &self.env.substitutions))
+                }
+                _ => None,
+            }
+        };
+        let Type::Ref(inner) = item(viewed_ty)? else {
+            return None;
+        };
+        let owned = item(side_ty)?;
+        if matches!(owned, Type::Ref(_) | Type::MutRef(_)) || !types_compatible(&inner, &owned) {
+            return None;
+        }
+        let at = arg.value.span;
+        Some((
+            FixIt {
+                span: Span { length: 0, ..at },
+                replacement: "ref ".to_string(),
+            },
+            at,
+        ))
     }
 
     /// `String + t` with `t` a `Str`: the edit that appends `.to_string()`
