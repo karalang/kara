@@ -62,7 +62,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | false-positive | 110 |
 | perf | 95 |
 | missing-feature | 75 |
-| soundness | 48 |
+| soundness | 49 |
 | miscompile | 34 |
 | run-vs-build | 23 |
 | codegen-gap | 22 |
@@ -75,7 +75,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 197 |
+| typecheck | 198 |
 | mir | 119 |
 | mir-llvm | 111 |
 | cli | 55 |
@@ -110,9 +110,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-04-39 | 2026-11-04 | mir-llvm | low | Seven first-run katas (321, 326, 333, 337, 338, 339, 343) execute 1.14-1.26x legacy's instructions on the MIR backend with cycles mostly flat: too small to file alone | — |
 | B-2026-11-04-55 | 2026-11-04 | mir-llvm | low | `PriorityQueue.pop` sifts down by swapping, two comparisons a level, where Rust's `BinaryHeap::pop` sifts a hole to the bottom with one: kata 1046's bench (1000 piles of 3000 stones, 3 rounds of the heap game) runs 2.66x Rust's time under overflow checks, of which the compiler is about 1.15x and the heap algorithm the rest | — |
 | B-2026-11-04-56 | 2026-11-04 | mir | medium | `karac check` does not run the MIR borrow check on a function that `main` never reaches, so a library package's `pub fn bad() -> Str { let s = "abc".to_string(); s.as_str() }` (a view of its own local escaping, E0516/E0509) is reported clean; the same function called from `main` is refused by check | — |
-| B-2026-11-04-58 | 2026-11-04 | typecheck | medium | A list literal with a `Set[T]` expected type is refused: `let s: Set[i64] = [1, 2, 2, 3];` -> "expected 'Set[i64]', found 'Vec[i64]'", though design.md §5 Collection literals says the literal follows the expected type and builds a `Set` there | — |
 | B-2026-11-04-59 | 2026-11-04 | mir | medium | Mixed-width compound assignment passes `karac check` and then fails in MIR: `total_i64 += n_i32` (legal per design.md §5) stops `run`/`build` with "invalid MIR: binary operands of different types i64 and i32", and the illegal narrowing `n_i32 += total_i64` is accepted by check and fails the same way; `let w: Slice[i64] = v;` (a let does not coerce, §5 Slices) is likewise accepted by check and fails in MIR | — |
-| B-2026-11-04-60 | 2026-11-04 | typecheck | low | Small §5 divergences in refusals and lints: an or-pattern whose alternatives bind different names (`E.A(x) | E.B(y)`) is accepted; `mut port: i64` on a plain struct field and `struct Marker;` are accepted; the `redundant_alias_bound` warning never fires; a shift amount out of range reports "integer overflow" instead of "shift amount out of range"; and the alias-bound and range-bound errors carry E0262/E0263 where §5 names E_TYPE_ALIAS_BOUND_NOT_SATISFIED / E_RANGE_PATTERN_BOUND_NOT_CONST | — |
 | B-2026-11-04-62 | 2026-11-04 | typecheck | medium | Rebinding an `own MutFn` / `own Fn` parameter with `let mut f = f;`, the spelling design.md §7 Function types and kinds prescribes for calling an owned MutFn, is refused by karac check as binding a non-escaping function value; the backends run it | — |
 | B-2026-11-04-64 | 2026-11-04 | typecheck | medium | An unbound method value `User.adult` gets the type `Fn() -> bool` with the receiver dropped, so `let check = User.adult; check(u)` is refused ("expected 0 argument(s), found 1") and `.map(User.adult)` fails to infer | — |
 | B-2026-11-04-65 | 2026-11-04 | typecheck | medium | An escaping closure that captures a String and calls `println(s)` is classified OnceFn ("consumes captured binding `s`") and refused for an Fn slot; `println(f"{s}")`, `show(s)` and `s.len()` in the same closure are Fn | — |
@@ -127,6 +125,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-04-76 | 2026-11-04 | parser | low | A closure parameter written `mut acc` (Rust's `fold(init, |mut acc, x| ..)`) is refused with "'mut' is a reserved keyword and cannot be used as an identifier" and a cascade error at the closing `)`, with no fix; a `fn` parameter written `mut x` gets a diagnostic naming the Kāra spelling (`let mut x = x;` in the body) | — |
 | B-2026-11-04-77 | 2026-11-04 | typecheck | low | `Vec` has no `drain(range)`: Rust's `v.drain(i..i + 2);` gets only "no method 'drain' on type 'Vec'" with no hint, though `remove`, `truncate` and `split_off`-style edits exist | — |
 | B-2026-11-04-78 | 2026-11-04 | typecheck | medium | A borrowed parameter passed where a library constructor takes `own Vec[T]` (`PriorityQueue.from(v)`, `max_first_from(v)` with `v: Vec[i64]`) draws "expected 'Vec[T]', found 'ref Vec[i64]'" and a cascade "cannot infer type parameter 'T'", with no fix; the same parameter given away by `let`/return gets "cannot give away parameter `v`" with its `own` / `.clone()` fix | — |
+| B-2026-11-04-79 | 2026-11-04 | typecheck | low | `mut` on a field of a plain (non-`shared`) struct is accepted; design.md §5 Structs makes it a compile error, but 305 corpus programs write it, so the refusal needs a migration call (split from B-2026-11-04-60) | — |
 
 ### Relocated
 
@@ -681,6 +680,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-04-53 | cli | low | `karac fmt` breaks an expression holding two `unsafe { . | 19775ae374 |
 | B-2026-11-04-54 | typecheck | medium | With two impls of a user generic trait on one type (`impl Make[i64] for Out` + `impl Make[String] for Out`, `fn make(x: T) -> Self`), `Out.make("abcd… | 2b657fbeba |
 | B-2026-11-04-57 | mir | medium | Three pattern shapes design.md §5 specifies pass the front end but are refused with "this pattern is not lowered yet": an or-pattern whose alternativ… | 6ad941be02 |
+| B-2026-11-04-58 | typecheck | medium | A list literal with a `Set[T]` expected type is refused: `let s: Set[i64] = [1, 2, 2, 3];` -> "expected 'Set[i64]', found 'Vec[i64]'", though design.… | 167711e424 |
+| B-2026-11-04-60 | typecheck | low | Small §5 divergences in refusals and lints: an or-pattern whose alternatives bind different names (`E.A(x) \| E.B(y)`) is accepted; `mut port: i64` on… | 167711e424 |
 | B-2026-11-04-61 | typecheck+cli | low | `m.get(k) == Some(v)` with a non-Copy value (Map[String, String]) refuses E0208 "cannot compare 'Option[ref String]' and 'Option[String]'" with no ed… | be4628d4bc |
 | B-2026-11-04-63 | parser | medium | A struct pattern with a `..` rest in parameter position is a parse error ("Expected identifier, found `..`"), though design.md §7 Destructuring param… | 1776ad9f5e |
 | B-2026-11-04-70 | ownership | medium | A closure cannot capture a `frozen` binding at all ("`frozen` alias `g` is captured by a closure"), and a TaskGroup.spawn closure over one is also E_… | bf270628d9 |
