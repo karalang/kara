@@ -59,7 +59,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 119 |
-| false-positive | 104 |
+| false-positive | 105 |
 | perf | 94 |
 | missing-feature | 70 |
 | soundness | 48 |
@@ -75,7 +75,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 182 |
+| typecheck | 183 |
 | mir | 115 |
 | mir-llvm | 109 |
 | cli | 54 |
@@ -113,9 +113,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-04-39 | 2026-11-04 | mir-llvm | low | Seven first-run katas (321, 326, 333, 337, 338, 339, 343) execute 1.14-1.26x legacy's instructions on the MIR backend with cycles mostly flat: too small to file alone | — |
 | B-2026-11-04-44 | 2026-11-04 | typecheck | low | An empty list literal with no expected type (`let mut w = [];`) is refused by `karac check` with MIR's internal "a type that failed to check is not lowered yet", not a diagnostic saying the element type is needed | — |
 | B-2026-11-04-45 | 2026-11-04 | typecheck | low | A `let` keeping a borrow of a prefix `Vec` literal's temporary (`let g = Vec["a"].last();`, and `vec!["a"].last()`, the same node) is refused late, as E0516 "cannot drop the temporary value ... while `g` still borrows it", where the list literal `["a"].last()` gets the §5.5 rule "a reference to a temporary outlives its statement"; next to another refusal the late E0516 never shows | — |
-| B-2026-11-04-47 | 2026-11-04 | mir | high | With two `From` impls on one type, `Out.from(c)` calls the FIRST impl's `from` whatever the argument (prints 6 for `Out.from(C { n: 6 })` whose impl multiplies by 10), on run and --interp; with argument-less headers (`impl From for Out` twice, told apart by the parameter) `.into()` picks the first impl too | — |
 | B-2026-11-04-52 | 2026-11-04 | typecheck | low | `.iter().flatten()` over collection items names the exact rewrite ("write `.flat_map(|v| v.iter())` in place of `.flatten()`") but carries no fix, so `karac fix` leaves `g.iter().flatten().collect()` on a `Vec[Vec[i64]]` refused | — |
 | B-2026-11-04-53 | 2026-11-04 | cli | low | `karac fmt` breaks an expression holding two `unsafe { .. }` blocks over lines, and the `undocumented_unsafe` lint then fires on the second though the statement carries a `// Safety:` comment: `// Safety: ..` above `let (a, b) = par { unsafe { labs(-3) }, unsafe { labs(-4) } };` is clean, and its formatted form is not, with no place a comment could go | — |
+| B-2026-11-04-54 | 2026-11-04 | typecheck | medium | With two impls of a user generic trait on one type (`impl Make[i64] for Out` + `impl Make[String] for Out`, `fn make(x: T) -> Self`), `Out.make("abcd".to_string())` is refused at check ("expected 'i64', found 'String'"): the checker picks among `From` impls by the argument's type but takes the first impl of any other trait | — |
 
 ### Relocated
 
@@ -656,6 +656,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-04-42 | mir | medium | The MIR effect pass gives every call of an `extern` function every effect, ignoring its declaration: two `par` branches that each call a `pure fn` fr… | b8f73d1a3f |
 | B-2026-11-04-43 | resolver+parser | low | Rust's `Box.new(e)` (what `Box::new(e)` becomes) gets `undefined name 'Box', did you mean 'Hex'?` with no fix, though Kāra has no `Box` (design.md §… | a3e6d2fd30 |
 | B-2026-11-04-46 | typecheck | low | Reading a `private` field from another directory is refused with code E0221 (PrivateTypeInPublicSignature) instead of E0111 PrivateItemAccess, which… | 3942d674ca |
+| B-2026-11-04-47 | mir | high | With two `From` impls on one type, `Out.from(c)` calls the FIRST impl's `from` whatever the argument (prints 6 for `Out.from(C { n: 6 })` whose impl… | c922a27b91 |
 | B-2026-11-04-48 | mir | medium | `self.raw()` in a method of a `distinct type` whose receiver is a bare (borrowed, D5) `self` is refused after check: "`raw` of a borrowed distinct va… | 36c03e2120 |
 | B-2026-11-04-49 | mir | medium | A trait default method that calls another of the trait's methods (`fn shout(self, n: i64) -> String { let s = self.tag(); . | 36c03e2120 |
 | B-2026-11-04-50 | mir | medium | An inherent impl on a type alias of the program's own struct (`type Wrap = W; impl Wrap { fn get(self) -> i64 { . | fbe0caf3bc |
