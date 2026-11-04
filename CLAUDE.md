@@ -38,8 +38,17 @@ A cloud container cannot reach apt.llvm.org and Ubuntu's archive stops at 20,
 so once per container, before any `--features llvm` build:
 
 ```bash
-bash scripts/setup-llvm22.sh   # idempotent; ~1.9 GB download, ~710 MiB kept in /opt/llvm-22
+bash scripts/setup-llvm22.sh   # idempotent; ~1.9 GB download (deleted after), ~870 MiB kept in /opt/llvm-22
 ```
+
+The release ships static libraries only, so the script also links them into
+`/opt/llvm-22/lib/libLLVM-22.so` (about 7 s) and registers it with the
+loader. karac's default `prefer-dynamic` then takes it: karac is 26 MB rather
+than 157 MB, `karac_jit_runner` 7 MB rather than 70 MB, and a test binary
+that links the backend no longer carries its own copy of LLVM. A container that ran the
+script before this existed gets the library from a re-run, then needs
+`cargo clean -p llvm-sys` to relink. `ldd target/release/karac | grep LLVM`
+shows which build you have.
 
 It sets `LLVM_SYS_221_PREFIX` in `~/.cargo/config.toml`, so nothing needs
 exporting. CI and the release take apt.llvm.org's packages through
@@ -191,9 +200,15 @@ CARGO_PROFILE_TEST_DEBUG=line-tables-only cargo test --features llvm   # ~250 ->
 cargo clean -p karac                                                    # between legs
 ```
 
-- **Since LLVM 22 the `--features llvm` test leg does not fit at all** in a
-  cloud container: about 24 GiB is used before it starts, and linking every
-  test binary runs out even after `rm -rf target/debug`. Run it as
+- **The `--features llvm` test leg fits whole without debuginfo, and
+  comfortably only against the shared libLLVM.** With
+  `CARGO_INCREMENTAL=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_PROFILE_DEV_DEBUG=0
+  CARGO_PROFILE_TEST_STRIP=debuginfo CARGO_PROFILE_DEV_STRIP=debuginfo`
+  and `rm -rf target/debug` first, the shared build's `target/debug` ends at
+  7.0 GiB (80e7fba5c8, 10455 passed, 40 min, 11 GiB still free). The same leg
+  against the static libraries ended with 0 GiB free. With full debuginfo,
+  each backend test binary is about 400 MB even against the shared library, and
+  the leg fills the disk. When it still runs out, run it as
   `bash scripts/llvm-leg-split.sh`, one target at a time, deleting each test
   binary after it runs. It honors the plain leg's environment and prints the
   pass/fail totals to compare with a whole-leg run.
