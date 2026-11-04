@@ -108,6 +108,17 @@ impl<'a> super::TypeChecker<'a> {
             if let Err(path) = is_cross_task_safe_with(ty, &self.env.structs, &self.env.enums)
                 .or_else(|p| self.fn_value_in_sight(&name, p))
             {
+                // A `frozen` handle enters a `TaskGroup` task as it enters a
+                // `par` branch: uncounted, and the task joins before the
+                // group drops (design.md § Handles in closures,
+                // B-2026-11-04-70).
+                if path.fix_it == CrossTaskUnsafeFixIt::SharedToPar
+                    && site_label.ends_with("Group.spawn")
+                    && (self.current_fn_frozen_params.contains(&name)
+                        || self.current_fn_frozen_lets.contains(&name))
+                {
+                    continue;
+                }
                 self.emit_cross_task_unsafe(
                     name.as_str(),
                     ty,

@@ -823,14 +823,14 @@ impl super::OwnershipChecker<'_> {
                     ),
                 ),
                 Reason::Captured => (
-                    format!("`frozen` {noun} `{name}` is captured by a closure"),
+                    format!("`frozen` {noun} `{name}` is captured by a closure that escapes"),
                     format!(
-                        "the closure's environment holds the handle and can outlive the call \
-                         — returned, stored, or handed to `spawn` — so a non-counting handle \
-                         would be left pointing at freed memory. Read what you need from \
-                         `{name}` into a local BEFORE the closure and capture that instead. \
-                         (`par` / `seq` branches are not closures here: they join before the \
-                         function returns.)"
+                        "the closure is returned, stored in a field or a collection, or passed \
+                         to an `escaping` parameter, so its environment can outlive the call and \
+                         a non-counting handle would be left pointing at freed memory. A closure \
+                         that is only called or passed down (including into `par` branches and \
+                         `TaskGroup` tasks) may capture `{name}`; otherwise read what you need \
+                         from `{name}` into a local BEFORE the closure and capture that instead."
                     ),
                 ),
                 Reason::FreezeRefused(why) => (
@@ -2044,7 +2044,20 @@ fn walk_expr<'a>(e: &'a Expr, cx: &mut Cx<'a, '_>) {
         ExprKind::Loop { body, .. } => walk_block(body, cx),
         ExprKind::LabeledBlock { body, .. } => walk_block(body, cx),
         ExprKind::Closure { body, .. } => {
-            let saved = std::mem::replace(&mut cx.in_closure, true);
+            // design.md § Handles in closures (B-2026-11-04-70): a closure
+            // that captures a `frozen` handle is a view. It may be called,
+            // passed down, and enter `par` branches and `TaskGroup` tasks;
+            // only an ESCAPING closure (v2 core §9.3, which the typechecker's
+            // escape pass decides) carries the handle out, so only there is
+            // a captured frozen place reported. The escape set exists only
+            // under the core rules, so elsewhere every capture stays refused.
+            let escapes = cx.in_closure
+                || !crate::ownership::core_rules()
+                || cx
+                    .tc
+                    .core_escaping_closures
+                    .contains(&SpanKey::from_span(&e.span));
+            let saved = std::mem::replace(&mut cx.in_closure, escapes);
             // A closure's environment can outlive the call, so a container
             // declared outside and touched inside is disqualified on the same
             // terms as a `defer` body. `in_closure` above independently

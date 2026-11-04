@@ -1,0 +1,1 @@
+ERROR at line 11: `frozen` parameter `n` is captured by a closure that escapes

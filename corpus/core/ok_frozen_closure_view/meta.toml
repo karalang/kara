@@ -1,0 +1,9 @@
+source = "B-2026-11-04-70"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure", "concurrency", "post-m1:par"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-04-70: a closure capturing a frozen handle is a view; it is called, passed down, and enters par branches and TaskGroup tasks (design.md § Handles in closures)."

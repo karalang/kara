@@ -1,0 +1,19 @@
+// design.md § Handles in closures, core semantics §9.3: a closure that
+// captures a `frozen` handle may not escape. Bound to a local first and then
+// returned, it would carry the uncounted handle out of the call
+// (B-2026-11-04-70).
+
+shared struct Node {
+    val: i64,
+}
+
+fn reader(n: frozen Node) -> Fn() -> i64 {
+    let f = || n.val;
+    f
+}
+
+fn main() {
+    let r = Node { val: 2 };
+    let f = reader(r);
+    println(f());
+}

@@ -1,0 +1,11 @@
+source = "B-2026-11-04-70"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["closure", "frozen"]
+class = "a"
+expected_from = "pin"
+backends = []
+env = {}
+note = "B-2026-11-04-70: a closure capturing a frozen handle is a view and may not escape; returning it (through a local) is refused. The expected.out wording of an error pin is guidance, not a byte oracle."
+bucket = "a:refused"

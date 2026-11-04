@@ -1,0 +1,27 @@
+// design.md § Handles in closures, core semantics §9.2, §9.5: a closure that
+// captures a `frozen` handle is a view. It may be called, passed down to a
+// non-escaping parameter, and enter `par` branches and `TaskGroup` tasks
+// (B-2026-11-04-70).
+
+shared struct Node {
+    val: i64,
+    kids: Vec[i64],
+}
+
+fn twice(f: Fn() -> i64) -> i64 {
+    f() + f()
+}
+
+fn main() {
+    let r = Node { val: 3, kids: [4, 5] };
+    let g = freeze r;
+    let f = || g.val + 1;
+    println(f());
+    println(twice(|| g.val * 10));
+    let (x, y) = par { f(), f() + g.kids.len() };
+    println(x + y);
+    let tg = TaskGroup.new();
+    let a = tg.spawn(|| g.val + g.kids[1]);
+    let b = tg.spawn(|| g.kids.len() * g.val);
+    println(a.join() + b.join());
+}
