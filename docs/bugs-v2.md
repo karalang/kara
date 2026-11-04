@@ -60,7 +60,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | diagnostics | 113 |
 | false-positive | 102 |
-| perf | 90 |
+| perf | 94 |
 | missing-feature | 70 |
 | soundness | 48 |
 | miscompile | 33 |
@@ -77,7 +77,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | typecheck | 177 |
 | mir | 110 |
-| mir-llvm | 105 |
+| mir-llvm | 109 |
 | cli | 53 |
 | ownership | 48 |
 | parser | 36 |
@@ -118,11 +118,15 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-04-28 | 2026-11-04 | effect | medium | `#[no_effect(allocates(Heap))]` (design.md §12's real-time guarantee) misses most allocations: `[1, 2].to_vec()`, `"a".to_string()`, an f-string, a `Vec` literal `let v: Vec[i64] = [1, 2]`, `Vec.filled(3, 0)`, `String + Str` and `(0..3).collect()` all pass under it; only `push` is caught | — |
 | B-2026-11-04-29 | 2026-11-04 | effect | medium | Integer `/` and `%` and checked-mode overflow arithmetic are not `panics` atoms: `#[no_effect(panics)] fn f(a: i64, b: i64) -> i64 { a % b }` (and `a / b`, `a + b`) passes `karac check`, and `f(1, 0)` then panics at run time with "division by zero" | — |
 | B-2026-11-04-30 | 2026-11-04 | mir-llvm | medium | Kata 394's String decode loop runs 1.27x legacy's instructions and 1.26x its cycles on the MIR backend; seq 0.99x -> 1.17x rustc -O, par 0.86x -> 1.27x rayon | — |
-| B-2026-11-04-31 | 2026-11-04 | mir-llvm | low | Seq binaries of katas 297, 315, 332 and 394 are still 319-336 KB on gd33cb285d, after ad984ef96b took katas 38, 282 and 306 down to 67-83 KB | — |
+| B-2026-11-04-31 | 2026-11-04 | mir-llvm | low | Seq binaries of katas 297, 315, 330, 331, 332, 336 and 394 are still 319-336 KB on gd33cb285d and gf0017054a, after ad984ef96b took katas 38, 282 and 306 down to 67-83 KB | — |
 | B-2026-11-04-32 | 2026-11-04 | mir-llvm | low | Kata 297's peak RSS is 1.35x Rust's (233-235 MiB vs 173 MiB) on the MIR backend, where the 2026-08-28 feed read 179.9 vs 174.3 MiB | — |
 | B-2026-11-04-33 | 2026-11-04 | mir-llvm | low | Six more katas sit at 1.03-1.20x legacy's cycles or instructions on the MIR backend, each too small to file alone, and kata 895's par lane slipped to 2.31x rayon: the third borderline batch after B-2026-11-01-45 | — |
 | B-2026-11-04-36 | 2026-11-04 | cli | low | `karac fmt` rewrites a script-mode file into an explicit `fn main()`, its top-level statements moved after every item; since B-2026-11-04-19 it also writes the implicit main's `-> Result[(), AnyError]` and `Ok(())`, so formatting a script changes its shape (design.md § Script mode) | — |
 | B-2026-11-04-40 | 2026-11-04 | mir | medium | A trait's default method body calling `self.m()` is refused as ambiguous ("ambiguous method 'm' on receiver of type 'S'") in the copy for a type that also implements another trait with a method `m`; inside trait `A`'s default, `self.m()` is `A.m` | — |
+| B-2026-11-04-41 | 2026-11-04 | mir-llvm | medium | Kata 344's in-place reverse of a Slice[char] runs 4.9x the instructions of rustc -O and clang -O3 (4.017G vs 0.82G) and 2.47x their wall time, the same on legacy, so it is not a MIR regression | — |
+| B-2026-11-04-37 | 2026-11-04 | mir-llvm | low | Kata 342 runs 1.20x legacy's instructions and 1.39x its cycles on the MIR backend, the largest cycle ratio in its batch | — |
+| B-2026-11-04-38 | 2026-11-04 | mir-llvm | low | Kata 3629's seq peak RSS rose from 59.9 to 88.9 MiB on the MIR backend while Rust held at 60.1 MiB | — |
+| B-2026-11-04-39 | 2026-11-04 | mir-llvm | low | Seven first-run katas (321, 326, 333, 337, 338, 339, 343) execute 1.14-1.26x legacy's instructions on the MIR backend with cycles mostly flat: too small to file alone | — |
 
 ### Relocated
 
