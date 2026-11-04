@@ -746,11 +746,13 @@ impl StringSlice {
     }
 
     /// The text without leading and trailing whitespace, a view into it.
+    #[must_use("`trim` returns the trimmed view and leaves the string as it was")]
     fn trim(self) -> Str {
         self.trim_start().trim_end()
     }
 
     /// The text without leading whitespace, a view into it.
+    #[must_use("`trim_start` returns the trimmed view and leaves the string as it was")]
     fn trim_start(self) -> Str {
         let n = self.len();
         let mut at = 0;
@@ -765,6 +767,7 @@ impl StringSlice {
     }
 
     /// The text without trailing whitespace, a view into it.
+    #[must_use("`trim_end` returns the trimmed view and leaves the string as it was")]
     fn trim_end(self) -> Str {
         let mut end = self.len();
         while end > 0 {
@@ -865,16 +868,19 @@ impl String {
     }
 
     /// `trim` of the text as a `Str`: a view into `self`.
+    #[must_use("`trim` returns the trimmed view and leaves the string as it was")]
     fn trim(ref self) -> Str {
         self.as_str().trim()
     }
 
     /// `trim_start` of the text as a `Str`: a view into `self`.
+    #[must_use("`trim_start` returns the trimmed view and leaves the string as it was")]
     fn trim_start(ref self) -> Str {
         self.as_str().trim_start()
     }
 
     /// `trim_end` of the text as a `Str`: a view into `self`.
+    #[must_use("`trim_end` returns the trimmed view and leaves the string as it was")]
     fn trim_end(ref self) -> Str {
         self.as_str().trim_end()
     }

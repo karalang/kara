@@ -131,6 +131,7 @@ fn __select_due(at: i64) -> bool with reads(Clock) {
 /// it drops, so every exit from its scope (`return`, `break`, `?`)
 /// releases it. A `lock m x { ... }` block is a guard in a scope of its
 /// own.
+#[must_use("the mutex is released when this guard drops; bind it to a name to keep the lock")]
 pub struct MutexGuard[T] {
     pub value: mut ref T,
     mutex: ref Mutex[T],

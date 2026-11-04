@@ -281,7 +281,7 @@ fn make_diagnostic(f: &Function, reason: FireReason, level: LintLevel) -> LintDi
                 f.name
             ),
             Some(
-                "annotate with `#[must_use = \"discarding the iterator drops every adapter without running it — chain a terminal method or bind the result\"]` (the message design.md gives iterator-adapter return types)."
+                "annotate with `#[must_use(\"discarding the iterator drops every adapter without running it — chain a terminal method or bind the result\")]` (the message design.md gives iterator-adapter return types)."
                     .to_string(),
             ),
             Some(
@@ -295,7 +295,7 @@ fn make_diagnostic(f: &Function, reason: FireReason, level: LintLevel) -> LintDi
                 f.name
             ),
             Some(
-                "annotate with `#[must_use = \"<reason discarding the value is a hazard>\"]` (the message is consumer-facing; name the wasted operation specifically — e.g. \"discarding the builder loses every chained call\" or \"discarding the computed statistic wastes the traversal\")."
+                "annotate with `#[must_use(\"<reason discarding the value is a hazard>\")]` (the message is consumer-facing; name the wasted operation specifically — e.g. \"discarding the builder loses every chained call\" or \"discarding the computed statistic wastes the traversal\")."
                     .to_string(),
             ),
             Some(

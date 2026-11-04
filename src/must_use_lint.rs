@@ -112,6 +112,11 @@ fn displaced_value_exempt(receiver: &str, method: &str) -> bool {
     )
 }
 
+/// The discard message for a stdlib iterator (design.md § `#[must_use]`
+/// mandate, category 2), the one the `Iterator` pseudo-struct carries.
+const ITERATOR_MUST_USE: &str = "discarding the iterator drops every adapter without running \
+     it — chain a terminal method or bind the result";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LintLevel {
     Warning,
@@ -169,10 +174,29 @@ pub fn check_implicit_must_use(
     };
     let mut diags: Vec<LintDiagnostic> = Vec::new();
     {
+        let library_iterators: std::collections::HashSet<&str> = program
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Item::StructDef(sd)
+                    if (sd.stdlib_origin
+                        || program
+                            .library_start
+                            .is_some_and(|start| sd.span.offset >= start))
+                        && typed
+                            .trait_impls
+                            .contains(&("Iterator".to_string(), sd.name.clone())) =>
+                {
+                    Some(sd.name.as_str())
+                }
+                _ => None,
+            })
+            .collect();
         let mut walker = Walker {
             typed,
             level,
             diags: &mut diags,
+            library_iterators,
         };
         for item in &program.items {
             match item {
@@ -207,6 +231,9 @@ struct Walker<'a> {
     /// point so the per-emission path is just a `level` field read.
     level: LintLevel,
     diags: &'a mut Vec<LintDiagnostic>,
+    /// The library's own iterator types (a struct the library defines with
+    /// an `Iterator` impl), which discard as the mandate's category 2.
+    library_iterators: std::collections::HashSet<&'a str>,
 }
 
 impl Walker<'_> {
@@ -401,6 +428,15 @@ impl Walker<'_> {
                 return Some((name.clone(), msg.clone()));
             }
         }
+        // design.md § `#[must_use]` mandate, category 2: every stdlib
+        // iterator adapter. With the library compiled from source an adapter
+        // is its own struct (`IterMap[..]`, `VecIter[T]`), not the `Iterator`
+        // pseudo-struct the mandate's message was first written on, so the
+        // library's iterator types carry it by their `Iterator` impl
+        // (B-2026-11-04-71).
+        if self.library_iterators.contains(name.as_str()) {
+            return Some((name.clone(), ITERATOR_MUST_USE.to_string()));
+        }
         if let Some(info) = self.typed.enum_info.get(name) {
             if let Some(msg) = &info.must_use_message {
                 return Some((name.clone(), msg.clone()));
@@ -467,14 +503,12 @@ impl Walker<'_> {
                  discard."
             )
         } else {
-            format!("`{type_name}` is annotated `#[must_use = \"{msg}\"]`. {msg}.")
+            format!("`{type_name}` is `#[must_use(\"...\")]`: {msg}.")
         };
         LintDiagnostic {
             level: self.level,
             span: expr.span,
-            message: format!(
-                "discarded `{type_name}` value — `{type_name}` is annotated `#[must_use]`"
-            ),
+            message: format!("discarded `{type_name}` value — `{type_name}` is `#[must_use]`"),
             lint_name: "must_use".to_string(),
             help: Some(
                 "bind the value with `let _ = ...` to acknowledge the discard \
@@ -497,7 +531,7 @@ impl Walker<'_> {
                  return value is meaningful — bind it or pass it to the consuming function."
             )
         } else {
-            format!("`{callee_name}` is annotated `#[must_use = \"{msg}\"]`. {msg}.")
+            format!("`{callee_name}` is `#[must_use(\"...\")]`: {msg}.")
         };
         LintDiagnostic {
             level: self.level,
