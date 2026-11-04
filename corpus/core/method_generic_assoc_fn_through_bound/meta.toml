@@ -1,0 +1,11 @@
+source = "design.md § Method resolution"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["traits"]
+class = "e"
+expected_from = "spec"
+rules = []
+backends = []
+env = {}
+note = "In a generic body lookup uses the bound, not the concrete type (design.md §9 Generic receivers): T.label() under T: Named calls Named's function even where the type passed as T has an inherent label of its own; P.label() on the type is the inherent one (B-2026-11-04-9)."

@@ -1,0 +1,18 @@
+trait A { fn m(self) -> i64; }
+trait B { fn m(self) -> i64; }
+struct S {}
+impl A for S { fn m(self) -> i64 { 1 } }
+impl B for S { fn m(self) -> i64 { 2 } }
+
+fn through_b[T: B](x: T) -> i64 {
+    x.m()
+}
+
+fn through_a[T: A](x: T) -> i64 {
+    x.m()
+}
+
+fn main() {
+    println(through_b(S {}));
+    println(through_a(S {}));
+}

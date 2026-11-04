@@ -1,0 +1,11 @@
+source = "design.md § Method resolution"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["traits"]
+class = "e"
+expected_from = "spec"
+rules = []
+backends = []
+env = {}
+note = "UFCS names the trait whose method it calls (design.md §9): Shape.area(c) form. A.d(o) and A.d(s) reach a default method, whose own A.m(self) names A's m even for S, which has a B.m too, and A.m(o) the impl's; beside a second trait with an m, A.m(s) and B.m(s) each call their own trait's impl; in a generic body under T: A + B the named trait picks the bound (B-2026-11-04-8)."

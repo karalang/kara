@@ -72,6 +72,15 @@ accepted by 0.8.0 are now refused, each with a fix-it.
   (B-2026-11-02-1).
 - `let x: i64 = None?;` no longer stops `karac run` with invalid MIR
   (B-2026-11-01-31).
+- Trait calls resolve through the bound and the named trait (design.md §9).
+  `T.label()` under `T: Named` calls `Named`'s function, not an inherent
+  one of the same name (B-2026-11-04-9). UFCS on a program trait
+  (`A.m(s)`) is accepted and calls `A`'s impl, also when a second trait
+  has an `m` and in a generic body under `T: A + B` (B-2026-11-04-8).
+  `x.m()` under one bound no longer fails when the type has another trait's
+  `m` (B-2026-11-04-11). A program's associated function named `name` (or
+  any other reflection method) is no longer run as reflection
+  (B-2026-11-04-10).
 
 ### Diagnostics
 

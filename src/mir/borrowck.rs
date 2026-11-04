@@ -2442,6 +2442,8 @@ fn main() -> () {
         if !tc.errors.is_empty() {
             return Err(format!("typecheck: {}", tc.errors[0].message));
         }
+        // As the build frontend reads it: a UFCS call is the receiver form.
+        crate::lowering::rewrite_ufcs(&mut program, &tc.ufcs_calls);
         let defs = crate::def_table::ProgramDefs::build_for_program(&program);
         let res = crate::node_res::node_res(&r, &defs, 0, None);
         let hir =

@@ -1,0 +1,11 @@
+source = "design.md § Method resolution"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["traits"]
+class = "e"
+expected_from = "spec"
+rules = []
+backends = []
+env = {}
+note = "The one bound gives one candidate, whatever other traits the type passed as T implements (design.md §9 Generic receivers): x.m() under T: B calls B's m and under T: A calls A's, for a type with both (B-2026-11-04-11)."

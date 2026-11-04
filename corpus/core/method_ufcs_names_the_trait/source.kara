@@ -1,0 +1,25 @@
+trait A {
+    fn m(self) -> i64;
+    fn d(self) -> i64 { A.m(self) + 10 }
+}
+trait B { fn m(self) -> i64; }
+struct S {}
+impl A for S { fn m(self) -> i64 { 1 } }
+impl B for S { fn m(self) -> i64 { 2 } }
+struct One {}
+impl A for One { fn m(self) -> i64 { 1 } }
+
+fn both[T: A + B](x: T) -> i64 {
+    A.m(x) * 10 + B.m(x)
+}
+
+fn main() {
+    let o = One {};
+    println(A.d(o));
+    println(A.m(o));
+    let s = S {};
+    println(A.d(s));
+    println(A.m(s));
+    println(B.m(s));
+    println(both(S {}));
+}

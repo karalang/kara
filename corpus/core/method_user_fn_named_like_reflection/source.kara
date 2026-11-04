@@ -1,0 +1,15 @@
+trait Named { fn name() -> String; }
+struct P {}
+impl Named for P { fn name() -> String { "trait".to_string() } }
+struct Q {}
+impl Q { fn name() -> String { "inherent".to_string() } }
+
+fn via[T: Named](x: T) -> String {
+    T.name()
+}
+
+fn main() {
+    println(P.name());
+    println(via(P {}));
+    println(Q.name());
+}

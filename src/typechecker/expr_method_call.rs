@@ -663,6 +663,13 @@ impl<'a> super::TypeChecker<'a> {
         // Two bounds can reach one trait (`I: Iterator + DoubleEndedIterator`).
         let mut seen = std::collections::HashSet::new();
         candidates.retain(|(b, _)| seen.insert(b.path.last().cloned()));
+        // `A.m(x)` names the trait: of `T: A + B`, only `A`'s `m`
+        // (B-2026-11-04-8).
+        if let Some((t, m)) = &self.env.ufcs_trait {
+            if m == method {
+                candidates.retain(|(b, _)| b.path.last() == Some(t));
+            }
+        }
 
         match candidates.len() {
             0 => {
@@ -1119,6 +1126,13 @@ impl<'a> super::TypeChecker<'a> {
             1 => {
                 let trait_name = candidates[0].clone();
                 let trait_method = self.find_trait_method(&trait_name, method)?.clone();
+                // The trait the bound names, which picks the impl's function
+                // over an inherent one of the same name once `T` is known
+                // (B-2026-11-04-9).
+                self.method_typeparam_trait_key.insert(
+                    SpanKey::from_span(call_span),
+                    format!("{trait_name}.{method}"),
+                );
                 Some(self.dispatch_trait_assoc_fn(type_name, &trait_method, &[], args, call_span))
             }
             _ => {

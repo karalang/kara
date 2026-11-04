@@ -1702,8 +1702,14 @@ impl<'a> Lcx<'a> {
                 _ => {}
             }
         }
+        // So is each of two traits' methods of one name for one type
+        // (`A.m(s)` beside `B.m(s)`, B-2026-11-04-8).
+        let mut traits_of: FxHashMap<_, FxHashSet<&String>> = FxHashMap::default();
+        for (_, key, tr) in &trait_methods {
+            traits_of.entry(key.clone()).or_default().insert(*tr);
+        }
         for (d, key, tr) in trait_methods {
-            if inherent.contains(&key) {
+            if inherent.contains(&key) || traits_of.get(&key).is_some_and(|t| t.len() > 1) {
                 if let Some(item) = self.fns.get_mut(&d) {
                     let k = item.impl_suffix.get_or_insert_with(String::new);
                     k.push('#');
@@ -17169,8 +17175,14 @@ impl<'l, 'a> Bx<'l, 'a> {
                     {
                         (format!("{m}.{f}"), None, None, args)
                     }
+                    // A program's own `P.name()` is its function, which the
+                    // checker resolved the call to (B-2026-11-04-10).
                     [t, f]
                         if interp::comptime::REFLECTION_METHODS.contains(&f.as_str())
+                            && !matches!(
+                                self.lcx.calls.get(&e.id).map(|rc| &rc.callee),
+                                Some(Callee::Def(_))
+                            )
                             && (self.lcx.tc.struct_info.contains_key(t)
                                 || self.lcx.tc.enum_info.contains_key(t)
                                 || self.lcx.tc.union_info.contains_key(t)) =>
@@ -18316,6 +18328,12 @@ impl<'l, 'a> Bx<'l, 'a> {
         args: &'a [CallArg],
         dest: Place,
     ) -> R<()> {
+        // `T.label()` under `T: Named` is `Named`'s, even where the type
+        // has an inherent `label` too (B-2026-11-04-9).
+        if let Some((d, inst_args)) = self.bound_impl_fn(e, t, m) {
+            let f = self.lcx.fns[&d].f;
+            return self.def_call(e, d, f, inst_args, None, args, dest);
+        }
         if let Some((d, inst_args)) = self.method_by_receiver(t, m) {
             let f = self.lcx.fns[&d].f;
             return self.def_call(e, d, f, inst_args, None, args, dest);
@@ -20614,6 +20632,12 @@ impl<'l, 'a> Bx<'l, 'a> {
             if let Some((d, inst_args)) = self.method_by_receiver(rt, method) {
                 return self.user_method_call(e, object, d, inst_args, args, dest);
             }
+            // Of several traits' `m` for the type, the one the bound names
+            // (`x.m()` under `T: B` where `A` has an `m` too,
+            // B-2026-11-04-11).
+            if let Some((d, inst_args)) = self.bound_impl_fn(e, rt, method) {
+                return self.user_method_call(e, object, d, inst_args, args, dest);
+            }
             // A generic method (`v.serialize(s)` with `S` the serializer's
             // type): its own parameters read off the arguments.
             let ret = if self.lcx.node_types.contains_key(&e.id) {
@@ -20903,6 +20927,26 @@ impl<'l, 'a> Bx<'l, 'a> {
             next,
         );
         Ok(true)
+    }
+
+    /// The function `m` of the impl, for `t`'s type, of the trait the bound
+    /// the checker dispatched the call `e` through names (`Named.label` for
+    /// `T.label()` or `x.label()` under `T: Named`), when it has no generic
+    /// parameters of its own.
+    fn bound_impl_fn(&self, e: &Expr, t: Ty, m: &str) -> Option<(DefId, Vec<Ty>)> {
+        let key = self
+            .lcx
+            .tc
+            .method_typeparam_trait_key
+            .get(&SpanKey::from_span(&e.span))?;
+        let (tr, km) = key.split_once('.')?;
+        if km != m {
+            return None;
+        }
+        let (d, inst_args) = self.user_impl_method(self.strip_ty_full(t).1, tr, m)?;
+        let own = self.lcx.fns.get(&d)?.f.generic_params.as_ref();
+        own.is_none_or(|g| g.params.is_empty())
+            .then_some((d, inst_args))
     }
 
     /// The method `method` of the impl for `recv`'s type, when exactly one

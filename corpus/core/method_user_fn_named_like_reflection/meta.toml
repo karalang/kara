@@ -1,0 +1,11 @@
+source = "design.md § Method resolution"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["traits"]
+class = "e"
+expected_from = "spec"
+rules = []
+backends = []
+env = {}
+note = "Type reflection (name, fields, ...) is reserved only inside comptime; outside it a program's associated function of the same name is the one a call resolves to (design.md §9 Associated functions, deferred.md § Reflection API): P.name() and T.name() under T: Named call the trait impl's, Q.name() the inherent one (B-2026-11-04-10)."

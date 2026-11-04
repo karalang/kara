@@ -1822,7 +1822,13 @@ impl Pipeline {
             && std::env::var("KARAC_CHECK_MIR").as_deref() != Ok("0")
             && !crate::comptime::has_comptime_work(&self.parsed.program)
         {
-            self.mir_program = Some(self.parsed.program.clone());
+            // A UFCS call is the receiver form there too, as the build
+            // frontend reads it (B-2026-11-04-8).
+            let mut program = self.parsed.program.clone();
+            if let Some(typed) = self.typed.as_ref() {
+                crate::lowering::rewrite_ufcs(&mut program, &typed.ufcs_calls);
+            }
+            self.mir_program = Some(program);
         }
         // On the library (the v2 pipeline), comptime work runs on the MIR
         // interpreter before the operators are lowered, and the program it
