@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 125 |
+| diagnostics | 128 |
 | false-positive | 110 |
 | perf | 95 |
 | missing-feature | 74 |
@@ -75,9 +75,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 193 |
-| mir | 118 |
-| mir-llvm | 110 |
+| typecheck | 195 |
+| mir | 119 |
+| mir-llvm | 111 |
 | cli | 55 |
 | ownership | 50 |
 | parser | 38 |
@@ -110,8 +110,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-04-37 | 2026-11-04 | mir-llvm | low | Kata 342 runs 1.20x legacy's instructions and 1.39x its cycles on the MIR backend, the largest cycle ratio in its batch | — |
 | B-2026-11-04-38 | 2026-11-04 | mir-llvm | low | Kata 3629's seq peak RSS rose from 59.9 to 88.9 MiB on the MIR backend while Rust held at 60.1 MiB | — |
 | B-2026-11-04-39 | 2026-11-04 | mir-llvm | low | Seven first-run katas (321, 326, 333, 337, 338, 339, 343) execute 1.14-1.26x legacy's instructions on the MIR backend with cycles mostly flat: too small to file alone | — |
-| B-2026-11-04-44 | 2026-11-04 | typecheck | low | An empty list literal with no expected type (`let mut w = [];`) is refused by `karac check` with MIR's internal "a type that failed to check is not lowered yet", not a diagnostic saying the element type is needed | — |
-| B-2026-11-04-45 | 2026-11-04 | typecheck | low | A `let` keeping a borrow of a prefix `Vec` literal's temporary (`let g = Vec["a"].last();`, and `vec!["a"].last()`, the same node) is refused late, as E0516 "cannot drop the temporary value ... while `g` still borrows it", where the list literal `["a"].last()` gets the §5.5 rule "a reference to a temporary outlives its statement"; next to another refusal the late E0516 never shows | — |
 | B-2026-11-04-55 | 2026-11-04 | mir-llvm | low | `PriorityQueue.pop` sifts down by swapping, two comparisons a level, where Rust's `BinaryHeap::pop` sifts a hole to the bottom with one: kata 1046's bench (1000 piles of 3000 stones, 3 rounds of the heap game) runs 2.66x Rust's time under overflow checks, of which the compiler is about 1.15x and the heap algorithm the rest | — |
 | B-2026-11-04-56 | 2026-11-04 | mir | medium | `karac check` does not run the MIR borrow check on a function that `main` never reaches, so a library package's `pub fn bad() -> Str { let s = "abc".to_string(); s.as_str() }` (a view of its own local escaping, E0516/E0509) is reported clean; the same function called from `main` is refused by check | — |
 | B-2026-11-04-57 | 2026-11-04 | mir | medium | Three pattern shapes design.md §5 specifies pass the front end but are refused with "this pattern is not lowered yet": an or-pattern whose alternatives bind under a guard (`E.A(x) | E.B(x) if g(x) =>`), an or-pattern nested inside a variant (`Out.Foo(In.A | In.B) =>`), and an or-pattern in `if let` (`if let Lr.Left(x) | Lr.Right(x) = v`); a distinct type's literal pattern (`Uid(0) =>`) is refused the same way ("this variant is not lowered yet") | — |
@@ -130,6 +128,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-04-70 | 2026-11-04 | ownership | medium | A closure cannot capture a `frozen` binding at all ("`frozen` alias `g` is captured by a closure"), and a TaskGroup.spawn closure over one is also E_NOT_CROSS_TASK; design.md §11 Handles in closures says such a closure is a view that may be called, passed down and enter par branches and TaskGroup tasks | — |
 | B-2026-11-04-71 | 2026-11-04 | typecheck | medium | design.md §11 #[must_use] mandate unmet: a discarded `m.lock()` guard, iterator adapter (`v.iter().map(..);`) and `s.trim()` give no warning, so a lock released at the wrong point is silent; also no `.unwrap()` -> `.expect` suggestion and no warning on a deprecated enum variant | — |
 | B-2026-11-04-72 | 2026-11-04 | typecheck | low | §11 sharing roll-up: `own self` on a sync type and `weak` on a non-shared type accepted; borrow-flag panic does not name the field or both spans; several sharing diagnostics give stale or wrong wording | — |
+| B-2026-11-04-74 | 2026-11-04 | mir+mir-llvm | low | A shift by an out-of-range amount (`x << 32` on an i32, `x << -1`) panics with "integer overflow" on run and build; design.md §5 says it panics with "shift amount out of range" (split from B-2026-11-04-60) | — |
+| B-2026-11-04-75 | 2026-11-04 | typecheck | low | An empty list literal compared with a typed `Vec` (`v == []`) is refused with MIR's internal "a type that failed to check is not lowered yet"; the other operand gives `[]` its element type, so it should check | — |
 
 ### Relocated
 
@@ -670,6 +670,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-04-36 | cli | low | `karac fmt` rewrites a script-mode file into an explicit `fn main()`, its top-level statements moved after every item; since B-2026-11-04-19 it also… | e5ccf4fc0c |
 | B-2026-11-04-42 | mir | medium | The MIR effect pass gives every call of an `extern` function every effect, ignoring its declaration: two `par` branches that each call a `pure fn` fr… | b8f73d1a3f |
 | B-2026-11-04-43 | resolver+parser | low | Rust's `Box.new(e)` (what `Box::new(e)` becomes) gets `undefined name 'Box', did you mean 'Hex'?` with no fix, though Kāra has no `Box` (design.md §… | a3e6d2fd30 |
+| B-2026-11-04-44 | typecheck | low | An empty list literal with no expected type (`let mut w = [];`) is refused by `karac check` with MIR's internal "a type that failed to check is not l… | aa857c6355 |
+| B-2026-11-04-45 | typecheck | low | A `let` keeping a borrow of a prefix `Vec` literal's temporary (`let g = Vec["a"].last();`, and `vec!["a"].last()`, the same node) is refused late, a… | aa857c6355 |
 | B-2026-11-04-46 | typecheck | low | Reading a `private` field from another directory is refused with code E0221 (PrivateTypeInPublicSignature) instead of E0111 PrivateItemAccess, which… | 3942d674ca |
 | B-2026-11-04-47 | mir | high | With two `From` impls on one type, `Out.from(c)` calls the FIRST impl's `from` whatever the argument (prints 6 for `Out.from(C { n: 6 })` whose impl… | c922a27b91 |
 | B-2026-11-04-48 | mir | medium | `self.raw()` in a method of a `distinct type` whose receiver is a bare (borrowed, D5) `self` is refused after check: "`raw` of a borrowed distinct va… | 36c03e2120 |
@@ -679,6 +681,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-04-52 | typecheck | low | `.iter().flatten()` over collection items names the exact rewrite ("write `.flat_map(\|v\| v.iter())` in place of `.flatten()`") but carries no fix, so… | e9fa6bddd1 |
 | B-2026-11-04-53 | cli | low | `karac fmt` breaks an expression holding two `unsafe { . | 19775ae374 |
 | B-2026-11-04-54 | typecheck | medium | With two impls of a user generic trait on one type (`impl Make[i64] for Out` + `impl Make[String] for Out`, `fn make(x: T) -> Self`), `Out.make("abcd… | 2b657fbeba |
+| B-2026-11-04-73 | typecheck | low | A `for` over a borrow of a concrete non-`Copy` iterator (`it: VecIntoIter[i64]`, a user `impl Iterator for Up`) is refused with MIR's internal "a `fo… | aa857c6355 |
 
 </details>
 
