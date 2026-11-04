@@ -1116,15 +1116,26 @@ impl<'a> super::TypeChecker<'a> {
             return None;
         }
         let bounds = self.resolve_result.symbol_table.get_generic_bounds(sym_id);
-        let candidates: Vec<String> = bounds
+        let found: Vec<&crate::ast::TraitBound> = bounds
+            .iter()
+            .filter(|b| {
+                b.path
+                    .last()
+                    .is_some_and(|t| self.find_trait_method(t, method).is_some())
+            })
+            .collect();
+        let candidates: Vec<String> = found
             .iter()
             .filter_map(|b| b.path.last().cloned())
-            .filter(|trait_name| self.find_trait_method(trait_name, method).is_some())
             .collect();
         match candidates.len() {
             0 => None,
             1 => {
                 let trait_name = candidates[0].clone();
+                // `T.make(5)` under `T: Make[i64]`: the trait's `T` is `i64`
+                // (B-2026-11-04-54).
+                let bound = found[0].clone();
+                let trait_subs = self.trait_bound_arg_subs(&bound);
                 let trait_method = self.find_trait_method(&trait_name, method)?.clone();
                 // The trait the bound names, which picks the impl's function
                 // over an inherent one of the same name once `T` is known
@@ -1133,7 +1144,13 @@ impl<'a> super::TypeChecker<'a> {
                     SpanKey::from_span(call_span),
                     format!("{trait_name}.{method}"),
                 );
-                Some(self.dispatch_trait_assoc_fn(type_name, &trait_method, &[], args, call_span))
+                Some(self.dispatch_trait_assoc_fn(
+                    type_name,
+                    &trait_method,
+                    &trait_subs,
+                    args,
+                    call_span,
+                ))
             }
             _ => {
                 let trait_list = candidates

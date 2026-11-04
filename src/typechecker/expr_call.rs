@@ -1087,6 +1087,20 @@ impl<'a> super::TypeChecker<'a> {
                 }
             }
         }
+        // The same for an associated function of any other trait the type
+        // implements more than once (`impl Make[i64] for Out` and `impl
+        // Make[String] for Out`): the impl whose parameters the arguments
+        // fit (B-2026-11-04-54).
+        if let ExprKind::Path { segments, .. } = &callee.kind {
+            if segments.len() == 2 && !args.is_empty() {
+                if let Some(ty) =
+                    self.infer_multi_impl_assoc_call(&segments[0], &segments[1], args, span)
+                {
+                    self.record_expr_type(span, &ty);
+                    return ty;
+                }
+            }
+        }
 
         // Fallible-allocation constructor companions (phase-8-stdlib-floor
         // item 2). `Type.try_with_capacity(n)` / `Vec.try_from_slice(src)` type
@@ -3749,6 +3763,105 @@ impl super::TypeChecker<'_> {
         self.assoc_conversion_dispatch
             .insert(SpanKey::from_span(span), seg);
         Some(ret.unwrap_or(Type::Error))
+    }
+}
+
+impl super::TypeChecker<'_> {
+    /// `T.f(args)` where `T` has two or more impls of one trait declaring the
+    /// associated function `f` (no `self`), told apart by `f`'s parameter
+    /// types: typed as the one impl the arguments fit. `None`, leaving the
+    /// call to the ordinary path, unless such a group exists; `From` and
+    /// `TryFrom` are [`Self::infer_multi_impl_conversion_call`]'s.
+    fn infer_multi_impl_assoc_call(
+        &mut self,
+        type_name: &str,
+        member: &str,
+        args: &[CallArg],
+        span: &Span,
+    ) -> Option<Type> {
+        if matches!(member, "from" | "try_from") || self.local_scope.lookup(type_name).is_some() {
+            return None;
+        }
+        let type_name = self.unaliased_type_name(type_name);
+        let mut groups: std::collections::BTreeMap<String, Vec<(Vec<Type>, Type)>> =
+            std::collections::BTreeMap::new();
+        for imp in &self.env.impls {
+            let Some(tr) = imp.trait_name.as_deref() else {
+                continue;
+            };
+            if imp.target_type != type_name {
+                continue;
+            }
+            let Some(sig) = imp.methods.get(member) else {
+                continue;
+            };
+            if sig.params.len() != args.len() || !sig.generic_params.is_empty() {
+                continue;
+            }
+            groups
+                .entry(tr.to_string())
+                .or_default()
+                .push((sig.params.clone(), sig.return_type.clone()));
+        }
+        // One trait, implemented more than once, whose `member` takes no `self`.
+        let mut multi = groups.into_iter().filter(|(_, v)| v.len() >= 2);
+        let (trait_name, cands) = multi.next()?;
+        if multi.next().is_some() {
+            return None;
+        }
+        if self
+            .find_trait_method(&trait_name, member)
+            .is_none_or(|m| m.self_param.is_some())
+        {
+            return None;
+        }
+        let arg_tys: Vec<Type> = args.iter().map(|a| self.infer_expr(&a.value)).collect();
+        if arg_tys.contains(&Type::Error) {
+            return Some(Type::Error);
+        }
+        let takes = |p: &Type, a: &Type| {
+            super::env::conversion_param_takes(p, a)
+                || matches!(a, Type::Ref(inner) if super::env::conversion_param_takes(p, inner))
+        };
+        let fits: Vec<&(Vec<Type>, Type)> = cands
+            .iter()
+            .filter(|(ps, _)| ps.iter().zip(&arg_tys).all(|(p, a)| takes(p, a)))
+            .collect();
+        if let [(_, ret)] = fits.as_slice() {
+            return Some(ret.clone());
+        }
+        let mut available: Vec<String> = cands
+            .iter()
+            .map(|(ps, _)| {
+                // As written: a bare parameter is a borrow under D5.
+                let ps: Vec<String> = ps
+                    .iter()
+                    .map(|p| match p {
+                        Type::Ref(inner) => type_display(inner),
+                        p => type_display(p),
+                    })
+                    .collect();
+                format!("`{member}({})`", ps.join(", "))
+            })
+            .collect();
+        available.sort();
+        let given: Vec<String> = arg_tys.iter().map(type_display).collect();
+        self.type_error(
+            format!(
+                "{} `{trait_name}` impl of `{type_name}` has a `{member}` taking ({}); \
+                 its impls take {}",
+                if fits.is_empty() {
+                    "no"
+                } else {
+                    "more than one"
+                },
+                given.join(", "),
+                available.join(", ")
+            ),
+            *span,
+            TypeErrorKind::TypeMismatch,
+        );
+        Some(Type::Error)
     }
 }
 

@@ -1,0 +1,11 @@
+source = "corpus/fixtures/coherence/assoc_fn_impl_by_argument"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["coherence", "traits"]
+class = "a"
+expected_from = "spec"
+rules = []
+backends = []
+env = {}
+note = "design.md § Coherence allows `impl Make[i64] for Out` beside `impl Make[String] for Out`, and § Associated functions looks `T.name()` up as methods are: `Out.make(x)` is the impl the argument's type fits, and `T.make(5)` under `T: Make[i64]` takes an i64 (B-2026-11-04-54: \"expected 'i64', found 'String'\")."

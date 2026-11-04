@@ -1,0 +1,27 @@
+trait Make[T] {
+    fn make(x: T) -> Self;
+}
+
+struct Out { n: i64 }
+
+impl Make[i64] for Out {
+    fn make(x: i64) -> Out { Out { n: x } }
+}
+
+impl Make[String] for Out {
+    fn make(x: String) -> Out { Out { n: x.len() } }
+}
+
+fn from_text(s: String) -> Out { Out.make(s) }
+
+fn build[T: Make[i64]]() -> T { T.make(5) }
+
+fn main() {
+    let a = Out.make(7);
+    let b = Out.make("abcd".to_string());
+    println(a.n);
+    println(b.n);
+    println(from_text("xyz".to_string()).n);
+    let c: Out = build();
+    println(c.n);
+}

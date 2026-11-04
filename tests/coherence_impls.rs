@@ -15,6 +15,8 @@
 //! - A blanket impl's body calling another method of the impl on its
 //!   parameter, written there or in a trait default, calls the impl's
 //!   method (B-2026-11-04-49: "no resolved callee").
+//! - `T.f(x)` with two impls of one trait declaring `f` takes the impl
+//!   the argument fits (B-2026-11-04-54: the first impl's parameter).
 //! - An impl method's receiver may not be stronger than the trait's
 //!   (B-2026-11-04-13: `mut ref self` for the trait's `self` was given the
 //!   trait's receiver and accepted).
@@ -247,6 +249,29 @@ fn a_blanket_default_body_calls_the_impls_own_method() {
          fn go[U: Shout](u: U) -> String { u.shout(3) }\n\
          fn main() { println(go(3)); println(4.shout(2)); println(true.twice()); }\n",
         "<3>!!\n<4>!\n<true>=<true>\n",
+    );
+}
+
+#[test]
+fn an_assoc_fn_of_two_impls_of_one_trait_is_picked_by_argument() {
+    runs(
+        "assoc-by-arg",
+        "trait Make[T] { fn make(x: T) -> Self; }\n\
+         struct Out { n: i64 }\n\
+         impl Make[i64] for Out { fn make(x: i64) -> Out { Out { n: x } } }\n\
+         impl Make[String] for Out { fn make(x: String) -> Out { Out { n: x.len() } } }\n\
+         fn main() { println(Out.make(7).n); println(Out.make(\"abcd\".to_string()).n); }\n",
+        "7\n4\n",
+    );
+    refused(
+        "assoc-by-arg-none",
+        "trait Make[T] { fn make(x: T) -> Self; }\n\
+         struct Out { n: i64 }\n\
+         impl Make[i64] for Out { fn make(x: i64) -> Out { Out { n: x } } }\n\
+         impl Make[String] for Out { fn make(x: String) -> Out { Out { n: x.len() } } }\n\
+         fn main() { println(Out.make(true).n); }\n",
+        5,
+        "no `Make` impl of `Out` has a `make` taking (bool); its impls take `make(String)`, `make(i64)`",
     );
 }
 
