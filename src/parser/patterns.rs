@@ -567,6 +567,8 @@ impl super::Parser {
                 })
             }
             Token::Identifier { .. } => {
+                // `Dir::Up =>`: Rust's path, written `Dir.Up` (B-2026-11-04-5).
+                self.rewrite_rust_path();
                 let name = self.expect_identifier()?;
 
                 // Check for @ binding: name @ pattern

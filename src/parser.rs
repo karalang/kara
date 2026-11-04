@@ -1917,6 +1917,109 @@ impl Parser {
     /// Like [`error`], but anchors the diagnostic at an explicit `span`
     /// rather than the current token — for cases where the offending
     /// construct was already consumed (e.g. a bad `extern "ABI"` string).
+    /// `Vec::new()`, `i64::MAX`, `Dir::Up =>`, `std::cmp::max(a, b)`: Rust's
+    /// `::` paths. Kāra writes a path with `.`, and its free functions
+    /// (`max`, `min`, `swap`, `replace`) and types need no `std::` module
+    /// path. Called at an identifier: when a `::` follows it, report the
+    /// whole path once, offer the Kāra spelling (the module prefix of a
+    /// `std::` / `core::` path deleted, every other `::` written `.`), and
+    /// rewrite those `::` tokens to `.` so the parse goes on as the fixed
+    /// text would (B-2026-11-04-5). Leaves turbofish (`f::<T>`) alone.
+    pub(crate) fn rewrite_rust_path(&mut self) {
+        let is_segment = |t: Option<&Token>| matches!(t, Some(Token::Identifier { .. }));
+        let at = self.pos;
+        if !is_segment(self.tokens.get(at).map(|t| &t.token))
+            || !matches!(
+                self.tokens.get(at + 1).map(|t| &t.token),
+                Some(Token::ColonColon)
+            )
+            || !is_segment(self.tokens.get(at + 2).map(|t| &t.token))
+        {
+            return;
+        }
+        // The segments, at token indices `at`, `at + 2`, ..; the `::`
+        // between them at the odd offsets.
+        let mut segments = vec![at];
+        while matches!(
+            self.tokens
+                .get(segments[segments.len() - 1] + 1)
+                .map(|t| &t.token),
+            Some(Token::ColonColon)
+        ) && is_segment(
+            self.tokens
+                .get(segments[segments.len() - 1] + 2)
+                .map(|t| &t.token),
+        ) {
+            let next = segments[segments.len() - 1] + 2;
+            segments.push(next);
+        }
+        let name = |i: usize| match &self.tokens[i].token {
+            Token::Identifier { name, .. } => name.clone(),
+            _ => String::new(),
+        };
+        let names: Vec<String> = segments.iter().map(|&i| name(i)).collect();
+        // A `std::` / `core::` path, or one through a module Rust code
+        // imports by name (`cmp::max` after `use std::cmp;`), loses its
+        // module segments: every lowercase one before the first type
+        // (`HashMap`, `i64`) or the last segment.
+        const PRIMITIVES: &[&str] = &[
+            "i8", "i16", "i32", "i64", "i128", "isize", "u8", "u16", "u32", "u64", "u128", "usize",
+            "f32", "f64", "bool", "char", "str",
+        ];
+        let mut dropped = 0;
+        if matches!(
+            names[0].as_str(),
+            "std" | "core" | "alloc" | "cmp" | "mem" | "collections"
+        ) {
+            while dropped < names.len() - 1
+                && !starts_upper(&names[dropped])
+                && !PRIMITIVES.contains(&names[dropped].as_str())
+            {
+                dropped += 1;
+            }
+        }
+        let first = self.tokens[at].span;
+        let last = self.tokens[segments[segments.len() - 1]].span;
+        let whole = Span {
+            length: last.offset + last.length - first.offset,
+            ..first
+        };
+        let written = names.join("::");
+        let kara = names[dropped..].join(".");
+        let mut edits = Vec::new();
+        if dropped > 0 {
+            let keep = self.tokens[segments[dropped]].span.offset;
+            edits.push(crate::resolver::TextEdit {
+                offset: first.offset,
+                length: keep - first.offset,
+                replacement: String::new(),
+            });
+        }
+        for &seg in &segments[dropped..segments.len() - 1] {
+            let colons = self.tokens[seg + 1].span;
+            edits.push(crate::resolver::TextEdit {
+                offset: colons.offset,
+                length: colons.length,
+                replacement: ".".to_string(),
+            });
+        }
+        let message = if dropped > 0 {
+            format!(
+                "`{written}` is a Rust path -- Kāra's `{}` needs no module path, and a path \
+                 is written with `.`: write `{kara}`",
+                names[dropped]
+            )
+        } else {
+            format!("`{written}` is Rust's `::` path -- Kāra writes a path with `.`: `{kara}`")
+        };
+        self.error_at(&message, whole);
+        self.fix_diffs
+            .insert(crate::resolver::SpanKey::from_span(&whole), edits);
+        for &seg in &segments[..segments.len() - 1] {
+            self.tokens[seg + 1].token = Token::Dot;
+        }
+    }
+
     fn error_at(&mut self, message: &str, span: Span) {
         self.error_at_kind(ParseErrorKind::Syntax, message, span);
     }

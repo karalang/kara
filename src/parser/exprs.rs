@@ -2813,6 +2813,7 @@ impl super::Parser {
     }
 
     fn parse_identifier_expr(&mut self) -> Option<Expr> {
+        self.rewrite_rust_path();
         let start = self.current_span();
         let name = self.expect_identifier()?;
 

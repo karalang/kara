@@ -13389,6 +13389,10 @@ fn missing_semicolon_carries_a_machine_applicable_insertion() {
 /// which is a WRONG repair, and a wrong repair in the primary fix path is
 /// worse than none. The guard is that the offending token must plausibly begin
 /// a new statement: a later line, or the `}` closing the block.
+///
+/// Since B-2026-11-04-5 the `::` path is named as such (its fix, the
+/// Kāra spelling, rides in `fix_diffs`), so no `Expected `;`` is reported
+/// at all, and still no `;` is inserted.
 #[test]
 fn mid_expression_semicolon_error_carries_no_insertion() {
     let src = "fn main() {\n\
@@ -13400,8 +13404,16 @@ fn mid_expression_semicolon_error_carries_no_insertion() {
         result
             .errors
             .iter()
+            .any(|e| e.message.contains("`std::mem::size_of` is a Rust path")),
+        "expected the Rust-path diagnostic; got: {:?}",
+        result.errors
+    );
+    assert!(
+        !result
+            .errors
+            .iter()
             .any(|e| e.message.contains("Expected `;`")),
-        "expected a missing-semicolon diagnostic; got: {:?}",
+        "the path must not also draw a missing-semicolon diagnostic; got: {:?}",
         result.errors
     );
     assert!(
