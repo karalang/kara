@@ -1494,6 +1494,11 @@ impl<'a> super::TypeChecker<'a> {
     /// (no `.iter()` hop) is rejected with an actionable `.iter()` hint rather
     /// than an edit-distance neighbour (B-2026-07-17-12). Keep in sync with the
     /// `require_known_method` list at the tail of `infer_iterator_method`.
+    /// Two names on that list are left out because a sequence owns them:
+    /// `last` (`Vec`, `Array`, `Slice`; a `VecDeque` names it `back` and says
+    /// so) and `peek`, which is `Peekable`'s alone. `find`, `flatten`, `nth`,
+    /// `position` and `rev` had drifted out, so `v.windows(2).find(..)` drew
+    /// "did you mean 'fill'?" with no fix (B-2026-11-04-51).
     pub(super) fn is_iterator_surface_method(method: &str) -> bool {
         matches!(
             method,
@@ -1509,8 +1514,10 @@ impl<'a> super::TypeChecker<'a> {
                 | "enumerate"
                 | "filter"
                 | "filter_map"
+                | "find"
                 | "find_map"
                 | "flat_map"
+                | "flatten"
                 | "fold"
                 | "for_each"
                 | "inspect"
@@ -1518,10 +1525,13 @@ impl<'a> super::TypeChecker<'a> {
                 | "max"
                 | "min"
                 | "next"
+                | "nth"
                 | "partition"
                 | "peekable"
+                | "position"
                 | "product"
                 | "reduce"
+                | "rev"
                 | "scan"
                 | "skip"
                 | "skip_while"
