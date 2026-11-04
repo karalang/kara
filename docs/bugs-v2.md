@@ -58,10 +58,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 128 |
+| diagnostics | 129 |
 | false-positive | 110 |
 | perf | 95 |
-| missing-feature | 74 |
+| missing-feature | 75 |
 | soundness | 48 |
 | miscompile | 34 |
 | run-vs-build | 23 |
@@ -75,12 +75,12 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 195 |
+| typecheck | 196 |
 | mir | 119 |
 | mir-llvm | 111 |
 | cli | 55 |
 | ownership | 50 |
-| parser | 38 |
+| parser | 39 |
 | interp | 27 |
 | runtime | 23 |
 | codegen | 22 |
@@ -99,7 +99,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 |---|---|---|---|---|---|
 | B-2026-10-31-8 | 2026-10-31 | mir-llvm | low | Every `karac` process starts at 15-20 ms and 46.6 MB peak RSS before doing anything (`karac --version`), and the link step of a small kata's `karac build` is its largest phase at 72-102 ms | — |
 | B-2026-11-01-17 | 2026-11-01 | runtime | medium | Kata 71's auto-par binary runs 1.6-2.6x SLOWER with exactly two workers than with one (KARAC_THREADS=2: 0.24-0.39 s against 0.15 s) on the M5, on 5x the cycles for 7% more instructions; three or more workers run 0.04-0.06 s | — |
-| B-2026-11-04-5 | 2026-11-04 | parser | medium | Remainder after c2a612b69c (which names and fixes a Rust `::` path in an expression or a pattern: `Vec::new()`, `String::from("ab")`, `i64::MAX`, `HashMap::new()`, `std::cmp::max`, `Dir::Up =>`): an import path `import std::collections::HashMap;` (what `karac fix` makes of Rust's `use`) still gets only `Expected ';', found '::'` with no fix, and once `HashMap::new()` is fixed to `HashMap.new()` the resolver says only "undefined name 'HashMap'" with no hint toward Kāra's `Map`; likewise `HashSet` ("did you mean 'Hasher'?"), `BTreeMap`, `BTreeSet` and `BinaryHeap`, where the rename must also flip the direction (`BinaryHeap::from(v)` is `PriorityQueue.max_first_from(v)`: Kāra's queue pops the smallest first) | — |
 | B-2026-11-04-20 | 2026-11-04 | mir | low | `#[track_caller]` on a program function is accepted but does nothing: a wrapper `#[track_caller] fn must(o: Option[i64]) -> i64 { o.unwrap() }` called at line 10 panics with `at <file>:6:5`, the `unwrap()` inside the wrapper; design.md §10 says user code may use it on its own panicking wrappers and that it is transitive | — |
 | B-2026-11-04-30 | 2026-11-04 | mir-llvm | medium | Kata 394's String decode loop runs 1.27x legacy's instructions and 1.26x its cycles on the MIR backend; seq 0.99x -> 1.17x rustc -O, par 0.86x -> 1.27x rayon | — |
 | B-2026-11-04-31 | 2026-11-04 | mir-llvm | low | Seq binaries of katas 297, 315, 330, 331, 332, 336 and 394 are still 319-336 KB on gd33cb285d and gf0017054a, after ad984ef96b took katas 38, 282 and 306 down to 67-83 KB | — |
@@ -130,6 +129,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-04-72 | 2026-11-04 | typecheck | low | §11 sharing roll-up: `own self` on a sync type and `weak` on a non-shared type accepted; borrow-flag panic does not name the field or both spans; several sharing diagnostics give stale or wrong wording | — |
 | B-2026-11-04-74 | 2026-11-04 | mir+mir-llvm | low | A shift by an out-of-range amount (`x << 32` on an i32, `x << -1`) panics with "integer overflow" on run and build; design.md §5 says it panics with "shift amount out of range" (split from B-2026-11-04-60) | — |
 | B-2026-11-04-75 | 2026-11-04 | typecheck | low | An empty list literal compared with a typed `Vec` (`v == []`) is refused with MIR's internal "a type that failed to check is not lowered yet"; the other operand gives `[]` its element type, so it should check | — |
+| B-2026-11-04-76 | 2026-11-04 | parser | low | A closure parameter written `mut acc` (Rust's `fold(init, |mut acc, x| ..)`) is refused with "'mut' is a reserved keyword and cannot be used as an identifier" and a cascade error at the closing `)`, with no fix; a `fn` parameter written `mut x` gets a diagnostic naming the Kāra spelling (`let mut x = x;` in the body) | — |
+| B-2026-11-04-77 | 2026-11-04 | typecheck | low | `Vec` has no `drain(range)`: Rust's `v.drain(i..i + 2);` gets only "no method 'drain' on type 'Vec'" with no hint, though `remove`, `truncate` and `split_off`-style edits exist | — |
 
 ### Relocated
 
@@ -642,6 +643,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-04-2 | typecheck | low | `items.into_iter()` on a bare `Vec[Item]` parameter whose `Item` is not clonable gets the fix `items.clone().into_iter()`, which does not check eithe… | 4230ad12ec |
 | B-2026-11-04-3 | ownership | low | `let s = v[i].field;` with `s` only read gets the fix that clones the field, where `let s = v[i];` already gets `ref`; under `self`, a write to any o… | 4230ad12ec |
 | B-2026-11-04-4 | mir | medium | `for f in rx.into_iter()` over a `Receiver[Fn(i64) -> i64 + CrossTask]` passes `karac check` and fails the MIR borrow check inside the library: `borr… | 555b8efd68 |
+| B-2026-11-04-5 | parser | medium | Remainder after c2a612b69c (which names and fixes a Rust `::` path in an expression or a pattern: `Vec::new()`, `String::from("ab")`, `i64::MAX`, `Ha… | 75832f76f1 |
 | B-2026-11-04-6 | parser | low | Rust angle-bracket generics on a DECLARATION (`struct Bx<T> { v: T }`, `impl<T> Bx<T> { . | 6932c9f1e9 |
 | B-2026-11-04-7 | parser | low | Two Rust-isms are fixed into a program that is still refused: `fn first(s: &[i64])` is fixed to `ref [i64]`, whose `[T]` diagnostic then offers no ma… | 6932c9f1e9 |
 | B-2026-11-04-8 | mir | high | UFCS on a program trait (`A.m(s)`, design.md §9 Method resolution) is refused by `karac check`, `karac run` and `karac build` with "a call that leave… | 5bb971cb18 |
