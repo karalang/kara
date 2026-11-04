@@ -20,8 +20,8 @@ impl[with E] EventBus[with E] {
     }
 }
 
-fn record(e: Event) with writes(OrderDb) { println(f"order {e.n}"); }
-fn note(e: Event) with writes(Log) { println(f"log {e.n}"); }
+fn record(e: Event) with writes(OrderDb) writes(Stdout) { println(f"order {e.n}"); }
+fn note(e: Event) with writes(Log) writes(Stdout) { println(f"log {e.n}"); }
 
 // `E` = {writes(OrderDb), writes(Stdout)} for `orders`, fixed by the
 // first handler and fitted by the second; `audit` is charged it, so its

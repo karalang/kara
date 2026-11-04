@@ -4,7 +4,7 @@ impl EnvProvider for FakeEnv { fn var(ref self, name: Str) -> Result[String, Var
 fn rv() -> String reads(Env) {
     match env.var("ANYTHING") { Ok(s) => s, Err(e) => "missing" }
 }
-fn main() reads(Env) {
+fn main() reads(Env) writes(Stdout) {
     with_provider[Env](FakeEnv {}, || { println(rv()); });
     match env.var("KARA_DEFINITELY_UNSET_XYZ") {
         Ok(s) => println(s),

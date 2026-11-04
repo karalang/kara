@@ -7,7 +7,7 @@ fn total_len(path: String) -> Result[i64, IoError] with reads(FileSystem) {{
     }}
     Ok(total)
 }}
-fn main() with reads(FileSystem) {{
+fn main() with reads(FileSystem) writes(Stdout) {{
     match total_len("{path}") {{
         Ok(n) => println(n.to_string()),
         Err(_) => println("read-err"),

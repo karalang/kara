@@ -326,8 +326,8 @@ fn test_transitive_println_parallelizes_with_ordered_output() {
         effect resource B;
         fn touch_a() writes(A) {}
         fn touch_b() writes(B) {}
-        fn work_a() -> i32 writes(A) { println(1); touch_a(); 10 }
-        fn work_b() -> i32 writes(B) { println(2); touch_b(); 20 }
+        fn work_a() -> i32 writes(A) writes(Stdout) { println(1); touch_a(); 10 }
+        fn work_b() -> i32 writes(B) writes(Stdout) { println(2); touch_b(); 20 }
         fn main() {
             let a = work_a();
             let b = work_b();

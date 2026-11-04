@@ -1,4 +1,4 @@
-fn work() writes(Hardware) {
+fn work() writes(Hardware) writes(Stdout) {
 let _guard = critical_section.acquire();
 println(42);
 }

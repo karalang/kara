@@ -1,5 +1,5 @@
 
-fn main() with reads(FileSystem) {
+fn main() with reads(FileSystem) writes(Stdout) {
     match File.open("/tmp/karac_b070703_borrow") {
         ref whole @ Ok(f) => println("ok"),
         Err(_) => println("err"),

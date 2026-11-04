@@ -1,5 +1,5 @@
 
-fn main() with sends(Network) receives(Network) {{
+fn main() with sends(Network) receives(Network) writes(Stdout) sends(Channel) {{
     let c = Client.new();
     match c.request("PUT", "http://127.0.0.1:{port}/p")
            .header("X-A", "one")

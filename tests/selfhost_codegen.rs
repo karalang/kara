@@ -906,7 +906,7 @@ const CORPUS: &[&str] = &[
     // no-filename form (`panic: <msg>`) while the seed's AOT path prints the
     // Level-2 `panic at <file>:<line>:<col> in <fn>: <msg>`, so panic-MESSAGE
     // parity is a deferred surface and no corpus program may actually panic.
-    "fn pick(n: i64) -> i64 with panics {\n    if n < 0 {\n        panic(\"negative input\");\n    }\n    n * 2\n}\nfn main() with panics {\n    println(pick(3).to_string());\n    println(pick(0).to_string());\n}\n",
+    "fn pick(n: i64) -> i64 with panics {\n    if n < 0 {\n        panic(\"negative input\");\n    }\n    n * 2\n}\nfn main() with panics writes(Stdout) {\n    println(pick(3).to_string());\n    println(pick(0).to_string());\n}\n",
     // B-2026-07-29-6 — the SCRUTINEE TEMP of a match over a heap-payload enum.
     // `match pick(i) { Word(s) => s, ... }` where `pick` RETURNS the enum: the
     // arms take a view of the payload and copy out what they keep, so the

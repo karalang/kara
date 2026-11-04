@@ -5,7 +5,7 @@ fn band_sum(data: ref Vec[i64], lo: i64, hi: i64) -> i64 {
     while i < hi { acc = acc + data[i]; i = i + 1; }
     acc
 }
-fn main() with panics {
+fn main() with panics writes(Stdout) {
     let mut data: Vec[i64] = Vec.new();
     let mut i = 0;
     while i < 100 { data.push(i); i = i + 1; }

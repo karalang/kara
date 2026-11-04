@@ -2,7 +2,7 @@
 fn match_addr(addr: ref String) -> i64 {
     if addr == "relay-upstream-host-127.0.0.1-port-9000-ok" { 1 } else { 0 }
 }
-fn main() with panics {
+fn main() with panics writes(Stdout) {
     let addr: String = "relay-upstream-host-127.0.0.1-port-9000-ok";
     let mut pool: TaskGroup = TaskGroup.new();
     let mut handles: Vec[TaskHandle[i64]] = Vec.new();

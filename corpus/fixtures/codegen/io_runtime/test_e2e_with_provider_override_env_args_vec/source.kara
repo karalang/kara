@@ -10,6 +10,6 @@ impl EnvProvider for FakeEnv {
     }
 }
 fn count() -> i64 reads(Env) { env.args().len() }
-fn main() reads(Env) {
+fn main() reads(Env) writes(Stdout) {
     with_provider[Env](FakeEnv {}, || { println(count()); });
 }

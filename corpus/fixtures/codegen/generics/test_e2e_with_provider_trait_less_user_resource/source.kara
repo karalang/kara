@@ -12,7 +12,7 @@ impl Audit for FakeLog {
 fn tally() -> i64 reads(AuditLog) {
     AuditLog.count() + AuditLog.bump()
 }
-fn main() reads(AuditLog) {
+fn main() reads(AuditLog) writes(Stdout) {
     with_provider[AuditLog](FakeLog { n: 1 }, || {
         println(tally());
     });

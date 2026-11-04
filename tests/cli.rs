@@ -5356,7 +5356,7 @@ fn test_provider_early_return_run_build_parity() {
                fn early2() -> i64 with reads(Ctr) {\n\
                \x20   providers { Ctr => InMem { n: 8 } } in { return read(); }\n\
                }\n\
-               fn main() with reads(Ctr) {\n\
+               fn main() with reads(Ctr) writes(Stdout) {\n\
                \x20   println(f\"{early()}\");\n\
                \x20   println(f\"{early2()}\");\n\
                }\n";
@@ -5438,7 +5438,7 @@ fn test_provider_closure_scoped_return_run_build_parity() {
                \x20   let x = with_provider[Ctr](InMem { n: 8 }, || { return read(); });\n\
                \x20   x + 1\n\
                }\n\
-               fn main() with reads(Ctr) {\n\
+               fn main() with reads(Ctr) writes(Stdout) {\n\
                \x20   println(f\"{f()}\");\n\
                }\n";
     write(&tmp.join("provclo.kara"), src);
@@ -30447,7 +30447,7 @@ fn test_substring_built_string_survives_the_env_ffi_boundary() {
 
     let tmp = scratch_project("sso-env-ffi");
     // 28 bytes: [0,18) is the 18-byte name, [19,28) the 9-byte value.
-    let src = "fn main() writes(Env) reads(Env) {\n\
+    let src = "fn main() writes(Env) reads(Env) writes(Stdout) {\n\
                \x20   let src = \"KARAC_SSO_ENVPROBE=short-val\";\n\
                \x20   let name = src.substring(0, 18);\n\
                \x20   let val = src.substring(19, 28);\n\

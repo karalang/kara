@@ -1,5 +1,5 @@
 
-fn main() with writes(FileSystem) {
+fn main() with writes(FileSystem) writes(Stdout) {
     match FileSystem.write("/no_such_dir_karac_l646_s4/x.txt", "data") {
         Ok(_) => println("unexpected-ok"),
         Err(_) => println("write-err"),

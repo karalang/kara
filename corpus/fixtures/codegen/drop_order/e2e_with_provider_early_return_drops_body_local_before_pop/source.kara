@@ -10,7 +10,7 @@ if flag { return s.len(); }
 read()
 })
 }
-fn main() with reads(Ctr) {
+fn main() with reads(Ctr) writes(Stdout) {
 println(f"{heapy(true)}");
 println(f"{heapy(false)}");
 }

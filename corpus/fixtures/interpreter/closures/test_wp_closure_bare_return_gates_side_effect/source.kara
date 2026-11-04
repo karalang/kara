@@ -3,14 +3,14 @@ trait Counter { fn get(ref self) -> i64; }
          struct InMem { n: i64 }
          impl Counter for InMem { fn get(ref self) -> i64 { self.n } }
          fn read() -> i64 with reads(Ctr) { Ctr.get() }
-         fn quiet(n: i64) -> i64 with reads(Ctr) {
+         fn quiet(n: i64) -> i64 with reads(Ctr) writes(Stdout) {
              with_provider[Ctr](InMem { n: n }, || {
                  if read() == 3 { return; }
                  println(f"seen-{read()}");
              });
              7
          }
-         fn main() with reads(Ctr) {
+         fn main() with reads(Ctr) writes(Stdout) {
              println(f"{quiet(3)}");
              println(f"{quiet(5)}");
          }

@@ -12,4 +12,4 @@ let inner = inner_early();
 inner + read()
 })
 }
-fn main() with reads(Ctr) { println(f"{nested()}"); }
+fn main() with reads(Ctr) writes(Stdout) { println(f"{nested()}"); }

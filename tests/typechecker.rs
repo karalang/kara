@@ -37436,7 +37436,7 @@ fn probe() -> i64 reads(Store) {
     }
     t
 }
-fn main() reads(Store) {
+fn main() reads(Store) writes(Stdout) {
     with_provider[Store](FakeStore { n: 5 }, || {
         println(probe());
     });
@@ -37541,7 +37541,7 @@ fn probe() -> i64 reads(Store) {
     }
     t
 }
-fn main() reads(Store) {
+fn main() reads(Store) writes(Stdout) {
     with_provider[Store](FakeStore { n: 7 }, || {
         println(probe());
     });

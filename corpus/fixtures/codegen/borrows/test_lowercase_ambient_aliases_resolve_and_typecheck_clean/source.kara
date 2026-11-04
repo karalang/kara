@@ -1,5 +1,5 @@
 
-fn main() with reads(Env) writes(FileSystem) reads(FileSystem) {
+fn main() with reads(Env) writes(FileSystem) reads(FileSystem) reads(Clock) writes(RandomSource) writes(Stdout) writes(Stderr) {
     let _t = clock.now();
     let _r = rand.next_u64();
     let _a = env.args();

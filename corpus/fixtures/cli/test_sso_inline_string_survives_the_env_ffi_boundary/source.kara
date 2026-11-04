@@ -1,4 +1,4 @@
-fn main() writes(Env) reads(Env) {
+fn main() writes(Env) reads(Env) writes(Stdout) {
     let src = "KARAC_SSO_ENVPROBE=short-val";
     let name = src.substring(0, 18);
     let val = src.substring(19, 28);

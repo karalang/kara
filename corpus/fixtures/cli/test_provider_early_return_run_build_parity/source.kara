@@ -9,7 +9,7 @@ fn early() -> i64 with reads(Ctr) {
 fn early2() -> i64 with reads(Ctr) {
     providers { Ctr => InMem { n: 8 } } in { return read(); }
 }
-fn main() with reads(Ctr) {
+fn main() with reads(Ctr) writes(Stdout) {
     println(f"{early()}");
     println(f"{early2()}");
 }

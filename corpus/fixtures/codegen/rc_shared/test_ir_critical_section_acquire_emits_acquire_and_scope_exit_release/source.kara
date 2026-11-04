@@ -1,5 +1,5 @@
 
-fn f() with writes(Hardware) {
+fn f() with writes(Hardware) writes(Stdout) {
     let _guard = critical_section.acquire();
     println(7);
 }

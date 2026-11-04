@@ -1,5 +1,5 @@
 
-fn main() with reads(FileSystem) writes(FileSystem) {{
+fn main() with reads(FileSystem) writes(FileSystem) writes(Stdout) {{
     match File.create("{path}") {{
         Ok(f) => {{
             let mut data: Vec[u8] = Vec.new();

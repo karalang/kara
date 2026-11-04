@@ -7,4 +7,4 @@ trait Counter { fn get(ref self) -> i64; }
              let s = with_provider[Ctr](InMem { n: 42 }, || { return f"v-{read()}"; });
              s.len()
          }
-         fn main() with reads(Ctr) { println(f"{heap()}"); }
+         fn main() with reads(Ctr) writes(Stdout) { println(f"{heap()}"); }

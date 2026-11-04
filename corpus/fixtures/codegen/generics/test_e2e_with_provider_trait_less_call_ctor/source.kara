@@ -5,7 +5,7 @@ struct FakeLog { n: i64 }
 impl Audit for FakeLog { fn count(self) -> i64 { self.n } }
 fn make_log() -> FakeLog { FakeLog { n: 9 } }
 fn tally() -> i64 reads(AuditLog) { AuditLog.count() }
-fn main() reads(AuditLog) {
+fn main() reads(AuditLog) writes(Stdout) {
     let p = make_log();
     with_provider[AuditLog](p, || { println(tally()); });
 }

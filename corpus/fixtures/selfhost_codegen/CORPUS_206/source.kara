@@ -4,7 +4,7 @@ fn pick(n: i64) -> i64 with panics {
     }
     n * 2
 }
-fn main() with panics {
+fn main() with panics writes(Stdout) {
     println(pick(3).to_string());
     println(pick(0).to_string());
 }

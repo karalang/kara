@@ -1,5 +1,5 @@
 
-fn main() with sends(Network) receives(Network) {
+fn main() with sends(Network) receives(Network) writes(Stdout) {
     let c = Client.new();
     let url = "http://127.0.0.1:65535/";
     match c.get(url) {

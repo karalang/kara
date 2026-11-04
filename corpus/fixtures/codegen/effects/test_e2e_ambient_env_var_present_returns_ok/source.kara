@@ -1,5 +1,5 @@
 
-fn main() writes(Env) reads(Env) {
+fn main() writes(Env) reads(Env) writes(Stdout) {
     env.set("KARAC_E2E_VAR_PRESENT", "hello-var");
     match env.var("KARAC_E2E_VAR_PRESENT") {
         Ok(v) => { println(v); }

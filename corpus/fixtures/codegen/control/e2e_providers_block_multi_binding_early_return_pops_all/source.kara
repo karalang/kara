@@ -12,7 +12,7 @@ providers { Ctr => InMem { n: 2 }, Who => N1 { s: "zed" } } in {
 return f"{Who.name()}-{read()}";
 }
 }
-fn main() with reads(Ctr) reads(Who) {
+fn main() with reads(Ctr) reads(Who) writes(Stdout) {
 println(f"{multi()}");
 with_provider[Ctr](InMem { n: 9 }, || { println(f"{read()}"); });
 }

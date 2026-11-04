@@ -13,4 +13,4 @@ acc = acc + read();
 }
 acc
 }
-fn main() with reads(Ctr) { println(f"{brk2()}"); }
+fn main() with reads(Ctr) writes(Stdout) { println(f"{brk2()}"); }

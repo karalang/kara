@@ -1891,7 +1891,7 @@ mod http_server_tests {
         let url = format!("http://127.0.0.1:{port}/test");
         let src = format!(
             r#"
-fn main() with sends(Network) receives(Network) {{
+fn main() with sends(Network) receives(Network) writes(Stdout) {{
     let url: String = "{url}";
     let c = Client.new();
     match c.get(url) {{
@@ -1994,7 +1994,7 @@ fn main() with sends(Network) receives(Network) {{
         let url = format!("http://127.0.0.1:{port}/bin");
         let src = format!(
             r#"
-fn main() with sends(Network) receives(Network) {{
+fn main() with sends(Network) receives(Network) writes(Stdout) {{
     let url: String = "{url}";
     let c = Client.new();
     match c.get(url) {{
@@ -2094,7 +2094,7 @@ fn main() with sends(Network) receives(Network) {{
         let url = format!("http://127.0.0.1:{port}/hdr");
         let src = format!(
             r#"
-fn main() with sends(Network) receives(Network) {{
+fn main() with sends(Network) receives(Network) writes(Stdout) {{
     let url: String = "{url}";
     let c = Client.new();
     match c.get(url) {{
@@ -2204,7 +2204,7 @@ fn main() with sends(Network) receives(Network) {{
         let url = format!("http://127.0.0.1:{port}/hdrs");
         let src = format!(
             r#"
-fn main() with sends(Network) receives(Network) {{
+fn main() with sends(Network) receives(Network) writes(Stdout) {{
     let url: String = "{url}";
     let c = Client.new();
     match c.get(url) {{
@@ -2314,7 +2314,7 @@ fn main() with sends(Network) receives(Network) {{
         // the arms' types wouldn't unify.)
         let src = format!(
             r#"
-fn main() with sends(Network) receives(Network) {{
+fn main() with sends(Network) receives(Network) writes(Stdout) {{
     let url: String = "{url}";
     let c = Client.new();
     match c.get(url) {{
@@ -2441,7 +2441,7 @@ fn main() with sends(Network) receives(Network) {{
         let url = format!("http://127.0.0.1:{port}/test");
         let src = format!(
             r#"
-fn main() with sends(Network) receives(Network) {{
+fn main() with sends(Network) receives(Network) writes(Stdout) {{
     let url: String = "{url}";
     let c = Client.new();
     match c.request("GET", url).header("X-Trace-Id", "trace-zzz").send() {{
@@ -3610,7 +3610,7 @@ fn main() with sends(Network) receives(Network) {{
     fn run_client_get_binary(url: &str, extra_ca_pem: Option<&str>, tag: &str) -> String {
         let src = format!(
             r#"
-fn main() with sends(Network) receives(Network) {{
+fn main() with sends(Network) receives(Network) writes(Stdout) {{
     let url: String = "{url}";
     let c = Client.new();
     match c.get(url) {{

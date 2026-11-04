@@ -1,5 +1,5 @@
 
-fn main() with reads(FileSystem) writes(FileSystem) {{
+fn main() with reads(FileSystem) writes(FileSystem) writes(Stdout) {{
     let mut hs: Vec[File] = Vec.new();
     let mut buf: Array[u8, 4] = [0u8; 4];
     match File.open("{path}") {{
