@@ -93,6 +93,7 @@ pub mod emutls;
 #[cfg(feature = "net")]
 pub mod event_loop;
 mod fatal;
+mod int_sort;
 mod lean_vec;
 // IEEE-754 half-precision conversion builtins (`__truncsfhf2` /
 // `__extendhfsf2`). LLVM legalizes every `half` op on wasm32 into these

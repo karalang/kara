@@ -412,11 +412,34 @@ pub extern "C" fn karac_mir_fmt_u64(v: u64) {
 #[no_mangle]
 pub extern "C" fn karac_mir_fmt_i128(lo: u64, hi: u64, signed: bool) {
     let bits = (u128::from(hi) << 64) | u128::from(lo);
-    append(&if signed {
-        (bits as i128).to_string()
+    let neg = signed && (bits as i128) < 0;
+    let mut v = if neg {
+        (bits as i128).unsigned_abs()
     } else {
-        bits.to_string()
-    });
+        bits
+    };
+    // Written out rather than `to_string`: `u128`'s `Display` keeps a
+    // bounds panic, and with it std's panic hook, in every binary that
+    // prints one (B-2026-11-04-31). 39 digits and a sign at most.
+    let mut d = [0u8; 40];
+    let mut i = d.len();
+    loop {
+        i -= 1;
+        if let Some(slot) = d.get_mut(i) {
+            *slot = b'0' + (v % 10) as u8;
+        }
+        v /= 10;
+        if v == 0 {
+            break;
+        }
+    }
+    if neg {
+        i -= 1;
+        if let Some(slot) = d.get_mut(i) {
+            *slot = b'-';
+        }
+    }
+    append_bytes(d.get(i..).unwrap_or_default());
 }
 
 #[no_mangle]
@@ -2060,10 +2083,38 @@ pub extern "C" fn karac_mir_sleep_ms(ms: i64) {
 #[no_mangle]
 pub unsafe extern "C" fn karac_mir_str_repeat(out: *mut RawVec, s: *const u8, sn: u64, n: i64) {
     let sn = sn as usize;
+    // Copied out by doubling rather than through `str::repeat`, whose
+    // `expect` on the length keeps std's panic hook in every binary that
+    // repeats a string (B-2026-11-04-31).
+    let total = match usize::try_from(n.max(0)) {
+        _ if sn == 0 => Some(0),
+        Ok(n) => sn.checked_mul(n),
+        Err(_) => None,
+    };
+    let Some(total) = total else {
+        crate::fatal::write_stderr(b"panic: capacity overflow\n");
+        std::process::abort()
+    };
+    let ptr = if total == 0 {
+        std::ptr::null_mut()
+    } else {
+        let p = karac_realloc_or_panic(std::ptr::null_mut(), total);
+        // SAFETY: `s` is readable for `sn` bytes and `p` has room for
+        // `total`, a whole number of copies; each copy reads the `filled`
+        // bytes already written before them.
+        unsafe {
+            std::ptr::copy_nonoverlapping(s, p, sn);
+            let mut filled = sn;
+            while filled < total {
+                let c = filled.min(total - filled);
+                std::ptr::copy_nonoverlapping(p, p.add(filled), c);
+                filled += c;
+            }
+        }
+        p
+    };
     // SAFETY: the caller's contract.
-    let t = unsafe { text(s, sn).repeat(n.max(0) as usize) };
-    // SAFETY: as above.
-    unsafe { string_of(out, t.as_bytes()) };
+    unsafe { out.write(RawVec::new(ptr, total, total)) };
 }
 
 /// A new `Vec[String]` at `out` of the parts of `s`: 0 `split(sep)`, 1
@@ -2622,18 +2673,27 @@ pub unsafe extern "C" fn karac_mir_sort_int(buf: *mut u8, n: u64, kind: i64) {
     if n < 2 {
         return;
     }
+    // Core's own sort, without its panic (`int_sort`, B-2026-11-04-31).
     // SAFETY (each arm): the caller's contract.
     unsafe {
+        use crate::int_sort::sort;
         match kind {
-            8 => std::slice::from_raw_parts_mut(buf, n).sort_unstable(),
-            16 => std::slice::from_raw_parts_mut(buf as *mut u16, n).sort_unstable(),
-            32 => std::slice::from_raw_parts_mut(buf as *mut u32, n).sort_unstable(),
-            64 => std::slice::from_raw_parts_mut(buf as *mut u64, n).sort_unstable(),
-            264 => std::slice::from_raw_parts_mut(buf as *mut i8, n).sort_unstable(),
-            272 => std::slice::from_raw_parts_mut(buf as *mut i16, n).sort_unstable(),
-            288 => std::slice::from_raw_parts_mut(buf as *mut i32, n).sort_unstable(),
-            320 => std::slice::from_raw_parts_mut(buf as *mut i64, n).sort_unstable(),
-            _ => panic!("karac_mir_sort_int: no integer kind {kind}"),
+            8 => sort(buf, n),
+            16 => sort(buf as *mut u16, n),
+            32 => sort(buf as *mut u32, n),
+            64 => sort(buf as *mut u64, n),
+            264 => sort(buf as *mut i8, n),
+            272 => sort(buf as *mut i16, n),
+            288 => sort(buf as *mut i32, n),
+            320 => sort(buf as *mut i64, n),
+            // A fatal write, not `panic!` (B-2026-11-04-31): codegen emits
+            // only the kinds above.
+            _ => {
+                crate::fatal::write_stderr(
+                    b"fatal runtime error: karac_mir_sort_int: no such integer kind\n",
+                );
+                std::process::abort()
+            }
         }
     }
 }
@@ -2710,7 +2770,9 @@ unsafe fn merge_passes<const N: usize>(
     size: usize,
     cmp: &mut dyn FnMut(*const u8, *const u8) -> i32,
 ) {
-    let mut scratch = vec![0u8; n * size];
+    // A `LeanVec`, not `vec!`, whose capacity check keeps a Rust panic in
+    // every binary that sorts (B-2026-11-04-31).
+    let mut scratch = LeanVec::<u8>::with_capacity(n.saturating_mul(size));
     let tmp = scratch.as_mut_ptr();
     if n <= MERGE_BLOCK {
         // SAFETY: the caller's contract; `tmp` holds `n` elements.
@@ -2767,19 +2829,20 @@ unsafe fn merge_widths<const N: usize>(
         }
     };
     if width == 1 {
-        let mut x = vec![0u8; size];
+        let mut x = LeanVec::<u8>::with_capacity(size);
         for lo in (0..n).step_by(INSERTION_RUN) {
             let hi = (lo + INSERTION_RUN).min(n);
             for k in lo + 1..hi {
                 // SAFETY: indices below `n`; `x` holds one element.
                 unsafe {
-                    std::ptr::copy_nonoverlapping(at(buf, k), x.as_mut_ptr(), size);
+                    let x = x.as_mut_ptr();
+                    std::ptr::copy_nonoverlapping(at(buf, k), x, size);
                     let mut j = k;
-                    while j > lo && cmp(x.as_ptr(), at(buf, j - 1)) < 0 {
+                    while j > lo && cmp(x, at(buf, j - 1)) < 0 {
                         std::ptr::copy_nonoverlapping(at(buf, j - 1), at(buf, j), size);
                         j -= 1;
                     }
-                    std::ptr::copy_nonoverlapping(x.as_ptr(), at(buf, j), size);
+                    std::ptr::copy_nonoverlapping(x, at(buf, j), size);
                 }
             }
         }
@@ -2787,7 +2850,10 @@ unsafe fn merge_widths<const N: usize>(
     }
     while width < limit {
         let mut k = 0;
-        for lo in (0..n).step_by(2 * width) {
+        // A plain loop: `step_by` asserts a nonzero step, a Rust panic in
+        // every binary that sorts (B-2026-11-04-31).
+        let mut lo = 0;
+        while lo < n {
             let mid = (lo + width).min(n);
             let hi = (lo + 2 * width).min(n);
             let (mut i, mut j) = (lo, mid);
@@ -2808,6 +2874,7 @@ unsafe fn merge_widths<const N: usize>(
                 std::ptr::copy_nonoverlapping(at(src, j), at(dst, k), (hi - j) * size);
                 k += hi - j;
             }
+            lo = hi;
         }
         std::mem::swap(&mut src, &mut dst);
         width *= 2;
@@ -3429,17 +3496,58 @@ pub unsafe extern "C" fn karac_mir_parse_int128(
     if !(2..=36).contains(&radix) {
         return 0;
     }
-    let got = if signed != 0 {
-        i128::from_str_radix(text, radix as u32).map(|n| n.to_ne_bytes())
-    } else {
-        u128::from_str_radix(text, radix as u32).map(|n| n.to_ne_bytes())
+    let got = match radix_digits(text.as_bytes(), radix as u32, signed != 0) {
+        Some((true, m)) => signed_of(true, m).map(i128::to_ne_bytes),
+        Some((false, m)) if signed != 0 => signed_of(false, m).map(i128::to_ne_bytes),
+        Some((false, m)) => Some(m.to_ne_bytes()),
+        None => None,
     };
-    let Ok(b) = got else {
+    let Some(b) = got else {
         return 0;
     };
     // SAFETY: the caller's contract.
     unsafe { std::ptr::copy_nonoverlapping(b.as_ptr(), out, 16) };
     1
+}
+
+/// `text` as an integer type's `from_str_radix` reads it: a `+`, or a `-`
+/// when `signed`, then one or more digits of `radix` (2 to 36, either
+/// case), as the sign and the magnitude; `None` for any other text or a
+/// magnitude past `u128`. Written out because core's `from_str_radix`
+/// asserts its radix, a Rust panic in every binary that parses an integer
+/// (B-2026-11-04-31).
+fn radix_digits(text: &[u8], radix: u32, signed: bool) -> Option<(bool, u128)> {
+    let (neg, digits) = match text {
+        [b'-', rest @ ..] if signed => (true, rest),
+        [b'+', rest @ ..] => (false, rest),
+        _ => (false, text),
+    };
+    if digits.is_empty() {
+        return None;
+    }
+    let mut m: u128 = 0;
+    for &c in digits {
+        let d = match c {
+            b'0'..=b'9' => c - b'0',
+            b'a'..=b'z' => c - b'a' + 10,
+            b'A'..=b'Z' => c - b'A' + 10,
+            _ => return None,
+        } as u32;
+        if d >= radix {
+            return None;
+        }
+        m = m.checked_mul(radix as u128)?.checked_add(d as u128)?;
+    }
+    Some((neg, m))
+}
+
+/// The `i128` of a sign and a magnitude, when it is one.
+fn signed_of(neg: bool, m: u128) -> Option<i128> {
+    if neg {
+        (m <= 1u128 << 127).then(|| (m as i128).wrapping_neg())
+    } else {
+        i128::try_from(m).ok()
+    }
 }
 
 /// A radix-10 integer of at most 18 digits, with an optional sign and
@@ -3516,9 +3624,11 @@ pub unsafe extern "C" fn karac_mir_parse_int(
             if signed == 0 && text.starts_with('-') {
                 return 0;
             }
-            match i128::from_str_radix(text, radix as u32) {
-                Ok(n) => n,
-                Err(_) => return 0,
+            match radix_digits(text.as_bytes(), radix as u32, true)
+                .and_then(|(neg, m)| signed_of(neg, m))
+            {
+                Some(n) => n,
+                None => return 0,
             }
         }
     };
@@ -4632,7 +4742,8 @@ mod tests {
 
     use super::{
         karac_mir_fmt_begin, karac_mir_fmt_char, karac_mir_fmt_end_string, karac_mir_fmt_i64,
-        karac_mir_fmt_str, karac_mir_fmt_u64, karac_mir_parse_int, merge_sort, RawVec,
+        karac_mir_fmt_str, karac_mir_fmt_u64, karac_mir_parse_int, karac_mir_str_repeat,
+        merge_sort, radix_digits, signed_of, RawVec,
     };
 
     /// `karac_mir_parse_int` on `text`, as an i64 of `bits` bits.
@@ -4751,6 +4862,91 @@ mod tests {
         assert_eq!(end_string(), "a-92233720368547758080-7é");
         karac_mir_fmt_begin();
         assert_eq!(end_string(), "");
+    }
+
+    /// The written-out `from_str_radix` agrees with core's on signs, both
+    /// cases of digit, digits past the radix, empty and sign-only text,
+    /// and the edges of `i128` and `u128` (B-2026-11-04-31).
+    #[test]
+    fn radix_digits_agree_with_from_str_radix() {
+        let texts = [
+            "0",
+            "7",
+            "-7",
+            "+7",
+            "",
+            "-",
+            "+",
+            "+-1",
+            "-+1",
+            "--1",
+            "ff",
+            "FF",
+            "-fF",
+            "z",
+            "Z",
+            "10",
+            "12",
+            "1_0",
+            " 1",
+            "1 ",
+            "é",
+            "00000000000000000000000000000000000000000001",
+            "170141183460469231731687303715884105727",
+            "170141183460469231731687303715884105728",
+            "-170141183460469231731687303715884105728",
+            "-170141183460469231731687303715884105729",
+            "340282366920938463463374607431768211455",
+            "340282366920938463463374607431768211456",
+            "ffffffffffffffffffffffffffffffff",
+            "100000000000000000000000000000000",
+            "7fffffffffffffffffffffffffffffff",
+            "-80000000000000000000000000000000",
+            "-80000000000000000000000000000001",
+        ];
+        for radix in [2u32, 8, 10, 16, 35, 36] {
+            for text in texts {
+                let b = text.as_bytes();
+                let signed = radix_digits(b, radix, true).and_then(|(n, m)| signed_of(n, m));
+                assert_eq!(
+                    signed,
+                    i128::from_str_radix(text, radix).ok(),
+                    "i128 {text:?} radix {radix}"
+                );
+                let unsigned = radix_digits(b, radix, false).map(|(n, m)| {
+                    assert!(!n);
+                    m
+                });
+                assert_eq!(
+                    unsigned,
+                    u128::from_str_radix(text, radix).ok(),
+                    "u128 {text:?} radix {radix}"
+                );
+            }
+        }
+    }
+
+    /// `karac_mir_str_repeat`'s doubling copy, against `str::repeat`.
+    #[test]
+    fn str_repeat_matches_std() {
+        for s in ["", "a", "ab", "xyz", "é"] {
+            for n in [-5i64, 0, 1, 2, 3, 7, 64, 1000] {
+                let mut out = std::mem::MaybeUninit::<RawVec>::uninit();
+                // SAFETY: `out` is writable; `s` readable for its length.
+                let got = unsafe {
+                    karac_mir_str_repeat(out.as_mut_ptr(), s.as_ptr(), s.len() as u64, n);
+                    let v = out.assume_init();
+                    let bytes = if v.len == 0 {
+                        Vec::new()
+                    } else {
+                        std::slice::from_raw_parts(v.ptr, v.len).to_vec()
+                    };
+                    crate::alloc::karac_free(v.ptr);
+                    bytes
+                };
+                assert_eq!(got, s.repeat(n.max(0) as usize).into_bytes(), "{s:?} x {n}");
+            }
+        }
     }
 
     /// The merge is stable and sorts, for a fixed element size and for

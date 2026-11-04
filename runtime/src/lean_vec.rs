@@ -42,6 +42,18 @@ impl<T: Copy> LeanVec<T> {
         }
     }
 
+    /// An empty buffer with room for `cap` values.
+    pub(crate) fn with_capacity(cap: usize) -> Self {
+        let mut v = Self::new();
+        v.reserve_total(cap);
+        v
+    }
+
+    /// The buffer, room for its capacity (null while it has none).
+    pub(crate) fn as_mut_ptr(&mut self) -> *mut T {
+        self.ptr
+    }
+
     pub(crate) fn len(&self) -> usize {
         self.len
     }
