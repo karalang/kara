@@ -1,0 +1,11 @@
+source = "corpus/fixtures/coherence/blanket_impl_sibling_call"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["coherence", "traits"]
+class = "a"
+expected_from = "spec"
+rules = []
+backends = []
+env = {}
+note = "design.md § Coherence, Blanket impls: a trait default body reached through `impl[T: Display] Shout for T` calls the impl's own `tag`, by a bound and on a concrete receiver, and ahead of an inherent `tag` of the receiver's type (B-2026-11-04-49: \"the method call `.tag` with no resolved callee is not lowered yet\")."

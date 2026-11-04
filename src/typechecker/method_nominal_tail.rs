@@ -40,6 +40,7 @@ impl<'a> super::TypeChecker<'a> {
         span: &Span,
         args_close_span: &Span,
         receiver_for_lookup: &Type,
+        borrowed: bool,
     ) -> Option<Type> {
         // Distinct-type `.raw()` unwrap + no-deref rule (design.md § Distinct
         // Types). A distinct type flows as a nominal `Type::Named { name }`;
@@ -63,6 +64,12 @@ impl<'a> super::TypeChecker<'a> {
                         for arg in args {
                             self.infer_expr(&arg.value);
                         }
+                    }
+                    // Of a borrowed value, a borrow of its base, unless the
+                    // base is `Copy`: `self.raw()[0]` under a bare `self`
+                    // reads through it (B-2026-11-04-48).
+                    if borrowed && !self.is_copy_type_during_check(&base) {
+                        return Some(Type::Ref(Box::new(base)));
                     }
                     return Some(base);
                 }

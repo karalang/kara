@@ -2869,9 +2869,15 @@ impl<'a> super::TypeChecker<'a> {
         // the normalized receiver. Extracted to `method_nominal_tail.rs`;
         // it keeps this position in the first-match-wins chain and the
         // block order within it.
-        if let Some(t) =
-            self.try_nominal_tail_method(method, args, span, args_close_span, &receiver_for_lookup)
-        {
+        if let Some(t) = self.try_nominal_tail_method(
+            method,
+            args,
+            span,
+            args_close_span,
+            &receiver_for_lookup,
+            matches!(obj_ty, Type::Ref(_) | Type::MutRef(_))
+                || (matches!(object.kind, ExprKind::SelfValue) && self.current_self_borrowed),
+        ) {
             return t;
         }
         // B-2026-10-24-26: `.copied()` is the Rust spelling of

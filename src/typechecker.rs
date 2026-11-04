@@ -3076,6 +3076,9 @@ pub struct TypeChecker<'a> {
     /// returns + demands.
     pub(super) closure_return_types: Vec<ClosureReturnFrame>,
     pub(super) current_self_type: Option<Type>,
+    /// Whether the current method's `self` is a borrow (`ref self`, or a
+    /// bare `self` D5 made one): `self` is typed as the bare type.
+    pub(super) current_self_borrowed: bool,
     /// B-2026-09-28-73 — inside `impl[T] G[T]` the receiver is typed as the
     /// ERASED `G` (see the fallback arm of `check_impl_block`'s `self_type`),
     /// while `G[T]` written in a signature, and a constructor like `G.Y` in
@@ -3943,6 +3946,7 @@ impl<'a> TypeChecker<'a> {
             break_value_types: Vec::new(),
             closure_return_types: Vec::new(),
             current_self_type: None,
+            current_self_borrowed: false,
             current_impl_target: None,
             current_concrete_impl_target: None,
             in_defer: false,

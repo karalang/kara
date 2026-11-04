@@ -20552,7 +20552,9 @@ impl<'l, 'a> Bx<'l, 'a> {
                 let op = if self.is_copy(bt) {
                     Operand::Copy(p.field(0, bt))
                 } else if by_ref {
-                    return self.unsupported(e.span, "`raw` of a borrowed distinct value");
+                    // A borrow of the base (B-2026-11-04-48).
+                    self.assign(dest, Rvalue::Ref(BorrowKind::Shared, p.field(0, bt)));
+                    return Ok(());
                 } else {
                     Operand::Move(p.field(0, bt))
                 };
@@ -20719,6 +20721,13 @@ impl<'l, 'a> Bx<'l, 'a> {
                     apart.ends_with(&format!("#{tr}")).then_some((d, inst_args))
                 });
             if let Some((d, inst_args)) = bound {
+                return self.user_method_call(e, object, d, inst_args, args, dest);
+            }
+            // In a blanket impl's body, a method of the impl on its own
+            // parameter (`self.tag()` in `impl[T: Display] Shout for T`):
+            // that impl's method, at this instance, ahead of any the type
+            // has of its own (B-2026-11-04-49).
+            if let Some((d, inst_args)) = self.blanket_sibling(rt, method) {
                 return self.user_method_call(e, object, d, inst_args, args, dest);
             }
             let ret = if self.lcx.node_types.contains_key(&e.id) {
@@ -21114,6 +21123,25 @@ impl<'l, 'a> Bx<'l, 'a> {
             return None;
         }
         Some((d, item.impl_args(&targs)?))
+    }
+
+    /// The method `method` of the blanket impl being lowered, when `recv`
+    /// (through a borrow) is the impl's parameter at this instance.
+    fn blanket_sibling(&self, recv: Ty, method: &str) -> Option<(DefId, Vec<Ty>)> {
+        let cur = self.b.instance().def;
+        if !self.lcx.is_blanket_fn(cur) || self.args.first() != Some(&self.strip_ty_full(recv).1) {
+            return None;
+        }
+        let here = &self.lcx.defs.table.get(cur).path.segments;
+        let impl_path = &here[..here.len() - 1];
+        let (&d, _) = self.lcx.fns.iter().find(|(&d, i)| {
+            let path = &self.lcx.defs.table.get(d).path.segments;
+            i.f.name == method
+                && self.lcx.is_blanket_fn(d)
+                && path.len() == here.len()
+                && &path[..path.len() - 1] == impl_path
+        })?;
+        Some((d, vec![self.args[0]]))
     }
 
     /// A trait method called through a bound (`c.into_iter()` under `C:

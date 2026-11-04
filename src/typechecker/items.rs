@@ -2538,6 +2538,8 @@ impl<'a> super::TypeChecker<'a> {
             if let Some(st) = self_type {
                 self.local_scope.insert("self".to_string(), st.clone());
                 self.current_self_type = Some(st.clone());
+                self.current_self_borrowed =
+                    matches!(f.self_param, Some(SelfParam::Ref | SelfParam::MutRef));
                 self.fn_self_types.insert(
                     (self.current_impl_span, SpanKey::from_span(&f.span)),
                     (st.clone(), self.current_generic_frame),
@@ -2776,6 +2778,7 @@ impl<'a> super::TypeChecker<'a> {
 
         self.current_return_type = None;
         self.current_self_type = None;
+        self.current_self_borrowed = false;
         self.enclosing_bounds = saved_bounds;
         self.enclosing_assoc_eqs = saved_assoc_eqs;
         self.enclosing_proj_bounds = saved_proj_bounds;

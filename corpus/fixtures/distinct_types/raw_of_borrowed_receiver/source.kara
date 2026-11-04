@@ -1,0 +1,20 @@
+distinct type Ids = Vec[i64];
+distinct type Uid = i64;
+impl Ids {
+    fn first(self) -> i64 { self.raw()[0] }
+    fn second(self) -> i64 { let v: ref Vec[i64] = self.raw(); v[1] }
+    fn count(ref self) -> i64 { self.raw().len() }
+    fn take(own self) -> Vec[i64] { self.raw() }
+}
+fn total(x: Ids) -> i64 { let mut t = 0; for v in x.raw() { t += v; } t }
+fn main() {
+    let ids = Ids([7, 8, 9].to_vec());
+    println(ids.first());
+    println(ids.second());
+    println(ids.count());
+    println(total(ids));
+    let u = Uid(4);
+    println(u.raw() + 1);
+    let v = ids.take();
+    println(v.len());
+}

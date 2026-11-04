@@ -12,6 +12,9 @@
 //! - A blanket impl of the program's trait over a bare parameter is found by
 //!   a method call and by UFCS on a type meeting its bounds
 //!   (B-2026-11-04-16: "no method 'twice' on type 'i64'").
+//! - A blanket impl's body calling another method of the impl on its
+//!   parameter, written there or in a trait default, calls the impl's
+//!   method (B-2026-11-04-49: "no resolved callee").
 //! - An impl method's receiver may not be stronger than the trait's
 //!   (B-2026-11-04-13: `mut ref self` for the trait's `self` was given the
 //!   trait's receiver and accepted).
@@ -225,6 +228,25 @@ fn ufcs_reaches_the_blanket_method_past_an_inherent_one() {
              fn main() {{\n    println(Q {{ n: 1 }}.twice());\n    println(Twice.twice(Q {{ n: 1 }}));\n}}\n"
         ),
         "inherent\nqq\n",
+    );
+}
+
+#[test]
+fn a_blanket_default_body_calls_the_impls_own_method() {
+    runs(
+        "blanket-sibling",
+        "trait Shout {\n\
+             fn tag(self) -> String;\n\
+             fn shout(self, n: i64) -> String { let mut s = self.tag(); let mut i = 1; while i < n { s = s + \"!\"; i += 1; } s }\n\
+             fn twice(self) -> String { self.tag() + self.tag() }\n\
+         }\n\
+         impl[T: Display] Shout for T {\n\
+             fn tag(self) -> String { f\"<{self}>\" }\n\
+             fn twice(self) -> String { self.tag() + \"=\" + self.tag() }\n\
+         }\n\
+         fn go[U: Shout](u: U) -> String { u.shout(3) }\n\
+         fn main() { println(go(3)); println(4.shout(2)); println(true.twice()); }\n",
+        "<3>!!\n<4>!\n<true>=<true>\n",
     );
 }
 

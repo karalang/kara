@@ -1,0 +1,11 @@
+source = "corpus/fixtures/distinct_types/raw_of_borrowed_receiver"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["distinct", "borrows"]
+class = "a"
+expected_from = "spec"
+rules = []
+backends = []
+env = {}
+note = "design.md § Distinct types: `.raw()` returns the base. Of a borrowed receiver (a bare `self` under D5, `ref self`, a borrowed parameter) whose base is not Copy it is a borrow of the base; a Copy base is copied and an owned receiver gives up its base (B-2026-11-04-48: \"`raw` of a borrowed distinct value is not lowered yet\")."
