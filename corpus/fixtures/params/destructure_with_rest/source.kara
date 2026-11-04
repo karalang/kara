@@ -1,0 +1,14 @@
+struct D { n: String }
+impl Drop for D { fn drop(mut ref self) { println(f"drop {self.n}"); } }
+struct W { a: D, b: D }
+fn h(W { a, .. }: own W) {
+    println(a.n);
+    println("body");
+}
+fn peek(W { a, .. }: W) -> i64 { a.n.len() }
+fn main() {
+    let w = W { a: D { n: "a".to_string() }, b: D { n: "b".to_string() } };
+    println(peek(w));
+    h(w);
+    println("end");
+}

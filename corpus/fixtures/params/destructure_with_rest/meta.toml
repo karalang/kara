@@ -1,0 +1,11 @@
+source = "corpus/fixtures/params/destructure_with_rest"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["patterns", "params"]
+class = "a"
+expected_from = "spec"
+rules = []
+backends = []
+env = {}
+note = "design.md § Destructuring parameters: `fn inspect(Request { headers, .. }: Request)` binds the named fields and ignores the rest; a bare parameter borrows, and an `own` one drops its unbound parts at the end of the function (B-2026-11-04-63: \"Expected identifier, found `..`\")."

@@ -2119,7 +2119,25 @@ impl super::Parser {
                     // Struct destructuring: Name { field1, field2: pat, ... }
                     self.advance();
                     let mut fields = Vec::new();
+                    let mut has_rest = false;
                     while !self.check(&Token::RightBrace) && !self.is_at_end() {
+                        // `Request { headers, .. }`: the fields not named are
+                        // ignored (design.md § Patterns, B-2026-11-04-63).
+                        if self.check(&Token::DotDot) {
+                            let dotdot_span = self.current_span();
+                            self.advance();
+                            has_rest = true;
+                            if self.eat(&Token::Comma) && !self.check(&Token::RightBrace) {
+                                self.errors.push(super::ParseError {
+                                    kind: crate::parser::ParseErrorKind::Syntax,
+                                    message: "error[E_REST_PATTERN_NOT_LAST]: `..` must be \
+                                              the last item of a struct pattern"
+                                        .to_string(),
+                                    span: dotdot_span,
+                                });
+                            }
+                            break;
+                        }
                         let fstart = self.current_span();
                         let field_name = self.expect_identifier()?;
                         let sub_pattern = if self.eat(&Token::Colon) {
@@ -2142,10 +2160,7 @@ impl super::Parser {
                         kind: PatternKind::Struct {
                             path: vec![name],
                             fields,
-                            // `..` rest-binding is not accepted in parameter
-                            // patterns — params are irrefutable and a rest
-                            // there would carry no behavioural meaning.
-                            has_rest: false,
+                            has_rest,
                         },
                         span: self.span_from(&start),
                     })
