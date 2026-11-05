@@ -2109,6 +2109,15 @@ fn walk_stmt(stmt: &mut Stmt, ret: Option<&TypeExpr>, cx: &mut WalkCx) {
 /// and every pass from the resolver on takes a `StmtKind::MultiAssign` to be
 /// gone (B-2026-11-05-19). The rest of [`desugar_program`] needs the whole
 /// program, so only this purely local rewrite runs there.
+///
+/// The statement itself is rewritten by [`expand_multi_assign`], the same
+/// function the whole-program walk calls, so the two cannot disagree on what
+/// a parallel assignment means. Only the walk differs: the whole-program one
+/// (`walk_stmt`) also performs the `collect()` and parameter-`unwrap`
+/// rewrites, which read signatures across the program, so this one walks
+/// with the generic [`crate::span_visitor::MutVisitor`] instead.
+/// `tests/package_pipeline_parity.rs` guards that a package and a lone file
+/// still run every desugared form alike.
 pub fn desugar_multi_assigns(items: &mut [Item]) {
     struct MultiAssigns;
     impl crate::span_visitor::MutVisitor for MultiAssigns {
