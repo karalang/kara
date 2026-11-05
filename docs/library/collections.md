@@ -123,6 +123,10 @@ The bound holds wherever a table type is written, not only where a table is buil
 | `is_empty` | `fn is_empty(self) -> bool` | `self.len() == 0` |
 | `keys` | `fn keys(self) -> impl Iterator[Item = ref K]` | |
 | `values` | `fn values(self) -> impl Iterator[Item = ref V]` | |
+| `values_mut` | `fn values_mut(mut ref self) -> impl Iterator[Item = mut ref V]` | Each value, for in-place change |
+| `into_keys` | `fn into_keys(own self) -> impl Iterator[Item = K]` | Consumes the map; values drop |
+| `into_values` | `fn into_values(own self) -> impl Iterator[Item = V]` | Consumes the map; keys drop |
+| `retain` | `fn retain(mut ref self, pred: own MutFn(K, mut ref V) -> bool)` | Keeps the entries for which `pred` returns `true` and drops the rest, in one pass. `pred` borrows the key and may change the value |
 | `entry` | `fn entry(mut ref self, key: own K) -> Entry[K, V]` | The slot for `key`, occupied or vacant |
 | `clear` | `fn clear(mut ref self)` | Drops every entry |
 | `reserve` | `fn reserve(mut ref self, additional: i64)` | Makes room for `additional` more entries. `additional <= 0` does nothing. There is no `capacity()`: the bucket count is not part of the contract |
@@ -196,6 +200,14 @@ A B-tree map, `K: Ord`. Iteration is in ascending key order.
 | `range_inclusive` | `fn range_inclusive(self, from: K, to: K) -> impl Iterator[Item = (ref K, ref V)]` | Entries with keys in `[from, to]`, like `from..=to`. Empty if `from > to` |
 | `floor` | `fn floor(self, key: K) -> Option[(ref K, ref V)]` | The entry with the largest key `<= key` |
 | `ceiling` | `fn ceiling(self, key: K) -> Option[(ref K, ref V)]` | The entry with the smallest key `>= key` |
+| `first` | `fn first(self) -> Option[(ref K, ref V)]` | The entry with the smallest key. Rust's `first_key_value` |
+| `last` | `fn last(self) -> Option[(ref K, ref V)]` | The entry with the largest key. Rust's `last_key_value` |
+| `pop_first` | `fn pop_first(mut ref self) -> Option[(K, V)]` | Removes and returns the entry with the smallest key |
+| `pop_last` | `fn pop_last(mut ref self) -> Option[(K, V)]` | Removes and returns the entry with the largest key |
+| `values_mut` | `fn values_mut(mut ref self) -> impl Iterator[Item = mut ref V]` | In key order |
+| `into_keys` | `fn into_keys(own self) -> impl Iterator[Item = K]` | Ascending; values drop |
+| `into_values` | `fn into_values(own self) -> impl Iterator[Item = V]` | In key order; keys drop |
+| `retain` | `fn retain(mut ref self, pred: own MutFn(K, mut ref V) -> bool)` | As `Map.retain`, in key order |
 | `clear` | `fn clear(mut ref self)` | |
 | `[]` | `m[key]` | Index operator through `Index`. Panics if the key is missing |
 | `[]=` | `m[key] = val` | Index assignment through `IndexSet`, as for `Map` |
@@ -213,6 +225,9 @@ A B-tree set, `T: Ord`. Every operation is O(log n), and iteration is in ascendi
 | `contains` | `fn contains(self, val: T) -> bool` | |
 | `min` | `fn min(self) -> Option[ref T]` | Smallest element |
 | `max` | `fn max(self) -> Option[ref T]` | Largest element |
+| `pop_first` | `fn pop_first(mut ref self) -> Option[T]` | Removes and returns the smallest element |
+| `pop_last` | `fn pop_last(mut ref self) -> Option[T]` | Removes and returns the largest element |
+| `retain` | `fn retain(mut ref self, pred: own MutFn(T) -> bool)` | Keeps the elements satisfying `pred`, in ascending order |
 | `range` | `fn range(self, from: T, to: T) -> impl Iterator[Item = ref T]` | Elements in `[from, to)`, ascending, half-open like `from..to`. Empty if `from >= to` |
 | `range_inclusive` | `fn range_inclusive(self, from: T, to: T) -> impl Iterator[Item = ref T]` | Elements in `[from, to]`, ascending, like `from..=to`. Empty if `from > to` |
 | `len` | `fn len(self) -> i64` | |
