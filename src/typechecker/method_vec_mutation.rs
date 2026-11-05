@@ -881,6 +881,77 @@ impl<'a> super::TypeChecker<'a> {
         Some(Type::Error)
     }
 
+    /// Rust's `sort_unstable`, `sort_unstable_by` and `sort_unstable_by_key`
+    /// on a `Vec`, an array or a slice. collections.md gives only the stable
+    /// sorts, and a stable sort is also a valid unstable one, so on v2 the
+    /// call is refused by name with the fix that drops `_unstable`, and is
+    /// then checked as the stable sort it names (kata 1051).
+    pub(super) fn rename_rust_unstable_sort(
+        &mut self,
+        object: &Expr,
+        method: &str,
+        args: &[CallArg],
+        args_close_span: &Span,
+        obj_ty: &Type,
+    ) -> Option<&'static str> {
+        if !self.library_methods_from_source {
+            return None;
+        }
+        let to = match method {
+            "sort_unstable" => "sort",
+            "sort_unstable_by" => "sort_by",
+            "sort_unstable_by_key" => "sort_by_key",
+            _ => return None,
+        };
+        let inner = match obj_ty {
+            Type::Ref(t) | Type::MutRef(t) => t.as_ref(),
+            t => t,
+        };
+        let sortable = match inner {
+            Type::Named { name, .. } => name == "Vec",
+            Type::Array { .. } | Type::Slice { .. } => true,
+            _ => false,
+        };
+        if !sortable {
+            return None;
+        }
+        let msg = format!(
+            "no method '{method}' on type '{}': a stable sort is also an unstable \
+             one, and the library has only the stable `{to}` (docs/library/collections.md)",
+            type_display(inner)
+        );
+        // The edit renames the method, offered only when `.{method}(` sits
+        // right after the receiver with nothing in between.
+        let object_end = object.span.offset + object.span.length;
+        let opened = object_end + ".(".len() + method.len();
+        let in_place = match args.first() {
+            Some(arg) => arg.value.span.offset == opened,
+            None => args_close_span.offset == opened,
+        };
+        // The name is on the receiver's last line, which is its first for
+        // all but a receiver that spans lines; there the column is a guess.
+        let at = Span {
+            line: object.span.line,
+            column: object.span.column + object.span.length + 1,
+            offset: object_end + 1,
+            length: method.len(),
+        };
+        if in_place {
+            self.type_error_with_fix_it(
+                msg,
+                at,
+                TypeErrorKind::NoMethodFound,
+                FixIt {
+                    span: at,
+                    replacement: to.to_string(),
+                },
+            );
+        } else {
+            self.type_error(msg, at, TypeErrorKind::NoMethodFound);
+        }
+        Some(to)
+    }
+
     /// The `Vec` / `Slice` methods collections.md does not give a
     /// `VecDeque[T]` (B-2026-10-26-18, the page's surface at 857e45825).
     /// Refused by name on v2: `push` / `pop` / `first` / `last` are fixed to

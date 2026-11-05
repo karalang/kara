@@ -2106,6 +2106,11 @@ impl<'a> super::TypeChecker<'a> {
             }
             return Type::Error;
         }
+        // Rust's unstable sorts are checked as the stable ones they are
+        // refused for (kata 1051).
+        let method: &str = self
+            .rename_rust_unstable_sort(object, method, args, args_close_span, &obj_ty)
+            .unwrap_or(method);
 
         // B-2026-11-05-3: the receivers of the builtin `Option.unwrap`, where
         // an editor offers the rewrite to `.expect("…")`. Before the library
