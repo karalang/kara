@@ -50,8 +50,8 @@
 
 struct Source {
     data: Vec[i64],
-    mut pos: i64,
-    mut pulls: i64,
+    pos: i64,
+    pulls: i64,
 }
 
 fn src_has_next(s: ref Source) -> bool {
@@ -66,9 +66,9 @@ fn src_next(s: mut ref Source) -> i64 {
 }
 
 struct EagerP {
-    mut src: Source,
-    mut slot: i64,
-    mut full: bool,
+    src: Source,
+    slot: i64,
+    full: bool,
 }
 
 fn make_peeking_eager(data: ref Vec[i64]) -> EagerP {
@@ -104,9 +104,9 @@ fn next_eager(p: mut ref EagerP) -> i64 {
 }
 
 struct LazyP {
-    mut src: Source,
-    mut slot: i64,
-    mut full: bool,
+    src: Source,
+    slot: i64,
+    full: bool,
 }
 
 fn make_peeking_lazy(data: ref Vec[i64]) -> LazyP {
@@ -139,9 +139,9 @@ fn next_lazy(p: mut ref LazyP) -> i64 {
 }
 
 struct MatP {
-    mut src: Source,
-    mut all: Vec[i64],
-    mut pos: i64,
+    src: Source,
+    all: Vec[i64],
+    pos: i64,
 }
 
 fn make_peeking_mat(data: ref Vec[i64]) -> MatP {

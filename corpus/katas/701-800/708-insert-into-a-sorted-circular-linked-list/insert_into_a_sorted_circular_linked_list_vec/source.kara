@@ -39,7 +39,7 @@ fn insert(ring: mut ref Vec[i64], insert_val: i64) {
 
 // The list the harness drives.
 struct CircularList {
-    mut ring: Vec[i64],
+    ring: Vec[i64],
 }
 
 impl CircularList {

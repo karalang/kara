@@ -15,8 +15,8 @@ const MODULUS: i64 = 1073741789;
 
 struct Node {
     val: i64,
-    mut left: i64,
-    mut right: i64,
+    left: i64,
+    right: i64,
 }
 
 // (robbed, not robbed) for the subtree at `node`.

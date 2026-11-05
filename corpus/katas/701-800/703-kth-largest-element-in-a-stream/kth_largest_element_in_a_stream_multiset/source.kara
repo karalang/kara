@@ -8,8 +8,8 @@
 
 struct KthLargest {
     k: i64,
-    mut counts: SortedMap[i64, i64],
-    mut held: i64,
+    counts: SortedMap[i64, i64],
+    held: i64,
 }
 
 impl KthLargest {

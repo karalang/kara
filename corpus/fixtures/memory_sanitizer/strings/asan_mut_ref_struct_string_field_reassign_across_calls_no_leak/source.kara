@@ -1,5 +1,5 @@
 
-struct S { src: String, mut pos: i64, mut buf: String, mut bp: i64 }
+struct S { src: String, pos: i64, buf: String, bp: i64 }
 fn read4(s: mut ref S) -> String {
     let n = s.src.len();
     let mut chunk: String = "";

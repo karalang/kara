@@ -4,7 +4,7 @@ impl PartialEq for Item { fn eq(ref self, other: ref Item) -> bool { self.id == 
 impl Eq for Item {}
 impl Hash for Item { fn hash[H: Hasher](ref self, hasher: mut ref H) { hasher.write_i64(self.id) } }
 
-struct Fnv { mut h: u64 }
+struct Fnv { h: u64 }
 impl Hasher for Fnv {
     fn write(mut ref self, bytes: ref Slice[u8]) {
         let mut i = 0;

@@ -7,8 +7,8 @@
 // struct plus free functions taking `mut ref` / `ref`, as in #146.)
 
 struct MinStack {
-    mut data: Vec[i64],
-    mut mins: Vec[i64],
+    data: Vec[i64],
+    mins: Vec[i64],
 }
 
 fn ms_new() -> MinStack {

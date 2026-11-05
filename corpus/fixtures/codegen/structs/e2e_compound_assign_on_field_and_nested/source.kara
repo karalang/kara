@@ -1,5 +1,5 @@
 struct Inner { x: i64 }
-struct Outer { mut count: i64, inner: Inner }
+struct Outer { count: i64, inner: Inner }
 fn main() {
 let mut o = Outer { count: 0, inner: Inner { x: 5 } };
 o.count += 10;

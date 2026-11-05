@@ -8,9 +8,9 @@
 // keys and tombstones fill half of them.
 
 struct MyHashMap {
-    mut keys: Vec[i64],
-    mut values: Vec[i64],
-    mut used: i64,
+    keys: Vec[i64],
+    values: Vec[i64],
+    used: i64,
 }
 
 // A slot never held a key, and a slot whose key was removed.

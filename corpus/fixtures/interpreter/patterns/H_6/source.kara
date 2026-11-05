@@ -1,7 +1,7 @@
 struct R { s: String }
 impl Drop for R { fn drop(mut ref self) { println(f"dR[{self.s}]") } }
 struct P { r: R, n: i64 }
-struct C { mut i: i64 }
+struct C { i: i64 }
 impl C { fn next(mut ref self) -> Option[P] {
     self.i = self.i + 1;
     if self.i > 2 { return Option.None; }

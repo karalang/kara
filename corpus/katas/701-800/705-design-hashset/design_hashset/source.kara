@@ -7,7 +7,7 @@
 // most 10,000 keys, a bucket holds about ten keys at worst on average.
 
 struct MyHashSet {
-    mut buckets: Vec[Vec[i64]],
+    buckets: Vec[Vec[i64]],
 }
 
 impl MyHashSet {

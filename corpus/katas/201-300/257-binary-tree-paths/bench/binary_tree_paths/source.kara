@@ -34,8 +34,8 @@
 
 struct Node {
     val: i64,
-    mut left: i64,
-    mut right: i64,
+    left: i64,
+    right: i64,
 }
 
 // Random bushy tree: each new node attaches to a uniformly chosen existing node

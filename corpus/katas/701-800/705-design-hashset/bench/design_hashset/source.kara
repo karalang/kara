@@ -7,7 +7,7 @@
 // checksum. Five rounds.
 
 struct MyHashSet {
-    mut buckets: Vec[Vec[i64]],
+    buckets: Vec[Vec[i64]],
 }
 
 impl MyHashSet {

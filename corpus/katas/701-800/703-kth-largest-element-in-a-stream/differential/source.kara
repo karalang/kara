@@ -6,7 +6,7 @@
 
 struct KthStar {
     k: i64,
-    mut top: PriorityQueue[i64],
+    top: PriorityQueue[i64],
 }
 
 impl KthStar {
@@ -31,7 +31,7 @@ impl KthStar {
 
 struct KthHeap {
     k: i64,
-    mut heap: Vec[i64],
+    heap: Vec[i64],
 }
 
 impl KthHeap {
@@ -88,7 +88,7 @@ impl KthHeap {
 
 struct KthSorted {
     k: i64,
-    mut desc: Vec[i64],
+    desc: Vec[i64],
 }
 
 impl KthSorted {
@@ -123,8 +123,8 @@ impl KthSorted {
 
 struct KthMultiset {
     k: i64,
-    mut counts: SortedMap[i64, i64],
-    mut held: i64,
+    counts: SortedMap[i64, i64],
+    held: i64,
 }
 
 impl KthMultiset {

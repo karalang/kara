@@ -14,8 +14,8 @@
 
 struct Vector2D {
     data: Vec[Vec[i64]],
-    mut row: i64,
-    mut col: i64,
+    row: i64,
+    col: i64,
 }
 
 fn skip_empty(v: mut ref Vector2D) {

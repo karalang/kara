@@ -6,9 +6,9 @@
 // into the sink. `val` is `mut` here for that, unlike in the kata.
 
 struct Node {
-    mut val: i64,
-    mut left: i64,
-    mut right: i64,
+    val: i64,
+    left: i64,
+    right: i64,
 }
 
 fn visit(nodes: Vec[Node], node: i64, is_left: bool) -> i64 {

@@ -1,7 +1,7 @@
 
 struct Node {
     val: i64,
-    mut kids: Vec[Node],
+    kids: Vec[Node],
 }
 
 impl Node {

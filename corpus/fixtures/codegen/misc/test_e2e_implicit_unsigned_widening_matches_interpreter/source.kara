@@ -1,5 +1,5 @@
 
-struct W { mut a: i64 }
+struct W { a: i64 }
 
 fn t64(v: i64) -> i64 { v }
 fn t32(v: i32) -> i32 { v }

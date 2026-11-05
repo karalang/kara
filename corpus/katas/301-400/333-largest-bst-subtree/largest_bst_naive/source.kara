@@ -12,8 +12,8 @@
 
 struct Node {
     val: i64,
-    mut left: i64,
-    mut right: i64,
+    left: i64,
+    right: i64,
 }
 
 fn within(nodes: ref Vec[Node], node: i64, lo: Option[i64], hi: Option[i64]) -> bool {

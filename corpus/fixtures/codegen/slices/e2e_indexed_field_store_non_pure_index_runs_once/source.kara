@@ -1,5 +1,5 @@
-struct P { mut id: i64, mut name: String }
-struct O { mut hs: Vec[P] }
+struct P { id: i64, name: String }
+struct O { hs: Vec[P] }
 fn idx() -> i64 {
     println("eval");
     return 0;

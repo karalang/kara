@@ -12,7 +12,7 @@ struct Solution {
     bound: i64,
     from: Vec[i64],
     to: Vec[i64],
-    mut seed: i64,
+    seed: i64,
 }
 
 impl Solution {

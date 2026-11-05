@@ -6,7 +6,7 @@ fn mki(i: i64) -> Ri { return Ri { id: i, inner: Inner { v: i } }; }
 struct Sp { id: i64, name: String }
 impl Drop for Sp { fn drop(mut ref self) { println(f"dP{self.id}") } }
 fn mkp(i: i64) -> Sp { return Sp { id: i, name: f"p{i}" }; }
-struct Vi { mut xs: Vec[Ri] }
+struct Vi { xs: Vec[Ri] }
 
 fn gcond[T](v: mut ref Vec[T], x: own T, k: bool) { if k { v.push(x); } }
 fn guncond[T](v: mut ref Vec[T], x: own T) { v.push(x); }

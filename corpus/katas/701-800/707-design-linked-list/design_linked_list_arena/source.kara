@@ -8,11 +8,11 @@
 // size - index)) per call.
 
 struct MyLinkedList {
-    mut vals: Vec[i64],
-    mut prev: Vec[i64],
-    mut next: Vec[i64],
-    mut free: Vec[i64],
-    mut size: i64,
+    vals: Vec[i64],
+    prev: Vec[i64],
+    next: Vec[i64],
+    free: Vec[i64],
+    size: i64,
 }
 
 // The two sentinels' slots.

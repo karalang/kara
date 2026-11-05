@@ -19,8 +19,8 @@
 
 struct Node {
     val: i64,
-    mut left: i64,
-    mut right: i64,
+    left: i64,
+    right: i64,
 }
 
 fn lca(nodes: ref Vec[Node], root: i64, p: i64, q: i64) -> i64 {

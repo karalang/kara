@@ -8,7 +8,7 @@ struct S { id: i64, name: String }
 impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}") } }
 fn mks(i: i64) -> S { return S { id: i, name: f"s{i}" }; }
 
-struct Box2 { mut xs: Vec[R] }
+struct Box2 { xs: Vec[R] }
 impl Box2 {
     fn push(mut ref self, r: own R) { self.xs.push(r); }
     fn put2(mut ref self, a: own R, c: own R) { self.xs.push(a); self.xs.push(c); }
@@ -16,9 +16,9 @@ impl Box2 {
     fn maybe(mut ref self, r: own R, k: bool) { if k { self.xs.push(r); } }
     fn stash(b: mut ref Box2, r: own R) { b.xs.push(r); }
 }
-struct Box3 { mut one: R }
+struct Box3 { one: R }
 impl Box3 { fn set(mut ref self, r: own R) { self.one = r; } }
-struct BoxS { mut xs: Vec[S] }
+struct BoxS { xs: Vec[S] }
 impl BoxS { fn add(mut ref self, s: own S) { self.xs.push(s); } }
 
 fn take(b: mut ref Box2, r: own R) { b.xs.push(r); }

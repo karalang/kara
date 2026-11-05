@@ -8,7 +8,7 @@
 
 struct Node {
     val: i64,
-    mut next: i64,
+    next: i64,
 }
 
 // Build a singly-linked list 0 → 1 → … → n-1 in a fresh pool.

@@ -4,7 +4,7 @@ impl Drop for Es { fn drop(mut ref self) { println("dEs") } }
 fn mkes(i: i64) -> Es { return Es.A(f"e{i}"); }
 impl Es { fn is_a(ref self) -> i64 { match self { Es.A(s) => { return 1; } Es.B => { return 0; } } } }
 
-struct BoxS { mut ys: Vec[Es] }
+struct BoxS { ys: Vec[Es] }
 impl BoxS {
     fn puts(mut ref self, e: own Es) { self.ys.push(e); }
     fn stash(b: mut ref BoxS, e: own Es) { b.ys.push(e); }

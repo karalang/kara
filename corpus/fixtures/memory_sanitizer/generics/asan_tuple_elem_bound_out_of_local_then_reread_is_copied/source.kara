@@ -1,7 +1,7 @@
 
 #[derive(Clone)]
-struct A { mut lines: Vec[String] }
-struct H { mut pe: (A, i64) }
+struct A { lines: Vec[String] }
+struct H { pe: (A, i64) }
 fn main() {
     let k = env.args().len() as i64;
     let mut s = String.new(); s.push_str("alpha"); s.push_str(k.to_string());

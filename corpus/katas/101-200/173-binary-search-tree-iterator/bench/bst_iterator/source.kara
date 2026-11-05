@@ -10,9 +10,9 @@
 // all passes (pos = 1,2,3,… in in-order sequence).
 
 struct Node {
-    mut val: i64,
-    mut left: i64,
-    mut right: i64,
+    val: i64,
+    left: i64,
+    right: i64,
 }
 
 fn insert(nodes: mut ref Vec[Node], root: i64, val: i64) -> i64 {

@@ -1,5 +1,5 @@
 
-struct A { mut lines: Vec[String] }
+struct A { lines: Vec[String] }
 fn main() {
     let k = env.args().len() as i64;
     let mut v: Vec[String] = Vec.new();

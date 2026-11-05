@@ -11,8 +11,8 @@
 // the accumulated checksum over all passes.
 
 struct Reader {
-    mut pos: i64,
-    mut chk: i64,
+    pos: i64,
+    chk: i64,
 }
 
 fn read4(src: ref Vec[i64], rd: mut ref Reader) -> i64 {

@@ -8,9 +8,9 @@
 
 struct Reader {
     src: String,
-    mut pos: i64,
-    mut buf: String,
-    mut buf_pos: i64,
+    pos: i64,
+    buf: String,
+    buf_pos: i64,
 }
 
 fn new_reader(src: own String) -> Reader {

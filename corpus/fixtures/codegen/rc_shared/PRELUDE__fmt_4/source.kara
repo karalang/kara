@@ -5,8 +5,8 @@ impl Drop for Rs {
     }
 }
 fn mks(i: i64) -> Rs { return Rs { id: i, name: f"h{i}" }; }
-struct Bs { mut one: Rs, mut two: Rs }
-struct Ps { mut a: String, mut b: i64 }
+struct Bs { one: Rs, two: Rs }
+struct Ps { a: String, b: i64 }
 fn main() {
     println("c2");
     let mut h = Bs { one: mks(3), two: mks(4) };

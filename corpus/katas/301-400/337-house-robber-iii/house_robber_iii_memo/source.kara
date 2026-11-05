@@ -11,8 +11,8 @@
 
 struct Node {
     val: i64,
-    mut left: i64,
-    mut right: i64,
+    left: i64,
+    right: i64,
 }
 
 fn best(nodes: ref Vec[Node], node: i64, memo: mut ref Map[i64, i64]) -> i64 {

@@ -7,7 +7,7 @@ println(f"dS{self.id}")
 fn mks(i: i64) -> Rs {
 return Rs { id: i, name: f"h{i}" };
 }
-struct Bs { mut one: Rs, mut two: Rs }
+struct Bs { one: Rs, two: Rs }
 fn main() {
 let f = false;
 let mut g = Bs { one: mks(1), two: mks(2) };

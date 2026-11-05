@@ -12,8 +12,8 @@
 // WHICH node pays for it.
 
 struct Node {
-    mut val: i64,
-    mut next: i64,
+    val: i64,
+    next: i64,
 }
 
 fn build(vals: ref Slice[i64]) -> Vec[Node] {

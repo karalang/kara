@@ -8,12 +8,12 @@ impl Drop for Es { fn drop(mut ref self) { println("dEs") } }
 fn mkes(i: i64) -> Es { return Es.A(f"e{i}"); }
 impl Es { fn is_a(ref self) -> i64 { match self { Es.A(s) => { return 1; } Es.B => { return 0; } } } }
 
-struct BoxE { mut xs: Vec[Ev] }
+struct BoxE { xs: Vec[Ev] }
 impl BoxE {
     fn put(mut ref self, e: own Ev) { self.xs.push(e); }
     fn stash(b: mut ref BoxE, e: own Ev) { b.xs.push(e); }
 }
-struct BoxS { mut ys: Vec[Es] }
+struct BoxS { ys: Vec[Es] }
 impl BoxS { fn puts(mut ref self, e: own Es) { self.ys.push(e); } }
 
 fn pute(b: mut ref BoxS, e: own Es) { b.ys.push(e); }

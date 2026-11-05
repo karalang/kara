@@ -34,8 +34,8 @@
 // against three implementations that share none of its code.
 
 struct MedianFinder {
-    mut lo: PriorityQueue[i64],
-    mut hi: PriorityQueue[i64],
+    lo: PriorityQueue[i64],
+    hi: PriorityQueue[i64],
 }
 
 fn mf_new() -> MedianFinder {

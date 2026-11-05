@@ -1,4 +1,4 @@
-struct H { mut f: f64 }
+struct H { f: f64 }
 fn main() {
 let v = 200u8;
 let n = -5i8;

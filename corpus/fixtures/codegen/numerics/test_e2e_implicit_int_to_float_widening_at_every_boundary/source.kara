@@ -1,6 +1,6 @@
-struct W { mut a: i64, mut f: f64 }
+struct W { a: i64, f: f64 }
 enum E { F(f64) }
-struct M { mut f: f64, mut n: i64 }
+struct M { f: f64, n: i64 }
 impl M {
 fn setf(mut ref self, x: f64) { self.f = x; }
 fn setn(mut ref self, x: i64) { self.n = x; }

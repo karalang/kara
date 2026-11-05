@@ -1,6 +1,6 @@
 #[derive(Clone)]
-struct A { mut lines: Vec[String] }
-struct H { mut pe: (A, i64) }
+struct A { lines: Vec[String] }
+struct H { pe: (A, i64) }
 fn main() {
 let mut seed = A { lines: Vec.new() };
 seed.lines.push(f"x");

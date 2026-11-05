@@ -13,7 +13,7 @@
 
 struct Queue {
     data: Vec[i64],
-    mut head: i64,
+    head: i64,
 }
 
 fn q_new() -> Queue {

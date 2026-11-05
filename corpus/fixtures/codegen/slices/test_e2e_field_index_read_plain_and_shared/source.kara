@@ -1,5 +1,5 @@
 
-struct Holder { tag: i64, mut items: Vec[i64] }
+struct Holder { tag: i64, items: Vec[i64] }
 shared struct Cell { mut vals: Vec[i64] }
 fn read_ref(h: ref Holder) -> i64 { h.items[1] }
 fn main() {

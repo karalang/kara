@@ -11,7 +11,7 @@ struct Solution {
     bound: i64,
     starts: Vec[i64],
     before: Vec[i64],
-    mut seed: i64,
+    seed: i64,
 }
 
 impl Solution {

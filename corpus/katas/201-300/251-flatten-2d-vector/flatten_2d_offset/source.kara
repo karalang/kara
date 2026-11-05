@@ -20,7 +20,7 @@
 struct Vector2D {
     data: Vec[Vec[i64]],
     prefix: Vec[i64], // prefix[i] = number of elements before row i; len = rows+1
-    mut k: i64,
+    k: i64,
 }
 
 fn v_new(data: own Vec[Vec[i64]]) -> Vector2D {

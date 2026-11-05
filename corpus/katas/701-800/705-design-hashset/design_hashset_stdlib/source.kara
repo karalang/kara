@@ -5,7 +5,7 @@
 // shows. O(1) expected for each.
 
 struct MyHashSet {
-    mut keys: Set[i64],
+    keys: Set[i64],
 }
 
 impl MyHashSet {

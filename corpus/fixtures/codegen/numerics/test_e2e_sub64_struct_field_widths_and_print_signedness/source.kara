@@ -1,4 +1,4 @@
-struct S { mut b: u8, mut tail: i64 }
+struct S { b: u8, tail: i64 }
 
 shared struct Sh { mut b: u8, mut tail: i64 }
 

@@ -57,8 +57,8 @@ fn make_data(seed: i64) -> Vec[Vec[i64]] {
 
 struct Cursor {
     data: Vec[Vec[i64]],
-    mut row: i64,
-    mut col: i64,
+    row: i64,
+    col: i64,
 }
 
 fn c_skip(v: mut ref Cursor) {
@@ -106,7 +106,7 @@ fn run_cursor(data: own Vec[Vec[i64]]) -> i64 {
 
 struct Flat {
     flat: Vec[i64],
-    mut pos: i64,
+    pos: i64,
 }
 
 fn f_has_next(v: mut ref Flat) -> bool {
@@ -155,7 +155,7 @@ fn run_flat(data: Vec[Vec[i64]]) -> i64 {
 struct Offset {
     data: Vec[Vec[i64]],
     prefix: Vec[i64],
-    mut k: i64,
+    k: i64,
 }
 
 fn o_total(v: ref Offset) -> i64 {

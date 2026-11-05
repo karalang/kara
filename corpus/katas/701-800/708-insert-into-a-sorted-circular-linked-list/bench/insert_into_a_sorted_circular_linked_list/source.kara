@@ -10,8 +10,8 @@
 // the given node. O(n).
 
 struct Ring {
-    mut vals: Vec[i64],
-    mut next: Vec[i64],
+    vals: Vec[i64],
+    next: Vec[i64],
 }
 
 // Whether `x` fits between `a` and the value after it, `b`.

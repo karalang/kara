@@ -13,7 +13,7 @@ shared struct Node {
 
 struct MyLinkedList {
     head: Node,
-    mut size: i64,
+    size: i64,
 }
 
 impl MyLinkedList {

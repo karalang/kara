@@ -11,8 +11,8 @@
 // array, so the kernel does not vectorize. Sink = number of palindromes found.
 
 struct Node {
-    mut val: i64,
-    mut next: i64,
+    val: i64,
+    next: i64,
 }
 
 fn reverse(nodes: mut ref Vec[Node], head: i64) -> i64 {

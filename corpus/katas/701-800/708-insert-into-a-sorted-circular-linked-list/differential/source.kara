@@ -5,8 +5,8 @@
 // ---- arena (★) arm ---------------------------------------------------
 
 struct RingArena {
-    mut vals: Vec[i64],
-    mut next: Vec[i64],
+    vals: Vec[i64],
+    next: Vec[i64],
 }
 
 // Whether `x` fits between `a` and the value after it, `b`.
@@ -54,8 +54,8 @@ impl RingArena {
 
 // The list the harness drives: the arena and the given node.
 struct CircularListArena {
-    mut ring: RingArena,
-    mut head: Option[i64],
+    ring: RingArena,
+    head: Option[i64],
 }
 
 impl CircularListArena {
@@ -135,7 +135,7 @@ fn insert_shared(head: Option[NodeShared], insert_val: i64) -> NodeShared {
 
 // The list the harness drives: the given node.
 struct CircularListShared {
-    mut head: Option[NodeShared],
+    head: Option[NodeShared],
 }
 
 impl Drop for CircularListShared {
@@ -231,7 +231,7 @@ fn insert_rec(head: Option[NodeRec], insert_val: i64) -> NodeRec {
 
 // The list the harness drives: the given node.
 struct CircularListRec {
-    mut head: Option[NodeRec],
+    head: Option[NodeRec],
 }
 
 impl Drop for CircularListRec {
@@ -315,7 +315,7 @@ fn insert_vec(ring: mut ref Vec[i64], insert_val: i64) {
 
 // The list the harness drives.
 struct CircularListVec {
-    mut ring: Vec[i64],
+    ring: Vec[i64],
 }
 
 impl CircularListVec {

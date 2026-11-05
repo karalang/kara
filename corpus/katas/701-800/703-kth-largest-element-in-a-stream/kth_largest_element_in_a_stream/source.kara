@@ -8,7 +8,7 @@
 
 struct KthLargest {
     k: i64,
-    mut top: PriorityQueue[i64],
+    top: PriorityQueue[i64],
 }
 
 impl KthLargest {

@@ -1,6 +1,6 @@
 
 shared struct Node { mut val: i64, mut next: Option[Node] }
-struct H { mut head: Option[Node] }
+struct H { head: Option[Node] }
 impl H {
     fn advance(mut ref self) {
         match self.head { None => {} Some(n) => { self.head = n.next; } }

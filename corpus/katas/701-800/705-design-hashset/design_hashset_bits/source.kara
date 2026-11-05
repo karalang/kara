@@ -7,7 +7,7 @@
 // there are.
 
 struct MyHashSet {
-    mut words: Vec[u64],
+    words: Vec[u64],
 }
 
 impl MyHashSet {

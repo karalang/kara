@@ -33,9 +33,9 @@
 
 struct Zigzag {
     lists: Vec[Vec[i64]],
-    mut cursor: Vec[i64],
-    mut turn: i64,
-    mut remaining: i64,
+    cursor: Vec[i64],
+    turn: i64,
+    remaining: i64,
 }
 
 fn make_zigzag(lists: own Vec[Vec[i64]]) -> Zigzag {
@@ -93,9 +93,9 @@ fn drain_cursor(lists: own Vec[Vec[i64]]) -> Vec[i64] {
 
 struct QZigzag {
     lists: Vec[Vec[i64]],
-    mut cursor: Vec[i64],
-    mut queue: Vec[i64],      // list indices with elements left, in turn order
-    mut head: i64,            // read cursor into `queue`
+    cursor: Vec[i64],
+    queue: Vec[i64],      // list indices with elements left, in turn order
+    head: i64,            // read cursor into `queue`
 }
 
 fn make_qzigzag(lists: own Vec[Vec[i64]]) -> QZigzag {

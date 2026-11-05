@@ -11,8 +11,8 @@
 // the accumulated getMin/top values over the whole op stream.
 
 struct MinStack {
-    mut data: Vec[i64],
-    mut mins: Vec[i64],
+    data: Vec[i64],
+    mins: Vec[i64],
 }
 
 fn ms_new() -> MinStack {

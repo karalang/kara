@@ -16,8 +16,8 @@
 
 struct Vector2D {
     data: Vec[Vec[i64]],
-    mut row: i64,
-    mut col: i64,
+    row: i64,
+    col: i64,
 }
 
 fn v_new(data: own Vec[Vec[i64]]) -> Vector2D {

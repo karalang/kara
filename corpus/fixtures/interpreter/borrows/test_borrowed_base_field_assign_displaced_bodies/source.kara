@@ -5,8 +5,8 @@ println(f"dS{self.id}")
 }
 }
 fn mks(i: i64) -> Rs { return Rs { id: i, name: f"h{i}" }; }
-struct Bs { mut one: Rs }
-struct Outer { mut inner: Bs }
+struct Bs { one: Rs }
+struct Outer { inner: Bs }
 impl Bs {
 fn set(mut ref self, r: Rs) { self.one = r; }
 fn set_lit(mut ref self) { self.one = mks(9); }

@@ -1,5 +1,5 @@
 
-struct Leaf { mut n: i64 }
+struct Leaf { n: i64 }
 struct Mid { leaf: Leaf }
 fn main() {
     let mut m = Mid { leaf: Leaf { n: 1 } };

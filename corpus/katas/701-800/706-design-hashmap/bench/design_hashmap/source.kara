@@ -7,7 +7,7 @@
 // read is folded into a checksum. Five rounds.
 
 struct MyHashMap {
-    mut buckets: Vec[Vec[(i64, i64)]],
+    buckets: Vec[Vec[(i64, i64)]],
 }
 
 impl MyHashMap {

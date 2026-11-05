@@ -36,8 +36,8 @@ fn deleted(list: List, index: i64) -> List {
 }
 
 struct MyLinkedList {
-    mut items: List,
-    mut size: i64,
+    items: List,
+    size: i64,
 }
 
 impl MyLinkedList {

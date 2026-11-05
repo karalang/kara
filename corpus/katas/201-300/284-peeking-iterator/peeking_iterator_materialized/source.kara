@@ -23,8 +23,8 @@
 
 struct Source {
     data: Vec[i64],
-    mut pos: i64,
-    mut pulls: i64,
+    pos: i64,
+    pulls: i64,
 }
 
 fn src_has_next(s: ref Source) -> bool {
@@ -39,9 +39,9 @@ fn src_next(s: mut ref Source) -> i64 {
 }
 
 struct Peeking {
-    mut src: Source,
-    mut all: Vec[i64],
-    mut pos: i64,
+    src: Source,
+    all: Vec[i64],
+    pos: i64,
 }
 
 fn make_peeking(data: own Vec[i64]) -> Peeking {

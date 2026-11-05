@@ -21,9 +21,9 @@
 
 struct QZigzag {
     lists: Vec[Vec[i64]],
-    mut cursor: Vec[i64],
-    mut queue: Vec[i64],      // list indices with elements left, in turn order
-    mut head: i64,            // read cursor into `queue`
+    cursor: Vec[i64],
+    queue: Vec[i64],      // list indices with elements left, in turn order
+    head: i64,            // read cursor into `queue`
 }
 
 fn make_zigzag(lists: own Vec[Vec[i64]]) -> QZigzag {

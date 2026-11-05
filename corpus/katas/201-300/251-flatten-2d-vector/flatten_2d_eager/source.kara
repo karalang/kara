@@ -17,7 +17,7 @@
 
 struct Vector2D {
     flat: Vec[i64],
-    mut pos: i64,
+    pos: i64,
 }
 
 fn v_new(data: Vec[Vec[i64]]) -> Vector2D {

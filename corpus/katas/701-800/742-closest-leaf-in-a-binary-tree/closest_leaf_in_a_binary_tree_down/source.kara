@@ -9,8 +9,8 @@
 
 struct Node {
     val: i64,
-    mut left: i64,
-    mut right: i64,
+    left: i64,
+    right: i64,
 }
 
 // The nearest leaf below node i, as (distance, value), for every node.

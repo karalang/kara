@@ -7,7 +7,7 @@
 // last. 1,009 buckets (a prime) keep them short for 10,000 keys.
 
 struct MyHashMap {
-    mut buckets: Vec[Vec[(i64, i64)]],
+    buckets: Vec[Vec[(i64, i64)]],
 }
 
 impl MyHashMap {

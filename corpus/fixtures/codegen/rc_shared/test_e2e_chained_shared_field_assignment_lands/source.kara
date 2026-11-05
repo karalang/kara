@@ -4,9 +4,9 @@ shared struct Outer { mut inner: Inner, mut tag: i64 }
 shared struct L3 { mut n: i64 }
 shared struct L2 { mut c: L3 }
 shared struct L1 { mut b: L2 }
-struct PlainMid { mut inner: Inner }
-struct PlainInner { mut n: i64 }
-struct PlainNest { mut mid: PlainInner }
+struct PlainMid { inner: Inner }
+struct PlainInner { n: i64 }
+struct PlainNest { mid: PlainInner }
 
 impl Outer {
     fn bump(ref self, k: i64) { self.inner.n = k; }

@@ -5,7 +5,7 @@
 // ---- star arm -------------------------------------------------------
 
 struct MapChained {
-    mut buckets: Vec[Vec[(i64, i64)]],
+    buckets: Vec[Vec[(i64, i64)]],
 }
 
 impl MapChained {
@@ -51,7 +51,7 @@ impl MapChained {
 // ---- paged arm ------------------------------------------------------
 
 struct MapPaged {
-    mut pages: Vec[Vec[i64]],
+    pages: Vec[Vec[i64]],
 }
 
 impl MapPaged {
@@ -90,9 +90,9 @@ impl MapPaged {
 // ---- probing arm ----------------------------------------------------
 
 struct MapProbing {
-    mut keys: Vec[i64],
-    mut values: Vec[i64],
-    mut used: i64,
+    keys: Vec[i64],
+    values: Vec[i64],
+    used: i64,
 }
 
 // A slot never held a key, and a slot whose key was removed.
@@ -167,7 +167,7 @@ impl MapProbing {
 // ---- stdlib arm -----------------------------------------------------
 
 struct MapStd {
-    mut entries: Map[i64, i64],
+    entries: Map[i64, i64],
 }
 
 impl MapStd {

@@ -37,7 +37,7 @@
 // ---------------------------------------------------------------- arm A
 
 struct Heap {
-    mut data: Vec[i64],
+    data: Vec[i64],
     max: bool,
 }
 
@@ -115,8 +115,8 @@ fn heap_pop(h: mut ref Heap) -> i64 {
 }
 
 struct MedianFinder {
-    mut lo: Heap,
-    mut hi: Heap,
+    lo: Heap,
+    hi: Heap,
 }
 
 fn mf_new() -> MedianFinder {
@@ -143,7 +143,7 @@ fn mf_median(m: ref MedianFinder) -> f64 {
 // ---------------------------------------------------------------- arm B
 
 struct SortedStream {
-    mut data: Vec[i64],
+    data: Vec[i64],
 }
 
 fn ss_new() -> SortedStream {
@@ -180,8 +180,8 @@ fn ss_median(s: ref SortedStream) -> f64 {
 // ---------------------------------------------------------------- arm C
 
 struct CountingStream {
-    mut counts: SortedMap[i64, i64],
-    mut total: i64,
+    counts: SortedMap[i64, i64],
+    total: i64,
 }
 
 fn cs_new() -> CountingStream {
@@ -232,8 +232,8 @@ fn cs_median(c: ref CountingStream) -> f64 {
 // expressible at all.
 
 struct StdFinder {
-    mut lo: PriorityQueue[i64],
-    mut hi: PriorityQueue[i64],
+    lo: PriorityQueue[i64],
+    hi: PriorityQueue[i64],
 }
 
 fn sf_new() -> StdFinder {

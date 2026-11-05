@@ -4,7 +4,7 @@ shared struct Node {
 }
 
 struct Holder {
-    mut ns: Vec[Node],
+    ns: Vec[Node],
 }
 
 fn set(nodes: Vec[Node]) {

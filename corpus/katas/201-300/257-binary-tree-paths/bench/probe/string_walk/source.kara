@@ -19,8 +19,8 @@
 
 struct Node {
     val: i64,
-    mut left: i64,
-    mut right: i64,
+    left: i64,
+    right: i64,
 }
 
 // A pure left spine: depth n, exactly ONE leaf. This is the shape the two

@@ -6,7 +6,7 @@ impl Drop for R {
 fn mk(i: i64) -> R { return R { id: i, name: f"h{i}", inner: Inner { v: i } }; }
 struct P { id: i64, name: String }
 fn mkp(i: i64) -> P { return P { id: i, name: f"p{i}" }; }
-struct Box2 { mut xs: Vec[R] }
+struct Box2 { xs: Vec[R] }
 impl Box2 {
     fn before(mut ref self, r: R, k: bool) { println(f"s{r.inner.v}"); if k { self.xs.push(r); } }
     fn trailing(mut ref self, r: R, k: bool) { if k { self.xs.push(r); } println("x"); }

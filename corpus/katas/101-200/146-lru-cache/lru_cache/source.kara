@@ -12,10 +12,10 @@
 // pool owns every node — while keeping every list operation O(1).
 
 struct DNode {
-    mut key: i64,
-    mut val: i64,
-    mut prev: i64,
-    mut next: i64,
+    key: i64,
+    val: i64,
+    prev: i64,
+    next: i64,
 }
 
 // Detach node `i` from the list: splice its neighbours together.

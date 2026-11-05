@@ -11,7 +11,7 @@ shared struct LNode {
 
 struct ListLinked {
     head: LNode,
-    mut size: i64,
+    size: i64,
 }
 
 impl ListLinked {
@@ -65,11 +65,11 @@ impl ListLinked {
 // ---- arena arm ------------------------------------------------------
 
 struct ListArena {
-    mut vals: Vec[i64],
-    mut prev: Vec[i64],
-    mut next: Vec[i64],
-    mut free: Vec[i64],
-    mut size: i64,
+    vals: Vec[i64],
+    prev: Vec[i64],
+    next: Vec[i64],
+    free: Vec[i64],
+    size: i64,
 }
 
 // The two sentinels' slots.
@@ -156,7 +156,7 @@ impl ListArena {
 // ---- vec arm --------------------------------------------------------
 
 struct ListVec {
-    mut vals: Vec[i64],
+    vals: Vec[i64],
 }
 
 impl ListVec {
@@ -224,8 +224,8 @@ fn cells_deleted(list: Cells, index: i64) -> Cells {
 }
 
 struct ListPersistent {
-    mut items: Cells,
-    mut size: i64,
+    items: Cells,
+    size: i64,
 }
 
 impl ListPersistent {

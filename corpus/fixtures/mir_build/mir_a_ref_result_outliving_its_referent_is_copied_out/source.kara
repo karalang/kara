@@ -14,7 +14,7 @@ fn main_a() {
     println(f"{t} {words} {topq()}");
 }
 struct Least {
-    mut top: PriorityQueue[i64],
+    top: PriorityQueue[i64],
 }
 impl Least {
     fn add(mut ref self, val: i64) -> i64 {

@@ -8,8 +8,8 @@
 // tombstones, when keys and tombstones fill half of it.
 
 struct MyHashSet {
-    mut slots: Vec[i64],
-    mut used: i64,
+    slots: Vec[i64],
+    used: i64,
 }
 
 // A slot never held a key, and a slot whose key was removed.

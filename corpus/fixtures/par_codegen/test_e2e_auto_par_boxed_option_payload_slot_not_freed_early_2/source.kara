@@ -1,6 +1,6 @@
 
 #[derive(Clone)]
-struct P { val: i64, mut kids: Vec[i64] }
+struct P { val: i64, kids: Vec[i64] }
 fn get(v: ref Vec[P], k: i64) -> Option[P] {
     let mut i = 0;
     while i < v.len() { if v[i].val == k { return Some(v[i].clone()); } i = i + 1; }

@@ -1,6 +1,6 @@
 
-struct H { mut f: f32 }
-struct G { mut f: f64 }
+struct H { f: f32 }
+struct G { f: f64 }
 
 fn main() {
     let big = 4294967295u32;

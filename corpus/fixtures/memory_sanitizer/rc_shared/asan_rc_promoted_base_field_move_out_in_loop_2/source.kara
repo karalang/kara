@@ -3,8 +3,8 @@ struct S { id: i64, name: String }
 impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}") } }
 fn mks(i: i64) -> S { return S { id: i, name: f"s{i}" }; }
 
-struct Bs { mut one: S, mut two: S }
-struct Ps { mut a: String, mut b: i64 }
+struct Bs { one: S, two: S }
+struct Ps { a: String, b: i64 }
 
 fn c_str() {
     let mut p = Ps { a: "payload", b: 1 };

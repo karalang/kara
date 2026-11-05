@@ -8,7 +8,7 @@
 
 struct ArrayReader {
     secret: Vec[i64],
-    mut reads: i64,
+    reads: i64,
 }
 
 impl ArrayReader {

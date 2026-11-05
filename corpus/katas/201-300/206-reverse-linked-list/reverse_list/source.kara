@@ -10,7 +10,7 @@
 
 struct Node {
     val: i64,
-    mut next: i64,
+    next: i64,
 }
 
 fn build(vals: Slice[i64]) -> Vec[Node] {

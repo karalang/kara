@@ -8,7 +8,7 @@
 // the pages used.
 
 struct MyHashMap {
-    mut pages: Vec[Vec[i64]],
+    pages: Vec[Vec[i64]],
 }
 
 impl MyHashMap {

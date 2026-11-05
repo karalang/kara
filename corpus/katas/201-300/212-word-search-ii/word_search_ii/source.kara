@@ -18,7 +18,7 @@
 
 struct TrieNode {
     children: Map[char, i64],   // next char -> child node index
-    mut is_end: bool,
+    is_end: bool,
 }
 
 fn new_node() -> TrieNode {

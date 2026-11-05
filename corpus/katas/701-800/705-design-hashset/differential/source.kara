@@ -5,7 +5,7 @@
 // ---- star arm -------------------------------------------------------
 
 struct SetChained {
-    mut buckets: Vec[Vec[i64]],
+    buckets: Vec[Vec[i64]],
 }
 
 impl SetChained {
@@ -43,7 +43,7 @@ impl SetChained {
 // ---- bits arm -------------------------------------------------------
 
 struct SetBits {
-    mut words: Vec[u64],
+    words: Vec[u64],
 }
 
 impl SetBits {
@@ -71,8 +71,8 @@ impl SetBits {
 // ---- probing arm ----------------------------------------------------
 
 struct SetProbing {
-    mut slots: Vec[i64],
-    mut used: i64,
+    slots: Vec[i64],
+    used: i64,
 }
 
 // A slot never held a key, and a slot whose key was removed.
@@ -156,7 +156,7 @@ impl SetProbing {
 // ---- stdlib arm -----------------------------------------------------
 
 struct SetStd {
-    mut keys: Set[i64],
+    keys: Set[i64],
 }
 
 impl SetStd {

@@ -10,9 +10,9 @@
 // every visible (rightmost-per-level) node value over all passes.
 
 struct Node {
-    mut val: i64,
-    mut left: i64,
-    mut right: i64,
+    val: i64,
+    left: i64,
+    right: i64,
 }
 
 fn right_view(nodes: ref Vec[Node], root: i64) -> Vec[i64] {

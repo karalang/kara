@@ -3,9 +3,9 @@ struct S { id: i64, name: String }
 impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}") } }
 fn mks(i: i64) -> S { return S { id: i, name: f"s{i}" }; }
 
-struct In { mut r: S, mut q: S }
-struct Ou { mut h: In, mut k: i64 }
-struct Bs { mut one: S, mut two: S }
+struct In { r: S, q: S }
+struct Ou { h: In, k: i64 }
+struct Bs { one: S, two: S }
 
 fn c_deep() {
     let mut o = Ou { h: In { r: mks(1), q: mks(2) }, k: 5 };

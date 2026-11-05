@@ -8,7 +8,7 @@
 
 struct KthLargest {
     k: i64,
-    mut heap: Vec[i64],
+    heap: Vec[i64],
 }
 
 impl KthLargest {

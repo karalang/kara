@@ -1,6 +1,6 @@
 
 shared struct SharedOwner { mut m: Map[i64, Vec[Vec[String]]] }
-struct PlainOwner { mut m: Map[i64, Vec[Vec[String]]] }
+struct PlainOwner { m: Map[i64, Vec[Vec[String]]] }
 fn nested(tag: own String) -> Vec[Vec[String]] {
     let mut inner: Vec[String] = Vec.new();
     inner.push(tag);

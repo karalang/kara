@@ -35,9 +35,9 @@
 
 struct Zigzag {
     lists: Vec[Vec[i64]],
-    mut cursor: Vec[i64],
-    mut turn: i64,
-    mut remaining: i64,
+    cursor: Vec[i64],
+    turn: i64,
+    remaining: i64,
 }
 
 fn make_zigzag(lists: own Vec[Vec[i64]]) -> Zigzag {

@@ -1,6 +1,6 @@
 #[derive(Clone)]
-struct A { mut lines: Vec[String] }
-struct B { mut a: A }
+struct A { lines: Vec[String] }
+struct B { a: A }
 fn main() {
 let mut a1 = A { lines: Vec.new() };
 a1.lines.push(f"x");

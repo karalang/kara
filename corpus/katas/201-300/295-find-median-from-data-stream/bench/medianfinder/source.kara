@@ -21,7 +21,7 @@
 // Mirrors: medianfinder.c / .rs / .py / go-seq/main.go — same algorithm.
 
 struct Heap {
-    mut data: Vec[i64],
+    data: Vec[i64],
     max: bool,
 }
 
@@ -99,8 +99,8 @@ fn heap_pop(h: mut ref Heap) -> i64 {
 }
 
 struct MedianFinder {
-    mut lo: Heap,
-    mut hi: Heap,
+    lo: Heap,
+    hi: Heap,
 }
 
 fn mf_new() -> MedianFinder {

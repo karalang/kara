@@ -18,7 +18,7 @@
 // definition transcribed, so when the heaps and this disagree, this is right.
 
 struct SortedStream {
-    mut data: Vec[i64],
+    data: Vec[i64],
 }
 
 fn ss_new() -> SortedStream {

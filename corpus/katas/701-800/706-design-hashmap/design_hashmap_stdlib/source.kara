@@ -5,7 +5,7 @@
 // shows. O(1) expected for each.
 
 struct MyHashMap {
-    mut entries: Map[i64, i64],
+    entries: Map[i64, i64],
 }
 
 impl MyHashMap {

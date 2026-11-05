@@ -6,7 +6,7 @@
 // memory.
 
 struct MyLinkedList {
-    mut vals: Vec[i64],
+    vals: Vec[i64],
 }
 
 impl MyLinkedList {

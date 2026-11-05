@@ -5,9 +5,9 @@ impl Drop for Rs {
     }
 }
 fn mks(i: i64) -> Rs { return Rs { id: i, name: f"h{i}" }; }
-struct In { mut r: Rs, mut q: Rs }
-struct Ou { mut h: In, mut k: i64 }
-struct Bs { mut one: Rs, mut two: Rs }
+struct In { r: Rs, q: Rs }
+struct Ou { h: In, k: i64 }
+struct Bs { one: Rs, two: Rs }
 fn c_straight() {
     let mut o = Ou { h: In { r: mks(7), q: mks(8) }, k: 5 };
     let x = o.h.r;

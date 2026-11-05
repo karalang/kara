@@ -7,7 +7,7 @@
 struct SolStar {
     bound: i64,
     remap: Map[i64, i64],
-    mut seed: i64,
+    seed: i64,
 }
 
 impl SolStar {
@@ -54,7 +54,7 @@ impl SolStar {
 struct SolRank {
     bound: i64,
     black: Vec[i64],
-    mut seed: i64,
+    seed: i64,
 }
 
 impl SolRank {
@@ -91,7 +91,7 @@ struct SolIntervals {
     bound: i64,
     starts: Vec[i64],
     before: Vec[i64],
-    mut seed: i64,
+    seed: i64,
 }
 
 impl SolIntervals {
@@ -149,7 +149,7 @@ struct SolRemapVec {
     bound: i64,
     from: Vec[i64],
     to: Vec[i64],
-    mut seed: i64,
+    seed: i64,
 }
 
 impl SolRemapVec {

@@ -1,4 +1,4 @@
-struct Bx { mut f: f64 }
+struct Bx { f: f64 }
 fn takef(x: f64) -> bool { x == 200.0 }
 fn retf(v: u8) -> f64 { v }
 impl Bx { fn echo(self, x: f64) -> bool { x == 200.0 } }

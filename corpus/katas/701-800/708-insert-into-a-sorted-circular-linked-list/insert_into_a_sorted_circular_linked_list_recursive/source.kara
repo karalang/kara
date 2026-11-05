@@ -51,7 +51,7 @@ fn insert(head: Option[Node], insert_val: i64) -> Node {
 
 // The list the harness drives: the given node.
 struct CircularList {
-    mut head: Option[Node],
+    head: Option[Node],
 }
 
 impl Drop for CircularList {

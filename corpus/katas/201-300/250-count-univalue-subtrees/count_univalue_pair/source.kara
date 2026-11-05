@@ -21,8 +21,8 @@
 
 struct Node {
     val: i64,
-    mut left: i64,
-    mut right: i64,
+    left: i64,
+    right: i64,
 }
 
 // Build the index-pool tree from a level-order array (`null_val` marks absent

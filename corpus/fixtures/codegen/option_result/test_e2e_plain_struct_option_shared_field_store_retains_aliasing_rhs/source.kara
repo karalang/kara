@@ -1,6 +1,6 @@
 
 shared struct Node { mut val: i64, mut next: Option[Node] }
-struct H { mut head: Option[Node] }
+struct H { head: Option[Node] }
 fn main() {
     let mut h = H { head: None };
     let a = Node { val: 1, next: None };

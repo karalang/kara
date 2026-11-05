@@ -27,8 +27,8 @@
 // share it — it is the definition applied to counts rather than to positions.
 
 struct CountingStream {
-    mut counts: SortedMap[i64, i64],
-    mut total: i64,
+    counts: SortedMap[i64, i64],
+    total: i64,
 }
 
 fn cs_new() -> CountingStream {
