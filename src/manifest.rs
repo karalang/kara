@@ -1173,6 +1173,31 @@ fn parse_profile_table(
                     });
                 }
             },
+            // `[profile.release]` is the release build profile, read by
+            // `parse_release_table`.
+            "release" => {}
+            // `[profile.dev]`: the ordinary build profile (design.md § Build
+            // profiles). None of its keys is implemented yet; each one
+            // soft-warns under its own name.
+            "dev" => match val.as_table() {
+                Some(dev) => {
+                    for key in dev.keys() {
+                        warnings.push(ManifestWarning {
+                            line: None,
+                            message: format!(
+                                "unknown key `[profile.dev].{key}` — ignored in 0.8 (reserved for a later release)"
+                            ),
+                        });
+                    }
+                }
+                None => {
+                    return Err(ManifestError::InvalidFieldType {
+                        path: path.to_path_buf(),
+                        key: "profile.dev".to_string(),
+                        expected: "a table (e.g. `[profile.dev]`)",
+                    });
+                }
+            },
             // Unknown keys soft-warn (reserved for later `[profile]` knobs) —
             // same drop-on-the-floor discipline as `[wasm]` / `[release]`.
             other => warnings.push(ManifestWarning {
@@ -1370,21 +1395,68 @@ fn parse_link_string_array(
 /// cpu-baseline)` — each `None` when its key is absent.
 type ReleaseTableConfig = (Option<String>, Option<String>, Option<String>);
 
+///
+/// design.md § Build profiles and § CPU Baseline Targeting spell the table
+/// `[profile.release]` (B-2026-11-05-12: it was ignored as an unknown
+/// `[profile]` key). The bare `[release]` spelling, which came first, is
+/// still read, with a warning naming the new one; a key set in
+/// `[profile.release]` wins.
 fn parse_release_table(
     path: &Path,
     table: &toml::Table,
     warnings: &mut Vec<ManifestWarning>,
 ) -> Result<ReleaseTableConfig, ManifestError> {
-    let Some(value) = table.get("release") else {
-        return Ok((None, None, None));
+    let legacy = match table.get("release") {
+        Some(value) => {
+            let t = value
+                .as_table()
+                .ok_or_else(|| ManifestError::InvalidFieldType {
+                    path: path.to_path_buf(),
+                    key: "release".to_string(),
+                    expected: "a table (e.g. `[profile.release]`)",
+                })?;
+            warnings.push(ManifestWarning {
+                line: None,
+                message: "`[release]` is spelled `[profile.release]`; the old spelling is \
+                          still read, and a key in `[profile.release]` wins"
+                    .to_string(),
+            });
+            parse_release_keys(path, t, "release", warnings)?
+        }
+        None => (None, None, None),
     };
-    let release_table = value
-        .as_table()
-        .ok_or_else(|| ManifestError::InvalidFieldType {
-            path: path.to_path_buf(),
-            key: "release".to_string(),
-            expected: "a table (e.g. `[release]`)",
-        })?;
+    let current = match table
+        .get("profile")
+        .and_then(|p| p.as_table())
+        .and_then(|p| p.get("release"))
+    {
+        Some(value) => {
+            let t = value
+                .as_table()
+                .ok_or_else(|| ManifestError::InvalidFieldType {
+                    path: path.to_path_buf(),
+                    key: "profile.release".to_string(),
+                    expected: "a table (e.g. `[profile.release]`)",
+                })?;
+            parse_release_keys(path, t, "profile.release", warnings)?
+        }
+        None => (None, None, None),
+    };
+    Ok((
+        current.0.or(legacy.0),
+        current.1.or(legacy.1),
+        current.2.or(legacy.2),
+    ))
+}
+
+/// The keys of one release table, `[profile.release]` or the older
+/// `[release]`; `prefix` names it in diagnostics.
+fn parse_release_keys(
+    path: &Path,
+    release_table: &toml::Table,
+    prefix: &str,
+    warnings: &mut Vec<ManifestWarning>,
+) -> Result<ReleaseTableConfig, ManifestError> {
     let mut target_cpu = None;
     let mut target_features = None;
     let mut cpu_baseline = None;
@@ -1397,7 +1469,7 @@ fn parse_release_table(
                 _ => {
                     return Err(ManifestError::InvalidFieldType {
                         path: path.to_path_buf(),
-                        key: "release.cpu-baseline".to_string(),
+                        key: format!("{prefix}.cpu-baseline"),
                         expected: "one of the strings \"v1\", \"v2\", \"v3\", \"v4\"",
                     });
                 }
@@ -1409,7 +1481,7 @@ fn parse_release_table(
                 _ => {
                     return Err(ManifestError::InvalidFieldType {
                         path: path.to_path_buf(),
-                        key: "release.target-cpu".to_string(),
+                        key: format!("{prefix}.target-cpu"),
                         expected: "a non-empty CPU name string (e.g. \"apple-m1\", \"x86-64-v3\")",
                     });
                 }
@@ -1421,7 +1493,7 @@ fn parse_release_table(
                 _ => {
                     return Err(ManifestError::InvalidFieldType {
                         path: path.to_path_buf(),
-                        key: "release.target-features".to_string(),
+                        key: format!("{prefix}.target-features"),
                         expected:
                             "a non-empty feature list string (e.g. \"+aes,-outline-atomics\")",
                     });
@@ -1430,7 +1502,7 @@ fn parse_release_table(
             other => warnings.push(ManifestWarning {
                 line: None,
                 message: format!(
-                    "unknown key `[release].{other}` — ignored in 0.8 (reserved for a later release)"
+                    "unknown key `[{prefix}].{other}` — ignored in 0.8 (reserved for a later release)"
                 ),
             }),
         }
@@ -4056,7 +4128,7 @@ targets = ["native", 42]
         let src = r#"[package]
 name = "hello"
 
-[release]
+[profile.release]
 target-cpu = "apple-m4"
 "#;
         let m = parse_manifest(&p(), src).unwrap();
@@ -4071,8 +4143,8 @@ name = "hello"
 "#;
         let m = parse_manifest(&p(), src).unwrap();
         assert!(m.release_target_cpu.is_none());
-        // An empty [release] table is also fine.
-        let src = "[package]\nname = \"hello\"\n\n[release]\n";
+        // An empty [profile.release] table is also fine.
+        let src = "[package]\nname = \"hello\"\n\n[profile.release]\n";
         let m = parse_manifest(&p(), src).unwrap();
         assert!(m.release_target_cpu.is_none());
     }
@@ -4082,13 +4154,13 @@ name = "hello"
         // A typo'd value must not silently drop the override — same
         // posture as `[build].targets`.
         for src in [
-            "[package]\nname = \"hello\"\n\n[release]\ntarget-cpu = 42\n",
-            "[package]\nname = \"hello\"\n\n[release]\ntarget-cpu = \"\"\n",
+            "[package]\nname = \"hello\"\n\n[profile.release]\ntarget-cpu = 42\n",
+            "[package]\nname = \"hello\"\n\n[profile.release]\ntarget-cpu = \"\"\n",
         ] {
             let err = parse_manifest(&p(), src).unwrap_err();
             match err {
                 ManifestError::InvalidFieldType { key, .. } => {
-                    assert_eq!(key, "release.target-cpu")
+                    assert_eq!(key, "profile.release.target-cpu")
                 }
                 other => panic!("expected InvalidFieldType on `release.target-cpu`, got {other:?}"),
             }
@@ -4098,8 +4170,9 @@ name = "hello"
     #[test]
     fn release_cpu_baseline_parses() {
         for lvl in ["v1", "v2", "v3", "v4"] {
-            let src =
-                format!("[package]\nname = \"hello\"\n\n[release]\ncpu-baseline = \"{lvl}\"\n");
+            let src = format!(
+                "[package]\nname = \"hello\"\n\n[profile.release]\ncpu-baseline = \"{lvl}\"\n"
+            );
             let m = parse_manifest(&p(), &src).unwrap();
             assert_eq!(m.release_cpu_baseline.as_deref(), Some(lvl));
             assert!(m.warnings.is_empty(), "level {lvl} warned unexpectedly");
@@ -4114,14 +4187,14 @@ name = "hello"
         // Outside the closed v1..v4 set (or wrong type) must hard-error, not
         // silently drop the baseline — same posture as `target-cpu`.
         for src in [
-            "[package]\nname = \"hello\"\n\n[release]\ncpu-baseline = \"v5\"\n",
-            "[package]\nname = \"hello\"\n\n[release]\ncpu-baseline = \"x86-64-v3\"\n",
-            "[package]\nname = \"hello\"\n\n[release]\ncpu-baseline = 3\n",
+            "[package]\nname = \"hello\"\n\n[profile.release]\ncpu-baseline = \"v5\"\n",
+            "[package]\nname = \"hello\"\n\n[profile.release]\ncpu-baseline = \"x86-64-v3\"\n",
+            "[package]\nname = \"hello\"\n\n[profile.release]\ncpu-baseline = 3\n",
         ] {
             let err = parse_manifest(&p(), src).unwrap_err();
             match err {
                 ManifestError::InvalidFieldType { key, .. } => {
-                    assert_eq!(key, "release.cpu-baseline")
+                    assert_eq!(key, "profile.release.cpu-baseline")
                 }
                 other => {
                     panic!("expected InvalidFieldType on `release.cpu-baseline`, got {other:?}")
@@ -4170,7 +4243,7 @@ name = "hello"
         let src = r#"[package]
 name = "hello"
 
-[release]
+[profile.release]
 target-cpu = "x86-64-v3"
 lto = "fat"
 "#;
@@ -4179,7 +4252,7 @@ lto = "fat"
         assert!(
             m.warnings
                 .iter()
-                .any(|w| w.message.contains("unknown key `[release].lto`")),
+                .any(|w| w.message.contains("unknown key `[profile.release].lto`")),
             "expected a soft warning for the unknown key, got: {:?}",
             m.warnings,
         );
@@ -4190,7 +4263,7 @@ lto = "fat"
         let src = r#"[package]
 name = "hello"
 
-[release]
+[profile.release]
 target-cpu = "apple-m4"
 target-features = "+aes,-outline-atomics"
 "#;
@@ -4202,7 +4275,7 @@ target-features = "+aes,-outline-atomics"
         );
         assert!(m.warnings.is_empty());
         // Absent key → None (independent of target-cpu's presence).
-        let src = "[package]\nname = \"hello\"\n\n[release]\ntarget-cpu = \"apple-m4\"\n";
+        let src = "[package]\nname = \"hello\"\n\n[profile.release]\ntarget-cpu = \"apple-m4\"\n";
         let m = parse_manifest(&p(), src).unwrap();
         assert!(m.release_target_features.is_none());
     }
@@ -4210,13 +4283,13 @@ target-features = "+aes,-outline-atomics"
     #[test]
     fn release_target_features_wrong_type_is_hard_error() {
         for src in [
-            "[package]\nname = \"hello\"\n\n[release]\ntarget-features = 42\n",
-            "[package]\nname = \"hello\"\n\n[release]\ntarget-features = \"\"\n",
+            "[package]\nname = \"hello\"\n\n[profile.release]\ntarget-features = 42\n",
+            "[package]\nname = \"hello\"\n\n[profile.release]\ntarget-features = \"\"\n",
         ] {
             let err = parse_manifest(&p(), src).unwrap_err();
             match err {
                 ManifestError::InvalidFieldType { key, .. } => {
-                    assert_eq!(key, "release.target-features")
+                    assert_eq!(key, "profile.release.target-features")
                 }
                 other => {
                     panic!("expected InvalidFieldType on `release.target-features`, got {other:?}")
@@ -4225,6 +4298,67 @@ target-features = "+aes,-outline-atomics"
         }
     }
 
+    // B-2026-11-05-12: `[profile.release]` is the spec's spelling; the bare
+    // `[release]` that came first is still read, with a warning.
+    #[test]
+    fn legacy_release_table_is_read_with_a_warning() {
+        let src = "[package]\nname = \"hello\"\n\n[release]\ntarget-cpu = \"apple-m4\"\n";
+        let m = parse_manifest(&p(), src).unwrap();
+        assert_eq!(m.release_target_cpu.as_deref(), Some("apple-m4"));
+        assert!(
+            m.warnings
+                .iter()
+                .any(|w| w.message.contains("is spelled `[profile.release]`")),
+            "{:?}",
+            m.warnings
+        );
+    }
+
+    #[test]
+    fn profile_release_wins_over_the_legacy_table_per_key() {
+        let src = r#"[package]
+name = "hello"
+
+[release]
+target-cpu = "old-cpu"
+target-features = "+old"
+
+[profile.release]
+target-cpu = "new-cpu"
+"#;
+        let m = parse_manifest(&p(), src).unwrap();
+        assert_eq!(m.release_target_cpu.as_deref(), Some("new-cpu"));
+        assert_eq!(m.release_target_features.as_deref(), Some("+old"));
+    }
+
+    #[test]
+    fn profile_release_sits_beside_profile_knobs() {
+        let src = r#"[package]
+name = "hello"
+
+[profile]
+panic = "abort"
+
+[profile.release]
+target-cpu = "apple-m4"
+"#;
+        let m = parse_manifest(&p(), src).unwrap();
+        assert_eq!(m.release_target_cpu.as_deref(), Some("apple-m4"));
+        assert!(m.warnings.is_empty(), "{:?}", m.warnings);
+    }
+
+    #[test]
+    fn profile_dev_keys_soft_warn_by_name() {
+        let src = "[package]\nname = \"hello\"\n\n[profile.dev]\nruntime_debug_metadata = true\n";
+        let m = parse_manifest(&p(), src).unwrap();
+        assert!(
+            m.warnings.iter().any(|w| w
+                .message
+                .contains("unknown key `[profile.dev].runtime_debug_metadata`")),
+            "{:?}",
+            m.warnings
+        );
+    }
     #[test]
     fn toolchain_wasm_tools_parses() {
         let src = r#"[package]

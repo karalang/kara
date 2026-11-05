@@ -842,8 +842,8 @@ fn selfhost_lexer_matches_rust_lexer() {
         .output()
         .expect("spawn karac build");
     let berr = String::from_utf8_lossy(&build.stderr);
-    // A package builds into `dist/` (710e7be317).
-    let bin = tmp.join("dist").join("lex");
+    // A package builds into `dist/native/` (710e7be317, B-2026-11-05-12).
+    let bin = tmp.join("dist/native").join("lex");
 
     if !bin.exists() {
         // A real COMPILE failure (typecheck / codegen / parse / verifier) is a

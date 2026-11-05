@@ -470,8 +470,8 @@ fn build_and_run_driver(tag: &str, driver: &str) -> Option<Vec<String>> {
         .output()
         .expect("spawn karac build");
     let berr = String::from_utf8_lossy(&build.stderr);
-    // A package builds into `dist/` (710e7be317).
-    let bin = tmp.join("dist").join("tc");
+    // A package builds into `dist/native/` (710e7be317, B-2026-11-05-12).
+    let bin = tmp.join("dist/native").join("tc");
 
     if !bin.exists() {
         let compiler_crashed = berr.contains("panicked at") || build.status.code().is_none();

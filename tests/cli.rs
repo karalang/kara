@@ -5819,9 +5819,10 @@ fn project_check_honours_the_singular_target_flag() {
         "the wasm check must walk host_wasm.kara, losing `shared_only`: {wasm_all}"
     );
 
-    // The plural spelling sweeps every v1 target. This package fails under
-    // both wasm targets for the reason above, so the sweep must run all four,
-    // fail, and name which ones — not answer with a single verdict.
+    // The plural spelling sweeps the v1 set (native, wasm_wasi), plus any
+    // target an item is gated on; nothing here is gated. This package fails
+    // under wasm for the reason above, so the sweep must run both, fail, and
+    // name which one, not answer with a single verdict.
     let plural = karac_bin()
         .current_dir(&tmp)
         .args(["check", "--targets=all"])
@@ -5831,10 +5832,16 @@ fn project_check_honours_the_singular_target_flag() {
     let plural_out = String::from_utf8_lossy(&plural.stdout).into_owned();
     let plural_all = format!("{plural_out}{}", String::from_utf8_lossy(&plural.stderr));
     assert!(!plural.status.success(), "the wasm legs fail: {plural_all}");
-    for target in ["native", "wasm_browser", "wasm_wasi", "gpu"] {
+    for target in ["native", "wasm_wasi"] {
         assert!(
             plural_out.contains(&format!("── target: {target} ──")),
             "every target gets a block; missing {target} in: {plural_out}"
+        );
+    }
+    for target in ["wasm_browser", "gpu"] {
+        assert!(
+            !plural_out.contains(&format!("── target: {target} ──")),
+            "{target} is outside the v1 set: {plural_out}"
         );
     }
     assert!(
@@ -6812,7 +6819,7 @@ fn test_build_project_codegen_two_files_runs() {
         "expected `Built: ...` line; stdout={stdout}",
     );
 
-    let exe_path = tmp.join("dist/two_file_demo");
+    let exe_path = tmp.join("dist/native/two_file_demo");
     let run = common::output_with_hang_watchdog(
         std::process::Command::new(&exe_path),
         std::time::Duration::from_secs(15),
@@ -6884,7 +6891,7 @@ fn test_build_generic_struct_reconstruct_heap_field_no_double_free_at_o0() {
         String::from_utf8_lossy(&out.stdout),
     );
 
-    let exe_path = tmp.join("dist/swap_demo");
+    let exe_path = tmp.join("dist/native/swap_demo");
     let run = common::output_with_hang_watchdog(
         std::process::Command::new(&exe_path),
         std::time::Duration::from_secs(15),
@@ -6944,7 +6951,7 @@ fn test_build_fn_align_lever_is_behaviour_neutral() {
         String::from_utf8_lossy(&out.stdout),
     );
 
-    let exe_path = tmp.join("dist/align_demo");
+    let exe_path = tmp.join("dist/native/align_demo");
     let run = common::output_with_hang_watchdog(
         std::process::Command::new(&exe_path),
         std::time::Duration::from_secs(15),
@@ -7001,7 +7008,7 @@ fn test_build_llvm_args_lever_reaches_the_backend() {
         String::from_utf8_lossy(&out.stderr),
     );
 
-    let exe_path = tmp.join("dist/llvmargs_demo");
+    let exe_path = tmp.join("dist/native/llvmargs_demo");
     let run = common::output_with_hang_watchdog(
         std::process::Command::new(&exe_path),
         std::time::Duration::from_secs(15),
@@ -7073,7 +7080,7 @@ fn test_build_project_codegen_three_module_chain_runs() {
         String::from_utf8_lossy(&out.stderr),
     );
 
-    let exe_path = tmp.join("dist/chain_demo");
+    let exe_path = tmp.join("dist/native/chain_demo");
     let run = common::output_with_hang_watchdog(
         std::process::Command::new(&exe_path),
         std::time::Duration::from_secs(15),
@@ -7128,7 +7135,7 @@ fn test_build_project_codegen_cross_module_collision_resolves_to_both_items() {
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr),
     );
-    let exe = tmp.join("dist/collide_demo");
+    let exe = tmp.join("dist/native/collide_demo");
     let ran = exe.exists().then(|| Command::new(&exe).output().unwrap());
     let _ = std::fs::remove_dir_all(&tmp);
     let Some(run) = ran else {
@@ -7236,7 +7243,7 @@ fn test_build_project_codegen_providers_as_module_name() {
         String::from_utf8_lossy(&out.stderr),
     );
 
-    let exe_path = tmp.join("dist/providers_module");
+    let exe_path = tmp.join("dist/native/providers_module");
     let run = common::output_with_hang_watchdog(
         std::process::Command::new(&exe_path),
         std::time::Duration::from_secs(15),
@@ -7268,7 +7275,7 @@ fn test_build_project_codegen_manifest_name_becomes_binary_name() {
         String::from_utf8_lossy(&out.stderr),
     );
 
-    let exe_path = tmp.join("dist/my_renamed_app");
+    let exe_path = tmp.join("dist/native/my_renamed_app");
     let exe_exists = exe_path.exists();
     let run = common::output_with_hang_watchdog(
         std::process::Command::new(&exe_path),
@@ -22527,7 +22534,7 @@ fn bindings_component_paired_spelling_removed() {
 //
 // CPU baseline override (design.md § CPU Baseline Targeting).
 // Precedence: `--target-cpu` flag > `KARAC_TARGET_CPU` env >
-// `[release] target-cpu` in kara.toml > the per-target default table.
+// `[profile.release] target-cpu` in kara.toml > the per-target default table.
 // Validation is per-active-target against LLVM's CPU registry; an
 // unknown name is a hard error carrying the supported listing (LLVM's
 // native behavior — warn and silently fall back to generic — is
@@ -22568,9 +22575,15 @@ fn target_cpu_help_lists_cpus() {
         return;
     }
     assert!(out.status.success(), "help listing must exit 0: {stderr}");
+    // A listing the user asked for goes to stdout (B-2026-11-05-12).
+    let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        stderr.contains("Available CPUs for this target:") && stderr.contains("generic"),
-        "expected LLVM's CPU table on stderr, got: {stderr}",
+        stdout.contains("Available CPUs for this target:") && stdout.contains("generic"),
+        "expected LLVM's CPU table on stdout, got: {stdout}\nstderr: {stderr}",
+    );
+    assert!(
+        !stderr.contains("Available CPUs"),
+        "listed on stderr too: {stderr}"
     );
 
     // No-file form, from a directory with no kara.toml anywhere
@@ -22581,10 +22594,10 @@ fn target_cpu_help_lists_cpus() {
         .current_dir(&tmp)
         .output()
         .unwrap();
-    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        out.status.success() && stderr.contains("Available CPUs for this target:"),
-        "no-file help form must list project-lessly, got: {stderr}",
+        out.status.success() && stdout.contains("Available CPUs for this target:"),
+        "no-file help form must list project-lessly, got: {stdout}",
     );
     let _ = std::fs::remove_dir_all(&tmp);
 }
@@ -22615,9 +22628,10 @@ fn target_cpu_help_is_per_target() {
         return;
     }
     assert!(out.status.success(), "help listing must exit 0: {stderr}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        stderr.contains("mvp") && !stderr.contains("apple-m1"),
-        "expected the wasm32 CPU table, got: {stderr}",
+        stdout.contains("mvp") && !stdout.contains("apple-m1"),
+        "expected the wasm32 CPU table, got: {stdout}",
     );
     let _ = std::fs::remove_dir_all(&tmp);
 }
@@ -22777,7 +22791,7 @@ fn target_cpu_cli_flag_beats_env() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-/// `[release] target-cpu` in a discovered manifest is the lowest
+/// `[profile.release] target-cpu` in a discovered manifest is the lowest
 /// override tier: consulted when flag and env are absent (walk-up from
 /// the built file's directory, the `karac run` discovery rule)…
 #[test]
@@ -22785,7 +22799,7 @@ fn target_cpu_manifest_tier_consulted() {
     let tmp = wasm_test_dir("cpumf");
     std::fs::write(
         tmp.join("kara.toml"),
-        "[package]\nname = \"demo\"\n\n[release]\ntarget-cpu = \"manifest-bogus-cpu\"\n",
+        "[package]\nname = \"demo\"\n\n[profile.release]\ntarget-cpu = \"manifest-bogus-cpu\"\n",
     )
     .unwrap();
     let path = tmp.join("p.kara");
@@ -22817,7 +22831,7 @@ fn target_cpu_env_beats_manifest() {
     let tmp = wasm_test_dir("cpumfenv");
     std::fs::write(
         tmp.join("kara.toml"),
-        "[package]\nname = \"demo\"\n\n[release]\ntarget-cpu = \"manifest-bogus-cpu\"\n",
+        "[package]\nname = \"demo\"\n\n[profile.release]\ntarget-cpu = \"manifest-bogus-cpu\"\n",
     )
     .unwrap();
     let path = tmp.join("p.kara");
@@ -22883,7 +22897,7 @@ fn target_cpu_valid_override_builds() {
 //
 // Feature-string sibling of `--target-cpu` (design.md § CPU Baseline
 // Targeting > Feature-string override). Own precedence chain (flag >
-// KARAC_TARGET_FEATURES > `[release] target-features`), token-shape
+// KARAC_TARGET_FEATURES > `[profile.release] target-features`), token-shape
 // validation (`+`/`-` prefixes) plus registry membership — both fail
 // fast before the pipeline, so precedence is observable via distinct
 // bogus values per tier without any runtime archive.
@@ -22907,9 +22921,10 @@ fn target_features_help_lists_features() {
         return;
     }
     assert!(out.status.success(), "help listing must exit 0: {stderr}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        stderr.contains("Available features for this target:"),
-        "expected LLVM's feature table on stderr, got: {stderr}",
+        stdout.contains("Available features for this target:"),
+        "expected LLVM's feature table on stdout, got: {stdout}",
     );
     let _ = std::fs::remove_dir_all(&tmp);
 }
@@ -23035,7 +23050,7 @@ fn target_features_cli_beats_env_and_env_consulted() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-/// `[release] target-features` is the lowest tier (consulted when flag
+/// `[profile.release] target-features` is the lowest tier (consulted when flag
 /// and env are absent), and the env var beats it. Also pins the chains'
 /// independence: a CPU supplied via flag does not suppress the
 /// manifest's feature list.
@@ -23044,7 +23059,7 @@ fn target_features_manifest_tier_and_independence() {
     let tmp = wasm_test_dir("featmf");
     std::fs::write(
         tmp.join("kara.toml"),
-        "[package]\nname = \"demo\"\n\n[release]\ntarget-features = \"+manifest-bogus-feat\"\n",
+        "[package]\nname = \"demo\"\n\n[profile.release]\ntarget-features = \"+manifest-bogus-feat\"\n",
     )
     .unwrap();
     let path = tmp.join("p.kara");
@@ -23119,7 +23134,7 @@ fn target_features_valid_override_builds() {
         let _ = std::fs::remove_dir_all(&tmp);
         return;
     }
-    let feature = stderr
+    let feature = String::from_utf8_lossy(&out.stdout)
         .lines()
         .skip_while(|l| !l.starts_with("Available features"))
         .skip(1)
@@ -23269,7 +23284,7 @@ fn test_xpkg_import_typechecks_and_builds() {
     // identical output (A/B surface).
     #[cfg(feature = "llvm")]
     {
-        let exe = tmp.join("app/dist/app");
+        let exe = tmp.join("app/dist/native/app");
         assert!(exe.is_file(), "executable produced at {}", exe.display());
         let run = std::process::Command::new(&exe).output().unwrap();
         assert_eq!(
@@ -23451,7 +23466,7 @@ fn test_xpkg_transitive_path_dep_resolves() {
     );
     #[cfg(feature = "llvm")]
     {
-        let exe = tmp.join("app/dist/app");
+        let exe = tmp.join("app/dist/native/app");
         let run = std::process::Command::new(&exe).output().unwrap();
         assert_eq!(String::from_utf8_lossy(&run.stdout), "112\n");
     }

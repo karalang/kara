@@ -1809,6 +1809,25 @@ pub fn print_target_cpu_listing() {
     let _ = create_target_machine_with_cpu(Some("help"));
 }
 
+/// `karac build --target-cpu=help` / `--target-features=help`: the
+/// listing on stdout, where a list a user asked for belongs (design.md
+/// § CPU baseline targeting, B-2026-11-05-12). LLVM writes the dump to
+/// stderr in-process, so it is taken from the `__list-target-cpus` child
+/// [`capture_help_listing`] runs; when that yields nothing, the dump goes
+/// to stderr as before.
+pub fn print_target_cpu_help() {
+    match capture_help_listing().filter(|l| l.contains("Available CPUs")) {
+        Some(listing) => {
+            println!(
+                "Supported CPUs and features for target `{}`:",
+                target_label()
+            );
+            print!("{listing}");
+        }
+        None => print_target_cpu_listing(),
+    }
+}
+
 /// Target machine for the wasm targets (`wasm_wasi`, `wasm_browser` —
 /// both wasip1 modules in v1): wasm32 with the WASI preview-1 OS tag —
 /// matches rustc's `wasm32-wasip1` llvm-target and the triple the
@@ -1933,7 +1952,7 @@ fn create_native_target_machine_at(
 /// table mirrors those values so karac-built binaries don't lag what every
 /// other shipping compiler produces.
 ///
-/// Override via `--target-cpu` / `KARAC_TARGET_CPU` / `[release] target-cpu`
+/// Override via `--target-cpu` / `KARAC_TARGET_CPU` / `[profile.release] target-cpu`
 /// in `kara.toml` (precedence in that order) swaps the CPU while keeping
 /// this table's features string — see `create_native_target_machine` and
 /// `cli.rs::apply_target_cpu_override`. The fallback `("generic", "")` is

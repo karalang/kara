@@ -259,8 +259,8 @@ fn selfhost_parser_matches_rust_parser_types() {
         .output()
         .expect("spawn karac build");
     let berr = String::from_utf8_lossy(&build.stderr);
-    // A package builds into `dist/` (710e7be317).
-    let bin = tmp.join("dist").join("parse");
+    // A package builds into `dist/native/` (710e7be317, B-2026-11-05-12).
+    let bin = tmp.join("dist/native").join("parse");
 
     if !bin.exists() {
         // A compiler PANIC or signal-kill is a real bug, never a benign skip.

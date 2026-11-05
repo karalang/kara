@@ -243,7 +243,8 @@ USAGE:
 With a file, compiles that file into `<stem>` (`-o` names another path); a
 file of a package with other modules builds the whole package. Without a
 file, builds the package in the current directory from `src/main.kara` into
-`<root>/dist/<package name>`. The program is checked as `karac check` checks it,
+`<root>/dist/native/<package name>` (`dist/wasm/<package name>.wasm` with
+`--target=wasm_wasi`). The program is checked as `karac check` checks it,
 built to MIR and compiled to native code (KARAC_MIR_OPT=0..3 sets the IR
 optimisation level, -O2 by default). The flags marked Not in 0.8 below are
 refused by name. A library package (`src/lib.kara`) has no `main`: its build
@@ -340,7 +341,7 @@ OPTIONS:
                             CPUs for the active target; any other
                             unknown name is a hard error carrying that
                             same listing. Precedence: this flag >
-                            KARAC_TARGET_CPU env var > `[release]
+                            KARAC_TARGET_CPU env var > `[profile.release]
                             target-cpu` in kara.toml > the per-target
                             default baseline (aarch64-darwin: apple-m1,
                             x86_64-linux: x86-64, aarch64-linux:
@@ -358,7 +359,7 @@ OPTIONS:
                             feature for the active target — hard error
                             otherwise. `--target-features=help` lists
                             them. Own precedence chain: this flag >
-                            KARAC_TARGET_FEATURES env var > `[release]
+                            KARAC_TARGET_FEATURES env var > `[profile.release]
                             target-features` in kara.toml > defaults.
                             Composes with --target-cpu. Accepts
                             `--target-features <list>` too. On wasm

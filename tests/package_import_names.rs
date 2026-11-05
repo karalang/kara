@@ -70,7 +70,7 @@ fn checks_and_prints(app: &Path, expected: &str) {
     if LLVM {
         let out = karac(app, &["build"]);
         assert!(out.status.success(), "build failed:\n{}", text(&out.stderr));
-        let run = Command::new(app.join("dist/app")).output().unwrap();
+        let run = Command::new(app.join("dist/native/app")).output().unwrap();
         assert!(run.status.success(), "{}", text(&run.stderr));
         assert_eq!(text(&run.stdout), expected);
     }

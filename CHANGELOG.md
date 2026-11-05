@@ -71,6 +71,30 @@ accepted by 0.8.0 are now refused, each with a fix-it.
   `Counter.bump(mut c)`, and `own` is not written beside `escaping`; `karac
   fix` writes both (B-2026-11-04-69).
 
+### Changed
+
+- **Build output paths follow the spec.** In a package, `karac build` writes
+  `dist/native/<pkg>` and `karac build --target=wasm_wasi` writes
+  `dist/wasm/<pkg>.wasm` (design.md § 16). They were `dist/<pkg>` and
+  `dist/<pkg>.wasm`, so a script that runs the built binary needs the new
+  path. `karac install` takes the binary from the new place
+  (B-2026-11-05-12).
+- **`karac check --targets=all` checks the v1 targets**, native and
+  wasm_wasi, plus any target an item in the file or package is gated on. It
+  also checked wasm_browser and gpu, and gpu refuses any program that
+  prints, so hello world failed it (B-2026-11-05-12).
+- **`[profile.release]` sets the CPU baseline.** Its `target-cpu`,
+  `target-features` and `cpu-baseline` are the manifest rung of each
+  precedence chain (design.md § Build profiles); the table was ignored as
+  an unknown key. The older `[release]` spelling is still read, with a
+  warning, and a key in `[profile.release]` wins (B-2026-11-05-12).
+- `karac build --target-cpu=help` and `--target-features=help` print their
+  listing on stdout, not stderr (B-2026-11-05-12).
+- `karac check --output=json` on a package with several targets prints one
+  object, each target's own findings tagged with the target and those on
+  every target once under `shared_diagnostics`, as a file check already
+  did. It printed one untagged object per target (B-2026-11-05-12).
+
 ### Added
 
 - **The empty effect clause `with ()` on a function type.** A field or

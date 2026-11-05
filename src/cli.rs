@@ -274,7 +274,7 @@ pub enum Command {
         /// (phase-10; design.md § CPU Baseline Targeting). `None` here
         /// means "flag omitted" — `cmd_build` then consults the
         /// `KARAC_TARGET_CPU` env var, then the discovered manifest's
-        /// `[release] target-cpu`, then the per-target default table in
+        /// `[profile.release] target-cpu`, then the per-target default table in
         /// `backend/driver.rs::default_cpu_and_features`. The literal
         /// value `help` prints LLVM's supported-CPU listing for the
         /// active target and exits (mirrors `rustc -C target-cpu=help`);
@@ -286,7 +286,7 @@ pub enum Command {
         /// override, the `--target-cpu` sibling (design.md § CPU
         /// Baseline Targeting > Feature-string override). Own precedence
         /// chain resolved independently of the CPU's: this flag, then
-        /// `KARAC_TARGET_FEATURES`, then `[release] target-features`.
+        /// `KARAC_TARGET_FEATURES`, then `[profile.release] target-features`.
         /// The resolved list appends *after* the per-target default
         /// features (LLVM resolves duplicates last-wins, so a user
         /// `-feat` genuinely disables a table default). Every token

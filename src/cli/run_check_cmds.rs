@@ -713,7 +713,14 @@ pub(super) fn cmd_check_project(
     // default target (B-2026-08-20-29).
     let declared: Vec<String> = mf.build_targets.clone();
     let target_sweep: Option<&[String]> = match (targets, target.is_some()) {
-        (Some(list), _) if list.len() > 1 => Some(list),
+        (Some(list), _)
+            if list.len() > 1
+                || list
+                    .iter()
+                    .any(|t| t == crate::target::ALL_TARGETS_SENTINEL) =>
+        {
+            Some(list)
+        }
         // An explicit singular `--target=` is a request for ONE target and
         // outranks the manifest's list.
         (None, false) if declared.len() > 1 => Some(&declared),
@@ -960,7 +967,33 @@ fn check_target_sweep(
     targets: &[String],
     platforms: Option<&[crate::walker::Platform]>,
 ) {
+    // `--targets=all` over a package: the v1 set, and every target an item
+    // in the package's sources is gated on, so its body is checked where it
+    // is written for.
+    let all: Vec<String>;
+    let targets = if targets
+        .iter()
+        .any(|t| t == crate::target::ALL_TARGETS_SENTINEL)
+    {
+        let mut list: Vec<String> = crate::target::ALL_CHECK_TARGETS
+            .iter()
+            .map(|t| t.to_string())
+            .collect();
+        for t in package_gated_check_targets(&root.join("src")) {
+            if !list.iter().any(|a| a == t) {
+                list.push(t.to_string());
+            }
+        }
+        all = list;
+        &all[..]
+    } else {
+        targets
+    };
     let mut failed: Vec<String> = Vec::new();
+    // JSON is one object for the whole sweep, as for a file: each target's
+    // own findings under `targets`, those on every target once under
+    // `shared_diagnostics`.
+    let mut json_runs: Vec<(String, usize, Vec<String>)> = Vec::new();
     for (i, target) in targets.iter().enumerate() {
         if let Err(e) = crate::target::set_active_target(target) {
             eprintln!("error: {e}");
@@ -985,11 +1018,23 @@ fn check_target_sweep(
         let errors = match super::build_cmds::package_check_on(root, lints, platform) {
             Ok(pc) => {
                 let errors = pc.error_count();
-                render_package_check(&pc, output, errors, None);
+                if let OutputMode::Json = output {
+                    json_runs.push((target.clone(), errors, package_check_json_entries(&pc)));
+                } else {
+                    render_package_check(&pc, output, errors, None);
+                }
                 errors
             }
             Err(e) => {
-                emit_build_error(&e, output);
+                if let OutputMode::Json = output {
+                    let entry = format!(
+                        "{{\"severity\":\"error\",\"phase\":\"build\",\"message\":{}}}",
+                        json_string(&e)
+                    );
+                    json_runs.push((target.clone(), 1, vec![entry]));
+                } else {
+                    emit_build_error(&e, output);
+                }
                 1
             }
         };
@@ -1007,6 +1052,17 @@ fn check_target_sweep(
                 ),
             );
         }
+    }
+    if let OutputMode::Json = output {
+        let per_target: Vec<(&str, usize, &[String])> = json_runs
+            .iter()
+            .map(|(t, n, e)| (t.as_str(), *n, &e[..]))
+            .collect();
+        let (blocks, shared) = split_target_json(&per_target);
+        print_stdout_line(&format!(
+            "{{\"targets\":[{blocks}],\"shared_diagnostics\":[{shared}],\"success\":{}}}",
+            failed.is_empty()
+        ));
     }
     if !failed.is_empty() {
         if let OutputMode::Text = output {
@@ -1028,6 +1084,17 @@ fn check_target_sweep(
 /// `cmd_check_project` so the platform sweep renders each run identically to a
 /// single check — `platform` is `Some` only inside a sweep, where the text mode
 /// has already printed the header and must not repeat the summary line.
+/// A package check's diagnostics as JSON entries, in render order.
+fn package_check_json_entries(pc: &super::build_cmds::PackageCheck) -> Vec<String> {
+    let mut diags: Vec<String> = Vec::new();
+    diags.extend(super::build_cmds::parse_errors_json(&pc.parse_errors));
+    diags.extend(super::build_cmds::type_warnings_json(&pc.type_warnings));
+    diags.extend(super::build_cmds::cycles_json(&pc.cycles, &pc.tree));
+    diags.extend(super::build_cmds::resolve_errors_json(&pc.resolve_errors));
+    diags.extend(super::build_cmds::type_errors_json(&pc.type_errors));
+    diags
+}
+
 fn render_package_check(
     pc: &super::build_cmds::PackageCheck,
     output: OutputMode,
@@ -1036,12 +1103,7 @@ fn render_package_check(
 ) {
     match output {
         OutputMode::Json => {
-            let mut diags: Vec<String> = Vec::new();
-            diags.extend(super::build_cmds::parse_errors_json(&pc.parse_errors));
-            diags.extend(super::build_cmds::type_warnings_json(&pc.type_warnings));
-            diags.extend(super::build_cmds::cycles_json(&pc.cycles, &pc.tree));
-            diags.extend(super::build_cmds::resolve_errors_json(&pc.resolve_errors));
-            diags.extend(super::build_cmds::type_errors_json(&pc.type_errors));
+            let diags = package_check_json_entries(pc);
             match platform {
                 Some(name) => println!(
                     "{{\"platform\":{},\"diagnostics\":[{}]}}",
@@ -1266,6 +1328,27 @@ pub(super) fn cmd_check(
     // upward from the file's own directory, same discovery rule as
     // `karac run`). An empty/undeclared list keeps the single-pass
     // default below — check under the active (`native`) target.
+    // `--targets=all`: the v1 set, and every target the source gates an
+    // item on, so its body is checked where it is written for.
+    let targets = targets.map(|list| {
+        if list
+            .iter()
+            .any(|t| t == crate::target::ALL_TARGETS_SENTINEL)
+        {
+            let mut all: Vec<String> = crate::target::ALL_CHECK_TARGETS
+                .iter()
+                .map(|t| t.to_string())
+                .collect();
+            for t in gated_check_targets(&source) {
+                if !all.iter().any(|a| a == t) {
+                    all.push(t.to_string());
+                }
+            }
+            all
+        } else {
+            list
+        }
+    });
     let targets = targets.or_else(|| {
         let declared = manifest_build_targets_for(filename, output);
         if declared.is_empty() {
@@ -1517,6 +1600,34 @@ pub(super) fn cmd_check_profiles(
 /// IMPORTED module is not discovered here, so a gated body in a
 /// dependency module still needs an explicit `--targets`. Recorded on
 /// B-2026-08-05-29 rather than silently narrowed.
+/// [`gated_check_targets`] over every `.kara` file under `dir`, every
+/// platform half included.
+fn package_gated_check_targets(dir: &std::path::Path) -> Vec<&'static str> {
+    let mut out: Vec<&'static str> = Vec::new();
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return out;
+    };
+    let mut paths: Vec<std::path::PathBuf> = entries.flatten().map(|e| e.path()).collect();
+    paths.sort();
+    for p in paths {
+        let found = if p.is_dir() {
+            package_gated_check_targets(&p)
+        } else if p.extension().is_some_and(|e| e == "kara") {
+            std::fs::read_to_string(&p)
+                .map(|s| gated_check_targets(&s))
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        for t in found {
+            if !out.contains(&t) {
+                out.push(t);
+            }
+        }
+    }
+    out
+}
+
 pub(super) fn gated_check_targets(source: &str) -> Vec<&'static str> {
     let parsed = crate::parse(source);
     if !parsed.errors.is_empty() {
@@ -1556,7 +1667,7 @@ pub(super) fn manifest_build_targets_for(filename: &str, output: OutputMode) -> 
 }
 
 /// Read the `KARAC_TARGET_CPU` env var — the middle tier of the
-/// `--target-cpu` precedence chain (flag, then env, then `[release]
+/// `--target-cpu` precedence chain (flag, then env, then `[profile.release]
 /// target-cpu`, then the per-target default table). Empty /
 /// whitespace-only is treated
 /// as unset so `KARAC_TARGET_CPU= karac build …` can neutralize an
@@ -1582,7 +1693,7 @@ pub(super) fn read_target_features_env() -> Option<String> {
 
 /// Discover the manifest by walking upward from the built file's own
 /// directory (the `karac run` discovery rule, same shape as
-/// `manifest_build_targets_for` above) and return one `[release]` field
+/// `manifest_build_targets_for` above) and return one `[profile.release]` field
 /// picked by `pick`. No manifest → `None`. A malformed manifest is a
 /// hard error — but note the callers only reach this tier when neither
 /// the CLI flag nor the env var supplied a value, so explicit overrides
@@ -1622,14 +1733,14 @@ pub(super) fn manifest_release_field_for(
 /// when no explicit level is declared. Native non-wasm only — wasm gets no CPU
 /// baseline (`(None, None)`). The mapped value is the LOWEST tier of the CPU /
 /// feature chains, so an explicit `--target-cpu` / `KARAC_TARGET_CPU` /
-/// `[release] target-cpu` (or `[release] cpu-baseline`) always wins.
+/// `[profile.release] target-cpu` (or `[profile.release] cpu-baseline`) always wins.
 ///
 /// **Deploy-baseline commitment (design.md § Multiversioning > `cpu-baseline`,
 /// default `"v3"`):** a default `karac build` now targets `x86-64-v3` on x86-64
 /// (Haswell+, ~2013 — excludes pre-Haswell) and `+v8.4a` on aarch64 (Apple M1+,
 /// Graviton 3+). This narrows the deploy set for sharper codegen — the design's
 /// single-binary-distribution posture. Pre-baseline hardware opts down with
-/// `[release] cpu-baseline = "v1" | "v2"` (or an explicit `--target-cpu`). The
+/// `[profile.release] cpu-baseline = "v1" | "v2"` (or an explicit `--target-cpu`). The
 /// codegen / asan / abi test harnesses drive `compile_to_object*` directly (not
 /// this CLI path), so they stay on the per-target `generic` default and the
 /// heavy CI legs are unaffected; the CLI-spawned build tests run on x86 (v3) and
@@ -1662,7 +1773,7 @@ pub(super) fn resolve_native_cpu_baseline(
 pub(super) fn apply_target_cpu_override(resolved: Option<String>) {
     let Some(cpu) = resolved else { return };
     if cpu == "help" {
-        crate::backend::driver::print_target_cpu_listing();
+        crate::backend::driver::print_target_cpu_help();
         process::exit(0);
     }
     if let Err(msg) = crate::backend::driver::validate_target_cpu(&cpu) {
@@ -1686,7 +1797,7 @@ pub(super) fn apply_target_cpu_override(resolved: Option<String>) {
 pub(super) fn apply_target_features_override(resolved: Option<String>) {
     let Some(features) = resolved else { return };
     if features == "help" {
-        crate::backend::driver::print_target_cpu_listing();
+        crate::backend::driver::print_target_cpu_help();
         process::exit(0);
     }
     if let Err(msg) = crate::backend::driver::validate_target_features(&features) {
@@ -1701,6 +1812,57 @@ pub(super) fn apply_target_features_override(resolved: Option<String>) {
 /// first field — see `DiagnosticJson::add`). An entry unique to one
 /// target shifts every subsequent id in that run, so raw string
 /// equality would misclassify otherwise-identical diagnostics.
+/// The JSON halves of a multi-target check (design.md § Checking several
+/// targets): one `{"target",…,"diagnostics"}` object per target, holding the
+/// entries that are not on every target, and the `shared_diagnostics`
+/// entries that are, reported once (drawn from the first target's run, ids
+/// included). The dedup key is the entry minus its run-local id. With one
+/// target there is nothing to compare against, so everything stays tagged.
+/// Returns the comma-joined target objects and shared entries.
+pub(super) fn split_target_json(runs: &[(&str, usize, &[String])]) -> (String, String) {
+    let shared_keys: std::collections::HashSet<String> = if runs.len() > 1 {
+        runs[0]
+            .2
+            .iter()
+            .map(|e| strip_diag_id(e))
+            .filter(|key| {
+                runs[1..]
+                    .iter()
+                    .all(|r| r.2.iter().any(|e| strip_diag_id(e) == *key))
+            })
+            .collect()
+    } else {
+        std::collections::HashSet::new()
+    };
+    let shared: Vec<&str> = runs
+        .first()
+        .map(|r| {
+            r.2.iter()
+                .filter(|e| shared_keys.contains(&strip_diag_id(e)))
+                .map(String::as_str)
+                .collect()
+        })
+        .unwrap_or_default();
+    let blocks: Vec<String> = runs
+        .iter()
+        .map(|(target, total_errors, entries)| {
+            let own: Vec<&str> = entries
+                .iter()
+                .filter(|e| !shared_keys.contains(&strip_diag_id(e)))
+                .map(String::as_str)
+                .collect();
+            format!(
+                "{{\"target\":{},\"success\":{},\"total_errors\":{},\"diagnostics\":[{}]}}",
+                json_string(target),
+                *total_errors == 0,
+                total_errors,
+                own.join(","),
+            )
+        })
+        .collect();
+    (blocks.join(","), shared.join(","))
+}
+
 pub(super) fn strip_diag_id(entry: &str) -> String {
     let Some(rest) = entry.strip_prefix("{\"id\":\"") else {
         return entry.to_string();
@@ -1866,61 +2028,15 @@ pub(super) fn cmd_check_targets(
             }
         }
         OutputMode::Json => {
-            // Shared entries are reported once (drawn from the first
-            // target's run, ids included); per-target arrays carry the
-            // remainder. Dedup key: the entry minus its run-local id.
-            let shared_keys: std::collections::HashSet<String> = if runs.len() > 1 {
-                runs[0]
-                    .json_entries
-                    .iter()
-                    .map(|e| strip_diag_id(e))
-                    .filter(|key| {
-                        runs[1..]
-                            .iter()
-                            .all(|r| r.json_entries.iter().any(|e| strip_diag_id(e) == *key))
-                    })
-                    .collect()
-            } else {
-                std::collections::HashSet::new()
-            };
-            let shared_json: Vec<&String> = runs
-                .first()
-                .map(|r| {
-                    r.json_entries
-                        .iter()
-                        .filter(|e| shared_keys.contains(&strip_diag_id(e)))
-                        .collect()
-                })
-                .unwrap_or_default();
-            let blocks: Vec<String> = runs
+            let per_target: Vec<(&str, usize, &[String])> = runs
                 .iter()
-                .map(|run| {
-                    let entries: Vec<&String> = run
-                        .json_entries
-                        .iter()
-                        .filter(|e| !shared_keys.contains(&strip_diag_id(e)))
-                        .collect();
-                    format!(
-                        "{{\"target\":{},\"success\":{},\"total_errors\":{},\"diagnostics\":[{}]}}",
-                        json_string(&run.target),
-                        run.total_errors == 0,
-                        run.total_errors,
-                        entries
-                            .iter()
-                            .map(|s| s.as_str())
-                            .collect::<Vec<_>>()
-                            .join(","),
-                    )
-                })
+                .map(|r| (r.target.as_str(), r.total_errors, &r.json_entries[..]))
                 .collect();
+            let (blocks, shared_json) = split_target_json(&per_target);
             println!(
                 "{{\"targets\":[{}],\"shared_diagnostics\":[{}],\"target_skipped\":{},\"success\":{}}}",
-                blocks.join(","),
-                shared_json
-                    .iter()
-                    .map(|s| s.as_str())
-                    .collect::<Vec<_>>()
-                    .join(","),
+                blocks,
+                shared_json,
                 // Peer to the single-pass field, same shape: items NO
                 // requested target checked. An EMPTY array is meaningful —
                 // it says the matrix covered everything.

@@ -18,8 +18,8 @@ KARAC="${KARAC:-karac}"
 if [[ "${1:-}" == "--native" ]]; then
   echo "==> building native oracle (karac build)"
   "$KARAC" build >/dev/null
-  echo "==> dist/slipstream (milestone framebuffer checksums — the kernel gate):"
-  ./dist/slipstream
+  echo "==> dist/native/slipstream (milestone framebuffer checksums — the kernel gate):"
+  ./dist/native/slipstream
   exit 0
 fi
 

@@ -209,10 +209,14 @@ pub(super) fn cmd_build_v2_project(a: BuildArgs) {
     }
     // The package's own output goes in `dist/`, which the scaffold's
     // `.gitignore` ignores and `karac clean` removes (design.md § Build
-    // cache).
+    // cache), under the target's directory: `dist/native/<pkg>`,
+    // `dist/wasm/<pkg>.wasm` (design.md § Target build artifacts,
+    // B-2026-11-05-12).
     let exe = a.out_path.map_or_else(
         || {
-            let dist = root.join("dist");
+            let dist = root
+                .join("dist")
+                .join(if is_wasm_wasi(&a) { "wasm" } else { "native" });
             if let Err(e) = std::fs::create_dir_all(&dist) {
                 fail_with(
                     &format!("error: cannot create {}: {e}", dist.display()),
@@ -402,7 +406,7 @@ fn refuse_unsupported(a: &BuildArgs) {
 #[cfg(feature = "llvm")]
 fn list_cpus_if_asked(a: &BuildArgs) {
     if a.target_cpu == Some("help") || a.target_features == Some("help") {
-        crate::backend::driver::print_target_cpu_listing();
+        crate::backend::driver::print_target_cpu_help();
         process::exit(0);
     }
 }
@@ -425,7 +429,7 @@ fn apply_wasm_cpu(a: &BuildArgs) {
 }
 
 /// The CPU baseline, as `karac build` sets it: the flag, then
-/// `KARAC_TARGET_CPU`, then the manifest's `[release] target-cpu`, then its
+/// `KARAC_TARGET_CPU`, then the manifest's `[profile.release] target-cpu`, then its
 /// `cpu-baseline` (`v3` when absent); the feature string likewise.
 #[cfg(feature = "llvm")]
 fn apply_cpu(

@@ -624,8 +624,12 @@ fn parse_check_command(args: &[String]) -> Command {
         // ignoring them. The singular `--target=<name>` is a different
         // request — the one `karac build` already honours — so it passes
         // through as the project check's compilation target.
+        // `all` is a sweep however it is spelled (`--target=all` too).
+        let is_all = targets
+            .as_ref()
+            .is_some_and(|t| t.iter().any(|n| n == crate::target::ALL_TARGETS_SENTINEL));
         let single_target = match (&targets, target_is_singular) {
-            (Some(t), true) if t.len() == 1 => Some(t[0].clone()),
+            (Some(t), true) if t.len() == 1 && !is_all => Some(t[0].clone()),
             _ => None,
         };
         // `--profiles` is still a per-file matrix. The plural `--targets` is
@@ -643,6 +647,7 @@ fn parse_check_command(args: &[String]) -> Command {
         }
         let target_sweep = match (&targets, target_is_singular) {
             (Some(t), false) => Some(t.clone()),
+            (Some(t), true) if is_all => Some(t.clone()),
             _ => None,
         };
         return Command::CheckProject {
@@ -751,10 +756,7 @@ fn parse_targets_arg(spec: &str) -> Vec<String> {
         process::exit(1);
     }
     if spec == "all" {
-        return crate::target::V1_TARGETS
-            .iter()
-            .map(|t| t.to_string())
-            .collect();
+        return vec![crate::target::ALL_TARGETS_SENTINEL.to_string()];
     }
     let mut out: Vec<String> = Vec::new();
     for raw in spec.split(',') {

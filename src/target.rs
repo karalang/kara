@@ -34,6 +34,16 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 /// diagnostics.
 pub const V1_TARGETS: &[&str] = &["native", "wasm_browser", "wasm_wasi", "gpu"];
 
+/// The targets `--targets=all` checks: design.md § The v1 target set,
+/// closed at `native` and `wasm_wasi`. `wasm_browser` and `gpu` belong to
+/// later tracks; a check sweeps them when asked by name, or when the
+/// program gates an item on one (B-2026-11-05-12).
+pub const ALL_CHECK_TARGETS: &[&str] = &["native", "wasm_wasi"];
+
+/// The `--targets` value standing for `all` until the check knows the
+/// program, which adds the targets its `#[target(...)]` items name.
+pub const ALL_TARGETS_SENTINEL: &str = "all";
+
 /// The compilation target every karac build produces by default.
 pub const CURRENT_TARGET: &str = "native";
 
@@ -294,7 +304,7 @@ pub fn cross_triple() -> Option<&'static str> {
 /// per-target-triple table in `backend/driver.rs::default_cpu_and_features`.
 /// Set once at CLI startup by `cmd_build` / `cmd_build_project` after
 /// resolving the precedence chain `--target-cpu` flag > `KARAC_TARGET_CPU`
-/// env > `[release] target-cpu` in `kara.toml` — the codegen driver's
+/// env > `[profile.release] target-cpu` in `kara.toml` — the codegen driver's
 /// target-machine constructors are the only readers. Lives here (plain
 /// string, no LLVM types) so the setter is reachable from non-llvm cfg
 /// and the codegen-containment invariant holds.
@@ -315,7 +325,7 @@ pub fn target_cpu_override() -> Option<&'static str> {
 /// User-selected feature-string override (phase-10 `--target-features`;
 /// design.md § CPU Baseline Targeting > Feature-string override). The
 /// sibling of [`TARGET_CPU_OVERRIDE`] with its own precedence chain
-/// (`--target-features` flag > `KARAC_TARGET_FEATURES` env > `[release]
+/// (`--target-features` flag > `KARAC_TARGET_FEATURES` env > `[profile.release]
 /// target-features`), resolved independently of the CPU chain. The
 /// codegen driver *appends* this after the per-target default features —
 /// LLVM resolves duplicate entries last-wins, so a user `-feat` can
