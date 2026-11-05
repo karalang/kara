@@ -3272,6 +3272,18 @@ fn library_fn_names(
             _ => {}
         }
     }
+    // The conversion traits' methods the effect checker registers itself,
+    // with no source behind them, are the library's too: they are no
+    // program's public functions (`public_function_effects` listed them for
+    // any program with a `pub fn`).
+    for name in [
+        "From.from",
+        "Into.into",
+        "TryFrom.try_from",
+        "TryInto.try_into",
+    ] {
+        out.insert(name.to_string());
+    }
     out
 }
 
