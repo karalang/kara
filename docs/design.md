@@ -7343,7 +7343,7 @@ A panic produces one **panic record** ([core-semantics.md §10.2](core-semantics
 2. The custom panic handler runs, if the program has one ([Panic handler](#panic-handler)).
 3. The process exits with code 101.
 
-Under `karac run` and `karac test`, the runner asks the program for the same record as one JSONL event on stderr, so a tool reads the panic without parsing text. There is no crash file.
+Under `karac run` and `karac test` with `--output=json` or `--output=jsonl`, the runner asks the program for the same record as one JSONL event on stderr and carries it in its own output, so a tool reads the panic without parsing text. In text mode, and for a built binary run directly, stderr has only the human report. There is no crash file.
 
 **Stability.** The JSONL event is stable within a major version. Fields may be added and older tools ignore them; an existing field changes shape only through an edition-gated migration.
 
