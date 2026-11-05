@@ -26,6 +26,7 @@ The literal forms (`[a, b]`, `[v; n]`, `[k: v]`, `[]` and `[:]`), and how an exp
 let primes = Set.from([2, 3, 5, 7]);                 // Set[i64]
 let ages = Map.from([("ann", 31), ("bo", 27)]);      // Map[String, i64]
 let pq = PriorityQueue.from([9, 7, 8]);              // PriorityQueue[i64]
+let seen = SortedSet.from([3, 1, 2]);                // SortedSet[i64]
 ```
 
 ## `Array[T, N]`
@@ -187,6 +188,7 @@ A B-tree map, `K: Ord`. Iteration is in ascending key order.
 | Method | Signature | Notes |
 |---|---|---|
 | `new` | `fn new() -> SortedMap[K, V]` | Empty map |
+| `from` | `fn from(pairs: own Vec[(K, V)]) -> SortedMap[K, V]` | Builds a map from key-value pairs; a repeated key keeps its last value |
 | `insert` | `fn insert(mut ref self, key: own K, val: own V) -> Option[V]` | Returns the previous value if the key was present |
 | `extend` | `fn extend[I: IntoIterator[Item = (K, V)]](mut ref self, items: own I)` | Inserts every pair, in order; a later pair replaces an earlier value |
 | `get` | `fn get(self, key: K) -> Option[ref V]` | |
@@ -219,6 +221,7 @@ A B-tree set, `T: Ord`. Every operation is O(log n), and iteration is in ascendi
 | Method | Signature | Notes |
 |---|---|---|
 | `new` | `fn new() -> SortedSet[T]` | Empty set |
+| `from` | `fn from(items: own Vec[T]) -> SortedSet[T]` | Builds a set from a list; duplicates collapse |
 | `insert` | `fn insert(mut ref self, val: own T) -> bool` | `false` if already present |
 | `extend` | `fn extend[I: IntoIterator[Item = T]](mut ref self, items: own I)` | Inserts every item |
 | `remove` | `fn remove(mut ref self, val: T) -> bool` | `true` if it was present |

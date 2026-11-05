@@ -370,6 +370,16 @@ impl[T] SortedSet[T] {
 }
 
 impl[T: Ord] SortedSet[T] {
+    /// A set of the list's elements; a repeated element is kept once
+    /// (docs/library/collections.md, Collection literals).
+    fn from(v: own Vec[T]) -> SortedSet[T] {
+        let mut out: SortedSet[T] = SortedSet.new();
+        for x in v.into_iter() {
+            out.insert(x);
+        }
+        out
+    }
+
     /// The elements in `[from, to)`, ascending, each borrowed; none when
     /// `from >= to`.
     fn range(ref self, from: T, to: T) -> SortedSetIter[T] {
@@ -566,6 +576,16 @@ impl[K, V] SortedMap[K, V] {
 }
 
 impl[K: Ord, V] SortedMap[K, V] {
+    /// A map of the list's `(key, value)` pairs; a repeated key keeps its
+    /// last value (docs/library/collections.md, Collection literals).
+    fn from(v: own Vec[(K, V)]) -> SortedMap[K, V] {
+        let mut out: SortedMap[K, V] = SortedMap.new();
+        for (k, x) in v.into_iter() {
+            out.insert(k, x);
+        }
+        out
+    }
+
     /// The entries with keys in `[from, to)`, ascending, each key and
     /// value borrowed; none when `from >= to`.
     fn range(ref self, from: K, to: K) -> SortedMapIter[K, V] {
