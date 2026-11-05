@@ -1886,6 +1886,11 @@ pub struct TypeCheckResult {
     /// to a task, passed to an `escaping` parameter), keyed by span. They
     /// capture every place by move. Empty outside the strict commands.
     pub core_escaping_closures: FxHashSet<SpanKey>,
+    /// The `unwrap()` text of each `.unwrap()` in the program's source whose
+    /// receiver is an ordinary `Option` (not a `weak` read, which warns
+    /// instead): where an editor offers the rewrite to `.expect("…")`
+    /// (design.md §11 weak Ergonomics, B-2026-11-05-3).
+    pub option_unwrap_sites: Vec<Span>,
     /// The closures in [`Self::core_escaping_closures`] that escape only by
     /// being returned from another closure (B-2026-10-26-9).
     pub core_closure_result_only: FxHashSet<SpanKey>,
@@ -2818,6 +2823,11 @@ pub struct TypeChecker<'a> {
     pub(super) rejected_assign_spans: Vec<Span>,
     /// See [`deprecated_variant`]; built on first use.
     pub(super) deprecated_variants: Option<deprecated_variant::DeprecatedVariants>,
+    /// The receivers of the builtin `Option.unwrap` in the program's source,
+    /// by span (B-2026-11-05-3).
+    pub(super) option_unwrap_receivers: FxHashSet<SpanKey>,
+    /// See [`TypeCheckResult::option_unwrap_sites`].
+    pub(super) option_unwrap_sites: Vec<Span>,
     /// The start offset of the assignment a `match` arm holds without
     /// braces (`'L' => (dx, dy) = (-dy, dx),`), while its block is checked.
     /// The parser wraps such a body in a block whose span is the
@@ -3915,6 +3925,8 @@ impl<'a> TypeChecker<'a> {
             core_ref_copy_spans: FxHashSet::default(),
             rejected_assign_spans: Vec::new(),
             deprecated_variants: None,
+            option_unwrap_receivers: FxHashSet::default(),
+            option_unwrap_sites: Vec::new(),
             braceless_arm_assign: None,
             core_ref_copy_nodes: FxHashSet::default(),
             core_ref_results: FxHashSet::default(),
@@ -4527,6 +4539,7 @@ impl<'a> TypeChecker<'a> {
             core_own_param_receivers: self.core_own_param_receivers,
             core_fresh_index_reads: self.index_read_is_fresh_value.clone(),
             core_escaping_closures,
+            option_unwrap_sites: self.option_unwrap_sites,
             core_closure_result_only,
             core_task_moved_captures,
             vector_method_receivers: self.vector_method_receivers,

@@ -2107,6 +2107,17 @@ impl<'a> super::TypeChecker<'a> {
             return Type::Error;
         }
 
+        // B-2026-11-05-3: the receivers of the builtin `Option.unwrap`, where
+        // an editor offers the rewrite to `.expect("…")`. Before the library
+        // dispatch below, which types a library-from-source `unwrap`.
+        if method == "unwrap"
+            && args.is_empty()
+            && method_callee_type_name(&obj_ty).as_deref() == Some("Option")
+            && object.span.offset < self.program.library_start.unwrap_or(usize::MAX)
+        {
+            self.option_unwrap_receivers
+                .insert(crate::resolver::SpanKey::from_span(&object.span));
+        }
         // A library type's method with a Kāra body (redesign A2) is typed
         // through that body's signature, so the call records the callee and
         // the method's own type arguments like any other source method.

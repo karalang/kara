@@ -80,25 +80,32 @@ impl TypeChecker<'_> {
             {
                 object.span.offset + object.span.length
             }
-            _ => return,
+            _ => {
+                // An ordinary Option's: an editor code action, never a
+                // check warning (B-2026-11-05-3).
+                if self
+                    .option_unwrap_receivers
+                    .contains(&SpanKey::from_span(&object.span))
+                {
+                    let end = match &object.kind {
+                        ExprKind::MethodCall {
+                            args_close_span, ..
+                        } => args_close_span.offset + args_close_span.length,
+                        _ => object.span.offset + object.span.length,
+                    };
+                    if let Some(at) = Self::unwrap_text_after(end, close) {
+                        self.option_unwrap_sites.push(at);
+                    }
+                }
+                return;
+            }
         };
         // The edit needs the written `.unwrap()` to be exactly that text
         // after the receiver; a call split over lines warns at its `)`
         // without one.
-        let start = receiver_end + 1;
-        let contiguous = close.length == 1
-            && close.offset + 1 == start + "unwrap()".len()
-            && close.column >= "unwrap(".len();
-        let at = if contiguous {
-            Span {
-                offset: start,
-                length: "unwrap()".len(),
-                column: close.column - "unwrap(".len(),
-                ..*close
-            }
-        } else {
-            *close
-        };
+        let found = Self::unwrap_text_after(receiver_end, close);
+        let contiguous = found.is_some();
+        let at = found.unwrap_or(*close);
         let fix = contiguous.then(|| super::FixIt {
             span: at,
             replacement: "expect(\"the referent is alive\")".to_string(),
@@ -113,5 +120,21 @@ impl TypeChecker<'_> {
             "weak_read_unwrap",
             fix,
         );
+    }
+
+    /// The `unwrap()` text of a call whose receiver ends at `receiver_end`
+    /// and whose `)` is `close`, when it is written as exactly `.unwrap()`
+    /// (a call split over lines has none).
+    fn unwrap_text_after(receiver_end: usize, close: &Span) -> Option<Span> {
+        let start = receiver_end + 1;
+        let contiguous = close.length == 1
+            && close.offset + 1 == start + "unwrap()".len()
+            && close.column >= "unwrap(".len();
+        contiguous.then(|| Span {
+            offset: start,
+            length: "unwrap()".len(),
+            column: close.column - "unwrap(".len(),
+            ..*close
+        })
     }
 }

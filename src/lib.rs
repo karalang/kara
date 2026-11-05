@@ -1237,6 +1237,26 @@ pub fn hover_at(source: &str, byte_offset: usize) -> Option<HoverInfo> {
 /// symbols (to spot a function reference), and the effect result together.
 /// `None` on parse errors; resolve/typecheck errors are kept going through so a
 /// half-typed buffer still hovers its checked parts.
+/// The byte spans (`offset`, `length`) of the `unwrap()` text of each
+/// `.unwrap()` on an ordinary `Option` in `source`, in source order: where an
+/// editor offers the rewrite to `.expect("…")`. design.md §11 weak
+/// Ergonomics makes that a code action, never a check warning; a `weak`
+/// read's `.unwrap()` is a `weak_read_unwrap` warning with its own fix
+/// instead (B-2026-11-05-3).
+pub fn option_unwrap_sites(source: &str) -> Vec<(usize, usize)> {
+    let Some((_, typed, _)) = analyze_for_hover(source) else {
+        return Vec::new();
+    };
+    let mut sites: Vec<(usize, usize)> = typed
+        .option_unwrap_sites
+        .iter()
+        .map(|s| (s.offset, s.length))
+        .collect();
+    sites.sort_unstable();
+    sites.dedup();
+    sites
+}
+
 fn analyze_for_hover(source: &str) -> Option<(ResolveResult, TypeCheckResult, EffectCheckResult)> {
     // Natively, the types `karac check` infers, as `check_source` reports its
     // diagnostics (B-2026-10-31-19).

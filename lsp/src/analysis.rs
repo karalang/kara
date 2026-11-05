@@ -342,6 +342,71 @@ fn analyze(source: &str) -> Vec<(Diagnostic, Vec<karac::SourceFix>)> {
 #[allow(clippy::mutable_key_type)]
 pub fn code_actions(source: &str, uri: &Uri, range: Range) -> Vec<CodeActionOrCommand> {
     let index = LineIndex::new(source);
+    let mut actions = fix_actions(source, uri, range, &index);
+    actions.extend(unwrap_to_expect_actions(source, uri, range, &index));
+    actions
+}
+
+/// The rewrite of `.unwrap()` on an ordinary `Option` to `.expect("…")`, at
+/// each such call overlapping `range`: design.md §11 weak Ergonomics offers
+/// it as a code action and never as a check warning, since `.unwrap()` on an
+/// ordinary `Option` is common and usually fine (B-2026-11-05-3). A `weak`
+/// read's `.unwrap()` is a warning with its own quick fix instead. The
+/// message is a placeholder for the invariant, so the action is not
+/// preferred.
+#[allow(clippy::mutable_key_type)] // see `code_actions`
+fn unwrap_to_expect_actions(
+    source: &str,
+    uri: &Uri,
+    range: Range,
+    index: &LineIndex,
+) -> Vec<CodeActionOrCommand> {
+    let sites =
+        match std::panic::catch_unwind(AssertUnwindSafe(|| karac::option_unwrap_sites(source))) {
+            Ok(sites) => sites,
+            Err(_) => {
+                eprintln!("kara-lsp: unwrap-site analysis panicked; offering no rewrite");
+                return Vec::new();
+            }
+        };
+    sites
+        .into_iter()
+        .map(|(offset, length)| index.range(offset, length))
+        .filter(|r| ranges_overlap(*r, range))
+        .map(|r| {
+            let mut changes = HashMap::new();
+            changes.insert(
+                uri.clone(),
+                vec![TextEdit {
+                    range: r,
+                    new_text: UNWRAP_TO_EXPECT.to_string(),
+                }],
+            );
+            CodeActionOrCommand::CodeAction(CodeAction {
+                title: format!("Replace `unwrap()` with `{UNWRAP_TO_EXPECT}`"),
+                kind: Some(CodeActionKind::REFACTOR_REWRITE),
+                edit: Some(WorkspaceEdit {
+                    changes: Some(changes),
+                    ..Default::default()
+                }),
+                is_preferred: Some(false),
+                ..Default::default()
+            })
+        })
+        .collect()
+}
+
+/// The rewrite's text: design.md's own spelling of the invariant to write.
+const UNWRAP_TO_EXPECT: &str = "expect(\"…\")";
+
+/// The quick fixes of the diagnostics overlapping `range`.
+#[allow(clippy::mutable_key_type)] // see `code_actions`
+fn fix_actions(
+    source: &str,
+    uri: &Uri,
+    range: Range,
+    index: &LineIndex,
+) -> Vec<CodeActionOrCommand> {
     analyze(source)
         .into_iter()
         .filter(|(d, fixes)| !fixes.is_empty() && ranges_overlap(d.range, range))
@@ -806,5 +871,56 @@ mod tests {
             assert!(s.selection_range.start >= s.range.start);
             assert!(s.selection_range.end <= s.range.end);
         }
+    }
+
+    /// B-2026-11-05-3: `.unwrap()` on an ordinary Option offers the rewrite
+    /// to `.expect("…")` as a code action (design.md §11), with no
+    /// diagnostic; a `weak` read's keeps its quick fix and gets no rewrite.
+    #[test]
+    #[allow(clippy::mutable_key_type)] // see `code_actions`
+    fn unwrap_on_an_option_offers_the_expect_rewrite() {
+        let src = "fn main() {\n    let o: Option[i64] = Some(1);\n    println(o.unwrap());\n}\n";
+        assert!(diagnostics(src).is_empty(), "{:?}", diagnostics(src));
+        let caret = Range::new(Position::new(2, 16), Position::new(2, 16));
+        let actions = code_actions(src, &test_uri(), caret);
+        assert_eq!(actions.len(), 1, "{actions:?}");
+        let CodeActionOrCommand::CodeAction(a) = &actions[0] else {
+            panic!("expected a CodeAction");
+        };
+        assert_eq!(a.title, "Replace `unwrap()` with `expect(\"…\")`");
+        assert_eq!(a.kind, Some(CodeActionKind::REFACTOR_REWRITE));
+        assert_eq!(a.is_preferred, Some(false));
+        let edits = &a.edit.as_ref().unwrap().changes.as_ref().unwrap()[&test_uri()];
+        assert_eq!(edits.len(), 1);
+        assert_eq!(
+            edits[0].range,
+            Range::new(Position::new(2, 14), Position::new(2, 22))
+        );
+        assert_eq!(edits[0].new_text, "expect(\"…\")");
+        // Away from the call, nothing.
+        let away = Range::new(Position::new(1, 0), Position::new(1, 0));
+        assert!(code_actions(src, &test_uri(), away).is_empty());
+    }
+
+    #[test]
+    fn a_weak_read_unwrap_keeps_its_quick_fix_without_the_rewrite() {
+        let src = "shared struct P { name: String, mut kids: Vec[C] }\nshared struct C { mut parent: weak P }\nfn main() {\n    let p = P { name: \"r\".to_string(), kids: [] };\n    let c = C { parent: p };\n    p.kids.push(c);\n    println(p.kids[0].parent.unwrap().name);\n}\n";
+        let titles: Vec<String> = code_actions(src, &test_uri(), full_range())
+            .into_iter()
+            .filter_map(|a| match a {
+                CodeActionOrCommand::CodeAction(a) => Some(a.title),
+                CodeActionOrCommand::Command(_) => None,
+            })
+            .collect();
+        assert!(
+            titles.contains(
+                &"Replace `unwrap()` with `expect(\"the referent is alive\")`".to_string()
+            ),
+            "{titles:?}"
+        );
+        assert!(
+            !titles.iter().any(|t| t.ends_with("`expect(\"…\")`")),
+            "{titles:?}"
+        );
     }
 }

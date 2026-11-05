@@ -57,7 +57,10 @@ pub fn serve(connection: Connection) -> LspResult {
         // just `true`) lets a client pre-filter and drive "fix all" without a
         // round trip.
         code_action_provider: Some(CodeActionProviderCapability::Options(CodeActionOptions {
-            code_action_kinds: Some(vec![lsp_types::CodeActionKind::QUICKFIX]),
+            code_action_kinds: Some(vec![
+                lsp_types::CodeActionKind::QUICKFIX,
+                lsp_types::CodeActionKind::REFACTOR_REWRITE,
+            ]),
             ..Default::default()
         })),
         ..Default::default()

@@ -363,9 +363,11 @@ fn server_offers_quick_fixes_over_the_protocol() {
     };
     // Advertised as OPTIONS naming the kind, not a bare `true`: a client that
     // pre-filters by kind (or drives "fix all") needs the kind up front.
+    // `refactor.rewrite` is the `.unwrap()` -> `.expect` rewrite on an
+    // ordinary Option, which carries no diagnostic (B-2026-11-05-3).
     assert_eq!(
         caps["capabilities"]["codeActionProvider"]["codeActionKinds"],
-        json!(["quickfix"]),
+        json!(["quickfix", "refactor.rewrite"]),
         "codeActionProvider not advertised: {:?}",
         caps["capabilities"]["codeActionProvider"]
     );
