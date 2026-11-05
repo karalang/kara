@@ -99,6 +99,15 @@ accepted by 0.8.0 are now refused, each with a fix-it.
   object, each target's own findings tagged with the target and those on
   every target once under `shared_diagnostics`, as a file check already
   did. It printed one untagged object per target (B-2026-11-05-12).
+- **A package reports in the shapes a file does.** `karac check
+  --output=jsonl` on a package member, `karac build --output=jsonl` and
+  `karac run --output=jsonl` in a package stream `build_start`, phase
+  events, `diagnostic` events with ids and `build_complete`, and a member's
+  check runs every phase, so an ownership error after a type error is
+  reported. `--output=json` is the batch document, with ids and
+  `program_effects`. A member check printed bare `type_error` lines and
+  stopped at the type checker, and a package build printed its entries with
+  no `type` (design.md § 17, B-2026-11-05-26).
 
 ### Added
 

@@ -177,6 +177,15 @@ pub(super) fn package_check_refusal(
     pc.has_errors().then_some(pc)
 }
 
+/// The files of a package's modules, as reports name them.
+pub(super) fn package_files(tree: &crate::module::ProgramTree) -> Vec<String> {
+    tree.modules
+        .iter()
+        .filter(|m| !m.is_synthetic)
+        .map(|m| super::project_v2::shown(&m.file))
+        .collect()
+}
+
 /// Render a refusing [`package_check_refusal`] as the build renders it, and
 /// exit 1.
 pub(super) fn render_package_refusal(
@@ -184,7 +193,9 @@ pub(super) fn render_package_refusal(
     output: OutputMode,
 ) -> ! {
     match output {
-        OutputMode::Json => {
+        // The batch document and the event stream a pipeline gives, ids and
+        // phases included (design.md § 17, B-2026-11-05-26).
+        OutputMode::Json | OutputMode::Jsonl => {
             let mut diags: Vec<String> = Vec::new();
             diags.extend(super::build_cmds::parse_errors_json(&pc.parse_errors));
             diags.extend(super::build_cmds::cycles_json(&pc.cycles, &pc.tree));
@@ -193,26 +204,7 @@ pub(super) fn render_package_refusal(
             if let Some(f) = &pc.late_failure {
                 diags.extend(super::build_cmds::late_failure_json(f));
             }
-            println!("{{\"diagnostics\":[{}]}}", diags.join(","));
-        }
-        OutputMode::Jsonl => {
-            for e in super::build_cmds::parse_errors_jsonl(&pc.parse_errors) {
-                println!("{e}");
-            }
-            for e in super::build_cmds::cycles_jsonl(&pc.cycles, &pc.tree) {
-                println!("{e}");
-            }
-            for e in super::build_cmds::resolve_errors_jsonl(&pc.resolve_errors) {
-                println!("{e}");
-            }
-            for e in super::build_cmds::type_errors_jsonl(&pc.type_errors) {
-                println!("{e}");
-            }
-            if let Some(f) = &pc.late_failure {
-                for e in super::build_cmds::late_failure_jsonl(f) {
-                    println!("{e}");
-                }
-            }
+            emit_found_entries(&diags, &package_files(&pc.tree), output, None);
         }
         OutputMode::Text => {
             super::build_cmds::print_parse_errors_text(&pc.parse_errors);
@@ -771,6 +763,7 @@ pub(super) fn cmd_check_project(
     // to report first, as in `run_v2::combine`; a parse, cycle or resolve
     // one is the package's alone, and leaves nothing to combine.
     let mut v2_warnings_json: Vec<String> = Vec::new();
+    let mut v2_effects: Option<(String, String)> = None;
     if pc.refuses_only_by_type() {
         let entry = &pc.tree.modules[pc.tree.root as usize].file;
         let filename = super::project_v2::shown(entry);
@@ -793,13 +786,15 @@ pub(super) fn cmd_check_project(
                 // (B-2026-11-05-16). They stand in for the modules' own.
                 match output {
                     OutputMode::Text => super::run_v2::print_diagnostics(&passed, Some(&a)),
-                    OutputMode::Json => v2_warnings_json.extend(
-                        collect_diagnostics(&passed)
-                            .entries
-                            .iter()
-                            .map(|d| a.remap_json_text(&filename, d)),
-                    ),
-                    OutputMode::Jsonl => {}
+                    OutputMode::Json | OutputMode::Jsonl => {
+                        v2_warnings_json.extend(
+                            collect_diagnostics(&passed)
+                                .entries
+                                .iter()
+                                .map(|d| a.remap_json_text(&filename, d)),
+                        );
+                        v2_effects = Some(effects_fields(&passed));
+                    }
                 }
                 pc.type_warnings.clear();
             }
@@ -818,38 +813,26 @@ pub(super) fn cmd_check_project(
     };
     let errors = pc.error_count() + test_errors;
     match output {
-        OutputMode::Json => {
+        // The batch document and the event stream, ids and effects included
+        // (design.md § 17, B-2026-11-05-26).
+        OutputMode::Json | OutputMode::Jsonl => {
             let mut diags: Vec<String> = Vec::new();
-            diags.extend(test_json);
             diags.extend(super::build_cmds::parse_errors_json(&pc.parse_errors));
-            diags.extend(v2_warnings_json);
-            diags.extend(super::build_cmds::type_warnings_json(&pc.type_warnings));
             diags.extend(super::build_cmds::cycles_json(&pc.cycles, &pc.tree));
             diags.extend(super::build_cmds::resolve_errors_json(&pc.resolve_errors));
+            diags.extend(v2_warnings_json);
+            diags.extend(super::build_cmds::type_warnings_json(&pc.type_warnings));
             diags.extend(super::build_cmds::type_errors_json(&pc.type_errors));
             if let Some(f) = &pc.late_failure {
                 diags.extend(super::build_cmds::late_failure_json(f));
             }
-            println!("{{\"diagnostics\":[{}]}}", diags.join(","));
-        }
-        OutputMode::Jsonl => {
-            for e in super::build_cmds::parse_errors_jsonl(&pc.parse_errors) {
-                println!("{e}");
-            }
-            for e in super::build_cmds::cycles_jsonl(&pc.cycles, &pc.tree) {
-                println!("{e}");
-            }
-            for e in super::build_cmds::resolve_errors_jsonl(&pc.resolve_errors) {
-                println!("{e}");
-            }
-            for e in super::build_cmds::type_errors_jsonl(&pc.type_errors) {
-                println!("{e}");
-            }
-            if let Some(f) = &pc.late_failure {
-                for e in super::build_cmds::late_failure_jsonl(f) {
-                    println!("{e}");
-                }
-            }
+            diags.extend(test_json);
+            emit_found_entries(
+                &diags,
+                &package_files(&pc.tree),
+                output,
+                v2_effects.as_ref(),
+            );
         }
         OutputMode::Text => {
             super::build_cmds::print_type_warnings_text(&pc.type_warnings);
@@ -1170,6 +1153,17 @@ fn cmd_check_package_member(
     let platform = platform.unwrap_or_else(|| {
         super::build_cmds::walk_platform_for_target(crate::target::active_target())
     });
+    // The machine-readable reports are the ones `karac build` checks with:
+    // the package as one source through every phase, its places named by
+    // file, ids and the event stream included (design.md § 17,
+    // B-2026-11-05-26). The text report stays scoped to the named file.
+    if output != OutputMode::Text && platform == crate::walker::Platform::host() {
+        if let Some((tree_root, tree)) = super::project_v2::package_tree(filename, false, false) {
+            if tree.modules.iter().filter(|m| !m.is_synthetic).count() > 1 {
+                check_package_machine(filename, &tree_root, &tree, &lints, output);
+            }
+        }
+    }
     let mut pc = match super::build_cmds::package_check_on(root, &lints, platform) {
         Ok(pc) => pc,
         Err(e) => {
@@ -1200,32 +1194,23 @@ fn cmd_check_package_member(
         return false;
     }
     let had_errors = pc.has_errors();
+    // Machine output that reaches here is a package the combined source could
+    // not be formed for (a parse error in a module, a cycle): the package
+    // check's findings, all of them, each naming its file.
+    if output != OutputMode::Text {
+        let mut diags: Vec<String> = Vec::new();
+        diags.extend(super::build_cmds::parse_errors_json(&pc.parse_errors));
+        diags.extend(super::build_cmds::cycles_json(&pc.cycles, &pc.tree));
+        diags.extend(super::build_cmds::resolve_errors_json(&pc.resolve_errors));
+        diags.extend(super::build_cmds::type_warnings_json(&pc.type_warnings));
+        diags.extend(super::build_cmds::type_errors_json(&pc.type_errors));
+        emit_found_entries(&diags, &package_files(&pc.tree), output, None);
+        process::exit(i32::from(had_errors));
+    }
     let elsewhere = pc.restrict_to_file(std::path::Path::new(filename));
 
     match output {
-        OutputMode::Json => {
-            let mut diags: Vec<String> = Vec::new();
-            diags.extend(super::build_cmds::parse_errors_json(&pc.parse_errors));
-            diags.extend(super::build_cmds::type_warnings_json(&pc.type_warnings));
-            diags.extend(super::build_cmds::cycles_json(&pc.cycles, &pc.tree));
-            diags.extend(super::build_cmds::resolve_errors_json(&pc.resolve_errors));
-            diags.extend(super::build_cmds::type_errors_json(&pc.type_errors));
-            println!("{{\"diagnostics\":[{}]}}", diags.join(","));
-        }
-        OutputMode::Jsonl => {
-            for e in super::build_cmds::parse_errors_jsonl(&pc.parse_errors) {
-                println!("{e}");
-            }
-            for e in super::build_cmds::cycles_jsonl(&pc.cycles, &pc.tree) {
-                println!("{e}");
-            }
-            for e in super::build_cmds::resolve_errors_jsonl(&pc.resolve_errors) {
-                println!("{e}");
-            }
-            for e in super::build_cmds::type_errors_jsonl(&pc.type_errors) {
-                println!("{e}");
-            }
-        }
+        OutputMode::Json | OutputMode::Jsonl => unreachable!("reported above"),
         OutputMode::Text => {
             super::build_cmds::print_type_warnings_text(&pc.type_warnings);
             super::build_cmds::print_parse_errors_text(&pc.parse_errors);
@@ -1254,6 +1239,36 @@ fn cmd_check_package_member(
         process::exit(1);
     }
     true
+}
+
+/// [`cmd_check_package_member`]'s `--output=json` / `jsonl`: the package's
+/// combined source checked as `karac build` checks it, then reported in its
+/// files. A refusal only the module boundaries carry is the package check's,
+/// reported in the same shapes. Exits: 1 on an error, 0 otherwise.
+fn check_package_machine(
+    filename: &str,
+    root: &std::path::Path,
+    tree: &crate::module::ProgramTree,
+    lints: &crate::lints::CliLintOverrides,
+    output: OutputMode,
+) -> ! {
+    let a = super::run_v2::combine(root, tree, output, "check");
+    let mf = manifest::load_from_root(root).ok();
+    let remap = |d: &str| a.remap_json_text(filename, d);
+    let fresh = || super::run_v2::v2_pipeline(filename, &a.text, mf.as_ref(), lints.clone());
+    let mut pipeline = fresh();
+    pipeline.run_all_checks();
+    let errors = pipeline.total_errors();
+    if errors == 0 {
+        if let Some(pc) = &a.refusal {
+            render_package_refusal(pc, output);
+        }
+    }
+    match output {
+        OutputMode::Json => emit_json_output_remapped(&pipeline, &remap),
+        _ => run_pipeline_jsonl_remapped(&mut fresh(), &a.files(), &remap),
+    }
+    process::exit(i32::from(errors > 0));
 }
 
 #[allow(clippy::too_many_arguments)]

@@ -120,6 +120,25 @@ pub(super) fn check_v2(
     pipeline
 }
 
+/// The pipeline `karac check` runs on a program's source, under its
+/// manifest's profile.
+pub(super) fn v2_pipeline(
+    filename: &str,
+    source: &str,
+    manifest: Option<&manifest::Manifest>,
+    lint_overrides: crate::lints::CliLintOverrides,
+) -> Pipeline {
+    let mut p = Pipeline::new(filename, source)
+        .with_lint_overrides(lint_overrides)
+        .strict_core()
+        .with_library();
+    if let Some(m) = manifest {
+        p.profile = m.profile;
+        p.profile_config = m.profile_config.clone();
+    }
+    p
+}
+
 /// [`check_v2`]'s check: an error fails the command with exit 1, its
 /// diagnostics naming the package's files; a passing check's pipeline is
 /// returned with its warnings unprinted.
@@ -137,17 +156,7 @@ pub(super) fn check_v2_or_exit(
     }
     // An error `karac check` reports fails the command too (core semantics
     // §0): the MIR builder does not repeat every rule.
-    let checked = || {
-        let mut p = Pipeline::new(filename, source)
-            .with_lint_overrides(lint_overrides.clone())
-            .strict_core()
-            .with_library();
-        if let Some(m) = manifest {
-            p.profile = m.profile;
-            p.profile_config = m.profile_config.clone();
-        }
-        p
-    };
+    let checked = || v2_pipeline(filename, source, manifest, lint_overrides.clone());
     let mut pipeline = checked();
     pipeline.run_all_checks();
     let total = pipeline.total_errors();
@@ -159,23 +168,15 @@ pub(super) fn check_v2_or_exit(
             }
             (OutputMode::Json, None) => emit_json_output(&pipeline),
             (OutputMode::Jsonl, None) => run_pipeline_jsonl(&mut checked()),
-            // A package's diagnostics read as the package-wide check's do.
+            // A package's diagnostics name its files, in the document and
+            // the stream a lone file gives (B-2026-11-05-26).
             (OutputMode::Json, Some(a)) => {
-                let diags: Vec<String> = collect_diagnostics(&pipeline)
-                    .entries
-                    .iter()
-                    .map(|d| a.remap_json_text(filename, d))
-                    .collect();
-                print_stdout_line(&format!(
-                    "{{\"program_effects\":{},\"diagnostics\":[{}]}}",
-                    program_effects_json(&pipeline),
-                    diags.join(",")
-                ));
+                emit_json_output_remapped(&pipeline, &|d| a.remap_json_text(filename, d));
             }
             (OutputMode::Jsonl, Some(a)) => {
-                for d in &collect_diagnostics(&pipeline).entries {
-                    print_stdout_line(&a.remap_json_text(filename, d));
-                }
+                run_pipeline_jsonl_remapped(&mut checked(), &a.files(), &|d| {
+                    a.remap_json_text(filename, d)
+                })
             }
         }
         process::exit(1);

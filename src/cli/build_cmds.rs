@@ -965,22 +965,6 @@ pub(super) fn late_failure_json(f: &MultiFileLateFailure) -> Vec<String> {
         .collect()
 }
 
-pub(super) fn late_failure_jsonl(f: &MultiFileLateFailure) -> Vec<String> {
-    f.diags
-        .iter()
-        .map(|d| {
-            format!(
-                "{{\"type\":{},\"file\":{},\"line\":{},\"column\":{},\"message\":{}}}",
-                json_string(&format!("{}_error", f.phase)),
-                json_string(d.file.as_deref().unwrap_or("")),
-                d.line,
-                d.column,
-                json_string(&d.message),
-            )
-        })
-        .collect()
-}
-
 pub(super) fn print_late_failure_text(f: &MultiFileLateFailure) {
     eprintln!("error[{}]: {}", f.phase, f.message);
 }

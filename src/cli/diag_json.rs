@@ -2705,18 +2705,179 @@ pub(super) fn cap_cascade(diags: DiagnosticJson) -> DiagnosticJson {
 }
 
 pub(super) fn emit_json_output(pipeline: &Pipeline) {
+    emit_json_output_remapped(pipeline, &|d| d.to_string());
+}
+
+/// [`emit_json_output`] with each diagnostic's places named by `remap`: a
+/// package's combined source reports in its files (B-2026-11-05-26).
+pub(super) fn emit_json_output_remapped(pipeline: &Pipeline, remap: &dyn Fn(&str) -> String) {
     let diags = cap_cascade(collect_diagnostics(pipeline));
+    let entries: Vec<String> = diags.entries.iter().map(|d| remap(d)).collect();
     let effects = program_effects_json(pipeline);
     let pub_effects = public_function_effects_json(pipeline);
     let mrg = mutual_recursion_groups_json(pipeline);
     print_stdout_line(&format!(
-        "{{\"program_effects\":{},\"public_function_effects\":{},\"mutual_recursion_groups\":{},\"target_skipped\":{},\"diagnostics\":{}}}",
+        "{{\"program_effects\":{},\"public_function_effects\":{},\"mutual_recursion_groups\":{},\"target_skipped\":{},\"diagnostics\":[{}]}}",
         effects,
         pub_effects,
         mrg,
         target_skipped_json(pipeline),
-        diags.to_json_array()
+        entries.join(",")
     ));
+}
+
+/// Findings that have no pipeline behind them, a package's module-aware
+/// check refusing it (a parse error, an import cycle, a refused import), as
+/// the batch document or the event stream a pipeline gives (design.md § 17,
+/// B-2026-11-05-26): each entry gets an id and `primary`, and the stream
+/// brackets each phase that ran and skips the rest. `entries` are JSON
+/// objects carrying `severity` and `phase`, in report order; `files` are the
+/// package's files.
+/// The batch document's fields before `diagnostics`, and `program_effects`
+/// alone for the stream's `build_complete`, from a pipeline that checked the
+/// program; [`emit_found_entries`]'s `effects`.
+pub(super) fn effects_fields(pipeline: &Pipeline) -> (String, String) {
+    let effects = program_effects_json(pipeline);
+    (
+        format!(
+            "\"program_effects\":{},\"public_function_effects\":{},\"mutual_recursion_groups\":{},\"target_skipped\":{}",
+            effects,
+            public_function_effects_json(pipeline),
+            mutual_recursion_groups_json(pipeline),
+            target_skipped_json(pipeline),
+        ),
+        effects,
+    )
+}
+
+/// `effects` are [`effects_fields`] when a pipeline checked the program;
+/// `None` reports them as not reached.
+pub(super) fn emit_found_entries(
+    entries: &[String],
+    files: &[String],
+    output: OutputMode,
+    effects: Option<&(String, String)>,
+) {
+    let (head, program_effects) = effects.cloned().unwrap_or_else(|| {
+        (
+            "\"program_effects\":null,\"public_function_effects\":{},\"mutual_recursion_groups\":[],\"target_skipped\":[]".to_string(),
+            "null".to_string(),
+        )
+    });
+    let parsed: Vec<serde_json::Map<String, serde_json::Value>> = entries
+        .iter()
+        .filter_map(|e| match serde_json::from_str::<serde_json::Value>(e) {
+            Ok(serde_json::Value::Object(fields)) => Some(fields),
+            _ => None,
+        })
+        .collect();
+    let field = |m: &serde_json::Map<String, serde_json::Value>, k: &str| {
+        m.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string()
+    };
+    // A phase of the package check's own (`checks`, the concurrency and
+    // late checks) reports after ownership, where it runs.
+    let mut phases: Vec<String> = DIAGNOSTIC_PHASES.iter().map(|p| p.to_string()).collect();
+    for m in &parsed {
+        let p = field(m, "phase");
+        if !phases.contains(&p) {
+            let at = phases
+                .iter()
+                .position(|q| q == "ownership")
+                .map_or(phases.len(), |i| i + 1);
+            phases.insert(at, p);
+        }
+    }
+    let rank = |p: &str| phases.iter().position(|q| q == p).unwrap_or(0);
+    // In phase order, as the stream reports them, so an id is a place in
+    // the document and in the stream alike.
+    let mut parsed = parsed;
+    parsed.sort_by_key(|m| rank(&field(m, "phase")));
+    // `(phase, severity, entry with its id)`.
+    let mut tagged: Vec<(String, String, String)> = Vec::new();
+    for (i, fields) in parsed.into_iter().enumerate() {
+        let (severity, phase) = (field(&fields, "severity"), field(&fields, "phase"));
+        let mut out = serde_json::Map::new();
+        out.insert(
+            "id".into(),
+            serde_json::Value::String(format!("d{}", i + 1)),
+        );
+        for (k, v) in fields {
+            // An entry from a pipeline brings its own id and `primary`; the
+            // ids here number this report.
+            if k == "id" || k == "primary" {
+                continue;
+            }
+            let is_severity = k == "severity";
+            out.insert(k, v);
+            if is_severity {
+                out.insert("primary".into(), serde_json::Value::Bool(true));
+            }
+        }
+        tagged.push((phase, severity, serde_json::Value::Object(out).to_string()));
+    }
+    if output != OutputMode::Jsonl {
+        let all: Vec<&str> = tagged.iter().map(|t| t.2.as_str()).collect();
+        print_stdout_line(&format!("{{{head},\"diagnostics\":[{}]}}", all.join(",")));
+        return;
+    }
+    let build_id = open_jsonl_stream(files);
+    // Every phase up to the last one with an error ran; the ones after it
+    // did not, blocked by the errors so far. With no error, all of them ran.
+    let last = tagged
+        .iter()
+        .filter(|t| t.1 == "error")
+        .map(|t| rank(&t.0))
+        .max()
+        .unwrap_or(phases.len() - 1);
+    let (mut total_errors, mut total_warnings) = (0, 0);
+    let mut error_ids: Vec<String> = Vec::new();
+    for (idx, phase) in phases.iter().enumerate() {
+        if idx > last {
+            let blocking: Vec<String> = error_ids.iter().map(|id| json_string(id)).collect();
+            emit_jsonl_event(
+                "phase_skipped",
+                &format!(
+                    "\"phase\":{},\"reason\":{},\"blocking\":[{}]",
+                    json_string(phase),
+                    json_string(&format!("{} errors in input", phases[last])),
+                    blocking.join(",")
+                ),
+            );
+            continue;
+        }
+        emit_jsonl_event("phase_start", &format!("\"phase\":{}", json_string(phase)));
+        let (mut errors, mut warnings, mut notes) = (0, 0, 0);
+        for (i, (p, severity, entry)) in tagged.iter().enumerate() {
+            if p != phase {
+                continue;
+            }
+            print_stdout_line(&format!("{{\"type\":\"diagnostic\",{}", &entry[1..]));
+            match severity.as_str() {
+                "error" => {
+                    errors += 1;
+                    error_ids.push(format!("d{}", i + 1));
+                }
+                "warning" => warnings += 1,
+                _ => notes += 1,
+            }
+        }
+        total_errors += errors;
+        total_warnings += warnings;
+        emit_jsonl_event(
+            "phase_complete",
+            &format!(
+                "\"phase\":{},\"errors\":{errors},\"warnings\":{warnings},\"notes\":{notes}",
+                json_string(phase)
+            ),
+        );
+    }
+    emit_jsonl_event(
+        "build_complete",
+        &format!(
+            "\"build_id\":{build_id},\"success\":{},\"total_errors\":{total_errors},\"total_warnings\":{total_warnings},\"program_effects\":{program_effects}",
+            total_errors == 0
+        ),
+    );
 }
 
 /// Write `line` and a newline to stdout. When the reader has gone
@@ -2828,7 +2989,10 @@ const DIAGNOSTIC_PHASES: [&str; 9] = [
 
 /// The JSONL stream's running state ([`run_pipeline_jsonl`]).
 #[derive(Default)]
-struct JsonlStream {
+struct JsonlStream<'a> {
+    /// Names a package's combined source back to its files
+    /// ([`run_pipeline_jsonl_remapped`]); `None` for a lone file.
+    remap: Option<&'a dyn Fn(&str) -> String>,
     /// How many of [`collect_diagnostics`]'s entries are out.
     emitted: usize,
     /// The ids of the error diagnostics out so far, a skipped phase's
@@ -2840,7 +3004,7 @@ struct JsonlStream {
     started: Vec<&'static str>,
 }
 
-impl JsonlStream {
+impl JsonlStream<'_> {
     /// Emit `phase`'s diagnostics and its `phase_complete`, with the counts
     /// from their severities.
     fn complete(&mut self, pipeline: &Pipeline, phase: &'static str) {
@@ -2857,7 +3021,8 @@ impl JsonlStream {
             let entry = &diags.entries[i];
             // An entry is a JSON object, `{"id":…`: the event is the entry
             // with its type first.
-            print_stdout_line(&format!("{{\"type\":\"diagnostic\",{}", &entry[1..]));
+            let shown = self.remap.map_or_else(|| entry.clone(), |f| f(entry));
+            print_stdout_line(&format!("{{\"type\":\"diagnostic\",{}", &shown[1..]));
             match diags.severities[i].as_str() {
                 "error" => {
                     errors += 1;
@@ -2941,33 +3106,60 @@ impl JsonlStream {
 /// rebuilds that document; `phase_complete` counts them by severity, and
 /// `build_complete.total_errors` is the sum of those counts (B-2026-11-05-13).
 pub(super) fn run_pipeline_jsonl(pipeline: &mut Pipeline) {
-    let filename = pipeline.filename.clone();
+    let files = [pipeline.filename.clone()];
+    stream_pipeline_jsonl(pipeline, &files, None);
+}
+
+/// [`run_pipeline_jsonl`] over a package's combined source: `files` are the
+/// package's files and `remap` names each diagnostic's places in them, so the
+/// stream is the one a lone file gives (design.md § 17, B-2026-11-05-26).
+pub(super) fn run_pipeline_jsonl_remapped(
+    pipeline: &mut Pipeline,
+    files: &[String],
+    remap: &dyn Fn(&str) -> String,
+) {
+    stream_pipeline_jsonl(pipeline, files, Some(remap));
+}
+
+/// The stream's opening: `build_start`, then the lexer's phase, which runs
+/// inside the parser, whose errors are its errors. Returns the build id.
+fn open_jsonl_stream(files: &[String]) -> String {
     let build_id = json_string(&new_build_id());
     let args: Vec<String> = std::env::args().skip(1).map(|a| json_string(&a)).collect();
+    let files: Vec<String> = files.iter().map(|f| json_string(f)).collect();
     emit_jsonl_event(
         "build_start",
         &format!(
             "\"build_id\":{build_id},\"timestamp\":{},\"args\":[{}],\"files\":[{}]",
             json_string(&rfc3339_utc_now()),
             args.join(","),
-            json_string(&filename)
+            files.join(",")
         ),
     );
-
-    // The lexer runs inside the parser, whose errors are its errors.
     emit_jsonl_event(
         "phase_start",
         &format!(
             "\"phase\":\"lex\",\"scope\":{{\"files\":[{}]}}",
-            json_string(&filename)
+            files.join(",")
         ),
     );
     emit_jsonl_event(
         "phase_complete",
         "\"phase\":\"lex\",\"errors\":0,\"warnings\":0,\"notes\":0",
     );
+    build_id
+}
 
-    let mut stream = JsonlStream::default();
+fn stream_pipeline_jsonl(
+    pipeline: &mut Pipeline,
+    files: &[String],
+    remap: Option<&dyn Fn(&str) -> String>,
+) {
+    let build_id = open_jsonl_stream(files);
+    let mut stream = JsonlStream {
+        remap,
+        ..JsonlStream::default()
+    };
     stream.start("parse");
     pipeline.run_all_checks_observed(&mut |p, phase, done| stream.observe(p, phase, done));
     // Compile-time evaluation runs inside resolve and the lowering; its

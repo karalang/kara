@@ -49,6 +49,17 @@ pub(super) struct Amalgam {
 }
 
 impl Amalgam {
+    /// The package's files, as reports name them, in the combined order.
+    pub fn files(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for (_, _, file) in &self.bytes {
+            if !out.contains(file) {
+                out.push(file.clone());
+            }
+        }
+        out
+    }
+
     /// The file and line a line of the combined text came from.
     pub fn locate(&self, line: usize) -> Option<(&str, usize)> {
         let i = self.lines.partition_point(|(first, _, _)| *first <= line);
