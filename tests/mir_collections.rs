@@ -1009,8 +1009,11 @@ fn lazy_lock_is_clean_under_asan() {
     }
 }
 
-/// The runtime's introspection is empty and `Vec.filled` with a negative
-/// count is empty, on both backends (B-2026-10-22-38).
+/// The runtime's introspection is empty outside any `par` block or task
+/// and `Vec.filled` with a negative count is empty, on both backends
+/// (B-2026-10-22-38). `has_debug_metadata()` is left out: a compiled dev
+/// build has the metadata and the interpreter does not
+/// (`tests/mir_debug_metadata.rs`, B-2026-11-05-34).
 #[test]
 fn runtime_introspection_and_negative_fills_agree_on_both_backends() {
     agrees(
@@ -1018,13 +1021,12 @@ fn runtime_introspection_and_negative_fills_agree_on_both_backends() {
 fn main() {
     println(Runtime.list_tasks().len());
     println(Runtime.list_par_blocks().len());
-    println(Runtime.has_debug_metadata());
     let v = Vec.filled(-1, 7);
     let w = Vec.filled(-3, "s");
     println(f"{v.len()} {w.len()} {Vec.filled(2, 7).len()}");
 }
 "#,
-        "0\n0\nfalse\n0 0 2\n",
+        "0\n0\n0 0 2\n",
         0,
     );
 }
