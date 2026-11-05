@@ -1,0 +1,309 @@
+// LeetCode #1054: Distant Barcodes -- the differential.
+//
+// The five arms against the statement read literally, on 3000 random
+// arrays of barcodes that can be rearranged, with five properties:
+//
+// P1  the answer holds the same barcodes and no two next to each other are
+//     equal
+// P2  the greedy arm's answer is the first arrangement a search in
+//     dictionary order finds, and no arm's answer is smaller
+// P3  the barcodes reversed, or sorted, give the same answer
+// P4  every barcode 3 larger, or doubled, moves the answer the same way
+// P5  n + 1 copies of a new barcode added to n barcodes take every even
+//     place, and the answer is valid
+// ---- barcodes.kara: the ★ arm: the most common barcode first, every other place
+fn star_arm(barcodes: Slice[i64]) -> Vec[i64] {
+    let n = barcodes.len();
+    let top = *barcodes.iter().max().unwrap();
+    let mut counts = Vec.filled(top + 1, 0);
+    for b in barcodes.iter() {
+        counts[b] += 1;
+    }
+    let mut most = 0;
+    for v in 1..top + 1 {
+        if counts[v] > counts[most] {
+            most = v;
+        }
+    }
+    let mut answer = Vec.filled(n, 0);
+    let mut place = 0;
+    let mut v = most;
+    let mut next = 1;
+    for _ in 0..n {
+        while counts[v] == 0 {
+            v = next;
+            next += 1;
+        }
+        answer[place] = v;
+        counts[v] -= 1;
+        place += 2;
+        if place >= n {
+            place = 1;
+        }
+    }
+    answer
+}
+
+// ---- barcodes_heap.kara: a max-heap of counts
+fn heap_arm(barcodes: Slice[i64]) -> Vec[i64] {
+    let mut counts: Map[i64, i64] = Map.new();
+    for b in barcodes.iter() {
+        *counts.entry(*b).or_insert(0) += 1;
+    }
+    let mut heap: PriorityQueue[(i64, i64)] = PriorityQueue.max_first();
+    for (b, c) in counts.iter() {
+        heap.push((*c, *b));
+    }
+    let mut answer: Vec[i64] = Vec.with_capacity(barcodes.len());
+    while let Some((c, b)) = heap.pop() {
+        if answer.last() == Some(ref b) {
+            let (c2, b2) = heap.pop().unwrap();
+            answer.push(b2);
+            if c2 > 1 {
+                heap.push((c2 - 1, b2));
+            }
+            heap.push((c, b));
+        } else {
+            answer.push(b);
+            if c > 1 {
+                heap.push((c - 1, b));
+            }
+        }
+    }
+    answer
+}
+
+// ---- barcodes_sort.kara: sorted by count, dealt to every other place
+fn sort_arm(barcodes: Slice[i64]) -> Vec[i64] {
+    let mut counts: Map[i64, i64] = Map.new();
+    for b in barcodes {
+        *counts.entry(b).or_insert(0) += 1;
+    }
+    let mut sorted = barcodes.to_vec();
+    sorted.sort_by_key(|b| (-counts[b], b));
+    let n = sorted.len();
+    let mut answer = Vec.filled(n, 0);
+    let mut place = 0;
+    for b in sorted {
+        answer[place] = b;
+        place += 2;
+        if place >= n {
+            place = 1;
+        }
+    }
+    answer
+}
+
+// ---- barcodes_iter.kara: iterator adaptors
+fn iter_arm(barcodes: Slice[i64]) -> Vec[i64] {
+    let counts: SortedMap[i64, i64] = barcodes.iter().fold(SortedMap.new(), |m, b| {
+        let mut m = m;
+        *m.entry(*b).or_insert(0) += 1;
+        m
+    });
+    let mut groups: Vec[(i64, i64)] = counts.into_iter().collect();
+    groups.sort_by(|a, b| b.1.cmp(a.1));
+    let order: Vec[i64] = groups
+        .iter()
+        .flat_map(|(v, c)| repeat(*v).take(*c))
+        .collect();
+    let n = order.len();
+    let places = (0..n).step_by(2).chain((1..n).step_by(2));
+    let mut answer = Vec.filled(n, 0);
+    for (p, b) in places.zip(order.into_iter()) {
+        answer[p] = b;
+    }
+    answer
+}
+
+// ---- barcodes_greedy.kara: the smallest answer, place by place
+fn greedy_arm(barcodes: Slice[i64]) -> Vec[i64] {
+    let mut counts: SortedMap[i64, i64] = SortedMap.new();
+    for b in barcodes.iter() {
+        *counts.entry(*b).or_insert(0) += 1;
+    }
+    let n = barcodes.len();
+    let mut answer: Vec[i64] = Vec.with_capacity(n);
+    for i in 0..n {
+        let left = n - i;
+        let prev = answer.last().cloned();
+        let forced = if left % 2 == 1 {
+            counts.iter().find(|(_, c)| *c == (left + 1) / 2).map(|(v, _)| *v)
+        } else {
+            None
+        };
+        let pick = forced.unwrap_or_else(|| *counts.keys().find(|v| Some(*v) != prev).unwrap());
+        answer.push(pick);
+        let c = counts.get_mut(pick).unwrap();
+        *c -= 1;
+        if *c == 0 {
+            counts.remove(pick);
+        }
+    }
+    answer
+}
+
+// ---- the statement read literally
+// Arrangements tried in dictionary order: each place takes the smallest
+// barcode left that differs from the one before, and the search backs up
+// when none does. The first arrangement it completes is the smallest.
+fn smallest_literally(barcodes: Slice[i64]) -> Vec[i64] {
+    let mut values = barcodes.to_vec();
+    values.sort();
+    values.dedup();
+    let mut left: Vec[i64] = values.iter().map(|v| barcodes.iter().filter(|b| *b == v).count()).collect();
+    let mut answer: Vec[i64] = Vec.new();
+    place_next(values, mut left, mut answer, barcodes.len());
+    answer
+}
+
+fn place_next(values: Slice[i64], left: mut ref Vec[i64], answer: mut ref Vec[i64], n: i64) -> bool {
+    if answer.len() == n {
+        return true;
+    }
+    for k in 0..values.len() {
+        if left[k] > 0 and answer.last() != Some(ref values[k]) {
+            left[k] -= 1;
+            answer.push(values[k]);
+            if place_next(values, mut left, mut answer, n) {
+                return true;
+            }
+            answer.pop();
+            left[k] += 1;
+        }
+    }
+    false
+}
+
+// Whether `answer` holds the same barcodes as `barcodes` and no two
+// adjacent ones are equal.
+fn valid(barcodes: Slice[i64], answer: Slice[i64]) -> bool {
+    let mut want = barcodes.to_vec();
+    let mut got = answer.to_vec();
+    want.sort();
+    got.sort();
+    want == got and answer.windows(2).iter().all(|w| w[0] != w[1])
+}
+
+fn arm(a: i64, barcodes: Slice[i64]) -> Vec[i64] {
+    match a {
+        0 => star_arm(barcodes),
+        1 => heap_arm(barcodes),
+        2 => sort_arm(barcodes),
+        3 => iter_arm(barcodes),
+        _ => greedy_arm(barcodes),
+    }
+}
+
+// ---- the harness
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_values(n: i64, largest: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut barcodes: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        barcodes.push(next_random(mut seed) % largest + 1);
+    }
+    barcodes
+}
+
+// Whether a rearrangement can exist: no barcode fills more than every other
+// place.
+fn feasible(barcodes: Slice[i64]) -> bool {
+    let mut counts: Map[i64, i64] = Map.new();
+    for b in barcodes.iter() {
+        *counts.entry(*b).or_insert(0) += 1;
+    }
+    counts.values().all(|c| *c <= (barcodes.len() + 1) / 2)
+}
+
+fn fold(answer: Slice[i64]) -> i64 {
+    let mut h = 0;
+    for x in answer.iter() {
+        h = (h * 10007 + x) % 1000000007;
+    }
+    h
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    // failures by property, P1 to P5 at 1 to 5
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+// Every check on one array.
+fn check_case(t: mut ref Tally, barcodes: Slice[i64]) {
+    let answers: Vec[Vec[i64]] = (0..5).map(|a| arm(a, barcodes)).collect();
+    let smallest = smallest_literally(barcodes);
+    let n = barcodes.len();
+    let mut reversed = barcodes.to_vec();
+    reversed.reverse();
+    let mut sorted = barcodes.to_vec();
+    sorted.sort();
+    let plus: Vec[i64] = barcodes.iter().map(|x| x + 3).collect();
+    let doubled: Vec[i64] = barcodes.iter().map(|x| 2 * x).collect();
+    let fresh = sorted[n - 1] + 1;
+    let mut crowded = barcodes.to_vec();
+    for _ in 0..n + 1 {
+        crowded.push(fresh);
+    }
+    for a in 0..5 {
+        let answer = ref answers[a];
+        let what = f"arm {a}, {barcodes} -> {answer}";
+        expect(mut t, 1, valid(barcodes, answer), f"P1 {what}: not valid");
+        let least = if a == 4 { answer == smallest } else { answer >= smallest };
+        expect(mut t, 2, least, f"P2 {what}, smallest {smallest}");
+        let same = arm(a, reversed) == answer and arm(a, sorted) == answer;
+        expect(mut t, 3, same, f"P3 {what}: reversed or sorted differs");
+        let moved_plus: Vec[i64] = answer.iter().map(|x| x + 3).collect();
+        let moved_doubled: Vec[i64] = answer.iter().map(|x| 2 * x).collect();
+        let moves = arm(a, plus) == moved_plus and arm(a, doubled) == moved_doubled;
+        expect(mut t, 4, moves, f"P4 {what}: 3 larger, or doubled");
+        let spread = arm(a, crowded);
+        let evens = (0..spread.len()).step_by(2).all(|k| spread[k] == fresh);
+        expect(mut t, 5, evens and valid(crowded, spread), f"P5 {what}: {n + 1} of {fresh} -> {spread}");
+    }
+    t.cases += 1;
+    for answer in answers.iter() {
+        t.check = (t.check * 131 + fold(answer)) % 1000000007;
+    }
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: Vec.filled(6, 0) };
+    // 3000 random arrays that can be rearranged: 2000 of 1 to 8 barcodes of
+    // 1 to 3, where barcodes repeat, and 1000 of 1 to 30 of 1 to 100
+    let mut seed = 10541;
+    while t.cases < 3000 {
+        let barcodes = if t.cases < 2000 {
+            random_values(next_random(mut seed) % 8 + 1, 3, mut seed)
+        } else {
+            random_values(next_random(mut seed) % 30 + 1, 100, mut seed)
+        };
+        if feasible(barcodes) {
+            check_case(mut t, barcodes);
+        }
+    }
+    println(f"{t.cases} arrays: checksum {t.check}, {t.checks} checks over 5 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..6).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

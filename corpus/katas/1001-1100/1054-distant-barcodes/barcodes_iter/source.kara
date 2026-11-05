@@ -1,0 +1,129 @@
+// LeetCode #1054: Distant Barcodes -- iterator adaptors.
+//
+// Count into a `SortedMap` with `fold`, order the values most common first
+// with a stable sort (ties stay in value order), spell each value out with
+// `repeat(..).take(..)` under `flat_map`, and `zip` the result with the
+// even places chained to the odd ones. O(n + k log k) for k distinct
+// barcodes.
+
+fn rearrange_barcodes(barcodes: Slice[i64]) -> Vec[i64] {
+    let counts: SortedMap[i64, i64] = barcodes.iter().fold(SortedMap.new(), |m, b| {
+        let mut m = m;
+        *m.entry(*b).or_insert(0) += 1;
+        m
+    });
+    let mut groups: Vec[(i64, i64)] = counts.into_iter().collect();
+    groups.sort_by(|a, b| b.1.cmp(a.1));
+    let order: Vec[i64] = groups
+        .iter()
+        .flat_map(|(v, c)| repeat(*v).take(*c))
+        .collect();
+    let n = order.len();
+    let places = (0..n).step_by(2).chain((1..n).step_by(2));
+    let mut answer = Vec.filled(n, 0);
+    for (p, b) in places.zip(order.into_iter()) {
+        answer[p] = b;
+    }
+    answer
+}
+
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// Whether a rearrangement can exist: no value fills more than every other
+// place.
+fn feasible(barcodes: Slice[i64]) -> bool {
+    let mut counts: Map[i64, i64] = Map.new();
+    let mut most = 0;
+    for b in barcodes.iter() {
+        let c = counts.get(b).cloned().unwrap_or(0) + 1;
+        counts.insert(*b, c);
+        most = most.max(c);
+    }
+    most <= (barcodes.len() + 1) / 2
+}
+
+// Whether `answer` holds the same barcodes as `barcodes` and no two
+// adjacent ones are equal.
+fn valid(barcodes: Slice[i64], answer: Slice[i64]) -> bool {
+    let mut want = barcodes.to_vec();
+    let mut got = answer.to_vec();
+    want.sort();
+    got.sort();
+    if want != got {
+        return false;
+    }
+    for i in 1..answer.len() {
+        if answer[i] == answer[i - 1] {
+            return false;
+        }
+    }
+    true
+}
+
+// Random arrays of 1 to `longest` barcodes of 1 to `largest`: how many could
+// be rearranged, and how many answers were valid.
+fn trial(count: i64, longest: i64, largest: i64, seed: mut ref i64) -> (i64, i64) {
+    let mut possible = 0;
+    let mut good = 0;
+    for _ in 0..count {
+        let n = next_random(mut seed) % longest + 1;
+        let mut barcodes: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            barcodes.push(next_random(mut seed) % largest + 1);
+        }
+        if not feasible(barcodes) {
+            continue;
+        }
+        possible += 1;
+        if valid(barcodes, rearrange_barcodes(barcodes)) {
+            good += 1;
+        }
+    }
+    (possible, good)
+}
+
+fn main() {
+    // LeetCode's two examples, then a few more
+    let examples: Vec[Vec[i64]] = [
+        [1, 1, 1, 2, 2, 2],
+        [1, 1, 1, 1, 2, 2, 3, 3],
+        [7],
+        [1, 2],
+        [5, 5, 6],
+        [3, 3, 3, 1, 2],
+        [1, 1, 2, 2, 3, 3],
+        [4, 4, 4, 4, 1, 2, 3],
+        [9, 8, 7, 6],
+        [2, 2, 1, 1, 1],
+    ];
+    for barcodes in examples.iter() {
+        let answer = rearrange_barcodes(barcodes);
+        let verdict = if valid(barcodes, answer) { "valid" } else { "INVALID" };
+        println(f"{barcodes} -> {verdict}");
+    }
+    let mut seed = 1054;
+    let (possible, good) = trial(3000, 8, 3, mut seed);
+    println(f"3000 random arrays of 1 to 8 barcodes of 1 to 3: {possible} possible, {good} valid");
+    let (possible, good) = trial(300, 2000, 50, mut seed);
+    println(f"300 random arrays of 1 to 2000 barcodes of 1 to 50: {possible} possible, {good} valid");
+    // the largest: 10000 barcodes, half of them 7 and the rest 1 to 6 in turn,
+    // and 10000 of two values in two runs
+    let mut half: Vec[i64] = Vec.new();
+    for i in 0..10000 {
+        half.push(if i < 5000 { 7 } else { i % 6 + 1 });
+    }
+    let a = rearrange_barcodes(half);
+    println(f"10000 barcodes, 5000 of them 7, the rest 1 to 6: {if valid(half, a) { "valid" } else { "INVALID" }}");
+    let mut runs: Vec[i64] = Vec.new();
+    for i in 0..10000 {
+        runs.push(if i < 5000 { 1 } else { 2 });
+    }
+    let b = rearrange_barcodes(runs);
+    println(f"10000 barcodes, 5000 of 1 then 5000 of 2: {if valid(runs, b) { "valid" } else { "INVALID" }}");
+}

@@ -1,0 +1,14 @@
+[1, 1, 1, 2, 2, 2] -> valid
+[1, 1, 1, 1, 2, 2, 3, 3] -> valid
+[7] -> valid
+[1, 2] -> valid
+[5, 5, 6] -> valid
+[3, 3, 3, 1, 2] -> valid
+[1, 1, 2, 2, 3, 3] -> valid
+[4, 4, 4, 4, 1, 2, 3] -> valid
+[9, 8, 7, 6] -> valid
+[2, 2, 1, 1, 1] -> valid
+3000 random arrays of 1 to 8 barcodes of 1 to 3: 2412 possible, 2412 valid
+300 random arrays of 1 to 2000 barcodes of 1 to 50: 300 possible, 300 valid
+10000 barcodes, 5000 of them 7, the rest 1 to 6: valid
+10000 barcodes, 5000 of 1 then 5000 of 2: valid
