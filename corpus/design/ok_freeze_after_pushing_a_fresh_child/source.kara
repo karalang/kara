@@ -1,0 +1,8 @@
+shared struct Nd { mut val: i64, mut kids: Vec[Nd] }
+fn main() {
+    let r = Nd { val: 2, kids: [] };
+    r.kids.push(Nd { val: 3, kids: [] });
+    let g = freeze r;
+    println(g.kids.len());
+    println(g.kids[0].val);
+}

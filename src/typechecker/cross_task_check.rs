@@ -225,15 +225,59 @@ impl<'a> super::TypeChecker<'a> {
                     {
                         continue;
                     }
+                    // A value that only CONTAINS a shared handle is not one
+                    // itself: say what it is and where the handle sits, as
+                    // design.md § What may cross a task boundary shows
+                    // (B-2026-11-05-6).
+                    let ty_text = type_display(ty);
+                    let (what, note) = if ty_text == path.unsafe_leaf {
+                        (
+                            format!("a `shared` handle of type `{ty_text}`"),
+                            String::new(),
+                        )
+                    } else if path.path.is_empty() {
+                        (
+                            format!(
+                                "of type `{ty_text}`, which holds the `shared` type `{}`",
+                                path.unsafe_leaf
+                            ),
+                            format!("\nnote: `{ty_text}` holds `{}` handles", path.unsafe_leaf),
+                        )
+                    } else {
+                        // `field 'inner'` / `field 'cache'` read as the
+                        // field path `inner.cache`; any other step (a `Vec`
+                        // argument, a tuple element) is named as it is.
+                        let fields: Option<Vec<&str>> = path
+                            .path
+                            .iter()
+                            .map(|seg| {
+                                seg.strip_prefix("field '")
+                                    .and_then(|r| r.strip_suffix('\''))
+                            })
+                            .collect();
+                        let at = match fields {
+                            Some(f) => format!("at field path {}", f.join(".")),
+                            None => format!("at {}", path.path.join(" -> ")),
+                        };
+                        (
+                            format!(
+                                "of type `{ty_text}`, which contains the `shared` type `{}`",
+                                path.unsafe_leaf
+                            ),
+                            format!(
+                                "\nnote: `{ty_text}` contains the shared type `{}` {at}",
+                                path.unsafe_leaf,
+                            ),
+                        )
+                    };
                     self.type_error(
                         format!(
-                            "error[E_NOT_CROSS_TASK]: `{name}` (a `shared` handle of type `{ty}`) cannot enter a `par` \
+                            "error[E_NOT_CROSS_TASK]: `{name}` ({what}) cannot enter a `par` \
                              branch (core semantics §11.3: a branch takes owned values, `frozen` \
                              and `sync` handles, and views, and a `shared` handle is none of \
-                             them)\n\
+                             them){note}\n\
                              help: declare `{leaf}` as a `sync` type, or read what the \
                              branches need out of `{name}` before the `par`",
-                            ty = type_display(ty),
                             leaf = path.unsafe_leaf,
                         ),
                         anchor_span,

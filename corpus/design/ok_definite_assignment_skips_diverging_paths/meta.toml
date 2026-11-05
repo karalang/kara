@@ -1,0 +1,9 @@
+source = "B-2026-11-05-22"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "definite-assignment", "ownership"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md §6 Definite assignment: a binding must be assigned on every path that reads it, and a path that diverges (`return`, `panic`) reads nothing after it. So an `if` whose other branch returns or panics, a `match` with a panicking arm, and a `loop` whose only `break` follows the assignment inside an `if` all leave the binding assigned; f(3)=3, f(-1)=0, w(4)=4, g(0)=1, h(5)=10, z=30."

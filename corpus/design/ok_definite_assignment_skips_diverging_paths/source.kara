@@ -1,0 +1,40 @@
+fn f(k: i64) -> i64 {
+    let x: i64;
+    if k > 0 { x = k; } else { return 0; }
+    x
+}
+fn w(k: i64) -> i64 {
+    let x: i64;
+    if k > 0 { x = k; } else { panic("neg"); }
+    x
+}
+fn g(k: i64) -> i64 {
+    let x: i64;
+    match k {
+        0 => { x = 1; }
+        _ => { panic("no"); }
+    }
+    x
+}
+fn h(k: i64) -> i64 {
+    let x: i64;
+    if k < 0 { return -1; } else { x = k * 2; }
+    x
+}
+fn main() {
+    println(f(3));
+    println(f(-1));
+    println(w(4));
+    println(g(0));
+    println(h(5));
+    let z: i64;
+    let mut i = 0;
+    loop {
+        i += 1;
+        if i == 3 {
+            z = i * 10;
+            break;
+        }
+    }
+    println(z);
+}

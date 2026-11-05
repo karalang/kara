@@ -962,6 +962,18 @@ impl<'a> super::OwnershipChecker<'a> {
                     self.check_expr_reading(else_expr, &mut else_states, param_types, param_usage);
                     // Merge: if moved in EITHER branch, it's moved
                     merge_states(states, &then_states, &else_states);
+                    // A branch that diverges (`return`, `panic`, `break`)
+                    // never reaches the code after the `if`, so definite
+                    // assignment takes the other branch alone
+                    // (design.md §6 Definite assignment; B-2026-11-05-22).
+                    match (
+                        self.block_diverges(then_block),
+                        self.expr_diverges(else_expr),
+                    ) {
+                        (true, false) => merge_states(states, &else_states, &else_states),
+                        (false, true) => merge_states(states, &then_states, &then_states),
+                        _ => {}
+                    }
                 } else {
                     // Only then branch ran — promote any conditional move
                     // to BranchMerged so the next use lands in RC fallback
@@ -1112,7 +1124,19 @@ impl<'a> super::OwnershipChecker<'a> {
                     }
                     let mut merged: Option<ValueState> = None;
                     let mut all_init = true;
-                    for arm_states in &all_arm_states {
+                    // An arm that diverges never reaches the code after the
+                    // match, so it does not have to assign (B-2026-11-05-22);
+                    // when every arm diverges nothing after it runs at all.
+                    let live: Vec<&HashMap<String, ValueState>> = all_arm_states
+                        .iter()
+                        .zip(arms.iter())
+                        .filter(|(_, arm)| !self.expr_diverges(&arm.body))
+                        .map(|(st, _)| st)
+                        .collect();
+                    if live.is_empty() {
+                        continue;
+                    }
+                    for arm_states in live {
                         match arm_states.get(&name) {
                             Some(v @ ValueState::Live) | Some(v @ ValueState::InitOnce { .. }) => {
                                 merged = Some(match (&merged, v) {
@@ -1783,5 +1807,41 @@ impl<'a> super::OwnershipChecker<'a> {
             | ExprKind::OffsetOf { .. }
             | ExprKind::Error => {}
         }
+    }
+}
+
+impl super::OwnershipChecker<'_> {
+    /// Whether control never leaves `e` normally: a `return`, `break` or
+    /// `continue`, a call typed `Never` (`panic`, `unreachable`), or a block,
+    /// `if` or `match` all of whose ways out are those (B-2026-11-05-22).
+    pub(crate) fn expr_diverges(&self, e: &Expr) -> bool {
+        match &e.kind {
+            ExprKind::Return(_) | ExprKind::Break { .. } | ExprKind::Continue { .. } => true,
+            ExprKind::Block(b) => self.block_diverges(b),
+            ExprKind::If {
+                then_block,
+                else_branch: Some(else_expr),
+                ..
+            } => self.block_diverges(then_block) && self.expr_diverges(else_expr),
+            ExprKind::Match { arms, .. } => {
+                !arms.is_empty() && arms.iter().all(|a| self.expr_diverges(&a.body))
+            }
+            ExprKind::Call { .. } | ExprKind::MethodCall { .. } => matches!(
+                self.typecheck_result.expr_type(e),
+                Some(crate::typechecker::Type::Never)
+            ),
+            _ => false,
+        }
+    }
+
+    /// Whether a block diverges: one of its statements, or its tail, does.
+    pub(crate) fn block_diverges(&self, b: &Block) -> bool {
+        b.stmts.iter().any(|st| match &st.kind {
+            StmtKind::Expr(e) => self.expr_diverges(e),
+            _ => false,
+        }) || b
+            .final_expr
+            .as_deref()
+            .is_some_and(|e| self.expr_diverges(e))
     }
 }

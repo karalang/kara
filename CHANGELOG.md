@@ -126,11 +126,26 @@ accepted by 0.8.0 are now refused, each with a fix-it.
 - A default parameter value may name a function, `g: Fn(i64) -> i64 = id`
   (B-2026-11-04-68), and `v == []` gives `[]` the element type of `v`
   (B-2026-11-04-75).
+- `assert`, `assert_eq` and `assert_ne` borrow their operands, so a `Vec`
+  or `String` compared by `assert_eq(v, e)` is still usable afterwards; it
+  was moved, with a `.clone()` fix (B-2026-11-05-8).
+- Definite assignment ignores a branch that diverges: `if k > 0 { x = k; }
+  else { return 0; }` (or `panic`, or a panicking `match` arm) leaves `x`
+  assigned, and a `loop` whose only `break` follows the assignment inside
+  an `if` does too (B-2026-11-05-22).
+- `freeze r` is accepted after a value built in place is pushed into a
+  field of `r` (`r.kids.push(Nd { .. })`), which makes no second handle
+  (B-2026-11-05-6).
 - In a trait's default method, `self.m()` calls that trait's `m` in every
   impl the default is copied into, even when the type implements another
   trait with an `m`; it was refused as ambiguous (B-2026-11-04-40).
 
 ### Diagnostics
+
+- E_NOT_CROSS_TASK on a value that only contains a `shared` handle names
+  its type as such and adds a note with the field path to the handle
+  (`at field path inner.cache`); it called the value "a `shared` handle"
+  (B-2026-11-05-6).
 
 - `#[track_caller]` on a program's own function now works: a panic inside
   it, or inside a tracked function it calls, is reported at the call into

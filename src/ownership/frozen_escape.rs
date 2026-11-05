@@ -1304,7 +1304,88 @@ fn walk_stmt<'a>(s: &'a Stmt, cx: &mut Cx<'a, '_>) {
             reject_frozen_write(target, cx);
             walk_expr(value, cx);
         }
+        StmtKind::Expr(e) if walk_fresh_insert_into_field(e, cx) => {}
         StmtKind::Expr(e) => walk_expr(e, cx),
+    }
+}
+
+/// `r.kids.push(Nd { val: 3, kids: [] });`: inserting a value built right
+/// here into a collection field of a local does not make a second handle to
+/// the local, so it does not cost `r` its uniqueness for a later `freeze r`
+/// (design.md §11 freeze site; B-2026-11-05-6). Admitted only for that exact
+/// shape: a statement whose receiver is a field path off a plain local name,
+/// a collection insert, and arguments that hold no handle at all (literals,
+/// composite literals of them, and `Copy` locals). Anything else takes the
+/// ordinary walk, which counts the use. Returns `true` when it walked `e`.
+fn walk_fresh_insert_into_field<'a>(e: &'a Expr, cx: &mut Cx<'a, '_>) -> bool {
+    let ExprKind::MethodCall {
+        object,
+        method,
+        args,
+        ..
+    } = &e.kind
+    else {
+        return false;
+    };
+    if !matches!(
+        method.as_str(),
+        "push" | "push_back" | "push_front" | "insert"
+    ) || cx.in_closure
+    {
+        return false;
+    }
+    let ExprKind::FieldAccess { object: base, .. } = &object.kind else {
+        return false;
+    };
+    let mut root: &Expr = base;
+    while let ExprKind::FieldAccess { object, .. } = &root.kind {
+        root = object;
+    }
+    let ExprKind::Identifier(n) = &root.kind else {
+        return false;
+    };
+    if cx.frozen.contains_key(n.as_str())
+        || cx.aliases.contains(n.as_str())
+        || cx.container_candidates.contains_key(n.as_str())
+    {
+        return false;
+    }
+    if !args
+        .iter()
+        .all(|a| !a.mut_marker && holds_no_handle(&a.value, cx.tc))
+    {
+        return false;
+    }
+    for a in args {
+        walk_expr(&a.value, cx);
+    }
+    true
+}
+
+/// An expression that can hold no handle to an existing value: a literal, a
+/// composite literal of such, arithmetic on them, or a `Copy` local.
+fn holds_no_handle(e: &Expr, tc: &TypeCheckResult) -> bool {
+    match &e.kind {
+        ExprKind::Integer(..)
+        | ExprKind::Float(..)
+        | ExprKind::CharLit(_)
+        | ExprKind::ByteLit(_)
+        | ExprKind::StringLit(_)
+        | ExprKind::Bool(_) => true,
+        ExprKind::Identifier(_) => tc.expr_type(e).is_some_and(super::is_copy_type_basic),
+        ExprKind::Binary { left, right, .. } => {
+            holds_no_handle(left, tc) && holds_no_handle(right, tc)
+        }
+        ExprKind::Unary { operand, .. } => holds_no_handle(operand, tc),
+        ExprKind::Tuple(es)
+        | ExprKind::ArrayLiteral(es)
+        | ExprKind::PrefixCollectionLiteral { items: es, .. } => {
+            es.iter().all(|x| holds_no_handle(x, tc))
+        }
+        ExprKind::StructLiteral { fields, spread, .. } => {
+            spread.is_none() && fields.iter().all(|f| holds_no_handle(&f.value, tc))
+        }
+        _ => false,
     }
 }
 

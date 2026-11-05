@@ -1,0 +1,9 @@
+source = "B-2026-11-05-6"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "shared", "frozen"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md §11 freeze site: `freeze r` needs `r` to be the only handle to its instance. Pushing a node built in place into `r.kids` makes no second handle, so `r` stays unique and the freeze is accepted; the frozen tree has one child, whose val is 3."

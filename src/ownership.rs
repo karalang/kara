@@ -4109,6 +4109,13 @@ pub(crate) fn collect_callee_param_modes(
     for name in ["print", "println", "eprint", "eprintln", "dbg"] {
         map.insert(name.to_string(), vec![OwnershipMode::Ref]);
     }
+    // The assertions compare their operands and render them on failure; they
+    // borrow both, so neither moves (design.md §14 Assertions: "after
+    // assert_eq(v, expected), v is still usable", B-2026-11-05-8). The
+    // optional message is read too.
+    for name in ["assert", "assert_eq", "assert_ne"] {
+        map.insert(name.to_string(), vec![OwnershipMode::Ref; 3]);
+    }
     // `String.from_utf8(bytes: Slice[u8])` (strings.md) reads its bytes and
     // copies them into a fresh String; its signature is the typechecker's
     // (`env_build.rs`), with no declaration here to read a mode from, so it
@@ -5076,10 +5083,11 @@ pub(crate) fn apply_loop_break_dominance(
         return;
     }
     for (name, original) in pre_uninit {
-        if matches!(
-            states.get(&name),
-            Some(ValueState::Uninit { .. }) | Some(ValueState::Moved { .. })
-        ) {
+        // A body-end `Uninit` does not decide: the code after a `loop` is
+        // reached only through its breaks, so `loop { if c { x = 1; break; } }`
+        // assigns `x` though the body's fall-through path does not
+        // (B-2026-11-05-22).
+        if matches!(states.get(&name), Some(ValueState::Moved { .. })) {
             continue;
         }
         let mut merged: Option<ValueState> = None;

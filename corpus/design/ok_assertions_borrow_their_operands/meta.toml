@@ -1,0 +1,9 @@
+source = "B-2026-11-05-8"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "assertions", "ownership"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md §14 Assertions: assert_eq and assert_ne borrow both operands, so neither moves; after `assert_eq(v, e)` both Vecs are still usable, after `assert_ne(s, \"b\")` the String is, and `assert`'s message is read, not moved."
