@@ -1798,7 +1798,7 @@ t[i, j, k]            // tensor multi-index; desugars to t[(i, j, k)]
 
 **Multi-index desugaring.** `e[i, j, k]` (two or more comma-separated expressions inside `[]`) is syntactic sugar for `e[(i, j, k)]` — the indices are folded into a tuple and the single-arg `Index` / `IndexMut` trait is called with that tuple. `Tensor[T, [M, K, N]]` implements `Index[(i64, i64, i64)]`; `t[i, j, k]` and `t[(i, j, k)]` are exactly equivalent. The `:` character inside `[]` on a value-class expression (as in `map["a": 1]`) is a parse error — `key: value` syntax is only valid inside `PREFIX_LITERAL` productions (see §5.17b).
 
-Field access and method calls auto-deref through `ref T` / `mut ref T`, so `r.field` does not need an explicit `*`. Use `*expr` for value-level operations that aren't method calls — comparisons (`a == *b`), arithmetic, and assignment-through-ref (`*r = v`). Kāra does **not** auto-deref in binary-operator position; `a == b` where `b: ref T` is a type error — write `a == *b`.
+Field access and method calls auto-deref through `ref T` / `mut ref T`, so `r.field` does not need an explicit `*`. Comparisons (`==`, `!=`, `<`, `<=`, `>`, `>=`) also look through a `ref` on either side, so `a == b` with `b: ref T` compares the values. Use `*expr` for other value-level operations that aren't method calls: arithmetic on a non-`Copy` `T` and assignment-through-ref (`*r = v`).
 
 **Place expressions.** Assignment and compound-assignment targets (see § 4) are restricted to *place expressions*:
 
