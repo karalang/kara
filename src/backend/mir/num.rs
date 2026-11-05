@@ -553,6 +553,23 @@ impl<'ctx> Cx<'ctx, '_> {
             .builder
             .build_int_truncate_or_bit_cast(w, oit, "")
             .map_err(e)?;
+        // `fits` held, so the truncation drops only copies of the sign bit
+        // (a signed target: `nsw`) or only zeros (an unsigned target, or a
+        // signed one from an unsigned source, which `fits` bounds to
+        // `0..=hi`: `nuw`). At 64 bits it is a no-op with no instruction.
+        if bits < 64 {
+            use inkwell::values::{AsValueRef, BasicValue};
+            if c.as_instruction_value().is_some() {
+                unsafe {
+                    if signed {
+                        llvm_sys::core::LLVMSetNSW(c.as_value_ref(), 1);
+                    }
+                    if !signed || !src_signed {
+                        llvm_sys::core::LLVMSetNUW(c.as_value_ref(), 1);
+                    }
+                }
+            }
+        }
         self.store(oq, c.into())?;
         self.builder.build_unconditional_branch(done).map_err(e)?;
         self.builder.position_at_end(no);
