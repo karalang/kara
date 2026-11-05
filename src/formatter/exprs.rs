@@ -62,7 +62,7 @@ impl super::Formatter {
         if expr_power(e) < min {
             self.stmt_start = false;
             self.write_str("(");
-            self.format_expr(e);
+            self.delimited(|f| f.format_expr(e));
             self.write_str(")");
         } else {
             self.format_expr(e);
@@ -139,6 +139,32 @@ impl super::Formatter {
     }
 
     pub(super) fn format_expr(&mut self, expr: &Expr) {
+        // Inside its own delimiters an expression is out of a head's reach.
+        if self.in_head
+            && matches!(
+                expr.kind,
+                ExprKind::Block(_)
+                    | ExprKind::Comptime(_)
+                    | ExprKind::Tuple(_)
+                    | ExprKind::ArrayLiteral(_)
+                    | ExprKind::MapLiteral { .. }
+                    | ExprKind::RepeatLiteral { .. }
+                    | ExprKind::PrefixCollectionLiteral { .. }
+                    | ExprKind::Closure { .. }
+                    | ExprKind::InterpolatedStringLit(_)
+                    | ExprKind::Loop { .. }
+                    | ExprKind::LabeledBlock { .. }
+                    | ExprKind::Seq(_)
+                    | ExprKind::Par(_)
+                    | ExprKind::Unsafe(_)
+                    | ExprKind::Try(_)
+                    | ExprKind::Lock { .. }
+                    | ExprKind::Providers { .. }
+            )
+        {
+            self.delimited(|f| f.format_expr(expr));
+            return;
+        }
         // Set by the statement printer; handed on only to the operand printed
         // first, see `paren_block_like_at_stmt_start`.
         let stmt_start = std::mem::take(&mut self.stmt_start);
@@ -381,7 +407,7 @@ impl super::Formatter {
                 self.stmt_start = stmt_start;
                 self.format_receiver(object);
                 self.write_str("[");
-                self.format_expr(index);
+                self.delimited(|f| f.format_expr(index));
                 self.write_str("]");
             }
             ExprKind::Block(block) => self.format_block(block),
@@ -395,7 +421,7 @@ impl super::Formatter {
                 else_branch,
             } => {
                 self.write_str("if ");
-                self.format_expr(condition);
+                self.format_head(condition);
                 self.write_str(" ");
                 self.format_block(then_block);
                 if let Some(ref eb) = else_branch {
@@ -416,7 +442,7 @@ impl super::Formatter {
                 self.write_str("if let ");
                 self.format_pattern(pattern);
                 self.write_str(" = ");
-                self.format_expr(value);
+                self.format_head(value);
                 self.write_str(" ");
                 self.format_block(then_block);
                 if let Some(ref eb) = else_branch {
@@ -486,7 +512,7 @@ impl super::Formatter {
                     write!(self.output, "'{l}: ").unwrap();
                 }
                 self.write_str("while ");
-                self.format_expr(condition);
+                self.format_head(condition);
                 self.write_str(" ");
                 self.format_block(body);
             }
@@ -503,7 +529,7 @@ impl super::Formatter {
                 self.write_str("while let ");
                 self.format_pattern(pattern);
                 self.write_str(" = ");
-                self.format_expr(value);
+                self.format_head(value);
                 self.write_str(" ");
                 self.format_block(body);
             }
@@ -530,7 +556,7 @@ impl super::Formatter {
                 self.write_str("for ");
                 self.format_pattern(pattern);
                 self.write_str(" in ");
-                self.format_expr(iterable);
+                self.format_head(iterable);
                 self.write_str(" ");
                 self.format_block(body);
             }
@@ -686,6 +712,12 @@ impl super::Formatter {
                 spread,
                 generic_args,
             } => {
+                if self.in_head {
+                    self.write_str("(");
+                    self.delimited(|f| f.format_expr(expr));
+                    self.write_str(")");
+                    return;
+                }
                 self.write_path_with_args(path, generic_args, &expr.span);
                 if fields.is_empty() && spread.is_none() {
                     self.write_str(" {}");
@@ -833,6 +865,27 @@ impl super::Formatter {
     }
 
     pub(super) fn format_call_args(&mut self, args: &[CallArg]) {
+        self.delimited(|f| f.format_call_args_inner(args));
+    }
+
+    /// Print `e` as the head of an `if`, `while`, `if let`, `while let` or
+    /// `for`: a struct literal outside any delimiter in it is parenthesized,
+    /// or it reads back as a name followed by the body (design.md § 6).
+    pub(super) fn format_head(&mut self, e: &Expr) {
+        let saved = std::mem::replace(&mut self.in_head, true);
+        self.format_expr(e);
+        self.in_head = saved;
+    }
+
+    /// Run `f` inside a delimiter (parentheses, brackets, braces), where a
+    /// head's struct-literal rule no longer applies.
+    pub(super) fn delimited(&mut self, f: impl FnOnce(&mut Self)) {
+        let saved = std::mem::take(&mut self.in_head);
+        f(self);
+        self.in_head = saved;
+    }
+
+    fn format_call_args_inner(&mut self, args: &[CallArg]) {
         for (i, arg) in args.iter().enumerate() {
             if i > 0 {
                 self.write_str(", ");

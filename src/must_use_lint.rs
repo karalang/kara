@@ -346,6 +346,24 @@ impl Walker<'_> {
             }
         }
 
+        // Source 1, through a tuple: a discarded `par { a(), b() }` (or any
+        // tuple) whose elements are `Result`s drops each one as surely as a
+        // bare discard does (design.md § 6, B-2026-11-05-23).
+        if let Type::Tuple(elems) = ty {
+            let held = elems.iter().find_map(|t| match t {
+                Type::Named { name, .. } => implicit_must_use_kind(name),
+                _ => None,
+            });
+            if let Some((kind, why)) = held {
+                let mut d = self.make_implicit_diag(expr, kind, why);
+                d.message = format!(
+                    "discarded tuple holding a `{kind}` value — `{kind}` is implicitly `#[must_use]`"
+                );
+                self.diags.push(d);
+                return;
+            }
+        }
+
         // Source 2: type-level `#[must_use]` (slice 4). `v.drain(a..b);`
         // removes the range at the call, so the iterator it returns, unlike
         // an adapter's, has already done its work when it is dropped.

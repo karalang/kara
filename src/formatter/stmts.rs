@@ -4,6 +4,10 @@ use crate::ast::*;
 
 impl super::Formatter {
     pub(super) fn format_block(&mut self, block: &Block) {
+        if self.in_head {
+            self.delimited(|f| f.format_block(block));
+            return;
+        }
         let end = block.span.offset + block.span.length;
         if block.stmts.is_empty()
             && block.final_expr.is_none()

@@ -10434,6 +10434,12 @@ impl<'l, 'a> Bx<'l, 'a> {
                 self.call_native("String.eq", vec![lo, ro], dest);
                 Ok(())
             }
+            // `()` has one value, so two of them are equal (B-2026-11-05-23).
+            HK::Unit => {
+                let bool_t = self.tys().bool();
+                self.assign(dest, Rvalue::Use(bool_const(bool_t, true)));
+                Ok(())
+            }
             HK::Tuple(list) => {
                 let tys = self.tys().tcx().list(list);
                 let parts = tys

@@ -1,17 +1,18 @@
 source = "tests/memory_sanitizer/patterns.rs::asan_discarded_arm_literal_over_a_named_local"
 dedup_of = []
-expect = "stdout"
-exit = 0
+expect = "error"
+exit = 1
 tags = ["drop", "src:legacy-tests"]
 class = "a"
-expected_from = "oracle"
+expected_from = "spec"
 legacy_backend = "legacy-build"
 legacy_exit = 0
 rules = []
 backends = []
 env = {}
-bucket = "a"
+bucket = "a:refused"
 classified_with = "9913c6855"
 extracted_src = "a200ae04"
 model_rev = "3acf4472"
 model_src = "a200ae04"
+note = "design.md § 6 / B-2026-11-05-23: an `if` without `else` has type `()`, so a block that ends in a value is refused at check, in a `let _ =` initializer and in statement position alike. This program pinned the drop of that value before the rule was enforced, so it now pins the refusal. The expected.out wording of an error pin is guidance, not a byte oracle."

@@ -93,11 +93,12 @@ fn test_not_in_and_or_silent() {
 }
 
 #[test]
-fn test_not_on_right_of_comparison_warns() {
-    // `x == not y` parses as `Binary(Eq, x, Unary(Not, y))`. Lint also
-    // fires on the right-side variant.
+fn test_not_on_right_of_comparison_silent() {
+    // `x == not y` parses as `Binary(Eq, x, Unary(Not, y))`, its only
+    // reading: the `not` is not before a comparison, so design.md § 6's lint
+    // has nothing to warn about (B-2026-11-05-23).
     let diags = lint("fn main() { let r = x == not y; }");
-    assert_eq!(diags.len(), 1);
+    assert!(diags.is_empty(), "diags: {:?}", diags);
 }
 
 #[test]

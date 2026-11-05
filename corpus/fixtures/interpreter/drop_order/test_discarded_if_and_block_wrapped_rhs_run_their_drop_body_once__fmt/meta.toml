@@ -1,19 +1,20 @@
 source = "tests/interpreter/drop_order.rs::test_discarded_if_and_block_wrapped_rhs_run_their_drop_body_once__fmt"
 dedup_of = []
-expect = "stdout"
-exit = 0
+expect = "error"
+exit = 1
 tags = ["drop", "format-filled", "src:legacy-tests"]
 class = "a"
-expected_from = "oracle"
+expected_from = "spec"
 legacy_backend = "legacy-interp"
 legacy_exit = 0
 rules = []
 backends = []
 env = {}
-bucket = "a"
+bucket = "a:refused"
 classified_with = "9913c6855"
 extracted_src = "cbfae58f"
 model_exit = 0
 model_rev = "3acf4472"
 model_src = "cbfae58f"
 model_verdict = "SAME"
+note = "design.md § 6 / B-2026-11-05-23: an `if` without `else` has type `()`, so a block that ends in a value is refused at check, in a `let _ =` initializer and in statement position alike. This program pinned the drop of that value before the rule was enforced, so it now pins the refusal. The expected.out wording of an error pin is guidance, not a byte oracle."

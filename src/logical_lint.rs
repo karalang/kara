@@ -136,8 +136,11 @@ fn is_not_unary(expr: &Expr) -> bool {
 }
 
 fn walk_expr(expr: &Expr, level: LintLevel, diags: &mut Vec<LintDiagnostic>) {
-    if let ExprKind::Binary { op, left, right } = &expr.kind {
-        if is_comparison(op) && (is_not_unary(left) || is_not_unary(right)) {
+    if let ExprKind::Binary { op, left, .. } = &expr.kind {
+        // Only a `not` BEFORE the comparison is ambiguous (design.md § 6:
+        // "warns about `not` directly before a comparison"). `x == not y`
+        // has one reading, `x == (not y)`, since nothing follows `not y`.
+        if is_comparison(op) && is_not_unary(left) {
             diags.push(LintDiagnostic {
                 level,
                 span: expr.span,

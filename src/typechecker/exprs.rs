@@ -5321,6 +5321,30 @@ impl<'a> super::TypeChecker<'a> {
         self.retype_partial_node(e.id, ty);
     }
 
+    /// design.md § 6: `if` without `else` has type `()`, so its block must
+    /// produce `()` too; a block that produces a value is a type error even
+    /// in statement position, where the value would be silently discarded
+    /// (B-2026-11-05-23).
+    pub(super) fn refuse_valued_if_without_else(&mut self, then_block: &Block, then_ty: &Type) {
+        if matches!(then_ty, Type::Unit | Type::Never | Type::Error)
+            || !expectation_is_concrete(then_ty)
+        {
+            return;
+        }
+        let span = then_block
+            .final_expr
+            .as_deref()
+            .map_or(then_block.span, |e| e.span);
+        self.type_error(
+            format!(
+                "`if` without `else` has type '()', but its block produces '{}': add an `else` branch, or end the value with `;` to discard it",
+                type_display(then_ty)
+            ),
+            span,
+            TypeErrorKind::BranchTypeMismatch,
+        );
+    }
+
     /// B-2026-10-15-52 — the unsuffixed numeric literal `e` (a branch's
     /// value, or a block holding only that) ends with, when the sibling
     /// branch's concrete numeric type `peer` can hold it: a float literal
@@ -10619,6 +10643,7 @@ impl<'a> super::TypeChecker<'a> {
                         }
                     }
                 } else {
+                    self.refuse_valued_if_without_else(then_block, &then_ty);
                     Type::Unit
                 }
             }
@@ -10698,6 +10723,7 @@ impl<'a> super::TypeChecker<'a> {
                         }
                     }
                 } else {
+                    self.refuse_valued_if_without_else(then_block, &then_ty);
                     Type::Unit
                 }
             }

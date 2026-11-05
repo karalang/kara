@@ -148,6 +148,10 @@ pub(super) struct Formatter {
     pub(super) line_comment_end: usize,
     /// The expression being printed begins a statement (`exprs.rs`).
     pub(super) stmt_start: bool,
+    /// The expression being printed is in the head of an `if`, `while`,
+    /// `if let`, `while let` or `for`, outside any delimiter, where a struct
+    /// literal must be parenthesized (design.md § 6, `exprs.rs`).
+    pub(super) in_head: bool,
 }
 
 impl Formatter {
@@ -169,6 +173,7 @@ impl Formatter {
             next_comment: 0,
             line_comment_end: usize::MAX,
             stmt_start: false,
+            in_head: false,
         }
     }
 

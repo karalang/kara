@@ -34,7 +34,7 @@ fn last_of[I: DoubleEndedIterator](it: own I) -> Option[I.Item] {
 fn main() {
     let mut c = Count { lo: 0, hi: 4 };
     println(f"{c.next_back()} {c.next()}");
-    for x in Count { lo: 0, hi: 3 }.rev() {
+    for x in (Count { lo: 0, hi: 3 }).rev() {
         println(f"{x}");
     }
     println(f"{last_of(Count { lo: 1, hi: 9 })}");

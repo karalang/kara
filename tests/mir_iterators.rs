@@ -330,12 +330,12 @@ fn the_library_iterator_methods_chain_on_a_programs_iterator() {
     let src = r#"
 fn main() {
     println(Counter { n: 0 }.take(3).count());
-    for (i, x) in Counter { n: 0 }.skip(2).step_by(3).take(3).enumerate() {
+    for (i, x) in (Counter { n: 0 }).skip(2).step_by(3).take(3).enumerate() {
         println(f"{i}: {x}");
     }
     println(Counter { n: 0 }.take(5).last().unwrap());
     println(Counter { n: 0 }.nth(4).unwrap());
-    for w in Words { n: 0 }.skip(1).take(2) {
+    for w in (Words { n: 0 }).skip(1).take(2) {
         println(w);
     }
     println(Words { n: 0 }.take(3).last().unwrap());
@@ -373,8 +373,8 @@ impl Iterator for Counter {
     fn next(mut ref self) -> Option[i64] { self.n = self.n + 1; Some(self.n) }
 }
 fn main() {
-    for x in Counter { n: 0 }.take(2).chain(Counter { n: 10 }.take(2)) { println(x); }
-    for (a, b) in Counter { n: 0 }.zip(Counter { n: 100 }.skip(1)).take(2) {
+    for x in (Counter { n: 0 }).take(2).chain(Counter { n: 10 }.take(2)) { println(x); }
+    for (a, b) in (Counter { n: 0 }).zip(Counter { n: 100 }.skip(1)).take(2) {
         println(f"{a} {b}");
         if a > 1 { break; }
     }
@@ -486,10 +486,10 @@ impl Iterator for Counter {
 }
 fn main() {
     let k = 10;
-    for s in Counter { n: 0 }.map(|x| f"<{x * k}>").take(3) { println(s); }
+    for s in (Counter { n: 0 }).map(|x| f"<{x * k}>").take(3) { println(s); }
     println(Counter { n: 0 }.filter(|x| x % 3 == 0).take(4).fold(0, |a, x| a + x));
-    for y in Counter { n: 0 }.filter_map(|x| if x % 2 == 0 { Some(x * x) } else { None }).take(3) { println(y); }
-    for x in Counter { n: 0 }.skip_while(|x| x < 5).take_while(|x| x < 8) { println(x); }
+    for y in (Counter { n: 0 }).filter_map(|x| if x % 2 == 0 { Some(x * x) } else { None }).take(3) { println(y); }
+    for x in (Counter { n: 0 }).skip_while(|x| x < 5).take_while(|x| x < 8) { println(x); }
     let t = Counter { n: 0 }.take(3).inspect(|x| println(f"saw {x}")).fold(0, |a, x| a + x);
     println(t);
 }

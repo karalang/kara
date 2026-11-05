@@ -810,6 +810,16 @@ impl super::Parser {
                 if range_bp < min_bp {
                     break;
                 }
+                // design.md § 6: ranges do not chain (B-2026-11-05-23). The
+                // second range still parses, so recovery reads on.
+                if matches!(lhs.kind, ExprKind::Range { .. }) {
+                    let op = self.current_span();
+                    self.error_at(
+                        "ranges do not chain: `a..b..c` is an error; write one range, \
+                         or parenthesize what the second operator applies to",
+                        op,
+                    );
+                }
                 let inclusive = self.check(&Token::DotDotEq);
                 self.advance();
                 // `expr..` with no RHS → RangeFrom; only when next token cannot
@@ -1743,9 +1753,11 @@ impl super::Parser {
                 })
             }
 
-            // Block expression
+            // Block expression. Its braces delimit it, so a struct literal
+            // inside one parses normally even in a condition head
+            // (`for v in { CountUp { current: 0 } } { .. }`).
             Token::LeftBrace => {
-                let block = self.parse_block()?;
+                let block = self.with_struct_literals(Self::parse_block)?;
                 Some(Expr {
                     id: crate::ids::NodeId::DUMMY,
                     span: block.span,
@@ -3948,6 +3960,45 @@ impl super::Parser {
     /// must point at the `{`; the `[...]` has already been consumed by the
     /// caller. B-2026-08-24-3.
     fn parse_struct_literal_body_generic(
+        &mut self,
+        path: Vec<String>,
+        generic_args: Option<Vec<GenericArg>>,
+        start: &Span,
+    ) -> Option<Expr> {
+        let in_head = self.no_struct_literal;
+        let lit = self
+            .with_struct_literals(|p| p.parse_struct_literal_fields(path, generic_args, start))?;
+        // design.md § 6: in the head of an `if`, `while`, `if let`, `while
+        // let` or `for`, a `{` after a name starts the body, so a struct
+        // literal there must be parenthesized (B-2026-11-05-23). The literal
+        // is still read, so the error comes with its fix.
+        if in_head {
+            self.error_at(
+                "a struct literal in a condition must be parenthesized: in the head of \
+                 `if`, `while` or `for`, a `{` after a name starts the body",
+                lit.span,
+            );
+            let end = lit.span.offset + lit.span.length;
+            self.fix_diffs.insert(
+                crate::resolver::SpanKey::from_span(&lit.span),
+                vec![
+                    crate::resolver::TextEdit {
+                        offset: lit.span.offset,
+                        length: 0,
+                        replacement: "(".to_string(),
+                    },
+                    crate::resolver::TextEdit {
+                        offset: end,
+                        length: 0,
+                        replacement: ")".to_string(),
+                    },
+                ],
+            );
+        }
+        Some(lit)
+    }
+
+    fn parse_struct_literal_fields(
         &mut self,
         path: Vec<String>,
         generic_args: Option<Vec<GenericArg>>,

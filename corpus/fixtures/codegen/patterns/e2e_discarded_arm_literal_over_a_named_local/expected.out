@@ -1,8 +1,4 @@
-named_field
-stmt_in_arm
-  q=31
-mint_field
-  dR2
-bare_stmt_named
-not_taken
-end
+ERROR at line 8: `if` without `else` has type '()', but its block produces 'D': add an `else` branch, or end the value with `;` to discard it
+ERROR at line 10: `if` without `else` has type '()', but its block produces 'R': add an `else` branch, or end the value with `;` to discard it
+ERROR at line 11: `if` without `else` has type '()', but its block produces 'D': add an `else` branch, or end the value with `;` to discard it
+ERROR at line 12: `if` without `else` has type '()', but its block produces 'D': add an `else` branch, or end the value with `;` to discard it

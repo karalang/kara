@@ -5,11 +5,11 @@ fn mk(i: i64) -> R { return R { id: i, name: f"name-{i}-padding" }; }
 struct S3 { a: R, b: R }
 fn mks() -> S3 { return S3 { a: mk(61), b: mk(62) }; }
 
-fn il_one() -> i64 { if let S3 { a, .. } = S3 { a: mk(44), b: mk(45) } { return a.id; } return 0; }
+fn il_one() -> i64 { if let S3 { a, .. } = (S3 { a: mk(44), b: mk(45) }) { return a.id; } return 0; }
 fn il_call() -> i64 { if let S3 { a, .. } = mks() { return a.id; } return 0; }
-fn il_none() -> i64 { if let S3 { .. } = S3 { a: mk(46), b: mk(47) } { return 1; } return 0; }
+fn il_none() -> i64 { if let S3 { .. } = (S3 { a: mk(46), b: mk(47) }) { return 1; } return 0; }
 fn le_one() -> i64 { let S3 { a, .. } = S3 { a: mk(48), b: mk(49) } else { return 0; }; return a.id; }
-fn wl_none() -> i64 { let mut s: i64 = 0; while let S3 { .. } = S3 { a: mk(50), b: mk(51) } { s = 1; break; } return s; }
+fn wl_none() -> i64 { let mut s: i64 = 0; while let S3 { .. } = (S3 { a: mk(50), b: mk(51) }) { s = 1; break; } return s; }
 
 fn main() {
     println(f"I:{il_one()}");

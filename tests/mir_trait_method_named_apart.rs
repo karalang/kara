@@ -23,7 +23,7 @@ fn show[T: Display](t: ref T) -> String { t.to_string() }
 fn main() {
     println(total(Bag { items: vec![3, 4] }));
     let mut s = 0;
-    for x in Bag { items: vec![3, 4] }.into_iter() { s += x; }
+    for x in (Bag { items: vec![3, 4] }).into_iter() { s += x; }
     println(s);
     let p = P { n: 1 };
     println(p.to_string());
