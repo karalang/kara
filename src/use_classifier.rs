@@ -672,11 +672,27 @@ impl<'a> UseClassifier<'a> {
         if !self.closure_span_stack.is_empty() {
             return;
         }
+        // The statement's extent the closures run within: a `let ... else`
+        // evaluates its value first, so its `else` block, which may move
+        // what they read, lies after them (kata 1053's
+        // `let Some(i) = r.find(|k| v[k] > 2) else { return v; }`).
+        let mut extent = (stmt.span.offset, stmt.span.length);
         let value = match &stmt.kind {
             StmtKind::Let { value, .. } => {
                 if !self.tc.expr_type(value).is_some_and(holds_no_closure) {
                     return;
                 }
+                value
+            }
+            StmtKind::LetElse {
+                value, else_block, ..
+            } => {
+                if !self.tc.expr_type(value).is_some_and(holds_no_closure)
+                    || else_block.span.offset <= stmt.span.offset
+                {
+                    return;
+                }
+                extent.1 = else_block.span.offset - stmt.span.offset;
                 value
             }
             StmtKind::Expr(e) => e,
@@ -714,9 +730,7 @@ impl<'a> UseClassifier<'a> {
             return;
         }
         for k in found {
-            self.classification
-                .statement_closures
-                .insert(k, (stmt.span.offset, stmt.span.length));
+            self.classification.statement_closures.insert(k, extent);
         }
     }
 

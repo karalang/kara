@@ -1932,6 +1932,11 @@ pub struct OwnershipChecker<'a> {
     /// `slice_borrow_sources` entry. Drives the drop-of-borrowed
     /// trigger comparison.
     pub(crate) slice_binding_scope_depth: HashMap<String, usize>,
+    /// The creation key of the slice borrow each slice binding holds (the
+    /// `slice_borrow_sources` key of its `let`'s value), so the borrow can
+    /// end at the binding's last use rather than its scope's end
+    /// (core-semantics.md §5: a borrow is live to its last use).
+    pub(crate) slice_binding_keys: HashMap<String, SpanKey>,
     /// Phase-7-codegen.md line 45 — the use-classifier's `Classification`
     /// for the function currently being checked. Populated by
     /// `check_function` before walking the body; consulted by
@@ -2228,6 +2233,7 @@ impl<'a> OwnershipChecker<'a> {
             current_scope_depth: 0,
             binding_scope_depth: HashMap::new(),
             slice_binding_scope_depth: HashMap::new(),
+            slice_binding_keys: HashMap::new(),
             current_classification: None,
             d5: None,
         }
@@ -3120,6 +3126,7 @@ impl<'a> OwnershipChecker<'a> {
         self.active_borrows.clear();
         self.binding_scope_depth.clear();
         self.slice_binding_scope_depth.clear();
+        self.slice_binding_keys.clear();
         self.loop_da_stack.clear();
         self.current_scope_depth = 0;
 

@@ -102,10 +102,42 @@ impl[T] DoubleEndedIterator for SliceIter[T] {
     }
 }
 
+impl[T] SliceIter[T] {
+    /// As `VecIter.rposition`: the front-counted index of the last item
+    /// `pred` accepts, searching from the back.
+    fn rposition(mut ref self, pred: own MutFn(ref T) -> bool) -> Option[i64] {
+        while self.front < self.back {
+            self.back = self.back - 1;
+            if pred(self.s[self.back]) {
+                return Some(self.back - self.front);
+            }
+        }
+        None
+    }
+}
+
 impl[T] Slice[T] {
     /// The elements, front to back, each borrowed.
     fn iter(self) -> SliceIter[T] {
         SliceIter { s: self, front: 0, back: self.len() }
+    }
+
+    /// The index of the first element `pred` rejects, found by binary
+    /// search: the slice must hold every element `pred` accepts before every
+    /// one it rejects, and `self.len()` comes back when it accepts them all
+    /// (docs/library/collections.md).
+    fn partition_point(self, pred: own MutFn(T) -> bool) -> i64 {
+        let mut lo = 0;
+        let mut hi = self.len();
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            if pred(self[mid]) {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        lo
     }
 }
 
@@ -262,6 +294,21 @@ impl[T] DoubleEndedIterator for VecIter[T] {
         }
         self.back = self.back - 1;
         self.v.get(self.back)
+    }
+}
+
+impl[T] VecIter[T] {
+    /// The index, counted from the front, of the last item `pred` accepts,
+    /// searching from the back; the items from there to the back are
+    /// consumed (docs/library/iterators.md).
+    fn rposition(mut ref self, pred: own MutFn(ref T) -> bool) -> Option[i64] {
+        while self.front < self.back {
+            self.back = self.back - 1;
+            if pred(self.v[self.back]) {
+                return Some(self.back - self.front);
+            }
+        }
+        None
     }
 }
 

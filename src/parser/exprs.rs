@@ -1120,10 +1120,23 @@ impl super::Parser {
                     length: self.current_span().offset.saturating_sub(start.offset),
                     ..start
                 };
+                let operand = self.parse_expr_bp(24)?;
+                // `&v[a..b]`: a range index is already a view, a `Slice[T]`
+                // (design.md § Slices), so the edit drops the `&` rather than
+                // borrowing the view (kata 1053).
+                let view = !is_mut
+                    && matches!(&operand.kind, ExprKind::Index { index, .. }
+                        if matches!(index.kind, ExprKind::Range { .. }));
                 let (message, kara) = if is_mut {
                     (
                         "`&mut` is Rust syntax -- a borrow that writes is `mut ref place`",
                         "mut ref ",
+                    )
+                } else if view {
+                    (
+                        "`&` is Rust syntax -- `v[a..b]` is already a view of `v`, a `Slice[T]`, \
+                         so it takes no borrow",
+                        "",
                     )
                 } else {
                     ("`&` is Rust syntax -- a borrow is `ref place`", "ref ")
@@ -1137,7 +1150,9 @@ impl super::Parser {
                         replacement: kara.to_string(),
                     },
                 );
-                let operand = self.parse_expr_bp(24)?;
+                if view {
+                    return Some(operand);
+                }
                 Some(Expr {
                     id: crate::ids::NodeId::DUMMY,
                     span: self.span_from(&start),

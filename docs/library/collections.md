@@ -50,6 +50,7 @@ A fixed-size array of `N` elements, stored inline. It has every [`Slice[T]`](#sl
 | `last` | `fn last(self) -> Option[ref T]` | `None` if empty |
 | `contains` | `fn contains(self, val: T) -> bool where T: PartialEq` | Linear search |
 | `binary_search` | `fn binary_search(self, val: T) -> Option[i64] where T: Ord` | Index of an element equal to `val`, or `None`. The sequence must be sorted ascending |
+| `partition_point` | `fn partition_point(self, pred: own MutFn(T) -> bool) -> i64` | Index of the first element `pred` rejects, by binary search. The sequence must hold every element `pred` accepts before every one it rejects; `len()` when it accepts all. `v.partition_point(\|x\| x < t)` is where `t` would go in a sorted `v` |
 | `is_sorted` | `fn is_sorted(self) -> bool where T: Ord` | Non-strict ascending check: equal neighbours count as sorted, and 0 or 1 elements are sorted |
 | `split_at` | `fn split_at(self, mid: i64) -> (Slice[T], Slice[T])` | `[0, mid)` and `[mid, len)`. Panics if `mid > self.len()` |
 | `windows` | `fn windows(self, size: i64) -> Vec[Slice[T]]` | Every run of `size` consecutive elements |

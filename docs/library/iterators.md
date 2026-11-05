@@ -111,6 +111,12 @@ trait DoubleEndedIterator: Iterator {
 
 The iterators over `Vec`, `Array`, `Slice` and `VecDeque`, integer ranges, and a `String`'s `chars()` implement it, which is what `rev` needs. (UTF-8 decodes backward as well as forward, so a string's chars cost nothing extra to walk from the end.)
 
+The iterators over a `Vec`, an `Array` and a `Slice` also know how many items are left, so they have `rposition`, as Rust's do:
+
+| Method | Signature | Notes |
+|---|---|---|
+| `rposition` | `fn rposition(mut ref self, pred: own MutFn(ref T) -> bool) -> Option[i64]` | Index, counted from the front of what is left, of the last item that passes, searching from the back. `v.windows(2).iter().rposition(\|w\| w[0] > w[1])` is the last place `v` falls |
+
 ## Example
 
 ```kara

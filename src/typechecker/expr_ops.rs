@@ -3382,6 +3382,25 @@ impl<'a> super::TypeChecker<'a> {
             );
             return;
         }
+        let as_slice = if fix.is_some() {
+            None
+        } else {
+            self.vec_slice_compare_fix(left, left_ty, right_ty)
+                .or_else(|| self.vec_slice_compare_fix(right, right_ty, left_ty))
+        };
+        if let Some(fix) = as_slice {
+            self.type_error_with_fix_it(
+                format!(
+                    "{message}: a `Vec[T]` or `Array[T, N]` passes as a `Slice[T]` only at a \
+                     call boundary (design.md § Slices); `.as_slice()` views it as one, \
+                     and the two compare element by element"
+                ),
+                span,
+                TypeErrorKind::InvalidBinaryOp,
+                fix,
+            );
+            return;
+        }
         match fix {
             Some(fix) => self.type_error_with_fix_it(
                 format!(
@@ -3395,6 +3414,46 @@ impl<'a> super::TypeChecker<'a> {
             ),
             None => self.type_error(message, span, TypeErrorKind::InvalidBinaryOp),
         }
+    }
+
+    /// The edit appending `.as_slice()` to `side` when `side_ty` is a
+    /// `Vec[T]` or `Array[T, N]` (or a reference to one), `other_ty` a
+    /// `Slice[T]` of the same `T`, and the end of `side` is known: the
+    /// coercion that passes a `Vec` as a `Slice` runs only at call
+    /// boundaries (design.md § Slices), and a comparison is not one.
+    fn vec_slice_compare_fix(&self, side: &Expr, side_ty: &Type, other_ty: &Type) -> Option<FixIt> {
+        let resolve = |t: &Type| resolve_type_var_top(t, &self.env.substitutions);
+        let element = match strip_refs_for_compare(&resolve(side_ty)) {
+            Type::Named { name, args } if name == "Vec" && args.len() == 1 => resolve(&args[0]),
+            Type::Array { element, .. } => resolve(element),
+            _ => return None,
+        };
+        let Type::Slice { element: other, .. } = strip_refs_for_compare(&resolve(other_ty)).clone()
+        else {
+            return None;
+        };
+        if !types_compatible(&element, &resolve(&other)) {
+            return None;
+        }
+        let end = match &side.kind {
+            ExprKind::MethodCall {
+                args_close_span, ..
+            } => args_close_span.offset + args_close_span.length,
+            ExprKind::Identifier(_)
+            | ExprKind::FieldAccess { .. }
+            | ExprKind::Index { .. }
+            | ExprKind::TupleIndex { .. }
+            | ExprKind::Call { .. } => side.span.offset + side.span.length,
+            _ => return None,
+        };
+        Some(FixIt {
+            span: Span {
+                offset: end,
+                length: 0,
+                ..side.span
+            },
+            replacement: ".as_slice()".to_string(),
+        })
     }
 
     /// The edit inserting `.cloned()` after `side`, when `side_ty` is

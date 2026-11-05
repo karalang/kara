@@ -32,8 +32,20 @@ impl<'a> super::OwnershipChecker<'a> {
         // beyond this block's depth.
         self.current_scope_depth += 1;
         let entered_depth = self.current_scope_depth;
-        for stmt in &block.stmts {
+        // The slice bindings this block's `let`s made, each with the index
+        // of its `let`.
+        let mut holders: Vec<(String, usize)> = Vec::new();
+        for (i, stmt) in block.stmts.iter().enumerate() {
+            self.end_dead_slice_holders(block, i, &mut holders);
             self.check_stmt(stmt, states, param_types, param_usage);
+            if let StmtKind::Let { pattern, .. } = &stmt.kind {
+                for name in pattern.binding_names() {
+                    holders.retain(|(h, _)| *h != name);
+                    if self.slice_binding_keys.contains_key(&name) {
+                        holders.push((name, i));
+                    }
+                }
+            }
         }
         if let Some(ref expr) = block.final_expr {
             self.check_expr_consuming(expr, states, param_types, param_usage);
@@ -48,6 +60,67 @@ impl<'a> super::OwnershipChecker<'a> {
         }
         self.drain_borrows_at_depth(entered_depth);
         self.current_scope_depth = entered_depth - 1;
+    }
+
+    /// Ends the slice borrow a binding of this block holds once nothing in
+    /// the rest of the block names the binding (core-semantics.md §5: a
+    /// borrow is live from its creation to its last use), so
+    /// `let tail = v[1..]; let k = tail.len(); v.swap(0, k);` is accepted.
+    /// Only a binding every use of which so far was a `let` of a value that
+    /// holds no borrow (`tail.len()`, `tail[k]`) is ended: a use that could
+    /// have handed the view on (`w.push(tail.first())`, `let it =
+    /// tail.iter()`) keeps the borrow to the end of the scope, as before.
+    fn end_dead_slice_holders(
+        &mut self,
+        block: &Block,
+        at: usize,
+        holders: &mut Vec<(String, usize)>,
+    ) {
+        let names = |s: &Stmt, name: &str| {
+            let mut hit = false;
+            crate::rc_elide::walk_stmt_children_pub(s, &mut |e| {
+                hit = hit || crate::deque_head::expr_mentions_name_deep(e, name);
+            });
+            hit
+        };
+        let mut ended = Vec::new();
+        holders.retain(|(name, made)| {
+            let later = block.stmts[at..].iter().any(|s| names(s, name))
+                || block
+                    .final_expr
+                    .as_deref()
+                    .is_some_and(|e| crate::deque_head::expr_mentions_name_deep(e, name));
+            if later {
+                return true;
+            }
+            let owned_uses = block.stmts[made + 1..at].iter().all(|s| {
+                !names(s, name)
+                    || matches!(&s.kind, StmtKind::Let { value, .. }
+                        if self
+                            .typecheck_result
+                            .expr_type(value)
+                            .is_some_and(crate::ownership::type_is_deeply_owned))
+            });
+            if owned_uses {
+                ended.push(name.clone());
+            }
+            false
+        });
+        for name in ended {
+            let Some(key) = self.slice_binding_keys.remove(&name) else {
+                continue;
+            };
+            let Some((place, _)) = self.slice_borrow_sources.get(&key) else {
+                continue;
+            };
+            let root = place.root.clone();
+            if let Some(borrows) = self.active_borrows.get_mut(&root) {
+                borrows.retain(|b| !(b.kind.is_slice() && SpanKey::from_span(&b.span) == key));
+                if borrows.is_empty() {
+                    self.active_borrows.remove(&root);
+                }
+            }
+        }
     }
 
     pub(crate) fn check_stmt(
@@ -186,6 +259,10 @@ impl<'a> super::OwnershipChecker<'a> {
                 // this map in `place_expr_root` so the recorded root is
                 // the original storage (`v`), not the intermediate slice.
                 let borrow_key = self.slice_borrow_key_for(value);
+                // A name this `let` binds holds no earlier slice borrow.
+                for name in pattern.binding_names() {
+                    self.slice_binding_keys.remove(&name);
+                }
                 if let Some(entry) = self.slice_borrow_sources.get(&borrow_key).cloned() {
                     // B-2026-08-17-16 — the span-keyed hit cannot tell "the
                     // RHS IS the slice" from "the RHS passed through a
@@ -210,6 +287,7 @@ impl<'a> super::OwnershipChecker<'a> {
                         self.end_copied_out_slice_borrow(&borrow_key);
                     } else {
                         for name in pattern.binding_names() {
+                            self.slice_binding_keys.insert(name.clone(), borrow_key);
                             self.slice_binding_sources
                                 .insert(name.clone(), entry.clone());
                             // Slice 2 — record the scope at which this slice

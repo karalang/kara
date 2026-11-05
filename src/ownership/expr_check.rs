@@ -680,7 +680,30 @@ impl<'a> super::OwnershipChecker<'a> {
             ExprKind::SelfValue => {
                 self.handle_moved_use("self", &expr.span, states);
             }
-            ExprKind::Binary { left, right, .. } | ExprKind::Pipe { left, right } => {
+            ExprKind::Binary { left, right, op } => {
+                // A comparison or a logical operator reads its operands and
+                // keeps nothing, so a view one of them takes
+                // (`v.as_slice() < s`) ends with it, as a call argument's
+                // does (kata 1053).
+                let keeps_nothing = matches!(
+                    op,
+                    BinOp::Eq
+                        | BinOp::NotEq
+                        | BinOp::Lt
+                        | BinOp::LtEq
+                        | BinOp::Gt
+                        | BinOp::GtEq
+                        | BinOp::And
+                        | BinOp::Or
+                );
+                let snapshot = keeps_nothing.then(|| self.snapshot_active_borrow_lens());
+                self.check_expr_reading(left, states, param_types, param_usage);
+                self.check_expr_reading(right, states, param_types, param_usage);
+                if let Some(snapshot) = snapshot {
+                    self.restore_active_borrows_to_snapshot(&snapshot);
+                }
+            }
+            ExprKind::Pipe { left, right } => {
                 self.check_expr_reading(left, states, param_types, param_usage);
                 self.check_expr_reading(right, states, param_types, param_usage);
             }

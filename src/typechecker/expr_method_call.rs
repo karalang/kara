@@ -2135,6 +2135,27 @@ impl<'a> super::TypeChecker<'a> {
                     element,
                     mutable: false,
                 },
+                // So does a `Vec`, for a method neither its own impls nor the
+                // builtin sequence surface have (collections.md § `Slice[T]`:
+                // `v.partition_point(f)`, `v.clone_from_slice(w)`).
+                Type::Named { ref name, ref args }
+                    if name == "Vec"
+                        && args.len() == 1
+                        && !VEC_METHOD_NAMES.contains(&method)
+                        && !SLICE_BUILTIN_METHODS.contains(&method)
+                        && self
+                            .library_source_method_owner(&receiver, method)
+                            .is_none() =>
+                {
+                    let slice = Type::Slice {
+                        element: Box::new(args[0].clone()),
+                        mutable: false,
+                    };
+                    match self.library_source_method_owner(&slice, method) {
+                        Some(_) => slice,
+                        None => receiver,
+                    }
+                }
                 other => other,
             };
             if let Some(ty) = self.library_cursor_method(&receiver, method, args, span) {
