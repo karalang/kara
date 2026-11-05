@@ -7350,7 +7350,7 @@ Under `karac run` and `karac test`, the runner asks the program for the same rec
 ### Canonical formatting
 
 `karac fmt` produces deterministic output. It is **syntactically** canonical, in the scope of `gofmt` or `rustfmt`, not a semantic normalizer:
-- declarations are canonicalized (methods sorted, imports sorted);
+- declarations are canonicalized: imports sorted; in each `impl` and `trait` body, functions without `self` (constructors such as `new`) come first, then methods, each group in alphabetical order, with doc comments and attributes travelling with their item;
 - whitespace, brace placement and ordering are normalized;
 - AI edits produce clean semantic diffs, not reordering noise.
 
