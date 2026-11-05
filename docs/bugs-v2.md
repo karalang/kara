@@ -98,7 +98,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-10-31-8 | 2026-10-31 | mir-llvm | low | Every `karac` process starts at 15-20 ms and 46.6 MB peak RSS before doing anything (`karac --version`), and the link step of a small kata's `karac build` is its largest phase at 72-102 ms | — |
-| B-2026-11-01-17 | 2026-11-01 | runtime | medium | Kata 71's auto-par binary runs 1.6-2.6x SLOWER with exactly two workers than with one (KARAC_THREADS=2: 0.24-0.39 s against 0.15 s) on the M5, on 5x the cycles for 7% more instructions; three or more workers run 0.04-0.06 s | — |
+| B-2026-11-01-17 | 2026-11-01 | runtime | medium | Kata 71's auto-par binary at exactly two workers runs 1.22x slower than at one on the M5 (143.1 ms against 117.6 ms at eb17818b45, from 1.6-2.6x), ATTRIBUTED to macOS's xzone allocator: free() reads mach_absolute_time on each of simplify()'s per-iteration buffer frees, not the pool; Linux scales cleanly | — |
 | B-2026-11-04-30 | 2026-11-04 | mir-llvm | medium | Kata 394's String decode loop runs 1.27x legacy's instructions and 1.26x its cycles on the MIR backend; seq 0.99x -> 1.17x rustc -O, par 0.86x -> 1.27x rayon | — |
 | B-2026-11-04-32 | 2026-11-04 | mir-llvm | low | Kata 297's peak RSS is 1.35x Rust's (233-235 MiB vs 173 MiB) on the MIR backend, where the 2026-08-28 feed read 179.9 vs 174.3 MiB | — |
 | B-2026-11-04-33 | 2026-11-04 | mir-llvm | low | Six more katas sit at 1.03-1.20x legacy's cycles or instructions on the MIR backend, each too small to file alone, and kata 895's par lane slipped to 2.31x rayon: the third borderline batch after B-2026-11-01-45 | — |
