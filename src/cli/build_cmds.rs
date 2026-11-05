@@ -1483,6 +1483,94 @@ impl PackageCheck {
         self.type_warnings.retain(|m| keep(&m.file));
         dropped
     }
+
+    /// The per-module diagnostics left after [`Self::restrict_to_file`], for
+    /// an editor: spans are byte offsets into that one file
+    /// (B-2026-11-05-15). Resolve fixes ride along as `karac fix` applies
+    /// them; the late flattened passes have no per-file span and are left to
+    /// the command line.
+    pub(super) fn editor_diagnostics(
+        &self,
+        file: &std::path::Path,
+    ) -> Vec<crate::PlaygroundDiagnostic> {
+        let diag = |phase: &'static str,
+                    severity: &'static str,
+                    message: &str,
+                    span: &crate::token::Span,
+                    fixes: Vec<crate::SourceFix>| crate::PlaygroundDiagnostic {
+            phase,
+            severity,
+            message: message.to_string(),
+            line: span.line,
+            column: span.column,
+            offset: span.offset,
+            length: span.length,
+            fixes,
+        };
+        let mut out = Vec::new();
+        for m in &self.parse_errors {
+            for e in &m.errors {
+                out.push(diag("parse", "error", &e.message, &e.span, Vec::new()));
+            }
+        }
+        let this_file =
+            |p: &std::path::Path| match (std::fs::canonicalize(p), std::fs::canonicalize(file)) {
+                (Ok(a), Ok(b)) => a == b,
+                _ => p == file,
+            };
+        for c in &self.cycles {
+            if let Some((f, span)) = c.closing_import(&self.tree) {
+                if this_file(f) {
+                    let message = format!("circular module dependency: {}", c.format(&self.tree));
+                    out.push(diag("resolve", "error", &message, &span, Vec::new()));
+                }
+            }
+        }
+        for m in &self.resolve_errors {
+            for e in &m.errors {
+                let mut fixes: Vec<crate::SourceFix> = e
+                    .replacement
+                    .iter()
+                    .map(|t| crate::SourceFix {
+                        offset: t.offset,
+                        length: t.length,
+                        replacement: t.replacement.clone(),
+                    })
+                    .collect();
+                if let Some(diff) = m
+                    .fix_diffs
+                    .get(&crate::resolver::SpanKey::from_span(&e.span))
+                {
+                    fixes = diff
+                        .iter()
+                        .map(|t| crate::SourceFix {
+                            offset: t.offset,
+                            length: t.length,
+                            replacement: t.replacement.clone(),
+                        })
+                        .collect();
+                }
+                out.push(diag("resolve", "error", &e.message, &e.span, fixes));
+            }
+        }
+        for m in &self.type_warnings {
+            for e in &m.errors {
+                out.push(diag(
+                    "typecheck",
+                    "warning",
+                    &e.message,
+                    &e.span,
+                    Vec::new(),
+                ));
+            }
+        }
+        for m in &self.type_errors {
+            for e in &m.errors {
+                out.push(diag("typecheck", "error", &e.message, &e.span, Vec::new()));
+            }
+        }
+        out
+    }
 }
 
 /// Run [`PackageCheck`] over the package rooted at `root`.
@@ -1561,6 +1649,17 @@ pub(super) fn package_check_on(
     lint_overrides: &crate::lints::CliLintOverrides,
     platform: walker::Platform,
 ) -> Result<PackageCheck, String> {
+    package_check_with_buffer(root, lint_overrides, platform, None)
+}
+
+/// [`package_check_on`] with one module's text taken from an editor buffer
+/// rather than the disk (B-2026-11-05-15).
+pub(super) fn package_check_with_buffer(
+    root: &std::path::Path,
+    lint_overrides: &crate::lints::CliLintOverrides,
+    platform: walker::Platform,
+    buffer: Option<(&std::path::Path, &str)>,
+) -> Result<PackageCheck, String> {
     // Every caller is `karac check` or the gate in front of `karac run`,
     // both v2 commands, so `ref` takes any named place (B-2026-10-22-28),
     // and each module is checked by the v2 core rules over its D5-rewritten
@@ -1579,9 +1678,13 @@ pub(super) fn package_check_on(
     // dep-resolution failure proceeds without dependency modules rather than
     // failing the check of the local package.
     let dep_walks = super::run_check_cmds::quiet_dep_package_walks(root);
-    let built =
-        module::build_program_tree_with_deps(&walked, &dep_walks, module::BuildTreeOpts::default())
-            .map_err(|e| format!("{e}"))?;
+    let built = module::build_program_tree_with_overlay(
+        &walked,
+        &dep_walks,
+        module::BuildTreeOpts::default(),
+        buffer,
+    )
+    .map_err(|e| format!("{e}"))?;
     let BuildTreeOk {
         mut tree,
         parse_errors,

@@ -10,6 +10,7 @@
 
 use super::diag_json::collect_diagnostics;
 use super::Pipeline;
+use crate::manifest;
 use crate::{PlaygroundDiagnostic, SourceFix};
 
 /// The name the buffer is checked under. Nothing is read from it: it labels
@@ -103,4 +104,32 @@ fn fixes_of(v: &serde_json::Value) -> Vec<SourceFix> {
         fixes.extend(diff.iter().filter_map(edit));
     }
     fixes
+}
+
+/// `karac check`'s diagnostics for the editor buffer `source` of the file at
+/// `path`. A member of a `kara.toml` package is checked as `karac check
+/// <file>` checks it, with the whole package and the buffer in place of the
+/// file on disk, so `import util;` finds the sibling module
+/// (B-2026-11-05-15). Any other file, or a package that cannot be assembled,
+/// is checked on its own as [`check_source`] does.
+pub fn check_source_at(source: &str, path: &std::path::Path) -> Vec<PlaygroundDiagnostic> {
+    let Some(root) = super::run_check_cmds::package_root_of_member(&path.to_string_lossy()) else {
+        return check_source(source);
+    };
+    let mut lints = crate::lints::CliLintOverrides::default();
+    if let Ok(mf) = manifest::load_from_root(&root) {
+        lints.apply_manifest_lints(&mf.lints);
+    }
+    let platform = super::build_cmds::walk_platform_for_target(crate::target::active_target());
+    let Ok(mut pc) =
+        super::build_cmds::package_check_with_buffer(&root, &lints, platform, Some((path, source)))
+    else {
+        return check_source(source);
+    };
+    // A lone `src/main.kara` is checked as a file (B-2026-10-24-39).
+    if pc.lone_entry(&root).is_some() {
+        return check_source(source);
+    }
+    pc.restrict_to_file(path);
+    pc.editor_diagnostics(path)
 }

@@ -1162,6 +1162,23 @@ pub fn check_source(source: &str) -> Vec<PlaygroundDiagnostic> {
     }
 }
 
+/// [`check_source`] for the buffer of the file at `path`: a file inside a
+/// `kara.toml` package is checked with the rest of its package, as `karac
+/// check <file>` checks it, so imports of sibling modules resolve
+/// (B-2026-11-05-15). The wasm build has no file system and checks the buffer
+/// alone.
+pub fn check_source_at(source: &str, path: &std::path::Path) -> Vec<PlaygroundDiagnostic> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        cli::editor::check_source_at(source, path)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = path;
+        run_static_checks(source).0
+    }
+}
+
 /// A resolved editor-hover result: the display form of the inferred type of the
 /// innermost expression at a byte offset, plus that expression's span so the
 /// editor can underline exactly what was described. The normalized,

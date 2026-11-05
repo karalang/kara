@@ -290,7 +290,7 @@ fn handle_request(
 
 /// Analyze `text` and publish the resulting diagnostics for `uri`.
 fn publish(connection: &Connection, uri: &Uri, text: &str) {
-    let diags = analysis::diagnostics(text);
+    let diags = analysis::diagnostics_for(text, uri);
     publish_diagnostics(connection, uri.clone(), diags);
 }
 

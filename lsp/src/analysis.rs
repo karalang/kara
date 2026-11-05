@@ -281,15 +281,62 @@ fn symbol_kind(slug: &str) -> SymbolKind {
 /// die on one keystroke). On a panic we return no diagnostics for this pass —
 /// a stale-but-alive server beats a dead one — and log to stderr.
 pub fn diagnostics(source: &str) -> Vec<Diagnostic> {
-    analyze(source).into_iter().map(|(d, _)| d).collect()
+    analyze(source, None).into_iter().map(|(d, _)| d).collect()
+}
+
+/// [`diagnostics`] for the document at `uri`: a file inside a `kara.toml`
+/// package is checked with its package, so `import util;` resolves the
+/// sibling module the way `karac check` does (B-2026-11-05-15).
+pub fn diagnostics_for(source: &str, uri: &Uri) -> Vec<Diagnostic> {
+    analyze(source, file_path(uri).as_deref())
+        .into_iter()
+        .map(|(d, _)| d)
+        .collect()
+}
+
+/// The local path a `file:` URI names, percent-decoded; `None` for any other
+/// scheme or a path that does not decode as UTF-8.
+pub fn file_path(uri: &Uri) -> Option<std::path::PathBuf> {
+    let rest = uri.as_str().strip_prefix("file://")?;
+    // `file:///p` and `file://localhost/p` name the local `/p`.
+    let path = rest.strip_prefix("localhost").unwrap_or(rest);
+    if !path.starts_with('/') {
+        return None;
+    }
+    let bytes = path.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).ok()?;
+            out.push(u8::from_str_radix(hex, 16).ok()?);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    let mut decoded = String::from_utf8(out).ok()?;
+    // `file:///C:/x` is the Windows path `C:/x`.
+    if decoded.len() > 2 && decoded.as_bytes()[2] == b':' {
+        decoded.remove(0);
+    }
+    Some(std::path::PathBuf::from(decoded))
 }
 
 /// Every diagnostic paired with the machine-applicable edits that resolve it.
 ///
 /// The single analysis pass behind both [`diagnostics`] and [`code_actions`],
 /// so a quick-fix can never describe a diagnostic the editor was not shown.
-fn analyze(source: &str) -> Vec<(Diagnostic, Vec<karac::SourceFix>)> {
-    let raw = match std::panic::catch_unwind(AssertUnwindSafe(|| karac::check_source(source))) {
+fn analyze(
+    source: &str,
+    path: Option<&std::path::Path>,
+) -> Vec<(Diagnostic, Vec<karac::SourceFix>)> {
+    let check = || match path {
+        Some(p) => karac::check_source_at(source, p),
+        None => karac::check_source(source),
+    };
+    let raw = match std::panic::catch_unwind(AssertUnwindSafe(check)) {
         Ok(diags) => diags,
         Err(_) => {
             eprintln!("kara-lsp: analysis panicked; skipping diagnostics for this revision");
@@ -407,7 +454,7 @@ fn fix_actions(
     range: Range,
     index: &LineIndex,
 ) -> Vec<CodeActionOrCommand> {
-    analyze(source)
+    analyze(source, file_path(uri).as_deref())
         .into_iter()
         .filter(|(d, fixes)| !fixes.is_empty() && ranges_overlap(d.range, range))
         .map(|(diag, fixes)| {

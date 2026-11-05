@@ -28,7 +28,7 @@ use crate::token::Span;
 use crate::walker::{self, WalkResult};
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Handle into `ProgramTree::modules`. Cheap to copy; stable across a single
 /// compilation.
@@ -323,6 +323,24 @@ pub fn build_program_tree_with_deps(
     deps: &[DepPackageWalk],
     opts: BuildTreeOpts,
 ) -> Result<BuildTreeOk, BuildTreeError> {
+    build_program_tree_with_overlay(walked, deps, opts, None)
+}
+
+/// As [`build_program_tree_with_deps`], with one file's text taken from
+/// `overlay` instead of the disk: the editor's buffer for that file, which
+/// may not be saved yet (B-2026-11-05-15). Matched by canonical path.
+pub fn build_program_tree_with_overlay(
+    walked: &WalkResult,
+    deps: &[DepPackageWalk],
+    opts: BuildTreeOpts,
+    overlay: Option<(&Path, &str)>,
+) -> Result<BuildTreeOk, BuildTreeError> {
+    let overlay = overlay.map(|(p, text)| {
+        (
+            fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf()),
+            text,
+        )
+    });
     if walked.modules.is_empty() {
         return Err(BuildTreeError::EmptyProject {
             src_dir: walked.src_dir.clone(),
@@ -347,10 +365,16 @@ pub fn build_program_tree_with_deps(
     let mut parsed_files: Vec<ParsedFile> = Vec::with_capacity(walked.modules.len());
     let mut parse_errors: Vec<ModuleParseErrors> = Vec::new();
     for w in &walked.modules {
-        let source = fs::read_to_string(&w.file).map_err(|e| BuildTreeError::Io {
-            path: w.file.clone(),
-            error: e.to_string(),
-        })?;
+        let buffer = overlay.as_ref().and_then(|(p, text)| {
+            (fs::canonicalize(&w.file).as_ref().unwrap_or(&w.file) == p).then(|| text.to_string())
+        });
+        let source = match buffer {
+            Some(text) => text,
+            None => fs::read_to_string(&w.file).map_err(|e| BuildTreeError::Io {
+                path: w.file.clone(),
+                error: e.to_string(),
+            })?,
+        };
         let parsed = crate::parse_items_only(&source);
         let imports = extract_imports(&parsed.program);
         if !parsed.errors.is_empty() {
@@ -1439,7 +1463,15 @@ fn collect_import_edges(modules: &[Module], graph: &mut ModuleGraph) {
                 if let Some(&id) = graph.by_path.get(&full) {
                     graph.add_edge(m.id, id);
                 } else if let Some(&id) = graph.by_path.get(&imp.path) {
-                    graph.add_edge(m.id, id);
+                    // `import z;` names an item of the crate root. From the
+                    // root itself the edge would be a cycle of `main.kara`
+                    // with itself, so `import utils;` naming no module was
+                    // reported as E0223 instead of the resolver's unknown
+                    // module (B-2026-11-05-42): a module importing from
+                    // itself adds no edge.
+                    if id != m.id {
+                        graph.add_edge(m.id, id);
+                    }
                 }
             }
         }
