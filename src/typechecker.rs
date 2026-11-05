@@ -1302,6 +1302,11 @@ pub enum TypeErrorKind {
     /// takes out of the core (`#[gpu]`, `comptime` beyond `#[derive]`),
     /// which compiles and runs as ordinary code today.
     LaterTrack,
+    /// One of the five style lints (B-2026-11-05-31, `crate::style_lints`):
+    /// `counter_while_loop`, `manual_compound_assign`, `needless_return`,
+    /// `redundant_literal_method`, `redundant_ref_param`. Reported after
+    /// typechecking, from source text; the entry's `lint_name` says which.
+    StyleLint,
     /// Bare `method(args)` call appears in a synthesis position (no expected
     /// type) where the only candidate resolutions are trait associated
     /// functions. The typechecker cannot infer the target type — programmer
@@ -1686,7 +1691,8 @@ pub(crate) fn class_for_type_error_kind(
         | TypeErrorKind::PreludeShadow
         | TypeErrorKind::ModuleMutBinding
         | TypeErrorKind::ReturnClauseOnFn
-        | TypeErrorKind::LaterTrack => Some(DC::LintWarning),
+        | TypeErrorKind::LaterTrack
+        | TypeErrorKind::StyleLint => Some(DC::LintWarning),
 
         // Kinds not yet individually classified — `Other` at the JSON
         // emit site. Backfill is incremental; each one is a small
@@ -8804,6 +8810,25 @@ fn enclosing_lint_levels(
         out.extend(overs.iter().cloned());
     }
     out
+}
+
+/// The attribute that sets `lint`'s level at `span`, innermost first: a
+/// statement's at exactly `span`, the statements around it, then its
+/// function's and its impl block's. `None` when no attribute in scope names
+/// the lint. For a lint reported after typechecking, from source text
+/// (`crate::style_lints`).
+pub(crate) fn attribute_lint_level_at(
+    program: &Program,
+    span: &Span,
+    lint: &str,
+) -> Option<crate::lints::LintLevelOverride> {
+    let stmts: Vec<_> = program.stmt_lint_overrides.iter().collect();
+    let at = crate::resolver::SpanKey::from_span(span);
+    let mut frames = enclosing_lint_levels(program, &stmts, &at);
+    if let Some(own) = program.stmt_lint_overrides.get(&at) {
+        frames.extend(own.iter().cloned());
+    }
+    frames.into_iter().rev().find(|ov| ov.lint == lint)
 }
 
 /// The item's own lint overrides (the attached `#[allow]` / `#[warn]`

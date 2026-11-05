@@ -888,6 +888,8 @@ pub trait MutVisitor {
     fn pattern(&mut self, _p: &mut Pattern) {}
     /// Every statement, before its parts are walked.
     fn stmt(&mut self, _s: &mut Stmt) {}
+    /// Every block, before its statements are walked.
+    fn block(&mut self, _b: &mut Block) {}
 }
 
 struct SpanOnly<F>(F);
@@ -957,6 +959,22 @@ pub fn for_each_stmt_in_block(b: &Block, f: &mut impl FnMut(&Stmt)) {
     }
     let mut copy = b.clone();
     visit_block_spans_mut(&mut copy, &mut Each(f));
+}
+
+/// Call `f` on every block nested in `b` (not `b` itself), outermost first.
+pub fn for_each_block_in_block(b: &Block, f: &mut impl FnMut(&Block)) {
+    struct Each<'f, F>(&'f mut F, usize);
+    impl<F: FnMut(&Block)> MutVisitor for Each<'_, F> {
+        fn span(&mut self, _: &mut Span) {}
+        fn block(&mut self, b: &mut Block) {
+            self.1 += 1;
+            if self.1 > 1 {
+                (self.0)(b)
+            }
+        }
+    }
+    let mut copy = b.clone();
+    visit_block_spans_mut(&mut copy, &mut Each(f, 0));
 }
 
 /// Call `f` on every expression in `e`, outermost first.
@@ -1229,6 +1247,7 @@ fn walk_expr_mut(e: &mut Expr, visit: &mut impl MutVisitor) {
 }
 
 fn visit_block_spans_mut(b: &mut Block, visit: &mut impl MutVisitor) {
+    visit.block(b);
     visit.span(&mut b.span);
     for s in &mut b.stmts {
         visit_stmt_spans_mut(s, visit);

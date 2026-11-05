@@ -1945,7 +1945,8 @@ fn a_generic_element_takes_a_clone_bound_up_the_call_chain() {
          fn via[T](v: ref Vec[T]) -> T { return head(v); }\n\
          fn main() { let a = vec![1, 2]; println(via(a)); }\n",
         "cannot move a non-`Copy` value out of a collection element",
-        "fn via[T: Clone](v: ref Vec[T])",
+        // Once the bounds are in, the style lints `fix` runs drop the `ref`.
+        "fn via[T: Clone](v: Vec[T])",
         3,
     );
 }

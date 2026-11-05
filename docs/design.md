@@ -7341,12 +7341,12 @@ Each query returns JSON. AI agents ask directly instead of compiling, parsing an
 
 **`karac fix`** applies the machine-applicable diffs from the structured output. It is the primary fix path for an AI author: run `karac check --output=json`, apply `karac fix`, and feed the remaining diagnostics back.
 
-`karac fix` also applies the style lints, each with a machine-applicable fix:
-- a counter `while` loop becomes `for i in a..b`;
-- `x = x + e` becomes `x += e`;
-- a final `return e;` becomes `e`;
-- a redundant `.iter()` or `.to_string()` on a literal is removed;
-- a redundant `ref` on a parameter is removed: `x: ref T` means the same as `x: T` ([§7](#parameter-modes)).
+`karac fix` also applies the style lints, each a lint with a machine-applicable fix. They are off (`allow`) in `check`, `build` and `run`; `karac fix` turns them on, and `-W NAME` or `#[warn(NAME)]` reports them anywhere:
+- `counter_while_loop`: a counter `while` loop becomes `for i in a..b`;
+- `manual_compound_assign`: `x = x + e` becomes `x += e`;
+- `needless_return`: a final `return e;` becomes `e`;
+- `redundant_literal_method`: a redundant `.iter()` or `.to_string()` on a literal is removed;
+- `redundant_ref_param`: a redundant `ref` on a parameter is removed: `x: ref T` means the same as `x: T` ([§7](#parameter-modes)).
 
 **`karac explain`** explains a diagnostic code from the code catalogue, and a [concept id](#concept-ids) by the sections that specify it. For an item (`karac explain src/order.kara.process`, a method as `<file>.Type.method`), it shows the inferred effect set with its derivation, and the would-be parameter mode beside the declared one ([§2](#2-specification-layers)). A function with a `with` clause is trusted for what it declares, so its derivation ends at the clause.
 

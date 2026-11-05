@@ -70,7 +70,9 @@ fn main() {
     );
     let out = std::fs::read_to_string(&path).unwrap();
     for want in [
-        "return b;",
+        // The cast goes, and `karac fix`'s `needless_return` takes the
+        // `return` with it (B-2026-11-05-31).
+        "fn back(b: u8) -> i64 {\n    b\n}",
         "let a = x;",
         "let b: i64 = p.n;",
         "let c = t;",

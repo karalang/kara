@@ -146,6 +146,19 @@ accepted by 0.8.0 are now refused, each with a fix-it.
   Before, it looked only at the `rustc` on PATH, so a wasm build outside
   the repository failed unless `RUSTUP_TOOLCHAIN` was pinned
   (B-2026-11-05-12).
+- **The five style lints `karac fix` applies** (design.md § `karac fix` and
+  `karac explain`, B-2026-11-05-31). Each is a lint (`W0295`) with a
+  machine-applicable fix, off in `check`, `build` and `run` and on in
+  `karac fix` (`-W NAME` shows one anywhere): `counter_while_loop` turns
+  `let mut i = a; while i < b { ..; i += 1; }` into `for i in a..b { .. }`,
+  `manual_compound_assign` turns `x = x + e` into `x += e` on a number (and
+  on a `String` for `+`),
+  `needless_return` turns a function's final `return e;` into `e`,
+  `redundant_literal_method` removes `.to_string()` on a string literal and
+  `.iter()` on an array literal a `for` iterates, and `redundant_ref_param`
+  removes `ref` from a parameter's type. Each stays silent where the rewrite
+  would not mean the same (the counter read after the loop, a `continue`, a
+  bound the body changes), and `karac lint --list` lists them.
 
 ### Wrong behaviour fixed
 

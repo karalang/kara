@@ -1816,6 +1816,8 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 // (B-2026-08-20-36).
                 crate::typechecker::TypeErrorKind::RedundantSuffix => "E0280",
                 crate::typechecker::TypeErrorKind::RedundantCast => "E0291",
+                // A style lint escalated by `-D`/`#[deny]`; `W0295` below.
+                crate::typechecker::TypeErrorKind::StyleLint => "E0295",
                 crate::typechecker::TypeErrorKind::RedundantAliasBound => "E0293",
                 crate::typechecker::TypeErrorKind::WeakReadUnwrap => "E0294",
                 crate::typechecker::TypeErrorKind::PreludeShadow => "E0282",
@@ -2052,9 +2054,32 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 crate::typechecker::TypeErrorKind::ModuleMutBinding => "W0281",
                 crate::typechecker::TypeErrorKind::ReturnClauseOnFn => "W0290",
                 crate::typechecker::TypeErrorKind::LaterTrack => "W0292",
+                crate::typechecker::TypeErrorKind::StyleLint => "W0295",
                 // Other kinds aren't expected to appear as warnings today.
                 _ => "W0299",
             };
+            // A multi-edit fix (the style lints', B-2026-11-05-31), rendered
+            // as an error's is above.
+            let fix_diff = t
+                .error_fix_diffs
+                .get(&crate::resolver::SpanKey::from_span(&warn.span))
+                .filter(|v| {
+                    !v.is_empty() && warn.kind == crate::typechecker::TypeErrorKind::StyleLint
+                })
+                .map(|edits| {
+                    let items: Vec<String> = edits
+                        .iter()
+                        .map(|e| {
+                            format!(
+                                "{{\"offset\":{},\"length\":{},\"text\":{}}}",
+                                e.offset,
+                                e.length,
+                                json_string(&e.replacement),
+                            )
+                        })
+                        .collect();
+                    format!("\"fix_diff\":[{}]", items.join(","))
+                });
             diags.add(DiagEntry {
                 id: &format!("d{id_counter}"),
                 severity: "warning",
@@ -2065,7 +2090,7 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 filename,
                 span: &warn.span,
                 suggestion: None,
-                extra_json: None,
+                extra_json: fix_diff,
                 lint_name: warn.lint_name.as_deref(),
                 fix_it: warn.fix_it.as_ref(),
                 class: Some(warn.class.map(|c| c.as_str()).unwrap_or("OTHER")),

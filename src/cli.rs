@@ -1687,6 +1687,83 @@ impl Pipeline {
         // the program's own text, ahead of the appended library.
         self.report_missing_library_imports();
         self.widen_redundant_suffix_fixes();
+        self.report_style_lints();
+    }
+
+    /// The five style lints (B-2026-11-05-31, `crate::style_lints`), on a
+    /// program with no type error, each at the level the attributes around
+    /// it give it, else the command line's, else its registry default. An `#[expect]` one fulfils retracts
+    /// the typechecker's `unfulfilled_lint_expectation` for it, which was
+    /// decided before this pass ran. The fix rides `error_fix_diffs`, keyed by
+    /// the diagnostic's span, which `karac fix` and the JSON both read.
+    fn report_style_lints(&mut self) {
+        use crate::lints::LintLevel;
+        let (Some(source), Some(typed)) = (self.source.as_deref(), self.typed.as_mut()) else {
+            return;
+        };
+        // Style comes after correctness: a program with a type error gets
+        // its fixes first, and these on the next run.
+        let own_len = self.library_len.unwrap_or(source.len());
+        if typed.errors.iter().any(|e| e.span.offset < own_len) {
+            return;
+        }
+        let hits = crate::style_lints::style_hits(&self.parsed.program, typed, source);
+        for hit in hits {
+            if hit.edits.iter().any(|e| e.offset + e.length > own_len) {
+                continue;
+            }
+            let default = crate::lints::lint_by_name(hit.lint)
+                .map_or(LintLevel::Warn, |info| info.default_level);
+            let attribute = crate::typechecker::attribute_lint_level_at(
+                &self.parsed.program,
+                &hit.span,
+                hit.lint,
+            );
+            let level = if self.lint_overrides.is_forbidden(hit.lint) {
+                LintLevel::Deny
+            } else if let Some(ov) = &attribute {
+                ov.level
+            } else {
+                self.lint_overrides
+                    .level_for(hit.lint, default)
+                    .unwrap_or(default)
+            };
+            match level {
+                LintLevel::Allow => continue,
+                LintLevel::Expect => {
+                    if let Some(ov) = attribute {
+                        let named = format!("`{}`", hit.lint);
+                        let unfulfilled = |w: &crate::typechecker::TypeError| {
+                            w.kind == crate::typechecker::TypeErrorKind::UnfulfilledLintExpectation
+                                && w.span == ov.span
+                                && w.message.contains(&named)
+                        };
+                        typed.warnings.retain(|w| !unfulfilled(w));
+                        typed.errors.retain(|w| !unfulfilled(w));
+                    }
+                    continue;
+                }
+                LintLevel::Warn | LintLevel::Deny => {}
+            }
+            let entry = crate::typechecker::TypeError {
+                message: hit.message,
+                span: hit.span,
+                kind: crate::typechecker::TypeErrorKind::StyleLint,
+                lint_name: Some(hit.lint.to_string()),
+                fix_it: None,
+                class: Some(crate::diagnostic_class::DiagnosticClass::LintWarning),
+                expected: None,
+                got: None,
+            };
+            typed
+                .error_fix_diffs
+                .insert(crate::resolver::SpanKey::from_span(&hit.span), hit.edits);
+            if level == LintLevel::Deny {
+                typed.errors.push(entry);
+            } else {
+                typed.warnings.push(entry);
+            }
+        }
     }
 
     /// `unused_effect` (B-2026-10-30-22): report each candidate the effect
@@ -1916,6 +1993,7 @@ impl Pipeline {
             crate::lower(&mut self.parsed.program, &retyped);
             self.typed = Some(retyped);
             self.report_missing_library_imports();
+            self.report_style_lints();
         } else {
             let typed = self.typed.as_ref().unwrap();
             crate::lower(&mut self.parsed.program, typed);

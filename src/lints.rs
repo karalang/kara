@@ -385,6 +385,41 @@ pub const STARTER_LINTS: &[LintInfo] = &[
              declaration may reserve one, so a library can add it later without breaking callers; \
              turn this on to find the ones that are not meant (design.md § Effects).",
     },
+    // The five style lints of design.md § `karac fix` and `karac explain`
+    // (B-2026-11-05-31), reported from source text by `crate::style_lints`.
+    // Off by default in `check`, `build` and `run`; `karac fix` turns them
+    // on, and `-W NAME` or `#[warn(NAME)]` shows them.
+    LintInfo {
+        name: "counter_while_loop",
+        default_level: LintLevel::Allow,
+        description: "A `while` loop counts a fresh variable up by one to a bound; \
+             `for i in a..b` says the same. `karac fix` rewrites it.",
+    },
+    LintInfo {
+        name: "manual_compound_assign",
+        default_level: LintLevel::Allow,
+        description: "`x = x + e` on a number is `x += e` (and so for `-`, `*`, `/`, `%`). \
+             `karac fix` rewrites it.",
+    },
+    LintInfo {
+        name: "needless_return",
+        default_level: LintLevel::Allow,
+        description: "A function body ends in `return e;`; its last expression `e` is \
+             already its value. `karac fix` drops the `return` and the `;`.",
+    },
+    LintInfo {
+        name: "redundant_literal_method",
+        default_level: LintLevel::Allow,
+        description: "`.to_string()` on a string literal (already a `String`), or `.iter()` \
+             on an array literal a `for` iterates (`for` borrows the items itself). \
+             `karac fix` removes the call.",
+    },
+    LintInfo {
+        name: "redundant_ref_param",
+        default_level: LintLevel::Allow,
+        description: "`ref` on a parameter's type: a parameter borrows by default, so \
+             `x: ref T` means `x: T` (design.md § Parameter modes). `karac fix` removes it.",
+    },
 ];
 
 /// Look up a lint by its registered name. Returns `None` for

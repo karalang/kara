@@ -239,9 +239,18 @@ pub(super) fn cmd_fix_project(dry_run: bool) {
 
 pub(super) fn cmd_fix(filename: &str, dry_run: bool) {
     let source = read_source(filename);
+    // The style lints are off elsewhere and on here (B-2026-11-05-31): fixing
+    // them is what `karac fix` is for. An `#[allow]` in the source still wins.
     let mut pipeline = Pipeline::new(filename, &source)
         .strict_core()
         .with_library();
+    for lint in crate::style_lints::LINTS {
+        pipeline
+            .lint_overrides
+            .levels
+            .entry(lint.to_string())
+            .or_insert(crate::lints::LintLevel::Warn);
+    }
     // Each edit carries the id of the fix it belongs to: a multi-edit
     // envelope is one fix, applied or skipped whole.
     let mut fixes = FixSet::default();

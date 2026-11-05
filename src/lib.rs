@@ -143,6 +143,7 @@ pub mod scaffold;
 pub mod simd_report;
 pub mod span_visitor;
 pub mod specialization_queries;
+pub mod style_lints;
 pub mod target;
 pub mod token;
 pub mod ty;
