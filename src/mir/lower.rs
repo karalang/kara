@@ -27508,13 +27508,58 @@ impl BorrowSummary {
 /// `KARAC_MIR_TIME=1` prints each build phase's wall time to stderr.
 pub fn phase_time(label: &str, t: &mut std::time::Instant) {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    let ms = t.elapsed().as_secs_f64() * 1e3;
     if *ON.get_or_init(|| std::env::var("KARAC_MIR_TIME").as_deref() == Ok("1")) {
-        eprintln!(
-            "[mir-time] {label:<24} {:8.1} ms",
-            t.elapsed().as_secs_f64() * 1e3
-        );
+        eprintln!("[mir-time] {label:<24} {ms:8.1} ms");
     }
+    record_timing(label, ms);
     *t = std::time::Instant::now();
+}
+
+/// `--emit-timings=<file>`: where the phase timings go, and the ones so far.
+/// The file, when it was asked for, and the phases so far.
+type Timings = (String, std::time::Instant, Vec<(String, f64)>);
+static TIMINGS: std::sync::Mutex<Option<Timings>> = std::sync::Mutex::new(None);
+
+/// Send every phase's wall time to `path` as JSON (design.md §17 rule 1:
+/// timings go to a separate file, never into the diagnostic stream). The file
+/// is written now, empty, and again after each phase, so it is whole however
+/// the process ends.
+pub fn set_timings_file(path: &str) -> std::io::Result<()> {
+    let mut slot = TIMINGS.lock().unwrap_or_else(|e| e.into_inner());
+    *slot = Some((path.to_string(), std::time::Instant::now(), Vec::new()));
+    write_timings(path, &[], 0.0)
+}
+
+fn record_timing(label: &str, ms: f64) {
+    let mut slot = TIMINGS.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((path, start, phases)) = slot.as_mut() {
+        phases.push((label.to_string(), ms));
+        // A write that fails leaves the previous file; timings never stop
+        // a build.
+        let _ = write_timings(path, phases, start.elapsed().as_secs_f64() * 1e3);
+    }
+}
+
+/// `total_ms` is the wall time since the request: the phases nest (the MIR
+/// stages are timed inside `check ownership+mir`), so their sum is not it.
+fn write_timings(path: &str, phases: &[(String, f64)], total: f64) -> std::io::Result<()> {
+    let rows: Vec<String> = phases
+        .iter()
+        .map(|(label, ms)| {
+            format!(
+                "{{\"phase\":{},\"ms\":{ms:.3}}}",
+                serde_json::to_string(label).unwrap_or_default()
+            )
+        })
+        .collect();
+    std::fs::write(
+        path,
+        format!(
+            "{{\"phases\":[{}],\"total_ms\":{total:.3}}}\n",
+            rows.join(",")
+        ),
+    )
 }
 
 fn lower_source_for_checks(

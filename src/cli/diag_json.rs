@@ -1291,6 +1291,8 @@ pub(super) struct DiagnosticJson {
     /// JSONL stream's per-phase counts ([`run_pipeline_jsonl`]).
     pub(super) severities: Vec<String>,
     pub(super) phases: Vec<String>,
+    /// Each entry's `file`, for the cascade cap ([`cap_cascade`]).
+    pub(super) files: Vec<String>,
 }
 
 impl DiagnosticJson {
@@ -1300,6 +1302,7 @@ impl DiagnosticJson {
             spans: Vec::new(),
             severities: Vec::new(),
             phases: Vec::new(),
+            files: Vec::new(),
         }
     }
 
@@ -1388,6 +1391,7 @@ impl DiagnosticJson {
         self.spans.push(*d.span);
         self.severities.push(d.severity.to_string());
         self.phases.push(d.phase.to_string());
+        self.files.push(d.filename.to_string());
     }
 
     pub(super) fn to_json_array(&self) -> String {
@@ -2642,8 +2646,66 @@ pub(super) fn render_target_skipped_json(
     format!("[{}]", parts.join(","))
 }
 
+/// The most primary errors one file reports (design.md §17 rule 3).
+pub(super) const CASCADE_CAP: usize = 20;
+
+/// `diags` under the cascade cap (design.md §17 rule 3): once a file has
+/// reported [`CASCADE_CAP`] primary errors, its further errors are dropped,
+/// and each phase that dropped some reports how many in a marker,
+/// `{"phase":…,"truncated":{"file":…,"suppressed_primary_errors":N}}`, after
+/// its last entry. Warnings and notes are never capped. Whether an entry is
+/// kept depends only on the entries before it and a marker sits at its
+/// phase's end, so the JSONL stream, which emits a prefix of this list at each
+/// phase boundary, reports the batch document's entries and markers
+/// (invariant 4). The ids of dropped entries are not reused.
+pub(super) fn cap_cascade(diags: DiagnosticJson) -> DiagnosticJson {
+    let mut out = DiagnosticJson::new();
+    let mut errors: FxHashMap<String, usize> = FxHashMap::default();
+    // The current phase's suppressed counts, per file, in first-seen order.
+    let mut dropped: Vec<(String, usize)> = Vec::new();
+    let mut phase = String::new();
+    let flush = |out: &mut DiagnosticJson, phase: &str, dropped: &mut Vec<(String, usize)>| {
+        for (file, n) in dropped.drain(..) {
+            out.entries.push(format!(
+                "{{\"phase\":{},\"truncated\":{{\"file\":{},\"suppressed_primary_errors\":{n}}}}}",
+                json_string(phase),
+                json_string(&file)
+            ));
+            out.spans.push(Span::default());
+            out.severities.push("truncated".to_string());
+            out.phases.push(phase.to_string());
+            out.files.push(file);
+        }
+    };
+    for i in 0..diags.entries.len() {
+        if diags.phases[i] != phase {
+            flush(&mut out, &phase, &mut dropped);
+            phase = diags.phases[i].clone();
+        }
+        let file = &diags.files[i];
+        if diags.severities[i] == "error" {
+            let n = errors.entry(file.clone()).or_insert(0);
+            if *n >= CASCADE_CAP {
+                match dropped.iter_mut().find(|(f, _)| f == file) {
+                    Some((_, k)) => *k += 1,
+                    None => dropped.push((file.clone(), 1)),
+                }
+                continue;
+            }
+            *n += 1;
+        }
+        out.entries.push(diags.entries[i].clone());
+        out.spans.push(diags.spans[i]);
+        out.severities.push(diags.severities[i].clone());
+        out.phases.push(diags.phases[i].clone());
+        out.files.push(diags.files[i].clone());
+    }
+    flush(&mut out, &phase, &mut dropped);
+    out
+}
+
 pub(super) fn emit_json_output(pipeline: &Pipeline) {
-    let diags = collect_diagnostics(pipeline);
+    let diags = cap_cascade(collect_diagnostics(pipeline));
     let effects = program_effects_json(pipeline);
     let pub_effects = public_function_effects_json(pipeline);
     let mrg = mutual_recursion_groups_json(pipeline);
@@ -2786,7 +2848,7 @@ impl JsonlStream {
             .iter()
             .position(|p| *p == phase)
             .map_or(0, |i| i + 1);
-        let diags = collect_diagnostics(pipeline);
+        let diags = cap_cascade(collect_diagnostics(pipeline));
         let (mut errors, mut warnings, mut notes) = (0, 0, 0);
         while self.emitted < diags.entries.len()
             && DIAGNOSTIC_PHASES[..done].contains(&diags.phases[self.emitted].as_str())
@@ -2807,7 +2869,9 @@ impl JsonlStream {
                     }
                 }
                 "warning" => warnings += 1,
-                _ => notes += 1,
+                "note" => notes += 1,
+                // A cascade-cap marker is no diagnostic of its own.
+                _ => {}
             }
             self.emitted += 1;
         }

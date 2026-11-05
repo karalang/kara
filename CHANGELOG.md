@@ -192,6 +192,10 @@ accepted by 0.8.0 are now refused, each with a fix-it.
   explain` answers the spec's symbolic codes (`E_NOT_CROSS_TASK`,
   `E_DUPLICATE_LINT_LEVEL`, ...), the last now with its own code, E0006
   (B-2026-11-05-17).
+- `--output=json` and `--output=jsonl` stop a file at 20 primary errors and
+  report the rest in a `truncated` marker (design.md §17 rule 3), and
+  `--emit-timings=<file>` writes the phase times there as JSON
+  (B-2026-11-05-17).
 - `karac check --output=jsonl` streams every diagnostic the batch
   `--output=json` document lists, as `diagnostic` events with the same ids
   at each phase's boundary; it printed only parse errors, and those without

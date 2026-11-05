@@ -7138,6 +7138,8 @@ The JSON document is the compiler's only output channel for signal. Five rules g
 { "truncated": { "file": "src/order.kara", "suppressed_primary_errors": 14 } }
 ```
 
+The marker comes after the last entry of the phase that dropped the errors and names that phase, as every entry does: `{ "phase": "typecheck", "truncated": { ... } }`. A later phase that drops more of the file's errors reports them in a marker of its own, so the stream, which emits each phase's entries at its boundary, carries the same markers in the same places.
+
 A hard cap, rather than stopping at the first error, lets AI agents apply independent fixes in one pass. Twenty primaries is enough for parallel fixing and small enough to avoid a wall of errors.
 
 **4. A `concept` field linking to the specification.** Every diagnostic carries `"concept": "<id>"`, a stable string such as `"ownership/move-semantics"` or `"effects/inference-boundaries"`. The [concept table](#concept-ids) maps each id to the section that specifies it, so an AI agent fetches the authoritative section without guessing. Ids are used instead of URLs because URLs rot. When this document is reorganized, the table changes and the ids do not.

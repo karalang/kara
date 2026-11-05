@@ -147,3 +147,70 @@ fn package_json_carries_program_effects() {
     assert_eq!(out.status.code(), Some(1), "{text}");
     assert!(text.starts_with("{\"program_effects\":"), "{text}");
 }
+
+/// 25 type errors in one file: 20 primaries and a `truncated` marker for the
+/// other 5, the same in the batch document and the stream (design.md §17
+/// rule 3 and invariant 4).
+#[test]
+fn the_cascade_cap_stops_a_file_at_twenty_primary_errors() {
+    let mut src = String::from("#[deprecated]\nfn old() {}\nfn main() {\n");
+    for i in 0..25 {
+        src.push_str(&format!("    let x{i}: i64 = \"s\";\n"));
+    }
+    src.push_str("    old();\n}\n");
+    let (code, batch, _) = karac(&["check", "--output=json"], "cap", &src);
+    assert_eq!(code, Some(1), "{batch}");
+    assert_eq!(batch.matches("\"code\":\"E0200\"").count(), 20, "{batch}");
+    assert!(
+        batch.contains("{\"phase\":\"typecheck\",\"truncated\":{\"file\":"),
+        "{batch}"
+    );
+    assert!(
+        batch.contains("\"suppressed_primary_errors\":5}"),
+        "{batch}"
+    );
+    assert!(
+        batch.contains("\"severity\":\"warning\""),
+        "a warning is never capped: {batch}"
+    );
+
+    let (code, stream, _) = karac(&["check", "--output=jsonl"], "cap", &src);
+    assert_eq!(code, Some(1), "{stream}");
+    let marker = stream
+        .lines()
+        .find(|l| l.contains("\"truncated\""))
+        .expect("the stream carries the marker");
+    assert!(
+        marker.starts_with("{\"type\":\"diagnostic\",\"phase\":\"typecheck\","),
+        "{marker}"
+    );
+    assert!(
+        marker.contains("\"suppressed_primary_errors\":5}"),
+        "{marker}"
+    );
+    let typecheck = stream
+        .lines()
+        .find(|l| l.contains("\"phase_complete\"") && l.contains("\"typecheck\""))
+        .unwrap();
+    assert!(typecheck.contains("\"errors\":20,"), "{typecheck}");
+}
+
+#[test]
+fn emit_timings_writes_the_phase_times_to_a_file() {
+    let out = std::env::temp_dir().join(format!("karac-lee-timings-{}.json", std::process::id()));
+    let flag = format!("--emit-timings={}", out.display());
+    let (code, stdout, err) = karac(
+        &["check", &flag, "--output=json"],
+        "timings",
+        "fn main() { println(1); }\n",
+    );
+    let written = std::fs::read_to_string(&out).unwrap_or_default();
+    let _ = std::fs::remove_file(&out);
+    assert_eq!(code, Some(0), "{stdout}{err}");
+    assert!(
+        stdout.starts_with("{\"program_effects\":"),
+        "stdout is the document alone: {stdout}"
+    );
+    assert!(written.starts_with("{\"phases\":[{\"phase\":"), "{written}");
+    assert!(written.contains("\"total_ms\":"), "{written}");
+}

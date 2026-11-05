@@ -11,6 +11,33 @@ use super::help::{has_help_flag, print_subcommand_help};
 use super::{BindingsMode, Command, OutputMode, QueryKind};
 
 pub fn parse_args(args: &[String]) -> Command {
+    // `--emit-timings=<file>` applies to every command that runs the
+    // pipeline, so it is taken out before any command's own parser sees it
+    // (design.md §17 rule 1, B-2026-11-05-17).
+    // Arguments after `--` are the program's.
+    let ours = args.iter().position(|a| a == "--").unwrap_or(args.len());
+    if args[..ours].iter().any(|a| a.starts_with("--emit-timings")) {
+        let mut rest = Vec::with_capacity(args.len());
+        for (i, a) in args.iter().enumerate() {
+            match a.strip_prefix("--emit-timings").filter(|_| i < ours) {
+                Some(v) => {
+                    let path = v.strip_prefix('=').unwrap_or("");
+                    if path.is_empty() {
+                        eprintln!(
+                            "error: `--emit-timings` takes a file: `--emit-timings=timings.json`"
+                        );
+                        process::exit(1);
+                    }
+                    if let Err(e) = crate::mir::lower::set_timings_file(path) {
+                        eprintln!("error: cannot write the timings file `{path}`: {e}");
+                        process::exit(1);
+                    }
+                }
+                None => rest.push(a.clone()),
+            }
+        }
+        return parse_args(&rest);
+    }
     if args.len() < 2 {
         return Command::Help;
     }
