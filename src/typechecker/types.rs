@@ -890,7 +890,12 @@ pub fn type_display(ty: &Type) -> String {
         Type::Never => "!".to_string(),
         Type::Tuple(types) => {
             let inner: Vec<String> = types.iter().map(type_display).collect();
-            format!("({})", inner.join(", "))
+            // A one-element tuple prints as it is written, `(T,)`.
+            if inner.len() == 1 {
+                format!("({},)", inner[0])
+            } else {
+                format!("({})", inner.join(", "))
+            }
         }
         Type::Array { element, size } => format!(
             "Array[{}, {}]",

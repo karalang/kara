@@ -102,6 +102,11 @@ impl super::Formatter {
                     }
                     self.format_pattern(p);
                 }
+                // `(p,)` destructures a one-element tuple; `(p)` is `p`
+                // (B-2026-11-05-14).
+                if patterns.len() == 1 {
+                    self.write_str(",");
+                }
                 self.write_str(")");
             }
             PatternKind::Or(alts) => {

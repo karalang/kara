@@ -284,6 +284,11 @@ impl super::Formatter {
                     }
                     self.format_type_expr(t);
                 }
+                // `(T,)` is a one-element tuple; `(T)` is `T` in parentheses
+                // (B-2026-11-05-14).
+                if types.len() == 1 {
+                    self.write_str(",");
+                }
                 self.write_str(")");
             }
             TypeKind::Array { element, size } => {
