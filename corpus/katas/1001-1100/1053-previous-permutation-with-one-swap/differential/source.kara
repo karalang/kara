@@ -1,0 +1,255 @@
+// LeetCode #1053: Previous Permutation With One Swap -- the differential.
+//
+// The five arms against the statement read literally, on 3000 random
+// arrays, with six properties:
+//
+// P1  the answer is the statement read literally
+// P2  the answer holds the same values, differs from the array in no place
+//     or in two, is no larger, and is the array itself exactly when the
+//     array never falls
+// P3  the values before the first place the answer changes, dropped, leave
+//     the rest of the answer
+// P4  every value 3 larger, or doubled, moves the answer the same way
+// P5  a value no larger than any added at the front, and one larger than
+//     any added at the back, leave the answer between them
+// P6  each arm agrees with at least two of the other four
+// ---- prev_perm.kara: the ★ arm: one scan from the right
+fn scan_arm(arr: Slice[i64]) -> Vec[i64] {
+    let mut out = arr.to_vec();
+    let n = out.len();
+    let mut i = n - 2;
+    while i >= 0 and out[i] <= out[i + 1] {
+        i -= 1;
+    }
+    if i < 0 {
+        return out;
+    }
+    let mut j = n - 1;
+    while out[j] >= out[i] {
+        j -= 1;
+    }
+    while out[j - 1] == out[j] {
+        j -= 1;
+    }
+    out.swap(i, j);
+    out
+}
+
+// ---- prev_perm_search.kara: binary search
+fn search_arm(arr: Slice[i64]) -> Vec[i64] {
+    let mut out = arr.to_vec();
+    let n = out.len();
+    let Some(i) = (0..n - 1).rev().find(|k| out[k] > out[k + 1]) else {
+        return out;
+    };
+    let tail = out[i + 1..];
+    let below = tail.partition_point(|v| *v < out[i]);
+    let value = tail[below - 1];
+    let first = tail.partition_point(|v| *v < value);
+    out.swap(i, i + 1 + first);
+    out
+}
+
+// ---- prev_perm_map.kara: a SortedMap of the values seen
+fn map_arm(arr: Slice[i64]) -> Vec[i64] {
+    let mut out = arr.to_vec();
+    let mut seen: SortedMap[i64, i64] = SortedMap.new();
+    let mut i = out.len() - 1;
+    while i >= 0 {
+        if let Some((_, j)) = seen.range(0, out[i]).last() {
+            out.swap(i, *j);
+            return out;
+        }
+        seen.insert(out[i], i);
+        i -= 1;
+    }
+    out
+}
+
+// ---- prev_perm_iter.kara: rposition and max_by_key
+fn iter_arm(arr: Slice[i64]) -> Vec[i64] {
+    let mut out = arr.to_vec();
+    if let Some(i) = arr.windows(2).iter().rposition(|w| w[0] > w[1]) {
+        let j = (i + 1..arr.len()).filter(|j| arr[j] < arr[i]).max_by_key(|j| (arr[j], -j)).unwrap();
+        out.swap(i, j);
+    }
+    out
+}
+
+// ---- prev_perm_candidates.kara: every candidate swap compared
+fn candidates_arm(arr: Slice[i64]) -> Vec[i64] {
+    let n = arr.len();
+    let mut i = n - 2;
+    while i >= 0 and arr[i] <= arr[i + 1] {
+        i -= 1;
+    }
+    let mut best = arr.to_vec();
+    if i < 0 {
+        return best;
+    }
+    let mut found = false;
+    for j in i + 1..n {
+        if arr[j] < arr[i] {
+            let mut tried = arr.to_vec();
+            tried.swap(i, j);
+            if not found or tried > best {
+                best = tried;
+                found = true;
+            }
+        }
+    }
+    best
+}
+
+// ---- the statement read literally
+// Every swap of two places, kept when it makes an array smaller than `arr`
+// and larger than the best one kept so far; `arr` itself when none does.
+fn read_literally(arr: Slice[i64]) -> Vec[i64] {
+    let n = arr.len();
+    let mut best = arr.to_vec();
+    let mut found = false;
+    for i in 0..n {
+        for j in i + 1..n {
+            let mut tried = arr.to_vec();
+            tried.swap(i, j);
+            if tried.as_slice() < arr and (not found or tried > best) {
+                best = tried;
+                found = true;
+            }
+        }
+    }
+    best
+}
+
+fn arm(a: i64, arr: Slice[i64]) -> Vec[i64] {
+    match a {
+        0 => scan_arm(arr),
+        1 => search_arm(arr),
+        2 => map_arm(arr),
+        3 => iter_arm(arr),
+        _ => candidates_arm(arr),
+    }
+}
+
+// ---- the harness
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_values(n: i64, largest: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut arr: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        arr.push(next_random(mut seed) % largest + 1);
+    }
+    arr
+}
+
+fn fold(arr: Slice[i64]) -> i64 {
+    let mut h = 0;
+    for x in arr.iter() {
+        h = (h * 10007 + x) % 1000000007;
+    }
+    h
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    // failures by property, P1 to P6 at 1 to 6
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+// Every check on one array.
+fn check_case(t: mut ref Tally, arr: Slice[i64]) {
+    let answers: Vec[Vec[i64]] = (0..5).map(|a| arm(a, arr)).collect();
+    let want = read_literally(arr);
+    let n = arr.len();
+    let mut sorted = arr.to_vec();
+    sorted.sort();
+    let mut falls = false;
+    for k in 0..n - 1 {
+        if arr[k] > arr[k + 1] {
+            falls = true;
+        }
+    }
+    let low = sorted[0];
+    let high = sorted[n - 1];
+    let plus: Vec[i64] = arr.iter().map(|x| x + 3).collect();
+    let doubled: Vec[i64] = arr.iter().map(|x| 2 * x).collect();
+    let mut ends: Vec[i64] = [low];
+    ends.extend_from_slice(arr);
+    ends.push(high + 1);
+    for a in 0..5 {
+        let answer = ref answers[a];
+        let what = f"arm {a}, {arr} -> {answer}";
+        expect(mut t, 1, answer == want, f"P1 {what}, read literally {want}");
+        let mut same = answer.to_vec();
+        same.sort();
+        let mut differ = 0;
+        let mut first = n;
+        for k in 0..answer.len().min(n) {
+            if answer[k] != arr[k] {
+                differ += 1;
+                first = first.min(k);
+            }
+        }
+        let shape = same == sorted and (differ == 0 or differ == 2) and answer.as_slice() <= arr;
+        let unchanged = (answer.as_slice() == arr) == not falls;
+        expect(mut t, 2, shape and unchanged, f"P2 {what}: not one swap down");
+        let from = if first == n { n.min(1) } else { first };
+        let rest = arm(a, arr[from..]);
+        expect(mut t, 3, rest.as_slice() == answer[from..], f"P3 {what}: from {from}, {rest}");
+        let moved_plus: Vec[i64] = answer.iter().map(|x| x + 3).collect();
+        let moved_doubled: Vec[i64] = answer.iter().map(|x| 2 * x).collect();
+        let moves = arm(a, plus) == moved_plus and arm(a, doubled) == moved_doubled;
+        expect(mut t, 4, moves, f"P4 {what}: 3 larger, or doubled");
+        let mut between: Vec[i64] = [low];
+        between.extend_from_slice(answer);
+        between.push(high + 1);
+        expect(mut t, 5, arm(a, ends) == between, f"P5 {what}: {low} in front, {high + 1} behind");
+        let mut agree = 0;
+        for o in 0..5 {
+            if o != a and answers[o] == answer {
+                agree += 1;
+            }
+        }
+        expect(mut t, 6, agree >= 2, f"P6 {what}: agrees with {agree}");
+    }
+    t.cases += 1;
+    t.check = (t.check * 131 + fold(answers[0])) % 1000000007;
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: Vec.filled(7, 0) };
+    // 3000 random arrays: 2000 of 1 to 8 values of 1 to 3, where values
+    // repeat, and 1000 of 1 to 30 values of 1 to 100
+    let mut seed = 10531;
+    for i in 0..3000 {
+        let arr = if i < 2000 {
+            random_values(next_random(mut seed) % 8 + 1, 3, mut seed)
+        } else {
+            random_values(next_random(mut seed) % 30 + 1, 100, mut seed)
+        };
+        check_case(mut t, arr);
+    }
+    println(f"{t.cases} arrays: checksum {t.check}, {t.checks} checks over 5 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

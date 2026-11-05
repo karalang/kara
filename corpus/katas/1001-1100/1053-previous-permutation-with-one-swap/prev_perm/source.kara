@@ -1,0 +1,111 @@
+// LeetCode #1053: Previous Permutation With One Swap -- one scan from the
+// right.
+//
+// A swap makes the array smaller only when it moves a smaller value left,
+// and the largest such result changes the array as far right as it can.
+// So find the last place i where a value is larger than the next one; the
+// values after it rise. Swap it with the largest value after it that is
+// still smaller, and of several equal ones the leftmost, so the larger
+// value lands as far left as it can. No such i means the array already
+// rises and nothing smaller is one swap away. O(n).
+
+fn prev_perm_opt1(arr: Slice[i64]) -> Vec[i64] {
+    let mut out = arr.to_vec();
+    let n = out.len();
+    let mut i = n - 2;
+    while i >= 0 and out[i] <= out[i + 1] {
+        i -= 1;
+    }
+    if i < 0 {
+        return out;
+    }
+    let mut j = n - 1;
+    while out[j] >= out[i] {
+        j -= 1;
+    }
+    while out[j - 1] == out[j] {
+        j -= 1;
+    }
+    out.swap(i, j);
+    out
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `n` values of 1 to `largest`
+fn random_values(n: i64, largest: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut arr: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        arr.push(next_random(mut seed) % largest + 1);
+    }
+    arr
+}
+
+// A checksum of one answer: its values in order.
+fn fold(arr: Slice[i64]) -> i64 {
+    let mut h = 0;
+    for x in arr.iter() {
+        h = (h * 10007 + x) % 1000000007;
+    }
+    h
+}
+
+fn main() {
+    // LeetCode's three examples, then a few more
+    let examples: Vec[Vec[i64]] = [
+        [3, 2, 1],
+        [1, 1, 5],
+        [1, 9, 4, 6, 7],
+        [3, 1, 1, 3],
+        [7],
+        [2, 1],
+        [1, 2],
+        [5, 5, 5],
+        [4, 1, 2, 2, 3],
+        [6, 2, 2, 5, 5, 1],
+    ];
+    for arr in examples.iter() {
+        println(f"{arr} -> {prev_perm_opt1(arr)}");
+    }
+    // 3000 random arrays of 1 to 8 values of 1 to 4
+    let mut seed = 1053;
+    let mut changed = 0;
+    let mut check = 0;
+    for _ in 0..3000 {
+        let n = next_random(mut seed) % 8 + 1;
+        let arr = random_values(n, 4, mut seed);
+        let answer = prev_perm_opt1(arr);
+        if answer != arr {
+            changed += 1;
+        }
+        check = (check * 131 + fold(answer)) % 1000000007;
+    }
+    println(f"3000 random arrays of 1 to 8 values of 1 to 4: {changed} changed, checksum {check}");
+    // 300 random arrays of 1 to 2000 values of 1 to 10000
+    changed = 0;
+    check = 0;
+    for _ in 0..300 {
+        let n = next_random(mut seed) % 2000 + 1;
+        let arr = random_values(n, 10000, mut seed);
+        let answer = prev_perm_opt1(arr);
+        if answer != arr {
+            changed += 1;
+        }
+        check = (check * 131 + fold(answer)) % 1000000007;
+    }
+    println(f"300 random arrays of 1 to 2000 values of 1 to 10000: {changed} changed, checksum {check}");
+    // the largest: 10000 values rising but the first, and 10000 rising with the last two swapped
+    let mut first_high: Vec[i64] = (1..10001).collect();
+    first_high[0] = 5000;
+    let a = prev_perm_opt1(first_high);
+    println(f"10000 rising, the first 5000 -> starts {a[0]}, {a[1]}, checksum {fold(a)}");
+    let mut last_two: Vec[i64] = (1..10001).collect();
+    last_two.swap(9998, 9999);
+    let b = prev_perm_opt1(last_two);
+    println(f"10000 rising, the last two swapped -> ends {b[9998]}, {b[9999]}, checksum {fold(b)}");
+}

@@ -1,0 +1,67 @@
+// LeetCode #1053: Previous Permutation With One Swap -- the benchmark: the
+// ★ scan on 200 arrays of 20000 values built once, 25 rounds. Each array is
+// random values followed by a rising run of random length, so the scan from
+// the right walks the run to find the fall and back down it for the swap.
+
+fn prev_perm_opt1(arr: Slice[i64]) -> Vec[i64] {
+    let mut out = arr.to_vec();
+    let n = out.len();
+    let mut i = n - 2;
+    while i >= 0 and out[i] <= out[i + 1] {
+        i -= 1;
+    }
+    if i < 0 {
+        return out;
+    }
+    let mut j = n - 1;
+    while out[j] >= out[i] {
+        j -= 1;
+    }
+    while out[j - 1] == out[j] {
+        j -= 1;
+    }
+    out.swap(i, j);
+    out
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let count = 200;
+    let n = 20000;
+    let rounds = 25;
+    let mut seed = 1053;
+    let mut all: Vec[(Vec[i64], i64)] = Vec.new();
+    for _ in 0..count {
+        // a rising run of 1 to n - 1 values at the end, random values before it
+        let run = next_random(mut seed) % (n - 1) + 1;
+        let mut arr: Vec[i64] = Vec.new();
+        for _ in 0..n - run {
+            arr.push(next_random(mut seed) % 10000 + 1);
+        }
+        let mut v = next_random(mut seed) % 1000 + 1;
+        for _ in 0..run {
+            arr.push(v);
+            v += next_random(mut seed) % 3;
+        }
+        all.push((arr, n - run - 1));
+    }
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..rounds {
+        for (arr, from) in all.iter() {
+            let answer = prev_perm_opt1(arr);
+            // the answer from the place before the run on, folded
+            let mut h = 0;
+            for k in from..n {
+                h = (h * 10007 + answer[k]) % 1000000007;
+            }
+            total += answer[from];
+            check = (check * 131 + h) % 1000000007;
+        }
+    }
+    println(f"{count} arrays of {n} values, {rounds} rounds: total {total}, checksum {check}");
+}
