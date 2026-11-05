@@ -383,6 +383,8 @@ impl<'ctx> Cx<'ctx, '_> {
                 .build_in_bounds_gep(self.llcx.i8_type(), base, &[at], "elem")
                 .map_err(e)?
         };
+        // `i` is below the length (checked, or a promise of the program's).
+        self.mark_index_nuw(at, p);
         Ok((p, elem))
     }
 

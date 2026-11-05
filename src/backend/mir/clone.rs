@@ -102,6 +102,59 @@ impl<'ctx> Cx<'ctx, '_> {
         }
     }
 
+    /// [`Self::elem_ptr`] for an `i` proven in `0..len` and a `base` at the
+    /// start of the buffer: the offset and the address carry the no-wrap
+    /// facts that holds ([`Self::mark_index_nuw`]).
+    pub(super) fn elem_ptr_nuw(
+        &self,
+        base: PointerValue<'ctx>,
+        i: inkwell::values::IntValue<'ctx>,
+        size: u64,
+    ) -> R<PointerValue<'ctx>> {
+        let at = self
+            .builder
+            .build_int_mul(i, self.i64(size), "")
+            .map_err(e)?;
+        // SAFETY: element `i` of a buffer the caller has bounds-checked.
+        let p = unsafe {
+            self.builder
+                .build_in_bounds_gep(self.llcx.i8_type(), base, &[at], "")
+                .map_err(e)?
+        };
+        self.mark_index_nuw(at, p);
+        Ok(p)
+    }
+
+    /// B-2026-11-04-83: element `i` with `0 <= i < len` sits at a byte
+    /// offset `i * size` inside one allocation, so the multiply wraps
+    /// neither signed nor unsigned, and the GEP adds a non-negative offset
+    /// to the buffer's start (`nuw`, LLVM 19). `KARAC_MIR_INDEX_NUW=0`
+    /// emits them bare.
+    pub(super) fn mark_index_nuw(
+        &self,
+        at: inkwell::values::IntValue<'ctx>,
+        p: PointerValue<'ctx>,
+    ) {
+        if !index_nuw_flag() {
+            return;
+        }
+        use inkwell::values::{AsValueRef, BasicValue};
+        // SAFETY: the flags are set only on a multiply and a GEP, the
+        // instructions that carry them; a folded constant is left alone.
+        unsafe {
+            if at.as_instruction_value().is_some() {
+                llvm_sys::core::LLVMSetNUW(at.as_value_ref(), 1);
+                llvm_sys::core::LLVMSetNSW(at.as_value_ref(), 1);
+            }
+            if p.as_instruction_value().is_some() {
+                llvm_sys::core::LLVMGEPSetNoWrapFlags(
+                    p.as_value_ref(),
+                    llvm_sys::LLVMGEPFlagInBounds | llvm_sys::LLVMGEPFlagNUW,
+                );
+            }
+        }
+    }
+
     /// Clones `n` elements of `el` from `src` to `dst`, first to last.
     fn clone_elems(
         &mut self,
@@ -282,4 +335,11 @@ impl<'ctx> Cx<'ctx, '_> {
         }
         Ok(())
     }
+}
+
+/// Whether an element's address carries `nuw` ([`Cx::mark_index_nuw`]);
+/// `KARAC_MIR_INDEX_NUW=0` turns it off.
+fn index_nuw_flag() -> bool {
+    static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *FLAG.get_or_init(|| std::env::var("KARAC_MIR_INDEX_NUW").as_deref() != Ok("0"))
 }

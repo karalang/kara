@@ -1555,7 +1555,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 .map_err(e)?
         };
         self.abort_unless(ok, "index out of bounds")?;
-        self.elem_ptr(p, i, size)
+        self.elem_ptr_nuw(p, i, size)
     }
 
     /// Writes `Some(ref elem i)` or `None` at `dest` (an `Option[ref T]`).
@@ -1577,7 +1577,7 @@ impl<'ctx> Cx<'ctx, '_> {
         let (some, none) = self.option_variants(dty)?;
         self.store_tag(d, dty, none)?;
         self.if_then(ok, |cx| {
-            let at = cx.elem_ptr(p, i, size)?;
+            let at = cx.elem_ptr_nuw(p, i, size)?;
             cx.store_tag(d, dty, some)?;
             cx.store_found(d, dty, some, at, el)
         })
