@@ -2,7 +2,7 @@
 // one at a time.
 //
 // The statement as it reads: find two adjacent equal letters, take both out
-// with `remove`, and look again one place back, where taking them out may
+// with `drain`, and look again one place back, where taking them out may
 // have made a new pair. Each removal shifts the rest down, so O(n^2) at
 // worst.
 
@@ -11,8 +11,7 @@ fn remove_duplicates(s: String) -> String {
     let mut i = 0;
     while i + 1 < v.len() {
         if v[i] == v[i + 1] {
-            v.remove(i + 1);
-            v.remove(i);
+            v.drain(i..i + 2);
             if i > 0 {
                 i -= 1;
             }

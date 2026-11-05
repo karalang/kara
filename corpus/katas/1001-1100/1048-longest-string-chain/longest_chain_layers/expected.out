@@ -1,0 +1,14 @@
+["a","b","ba","bca","bda","bdca"] -> 4
+["xbc","pcxbcf","xb","cxbc","pcxbc"] -> 5
+["abcd","dbqca"] -> 1
+["a"] -> 1
+["a","a","aa"] -> 2
+["ab","ba","a"] -> 2
+["abc","ac","a","c"] -> 3
+["a","ab","abc","abcd","abcde","x","xy"] -> 5
+["ksqvsyq","ks","kss","czvh","zczpzvdhx","zczpzvh","zczpzvhx","zcpzvh","zczvh","gr","grukmj","ksqvsq","gruj","kssq","ksqsq","grukkmj","grukj","zczpzfvdhx","gru"] -> 7
+["b","c","d","e"] -> 1
+2000 random lists of a, b: total 4698, checksum 800781900
+300 random lists of a to d: total 1258, checksum 548173810
+1000 words of a, b, c -> 8
+a ladder of 16 words, longest first -> 16

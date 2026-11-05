@@ -65,8 +65,7 @@ fn scan_arm(s: String) -> String {
     let mut i = 0;
     while i + 1 < v.len() {
         if v[i] == v[i + 1] {
-            v.remove(i + 1);
-            v.remove(i);
+            v.drain(i..i + 2);
             if i > 0 {
                 i -= 1;
             }
