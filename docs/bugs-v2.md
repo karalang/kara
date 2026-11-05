@@ -107,7 +107,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-04-78 | 2026-11-04 | typecheck | medium | A borrowed parameter passed where a library constructor takes `own Vec[T]` (`PriorityQueue.from(v)`, `max_first_from(v)` with `v: Vec[i64]`) draws "expected 'Vec[T]', found 'ref Vec[i64]'" and a cascade "cannot infer type parameter 'T'", with no fix; the same parameter given away by `let`/return gets "cannot give away parameter `v`" with its `own` / `.clone()` fix | — |
 | B-2026-11-04-79 | 2026-11-04 | typecheck | low | Tracker for the next minor release: `mut` on a field of a plain (non-`shared`) struct or enum becomes a compile error; in 0.8.x it is a `deprecated` warning with a `karac fix` that deletes it (ad5c10d728, design.md §5 Structs 25d27bd53a) | — |
 | B-2026-11-04-83 | 2026-11-04 | mir-llvm | low | The backend does not emit the facts LLVM 19-22 added: `range` attributes on parameters and returns, `nuw`/`nusw`/`inbounds` flags on GEPs beyond inbounds, `nuw`/`nsw` on `trunc`, `samesign` on `icmp`, and `captures(address/read_provenance)` beyond `captures(none)` | — |
-| B-2026-11-05-3 | 2026-11-05 | typecheck+other | low | Remainder of B-2026-11-04-80: the editor code action that rewrites `.unwrap()` on an ordinary (non-`weak`) Option to `.expect("…")` does not exist; design.md §11 weak Ergonomics (8c5e67ab81) offers it as an LSP code action, never a check warning | — |
 | B-2026-11-05-4 | 2026-11-05 | mir-llvm | medium | Three kata benches run 2-3x slower on LLVM 22 than on LLVM 18 at about the same instruction count (x86): teemo_attacking 357 ms vs 126 (x86's cmov converter now branches the loop's `min`), min_stack 900 vs 423 and hsearch (275) 925 vs 471 (not cmov, unattributed); the frozen set's run-time geomean is unchanged (0.995) | — |
 
 ### Relocated
@@ -694,6 +693,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-04-82 | mir-llvm | high | An integer tuple literal passed as a collection key or compared with `==`/`<` keeps the default (i64, i64) layout instead of the declared narrow tupl… | 89324c3d8f |
 | B-2026-11-05-1 | typecheck | low | `a == r` with a non-Copy `T` beside a non-literal `ref T`: Gowtham decided 2026-11-05 that comparisons see through `ref` on either side for any T (de… | 2a3202d89d |
 | B-2026-11-05-2 | ownership | low | A MutFn closure passed to an `own MutFn()` parameter twice (`take(f); take(f);`) is accepted on every lane and runs as if copied; design.md §7 says a… | d78c610976 |
+| B-2026-11-05-3 | typecheck+other | low | Remainder of B-2026-11-04-80: the editor code action that rewrites `.unwrap()` on an ordinary (non-`weak`) Option to `.expect("…")` does not exist; d… | 5fd8c20172 |
 
 </details>
 
