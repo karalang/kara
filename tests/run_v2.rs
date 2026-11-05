@@ -133,7 +133,9 @@ fn run_v2_json_output_carries_the_runtime_reports() {
         let stdout = text(&out.stdout);
         assert!(stdout.starts_with("before\n{\"runtime_errors\":[{\"message\":\"index out of bounds\",\"location\":{\"file\":"), "{lane:?}: {stdout}");
         assert!(
-            stdout.contains("\"line\":5,\"col\":16}}]}\n"),
+            // The panic record's kind rides on the fault (design.md § Panic
+            // record, B-2026-11-05-18).
+            stdout.contains("\"line\":5,\"col\":16},\"kind\":\"index_out_of_bounds\"}]}\n"),
             "{lane:?}: {stdout}"
         );
         assert!(
