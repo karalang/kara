@@ -345,7 +345,10 @@ fn loop_trips(body: &Body, header: BasicBlock, outer: Option<BasicBlock>) -> Opt
         Some((lits, others))
     };
     // A literal, or a local written once with one (`stepped`: and maybe
-    // also otherwise, as a counter is).
+    // also otherwise, as a counter is). A counter may be reset with the
+    // same literal for each loop it runs (`i = 0;` before a second `while
+    // i < rows`, kata 73): this only sizes a loop for the cost gate, so
+    // that literal is taken as its start.
     let value = |o: &Operand, stepped: bool| -> Option<u128> {
         match o {
             Operand::Const(Const {
@@ -354,6 +357,9 @@ fn loop_trips(body: &Body, header: BasicBlock, outer: Option<BasicBlock>) -> Opt
             }) => Some(*v),
             Operand::Copy(p) if p.projection.is_empty() => match writes(p.local)? {
                 (lits, others) if lits.len() == 1 && (stepped || others == 0) => Some(lits[0]),
+                (lits, _) if stepped && !lits.is_empty() && lits.iter().all(|&v| v == lits[0]) => {
+                    Some(lits[0])
+                }
                 _ => None,
             },
             _ => None,
@@ -605,12 +611,15 @@ impl Cost {
             .iter()
             .any(|m| m.header != own.header && m.blocks.contains(&own.header));
         let trips = constant_trips(body, own.header)?;
-        if nested {
-            return (trips <= FEW_TRIPS)
-                .then(|| format!("it is inside a loop and makes {trips} trips"));
+        if nested && trips <= FEW_TRIPS {
+            return Some(format!("it is inside a loop and makes {trips} trips"));
         }
-        // A top-level loop whose iterations only run inner loops of known
-        // trips (no call that loops): all its work, in trips.
+        // A loop whose iterations only run inner loops of known trips (no
+        // call that loops): all its work, in trips. Inside another loop
+        // that is the work of each time it runs, so each spawn and join
+        // pays for that much: kata 73's 20-row build of a 20x20 matrix
+        // (400 pushes) ran as tasks 100,000 times, 10 s on four workers
+        // against 0.48 s in order (B-2026-11-05-10).
         if self.weight_of(name, &set) != 1
             || set.iter().any(|&b| {
                 self.calls[name]
@@ -628,7 +637,12 @@ impl Cost {
         }
         let work = trips.checked_mul(inner.max(1))?;
         (work < SMALL_WORK).then(|| {
-            format!("its {trips} trips run about {work} inner trips in all, too few to pay")
+            let each = if nested {
+                " each time, inside a loop,"
+            } else {
+                " in all,"
+            };
+            format!("its {trips} trips run about {work} inner trips{each} too few to pay")
         })
     }
 
@@ -2190,6 +2204,88 @@ fn main() {
             cost_reason(outer[0]),
             "its 200 trips run about 40000 inner trips in all, too few to pay"
         );
+    }
+
+    /// A loop inside another one whose iterations only run inner loops of
+    /// known trips stays in order when one run of it makes fewer than
+    /// [`SMALL_WORK`] trips: it is spawned and joined on every trip of the
+    /// outer loop. Kata 73's bench builds a 20 by 20 matrix 100,000 times,
+    /// its counter reset for a second loop (B-2026-11-05-10). A big inner
+    /// grid still runs as tasks.
+    #[test]
+    fn auto_par_nested_loop_of_little_work_stays_in_order() {
+        let src = "
+fn build(total: i64) -> i64 {
+    let mut acc = 0;
+    let mut k = 0;
+    while k < total {
+        let mut m: Vec[Vec[i64]] = Vec.new();
+        let mut i = 0;
+        while i < 20 {
+            let mut row: Vec[i64] = Vec.new();
+            let mut j = 0;
+            while j < 20 {
+                row.push(1 + (i * 31 + j * 17 + k) % 9);
+                j = j + 1;
+            }
+            m.push(row);
+            i = i + 1;
+        }
+        i = 0;
+        while i < 20 {
+            acc = acc + m[i].len() as i64;
+            i = i + 1;
+        }
+        k = k + 1;
+    }
+    acc
+}
+
+fn big(total: i64) -> i64 {
+    let mut acc = 0;
+    let mut k = 0;
+    while k < total {
+        let mut m: Vec[Vec[i64]] = Vec.new();
+        let mut i = 0;
+        while i < 1000 {
+            let mut row: Vec[i64] = Vec.new();
+            let mut j = 0;
+            while j < 1000 {
+                row.push(i * j + k);
+                j = j + 1;
+            }
+            m.push(row);
+            i = i + 1;
+        }
+        acc = acc + m.len() as i64;
+        k = k + 1;
+    }
+    acc
+}
+
+fn main() {
+    println(build(3));
+    println(big(2));
+}
+";
+        let l = crate::mir::lower::build_source_recording(src).unwrap_or_else(|e| panic!("{e}"));
+        let v = analyze_with(&l.program, &l.tys, true).auto_par;
+        // Each function's `while i < ..` loop, the one inside `while k`.
+        let at = |name: &str, line: usize| -> Vec<&AutoParVerdict> {
+            v.iter()
+                .filter(|x| x.instance == name && x.span.line == line)
+                .filter(|x| matches!(x.kind, VerdictKind::Loop))
+                .collect()
+        };
+        let small = at("build", 8);
+        assert_eq!(small.len(), 1, "{v:#?}");
+        assert_eq!(
+            cost_reason(small[0]),
+            "its 20 trips run about 400 inner trips each time, inside a loop, too few to pay"
+        );
+        let big = at("big", 34);
+        assert_eq!(big.len(), 1, "{v:#?}");
+        assert!(big[0].verdict.is_ok(), "{v:#?}");
     }
 
     /// The pins of the review thread's ruling: a group in a function
