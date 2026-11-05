@@ -320,7 +320,7 @@ import std.collections.r#async_map;         // a raw module-path segment
 
 **Case class** is decided after the prefix: `r#async` is Value class, `r#Async` Type class.
 
-**Where it can appear:** any binding position (`let`, `fn`, `struct`, `enum`, variants, generic parameters, parameters, fields, aliases, traits, methods), any reference position (`r#name`, `obj.r#name`, `module.r#name`, `r#Name[T]`), and an attribute name (`#[r#name]`). Attribute paths have one segment in v1: `#[karac::proto]` is an error ([§17](#attributes)).
+**Where it can appear:** any binding position (`let`, `fn`, `struct`, `enum`, variants, generic parameters, parameters, fields, aliases, traits, methods), any reference position (`r#name`, `obj.r#name`, `module.r#name`, `r#Name[T]`), and an attribute name (`#[r#name]`). Attribute paths have one segment in v1, except the compiler's own `karac::` namespace: `#[tool::name]` is an error ([§17](#attributes)).
 
 **Where it cannot appear:**
 - Inside comments and string literals, which hold text, not tokens.
@@ -7425,7 +7425,7 @@ Tests are `test "name" { }` blocks, not an attribute ([§14](#14-testing)).
 
 **Arguments are written like a call's.** An attribute is a bare name (`#[non_exhaustive]`), or a name with a parenthesized list of positional arguments and `key: value` arguments, the same shape as a call with named arguments ([§7](#named-and-default-parameters)): `#[repr(C)]`, `#[kara_name("CFile")]`, `#[serde(rename: "server_name")]`, `#[deprecated(since: "1.2.0", note: "...")]`. There is no `#[name = value]` form and no `key = value` argument. Inside `#[cfg(...)]` each condition is `key: value` (`target: "native"`, `target_os: "linux"`), and `not`, `any` and `all` take conditions as positional arguments, so `any(target_os: "linux", target_os: "macos")` may repeat a key.
 
-**Attribute paths have one segment.** A multi-segment path such as `#[karac::proto]` is an error in v1; tool namespaces are deferred.
+**Attribute paths have one segment, except `karac::`.** The `karac::` namespace belongs to the compiler and holds the helper attributes of compiler-provided derives: `#[karac::proto(...)]` and `#[karac::field(...)]` for the protobuf derive (`runtime/stdlib/protobuf.kara`). A `karac::` name the compiler does not define is an error. Any other multi-segment path, such as `#[tool::name]`, is an error in v1; tool namespaces are deferred.
 
 The `#[diagnostic::*]` namespace, tool-namespaced attributes (`#[tool::name]`), performance diagnostics, and the attributes of the deferred tracks (layout, systems, GPU, web, providers) are in [deferred.md](deferred.md).
 
