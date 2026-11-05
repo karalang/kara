@@ -1,0 +1,318 @@
+== load
+queues.conf: 5 queues
+error: queues.conf:10: bad name 'Mailers'
+error: queues.conf:11: bad limit '0'
+error: queues.conf:12: bad limit '200'
+error: queues.conf:13: unknown field 'workers=4'
+error: queues.conf:14: queue 'media' needs limit
+error: queues.conf:15: duplicate queue 'mailers'
+error: queues.conf:16: unknown directive 'topic'
+error: queues.conf:17: queue needs a name
+workers.conf: 8 workers
+error: workers.conf:12: bad name 'send-sms'
+error: workers.conf:13: bad duration '0'
+error: workers.conf:14: bad duration '5x'
+error: workers.conf:15: worker 'thumbnail' needs duration
+error: workers.conf:16: duplicate worker 'send_email'
+error: workers.conf:17: bad attempt list '1,30'
+error: workers.conf:18: bad attempt '0'
+error: workers.conf:19: bad attempts '50'
+error: workers.conf:20: unknown field 'retries=3'
+error: workers.conf:21: bad error
+error: workers.conf:22: unknown directive 'job'
+error: workers.conf:23: worker needs a kind
+events.txt: 89 events
+== events
+> 00:00:00 enqueue mailers send_email to=ana@example.com template=receipt
+enqueued #1 send_email on mailers
+00:00:00 start #1 send_email on mailers (attempt 1)
+> 00:00:00 enqueue mailers send_email to=bo@example.com template=receipt
+enqueued #2 send_email on mailers
+00:00:00 start #2 send_email on mailers (attempt 1)
+> 00:00:00 enqueue mailers send_email to=cy@example.com template=receipt priority=1
+enqueued #3 send_email on mailers
+> 00:00:00 enqueue mailers send_email to=di@example.com template=receipt
+enqueued #4 send_email on mailers
+> 00:00:01 stats
+default limit=2: executing 0, available 0, scheduled 0, retryable 0, completed 0, discarded 0, cancelled 0
+exports limit=1 paused: executing 0, available 0, scheduled 0, retryable 0, completed 0, discarded 0, cancelled 0
+mailers limit=2: executing 2, available 2, scheduled 0, retryable 0, completed 0, discarded 0, cancelled 0
+payments limit=1: executing 0, available 0, scheduled 0, retryable 0, completed 0, discarded 0, cancelled 0
+webhooks limit=3: executing 0, available 0, scheduled 0, retryable 0, completed 0, discarded 0, cancelled 0
+00:00:02 done #1 send_email (attempt 1)
+00:00:02 done #2 send_email (attempt 1)
+00:00:02 start #4 send_email on mailers (attempt 1)
+00:00:02 start #3 send_email on mailers (attempt 1)
+00:00:04 done #3 send_email (attempt 1)
+00:00:04 done #4 send_email (attempt 1)
+> 00:00:10 enqueue payments charge_card order=1001 amount=4999
+enqueued #5 charge_card on payments
+00:00:10 start #5 charge_card on payments (attempt 1)
+> 00:00:10 enqueue payments charge_card order=1002 amount=1250 fail=none
+enqueued #6 charge_card on payments
+> 00:00:10 enqueue payments charge_card order=1003 amount=899 fail=1,2,3
+enqueued #7 charge_card on payments
+00:00:13 fail #5 charge_card attempt 1: card declined by issuer; retry at 00:00:32
+00:00:13 start #6 charge_card on payments (attempt 1)
+00:00:16 done #6 charge_card (attempt 1)
+00:00:16 start #7 charge_card on payments (attempt 1)
+00:00:19 fail #7 charge_card attempt 1: card declined by issuer; retry at 00:00:36
+> 00:00:20 enqueue webhooks webhook_deliver url=https://partner.example/hook event=order.paid
+enqueued #8 webhook_deliver on webhooks
+00:00:20 start #8 webhook_deliver on webhooks (attempt 1)
+> 00:00:20 enqueue webhooks webhook_deliver url=https://crm.example/hook event=order.paid fail=1
+enqueued #9 webhook_deliver on webhooks
+00:00:20 start #9 webhook_deliver on webhooks (attempt 1)
+> 00:00:20 enqueue webhooks webhook_deliver url=https://ops.example/hook event=order.paid fail=none
+enqueued #10 webhook_deliver on webhooks
+00:00:20 start #10 webhook_deliver on webhooks (attempt 1)
+00:00:21 fail #8 webhook_deliver attempt 1: HTTP 503 from endpoint; retry at 00:00:41
+00:00:21 fail #9 webhook_deliver attempt 1: HTTP 503 from endpoint; retry at 00:00:38
+00:00:21 done #10 webhook_deliver (attempt 1)
+> 00:00:30 enqueue mailers send_welcome user=77 in=1h unique=1h
+scheduled #11 send_welcome on mailers at 01:00:30
+> 00:00:31 enqueue mailers send_welcome user=77 in=1h unique=1h
+duplicate of #11
+00:00:32 start #5 charge_card on payments (attempt 2)
+> 00:00:32 enqueue mailers send_welcome user=78 in=1h unique=1h
+scheduled #12 send_welcome on mailers at 01:00:32
+00:00:35 done #5 charge_card (attempt 2)
+00:00:36 start #7 charge_card on payments (attempt 2)
+00:00:38 start #9 webhook_deliver on webhooks (attempt 2)
+00:00:39 fail #7 charge_card attempt 2: card declined by issuer; retry at 00:01:13
+00:00:39 done #9 webhook_deliver (attempt 2)
+> 00:00:40 jobs retryable
+#7 retryable charge_card payments 2/3 next=00:01:13 amount=899 order=1003 (card declined by issuer)
+#8 retryable webhook_deliver webhooks 1/4 next=00:00:41 event=order.paid url=https://partner.example/hook (HTTP 503 from endpoint)
+00:00:41 start #8 webhook_deliver on webhooks (attempt 2)
+00:00:42 fail #8 webhook_deliver attempt 2: HTTP 503 from endpoint; retry at 00:01:14
+> 00:01:00 jobs scheduled
+#11 scheduled send_welcome mailers 0/3 next=01:00:30 user=77
+#12 scheduled send_welcome mailers 0/3 next=01:00:32 user=78
+00:01:13 start #7 charge_card on payments (attempt 3)
+00:01:14 start #8 webhook_deliver on webhooks (attempt 3)
+00:01:15 fail #8 webhook_deliver attempt 3: HTTP 503 from endpoint; retry at 00:02:07
+00:01:16 fail #7 charge_card attempt 3: card declined by issuer; discarded
+> 00:02:00 enqueue default sync_inventory warehouse=east
+enqueued #13 sync_inventory on default
+00:02:00 start #13 sync_inventory on default (attempt 1)
+> 00:02:00 enqueue default resize_image photo=p1 size=large priority=5
+enqueued #14 resize_image on default
+00:02:00 start #14 resize_image on default (attempt 1)
+> 00:02:00 enqueue default resize_image photo=p2 size=large priority=5
+enqueued #15 resize_image on default
+> 00:02:00 enqueue default resize_image photo=p3 size=thumb
+enqueued #16 resize_image on default
+> 00:02:00 enqueue default resize_image photo=p4 size=thumb
+enqueued #17 resize_image on default
+00:02:04 done #14 resize_image (attempt 1)
+00:02:04 start #16 resize_image on default (attempt 1)
+> 00:02:05 cancel 13
+cancelled #13 sync_inventory (was executing)
+00:02:05 start #17 resize_image on default (attempt 1)
+> 00:02:06 stats
+default limit=2: executing 2, available 1, scheduled 0, retryable 0, completed 1, discarded 0, cancelled 1
+exports limit=1 paused: executing 0, available 0, scheduled 0, retryable 0, completed 0, discarded 0, cancelled 0
+mailers limit=2: executing 0, available 0, scheduled 2, retryable 0, completed 4, discarded 0, cancelled 0
+payments limit=1: executing 0, available 0, scheduled 0, retryable 0, completed 2, discarded 1, cancelled 0
+webhooks limit=3: executing 0, available 0, scheduled 0, retryable 1, completed 2, discarded 0, cancelled 0
+00:02:07 start #8 webhook_deliver on webhooks (attempt 4)
+00:02:08 fail #8 webhook_deliver attempt 4: HTTP 503 from endpoint; discarded
+00:02:08 done #16 resize_image (attempt 1)
+00:02:08 start #15 resize_image on default (attempt 1)
+00:02:09 done #17 resize_image (attempt 1)
+> 00:02:10 scale default 3
+scaled default 2 -> 3
+00:02:12 done #15 resize_image (attempt 1)
+> 00:02:15 cancel 13
+error: events.txt:35: job 13 is cancelled
+> 00:02:20 retry 13
+retrying #13 sync_inventory (attempt 2 of 5)
+00:02:20 start #13 sync_inventory on default (attempt 2)
+00:02:50 done #13 sync_inventory (attempt 2)
+> 00:03:00 enqueue payments refund order=1001 amount=4999
+enqueued #18 refund on payments
+00:03:00 start #18 refund on payments (attempt 1)
+00:03:05 cancel #18 refund attempt 1: cancelled by worker
+> 00:03:30 jobs cancelled
+#18 cancelled refund payments 1/5 amount=4999 order=1001 (cancelled by worker)
+> 00:03:31 retry 18
+retrying #18 refund (attempt 2 of 5)
+00:03:31 start #18 refund on payments (attempt 2)
+00:03:36 done #18 refund (attempt 2)
+> 00:04:00 enqueue sms send_email to=ana@example.com
+error: events.txt:44: unknown queue 'sms'
+> 00:04:00 enqueue mailers send_sms to=ana@example.com
+error: events.txt:45: unknown kind 'send_sms'
+> 00:04:00 enqueue mailers send_email to=ana@example.com priority=10
+error: events.txt:46: bad priority '10'
+> 00:04:00 enqueue mailers send_email to=ana@example.com in=soon
+error: events.txt:47: bad duration 'soon'
+> 00:04:00 enqueue mailers send_email to=ana@example.com max_attempts=0
+error: events.txt:48: bad max_attempts '0'
+> 00:04:00 enqueue mailers send_email to=ana@example.com fail=0
+error: events.txt:49: bad attempt list '0'
+> 00:04:00 enqueue mailers send_email to=ana@example.com urgent
+error: events.txt:50: bad argument 'urgent'
+> 00:04:00 enqueue mailers send_email To=ana@example.com
+error: events.txt:51: bad argument 'To=ana@example.com'
+> 00:04:00 enqueue mailers send_email to=ana@example.com to=bo@example.com
+error: events.txt:52: duplicate argument 'to'
+> 00:04:00 enqueue mailers
+error: events.txt:53: usage: enqueue QUEUE KIND [OPTIONS]
+> 00:04:00 pause media
+error: events.txt:54: unknown queue 'media'
+> 00:04:00 resume mailers
+error: events.txt:55: queue 'mailers' is not paused
+> 00:04:00 scale mailers 0
+error: events.txt:56: bad limit '0'
+> 00:04:00 cancel abc
+error: events.txt:57: bad job id 'abc'
+> 00:04:00 cancel 999
+error: events.txt:58: no job 999
+> 00:04:00 cancel 1
+error: events.txt:59: job 1 is completed
+> 00:04:00 retry 2
+error: events.txt:60: job 2 is completed, not discarded or cancelled
+> 00:04:00 retry 7
+retrying #7 charge_card (attempt 4 of 4)
+00:04:00 start #7 charge_card on payments (attempt 4)
+> 00:04:00 jobs stuck
+error: events.txt:62: bad state 'stuck'
+> 00:04:00 recover
+error: events.txt:63: queue is not down
+> 00:04:00 restart
+error: events.txt:64: unknown command 'restart'
+> 00:03:59 stats
+error: events.txt:65: time goes back
+> 00:61:00 stats
+error: events.txt:66: bad time '00:61:00'
+> 00:04:00
+error: events.txt:67: missing command
+> 00:04:00 pause mailers mailers
+error: events.txt:68: usage: pause QUEUE
+00:04:03 done #7 charge_card (attempt 4)
+> 00:05:00 enqueue exports generate_report month=2026-10 format=csv
+enqueued #19 generate_report on exports
+> 00:05:00 enqueue exports generate_report month=2026-10 format=csv unique=10m
+duplicate of #19
+> 00:05:30 jobs available
+#19 available generate_report exports 0/2 format=csv month=2026-10
+> 00:06:00 resume exports
+resumed exports
+00:06:00 start #19 generate_report on exports (attempt 1)
+> 00:06:00 pause exports
+paused exports
+00:07:30 fail #19 generate_report attempt 1: timeout after 90s; retry at 00:07:50
+> 00:12:00 jobs discarded
+#8 discarded webhook_deliver webhooks 4/4 event=order.paid url=https://partner.example/hook (HTTP 503 from endpoint)
+> 00:12:00 resume exports
+resumed exports
+00:12:00 start #19 generate_report on exports (attempt 2)
+> 00:12:01 retry 19
+error: events.txt:78: job 19 is executing, not discarded or cancelled
+00:13:30 fail #19 generate_report attempt 2: timeout after 90s; discarded
+> 00:14:00 retry 19
+retrying #19 generate_report (attempt 3 of 3)
+00:14:00 start #19 generate_report on exports (attempt 3)
+00:15:30 fail #19 generate_report attempt 3: timeout after 90s; discarded
+> 00:20:00 stats
+default limit=3: executing 0, available 0, scheduled 0, retryable 0, completed 5, discarded 0, cancelled 0
+exports limit=1: executing 0, available 0, scheduled 0, retryable 0, completed 0, discarded 1, cancelled 0
+mailers limit=2: executing 0, available 0, scheduled 2, retryable 0, completed 4, discarded 0, cancelled 0
+payments limit=1: executing 0, available 0, scheduled 0, retryable 0, completed 4, discarded 0, cancelled 0
+webhooks limit=3: executing 0, available 0, scheduled 0, retryable 0, completed 2, discarded 1, cancelled 0
+> 00:30:00 pause payments
+paused payments
+> 00:30:00 enqueue payments charge_card order=1004 amount=2500
+enqueued #20 charge_card on payments
+> 00:30:00 enqueue payments charge_card order=1005 amount=7300 fail=none priority=2 max_attempts=1
+enqueued #21 charge_card on payments
+> 00:30:00 enqueue mailers send_email to=ed@example.com template=shipped
+enqueued #22 send_email on mailers
+00:30:00 start #22 send_email on mailers (attempt 1)
+> 00:30:00 enqueue mailers send_email to=fa@example.com template=shipped
+enqueued #23 send_email on mailers
+00:30:00 start #23 send_email on mailers (attempt 1)
+00:30:02 done #22 send_email (attempt 1)
+00:30:02 done #23 send_email (attempt 1)
+> 00:30:05 resume payments
+resumed payments
+00:30:05 start #20 charge_card on payments (attempt 1)
+> 00:30:06 crash torn
+crashed mid-write (log cut from 3054 to 3044 bytes)
+> 00:30:30 stats
+error: events.txt:92: queue is down
+> 00:31:00 recover
+recovered 95 records, dropped a torn record of 9 bytes
+00:31:00 start #20 charge_card on payments (attempt 1)
+> 00:31:01 jobs executing
+#20 executing charge_card payments 1/3 amount=2500 order=1004
+> 00:31:01 enqueue default sync_inventory warehouse=west
+enqueued #24 sync_inventory on default
+00:31:01 start #24 sync_inventory on default (attempt 1)
+00:31:03 fail #20 charge_card attempt 1: card declined by issuer; retry at 00:31:19
+00:31:03 start #21 charge_card on payments (attempt 1)
+> 00:31:05 crash
+crashed (log 3199 bytes)
+> 00:32:00 crash
+error: events.txt:97: queue is down
+> 00:33:00 recover
+recovered 100 records
+discarded #21 charge_card (rescued after crash)
+rescued #24 sync_inventory (attempt 1 of 5)
+00:33:00 start #24 sync_inventory on default (attempt 2)
+00:33:00 start #20 charge_card on payments (attempt 2)
+> 00:33:00 recover
+error: events.txt:99: queue is not down
+> 00:33:01 jobs available
+no jobs
+> 00:33:02 retry 21
+retrying #21 charge_card (attempt 2 of 2)
+00:33:03 done #20 charge_card (attempt 2)
+00:33:03 start #21 charge_card on payments (attempt 2)
+00:33:06 done #21 charge_card (attempt 2)
+00:33:30 done #24 sync_inventory (attempt 2)
+01:00:30 start #11 send_welcome on mailers (attempt 1)
+01:00:31 done #11 send_welcome (attempt 1)
+01:00:32 start #12 send_welcome on mailers (attempt 1)
+01:00:33 done #12 send_welcome (attempt 1)
+> 01:01:00 jobs scheduled
+no jobs
+> 01:10:00 prune 30m
+pruned 22 jobs, log 3448 -> 276 bytes
+> 01:10:00 prune soon
+error: events.txt:106: bad duration 'soon'
+> 01:10:01 jobs all
+#11 completed send_welcome mailers 1/3 user=77
+#12 completed send_welcome mailers 1/3 user=78
+> 01:12:00 enqueue mailers send_email to=ana@example.com template=receipt
+enqueued #25 send_email on mailers
+01:12:00 start #25 send_email on mailers (attempt 1)
+> 01:12:00 enqueue mailers send_email to=bo@example.com template=reminder in=15m
+scheduled #26 send_email on mailers at 01:27:00
+> 01:12:00 enqueue webhooks webhook_deliver url=https://partner.example/hook event=order.refunded
+enqueued #27 webhook_deliver on webhooks
+01:12:00 start #27 webhook_deliver on webhooks (attempt 1)
+01:12:01 fail #27 webhook_deliver attempt 1: HTTP 503 from endpoint; retry at 01:12:18
+01:12:02 done #25 send_email (attempt 1)
+01:12:18 start #27 webhook_deliver on webhooks (attempt 2)
+01:12:19 fail #27 webhook_deliver attempt 2: HTTP 503 from endpoint; retry at 01:12:53
+> 01:12:30 drain
+01:12:53 start #27 webhook_deliver on webhooks (attempt 3)
+01:12:54 fail #27 webhook_deliver attempt 3: HTTP 503 from endpoint; retry at 01:13:25
+01:13:25 start #27 webhook_deliver on webhooks (attempt 4)
+01:13:26 fail #27 webhook_deliver attempt 4: HTTP 503 from endpoint; discarded
+01:27:00 start #26 send_email on mailers (attempt 1)
+01:27:02 done #26 send_email (attempt 1)
+drained at 01:27:02
+== end
+default limit=3: executing 0, available 0, scheduled 0, retryable 0, completed 0, discarded 0, cancelled 0
+exports limit=1: executing 0, available 0, scheduled 0, retryable 0, completed 0, discarded 0, cancelled 0
+mailers limit=2: executing 0, available 0, scheduled 0, retryable 0, completed 4, discarded 0, cancelled 0
+payments limit=1: executing 0, available 0, scheduled 0, retryable 0, completed 0, discarded 0, cancelled 0
+webhooks limit=3: executing 0, available 0, scheduled 0, retryable 0, completed 0, discarded 1, cancelled 0
+== log
+data/out/queue.log: 28 records, 856 bytes
+complete 4, discard 1, ids 1, insert 5, pause 2, resume 3, retry 3, scale 1, start 8
+replay: 5 jobs, matches memory

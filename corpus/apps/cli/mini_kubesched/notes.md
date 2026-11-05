@@ -154,4 +154,5 @@ read back, and counted per node.
 - B-2026-11-04-61: `m.get(k) == Some(v)` on a non-Copy value refuses
   with E0208 and no edit, and `karac fix` applies E0200's `.clone()`
   inside the `Some`, which leaves the E0208 standing. The program writes
-  the no-copy form, `Some(ref v)`.
+  the no-copy form, `Some(ref v)`. Fixed in kara be4628d4bc: `karac fix`
+  now writes `Some(ref v)` itself.

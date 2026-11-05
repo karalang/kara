@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 140 |
+| diagnostics | 142 |
 | false-positive | 119 |
 | perf | 103 |
 | missing-feature | 90 |
@@ -75,10 +75,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 212 |
+| typecheck | 213 |
 | mir-llvm | 124 |
 | mir | 121 |
-| cli | 67 |
+| cli | 68 |
 | ownership | 53 |
 | parser | 40 |
 | interp | 30 |
@@ -110,6 +110,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-05-29 | 2026-11-05 | cli | low | E0400 carries no `derivation`, `inferred_effects` or `declared_effects` and `karac fix` cannot add the missing clause; a match missing an arm is not fixable either; `karac query effects` / `query ownership` answer with no `derivation` (design.md §17 rule 5, Structured compiler output, Compiler query API) | — |
 | B-2026-11-05-33 | 2026-11-05 | mir-llvm | low | x86 host-dependent: a jump across a 32-byte line costs kata 661 1.5x on one Cascade Lake host and nothing on another; aligning branches is 0.914x geomean there and loses kata 207 2.3x here, so it is opt-in (KARAC_MIR_ALIGN_BRANCHES=1); the over-2x list was a cross-host artifact | — |
 | B-2026-11-05-35 | 2026-11-05 | typecheck | low | `(0..n).step_by(2).rev()` is "no method 'rev' on type 'IterStepBy'": Rust's `StepBy` walks back over a range, Kāra's has no `next_back` and the diagnostic names no other way | — |
+| B-2026-11-05-41 | 2026-11-05 | typecheck | low | Rust's map methods `values_mut`, `retain`, `into_values`/`into_keys`, and on `SortedMap` `first_key_value`/`last_key_value`/`pop_first`/`pop_last`, are a bare `no method 'X' on type 'SortedMap'` that names no Kāra twin; whether `SortedMap` (which has `floor`/`ceiling` but, unlike `SortedSet`, no `min`/`max`) and `Map` should gain some of them is a library-spec question | — |
+| B-2026-11-05-42 | 2026-11-05 | cli | low | In a package, `import utils;` naming no module is reported as E0223 `circular module dependency: <crate root> → <crate root>` instead of an unknown module: the module graph's longest-prefix fallback turns a bare import that names nothing into an edge to the crate root, so main.kara imports itself | — |
 | B-2026-11-06-1 | 2026-11-06 | mir-llvm | low | Kata 354 runs 0.81x legacy's instructions but 1.46x its cycles on the MIR backend; seq 2.05x rustc -O at either safety | — |
 | B-2026-11-06-2 | 2026-11-06 | mir-llvm | low | Kata 346's seq binary is 336,240 B on g162ee7a0e, after 5984ed3080 and e8466b1435 took the seven B-2026-11-04-31 katas to 83-99 KB | — |
 | B-2026-11-06-3 | 2026-11-06 | typecheck | low | A Rust `Vec<usize>` element type, once `karac fix` spells it `Vec[Vec[usize]]`, draws four `i64`/`usize` coercion and comparison errors with no fix; the fix is to write `i64` (design.md §5: `usize` is for FFI) | — |

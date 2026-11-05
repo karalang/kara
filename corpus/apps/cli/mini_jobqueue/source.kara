@@ -1,0 +1,1330 @@
+// mini_jobqueue: a durable background job queue in the shape of Sidekiq
+// and Oban. Queues with concurrency limits, worker kinds that succeed,
+// fail, time out or cancel, retries with Sidekiq's backoff, unique and
+// scheduled jobs, and a write-ahead log that survives a crash and is
+// compacted by pruning. The two configuration files and the event script
+// are each parsed in a task of its own.
+// README.md is the spec; oracle.py is the reference.
+
+const LOG: Str = "data/out/queue.log";
+
+// ------------------------------------------------------------ tokens
+
+fn is_digit(c: u8) -> bool {
+    c >= b'0' and c <= b'9'
+}
+
+fn digits(s: Str) -> bool {
+    s.len() > 0 and s.bytes().iter().all(|c| is_digit(c))
+}
+
+fn is_name(s: Str) -> bool {
+    s.len() > 0 and s.bytes().iter().all(|c| is_digit(c) or (c >= b'a' and c <= b'z') or c == b'_')
+}
+
+fn is_key(s: Str) -> bool {
+    s.len() > 0 and s.bytes().iter().all(|c| (c >= b'a' and c <= b'z') or c == b'_')
+}
+
+fn num(s: Str) -> i64 {
+    i64.parse(s).ok() ?? 0
+}
+
+// At most seven digits, between lo and hi.
+fn small(s: Str, lo: i64, hi: i64) -> Option[i64] {
+    if not digits(s) or s.len() > 7 {
+        return None;
+    }
+    let v = num(s);
+    if v >= lo and v <= hi { Some(v) } else { None }
+}
+
+// Digits with an optional s, m or h unit, at least lo seconds.
+fn dur(s: Str, lo: i64) -> Option[i64] {
+    let mut mul = 1;
+    let mut body = s.to_string();
+    if s.ends_with("s") or s.ends_with("m") or s.ends_with("h") {
+        if s.ends_with("m") {
+            mul = 60;
+        } else if s.ends_with("h") {
+            mul = 3600;
+        }
+        body = s.substring(0, s.len() - 1);
+    }
+    if not digits(body) or body.len() > 7 {
+        return None;
+    }
+    let v = num(body) * mul;
+    if v >= lo { Some(v) } else { None }
+}
+
+fn attempt_list(s: Str) -> Option[Vec[i64]] {
+    let mut out: Vec[i64] = Vec.new();
+    if s == "none" {
+        return Some(out);
+    }
+    for p in s.split(",") {
+        out.push(small(p, 1, 25)?);
+    }
+    Some(out)
+}
+
+// A job's own failing attempts: `-` for the kind's.
+fn show_list(xs: Option[Vec[i64]]) -> String {
+    match xs {
+        None => "-".to_string(),
+        Some(v) => {
+            if v.len() == 0 {
+                return "none".to_string();
+            }
+            let parts: Vec[String] = v.iter().map(|a| f"{a}").collect();
+            parts.join(",")
+        }
+    }
+}
+
+fn read_list(s: Str) -> Option[Vec[i64]] {
+    if s == "-" { None } else { attempt_list(s) }
+}
+
+fn pad2(n: i64) -> String {
+    if n < 10 { f"0{n}" } else { f"{n}" }
+}
+
+fn fmt(t: i64) -> String {
+    f"{pad2(t / 3600)}:{pad2(t / 60 % 60)}:{pad2(t % 60)}"
+}
+
+// 32-bit FNV-1a.
+fn fnv(s: Str) -> i64 {
+    let mut h = 2166136261;
+    for b in s.bytes() {
+        h = ((h ^ b) * 16777619) & 4294967295;
+    }
+    h
+}
+
+// The text of a line before any `#`, without outer space.
+fn strip_comment(raw: Str) -> String {
+    match raw.split_once("#") {
+        Some((before, _)) => before.trim().to_string(),
+        None => raw.trim().to_string(),
+    }
+}
+
+// ------------------------------------------------------------ configuration
+
+#[derive(Clone)]
+struct Queue {
+    limit: i64,
+    paused: bool,
+}
+
+// timeout and cancel_on are 0 when not set.
+#[derive(Clone)]
+struct Worker {
+    duration: i64,
+    timeout: i64,
+    attempts: i64,
+    fail: Vec[i64],
+    cancel_on: i64,
+    error: String,
+}
+
+impl Worker {
+    fn times_out(self) -> bool {
+        self.timeout > 0 and self.duration > self.timeout
+    }
+
+    fn length(self) -> i64 {
+        if self.times_out() { self.timeout } else { self.duration }
+    }
+}
+
+struct QueuesFile {
+    queues: SortedMap[String, Queue],
+    errors: Vec[String],
+}
+
+struct WorkersFile {
+    workers: SortedMap[String, Worker],
+    errors: Vec[String],
+}
+
+fn parse_queue(t: Vec[Str]) -> Result[(String, Queue), String] {
+    if t[0] != "queue" {
+        return Err(f"unknown directive '{t[0]}'");
+    }
+    if t.len() < 2 {
+        return Err("queue needs a name".to_string());
+    }
+    let name = t[1].to_string();
+    if not is_name(name) {
+        return Err(f"bad name '{name}'");
+    }
+    let mut limit = 0;
+    let mut paused = false;
+    for f in t.iter().skip(2) {
+        if f.starts_with("limit=") {
+            let v = f.substring(6);
+            limit = match small(v, 1, 100) {
+                Some(n) => n,
+                None => return Err(f"bad limit '{v}'"),
+            };
+        } else if f == "paused" {
+            paused = true;
+        } else {
+            return Err(f"unknown field '{f}'");
+        }
+    }
+    if limit == 0 {
+        return Err(f"queue '{name}' needs limit");
+    }
+    Ok((name, Queue { limit: limit, paused: paused }))
+}
+
+fn parse_queues(text: String) -> QueuesFile {
+    let mut out = QueuesFile { queues: SortedMap.new(), errors: Vec.new() };
+    for (i, raw) in text.split("\n").enumerate() {
+        let line = strip_comment(raw);
+        if line.len() == 0 {
+            continue;
+        }
+        let res = match parse_queue(line.split_whitespace().collect()) {
+            Ok((name, q)) => {
+                if out.queues.contains_key(name) {
+                    Err(f"duplicate queue '{name}'")
+                } else {
+                    out.queues.insert(name, q);
+                    Ok(())
+                }
+            }
+            Err(e) => Err(e),
+        };
+        if let Err(e) = res {
+            out.errors.push(f"error: queues.conf:{i + 1}: {e}");
+        }
+    }
+    out
+}
+
+fn parse_worker(t: Vec[Str]) -> Result[(String, Worker), String] {
+    if t[0] != "worker" {
+        return Err(f"unknown directive '{t[0]}'");
+    }
+    if t.len() < 2 {
+        return Err("worker needs a kind".to_string());
+    }
+    let kind = t[1].to_string();
+    if not is_name(kind) {
+        return Err(f"bad name '{kind}'");
+    }
+    let mut w = Worker { duration: 0, timeout: 0, attempts: 5, fail: Vec.new(), cancel_on: 0, error: "failed".to_string() };
+    let mut i = 2;
+    while i < t.len() {
+        let f = t[i];
+        let (k, v) = match f.split_once("=") {
+            Some((k, v)) => (k.to_string(), v.to_string()),
+            None => return Err(f"unknown field '{f}'"),
+        };
+        if k == "duration" or k == "timeout" {
+            let d = match dur(v, 1) {
+                Some(d) => d,
+                None => return Err(f"bad duration '{v}'"),
+            };
+            if k == "duration" {
+                w.duration = d;
+            } else {
+                w.timeout = d;
+            }
+        } else if k == "attempts" {
+            w.attempts = match small(v, 1, 25) {
+                Some(a) => a,
+                None => return Err(f"bad attempts '{v}'"),
+            };
+        } else if k == "fail" {
+            w.fail = match attempt_list(v) {
+                Some(xs) => xs,
+                None => return Err(f"bad attempt list '{v}'"),
+            };
+        } else if k == "cancel_on" {
+            w.cancel_on = match small(v, 1, 25) {
+                Some(a) => a,
+                None => return Err(f"bad attempt '{v}'"),
+            };
+        } else if k == "error" {
+            // The rest of the line is the message.
+            let mut parts: Vec[String] = Vec.new();
+            parts.push(v);
+            for x in t.iter().skip(i + 1) {
+                parts.push(x.to_string());
+            }
+            let msg = parts.join(" ").trim().to_string();
+            if msg.len() == 0 {
+                return Err("bad error".to_string());
+            }
+            w.error = msg;
+            break;
+        } else {
+            return Err(f"unknown field '{f}'");
+        }
+        i += 1;
+    }
+    if w.duration == 0 {
+        return Err(f"worker '{kind}' needs duration");
+    }
+    Ok((kind, w))
+}
+
+fn parse_workers(text: String) -> WorkersFile {
+    let mut out = WorkersFile { workers: SortedMap.new(), errors: Vec.new() };
+    for (i, raw) in text.split("\n").enumerate() {
+        let line = strip_comment(raw);
+        if line.len() == 0 {
+            continue;
+        }
+        let res = match parse_worker(line.split_whitespace().collect()) {
+            Ok((kind, w)) => {
+                if out.workers.contains_key(kind) {
+                    Err(f"duplicate worker '{kind}'")
+                } else {
+                    out.workers.insert(kind, w);
+                    Ok(())
+                }
+            }
+            Err(e) => Err(e),
+        };
+        if let Err(e) = res {
+            out.errors.push(f"error: workers.conf:{i + 1}: {e}");
+        }
+    }
+    out
+}
+
+// ------------------------------------------------------------ events
+
+// err is "" for a line whose time and command parsed.
+#[derive(Clone)]
+struct Ev {
+    no: i64,
+    line: String,
+    at: i64,
+    err: String,
+    toks: Vec[String],
+}
+
+fn parse_time(s: Str) -> Option[i64] {
+    let b = s.bytes().to_vec();
+    if b.len() != 8 or b[2] != b':' or b[5] != b':' {
+        return None;
+    }
+    let h = s.substring(0, 2);
+    let m = s.substring(3, 5);
+    let sec = s.substring(6, 8);
+    if not digits(h) or not digits(m) or not digits(sec) or num(m) >= 60 or num(sec) >= 60 {
+        return None;
+    }
+    Some(num(h) * 3600 + num(m) * 60 + num(sec))
+}
+
+fn parse_events(text: String) -> Vec[Ev] {
+    let mut out: Vec[Ev] = Vec.new();
+    for (i, raw) in text.split("\n").enumerate() {
+        let line = strip_comment(raw);
+        if line.len() == 0 {
+            continue;
+        }
+        let t: Vec[String] = line.split_whitespace().map(|s| s.to_string()).collect();
+        let mut ev = Ev { no: i + 1, line: line.clone(), at: 0, err: "".to_string(), toks: Vec.new() };
+        match parse_time(t[0]) {
+            None => ev.err = f"bad time '{t[0]}'",
+            Some(at) => {
+                if t.len() == 1 {
+                    ev.err = "missing command".to_string();
+                } else {
+                    ev.at = at;
+                    ev.toks = t.iter().skip(1).cloned().collect();
+                }
+            }
+        }
+        out.push(ev);
+    }
+    out
+}
+
+// ------------------------------------------------------------ jobs
+
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum State {
+    Executing,
+    Available,
+    Scheduled,
+    Retryable,
+    Completed,
+    Discarded,
+    Cancelled,
+}
+
+impl State {
+    fn name(self) -> String {
+        match self {
+            State.Executing => "executing".to_string(),
+            State.Available => "available".to_string(),
+            State.Scheduled => "scheduled".to_string(),
+            State.Retryable => "retryable".to_string(),
+            State.Completed => "completed".to_string(),
+            State.Discarded => "discarded".to_string(),
+            State.Cancelled => "cancelled".to_string(),
+        }
+    }
+
+    fn is_final(self) -> bool {
+        self == State.Completed or self == State.Discarded or self == State.Cancelled
+    }
+
+    fn waiting(self) -> bool {
+        self == State.Scheduled or self == State.Retryable
+    }
+}
+
+fn all_states() -> Vec[State] {
+    let mut v: Vec[State] = Vec.new();
+    v.push(State.Executing);
+    v.push(State.Available);
+    v.push(State.Scheduled);
+    v.push(State.Retryable);
+    v.push(State.Completed);
+    v.push(State.Discarded);
+    v.push(State.Cancelled);
+    v
+}
+
+// args holds `KEY=VALUE` in key order; end and finished are -1 until set.
+#[derive(Clone)]
+struct Job {
+    id: i64,
+    queue: String,
+    kind: String,
+    prio: i64,
+    max: i64,
+    due: i64,
+    inserted: i64,
+    fail: Option[Vec[i64]],
+    args: Vec[String],
+    state: State,
+    attempt: i64,
+    end: i64,
+    finished: i64,
+    error: String,
+}
+
+impl Job {
+    fn snap(self) -> String {
+        let args = self.args.join(" ");
+        f"{self.id} {self.queue} {self.kind} {self.state.name()} {self.attempt} {self.max} {self.prio} {self.due} {self.end} {self.finished} {self.inserted} {show_list(self.fail.clone())} [{args}] {self.error}"
+    }
+}
+
+fn tail(t: Vec[Str], from: i64) -> String {
+    let rest: Vec[Str] = t.iter().skip(from).collect();
+    rest.join(" ")
+}
+
+// ------------------------------------------------------------ the engine
+
+struct Engine {
+    conf: SortedMap[String, Queue],
+    workers: SortedMap[String, Worker],
+    queues: SortedMap[String, Queue],
+    jobs: SortedMap[i64, Job],
+    log: Vec[String],
+    next_id: i64,
+    now: i64,
+    down: bool,
+    out: Vec[String],
+}
+
+fn engine(conf: SortedMap[String, Queue], workers: SortedMap[String, Worker]) -> Engine {
+    Engine {
+        conf: conf.clone(),
+        workers: workers.clone(),
+        queues: conf.clone(),
+        jobs: SortedMap.new(),
+        log: Vec.new(),
+        next_id: 1,
+        now: 0,
+        down: false,
+        out: Vec.new(),
+    }
+}
+
+impl Engine {
+    fn reset(mut ref self) {
+        self.queues = self.conf.clone();
+        self.jobs = SortedMap.new();
+        self.log = Vec.new();
+        self.next_id = 1;
+    }
+
+    // ---- records: memory changes only by applying one
+
+    fn apply(mut ref self, rec: Str) {
+        let t: Vec[Str] = rec.split(" ").collect();
+        let k = t[0];
+        if k == "insert" {
+            let id = num(t[1]);
+            let due = num(t[6]);
+            let at = num(t[7]);
+            let args: Vec[String] = t.iter().skip(9).map(|a| a.to_string()).collect();
+            let j = Job {
+                id: id,
+                queue: t[2].to_string(),
+                kind: t[3].to_string(),
+                prio: num(t[4]),
+                max: num(t[5]),
+                due: due,
+                inserted: at,
+                fail: read_list(t[8]),
+                args: args,
+                state: if due > at { State.Scheduled } else { State.Available },
+                attempt: 0,
+                end: -1,
+                finished: -1,
+                error: "".to_string(),
+            };
+            self.jobs.insert(id, j);
+            if id + 1 > self.next_id {
+                self.next_id = id + 1;
+            }
+        } else if k == "ids" {
+            let n = num(t[1]);
+            if n > self.next_id {
+                self.next_id = n;
+            }
+        } else if k == "pause" or k == "resume" {
+            if let Some(q) = self.queues.get_mut(t[1]) {
+                q.paused = k == "pause";
+            }
+        } else if k == "scale" {
+            if let Some(q) = self.queues.get_mut(t[1]) {
+                q.limit = num(t[2]);
+            }
+        } else {
+            let at = num(t[2]);
+            let reason = tail(t.clone(), 3);
+            let error = tail(t.clone(), 4);
+            if let Some(j) = self.jobs.get_mut(num(t[1])) {
+                if k == "start" {
+                    j.state = State.Executing;
+                    j.attempt += 1;
+                    j.end = num(t[3]);
+                } else if k == "complete" {
+                    j.state = State.Completed;
+                    j.finished = at;
+                } else if k == "retry" {
+                    j.state = State.Retryable;
+                    j.due = num(t[3]);
+                    j.error = error;
+                } else if k == "discard" or k == "cancel" {
+                    j.state = if k == "discard" { State.Discarded } else { State.Cancelled };
+                    j.finished = at;
+                    j.error = reason;
+                } else if k == "requeue" {
+                    j.state = State.Available;
+                    j.due = at;
+                    j.max = num(t[3]);
+                    j.finished = -1;
+                } else if k == "rescue" {
+                    j.state = State.Available;
+                    j.due = at;
+                }
+            }
+        }
+    }
+
+    fn emit(mut ref self, rec: own String) {
+        self.apply(rec);
+        self.log.push(rec);
+    }
+
+    fn text(self) -> String {
+        let mut s = String.new();
+        for r in self.log.iter() {
+            s.push_str(r);
+            s.push_str("\n");
+        }
+        s
+    }
+
+    fn write(self) -> Result[(), String] {
+        put_bytes(LOG, self.text().bytes().to_vec())
+    }
+
+    // ---- the engine
+
+    fn say(mut ref self, s: Str) {
+        self.out.push(f"{fmt(self.now)} {s}");
+    }
+
+    fn next_time(self) -> Option[i64] {
+        let mut best: Option[i64] = None;
+        for j in self.jobs.values() {
+            let t = if j.state == State.Executing {
+                j.end
+            } else if j.state.waiting() {
+                j.due
+            } else {
+                continue;
+            };
+            best = match best {
+                Some(b) => Some(if t < b { t } else { b }),
+                None => Some(t),
+            };
+        }
+        best
+    }
+
+    fn advance(mut ref self, t: i64) {
+        if not self.down {
+            while let Some(n) = self.next_time() {
+                if n > t {
+                    break;
+                }
+                self.now = n;
+                self.step();
+            }
+        }
+        self.now = t;
+    }
+
+    fn promote(mut ref self) {
+        let mut due: Vec[i64] = Vec.new();
+        for j in self.jobs.values() {
+            if j.state.waiting() and j.due <= self.now {
+                due.push(j.id);
+            }
+        }
+        for id in due.iter() {
+            if let Some(j) = self.jobs.get_mut(id) {
+                j.state = State.Available;
+            }
+        }
+    }
+
+    fn running(self, q: Str) -> i64 {
+        let mut n = 0;
+        for j in self.jobs.values() {
+            if j.queue == q and j.state == State.Executing {
+                n += 1;
+            }
+        }
+        n
+    }
+
+    fn step(mut ref self) {
+        let mut ending: Vec[i64] = Vec.new();
+        for j in self.jobs.values() {
+            if j.state == State.Executing and j.end == self.now {
+                ending.push(j.id);
+            }
+        }
+        for id in ending.iter() {
+            self.finish(id);
+        }
+        self.promote();
+        let names: Vec[String] = self.queues.iter().map(|(k, _)| k.clone()).collect();
+        for q in names.iter() {
+            let qu = self.queues.get(q).cloned().unwrap();
+            if qu.paused {
+                continue;
+            }
+            let mut running = self.running(q);
+            let mut avail: Vec[Job] = self.jobs.values().filter(|j| j.queue == q and j.state == State.Available).cloned().collect();
+            avail.sort_by_key(|j| (j.prio, j.due, j.id));
+            for j in avail.iter() {
+                if running >= qu.limit {
+                    break;
+                }
+                self.start(j.id);
+                running += 1;
+            }
+        }
+    }
+
+    fn start(mut ref self, id: i64) {
+        let j = self.jobs.get(id).cloned().unwrap();
+        let w = self.workers.get(j.kind).cloned().unwrap();
+        self.emit(f"start {id} {self.now} {self.now + w.length()}");
+        self.say(f"start #{id} {j.kind} on {j.queue} (attempt {j.attempt + 1})");
+    }
+
+    fn finish(mut ref self, id: i64) {
+        let j = self.jobs.get(id).cloned().unwrap();
+        let w = self.workers.get(j.kind).cloned().unwrap();
+        let a = j.attempt;
+        let fails = j.fail.clone() ?? w.fail.clone();
+        if w.times_out() {
+            self.fail(j, f"timeout after {w.timeout}s");
+        } else if w.cancel_on == a {
+            self.emit(f"cancel {id} {self.now} cancelled by worker");
+            self.say(f"cancel #{id} {j.kind} attempt {a}: cancelled by worker");
+        } else if fails.contains(a) {
+            self.fail(j, w.error.clone());
+        } else {
+            self.emit(f"complete {id} {self.now}");
+            self.say(f"done #{id} {j.kind} (attempt {a})");
+        }
+    }
+
+    fn fail(mut ref self, j: Job, err: String) {
+        let a = j.attempt;
+        if a >= j.max {
+            self.emit(f"discard {j.id} {self.now} {err}");
+            self.say(f"fail #{j.id} {j.kind} attempt {a}: {err}; discarded");
+        } else {
+            let c = a - 1;
+            let due = self.now + c * c * c * c + 15 + (fnv(f"{j.id}-{a}") % 10) * (c + 1);
+            self.emit(f"retry {j.id} {self.now} {due} {err}");
+            self.say(f"fail #{j.id} {j.kind} attempt {a}: {err}; retry at {fmt(due)}");
+        }
+    }
+
+    fn snapshot(self) -> Vec[String] {
+        let mut out: Vec[String] = Vec.new();
+        out.push(f"next {self.next_id}");
+        for (name, q) in self.queues.iter() {
+            out.push(f"queue {name} {q.limit} {q.paused}");
+        }
+        for j in self.jobs.values() {
+            out.push(j.snap());
+        }
+        out
+    }
+
+    // ---- commands
+
+    fn queue(self, q: Str) -> Result[Queue, String] {
+        match self.queues.get(q) {
+            Some(x) => Ok(x.clone()),
+            None => Err(f"unknown queue '{q}'"),
+        }
+    }
+
+    fn job(self, s: Str) -> Result[Job, String] {
+        let id = match small(s, 1, 9999999) {
+            Some(id) => id,
+            None => return Err(f"bad job id '{s}'"),
+        };
+        match self.jobs.get(id) {
+            Some(j) => Ok(j.clone()),
+            None => Err(f"no job {id}"),
+        }
+    }
+
+    fn command(mut ref self, t: Vec[String]) -> Result[(), String] {
+        let cmd = t[0].clone();
+        let a: Vec[String] = t.iter().skip(1).cloned().collect();
+        let known = ["enqueue", "pause", "resume", "scale", "cancel", "retry", "crash", "recover", "prune", "stats", "jobs", "drain"];
+        if not known.iter().any(|k| k == cmd) {
+            return Err(f"unknown command '{cmd}'");
+        }
+        if self.down and cmd != "recover" {
+            return Err("queue is down".to_string());
+        }
+        match cmd.as_str() {
+            "enqueue" => self.c_enqueue(a),
+            "pause" => self.c_pause(a, true),
+            "resume" => self.c_pause(a, false),
+            "scale" => self.c_scale(a),
+            "cancel" => self.c_cancel(a),
+            "retry" => self.c_retry(a),
+            "crash" => self.c_crash(a),
+            "recover" => self.c_recover(a),
+            "prune" => self.c_prune(a),
+            "stats" => {
+                usage(a, 0, "stats")?;
+                self.stats();
+                Ok(())
+            }
+            "jobs" => self.c_jobs(a),
+            _ => self.c_drain(a),
+        }
+    }
+
+    fn c_enqueue(mut ref self, a: Vec[String]) -> Result[(), String] {
+        if a.len() < 2 {
+            return Err("usage: enqueue QUEUE KIND [OPTIONS]".to_string());
+        }
+        let q = a[0].clone();
+        let kind = a[1].clone();
+        self.queue(q)?;
+        let w = match self.workers.get(kind) {
+            Some(w) => w.clone(),
+            None => return Err(f"unknown kind '{kind}'"),
+        };
+        let mut prio = 0;
+        let mut delay = 0;
+        let mut max = w.attempts;
+        let mut uniq: Option[i64] = None;
+        let mut fail: Option[Vec[i64]] = None;
+        let mut args: SortedMap[String, String] = SortedMap.new();
+        for f in a.iter().skip(2) {
+            let (k, v) = match f.split_once("=") {
+                Some((k, v)) => (k.to_string(), v.to_string()),
+                None => return Err(f"bad argument '{f}'"),
+            };
+            if k == "priority" {
+                prio = match small(v, 0, 9) {
+                    Some(p) => p,
+                    None => return Err(f"bad priority '{v}'"),
+                };
+            } else if k == "in" or k == "unique" {
+                let d = match dur(v, if k == "in" { 0 } else { 1 }) {
+                    Some(d) => d,
+                    None => return Err(f"bad duration '{v}'"),
+                };
+                if k == "in" {
+                    delay = d;
+                } else {
+                    uniq = Some(d);
+                }
+            } else if k == "max_attempts" {
+                max = match small(v, 1, 25) {
+                    Some(m) => m,
+                    None => return Err(f"bad max_attempts '{v}'"),
+                };
+            } else if k == "fail" {
+                fail = match attempt_list(v) {
+                    Some(xs) => Some(xs),
+                    None => return Err(f"bad attempt list '{v}'"),
+                };
+            } else {
+                if not is_key(k) or v.len() == 0 {
+                    return Err(f"bad argument '{f}'");
+                }
+                if args.contains_key(k) {
+                    return Err(f"duplicate argument '{k}'");
+                }
+                args.insert(k, v);
+            }
+        }
+        let pairs: Vec[String] = args.iter().map(|(k, v)| f"{k}={v}").collect();
+        let shown = pairs.join(" ");
+        if let Some(d) = uniq {
+            for j in self.jobs.values() {
+                if j.queue == q and j.kind == kind and j.args.join(" ") == shown and j.inserted >= self.now - d
+                    and j.state != State.Cancelled and j.state != State.Discarded {
+                    self.out.push(f"duplicate of #{j.id}");
+                    return Ok(());
+                }
+            }
+        }
+        let id = self.next_id;
+        let due = self.now + delay;
+        let mut rest = String.new();
+        for p in pairs.iter() {
+            rest.push_str(" ");
+            rest.push_str(p);
+        }
+        self.emit(f"insert {id} {q} {kind} {prio} {max} {due} {self.now} {show_list(fail)}{rest}");
+        if delay > 0 {
+            self.out.push(f"scheduled #{id} {kind} on {q} at {fmt(due)}");
+        } else {
+            self.out.push(f"enqueued #{id} {kind} on {q}");
+        }
+        Ok(())
+    }
+
+    fn c_pause(mut ref self, a: Vec[String], on: bool) -> Result[(), String] {
+        let verb = if on { "pause" } else { "resume" };
+        usage(a, 1, f"{verb} QUEUE")?;
+        let q = a[0].clone();
+        let paused = self.queue(q)?.paused;
+        if on and paused {
+            return Err(f"queue '{q}' is already paused");
+        }
+        if not on and not paused {
+            return Err(f"queue '{q}' is not paused");
+        }
+        self.emit(f"{verb} {q}");
+        self.out.push(f"{verb}d {q}");
+        Ok(())
+    }
+
+    fn c_scale(mut ref self, a: Vec[String]) -> Result[(), String] {
+        usage(a, 2, "scale QUEUE N")?;
+        let q = a[0].clone();
+        let old = self.queue(q)?.limit;
+        let n = match small(a[1], 1, 100) {
+            Some(n) => n,
+            None => return Err(f"bad limit '{a[1]}'"),
+        };
+        self.emit(f"scale {q} {n}");
+        self.out.push(f"scaled {q} {old} -> {n}");
+        Ok(())
+    }
+
+    fn c_cancel(mut ref self, a: Vec[String]) -> Result[(), String] {
+        usage(a, 1, "cancel ID")?;
+        let j = self.job(a[0])?;
+        if j.state.is_final() {
+            return Err(f"job {j.id} is {j.state.name()}");
+        }
+        self.emit(f"cancel {j.id} {self.now} cancelled by user");
+        self.out.push(f"cancelled #{j.id} {j.kind} (was {j.state.name()})");
+        Ok(())
+    }
+
+    fn c_retry(mut ref self, a: Vec[String]) -> Result[(), String] {
+        usage(a, 1, "retry ID")?;
+        let j = self.job(a[0])?;
+        if j.state != State.Discarded and j.state != State.Cancelled {
+            return Err(f"job {j.id} is {j.state.name()}, not discarded or cancelled");
+        }
+        let max = if j.attempt < j.max { j.max } else { j.attempt + 1 };
+        self.emit(f"requeue {j.id} {self.now} {max}");
+        self.out.push(f"retrying #{j.id} {j.kind} (attempt {j.attempt + 1} of {max})");
+        Ok(())
+    }
+
+    fn c_crash(mut ref self, a: Vec[String]) -> Result[(), String] {
+        let torn = a.len() == 1 and a[0] == "torn";
+        if a.len() != 0 and not torn {
+            return Err("usage: crash [torn]".to_string());
+        }
+        self.write()?;
+        let data = self.text();
+        if torn {
+            let last = if self.log.len() > 0 { self.log[self.log.len() - 1].len() + 1 } else { 0 };
+            let cut = data.len() - (last + 1) / 2;
+            put_bytes(LOG, data.substring(0, cut).bytes().to_vec())?;
+            self.out.push(f"crashed mid-write (log cut from {data.len()} to {cut} bytes)");
+        } else {
+            self.out.push(f"crashed (log {data.len()} bytes)");
+        }
+        self.reset();
+        self.down = true;
+        Ok(())
+    }
+
+    fn c_recover(mut ref self, a: Vec[String]) -> Result[(), String] {
+        usage(a, 0, "recover")?;
+        if not self.down {
+            return Err("queue is not down".to_string());
+        }
+        self.down = false;
+        self.reset();
+        let text = read(LOG)?;
+        let mut parts: Vec[String] = text.split("\n").map(|p| p.to_string()).collect();
+        let torn = parts.pop() ?? "".to_string();
+        for r in parts.iter() {
+            self.apply(r);
+            self.log.push(r.clone());
+        }
+        let mut msg = f"recovered {parts.len()} records";
+        if torn.len() > 0 {
+            msg.push_str(f", dropped a torn record of {torn.len()} bytes");
+        }
+        self.out.push(msg);
+        let running: Vec[Job] = self.jobs.values().filter(|j| j.state == State.Executing).cloned().collect();
+        for j in running.iter() {
+            if j.attempt >= j.max {
+                self.emit(f"discard {j.id} {self.now} rescued after crash");
+                self.out.push(f"discarded #{j.id} {j.kind} (rescued after crash)");
+            } else {
+                self.emit(f"rescue {j.id} {self.now}");
+                self.out.push(f"rescued #{j.id} {j.kind} (attempt {j.attempt} of {j.max})");
+            }
+        }
+        Ok(())
+    }
+
+    fn c_prune(mut ref self, a: Vec[String]) -> Result[(), String] {
+        usage(a, 1, "prune AGE")?;
+        let age = match dur(a[0], 0) {
+            Some(d) => d,
+            None => return Err(f"bad duration '{a[0]}'"),
+        };
+        let mut gone: SortedSet[i64] = SortedSet.new();
+        for j in self.jobs.values() {
+            if j.state.is_final() and j.finished <= self.now - age {
+                gone.insert(j.id);
+            }
+        }
+        let before = self.text().len();
+        for id in gone.iter() {
+            self.jobs.remove(id);
+        }
+        let mut keep: Vec[String] = Vec.new();
+        keep.push(f"ids {self.next_id}");
+        for r in self.log.iter() {
+            let t: Vec[Str] = r.split(" ").collect();
+            if t[0] == "ids" {
+                continue;
+            }
+            let queue_rec = t[0] == "pause" or t[0] == "resume" or t[0] == "scale";
+            if not queue_rec and gone.contains(num(t[1])) {
+                continue;
+            }
+            keep.push(r.clone());
+        }
+        self.log = keep;
+        self.out.push(f"pruned {gone.len()} jobs, log {before} -> {self.text().len()} bytes");
+        Ok(())
+    }
+
+    fn stats(mut ref self) {
+        let names: Vec[String] = self.queues.iter().map(|(k, _)| k.clone()).collect();
+        for q in names.iter() {
+            let qu = self.queues.get(q).cloned().unwrap();
+            let mut parts: Vec[String] = Vec.new();
+            for s in all_states().iter() {
+                let mut n = 0;
+                for j in self.jobs.values() {
+                    if j.queue == q and j.state == s {
+                        n += 1;
+                    }
+                }
+                parts.push(f"{s.name()} {n}");
+            }
+            let paused = if qu.paused { " paused" } else { "" };
+            self.out.push(f"{q} limit={qu.limit}{paused}: {parts.join(", ")}");
+        }
+    }
+
+    fn c_jobs(mut ref self, a: Vec[String]) -> Result[(), String] {
+        usage(a, 1, "jobs STATE")?;
+        let s = a[0].clone();
+        if s != "all" and not all_states().iter().any(|x| x.name() == s) {
+            return Err(f"bad state '{s}'");
+        }
+        let mut lines: Vec[String] = Vec.new();
+        for j in self.jobs.values() {
+            if s != "all" and j.state.name() != s {
+                continue;
+            }
+            let mut line = f"#{j.id} {j.state.name()} {j.kind} {j.queue} {j.attempt}/{j.max}";
+            if j.state.waiting() {
+                line.push_str(f" next={fmt(j.due)}");
+            }
+            for p in j.args.iter() {
+                line.push_str(" ");
+                line.push_str(p);
+            }
+            if j.error.len() > 0 {
+                line.push_str(f" ({j.error})");
+            }
+            lines.push(line);
+        }
+        if lines.len() == 0 {
+            lines.push("no jobs".to_string());
+        }
+        for l in lines.into_iter() {
+            self.out.push(l);
+        }
+        Ok(())
+    }
+
+    fn c_drain(mut ref self, a: Vec[String]) -> Result[(), String] {
+        usage(a, 0, "drain")?;
+        while let Some(n) = self.next_time() {
+            self.now = n;
+            self.step();
+        }
+        self.out.push(f"drained at {fmt(self.now)}");
+        Ok(())
+    }
+}
+
+fn usage(a: Vec[String], n: i64, u: Str) -> Result[(), String] {
+    if a.len() != n {
+        return Err(f"usage: {u}");
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------ main
+
+fn read(path: Str) -> Result[String, String] {
+    match fs.read_to_string(path.to_string()) {
+        Ok(t) => Ok(t),
+        Err(_) => Err(f"cannot read {path}"),
+    }
+}
+
+fn run() -> Result[(), String] {
+    fs.create_dir_all("data/out".to_string()).map_err(|e| f"cannot create data/out: {e}")?;
+    write_data()?;
+    let qtext = read("data/queues.conf")?;
+    let wtext = read("data/workers.conf")?;
+    let etext = read("data/events.txt")?;
+    // Each file is parsed in a task of its own.
+    let group = TaskGroup.new();
+    let hq = group.spawn(|| parse_queues(qtext));
+    let hw = group.spawn(|| parse_workers(wtext));
+    let he = group.spawn(|| parse_events(etext));
+    let qf = hq.join();
+    let wf = hw.join();
+    let evs = he.join();
+
+    let mut e = engine(qf.queues.clone(), wf.workers.clone());
+    e.out.push("== load".to_string());
+    e.out.push(f"queues.conf: {qf.queues.len()} queues");
+    for x in qf.errors.iter() {
+        e.out.push(x.clone());
+    }
+    e.out.push(f"workers.conf: {wf.workers.len()} workers");
+    for x in wf.errors.iter() {
+        e.out.push(x.clone());
+    }
+    e.out.push(f"events.txt: {evs.len()} events");
+    e.out.push("== events".to_string());
+    e.write()?;
+    for ev in evs.iter() {
+        let mut err = ev.err.clone();
+        if err.len() == 0 and ev.at < e.now {
+            err = "time goes back".to_string();
+        }
+        if err.len() == 0 {
+            e.advance(ev.at);
+        }
+        e.out.push(f"> {ev.line}");
+        if err.len() == 0 {
+            if let Err(x) = e.command(ev.toks.clone()) {
+                err = x;
+            }
+        }
+        if err.len() > 0 {
+            e.out.push(f"error: events.txt:{ev.no}: {err}");
+        }
+        if not e.down {
+            e.step();
+            e.write()?;
+        }
+    }
+    e.out.push("== end".to_string());
+    if e.down {
+        e.out.push("queue is down".to_string());
+    } else {
+        e.stats();
+    }
+
+    let back = read(LOG)?;
+    let recs: Vec[Str] = back.split("\n").filter(|r| r.len() > 0).collect();
+    e.out.push("== log".to_string());
+    e.out.push(f"{LOG}: {recs.len()} records, {back.len()} bytes");
+    let mut per: SortedMap[String, i64] = SortedMap.new();
+    for r in recs.iter() {
+        let k = (r.split_once(" ").map(|(k, _)| k.to_string())) ?? r.to_string();
+        let n = per.get(k).cloned() ?? 0;
+        per.insert(k, n + 1);
+    }
+    let counts: Vec[String] = per.iter().map(|(k, v)| f"{k} {v}").collect();
+    e.out.push(counts.join(", "));
+    if e.down {
+        e.out.push("replay: skipped, queue is down".to_string());
+    } else {
+        let mut r = engine(qf.queues.clone(), wf.workers.clone());
+        for rec in recs.iter() {
+            r.apply(rec);
+        }
+        r.now = e.now;
+        r.promote();
+        let mine = e.snapshot();
+        let theirs = r.snapshot();
+        if mine.join("\n") == theirs.join("\n") {
+            e.out.push(f"replay: {r.jobs.len()} jobs, matches memory");
+        } else {
+            let mut i = 0;
+            while i < mine.len() and i < theirs.len() and mine[i] == theirs[i] {
+                i += 1;
+            }
+            e.out.push(f"replay differs at entry {i + 1}");
+        }
+    }
+    println(e.out.join("\n"));
+    Ok(())
+}
+
+fn is_hexd(c: u8) -> bool {
+    is_digit(c) or (c >= b'a' and c <= b'f')
+}
+
+fn hex_val(c: u8) -> u8 {
+    if is_digit(c) { c - b'0' } else { c - b'a' + 10 }
+}
+
+fn unhex(s: Str) -> Vec[u8] {
+    let mut ds: Vec[u8] = Vec.new();
+    for c in s.bytes() {
+        if is_hexd(c) {
+            ds.push(hex_val(c));
+        }
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i + 1 < ds.len() {
+        out.push(ds[i] * 16 + ds[i + 1]);
+        i += 2;
+    }
+    out
+}
+
+fn put_bytes(path: Str, b: Vec[u8]) -> Result[(), String] {
+    if let Err(e) = fs.write_bytes(path.to_string(), b) {
+        return Err(f"cannot write {path}: {e}");
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = run() {
+        eprintln(e);
+    }
+}
+
+// ============================================================ data
+
+// The files under data/, in name order.
+fn write_data() -> Result[(), String] {
+    put_bytes("data/events.txt", unhex(file_0()))?;
+    put_bytes("data/queues.conf", unhex(file_1()))?;
+    put_bytes("data/workers.conf", unhex(file_2()))?;
+    Ok(())
+}
+
+// data/events.txt
+fn file_0() -> String {
+    """
+23204120646179206174207468652073686f702e2054696d6573206172652048483a4d4d3a53532073696e6365207468
+652072756e6e657220737461727465642e0a0a30303a30303a303020656e7175657565206d61696c6572732073656e64
+5f656d61696c20746f3d616e61406578616d706c652e636f6d2074656d706c6174653d726563656970740a30303a3030
+3a303020656e7175657565206d61696c6572732073656e645f656d61696c20746f3d626f406578616d706c652e636f6d
+2074656d706c6174653d726563656970740a30303a30303a303020656e7175657565206d61696c6572732073656e645f
+656d61696c20746f3d6379406578616d706c652e636f6d2074656d706c6174653d72656365697074207072696f726974
+793d310a30303a30303a303020656e7175657565206d61696c6572732073656e645f656d61696c20746f3d6469406578
+616d706c652e636f6d2074656d706c6174653d726563656970740a30303a30303a30312073746174730a0a2320412063
+617264206973206465636c696e6564206f6e636520616e642063686172676564206f6e207468652072657472793b2061
+6e6f7468657220676f6573207468726f7567682e0a30303a30303a313020656e7175657565207061796d656e74732063
+68617267655f63617264206f726465723d3130303120616d6f756e743d343939390a30303a30303a313020656e717565
+7565207061796d656e7473206368617267655f63617264206f726465723d3130303220616d6f756e743d313235302066
+61696c3d6e6f6e650a30303a30303a313020656e7175657565207061796d656e7473206368617267655f63617264206f
+726465723d3130303320616d6f756e743d383939206661696c3d312c322c330a0a23204120706172746e657220656e64
+706f696e7420697320646f776e3b20616e6f7468657220616e7377657273206f6e20746865207365636f6e6420747279
+2e0a30303a30303a323020656e717565756520776562686f6f6b7320776562686f6f6b5f64656c697665722075726c3d
+68747470733a2f2f706172746e65722e6578616d706c652f686f6f6b206576656e743d6f726465722e706169640a3030
+3a30303a323020656e717565756520776562686f6f6b7320776562686f6f6b5f64656c697665722075726c3d68747470
+733a2f2f63726d2e6578616d706c652f686f6f6b206576656e743d6f726465722e70616964206661696c3d310a30303a
+30303a323020656e717565756520776562686f6f6b7320776562686f6f6b5f64656c697665722075726c3d6874747073
+3a2f2f6f70732e6578616d706c652f686f6f6b206576656e743d6f726465722e70616964206661696c3d6e6f6e650a0a
+23205468652077656c636f6d65206d61696c20676f6573206f757420616e20686f7572206166746572207369676e7570
+2c206f6e63652e0a30303a30303a333020656e7175657565206d61696c6572732073656e645f77656c636f6d65207573
+65723d373720696e3d316820756e697175653d31680a30303a30303a333120656e7175657565206d61696c6572732073
+656e645f77656c636f6d6520757365723d373720696e3d316820756e697175653d31680a30303a30303a333220656e71
+75657565206d61696c6572732073656e645f77656c636f6d6520757365723d373820696e3d316820756e697175653d31
+680a30303a30303a3430206a6f627320726574727961626c650a30303a30313a3030206a6f6273207363686564756c65
+640a0a2320496d61676520776f726b2071756575657320757020626568696e6420746865206c696d69743b207072696f
+726974696573207069636b20746865206f726465722e0a30303a30323a303020656e71756575652064656661756c7420
+73796e635f696e76656e746f72792077617265686f7573653d656173740a30303a30323a303020656e71756575652064
+656661756c7420726573697a655f696d6167652070686f746f3d70312073697a653d6c61726765207072696f72697479
+3d350a30303a30323a303020656e71756575652064656661756c7420726573697a655f696d6167652070686f746f3d70
+322073697a653d6c61726765207072696f726974793d350a30303a30323a303020656e71756575652064656661756c74
+20726573697a655f696d6167652070686f746f3d70332073697a653d7468756d620a30303a30323a303020656e717565
+75652064656661756c7420726573697a655f696d6167652070686f746f3d70342073697a653d7468756d620a30303a30
+323a30352063616e63656c2031330a30303a30323a30362073746174730a30303a30323a3130207363616c6520646566
+61756c7420330a30303a30323a31352063616e63656c2031330a30303a30323a32302072657472792031330a0a232041
+20726566756e642074686520776f726b657220726566757365732c20726574726965642062792068616e642e0a30303a
+30333a303020656e7175657565207061796d656e747320726566756e64206f726465723d3130303120616d6f756e743d
+343939390a30303a30333a3330206a6f62732063616e63656c6c65640a30303a30333a33312072657472792031380a0a
+23204d697374616b657320616e206f70657261746f72206d616b65732e0a30303a30343a303020656e71756575652073
+6d732073656e645f656d61696c20746f3d616e61406578616d706c652e636f6d0a30303a30343a303020656e71756575
+65206d61696c6572732073656e645f736d7320746f3d616e61406578616d706c652e636f6d0a30303a30343a30302065
+6e7175657565206d61696c6572732073656e645f656d61696c20746f3d616e61406578616d706c652e636f6d20707269
+6f726974793d31300a30303a30343a303020656e7175657565206d61696c6572732073656e645f656d61696c20746f3d
+616e61406578616d706c652e636f6d20696e3d736f6f6e0a30303a30343a303020656e7175657565206d61696c657273
+2073656e645f656d61696c20746f3d616e61406578616d706c652e636f6d206d61785f617474656d7074733d300a3030
+3a30343a303020656e7175657565206d61696c6572732073656e645f656d61696c20746f3d616e61406578616d706c65
+2e636f6d206661696c3d300a30303a30343a303020656e7175657565206d61696c6572732073656e645f656d61696c20
+746f3d616e61406578616d706c652e636f6d20757267656e740a30303a30343a303020656e7175657565206d61696c65
+72732073656e645f656d61696c20546f3d616e61406578616d706c652e636f6d0a30303a30343a303020656e71756575
+65206d61696c6572732073656e645f656d61696c20746f3d616e61406578616d706c652e636f6d20746f3d626f406578
+616d706c652e636f6d0a30303a30343a303020656e7175657565206d61696c6572730a30303a30343a30302070617573
+65206d656469610a30303a30343a303020726573756d65206d61696c6572730a30303a30343a3030207363616c65206d
+61696c65727320300a30303a30343a30302063616e63656c206162630a30303a30343a30302063616e63656c20393939
+0a30303a30343a30302063616e63656c20310a30303a30343a303020726574727920320a30303a30343a303020726574
+727920370a30303a30343a3030206a6f627320737475636b0a30303a30343a3030207265636f7665720a30303a30343a
+303020726573746172740a30303a30333a35392073746174730a30303a36313a30302073746174730a30303a30343a30
+300a30303a30343a3030207061757365206d61696c657273206d61696c6572730a0a2320546865206e696768746c7920
+77696e646f77206f70656e733a20746865207265706f72742074696d6573206f75742c20697320726574726965642062
+792068616e642e0a30303a30353a303020656e7175657565206578706f7274732067656e65726174655f7265706f7274
+206d6f6e74683d323032362d313020666f726d61743d6373760a30303a30353a303020656e7175657565206578706f72
+74732067656e65726174655f7265706f7274206d6f6e74683d323032362d313020666f726d61743d63737620756e6971
+75653d31306d0a30303a30353a3330206a6f627320617661696c61626c650a30303a30363a303020726573756d652065
+78706f7274730a30303a30363a3030207061757365206578706f7274730a30303a31323a3030206a6f62732064697363
+61726465640a30303a31323a303020726573756d65206578706f7274730a30303a31323a30312072657472792031390a
+30303a31343a30302072657472792031390a30303a32303a30302073746174730a0a23204f7264657273206b65657020
+636f6d696e673b207061796d656e74732069732070617573656420666f7220612070726f636573736f72207570677261
+64652e0a30303a33303a3030207061757365207061796d656e74730a30303a33303a303020656e717565756520706179
+6d656e7473206368617267655f63617264206f726465723d3130303420616d6f756e743d323530300a30303a33303a30
+3020656e7175657565207061796d656e7473206368617267655f63617264206f726465723d3130303520616d6f756e74
+3d37333030206661696c3d6e6f6e65207072696f726974793d32206d61785f617474656d7074733d310a30303a33303a
+303020656e7175657565206d61696c6572732073656e645f656d61696c20746f3d6564406578616d706c652e636f6d20
+74656d706c6174653d736869707065640a30303a33303a303020656e7175657565206d61696c6572732073656e645f65
+6d61696c20746f3d6661406578616d706c652e636f6d2074656d706c6174653d736869707065640a30303a33303a3035
+20726573756d65207061796d656e74730a0a23205468652070726f6365737320646965732077726974696e6720612072
+65636f72642c20616e6420636f6d6573206261636b2e0a30303a33303a303620637261736820746f726e0a30303a3330
+3a33302073746174730a30303a33313a3030207265636f7665720a30303a33313a3031206a6f62732065786563757469
+6e670a30303a33313a303120656e71756575652064656661756c742073796e635f696e76656e746f7279207761726568
+6f7573653d776573740a30303a33313a30352063726173680a30303a33323a30302063726173680a30303a33333a3030
+207265636f7665720a30303a33333a3030207265636f7665720a30303a33333a3031206a6f627320617661696c61626c
+650a30303a33333a30322072657472792032310a0a2320486f7573656b656570696e673a20636f6d706c657465642061
+6e642064656164206a6f6273206f6c646572207468616e203330206d696e7574657320676f2e0a30313a30313a303020
+6a6f6273207363686564756c65640a30313a31303a3030207072756e652033306d0a30313a31303a3030207072756e65
+20736f6f6e0a30313a31303a3031206a6f627320616c6c0a30313a31323a303020656e7175657565206d61696c657273
+2073656e645f656d61696c20746f3d616e61406578616d706c652e636f6d2074656d706c6174653d726563656970740a
+30313a31323a303020656e7175657565206d61696c6572732073656e645f656d61696c20746f3d626f406578616d706c
+652e636f6d2074656d706c6174653d72656d696e64657220696e3d31356d0a30313a31323a303020656e717565756520
+776562686f6f6b7320776562686f6f6b5f64656c697665722075726c3d68747470733a2f2f706172746e65722e657861
+6d706c652f686f6f6b206576656e743d6f726465722e726566756e6465640a30313a31323a333020647261696e0a
+"""
+}
+
+// data/queues.conf
+fn file_1() -> String {
+    """
+2320517565756573206f66207468652073686f702773206a6f622072756e6e65722e206c696d697420697320686f7720
+6d616e79206a6f6273206f66207468652071756575650a232072756e206174206f6e63652e0a0a717565756520646566
+61756c74206c696d69743d320a7175657565206d61696c657273206c696d69743d320a7175657565207061796d656e74
+73206c696d69743d312020202020202020232074686520636172642070726f636573736f7220616c6c6f7773206f6e65
+2063616c6c20617420612074696d650a717565756520776562686f6f6b73206c696d69743d330a717565756520657870
+6f727473206c696d69743d3120706175736564202023207265706f727473207761697420666f7220746865206e696768
+746c792077696e646f770a0a7175657565204d61696c657273206c696d69743d3220202020202020202023206e616d65
+7320617265206c6f77657220636173650a7175657565206d65646961206c696d69743d300a7175657565206d65646961
+206c696d69743d3230300a7175657565206d6564696120776f726b6572733d340a7175657565206d656469610a717565
+7565206d61696c657273206c696d69743d350a746f706963206576656e7473206c696d69743d310a71756575650a
+"""
+}
+
+// data/workers.conf
+fn file_2() -> String {
+    """
+2320576f726b6572206b696e64733a20686f77206c6f6e6720616e20617474656d70742072756e7320616e6420686f77
+20697420656e64732e0a0a776f726b65722073656e645f656d61696c206475726174696f6e3d32730a776f726b657220
+73656e645f77656c636f6d65206475726174696f6e3d3120617474656d7074733d330a776f726b657220636861726765
+5f63617264206475726174696f6e3d3320617474656d7074733d33206661696c3d31206572726f723d63617264206465
+636c696e6564206279206973737565720a776f726b657220776562686f6f6b5f64656c69766572206475726174696f6e
+3d3120617474656d7074733d34206661696c3d312c322c332c34206572726f723d48545450203530332066726f6d2065
+6e64706f696e740a776f726b65722067656e65726174655f7265706f7274206475726174696f6e3d326d2074696d656f
+75743d39307320617474656d7074733d320a776f726b65722073796e635f696e76656e746f7279206475726174696f6e
+3d3330730a776f726b657220726566756e64206475726174696f6e3d352063616e63656c5f6f6e3d310a776f726b6572
+20726573697a655f696d616765206475726174696f6e3d340a0a776f726b65722073656e642d736d7320647572617469
+6f6e3d31202020202020202020202023206e616d65732075736520756e64657273636f7265730a776f726b6572207468
+756d626e61696c206475726174696f6e3d300a776f726b6572207468756d626e61696c206475726174696f6e3d35780a
+776f726b6572207468756d626e61696c0a776f726b65722073656e645f656d61696c206475726174696f6e3d330a776f
+726b6572206578706f72745f637376206475726174696f6e3d3130206661696c3d312c33300a776f726b657220657870
+6f72745f637376206475726174696f6e3d31302063616e63656c5f6f6e3d300a776f726b6572206578706f72745f6373
+76206475726174696f6e3d313020617474656d7074733d35300a776f726b6572206578706f72745f6373762064757261
+74696f6e3d313020726574726965733d330a776f726b6572206578706f72745f637376206475726174696f6e3d313020
+6572726f723d0a6a6f6220636c65616e7570206475726174696f6e3d310a776f726b65720a
+"""
+}
