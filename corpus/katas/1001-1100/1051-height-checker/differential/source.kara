@@ -1,0 +1,228 @@
+// LeetCode #1051: Height Checker -- the differential.
+//
+// The five arms against the statement read literally, on 3000 random
+// lines, with six properties:
+//
+// P1  the answer is the statement read literally
+// P2  the answer is between 0 and the number of students, and never 1
+// P3  the line in order gives 0, and the line reversed gives the count of
+//     places where the line differs from its heights tallest first
+// P4  every height one taller, or twice as tall, changes nothing
+// P5  a student taller than all added at the back, or one shorter than
+//     all at the front, changes nothing
+// P6  each arm agrees with at least two of the other four
+
+// ---- height_checker.kara (the ★ arm): the line against its sorted copy
+
+fn sorted_arm(heights: Slice[i64]) -> i64 {
+    let mut expected = heights.to_vec();
+    expected.sort();
+    let mut moved = 0;
+    for i in 0..heights.len() {
+        if heights[i] != expected[i] {
+            moved += 1;
+        }
+    }
+    moved
+}
+
+// ---- height_checker_counts.kara: counting sort, walked in place
+// (the counts run to 201 here, for the heights P4 doubles)
+
+fn counts_arm(heights: Slice[i64]) -> i64 {
+    let mut count = [0; 202];
+    for h in heights.iter() {
+        count[*h] += 1;
+    }
+    let mut moved = 0;
+    let mut want = 0;
+    for h in heights.iter() {
+        while count[want] == 0 {
+            want += 1;
+        }
+        if *h != want {
+            moved += 1;
+        }
+        count[want] -= 1;
+    }
+    moved
+}
+
+// ---- height_checker_iter.kara: the sorted copy, zipped
+
+fn iter_arm(heights: Slice[i64]) -> i64 {
+    let mut expected = heights.to_vec();
+    expected.sort();
+    heights.iter().zip(expected.iter()).filter(|(a, b)| a != b).count()
+}
+
+// ---- height_checker_heap.kara: the shortest student next, from a heap
+
+fn heap_arm(heights: Slice[i64]) -> i64 {
+    let mut queue = PriorityQueue.from(heights.to_vec());
+    let mut moved = 0;
+    for h in heights.iter() {
+        if queue.pop() != Some(*h) {
+            moved += 1;
+        }
+    }
+    moved
+}
+
+// ---- height_checker_insertion.kara: insertion sort, then the count
+
+fn insertion_arm(heights: Slice[i64]) -> i64 {
+    let mut line: Vec[i64] = Vec.with_capacity(heights.len());
+    for h in heights.iter() {
+        line.push(*h);
+        let mut j = line.len() - 1;
+        while j > 0 and line[j - 1] > line[j] {
+            line.swap(j - 1, j);
+            j -= 1;
+        }
+    }
+    let mut moved = 0;
+    for (i, h) in heights.iter().enumerate() {
+        if *h != line[i] {
+            moved += 1;
+        }
+    }
+    moved
+}
+
+// ---- the statement read literally
+
+// The student at place i is where the expected line puts them when as many
+// students are shorter than them as stand before place i, or fewer, with
+// the ones of their own height filling the places between: place i holds
+// height h in the expected line exactly when fewer than i + 1 students are
+// shorter than h and at least i + 1 are no taller.
+fn read_literally(heights: Slice[i64]) -> i64 {
+    let mut moved = 0;
+    for i in 0..heights.len() {
+        let h = heights[i];
+        let mut shorter = 0;
+        let mut no_taller = 0;
+        for o in heights.iter() {
+            if *o < h {
+                shorter += 1;
+            }
+            if *o <= h {
+                no_taller += 1;
+            }
+        }
+        if not (shorter <= i and i < no_taller) {
+            moved += 1;
+        }
+    }
+    moved
+}
+
+fn arm(a: i64, heights: Slice[i64]) -> i64 {
+    match a {
+        0 => sorted_arm(heights),
+        1 => counts_arm(heights),
+        2 => iter_arm(heights),
+        3 => heap_arm(heights),
+        _ => insertion_arm(heights),
+    }
+}
+
+// ---- the harness
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_heights(count: i64, tallest: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut heights: Vec[i64] = Vec.new();
+    for _ in 0..count {
+        heights.push(next_random(mut seed) % tallest + 1);
+    }
+    heights
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    // failures by property, P1 to P6 at 1 to 6
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+// Every check on one line of students.
+fn check_case(t: mut ref Tally, heights: Slice[i64]) {
+    let answers: Vec[i64] = (0..5).map(|a| arm(a, heights)).collect();
+    let want = read_literally(heights);
+    let n = heights.len();
+    let mut in_order = heights.to_vec();
+    in_order.sort();
+    let reversed: Vec[i64] = heights.iter().rev().cloned().collect();
+    let mut falling = in_order.clone();
+    falling.reverse();
+    // the reversed line against its own order is the line against its
+    // heights tallest first, read from the back
+    let mut against_falling = 0;
+    for i in 0..n {
+        if heights[i] != falling[i] {
+            against_falling += 1;
+        }
+    }
+    let taller: Vec[i64] = heights.iter().map(|h| h + 1).collect();
+    let twice: Vec[i64] = heights.iter().map(|h| 2 * h).collect();
+    let mut back = heights.to_vec();
+    back.push(101);
+    let mut front: Vec[i64] = [0];
+    front.extend_from_slice(heights);
+    for a in 0..5 {
+        let answer = answers[a];
+        let what = f"arm {a}, {heights} -> {answer}";
+        expect(mut t, 1, answer == want, f"P1 {what}, read literally {want}");
+        expect(mut t, 2, answer >= 0 and answer <= n and answer != 1, f"P2 {what}: out of range");
+        expect(mut t, 3, arm(a, in_order) == 0 and arm(a, reversed) == against_falling, f"P3 {what}: in order or reversed");
+        expect(mut t, 4, arm(a, taller) == answer and arm(a, twice) == answer, f"P4 {what}: taller or twice as tall");
+        expect(mut t, 5, arm(a, back) == answer and arm(a, front) == answer, f"P5 {what}: a tallest at the back or a shortest at the front");
+        let mut agree = 0;
+        for o in 0..5 {
+            if o != a and answers[o] == answer {
+                agree += 1;
+            }
+        }
+        expect(mut t, 6, agree >= 2, f"P6 {what}: agrees with {agree}");
+    }
+    t.cases += 1;
+    t.check = (t.check * 131 + answers[0]) % 1000000007;
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: Vec.filled(7, 0) };
+    // 3000 random lines: 2000 of 1 to 8 students of 1 to 3, where heights
+    // repeat, and 1000 of 1 to 40 students of 1 to 100
+    let mut seed = 10511;
+    for i in 0..3000 {
+        let heights = if i < 2000 {
+            random_heights(next_random(mut seed) % 8 + 1, 3, mut seed)
+        } else {
+            random_heights(next_random(mut seed) % 40 + 1, 100, mut seed)
+        };
+        check_case(mut t, heights);
+    }
+    println(f"{t.cases} lists: checksum {t.check}, {t.checks} checks over 5 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

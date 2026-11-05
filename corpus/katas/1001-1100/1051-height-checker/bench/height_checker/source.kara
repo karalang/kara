@@ -1,0 +1,45 @@
+// LeetCode #1051: Height Checker -- the benchmark: the ★ check, a sorted
+// copy against the line, on 2000 lines of 100 students built once, fifty
+// rounds over all of them.
+
+fn height_checker(heights: Slice[i64]) -> i64 {
+    let mut expected = heights.to_vec();
+    expected.sort();
+    let mut moved = 0;
+    for i in 0..heights.len() {
+        if heights[i] != expected[i] {
+            moved += 1;
+        }
+    }
+    moved
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let lines = 2000;
+    let count = 100;
+    let rounds = 50;
+    let mut seed = 1051;
+    let mut all: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..lines {
+        let mut heights: Vec[i64] = Vec.new();
+        for _ in 0..count {
+            heights.push(next_random(mut seed) % 100 + 1);
+        }
+        all.push(heights);
+    }
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..rounds {
+        for heights in all.iter() {
+            let answer = height_checker(heights);
+            total += answer;
+            check = (check * 131 + answer) % 1000000007;
+        }
+    }
+    println(f"{lines} lines of {count} students, {rounds} rounds: total {total}, checksum {check}");
+}
