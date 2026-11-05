@@ -1467,12 +1467,10 @@ fn parse_resolve_command(args: &[String]) -> Command {
 ///   entry is recorded so later `-A NAME` flags can re-suppress
 ///
 /// Repeated flags for the same name are last-write-wins (matches
-/// Rust's behavior). Unknown lint names are accepted silently —
-/// the catch is at the source side (the `unknown_lint` lint fires
-/// at `#[allow(NAME)]` for an unknown `NAME`); a CLI flag naming
-/// an unknown lint is inert (no emission site queries the name).
-/// `-F` for an unknown name is still load-bearing because inner
-/// `#[allow(NAME)]` rejection is name-based, not registry-gated.
+/// Rust's behavior). An unknown lint name warns on stderr and is
+/// otherwise inert (no emission site queries the name); `-F` for an
+/// unknown name is still load-bearing because inner `#[allow(NAME)]`
+/// rejection is name-based, not registry-gated.
 pub(super) fn try_consume_lint_flag(
     args: &[String],
     i: &mut usize,
@@ -1533,6 +1531,22 @@ fn apply_lint_flag(
     is_forbid: bool,
     name: &str,
 ) {
+    // A flag naming no lint is the `unknown_lint` warning, as an attribute
+    // naming one is (design.md § Lint levels); it was accepted silently, so a
+    // misspelt `-D` gated nothing (B-2026-11-05-17). On stderr: stdout is the
+    // JSON document's.
+    if name != "warnings" && crate::lints::lint_by_name(name).is_none() {
+        let flag = match (level, is_forbid) {
+            (_, true) => "-F",
+            (crate::lints::LintLevel::Allow, _) => "-A",
+            (crate::lints::LintLevel::Warn, _) => "-W",
+            _ => "-D",
+        };
+        eprintln!(
+            "warning[unknown_lint]: `{flag} {name}` names no lint the compiler knows; \
+             `karac lint --list` lists them"
+        );
+    }
     // `-D warnings` is the catch-all: promote every default-Warn
     // lint to Deny. Stored as a separate flag so a later `-A NAME`
     // can re-suppress an explicitly allowed lint (per-name beats
@@ -2155,7 +2169,7 @@ fn classify_explain_name(name: &str) -> crate::cli::ExplainTarget {
             && !name[1..].is_empty()
             && chars.all(|c| c.is_ascii_digit())
     };
-    if is_code {
+    if is_code || crate::cli::explain::is_symbolic_code(name) {
         return crate::cli::ExplainTarget::Code(name.to_string());
     }
     let is_class = !name.is_empty()

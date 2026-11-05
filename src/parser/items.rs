@@ -1541,7 +1541,7 @@ impl super::Parser {
                 };
                 if !seen.insert(name.clone()) {
                     self.errors.push(super::ParseError {
-                        kind: crate::parser::ParseErrorKind::Syntax,
+                        kind: crate::parser::ParseErrorKind::DuplicateLintLevel,
                         message: format!(
                             "error[E_DUPLICATE_LINT_LEVEL]: lint \
                              name `{}` appears more than once in \

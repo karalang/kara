@@ -4330,16 +4330,25 @@ fn attr_slice2_diagnostic_namespaced_known_member_accepted_silently() {
 }
 
 #[test]
-fn attr_slice2_tool_namespaced_attribute_accepted_silently() {
-    // Tool-namespaced attributes (item 37 — `#[TOOL::NAME(...)]`) are
-    // already silently accepted at the slice-2 layer because the
-    // walker only validates bare-name paths; item 37 will formalise
-    // the rule + add `karac query attributes`. Pinning here so the
-    // existing surface does not regress when item 37 lands.
-    assert_no_unknown_attribute("#[karafmt::skip]\nfn manually_aligned() { }");
-    assert_no_unknown_attribute(
+fn attr_tool_namespaced_attribute_is_refused_in_v1() {
+    // Attribute paths have one segment in v1; tool namespaces are deferred
+    // (design.md § Attributes). This pinned the silent acceptance before
+    // B-2026-11-05-17.
+    for src in [
+        "#[karafmt::skip]\nfn manually_aligned() { }",
         "#[acmecorp_security::audit_required(level: \"strict\")]\npub fn login() { }",
-    );
+        "#[karac::no_such_helper]\nfn f() { }",
+    ] {
+        let errs = resolve_errors(src);
+        assert!(
+            errs.iter()
+                .any(|e| e.kind == ResolveErrorKind::UnknownAttribute),
+            "{src}: {:?}",
+            errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
+    }
+    // The compiler's own namespaces stay legal.
+    assert_no_unknown_attribute("struct M {\n    #[karac::proto(sint64)] x: i64,\n}\n");
 }
 
 #[test]
@@ -4367,11 +4376,9 @@ fn attr_slice2_unknown_attribute_has_dedicated_error_kind_and_e0243() {
 
 #[test]
 fn attr_slice2_unknown_attribute_message_suggests_namespaced_form() {
-    // The error message offers the namespaced alternatives
-    // (`#[diagnostic::NAME]` or `#[your_tool::NAME]`) so the author
-    // can pivot to a silently-accepted form when the bare name was a
-    // tool hint. Pin the suggestion so future message tweaks keep the
-    // recovery hint.
+    // The error message offers `#[diagnostic::NAME]`, the one namespace
+    // besides the compiler's that v1 accepts; a tool namespace is refused
+    // (B-2026-11-05-17), so it is not suggested.
     let errs = resolve_errors("#[no_such_thing]\nfn f() { }");
     let msg = errs
         .iter()
@@ -4383,8 +4390,8 @@ fn attr_slice2_unknown_attribute_message_suggests_namespaced_form() {
         "expected diagnostic suggestion; got: {msg}"
     );
     assert!(
-        msg.contains("#[your_tool::no_such_thing]"),
-        "expected tool-namespace suggestion; got: {msg}"
+        !msg.contains("#[your_tool::"),
+        "a tool namespace is not a v1 form, so it is not suggested: {msg}"
     );
 }
 

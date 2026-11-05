@@ -703,12 +703,29 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
     ("E0227", mf("NotInsideKaraProject")),
     // ── parse ───────────────────────────────────────────────────
     //
-    // The whole band: `ParseErrorKind::code` mints exactly these five.
+    // The whole band: `ParseErrorKind::code` mints exactly these six.
     ("E0001", parse("Syntax")),
     ("E0002", parse("UnexpectedToken")),
     ("E0003", parse("ReservedKeyword")),
     ("E0004", parse("RawIdentNotAllowed")),
     ("E0005", parse("ReservedSyntax")),
+    ("E0006", parse("DuplicateLintLevel")),
+    // ── the spec's symbolic names ───────────────────────────────
+    //
+    // design.md and the text renderer name these diagnostics by a symbolic
+    // code (`error[E_NOT_CROSS_TASK]: …`) while the JSON record carries the
+    // number, so `karac explain` answers both spellings (B-2026-11-05-17).
+    ("E_DUPLICATE_LINT_LEVEL", parse("DuplicateLintLevel")),
+    ("E_UNKNOWN_ATTRIBUTE", res("UnknownAttribute", None)),
+    (
+        "E_FORBIDDEN_LINT_ALLOW",
+        ty("ForbiddenLintAllow", Some(DiagnosticClass::LintWarning)),
+    ),
+    (
+        "E_EXPECT_ON_UNFULFILLED",
+        ty("ExpectOnUnfulfilled", Some(DiagnosticClass::LintWarning)),
+    ),
+    ("E_NOT_CROSS_TASK", ty("CrossTaskUnsafeCapture", None)),
     // ── effect ──────────────────────────────────────────────────
     //
     // `L0001` is a NOTE, not an error, and its `L` prefix puts it outside the
@@ -1048,6 +1065,13 @@ fn lookup_code(code: &str) -> Vec<CodeEntry> {
         .filter(|(c, _)| *c == code)
         .map(|(_, e)| *e)
         .collect()
+}
+
+/// A catalogued symbolic code (`E_NOT_CROSS_TASK`, `E_MODULE_LET`): `karac
+/// explain` reads it as a code, not as the class name its UPPER_SNAKE shape
+/// would otherwise make it.
+pub fn is_symbolic_code(name: &str) -> bool {
+    name.starts_with("E_") && !lookup_code(name).is_empty()
 }
 
 fn unknown_code_message(code: &str) -> String {
@@ -2372,10 +2396,11 @@ mod tests {
             P::ReservedKeyword,
             P::RawIdentNotAllowed,
             P::ReservedSyntax,
+            P::DuplicateLintLevel,
         ];
         assert_eq!(
             all.len(),
-            5,
+            6,
             "ParseErrorKind gained a variant — add it here and to CODE_TABLE"
         );
         for kind in all {

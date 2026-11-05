@@ -21,6 +21,11 @@ accepted by 0.8.0 are now refused, each with a fix-it.
 
 ### Programs 0.8.0 accepted that are now refused
 
+- **A multi-segment attribute path outside the compiler's namespaces.**
+  `#[tool::name]` was dropped silently; attribute paths have one segment in
+  v1, apart from `karac::` (the protobuf derive's `#[karac::proto]` and
+  `#[karac::field]`) and `diagnostic::`, and an unknown `karac::` name is
+  refused too (design.md § Attributes, B-2026-11-05-17).
 - **`karac check` borrow-checks functions nothing calls yet, and libraries.**
   The MIR move and borrow checks ran only on what `main` reaches, so a
   library's `pub fn bad() -> Str { let s = ..; s.as_str() }` checked clean
@@ -180,6 +185,13 @@ accepted by 0.8.0 are now refused, each with a fix-it.
 
 ### Diagnostics
 
+- `#[allow(unfulfilled_lint_expectation)]` on a function or impl covers an
+  `#[expect]` on a statement inside it; `-A` / `-W` / `-D` / `-F` naming no
+  lint warns `unknown_lint`, as an attribute does; an unknown lint and an
+  unfulfilled expectation print one level in their label; and `karac
+  explain` answers the spec's symbolic codes (`E_NOT_CROSS_TASK`,
+  `E_DUPLICATE_LINT_LEVEL`, ...), the last now with its own code, E0006
+  (B-2026-11-05-17).
 - `karac check --output=jsonl` streams every diagnostic the batch
   `--output=json` document lists, as `diagnostic` events with the same ids
   at each phase's boundary; it printed only parse errors, and those without

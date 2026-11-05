@@ -4693,8 +4693,8 @@ impl<'a> TypeChecker<'a> {
             for ov in &inner {
                 if crate::lints::lint_by_name(&ov.lint).is_none() {
                     let message = format!(
-                        "error[E_UNKNOWN_LINT]: unknown lint name `{}` in lint-level attribute; \
-                         remove the attribute or check the lint registry",
+                        "unknown lint name `{}` in lint-level attribute; remove the attribute \
+                         or check the lint registry (`karac lint --list`)",
                         ov.lint,
                     );
                     self.type_lint_warning(
@@ -4872,12 +4872,17 @@ impl<'a> TypeChecker<'a> {
         // is deterministic; `FxHashMap` is not.
         let mut stmt_overrides: Vec<_> = self.program.stmt_lint_overrides.iter().collect();
         stmt_overrides.sort_by_key(|(k, _)| (k.0, k.1));
-        for (_, overs) in stmt_overrides {
+        for (key, overs) in &stmt_overrides {
+            // The levels around the statement, outermost first, so an
+            // `#[allow(unfulfilled_lint_expectation)]` on its function (or an
+            // enclosing statement) covers it, as it covers an item-level
+            // `#[expect]` (B-2026-11-05-17).
+            let outer = enclosing_lint_levels(self.program, &stmt_overrides, key);
             collect_unfulfilled_expects(
                 overs,
                 &self.fulfilled_expectations,
-                Vec::new(),
-                overs.clone(),
+                outer,
+                (*overs).clone(),
                 &mut emissions,
             );
         }
@@ -4888,7 +4893,7 @@ impl<'a> TypeChecker<'a> {
             }
             self.lint_override_stack.push(inner);
             let message = format!(
-                "warning[unfulfilled_lint_expectation]: the lint `{lint_name}` did not fire \
+                "the lint `{lint_name}` did not fire \
                  anywhere in the scope of this `#[expect({lint_name})]` — either the lint \
                  has been fixed (remove the attribute) or the attribute was attached to the \
                  wrong scope",
@@ -8758,6 +8763,47 @@ fn collect_unfulfilled_expects(
             ));
         }
     }
+}
+
+/// The lint levels in force around the statement keyed `at`, outermost first:
+/// its impl block's, its function's or method's, then those of each enclosing
+/// statement in `stmts`. A frame read last-first gives the innermost its say.
+fn enclosing_lint_levels(
+    program: &Program,
+    stmts: &[(
+        &crate::resolver::SpanKey,
+        &Vec<crate::lints::LintLevelOverride>,
+    )],
+    at: &crate::resolver::SpanKey,
+) -> Vec<crate::lints::LintLevelOverride> {
+    let inside = |span: &Span| span.offset <= at.0 && at.0 + at.1 <= span.offset + span.length;
+    let mut out = Vec::new();
+    for item in &program.items {
+        match item {
+            Item::Function(f) if inside(&f.span) => out.extend(f.lint_overrides.iter().cloned()),
+            Item::ImplBlock(imp) if inside(&imp.span) => {
+                out.extend(imp.lint_overrides.iter().cloned());
+                for impl_item in &imp.items {
+                    if let ImplItem::Method(f) = impl_item {
+                        if inside(&f.span) {
+                            out.extend(f.lint_overrides.iter().cloned());
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    // Enclosing statements, widest first.
+    let mut around: Vec<_> = stmts
+        .iter()
+        .filter(|(k, _)| (k.0, k.1) != (at.0, at.1) && k.0 <= at.0 && at.0 + at.1 <= k.0 + k.1)
+        .collect();
+    around.sort_by_key(|(k, _)| std::cmp::Reverse(k.1));
+    for (_, overs) in around {
+        out.extend(overs.iter().cloned());
+    }
+    out
 }
 
 /// The item's own lint overrides (the attached `#[allow]` / `#[warn]`

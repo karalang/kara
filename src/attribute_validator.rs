@@ -564,6 +564,21 @@ fn check_item_default(item: &Item, errors: &mut Vec<ResolveError>) {
     }
 }
 
+/// The `karac::` namespace's members: the protobuf derive's field and type
+/// helpers (`runtime/stdlib/protobuf.kara`).
+const KARAC_NAMESPACE_ATTRIBUTES: &[&str] = &["proto", "field"];
+
+fn unknown_path_attribute(attr: &Attribute, message: String) -> ResolveError {
+    ResolveError {
+        message,
+        span: attr.span,
+        kind: ResolveErrorKind::UnknownAttribute,
+        suggestion: None,
+        replacement: None,
+        stub_hint: None,
+    }
+}
+
 fn visit_attrs(attrs: &[Attribute], errors: &mut Vec<ResolveError>) {
     for attr in attrs {
         if attr.path.len() == 1 {
@@ -572,10 +587,9 @@ fn visit_attrs(attrs: &[Attribute], errors: &mut Vec<ResolveError>) {
                 errors.push(ResolveError {
                     message: format!(
                         "error[E_UNKNOWN_ATTRIBUTE]: unknown attribute `{name}` — the \
-                         compiler does not recognise this bare-name attribute. If you \
-                         intended a diagnostic hint, write `#[diagnostic::{name}]`; if \
-                         you intended a tool attribute, use a namespaced form like \
-                         `#[your_tool::{name}]`."
+                         compiler does not recognise this bare-name attribute (design.md \
+                         § Attributes lists them). If you intended a diagnostic hint, \
+                         write `#[diagnostic::{name}]`."
                     ),
                     span: attr.span,
                     kind: ResolveErrorKind::UnknownAttribute,
@@ -591,10 +605,41 @@ fn visit_attrs(attrs: &[Attribute], errors: &mut Vec<ResolveError>) {
             // `diagnostic::do_not_recommend`); slice 2 silently accepts
             // every member so the namespace's "unknown member is accepted
             // silently" rule is honoured.
+        } else if attr.path[0] == "karac" {
+            // The compiler's own namespace (design.md § Attributes, 219b88a4a2):
+            // the protobuf derive's helpers. A name it does not define is an
+            // error, as an unknown bare name is.
+            let member = attr.path[1..].join("::");
+            if !KARAC_NAMESPACE_ATTRIBUTES.contains(&member.as_str()) {
+                errors.push(unknown_path_attribute(
+                    attr,
+                    format!(
+                        "error[E_UNKNOWN_ATTRIBUTE]: unknown attribute `#[karac::{member}]` — \
+                         the `karac::` namespace holds the compiler's own attributes, {}",
+                        KARAC_NAMESPACE_ATTRIBUTES
+                            .iter()
+                            .map(|n| format!("`#[karac::{n}]`"))
+                            .collect::<Vec<_>>()
+                            .join(" and "),
+                    ),
+                ));
+            }
         } else {
-            // Tool-namespaced path (`#[karafmt::skip]`, …). Silently
-            // accepted; item 37 formalises the rule + the
-            // `karac query attributes` read surface.
+            // A tool-namespaced path (`#[karafmt::skip]`). Attribute paths have
+            // one segment in v1 and tool namespaces are deferred (design.md
+            // § Attributes), so it is refused rather than silently dropped
+            // (B-2026-11-05-17).
+            let path = attr.path.join("::");
+            errors.push(unknown_path_attribute(
+                attr,
+                format!(
+                    "error[E_UNKNOWN_ATTRIBUTE]: `#[{path}]` has a multi-segment path — \
+                     attribute paths have one segment in v1 (tool namespaces such as \
+                     `#[{}::…]` come later), apart from the compiler's `karac::` and \
+                     `diagnostic::` namespaces",
+                    attr.path[0],
+                ),
+            ));
         }
     }
 

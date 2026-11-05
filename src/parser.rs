@@ -55,6 +55,9 @@ pub enum ParseErrorKind {
     /// peers) — valid-looking code the language reserves rather than rejects
     /// as nonsense; tools should surface these as "not yet", not "wrong".
     ReservedSyntax,
+    /// One lint named twice in one lint-level attribute,
+    /// `error[E_DUPLICATE_LINT_LEVEL]` (design.md § Lint levels).
+    DuplicateLintLevel,
 }
 
 impl ParseErrorKind {
@@ -72,6 +75,7 @@ impl ParseErrorKind {
             // design.md § Raw Identifiers name it `E_RAW_IDENT_NOT_ALLOWED`.
             ParseErrorKind::RawIdentNotAllowed => "E0004",
             ParseErrorKind::ReservedSyntax => "E0005",
+            ParseErrorKind::DuplicateLintLevel => "E0006",
         }
     }
 }
