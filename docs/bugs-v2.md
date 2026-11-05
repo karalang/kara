@@ -58,16 +58,16 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 135 |
-| false-positive | 113 |
+| diagnostics | 138 |
+| false-positive | 116 |
 | perf | 98 |
-| missing-feature | 76 |
+| missing-feature | 80 |
 | soundness | 50 |
-| miscompile | 35 |
+| miscompile | 36 |
 | run-vs-build | 23 |
 | codegen-gap | 22 |
-| other | 18 |
-| crash | 8 |
+| other | 19 |
+| crash | 9 |
 | leak | 4 |
 | use-after-free | 1 |
 
@@ -75,18 +75,18 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 203 |
-| mir | 119 |
-| mir-llvm | 116 |
-| cli | 55 |
-| ownership | 52 |
-| parser | 39 |
-| interp | 28 |
-| runtime | 23 |
-| effect | 23 |
+| typecheck | 205 |
+| mir | 120 |
+| mir-llvm | 117 |
+| cli | 61 |
+| ownership | 53 |
+| parser | 40 |
+| interp | 29 |
+| runtime | 24 |
+| effect | 24 |
 | codegen | 22 |
-| resolver | 7 |
-| other | 5 |
+| resolver | 9 |
+| other | 6 |
 | autopar | 4 |
 | lexer | 1 |
 ## Current state
@@ -104,7 +104,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-04-37 | 2026-11-04 | mir-llvm | low | Kata 342 runs 1.20x legacy's instructions and 1.39x its cycles on the MIR backend, the largest cycle ratio in its batch | — |
 | B-2026-11-04-39 | 2026-11-04 | mir-llvm | low | Katas 333 (1.19x) and 338 (1.17x) still execute over legacy's instructions on the M5 at eb17818b45 (LLVM 22), where 321, 337, 339 and 343 are within; both gaps are larger than x86's (1.05x, 1.10x); 338's inclusive-range piece is Thread B's | — |
 | B-2026-11-04-55 | 2026-11-04 | mir-llvm | low | `PriorityQueue.pop` sifts down by swapping, two comparisons a level, where Rust's `BinaryHeap::pop` sifts a hole to the bottom with one: kata 1046's bench (1000 piles of 3000 stones, 3 rounds of the heap game) runs 2.66x Rust's time under overflow checks, of which the compiler is about 1.15x and the heap algorithm the rest | — |
-| B-2026-11-04-78 | 2026-11-04 | typecheck | medium | A borrowed parameter passed where a library constructor takes `own Vec[T]` (`PriorityQueue.from(v)`, `max_first_from(v)` with `v: Vec[i64]`) draws "expected 'Vec[T]', found 'ref Vec[i64]'" and a cascade "cannot infer type parameter 'T'", with no fix; the same parameter given away by `let`/return gets "cannot give away parameter `v`" with its `own` / `.clone()` fix | — |
 | B-2026-11-04-79 | 2026-11-04 | typecheck | low | Tracker for the next minor release: `mut` on a field of a plain (non-`shared`) struct or enum becomes a compile error; in 0.8.x it is a `deprecated` warning with a `karac fix` that deletes it (ad5c10d728, design.md §5 Structs 25d27bd53a) | — |
 | B-2026-11-04-83 | 2026-11-04 | mir-llvm | low | The backend does not emit the facts LLVM 19-22 added: `range` attributes on parameters and returns, `nuw`/`nusw`/`inbounds` flags on GEPs beyond inbounds, `nuw`/`nsw` on `trunc`, `samesign` on `icmp`, and `captures(address/read_provenance)` beyond `captures(none)` | — |
 | B-2026-11-05-4 | 2026-11-05 | mir-llvm | medium | Three kata benches run 2-3x slower on LLVM 22 than on LLVM 18 at about the same instruction count (x86): teemo_attacking 357 ms vs 126 (x86's cmov converter now branches the loop's `min`), min_stack 900 vs 423 and hsearch (275) 925 vs 471 (not cmov, unattributed); the frozen set's run-time geomean is unchanged (0.995) | — |
@@ -114,6 +113,19 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-05-8 | 2026-11-05 | ownership | medium | `assert_eq(v, e)` and `assert_ne(s, "b")` move a non-Copy operand, so using it afterwards is E0500; design.md §14 says both operands are borrowed and stay usable | — |
 | B-2026-11-05-9 | 2026-11-05 | typecheck | low | §14 testing roll-up: assert_eq/assert_ne failure messages omit the `left:`/`right:`/`value:` lines; assert_eq accepts a type with no Debug; `karac test` panics in Rust on a closed stdout | — |
 | B-2026-11-05-10 | 2026-11-05 | mir-llvm | high | Kata 73's bench runs 21x slower on the default pool than on one worker (10.1 s against 0.48 s, 4 workers, x86): auto-par runs its 20-row matrix build (400 pushes) as tasks on every one of 100,000 outer trips, since a loop inside a loop was refused only at 16 trips or fewer | — |
+| B-2026-11-05-11 | 2026-11-05 | effect | medium | The target gate never refuses ProcessTable on wasm_wasi: a program that spawns a process passes `karac check --targets=all` and a `[build] targets = ["native", "wasm_wasi"]` matrix, and `karac build --target=wasm_wasi` emits a module that runs; design.md §16 makes it error E0411 with the call chain | — |
+| B-2026-11-05-12 | 2026-11-05 | cli | low | §16 targets roll-up: artifact paths differ from the spec; the multi-target check JSON is neither tagged nor deduplicated; `--targets=all` also runs wasm_browser and gpu, so every printing program fails it; `[profile.release]` is ignored; `--target-cpu=help` prints to stderr; wasm builds need the host's rustc with the wasm32-wasip1 target | — |
+| B-2026-11-05-13 | 2026-11-05 | cli | medium | `--output=jsonl` (check and build, single file and package) never emits a `diagnostic` event for resolve, typecheck, effect or ownership errors, so a client cannot rebuild the batch document from the stream (design.md §17 Streaming phase events, invariants 1 and 2) | — |
+| B-2026-11-05-14 | 2026-11-05 | cli | medium | `karac fmt` drops the trailing comma of a one-element tuple TYPE, so `(i64,)` becomes `(i64)` and the formatted program no longer typechecks (and a second fmt is not idempotent) | — |
+| B-2026-11-05-15 | 2026-11-05 | other | medium | kara-lsp treats a file inside a package as package-less: `import util;` in src/main.kara of a package with kara.toml gets a false `unknown module util` error, so every multi-file package shows red in the editor | — |
+| B-2026-11-05-16 | 2026-11-05 | typecheck+cli | medium | In a package, `karac check` drops the cross-module `deprecated` warning unless the check also has an error; `karac build` reports it, and a single file reports it | — |
+| B-2026-11-05-17 | 2026-11-05 | cli | low | §17 tooling roll-up: batch JSON lacks `concept`, the 20-per-file cascade cap and E0400's `derivation`/`inferred_effects`/`declared_effects`; fix hints have two shapes and no `diff`; `karac fix` has none of the five style lints and cannot fix E0400 or missing arms; query has no `derivation`; explain lacks concept ids and items; lint and attribute edge cases | — |
+| B-2026-11-05-18 | 2026-11-05 | runtime+cli | low | §17 panic record and debugger contract are not emitted: no JSONL panic event on stderr under `karac run`/`karac test`, no record `kind`, so `karac debug` has nothing to read; `std.runtime` (has_debug_metadata, list_tasks, list_par_blocks) is an unknown module | — |
+| B-2026-11-05-19 | 2026-11-05 | resolver | high | Parallel assignment (`a, b = b, a`, `v[i], v[j] = v[j], v[i]`) in ANY package panics the compiler: `entered unreachable code: StmtKind::MultiAssign is removed by the desugar pass before reaching this phase` (src/resolver/resolve_block.rs:155) on check, run, run --interp and build | — |
+| B-2026-11-05-20 | 2026-11-05 | mir+mir-llvm+interp | high | A `for` over an open range `lo..` wraps silently past the type's MAX on JIT, debug and release AOT (`for i in (i64.MAX - 1)..` yields MAX-1, MAX, MIN, MIN+1; `for b in 254u8..` yields 254, 255, 0, 1), and the MIR interpreter dies with `unchecked Add overflowed; the builder must use CheckedBinaryOp` | — |
+| B-2026-11-05-21 | 2026-11-05 | resolver | medium | In a package, every user operator-trait impl (`impl Add for V`, `impl Index[(i64, i64)] for Grid`, ...) is refused with E0108 `user-defined impl Add for V is not supported in 0.8; operator traits are stdlib-only`; the same file outside a package compiles and runs | — |
+| B-2026-11-05-22 | 2026-11-05 | ownership | medium | Definite assignment ignores diverging paths: `let x: i64; if k > 0 { x = k; } else { return 0; } x` and the same with `panic(..)` in the else or in a match arm are refused `use of uninitialized binding`, and so is a `loop` whose only `break` follows an assignment inside an `if` | — |
+| B-2026-11-05-23 | 2026-11-05 | typecheck+parser | low | §6 expressions roll-up: `if c { 5 }` in statement position is accepted; an unparenthesized struct literal in an `if` condition is accepted; `u == ()` is `comparing this type is not lowered yet`; RangeTo/RangeToInclusive/RangeFull are undefined type names; `ambiguous_not_comparison` never runs; a discarded tuple of Results warns nothing (item 8, multi-assign order, is CONFORMANT per the 43518f58d7 decision: values first) | — |
 
 ### Relocated
 
@@ -694,6 +706,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-04-75 | typecheck | low | An empty list literal compared with a typed `Vec` (`v == []`) is refused with MIR's internal "a type that failed to check is not lowered yet"; the ot… | e06766fe96 |
 | B-2026-11-04-76 | parser | low | A closure parameter written `mut acc` (Rust's `fold(init, \|mut acc, x\| ..)`) is refused with "'mut' is a reserved keyword and cannot be used as an id… | dd0d3d3fa3 |
 | B-2026-11-04-77 | typecheck | low | `Vec` has no `drain(range)`: Rust's `v.drain(i..i + 2);` gets only "no method 'drain' on type 'Vec'" with no hint, though `remove`, `truncate` and `s… | 4e87c65465 |
+| B-2026-11-04-78 | typecheck | medium | A borrowed parameter passed where a library constructor takes `own Vec[T]` (`PriorityQueue.from(v)`, `max_first_from(v)` with `v: Vec[i64]`) draws "e… | 5190a456b6 |
 | B-2026-11-04-80 | typecheck | low | Remainder of B-2026-11-04-71: `.unwrap()` on an Option gets no `.expect("...")` suggestion with a fix (design.md §11 Ergonomics), and a use of a `#[d… | 7d007768dd |
 | B-2026-11-04-81 | interp+mir-llvm | low | Remainder of B-2026-11-04-72: the shared-field borrow-flag panic says "already borrowed: this `shared` field is borrowed through another handle" with… | 872c092c69 |
 | B-2026-11-04-82 | mir-llvm | high | An integer tuple literal passed as a collection key or compared with `==`/`<` keeps the default (i64, i64) layout instead of the declared narrow tupl… | 89324c3d8f |
