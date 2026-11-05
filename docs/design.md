@@ -2049,7 +2049,7 @@ v[i], v[j] = v[j], v[i];           // swap two slots of a Vec of a Copy type
 x, y, z = z, x, y;                 // rotate three locals
 ```
 
-Every value on the right is evaluated, left to right, before any target is written; that is what makes `a, b = b, a` a swap. Both sides must list the same number of items (a mismatch is a parse error), and each target follows the place rules above. This is the in-place idiom that swap-based sorts and permutation generators rely on.
+Every value on the right is evaluated, left to right, before any target is written; that is what makes `a, b = b, a` a swap. Then each target's place operands (an index, a field path) are evaluated and the target written, left to right, one target at a time. This is the one place where values come before places; a single `p = v` evaluates `p`'s operands first ([core-semantics.md §8.2](core-semantics.md#8-evaluation-order)). So `v[i], i = 0, 5` writes `v[i]` with the old `i`. (B-2026-11-05-23) Both sides must list the same number of items (a mismatch is a parse error), and each target follows the place rules above. This is the in-place idiom that swap-based sorts and permutation generators rely on.
 
 Assignment is a statement, not an expression: it has no value. It may also be the body of a `match` arm ([Pattern matching](#pattern-matching)).
 
