@@ -1,0 +1,18 @@
+first 10/1 email
+last 30/3 report
+pop 10/1 email! tries=1
+pop 10/4 webhook! tries=1
+pop 20/2 charge! tries=1
+pop_last 30/3 report!
+left 0
+empty pops true true true
+visited apple,fig,kiwi,pear,plum
+kept apple=30,fig=70,plum=20
+keys apple,fig,plum
+values 30,70,20
+sessions s1=ana@x,s2=bo@x (kept),s4=di@x
+map keys s1,s2,s4
+map values ana@x,bo@x (kept),di@x
+set pops a x
+set left c,q
+set empty true true

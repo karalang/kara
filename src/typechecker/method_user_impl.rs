@@ -138,6 +138,26 @@ impl<'a> super::TypeChecker<'a> {
                 };
                 (name.clone(), 0, vec)
             }
+            // `take_entry_at(i)` moves the `i`th entry out of a set or map
+            // (`pop_first` / `pop_last`), and `value_at_mut(i)` lends the
+            // `i`th value of a map in place (`values_mut`), B-2026-11-05-41.
+            (Type::Named { name, args: targs }, "take_entry_at" | "value_at_mut") => {
+                let ret = match (
+                    method,
+                    name.as_str(),
+                    crate::typechecker::types::element_args(name, targs),
+                ) {
+                    ("take_entry_at", "Set" | "SortedSet", [t]) => t.clone(),
+                    ("take_entry_at", "Map" | "SortedMap", [k, v]) => {
+                        Type::Tuple(vec![k.clone(), v.clone()])
+                    }
+                    ("value_at_mut", "Map" | "SortedMap", [_, v]) => {
+                        Type::MutRef(Box::new(v.clone()))
+                    }
+                    _ => return None,
+                };
+                (name.clone(), 1, ret)
+            }
             (Type::Str, "char_at_byte" | "char_before_byte") => {
                 ("String".to_string(), 1, Type::Char)
             }

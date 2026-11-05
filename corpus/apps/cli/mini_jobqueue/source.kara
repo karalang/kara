@@ -598,14 +598,8 @@ impl Engine {
     }
 
     fn promote(mut ref self) {
-        let mut due: Vec[i64] = Vec.new();
-        for j in self.jobs.values() {
+        for j in self.jobs.values_mut() {
             if j.state.waiting() and j.due <= self.now {
-                due.push(j.id);
-            }
-        }
-        for id in due.iter() {
-            if let Some(j) = self.jobs.get_mut(id) {
                 j.state = State.Available;
             }
         }

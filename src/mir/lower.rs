@@ -25328,6 +25328,8 @@ impl<'l, 'a> Bx<'l, 'a> {
                                     | "sort_unstable_by"
                                     | "entry"
                                     | "drain_entries"
+                                    | "take_entry_at"
+                                    | "value_at_mut"
                                     // Its halves hold a mutable loan of the
                                     // sequence (B-2026-10-21-29).
                                     | "split_at_mut"

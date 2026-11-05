@@ -173,11 +173,12 @@ at the final time) gives the same queues, jobs and next id as memory
 
 ## Compiler gaps found
 
-- B-2026-11-05-41: the first draft promoted due jobs with
-  `for j in jobs.values_mut()`, Rust's spelling, and karac answered a bare
-  `no method 'values_mut' on type 'SortedMap'`. Kāra's is
-  `for (_, j) in jobs.iter_mut()`; the program collects the due ids and
-  calls `get_mut` on each. The same bare error meets `retain`,
-  `pop_first`, `first_key_value` and the other Rust map methods, and
-  `SortedMap` has no first, last or pop of its own (a library-spec
-  question, routed to the review thread).
+- B-2026-11-05-41 (fixed; first filed as -24, renumbered at landing): the first draft promoted due jobs with
+  `for j in jobs.values_mut()`, and karac answered a bare
+  `no method 'values_mut' on type 'SortedMap'`, so the program collected
+  the due ids and called `get_mut` on each. The library spec now gives
+  `Map` and `SortedMap` `values_mut`, `into_keys`, `into_values` and
+  `retain`, `SortedMap` `first`, `last`, `pop_first` and `pop_last`, and
+  `SortedSet` `pop_first`, `pop_last` and `retain`; Rust names Kāra spells
+  differently (`first_key_value`, a sorted set's `first`) get a diagnostic
+  naming Kāra's method. `promote` is back to the `values_mut` loop.

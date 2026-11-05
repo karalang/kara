@@ -971,6 +971,36 @@ impl<'ctx> Cx<'ctx, '_> {
                     self.store(d, at.into())?;
                 }
             }
+            // `pop_first` / `pop_last`: the `i`th entry moved out whole
+            // into the destination (B-2026-11-05-41).
+            ("take_entry_at", [i]) => {
+                let h = self.load_ptr(hp)?;
+                let i = self.int_arg(i)?;
+                let n = self.table_len(h)?;
+                let ok = self
+                    .builder
+                    .build_int_compare(IntPredicate::ULT, i, n, "")
+                    .map_err(e)?;
+                self.abort_unless(ok, "index out of bounds")?;
+                let at = self.walk_at(h, i, t)?;
+                let d = self.place_ptr(dest)?;
+                self.rt("map_remove_entry", &[h.into(), at.into(), d.into()])?;
+            }
+            // `values_mut`: the `i`th value, lent in place.
+            ("value_at_mut", [i]) if is_map => {
+                let h = self.load_ptr(hp)?;
+                let i = self.int_arg(i)?;
+                let n = self.table_len(h)?;
+                let ok = self
+                    .builder
+                    .build_int_compare(IntPredicate::ULT, i, n, "")
+                    .map_err(e)?;
+                self.abort_unless(ok, "index out of bounds")?;
+                let at = self.walk_at(h, i, t)?;
+                let v = self.offset(at, self.val_off(t)?)?;
+                let d = self.place_ptr(dest)?;
+                self.lend_value(d, v, t)?;
+            }
             ("insert", [k, rest @ ..]) => self.table_insert(hp, t, k, rest, dest, dty, unit)?,
             ("entries", []) if is_map => {
                 let h = self.load_ptr(hp)?;

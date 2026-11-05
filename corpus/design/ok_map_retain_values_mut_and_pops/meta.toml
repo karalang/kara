@@ -1,0 +1,9 @@
+source = "B-2026-11-05-41"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "collections", "library"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "docs/library/collections.md (5033cb49da): Map and SortedMap values_mut, into_keys, into_values and retain (pred borrows the key and may change the value; SortedMap's in key order); SortedMap first/last (borrowed) and pop_first/pop_last (owned); SortedSet pop_first/pop_last and retain. String keys and values exercise moves and drops on every lane; the Map's results are sorted because its order is unspecified."

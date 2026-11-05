@@ -1,0 +1,102 @@
+// docs/library/collections.md (5033cb49da, B-2026-11-05-41): `Map` and
+// `SortedMap` have `values_mut`, `into_keys`, `into_values` and `retain`;
+// `SortedMap` has `first`, `last`, `pop_first` and `pop_last`; `SortedSet`
+// has `pop_first`, `pop_last` and `retain`. Keys and values are Strings so
+// every move and drop is exercised.
+
+#[derive(Clone)]
+struct Job {
+    name: String,
+    tries: i64,
+}
+
+fn sorted(v: own Vec[String]) -> String {
+    let mut v = v;
+    v.sort();
+    v.join(",")
+}
+
+fn main() {
+    // SortedMap as a timer queue: (due, id) -> job.
+    let mut q: SortedMap[(i64, i64), Job] = SortedMap.new();
+    q.insert((30, 3), Job { name: "report".to_string(), tries: 0 });
+    q.insert((10, 1), Job { name: "email".to_string(), tries: 0 });
+    q.insert((20, 2), Job { name: "charge".to_string(), tries: 0 });
+    q.insert((10, 4), Job { name: "webhook".to_string(), tries: 0 });
+    match q.first() {
+        Some((k, j)) => println(f"first {k.0}/{k.1} {j.name}"),
+        None => println("empty"),
+    }
+    match q.last() {
+        Some((k, j)) => println(f"last {k.0}/{k.1} {j.name}"),
+        None => println("empty"),
+    }
+    for j in q.values_mut() {
+        j.tries += 1;
+        j.name.push_str("!");
+    }
+    while let Some(((due, id), j)) = q.pop_first() {
+        println(f"pop {due}/{id} {j.name} tries={j.tries}");
+        if j.name == "charge!" {
+            break;
+        }
+    }
+    if let Some((k, j)) = q.pop_last() {
+        println(f"pop_last {k.0}/{k.1} {j.name}");
+    }
+    println(f"left {q.len()}");
+    println(f"empty pops {q.pop_first().is_none()} {q.pop_last().is_none()} {q.first().is_none()}");
+
+    // SortedMap retain, in key order; pred may change the value.
+    let mut stock: SortedMap[String, i64] = SortedMap.new();
+    for (k, n) in [("apple", 3), ("pear", 0), ("fig", 7), ("kiwi", 0), ("plum", 2)] {
+        stock.insert(k.to_string(), n);
+    }
+    let mut seen: Vec[String] = Vec.new();
+    stock.retain(|k, n| {
+        seen.push(k.clone());
+        *n = *n * 10;
+        *n > 0
+    });
+    println(f"visited {seen.join(",")}");
+    let rows: Vec[String] = stock.iter().map(|(k, n)| f"{k}={n}").collect();
+    println(f"kept {rows.join(",")}");
+    let keys: Vec[String] = stock.clone().into_keys().collect();
+    println(f"keys {keys.join(",")}");
+    let vals: Vec[String] = stock.into_values().map(|n| f"{n}").collect();
+    println(f"values {vals.join(",")}");
+
+    // Map: the same methods; its order is unspecified, so results are sorted.
+    let mut sessions: Map[String, String] = Map.new();
+    sessions.insert("s1".to_string(), "ana".to_string());
+    sessions.insert("s2".to_string(), "bo".to_string());
+    sessions.insert("s3".to_string(), "cy".to_string());
+    sessions.insert("s4".to_string(), "di".to_string());
+    for user in sessions.values_mut() {
+        user.push_str("@x");
+    }
+    sessions.retain(|id, user| {
+        if id == "s2" {
+            user.push_str(" (kept)");
+        }
+        id != "s3"
+    });
+    let rows: Vec[String] = sessions.iter().map(|(k, v)| f"{k}={v}").collect();
+    println(f"sessions {sorted(rows)}");
+    let ks: Vec[String] = sessions.clone().into_keys().collect();
+    println(f"map keys {sorted(ks)}");
+    let vs: Vec[String] = sessions.into_values().collect();
+    println(f"map values {sorted(vs)}");
+
+    // SortedSet.
+    let mut ids: SortedSet[String] = SortedSet.new();
+    for s in ["m", "c", "x", "a", "q"] {
+        ids.insert(s.to_string());
+    }
+    println(f"set pops {ids.pop_first() ?? "-".to_string()} {ids.pop_last() ?? "-".to_string()}");
+    ids.retain(|s| s != "m");
+    let rest: Vec[String] = ids.iter().cloned().collect();
+    println(f"set left {rest.join(",")}");
+    let mut none: SortedSet[i64] = SortedSet.new();
+    println(f"set empty {none.pop_first().is_none()} {none.pop_last().is_none()}");
+}

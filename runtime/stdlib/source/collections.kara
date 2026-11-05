@@ -415,6 +415,36 @@ impl[T] SortedSet[T] {
     fn iter(ref self) -> SortedSetIter[T] {
         SortedSetIter { s: self, front: 0, back: self.len() }
     }
+
+    /// Removes and returns the smallest element (B-2026-11-05-41).
+    fn pop_first(mut ref self) -> Option[T] {
+        if self.len() == 0 {
+            return None;
+        }
+        Some(self.take_entry_at(0))
+    }
+
+    /// Removes and returns the largest element.
+    fn pop_last(mut ref self) -> Option[T] {
+        let n = self.len();
+        if n == 0 {
+            return None;
+        }
+        Some(self.take_entry_at(n - 1))
+    }
+}
+
+impl[T: Ord] SortedSet[T] {
+    /// Keeps the elements `pred` accepts and drops the rest, in ascending
+    /// order.
+    fn retain(mut ref self, pred: own MutFn(T) -> bool) {
+        let mut f = pred;
+        for x in self.drain_entries().into_iter() {
+            if f(x) {
+                self.insert(x);
+            }
+        }
+    }
 }
 
 impl[T: Ord] SortedSet[T] {
@@ -520,6 +550,66 @@ impl[K: Hash + Eq, V] Map[K, V] {
             None
         }
     }
+
+    /// The values, in the map's iteration order, each borrowed to be
+    /// changed in place (B-2026-11-05-41).
+    fn values_mut(mut ref self) -> MapValuesMut[K, V] {
+        let n = self.len();
+        MapValuesMut { m: self, front: 0, back: n }
+    }
+
+    /// The keys moved out, in the map's iteration order; the values drop.
+    fn into_keys(own self) -> VecIntoIter[K] {
+        let mut c = self;
+        let mut out: Vec[K] = Vec.new();
+        for (k, _) in c.drain_entries().into_iter() {
+            out.push(k);
+        }
+        out.into_iter()
+    }
+
+    /// The values moved out, in the map's iteration order; the keys drop.
+    fn into_values(own self) -> VecIntoIter[V] {
+        let mut c = self;
+        let mut out: Vec[V] = Vec.new();
+        for (_, v) in c.drain_entries().into_iter() {
+            out.push(v);
+        }
+        out.into_iter()
+    }
+
+    /// Keeps the entries for which `pred` returns `true` and drops the
+    /// rest. `pred` borrows the key and may change the value.
+    fn retain(mut ref self, pred: own MutFn(K, mut ref V) -> bool) {
+        let mut f = pred;
+        for (k, v) in self.drain_entries().into_iter() {
+            let mut v = v;
+            if f(k, mut v) {
+                self.insert(k, v);
+            }
+        }
+    }
+}
+
+/// The values of a map, in the map's iteration order, each borrowed to be
+/// changed in place. Each value is handed out once.
+struct MapValuesMut[K: Hash + Eq, V] {
+    m: mut ref Map[K, V],
+    front: i64,
+    back: i64,
+}
+
+impl[K, V] Iterator for MapValuesMut[K, V] {
+    type Item = mut ref V;
+
+    fn next(mut ref self) -> Option[Self.Item] {
+        if self.front >= self.back {
+            return None;
+        }
+        let i = self.front;
+        self.front = i + 1;
+        Some(self.m.value_at_mut(i))
+    }
 }
 
 /// The keys of a map, in the map's iteration order, each borrowed.
@@ -621,6 +711,90 @@ impl[K, V] SortedMap[K, V] {
             None
         }
     }
+
+    /// The values, in key order, each borrowed to be changed in place
+    /// (B-2026-11-05-41).
+    fn values_mut(mut ref self) -> SortedMapValuesMut[K, V] {
+        let n = self.len();
+        SortedMapValuesMut { m: self, front: 0, back: n }
+    }
+
+    /// The keys moved out, ascending; the values drop.
+    fn into_keys(own self) -> VecIntoIter[K] {
+        let mut c = self;
+        let mut out: Vec[K] = Vec.new();
+        for (k, _) in c.drain_entries().into_iter() {
+            out.push(k);
+        }
+        out.into_iter()
+    }
+
+    /// The values moved out, in key order; the keys drop.
+    fn into_values(own self) -> VecIntoIter[V] {
+        let mut c = self;
+        let mut out: Vec[V] = Vec.new();
+        for (_, v) in c.drain_entries().into_iter() {
+            out.push(v);
+        }
+        out.into_iter()
+    }
+
+    /// The entry with the smallest key, borrowed. Rust's `first_key_value`.
+    fn first(ref self) -> Option[(ref K, ref V)] {
+        if self.len() == 0 {
+            return None;
+        }
+        let (k, v) = self.entry_at(0);
+        Some((k, v))
+    }
+
+    /// The entry with the largest key, borrowed. Rust's `last_key_value`.
+    fn last(ref self) -> Option[(ref K, ref V)] {
+        let n = self.len();
+        if n == 0 {
+            return None;
+        }
+        let (k, v) = self.entry_at(n - 1);
+        Some((k, v))
+    }
+
+    /// Removes and returns the entry with the smallest key.
+    fn pop_first(mut ref self) -> Option[(K, V)] {
+        if self.len() == 0 {
+            return None;
+        }
+        Some(self.take_entry_at(0))
+    }
+
+    /// Removes and returns the entry with the largest key.
+    fn pop_last(mut ref self) -> Option[(K, V)] {
+        let n = self.len();
+        if n == 0 {
+            return None;
+        }
+        Some(self.take_entry_at(n - 1))
+    }
+}
+
+/// The values of a sorted map, in key order, each borrowed to be changed
+/// in place. Each value is handed out once.
+struct SortedMapValuesMut[K, V] {
+    m: mut ref SortedMap[K, V],
+    front: i64,
+    back: i64,
+}
+
+impl[K, V] Iterator for SortedMapValuesMut[K, V] {
+    type Item = mut ref V;
+
+    fn next(mut ref self) -> Option[Self.Item] {
+        if self.front >= self.back {
+            return None;
+        }
+        let i = self.front;
+        self.front = i + 1;
+        Some(self.m.value_at_mut(i))
+    }
 }
 
 impl[K: Ord, V] SortedMap[K, V] {
@@ -632,6 +806,18 @@ impl[K: Ord, V] SortedMap[K, V] {
             out.insert(k, x);
         }
         out
+    }
+
+    /// Keeps the entries for which `pred` returns `true` and drops the
+    /// rest, in key order. `pred` borrows the key and may change the value.
+    fn retain(mut ref self, pred: own MutFn(K, mut ref V) -> bool) {
+        let mut f = pred;
+        for (k, v) in self.drain_entries().into_iter() {
+            let mut v = v;
+            if f(k, mut v) {
+                self.insert(k, v);
+            }
+        }
     }
 
     /// The entries with keys in `[from, to)`, ascending, each key and

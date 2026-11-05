@@ -8689,6 +8689,24 @@ impl<'a> Interp<'a> {
                 self.drop_value(k, key_ty)?;
                 self.option(ret, Some(val))
             }
+            // `pop_first` / `pop_last`: the `i`th entry moved out
+            // (B-2026-11-05-41).
+            ("take_entry_at", [Value::Int(i)]) => {
+                let n = self.table_len(id)? as i128;
+                if !(0..n).contains(i) {
+                    return err(format!("{name}: index out of bounds"));
+                }
+                let i = self.walk_slot(id, *i, sorted)?;
+                self.table_remove(id, i, is_map, sorted)
+            }
+            // `values_mut`: the `i`th value, lent in place.
+            ("value_at_mut", [Value::Int(i)]) if is_map => {
+                let i = self.walk_slot(id, *i, sorted)?;
+                Ok(Value::Ref(Addr {
+                    root: Root::Heap(id),
+                    path: Path::from_slice(&[i as u64, 1]),
+                }))
+            }
             ("entry_at", [Value::Int(i)]) => {
                 // The `i`th entry in iteration order, for a borrowing `for`:
                 // a `ref (K, V)` into a Map, a `ref T` into a Set.
