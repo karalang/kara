@@ -2151,7 +2151,7 @@ Each iteration is its own scope: what it creates drops at the end of the iterati
 |---|---|---|---|
 | `lo..hi` | `Range[T]` | exclusive end, `[lo, hi)` | Yes |
 | `lo..=hi` | `RangeInclusive[T]` | inclusive end, `[lo, hi]` | Yes |
-| `lo..` | `RangeFrom[T]` | no upper end, `[lo, ∞)` | Yes; the loop must end by `break`, `take` or the like |
+| `lo..` | `RangeFrom[T]` | no upper end, `[lo, ∞)` | Yes; the loop must end by `break`, `take` or the like. It yields every value up to `T.MAX` and panics with overflow when asked for the one after: `254u8..` yields 254, 255, then panics |
 | `..hi` | `RangeTo[T]` | exclusive end only, `(-∞, hi)` | No |
 | `..=hi` | `RangeToInclusive[T]` | inclusive end only, `(-∞, hi]` | No |
 | `..` | `RangeFull` | no ends | No |
