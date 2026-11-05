@@ -120,11 +120,11 @@ ROWS = [
     ("B-2026-11-04-39", "301-400/339-nested-list-weight-sum", "nested_weight_sum.kara", "pair", "instructions", "x86 1.09x, not fixed"),
     # -41's bar is rustc -O's 0.819G instructions on the M5, not legacy's.
     ("B-2026-11-04-41", "301-400/344-reverse-string", "reverse_string.kara", "pair", "instructions", "x86 LLVM 22: 3.60G -> 0.25G"),
-    # -4: x86 LLVM 22 runs these 2-3x slower than LLVM 18 at about the same
+    # -4 (teemo, fixed ce0cf3209b) and -27: x86 LLVM 22 ran these 2-3x slower than LLVM 18 at about the same
     # instruction count; cycles say whether the M5 shares it.
-    ("B-2026-11-05-4", "401-500/495-teemo-attacking", "teemo_attacking.kara", "pair", "cycles", "x86 LLVM 22 357 ms vs 18's 126"),
-    ("B-2026-11-05-4", "101-200/155-min-stack", "min_stack.kara", "pair", "cycles", "x86 LLVM 22 900 ms vs 18's 423"),
-    ("B-2026-11-05-4", "201-300/275-h-index-ii", "hsearch.kara", "pair", "cycles", "x86 LLVM 22 925 ms vs 18's 471"),
+    ("B-2026-11-05-4", "401-500/495-teemo-attacking", "teemo_attacking.kara", "pair", "cycles", "x86 LLVM 22 357 ms vs 18's 126; fixed ce0cf3209b: 133"),
+    ("B-2026-11-05-27", "101-200/155-min-stack", "min_stack.kara", "pair", "cycles", "x86 LLVM 22 900 ms vs 18's 423"),
+    ("B-2026-11-05-27", "201-300/275-h-index-ii", "hsearch.kara", "pair", "cycles", "x86 LLVM 22 925 ms vs 18's 471"),
     ("B-2026-11-05-10", "1-100/73-set-matrix-zeroes", "set_matrix_zeroes.kara", "par", "wall", "x86 8.7 s -> 0.44 s; par lane"),
 ]
 

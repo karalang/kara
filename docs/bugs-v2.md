@@ -60,7 +60,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | diagnostics | 139 |
 | false-positive | 116 |
-| perf | 99 |
+| perf | 100 |
 | missing-feature | 81 |
 | soundness | 50 |
 | miscompile | 36 |
@@ -77,7 +77,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | typecheck | 206 |
 | mir | 120 |
-| mir-llvm | 118 |
+| mir-llvm | 119 |
 | cli | 62 |
 | ownership | 53 |
 | parser | 40 |
@@ -105,7 +105,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-04-39 | 2026-11-04 | mir-llvm | low | Katas 333 (1.19x) and 338 (1.17x) still execute over legacy's instructions on the M5 at eb17818b45 (LLVM 22), where 321, 337, 339 and 343 are within; both gaps are larger than x86's (1.05x, 1.10x); 338's inclusive-range piece is Thread B's | — |
 | B-2026-11-04-55 | 2026-11-04 | mir-llvm | low | `PriorityQueue.pop` sifts down by swapping, two comparisons a level, where Rust's `BinaryHeap::pop` sifts a hole to the bottom with one: kata 1046's bench (1000 piles of 3000 stones, 3 rounds of the heap game) runs 2.66x Rust's time under overflow checks, of which the compiler is about 1.15x and the heap algorithm the rest | — |
 | B-2026-11-04-79 | 2026-11-04 | typecheck | low | Tracker for the next minor release: `mut` on a field of a plain (non-`shared`) struct or enum becomes a compile error; in 0.8.x it is a `deprecated` warning with a `karac fix` that deletes it (ad5c10d728, design.md §5 Structs 25d27bd53a) | — |
-| B-2026-11-05-4 | 2026-11-05 | mir-llvm | medium | Three kata benches run 2-3x slower on LLVM 22 than on LLVM 18 at about the same instruction count (x86): teemo_attacking 357 ms vs 126 (x86's cmov converter now branches the loop's `min`), min_stack 900 vs 423 and hsearch (275) 925 vs 471 (not cmov, unattributed); the frozen set's run-time geomean is unchanged (0.995) | — |
 | B-2026-11-05-12 | 2026-11-05 | cli | low | §16 targets roll-up: artifact paths differ from the spec; the multi-target check JSON is neither tagged nor deduplicated; `--targets=all` also runs wasm_browser and gpu, so every printing program fails it; `[profile.release]` is ignored; `--target-cpu=help` prints to stderr; wasm builds need the host's rustc with the wasm32-wasip1 target | — |
 | B-2026-11-05-14 | 2026-11-05 | cli | medium | `karac fmt` drops the trailing comma of a one-element tuple TYPE, so `(i64,)` becomes `(i64)` and the formatted program no longer typechecks (and a second fmt is not idempotent) | — |
 | B-2026-11-05-15 | 2026-11-05 | other | medium | kara-lsp treats a file inside a package as package-less: `import util;` in src/main.kara of a package with kara.toml gets a false `unknown module util` error, so every multi-file package shows red in the editor | — |
@@ -115,6 +114,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-05-24 | 2026-11-05 | typecheck | low | A use of a deprecated item through a module binding (`import util;` then `util.old()`) is warned with the caret on the call's closing paren, not on `old`; `import util.{old};` then `old()` puts it on `old` | — |
 | B-2026-11-05-25 | 2026-11-05 | mir-llvm | low | The backend still emits none of the LLVM 19-22 facts B-2026-11-04-83 left: `range` attributes on parameters and returns, `icmp samesign`, and `captures(address/read_provenance)` beyond `captures(none)` | — |
 | B-2026-11-05-26 | 2026-11-05 | cli | low | package mode: `karac check --output=jsonl` on a package member prints `type_error` lines (no `type` stream, no ids) and stops at typecheck, `karac build --output=jsonl` in a package prints raw batch entries, and package `check --output=json` has no ids or `program_effects` (design.md §17; remainder of B-2026-11-05-13) | — |
+| B-2026-11-05-27 | 2026-11-05 | mir-llvm | medium | Two kata benches still run about 2x slower on LLVM 22 than on LLVM 18 (x86): min_stack (155) 951 ms vs 444 and hsearch (275) 1074 vs 526; teemo, the third of B-2026-11-05-4, is fixed | — |
 
 ### Relocated
 
@@ -703,6 +703,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-05-1 | typecheck | low | `a == r` with a non-Copy `T` beside a non-literal `ref T`: Gowtham decided 2026-11-05 that comparisons see through `ref` on either side for any T (de… | 2a3202d89d |
 | B-2026-11-05-2 | ownership | low | A MutFn closure passed to an `own MutFn()` parameter twice (`take(f); take(f);`) is accepted on every lane and runs as if copied; design.md §7 says a… | d78c610976 |
 | B-2026-11-05-3 | typecheck+other | low | Remainder of B-2026-11-04-80: the editor code action that rewrites `.unwrap()` on an ordinary (non-`weak`) Option to `.expect("…")` does not exist; d… | 5fd8c20172 |
+| B-2026-11-05-4 | mir-llvm | medium | Teemo_attacking ran 2.8x slower on LLVM 22 than on LLVM 18 (x86, 357 ms vs 126): LLVM 22's LICM stopped hoisting the Vec's data-pointer load on karac… | ce0cf3209b |
 | B-2026-11-05-5 | effect | medium | Two `par` branches that each apply `?` to a `Result[D, E]` whose `D` has a printing Drop body conflict on writes(Stdout), though nothing drops inside… | 8982776215 |
 | B-2026-11-05-6 | typecheck | low | §13 concurrency roll-up: `return` out of a `par for` body accepted; par conflicts never carry E0408; E_NOT_CROSS_TASK calls a type that contains a sh… | c519e4b881 |
 | B-2026-11-05-7 | resolver | high | In a package (kara.toml + src/), `import std.sync.{..}`, `import std.net.{..}` and `import std.json.{..}` are refused "unknown module `std.sync`" by… | 8b95f3e4b1 |
