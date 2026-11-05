@@ -147,6 +147,20 @@ accepted by 0.8.0 are now refused, each with a fix-it.
 
 ### Diagnostics
 
+- `karac check --output=jsonl` streams every diagnostic the batch
+  `--output=json` document lists, as `diagnostic` events with the same ids
+  at each phase's boundary; it printed only parse errors, and those without
+  a `type`. `phase_complete` counts errors, warnings and notes from them,
+  `build_complete.total_errors` is their sum, a skipped phase names the
+  errors that blocked it, and `build_start` carries a `build_id`, a
+  timestamp and the arguments (B-2026-11-05-13).
+- `karac check --output=jsonl | head` and `karac test | head` end quietly
+  with status 141 when the reader goes; they panicked on the closed pipe
+  (B-2026-11-05-9, B-2026-11-05-13).
+- A failed `assert_eq` / `assert_ne` in `karac test` reports its `left:`
+  and `right:` values in the `test_fail` message, and both refuse operands
+  whose type has no `Debug`, which they could not print (design.md §14,
+  B-2026-11-05-9).
 - E_NOT_CROSS_TASK on a value that only contains a `shared` handle names
   its type as such and adds a note with the field path to the handle
   (`at field path inner.cache`); it called the value "a `shared` handle"

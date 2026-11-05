@@ -1287,6 +1287,10 @@ pub(super) struct DiagnosticJson {
     /// its line and column, and the language server needs the byte range
     /// ([`super::check_source`]).
     pub(super) spans: Vec<Span>,
+    /// Each entry's `severity` and `phase`, in step with `entries`, for the
+    /// JSONL stream's per-phase counts ([`run_pipeline_jsonl`]).
+    pub(super) severities: Vec<String>,
+    pub(super) phases: Vec<String>,
 }
 
 impl DiagnosticJson {
@@ -1294,6 +1298,8 @@ impl DiagnosticJson {
         DiagnosticJson {
             entries: Vec::new(),
             spans: Vec::new(),
+            severities: Vec::new(),
+            phases: Vec::new(),
         }
     }
 
@@ -1380,6 +1386,8 @@ impl DiagnosticJson {
         entry.push('}');
         self.entries.push(entry);
         self.spans.push(*d.span);
+        self.severities.push(d.severity.to_string());
+        self.phases.push(d.phase.to_string());
     }
 
     pub(super) fn to_json_array(&self) -> String {
@@ -2639,37 +2647,255 @@ pub(super) fn emit_json_output(pipeline: &Pipeline) {
     let effects = program_effects_json(pipeline);
     let pub_effects = public_function_effects_json(pipeline);
     let mrg = mutual_recursion_groups_json(pipeline);
-    println!(
+    print_stdout_line(&format!(
         "{{\"program_effects\":{},\"public_function_effects\":{},\"mutual_recursion_groups\":{},\"target_skipped\":{},\"diagnostics\":{}}}",
         effects,
         pub_effects,
         mrg,
         target_skipped_json(pipeline),
         diags.to_json_array()
-    );
+    ));
+}
+
+/// Write `line` and a newline to stdout. When the reader has gone
+/// (`karac check --output=jsonl | head -1`, `karac test | head`), the process
+/// ends quietly with the status a process killed by `SIGPIPE` reports, 141,
+/// where `println!` panicked with "failed printing to stdout: Broken pipe"
+/// (B-2026-11-05-9, B-2026-11-05-13). Rust ignores `SIGPIPE`, so the closed
+/// pipe arrives as this write's `BrokenPipe` error; the signal's default is
+/// left alone, as the servers and child processes `karac` runs rely on that.
+pub(super) fn print_stdout_line(line: &str) {
+    use std::io::Write;
+    let mut out = std::io::stdout().lock();
+    let written = out
+        .write_all(line.as_bytes())
+        .and_then(|()| out.write_all(b"\n"))
+        .and_then(|()| out.flush());
+    if let Err(e) = written {
+        if e.kind() == std::io::ErrorKind::BrokenPipe {
+            process::exit(141);
+        }
+        eprintln!("error: writing to stdout: {e}");
+        process::exit(1);
+    }
 }
 
 // ── JSONL Streaming Output ──────────────────────────────────────
 
 pub(super) fn emit_jsonl_event(event_type: &str, fields: &str) {
-    println!("{{\"type\":{},{}}}", json_string(event_type), fields);
+    print_stdout_line(&format!(
+        "{{\"type\":{},{}}}",
+        json_string(event_type),
+        fields
+    ));
 }
 
-pub(super) fn run_pipeline_jsonl(pipeline: &mut Pipeline) {
-    let filename = &pipeline.filename.clone();
+/// A build id for the JSONL stream's `build_start` and `build_complete`
+/// (design.md § Streaming phase events): a ULID, 26 Crockford base-32
+/// characters, the first ten the milliseconds since the Unix epoch so ids
+/// sort by time, the other sixteen 80 random bits.
+fn new_build_id() -> String {
+    use std::hash::{BuildHasher, Hasher};
+    const ALPHABET: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    let ms = now.as_millis() as u64 & ((1u64 << 48) - 1);
+    // Two words from the standard library's per-process random hasher keys,
+    // mixed with the clock and the pid: no `rand` dependency for an id.
+    let word = |salt: u64| {
+        let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+        h.write_u64(salt);
+        h.write_u128(now.as_nanos());
+        h.write_u32(process::id());
+        h.finish()
+    };
+    let random: u128 = ((word(1) as u128) << 64 | word(2) as u128) & ((1u128 << 80) - 1);
+    let value: u128 = (ms as u128) << 80 | random;
+    (0..26)
+        .rev()
+        .map(|i| ALPHABET[((value >> (i * 5)) & 31) as usize] as char)
+        .collect()
+}
 
-    // build_start
+/// The current time as an RFC 3339 UTC timestamp, `2026-04-11T10:23:04Z`.
+fn rfc3339_utc_now() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    rfc3339_utc(secs)
+}
+
+/// `secs` since the Unix epoch as an RFC 3339 UTC timestamp, by the
+/// days-to-civil conversion (Howard Hinnant's `civil_from_days`).
+fn rfc3339_utc(secs: u64) -> String {
+    let days = (secs / 86_400) as i64;
+    let rem = secs % 86_400;
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
+        rem / 3_600,
+        rem % 3_600 / 60,
+        rem % 60
+    )
+}
+
+/// The phases [`collect_diagnostics`] reports, in the order it lists their
+/// entries. An entry's id is its place in that list, so the stream emits a
+/// phase's entries only once every phase before it is done: the ids it prints
+/// are then the ones the batch document gives.
+const DIAGNOSTIC_PHASES: [&str; 9] = [
+    "parse",
+    "resolve",
+    "typecheck",
+    "lint",
+    "effect",
+    "ownership",
+    "provider_escape",
+    "simd_check",
+    "comptime",
+];
+
+/// The JSONL stream's running state ([`run_pipeline_jsonl`]).
+#[derive(Default)]
+struct JsonlStream {
+    /// How many of [`collect_diagnostics`]'s entries are out.
+    emitted: usize,
+    /// The ids of the error diagnostics out so far, a skipped phase's
+    /// `blocking`.
+    error_ids: Vec<String>,
+    total_errors: usize,
+    total_warnings: usize,
+    /// The phases that started and have not completed.
+    started: Vec<&'static str>,
+}
+
+impl JsonlStream {
+    /// Emit `phase`'s diagnostics and its `phase_complete`, with the counts
+    /// from their severities.
+    fn complete(&mut self, pipeline: &Pipeline, phase: &'static str) {
+        let done = DIAGNOSTIC_PHASES
+            .iter()
+            .position(|p| *p == phase)
+            .map_or(0, |i| i + 1);
+        let diags = collect_diagnostics(pipeline);
+        let (mut errors, mut warnings, mut notes) = (0, 0, 0);
+        while self.emitted < diags.entries.len()
+            && DIAGNOSTIC_PHASES[..done].contains(&diags.phases[self.emitted].as_str())
+        {
+            let i = self.emitted;
+            let entry = &diags.entries[i];
+            // An entry is a JSON object, `{"id":…`: the event is the entry
+            // with its type first.
+            print_stdout_line(&format!("{{\"type\":\"diagnostic\",{}", &entry[1..]));
+            match diags.severities[i].as_str() {
+                "error" => {
+                    errors += 1;
+                    if let Some(id) = entry
+                        .strip_prefix("{\"id\":\"")
+                        .and_then(|r| r.split('"').next())
+                    {
+                        self.error_ids.push(id.to_string());
+                    }
+                }
+                "warning" => warnings += 1,
+                _ => notes += 1,
+            }
+            self.emitted += 1;
+        }
+        self.total_errors += errors;
+        self.total_warnings += warnings;
+        self.started.retain(|p| *p != phase);
+        emit_jsonl_event(
+            "phase_complete",
+            &format!(
+                "\"phase\":{},\"errors\":{errors},\"warnings\":{warnings},\"notes\":{notes}",
+                json_string(phase)
+            ),
+        );
+    }
+
+    fn start(&mut self, phase: &'static str) {
+        self.started.push(phase);
+        emit_jsonl_event("phase_start", &format!("\"phase\":{}", json_string(phase)));
+    }
+
+    fn skip(&mut self, pipeline: &Pipeline, phase: &'static str) {
+        let reason = if pipeline.has_parse_errors() {
+            "parse errors in input"
+        } else if phase == "typecheck" {
+            "resolve errors in input"
+        } else {
+            "typecheck did not run"
+        };
+        let blocking: Vec<String> = self.error_ids.iter().map(|id| json_string(id)).collect();
+        emit_jsonl_event(
+            "phase_skipped",
+            &format!(
+                "\"phase\":{},\"reason\":{},\"blocking\":[{}]",
+                json_string(phase),
+                json_string(reason),
+                blocking.join(",")
+            ),
+        );
+    }
+
+    /// [`Pipeline::run_all_checks_observed`]'s hook.
+    fn observe(&mut self, pipeline: &Pipeline, phase: &'static str, done: bool) {
+        if !done {
+            if pipeline.phase_will_run(phase) {
+                self.start(phase);
+            }
+            return;
+        }
+        if self.started.contains(&phase) || phase == "parse" {
+            self.complete(pipeline, phase);
+        } else {
+            self.skip(pipeline, phase);
+        }
+        // The lints read the checked program, so they report once it is
+        // checked, between `typecheck` and `effect`, as the batch lists them.
+        if phase == "typecheck" {
+            self.start("lint");
+            self.complete(pipeline, "lint");
+        }
+    }
+}
+
+/// `--output=jsonl`: the checks [`Pipeline::run_all_checks`] runs, as the
+/// event stream design.md § Streaming phase events specifies. Each phase's
+/// diagnostics are `diagnostic` events at its boundary, with the ids and the
+/// shape the batch `--output=json` document gives them, so a complete stream
+/// rebuilds that document; `phase_complete` counts them by severity, and
+/// `build_complete.total_errors` is the sum of those counts (B-2026-11-05-13).
+pub(super) fn run_pipeline_jsonl(pipeline: &mut Pipeline) {
+    let filename = pipeline.filename.clone();
+    let build_id = json_string(&new_build_id());
+    let args: Vec<String> = std::env::args().skip(1).map(|a| json_string(&a)).collect();
     emit_jsonl_event(
         "build_start",
-        &format!("\"timestamp\":\"\",\"files\":[{}]", json_string(filename)),
+        &format!(
+            "\"build_id\":{build_id},\"timestamp\":{},\"args\":[{}],\"files\":[{}]",
+            json_string(&rfc3339_utc_now()),
+            args.join(","),
+            json_string(&filename)
+        ),
     );
 
-    // lex phase (already done during parse)
+    // The lexer runs inside the parser, whose errors are its errors.
     emit_jsonl_event(
         "phase_start",
         &format!(
             "\"phase\":\"lex\",\"scope\":{{\"files\":[{}]}}",
-            json_string(filename)
+            json_string(&filename)
         ),
     );
     emit_jsonl_event(
@@ -2677,180 +2903,28 @@ pub(super) fn run_pipeline_jsonl(pipeline: &mut Pipeline) {
         "\"phase\":\"lex\",\"errors\":0,\"warnings\":0,\"notes\":0",
     );
 
-    // parse phase
-    emit_jsonl_event("phase_start", "\"phase\":\"parse\"");
-    let parse_errors = pipeline.parsed.errors.len();
-    if parse_errors > 0 {
-        let diags = collect_diagnostics(pipeline);
-        for entry in &diags.entries {
-            // Re-emit parse diagnostics as streaming events
-            println!("{entry}");
-        }
-    }
-    emit_jsonl_event(
-        "phase_complete",
-        &format!(
-            "\"phase\":\"parse\",\"errors\":{},\"warnings\":0,\"notes\":0",
-            parse_errors
-        ),
-    );
+    let mut stream = JsonlStream::default();
+    stream.start("parse");
+    pipeline.run_all_checks_observed(&mut |p, phase, done| stream.observe(p, phase, done));
+    // Compile-time evaluation runs inside resolve and the lowering; its
+    // diagnostics come last in the batch, so they report last here.
+    stream.start("comptime");
+    stream.complete(pipeline, "comptime");
 
-    if pipeline.has_parse_errors() {
-        // Skip remaining phases
-        for phase in &["resolve", "typecheck", "effect", "ownership"] {
-            emit_jsonl_event(
-                "phase_skipped",
-                &format!(
-                    "\"phase\":{},\"reason\":\"parse errors in input\",\"blocking\":[\"d1\"]",
-                    json_string(phase)
-                ),
-            );
-        }
-        emit_jsonl_event(
-            "build_complete",
-            &format!(
-                "\"success\":false,\"total_errors\":{},\"total_warnings\":0,\"program_effects\":null",
-                parse_errors
-            ),
-        );
-        return;
-    }
-
-    // resolve phase
-    emit_jsonl_event("phase_start", "\"phase\":\"resolve\"");
-    pipeline.resolve();
-    pipeline.drop_library_diagnostics();
-    let resolve_errors = pipeline.resolved.as_ref().map_or(0, |r| r.errors.len());
-    emit_jsonl_event(
-        "phase_complete",
-        &format!(
-            "\"phase\":\"resolve\",\"errors\":{},\"warnings\":0,\"notes\":0",
-            resolve_errors
-        ),
-    );
-
-    if pipeline.has_resolve_errors() {
-        for phase in &["typecheck", "effect", "ownership"] {
-            emit_jsonl_event(
-                "phase_skipped",
-                &format!(
-                    "\"phase\":{},\"reason\":\"resolve errors in input\",\"blocking\":[]",
-                    json_string(phase)
-                ),
-            );
-        }
-        let total = parse_errors + resolve_errors;
-        emit_jsonl_event(
-            "build_complete",
-            &format!(
-                "\"success\":false,\"total_errors\":{},\"total_warnings\":0,\"program_effects\":null",
-                total
-            ),
-        );
-        return;
-    }
-
-    // typecheck phase
-    emit_jsonl_event("phase_start", "\"phase\":\"typecheck\"");
-    pipeline.typecheck();
-    pipeline.drop_library_diagnostics();
-    pipeline.lower();
-    let type_errors = pipeline.typed.as_ref().map_or(0, |t| t.errors.len());
-    emit_jsonl_event(
-        "phase_complete",
-        &format!(
-            "\"phase\":\"typecheck\",\"errors\":{},\"warnings\":0,\"notes\":0",
-            type_errors
-        ),
-    );
-
-    // effect phase
-    emit_jsonl_event("phase_start", "\"phase\":\"effect\"");
-    pipeline.effectcheck();
-    pipeline.drop_library_diagnostics();
-    let (effect_errors, effect_notes) = pipeline.effects.as_ref().map_or((0, 0), |e| {
-        // Both halves ride the one note predicate (B-2026-08-21-2), so the
-        // JSONL `phase_complete` counts cannot disagree with the text
-        // renderer and the exit code about what a note is.
-        let errors = e
-            .errors
-            .iter()
-            .filter(|e| !crate::effectchecker::kind_is_note(&e.kind))
-            .count();
-        let notes = e
-            .errors
-            .iter()
-            .filter(|e| crate::effectchecker::kind_is_note(&e.kind))
-            .count();
-        (errors, notes)
-    });
-    emit_jsonl_event(
-        "phase_complete",
-        &format!(
-            "\"phase\":\"effect\",\"errors\":{},\"warnings\":0,\"notes\":{}",
-            effect_errors, effect_notes
-        ),
-    );
-
-    // ownership phase
-    emit_jsonl_event("phase_start", "\"phase\":\"ownership\"");
-    pipeline.ownershipcheck();
-    pipeline.drop_library_diagnostics();
-    let ownership_errors = pipeline.ownership.as_ref().map_or(0, |o| o.errors.len());
-    emit_jsonl_event(
-        "phase_complete",
-        &format!(
-            "\"phase\":\"ownership\",\"errors\":{},\"warnings\":0,\"notes\":0",
-            ownership_errors
-        ),
-    );
-
-    // provider escape phase
-    emit_jsonl_event("phase_start", "\"phase\":\"provider_escape\"");
-    pipeline.provider_escape_check();
-    pipeline.drop_library_diagnostics();
-    let escape_errors = pipeline.provider_escape.as_ref().map_or(0, |e| e.len());
-    emit_jsonl_event(
-        "phase_complete",
-        &format!(
-            "\"phase\":\"provider_escape\",\"errors\":{},\"warnings\":0,\"notes\":0",
-            escape_errors
-        ),
-    );
-
-    // `#[require_simd]` guarantee phase (phase-7-codegen.md line 308 slice 5a)
-    emit_jsonl_event("phase_start", "\"phase\":\"simd_check\"");
-    pipeline.simd_check();
-    pipeline.drop_library_diagnostics();
-    let simd_errors = pipeline.simd_errors.as_ref().map_or(0, |s| s.len());
-    emit_jsonl_event(
-        "phase_complete",
-        &format!(
-            "\"phase\":\"simd_check\",\"errors\":{},\"warnings\":0,\"notes\":0",
-            simd_errors
-        ),
-    );
-
-    let comptime_errors = pipeline.comptime_errors.as_ref().map_or(0, |c| c.len());
-    let total = parse_errors
-        + resolve_errors
-        + type_errors
-        + effect_errors
-        + ownership_errors
-        + escape_errors
-        + simd_errors
-        + comptime_errors;
+    // `null` when the effect checker did not run.
     let effects = program_effects_json(pipeline);
     emit_jsonl_event(
         "build_complete",
         &format!(
-            "\"success\":{},\"total_errors\":{},\"total_warnings\":0,\"program_effects\":{}",
-            total == 0,
-            total,
+            "\"build_id\":{build_id},\"success\":{},\"total_errors\":{},\"total_warnings\":{},\"program_effects\":{}",
+            stream.total_errors == 0,
+            stream.total_errors,
+            stream.total_warnings,
             effects,
         ),
     );
 }
+
 /// The three lints B-2026-08-18-2 moved onto the compile path, as
 /// `(lint_name, is_error, message, span)`.
 ///

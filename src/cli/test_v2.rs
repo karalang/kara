@@ -54,7 +54,7 @@ pub(super) fn cmd_test_v2(filter: Option<String>, all: bool, interp: bool) {
     pipeline.run_all_checks();
     if pipeline.total_errors() > 0 {
         for d in &collect_diagnostics(&pipeline).entries {
-            println!("{}", amalgam.remap_json_text(PACKAGE, d));
+            print_stdout_line(&amalgam.remap_json_text(PACKAGE, d));
         }
         process::exit(1);
     }
@@ -184,10 +184,9 @@ pub(super) fn cmd_test_v2(filter: Option<String>, all: bool, interp: bool) {
             }
         }
         let assertion = head.strip_prefix("assertion failed: ").map(str::to_string);
-        let message = match left {
-            Some(_) => head,
-            None => message,
-        };
+        // `message` is the assertion's whole failure message, its `left:` /
+        // `right:` / `value:` lines included (design.md § Assertions); the
+        // operands also ride on their own fields (B-2026-11-05-9).
         let outcome = TestOutcome {
             message: Some(message),
             span: at.as_ref().map(|(_, line, column)| crate::token::Span {
@@ -584,7 +583,7 @@ pub(super) fn check_package_tests(
                         .chain(cycles_jsonl(&f.cycles, &f.tree))
                         .chain(resolve_errors_jsonl(&f.resolve_errors))
                     {
-                        println!("{e}");
+                        print_stdout_line(&e);
                     }
                 }
             }
@@ -633,7 +632,7 @@ pub(super) fn check_package_tests(
         ),
         OutputMode::Jsonl => {
             for d in &collect_diagnostics(&pipeline).entries {
-                println!("{}", amalgam.remap_json_text(PACKAGE, d));
+                print_stdout_line(&amalgam.remap_json_text(PACKAGE, d));
             }
         }
     }

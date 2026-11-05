@@ -24,10 +24,11 @@ pub(super) struct TestOutcome {
 /// key is `"type"`, matching the build pipeline's [`emit_jsonl_event`] —
 /// JSONL clients consume one shape across all `karac` outputs.
 pub(super) fn emit_test_event(event: &str, fields: &str) {
+    // A closed stdout (`karac test | head`) ends the run quietly.
     if fields.is_empty() {
-        println!("{{\"type\":{}}}", json_string(event));
+        print_stdout_line(&format!("{{\"type\":{}}}", json_string(event)));
     } else {
-        println!("{{\"type\":{},{}}}", json_string(event), fields);
+        print_stdout_line(&format!("{{\"type\":{},{}}}", json_string(event), fields));
     }
 }
 
@@ -418,16 +419,16 @@ pub(super) fn test_front(filter: Option<&str>, core_places: bool) -> TestFront {
         Ok(front) => front,
         Err(f) => {
             for entry in parse_errors_jsonl(&f.parse_errors) {
-                println!("{entry}");
+                print_stdout_line(&entry);
             }
             for entry in cycles_jsonl(&f.cycles, &f.tree) {
-                println!("{entry}");
+                print_stdout_line(&entry);
             }
             for entry in resolve_errors_jsonl(&f.resolve_errors) {
-                println!("{entry}");
+                print_stdout_line(&entry);
             }
             for entry in type_errors_jsonl(&f.type_errors) {
-                println!("{entry}");
+                print_stdout_line(&entry);
             }
             process::exit(1);
         }

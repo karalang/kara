@@ -166,11 +166,11 @@ pub(super) fn check_v2_or_exit(
                     .iter()
                     .map(|d| a.remap_json_text(filename, d))
                     .collect();
-                println!("{{\"diagnostics\":[{}]}}", diags.join(","));
+                print_stdout_line(&format!("{{\"diagnostics\":[{}]}}", diags.join(",")));
             }
             (OutputMode::Jsonl, Some(a)) => {
                 for d in &collect_diagnostics(&pipeline).entries {
-                    println!("{}", a.remap_json_text(filename, d));
+                    print_stdout_line(&a.remap_json_text(filename, d));
                 }
             }
         }

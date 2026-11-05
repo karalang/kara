@@ -91,10 +91,12 @@ fn test_v2_reports_each_case() {
             "{lane:?}: {wrong}"
         );
         // The assertion's source text, in the message and on its own
-        // (B-2026-10-30-33).
+        // (B-2026-10-30-33); the message carries the operand lines
+        // design.md § Assertions gives it (B-2026-11-05-9).
         assert!(
             wrong.contains(
-                "\"message\":\"assertion failed: double(2) == 5\",\"assertion\":\"double(2) == 5\""
+                "\"message\":\"assertion failed: double(2) == 5\\n  left:  4\\n  right: 5\",\
+                 \"assertion\":\"double(2) == 5\""
             ),
             "{lane:?}: {wrong}"
         );

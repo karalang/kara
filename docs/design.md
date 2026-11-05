@@ -6986,7 +6986,7 @@ The streaming diagnostic protocol ([Streaming phase events](#streaming-phase-eve
 lex → parse → resolve → typecheck → effect → ownership → concurrency → codegen
 ```
 
-Phase names are part of the public contract: renaming one is a breaking change for any client of `--output=jsonl`. Internal iteration within a phase is not observable. Internal stages report under these names: desugaring reports as `parse`, and MIR building and borrow checking report as `ownership`.
+Phase names are part of the public contract: renaming one is a breaking change for any client of `--output=jsonl`. Internal iteration within a phase is not observable. Internal stages report under these names: desugaring reports as `parse`, and MIR building and borrow checking report as `ownership`. `karac check` reports four more, which clients treat as opaque: `lint` after `typecheck`, `provider_escape` and `simd_check` after `ownership`, and `comptime` last, since compile-time evaluation runs inside `resolve` and `typecheck` and the batch document lists its diagnostics last.
 
 ### Execution model
 

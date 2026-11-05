@@ -1,0 +1,1 @@
+ERROR at line 6: `assert_eq` needs its operands to implement `Debug`, to print them when it fails, and `Point` does not (design.md §14 Assertions: `assert_eq[T: PartialEq + Debug]`)

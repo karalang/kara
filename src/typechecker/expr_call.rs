@@ -1770,6 +1770,44 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
+        // `assert_eq[T: PartialEq + Debug](a: T, b: T)` and `assert_ne`
+        // (design.md §14 Assertions): a failed assertion prints its operands'
+        // `Debug` text, so a type with no `Debug` is refused here rather than
+        // compiled to a message the program cannot render (B-2026-11-05-9).
+        // The operands' types are otherwise left to the comparison's own rules.
+        if let ExprKind::Identifier(name) = &callee.kind {
+            if (name == "assert_eq" || name == "assert_ne")
+                && self.local_scope.lookup(name).is_none()
+                && !self.program_defines_fn(name, span)
+            {
+                let tys: Vec<Type> = args.iter().map(|a| self.infer_expr(&a.value)).collect();
+                for (arg, ty) in args.iter().zip(&tys).take(2) {
+                    let mut t = ty;
+                    while let Type::Ref(inner) | Type::MutRef(inner) = t {
+                        t = inner;
+                    }
+                    if matches!(t, Type::Error | Type::TypeVar(_)) {
+                        continue;
+                    }
+                    if !self.type_supports_debug(t) {
+                        self.type_error(
+                            format!(
+                                "`{name}` needs its operands to implement `Debug`, to print them \
+                                 when it fails, and `{}` does not (design.md §14 Assertions: \
+                                 `{name}[T: PartialEq + Debug]`); add `#[derive(Debug)]` to it, \
+                                 or compare with `assert(a == b)`",
+                                type_display(t)
+                            ),
+                            arg.value.span,
+                            TypeErrorKind::TraitBoundNotSatisfied,
+                        );
+                        break;
+                    }
+                }
+                return Type::Unit;
+            }
+        }
+
         // Built-in diverging functions: todo(), unreachable(), and panic().
         // Accept 0 or 1 String argument; return Never (they never return normally).
         // Local-binding shadow guard (B-2026-08-01-26): a closure bound to the

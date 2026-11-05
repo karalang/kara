@@ -2483,12 +2483,28 @@ impl Pipeline {
 
     /// Run all analysis phases (no execution).
     fn run_all_checks(&mut self) {
+        self.run_all_checks_observed(&mut |_, _, _| {});
+    }
+
+    /// [`Self::run_all_checks`], telling `on` where it is: `on(p, phase,
+    /// false)` before a phase runs and `on(p, phase, true)` once it has and its
+    /// library diagnostics are dropped. `parse` is reported done first, then
+    /// `resolve`, `typecheck` (which includes the lowering, as a `#[derive]`
+    /// re-checks the program there), `effect`, `ownership`, `provider_escape`
+    /// and `simd_check`. The JSONL stream (`run_pipeline_jsonl`) runs the
+    /// checks through here, so it reports the diagnostics the batch document
+    /// does, from the same passes.
+    fn run_all_checks_observed(&mut self, on: &mut dyn FnMut(&Pipeline, &'static str, bool)) {
         let mut t = std::time::Instant::now();
         let t = &mut t;
         self.drop_library_diagnostics();
+        on(self, "parse", true);
+        on(self, "resolve", false);
         self.resolve();
         crate::mir::lower::phase_time("check resolve", t);
         self.drop_library_diagnostics();
+        on(self, "resolve", true);
+        on(self, "typecheck", false);
         self.typecheck();
         crate::mir::lower::phase_time("check typecheck", t);
         self.drop_library_diagnostics();
@@ -2503,23 +2519,44 @@ impl Pipeline {
         self.lower();
         crate::mir::lower::phase_time("check lower", t);
         self.drop_library_diagnostics();
+        on(self, "typecheck", true);
+        on(self, "effect", false);
         self.effectcheck();
         crate::mir::lower::phase_time("check effects", t);
         self.drop_library_diagnostics();
+        on(self, "effect", true);
+        on(self, "ownership", false);
         self.ownershipcheck();
         crate::mir::lower::phase_time("check ownership+mir", t);
         self.drop_library_diagnostics();
+        on(self, "ownership", true);
         // No `concurrencycheck` here: the auto-par analysis reports no
         // diagnostics, and on a large program it was a third of check's time.
         // The paths that read it (build, run, query, `--concurrency-report`)
         // run it themselves.
+        on(self, "provider_escape", false);
         self.provider_escape_check();
+        self.drop_library_diagnostics();
+        on(self, "provider_escape", true);
+        on(self, "simd_check", false);
         self.simd_check();
         self.drop_library_diagnostics();
+        on(self, "simd_check", true);
         if let LibraryBodiesState::Aside(aside) = std::mem::take(&mut self.library_bodies) {
             crate::mir::lower::restore_library_bodies(&mut self.parsed.program, aside);
         }
         crate::mir::lower::phase_time("check rest", t);
+    }
+
+    /// Whether `phase` runs on this pipeline as it stands, by the guard the
+    /// phase itself opens with ([`Self::run_all_checks_observed`]'s names).
+    fn phase_will_run(&self, phase: &str) -> bool {
+        match phase {
+            "resolve" | "effect" | "provider_escape" => !self.has_parse_errors(),
+            "typecheck" => self.resolved.is_some() && !self.has_resolve_errors(),
+            "ownership" => self.typed.is_some(),
+            _ => true,
+        }
     }
 
     /// Collect all errors across phases. Typecheck errors are included —

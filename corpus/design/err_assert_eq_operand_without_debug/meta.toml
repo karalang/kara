@@ -1,0 +1,9 @@
+source = "B-2026-11-05-9"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["design", "assertions"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md §14 Assertions: `assert_eq[T: PartialEq + Debug]`, so an operand type without Debug is refused at check time; it could not print the left:/right: lines when the assertion fails. The expected.out wording of an error pin is guidance, not a byte oracle."

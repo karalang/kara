@@ -1849,10 +1849,12 @@ fn test_jsonl_parse_error_skips_phases() {
     assert!(!out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
 
-    // Should have phase_skipped for resolve, typecheck, effect, ownership
+    // Should have phase_skipped for resolve, typecheck, effect, ownership and
+    // provider_escape: the phases whose guard a parse error fails, as
+    // `karac check` runs them (B-2026-11-05-13).
     assert!(stdout.contains("\"type\":\"phase_skipped\""));
     let skipped_count = stdout.matches("\"phase_skipped\"").count();
-    assert_eq!(skipped_count, 4);
+    assert_eq!(skipped_count, 5);
 
     // build_complete should show failure
     assert!(stdout.contains("\"success\":false"));
@@ -1873,9 +1875,10 @@ fn test_jsonl_resolve_error_skips_later_phases() {
 
     // resolve should complete (not be skipped)
     assert!(stdout.contains("\"phase\":\"resolve\""));
-    // typecheck, effect, ownership should be skipped
+    // typecheck and ownership are skipped; the effect checker runs over a
+    // resolved program, as `karac check` runs it (B-2026-11-05-13)
     let skipped_count = stdout.matches("\"phase_skipped\"").count();
-    assert_eq!(skipped_count, 3);
+    assert_eq!(skipped_count, 2);
 }
 
 // ── Query ───────────────────────────────────────────────────────
