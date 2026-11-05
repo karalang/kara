@@ -61,7 +61,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | diagnostics | 133 |
 | false-positive | 110 |
 | perf | 96 |
-| missing-feature | 75 |
+| missing-feature | 76 |
 | soundness | 50 |
 | miscompile | 35 |
 | run-vs-build | 23 |
@@ -75,7 +75,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 200 |
+| typecheck | 201 |
 | mir | 119 |
 | mir-llvm | 114 |
 | cli | 55 |
@@ -86,7 +86,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | codegen | 22 |
 | effect | 22 |
 | resolver | 6 |
-| other | 4 |
+| other | 5 |
 | autopar | 4 |
 | lexer | 1 |
 ## Current state
@@ -107,11 +107,12 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-04-55 | 2026-11-04 | mir-llvm | low | `PriorityQueue.pop` sifts down by swapping, two comparisons a level, where Rust's `BinaryHeap::pop` sifts a hole to the bottom with one: kata 1046's bench (1000 piles of 3000 stones, 3 rounds of the heap game) runs 2.66x Rust's time under overflow checks, of which the compiler is about 1.15x and the heap algorithm the rest | — |
 | B-2026-11-04-64 | 2026-11-04 | typecheck | medium | An unbound method value `User.adult` gets the type `Fn() -> bool` with the receiver dropped, so `let check = User.adult; check(u)` is refused ("expected 0 argument(s), found 1") and `.map(User.adult)` fails to infer | — |
 | B-2026-11-04-78 | 2026-11-04 | typecheck | medium | A borrowed parameter passed where a library constructor takes `own Vec[T]` (`PriorityQueue.from(v)`, `max_first_from(v)` with `v: Vec[i64]`) draws "expected 'Vec[T]', found 'ref Vec[i64]'" and a cascade "cannot infer type parameter 'T'", with no fix; the same parameter given away by `let`/return gets "cannot give away parameter `v`" with its `own` / `.clone()` fix | — |
-| B-2026-11-04-79 | 2026-11-04 | typecheck | low | `mut` on a field of a plain (non-`shared`) struct is accepted; design.md §5 Structs makes it a compile error, but 305 corpus programs write it, so the refusal needs a migration call (split from B-2026-11-04-60) | — |
+| B-2026-11-04-79 | 2026-11-04 | typecheck | low | Tracker for the next minor release: `mut` on a field of a plain (non-`shared`) struct or enum becomes a compile error; in 0.8.x it is a `deprecated` warning with a `karac fix` that deletes it (ad5c10d728, design.md §5 Structs 25d27bd53a) | — |
 | B-2026-11-04-82 | 2026-11-04 | mir-llvm | high | An integer tuple literal passed as a collection key or compared with `==`/`<` keeps the default (i64, i64) layout instead of the declared narrow tuple type: `s.contains((1, 2))` on a `SortedSet`/`Set`/`Vec[(i32, i32)]` and `m.contains_key((1, 2))`/`m.get((1, 2))` on a `Map[(i32, i32), _]` answer false/None on compiled code, and `a == (1, 2)` with `a: (i32, i32)` is invalid MIR on run and build | — |
 | B-2026-11-04-83 | 2026-11-04 | mir-llvm | low | The backend does not emit the facts LLVM 19-22 added: `range` attributes on parameters and returns, `nuw`/`nusw`/`inbounds` flags on GEPs beyond inbounds, `nuw`/`nsw` on `trunc`, `samesign` on `icmp`, and `captures(address/read_provenance)` beyond `captures(none)` | — |
 | B-2026-11-05-1 | 2026-11-05 | typecheck | low | `a == r` with non-Copy `a: T` and a non-literal `r: ref T` is accepted (design.md § No automatic dereference in operators wants a type error with fix-it `*r`); refusing it turns 573 swept programs red, nearly all a D5-borrowed parameter compared with an owned value, so it waits on a call from the review thread | — |
 | B-2026-11-05-2 | 2026-11-05 | ownership | low | A MutFn closure passed to an `own MutFn()` parameter twice (`take(f); take(f);`) is accepted on every lane and runs as if copied; design.md §7 says a MutFn is never Copy, so the second call is a use after move | — |
+| B-2026-11-05-3 | 2026-11-05 | typecheck+other | low | Remainder of B-2026-11-04-80: the editor code action that rewrites `.unwrap()` on an ordinary (non-`weak`) Option to `.expect("…")` does not exist; design.md §11 weak Ergonomics (8c5e67ab81) offers it as an LSP code action, never a check warning | — |
 
 ### Relocated
 
