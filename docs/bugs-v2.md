@@ -58,9 +58,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 133 |
-| false-positive | 110 |
-| perf | 97 |
+| diagnostics | 135 |
+| false-positive | 113 |
+| perf | 98 |
 | missing-feature | 76 |
 | soundness | 50 |
 | miscompile | 35 |
@@ -75,17 +75,17 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 201 |
+| typecheck | 203 |
 | mir | 119 |
-| mir-llvm | 115 |
+| mir-llvm | 116 |
 | cli | 55 |
-| ownership | 51 |
+| ownership | 52 |
 | parser | 39 |
 | interp | 28 |
 | runtime | 23 |
+| effect | 23 |
 | codegen | 22 |
-| effect | 22 |
-| resolver | 6 |
+| resolver | 7 |
 | other | 5 |
 | autopar | 4 |
 | lexer | 1 |
@@ -108,6 +108,12 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-04-79 | 2026-11-04 | typecheck | low | Tracker for the next minor release: `mut` on a field of a plain (non-`shared`) struct or enum becomes a compile error; in 0.8.x it is a `deprecated` warning with a `karac fix` that deletes it (ad5c10d728, design.md §5 Structs 25d27bd53a) | — |
 | B-2026-11-04-83 | 2026-11-04 | mir-llvm | low | The backend does not emit the facts LLVM 19-22 added: `range` attributes on parameters and returns, `nuw`/`nusw`/`inbounds` flags on GEPs beyond inbounds, `nuw`/`nsw` on `trunc`, `samesign` on `icmp`, and `captures(address/read_provenance)` beyond `captures(none)` | — |
 | B-2026-11-05-4 | 2026-11-05 | mir-llvm | medium | Three kata benches run 2-3x slower on LLVM 22 than on LLVM 18 at about the same instruction count (x86): teemo_attacking 357 ms vs 126 (x86's cmov converter now branches the loop's `min`), min_stack 900 vs 423 and hsearch (275) 925 vs 471 (not cmov, unattributed); the frozen set's run-time geomean is unchanged (0.995) | — |
+| B-2026-11-05-5 | 2026-11-05 | effect | medium | Two `par` branches that each apply `?` to a `Result[D, E]` whose `D` has a printing Drop body conflict on writes(Stdout), though nothing drops inside the branches; the same branches without `?` are accepted | — |
+| B-2026-11-05-6 | 2026-11-05 | typecheck | low | §13 concurrency roll-up: `return` out of a `par for` body accepted; par conflicts never carry E0408; E_NOT_CROSS_TASK calls a type that contains a shared handle "a shared handle" and gives no field path; freeze refused after pushing a temporary into a mut field; design.md and core-semantics disagree on disjoint element writes in `par for` | — |
+| B-2026-11-05-7 | 2026-11-05 | resolver | high | In a package (kara.toml + src/), `import std.sync.{..}`, `import std.net.{..}` and `import std.json.{..}` are refused "unknown module `std.sync`" by check, run, build and test; the same import in a single file works, and `std.time`, `std.log`, `std.process` work in a package | — |
+| B-2026-11-05-8 | 2026-11-05 | ownership | medium | `assert_eq(v, e)` and `assert_ne(s, "b")` move a non-Copy operand, so using it afterwards is E0500; design.md §14 says both operands are borrowed and stay usable | — |
+| B-2026-11-05-9 | 2026-11-05 | typecheck | low | §14 testing roll-up: assert_eq/assert_ne failure messages omit the `left:`/`right:`/`value:` lines; assert_eq accepts a type with no Debug; `karac test` panics in Rust on a closed stdout | — |
+| B-2026-11-05-10 | 2026-11-05 | mir-llvm | high | Kata 73's bench runs 21x slower on the default pool than on one worker (10.1 s against 0.48 s, 4 workers, x86): auto-par runs its 20-row matrix build (400 pushes) as tasks on every one of 100,000 outer trips, since a loop inside a loop was refused only at 16 trips or fewer | — |
 
 ### Relocated
 
