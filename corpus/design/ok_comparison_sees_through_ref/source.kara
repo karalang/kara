@@ -1,0 +1,56 @@
+// design.md § No automatic dereference in operators (Gowtham, 2026-11-05):
+// `==`, `!=`, `<`, `<=`, `>` and `>=` compare the values whether either
+// operand is `T`, `ref T` or `mut ref T`, for any T, and move neither.
+#[derive(PartialEq, PartialOrd, Clone)]
+struct P {
+    x: i64,
+    name: String,
+}
+
+fn same[T: PartialEq](a: own T, b: ref T) -> bool {
+    a == b
+}
+
+fn before[T: PartialOrd](a: ref T, b: own T) -> bool {
+    a < b and b > a
+}
+
+fn named(word: String, owned: String) -> bool {
+    owned == word
+}
+
+fn grow(s: mut ref String, other: String) -> bool {
+    s.push_str("!");
+    s != other and other <= s and s >= other
+}
+
+fn main() {
+    let a: String = "abc";
+    let b: String = "abd";
+    let r = ref b;
+    println(a == r);
+    println(a != r);
+    println(a < r);
+    println(r <= a);
+    println(r > a);
+    println(a >= r);
+    println(named("abc", a.clone()));
+    let mut g: String = "x";
+    println(grow(mut g, "x"));
+    println(g);
+    let p = P { x: 1, name: "p" };
+    let q = P { x: 2, name: "q" };
+    let rq = ref q;
+    println(p == rq);
+    println(p < rq);
+    println(rq >= p);
+    println(same(p.clone(), p));
+    println(before(a, b.clone()));
+    let pa = ref a;
+    let pb = ref b;
+    println(*pa == *pb);
+    println(*pa < *pb);
+    println(a);
+    println(b);
+    println(p.name);
+}

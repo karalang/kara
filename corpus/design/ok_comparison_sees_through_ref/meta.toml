@@ -1,0 +1,9 @@
+source = "B-2026-11-05-1"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "operators", "references"]
+expected_from = "decision"
+backends = []
+env = {}
+note = "design.md § No automatic dereference in operators, decided by Gowtham 2026-11-05 (e6d39e4575): `==`, `!=`, `<`, `<=`, `>`, `>=` compare the values whether either operand is `T`, `ref T` or `mut ref T`, for any T, and move neither. String vs ref String on every arm, a D5-borrowed parameter vs an owned value, a `mut ref String`, a derived user struct, generic `T: PartialEq` / `T: PartialOrd`, and `*pa == *pb`; the operands print unchanged afterwards."
