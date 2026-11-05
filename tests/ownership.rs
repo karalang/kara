@@ -6570,6 +6570,9 @@ fn slice_conflict_errors(source: &str) -> Vec<OwnershipError> {
         .collect()
 }
 
+// Each conflict fixture below uses its first slice after the conflicting
+// step: a let-bound slice is borrowed to its last use (core-semantics.md
+// §5), so an unused one would end before the conflict (kata 1053).
 #[test]
 fn mut_slice_plus_imm_slice_same_source_rejected_shape_a() {
     let errors = slice_conflict_errors(
@@ -6578,6 +6581,7 @@ fn mut_slice_plus_imm_slice_same_source_rejected_shape_a() {
              v.push(1);
              let _s_mut = v.as_slice_mut();
              let _s_imm = v.as_slice();
+             let _n = _s_mut.len();
          }",
     );
     let shape_a: Vec<_> = errors
@@ -6621,6 +6625,7 @@ fn two_mut_slices_same_source_rejected_shape_b() {
              v.push(1);
              let _s1 = v.as_slice_mut();
              let _s2 = v.as_slice_mut();
+             let _n = _s1.len();
          }",
     );
     let shape_b: Vec<_> = errors
@@ -6654,6 +6659,7 @@ fn slice_then_move_source_rejected_shape_c() {
              v.push(1);
              let _s = v.as_slice();
              take(v);
+             let _n = _s.len();
          }",
     );
     let shape_c: Vec<_> = errors
@@ -6689,6 +6695,7 @@ fn transitive_slice_of_slice_conflicts_via_root() {
              v.push(3);
              let _s1 = v.as_slice_mut();
              let _s2 = v[0..2];
+             let _n = _s1.len();
          }",
     );
     let shape_a: Vec<_> = errors
@@ -6745,6 +6752,7 @@ fn mut_slice_then_mutate_source_via_method_rejected_cross_borrow() {
              let mut h = Holder { val: Vec.new() };
              let _s = h.val.as_slice_mut();
              h.check();
+             let _again = _s;
          }",
     );
     let cross: Vec<_> = errors
@@ -6775,6 +6783,7 @@ fn imm_slice_then_mut_ref_call_arg_rejected_cross_borrow() {
              v.push(1);
              let _s = v.as_slice();
              take_mut(mut v);
+             let _n = _s.len();
          }",
     );
     let cross: Vec<_> = errors
@@ -6805,6 +6814,7 @@ fn imm_slice_then_stdlib_mut_method_rejected_cross_borrow() {
              v.push(1);
              let _s = v.as_slice();
              v.push(99);
+             let _n = _s.len();
          }",
     );
     let cross: Vec<_> = errors
@@ -7052,6 +7062,7 @@ fn impl_trait_slice4_iterator_outliving_its_vec_source_rejected() {
              let mut v = Vec.with_init([1, 2, 3]);\n\
              let _it = iter(v);\n\
              let _s = v.as_slice_mut();\n\
+             let _again = _it;\n\
          }",
     );
     let found_conflict = errors

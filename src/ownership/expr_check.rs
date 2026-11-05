@@ -881,7 +881,15 @@ impl<'a> super::OwnershipChecker<'a> {
                 let receiver_snapshot = self.snapshot_active_borrow_lens();
                 // A range-view receiver's borrow is the `mut Slice[T]` taken
                 // above; a second, whole-`v` push would conflict with it.
-                if !matches!(method.as_str(), "as_slice" | "as_slice_mut") && !range_view_write {
+                // A slice binding's own method acts through the view it
+                // already holds (`let s = v.as_slice_mut(); s.len()`), so it
+                // takes no second borrow of the source to conflict with.
+                let through_view = matches!(&object.kind,
+                    ExprKind::Identifier(n) if self.slice_binding_sources.contains_key(n));
+                if !matches!(method.as_str(), "as_slice" | "as_slice_mut")
+                    && !range_view_write
+                    && !through_view
+                {
                     if let Some(borrow_kind) = self.method_self_borrow_kind(expr) {
                         if let Some(place) = self.place_expr_root(object) {
                             self.push_active_borrow(borrow_kind, place, expr.span);

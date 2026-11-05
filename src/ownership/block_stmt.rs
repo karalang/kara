@@ -262,6 +262,7 @@ impl<'a> super::OwnershipChecker<'a> {
                 // A name this `let` binds holds no earlier slice borrow.
                 for name in pattern.binding_names() {
                     self.slice_binding_keys.remove(&name);
+                    self.slice_binding_sources.remove(&name);
                 }
                 if let Some(entry) = self.slice_borrow_sources.get(&borrow_key).cloned() {
                     // B-2026-08-17-16 — the span-keyed hit cannot tell "the

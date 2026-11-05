@@ -5,7 +5,9 @@
 //!   end (core-semantics.md §5), so `let tail = v[1..]; let k = tail.len();
 //!   v.swap(0, k);` is accepted, while a use that could hand the view on
 //!   keeps it to the end of the scope;
-//! - a comparison ends the view an operand takes (`v.as_slice() < s`);
+//! - a comparison ends the view an operand takes (`v.as_slice() < s`), and
+//!   a slice binding's own method (`s.len()` on a `mut Slice`) takes no
+//!   second borrow of the source;
 //! - a `let ... else` whose value runs a closure reading a binding may move
 //!   that binding in its `else` block;
 //! - `&v[a..b]` is fixed by dropping the `&`, since a range index is already
@@ -112,6 +114,23 @@ fn a_slice_used_after_the_write_or_handed_on_stays_borrowed() {
 }
 ",
         conflict,
+    );
+}
+
+#[test]
+fn a_mut_slice_s_own_method_takes_no_second_borrow_of_its_source() {
+    accepted(
+        "mut-view-method",
+        "fn main() {
+    let mut v: Vec[i64] = [1, 2, 3];
+    let s = v.as_slice_mut();
+    s[0] = 9;
+    let n = s.len();
+    s.reverse();
+    println(f\"{n} {v}\");
+}
+",
+        "3 [3, 2, 9]\n",
     );
 }
 
