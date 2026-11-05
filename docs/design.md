@@ -5806,7 +5806,7 @@ fn fetch_all(urls: Slice[String]) -> Vec[Result[Page, FetchError]] {
 - **Iterations are branches of one block**, so two iterations conflict by the rule for `par` branches. In v1 the elements of one collection are one place, so iterations that write different elements of the same `Vec` or `Array` conflict; split it first (`split_at_mut`) and give each part to its own task. Proving index-disjoint writes is scheduled in `deferred.md` ([core-semantics.md §11.2](core-semantics.md#11-concurrency-c9), B-2026-11-01-40).
 - **The loop variable** binds as in a `for` loop ([core-semantics.md §4.6](core-semantics.md#4-parameters-calls-and-patterns)): iterating a collection borrows it and binds `ref` elements, and `it.into_iter()` moves the elements in.
 - **`par(limit: n) for`** runs at most `n` iterations at once. `n` is evaluated once, before the iterable expression, and `n <= 0` panics. Without a limit, the runtime chooses how many run at once.
-- **`break`, `continue` and `return`** may not cross out of the body, as for a `par` branch.
+- **`break` and `continue`** may not cross out of the body. **`return` and `?`** end the iteration as an early exit, as they end a `par` branch: the function returns the earliest iteration's value ([core-semantics.md §11.7](core-semantics.md#11-concurrency-c9)).
 - **`?` in the body** pierces the loop as it pierces a `par` block. The value is then the `Vec` of success values, and the enclosing function returns the error of the earliest failing iteration in iteration order.
 
 ```kara
