@@ -1,0 +1,23 @@
+// `lo..` is `[lo, ∞)` (design.md § Ranges): the type's largest value is
+// in it, and asking for the value after it overflows. A `for` and the
+// iterator it stands for agree (B-2026-11-05-20).
+fn main() {
+    let mut n = 0;
+    let mut last: i64 = 0;
+    for i in (i64.MAX - 1).. {
+        n += 1;
+        last = i;
+        if i == i64.MAX {
+            break;
+        }
+    }
+    println(f"{n} {last}");
+    let tail: Vec[u8] = (253u8..).take(3).collect();
+    println(f"{tail}");
+    let mut r = 254u8..;
+    println(f"{r.next()} {r.next()}");
+    for b in 254u8.. {
+        println(b);
+    }
+    println("unreachable");
+}

@@ -84,6 +84,11 @@ accepted by 0.8.0 are now refused, each with a fix-it.
 
 ### Wrong behaviour fixed
 
+- A `for` over an open range `lo..` now overflows when it steps past the
+  type's largest value. It used to wrap: `for b in 254u8..` went 254, 255,
+  0, 1, and the interpreter refused the loop. `RangeFrom` now gives out the
+  type's largest value before overflowing on the next one. It used to
+  overflow one value early (design.md § Ranges, B-2026-11-05-20).
 - A tuple of integer literals takes its slot's integer types: as a key of a
   narrow-tuple collection (`s.contains((1, 2))` on a `SortedSet[(i32, i32)]`,
   `m.get((1, 2))`, `v.contains(..)`) it was built as `(i64, i64)` and never

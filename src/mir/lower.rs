@@ -9126,7 +9126,9 @@ impl<'l, 'a> Bx<'l, 'a> {
             };
             ops.push(self.operand_at(right, et)?);
         }
-        if inclusive {
+        // `RangeInclusive.exhausted`, or `RangeFrom.given`: nothing given
+        // out yet.
+        if inclusive || right.is_none() {
             ops.push(bool_const(self.tys().bool(), false));
         }
         let kind = self.adt_aggregate(t, 0);
@@ -14324,10 +14326,25 @@ impl<'l, 'a> Bx<'l, 'a> {
             ty: t,
             kind: ConstKind::Scalar(1),
         });
-        self.assign(
-            i,
-            Rvalue::BinaryOp(BinOp::Add, Operand::Copy(Place::local(i)), one),
-        );
+        if end_t.is_some() {
+            self.assign(
+                i,
+                Rvalue::BinaryOp(BinOp::Add, Operand::Copy(Place::local(i)), one),
+            );
+        } else {
+            // `a..` has no bound to stop below the type's largest value, so
+            // its step is checked: `for b in 254u8..` runs for 254 and 255,
+            // and overflows when it asks for the next value, as
+            // `RangeFrom.next` does (design.md, B-2026-11-05-20). A bounded
+            // range's step cannot overflow.
+            self.arith(
+                BinOp::Add,
+                Operand::Copy(Place::local(i)),
+                one,
+                t,
+                Place::local(i),
+            );
+        }
         self.goto(head);
         self.cur = exit;
         Ok(())

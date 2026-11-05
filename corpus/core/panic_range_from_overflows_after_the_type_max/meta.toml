@@ -1,0 +1,9 @@
+source = "B-2026-11-05-20"
+dedup_of = []
+expect = "panic:101"
+exit = 101
+tags = ["numerics", "panic"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-05-20: design.md § Ranges, `lo..` is `[lo, inf)`: i64 and u8 open ranges give out the type's largest value, then the next step overflows. The `for` used an unchecked step and wrapped (and the interpreter refused it); RangeFrom.next stepped before giving its value out."

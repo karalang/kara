@@ -386,20 +386,25 @@ impl[T: PartialOrd + Copy] RangeInclusive[T] {
 }
 
 /// The values from `start` up, with no end: `(1..).take(3)`. It stops only
-/// when something stops asking, and stepping past the type's largest value
-/// overflows the way `+ 1` does.
+/// when something stops asking. The type's largest value is in the range;
+/// asking for the one after it overflows the way `+ 1` does.
 #[derive(Copy, Clone)]
 struct RangeFrom[T] {
     start: T,
+    /// Set once `start` has been given out: the next call steps first, so
+    /// giving out the largest value does not overflow (B-2026-11-05-20).
+    given: bool,
 }
 
 impl[T: RangeStep + PartialOrd + Copy] Iterator for RangeFrom[T] {
     type Item = T;
 
     fn next(mut ref self) -> Option[T] {
-        let v = self.start;
-        self.start = v.step_forward();
-        Some(v)
+        if self.given {
+            self.start = self.start.step_forward();
+        }
+        self.given = true;
+        Some(self.start)
     }
 }
 
@@ -409,8 +414,13 @@ impl[T: PartialOrd + Copy] RangeFrom[T] {
         self
     }
 
-    /// Whether `x` lies in the range.
+    /// Whether `x` lies in the range: from `start` up, or past it once
+    /// `start` has been given out.
     fn contains(ref self, x: ref T) -> bool {
-        *x >= self.start
+        if self.given {
+            *x > self.start
+        } else {
+            *x >= self.start
+        }
     }
 }
