@@ -61,7 +61,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | diagnostics | 139 |
 | false-positive | 116 |
 | perf | 100 |
-| missing-feature | 86 |
+| missing-feature | 87 |
 | soundness | 50 |
 | miscompile | 36 |
 | run-vs-build | 23 |
@@ -76,8 +76,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 206 |
+| mir-llvm | 120 |
 | mir | 120 |
-| mir-llvm | 119 |
 | cli | 67 |
 | ownership | 53 |
 | parser | 40 |
@@ -106,7 +106,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-04-79 | 2026-11-04 | typecheck | low | Tracker for the next minor release: `mut` on a field of a plain (non-`shared`) struct or enum becomes a compile error; in 0.8.x it is a `deprecated` warning with a `karac fix` that deletes it (ad5c10d728, design.md §5 Structs 25d27bd53a) | — |
 | B-2026-11-05-14 | 2026-11-05 | cli | medium | `karac fmt` drops the trailing comma of a one-element tuple TYPE, so `(i64,)` becomes `(i64)` and the formatted program no longer typechecks (and a second fmt is not idempotent) | — |
 | B-2026-11-05-15 | 2026-11-05 | other | medium | kara-lsp treats a file inside a package as package-less: `import util;` in src/main.kara of a package with kara.toml gets a false `unknown module util` error, so every multi-file package shows red in the editor | — |
-| B-2026-11-05-18 | 2026-11-05 | runtime+cli | low | §17 panic record and debugger contract are not emitted: no JSONL panic event on stderr under `karac run`/`karac test`, no record `kind`, so `karac debug` has nothing to read; `std.runtime` (has_debug_metadata, list_tasks, list_par_blocks) is an unknown module | — |
 | B-2026-11-05-23 | 2026-11-05 | typecheck+parser | low | §6 expressions roll-up: `if c { 5 }` in statement position is accepted; an unparenthesized struct literal in an `if` condition is accepted; `u == ()` is `comparing this type is not lowered yet`; RangeTo/RangeToInclusive/RangeFull are undefined type names; `ambiguous_not_comparison` never runs; a discarded tuple of Results warns nothing (item 8, multi-assign order, is CONFORMANT per the 43518f58d7 decision: values first) | — |
 | B-2026-11-05-24 | 2026-11-05 | typecheck | low | A use of a deprecated item through a module binding (`import util;` then `util.old()`) is warned with the caret on the call's closing paren, not on `old`; `import util.{old};` then `old()` puts it on `old` | — |
 | B-2026-11-05-25 | 2026-11-05 | mir-llvm | low | The backend still emits none of the LLVM 19-22 facts B-2026-11-04-83 left: `range` attributes on parameters and returns, `icmp samesign`, and `captures(address/read_provenance)` beyond `captures(none)` | — |
@@ -116,6 +115,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-05-30 | 2026-11-05 | cli | low | fix hints have two shapes, neither the spec's `diff {file, line, old, new}`: single-file JSON gives `replacement {offset, length, text}` beside a prose hint, package JSON `fix_it` and `fixes[].edits[]` (design.md §17 Structured compiler output) | — |
 | B-2026-11-05-31 | 2026-11-05 | cli | low | `karac fix` has none of the five style lints (counter `while` to `for`, `x = x + e` to `+=`, a final `return e;` to `e`, a redundant `.iter()` / `.to_string()` on a literal, a redundant `ref` on a parameter), and `karac lint --list` lists none of them (design.md §17 `karac fix`, Lint levels) | — |
 | B-2026-11-05-32 | 2026-11-05 | cli | low | `karac fmt` does not sort methods (an impl's `zeta` stays before `alpha`; imports are sorted) (design.md § Canonical formatting: methods sorted, imports sorted) | — |
+| B-2026-11-05-34 | 2026-11-05 | mir-llvm | low | The v2 backends emit none of the debugger contract's runtime metadata (design.md § Debugger contract, elements 1-3): no spawn-site ids per `par {}` block, no parent-frame reference per worker, no await-chain `WaitTarget`; so `std.runtime.has_debug_metadata()` is false even in a dev build and both lists are always empty | — |
 
 ### Relocated
 
@@ -717,6 +717,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-05-13 | cli | medium | `--output=jsonl` (check and build) never emitted a `diagnostic` event for resolve, typecheck, effect or ownership errors, so a client could not rebui… | 984142c99a |
 | B-2026-11-05-16 | typecheck+cli | medium | In a package, `karac check` drops the cross-module `deprecated` warning unless the check also has an error; `karac build` reports it, and a single fi… | 8b95f3e4b1 |
 | B-2026-11-05-17 | cli | low | §17 tooling roll-up: batch JSON lacks the 20-per-file cascade cap; `--emit-timings` unknown; explain rejects the symbolic codes the text prints; tool… | 8039f0b7dd |
+| B-2026-11-05-18 | runtime+cli | low | §17 panic record and debugger contract are not emitted: no JSONL panic event on stderr under `karac run`/`karac test`, no record `kind`, so `karac de… | fe1f97379f |
 | B-2026-11-05-19 | resolver | high | Parallel assignment (`a, b = b, a`, `v[i], v[j] = v[j], v[i]`) in ANY package panics the compiler: `entered unreachable code: StmtKind::MultiAssign i… | 8b95f3e4b1 |
 | B-2026-11-05-20 | mir+mir-llvm+interp | high | A `for` over an open range `lo..` wraps silently past the type's MAX on JIT, debug and release AOT (`for i in (i64.MAX - 1)..` yields MAX-1, MAX, MIN… | 479d7a3253 |
 | B-2026-11-05-21 | resolver | medium | In a package, every user operator-trait impl (`impl Add for V`, `impl Index[(i64, i64)] for Grid`, ...) is refused with E0108 `user-defined impl Add… | 8b95f3e4b1 |
