@@ -612,7 +612,7 @@ A `main` that returns `Err(e)` is an ordinary error exit: `main`'s drops, `defer
 - A conflict is an error that names both accesses.
 - **Elements of one collection are one place in v1** (ruling 2026-11-02, B-2026-11-01-40). There is no index-disjointness analysis yet, so two branches of a `par {}`, or two iterations of a `par for`, that write elements of the same `Vec` or `Array` conflict even when the indices differ (`{ v[0] = 1 }` and `{ v[1] = 2 }`). Split the collection first and give each branch its own part: `let (a, b) = v.split_at_mut(mid);`. Proving disjoint index ranges is scheduled in `deferred.md` § Auto-Parallel Loops over Provably-Disjoint Indexed Writes; when it lands, ranges it proves disjoint will not conflict.
 
-Pin: `err_par_conflict` (already an error today, E0408).
+Pin: `err_par_conflict` (already an error today, E0418).
 
 **11.3 What may enter a task:**
 - owned values (moved in);
@@ -797,7 +797,7 @@ Gowtham moved providers before M3 on 2026-10-20 ("Providers first") and chose th
 | `err_ref_from_temp` | error | compiles, prints `abc` |
 | `err_escaping_capture_reused` | E0500 | compiles, prints `abc 3` |
 | `err_store_nonescaping_param` | error | compiles |
-| `err_partial_move_drop_type`, `err_par_conflict` | error | error (E0200, E0408) |
+| `err_partial_move_drop_type`, `err_par_conflict` | error | error (E0200, E0418) |
 | `drop_temp_stmt`, `drop_match_scrutinee`, `ok_reinit` | as legacy | — |
 
 ## Appendix B — Open items

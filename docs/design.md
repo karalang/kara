@@ -5735,7 +5735,7 @@ fn load_dashboard(user_id: u64) -> Result[Dashboard, AppError] {
 ```
 
 **Rules:**
-- **Branches must not conflict.** Two branches conflict when one writes, moves, mutably borrows or drops a place or a resource that another reads or writes ([core-semantics.md §11.2](core-semantics.md#11-concurrency-c9)). Resources come from effects ([Conflict rules](#conflict-rules)), so two branches that both print conflict, and so do two that both send on one channel. The error, E0408, names both accesses.
+- **Branches must not conflict.** Two branches conflict when one writes, moves, mutably borrows or drops a place or a resource that another reads or writes ([core-semantics.md §11.2](core-semantics.md#11-concurrency-c9)). Resources come from effects ([Conflict rules](#conflict-rules)), so two branches that both print conflict, and so do two that both send on one channel. The error, E0418, names both accesses.
 - **Order and placement are free.** Once the branches are proven not to conflict, the runtime may run them in any order, in parallel or one after another ([§2](#2-specification-layers)). A target that cannot run them in parallel runs them in sequence with no source change ([§16](#concurrency-across-targets)).
 - **What may enter a branch** is [core-semantics.md §11.3](core-semantics.md#11-concurrency-c9): owned values moved in, `sync` and `frozen` handles, and views. A `shared` handle may not ([What may cross a task boundary](#what-may-cross-a-task-boundary)).
 - **Effects.** The enclosing function's effects include the effects of every branch.
@@ -5781,7 +5781,7 @@ fn append_concurrently(log: own Vec[String]) -> Vec[String] {
 fn invalid_aliasing(log: own Vec[String]) {
     let mut log = log;
     par { append_log(mut log), read_log_count(log) }
-    // error[E0408]: branch 1 mutably borrows `log`, and branch 2 reads it
+    // error[E0418]: branch 1 mutably borrows `log`, and branch 2 reads it
 }
 ```
 
