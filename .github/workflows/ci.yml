@@ -319,6 +319,11 @@ jobs:
       - name: WASM E2E on MIR (cargo test --test mir_wasm)
         run: cargo test --features llvm --test mir_wasm
 
+      # A release bundle's karac links wasm with the bundle's own wasi-libc,
+      # not the PATH rustc's (B-2026-11-05-12); run under node like the above.
+      - name: WASM bundle link (cargo test --test build_wasm_bundle)
+        run: cargo test --features llvm --test build_wasm_bundle
+
   # The `--features llvm` codegen surface — the load-bearing correctness gate
   # that, until now, ran ZERO times in CI (`test` runs `cargo test --all`, no
   # `--features llvm`, so the real-binary codegen E2E + the self-hosting oracle
