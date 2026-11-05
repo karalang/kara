@@ -101,7 +101,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-04-30 | 2026-11-04 | mir-llvm | medium | Kata 394's String decode loop runs 1.27x legacy's instructions and 1.26x its cycles on the MIR backend; seq 0.99x -> 1.17x rustc -O, par 0.86x -> 1.27x rayon | — |
 | B-2026-11-04-32 | 2026-11-04 | mir-llvm | low | Kata 297's peak RSS is 1.35x Rust's (233-235 MiB vs 173 MiB) on the MIR backend, where the 2026-08-28 feed read 179.9 vs 174.3 MiB | — |
 | B-2026-11-04-33 | 2026-11-04 | mir-llvm | low | Six more katas sit at 1.03-1.20x legacy's cycles or instructions on the MIR backend, each too small to file alone, and kata 895's par lane slipped to 2.31x rayon: the third borderline batch after B-2026-11-01-45 | — |
-| B-2026-11-04-40 | 2026-11-04 | mir | medium | A trait's default method body calling `self.m()` is refused as ambiguous ("ambiguous method 'm' on receiver of type 'S'") in the copy for a type that also implements another trait with a method `m`; inside trait `A`'s default, `self.m()` is `A.m` | — |
 | B-2026-11-04-37 | 2026-11-04 | mir-llvm | low | Kata 342 runs 1.20x legacy's instructions and 1.39x its cycles on the MIR backend, the largest cycle ratio in its batch | — |
 | B-2026-11-04-39 | 2026-11-04 | mir-llvm | low | Katas 333 (1.19x) and 338 (1.17x) still execute over legacy's instructions on the M5 at eb17818b45 (LLVM 22), where 321, 337, 339 and 343 are within; both gaps are larger than x86's (1.05x, 1.10x); 338's inclusive-range piece is Thread B's | — |
 | B-2026-11-04-55 | 2026-11-04 | mir-llvm | low | `PriorityQueue.pop` sifts down by swapping, two comparisons a level, where Rust's `BinaryHeap::pop` sifts a hole to the bottom with one: kata 1046's bench (1000 piles of 3000 stones, 3 rounds of the heap game) runs 2.66x Rust's time under overflow checks, of which the compiler is about 1.15x and the heap algorithm the rest | — |
@@ -110,8 +109,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-04-79 | 2026-11-04 | typecheck | low | Tracker for the next minor release: `mut` on a field of a plain (non-`shared`) struct or enum becomes a compile error; in 0.8.x it is a `deprecated` warning with a `karac fix` that deletes it (ad5c10d728, design.md §5 Structs 25d27bd53a) | — |
 | B-2026-11-04-82 | 2026-11-04 | mir-llvm | high | An integer tuple literal passed as a collection key or compared with `==`/`<` keeps the default (i64, i64) layout instead of the declared narrow tuple type: `s.contains((1, 2))` on a `SortedSet`/`Set`/`Vec[(i32, i32)]` and `m.contains_key((1, 2))`/`m.get((1, 2))` on a `Map[(i32, i32), _]` answer false/None on compiled code, and `a == (1, 2)` with `a: (i32, i32)` is invalid MIR on run and build | — |
 | B-2026-11-04-83 | 2026-11-04 | mir-llvm | low | The backend does not emit the facts LLVM 19-22 added: `range` attributes on parameters and returns, `nuw`/`nusw`/`inbounds` flags on GEPs beyond inbounds, `nuw`/`nsw` on `trunc`, `samesign` on `icmp`, and `captures(address/read_provenance)` beyond `captures(none)` | — |
-| B-2026-11-05-1 | 2026-11-05 | typecheck | low | `a == r` with non-Copy `a: T` and a non-literal `r: ref T` is accepted (design.md § No automatic dereference in operators wants a type error with fix-it `*r`); refusing it turns 573 swept programs red, nearly all a D5-borrowed parameter compared with an owned value, so it waits on a call from the review thread | — |
-| B-2026-11-05-2 | 2026-11-05 | ownership | low | A MutFn closure passed to an `own MutFn()` parameter twice (`take(f); take(f);`) is accepted on every lane and runs as if copied; design.md §7 says a MutFn is never Copy, so the second call is a use after move | — |
 | B-2026-11-05-3 | 2026-11-05 | typecheck+other | low | Remainder of B-2026-11-04-80: the editor code action that rewrites `.unwrap()` on an ordinary (non-`weak`) Option to `.expect("…")` does not exist; design.md §11 weak Ergonomics (8c5e67ab81) offers it as an LSP code action, never a check warning | — |
 
 ### Relocated
@@ -655,6 +652,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-04-34 | ownership | medium | A closure or task made in each arm of an `if`, each moving the same value in, is refused as "moved into a closure, used again here" (or "moved into a… | f575bce6f0 |
 | B-2026-11-04-35 | ownership | medium | `match p.c { C.At(s) => . | f575bce6f0 |
 | B-2026-11-04-36 | cli | low | `karac fmt` rewrites a script-mode file into an explicit `fn main()`, its top-level statements moved after every item; since B-2026-11-04-19 it also… | e5ccf4fc0c |
+| B-2026-11-04-40 | mir | medium | A trait's default method body calling `self.m()` is refused as ambiguous ("ambiguous method 'm' on receiver of type 'S'") in the copy for a type that… | d78c610976 |
 | B-2026-11-04-41 | mir-llvm | medium | Kata 344's two-pointer reverse stays scalar: LLVM 18's SCEV cannot count a loop whose bound moves (`while i < j { ...; i += 1; j -= 1 }`) and its dep… | 6dcdc1a604 |
 | B-2026-11-04-38 | mir-llvm | low | Kata 3629's seq peak RSS rose from 59.9 to 88.9 MiB on the MIR backend while Rust held at 60.1 MiB | d273d89f37 |
 | B-2026-11-04-42 | mir | medium | The MIR effect pass gives every call of an `extern` function every effect, ignoring its declaration: two `par` branches that each call a `pure fn` fr… | b8f73d1a3f |
@@ -693,6 +691,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-04-77 | typecheck | low | `Vec` has no `drain(range)`: Rust's `v.drain(i..i + 2);` gets only "no method 'drain' on type 'Vec'" with no hint, though `remove`, `truncate` and `s… | 4e87c65465 |
 | B-2026-11-04-80 | typecheck | low | Remainder of B-2026-11-04-71: `.unwrap()` on an Option gets no `.expect("...")` suggestion with a fix (design.md §11 Ergonomics), and a use of a `#[d… | 7d007768dd |
 | B-2026-11-04-81 | interp+mir-llvm | low | Remainder of B-2026-11-04-72: the shared-field borrow-flag panic says "already borrowed: this `shared` field is borrowed through another handle" with… | 872c092c69 |
+| B-2026-11-05-1 | typecheck | low | `a == r` with a non-Copy `T` beside a non-literal `ref T`: Gowtham decided 2026-11-05 that comparisons see through `ref` on either side for any T (de… | 2a3202d89d |
+| B-2026-11-05-2 | ownership | low | A MutFn closure passed to an `own MutFn()` parameter twice (`take(f); take(f);`) is accepted on every lane and runs as if copied; design.md §7 says a… | d78c610976 |
 
 </details>
 
