@@ -1,0 +1,54 @@
+// LeetCode #1049: Last Stone Weight II -- the benchmark: the ★ table of
+// sums up to half the total, on 1000 lists of 30 stones built once, ten
+// rounds over all of them.
+
+fn last_stone_weight_ii(stones: Slice[i64]) -> i64 {
+    let total: i64 = stones.iter().sum();
+    let half = total / 2;
+    let mut made = Vec.filled(half + 1, false);
+    made[0] = true;
+    for s in stones.iter() {
+        let mut t = half;
+        while t >= *s {
+            if made[t - *s] {
+                made[t] = true;
+            }
+            t -= 1;
+        }
+    }
+    let mut best = half;
+    while not made[best] {
+        best -= 1;
+    }
+    total - 2 * best
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let lists = 1000;
+    let count = 30;
+    let rounds = 10;
+    let mut seed = 1049;
+    let mut all: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..lists {
+        let mut stones: Vec[i64] = Vec.new();
+        for _ in 0..count {
+            stones.push(next_random(mut seed) % 100 + 1);
+        }
+        all.push(stones);
+    }
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..rounds {
+        for stones in all.iter() {
+            let answer = last_stone_weight_ii(stones);
+            total += answer;
+            check = (check * 131 + answer) % 1000000007;
+        }
+    }
+    println(f"{lists} lists of {count} stones, {rounds} rounds: total {total}, checksum {check}");
+}

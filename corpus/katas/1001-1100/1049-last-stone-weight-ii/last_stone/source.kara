@@ -1,0 +1,92 @@
+// LeetCode #1049: Last Stone Weight II -- the sums half the stones can make.
+//
+// However the stones are smashed, what is left is the stones split into two
+// piles, one counted plus and one minus, and any split can be smashed down
+// to its difference. So the answer is the total less twice the largest sum
+// a set of stones makes without passing half the total. A table of which
+// sums some set of the stones makes, filled one stone at a time and walked
+// downward so no stone is used twice, finds it. O(n S) for n stones of
+// total S.
+
+fn last_stone_weight_ii(stones: Slice[i64]) -> i64 {
+    let total: i64 = stones.iter().sum();
+    let half = total / 2;
+    let mut made = Vec.filled(half + 1, false);
+    made[0] = true;
+    for s in stones.iter() {
+        let mut t = half;
+        while t >= *s {
+            if made[t - *s] {
+                made[t] = true;
+            }
+            t -= 1;
+        }
+    }
+    let mut best = half;
+    while not made[best] {
+        best -= 1;
+    }
+    total - 2 * best
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `count` stones of 1 to `heaviest`
+fn random_stones(count: i64, heaviest: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut stones: Vec[i64] = Vec.new();
+    for _ in 0..count {
+        stones.push(next_random(mut seed) % heaviest + 1);
+    }
+    stones
+}
+
+fn main() {
+    // LeetCode's two examples, then a few more
+    let examples: Vec[Vec[i64]] = [
+        [2, 7, 4, 1, 8, 1],
+        [31, 26, 33, 21, 40],
+        [1],
+        [1, 1],
+        [1, 2],
+        [100, 1],
+        [3, 3, 3],
+        [1, 1, 4, 2, 2],
+        [8, 9, 10, 25],
+        [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 99],
+    ];
+    for stones in examples.iter() {
+        println(f"{stones} -> {last_stone_weight_ii(stones)}");
+    }
+    // 3000 random lists of 1 to 8 stones of 1 to 20
+    let mut seed = 1049;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..3000 {
+        let count = next_random(mut seed) % 8 + 1;
+        let answer = last_stone_weight_ii(random_stones(count, 20, mut seed));
+        total += answer;
+        check = (check * 131 + answer) % 1000000007;
+    }
+    println(f"3000 random lists of 1 to 8 stones of 1 to 20: total {total}, checksum {check}");
+    // 500 random lists of 1 to 30 stones of 1 to 100
+    total = 0;
+    check = 0;
+    for _ in 0..500 {
+        let count = next_random(mut seed) % 30 + 1;
+        let answer = last_stone_weight_ii(random_stones(count, 100, mut seed));
+        total += answer;
+        check = (check * 131 + answer) % 1000000007;
+    }
+    println(f"500 random lists of 1 to 30 stones of 1 to 100: total {total}, checksum {check}");
+    // the largest: 30 stones of 100 or so, and the first 30 odd numbers
+    let mut heavy: Vec[i64] = Vec.filled(29, 100);
+    heavy.push(99);
+    println(f"29 stones of 100 and one of 99 -> {last_stone_weight_ii(heavy)}");
+    let odd: Vec[i64] = (0..30).map(|i| 1 + 2 * (i % 50)).collect();
+    println(f"30 odd stones 1 to 59 -> {last_stone_weight_ii(odd)}");
+}

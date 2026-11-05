@@ -1,0 +1,82 @@
+// LeetCode #1049: Last Stone Weight II -- every signed total, in a set.
+//
+// Each stone ends up counted plus or minus, so the weights that can be left
+// are the absolute values of the signed totals. A set of the totals the
+// stones so far can make, each stone adding and subtracting itself, holds
+// them all; the answer is the smallest in absolute value. O(n S).
+
+fn last_stone_weight_ii(stones: Slice[i64]) -> i64 {
+    let mut diffs: Set[i64] = Set.new();
+    diffs.insert(0);
+    for s in stones.iter() {
+        let mut next: Set[i64] = Set.new();
+        for d in diffs.iter() {
+            next.insert(d + s);
+            next.insert(d - s);
+        }
+        diffs = next;
+    }
+    diffs.iter().map(|d| d.abs()).min().unwrap()
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `count` stones of 1 to `heaviest`
+fn random_stones(count: i64, heaviest: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut stones: Vec[i64] = Vec.new();
+    for _ in 0..count {
+        stones.push(next_random(mut seed) % heaviest + 1);
+    }
+    stones
+}
+
+fn main() {
+    // LeetCode's two examples, then a few more
+    let examples: Vec[Vec[i64]] = [
+        [2, 7, 4, 1, 8, 1],
+        [31, 26, 33, 21, 40],
+        [1],
+        [1, 1],
+        [1, 2],
+        [100, 1],
+        [3, 3, 3],
+        [1, 1, 4, 2, 2],
+        [8, 9, 10, 25],
+        [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 99],
+    ];
+    for stones in examples.iter() {
+        println(f"{stones} -> {last_stone_weight_ii(stones)}");
+    }
+    // 3000 random lists of 1 to 8 stones of 1 to 20
+    let mut seed = 1049;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..3000 {
+        let count = next_random(mut seed) % 8 + 1;
+        let answer = last_stone_weight_ii(random_stones(count, 20, mut seed));
+        total += answer;
+        check = (check * 131 + answer) % 1000000007;
+    }
+    println(f"3000 random lists of 1 to 8 stones of 1 to 20: total {total}, checksum {check}");
+    // 500 random lists of 1 to 30 stones of 1 to 100
+    total = 0;
+    check = 0;
+    for _ in 0..500 {
+        let count = next_random(mut seed) % 30 + 1;
+        let answer = last_stone_weight_ii(random_stones(count, 100, mut seed));
+        total += answer;
+        check = (check * 131 + answer) % 1000000007;
+    }
+    println(f"500 random lists of 1 to 30 stones of 1 to 100: total {total}, checksum {check}");
+    // the largest: 30 stones of 100 or so, and the first 30 odd numbers
+    let mut heavy: Vec[i64] = Vec.filled(29, 100);
+    heavy.push(99);
+    println(f"29 stones of 100 and one of 99 -> {last_stone_weight_ii(heavy)}");
+    let odd: Vec[i64] = (0..30).map(|i| 1 + 2 * (i % 50)).collect();
+    println(f"30 odd stones 1 to 59 -> {last_stone_weight_ii(odd)}");
+}
