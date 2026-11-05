@@ -147,6 +147,7 @@ impl<'a> super::EffectChecker<'a> {
         let mut errors: Vec<EffectError> = Vec::new();
         let mut visited: HashSet<(Symbol, Vec<String>)> = HashSet::new();
         let mut path: Vec<Symbol> = Vec::new();
+        let mut sites: Vec<Span> = Vec::new();
         self.gate_dfs(
             self.syms.main,
             &HashSet::new(),
@@ -154,7 +155,7 @@ impl<'a> super::EffectChecker<'a> {
             &graph,
             &bound_in,
             &direct,
-            &mut path,
+            (&mut path, &mut sites),
             &mut visited,
             &mut errors,
         );
@@ -170,7 +171,7 @@ impl<'a> super::EffectChecker<'a> {
         graph: &FxHashMap<Symbol, Vec<(Symbol, Span)>>,
         bound_in: &HashMap<Symbol, HashSet<String>>,
         direct: &HashMap<Symbol, Vec<(String, Span)>>,
-        path: &mut Vec<Symbol>,
+        (path, sites): (&mut Vec<Symbol>, &mut Vec<Span>),
         visited: &mut HashSet<(Symbol, Vec<String>)>,
         errors: &mut Vec<EffectError>,
     ) {
@@ -199,6 +200,26 @@ impl<'a> super::EffectChecker<'a> {
                     .map(|s| self.interner.resolve(*s))
                     .collect::<Vec<_>>()
                     .join(" \u{2192} ");
+                // A use inside the library's own text is reported at the
+                // program's last call on the chain, since a diagnostic in
+                // text no file holds is dropped (B-2026-11-05-11).
+                let span = match self.program.library_start {
+                    Some(n) if span.offset >= n => sites
+                        .iter()
+                        .rev()
+                        .find(|s| s.offset < n)
+                        .copied()
+                        .unwrap_or(*span),
+                    _ => *span,
+                };
+                // The library's uses below one call are one finding there.
+                let named = format!("resource '{resource}'");
+                if errors
+                    .iter()
+                    .any(|e| e.span == span && e.message.contains(&named))
+                {
+                    continue;
+                }
                 errors.push(EffectError {
                     message: format!(
                         "target `{target}` does not provide resource '{resource}' — \
@@ -207,7 +228,7 @@ impl<'a> super::EffectChecker<'a> {
                          keep it off this target's entry path \
                          (design.md § Cross-target Compilation)",
                     ),
-                    span: *span,
+                    span,
                     kind: EffectErrorKind::TargetGateViolation,
                     subtype_trace: None,
                     replacement: None,
@@ -219,13 +240,23 @@ impl<'a> super::EffectChecker<'a> {
             // Dedup callees — multiple call sites to the same function
             // produce identical subtree walks.
             let mut seen: HashSet<Symbol> = HashSet::new();
-            for &(callee, _) in calls {
+            for &(callee, site) in calls {
                 if !seen.insert(callee) {
                     continue;
                 }
+                sites.push(site);
                 self.gate_dfs(
-                    callee, &here, target, graph, bound_in, direct, path, visited, errors,
+                    callee,
+                    &here,
+                    target,
+                    graph,
+                    bound_in,
+                    direct,
+                    (&mut *path, &mut *sites),
+                    visited,
+                    errors,
                 );
+                sites.pop();
             }
         }
 

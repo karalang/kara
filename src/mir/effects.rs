@@ -67,6 +67,7 @@ use crate::ids::DefId;
 use crate::ty::TyKind as SK;
 
 pub mod auto_par;
+mod feasible;
 mod task_providers;
 pub use task_providers::TaskConflict;
 
@@ -2403,9 +2404,15 @@ impl<'p> Analysis<'p> {
     /// component, contributes nothing this round).
     fn body_sites(&self, body: &Body, summaries: &BTreeMap<String, EffectSet>) -> Vec<Site> {
         let defs = single_defs(body);
+        // A block no run reaches has no effects (B-2026-11-05-5): the
+        // residual drop of an enum whose variant an earlier switch decided.
+        let dead = feasible::infeasible_blocks(body);
         let mut sites = Vec::new();
         for (i, bb) in body.blocks.iter().enumerate() {
             let block = BasicBlock(i as u32);
+            if dead.contains(&block) {
+                continue;
+            }
             let mut eff = EffectSet::default();
             match &bb.terminator.kind {
                 TerminatorKind::Call { func, args, .. } => {
