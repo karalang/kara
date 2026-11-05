@@ -6071,7 +6071,7 @@ Discovery by a name prefix (`test_`) fails silently in two ways: a test is skipp
 |---|---|---|
 | `run_start` | `total_tests: int` | Once, at the start of the run, after discovery. |
 | `test_pass` | `test: string`, `duration_ms: int` | `test` is the case name, verbatim. |
-| `test_fail` | `test: string`, `duration_ms: int`, `location: {file, line, col}`, `message: string` | Optional: `assertion: string` (the assertion's source text); `left: string` and `right: string` for `assert_eq` and `assert_ne`; `reason: string` for a failure that is not an assertion. |
+| `test_fail` | `test: string`, `duration_ms: int`, `location: {file, line, col}`, `message: string` | Optional: `assertion: string` (the assertion's source text); `left: string` and `right: string` for `assert_eq` and `assert_ne`; `reason: string` for a failure that is not an assertion; `kind: string`, the [panic record](#panic-record)'s kind, when the test panicked. |
 | `test_skip` | `test: string`, `reason: string` | Reserved for skipped tests. Consumers must accept `reason` values they do not know. |
 | `summary` | `total: int`, `passed: int`, `failed: int`, `skipped: int`, `duration_ms: int` | Once, at the end of the run. |
 
