@@ -1,0 +1,9 @@
+source = "B-2026-11-05-18"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "runtime", "debugger-contract"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md § Debugger contract: `std.runtime` exposes `has_debug_metadata()`, `list_tasks()` and `list_par_blocks()`; without the metadata the lists are empty, so tools can try and degrade."

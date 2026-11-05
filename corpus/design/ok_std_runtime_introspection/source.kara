@@ -1,0 +1,13 @@
+// design.md § Debugger contract, element 4: `std.runtime` is importable as
+// a module (`runtime.list_tasks()`) and item by item, and in a binary
+// without the runtime debug metadata both lists are empty, not an error.
+import std.runtime;
+import std.runtime.{list_par_blocks, TaskInfo};
+
+fn main() {
+    let tasks: Vec[TaskInfo] = runtime.list_tasks();
+    let blocks = list_par_blocks();
+    if not runtime.has_debug_metadata() {
+        println(f"{tasks.len()} {blocks.len()}");
+    }
+}

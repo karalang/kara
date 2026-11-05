@@ -86,5 +86,6 @@ Everything else is imported from a `std.*` module:
 | `std.crypto.legacy` | `sha1`, `Sha1` |
 | `std.log` | `debug`, `info`, `warn`, `error`, `init`, `Level`, `Record`, `Backend`, `Stream`, `json_backend`, `text_backend` |
 | `std.secret` | `Secret`, `ConstantTimeEq`, `Zeroize` |
+| `std.runtime` | `has_debug_metadata`, `list_tasks`, `list_par_blocks`, `TaskInfo`, `ParBlockInfo`, `WaitTarget` ([design.md § Debugger contract](../design.md#debugger-contract)) |
 
 Domain names (an HTTP `Response`, a parser's `Parser` and `Span`, JSON types) live under `std.*` as well and are never in the prelude. A local binding may shadow any prelude name; a lint flags the likely-unintended cases.

@@ -1,0 +1,21 @@
+// `std.runtime`: the debugger contract's introspection surface (design.md
+// § Debugger contract, element 4; B-2026-11-05-18). `Runtime`,
+// `ParBlockInfo`, `TaskInfo` and `WaitTarget` are globals of the library
+// (runtime/stdlib/runtime.kara); these are the module's functions, as the
+// design names them: `std.runtime.list_tasks()`.
+
+/// Whether this binary carries the runtime debug metadata. Without it,
+/// `list_tasks` and `list_par_blocks` return empty lists.
+pub fn has_debug_metadata() -> bool {
+    Runtime.has_debug_metadata()
+}
+
+/// Every suspended task, with what it waits on and where it was spawned.
+pub fn list_tasks() -> Vec[TaskInfo] {
+    Runtime.list_tasks()
+}
+
+/// Every active `par {}` block, with its spawn-site id and worker count.
+pub fn list_par_blocks() -> Vec[ParBlockInfo] {
+    Runtime.list_par_blocks()
+}

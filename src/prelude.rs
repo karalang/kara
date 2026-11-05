@@ -1352,6 +1352,12 @@ pub const GATED_STDLIB_SOURCES: &[(&[&str], &str)] = &[
         &["std", "log"],
         include_str!("../runtime/stdlib/std_log.kara"),
     ),
+    // `std.runtime` (design.md § Debugger contract; B-2026-11-05-18) is
+    // also a module of globals (`Runtime`, `TaskInfo`, ...).
+    (
+        &["std", "runtime"],
+        include_str!("../runtime/stdlib/std_runtime.kara"),
+    ),
 ];
 
 /// Whether a library source (the prelude's or a gated module's) declares
@@ -2393,6 +2399,11 @@ pub const LIBRARY_GLOBAL_MODULES: &[(&[&str], &[&str], &[&str])] = &[
         &[],
     ),
     (&["std", "time"], &["Clock", "sleep_ms"], &[]),
+    (
+        &["std", "runtime"],
+        &["Runtime", "ParBlockInfo", "TaskInfo", "WaitTarget"],
+        &[],
+    ),
     (
         &["std", "io"],
         &[
