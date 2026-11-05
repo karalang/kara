@@ -916,7 +916,7 @@ fn unix_socket_path() -> String { "/tmp/app.sock" }
 
 An unknown key or value is an error.
 
-**Grammar.** The condition is one predicate. A predicate is `key = "value"`, or a combinator around predicates:
+**Grammar.** The condition is one predicate. A predicate is `key: "value"`, or a combinator around predicates:
 - `all(p, ...)` holds when every `p` holds;
 - `any(p, ...)` holds when at least one `p` holds;
 - `not(p)` holds when `p` does not.
@@ -929,7 +929,7 @@ An unknown key or value is an error.
 - There is no run-time `if target == ...`. `#[cfg]` is the one mechanism.
 - Under `karac check` with several targets, each target's pass sees exactly the declarations that target's build sees ([§16](#checking-several-targets)).
 
-`#[cfg]` is not yet implemented.
+`#[cfg]` is not yet implemented. Until it is, `#[target(native)]` or `#[target(wasm_wasi)]` gates an item on one target, with the same rules (the item does not exist elsewhere; a use there is an error naming the target). `#[target]` is an interim spelling: when `#[cfg]` lands it becomes a deprecation warning whose fix rewrites it to `#[cfg(target: "...")]`.
 
 #### Platform files
 
@@ -7409,6 +7409,7 @@ The v1 core set:
 | `#[default]` | Mark the default variant for `#[derive(Default)]` (a derive helper). | [§9](#default-and-default) |
 | `#[serde(...)]` | Rename, skip or default a field, and choose an enum's tagging, for `#[derive(Serialize, Deserialize)]` (a derive helper). | [§9](#serialize-and-deserialize) |
 | `#[cfg(...)]` | Conditional compilation, including `target:`. | [§4](#4-modules-and-packages) |
+| `#[target(...)]` | Interim single-target gating until `#[cfg]` is implemented. | [§4](#4-modules-and-packages) |
 | `#[repr(...)]` | ABI layout: `C`, an integer type, `transparent`. | [§15](#repr-abi-layout) |
 | `#[must_use]` | Warn when a value is discarded. | [§11](#must_use) |
 | `#[non_exhaustive]` | Let a public type gain variants or fields: other packages need a wildcard arm or `..`. | [§11](#non_exhaustive) |
