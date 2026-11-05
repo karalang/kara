@@ -1590,6 +1590,9 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 crate::resolver::ResolveErrorKind::DefaultAttributeWithoutDerive => {
                     "E_DEFAULT_ATTRIBUTE_WITHOUT_DERIVE"
                 }
+                crate::resolver::ResolveErrorKind::HelperAttributeInvalidPosition => {
+                    "E_HELPER_ATTRIBUTE_INVALID_POSITION"
+                }
                 crate::resolver::ResolveErrorKind::PanicHandlerInvalid => "E_PANIC_HANDLER",
                 crate::resolver::ResolveErrorKind::MalformedAttributeArgs => {
                     "E_MALFORMED_ATTRIBUTE_ARGS"

@@ -1,0 +1,9 @@
+source = "B-2026-11-05-17"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["design", "attributes", "derive"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md § Attributes: `#[serde(...)]` is a derive helper for `#[derive(Serialize, Deserialize)]`, which reads it on a struct, an enum, a field or a variant (§9 Serialize and Deserialize). On a function no derive reads it, so it is refused rather than dropped silently. The expected.out wording of an error pin is guidance, not a byte oracle."

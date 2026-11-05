@@ -415,8 +415,133 @@ pub fn validate_default_attribute(program: &Program) -> Vec<ResolveError> {
     let mut errors = Vec::new();
     for item in &program.items {
         check_item_default(item, &mut errors);
+        check_item_helpers(item, &mut errors);
     }
     errors
+}
+
+/// Where a derive helper may stand.
+#[derive(Clone, Copy, PartialEq)]
+enum HelperSite {
+    /// A struct or enum declaration, or an enum variant: `#[serde(...)]`.
+    TypeOrVariant,
+    /// A struct field or a struct variant's field: `#[serde(...)]` and the
+    /// protobuf derive's `#[karac::proto(...)]` / `#[karac::field(...)]`.
+    Field,
+    /// Anywhere else: no derive reads a helper there.
+    Elsewhere,
+}
+
+/// Refuse a derive helper where its derive does not look: it would be dropped
+/// silently, as `#[serde(rename: "x")]` on a function was (B-2026-11-05-17
+/// follow-up). `#[default]` has its own position check above.
+fn report_helpers(attrs: &[Attribute], site: HelperSite, errors: &mut Vec<ResolveError>) {
+    for attr in attrs {
+        let (name, valid_at) = if attr.path.len() == 1 && attr.path[0] == "serde" {
+            ("#[serde(...)]", "a struct, an enum, a field or a variant")
+        } else if attr.path.len() == 2
+            && attr.path[0] == "karac"
+            && KARAC_NAMESPACE_ATTRIBUTES.contains(&attr.path[1].as_str())
+        {
+            if attr.path[1] == "proto" {
+                ("#[karac::proto(...)]", "a field")
+            } else {
+                ("#[karac::field(...)]", "a field")
+            }
+        } else {
+            continue;
+        };
+        let ok = match site {
+            HelperSite::Field => true,
+            HelperSite::TypeOrVariant => attr.path.len() == 1,
+            HelperSite::Elsewhere => false,
+        };
+        if ok {
+            continue;
+        }
+        errors.push(ResolveError {
+            message: format!(
+                "error[E_HELPER_ATTRIBUTE_INVALID_POSITION]: `{name}` is a derive helper, read \
+                 only on {valid_at}; here no derive reads it, so it would do nothing"
+            ),
+            span: attr.span,
+            kind: ResolveErrorKind::HelperAttributeInvalidPosition,
+            suggestion: None,
+            replacement: None,
+            stub_hint: None,
+        });
+    }
+}
+
+fn check_item_helpers(item: &Item, errors: &mut Vec<ResolveError>) {
+    use HelperSite::*;
+    let fields = |fs: &[StructField], errors: &mut Vec<ResolveError>| {
+        for f in fs {
+            report_helpers(&f.attributes, Field, errors);
+        }
+    };
+    match item {
+        Item::StructDef(s) => {
+            report_helpers(&s.attributes, TypeOrVariant, errors);
+            fields(&s.fields, errors);
+        }
+        Item::EnumDef(e) => {
+            report_helpers(&e.attributes, TypeOrVariant, errors);
+            for v in &e.variants {
+                report_helpers(&v.attributes, TypeOrVariant, errors);
+                if let VariantKind::Struct(fs) = &v.kind {
+                    fields(fs, errors);
+                }
+            }
+        }
+        Item::UnionDef(u) => {
+            report_helpers(&u.attributes, Elsewhere, errors);
+            for f in &u.fields {
+                report_helpers(&f.attributes, Elsewhere, errors);
+            }
+        }
+        Item::TraitDef(t) => {
+            report_helpers(&t.attributes, Elsewhere, errors);
+            for ti in &t.items {
+                if let TraitItem::Method(m) = ti {
+                    report_helpers(&m.attributes, Elsewhere, errors);
+                }
+            }
+        }
+        Item::ImplBlock(i) => {
+            report_helpers(&i.attributes, Elsewhere, errors);
+            for ii in &i.items {
+                if let ImplItem::Method(m) = ii {
+                    report_helpers(&m.attributes, Elsewhere, errors);
+                }
+            }
+        }
+        Item::ExternBlock(b) => {
+            report_helpers(&b.attributes, Elsewhere, errors);
+            for it in &b.items {
+                match it {
+                    ExternItem::Function(f) => report_helpers(&f.attributes, Elsewhere, errors),
+                    ExternItem::OpaqueType(o) => report_helpers(&o.attributes, Elsewhere, errors),
+                }
+            }
+        }
+        Item::Function(f) => report_helpers(&f.attributes, Elsewhere, errors),
+        Item::TraitAlias(t) => report_helpers(&t.attributes, Elsewhere, errors),
+        Item::MarkerTrait(t) => report_helpers(&t.attributes, Elsewhere, errors),
+        Item::ConstDecl(c) => report_helpers(&c.attributes, Elsewhere, errors),
+        Item::ModuleBinding(b) => report_helpers(&b.attributes, Elsewhere, errors),
+        Item::TestCase(t) => report_helpers(&t.attributes, Elsewhere, errors),
+        Item::TypeAlias(t) => report_helpers(&t.attributes, Elsewhere, errors),
+        Item::DistinctType(d) => report_helpers(&d.attributes, Elsewhere, errors),
+        Item::ExternFunction(f) => report_helpers(&f.attributes, Elsewhere, errors),
+        Item::LayoutDef(l) => report_helpers(&l.attributes, Elsewhere, errors),
+        Item::EffectResource(_)
+        | Item::EffectGroup(_)
+        | Item::EffectVerbDecl(_)
+        | Item::Import(_)
+        | Item::AliasDecl(_)
+        | Item::IndependentDecl(_) => {}
+    }
 }
 
 /// Emit `E_MALFORMED_ATTRIBUTE_ARGS` if `#[default]` carries arguments.

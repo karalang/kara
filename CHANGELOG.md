@@ -26,6 +26,10 @@ accepted by 0.8.0 are now refused, each with a fix-it.
   v1, apart from `karac::` (the protobuf derive's `#[karac::proto]` and
   `#[karac::field]`) and `diagnostic::`, and an unknown `karac::` name is
   refused too (design.md § Attributes, B-2026-11-05-17).
+- **A derive helper where no derive reads it.** `#[serde(...)]` outside a
+  struct, an enum, a field or a variant, and `#[karac::proto]` /
+  `#[karac::field]` off a field, were dropped silently; they are
+  `E_HELPER_ATTRIBUTE_INVALID_POSITION`.
 - **`karac check` borrow-checks functions nothing calls yet, and libraries.**
   The MIR move and borrow checks ran only on what `main` reaches, so a
   library's `pub fn bad() -> Str { let s = ..; s.as_str() }` checked clean

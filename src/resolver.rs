@@ -960,6 +960,12 @@ pub enum ResolveErrorKind {
     /// `E_DEFAULT_ATTRIBUTE_INVALID_POSITION`. Phase-8 stdlib-floor
     /// item `#[derive(Default)]` / `#[default]` on enum variants.
     DefaultAttributeInvalidPosition,
+    /// A derive helper on an item its derive does not read: `#[serde(...)]`
+    /// anywhere but a struct, an enum, a field or a variant, and the protobuf
+    /// derive's `#[karac::proto(...)]` / `#[karac::field(...)]` anywhere but a
+    /// field. Mapped to `E_HELPER_ATTRIBUTE_INVALID_POSITION`
+    /// (B-2026-11-05-17 follow-up).
+    HelperAttributeInvalidPosition,
     /// `#[default]` on an enum variant whose enclosing enum does not
     /// carry `#[derive(Default)]` — the marker is inert without the
     /// derive, so the dead annotation is rejected rather than silently

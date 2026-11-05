@@ -1,0 +1,1 @@
+ERROR at line 6: `#[serde(...)]` is a derive helper, read only on a struct, an enum, a field or a variant; here no derive reads it
