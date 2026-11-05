@@ -61,7 +61,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | diagnostics | 139 |
 | false-positive | 116 |
 | perf | 101 |
-| missing-feature | 87 |
+| missing-feature | 89 |
 | soundness | 50 |
 | miscompile | 36 |
 | run-vs-build | 23 |
@@ -75,8 +75,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 206 |
-| mir-llvm | 121 |
+| typecheck | 207 |
+| mir-llvm | 122 |
 | mir | 120 |
 | cli | 67 |
 | ownership | 53 |
@@ -114,8 +114,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-05-30 | 2026-11-05 | cli | low | fix hints have two shapes, neither the spec's `diff {file, line, old, new}`: single-file JSON gives `replacement {offset, length, text}` beside a prose hint, package JSON `fix_it` and `fixes[].edits[]` (design.md §17 Structured compiler output) | — |
 | B-2026-11-05-31 | 2026-11-05 | cli | low | `karac fix` has none of the five style lints (counter `while` to `for`, `x = x + e` to `+=`, a final `return e;` to `e`, a redundant `.iter()` / `.to_string()` on a literal, a redundant `ref` on a parameter), and `karac lint --list` lists none of them (design.md §17 `karac fix`, Lint levels) | — |
 | B-2026-11-05-32 | 2026-11-05 | cli | low | `karac fmt` does not sort methods (an impl's `zeta` stays before `alpha`; imports are sorted) (design.md § Canonical formatting: methods sorted, imports sorted) | — |
-| B-2026-11-05-34 | 2026-11-05 | mir-llvm | low | The v2 backends emit none of the debugger contract's runtime metadata (design.md § Debugger contract, elements 1-3): no spawn-site ids per `par {}` block, no parent-frame reference per worker, no await-chain `WaitTarget`; so `std.runtime.has_debug_metadata()` is false even in a dev build and both lists are always empty | — |
 | B-2026-11-05-33 | 2026-11-05 | mir-llvm | low | x86 host-dependent: a jump across a 32-byte line costs kata 661 1.5x on one Cascade Lake host and nothing on another; aligning branches is 0.914x geomean there and loses kata 207 2.3x here, so it is opt-in (KARAC_MIR_ALIGN_BRANCHES=1); the over-2x list was a cross-host artifact | — |
+| B-2026-11-05-35 | 2026-11-05 | typecheck | low | `(0..n).step_by(2).rev()` is "no method 'rev' on type 'IterStepBy'": Rust's `StepBy` walks back over a range, Kāra's has no `next_back` and the diagnostic names no other way | — |
+| B-2026-11-05-36 | 2026-11-05 | mir-llvm | low | The v2 debugger metadata covers the contract only in part: no `runtime_debug_metadata` key in kara.toml's profiles, no per-worker file:line in `list_par_blocks()`, no effect summary in `list_tasks()`, and `WaitTarget.PeerTask` does not name the task waited on | — |
 
 ### Relocated
 
@@ -724,6 +725,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-05-22 | ownership | medium | Definite assignment ignores diverging paths: `let x: i64; if k > 0 { x = k; } else { return 0; } x` and the same with `panic(..)` in the else or in a… | c519e4b881 |
 | B-2026-11-05-24 | typecheck | low | A use of a deprecated item through a module binding (`import util;` then `util.old()`) is warned with the caret on the call's closing paren, not on `… | 244ab1cf33 |
 | B-2026-11-05-26 | cli | low | package mode: `karac check --output=jsonl` on a package member prints `type_error` lines (no `type` stream, no ids) and stops at typecheck, `karac bu… | 532e17a65b |
+| B-2026-11-05-34 | mir-llvm | low | The v2 backends emit none of the debugger contract's runtime metadata (design.md § Debugger contract, elements 1-3): no spawn-site ids per `par {}` b… | 12215de11b |
 
 </details>
 
