@@ -31,3 +31,11 @@ fn __karac_panic_message() -> String {
 fn __karac_panic_location() -> String {
     String.new()
 }
+
+// The panic record's kind of the panic that follows (design.md § Panic
+// record, B-2026-11-05-18), where `panic(msg)` alone would read as
+// `explicit`: `unwrap` / `expect` call it with 4 (`unwrap`), a library
+// bounds check with 1 (`index_out_of_bounds`). The codes are
+// `mir::syntax::PANIC_KINDS`.
+#[compiler_builtin]
+fn __karac_panic_kind(kind: i64) {}

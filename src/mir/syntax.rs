@@ -610,7 +610,40 @@ pub enum AbortReason {
     ShiftOutOfRange,
 }
 
+/// The panic record's kinds (design.md § Panic record), each at its code:
+/// the argument of the `panic_kind` native, and what the runtime's
+/// `karac_mir_panic_kind` stores. Kinds are only ever added, at the end.
+pub const PANIC_KINDS: [&str; 10] = [
+    "explicit",
+    "index_out_of_bounds",
+    "overflow",
+    "div_by_zero",
+    "unwrap",
+    "borrow_conflict",
+    "assertion",
+    "alloc_failure",
+    "unreachable",
+    "deadlock",
+];
+
+/// The code of a [`PANIC_KINDS`] kind.
+pub fn panic_kind_code(kind: &str) -> u8 {
+    PANIC_KINDS.iter().position(|k| *k == kind).unwrap_or(0) as u8
+}
+
 impl AbortReason {
+    /// The panic record's kind of an abort for this reason, when no
+    /// `panic_kind` call named a finer one.
+    pub fn panic_kind(&self) -> &'static str {
+        match self {
+            AbortReason::Panic => "explicit",
+            AbortReason::Overflow | AbortReason::ShiftOutOfRange => "overflow",
+            AbortReason::DivByZero => "div_by_zero",
+            AbortReason::BoundsCheck => "index_out_of_bounds",
+            AbortReason::UnreachableArm => "unreachable",
+        }
+    }
+
     /// The reason as the argument of a `__panic` call
     /// ([`crate::mir::coroutine::PANIC`]).
     pub fn code(&self) -> u8 {

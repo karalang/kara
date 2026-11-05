@@ -245,6 +245,13 @@ fn main() -> ExitCode {
     // JIT's process-symbol-search generator runs `dlsym`.
     let _ = force_link_karac_runtime();
 
+    // `karac run` / `karac test` under a JSON output mode ask the program
+    // for the panic record's kind (design.md § Panic record,
+    // B-2026-11-05-18); a built binary is never asked.
+    if std::env::var_os("KARAC_PANIC_RECORD").is_some_and(|v| v == "1") {
+        karac_runtime::mir::karac_mir_panic_record_enable();
+    }
+
     let Some(first) = std::env::args().nth(1).filter(|a| !a.starts_with("--")) else {
         eprintln!("karac_jit_runner: usage: karac_jit_runner <ir-path>");
         return ExitCode::from(2);

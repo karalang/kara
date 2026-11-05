@@ -840,6 +840,7 @@ fn run_with(
         tracing_min: 0,
         debug_render: false,
         panic_message: None,
+        panic_kind: None,
         contract_depth: 0,
         error_trace: Vec::new(),
         error_trace_truncated: false,
@@ -1335,6 +1336,9 @@ struct Interp<'a> {
     debug_render: bool,
     /// `panic(msg)`'s message, shown when the run aborts.
     panic_message: Option<String>,
+    /// The panic record's kind of the next abort, when its reason does not
+    /// name it ([`crate::mir::syntax::PANIC_KINDS`], B-2026-11-05-18).
+    panic_kind: Option<u8>,
     /// How many `requires` / `ensures` predicates are being evaluated: an
     /// abort raised above 0 is the predicate's panic (B-2026-10-25-23).
     contract_depth: u32,
@@ -2297,6 +2301,13 @@ impl<'a> Interp<'a> {
             }
             ("panic_message", "") => {
                 self.panic_message = Some(self.show(&args, arg_tys)?);
+                Ok(Value::Unit)
+            }
+            ("panic_kind" | "__karac_panic_kind", "") => {
+                let Some(Value::Int(k)) = args.first() else {
+                    return err("panic_kind takes a kind code");
+                };
+                self.panic_kind = u8::try_from(*k).ok();
                 Ok(Value::Unit)
             }
             ("contract_enter", "") => {
@@ -12538,11 +12549,19 @@ impl<'a> Interp<'a> {
             if !self.abort_reported && !in_library {
                 self.abort_reported = true;
                 self.drain_logs();
+                let kind = self
+                    .panic_kind
+                    .and_then(|k| crate::mir::syntax::PANIC_KINDS.get(usize::from(k)))
+                    .copied()
+                    .unwrap_or_else(|| reason.panic_kind());
                 let msg = self.abort_message(reason);
                 let (file, line) = source_at(span.line);
                 let at = format!("{file}:{line}:{}", span.column);
                 let trace = self.error_trace_text(Some(&at));
                 self.write_out(true, &format!("runtime error: {msg}\n  at {at}\n{trace}"));
+                if panic_record_asked() {
+                    self.write_out(true, &panic_record_line(kind));
+                }
                 self.run_panic_handler(msg, at);
             }
         }
@@ -12603,6 +12622,9 @@ impl<'a> Interp<'a> {
     /// was being evaluated, in it or in a function it calls (design.md §
     /// Contracts rule 2, B-2026-10-25-23).
     fn abort_message(&mut self, reason: &AbortReason) -> String {
+        // The kind goes with the message: a contained task's panic takes
+        // both, and leaves neither to a later abort.
+        self.panic_kind = None;
         let msg = match self.panic_message.take() {
             Some(m) => m,
             None => abort_text(reason).to_string(),
@@ -17207,6 +17229,22 @@ struct GroupSlot {
 /// What indexing a `Map` with a missing key reports, as the compiled
 /// backend does (B-2026-10-25-1).
 const KEY_NOT_FOUND: &str = "key not found";
+
+/// Whether the runner asked for the panic record (design.md § Panic
+/// record): `karac run` and `karac test` set this under `--output=json` /
+/// `jsonl` and fold the record into their own stream (B-2026-11-05-18).
+pub const PANIC_RECORD_ENV: &str = "KARAC_PANIC_RECORD";
+
+pub(crate) fn panic_record_asked() -> bool {
+    std::env::var_os(PANIC_RECORD_ENV).is_some_and(|v| v == "1")
+}
+
+/// The line the record adds after the human report: its kind, which the
+/// report's text does not carry. The message, place and trace are the
+/// report's own, which the runner already reads.
+pub(crate) fn panic_record_line(kind: &str) -> String {
+    format!("{{\"type\":\"panic_record\",\"kind\":\"{kind}\"}}\n")
+}
 
 /// What an abort for `reason` reports when no message was given.
 fn abort_text(reason: &AbortReason) -> &'static str {

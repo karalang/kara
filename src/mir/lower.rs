@@ -875,10 +875,12 @@ fn refs_only_receiver(tys: &TyInterner, t: Ty) -> bool {
 
 /// The natives the builder calls by bare name rather than through a
 /// definition.
-const BUILDER_NATIVES: [&str; 11] = [
+const BUILDER_NATIVES: [&str; 12] = [
     "format",
     "format_spec",
     "panic_message",
+    // The panic record's kind (design.md § Panic record, B-2026-11-05-18).
+    "panic_kind",
     "contract_enter",
     "contract_exit",
     "error_trace_push",
@@ -17426,6 +17428,20 @@ impl<'l, 'a> Bx<'l, 'a> {
         self.b.set_source_info(outer);
     }
 
+    /// The panic record's kind of the abort that follows, where the abort's
+    /// reason alone does not name it (design.md § Panic record,
+    /// B-2026-11-05-18).
+    fn panic_kind(&mut self, kind: &str) {
+        let i64_t = self.tys().int(crate::mir::ty::IntTy::I64);
+        let code = Operand::Const(Const {
+            ty: i64_t,
+            kind: ConstKind::Scalar(u128::from(crate::mir::syntax::panic_kind_code(kind))),
+        });
+        let unit = self.tys().unit();
+        let l = self.temp(unit);
+        self.call_native("panic_kind", vec![code], Place::local(l));
+    }
+
     fn call_native(&mut self, name: &str, args: Vec<Operand>, dest: Place) {
         self.queue_for_native(name, &args);
         let func = self.fn_operand(name, DefId(u32::MAX), Vec::new());
@@ -20253,6 +20269,9 @@ impl<'l, 'a> Bx<'l, 'a> {
                     let l = self.temp(unit);
                     self.call_native("panic_message", ops, Place::local(l));
                 }
+                if name == "unreachable" {
+                    self.panic_kind("unreachable");
+                }
                 self.diverge(TerminatorKind::Abort {
                     reason: AbortReason::Panic,
                 });
@@ -20397,6 +20416,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 let unit_t = self.tys().unit();
                 let l = self.temp(unit_t);
                 self.call_native("panic_message", ops, Place::local(l));
+                self.panic_kind("assertion");
                 self.diverge(TerminatorKind::Abort {
                     reason: AbortReason::Panic,
                 });

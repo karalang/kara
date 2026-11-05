@@ -432,6 +432,8 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         mir::karac_mir_string_push_char,
         mir::karac_mir_exit,
         mir::karac_mir_panic_set,
+        mir::karac_mir_panic_kind,
+        mir::karac_mir_panic_record_enable,
         mir::karac_mir_abort,
         mir::karac_mir_abort_at,
         mir::karac_mir_panic_at,

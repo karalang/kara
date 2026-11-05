@@ -77,27 +77,39 @@ impl[T, E] Result[T, E] {
     fn unwrap(own self) -> T {
         match self {
             Ok(x) => x,
-            Err(_) => panic("called unwrap() on Err"),
+            Err(_) => {
+                __karac_panic_kind(4);
+                panic("called unwrap() on Err")
+            }
         }
     }
 
     fn expect(own self, msg: Str) -> T {
         match self {
             Ok(x) => x,
-            Err(_) => panic(msg),
+            Err(_) => {
+                __karac_panic_kind(4);
+                panic(msg)
+            }
         }
     }
 
     fn unwrap_err(own self) -> E {
         match self {
-            Ok(_) => panic("called unwrap_err() on Ok"),
+            Ok(_) => {
+                __karac_panic_kind(4);
+                panic("called unwrap_err() on Ok")
+            }
             Err(e) => e,
         }
     }
 
     fn expect_err(own self, msg: Str) -> E {
         match self {
-            Ok(_) => panic(msg),
+            Ok(_) => {
+                __karac_panic_kind(4);
+                panic(msg)
+            }
             Err(e) => e,
         }
     }

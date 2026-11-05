@@ -1154,6 +1154,9 @@ fn str_range_panic(s: &str, lo: i64, hi: i64, mode: i32) {
         msg.extend_from_slice(b"..");
         push_i64(msg, hi);
     };
+    // Either failure is a slice out of bounds (`index_out_of_bounds`), as
+    // the MIR interpreter reports it.
+    PANIC_KIND.store(1, std::sync::atomic::Ordering::Relaxed);
     if mode != 0 && !(0 <= lo && lo <= hi && hi <= len) {
         msg.extend_from_slice(b"string slice bounds ");
         range(&mut msg);
@@ -2931,6 +2934,77 @@ pub unsafe extern "C" fn karac_mir_forget(p: *const u8, n: u64) {
         .push(bytes);
 }
 
+/// The panic record's kind of the next abort (design.md § Panic record,
+/// B-2026-11-05-18), as a code into [`PANIC_KINDS`]; `u8::MAX` when no
+/// `panic_kind` call named one, and the abort's reason decides.
+static PANIC_KIND: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(u8::MAX);
+
+/// Set by `karac_jit_runner` when `karac run` / `karac test` asked for the
+/// panic record; a built binary run directly never writes it.
+static PANIC_RECORD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The panic record's kinds, at their codes: `karac::mir::syntax::PANIC_KINDS`.
+const PANIC_KINDS: [&[u8]; 10] = [
+    b"explicit",
+    b"index_out_of_bounds",
+    b"overflow",
+    b"div_by_zero",
+    b"unwrap",
+    b"borrow_conflict",
+    b"assertion",
+    b"alloc_failure",
+    b"unreachable",
+    b"deadlock",
+];
+
+/// `panic_kind(code)`: the kind of the abort that follows.
+#[no_mangle]
+pub extern "C" fn karac_mir_panic_kind(kind: i64) {
+    PANIC_KIND.store(
+        u8::try_from(kind).unwrap_or(0),
+        std::sync::atomic::Ordering::Relaxed,
+    );
+}
+
+/// The runner asks for the panic record.
+#[no_mangle]
+pub extern "C" fn karac_mir_panic_record_enable() {
+    PANIC_RECORD.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// After an abort's human report, the record's kind on its own line, when
+/// the runner asked for it: `{"type":"panic_record","kind":K}`. The kind is
+/// the one a `panic_kind` call named; else `explicit` when the program set
+/// the message (`panic(msg)`); else the one the abort's reason text names.
+fn panic_record(message_set: bool, reason_text: &[u8]) {
+    let kind = PANIC_KIND.swap(u8::MAX, std::sync::atomic::Ordering::Relaxed);
+    if !PANIC_RECORD.load(std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+    let code = if kind != u8::MAX {
+        kind
+    } else if message_set {
+        0
+    } else {
+        match reason_text {
+            b"index out of bounds" => 1,
+            b"integer overflow" | b"shift amount out of range" => 2,
+            b"division by zero" => 3,
+            b"entered unreachable code" => 8,
+            _ => 0,
+        }
+    };
+    let name = PANIC_KINDS
+        .get(usize::from(code))
+        .copied()
+        .unwrap_or(b"explicit");
+    let mut line = LeanVec::<u8>::new();
+    line.extend_from_slice(b"{\"type\":\"panic_record\",\"kind\":\"");
+    line.extend_from_slice(name);
+    line.extend_from_slice(b"\"}\n");
+    write(true, line.as_slice());
+}
+
 /// Ends a `panic_message` format: its text is the next abort's message.
 #[no_mangle]
 pub extern "C" fn karac_mir_panic_set() {
@@ -3241,11 +3315,13 @@ pub unsafe extern "C" fn karac_mir_abort(ptr: *const u8, len: u64) -> ! {
         karac_mir_exit(101)
     }
     crate::mir_task::drain_logs();
-    let msg = abort_message(take_panic_message().unwrap_or_else(|| {
-        // SAFETY: the caller's contract.
-        String::from_utf8_lossy(unsafe { bytes(ptr, len) }).into_owned()
-    }));
+    let set = take_panic_message();
+    let message_set = set.is_some();
+    // SAFETY: the caller's contract.
+    let reason = unsafe { bytes(ptr, len) };
+    let msg = abort_message(set.unwrap_or_else(|| String::from_utf8_lossy(reason).into_owned()));
     write(true, format!("runtime error: {msg}\n").as_bytes());
+    panic_record(message_set, reason);
     run_panic_handler(&msg, "");
     karac_mir_exit(101)
 }
@@ -3282,7 +3358,9 @@ pub unsafe extern "C" fn karac_mir_abort_at(
     if crate::in_contract_predicate() {
         report.extend_from_slice(CONTRACT_PREDICATE_PANICKED.as_bytes());
     }
+    let mut message_set = false;
     with_panic(|p| {
+        message_set = p.set;
         report.extend_from_slice(if p.set { p.text.as_slice() } else { msg });
         p.set = false;
         p.text.clear();
@@ -3294,6 +3372,7 @@ pub unsafe extern "C" fn karac_mir_abort_at(
         }
     }
     write(true, report.as_slice());
+    panic_record(message_set, msg);
     karac_mir_exit(101)
 }
 
@@ -3333,10 +3412,11 @@ unsafe fn rich_abort(ptr: *const u8, len: u64, at: *const u8, at_len: u64) -> ! 
     let len = len as usize;
     let at_len = at_len as usize;
     crate::mir_task::drain_logs();
-    let msg = abort_message(take_panic_message().unwrap_or_else(|| {
-        // SAFETY: the caller's contract.
-        String::from_utf8_lossy(unsafe { bytes(ptr, len) }).into_owned()
-    }));
+    let set = take_panic_message();
+    let message_set = set.is_some();
+    // SAFETY: the caller's contract.
+    let reason = unsafe { bytes(ptr, len) };
+    let msg = abort_message(set.unwrap_or_else(|| String::from_utf8_lossy(reason).into_owned()));
     // SAFETY: the caller's contract.
     let at = String::from_utf8_lossy(unsafe { bytes(at, at_len) });
     let report = if at.is_empty() {
@@ -3346,6 +3426,7 @@ unsafe fn rich_abort(ptr: *const u8, len: u64, at: *const u8, at_len: u64) -> ! 
         format!("runtime error: {msg}\n  at {at}\n{trace}")
     };
     write(true, report.as_bytes());
+    panic_record(message_set, reason);
     run_panic_handler(&msg, &at);
     karac_mir_exit(101)
 }

@@ -1141,6 +1141,12 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.rt("panic_set", &[])?;
                 self.drop_moved(args)
             }
+            // The panic record's kind of the abort that follows (design.md
+            // § Panic record, B-2026-11-05-18).
+            ("panic_kind" | "__karac_panic_kind", "") => {
+                let k = self.operand_scalar(&args[0])?.into_int_value();
+                self.rt("panic_kind", &[k.into()])
+            }
             ("process", "exit") => {
                 let code = self.operand_scalar(&args[0])?.into_int_value();
                 let code = self

@@ -24,6 +24,10 @@ const PACKAGE: &str = "<package>";
 
 pub(super) fn cmd_test_v2(filter: Option<String>, all: bool, interp: bool) {
     let TestFront { mf, tree, tests } = test_front(filter.as_deref(), true);
+    // The runner's stream is JSONL, so it asks each case for the panic
+    // record's kind, which a `test_fail` carries (design.md § Panic record,
+    // B-2026-11-05-18).
+    std::env::set_var(crate::mir::interp::PANIC_RECORD_ENV, "1");
     let jit =
         cfg!(feature = "llvm") && !interp && std::env::var("KARAC_TEST_JIT").as_deref() != Ok("0");
 
@@ -205,10 +209,12 @@ pub(super) fn cmd_test_v2(filter: Option<String>, all: bool, interp: bool) {
             .iter()
             .map(|fx| fx.resource_path.clone())
             .collect();
-        emit_test_event(
-            "test_fail",
-            &test_fail_fields_with_providers(t, &outcome, &file, duration_ms, &providers),
-        );
+        let mut fields =
+            test_fail_fields_with_providers(t, &outcome, &file, duration_ms, &providers);
+        if let Some(kind) = fault.and_then(|f| f.kind.as_ref()) {
+            fields.push_str(&format!(",\"kind\":{}", json_string(kind)));
+        }
+        emit_test_event("test_fail", &fields);
     }
     emit_test_event(
         "summary",

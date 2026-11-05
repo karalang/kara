@@ -58,6 +58,9 @@ fn cmd_run_v2(
     // runtime and the MIR interpreter both read this.
     if matches!(output, OutputMode::Json | OutputMode::Jsonl) {
         std::env::set_var("KARAC_DBG_OUTPUT", "json");
+        // The panic record's kind, which the human report does not carry
+        // (design.md § Panic record, B-2026-11-05-18).
+        std::env::set_var(crate::mir::interp::PANIC_RECORD_ENV, "1");
     }
     let manifest = run_manifest_preamble(filename, output, manifest_override, no_manifest);
     // A file of a package with other modules runs the whole package, as
@@ -465,6 +468,19 @@ fn finish(code: i32, stderr: Option<&str>, output: OutputMode) -> ! {
 pub(super) struct Fault {
     pub(super) message: String,
     pub(super) at: Option<(String, usize, usize)>,
+    /// The panic record's kind (design.md § Panic record), when the
+    /// program was asked for it.
+    pub(super) kind: Option<String>,
+}
+
+/// The kind a `{"type":"panic_record","kind":K}` line names
+/// ([`crate::mir::interp::panic_record_line`]).
+fn panic_record_kind(line: &str) -> Option<String> {
+    let rest = line.strip_prefix("{\"type\":\"panic_record\",\"kind\":\"")?;
+    let kind = rest.strip_suffix("\"}")?;
+    crate::mir::syntax::PANIC_KINDS
+        .contains(&kind)
+        .then(|| kind.to_string())
 }
 
 /// The lines a failed `assert_eq` (`left`, `right`) or `assert_ne`
@@ -558,7 +574,18 @@ impl RuntimeReports {
                     .and_then(|l| l.strip_prefix("  at "))
                     .and_then(location);
                 i += if at.is_some() { 2 } else { 1 };
-                r.faults.push(Fault { message, at });
+                r.faults.push(Fault {
+                    message,
+                    at,
+                    kind: None,
+                });
+                continue;
+            }
+            if let Some(kind) = panic_record_kind(line) {
+                if let Some(f) = r.faults.last_mut() {
+                    f.kind = Some(kind);
+                }
+                i += 1;
                 continue;
             }
             if let Some(why) = line.strip_prefix("Error return trace: unavailable ") {
@@ -608,6 +635,10 @@ impl RuntimeReports {
             ),
             None => "null".to_string(),
         };
+        let kind_json = |kind: &Option<String>| match kind {
+            Some(k) => format!(",\"kind\":{}", json_string(k)),
+            None => String::new(),
+        };
         let frames = self
             .trace
             .iter()
@@ -634,9 +665,10 @@ impl RuntimeReports {
                         .iter()
                         .map(|f| {
                             format!(
-                                "{{\"message\":{},\"location\":{}}}",
+                                "{{\"message\":{},\"location\":{}{}}}",
                                 json_string(&f.message),
-                                at_json(&f.at)
+                                at_json(&f.at),
+                                kind_json(&f.kind)
                             )
                         })
                         .collect::<Vec<_>>()
@@ -666,9 +698,10 @@ impl RuntimeReports {
                     emit_jsonl_event(
                         "runtime_error",
                         &format!(
-                            "\"message\":{},\"location\":{}",
+                            "\"message\":{},\"location\":{}{}",
                             json_string(&f.message),
-                            at_json(&f.at)
+                            at_json(&f.at),
+                            kind_json(&f.kind)
                         ),
                     );
                 }

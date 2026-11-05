@@ -250,6 +250,7 @@ impl[T] Vec[T] {
     /// aborts (B-2026-11-04-77).
     fn drain(mut ref self, r: Range[i64]) -> VecIntoIter[T] {
         if r.start < 0 or r.end > self.len() or r.start > r.end {
+            __karac_panic_kind(1);
             panic("drain range out of bounds");
         }
         let mut tail = self.split_off(r.end);
@@ -1433,6 +1434,7 @@ impl[T] VecDeque[T] {
     fn remove(mut ref self, idx: i64) -> T {
         let n = self.len();
         if idx < 0 or idx >= n {
+            __karac_panic_kind(1);
             panic("index out of bounds");
         }
         deque_rotate_front(mut self, idx);
@@ -1445,6 +1447,7 @@ impl[T] VecDeque[T] {
     fn swap(mut ref self, i: i64, j: i64) {
         let n = self.len();
         if i < 0 or i >= n or j < 0 or j >= n {
+            __karac_panic_kind(1);
             panic("index out of bounds");
         }
         if i == j {

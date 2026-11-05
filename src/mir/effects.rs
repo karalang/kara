@@ -1506,6 +1506,9 @@ fn native_effects(base: &str, method: &str) -> Option<Vec<(Verb, &'static str, O
         // (core semantics §10.2). Its stderr write is the panic's own, so
         // it charges exactly what the abort after it does.
         ("panic_message", "") => vec![PANICS],
+        // The kind the panic record gives the abort after it
+        // (B-2026-11-05-18): a note for the report, which the abort charges.
+        ("panic_kind" | "__karac_panic_kind", "") => vec![],
         // The bracket around a contract predicate only counts how deep the
         // thread is in one (B-2026-10-25-23).
         ("contract_enter" | "contract_exit", "") => vec![],
