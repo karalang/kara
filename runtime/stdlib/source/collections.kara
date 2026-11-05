@@ -220,9 +220,11 @@ impl[T] Vec[T] {
         if r.start < 0 or r.end > self.len() or r.start > r.end {
             panic("drain range out of bounds");
         }
-        let tail = self.split_off(r.end);
+        let mut tail = self.split_off(r.end);
         let taken = self.split_off(r.start);
-        self.extend(tail);
+        // `append` moves the tail back in one step; `extend` pushes it an
+        // element at a time, 60 times slower under the interpreter (kata 1047).
+        self.append(mut tail);
         VecIntoIter { front: Vec.new(), back: taken }
     }
 

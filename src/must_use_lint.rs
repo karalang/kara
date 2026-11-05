@@ -96,8 +96,11 @@ fn implicit_must_use_kind(name: &str) -> Option<(&'static str, &'static str)> {
 /// result (did the child exit?), not an ancillary report, and `("Process",
 /// "wait")` is absent — so it still warns.
 ///
-/// Consulted ONLY when the discarded value's type is `Option` (see
-/// `check_discard`), so a `try_*` call discarded WITHOUT `?` — where the
+/// `Vec.drain` is the one entry whose value is not an `Option`: the
+/// `VecIntoIter` it returns holds the elements the call already removed.
+///
+/// Consulted ONLY when the discarded value's type is `Option` or a library
+/// iterator (see `check_discard`), so a `try_*` call discarded WITHOUT `?` — where the
 /// discarded type is the `Result` and the abandoned branch is the ALLOCATION
 /// FAILURE — is untouched and still warns.
 fn displaced_value_exempt(receiver: &str, method: &str) -> bool {
@@ -109,6 +112,7 @@ fn displaced_value_exempt(receiver: &str, method: &str) -> bool {
             | ("String", "pop")
             | ("VecDeque", "pop_front" | "pop_back")
             | ("PriorityQueue", "pop")
+            | ("Vec", "drain")
     )
 }
 
@@ -342,8 +346,13 @@ impl Walker<'_> {
             }
         }
 
-        // Source 2: type-level `#[must_use]` (slice 4).
+        // Source 2: type-level `#[must_use]` (slice 4). `v.drain(a..b);`
+        // removes the range at the call, so the iterator it returns, unlike
+        // an adapter's, has already done its work when it is dropped.
         if let Some((name, msg)) = self.type_level_must_use(ty) {
+            if self.is_displaced_value_discard(expr) {
+                return;
+            }
             self.diags.push(self.make_type_level_diag(expr, name, msg));
             return;
         }
