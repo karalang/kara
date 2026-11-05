@@ -1,7 +1,7 @@
 
-#[derive(Hash, Eq, PartialEq)]
+#[derive(Hash, Eq, PartialEq, Debug)]
 enum E { A(String), Pair(i64, String), B }
-#[derive(Hash, Eq, PartialEq)]
+#[derive(Hash, Eq, PartialEq, Debug)]
 struct S { a: i64, s: String }
 
 fn mk(n: i64) -> String { return f"v{n}"; }

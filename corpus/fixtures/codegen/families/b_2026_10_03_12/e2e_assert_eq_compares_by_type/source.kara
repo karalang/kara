@@ -1,4 +1,6 @@
+#[derive(Debug)]
 shared struct Node { v: i64 }
+#[derive(Debug)]
 struct T3 { h: Node, a: i64, b: i64 }
 fn names(t: own String) -> Vec[String] { let mut v: Vec[String] = Vec.new(); v.push(t); v }
 fn main() {
