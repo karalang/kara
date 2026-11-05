@@ -24,6 +24,72 @@ fn e<T: ToString>(x: T) -> String {
 }
 
 impl<'ctx> Cx<'ctx, '_> {
+    /// Refuses to compile `Runtime.list_tasks` / `list_par_blocks` into a
+    /// `dty` (the list) whose rows are not laid out as the runtime writes
+    /// them (`ParBlockRow` / `TaskRow` in runtime/src/mir_task.rs): each
+    /// field, by name, at the offset the runtime's `#[repr(C)]` row puts
+    /// it, and `WaitTarget`'s variants in the runtime's order.
+    fn check_contract_rows(&self, dty: Ty) -> R<()> {
+        let TyKind::Intrinsic(IntrinsicTy::Vec(row)) = self.tys.kind(dty) else {
+            return Err("a debugger-contract list that is not a Vec".into());
+        };
+        let (adt, _) = self
+            .tys
+            .tcx()
+            .adt_of(row)
+            .ok_or("a list row that is not a struct")?;
+        let want: &[(&str, u64)] = match adt.name.as_str() {
+            "ParBlockInfo" => &[
+                ("spawn_site_id", 0),
+                ("file", 8),
+                ("line", 32),
+                ("col", 36),
+                ("worker_count", 40),
+                ("parent_task_id", 48),
+            ],
+            "TaskInfo" => &[
+                ("spawn_site_id", 0),
+                ("wait_target", 8),
+                ("file", 24),
+                ("line", 48),
+                ("col", 52),
+                ("task_id", 56),
+                ("parent_task_id", 64),
+            ],
+            other => return Err(format!("`{other}` is not a debugger-contract row")),
+        };
+        let fields = &adt.variants[0].fields;
+        let mut ok = fields.len() == want.len();
+        for (f, (name, at)) in want.iter().enumerate() {
+            ok &= fields.get(f).is_some_and(|(n, _)| n == name)
+                && self.field_offset(row, None, f as u32)? == *at;
+        }
+        if adt.name == "TaskInfo" {
+            let wt = self
+                .tys
+                .field_ty(row, None, 1)
+                .ok_or("TaskInfo without wait_target")?;
+            let (w, _) = self
+                .tys
+                .tcx()
+                .adt_of(wt)
+                .ok_or("a WaitTarget that is not an enum")?;
+            let names: Vec<&str> = w.variants.iter().map(|v| v.name.as_str()).collect();
+            ok &= names == ["Running", "PeerTask", "IoHandle", "Sleep"]
+                && crate::mir::layout::enum_tag(self.tys, wt).is_some_and(|t| t.size == 1)
+                && self.field_offset(wt, Some(2), 0)? == 8
+                && self.layout(wt)?.size == 16;
+        }
+        if !ok {
+            return Err(format!(
+                "the library's `{}` is not laid out as the runtime writes it \
+                 (runtime/src/mir_task.rs)",
+                adt.name
+            ));
+        }
+        Ok(())
+    }
+
     pub(super) fn call(
         &mut self,
         func: &Operand,
@@ -1333,8 +1399,15 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.rt("string_from", &[d.into(), s.into(), n.into()])?;
                 self.drop_moved(args)
             }
-            // No scheduler is listed and no debug metadata is kept, as on
-            // the MIR interpreter (design.md §17; B-2026-10-22-38).
+            // The runtime writes the rows, laid out as the library declares
+            // them (design.md § Debugger contract, B-2026-11-05-34).
+            ("Runtime", "list_tasks" | "list_par_blocks") if self.debug_meta => {
+                self.check_contract_rows(dty)?;
+                let d = self.place_ptr(dest)?;
+                self.rt(method, &[d.into()])
+            }
+            // Without the metadata both lists are empty (design.md §
+            // Debugger contract).
             ("String" | "Vec", "new") | ("Runtime", "list_tasks" | "list_par_blocks") => {
                 let d = self.place_ptr(dest)?;
                 self.builder
@@ -1846,7 +1919,8 @@ impl<'ctx> Cx<'ctx, '_> {
             }
             ("Runtime", "has_debug_metadata") => {
                 let d = self.place_ptr(dest)?;
-                self.store_i1(d, self.llcx.bool_type().const_zero())
+                let on = u64::from(self.debug_meta);
+                self.store_i1(d, self.llcx.bool_type().const_int(on, false))
             }
             ("Env", "args") => {
                 let d = self.place_ptr(dest)?;

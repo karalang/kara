@@ -571,12 +571,13 @@ fn build(
         process::exit(1);
     }
     if a.release {
-        // `dbg()`, contracts and the error return trace are stripped from
-        // release builds (design.md § `dbg()`, § Contracts, § Error return
-        // traces).
+        // `dbg()`, contracts, the error return trace and the runtime debug
+        // metadata are stripped from release builds (design.md § `dbg()`,
+        // § Contracts, § Error return traces, § Debugger contract).
         std::env::set_var("KARAC_STRIP_DBG", "1");
         std::env::set_var("KARAC_STRIP_CONTRACTS", "1");
         std::env::set_var("KARAC_STRIP_ERROR_TRACE", "1");
+        std::env::set_var("KARAC_STRIP_DEBUG_METADATA", "1");
     }
     let source = match &project {
         Some(p) => p.text.clone(),

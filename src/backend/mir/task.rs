@@ -250,25 +250,26 @@ impl<'ctx> Cx<'ctx, '_> {
         self.store(block, self.i64(RUNNING).into())?;
         let poll = self.task_poll(&resume, true);
         let g = self.group_handle(group)?;
-        let p = self.ptr_ty();
-        let spawn = self.extern_fn(
-            "karac_mir_task_spawn",
-            self.llcx
-                .void_type()
-                .fn_type(&[p.into(), p.into(), p.into(), p.into()], false),
-        );
-        self.builder
-            .build_call(
-                spawn,
-                &[
-                    g.into(),
-                    poll.as_global_value().as_pointer_value().into(),
-                    frame.into(),
-                    block.into(),
-                ],
-                "",
-            )
-            .map_err(e)?;
+        let mut args: Vec<inkwell::values::BasicMetadataValueEnum<'ctx>> = vec![
+            g.into(),
+            poll.as_global_value().as_pointer_value().into(),
+            frame.into(),
+            block.into(),
+        ];
+        // With the runtime debug metadata, the task keeps the place of its
+        // spawn, for `Runtime.list_tasks` (design.md § Debugger contract,
+        // B-2026-11-05-34).
+        let name = if self.debug_meta {
+            let (at, n) = self.meta_site(self.site)?;
+            args.push(at.into());
+            args.push(n.into());
+            "karac_mir_task_spawn_at"
+        } else {
+            "karac_mir_task_spawn"
+        };
+        let tys = self.arg_tys(&args);
+        let spawn = self.extern_fn(name, self.llcx.void_type().fn_type(&tys, false));
+        self.builder.build_call(spawn, &args, "").map_err(e)?;
         let d = self.place_ptr(dest)?;
         self.store(d, block.into())
     }

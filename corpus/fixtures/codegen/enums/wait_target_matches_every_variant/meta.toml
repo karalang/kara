@@ -1,10 +1,10 @@
-source = "tests/codegen/enums.rs::wait_target_matches_on_its_only_variant"
+source = "B-2026-11-05-34"
 dedup_of = []
 expect = "stdout"
 exit = 0
-tags = ["src:legacy-tests"]
+tags = ["src:legacy-tests", "debugger-contract"]
 class = "a"
-expected_from = "oracle"
+expected_from = "spec"
 legacy_backend = "legacy-build"
 legacy_exit = 0
 rules = []

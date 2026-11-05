@@ -1,4 +1,0 @@
-fn main() {
-let w = WaitTarget.Running;
-match w { WaitTarget.Running => println("Running") }
-}

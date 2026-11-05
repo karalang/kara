@@ -345,6 +345,16 @@ impl<'ctx> Cx<'ctx, '_> {
         (here == f).then_some((p, n))
     }
 
+    /// The `file:line:col` of `span`, for the runtime debug metadata
+    /// (design.md § Debugger contract): a constant when `span` is in the
+    /// program's source, else none (null and 0).
+    pub(super) fn meta_site(&mut self, span: Span) -> R<(PointerValue<'ctx>, IntValue<'ctx>)> {
+        if self.in_user_source(span) && span.line > 0 {
+            return self.str_const(&Self::site_text(span));
+        }
+        Ok(self.no_site())
+    }
+
     fn no_site(&self) -> (PointerValue<'ctx>, IntValue<'ctx>) {
         (
             self.ptr_ty().const_null(),

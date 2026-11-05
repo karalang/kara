@@ -66,7 +66,7 @@ use crate::mir::coroutine;
 use crate::mir::interp::{self, Program};
 use crate::mir::layout::{self, Layout};
 use crate::mir::ty::{FloatTy, TyKind};
-use crate::mir::{Body, Operand, Place, TerminatorKind, Ty, TyInterner};
+use crate::mir::{Body, Const, ConstKind, Operand, Place, TerminatorKind, Ty, TyInterner};
 
 /// The largest body, in blocks and in statements, that is hinted for
 /// inlining ([`Cx::lower_body`]).
@@ -316,6 +316,16 @@ pub struct Cx<'ctx, 'p> {
     /// The locals of the body being lowered that hold a length
     /// ([`crate::mir::guard_bounds::length_locals`]).
     lengths: Vec<bool>,
+    /// The binary carries the runtime debug metadata (design.md §
+    /// Debugger contract, B-2026-11-05-34): every build but `--release`,
+    /// which sets `KARAC_STRIP_DEBUG_METADATA`.
+    debug_meta: bool,
+    /// The index of the block being lowered.
+    cur_block: usize,
+    /// In the body being lowered, the blocks whose `TaskGroup.new` makes
+    /// a `par` block's group, with the block's place and branch count
+    /// ([`par_group_sites`]).
+    par_sites: HashMap<usize, (crate::token::Span, u32)>,
 }
 
 impl<'ctx, 'p> Cx<'ctx, 'p> {
@@ -361,6 +371,12 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
             upper_proven: false,
             lengths: Vec::new(),
             hot_swap_calls: Vec::new(),
+            debug_meta: !matches!(
+                std::env::var("KARAC_STRIP_DEBUG_METADATA").as_deref(),
+                Ok("1" | "true")
+            ),
+            cur_block: 0,
+            par_sites: HashMap::new(),
         }
     }
 
@@ -1551,7 +1567,13 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
         } else {
             crate::mir::midpoint::midpoints(body, self.tys)
         };
+        self.par_sites = if self.debug_meta {
+            par_group_sites(body)
+        } else {
+            HashMap::new()
+        };
         for (i, block) in body.blocks.iter().enumerate() {
+            self.cur_block = i;
             self.builder.position_at_end(self.blocks[i]);
             for (m, slot, ty) in monotones.iter().filter(|(m, ..)| m.header == i) {
                 self.assume_monotone(m, *slot, *ty)?;
@@ -1880,6 +1902,58 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
             .map_err(|e| e.to_string())?;
         Ok(a)
     }
+}
+
+/// The blocks of `body` whose call is the `TaskGroup.new` of a `par`
+/// block's group, with the block's place and branch count, for the runtime
+/// debug metadata (design.md § Debugger contract, B-2026-11-05-34). The
+/// group is made just before the first branch: the call's block leads to
+/// the first branch's entry through at most a few single-successor blocks
+/// (an auto-par group's `__hidden` call among them).
+fn par_group_sites(body: &Body) -> HashMap<usize, (crate::token::Span, u32)> {
+    let mut sites = HashMap::new();
+    if body.par_regions.is_empty() {
+        return sites;
+    }
+    let mut preds: Vec<Vec<usize>> = vec![Vec::new(); body.blocks.len()];
+    for (i, b) in body.blocks.iter().enumerate() {
+        for t in b.terminator.kind.successors() {
+            if let Some(p) = preds.get_mut(t.0 as usize) {
+                p.push(i);
+            }
+        }
+    }
+    for region in &body.par_regions {
+        let Some(&entry) = region.branches.first().and_then(|b| b.first()) else {
+            continue;
+        };
+        let workers = match region.kind {
+            crate::mir::ParKind::Block => region.branches.len() as u32,
+            crate::mir::ParKind::For { .. } => 0,
+        };
+        let mut at = entry.0 as usize;
+        for _ in 0..4 {
+            let [p] = preds[at][..] else {
+                break;
+            };
+            if let TerminatorKind::Call {
+                func:
+                    Operand::Const(Const {
+                        kind: ConstKind::FnDef(i),
+                        ..
+                    }),
+                ..
+            } = &body.blocks[p].terminator.kind
+            {
+                if i.name == "TaskGroup.new" {
+                    sites.insert(p, (region.span, workers));
+                    break;
+                }
+            }
+            at = p;
+        }
+    }
+    sites
 }
 
 #[cfg(test)]

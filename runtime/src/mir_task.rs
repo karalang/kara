@@ -163,6 +163,55 @@ struct Group {
     /// The first of `members` that has not finished: its records go on as
     /// it logs them, and a later task's wait until it is the first.
     next: usize,
+    /// The `par` block it runs, in a binary with the runtime debug
+    /// metadata (design.md § Debugger contract, B-2026-11-05-34).
+    site: Option<ParSite>,
+}
+
+/// Where a `par` block or a spawned task is in the source: its
+/// `file:line:col`, a constant of the program.
+#[derive(Clone, Copy)]
+struct Site(*const u8, usize);
+
+impl Site {
+    /// The text, when there is one.
+    fn of(ptr: *const u8, len: u64) -> Option<Site> {
+        (!ptr.is_null() && len > 0).then_some(Site(ptr, len as usize))
+    }
+
+    fn text(&self) -> &'static [u8] {
+        // SAFETY: a constant of the program, `len` bytes long.
+        unsafe { std::slice::from_raw_parts(self.0, self.1) }
+    }
+
+    /// The spawn-site id (design.md § Debugger contract, element 1): the
+    /// 32-bit FNV-1a hash of the text, the same in every run of a binary.
+    fn id(&self) -> u32 {
+        self.text().iter().fold(0x811c_9dc5u32, |h, &b| {
+            (h ^ u32::from(b)).wrapping_mul(0x0100_0193)
+        })
+    }
+
+    /// The file, line and column.
+    fn parts(&self) -> (&'static [u8], u32, u32) {
+        let t = self.text();
+        let mut it = t.rsplitn(3, |&b| b == b':');
+        let num = |x: Option<&[u8]>| {
+            x.and_then(|x| std::str::from_utf8(x).ok())
+                .and_then(|x| x.parse::<u32>().ok())
+                .unwrap_or(0)
+        };
+        let col = num(it.next());
+        let line = num(it.next());
+        (it.next().unwrap_or(t), line, col)
+    }
+}
+
+/// A `par` block's site and how many branches it runs.
+#[derive(Clone, Copy)]
+struct ParSite {
+    at: Site,
+    workers: u32,
 }
 
 /// A task of a hidden group, for `std.log` (B-2026-10-27-22): while it is
@@ -224,6 +273,8 @@ struct Task {
     /// a hidden group, else its spawner's, so a task started inside an
     /// auto-par task logs in that task's place in statement order.
     hold: u64,
+    /// Where it was spawned, in a binary with the runtime debug metadata.
+    site: Option<Site>,
 }
 
 /// Whether a queued task can get anywhere if polled now, with the progress
@@ -991,11 +1042,29 @@ fn bump() {
 /// tasks run at once.
 #[no_mangle]
 pub extern "C" fn karac_mir_group_new(limit: i64) -> *mut u8 {
-    group_new(limit, false)
+    group_new(limit, false, None)
+}
+
+/// `TaskGroup.new` for a `par` block, in a binary with the runtime debug
+/// metadata (design.md § Debugger contract): the group remembers the
+/// block's `file:line:col` (`at[..len]`) and its `workers` branches, for
+/// `Runtime.list_par_blocks`.
+///
+/// # Safety
+/// `at` is null or a constant `len` bytes long.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_group_new_at(
+    limit: i64,
+    at: *const u8,
+    len: u64,
+    workers: u32,
+) -> *mut u8 {
+    let site = Site::of(at, len).map(|at| ParSite { at, workers });
+    group_new(limit, false, site)
 }
 
 /// A group of at most `limit` running tasks, registered.
-fn group_new(limit: i64, isolating: bool) -> *mut u8 {
+fn group_new(limit: i64, isolating: bool, site: Option<ParSite>) -> *mut u8 {
     EXEC.with(|e| {
         let mut e = e.borrow_mut();
         e.group_ids += 1;
@@ -1010,6 +1079,7 @@ fn group_new(limit: i64, isolating: bool) -> *mut u8 {
             hidden: false,
             members: Vec::new(),
             next: 0,
+            site,
         }));
         let id = e.group_ids;
         e.groups.insert(id, g);
@@ -1022,7 +1092,7 @@ fn group_new(limit: i64, isolating: bool) -> *mut u8 {
 /// the process.
 #[no_mangle]
 pub extern "C" fn karac_mir_group_isolating(limit: i64) -> *mut u8 {
-    group_new(limit, true)
+    group_new(limit, true, None)
 }
 
 /// Marks auto-par's group `g` hidden (B-2026-10-27-22): its tasks log as
@@ -1630,6 +1700,35 @@ pub unsafe extern "C" fn karac_mir_task_spawn(
     a: *mut u8,
     b: *mut u8,
 ) {
+    // SAFETY: the caller's contract.
+    unsafe { spawn(group, poll, a, b, None) }
+}
+
+/// [`karac_mir_task_spawn`] in a binary with the runtime debug metadata:
+/// the task remembers the `file:line:col` (`at[..len]`) of its spawn, for
+/// `Runtime.list_tasks` (design.md § Debugger contract).
+///
+/// # Safety
+/// As [`karac_mir_task_spawn`]; `at` is null or a constant `len` bytes
+/// long.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_task_spawn_at(
+    group: *mut u8,
+    poll: TaskPoll,
+    a: *mut u8,
+    b: *mut u8,
+    at: *const u8,
+    len: u64,
+) {
+    // SAFETY: the caller's contract.
+    unsafe { spawn(group, poll, a, b, Site::of(at, len)) }
+}
+
+/// Queues a task; see [`karac_mir_task_spawn`].
+///
+/// # Safety
+/// As [`karac_mir_task_spawn`].
+unsafe fn spawn(group: *mut u8, poll: TaskPoll, a: *mut u8, b: *mut u8, site: Option<Site>) {
     // A task may hold log records, which an abort drains.
     crate::mir::rich_abort_used();
     let group = group as *mut Group;
@@ -1682,6 +1781,7 @@ pub unsafe extern "C" fn karac_mir_task_spawn(
             root: false,
             log_id,
             hold,
+            site,
         });
         e.progress += 1;
         id
@@ -2862,6 +2962,155 @@ pub(crate) fn take_timed_out(fd: i32) -> bool {
         }
         hit
     })
+}
+
+/// A `ParBlockInfo` as compiled code lays it out (runtime/stdlib/runtime.kara;
+/// the backend checks its layout matches before it calls
+/// [`karac_mir_list_par_blocks`]).
+#[repr(C)]
+struct ParBlockRow {
+    spawn_site_id: u32,
+    file: crate::mir::RawVec,
+    line: u32,
+    col: u32,
+    worker_count: u32,
+    parent_task_id: u64,
+}
+
+/// A `WaitTarget`: its variant's index, then `IoHandle`'s descriptor.
+#[repr(C)]
+struct WaitRow {
+    tag: u8,
+    fd: i64,
+}
+
+/// A `TaskInfo` as compiled code lays it out.
+#[repr(C)]
+struct TaskRow {
+    spawn_site_id: u32,
+    wait_target: WaitRow,
+    file: crate::mir::RawVec,
+    line: u32,
+    col: u32,
+    task_id: u64,
+    parent_task_id: u64,
+}
+
+/// Writes `rows` at `out` as a `Vec` of `T`, each row made in place by
+/// `fill`.
+///
+/// # Safety
+/// `out` is writable for a `Vec[T]`, and `fill` initializes its row.
+unsafe fn write_rows<R, T>(out: *mut crate::mir::RawVec, rows: &[R], fill: impl Fn(*mut T, &R)) {
+    let size = std::mem::size_of::<T>();
+    let ptr = if rows.is_empty() {
+        std::ptr::null_mut()
+    } else {
+        crate::alloc::karac_realloc_or_panic(std::ptr::null_mut(), rows.len() * size)
+    };
+    for (i, r) in rows.iter().enumerate() {
+        // SAFETY: `ptr` has room for `rows.len()` rows.
+        fill(unsafe { ptr.add(i * size) }.cast(), r);
+    }
+    // SAFETY: the caller's contract.
+    unsafe { out.write(crate::mir::RawVec::new(ptr, rows.len(), rows.len())) };
+}
+
+/// `Runtime.list_par_blocks()` (design.md § Debugger contract, element 4,
+/// B-2026-11-05-34): every live group of a `par` block, oldest first, with
+/// its spawn-site id, `file:line:col`, branch count and the task that
+/// runs it (`parent_task_id`, element 2: `main` is 1). Groups made without
+/// a site (a binary without the metadata, or a `TaskGroup` of the
+/// program's own) are not listed.
+///
+/// # Safety
+/// `out` is writable for a `Vec[ParBlockInfo]`.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_list_par_blocks(out: *mut crate::mir::RawVec) {
+    let mut rows: Vec<(u64, ParSite, u64)> = EXEC
+        .try_with(|e| {
+            let e = e.borrow();
+            e.groups
+                .values()
+                // SAFETY: a registered group is live, under the lock.
+                .map(|&g| unsafe { &*g })
+                .filter(|g| !g.dropped)
+                .filter_map(|g| Some((g.id, g.site?, g.owner)))
+                .collect()
+        })
+        .unwrap_or_default();
+    rows.sort_by_key(|r| r.0);
+    // SAFETY: the caller's contract; every field is written.
+    unsafe {
+        write_rows(out, &rows, |p: *mut ParBlockRow, &(_, site, owner)| {
+            let (file, line, col) = site.at.parts();
+            let f = std::ptr::addr_of_mut!((*p).file);
+            crate::mir::string_of(f, file);
+            std::ptr::addr_of_mut!((*p).spawn_site_id).write(site.at.id());
+            std::ptr::addr_of_mut!((*p).line).write(line);
+            std::ptr::addr_of_mut!((*p).col).write(col);
+            std::ptr::addr_of_mut!((*p).worker_count).write(site.workers);
+            std::ptr::addr_of_mut!((*p).parent_task_id).write(owner);
+        })
+    };
+}
+
+/// What a suspended task waits on, as `WaitTarget`'s variant index and
+/// `IoHandle`'s descriptor: `Running` (0) when it waits on nothing,
+/// `PeerTask` (1) for a join, a channel or a lock, `IoHandle` (2) for a
+/// descriptor, `Sleep` (3) for a deadline.
+fn wait_row(w: Wait) -> WaitRow {
+    let (tag, fd) = match w {
+        Wait::None => (0, 0),
+        Wait::Task | Wait::TaskBy(_) => (1, 0),
+        Wait::Fd(fd, _) | Wait::FdBy(fd, _, _) => (2, i64::from(fd)),
+        Wait::Until(_) => (3, 0),
+    };
+    WaitRow { tag, fd }
+}
+
+/// `Runtime.list_tasks()` (design.md § Debugger contract, elements 3 and
+/// 4): every task suspended in the executor, by id, with what it waits on
+/// (element 3), the `file:line:col` of its spawn and its id, and the task
+/// whose group spawned it (`parent_task_id`, element 2): 0, the root
+/// sentinel, for `main`.
+///
+/// # Safety
+/// `out` is writable for a `Vec[TaskInfo]`.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_list_tasks(out: *mut crate::mir::RawVec) {
+    let mut rows: Vec<(u64, Wait, Option<Site>, u64)> = EXEC
+        .try_with(|e| {
+            let e = e.borrow();
+            let parent = |t: &Task| {
+                if t.group.is_null() {
+                    0
+                } else {
+                    // SAFETY: a task's group outlives it, under the lock.
+                    unsafe { (*t.group).owner }
+                }
+            };
+            e.queue
+                .iter()
+                .chain(e.off.values())
+                .map(|t| (t.id, t.wait, t.site, parent(t)))
+                .collect()
+        })
+        .unwrap_or_default();
+    rows.sort_by_key(|r| r.0);
+    // SAFETY: the caller's contract; every field is written.
+    unsafe {
+        write_rows(out, &rows, |p: *mut TaskRow, &(id, wait, site, parent)| {
+            let (file, line, col) = site.map_or((&b""[..], 0, 0), |s| s.parts());
+            crate::mir::string_of(std::ptr::addr_of_mut!((*p).file), file);
+            std::ptr::addr_of_mut!((*p).spawn_site_id).write(site.map_or(0, |s| s.id()));
+            std::ptr::addr_of_mut!((*p).wait_target).write(wait_row(wait));
+            std::ptr::addr_of_mut!((*p).line).write(line);
+            std::ptr::addr_of_mut!((*p).col).write(col);
+            std::ptr::addr_of_mut!((*p).task_id).write(id);
+            std::ptr::addr_of_mut!((*p).parent_task_id).write(parent);
+        })
+    };
 }
 
 #[cfg(test)]

@@ -622,7 +622,7 @@ fn padded_int(spec: &[u8], v: u64, signed: bool) -> Option<Vec<u8>> {
 ///
 /// # Safety
 /// `out` is writable for a `String`.
-unsafe fn string_of(out: *mut RawVec, b: &[u8]) {
+pub(crate) unsafe fn string_of(out: *mut RawVec, b: &[u8]) {
     let ptr = if b.is_empty() {
         std::ptr::null_mut()
     } else {

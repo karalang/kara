@@ -1295,16 +1295,40 @@ impl<'ctx> Cx<'ctx, '_> {
                     _ => self.i64(i64::MAX as u64),
                 };
                 let p = self.ptr_ty();
-                let f = self.extern_fn(
-                    &format!("karac_mir_group_{method}"),
-                    p.fn_type(&[self.llcx.i64_type().into()], false),
-                );
-                let g = self
-                    .builder
-                    .build_call(f, &[limit.into()], "group")
-                    .map_err(e)?
-                    .try_as_basic_value()
-                    .unwrap_basic();
+                let i64t = self.llcx.i64_type();
+                // A `par` block's group carries its place and branch count,
+                // for `Runtime.list_par_blocks` (design.md § Debugger
+                // contract, B-2026-11-05-34).
+                let par = match self.par_sites.get(&self.cur_block) {
+                    Some(&(span, workers)) if method == "new" => Some((span, workers)),
+                    _ => None,
+                };
+                let g = match par {
+                    Some((span, workers)) => {
+                        let (at, n) = self.meta_site(span)?;
+                        let i32t = self.llcx.i32_type();
+                        let f = self.extern_fn(
+                            "karac_mir_group_new_at",
+                            p.fn_type(&[i64t.into(), p.into(), i64t.into(), i32t.into()], false),
+                        );
+                        let w = i32t.const_int(u64::from(workers), false);
+                        self.builder.build_call(
+                            f,
+                            &[limit.into(), at.into(), n.into(), w.into()],
+                            "group",
+                        )
+                    }
+                    None => {
+                        let f = self.extern_fn(
+                            &format!("karac_mir_group_{method}"),
+                            p.fn_type(&[i64t.into()], false),
+                        );
+                        self.builder.build_call(f, &[limit.into()], "group")
+                    }
+                }
+                .map_err(e)?
+                .try_as_basic_value()
+                .unwrap_basic();
                 let mut d = self.place_ptr(dest)?;
                 if method == "isolating" {
                     d = self.offset(d, self.field_offset(dty, None, 0)?)?;

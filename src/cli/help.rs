@@ -261,14 +261,16 @@ OPTIONS:
                             stdout alongside the binary build.
     --release               Strip debug-only runtime instrumentation from the
                             binary: contracts (requires / ensures / old /
-                            invariant) and the `?`-error-return trace — both
-                            checked/recorded in debug builds, stripped in
-                            release per design.md. Optimization is already -O2
+                            invariant), the `?`-error-return trace and the
+                            runtime debug metadata (std.runtime's task and
+                            par-block lists) — all kept in debug builds,
+                            stripped in release per design.md. Optimization is already -O2
                             by default (see KARAC_OPT_LEVEL), so --release
                             removes runtime cost rather than turning the
                             optimizer on. Works in both single-file and project
-                            mode. Composes (OR) with the KARAC_STRIP_CONTRACTS
-                            and KARAC_STRIP_ERROR_TRACE env vars.
+                            mode. Composes (OR) with the KARAC_STRIP_CONTRACTS,
+                            KARAC_STRIP_ERROR_TRACE and
+                            KARAC_STRIP_DEBUG_METADATA env vars.
     --mir                   The default build (accepted so
                             scripts that ask for it keep working).
     --enable-hot-swap       Emit PLT-style indirection for extern-public
