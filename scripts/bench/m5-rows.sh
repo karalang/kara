@@ -125,6 +125,12 @@ ROWS = [
     ("B-2026-11-05-4", "401-500/495-teemo-attacking", "teemo_attacking.kara", "pair", "cycles", "x86 LLVM 22 357 ms vs 18's 126; fixed ce0cf3209b: 133"),
     ("B-2026-11-05-27", "101-200/155-min-stack", "min_stack.kara", "pair", "cycles", "x86 LLVM 22 900 ms vs 18's 423"),
     ("B-2026-11-05-27", "201-300/275-h-index-ii", "hsearch.kara", "pair", "cycles", "x86 LLVM 22 925 ms vs 18's 471"),
+    # M5-filed rows the x86 container cannot settle (callgrind ratios in the notes).
+    ("B-2026-11-04-30", "301-400/394-decode-string", "decode_string.kara", "pair", "instructions", "x86 0.96x"),
+    ("B-2026-11-04-37", "301-400/342-power-of-four", "power_of_four.kara", "pair", "cycles", "x86 instr 1.11x"),
+    ("B-2026-11-04-33", "301-400/314-binary-tree-vertical-order-traversal", "vertical.kara", "pair", "cycles", "x86 instr 1.07x"),
+    ("B-2026-11-04-33", "301-400/318-maximum-product-of-word-lengths", "max_product.kara", "pair", "instructions", "x86 1.19x: write_word not inlined"),
+    ("B-2026-11-04-33", "1601-1700/1665-minimum-initial-energy-to-finish-tasks", "greedy.kara", "pair", "instructions", "x86 1.29x"),
     ("B-2026-11-05-10", "1-100/73-set-matrix-zeroes", "set_matrix_zeroes.kara", "par", "wall", "x86 8.7 s -> 0.44 s; par lane"),
 ]
 
