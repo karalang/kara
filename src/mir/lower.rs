@@ -22522,6 +22522,52 @@ impl<'l, 'a> Bx<'l, 'a> {
         let n_generic = self.lcx.fns.get(&d).map_or(0, |i| {
             i.f.generic_params.as_ref().map_or(0, |g| g.params.len())
         });
+        // A method of a generic impl named as a value (`Wrap.get`,
+        // B-2026-11-04-64): the impl's arguments come from the receiver the
+        // value's type gives, its first parameter.
+        let impl_n = self.lcx.fns.get(&d).map_or(0, |i| {
+            if i.f.self_param.is_some() && i.impl_target.is_some() {
+                i.impl_params
+            } else {
+                0
+            }
+        });
+        if impl_n > 0 {
+            let want = match want {
+                Some(t) => t,
+                None => self.expr_ty(e)?,
+            };
+            let tcx = self.tys().tcx();
+            let recv = match tcx.kind(want) {
+                HK::Fn { params, .. } => tcx.list(params).first().copied(),
+                _ => None,
+            };
+            let recv = recv.map(|r| match tcx.kind(r) {
+                HK::Ref(i) | HK::MutRef(i) => i,
+                _ => r,
+            });
+            let info = &self.lcx.fns[&d];
+            let args = match recv.map(|r| tcx.kind(r)) {
+                Some(HK::Adt { def, args }) if Some(def) == info.impl_target && n_generic == 0 => {
+                    info.impl_args(&tcx.list(args))
+                }
+                _ => None,
+            };
+            let Some(args) = args else {
+                return self.unsupported(e.span, "a generic impl's method as a value");
+            };
+            let name = self.lcx.instance(d, args.clone());
+            let t = {
+                let tcx = self.tys().tcx();
+                let list = tcx.intern_list(&args);
+                tcx.intern(HK::FnDef { def: d, args: list })
+            };
+            let op = Operand::Const(Const {
+                ty: t,
+                kind: ConstKind::FnDef(InstanceId { def: d, args, name }),
+            });
+            return Ok((op, t));
+        }
         let args = if n_generic == 0 {
             Vec::new()
         } else {
@@ -24070,6 +24116,22 @@ impl<'l, 'a> Bx<'l, 'a> {
                 // (B-2026-10-18-12).
                 let fargs = self.tys().tcx().list(fargs);
                 let mut pts = Vec::new();
+                // `let check = User.adult; check(u)` (design.md §7 Function
+                // values): a method named as a value takes its receiver as
+                // the first argument, in the mode a direct call gives it
+                // (B-2026-11-04-64).
+                if let (Some(m), Some(recv)) = (f.self_param.clone(), args.first()) {
+                    let st = self.expr_ty(&recv.value)?;
+                    let (_, st) = self.strip_ty_full(st);
+                    if self.lcx.fns[&def].impl_params == 0 {
+                        self.lcx.self_tys.entry(def).or_insert(st);
+                    }
+                    pts.push(match self.self_mode(f, m, st) {
+                        SelfParam::Owned => st,
+                        SelfParam::Ref => self.tys().tcx().reference(st, false),
+                        SelfParam::MutRef => self.tys().tcx().reference(st, true),
+                    });
+                }
                 for p in &f.params {
                     pts.push(self.callee_param_ty(p, &fargs)?);
                 }

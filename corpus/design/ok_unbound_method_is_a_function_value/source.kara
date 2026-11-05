@@ -1,0 +1,45 @@
+// design.md §7 Function values: "Unbound methods are function values.
+// User.validate is a function whose first parameter is the receiver"
+// (B-2026-11-04-64). The receiver takes the mode the method declares, and a
+// generic impl's parameters are solved by the value's use.
+#[derive(Clone)]
+struct User { name: String, age: i64 }
+
+impl User {
+    fn new(name: own String, age: i64) -> User { User { name: name, age: age } }
+    fn adult(self) -> bool { self.age >= 18 }
+    fn older(self, by: i64) -> i64 { self.age + by }
+    fn get_age(ref self) -> i64 { self.age }
+    fn birthday(mut ref self) { self.age += 1; }
+}
+
+struct Wrap[T] { v: T }
+
+impl[T: Clone] Wrap[T] {
+    fn get(self) -> T { self.v.clone() }
+}
+
+fn apply(f: Fn(User) -> bool, u: User) -> bool { f(u) }
+
+fn main() {
+    let make = User.new;
+    let mut u = make("ann".to_string(), 17);
+    let check = User.adult;
+    println(check(u));
+    let grow = User.birthday;
+    grow(mut u);
+    println(f"{check(u)} {apply(User.adult, u)}");
+    let older = User.older;
+    let age = User.get_age;
+    println(f"{older(u, 5)} {age(u)}");
+
+    let mut us: Vec[User] = Vec.new();
+    us.push(User.new("bo".to_string(), 30));
+    us.push(User.new("cy".to_string(), 10));
+    let adults: Vec[bool] = us.iter().map(User.adult).collect();
+    println(f"{adults}");
+
+    let w = Wrap { v: "hi".to_string() };
+    let get: Fn(Wrap[String]) -> String = Wrap.get;
+    println(get(w));
+}

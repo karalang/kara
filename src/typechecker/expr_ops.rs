@@ -1432,17 +1432,49 @@ impl<'a> super::TypeChecker<'a> {
                     name: type_name.clone(),
                     args: target_generic_args,
                 };
+                // design.md §7 Function values: "User.validate is a function
+                // whose first parameter is the receiver". The signature
+                // leaves `self` out, so a method named as a value takes it
+                // back, in the mode it declares (B-2026-11-04-64).
+                let receiver = self
+                    .inherent_self_param(type_name, member)
+                    .map(|m| match m {
+                        SelfParam::Owned => target.clone(),
+                        SelfParam::Ref => Type::Ref(Box::new(target.clone())),
+                        SelfParam::MutRef => Type::MutRef(Box::new(target.clone())),
+                    });
+                // A generic impl's parameters are open in the value
+                // (`Wrap.get` is `Fn(Wrap[?T]) -> ?T`), solved by its use
+                // as a call's are; left as the impl's own `T` they could
+                // never match a concrete `Wrap[i64]`.
+                let mut subs = HashMap::new();
+                if receiver.is_some() {
+                    let names: Vec<String> = self.env.impls[i]
+                        .generic_params
+                        .iter()
+                        .flat_map(|g| g.params.iter().map(|p| p.name.clone()))
+                        .collect();
+                    for n in names {
+                        let var = self.env.fresh_type_var();
+                        subs.insert(n, super::types::SubstValue::Type(var));
+                    }
+                }
+                let open = |t: Type| {
+                    let t = Self::resolve_self_in_type(t, &target);
+                    if subs.is_empty() {
+                        t
+                    } else {
+                        super::inference::substitute_type_params(&t, &subs)
+                    }
+                };
                 return Type::Function {
                     cross_task: Default::default(),
-                    params: sig
-                        .params
-                        .iter()
-                        .map(|p| Self::resolve_self_in_type(p.clone(), &target))
+                    params: receiver
+                        .into_iter()
+                        .map(&open)
+                        .chain(sig.params.iter().map(|p| open(p.clone())))
                         .collect(),
-                    return_type: Box::new(Self::resolve_self_in_type(
-                        sig.return_type.clone(),
-                        &target,
-                    )),
+                    return_type: Box::new(open(sig.return_type.clone())),
                 };
             }
 

@@ -256,6 +256,35 @@ impl<'a> super::TypeChecker<'a> {
 
     /// Whether the method `Type.method` takes `self`: an inherent method of
     /// the program's, or the method of a trait the type implements.
+    /// The receiver an inherent method `type_name.method` declares, or
+    /// `None` for an associated function (no `self`) or no such method.
+    pub(super) fn inherent_self_param(&self, type_name: &str, method: &str) -> Option<SelfParam> {
+        for item in &self.program.items {
+            let Item::ImplBlock(imp) = item else { continue };
+            let TypeKind::Path(path) = &imp.target_type.kind else {
+                continue;
+            };
+            if imp.trait_name.is_some()
+                || path
+                    .segments
+                    .last()
+                    .map(|n| self.unaliased_type_name(n))
+                    .as_deref()
+                    != Some(type_name)
+            {
+                continue;
+            }
+            for ii in &imp.items {
+                if let ImplItem::Method(f) = ii {
+                    if f.name == method {
+                        return f.self_param.clone();
+                    }
+                }
+            }
+        }
+        None
+    }
+
     fn type_method_takes_self(&self, type_name: &str, method: &str) -> Option<bool> {
         for item in &self.program.items {
             let Item::ImplBlock(imp) = item else { continue };

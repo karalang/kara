@@ -1,0 +1,9 @@
+source = "B-2026-11-04-64"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "function-values", "methods"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md §7 Function values: `User.adult` is a function whose first parameter is the receiver, in the mode the method declares (`self`, `ref self`, `mut ref self`); it is called, passed to a `Fn` parameter and to `map`, and a generic impl's method value is instanced by its use."
