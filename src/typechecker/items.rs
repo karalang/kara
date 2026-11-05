@@ -363,6 +363,14 @@ impl<'a> super::TypeChecker<'a> {
                         let fields: Vec<_> =
                             s.fields.iter().map(|f| (f.name.clone(), &f.ty)).collect();
                         self.check_sync_fields_cross_task("struct", &s.name, s.span, &fields, &gp);
+                    } else if !s.is_shared {
+                        self.warn_mut_field_of_plain_type(
+                            "struct",
+                            &s.name,
+                            s.stdlib_origin,
+                            &s.fields,
+                            &s.lint_overrides,
+                        );
                     }
                 }
                 Item::EnumDef(e) => {
@@ -377,6 +385,19 @@ impl<'a> super::TypeChecker<'a> {
                         for v in &e.variants {
                             if let VariantKind::Struct(fields) = &v.kind {
                                 self.check_weak_field_targets(fields, &gp);
+                            }
+                        }
+                    }
+                    if !e.is_par && !e.is_shared {
+                        for v in &e.variants {
+                            if let VariantKind::Struct(fields) = &v.kind {
+                                self.warn_mut_field_of_plain_type(
+                                    "enum",
+                                    &e.name,
+                                    e.stdlib_origin,
+                                    fields,
+                                    &e.lint_overrides,
+                                );
                             }
                         }
                     }
@@ -3477,6 +3498,64 @@ impl<'a> super::TypeChecker<'a> {
                     TypeErrorKind::DeferredToLaterTrack,
                 );
             }
+        }
+    }
+
+    /// `mut` on a field of a plain (non-`shared`, non-`sync`) type
+    /// (design.md §5 Structs, "Fields are mutable only through the
+    /// binding"; B-2026-11-04-79). The keyword changes nothing there, since
+    /// a plain value's fields are writable exactly when its binding is, so
+    /// the spec makes it a compile error. In 0.8.x it is a `deprecated`
+    /// warning whose machine-applicable fix deletes the keyword (from `mut`
+    /// to the field name, so the space goes with it); it becomes the error
+    /// at the next minor release, tracked by B-2026-11-04-79.
+    fn warn_mut_field_of_plain_type(
+        &mut self,
+        kind: &str,
+        type_name: &str,
+        stdlib_origin: bool,
+        fields: &[StructField],
+        lint_overrides: &[crate::lints::LintLevelOverride],
+    ) {
+        if stdlib_origin || self.compiling_stdlib {
+            return;
+        }
+        // The library compiled from source is not the program's to fix.
+        let library = self.program.library_start.unwrap_or(usize::MAX);
+        let mut pushed = false;
+        for f in fields {
+            let Some(m) = f.mut_keyword_span else {
+                continue;
+            };
+            if m.offset >= library {
+                continue;
+            }
+            if !pushed {
+                self.lint_override_stack.push(lint_overrides.to_vec());
+                pushed = true;
+            }
+            let mut strip = m;
+            strip.length = f.name_span.offset.saturating_sub(m.offset);
+            self.type_lint_warning_with_fix(
+                format!(
+                    "`mut` on field `{field}` of {kind} `{type_name}` is deprecated: a plain \
+                     {kind}'s fields are mutable only through the binding (`let mut` or \
+                     `mut ref`), so `mut` here changes nothing; it is valid only in a \
+                     `shared` type (design.md §5 Structs). It becomes an error in the next \
+                     minor release; `karac fix` deletes it",
+                    field = f.name,
+                ),
+                m,
+                TypeErrorKind::Deprecated,
+                "deprecated",
+                (strip.length > 0).then(|| FixIt {
+                    span: strip,
+                    replacement: String::new(),
+                }),
+            );
+        }
+        if pushed {
+            self.lint_override_stack.pop();
         }
     }
 
