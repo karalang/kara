@@ -7159,13 +7159,55 @@ Performance notes and concurrency reports join this table when their tracks retu
 
 | Concept id | Section |
 |---|---|
-| `ownership/move-semantics` | [§11 The core rules in brief](#the-core-rules-in-brief); [core-semantics.md §3](core-semantics.md#3-moves) |
-| `effects/public-function-declaration` | [§12 Inference and declarations](#inference-and-declarations) |
-| `effects/inference-boundaries` | [§12 Inference and declarations](#inference-and-declarations) |
+| `syntax/lexical-structure` | [§3 Lexical structure](#3-lexical-structure) |
+| `modules/imports` | [Modules](#modules); [Imports](#imports) |
+| `modules/constants` | [Constants](#constants) |
+| `packages/manifests` | [Packages and manifests](#packages-and-manifests) |
+| `names/resolution` | [Imports](#imports); [Visibility](#visibility) |
+| `names/visibility` | [Visibility](#visibility) |
+| `types/checking` | [§5 Types](#5-types); [Type inference](#type-inference) |
+| `types/inference` | [Type inference](#type-inference) |
+| `types/numeric-semantics` | [Numeric semantics](#numeric-semantics) |
+| `types/casts` | [`as` casts](#as-casts) |
+| `types/indexing` | [Indexing](#indexing); [`Index` and `IndexMut`](#index-and-indexmut) |
+| `patterns/matching` | [Pattern matching](#pattern-matching) |
+| `patterns/exhaustiveness` | [Pattern exhaustiveness](#pattern-exhaustiveness) |
+| `bindings/mutability` | [Variable binding rules](#variable-binding-rules); [Assignment](#assignment) |
+| `functions/calls` | [Declarations](#declarations); [Named and default parameters](#named-and-default-parameters) |
+| `functions/parameter-modes` | [Parameter modes](#parameter-modes); [Call-site `mut` markers](#call-site-mut-markers) |
+| `functions/closures` | [Closures](#closures); [Captures](#captures); [Function types and kinds](#function-types-and-kinds); [core-semantics.md §9](core-semantics.md#9-closures) |
+| `traits/bounds` | [Bounds and generic bodies](#bounds-and-generic-bodies); [Supertraits](#supertraits) |
+| `traits/method-resolution` | [Method resolution](#method-resolution) |
+| `traits/coherence` | [Coherence and the orphan rule](#coherence-and-the-orphan-rule); [Operator traits](#operator-traits) |
+| `traits/drop` | [`Drop`](#drop) |
+| `generics/monomorphization` | [Monomorphization](#monomorphization) |
+| `programs/main` | [The `main` function and exit codes](#the-main-function-and-exit-codes) |
+| `ownership/move-semantics` | [The core rules in brief](#the-core-rules-in-brief); [core-semantics.md §3](core-semantics.md#3-moves) |
+| `ownership/borrowing` | [The core rules in brief](#the-core-rules-in-brief); [core-semantics.md §5](core-semantics.md#5-references-and-views-c5) |
+| `ownership/initialization` | [Variable binding rules](#variable-binding-rules); [core-semantics.md §2](core-semantics.md#2-places) |
+| `ownership/sharing` | [Shared types](#shared-types); [Frozen handles](#frozen-handles); [core-semantics.md §6](core-semantics.md#6-sharing-c7) |
+| `items/deprecation` | [`#[deprecated]`](#deprecated) |
+| `items/non-exhaustive` | [`#[non_exhaustive]`](#non_exhaustive) |
+| `items/must-use` | [`#[must_use]`](#must_use) |
+| `effects/public-function-declaration` | [Inference and declarations](#inference-and-declarations) |
+| `effects/inference-boundaries` | [Inference and declarations](#inference-and-declarations) |
+| `effects/conflict-rules` | [Conflict rules](#conflict-rules) |
+| `effects/effect-variables` | [Effect variables](#effect-variables) |
+| `effects/trait-methods` | [Trait methods and generic calls](#trait-methods-and-generic-calls) |
+| `effects/providers` | [core-semantics.md §14](core-semantics.md#14-providers-brought-forward-from-m4a-2026-10-20) |
+| `concurrency/task-boundaries` | [What may cross a task boundary](#what-may-cross-a-task-boundary); [Locks and atomics](#locks-and-atomics) |
+| `unsafe/ffi-and-layout` | [§15 Unsafe, FFI and layout control](#15-unsafe-ffi-and-layout-control) |
+| `targets/effect-gating` | [Effect-driven target gating](#effect-driven-target-gating) |
+| `targets/cpu-baseline` | [CPU baseline](#cpu-baseline) |
+| `tooling/attributes` | [Attributes](#attributes) |
+| `tooling/lint-levels` | [Lint levels](#lint-levels) |
+| `testing/test-blocks` | [Test blocks](#test-blocks) |
+| `compilation/pipeline` | [Compilation model](#compilation-model) |
+| `scope/later-tracks` | [v1 scope](#v1-scope); [Tracks](#tracks) |
 | `ownership/rc-fallback` | Retired: there is no implicit sharing ([core-semantics.md §6.4](core-semantics.md#6-sharing-c7)) |
 | `performance/allocation-hoisting` | Deferred with performance diagnostics to the [tooling track](deferred.md#tooling) |
 
-A new id is added to this table when a diagnostic first uses it.
+A diagnostic's concept comes from its code's error kind, else its class, else the phase that reported it, so every diagnostic has one, including those of the package checks (manifest, dependencies, toolchain pin) and of the MIR build. `karac explain <id>` names the sections and the codes that carry the id. A new id is added to this table when a diagnostic first uses it.
 
 #### Error return traces
 
@@ -7304,7 +7346,7 @@ Each query returns JSON. AI agents ask directly instead of compiling, parsing an
 - a redundant `.iter()` or `.to_string()` on a literal is removed;
 - a redundant `ref` on a parameter is removed: `x: ref T` means the same as `x: T` ([§7](#parameter-modes)).
 
-**`karac explain`** explains a diagnostic code from the code catalogue. For an item, it shows the inferred effect set with its derivation, and the would-be parameter mode beside the declared one ([§2](#2-specification-layers)).
+**`karac explain`** explains a diagnostic code from the code catalogue, and a [concept id](#concept-ids) by the sections that specify it. For an item, it shows the inferred effect set with its derivation, and the would-be parameter mode beside the declared one ([§2](#2-specification-layers)).
 
 ### Debugger contract
 

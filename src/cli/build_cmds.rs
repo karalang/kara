@@ -955,8 +955,9 @@ pub(super) fn late_failure_json(f: &MultiFileLateFailure) -> Vec<String> {
         .iter()
         .map(|d| {
             format!(
-                "{{\"severity\":\"error\",\"phase\":{},\"file\":{},\"line\":{},\"column\":{},\"message\":{}}}",
+                "{{\"severity\":\"error\",\"phase\":{},\"concept\":{},\"file\":{},\"line\":{},\"column\":{},\"message\":{}}}",
                 json_string(&f.phase),
+                json_string(super::explain::concept_for(&f.phase, "", None, None)),
                 json_string(d.file.as_deref().unwrap_or("")),
                 d.line,
                 d.column,
@@ -984,8 +985,9 @@ pub(super) fn resolve_errors_json(per_module: &[ModuleResolveErrors]) -> Vec<Str
             let fix_diff = fix_diff_json_tail(err, &re.fix_diffs);
             let hints = stub_hints_tail(&file, err);
             out.push(format!(
-                "{{\"severity\":\"error\",\"phase\":\"resolve\",\"code\":{},\"file\":{},\"line\":{},\"column\":{},\"message\":{}{}{}{}{}}}",
+                "{{\"severity\":\"error\",\"phase\":\"resolve\",\"code\":{},\"concept\":{},\"file\":{},\"line\":{},\"column\":{},\"message\":{}{}{}{}{}}}",
                 json_string(code),
+                json_string(super::explain::concept_for("resolve", code, None, None)),
                 json_string(&file),
                 err.span.line,
                 err.span.column,
@@ -1198,7 +1200,13 @@ pub(super) fn type_warnings_json(per_module: &[ModuleTypeErrors]) -> Vec<String>
         let file = super::project_v2::shown(&te.file);
         for warn in &te.errors {
             let mut record = format!(
-                "{{\"severity\":\"warning\",\"phase\":\"typecheck\",\"file\":{},\"line\":{},\"column\":{},\"message\":{}",
+                "{{\"severity\":\"warning\",\"phase\":\"typecheck\",\"concept\":{},\"file\":{},\"line\":{},\"column\":{},\"message\":{}",
+                json_string(super::explain::concept_for(
+                    "typecheck",
+                    type_error_code(&warn.kind),
+                    warn.class.map(|c| c.as_str()),
+                    warn.lint_name.as_deref(),
+                )),
                 json_string(&file),
                 warn.span.line,
                 warn.span.column,
@@ -1221,8 +1229,14 @@ pub(super) fn type_errors_json(per_module: &[ModuleTypeErrors]) -> Vec<String> {
         for err in &te.errors {
             let code = type_error_code(&err.kind);
             let mut record = format!(
-                "{{\"severity\":\"error\",\"phase\":\"typecheck\",\"code\":{},\"file\":{},\"line\":{},\"column\":{},\"message\":{},\"class\":{}",
+                "{{\"severity\":\"error\",\"phase\":\"typecheck\",\"code\":{},\"concept\":{},\"file\":{},\"line\":{},\"column\":{},\"message\":{},\"class\":{}",
                 json_string(code),
+                json_string(super::explain::concept_for(
+                    "typecheck",
+                    code,
+                    err.class.map(|c| c.as_str()),
+                    err.lint_name.as_deref(),
+                )),
                 json_string(&file),
                 err.span.line,
                 err.span.column,
@@ -1655,7 +1669,7 @@ pub(super) fn parse_errors_json(parse_errors: &[ModuleParseErrors]) -> Vec<Strin
         let file = super::project_v2::shown(&pe.file);
         for err in &pe.errors {
             out.push(format!(
-                "{{\"severity\":\"error\",\"phase\":\"parse\",\"code\":\"E0001\",\"file\":{},\"line\":{},\"column\":{},\"message\":{}}}",
+                "{{\"severity\":\"error\",\"phase\":\"parse\",\"concept\":\"syntax/lexical-structure\",\"code\":\"E0001\",\"file\":{},\"line\":{},\"column\":{},\"message\":{}}}",
                 json_string(&file),
                 err.span.line,
                 err.span.column,
@@ -1701,7 +1715,7 @@ pub(super) fn cycles_json(cycles: &[Cycle], tree: &ProgramTree) -> Vec<String> {
                 })
                 .unwrap_or_default();
             format!(
-                "{{\"severity\":\"error\",\"phase\":\"module_graph\",\"code\":\"E0223\"{at},\"message\":{},\"cycle_paths\":[{}],\"cycle_files\":[{}]}}",
+                "{{\"severity\":\"error\",\"phase\":\"module_graph\",\"concept\":\"modules/imports\",\"code\":\"E0223\"{at},\"message\":{},\"cycle_paths\":[{}],\"cycle_files\":[{}]}}",
                 json_string(&c.format(tree)),
                 paths_json.join(","),
                 files.join(","),
@@ -1761,7 +1775,7 @@ pub(super) fn emit_build_tree_error(e: &BuildTreeError, output: OutputMode) {
         }
         OutputMode::Json => {
             println!(
-                "{{\"status\":\"error\",\"diagnostics\":[{{\"severity\":\"error\",\"phase\":\"module_graph\",\"code\":{},\"message\":{}}}]}}",
+                "{{\"status\":\"error\",\"diagnostics\":[{{\"severity\":\"error\",\"phase\":\"module_graph\",\"concept\":\"modules/imports\",\"code\":{},\"message\":{}}}]}}",
                 json_string(code),
                 json_string(&e.to_string()),
             );
@@ -1787,7 +1801,7 @@ pub(super) fn emit_manifest_error(e: &manifest::ManifestError, output: OutputMod
         }
         OutputMode::Json => {
             println!(
-                "{{\"status\":\"error\",\"diagnostics\":[{{\"severity\":\"error\",\"phase\":\"manifest\",\"code\":{},\"message\":{}}}]}}",
+                "{{\"status\":\"error\",\"diagnostics\":[{{\"severity\":\"error\",\"phase\":\"manifest\",\"concept\":\"packages/manifests\",\"code\":{},\"message\":{}}}]}}",
                 json_string(code),
                 json_string(&e.to_string()),
             );
@@ -2209,7 +2223,7 @@ pub(super) fn emit_dep_walk_error(pkg: &str, message: &str, output: OutputMode) 
         }
         OutputMode::Json => {
             println!(
-                "{{\"status\":\"error\",\"diagnostics\":[{{\"severity\":\"error\",\"phase\":\"walker\",\"code\":\"walker\",\"package\":{},\"message\":{}}}]}}",
+                "{{\"status\":\"error\",\"diagnostics\":[{{\"severity\":\"error\",\"phase\":\"walker\",\"concept\":\"packages/manifests\",\"code\":\"walker\",\"package\":{},\"message\":{}}}]}}",
                 json_string(pkg),
                 json_string(message),
             );
@@ -2270,7 +2284,7 @@ pub(super) fn emit_toolchain_load_error(
         }
         OutputMode::Json => {
             println!(
-                "{{\"status\":\"error\",\"diagnostics\":[{{\"severity\":\"error\",\"phase\":\"toolchain_pin\",\"code\":{},\"message\":{}}}]}}",
+                "{{\"status\":\"error\",\"diagnostics\":[{{\"severity\":\"error\",\"phase\":\"toolchain_pin\",\"concept\":\"packages/manifests\",\"code\":{},\"message\":{}}}]}}",
                 json_string(code),
                 json_string(&primary),
             );
@@ -2306,7 +2320,7 @@ pub(super) fn emit_toolchain_mismatch(
         }
         OutputMode::Json => {
             println!(
-                "{{\"status\":\"error\",\"diagnostics\":[{{\"severity\":\"error\",\"phase\":\"toolchain_pin\",\"code\":{},\"message\":{},\"required\":{},\"active\":{}}}]}}",
+                "{{\"status\":\"error\",\"diagnostics\":[{{\"severity\":\"error\",\"phase\":\"toolchain_pin\",\"concept\":\"packages/manifests\",\"code\":{},\"message\":{},\"required\":{},\"active\":{}}}]}}",
                 json_string(code),
                 json_string(&primary),
                 json_string(&mismatch.required.to_string()),
@@ -2346,7 +2360,7 @@ pub(super) fn emit_offline_no_vendor_dir(vendor_dir: &std::path::Path, output: O
         }
         OutputMode::Json => {
             println!(
-                "{{\"status\":\"error\",\"diagnostics\":[{{\"severity\":\"error\",\"phase\":\"dep_resolution\",\"code\":{},\"message\":{}}}]}}",
+                "{{\"status\":\"error\",\"diagnostics\":[{{\"severity\":\"error\",\"phase\":\"dep_resolution\",\"concept\":\"packages/manifests\",\"code\":{},\"message\":{}}}]}}",
                 json_string(code),
                 json_string(&primary),
             );
@@ -2472,7 +2486,7 @@ pub(super) fn emit_lockfile_warning(err: &crate::lockfile::LockfileError, output
         }
         OutputMode::Json => {
             println!(
-                "{{\"status\":\"ok\",\"diagnostics\":[{{\"severity\":\"warning\",\"phase\":\"lockfile\",\"code\":{},\"message\":{}}}]}}",
+                "{{\"status\":\"ok\",\"diagnostics\":[{{\"severity\":\"warning\",\"phase\":\"lockfile\",\"concept\":\"packages/manifests\",\"code\":{},\"message\":{}}}]}}",
                 json_string(code),
                 json_string(&primary),
             );
@@ -2522,7 +2536,7 @@ pub(super) fn emit_dep_diagnostic(
                 .collect::<Vec<_>>()
                 .join(",");
             println!(
-                "{{\"status\":\"{}\",\"diagnostics\":[{{\"severity\":\"{}\",\"phase\":\"dep_resolution\",\"code\":{},\"message\":{},\"notes\":[{}]{}}}]}}",
+                "{{\"status\":\"{}\",\"diagnostics\":[{{\"severity\":\"{}\",\"phase\":\"dep_resolution\",\"concept\":\"packages/manifests\",\"code\":{},\"message\":{},\"notes\":[{}]{}}}]}}",
                 if severity == "warning" { "ok" } else { "error" },
                 severity,
                 json_string(diag.code),
@@ -2597,7 +2611,7 @@ pub(super) fn emit_walker_error(e: &walker::WalkerError, output: OutputMode) {
         }
         OutputMode::Json => {
             println!(
-                "{{\"status\":\"error\",\"diagnostics\":[{{\"severity\":\"error\",\"phase\":\"walker\",\"code\":{},\"message\":{}}}]}}",
+                "{{\"status\":\"error\",\"diagnostics\":[{{\"severity\":\"error\",\"phase\":\"walker\",\"concept\":\"packages/manifests\",\"code\":{},\"message\":{}}}]}}",
                 json_string(code),
                 json_string(&e.to_string()),
             );

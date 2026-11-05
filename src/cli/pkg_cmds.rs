@@ -528,7 +528,7 @@ pub(super) fn emit_update_target_error(
                 .map(|h| format!(",\"help\":{}", json_string(h)))
                 .unwrap_or_default();
             println!(
-                "{{\"status\":\"error\",\"diagnostics\":[{{\"severity\":\"error\",\"phase\":\"update\",\"code\":{},\"message\":{}{}}}]}}",
+                "{{\"status\":\"error\",\"diagnostics\":[{{\"severity\":\"error\",\"phase\":\"update\",\"concept\":\"packages/manifests\",\"code\":{},\"message\":{}{}}}]}}",
                 json_string(code),
                 json_string(message),
                 help_field,

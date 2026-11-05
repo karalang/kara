@@ -189,7 +189,7 @@ fn build_v2_refuses_legacy_only_flags_by_name() {
     );
     assert_eq!(json.status.code(), Some(1));
     assert!(
-        text(&json.stdout).starts_with("{\"severity\":\"error\",\"phase\":\"build\",\"message\":\"error: `--crate-type` builds the exported C ABI, which is not in 0.8"),
+        text(&json.stdout).starts_with("{\"severity\":\"error\",\"phase\":\"build\",\"concept\":\"compilation/pipeline\",\"message\":\"error: `--crate-type` builds the exported C ABI, which is not in 0.8"),
         "{}",
         text(&json.stdout)
     );

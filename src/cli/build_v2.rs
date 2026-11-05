@@ -801,7 +801,7 @@ fn enforce_monomorphization_budget(
             .iter()
             .map(|v| {
                 format!(
-                    "{{\"severity\":\"error\",\"phase\":\"monomorphization-budget\",\"generic\":{},\"count\":{},\"limit\":{},\"site\":{}}}",
+                    "{{\"severity\":\"error\",\"phase\":\"monomorphization-budget\",\"concept\":\"generics/monomorphization\",\"generic\":{},\"count\":{},\"limit\":{},\"site\":{}}}",
                     json_string(&v.generic),
                     v.count,
                     v.threshold,

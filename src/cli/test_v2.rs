@@ -607,7 +607,7 @@ pub(super) fn check_package_tests(
             let msg = format!("error[project]: {e}");
             match output {
                 OutputMode::Json => json.push(format!(
-                    "{{\"severity\":\"error\",\"message\":{}}}",
+                    "{{\"severity\":\"error\",\"phase\":\"project\",\"concept\":\"compilation/pipeline\",\"message\":{}}}",
                     json_string(&msg)
                 )),
                 _ => eprintln!("{msg}"),

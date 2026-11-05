@@ -1011,7 +1011,7 @@ fn check_target_sweep(
             Err(e) => {
                 if let OutputMode::Json = output {
                     let entry = format!(
-                        "{{\"severity\":\"error\",\"phase\":\"build\",\"message\":{}}}",
+                        "{{\"severity\":\"error\",\"phase\":\"build\",\"concept\":\"compilation/pipeline\",\"message\":{}}}",
                         json_string(&e)
                     );
                     json_runs.push((target.clone(), 1, vec![entry]));
@@ -2113,7 +2113,7 @@ pub(super) fn emit_build_error(msg: &str, output: OutputMode) {
     match output {
         OutputMode::Json | OutputMode::Jsonl => {
             println!(
-                "{{\"severity\":\"error\",\"phase\":\"build\",\"message\":{}}}",
+                "{{\"severity\":\"error\",\"phase\":\"build\",\"concept\":\"compilation/pipeline\",\"message\":{}}}",
                 json_string(msg)
             );
         }

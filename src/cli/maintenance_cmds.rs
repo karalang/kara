@@ -272,7 +272,7 @@ pub(super) fn emit_cache_error(e: &crate::build_cache::CacheError, output: Outpu
         }
         OutputMode::Json => {
             println!(
-                "{{\"status\":\"error\",\"diagnostics\":[{{\"severity\":\"error\",\"phase\":\"cache\",\"code\":{},\"message\":{}}}]}}",
+                "{{\"status\":\"error\",\"diagnostics\":[{{\"severity\":\"error\",\"phase\":\"cache\",\"concept\":\"packages/manifests\",\"code\":{},\"message\":{}}}]}}",
                 json_string(code),
                 json_string(&message),
             );

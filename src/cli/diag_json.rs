@@ -1308,12 +1308,18 @@ impl DiagnosticJson {
 
     fn add(&mut self, d: DiagEntry<'_>) {
         let mut entry = format!(
-            "{{\"id\":{},\"severity\":{},\"primary\":true,\"phase\":{},\"code\":{},\"category\":{},{},\"message\":{}",
+            "{{\"id\":{},\"severity\":{},\"primary\":true,\"phase\":{},\"code\":{},\"category\":{},\"concept\":{},{},\"message\":{}",
             json_string(d.id),
             json_string(d.severity),
             json_string(d.phase),
             json_string(d.code),
             json_string(d.category),
+            json_string(super::explain::concept_for(
+                d.phase,
+                d.code,
+                d.class,
+                d.lint_name
+            )),
             span_to_json(d.span, d.filename),
             json_string(d.message),
         );

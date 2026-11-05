@@ -73,6 +73,12 @@ pub fn render(target: &ExplainTarget, format: ExplainFormat) {
 pub fn render_to_string(target: &ExplainTarget, format: ExplainFormat) -> Result<String, String> {
     match target {
         ExplainTarget::Concept(name) => {
+            if let Some(c) = concept_id(name) {
+                return Ok(match format {
+                    ExplainFormat::Text => render_concept_id_text(c),
+                    ExplainFormat::Json => render_concept_id_json(c),
+                });
+            }
             let Some(concept) = ExplainConcept::parse(name) else {
                 return Err(format!(
                     "unknown concept '{name}'. Supported: {}.",
@@ -110,6 +116,15 @@ pub fn render_to_string(target: &ExplainTarget, format: ExplainFormat) -> Result
 }
 
 fn render_concept(name: &str, format: ExplainFormat) {
+    // A diagnostic's `concept` id (`ownership/move-semantics`): where the
+    // spec says it, and the codes that carry it.
+    if let Some(c) = concept_id(name) {
+        match format {
+            ExplainFormat::Text => print!("{}", render_concept_id_text(c)),
+            ExplainFormat::Json => println!("{}", render_concept_id_json(c)),
+        }
+        return;
+    }
     let Some(concept) = ExplainConcept::parse(name) else {
         eprintln!(
             "error: unknown concept '{name}'. Supported: {}.",
@@ -1119,8 +1134,10 @@ fn render_code_text(code: &str, entries: Vec<CodeEntry>) -> String {
     }
     for entry in &entries {
         out.push_str(&format!(
-            "\nphase: {}\nkind:  {}\n",
-            entry.phase, entry.kind
+            "\nphase: {}\nkind:  {}\nconcept: {}\n",
+            entry.phase,
+            entry.kind,
+            concept_for(entry.phase, code, None, None)
         ));
         match entry.class {
             Some(class) => out.push_str(&format!(
@@ -1148,10 +1165,11 @@ fn render_code_json(code: &str, entries: Vec<CodeEntry>) -> String {
                 .map(class_description)
                 .unwrap_or("No class page yet; the diagnostic message is authoritative.");
             format!(
-                "{{\"phase\":\"{}\",\"kind\":\"{}\",\"class\":\"{}\",\"description\":\"{}\"}}",
+                "{{\"phase\":\"{}\",\"kind\":\"{}\",\"class\":\"{}\",\"concept\":\"{}\",\"description\":\"{}\"}}",
                 e.phase,
                 e.kind,
                 class,
+                concept_for(e.phase, code, None, None),
                 escape_json_string(description),
             )
         })
@@ -1170,6 +1188,7 @@ fn concept_list() -> String {
     ALL_CONCEPTS
         .iter()
         .map(|c| c.as_str())
+        .chain(CONCEPT_IDS.iter().map(|c| c.id))
         .collect::<Vec<_>>()
         .join(", ")
 }
@@ -2082,6 +2101,492 @@ rather than a lint, and no such profile variant exists in
 approximated by the warning.
 ";
 
+// ── Concept ids (design.md §17 rule 4, B-2026-11-05-28) ─────────────
+
+/// A concept id and the sections that specify it: `(doc, heading)`, the
+/// heading as the document writes it, without its `#`s. design.md's
+/// [concept table](../../docs/design.md#concept-ids) lists the same ids
+/// against the same sections; `concept_ids_match_the_design_table` holds
+/// the two together and resolves every heading.
+pub struct ConceptId {
+    pub id: &'static str,
+    pub sections: &'static [(&'static str, &'static str)],
+}
+
+const D: &str = "docs/design.md";
+const C: &str = "docs/core-semantics.md";
+
+/// Every concept id a diagnostic carries, in the order design.md lists them.
+pub const CONCEPT_IDS: &[ConceptId] = &[
+    ConceptId {
+        id: "syntax/lexical-structure",
+        sections: &[(D, "3. Lexical structure")],
+    },
+    ConceptId {
+        id: "modules/imports",
+        sections: &[(D, "Modules"), (D, "Imports")],
+    },
+    ConceptId {
+        id: "modules/constants",
+        sections: &[(D, "Constants")],
+    },
+    ConceptId {
+        id: "packages/manifests",
+        sections: &[(D, "Packages and manifests")],
+    },
+    ConceptId {
+        id: "names/resolution",
+        sections: &[(D, "Imports"), (D, "Visibility")],
+    },
+    ConceptId {
+        id: "names/visibility",
+        sections: &[(D, "Visibility")],
+    },
+    ConceptId {
+        id: "types/checking",
+        sections: &[(D, "5. Types"), (D, "Type inference")],
+    },
+    ConceptId {
+        id: "types/inference",
+        sections: &[(D, "Type inference")],
+    },
+    ConceptId {
+        id: "types/numeric-semantics",
+        sections: &[(D, "Numeric semantics")],
+    },
+    ConceptId {
+        id: "types/casts",
+        sections: &[(D, "`as` casts")],
+    },
+    ConceptId {
+        id: "types/indexing",
+        sections: &[(D, "Indexing"), (D, "`Index` and `IndexMut`")],
+    },
+    ConceptId {
+        id: "patterns/matching",
+        sections: &[(D, "Pattern matching")],
+    },
+    ConceptId {
+        id: "patterns/exhaustiveness",
+        sections: &[(D, "Pattern exhaustiveness")],
+    },
+    ConceptId {
+        id: "bindings/mutability",
+        sections: &[(D, "Variable binding rules"), (D, "Assignment")],
+    },
+    ConceptId {
+        id: "functions/calls",
+        sections: &[(D, "Declarations"), (D, "Named and default parameters")],
+    },
+    ConceptId {
+        id: "functions/parameter-modes",
+        sections: &[(D, "Parameter modes"), (D, "Call-site `mut` markers")],
+    },
+    ConceptId {
+        id: "functions/closures",
+        sections: &[
+            (D, "Closures"),
+            (D, "Captures"),
+            (D, "Function types and kinds"),
+            (C, "9. Closures"),
+        ],
+    },
+    ConceptId {
+        id: "traits/bounds",
+        sections: &[(D, "Bounds and generic bodies"), (D, "Supertraits")],
+    },
+    ConceptId {
+        id: "traits/method-resolution",
+        sections: &[(D, "Method resolution")],
+    },
+    ConceptId {
+        id: "traits/coherence",
+        sections: &[(D, "Coherence and the orphan rule"), (D, "Operator traits")],
+    },
+    ConceptId {
+        id: "traits/drop",
+        sections: &[(D, "`Drop`")],
+    },
+    ConceptId {
+        id: "generics/monomorphization",
+        sections: &[(D, "Monomorphization")],
+    },
+    ConceptId {
+        id: "programs/main",
+        sections: &[(D, "The `main` function and exit codes")],
+    },
+    ConceptId {
+        id: "ownership/move-semantics",
+        sections: &[(D, "The core rules in brief"), (C, "3. Moves")],
+    },
+    ConceptId {
+        id: "ownership/borrowing",
+        sections: &[
+            (D, "The core rules in brief"),
+            (C, "5. References and views (C5)"),
+        ],
+    },
+    ConceptId {
+        id: "ownership/initialization",
+        sections: &[(D, "Variable binding rules"), (C, "2. Places")],
+    },
+    ConceptId {
+        id: "ownership/sharing",
+        sections: &[
+            (D, "Shared types"),
+            (D, "Frozen handles"),
+            (C, "6. Sharing (C7)"),
+        ],
+    },
+    ConceptId {
+        id: "items/deprecation",
+        sections: &[(D, "`#[deprecated]`")],
+    },
+    ConceptId {
+        id: "items/non-exhaustive",
+        sections: &[(D, "`#[non_exhaustive]`")],
+    },
+    ConceptId {
+        id: "items/must-use",
+        sections: &[(D, "`#[must_use]`")],
+    },
+    ConceptId {
+        id: "effects/public-function-declaration",
+        sections: &[(D, "Inference and declarations")],
+    },
+    ConceptId {
+        id: "effects/inference-boundaries",
+        sections: &[(D, "Inference and declarations")],
+    },
+    ConceptId {
+        id: "effects/conflict-rules",
+        sections: &[(D, "Conflict rules")],
+    },
+    ConceptId {
+        id: "effects/effect-variables",
+        sections: &[(D, "Effect variables")],
+    },
+    ConceptId {
+        id: "effects/trait-methods",
+        sections: &[(D, "Trait methods and generic calls")],
+    },
+    ConceptId {
+        id: "effects/providers",
+        sections: &[(C, "14. Providers (brought forward from M4a, 2026-10-20)")],
+    },
+    ConceptId {
+        id: "concurrency/task-boundaries",
+        sections: &[
+            (D, "What may cross a task boundary"),
+            (D, "Locks and atomics"),
+        ],
+    },
+    ConceptId {
+        id: "unsafe/ffi-and-layout",
+        sections: &[(D, "15. Unsafe, FFI and layout control")],
+    },
+    ConceptId {
+        id: "targets/effect-gating",
+        sections: &[(D, "Effect-driven target gating")],
+    },
+    ConceptId {
+        id: "targets/cpu-baseline",
+        sections: &[(D, "CPU baseline")],
+    },
+    ConceptId {
+        id: "tooling/attributes",
+        sections: &[(D, "Attributes")],
+    },
+    ConceptId {
+        id: "tooling/lint-levels",
+        sections: &[(D, "Lint levels")],
+    },
+    ConceptId {
+        id: "testing/test-blocks",
+        sections: &[(D, "Test blocks")],
+    },
+    ConceptId {
+        id: "compilation/pipeline",
+        sections: &[(D, "Compilation model")],
+    },
+    ConceptId {
+        id: "scope/later-tracks",
+        sections: &[(D, "v1 scope"), (D, "Tracks")],
+    },
+];
+
+/// The concept id `name` names, if it is one.
+pub fn concept_id(name: &str) -> Option<&'static ConceptId> {
+    CONCEPT_IDS.iter().find(|c| c.id == name)
+}
+
+/// A heading's anchor, as GitHub writes it: lower case, punctuation other
+/// than `-` and `_` dropped, spaces as `-`.
+pub fn heading_anchor(heading: &str) -> String {
+    heading
+        .to_lowercase()
+        .chars()
+        .filter(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | ' '))
+        .map(|c| if c == ' ' { '-' } else { c })
+        .collect()
+}
+
+/// The concept a diagnostic carries, from what its record says about it:
+/// the phase that emitted it, its code, its class and its lint. The code's
+/// catalogue row names the compiler's own error kind, which is the finest
+/// key; the class and then the phase decide the rest, so every diagnostic
+/// has one (design.md §17 rule 4: required on errors and warnings).
+pub fn concept_for(
+    phase: &str,
+    code: &str,
+    class: Option<&str>,
+    lint_name: Option<&str>,
+) -> &'static str {
+    if let Some(lint) = lint_name {
+        match lint {
+            "deprecated" => return "items/deprecation",
+            "must_use" => return "items/must-use",
+            "undocumented_unsafe" | "unsafe_op_in_unsafe_fn" | "ffi_float_eq" => {
+                return "unsafe/ffi-and-layout"
+            }
+            _ => {}
+        }
+    }
+    let row = CODE_TABLE
+        .iter()
+        .filter(|(c, _)| *c == code)
+        .map(|(_, e)| e)
+        .find(|e| e.phase == phase)
+        .or_else(|| CODE_TABLE.iter().find(|(c, _)| *c == code).map(|(_, e)| e));
+    if let Some(concept) = row.and_then(|e| concept_for_kind(e.kind)) {
+        return concept;
+    }
+    let class = class
+        .and_then(parse_class_name)
+        .or_else(|| row.and_then(|e| e.class));
+    if let Some(concept) = class.and_then(concept_for_class) {
+        return concept;
+    }
+    match phase {
+        "parse" | "lex" => "syntax/lexical-structure",
+        "resolve" => "names/resolution",
+        "module_graph" => "modules/imports",
+        "manifest" | "walker" | "dep_resolution" | "toolchain_pin" | "lockfile" | "update"
+        | "cache" => "packages/manifests",
+        "effect" | "effects" => "effects/inference-boundaries",
+        "ownership" => "ownership/move-semantics",
+        "provider_escape" => "effects/providers",
+        "simd_check" => "targets/cpu-baseline",
+        "comptime" => "modules/constants",
+        "monomorphization-budget" => "generics/monomorphization",
+        "lint" => "tooling/lint-levels",
+        "test" => "testing/test-blocks",
+        "typecheck" => "types/checking",
+        _ => "compilation/pipeline",
+    }
+}
+
+/// The concept of a catalogued error kind, where the kind is finer than its
+/// class (`BorrowConflict` is classed a type mismatch).
+fn concept_for_kind(kind: &str) -> Option<&'static str> {
+    Some(match kind {
+        "Syntax" | "UnexpectedToken" | "ReservedKeyword" | "RawIdentNotAllowed"
+        | "ReservedSyntax" | "ReservedIdentifier" => "syntax/lexical-structure",
+        "DuplicateLintLevel"
+        | "UnknownLint"
+        | "ForbiddenLintAllow"
+        | "ExpectOnUnfulfilled"
+        | "UnfulfilledLintExpectation" => "tooling/lint-levels",
+        "UnknownAttribute"
+        | "TrackCallerInvalidTarget"
+        | "ProfileInvalidTarget"
+        | "UnknownProfile"
+        | "CompilerBuiltinReserved" => "tooling/attributes",
+        "CircularModuleDependency"
+        | "UnknownModule"
+        | "UnknownItemInModule"
+        | "AmbiguousWildcardImport" => "modules/imports",
+        "NotInsideKaraProject" => "packages/manifests",
+        "PrivateAccess" | "PrivateItemAccess" | "PrivateTypeInPublicSignature" => {
+            "names/visibility"
+        }
+        "ModuleBindingEffectfulInit"
+        | "ModuleBindingHeapType"
+        | "ModuleLet"
+        | "ReassignToImmutableModuleBinding"
+        | "ModuleMutBinding"
+        | "LazyLockRuntimeCapture" => "modules/constants",
+        "Deprecated" | "DeprecatedOnImpl" | "DeprecatedOnField" => "items/deprecation",
+        "NonExhaustiveInvalidTarget"
+        | "NonExhaustiveCrossPackageLiteral"
+        | "NonExhaustiveCrossPackageMatch"
+        | "NonExhaustiveCrossPackagePattern"
+        | "MissingNonExhaustive" => "items/non-exhaustive",
+        "NonExhaustiveMatch" | "RefutablePattern" | "UnreachableArm" => "patterns/exhaustiveness",
+        "PatternScrutineeMismatch"
+        | "RangePatternBoundNotConst"
+        | "AtBindingDoubleConsume"
+        | "AmbiguousBareVariant"
+        | "BareVariantConstructor" => "patterns/matching",
+        "InvalidCast" | "RedundantCast" => "types/casts",
+        "UnsupportedNumericSuffix" | "RedundantSuffix" => "types/numeric-semantics",
+        "StringNotIndexable" | "IteratorNotIndexable" | "TypeNotIndexable" => "types/indexing",
+        "CannotInferTypeParam" | "CannotInferAssocFn" => "types/inference",
+        "OperatorTraitImplRestricted" | "IntoTraitImplNotAllowed" | "ConflictingImpl" => {
+            "traits/coherence"
+        }
+        "DropBodyMayPanic" => "traits/drop",
+        "MainReturnType" | "MainErrNotDisplay" | "MainSignature" => "programs/main",
+        "ReassignToImmutable"
+        | "MutateImmutableBinding"
+        | "SharedFieldNotMut"
+        | "AssignTargetNotPlace" => "bindings/mutability",
+        "MissingMutMarker" | "InvalidMutMarker" | "ImplModeStrongerThanTrait" => {
+            "functions/parameter-modes"
+        }
+        "FnKindMismatch"
+        | "CapturePrefixRemoved"
+        | "CaptureModeViolation"
+        | "RefCaptureEscapesScope"
+        | "UnusedMutCaptureNote"
+        | "OnceFnIntoFnSlot" => "functions/closures",
+        "UseAfterMove"
+        | "MoveOutOfPlace"
+        | "MovedFieldRefilledAcrossCall"
+        | "MoveOutOfNoMovePlace"
+        | "IndexMoveNonCopy" => "ownership/move-semantics",
+        "BorrowConflict"
+        | "WriteThroughSharedRef"
+        | "BorrowReturnNotSourcePinned"
+        | "RefOperandUnsupported" => "ownership/borrowing",
+        "UseOfUninitialized" => "ownership/initialization",
+        "OwnershipCycle"
+        | "NoRcViolation"
+        | "RcFallbackNote"
+        | "RcFallbackOfDropType"
+        | "FrozenParamEscapes"
+        | "FrozenTypeNotFreezable" => "ownership/sharing",
+        "MissingEffectDeclaration" | "OverDeclaredEffect" | "PubFnSyntheticResource" => {
+            "effects/public-function-declaration"
+        }
+        "TraitEffectVarNotAllowed"
+        | "EffectVarKindMismatch"
+        | "EffectArgsMissingInPublicSignature"
+        | "EffectVariableConflict" => "effects/effect-variables",
+        "ImplExceedsTraitCeiling" | "TraitDefaultExceedsCeiling" => "effects/trait-methods",
+        "NoProvider"
+        | "StatefulDefault"
+        | "ProviderUnsupported"
+        | "HandleUsesOverride"
+        | "DynProvider"
+        | "TaskProviderConflict"
+        | "ProviderEscape" => "effects/providers",
+        "ParFieldNotConcurrent"
+        | "ParMutSelfReceiver"
+        | "CrossTaskUnsafeCapture"
+        | "LockTargetNotMutex"
+        | "ScopeLocalEscape"
+        | "AtomicMissingOrdering"
+        | "AtomicInvalidInnerType" => "concurrency/task-boundaries",
+        "GpuInvalidTarget"
+        | "GpuNotSafe"
+        | "GpuEffectViolation"
+        | "TargetGateViolation"
+        | "ProfileViolation"
+        | "ProfileIncompatibleEffect" => "targets/effect-gating",
+        "LayoutUnassignedFields"
+        | "LayoutReprCIgnored"
+        | "LayoutReprCOnPubStruct"
+        | "ReprTransparentInvalid"
+        | "DiscriminantInvalid"
+        | "ExternSignatureInvalid"
+        | "FfiLintHint" => "unsafe/ffi-and-layout",
+        "RemovedInCore"
+        | "DeferredToM4a"
+        | "ArchivedWithLegacy"
+        | "DeferredToLaterTrack"
+        | "LaterTrack" => "scope/later-tracks",
+        _ => return None,
+    })
+}
+
+/// The concept of a diagnostic class, for a kind [`concept_for_kind`] leaves
+/// to it.
+fn concept_for_class(class: DiagnosticClass) -> Option<&'static str> {
+    use DiagnosticClass as K;
+    Some(match class {
+        K::TypeMismatch | K::UndefinedType | K::InvalidUnaryOp | K::InvalidBinaryOp => {
+            "types/checking"
+        }
+        K::WrongNumberOfArgs => "functions/calls",
+        K::NoMethodFound => "traits/method-resolution",
+        K::InvalidCast => "types/casts",
+        K::TraitBoundNotSatisfied => "traits/bounds",
+        K::RefutablePattern => "patterns/exhaustiveness",
+        K::CannotInferTypeParam => "types/inference",
+        K::UndefinedName | K::DuplicateDefinition => "names/resolution",
+        K::EffectUndeclared => "effects/public-function-declaration",
+        K::EffectConflict => "effects/conflict-rules",
+        K::OwnershipMoveAfterUse => "ownership/move-semantics",
+        K::OwnershipBorrowConflict => "ownership/borrowing",
+        K::OwnershipUseOfUninitialized => "ownership/initialization",
+        K::TargetIncompatible => "targets/effect-gating",
+        K::UnsafeRequired | K::FfiViolation | K::LayoutQueryInvalid => "unsafe/ffi-and-layout",
+        K::LintWarning => "tooling/lint-levels",
+        K::Other => return None,
+    })
+}
+
+/// The catalogued codes whose diagnostics carry `concept`.
+fn codes_of_concept(concept: &str) -> Vec<&'static str> {
+    let mut codes: Vec<&'static str> = CODE_TABLE
+        .iter()
+        .filter(|(code, e)| concept_for(e.phase, code, None, None) == concept)
+        .map(|(code, _)| *code)
+        .collect();
+    codes.dedup();
+    codes
+}
+
+fn render_concept_id_text(c: &ConceptId) -> String {
+    let mut out = format!("karac explain — concept: {}\n\nSpecified in:\n", c.id);
+    for (doc, heading) in c.sections {
+        out.push_str(&format!(
+            "  {doc}#{}  ({heading})\n",
+            heading_anchor(heading)
+        ));
+    }
+    let codes = codes_of_concept(c.id);
+    if !codes.is_empty() {
+        out.push_str(&format!("\nDiagnostic codes: {}\n", codes.join(", ")));
+    }
+    out
+}
+
+fn render_concept_id_json(c: &ConceptId) -> String {
+    let sections = c
+        .sections
+        .iter()
+        .map(|(doc, heading)| {
+            format!(
+                "{{\"file\":\"{doc}\",\"section\":\"{}\",\"anchor\":\"{}\"}}",
+                escape_json_string(heading),
+                heading_anchor(heading)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    let codes = codes_of_concept(c.id)
+        .iter()
+        .map(|c| format!("\"{c}\""))
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(
+        "{{\"kind\":\"concept_id\",\"concept\":\"{}\",\"sections\":[{sections}],\"codes\":[{codes}]}}",
+        c.id
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2977,5 +3482,93 @@ mod tests {
         assert!(json.starts_with("{\"kind\":\"diagnostic_code\",\"code\":\"E0200\""));
         assert!(json.contains("\"class\":\"TYPE_MISMATCH\""));
         assert!(json.ends_with("]}"));
+    }
+
+    const CORE_SEMANTICS_MD: &str = include_str!("../../docs/core-semantics.md");
+
+    /// design.md's concept table lists exactly [`CONCEPT_IDS`], in order,
+    /// each against the sections the code names, and every section is a
+    /// heading of its document (B-2026-11-05-28).
+    #[test]
+    fn concept_ids_match_the_design_table() {
+        let table = &DESIGN_MD[DESIGN_MD.find("#### Concept ids").unwrap()..];
+        let table = &table[..table.find("#### Error return traces").unwrap()];
+        let rows: Vec<(&str, &str)> = table
+            .lines()
+            .filter_map(|l| l.strip_prefix("| `"))
+            .filter_map(|l| l.split_once("` | "))
+            .filter(|(_, sections)| {
+                !sections.starts_with("Retired") && !sections.starts_with("Deferred")
+            })
+            .collect();
+        let ids: Vec<&str> = rows.iter().map(|(id, _)| *id).collect();
+        let want: Vec<&str> = CONCEPT_IDS.iter().map(|c| c.id).collect();
+        assert_eq!(
+            ids, want,
+            "design.md's concept table and CONCEPT_IDS differ"
+        );
+        let anchors = |doc: &str| -> Vec<String> {
+            doc.lines()
+                .filter(|l| l.starts_with('#'))
+                .map(|l| heading_anchor(l.trim_start_matches('#').trim()))
+                .collect()
+        };
+        let (design, core) = (anchors(DESIGN_MD), anchors(CORE_SEMANTICS_MD));
+        for (c, (_, cell)) in CONCEPT_IDS.iter().zip(&rows) {
+            for (doc, heading) in c.sections {
+                let anchor = heading_anchor(heading);
+                let (headings, link) = if *doc == D {
+                    (&design, format!("(#{anchor})"))
+                } else {
+                    (&core, format!("(core-semantics.md#{anchor})"))
+                };
+                assert!(
+                    headings.contains(&anchor),
+                    "{}: no heading `{heading}` in {doc}",
+                    c.id
+                );
+                assert!(
+                    cell.contains(&link),
+                    "{}: the table does not link {link}",
+                    c.id
+                );
+            }
+        }
+    }
+
+    /// Every catalogued code has a concept from the table, and the spec's
+    /// own examples get the ids it shows.
+    #[test]
+    fn every_catalogued_code_has_a_concept() {
+        for (code, e) in CODE_TABLE {
+            let c = concept_for(e.phase, code, None, None);
+            assert!(concept_id(c).is_some(), "{code}: {c} is not a concept id");
+        }
+        let at = |phase, code| concept_for(phase, code, None, None);
+        assert_eq!(at("ownership", "E0500"), "ownership/move-semantics");
+        assert_eq!(at("effect", "E0400"), "effects/public-function-declaration");
+        // The kind is finer than the class: E0516 is classed a mismatch.
+        assert_eq!(at("typecheck", "E0516"), "ownership/borrowing");
+        // An uncatalogued symbolic code goes by its class, then its phase.
+        assert_eq!(
+            concept_for(
+                "ownership",
+                "E_SLICE_BORROW_CONFLICT",
+                Some("OWNERSHIP_BORROW_CONFLICT"),
+                None
+            ),
+            "ownership/borrowing"
+        );
+        assert_eq!(
+            concept_for("manifest", "E0999", None, None),
+            "packages/manifests"
+        );
+        assert_eq!(
+            concept_for("typecheck", "W0245", None, Some("deprecated")),
+            "items/deprecation"
+        );
+        for phase in ["no-such-phase", "build", "test"] {
+            assert!(concept_id(concept_for(phase, "", None, None)).is_some());
+        }
     }
 }
