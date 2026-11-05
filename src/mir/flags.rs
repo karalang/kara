@@ -305,6 +305,42 @@ pub fn is_flagged_place(body: &Body, tys: &TyInterner, place: &Place) -> bool {
     matches!(tys.kind(b.ty), TyKind::Shared(_)) && takes_flag(tys, f.ty)
 }
 
+/// The message head of a conflict at the flagged field `place`: the field
+/// as the program names it (`Bag.items`, or `Shape.Circle.r` for a variant's
+/// field), which design.md §11 says the panic names. The run time adds
+/// where the borrow holding the flag was made, and the rule.
+pub fn conflict_head(body: &Body, tys: &TyInterner, place: &Place) -> String {
+    let field = field_name(body, tys, place)
+        .map_or_else(|| "this `shared` field".to_string(), |f| format!("`{f}`"));
+    format!("already borrowed: {field} is borrowed through another handle")
+}
+
+fn field_name(body: &Body, tys: &TyInterner, place: &Place) -> Option<String> {
+    let (ProjElem::Field(f, _), base) = place.projection.split_last()? else {
+        return None;
+    };
+    let base = Place {
+        local: place.local,
+        projection: base.to_vec(),
+    };
+    let b = place_ty(body, tys, &base).ok()?;
+    let (TyKind::Shared(a) | TyKind::Adt(a)) = tys.kind(b.ty) else {
+        return None;
+    };
+    let adt = tys.adt(a);
+    match b.variant {
+        Some(v) if adt.is_enum => {
+            let var = adt.variants.get(v as usize)?;
+            let (name, _) = var.fields.get(f.0 as usize)?;
+            Some(format!("{}.{}.{name}", adt.name, var.name))
+        }
+        _ => {
+            let (name, _) = adt.variants.first()?.fields.get(f.0 as usize)?;
+            Some(format!("{}.{name}", adt.name))
+        }
+    }
+}
+
 /// The flagged fields `place` reaches its target through, outermost
 /// first: an access of kind `kind` holds the innermost one that way and
 /// the others as a reader.

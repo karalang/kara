@@ -20,6 +20,8 @@ fn e<T: ToString>(x: T) -> String {
     x.to_string()
 }
 
+/// The abort's message when the runtime set none: the run time sets one
+/// naming the field and the borrow's place first ([`Cx::conflict_unless`]).
 const CONFLICT: &str =
     "already borrowed: this `shared` field is borrowed through another handle (core semantics §6.2)";
 
@@ -105,16 +107,39 @@ impl<'ctx> Cx<'ctx, '_> {
                     .ok_or("a flag acquired with no slot")?;
                 let addr = self.place_ptr(place)?;
                 let frame = self.frame_ptr()?;
+                let (at, at_n) = self.abort_site()?;
                 let (pt, i8t, i32t) = (self.ptr_ty(), self.llcx.i8_type(), self.llcx.i32_type());
+                let i64t = self.llcx.i64_type();
                 let f = self.extern_fn(
                     "karac_mir_flag_acquire_in",
-                    i8t.fn_type(&[pt.into(), i8t.into(), pt.into(), i32t.into()], false),
+                    i8t.fn_type(
+                        &[
+                            pt.into(),
+                            i8t.into(),
+                            pt.into(),
+                            i32t.into(),
+                            pt.into(),
+                            i64t.into(),
+                        ],
+                        false,
+                    ),
                 );
                 let m = i8t.const_int(u64::from(*kind == BorrowKind::Mut), false);
                 let k = i32t.const_int(i as u64, false);
                 let r = self
                     .builder
-                    .build_call(f, &[addr.into(), m.into(), frame.into(), k.into()], "")
+                    .build_call(
+                        f,
+                        &[
+                            addr.into(),
+                            m.into(),
+                            frame.into(),
+                            k.into(),
+                            at.into(),
+                            at_n.into(),
+                        ],
+                        "",
+                    )
                     .map_err(e)?
                     .try_as_basic_value()
                     .unwrap_basic()
@@ -123,7 +148,7 @@ impl<'ctx> Cx<'ctx, '_> {
                     .builder
                     .build_int_compare(IntPredicate::EQ, r, i8t.const_zero(), "")
                     .map_err(e)?;
-                self.abort_unless(ok, CONFLICT)?;
+                self.conflict_unless(ok, addr, place)?;
             }
             FlagOp::Release { loan } if resume => {
                 let frame = self.frame_ptr()?;
@@ -154,8 +179,8 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.give_back(i)?;
                 let mutable = *kind == BorrowKind::Mut;
                 let addr = self.place_ptr(place)?;
-                let r = self.flag_call("karac_mir_flag_acquire", addr, mutable)?;
-                self.abort_unless(r, CONFLICT)?;
+                let r = self.flag_acquire(addr, mutable)?;
+                self.conflict_unless(r, addr, place)?;
                 let slot = self.flags[i].slot.ok_or("a frame flag with no slot")?;
                 self.builder.build_store(slot, addr).map_err(e)?;
             }
@@ -169,7 +194,7 @@ impl<'ctx> Cx<'ctx, '_> {
             FlagOp::Check { place, kind } => {
                 let addr = self.place_ptr(place)?;
                 let r = self.flag_call("karac_mir_flag_check", addr, *kind == BorrowKind::Mut)?;
-                self.abort_unless(r, CONFLICT)?;
+                self.conflict_unless(r, addr, place)?;
             }
         }
         Ok(())
@@ -228,6 +253,66 @@ impl<'ctx> Cx<'ctx, '_> {
     /// argument.
     fn frame_ptr(&mut self) -> R<PointerValue<'ctx>> {
         self.place_ptr(&Place::local(Local(1)).project(ProjElem::Deref))
+    }
+
+    /// Aborts unless `ok`, with the message naming the field at `place`
+    /// and where the borrow holding its flag (at `addr`) was made: the
+    /// runtime sets it as the panic's message before the abort, whose own
+    /// place is the conflicting access (design.md §11, B-2026-11-04-81).
+    fn conflict_unless(
+        &mut self,
+        ok: inkwell::values::IntValue<'ctx>,
+        addr: PointerValue<'ctx>,
+        place: &Place,
+    ) -> R<()> {
+        let f = self.cur_fn()?;
+        let bad = self.llcx.append_basic_block(f, "flag.conflict");
+        let good = self.llcx.append_basic_block(f, "flag.ok");
+        self.builder
+            .build_conditional_branch(ok, good, bad)
+            .map_err(e)?;
+        self.builder.position_at_end(bad);
+        let head = crate::mir::flags::conflict_head(self.cur()?, self.tys, place);
+        let (h, hn) = self.str_const(&head)?;
+        let pt = self.ptr_ty();
+        let set = self.extern_fn(
+            "karac_mir_flag_conflict",
+            self.llcx
+                .void_type()
+                .fn_type(&[pt.into(), pt.into(), self.llcx.i64_type().into()], false),
+        );
+        self.builder
+            .build_call(set, &[addr.into(), h.into(), hn.into()], "")
+            .map_err(e)?;
+        self.abort_with(CONFLICT)?;
+        self.builder.position_at_end(good);
+        Ok(())
+    }
+
+    /// `karac_mir_flag_acquire(addr, mutable, at) == 0`, `at` being the
+    /// place of the borrow, which a later conflict names.
+    fn flag_acquire(
+        &mut self,
+        addr: PointerValue<'ctx>,
+        mutable: bool,
+    ) -> R<inkwell::values::IntValue<'ctx>> {
+        let (at, at_n) = self.abort_site()?;
+        let (pt, i8t, i64t) = (self.ptr_ty(), self.llcx.i8_type(), self.llcx.i64_type());
+        let f = self.extern_fn(
+            "karac_mir_flag_acquire",
+            i8t.fn_type(&[pt.into(), i8t.into(), pt.into(), i64t.into()], false),
+        );
+        let m = i8t.const_int(u64::from(mutable), false);
+        let r = self
+            .builder
+            .build_call(f, &[addr.into(), m.into(), at.into(), at_n.into()], "")
+            .map_err(e)?
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+        self.builder
+            .build_int_compare(IntPredicate::EQ, r, i8t.const_zero(), "")
+            .map_err(e)
     }
 
     /// `name(addr, mutable) == 0`: the runtime found no conflict.

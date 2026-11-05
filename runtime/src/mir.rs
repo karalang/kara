@@ -110,7 +110,7 @@ fn with_panic<R>(f: impl FnOnce(&mut PanicMessage) -> R) -> R {
 }
 
 /// Sets the message for the abort that follows, without a panic of its own.
-fn set_panic_bytes(msg: &[u8]) {
+pub(crate) fn set_panic_bytes(msg: &[u8]) {
     with_panic(|p| {
         p.text.clear();
         p.text.extend_from_slice(msg);

@@ -1056,11 +1056,15 @@ struct Frame {
     held: Held,
 }
 
-/// A §6.2 borrow flag: how many readers hold it, or whether a writer does.
+/// A §6.2 borrow flag: how many readers hold it, or whether a writer does,
+/// and where the borrow that took it was made, which a conflict names
+/// (design.md §11, B-2026-11-04-81). Readers that join a held flag keep
+/// the first one's place.
 #[derive(Default)]
 struct Flag {
     readers: u32,
     writer: bool,
+    at: Option<String>,
 }
 
 struct HeapObj {
@@ -12437,7 +12441,7 @@ impl<'a> Interp<'a> {
                     continue;
                 }
                 let st = &block.statements[i];
-                self.statement(body, &st.kind)
+                self.statement(body, &st.kind, st.source_info.span)
                     .map_err(|s| self.report_abort(s, body, st.source_info.span))
                     .map_err(|s| locate(s, body, format!("{bb}[{i}]")))?;
             }
@@ -12470,7 +12474,7 @@ impl<'a> Interp<'a> {
                 fast::Term::Checked { .. } => {
                     let i = block.statements.len() - 1;
                     let st = &block.statements[i];
-                    self.statement(body, &st.kind)
+                    self.statement(body, &st.kind, st.source_info.span)
                         .map_err(|s| self.report_abort(s, body, st.source_info.span))
                         .map_err(|s| locate(s, body, format!("{bb}[{i}]")))?;
                     self.terminator(body, &block.terminator.kind, strict)
@@ -12501,7 +12505,7 @@ impl<'a> Interp<'a> {
             let block = body.block(bb);
             for (i, st) in block.statements.iter().enumerate() {
                 self.tick()?;
-                self.statement(body, &st.kind)
+                self.statement(body, &st.kind, st.source_info.span)
                     .map_err(|s| self.report_abort(s, body, st.source_info.span))
                     .map_err(|s| locate(s, body, format!("{bb}[{i}]")))?;
             }
@@ -13036,7 +13040,7 @@ impl<'a> Interp<'a> {
 
     // ---- statements and rvalues ----
 
-    fn statement(&mut self, body: &Body, s: &StatementKind) -> R<()> {
+    fn statement(&mut self, body: &Body, s: &StatementKind, span: crate::token::Span) -> R<()> {
         match s {
             StatementKind::Assign(p, rv) => {
                 let v = match rv {
@@ -13144,14 +13148,14 @@ impl<'a> Interp<'a> {
                 }
                 Ok(())
             }
-            StatementKind::BorrowFlag(op) => self.borrow_flag(body, op),
+            StatementKind::BorrowFlag(op) => self.borrow_flag(body, op, span),
             // Nothing here is boxed.
             StatementKind::FreeBox(_) | StatementKind::Nop => Ok(()),
         }
     }
 
     /// §6.2: a conflicting access through another handle panics.
-    fn borrow_flag(&mut self, body: &Body, op: &FlagOp) -> R<()> {
+    fn borrow_flag(&mut self, body: &Body, op: &FlagOp, span: crate::token::Span) -> R<()> {
         match op {
             FlagOp::Acquire { place, kind, loan } => {
                 let (addr, _) = self.resolve_read(body, place)?;
@@ -13168,11 +13172,26 @@ impl<'a> Interp<'a> {
                 if let Some(old) = again {
                     self.release_flags(vec![old]);
                 }
-                self.flag_conflict(&addr, *kind)?;
+                self.flag_conflict(body, place, &addr, *kind)?;
                 let flag = match self.flags.iter().position(|(a, _)| *a == addr) {
                     Some(i) => &mut self.flags[i].1,
                     None => {
-                        self.flags.push((addr.clone(), Flag::default()));
+                        // The borrow's place, as the abort report writes
+                        // one; a library body's is its caller's, which this
+                        // frame does not know.
+                        let at = (!self.program.defers_location(body, span) && span.line > 0).then(
+                            || {
+                                let (file, line) = source_at(span.line);
+                                format!("{file}:{line}:{}", span.column)
+                            },
+                        );
+                        self.flags.push((
+                            addr.clone(),
+                            Flag {
+                                at,
+                                ..Flag::default()
+                            },
+                        ));
                         &mut self.flags.last_mut().expect("pushed").1
                     }
                 };
@@ -13201,13 +13220,21 @@ impl<'a> Interp<'a> {
                 let Some((addr, _)) = self.resolve(body, place, Mode::Probe)? else {
                     return Ok(());
                 };
-                self.flag_conflict(&addr, *kind)
+                self.flag_conflict(body, place, &addr, *kind)
             }
         }
     }
 
-    /// Panics when the flag at `addr` is held in a way `kind` conflicts with.
-    fn flag_conflict(&mut self, addr: &Addr, kind: BorrowKind) -> R<()> {
+    /// Panics when the flag at `addr` is held in a way `kind` conflicts with,
+    /// naming the field at `place` and where the borrow holding the flag
+    /// was made; the abort's own place is this access (design.md §11).
+    fn flag_conflict(
+        &mut self,
+        body: &Body,
+        place: &Place,
+        addr: &Addr,
+        kind: BorrowKind,
+    ) -> R<()> {
         let Some((_, f)) = self.flags.iter().find(|(a, _)| a == addr) else {
             return Ok(());
         };
@@ -13216,6 +13243,13 @@ impl<'a> Interp<'a> {
             BorrowKind::Mut => f.writer || f.readers > 0,
         };
         if conflict {
+            let mut msg = crate::mir::flags::conflict_head(body, self.tys, place);
+            if let Some(at) = &f.at {
+                msg.push_str(" at ");
+                msg.push_str(at);
+            }
+            msg.push_str(" (core semantics §6.2)");
+            self.panic_message = Some(msg);
             if self.trace {
                 self.events.push(Event::Abort(AbortReason::Panic));
             }

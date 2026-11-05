@@ -24,11 +24,17 @@
 
 use std::cell::RefCell;
 
-/// One flagged field: how many readers hold it, or whether a writer does.
+/// One flagged field: how many readers hold it, or whether a writer does,
+/// and where the borrow that took it was made: a `file:line:col` constant
+/// the compiled program passes (null when the place is not the program's
+/// own), which a conflict names (design.md §11, B-2026-11-04-81). Readers
+/// that join a held flag keep the first one's place.
 struct Flag {
     addr: usize,
     readers: u32,
     writer: bool,
+    at: usize,
+    at_len: u64,
 }
 
 /// A flag a coroutine frame holds: the frame, its slot, and what it took.
@@ -74,10 +80,16 @@ fn conflicts(f: &Flag, mutable: bool) -> bool {
     f.writer || (mutable && f.readers > 0)
 }
 
-/// Takes the flag at `addr`, mutably when `mutable` is non-zero. Returns 1,
-/// taking nothing, when the flag is held in a way that conflicts.
+/// Takes the flag at `addr`, mutably when `mutable` is non-zero, for the
+/// borrow made at `at` (`at_len` bytes). Returns 1, taking nothing, when
+/// the flag is held in a way that conflicts.
 #[no_mangle]
-pub extern "C" fn karac_mir_flag_acquire(addr: *const u8, mutable: u8) -> u8 {
+pub extern "C" fn karac_mir_flag_acquire(
+    addr: *const u8,
+    mutable: u8,
+    at: *const u8,
+    at_len: u64,
+) -> u8 {
     let addr = addr as usize;
     let mutable = mutable != 0;
     flags(|fl| {
@@ -95,6 +107,8 @@ pub extern "C" fn karac_mir_flag_acquire(addr: *const u8, mutable: u8) -> u8 {
                     addr,
                     readers: u32::from(!mutable),
                     writer: mutable,
+                    at: at as usize,
+                    at_len,
                 });
             }
         }
@@ -136,6 +150,36 @@ pub extern "C" fn karac_mir_flag_check(addr: *const u8, mutable: u8) -> u8 {
     })
 }
 
+/// Sets the message of the abort that follows a conflict at `addr`: `head`
+/// (`head_len` bytes, which names the field), the place of the borrow
+/// holding the flag when the program passed one, and the rule (design.md
+/// §11: the panic names the field and both accesses; the abort's own place
+/// is the second).
+///
+/// # Safety
+/// `head` points at `head_len` readable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_flag_conflict(addr: *const u8, head: *const u8, head_len: u64) {
+    let addr = addr as usize;
+    let (at, at_len) = flags(|fl| {
+        fl.iter()
+            .find(|f| f.addr == addr)
+            .map_or((0, 0), |f| (f.at, f.at_len))
+    });
+    let mut msg = crate::lean_vec::LeanVec::<u8>::new();
+    // SAFETY: the caller's contract.
+    msg.extend_from_slice(unsafe { std::slice::from_raw_parts(head, head_len as usize) });
+    if at != 0 && at_len > 0 {
+        msg.extend_from_slice(b" at ");
+        // SAFETY: `karac_mir_flag_acquire`'s caller passed a constant.
+        msg.extend_from_slice(unsafe {
+            std::slice::from_raw_parts(at as *const u8, at_len as usize)
+        });
+    }
+    msg.extend_from_slice(" (core semantics §6.2)".as_bytes());
+    crate::mir::set_panic_bytes(msg.as_slice());
+}
+
 /// `karac_mir_flag_acquire` for the coroutine frame at `frame`, at its
 /// slot `slot`: gives back what that slot held first, and remembers what
 /// it takes until `karac_mir_flag_release_in` or
@@ -146,9 +190,11 @@ pub extern "C" fn karac_mir_flag_acquire_in(
     mutable: u8,
     frame: *const u8,
     slot: u32,
+    at: *const u8,
+    at_len: u64,
 ) -> u8 {
     karac_mir_flag_release_in(frame, slot);
-    if karac_mir_flag_acquire(addr, mutable) != 0 {
+    if karac_mir_flag_acquire(addr, mutable, at, at_len) != 0 {
         return 1;
     }
     holds(|h| {
@@ -197,17 +243,19 @@ pub extern "C" fn karac_mir_flag_release_frame(frame: *const u8) {
 mod tests {
     use super::*;
 
+    const NO_AT: *const u8 = std::ptr::null();
+
     #[test]
     fn readers_share_and_a_writer_excludes() {
         let a = 0x1000 as *const u8;
-        assert_eq!(karac_mir_flag_acquire(a, 0), 0);
-        assert_eq!(karac_mir_flag_acquire(a, 0), 0);
+        assert_eq!(karac_mir_flag_acquire(a, 0, NO_AT, 0), 0);
+        assert_eq!(karac_mir_flag_acquire(a, 0, NO_AT, 0), 0);
         assert_eq!(karac_mir_flag_check(a, 0), 0);
         assert_eq!(karac_mir_flag_check(a, 1), 1);
-        assert_eq!(karac_mir_flag_acquire(a, 1), 1);
+        assert_eq!(karac_mir_flag_acquire(a, 1, NO_AT, 0), 1);
         karac_mir_flag_release(a, 0);
         karac_mir_flag_release(a, 0);
-        assert_eq!(karac_mir_flag_acquire(a, 1), 0);
+        assert_eq!(karac_mir_flag_acquire(a, 1, NO_AT, 0), 0);
         assert_eq!(karac_mir_flag_check(a, 0), 1);
         karac_mir_flag_release(a, 1);
         assert_eq!(karac_mir_flag_check(a, 1), 0);
@@ -217,11 +265,11 @@ mod tests {
     fn a_frame_keeps_its_flags_until_released_or_dropped() {
         let (a, b) = (0x2000 as *const u8, 0x3000 as *const u8);
         let f = 0x9000 as *const u8;
-        assert_eq!(karac_mir_flag_acquire_in(a, 1, f, 0), 0);
-        assert_eq!(karac_mir_flag_acquire_in(b, 0, f, 1), 0);
+        assert_eq!(karac_mir_flag_acquire_in(a, 1, f, 0, NO_AT, 0), 0);
+        assert_eq!(karac_mir_flag_acquire_in(b, 0, f, 1, NO_AT, 0), 0);
         assert_eq!(karac_mir_flag_check(a, 0), 1);
         // Taking slot 0 again gives back what it held first.
-        assert_eq!(karac_mir_flag_acquire_in(a, 1, f, 0), 0);
+        assert_eq!(karac_mir_flag_acquire_in(a, 1, f, 0, NO_AT, 0), 0);
         karac_mir_flag_release_in(f, 0);
         assert_eq!(karac_mir_flag_check(a, 1), 0);
         assert_eq!(karac_mir_flag_check(b, 1), 1);
