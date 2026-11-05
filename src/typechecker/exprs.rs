@@ -1514,6 +1514,16 @@ impl<'a> super::TypeChecker<'a> {
                     || self.local_scope.part_of(n).is_some())
     }
 
+    /// Whether `arg` is a bare parameter (or a part of one) handed to a slot
+    /// of a generic signature that takes it by value: not a borrow, not a
+    /// view, and not a bare type parameter, which a borrow solves as itself.
+    fn d5_borrow_for_owned_slot(&self, arg: &Expr, formal: &Type) -> bool {
+        !matches!(
+            formal,
+            Type::Ref(_) | Type::MutRef(_) | Type::Slice { .. } | Type::TypeParam(_)
+        ) && self.names_a_d5_borrow(arg)
+    }
+
     /// The bare parameter a scrutinee names: the parameter itself while it
     /// is still the borrow (not shadowed), or a binding already bound out
     /// of one.
@@ -4687,16 +4697,27 @@ impl<'a> super::TypeChecker<'a> {
                         .is_some_and(|t| self.is_undecided_unit_variant(&arg.value, t))
             })
             .collect();
-        for (((sub_param_ty, arg_ty_opt), formal), undecided) in sub_params
+        for ((((sub_param_ty, arg_ty_opt), formal), undecided), arg) in sub_params
             .iter()
             .zip(arg_tys.iter())
             .zip(params.iter())
             .zip(undecided_variant)
+            .zip(args.iter())
         {
             if undecided {
                 continue;
             }
             if let Some(arg_ty) = arg_ty_opt {
+                // A bare parameter handed to an owned slot (`PriorityQueue.from(v)`
+                // with `v: Vec[i64]`) solves the slot from what it borrows, so
+                // pass 2 reports the give-away, with its `own` fix, rather than
+                // a `ref` mismatch and an unsolved `T` (B-2026-11-04-78).
+                let arg_ty = match arg_ty {
+                    Type::Ref(inner) if self.d5_borrow_for_owned_slot(&arg.value, formal) => {
+                        inner.as_ref()
+                    }
+                    t => t,
+                };
                 unify_types(
                     sub_param_ty,
                     arg_ty,
@@ -4843,7 +4864,10 @@ impl<'a> super::TypeChecker<'a> {
                         &self.env.const_substitutions,
                         &const_id_to_name,
                     ));
-                    if !(is_str_view(&resolved) && is_string_place_type(arg_ty)) {
+                    let given_away = matches!(arg_ty, Type::Ref(_))
+                        && self.d5_borrow_for_owned_slot(&arg.value, formal)
+                        && self.d5_give_away(&arg.value, &resolved).is_some();
+                    if !given_away && !(is_str_view(&resolved) && is_string_place_type(arg_ty)) {
                         self.check_assignable(&resolved, arg_ty, arg.value.span);
                     }
                     self.note_arg_slot(&arg.value, arg_ty, &resolved);
