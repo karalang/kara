@@ -179,3 +179,40 @@ fn a_clean_package_check_warns_of_another_modules_deprecated_item() {
         "{json}"
     );
 }
+
+/// Through a module binding the combined text blanks the qualifier, and the
+/// warning's column read the blank as a word: `util.old()` was warned at the
+/// `)` (B-2026-11-05-24).
+#[test]
+fn a_deprecated_use_through_a_module_binding_points_at_the_name() {
+    let dir = scratch("deprecated-binding");
+    package(
+        &dir,
+        &[
+            (
+                "util.kara",
+                "#[deprecated(note: \"x\")]\npub fn old() -> i64 { 1 }\n",
+            ),
+            (
+                "main.kara",
+                "import util;\n\nfn main() {\n    println(util.old() + util.old());\n}\n",
+            ),
+        ],
+    );
+    let (ok, out) = output(karac().arg("check").current_dir(&dir));
+    let (_, json) = output(karac().args(["check", "--output=json"]).current_dir(&dir));
+    let (_, build) = output(karac().arg("build").current_dir(&dir));
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(ok, "{out}");
+    let carets = "    println(util.old() + util.old());\n  |                  ^^^";
+    let second = "    println(util.old() + util.old());\n  |                               ^^^";
+    for text in [&out, &build] {
+        assert!(text.contains("src/main.kara:4:18:"), "{text}");
+        assert!(text.contains("src/main.kara:4:31:"), "{text}");
+        assert!(text.contains(carets) && text.contains(second), "{text}");
+    }
+    assert!(
+        json.contains("\"column\":18") && json.contains("\"column\":31"),
+        "{json}"
+    );
+}

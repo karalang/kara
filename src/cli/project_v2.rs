@@ -557,6 +557,51 @@ fn word_map(combined: &[char], own: &[char]) -> (Vec<usize>, Vec<usize>) {
             j += 1;
             continue;
         }
+        // Spaces the file does not have: a blanked qualifier (`util.` in
+        // `util.old()`, the same bytes as spaces) or the padding after a
+        // shorter rename. Whichever lines the text after the run up with the
+        // file decides; read as a word, the run moved every column after it
+        // (B-2026-11-05-24).
+        if combined[i] == ' ' && !own[j].is_whitespace() {
+            let k = combined[i..].iter().take_while(|c| **c == ' ').count();
+            // The file's characters the run blanked, byte for byte.
+            let mut bytes = 0;
+            let mut m = 0;
+            while bytes < k && j + m < own.len() && !own[j + m].is_whitespace() {
+                bytes += own[j + m].len_utf8();
+                m += 1;
+            }
+            let agree = |a: usize, b: usize| {
+                combined[a.min(combined.len())..]
+                    .iter()
+                    .zip(&own[b.min(own.len())..])
+                    .take_while(|(x, y)| x == y)
+                    .count()
+            };
+            let blanked = bytes == k && agree(i + k, j + m) >= agree(i + k, j);
+            for n in 0..k {
+                if blanked {
+                    // Each blanked character's spaces map onto it.
+                    let mut b = 0;
+                    let mut c = 0;
+                    while c < m && b + own[j + c].len_utf8() <= n {
+                        b += own[j + c].len_utf8();
+                        c += 1;
+                    }
+                    starts[i + n] = j + c;
+                    ends[i + n + 1] = j + c + 1;
+                } else {
+                    // Padding takes no room in the file.
+                    starts[i + n] = j;
+                    ends[i + n + 1] = j;
+                }
+            }
+            i += k;
+            if blanked {
+                j += m;
+            }
+            continue;
+        }
         // Back up to the start of the word both sides are in, then map the
         // whole word onto the whole word.
         while i > 0 && j > 0 && word(&combined[i - 1]) && combined[i - 1] == own[j - 1] {
@@ -1301,7 +1346,44 @@ pub(super) fn package_tree(
 
 #[cfg(test)]
 mod remap_tests {
-    use super::remap_places;
+    use super::{remap_places, word_map};
+
+    /// Where the word `name` of `combined` starts and ends in `own`.
+    fn mapped(combined: &str, own: &str, name: &str) -> (usize, usize) {
+        let c: Vec<char> = combined.chars().collect();
+        let o: Vec<char> = own.chars().collect();
+        let at = combined[..combined.find(name).unwrap()].chars().count();
+        let (starts, ends) = word_map(&c, &o);
+        (starts[at], ends[at + name.chars().count()])
+    }
+
+    #[test]
+    fn a_blanked_qualifier_keeps_the_columns_after_it() {
+        // B-2026-11-05-24: `old` read 5 columns late, under the `)`.
+        let own = "fn main() { println(util.old()); }";
+        assert_eq!(
+            mapped("fn main() { println(     old()); }", own, "old"),
+            (25, 28)
+        );
+        // The qualifier starts with the member's letter.
+        let own = "fn f() { m.max(1) + m.min(2) }";
+        assert_eq!(
+            mapped("fn f() {   max(1) +   min(2) }", own, "min"),
+            (22, 25)
+        );
+        // A qualifier's two-byte letter is blanked as two spaces.
+        let own = "fn f() { \u{e9}t\u{e9}.go() }";
+        assert_eq!(mapped("fn f() {       go() }", own, "go"), (13, 15));
+        // A shorter rename's padding takes no room, and a longer rename
+        // before a blank keeps the blank's columns.
+        let own = "fn f() { connection(x) + db.q() }";
+        assert_eq!(
+            mapped("fn f() { open      (x) +    q() }", own, "q"),
+            (28, 29)
+        );
+        let own = "fn f() { BP(x) + db.q() }";
+        assert_eq!(mapped("fn f() { P__b(x) +    q() }", own, "q"), (20, 21));
+    }
 
     fn at(line: usize) -> (&'static str, usize) {
         if line > 100 {
