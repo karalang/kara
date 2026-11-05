@@ -320,7 +320,7 @@ import std.collections.r#async_map;         // a raw module-path segment
 
 **Case class** is decided after the prefix: `r#async` is Value class, `r#Async` Type class.
 
-**Where it can appear:** any binding position (`let`, `fn`, `struct`, `enum`, variants, generic parameters, parameters, fields, aliases, traits, methods), any reference position (`r#name`, `obj.r#name`, `module.r#name`, `r#Name[T]`), and an attribute name (`#[r#name]`). Attribute paths have one segment in v1, except the compiler's own `karac::` namespace: `#[tool::name]` is an error ([§17](#attributes)).
+**Where it can appear:** any binding position (`let`, `fn`, `struct`, `enum`, variants, generic parameters, parameters, fields, aliases, traits, methods), any reference position (`r#name`, `obj.r#name`, `module.r#name`, `r#Name[T]`), and an attribute name (`#[r#name]`). Attribute paths have one segment in v1, except the compiler's own `karac::` and `diagnostic::` namespaces: `#[tool::name]` is an error ([§17](#attributes)).
 
 **Where it cannot appear:**
 - Inside comments and string literals, which hold text, not tokens.
@@ -7425,9 +7425,55 @@ Tests are `test "name" { }` blocks, not an attribute ([§14](#14-testing)).
 
 **Arguments are written like a call's.** An attribute is a bare name (`#[non_exhaustive]`), or a name with a parenthesized list of positional arguments and `key: value` arguments, the same shape as a call with named arguments ([§7](#named-and-default-parameters)): `#[repr(C)]`, `#[kara_name("CFile")]`, `#[serde(rename: "server_name")]`, `#[deprecated(since: "1.2.0", note: "...")]`. There is no `#[name = value]` form and no `key = value` argument. Inside `#[cfg(...)]` each condition is `key: value` (`target: "native"`, `target_os: "linux"`), and `not`, `any` and `all` take conditions as positional arguments, so `any(target_os: "linux", target_os: "macos")` may repeat a key.
 
-**Attribute paths have one segment, except `karac::`.** The `karac::` namespace belongs to the compiler and holds the helper attributes of compiler-provided derives: `#[karac::proto(...)]` and `#[karac::field(...)]` for the protobuf derive (`runtime/stdlib/protobuf.kara`). A `karac::` name the compiler does not define is an error. Any other multi-segment path, such as `#[tool::name]`, is an error in v1; tool namespaces are deferred.
+**Attribute paths have one segment, except `karac::` and `diagnostic::`.** The `karac::` namespace belongs to the compiler and holds the helper attributes of compiler-provided derives: `#[karac::proto(...)]` and `#[karac::field(...)]` for the protobuf derive (`runtime/stdlib/protobuf.kara`). A `karac::` name the compiler does not define is an error. The `diagnostic::` namespace is below. Any other multi-segment path, such as `#[tool::name]`, is an error in v1; tool namespaces are deferred.
 
-The `#[diagnostic::*]` namespace, tool-namespaced attributes (`#[tool::name]`), performance diagnostics, and the attributes of the deferred tracks (layout, systems, GPU, web, providers) are in [deferred.md](deferred.md).
+#### The `diagnostic::` namespace
+
+Trait designers — both stdlib and user — sometimes know better than the compiler what error message a failed bound deserves, or which of several legal `impl`s a diagnostic should suggest. Kāra reserves the `#[diagnostic::*]` attribute namespace as the channel for these hints. Two members are designed; the namespace itself is open for compiler additions across versions.
+
+**Surface.**
+
+```kara
+#[diagnostic::on_unimplemented(
+    message: "the type `{Self}` cannot be used as a map key",
+    label: "`{Self}` is not Hash",
+    note: "derive it with `#[derive(Hash)]` or write an impl"
+)]
+trait Hash { ... }
+
+#[diagnostic::do_not_recommend]
+impl[T: Iterator] IntoIterator for T { ... }
+```
+
+**The two members.**
+
+- **`#[diagnostic::on_unimplemented(...)]`** — applies to a `trait` declaration. Replaces or augments the standard "trait `T` not implemented for `U`" diagnostic when a bound `U: T` fails. Three named arguments (all optional): `message: "..."` (the headline), `label: "..."` (the underline label at the offending span), `note: "..."` (an accompanying explanation). The argument values are template strings — `{Self}` interpolates the type that failed the bound; `{T0}`, `{T1}` interpolate trait type parameters; the placeholder set is fixed (no general expression evaluation). Unknown placeholders produce a build-time warning at the *trait declaration site* and render literally in the diagnostic. A trait with no `#[diagnostic::on_unimplemented]` falls back to the compiler's standard "the trait `T` is not implemented for `U`" wording.
+
+- **`#[diagnostic::do_not_recommend]`** — applies to an `impl` block. When a downstream call fails to satisfy a bound and the compiler scans candidate impls to suggest in the diagnostic ("note: the trait is implemented by ..."), an impl carrying this attribute is **omitted from the suggestion list**. The impl is still legal, still selected by ordinary lookup, and still part of coherence — only the diagnostic-suggestion path skips it. Used for blanket `impl[T: Iterator] IntoIterator for T` shapes where the suggestion would be misleading because the *direct* impl is the recommended path.
+
+**Advisory contract.** Every member of the `#[diagnostic::*]` namespace is **advisory only**:
+
+- The compiler **may** ignore the attribute (or honor it differently across versions) without breaking program semantics. Programs compile to the same code whether or not the attribute is present; only diagnostic shape changes.
+- The compiler **may** add new `#[diagnostic::*]` attributes in any release without an edition bump. New attributes are additive — older compilers see them as "unknown but in the diagnostic namespace" and accept silently.
+- An unrecognized attribute in this namespace is **silently accepted**, not rejected. This is the load-bearing distinguishing rule from the rest of the attribute system, where unknown attributes are a hard error. A `#[diagnostic::polish_my_error_pretty]` written today against a future compiler version that doesn't recognize it produces no diagnostic at the use site.
+- A malformed attribute *within* the namespace (wrong argument shape, unknown named field, invalid value type) is a *warning*, not an error, attached to the attribute span. The build proceeds; the attribute is ignored. The lint name is `malformed_diagnostic_attribute` (warn-by-default, suppressible with `#[allow(malformed_diagnostic_attribute)]`).
+
+The advisory rule reflects a deliberate trade: in exchange for the compiler retaining freedom over diagnostic wording (which is part of the *reported-behavior* layer of the spec, not the *guaranteed-semantics* layer — see [design.md §2](#2-specification-layers)), trait designers can hint at improvements without locking the compiler into a specific output format. The same trade-off underpins Rust's `#[diagnostic::*]` namespace; Kāra adopts the convention so cross-language muscle memory carries.
+
+**Where they may appear.**
+
+| Attribute | Valid item kinds |
+|---|---|
+| `#[diagnostic::on_unimplemented(...)]` | `trait` declaration only |
+| `#[diagnostic::do_not_recommend]` | `impl` block only (inherent or trait) |
+
+Applying either to an unsupported item kind is a malformed-attribute warning (not an error), and the attribute is ignored. Applying multiple `#[diagnostic::on_unimplemented]` to one trait emits the warning and uses the first one in source order.
+
+**Reservation.** The `diagnostic::` path prefix is reserved for compiler use — adding attributes here is a non-breaking minor change for the compiler. User code may write `#[diagnostic::custom_thing]` and have it silently accepted, but no semantics are guaranteed and the name space may collide with a future compiler addition (in which case the new built-in member takes precedence and the user's intent is lost). Stdlib trait designers are the primary audience; third-party trait authors may use the namespace at their own risk under this reservation policy.
+
+**Cross-reference: tool namespaces.** The general path-prefixed attribute form `#[NAMESPACE::NAME]` is also used by tool-namespaced attributes (e.g., `#[rustfmt::skip]`-style external-tool hints) — see [Tool-Namespaced Attributes](deferred.md#tool-namespaced-attributes) for the mirror system reserved for formatters/linters/analyzers.
+
+Tool-namespaced attributes (`#[tool::name]`), performance diagnostics, and the attributes of the deferred tracks (layout, systems, GPU, web, providers) are in [deferred.md](deferred.md).
 
 ---
 

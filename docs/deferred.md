@@ -6805,51 +6805,7 @@ A future `--monomorphization-budget=warn:N,error:M` flag will read the data of `
 
 ### Diagnostic Namespace Attributes (`#[diagnostic::*]`)
 
-> In v1 an attribute path has one segment, so `#[diagnostic::*]` and tool namespaces are both errors ([design.md §17](design.md#attributes)).
-
-Trait designers — both stdlib and user — sometimes know better than the compiler what error message a failed bound deserves, or which of several legal `impl`s a diagnostic should suggest. Kāra reserves the `#[diagnostic::*]` attribute namespace as the channel for these hints. Two members are designed; the namespace itself is open for compiler additions across versions.
-
-**Surface.**
-
-```kara
-#[diagnostic::on_unimplemented(
-    message: "the type `{Self}` cannot be used as a map key",
-    label: "`{Self}` is not Hash",
-    note: "derive it with `#[derive(Hash)]` or write an impl"
-)]
-trait Hash { ... }
-
-#[diagnostic::do_not_recommend]
-impl[T: Iterator] IntoIterator for T { ... }
-```
-
-**The two members.**
-
-- **`#[diagnostic::on_unimplemented(...)]`** — applies to a `trait` declaration. Replaces or augments the standard "trait `T` not implemented for `U`" diagnostic when a bound `U: T` fails. Three named arguments (all optional): `message: "..."` (the headline), `label: "..."` (the underline label at the offending span), `note: "..."` (an accompanying explanation). The argument values are template strings — `{Self}` interpolates the type that failed the bound; `{T0}`, `{T1}` interpolate trait type parameters; the placeholder set is fixed (no general expression evaluation). Unknown placeholders produce a build-time warning at the *trait declaration site* and render literally in the diagnostic. A trait with no `#[diagnostic::on_unimplemented]` falls back to the compiler's standard "the trait `T` is not implemented for `U`" wording.
-
-- **`#[diagnostic::do_not_recommend]`** — applies to an `impl` block. When a downstream call fails to satisfy a bound and the compiler scans candidate impls to suggest in the diagnostic ("note: the trait is implemented by ..."), an impl carrying this attribute is **omitted from the suggestion list**. The impl is still legal, still selected by ordinary lookup, and still part of coherence — only the diagnostic-suggestion path skips it. Used for blanket `impl[T: Iterator] IntoIterator for T` shapes where the suggestion would be misleading because the *direct* impl is the recommended path.
-
-**Advisory contract.** Every member of the `#[diagnostic::*]` namespace is **advisory only**:
-
-- The compiler **may** ignore the attribute (or honor it differently across versions) without breaking program semantics. Programs compile to the same code whether or not the attribute is present; only diagnostic shape changes.
-- The compiler **may** add new `#[diagnostic::*]` attributes in any release without an edition bump. New attributes are additive — older compilers see them as "unknown but in the diagnostic namespace" and accept silently.
-- An unrecognized attribute in this namespace is **silently accepted**, not rejected. This is the load-bearing distinguishing rule from the rest of the attribute system, where unknown attributes are a hard error. A `#[diagnostic::polish_my_error_pretty]` written today against a future compiler version that doesn't recognize it produces no diagnostic at the use site.
-- A malformed attribute *within* the namespace (wrong argument shape, unknown named field, invalid value type) is a *warning*, not an error, attached to the attribute span. The build proceeds; the attribute is ignored. The lint name is `malformed_diagnostic_attribute` (warn-by-default, suppressible with `#[allow(malformed_diagnostic_attribute)]`).
-
-The advisory rule reflects a deliberate trade: in exchange for the compiler retaining freedom over diagnostic wording (which is part of the *reported-behavior* layer of the spec, not the *guaranteed-semantics* layer — see [design.md §2](design.md#2-specification-layers)), trait designers can hint at improvements without locking the compiler into a specific output format. The same trade-off underpins Rust's `#[diagnostic::*]` namespace; Kāra adopts the convention so cross-language muscle memory carries.
-
-**Where they may appear.**
-
-| Attribute | Valid item kinds |
-|---|---|
-| `#[diagnostic::on_unimplemented(...)]` | `trait` declaration only |
-| `#[diagnostic::do_not_recommend]` | `impl` block only (inherent or trait) |
-
-Applying either to an unsupported item kind is a malformed-attribute warning (not an error), and the attribute is ignored. Applying multiple `#[diagnostic::on_unimplemented]` to one trait emits the warning and uses the first one in source order.
-
-**Reservation.** The `diagnostic::` path prefix is reserved for compiler use — adding attributes here is a non-breaking minor change for the compiler. User code may write `#[diagnostic::custom_thing]` and have it silently accepted, but no semantics are guaranteed and the name space may collide with a future compiler addition (in which case the new built-in member takes precedence and the user's intent is lost). Stdlib trait designers are the primary audience; third-party trait authors may use the namespace at their own risk under this reservation policy.
-
-**Cross-reference: tool namespaces.** The general path-prefixed attribute form `#[NAMESPACE::NAME]` is also used by tool-namespaced attributes (e.g., `#[rustfmt::skip]`-style external-tool hints) — see [Tool-Namespaced Attributes](#tool-namespaced-attributes) for the mirror system reserved for formatters/linters/analyzers.
+Moved into v1: see [design.md §17, The `diagnostic::` namespace](design.md#the-diagnostic-namespace).
 
 ### Tool-Namespaced Attributes
 
@@ -6870,7 +6826,7 @@ fn complicated_inner_loop(data: ref Slice[Frame]) -> Frame {
 pub fn login(username: String, password: String) -> Result[Session, AuthError] { ... }
 ```
 
-The compiler treats every multi-segment attribute path as a tool-namespace hint *unless* the first segment names a compiler-reserved namespace (currently only `diagnostic::*` — see [Diagnostic Namespace Attributes](#diagnostic-namespace-attributes-diagnostic)). The discriminator is structural: a *bare-name* attribute path (`#[derive]`, `#[no_mangle]`, etc.) must match a known compiler attribute or it is `error[E_UNKNOWN_ATTRIBUTE]`; a *multi-segment* path is either a compiler-reserved namespace (validated) or a tool namespace (silently accepted).
+The compiler treats every multi-segment attribute path as a tool-namespace hint *unless* the first segment names a compiler-reserved namespace (`karac::*` and `diagnostic::*` — see [Diagnostic Namespace Attributes](design.md#the-diagnostic-namespace)). The discriminator is structural: a *bare-name* attribute path (`#[derive]`, `#[no_mangle]`, etc.) must match a known compiler attribute or it is `error[E_UNKNOWN_ATTRIBUTE]`; a *multi-segment* path is either a compiler-reserved namespace (validated) or a tool namespace (silently accepted).
 
 **The compiler's contract.** For every `#[TOOL::NAME(...)]` attribute on an item:
 
@@ -6898,7 +6854,7 @@ The reservation is a name-claim, not an implementation commitment — it prevent
 
 **What is not allowed.** Tool-namespaced attributes are accepted in any item-attaching position the bare-name family supports (functions, structs, enums, traits, impls, modules, statements, expression blocks). A tool-namespaced attribute at the **expression** level (where bare-name attributes are also accepted) is syntactically legal but exotic; the compiler stores it without comment, but tooling discoverability is weaker because the LSP surfaces item-level attributes more readily than expression-level ones. Tools expecting to be portable should attach to items.
 
-**Cross-reference.** The `#[diagnostic::*]` namespace ([Diagnostic Namespace Attributes](#diagnostic-namespace-attributes-diagnostic)) is *compiler-reserved*, not a tool namespace — its members have semantic effects in the compiler. The discriminator between the two regimes is the namespace's first-segment identity, baked into the attribute checker.
+**Cross-reference.** The `#[diagnostic::*]` namespace ([Diagnostic Namespace Attributes](design.md#the-diagnostic-namespace)) is *compiler-reserved*, not a tool namespace — its members have semantic effects in the compiler. The discriminator between the two regimes is the namespace's first-segment identity, baked into the attribute checker.
 
 ### Cranelift as a JIT Backend
 
