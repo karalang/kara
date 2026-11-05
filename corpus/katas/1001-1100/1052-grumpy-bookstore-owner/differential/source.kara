@@ -1,0 +1,244 @@
+// LeetCode #1052: Grumpy Bookstore Owner -- the differential.
+//
+// The five arms against the statement read literally, on 3000 random
+// days, with six properties:
+//
+// P1  the answer is the statement read literally
+// P2  the answer is at least the calm minutes' customers and at most all
+//     the customers, and all of them when the technique lasts the day
+// P3  the day reversed gives the same answer
+// P4  a technique a minute longer satisfies no fewer
+// P5  every minute's customers doubled doubles the answer, and a calm
+//     minute of 7 customers added at either end adds 7
+// P6  each arm agrees with at least two of the other four
+
+// ---- grumpy.kara (the ★ arm): one window slid along the day
+
+fn slide_arm(customers: Slice[i64], grumpy: Slice[i64], minutes: i64) -> i64 {
+    let mut base = 0;
+    let mut saved = 0;
+    let mut best = 0;
+    for i in 0..customers.len() {
+        if grumpy[i] == 0 {
+            base += customers[i];
+        } else {
+            saved += customers[i];
+        }
+        if i >= minutes and grumpy[i - minutes] == 1 {
+            saved -= customers[i - minutes];
+        }
+        best = best.max(saved);
+    }
+    base + best
+}
+
+// ---- grumpy_prefix.kara: prefix sums of the lost
+
+fn prefix_arm(customers: Slice[i64], grumpy: Slice[i64], minutes: i64) -> i64 {
+    let n = customers.len();
+    let mut lost = Vec.filled(n + 1, 0);
+    let mut base = 0;
+    for i in 0..n {
+        lost[i + 1] = lost[i] + customers[i] * grumpy[i];
+        base += customers[i] * (1 - grumpy[i]);
+    }
+    let mut best = 0;
+    for end in minutes..n + 1 {
+        best = best.max(lost[end] - lost[end - minutes]);
+    }
+    base + best
+}
+
+// ---- grumpy_every.kara: every window, added up
+
+fn every_arm(customers: Slice[i64], grumpy: Slice[i64], minutes: i64) -> i64 {
+    let n = customers.len();
+    let mut base = 0;
+    for i in 0..n {
+        if grumpy[i] == 0 {
+            base += customers[i];
+        }
+    }
+    let mut best = 0;
+    for start in 0..n - minutes + 1 {
+        let mut saved = 0;
+        for i in start..start + minutes {
+            if grumpy[i] == 1 {
+                saved += customers[i];
+            }
+        }
+        best = best.max(saved);
+    }
+    base + best
+}
+
+// ---- grumpy_iter.kara: the windows of the lost
+
+fn iter_arm(customers: Slice[i64], grumpy: Slice[i64], minutes: i64) -> i64 {
+    let lost: Vec[i64] = customers.iter().zip(grumpy.iter()).map(|(c, g)| c * g).collect();
+    let base: i64 = customers.iter().zip(grumpy.iter()).filter(|(_, g)| *g == 0).map(|(c, _)| c).sum();
+    let best = lost.windows(minutes).iter().map(|w| w.iter().sum()).max().unwrap();
+    base + best
+}
+
+// ---- grumpy_total.kara: the satisfied total, slid
+
+fn total_arm(customers: Slice[i64], grumpy: Slice[i64], minutes: i64) -> i64 {
+    let n = customers.len();
+    let mut total = 0;
+    for i in 0..n {
+        if grumpy[i] == 0 or i < minutes {
+            total += customers[i];
+        }
+    }
+    let mut best = total;
+    for start in 1..n - minutes + 1 {
+        let left = start - 1;
+        let entered = start + minutes - 1;
+        if grumpy[left] == 1 {
+            total -= customers[left];
+        }
+        if grumpy[entered] == 1 {
+            total += customers[entered];
+        }
+        best = best.max(total);
+    }
+    best
+}
+
+// ---- the statement read literally
+
+// The technique used once, from each minute it can start at: a customer is
+// satisfied when the owner is not grumpy that minute, or the technique is
+// on then. The most satisfied over every start.
+fn read_literally(customers: Slice[i64], grumpy: Slice[i64], minutes: i64) -> i64 {
+    let n = customers.len();
+    let mut best = 0;
+    for start in 0..n - minutes + 1 {
+        let mut satisfied = 0;
+        for i in 0..n {
+            let technique_on = i >= start and i < start + minutes;
+            if grumpy[i] == 0 or technique_on {
+                satisfied += customers[i];
+            }
+        }
+        best = best.max(satisfied);
+    }
+    best
+}
+
+fn arm(a: i64, customers: Slice[i64], grumpy: Slice[i64], minutes: i64) -> i64 {
+    match a {
+        0 => slide_arm(customers, grumpy, minutes),
+        1 => prefix_arm(customers, grumpy, minutes),
+        2 => every_arm(customers, grumpy, minutes),
+        3 => iter_arm(customers, grumpy, minutes),
+        _ => total_arm(customers, grumpy, minutes),
+    }
+}
+
+// ---- the harness
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_day(n: i64, most: i64, grumpy_one_in: i64, seed: mut ref i64) -> (Vec[i64], Vec[i64], i64) {
+    let mut customers: Vec[i64] = Vec.new();
+    let mut grumpy: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        customers.push(next_random(mut seed) % (most + 1));
+        grumpy.push(if next_random(mut seed) % grumpy_one_in == 0 { 1 } else { 0 });
+    }
+    let minutes = next_random(mut seed) % n + 1;
+    (customers, grumpy, minutes)
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    // failures by property, P1 to P6 at 1 to 6
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+// Every check on one day.
+fn check_case(t: mut ref Tally, customers: Slice[i64], grumpy: Slice[i64], minutes: i64) {
+    let answers: Vec[i64] = (0..5).map(|a| arm(a, customers, grumpy, minutes)).collect();
+    let want = read_literally(customers, grumpy, minutes);
+    let n = customers.len();
+    let all: i64 = customers.iter().sum();
+    let mut calm = 0;
+    for i in 0..n {
+        if grumpy[i] == 0 {
+            calm += customers[i];
+        }
+    }
+    let c_rev: Vec[i64] = customers.iter().rev().cloned().collect();
+    let g_rev: Vec[i64] = grumpy.iter().rev().cloned().collect();
+    let doubled: Vec[i64] = customers.iter().map(|c| 2 * c).collect();
+    let mut c_back = customers.to_vec();
+    c_back.push(7);
+    let mut g_back = grumpy.to_vec();
+    g_back.push(0);
+    let mut c_front: Vec[i64] = [7];
+    c_front.extend_from_slice(customers);
+    let mut g_front: Vec[i64] = [0];
+    g_front.extend_from_slice(grumpy);
+    for a in 0..5 {
+        let answer = answers[a];
+        let what = f"arm {a}, {customers} {grumpy} {minutes} -> {answer}";
+        expect(mut t, 1, answer == want, f"P1 {what}, read literally {want}");
+        let whole = minutes < n or answer == all;
+        expect(mut t, 2, answer >= calm and answer <= all and whole, f"P2 {what}: out of range");
+        expect(mut t, 3, arm(a, c_rev, g_rev, minutes) == answer, f"P3 {what}: reversed");
+        let longer = minutes == n or arm(a, customers, grumpy, minutes + 1) >= answer;
+        expect(mut t, 4, longer, f"P4 {what}: a minute longer");
+        let scaled = arm(a, doubled, grumpy, minutes) == 2 * answer;
+        let ends = arm(a, c_back, g_back, minutes) == answer + 7 and arm(a, c_front, g_front, minutes) == answer + 7;
+        expect(mut t, 5, scaled and ends, f"P5 {what}: doubled, or a calm minute added");
+        let mut agree = 0;
+        for o in 0..5 {
+            if o != a and answers[o] == answer {
+                agree += 1;
+            }
+        }
+        expect(mut t, 6, agree >= 2, f"P6 {what}: agrees with {agree}");
+    }
+    t.cases += 1;
+    t.check = (t.check * 131 + answers[0]) % 1000000007;
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: Vec.filled(7, 0) };
+    // 3000 random days: 2000 of 1 to 8 minutes of up to 3 customers, the
+    // owner grumpy half the time, and 1000 of 1 to 30 minutes of up to 50,
+    // grumpy a third of the time
+    let mut seed = 10521;
+    for i in 0..3000 {
+        let (customers, grumpy, minutes) = if i < 2000 {
+            random_day(next_random(mut seed) % 8 + 1, 3, 2, mut seed)
+        } else {
+            random_day(next_random(mut seed) % 30 + 1, 50, 3, mut seed)
+        };
+        check_case(mut t, customers, grumpy, minutes);
+    }
+    println(f"{t.cases} days: checksum {t.check}, {t.checks} checks over 5 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..7).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

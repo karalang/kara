@@ -1,0 +1,96 @@
+// LeetCode #1052: Grumpy Bookstore Owner -- the satisfied total, slid.
+//
+// The day's satisfied total itself, with the technique's window at the
+// start, then moved a minute at a time: the minute that leaves the window
+// loses its customers if the owner is grumpy then, and the minute that
+// enters gains its customers if so. The best total seen is the answer. O(n).
+
+fn max_satisfied(customers: Slice[i64], grumpy: Slice[i64], minutes: i64) -> i64 {
+    let n = customers.len();
+    let mut total = 0;
+    for i in 0..n {
+        if grumpy[i] == 0 or i < minutes {
+            total += customers[i];
+        }
+    }
+    let mut best = total;
+    for start in 1..n - minutes + 1 {
+        let left = start - 1;
+        let entered = start + minutes - 1;
+        if grumpy[left] == 1 {
+            total -= customers[left];
+        }
+        if grumpy[entered] == 1 {
+            total += customers[entered];
+        }
+        best = best.max(total);
+    }
+    best
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A day of `n` minutes: up to `most` customers a minute, the owner grumpy
+// about one minute in `grumpy_one_in`, and a technique of 1 to n minutes.
+fn random_day(n: i64, most: i64, grumpy_one_in: i64, seed: mut ref i64) -> (Vec[i64], Vec[i64], i64) {
+    let mut customers: Vec[i64] = Vec.new();
+    let mut grumpy: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        customers.push(next_random(mut seed) % (most + 1));
+        grumpy.push(if next_random(mut seed) % grumpy_one_in == 0 { 1 } else { 0 });
+    }
+    let minutes = next_random(mut seed) % n + 1;
+    (customers, grumpy, minutes)
+}
+
+fn main() {
+    // LeetCode's two examples, then a few more
+    let examples: Vec[(Vec[i64], Vec[i64], i64)] = [
+        ([1, 0, 1, 2, 1, 1, 7, 5], [0, 1, 0, 1, 0, 1, 0, 1], 3),
+        ([1], [0], 1),
+        ([4], [1], 1),
+        ([2, 6, 6, 9], [0, 0, 1, 1], 1),
+        ([3, 3, 3], [1, 1, 1], 3),
+        ([3, 3, 3], [1, 1, 1], 2),
+        ([0, 0, 0], [1, 1, 1], 2),
+        ([5, 1, 1, 1, 5], [1, 0, 0, 0, 1], 4),
+        ([1, 2, 3, 4, 5], [1, 0, 1, 0, 1], 2),
+        ([10, 1, 7], [0, 0, 0], 2),
+    ];
+    for (customers, grumpy, minutes) in examples.iter() {
+        println(f"{customers} {grumpy} {minutes} -> {max_satisfied(customers, grumpy, minutes)}");
+    }
+    // 3000 random days of 1 to 10 minutes, up to 5 customers a minute
+    let mut seed = 1052;
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..3000 {
+        let n = next_random(mut seed) % 10 + 1;
+        let (customers, grumpy, minutes) = random_day(n, 5, 2, mut seed);
+        let answer = max_satisfied(customers, grumpy, minutes);
+        total += answer;
+        check = (check * 131 + answer) % 1000000007;
+    }
+    println(f"3000 random days of 1 to 10 minutes: total {total}, checksum {check}");
+    // 300 random days of 1 to 1000 minutes, up to 1000 customers a minute
+    total = 0;
+    check = 0;
+    for _ in 0..300 {
+        let n = next_random(mut seed) % 1000 + 1;
+        let (customers, grumpy, minutes) = random_day(n, 1000, 3, mut seed);
+        let answer = max_satisfied(customers, grumpy, minutes);
+        total += answer;
+        check = (check * 131 + answer) % 1000000007;
+    }
+    println(f"300 random days of 1 to 1000 minutes: total {total}, checksum {check}");
+    // the largest: 20000 minutes, the technique 1, 100 and 20000 minutes long
+    let (customers, grumpy, _) = random_day(20000, 1000, 2, mut seed);
+    for minutes in [1, 100, 20000] {
+        println(f"20000 minutes, a technique of {minutes} -> {max_satisfied(customers, grumpy, minutes)}");
+    }
+}

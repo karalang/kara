@@ -1,0 +1,54 @@
+// LeetCode #1052: Grumpy Bookstore Owner -- the benchmark: the ★ slide on
+// 200 days of 20000 minutes built once, each with ten techniques of 1 to
+// 20000 minutes.
+
+fn max_satisfied(customers: Slice[i64], grumpy: Slice[i64], minutes: i64) -> i64 {
+    let mut base = 0;
+    let mut saved = 0;
+    let mut best = 0;
+    for i in 0..customers.len() {
+        if grumpy[i] == 0 {
+            base += customers[i];
+        } else {
+            saved += customers[i];
+        }
+        if i >= minutes and grumpy[i - minutes] == 1 {
+            saved -= customers[i - minutes];
+        }
+        best = best.max(saved);
+    }
+    base + best
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let days = 200;
+    let n = 20000;
+    let techniques = 10;
+    let mut seed = 1052;
+    let mut all: Vec[(Vec[i64], Vec[i64])] = Vec.new();
+    for _ in 0..days {
+        let mut customers: Vec[i64] = Vec.new();
+        let mut grumpy: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            customers.push(next_random(mut seed) % 1001);
+            grumpy.push(next_random(mut seed) % 2);
+        }
+        all.push((customers, grumpy));
+    }
+    let mut total = 0;
+    let mut check = 0;
+    for (customers, grumpy) in all.iter() {
+        for _ in 0..techniques {
+            let minutes = next_random(mut seed) % n + 1;
+            let answer = max_satisfied(customers, grumpy, minutes);
+            total += answer;
+            check = (check * 131 + answer) % 1000000007;
+        }
+    }
+    println(f"{days} days of {n} minutes, {techniques} techniques each: total {total}, checksum {check}");
+}
