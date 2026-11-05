@@ -98,9 +98,34 @@ fn emit_version_stamp() {
     println!("cargo:rustc-env=KARAC_VERSION_SUFFIX={suffix}");
 }
 
+/// Record the sysroot and host triple of the Rust toolchain building karac
+/// as `KARAC_BUILD_RUST_SYSROOT` / `KARAC_BUILD_RUST_HOST`. A wasm link
+/// falls back to that toolchain's wasi-libc and `rust-lld` when the `rustc`
+/// on the user's PATH has no wasm target: the repository's pinned toolchain
+/// declares both wasi targets, but a shell outside the repository resolves
+/// `rustc` to the user's default toolchain (B-2026-11-05-12). Empty when
+/// `rustc` cannot say, and the driver then skips the tier.
+fn emit_build_toolchain() {
+    let rustc = env::var("RUSTC").unwrap_or_else(|_| "rustc".to_string());
+    let sysroot = std::process::Command::new(rustc)
+        .args(["--print", "sysroot"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
+    println!("cargo:rustc-env=KARAC_BUILD_RUST_SYSROOT={sysroot}");
+    println!(
+        "cargo:rustc-env=KARAC_BUILD_RUST_HOST={}",
+        env::var("HOST").unwrap_or_default()
+    );
+    println!("cargo:rerun-if-env-changed=RUSTUP_TOOLCHAIN");
+}
+
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     emit_version_stamp();
+    emit_build_toolchain();
 
     // Nothing to do unless the JIT engine is compiled in. Cargo sets
     // `CARGO_FEATURE_<NAME>` for every active feature (uppercased, `-`→`_`).

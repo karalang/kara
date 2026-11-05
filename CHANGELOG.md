@@ -81,6 +81,15 @@ accepted by 0.8.0 are now refused, each with a fix-it.
   effects; B-2026-11-03-1). It is a parse error on a `fn` declaration,
   with a fix-it that removes it. Storing a value into a field of an
   unannotated struct local is now checked against the field's clause too.
+- **The release bundle builds wasm.** It now ships the wasm runtime archives
+  and the wasi-libc they link with under `lib/`, so
+  `karac build --target=wasm_wasi` needs only a wasm linker: the `rust-lld`
+  of any rustup toolchain (no wasm target needed), or LLVM's `wasm-ld`. A
+  karac built from source looks for wasi-libc in three places, in order:
+  the bundle, the `rustc` on PATH, then the toolchain karac was built with.
+  Before, it looked only at the `rustc` on PATH, so a wasm build outside
+  the repository failed unless `RUSTUP_TOOLCHAIN` was pinned
+  (B-2026-11-05-12).
 
 ### Wrong behaviour fixed
 

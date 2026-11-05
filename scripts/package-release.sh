@@ -14,6 +14,10 @@
 #     lib/libkarac_runtime.a      # full runtime (TLS on)
 #     lib/libkarac_runtime_min.a  # lean runtime (auto-selected for
 #                                 #  programs with no TLS-only symbols)
+#     lib/libkarac_runtime_wasm.a          # `--target=wasm_wasi`
+#     lib/libkarac_runtime_wasm_threads.a  #  ... with par / tasks
+#     lib/wasm32-wasip1/{crt1-command.o,libc.a}          # wasi-libc for each,
+#     lib/wasm32-wasip1-threads/{crt1-command.o,libc.a}  #  from this toolchain
 #     bin/kara-lsp                # the language server editors launch
 #     README.md
 #
@@ -58,6 +62,14 @@ echo "==> building runtime archives (lean → full)"
 cargo rustc -p karac-runtime --release --no-default-features --features net --crate-type staticlib
 cp target/release/libkarac_runtime.a target/release/libkarac_runtime_min.a
 cargo rustc -p karac-runtime --release --crate-type staticlib
+
+# The wasm archives, sequential and threaded (rust-toolchain.toml declares
+# both targets). A wasm build links them with the wasi-libc of the same
+# toolchain, copied into the bundle below, so a user needs no Rust wasm
+# target of their own, only a wasm linker (B-2026-11-05-12).
+echo "==> building wasm runtime archives"
+cargo rustc -p karac-runtime --release --target wasm32-wasip1 --no-default-features --crate-type staticlib
+cargo rustc -p karac-runtime --release --target wasm32-wasip1-threads --no-default-features --features wasm-threads --crate-type staticlib
 
 echo "==> building karac + karac_jit_runner (release, static LLVM)"
 cargo build --release --no-default-features --features llvm,llvm-static --bin karac --bin karac_jit_runner
@@ -123,6 +135,13 @@ cp target/release/karac_jit_runner "$STAGE/bin/"
 cp target/release/kara-lsp "$STAGE/bin/"
 cp target/release/libkarac_runtime.a "$STAGE/lib/"
 cp target/release/libkarac_runtime_min.a "$STAGE/lib/"
+cp target/wasm32-wasip1/release/libkarac_runtime.a "$STAGE/lib/libkarac_runtime_wasm.a"
+cp target/wasm32-wasip1-threads/release/libkarac_runtime.a "$STAGE/lib/libkarac_runtime_wasm_threads.a"
+for triple in wasm32-wasip1 wasm32-wasip1-threads; do
+    WASI_LIBC="$(rustc --print target-libdir --target "$triple")/self-contained"
+    mkdir -p "$STAGE/lib/$triple"
+    cp "$WASI_LIBC/crt1-command.o" "$WASI_LIBC/libc.a" "$STAGE/lib/$triple/"
+done
 
 # macOS: brew's LLVM links its OWN support dylibs from the keg —
 # libunwind at minimum (brew builds LLVM against LLVM's libunwind, and
@@ -220,8 +239,10 @@ it (Extensions view, "Install from VSIX...", or
   Debian/Ubuntu, Xcode CLT on macOS). \`karac run\` needs nothing extra.
 - Common system libraries LLVM links dynamically (zlib, zstd, terminfo)
   — present by default on mainstream distros and macOS.
-- WASM targets (\`--target=wasm_wasi\` / \`wasm_browser\`) are not
-  bundled in this preview; build from source for those.
+- WASM targets (\`--target=wasm_wasi\` / \`wasm_browser\`) link with the
+  bundled runtime and wasi-libc, and need a wasm linker: the \`rust-lld\`
+  of any rustup toolchain (no wasm target needed), or LLVM's \`wasm-ld\`
+  20 or newer on PATH, or \`KARAC_WASM_LD=<path>\`.
 
 Docs: https://github.com/karalang/kara/blob/main/docs/design.md
 EOF

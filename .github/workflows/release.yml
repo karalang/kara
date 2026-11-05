@@ -168,6 +168,21 @@ jobs:
           karac build hello.kara
           ./hello | grep -q "hello from a downloaded karac"
 
+          # WASM lane: the bundled wasm runtime and wasi-libc, linked by
+          # the runner image's rustup `rust-lld` (no wasm target added),
+          # run under node's WASI host (B-2026-11-05-12).
+          karac build --target=wasm_wasi hello.kara
+          WASM="$(find . -maxdepth 3 -name hello.wasm | head -1)"
+          cat > run-wasi.mjs <<'JS'
+          import { WASI } from 'node:wasi';
+          import { readFileSync } from 'node:fs';
+          const wasi = new WASI({ version: 'preview1', args: [], env: {} });
+          const mod = await WebAssembly.compile(readFileSync(process.argv[2]));
+          const inst = await WebAssembly.instantiate(mod, wasi.getImportObject());
+          process.exitCode = wasi.start(inst);
+          JS
+          node run-wasi.mjs "$WASM" | grep -q "hello from a downloaded karac"
+
           # A par block, so the linked runtime's scheduler actually spins.
           cat > fanout.kara <<'KARA'
           fn work(n: i64) -> i64 {

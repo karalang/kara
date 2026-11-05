@@ -68,8 +68,8 @@ fn link_wasm_executable(
     exe_path: &str,
     wasm_exports: &[String],
 ) -> Result<(), String> {
-    let (linker, flavor_args) = resolve_wasm_linker()?;
-    let sysroot = resolve_wasi_self_contained_dir("wasm32-wasip1")?;
+    let (sysroot, lld) = resolve_wasi_self_contained_dir("wasm32-wasip1")?;
+    let (linker, flavor_args) = resolve_wasm_linker(lld)?;
     let crt1 = sysroot.join("crt1-command.o");
     let libc = sysroot.join("libc.a");
     for (what, p) in [("crt1-command.o", &crt1), ("libc.a", &libc)] {
@@ -183,8 +183,8 @@ pub fn link_wasm_executable_threaded(
     max_memory_bytes: u64,
     wasm_exports: &[String],
 ) -> Result<(), String> {
-    let (linker, flavor_args) = resolve_wasm_linker()?;
-    let sysroot = resolve_wasi_self_contained_dir("wasm32-wasip1-threads")?;
+    let (sysroot, lld) = resolve_wasi_self_contained_dir("wasm32-wasip1-threads")?;
+    let (linker, flavor_args) = resolve_wasm_linker(lld)?;
     let crt1 = sysroot.join("crt1-command.o");
     let libc = sysroot.join("libc.a");
     for (what, p) in [("crt1-command.o", &crt1), ("libc.a", &libc)] {
@@ -289,40 +289,34 @@ fn append_wasm_export_flags(cmd: &mut std::process::Command, wasm_exports: &[Str
 /// Locate a wasm-capable linker. Resolution order:
 ///   1. `KARAC_WASM_LD` env var — honored verbatim (mirror of
 ///      `KARAC_RUNTIME`'s contract).
-///   2. The ACTIVE Rust toolchain's `rust-lld` with `-flavor wasm` — the
-///      version-matched sibling of the wasi-libc we link (both come from the
-///      same rustup toolchain), so it can't drift out of sync with the libc
-///      the way a system linker can (B-2026-07-17-5). Present in every rustup
-///      install, so the karac-runtime build prerequisite already guarantees
-///      it exists.
-///   3. `wasm-ld` on `PATH` (fallback for a non-rustup toolchain).
-///   4. Homebrew LLVM's `wasm-ld` (macOS: Apple's toolchain ships no
+///   2. `matched`: the `rust-lld` of the toolchain whose wasi-libc
+///      [`resolve_wasi_self_contained_dir`] picked — the version-matched
+///      linker for that libc, so the two cannot drift apart the way a
+///      system linker can (B-2026-07-17-5: after `rustup update` a newer
+///      wasi-libc's dlmalloc references `__wasm_first_page_end`, a symbol
+///      only newer LLD synthesizes, and Ubuntu's PATH `wasm-ld` 18.1.3
+///      fails with a cryptic undefined-symbol error).
+///   3. The active Rust toolchain's `rust-lld`, then the one of the
+///      toolchain karac was built with. `rust-lld -flavor wasm` IS lld's
+///      wasm driver, and every rustup toolchain has it, wasm target or
+///      not, which is what a release bundle's own wasi-libc links with.
+///   4. `wasm-ld` on `PATH` (fallback for a non-rustup toolchain).
+///   5. Homebrew LLVM's `wasm-ld` (macOS: Apple's toolchain ships no
 ///      wasm backend driver, brew's llvm/llvm@22 do).
 ///
 /// Returns the command plus any prefix args the flavor needs.
-fn resolve_wasm_linker() -> Result<(std::path::PathBuf, Vec<String>), String> {
+fn resolve_wasm_linker(
+    matched: Option<std::path::PathBuf>,
+) -> Result<(std::path::PathBuf, Vec<String>), String> {
     if let Some(p) = std::env::var_os("KARAC_WASM_LD") {
         return Ok((std::path::PathBuf::from(p), vec![]));
     }
-    // Prefer the ACTIVE rustup toolchain's own `rust-lld` over a PATH
-    // `wasm-ld`. The wasi-libc we link (`wasi_self_contained_sysroot`) comes
-    // from THIS toolchain's self-contained sysroot, so `rust-lld` is the
-    // version-matched linker; a stale system `wasm-ld` invites exactly the
-    // libc↔linker drift that breaks the link (B-2026-07-17-5: after
-    // `rustup update` a newer wasi-libc's dlmalloc references
-    // `__wasm_first_page_end`, a symbol only newer LLD synthesizes, while
-    // Ubuntu's PATH `wasm-ld` 18.1.3 fails with a cryptic undefined-symbol
-    // error). `rust-lld -flavor wasm` IS lld's wasm driver — identical
-    // behaviour to `wasm-ld`, just guaranteed to match the libc. Best-effort:
-    // if `rustc`/`rust-lld` isn't resolvable (a non-rustup toolchain), fall
-    // through to the PATH / homebrew probes below.
-    if let (Ok(sysroot), Ok(host)) = (rustc_print(&["--print", "sysroot"]), rustc_host_triple()) {
-        let rust_lld = std::path::Path::new(sysroot.trim())
-            .join("lib/rustlib")
-            .join(host.trim())
-            .join("bin/rust-lld");
-        if rust_lld.exists() {
-            return Ok((rust_lld, vec!["-flavor".to_string(), "wasm".to_string()]));
+    let lld_flavor = || vec!["-flavor".to_string(), "wasm".to_string()];
+    let active = active_rust_toolchain().map(|(sysroot, host)| rust_lld(&sysroot, &host));
+    let built = build_rust_toolchain().map(|(sysroot, host)| rust_lld(&sysroot, &host));
+    for lld in [matched, active, built].into_iter().flatten() {
+        if lld.exists() {
+            return Ok((lld, lld_flavor()));
         }
     }
     // PATH probe: `wasm-ld --version` exiting zero is the existence check.
@@ -343,29 +337,98 @@ fn resolve_wasm_linker() -> Result<(std::path::PathBuf, Vec<String>), String> {
         }
     }
     Err(
-        "no wasm linker found: set KARAC_WASM_LD, or install one of wasm-ld (PATH / \
-         homebrew llvm) — rust-lld via rustup also works"
+        "no wasm linker found: install Rust through rustup (its `rust-lld` links wasm, no \
+         wasm target needed), or LLVM's `wasm-ld` 20 or newer on PATH, or set KARAC_WASM_LD"
             .to_string(),
     )
 }
 
-/// The Rust toolchain's self-contained wasi sysroot for the given wasm
-/// triple (`<target-libdir>/self-contained` — holds `crt1-command.o` and
-/// wasi-libc's `libc.a`). `wasm32-wasip1` for the sequential module;
-/// `wasm32-wasip1-threads` for the threaded one (its libc is built with
-/// atomics + pthreads-over-wasi-threads — the two are not
-/// interchangeable under `--shared-memory`).
-fn resolve_wasi_self_contained_dir(triple: &str) -> Result<std::path::PathBuf, String> {
-    let libdir = rustc_print(&["--print", "target-libdir", "--target", triple])?;
-    let dir = std::path::Path::new(libdir.trim()).join("self-contained");
-    if !dir.is_dir() {
-        return Err(format!(
-            "{triple} self-contained sysroot not found at {} — install it with \
-             `rustup target add {triple}`",
-            dir.display()
-        ));
+/// `<sysroot>/lib/rustlib/<host>/bin/rust-lld`.
+fn rust_lld(sysroot: &std::path::Path, host: &str) -> std::path::PathBuf {
+    sysroot.join("lib/rustlib").join(host).join("bin/rust-lld")
+}
+
+/// The sysroot and host triple of the `rustc` on PATH, when there is one.
+fn active_rust_toolchain() -> Option<(std::path::PathBuf, String)> {
+    let sysroot = rustc_print(&["--print", "sysroot"]).ok()?;
+    let host = rustc_host_triple().ok()?;
+    Some((
+        std::path::PathBuf::from(sysroot.trim()),
+        host.trim().to_string(),
+    ))
+}
+
+/// The sysroot and host triple of the toolchain that built karac
+/// (build.rs), while that sysroot is still on disk.
+fn build_rust_toolchain() -> Option<(std::path::PathBuf, String)> {
+    let sysroot = std::path::PathBuf::from(env!("KARAC_BUILD_RUST_SYSROOT"));
+    let host = env!("KARAC_BUILD_RUST_HOST");
+    (!host.is_empty() && sysroot.is_dir()).then(|| (sysroot, host.to_string()))
+}
+
+/// The wasi sysroot for a wasm triple — the directory holding
+/// `crt1-command.o` and wasi-libc's `libc.a` — with the `rust-lld` that
+/// matches it, when it came from a Rust toolchain. `wasm32-wasip1` for the
+/// sequential module; `wasm32-wasip1-threads` for the threaded one (its
+/// libc is built with atomics + pthreads-over-wasi-threads — the two are
+/// not interchangeable under `--shared-memory`). Tried in order:
+///   1. A release bundle's `<karac-bin-dir>/../lib/<triple>/`, next to its
+///      wasm runtime archives (`scripts/package-release.sh`).
+///   2. The `rustc` on PATH: `<target-libdir>/self-contained`, when that
+///      toolchain has the target.
+///   3. The toolchain karac was built with, which the repository's
+///      `rust-toolchain.toml` gives both targets: a shell outside the
+///      repository resolves `rustc` to the user's default toolchain, which
+///      need not have them (B-2026-11-05-12).
+fn resolve_wasi_self_contained_dir(
+    triple: &str,
+) -> Result<(std::path::PathBuf, Option<std::path::PathBuf>), String> {
+    let has_libc =
+        |d: &std::path::Path| d.join("crt1-command.o").is_file() && d.join("libc.a").is_file();
+    if let Some(bin_dir) = std::env::current_exe()
+        .ok()
+        .and_then(|e| e.parent().map(|p| p.to_path_buf()))
+    {
+        let bundled = bin_dir.join("../lib").join(triple);
+        if has_libc(&bundled) {
+            return Ok((bundled, None));
+        }
     }
-    Ok(dir)
+    let mut tried = Vec::new();
+    if let Some((sysroot, host)) = active_rust_toolchain() {
+        // `--print target-libdir` names the directory whether or not the
+        // target is installed.
+        let dir = match rustc_print(&["--print", "target-libdir", "--target", triple]) {
+            Ok(libdir) => std::path::Path::new(libdir.trim()).join("self-contained"),
+            Err(_) => sysroot
+                .join("lib/rustlib")
+                .join(triple)
+                .join("lib/self-contained"),
+        };
+        if has_libc(&dir) {
+            return Ok((dir, Some(rust_lld(&sysroot, &host))));
+        }
+        tried.push(dir);
+    }
+    if let Some((sysroot, host)) = build_rust_toolchain() {
+        let dir = sysroot
+            .join("lib/rustlib")
+            .join(triple)
+            .join("lib/self-contained");
+        if has_libc(&dir) {
+            return Ok((dir, Some(rust_lld(&sysroot, &host))));
+        }
+        tried.push(dir);
+    }
+    let tried: Vec<String> = tried.iter().map(|d| d.display().to_string()).collect();
+    Err(format!(
+        "{triple} wasi-libc not found{} — install it with `rustup target add {triple}`",
+        if tried.is_empty() {
+            String::new()
+        } else {
+            format!(" (looked in {})", tried.join(", "))
+        }
+    ))
 }
 
 fn rustc_print(args: &[&str]) -> Result<String, String> {
