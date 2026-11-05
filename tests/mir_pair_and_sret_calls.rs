@@ -128,10 +128,12 @@ fn mir_pair_results_and_sret_results_keep_parameters_in_registers() {
         assert!(ir.contains(want), "no `{want}` in:\n{ir}");
     }
     // `info` takes its result slot, then `nodes` and `best` as the
-    // references themselves and `node` as an integer.
+    // references themselves (dereferenceable for a `Vec` and an `i64`,
+    // B-2026-11-05-4) and `node` as an integer.
+    let refs = "ptr align 8 dereferenceable(24) %1, i64 %2, ptr align 8 dereferenceable(8) %3)";
     assert!(
-        ir.contains("@kara.info(ptr noalias %0, ptr %1, i64 %2, ptr %3)")
-            || ir.contains("@kara.info(ptr %0, ptr %1, i64 %2, ptr %3)"),
+        ir.contains(&format!("@kara.info(ptr noalias %0, {refs}"))
+            || ir.contains(&format!("@kara.info(ptr %0, {refs}")),
         "info's parameters are not in registers:\n{ir}"
     );
     let dir = std::env::temp_dir().join(format!("karac-mir-pair-sret-{}", std::process::id()));

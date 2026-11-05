@@ -810,6 +810,7 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
                 self.llcx.create_enum_attribute(k, 0),
             );
         }
+        self.mark_deref_params(body, &params, f)?;
         self.vfns.insert(name.to_string(), f);
         if self.located(name) {
             self.site_todo.push((name.to_string(), true));
@@ -974,6 +975,61 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
                 f.add_attribute(AttributeLoc::Param(i), noalias);
             }
         }
+    }
+
+    /// Marks each `ref T` / `mut ref T` parameter of a by-value function
+    /// `dereferenceable(size of T)` and `align`, which a borrow guarantees
+    /// for the whole call, as Rust marks a `&T`. The `llvm.assume` that
+    /// [`Self::assume_ref_params`] states inside the body says the same
+    /// and survives inlining, but LLVM 22's LICM no longer speculates a
+    /// load on it: it must first prove nothing between the assume and the
+    /// hoisted load can free the memory, and an abort call on the
+    /// bounds-check path defeats that. On the parameter, the fact holds
+    /// for the whole function, so the callee's own loop passes hoist a
+    /// `Vec`'s data pointer before it is inlined. Without it kata 495's
+    /// `time_series[i]` reloaded that pointer every trip; the deeper
+    /// chain made the x86 cmov converter branch the loop's `min`, 2.8x
+    /// slower (B-2026-11-05-4). `KARAC_MIR_DEREF_PARAM=0` leaves them out.
+    fn mark_deref_params(
+        &self,
+        body: &Body,
+        params: &[Option<BasicTypeEnum<'ctx>>],
+        f: FunctionValue<'ctx>,
+    ) -> R<()> {
+        if std::env::var("KARAC_MIR_DEREF_PARAM").as_deref() == Ok("0") {
+            return Ok(());
+        }
+        let mut at = u32::from(self.ret_in_memory(body));
+        for (i, p) in params.iter().enumerate() {
+            if p.is_none() {
+                continue;
+            }
+            let ty = body.locals[i + 1].ty;
+            let here = at;
+            at += 1;
+            let (TyKind::Ref(t) | TyKind::MutRef(t)) = self.tys.kind(ty) else {
+                continue;
+            };
+            // A `str` or slice reference is a view, not a thin pointer.
+            if matches!(self.tys.kind(t), TyKind::Str | TyKind::Slice(_)) {
+                continue;
+            }
+            if self.layout(ty)?.size != 8 {
+                continue;
+            }
+            let l = self.layout(t)?;
+            if l.size == 0 {
+                continue;
+            }
+            for (kind, v) in [("dereferenceable", l.size), ("align", l.align.max(1))] {
+                let k = Attribute::get_named_enum_kind_id(kind);
+                f.add_attribute(
+                    AttributeLoc::Param(here),
+                    self.llcx.create_enum_attribute(k, v),
+                );
+            }
+        }
+        Ok(())
     }
 
     /// Tells LLVM that each `ref T` / `mut ref T` parameter points at a
