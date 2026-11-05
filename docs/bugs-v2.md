@@ -61,7 +61,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | diagnostics | 139 |
 | false-positive | 116 |
 | perf | 99 |
-| missing-feature | 80 |
+| missing-feature | 81 |
 | soundness | 50 |
 | miscompile | 36 |
 | run-vs-build | 23 |
@@ -78,7 +78,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | typecheck | 206 |
 | mir | 120 |
 | mir-llvm | 118 |
-| cli | 61 |
+| cli | 62 |
 | ownership | 53 |
 | parser | 40 |
 | interp | 29 |
@@ -106,9 +106,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-04-55 | 2026-11-04 | mir-llvm | low | `PriorityQueue.pop` sifts down by swapping, two comparisons a level, where Rust's `BinaryHeap::pop` sifts a hole to the bottom with one: kata 1046's bench (1000 piles of 3000 stones, 3 rounds of the heap game) runs 2.66x Rust's time under overflow checks, of which the compiler is about 1.15x and the heap algorithm the rest | — |
 | B-2026-11-04-79 | 2026-11-04 | typecheck | low | Tracker for the next minor release: `mut` on a field of a plain (non-`shared`) struct or enum becomes a compile error; in 0.8.x it is a `deprecated` warning with a `karac fix` that deletes it (ad5c10d728, design.md §5 Structs 25d27bd53a) | — |
 | B-2026-11-05-4 | 2026-11-05 | mir-llvm | medium | Three kata benches run 2-3x slower on LLVM 22 than on LLVM 18 at about the same instruction count (x86): teemo_attacking 357 ms vs 126 (x86's cmov converter now branches the loop's `min`), min_stack 900 vs 423 and hsearch (275) 925 vs 471 (not cmov, unattributed); the frozen set's run-time geomean is unchanged (0.995) | — |
-| B-2026-11-05-9 | 2026-11-05 | typecheck | low | §14 testing roll-up: assert_eq/assert_ne failure messages omit the `left:`/`right:`/`value:` lines; assert_eq accepts a type with no Debug; `karac test` panics in Rust on a closed stdout | — |
 | B-2026-11-05-12 | 2026-11-05 | cli | low | §16 targets roll-up: artifact paths differ from the spec; the multi-target check JSON is neither tagged nor deduplicated; `--targets=all` also runs wasm_browser and gpu, so every printing program fails it; `[profile.release]` is ignored; `--target-cpu=help` prints to stderr; wasm builds need the host's rustc with the wasm32-wasip1 target | — |
-| B-2026-11-05-13 | 2026-11-05 | cli | medium | `--output=jsonl` (check and build, single file and package) never emits a `diagnostic` event for resolve, typecheck, effect or ownership errors, so a client cannot rebuild the batch document from the stream (design.md §17 Streaming phase events, invariants 1 and 2) | — |
 | B-2026-11-05-14 | 2026-11-05 | cli | medium | `karac fmt` drops the trailing comma of a one-element tuple TYPE, so `(i64,)` becomes `(i64)` and the formatted program no longer typechecks (and a second fmt is not idempotent) | — |
 | B-2026-11-05-15 | 2026-11-05 | other | medium | kara-lsp treats a file inside a package as package-less: `import util;` in src/main.kara of a package with kara.toml gets a false `unknown module util` error, so every multi-file package shows red in the editor | — |
 | B-2026-11-05-17 | 2026-11-05 | cli | low | §17 tooling roll-up: batch JSON lacks `concept`, the 20-per-file cascade cap and E0400's `derivation`/`inferred_effects`/`declared_effects`; fix hints have two shapes and no `diff`; `karac fix` has none of the five style lints and cannot fix E0400 or missing arms; query has no `derivation`; explain lacks concept ids and items; lint and attribute edge cases | — |
@@ -116,6 +114,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-05-23 | 2026-11-05 | typecheck+parser | low | §6 expressions roll-up: `if c { 5 }` in statement position is accepted; an unparenthesized struct literal in an `if` condition is accepted; `u == ()` is `comparing this type is not lowered yet`; RangeTo/RangeToInclusive/RangeFull are undefined type names; `ambiguous_not_comparison` never runs; a discarded tuple of Results warns nothing (item 8, multi-assign order, is CONFORMANT per the 43518f58d7 decision: values first) | — |
 | B-2026-11-05-24 | 2026-11-05 | typecheck | low | A use of a deprecated item through a module binding (`import util;` then `util.old()`) is warned with the caret on the call's closing paren, not on `old`; `import util.{old};` then `old()` puts it on `old` | — |
 | B-2026-11-05-25 | 2026-11-05 | mir-llvm | low | The backend still emits none of the LLVM 19-22 facts B-2026-11-04-83 left: `range` attributes on parameters and returns, `icmp samesign`, and `captures(address/read_provenance)` beyond `captures(none)` | — |
+| B-2026-11-05-26 | 2026-11-05 | cli | low | package mode: `karac check --output=jsonl` on a package member prints `type_error` lines (no `type` stream, no ids) and stops at typecheck, `karac build --output=jsonl` in a package prints raw batch entries, and package `check --output=json` has no ids or `program_effects` (design.md §17; remainder of B-2026-11-05-13) | — |
 
 ### Relocated
 
@@ -708,8 +707,10 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-05-6 | typecheck | low | §13 concurrency roll-up: `return` out of a `par for` body accepted; par conflicts never carry E0408; E_NOT_CROSS_TASK calls a type that contains a sh… | c519e4b881 |
 | B-2026-11-05-7 | resolver | high | In a package (kara.toml + src/), `import std.sync.{..}`, `import std.net.{..}` and `import std.json.{..}` are refused "unknown module `std.sync`" by… | 8b95f3e4b1 |
 | B-2026-11-05-8 | ownership | medium | `assert_eq(v, e)` and `assert_ne(s, "b")` move a non-Copy operand, so using it afterwards is E0500; design.md §14 says both operands are borrowed and… | c519e4b881 |
+| B-2026-11-05-9 | typecheck | low | §14 testing roll-up: assert_eq/assert_ne failure messages omit the `left:`/`right:`/`value:` lines; assert_eq accepts a type with no Debug; `karac te… | 984142c99a |
 | B-2026-11-05-10 | mir-llvm | high | Kata 73's bench runs 21x slower on the default pool than on one worker (10.1 s against 0.48 s, 4 workers, x86): auto-par runs its 20-row matrix build… | ebd092c397 |
 | B-2026-11-05-11 | effect | medium | The target gate never refuses ProcessTable on wasm_wasi: a program that spawns a process passes `karac check --targets=all` and a `[build] targets =… | 8982776215 |
+| B-2026-11-05-13 | cli | medium | `--output=jsonl` (check and build) never emitted a `diagnostic` event for resolve, typecheck, effect or ownership errors, so a client could not rebui… | 984142c99a |
 | B-2026-11-05-16 | typecheck+cli | medium | In a package, `karac check` drops the cross-module `deprecated` warning unless the check also has an error; `karac build` reports it, and a single fi… | 8b95f3e4b1 |
 | B-2026-11-05-19 | resolver | high | Parallel assignment (`a, b = b, a`, `v[i], v[j] = v[j], v[i]`) in ANY package panics the compiler: `entered unreachable code: StmtKind::MultiAssign i… | 8b95f3e4b1 |
 | B-2026-11-05-20 | mir+mir-llvm+interp | high | A `for` over an open range `lo..` wraps silently past the type's MAX on JIT, debug and release AOT (`for i in (i64.MAX - 1)..` yields MAX-1, MAX, MIN… | 479d7a3253 |
