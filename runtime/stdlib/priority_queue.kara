@@ -209,7 +209,8 @@ impl[T: Ord] PriorityQueue[T] {
     // Remove and return the next element — the smallest of a
     // smallest-first queue, the largest of a largest-first one — or
     // `None` when empty. Swaps the root to the end so the pop is O(1) on
-    // the backing vector, then sifts the replacement root down.
+    // the backing vector, then sifts the replacement root down to the
+    // bottom and back up (`sift_down_to_bottom`).
     fn pop(mut ref self) -> Option[T] {
         let n = self.xs.len();
         if n == 0 {
@@ -217,8 +218,53 @@ impl[T: Ord] PriorityQueue[T] {
         }
         self.swap(0, n - 1);
         let top = self.xs.pop();
-        self.sift_down(0);
+        self.sift_down_to_bottom(0);
         top
+    }
+
+    // Floyd's pop, as Rust's `BinaryHeap::pop` and Python's `heapq` do
+    // it: walk the slot at `start` down to a leaf along the better child,
+    // one comparison a level, then sift the element carried there back
+    // up, no higher than `start`. The element swapped into the root comes
+    // from the bottom and usually belongs near it, so this compares about
+    // half as often as `sift_down`, which tests both children against the
+    // element at every level (B-2026-11-04-55, kata 1046). On a tie the
+    // right child is taken, as `heapq` takes it. Each direction has its
+    // own loop, so the comparison is not behind a test of `max` a level,
+    // and the child is picked by adding the comparison, which compiles to
+    // a conditional move rather than a branch on random keys.
+    fn sift_down_to_bottom(mut ref self, start: i64) {
+        let n = self.xs.len();
+        let mut i = start;
+        let mut c = 2 * i + 1;
+        if self.max {
+            while c + 1 < n {
+                c = c + (self.xs[c] <= self.xs[c + 1]) as i64;
+                self.xs.swap(i, c);
+                i = c;
+                c = 2 * i + 1;
+            }
+        } else {
+            while c + 1 < n {
+                c = c + (self.xs[c] >= self.xs[c + 1]) as i64;
+                self.xs.swap(i, c);
+                i = c;
+                c = 2 * i + 1;
+            }
+        }
+        if c + 1 == n {
+            self.xs.swap(i, c);
+            i = c;
+        }
+        while i > start {
+            let parent = (i - 1) / 2;
+            if self.outranks(i, parent) {
+                self.swap(i, parent);
+                i = parent;
+            } else {
+                return;
+            }
+        }
     }
 
     // Drain into a vector in pop order: ascending for a smallest-first
