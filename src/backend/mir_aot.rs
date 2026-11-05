@@ -364,6 +364,17 @@ fn route_heap(module: &Module<'_>) {
 /// (0.91x with). Over the 707 frozen-set programs it costs 0.7% of build
 /// time and 0.15% of stripped size (B-2026-11-01-36).
 /// `KARAC_MIR_UNROLL_THRESHOLD=<n>` sets another; 150 is LLVM's O2 value.
+///
+/// `KARAC_MIR_ALIGN_BRANCHES=1` also keeps x86 jumps from crossing or
+/// ending on a 32-byte line (clang's `-mbranches-within-32B-boundaries`:
+/// the assembler pads, nothing else changes). It is off by default
+/// because what it buys depends on the host, not the program
+/// (B-2026-11-05-33). On a Cascade Lake Xeon whose microcode carries
+/// the SKX102 fix, a line holding such a jump loses its decoded-uop
+/// cache: kata 661 ran 0.49 s, 0.32 s aligned, and the 707 frozen-set
+/// programs 0.914x geomean. Later on the same container, the same
+/// unaligned binary of 661 ran 0.27 s and alignment bought nothing,
+/// 0.985x geomean, while kata 207's queue loop ran 2.3x slower aligned.
 fn unroll_threshold() {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
@@ -371,15 +382,24 @@ fn unroll_threshold() {
             .ok()
             .and_then(|v| v.parse::<u32>().ok())
             .unwrap_or(300);
-        let args = [
+        let mut args = vec![
             std::ffi::CString::new("karac").unwrap_or_default(),
             std::ffi::CString::new(format!("-unroll-threshold={n}")).unwrap_or_default(),
         ];
+        if std::env::var("KARAC_MIR_ALIGN_BRANCHES").as_deref() == Ok("1") {
+            args.push(
+                std::ffi::CString::new("-x86-branches-within-32B-boundaries").unwrap_or_default(),
+            );
+        }
         let argv: Vec<*const std::ffi::c_char> = args.iter().map(|a| a.as_ptr()).collect();
-        // SAFETY: two NUL-terminated strings that outlive the call; LLVM
+        // SAFETY: NUL-terminated strings that outlive the call; LLVM
         // copies what it keeps.
         unsafe {
-            llvm_sys::support::LLVMParseCommandLineOptions(2, argv.as_ptr(), std::ptr::null())
+            llvm_sys::support::LLVMParseCommandLineOptions(
+                argv.len() as i32,
+                argv.as_ptr(),
+                std::ptr::null(),
+            )
         };
     });
 }
