@@ -512,6 +512,7 @@ impl<'a> super::TypeChecker<'a> {
         method: &str,
         args: &[CallArg],
         span: &Span,
+        args_close_span: &Span,
     ) -> Type {
         let v = val.clone();
         let mut_ref_v = Type::MutRef(Box::new(v.clone()));
@@ -600,6 +601,55 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 entry_kv
             }
+            "or_default" if args.is_empty() => {
+                // Rust's `or_default()`. Kāra's `Entry` puts in what it is
+                // given (library/collections.md), so the fix writes `V`'s
+                // default out: a literal for a number or `bool`, `new()` for
+                // a library container, `V.default()` for any other named type.
+                let default = match resolve_type_var_top(&v, &self.env.substitutions) {
+                    Type::Int(_) | Type::UInt(_) => Some("0".to_string()),
+                    Type::Float(_) => Some("0.0".to_string()),
+                    Type::Bool => Some("false".to_string()),
+                    Type::Str => Some("String.new()".to_string()),
+                    Type::Named { name, .. }
+                        if ENTRY_DEFAULT_CONTAINERS.contains(&name.as_str()) =>
+                    {
+                        Some(format!("{name}.new()"))
+                    }
+                    Type::Named { name, args } if args.is_empty() => {
+                        Some(format!("{name}.default()"))
+                    }
+                    _ => None,
+                };
+                // `or_default()`: the name ends at the `(` before the `)`.
+                let at = args_close_span
+                    .offset
+                    .checked_sub(1 + method.len())
+                    .filter(|&o| o >= span.offset);
+                match (default, at) {
+                    (Some(d), Some(offset)) => {
+                        self.type_error_with_fix_it(
+                            format!(
+                                "no method 'or_default' on type 'Entry': Kāra's `Entry` puts in \
+                                 the value it is given (library/collections.md), so \
+                                 `or_insert({d})` is `or_default()`"
+                            ),
+                            *span,
+                            TypeErrorKind::NoMethodFound,
+                            super::FixIt {
+                                span: Span {
+                                    offset,
+                                    length: method.len() + 2,
+                                    ..*args_close_span
+                                },
+                                replacement: format!("or_insert({d})"),
+                            },
+                        );
+                        mut_ref_v
+                    }
+                    _ => self.entry_or_default_unfixed(span),
+                }
+            }
             _ => self.require_known_method(
                 "Entry",
                 method,
@@ -608,6 +658,20 @@ impl<'a> super::TypeChecker<'a> {
                 span,
             ),
         }
+    }
+
+    /// `or_default()` on an `Entry` whose value type has no default to
+    /// write out (a type variable, a generic struct): the diagnostic alone.
+    fn entry_or_default_unfixed(&mut self, span: &Span) -> Type {
+        self.type_error(
+            "no method 'or_default' on type 'Entry': Kāra's `Entry` puts in the value it \
+             is given (library/collections.md), so `or_insert(V.default())` is \
+             `or_default()` for a value type `V`"
+                .to_string(),
+            *span,
+            TypeErrorKind::NoMethodFound,
+        );
+        Type::Error
     }
 
     /// Infer the return type of a method call on `SortedSet[T]`.
@@ -1230,3 +1294,16 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 }
+
+/// The library containers whose empty value is `new()`, the default
+/// `Entry.or_default()`'s fix writes out for them.
+const ENTRY_DEFAULT_CONTAINERS: &[&str] = &[
+    "String",
+    "Vec",
+    "VecDeque",
+    "Map",
+    "Set",
+    "SortedMap",
+    "SortedSet",
+    "PriorityQueue",
+];

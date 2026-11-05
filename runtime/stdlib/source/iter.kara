@@ -940,3 +940,36 @@ impl[I: Iterator] IntoIterator for I {
 trait Extend[T] {
     fn extend[I: IntoIterator[Item = T]](mut ref self, items: own I);
 }
+
+/// `repeat(value)`: `value`, again and again, without end, as Rust's
+/// `std::iter::repeat`. `repeat(x).take(n)` is `n` copies of `x`.
+struct IterRepeat[T] {
+    value: T,
+}
+
+impl[T: Clone] Iterator for IterRepeat[T] {
+    type Item = T;
+    fn next(mut ref self) -> Option[T] {
+        Some(self.value.clone())
+    }
+}
+
+pub fn repeat[T: Clone](value: own T) -> IterRepeat[T] {
+    IterRepeat { value }
+}
+
+/// `once(value)`: `value`, and then nothing, as Rust's `std::iter::once`.
+struct IterOnce[T] {
+    item: Option[T],
+}
+
+impl[T] Iterator for IterOnce[T] {
+    type Item = T;
+    fn next(mut ref self) -> Option[T] {
+        self.item.take()
+    }
+}
+
+pub fn once[T](value: own T) -> IterOnce[T] {
+    IterOnce { item: Some(value) }
+}

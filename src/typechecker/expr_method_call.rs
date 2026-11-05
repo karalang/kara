@@ -2743,7 +2743,9 @@ impl<'a> super::TypeChecker<'a> {
         // HTTP named types. Extracted to `method_mapset.rs`; it keeps this
         // position in the first-match-wins chain and the block order
         // within it.
-        if let Some(t) = self.try_mapset_method(method, args, span, &obj_ty_for_named) {
+        if let Some(t) =
+            self.try_mapset_method(method, args, span, args_close_span, &obj_ty_for_named)
+        {
             return t;
         }
 

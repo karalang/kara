@@ -12,6 +12,17 @@ The lang-item traits `Iterator` and `Iterable`, and the way `for` uses them, are
 - **Fusion is an optimization.** The compiler may turn a chain into a single loop. That never changes what the program does.
 - **Effects flow through a chain.** A source's `next` may have effects: an `impl Iterator` whose `next` reads a file has `reads(FileSystem)` and `blocks`. Each adaptor adds the effects of the function passed to it. A chain's effects are the source's plus every function's, counted once for the loop that drives it ([design.md §12](../design.md#12-effects)). One `Iterator` trait therefore covers pure and blocking sources alike, with no separate stream type. (The line iterators of [io.md](io.md), `stdin.lines()` and `BufReader.lines()`, take no adaptors yet; a `for` loop drives them.)
 
+## Sources
+
+Besides the collections' own iterators and ranges, two free functions in the prelude start a chain:
+
+| Function | Signature | Notes |
+|---|---|---|
+| `repeat` | `fn repeat[T: Clone](value: own T) -> impl Iterator[Item = T]` | `value` without end, a clone each time; `repeat(x).take(n)` is `n` copies |
+| `once` | `fn once[T](value: own T) -> impl Iterator[Item = T]` | `value`, then nothing; `once(x).chain(rest)` puts `x` first |
+
+A program's own function named `repeat` or `once` takes the name, and the library's is not seen.
+
 ## Adaptors
 
 | Method | Signature | Notes |

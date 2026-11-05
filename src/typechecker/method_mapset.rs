@@ -42,6 +42,7 @@ impl<'a> super::TypeChecker<'a> {
         method: &str,
         args: &[CallArg],
         span: &Span,
+        args_close_span: &Span,
         obj_ty_for_named: &Type,
     ) -> Option<Type> {
         // `Map[K, V]` method dispatch. K and V thread through return types.
@@ -85,7 +86,14 @@ impl<'a> super::TypeChecker<'a> {
             if name == "Entry" {
                 let key = type_args.first().cloned().unwrap_or(Type::Error);
                 let val = type_args.get(1).cloned().unwrap_or(Type::Error);
-                return Some(self.infer_entry_method(&key, &val, method, args, span));
+                return Some(self.infer_entry_method(
+                    &key,
+                    &val,
+                    method,
+                    args,
+                    span,
+                    args_close_span,
+                ));
             }
         }
 
