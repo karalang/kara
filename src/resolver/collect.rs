@@ -1784,23 +1784,7 @@ impl<'a> super::Resolver<'a> {
         // A library module whose items are globals (B-2026-10-14-48): the
         // items that resolve were dropped before resolution, so each one
         // left is unknown, specified but unimplemented, or renamed.
-        if crate::prelude::library_global_module(&imp.path).is_some() {
-            for it in &imp.items {
-                if let Some(message) = crate::prelude::library_module_item_error(
-                    &imp.path,
-                    &it.name,
-                    it.alias.as_deref(),
-                ) {
-                    self.errors.push(ResolveError {
-                        message,
-                        span: it.span,
-                        kind: ResolveErrorKind::UnknownItemInModule,
-                        suggestion: None,
-                        replacement: None,
-                        stub_hint: None,
-                    });
-                }
-            }
+        if self.report_library_global_items(imp) {
             return;
         }
         // A gated module's item the module does not define (B-2026-10-21-7).
@@ -1858,25 +1842,8 @@ impl<'a> super::Resolver<'a> {
         if crate::prelude::is_importable_stdlib_module(&imp.path) {
             return;
         }
-        // `import std.sync;` names a module of globals: there is no module
-        // value to bind, so say how to import from it.
-        for it in &imp.items {
-            let mut full = imp.path.clone();
-            full.push(it.name.clone());
-            if crate::prelude::library_global_module(&full).is_some() {
-                self.errors.push(ResolveError {
-                    message: format!(
-                        "`{m}` is imported item by item: `import {m}.{{..}};`",
-                        m = full.join(".")
-                    ),
-                    span: imp.span,
-                    kind: ResolveErrorKind::UnknownModule,
-                    suggestion: None,
-                    replacement: None,
-                    stub_hint: None,
-                });
-                return;
-            }
+        if self.report_bare_library_global_import(imp) {
+            return;
         }
         let bare_ok = imp.items.iter().any(|it| {
             let mut full = imp.path.clone();
@@ -1950,6 +1917,60 @@ impl<'a> super::Resolver<'a> {
         });
     }
 
+    /// For an import from a library module whose items are globals
+    /// ([`crate::prelude::LIBRARY_GLOBAL_MODULES`], B-2026-10-14-48), report
+    /// each item that does not resolve (unknown, specified but unimplemented,
+    /// or renamed) and return true: the import binds nothing, since the items
+    /// that resolve are globals already in scope. A pipeline that drops the
+    /// resolving items first leaves only the bad ones; one that does not
+    /// (a package's modules) still carries them, and they pass.
+    fn report_library_global_items(&mut self, imp: &ImportDecl) -> bool {
+        if crate::prelude::library_global_module(&imp.path).is_none() {
+            return false;
+        }
+        for it in &imp.items {
+            if let Some(message) =
+                crate::prelude::library_module_item_error(&imp.path, &it.name, it.alias.as_deref())
+            {
+                self.errors.push(ResolveError {
+                    message,
+                    span: it.span,
+                    kind: ResolveErrorKind::UnknownItemInModule,
+                    suggestion: None,
+                    replacement: None,
+                    stub_hint: None,
+                });
+            }
+        }
+        true
+    }
+
+    /// `import std.sync;` names a module of globals: there is no module
+    /// value to bind, so say how to import from it, and return true.
+    fn report_bare_library_global_import(&mut self, imp: &ImportDecl) -> bool {
+        for it in &imp.items {
+            let mut full = imp.path.clone();
+            full.push(it.name.clone());
+            if crate::prelude::library_global_module(&full).is_some()
+                && !crate::prelude::is_importable_stdlib_module(&full)
+            {
+                self.errors.push(ResolveError {
+                    message: format!(
+                        "`{m}` is imported item by item: `import {m}.{{..}};`",
+                        m = full.join(".")
+                    ),
+                    span: imp.span,
+                    kind: ResolveErrorKind::UnknownModule,
+                    suggestion: None,
+                    replacement: None,
+                    stub_hint: None,
+                });
+                return true;
+            }
+        }
+        false
+    }
+
     fn collect_import(&mut self, imp: &ImportDecl) {
         let Some(tree) = self.tree else {
             // Single-file mode — cross-module validation is skipped (the file
@@ -1990,6 +2011,18 @@ impl<'a> super::Resolver<'a> {
             }
             return;
         };
+
+        // A library module of globals is no module of the package's graph
+        // (std.sync, std.net, std.json, ...): its import resolves, or is
+        // refused item by item, exactly as in a lone file (B-2026-11-05-7).
+        // A module that is also gated (std.time) has a synthetic module in
+        // the graph and resolves below.
+        if !tree.graph.by_path.contains_key(&imp.path)
+            && (self.report_library_global_items(imp)
+                || self.report_bare_library_global_import(imp))
+        {
+            return;
+        }
 
         // Validate the dotted prefix exists. A prefix that is only a
         // directory (`db/` with no `db.kara`) is a valid one when every name
@@ -2074,6 +2107,29 @@ impl<'a> super::Resolver<'a> {
         for item in &imp.items {
             let mut full = imp.path.clone();
             full.push(item.name.clone());
+
+            // A module of Kāra items that also has globals (`std.time.{Clock}`):
+            // a global is in scope already and binds nothing, as in a lone file,
+            // whose pipeline drops it before resolution (B-2026-11-05-7).
+            if let Some((have, _)) = crate::prelude::library_global_module(&imp.path) {
+                if have.contains(&item.name.as_str()) {
+                    if let Some(message) = crate::prelude::library_module_item_error(
+                        &imp.path,
+                        &item.name,
+                        item.alias.as_deref(),
+                    ) {
+                        self.errors.push(ResolveError {
+                            message,
+                            span: item.span,
+                            kind: ResolveErrorKind::UnknownItemInModule,
+                            suggestion: None,
+                            replacement: None,
+                            stub_hint: None,
+                        });
+                    }
+                    continue;
+                }
+            }
 
             let binds_submodule = tree.graph.by_path.contains_key(&full);
             let binds_item = !binds_submodule && module_exposes_name(tree, &imp.path, &item.name);

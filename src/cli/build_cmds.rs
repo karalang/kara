@@ -747,10 +747,14 @@ pub(super) fn resolve_modules(
         // Resolver still takes a `&Program`, so wrap the module's items
         // in a freshly-owned `Program` view. Clone cost is negligible next
         // to the resolver pass itself.
-        let program = PackageLibrary::program(lib, &m.items);
+        let mut program = PackageLibrary::program(lib, &m.items);
+        crate::desugar::desugar_multi_assigns(&mut program.items);
+        // A package is checked by the v2 pipeline, which admits a user
+        // operator-trait impl as a lone file's does (B-2026-11-05-21).
         let mut result = Resolver::new(&program)
             .with_tree(tree, id as ModuleId)
             .with_test_file(m.is_test_file)
+            .with_user_operator_impls(true)
             .resolve();
         result
             .errors
@@ -1090,9 +1094,11 @@ pub(super) fn typecheck_modules(
         if m.is_synthetic {
             continue;
         }
-        let program = PackageLibrary::program(lib, &m.items);
+        let mut program = PackageLibrary::program(lib, &m.items);
+        crate::desugar::desugar_multi_assigns(&mut program.items);
         let resolved = Resolver::new(&program)
             .with_tree(tree, id as ModuleId)
+            .with_user_operator_impls(true)
             .resolve();
         let mut result = crate::typechecker::TypeChecker::new(&program, &resolved)
             .with_tree(tree, id as ModuleId)

@@ -763,6 +763,7 @@ pub(super) fn cmd_check_project(
     // (B-2026-10-25-5). A type or late-phase refusal here is the v2 check's
     // to report first, as in `run_v2::combine`; a parse, cycle or resolve
     // one is the package's alone, and leaves nothing to combine.
+    let mut v2_warnings_json: Vec<String> = Vec::new();
     if pc.refuses_only_by_type() {
         let entry = &pc.tree.modules[pc.tree.root as usize].file;
         let filename = super::project_v2::shown(entry);
@@ -770,7 +771,7 @@ pub(super) fn cmd_check_project(
             super::project_v2::amalgamate(&pc.tree, &files, |_, _| Vec::new(), "")
         }) {
             Ok(a) => {
-                super::run_v2::check_v2_or_exit(
+                let passed = super::run_v2::check_v2_or_exit(
                     &filename,
                     &a.text,
                     Some(&a),
@@ -779,6 +780,21 @@ pub(super) fn cmd_check_project(
                     output,
                 );
                 pc.past_the_v2_check();
+                // The combined source's warnings are the ones `run` and
+                // `build` print, a use of another module's deprecated item
+                // among them, which a module's own check cannot see
+                // (B-2026-11-05-16). They stand in for the modules' own.
+                match output {
+                    OutputMode::Text => super::run_v2::print_diagnostics(&passed, Some(&a)),
+                    OutputMode::Json => v2_warnings_json.extend(
+                        collect_diagnostics(&passed)
+                            .entries
+                            .iter()
+                            .map(|d| a.remap_json_text(&filename, d)),
+                    ),
+                    OutputMode::Jsonl => {}
+                }
+                pc.type_warnings.clear();
             }
             // A package `run` and `build` cannot combine, they refuse, and
             // so does `check`.
@@ -799,6 +815,7 @@ pub(super) fn cmd_check_project(
             let mut diags: Vec<String> = Vec::new();
             diags.extend(test_json);
             diags.extend(super::build_cmds::parse_errors_json(&pc.parse_errors));
+            diags.extend(v2_warnings_json);
             diags.extend(super::build_cmds::type_warnings_json(&pc.type_warnings));
             diags.extend(super::build_cmds::cycles_json(&pc.cycles, &pc.tree));
             diags.extend(super::build_cmds::resolve_errors_json(&pc.resolve_errors));

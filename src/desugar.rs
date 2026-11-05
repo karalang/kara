@@ -2103,6 +2103,39 @@ fn walk_stmt(stmt: &mut Stmt, ret: Option<&TypeExpr>, cx: &mut WalkCx) {
     }
 }
 
+/// Rewrite only the parallel assignments in `items`, as
+/// [`desugar_program`] does. A package's per-module resolve and type checks
+/// run on a module's own items, before the flattened program is desugared,
+/// and every pass from the resolver on takes a `StmtKind::MultiAssign` to be
+/// gone (B-2026-11-05-19). The rest of [`desugar_program`] needs the whole
+/// program, so only this purely local rewrite runs there.
+pub fn desugar_multi_assigns(items: &mut [Item]) {
+    struct MultiAssigns;
+    impl crate::span_visitor::MutVisitor for MultiAssigns {
+        fn span(&mut self, _span: &mut Span) {}
+        fn stmt(&mut self, s: &mut Stmt) {
+            if !matches!(s.kind, StmtKind::MultiAssign { .. }) {
+                return;
+            }
+            let placeholder = StmtKind::Expr(Expr {
+                id: crate::ids::NodeId::DUMMY,
+                kind: ExprKind::Error,
+                span: s.span,
+            });
+            if let StmtKind::MultiAssign { targets, values } =
+                std::mem::replace(&mut s.kind, placeholder)
+            {
+                // The walk continues into the expansion, so a parallel
+                // assignment nested in a value is rewritten too.
+                s.kind = expand_multi_assign(targets, values, s.span);
+            }
+        }
+    }
+    for item in items {
+        crate::span_visitor::walk_item_mut_with(item, &mut MultiAssigns);
+    }
+}
+
 /// Build the block-expr `StmtKind` a parallel assignment lowers to. The
 /// temporaries carry a `__karac_pa_<offset>_<i>` name that user code cannot
 /// collide with and live only inside the synthesized block's scope.
