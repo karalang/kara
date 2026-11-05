@@ -60,7 +60,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | diagnostics | 133 |
 | false-positive | 110 |
-| perf | 96 |
+| perf | 97 |
 | missing-feature | 76 |
 | soundness | 50 |
 | miscompile | 35 |
@@ -77,7 +77,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | typecheck | 201 |
 | mir | 119 |
-| mir-llvm | 114 |
+| mir-llvm | 115 |
 | cli | 55 |
 | ownership | 51 |
 | parser | 39 |
@@ -110,6 +110,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-04-82 | 2026-11-04 | mir-llvm | high | An integer tuple literal passed as a collection key or compared with `==`/`<` keeps the default (i64, i64) layout instead of the declared narrow tuple type: `s.contains((1, 2))` on a `SortedSet`/`Set`/`Vec[(i32, i32)]` and `m.contains_key((1, 2))`/`m.get((1, 2))` on a `Map[(i32, i32), _]` answer false/None on compiled code, and `a == (1, 2)` with `a: (i32, i32)` is invalid MIR on run and build | — |
 | B-2026-11-04-83 | 2026-11-04 | mir-llvm | low | The backend does not emit the facts LLVM 19-22 added: `range` attributes on parameters and returns, `nuw`/`nusw`/`inbounds` flags on GEPs beyond inbounds, `nuw`/`nsw` on `trunc`, `samesign` on `icmp`, and `captures(address/read_provenance)` beyond `captures(none)` | — |
 | B-2026-11-05-3 | 2026-11-05 | typecheck+other | low | Remainder of B-2026-11-04-80: the editor code action that rewrites `.unwrap()` on an ordinary (non-`weak`) Option to `.expect("…")` does not exist; design.md §11 weak Ergonomics (8c5e67ab81) offers it as an LSP code action, never a check warning | — |
+| B-2026-11-05-4 | 2026-11-05 | mir-llvm | medium | Three kata benches run 2-3x slower on LLVM 22 than on LLVM 18 at about the same instruction count (x86): teemo_attacking 357 ms vs 126 (x86's cmov converter now branches the loop's `min`), min_stack 900 vs 423 and hsearch (275) 925 vs 471 (not cmov, unattributed); the frozen set's run-time geomean is unchanged (0.995) | — |
 
 ### Relocated
 
