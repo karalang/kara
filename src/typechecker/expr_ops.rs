@@ -3881,6 +3881,29 @@ impl<'a> super::TypeChecker<'a> {
                 self.record_node_type(left.id, &right_ty);
                 left_ty = right_ty.clone();
             }
+            // A tuple literal of integer literals compares at the other
+            // operand's integer types: `a == (1, 2)` with `a: (i32, i32)`
+            // builds an `(i32, i32)`, not the `(i64, i64)` synthesis gave
+            // it (B-2026-11-04-82).
+            for (lit, lit_ty, other_ty, is_right) in [
+                (right, right_ty.clone(), left_ty.clone(), true),
+                (left, left_ty.clone(), right_ty.clone(), false),
+            ] {
+                let other = Self::peel_borrow(&other_ty).clone();
+                if matches!(lit.kind, ExprKind::Tuple(_))
+                    && matches!(other, Type::Tuple(_))
+                    && lit_ty != other
+                    && self.retype_literal(&other, &lit_ty, lit.span)
+                {
+                    self.retyped_int_literal = None;
+                    if is_right {
+                        right_ty = other;
+                    } else {
+                        left_ty = other;
+                    }
+                    break;
+                }
+            }
         }
 
         if left_ty == Type::Error || right_ty == Type::Error {

@@ -1130,7 +1130,15 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
         self.collect_views_into_strings_fix(expr, expected);
+        self.retyped_int_literal = None;
         let mut ty = self.check_expr_inner(expr, expected);
+        // A literal whose integers took the slot's narrower types has the
+        // slot's type (B-2026-11-04-82).
+        if let Some((key, want)) = self.retyped_int_literal.take() {
+            if key == SpanKey::from_span(&expr.span) {
+                ty = want;
+            }
+        }
         // A branch or block whose results each became the `dyn` value is
         // that `dyn` value.
         if self.coerced_within(expr, expected, &ty) {
@@ -9238,6 +9246,12 @@ impl<'a> super::TypeChecker<'a> {
                 if sfx.is_none() && i64::try_from(*n).is_err() {
                     self.wide_int_literals.push((expr.span, *n));
                 }
+                if sfx.is_none() {
+                    self.int_literal_spans.insert(
+                        crate::resolver::SpanKey::from_span(&expr.span),
+                        (vec![(expr.span, expr.id)], *n),
+                    );
+                }
                 ty
             }
             ExprKind::Float(_, sfx) => {
@@ -9517,6 +9531,12 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 let ty = self.infer_unary(op, operand, &expr.span);
                 self.neg_validated_suffixed_literal = saved_neg_key;
+                if let (UnaryOp::Neg, ExprKind::Integer(n, None)) = (op, &operand.kind) {
+                    self.int_literal_spans.insert(
+                        crate::resolver::SpanKey::from_span(&expr.span),
+                        (vec![(expr.span, expr.id), (operand.span, operand.id)], -*n),
+                    );
+                }
                 ty
             }
 

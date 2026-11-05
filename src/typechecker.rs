@@ -3561,6 +3561,12 @@ pub struct TypeChecker<'a> {
     /// elements' spans, so a slot that wants a tuple with a `Str` in it can
     /// still take a literal there as a `Str`.
     pub(super) tuple_literal_spans: FxHashMap<SpanKey, (crate::ids::NodeId, Vec<Span>)>,
+    /// B-2026-11-04-82 — the unsuffixed integer literals typed by
+    /// synthesis (`i64`), a negated one included, with their value and
+    /// nodes (the negation's, then the literal's), so a tuple literal whose
+    /// slot wants narrower integers (`s.contains((1, 2))` on a
+    /// `SortedSet[(i32, i32)]`) takes the slot's types.
+    pub(super) int_literal_spans: FxHashMap<SpanKey, (Vec<(Span, crate::ids::NodeId)>, i128)>,
     /// B-2026-10-20-6 — the same for `Vec` and `Set` literals (`vec![..]`,
     /// `Vec[..]`, a bare `[..]`), with the collection's name.
     pub(super) collection_literal_spans:
@@ -3756,6 +3762,10 @@ pub struct TypeChecker<'a> {
     /// The type of a value just checked into a `weak` slot, for typed HIR
     /// (B-2026-10-13-23).
     pub(super) weak_store_actual: Option<Type>,
+    /// B-2026-11-04-82 — a literal whose integers `retype_literal` gave
+    /// its slot's narrower types, with that type: `check_expr` hands the
+    /// slot's type back for it rather than the synthesised one.
+    pub(super) retyped_int_literal: Option<(SpanKey, Type)>,
     /// Indices into `env.impls` of the baked stdlib's impls, which a library
     /// source's re-statement replaces (redesign A2).
     pub(super) baked_impls: FxHashSet<usize>,
@@ -4077,6 +4087,7 @@ impl<'a> TypeChecker<'a> {
             weak_elem_store_sites: FxHashSet::default(),
             string_literal_spans: FxHashMap::default(),
             tuple_literal_spans: FxHashMap::default(),
+            int_literal_spans: FxHashMap::default(),
             collection_literal_spans: FxHashMap::default(),
             weak_slot_reads: FxHashSet::default(),
             weak_elem_read_sites: FxHashSet::default(),
@@ -4114,6 +4125,7 @@ impl<'a> TypeChecker<'a> {
             str_lit_let_uses: FxHashMap::default(),
             str_retyped_uses: FxHashSet::default(),
             weak_store_actual: None,
+            retyped_int_literal: None,
             baked_impls: FxHashSet::default(),
             reported_uninferrable_empty_literal: false,
             variant_ctor_in_callee: false,
@@ -7040,6 +7052,7 @@ impl<'a> TypeChecker<'a> {
             _ => return false,
         };
         let mut retype = Vec::new();
+        let mut retype_ints = Vec::new();
         for (e, f, at) in pairs {
             let e = inference::resolve_type_var_top(&e, &self.env.substitutions);
             if e == f {
@@ -7061,6 +7074,17 @@ impl<'a> TypeChecker<'a> {
                     };
                     retype.push((at, lit, e.clone()));
                 }
+                // An integer literal in a slot of another integer type takes
+                // it, as a bare one does (B-2026-11-04-82).
+                (Type::Int(_) | Type::UInt(_), Type::Int(_) | Type::UInt(_)) => {
+                    let Some((nodes, value)) = self.int_literal_spans.get(&key).cloned() else {
+                        return false;
+                    };
+                    if !self.check_int_literal_fits(value, &e, &at, None) {
+                        return false;
+                    }
+                    retype_ints.push((nodes, e.clone()));
+                }
                 (Type::Tuple(_), Type::Tuple(_)) | (Type::Named { .. }, Type::Named { .. })
                     if self.tuple_literal_spans.contains_key(&key)
                         || self.collection_literal_spans.contains_key(&key) =>
@@ -7075,6 +7099,16 @@ impl<'a> TypeChecker<'a> {
         for (at, lit, view) in retype {
             self.record_expr_type(&at, &view);
             self.record_node_type(lit, &view);
+        }
+        let ints = !retype_ints.is_empty();
+        for (nodes, t) in retype_ints {
+            for (at, id) in nodes {
+                self.record_expr_type(&at, &t);
+                self.record_node_type(id, &t);
+            }
+        }
+        if ints {
+            self.retyped_int_literal = Some((SpanKey::from_span(&span), want.clone()));
         }
         self.record_expr_type(&span, &want);
         self.record_node_type(id, &want);

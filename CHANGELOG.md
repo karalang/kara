@@ -84,6 +84,11 @@ accepted by 0.8.0 are now refused, each with a fix-it.
 
 ### Wrong behaviour fixed
 
+- A tuple of integer literals takes its slot's integer types: as a key of a
+  narrow-tuple collection (`s.contains((1, 2))` on a `SortedSet[(i32, i32)]`,
+  `m.get((1, 2))`, `v.contains(..)`) it was built as `(i64, i64)` and never
+  found on compiled code, and `a == (1, 2)` with `a: (i32, i32)` stopped
+  with invalid MIR (design.md § Numeric literals, B-2026-11-04-82).
 - An assignment whose place starts with a call, or is a `Map` index with a
   `Copy` key, evaluates the place before the value (§8.2; B-2026-11-01-16,
   -28, -29).

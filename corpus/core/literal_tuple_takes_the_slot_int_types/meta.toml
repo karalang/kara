@@ -1,0 +1,11 @@
+source = "design.md § Numeric literals"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["literal", "tuple", "collections"]
+class = "e"
+expected_from = "spec"
+rules = []
+backends = []
+env = {}
+note = "design.md § Numeric literals: a literal takes the expected type (an argument's element type) and, in a binary operator, the other operand's type, inside a tuple literal too (B-2026-11-04-82)."

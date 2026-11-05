@@ -1,0 +1,27 @@
+// design.md § Numeric literals: an integer literal takes the expected type
+// of the slot it is in (an argument's element type), and in a binary
+// operator the other operand's type. A tuple of literals passed as a key
+// of a narrow-tuple collection, or compared with a narrow tuple, is built
+// at those types (B-2026-11-04-82).
+
+fn main() {
+    let mut s: SortedSet[(i32, i32)] = SortedSet.new();
+    s.insert((1, 2));
+    let k: (i32, i32) = (1, 2);
+    println(f"{s.contains(k)} {s.contains((1, 2))} {s.contains((2, 1))}");
+    let mut t: SortedSet[(i16, i16, i32)] = SortedSet.new();
+    t.insert((1, -2, 3));
+    println(f"{t.contains((1, -2, 3))} {t.contains((1, 2, 3))}");
+    let mut u: Set[(u8, u8)] = Set.new();
+    u.insert((200, 1));
+    println(u.contains((200, 1)));
+    let mut m: Map[(i32, i32), i64] = Map.new();
+    m.insert((3, 4), 7);
+    println(f"{m.contains_key((3, 4))} {m.get((3, 4))} {m.get((4, 3))}");
+    let v: Vec[(i32, i32)] = [(5, 6)];
+    println(f"{v.contains((5, 6))} {v.contains((6, 5))}");
+    let a: (i32, i32) = (1, 2);
+    println(f"{a < (3, 4)} {a == (1, 2)} {(1, 2) == a} {a != (1, -2)}");
+    let b: (u8, i16, i64) = (250, -7, 9);
+    println(b == (250, -7, 9));
+}
