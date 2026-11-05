@@ -1,0 +1,9 @@
+source = "B-2026-11-05-2"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "closures", "ownership"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md §7: a MutFn moved into an `own MutFn()` parameter once on each branch of an `if` is moved once on every path, so the program checks; `n` is 0, so the else branch runs `take` once and prints 1."

@@ -1,0 +1,22 @@
+trait A {
+    fn m(self) -> i64;
+    fn d(self) -> i64 { self.m() + 10 }
+}
+trait B {
+    fn m(self) -> i64;
+    fn e(self) -> i64 { self.m() + 100 }
+}
+struct S {}
+struct T { k: i64 }
+impl A for S { fn m(self) -> i64 { 1 } }
+impl B for S { fn m(self) -> i64 { 2 } }
+impl A for T { fn m(self) -> i64 { self.k } }
+impl B for T { fn m(self) -> i64 { self.k * 2 } }
+fn main() {
+    let s = S {};
+    println(s.d());
+    println(s.e());
+    let t = T { k: 5 };
+    println(t.d());
+    println(t.e());
+}

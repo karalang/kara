@@ -992,6 +992,21 @@ impl<'a> super::TypeChecker<'a> {
                 candidates = fits;
             }
         }
+        // In a trait's default body, `self` is `Self: Trait`, so `self.m()`
+        // has the one candidate that trait gives, though the copy's `self` is
+        // a concrete type that other traits' `m` also fit (B-2026-11-04-40).
+        if candidates.len() > 1 && matches!(object.kind, ExprKind::SelfValue) {
+            if let Some(t) = self.current_default_trait.as_deref() {
+                let own: Vec<_> = candidates
+                    .iter()
+                    .filter(|(imp, _)| imp.trait_name.as_deref() == Some(t))
+                    .cloned()
+                    .collect();
+                if own.len() == 1 {
+                    candidates = own;
+                }
+            }
+        }
         let method_pick: Option<(ImplInfo, FunctionSig)> = if candidates.len() > 1 {
             // Render each candidate as `Trait.method(receiver)` (or
             // `Type.method(receiver)` for the rare inherent-vs-inherent

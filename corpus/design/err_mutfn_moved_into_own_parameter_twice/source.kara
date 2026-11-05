@@ -1,0 +1,8 @@
+fn take(f: own MutFn()) { let mut f = f; f(); }
+fn main() {
+    let mut n = 0;
+    let f = || { n += 1; };
+    take(f);
+    take(f);
+    println(n);
+}

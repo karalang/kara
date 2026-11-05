@@ -5250,7 +5250,20 @@ impl<'a> super::TypeChecker<'a> {
                     // unsatisfied ("`T` does not implement `Ord`"), because
                     // `first_unsatisfied_bound` skips a `TypeParam` arg but
                     // discharges a `Named` one against the impl table.
+                    // A default method copied in from its trait keeps the
+                    // trait's spans, so it lies outside the impl block. Its
+                    // `self.m()` is written against `Self: Trait` and means
+                    // that trait's `m` (B-2026-11-04-40).
+                    let copied_default = imp.trait_name.as_ref().filter(|_| {
+                        method.span.offset < imp.span.offset
+                            || method.span.offset >= imp.span.offset + imp.span.length
+                    });
+                    let saved = std::mem::replace(
+                        &mut self.current_default_trait,
+                        copied_default.and_then(|t| t.segments.last().cloned()),
+                    );
                     self.check_function(method, Some(&self_type), &gp);
+                    self.current_default_trait = saved;
                 }
                 ImplItem::AssocType(binding) => {
                     // GAT slice 5: extend the generic scope with the GAT's

@@ -1,0 +1,9 @@
+source = "B-2026-11-04-40"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "traits"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md §9: inside trait `A`'s default body `self` is `Self: A`, so `self.m()` is `A.m` even in the copy for a type that also implements `B` with its own `m`; S gives 1+10 and 2+100, T(k=5) gives 5+10 and 10+100."

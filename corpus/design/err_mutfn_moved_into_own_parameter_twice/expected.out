@@ -1,0 +1,1 @@
+ERROR at line 6: use of moved value `f`: it writes a captured binding, so it is a MutFn, and a MutFn is never Copy (core-semantics §1.1), so passing it to `take`'s owned parameter `f` moved it

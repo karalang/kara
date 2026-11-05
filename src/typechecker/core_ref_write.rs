@@ -133,8 +133,9 @@ struct Walk<'t, 'a> {
     /// calling a local `MutFn` needs `let mut` (design.md §7;
     /// B-2026-11-04-69).
     immutable_mut_closure_locals: Vec<((usize, usize), FixIt)>,
-    /// MutFn locals a `let` has moved out of (§1.1: a `MutFn` is never
-    /// `Copy`), with the binding that took each one (B-2026-10-19-36).
+    /// MutFn locals a `let` or an owned argument has moved out of (§1.1: a
+    /// `MutFn` is never `Copy`), with how each one moved (B-2026-10-19-36,
+    /// B-2026-11-05-2).
     moved_mut_fns: Vec<((usize, usize), String)>,
     /// Function-kind errors (§9.6).
     kind_errors: Vec<(Span, String)>,
@@ -1136,10 +1137,51 @@ impl Walk<'_, '_> {
         if i != depth {
             return;
         }
-        self.moved_mut_fns.push(((i, j), name.clone()));
+        self.moved_mut_fns.push((
+            (i, j),
+            format!("binding it to `{name}` moved it. Call it through `{name}` from here on"),
+        ));
         if let Root::Local(gi, gj) = self.root_of(name) {
             self.mut_closure_locals.push(((gi, gj), n));
         }
+    }
+
+    /// `take(f)` with `f` a `MutFn` local and `take`'s parameter owned
+    /// (`own MutFn()`, or `escaping`, which is owned): the call moves `f`,
+    /// so a later use is a use after move (B-2026-11-05-2). Counted only
+    /// for a call in `f`'s own scope, outside any closure, as a `let` move
+    /// is, so a move on one branch never reports a use on another.
+    fn note_mut_fn_moved_into_param(&mut self, callee: &str, param: &Param, arg: &Expr) {
+        let owned = param.is_own
+            || self
+                .tc
+                .program
+                .escaping_fn_types
+                .contains(&SpanKey::from_span(&param.ty.span));
+        let ExprKind::Identifier(x) = &arg.kind else {
+            return;
+        };
+        if !owned || !self.closures.is_empty() {
+            return;
+        }
+        let Root::Local(i, j) = self.root_of(x) else {
+            return;
+        };
+        if i != self.scopes.len() - 1 || self.scopes[i][j].0 != *x {
+            return;
+        }
+        if !self
+            .mut_closure_locals
+            .iter()
+            .any(|(r, n)| *r == (i, j) && !n.is_empty())
+        {
+            return;
+        }
+        let pname = param.pattern.binding_names().join(", ");
+        self.moved_mut_fns.push((
+            (i, j),
+            format!("passing it to `{callee}`'s owned parameter `{pname}` moved it"),
+        ));
     }
 
     /// A use of a `MutFn` local after a `let` moved it (B-2026-10-19-36).
@@ -1154,13 +1196,12 @@ impl Walk<'_, '_> {
             return;
         }
         if let Some(k) = self.moved_mut_fns.iter().position(|(r, _)| *r == (i, j)) {
-            let (_, into) = self.moved_mut_fns.remove(k);
+            let (_, how) = self.moved_mut_fns.remove(k);
             self.kind_errors.push((
                 e.span,
                 format!(
                     "use of moved value `{x}`: it writes a captured binding, so it is a \
-                     MutFn, and a MutFn is never Copy (core-semantics §1.1), so binding it \
-                     to `{into}` moved it. Call it through `{into}` from here on"
+                     MutFn, and a MutFn is never Copy (core-semantics §1.1), so {how}"
                 ),
             ));
         }
@@ -1818,6 +1859,7 @@ impl Walk<'_, '_> {
             let Some(param) = param else {
                 continue;
             };
+            self.note_mut_fn_moved_into_param(name, param, &a.value);
             let mut ty = &param.ty;
             while let TypeKind::Ref(inner) | TypeKind::MutRef(inner) = &ty.kind {
                 ty = inner;

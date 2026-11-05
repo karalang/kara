@@ -64,7 +64,9 @@ accepted by 0.8.0 are now refused, each with a fix-it.
   is not a closure literal or a function name (a call's result, an `own` or
   `escaping` parameter) is move-only, so `let h2 = h;` moves `h`. Calling a
   local `MutFn` needs `let mut`, and a bare `OnceFn` parameter cannot be
-  called (`own OnceFn`); `karac fix` writes both (B-2026-11-04-69).
+  called (`own OnceFn`); `karac fix` writes both (B-2026-11-04-69). Passing
+  a `MutFn` local to an owned parameter (`own MutFn()` or `escaping`) moves
+  it, so `take(f); take(f);` is a use after move (B-2026-11-05-2).
 - A UFCS call to a `mut ref self` method marks its receiver,
   `Counter.bump(mut c)`, and `own` is not written beside `escaping`; `karac
   fix` writes both (B-2026-11-04-69).
@@ -119,6 +121,9 @@ accepted by 0.8.0 are now refused, each with a fix-it.
 - A default parameter value may name a function, `g: Fn(i64) -> i64 = id`
   (B-2026-11-04-68), and `v == []` gives `[]` the element type of `v`
   (B-2026-11-04-75).
+- In a trait's default method, `self.m()` calls that trait's `m` in every
+  impl the default is copied into, even when the type implements another
+  trait with an `m`; it was refused as ambiguous (B-2026-11-04-40).
 
 ### Diagnostics
 

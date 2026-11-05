@@ -1,0 +1,9 @@
+source = "B-2026-11-05-2"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["design", "closures", "ownership"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md §7 Function types and kinds: a MutFn closure is never Copy (core-semantics §1.1), so `take(f)` into an `own MutFn()` parameter moves `f` and the second `take(f)` is a use after move. The expected.out wording of an error pin is guidance, not a byte oracle."

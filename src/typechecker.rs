@@ -3528,6 +3528,10 @@ pub struct TypeChecker<'a> {
     /// The span of the impl block whose methods are being checked; part of
     /// the `fn_return_types` / `fn_self_types` key.
     pub(super) current_impl_span: Option<SpanKey>,
+    /// The trait whose default method body is being checked, in the copy a
+    /// trait impl received; its `self.m()` prefers that trait's `m` over a
+    /// same-named method of another trait (B-2026-11-04-40).
+    pub(super) current_default_trait: Option<String>,
     /// `(part, whole, how)`: a node whose type is a projection of another's,
     /// in recording order (a whole after its parts). See
     /// `refine_node_types_from_wholes`.
@@ -4062,6 +4066,7 @@ impl<'a> TypeChecker<'a> {
             fn_return_types: FxHashMap::default(),
             fn_self_types: FxHashMap::default(),
             current_impl_span: None,
+            current_default_trait: None,
             node_method_callees: FxHashMap::default(),
             node_method_impls: FxHashMap::default(),
             node_call_callees: FxHashMap::default(),
