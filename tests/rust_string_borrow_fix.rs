@@ -19,7 +19,7 @@ const CELLS: &[(&str, &str, &str, &str)] = &[
     (
         "println_borrowed_args",
         "fn main() { let a = 3; let b = \"x\".to_string(); println!(\"{} {}\", &a, &&b); }",
-        "write an f-string",
+        "its format arguments go into an f-string",
         "3 x",
     ),
     (
