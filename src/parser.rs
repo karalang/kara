@@ -1422,7 +1422,16 @@ impl Parser {
                         && captured.chars().all(|c| c.is_alphanumeric() || c == '_');
                     out.push('{');
                     if captured.is_empty() {
-                        out.push_str(args.next()??);
+                        // `format!("{}", &w[..i])`: Rust borrows an argument
+                        // it only displays, and a hole displays the value it
+                        // names, so the `&` goes (a `&` kept in the hole was
+                        // a parse error with no fix).
+                        let arg = args.next()??;
+                        let arg = arg.trim_start_matches('&').trim_start();
+                        if arg.starts_with("mut ") || arg.starts_with("mut\t") {
+                            return None;
+                        }
+                        out.push_str(arg);
                     } else if is_ident {
                         out.push_str(captured);
                     } else {

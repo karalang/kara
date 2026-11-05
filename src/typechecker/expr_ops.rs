@@ -3524,6 +3524,42 @@ impl<'a> super::TypeChecker<'a> {
         to_string_fix(right)
     }
 
+    /// `s + ref t` with `s` a `String` and `t` a `Str`: the edits that drop
+    /// the `ref` and append `.to_string()` to `t`. Rust's `s + &t` reaches
+    /// this as `s + ref t` after `karac fix` rewrites the `&`.
+    fn str_concat_ref_operand_fix(
+        &self,
+        op: &BinOp,
+        left_ty: &Type,
+        right: &Expr,
+        right_ty: &Type,
+    ) -> Option<Vec<crate::resolver::TextEdit>> {
+        if !matches!(op, BinOp::Add) || !is_string_concat_operand(left_ty) || !is_str_view(right_ty)
+        {
+            return None;
+        }
+        let ExprKind::Unary {
+            op: UnaryOp::Ref,
+            operand,
+        } = &right.kind
+        else {
+            return None;
+        };
+        let append = to_string_fix(operand)?;
+        Some(vec![
+            crate::resolver::TextEdit {
+                offset: right.span.offset,
+                length: operand.span.offset.checked_sub(right.span.offset)?,
+                replacement: String::new(),
+            },
+            crate::resolver::TextEdit {
+                offset: append.span.offset,
+                length: 0,
+                replacement: append.replacement,
+            },
+        ])
+    }
+
     /// `s + t` with `s` a `Str` and `t` a `Str` or a `String`: the edit that
     /// appends `.to_string()` to `s`, so the sum starts from an owned
     /// `String` (B-2026-11-03-11).
@@ -4524,6 +4560,25 @@ impl<'a> super::TypeChecker<'a> {
                             left.span,
                             TypeErrorKind::InvalidBinaryOp,
                             fix,
+                        );
+                        return Type::Error;
+                    }
+                    if let Some(edits) =
+                        self.str_concat_ref_operand_fix(op, &left_ty, right, &right_ty)
+                    {
+                        // `s + ref w[i..]`, what `karac fix` writes for
+                        // Rust's `s + &w[i..]`: the borrow goes and the view
+                        // becomes an owned copy.
+                        self.error_fix_diffs
+                            .insert(SpanKey::from_span(&left.span), edits);
+                        self.type_error(
+                            format!(
+                                "{message}: a `Str` is a view and `+` appends an owned \
+                                 `String`, so Rust's `s + &t` is `s + t.to_string()` \
+                                 (design.md § Operator traits)"
+                            ),
+                            left.span,
+                            TypeErrorKind::InvalidBinaryOp,
                         );
                         return Type::Error;
                     }
