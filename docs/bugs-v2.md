@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 138 |
+| diagnostics | 139 |
 | false-positive | 116 |
 | perf | 98 |
 | missing-feature | 80 |
@@ -75,7 +75,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 205 |
+| typecheck | 206 |
 | mir | 120 |
 | mir-llvm | 117 |
 | cli | 61 |
@@ -126,6 +126,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-05-21 | 2026-11-05 | resolver | medium | In a package, every user operator-trait impl (`impl Add for V`, `impl Index[(i64, i64)] for Grid`, ...) is refused with E0108 `user-defined impl Add for V is not supported in 0.8; operator traits are stdlib-only`; the same file outside a package compiles and runs | — |
 | B-2026-11-05-22 | 2026-11-05 | ownership | medium | Definite assignment ignores diverging paths: `let x: i64; if k > 0 { x = k; } else { return 0; } x` and the same with `panic(..)` in the else or in a match arm are refused `use of uninitialized binding`, and so is a `loop` whose only `break` follows an assignment inside an `if` | — |
 | B-2026-11-05-23 | 2026-11-05 | typecheck+parser | low | §6 expressions roll-up: `if c { 5 }` in statement position is accepted; an unparenthesized struct literal in an `if` condition is accepted; `u == ()` is `comparing this type is not lowered yet`; RangeTo/RangeToInclusive/RangeFull are undefined type names; `ambiguous_not_comparison` never runs; a discarded tuple of Results warns nothing (item 8, multi-assign order, is CONFORMANT per the 43518f58d7 decision: values first) | — |
+| B-2026-11-05-24 | 2026-11-05 | typecheck | low | A use of a deprecated item through a module binding (`import util;` then `util.old()`) is warned with the caret on the call's closing paren, not on `old`; `import util.{old};` then `old()` puts it on `old` | — |
 
 ### Relocated
 
