@@ -14285,16 +14285,30 @@ impl<'l, 'a> Bx<'l, 'a> {
         }
         self.loop_body(label, body, step, exit, None)?;
         self.cur = step;
-        // `a..=b` stops at `b` before stepping, since `b` may be the type's
-        // largest value (`250u8..=255u8`).
+        // `a..=b` stops at the type's largest value before stepping, since
+        // `b` may be it (`250u8..=255u8`); below it, the header's `i <= b`
+        // ends the loop. Testing against the constant rather than `b` keeps
+        // `i <= b` the loop's own bound for LLVM, which then sees `i < b + 1`
+        // and drops the bounds check of a `v[i]` into a `b + 1` long vector
+        // (kata 338, B-2026-11-04-39).
         if let (true, Some(end_t)) = (inclusive, end_t) {
             let last = self.temp(bool_t);
+            let top = match self.tys().kind(t) {
+                super::ty::TyKind::Int(it) => {
+                    let bits = it.bits() - u32::from(it.signed());
+                    Some(Operand::Const(Const {
+                        ty: t,
+                        kind: ConstKind::Scalar(u128::MAX >> (128 - bits)),
+                    }))
+                }
+                _ => None,
+            };
             self.assign(
                 last,
                 Rvalue::BinaryOp(
                     BinOp::Eq,
                     Operand::Copy(Place::local(i)),
-                    Operand::Copy(Place::local(end_t)),
+                    top.unwrap_or(Operand::Copy(Place::local(end_t))),
                 ),
             );
             let bump = self.b.new_block();

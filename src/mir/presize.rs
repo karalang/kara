@@ -196,9 +196,13 @@ fn mentions_only_reads(body: &Body, b: usize, v: Local, push_ok: bool) -> bool {
 }
 
 /// Whether block `b` leaves the loop exactly when `i == bound`: it ends in
-/// `switchInt(c) -> [0: stay, otherwise: out]` with `c = Eq(copy i, bound)`.
+/// `switchInt(c) -> [0: stay, otherwise: out]` with `c = Eq(copy i, bound)`,
+/// or `c = Eq(copy i, MAX)` with `MAX` the largest value of `i`'s type, which
+/// the guard `i <= bound` makes the same test (an inclusive range `for`
+/// steps that way, B-2026-11-04-39).
 fn leaves_at_bound(
     body: &Body,
+    tys: &TyInterner,
     b: usize,
     i: Local,
     bound: &Operand,
@@ -223,8 +227,13 @@ fn leaves_at_bound(
         _ => None,
     });
     let iv = Operand::Copy(Place::local(i));
+    let top = match tys.kind(body.local(i).ty) {
+        TyKind::Int(it) => Some(u128::MAX >> (128 - it.bits() + u32::from(it.signed()))),
+        _ => None,
+    };
+    let at_top = |o: &Operand| matches!(o, Operand::Const(Const { kind: ConstKind::Scalar(v), .. }) if Some(*v) == top);
     matches!(cmp, Some(Rvalue::BinaryOp(BinOp::Eq, x, y))
-        if (*x == iv && y == bound) || (x == bound && *y == iv))
+        if (*x == iv && (y == bound || at_top(y))) || ((x == bound || at_top(x)) && *y == iv))
 }
 
 /// `l` when it holds at `Vec.new()` (block `nb`'s call) the value it holds
@@ -474,7 +483,7 @@ fn plan(
         for s in body.blocks[b].terminator.kind.successors() {
             let s = s.index();
             if !in_loop(s) && !(b == g && s == exit.index()) && !is_abort(s) {
-                if op != BinOp::Le || !leaves_at_bound(body, b, i, &bound, &in_loop) {
+                if op != BinOp::Le || !leaves_at_bound(body, tys, b, i, &bound, &in_loop) {
                     return out;
                 }
                 last_exits.push(b);

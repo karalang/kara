@@ -221,6 +221,10 @@ accepted by 0.8.0 are now refused, each with a fix-it.
   carry an 8-byte count header (B-2026-11-01-24). String building, integer
   formatting and `Vec` fills presize (B-2026-11-02-4, -6, -9, -11;
   B-2026-11-01-21; B-2026-10-31-42).
+- A `for i in a..=b` loop now stops on its header's `i <= b`, and steps
+  unless `i` is its type's largest value. Before, the loop also tested
+  `i == b` before each step. LLVM can now see that `v[i]` stays inside a
+  `b + 1` long vector, so it drops that bounds check (B-2026-11-04-39).
 
 ---
 
