@@ -85,6 +85,8 @@ MAC = platform.system() == "Darwin"
 #  base:     default MIR against a fixed baseline the row gives
 #  seqfix:   seq MIR against the row's own figure before its fix (a source
 #            legacy cannot compile); within when at most half of it
+#  rust:F    seq MIR against the kata's Rust mirror bench/F, built with
+#            rustc -O (a source legacy cannot compile, measured against Rust)
 ROWS = [
     ("B-2026-10-31-37", "1-100/38-count-and-say", "count_and_say.kara", "pair", "cycles", ""),
     ("B-2026-11-01-17", "1-100/71-simplify-path", "simplify.kara", "threads:2:1", "wall", "2 workers vs 1"),
@@ -111,6 +113,11 @@ ROWS = [
     ("B-2026-11-04-31", "301-400/332-reconstruct-itinerary", "reconstruct_itinerary.kara", "seqfix:319800", "size", "fixed 5984ed3080"),
     ("B-2026-11-04-31", "301-400/336-palindrome-pairs", "palindrome_pairs.kara", "seqfix:336320", "size", "fixed 5984ed3080"),
     ("B-2026-11-04-31", "301-400/394-decode-string", "decode_string.kara", "pair", "size", "fixed 5984ed3080"),
+    # -32's bar is the kata's own Rust mirror (`rust:<file>`, rustc -O), as
+    # legacy dd86 refuses 297's source; at kara-katas d6d1a5e8e or later,
+    # where the Kara arm borrows its tokens as the mirror does.
+    ("B-2026-11-04-32", "201-300/297-serialize-and-deserialize-binary-tree", "treecodec.kara", "rust:treecodec.rs", "rss", "x86: 31.8 vs 25.7 MiB"),
+    ("B-2026-11-04-32", "201-300/297-serialize-and-deserialize-binary-tree", "treecodec.kara", "rust:treecodec.rs", "wall", "x86: Rust's time"),
     ("B-2026-11-04-38", "3601-3700/3629-minimum-jumps-to-reach-end-via-prime-teleportation", "bfs_sieve.kara", "pair", "rss", "fixed d273d89f37"),
     ("B-2026-11-04-39", "301-400/337-house-robber-iii", "house_robber_iii.kara", "pair", "instructions", "x86 1.32x -> 1.04x"),
     ("B-2026-11-04-39", "301-400/333-largest-bst-subtree", "largest_bst.kara", "pair", "instructions", "x86 1.12x -> 1.05x"),
@@ -236,6 +243,16 @@ for rid, kdir, srcname, kind, metric, note in ROWS:
         ea, eb = build(KARAC, src, False), build(LEGACY, src, False)
         if ea and eb:
             a, b = measure(ea, {}), measure(eb, {})
+    elif kind.startswith("rust:"):
+        # The kata's Rust mirror, built with rustc -O, is the bar.
+        rs = os.path.join(os.path.dirname(src), kind.split(":", 1)[1])
+        er = os.path.join(OUT, os.path.basename(rs)[:-3] + "_rust")
+        r = subprocess.run(["rustc", "-O", "-o", er, rs], capture_output=True, text=True)
+        e = build(KARAC, src, True)
+        if r.returncode != 0:
+            log(f"   rustc failed: {rs}\n{r.stderr[-600:]}")
+        elif e:
+            a, b = measure(e, {}), measure(er, {})
     elif kind.startswith("seqfix:"):
         e = build(KARAC, src, True)
         if e:
