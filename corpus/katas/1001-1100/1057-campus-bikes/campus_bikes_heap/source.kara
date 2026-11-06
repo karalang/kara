@@ -23,8 +23,7 @@ fn assign_bikes(workers: Vec[(i64, i64)], bikes: Vec[(i64, i64)]) -> Vec[i64] {
         })
         .collect();
     let mut next = Vec.filled(n, 0usize);
-    // The element type is written by hand: kara B-2026-11-06-7.
-    let mut heap: PriorityQueue[(i64, i64, i64)] = PriorityQueue.new();
+    let mut heap = PriorityQueue.new();
     for i in 0..n {
         let (d, j) = prefs[i][0];
         heap.push((d, i, j));
