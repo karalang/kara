@@ -1,0 +1,362 @@
+// LeetCode #1057: Campus Bikes -- the differential.
+//
+// The five arms against the statement read literally, on 3000 campuses,
+// with seven properties:
+//
+// P1  the answer is the statement read literally
+// P2  every worker gets a bike, and no two the same one
+// P3  no worker and bike would both rather have each other: a worker whose
+//     pair with a bike comes before the pair it was given finds that bike
+//     ridden by a worker whose pair with it comes earlier still
+// P4  the campus turned a quarter round, or moved, leaves the answer
+// P5  a bike nobody rides taken away leaves everyone's bike
+// P6  the worker whose pair is chosen last, taken away with its bike,
+//     leaves everyone else's bike
+// P7  each arm agrees with at least two of the other four
+//
+// A pair comes before another when it is nearer, or as near with a smaller
+// worker, or the same worker and a smaller bike: the statement's order.
+
+// ---- campus_bikes.kara: the ★ arm: the pairs bucketed by distance
+fn star_arm(workers: ref Vec[(i64, i64)], bikes: ref Vec[(i64, i64)]) -> Vec[i64] {
+    let mut buckets: Vec[Vec[(i64, i64)]] = Vec.filled(2000, Vec.new());
+    for (w, (wx, wy)) in workers.iter().enumerate() {
+        for (b, (bx, by)) in bikes.iter().enumerate() {
+            let d = (wx - bx).abs() + (wy - by).abs();
+            buckets[d].push((w, b));
+        }
+    }
+    let mut bike_of = Vec.filled(workers.len(), -1);
+    let mut taken = Vec.filled(bikes.len(), false);
+    let mut left = workers.len();
+    for bucket in buckets.iter() {
+        for (w, b) in bucket.iter() {
+            if left > 0 and bike_of[w] < 0 and not taken[b] {
+                bike_of[w] = b;
+                taken[b] = true;
+                left -= 1;
+            }
+        }
+    }
+    bike_of
+}
+
+// ---- campus_bikes_sort.kara: every pair sorted
+fn sort_arm(workers: Vec[(i64, i64)], bikes: Vec[(i64, i64)]) -> Vec[i64] {
+    let mut pairs: Vec[(i64, i64, i64)] = Vec.with_capacity(workers.len() * bikes.len());
+    for (i, w) in workers.iter().enumerate() {
+        for (j, b) in bikes.iter().enumerate() {
+            pairs.push(((w.0 - b.0).abs() + (w.1 - b.1).abs(), i, j));
+        }
+    }
+    pairs.sort();
+    let mut bike_of = Vec.filled(workers.len(), -1);
+    let mut used = Vec.filled(bikes.len(), false);
+    let mut done = 0;
+    for (_, i, j) in ref pairs {
+        if bike_of[i] == -1 and not used[j] {
+            bike_of[i] = j;
+            used[j] = true;
+            done += 1;
+            if done == workers.len() {
+                break;
+            }
+        }
+    }
+    bike_of
+}
+
+// ---- campus_bikes_heap.kara: each worker's bikes in order, and a heap
+fn heap_arm(workers: Vec[(i64, i64)], bikes: Vec[(i64, i64)]) -> Vec[i64] {
+    let n = workers.len();
+    let prefs: Vec[Vec[(i64, i64)]] = workers
+        .iter()
+        .map(|w| {
+            let mut v: Vec[(i64, i64)] = bikes
+                .iter()
+                .enumerate()
+                .map(|(j, b)| ((w.0 - b.0).abs() + (w.1 - b.1).abs(), j))
+                .collect();
+            v.sort();
+            v
+        })
+        .collect();
+    let mut next = Vec.filled(n, 0);
+    let mut heap: PriorityQueue[(i64, i64, i64)] = PriorityQueue.new();
+    for i in 0..n {
+        let (d, j) = prefs[i][0];
+        heap.push((d, i, j));
+    }
+    let mut bike_of = Vec.filled(n, -1);
+    let mut used = Vec.filled(bikes.len(), false);
+    while let Some((_, i, j)) = heap.pop() {
+        if not used[j] {
+            used[j] = true;
+            bike_of[i] = j;
+        } else {
+            next[i] += 1;
+            let (d, k) = prefs[i][next[i]];
+            heap.push((d, i, k));
+        }
+    }
+    bike_of
+}
+
+// ---- campus_bikes_iter.kara: `flat_map`, `sort_by_key` and `for_each`
+fn iter_arm(workers: Vec[(i64, i64)], bikes: Vec[(i64, i64)]) -> Vec[i64] {
+    let mut pairs: Vec[(i64, i64, i64)] = workers
+        .iter()
+        .enumerate()
+        .flat_map(|(i, w)| {
+            bikes
+                .iter()
+                .enumerate()
+                .map(|(j, b)| ((w.0 - b.0).abs() + (w.1 - b.1).abs(), i, j))
+        })
+        .collect();
+    pairs.sort_by_key(|(d, i, j)| (d, i, j));
+    let mut bike_of = Vec.filled(workers.len(), -1);
+    let mut used = Vec.filled(bikes.len(), false);
+    pairs.iter().for_each(|(_, i, j)| {
+        if bike_of[i] < 0 and not used[j] {
+            bike_of[i] = j;
+            used[j] = true;
+        }
+    });
+    bike_of
+}
+
+// ---- campus_bikes_map.kara: the pairs grouped in a sorted map
+fn map_arm(workers: Vec[(i64, i64)], bikes: Vec[(i64, i64)]) -> Vec[i64] {
+    let mut by_distance: SortedMap[i64, Vec[(i64, i64)]] = SortedMap.new();
+    for (i, w) in workers.iter().enumerate() {
+        for (j, b) in bikes.iter().enumerate() {
+            let d = (w.0 - b.0).abs() + (w.1 - b.1).abs();
+            by_distance.entry(d).or_insert(Vec.new()).push((i, j));
+        }
+    }
+    let mut bike_of = Vec.filled(workers.len(), -1);
+    let mut used = Vec.filled(bikes.len(), false);
+    for pairs in by_distance.values() {
+        for (i, j) in pairs {
+            if bike_of[i] < 0 and not used[j] {
+                bike_of[i] = j;
+                used[j] = true;
+            }
+        }
+    }
+    bike_of
+}
+
+// ---- the statement read literally
+
+fn distance(p: (i64, i64), q: (i64, i64)) -> i64 {
+    (p.0 - q.0).abs() + (p.1 - q.1).abs()
+}
+
+// Where the statement's order puts the pair of worker `w` and bike `b`.
+fn key(workers: ref Vec[(i64, i64)], bikes: ref Vec[(i64, i64)], w: i64, b: i64) -> (i64, i64, i64) {
+    (distance(workers[w], bikes[b]), w, b)
+}
+
+// Until every worker has a bike: of every free worker and free bike, the
+// pair that comes first, which is the worker's.
+fn read_literally(workers: ref Vec[(i64, i64)], bikes: ref Vec[(i64, i64)]) -> Vec[i64] {
+    let mut bike_of = Vec.filled(workers.len(), -1);
+    let mut taken = Vec.filled(bikes.len(), false);
+    for _ in 0..workers.len() {
+        let mut best: Option[(i64, i64, i64)] = None;
+        for w in 0..workers.len() {
+            for b in 0..bikes.len() {
+                if bike_of[w] < 0 and not taken[b] {
+                    let k = key(workers, bikes, w, b);
+                    if best.is_none() or k < best.unwrap() {
+                        best = Some(k);
+                    }
+                }
+            }
+        }
+        let (_, w, b) = best.unwrap();
+        bike_of[w] = b;
+        taken[b] = true;
+    }
+    bike_of
+}
+
+fn arm(a: i64, workers: ref Vec[(i64, i64)], bikes: ref Vec[(i64, i64)]) -> Vec[i64] {
+    match a {
+        0 => star_arm(workers, bikes),
+        1 => sort_arm(workers, bikes),
+        2 => heap_arm(workers, bikes),
+        3 => iter_arm(workers, bikes),
+        _ => map_arm(workers, bikes),
+    }
+}
+
+// ---- the harness
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_places(count: i64, side: i64, seed: mut ref i64) -> Vec[(i64, i64)] {
+    let mut places: Vec[(i64, i64)] = Vec.new();
+    for _ in 0..count {
+        let x = next_random(mut seed) % side;
+        let y = next_random(mut seed) % side;
+        places.push((x, y));
+    }
+    places
+}
+
+// The places turned a quarter round on the 1000 by 1000 campus.
+fn turned(places: ref Vec[(i64, i64)]) -> Vec[(i64, i64)] {
+    places.iter().map(|(x, y)| (999 - y, x)).collect()
+}
+
+// The places moved by `dx` and `dy`.
+fn moved(places: ref Vec[(i64, i64)], dx: i64, dy: i64) -> Vec[(i64, i64)] {
+    places.iter().map(|(x, y)| (x + dx, y + dy)).collect()
+}
+
+// `places` without the one at `at`.
+fn without(places: ref Vec[(i64, i64)], at: i64) -> Vec[(i64, i64)] {
+    let mut rest = places.clone();
+    rest.remove(at);
+    rest
+}
+
+// A bike's place in the list once the bike at `gone` is taken away.
+fn renumbered(b: i64, gone: i64) -> i64 {
+    if b > gone { b - 1 } else { b }
+}
+
+struct Tally {
+    cases: i64,
+    checks: i64,
+    failures: i64,
+    check: i64,
+    // failures by property, P1 to P7 at 1 to 7
+    by: Vec[i64],
+}
+
+fn expect(t: mut ref Tally, property: i64, ok: bool, what: String) {
+    t.checks += 1;
+    if not ok {
+        t.failures += 1;
+        t.by[property] += 1;
+        if t.failures <= 10 {
+            println(f"FAIL {what}");
+        }
+    }
+}
+
+// Whether `answer` gives every worker a bike, none twice.
+fn assigns_all(answer: ref Vec[i64], workers: i64, bikes: i64) -> bool {
+    let mut seen = Vec.filled(bikes, false);
+    if answer.len() != workers {
+        return false;
+    }
+    for b in answer.iter() {
+        if b < 0 or b >= bikes or seen[b] {
+            return false;
+        }
+        seen[b] = true;
+    }
+    true
+}
+
+// A worker and a bike that would both rather have each other, if any.
+fn blocking_pair(workers: ref Vec[(i64, i64)], bikes: ref Vec[(i64, i64)], answer: ref Vec[i64]) -> Option[(i64, i64)] {
+    let mut rider = Vec.filled(bikes.len(), -1);
+    for (w, b) in answer.iter().enumerate() {
+        rider[b] = w;
+    }
+    for w in 0..workers.len() {
+        let own = key(workers, bikes, w, answer[w]);
+        for b in 0..bikes.len() {
+            let k = key(workers, bikes, w, b);
+            if k < own and (rider[b] < 0 or k < key(workers, bikes, rider[b], b)) {
+                return Some((w, b));
+            }
+        }
+    }
+    None
+}
+
+// Every check on one campus.
+fn check_case(t: mut ref Tally, workers: ref Vec[(i64, i64)], bikes: ref Vec[(i64, i64)]) {
+    let n = workers.len();
+    let m = bikes.len();
+    let answers: Vec[Vec[i64]] = (0..5).map(|a| arm(a, workers, bikes)).collect();
+    let want = read_literally(workers, bikes);
+    // the farthest any place lies along x and along y
+    let far_x = workers.iter().chain(bikes.iter()).map(|p| p.0).max().unwrap();
+    let far_y = workers.iter().chain(bikes.iter()).map(|p| p.1).max().unwrap();
+    for a in 0..5 {
+        let answer = ref answers[a];
+        let what = f"arm {a}, {workers} {bikes} -> {answer}";
+        expect(mut t, 1, answer == want, f"P1 {what}, read literally {want}");
+        let valid = assigns_all(answer, n, m);
+        expect(mut t, 2, valid, f"P2 {what}: not every worker a bike of its own");
+        if not valid {
+            continue;
+        }
+        let block = blocking_pair(workers, bikes, answer);
+        expect(mut t, 3, block.is_none(), f"P3 {what}: {block} would rather");
+        let quarter = arm(a, turned(workers), turned(bikes));
+        expect(mut t, 4, quarter == answer, f"P4 {what}: turned -> {quarter}");
+        let (dx, dy) = (999 - far_x, (999 - far_y) / 2);
+        let shift = arm(a, moved(workers, dx, dy), moved(bikes, dx, dy));
+        expect(mut t, 4, shift == answer, f"P4 {what}: moved by {dx}, {dy} -> {shift}");
+        if m > n {
+            // the last bike nobody rides
+            let gone = (0..m).filter(|b| not answer.contains(b)).max().unwrap();
+            let fewer = arm(a, workers, without(bikes, gone));
+            let kept: Vec[i64] = answer.iter().map(|b| renumbered(b, gone)).collect();
+            expect(mut t, 5, fewer == kept, f"P5 {what}: bike {gone} taken away -> {fewer}");
+        }
+        if n > 1 {
+            let last = (0..n).max_by_key(|w| key(workers, bikes, w, answer[w])).unwrap();
+            let gone = answer[last];
+            let rest = arm(a, without(workers, last), without(bikes, gone));
+            let mut kept: Vec[i64] = answer.iter().map(|b| renumbered(b, gone)).collect();
+            kept.remove(last);
+            expect(mut t, 6, rest == kept, f"P6 {what}: worker {last} and bike {gone} taken away -> {rest}");
+        }
+        let agree = (0..5).filter(|o| o != a and answers[o] == answer).count();
+        expect(mut t, 7, agree >= 2, f"P7 {what}: agrees with {agree}");
+    }
+    t.cases += 1;
+    for b in want.iter() {
+        t.check = (t.check * 131 + b + 1) % 1000000007;
+    }
+}
+
+fn main() {
+    let mut t = Tally { cases: 0, checks: 0, failures: 0, check: 0, by: Vec.filled(8, 0) };
+    // 3000 campuses: 2000 of 1 to 6 workers on 4 by 4, where distances tie
+    // often, and 1000 of 1 to 20 on 30 by 30 or 1000 by 1000; each with up
+    // to three more bikes than workers
+    let mut seed = 10571;
+    for i in 0..3000 {
+        let (most, side) = if i < 2000 {
+            (6, 4)
+        } else if i % 2 == 0 {
+            (20, 30)
+        } else {
+            (20, 1000)
+        };
+        let n = next_random(mut seed) % most + 1;
+        let m = n + next_random(mut seed) % 4;
+        let workers = random_places(n, side, mut seed);
+        let bikes = random_places(m, side, mut seed);
+        check_case(mut t, workers, bikes);
+    }
+    println(f"{t.cases} campuses: checksum {t.check}, {t.checks} checks over 5 arms: {t.failures} failures");
+    if t.failures > 0 {
+        let parts: Vec[String] = (1..8).filter(|p| t.by[p] > 0).map(|p| f"P{p} {t.by[p]}").collect();
+        println(f"failures by property: {parts.join(", ")}");
+    }
+}

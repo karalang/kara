@@ -1,0 +1,11 @@
+source = "kara-katas/leetcode/1001-1100/1057-campus-bikes/bench/campus_bikes.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["bench"]
+class = "e"
+expected_from = "mirror"
+note = "mirror: the C, Rust, Go and Python bench programs print this line (kara-katas 1057 bench/); there is no legacy record (the legacy compiler went at M3) e-spec: legacy differs from the drop model; v2 matches it"
+bucket = "e-spec"
+classified_with = "a3df76e55"
+extracted_src = "f44890dc"

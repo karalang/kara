@@ -1,0 +1,110 @@
+// LeetCode #1057: Campus Bikes -- every pair sorted.
+//
+// Every worker-bike pair as `(distance, worker, bike)`, sorted: the order of
+// the tuples is the statement's order of choice, nearest first and then by
+// worker and by bike. Walking the sorted pairs, each one whose worker and
+// bike are both free is an assignment. O(n m log(n m)).
+
+fn assign_bikes(workers: Vec[(i64, i64)], bikes: Vec[(i64, i64)]) -> Vec[i64] {
+    let mut pairs: Vec[(i64, i64, i64)] = Vec.with_capacity(workers.len() * bikes.len());
+    for (i, w) in workers.iter().enumerate() {
+        for (j, b) in bikes.iter().enumerate() {
+            pairs.push(((w.0 - b.0).abs() + (w.1 - b.1).abs(), i, j));
+        }
+    }
+    pairs.sort();
+    let mut bike_of = Vec.filled(workers.len(), -1);
+    let mut used = Vec.filled(bikes.len(), false);
+    let mut done = 0;
+    for (_, i, j) in ref pairs {
+        if bike_of[i] == -1 and not used[j] {
+            bike_of[i] = j;
+            used[j] = true;
+            done += 1;
+            if done == workers.len() {
+                break;
+            }
+        }
+    }
+    bike_of
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `count` places on a square of `side`.
+fn random_places(count: i64, side: i64, seed: mut ref i64) -> Vec[(i64, i64)] {
+    let mut places: Vec[(i64, i64)] = Vec.new();
+    for _ in 0..count {
+        let x = next_random(mut seed) % side;
+        let y = next_random(mut seed) % side;
+        places.push((x, y));
+    }
+    places
+}
+
+// `count` random campuses of 1 to `most` workers, each with up to three
+// more bikes than workers, on a square of `side`: the total distance ridden
+// and a checksum of every answer.
+fn trial(count: i64, most: i64, side: i64, seed: mut ref i64) -> (i64, i64) {
+    let mut total = 0;
+    let mut check = 0;
+    for _ in 0..count {
+        let n = next_random(mut seed) % most + 1;
+        let m = n + next_random(mut seed) % 4;
+        let workers = random_places(n, side, mut seed);
+        let bikes = random_places(m, side, mut seed);
+        let answer = assign_bikes(workers, bikes);
+        for (w, b) in answer.iter().enumerate() {
+            total += (workers[w].0 - bikes[b].0).abs() + (workers[w].1 - bikes[b].1).abs();
+            check = (check * 131 + b + 1) % 1000000007;
+        }
+    }
+    (total, check)
+}
+
+fn main() {
+    // LeetCode's two examples, then a few more
+    let examples: Vec[(Vec[(i64, i64)], Vec[(i64, i64)])] = [
+        ([(0, 0), (2, 1)], [(1, 2), (3, 3)]),
+        ([(0, 0), (1, 1), (2, 0)], [(1, 0), (2, 2), (2, 1)]),
+        ([(0, 0)], [(5, 5)]),
+        ([(0, 0), (0, 0)], [(1, 1), (1, 1)]),
+        ([(0, 0), (4, 0)], [(2, 0), (9, 9)]),
+        ([(3, 3), (0, 0)], [(3, 2), (0, 1), (3, 4)]),
+        ([(1, 1), (2, 2), (3, 3)], [(3, 3), (2, 2), (1, 1)]),
+        ([(0, 0), (999, 999)], [(999, 999), (0, 0), (500, 500)]),
+    ];
+    for (workers, bikes) in examples.iter() {
+        println(f"{workers} {bikes} -> {assign_bikes(workers, bikes)}");
+    }
+    let mut seed = 1057;
+    let (total, check) = trial(3000, 8, 6, mut seed);
+    println(f"3000 campuses of 1 to 8 workers on 6 by 6: total {total}, checksum {check}");
+    let (total, check) = trial(20, 200, 1000, mut seed);
+    println(f"20 campuses of 1 to 200 workers on 1000 by 1000: total {total}, checksum {check}");
+    // the largest: 1000 workers and 1000 bikes
+    let workers = random_places(1000, 1000, mut seed);
+    let bikes = random_places(1000, 1000, mut seed);
+    let answer = assign_bikes(workers, bikes);
+    let mut ridden = 0;
+    let mut check = 0;
+    for (w, b) in answer.iter().enumerate() {
+        ridden += (workers[w].0 - bikes[b].0).abs() + (workers[w].1 - bikes[b].1).abs();
+        check = (check * 131 + b + 1) % 1000000007;
+    }
+    println(f"1000 workers and 1000 bikes: {ridden} ridden, checksum {check}, first {answer[0]}, last {answer[999]}");
+    // 200 workers at one place: the bikes go out by distance, then in order
+    let workers = Vec.filled(200, (500, 500));
+    let bikes = random_places(1000, 1000, mut seed);
+    let answer = assign_bikes(workers, bikes);
+    let mut check = 0;
+    for b in answer.iter() {
+        check = (check * 131 + b + 1) % 1000000007;
+    }
+    println(f"200 workers at one place, 1000 bikes: checksum {check}, first {answer[0]}, last {answer[199]}");
+}
