@@ -357,6 +357,12 @@ impl Amalgam {
                 for (_, child) in map.iter_mut() {
                     self.remap_json_in(name, here.as_deref(), child);
                 }
+                // A fix's hint diff was taken from the combined text, where a
+                // module qualifier is blanked; its edits now name bytes of the
+                // file itself, so the diff is taken again from that file.
+                if map.contains_key("severity") {
+                    self.rehint(map);
+                }
             }
             serde_json::Value::Array(items) => {
                 for item in items {
@@ -364,6 +370,29 @@ impl Amalgam {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// Re-derive a remapped diagnostic's hint diffs from its own file.
+    fn rehint(&self, map: &mut serde_json::Map<String, serde_json::Value>) {
+        let Some(own) = map
+            .get("file")
+            .and_then(|f| f.as_str())
+            .and_then(|f| self.originals.get(f))
+        else {
+            return;
+        };
+        let Some(hints) = map.get_mut("hints").and_then(|h| h.as_array_mut()) else {
+            return;
+        };
+        let mut had = false;
+        for h in hints.iter_mut() {
+            if let Some(h) = h.as_object_mut() {
+                had |= h.remove("diff").is_some();
+            }
+        }
+        if had {
+            super::diag_json::add_hint_diffs(map, own, "");
         }
     }
 

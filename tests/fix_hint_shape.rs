@@ -146,3 +146,26 @@ fn a_package_fix_hint_names_its_own_file_and_line() {
         "{d}"
     );
 }
+
+#[test]
+fn a_package_fix_hint_keeps_the_module_qualifier_on_its_line() {
+    // The package is checked as one combined text in which `util.` is
+    // blanked; the diff is the user's own line, qualifier and all.
+    let dir = scratch("qualified");
+    std::fs::write(dir.join("kara.toml"), "[package]\nname = \"app\"\n").unwrap();
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(
+        dir.join("src/util.kara"),
+        "pub fn bump(v: mut ref Vec[i64]) { v.push(1); }\n",
+    )
+    .unwrap();
+    let main = "import util;\nfn main() {\n    let mut v: Vec[i64] = Vec.new();\n    v.push(0);\n    util.bump(v);\n    println(v.len());\n}\n";
+    std::fs::write(dir.join("src/main.kara"), main).unwrap();
+    let d = the(&diagnostics(&dir, "--output=json", &[]), "E0218");
+    assert_eq!(d["replacement"]["offset"], main.find("v);").unwrap(), "{d}");
+    assert_eq!(
+        d["hints"][0]["diff"],
+        serde_json::json!({"file": "src/main.kara", "line": 5, "old": "    util.bump(v);", "new": "    util.bump(mut v);"}),
+        "{d}"
+    );
+}

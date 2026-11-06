@@ -1330,7 +1330,33 @@ pub(super) fn with_hint_diffs(entry: &str, source: &str, file: &str) -> String {
     else {
         return entry.to_string();
     };
+    if add_hint_diffs(&mut map, source, file) {
+        serde_json::Value::Object(map).to_string()
+    } else {
+        entry.to_string()
+    }
+}
+
+/// [`with_hint_diffs`] on a parsed record: adds the diffs and says whether it
+/// added any. A fix with an edit in another file (an edit object carrying
+/// its own `file`) gets no diff, since `source` is the record's file only.
+pub(super) fn add_hint_diffs(
+    map: &mut serde_json::Map<String, serde_json::Value>,
+    source: &str,
+    file: &str,
+) -> bool {
+    let file = map
+        .get("file")
+        .and_then(|f| f.as_str())
+        .unwrap_or(file)
+        .to_string();
     let edit = |e: &serde_json::Value| -> Option<(usize, usize, String)> {
+        if e.get("file")
+            .and_then(|f| f.as_str())
+            .is_some_and(|f| f != file)
+        {
+            return None;
+        }
         Some((
             e["offset"].as_u64()? as usize,
             e["length"].as_u64()? as usize,
@@ -1343,22 +1369,17 @@ pub(super) fn with_hint_diffs(entry: &str, source: &str, file: &str) -> String {
     }
     if let Some(diff) = map.get("fix_diff").and_then(|d| d.as_array()) {
         let edits: Vec<_> = diff.iter().filter_map(edit).collect();
-        if !edits.is_empty() && !fixes.contains(&edits) {
+        if !edits.is_empty() && edits.len() == diff.len() && !fixes.contains(&edits) {
             fixes.push(edits);
         }
     }
-    let file = map
-        .get("file")
-        .and_then(|f| f.as_str())
-        .unwrap_or(file)
-        .to_string();
     let diffs: Vec<serde_json::Value> = fixes
         .iter()
         .filter_map(|edits| hint_diff(source, &file, edits))
         .filter_map(|d| serde_json::from_str(&d).ok())
         .collect();
     if diffs.is_empty() {
-        return entry.to_string();
+        return false;
     }
     let description = map
         .get("lint_name")
@@ -1370,7 +1391,7 @@ pub(super) fn with_hint_diffs(entry: &str, source: &str, file: &str) -> String {
         .entry("hints")
         .or_insert_with(|| serde_json::Value::Array(Vec::new()));
     let Some(hints) = hints.as_array_mut() else {
-        return entry.to_string();
+        return false;
     };
     for diff in diffs {
         // The record's own suggestion describes its fix: the first hint with
@@ -1387,7 +1408,7 @@ pub(super) fn with_hint_diffs(entry: &str, source: &str, file: &str) -> String {
             }
         }
     }
-    serde_json::Value::Object(map).to_string()
+    true
 }
 
 pub(super) struct DiagnosticJson {
