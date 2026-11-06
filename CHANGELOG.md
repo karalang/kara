@@ -175,6 +175,11 @@ accepted by 0.8.0 are now refused, each with a fix-it.
   with "cannot infer type parameter 'T'". One nothing in the body solves is
   still refused, at the call, and the impl's bounds are checked against the
   type the later use fixed (design.md § Type inference, B-2026-11-06-7).
+- The same holds for a binding of `None` or `Ok(..)` (`let mut best = None;`
+  then `best = Some(x)`), for a call whose result is the bare parameter
+  (`let x = make(); let y: i64 = x;`), and for a call inside a generic
+  function whose own parameter has the same name (`Bag.new()` inside
+  `fn g[T]`, which read the Bag's `T` as `g`'s) (B-2026-11-06-11).
 - **`let` can destructure a `shared` value.** `let H { xs, n } = h` on a
   `shared struct H` was refused with ``struct pattern `H` used but type is
   `H` `` though `match` accepted it. It now binds a non-`Copy` part as a `ref`

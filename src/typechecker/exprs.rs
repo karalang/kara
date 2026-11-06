@@ -5211,10 +5211,10 @@ impl<'a> super::TypeChecker<'a> {
         // `fn empty[T]() -> Vec[T]`) stays a variable in the call's type, so
         // `heap.push(x)` can fix it, and is judged once the whole program has
         // been checked (`report_unsolved_call_vars`). A rigid parameter is the
-        // caller's own and is not this call's to solve, and one spelled as a
-        // parameter in scope keeps that name, as before: a library default
-        // body copied into `impl[K, V] Iterator for MapValues[K, V]` reads
-        // `self.next()`'s unsolved `V` as the impl's own.
+        // caller's own and is not this call's to solve. A callee parameter
+        // spelled like one of the caller's is still the callee's: `Bag.new()`
+        // inside `fn g[T]` is a `Bag[?]`, not a `Bag[T]` (B-2026-11-06-11).
+
         // A parameter that is the whole result (`collect`'s `C`) keeps the
         // context-recorded path it has (`record_declared_type_for_polymorphic_rhs`).
         let bare_return = matches!(sub_ret, Type::TypeVar(_));
@@ -5225,7 +5225,15 @@ impl<'a> super::TypeChecker<'a> {
                     && !self.env.substitutions.contains_key(*id)
                     && name_to_id.get(*name) == Some(*id)
                     && !rigid.contains(*name)
-                    && !self.enclosing_bounds.contains_key(*name)
+                    // Inside an impl, `self` is the bare target (`Map`, not
+                    // `Map[K, V]`), so `self.drain_entries()` leaves the
+                    // impl's own `K` and `V` unsolved: those keep naming the
+                    // impl's, as before. A call on a type path (`Bag.new()`)
+                    // has no receiver to bring them.
+                    && !(self.current_self_type.is_some()
+                        && self.call_bound_receiver_subs.is_some()
+                        && (self.enclosing_bounds.contains_key(*name)
+                            || self.names_current_impl_param(name)))
                     // An `impl Trait` receiver's `Self` is spelled as the
                     // trait (`IterMap[Iterator, F, U]`); it is not unsolved.
                     && !self.env.traits.contains_key(*name)
@@ -5264,6 +5272,12 @@ impl<'a> super::TypeChecker<'a> {
             &const_id_to_name,
         );
         let ret = self.resolve_assoc_projections(&ret);
+        // One spelled like a parameter in scope and still unsolved at the end
+        // names that parameter, as it did before.
+        let (aliased, late): (Vec<_>, Vec<_>) = late.into_iter().partition(|(_, n)| {
+            self.enclosing_bounds.contains_key(n) || self.names_current_impl_param(n)
+        });
+        self.aliased_call_vars.extend(aliased);
         if !late.is_empty() {
             self.unsolved_call_vars.push((*record_subs_for_span, late));
         }
@@ -5543,12 +5557,30 @@ impl<'a> super::TypeChecker<'a> {
     /// context has solved it. Only a concrete answer is checked, and a
     /// parameterized bound (`FromIterator[V]`) holds when ANY impl of the
     /// trait for the type takes those arguments (B-2026-10-15-2).
+    /// Whether `name` is a parameter of the generic impl being checked,
+    /// whose `self` is the bare target type.
+    fn names_current_impl_param(&self, name: &str) -> bool {
+        matches!(&self.current_impl_target, Some(Type::Named { args, .. })
+            if args.iter().any(|a| matches!(a, Type::TypeParam(n) if n == name)))
+    }
+
     /// B-2026-11-06-7: design.md § Type inference, "An unsolved variable is
     /// an error at the end of the body". A generic call's parameter that
     /// nothing at the call fixed is reported here, once the whole program has
     /// been checked, only if no later use solved it either.
     pub(super) fn report_unsolved_call_vars(&mut self) {
         self.report_deferred_receiver_bounds();
+        for (id, name) in std::mem::take(&mut self.aliased_call_vars) {
+            if let Type::TypeVar(end) = resolve_type_vars(
+                &Type::TypeVar(id),
+                &self.env.substitutions,
+                &HashMap::new(),
+                &self.env.const_substitutions,
+                &HashMap::new(),
+            ) {
+                self.env.substitutions.insert(end, Type::TypeParam(name));
+            }
+        }
         let no_consts: HashMap<super::types::ConstVarId, String> = HashMap::new();
         for (span, vars) in std::mem::take(&mut self.unsolved_call_vars) {
             let names: HashMap<TypeVarId, String> = vars.iter().cloned().collect();
@@ -5583,9 +5615,8 @@ impl<'a> super::TypeChecker<'a> {
                 .unwrap_or_default();
             self.type_error(
                 format!(
-                    "cannot infer type parameter '{name}'{of}, this call's result: nothing \
-                     in the body fixes it (design.md § Type inference); add a type \
-                     annotation to the binding"
+                    "cannot infer type parameter '{name}'{of}: nothing in the body fixes \
+                     it (design.md § Type inference); add a type annotation to the binding"
                 ),
                 span,
                 TypeErrorKind::CannotInferTypeParam,

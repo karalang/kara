@@ -3447,6 +3447,10 @@ pub struct TypeChecker<'a> {
     /// nothing at the call fixed, with those variables, judged at the end of
     /// `check` (`report_unsolved_call_vars`).
     pub(super) unsolved_call_vars: Vec<(Span, Vec<(types::TypeVarId, String)>)>,
+    /// B-2026-11-06-11: a generic call's unfixed parameters spelled like a
+    /// parameter in scope at the call; one still unsolved at the end names
+    /// that parameter.
+    pub(super) aliased_call_vars: Vec<(types::TypeVarId, String)>,
     /// B-2026-11-06-7: a method call whose receiver's type argument was
     /// still a variable, with the impl it resolved to, so the impl's bounds
     /// are checked once a later use has fixed it.
@@ -4123,6 +4127,7 @@ impl<'a> TypeChecker<'a> {
             call_bound_receiver_subs: None,
             call_rigid_params: Vec::new(),
             unsolved_call_vars: Vec::new(),
+            aliased_call_vars: Vec::new(),
             deferred_receiver_bounds: Vec::new(),
             call_borrowed_fn_params: Vec::new(),
             deferred_call_bounds: Vec::new(),

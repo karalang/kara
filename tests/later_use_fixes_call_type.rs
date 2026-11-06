@@ -63,3 +63,31 @@ fn an_impl_bound_is_checked_once_a_later_use_fixes_the_receiver() {
         "{text}"
     );
 }
+
+/// B-2026-11-06-11: the same for a binding of `None` / `Ok(..)`, a bare-`T`
+/// result, and a callee parameter spelled like the caller's own.
+#[test]
+fn an_option_a_bare_result_and_a_same_named_parameter_are_fixed_later() {
+    let src = format!(
+        "{BAG}fn make[T: Default]() -> T {{\n    T.default()\n}}\n\n\
+         fn g[T](x: T) {{\n    let mut b = Bag.new();\n    b.push(1);\n}}\n\n\
+         fn main() {{\n    let mut best = None;\n    best = Some(3);\n    \
+         let mut r = Ok(1);\n    r = Err(\"bad\");\n    \
+         let x = make();\n    let y: i64 = x;\n    g(y);\n}}\n"
+    );
+    let (ok, text) = check("option", &src);
+    assert!(ok, "{text}");
+}
+
+#[test]
+fn a_none_nothing_fixes_is_still_refused() {
+    let (ok, text) = check(
+        "none",
+        "fn main() {\n    let o = None;\n    println(1);\n}\n",
+    );
+    assert!(!ok, "{text}");
+    assert!(
+        text.contains(":2:13: cannot infer type parameter 'T' of `Option[T]`"),
+        "{text}"
+    );
+}

@@ -1,0 +1,9 @@
+source = "B-2026-11-06-11"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "inference", "generics", "option", "result"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md § Type inference: a generic call or a constructor whose parameters are unknown introduces a type variable that a later use in the body solves. `make()` is fixed to i64 by `let y: i64 = x` and gives i64's default 0; `None` passed to `show(Option[i64])` is -1; `found` is fixed by `found = Some(x)`, the first even of 1 3 4 6 is Some(4) and of 1 3 None; `best` becomes the last (index, length) with length > 1, (1, 2); `r = Ok(0)` is fixed to Result[i64, String] by `r = Err(..)` and y == 0 so it prints Err(zero); `lo = none_of()` is fixed to Option[f64] by `lo = Some(2.5)`; `Bag.new()` inside `fn count_in[T]` is the Bag's own `T`, fixed to i64 by the pushes, so 2; the same inside `impl[T] Holder[T]`, where `Bag.new()` is a `Bag[?]` and not a `Bag[T]`, so two pushes give 2."

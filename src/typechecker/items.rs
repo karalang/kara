@@ -6880,6 +6880,101 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// B-2026-11-06-11: an assignment to a binding whose type still holds a
+    /// variable (`best = Some(x)` after `let mut best = None;`) is the later
+    /// use that solves it. The value's own unbound parameters (`T` of
+    /// `Err("bad")`) are opened too, so the two unify; the value is then
+    /// checked against the solved slot as before.
+    fn solve_open_slot_from(&mut self, value: &Expr, slot: Type) -> Type {
+        let no_names: HashMap<super::types::TypeVarId, String> = HashMap::new();
+        let no_consts: HashMap<super::types::ConstVarId, String> = HashMap::new();
+        let resolve = |tc: &Self, t: &Type| {
+            super::inference::resolve_type_vars(
+                t,
+                &tc.env.substitutions,
+                &no_names,
+                &tc.env.const_substitutions,
+                &no_consts,
+            )
+        };
+        let slot = resolve(self, &slot);
+        if !super::exprs::contains_type_var(&slot) {
+            return slot;
+        }
+        let mark = (self.errors.len(), self.warnings.len());
+        let value_ty = self.infer_expr(value);
+        self.errors.truncate(mark.0);
+        self.warnings.truncate(mark.1);
+        if matches!(value_ty, Type::Error) {
+            return slot;
+        }
+        let (value_ty, _) = self.open_unbound_params(value_ty);
+        super::inference::unify_types(
+            &slot,
+            &value_ty,
+            &mut self.env.substitutions,
+            &mut self.env.const_substitutions,
+        );
+        resolve(self, &slot)
+    }
+
+    /// B-2026-11-06-11: design.md § Type inference — `let mut best = None;`
+    /// introduces a variable a later use solves (`best = Some(x)`). A type
+    /// parameter the initializer leaves unbound (`T` of `None`, of
+    /// `none_of()`, of `make()`) becomes a fresh variable in the binding's
+    /// type, judged once the program has been checked
+    /// (`report_unsolved_call_vars`). A pointer's pointee keeps its own
+    /// use-site check.
+    fn open_unsolved_let_params(&mut self, inferred: Type, value: &Expr) -> Type {
+        if matches!(inferred, Type::Error | Type::Pointer { .. }) {
+            return inferred;
+        }
+        let (ty, mut vars) = self.open_unbound_params(inferred);
+        if !vars.is_empty() {
+            vars.sort_by(|a, b| a.1.cmp(&b.1));
+            self.unsolved_call_vars.push((value.span, vars));
+            // The initializer's own node takes the opened type, so the type
+            // the body solves is what the call's arguments are read off
+            // (`resolved_node_tables`) and what `None` is built at.
+            if let Some((_, frame)) = self.node_types.get(&value.id).cloned() {
+                self.node_types.insert(value.id, (ty.clone(), frame));
+            }
+        }
+        ty
+    }
+
+    /// Each type parameter `ty` leaves unbound (not the enclosing item's,
+    /// not an `impl Trait`'s spelling) replaced by a fresh variable.
+    fn open_unbound_params(
+        &mut self,
+        mut ty: Type,
+    ) -> (Type, Vec<(super::types::TypeVarId, String)>) {
+        let in_scope: HashSet<String> = self
+            .enclosing_bounds
+            .keys()
+            .cloned()
+            .chain(["Self".to_string()])
+            .collect();
+        let mut vars = Vec::new();
+        loop {
+            let scope: HashSet<&str> = in_scope.iter().map(|s| s.as_str()).collect();
+            let Some(name) = find_unbound_type_param(&ty, &scope).map(|s| s.to_string()) else {
+                break;
+            };
+            if self.env.traits.contains_key(&name) || vars.iter().any(|(_, n)| n == &name) {
+                break;
+            }
+            let Type::TypeVar(id) = self.env.fresh_type_var() else {
+                break;
+            };
+            let subs: HashMap<String, SubstValue> =
+                std::iter::once((name.clone(), SubstValue::Type(Type::TypeVar(id)))).collect();
+            ty = substitute_type_params(&ty, &subs);
+            vars.push((id, name));
+        }
+        (ty, vars)
+    }
+
     fn check_unsolved_type_param(&mut self, inferred: &Type, span: &Span) {
         if matches!(inferred, Type::Error) {
             return;
@@ -9985,6 +10080,7 @@ impl<'a> super::TypeChecker<'a> {
                     if matches!(&value.kind, ExprKind::ArrayLiteral(items) if items.is_empty()) {
                         self.report_empty_list_literal(&value.span);
                     }
+                    let inferred = self.open_unsolved_let_params(inferred, value);
                     self.check_unsolved_type_param(&inferred, &value.span);
                     self.record_uninferrable_binding_origin(pattern, &inferred, value);
                     inferred
@@ -10556,6 +10652,7 @@ impl<'a> super::TypeChecker<'a> {
                     }
                     _ => target_ty.clone(),
                 };
+                let slot_ty = self.solve_open_slot_from(value, slot_ty);
                 self.check_expr(value, &slot_ty);
                 // `v[1..] = [5, 6]` writes elements through the range; it
                 // rebinds no slice (B-2026-10-21-36).

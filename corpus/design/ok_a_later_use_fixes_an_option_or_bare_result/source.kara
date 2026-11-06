@@ -1,0 +1,90 @@
+struct Bag[T] {
+    items: Vec[T],
+}
+
+impl[T] Bag[T] {
+    fn new() -> Bag[T] {
+        Bag { items: Vec.new() }
+    }
+
+    fn push(mut ref self, x: own T) {
+        self.items.push(x);
+    }
+
+    fn len(ref self) -> i64 {
+        self.items.len()
+    }
+}
+
+struct Holder[T] {
+    v: T,
+}
+
+impl[T] Holder[T] {
+    fn count(ref self) -> i64 {
+        let mut b = Bag.new();
+        b.push(7);
+        b.push(8);
+        b.len()
+    }
+}
+
+fn make[T: Default]() -> T {
+    T.default()
+}
+
+fn none_of[T]() -> Option[T] {
+    None
+}
+
+fn show(o: Option[i64]) -> i64 {
+    o ?? -1
+}
+
+fn first_even(v: ref Vec[i64]) -> Option[i64] {
+    let mut found = None;
+    for x in v {
+        if x % 2 == 0 and found.is_none() {
+            found = Some(x);
+        }
+    }
+    found
+}
+
+fn count_in[T](x: T) -> i64 {
+    let mut b = Bag.new();
+    b.push(1);
+    b.push(2);
+    b.len()
+}
+
+fn main() {
+    let x = make();
+    let y: i64 = x;
+    println(y);
+    let o = None;
+    println(show(o));
+    println(first_even([1, 3, 4, 6]));
+    println(first_even([1, 3]));
+    let mut best = None;
+    for (i, w) in ["a", "bb", "c"].iter().enumerate() {
+        if w.len() > 1 {
+            best = Some((i, w.len()));
+        }
+    }
+    match best {
+        Some((i, n)) => println(f"{i} {n}"),
+        None => println("none"),
+    }
+    let mut r = Ok(0);
+    if y == 0 {
+        r = Err(String.from("zero"));
+    }
+    println(r);
+    let mut lo = none_of();
+    lo = Some(2.5);
+    println(lo);
+    println(count_in("s"));
+    let h = Holder { v: "abc" };
+    println(h.count());
+}
