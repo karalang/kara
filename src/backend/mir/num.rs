@@ -230,33 +230,39 @@ impl<'ctx> Cx<'ctx, '_> {
             .const_int(k as u64 | if byte { 0x100 } else { 0 }, false);
         // The ASCII classes and case maps are range tests, computed in line
         // (B-2026-10-13-31); the Unicode ones are in line below 128 only.
-        let v = match self.ascii_char(method, c, byte)? {
-            Some((a, true)) => a,
-            Some((a, false)) => {
-                let here = self.builder.get_insert_block().ok_or("no block")?;
-                let f = self.cur_fn()?;
-                let wide = self.llcx.append_basic_block(f, "char.wide");
-                let done = self.llcx.append_basic_block(f, "char.done");
-                let ascii = self
-                    .builder
-                    .build_int_compare(IntPredicate::ULT, c, self.i64(128), "")
-                    .map_err(e)?;
-                self.builder
-                    .build_conditional_branch(ascii, done, wide)
-                    .map_err(e)?;
-                self.builder.position_at_end(wide);
-                let w = self.rt_int("char", &[op.into(), c.into(), r.into()], 64)?;
-                let wide_end = self.builder.get_insert_block().ok_or("no block")?;
-                self.builder.build_unconditional_branch(done).map_err(e)?;
-                self.builder.position_at_end(done);
-                let phi = self
-                    .builder
-                    .build_phi(self.llcx.i64_type(), "")
-                    .map_err(e)?;
-                phi.add_incoming(&[(&a, here), (&w, wide_end)]);
-                phi.as_basic_value().into_int_value()
+        // `to_digit` and `is_digit` of a char are in line for a radix in
+        // 2..=36 (kata 1058, B-2026-11-06-33).
+        let v = if radix && !byte {
+            self.digit_in_line(method, c, r, op)?
+        } else {
+            match self.ascii_char(method, c, byte)? {
+                Some((a, true)) => a,
+                Some((a, false)) => {
+                    let here = self.builder.get_insert_block().ok_or("no block")?;
+                    let f = self.cur_fn()?;
+                    let wide = self.llcx.append_basic_block(f, "char.wide");
+                    let done = self.llcx.append_basic_block(f, "char.done");
+                    let ascii = self
+                        .builder
+                        .build_int_compare(IntPredicate::ULT, c, self.i64(128), "")
+                        .map_err(e)?;
+                    self.builder
+                        .build_conditional_branch(ascii, done, wide)
+                        .map_err(e)?;
+                    self.builder.position_at_end(wide);
+                    let w = self.rt_int("char", &[op.into(), c.into(), r.into()], 64)?;
+                    let wide_end = self.builder.get_insert_block().ok_or("no block")?;
+                    self.builder.build_unconditional_branch(done).map_err(e)?;
+                    self.builder.position_at_end(done);
+                    let phi = self
+                        .builder
+                        .build_phi(self.llcx.i64_type(), "")
+                        .map_err(e)?;
+                    phi.add_incoming(&[(&a, here), (&w, wide_end)]);
+                    phi.as_basic_value().into_int_value()
+                }
+                None => self.rt_int("char", &[op.into(), c.into(), r.into()], 64)?,
             }
-            None => self.rt_int("char", &[op.into(), c.into(), r.into()], 64)?,
         };
         if radix {
             // The runtime set the panic's message for a radix outside 2..=36.
@@ -288,6 +294,69 @@ impl<'ctx> Cx<'ctx, '_> {
             }
         }
         Ok(Some(()))
+    }
+
+    /// `c.to_digit(radix)` (the digit, or -1 for none) or `c.is_digit(radix)`
+    /// (0 or 1) of a char `c`, as `karac_mir_char` answers them: `0`..`9`
+    /// are 0 to 9 and a letter of either case is 10 to 35, kept when below
+    /// the radix. A radix outside 2..=36 goes to the runtime, which words
+    /// the panic.
+    fn digit_in_line(
+        &mut self,
+        method: &str,
+        c: IntValue<'ctx>,
+        radix: IntValue<'ctx>,
+        op: IntValue<'ctx>,
+    ) -> R<IntValue<'ctx>> {
+        let f = self.cur_fn()?;
+        let fast = self.llcx.append_basic_block(f, "digit.fast");
+        let slow = self.llcx.append_basic_block(f, "digit.slow");
+        let done = self.llcx.append_basic_block(f, "digit.done");
+        let b = &self.builder;
+        let below = |x: IntValue<'ctx>, lo: u64, n: IntValue<'ctx>| -> R<IntValue<'ctx>> {
+            let d = b.build_int_sub(x, self.i64(lo), "").map_err(e)?;
+            b.build_int_compare(IntPredicate::ULT, d, n, "").map_err(e)
+        };
+        let in_range = below(radix, 2, self.i64(35))?;
+        b.build_conditional_branch(in_range, fast, slow)
+            .map_err(e)?;
+        b.position_at_end(fast);
+        let decimal = b.build_int_sub(c, self.i64(48), "").map_err(e)?;
+        let is_decimal = below(c, 48, self.i64(10))?;
+        let folded = b.build_or(c, self.i64(32), "").map_err(e)?;
+        let is_letter = below(folded, 97, self.i64(26))?;
+        let letter = b.build_int_sub(folded, self.i64(87), "").map_err(e)?;
+        let value = b
+            .build_select(is_letter, letter, self.i64(36), "")
+            .map_err(e)?
+            .into_int_value();
+        let value = b
+            .build_select(is_decimal, decimal, value, "")
+            .map_err(e)?
+            .into_int_value();
+        let kept = b
+            .build_int_compare(IntPredicate::ULT, value, radix, "")
+            .map_err(e)?;
+        let quick = if method == "to_digit" {
+            b.build_select(kept, value, self.i64(u64::MAX), "")
+                .map_err(e)?
+                .into_int_value()
+        } else {
+            b.build_int_z_extend(kept, self.llcx.i64_type(), "")
+                .map_err(e)?
+        };
+        b.build_unconditional_branch(done).map_err(e)?;
+        b.position_at_end(slow);
+        let wide = self.rt_int("char", &[op.into(), c.into(), radix.into()], 64)?;
+        let slow_end = self.builder.get_insert_block().ok_or("no block")?;
+        self.builder.build_unconditional_branch(done).map_err(e)?;
+        self.builder.position_at_end(done);
+        let phi = self
+            .builder
+            .build_phi(self.llcx.i64_type(), "")
+            .map_err(e)?;
+        phi.add_incoming(&[(&quick, fast), (&wide, slow_end)]);
+        Ok(phi.as_basic_value().into_int_value())
     }
 
     /// The char method `method` of `c` (an `i64`) as range tests, as

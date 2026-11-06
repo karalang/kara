@@ -89,6 +89,8 @@ A growable array. It has every [`Slice[T]`](#slicet) method, plus:
 | `pop` | `fn pop(mut ref self) -> Option[T]` | Removes the last element |
 | `insert` | `fn insert(mut ref self, idx: i64, val: own T)` | Inserts at `idx`, shifting the rest. Panics if `idx > self.len()` |
 | `remove` | `fn remove(mut ref self, idx: i64) -> T` | Removes at `idx`, shifting the rest. Panics if out of bounds |
+| `rotate_left` | `fn rotate_left(mut ref self, mid: i64)` | Turns the elements `mid` places toward the front: the element at `mid` comes first. Panics if `mid` is outside `0..=len`. On a `Vec` only |
+| `rotate_right` | `fn rotate_right(mut ref self, k: i64)` | Turns the elements `k` places toward the back: the last `k` come first. Panics if `k` is outside `0..=len`. On a `Vec` only |
 | `remove_first` | `fn remove_first(mut ref self, pred: own MutFn(T) -> bool) -> Option[T]` | Removes and returns the first element satisfying `pred`. O(n) |
 | `retain` | `fn retain(mut ref self, pred: own MutFn(T) -> bool)` | Keeps the elements satisfying `pred` and drops the rest, in one pass |
 | `dedup` | `fn dedup(mut ref self) where T: PartialEq` | Drops consecutive equal elements |

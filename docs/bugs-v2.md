@@ -60,8 +60,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | diagnostics | 150 |
 | false-positive | 126 |
-| perf | 104 |
-| missing-feature | 95 |
+| perf | 106 |
+| missing-feature | 96 |
 | soundness | 51 |
 | miscompile | 39 |
 | run-vs-build | 24 |
@@ -75,9 +75,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 236 |
+| typecheck | 237 |
+| mir-llvm | 128 |
 | mir | 128 |
-| mir-llvm | 126 |
 | cli | 71 |
 | ownership | 55 |
 | parser | 42 |
@@ -128,6 +128,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-06-30 | 2026-11-06 | typecheck | low | collections.md roll-up: `Vec.from_iter(dq)`, which collections.md and the compiler's own VecDeque diagnostic both recommend, is refused (`VecDeque[i64] is a collection, not an Iterator`), and `v[0..1] = o` on non-Copy elements says `assigning a range of non-Copy elements is not lowered yet` instead of pointing to `clone_from_slice` | — |
 | B-2026-11-06-31 | 2026-11-06 | typecheck+mir | medium | check accepts String-only building methods (push_str, push, clear, truncate, pop, reserve) on a Str, even a borrowed parameter; every backend then refuses with an internal error | — |
 | B-2026-11-06-32 | 2026-11-06 | typecheck | low | CString lacks the CStr reading surface (to_str, to_string) and has no constructor from Slice[u8], which strings.md says exists | — |
+| B-2026-11-06-33 | 2026-11-06 | mir-llvm | medium | `c.to_digit(10)` on a char compiles to a `karac_mir_char` call that matches the method's name among twenty strings: half of kata 1058's benchmark | — |
+| B-2026-11-06-34 | 2026-11-06 | mir-llvm | low | `Vec.sort_by(|a, b| b.cmp(a))` on 500 `i64`s takes about 2.5x Rust's `sort_by` in kata 1058's benchmark, where a plain `sort()` keeps pace | — |
+| B-2026-11-06-35 | 2026-11-06 | typecheck | low | `Vec` has no `rotate_left` or `rotate_right`: `v.rotate_left(1)` is refused with "no method 'rotate_left' on type 'Vec'" | — |
 
 ### Relocated
 
