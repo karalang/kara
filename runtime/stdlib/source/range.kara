@@ -424,3 +424,37 @@ impl[T: PartialOrd + Copy] RangeFrom[T] {
         }
     }
 }
+
+/// The values below `end`: `..n`. It has no start, so it is not an
+/// iterator; it is a slice index (`items[..n]`) and a bound to test
+/// against (design.md § 6).
+#[derive(Copy, Clone)]
+struct RangeTo[T] {
+    end: T,
+}
+
+impl[T: PartialOrd + Copy] RangeTo[T] {
+    /// Whether `x` lies in the range.
+    fn contains(ref self, x: ref T) -> bool {
+        *x < self.end
+    }
+}
+
+/// The values up to and including `end`: `..=n`. Like `RangeTo`, it is not
+/// an iterator.
+#[derive(Copy, Clone)]
+struct RangeToInclusive[T] {
+    end: T,
+}
+
+impl[T: PartialOrd + Copy] RangeToInclusive[T] {
+    /// Whether `x` lies in the range.
+    fn contains(ref self, x: ref T) -> bool {
+        *x <= self.end
+    }
+}
+
+/// Every value: `..`. It names a whole sequence as a slice index
+/// (`items[..]`).
+#[derive(Copy, Clone)]
+struct RangeFull {}

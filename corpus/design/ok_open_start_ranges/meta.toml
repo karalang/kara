@@ -1,0 +1,9 @@
+source = "B-2026-11-05-37"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "range"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md § 6 range table: `..hi` is RangeTo[T], `..=hi` RangeToInclusive[T], `..` RangeFull; all six range forms index a sequence the same way, whether written in the brackets or held in a binding."

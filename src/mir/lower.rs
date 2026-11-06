@@ -7089,18 +7089,28 @@ impl<'l, 'a> Bx<'l, 'a> {
             HK::Adt { def, .. } => names.contains(&self.lcx.def_name(def).as_str()),
             _ => false,
         };
-        let range = self
-            .lcx
-            .node_types
-            .get(&index.id)
-            .is_some_and(|&t| named(t, &["Range", "RangeInclusive", "RangeFrom"]));
+        let range = self.lcx.node_types.get(&index.id).is_some_and(|&t| {
+            named(
+                t,
+                &[
+                    "Range",
+                    "RangeInclusive",
+                    "RangeFrom",
+                    "RangeTo",
+                    "RangeToInclusive",
+                    "RangeFull",
+                ],
+            )
+        });
         range
             && self.lcx.node_types.get(&object.id).is_some_and(|&t| {
                 let mut t = t;
                 while let HK::Ref(inner) | HK::MutRef(inner) = tcx.kind(t) {
                     t = inner;
                 }
-                self.seq_of(t).is_some() || named(t, &["Vec"])
+                self.seq_of(t).is_some()
+                    || named(t, &["Vec"])
+                    || matches!(tcx.kind(t), HK::Str | HK::StaticStr)
             })
     }
 
@@ -7857,6 +7867,65 @@ impl<'l, 'a> Bx<'l, 'a> {
         Ok(())
     }
 
+    /// `s[r]` for a range value `r` (`let r = ..2; s[r]`): the bounds are
+    /// the value's fields, as `slice_view_by` reads them for a sequence.
+    fn string_range_by(&mut self, object: &'a Expr, rng: &'a Expr, dest: Place) -> R<()> {
+        let i64_t = self.tys().tcx().intern(HK::Int(IntSize::I64));
+        let p = self.expr_place(object, false)?;
+        let (p, ct) = self.strip_refs(p);
+        let rt = self.tys().tcx().reference(ct, false);
+        let range_place = if self.is_place(rng) {
+            self.expr_place(rng, false)?
+        } else {
+            let t = self.expr_ty(rng)?;
+            Place::local(self.temp_of(rng, t)?)
+        };
+        let (rp, rng_t) = self.strip_refs(range_place);
+        let inclusive =
+            self.tys().tcx().adt_of(rng_t).is_some_and(|(a, _)| {
+                matches!(a.name.as_str(), "RangeInclusive" | "RangeToInclusive")
+            });
+        let bound = |bx: &mut Self, name: &str| {
+            let (i, ft) = bx.field_of(rng_t, None, name)?;
+            Some(bx.cast_index(Operand::Copy(rp.field(i, ft)), i64_t))
+        };
+        let lo = bound(self, "start").unwrap_or(Operand::Const(Const {
+            ty: i64_t,
+            kind: ConstKind::Scalar(0),
+        }));
+        let hi = match bound(self, "end") {
+            Some(o) if inclusive => {
+                let one = Operand::Const(Const {
+                    ty: i64_t,
+                    kind: ConstKind::Scalar(1),
+                });
+                let h = self.temp(i64_t);
+                self.arith(BinOp::Add, o, one, i64_t, Place::local(h));
+                Operand::Copy(Place::local(h))
+            }
+            Some(o) => o,
+            None => {
+                let r = self.temp(rt);
+                self.assign(r, Rvalue::Ref(BorrowKind::Shared, p.clone()));
+                let n = self.temp(i64_t);
+                self.call_native(
+                    "String.len",
+                    vec![Operand::Move(Place::local(r))],
+                    Place::local(n),
+                );
+                Operand::Copy(Place::local(n))
+            }
+        };
+        let r = self.temp(rt);
+        self.assign(r, Rvalue::Ref(BorrowKind::Shared, p));
+        self.call_native(
+            "String.index_range",
+            vec![Operand::Move(Place::local(r)), lo, hi],
+            dest,
+        );
+        Ok(())
+    }
+
     fn cast_index(&mut self, idx: Operand, usize_t: Ty) -> Operand {
         match idx {
             Operand::Const(Const {
@@ -8559,6 +8628,10 @@ impl<'l, 'a> Bx<'l, 'a> {
                 } = &index.kind
                 else {
                     // `let r = 1..3; v[r]`: the bounds are the value's.
+                    let ot = self.expr_ty(object)?;
+                    if matches!(self.strip_ty(ot), HK::Str | HK::StaticStr) {
+                        return self.string_range_by(object, index, dest);
+                    }
                     let t = self.expr_ty(e)?;
                     let s = self.slice_view_by(object, index, t)?;
                     self.assign(dest, Rvalue::Use(Operand::Move(Place::local(s))));
@@ -8647,18 +8720,23 @@ impl<'l, 'a> Bx<'l, 'a> {
                 op: op @ (AstBinOp::Range | AstBinOp::RangeInclusive),
                 left,
                 right,
-            } => self.range_value(e, left, Some(right), *op == AstBinOp::RangeInclusive, dest),
+            } => self.range_value(
+                e,
+                Some(left),
+                Some(right),
+                *op == AstBinOp::RangeInclusive,
+                dest,
+            ),
+            // B-2026-10-21-46 — `a..` as a value is the library's `RangeFrom`;
+            // B-2026-11-05-37 — `..b`, `..=b` and `..` are `RangeTo`,
+            // `RangeToInclusive` and `RangeFull` (design.md § 6).
             ExprKind::Range {
-                start: Some(left),
-                end: Some(right),
+                start,
+                end,
                 inclusive,
-            } => self.range_value(e, left, Some(right), *inclusive, dest),
-            // B-2026-10-21-46 — `a..` as a value is the library's `RangeFrom`.
-            ExprKind::Range {
-                start: Some(left),
-                end: None,
-                inclusive: false,
-            } => self.range_value(e, left, None, false, dest),
+            } if !(start.is_some() && end.is_none() && *inclusive) => {
+                self.range_value(e, start.as_deref(), end.as_deref(), *inclusive, dest)
+            }
             ExprKind::Binary { op, left, right } => self.binary(op.clone(), left, right, dest),
             ExprKind::Unary { op, operand } => {
                 // B-2026-10-14-33 — `-a` / `~a` on a user type with an
@@ -9112,16 +9190,19 @@ impl<'l, 'a> Bx<'l, 'a> {
     fn range_value(
         &mut self,
         e: &'a Expr,
-        left: &'a Expr,
+        left: Option<&'a Expr>,
         right: Option<&'a Expr>,
         inclusive: bool,
         dest: Place,
     ) -> R<()> {
         let t = self.expr_ty(e)?;
-        let Some((_, st)) = self.field_of(t, None, "start") else {
-            return self.unsupported(e.span, "a range value");
-        };
-        let mut ops = vec![self.operand_at(left, st)?];
+        let mut ops = Vec::new();
+        if let Some(left) = left {
+            let Some((_, st)) = self.field_of(t, None, "start") else {
+                return self.unsupported(e.span, "a range value");
+            };
+            ops.push(self.operand_at(left, st)?);
+        }
         if let Some(right) = right {
             let Some((_, et)) = self.field_of(t, None, "end") else {
                 return self.unsupported(e.span, "a range value");
@@ -9129,8 +9210,8 @@ impl<'l, 'a> Bx<'l, 'a> {
             ops.push(self.operand_at(right, et)?);
         }
         // `RangeInclusive.exhausted`, or `RangeFrom.given`: nothing given
-        // out yet.
-        if inclusive || right.is_none() {
+        // out yet. The open-start ranges are their bounds alone.
+        if left.is_some() && (inclusive || right.is_none()) {
             ops.push(bool_const(self.tys().bool(), false));
         }
         let kind = self.adt_aggregate(t, 0);
@@ -19576,11 +19657,11 @@ impl<'l, 'a> Bx<'l, 'a> {
         };
         let (rp, rt) = self.strip_refs(rp);
         let usize_t = self.tys().tcx().intern(HK::UInt(UIntSize::Usize));
-        let inclusive = self
-            .tys()
-            .tcx()
-            .adt_of(rt)
-            .is_some_and(|(a, _)| a.name == "RangeInclusive");
+        // `..=b` ends after `b` as `a..=b` does (B-2026-11-05-37).
+        let inclusive =
+            self.tys().tcx().adt_of(rt).is_some_and(|(a, _)| {
+                matches!(a.name.as_str(), "RangeInclusive" | "RangeToInclusive")
+            });
         let bound = |bx: &mut Self, name: &str| {
             let (i, ft) = bx.field_of(rt, None, name)?;
             Some(bx.cast_index(Operand::Copy(rp.field(i, ft)), usize_t))
@@ -26693,6 +26774,9 @@ const TYPES_THE_COMPILER_SPELLS: &[&str] = &[
     "Range",
     "RangeInclusive",
     "RangeFrom",
+    "RangeTo",
+    "RangeToInclusive",
+    "RangeFull",
     "IoError",
     // The HTTP client types, whose methods the typechecker dispatches by
     // name (B-2026-10-18-10). Not `Response`: a server program declares its
@@ -26805,6 +26889,9 @@ const LIBRARY_NAMES_THE_COMPILER_USES: &[&str] = &[
     "Range",
     "RangeInclusive",
     "RangeFrom",
+    "RangeTo",
+    "RangeToInclusive",
+    "RangeFull",
     "Serialize",
     "Deserialize",
     "Serializer",

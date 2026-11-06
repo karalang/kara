@@ -1,0 +1,9 @@
+source = "B-2026-11-05-37"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["design", "range"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md § 6: only the forms with a start can be iterated; `RangeTo`, `RangeToInclusive` and `RangeFull` are slice indices and bounds. The expected.out wording of an error pin is guidance, not a byte oracle."

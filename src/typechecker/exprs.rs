@@ -3142,6 +3142,48 @@ impl<'a> super::TypeChecker<'a> {
             self.record_expr_type(&expr.span, expected);
             return expected.clone();
         }
+        // A range of bare integer literals takes its element type from the
+        // range type the slot names, as an integer literal takes the slot's:
+        // `let r: RangeTo[u8] = ..200;` (B-2026-11-05-37). Synthesis alone
+        // has no typed bound to promote the literals to, so it typed them
+        // `i64`.
+        if let (
+            ExprKind::Range {
+                start,
+                end,
+                inclusive,
+            },
+            Type::Named { name, args },
+        ) = (&expr.kind, expected)
+        {
+            let shape = match (start.is_some(), end.is_some(), *inclusive) {
+                (true, true, false) => "Range",
+                (true, true, true) => "RangeInclusive",
+                (true, false, _) => "RangeFrom",
+                (false, true, false) => "RangeTo",
+                (false, true, true) => "RangeToInclusive",
+                (false, false, _) => "RangeFull",
+            };
+            let bounds: Vec<&Expr> = [start, end].into_iter().flatten().map(|b| &**b).collect();
+            if name == shape
+                && args.len() == 1
+                && is_integer(&args[0])
+                && !bounds.is_empty()
+                && bounds
+                    .iter()
+                    .all(|b| Self::unsuffixed_int_literal_value(b).is_some())
+            {
+                let elem = args[0].clone();
+                if bounds
+                    .iter()
+                    .any(|b| self.promote_range_literal(b, &elem) == Type::Error)
+                {
+                    return Type::Error;
+                }
+                self.record_expr_type(&expr.span, expected);
+                return expected.clone();
+            }
+        }
         // Same coercion for bare `[v; n]` against an `Array[T, N]` expected:
         // the literal's count must equal N, and the value's type must match T.
         if let (

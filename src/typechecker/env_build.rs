@@ -1389,8 +1389,10 @@ impl<'a> super::TypeChecker<'a> {
         ] {
             // On the MIR pipeline `Range`, `RangeInclusive` and `RangeFrom`
             // are the library's Kāra structs, whose impls name their `Item`.
-            if matches!(*name, "Range" | "RangeInclusive" | "RangeFrom")
-                && self.library_methods_from_source
+            if matches!(
+                *name,
+                "Range" | "RangeInclusive" | "RangeFrom" | "RangeTo" | "RangeToInclusive"
+            ) && self.library_methods_from_source
             {
                 continue;
             }

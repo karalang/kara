@@ -1,0 +1,34 @@
+// design.md § 6: `..hi`, `..=hi` and `..` are the library's `RangeTo[T]`,
+// `RangeToInclusive[T]` and `RangeFull`, values like the ranges with a start,
+// and a sequence indexed by one is sliced as by the literal form.
+fn below(r: RangeTo[i64], x: i64) -> bool {
+    r.contains(x)
+}
+
+fn main() {
+    let to: RangeTo[i64] = ..2;
+    let through: RangeToInclusive[i64] = ..=2;
+    let all: RangeFull = ..;
+    println(f"{to.end} {through.end}");
+    println(f"{below(to, 1)} {below(to, 2)} {through.contains(2)} {through.contains(3)}");
+
+    let v = [10, 20, 30, 40];
+    println(f"{v[to].len()} {v[through].len()} {v[all].len()}");
+    println(f"{v[..2].len()} {v[..=2].len()} {v[..].len()}");
+    let tail = v[through];
+    println(f"{tail[2]}");
+
+    let s = "hello";
+    println(f"{s[to]} {s[through]} {s[all]}");
+    let mid = 1..=3;
+    println(s[mid]);
+
+    let small: RangeToInclusive[u8] = ..=200;
+    println(small.contains(200));
+    let bytes: RangeInclusive[u8] = 1..=200;
+    println(f"{bytes.contains(200)} {bytes.count()}");
+    let copy = to;
+    println(copy.end + to.end);
+    let rs = [..1, ..4];
+    println(rs[1].end);
+}

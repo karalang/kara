@@ -1,0 +1,6 @@
+// design.md § 6: only the range forms with a start can be iterated.
+fn main() {
+    for x in ..3 {
+        println(x);
+    }
+}
