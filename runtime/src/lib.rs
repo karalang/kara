@@ -337,6 +337,7 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         mir_task::karac_mir_list_tasks,
         mir_task::karac_mir_task_run,
         mir_task::karac_mir_ready,
+        mir_task::karac_mir_ready_join,
         mir_task::karac_mir_ready_sleep,
         mir_task::karac_mir_ready_fd,
         mir_task::karac_mir_ready_connect,

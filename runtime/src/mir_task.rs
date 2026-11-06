@@ -130,8 +130,10 @@ enum Wait {
     /// (core-semantics §11.10). Unix only, as socket deadlines are.
     #[cfg_attr(not(unix), allow(dead_code))]
     FdBy(i32, i16, Instant),
-    /// A join or a channel, which only another task can make ready.
-    Task,
+    /// A join, a channel, a lock or a pool, which only another task can
+    /// make ready: for a join, the joined task's result block, else 0
+    /// (`WaitTarget.PeerTask`, B-2026-11-05-36).
+    Task(usize),
     /// As `Task`, or until the deadline passes (a pool's `acquire`).
     TaskBy(Instant),
 }
@@ -287,7 +289,7 @@ struct Task {
 fn worth(t: &Task, progress: u64, now: &mut Option<Instant>) -> bool {
     match t.wait {
         Wait::None => true,
-        Wait::Task => t.seen != progress,
+        Wait::Task(_) => t.seen != progress,
         Wait::TaskBy(at) => t.seen != progress || at <= *now.get_or_insert_with(Instant::now),
         _ => false,
     }
@@ -1261,7 +1263,7 @@ pub unsafe extern "C" fn karac_mir_ready_group(g: *mut u8, end: u8) -> u8 {
             g.live < g.limit
         }
     });
-    note(ready, Wait::Task)
+    note(ready, Wait::Task(0))
 }
 
 /// Task `t` ended, returned or torn down: its group runs one task fewer,
@@ -1933,7 +1935,7 @@ pub unsafe extern "C" fn karac_mir_task_run(poll: TaskPoll, a: *mut u8, b: *mut 
         if after != before || t.wait == Wait::None {
             idle = 0;
         }
-        if matches!(t.wait, Wait::Task | Wait::TaskBy(_)) && after == before {
+        if matches!(t.wait, Wait::Task(_) | Wait::TaskBy(_)) && after == before {
             if idle == 0 {
                 quiet = before;
             }
@@ -2630,7 +2632,15 @@ fn note(ready: bool, wait: Wait) -> u8 {
 /// worked out: only another task can change it.
 #[no_mangle]
 pub extern "C" fn karac_mir_ready(ready: u8) -> u8 {
-    note(ready != 0, Wait::Task)
+    note(ready != 0, Wait::Task(0))
+}
+
+/// `__ready` of a join, whose readiness codegen worked out: the task waits
+/// on the one whose result block is `block`, which `Runtime.list_tasks`
+/// names (design.md § Debugger contract, element 3; B-2026-11-05-36).
+#[no_mangle]
+pub extern "C" fn karac_mir_ready_join(block: *mut u8, ready: u8) -> u8 {
+    note(ready != 0, Wait::Task(block as usize))
 }
 
 /// `__ready("sleep_ms", ms)`: whether the running task's pause is over,
@@ -2729,7 +2739,7 @@ pub extern "C" fn karac_mir_ready_select(epoch: i64, until: i64) -> u8 {
         let left = until - crate::karac_runtime_clock_monotonic_ns();
         Wait::TaskBy(Instant::now() + Duration::from_nanos(left.max(0) as u64))
     } else {
-        Wait::Task
+        Wait::Task(0)
     };
     note(ready, wait)
 }
@@ -2854,7 +2864,7 @@ pub extern "C" fn karac_mir_mutex_ready(cell: *mut u8) -> u8 {
         }
         free
     });
-    note(free, Wait::Task)
+    note(free, Wait::Task(0))
 }
 
 /// `Mutex[T].acquire`, run once its `__ready` saw the mutex free: marks it
@@ -2994,7 +3004,7 @@ struct ParBlockRow {
 #[repr(C)]
 struct WaitRow {
     tag: u8,
-    fd: i64,
+    payload: i64,
 }
 
 /// A `TaskInfo` as compiled code lays it out.
@@ -3087,17 +3097,19 @@ pub unsafe extern "C" fn karac_mir_list_par_blocks(out: *mut crate::mir::RawVec)
 }
 
 /// What a suspended task waits on, as `WaitTarget`'s variant index and
-/// `IoHandle`'s descriptor: `Running` (0) when it waits on nothing,
-/// `PeerTask` (1) for a join, a channel or a lock, `IoHandle` (2) for a
-/// descriptor, `Sleep` (3) for a deadline.
-fn wait_row(w: Wait) -> WaitRow {
-    let (tag, fd) = match w {
+/// its payload: `Running` (0) when it waits on nothing, `PeerTask` (1) for
+/// a join, a channel, a lock or a pool, with the joined task's id from
+/// `peer` (0 when it waits on no one task, or the joined one is running),
+/// `IoHandle` (2) with the descriptor, `Sleep` (3) for a deadline.
+fn wait_row(w: Wait, peer: impl Fn(usize) -> u64) -> WaitRow {
+    let (tag, payload) = match w {
         Wait::None => (0, 0),
-        Wait::Task | Wait::TaskBy(_) => (1, 0),
+        Wait::Task(block) => (1, peer(block) as i64),
+        Wait::TaskBy(_) => (1, 0),
         Wait::Fd(fd, _) | Wait::FdBy(fd, _, _) => (2, i64::from(fd)),
         Wait::Until(_) => (3, 0),
     };
-    WaitRow { tag, fd }
+    WaitRow { tag, payload }
 }
 
 /// `Runtime.list_tasks()` (design.md § Debugger contract, elements 3 and
@@ -3110,6 +3122,7 @@ fn wait_row(w: Wait) -> WaitRow {
 /// `out` is writable for a `Vec[TaskInfo]`.
 #[no_mangle]
 pub unsafe extern "C" fn karac_mir_list_tasks(out: *mut crate::mir::RawVec) {
+    let mut blocks: HashMap<usize, u64> = HashMap::new();
     let mut rows: Vec<(u64, Wait, Option<Site>, u64)> = EXEC
         .try_with(|e| {
             let e = e.borrow();
@@ -3121,11 +3134,9 @@ pub unsafe extern "C" fn karac_mir_list_tasks(out: *mut crate::mir::RawVec) {
                     unsafe { (*t.group).owner }
                 }
             };
-            e.queue
-                .iter()
-                .chain(e.off.values())
-                .map(|t| (t.id, t.wait, t.site, parent(t)))
-                .collect()
+            let tasks = || e.queue.iter().chain(e.off.values());
+            blocks.extend(tasks().map(|t| (t.b as usize, t.id)));
+            tasks().map(|t| (t.id, t.wait, t.site, parent(t))).collect()
         })
         .unwrap_or_default();
     rows.sort_by_key(|r| r.0);
@@ -3135,7 +3146,14 @@ pub unsafe extern "C" fn karac_mir_list_tasks(out: *mut crate::mir::RawVec) {
             let (file, line, col) = site.map_or((&b""[..], 0, 0), |s| s.parts());
             crate::mir::string_of(std::ptr::addr_of_mut!((*p).file), file);
             std::ptr::addr_of_mut!((*p).spawn_site_id).write(site.map_or(0, |s| s.id()));
-            std::ptr::addr_of_mut!((*p).wait_target).write(wait_row(wait));
+            let peer = |b: usize| {
+                if b == 0 {
+                    0
+                } else {
+                    blocks.get(&b).copied().unwrap_or(0)
+                }
+            };
+            std::ptr::addr_of_mut!((*p).wait_target).write(wait_row(wait, peer));
             std::ptr::addr_of_mut!((*p).line).write(line);
             std::ptr::addr_of_mut!((*p).col).write(col);
             std::ptr::addr_of_mut!((*p).task_id).write(id);

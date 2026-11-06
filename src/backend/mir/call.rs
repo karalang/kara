@@ -78,6 +78,7 @@ impl<'ctx> Cx<'ctx, '_> {
             let names: Vec<&str> = w.variants.iter().map(|v| v.name.as_str()).collect();
             ok &= names == ["Running", "PeerTask", "IoHandle", "Sleep"]
                 && crate::mir::layout::enum_tag(self.tys, wt).is_some_and(|t| t.size == 1)
+                && self.field_offset(wt, Some(1), 0)? == 8
                 && self.field_offset(wt, Some(2), 0)? == 8
                 && self.layout(wt)?.size == 16;
         }

@@ -96,7 +96,10 @@ impl<'ctx> Cx<'ctx, '_> {
                     .builder
                     .build_int_compare(IntPredicate::NE, state, self.i64(RUNNING), "")
                     .map_err(e)?;
-                self.ready_flag(done)?
+                // The block names the joined task, for `Runtime.list_tasks`
+                // (B-2026-11-05-36).
+                let done = self.builder.build_int_z_extend(done, i8t, "").map_err(e)?;
+                self.rt_flag("ready_join", &[block.into(), done.into()])?
             }
             ("Receiver" | "Channel", "recv" | "recv_blocking", [c, ..])
             | ("Sender" | "Channel", "send", [c, ..]) => {

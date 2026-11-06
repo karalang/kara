@@ -39,30 +39,35 @@ fn main() {
 }
 "#;
 
-/// Two spawned tasks suspended, one on a channel and one asleep, while
-/// `main` lists them.
+/// Three spawned tasks suspended while `main` lists them: one on a
+/// channel, one joining a task it spawned (`PeerTask` names it), and that
+/// task asleep.
 const TASKS: &str = r#"import std.runtime;
 
 fn wait_name(w: WaitTarget) -> String {
     match w {
         WaitTarget.Running => "running",
-        WaitTarget.PeerTask => "peer",
+        WaitTarget.PeerTask(id) => f"peer {id}",
         WaitTarget.IoHandle(fd) => f"io {fd}",
         WaitTarget.Sleep => "sleep",
     }
 }
 
 fn main() {
-    let (tx, rx) = Channel.new();
+    let (tx, rx) = channel(1);
     let group = TaskGroup.new();
     let a = group.spawn(|| { let v: i64 = rx.recv().unwrap(); v });
-    let b = group.spawn(|| { sleep_ms(200); 5 });
+    let c = group.spawn(|| {
+        let inner = TaskGroup.new();
+        let b = inner.spawn(|| { sleep_ms(200); 5 });
+        b.join() + 1
+    });
     sleep_ms(20);
     for t in runtime.list_tasks().iter() {
-        println(f"{wait_name(t.wait_target)} line {t.line} parent {t.parent_task_id} id {t.spawn_site_id != 0}");
+        println(f"{t.task_id}: {wait_name(t.wait_target)} line {t.line} parent {t.parent_task_id} id {t.spawn_site_id != 0}");
     }
     tx.send(7).unwrap();
-    println(a.join() + b.join());
+    println(a.join() + c.join());
 }
 "#;
 
@@ -123,15 +128,16 @@ fn mir_debug_metadata_lists_running_par_blocks() {
 fn mir_debug_metadata_lists_suspended_tasks() {
     let dir = scratch("tasks");
     if let Some(out) = run(&dir, "tasks", TASKS, false) {
-        // Task 2 waits on the channel, task 3 sleeps; `main` (task 1)
-        // spawned both.
+        // Task 2 waits on the channel and task 3 joins task 4, which
+        // sleeps; `main` (task 1) spawned 2 and 3, and 3 spawned 4.
         assert_eq!(
-            out, "peer line 15 parent 1 id true\nsleep line 16 parent 1 id true\n12\n",
+            out,
+            "2: peer 0 line 15 parent 1 id true\n3: peer 4 line 16 parent 1 id true\n4: sleep line 18 parent 3 id true\n13\n",
             "dev build"
         );
     }
     if let Some(out) = run(&dir, "tasks_release", TASKS, true) {
-        assert_eq!(out, "12\n", "release build");
+        assert_eq!(out, "13\n", "release build");
     }
     let _ = std::fs::remove_dir_all(&dir);
 }

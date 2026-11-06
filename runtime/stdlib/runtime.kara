@@ -64,13 +64,16 @@ pub struct TaskInfo {
 // What a suspended task waits on (element 3). Variants are only added, at
 // the end, so a variant keeps its index.
 // - `Running`: nothing; it can run when a worker takes it.
-// - `PeerTask`: another task: a join, a channel, a lock or a pool.
+// - `PeerTask(task_id)`: another task: a join, a channel, a lock or a
+//   pool. For a join, `task_id` is the joined task's (`TaskInfo.task_id`);
+//   it is 0 for the rest, which wait on no one task, and while the joined
+//   task is running.
 // - `IoHandle(fd)`: a descriptor to become readable or writable.
 // - `Sleep`: a deadline (`sleep_ms`).
 // `Running` rather than `None`, which would shadow `Option.None` at scope 0.
 pub enum WaitTarget {
     Running,
-    PeerTask,
+    PeerTask(u64),
     IoHandle(i64),
     Sleep,
 }

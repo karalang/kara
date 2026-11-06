@@ -1,7 +1,7 @@
 fn name(w: WaitTarget) -> String {
     match w {
         WaitTarget.Running => "Running",
-        WaitTarget.PeerTask => "PeerTask",
+        WaitTarget.PeerTask(t) => f"PeerTask({t})",
         WaitTarget.IoHandle(fd) => f"IoHandle({fd})",
         WaitTarget.Sleep => "Sleep",
     }
@@ -9,6 +9,7 @@ fn name(w: WaitTarget) -> String {
 
 fn main() {
     println(name(WaitTarget.Running));
+    println(name(WaitTarget.PeerTask(4)));
     println(name(WaitTarget.IoHandle(3)));
     println(name(WaitTarget.Sleep));
 }
