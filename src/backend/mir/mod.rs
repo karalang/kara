@@ -830,6 +830,7 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
             );
         }
         self.mark_deref_params(body, &params, f)?;
+        self.mark_range_params(body, &params, ret, f);
         self.vfns.insert(name.to_string(), f);
         if self.located(name) {
             self.site_todo.push((name.to_string(), true));
@@ -993,6 +994,56 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
             for i in 0..f.count_params().saturating_sub(2) {
                 f.add_attribute(AttributeLoc::Param(i), noalias);
             }
+        }
+    }
+
+    /// Marks each `bool` parameter and return of a by-value function
+    /// `range(i8 0, 2)`: a `bool` travels as an `i8` that only ever holds 0
+    /// or 1, which LLVM cannot see across the call. On the frozen set it
+    /// changed 50 of 707 binaries; kata 100's `same_tree` and kata 101's
+    /// `is_symmetric` ran 0.90x as long, the 50 together 0.999x, with the
+    /// instruction counts unchanged: the fact moves blocks, not work
+    /// (B-2026-11-05-25). The same fact on a `char` (below 0x110000) moved
+    /// none of them, so it is not stated. `KARAC_MIR_RANGE_ATTR=0` leaves
+    /// them out.
+    fn mark_range_params(
+        &self,
+        body: &Body,
+        params: &[Option<BasicTypeEnum<'ctx>>],
+        ret: Option<BasicTypeEnum<'ctx>>,
+        f: FunctionValue<'ctx>,
+    ) {
+        if std::env::var("KARAC_MIR_RANGE_ATTR").as_deref() == Ok("0") {
+            return;
+        }
+        let is_bool = |ty: Ty, lt: BasicTypeEnum<'ctx>| {
+            matches!(self.tys.kind(ty), TyKind::Bool)
+                && lt.is_int_type()
+                && lt.into_int_type().get_bit_width() == 8
+        };
+        let k = Attribute::get_named_enum_kind_id("range");
+        let (lo, hi) = ([0u64], [2u64]);
+        // SAFETY: a context-owned attribute built from one word per bound,
+        // as `LLVMCreateConstantRangeAttribute` takes for an 8-bit range.
+        let attr = unsafe {
+            Attribute::new(llvm_sys::core::LLVMCreateConstantRangeAttribute(
+                self.llcx.raw(),
+                k,
+                8,
+                lo.as_ptr(),
+                hi.as_ptr(),
+            ))
+        };
+        if ret.is_some_and(|r| is_bool(body.locals[0].ty, r)) {
+            f.add_attribute(AttributeLoc::Return, attr);
+        }
+        let mut at = u32::from(self.ret_in_memory(body));
+        for (i, p) in params.iter().enumerate() {
+            let Some(lt) = p else { continue };
+            if is_bool(body.locals[i + 1].ty, *lt) {
+                f.add_attribute(AttributeLoc::Param(at), attr);
+            }
+            at += 1;
         }
     }
 

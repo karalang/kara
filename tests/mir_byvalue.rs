@@ -56,7 +56,7 @@ fn mir_byvalue_calls_and_borrowed_handles_on_both_backends() {
     karac::mir::lower::compiled_check(&lowered).expect("checks");
     let ir = karac::backend::mir::compile_mir_ir(&lowered.program, &lowered.tys).expect("IR");
     assert!(
-        ir.contains("define internal i8 @kara.is_mirror(ptr"),
+        ir.contains("define internal range(i8 0, 2) i8 @kara.is_mirror(ptr"),
         "is_mirror is not called by value:\n{ir}"
     );
     let dir = std::env::temp_dir().join(format!("karac-mir-byvalue-{}", std::process::id()));

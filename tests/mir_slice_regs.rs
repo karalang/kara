@@ -118,7 +118,8 @@ fn a_slice_parameter_is_passed_in_registers() {
     };
     assert_eq!(ran, EXPECTED);
     assert!(
-        sig.starts_with("define internal i8 ") && sig.matches("{ ptr, i64 }").count() == 2,
+        sig.starts_with("define internal range(i8 0, 2) i8 ")
+            && sig.matches("{ ptr, i64 }").count() == 2,
         "{sig}"
     );
     let Some((off, ran)) = build(&d, "0") else {
