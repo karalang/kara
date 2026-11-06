@@ -421,6 +421,7 @@ impl<'a> super::EffectChecker<'a> {
                 kind: super::EffectErrorKind::PureLoopInPar,
                 subtype_trace: None,
                 replacement: None,
+                undeclared: None,
             });
         }
     }

@@ -116,6 +116,7 @@ impl<'a> super::EffectChecker<'a> {
                         kind: EffectErrorKind::ProfileViolation,
                         subtype_trace: None,
                         replacement: None,
+                        undeclared: None,
                     });
                 }
             }
@@ -212,6 +213,7 @@ impl<'a> super::EffectChecker<'a> {
                 kind: EffectErrorKind::FfiLintHint,
                 subtype_trace: None,
                 replacement: None,
+                undeclared: None,
             });
         }
 
@@ -257,6 +259,7 @@ impl<'a> super::EffectChecker<'a> {
                 kind: EffectErrorKind::FfiLintHint,
                 subtype_trace: None,
                 replacement: None,
+                undeclared: None,
             });
         }
     }

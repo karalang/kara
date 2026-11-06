@@ -222,6 +222,7 @@ impl<'a> super::EffectChecker<'a> {
                 monomorphized_signature: None,
             }),
             replacement: None,
+            undeclared: None,
         });
     }
 

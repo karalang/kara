@@ -116,6 +116,7 @@ impl super::EffectChecker<'_> {
                 kind: EffectErrorKind::ProfileIncompatibleEffect,
                 subtype_trace: None,
                 replacement: None,
+                undeclared: None,
             });
         }
     }

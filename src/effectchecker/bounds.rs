@@ -570,6 +570,7 @@ impl<'a> super::EffectChecker<'a> {
                 kind: EffectErrorKind::MutualRecursionNote,
                 subtype_trace: None,
                 replacement: None,
+                undeclared: None,
             });
         }
     }

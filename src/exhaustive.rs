@@ -499,6 +499,42 @@ pub fn check_match_exhaustive(
     }
 }
 
+/// Every pattern a non-exhaustive match misses, at most `cap`: the first
+/// witness [`check_match_exhaustive`] reports, then, with each witness added
+/// as an arm, the next, until the arms are total. So a fix can add every
+/// missing arm in one edit (B-2026-11-05-29). Each witness is a value the
+/// arms before it do not cover, so adding it as a row only covers more and
+/// the loop ends; a wildcard witness (an open domain) ends it at once.
+/// Empty when the match is exhaustive or not checked.
+pub fn missing_match_witnesses(
+    scrutinee_type: &Type,
+    arms: &[MatchArm],
+    env: &TypeEnv,
+    cap: usize,
+) -> Vec<String> {
+    if !is_handled_scrutinee(scrutinee_type) {
+        return Vec::new();
+    }
+    let mut matrix = build_matrix(arms, scrutinee_type, env);
+    if is_open_slice_scrutinee(scrutinee_type) && slice_patterns_cover_all_lengths(&matrix) {
+        return Vec::new();
+    }
+    let head_types = vec![scrutinee_type.clone()];
+    let mut out = Vec::new();
+    while out.len() < cap {
+        let Some(witness_vec) = usefulness(&matrix, &[Pat::Wildcard], &head_types, env) else {
+            break;
+        };
+        let pat = witness_vec.into_iter().next().unwrap_or(Pat::Wildcard);
+        out.push(render_witness(&pat, scrutinee_type, env));
+        if matches!(pat, Pat::Wildcard) {
+            break;
+        }
+        matrix.rows.push(Row { pats: vec![pat] });
+    }
+    out
+}
+
 /// Gate for top-level exhaustiveness. Denylist: skip computed/erroneous/
 /// internal types and ref/pointer wrappers (the latter to preserve the
 /// pre-Maranget skip behaviour on `match r { ... }` over `ref T`). Every

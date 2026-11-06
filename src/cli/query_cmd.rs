@@ -33,7 +33,7 @@ pub(super) fn cmd_query(kind: QueryKind, filename: &str, function: &str) {
             pipeline.typecheck();
             pipeline.lower();
             pipeline.ownershipcheck();
-            query_ownership(&pipeline, function);
+            query_ownership(&pipeline, function, filename);
         }
         QueryKind::Concurrency => {
             // Same instance-method-effect-resolution requirement as the
@@ -654,12 +654,28 @@ pub(super) fn query_effects(pipeline: &Pipeline, function: &str, filename: &str)
     let inferred_str = inferred
         .map(crate::effect_graph::effect_set_json)
         .unwrap_or_else(|| "[]".to_string());
+    // Why the function has each effect: the call chain to where it
+    // happens, one chain per effect in inferred order (design.md § Compiler
+    // query API: "each answer includes a derivation chain").
+    let mut seen = std::collections::HashSet::new();
+    let steps: Vec<crate::effect_graph::DerivationStep> = inferred
+        .map(|set| {
+            set.effects
+                .iter()
+                .filter(|te| seen.insert(te.effect.clone()))
+                .flat_map(|te| {
+                    crate::effect_graph::derivation(effects, function, &te.effect, filename)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
 
     println!(
-        "{{\"function\":{},\"inferred_effects\":{},\"declared_effects\":{}}}",
+        "{{\"function\":{},\"inferred_effects\":{},\"declared_effects\":{},\"derivation\":{}}}",
         json_string(function),
         inferred_str,
         crate::effect_graph::declared_effects_json(declared),
+        crate::effect_graph::derivation_json(&steps),
     );
 }
 
@@ -681,7 +697,7 @@ pub(super) fn query_effects_whole_program(
     );
 }
 
-pub(super) fn query_ownership(pipeline: &Pipeline, function: &str) {
+pub(super) fn query_ownership(pipeline: &Pipeline, function: &str, filename: &str) {
     let ownership = pipeline.ownership.as_ref().unwrap();
 
     // Whole-program mode: an empty `function` (a bare `<file>.kara` target)
@@ -692,13 +708,13 @@ pub(super) fn query_ownership(pipeline: &Pipeline, function: &str) {
         names.sort();
         let entries: Vec<String> = names
             .into_iter()
-            .filter_map(|name| ownership_function_json(ownership, name))
+            .filter_map(|name| ownership_function_json(ownership, name, filename))
             .collect();
         println!("{{\"functions\":[{}]}}", entries.join(","));
         return;
     }
 
-    match ownership_function_json(ownership, function) {
+    match ownership_function_json(ownership, function, filename) {
         Some(json) => println!("{json}"),
         None => {
             eprintln!("error: function '{function}' not found");
@@ -713,6 +729,7 @@ pub(super) fn query_ownership(pipeline: &Pipeline, function: &str) {
 fn ownership_function_json(
     ownership: &crate::ownership::OwnershipCheckResult,
     function: &str,
+    filename: &str,
 ) -> Option<String> {
     match ownership.param_modes.get(function) {
         Some(params) => {
@@ -822,12 +839,41 @@ fn ownership_function_json(
                     )
                 })
                 .collect();
+            // Why each parameter has its body-level mode, then why each
+            // reference-counted binding is counted (design.md § Compiler
+            // query API; B-2026-11-05-29).
+            let mut steps: Vec<crate::effect_graph::DerivationStep> = ownership
+                .param_mode_derivation
+                .get(function)
+                .into_iter()
+                .flatten()
+                .map(|(_, line, reason)| crate::effect_graph::DerivationStep {
+                    file: filename.to_string(),
+                    line: *line,
+                    reason: reason.clone(),
+                })
+                .collect();
+            if let Some(m) = ownership.rc_values.get(function) {
+                let mut v: Vec<&crate::ownership::RcEntry> = m.values().collect();
+                v.sort_by(|a, b| a.binding.cmp(&b.binding));
+                for e in v {
+                    steps.push(crate::effect_graph::DerivationStep {
+                        file: filename.to_string(),
+                        line: e.other_use_span.line,
+                        reason: format!(
+                            "`{}` is used here after it is consumed at line {}, so it is reference-counted",
+                            e.binding, e.consume_span.line
+                        ),
+                    });
+                }
+            }
             Some(format!(
-                "{{\"function\":{},\"parameters\":[{}],\"rc_values\":[{}],\"closures\":[{}]}}",
+                "{{\"function\":{},\"parameters\":[{}],\"rc_values\":[{}],\"closures\":[{}],\"derivation\":{}}}",
                 json_string(function),
                 param_entries.join(","),
                 rc_entries.join(","),
                 closure_entries.join(","),
+                crate::effect_graph::derivation_json(&steps),
             ))
         }
         None => None,

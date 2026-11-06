@@ -38,6 +38,47 @@ pub(super) fn json_string(s: &str) -> String {
     out
 }
 
+/// The fields design.md § Structured compiler output gives a missing
+/// effect declaration (E0400): `inferred_effects` (the function's set),
+/// `declared_effects` (its clause; `[]` with none) and the `derivation` of
+/// each undeclared effect, the call chain that brought it in
+/// (B-2026-11-05-29).
+fn undeclared_effects_json(
+    effects: &crate::effectchecker::EffectCheckResult,
+    u: &crate::effectchecker::UndeclaredEffects,
+    filename: &str,
+) -> String {
+    use crate::effect_graph::{derivation, derivation_json, effect_display};
+    let display = |set: &crate::effectchecker::EffectSet| -> Vec<String> {
+        set.effects
+            .iter()
+            .map(|te| effect_display(&te.effect))
+            .collect()
+    };
+    let inferred = effects
+        .inferred_effects
+        .get(&u.function)
+        .map(display)
+        .unwrap_or_default();
+    let declared = match effects.declared_effects.get(&u.function) {
+        Some(DeclaredEffects::Explicit(set)) | Some(DeclaredEffects::PolymorphicWithFixed(set)) => {
+            display(set)
+        }
+        _ => Vec::new(),
+    };
+    let steps: Vec<_> = u
+        .effects
+        .iter()
+        .flat_map(|effect| derivation(effects, &u.function, effect, filename))
+        .collect();
+    format!(
+        "\"inferred_effects\":{},\"declared_effects\":{},\"derivation\":{}",
+        json_string_list(&inferred),
+        json_string_list(&declared),
+        derivation_json(&steps),
+    )
+}
+
 pub(super) fn json_string_list(items: &[String]) -> String {
     let parts: Vec<String> = items.iter().map(|s| json_string(s)).collect();
     format!("[{}]", parts.join(","))
@@ -2301,10 +2342,14 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                     json_string(&r.replacement),
                 )
             });
-            let extra_json = match (subtype_json, replacement_json) {
-                (Some(a), Some(b)) => Some(format!("{a},{b}")),
-                (a, b) => a.or(b),
-            };
+            let undeclared_json = err
+                .undeclared
+                .as_deref()
+                .map(|u| undeclared_effects_json(e, u, filename));
+            let extra_json = [subtype_json, replacement_json, undeclared_json]
+                .into_iter()
+                .flatten()
+                .reduce(|a, b| format!("{a},{b}"));
             diags.add(DiagEntry {
                 id: &format!("d{id_counter}"),
                 severity,

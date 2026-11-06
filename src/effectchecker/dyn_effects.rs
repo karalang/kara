@@ -578,6 +578,7 @@ impl<'a> super::EffectChecker<'a> {
                     kind: EffectErrorKind::EffectSubtypeViolation,
                     subtype_trace: None,
                     replacement: None,
+                    undeclared: None,
                 });
             }
         }

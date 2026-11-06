@@ -2217,12 +2217,42 @@ fn classify_explain_name(name: &str) -> crate::cli::ExplainTarget {
 }
 
 fn parse_query_command(args: &[String]) -> Command {
+    // `karac query queries` with no target reports the package in this
+    // directory, as design.md § Compiler query API writes it: its
+    // src/main.kara, or src/lib.kara for a library (B-2026-11-05-29).
+    if args.len() == 3 && args[2] == "queries" {
+        let entry = std::env::current_dir().ok().and_then(|cwd| {
+            let root = crate::manifest::discover_project_root(&cwd)?;
+            let src = root.join("src");
+            let entry = [src.join("main.kara"), src.join("lib.kara")]
+                .into_iter()
+                .find(|p| p.is_file())?;
+            let shown = entry.strip_prefix(&cwd).unwrap_or(&entry).to_path_buf();
+            Some(shown.to_string_lossy().into_owned())
+        });
+        let Some(file) = entry else {
+            eprintln!(
+                "error: `karac query queries` with no target reports the package in this \
+                 directory, and there is none here (no kara.toml with a src/main.kara or \
+                 src/lib.kara); give a file: `karac query queries <file>.kara`"
+            );
+            process::exit(1);
+        };
+        return Command::Query {
+            kind: QueryKind::Queries,
+            file,
+            function: String::new(),
+        };
+    }
     if args.len() < 4 {
         eprintln!(
             "Usage: karac query <effects|ownership|concurrency|cost-summary|attributes|queries|monomorphization|affected-by> [flags] <target>"
         );
         eprintln!("       <target> is `<file>.<function>` for the per-function kinds,");
         eprintln!("                or `<file>` for effects, concurrency (whole-program), cost-summary, attributes, queries, and monomorphization,");
+        eprintln!(
+            "                and `queries` with no target reports the package in this directory,"
+        );
         eprintln!("                or `<file>[:<line>|<line>-<line>|<fn>]` for affected-by.");
         eprintln!("       attributes accepts `--tool=PREFIX` to filter by first-segment match.");
         eprintln!(

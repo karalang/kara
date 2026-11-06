@@ -172,6 +172,7 @@ fn gpu_gate_dfs(
                 kind: EffectErrorKind::GpuEffectViolation,
                 subtype_trace: None,
                 replacement: None,
+                undeclared: None,
             });
         }
     }

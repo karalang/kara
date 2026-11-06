@@ -20,6 +20,29 @@ use super::{OwnershipError, OwnershipErrorKind, ParamUsage, ValueState};
 impl<'a> super::OwnershipChecker<'a> {
     // ── Block / Statement / Expression Walking ──────────────────
 
+    /// Record each parameter a statement first wrote or moved, for the
+    /// ownership query's derivation. A nested block records its own
+    /// statements first, so the line is the innermost statement's.
+    fn note_usage_changes(
+        &mut self,
+        before: &HashMap<String, ParamUsage>,
+        after: &HashMap<String, ParamUsage>,
+        span: crate::token::Span,
+    ) {
+        for (name, usage) in after {
+            if !matches!(usage, ParamUsage::Mutated | ParamUsage::Consumed)
+                || before.get(name) == Some(usage)
+                || self
+                    .usage_sites
+                    .iter()
+                    .any(|(n, u, _)| n == name && u == usage)
+            {
+                continue;
+            }
+            self.usage_sites.push((name.clone(), usage.clone(), span));
+        }
+    }
+
     pub(crate) fn check_block(
         &mut self,
         block: &Block,
@@ -37,7 +60,9 @@ impl<'a> super::OwnershipChecker<'a> {
         let mut holders: Vec<(String, usize)> = Vec::new();
         for (i, stmt) in block.stmts.iter().enumerate() {
             self.end_dead_slice_holders(block, i, &mut holders);
+            let before = param_usage.clone();
             self.check_stmt(stmt, states, param_types, param_usage);
+            self.note_usage_changes(&before, param_usage, stmt.span);
             if let StmtKind::Let { pattern, .. } = &stmt.kind {
                 for name in pattern.binding_names() {
                     holders.retain(|(h, _)| *h != name);
@@ -48,7 +73,9 @@ impl<'a> super::OwnershipChecker<'a> {
             }
         }
         if let Some(ref expr) = block.final_expr {
+            let before = param_usage.clone();
             self.check_expr_consuming(expr, states, param_types, param_usage);
+            self.note_usage_changes(&before, param_usage, expr.span);
         }
         // B-2026-09-28-61 — a `let ... else` binding lives to the end of the
         // enclosing block, so whether it was moved out of a `shared enum` is

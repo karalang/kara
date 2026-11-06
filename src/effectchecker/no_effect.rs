@@ -109,6 +109,7 @@ impl super::EffectChecker<'_> {
                 kind: EffectErrorKind::NoEffectViolated,
                 subtype_trace: None,
                 replacement: None,
+                undeclared: None,
             });
         }
     }

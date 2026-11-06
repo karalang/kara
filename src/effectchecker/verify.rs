@@ -19,9 +19,41 @@ use crate::intern::Symbol;
 use crate::token::Span;
 
 use super::{
-    declared_admits, verb_name, DeclaredEffects, EffectError, EffectErrorKind, PublicEffectsPolicy,
-    TracedEffect,
+    declared_admits, verb_name, DeclaredEffects, Effect, EffectError, EffectErrorKind,
+    PublicEffectsPolicy, TracedEffect, UndeclaredEffects,
 };
+
+/// The payload of a missing-declaration error: `function` performs
+/// `effects` without declaring them.
+fn undeclared<'e>(
+    function: &str,
+    effects: impl IntoIterator<Item = &'e Effect>,
+) -> Option<Box<UndeclaredEffects>> {
+    Some(Box::new(UndeclaredEffects {
+        function: function.to_string(),
+        effects: effects.into_iter().cloned().collect(),
+    }))
+}
+
+/// `effects` as a `with` clause writes them, space-separated: a resource
+/// verb as `verb(Resource)`, a resourceless one (`panics`) bare, sorted.
+fn clause_text(effects: &[Effect]) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    for e in effects {
+        let part = if e.resource.is_empty() {
+            verb_name(&e.verb).to_string()
+        } else {
+            format!("{}({})", verb_name(&e.verb), e.resource)
+        };
+        if !parts.contains(&part) {
+            parts.push(part);
+        }
+    }
+    // The errors come from a set, so their order is not stable; the edit
+    // must be.
+    parts.sort();
+    parts.join(" ")
+}
 
 impl<'a> super::EffectChecker<'a> {
     // ── Verification ────────────────────────────────────────────
@@ -38,7 +70,73 @@ impl<'a> super::EffectChecker<'a> {
         matches!(ret.kind, TypeKind::FnType { .. }).then_some(ret)
     }
 
+    /// The edit that declares `add` on `sym`: appended to its `with`
+    /// clause, or a new clause where the clause goes (after the return
+    /// type, before `requires`, `where` and the body). `None` where no
+    /// edit is safe: a library function, an `Fn` return type (a `with`
+    /// after it binds to the type), and a clause-less function whose
+    /// signature ends in `requires` / `ensures` / `where` with no return
+    /// type to anchor on.
+    fn with_clause_edit(&self, sym: Symbol, add: &str) -> Option<Box<crate::resolver::TextEdit>> {
+        let f = self
+            .function_bodies
+            .get(&sym)
+            .or_else(|| self.method_bodies.get(&sym))?;
+        if f.stdlib_origin || add.is_empty() {
+            return None;
+        }
+        let (offset, text) = match &f.effects {
+            Some(list) => (list.span.offset + list.span.length, format!(" {add}")),
+            None => {
+                if matches!(
+                    f.return_type.as_ref().map(|t| &t.kind),
+                    Some(TypeKind::FnType { .. })
+                ) {
+                    return None;
+                }
+                if f.requires.is_empty() && f.ensures.is_empty() && f.where_clause.is_none() {
+                    (f.body.span.offset, format!("with {add} "))
+                } else {
+                    let rt = f.return_type.as_ref()?;
+                    (rt.span.offset + rt.span.length, format!(" with {add}"))
+                }
+            }
+        };
+        Some(Box::new(crate::resolver::TextEdit {
+            offset,
+            length: 0,
+            replacement: text,
+        }))
+    }
+
+    /// Give the first missing-declaration error of each function in
+    /// `self.errors[from..]` the edit that declares everything its errors
+    /// report (B-2026-11-05-29). One edit per function, so `karac fix`
+    /// never inserts twice at the same place; `main`, whose fix is to
+    /// drop its `pub`, gets none.
+    fn attach_with_clause_fixes(&mut self, from: usize) {
+        let mut by_function: Vec<(String, usize, Vec<Effect>)> = Vec::new();
+        for (i, err) in self.errors.iter().enumerate().skip(from) {
+            let Some(u) = err.undeclared.as_deref() else {
+                continue;
+            };
+            if err.replacement.is_some() || u.function == "main" {
+                continue;
+            }
+            match by_function.iter_mut().find(|(f, ..)| *f == u.function) {
+                Some((_, _, effects)) => effects.extend(u.effects.iter().cloned()),
+                None => by_function.push((u.function.clone(), i, u.effects.clone())),
+            }
+        }
+        for (function, first, effects) in by_function {
+            let sym = self.interner.intern(&function);
+            let edit = self.with_clause_edit(sym, &clause_text(&effects));
+            self.errors[first].replacement = edit;
+        }
+    }
+
     pub(crate) fn verify_declarations(&mut self) {
+        let from = self.errors.len();
         let fn_names: Vec<Symbol> = self.function_bodies.keys().copied().collect();
         for &sym in &fn_names {
             let is_pub = self.function_visibility.get(&sym).copied().unwrap_or(false);
@@ -118,6 +216,7 @@ impl<'a> super::EffectChecker<'a> {
                                 kind: EffectErrorKind::MissingEffectDeclaration,
                                 subtype_trace: None,
                                 replacement: None,
+                                undeclared: undeclared(&name, [&te.effect]),
                             });
                         }
                     }
@@ -173,6 +272,7 @@ impl<'a> super::EffectChecker<'a> {
                                     kind: EffectErrorKind::MissingEffectDeclaration,
                                     subtype_trace: None,
                                     replacement: None,
+                                    undeclared: undeclared(&name, [&te.effect]),
                                 });
                             }
                         }
@@ -213,6 +313,7 @@ impl<'a> super::EffectChecker<'a> {
                                     kind: EffectErrorKind::MissingEffectDeclaration,
                                     subtype_trace: None,
                                     replacement: None,
+                                    undeclared: undeclared(&name, [effect]),
                                 });
                             }
                         }
@@ -234,6 +335,7 @@ impl<'a> super::EffectChecker<'a> {
                                     kind: EffectErrorKind::OverDeclaredEffect,
                                     subtype_trace: None,
                                     replacement: None,
+                                    undeclared: None,
                                 });
                             }
                         }
@@ -359,6 +461,10 @@ impl<'a> super::EffectChecker<'a> {
                                     kind: EffectErrorKind::MissingEffectDeclaration,
                                     subtype_trace: None,
                                     replacement: None,
+                                    undeclared: undeclared(
+                                        &name,
+                                        non_transparent.iter().map(|e| &e.effect),
+                                    ),
                                 });
                             }
                         }
@@ -379,9 +485,11 @@ impl<'a> super::EffectChecker<'a> {
                     kind: EffectErrorKind::MissingEffectDeclaration,
                     subtype_trace: None,
                     replacement: None,
+                    undeclared: None,
                 });
             }
         }
+        self.attach_with_clause_fixes(from);
     }
 
     /// Verify a WRITTEN effect clause where [`Self::verify_declarations`] does
@@ -486,10 +594,13 @@ impl<'a> super::EffectChecker<'a> {
                     kind: EffectErrorKind::MissingEffectDeclaration,
                     subtype_trace: None,
                     replacement: None,
+                    undeclared: undeclared(&name, [&te.effect]),
                 });
             }
         }
+        let from = self.errors.len();
         self.errors.extend(new_errors);
+        self.attach_with_clause_fixes(from);
     }
 
     /// Enforce design.md § Panic Semantics at the FFI Boundary, case 2:
@@ -568,6 +679,7 @@ impl<'a> super::EffectChecker<'a> {
                 kind: EffectErrorKind::ExternCUnwindRequiresPanics,
                 subtype_trace: None,
                 replacement: None,
+                undeclared: None,
             });
         }
     }
@@ -635,6 +747,7 @@ impl<'a> super::EffectChecker<'a> {
                 kind: EffectErrorKind::ExternCUnwindRequiresUnwindProfile,
                 subtype_trace: None,
                 replacement: None,
+                undeclared: None,
             });
         }
     }
@@ -682,6 +795,7 @@ impl<'a> super::EffectChecker<'a> {
                 kind: EffectErrorKind::ExternExportSuspendsUnsupported,
                 subtype_trace: None,
                 replacement: None,
+                undeclared: None,
             });
         }
     }
@@ -782,6 +896,7 @@ impl<'a> super::EffectChecker<'a> {
                             kind: EffectErrorKind::ImplExceedsTraitCeiling,
                             subtype_trace: None,
                             replacement: None,
+                            undeclared: None,
                         });
                     }
                 }
@@ -870,6 +985,7 @@ impl<'a> super::EffectChecker<'a> {
                     kind: EffectErrorKind::DropBodyMayPanic,
                     subtype_trace: None,
                     replacement: None,
+                    undeclared: None,
                 });
             }
         }
@@ -946,6 +1062,7 @@ impl<'a> super::EffectChecker<'a> {
                             kind: EffectErrorKind::TraitDefaultExceedsCeiling,
                             subtype_trace: None,
                             replacement: None,
+                            undeclared: None,
                         });
                     }
                 }

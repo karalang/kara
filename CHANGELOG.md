@@ -231,6 +231,15 @@ accepted by 0.8.0 are now refused, each with a fix-it.
 
 ### Diagnostics
 
+- **E0400 explains itself and `karac fix` declares the effects.** Its JSON
+  record carries `inferred_effects`, `declared_effects` and a `derivation`,
+  the call chain that brought in each undeclared effect (design.md §17
+  rule 5). Its fix adds the effects to the `with` clause, or writes the
+  clause, so `karac fix` resolves it. A non-exhaustive match on an enum, a
+  bool or a tuple of them is fixed with every missing arm in one edit, not
+  one arm per run. `karac query effects` and `query ownership` answer with
+  a `derivation`, and `karac query queries` with no target reports the
+  package in the current directory (B-2026-11-05-29).
 - `#[allow(unfulfilled_lint_expectation)]` on a function or impl covers an
   `#[expect]` on a statement inside it; `-A` / `-W` / `-D` / `-F` naming no
   lint warns `unknown_lint`, as an attribute does; an unknown lint and an

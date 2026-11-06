@@ -992,6 +992,12 @@ pub struct OwnershipCheckResult {
     /// borrows. Same keys and order as `param_modes`, which holds what the
     /// body does with each parameter instead (B-2026-10-30-35).
     pub declared_param_modes: HashMap<String, Vec<(String, OwnershipMode)>>,
+    /// Why each parameter has its body-level mode in `param_modes`: per
+    /// function, `(parameter, line, reason)`, the line of the first
+    /// statement that wrote or moved it, or the function's line when the
+    /// body only reads it. `karac query ownership` answers with it as the
+    /// `derivation` (design.md § Compiler query API; B-2026-11-05-29).
+    pub param_mode_derivation: HashMap<String, Vec<(String, usize, String)>>,
     /// B-2026-08-10-21 — span keys (`(offset, length)`) of every CONSUME site
     /// that a `UseAfterMove` diagnostic reported, i.e. every move whose source
     /// is read again afterwards.
@@ -1620,6 +1626,11 @@ pub struct OwnershipChecker<'a> {
     pub(crate) param_modes: HashMap<String, Vec<(String, OwnershipMode)>>,
     /// See `OwnershipCheckResult::declared_param_modes`.
     pub(crate) declared_param_modes: HashMap<String, Vec<(String, OwnershipMode)>>,
+    /// See `OwnershipCheckResult::param_mode_derivation`.
+    pub(crate) param_mode_derivation: HashMap<String, Vec<(String, usize, String)>>,
+    /// The current function's parameter-usage changes, in walk order: the
+    /// parameter, the usage it reached and the statement that made it so.
+    pub(crate) usage_sites: Vec<(String, ParamUsage, Span)>,
     /// B-2026-08-16-7 — the consume span of EVERY (C, U) use-after-move
     /// witness, across all functions, not merely the first per binding
     /// that the diagnostic reports. Unioned into
@@ -2168,6 +2179,8 @@ impl<'a> OwnershipChecker<'a> {
             typecheck_result,
             param_modes: HashMap::new(),
             declared_param_modes: HashMap::new(),
+            param_mode_derivation: HashMap::new(),
+            usage_sites: Vec::new(),
             all_uam_consume_sites: std::collections::HashSet::new(),
             uam_bindings: std::collections::HashSet::new(),
             closure_param_modes: FxHashMap::default(),
@@ -2456,6 +2469,7 @@ impl<'a> OwnershipChecker<'a> {
         OwnershipCheckResult {
             param_modes: self.param_modes,
             declared_param_modes: self.declared_param_modes,
+            param_mode_derivation: self.param_mode_derivation,
             use_after_move_consume_sites,
             elidable_ref_params,
             closure_param_modes: self.closure_param_modes,
@@ -3162,6 +3176,7 @@ impl<'a> OwnershipChecker<'a> {
         }
 
         // Track parameter usage for mode inference
+        let outer_usage_sites = std::mem::take(&mut self.usage_sites);
         let mut param_usage: HashMap<String, ParamUsage> = HashMap::new();
         for param in &f.params {
             for name in param.pattern.binding_names() {
@@ -3354,6 +3369,47 @@ impl<'a> OwnershipChecker<'a> {
                 modes.push((name, mode));
             }
         }
+        let sites = std::mem::replace(&mut self.usage_sites, outer_usage_sites);
+        let derivation = modes
+            .iter()
+            .map(|(name, mode)| {
+                let site = |want: ParamUsage| {
+                    sites
+                        .iter()
+                        .find(|(n, u, _)| n == name && *u == want)
+                        .map(|(_, _, span)| span.line)
+                };
+                let (line, reason) = if escaping_own_params.contains(name) {
+                    (
+                        f.span.line,
+                        format!("`{name}` is captured by a closure that escapes, which takes it"),
+                    )
+                } else {
+                    match mode {
+                        OwnershipMode::Own => (
+                            site(ParamUsage::Consumed).unwrap_or(f.span.line),
+                            format!("`{name}` is moved here, so the body takes it"),
+                        ),
+                        OwnershipMode::MutRef => (
+                            site(ParamUsage::Mutated).unwrap_or(f.span.line),
+                            format!("`{name}` is written here, so the body needs `mut ref`"),
+                        ),
+                        _ => match param_usage.get(name) {
+                            Some(ParamUsage::Unused) | None => {
+                                (f.span.line, format!("`{name}` is not used"))
+                            }
+                            _ => (
+                                f.span.line,
+                                format!("the body never moves `{name}`, so a borrow will do"),
+                            ),
+                        },
+                    }
+                };
+                (name.clone(), line, reason)
+            })
+            .collect();
+        self.param_mode_derivation
+            .insert(fn_key.clone(), derivation);
         self.drop_copy_non_move_errors(f, &fn_key, errors_before, copy_index_moves);
         self.declared_param_modes.insert(fn_key.clone(), declared);
         self.param_modes.insert(fn_key, modes);

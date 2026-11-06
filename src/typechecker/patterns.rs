@@ -2889,14 +2889,34 @@ impl<'a> super::TypeChecker<'a> {
                 // pattern (`Cancelled`, `Failed(_)`, `Point { .. }`, …), so the
                 // missing arm can be synthesized as a machine-applicable fix.
                 // Bool / integer-range / other witnesses stay descriptive.
-                // `check_match_exhaustive` yields one witness at a time, so a
-                // match missing several variants is fixed one arm per pass.
-                let is_enum = matches!(
-                    scrutinee_type,
-                    Type::Named { name, .. } if self.env.enums.contains_key(name)
-                );
-                if is_enum {
-                    let arm = format!("{witness} => todo()");
+                // Every missing arm goes in one edit (B-2026-11-05-29), and a
+                // bool match's missing `true` / `false` is an arm too.
+                let fixable = arms_are_synthesizable(scrutinee_type, &self.env);
+                if fixable {
+                    let witnesses = crate::exhaustive::missing_match_witnesses(
+                        scrutinee_type,
+                        arms,
+                        &self.env,
+                        64,
+                    );
+                    let message = if witnesses.len() > 1 {
+                        let all: Vec<String> = witnesses.iter().map(|w| format!("`{w}`")).collect();
+                        format!(
+                            "non-exhaustive match: patterns {} not covered",
+                            all.join(", ")
+                        )
+                    } else {
+                        message
+                    };
+                    let arm = if witnesses.is_empty() {
+                        format!("{witness} => todo()")
+                    } else {
+                        witnesses
+                            .iter()
+                            .map(|w| format!("{w} => todo()"))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    };
                     let fix_it = non_exhaustive_match_fix_it(&span, arms, &arm);
                     self.type_error_with_fix_it(
                         message,
@@ -4115,6 +4135,21 @@ fn non_exhaustive_pattern_fix_it(
 /// with `, ` (the last arm's span ends before any trailing comma, so this
 /// yields a well-formed comma-separated list); an empty match inserts just
 /// before the closing brace. The span is a zero-length insertion point.
+/// Whether a missing arm of a match on `ty` can be written from its
+/// witness: a bool, an enum, or a tuple of those, whose witnesses render as
+/// patterns (`false`, `Failed(_)`, `(Green, _)`). An integer or string
+/// witness describes a range or a wildcard, not an arm to add.
+fn arms_are_synthesizable(ty: &Type, env: &crate::typechecker::TypeEnv) -> bool {
+    match ty {
+        Type::Bool => true,
+        Type::Named { name, .. } => env.enums.contains_key(name),
+        Type::Tuple(elems) => elems.iter().all(|e| arms_are_synthesizable(e, env)),
+        // A borrowed parameter in a tuple scrutinee: `match (c, b)`.
+        Type::Ref(inner) | Type::MutRef(inner) => arms_are_synthesizable(inner, env),
+        _ => false,
+    }
+}
+
 fn non_exhaustive_match_fix_it(
     match_span: &Span,
     arms: &[MatchArm],

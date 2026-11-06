@@ -195,6 +195,19 @@ pub struct EffectError {
     /// the `replacement` payload. Boxed for the same sparse-payload
     /// reason as `ResolveError::replacement`.
     pub replacement: Option<Box<crate::resolver::TextEdit>>,
+    /// For a missing-declaration error (E0400): the function and the
+    /// effects it performs beyond its clause, so `--output=json` can give
+    /// the inferred and declared sets and the derivation of each
+    /// (design.md § Diagnostic quality commitments, rule 5).
+    pub undeclared: Option<Box<UndeclaredEffects>>,
+}
+
+/// The payload of a missing-declaration error: `function` (its key in
+/// `inferred_effects`) performs `effects` without declaring them.
+#[derive(Debug, Clone)]
+pub struct UndeclaredEffects {
+    pub function: String,
+    pub effects: Vec<Effect>,
 }
 
 /// Whether an effect diagnostic of this kind STOPS A BUILD.
@@ -2469,6 +2482,7 @@ impl<'a> EffectChecker<'a> {
                     kind: EffectErrorKind::CircularEffectGroup,
                     subtype_trace: None,
                     replacement: None,
+                    undeclared: None,
                 });
             }
             self.expanded_groups
@@ -2522,6 +2536,7 @@ impl<'a> EffectChecker<'a> {
                                 kind: EffectErrorKind::UndefinedEffectGroup,
                                 subtype_trace: None,
                                 replacement: None,
+                                undeclared: None,
                             });
                             continue;
                         }
@@ -2747,6 +2762,7 @@ impl<'a> EffectChecker<'a> {
                             kind: EffectErrorKind::UndefinedEffectGroup,
                             subtype_trace: None,
                             replacement: None,
+                            undeclared: None,
                         });
                     }
                 }

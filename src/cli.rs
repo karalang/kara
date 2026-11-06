@@ -2509,6 +2509,7 @@ impl Pipeline {
                 kind,
                 subtype_trace: None,
                 replacement: None,
+                undeclared: None,
             });
         }
     }

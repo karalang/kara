@@ -232,6 +232,7 @@ impl<'a> super::EffectChecker<'a> {
                     kind: EffectErrorKind::TargetGateViolation,
                     subtype_trace: None,
                     replacement: None,
+                    undeclared: None,
                 });
             }
         }

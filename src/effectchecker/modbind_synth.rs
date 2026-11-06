@@ -656,6 +656,7 @@ impl<'a> super::EffectChecker<'a> {
                 kind: super::EffectErrorKind::ModuleBindingWriteInPar,
                 subtype_trace: None,
                 replacement: None,
+                undeclared: None,
             });
         }
     }
@@ -733,6 +734,7 @@ impl<'a> super::EffectChecker<'a> {
                         kind: super::EffectErrorKind::ModuleBindingWriteInPar,
                         subtype_trace: None,
                         replacement: None,
+                        undeclared: None,
                     });
                 }
             }
@@ -833,6 +835,7 @@ impl<'a> super::EffectChecker<'a> {
                     kind: super::EffectErrorKind::PubFnSyntheticResource,
                     subtype_trace: None,
                     replacement: None,
+                    undeclared: None,
                 });
             }
         }

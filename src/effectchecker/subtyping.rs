@@ -553,6 +553,7 @@ impl<'a> super::EffectChecker<'a> {
                             monomorphized_signature: monomorphized.clone(),
                         }),
                         replacement: None,
+                        undeclared: None,
                     });
                 }
             }
@@ -1139,6 +1140,7 @@ impl<'a> super::EffectChecker<'a> {
                     monomorphized_signature: None,
                 }),
                 replacement: None,
+                undeclared: None,
             });
         }
     }

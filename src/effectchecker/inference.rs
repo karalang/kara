@@ -276,6 +276,7 @@ impl<'a> super::EffectChecker<'a> {
                                 length: span.length,
                                 replacement: "ref self".to_string(),
                             })),
+                            undeclared: None,
                         });
                     }
                 }
@@ -734,6 +735,7 @@ impl<'a> super::EffectChecker<'a> {
                 kind: super::EffectErrorKind::ForbiddenEffectInContract,
                 subtype_trace: None,
                 replacement: None,
+                undeclared: None,
             });
         }
     }

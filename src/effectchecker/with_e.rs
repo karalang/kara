@@ -269,6 +269,7 @@ impl<'a> super::EffectChecker<'a> {
                                 kind: EffectErrorKind::EffectVariableConflict,
                                 subtype_trace: None,
                                 replacement: None,
+                                undeclared: None,
                             });
                         }
                     }
