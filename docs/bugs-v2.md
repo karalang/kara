@@ -115,7 +115,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-05-33 | 2026-11-05 | mir-llvm | low | x86 host-dependent: a jump across a 32-byte line costs kata 661 1.5x on one Cascade Lake host and nothing on another; aligning branches is 0.914x geomean there and loses kata 207 2.3x here, so it is opt-in (KARAC_MIR_ALIGN_BRANCHES=1); the over-2x list was a cross-host artifact | — |
 | B-2026-11-05-35 | 2026-11-05 | typecheck | low | `(0..n).step_by(2).rev()` is "no method 'rev' on type 'IterStepBy'": Rust's `StepBy` walks back over a range, Kāra's has no `next_back` and the diagnostic names no other way | — |
 | B-2026-11-05-36 | 2026-11-05 | mir-llvm | low | The v2 debugger metadata lacks two pieces of the contract: `list_tasks()` rows carry no effect summary, and `WaitTarget.PeerTask` does not name the task waited on (the kara.toml key and per-worker file:line landed at 0652164cf8) | — |
-| B-2026-11-05-37 | 2026-11-05 | typecheck+mir | low | `RangeTo[T]`, `RangeToInclusive[T]` and `RangeFull` are undefined type names, and `..2`, `..=2` and `..` as values are `the expression kind Range is not lowered yet` (design.md §6 range table; the slice forms `v[..n]`, `v[..=n]`, `v[..]` work) | — |
 
 ### Relocated
 
@@ -727,6 +726,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-05-26 | cli | low | package mode: `karac check --output=jsonl` on a package member prints `type_error` lines (no `type` stream, no ids) and stops at typecheck, `karac bu… | 532e17a65b |
 | B-2026-11-05-28 | cli | low | diagnostics carry no `concept` id, and `karac explain` knows no concept ids from the diagnostic taxonomy (`ownership/move-semantics`) and no items (`… | 7966b30c9e |
 | B-2026-11-05-34 | mir-llvm | low | The v2 backends emit none of the debugger contract's runtime metadata (design.md § Debugger contract, elements 1-3): no spawn-site ids per `par {}` b… | 12215de11b |
+| B-2026-11-05-37 | typecheck+mir | low | `RangeTo[T]`, `RangeToInclusive[T]` and `RangeFull` are undefined type names, and `..2`, `..=2` and `..` as values are `the expression kind Range is… | 28d010faad |
 
 </details>
 
