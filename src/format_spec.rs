@@ -350,14 +350,29 @@ impl FormatSpec {
                 }
             }
             Err(_) => {
-                let mut m = mag;
+                // Divided 32 bits at a time, not as a `u128`: 128-bit
+                // division is compiler_builtins' `__udivti3`, whose unwind
+                // table names Rust's personality routine, and on Mach-O
+                // that keeps std's panic machinery in every binary that
+                // formats a hole with a spec (B-2026-11-06-2).
+                let mut limbs = [
+                    (mag >> 96) as u32,
+                    (mag >> 64) as u32,
+                    (mag >> 32) as u32,
+                    mag as u32,
+                ];
                 while i > 0 {
+                    let mut rem = 0u64;
+                    for l in limbs.iter_mut() {
+                        let cur = rem << 32 | u64::from(*l);
+                        *l = (cur / base) as u32;
+                        rem = cur % base;
+                    }
                     i -= 1;
                     if let Some(slot) = buf.get_mut(i) {
-                        *slot = digit((m % u128::from(base)) as u8);
+                        *slot = digit(rem as u8);
                     }
-                    m /= u128::from(base);
-                    if m == 0 {
+                    if limbs.iter().all(|l| *l == 0) {
                         break;
                     }
                 }
