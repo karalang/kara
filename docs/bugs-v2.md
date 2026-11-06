@@ -59,7 +59,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 142 |
-| false-positive | 120 |
+| false-positive | 121 |
 | perf | 103 |
 | missing-feature | 90 |
 | soundness | 50 |
@@ -75,7 +75,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 213 |
+| typecheck | 214 |
 | mir-llvm | 124 |
 | mir | 121 |
 | cli | 69 |
@@ -111,6 +111,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-06-2 | 2026-11-06 | mir-llvm | low | Kata 346's seq binary is 336,240 B on g162ee7a0e, after 5984ed3080 and e8466b1435 took the seven B-2026-11-04-31 katas to 83-99 KB | — |
 | B-2026-11-06-3 | 2026-11-06 | typecheck | low | A Rust `Vec<usize>` element type, once `karac fix` spells it `Vec[Vec[usize]]`, draws four `i64`/`usize` coercion and comparison errors with no fix; the fix is to write `i64` (design.md §5: `usize` is for FFI) | — |
 | B-2026-11-06-5 | 2026-11-06 | cli | medium | `karac query` refuses a program that uses a library type `karac check` resolves (`undefined type 'WsMessage'`), so every query kind fails on the `karac new` backend scaffold: the query pipeline is built without `.with_library()` | — |
+| B-2026-11-06-6 | 2026-11-06 | typecheck | medium | two impls of one trait whose headers do not unify, `impl[T] Name for W[A[T]]` and `impl[T] Name for W[B[T]]`, are refused as a conflicting impl ("`W` already implements `Name`"), and in the standard library the second is dropped silently | — |
 
 ### Relocated
 
