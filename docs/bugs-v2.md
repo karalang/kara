@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 142 |
+| diagnostics | 143 |
 | false-positive | 121 |
 | perf | 104 |
 | missing-feature | 91 |
@@ -78,7 +78,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | typecheck | 215 |
 | mir-llvm | 125 |
 | mir | 121 |
-| cli | 69 |
+| cli | 70 |
 | ownership | 53 |
 | parser | 40 |
 | interp | 30 |
@@ -107,10 +107,10 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-05-27 | 2026-11-05 | mir-llvm | medium | x86 only, within on the M5: two kata benches run about 2x slower on LLVM 22 than on LLVM 18 on x86, min_stack (155) 951 ms vs 444 and hsearch (275) 1074 vs 526; Gowtham's M5 run at 7c63217740 reads 0.904x and 1.056x legacy's cycles; teemo, the third of B-2026-11-05-4, is fixed | — |
 | B-2026-11-05-33 | 2026-11-05 | mir-llvm | low | x86 host-dependent: a jump across a 32-byte line costs kata 661 1.5x on one Cascade Lake host and nothing on another; aligning branches is 0.914x geomean there and loses kata 207 2.3x here, so it is opt-in (KARAC_MIR_ALIGN_BRANCHES=1); the over-2x list was a cross-host artifact | — |
 | B-2026-11-06-2 | 2026-11-06 | mir-llvm | low | Kata 346's seq binary is 336,240 B on g162ee7a0e, after 5984ed3080 and e8466b1435 took the seven B-2026-11-04-31 katas to 83-99 KB | — |
-| B-2026-11-06-5 | 2026-11-06 | cli | medium | `karac query` refuses a program that uses a library type `karac check` resolves (`undefined type 'WsMessage'`), so every query kind fails on the `karac new` backend scaffold: the query pipeline is built without `.with_library()` | — |
 | B-2026-11-06-6 | 2026-11-06 | typecheck | medium | two impls of one trait whose headers do not unify, `impl[T] Name for W[A[T]]` and `impl[T] Name for W[B[T]]`, are refused as a conflicting impl ("`W` already implements `Name`"), and in the standard library the second is dropped silently | — |
 | B-2026-11-06-7 | 2026-11-06 | typecheck | medium | A type parameter that only a call's return type names is refused at the `let` (`let mut heap = PriorityQueue.new()`, a user `Bag.new()`, `fn empty[T]() -> Vec[T]`) with 'cannot infer type parameter T', though a later use in the body (`heap.push(x)`) fixes it; design.md §8 solves type variables by unification within the body | — |
 | B-2026-11-06-8 | 2026-11-06 | mir-llvm | low | Kata 354 on arm64 still runs 1.36x rustc -O's cycles after d70e6d474a, though 0.954x legacy's and level with Rust on x86 | — |
+| B-2026-11-06-9 | 2026-11-06 | cli | low | `karac query queries` and `query cost-summary` still report RC fallbacks (`rc_fallback_decision` with keep_rc / prefer_rc, `rc_ops`), which core semantics §6.4 removed: they now appear only on programs `karac check` refuses with E0500 | — |
 
 ### Relocated
 
@@ -740,6 +740,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-06-1 | mir-llvm | low | Kata 354 runs 0.81x legacy's instructions but 1.46x its cycles on the MIR backend; FIXED d70e6d474a (integer cmp as one scmp): M5 0.954x legacy's cyc… | d70e6d474a |
 | B-2026-11-06-3 | typecheck | low | A Rust `Vec<usize>` element type, once `karac fix` spells it `Vec[Vec[usize]]`, draws four `i64`/`usize` coercion and comparison errors with no fix;… | 52c81c1375 |
 | B-2026-11-06-4 | typecheck | low | An explicit `ref name` pattern binding over an owned scrutinee cannot go into a tuple: `match p { P.R { ref xs, ms } => (xs, ms) }` (and `let H { ref… | 5f60e598f2 |
+| B-2026-11-06-5 | cli | medium | `karac query` refuses a program that uses a library type `karac check` resolves (`undefined type 'WsMessage'`), so every query kind fails on the `kar… | 02a406c30c |
 
 </details>
 
