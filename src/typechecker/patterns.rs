@@ -3840,7 +3840,29 @@ impl<'a> super::TypeChecker<'a> {
                     }
                 }
 
-                let field_source_ty = if let Type::Named { name, .. } = ty {
+                // v2 core §4.6: destructuring a `shared` value reads its parts
+                // through the handle, so a plain binding of a non-`Copy` part
+                // is a `ref` into it, as in `match` (B-2026-11-05-40). A part
+                // that is itself a handle copies the handle (§6.1). The value
+                // of a `shared struct` is `Type::Shared` (B-2026-11-06-10).
+                let shared_parts = matches!(ty, Type::Shared(n) if n == struct_name)
+                    && (self.cli_lint_overrides.strict_core || self.library_methods_from_source);
+                let field_source_ty = if let Type::Shared(name) = ty {
+                    if name == struct_name {
+                        Some(name.clone())
+                    } else {
+                        self.type_error(
+                            format!(
+                                "struct pattern `{}` used but type is `{}`",
+                                struct_name,
+                                type_display(ty)
+                            ),
+                            pattern.span,
+                            TypeErrorKind::TypeMismatch,
+                        );
+                        None
+                    }
+                } else if let Type::Named { name, .. } = ty {
                     if name == struct_name || ty == &Type::Error {
                         Some(name.clone())
                     } else if *ty != Type::Error {
@@ -3926,6 +3948,13 @@ impl<'a> super::TypeChecker<'a> {
                         Type::Error
                     };
                     let field_ty = match mode {
+                        ScrutineeMode::Owned
+                            if shared_parts
+                                && !self.is_copy_type_during_check(&field_ty)
+                                && !self.copy_is_only_an_rc_retain(&field_ty) =>
+                        {
+                            borrowed_field_binding_ty(&field_ty, false)
+                        }
                         ScrutineeMode::Owned => field_ty,
                         ScrutineeMode::Ref => borrowed_field_binding_ty(&field_ty, false),
                         ScrutineeMode::MutRef => borrowed_field_binding_ty(&field_ty, true),

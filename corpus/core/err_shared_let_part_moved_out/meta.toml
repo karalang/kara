@@ -1,0 +1,9 @@
+source = "B-2026-11-06-10"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["ref-binding", "shared"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-06-10: the control. A part bound by a `let` destructure of a `shared` value still borrows it, so moving it into an `own` parameter is refused (§3.7). The expected.out wording of an error pin is guidance, not a byte oracle."

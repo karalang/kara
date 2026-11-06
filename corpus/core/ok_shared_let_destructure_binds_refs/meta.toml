@@ -1,0 +1,9 @@
+source = "B-2026-11-06-10"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["ref-binding", "shared"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-06-10: core semantics §4.6 covers `let` destructuring, so a plain binding of a non-`Copy` part of a `shared` value is a `ref` there too, as in `match` (B-2026-11-05-40), and the handle is left intact. A part that is itself a handle copies it (§6.1). The check refused the `let` with `struct pattern H used but type is H`, and the build moved the parts out of the handle."

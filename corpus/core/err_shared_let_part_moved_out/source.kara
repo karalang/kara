@@ -1,0 +1,12 @@
+// A part bound by a `let` destructure of a `shared` value is a `ref` into it
+// (core semantics §4.6), so moving it into an `own` parameter is the §3.7
+// error (B-2026-11-06-10).
+shared struct H { xs: Vec[i64], n: i64 }
+
+fn keep(v: own Vec[i64]) -> i64 { v.len() }
+
+fn main() {
+    let h = H { xs: [1, 2], n: 3 };
+    let H { xs, n } = h;
+    println(keep(xs) + n);
+}

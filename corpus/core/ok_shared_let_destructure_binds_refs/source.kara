@@ -1,0 +1,23 @@
+// `let` destructuring of a shared value binds its non-Copy parts as refs
+// (core semantics §4.6), as `match` does (B-2026-11-06-10).
+shared struct H { xs: Vec[i64], n: i64, name: String }
+shared struct Outer { inner: H, k: i64 }
+
+fn total(h: H) -> i64 {
+    let H { xs, n, .. } = h;
+    xs.len() + n
+}
+
+fn main() {
+    let h = H { xs: [1, 2], n: 3, name: "h" };
+    let H { xs, n, name } = h;
+    println(xs.len() + n);
+    println(name);
+    println(h.xs.len());
+    println(total(h));
+    let o = Outer { inner: h, k: 7 };
+    let Outer { inner: H { xs: ys, .. }, k } = o;
+    println(ys.len() + k);
+    let Outer { inner, .. } = o;
+    println(inner.n);
+}

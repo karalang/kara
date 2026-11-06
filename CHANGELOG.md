@@ -175,6 +175,11 @@ accepted by 0.8.0 are now refused, each with a fix-it.
   with "cannot infer type parameter 'T'". One nothing in the body solves is
   still refused, at the call, and the impl's bounds are checked against the
   type the later use fixed (design.md § Type inference, B-2026-11-06-7).
+- **`let` can destructure a `shared` value.** `let H { xs, n } = h` on a
+  `shared struct H` was refused with ``struct pattern `H` used but type is
+  `H` `` though `match` accepted it. It now binds a non-`Copy` part as a `ref`
+  into the value, as `match` does, and leaves the handle intact (core
+  semantics §4.6, B-2026-11-06-10).
 - A `for` over an open range `lo..` now overflows when it steps past the
   type's largest value. It used to wrap: `for b in 254u8..` went 254, 255,
   0, 1, and the interpreter refused the loop. `RangeFrom` now gives out the

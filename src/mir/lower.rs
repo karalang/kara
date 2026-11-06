@@ -6405,6 +6405,22 @@ impl<'l, 'a> Bx<'l, 'a> {
                         }
                         return Ok(());
                     }
+                    // A `shared` value in a place is destructured where it
+                    // is: its parts bind `ref`s through the handle (§4.6), so
+                    // they live as long as the place, as in a `match`
+                    // (B-2026-11-06-10).
+                    None if self.destructures(pattern)
+                        && self.is_place(value)
+                        && self.is_local_rooted(value)
+                        && {
+                            let vt = self.expr_ty(value)?;
+                            matches!(self.tys().tcx().kind(vt), HK::Shared { .. })
+                        } =>
+                    {
+                        let p = self.expr_place(value, false)?;
+                        let t = self.place_type(&p);
+                        (p, t)
+                    }
                     None => {
                         let t = self.expr_ty(value)?;
                         (Place::local(self.temp_of(value, t)?), t)
@@ -6573,6 +6589,14 @@ impl<'l, 'a> Bx<'l, 'a> {
             if !matches!(pat.kind, PatternKind::Wildcard | PatternKind::Binding(_)) {
                 return self.bind_pattern(pat, &place.project(ProjElem::Deref), inner, true, out);
             }
+        }
+        // So does destructuring a `shared` value: its parts are reached only
+        // through the handle, so a plain binding of a non-`Copy` part is a
+        // `ref`, as in a `match` (core semantics §4.6, B-2026-11-06-10).
+        if matches!(self.tys().tcx().kind(t), HK::Shared { .. })
+            && !matches!(pat.kind, PatternKind::Wildcard | PatternKind::Binding(_))
+        {
+            return self.bind_pattern(pat, &place, t, true, out);
         }
         match &pat.kind {
             PatternKind::Wildcard => Ok(()),
