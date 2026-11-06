@@ -25,6 +25,25 @@ impl MaxStack {
         }
     }
 
+    fn peek_max(ref self) -> i64 {
+        match self.ids.floor(i64.MAX) {
+            Some((x, _)) => x,
+            None => 0,
+        }
+    }
+
+    fn pop(mut ref self) -> i64 {
+        self.unlink(self.tail)
+    }
+
+    fn pop_max(mut ref self) -> i64 {
+        let mut id = -1;
+        if let Some((_, held)) = self.ids.floor(i64.MAX) {
+            id = held[held.len() - 1];
+        }
+        self.unlink(id)
+    }
+
     fn push(mut ref self, x: i64) {
         let id = self.values.len();
         self.values.push(x);
@@ -39,6 +58,10 @@ impl MaxStack {
         } else {
             self.ids.insert(x, [id]);
         }
+    }
+
+    fn top(ref self) -> i64 {
+        self.values[self.tail]
     }
 
     // Take `id`, the newest id of its value, out of the list and the
@@ -61,29 +84,6 @@ impl MaxStack {
             self.ids.remove(x);
         }
         x
-    }
-
-    fn pop(mut ref self) -> i64 {
-        self.unlink(self.tail)
-    }
-
-    fn top(ref self) -> i64 {
-        self.values[self.tail]
-    }
-
-    fn peek_max(ref self) -> i64 {
-        match self.ids.floor(i64.MAX) {
-            Some((x, _)) => x,
-            None => 0,
-        }
-    }
-
-    fn pop_max(mut ref self) -> i64 {
-        let mut id = -1;
-        if let Some((_, held)) = self.ids.floor(i64.MAX) {
-            id = held[held.len() - 1];
-        }
-        self.unlink(id)
     }
 }
 

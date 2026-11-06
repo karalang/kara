@@ -16,23 +16,9 @@ enum Ordering {
 }
 
 impl Ordering {
-    fn is_lt(ref self) -> bool {
+    fn is_eq(ref self) -> bool {
         match self {
-            Ordering.Less => true,
-            _ => false,
-        }
-    }
-
-    fn is_le(ref self) -> bool {
-        match self {
-            Ordering.Greater => false,
-            _ => true,
-        }
-    }
-
-    fn is_gt(ref self) -> bool {
-        match self {
-            Ordering.Greater => true,
+            Ordering.Equal => true,
             _ => false,
         }
     }
@@ -44,9 +30,23 @@ impl Ordering {
         }
     }
 
-    fn is_eq(ref self) -> bool {
+    fn is_gt(ref self) -> bool {
         match self {
-            Ordering.Equal => true,
+            Ordering.Greater => true,
+            _ => false,
+        }
+    }
+
+    fn is_le(ref self) -> bool {
+        match self {
+            Ordering.Greater => false,
+            _ => true,
+        }
+    }
+
+    fn is_lt(ref self) -> bool {
+        match self {
+            Ordering.Less => true,
             _ => false,
         }
     }
@@ -80,23 +80,9 @@ impl Ordering {
 }
 
 impl Option[Ordering] {
-    fn is_lt(ref self) -> bool {
+    fn is_eq(ref self) -> bool {
         match self {
-            Some(Ordering.Less) => true,
-            _ => false,
-        }
-    }
-
-    fn is_le(ref self) -> bool {
-        match self {
-            Some(Ordering.Less) | Some(Ordering.Equal) => true,
-            _ => false,
-        }
-    }
-
-    fn is_gt(ref self) -> bool {
-        match self {
-            Some(Ordering.Greater) => true,
+            Some(Ordering.Equal) => true,
             _ => false,
         }
     }
@@ -108,9 +94,23 @@ impl Option[Ordering] {
         }
     }
 
-    fn is_eq(ref self) -> bool {
+    fn is_gt(ref self) -> bool {
         match self {
-            Some(Ordering.Equal) => true,
+            Some(Ordering.Greater) => true,
+            _ => false,
+        }
+    }
+
+    fn is_le(ref self) -> bool {
+        match self {
+            Some(Ordering.Less) | Some(Ordering.Equal) => true,
+            _ => false,
+        }
+    }
+
+    fn is_lt(ref self) -> bool {
+        match self {
+            Some(Ordering.Less) => true,
             _ => false,
         }
     }

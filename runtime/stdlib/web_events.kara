@@ -48,14 +48,6 @@ pub struct PointerEvent {
 }
 
 impl PointerEvent {
-    fn x(ref self) -> f64 {
-        self.x
-    }
-
-    fn y(ref self) -> f64 {
-        self.y
-    }
-
     // The raw `MouseEvent.buttons` bitmask held during this move.
     fn buttons(ref self) -> i64 {
         self.buttons
@@ -65,6 +57,14 @@ impl PointerEvent {
     // while dragging with any button, false on a plain hover.)
     fn pressed(ref self) -> bool {
         self.buttons != 0
+    }
+
+    fn x(ref self) -> f64 {
+        self.x
+    }
+
+    fn y(ref self) -> f64 {
+        self.y
     }
 }
 
@@ -116,20 +116,20 @@ pub struct WheelEvent {
 }
 
 impl WheelEvent {
-    fn x(ref self) -> f64 {
-        self.x
-    }
-
-    fn y(ref self) -> f64 {
-        self.y
-    }
-
     fn delta_x(ref self) -> f64 {
         self.delta_x
     }
 
     fn delta_y(ref self) -> f64 {
         self.delta_y
+    }
+
+    fn x(ref self) -> f64 {
+        self.x
+    }
+
+    fn y(ref self) -> f64 {
+        self.y
     }
 }
 
@@ -313,12 +313,12 @@ pub struct ResizeEvent {
 }
 
 impl ResizeEvent {
-    fn width(ref self) -> i64 {
-        self.width
-    }
-
     fn height(ref self) -> i64 {
         self.height
+    }
+
+    fn width(ref self) -> i64 {
+        self.width
     }
 }
 

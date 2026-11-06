@@ -15,14 +15,14 @@
 // with S6c's user impls.
 
 trait ElementwiseOrd[T] {
+    fn argmax(ref self) -> Option[i64];
     // Index of the first minimum / maximum, `None` for an empty input
     // (mirroring `Stats.argmin` / `Stats.argmax`).
     fn argmin(ref self) -> Option[i64];
-    fn argmax(ref self) -> Option[i64];
-
-    // Fresh ascending copy of the elements; the receiver is unchanged.
-    fn sorted(ref self) -> Vec[T];
 
     // Indices that sort the input ascending (stable).
     fn argsort(ref self) -> Vec[i64];
+
+    // Fresh ascending copy of the elements; the receiver is unchanged.
+    fn sorted(ref self) -> Vec[T];
 }
