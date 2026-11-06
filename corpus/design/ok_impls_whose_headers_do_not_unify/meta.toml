@@ -1,0 +1,9 @@
+source = "B-2026-11-06-6"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "traits", "coherence"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md § Coherence: two impls overlap when their headers unify, ignoring bounds. W[A[T]], W[B[i64]] and W[(T, String)] do not unify pairwise, so the program is accepted and each receiver uses its own impl: a, b, t directly and through `via[N: Name]`, and the default `shout` calls the receiver's `name`: b!, a!."

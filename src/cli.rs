@@ -1380,8 +1380,17 @@ impl Pipeline {
         // A type error there is not kept: check's strict typing asks of a
         // derive's code what the build does not (serde's generated calls
         // carry no `mut` markers), so it would refuse programs that run.
+        // Two library impls that overlap are kept, like a parse error: the
+        // second was not registered, so a program would see its methods
+        // missing with no cause named (B-2026-11-06-6).
         if let Some(t) = self.typed.as_mut() {
-            t.errors.retain(|e| user(&e.span));
+            t.errors.retain(|e| {
+                user(&e.span)
+                    || matches!(e.kind, crate::typechecker::TypeErrorKind::ConflictingImpl)
+            });
+            for e in t.errors.iter_mut().filter(|e| !user(&e.span)) {
+                e.message = format!("in the standard library: {}", e.message);
+            }
             t.warnings.retain(|e| user(&e.span));
         }
         if let Some(e) = self.effects.as_mut() {

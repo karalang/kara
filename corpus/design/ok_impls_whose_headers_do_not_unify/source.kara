@@ -1,0 +1,68 @@
+// Two impls of one trait overlap only when their headers unify (design.md
+// § Coherence). `W[A[T]]`, `W[B[i64]]` and `W[(T, String)]` never name the
+// same type, so all three impls stand, and each call, direct or through a
+// bound, reaches the one written for its receiver (B-2026-11-06-6).
+struct A[T] {
+    x: T,
+}
+
+struct B[T] {
+    x: T,
+}
+
+struct W[I] {
+    it: I,
+}
+
+trait Name {
+    fn name(ref self) -> String;
+    fn shout(ref self) -> String {
+        self.name() + "!"
+    }
+}
+
+impl[T] Name for W[A[T]] {
+    fn name(ref self) -> String {
+        "a"
+    }
+}
+
+impl Name for W[B[i64]] {
+    fn name(ref self) -> String {
+        "b"
+    }
+}
+
+impl[T] Name for W[(T, String)] {
+    fn name(ref self) -> String {
+        "t"
+    }
+}
+
+fn via[N: Name](n: ref N) -> String {
+    n.name()
+}
+
+fn main() {
+    let wa = W {
+        it: A {
+            x: 1,
+        },
+    };
+    let wb = W {
+        it: B {
+            x: 1,
+        },
+    };
+    let wt = W {
+        it: (1, "s"),
+    };
+    println(wa.name());
+    println(wb.name());
+    println(wt.name());
+    println(via(wa));
+    println(via(wb));
+    println(via(wt));
+    println(wb.shout());
+    println(wa.shout());
+}

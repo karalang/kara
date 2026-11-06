@@ -11297,6 +11297,32 @@ impl<'l, 'a> Bx<'l, 'a> {
     }
 
     fn user_impl_method(&self, t: Ty, tr: &str, method: &str) -> Option<(DefId, Vec<Ty>)> {
+        // Of several impls of `tr` for one type whose headers do not unify
+        // (`impl[T] Name for W[A[T]]`, `impl Name for W[B[i64]]`), the one
+        // whose written target `t` is, its parameters read off `t`
+        // (B-2026-11-06-6). With one impl, or none that fits, the first.
+        if self.nth_impl_def(t, tr, method, 1).is_some() {
+            let mut n = 0;
+            while let Some((d, _)) = self.nth_impl_def(t, tr, method, n) {
+                n += 1;
+                let Some(item) = self.lcx.fns.get(&d) else {
+                    continue;
+                };
+                let Some(target) = item.impl_target_ty else {
+                    continue;
+                };
+                let names: Vec<&str> = item
+                    .impl_generics
+                    .map(|g| g.params.iter().map(|p| p.name.as_str()).collect())
+                    .unwrap_or_default();
+                let mut out: Vec<Option<Ty>> = vec![None; item.impl_params];
+                if self.written_fits(target, t, &names, &mut out) {
+                    if let Some(inst) = out.into_iter().collect::<Option<Vec<_>>>() {
+                        return Some((d, inst));
+                    }
+                }
+            }
+        }
         self.nth_impl_method(t, tr, method, 0)
     }
 

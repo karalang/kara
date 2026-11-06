@@ -3111,9 +3111,19 @@ impl<'a> super::TypeChecker<'a> {
             &type_name,
             &target_args,
             &trait_args,
+            (&target_generic_args, &impl_gp_names),
             &methods,
         ) {
             None => {}
+            // A library source re-stating a baked impl where it does not
+            // replace it (a package member's check): the baked one stands,
+            // as it did when this was a dropped library error.
+            Some(ImplOverlap::Duplicate(_))
+                if imp.span.offset >= self.program.library_start.unwrap_or(usize::MAX)
+                    && self.restates_baked(&trait_name, &type_name, &target_args, &trait_args) =>
+            {
+                return;
+            }
             Some(ImplOverlap::Duplicate(assoc)) => {
                 let trait_shown = trait_name.as_deref().unwrap_or_default();
                 let args = if trait_args.is_empty() {
@@ -3278,10 +3288,20 @@ impl<'a> super::TypeChecker<'a> {
         target_type: &str,
         target_args: &[Type],
         trait_args: &[Type],
+        (written, params): (&[Type], &[String]),
         new_methods: &HashMap<String, FunctionSig>,
     ) -> Option<ImplOverlap> {
         for (i, existing) in self.env.impls.iter().enumerate() {
             if existing.trait_name != *trait_name || existing.target_type != target_type {
+                continue;
+            }
+            // Two impls overlap only when their headers unify (design.md
+            // § Coherence): `W[A[T]]` and `W[B[T]]` name one type each and
+            // never the same one, though both are generic over `W`'s name
+            // (B-2026-11-06-6). So do `W[A[T]]` and `W[B[i64]]`. Inherent
+            // impls keep the name rule below: their methods are called by
+            // `Type.method`, which one disjoint pair would name twice.
+            if trait_name.is_some() && !headers_unify(existing, written, params) {
                 continue;
             }
             // Two trait impls on the same header: both generic over the
@@ -3358,6 +3378,24 @@ impl<'a> super::TypeChecker<'a> {
             return Some(ImplOverlap::WholeImpl);
         }
         None
+    }
+
+    /// Whether a baked impl of `trait_name` for this target already stands:
+    /// the one a library source's restatement duplicates.
+    fn restates_baked(
+        &self,
+        trait_name: &Option<String>,
+        target_type: &str,
+        target_args: &[Type],
+        trait_args: &[Type],
+    ) -> bool {
+        self.env.impls.iter().enumerate().any(|(i, e)| {
+            self.baked_impls.contains(&i)
+                && e.trait_name == *trait_name
+                && e.target_type == target_type
+                && e.target_args == target_args
+                && e.trait_args == trait_args
+        })
     }
 
     /// Register a built-in stdlib impl programmatically (no AST source).
@@ -4112,4 +4150,48 @@ fn resolve_type_origin_in_module(
         }
     }
     None
+}
+
+/// Whether an impl written for `written` (generic over `params`) and the
+/// registered `existing` could apply to one type: their targets' arguments
+/// unify, each impl's own parameters standing for any type. Conservative:
+/// a parameter used twice is not required to bind one type, and a form it
+/// cannot compare (a projection) unifies, so a doubtful pair still overlaps.
+fn headers_unify(existing: &ImplInfo, written: &[Type], params: &[String]) -> bool {
+    let theirs: Vec<&str> = existing
+        .generic_params
+        .iter()
+        .flat_map(|gp| gp.params.iter().map(|p| p.name.as_str()))
+        .collect();
+    let ours: Vec<&str> = params.iter().map(String::as_str).collect();
+    fn unify(a: &Type, b: &Type, theirs: &[&str], ours: &[&str]) -> bool {
+        match (a, b) {
+            (Type::TypeParam(p), _) if theirs.contains(&p.as_str()) => true,
+            (_, Type::TypeParam(p)) if ours.contains(&p.as_str()) => true,
+            (Type::Named { name: an, args: aa }, Type::Named { name: bn, args: ba }) => {
+                an == bn
+                    && aa.len() == ba.len()
+                    && aa.iter().zip(ba).all(|(x, y)| unify(x, y, theirs, ours))
+            }
+            (Type::Ref(x), Type::Ref(y))
+            | (Type::MutRef(x), Type::MutRef(y))
+            | (Type::Weak(x), Type::Weak(y)) => unify(x, y, theirs, ours),
+            (Type::Tuple(xs), Type::Tuple(ys)) => {
+                xs.len() == ys.len() && xs.iter().zip(ys).all(|(x, y)| unify(x, y, theirs, ours))
+            }
+            (Type::Array { element: x, .. }, Type::Array { element: y, .. })
+            | (Type::Slice { element: x, .. }, Type::Slice { element: y, .. }) => {
+                unify(x, y, theirs, ours)
+            }
+            (Type::AssocProjection { .. }, _) | (_, Type::AssocProjection { .. }) => true,
+            _ => a == b,
+        }
+    }
+    let mine = &existing.target_generic_args;
+    if mine.len() != written.len() {
+        return true;
+    }
+    mine.iter()
+        .zip(written)
+        .all(|(a, b)| unify(a, b, &theirs, &ours))
 }

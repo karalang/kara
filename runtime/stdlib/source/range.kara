@@ -433,67 +433,51 @@ impl[T: RangeStep + PartialOrd + Copy] DoubleEndedIterator for RangeInclusive[T]
     }
 }
 
-// Not public and not in docs/library: `StepBack` stands in for two direct
-// impls, `DoubleEndedIterator for IterStepBy[Range[T]]` and
-// `...[RangeInclusive[T]]`, which the coherence check refuses as overlapping
-// though their headers do not unify (B-2026-11-06-6). Replace it with them
-// once that row is fixed.
-/// An iterator a step can walk back over: `(0..n).step_by(k).rev()`
-/// (B-2026-11-05-35). A step's last value depends on where the iterator
-/// ends, so only one that knows its bounds can say it.
-trait StepBack: Iterator {
-    /// Take the last value a step of `step` gives, `from + j * step` with
-    /// `from` this iterator's next value when `first`, else the one
-    /// `step - 1` on.
-    fn step_back(mut ref self, first: bool, step: i64) -> Option[Self.Item];
-}
-
-impl[I: StepBack] DoubleEndedIterator for IterStepBy[I] {
-    fn next_back(mut ref self) -> Option[I.Item] {
-        self.it.step_back(self.first, self.step)
-    }
-}
-
-impl[T: RangeStep + PartialOrd + Copy] StepBack for Range[T] {
-    fn step_back(mut ref self, first: bool, step: i64) -> Option[T] {
-        if self.start >= self.end {
+/// `(0..n).step_by(k).rev()`: a step over a range walks back from the last
+/// value it reaches, `start + j * k`, and shrinks the range's end past it,
+/// so both ends of one step meet in the middle (B-2026-11-05-35).
+impl[T: RangeStep + PartialOrd + Copy] DoubleEndedIterator for IterStepBy[Range[T]] {
+    fn next_back(mut ref self) -> Option[T] {
+        if self.it.start >= self.it.end {
             return None;
         }
-        let from = if first {
-            self.start
+        // The value the step gives next: the start until the first is
+        // given out, then the one `step - 1` on.
+        let from = if self.first {
+            self.it.start
         } else {
-            match self.start.step_forward_within(step - 1, self.end) {
+            match self.it.start.step_forward_within(self.step - 1, self.it.end) {
                 Some(v) => v,
                 None => return None,
             }
         };
-        if from >= self.end {
+        if from >= self.it.end {
             return None;
         }
-        let last = from.last_step_within(step, self.end.step_backward());
-        self.end = last;
+        let last = from.last_step_within(self.step, self.it.end.step_backward());
+        self.it.end = last;
         Some(last)
     }
 }
 
-impl[T: RangeStep + PartialOrd + Copy] StepBack for RangeInclusive[T] {
-    fn step_back(mut ref self, first: bool, step: i64) -> Option[T] {
-        if self.exhausted or self.start > self.end {
+impl[T: RangeStep + PartialOrd + Copy] DoubleEndedIterator for IterStepBy[RangeInclusive[T]] {
+    fn next_back(mut ref self) -> Option[T] {
+        if self.it.exhausted or self.it.start > self.it.end {
             return None;
         }
-        let from = if first {
-            self.start
+        let from = if self.first {
+            self.it.start
         } else {
-            match self.start.step_forward_within(step - 1, self.end) {
+            match self.it.start.step_forward_within(self.step - 1, self.it.end) {
                 Some(v) => v,
                 None => return None,
             }
         };
-        let last = from.last_step_within(step, self.end);
+        let last = from.last_step_within(self.step, self.it.end);
         if last == from {
-            self.exhausted = true;
+            self.it.exhausted = true;
         } else {
-            self.end = last.step_backward();
+            self.it.end = last.step_backward();
         }
         Some(last)
     }

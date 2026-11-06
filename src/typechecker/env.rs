@@ -245,6 +245,27 @@ pub(super) fn impl_shape_fits(imp: &ImplInfo, actual: &[Type]) -> bool {
             (Type::Tuple(xs), Type::Tuple(ys)) => {
                 xs.len() == ys.len() && xs.iter().zip(ys).all(|(x, y)| fits(x, y, params))
             }
+            (Type::Array { element: x, .. }, Type::Array { element: y, .. })
+            | (Type::Slice { element: x, .. }, Type::Slice { element: y, .. }) => {
+                fits(x, y, params)
+            }
+            // Two different type constructors never fit, whatever params
+            // the written one holds: `W[(T, String)]` is not `W[A[i64]]`
+            // (B-2026-11-06-6).
+            (
+                Type::Named { .. }
+                | Type::Tuple(_)
+                | Type::Ref(_)
+                | Type::MutRef(_)
+                | Type::Array { .. }
+                | Type::Slice { .. },
+                Type::Named { .. }
+                | Type::Tuple(_)
+                | Type::Ref(_)
+                | Type::MutRef(_)
+                | Type::Array { .. }
+                | Type::Slice { .. },
+            ) => false,
             // A projection (`I.Item`) or another form written with the
             // impl's params is decided by the bounds, not here.
             _ if mentions_param(d) => true,
