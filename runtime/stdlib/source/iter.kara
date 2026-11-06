@@ -329,6 +329,22 @@ trait Iterator {
         }
     }
 
+    /// Folds the items into an accumulator while `f` returns a value:
+    /// `Some(acc)` (or `Ok(acc)`) goes on to the next item, and the first
+    /// `None` (or `Err(e)`) is the answer, with no more items pulled. Every
+    /// item folded gives `Some(acc)` (or `Ok(acc)`).
+    fn try_fold[AccV, R: Try[Output = AccV]](own self, init: own AccV, f: own MutFn(own AccV, own Self.Item) -> R) -> R {
+        let mut it = self;
+        let mut acc = init;
+        while let Some(x) = it.next() {
+            match f(acc, x).branch() {
+                Ok(a) => acc = a,
+                Err(r) => return r,
+            }
+        }
+        R.from_output(acc)
+    }
+
     /// The first `Some` that `f` returns.
     fn find_map[OutV](own self, f: own MutFn(own Self.Item) -> Option[OutV]) -> Option[OutV] {
         let mut it = self;
@@ -972,4 +988,61 @@ impl[T] Iterator for IterOnce[T] {
 
 pub fn once[T](value: own T) -> IterOnce[T] {
     IterOnce { item: Some(value) }
+}
+
+/// `successors(first, succ)`: `first`, then `succ` of each item, until there
+/// is no first or `succ` returns `None`, as Rust's `std::iter::successors`.
+/// `successors(Some(n), |x| if x >= 10 { Some(x / 10) } else { None })` is
+/// `n`, `n / 10`, ... down to its first digit.
+struct IterSuccessors[T, F] {
+    item: Option[T],
+    succ: F,
+}
+
+impl[T, F: MutFn(ref T) -> Option[T]] Iterator for IterSuccessors[T, F] {
+    type Item = T;
+    fn next(mut ref self) -> Option[T] {
+        let item = self.item.take()?;
+        self.item = (self.succ)(item);
+        Some(item)
+    }
+}
+
+pub fn successors[T, F: MutFn(ref T) -> Option[T]](first: own Option[T], succ: own F) -> IterSuccessors[T, F] {
+    IterSuccessors { item: first, succ }
+}
+
+/// What `try_fold` reads its function's answers as: `Option` and `Result`.
+/// `branch` is `Ok(value)` to go on, or `Err(self)` to stop with this
+/// answer; `from_output` wraps the value at the end.
+trait Try {
+    type Output;
+    fn branch(own self) -> Result[Self.Output, Self];
+    fn from_output(output: own Self.Output) -> Self;
+}
+
+impl[T] Try for Option[T] {
+    type Output = T;
+    fn branch(own self) -> Result[T, Option[T]] {
+        match self {
+            Some(v) => Ok(v),
+            None => Err(None),
+        }
+    }
+    fn from_output(output: own T) -> Option[T] {
+        Some(output)
+    }
+}
+
+impl[T, E] Try for Result[T, E] {
+    type Output = T;
+    fn branch(own self) -> Result[T, Result[T, E]] {
+        match self {
+            Ok(v) => Ok(v),
+            Err(e) => Err(Err(e)),
+        }
+    }
+    fn from_output(output: own T) -> Result[T, E] {
+        Ok(output)
+    }
 }

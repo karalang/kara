@@ -14,14 +14,15 @@ The lang-item traits `Iterator` and `Iterable`, and the way `for` uses them, are
 
 ## Sources
 
-Besides the collections' own iterators and ranges, two free functions in the prelude start a chain:
+Besides the collections' own iterators and ranges, three free functions in the prelude start a chain:
 
 | Function | Signature | Notes |
 |---|---|---|
 | `repeat` | `fn repeat[T: Clone](value: own T) -> impl Iterator[Item = T]` | `value` without end, a clone each time; `repeat(x).take(n)` is `n` copies |
 | `once` | `fn once[T](value: own T) -> impl Iterator[Item = T]` | `value`, then nothing; `once(x).chain(rest)` puts `x` first |
+| `successors` | `fn successors[T, F: MutFn(ref T) -> Option[T]](first: own Option[T], succ: own F) -> impl Iterator[Item = T]` | `first`, then `succ` of each item until it returns `None`; `successors(Some(n), \|x\| if x >= 10 { Some(x / 10) } else { None })` is `n`, `n / 10`, ... down to `n`'s first digit |
 
-A program's own function named `repeat` or `once` takes the name, and the library's is not seen.
+A program's own function named `repeat`, `once` or `successors` takes the name, and the library's is not seen.
 
 ## Adaptors
 
@@ -82,6 +83,7 @@ let rest: Vec[Str] = words.collect();   // the words after "--"
 | `all` | `fn all(own self, pred: own MutFn(own Self.Item) -> bool) -> bool` | Stops at the first `false` |
 | `find` | `fn find(own self, pred: own MutFn(Self.Item) -> bool) -> Option[Self.Item]` | First item that passes |
 | `find_map` | `fn find_map[U](own self, f: own MutFn(own Self.Item) -> Option[U]) -> Option[U]` | First `Some` result |
+| `try_fold` | `fn try_fold[A, R: Try[Output = A]](own self, init: own A, f: own MutFn(own A, own Self.Item) -> R) -> R` | `fold` while `f` returns `Some(acc)` or `Ok(acc)`; the first `None` or `Err(e)` is the answer, and no more items are pulled. `v.iter().try_fold(0, \|acc, x\| acc.checked_add(x))` is the sum, or `None` on overflow |
 | `position` | `fn position(own self, pred: own MutFn(Self.Item) -> bool) -> Option[i64]` | Index of the first item that passes |
 | `last` | `fn last(own self) -> Option[Self.Item]` | |
 | `nth` | `fn nth(own self, n: i64) -> Option[Self.Item]` | The item at index `n` |
@@ -109,6 +111,17 @@ trait FromIterator[T] {
 let v: Vec[i32] = it.collect();
 let chars: Vec[char] = s.chars().collect();
 ```
+
+`Option[C]` and `Result[C, E]` implement `FromIterator` for `Option[T]` and `Result[T, E]` items when `C` implements it for `T`. Collecting gathers the values into `C` and gives `Some(c)` or `Ok(c)`, or stops at the first `None` or `Err(e)`, pulling no more items, and gives that:
+
+```kara
+let digits: Option[Vec[u32]] = s.chars().map(|c| c.to_digit(10)).collect();
+let numbers: Result[Vec[i64], ParseError] = words.iter().map(|w| i64.parse(w)).collect();
+```
+
+The values wait in a `Vec` until the last item is known not to be `None` or `Err`. Only the item is read as a value (above), not the value inside it: `v.iter().map(|x| Some(x))` yields `Option[ref i64]`, which an `Option[Vec[i64]]` does not gather, so write `Some(*x)`.
+
+`try_fold` reads its function's result through the prelude trait `Try`, which `Option` and `Result` implement: `branch` is `Ok(value)` to go on or `Err(self)` to stop with that result, and `from_output` wraps the final accumulator.
 
 ## `DoubleEndedIterator`
 

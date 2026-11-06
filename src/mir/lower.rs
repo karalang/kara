@@ -908,6 +908,9 @@ struct FnItem<'a> {
     impl_generics: Option<&'a ast::GenericParams>,
     /// The trait's arguments as the impl writes them (`Handler[i64]`).
     impl_trait_args: Option<&'a [ast::GenericArg]>,
+    /// The impl's target as written (`Option[C]`), for a parameter the
+    /// target does not write bare.
+    impl_target_ty: Option<&'a ast::TypeExpr>,
     /// Where each impl parameter sits among the target's arguments, when
     /// that is not simply the leading ones in order: `impl[I, B] ... for
     /// MapIter[I, I.Item, B]` gives `[0, 2]`.
@@ -1528,6 +1531,7 @@ impl<'a> Lcx<'a> {
                     impl_slice: false,
                     impl_generics: Some(&d.generics),
                     impl_trait_args: None,
+                    impl_target_ty: None,
                     impl_arg_pos: None,
                     impl_span: None,
                     impl_dispatch: None,
@@ -1591,6 +1595,7 @@ impl<'a> Lcx<'a> {
                                 impl_slice: false,
                                 impl_generics: None,
                                 impl_trait_args: None,
+                                impl_target_ty: None,
                                 impl_arg_pos: None,
                                 impl_span: None,
                                 impl_dispatch: None,
@@ -1744,6 +1749,7 @@ impl<'a> Lcx<'a> {
                                         .trait_name
                                         .as_ref()
                                         .and_then(|t| t.generic_args.as_deref()),
+                                    impl_target_ty: Some(&b.target_type),
                                     impl_arg_pos: impl_arg_pos.clone(),
                                     impl_span: Some(SpanKey::from_span(&b.span)),
                                     impl_dispatch: impl_dispatch.clone(),
@@ -18834,7 +18840,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             let f = self.lcx.fns[&d].f;
             return self.def_call(e, d, f, inst_args, None, args, dest);
         }
-        if let Some((d, inst_args)) = self.generic_fn_by_receiver(t, m, args)? {
+        if let Some((d, inst_args)) = self.generic_fn_by_receiver(e, t, m, args)? {
             let f = self.lcx.fns[&d].f;
             return self.def_call(e, d, f, inst_args, None, args, dest);
         }
@@ -21659,6 +21665,7 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// off the argument its parameter is written as (`iter: own I`).
     fn generic_fn_by_receiver(
         &mut self,
+        e: &Expr,
         t: Ty,
         m: &str,
         args: &'a [CallArg],
@@ -21709,10 +21716,74 @@ impl<'l, 'a> Bx<'l, 'a> {
         if found.next().is_some() {
             return Ok(None);
         }
-        let Some(inst) = item.impl_args(&targs) else {
-            return Ok(None);
+        let inst = match item.impl_args(&targs) {
+            Some(inst) => inst,
+            None => match self.impl_args_through_bound(e, item, base) {
+                Some(inst) => inst,
+                None => return Ok(None),
+            },
         };
         self.own_generics_from_args(d, inst, args, None)
+    }
+
+    /// The generic arguments of `item`'s impl when one of its parameters is
+    /// written only among the trait's arguments: `impl[T, C:
+    /// FromIterator[T]] FromIterator[Option[T]] for Option[C]` reached as
+    /// `C.from_iter(..)` under `C: FromIterator[ItemV]`. Each parameter is
+    /// read off the target `t` where the impl's target writes it, else off
+    /// the trait arguments the receiver's bound gives in this instance.
+    fn impl_args_through_bound(&self, e: &Expr, item: &FnItem<'_>, t: Ty) -> Option<Vec<Ty>> {
+        let params = &item.impl_generics?.params;
+        let target_te = item.impl_target_ty?;
+        let written = item.impl_trait_args?;
+        let ExprKind::Call { callee, .. } = &e.kind else {
+            return None;
+        };
+        let ExprKind::Path { segments, .. } = &callee.kind else {
+            return None;
+        };
+        let [tp, _] = segments.as_slice() else {
+            return None;
+        };
+        let def = self.outer_fn.unwrap_or(self.b.instance().def);
+        let here = self.lcx.fns.get(&def)?;
+        let gp = here
+            .impl_generics
+            .into_iter()
+            .chain(here.f.generic_params.as_ref())
+            .flat_map(|g| g.params.iter())
+            .find(|p| &p.name == tp)?;
+        let bare_arg = |a: &ast::GenericArg| match a {
+            ast::GenericArg::Type(te) => match &te.kind {
+                ast::TypeKind::Path(q) if q.generic_args.is_none() && q.segments.len() == 1 => {
+                    self.type_param(&q.segments[0])
+                }
+                _ => None,
+            },
+            _ => None,
+        };
+        gp.bounds.iter().find_map(|b| {
+            let bound: Vec<Ty> = b
+                .generic_args
+                .as_ref()?
+                .iter()
+                .map(bare_arg)
+                .collect::<Option<_>>()?;
+            if bound.len() != written.len() {
+                return None;
+            }
+            params
+                .iter()
+                .map(|p| {
+                    self.written_at(target_te, t, &p.name).or_else(|| {
+                        written.iter().zip(&bound).find_map(|(w, &b)| match w {
+                            ast::GenericArg::Type(w) => self.written_at(w, b, &p.name),
+                            _ => None,
+                        })
+                    })
+                })
+                .collect()
+        })
     }
 
     /// `d`'s instance arguments: `inst` (its impl's), then each of its own

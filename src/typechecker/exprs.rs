@@ -4519,11 +4519,17 @@ impl<'a> super::TypeChecker<'a> {
             .is_some_and(|(key, _)| *key == SpanKey::from_span(record_subs_for_span))
         {
             let (_, expected_ret) = self.pending_expected_method_return.take().expect("checked");
-            let same_shape = matches!(
-                (&sub_ret, &expected_ret),
-                (Type::Named { name, args }, Type::Named { name: n2, args: a2 })
-                    if name == n2 && args.len() == a2.len()
-            );
+            // A return that is a bare parameter of the method (`try_fold`'s
+            // `R`, which only its function argument's result fixes) is the
+            // expectation too, as a free function's is: the closure is then
+            // checked against `Result[i64, String]`, not left with an
+            // unsolved error type.
+            let same_shape = matches!(sub_ret, Type::TypeVar(_))
+                || matches!(
+                    (&sub_ret, &expected_ret),
+                    (Type::Named { name, args }, Type::Named { name: n2, args: a2 })
+                        if name == n2 && args.len() == a2.len()
+                );
             if same_shape && contains_type_var(&sub_ret) {
                 unify_types(
                     &sub_ret,
@@ -5539,6 +5545,18 @@ impl<'a> super::TypeChecker<'a> {
                     // An item is read as a value (`ItemValues`): a `ref` to a
                     // `Copy` part is the part (`(x, x * 2)` over `v.iter()`).
                     let want: Vec<Type> = want.iter().map(|t| self.read_as_value(t)).collect();
+                    // `collect` into an `Option` or `Result` gathers the
+                    // payloads into the collection inside, which must take
+                    // them: `Option[ref i64]` items do not make an
+                    // `Option[Vec[i64]]`.
+                    if trait_name == "FromIterator" {
+                        if let Some(message) =
+                            self.wrapped_collect_mismatch(type_name, &concrete, &want)
+                        {
+                            self.type_error(message, d.span, TypeErrorKind::TypeMismatch);
+                            continue;
+                        }
+                    }
                     let Some((ty_name, ty_args)) = impl_table_key(&concrete) else {
                         continue;
                     };
@@ -5637,6 +5655,104 @@ impl<'a> super::TypeChecker<'a> {
                 }
             }
         }
+    }
+
+    /// The trait arguments `concrete`'s impls of `trait_name` take, each read
+    /// as a value; `None` when an impl's are not all concrete.
+    fn concrete_trait_offers(&self, concrete: &Type, trait_name: &str) -> Option<Vec<Vec<Type>>> {
+        let (ty_name, ty_args) = impl_table_key(concrete)?;
+        let mut offered: Vec<Vec<Type>> = Vec::new();
+        for imp in &self.env.impls {
+            if imp.target_type != ty_name
+                || imp.trait_name.as_deref() != Some(trait_name)
+                || !impl_args_match(&imp.target_args, &ty_args)
+            {
+                continue;
+            }
+            let mut bound_params = HashMap::new();
+            super::env::bind_impl_params(&imp.target_generic_args, &ty_args, &mut bound_params);
+            let isubs: HashMap<String, SubstValue> = bound_params
+                .into_iter()
+                .map(|(k, v)| (k, SubstValue::Type(v)))
+                .collect();
+            let args: Vec<Type> = imp
+                .trait_args
+                .iter()
+                .map(|t| substitute_type_params(t, &isubs))
+                .collect();
+            if !args
+                .iter()
+                .all(|t| type_is_fully_concrete(t) && !contains_type_param(t))
+            {
+                return None;
+            }
+            offered.push(args.iter().map(|t| self.read_as_value(t)).collect());
+        }
+        (!offered.is_empty()).then_some(offered)
+    }
+
+    /// `collect` into `Option[C]` or `Result[C, E]` (any depth of them) from
+    /// items whose payload `C` does not gather: the message, or `None` when
+    /// it does or cannot be told.
+    fn wrapped_collect_mismatch(
+        &self,
+        type_name: &str,
+        concrete: &Type,
+        want: &[Type],
+    ) -> Option<String> {
+        let [first] = want else {
+            return None;
+        };
+        let (mut c, mut w) = (concrete, first);
+        let mut wrapper = None;
+        while let (Type::Named { name: a, args: ca }, Type::Named { name: b, args: wa }) = (c, w) {
+            if a != b || !(a == "Option" || a == "Result") || ca.is_empty() || wa.is_empty() {
+                break;
+            }
+            wrapper = Some(a.as_str());
+            (c, w) = (&ca[0], &wa[0]);
+        }
+        let wrapper = wrapper?;
+        // The payload is not read as a value: only the item itself is
+        // (§5.10), so a `ref i64` inside a `Some` stays a `ref i64`.
+        let w = w.clone();
+        let offered = self.concrete_trait_offers(c, "FromIterator")?;
+        if offered
+            .iter()
+            .any(|a| a.as_slice() == std::slice::from_ref(&w))
+        {
+            return None;
+        }
+        let have = offered
+            .iter()
+            .map(|a| {
+                let shown: Vec<String> = a.iter().map(type_display).collect();
+                format!("`FromIterator[{}]`", shown.join(", "))
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let ctor = if wrapper == "Option" { "Some" } else { "Ok" };
+        let hint = match &w {
+            Type::Ref(i) | Type::MutRef(i)
+                if offered
+                    .iter()
+                    .any(|a| a.as_slice() == std::slice::from_ref(&**i)) =>
+            {
+                format!(
+                    "; each item is a borrowed value, so put a copy in the `{ctor}`: \
+                     `{ctor}(*x)`, or `{ctor}(x.clone())`"
+                )
+            }
+            _ => String::new(),
+        };
+        Some(format!(
+            "trait bound `{type_name}: FromIterator[{}]` is not satisfied; `{}` gathers each \
+             `{ctor}`'s value into `{}`, which implements {have}, not `FromIterator[{}]`{hint}",
+            type_display(first),
+            type_display(concrete),
+            type_display(c),
+            type_display(&w),
+        ))
     }
 
     /// `t` read as a value: a `ref` to a `Copy` type or a handle, alone or as
