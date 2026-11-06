@@ -1281,6 +1281,115 @@ struct DiagEntry<'a> {
     stub_hint_json: Option<String>,
 }
 
+/// One machine-applicable fix as design.md §17's hint diff: the source
+/// lines the edits touch, before and after, from the first line's number.
+/// `edits` are `(offset, length, text)` into `source`.
+pub(super) fn hint_diff(
+    source: &str,
+    file: &str,
+    edits: &[(usize, usize, String)],
+) -> Option<String> {
+    let first = edits.iter().map(|e| e.0).min()?;
+    let last = edits.iter().map(|e| e.0 + e.1).max()?;
+    if last > source.len() || !source.is_char_boundary(first) || !source.is_char_boundary(last) {
+        return None;
+    }
+    let start = source[..first].rfind('\n').map_or(0, |i| i + 1);
+    let end = source[last..].find('\n').map_or(source.len(), |i| last + i);
+    let old = &source[start..end];
+    let mut sorted: Vec<&(usize, usize, String)> = edits.iter().collect();
+    sorted.sort_by_key(|e| std::cmp::Reverse(e.0));
+    let mut new = old.to_string();
+    for (offset, length, text) in sorted {
+        let at = offset - start;
+        if at + length > new.len()
+            || !new.is_char_boundary(at)
+            || !new.is_char_boundary(at + length)
+        {
+            return None;
+        }
+        new.replace_range(at..at + length, text);
+    }
+    let line = source[..start].matches('\n').count() + 1;
+    Some(format!(
+        "{{\"file\":{},\"line\":{line},\"old\":{},\"new\":{}}}",
+        json_string(file),
+        json_string(old),
+        json_string(&new)
+    ))
+}
+
+/// `entry` with a `hints` diff for each of its machine-applicable fixes (its
+/// `replacement`, and its `fix_diff` as one fix), design.md §17's shape
+/// `{"description", "diff": {"file", "line", "old", "new"}}`. The fix's
+/// description is the record's own suggestion when it has one, which the
+/// diff then joins; `replacement` / `fix_diff` stay as the byte-level edits
+/// the diff summarizes (B-2026-11-05-30).
+pub(super) fn with_hint_diffs(entry: &str, source: &str, file: &str) -> String {
+    let Ok(serde_json::Value::Object(mut map)) = serde_json::from_str::<serde_json::Value>(entry)
+    else {
+        return entry.to_string();
+    };
+    let edit = |e: &serde_json::Value| -> Option<(usize, usize, String)> {
+        Some((
+            e["offset"].as_u64()? as usize,
+            e["length"].as_u64()? as usize,
+            e["text"].as_str()?.to_string(),
+        ))
+    };
+    let mut fixes: Vec<Vec<(usize, usize, String)>> = Vec::new();
+    if let Some(e) = map.get("replacement").and_then(edit) {
+        fixes.push(vec![e]);
+    }
+    if let Some(diff) = map.get("fix_diff").and_then(|d| d.as_array()) {
+        let edits: Vec<_> = diff.iter().filter_map(edit).collect();
+        if !edits.is_empty() && !fixes.contains(&edits) {
+            fixes.push(edits);
+        }
+    }
+    let file = map
+        .get("file")
+        .and_then(|f| f.as_str())
+        .unwrap_or(file)
+        .to_string();
+    let diffs: Vec<serde_json::Value> = fixes
+        .iter()
+        .filter_map(|edits| hint_diff(source, &file, edits))
+        .filter_map(|d| serde_json::from_str(&d).ok())
+        .collect();
+    if diffs.is_empty() {
+        return entry.to_string();
+    }
+    let description = map
+        .get("lint_name")
+        .and_then(|l| l.as_str())
+        .map_or("apply the machine-applicable edit".to_string(), |l| {
+            format!("apply the `{l}` fix")
+        });
+    let hints = map
+        .entry("hints")
+        .or_insert_with(|| serde_json::Value::Array(Vec::new()));
+    let Some(hints) = hints.as_array_mut() else {
+        return entry.to_string();
+    };
+    for diff in diffs {
+        // The record's own suggestion describes its fix: the first hint with
+        // a description and no diff takes it.
+        match hints
+            .iter_mut()
+            .find(|h| h.get("diff").is_none() && h.get("description").is_some())
+        {
+            Some(serde_json::Value::Object(h)) => {
+                h.insert("diff".into(), diff);
+            }
+            _ => {
+                hints.push(serde_json::json!({ "description": description, "diff": diff }));
+            }
+        }
+    }
+    serde_json::Value::Object(map).to_string()
+}
+
 pub(super) struct DiagnosticJson {
     pub(super) entries: Vec<String>,
     /// Each entry's whole span, in step with `entries`: the JSON carries only
@@ -1352,42 +1461,24 @@ impl DiagnosticJson {
             write!(entry, ",\"got\":{}", json_string(got)).unwrap();
         }
         if let Some(fix) = d.fix_it {
-            // `#[non_exhaustive]` slice 7 — surface the
-            // machine-applicable edit as a nested object. `length` is
-            // included so consumers can distinguish insertion
-            // (length=0) from replacement without re-deriving from
-            // start/end markers.
-            write!(
-                entry,
-                ",\"fix_it\":{{\"span\":{{{},\"offset\":{},\"length\":{}}},\"replacement\":{}}}",
-                span_to_json(&fix.span, d.filename),
-                fix.span.offset,
-                fix.span.length,
-                json_string(&fix.replacement),
-            )
-            .unwrap();
-            // Line 619 slice 5 — also emit the multi-edit `fixes`
-            // array form per the structured-diagnostic spec. The
-            // single-edit `fix_it` field stays for back-compat with
-            // existing consumers; the array form is what new LLM /
-            // IDE consumers should consume going forward. Each fix
-            // carries a `description` (derived from the lint name
-            // when available, else a generic "apply suggested
-            // edit") and an `edits` array of `{span, replacement}`
-            // entries. v1 ships one entry per fix; the array shape
-            // is forward-compatible with multi-edit fixes when they
-            // land.
-            let description = d.lint_name.unwrap_or("apply suggested edit");
-            write!(
-                entry,
-                ",\"fixes\":[{{\"description\":{},\"edits\":[{{\"span\":{{{},\"offset\":{},\"length\":{}}},\"replacement\":{}}}]}}]",
-                json_string(description),
-                span_to_json(&fix.span, d.filename),
-                fix.span.offset,
-                fix.span.length,
-                json_string(&fix.replacement),
-            )
-            .unwrap();
+            // The typechecker's edit, in the one edit shape every phase uses
+            // (B-2026-11-05-30), unless the record already carries it as its
+            // `replacement`. The `hints` diff is added from it with the rest
+            // ([`with_hint_diffs`]).
+            let carried = d
+                .extra_json
+                .as_deref()
+                .is_some_and(|e| e.contains("\"replacement\":"));
+            if !carried {
+                write!(
+                    entry,
+                    ",\"replacement\":{{\"offset\":{},\"length\":{},\"text\":{}}}",
+                    fix.span.offset,
+                    fix.span.length,
+                    json_string(&fix.replacement),
+                )
+                .unwrap();
+            }
         }
         if let Some(ref extra) = d.extra_json {
             write!(entry, ",{}", extra).unwrap();
@@ -2433,6 +2524,12 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
         }
     }
 
+    // Every machine-applicable fix is also a hint in the spec's shape.
+    if let Some(source) = pipeline.source.as_deref() {
+        for entry in &mut diags.entries {
+            *entry = with_hint_diffs(entry, source, filename);
+        }
+    }
     diags
 }
 
@@ -3253,7 +3350,7 @@ mod diagnostic_json_tests {
     //! pin the *shape* against a synthetic `DiagEntry` so the
     //! field-by-field wire format is testable without standing up a
     //! full pipeline.
-    use super::{DiagEntry, DiagnosticJson};
+    use super::{hint_diff, with_hint_diffs, DiagEntry, DiagnosticJson};
     use crate::token::Span;
     use crate::typechecker::FixIt;
 
@@ -3267,14 +3364,10 @@ mod diagnostic_json_tests {
     }
 
     #[test]
-    fn fix_it_emits_both_legacy_field_and_fixes_array() {
-        // Line 619 slice 5 pin — a DiagEntry carrying a FixIt
-        // produces both the legacy `fix_it` object (single-edit
-        // form, kept for backward compat) and the new `fixes` array
-        // (the spec's preferred shape per `docs/deferred.md` §
-        // Structured Diagnostics). Both wire from the same FixIt
-        // data; the legacy form has no `description` field, the
-        // array form does.
+    fn a_fix_it_is_emitted_as_the_one_edit_shape() {
+        // B-2026-11-05-30: a typechecker FixIt is the record's
+        // `replacement`, the edit shape every phase uses; the duplicate
+        // `fix_it` object and `fixes` array are gone.
         let mut diags = DiagnosticJson::new();
         let span = synth_span();
         let fix = FixIt {
@@ -3300,23 +3393,44 @@ mod diagnostic_json_tests {
             stub_hint_json: None,
         });
         let json = diags.to_json_array();
-        // Legacy field still present.
         assert!(
-            json.contains("\"fix_it\":"),
-            "expected legacy fix_it field; got: {json}"
+            !json.contains("\"fix_it\":") && !json.contains("\"fixes\":"),
+            "{json}"
         );
-        // New array form.
+        assert!(json.contains("\"replacement\":{\"offset\":"), "{json}");
+        assert!(json.contains("\"text\":\", ..\""), "{json}");
+    }
+
+    #[test]
+    fn a_fix_is_a_hint_diff_of_the_lines_it_touches() {
+        let source = "fn main() {\n    bump(v);\n    f(a,\n      b);\n}\n";
+        let at = source.find("v)").unwrap();
+        assert_eq!(
+            hint_diff(source, "m.kara", &[(at, 0, "mut ".to_string())]).unwrap(),
+            "{\"file\":\"m.kara\",\"line\":2,\"old\":\"    bump(v);\",\"new\":\"    bump(mut v);\"}"
+        );
+        // Two edits on two lines: one diff over both.
+        let a = source.find("a,").unwrap();
+        let b = source.find("b)").unwrap();
+        let d = hint_diff(source, "m.kara", &[(a, 1, "x".into()), (b, 1, "y".into())]).unwrap();
         assert!(
-            json.contains("\"fixes\":["),
-            "expected fixes array; got: {json}"
+            d.contains(
+                "\"line\":3,\"old\":\"    f(a,\\n      b);\",\"new\":\"    f(x,\\n      y);\""
+            ),
+            "{d}"
         );
-        // Array entry carries description + edits.
-        assert!(json.contains("\"description\":"));
-        assert!(json.contains("\"edits\":[{"));
-        // Edits entry carries span + replacement.
-        assert!(json.contains("\"replacement\":\", ..\""));
-        // No fix-it on plain diagnostics — confirm the field is
-        // omitted when fix_it: None.
+        // An edit past the end describes nothing.
+        assert!(hint_diff(source, "m.kara", &[(999, 1, String::new())]).is_none());
+        // The record's own suggestion takes the diff.
+        let entry = format!(
+            "{{\"file\":\"m.kara\",\"hints\":[{{\"description\":\"add `mut`\"}}],\"replacement\":{{\"offset\":{},\"length\":0,\"text\":\"mut \"}}}}",
+            source.find("v)").unwrap()
+        );
+        let out = with_hint_diffs(&entry, source, "m.kara");
+        assert!(
+            out.contains("\"hints\":[{\"description\":\"add `mut`\",\"diff\":{\"file\":\"m.kara\",\"line\":2"),
+            "{out}"
+        );
     }
 
     #[test]
@@ -3355,11 +3469,7 @@ mod diagnostic_json_tests {
     }
 
     #[test]
-    fn fixes_array_description_falls_back_to_lint_name() {
-        // When the diagnostic carries a `lint_name`, the fix's
-        // description uses it instead of the generic "apply
-        // suggested edit". Gives LLM/IDE consumers a recognisable
-        // anchor for which rule the fix derives from.
+    fn a_lint_fix_hint_is_described_by_its_lint_name() {
         let mut diags = DiagnosticJson::new();
         let span = synth_span();
         let fix = FixIt {
@@ -3384,10 +3494,16 @@ mod diagnostic_json_tests {
             got: None,
             stub_hint_json: None,
         });
-        let json = diags.to_json_array();
+        // The fix becomes a hint whose description names the lint, so a
+        // consumer can tell which rule the edit derives from.
+        let out = with_hint_diffs(&diags.entries[0], "let x = 1;\n", "test.kara");
         assert!(
-            json.contains("\"description\":\"missing_non_exhaustive\""),
-            "fix description should adopt lint_name; got: {json}"
+            out.contains("\"description\":\"apply the `missing_non_exhaustive` fix\""),
+            "fix description should adopt lint_name; got: {out}"
+        );
+        assert!(
+            out.contains("\"old\":\"let x = 1;\",\"new\":\"let _x = 1;\""),
+            "{out}"
         );
     }
 }

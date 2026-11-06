@@ -61,7 +61,14 @@ fn mut_on_a_plain_field_warns_and_fix_deletes_it() {
     assert_eq!(out.matches("warning[deprecated]").count(), 2, "{out}");
 
     let (_, json) = karac(&dir, &["check", "--output=json", "m.kara"]);
-    assert!(json.contains("\"replacement\":\"\""), "{json}");
+    assert!(
+        json.contains("\"replacement\":{\"offset\":11,\"length\":4,\"text\":\"\"}"),
+        "{json}"
+    );
+    assert!(
+        json.contains("\"new\":\"struct P { port: i64, name: String }\""),
+        "{json}"
+    );
 
     let (ok, out) = karac(&dir, &["fix", "m.kara"]);
     assert!(ok, "{out}");

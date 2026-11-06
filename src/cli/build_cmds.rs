@@ -975,6 +975,12 @@ pub(super) fn resolve_errors_json(per_module: &[ModuleResolveErrors]) -> Vec<Str
     let mut out = Vec::new();
     for re in per_module {
         let file = super::project_v2::shown(&re.file);
+        // The module's text, for each fix's hint diff (B-2026-11-05-30).
+        let source = std::fs::read_to_string(&re.file).ok();
+        let hinted = |entry: String| match source.as_deref() {
+            Some(src) => super::diag_json::with_hint_diffs(&entry, src, &file),
+            None => entry,
+        };
         for err in &re.errors {
             let code = resolve_error_code(&err.kind);
             let suggestion = match err.suggestion.as_deref() {
@@ -984,7 +990,7 @@ pub(super) fn resolve_errors_json(per_module: &[ModuleResolveErrors]) -> Vec<Str
             let replacement = replacement_json_tail(err);
             let fix_diff = fix_diff_json_tail(err, &re.fix_diffs);
             let hints = stub_hints_tail(&file, err);
-            out.push(format!(
+            out.push(hinted(format!(
                 "{{\"severity\":\"error\",\"phase\":\"resolve\",\"code\":{},\"concept\":{},\"file\":{},\"line\":{},\"column\":{},\"message\":{}{}{}{}{}}}",
                 json_string(code),
                 json_string(super::explain::concept_for("resolve", code, None, None)),
@@ -996,7 +1002,7 @@ pub(super) fn resolve_errors_json(per_module: &[ModuleResolveErrors]) -> Vec<Str
                 replacement,
                 fix_diff,
                 hints,
-            ));
+            )));
         }
     }
     out
@@ -1006,6 +1012,12 @@ pub(super) fn resolve_errors_jsonl(per_module: &[ModuleResolveErrors]) -> Vec<St
     let mut out = Vec::new();
     for re in per_module {
         let file = super::project_v2::shown(&re.file);
+        // The module's text, for each fix's hint diff (B-2026-11-05-30).
+        let source = std::fs::read_to_string(&re.file).ok();
+        let hinted = |entry: String| match source.as_deref() {
+            Some(src) => super::diag_json::with_hint_diffs(&entry, src, &file),
+            None => entry,
+        };
         for err in &re.errors {
             let code = resolve_error_code(&err.kind);
             let suggestion = match err.suggestion.as_deref() {
@@ -1015,7 +1027,7 @@ pub(super) fn resolve_errors_jsonl(per_module: &[ModuleResolveErrors]) -> Vec<St
             let replacement = replacement_json_tail(err);
             let fix_diff = fix_diff_json_tail(err, &re.fix_diffs);
             let hints = stub_hints_tail(&file, err);
-            out.push(format!(
+            out.push(hinted(format!(
                 "{{\"type\":\"resolve_error\",\"code\":{},\"file\":{},\"line\":{},\"column\":{},\"message\":{}{}{}{}{}}}",
                 json_string(code),
                 json_string(&file),
@@ -1026,7 +1038,7 @@ pub(super) fn resolve_errors_jsonl(per_module: &[ModuleResolveErrors]) -> Vec<St
                 replacement,
                 fix_diff,
                 hints,
-            ));
+            )));
         }
     }
     out

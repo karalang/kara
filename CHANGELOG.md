@@ -112,8 +112,22 @@ accepted by 0.8.0 are now refused, each with a fix-it.
   `program_effects`. A member check printed bare `type_error` lines and
   stopped at the type checker, and a package build printed its entries with
   no `type` (design.md § 17, B-2026-11-05-26).
+- **JSON diagnostics have one fix shape.** Every machine-applicable fix is a
+  hint in the spec's form, `hints: [{"description", "diff": {"file", "line",
+  "old", "new"}}]`, with the byte-level edits it summarizes as
+  `replacement` (one edit) or `fix_diff` (several), on a file and a package
+  alike. The `fix_it` object and `fixes` array a 0.8.0 type-check record
+  carried beside its `replacement` are gone, so a tool that reads them reads
+  `replacement` instead (design.md § 17, B-2026-11-05-30).
 
 ### Added
+
+- **Every JSON diagnostic carries a `concept` id** naming the spec section
+  that specifies it (design.md § 17 Concept ids, 45 ids), and `karac
+  explain ownership/move-semantics` names those sections and the codes that
+  carry the id. `karac explain src/order.kara.process` reports a function's
+  effects, each with the chain of calls that gives it, and each parameter's
+  declared mode beside the weakest mode its body needs (B-2026-11-05-28).
 
 - **The empty effect clause `with ()` on a function type.** A field or
   collection element typed `Fn(A) -> R with ()` holds only values whose

@@ -7116,6 +7116,8 @@ $ karac build --output=json
 }
 ```
 
+**One fix shape.** A machine-applicable fix is a hint whose `diff` names the source lines the fix touches, from `line`: `old` is those lines as they are and `new` is them after the fix, so a fix that edits two lines has one diff over both. Beside the hints, a diagnostic carries the byte-level edits the diffs summarize, the form `karac fix` applies and an editor applies in place: `replacement` `{offset, length, text}` for a fix of one edit, `fix_diff` `[{offset, length, text}, ...]` for a fix of several. Offsets are bytes of the diagnostic's `file`. Every phase, and a package as well as a file, reports a fix in this shape and no other.
+
 Diagnostic codes come from per-phase bands, and every code is catalogued for `karac explain` ([§2](#2-specification-layers)).
 
 #### Diagnostic quality commitments

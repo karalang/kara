@@ -1800,9 +1800,11 @@ fn test_json_stub_hint_absent_for_production_file() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     let _ = std::fs::remove_file(&fixture);
     assert!(!out.status.success());
+    // The did-you-mean fix still has its hint diff (B-2026-11-05-30); the
+    // stub is what a production file must not get.
     assert!(
-        !stdout.contains("\"diff\":"),
-        "production-file diagnostic must not carry hints[].diff; got: {}",
+        !stdout.contains("todo()"),
+        "production-file diagnostic must not carry a stub hint; got: {}",
         stdout
     );
 }
@@ -11598,8 +11600,13 @@ fn test_check_json_includes_replacement_for_n0507_note() {
         "N0507 must stay silent under `check`, got: {stdout}"
     );
     assert!(
-        stdout.contains("\"length\":8},\"replacement\":\"\""),
+        stdout.contains("\"length\":8,\"text\":\"\"}"),
         "expected an edit deleting `mut ref `, got: {stdout}"
+    );
+    // B-2026-11-05-30: the edit is also a hint diff of the line it touches.
+    assert!(
+        stdout.contains("\"old\":\"let f = mut ref || o.x + 1;\",\"new\":\"let f = || o.x + 1;\""),
+        "expected the hint diff of the edit, got: {stdout}"
     );
     let _ = std::fs::remove_file(&path);
 }

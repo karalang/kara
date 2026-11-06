@@ -87,33 +87,20 @@ fn severity_of(severity: &str) -> &'static str {
     }
 }
 
-/// The record's edits: a single `replacement`, a `fix_diff` envelope, or a
-/// typechecker `fix_it`, in the shapes `karac fix` applies. A typecheck record
-/// carries its edit twice, as `fix_it` and as `replacement`, so `fix_it` is
-/// read only when neither of the others is there.
+/// The record's edits: a single `replacement` or a `fix_diff` envelope, the
+/// one edit shape every phase emits (B-2026-11-05-30), and what `karac fix`
+/// applies.
 fn fixes_of(v: &serde_json::Value) -> Vec<SourceFix> {
-    let edit = |e: &serde_json::Value, text: &str| -> Option<SourceFix> {
+    let edit = |e: &serde_json::Value| -> Option<SourceFix> {
         Some(SourceFix {
             offset: e["offset"].as_u64()? as usize,
             length: e["length"].as_u64()? as usize,
-            replacement: e[text].as_str()?.to_string(),
+            replacement: e["text"].as_str()?.to_string(),
         })
     };
-    let mut fixes: Vec<SourceFix> = edit(&v["replacement"], "text").into_iter().collect();
+    let mut fixes: Vec<SourceFix> = edit(&v["replacement"]).into_iter().collect();
     if let Some(diff) = v["fix_diff"].as_array() {
-        fixes.extend(diff.iter().filter_map(|e| edit(e, "text")));
-    }
-    if !fixes.is_empty() {
-        return fixes;
-    }
-    if let Some(span) = v["fix_it"].get("span") {
-        fixes.extend(v["fix_it"]["replacement"].as_str().and_then(|r| {
-            Some(SourceFix {
-                offset: span["offset"].as_u64()? as usize,
-                length: span["length"].as_u64()? as usize,
-                replacement: r.to_string(),
-            })
-        }));
+        fixes.extend(diff.iter().filter_map(edit));
     }
     fixes
 }
