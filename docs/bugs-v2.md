@@ -108,7 +108,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-05-33 | 2026-11-05 | mir-llvm | low | x86 host-dependent: a jump across a 32-byte line costs kata 661 1.5x on one Cascade Lake host and nothing on another; aligning branches is 0.914x geomean there and loses kata 207 2.3x here, so it is opt-in (KARAC_MIR_ALIGN_BRANCHES=1); the over-2x list was a cross-host artifact | — |
 | B-2026-11-06-1 | 2026-11-06 | mir-llvm | low | Kata 354 runs 0.81x legacy's instructions but 1.46x its cycles on the MIR backend; seq 2.05x rustc -O at either safety | — |
 | B-2026-11-06-2 | 2026-11-06 | mir-llvm | low | Kata 346's seq binary is 336,240 B on g162ee7a0e, after 5984ed3080 and e8466b1435 took the seven B-2026-11-04-31 katas to 83-99 KB | — |
-| B-2026-11-06-3 | 2026-11-06 | typecheck | low | A Rust `Vec<usize>` element type, once `karac fix` spells it `Vec[Vec[usize]]`, draws four `i64`/`usize` coercion and comparison errors with no fix; the fix is to write `i64` (design.md §5: `usize` is for FFI) | — |
 | B-2026-11-06-5 | 2026-11-06 | cli | medium | `karac query` refuses a program that uses a library type `karac check` resolves (`undefined type 'WsMessage'`), so every query kind fails on the `karac new` backend scaffold: the query pipeline is built without `.with_library()` | — |
 | B-2026-11-06-6 | 2026-11-06 | typecheck | medium | two impls of one trait whose headers do not unify, `impl[T] Name for W[A[T]]` and `impl[T] Name for W[B[T]]`, are refused as a conflicting impl ("`W` already implements `Name`"), and in the standard library the second is dropped silently | — |
 | B-2026-11-06-7 | 2026-11-06 | typecheck | medium | A type parameter that only a call's return type names is refused at the `let` (`let mut heap = PriorityQueue.new()`, a user `Bag.new()`, `fn empty[T]() -> Vec[T]`) with 'cannot infer type parameter T', though a later use in the body (`heap.push(x)`) fixes it; design.md §8 solves type variables by unification within the body | — |
@@ -738,6 +737,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-05-40 | typecheck | medium | A pattern over a bare parameter binds differently from one over a `ref` parameter: `match arg { E.R { xs, ms } => (xs, ms) }` reached through `fn get… | 34cb06e29c |
 | B-2026-11-05-41 | typecheck | low | Rust's map methods `values_mut`, `retain`, `into_values`/`into_keys`, and on `SortedMap` `first_key_value`/`last_key_value`/`pop_first`/`pop_last`, a… | 2a3f845fd5 |
 | B-2026-11-05-42 | cli | low | In a package, `import utils;` naming no module is reported as E0223 `circular module dependency: <crate root> → <crate root>` instead of an unknown m… | 8dff1b2177 |
+| B-2026-11-06-3 | typecheck | low | A Rust `Vec<usize>` element type, once `karac fix` spells it `Vec[Vec[usize]]`, draws four `i64`/`usize` coercion and comparison errors with no fix;… | 52c81c1375 |
 | B-2026-11-06-4 | typecheck | low | An explicit `ref name` pattern binding over an owned scrutinee cannot go into a tuple: `match p { P.R { ref xs, ms } => (xs, ms) }` (and `let H { ref… | 5f60e598f2 |
 
 </details>
