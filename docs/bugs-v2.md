@@ -110,7 +110,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-05-29 | 2026-11-05 | cli | low | E0400 carries no `derivation`, `inferred_effects` or `declared_effects` and `karac fix` cannot add the missing clause; a match missing an arm is not fixable either; `karac query effects` / `query ownership` answer with no `derivation` (design.md §17 rule 5, Structured compiler output, Compiler query API) | — |
 | B-2026-11-05-33 | 2026-11-05 | mir-llvm | low | x86 host-dependent: a jump across a 32-byte line costs kata 661 1.5x on one Cascade Lake host and nothing on another; aligning branches is 0.914x geomean there and loses kata 207 2.3x here, so it is opt-in (KARAC_MIR_ALIGN_BRANCHES=1); the over-2x list was a cross-host artifact | — |
 | B-2026-11-05-35 | 2026-11-05 | typecheck | low | `(0..n).step_by(2).rev()` is "no method 'rev' on type 'IterStepBy'": Rust's `StepBy` walks back over a range, Kāra's has no `next_back` and the diagnostic names no other way | — |
-| B-2026-11-05-38 | 2026-11-05 | interp | high | `m.get_or(k, "lit")` on a `Map[String, String]` stops the MIR interpreter with `a String place holds no box` when the default is a string literal, hit or miss; a `let d: String = "x"` default works | — |
 | B-2026-11-05-39 | 2026-11-05 | typecheck | medium | Passing a struct's `Fn` field to a bare `Fn` parameter is refused as a move out of a borrowed place (`apply(self.f, 1)` with `fn apply(f: Fn(i64) -> i64, ..)`); the same call to `f: ref Fn(i64) -> i64` is accepted, though a function-typed parameter is non-escaping and borrowed (design.md § Parameter modes, core-semantics §9.3) | — |
 | B-2026-11-05-40 | 2026-11-05 | typecheck | medium | A pattern over a bare parameter binds differently from one over a `ref` parameter: `match arg { E.R { xs, ms } => (xs, ms) }` reached through `fn get(e: E)` of a `shared enum` is refused (`cannot move 'xs': it borrows its value`), and the same body under `e: ref E` is accepted (design.md § Parameter modes: a bare parameter borrows) | — |
 | B-2026-11-06-1 | 2026-11-06 | mir-llvm | low | Kata 354 runs 0.81x legacy's instructions but 1.46x its cycles on the MIR backend; seq 2.05x rustc -O at either safety | — |
@@ -733,6 +732,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-05-34 | mir-llvm | low | The v2 backends emit none of the debugger contract's runtime metadata (design.md § Debugger contract, elements 1-3): no spawn-site ids per `par {}` b… | 12215de11b |
 | B-2026-11-05-36 | mir-llvm | low | The v2 debugger metadata lacks two pieces of the contract: `list_tasks()` rows carry no effect summary, and `WaitTarget.PeerTask` does not name the t… | 7241c6d35a |
 | B-2026-11-05-37 | typecheck+mir | low | `RangeTo[T]`, `RangeToInclusive[T]` and `RangeFull` are undefined type names, and `..2`, `..=2` and `..` as values are `the expression kind Range is… | 28d010faad |
+| B-2026-11-05-38 | interp | high | `m.get_or(k, "lit")` on a `Map[String, String]` stops the MIR interpreter with `a String place holds no box` when the default is a string literal, hi… | 8a9475c0f8 |
 
 </details>
 
