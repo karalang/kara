@@ -58,16 +58,16 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 143 |
-| false-positive | 122 |
+| diagnostics | 150 |
+| false-positive | 126 |
 | perf | 104 |
-| missing-feature | 92 |
-| soundness | 50 |
-| miscompile | 36 |
-| run-vs-build | 23 |
+| missing-feature | 95 |
+| soundness | 51 |
+| miscompile | 39 |
+| run-vs-build | 24 |
 | codegen-gap | 22 |
 | other | 19 |
-| crash | 10 |
+| crash | 12 |
 | leak | 4 |
 | use-after-free | 1 |
 
@@ -75,17 +75,17 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 217 |
-| mir-llvm | 125 |
-| mir | 121 |
-| cli | 70 |
-| ownership | 53 |
-| parser | 40 |
+| typecheck | 236 |
+| mir | 128 |
+| mir-llvm | 126 |
+| cli | 71 |
+| ownership | 55 |
+| parser | 42 |
 | interp | 30 |
+| effect | 25 |
 | runtime | 24 |
-| effect | 24 |
 | codegen | 22 |
-| resolver | 9 |
+| resolver | 10 |
 | other | 6 |
 | autopar | 4 |
 | lexer | 1 |
@@ -106,8 +106,28 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-05-33 | 2026-11-05 | mir-llvm | low | x86 host-dependent: a jump across a 32-byte line costs kata 661 1.5x on one Cascade Lake host and nothing on another; aligning branches is 0.914x geomean there and loses kata 207 2.3x here, so it is opt-in (KARAC_MIR_ALIGN_BRANCHES=1); the over-2x list was a cross-host artifact | — |
 | B-2026-11-06-2 | 2026-11-06 | mir-llvm | low | Kata 346's seq binary is 336,240 B on g162ee7a0e, after 5984ed3080 and e8466b1435 took the seven B-2026-11-04-31 katas to 83-99 KB | — |
 | B-2026-11-06-8 | 2026-11-06 | mir-llvm | low | Kata 354 on arm64 still runs 1.36x rustc -O's cycles after d70e6d474a, though 0.954x legacy's and level with Rust on x86 | — |
-| B-2026-11-06-9 | 2026-11-06 | cli | low | `karac query queries` and `query cost-summary` still report RC fallbacks (`rc_fallback_decision` with keep_rc / prefer_rc, `rc_ops`), which core semantics §6.4 removed: they now appear only on programs `karac check` refuses with E0500 | — |
 | B-2026-11-06-11 | 2026-11-06 | typecheck | low | Remainder of B-2026-11-06-7: a later use still does not fix a call's return-only type parameter when the result is an `Option`/`Result` (`let mut best = none_of(); best = Some(3)`), is the bare parameter (`let x = make(); let y: i64 = x`), or the parameter shares a name with the caller's own (`fn g[T]` calling `Bag.new()` then `b.push(1)`: "expected 'T', found 'i64'") | — |
+| B-2026-11-06-12 | 2026-11-06 | typecheck+mir | high | Polymorphic recursion hangs the compiler: `fn deep[T: Display](x: own T, n: i64) -> i64 { .. deep([x], n - 1) + 1 }` makes `karac check` (and the interpreter lane) run forever instead of refusing the program | — |
+| B-2026-11-06-13 | 2026-11-06 | typecheck | medium | Numeric literals do not default last: a literal bound by `let` (directly or pushed into `Vec.new()`) is fixed at i64 before a later use can fix it, so design.md §8's own example (`let x = 5; take_i32(x); let mut v = Vec.new(); v.push(7); sum(v)`) is refused; `.collect()` passed straight to a generic `Vec[T]` parameter leaks `UnknownParam("T")` | — |
+| B-2026-11-06-14 | 2026-11-06 | typecheck | medium | Const generic parameters cannot be used as values or solved from the expected type: `N` in a body is `a type that failed to check is not lowered yet`, `[0; N]` is refused as a non-literal count, and `fn zeros[const N: i64]() -> Array[i64, N]` with `let a: Array[i64, 8] = zeros();` finds `Array[i64, N]` | — |
+| B-2026-11-06-15 | 2026-11-06 | typecheck | low | §8 roll-up: a `where` bound on a struct is never checked and an inline struct bound is not checked on an unannotated literal; `if c { 1i32 } else { 2i64 }` joins to i64 though §8's LUB has no rule for it; an unsolved `Vec.new()` used only for `.len()` and a never-called `|x| x` are accepted | — |
+| B-2026-11-06-16 | 2026-11-06 | typecheck+mir | high | A `const` in a pattern binds a fresh name instead of comparing against the constant: with `const LIMIT: i64 = 3`, `match x { LIMIT => .., _ => .. }` takes the LIMIT arm for every x (`if let LIMIT = 5` and `Some(LIMIT)` against Some(5) match too); path constants such as `i64.MAX` in a pattern are refused as enum-variant patterns | — |
+| B-2026-11-06-17 | 2026-11-06 | mir+mir-llvm | medium | Const-generic functions pass `karac check` but do not compile: the instance is named `first[i64, ()]` (N instantiated as `()`), so `a.len()` / `a[0]` on `Array[T, N]` fail with `Array[i64, N] has no layout` (llvm) or `index into non-array Array[i64, N]` (MIR), and `for x in a` is `a for loop over a collection is not lowered yet` | — |
+| B-2026-11-06-18 | 2026-11-06 | parser+typecheck | low | §3 roll-up: the value-class naming rule is enforced only on parameters (`let Count`, `let COUNT`, `for Ix in`, `Some(Val)` bindings are accepted), `struct _Hidden` / `const _MAX` are accepted, `requires`/`ensures`/`invariant` are reserved though §3 says they are not v1 keywords, a nested f-string is accepted, and doc-comment misuse is a parse error or silent instead of a warning | — |
+| B-2026-11-06-19 | 2026-11-06 | typecheck | high | A cycle between constants crashes the compiler: `const AA: i64 = BB; const BB: i64 = AA;` (or `const AA: i64 = AA + 1;`) aborts `karac check` and `karac run` with `thread has overflowed its stack` (exit 134) instead of a diagnostic | — |
+| B-2026-11-06-20 | 2026-11-06 | typecheck+mir | medium | Constant initializers are not evaluated at compile time: `const SH: i32 = 1 << 40` silently reads as 0 (the same shift in a function panics `shift amount out of range`), and `const XX: i64 = 9223372036854775807 + 1` / `1 / 0` pass check and panic at run time at each use | — |
+| B-2026-11-06-21 | 2026-11-06 | typecheck+ownership+parser | medium | A constant is treated as a place, not a fresh value: a second use of a non-Copy constant is `value 'ORIGIN' moved`, `ORIGIN.x` on a struct constant is `this name is not lowered yet`, `T_THREE.1` is a parse error, while `XX = 5;` and `TABLE[0] = 3;` on constants are accepted and do nothing | — |
+| B-2026-11-06-22 | 2026-11-06 | resolver+typecheck+mir | medium | `#[target]` is not honoured on impl members, struct fields or enum variants: with `#[target(native)] fn f(self) -> i64 { 1 }` and `#[target(wasm_wasi)] fn f(self) -> i64 { 2 }` in one impl, a native run prints 2; a wasm-gated field is still required in a native struct literal and a wasm-gated variant is still required in a native match | — |
+| B-2026-11-06-23 | 2026-11-06 | cli+typecheck | low | §4 roll-up: the spec's own `[build].target = "x86_64-linux"` makes `karac build` demand a runtime archive for that triple, `main_linux.kara` is ignored beside `main.kara`, the unknown-edition message differs from §4's text, `karac init --backend` is accepted, and a constant of a struct with a String field is accepted | — |
+| B-2026-11-06-24 | 2026-11-06 | typecheck | medium | `Copy` and `Drop` on one type are accepted, and the drop body then runs once per copy: `#[derive(Copy, Clone)] struct Pt` with `impl Drop for Pt` prints `drop 1` four times for a value copied once and passed twice | — |
+| B-2026-11-06-25 | 2026-11-06 | typecheck | medium | Three standard trait shapes from §9 are refused: `#[derive(Default)]` on a generic struct (`Pair[T]`) is E_DERIVE_DEFAULT_MISSING_FIELD_DEFAULT instead of `impl[T: Default]`, `impl PartialEq[i64] for Meters` is refused because the impl's `Rhs` is ignored, and a manual `Hash` impl cannot feed a field to its hasher (`self.s.hash(hasher)` is `hash takes a Hasher, but H is not one`) | — |
+| B-2026-11-06-26 | 2026-11-06 | typecheck+mir | medium | A generic function returning `impl Iterator[Item = T]` cannot be consumed: `fn evs[T](xs: own Vec[T]) -> impl Iterator[Item = T] { xs.into_iter() }` then `evs(["a"]).collect()` is `the method call .collect with no resolved callee is not lowered yet` | — |
+| B-2026-11-06-27 | 2026-11-06 | typecheck | low | §9 roll-up of accepted-invalid programs: derive chains (`Eq` without `PartialEq`, `Ord` without `PartialOrd`, `Copy` without `Clone`), a derive plus a manual impl of one trait, `#[derive(Drop)]`, `impl X for dyn Shape`, an unknown associated binding in a bound, a Map key without `Eq`, `dbg` and derived `Debug` without `Debug` on the element, derived `Clone` without its bound, `clone(own self)`, a run-time `#[serde(default: ..)]`; plus missing std conversions | — |
+| B-2026-11-06-28 | 2026-11-06 | typecheck+ownership | low | §10: a `defer` block that moves a binding (`defer { eat(a); }`) is accepted though §10 says cleanup blocks never capture by move (the unchecked_div/unchecked_rem item was a spec error, removed from §10 at d989f588da) | — |
+| B-2026-11-06-29 | 2026-11-06 | effect | medium | Trait-method effect ceilings count default-permitted effects: §12's own `ReadOnlyView.save` (`with writes(Data) { panic("read-only view"); }`) is refused `performs panics() but trait 'Storage.save' ceiling is [writes(Data)]`, and so is any impl method that allocates; and a `pub` generic fn whose only effect comes through a bound's ceiling is not checked until it is instantiated | — |
+| B-2026-11-06-30 | 2026-11-06 | typecheck | low | collections.md roll-up: `Vec.from_iter(dq)`, which collections.md and the compiler's own VecDeque diagnostic both recommend, is refused (`VecDeque[i64] is a collection, not an Iterator`), and `v[0..1] = o` on non-Copy elements says `assigning a range of non-Copy elements is not lowered yet` instead of pointing to `clone_from_slice` | — |
+| B-2026-11-06-31 | 2026-11-06 | typecheck+mir | medium | check accepts String-only building methods (push_str, push, clear, truncate, pop, reserve) on a Str, even a borrowed parameter; every backend then refuses with an internal error | — |
+| B-2026-11-06-32 | 2026-11-06 | typecheck | low | CString lacks the CStr reading surface (to_str, to_string) and has no constructor from Slice[u8], which strings.md says exists | — |
 
 ### Relocated
 
@@ -741,6 +761,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-06-5 | cli | medium | `karac query` refuses a program that uses a library type `karac check` resolves (`undefined type 'WsMessage'`), so every query kind fails on the `kar… | 02a406c30c |
 | B-2026-11-06-6 | typecheck | medium | two impls of one trait whose headers do not unify, `impl[T] Name for W[A[T]]` and `impl[T] Name for W[B[T]]`, are refused as a conflicting impl ("`W`… | 30f3ec3af7 |
 | B-2026-11-06-7 | typecheck | medium | A type parameter that only a call's return type names is refused at the `let` (`let mut heap = PriorityQueue.new()`, a user `Bag.new()`, `fn empty[T]… | 2783b8c546 |
+| B-2026-11-06-9 | cli | low | `karac query queries` and `query cost-summary` still report RC fallbacks (`rc_fallback_decision` with keep_rc / prefer_rc, `rc_ops`), which core sema… | f053625e94 |
 | B-2026-11-06-10 | typecheck | medium | `let H { xs, n } = h` on a `shared struct H` is refused with `struct pattern `H` used but type is `H``, though core semantics §4.6 lets a shared scru… | bd1c1521a1 |
 
 </details>
