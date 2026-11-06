@@ -1,0 +1,9 @@
+source = "B-2026-11-05-38"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "lib:map", "strings"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md § String literals: a literal is a `String` by default. `get_or(key, default)` returns the stored value on a hit and the default on a miss, so a literal default is an owned `String`: k->v, z->y, 1->one, 2->none, a->alpha, b->?, and a `String` binding default dflt."

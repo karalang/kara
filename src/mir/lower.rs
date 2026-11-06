@@ -25484,6 +25484,17 @@ impl<'l, 'a> Bx<'l, 'a> {
                             continue;
                         }
                     }
+                    // `get_or`'s default is the value the call returns on a
+                    // miss: a literal is a `String` of its own, which the
+                    // native returns or drops, not a view of static text
+                    // (B-2026-11-05-38).
+                    if method == "get_or"
+                        && i == 1
+                        && matches!(a.value.kind, ExprKind::StringLit(_))
+                    {
+                        rest.push(self.expr_operand(&a.value)?);
+                        continue;
+                    }
                     rest.push(self.lib_arg(&a.value, by_ref)?);
                 }
                 // A strong handle stored into a `weak` slot is downgraded,

@@ -1,0 +1,22 @@
+// `get_or`'s default is the value a miss returns, so a literal default is
+// a `String` of its own (design.md § String literals: a literal is a
+// `String` by default): on a hit it is dropped, on a miss it is the result.
+fn main() {
+    let mut m: Map[String, String] = Map.new();
+    m.insert("k", "v");
+    println(m.get_or("k", "x"));
+    println(m.get_or("z", "y"));
+
+    let mut ids: Map[i64, String] = Map.new();
+    ids.insert(1, "one");
+    println(ids.get_or(1, "none"));
+    println(ids.get_or(2, "none"));
+
+    let mut s: SortedMap[String, String] = SortedMap.new();
+    s.insert("a", "alpha");
+    println(s.get_or("a", "?"));
+    println(s.get_or("b", "?"));
+
+    let d: String = "dflt";
+    println(m.get_or("w", d));
+}
