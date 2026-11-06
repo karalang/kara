@@ -1,0 +1,9 @@
+source = "B-2026-11-05-39"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure", "move-from-borrow"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-05-39: core semantics §9.3 and §9.6, a bare function-typed parameter is non-escaping and a shared borrow, so a stored `Fn` read through a borrowed receiver is lent to it, as to `ref Fn`. The strict check refused it as a move out of a borrowed place."

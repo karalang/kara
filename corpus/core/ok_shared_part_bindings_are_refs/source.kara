@@ -1,0 +1,38 @@
+// A plain binding of a non-`Copy` part of a `shared` value is a `ref` into it
+// (core semantics §4.6), as the same binding over a `ref` scrutinee is. A
+// tuple of such bindings holds the references, so these bodies mean the same
+// under `e: E` as under `e: ref E` (B-2026-11-05-40).
+shared enum E { R { xs: Vec[i64], ms: i64 }, F { arg: E }, N }
+
+fn bare(e: E) -> i64 {
+    let (xs, ms) = match e { E.R { xs, ms } => (xs, ms), _ => return 0 };
+    xs.len() + ms
+}
+
+fn borrowed(e: ref E) -> i64 {
+    let (xs, ms) = match e { E.R { xs, ms } => (xs, ms), _ => return 0 };
+    xs.len() + ms
+}
+
+// The part `arg` is itself a handle, so it binds a copy of the handle (§6.1),
+// and a pattern over it binds `ref`s again.
+fn nested(e: E) -> i64 {
+    match e {
+        E.F { arg } => {
+            let (xs, ms) = match arg { E.R { xs, ms } => (xs, ms), _ => return 0 };
+            xs.len() + ms
+        }
+        _ => 0,
+    }
+}
+
+fn main() {
+    let e = E.R { xs: [1, 2], ms: 5 };
+    println(bare(e));
+    println(borrowed(e));
+    println(nested(E.F { arg: E.R { xs: [1, 2, 3], ms: 10 } }));
+    match e {
+        E.R { xs, .. } => println(xs.len()),
+        _ => {}
+    }
+}

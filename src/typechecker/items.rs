@@ -1918,7 +1918,34 @@ impl<'a> super::TypeChecker<'a> {
         {
             return None;
         }
-        let own = |ps: &[Param]| ps.iter().map(|p| p.is_own).collect::<Vec<_>>();
+        self.declared_params_map(key, |p| p.is_own)
+    }
+
+    /// Which parameters of the user function or method `key` take a function
+    /// value BORROWED: a bare, non-`escaping` parameter. A function-typed
+    /// parameter is non-escaping by default (core semantics §9.3) and a bare
+    /// one is a shared borrow (§9.6), so an argument handed to it is lent, not
+    /// moved, and the MIR passes it that way (`fn_arg`'s borrow flag). The
+    /// call-argument move check reads this beside the parameter's type, which
+    /// is a function type for exactly these positions (B-2026-11-05-39).
+    /// Empty when D5 or the strict check is off, or for a callee this program
+    /// does not declare.
+    pub(super) fn d5_borrowed_fn_params(&self, key: &str) -> Vec<bool> {
+        if !crate::d5_params::on() || !self.cli_lint_overrides.strict_core {
+            return Vec::new();
+        }
+        let esc = &self.program.escaping_fn_types;
+        self.declared_params_map(key, |p| {
+            !p.is_own && !esc.contains(&SpanKey::from_span(&p.ty.span))
+        })
+        .unwrap_or_default()
+    }
+
+    /// `per(param)` for each declared parameter of the user function or
+    /// method `key` (`name` or `Type.method`), or `None` when this program
+    /// declares no such callee.
+    fn declared_params_map(&self, key: &str, per: impl Fn(&Param) -> bool) -> Option<Vec<bool>> {
+        let own = |ps: &[Param]| ps.iter().map(&per).collect::<Vec<_>>();
         let (target, method) = match key.split_once('.') {
             Some((t, m)) => (Some(t), m),
             None => (None, key),

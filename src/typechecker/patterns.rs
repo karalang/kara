@@ -1442,11 +1442,31 @@ impl<'a> super::TypeChecker<'a> {
                 // whatever the scrutinee, so it is a value and `*` on it is
                 // an error (B-2026-10-24-36); `ref name` still borrows it.
                 let copies = self.core_binding_copies(pattern, expected);
+                // v2 core §4.6: a plain binding of a non-`Copy` part of a
+                // `shared` value is a `ref` into the part, so it is typed as one,
+                // exactly as the same binding over a `ref` scrutinee is. A
+                // tuple of such bindings then holds the references, and
+                // `match e { E.R { xs, ms } => (xs, ms) }` means the same
+                // under `e: E` (a `shared` handle) as under `e: ref E`
+                // (B-2026-11-05-40). A part that is itself a handle copies
+                // the handle (§6.1), so it keeps its type. The MIR builder
+                // already binds it by reference.
+                let part_ref = (self.cli_lint_overrides.strict_core
+                    || self.library_methods_from_source)
+                    && matches!(mode, ScrutineeMode::Owned)
+                    && !copies
+                    && self.core_shared_part_depth > 0
+                    && !self.copy_is_only_an_rc_retain(expected);
                 let wrapped = if copies {
                     expected.clone()
+                } else if part_ref {
+                    ScrutineeMode::Ref.wrap_binding_ty(expected.clone())
                 } else {
                     mode.wrap_binding_ty(expected.clone())
                 };
+                if part_ref {
+                    self.record_node_type(pattern.id, &wrapped);
+                }
                 let binding_ty = self.lib_view_binding_ty(mode, wrapped.clone());
                 if self.library_methods_from_source
                     && matches!(binding_ty, Type::Ref(_) | Type::MutRef(_))
@@ -1621,6 +1641,10 @@ impl<'a> super::TypeChecker<'a> {
                                 self.core_no_move_out.push(reason.clone());
                             }
                             let into_shared = self.core_enters_shared(name, mode);
+                            let part_of_shared = self.core_part_of_shared(name, mode);
+                            if part_of_shared {
+                                self.core_shared_part_depth += 1;
+                            }
                             if into_shared {
                                 self.core_shared_depth += 1;
                             }
@@ -1637,6 +1661,9 @@ impl<'a> super::TypeChecker<'a> {
                             }
                             if into_shared {
                                 self.core_shared_depth -= 1;
+                            }
+                            if part_of_shared {
+                                self.core_shared_part_depth -= 1;
                             }
                             return;
                         }
@@ -1844,6 +1871,10 @@ impl<'a> super::TypeChecker<'a> {
                     self.core_no_move_out.push(reason.clone());
                 }
                 let into_shared = self.core_enters_shared(&owner_name, mode);
+                let part_of_shared = self.core_part_of_shared(&owner_name, mode);
+                if part_of_shared {
+                    self.core_shared_part_depth += 1;
+                }
                 if into_shared {
                     self.core_shared_depth += 1;
                 }
@@ -1912,6 +1943,9 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 if into_shared {
                     self.core_shared_depth -= 1;
+                }
+                if part_of_shared {
+                    self.core_shared_part_depth -= 1;
                 }
             }
             PatternKind::Tuple(patterns) => {
@@ -2182,6 +2216,15 @@ impl<'a> super::TypeChecker<'a> {
                 _ => super::ScrutineePart::Leaf(self.scrutinee_core_borrowed(e)),
             })
             .collect()
+    }
+
+    /// [`Self::core_enters_shared`] without its borrowed-scrutinee
+    /// exception: the pattern takes apart a `shared` value, so a plain
+    /// binding of a non-`Copy` part is a `ref` (core semantics §4.6).
+    fn core_part_of_shared(&self, type_name: &str, mode: ScrutineeMode) -> bool {
+        (self.cli_lint_overrides.strict_core || self.library_methods_from_source)
+            && matches!(mode, ScrutineeMode::Owned)
+            && self.name_is_shared_decl(type_name)
     }
 
     fn core_enters_shared(&self, type_name: &str, mode: ScrutineeMode) -> bool {

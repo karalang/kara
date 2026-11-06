@@ -1464,6 +1464,8 @@ impl<'a> super::TypeChecker<'a> {
                 rigid.retain(|n| !sig.generic_params.contains(n));
                 self.call_rigid_params = rigid;
                 let saved = self.call_bound_receiver_subs.replace(receiver_subs);
+                self.call_borrowed_fn_params =
+                    self.d5_borrowed_fn_params(&format!("{type_name}.{method}"));
                 let ret = self.check_call_args_with_substitution_full(
                     args,
                     &params,

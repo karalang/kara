@@ -260,6 +260,7 @@ impl<'a> super::TypeChecker<'a> {
         }
         let formal_generic_params = sig.generic_params.clone();
         let where_clause = sig.where_clause.clone();
+        self.call_borrowed_fn_params = self.d5_borrowed_fn_params(name);
         self.check_call_args_with_substitution_full(
             args,
             &sig.params,
@@ -3001,6 +3002,15 @@ impl<'a> super::TypeChecker<'a> {
                     .collect();
                 let return_type =
                     resolve_type_var_top(return_type.as_ref(), &self.env.substitutions);
+                self.call_borrowed_fn_params = match &callee.kind {
+                    ExprKind::Identifier(name) if self.local_scope.lookup(name).is_none() => {
+                        self.d5_borrowed_fn_params(name)
+                    }
+                    ExprKind::Path { segments, .. } => {
+                        self.d5_borrowed_fn_params(&segments.join("."))
+                    }
+                    _ => Vec::new(),
+                };
                 let ret = self.check_call_args_with_substitution_full(
                     args,
                     &params,

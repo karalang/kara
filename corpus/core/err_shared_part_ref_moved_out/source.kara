@@ -1,0 +1,15 @@
+// The parts a tuple of `ref` bindings holds are still references into the
+// `shared` value (core semantics §4.6), so moving one out of the tuple's
+// binding is the §3.7 error (B-2026-11-05-40).
+shared enum E { R { xs: Vec[i64], ms: i64 }, N }
+
+fn consume(v: own Vec[i64]) -> i64 { v.len() }
+
+fn take(e: E) -> i64 {
+    let (xs, ms) = match e { E.R { xs, ms } => (xs, ms), _ => return 0 };
+    consume(xs) + ms
+}
+
+fn main() {
+    println(take(E.R { xs: [1], ms: 1 }));
+}

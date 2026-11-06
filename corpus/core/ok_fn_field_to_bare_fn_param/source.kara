@@ -1,0 +1,26 @@
+// A bare function-typed parameter is non-escaping (core semantics §9.3) and a
+// shared borrow (§9.6), so a stored `Fn` handed to it is lent, not moved out
+// of the borrowed receiver: the same call as to `f: ref Fn(i64) -> i64`
+// (B-2026-11-05-39).
+fn apply(f: Fn(i64) -> i64, x: i64) -> i64 { f(x) }
+fn twice[T](f: Fn(T) -> T, x: T) -> T { f(f(x)) }
+
+struct S { f: Fn(i64) -> i64 }
+
+impl S {
+    fn go(self) -> i64 { apply(self.f, 1) }
+    fn go_generic(self) -> i64 { twice(self.f, 10) }
+    fn helper(self, g: Fn(i64) -> i64) -> i64 { g(100) }
+    fn go_method(self) -> i64 { self.helper(self.f) }
+    fn with(g: Fn(i64) -> i64) -> i64 { g(1000) }
+    fn go_static(self) -> i64 { S.with(self.f) }
+}
+
+fn main() {
+    let s = S { f: |x| x + 1 };
+    println(s.go());
+    println(s.go_generic());
+    println(s.go_method());
+    println(s.go_static());
+    println(apply(s.f, 7) + apply(s.f, 8));
+}

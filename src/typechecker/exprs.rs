@@ -4359,8 +4359,15 @@ impl<'a> super::TypeChecker<'a> {
         let has_generic = params.iter().any(contains_type_param)
             || contains_type_param(return_type)
             || has_where_const_predicate;
+        // A bare, non-`escaping` function-typed parameter lends its argument
+        // (core semantics §9.3, §9.6): handing it `self.f` reads the field in
+        // place, so it is no move out of a borrow (B-2026-11-05-39).
+        let borrowed_fn = std::mem::take(&mut self.call_borrowed_fn_params);
+        let lends_fn = |i: usize, t: &Type| {
+            matches!(t, Type::Function { .. }) && borrowed_fn.get(i) == Some(&true)
+        };
         if !has_generic {
-            for (arg, param_ty) in args.iter().zip(params.iter()) {
+            for (i, (arg, param_ty)) in args.iter().zip(params.iter()).enumerate() {
                 // Line 549 slice 2b — set the union-borrow context for
                 // the duration of this arg's check_expr so a top-level
                 // `u.field` access lands in `infer_field_access` with
@@ -4415,7 +4422,7 @@ impl<'a> super::TypeChecker<'a> {
                     // projection of a borrowed place handed to a by-value
                     // parameter is a move out of a borrow. Legacy copies it
                     // silently here, so only the strict commands report it.
-                    if self.cli_lint_overrides.strict_core {
+                    if self.cli_lint_overrides.strict_core && !lends_fn(i, param_ty) {
                         self.warn_borrow_projection_copy_at(&arg.value, param_ty, false);
                     }
                 } else if self.cli_lint_overrides.strict_core {
@@ -4837,11 +4844,12 @@ impl<'a> super::TypeChecker<'a> {
         // closure args, the resolved slot may be a concrete
         // `Fn(i64) -> i64` (when T solved) and check_expr's pushdown
         // gives the closure params their types.
-        for (((arg, sub_param_ty), arg_ty_opt), formal) in args
+        for (i, (((arg, sub_param_ty), arg_ty_opt), formal)) in args
             .iter()
             .zip(sub_params.iter())
             .zip(arg_tys.iter())
             .zip(params.iter())
+            .enumerate()
         {
             // A closure for a parameter typed by a type parameter with a
             // function-trait bound is checked against the bound's signature.
@@ -4994,7 +5002,9 @@ impl<'a> super::TypeChecker<'a> {
                             Type::Ref(_) | Type::MutRef(_) | Type::Slice { .. }
                         )
                     {
-                        self.warn_borrow_projection_copy_at(&arg.value, &resolved, false);
+                        if !lends_fn(i, &resolved) {
+                            self.warn_borrow_projection_copy_at(&arg.value, &resolved, false);
+                        }
                     } else if self.cli_lint_overrides.strict_core {
                         self.warn_lent_branch_tails(&arg.value, &resolved);
                     }

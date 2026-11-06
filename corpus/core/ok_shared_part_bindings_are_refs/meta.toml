@@ -1,0 +1,9 @@
+source = "B-2026-11-05-40"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["ref-binding", "shared"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-05-40: core semantics §4.6, a plain binding of a non-`Copy` part of a `shared` value is a `ref`, typed as the same binding over a `ref` scrutinee is, so a tuple of such bindings holds references. The strict check typed them as values and refused the tuple as a move."

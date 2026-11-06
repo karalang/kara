@@ -1,0 +1,9 @@
+source = "B-2026-11-05-39"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["closure", "move-from-borrow"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-05-39: the control. An `escaping` parameter takes its function by value (§9.3), so the same argument is a move out of a borrowed place (§3.7). The expected.out wording of an error pin is guidance, not a byte oracle."

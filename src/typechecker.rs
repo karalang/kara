@@ -2823,6 +2823,11 @@ pub struct TypeChecker<'a> {
     /// being checked has descended into. Above zero, every binding is a
     /// `ref` (`docs/core-semantics.md` §4.6).
     pub(super) core_shared_depth: usize,
+    /// How many patterns over a `shared` type the current binding sits
+    /// inside, whether or not the scrutinee is also a borrowed place: a
+    /// part of a `shared` value binds a `ref` either way (core semantics
+    /// §4.6, B-2026-11-05-40).
+    pub(super) core_shared_part_depth: usize,
     /// See [`TypeCheckResult::core_ref_copy_spans`].
     pub(super) core_ref_copy_spans: FxHashSet<SpanKey>,
     /// See [`TypeCheckResult::rejected_assign_spans`].
@@ -3391,6 +3396,9 @@ pub struct TypeChecker<'a> {
     /// instantiation keeps them as they are rather than minting a variable
     /// for each (B-2026-10-21-60).
     pub(super) call_rigid_params: Vec<String>,
+    /// The next call's [`Self::d5_borrowed_fn_params`], set just before
+    /// `check_call_args_with_substitution_full` and taken at its entry.
+    pub(super) call_borrowed_fn_params: Vec<bool>,
     /// Call bounds whose parameter only the context solves, checked at the
     /// end of `check` ([`Self::discharge_deferred_call_bounds`]).
     pub(super) deferred_call_bounds: Vec<DeferredCallBounds>,
@@ -3928,6 +3936,7 @@ impl<'a> TypeChecker<'a> {
             core_no_move_out: Vec::new(),
             core_shorthand_field: false,
             core_shared_depth: 0,
+            core_shared_part_depth: 0,
             core_ref_copy_spans: FxHashSet::default(),
             rejected_assign_spans: Vec::new(),
             deprecated_variants: None,
@@ -4054,6 +4063,7 @@ impl<'a> TypeChecker<'a> {
             as_str_calls: FxHashMap::default(),
             call_bound_receiver_subs: None,
             call_rigid_params: Vec::new(),
+            call_borrowed_fn_params: Vec::new(),
             deferred_call_bounds: Vec::new(),
             dbg_arg_types: FxHashMap::default(),
             impl_trait_captures: FxHashMap::default(),

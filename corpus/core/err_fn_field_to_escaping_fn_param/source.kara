@@ -1,0 +1,16 @@
+// An `escaping` parameter takes its function by value (core semantics §9.3),
+// so handing it a stored `Fn` read through a borrowed receiver moves it out
+// of a borrowed place (§3.7). Only a bare parameter lends it
+// (B-2026-11-05-39).
+fn keep(f: escaping Fn(i64) -> i64, x: i64) -> i64 { f(x) }
+
+struct S { f: Fn(i64) -> i64 }
+
+impl S {
+    fn go(self) -> i64 { keep(self.f, 1) }
+}
+
+fn main() {
+    let s = S { f: |x| x + 1 };
+    println(s.go());
+}

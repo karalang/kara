@@ -2641,6 +2641,11 @@ fn main() -> () {
             "ok_owned_place_into_ref_slot",
             // `Receiver.recv` is sync.kara's (B-2026-11-02-37).
             "ok_literal_into_ref_slot",
+            // A part of a `shared` value binds a `ref`, and a bare `Fn`
+            // parameter lends its argument, in the check the build runs
+            // (core semantics §4.6, §9.3; B-2026-11-05-39, -40).
+            "ok_fn_field_to_bare_fn_param",
+            "ok_shared_part_bindings_are_refs",
         ];
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus/core");
         let mut pins: Vec<_> = std::fs::read_dir(&root)
