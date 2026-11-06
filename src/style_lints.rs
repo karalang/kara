@@ -224,8 +224,8 @@ impl Cx<'_> {
             return;
         };
         // A bare parameter of a function type is checked as taken, not
-        // borrowed (@ROW_B@); and a pattern over a bare parameter binds its
-        // parts as a pattern over a `ref` one does not (@ROW_C@), so a
+        // borrowed (B-2026-11-05-39); and a pattern over a bare parameter binds its
+        // parts as a pattern over a `ref` one does not (B-2026-11-05-40), so a
         // parameter something destructures keeps its `ref`.
         if matches!(inner.kind, TypeKind::FnType { .. })
             || derefs_name(body, name)

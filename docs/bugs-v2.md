@@ -58,8 +58,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 139 |
-| false-positive | 116 |
+| diagnostics | 140 |
+| false-positive | 118 |
 | perf | 103 |
 | missing-feature | 90 |
 | soundness | 50 |
@@ -67,7 +67,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | run-vs-build | 23 |
 | codegen-gap | 22 |
 | other | 19 |
-| crash | 9 |
+| crash | 10 |
 | leak | 4 |
 | use-after-free | 1 |
 
@@ -75,13 +75,13 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 208 |
+| typecheck | 211 |
 | mir-llvm | 124 |
 | mir | 121 |
 | cli | 67 |
 | ownership | 53 |
 | parser | 40 |
-| interp | 29 |
+| interp | 30 |
 | runtime | 24 |
 | effect | 24 |
 | codegen | 22 |
@@ -114,8 +114,12 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-05-32 | 2026-11-05 | cli | low | `karac fmt` does not sort methods (an impl's `zeta` stays before `alpha`; imports are sorted) (design.md § Canonical formatting: methods sorted, imports sorted) | — |
 | B-2026-11-05-33 | 2026-11-05 | mir-llvm | low | x86 host-dependent: a jump across a 32-byte line costs kata 661 1.5x on one Cascade Lake host and nothing on another; aligning branches is 0.914x geomean there and loses kata 207 2.3x here, so it is opt-in (KARAC_MIR_ALIGN_BRANCHES=1); the over-2x list was a cross-host artifact | — |
 | B-2026-11-05-35 | 2026-11-05 | typecheck | low | `(0..n).step_by(2).rev()` is "no method 'rev' on type 'IterStepBy'": Rust's `StepBy` walks back over a range, Kāra's has no `next_back` and the diagnostic names no other way | — |
+| B-2026-11-05-38 | 2026-11-05 | interp | high | `m.get_or(k, "lit")` on a `Map[String, String]` stops the MIR interpreter with `a String place holds no box` when the default is a string literal, hit or miss; a `let d: String = "x"` default works | — |
+| B-2026-11-05-39 | 2026-11-05 | typecheck | medium | Passing a struct's `Fn` field to a bare `Fn` parameter is refused as a move out of a borrowed place (`apply(self.f, 1)` with `fn apply(f: Fn(i64) -> i64, ..)`); the same call to `f: ref Fn(i64) -> i64` is accepted, though a function-typed parameter is non-escaping and borrowed (design.md § Parameter modes, core-semantics §9.3) | — |
+| B-2026-11-05-40 | 2026-11-05 | typecheck | medium | A pattern over a bare parameter binds differently from one over a `ref` parameter: `match arg { E.R { xs, ms } => (xs, ms) }` reached through `fn get(e: E)` of a `shared enum` is refused (`cannot move 'xs': it borrows its value`), and the same body under `e: ref E` is accepted (design.md § Parameter modes: a bare parameter borrows) | — |
 | B-2026-11-06-1 | 2026-11-06 | mir-llvm | low | Kata 354 runs 0.81x legacy's instructions but 1.46x its cycles on the MIR backend; seq 2.05x rustc -O at either safety | — |
 | B-2026-11-06-2 | 2026-11-06 | mir-llvm | low | Kata 346's seq binary is 336,240 B on g162ee7a0e, after 5984ed3080 and e8466b1435 took the seven B-2026-11-04-31 katas to 83-99 KB | — |
+| B-2026-11-06-3 | 2026-11-06 | typecheck | low | A Rust `Vec<usize>` element type, once `karac fix` spells it `Vec[Vec[usize]]`, draws four `i64`/`usize` coercion and comparison errors with no fix; the fix is to write `i64` (design.md §5: `usize` is for FFI) | — |
 
 ### Relocated
 
