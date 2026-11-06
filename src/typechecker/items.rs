@@ -8464,6 +8464,32 @@ impl<'a> super::TypeChecker<'a> {
         true
     }
 
+    /// Is `e` a name an explicit `ref name` pattern bound, of a non-`Copy`
+    /// type (core semantics §4.6)?
+    pub(super) fn is_ref_pattern_ident(&self, e: &Expr) -> bool {
+        let ExprKind::Identifier(n) = &e.kind else {
+            return false;
+        };
+        self.local_scope.is_ref_pattern(n)
+            && self
+                .local_scope
+                .lookup(n)
+                .is_some_and(|t| !self.is_copy_type_during_check(t))
+    }
+
+    /// The type an inferred tuple literal gives the element `e` typed `t`:
+    /// a binding an explicit `ref name` pattern made is held as the
+    /// reference it is, `ref T`, as a binding over a `ref` scrutinee already
+    /// is, so `match p { P.R { ref xs, ms } => (xs, ms) }` lends `xs`
+    /// rather than moving it (B-2026-11-06-4).
+    pub(super) fn tuple_slot_holds_ref_pattern(&self, e: &Expr, t: Type) -> Type {
+        if self.is_ref_pattern_ident(e) && !matches!(t, Type::Ref(_) | Type::MutRef(_)) {
+            Type::Ref(Box::new(t))
+        } else {
+            t
+        }
+    }
+
     /// [`Self::warn_borrow_projection_copy`] (and with it
     /// [`Self::deny_for_element_drop_copy`]) for each element of a tuple or
     /// collection literal: `(g, 1)` and `vec![g]` copy a `for` element, or a
@@ -8503,6 +8529,7 @@ impl<'a> super::TypeChecker<'a> {
             }
             _ => return,
         };
+        let tuple = matches!(expr.kind, ExprKind::Tuple(_));
         for (i, e) in elems.into_iter().enumerate() {
             if !matches!(
                 e.kind,
@@ -8510,6 +8537,7 @@ impl<'a> super::TypeChecker<'a> {
                     | ExprKind::FieldAccess { .. }
                     | ExprKind::TupleIndex { .. }
             ) || ref_slots.get(i).copied().unwrap_or(false)
+                || (tuple && expected.is_none() && self.is_ref_pattern_ident(e))
             {
                 continue;
             }

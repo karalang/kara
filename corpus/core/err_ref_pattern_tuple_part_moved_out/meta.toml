@@ -1,0 +1,9 @@
+source = "B-2026-11-06-4"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["ref-binding", "move-from-borrow"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-06-4: the control. The tuple holds a reference, so moving its part out into an owned binding that is returned is refused (§3.7). The expected.out wording of an error pin is guidance, not a byte oracle."

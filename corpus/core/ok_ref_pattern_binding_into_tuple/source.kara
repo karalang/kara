@@ -1,0 +1,30 @@
+// An explicit `ref name` binding borrows its part (core semantics §4.6), so a
+// tuple of it holds the reference, as a tuple of a binding over a `ref`
+// scrutinee does: in a `match` arm and in a `let` destructure alike
+// (B-2026-11-06-4).
+enum P { R { xs: Vec[i64], ms: i64 }, N }
+
+struct H { xs: Vec[i64] }
+
+fn arm(p: own P) -> i64 {
+    let (xs, ms) = match p { P.R { ref xs, ms } => (xs, ms), _ => return 0 };
+    xs.len() + ms
+}
+
+fn borrowed(p: ref P) -> i64 {
+    let (xs, ms) = match p { P.R { xs, ms } => (xs, ms), _ => return 0 };
+    xs.len() + ms
+}
+
+fn let_part(h: own H) -> i64 {
+    let H { ref xs } = h;
+    let t = (xs, 1);
+    t.0.len() + t.1
+}
+
+fn main() {
+    println(arm(P.R { xs: [1, 2], ms: 5 }));
+    let p = P.R { xs: [1, 2, 3], ms: 5 };
+    println(borrowed(p));
+    println(let_part(H { xs: [4, 5] }));
+}

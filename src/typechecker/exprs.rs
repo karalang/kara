@@ -11553,7 +11553,13 @@ impl<'a> super::TypeChecker<'a> {
                 if exprs.is_empty() {
                     Type::Unit
                 } else {
-                    let types: Vec<Type> = exprs.iter().map(|e| self.infer_expr(e)).collect();
+                    let types: Vec<Type> = exprs
+                        .iter()
+                        .map(|e| {
+                            let t = self.infer_expr(e);
+                            self.tuple_slot_holds_ref_pattern(e, t)
+                        })
+                        .collect();
                     // B-2026-09-03-20 — each element is consumed by value, so
                     // `(w.r, 1)` moves `r` out of an own-`Drop` `W` exactly as
                     // `let x = w.r;` does. Measured: two bodies, and the second

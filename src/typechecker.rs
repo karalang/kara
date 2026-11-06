@@ -610,6 +610,11 @@ pub(super) struct LocalTypeScope {
     /// that parameter's name: `r` in `let W { r, n } = w` or in a `match w`
     /// arm. Cleared like `views` by a shadowing `insert`.
     parts_of: Vec<FxHashMap<String, String>>,
+    /// Per scope, the names bound by an explicit `ref name` pattern (not
+    /// `mut ref name`), which the checker binds as `T` and marks a view. A
+    /// tuple literal holds such a binding as the reference it is (core
+    /// semantics §4.6, B-2026-11-06-4). Cleared like `views`.
+    ref_patterns: Vec<FxHashSet<String>>,
 }
 
 impl LocalTypeScope {
@@ -619,6 +624,7 @@ impl LocalTypeScope {
             views: vec![Default::default()],
             lent_iters: vec![Default::default()],
             parts_of: vec![Default::default()],
+            ref_patterns: vec![Default::default()],
         }
     }
 
@@ -627,6 +633,7 @@ impl LocalTypeScope {
         self.views.push(Default::default());
         self.lent_iters.push(Default::default());
         self.parts_of.push(Default::default());
+        self.ref_patterns.push(Default::default());
     }
 
     pub(super) fn pop(&mut self) {
@@ -634,6 +641,7 @@ impl LocalTypeScope {
         self.views.pop();
         self.lent_iters.pop();
         self.parts_of.pop();
+        self.ref_patterns.pop();
     }
 
     pub(super) fn insert(&mut self, name: String, ty: Type) {
@@ -644,6 +652,9 @@ impl LocalTypeScope {
             v.remove(name.as_str());
         }
         if let Some(v) = self.parts_of.last_mut() {
+            v.remove(name.as_str());
+        }
+        if let Some(v) = self.ref_patterns.last_mut() {
             v.remove(name.as_str());
         }
         if let Some(scope) = self.scopes.last_mut() {
@@ -658,6 +669,26 @@ impl LocalTypeScope {
                 v.insert(name.to_string());
             }
         }
+    }
+
+    /// Mark `name`, already bound in the innermost scope, as bound by an
+    /// explicit `ref name` pattern.
+    pub(super) fn mark_ref_pattern(&mut self, name: &str) {
+        if self.scopes.last().is_some_and(|s| s.contains_key(name)) {
+            if let Some(v) = self.ref_patterns.last_mut() {
+                v.insert(name.to_string());
+            }
+        }
+    }
+
+    /// Does `name` resolve to a binding marked by [`Self::mark_ref_pattern`]?
+    pub(super) fn is_ref_pattern(&self, name: &str) -> bool {
+        for (scope, marks) in self.scopes.iter().zip(self.ref_patterns.iter()).rev() {
+            if scope.contains_key(name) {
+                return marks.contains(name);
+            }
+        }
+        false
     }
 
     /// Does `name` resolve to a binding marked by [`Self::mark_view`]?

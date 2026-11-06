@@ -1493,6 +1493,7 @@ impl<'a> super::TypeChecker<'a> {
                 if clone_view {
                     self.local_scope.mark_view(name);
                 }
+                self.mark_explicit_ref_pattern(name, pattern, &wrapped);
                 // v2 core §4.6: a `ref name` binding, or any binding over a
                 // place the function does not own, borrows its part; moving
                 // it is §3.7's error, which the view rules report.
@@ -2216,6 +2217,20 @@ impl<'a> super::TypeChecker<'a> {
                 _ => super::ScrutineePart::Leaf(self.scrutinee_core_borrowed(e)),
             })
             .collect()
+    }
+
+    /// v2 core §4.6: mark a binding an explicit `ref name` pattern made
+    /// (not `mut ref name`) and typed as its part, so a tuple literal holds
+    /// it as the reference it is (B-2026-11-06-4).
+    fn mark_explicit_ref_pattern(&mut self, name: &str, pattern: &Pattern, ty: &Type) {
+        let key = SpanKey::from_span(&pattern.span);
+        if (self.cli_lint_overrides.strict_core || self.library_methods_from_source)
+            && self.program.ref_binding_spans.contains(&key)
+            && !self.program.mut_ref_binding_spans.contains(&key)
+            && !matches!(ty, Type::Ref(_) | Type::MutRef(_))
+        {
+            self.local_scope.mark_ref_pattern(name);
+        }
     }
 
     /// [`Self::core_enters_shared`] without its borrowed-scrutinee
@@ -3552,6 +3567,7 @@ impl<'a> super::TypeChecker<'a> {
                 {
                     self.local_scope.mark_view(name);
                 }
+                self.mark_explicit_ref_pattern(name, pattern, ty);
                 // Record the surface type for codegen so it can reconstitute
                 // struct payloads from the i64 word at match-arm bind sites
                 // (see TypeCheckResult.pattern_binding_types). Named types

@@ -1,0 +1,9 @@
+source = "B-2026-11-06-4"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["ref-binding", "move-from-borrow"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-06-4: core semantics §4.6, an explicit `ref name` binding borrows its part, so a tuple literal holds it as `ref T`, as it holds a binding over a `ref` scrutinee. The strict check refused the tuple as a move out of a borrow."

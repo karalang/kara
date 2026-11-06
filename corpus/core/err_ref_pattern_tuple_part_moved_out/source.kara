@@ -1,0 +1,15 @@
+// A tuple of a `ref name` binding holds the reference, so taking the part
+// back out of it as an owned value is a move out of a borrow (core semantics
+// §3.7, §4.6; B-2026-11-06-4).
+struct H { xs: Vec[i64] }
+
+fn take(h: own H) -> Vec[i64] {
+    let H { ref xs } = h;
+    let t = (xs, 1);
+    let w = t.0;
+    w
+}
+
+fn main() {
+    println(take(H { xs: [1] }).len());
+}
