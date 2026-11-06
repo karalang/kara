@@ -86,6 +86,8 @@ MAC = platform.system() == "Darwin"
 #  base:     default MIR against a fixed baseline the row gives
 #  seqfix:   seq MIR against the row's own figure before its fix (a source
 #            legacy cannot compile); within when at most half of it
+#  env:K=V   seq MIR against seq MIR built with K=V (a build switch's
+#            own effect, ratio default / K=V)
 #  rust:F    seq MIR against the kata's Rust mirror bench/F, built with
 #            rustc -O (a source legacy cannot compile, measured against Rust)
 ROWS = [
@@ -140,6 +142,14 @@ ROWS = [
     ("B-2026-11-04-33", "301-400/314-binary-tree-vertical-order-traversal", "vertical.kara", "pair", "cycles", "x86 instr 1.07x"),
     # -1 fixed d70e6d474a (M5 0.954x legacy's cycles); -8 is the arm64 gap to rustc -O left after it.
     ("B-2026-11-06-1", "301-400/354-russian-doll-envelopes", "russian_doll.kara", "pair", "cycles", "x86 0.70s -> 0.53s; fixed d70e6d474a"),
+    # -37: SimplifyCFG's phi fold threshold 6 rather than 4 (mir_aot.rs). Each
+    # row is the default build against the same compiler at LLVM's 4: 342 is
+    # the target, 229 the best x86 mover, 7 / 391 / 467 the worst.
+    ("B-2026-11-04-37", "301-400/342-power-of-four", "power_of_four.kara", "env:KARAC_MIR_PHI_FOLD_THRESHOLD=4", "cycles", "x86 unchanged; arm64 one branch"),
+    ("B-2026-11-04-37", "201-300/229-majority-element-ii", "majority_element_ii.kara", "env:KARAC_MIR_PHI_FOLD_THRESHOLD=4", "cycles", "x86 0.68x"),
+    ("B-2026-11-04-37", "1-100/7-reverse-integer", "reverse.kara", "env:KARAC_MIR_PHI_FOLD_THRESHOLD=4", "cycles", "x86 1.05x"),
+    ("B-2026-11-04-37", "301-400/391-perfect-rectangle", "perfect_rectangle.kara", "env:KARAC_MIR_PHI_FOLD_THRESHOLD=4", "cycles", "x86 1.04x"),
+    ("B-2026-11-04-37", "401-500/467-unique-substrings-in-wraparound-string", "unique_substrings.kara", "env:KARAC_MIR_PHI_FOLD_THRESHOLD=4", "cycles", "x86 1.03x"),
     ("B-2026-11-06-8", "301-400/354-russian-doll-envelopes", "russian_doll.kara", "rust:russian_doll.rs", "cycles", "M5 1.360x at 4471044a8a; x86 level"),
     ("B-2026-11-04-33", "301-400/318-maximum-product-of-word-lengths", "max_product.kara", "pair", "instructions", "x86 1.19x: write_word not inlined"),
     ("B-2026-11-04-33", "1601-1700/1665-minimum-initial-energy-to-finish-tasks", "greedy.kara", "pair", "instructions", "x86 1.29x"),
@@ -151,13 +161,15 @@ def log(*a):
 
 built = {}
 warned = []
-def build(compiler, src, seq):
-    key = (compiler, src, seq)
+def build(compiler, src, seq, build_env=None):
+    key = (compiler, src, seq, tuple(sorted((build_env or {}).items())))
     if key in built:
         return built[key]
     tag = ("mir" if compiler == KARAC else "leg") + ("_seq" if seq else "_par")
+    for k, v in sorted((build_env or {}).items()):
+        tag += f"_{k}{v}"
     exe = os.path.join(OUT, f"{os.path.basename(src)[:-5]}_{tag}")
-    env = dict(os.environ)
+    env = dict(os.environ, **(build_env or {}))
     if seq:
         env["KARAC_AUTO_PAR"] = "0"
     else:
@@ -246,6 +258,12 @@ for rid, kdir, srcname, kind, metric, note in ROWS:
             a, b = measure(e, {"KARAC_THREADS": x}), measure(e, {"KARAC_THREADS": y})
     elif kind == "par":
         ea, eb = build(KARAC, src, False), build(LEGACY, src, False)
+        if ea and eb:
+            a, b = measure(ea, {}), measure(eb, {})
+    elif kind.startswith("env:"):
+        # seq MIR as built against seq MIR built with K=V (ratio default / K=V).
+        k, v = kind.split(":", 1)[1].split("=", 1)
+        ea, eb = build(KARAC, src, True), build(KARAC, src, True, {k: v})
         if ea and eb:
             a, b = measure(ea, {}), measure(eb, {})
     elif kind.startswith("rust:"):

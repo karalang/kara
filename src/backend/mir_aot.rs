@@ -365,6 +365,16 @@ fn route_heap(module: &Module<'_>) {
 /// time and 0.15% of stripped size (B-2026-11-01-36).
 /// `KARAC_MIR_UNROLL_THRESHOLD=<n>` sets another; 150 is LLVM's O2 value.
 ///
+/// SimplifyCFG's two-entry phi folding threshold is 6 rather than 4, so a
+/// short-circuit `n > 0 and <test>` whose test became a `ctpop` (costed
+/// above a plain `and` on aarch64) still folds into one branch-free
+/// condition. At 4, kata 342's loop kept `n > 0` as its own branch on
+/// arm64, a second data-dependent branch per element that legacy's loop
+/// does not have (B-2026-11-04-37); x86 already branches three times in
+/// both. Over the 707 frozen-set programs on x86, 29 build differently,
+/// 0.969x geomean, best 0.68x (kata 229), worst 1.05x.
+/// `KARAC_MIR_PHI_FOLD_THRESHOLD=<n>` sets another; 4 is LLVM's.
+///
 /// `KARAC_MIR_ALIGN_BRANCHES=1` also keeps x86 jumps from crossing or
 /// ending on a 32-byte line (clang's `-mbranches-within-32B-boundaries`:
 /// the assembler pads, nothing else changes). It is off by default
@@ -391,6 +401,14 @@ fn unroll_threshold() {
                 std::ffi::CString::new("-x86-branches-within-32B-boundaries").unwrap_or_default(),
             );
         }
+        let fold = std::env::var("KARAC_MIR_PHI_FOLD_THRESHOLD")
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(6);
+        args.push(
+            std::ffi::CString::new(format!("-two-entry-phi-node-folding-threshold={fold}"))
+                .unwrap_or_default(),
+        );
         let argv: Vec<*const std::ffi::c_char> = args.iter().map(|a| a.as_ptr()).collect();
         // SAFETY: NUL-terminated strings that outlive the call; LLVM
         // copies what it keeps.
