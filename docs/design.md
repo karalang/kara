@@ -3115,6 +3115,8 @@ Kāra emits **one specialized implementation per tuple of type and const argumen
 
 **The standard library ships as source.** Collection code is compiled into each program at the instances it uses, like Rust's `std::collections`, not called through a prebuilt archive. The runtime library holds only non-generic primitives: panic support, the allocator interface, FFI bridges and OS bindings.
 
+**Polymorphic recursion is an error.** A generic whose recursive path calls it again at a type argument that strictly contains its own parameter, such as `deep[T]` calling `deep([x], ..)` at `Vec[T]`, would need unboundedly many instances. `karac check` refuses it at the recursive call, naming the cycle and the growing argument. Since `check` finds the cycle in the call graph rather than by expanding instances, it never runs forever on such a program. Recursion at the same or a smaller type is ordinary and compiles.
+
 **Cost.** Binary size grows with the number of distinct instances: a program using `Map[i64, i64]`, `Map[String, i64]`, `Map[String, Vec[i64]]` and `Set[String]` carries four map and set implementations. Stripping, LTO and dead-code elimination remove unused methods per instance, but each instance has a floor. A typical small program is about Rust's size; one with many instances grows linearly. In return, collections run at close to Rust's speed, the optimizer reaches into collection bodies (constant folding through hashing, vectorized bulk operations, scalar replacement of keys), and no probe pays an indirect call. Kāra chooses run-time speed over archive size.
 
 There is no dynamic linking ([deferred.md](deferred.md), permanent omissions); monomorphization is the alternative to plugin-style extension.
