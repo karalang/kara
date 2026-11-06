@@ -1,0 +1,51 @@
+// docs/library/collections.md: `Slice[T]` has `iter_mut()`, each item a
+// `mut ref T`, in index order; a range view of a `Vec` takes it as a
+// receiver (`v[a..b].iter_mut()`), as `sort` and `reverse` do.
+
+struct Seg {
+    name: String,
+    recs: Vec[String],
+}
+
+fn bump(xs: mut Slice[i64]) {
+    for x in xs.iter_mut() {
+        *x += 10;
+    }
+}
+
+fn tag(xs: mut Slice[String]) {
+    let mut back = xs.iter_mut().rev();
+    if let Some(last) = back.next() {
+        last.push_str("!");
+    }
+}
+
+fn main() {
+    let mut v = [1, 2, 3, 4];
+    let n = v.len();
+    bump(mut v[0..n - 1]);
+    println(f"{v}");
+
+    for x in v[2..].iter_mut() {
+        *x *= 2;
+    }
+    println(f"{v}");
+
+    let mut segs = [
+        Seg { name: "a".to_string(), recs: ["x".to_string(), "y".to_string()] },
+        Seg { name: "b".to_string(), recs: ["z".to_string()] },
+        Seg { name: "c".to_string(), recs: [] },
+    ];
+    let k = segs.len();
+    for seg in segs[0..k - 1].iter_mut() {
+        seg.recs.retain(|r| r != "y");
+        seg.name.push_str("'");
+    }
+    for seg in segs.iter() {
+        println(f"{seg.name} {seg.recs.len()}");
+    }
+
+    let mut words = ["one".to_string(), "two".to_string(), "three".to_string()];
+    tag(mut words[0..2]);
+    println(words.join(" "));
+}

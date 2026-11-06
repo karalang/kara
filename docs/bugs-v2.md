@@ -58,10 +58,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 150 |
-| false-positive | 126 |
+| diagnostics | 151 |
+| false-positive | 128 |
 | perf | 106 |
-| missing-feature | 96 |
+| missing-feature | 97 |
 | soundness | 51 |
 | miscompile | 39 |
 | run-vs-build | 24 |
@@ -75,11 +75,11 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 237 |
+| typecheck | 240 |
 | mir-llvm | 128 |
 | mir | 128 |
 | cli | 71 |
-| ownership | 55 |
+| ownership | 56 |
 | parser | 42 |
 | interp | 30 |
 | effect | 25 |
@@ -129,6 +129,10 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-06-31 | 2026-11-06 | typecheck+mir | medium | check accepts String-only building methods (push_str, push, clear, truncate, pop, reserve) on a Str, even a borrowed parameter; every backend then refuses with an internal error | — |
 | B-2026-11-06-32 | 2026-11-06 | typecheck | low | CString lacks the CStr reading surface (to_str, to_string) and has no constructor from Slice[u8], which strings.md says exists | — |
 | B-2026-11-06-34 | 2026-11-06 | mir-llvm | low | `Vec.sort_by(|a, b| b.cmp(a))` on 500 `i64`s takes about 2.5x Rust's `sort_by` in kata 1058's benchmark, where a plain `sort()` keeps pace | — |
+| B-2026-11-06-36 | 2026-11-06 | ownership | medium | A closure in a method chain that ends in `?` (`let h = half(n).map_err(|_| bad.clone())?;`) is paired with a later move of what it reads (`return Err(bad)`) as "moved inside a loop and not assigned again before the next iteration", with no loop in the program | — |
+| B-2026-11-06-37 | 2026-11-06 | typecheck | medium | `Slice[T]` has no `iter_mut`, though docs/library/collections.md lists it (`mut ref T` items): `fn bump(xs: mut Slice[i64]) { for x in xs.iter_mut() { .. } }` and `v[0..n - 1].iter_mut()` are "no method 'iter_mut' on type 'Slice'" | — |
+| B-2026-11-06-38 | 2026-11-06 | typecheck | medium | A `TaskGroup.spawn` closure whose `Result` error type only a later annotation fixes is refused at lowering when its handles are kept in a `Vec`: `let r: Result[i64, String] = h.join();`, the annotation `?`'s own diagnostic asks for, leaves `let mut hs = Vec.new()` as "an expression whose type does not lower (Type(UnknownParam(\"E\"))) is not lowered yet" | — |
+| B-2026-11-06-39 | 2026-11-06 | typecheck | low | A let-chain (`if let Some(s) = v and kind == "group" { .. }`, Rust's `if let .. && ..`) gets two unrelated errors ("logical operator requires 'bool', found 'Option[String]'" and a pattern-against-`bool` mismatch) and no word that Kāra has no let-chains or how to nest the `if` | — |
 
 ### Relocated
 

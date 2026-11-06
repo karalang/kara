@@ -1,0 +1,531 @@
+== load
+topics.conf: 6 topics
+topics.conf:11: bad topic name 'Orders'
+topics.conf:12: topic orders already defined
+topics.conf:13: topic name '__internal' is reserved
+topics.conf:14: partitions is required
+topics.conf:15: bad value for partitions: '0'
+topics.conf:16: bad value for segment_bytes: '32'
+topics.conf:17: bad value for retention: '10x'
+topics.conf:18: bad value for retention: '0s'
+topics.conf:19: bad value for cleanup: 'archive'
+topics.conf:20: unknown setting replicas
+topics.conf:21: duplicate setting partitions
+topics.conf:22: a compacted topic has no retention
+topics.conf:23: expected key=value, found 'retention'
+topics.conf:24: expected 'topic', found 'topik'
+topics.conf:25: topic needs a name
+script.txt: 141 events
+== events
+> 08:00:00 describe orders
+topic orders: partitions 3, cleanup delete, segment_bytes 400, retention 1h
+  orders-0 start=0 end=0 segments=[0:0]
+  orders-1 start=0 end=0 segments=[0:0]
+  orders-2 start=0 end=0 segments=[0:0]
+> 08:00:00 describe profiles
+topic profiles: partitions 2, cleanup compact, segment_bytes 360
+  profiles-0 start=0 end=0 segments=[0:0]
+  profiles-1 start=0 end=0 segments=[0:0]
+> 08:00:05 produce orders ord-1001 {"event":"created","sku":"tea-01","qty":2}
+ok orders-0@0
+> 08:00:06 produce orders ord-1002 {"event":"created","sku":"mug-07","qty":1}
+ok orders-2@0
+> 08:00:07 produce orders ord-1003 {"event":"created","sku":"tea-02","qty":6}
+ok orders-0@1
+> 08:00:08 produce orders ord-1001 {"event":"paid","amount":"18.40"}
+ok orders-0@2
+> 08:00:09 produce orders ord-1004 {"event":"created","sku":"pot-03","qty":1}
+ok orders-1@0
+> 08:00:10 produce orders ord-1002 {"event":"paid","amount":"12.00"}
+ok orders-2@1
+> 08:00:11 produce orders:1 - {"event":"heartbeat","from":"checkout-2"}
+ok orders-1@1
+> 08:00:12 produce orders ord-1005 {"event":"created","sku":"tea-01","qty":1}
+ok orders-1@2
+> 08:00:13 produce orders ord-1003 {"event":"cancelled","reason":"out of stock"}
+roll orders-0 at 3
+ok orders-0@3
+> 08:00:14 produce orders ord-1006 {"event":"created","sku":"cup-11","qty":4}
+ok orders-0@4
+> 08:00:20 produce payments ord-1001 card ok 18.40 EUR
+ok payments-0@0
+> 08:00:21 produce payments ord-1002 card ok 12.00 EUR
+ok payments-0@1
+> 08:00:22 produce payments ord-1004 paypal pending 31.90 EUR
+ok payments-1@0
+> 08:00:23 produce payments ord-1004 paypal ok 31.90 EUR
+ok payments-1@1
+> 08:00:30 batch clicks 9 0 view:/products/
+ok 9 records: clicks-0=0..2 clicks-1=0..1 clicks-2=0..1 clicks-3=0..1
+> 08:00:31 produce clicks - view:/cart
+ok clicks-1@2
+> 08:00:40 produce profiles cust-17 {"name":"Ana","city":"Porto"}
+ok profiles-1@0
+> 08:00:41 produce profiles cust-23 {"name":"Bo","city":"Malmo"}
+ok profiles-0@0
+> 08:00:42 produce profiles cust-31 {"name":"Cy","city":"Lyon"}
+ok profiles-0@1
+> 08:00:43 produce profiles cust-17 {"name":"Ana","city":"Lisbon"}
+ok profiles-1@1
+> 08:00:44 produce profiles cust-42 {"name":"Di","city":"Ghent"}
+ok profiles-0@2
+> 08:00:50 produce audit - login admin from 10.0.0.7
+ok audit-0@0
+> 08:00:51 produce audit - price change tea-01 9.20 to 9.40
+ok audit-0@1
+> 08:00:55 produce profiles - {"name":"nobody"}
+error: script.txt:38: compacted topic profiles needs a key
+> 08:00:55 produce invoices inv-1 draft
+error: script.txt:39: unknown topic invoices
+> 08:00:55 produce orders:7 ord-1007 {"event":"created"}
+error: script.txt:40: partition 7 out of range for orders
+> 08:00:55 produce orders:x ord-1007 {"event":"created"}
+error: script.txt:41: partition x out of range for orders
+> 08:00:55 produce __consumer_offsets k v
+error: script.txt:42: topic __consumer_offsets is internal
+> 08:00:55 produce orders ord-1007
+error: script.txt:43: usage: produce <topic>[:<p>] <key|-> <value...|null>
+> 08:00:55 batch clicks 0 0 view:
+error: script.txt:44: bad count '0'
+> 08:00:55 batch clicks:1 3 0 view:
+error: script.txt:45: batch takes a topic, not a partition
+> 08:00:55 deliver orders ord-1007
+error: script.txt:46: unknown command 'deliver'
+> 08:01:00 fetch orders:0 0
+orders-0 @0: 5 records, next 5
+  0 ord-1001 {"event":"created","sku":"tea-01","qty":2}
+  1 ord-1003 {"event":"created","sku":"tea-02","qty":6}
+  2 ord-1001 {"event":"paid","amount":"18.40"}
+  3 ord-1003 {"event":"cancelled","reason":"out of stock"}
+  4 ord-1006 {"event":"created","sku":"cup-11","qty":4}
+> 08:01:00 fetch orders:1 1 2
+orders-1 @1: 2 records, next 3
+  1 - {"event":"heartbeat","from":"checkout-2"}
+  2 ord-1005 {"event":"created","sku":"tea-01","qty":1}
+> 08:01:00 fetch orders:2 99
+error: script.txt:50: offset 99 out of range [0, 2]
+> 08:01:00 fetch orders 0
+error: script.txt:51: fetch needs a partition
+> 08:01:00 describe orders
+topic orders: partitions 3, cleanup delete, segment_bytes 400, retention 1h
+  orders-0 start=0 end=5 segments=[0:351, 3:252]
+  orders-1 start=0 end=3 segments=[0:351]
+  orders-2 start=0 end=2 segments=[0:228]
+> 08:02:00 join billing bill-a orders,payments
+group billing generation 1: bill-a=[orders-0,orders-1,orders-2,payments-0,payments-1]
+> 08:02:00 join billing bill-b orders
+group billing generation 2: bill-a=[orders-0,orders-1,payments-0,payments-1] bill-b=[orders-2]
+> 08:02:01 poll billing bill-a 4
+poll billing/bill-a: 4 records
+  orders-0 0 ord-1001 {"event":"created","sku":"tea-01","qty":2}
+  orders-0 1 ord-1003 {"event":"created","sku":"tea-02","qty":6}
+  orders-0 2 ord-1001 {"event":"paid","amount":"18.40"}
+  orders-0 3 ord-1003 {"event":"cancelled","reason":"out of stock"}
+> 08:02:02 commit billing bill-a
+commit billing/bill-a: orders-0=4 orders-1=0 payments-0=0 payments-1=0
+> 08:02:03 poll billing bill-b
+poll billing/bill-b: 2 records
+  orders-2 0 ord-1002 {"event":"created","sku":"mug-07","qty":1}
+  orders-2 1 ord-1002 {"event":"paid","amount":"12.00"}
+> 08:02:04 poll billing bill-a 10
+poll billing/bill-a: 8 records
+  orders-0 4 ord-1006 {"event":"created","sku":"cup-11","qty":4}
+  orders-1 0 ord-1004 {"event":"created","sku":"pot-03","qty":1}
+  orders-1 1 - {"event":"heartbeat","from":"checkout-2"}
+  orders-1 2 ord-1005 {"event":"created","sku":"tea-01","qty":1}
+  payments-0 0 ord-1001 card ok 18.40 EUR
+  payments-0 1 ord-1002 card ok 12.00 EUR
+  payments-1 0 ord-1004 paypal pending 31.90 EUR
+  payments-1 1 ord-1004 paypal ok 31.90 EUR
+> 08:02:05 commit billing bill-b
+commit billing/bill-b: orders-2=2
+> 08:02:10 leave billing bill-a
+group billing generation 3: bill-b=[orders-0,orders-1,orders-2]
+> 08:02:11 poll billing bill-b 20
+poll billing/bill-b: 4 records
+  orders-0 4 ord-1006 {"event":"created","sku":"cup-11","qty":4}
+  orders-1 0 ord-1004 {"event":"created","sku":"pot-03","qty":1}
+  orders-1 1 - {"event":"heartbeat","from":"checkout-2"}
+  orders-1 2 ord-1005 {"event":"created","sku":"tea-01","qty":1}
+> 08:02:12 commit billing bill-b
+roll __consumer_offsets-0 at 7
+commit billing/bill-b: orders-0=5 orders-1=3 orders-2=2
+> 08:02:13 lag billing
+lag billing: 4
+  orders-0 committed=5 end=5 lag=0
+  orders-1 committed=3 end=3 lag=0
+  orders-2 committed=2 end=2 lag=0
+  payments-0 committed=0 end=2 lag=2
+  payments-1 committed=0 end=2 lag=2
+> 08:02:14 join billing bill-a orders,payments reset=latest
+error: script.txt:67: group billing resets to earliest
+> 08:02:14 join billing bill-b orders
+error: script.txt:68: member bill-b already in group billing
+> 08:02:14 join billing bill-c orders,invoices
+error: script.txt:69: unknown topic invoices
+> 08:02:14 poll billing bill-z
+error: script.txt:70: member bill-z is not in group billing
+> 08:02:14 commit nosuch bill-a
+error: script.txt:71: unknown group nosuch
+> 08:03:00 join analytics an-1 clicks reset=latest
+group analytics generation 1: an-1=[clicks-0,clicks-1,clicks-2,clicks-3]
+> 08:03:01 poll analytics an-1
+poll analytics/an-1: 0 records
+> 08:03:02 batch clicks 6 0 view:/search?q=tea&page=
+ok 6 records: clicks-0=3..3 clicks-1=3..3 clicks-2=2..3 clicks-3=2..3
+> 08:03:03 poll analytics an-1 4
+poll analytics/an-1: 4 records
+  clicks-0 3 - view:/search?q=tea&page=2
+  clicks-1 3 - view:/search?q=tea&page=3
+  clicks-2 2 - view:/search?q=tea&page=0
+  clicks-2 3 - view:/search?q=tea&page=4
+> 08:03:04 commit analytics an-1
+commit analytics/an-1: clicks-0=4 clicks-1=4 clicks-2=4 clicks-3=2
+> 08:03:05 poll analytics an-1 4
+poll analytics/an-1: 2 records
+  clicks-3 2 - view:/search?q=tea&page=1
+  clicks-3 3 - view:/search?q=tea&page=5
+> 08:03:06 commit analytics an-1
+roll __consumer_offsets-2 at 6
+commit analytics/an-1: clicks-0=4 clicks-1=4 clicks-2=4 clicks-3=4
+> 08:04:00 join profile_cache pc-1 profiles
+group profile_cache generation 1: pc-1=[profiles-0,profiles-1]
+> 08:04:01 poll profile_cache pc-1 20
+poll profile_cache/pc-1: 5 records
+  profiles-0 0 cust-23 {"name":"Bo","city":"Malmo"}
+  profiles-0 1 cust-31 {"name":"Cy","city":"Lyon"}
+  profiles-0 2 cust-42 {"name":"Di","city":"Ghent"}
+  profiles-1 0 cust-17 {"name":"Ana","city":"Porto"}
+  profiles-1 1 cust-17 {"name":"Ana","city":"Lisbon"}
+> 08:04:02 commit profile_cache pc-1
+commit profile_cache/pc-1: profiles-0=3 profiles-1=2
+> 08:20:00 produce profiles cust-23 {"name":"Bo","city":"Oslo"}
+roll profiles-0 at 3
+ok profiles-0@3
+> 08:20:01 produce profiles cust-31 null
+ok profiles-0@4
+> 08:20:02 produce profiles cust-17 {"name":"Ana","city":"Lisbon","vip":true}
+ok profiles-1@2
+> 08:20:03 produce profiles cust-55 {"name":"Ed","city":"Bern"}
+roll profiles-1 at 3
+ok profiles-1@3
+> 08:20:04 produce profiles cust-42 {"name":"Di","city":"Antwerp"}
+ok profiles-0@5
+> 08:20:05 produce profiles cust-23 {"name":"Bo","city":"Bergen"}
+ok profiles-0@6
+> 08:20:06 produce profiles cust-61 {"name":"Flo","city":"Graz"}
+roll profiles-0 at 7
+ok profiles-0@7
+> 08:20:07 produce profiles cust-55 {"name":"Ed","city":"Basel"}
+ok profiles-1@4
+> 08:20:08 describe profiles
+topic profiles: partitions 2, cleanup compact, segment_bytes 360
+  profiles-0 start=0 end=8 segments=[0:277, 3:320, 7:93]
+  profiles-1 start=0 end=5 segments=[0:311, 3:184]
+> 08:20:10 compact
+compact __consumer_offsets-0: kept 4 of 7 records, removed 0 tombstones, segments [0, 7]
+compact __consumer_offsets-2: kept 2 of 6 records, removed 0 tombstones, segments [0, 6]
+compact profiles-0: kept 3 of 7 records, removed 0 tombstones, segments [0, 3, 7]
+compact profiles-1: kept 1 of 3 records, removed 0 tombstones, segments [0, 3]
+> 08:20:11 describe profiles
+topic profiles: partitions 2, cleanup compact, segment_bytes 360
+  profiles-0 start=0 end=8 segments=[0:0, 3:229, 7:93]
+  profiles-1 start=0 end=5 segments=[0:119, 3:184]
+> 08:20:12 fetch profiles:0 0 20
+profiles-0 @0: 4 records, next 8
+  4 cust-31 null
+  5 cust-42 {"name":"Di","city":"Antwerp"}
+  6 cust-23 {"name":"Bo","city":"Bergen"}
+  7 cust-61 {"name":"Flo","city":"Graz"}
+> 08:20:12 fetch profiles:1 0 20
+profiles-1 @0: 3 records, next 5
+  2 cust-17 {"name":"Ana","city":"Lisbon","vip":true}
+  3 cust-55 {"name":"Ed","city":"Bern"}
+  4 cust-55 {"name":"Ed","city":"Basel"}
+> 08:25:00 batch clicks 12 0 view:/products/tea-0
+roll clicks-0 at 4
+roll clicks-1 at 4
+roll clicks-2 at 4
+roll clicks-3 at 4
+ok 12 records: clicks-0=4..6 clicks-1=4..6 clicks-2=4..6 clicks-3=4..6
+> 08:25:01 batch payments 8 3 settle-
+roll payments-1 at 5
+ok 8 records: payments-1=2..9
+> 08:25:02 describe payments
+topic payments: partitions 2, cleanup delete, segment_bytes 300, retention_bytes 200
+  payments-0 start=0 end=2 segments=[0:146]
+  payments-1 start=0 end=10 segments=[0:293, 5:215]
+> 08:25:03 retention
+retention clicks-0: deleted segments [0], log start 4
+retention clicks-1: deleted segments [0], log start 4
+retention clicks-2: deleted segments [0], log start 4
+retention clicks-3: deleted segments [0], log start 4
+retention payments-1: deleted segments [0], log start 5
+> 08:25:04 describe payments
+topic payments: partitions 2, cleanup delete, segment_bytes 300, retention_bytes 200
+  payments-0 start=0 end=2 segments=[0:146]
+  payments-1 start=5 end=10 segments=[5:215]
+> 08:25:05 describe clicks
+topic clicks: partitions 4, cleanup delete, segment_bytes 256, retention 20m
+  clicks-0 start=4 end=7 segments=[4:195]
+  clicks-1 start=4 end=7 segments=[4:195]
+  clicks-2 start=4 end=7 segments=[4:197]
+  clicks-3 start=4 end=7 segments=[4:197]
+> 08:30:00 poll analytics an-1 30
+poll analytics/an-1: 12 records
+  clicks-0 4 - view:/products/tea-00
+  clicks-0 5 - view:/products/tea-04
+  clicks-0 6 - view:/products/tea-08
+  clicks-1 4 - view:/products/tea-01
+  clicks-1 5 - view:/products/tea-05
+  clicks-1 6 - view:/products/tea-09
+  clicks-2 4 - view:/products/tea-02
+  clicks-2 5 - view:/products/tea-06
+  clicks-2 6 - view:/products/tea-010
+  clicks-3 4 - view:/products/tea-03
+  clicks-3 5 - view:/products/tea-07
+  clicks-3 6 - view:/products/tea-011
+> 08:30:01 commit analytics an-1
+roll __consumer_offsets-2 at 12
+commit analytics/an-1: clicks-0=7 clicks-1=7 clicks-2=7 clicks-3=7
+> 08:30:02 poll profile_cache pc-1 20
+poll profile_cache/pc-1: 7 records
+  profiles-0 4 cust-31 null
+  profiles-0 5 cust-42 {"name":"Di","city":"Antwerp"}
+  profiles-0 6 cust-23 {"name":"Bo","city":"Bergen"}
+  profiles-0 7 cust-61 {"name":"Flo","city":"Graz"}
+  profiles-1 2 cust-17 {"name":"Ana","city":"Lisbon","vip":true}
+  profiles-1 3 cust-55 {"name":"Ed","city":"Bern"}
+  profiles-1 4 cust-55 {"name":"Ed","city":"Basel"}
+> 08:30:03 commit profile_cache pc-1
+commit profile_cache/pc-1: profiles-0=8 profiles-1=5
+> 08:31:00 compact
+compact __consumer_offsets-2: kept 4 of 8 records, removed 0 tombstones, segments [0, 6, 12]
+compact profiles-0: kept 2 of 3 records, removed 1 tombstones, segments [0, 3, 7]
+> 08:31:01 fetch profiles:0 0 20
+profiles-0 @0: 3 records, next 8
+  5 cust-42 {"name":"Di","city":"Antwerp"}
+  6 cust-23 {"name":"Bo","city":"Bergen"}
+  7 cust-61 {"name":"Flo","city":"Graz"}
+> 08:31:01 fetch profiles:1 0 20
+profiles-1 @0: 3 records, next 5
+  2 cust-17 {"name":"Ana","city":"Lisbon","vip":true}
+  3 cust-55 {"name":"Ed","city":"Bern"}
+  4 cust-55 {"name":"Ed","city":"Basel"}
+> 09:10:00 batch orders 14 5 rush-
+roll orders-1 at 4
+roll orders-2 at 6
+ok 14 records: orders-0=5..7 orders-1=3..7 orders-2=2..7
+> 09:10:01 batch clicks 10 0 view:/checkout/step-
+roll clicks-0 at 7
+roll clicks-1 at 7
+roll clicks-2 at 7
+roll clicks-3 at 7
+ok 10 records: clicks-0=7..9 clicks-1=7..9 clicks-2=7..8 clicks-3=7..8
+> 09:10:02 poll billing bill-b 8
+poll billing/bill-b: 8 records
+  orders-0 5 k2 rush-2
+  orders-0 6 k2 rush-7
+  orders-0 7 k2 rush-12
+  orders-1 3 k3 rush-3
+  orders-1 4 k4 rush-4
+  orders-1 5 k3 rush-8
+  orders-1 6 k4 rush-9
+  orders-1 7 k3 rush-13
+> 09:10:03 commit billing bill-b
+commit billing/bill-b: orders-0=8 orders-1=8 orders-2=2
+> 09:10:04 retention
+retention clicks-0: deleted segments [4], log start 7
+retention clicks-1: deleted segments [4], log start 7
+retention clicks-2: deleted segments [4], log start 7
+retention clicks-3: deleted segments [4], log start 7
+retention orders-0: deleted segments [0], log start 3
+> 09:10:05 describe clicks
+topic clicks: partitions 4, cleanup delete, segment_bytes 256, retention 20m
+  clicks-0 start=7 end=10 segments=[7:195]
+  clicks-1 start=7 end=10 segments=[7:195]
+  clicks-2 start=7 end=9 segments=[7:130]
+  clicks-3 start=7 end=9 segments=[7:130]
+> 09:15:00 produce orders ord-1101 {"event":"created","sku":"tea-09","qty":3}
+roll orders-0 at 8
+ok orders-0@8
+> 09:15:01 crash orders:9:30
+error: script.txt:128: partition 9 out of range for orders
+> 09:15:01 crash orders:0:999999
+error: script.txt:129: cannot tear 999999 bytes from a 123-byte segment
+> 09:15:01 crash orders:0:30
+broker crashed
+tore 30 bytes off orders-0 segment 8
+> 09:15:02 produce orders ord-1102 {"event":"created"}
+error: script.txt:131: broker is down
+> 09:15:03 poll billing bill-b
+error: script.txt:132: broker is down
+> 09:15:04 restart
+truncated orders-0 at offset 8: torn record
+recovered 17 partitions, 65 records
+groups: analytics (4 offsets), billing (5 offsets), profile_cache (2 offsets)
+> 09:15:05 restart
+error: script.txt:134: broker is running
+> 09:15:06 describe orders
+topic orders: partitions 3, cleanup delete, segment_bytes 400, retention 1h
+  orders-0 start=3 end=8 segments=[3:371, 8:0]
+  orders-1 start=0 end=8 segments=[0:390, 4:158]
+  orders-2 start=0 end=8 segments=[0:384, 6:82]
+> 09:15:07 lag billing
+lag billing: 18
+  orders-0 committed=8 end=8 lag=0
+  orders-1 committed=8 end=8 lag=0
+  orders-2 committed=2 end=8 lag=6
+  payments-0 committed=0 end=2 lag=2
+  payments-1 committed=0 end=10 lag=10
+> 09:15:08 poll billing bill-b
+error: script.txt:137: member bill-b is not in group billing
+> 09:15:09 join billing bill-b orders
+group billing generation 1: bill-b=[orders-0,orders-1,orders-2]
+> 09:15:10 poll billing bill-b 30
+poll billing/bill-b: 6 records
+  orders-2 2 k0 rush-0
+  orders-2 3 k1 rush-1
+  orders-2 4 k0 rush-5
+  orders-2 5 k1 rush-6
+  orders-2 6 k0 rush-10
+  orders-2 7 k1 rush-11
+> 09:15:11 commit billing bill-b
+roll __consumer_offsets-0 at 14
+commit billing/bill-b: orders-0=8 orders-1=8 orders-2=8
+> 09:15:12 join analytics an-2 clicks
+group analytics generation 1: an-2=[clicks-0,clicks-1,clicks-2,clicks-3]
+> 09:15:13 poll analytics an-2 40
+poll analytics/an-2: 10 records
+  clicks-0 7 - view:/checkout/step-0
+  clicks-0 8 - view:/checkout/step-4
+  clicks-0 9 - view:/checkout/step-8
+  clicks-1 7 - view:/checkout/step-1
+  clicks-1 8 - view:/checkout/step-5
+  clicks-1 9 - view:/checkout/step-9
+  clicks-2 7 - view:/checkout/step-2
+  clicks-2 8 - view:/checkout/step-6
+  clicks-3 7 - view:/checkout/step-3
+  clicks-3 8 - view:/checkout/step-7
+> 10:20:00 produce orders ord-1201 {"event":"created","sku":"mug-02","qty":1}
+ok orders-2@8
+> 10:20:01 produce orders ord-1202 {"event":"created","sku":"tea-05","qty":2}
+ok orders-2@9
+> 10:20:02 produce orders ord-1203 {"event":"created","sku":"pot-01","qty":1}
+roll orders-2 at 10
+ok orders-2@10
+> 10:20:03 retention
+retention orders-0: deleted segments [3], log start 8
+retention orders-1: deleted segments [0], log start 4
+retention orders-2: deleted segments [0], log start 6
+> 10:20:04 describe orders
+topic orders: partitions 3, cleanup delete, segment_bytes 400, retention 1h
+  orders-0 start=8 end=8 segments=[8:0]
+  orders-1 start=4 end=8 segments=[4:158]
+  orders-2 start=6 end=11 segments=[6:328, 10:124]
+> 10:20:05 leave billing bill-b
+group billing generation 2: empty
+> 10:20:06 join billing bill-d orders,payments
+group billing generation 3: bill-d=[orders-0,orders-1,orders-2,payments-0,payments-1]
+> 10:20:07 poll billing bill-d 20
+poll billing/bill-d: 10 records
+  orders-2 8 ord-1201 {"event":"created","sku":"mug-02","qty":1}
+  orders-2 9 ord-1202 {"event":"created","sku":"tea-05","qty":2}
+  orders-2 10 ord-1203 {"event":"created","sku":"pot-01","qty":1}
+  payments-0 0 ord-1001 card ok 18.40 EUR
+  payments-0 1 ord-1002 card ok 12.00 EUR
+  reset payments-1 from 0 to 5 (out of range)
+  payments-1 5 k0 settle-3
+  payments-1 6 k1 settle-4
+  payments-1 7 k2 settle-5
+  payments-1 8 k0 settle-6
+  payments-1 9 k1 settle-7
+> 10:20:08 commit billing bill-d
+commit billing/bill-d: orders-0=8 orders-1=8 orders-2=11 payments-0=2 payments-1=10
+> 10:20:09 lag billing
+lag billing: 0
+  orders-0 committed=8 end=8 lag=0
+  orders-1 committed=8 end=8 lag=0
+  orders-2 committed=11 end=11 lag=0
+  payments-0 committed=2 end=2 lag=0
+  payments-1 committed=10 end=10 lag=0
+> 10:30:00 leave analytics an-2
+group analytics generation 2: empty
+> 10:30:01 delete-group analytics
+deleted group analytics: 4 offsets
+> 10:30:01 delete-group billing
+error: script.txt:159: group billing has members
+> 10:30:02 lag analytics
+error: script.txt:160: unknown group analytics
+> 10:30:03 compact
+compact __consumer_offsets-0: kept 1 of 11 records, removed 0 tombstones, segments [0, 14]
+compact __consumer_offsets-2: kept 0 of 4 records, removed 0 tombstones, segments [0, 12]
+> 10:30:04 describe __consumer_offsets
+topic __consumer_offsets: partitions 3, cleanup compact, segment_bytes 512
+  __consumer_offsets-0 start=0 end=20 segments=[0:65, 14:444]
+  __consumer_offsets-1 start=0 end=5 segments=[0:425]
+  __consumer_offsets-2 start=0 end=18 segments=[0:0, 12:426]
+> 18:00:00 crash
+broker crashed
+> 18:00:01 restart
+recovered 17 partitions, 52 records
+groups: billing (5 offsets), profile_cache (2 offsets)
+> 18:00:02 lag billing
+lag billing: 0
+  orders-0 committed=8 end=8 lag=0
+  orders-1 committed=8 end=8 lag=0
+  orders-2 committed=11 end=11 lag=0
+  payments-0 committed=2 end=2 lag=0
+  payments-1 committed=10 end=10 lag=0
+> 18:00:03 lag profile_cache
+lag profile_cache: 0
+  profiles-0 committed=8 end=8 lag=0
+  profiles-1 committed=5 end=5 lag=0
+> 18:00:04 produce audit - logout admin
+ok audit-0@2
+> 18:00:05 fetch audit:0 0
+audit-0 @0: 3 records, next 3
+  0 - login admin from 10.0.0.7
+  1 - price change tea-01 9.20 to 9.40
+  2 - logout admin
+> 17:00:00 describe audit
+error: script.txt:171: time goes back
+> 18:00:06 retention now
+error: script.txt:172: usage: retention
+> 18:00:06 compact now
+error: script.txt:173: usage: compact
+> 18:00:06 describe
+error: script.txt:174: usage: describe <topic>
+> 18:00:06 flush
+error: script.txt:175: unknown command 'flush'
+> 18:0:07 describe audit
+error: script.txt:176: bad time '18:0:07'
+== end 18:00:06
+topic orders: partitions 3, cleanup delete, segment_bytes 400, retention 1h
+  orders-0 start=8 end=8 segments=[8:0]
+  orders-1 start=4 end=8 segments=[4:158]
+  orders-2 start=6 end=11 segments=[6:328, 10:124]
+topic payments: partitions 2, cleanup delete, segment_bytes 300, retention_bytes 200
+  payments-0 start=0 end=2 segments=[0:146]
+  payments-1 start=5 end=10 segments=[5:215]
+topic clicks: partitions 4, cleanup delete, segment_bytes 256, retention 20m
+  clicks-0 start=7 end=10 segments=[7:195]
+  clicks-1 start=7 end=10 segments=[7:195]
+  clicks-2 start=7 end=9 segments=[7:130]
+  clicks-3 start=7 end=9 segments=[7:130]
+topic profiles: partitions 2, cleanup compact, segment_bytes 360
+  profiles-0 start=0 end=8 segments=[0:0, 3:192, 7:93]
+  profiles-1 start=0 end=5 segments=[0:119, 3:184]
+topic audit: partitions 1, cleanup delete, segment_bytes 1024
+  audit-0 start=0 end=3 segments=[0:207]
+topic shipments: partitions 2, cleanup compact, segment_bytes 1024
+  shipments-0 start=0 end=0 segments=[0:0]
+  shipments-1 start=0 end=0 segments=[0:0]
+topic __consumer_offsets: partitions 3, cleanup compact, segment_bytes 512
+  __consumer_offsets-0 start=0 end=20 segments=[0:65, 14:444]
+  __consumer_offsets-1 start=0 end=5 segments=[0:425]
+  __consumer_offsets-2 start=0 end=18 segments=[0:0, 12:426]
+group billing: reset earliest, generation 0, members -, 5 committed offsets
+group profile_cache: reset earliest, generation 0, members -, 2 committed offsets
+== verify
+disk matches memory: 17 partitions, 53 records

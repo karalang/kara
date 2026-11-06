@@ -1,0 +1,1480 @@
+// mini_logbroker: a single-node log broker in the shape of Apache Kafka.
+// Topics are partitioned append-only logs of segment files; producers
+// append keyed records placed by Kafka's murmur2 partitioner; consumer
+// groups share partitions by the range assignor and commit offsets to a
+// compacted internal topic; retention and compaction clean the logs; and
+// after a crash the broker recovers its logs from disk, truncating a torn
+// tail, and its groups from the offsets topic.
+// README.md is the spec; oracle.py is the reference.
+
+import std.encoding.{hex_encode, hex_decode};
+
+const ROOT: Str = "data/out/logs";
+const OFFSETS: Str = "__consumer_offsets";
+const NONE: i64 = -1;
+
+// ------------------------------------------------------------ tokens
+
+fn is_digit(c: u8) -> bool {
+    c >= b'0' and c <= b'9'
+}
+
+fn digits(s: Str) -> bool {
+    s.len() > 0 and s.bytes().iter().all(|c| is_digit(c))
+}
+
+fn is_name(s: Str) -> bool {
+    s.len() >= 1 and s.len() <= 40
+        and s.bytes().iter().all(|c| is_digit(c) or (c >= b'a' and c <= b'z') or c == b'_' or c == b'.' or c == b'-')
+}
+
+// At most nine digits, between lo and hi.
+fn num(s: Str, lo: i64, hi: i64) -> Option[i64] {
+    if not digits(s) or s.len() > 9 {
+        return None;
+    }
+    let v = i64.parse(s).ok()?;
+    if v >= lo and v <= hi { Some(v) } else { None }
+}
+
+// Digits with an optional s, m or h unit, in seconds.
+fn dur(s: Str) -> Option[i64] {
+    let (body, mul) = if s.ends_with("s") {
+        (s.substring(0, s.len() - 1), 1)
+    } else if s.ends_with("m") {
+        (s.substring(0, s.len() - 1), 60)
+    } else if s.ends_with("h") {
+        (s.substring(0, s.len() - 1), 3600)
+    } else {
+        (s.to_string(), 1)
+    };
+    if not digits(body) or body.len() > 7 {
+        return None;
+    }
+    Some(i64.parse(body).ok()? * mul)
+}
+
+fn show_dur(v: i64) -> String {
+    if v == NONE {
+        "none".to_string()
+    } else if v > 0 and v % 3600 == 0 {
+        f"{v / 3600}h"
+    } else if v > 0 and v % 60 == 0 {
+        f"{v / 60}m"
+    } else {
+        f"{v}s"
+    }
+}
+
+fn pad2(n: i64) -> String {
+    if n < 10 { f"0{n}" } else { f"{n}" }
+}
+
+fn fmt(t: i64) -> String {
+    f"{pad2(t / 3600)}:{pad2(t / 60 % 60)}:{pad2(t % 60)}"
+}
+
+fn pad20(n: i64) -> String {
+    let s = f"{n}";
+    let mut out = String.new();
+    for _ in 0..(20 - s.len()) {
+        out.push_str("0");
+    }
+    out + s
+}
+
+// The text of a line before any `#`.
+fn strip_comment(raw: Str) -> String {
+    match raw.split_once("#") {
+        Some((before, _)) => before.to_string(),
+        None => raw.to_string(),
+    }
+}
+
+fn words(s: Str) -> Vec[String] {
+    s.split_whitespace().map(|w| w.to_string()).collect()
+}
+
+// ------------------------------------------------------------ hashes
+
+// Kafka's murmur2 (the producer's default partitioner), made positive.
+fn murmur2(data: Slice[u8]) -> i64 {
+    let m: u32 = 0x5bd1e995;
+    let mut h: u32 = 0x9747b28c ^ (data.len() as u32);
+    let n = data.len() / 4;
+    for i in 0..n {
+        let b = 4 * i;
+        let mut k: u32 = (data[b]) | (data[b + 1] as u32) << 8 | (data[b + 2] as u32) << 16
+            | (data[b + 3] as u32) << 24;
+        k = k.wrapping_mul(m);
+        k ^= k >> 24;
+        k = k.wrapping_mul(m);
+        h = h.wrapping_mul(m);
+        h ^= k;
+    }
+    let rest = data.len() % 4;
+    let base = n * 4;
+    if rest == 3 {
+        h ^= (data[base + 2] as u32) << 16;
+    }
+    if rest >= 2 {
+        h ^= (data[base + 1] as u32) << 8;
+    }
+    if rest >= 1 {
+        h ^= data[base];
+        h = h.wrapping_mul(m);
+    }
+    h ^= h >> 13;
+    h = h.wrapping_mul(m);
+    h ^= h >> 15;
+    h & 0x7fffffff
+}
+
+// CRC-32 as zlib computes it (reflected, polynomial 0xedb88320).
+fn crc32(data: Slice[u8]) -> u32 {
+    let mut c: u32 = 0xffffffff;
+    for b in data.iter() {
+        c ^= b as u32;
+        for _ in 0..8 {
+            c = if c & 1 == 1 { (c >> 1) ^ 0xedb88320 } else { c >> 1 };
+        }
+    }
+    c ^ 0xffffffff
+}
+
+fn hex8(v: u32) -> String {
+    let digits = "0123456789abcdef".bytes();
+    let mut out = String.new();
+    for i in 0..8 {
+        let d = (v >> ((7 - i) * 4) as u32) & 15;
+        out.push(digits[d as i64] as char);
+    }
+    out
+}
+
+// ------------------------------------------------------------ topics.conf
+
+#[derive(Clone)]
+struct Topic {
+    name: String,
+    partitions: i64,
+    segment_bytes: i64,
+    retention: i64,
+    retention_bytes: i64,
+    cleanup: String,
+    delete_retention: i64,
+}
+
+fn topic(name: Str) -> Topic {
+    Topic {
+        name: name.to_string(),
+        partitions: 0,
+        segment_bytes: 1024,
+        retention: NONE,
+        retention_bytes: NONE,
+        cleanup: "delete".to_string(),
+        delete_retention: 3600,
+    }
+}
+
+fn internal_topic() -> Topic {
+    Topic { partitions: 3, segment_bytes: 512, cleanup: "compact".to_string(), delete_retention: 0, ..topic(OFFSETS) }
+}
+
+struct TopicsFile {
+    topics: Vec[Topic],
+    errors: Vec[String],
+}
+
+// One `key=value` setting applied to a topic.
+fn setting(t: mut ref Topic, k: Str, v: Str) -> Result[(), String] {
+    let bad = f"bad value for {k}: '{v}'";
+    match k {
+        "partitions" => t.partitions = num(v, 1, 16).ok_or(bad)?,
+        "segment_bytes" => t.segment_bytes = num(v, 64, 1048576).ok_or(bad)?,
+        "retention" => {
+            let x = if v == "none" { Some(NONE) } else { dur(v) };
+            match x {
+                Some(x) if x != 0 => t.retention = x,
+                _ => return Err(bad),
+            }
+        }
+        "retention_bytes" => {
+            t.retention_bytes = if v == "none" { NONE } else { num(v, 1, 1000000000).ok_or(bad)? };
+        }
+        "cleanup" => {
+            if v != "delete" and v != "compact" {
+                return Err(bad);
+            }
+            t.cleanup = v.to_string();
+        }
+        "delete_retention" => t.delete_retention = dur(v).ok_or(bad)?,
+        _ => return Err(f"unknown setting {k}"),
+    }
+    Ok(())
+}
+
+fn topic_line(toks: Vec[String], known: Slice[Topic]) -> Result[Topic, String] {
+    if toks[0] != "topic" {
+        return Err(f"expected 'topic', found '{toks[0]}'");
+    }
+    if toks.len() < 2 {
+        return Err("topic needs a name".to_string());
+    }
+    let name = toks[1].clone();
+    if not is_name(name) {
+        return Err(f"bad topic name '{name}'");
+    }
+    if name.starts_with("__") {
+        return Err(f"topic name '{name}' is reserved");
+    }
+    if known.iter().any(|t| t.name == name) {
+        return Err(f"topic {name} already defined");
+    }
+    let mut t = topic(name);
+    let mut seen: Vec[String] = Vec.new();
+    for tok in toks[2..].iter() {
+        let (k, v) = match tok.split_once("=") {
+            Some(kv) => kv,
+            None => return Err(f"expected key=value, found '{tok}'"),
+        };
+        if seen.contains(k.to_string()) {
+            return Err(f"duplicate setting {k}");
+        }
+        seen.push(k.to_string());
+        setting(mut t, k, v)?;
+    }
+    if t.partitions == 0 {
+        return Err("partitions is required".to_string());
+    }
+    if t.cleanup == "compact" and (t.retention != NONE or t.retention_bytes != NONE) {
+        return Err("a compacted topic has no retention".to_string());
+    }
+    Ok(t)
+}
+
+fn parse_topics(text: Str) -> TopicsFile {
+    let mut f = TopicsFile { topics: Vec.new(), errors: Vec.new() };
+    for (i, raw) in text.split("\n").enumerate() {
+        let toks = words(strip_comment(raw));
+        if toks.is_empty() {
+            continue;
+        }
+        match topic_line(toks, f.topics) {
+            Ok(t) => f.topics.push(t),
+            Err(e) => f.errors.push(f"topics.conf:{i + 1}: {e}"),
+        }
+    }
+    f
+}
+
+// ------------------------------------------------------------ script.txt
+
+#[derive(Clone)]
+struct Event {
+    no: i64,
+    line: String,
+    at: i64,
+    toks: Vec[String],
+    err: String,
+}
+
+fn clock(s: Str) -> Option[i64] {
+    let b = s.bytes();
+    if b.len() != 8 or b[2] != b':' or b[5] != b':' {
+        return None;
+    }
+    let h = num(s.substring(0, 2), 0, 99)?;
+    let m = num(s.substring(3, 5), 0, 59)?;
+    let sec = num(s.substring(6, 8), 0, 59)?;
+    Some(h * 3600 + m * 60 + sec)
+}
+
+fn parse_script(text: Str) -> Vec[Event] {
+    let mut evs: Vec[Event] = Vec.new();
+    for (i, raw) in text.split("\n").enumerate() {
+        let line = strip_comment(raw).trim().to_string();
+        if line.is_empty() {
+            continue;
+        }
+        let toks = words(line);
+        let mut ev = Event { no: i + 1, line: line.clone(), at: 0, toks: toks[1..].to_vec(), err: String.new() };
+        match clock(toks[0]) {
+            None => ev.err = f"bad time '{toks[0]}'",
+            Some(at) => {
+                ev.at = at;
+                if toks.len() < 2 {
+                    ev.err = "missing command".to_string();
+                }
+            }
+        }
+        evs.push(ev);
+    }
+    evs
+}
+
+// ------------------------------------------------------------ records
+
+#[derive(Clone, PartialEq)]
+struct Rec {
+    off: i64,
+    ts: i64,
+    key: Option[String],
+    val: Option[String],
+}
+
+fn enc(b: Option[String]) -> String {
+    match b {
+        None => "-".to_string(),
+        Some(s) => ":" + hex_encode(s.bytes()),
+    }
+}
+
+fn record_line(r: Rec) -> String {
+    let body = f"{r.off} {r.ts} k{enc(r.key)} v{enc(r.val)}";
+    let crc = hex8(crc32(body.bytes()));
+    f"{body} {crc}\n"
+}
+
+fn record_size(r: Rec) -> i64 {
+    record_line(r).len()
+}
+
+// A key or value field: `<tag>-` or `<tag>:<lower-case hex>`.
+fn dec(tok: Str, tag: Str) -> Result[Option[String], ()] {
+    if tok == tag.to_string() + "-" {
+        return Ok(None);
+    }
+    if not tok.starts_with(tag.to_string() + ":") {
+        return Err(());
+    }
+    let h = tok.substring(2, tok.len());
+    if h.bytes().iter().any(|c| not (is_digit(c) or (c >= b'a' and c <= b'f'))) {
+        return Err(());
+    }
+    let bytes = hex_decode(h).map_err(|_| ())?;
+    let s = String.from_utf8(bytes).map_err(|_| ())?;
+    Ok(Some(s))
+}
+
+// A line without its newline: the record, or why it is not one.
+fn parse_record(line: Str) -> Result[Rec, String] {
+    let f: Vec[Str] = line.split(" ").collect();
+    let bad = "bad record".to_string();
+    if f.len() != 5 or not digits(f[0]) or not digits(f[1]) or f[0].len() > 9 or f[1].len() > 9 {
+        return Err(bad);
+    }
+    let key = dec(f[2], "k").map_err(|_| bad.clone())?;
+    let val = dec(f[3], "v").map_err(|_| bad.clone())?;
+    if f[4].len() != 8 {
+        return Err(bad);
+    }
+    let body = f[0..4].join(" ");
+    if hex8(crc32(body.bytes())) != f[4] {
+        return Err("bad checksum".to_string());
+    }
+    Ok(Rec { off: i64.parse(f[0]).unwrap(), ts: i64.parse(f[1]).unwrap(), key, val })
+}
+
+fn show_key(k: Option[String]) -> String {
+    k.clone() ?? "-".to_string()
+}
+
+fn show_val(v: Option[String]) -> String {
+    v.clone() ?? "null".to_string()
+}
+
+fn show_rec(r: Rec) -> String {
+    f"{r.off} {show_key(r.key.clone())} {show_val(r.val.clone())}"
+}
+
+// ------------------------------------------------------------ partitions
+
+#[derive(Clone)]
+struct Segment {
+    base: i64,
+    recs: Vec[Rec],
+    size: i64,
+}
+
+fn segment(base: i64) -> Segment {
+    Segment { base, recs: Vec.new(), size: 0 }
+}
+
+#[derive(Clone)]
+struct Part {
+    topic: Topic,
+    p: i64,
+    segs: Vec[Segment],
+    start: i64,
+    end: i64,
+}
+
+impl Part {
+    fn name(self) -> String {
+        f"{self.topic.name}-{self.p}"
+    }
+
+    fn dir(self) -> String {
+        f"{ROOT}/{self.name()}"
+    }
+
+    fn path(self, base: i64) -> String {
+        f"{self.dir()}/{pad20(base)}.log"
+    }
+
+    fn write(self, seg: Segment) -> Result[(), String] {
+        let text: Vec[String] = seg.recs.iter().map(|r| record_line(r)).collect();
+        fs.write(self.path(seg.base), text.join("")).map_err(|e| f"cannot write {self.path(seg.base)}: {e}")
+    }
+
+    fn records(self) -> Vec[Rec] {
+        let mut out: Vec[Rec] = Vec.new();
+        for seg in self.segs.iter() {
+            out.extend(seg.recs.iter().cloned());
+        }
+        out
+    }
+
+    // Up to mx records at or after off.
+    fn read(self, off: i64, mx: i64) -> Vec[Rec] {
+        self.records().into_iter().filter(|r| r.off >= off).take(mx).collect()
+    }
+}
+
+// ------------------------------------------------------------ groups
+
+type Tp = (String, i64);
+
+fn show_tp(tp: Tp) -> String {
+    f"{tp.0}-{tp.1}"
+}
+
+struct Group {
+    name: String,
+    reset: String,
+    members: SortedMap[String, Vec[String]],
+    generation: i64,
+    assign: SortedMap[String, Vec[Tp]],
+    pos: SortedMap[Tp, i64],
+    committed: SortedMap[Tp, i64],
+}
+
+fn group(name: Str, reset: Str) -> Group {
+    Group {
+        name: name.to_string(),
+        reset: reset.to_string(),
+        members: SortedMap.new(),
+        generation: 0,
+        assign: SortedMap.new(),
+        pos: SortedMap.new(),
+        committed: SortedMap.new(),
+    }
+}
+
+// ------------------------------------------------------------ broker
+
+struct Broker {
+    topics: Vec[Topic],
+    parts: SortedMap[Tp, Part],
+    groups: SortedMap[String, Group],
+    rr: Map[String, i64],
+    now: i64,
+    down: bool,
+    out: Vec[String],
+}
+
+// What a recovery read back: the partitions, the record count, and a line
+// for each truncation.
+struct Loaded {
+    parts: SortedMap[Tp, Part],
+    count: i64,
+    notes: Vec[String],
+}
+
+// Reads one partition's segments, truncating at the first bad record.
+fn load_part(t: own Topic, p: i64) -> Result[(Part, Option[String]), String] {
+    let mut part = Part { topic: t, p, segs: Vec.new(), start: 0, end: 0 };
+    let dir = part.dir();
+    let names = fs.read_dir(dir).map_err(|e| f"cannot list {dir}: {e}")?;
+    let mut prev = -1;
+    let mut bad: Option[String] = None;
+    for n in names.iter().filter(|n| n.ends_with(".log")) {
+        let path = f"{dir}/{n}";
+        if bad.is_some() {
+            fs.remove_file(path).map_err(|e| f"cannot remove {path}: {e}")?;
+            continue;
+        }
+        let mut seg = segment(i64.parse(n.substring(0, n.len() - 4)).unwrap_or(0));
+        let data = fs.read_to_string(path).map_err(|e| f"cannot read {path}: {e}")?;
+        let mut at = 0;
+        while at < data.len() {
+            let rest = data.substring(at, data.len());
+            let rec = match rest.find("\n") {
+                None => Err("torn record".to_string()),
+                Some(nl) => match parse_record(rest.substring(0, nl)) {
+                    Ok(r) if r.off <= prev or r.off < seg.base => Err("offset out of order".to_string()),
+                    other => other,
+                },
+            };
+            match rec {
+                Err(why) => {
+                    bad = Some(f"truncated {part.name()} at offset {prev + 1}: {why}");
+                    fs.write(path, data.substring(0, at)).map_err(|e| f"cannot write {path}: {e}")?;
+                    break;
+                }
+                Ok(r) => {
+                    let size = record_size(r);
+                    prev = r.off;
+                    seg.recs.push(r);
+                    seg.size += size;
+                    at += size;
+                }
+            }
+        }
+        part.segs.push(seg);
+    }
+    part.start = part.segs[0].base;
+    let last = part.segs[part.segs.len() - 1].base;
+    part.end = if prev + 1 > last { prev + 1 } else { last };
+    Ok((part, bad))
+}
+
+// Reads every partition back from disk, one task per topic.
+fn load(topics: Slice[Topic]) -> Result[Loaded, String] {
+    let group = TaskGroup.new();
+    let mut handles = Vec.new();
+    for t in topics.iter() {
+        let t = t.clone();
+        handles.push(group.spawn(|| {
+            let mut got: Vec[(Part, Option[String])] = Vec.new();
+            for p in 0..t.partitions {
+                got.push(load_part(t.clone(), p)?);
+            }
+            let done: Result[Vec[(Part, Option[String])], String] = Ok(got);
+            done
+        }));
+    }
+    let mut out = Loaded { parts: SortedMap.new(), count: 0, notes: Vec.new() };
+    for h in handles.into_iter() {
+        let got = h.join()?;
+        for (part, note) in got.into_iter() {
+            if let Some(n) = note {
+                out.notes.push(n);
+            }
+            out.count += part.records().len();
+            out.parts.insert((part.topic.name.clone(), part.p), part);
+        }
+    }
+    Ok(out)
+}
+
+impl Broker {
+    fn topic(self, name: Str) -> Option[Topic] {
+        self.topics.iter().find(|t| t.name == name).cloned()
+    }
+
+    fn part(mut ref self, name: Str, p: i64) -> mut ref Part {
+        self.parts.get_mut((name.to_string(), p)).unwrap()
+    }
+
+    fn fresh(mut ref self) -> Result[(), String] {
+        if fs.exists(ROOT) {
+            fs.remove_dir_all(ROOT).map_err(|e| f"cannot clear {ROOT}: {e}")?;
+        }
+        for t in self.topics.iter() {
+            for p in 0..t.partitions {
+                let part = Part { topic: t.clone(), p, segs: [segment(0)], start: 0, end: 0 };
+                fs.create_dir_all(part.dir()).map_err(|e| f"cannot create {part.dir()}: {e}")?;
+                part.write(part.segs[0])?;
+                self.parts.insert((t.name.clone(), p), part);
+            }
+        }
+        Ok(())
+    }
+
+    // ---- append
+
+    fn append(mut ref self, name: Str, p: i64, key: own Option[String], val: own Option[String]) -> Result[i64, String] {
+        let now = self.now;
+        let part = self.part(name, p);
+        let rec = Rec { off: part.end, ts: now, key, val };
+        let line = record_line(rec);
+        let mut rolled = false;
+        let n = part.segs.len();
+        if not part.segs[n - 1].recs.is_empty() and part.segs[n - 1].size + line.len() > part.topic.segment_bytes {
+            part.segs.push(segment(part.end));
+            rolled = true;
+        }
+        let path = part.path(part.segs[part.segs.len() - 1].base);
+        let file = File.append(path).map_err(|e| f"cannot open {path}: {e}")?;
+        file.write(line.bytes()).map_err(|e| f"cannot write {path}: {e}")?;
+        let last = part.segs.len() - 1;
+        part.segs[last].size += line.len();
+        part.segs[last].recs.push(rec);
+        part.end += 1;
+        let off = part.end - 1;
+        if rolled {
+            let shown = part.name();
+            self.out.push(f"roll {shown} at {off}");
+        }
+        Ok(off)
+    }
+
+    fn choose(mut ref self, t: Topic, key: Option[String]) -> i64 {
+        match key {
+            Some(k) => murmur2(k.bytes()) % t.partitions,
+            None => {
+                let n = self.rr.get(t.name) ?? 0;
+                self.rr.insert(t.name.clone(), n + 1);
+                n % t.partitions
+            }
+        }
+    }
+
+    // `<t>` or `<t>:<p>`, for a topic a client may use.
+    fn target(self, spec: Str) -> Result[(Topic, Option[i64]), String] {
+        let (name, ps) = match spec.split_once(":") {
+            Some((n, p)) => (n.to_string(), Some(p.to_string())),
+            None => (spec.to_string(), None),
+        };
+        let t = self.topic(name).ok_or(f"unknown topic {name}")?;
+        if t.name == OFFSETS {
+            return Err(f"topic {OFFSETS} is internal");
+        }
+        match ps {
+            None => Ok((t, None)),
+            Some(ps) => match num(ps, 0, 99) {
+                Some(p) if p < t.partitions => Ok((t, Some(p))),
+                _ => Err(f"partition {ps} out of range for {name}"),
+            },
+        }
+    }
+
+    fn produce(mut ref self, toks: Slice[String]) -> Result[(), String] {
+        if toks.len() < 3 {
+            return Err("usage: produce <topic>[:<p>] <key|-> <value...|null>".to_string());
+        }
+        let (t, p) = self.target(toks[0])?;
+        let key = if toks[1] == "-" { None } else { Some(toks[1].clone()) };
+        let rest = toks[2..].join(" ");
+        let val = if rest == "null" { None } else { Some(rest) };
+        if t.cleanup == "compact" and key.is_none() {
+            return Err(f"compacted topic {t.name} needs a key");
+        }
+        let p = match p {
+            Some(p) => p,
+            None => self.choose(t, key.clone()),
+        };
+        let off = self.append(t.name, p, key, val)?;
+        self.out.push(f"ok {t.name}-{p}@{off}");
+        Ok(())
+    }
+
+    fn batch(mut ref self, toks: Slice[String]) -> Result[(), String] {
+        if toks.len() != 4 {
+            return Err("usage: batch <topic> <count> <keys> <prefix>".to_string());
+        }
+        let (t, p) = self.target(toks[0])?;
+        if p.is_some() {
+            return Err("batch takes a topic, not a partition".to_string());
+        }
+        let count = num(toks[1], 1, 1000).ok_or(f"bad count '{toks[1]}'")?;
+        let keys = num(toks[2], 0, 1000).ok_or(f"bad key count '{toks[2]}'")?;
+        if t.cleanup == "compact" and keys == 0 {
+            return Err(f"compacted topic {t.name} needs a key");
+        }
+        let mut got: SortedMap[i64, (i64, i64)] = SortedMap.new();
+        for i in 0..count {
+            let key = if keys == 0 { None } else { Some(f"k{i % keys}") };
+            let q = self.choose(t, key.clone());
+            let off = self.append(t.name, q, key, Some(f"{toks[3]}{i}"))?;
+            let first = match got.get(q) {
+                Some((lo, _)) => lo,
+                None => off,
+            };
+            got.insert(q, (first, off));
+        }
+        let shown: Vec[String] = got.iter().map(|(q, (lo, hi))| f"{t.name}-{q}={lo}..{hi}").collect();
+        self.out.push(f"ok {count} records: {shown.join(" ")}");
+        Ok(())
+    }
+
+    fn fetch(mut ref self, toks: Slice[String]) -> Result[(), String] {
+        if toks.len() != 2 and toks.len() != 3 {
+            return Err("usage: fetch <topic>:<p> <offset> [max]".to_string());
+        }
+        let (t, p) = self.target(toks[0])?;
+        let p = p.ok_or("fetch needs a partition")?;
+        let off = num(toks[1], 0, 999999999).ok_or(f"bad offset '{toks[1]}'")?;
+        let mx = if toks.len() == 3 { num(toks[2], 1, 1000).ok_or(f"bad max '{toks[2]}'")? } else { 10 };
+        let part = self.parts.get((t.name.clone(), p)).unwrap();
+        if off < part.start or off > part.end {
+            return Err(f"offset {off} out of range [{part.start}, {part.end}]");
+        }
+        let recs = part.read(off, mx);
+        let next = match recs.last() {
+            Some(r) => r.off + 1,
+            None => off,
+        };
+        let mut lines = [f"{part.name()} @{off}: {recs.len()} records, next {next}"];
+        for r in recs.iter() {
+            lines.push(f"  {show_rec(r)}");
+        }
+        self.out.extend(lines);
+        Ok(())
+    }
+
+    // ---- groups
+
+    fn write_offset(mut ref self, group: Str, key: String, val: own Option[String]) -> Result[(), String] {
+        let p = murmur2(group.bytes()) % 3;
+        self.append(OFFSETS, p, Some(key.clone()), val)?;
+        Ok(())
+    }
+
+    fn rebalance(mut ref self, gname: Str) {
+        let topics = self.topics.clone();
+        let g = self.groups.get_mut(gname).unwrap();
+        g.generation += 1;
+        g.pos = SortedMap.new();
+        g.assign = SortedMap.new();
+        let mut names: SortedSet[String] = SortedSet.new();
+        for (m, ts) in g.members.iter() {
+            g.assign.insert(m.clone(), Vec.new());
+            for t in ts.iter() {
+                names.insert(t.clone());
+            }
+        }
+        for name in names.iter() {
+            let subs: Vec[String] = g.members.iter().filter(|(_, ts)| ts.contains(name)).map(|(m, _)| m.clone()).collect();
+            let n = topics.iter().find(|t| t.name == name).unwrap().partitions;
+            let per = n / subs.len();
+            let extra = n % subs.len();
+            let mut at = 0;
+            for (i, m) in subs.iter().enumerate() {
+                let k = per + if i < extra { 1 } else { 0 };
+                let mine = g.assign.get_mut(m).unwrap();
+                for q in at..(at + k) {
+                    mine.push((name.clone(), q));
+                }
+                at += k;
+            }
+        }
+        let line = if g.members.is_empty() {
+            f"group {g.name} generation {g.generation}: empty"
+        } else {
+            let shown: Vec[String] = g.assign.iter().map(|(m, tps)| {
+                let ps: Vec[String] = tps.iter().map(|tp| show_tp(tp)).collect();
+                f"{m}=[{ps.join(",")}]"
+            }).collect();
+            f"group {g.name} generation {g.generation}: {shown.join(" ")}"
+        };
+        self.out.push(line);
+    }
+
+    fn join(mut ref self, toks: Slice[String]) -> Result[(), String] {
+        if toks.len() != 3 and toks.len() != 4 {
+            return Err("usage: join <group> <member> <topic,...> [reset=earliest|latest]".to_string());
+        }
+        let gname = toks[0].clone();
+        let member = toks[1].clone();
+        if not is_name(gname) {
+            return Err(f"bad group name '{gname}'");
+        }
+        if not is_name(member) {
+            return Err(f"bad member name '{member}'");
+        }
+        let mut subs: Vec[String] = Vec.new();
+        for name in toks[2].split(",") {
+            let t = self.topic(name).ok_or(f"unknown topic {name}")?;
+            if t.name == OFFSETS {
+                return Err(f"topic {OFFSETS} is internal");
+            }
+            if subs.contains(name.to_string()) {
+                return Err(f"topic {name} listed twice");
+            }
+            subs.push(name.to_string());
+        }
+        let mut reset = "earliest".to_string();
+        if toks.len() == 4 {
+            if toks[3] != "reset=earliest" and toks[3] != "reset=latest" {
+                return Err(f"bad option '{toks[3]}'");
+            }
+            reset = toks[3].substring(6, toks[3].len());
+        }
+        match self.groups.get(gname) {
+            None => {
+                self.groups.insert(gname.clone(), group(gname, reset));
+                self.write_offset(gname, f"group/{gname}", Some(reset))?;
+            }
+            Some(g) => {
+                if toks.len() == 4 and g.reset != reset {
+                    return Err(f"group {gname} resets to {g.reset}");
+                }
+                if g.members.contains_key(member) {
+                    return Err(f"member {member} already in group {gname}");
+                }
+            }
+        }
+        self.groups.get_mut(gname).unwrap().members.insert(member, subs);
+        self.rebalance(gname);
+        Ok(())
+    }
+
+    fn member(self, gname: Str, member: Str) -> Result[(), String] {
+        match self.groups.get(gname) {
+            None => Err(f"unknown group {gname}"),
+            Some(g) if not g.members.contains_key(member) => Err(f"member {member} is not in group {gname}"),
+            Some(_) => Ok(()),
+        }
+    }
+
+    fn leave(mut ref self, toks: Slice[String]) -> Result[(), String] {
+        if toks.len() != 2 {
+            return Err("usage: leave <group> <member>".to_string());
+        }
+        self.member(toks[0], toks[1])?;
+        self.groups.get_mut(toks[0]).unwrap().members.remove(toks[1]);
+        self.rebalance(toks[0]);
+        Ok(())
+    }
+
+    fn poll(mut ref self, toks: Slice[String]) -> Result[(), String] {
+        if toks.len() != 2 and toks.len() != 3 {
+            return Err("usage: poll <group> <member> [max]".to_string());
+        }
+        self.member(toks[0], toks[1])?;
+        let mx = if toks.len() == 3 { num(toks[2], 1, 1000).ok_or(f"bad max '{toks[2]}'")? } else { 5 };
+        let parts = ref self.parts;
+        let g = self.groups.get_mut(toks[0]).unwrap();
+        let mut lines: Vec[String] = Vec.new();
+        let mut got = 0;
+        for tp in g.assign.get(toks[1]).unwrap().iter() {
+            let part = parts.get(tp).unwrap();
+            if not g.pos.contains_key(tp) {
+                let first = match g.committed.get(tp) {
+                    Some(c) => c,
+                    None => if g.reset == "earliest" { part.start } else { part.end },
+                };
+                g.pos.insert(tp.clone(), first);
+            }
+            let mut pos = g.pos.get(tp).unwrap();
+            if pos < part.start or pos > part.end {
+                let to = if g.reset == "earliest" { part.start } else { part.end };
+                lines.push(f"  reset {part.name()} from {pos} to {to} (out of range)");
+                g.pos.insert(tp.clone(), to);
+                pos = to;
+            }
+            if got >= mx {
+                continue;
+            }
+            let recs = part.read(pos, mx - got);
+            for r in recs.iter() {
+                lines.push(f"  {part.name()} {show_rec(r)}");
+            }
+            if let Some(r) = recs.last() {
+                g.pos.insert(tp.clone(), r.off + 1);
+            }
+            got += recs.len();
+        }
+        self.out.push(f"poll {toks[0]}/{toks[1]}: {got} records");
+        self.out.extend(lines);
+        Ok(())
+    }
+
+    fn commit(mut ref self, toks: Slice[String]) -> Result[(), String] {
+        if toks.len() != 2 {
+            return Err("usage: commit <group> <member>".to_string());
+        }
+        self.member(toks[0], toks[1])?;
+        let gname = toks[0].clone();
+        let g = self.groups.get(gname).unwrap();
+        let mut todo: Vec[(Tp, i64)] = Vec.new();
+        for tp in g.assign.get(toks[1]).unwrap().iter() {
+            if let Some(pos) = g.pos.get(tp) {
+                todo.push((tp.clone(), pos));
+            }
+        }
+        let mut done: Vec[String] = Vec.new();
+        for (tp, pos) in todo.iter() {
+            self.write_offset(gname, f"offset/{gname}/{tp.0}/{tp.1}", Some(f"{pos}"))?;
+            self.groups.get_mut(gname).unwrap().committed.insert(tp.clone(), pos);
+            done.push(f"{show_tp(tp)}={pos}");
+        }
+        if done.is_empty() {
+            self.out.push(f"commit {gname}/{toks[1]}: nothing to commit");
+        } else {
+            self.out.push(f"commit {gname}/{toks[1]}: {done.join(" ")}");
+        }
+        Ok(())
+    }
+
+    fn lag(mut ref self, toks: Slice[String]) -> Result[(), String] {
+        if toks.len() != 1 {
+            return Err("usage: lag <group>".to_string());
+        }
+        let g = self.groups.get(toks[0]).ok_or(f"unknown group {toks[0]}")?;
+        if g.committed.is_empty() {
+            self.out.push(f"lag {toks[0]}: no committed offsets");
+            return Ok(());
+        }
+        let mut total = 0;
+        let mut lines: Vec[String] = Vec.new();
+        for (tp, c) in g.committed.iter() {
+            let end = self.parts.get(tp).unwrap().end;
+            total += end - c;
+            lines.push(f"  {show_tp(tp)} committed={c} end={end} lag={end - c}");
+        }
+        self.out.push(f"lag {toks[0]}: {total}");
+        self.out.extend(lines);
+        Ok(())
+    }
+
+    fn delete_group(mut ref self, toks: Slice[String]) -> Result[(), String] {
+        if toks.len() != 1 {
+            return Err("usage: delete-group <group>".to_string());
+        }
+        let gname = toks[0].clone();
+        let g = self.groups.get(gname).ok_or(f"unknown group {gname}")?;
+        if not g.members.is_empty() {
+            return Err(f"group {gname} has members");
+        }
+        let tps: Vec[Tp] = g.committed.keys().cloned().collect();
+        for tp in tps.iter() {
+            self.write_offset(gname, f"offset/{gname}/{tp.0}/{tp.1}", None)?;
+        }
+        self.write_offset(gname, f"group/{gname}", None)?;
+        self.out.push(f"deleted group {gname}: {tps.len()} offsets");
+        self.groups.remove(gname);
+        Ok(())
+    }
+
+    // ---- cleaning
+
+    // The partitions of every topic with this cleanup policy, topics by name.
+    fn cleaned(self, policy: Str) -> Vec[Tp] {
+        let mut names: Vec[Topic] = self.topics.iter().filter(|t| t.cleanup == policy).cloned().collect();
+        names.sort_by_key(|t| t.name.clone());
+        let mut out: Vec[Tp] = Vec.new();
+        for t in names.iter() {
+            for p in 0..t.partitions {
+                out.push((t.name.clone(), p));
+            }
+        }
+        out
+    }
+
+    fn retention(mut ref self, toks: Slice[String]) -> Result[(), String] {
+        if not toks.is_empty() {
+            return Err("usage: retention".to_string());
+        }
+        let now = self.now;
+        let mut any = false;
+        for tp in self.cleaned("delete").iter() {
+            let part = self.parts.get_mut(tp).unwrap();
+            let t = part.topic.clone();
+            let mut gone: Vec[String] = Vec.new();
+            let mut total: i64 = part.segs.iter().map(|s| s.size).sum();
+            while part.segs.len() > 1 {
+                let seg = part.segs[0].clone();
+                let newest = seg.recs[seg.recs.len() - 1].ts;
+                let old = t.retention != NONE and newest <= now - t.retention;
+                let big = t.retention_bytes != NONE and total - seg.size >= t.retention_bytes;
+                if not (old or big) {
+                    break;
+                }
+                let path = part.path(seg.base);
+                fs.remove_file(path).map_err(|e| f"cannot remove {path}: {e}")?;
+                total -= seg.size;
+                gone.push(f"{seg.base}");
+                part.segs.remove(0);
+            }
+            if not gone.is_empty() {
+                any = true;
+                part.start = part.segs[0].base;
+                let line = f"retention {part.name()}: deleted segments [{gone.join(", ")}], log start {part.start}";
+                self.out.push(line);
+            }
+        }
+        if not any {
+            self.out.push("retention: nothing to delete".to_string());
+        }
+        Ok(())
+    }
+
+    fn compact(mut ref self, toks: Slice[String]) -> Result[(), String] {
+        if not toks.is_empty() {
+            return Err("usage: compact".to_string());
+        }
+        let now = self.now;
+        let mut any = false;
+        for tp in self.cleaned("compact").iter() {
+            let part = self.parts.get_mut(tp).unwrap();
+            let t = part.topic.clone();
+            let mut latest: Map[Option[String], i64] = Map.new();
+            for r in part.records().iter() {
+                latest.insert(r.key.clone(), r.off);
+            }
+            let mut kept = 0;
+            let mut total = 0;
+            let mut tombs = 0;
+            let mut changed = false;
+            let n = part.segs.len();
+            for seg in part.segs[0..n - 1].iter_mut() {
+                let before = seg.recs.len();
+                total += before;
+                seg.recs.retain(|r| {
+                    if latest.get(r.key).cloned() != Some(r.off) {
+                        return false;
+                    }
+                    if r.val.is_none() and r.ts <= now - t.delete_retention {
+                        tombs += 1;
+                        return false;
+                    }
+                    true
+                });
+                kept += seg.recs.len();
+                if seg.recs.len() != before {
+                    changed = true;
+                    seg.size = seg.recs.iter().map(|r| record_size(r)).sum();
+                }
+            }
+            if not changed {
+                continue;
+            }
+            any = true;
+            let mut live: Vec[Segment] = Vec.new();
+            for (i, seg) in part.segs.iter().enumerate() {
+                if i == 0 or i == n - 1 or not seg.recs.is_empty() {
+                    live.push(seg.clone());
+                } else {
+                    let path = part.path(seg.base);
+                    fs.remove_file(path).map_err(|e| f"cannot remove {path}: {e}")?;
+                }
+            }
+            for seg in live[0..live.len() - 1].iter() {
+                part.write(seg)?;
+            }
+            part.segs = live;
+            let bases: Vec[String] = part.segs.iter().map(|s| f"{s.base}").collect();
+            let line = f"compact {part.name()}: kept {kept} of {total} records, removed {tombs} tombstones, segments [{bases.join(", ")}]";
+            self.out.push(line);
+        }
+        if not any {
+            self.out.push("compact: nothing to clean".to_string());
+        }
+        Ok(())
+    }
+
+    // ---- describe
+
+    fn describe_topic(mut ref self, t: Topic) {
+        let ret = if t.retention != NONE { f", retention {show_dur(t.retention)}" } else { String.new() };
+        let rb = if t.retention_bytes != NONE { f", retention_bytes {t.retention_bytes}" } else { String.new() };
+        let mut lines = [f"topic {t.name}: partitions {t.partitions}, cleanup {t.cleanup}, segment_bytes {t.segment_bytes}{ret}{rb}"];
+        for p in 0..t.partitions {
+            let part = self.parts.get((t.name.clone(), p)).unwrap();
+            let segs: Vec[String] = part.segs.iter().map(|s| f"{s.base}:{s.size}").collect();
+            lines.push(f"  {part.name()} start={part.start} end={part.end} segments=[{segs.join(", ")}]");
+        }
+        self.out.extend(lines);
+    }
+
+    fn describe(mut ref self, toks: Slice[String]) -> Result[(), String] {
+        if toks.len() != 1 {
+            return Err("usage: describe <topic>".to_string());
+        }
+        let t = self.topic(toks[0]).ok_or(f"unknown topic {toks[0]}")?;
+        self.describe_topic(t);
+        Ok(())
+    }
+
+    // ---- crash and recovery
+
+    fn crash(mut ref self, toks: Slice[String]) -> Result[(), String] {
+        if toks.len() > 1 {
+            return Err("usage: crash [<topic>:<p>:<bytes>]".to_string());
+        }
+        let mut torn: Option[(String, String, i64)] = None;
+        if toks.len() == 1 {
+            let f: Vec[Str] = toks[0].split(":").collect();
+            if f.len() != 3 {
+                return Err(f"bad tear '{toks[0]}'");
+            }
+            let t = self.topic(f[0]).ok_or(f"unknown topic {f[0]}")?;
+            let p = match num(f[1], 0, 99) {
+                Some(p) if p < t.partitions => p,
+                _ => return Err(f"partition {f[1]} out of range for {f[0]}"),
+            };
+            let part = self.parts.get((t.name.clone(), p)).unwrap();
+            let act = part.segs.last().unwrap();
+            let n = match num(f[2], 1, 1000000) {
+                Some(n) if n <= act.size => n,
+                _ => return Err(f"cannot tear {f[2]} bytes from a {act.size}-byte segment"),
+            };
+            torn = Some((part.name(), part.path(act.base), n));
+        }
+        self.out.push("broker crashed".to_string());
+        if let Some((name, path, n)) = torn {
+            let size = fs.metadata(path).map_err(|e| f"cannot stat {path}: {e}")?.len;
+            let file = File.options().write(true).open(path).map_err(|e| f"cannot open {path}: {e}")?;
+            file.set_len(size - n).map_err(|e| f"cannot cut {path}: {e}")?;
+            let base = path.substring(path.len() - 24, path.len() - 4);
+            self.out.push(f"tore {n} bytes off {name} segment {i64.parse(base).unwrap()}");
+        }
+        self.down = true;
+        self.parts = SortedMap.new();
+        self.groups = SortedMap.new();
+        self.rr = Map.new();
+        Ok(())
+    }
+
+    fn restart(mut ref self, toks: Slice[String]) -> Result[(), String] {
+        if not toks.is_empty() {
+            return Err("usage: restart".to_string());
+        }
+        let loaded = load(self.topics)?;
+        self.out.extend(loaded.notes);
+        self.parts = loaded.parts;
+        self.down = false;
+        self.out.push(f"recovered {self.parts.len()} partitions, {loaded.count} records");
+        // The offsets topic, latest value per key.
+        let mut state: SortedMap[String, Option[String]] = SortedMap.new();
+        for p in 0..3 {
+            for r in self.parts.get((OFFSETS.to_string(), p)).unwrap().records().into_iter() {
+                state.insert(r.key.unwrap(), r.val);
+            }
+        }
+        for (k, v) in state.iter() {
+            let f: Vec[Str] = k.split("/").collect();
+            if let Some(v) = v {
+                if f[0] == "group" {
+                    self.groups.insert(f[1].to_string(), group(f[1], v));
+                }
+            }
+        }
+        for (k, v) in state.iter() {
+            let f: Vec[Str] = k.split("/").collect();
+            if let Some(v) = v {
+                if f[0] == "offset" {
+                    if let Some(g) = self.groups.get_mut(f[1]) {
+                        g.committed.insert((f[2].to_string(), i64.parse(f[3]).unwrap()), i64.parse(v).unwrap());
+                    }
+                }
+            }
+        }
+        if self.groups.is_empty() {
+            self.out.push("groups: none".to_string());
+        } else {
+            let shown: Vec[String] = self.groups.iter().map(|(n, g)| f"{n} ({g.committed.len()} offsets)").collect();
+            self.out.push(f"groups: {shown.join(", ")}");
+        }
+        Ok(())
+    }
+
+    // ---- dispatch
+
+    fn command(mut ref self, toks: Slice[String]) -> Result[(), String] {
+        let cmd = toks[0].clone();
+        let args = toks[1..];
+        if self.down and cmd != "restart" {
+            return Err("broker is down".to_string());
+        }
+        match cmd.as_str() {
+            "produce" => self.produce(args),
+            "batch" => self.batch(args),
+            "fetch" => self.fetch(args),
+            "join" => self.join(args),
+            "leave" => self.leave(args),
+            "poll" => self.poll(args),
+            "commit" => self.commit(args),
+            "lag" => self.lag(args),
+            "delete-group" => self.delete_group(args),
+            "retention" => self.retention(args),
+            "compact" => self.compact(args),
+            "describe" => self.describe(args),
+            "crash" => self.crash(args),
+            "restart" => {
+                if not self.down {
+                    return Err("broker is running".to_string());
+                }
+                self.restart(args)
+            }
+            _ => Err(f"unknown command '{cmd}'"),
+        }
+    }
+}
+
+// ------------------------------------------------------------ main
+
+fn read(path: Str) -> Result[String, String] {
+    fs.read_to_string(path).map_err(|e| f"cannot read {path}: {e}")
+}
+
+fn run() -> Result[(), String] {
+    fs.create_dir_all("data/out").map_err(|e| f"cannot create data/out: {e}")?;
+    write_data()?;
+    let ttext = read("data/topics.conf")?;
+    let stext = read("data/script.txt")?;
+    // Each file is parsed in a task of its own.
+    let tasks = TaskGroup.new();
+    let ht = tasks.spawn(|| parse_topics(ttext));
+    let hs = tasks.spawn(|| parse_script(stext));
+    let tf = ht.join();
+    let evs = hs.join();
+
+    let mut topics = tf.topics.clone();
+    topics.push(internal_topic());
+    let mut b = Broker {
+        topics,
+        parts: SortedMap.new(),
+        groups: SortedMap.new(),
+        rr: Map.new(),
+        now: 0,
+        down: false,
+        out: Vec.new(),
+    };
+    b.out.push("== load".to_string());
+    b.out.push(f"topics.conf: {tf.topics.len()} topics");
+    b.out.extend(tf.errors.iter().cloned());
+    b.out.push(f"script.txt: {evs.len()} events");
+    b.fresh()?;
+    b.out.push("== events".to_string());
+    for ev in evs.iter() {
+        let mut err = ev.err.clone();
+        if err.is_empty() and ev.at < b.now {
+            err = "time goes back".to_string();
+        }
+        b.out.push(f"> {ev.line}");
+        if err.is_empty() {
+            b.now = ev.at;
+            if let Err(e) = b.command(ev.toks) {
+                err = e;
+            }
+        }
+        if not err.is_empty() {
+            b.out.push(f"error: script.txt:{ev.no}: {err}");
+        }
+    }
+    b.out.push(f"== end {fmt(b.now)}");
+    if b.down {
+        b.out.push("broker is down".to_string());
+    } else {
+        for t in b.topics.clone().iter() {
+            b.describe_topic(t);
+        }
+        let mut lines: Vec[String] = Vec.new();
+        for (name, g) in b.groups.iter() {
+            let ms: Vec[String] = g.members.keys().cloned().collect();
+            let ms = if ms.is_empty() { "-".to_string() } else { ms.join(",") };
+            lines.push(f"group {name}: reset {g.reset}, generation {g.generation}, members {ms}, {g.committed.len()} committed offsets");
+        }
+        b.out.extend(lines);
+        let disk = load(b.topics)?;
+        let same = b.parts.iter().all(|(tp, part)| {
+            match disk.parts.get(tp) {
+                Some(d) => d.records() == part.records() and d.start == part.start and d.end == part.end,
+                None => false,
+            }
+        });
+        b.out.push("== verify".to_string());
+        if same {
+            b.out.push(f"disk matches memory: {disk.parts.len()} partitions, {disk.count} records");
+        } else {
+            b.out.push("disk differs from memory".to_string());
+        }
+    }
+    println(b.out.join("\n"));
+    Ok(())
+}
+
+fn put_bytes(path: Str, hex: Str) -> Result[(), String] {
+    let digits: String = hex.chars().filter(|c| not c.is_whitespace()).collect();
+    let bytes = hex_decode(digits).map_err(|e| f"bad data for {path}: {e}")?;
+    fs.write_bytes(path, bytes).map_err(|e| f"cannot write {path}: {e}")
+}
+
+fn main() {
+    if let Err(e) = run() {
+        eprintln(e);
+    }
+}
+
+// ============================================================ data
+
+// The files under data/, in name order.
+fn write_data() -> Result[(), String] {
+    put_bytes("data/script.txt", file_0())?;
+    put_bytes("data/topics.conf", file_1())?;
+    Ok(())
+}
+
+// data/script.txt
+fn file_0() -> String {
+    """
+23204120646179206174207468652073686f702773206576656e742062726f6b65722e2054696d657320617265204848
+3a4d4d3a53532e0a0a30383a30303a3030206465736372696265206f72646572730a30383a30303a3030206465736372
+6962652070726f66696c65730a0a23204f726465727320617265206b65796564206279206f726465722069642c20736f
+20616e206f726465722773206576656e7473207374617920696e206f726465722e0a30383a30303a30352070726f6475
+6365206f7264657273206f72642d31303031207b226576656e74223a2263726561746564222c22736b75223a22746561
+2d3031222c22717479223a327d0a30383a30303a30362070726f64756365206f7264657273206f72642d31303032207b
+226576656e74223a2263726561746564222c22736b75223a226d75672d3037222c22717479223a317d0a30383a30303a
+30372070726f64756365206f7264657273206f72642d31303033207b226576656e74223a2263726561746564222c2273
+6b75223a227465612d3032222c22717479223a367d0a30383a30303a30382070726f64756365206f7264657273206f72
+642d31303031207b226576656e74223a2270616964222c22616d6f756e74223a2231382e3430227d0a30383a30303a30
+392070726f64756365206f7264657273206f72642d31303034207b226576656e74223a2263726561746564222c22736b
+75223a22706f742d3033222c22717479223a317d0a30383a30303a31302070726f64756365206f7264657273206f7264
+2d31303032207b226576656e74223a2270616964222c22616d6f756e74223a2231322e3030227d0a30383a30303a3131
+2070726f64756365206f72646572733a31202d207b226576656e74223a22686561727462656174222c2266726f6d223a
+22636865636b6f75742d32227d0a30383a30303a31322070726f64756365206f7264657273206f72642d31303035207b
+226576656e74223a2263726561746564222c22736b75223a227465612d3031222c22717479223a317d0a30383a30303a
+31332070726f64756365206f7264657273206f72642d31303033207b226576656e74223a2263616e63656c6c6564222c
+22726561736f6e223a226f7574206f662073746f636b227d0a30383a30303a31342070726f64756365206f7264657273
+206f72642d31303036207b226576656e74223a2263726561746564222c22736b75223a226375702d3131222c22717479
+223a347d0a0a30383a30303a32302070726f64756365207061796d656e7473206f72642d313030312063617264206f6b
+2031382e3430204555520a30383a30303a32312070726f64756365207061796d656e7473206f72642d31303032206361
+7264206f6b2031322e3030204555520a30383a30303a32322070726f64756365207061796d656e7473206f72642d3130
+30342070617970616c2070656e64696e672033312e3930204555520a30383a30303a32332070726f6475636520706179
+6d656e7473206f72642d313030342070617970616c206f6b2033312e3930204555520a0a2320436c69636b7320636172
+7279206e6f206b657920616e6420676f20726f756e642d726f62696e206f7665722074686520706172746974696f6e73
+2e0a30383a30303a333020626174636820636c69636b732039203020766965773a2f70726f64756374732f0a30383a30
+303a33312070726f6475636520636c69636b73202d20766965773a2f636172740a0a232050726f66696c657320617265
+20636f6d7061637465643a20746865206c61746573742076616c75652070657220637573746f6d657220697320776861
+7420636f756e74732e0a30383a30303a34302070726f647563652070726f66696c657320637573742d3137207b226e61
+6d65223a22416e61222c2263697479223a22506f72746f227d0a30383a30303a34312070726f647563652070726f6669
+6c657320637573742d3233207b226e616d65223a22426f222c2263697479223a224d616c6d6f227d0a30383a30303a34
+322070726f647563652070726f66696c657320637573742d3331207b226e616d65223a224379222c2263697479223a22
+4c796f6e227d0a30383a30303a34332070726f647563652070726f66696c657320637573742d3137207b226e616d6522
+3a22416e61222c2263697479223a224c6973626f6e227d0a30383a30303a34342070726f647563652070726f66696c65
+7320637573742d3432207b226e616d65223a224469222c2263697479223a224768656e74227d0a0a30383a30303a3530
+2070726f64756365206175646974202d206c6f67696e2061646d696e2066726f6d2031302e302e302e370a30383a3030
+3a35312070726f64756365206175646974202d207072696365206368616e6765207465612d303120392e323020746f20
+392e34300a0a23204d697374616b657320612070726f6475636572206d616b65732e0a30383a30303a35352070726f64
+7563652070726f66696c6573202d207b226e616d65223a226e6f626f6479227d0a30383a30303a35352070726f647563
+6520696e766f6963657320696e762d312064726166740a30383a30303a35352070726f64756365206f72646572733a37
+206f72642d31303037207b226576656e74223a2263726561746564227d0a30383a30303a35352070726f64756365206f
+72646572733a78206f72642d31303037207b226576656e74223a2263726561746564227d0a30383a30303a3535207072
+6f64756365205f5f636f6e73756d65725f6f666673657473206b20760a30383a30303a35352070726f64756365206f72
+64657273206f72642d313030370a30383a30303a353520626174636820636c69636b732030203020766965773a0a3038
+3a30303a353520626174636820636c69636b733a312033203020766965773a0a30383a30303a35352064656c69766572
+206f7264657273206f72642d313030370a0a30383a30313a3030206665746368206f72646572733a3020300a30383a30
+313a3030206665746368206f72646572733a31203120320a30383a30313a3030206665746368206f72646572733a3220
+39390a30383a30313a3030206665746368206f726465727320300a30383a30313a3030206465736372696265206f7264
+6572730a0a23205468652062696c6c696e672073657276696365207265616473206f726465727320616e64207061796d
+656e747320776974682074776f20636f6e73756d6572732e0a30383a30323a3030206a6f696e2062696c6c696e672062
+696c6c2d61206f72646572732c7061796d656e74730a30383a30323a3030206a6f696e2062696c6c696e672062696c6c
+2d62206f72646572730a30383a30323a303120706f6c6c2062696c6c696e672062696c6c2d6120340a30383a30323a30
+3220636f6d6d69742062696c6c696e672062696c6c2d610a30383a30323a303320706f6c6c2062696c6c696e67206269
+6c6c2d620a30383a30323a303420706f6c6c2062696c6c696e672062696c6c2d612031300a30383a30323a303520636f
+6d6d69742062696c6c696e672062696c6c2d620a232062696c6c2d612063726173686573206265666f72652069742063
+6f6d6d69747320697473207365636f6e6420706f6c6c3b2069747320706172746974696f6e73206d6f76652e0a30383a
+30323a3130206c656176652062696c6c696e672062696c6c2d610a30383a30323a313120706f6c6c2062696c6c696e67
+2062696c6c2d622032300a30383a30323a313220636f6d6d69742062696c6c696e672062696c6c2d620a30383a30323a
+3133206c61672062696c6c696e670a30383a30323a3134206a6f696e2062696c6c696e672062696c6c2d61206f726465
+72732c7061796d656e74732072657365743d6c61746573740a30383a30323a3134206a6f696e2062696c6c696e672062
+696c6c2d62206f72646572730a30383a30323a3134206a6f696e2062696c6c696e672062696c6c2d63206f7264657273
+2c696e766f696365730a30383a30323a313420706f6c6c2062696c6c696e672062696c6c2d7a0a30383a30323a313420
+636f6d6d6974206e6f737563682062696c6c2d610a0a2320416e616c7974696373206f6e6c792063617265732061626f
+757420636c69636b732066726f6d206e6f77206f6e2e0a30383a30333a3030206a6f696e20616e616c79746963732061
+6e2d3120636c69636b732072657365743d6c61746573740a30383a30333a303120706f6c6c20616e616c797469637320
+616e2d310a30383a30333a303220626174636820636c69636b732036203020766965773a2f7365617263683f713d7465
+6126706167653d0a30383a30333a303320706f6c6c20616e616c797469637320616e2d3120340a30383a30333a303420
+636f6d6d697420616e616c797469637320616e2d310a30383a30333a303520706f6c6c20616e616c797469637320616e
+2d3120340a30383a30333a303620636f6d6d697420616e616c797469637320616e2d310a0a30383a30343a3030206a6f
+696e2070726f66696c655f63616368652070632d312070726f66696c65730a30383a30343a303120706f6c6c2070726f
+66696c655f63616368652070632d312032300a30383a30343a303220636f6d6d69742070726f66696c655f6361636865
+2070632d310a0a232050726f66696c6573206368616e676520647572696e6720746865206d6f726e696e673b206f6e65
+20637573746f6d657220636c6f73657320746865206163636f756e742e0a30383a32303a30302070726f647563652070
+726f66696c657320637573742d3233207b226e616d65223a22426f222c2263697479223a224f736c6f227d0a30383a32
+303a30312070726f647563652070726f66696c657320637573742d3331206e756c6c0a30383a32303a30322070726f64
+7563652070726f66696c657320637573742d3137207b226e616d65223a22416e61222c2263697479223a224c6973626f
+6e222c22766970223a747275657d0a30383a32303a30332070726f647563652070726f66696c657320637573742d3535
+207b226e616d65223a224564222c2263697479223a224265726e227d0a30383a32303a30342070726f64756365207072
+6f66696c657320637573742d3432207b226e616d65223a224469222c2263697479223a22416e7477657270227d0a3038
+3a32303a30352070726f647563652070726f66696c657320637573742d3233207b226e616d65223a22426f222c226369
+7479223a2242657267656e227d0a30383a32303a30362070726f647563652070726f66696c657320637573742d363120
+7b226e616d65223a22466c6f222c2263697479223a224772617a227d0a30383a32303a30372070726f64756365207072
+6f66696c657320637573742d3535207b226e616d65223a224564222c2263697479223a22426173656c227d0a30383a32
+303a30382064657363726962652070726f66696c65730a30383a32303a313020636f6d706163740a30383a32303a3131
+2064657363726962652070726f66696c65730a30383a32303a31322066657463682070726f66696c65733a3020302032
+300a30383a32303a31322066657463682070726f66696c65733a3120302032300a0a30383a32353a3030206261746368
+20636c69636b73203132203020766965773a2f70726f64756374732f7465612d300a30383a32353a3031206261746368
+207061796d656e74732038203320736574746c652d0a30383a32353a3032206465736372696265207061796d656e7473
+0a30383a32353a303320726574656e74696f6e0a30383a32353a3034206465736372696265207061796d656e74730a30
+383a32353a303520646573637269626520636c69636b730a0a30383a33303a303020706f6c6c20616e616c7974696373
+20616e2d312033300a30383a33303a303120636f6d6d697420616e616c797469637320616e2d310a30383a33303a3032
+20706f6c6c2070726f66696c655f63616368652070632d312032300a30383a33303a303320636f6d6d69742070726f66
+696c655f63616368652070632d310a0a232054656e206d696e75746573206c617465722074686520746f6d6273746f6e
+6520666f7220637573742d33312063616e20676f2e0a30383a33313a303020636f6d706163740a30383a33313a303120
+66657463682070726f66696c65733a3020302032300a30383a33313a30312066657463682070726f66696c65733a3120
+302032300a0a23204c756e636820727573682e0a30393a31303a3030206261746368206f726465727320313420352072
+7573682d0a30393a31303a303120626174636820636c69636b73203130203020766965773a2f636865636b6f75742f73
+7465702d0a30393a31303a303220706f6c6c2062696c6c696e672062696c6c2d6220380a30393a31303a303320636f6d
+6d69742062696c6c696e672062696c6c2d620a30393a31303a303420726574656e74696f6e0a30393a31303a30352064
+6573637269626520636c69636b730a0a23205468652062726f6b657220686f7374206c6f73657320706f776572207768
+696c652061207265636f72642069732068616c66207772697474656e2e0a30393a31353a30302070726f64756365206f
+7264657273206f72642d31313031207b226576656e74223a2263726561746564222c22736b75223a227465612d303922
+2c22717479223a337d0a30393a31353a3031206372617368206f72646572733a393a33300a30393a31353a3031206372
+617368206f72646572733a303a3939393939390a30393a31353a3031206372617368206f72646572733a303a33300a30
+393a31353a30322070726f64756365206f7264657273206f72642d31313032207b226576656e74223a22637265617465
+64227d0a30393a31353a303320706f6c6c2062696c6c696e672062696c6c2d620a30393a31353a303420726573746172
+740a30393a31353a303520726573746172740a30393a31353a3036206465736372696265206f72646572730a30393a31
+353a3037206c61672062696c6c696e670a30393a31353a303820706f6c6c2062696c6c696e672062696c6c2d620a3039
+3a31353a3039206a6f696e2062696c6c696e672062696c6c2d62206f72646572730a30393a31353a313020706f6c6c20
+62696c6c696e672062696c6c2d622033300a30393a31353a313120636f6d6d69742062696c6c696e672062696c6c2d62
+0a30393a31353a3132206a6f696e20616e616c797469637320616e2d3220636c69636b730a30393a31353a313320706f
+6c6c20616e616c797469637320616e2d322034300a0a23204f6c64206f726465727320616765206f75743b2062696c6c
+696e67277320636f6d6d6974746564206f666673657473206e6f7720706f696e74206265666f726520746865206c6f67
+2e0a31303a32303a30302070726f64756365206f7264657273206f72642d31323031207b226576656e74223a22637265
+61746564222c22736b75223a226d75672d3032222c22717479223a317d0a31303a32303a30312070726f64756365206f
+7264657273206f72642d31323032207b226576656e74223a2263726561746564222c22736b75223a227465612d303522
+2c22717479223a327d0a31303a32303a30322070726f64756365206f7264657273206f72642d31323033207b22657665
+6e74223a2263726561746564222c22736b75223a22706f742d3031222c22717479223a317d0a31303a32303a30332072
+6574656e74696f6e0a31303a32303a3034206465736372696265206f72646572730a31303a32303a3035206c65617665
+2062696c6c696e672062696c6c2d620a31303a32303a3036206a6f696e2062696c6c696e672062696c6c2d64206f7264
+6572732c7061796d656e74730a31303a32303a303720706f6c6c2062696c6c696e672062696c6c2d642032300a31303a
+32303a303820636f6d6d69742062696c6c696e672062696c6c2d640a31303a32303a3039206c61672062696c6c696e67
+0a0a2320416e616c797469637320697320726574697265643b20697473206f666673657473206265636f6d6520746f6d
+6273746f6e657320616e6420636f6d70616374696f6e2064726f7073207468656d2e0a31303a33303a3030206c656176
+6520616e616c797469637320616e2d320a31303a33303a30312064656c6574652d67726f757020616e616c7974696373
+0a31303a33303a30312064656c6574652d67726f75702062696c6c696e670a31303a33303a3032206c616720616e616c
+79746963730a31303a33303a303320636f6d706163740a31303a33303a3034206465736372696265205f5f636f6e7375
+6d65725f6f6666736574730a0a23204120636c65616e207265737461727420696e20746865206576656e696e67206b65
+6570732065766572797468696e672e0a31383a30303a30302063726173680a31383a30303a303120726573746172740a
+31383a30303a3032206c61672062696c6c696e670a31383a30303a3033206c61672070726f66696c655f63616368650a
+31383a30303a30342070726f64756365206175646974202d206c6f676f75742061646d696e0a31383a30303a30352066
+657463682061756469743a3020300a31373a30303a30302064657363726962652061756469740a31383a30303a303620
+726574656e74696f6e206e6f770a31383a30303a303620636f6d70616374206e6f770a31383a30303a30362064657363
+726962650a31383a30303a303620666c7573680a31383a303a30372064657363726962652061756469740a
+"""
+}
+
+// data/topics.conf
+fn file_1() -> String {
+    """
+2320546f70696373206f66207468652073686f702773206576656e742062726f6b65722e2053697a6573206172652073
+6d616c6c20736f2074686174207365676d656e74730a2320726f6c6c2c20616e6420726574656e74696f6e20616e6420
+636f6d70616374696f6e206861766520736f6d657468696e6720746f20646f2c2077697468696e2061206461792e0a0a
+746f706963206f726465727320706172746974696f6e733d33207365676d656e745f62797465733d3430302072657465
+6e74696f6e3d31680a746f706963207061796d656e747320706172746974696f6e733d32207365676d656e745f627974
+65733d33303020726574656e74696f6e5f62797465733d3230300a746f70696320636c69636b7320706172746974696f
+6e733d34207365676d656e745f62797465733d32353620726574656e74696f6e3d32306d0a746f7069632070726f6669
+6c657320706172746974696f6e733d32207365676d656e745f62797465733d33363020636c65616e75703d636f6d7061
+63742064656c6574655f726574656e74696f6e3d31306d0a746f70696320617564697420706172746974696f6e733d31
+202020202020202023207468652061756469746f7273206b6565702065766572797468696e670a746f70696320736869
+706d656e747320706172746974696f6e733d3220636c65616e75703d636f6d706163740a0a746f706963204f72646572
+7320706172746974696f6e733d322020202020202023206e616d657320617265206c6f77657220636173650a746f7069
+63206f726465727320706172746974696f6e733d310a746f706963205f5f696e7465726e616c20706172746974696f6e
+733d310a746f70696320696e76656e746f72790a746f70696320696e76656e746f727920706172746974696f6e733d30
+0a746f70696320696e76656e746f727920706172746974696f6e733d34207365676d656e745f62797465733d33320a74
+6f70696320696e76656e746f727920706172746974696f6e733d3420726574656e74696f6e3d3130780a746f70696320
+696e76656e746f727920706172746974696f6e733d3420726574656e74696f6e3d30730a746f70696320696e76656e74
+6f727920706172746974696f6e733d3420636c65616e75703d617263686976650a746f70696320696e76656e746f7279
+20706172746974696f6e733d34207265706c696361733d330a746f70696320696e76656e746f72792070617274697469
+6f6e733d3420706172746974696f6e733d320a746f70696320696e76656e746f727920706172746974696f6e733d3420
+636c65616e75703d636f6d7061637420726574656e74696f6e3d31680a746f70696320696e76656e746f727920706172
+746974696f6e733d3420726574656e74696f6e0a746f70696b20736869706d656e747320706172746974696f6e733d32
+0a746f7069630a
+"""
+}

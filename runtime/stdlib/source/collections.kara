@@ -102,6 +102,37 @@ impl[T] DoubleEndedIterator for SliceIter[T] {
     }
 }
 
+/// The elements of a slice, front to back, each borrowed to be changed in
+/// place (B-2026-11-06-37). Each element is handed out once.
+struct SliceIterMut[T] {
+    s: mut ref Slice[T],
+    front: i64,
+    back: i64,
+}
+
+impl[T] Iterator for SliceIterMut[T] {
+    type Item = mut ref T;
+
+    fn next(mut ref self) -> Option[Self.Item] {
+        if self.front >= self.back {
+            return None;
+        }
+        let i = self.front;
+        self.front = i + 1;
+        Some(mut self.s[i])
+    }
+}
+
+impl[T] DoubleEndedIterator for SliceIterMut[T] {
+    fn next_back(mut ref self) -> Option[Self.Item] {
+        if self.front >= self.back {
+            return None;
+        }
+        self.back = self.back - 1;
+        Some(mut self.s[self.back])
+    }
+}
+
 impl[T] SliceIter[T] {
     /// As `VecIter.rposition`: the front-counted index of the last item
     /// `pred` accepts, searching from the back.
@@ -120,6 +151,12 @@ impl[T] Slice[T] {
     /// The elements, front to back, each borrowed.
     fn iter(self) -> SliceIter[T] {
         SliceIter { s: self, front: 0, back: self.len() }
+    }
+
+    /// The elements, front to back, each borrowed to be changed in place.
+    fn iter_mut(mut ref self) -> SliceIterMut[T] {
+        let n = self.len();
+        SliceIterMut { s: self, front: 0, back: n }
     }
 
     /// The index of the first element `pred` rejects, found by binary

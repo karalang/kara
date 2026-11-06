@@ -700,13 +700,22 @@ impl<'a> UseClassifier<'a> {
         };
         let mut found = Vec::new();
         let mut e = value;
-        while let ExprKind::MethodCall { object, args, .. } = &e.kind {
-            for a in args {
-                if matches!(a.value.kind, ExprKind::Closure { .. }) {
-                    found.push(SpanKey::from_span(&a.value.span));
+        loop {
+            match &e.kind {
+                ExprKind::MethodCall { object, args, .. } => {
+                    for a in args {
+                        if matches!(a.value.kind, ExprKind::Closure { .. }) {
+                            found.push(SpanKey::from_span(&a.value.span));
+                        }
+                    }
+                    e = object;
                 }
+                // A `?` in the chain (`half(n).map_err(|_| bad.clone())?`)
+                // returns early or passes the value on; either way the
+                // closures before it have run (B-2026-11-06-36).
+                ExprKind::Question(inner) => e = inner,
+                _ => break,
             }
-            e = object;
         }
         // A named function's call (`run(|| ..)`, `with_provider[R](p, || ..)`)
         // calls a closure literal it takes as a non-escaping parameter, if at

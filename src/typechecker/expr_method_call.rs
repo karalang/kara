@@ -258,10 +258,13 @@ pub(crate) const SLICE_BUILTIN_METHODS: &[&str] = &[
 /// The `Slice` methods that take `mut ref self` (`infer_slice_method` refuses
 /// each on a read-only slice). A range-indexed receiver of one of these is a
 /// place where a mutable view is needed, so `v[a..b].reverse()` types the view
-/// as `mut Slice[T]` exactly as `flip(mut v[a..b])` does (B-2026-10-12-24).
+/// as `mut Slice[T]` exactly as `flip(mut v[a..b])` does (B-2026-10-12-24),
+/// and `v[a..b].iter_mut()` hands out its elements to change in place
+/// (B-2026-11-06-37).
 pub(crate) const SLICE_MUTATING_METHODS: &[&str] = &[
     "clone_from_slice",
     "fill",
+    "iter_mut",
     "reverse",
     "sort",
     "sort_by",

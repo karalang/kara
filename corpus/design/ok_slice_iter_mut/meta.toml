@@ -1,0 +1,9 @@
+source = "B-2026-11-06-37"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "collections", "library"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "docs/library/collections.md: Slice[T].iter_mut() yields `mut ref T` in index order, through a `mut Slice[T]` parameter, on a range view receiver (`v[2..].iter_mut()`, `segs[0..k - 1].iter_mut()`) and reversed (`.rev()`). Expected output worked by hand from the spec."
