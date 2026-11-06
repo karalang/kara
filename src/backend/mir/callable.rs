@@ -2020,21 +2020,18 @@ impl<'ctx> Cx<'ctx, '_> {
         let is_lt = b
             .build_int_compare(IntPredicate::SLT, o, oz, "")
             .map_err(e)?;
-        let is_gt = b
-            .build_int_compare(IntPredicate::SGT, o, oz, "")
-            .map_err(e)?;
         let is_eq = b
             .build_int_compare(IntPredicate::EQ, o, oz, "")
             .map_err(e)?;
-        let (lt8, gt8) = (
-            b.build_int_z_extend(is_lt, i8t, "").map_err(e)?,
-            b.build_int_z_extend(is_gt, i8t, "").map_err(e)?,
-        );
+        // The adapter's order is -1, 0 or 1 ([`Self::sort_by_order`]),
+        // so the tag (0 less, 1 tied, 2 greater) is the order plus one.
+        // LLVM cannot see that range through the comparator, and spelled
+        // as `1 + gt - lt` the count pass took 25 instructions an element
+        // to legacy's 13 (kata 1665, B-2026-11-04-33).
         let tag = b
-            .build_int_sub(
-                b.build_int_add(i8t.const_int(1, false), gt8, "")
-                    .map_err(e)?,
-                lt8,
+            .build_int_add(
+                b.build_int_truncate(o, i8t, "").map_err(e)?,
+                i8t.const_int(1, false),
                 "tag",
             )
             .map_err(e)?;
